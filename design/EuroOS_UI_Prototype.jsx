@@ -24,7 +24,7 @@ const P = {
 
 // ─── GEBRUIKERS DATA ─────────────────────────────────────────
 const USERS = [
-  { id: 1, name: "Jeroen",  role: "admin", avatar: "JV", color: "#2E7DD1", lastLogin: "Vandaag 08:12" },
+  { id: 1, name: "Euro User",  role: "admin", avatar: "EU", color: "#2E7DD1", lastLogin: "Vandaag 08:12" },
   { id: 2, name: "Marie",   role: "user",  avatar: "MA", color: "#22C55E", lastLogin: "Gisteren 16:44" },
   { id: 3, name: "Thomas",  role: "user",  avatar: "TK", color: "#EAB308", lastLogin: "2 dagen geleden" },
   { id: 4, name: "Gast",    role: "guest", avatar: "G",  color: "#8A9BB8", lastLogin: "Nooit" },

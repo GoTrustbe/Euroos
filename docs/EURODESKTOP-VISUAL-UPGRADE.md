@@ -309,7 +309,7 @@ pub fn draw_sidebar(fb: &mut Framebuffer, sidebar: &Sidebar) {
     let av_x = (spacing::SIDEBAR_W - 34) as i32 / 2;
     fill_circle(fb, av_x + 17, av_y + 17, 17, colors::EU_BLUE);
     // Initialen
-    draw_text(fb, "JV", av_x + 6, av_y + 11, 12, 0xFF_FFFFFF, FontWeight::SemiBold);
+    draw_text(fb, "EU", av_x + 6, av_y + 11, 12, 0xFF_FFFFFF, FontWeight::SemiBold);
 }
 
 fn draw_sidebar_button(fb: &mut Framebuffer, item: &SidebarItem, y: i32) {

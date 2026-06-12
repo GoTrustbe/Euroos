@@ -2126,9 +2126,9 @@ shell = "/bin/euroshell"
 
 [[user]]
 uid = 1000
-name = "jeroen"
-display_name = "Jeroen Van Langenhove"
-home = "/home/jeroen"
+name = "euro"
+display_name = "Euro User"
+home = "/home/euro"
 shell = "/bin/euroshell"
 groups = ["users", "admin", "audio", "video"]
 # Wachtwoord hash opgeslagen in /etc/shadow.toml (Argon2id)
