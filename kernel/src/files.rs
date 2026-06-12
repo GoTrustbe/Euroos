@@ -1,9 +1,184 @@
 //! Kernel-zijde van **EuroFiles** (Sprint AC-1): de bestandsbeheerder.
 //! Bij boot bewijzen we map-sortering (mappen eerst), filteren, padnormalisatie
 //! en de soevereine badges. Host-geteste kern: [`eurofiles`].
+//! Bevat ook de desktop-GUI (`render`): een "Plaatsen"-zijbalk + een live lijst
+//! van het ECHTE EuroFS (de kernel vult ze met `load_dir` uit `fs.list_dir`).
 
+use crate::graphics::{Color, FrameBuffer};
 use crate::serial_println;
-use eurofiles::{join, normalize, Badge, DirEntry, Listing, SortKey, SortOrder};
+use crate::{icons, text};
+use alloc::string::String;
+use alloc::vec::Vec;
+use eurofiles::{human_size, join, normalize, parent, Badge, DirEntry, FileKind, Listing, SortKey, SortOrder};
+use spin::Mutex;
+
+/// Gelijk aan `compositor::TITLEBAR_H`.
+const TITLEBAR_H: usize = 44;
+const PLACES_W: usize = 156;
+const ROW_H: usize = 30;
+const PLACE_H: usize = 40;
+
+/// Snelkoppelingen in de zijbalk (label, pad, glyph).
+const PLACES: &[(&str, &str, &str)] = &[
+    ("Home", "/home/euro", "home"),
+    ("Systeem", "/", "files"),
+    ("Configuratie", "/etc", "settings"),
+    ("Logboeken", "/var", "doc"),
+];
+
+/// De LIVE maplijst die de GUI toont (door de kernel gevuld uit het echte FS).
+static LISTING: Mutex<Option<Listing>> = Mutex::new(None);
+
+/// Het pad dat nu getoond wordt (leeg = nog niets geladen).
+pub fn current_path() -> String {
+    LISTING.lock().as_ref().map(|l| l.path.clone()).unwrap_or_default()
+}
+
+/// Vul de lijst met een echte map: `items` = (naam, is_map, grootte) uit
+/// `fs.list_dir`. We sorteren mappen-eerst via de `eurofiles`-engine.
+pub fn load_dir(path: &str, items: Vec<(String, bool, u64)>) {
+    let entries: Vec<DirEntry> = items
+        .into_iter()
+        .map(|(name, is_dir, size)| {
+            if is_dir {
+                DirEntry::dir(&name)
+            } else {
+                let mut e = DirEntry::file(&name, size);
+                // Eerlijke badge: getekende artefacten zijn écht Ed25519-gesigneerd.
+                if name.ends_with(".efi") || name.ends_with(".signed") {
+                    e = e.with_badge(Badge::Signed);
+                }
+                e
+            }
+        })
+        .collect();
+    let mut l = Listing::new(&normalize(path), entries);
+    l.sort(SortKey::Name, SortOrder::Asc); // mappen eerst, dan alfabetisch
+    *LISTING.lock() = Some(l);
+}
+
+/// Klik-afhandeling: geef het pad terug waar de gebruiker heen wil (map of
+/// snelkoppeling of ".." omhoog), of `None`. De kernel laadt dat pad dan in.
+pub fn hit_test(win_x: usize, win_y: usize, mx: usize, my: usize) -> Option<String> {
+    let by = win_y + TITLEBAR_H;
+    // Plaatsen-zijbalk.
+    if mx >= win_x && mx < win_x + PLACES_W && my >= by + 44 {
+        let i = (my - (by + 44)) / PLACE_H;
+        if i < PLACES.len() {
+            return Some(String::from(PLACES[i].1));
+        }
+        return None;
+    }
+    // Hoofdlijst: rij 0 = "..", rij 1.. = entries.
+    let list_x = win_x + PLACES_W;
+    let list_y = by + 40;
+    if mx >= list_x && my >= list_y {
+        let row = (my - list_y) / ROW_H;
+        let cur = current_path();
+        if row == 0 {
+            let p = parent(&cur);
+            return Some(if p.is_empty() { String::from("/") } else { p });
+        }
+        let guard = LISTING.lock();
+        if let Some(l) = guard.as_ref() {
+            let idx = row - 1;
+            if let Some(e) = l.entries.get(idx) {
+                if e.kind == FileKind::Dir {
+                    return Some(join(&cur, &e.name));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Desktop-GUI: zijbalk met plaatsen + de live maplijst van het echte EuroFS.
+pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
+    let bx = x;
+    let by = y + TITLEBAR_H;
+    let bw = w;
+    let bh = h.saturating_sub(TITLEBAR_H);
+    let accent = Color::rgb(0x20, 0x59, 0xC8); // EuroFiles-blauw
+    fb.fill_rect(bx, by, bw, bh, Color::SURFACE);
+
+    // ── Plaatsen-zijbalk ─────────────────────────────────────────────────────
+    fb.fill_rect(bx, by, PLACES_W, bh, Color::CARD);
+    fb.fill_rect(bx + PLACES_W, by, 1, bh, Color::BORDER);
+    text::draw_px(fb, bx + 16, by + 16, "Plaatsen", Color::TEXT_SEC, 12.5);
+    let cur = current_path();
+    for (i, (label, path, glyph)) in PLACES.iter().enumerate() {
+        let ry = by + 44 + i * PLACE_H;
+        let active = &cur == path || (cur.is_empty() && i == 0);
+        if active {
+            fb.fill_rounded_rect(bx + 8, ry - 4, PLACES_W - 16, PLACE_H - 6, 9, Color::ACCENT_SOFT);
+        }
+        let col = if active { accent } else { Color::INK };
+        icons::draw(fb, glyph, bx + 18, ry + 1, 16, col);
+        text::draw_px(fb, bx + 42, ry + 2, label, col, 13.0);
+    }
+
+    // ── Padbalk ──────────────────────────────────────────────────────────────
+    let list_x = bx + PLACES_W + 1;
+    let list_w = bw - PLACES_W - 1;
+    fb.fill_rect(list_x, by, list_w, 40, Color::SURFACE);
+    fb.fill_rect(list_x, by + 39, list_w, 1, Color::BORDER);
+    let shown_path = if cur.is_empty() { "/" } else { &cur };
+    icons::draw(fb, "path", list_x + 16, by + 12, 15, Color::TEXT_SEC);
+    text::draw_px(fb, list_x + 40, by + 13, shown_path, Color::INK, 13.5);
+
+    // ── Bestandslijst ────────────────────────────────────────────────────────
+    let guard = LISTING.lock();
+    let list_y0 = by + 40;
+    let ymax = by + bh - 26;
+    // ".."-rij om omhoog te gaan.
+    text::draw_px(fb, list_x + 44, list_y0 + 8, "..", Color::TEXT_SEC, 13.0);
+    icons::draw(fb, "folder", list_x + 18, list_y0 + 6, 16, Color::TEXT_DIM);
+
+    let (mut ndirs, mut nfiles, mut total) = (0usize, 0usize, 0u64);
+    if let Some(l) = guard.as_ref() {
+        let (d, f) = l.counts();
+        ndirs = d;
+        nfiles = f;
+        total = l.total_size();
+        for (i, e) in l.entries.iter().enumerate() {
+            let ry = list_y0 + (i + 1) * ROW_H;
+            if ry + ROW_H > ymax {
+                break;
+            }
+            let is_dir = e.kind == FileKind::Dir;
+            let (glyph, gcol) = if is_dir { ("folder", accent) } else { ("doc", Color::TEXT_SEC) };
+            icons::draw(fb, glyph, list_x + 18, ry + 6, 16, gcol);
+            text::draw_px(fb, list_x + 44, ry + 8, &e.name, Color::INK, 13.0);
+            // Badges (alleen écht bekende, bv. getekend).
+            let mut rx = list_x + list_w;
+            if !is_dir {
+                let sz = human_size(e.size);
+                let sw = text::width_px(&sz, 11.5);
+                text::draw_px(fb, list_x + list_w - sw - 16, ry + 9, &sz, Color::TEXT_DIM, 11.5);
+                rx = list_x + list_w - sw - 28;
+            }
+            for b in &e.badges {
+                if b == &Badge::Signed {
+                    let lbl = "getekend";
+                    let cw = text::width_px(lbl, 10.5) + 16;
+                    fb.fill_rounded_rect(rx - cw, ry + 5, cw, 18, 9, Color::ACCENT_SOFT);
+                    text::draw_px(fb, rx - cw + 8, ry + 7, lbl, accent, 10.5);
+                    rx -= cw + 6;
+                }
+            }
+        }
+    } else {
+        text::draw_px(fb, list_x + 44, list_y0 + ROW_H + 8, "(map wordt geladen…)", Color::TEXT_DIM, 12.5);
+    }
+
+    // ── Statusbalk ───────────────────────────────────────────────────────────
+    let sy = by + bh - 26;
+    fb.fill_rect(bx, sy, bw, 26, accent);
+    text::draw_px(fb, bx + 14, sy + 6, "EuroFiles  ·  live EuroFS", Color::WHITE, 11.5);
+    let right = alloc::format!("{} mappen · {} bestanden · {}", ndirs, nfiles, human_size(total));
+    let rw = text::width_px(&right, 11.5);
+    text::draw_px(fb, bx + bw - rw - 14, sy + 6, &right, Color::WHITE, 11.5);
+}
 
 /// Boot-zelftest: bouw een maplijst, sorteer/filter, controleer padbewerkingen.
 pub fn selftest() {

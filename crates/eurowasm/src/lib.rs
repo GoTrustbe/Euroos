@@ -169,6 +169,8 @@ pub struct Module {
     exports: Vec<(String, u32)>, // naam → globale functie-index (imports eerst)
     mem_min_pages: u32,
     globals: Vec<i64>,
+    /// Actieve data-segmenten (offset, bytes) — initialiseren het lineair geheugen.
+    data: Vec<(u32, Vec<u8>)>,
 }
 
 impl Module {
@@ -188,6 +190,7 @@ impl Module {
             exports: Vec::new(),
             mem_min_pages: 0,
             globals: Vec::new(),
+            data: Vec::new(),
         };
         let mut func_type_idx: Vec<u32> = Vec::new(); // type-index per gedefinieerde functie
 
@@ -305,7 +308,29 @@ impl Module {
                         });
                     }
                 }
-                _ => { /* andere secties (custom/data/element/start) overslaan */ }
+                11 => {
+                    // Data-sectie: actieve segmenten initialiseren het geheugen.
+                    let n = s.uleb()?;
+                    for _ in 0..n {
+                        let flags = s.uleb()?;
+                        match flags {
+                            0 => {
+                                // Actief, mem 0: offset = const-expr, dan byte-vec.
+                                let off = read_const_expr(&mut s)? as u32;
+                                let len = s.uleb()? as usize;
+                                let bytes = s.bytes(len)?.to_vec();
+                                m.data.push((off, bytes));
+                            }
+                            1 => {
+                                // Passief segment (geen geheugen-init) — bytes overslaan.
+                                let len = s.uleb()? as usize;
+                                let _ = s.bytes(len)?;
+                            }
+                            _ => return Err(WasmError::Unsupported("data-segment-vorm")),
+                        }
+                    }
+                }
+                _ => { /* andere secties (custom/element/start) overslaan */ }
             }
         }
         Ok(m)
@@ -313,6 +338,11 @@ impl Module {
 
     fn n_imports(&self) -> u32 {
         self.imports.len() as u32
+    }
+
+    /// Exporteert de module een functie met deze naam?
+    pub fn has_export(&self, name: &str) -> bool {
+        self.exports.iter().any(|(n, _)| n == name)
     }
 }
 
@@ -501,11 +531,15 @@ pub struct Instance<'m> {
 
 impl<'m> Instance<'m> {
     pub fn new(m: &'m Module) -> Self {
-        Instance {
-            m,
-            mem: vec![0u8; m.mem_min_pages as usize * PAGE],
-            globals: m.globals.clone(),
+        let mut mem = vec![0u8; m.mem_min_pages as usize * PAGE];
+        // Actieve data-segmenten in het lineair geheugen leggen (binnen de grenzen).
+        for (off, bytes) in &m.data {
+            let o = *off as usize;
+            if o + bytes.len() <= mem.len() {
+                mem[o..o + bytes.len()].copy_from_slice(bytes);
+            }
         }
+        Instance { m, mem, globals: m.globals.clone() }
     }
 
     /// Schrijf bytes in het lineair geheugen (om argumenten voor te bereiden).
@@ -1067,6 +1101,22 @@ mod tests {
     }
     fn header() -> Vec<u8> {
         vec![0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]
+    }
+
+    #[test]
+    fn data_section_inits_memory() {
+        // 1 mem-pagina + een actief data-segment "Hi" op offset 5.
+        let mut w = header();
+        w.extend(section(5, vec![1, 0x00, 1]));
+        let mut d = vec![1u8, 0u8]; // 1 segment, flags 0 (actief, mem 0)
+        d.extend_from_slice(&[0x41, 5, 0x0b]); // offset = i32.const 5, end
+        d.push(2);
+        d.extend_from_slice(b"Hi");
+        w.extend(section(11, d));
+        let m = Module::parse(&w).unwrap();
+        let inst = Instance::new(&m);
+        assert_eq!(&inst.mem()[5..7], b"Hi");
+        assert_eq!(inst.mem()[4], 0); // ervoor blijft 0
     }
 
     /// () -> i32 { 42 }

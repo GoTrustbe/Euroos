@@ -10,12 +10,28 @@ use spin::Mutex;
 
 use crate::graphics::{Color, FrameBuffer};
 use crate::text;
+use euromedia::Image;
 use euroweb::dom::{Dom, NodeKind};
 use euroweb::DisplayItem;
 
 const TITLEBAR_H: usize = 44;
 const TABBAR_H: usize = 32;
 const ADDR_H: usize = 38;
+const MARGIN: usize = 22; // paginarand (gelijk in render + hit_test)
+
+/// Een gedecodeerde (of mislukte) afbeelding in de paginabeeldcache.
+enum CachedImg {
+    Ok(Image),
+    Bad,
+}
+
+/// Beeldcache per `src` (gevuld bij navigatie — NOOIT per frame in `render`,
+/// zodat tekenen nooit blokkeert op een netwerk-fetch).
+static IMG_CACHE: Mutex<Vec<(String, CachedImg)>> = Mutex::new(Vec::new());
+/// Live formulier-veldwaarden per DOM-knoop (overschrijven het `value`-attr).
+static FORM_STATE: Mutex<Vec<(usize, String)>> = Mutex::new(Vec::new());
+/// Welk paginaveld (DOM-knoop) heeft focus voor toetsinvoer.
+static FOCUSED_FIELD: Mutex<Option<usize>> = Mutex::new(None);
 
 /// Eén tabblad.
 pub struct Tab {
@@ -142,6 +158,12 @@ pub fn navigate(input: &str) {
         );
         final_status = String::from("omleidingslus");
     }
+    // Nieuwe pagina: oude formuliertoestand + focus wissen en de afbeeldingen
+    // vooraf ophalen/decoderen (één keer, hier — niet per frame in `render`).
+    FORM_STATE.lock().clear();
+    *FOCUSED_FIELD.lock() = None;
+    preload_images(&final_html, &final_url);
+
     let title = extract_title(&final_html).unwrap_or_else(|| final_url.clone());
     if let Some(br) = BROWSER.lock().as_mut() {
         let a = br.active;
@@ -151,6 +173,58 @@ pub fn navigate(input: &str) {
         br.tabs[a].status = final_status;
         br.editing = false;
     }
+}
+
+// ── Afbeeldingen: ophalen (data:/http) + decoderen (QOI/PPM), gecachet ───────
+
+/// Parse, vind alle `<img src>` en vul de beeldcache. `data:`-URI's worden
+/// inline gedecodeerd; http(s) wordt ECHT opgehaald via de TCP/TLS-stack.
+fn preload_images(html: &str, base_url: &str) {
+    let mut cache = IMG_CACHE.lock();
+    cache.clear();
+    let dom = euroweb::parse(html);
+    for i in 0..dom.len() {
+        if dom.tag(i) == Some("img") {
+            if let Some(src) = dom.attr(i, "src") {
+                if cache.iter().any(|(s, _)| s == src) {
+                    continue;
+                }
+                let entry = match resolve_image(src, base_url) {
+                    Some(img) => CachedImg::Ok(img),
+                    None => CachedImg::Bad,
+                };
+                cache.push((String::from(src), entry));
+            }
+        }
+    }
+}
+
+/// Haal de bytes van één afbeelding op en decodeer ze (QOI eerst, dan PPM).
+fn resolve_image(src: &str, base_url: &str) -> Option<Image> {
+    let bytes: Vec<u8> = if let Some(rest) = src.strip_prefix("data:") {
+        // data:[<mime>][;base64],<data>
+        let comma = rest.find(',')?;
+        let meta = &rest[..comma];
+        let data = &rest[comma + 1..];
+        if meta.contains("base64") {
+            euromail::base64_decode(data)
+        } else {
+            data.as_bytes().to_vec()
+        }
+    } else {
+        // Relatief/absoluut http(s): los op tegen de pagina-URL en fetch.
+        let abs = if src.starts_with("http://") || src.starts_with("https://") {
+            String::from(src)
+        } else {
+            let (tls, host, _port, _path) = parse_url(base_url);
+            resolve_redirect(&host, tls, src)
+        };
+        let (tls, host, port, path) = parse_url(&abs);
+        crate::serial_println!("[web] IMG {host}:{port}{path}");
+        let (_status, _loc, body) = crate::net::fetch_full(&host, port, &path, tls)?;
+        body
+    };
+    euromedia::decode(&bytes).ok().or_else(|| euromedia::decode_ppm(&bytes).ok())
 }
 
 /// Laad het actieve tabblad opnieuw (of voor het eerst) van zijn huidige URL.
@@ -164,6 +238,7 @@ pub fn load_active() {
 // ── Bewerk-acties (vanuit de desktop-loop) ──────────────────────────────────
 
 pub fn begin_edit() {
+    *FOCUSED_FIELD.lock() = None; // adresbalk neemt over van een paginaveld
     if let Some(br) = BROWSER.lock().as_mut() {
         br.editing = true;
         br.edit_buf = String::new(); // leeg starten zodat typen meteen een nieuw adres bouwt
@@ -227,7 +302,219 @@ pub enum Hit {
     Tab(usize),
     NewTab,
     UrlBar,
+    /// Een tekst-invoerveld in de pagina (DOM-knoop) → focus voor typen.
+    Field(usize),
+    /// Een knop/verzendknop in de pagina (DOM-knoop) → formulier verzenden.
+    Submit(usize),
     None,
+}
+
+/// Heeft een paginaveld focus (toetsen gaan dan naar het veld i.p.v. de adresbalk)?
+pub fn field_focused() -> bool {
+    FOCUSED_FIELD.lock().is_some()
+}
+
+/// Geef een paginaveld focus (en stop adresbalk-bewerking).
+pub fn focus_field(node: usize) {
+    *FOCUSED_FIELD.lock() = Some(node);
+    if let Some(br) = BROWSER.lock().as_mut() {
+        br.editing = false;
+    }
+    // Zorg dat er een live-waarde-slot bestaat (geseed uit het value-attr).
+    let mut fs = FORM_STATE.lock();
+    if !fs.iter().any(|(n, _)| *n == node) {
+        let seed = active_field_value(node);
+        fs.push((node, seed));
+    }
+}
+
+/// Verwerk een toets in het gefocuste paginaveld. `true` = er veranderde iets.
+pub fn field_key(ch: char) -> bool {
+    let node = match *FOCUSED_FIELD.lock() {
+        Some(n) => n,
+        None => return false,
+    };
+    let mut fs = FORM_STATE.lock();
+    let slot = match fs.iter_mut().find(|(n, _)| *n == node) {
+        Some(s) => &mut s.1,
+        None => {
+            fs.push((node, String::new()));
+            &mut fs.last_mut().unwrap().1
+        }
+    };
+    match ch {
+        '\r' => {
+            drop(fs);
+            *FOCUSED_FIELD.lock() = None;
+        }
+        '\u{1b}' => {
+            drop(fs);
+            *FOCUSED_FIELD.lock() = None;
+        }
+        '\u{8}' | '\u{7f}' => {
+            slot.pop();
+        }
+        c if !c.is_control() => slot.push(c),
+        _ => {}
+    }
+    true
+}
+
+/// De huidige (begin)waarde van een veld uit het `value`-attr van de actieve pagina.
+fn active_field_value(node: usize) -> String {
+    let b = BROWSER.lock();
+    if let Some(br) = b.as_ref() {
+        let dom = euroweb::parse(&br.tabs[br.active].html);
+        if node < dom.len() {
+            return dom.attr(node, "value").map(String::from).unwrap_or_default();
+        }
+    }
+    String::new()
+}
+
+/// Verzend het formulier dat knoop `btn_node` bevat: bouw de doel-URL en doe een
+/// ECHTE HTTP-GET (via [`navigate`]).
+pub fn submit_form(btn_node: usize) {
+    if let Some(target) = submit_target(btn_node) {
+        crate::serial_println!("[web] FORM GET \u{2192} {target}");
+        navigate(&target);
+    }
+}
+
+/// Bouw — ZONDER te navigeren — de absolute GET-URL voor het formulier dat
+/// `btn_node` bevat (action + query uit de velden). Voor de zelftest + submit.
+pub fn submit_target(btn_node: usize) -> Option<String> {
+    let (action, query, base_url) = {
+        let b = BROWSER.lock();
+        let br = match b.as_ref() {
+            Some(br) => br,
+            None => return None,
+        };
+        let base_url = br.tabs[br.active].url.clone();
+        let dom = euroweb::parse(&br.tabs[br.active].html);
+        // Zoek het omsluitende <form> van de knoop (eerste form-voorouder).
+        let form = enclosing_form(&dom, btn_node);
+        let action = form
+            .and_then(|f| dom.attr(f, "action").map(String::from))
+            .filter(|a| !a.is_empty())
+            .unwrap_or_else(|| {
+                let (_t, _h, _p, path) = parse_url(&base_url);
+                path
+            });
+        // Verzamel de velden binnen het formulier (of de hele DOM als er geen is).
+        let scope = form.unwrap_or(0);
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for i in 0..dom.len() {
+            if !is_descendant(&dom, scope, i) && form.is_some() {
+                continue;
+            }
+            if dom.tag(i) == Some("input") {
+                let ty = dom.attr(i, "type").unwrap_or("text");
+                if ty == "submit" || ty == "button" {
+                    continue;
+                }
+                if let Some(name) = dom.attr(i, "name") {
+                    // Waarde: live FORM_STATE-override, anders het value-attr uit de
+                    // lokale DOM (NOOIT BROWSER opnieuw locken — die houden we hier vast).
+                    let val = FORM_STATE
+                        .lock()
+                        .iter()
+                        .find(|(n, _)| *n == i)
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_else(|| dom.attr(i, "value").map(String::from).unwrap_or_default());
+                    pairs.push((String::from(name), val));
+                }
+            }
+        }
+        let query = pairs
+            .iter()
+            .map(|(k, v)| alloc::format!("{}={}", url_encode(k), url_encode(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        (action, query, base_url)
+    };
+    // Bouw de absolute doel-URL en navigeer (echte GET).
+    let (tls, host, _port, _path) = parse_url(&base_url);
+    let action_abs = if action.starts_with("http://") || action.starts_with("https://") {
+        action
+    } else {
+        resolve_redirect(&host, tls, &action)
+    };
+    let target = if query.is_empty() {
+        action_abs
+    } else if action_abs.contains('?') {
+        alloc::format!("{action_abs}&{query}")
+    } else {
+        alloc::format!("{action_abs}?{query}")
+    };
+    Some(target)
+}
+
+/// Zet de actieve tab op kant-en-klare HTML (zónder netwerk) en preload de
+/// afbeeldingen. Voor de AG-2 demo/zelftest-pagina.
+pub fn load_inline(url: &str, html: &str) {
+    FORM_STATE.lock().clear();
+    *FOCUSED_FIELD.lock() = None;
+    preload_images(html, url);
+    if let Some(br) = BROWSER.lock().as_mut() {
+        let a = br.active;
+        br.tabs[a].url = String::from(url);
+        br.tabs[a].html = String::from(html);
+        br.tabs[a].title = extract_title(html).unwrap_or_else(|| String::from("EuroWeb"));
+        br.tabs[a].status = String::from("inline");
+        br.editing = false;
+    }
+}
+
+/// De AG-2 demopagina: een ECHT gegenereerde PPM-afbeelding (als data:-URI,
+/// gedecodeerd door euromedia) + een zoekformulier (GET). Geen mock-pixels.
+pub fn ag2_demo_html() -> String {
+    let (w, h) = (24u32, 16u32);
+    let mut ppm = alloc::format!("P3 {w} {h} 255");
+    for y in 0..h {
+        for x in 0..w {
+            // EU-blauw veld met een raster gouden "sterren".
+            let star = (x % 6 == 3) && (y % 5 == 2);
+            let (r, g, b) = if star { (226u32, 163, 58) } else { (45, 107, 224) };
+            ppm.push_str(&alloc::format!(" {r} {g} {b}"));
+        }
+    }
+    alloc::format!(
+        "<html><head><title>EuroWeb \u{2014} afbeeldingen en formulieren</title></head>\
+         <body><h1>Afbeeldingen en formulieren</h1>\
+         <p>Een PPM-afbeelding, gedecodeerd door de eigen euromedia-engine:</p>\
+         <img src=\"data:image/x-portable-pixmap,{ppm}\" width=\"192\" height=\"128\">\
+         <form action=\"/zoek\" method=\"get\">\
+         <p>Zoek het soevereine web:</p>\
+         <input type=\"text\" name=\"q\" value=\"soevereiniteit\">\
+         <input type=\"submit\" value=\"Zoeken\"></form></body></html>"
+    )
+}
+
+/// Eerste `<form>`-voorouder van `node` (of None).
+fn enclosing_form(dom: &Dom, node: usize) -> Option<usize> {
+    (0..dom.len()).find(|&f| dom.tag(f) == Some("form") && is_descendant(dom, f, node))
+}
+
+/// Is `node` een (transitieve) afstammeling van `anc` (of `anc` zelf)?
+fn is_descendant(dom: &Dom, anc: usize, node: usize) -> bool {
+    if anc == node {
+        return true;
+    }
+    dom.nodes[anc].children.iter().any(|&c| is_descendant(dom, c, node))
+}
+
+/// Minimale URL-encoding voor query-waarden (RFC 3986 unreserved blijft, rest %HH).
+fn url_encode(s: &str) -> String {
+    let mut out = String::new();
+    for &b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b' ' => out.push('+'),
+            _ => out.push_str(&alloc::format!("%{:02X}", b)),
+        }
+    }
+    out
 }
 
 pub fn hit_test(win_x: usize, win_y: usize, win_w: usize, mx: usize, my: usize) -> Hit {
@@ -256,7 +543,47 @@ pub fn hit_test(win_x: usize, win_y: usize, win_w: usize, mx: usize, my: usize) 
             return Hit::UrlBar;
         }
     }
+    // Paginagebied: test tegen de gelayoute formulierbesturingen (her-layout).
+    let py = ay + ADDR_H;
+    if my >= py {
+        if let Some(hit) = hit_page_control(win_x, win_y, win_w, mx, my) {
+            return hit;
+        }
+    }
     Hit::None
+}
+
+/// Her-layout de actieve pagina en zoek of (mx,my) op een veld/knop valt.
+fn hit_page_control(win_x: usize, win_y: usize, win_w: usize, mx: usize, my: usize) -> Option<Hit> {
+    let b = BROWSER.lock();
+    let br = b.as_ref()?;
+    let html = br.tabs.get(br.active)?.html.clone();
+    drop(b);
+    if html.trim().is_empty() {
+        return None;
+    }
+    let content_w = win_w.saturating_sub(MARGIN * 2);
+    let dom = euroweb::parse(&html);
+    let css = extract_styles(&dom);
+    let ss = euroweb::parse_stylesheet(&css);
+    let styles = euroweb::compute(&dom, &[&ss]);
+    let lb = euroweb::layout(&dom, &styles, content_w as f32);
+    let items = euroweb::paint(&dom, &styles, &lb);
+    let ox = win_x + MARGIN;
+    let oy = win_y + TITLEBAR_H + TABBAR_H + ADDR_H + MARGIN;
+    for item in &items {
+        let (ix, iy, iw, ih, hit) = match item {
+            DisplayItem::Field { x, y, w, h, node, .. } => (*x, *y, *w, *h, Hit::Field(*node)),
+            DisplayItem::Button { x, y, w, h, node, .. } => (*x, *y, *w, *h, Hit::Submit(*node)),
+            _ => continue,
+        };
+        let dx = ox + ix as usize;
+        let dy = oy + iy as usize;
+        if mx >= dx && mx < dx + iw as usize && my >= dy && my < dy + ih as usize {
+            return Some(hit);
+        }
+    }
+    None
 }
 
 // ── Render ───────────────────────────────────────────────────────────────────
@@ -360,6 +687,8 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
     let ox = x + margin;
     let oy = py + margin;
     let max_y = y + h;
+    let focused = *FOCUSED_FIELD.lock();
+    let cache = IMG_CACHE.lock();
     for item in &items {
         match item {
             DisplayItem::Rect { x: rx, y: ry, w: rw, h: rh, color } => {
@@ -374,6 +703,69 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
                 let dy = oy + *ty as usize;
                 if dy + *size as usize <= max_y {
                     text::draw_px(fb, dx, dy, s, col(*color), *size);
+                }
+            }
+            DisplayItem::Image { x: ix, y: iy, w: iw, h: ih, src } => {
+                let dx = ox + *ix as usize;
+                let dy = oy + *iy as usize;
+                let dw = *iw as usize;
+                let dh = (*ih as usize).min(max_y.saturating_sub(dy));
+                if dy < max_y && dh > 0 {
+                    let img = cache.iter().find(|(s, _)| s == src).map(|(_, e)| e);
+                    match img {
+                        Some(CachedImg::Ok(image)) => blit_image(fb, dx, dy, dw, dh, image),
+                        _ => {
+                            // Placeholder voor een ontbrekende/kapotte afbeelding.
+                            fb.fill_rect(dx, dy, dw, dh, Color::SURFACE_3);
+                            fb.draw_border(dx, dy, dw, dh, 1, Color::BORDER);
+                            text::draw_px(fb, dx + 8, dy + dh / 2 - 7, "\u{1F5BC} afbeelding", Color::TEXT_DIM, 12.0);
+                        }
+                    }
+                }
+            }
+            DisplayItem::Field { x: fx, y: fy, w: fw, h: fh, node, value, .. } => {
+                let dx = ox + *fx as usize;
+                let dy = oy + *fy as usize;
+                if dy + *fh as usize <= max_y {
+                    // Live waarde uit FORM_STATE (géén BROWSER-lock: die houden we hier al vast).
+                    let live = FORM_STATE.lock().iter().find(|(n, _)| n == node).map(|(_, v)| v.clone());
+                    let shown = live.unwrap_or_else(|| value.clone());
+                    let foc = focused == Some(*node);
+                    fb.fill_rounded_rect(dx, dy, *fw as usize, *fh as usize, 7, Color::SURFACE);
+                    fb.draw_border(dx, dy, *fw as usize, *fh as usize, if foc { 2 } else { 1 }, if foc { Color::ACCENT } else { Color::BORDER });
+                    let mut t = clip(&shown, (*fw as usize / 8).max(1));
+                    if foc {
+                        t.push('|');
+                    }
+                    text::draw_px(fb, dx + 9, dy + (*fh as usize).saturating_sub(18) / 2 + 2, &t, Color::INK, 13.5);
+                }
+            }
+            DisplayItem::Button { x: bx, y: by_, w: bw, h: bh, label, .. } => {
+                let dx = ox + *bx as usize;
+                let dy = oy + *by_ as usize;
+                if dy + *bh as usize <= max_y {
+                    fb.fill_rounded_rect(dx, dy, *bw as usize, *bh as usize, 8, Color::ACCENT);
+                    let lw = text::width_px(label, 13.5);
+                    let lx = dx + (*bw as usize).saturating_sub(lw) / 2;
+                    text::draw_px(fb, lx, dy + (*bh as usize).saturating_sub(18) / 2 + 2, label, Color::SURFACE, 13.5);
+                }
+            }
+        }
+    }
+}
+
+/// Blit een afbeelding in een dest-vak (w×h) met nearest-neighbor-schaling.
+fn blit_image(fb: &FrameBuffer, dx: usize, dy: usize, dw: usize, dh: usize, img: &Image) {
+    if img.width == 0 || img.height == 0 {
+        return;
+    }
+    for ry in 0..dh {
+        let sy = ry * img.height as usize / dh;
+        for rx in 0..dw {
+            let sx = rx * img.width as usize / dw;
+            if let Some(p) = img.get(sx as u32, sy as u32) {
+                if p[3] >= 8 {
+                    fb.put_pixel(dx + rx, dy + ry, Color::rgb(p[0], p[1], p[2]));
                 }
             }
         }

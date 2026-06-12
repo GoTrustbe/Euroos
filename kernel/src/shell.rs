@@ -204,10 +204,18 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "agent" | "euroagent" => crate::agent::shell(&format!("{arg1} {arg2}")),
         // CU-5: find — loop de VFS-boom af en filter op -name/-type/-maxdepth.
         "find" => find_walk(fs, line),
+        // AH-3: draai een echte `.wasm` uit het VFS in de no-JIT sandbox (cap-gated WASI).
+        "wasm" => {
+            if arg1.is_empty() {
+                alloc::vec![String::from("gebruik: wasm <bestand.wasm>   (bv. wasm /agents/demo.wasm)")]
+            } else {
+                crate::wasm::run_file(fs, arg1)
+            }
+        }
         // P1: EuroLocale — lokalisatie voor de 24 EU-talen.
         "locale" => crate::locale::shell(&format!("{arg1} {arg2}")),
-        // Q1: EuroInstall — installer/live-image-planner (dry-run).
-        "euroinstall" => crate::installer::shell(arg1),
+        // Q1/AH-1: EuroInstall — dry-run-plan, of `--to N` voor een ECHTE installatie.
+        "euroinstall" => crate::installer::shell(line),
         // O3: EuroCA — soevereine lokale certificaatautoriteit.
         "euroca" => crate::ca::shell(),
         "euroattest" => crate::attest::shell(),
@@ -893,6 +901,8 @@ pub(crate) fn coreutils_filter(cmd: &str, args: &[&str], input: &[u8]) -> Option
         "base32" => cu::encoding::base32(args.contains(&"-d"), input),
         "sha256sum" => cu::checksum::sha256sum(input, "-"),
         "sha512sum" => cu::checksum::sha512sum(input, "-"),
+        "sha224sum" => cu::checksum::sha224sum(input, "-"),
+        "sha384sum" => cu::checksum::sha384sum(input, "-"),
         "cksum" => cu::encoding::cksum(input, "-"),
         _ => return None,
     };
@@ -927,12 +937,66 @@ pub(crate) fn run_pipeline(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             }
             continue;
         }
+        // `xargs [-nN] [CMD [args...]]`: bouw uit de stdin-tokens een commando en
+        // voer het uit (default CMD = echo). Heeft `ctx` nodig → apart afgehandeld.
+        if cmd == "xargs" {
+            bytes = run_xargs(ctx, &toks[1..], &bytes);
+            continue;
+        }
         match coreutils_filter(cmd, &toks[1..], &bytes) {
             Some(o) => bytes = o,
             None => return alloc::vec![alloc::format!("{cmd}: verwerkt geen pijplijn-invoer (geen filter)")],
         }
     }
     render_bytes(bytes)
+}
+
+/// `xargs [-n N] [CMD [args...]]` — lees de stdin-bytes, splits ze in tokens
+/// (witruimte/regeleinden), en voer `CMD args... tokens...` uit via de shell.
+/// Met `-n N` draait het CMD per batch van N tokens; zonder CMD is het `echo`.
+/// De uitvoer van alle aanroepen wordt aaneengeschakeld teruggegeven.
+fn run_xargs(ctx: &mut ShellCtx, args: &[&str], input: &[u8]) -> Vec<u8> {
+    // Parse `-n N` / `-nN`; de rest is CMD + initiële args.
+    let mut per: Option<usize> = None;
+    let mut rest: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "-n" {
+            if let Some(v) = args.get(i + 1).and_then(|v| v.parse::<usize>().ok()) {
+                per = Some(v.max(1));
+                i += 2;
+                continue;
+            }
+        } else if let Some(v) = args[i].strip_prefix("-n").and_then(|v| v.parse::<usize>().ok()) {
+            per = Some(v.max(1));
+            i += 1;
+            continue;
+        }
+        rest.push(args[i]);
+        i += 1;
+    }
+    let cmd = rest.first().copied().unwrap_or("echo");
+    let base: Vec<&str> = rest.iter().skip(1).copied().collect();
+    let text = core::str::from_utf8(input).unwrap_or("");
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+
+    let batches: Vec<&[&str]> = match per {
+        Some(n) if !tokens.is_empty() => tokens.chunks(n).collect(),
+        _ => alloc::vec![tokens.as_slice()],
+    };
+    let mut out: Vec<u8> = Vec::new();
+    for batch in batches {
+        let mut cmdline = String::from(cmd);
+        for a in base.iter().chain(batch.iter()) {
+            cmdline.push(' ');
+            cmdline.push_str(a);
+        }
+        for l in exec(ctx, &cmdline) {
+            out.extend_from_slice(l.as_bytes());
+            out.push(b'\n');
+        }
+    }
+    out
 }
 
 /// `find [START] [-name GLOB] [-type f|d] [-maxdepth N]` — loop de VFS-boom af

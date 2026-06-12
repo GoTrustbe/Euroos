@@ -97,10 +97,10 @@ AD en AE kunnen desnoods parallel (raken verschillende modules), maar AD eerst i
 
 | Item | Wat | Waar | Done |
 |---|---|---|---|
-| AG-1 EuroApps-GUI's (lead: EuroFiles, EuroNotes, EuroClock) | `render()`-vensters voor de geverifieerde engines, via het bestaande `SuiteApp`-dispatchpatroon (zoals calc_ui/webview) | `kernel/src/{files,notes,clockapp}.rs`, `compositor.rs`, `suite_ui.rs` | venster opent vanuit dock, toont echte engine-data, muis/toetsenbord werkt; screenshot-bewijs |
-| AG-2 Browser: afbeeldingen + formulieren | QOI/PPM-decode (euromedia hergebruiken) in de layout/paint; `<input>`/`<form>` met GET-submit | `crates/euroweb/{layout,paint}.rs`, `kernel/src/webview.rs` | `[ab]`-uitbreiding: pagina met afbeelding rendert; formulier-submit doet echte GET |
-| AG-3 Installer-executie | de geplande stappen écht uitvoeren op een tweede (virtio-)disk: partities, formatteren, image-write, loader | `kernel/src/instexec.rs`, `gpt.rs`, `update.rs` | `[q1x]`-uitbreiding: na install boot de tweede disk standalone (multidisk-harnas) |
-| AG-4 Coreutils long-tail | `xargs`, pipe-stdin voor meer built-ins | `crates/eurocoreutils`, `kernel/src/shell.rs` | `[cu]`-uitbreiding + host-tests |
+| AG-1 EuroApps-GUI's (EuroFiles/EuroNotes/EuroClock) ✅ | `render()`-vensters voor de geverifieerde engines via het `SuiteApp`-dispatchpatroon | `kernel/src/{files,notes,clockapp}.rs`, `compositor.rs`, `suite_ui.rs` | **✅ DONE 2026-06-12** (`[ag]`, ag1-desktop.png): EuroFiles=live EuroFS · EuroNotes=euronotes · EuroClock=RTC+wereldklokken; dock 6→8 eerlijke tegels; klik-navigatie/-selectie werkt |
+| AG-2 Browser: afbeeldingen + formulieren ✅ | QOI/PPM-decode (euromedia hergebruiken) in de layout/paint; `<input>`/`<form>` met GET-submit | `crates/euroweb/{layout,paint}.rs`, `kernel/src/webview.rs` | **✅ DONE 2026-06-12** (`[ag2]`, ag2-browser.png): `<img>` met QOI/PPM-decode (euromedia) rendert; `<input>`/`<form>` → echte GET-submit (`/zoek?q=…`); in-page klik/typen werkt |
+| AG-3 Installer-executie ✅ | echte GPT + FAT32-ESP (eigen `eurofat`-crate) + EuroFS naar een 2e virtio-schijf; kernel leest eigen install-media via UEFI (geen embed) | `crates/eurofat`, `kernel/src/instexec.rs`, `scripts/install-test.py` | **✅ DONE 2026-06-12** (`[q1x2]`, ag3-standalone.png): kernel installeert bootbare EuroOS naar blanco schijf; die boot STANDALONE; fsck/mtools/sgdisk + host-QEMU-boot gevalideerd |
+| AG-4 Coreutils long-tail ✅ | `xargs` (+ `-n N`) als pijplijn-stage + pipe-stdin voor sha224/384sum | `kernel/src/shell.rs` | **✅ DONE 2026-06-12** (`[pipe]` boot-zelftest: `seq 3\|xargs echo`, `seq 4\|xargs -n2 echo`, sha224-filter) |
 | AG-5 TTS-verkenning | onderzoek/prototype verstaanbare spraak (formant/diphone) — **earcons blijven het eerlijke verhaal tot dit echt werkt** | `crates/euroaudio`, `kernel/src/access.rs` | expliciet onderzoeksresultaat; géén claim zonder verstaanbare output |
 
 ---

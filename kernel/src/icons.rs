@@ -25,6 +25,7 @@ fn icon_svg(name: &str) -> &'static str {
         "grid" => "<rect x=\"4\" y=\"4\" width=\"7\" height=\"7\" rx=\"1.6\"/><rect x=\"13\" y=\"4\" width=\"7\" height=\"7\" rx=\"1.6\"/><rect x=\"4\" y=\"13\" width=\"7\" height=\"7\" rx=\"1.6\"/><rect x=\"13\" y=\"13\" width=\"7\" height=\"7\" rx=\"1.6\"/>",
         "user" => "<circle cx=\"12\" cy=\"8.5\" r=\"3.5\"/><path d=\"M5.5 19.5a6.5 6.5 0 0 1 13 0z\"/>",
         "bell" => "<path d=\"M6.5 10a5.5 5.5 0 0 1 11 0c0 4 1.5 5 1.5 5H5s1.5-1 1.5-5z\"/><path d=\"M10 18.5a2 2 0 0 0 4 0\"/>",
+        "clock" => "<circle cx=\"12\" cy=\"12\" r=\"8.5\"/><path d=\"M12 7.5 V12 L15.5 14\"/>",
         "plus" => "<path d=\"M12 5 V19 M5 12 H19\"/>",
         "home" => "<path d=\"M3.5 11.5 L12 4 L20.5 11.5 M6 10 V19.5 H18 V10\"/>",
         "doc" => "<path d=\"M6 3 H14 L18 7 V21 H6 Z M14 3 V7 H18\"/>",

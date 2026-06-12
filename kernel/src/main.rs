@@ -125,6 +125,19 @@ use compositor::SIDEBAR_W;
 use font::{draw_string, text_width};
 use graphics::{Color, FrameBuffer};
 
+/// AG-1: lees een ECHTE map uit het FS en geef ze aan de EuroFiles-GUI. Geen mock —
+/// de bestandsbeheerder toont precies wat `fs.list_dir` teruggeeft.
+fn load_files_dir(fs: &mut dyn FileSystem, path: &str) {
+    let items = match fs.list_dir(path) {
+        Ok(v) => v
+            .into_iter()
+            .map(|e| (e.name, e.kind == eurofs::EntryKind::Directory, e.size))
+            .collect::<alloc::vec::Vec<_>>(),
+        Err(_) => alloc::vec::Vec::new(),
+    };
+    files::load_dir(path, items);
+}
+
 const PROMPT: &str = "euroos:/ $ ";
 
 /// EuroGuard Niveau-1 systeem-policy (Track 7, Fase 7.2). Wordt bij de eerste
@@ -199,6 +212,11 @@ fn main() -> Status {
     acpi::set_rsdp(rsdp);
     serial_println!("[acpi] RSDP @ {rsdp:#x}");
 
+    // AG-3: lees onze EIGEN install-media (loader + A/B-kernel) van het boot-volume
+    // via UEFI — KAN ALLEEN NU, vóór ExitBootServices. Zo kan de installer later een
+    // bootbare kopie naar een doelschijf schrijven (geen embed, echte huidige bytes).
+    instexec::capture_media();
+
     // ── DE SPRONG: verlaat UEFI Boot Services. Hierna geen UEFI-services meer. ──
     serial_println!("[euro] ExitBootServices...");
     let _ = unsafe { boot::exit_boot_services(MemoryType::LOADER_DATA) };
@@ -262,13 +280,31 @@ fn main() -> Status {
     // als er een virtio-blk-schijf is, anders in RAM (live-modus). Bestaande FS
     // wordt gemount; een verse/lege schijf wordt geformatteerd + gevuld
     // (= installatie). Zo overleven bestanden een herstart — als een echt OS.
-    let rootdev = if virtio_blk::present() {
+    // AG-3: als we ECHTE install-media hebben én er een blanco virtio-doelschijf is,
+    // installeer een bootbare EuroOS daarheen (i.p.v. ze als root te gebruiken) en
+    // draai zelf verder in live-modus — de doelschijf boot standalone (multidisk-harnas).
+    let installed = if instexec::media_available() && virtio_blk::present() {
+        if instexec::disk_is_blank(0) {
+            // Verse doelschijf → installeer een bootbare, geprovisioneerde EuroOS (slot A).
+            instexec::install_to_disk(0, &instexec::default_config())
+        } else {
+            // Al geïnstalleerd → demonstreer de A/B-ZELFUPDATE: stage slot B + flip
+            // slot_config. Na een standalone reboot kiest de loader slot B (AH-2).
+            instexec::stage_update_b(0);
+            true // we draaien live verder; de schijf is de boot-/updatetarget
+        }
+    } else {
+        false
+    };
+    let rootdev = if virtio_blk::present() && !installed {
         let total = virtio_blk::capacity_sectors();
         let (start, blocks) = gpt::find_eurofs_partition().unwrap_or_else(|| gpt::install(total));
         rootblk::RootBlk::disk(start, blocks)
     } else {
-        rootblk::RootBlk::ram(2048) // 8 MiB live-ramdisk
+        rootblk::RootBlk::ram(2048) // 8 MiB live-ramdisk (ook ná een installatie)
     };
+    // De install-media (~6 MiB) blijft beschikbaar zodat de gebruiker ook LATER
+    // vanaf het draaiende bureaublad kan installeren (`euroinstall --to N`).
     let on_disk = rootdev.is_disk();
     let mut fs = match EuroFs::mount(rootdev.clone(), rtc::epoch()) {
         Ok(f) => {
@@ -1511,6 +1547,8 @@ fn main() -> Status {
 
     // EuroWeb (AB-B1): soevereine browser-engine — HTML5-tokenizer + DOM.
     web::selftest();
+    // AG-2: afbeeldingen (<img> + QOI/PPM-decode) + formulieren (echte GET).
+    web::selftest_ag2();
 
     // EuroReken (AC-1): soevereine rekenmachine — std/wetensch./programmeur.
     reken::selftest();
@@ -1605,6 +1643,10 @@ fn main() -> Status {
         );
     }
 
+    // AH-3 (H4-remainder): `wasm <bestand>` — een echte zelf-dragende .wasm van
+    // EuroFS in de no-JIT sandbox draaien, met cap-gated WASI.
+    wasm::selftest_file(&mut vfs);
+
     // pipe-stdin (CU-afmaak): bewijs dat coreutils-built-ins door een pijplijn
     // componeren — stdout van fase N → stdin van N+1 — deterministisch.
     {
@@ -1625,9 +1667,21 @@ fn main() -> Status {
         let r4 = shell::exec(&mut pctx, "seq 3 | tee /pipe-tee.txt | wc -l");
         let tee_through = r4.iter().any(|l| l.split_whitespace().next() == Some("3"));
         let tee_written = pctx.fs.read_file("/pipe-tee.txt").map(|d| d.len()).unwrap_or(0) == 6; // "1\n2\n3\n"
+        // AG-4: xargs — bouw uit de stdin-tokens een commando en voer het uit.
+        // seq 3 | xargs echo → één regel "1 2 3".
+        let rx1 = shell::exec(&mut pctx, "seq 3 | xargs echo");
+        let xargs1 = rx1.iter().any(|l| l.split_whitespace().collect::<alloc::vec::Vec<_>>() == ["1", "2", "3"]);
+        // seq 4 | xargs -n2 echo → twee batches: "1 2" en "3 4".
+        let rx2 = shell::exec(&mut pctx, "seq 4 | xargs -n2 echo");
+        let xargs2 = rx2.iter().filter(|l| !l.trim().is_empty()).count() == 2
+            && rx2.iter().any(|l| l.split_whitespace().collect::<alloc::vec::Vec<_>>() == ["1", "2"])
+            && rx2.iter().any(|l| l.split_whitespace().collect::<alloc::vec::Vec<_>>() == ["3", "4"]);
+        // AG-4: extra pipe-stdin built-in (sha224sum als pijplijn-filter).
+        let rsha = shell::exec(&mut pctx, "echo euroos | sha224sum");
+        let sha_pipe = rsha.iter().any(|l| l.len() >= 56 && l.contains("-"));
         serial_println!(
-            "[pipe] built-in pijplijn: cat|grep|wc-l=2 →{pipe1}, seq|tail-2 →{pipe2}, echo|tr →{pipe3}, seq|tee|wc(door={tee_through},bestand={tee_written}) → {}",
-            if pipe1 && pipe2 && pipe3 && tee_through && tee_written { "OK (stdout→stdin tussen coreutils-built-ins + tee) ✓" } else { "MISLUKT" }
+            "[pipe] built-in pijplijn: cat|grep|wc-l=2 →{pipe1}, seq|tail-2 →{pipe2}, echo|tr →{pipe3}, seq|tee|wc(door={tee_through},bestand={tee_written}), xargs(echo={xargs1},-n2={xargs2}), sha224-filter={sha_pipe} → {}",
+            if pipe1 && pipe2 && pipe3 && tee_through && tee_written && xargs1 && xargs2 && sha_pipe { "OK (stdout→stdin + tee + xargs + sha-filter) ✓" } else { "MISLUKT" }
         );
     }
 
@@ -1834,11 +1888,11 @@ fn main() -> Status {
     ];
     // Z-volgorde (back-to-front): System achter, Terminal vooraan.
     let mut order: Vec<usize> = alloc::vec![0, 1];
-    // Dock-icoon (0..5 = files/browser/mail/settings/store/photos) → venster-index.
-    // De desktop start LEEG (alle vensters verborgen); een dock-klik opent een app.
-    let mut dock_targets: [Option<usize>; 6] = [None; 6];
-    dock_targets[0] = Some(0); // files  → System (live kernelstatus)
-    dock_targets[2] = Some(1); // mail   → Terminal (de echte shell)
+    // Dock-tegel (zie compositor::DOCK_APPS: files/notes/clock/browser/terminal/
+    // settings/store/star) → venster-index. De desktop start LEEG (alle vensters
+    // verborgen); een dock-klik opent een app. (AG-1 voegde files/notes/clock toe.)
+    let mut dock_targets: [Option<usize>; 8] = [None; 8];
+    dock_targets[4] = Some(1); // terminal → Terminal (de echte shell)
 
     // ── H2: LIVE DISPLAY-SERVER ── bind een AF_UNIX-socket (H1), laat een app-
     // proces verbinden en via het eurodisplay-protocol (Request/Event) een venster
@@ -1970,7 +2024,7 @@ fn main() -> Status {
             restore: None,
         });
         order.push(i_web);
-        dock_targets[1] = Some(i_web); // dock: wereldbol → EuroWeb
+        dock_targets[3] = Some(i_web); // dock: wereldbol → EuroWeb
         serial_println!("[b6] EuroWeb: bruikbare browser (tabbladen + adresbalk) klaar (open via dock; typ een URL) ✓");
     }
 
@@ -1994,7 +2048,7 @@ fn main() -> Status {
             restore: None,
         });
         order.push(i_calc);
-        dock_targets[4] = Some(i_calc); // dock: store-icoon → EuroReken (echt)
+        dock_targets[6] = Some(i_calc); // dock: store-icoon → EuroReken (echt)
         // Zelftest: exact dezelfde input-functie die toetsenbord/muis aanroepen,
         // ECHT doorgerekend door de euroreken-engine — geen hardcoded waarde.
         let mut probe = alloc::vec![String::new(), String::from("0")];
@@ -2029,7 +2083,7 @@ fn main() -> Status {
             restore: None,
         });
         order.push(i_set);
-        dock_targets[3] = Some(i_set); // dock: instellingen-icoon → EuroBeheer
+        dock_targets[5] = Some(i_set); // dock: instellingen-icoon → EuroBeheer
         serial_println!("[set] EuroBeheer: instellingenpaneel klaar (live EuroGuard/netwerk/systeem; open via dock) ✓");
         // Zelftest: bewijs dat het paneel ECHT beheert — add_blocked_domain (de functie
         // die de "blokkeer domein"-knop aanroept) blokkeert daadwerkelijk een DNS-domein.
@@ -2063,7 +2117,7 @@ fn main() -> Status {
             restore: None,
         });
         order.push(i_agent);
-        dock_targets[5] = Some(i_agent); // dock: 6e icoon → EuroAgent
+        dock_targets[7] = Some(i_agent); // dock: ster-icoon → EuroAgent
         // Een voorbeeld-dispatch zodat het paneel meteen een echte, cap-gated
         // transcript toont (de gebruiker kan daarna z'n eigen intent typen).
         agent_ui::dispatch("vergadering opnemen en samenvatten");
@@ -2090,6 +2144,62 @@ fn main() -> Status {
         });
         order.push(i_inst);
         serial_println!("[bb7] EuroInstall: begeleide grafische installer klaar (plan + live FDE-enrol; uitvoering = instexec) ✓");
+
+        // ── AG-1: EuroFiles / EuroNotes / EuroClock — echte desktop-apps ────────
+        // Drie vensters die door de dock geopend worden en ECHTE engine-data tonen:
+        // EuroFiles = live EuroFS, EuroNotes = euronotes-Markdown, EuroClock = RTC.
+        // De desktop start LEEG (visible=false) — net als de andere apps; een
+        // dock-klik opent ze. (Boot-geverifieerd met screenshot ag1-desktop.png.)
+        let i_files = windows.len();
+        windows.push(compositor::Window {
+            x: SIDEBAR_W + 30, y: 70, w: 720, h: 620,
+            title: String::from("EuroFiles"),
+            content: Vec::new(), ui: Vec::new(),
+            active: false, accent: Color::rgb(0x20, 0x59, 0xC8),
+            sec: eds::SecState::new(true, true, false),
+            app: suite_ui::SuiteApp::Files,
+            visible: false,
+            restore: None,
+        });
+        order.push(i_files);
+        dock_targets[0] = Some(i_files); // dock: files-icoon → EuroFiles
+        let i_notes = windows.len();
+        windows.push(compositor::Window {
+            x: SIDEBAR_W + 780, y: 70, w: 720, h: 480,
+            title: String::from("EuroNotes"),
+            content: Vec::new(), ui: Vec::new(),
+            active: false, accent: Color::rgb(0xE2, 0xA3, 0x3A),
+            sec: eds::SecState::new(true, true, false),
+            app: suite_ui::SuiteApp::Notes,
+            visible: false,
+            restore: None,
+        });
+        order.push(i_notes);
+        dock_targets[1] = Some(i_notes); // dock: notes-icoon → EuroNotes
+        let i_clock = windows.len();
+        windows.push(compositor::Window {
+            x: SIDEBAR_W + 780, y: 580, w: 600, h: 430,
+            title: String::from("EuroClock"),
+            content: Vec::new(), ui: Vec::new(),
+            active: false, accent: Color::rgb(0x6A, 0x4B, 0xD0),
+            sec: eds::SecState::new(true, true, false),
+            app: suite_ui::SuiteApp::Clock,
+            visible: false,
+            restore: None,
+        });
+        order.push(i_clock);
+        dock_targets[2] = Some(i_clock); // dock: clock-icoon → EuroClock
+
+        // EuroFiles vooraf vullen met de ECHTE wortelmap van het FS, zodat het
+        // eerste dock-open meteen inhoud toont. Geen dock-tegel actief bij boot.
+        load_files_dir(ctx.fs, "/");
+        compositor::set_active_dock(None);
+        let fl_path = files::current_path();
+        serial_println!(
+            "[ag] EuroApps: EuroFiles (live FS @ {}), EuroNotes (euronotes), EuroClock (RTC {}) — 3 vensters + dock-tegels 0/1/2 ✓",
+            if fl_path.is_empty() { "/" } else { &fl_path },
+            rtc::clock_string()
+        );
     }
 
     // BB-2 sluitstuk: presenteer het LEVENDE bureaublad op het virtio-gpu-scherm via
@@ -2183,6 +2293,7 @@ fn main() -> Status {
                         // Toggle dicht.
                         windows[w].visible = false;
                         order.retain(|&x| x != w);
+                        compositor::set_active_dock(None);
                         need_full = true;
                     } else {
                         order.retain(|&x| x != w);
@@ -2192,6 +2303,11 @@ fn main() -> Status {
                         }
                         windows[w].visible = true;
                         windows[w].active = true;
+                        compositor::set_active_dock(Some(icon));
+                        // EuroFiles: vul de lijst met de echte map als ze nog leeg is.
+                        if windows[w].app == suite_ui::SuiteApp::Files && files::current_path().is_empty() {
+                            load_files_dir(ctx.fs, "/");
+                        }
                         need_full = true;
                     }
                 }
@@ -2268,6 +2384,8 @@ fn main() -> Status {
                             webview::Hit::Tab(t) => webview::switch_tab(t),
                             webview::Hit::NewTab => webview::new_tab(),
                             webview::Hit::UrlBar => webview::begin_edit(),
+                            webview::Hit::Field(n) => webview::focus_field(n), // paginaveld focus
+                            webview::Hit::Submit(n) => webview::submit_form(n), // echte GET-submit
                             webview::Hit::None => {}
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Settings {
@@ -2284,6 +2402,14 @@ fn main() -> Status {
                         if agent_ui::field_at(windows[i].x, windows[i].y, windows[i].w, px, py) {
                             agent_ui::begin_edit();
                         }
+                    } else if windows[i].app == suite_ui::SuiteApp::Files {
+                        // Klik op een map/plaats/".." → navigeer in het ECHTE FS.
+                        if let Some(path) = files::hit_test(windows[i].x, windows[i].y, px, py) {
+                            load_files_dir(ctx.fs, &path);
+                        }
+                    } else if windows[i].app == suite_ui::SuiteApp::Notes {
+                        // Klik in de notitielijst → selecteer een andere notitie.
+                        notes::hit_test(windows[i].x, windows[i].y, px, py);
                     }
                     need_full = true;
                 }
@@ -2334,13 +2460,18 @@ fn main() -> Status {
                 }
                 continue;
             }
-            // Browser-focus → toetsen bewerken de adresbalk; Enter navigeert (echte fetch).
+            // Browser-focus → een gefocust PAGINAVELD krijgt de toets; anders de
+            // adresbalk (Enter navigeert via een echte fetch).
             if browser_focused {
-                if !webview::editing() {
-                    webview::begin_edit();
-                }
-                if let Some(url) = webview::edit_key(k) {
-                    webview::navigate(&url); // blokkerende fetch (volgt redirects)
+                if webview::field_focused() {
+                    webview::field_key(k); // typen in een formulierveld
+                } else {
+                    if !webview::editing() {
+                        webview::begin_edit();
+                    }
+                    if let Some(url) = webview::edit_key(k) {
+                        webview::navigate(&url); // blokkerende fetch (volgt redirects)
+                    }
                 }
                 need_full = true;
                 continue;

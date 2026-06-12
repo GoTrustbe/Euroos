@@ -31,7 +31,7 @@ pub mod tokenizer;
 
 pub use css::{compute, parse_stylesheet, ComputedStyle, Rule, Selector, Stylesheet};
 pub use dom::{Attr, Dom, Node, NodeId, NodeKind};
-pub use layout::{layout, layout_with, BoxType, Dimensions, LayoutBox, Rect};
+pub use layout::{layout, layout_with, BoxType, Dimensions, LayoutBox, Rect, Replaced};
 pub use paint::{paint, parse_color, DisplayItem};
 pub use parser::parse;
 pub use tokenizer::{tokenize, Token};

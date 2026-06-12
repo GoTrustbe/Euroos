@@ -38,6 +38,7 @@ eurocoreutils = { path = "../crates/eurocoreutils" }
 euroagent = { path = "../crates/euroagent" }
 eurolocale = { path = "../crates/eurolocale" }
 euroinstall = { path = "../crates/euroinstall" }
+eurofat = { path = "../crates/eurofat" }
 euroca = { path = "../crates/euroca" }
 euroattest = { path = "../crates/euroattest" }
 euroidm = { path = "../crates/euroidm" }

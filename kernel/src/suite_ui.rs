@@ -27,6 +27,12 @@ pub enum SuiteApp {
     Agent,
     /// EuroInstall: begeleide grafische installer (plan + live FDE-enrol).
     Installer,
+    /// EuroFiles: bestandsbeheerder — toont het LIVE EuroFS.
+    Files,
+    /// EuroNotes: notitie-app — echte Markdown via de euronotes-engine.
+    Notes,
+    /// EuroClock: wereldklokken + lokale tijd uit de ECHTE RTC.
+    Clock,
 }
 
 const TITLEBAR_H: usize = 44; // moet gelijk zijn aan compositor::TITLEBAR_H
@@ -50,6 +56,11 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize, app: Sui
         SuiteApp::Settings => {}
         SuiteApp::Agent => {}
         SuiteApp::Installer => {}
+        // Files/Notes/Clock lezen hun eigen toestand en worden vóór deze dispatch
+        // afgehandeld (zie compositor::draw_window_body).
+        SuiteApp::Files => {}
+        SuiteApp::Notes => {}
+        SuiteApp::Clock => {}
         SuiteApp::None => {}
     }
 }

@@ -250,6 +250,95 @@ pub fn decode(data: &[u8]) -> Result<Image, QoiError> {
     Ok(Image { width, height, pixels })
 }
 
+/// Foutsoorten bij het decoderen van een PPM/PGM.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PpmError {
+    BadMagic,
+    BadHeader,
+    Truncated,
+    Unsupported,
+}
+
+/// Decodeer een **Netpbm**-afbeelding (PPM `P3`/`P6` of PGM `P2`/`P5`) naar [`Image`].
+/// Een simpel, header-leesbaar formaat — handig naast QOI omdat veel tooling het
+/// rechtstreeks schrijft. Ondersteunt 8-bit (maxval ≤ 255). Geen `unsafe`.
+pub fn decode_ppm(data: &[u8]) -> Result<Image, PpmError> {
+    if data.len() < 2 || data[0] != b'P' {
+        return Err(PpmError::BadMagic);
+    }
+    let magic = data[1];
+    let (ascii, gray) = match magic {
+        b'2' => (true, true),   // PGM ascii
+        b'3' => (true, false),  // PPM ascii
+        b'5' => (false, true),  // PGM binair
+        b'6' => (false, false), // PPM binair
+        _ => return Err(PpmError::BadMagic),
+    };
+    // Header-tokens (breedte, hoogte, maxval) lezen — whitespace + #-commentaar.
+    let mut pos = 2usize;
+    let next_token = |pos: &mut usize| -> Option<u32> {
+        loop {
+            while *pos < data.len() && (data[*pos] as char).is_ascii_whitespace() {
+                *pos += 1;
+            }
+            if *pos < data.len() && data[*pos] == b'#' {
+                while *pos < data.len() && data[*pos] != b'\n' {
+                    *pos += 1;
+                }
+                continue;
+            }
+            break;
+        }
+        let start = *pos;
+        while *pos < data.len() && (data[*pos] as char).is_ascii_digit() {
+            *pos += 1;
+        }
+        if *pos == start {
+            return None;
+        }
+        core::str::from_utf8(&data[start..*pos]).ok()?.parse().ok()
+    };
+    let width = next_token(&mut pos).ok_or(PpmError::BadHeader)?;
+    let height = next_token(&mut pos).ok_or(PpmError::BadHeader)?;
+    let maxval = next_token(&mut pos).ok_or(PpmError::BadHeader)?;
+    if width == 0 || height == 0 || maxval == 0 || maxval > 255 {
+        return Err(PpmError::Unsupported);
+    }
+    let n = (width * height) as usize;
+    let mut pixels = Vec::with_capacity(n);
+    if ascii {
+        // ASCII-samples: per pixel 1 (gray) of 3 (rgb) getallen.
+        for _ in 0..n {
+            if gray {
+                let v = next_token(&mut pos).ok_or(PpmError::Truncated)? as u8;
+                pixels.push([v, v, v, 255]);
+            } else {
+                let r = next_token(&mut pos).ok_or(PpmError::Truncated)? as u8;
+                let g = next_token(&mut pos).ok_or(PpmError::Truncated)? as u8;
+                let b = next_token(&mut pos).ok_or(PpmError::Truncated)? as u8;
+                pixels.push([r, g, b, 255]);
+            }
+        }
+    } else {
+        // Binair: precies één whitespace na maxval, dan ruwe bytes.
+        pos += 1; // de scheidende whitespace
+        let per = if gray { 1 } else { 3 };
+        if pos + n * per > data.len() {
+            return Err(PpmError::Truncated);
+        }
+        for i in 0..n {
+            if gray {
+                let v = data[pos + i];
+                pixels.push([v, v, v, 255]);
+            } else {
+                let o = pos + i * 3;
+                pixels.push([data[o], data[o + 1], data[o + 2], 255]);
+            }
+        }
+    }
+    Ok(Image { width, height, pixels })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +418,39 @@ mod tests {
         img.set(2, 0, [255, 0, 0, 200]);
         img.set(3, 0, [0, 255, 0, 200]);
         assert_eq!(decode(&encode(&img)).unwrap(), img);
+    }
+
+    #[test]
+    fn ppm_p3_ascii() {
+        // 2×2 PPM met commentaar + extra whitespace.
+        let src = b"P3\n# een commentaar\n2 2\n255\n 255 0 0  0 255 0\n0 0 255  255 255 0\n";
+        let img = decode_ppm(src).unwrap();
+        assert_eq!((img.width, img.height), (2, 2));
+        assert_eq!(img.get(0, 0), Some([255, 0, 0, 255]));
+        assert_eq!(img.get(1, 0), Some([0, 255, 0, 255]));
+        assert_eq!(img.get(0, 1), Some([0, 0, 255, 255]));
+        assert_eq!(img.get(1, 1), Some([255, 255, 0, 255]));
+    }
+
+    #[test]
+    fn ppm_p6_binary() {
+        // 2×1 binaire PPM: rood, groen.
+        let mut src = Vec::from(&b"P6\n2 1\n255\n"[..]);
+        src.extend_from_slice(&[255, 0, 0, 0, 255, 0]);
+        let img = decode_ppm(&src).unwrap();
+        assert_eq!((img.width, img.height), (2, 1));
+        assert_eq!(img.get(0, 0), Some([255, 0, 0, 255]));
+        assert_eq!(img.get(1, 0), Some([0, 255, 0, 255]));
+    }
+
+    #[test]
+    fn ppm_p5_gray_and_errors() {
+        let mut src = Vec::from(&b"P5\n2 1\n255\n"[..]);
+        src.extend_from_slice(&[40, 200]);
+        let img = decode_ppm(&src).unwrap();
+        assert_eq!(img.get(0, 0), Some([40, 40, 40, 255]));
+        assert_eq!(img.get(1, 0), Some([200, 200, 200, 255]));
+        assert_eq!(decode_ppm(b"PX\n1 1\n255\n\0"), Err(PpmError::BadMagic));
+        assert_eq!(decode_ppm(b"P6\n2 2\n255\n\0"), Err(PpmError::Truncated));
     }
 }
