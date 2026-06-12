@@ -24,6 +24,20 @@ const DOCK_M: usize = 14;
 // Rechter statuspaneel.
 const PANEL_W: usize = 284;
 
+// Dock-tegelmetriek + de app-volgorde (index = `dock_targets`-index in main.rs).
+const TILE: usize = 42;
+const TILE_GAP: usize = 8;
+const TILE_TOP: usize = DOCK_M + 64;
+/// De dock-app-tegels, van boven naar onder. Honest mapping: elk icoon opent de
+/// app die het voorstelt (AG-1 voegde files/notes/clock toe).
+pub const DOCK_APPS: [&str; 8] = ["files", "notes", "clock", "browser", "terminal", "settings", "store", "star"];
+/// Welke dock-tegel is geopend/actief (usize::MAX = geen) — voor het accentbalkje.
+static ACTIVE_DOCK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+/// Markeer welke dock-tegel actief is (de kernel zet dit bij open/sluiten).
+pub fn set_active_dock(i: Option<usize>) {
+    ACTIVE_DOCK.store(i.unwrap_or(usize::MAX), core::sync::atomic::Ordering::Relaxed);
+}
+
 /// Een venster (surface) met titel, inhoud en security-status (EDS). De body toont
 /// `content` als monospace tekstregels (terminal / live systeemstatus) of, als `ui`
 /// niet leeg is, een EuroUI-widgetpaneel.
@@ -87,18 +101,17 @@ impl Window {
     }
 }
 
-/// Welke dock-icoon-index (0..5 = files/browser/mail/settings/store/photos) ligt
-/// onder (px,py)? None als de klik niet op een dock-tegel valt.
+/// Welke dock-tegel-index (zie [`DOCK_APPS`]) ligt onder (px,py)? None als de
+/// klik niet op een tegel valt.
 pub fn dock_icon_at(px: usize, py: usize) -> Option<usize> {
     if px < DOCK_X || px >= DOCK_X + DOCK_W {
         return None;
     }
-    let top = DOCK_M + 64;
-    if py < top {
+    if py < TILE_TOP {
         return None;
     }
-    let i = (py - top) / (42 + 8);
-    if i < 6 && py < top + i * (42 + 8) + 42 {
+    let i = (py - TILE_TOP) / (TILE + TILE_GAP);
+    if i < DOCK_APPS.len() && py < TILE_TOP + i * (TILE + TILE_GAP) + TILE {
         Some(i)
     } else {
         None
@@ -195,6 +208,21 @@ pub fn draw_window_body(fb: &FrameBuffer, win: &Window) {
         crate::installer::render(fb, win.x, win.y, win.w, win.h);
         return;
     }
+    // EuroFiles: bestandsbeheerder — toont het LIVE EuroFS.
+    if win.app == crate::suite_ui::SuiteApp::Files {
+        crate::files::render(fb, win.x, win.y, win.w, win.h);
+        return;
+    }
+    // EuroNotes: notitie-app — echte Markdown via de euronotes-engine.
+    if win.app == crate::suite_ui::SuiteApp::Notes {
+        crate::notes::render(fb, win.x, win.y, win.w, win.h);
+        return;
+    }
+    // EuroClock: wereldklokken + lokale tijd uit de ECHTE RTC.
+    if win.app == crate::suite_ui::SuiteApp::Clock {
+        crate::clockapp::render(fb, win.x, win.y, win.w, win.h);
+        return;
+    }
     // EuroSuite-app? Render de rijke Writer/Calc/Impress-GUI.
     if win.app != crate::suite_ui::SuiteApp::None {
         crate::suite_ui::render(fb, win.x, win.y, win.w, win.h, win.app);
@@ -264,17 +292,17 @@ fn draw_sidebar(fb: &FrameBuffer, h: usize) {
     fb.fill_rect(cx - 15, DOCK_M + 54, 30, 1, Color::BORDER);
 
     // Kleurrijke app-tegels.
-    let apps = ["files", "browser", "mail", "settings", "store", "star"];
-    let tile = 42usize;
+    let tile = TILE;
     let tx = cx - tile / 2;
-    let mut iy = DOCK_M + 64;
-    for (i, id) in apps.iter().enumerate() {
+    let active = ACTIVE_DOCK.load(core::sync::atomic::Ordering::Relaxed);
+    let mut iy = TILE_TOP;
+    for (i, id) in DOCK_APPS.iter().enumerate() {
         crate::appicons::draw_tile(fb, tx, iy, tile, id);
         // Actief/geopend: accent-balkje aan de linkerrand van de dock.
-        if i == 0 {
+        if i == active {
             fb.fill_rounded_rect(DOCK_X + 1, iy + tile / 2 - 6, 4, 12, 2, Color::ACCENT);
         }
-        iy += tile + 8;
+        iy += tile + TILE_GAP;
     }
 
     // Gebruiker-avatar onderaan: accent-ring + initialen van de INGELOGDE gebruiker

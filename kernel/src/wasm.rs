@@ -4,8 +4,11 @@
 //! interpreter: locals, loop, br_if, rekenkunde) en (b) `euro.fd_write` aanroept om
 //! een bericht te schrijven — dat alleen slaagt als de host de capability verleent.
 
+use alloc::format;
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use eurofs::FileSystem;
 use eurowasm::{HostImports, Instance, Module, Val, WasmError};
 
 // ── Mini-assembler voor de demo-module (zelfde codering als de host-tests) ──
@@ -156,6 +159,84 @@ pub fn selftest() {
         }
         Err(e) => crate::serial_println!("[h4] onverwachte fout: {:?}", e),
     }
+}
+
+// ── AH-3: een ZELF-DRAGENDE .wasm (eigen data-sectie) + `wasm <bestand>` ──────
+
+/// Zoals [`build_module`], maar met een **data-sectie** zodat het bericht ín de
+/// module zit (geen kernel-`write_mem` meer nodig) — een echte, zelf-dragende
+/// `.wasm` die van schijf geladen en gedraaid kan worden.
+fn build_demo_wasm() -> Vec<u8> {
+    let mut w = build_module();
+    // data: 1 actief segment op offset 0 met MSG (de loader/host hoeft niets te injecteren).
+    let mut d = vec![1u8, 0u8]; // 1 segment, flags 0 (actief, mem 0)
+    d.extend_from_slice(&[0x41, 0x00, 0x0b]); // offset = i32.const 0, end
+    d.extend(uleb(MSG.len() as u32));
+    d.extend_from_slice(MSG);
+    w.extend(section(11, d));
+    w
+}
+
+/// Voer een ECHTE `.wasm` uit het VFS uit (H4-remainder: `wasm <bestand>`), in de
+/// no-JIT sandbox met cap-gated WASI. De gebruiker draaide het zelf → console-cap
+/// verleend; de sandbox-grens blijft (een niet-verleende host-call trapt).
+pub fn run_file(fs: &mut dyn FileSystem, path: &str) -> Vec<String> {
+    match fs.read_file(path) {
+        Ok(bytes) => run_bytes(&bytes, path, true),
+        Err(_) => vec![format!("wasm: {path}: bestand niet gevonden")],
+    }
+}
+
+/// Parse + draai WASM-bytes; `cap` = of de console-capability verleend is.
+fn run_bytes(bytes: &[u8], label: &str, cap: bool) -> Vec<String> {
+    let module = match Module::parse(bytes) {
+        Ok(m) => m,
+        Err(e) => return vec![format!("wasm: {label}: parse-fout {:?}", e)],
+    };
+    let entry = match ["run", "_start", "main"].into_iter().find(|e| module.has_export(e)) {
+        Some(e) => e,
+        None => return vec![format!("wasm: {label}: geen 'run'/'_start'/'main'-export")],
+    };
+    let mut inst = Instance::new(&module);
+    let mut host = CapHost { cap_console: cap, out: Vec::new() };
+    match inst.invoke(entry, &[], &mut host) {
+        Ok(r) => {
+            let mut out = Vec::new();
+            if !host.out.is_empty() {
+                out.push(format!("  [fd_write] {}", String::from_utf8_lossy(&host.out).trim_end()));
+            }
+            out.push(format!(
+                "wasm: {label} · {}() = {} · no-JIT sandbox, WASI cap-gated",
+                entry,
+                r.first().copied().unwrap_or(0)
+            ));
+            out
+        }
+        Err(WasmError::CapabilityDenied(c)) => vec![format!("wasm: {label}: host-call GEWEIGERD ({c}) — sandbox-grens")],
+        Err(e) => vec![format!("wasm: {label}: trap {:?}", e)],
+    }
+}
+
+/// `[wasm2]`-zelftest: schrijf een echte zelf-dragende `.wasm` naar EuroFS en draai
+/// ze via het `wasm <bestand>`-pad — mét cap (output + som) en zonder (geweigerd).
+pub fn selftest_file(fs: &mut dyn FileSystem) {
+    let bytes = build_demo_wasm();
+    let _ = fs.create_dir("/agents");
+    let _ = fs.write_file("/agents/demo.wasm", &bytes);
+    let on_fs = fs.read_file("/agents/demo.wasm").map(|d| d == bytes).unwrap_or(false);
+
+    let granted = run_bytes(&bytes, "/agents/demo.wasm", true);
+    let msg_ok = granted.iter().any(|l| l.contains("EuroWASM"));
+    let sum_ok = granted.iter().any(|l| l.contains("= 55"));
+    let denied = run_bytes(&bytes, "/agents/demo.wasm", false);
+    let denied_ok = denied.iter().any(|l| l.contains("GEWEIGERD"));
+
+    let ok = on_fs && msg_ok && sum_ok && denied_ok;
+    crate::serial_println!(
+        "[wasm2] `wasm <bestand>`: zelf-dragende .wasm (data-sectie) op EuroFS={on_fs}, mét-cap fd_write+run()=55={}, zonder-cap host-call-geweigerd={denied_ok} → {}",
+        msg_ok && sum_ok,
+        if ok { "OK (echte .wasm van schijf in de no-JIT sandbox, WASI cap-gated) ✓" } else { "MISLUKT" }
+    );
 }
 
 // ── H4-vervolg: bind de WASM-WASI aan een ECHTE EuroSandbox-container ───────

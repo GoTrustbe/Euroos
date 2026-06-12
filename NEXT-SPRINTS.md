@@ -1,5 +1,7 @@
 # EuroOS — Phase 2 Sprint Plan (what's still open)
 
+> **Status 2026-06-12:** the AD–AG cycle ("Promise = Reality") is ✅ done — Zero-Trust depth (JIT caps, anomaly detection, PCR-seal), EuroID end-to-end, **desktop apps** (EuroFiles/Notes/Clock), **web images+forms**, a **sovereign installer** (`eurofat` FAT32 + bootable-disk write that boots standalone), and **coreutils** `xargs`. **716 host tests.** The current forward plan is **[`docs/SPRINT-PLAN-AH.md`](docs/SPRINT-PLAN-AH.md)** (interactive install → A/B self-update → real WASM agents → broader hardware). The G–Q board below is the longer tail.
+
 *Successor to the A–F plan (now mostly ✅/🟡). Consolidates every open item from
 [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) (the 🟡 remainders) **and** the
 untouched subsystems in `docs/planning/` (Missing_Subsystems #1–16, Track8 EuroCompat,

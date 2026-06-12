@@ -67,6 +67,18 @@ impl Dimensions {
     }
 }
 
+/// Een vervangen/controle-element (intrinsieke grootte i.p.v. tekstflow): een
+/// afbeelding of een formulierbesturing. Maten in px (u32 → `Eq`-bruikbaar).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Replaced {
+    /// `<img>` — de kernel haalt `src` op en blit de pixels.
+    Image { src: String, w: u32, h: u32 },
+    /// `<input type=text>`/`textarea` — naam + (begin)waarde.
+    Field { name: String, value: String, w: u32, h: u32 },
+    /// `<button>`/`<input type=submit>` — knoplabel.
+    Button { label: String, w: u32, h: u32 },
+}
+
 /// Het soort layout-box.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BoxType {
@@ -75,6 +87,55 @@ pub enum BoxType {
     Text(String),
     /// Anonieme block-box die inline-inhoud groepeert.
     Anonymous,
+    /// Een vervangen element (afbeelding of formulierbesturing) met vaste maat.
+    Replaced(Replaced),
+}
+
+/// Bepaal of een (inline) element een vervangen/controle-box wordt, en met welke
+/// intrinsieke maat. Leest de relevante attributen uit de DOM. `None` = gewoon
+/// element (geen replaced box).
+fn replaced_for(name: &str, dom: &Dom, node: NodeId) -> Option<Replaced> {
+    let attr = |k: &str| dom.attr(node, k).map(String::from);
+    let px = |k: &str, d: u32| dom.attr(node, k).and_then(|v| v.trim().trim_end_matches("px").trim().parse::<u32>().ok()).unwrap_or(d);
+    match name {
+        "img" => Some(Replaced::Image {
+            src: attr("src").unwrap_or_default(),
+            w: px("width", 160).clamp(1, 4096),
+            h: px("height", 120).clamp(1, 4096),
+        }),
+        "input" => {
+            let ty = attr("type").unwrap_or_else(|| String::from("text"));
+            if ty == "submit" || ty == "button" {
+                let label = attr("value").unwrap_or_else(|| String::from("Verzenden"));
+                let w = (label.chars().count() as u32 * 9 + 28).clamp(64, 320);
+                Some(Replaced::Button { label, w, h: 30 })
+            } else if ty == "hidden" {
+                None
+            } else {
+                Some(Replaced::Field {
+                    name: attr("name").unwrap_or_default(),
+                    value: attr("value").unwrap_or_default(),
+                    w: px("size", 0).checked_mul(9).filter(|&w| w > 0).unwrap_or(220).clamp(80, 480),
+                    h: 30,
+                })
+            }
+        }
+        "button" => {
+            let label = {
+                let t = dom.text_content(node);
+                if t.trim().is_empty() { String::from("Knop") } else { String::from(t.trim()) }
+            };
+            let w = (label.chars().count() as u32 * 9 + 28).clamp(64, 320);
+            Some(Replaced::Button { label, w, h: 30 })
+        }
+        "textarea" => Some(Replaced::Field {
+            name: attr("name").unwrap_or_default(),
+            value: String::from(dom.text_content(node).trim()),
+            w: 360,
+            h: 90,
+        }),
+        _ => None,
+    }
 }
 
 /// Eén knoop in de layout-boom.
@@ -205,7 +266,17 @@ fn collect_children(
                 if is_non_visual(name) || display_none(&styles[child]) {
                     continue;
                 }
-                if is_block_tag(name) {
+                if let Some(rep) = replaced_for(name, dom, child) {
+                    // Vervangen element (img/input/button): eigen box met vaste maat.
+                    out.push(LayoutBox {
+                        box_type: BoxType::Replaced(rep),
+                        node: Some(child),
+                        dimensions: Dimensions::default(),
+                        children: Vec::new(),
+                        line_count: 0,
+                        font_size: font_size_of(&styles[child], font),
+                    });
+                } else if is_block_tag(name) {
                     if let Some(b) = build_box(dom, styles, child, font, depth + 1) {
                         out.push(b);
                     }
@@ -253,7 +324,24 @@ impl LayoutBox {
         match &self.box_type {
             BoxType::Block | BoxType::Anonymous => self.layout_block(containing, styles, measure),
             BoxType::Text(_) => self.layout_text(containing, measure),
+            BoxType::Replaced(_) => self.layout_replaced(containing),
         }
+    }
+
+    /// Plaats een vervangen element (img/input/button): vaste intrinsieke maat,
+    /// onder de tot nu toe gevulde hoogte van het containing block.
+    fn layout_replaced(&mut self, containing: Dimensions) {
+        let (w, h) = match &self.box_type {
+            BoxType::Replaced(Replaced::Image { w, h, .. })
+            | BoxType::Replaced(Replaced::Field { w, h, .. })
+            | BoxType::Replaced(Replaced::Button { w, h, .. }) => (*w as f32, *h as f32),
+            _ => (0.0, 0.0),
+        };
+        let d = &mut self.dimensions;
+        d.content.width = w.min(containing.content.width.max(1.0));
+        d.content.x = containing.content.x;
+        d.content.y = containing.content.y + containing.content.height;
+        d.content.height = h;
     }
 
     fn style<'a>(&self, styles: &'a [ComputedStyle]) -> Option<&'a ComputedStyle> {

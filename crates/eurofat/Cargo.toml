@@ -1,0 +1,9 @@
+[package]
+name = "eurofat"
+version = "0.1.0"
+edition = "2021"
+description = "Sovereign from-scratch FAT32 builder + reader for the EFI System Partition (EuroOS installer). no_std, no unsafe."
+license = "EUPL-1.2"
+
+[lib]
+doctest = false

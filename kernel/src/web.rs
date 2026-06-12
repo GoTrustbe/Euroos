@@ -96,3 +96,52 @@ pub fn selftest() {
         if ok { "✓" } else { "✗ FOUT" }
     );
 }
+
+/// AG-2 boot-zelftest: afbeeldingen (`<img>` + QOI/PPM-decode) en formulieren
+/// (`<input>`/`<form>` → echte GET-query). Bewijst de hele keten: decode →
+/// layout-replaced-box → display-item → submit-URL.
+pub fn selftest_ag2() {
+    use euroweb::DisplayItem;
+
+    // 1) euromedia: QOI-round-trip + PPM-decode.
+    let mut img = euromedia::Image::new(2, 2, [0, 0, 0, 255]);
+    img.set(0, 0, [226, 163, 58, 255]);
+    img.set(1, 1, [45, 107, 224, 255]);
+    let qoi_ok = euromedia::decode(&euromedia::encode(&img)) == Ok(img.clone());
+    let ppm = euromedia::decode_ppm(b"P3 2 1 255 255 0 0 0 255 0").unwrap();
+    let ppm_ok = ppm.get(0, 0) == Some([255, 0, 0, 255]) && ppm.get(1, 0) == Some([0, 255, 0, 255]);
+
+    // 2) engine: <img> wordt een Image-display-item met src + intrinsieke maat.
+    let idom = euroweb::parse(r#"<body><img src="/logo.qoi" width="80" height="60"></body>"#);
+    let istyles = euroweb::compute(&idom, &[]);
+    let ilb = euroweb::layout(&idom, &istyles, 800.0);
+    let iitems = euroweb::paint(&idom, &istyles, &ilb);
+    let img_ok = iitems.iter().any(|i| matches!(i, DisplayItem::Image { src, w, h, .. } if src == "/logo.qoi" && *w == 80.0 && *h == 60.0));
+
+    // 3) engine: <form> → Field + Button.
+    let fdom = euroweb::parse(
+        r#"<body><form action="/zoek" method="get"><input type="text" name="q" value="euro"><input type="submit" value="Zoek"></form></body>"#,
+    );
+    let fstyles = euroweb::compute(&fdom, &[]);
+    let flb = euroweb::layout(&fdom, &fstyles, 800.0);
+    let fitems = euroweb::paint(&fdom, &fstyles, &flb);
+    let field_ok = fitems.iter().any(|i| matches!(i, DisplayItem::Field { name, value, .. } if name == "q" && value == "euro"));
+    let button_ok = fitems.iter().any(|i| matches!(i, DisplayItem::Button { label, .. } if label == "Zoek"));
+
+    // 4) submit: laad de demopagina inline en bouw de echte GET-URL.
+    crate::webview::init("http://euro-os.eu/");
+    crate::webview::load_inline("http://euro-os.eu/", &crate::webview::ag2_demo_html());
+    let demo = crate::webview::ag2_demo_html();
+    let ddom = euroweb::parse(&demo);
+    let submit_node = (0..ddom.len())
+        .find(|&i| ddom.tag(i) == Some("input") && ddom.attr(i, "type") == Some("submit"));
+    let target = submit_node.and_then(crate::webview::submit_target).unwrap_or_default();
+    let submit_ok = target == "http://euro-os.eu/zoek?q=soevereiniteit";
+
+    let ok = qoi_ok && ppm_ok && img_ok && field_ok && button_ok && submit_ok;
+    serial_println!(
+        "[ag2] EuroWeb afbeeldingen+formulieren: QOI={} PPM={} img-box={} veld={} knop={} submit-GET=\"{}\" {}",
+        qoi_ok, ppm_ok, img_ok, field_ok, button_ok, target,
+        if ok { "✓" } else { "✗ FOUT" }
+    );
+}

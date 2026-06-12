@@ -1,9 +1,209 @@
 //! Kernel-zijde van **EuroNotes** (Sprint AC-1): de notitie-app.
 //! Bij boot bewijzen we de Markdown→EuroDoc-pijplijn: koppen, inline-opmaak,
 //! lijsten met niveaus, en `#tag`-extractie. Host-geteste kern: [`euronotes`].
+//! Bevat ook de desktop-GUI (`render`): een notitielijst + de geselecteerde
+//! notitie gerenderd door de ECHTE `euronotes`-engine (geen mock-tekst).
 
+use crate::graphics::{Color, FrameBuffer};
 use crate::serial_println;
+use crate::text;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use eurodoc::model::Block;
+
+/// Gelijk aan `compositor::TITLEBAR_H`.
+const TITLEBAR_H: usize = 44;
+
+/// Geseede notities (echte Markdown). De GUI parseert ze live met `euronotes`.
+const NOTES: &[&str] = &[
+    "# Welkom bij EuroNotes #euros\n\n\
+     Dit is een **echte** notitie, geparset door de from-scratch *euronotes*-engine \
+     (Markdown → EuroDoc). Geen mock-tekst.\n\n\
+     Wat werkt:\n\n\
+     - Koppen en inline-opmaak\n\
+     - Lijsten met niveaus\n  - zoals deze geneste regel\n\
+     - `#tag`-extractie\n\n\
+     > Soevereiniteit door ontwerp.\n",
+    "# Sprintplan AG #roadmap\n\n\
+     Breedte-sprint na de Zero-Trust-cyclus:\n\n\
+     - AG-1 desktop-apps #nu\n\
+     - AG-2 browser: afbeeldingen + formulieren\n\
+     - AG-3 installer-executie\n\
+     - AG-4 coreutils long-tail\n\n\
+     Status: **bezig** en *op koers*.\n",
+    "# Boodschappen #thuis\n\n\
+     - Brood\n\
+     - Belgische chocolade\n\
+     - Koffie\n\n\
+     Niet vergeten: het is *soeverein* lekker.\n",
+];
+
+static SELECTED: AtomicUsize = AtomicUsize::new(0);
+
+/// Welke notitie staat open.
+pub fn selected() -> usize {
+    SELECTED.load(Ordering::Relaxed).min(NOTES.len() - 1)
+}
+
+/// Klik in de notitielijst? Zet de selectie en geef `true` als ze veranderde.
+pub fn hit_test(win_x: usize, win_y: usize, mx: usize, my: usize) -> bool {
+    let lx = win_x;
+    let ly = win_y + TITLEBAR_H + 44; // onder de lijstkop
+    let list_w = 210usize;
+    if mx < lx || mx >= lx + list_w {
+        return false;
+    }
+    let row_h = 50usize;
+    if my < ly {
+        return false;
+    }
+    let i = (my - ly) / row_h;
+    if i < NOTES.len() {
+        let prev = SELECTED.swap(i, Ordering::Relaxed);
+        return prev != i;
+    }
+    false
+}
+
+/// Desktop-GUI: links de notitielijst, rechts de geselecteerde notitie zoals de
+/// `euronotes`-engine ze ontleedt.
+pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
+    let bx = x;
+    let by = y + TITLEBAR_H;
+    let bw = w;
+    let bh = h.saturating_sub(TITLEBAR_H);
+    let accent = Color::rgb(0xD6, 0x96, 0x2A); // amber (notities-accent)
+    fb.fill_rect(bx, by, bw, bh, Color::SURFACE);
+
+    // ── Lijstpaneel links ───────────────────────────────────────────────────
+    let list_w = 210usize;
+    fb.fill_rect(bx, by, list_w, bh, Color::CARD);
+    fb.fill_rect(bx + list_w, by, 1, bh, Color::BORDER);
+    text::draw_px(fb, bx + 16, by + 16, "Notities", Color::INK, 14.0);
+    let cnt = alloc::format!("{}", NOTES.len());
+    text::draw_px(fb, bx + list_w - text::width_px(&cnt, 12.0) - 16, by + 18, &cnt, Color::TEXT_DIM, 12.0);
+
+    let sel = selected();
+    let row_h = 50usize;
+    let row_y0 = by + 44;
+    for (i, md) in NOTES.iter().enumerate() {
+        let ry = row_y0 + i * row_h;
+        let note = euronotes::parse(md);
+        if i == sel {
+            fb.fill_rounded_rect(bx + 8, ry, list_w - 16, row_h - 6, 9, Color::SURFACE);
+            fb.fill_rounded_rect(bx + 8, ry, 3, row_h - 6, 2, accent);
+        }
+        let title = clip(&note.title, list_w - 40, 13.0);
+        text::draw_px(fb, bx + 18, ry + 8, &title, Color::INK, 13.0);
+        // Eerste tag als chip-tekst + bloktelling.
+        let sub = if let Some(t) = note.tags.first() {
+            alloc::format!("#{}  ·  {} blokken", t, note.blocks.len())
+        } else {
+            alloc::format!("{} blokken", note.blocks.len())
+        };
+        text::draw_px(fb, bx + 18, ry + 28, &clip(&sub, list_w - 36, 11.0), Color::TEXT_DIM, 11.0);
+    }
+
+    // ── Notitie-canvas rechts ────────────────────────────────────────────────
+    let note = euronotes::parse(NOTES[sel]);
+    let px = bx + list_w + 1;
+    let pw = bw - list_w - 1;
+    let margin = 30usize;
+    let tx = px + margin;
+    let maxw = pw.saturating_sub(margin * 2);
+    let mut ty = by + 28;
+
+    text::draw_px(fb, tx, ty, &clip(&note.title, maxw, 26.0), Color::INK, 26.0);
+    ty += 38;
+    fb.fill_rect(tx, ty, 56, 3, accent);
+    ty += 18;
+
+    let ymax = by + bh - 44;
+    for blk in &note.blocks {
+        if ty > ymax {
+            break;
+        }
+        if let Block::Paragraph(p) = blk {
+            let txt = p.plain_text();
+            let (size, col, indent, bullet) = match p.props.style_id.as_deref() {
+                Some("Heading1") => (19.0f32, Color::INK, 0usize, false),
+                Some("Heading2") => (16.0, accent, 0, false),
+                Some("Quote") => (13.5, Color::TEXT_SEC, 14, false),
+                _ => match p.props.list_level {
+                    Some(lvl) => (13.5, Color::INK, 14 + lvl as usize * 18, true),
+                    None => (13.5, Color::INK, 0, false),
+                },
+            };
+            if txt.trim().is_empty() {
+                continue;
+            }
+            if bullet {
+                fb.fill_rounded_rect(tx + indent, ty + 7, 5, 5, 2, accent);
+                ty = draw_wrapped(fb, tx + indent + 12, ty, maxw.saturating_sub(indent + 12), &txt, col, size, 20, ymax);
+            } else {
+                ty = draw_wrapped(fb, tx + indent, ty, maxw.saturating_sub(indent), &txt, col, size, (size as usize) + 8, ymax);
+            }
+            ty += 6;
+        }
+    }
+
+    // Tag-chips + statusbalk onderaan.
+    let sy = by + bh - 30;
+    fb.fill_rect(px, sy, pw, 30, Color::CARD);
+    fb.fill_rect(px, sy, pw, 1, Color::BORDER);
+    let mut chx = px + margin;
+    for t in &note.tags {
+        let label = alloc::format!("#{t}");
+        let cw = text::width_px(&label, 11.5) + 18;
+        fb.fill_rounded_rect(chx, sy + 6, cw, 18, 9, Color::ACCENT_SOFT);
+        text::draw_px(fb, chx + 9, sy + 8, &label, accent, 11.5);
+        chx += cw + 8;
+        if chx > px + pw - 40 {
+            break;
+        }
+    }
+}
+
+/// Teken `s` met simpele woord-wrap; geeft de nieuwe y terug.
+fn draw_wrapped(fb: &FrameBuffer, x: usize, mut y: usize, maxw: usize, s: &str, col: Color, size: f32, lead: usize, ymax: usize) -> usize {
+    use alloc::string::String;
+    let mut line = String::new();
+    for word in s.split(' ') {
+        let trial = if line.is_empty() { String::from(word) } else { alloc::format!("{line} {word}") };
+        if text::width_px(&trial, size) > maxw && !line.is_empty() {
+            text::draw_px(fb, x, y, &line, col, size);
+            y += lead;
+            line = String::from(word);
+            if y > ymax {
+                return y;
+            }
+        } else {
+            line = trial;
+        }
+    }
+    if !line.is_empty() {
+        text::draw_px(fb, x, y, &line, col, size);
+        y += lead;
+    }
+    y
+}
+
+/// Knip tekst af op pixelbreedte met ellipsis.
+fn clip(s: &str, maxw: usize, size: f32) -> alloc::string::String {
+    use alloc::string::String;
+    if text::width_px(s, size) <= maxw {
+        return String::from(s);
+    }
+    let mut out = String::new();
+    for ch in s.chars() {
+        let trial = alloc::format!("{out}{ch}…");
+        if text::width_px(&trial, size) > maxw {
+            break;
+        }
+        out.push(ch);
+    }
+    out.push('…');
+    out
+}
 
 /// Boot-zelftest: parse een notitie en controleer titel, blokken en tags.
 pub fn selftest() {

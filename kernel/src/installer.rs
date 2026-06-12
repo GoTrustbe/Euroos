@@ -66,8 +66,30 @@ pub fn selftest() {
 }
 
 /// `euroinstall [live]`-shell: toon het installatieplan (dry-run, schrijft niets).
-pub fn shell(args: &str) -> Vec<String> {
-    let live = args.trim() == "live";
+pub fn shell(line: &str) -> Vec<String> {
+    let toks: Vec<&str> = line.split_whitespace().collect();
+    let args: Vec<&str> = if toks.first() == Some(&"euroinstall") { toks[1..].to_vec() } else { toks };
+
+    // Vlaggen: --to N · --hostname H · --user U · live.
+    let (mut target, mut hostname, mut user, mut live) = (None::<usize>, None::<String>, None::<String>, false);
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--to" => { target = args.get(i + 1).and_then(|v| v.parse().ok()); i += 2; continue; }
+            "--hostname" => { hostname = args.get(i + 1).map(|s| String::from(*s)); i += 2; continue; }
+            "--user" => { user = args.get(i + 1).map(|s| String::from(*s)); i += 2; continue; }
+            "live" => live = true,
+            _ => {}
+        }
+        i += 1;
+    }
+
+    // `--to N`: ECHTE installatie naar virtio-schijf N (provisioneert + maakt bootbaar).
+    if let Some(dev) = target {
+        return do_install(dev, hostname, user);
+    }
+
+    // Anders: dry-run-plan + beschikbare doelschijven + gebruik.
     let cfg = sample_config(live);
     let mut out = alloc::vec![alloc::format!(
         "EuroInstall — {} (dry-run, er wordt niets geschreven):",
@@ -78,11 +100,47 @@ pub fn shell(args: &str) -> Vec<String> {
             for (i, s) in steps.iter().enumerate() {
                 out.push(alloc::format!("  {:>2}. {}", i + 1, euroinstall::describe(s)));
             }
-            out.push(String::from("  (echte uitvoering = userspace-installer, Ed25519-getekend; sector-I/O via gpt/eurofs)"));
         }
         Err(e) => out.push(alloc::format!("  config ongeldig: {e:?}")),
     }
+    let n = crate::virtio_blk::device_count();
+    if n == 0 {
+        out.push(String::from("  doelschijven: (geen virtio-blk-schijf aangesloten)"));
+    } else {
+        out.push(String::from("  doelschijven:"));
+        for d in 0..n {
+            let mib = crate::virtio_blk::capacity_sectors_dev(d) * 512 / 1024 / 1024;
+            let blank = if crate::instexec::disk_is_blank(d) { "blanco" } else { "in gebruik" };
+            out.push(alloc::format!("    virtio-blk {d}  ·  {mib} MiB  ·  {blank}"));
+        }
+    }
+    let media = if crate::instexec::media_available() { "ja" } else { "nee (alleen na een UEFI-boot)" };
+    out.push(alloc::format!("  install-media: {media}"));
+    out.push(String::from("  ECHTE installatie:  euroinstall --to <N> [--hostname H] [--user U]   \u{26A0} WIST schijf N"));
     out
+}
+
+/// Voer een ECHTE installatie uit naar virtio-schijf `dev` met optionele hostname/user.
+fn do_install(dev: usize, hostname: Option<String>, user: Option<String>) -> Vec<String> {
+    if !crate::instexec::media_available() {
+        return alloc::vec![String::from("euroinstall: geen install-media — alleen mogelijk vanaf een echte UEFI-boot.")];
+    }
+    if !crate::virtio_blk::present_dev(dev) {
+        return alloc::vec![alloc::format!("euroinstall: geen virtio-blk-schijf {dev} (zie `euroinstall` voor de lijst).")];
+    }
+    let mut cfg = crate::instexec::default_config();
+    if let Some(h) = hostname { cfg.hostname = h; }
+    if let Some(u) = user { cfg.username = u; }
+    let mib = crate::virtio_blk::capacity_sectors_dev(dev) * 512 / 1024 / 1024;
+    let ok = crate::instexec::install_to_disk(dev, &cfg);
+    alloc::vec![
+        alloc::format!("EuroInstall \u{2192} virtio-blk {dev} ({mib} MiB) · hostname={} · gebruiker={}", cfg.hostname, cfg.username),
+        if ok {
+            String::from("  \u{2713} bootbare + geprovisioneerde EuroOS geschreven — de schijf boot nu standalone (zie [q1x3]).")
+        } else {
+            String::from("  \u{2717} installatie mislukt (schijf te klein, geen media, of schrijffout).")
+        },
+    ]
 }
 
 /// **BB-7** — render de begeleide grafische installer (EuroInstall) in een venster:
