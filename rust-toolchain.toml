@@ -1,4 +1,8 @@
 [toolchain]
 channel = "nightly"
 targets = ["x86_64-unknown-uefi"]
-components = ["rust-src", "llvm-tools-preview", "clippy", "rustfmt"]
+# Only require what the build actually needs (rust-src for -Z build-std). clippy /
+# rustfmt / llvm-tools-preview are installed on demand in CI — requiring them here
+# makes the whole toolchain install fail on any nightly that happens to be missing
+# one of them. Devs who want them: `rustup component add clippy rustfmt`.
+components = ["rust-src"]
