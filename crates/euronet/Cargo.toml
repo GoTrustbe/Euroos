@@ -1,0 +1,9 @@
+[package]
+name = "euronet"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroNet — eigen TCP/IP-stack (Track 4). no_std + alloc, host-testbaar."
+
+[dependencies]

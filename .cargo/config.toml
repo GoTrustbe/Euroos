@@ -1,0 +1,32 @@
+# UEFI-target krijgt panic=abort (verplicht voor no_std bare-metal).
+# Dit is GESCOPED op de target, zodat host-test-builds blijven unwinden.
+[target.x86_64-unknown-uefi]
+# force-frame-pointers: betrouwbare RBP-keten voor de panic-backtrace (S1
+# observability). Kleine perf-kost, grote debug-winst op bare metal.
+rustflags = [
+    "-C", "panic=abort",
+    "-C", "force-frame-pointers=yes",
+    # Link-map (symbool -> RVA) voor OFFLINE symbolisatie van panic-backtraces;
+    # de .efi zelf is gestript, de map bewaart de namen. scripts/symbolize.sh.
+    "-C", "link-arg=/MAP:target/kernel.map",
+    # Audit #11: forceer curve25519-dalek's SERIAL backend i.p.v. de SIMD(AVX2)-
+    # backend. Twee redenen: (1) de AVX2-codegen liet de debug-build crashen met
+    # een LLVM "do not know how to split"-fout op dit UEFI-target; (2) bare-metal
+    # is veiliger zonder AVX2 (dat XCR0-enable vereist). Serieel is iets trager maar
+    # robuust en deterministisch — past bij een soeverein OS.
+    "--cfg", "curve25519_dalek_backend=\"serial\"",
+    # Idem voor poly1305 (zelfde AVX2-codegen-crash + bare-metal-veiligheid). sha2's
+    # soft-backend wordt via z'n `force-soft`-feature gekozen (kernel/Cargo.toml).
+    "--cfg", "poly1305_force_soft",
+    # En het chacha20-stroomcijfer (eurofde/eurotls) — z'n AVX2-backend crashte
+    # dezelfde LLVM-codegen; de soft-backend is portable + bare-metal-veilig.
+    "--cfg", "chacha20_force_soft",
+]
+
+# build-std staat BEWUST niet in [unstable] hier — anders zou `cargo test`
+# ook std-from-source bouwen voor de host. We geven build-std alleen mee op
+# de kernel-build via deze alias.
+[alias]
+kbuild = "build -p kernel --target x86_64-unknown-uefi -Z build-std=core,compiler_builtins,alloc -Z build-std-features=compiler-builtins-mem"
+kbuild-release = "build --release -p kernel --target x86_64-unknown-uefi -Z build-std=core,compiler_builtins,alloc -Z build-std-features=compiler-builtins-mem"
+lbuild-release = "build --release -p loader --target x86_64-unknown-uefi -Z build-std=core,compiler_builtins,alloc -Z build-std-features=compiler-builtins-mem"

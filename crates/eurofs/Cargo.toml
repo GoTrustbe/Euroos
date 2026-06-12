@@ -1,0 +1,16 @@
+[package]
+name = "eurofs"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroFS — Europees soeverein filesysteem (Track 2). no_std + alloc, host-testbaar."
+
+[dependencies]
+# XXH3 voor per-blok/-struct checksums. Pure Rust, no_std.
+twox-hash = { version = "1.6", default-features = false }
+# no_std spinlocks (RwLock/Mutex) voor de concurrente block-cache (J1).
+spin = { version = "0.9", default-features = false, features = ["spin_mutex", "rwlock"] }
+
+[features]
+default = []

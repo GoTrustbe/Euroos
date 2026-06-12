@@ -1,0 +1,12 @@
+[package]
+name = "euromusic"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroMusic — de muziekspeler-kern van EuroOS (AC-3). Bibliotheek (zoeken/sorteren/groeperen per album/artiest), afspeellijsten, en een afspeel-wachtrij met shuffle (deterministisch geseed) en herhaalmodi. Geen streaming-telemetrie. no_std, host-testbaar."
+
+[dependencies]
+
+[features]
+default = []

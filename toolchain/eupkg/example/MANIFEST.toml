@@ -1,0 +1,13 @@
+[package]
+name = "hello"
+version = "0.1.0"
+description = "Eerste EuroOS-programma — gecompileerd met de EuroToolchain"
+license = "EUPL-1.2"
+binary = "bin/hello"
+
+[build]
+reproducible = true
+
+[sandbox]
+network = false
+filesystem = "none"

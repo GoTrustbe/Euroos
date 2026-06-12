@@ -1,0 +1,12 @@
+[package]
+name = "eurolocale"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroLocale — CLDR-achtige lokalisatie voor de 24 officiële EU-talen: collatie, getal/valuta/datum-opmaak, meervoudsregels (plan P1). no_std, host-testbaar."
+
+[dependencies]
+
+[features]
+default = []

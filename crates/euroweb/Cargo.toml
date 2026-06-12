@@ -1,0 +1,12 @@
+[package]
+name = "euroweb"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroWeb — de soevereine browser-engine van EuroOS (Spoor B). HTML5-tokenizer + tree-construction → DOM, van scratch in Rust. no_std, host-testbaar. Geen foreign engine, geen ICU/NSS. Fundament voor css/layout/paint/js. Zie docs/EUROBROWSER-PLAN.md."
+
+[dependencies]
+
+[features]
+default = []

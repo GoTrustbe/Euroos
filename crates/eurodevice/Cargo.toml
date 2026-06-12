@@ -1,0 +1,12 @@
+[package]
+name = "eurodevice"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroDevice — unified device model & driver framework (Sprint R). no_std + alloc, host-testbaar."
+
+[dependencies]
+
+[features]
+default = []

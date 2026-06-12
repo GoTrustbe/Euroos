@@ -1,0 +1,12 @@
+[package]
+name = "eurosign"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroSign — soevereine documentondertekening voor EuroOS (AC-4). Canoniek ondertekenings-manifest (doc-hash + ondertekenaar + tijd + doel), een .eurosig-envelopformaat (parse/serialiseer) en bindings-verificatie. Crypto-vrij: Ed25519 zelf komt van eurotls/EuroVault. no_std, host-testbaar."
+
+[dependencies]
+
+[features]
+default = []

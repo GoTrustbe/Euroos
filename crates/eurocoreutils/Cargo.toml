@@ -1,0 +1,13 @@
+[package]
+name = "eurocoreutils"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroCoreutils — GNU-compatibele coreutils voor EuroOS (plan EUROCOREUTILS-PLAN). no_std, host-testbaar."
+
+[dependencies]
+sha2 = { version = "0.10", default-features = false }
+
+[features]
+default = []

@@ -1,0 +1,12 @@
+[package]
+name = "eurojs"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroJS — de JavaScript-engine van EuroWeb (Sprint AB-B5). Een tree-walking interpreter (geen JIT → klein aanvalsoppervlak): lexer + parser + evaluator met getallen/strings/booleans, var/let/const, operatoren, if/while/for, functies + closures, arrays en objecten, en console.log. no_std, host-testbaar."
+
+[dependencies]
+
+[features]
+default = []

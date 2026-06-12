@@ -1,0 +1,12 @@
+[package]
+name = "euroarchive"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroArchive — de archiefbeheerder van EuroOS (AC-2). USTAR tar lezen/schrijven (octale velden + checksum-verificatie), met haak voor Ed25519-manifest-verificatie. no_std, host-testbaar."
+
+[dependencies]
+
+[features]
+default = []

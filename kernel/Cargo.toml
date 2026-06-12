@@ -1,0 +1,82 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroKernel — bootable UEFI kernel (Track 1)."
+
+[[bin]]
+name = "eurokernel"
+path = "src/main.rs"
+
+[dependencies]
+uefi = { version = "0.33", features = ["alloc"] }
+eurofs = { path = "../crates/eurofs" }
+euronet = { path = "../crates/euronet" }
+euromm = { path = "../crates/euromm" }
+eurotls = { path = "../crates/eurotls" }
+euroupdate = { path = "../crates/euroupdate" }
+eurosandbox = { path = "../crates/eurosandbox" }
+eurodisplay = { path = "../crates/eurodisplay" }
+eurowasm = { path = "../crates/eurowasm" }
+eurowl = { path = "../crates/eurowl" }
+eurousb = { path = "../crates/eurousb" }
+euroaudio = { path = "../crates/euroaudio" }
+euroaml = { path = "../crates/euroaml" }
+eurodevice = { path = "../crates/eurodevice" }
+eurotpm = { path = "../crates/eurotpm" }
+eurofde = { path = "../crates/eurofde" }
+europol = { path = "../crates/europol" }
+euroobserve = { path = "../crates/euroobserve" }
+eurovault = { path = "../crates/eurovault" }
+eurocrash = { path = "../crates/eurocrash" }
+eurohealth = { path = "../crates/eurohealth" }
+eurofw = { path = "../crates/eurofw" }
+eurovpn = { path = "../crates/eurovpn" }
+eurocoreutils = { path = "../crates/eurocoreutils" }
+euroagent = { path = "../crates/euroagent" }
+eurolocale = { path = "../crates/eurolocale" }
+euroinstall = { path = "../crates/euroinstall" }
+euroca = { path = "../crates/euroca" }
+euroattest = { path = "../crates/euroattest" }
+euroidm = { path = "../crates/euroidm" }
+euroid = { path = "../crates/euroid" }
+europkg = { path = "../crates/europkg" }
+eurorepro = { path = "../crates/eurorepro" }
+euroaccess = { path = "../crates/euroaccess" }
+eurodoc = { path = "../crates/eurodoc" }
+eurodocio = { path = "../crates/eurodocio" }
+eurocalc = { path = "../crates/eurocalc" }
+euroweb = { path = "../crates/euroweb" }
+euroreken = { path = "../crates/euroreken" }
+euronotes = { path = "../crates/euronotes" }
+euroarchive = { path = "../crates/euroarchive" }
+eurosafe = { path = "../crates/eurosafe" }
+eurojs = { path = "../crates/eurojs" }
+eurofont = { path = "../crates/eurofont" }
+euromail = { path = "../crates/euromail" }
+euromusic = { path = "../crates/euromusic" }
+eurosign = { path = "../crates/eurosign" }
+eurocalendar = { path = "../crates/eurocalendar" }
+eurocontacts = { path = "../crates/eurocontacts" }
+euroshot = { path = "../crates/euroshot" }
+euroclock = { path = "../crates/euroclock" }
+euroclip = { path = "../crates/euroclip" }
+eurofiles = { path = "../crates/eurofiles" }
+euromedia = { path = "../crates/euromedia" }
+eurowifi = { path = "../crates/eurowifi" }
+eurogpu = { path = "../crates/eurogpu" }
+europrint = { path = "../crates/europrint" }
+# Kernelmodus (Track 3.2+):
+x86_64 = "0.15"                       # GDT/IDT/poort-I/O structuren (HW-abstractie, geen kernel)
+linked_list_allocator = "0.10"        # kernel-heap; wordt later EuroMM's eigen slab (Track 3.4)
+spin = "0.9"                          # no_std mutex voor globale staat
+pic8259 = "0.11"                      # 8259 PIC remap (timer/keyboard IRQ's)
+ed25519-dalek = { version = "2", default-features = false }
+# Audit #11: `force-soft` kiest sha2's portable software-backend i.p.v. de SIMD-
+# variant. Feature-unificatie past dit toe op ÉLKE sha2 in de boom — fixt de debug-
+# build-codegen-crash op het UEFI-target en vermijdt AVX op bare metal. (Identiek
+# effect als de curve25519/poly1305-cfg's in .cargo/config.toml.)
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+ab_glyph = { version = "0.2", default-features = false, features = ["libm"] }   # no_std TTF/OTF AA-rasterizer (modern font-rendering)

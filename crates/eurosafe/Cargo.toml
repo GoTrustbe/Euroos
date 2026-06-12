@@ -1,0 +1,12 @@
+[package]
+name = "eurosafe"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroSafe — het privacy-/capability-dashboard van EuroOS (AC-1, sovereign differentiator). Model van app→capabilities met risico-scoring, audit-samenvatting en aanbevelingen: het zichtbare gezicht van EuroGuard op kernelniveau. no_std, host-testbaar."
+
+[dependencies]
+
+[features]
+default = []

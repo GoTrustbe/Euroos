@@ -1,0 +1,29 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust nightly (uit rust-toolchain.toml)
+        run: |
+          rustup show
+          rustup component add rust-src clippy
+          rustup target add x86_64-unknown-uefi
+      - name: Tier 1 — logica-tests (host)
+        run: cargo test
+      - name: Tier 1 — clippy
+        run: cargo clippy -p eurofs -p euronet -- -D warnings
+      - name: Tier 2 — kernel UEFI-build
+        run: cargo kbuild-release
+      - name: Tier 2 — image + headless QEMU-boot + screenshot
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf dosfstools mtools
+          ./scripts/build.sh release
+          python3 scripts/screenshot.py eurokernel.img boot.png 28
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boot-screenshot
+          path: boot.png

@@ -1,0 +1,13 @@
+[package]
+name = "euroagent"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroAgent — sovereign agent-first runtime: manifest, capability-isolation, MCP gateway, intent dispatch (Sprint AA). no_std, host-testbaar."
+
+[dependencies]
+ed25519-dalek = { version = "2", default-features = false }
+
+[features]
+default = []

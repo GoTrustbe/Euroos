@@ -1,0 +1,49 @@
+EuroOS — a sovereign, security-first operating system, built from scratch in Rust.
+
+Copyright (c) 2026 EuroOS Contributors / GoTrust.
+
+Licensed under the European Union Public Licence (EUPL) v1.2.
+You may not use this work except in compliance with the Licence.
+A copy of the Licence is in the file `LICENSE` and at:
+    https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the Licence is distributed on an "AS IS" basis, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the Licence for the
+specific language governing permissions and limitations under the Licence.
+
+"EuroOS" and the EuroOS marks are used by the project to identify the official
+builds and the project itself; see CONTRIBUTING.md for trademark guidance.
+
+────────────────────────────────────────────────────────────────────────────────
+THIRD-PARTY COMPONENTS
+────────────────────────────────────────────────────────────────────────────────
+
+EuroOS is written from scratch (its own kernel, filesystem, network stack,
+crypto integration layer, and desktop). It builds on a small set of permissively
+licensed Rust crates, each retaining its own licence. The EUPL covers the EuroOS
+source; the components below remain under their respective licences:
+
+  Component                         Licence              Use in EuroOS
+  --------------------------------  -------------------  ---------------------------
+  RustCrypto: sha2, poly1305,       MIT OR Apache-2.0    hashing / AEAD primitives
+    chacha20, chacha20poly1305,                          (forced soft backends)
+    digest, cpufeatures, subtle
+  ed25519-dalek, x25519-dalek,      MIT OR Apache-2.0    signatures / key exchange
+    curve25519-dalek                                     (serial backend)
+  ab_glyph (+ libm)                 Apache-2.0 / MIT     desktop font rasterisation
+  spin                              MIT                  no_std synchronisation
+  linked_list_allocator            Apache-2.0 / MIT      kernel heap
+  x86_64                            MIT / Apache-2.0     CPU/paging abstractions
+  uefi / uefi-services             MPL-2.0              UEFI boot environment
+  Rust core / alloc / compiler-     MIT / Apache-2.0     no_std runtime (build-std)
+    builtins
+
+The EUPL v1.2 is explicitly compatible with these permissive licences and with
+copyleft licences listed in its Appendix (GPLv2/v3, AGPLv3, MPL-2.0, and others),
+allowing EuroOS to be combined and redistributed within the European and wider
+open-source legal context.
+
+Full dependency licences are reproduced by `cargo` under each crate; run
+`cargo tree` for the complete, version-pinned dependency graph (Cargo.lock is
+committed for reproducibility).

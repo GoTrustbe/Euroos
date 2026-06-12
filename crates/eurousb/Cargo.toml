@@ -1,0 +1,9 @@
+[package]
+name = "eurousb"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroUSB — USB-descriptor-parsing + HID-boot-protocol (toetsenbord/muis) kern (plan I1). Pure no_std-logica, host-getest."
+
+[dependencies]

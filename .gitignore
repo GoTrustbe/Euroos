@@ -1,0 +1,36 @@
+# ── Rust build output ────────────────────────────────────────────────────────
+/target/
+**/target/
+
+# ── Built binaries (kernel / loader / userland) ──────────────────────────────
+*.efi
+*.map
+*.o
+userland/*.elf
+userland/*.signed
+
+# ── Bootable disk images (build output) ──────────────────────────────────────
+*.img
+*.qcow2
+*.vmdk
+boot.ppm
+
+# ── Runtime logs & packet captures ───────────────────────────────────────────
+*.log
+*.pcap
+
+# ── SECRET: private Ed25519 signing seed — NEVER publish ─────────────────────
+# The kernel embeds ONLY the matching public key (toolchain/eupkg/keys/dev.pub).
+# Contributors generate their own dev keypair to build signed userland — see
+# CONTRIBUTING.md. The project's release-signing key is held offline, not in git.
+toolchain/eupkg/keys/dev.key
+
+# ── Local web staging (site content, not part of the OS source) ──────────────
+/web-staging/
+
+# ── Editor / OS cruft ────────────────────────────────────────────────────────
+.DS_Store
+*.swp
+*~
+
+# NOTE: Cargo.lock is INTENTIONALLY committed — EuroOS targets reproducible builds.

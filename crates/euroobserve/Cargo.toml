@@ -1,0 +1,12 @@
+[package]
+name = "euroobserve"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroObserve — in-kernel lock-vrije metrics + OpenMetrics-export (plan W). no_std, host-testbaar."
+
+[dependencies]
+
+[features]
+default = []

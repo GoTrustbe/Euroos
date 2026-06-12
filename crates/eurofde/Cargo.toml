@@ -1,0 +1,15 @@
+[package]
+name = "eurofde"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroFDE — full-disk-encryptie blok-laag (plan K3). Lengte-behoudend per-blok ChaCha20. no_std, host-testbaar."
+
+[dependencies]
+# Pure-Rust ChaCha20-stroomcijfer (no_std). Lengte-behoudend → ideaal voor FDE.
+chacha20 = { version = "0.9", default-features = false }
+eurofs = { path = "../eurofs" }
+
+[features]
+default = []

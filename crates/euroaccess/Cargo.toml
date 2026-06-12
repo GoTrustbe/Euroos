@@ -1,0 +1,13 @@
+[package]
+name = "euroaccess"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroAccess — toegankelijkheidslaag (plan P2, EN 301 549): accessibility-boom + focusbeheer + meertalige schermlezer voor EuroDisplay. no_std, host-testbaar."
+
+[dependencies]
+eurolocale = { path = "../eurolocale" }
+
+[features]
+default = []

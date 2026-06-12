@@ -1,0 +1,13 @@
+[package]
+name = "eurowifi"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroWiFi — 802.11-protocolkern (plan N1): frame-parsing, beacon/scan-model, WPA2/3-sleutelafleiding (PRF). no_std, host-testbaar. (De radio-driver is hardware-attended.)"
+
+[dependencies]
+sha2 = { version = "0.10", default-features = false }
+
+[features]
+default = []

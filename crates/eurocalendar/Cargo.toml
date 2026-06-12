@@ -1,0 +1,12 @@
+[package]
+name = "eurocalendar"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroCalendar — de agenda van EuroOS (AC-3). Afspraken met herhaling (dagelijks/wekelijks/maandelijks/jaarlijks, interval/count/until), herinneringen, en maand/week-indeling (maandag-eerst, EU). Eigen civiele-datumrekenkern. no_std, host-testbaar."
+
+[dependencies]
+
+[features]
+default = []

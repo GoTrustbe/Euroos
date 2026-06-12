@@ -1,0 +1,16 @@
+[package]
+name = "eurovpn"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroVPN — soevereine, forward-secret VPN-tunnel (plan N2, WireGuard-stijl). no_std, host-testbaar."
+
+[dependencies]
+x25519-dalek = { version = "2", default-features = false, features = ["static_secrets"] }
+hkdf = { version = "0.12", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+
+[features]
+default = []

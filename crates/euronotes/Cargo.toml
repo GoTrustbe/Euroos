@@ -1,0 +1,13 @@
+[package]
+name = "euronotes"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroNotes — de notitie-app van EuroOS (AC-1). Markdown-parser → EuroDoc-UDM (koppen, vet/cursief/code, lijsten, citaten, regels), #tag-extractie en append-only/getekende notities. no_std, host-testbaar, hergebruikt eurodoc."
+
+[dependencies]
+eurodoc = { path = "../eurodoc" }
+
+[features]
+default = []

@@ -1,0 +1,25 @@
+[package]
+name = "eupkg"
+version = "0.1.0"
+edition = "2021"
+description = "EuroKernel Package Manager (Track 6) — bouwt/verifieert gesigneerde .eupkg packages"
+
+# Eigen workspace zodat dit losstaat van de no_std kernel-workspace.
+[workspace]
+
+[[bin]]
+name = "eupkg"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+sha2 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+hex = "0.4"
+
+[profile.release]
+opt-level = "z"
