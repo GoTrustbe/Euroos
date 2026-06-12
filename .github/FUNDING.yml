@@ -1,0 +1,17 @@
+# Funding for EuroOS — https://github.com/GoTrustbe/Euroos
+#
+# This file adds a "Sponsor" button to the repository. Uncomment a line once the
+# corresponding account exists; you can list several and GitHub shows them all.
+
+# GitHub Sponsors — enable first at https://github.com/sponsors (select the
+# GoTrustbe organization, complete the Stripe/bank + tax setup). Belgium is
+# supported. Once approved, this line activates the Sponsor button:
+# github: [GoTrustbe]
+
+# European, non-profit, no-fee recurring donations (good fit for a sovereign EU
+# project). Create the account first, then uncomment with your handle:
+# liberapay: EuroOS
+# open_collective: euroos
+
+# Always-on fallback that works today — the project site:
+custom: ["https://euro-os.eu"]
