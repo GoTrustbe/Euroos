@@ -3,10 +3,10 @@
 # This file adds a "Sponsor" button to the repository. Uncomment a line once the
 # corresponding account exists; you can list several and GitHub shows them all.
 
-# GitHub Sponsors — enable first at https://github.com/sponsors (select the
-# GoTrustbe organization, complete the Stripe/bank + tax setup). Belgium is
-# supported. Once approved, this line activates the Sponsor button:
-# github: [GoTrustbe]
+# GitHub Sponsors for the GoTrustbe organization (profile submitted, pending
+# GitHub staff approval). The Sponsor button activates automatically once the
+# profile goes live.
+github: [GoTrustbe]
 
 # European, non-profit, no-fee recurring donations (good fit for a sovereign EU
 # project). Create the account first, then uncomment with your handle:
