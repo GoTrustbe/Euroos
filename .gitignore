@@ -34,3 +34,6 @@ toolchain/eupkg/keys/dev.key
 *~
 
 # NOTE: Cargo.lock is INTENTIONALLY committed — EuroOS targets reproducible builds.
+
+# Local Playwright/browser testing (node_modules)
+/web-test/
