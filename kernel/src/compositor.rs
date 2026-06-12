@@ -277,14 +277,16 @@ fn draw_sidebar(fb: &FrameBuffer, h: usize) {
         iy += tile + 8;
     }
 
-    // Gebruiker-avatar onderaan: accent-ring + initialen.
+    // Gebruiker-avatar onderaan: accent-ring + initialen van de INGELOGDE gebruiker
+    // (afgeleid van de EuroID-sessie — nooit hardcoded persoonsgegevens).
     let av = 40usize;
     let ax = cx - av / 2;
     let ay = DOCK_M + dh - av - 12;
     fb.fill_rounded_rect(ax, ay, av, av, av / 2, Color::ACCENT); // 2px accent-ring
     fb.fill_rounded_rect(ax + 2, ay + 2, av - 4, av - 4, (av - 4) / 2, Color::ACCENT_SOFT);
-    let jw = crate::text::width_px("JV", 14.0);
-    crate::text::draw_px(fb, ax + (av - jw) / 2, ay + 12, "JV", Color::ACCENT, 14.0);
+    let initials = crate::auth::session_initials();
+    let iw = crate::text::width_px(&initials, 14.0);
+    crate::text::draw_px(fb, ax + (av - iw) / 2, ay + 12, &initials, Color::ACCENT, 14.0);
 }
 
 /// Wallpaper in de "desktop.html"-referentielook, in software-pixels:

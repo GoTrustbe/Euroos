@@ -85,6 +85,20 @@ pub fn session_gid() -> u32 {
     SESSION_GID.load(Ordering::Relaxed)
 }
 
+/// Naam van de actieve sessie (leeg vóór login).
+pub fn session_name() -> String {
+    SESSION_NAME.lock().clone()
+}
+
+/// Avatar-initialen voor de huidige sessie: de eerste 2 letters van de
+/// gebruikersnaam (hoofdletters), of "EU" als er nog geen sessie is. Bevat
+/// NOOIT hardcoded persoonsgegevens — leidt zich af van de ingelogde gebruiker.
+pub fn session_initials() -> String {
+    let name = session_name();
+    let up: String = name.chars().take(2).collect::<String>().to_uppercase();
+    if up.is_empty() { String::from("EU") } else { up }
+}
+
 /// Zet de actieve sessie (na login/su).
 pub fn set_session(uid: u32, gid: u32, name: &str) {
     SESSION_UID.store(uid, Ordering::Relaxed);

@@ -2922,7 +2922,63 @@ fn populate_fs(fs: &mut dyn FileSystem) {
     let _ = fs.create_dir("/lib");
     let _ = fs.write_file("/bin/dyntest", ring3::dyntest_bytes());
     let _ = fs.write_file("/lib/libeuro.so", ring3::libeuro_bytes());
+    // Welkomst-/infobestand voor de gebruiker (Engels): wat EuroOS is, wat je kan
+    // doen, de belangrijkste commando's en de beperkingen. Openbaar te lezen via de
+    // Files-app of `cat /Welcome.txt`.
+    let _ = fs.create_dir("/home");
+    let _ = fs.create_dir("/home/euro");
+    fs.write_file("/Welcome.txt", WELCOME_TXT).unwrap();
+    let _ = fs.write_file("/home/euro/Welcome.txt", WELCOME_TXT);
 }
+
+/// Het Engelstalige welkomst-/infobestand dat in de FS wordt gezaaid.
+const WELCOME_TXT: &[u8] = b"\
+EuroOS - Welcome
+================
+
+EuroOS is a sovereign, security-first operating system built from scratch in
+Rust. It has its own kernel, filesystem, network stack, capability security and
+desktop - with no Linux or BSD underneath. Zero telemetry. Licensed under the
+European Union Public Licence (EUPL) v1.2.
+
+This is an ALPHA PREVIEW: something to explore and build on, not yet a
+daily-driver OS.
+
+What you can do here
+--------------------
+* Open the Terminal from the dock and explore an interactive shell.
+* Browse the filesystem and read/write files (EuroFS is copy-on-write).
+* Use real networking: DNS, HTTP/HTTPS over TLS 1.3.
+* Try the sovereign subsystems: user identity, the encrypted secrets vault,
+  capability-isolated AI agents, the firewall, snapshots, and the audit log.
+
+Useful shell commands  (type `help` for the exact, current list)
+----------------------------------------------------------------
+Files     : ls, cat, write <file> <text>, mkdir, cp, find, df
+Text      : echo, grep, sort, uniq, cut, wc, head, tail   (GNU-compatible)
+System    : uname, hostname, whoami, id, date, free, ps, lspci, lsdev, metrics
+Identity  : login <user> <pw>, su, sudo <cmd>, logout, eurousers
+Security  : vault, europol, audit, eurosnap, eurohealth
+Network   : net, eurofw (firewall), vpn
+Agents    : euroagent   (capability-isolated AI agents)
+
+The demo desktop user is `euro` (password: euro). Root access is via `sudo`.
+
+Known limitations (alpha)
+-------------------------
+* Not every desktop app is fully interactive yet; some are previews.
+* Hardware support is limited - it runs best in QEMU/KVM with virtio devices.
+* There is no internet app store / package installation yet.
+* This preview is for evaluation - do not store important data here.
+
+Learn more
+----------
+Website : https://euro-os.eu
+Source  : https://github.com/GoTrustbe/Euroos   (open source, EUPL-1.2)
+Docs    : https://euro-os.eu/docs
+
+Welcome to a computer that is yours, on your terms.  - The EuroOS project
+";
 
 /// Mini-EuroUpdate (Track 9): houd een GEÏNSTALLEERD systeem in sync met de kernel.
 /// Als de meegeleverde binaries verschillen van wat op schijf staat (= de kernel is
