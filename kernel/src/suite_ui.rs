@@ -33,6 +33,12 @@ pub enum SuiteApp {
     Notes,
     /// EuroClock: wereldklokken + lokale tijd uit de ECHTE RTC.
     Clock,
+    /// EuroText: platte-tekst-editor — bewerkt + slaat ECHT op naar EuroFS.
+    Text,
+    /// EuroMonitor: live systeemmonitor (RAM/taken/schijf/audit — echte metingen).
+    Monitor,
+    /// EuroLog: live weergave van het hash-geketende audit-logboek.
+    Log,
 }
 
 const TITLEBAR_H: usize = 44; // moet gelijk zijn aan compositor::TITLEBAR_H
@@ -61,6 +67,11 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize, app: Sui
         SuiteApp::Files => {}
         SuiteApp::Notes => {}
         SuiteApp::Clock => {}
+        // EuroText/EuroMonitor/EuroLog lezen hun eigen toestand en worden vóór deze
+        // dispatch afgehandeld (zie compositor::draw_window_body).
+        SuiteApp::Text => {}
+        SuiteApp::Monitor => {}
+        SuiteApp::Log => {}
         SuiteApp::None => {}
     }
 }

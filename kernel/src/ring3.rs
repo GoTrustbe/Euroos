@@ -1691,6 +1691,9 @@ static TICKER_ELF: &[u8] = include_bytes!("../../userland/ticker.elf");
 static MUSLPROG_ELF: &[u8] = include_bytes!("../../userland/muslprog.elf");
 static ARGVPROG_ELF: &[u8] = include_bytes!("../../userland/argvprog.elf");
 static PIEPROG_ELF: &[u8] = include_bytes!("../../userland/pieprog.elf");
+static TLSPROG_ELF: &[u8] = include_bytes!("../../userland/tlsprog.elf");
+static DYNTLS_ELF: &[u8] = include_bytes!("../../userland/dyntls.elf");
+static LIBTLS_SO: &[u8] = include_bytes!("../../userland/libtls.so");
 // H3: dynamische-linking-testartefacten — een dynamisch-gelinkte exe + de .so.
 static DYNTEST_ELF: &[u8] = include_bytes!("../../userland/dyntest.elf");
 static LIBEURO_SO: &[u8] = include_bytes!("../../userland/libeuro.so");
@@ -2142,6 +2145,115 @@ fn apply_relocations(elf: &[u8], base: u64, limit: u64) {
     crate::serial_println!("[elf] {applied} R_X86_64_RELATIVE relocaties toegepast @ base {base:#x}");
 }
 
+/// Markeer pagina's schrijfbaar in de W^X-bitmap (zelfde mechaniek als exec).
+fn mark_writ_pages(bits: &mut [u64; 8], start: u64, len: u64) {
+    mark_exec_pages(bits, start, len);
+}
+
+/// Vind het PT_TLS-segment (p_type==7): (vaddr, filesz, memsz, align≥8).
+fn find_pt_tls(elf: &[u8]) -> Option<(u64, u64, u64, u64)> {
+    let e_phoff = rd_u64(elf, 32) as usize;
+    let e_phentsize = rd_u16(elf, 54) as usize;
+    let e_phnum = rd_u16(elf, 56) as usize;
+    for i in 0..e_phnum {
+        let ph = e_phoff + i * e_phentsize;
+        if ph + 56 > elf.len() {
+            break;
+        }
+        if rd_u32(elf, ph) == 7 {
+            let vaddr = rd_u64(elf, ph + 16);
+            let filesz = rd_u64(elf, ph + 32);
+            let memsz = rd_u64(elf, ph + 40);
+            let align = rd_u64(elf, ph + 48).max(8);
+            return Some((vaddr, filesz, memsz, align));
+        }
+    }
+    None
+}
+
+/// Arena-offset voor het statische TLS-blok (boven de heap, onder de stack).
+const TLS_WINDOW: u64 = 0x188000;
+
+/// **Kernel-als-ld.so: statische TLS-setup (variant-II, x86-64).** Bouwt het
+/// statische TLS-blok uit het `PT_TLS` van ELK gegeven module (exe + .so's): elk
+/// module krijgt een offset ONDER de thread-pointer (TP), het TCB-zelfwijzer-woord
+/// staat op TP (`%fs:0x0` → TP). Een `__thread`-var op template-offset v in module m
+/// staat op `TP − tlsoffset[m] + v`. Geeft (TP, [(module_base, tlsoffset)]) terug —
+/// de offsets zijn nodig om `R_X86_64_TPOFF64`-relocaties te patchen.
+fn setup_static_tls(arena: u64, modules: &[(u64, &[u8])], info: &mut LoadInfo) -> (Option<u64>, Vec<(u64, u64)>) {
+    // Verzamel de TLS-modules: (base, vaddr, filesz, memsz, align).
+    let mut tls: Vec<(u64, u64, u64, u64, u64)> = Vec::new();
+    for (base, elf) in modules {
+        if let Some((v, f, m, a)) = find_pt_tls(elf) {
+            tls.push((*base, v, f, m, a));
+        }
+    }
+    if tls.is_empty() {
+        return (None, Vec::new());
+    }
+    // Wijs offsets toe (glibc-algoritme): offset accumuleert per module.
+    let mut offset = 0u64;
+    let mut offsets: Vec<(u64, u64)> = Vec::new();
+    for (base, _v, _f, memsz, align) in &tls {
+        offset = (offset + memsz + align - 1) & !(align - 1);
+        offsets.push((*base, offset));
+    }
+    let total = offset;
+    let region = arena + TLS_WINDOW;
+    let tp = region + total;
+    unsafe {
+        core::ptr::write_bytes(region as *mut u8, 0, (total + 8) as usize); // hele blok + TCB-woord nullen
+        for ((base, vaddr, filesz, _memsz, _a), (_b, toff)) in tls.iter().zip(offsets.iter()) {
+            let dst = tp - toff;
+            core::ptr::copy_nonoverlapping((base + vaddr) as *const u8, dst as *mut u8, *filesz as usize);
+        }
+        (tp as *mut u64).write(tp); // TCB self-pointer op TP (%fs:0x0)
+    }
+    mark_writ_pages(&mut info.writ_pages, TLS_WINDOW, total + 4096);
+    crate::serial_println!(
+        "[tls] statisch TLS-blok @ {region:#x}, TP={tp:#x}, {} module(s), totaal {total} B",
+        tls.len()
+    );
+    (Some(tp), offsets)
+}
+
+/// Patch de `R_X86_64_TPOFF64`-relocaties (type 18) van één module: schrijf de
+/// initial-exec TP-offset in het GOT-slot — `tpoff = sym.st_value − tlsoffset + addend`
+/// (de var staat op `%fs + tpoff`). Geeft het aantal gepatchte relocaties terug.
+fn apply_tls_relocs(base: u64, elf: &[u8], tlsoffset: u64) -> u32 {
+    let symtab = match dyn_value(base, elf, 6) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let tables = [
+        (dyn_value(base, elf, 23), dyn_value(base, elf, 2)), // .rela.plt
+        (dyn_value(base, elf, 7), dyn_value(base, elf, 8)),  // .rela.dyn
+    ];
+    let mut patched = 0u32;
+    for (rela_opt, sz_opt) in tables {
+        let (rela, sz) = match (rela_opt, sz_opt) {
+            (Some(r), Some(s)) => (r, s),
+            _ => continue,
+        };
+        let mut off = 0u64;
+        while off + 24 <= sz {
+            let e = base + rela + off;
+            let r_offset = unsafe { (e as *const u64).read() };
+            let r_info = unsafe { ((e + 8) as *const u64).read() };
+            let r_addend = unsafe { ((e + 16) as *const u64).read() };
+            if (r_info & 0xffff_ffff) == 18 {
+                let sym_idx = r_info >> 32;
+                let st_value = unsafe { ((base + symtab + sym_idx * 24 + 8) as *const u64).read() };
+                let tpoff = (st_value as i64) - (tlsoffset as i64) + (r_addend as i64);
+                unsafe { ((base + r_offset) as *mut u64).write(tpoff as u64) };
+                patched += 1;
+            }
+            off += 24;
+        }
+    }
+    patched
+}
+
 /// Laad de PT_LOAD-segmenten van een ELF64-binary op basis-adres `base` (positie-
 /// onafhankelijk; gelinkt op vaddr 0). `pages` = grootte van het frame-venster.
 fn load_elf64(elf: &[u8], base: u64, pages: usize) -> Option<LoadInfo> {
@@ -2534,6 +2646,23 @@ pub fn run_dynamic(
         unresolved
     );
 
+    // Kernel-als-ld.so: zet het statische TLS-blok + thread-pointer op (vóór we de
+    // adresruimte bouwen, zodat de TLS-pagina's user-schrijfbaar gemapt worden), en
+    // patch de cross-module TPOFF64-relocaties (IE-TLS) per module.
+    let mut tls_modules: Vec<(u64, &[u8])> = alloc::vec![(code, exe)];
+    for (lb, le) in &loaded {
+        tls_modules.push((*lb, *le));
+    }
+    let (tls_tp, tls_offsets) = setup_static_tls(arena, &tls_modules, &mut info);
+    let mut tls_patched = 0u32;
+    for (mbase, toff) in &tls_offsets {
+        let elf = if *mbase == code { exe } else { loaded.iter().find(|(b, _)| b == mbase).map(|(_, e)| *e).unwrap_or(exe) };
+        tls_patched += apply_tls_relocs(*mbase, elf, *toff);
+    }
+    if tls_patched > 0 {
+        crate::serial_println!("[tls] {tls_patched} TPOFF64-relocatie(s) gepatcht (initial-exec)");
+    }
+
     let rsp = unsafe { setup_user_stack(stack_top, argv, &info) };
     let entry = info.entry;
     let sel = crate::gdt::selectors();
@@ -2542,6 +2671,10 @@ pub fn run_dynamic(
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
     let boot = crate::sched::boot_pml4();
     unsafe { crate::gdt::set_rsp0(KERNEL_RSP) };
+    // Laad FS_BASE = TP (de musl/IE-TLS-pointer) als het programma TLS gebruikt.
+    if let Some(tp) = tls_tp {
+        unsafe { Msr::new(0xC000_0100).write(tp) };
+    }
     FG_ACTIVE.store(true, Ordering::Relaxed);
     // SAFETY: zelfde patroon als run_args — terugkeer via sys_exit of force-return.
     unsafe {
@@ -2562,6 +2695,31 @@ pub fn run_dynamic(
 /// H3-zelftest met de ingebedde artefacten: dyntest.elf + libeuro.so.
 pub fn dynlink_selftest(falloc: &mut FrameAllocator) -> (String, u64) {
     run_dynamic(falloc, DYNTEST_ELF, &[LIBEURO_SO], &[b"dyntest"], CAP_CONSOLE, true)
+}
+
+/// `[tls]`-zelftest (Sprint 1): draai een vrijstaande PIE met een `__thread`-teller
+/// die GEEN eigen TLS opzet — de kernel-ld.so doet de TLS-setup. tls_value 41→42 →
+/// exit(42) bewijst het statische TLS-blok + FS_BASE.
+pub fn tls_selftest(falloc: &mut FrameAllocator) {
+    let (_out, code) = run_dynamic(falloc, TLSPROG_ELF, &[], &[b"tlsprog"], CAP_CONSOLE, true);
+    crate::serial_println!(
+        "[tls] kernel-ld.so TLS-setup: vrijstaande __thread-PIE (41→42) → exit {} {}",
+        code,
+        if code == 42 { "✓ (statisch TLS-blok + FS_BASE door de kernel opgezet)" } else { "✗ FOUT" }
+    );
+}
+
+/// `[tls2]`-zelftest (Sprint 1, stage 1b): CROSS-MODULE TLS — dyntls roept bump()
+/// aan uit libtls.so, die zijn eigen `__thread ctr` via `%fs` (TPOFF64) leest. De
+/// kernel-ld.so zet het multi-module TLS-blok op + patcht de TPOFF64-relocatie.
+/// 41→42 → exit(42) bewijst dynamische cross-module IE-TLS.
+pub fn tls_cross_selftest(falloc: &mut FrameAllocator) {
+    let (_out, code) = run_dynamic(falloc, DYNTLS_ELF, &[LIBTLS_SO], &[b"dyntls"], CAP_CONSOLE, true);
+    crate::serial_println!(
+        "[tls2] cross-module IE-TLS (.so __thread via TPOFF64): bump() 41→42 → exit {} {}",
+        code,
+        if code == 42 { "✓ (multi-module TLS-blok + TPOFF64-patch door de kernel-ld.so)" } else { "✗ FOUT" }
+    );
 }
 
 /// `[uptr]` — bewijst dat de syscall-laag user-pointers tegen de arena valideert:

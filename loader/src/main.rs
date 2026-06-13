@@ -64,11 +64,40 @@ fn read_file(path: &CStr16) -> Option<Vec<u8>> {
     fs.read(Path::new(path)).ok()
 }
 
-/// Lees `\slot_config` van de ESP en geef het te booten slot. `None` → val terug op A.
-fn read_slot() -> Option<Slot> {
+fn write_file(path: &CStr16, data: &[u8]) -> bool {
+    let proto = match boot::get_image_file_system(boot::image_handle()) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let mut fs = FileSystem::new(proto);
+    fs.write(Path::new(path), data).is_ok()
+}
+
+/// Twee-traps A/B-beslissing (het echte ChromeOS/Android-model): lees `\slot_config`
+/// van de ESP, voer `on_boot()` uit (poging-teller −1, of automatische terugrol naar
+/// het laatst-goede slot als de pogingen op zijn), SCHRIJF de bijgewerkte config terug
+/// naar de ESP, en geef het te booten slot. Zo regelt de loader — niet de kernel — de
+/// rollback: zelfs een kernel die niet eens boot, kan de machine niet bricken.
+/// `None` → geen/onleesbare config → val terug op slot A.
+fn decide_slot() -> Option<Slot> {
     let data = read_file(cstr16!("\\slot_config"))?;
-    let cfg = SlotConfig::deserialize(&data)?;
-    Some(cfg.next_boot)
+    let mut cfg = SlotConfig::deserialize(&data)?;
+    let before = (cfg.tries, cfg.next_boot);
+    let booted = cfg.on_boot();
+    // Persisteer de bijgewerkte teller/keuze vóór we de kernel starten. Lukt het
+    // schrijven niet, dan booten we alsnog (read-only ESP mag nooit fataal zijn).
+    let _ = write_file(cstr16!("\\slot_config"), &cfg.serialize());
+    puts("[loader] on_boot: ");
+    puts(match before.1 {
+        Slot::A => "A",
+        Slot::B => "B",
+    });
+    puts(" tries ");
+    putc(b'0' + before.0.min(9));
+    puts(" → ");
+    putc(b'0' + cfg.tries.min(9));
+    puts("\n");
+    Some(booted)
 }
 
 #[entry]
@@ -76,7 +105,7 @@ fn main() -> Status {
     com1_init();
     puts("\n[loader] EuroOS twee-traps A/B-loader (G4)\n");
 
-    let slot = read_slot().unwrap_or(Slot::A);
+    let slot = decide_slot().unwrap_or(Slot::A);
     let (name, path): (&str, &CStr16) = match slot {
         Slot::A => ("A", cstr16!("\\EFI\\BOOT\\eurokernel-A.efi")),
         Slot::B => ("B", cstr16!("\\EFI\\BOOT\\eurokernel-B.efi")),

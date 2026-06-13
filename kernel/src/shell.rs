@@ -447,8 +447,16 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
                     crate::update::apply(fs, arg2)
                 }
             }
-            _ => vec!["euroupdate: status | apply <image> | rollback".to_string()],
+            "fetch" => {
+                if arg2.is_empty() {
+                    vec!["gebruik: euroupdate fetch <url>   (haalt <url> + <url>.sig op, verifieert, staget)".to_string()]
+                } else {
+                    crate::update::fetch(fs, arg2)
+                }
+            }
+            _ => vec!["euroupdate: status | apply <image> | fetch <url> | rollback".to_string()],
         },
+        "euroimmutable" | "immutable" => crate::immutable::shell(fs, arg1, arg2),
         "mem" => mem_report(ctx.mem),
         "ls" => {
             let path = if arg1.is_empty() { "/" } else { arg1 };

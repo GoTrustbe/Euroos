@@ -726,6 +726,25 @@ pub fn https_get(
     host: &str,
     path: &str,
 ) -> Option<(String, alloc::vec::Vec<u8>, Option<alloc::vec::Vec<u8>>)> {
+    let req = alloc::format!("GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    let (body, cert) = https_exchange(my_mac, my_ip, nexthop, server, host, req.as_bytes())?;
+    let status = String::from_utf8_lossy(&body).lines().next().unwrap_or("").into();
+    Some((status, body, cert))
+}
+
+/// Eén versleutelde HTTP-uitwisseling over EuroTLS 1.3: bouw de verbinding op,
+/// doe de handshake (met certificaatvalidatie tegen de gebundelde root-CA's), stuur
+/// `request` (een volledige HTTP-request incl. eventuele body), en geef de ruwe
+/// respons (statuslijn + headers + body) + het servercertificaat terug. Gedeeld door
+/// `https_get` (GET) en `post_full` (POST) — zo werkt POST over dezelfde echte TLS.
+fn https_exchange(
+    my_mac: MacAddr,
+    my_ip: Ipv4Addr,
+    nexthop: MacAddr,
+    server: Ipv4Addr,
+    host: &str,
+    request: &[u8],
+) -> Option<(alloc::vec::Vec<u8>, Option<alloc::vec::Vec<u8>>)> {
     let mut tcp = TcpConn::connect(my_mac, my_ip, nexthop, server, 443)?;
     let random = gather_entropy(0);
     let secret = gather_entropy(1);
@@ -765,9 +784,8 @@ pub fn https_get(
         }
     }
 
-    // Versleuteld HTTP-verzoek.
-    let req = alloc::format!("GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n");
-    if let Ok(rec) = tls.encrypt_app(req.as_bytes()) {
+    // Versleuteld HTTP-verzoek (door de aanroeper opgebouwd: GET of POST + body).
+    if let Ok(rec) = tls.encrypt_app(request) {
         tcp.send(&rec);
     }
 
@@ -800,8 +818,7 @@ pub fn https_get(
     }
     tcp.close();
     let cert = tls.server_cert.clone();
-    let status = String::from_utf8_lossy(&body).lines().next().unwrap_or("").into();
-    Some((status, body, cert))
+    Some((body, cert))
 }
 
 /// Shell-commando `https <host>` — haal https://<host>/ op via EuroTLS 1.3.
@@ -1739,7 +1756,12 @@ pub fn fetch_full(host: &str, port: u16, path: &str, tls: bool) -> Option<(u16, 
         c.close();
         data
     };
-    // Statuscode + Location-header parsen uit de headers.
+    Some(parse_http_response(&raw))
+}
+
+/// Parse een ruwe HTTP-respons (statuslijn + headers + body) → (statuscode,
+/// Location-header, body). Gedeeld door `fetch_full` (GET) en `post_full` (POST).
+fn parse_http_response(raw: &[u8]) -> (u16, Option<String>, alloc::vec::Vec<u8>) {
     let head_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
     let headers = String::from_utf8_lossy(&raw[..head_end]);
     let status = headers
@@ -1758,7 +1780,58 @@ pub fn fetch_full(host: &str, port: u16, path: &str, tls: bool) -> Option<(u16, 
         }
     }
     let body = if head_end < raw.len() { raw[head_end + 4..].to_vec() } else { alloc::vec::Vec::new() };
-    Some((status, location, body))
+    (status, location, body)
+}
+
+/// HTTP(S) **POST** met een `application/x-www-form-urlencoded`-body. Gebruikt
+/// dezelfde echte stacks als GET (EuroTLS 1.3 voor https, rauwe TCP voor http) via
+/// `https_exchange`. Geeft (statuscode, Location, body) of None bij geen verbinding.
+pub fn post_full(
+    host: &str,
+    port: u16,
+    path: &str,
+    tls: bool,
+    content_type: &str,
+    body: &[u8],
+) -> Option<(u16, Option<String>, alloc::vec::Vec<u8>)> {
+    let cfg = get()?;
+    let server = match parse_ipv4(host) {
+        Some(ip) => ip,
+        None => hosts_lookup(host).or_else(|| dns_query(cfg.my_mac, cfg.my_ip, cfg.dns_mac, cfg.dns_ip, host))?,
+    };
+    let nexthop = if same_subnet(server, cfg.my_ip) {
+        arp_resolve(cfg.my_mac, cfg.my_ip, server).unwrap_or(cfg.gw_mac)
+    } else {
+        cfg.gw_mac
+    };
+    let head = alloc::format!(
+        "POST {path} HTTP/1.0\r\nHost: {host}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let mut request = head.into_bytes();
+    request.extend_from_slice(body);
+
+    let raw: alloc::vec::Vec<u8> = if tls {
+        let (b, _cert) = https_exchange(cfg.my_mac, cfg.my_ip, nexthop, server, host, &request)?;
+        b
+    } else {
+        let mut c = TcpConn::connect(cfg.my_mac, cfg.my_ip, nexthop, server, port)?;
+        c.send(&request);
+        let mut data: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        loop {
+            let chunk = c.recv(16384);
+            if chunk.is_empty() {
+                break;
+            }
+            data.extend_from_slice(&chunk);
+            if data.len() > 512 * 1024 {
+                break;
+            }
+        }
+        c.close();
+        data
+    };
+    Some(parse_http_response(&raw))
 }
 
 /// Statische /etc/hosts-tabel (naam -> IPv4), door main.rs gevuld uit /etc/hosts.

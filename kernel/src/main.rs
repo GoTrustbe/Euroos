@@ -105,6 +105,9 @@ mod calc_ui;
 mod settings_ui;
 mod agent_ui;
 mod files;
+mod textedit;
+mod monitor;
+mod logview;
 mod media;
 mod xhci;
 
@@ -291,6 +294,7 @@ fn main() -> Status {
             // Al geïnstalleerd → demonstreer de A/B-ZELFUPDATE: stage slot B + flip
             // slot_config. Na een standalone reboot kiest de loader slot B (AH-2).
             instexec::stage_update_b(0);
+            instexec::rollback_selftest(0); // [upd4]: bewijs de twee-traps-rollback op de echte ESP
             true // we draaien live verder; de schijf is de boot-/updatetarget
         }
     } else {
@@ -331,6 +335,12 @@ fn main() -> Status {
     update::boot_init(&mut fs);
     // G4: bewijs de directe image→slot-partitie-write (EuroOS-B, sector-I/O + read-back).
     update::slot_partition_selftest();
+    // [upd3] (Sprint 3): verify-before-activate met een ECHTE Ed25519-handtekening +
+    // bewijs dat de update-pijplijn een gemanipuleerd pakket weigert.
+    crypto::selftest();
+    update::apply_gate_selftest(rtc::epoch());
+    // [edit] (Sprint 4): EuroText bewerken → opslaan → herlezen op het ECHTE EuroFS.
+    textedit::selftest(&mut fs);
 
     // J2: bad-block-remap op de ECHTE schijf — markeer een blok slecht en bewijs dat
     // I/O transparant naar een reserve-blok wordt omgeleid (bad-block-tabel ↔ scrub).
@@ -976,6 +986,10 @@ fn main() -> Status {
             "[h3] dyntest (dynamisch gelinkt) klaar: exit={h3_exit}, output={:?}",
             h3_out.trim_end()
         );
+        // Sprint 1: kernel-ld.so zet statische TLS op voor een vrijstaande __thread-PIE,
+        // en patcht cross-module IE-TLS (TPOFF64) voor een .so-`__thread`.
+        ring3::tls_selftest(&mut allocator);
+        ring3::tls_cross_selftest(&mut allocator);
     }
 
     // H3-vervolg: draai een dynamisch-gelinkte binary BIJ NAAM uit de FS — de .so-
@@ -1216,6 +1230,17 @@ fn main() -> Status {
         );
     } else {
         serial_println!("[i3-aml] geen DSDT gevonden via FADT");
+    }
+
+    // Sprint 2 (I3): bewijs dat het ACPI-S5-shutdown-pad gereed is — poort + S5-
+    // schrijfwaarde uit FADT + de AML-geëvalueerde \_S5 — ZONDER af te sluiten. De
+    // echte poweroff is `shutdown`/`poweroff` (boot-geverifieerd via shutdown-test.py).
+    {
+        let (s5_port, s5_val) = power::s5_ready();
+        serial_println!(
+            "[i3-s5] ACPI-shutdown gereed: PM1a_CNT-poort {:#x}, S5-waarde {:#06x}, SLP_TYP-uit-AML={} → `poweroff` voert nette soft-off uit ✓ (end-to-end bewezen via scripts/shutdown-test.py: QEMU guest-shutdown)",
+            s5_port, s5_val, power::s5_from_aml()
+        );
     }
     // O1: TPM 2.0 (hardware root of trust) via de TIS-MMIO-interface. Detecteer +
     // Startup; de zelftest bewijst measured boot (PCR-extend) — fundament voor K3-FDE.
@@ -1549,6 +1574,9 @@ fn main() -> Status {
     web::selftest();
     // AG-2: afbeeldingen (<img> + QOI/PPM-decode) + formulieren (echte GET).
     web::selftest_ag2();
+    // Sprint 4: formulier-POST (urlencoded body) + JS op een pagina (EuroJS).
+    web::selftest_post();
+    web::selftest_js();
 
     // EuroReken (AC-1): soevereine rekenmachine — std/wetensch./programmeur.
     reken::selftest();
@@ -1891,7 +1919,7 @@ fn main() -> Status {
     // Dock-tegel (zie compositor::DOCK_APPS: files/notes/clock/browser/terminal/
     // settings/store/star) → venster-index. De desktop start LEEG (alle vensters
     // verborgen); een dock-klik opent een app. (AG-1 voegde files/notes/clock toe.)
-    let mut dock_targets: [Option<usize>; 8] = [None; 8];
+    let mut dock_targets: [Option<usize>; 11] = [None; 11];
     dock_targets[4] = Some(1); // terminal → Terminal (de echte shell)
 
     // ── H2: LIVE DISPLAY-SERVER ── bind een AF_UNIX-socket (H1), laat een app-
@@ -2190,8 +2218,55 @@ fn main() -> Status {
         order.push(i_clock);
         dock_targets[2] = Some(i_clock); // dock: clock-icoon → EuroClock
 
+        // ── Sprint 4: EuroText / EuroMonitor / EuroLog — drie nieuwe dock-apps ──
+        // EuroText = echte editor (bewerkt+slaat op naar EuroFS), EuroMonitor = live
+        // systeemstatus (RAM/taken/schijf/audit), EuroLog = live audit-logboek.
+        let i_text = windows.len();
+        windows.push(compositor::Window {
+            x: SIDEBAR_W + 60, y: 90, w: 760, h: 600,
+            title: String::from("EuroText"),
+            content: Vec::new(), ui: Vec::new(),
+            active: false, accent: Color::rgb(0x2B, 0x6C, 0xB0),
+            sec: eds::SecState::new(true, true, false),
+            app: suite_ui::SuiteApp::Text,
+            visible: false,
+            restore: None,
+        });
+        order.push(i_text);
+        dock_targets[8] = Some(i_text); // dock: text-icoon → EuroText
+        textedit::open(ctx.fs, ""); // laad het standaard editbestand uit EuroFS
+
+        let i_mon = windows.len();
+        windows.push(compositor::Window {
+            x: SIDEBAR_W + 120, y: 110, w: 620, h: 560,
+            title: String::from("EuroMonitor"),
+            content: Vec::new(), ui: Vec::new(),
+            active: true, accent: Color::rgb(0x1F, 0x9D, 0x6B),
+            sec: eds::SecState::new(true, true, false),
+            app: suite_ui::SuiteApp::Monitor,
+            visible: true, // bij boot geopend: toont meteen live systeemstatus (screenshot)
+            restore: None,
+        });
+        order.push(i_mon);
+        dock_targets[9] = Some(i_mon); // dock: monitor-icoon → EuroMonitor
+
+        let i_log = windows.len();
+        windows.push(compositor::Window {
+            x: SIDEBAR_W + 780, y: 110, w: 700, h: 560,
+            title: String::from("EuroLog"),
+            content: Vec::new(), ui: Vec::new(),
+            active: false, accent: Color::rgb(0xB0, 0x4A, 0x2B),
+            sec: eds::SecState::new(true, true, false),
+            app: suite_ui::SuiteApp::Log,
+            visible: false,
+            restore: None,
+        });
+        order.push(i_log);
+        dock_targets[10] = Some(i_log); // dock: log-icoon → EuroLog
+        compositor::set_active_dock(Some(9)); // EuroMonitor is geopend bij boot
+
         // EuroFiles vooraf vullen met de ECHTE wortelmap van het FS, zodat het
-        // eerste dock-open meteen inhoud toont. Geen dock-tegel actief bij boot.
+        // eerste dock-open meteen inhoud toont.
         load_files_dir(ctx.fs, "/");
         compositor::set_active_dock(None);
         let fl_path = files::current_path();
@@ -2235,6 +2310,12 @@ fn main() -> Status {
     lockscreen::selftest(&fb);
     let _session_user = lockscreen::gate(&fb, "euro");
 
+    // EuroMonitor's eerste paint moet de echte RAM-cijfers tonen (niet de 0-atomics).
+    monitor::set_mem(
+        ctx.mem.usable_bytes() / (1024 * 1024),
+        ctx.mem.free_bytes() / (1024 * 1024),
+        ctx.mem.free_frames(),
+    );
     compositor::render(&fb, &windows, &order, &rtc::clock_string(), &rtc::date_string(), &mk_stats(ctx.mem.free_bytes()));
     serial_println!("[euro] EuroDesktop compositor actief — {} vensters + muis", windows.len());
 
@@ -2281,6 +2362,12 @@ fn main() -> Status {
         let (px, py) = mouse::pos();
         let ldown = mouse::left_down();
         let mut need_full = false;
+        // Live RAM-snapshot voor EuroMonitor (contextvrij leesbaar in de render-fn).
+        monitor::set_mem(
+            ctx.mem.usable_bytes() / (1024 * 1024),
+            ctx.mem.free_bytes() / (1024 * 1024),
+            ctx.mem.free_frames(),
+        );
 
         // Linkerklik net ingedrukt: dock-launch, venster-focus/raise, of slepen.
         if ldown && !prev_left && dragging.is_none() {
@@ -2410,6 +2497,11 @@ fn main() -> Status {
                     } else if windows[i].app == suite_ui::SuiteApp::Notes {
                         // Klik in de notitielijst → selecteer een andere notitie.
                         notes::hit_test(windows[i].x, windows[i].y, px, py);
+                    } else if windows[i].app == suite_ui::SuiteApp::Text {
+                        // Klik op "Opslaan" → schrijf de buffer ECHT naar EuroFS.
+                        if textedit::save_button_at(windows[i].x, windows[i].y, windows[i].w, px, py) {
+                            textedit::save(ctx.fs);
+                        }
                     }
                     need_full = true;
                 }
@@ -2439,6 +2531,9 @@ fn main() -> Status {
         let browser_focused = focused.map(|i| windows[i].app == suite_ui::SuiteApp::Browser).unwrap_or(false);
         let settings_focused = focused.map(|i| windows[i].app == suite_ui::SuiteApp::Settings).unwrap_or(false);
         let agent_focused = focused.map(|i| windows[i].app == suite_ui::SuiteApp::Agent).unwrap_or(false);
+        let text_focused = focused.map(|i| windows[i].app == suite_ui::SuiteApp::Text).unwrap_or(false);
+        // Alleen het (app-loze) terminalvenster mag toetsen als shell-invoer krijgen.
+        let term_focused = focused.map(|i| windows[i].app == suite_ui::SuiteApp::None).unwrap_or(false);
 
         // ── Interactieve shell / rekenmachine: lees toetsen. ──
         let mut term_dirty = false;
@@ -2500,6 +2595,16 @@ fn main() -> Status {
                     serial_println!("[bb6] EuroAgent dispatch: intent='{intent}' → agent-lus uitgevoerd (cap-gated, geaudit)");
                 }
                 need_full = true;
+                continue;
+            }
+            // EuroText-focus → de toets bewerkt de editorbuffer (typen/backspace/enter).
+            if text_focused {
+                textedit::input(k);
+                need_full = true;
+                continue;
+            }
+            // Read-only apps (EuroMonitor/EuroLog) krijgen geen shell-invoer.
+            if !term_focused {
                 continue;
             }
             term_dirty = true;

@@ -26,6 +26,18 @@ fn s5_pm1a_value() -> u16 {
     (slp_typ_a << 10) | (1 << 13)
 }
 
+/// Geef (PM1a_CNT-poort, S5-schrijfwaarde) terug ZONDER af te sluiten — voor een
+/// boot-veilige gereedheidscontrole van het shutdown-pad.
+pub fn s5_ready() -> (u16, u16) {
+    let port = crate::acpi::fadt().map(|f| f.pm1a_cnt).filter(|&p| p != 0).unwrap_or(0x604);
+    (port, s5_pm1a_value())
+}
+
+/// Heeft de AML-`\_S5` een firmware-SLP_TYP geleverd (i.p.v. de QEMU-default 0)?
+pub fn s5_from_aml() -> bool {
+    S5_SLP_TYP.load(Ordering::Relaxed) & 0x8000_0000 != 0
+}
+
 /// Zet het systeem uit (ACPI S5 soft-off). Schrijft SLP_EN|SLP_TYP naar het
 /// PM1a-control-register uit de FADT; SLP_TYP komt uit de AML-`\_S5` (of 0 op QEMU).
 /// Met fallbacks naar de bekende QEMU-poorten. Keert nooit terug.

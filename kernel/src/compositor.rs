@@ -30,7 +30,8 @@ const TILE_GAP: usize = 8;
 const TILE_TOP: usize = DOCK_M + 64;
 /// De dock-app-tegels, van boven naar onder. Honest mapping: elk icoon opent de
 /// app die het voorstelt (AG-1 voegde files/notes/clock toe).
-pub const DOCK_APPS: [&str; 8] = ["files", "notes", "clock", "browser", "terminal", "settings", "store", "star"];
+pub const DOCK_APPS: [&str; 11] =
+    ["files", "notes", "clock", "browser", "terminal", "settings", "store", "star", "text", "monitor", "log"];
 /// Welke dock-tegel is geopend/actief (usize::MAX = geen) — voor het accentbalkje.
 static ACTIVE_DOCK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
 /// Markeer welke dock-tegel actief is (de kernel zet dit bij open/sluiten).
@@ -221,6 +222,18 @@ pub fn draw_window_body(fb: &FrameBuffer, win: &Window) {
     // EuroClock: wereldklokken + lokale tijd uit de ECHTE RTC.
     if win.app == crate::suite_ui::SuiteApp::Clock {
         crate::clockapp::render(fb, win.x, win.y, win.w, win.h);
+        return;
+    }
+    if win.app == crate::suite_ui::SuiteApp::Text {
+        crate::textedit::render(fb, win.x, win.y, win.w, win.h);
+        return;
+    }
+    if win.app == crate::suite_ui::SuiteApp::Monitor {
+        crate::monitor::render(fb, win.x, win.y, win.w, win.h);
+        return;
+    }
+    if win.app == crate::suite_ui::SuiteApp::Log {
+        crate::logview::render(fb, win.x, win.y, win.w, win.h);
         return;
     }
     // EuroSuite-app? Render de rijke Writer/Calc/Impress-GUI.
