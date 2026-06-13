@@ -71,3 +71,27 @@ if [ "$jmpslot" -lt 1 ]; then
     echo "FOUT: dyntest heeft geen R_X86_64_JUMP_SLOT — dynamische-link-test zinloos!"; exit 1
 fi
 echo "==> dyntest.elf: $(stat -c%s dyntest.elf) bytes (PIE, $jmpslot JUMP_SLOT) · libeuro.so: $(stat -c%s libeuro.so) bytes"
+
+# Sprint 1 / H3: TLS — een vrijstaande PIE met een __thread-variabele. De kernel-
+# ld.so zet het statische TLS-blok + FS_BASE op (de binary zet zelf geen TLS op).
+gcc -ffreestanding -nostdlib -fPIC -Os -c tlsprog.c -o tlsprog.o
+ld -pie -nostdlib -e _start -o tlsprog.elf tlsprog.o
+rm -f tlsprog.o
+tlsseg=$(readelf -lW tlsprog.elf 2>/dev/null | grep -c TLS || true)
+if [ "$tlsseg" -lt 1 ]; then
+    echo "FOUT: tlsprog heeft geen PT_TLS — TLS-test zinloos!"; exit 1
+fi
+echo "==> tlsprog.elf: $(stat -c%s tlsprog.elf) bytes (PIE, PT_TLS aanwezig)"
+
+# Sprint 1 / H3 stage 1b: CROSS-MODULE TLS — libtls.so heeft een __thread `ctr`
+# (initial-exec → R_X86_64_TPOFF64); dyntls.elf roept bump() aan. De kernel-ld.so
+# zet het multi-module TLS-blok op + patcht de TPOFF64-relocatie.
+gcc -ffreestanding -nostdlib -fPIC -shared -ftls-model=initial-exec -Os -o libtls.so libtls.c
+gcc -ffreestanding -nostdlib -fPIC -Os -c dyntls.c -o dyntls.o
+ld -pie -nostdlib -e _start -o dyntls.elf dyntls.o libtls.so
+rm -f dyntls.o
+tpoff=$(readelf -rW libtls.so 2>/dev/null | grep -c TPOFF64 || true)
+if [ "$tpoff" -lt 1 ]; then
+    echo "FOUT: libtls.so heeft geen R_X86_64_TPOFF64 — cross-module-TLS-test zinloos!"; exit 1
+fi
+echo "==> dyntls.elf + libtls.so: $tpoff TPOFF64-relocatie(s)"

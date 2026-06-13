@@ -13,7 +13,9 @@
 extern crate alloc;
 
 pub mod disk;
+pub mod sectored;
 pub use disk::{build_boot_disk, build_esp, build_esp_cfg, layout_for, write_boot_disk, Layout};
+pub use sectored::{read_small_file, write_small_file};
 
 use alloc::string::String;
 use alloc::vec;

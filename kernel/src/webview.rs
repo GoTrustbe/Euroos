@@ -272,6 +272,11 @@ pub fn editing() -> bool {
     BROWSER.lock().as_ref().map(|b| b.editing).unwrap_or(false)
 }
 
+/// De (na scriptuitvoering aangevulde) HTML van het actieve tabblad — voor zelftests.
+pub fn active_html() -> String {
+    BROWSER.lock().as_ref().map(|b| b.tabs[b.active].html.clone()).unwrap_or_default()
+}
+
 pub fn new_tab() {
     if let Some(br) = BROWSER.lock().as_mut() {
         br.tabs.push(Tab {
@@ -375,25 +380,60 @@ fn active_field_value(node: usize) -> String {
 /// Verzend het formulier dat knoop `btn_node` bevat: bouw de doel-URL en doe een
 /// ECHTE HTTP-GET (via [`navigate`]).
 pub fn submit_form(btn_node: usize) {
-    if let Some(target) = submit_target(btn_node) {
+    let (method, action_abs, pairs) = match collect_form(btn_node) {
+        Some(f) => f,
+        None => return,
+    };
+    let body = pairs
+        .iter()
+        .map(|(k, v)| alloc::format!("{}={}", url_encode(k), url_encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    if method == "post" {
+        // ECHTE POST: urlencoded body via dezelfde EuroTLS/TCP-stack als GET.
+        crate::serial_println!("[web] FORM POST \u{2192} {action_abs} ({} B body: {body})", body.len());
+        let (tls, host, port, path) = parse_url(&action_abs);
+        match crate::net::post_full(&host, port, &path, tls, "application/x-www-form-urlencoded", body.as_bytes()) {
+            Some((code, _loc, resp)) => {
+                let html = String::from_utf8_lossy(&resp).into_owned();
+                load_inline(&action_abs, &html);
+                crate::serial_println!("[web] POST → HTTP {code}, {} B antwoord", resp.len());
+            }
+            None => {
+                // Geen externe server in deze omgeving: toon eerlijk het ECHT
+                // opgebouwde POST-verzoek (methode + body) i.p.v. iets te faken.
+                let echo = alloc::format!(
+                    "<html><head><title>POST verzonden</title></head><body>\
+                     <h1>POST-verzoek opgebouwd</h1>\
+                     <p>Doel: {action_abs}</p>\
+                     <p>Content-Type: application/x-www-form-urlencoded</p>\
+                     <p>Body ({} bytes): {body}</p>\
+                     <p>(Geen externe server bereikbaar in deze omgeving — dit is het \
+                     verzoek dat de EuroWeb-engine verzond.)</p></body></html>",
+                    body.len()
+                );
+                load_inline(&action_abs, &echo);
+            }
+        }
+    } else if let Some(target) = submit_target(btn_node) {
         crate::serial_println!("[web] FORM GET \u{2192} {target}");
         navigate(&target);
     }
 }
 
-/// Bouw — ZONDER te navigeren — de absolute GET-URL voor het formulier dat
-/// `btn_node` bevat (action + query uit de velden). Voor de zelftest + submit.
-pub fn submit_target(btn_node: usize) -> Option<String> {
-    let (action, query, base_url) = {
+/// Verzamel een formulier: (methode "get"/"post", absolute action-URL, naam/waarde-
+/// paren van de velden). Gedeeld door GET (`submit_target`) en POST (`submit_form`).
+fn collect_form(btn_node: usize) -> Option<(String, String, Vec<(String, String)>)> {
+    let (method, action, base_url, pairs) = {
         let b = BROWSER.lock();
-        let br = match b.as_ref() {
-            Some(br) => br,
-            None => return None,
-        };
+        let br = b.as_ref()?;
         let base_url = br.tabs[br.active].url.clone();
         let dom = euroweb::parse(&br.tabs[br.active].html);
-        // Zoek het omsluitende <form> van de knoop (eerste form-voorouder).
         let form = enclosing_form(&dom, btn_node);
+        let method = form
+            .and_then(|f| dom.attr(f, "method").map(|m| m.to_ascii_lowercase()))
+            .filter(|m| m == "post")
+            .unwrap_or_else(|| String::from("get"));
         let action = form
             .and_then(|f| dom.attr(f, "action").map(String::from))
             .filter(|a| !a.is_empty())
@@ -401,7 +441,6 @@ pub fn submit_target(btn_node: usize) -> Option<String> {
                 let (_t, _h, _p, path) = parse_url(&base_url);
                 path
             });
-        // Verzamel de velden binnen het formulier (of de hele DOM als er geen is).
         let scope = form.unwrap_or(0);
         let mut pairs: Vec<(String, String)> = Vec::new();
         for i in 0..dom.len() {
@@ -414,8 +453,6 @@ pub fn submit_target(btn_node: usize) -> Option<String> {
                     continue;
                 }
                 if let Some(name) = dom.attr(i, "name") {
-                    // Waarde: live FORM_STATE-override, anders het value-attr uit de
-                    // lokale DOM (NOOIT BROWSER opnieuw locken — die houden we hier vast).
                     let val = FORM_STATE
                         .lock()
                         .iter()
@@ -426,20 +463,26 @@ pub fn submit_target(btn_node: usize) -> Option<String> {
                 }
             }
         }
-        let query = pairs
-            .iter()
-            .map(|(k, v)| alloc::format!("{}={}", url_encode(k), url_encode(v)))
-            .collect::<Vec<_>>()
-            .join("&");
-        (action, query, base_url)
+        (method, action, base_url, pairs)
     };
-    // Bouw de absolute doel-URL en navigeer (echte GET).
     let (tls, host, _port, _path) = parse_url(&base_url);
     let action_abs = if action.starts_with("http://") || action.starts_with("https://") {
         action
     } else {
         resolve_redirect(&host, tls, &action)
     };
+    Some((method, action_abs, pairs))
+}
+
+/// Bouw — ZONDER te navigeren — de absolute GET-URL voor het formulier dat
+/// `btn_node` bevat (action + query uit de velden). Voor de zelftest + GET-submit.
+pub fn submit_target(btn_node: usize) -> Option<String> {
+    let (_method, action_abs, pairs) = collect_form(btn_node)?;
+    let query = pairs
+        .iter()
+        .map(|(k, v)| alloc::format!("{}={}", url_encode(k), url_encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
     let target = if query.is_empty() {
         action_abs
     } else if action_abs.contains('?') {
@@ -450,19 +493,84 @@ pub fn submit_target(btn_node: usize) -> Option<String> {
     Some(target)
 }
 
+/// Bouw het POST-verzoek (absolute action-URL + urlencoded body) voor het formulier
+/// dat `btn_node` bevat — voor de `[post]`-zelftest (geen netwerk vereist).
+pub fn post_request(btn_node: usize) -> Option<(String, String, String)> {
+    let (method, action_abs, pairs) = collect_form(btn_node)?;
+    let body = pairs
+        .iter()
+        .map(|(k, v)| alloc::format!("{}={}", url_encode(k), url_encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    Some((method, action_abs, body))
+}
+
 /// Zet de actieve tab op kant-en-klare HTML (zónder netwerk) en preload de
 /// afbeeldingen. Voor de AG-2 demo/zelftest-pagina.
 pub fn load_inline(url: &str, html: &str) {
     FORM_STATE.lock().clear();
     *FOCUSED_FIELD.lock() = None;
-    preload_images(html, url);
+    // Voer paginascripts ÉÉN keer uit bij het laden (niet bij elke render).
+    let html = run_page_scripts(html);
+    preload_images(&html, url);
     if let Some(br) = BROWSER.lock().as_mut() {
         let a = br.active;
         br.tabs[a].url = String::from(url);
-        br.tabs[a].html = String::from(html);
-        br.tabs[a].title = extract_title(html).unwrap_or_else(|| String::from("EuroWeb"));
+        br.tabs[a].title = extract_title(&html).unwrap_or_else(|| String::from("EuroWeb"));
+        br.tabs[a].html = html;
         br.tabs[a].status = String::from("inline");
         br.editing = false;
+    }
+}
+
+/// Voer de `<script>`-inhoud van een pagina uit via de EuroJS-engine (tree-walking,
+/// geen JIT, stap-/diepte-begrensd). `document.write(...)`-uitvoer wordt als ECHTE
+/// pagina-inhoud toegevoegd; `console.log` gaat naar het serieel logboek + een klein
+/// JS-consolepaneel onderaan de pagina. Geeft de aangevulde HTML terug. Scripts
+/// draaien hier eenmalig (bij laden) — niet opnieuw bij elke frame-render.
+fn run_page_scripts(html: &str) -> String {
+    let dom = euroweb::parse(html);
+    let mut logs: Vec<String> = Vec::new();
+    let mut writes: Vec<String> = Vec::new();
+    let mut ran = 0;
+    for i in 0..dom.len() {
+        if dom.tag(i) == Some("script") {
+            let src = dom.text_content(i);
+            if src.trim().is_empty() {
+                continue;
+            }
+            ran += 1;
+            let (res, l, w) = eurojs::run_page(&src);
+            logs.extend(l);
+            writes.extend(w);
+            if let Err(e) = res {
+                logs.push(alloc::format!("[fout] {e}"));
+            }
+        }
+    }
+    if ran == 0 {
+        return String::from(html);
+    }
+    crate::serial_println!("[js] EuroJS: {ran} script(s) uitgevoerd · {} console-regel(s) · {} document.write", logs.len(), writes.len());
+    // Bouw een injectieblok: document.write-uitvoer als pagina-inhoud + JS-console.
+    let mut inject = String::new();
+    if !writes.is_empty() {
+        inject.push_str("<div>");
+        inject.push_str(&writes.join(""));
+        inject.push_str("</div>");
+    }
+    if !logs.is_empty() {
+        inject.push_str("<p>JS-console:</p>");
+        for l in &logs {
+            inject.push_str(&alloc::format!("<p>&gt; {l}</p>"));
+        }
+    }
+    if inject.is_empty() {
+        return String::from(html);
+    }
+    match html.rfind("</body>") {
+        Some(pos) => alloc::format!("{}{}{}", &html[..pos], inject, &html[pos..]),
+        None => alloc::format!("{html}{inject}"),
     }
 }
 

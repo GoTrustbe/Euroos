@@ -43,8 +43,8 @@ Two foundation items are at "🟡 core done" — the mechanism is proven and par
   1. **Multi-partition GPT** — `gpt::install` lays down **EuroOS-A**, **EuroOS-B**, **EuroVar**, **EuroBoot** partitions; `find_partition_by_name` selects them; the root-mount path is unchanged (slot A = first EuroFS). `/var` mounts the EuroVar partition. Verified `[g4]` (4 partitions written, `/var` routes), 0 faults.
   2. **Image writes to partition block-ranges** — `euroupdate::apply` writes the verified image directly to the inactive slot's partition (sector I/O + first-sector read-back), FS-file fallback only if the layout is absent. Verified by boot self-test (`[g4] slot-image-write … ✓`).
   3. **Second-stage `loader.efi`** — DONE: a separate UEFI binary (`loader/`, its own crate) is now `BOOTX64.EFI`. It reads `slot_config`, picks the boot slot, and `LoadImage`/`StartImage`s that slot's kernel (`eurokernel-A.efi` / `eurokernel-B.efi`, both packed in the ESP). Verified end-to-end: `[loader] slot_config → boot slot A` → `LoadImage + StartImage` → `[euro] EuroKernel bring-up` → full boot to desktop with all self-tests, 0 faults. The Android/ChromeOS two-stage model.
-- **Remaining (refinement):** the loader currently reads `slot_config` from an ESP file and defaults to A; unify it with the kernel's raw-block `slot_config` (LBA 40 via UEFI BlockIO) so a kernel-staged update is honored at boot, and have the loader run the attempt-counter/rollback decision itself.
-- **Verify (full, once unified):** stage an update → reboot boots slot B → corrupt slot B → three boots decrement the attempt counter → automatic rollback to slot A; all across persistent disks.
+- **Loader-owned attempt-counter + auto-rollback — DONE (Sprint 3, 2026-06-13):** the loader now runs `SlotConfig::on_boot()` itself (decrement the attempt counter, or roll back to the last-good slot when attempts are exhausted) and writes the updated `\slot_config` back to the ESP *before* `StartImage` — the real ChromeOS/Android two-stage model. The anti-brick guarantee now holds even for a kernel that never boots. Verified: `update-test.py` RUN3 → `[loader] on_boot: B tries 3 → 2` → boots slot B. The kernel marks a confirmed-good slot back to the ESP via a new memory-light sectored FAT32 read/modify/write (`eurofat::sectored`, host-tested); the full decrement→exhaust→auto-rollback→mark-good cycle is proven on the **real on-disk ESP** by `[upd4]`. **Ed25519 verify-before-activate** is proven with a genuine `dev.key`-signed image by `[upd3]`. `euroupdate fetch <url>` wires the HTTPS fetch→verify→stage path.
+- **Remaining (honest):** kernel mark-good over a non-virtio standalone boot disk (AHCI write path); verity-style block hashing (L3, below).
 
 ---
 
@@ -53,6 +53,7 @@ Two foundation items are at "🟡 core done" — the mechanism is proven and par
 The display server (H2) and Unix sockets (H1) are done. The remaining H-items are what make a third-party application ecosystem possible.
 
 ### H3 — `ld.so` dynamic linker 🟡 `R 🏗️`
+- **Done (Sprint 1, TLS):** the kernel-as-ld.so now sets up the **static TLS block + `fs_base` + TCB self-pointer** (variant-II) for dynamically-loaded programs, and patches **`R_X86_64_TPOFF64`** (initial-exec) GOT slots. Verified: a freestanding `__thread` PIE runs without musl (`[tls]`, 41→42→exit 42) and a `.so`-provided `__thread` via cross-module IE-TLS resolves (`[tls2]`). Remaining for the libc breadth: ifunc + a syscall-surface pass (below).
 A minimal ELF **dynamic linker**: load `.so` dependencies, resolve the PLT/GOT, and run dynamically-linked binaries.
 - **Done (in-kernel linker, this cycle):** the kernel loads a `DT_NEEDED` shared library into the process arena (at a sub-offset, with the W^X bitmap merged/shifted), reads its dynamic symbol table — robust to GNU_HASH-only `.so`s by deriving the symbol count from `(DT_STRTAB − DT_SYMTAB)/DT_SYMENT` — and patches the executable's **`R_X86_64_JUMP_SLOT` + `R_X86_64_GLOB_DAT`** GOT slots with the resolved symbol addresses (eager binding). **Verified:** a freestanding dynamically-linked PIE (`dyntest.elf`) calls `euro_answer()` resolved from `libeuro.so` → prints `H3: 42`, exit 42, 0 faults. This is the heart of dynamic linking — cross-module symbol resolution + GOT patching — proven end-to-end.
 - **Done (run-by-name):** `ring3::needed_libs` parses `DT_NEEDED` and resolves each `.so` from `/lib` in the VFS; `run_dynamic` was generalized to load N libraries. Verified `[h3-fs]`: `/bin/dyntest` (read from the FS) → its `DT_NEEDED=["libeuro.so"]` is resolved from `/lib/libeuro.so`, linked, and run → `H3: 42`, exit 42.
@@ -100,7 +101,8 @@ An **xHCI** controller driver + **USB HID** (keyboard/mouse) + **USB mass storag
 ### I2 — Audio `N 🔒`
 An **Intel HDA** (or AC'97) driver, a simple mixer, and a playback API.
 
-### I3 — ACPI power management `N 🔒`
+### I3 — ACPI power management `N 🔒` 🟡
+- **Done (Sprint 2):** clean **ACPI S5 soft-off** — `power::shutdown()` writes the firmware-correct SLP_TYP (from the AML-evaluated `\_S5`) to the FADT `PM1a_CNT` port; **boot-verified end-to-end** (`[i3-s5]` + `scripts/shutdown-test.py`: QEMU reports a guest-initiated SHUTDOWN, process exits rc=0). `shutdown`/`poweroff`/`reboot` shell commands. **Remaining:** S3 suspend-to-RAM (wake vector), battery/thermal (`_BST`/`_PSR`/`_TMP`) — hardware-attended.
 **S3 suspend/resume**, proper shutdown/reboot states, thermal/battery read-out, lid and power-button events.
 
 ### I4 — Printer & scanner `N 🏗️`

@@ -191,6 +191,98 @@ pub fn stage_update_b(dev: usize) -> bool {
     true
 }
 
+/// **[upd4] — twee-traps A/B-rollback bewezen op de ECHTE on-disk ESP.**
+///
+/// Leest `\slot_config` van de geïnstalleerde ESP via de sector-gebaseerde FAT32-
+/// primitief (`eurofat::sectored`, dezelfde weg die de loader/kernel gebruiken),
+/// en draait de VOLLEDIGE levenscyclus die de loader bij elke boot uitvoert —
+/// `on_boot()` aftellen tot de pogingen op zijn, automatische terugrol naar het
+/// goede slot, en dan `mark_good()` dat de rollback stopt — waarbij na ELKE stap
+/// een VERSE schijf-read bevestigt dat de bijgewerkte staat echt op de ESP staat.
+/// Niet-destructief: de oorspronkelijke (gestagede) config wordt achteraf hersteld,
+/// zodat de standalone-bootrun (RUN3) ongemoeid slot B blijft proberen.
+pub fn rollback_selftest(dev: usize) {
+    if !crate::virtio_blk::present_dev(dev) || disk_is_blank(dev) {
+        return;
+    }
+    let total = crate::virtio_blk::capacity_sectors_dev(dev);
+    let esp = eurofat::layout_for(total).esp_first;
+    let read = |lba: u64, buf: &mut [u8]| crate::virtio_blk::read_io_dev(dev, lba, buf);
+    let write = |lba: u64, buf: &[u8]| {
+        let ok = crate::virtio_blk::write_io_dev(dev, lba, buf);
+        crate::virtio_blk::flush_dev(dev);
+        ok
+    };
+
+    // Bewaar de huidige (gestagede) config om hem later te herstellen.
+    let original = match eurofat::read_small_file(esp, "slot_config", read) {
+        Some(d) if d.len() >= euroupdate::CONFIG_SIZE => d,
+        _ => {
+            crate::serial_println!("[upd4] kon \\slot_config niet van de ESP lezen — sla rollback-zelftest over");
+            return;
+        }
+    };
+    let mut cfg = match euroupdate::SlotConfig::deserialize(&original) {
+        Some(c) => c,
+        None => {
+            crate::serial_println!("[upd4] \\slot_config op de ESP is corrupt — sla over");
+            return;
+        }
+    };
+
+    // Helper: schrijf cfg naar de ESP en lees 'm vers terug ter bevestiging.
+    let commit = |cfg: &euroupdate::SlotConfig| -> Option<euroupdate::SlotConfig> {
+        if !eurofat::write_small_file(esp, "slot_config", &cfg.serialize(), read, write) {
+            return None;
+        }
+        eurofat::read_small_file(esp, "slot_config", read).and_then(|d| euroupdate::SlotConfig::deserialize(&d))
+    };
+
+    let start_tries = cfg.tries;
+    let mut ok = matches!(cfg.next_boot, euroupdate::Slot::B) && cfg.state(euroupdate::Slot::B) == euroupdate::SlotState::Trying;
+    // Tel de pogingen af; elke boot schrijft de loader de bijgewerkte teller terug.
+    for _ in 0..start_tries {
+        let chosen = cfg.on_boot();
+        ok &= matches!(chosen, euroupdate::Slot::B);
+        match commit(&cfg) {
+            Some(rb) => ok &= rb == cfg, // verse schijf-read == in-memory ✓
+            None => ok = false,
+        }
+    }
+    ok &= cfg.tries == 0;
+    // Pogingen uitgeput, B nooit bevestigd → automatische terugrol naar A.
+    let rolled = cfg.on_boot();
+    ok &= matches!(rolled, euroupdate::Slot::A) && cfg.state(euroupdate::Slot::B) == euroupdate::SlotState::Failed;
+    match commit(&cfg) {
+        Some(rb) => ok &= rb == cfg && matches!(rb.next_boot, euroupdate::Slot::A),
+        None => ok = false,
+    }
+
+    // Tegenproef: had B wél bevestigd (mark_good), dan stopt de rollback.
+    let mut good = euroupdate::SlotConfig::initial();
+    good.stage_update(); // → B Trying
+    good.on_boot(); // loader probeert B
+    good.mark_good(); // boot geslaagd → B definitief goed
+    match commit(&good) {
+        Some(rb) => {
+            ok &= rb.state(euroupdate::Slot::B) == euroupdate::SlotState::Good && rb.tries == 0;
+            // Volgende boot blijft stabiel op B (geen rollback meer).
+            let mut g2 = rb;
+            ok &= matches!(g2.on_boot(), euroupdate::Slot::B);
+        }
+        None => ok = false,
+    }
+
+    // Herstel de oorspronkelijke gestagede config (niet-destructief voor RUN3).
+    let _ = eurofat::write_small_file(esp, "slot_config", &original, read, write);
+
+    crate::serial_println!(
+        "[upd4] twee-traps A/B-rollback op de ECHTE ESP (LBA {esp}): {start_tries} pogingen afgeteld → auto-rollback naar A (B=Failed) → mark_good pint B vast → {} (sector-FAT read/modify/write op on-disk \\slot_config, niet-destructief hersteld) {}",
+        if ok { "OK" } else { "MISLUKT" },
+        if ok { "✓" } else { "✗" }
+    );
+}
+
 /// Standaard-installconfig (overschrijfbaar via `euroinstall --hostname/--user`).
 pub fn default_config() -> Config {
     Config {

@@ -79,6 +79,8 @@ enum Flow {
 /// *aanroep-diepte*-grens (tegen oneindige recursie → stack-overflow).
 pub struct Interp {
     pub output: Vec<String>,
+    /// Tekst die paginascripts via `document.write(...)` aan de pagina toevoegen.
+    pub writes: Vec<String>,
     global: Env,
     steps: u64,
     depth: usize,
@@ -101,7 +103,7 @@ impl Interp {
     const DEPTH_LIMIT: usize = 256;
 
     pub fn new() -> Self {
-        Interp { output: Vec::new(), global: new_scope(None), steps: 0, depth: 0 }
+        Interp { output: Vec::new(), writes: Vec::new(), global: new_scope(None), steps: 0, depth: 0 }
     }
 
     /// Tel één uitvoeringsstap; breek af als het budget op is.
@@ -397,6 +399,20 @@ impl Interp {
                         parts.push(display(&v));
                     }
                     self.output.push(parts.join(" "));
+                    return Ok(Value::Undefined);
+                }
+                // document.write(...) / document.writeln(...): voeg tekst toe aan de pagina.
+                if name == "document" && (method == "write" || method == "writeln") {
+                    let mut parts = Vec::new();
+                    for a in args {
+                        let v = self.eval(a, env)?;
+                        parts.push(display(&v));
+                    }
+                    let mut s = parts.join("");
+                    if method == "writeln" {
+                        s.push('\n');
+                    }
+                    self.writes.push(s);
                     return Ok(Value::Undefined);
                 }
                 if name == "Math" {

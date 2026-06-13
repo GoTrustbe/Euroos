@@ -215,8 +215,18 @@ pub fn apply(fs: &mut dyn FileSystem, image_path: &str) -> Vec<String> {
             return out;
         }
     };
+    stage_verified_image(fs, &image, &sig)
+}
+
+/// De kern van een veilige update: verifieer de Ed25519-handtekening over `image`
+/// (verify-before-activate), schrijf het naar het inactieve slot, en stage het.
+/// Gedeeld door `apply` (FS-bron) en `fetch` (netwerkbron). Een ongeldige
+/// handtekening leidt ALTIJD tot weigering — een gemanipuleerde update wordt nooit
+/// gestaged, laat staan geactiveerd.
+fn stage_verified_image(fs: &mut dyn FileSystem, image: &[u8], sig: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
     // EuroGuard: weiger een update zonder geldige EuroOS-handtekening (anti-tamper).
-    if !crate::crypto::verify(&image, &sig) {
+    if !crate::crypto::verify(image, sig) {
         out.push("euroupdate: ONGELDIGE handtekening — update GEWEIGERD".into());
         return out;
     }
@@ -225,7 +235,7 @@ pub fn apply(fs: &mut dyn FileSystem, image_path: &str) -> Vec<String> {
     // Schrijf het image direct naar de PARTITIE van het inactieve slot (G4: echte
     // A/B-partities + read-back-verificatie). Valt terug op een FS-bestand als de
     // multi-partitie-GPT (nog) niet aanwezig is.
-    match write_image_to_slot(target, &image) {
+    match write_image_to_slot(target, image) {
         Ok(n) => out.push(alloc::format!(
             "euroupdate: {} bytes naar de {}-partitie geschreven + read-back ✓",
             n,
@@ -233,7 +243,8 @@ pub fn apply(fs: &mut dyn FileSystem, image_path: &str) -> Vec<String> {
         )),
         Err(_) => {
             let slot_file = alloc::format!("/boot/slot_{}.img", slot_name(target));
-            if fs.write_file(&slot_file, &image).is_err() {
+            let _ = fs.create_dir("/boot");
+            if fs.write_file(&slot_file, image).is_err() {
                 out.push("euroupdate: schrijven naar het inactieve slot MISLUKT".into());
                 *CONFIG.lock() = Some(cfg);
                 return out;
@@ -255,6 +266,106 @@ pub fn apply(fs: &mut dyn FileSystem, image_path: &str) -> Vec<String> {
     ));
     *CONFIG.lock() = Some(cfg);
     out
+}
+
+/// `euroupdate fetch <url>` — haal een GESIGNEERD updatepakket over HTTPS op
+/// (`<url>` = het image, `<url>.sig` = de Ed25519-handtekening), verifieer het
+/// tegen de ingebakken EuroOS-sleutel, en stage het naar het inactieve slot.
+/// Gebruikt de echte EuroTLS-1.3-stack (`net::fetch_full`). In deze sandbox is er
+/// geen externe netwerktoegang, dus rapporteren we de echte fetch-uitkomst eerlijk;
+/// de verify-+-stage-pijplijn die volgt is identiek aan `apply`.
+pub fn fetch(fs: &mut dyn FileSystem, url: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let (host, port, path, tls) = match parse_url(url) {
+        Some(p) => p,
+        None => {
+            out.push(alloc::format!("euroupdate fetch: ongeldige URL '{url}' (verwacht http(s)://host[:poort]/pad)"));
+            return out;
+        }
+    };
+    out.push(alloc::format!(
+        "euroupdate fetch: {} {}:{}{} via EuroTLS-1.3…",
+        if tls { "HTTPS" } else { "HTTP" }, host, port, path
+    ));
+    let sig_path = alloc::format!("{path}.sig");
+    let image = match crate::net::fetch_full(&host, port, &path, tls) {
+        Some((200, _, body)) => body,
+        Some((code, _, _)) => {
+            out.push(alloc::format!("euroupdate fetch: server gaf HTTP {code} voor het image — afgebroken"));
+            return out;
+        }
+        None => {
+            out.push("euroupdate fetch: geen verbinding/antwoord (geen externe netwerktoegang in deze omgeving) — afgebroken".into());
+            return out;
+        }
+    };
+    let sig = match crate::net::fetch_full(&host, port, &sig_path, tls) {
+        Some((200, _, body)) => body,
+        _ => {
+            out.push(alloc::format!("euroupdate fetch: handtekening {sig_path} niet opgehaald — afgebroken"));
+            return out;
+        }
+    };
+    out.push(alloc::format!("euroupdate fetch: {} B image + {} B handtekening opgehaald — verifiëren…", image.len(), sig.len()));
+    out.extend(stage_verified_image(fs, &image, &sig));
+    out
+}
+
+/// Heel eenvoudige URL-parser: `http(s)://host[:poort]/pad`.
+fn parse_url(url: &str) -> Option<(String, u16, String, bool)> {
+    let (tls, rest) = if let Some(r) = url.strip_prefix("https://") {
+        (true, r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        (false, r)
+    } else {
+        return None;
+    };
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    if authority.is_empty() {
+        return None;
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) => (h, p.parse().ok()?),
+        None => (authority, if tls { 443 } else { 80 }),
+    };
+    Some((String::from(host), port, String::from(path), tls))
+}
+
+/// **[upd3] (pijplijn) — `apply()` aanvaardt een echt pakket en weigert een
+/// gemanipuleerd**, end-to-end op een RAM-EuroFS, met de ECHTE dev.key-handtekening.
+/// Globale slotstaat wordt rond de test bewaard/hersteld (niet-invasief).
+pub fn apply_gate_selftest(now: u64) {
+    use eurofs::{EuroFs, MemoryBlockDevice};
+    let saved = *CONFIG.lock();
+    let mut dev = MemoryBlockDevice::new(1024, 4096);
+    let mut fs = match EuroFs::format(&mut dev, [0x33; 16], now) {
+        Ok(f) => f,
+        Err(_) => {
+            crate::serial_println!("[upd3] (pijplijn) kon RAM-EuroFS niet formatteren — overgeslagen");
+            return;
+        }
+    };
+    let (img, sig) = crate::crypto::test_update_image();
+    let _ = fs.create_dir("/upd");
+    let _ = fs.write_file("/upd/ok.img", img);
+    let _ = fs.write_file("/upd/ok.img.sig", sig);
+    let accepted = apply(&mut fs, "/upd/ok.img").iter().any(|l| l.contains("geverifieerd + naar slot"));
+
+    let mut tampered = img.to_vec();
+    tampered[200] ^= 0xFF; // gemanipuleerd image, originele (geldige) handtekening
+    let _ = fs.write_file("/upd/bad.img", &tampered);
+    let _ = fs.write_file("/upd/bad.img.sig", sig);
+    let refused = apply(&mut fs, "/upd/bad.img").iter().any(|l| l.contains("GEWEIGERD"));
+
+    *CONFIG.lock() = saved; // globale slotstaat herstellen
+    crate::serial_println!(
+        "[upd3] update-pijplijn: echt pakket gestaged={} · gemanipuleerd pakket geweigerd={} → {}",
+        accepted, refused,
+        if accepted && refused { "OK ✓" } else { "MISLUKT ✗" }
+    );
 }
 
 /// `euroupdate rollback` — forceer terug naar het andere goede slot.

@@ -45,11 +45,42 @@ pub fn run_capture(src: &str) -> (Result<Value, String>, Vec<String>) {
     (r, it.output)
 }
 
+/// Voer een paginascript uit en geef (resultaat, console.log-uitvoer,
+/// `document.write`-uitvoer) terug — voor de EuroWeb-integratie: de writes worden
+/// als tekst aan de gerenderde pagina toegevoegd.
+pub fn run_page(src: &str) -> (Result<Value, String>, Vec<String>, Vec<String>) {
+    let toks = match lexer::lex(src) {
+        Ok(t) => t,
+        Err(e) => return (Err(e), Vec::new(), Vec::new()),
+    };
+    let prog = match parser::Parser::new(toks).parse_program() {
+        Ok(p) => p,
+        Err(e) => return (Err(e), Vec::new(), Vec::new()),
+    };
+    let mut it = Interp::new();
+    let r = it.run(&prog);
+    (r, it.output, it.writes)
+}
+
 /// Hulp: een numeriek resultaat eruit halen (voor tests/integratie).
 pub fn as_num(v: &Value) -> Option<f64> {
     match v {
         Value::Num(n) => Some(*n),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::*;
+
+    #[test]
+    fn document_write_and_console_captured() {
+        let (_r, logs, writes) =
+            run_page("console.log('hoi'); document.write('Som: ' + (6*7)); document.writeln('!');");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0], "hoi");
+        assert_eq!(writes.join(""), "Som: 42!\n");
     }
 }
 

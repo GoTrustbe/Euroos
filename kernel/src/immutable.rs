@@ -37,14 +37,6 @@ pub fn set_protected(fs: &mut dyn FileSystem, path: &str, flags: u32, caps: u64)
 /// Markeer de meegeleverde systeembinaries + kritieke config IMMUTABEL — tamper-proof
 /// systeembestanden. Geeft het aantal beschermde bestanden terug.
 pub fn protect_system_files(fs: &mut dyn FileSystem, caps: u64) -> usize {
-    const SYSTEM_FILES: &[&str] = &[
-        "/bin/hello",
-        "/bin/cat",
-        "/bin/dyntest",
-        "/lib/libeuro.so",
-        "/etc/shadow",
-        "/etc/hostname",
-    ];
     let mut n = 0;
     for &p in SYSTEM_FILES {
         if fs.exists(p) && set_protected(fs, p, FLAG_IMMUTABLE, caps).is_ok() {
@@ -52,6 +44,83 @@ pub fn protect_system_files(fs: &mut dyn FileSystem, caps: u64) -> usize {
         }
     }
     n
+}
+
+/// De meegeleverde, tegen-manipulatie-beschermde systeembestanden (gespiegeld in
+/// [`protect_system_files`]) — voor de `euroimmutable list`-weergave.
+const SYSTEM_FILES: &[&str] = &[
+    "/bin/hello",
+    "/bin/cat",
+    "/bin/dyntest",
+    "/lib/libeuro.so",
+    "/etc/shadow",
+    "/etc/hostname",
+];
+
+fn describe_flags(flags: u32) -> &'static str {
+    if flags & FLAG_IMMUTABLE != 0 && flags & FLAG_APPEND_ONLY != 0 {
+        "immutabel + append-only"
+    } else if flags & FLAG_IMMUTABLE != 0 {
+        "immutabel (i)"
+    } else if flags & FLAG_APPEND_ONLY != 0 {
+        "append-only (a)"
+    } else {
+        "mutabel"
+    }
+}
+
+/// `euroimmutable` — de bevoegde immutability-admintool (L2-API). Het ZETTEN/WISSEN
+/// van vlaggen loopt via [`set_protected`] en vereist dus `CAP_IMMUTABLE_ADMIN`; dit
+/// is de getekende admintool die die capability houdt. Statuslezen is vrij.
+///
+/// Subcommando's: `status <pad>` · `list` · `lock <pad>` (+i) · `unlock <pad>` (−i).
+pub fn shell(fs: &mut dyn FileSystem, sub: &str, path: &str) -> alloc::vec::Vec<alloc::string::String> {
+    use alloc::string::ToString;
+    use alloc::vec;
+    match sub {
+        "" | "help" => vec![
+            "euroimmutable — onveranderbaarheid (L1/L2):".to_string(),
+            "  status <pad>   toon de immutability-vlaggen van een bestand".to_string(),
+            "  list           toon de beschermde systeembestanden".to_string(),
+            "  lock <pad>     markeer immutabel (+i) — vereist CAP_IMMUTABLE_ADMIN".to_string(),
+            "  unlock <pad>   wis de vlaggen (−i) — vereist CAP_IMMUTABLE_ADMIN".to_string(),
+        ],
+        "status" => {
+            if path.is_empty() {
+                return vec!["gebruik: euroimmutable status <pad>".to_string()];
+            }
+            match fs.get_flags(path) {
+                Ok(f) => vec![alloc::format!("{path}: {} (vlaggen={f:#x})", describe_flags(f))],
+                Err(_) => vec![alloc::format!("euroimmutable: kan '{path}' niet lezen")],
+            }
+        }
+        "list" => {
+            let mut out = vec!["beschermde systeembestanden:".to_string()];
+            for &p in SYSTEM_FILES {
+                if fs.exists(p) {
+                    let f = fs.get_flags(p).unwrap_or(0);
+                    out.push(alloc::format!("  {p}  →  {}", describe_flags(f)));
+                }
+            }
+            out
+        }
+        "lock" | "unlock" => {
+            if path.is_empty() {
+                return vec![alloc::format!("gebruik: euroimmutable {sub} <pad>")];
+            }
+            let flags = if sub == "lock" { FLAG_IMMUTABLE } else { 0 };
+            match set_protected(fs, path, flags, CAP_IMMUTABLE_ADMIN) {
+                Ok(()) => vec![alloc::format!(
+                    "euroimmutable: {path} is nu {} (geauditeerd)",
+                    describe_flags(flags)
+                )],
+                Err(_) => vec![alloc::format!(
+                    "euroimmutable: GEWEIGERD voor {path} — vereist CAP_IMMUTABLE_ADMIN"
+                )],
+            }
+        }
+        _ => vec![alloc::format!("euroimmutable: onbekend subcommando '{sub}' (zie: euroimmutable help)")],
+    }
 }
 
 /// L1/L2-boot-zelftest: bewijs (a) de cap-poort op het zetten van de vlag, en (b) dat
