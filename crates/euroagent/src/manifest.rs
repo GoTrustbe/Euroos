@@ -1,16 +1,17 @@
-//! `AgentManifest` — declaratieve, Ed25519-tekenbare beschrijving van een agent.
+//! `AgentManifest` — declarative, Ed25519-signable description of an agent.
 //!
-//! Een agent-bundle (`*.euroa`) levert een TOML-manifest mee dat *volledig* zegt
-//! wat de agent is en mag. De runtime verleent nooit meer dan hier staat. Dit
-//! module bevat een doelgerichte TOML-subset-parser (secties, `key = value` met
-//! string/int/bool/array-van-strings, `#`-commentaar) — genoeg voor het manifest
-//! en volledig `no_std` + host-getest, zonder een externe TOML-crate.
+//! An agent bundle (`*.euroa`) ships a TOML manifest that *fully* states
+//! what the agent is and may do. The runtime never grants more than what is
+//! declared here. This module contains a purpose-built TOML-subset parser
+//! (sections, `key = value` with string/int/bool/array-of-strings, `#`
+//! comments) — enough for the manifest and fully `no_std` + host-tested,
+//! without an external TOML crate.
 
 use crate::caps::{self, AgentCaps};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// Een geparseerd, gevalideerd agent-manifest.
+/// A parsed, validated agent manifest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentManifest {
     pub name: String,
@@ -19,9 +20,9 @@ pub struct AgentManifest {
     pub author: String,
     pub wasm: String,
     pub lang: String,
-    /// Caps die de agent strikt nodig heeft (verleend bij installatie).
+    /// Caps the agent strictly needs (granted at install time).
     pub required: AgentCaps,
-    /// Caps die optioneel zijn (pas verleend na expliciete user-grant).
+    /// Caps that are optional (granted only after an explicit user grant).
     pub optional: AgentCaps,
     pub triggers_intent: Vec<String>,
     pub triggers_event: Vec<String>,
@@ -34,14 +35,14 @@ pub struct AgentManifest {
     pub log_inputs: bool,
 }
 
-/// Een fout bij het parsen of valideren van een manifest.
+/// An error while parsing or validating a manifest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ManifestError {
-    /// Een verplicht veld ontbreekt.
+    /// A required field is missing.
     MissingField(&'static str),
-    /// Een gedeclareerde capability bestaat niet.
+    /// A declared capability does not exist.
     UnknownCap(String),
-    /// Syntaxfout op de gegeven (1-gebaseerde) regel.
+    /// Syntax error on the given (1-based) line.
     Syntax(usize),
 }
 
@@ -49,17 +50,17 @@ impl ManifestError {
     pub fn describe(&self) -> String {
         match self {
             ManifestError::MissingField(f) => {
-                let mut s = String::from("verplicht veld ontbreekt: ");
+                let mut s = String::from("required field missing: ");
                 s.push_str(f);
                 s
             }
             ManifestError::UnknownCap(c) => {
-                let mut s = String::from("onbekende capability: ");
+                let mut s = String::from("unknown capability: ");
                 s.push_str(c);
                 s
             }
             ManifestError::Syntax(line) => {
-                let mut s = String::from("syntaxfout op regel ");
+                let mut s = String::from("syntax error on line ");
                 s.push_str(&line.to_string());
                 s
             }
@@ -67,7 +68,7 @@ impl ManifestError {
     }
 }
 
-/// Eén waarde uit het TOML-document.
+/// A single value from the TOML document.
 enum Value {
     Str(String),
     Int(i64),
@@ -75,7 +76,7 @@ enum Value {
     Arr(Vec<String>),
 }
 
-/// Platte sleutel→waarde map met `sectie.key`-sleutels.
+/// Flat key→value map with `section.key` keys.
 struct Doc {
     entries: Vec<(String, Value)>,
 }
@@ -110,7 +111,7 @@ impl Doc {
     }
 }
 
-/// Strip `#`-commentaar buiten string-literals.
+/// Strip `#` comments outside of string literals.
 fn strip_comment(line: &str) -> &str {
     let bytes = line.as_bytes();
     let mut in_str = false;
@@ -124,7 +125,7 @@ fn strip_comment(line: &str) -> &str {
     line
 }
 
-/// Parse één scalar (`"str"`, int, true/false).
+/// Parse a single scalar (`"str"`, int, true/false).
 fn parse_scalar(s: &str) -> Option<Value> {
     let s = s.trim();
     if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
@@ -142,7 +143,7 @@ fn parse_scalar(s: &str) -> Option<Value> {
     None
 }
 
-/// Splits de binnenkant van een array op komma's en pak de string-elementen.
+/// Split the inside of an array on commas and take the string elements.
 fn parse_array_body(body: &str, out: &mut Vec<String>) {
     for part in body.split(',') {
         let p = part.trim();
@@ -155,7 +156,7 @@ fn parse_array_body(body: &str, out: &mut Vec<String>) {
     }
 }
 
-/// Parse de TOML-subset naar een platte `Doc`.
+/// Parse the TOML subset into a flat `Doc`.
 fn parse_doc(input: &str) -> Result<Doc, ManifestError> {
     let mut entries: Vec<(String, Value)> = Vec::new();
     let mut section = String::new();
@@ -183,7 +184,7 @@ fn parse_doc(input: &str) -> Result<Doc, ManifestError> {
         };
 
         if val.starts_with('[') {
-            // Mogelijk multi-line array: lees door tot de afsluitende ']'.
+            // Possibly a multi-line array: read on until the closing ']'.
             while !val.contains(']') {
                 match lines.next() {
                     Some((_, more)) => {
@@ -206,7 +207,7 @@ fn parse_doc(input: &str) -> Result<Doc, ManifestError> {
     Ok(Doc { entries })
 }
 
-/// Zet een lijst cap-namen om naar een `AgentCaps`, of faal op onbekende.
+/// Convert a list of cap names into an `AgentCaps`, or fail on an unknown one.
 fn caps_from(names: &[String]) -> Result<AgentCaps, ManifestError> {
     let mut c = AgentCaps::empty();
     for n in names {
@@ -219,7 +220,7 @@ fn caps_from(names: &[String]) -> Result<AgentCaps, ManifestError> {
 }
 
 impl AgentManifest {
-    /// Parse + valideer een manifest uit een TOML-string.
+    /// Parse + validate a manifest from a TOML string.
     pub fn from_toml(input: &str) -> Result<AgentManifest, ManifestError> {
         let doc = parse_doc(input)?;
 
@@ -260,22 +261,22 @@ mod tests {
 [agent]
 name        = "facilitator"
 version     = "1.0.0"
-description = "Vergaderingen opnemen, transcriberen en samenvatten"
+description = "Record, transcribe and summarize meetings"
 author      = "GoTrust BV <agent@gotrust.eu>"
 wasm        = "facilitator.wasm"
 lang        = "nl-BE"
 
 [capabilities]
 required = [
-    "CAP_AGENT_MIC",          # Microfoon
-    "CAP_AGENT_FS_WRITE",     # Transcripties opslaan
+    "CAP_AGENT_MIC",          # Microphone
+    "CAP_AGENT_FS_WRITE",     # Save transcripts
     "CAP_AGENT_DISPLAY",
 ]
 optional = ["CAP_AGENT_NET", "CAP_AGENT_CALENDAR"]
 
 [triggers]
 on_event  = ["calendar.meeting_start", "user.mic_hotkey"]
-on_intent = ["vergadering opnemen", "start recording"]
+on_intent = ["record meeting", "start recording"]
 
 [tools]
 allowed = ["mic_record", "fs_write", "display_notify"]

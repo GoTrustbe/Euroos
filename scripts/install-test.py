@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""AG-3c multidisk-installtest.
+"""AG-3c multidisk install test.
 
-Run 1 (installeren): boot de LIVE EuroOS-image (AHCI) met een BLANCO virtio-blk-
-doelschijf erbij; de kernel leest zijn eigen install-media en schrijft een bootbare
-EuroOS naar de doelschijf ([q1x2]).
-Run 2 (standalone): boot de NU-geïnstalleerde doelschijf alleen — bewijst dat ze
-zelfstandig EuroOS opstart. Maakt er een screenshot van.
+Run 1 (install): boot the LIVE EuroOS image (AHCI) with a BLANK virtio-blk
+target disk attached; the kernel reads its own install media and writes a bootable
+EuroOS to the target disk ([q1x2]).
+Run 2 (standalone): boot the NOW-installed target disk alone — proves that it
+boots EuroOS on its own. Takes a screenshot of it.
 """
 import json, os, socket, subprocess, sys, time
 
@@ -13,10 +13,10 @@ IMG = "eurokernel.img"
 TARGET = "/tmp/ag3-target.img"
 QMP = "/tmp/ek-qmp-inst.sock"
 OVMF = "/usr/share/ovmf/OVMF.fd"
-W1 = int(os.environ.get("W1", "95"))   # installeer-run
-W2 = int(os.environ.get("W2", "115"))  # standalone-boot-run
+W1 = int(os.environ.get("W1", "95"))   # install run
+W2 = int(os.environ.get("W2", "115"))  # standalone boot run
 
-# Verse, blanco 512 MiB doelschijf.
+# Fresh, blank 512 MiB target disk.
 subprocess.run(["qemu-img", "create", "-f", "raw", TARGET, "512M"], check=True,
                stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
@@ -44,16 +44,16 @@ def boot(args, serial, wait, screenshot=None):
     except Exception: pass
     qemu.wait(timeout=20)
 
-print(f"[install-test] RUN 1: live EuroOS + blanco virtio-doelschijf, wacht {W1}s...", flush=True)
+print(f"[install-test] RUN 1: live EuroOS + blank virtio target disk, waiting {W1}s...", flush=True)
 boot([
     "-drive", f"format=raw,file={IMG}",                                  # AHCI boot (live)
     "-drive", f"id=tgt,format=raw,file={TARGET},if=none",
-    "-device", "virtio-blk-pci,drive=tgt,disable-modern=on",            # blanco doelschijf
+    "-device", "virtio-blk-pci,drive=tgt,disable-modern=on",            # blank target disk
 ], "serial-install.log", W1)
 
-print(f"[install-test] RUN 2: boot de geïnstalleerde doelschijf STANDALONE, wacht {W2}s...", flush=True)
+print(f"[install-test] RUN 2: boot the installed target disk STANDALONE, waiting {W2}s...", flush=True)
 boot([
-    "-drive", f"format=raw,file={TARGET}",                               # AHCI boot van de install
+    "-drive", f"format=raw,file={TARGET}",                               # AHCI boot from the install
 ], "serial-standalone.log", W2, screenshot="ag3-standalone.png")
 
-print("[install-test] klaar — zie serial-install.log ([q1x2]) + serial-standalone.log + ag3-standalone.png")
+print("[install-test] done — see serial-install.log ([q1x2]) + serial-standalone.log + ag3-standalone.png")

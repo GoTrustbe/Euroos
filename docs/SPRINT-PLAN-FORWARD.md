@@ -76,12 +76,30 @@ AG-2 web engine.
 - **Done:** open ≥3 more apps from the dock with live data; edit + save a document; submit a
   POST form; run a tiny JS snippet on a page.
 
-## Sprint 5 — Reliability & scale hardening `🔒🧪`
+## Sprint 5 — Reliability & scale hardening `🔒🧪` — DONE (2026-06-13)
 **Goal.** Trust requires it never loses data under stress.
-- **J2 — NVMe robustness** under load; **J1 — lock-ordering audit** across subsystems;
-  **J3 — swap** pressure tests.
-- **EuroFS crash-consistency stress:** A/B-superblock torn-write + power-cut simulation.
-- **Done:** fault-injection + stress harness passes with 0 data loss / 0 panics.
+- **EuroFS crash-consistency (the flagged top risk) — DONE + host-verified.** The A/B
+  dual superblock (checksum + generation + 3-step barrier commit) already existed; what
+  was missing was a *systematic* proof. New `eurofs::faulty::FaultyBlockDevice` injects
+  power-cut (writes vanish after op *k*) and torn-writes (half a block then stop). A sweep
+  **crashes after *every* write op** across a format + multi-commit workload and proves, at
+  each point: (1) integrity — recovered content is never garbage, only a real committed
+  version; (2) durability — never rolls back below the last fully-completed checkpoint;
+  (3) mountability. A focused test tears the *newest* superblock write and proves mount
+  falls back to the previous valid generation. **0 data loss / 0 panics at every crash point.**
+- **J1 — lock-ordering audit — DONE + host-verified.** New `eurolock` crate documents the
+  kernel lock hierarchy (Sched→Process→Fs→Vault→Net→Agent→Firewall→Audit→Serial) as a
+  strict total order and provides a per-CPU `OrderTracker` that flags any inversion (the
+  classic A→B / B→A deadlock) before it can hang. Host-tested. *Follow-on: wire the tracker
+  around the live lock sites (the audit + tool are ready).*
+- **J2 — block robustness under load — DONE + host-verified.** Heavy multi-file I/O workload
+  (64 files, CoW overwrite pressure) reads back exactly + scrubs clean (0 errors) + survives
+  remount. Bad-block remap (`[j2]`) + scrub (`[g5]`) already boot-verified.
+- **J3 — swap pressure — partial (honest).** The swap path (`swapmgr.rs`, fault-driven
+  swap-in/out) is already boot-verified (`[j3]`/`[j3-fault]`); its logic lives in the kernel
+  paging path with no host-testable core, so a deeper pressure harness needs a virtio
+  multidisk boot — deferred rather than faked.
+- **730 host tests green** (+9: crash-sweep + heavy-load + lock-order).
 
 ---
 

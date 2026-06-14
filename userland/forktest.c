@@ -1,7 +1,7 @@
-/* EuroOS — S3-test: ECHTE fork() + waitpid() via de Linux-syscall-ABI.
- * De ouder forkt een kind; het kind print z'n pid en exit(7); de ouder wacht met
- * waitpid tot het kind klaar is en leest de exitstatus. Bewijst proces-creatie met
- * gekopieerde adresruimte + zombie-reaping op EuroKernel. */
+/* EuroOS — S3 test: REAL fork() + waitpid() via the Linux syscall ABI.
+ * The parent forks a child; the child prints its pid and exit(7); the parent waits with
+ * waitpid until the child is done and reads the exit status. Proves process creation with
+ * copied address space + zombie reaping on EuroKernel. */
 
 static long sys(long n, long a1, long a2, long a3) {
     long ret;
@@ -35,12 +35,12 @@ static const char *utoa(long v, char *end) {
 
 __attribute__((section(".text.start"))) void _start(void) {
     char num[24];
-    put("forktest: fork() + waitpid() op EuroKernel\n");
+    put("forktest: fork() + waitpid() on EuroKernel\n");
     long pid = sys(L_FORK, 0, 0, 0);
     if (pid == 0) {
-        /* kind: eigen adresruimte (kopie), eigen pid. execve() vervangt nu het
-         * image door /bin/execee (dat exit(9) doet). Op succes keert execve nooit
-         * terug; komen we hierna, dan faalde het. */
+        /* child: own address space (copy), own pid. execve() now replaces the
+         * image with /bin/execee (which does exit(9)). On success execve never
+         * returns; if we get past here, it failed. */
         long cp = sys(L_GETPID, 0, 0, 0);
         put("  [child]  getpid=");
         put(utoa(cp, num + 23));
@@ -49,13 +49,13 @@ __attribute__((section(".text.start"))) void _start(void) {
         av[0] = "/bin/execee";
         av[1] = 0;
         sys(L_EXECVE, (long)"/bin/execee", (long)av, 0);
-        put("  [child]  execve faalde -> exit(1)\n");
+        put("  [child]  execve failed -> exit(1)\n");
         sys(L_EXIT, 1, 0, 0);
         for (;;) {
         }
     } else {
-        /* ouder: krijgt de kind-pid, wacht (pollend) tot het kind een zombie is. */
-        put("  [parent] fork gaf kind-pid ");
+        /* parent: gets the child pid, waits (polling) until the child is a zombie. */
+        put("  [parent] fork returned child pid ");
         put(utoa(pid, num + 23));
         put("\n");
         int status = 0;
@@ -63,7 +63,7 @@ __attribute__((section(".text.start"))) void _start(void) {
         do {
             w = sys(L_WAIT4, -1, (long)&status, 0);
         } while (w == 0);
-        put("  [parent] waitpid reapte ");
+        put("  [parent] waitpid reaped ");
         put(utoa(w, num + 23));
         put(", WEXITSTATUS=");
         put(utoa((status >> 8) & 0xff, num + 23));

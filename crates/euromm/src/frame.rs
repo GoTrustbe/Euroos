@@ -1,11 +1,11 @@
-//! Bitmap-gebaseerde fysieke frame-allocator.
+//! Bitmap-based physical frame allocator.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 pub const PAGE_SIZE: u64 = 4096;
 
-/// Een fysieke geheugenregio uit de firmware-geheugenkaart.
+/// A physical memory region from the firmware memory map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryRegion {
     pub start: u64,
@@ -20,23 +20,23 @@ pub enum FrameError {
     OutOfBounds,
 }
 
-/// Bitmap-allocator: 1 bit per 4 KiB-frame, 64 frames per `u64`.
+/// Bitmap allocator: 1 bit per 4 KiB frame, 64 frames per `u64`.
 pub struct FrameAllocator {
     bitmap: Vec<u64>,
     total_frames: usize,
     free_frames: usize,
-    /// Aantal frames dat bij init bruikbaar was (installeerd RAM, vóór allocaties).
+    /// Number of frames that were usable at init (installed RAM, before allocations).
     usable_total: usize,
     hint: usize,
-    /// Aantal gedetecteerde double-frees (geheugen-hardening-diagnostiek, S6).
+    /// Number of detected double-frees (memory-hardening diagnostics, S6).
     double_frees: usize,
-    /// Piek-gebruik (hoogste aantal tegelijk gealloceerde frames) — voor diagnostiek
-    /// + capaciteitsplanning.
+    /// Peak usage (highest number of simultaneously allocated frames) — for diagnostics
+    /// + capacity planning.
     high_water: usize,
 }
 
 impl FrameAllocator {
-    /// Maak een allocator voor `total_frames` frames, allemaal als "in gebruik".
+    /// Create an allocator for `total_frames` frames, all marked as "in use".
     pub fn new(total_frames: usize) -> Self {
         let words = total_frames.div_ceil(64);
         Self {
@@ -50,12 +50,12 @@ impl FrameAllocator {
         }
     }
 
-    /// Bouw vanuit de firmware-geheugenkaart: bruikbare regio's worden vrij,
-    /// daarna worden de eerste `reserve_below` bytes (laag geheugen) en
-    /// niet-bruikbare regio's gereserveerd.
+    /// Build from the firmware memory map: usable regions become free,
+    /// then the first `reserve_below` bytes (low memory) and
+    /// non-usable regions are reserved.
     pub fn from_regions(regions: &[MemoryRegion], reserve_below: u64) -> Self {
-        // Dimensioneer op de hoogste BRUIKBARE regio — niet op verre MMIO/reserved
-        // adressen (die zouden de bitmap nodeloos enorm maken).
+        // Size on the highest USABLE region — not on distant MMIO/reserved
+        // addresses (which would needlessly make the bitmap enormous).
         let highest = regions
             .iter()
             .filter(|r| r.usable)
@@ -70,7 +70,7 @@ impl FrameAllocator {
         for r in regions.iter().filter(|r| !r.usable) {
             a.set_range(r.start, r.len, true);
         }
-        // Reserveer laag geheugen (IVT/BIOS/kernel-image bescherming).
+        // Reserve low memory (IVT/BIOS/kernel-image protection).
         a.set_range(0, reserve_below, true);
         a.recount();
         a.usable_total = a.free_frames;
@@ -100,7 +100,7 @@ impl FrameAllocator {
         self.free_frames = free;
     }
 
-    /// Alloceer één frame; geeft het fysieke startadres terug.
+    /// Allocate one frame; returns the physical start address.
     pub fn allocate(&mut self) -> Result<u64, FrameError> {
         for w in (self.hint..self.bitmap.len()).chain(0..self.hint) {
             if self.bitmap[w] != u64::MAX {
@@ -119,7 +119,7 @@ impl FrameAllocator {
         Err(FrameError::OutOfMemory)
     }
 
-    /// Alloceer `count` aaneengesloten frames.
+    /// Allocate `count` contiguous frames.
     pub fn allocate_contiguous(&mut self, count: usize) -> Result<u64, FrameError> {
         if count == 0 {
             return Err(FrameError::OutOfBounds);
@@ -142,10 +142,10 @@ impl FrameAllocator {
         Err(FrameError::OutOfMemory)
     }
 
-    /// Alloceer `count` aaneengesloten frames met een startframe uitgelijnd op
-    /// `align` frames (bv. `align = 512` → 2 MiB-grens). Geeft een uitgelijnd fysiek
-    /// adres terug zonder de "over-alloceer-en-lijn-uit"-verspilling van
-    /// [`allocate_contiguous`] (die tot `align-1` extra frames moet reserveren).
+    /// Allocate `count` contiguous frames with a start frame aligned to
+    /// `align` frames (e.g. `align = 512` → 2 MiB boundary). Returns an aligned physical
+    /// address without the "over-allocate-and-align" waste of
+    /// [`allocate_contiguous`] (which has to reserve up to `align-1` extra frames).
     pub fn allocate_aligned(&mut self, count: usize, align: usize) -> Result<u64, FrameError> {
         if count == 0 || align == 0 {
             return Err(FrameError::OutOfBounds);
@@ -153,7 +153,7 @@ impl FrameAllocator {
         let mut f = 0usize;
         while f + count <= self.total_frames {
             if f % align != 0 {
-                f += align - (f % align); // spring naar de volgende uitgelijnde grens
+                f += align - (f % align); // jump to the next aligned boundary
                 continue;
             }
             let mut free = true;
@@ -171,12 +171,12 @@ impl FrameAllocator {
                 self.note_high_water();
                 return Ok(f as u64 * PAGE_SIZE);
             }
-            f += align; // volgende uitgelijnde grens
+            f += align; // next aligned boundary
         }
         Err(FrameError::OutOfMemory)
     }
 
-    /// Werk de piek-gebruik-teller (high-water) bij na een allocatie.
+    /// Update the peak-usage counter (high-water) after an allocation.
     fn note_high_water(&mut self) {
         let used = self.usable_total.saturating_sub(self.free_frames);
         if used > self.high_water {
@@ -184,17 +184,17 @@ impl FrameAllocator {
         }
     }
 
-    /// Aantal gedetecteerde double-frees (S6 hardening-diagnostiek).
+    /// Number of detected double-frees (S6 hardening diagnostics).
     pub fn double_frees(&self) -> usize {
         self.double_frees
     }
 
-    /// Piek-frame-gebruik (high-water) sinds boot.
+    /// Peak frame usage (high-water) since boot.
     pub fn high_water_frames(&self) -> usize {
         self.high_water
     }
 
-    /// Geef een frame vrij.
+    /// Free a frame.
     pub fn free(&mut self, phys: u64) -> Result<(), FrameError> {
         let frame = (phys / PAGE_SIZE) as usize;
         if frame >= self.total_frames {
@@ -202,7 +202,7 @@ impl FrameAllocator {
         }
         let (w, b) = (frame / 64, frame % 64);
         if self.bitmap[w] & (1 << b) == 0 {
-            self.double_frees += 1; // S6: tel double-frees (geheugen-hardening)
+            self.double_frees += 1; // S6: count double-frees (memory hardening)
             return Err(FrameError::DoubleFree);
         }
         self.bitmap[w] &= !(1u64 << b);
@@ -228,7 +228,7 @@ impl FrameAllocator {
     pub fn free_bytes(&self) -> u64 {
         self.free_frames as u64 * PAGE_SIZE
     }
-    /// Bruikbaar RAM bij init (installeerd, vóór allocaties).
+    /// Usable RAM at init (installed, before allocations).
     pub fn usable_frames(&self) -> usize {
         self.usable_total
     }
@@ -243,15 +243,15 @@ mod tests {
 
     fn regions() -> Vec<MemoryRegion> {
         vec![
-            MemoryRegion { start: 0, len: 0x10_0000, usable: false }, // < 1 MiB gereserveerd
-            MemoryRegion { start: 0x10_0000, len: 0x40_0000, usable: true }, // 4 MiB bruikbaar
+            MemoryRegion { start: 0, len: 0x10_0000, usable: false }, // < 1 MiB reserved
+            MemoryRegion { start: 0x10_0000, len: 0x40_0000, usable: true }, // 4 MiB usable
         ]
     }
 
     #[test]
     fn init_telt_vrije_frames() {
         let a = FrameAllocator::from_regions(&regions(), 0x10_0000);
-        // 4 MiB bruikbaar = 1024 frames van 4 KiB.
+        // 4 MiB usable = 1024 frames of 4 KiB.
         assert_eq!(a.total_frames(), (0x50_0000 / 4096) as usize);
         assert_eq!(a.free_frames(), 1024);
     }
@@ -261,7 +261,7 @@ mod tests {
         let mut a = FrameAllocator::from_regions(&regions(), 0x10_0000);
         let f1 = a.allocate().unwrap();
         let f2 = a.allocate().unwrap();
-        assert_eq!(f1, 0x10_0000); // eerste bruikbare frame
+        assert_eq!(f1, 0x10_0000); // first usable frame
         assert_eq!(f2, 0x10_1000);
         assert_eq!(a.free_frames(), 1022);
     }
@@ -271,7 +271,7 @@ mod tests {
         let mut a = FrameAllocator::from_regions(&regions(), 0x10_0000);
         let f = a.allocate().unwrap();
         a.free(f).unwrap();
-        assert_eq!(a.allocate().unwrap(), f); // hetzelfde frame terug
+        assert_eq!(a.allocate().unwrap(), f); // the same frame back
     }
 
     #[test]
@@ -288,19 +288,19 @@ mod tests {
         let start = a.allocate_contiguous(8).unwrap();
         assert_eq!(start, 0x10_0000);
         assert_eq!(a.free_frames(), 1024 - 8);
-        // De volgende losse allocatie ligt direct erna.
+        // The next single allocation lies directly after it.
         assert_eq!(a.allocate().unwrap(), 0x10_0000 + 8 * PAGE_SIZE);
     }
 
     #[test]
     fn aligned_allocatie() {
         let mut a = FrameAllocator::from_regions(&regions(), 0x10_0000);
-        let p = a.allocate_aligned(4, 16).unwrap(); // 4 frames, 64 KiB-uitgelijnd
-        assert_eq!(p % (16 * PAGE_SIZE), 0); // adres is uitgelijnd
-        assert!(p >= 0x10_0000); // in de bruikbare regio
+        let p = a.allocate_aligned(4, 16).unwrap(); // 4 frames, 64 KiB aligned
+        assert_eq!(p % (16 * PAGE_SIZE), 0); // address is aligned
+        assert!(p >= 0x10_0000); // in the usable region
         let q = a.allocate_aligned(4, 16).unwrap();
         assert_eq!(q % (16 * PAGE_SIZE), 0);
-        assert!(q >= p + 4 * PAGE_SIZE); // niet overlappend met p
+        assert!(q >= p + 4 * PAGE_SIZE); // not overlapping with p
         assert_eq!(a.free_frames(), 1024 - 8);
     }
 

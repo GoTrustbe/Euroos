@@ -1,16 +1,16 @@
-//! Kernel-zijde van **EuroID** (Sprint K1 + P3): soeverein gebruikersbeheer.
+//! Kernel side of **EuroID** (Sprint K1 + P3): sovereign user management.
 //!
-//! Bij boot bouwen we de identiteitsopslag (de ingebouwde groepen + een paar demo-
-//! accounts), en bewijzen we de héle keten end-to-end: een gebruiker aanmaken
-//! (Argon2id-gehasht met TPM-RNG-zout) → aanmelden met timing-aanval-preventie →
-//! mislukte pogingen die het account vergrendelen → een onbekende gebruiker die
-//! ononderscheidbaar faalt → een soft delete → en een **hash-chain audit-log** dat
-//! elke actie onomkeerbaar vastlegt en knoeien detecteert. Host-geteste kern:
-//! [`euroid`] (24 tests, incl. het officiële RFC 9106 Argon2id-testvector).
+//! At boot we build the identity store (the built-in groups + a few demo
+//! accounts), and we prove the entire chain end-to-end: create a user
+//! (Argon2id-hashed with a TPM-RNG salt) → log in with timing-attack prevention →
+//! failed attempts that lock the account → an unknown user that fails
+//! indistinguishably → a soft delete → and a **hash-chain audit log** that
+//! records every action irreversibly and detects tampering. Host-tested core:
+//! [`euroid`] (24 tests, including the official RFC 9106 Argon2id test vector).
 //!
-//! De Argon2id-parameters zijn bij boot bewust verlaagd (geheugen/iteraties) zodat
-//! de zelftest snel is onder TCG; de échte soevereine parameters (64 MiB/t=3/p=4) en
-//! het RFC-testvector worden native in de host-tests geverifieerd.
+//! The Argon2id parameters are deliberately lowered at boot (memory/iterations) so
+//! the self-test is fast under TCG; the real sovereign parameters (64 MiB/t=3/p=4) and
+//! the RFC test vector are verified natively in the host tests.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -27,14 +27,14 @@ use euroid::{
     CAP_FILE, CAP_NET, GROUP_NET, GROUP_USERS, GROUP_WHEEL,
 };
 
-/// Het persistente gebruikersbestand op EuroFS (overleeft een herstart).
+/// The persistent user store on EuroFS (survives a reboot).
 const USERS_DB: &str = "/etc/euroid/users.db";
 
-/// Bewust verlaagde Argon2id-parameters voor de boot-zelftest/runtime onder TCG.
-/// (De soevereine 64 MiB/t=3/p=4 + RFC-vector worden in de host-tests bewezen.)
+/// Deliberately lowered Argon2id parameters for the boot self-test/runtime under TCG.
+/// (The sovereign 64 MiB/t=3/p=4 + RFC vector are proven in the host tests.)
 const BOOT_PARAMS: Params = Params { m_cost: 256, t_cost: 1, p_cost: 1, tag_len: 32 };
 
-/// De levende identiteitsopslag.
+/// The live identity store.
 struct State {
     users: UserDb,
     groups: GroupDb,
@@ -45,8 +45,8 @@ struct State {
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 
-/// Genereer `n` willekeurige bytes — TPM-RNG indien beschikbaar, anders een
-/// functionele tick/RDTSC-mix (de zelftest blijft geldig; productie gebruikt TPM).
+/// Generate `n` random bytes — TPM-RNG if available, otherwise a
+/// functional tick/RDTSC mix (the self-test stays valid; production uses TPM).
 fn rand_bytes(n: usize) -> Vec<u8> {
     if let Some(b) = crate::tpm::get_random(n as u16) {
         if b.len() >= n {
@@ -72,7 +72,7 @@ fn now() -> Timestamp {
     Timestamp(crate::rtc::epoch())
 }
 
-/// Maak een gebruikersrecord (de useradd-orkestratie uit de spec).
+/// Create a user record (the useradd orchestration from the spec).
 #[allow(clippy::too_many_arguments)]
 fn build_user(
     uid: u32,
@@ -104,21 +104,21 @@ fn build_user(
     }
 }
 
-/// Bouw de opslag met de ingebouwde groepen + twee demo-accounts (alice, admin-bob).
+/// Build the store with the built-in groups + two demo accounts (alice, admin-bob).
 fn build_state() -> State {
     let groups = GroupDb::with_builtins();
     let mut users = UserDb::new();
     let mut audit = AuditLog::new();
     audit.append(&AuditEvent::SystemInit, now());
 
-    // root: systeem-admin (wheel). Net als /etc/shadow `root:*` is interactieve
-    // login vergrendeld — root-toegang loopt via sudo, niet via een wachtwoord.
+    // root: system admin (wheel). Just like /etc/shadow `root:*`, interactive
+    // login is locked — root access goes through sudo, not via a password.
     let mut root = build_user(0, "root", "System Administrator", GROUP_WHEEL, &[], 0, "*locked*", 0);
     root.state = UserState::Locked { reason: LockReason::AdminLock, locked_at: now(), locked_by: euroid::UserId::ROOT };
     users.insert(root).ok();
 
-    // euro: het ECHTE desktop-account (uid 1000, /etc/passwd-canoniek). Hiermee
-    // logt de shell in via EuroID-Argon2id (geen SHA-256 meer). Demo-wachtwoord "euro".
+    // euro: the REAL desktop account (uid 1000, /etc/passwd-canonical). With this
+    // the shell logs in via EuroID-Argon2id (no more SHA-256). Demo password "euro".
     let euro = build_user(1000, "euro", "Euro User", GROUP_USERS, &[GROUP_NET], CAP_FILE, "euro", 0);
     audit.append(
         &AuditEvent::UserCreated {
@@ -132,7 +132,7 @@ fn build_state() -> State {
     );
     users.insert(euro).ok();
 
-    // alice: gewone gebruiker (groepen users+net, eigen CAP_FILE) — K1-demo-account.
+    // alice: regular user (groups users+net, own CAP_FILE) — K1 demo account.
     let alice = build_user(1002, "alice", "Alice Vermeersch", GROUP_USERS, &[GROUP_NET], CAP_FILE, "Correct-Horse-9!", 0);
     audit.append(
         &AuditEvent::UserCreated {
@@ -146,7 +146,7 @@ fn build_state() -> State {
     );
     users.insert(alice).ok();
 
-    // bob: admin (wheel) — moet wachtwoord wijzigen bij eerste login.
+    // bob: admin (wheel) — must change password on first login.
     let mut bob = build_user(1003, "bob", "Bob De Smedt", GROUP_WHEEL, &[], 0, "Initial-Admin-1!", 0);
     bob.password.must_change = true;
     audit.append(
@@ -161,18 +161,18 @@ fn build_state() -> State {
     );
     users.insert(bob).ok();
 
-    // De dummy-hash (zelfde params als echte accounts) voor timing-aanval-preventie.
+    // The dummy hash (same params as real accounts) for timing-attack prevention.
     let dummy = Argon2idHash::create(b"*invalid*", &salt32(), &BOOT_PARAMS);
 
     State { users, groups, audit, dummy, policy: PasswordPolicy::default() }
 }
 
-/// **K1 boot-zelftest** — de hele keten manage→auth→audit, end-to-end.
+/// **K1 boot self-test** — the entire chain manage→auth→audit, end-to-end.
 pub fn selftest() {
     let mut st = build_state();
     let from_tpm = crate::tpm::get_random(1).is_some();
 
-    // 1. alice logt correct in → sessie + LoginSuccess in het audit-log.
+    // 1. alice logs in correctly → session + LoginSuccess in the audit log.
     let sid = {
         let mut s = [0u8; 32];
         s.copy_from_slice(&rand_bytes(32));
@@ -194,12 +194,12 @@ pub fn selftest() {
     }
     let login_ok = r.outcome.is_ok();
     let caps = r.outcome.as_ref().map(|s| s.caps).unwrap_or(0);
-    // alice krijgt LOGIN|FILE|DISPLAY (users) ∪ NET (net) ∪ FILE (eigen).
+    // alice gets LOGIN|FILE|DISPLAY (users) ∪ NET (net) ∪ FILE (own).
     let caps_ok = caps & (CAP_NET | CAP_FILE | euroid::CAP_DISPLAY | euroid::CAP_LOGIN)
         == (CAP_NET | CAP_FILE | euroid::CAP_DISPLAY | euroid::CAP_LOGIN)
         && caps & euroid::CAP_USER_ADMIN == 0;
 
-    // 2. Onbekende gebruiker → ononderscheidbaar van verkeerd wachtwoord.
+    // 2. Unknown user → indistinguishable from a wrong password.
     let r_unknown = authenticate(
         &mut st.users,
         &st.groups,
@@ -216,7 +216,7 @@ pub fn selftest() {
     }
     let unknown_generic = r_unknown.outcome == Err(AuthError::InvalidCredentials);
 
-    // 3. Vijf foute pogingen op bob → account vergrendeld (lockout).
+    // 3. Five wrong attempts on bob → account locked (lockout).
     for _ in 0..5 {
         let rb = authenticate(
             &mut st.users,
@@ -235,7 +235,7 @@ pub fn selftest() {
     }
     let locked = matches!(st.users.get(euroid::UserId(1003)).map(|u| &u.state), Some(UserState::Locked { .. }));
 
-    // 4. Soft delete van alice → record blijft bestaan (audit-vereiste).
+    // 4. Soft delete of alice → record still exists (audit requirement).
     st.users.soft_delete(euroid::UserId(1002), euroid::UserId::ROOT, now()).ok();
     st.audit.append(
         &AuditEvent::UserDeleted { uid: euroid::UserId(1002), username: "alice".to_string(), deleted_by: euroid::UserId::ROOT },
@@ -243,69 +243,69 @@ pub fn selftest() {
     );
     let record_kept = st.users.get(euroid::UserId(1002)).is_some();
 
-    // 5. Hash-chain: de hele keten moet intact verifiëren. (Tamper-detectie — een
-    //    geknoeid record dat álle volgende hashes ongeldig maakt — wordt robuust
-    //    bewezen in de host-tests `tampering_*_breaks_the_chain`.)
+    // 5. Hash chain: the entire chain must verify intact. (Tamper detection — a
+    //    tampered record that invalidates ALL following hashes — is proven robustly
+    //    in the host tests `tampering_*_breaks_the_chain`.)
     let chain_ok = st.audit.verify_chain().is_ok();
     let entries = st.audit.len();
     let root = euroid::hex(&st.audit.root_hash());
 
     let ok = login_ok && caps_ok && unknown_generic && locked && record_kept && chain_ok;
     crate::serial_println!(
-        "[k1] EuroID: useradd+Argon2id(TPM-zout={from_tpm}) → login alice(caps users∪net={caps_ok})={login_ok} · onbekende-gebruiker-ononderscheidbaar={unknown_generic} · 5×fout→bob-vergrendeld={locked} · soft-delete-bewaart-record={record_kept} · hash-chain-intact={chain_ok} ({entries} events, root sha256:{}) → {}",
+        "[k1] EuroID: useradd+Argon2id(TPM-salt={from_tpm}) → login alice(caps users∪net={caps_ok})={login_ok} · unknown-user-indistinguishable={unknown_generic} · 5×wrong→bob-locked={locked} · soft-delete-keeps-record={record_kept} · hash-chain-intact={chain_ok} ({entries} events, root sha256:{}) → {}",
         &root[..16.min(root.len())],
-        if ok { "OK (Sprint K1: soeverein gebruikersbeheer + tamper-evident audit, NIS2/GDPR/ISO 27001) ✓" } else { "MISLUKT" }
+        if ok { "OK (Sprint K1: sovereign user management + tamper-evident audit, NIS2/GDPR/ISO 27001) ✓" } else { "FAILED" }
     );
 
     *STATE.lock() = Some(st);
 
-    // Rookproef van het ECHTE shell-pad (niet alleen gecompileerd): draai een paar
-    // `eurousers`-commando's tegen de levende opslag en bewijs dat ze werken.
+    // Smoke test of the REAL shell path (not just compiled): run a few
+    // `eurousers` commands against the live store and prove they work.
     let listed = shell("list", 0);
     let added = shell("add carla S3cure-Pass-9! users,net", 0);
     let verify = shell("audit --verify-chain", 0);
     let shell_ok = listed.iter().any(|l| l.contains("alice"))
-        && added.iter().any(|l| l.contains("aangemaakt"))
-        && verify.iter().any(|l| l.contains("keten intact"));
+        && added.iter().any(|l| l.contains("created"))
+        && verify.iter().any(|l| l.contains("chain intact"));
     crate::serial_println!(
-        "[k1] eurousers shell-pad: 'list'-toont-gebruikers={} · 'add carla'={} · 'audit --verify-chain'={} → {}",
+        "[k1] eurousers shell-path: 'list'-shows-users={} · 'add carla'={} · 'audit --verify-chain'={} → {}",
         listed.iter().any(|l| l.contains("alice")),
-        added.iter().any(|l| l.contains("aangemaakt")),
-        verify.iter().any(|l| l.contains("keten intact")),
-        if shell_ok { "OK (commandopad live geverifieerd) ✓" } else { "MISLUKT" }
+        added.iter().any(|l| l.contains("created")),
+        verify.iter().any(|l| l.contains("chain intact")),
+        if shell_ok { "OK (command path verified live) ✓" } else { "FAILED" }
     );
 
-    // [ae] Audit #3 / Sprint AE: bewijs dat de ECHTE login-poort (`euroid::login`,
-    // het pad dat de shell `login`/`su` nu gebruikt) op Argon2id draait — juist
-    // wachtwoord lukt, fout wordt geweigerd, en het vergrendelde root-account kan
-    // niet interactief inloggen.
+    // [ae] Audit #3 / Sprint AE: prove that the REAL login gate (`euroid::login`,
+    // the path the shell `login`/`su` now uses) runs on Argon2id — a correct
+    // password succeeds, a wrong one is rejected, and the locked root account
+    // cannot log in interactively.
     let ok = login("euro", "euro").is_ok();
-    let bad = matches!(login("euro", "fout"), Err(_));
-    let root_locked = matches!(login("root", "x"), Err(ref m) if m.contains("vergrendeld"));
+    let bad = matches!(login("euro", "wrong"), Err(_));
+    let root_locked = matches!(login("root", "x"), Err(ref m) if m.contains("locked"));
     crate::serial_println!(
-        "[ae] EuroID-login (Argon2id, geen SHA-256 meer): euro/'euro'={} · euro/'fout'-geweigerd={} · root-locked-geweigerd={} → {}",
+        "[ae] EuroID login (Argon2id, no more SHA-256): euro/'euro'={} · euro/'wrong'-rejected={} · root-locked-rejected={} → {}",
         ok, bad, root_locked,
-        if ok && bad && root_locked { "OK (login-pad op soevereine Argon2id-identiteit) ✓" } else { "MISLUKT" }
+        if ok && bad && root_locked { "OK (login path on sovereign Argon2id identity) ✓" } else { "FAILED" }
     );
 }
 
-/// Resultaat van een geslaagde shell-login via EuroID.
+/// Result of a successful shell login via EuroID.
 pub struct LoginOk {
     pub uid: u32,
     pub name: String,
     pub caps: u64,
 }
 
-/// **Audit #3 / Sprint AE** — authenticeer tegen de levende EuroID-opslag met
-/// Argon2id (memory-hard), accountstaat-controle, lockout-teller én een tamper-
-/// evident audit-log. Dit vervangt de oude geïtereerde-SHA-256-verificatie tegen
-/// /etc/shadow als het pad dat de shell `login`/`su` gebruikt. De audit-events
-/// worden onvoorwaardelijk weggeschreven (loggen is niet overslaanbaar).
+/// **Audit #3 / Sprint AE** — authenticate against the live EuroID store with
+/// Argon2id (memory-hard), account-state check, lockout counter and a tamper-
+/// evident audit log. This replaces the old iterated-SHA-256 verification against
+/// /etc/shadow as the path the shell `login`/`su` uses. The audit events
+/// are written unconditionally (logging is not skippable).
 pub fn login(username: &str, password: &str) -> Result<LoginOk, String> {
     let mut guard = STATE.lock();
     let st = match guard.as_mut() {
         Some(s) => s,
-        None => return Err("identiteitsopslag niet geïnitialiseerd".to_string()),
+        None => return Err("identity store not initialized".to_string()),
     };
     let sid = {
         let mut s = [0u8; 32];
@@ -325,29 +325,29 @@ pub fn login(username: &str, password: &str) -> Result<LoginOk, String> {
         &st.dummy,
     );
     for ev in &r.events {
-        st.audit.append(ev, now()); // audit MOET geschreven worden
+        st.audit.append(ev, now()); // audit MUST be written
     }
     match r.outcome {
         Ok(session) => Ok(LoginOk { uid: session.uid.0, name: session.username, caps: session.caps }),
         Err(e) => Err(match e {
-            AuthError::InvalidCredentials => "ongeldige gebruikersnaam of wachtwoord".to_string(),
-            AuthError::AccountLocked => "account vergrendeld (te veel pogingen of admin-lock)".to_string(),
-            AuthError::AccountExpired => "account verlopen".to_string(),
+            AuthError::InvalidCredentials => "invalid username or password".to_string(),
+            AuthError::AccountLocked => "account locked (too many attempts or admin lock)".to_string(),
+            AuthError::AccountExpired => "account expired".to_string(),
             AuthError::MustChangePassword => {
-                "wachtwoord moet eerst gewijzigd worden (eurousers passwd)".to_string()
+                "password must be changed first (eurousers passwd)".to_string()
             }
         }),
     }
 }
 
-/// Self-service wachtwoordwijziging tegen de levende opslag (gebruikt door de
-/// GUI-lockscreen bij een must-change). Verifieert het oude wachtwoord, valideert
-/// het nieuwe (policy + history) en wist de must-change-vlag. `Ok` = gewijzigd.
+/// Self-service password change against the live store (used by the
+/// GUI lockscreen on a must-change). Verifies the old password, validates
+/// the new one (policy + history) and clears the must-change flag. `Ok` = changed.
 pub fn change_own_password(user: &str, old: &str, new: &str) -> Result<(), String> {
     let mut guard = STATE.lock();
     let st = match guard.as_mut() {
         Some(s) => s,
-        None => return Err("identiteitsopslag niet geïnitialiseerd".to_string()),
+        None => return Err("identity store not initialized".to_string()),
     };
     if let Err(e) = validate_password(new, &st.policy) {
         return Err(e.message().to_string());
@@ -357,14 +357,14 @@ pub fn change_own_password(user: &str, old: &str, new: &str) -> Result<(), Strin
     let new_hash = Argon2idHash::create(new.as_bytes(), &salt, &BOOT_PARAMS);
     let target;
     {
-        let u = st.users.get_by_name_mut(user).ok_or_else(|| "gebruiker niet gevonden".to_string())?;
+        let u = st.users.get_by_name_mut(user).ok_or_else(|| "user not found".to_string())?;
         if !u.password.verify(old.as_bytes()) {
-            return Err("oud wachtwoord onjuist".to_string());
+            return Err("old password incorrect".to_string());
         }
         if u.password.is_reused(new.as_bytes(), depth) {
-            return Err(alloc::format!("wachtwoord hergebruikt (laatste {depth} verboden)"));
+            return Err(alloc::format!("password reused (last {depth} forbidden)"));
         }
-        u.password.set_new(new_hash, depth, now()); // wist must_change
+        u.password.set_new(new_hash, depth, now()); // clears must_change
         target = u.uid;
     }
     st.audit.append(&AuditEvent::PasswordChanged { actor: target, target, admin_reset: false }, now());
@@ -372,11 +372,11 @@ pub fn change_own_password(user: &str, old: &str, new: &str) -> Result<(), Strin
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Persistentie (Sprint AE-e2e): de gebruikersopslag overleeft een herstart.
+// Persistence (Sprint AE-e2e): the user store survives a reboot.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Schrijf de levende gebruikersopslag naar `/etc/euroid/users.db`. Wordt na élke
-/// muterende `eurousers`-actie aangeroepen zodat wijzigingen duurzaam zijn.
+/// Write the live user store to `/etc/euroid/users.db`. Called after every
+/// mutating `eurousers` action so that changes are durable.
 pub fn persist_state(fs: &mut dyn eurofs::FileSystem) -> bool {
     let guard = STATE.lock();
     let st = match guard.as_ref() {
@@ -389,9 +389,9 @@ pub fn persist_state(fs: &mut dyn eurofs::FileSystem) -> bool {
     fs.write_file(USERS_DB, text.as_bytes()).is_ok()
 }
 
-/// Laad de gebruikersopslag van schijf indien aanwezig. Geeft het aantal geladen
-/// gebruikers terug (0 = geen bestand / leeg → eerste boot). Bij corruptie: 0
-/// (de aanroeper valt dan terug op `build_state`).
+/// Load the user store from disk if present. Returns the number of loaded
+/// users (0 = no file / empty → first boot). On corruption: 0
+/// (the caller then falls back to `build_state`).
 fn load_users_from_disk(fs: &mut dyn eurofs::FileSystem) -> Option<UserDb> {
     let data = fs.read_file(USERS_DB).ok()?;
     let text = core::str::from_utf8(&data).ok()?;
@@ -401,35 +401,35 @@ fn load_users_from_disk(fs: &mut dyn eurofs::FileSystem) -> Option<UserDb> {
     }
 }
 
-/// **Sprint AE-e2e boot-zelftest** — bewijst dat de EuroID-opslag een herstart
-/// overleeft: bouw de opslag, persisteer naar EuroFS, lees 'm VAN SCHIJF terug, en
-/// toon dat (1) het Argon2id-wachtwoord van 'euro' nog verifieert, (2) een nieuw
-/// aangemaakte gebruiker na her-persist + herlezen aanwezig blijft (overleeft remount).
+/// **Sprint AE-e2e boot self-test** — proves that the EuroID store survives a
+/// reboot: build the store, persist to EuroFS, read it back FROM DISK, and
+/// show that (1) the Argon2id password of 'euro' still verifies, (2) a newly
+/// created user remains present after re-persist + re-read (survives remount).
 pub fn persist_selftest(fs: &mut dyn eurofs::FileSystem) {
     use eurofs::FileSystem;
 
-    // 1. Bouw + serialiseer + schrijf naar schijf.
+    // 1. Build + serialize + write to disk.
     let st = build_state();
     let text = serialize_db(&st.users);
     let _ = fs.create_dir("/etc");
     let _ = fs.create_dir("/etc/euroid");
     let wrote = fs.write_file(USERS_DB, text.as_bytes()).is_ok();
 
-    // 2. Lees TERUG van schijf → euro's wachtwoord verifieert nog (hash overleefde).
+    // 2. Read BACK from disk → euro's password still verifies (hash survived).
     let reloaded = load_users_from_disk(fs);
     let euro_ok = reloaded
         .as_ref()
         .and_then(|db| db.get_by_name("euro"))
-        .map(|u| u.password.verify(b"euro") && !u.password.verify(b"fout"))
+        .map(|u| u.password.verify(b"euro") && !u.password.verify(b"wrong"))
         .unwrap_or(false);
-    // root blijft vergrendeld na herlezen.
+    // root stays locked after re-reading.
     let root_locked = reloaded
         .as_ref()
         .and_then(|db| db.get(euroid::UserId::ROOT))
         .map(|u| matches!(u.state, UserState::Locked { .. }))
         .unwrap_or(false);
 
-    // 3. Mutatie-overleeft-remount: voeg een gebruiker toe, her-persist, herlees.
+    // 3. Mutation-survives-remount: add a user, re-persist, re-read.
     let mut db2 = reloaded.unwrap_or_else(|| build_state().users);
     let salt = salt32();
     let newrec = PasswordRecord::hash_password(b"Persist-Test-1!", &salt, &BOOT_PARAMS, now());
@@ -457,15 +457,15 @@ pub fn persist_selftest(fs: &mut dyn eurofs::FileSystem) {
 
     let ok = wrote && euro_ok && root_locked && survives;
     crate::serial_println!(
-        "[ae-persist] EuroID persistent op EuroFS: weggeschreven={wrote}, euro-Argon2id-na-herlezen={euro_ok}, root-vergrendeld-na-herlezen={root_locked}, nieuwe-gebruiker-overleeft-remount={survives} → {}",
-        if ok { "OK (identiteit + wachtwoord-hashes overleven een herstart) ✓" } else { "MISLUKT" }
+        "[ae-persist] EuroID persistent on EuroFS: written={wrote}, euro-Argon2id-after-reread={euro_ok}, root-locked-after-reread={root_locked}, new-user-survives-remount={survives} → {}",
+        if ok { "OK (identity + password hashes survive a reboot) ✓" } else { "FAILED" }
     );
 }
 
-/// **Sprint AE-e2e boot-zelftest** — must-change-password-handhaving. Bewijst dat
-/// een account met de must-change-vlag NIET kan inloggen (ook met het juiste
-/// wachtwoord), dat een self-service wijziging de vlag wist, en dat inloggen daarna
-/// met het NIEUWE wachtwoord lukt terwijl het oude faalt.
+/// **Sprint AE-e2e boot self-test** — must-change-password enforcement. Proves that
+/// an account with the must-change flag CANNOT log in (even with the correct
+/// password), that a self-service change clears the flag, and that logging in
+/// afterwards with the NEW password succeeds while the old one fails.
 pub fn must_change_selftest() {
     let groups = GroupDb::with_builtins();
     let mut db = UserDb::new();
@@ -489,10 +489,10 @@ pub fn must_change_selftest() {
         .outcome
     };
 
-    // 1. Juist wachtwoord MAAR must_change → login geweigerd (MustChangePassword).
+    // 1. Correct password BUT must_change → login rejected (MustChangePassword).
     let blocked = matches!(auth(&mut db, "OldPass-1!", &dummy), Err(AuthError::MustChangePassword));
 
-    // 2. Self-service wijziging: verifieer het oude, zet een nieuw → must_change gewist.
+    // 2. Self-service change: verify the old one, set a new one → must_change cleared.
     let depth = PasswordPolicy::default().history_depth;
     let cleared = {
         let salt = salt32();
@@ -503,19 +503,19 @@ pub fn must_change_selftest() {
         old_ok && !user.password.must_change
     };
 
-    // 3. Login met het NIEUWE wachtwoord lukt; het oude faalt.
+    // 3. Login with the NEW password succeeds; the old one fails.
     let now_ok = auth(&mut db, "NewPass-2!", &dummy).is_ok();
     let old_fails = auth(&mut db, "OldPass-1!", &dummy).is_err();
 
     let ok = blocked && cleared && now_ok && old_fails;
     crate::serial_println!(
-        "[ae-mustchange] must-change-handhaving: juist-pw-maar-geblokkeerd={blocked}, self-service-wijziging-wist-vlag={cleared}, login-met-nieuw-pw-OK={now_ok}, oud-pw-faalt={old_fails} → {}",
-        if ok { "OK (gedwongen wachtwoordwijziging end-to-end afgedwongen) ✓" } else { "MISLUKT" }
+        "[ae-mustchange] must-change enforcement: correct-pw-but-blocked={blocked}, self-service-change-clears-flag={cleared}, login-with-new-pw-OK={now_ok}, old-pw-fails={old_fails} → {}",
+        if ok { "OK (forced password change enforced end-to-end) ✓" } else { "FAILED" }
     );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// `eurousers` shellcommando.
+// `eurousers` shell command.
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn caps_summary(caps: u64) -> String {
@@ -526,13 +526,13 @@ fn state_caps(st: &State, u: &User) -> u64 {
     effective_caps(u, &st.groups, ALLOW_ALL)
 }
 
-/// `eurousers <subcmd> [args...]` — soeverein gebruikersbeheer vanaf de shell.
-/// `actor_uid` is de uid van de huidige sessie (voor de CAP_USER_ADMIN-check).
+/// `eurousers <subcmd> [args...]` — sovereign user management from the shell.
+/// `actor_uid` is the uid of the current session (for the CAP_USER_ADMIN check).
 pub fn shell(args: &str, actor_uid: u32) -> Vec<String> {
     let mut guard = STATE.lock();
     let st = match guard.as_mut() {
         Some(s) => s,
-        None => return alloc::vec!["eurousers: identiteitsopslag niet geïnitialiseerd".to_string()],
+        None => return alloc::vec!["eurousers: identity store not initialized".to_string()],
     };
 
     let mut it = args.split_whitespace();
@@ -541,44 +541,44 @@ pub fn shell(args: &str, actor_uid: u32) -> Vec<String> {
     let a2 = it.next().unwrap_or("");
     let a3 = it.next().unwrap_or("");
 
-    // Wie voert dit uit? Heeft die CAP_USER_ADMIN (wheel)?
+    // Who is running this? Do they have CAP_USER_ADMIN (wheel)?
     let actor = euroid::UserId(actor_uid);
     let is_admin = st
         .users
         .get(actor)
         .map(|u| state_caps(st, u) & euroid::CAP_USER_ADMIN != 0)
-        .unwrap_or(actor_uid == 0); // uid 0 = root/system mag altijd
+        .unwrap_or(actor_uid == 0); // uid 0 = root/system always allowed
 
     let require_admin = |is_admin: bool| -> Option<Vec<String>> {
         if is_admin {
             None
         } else {
-            Some(alloc::vec!["eurousers: EPERM — vereist CAP_USER_ADMIN (wheel-groep)".to_string()])
+            Some(alloc::vec!["eurousers: EPERM — requires CAP_USER_ADMIN (wheel group)".to_string()])
         }
     };
 
     match sub {
         "" | "help" => alloc::vec![
-            "eurousers — soeverein gebruikersbeheer (Sprint K1)".to_string(),
-            "  list                       alle gebruikers + staat".to_string(),
-            "  show <naam>                volledig record (geen wachtwoord-hash)".to_string(),
-            "  add <naam> <pw> [groep,..] gebruiker aanmaken (Argon2id)".to_string(),
-            "  passwd <naam> <nieuw-pw>   wachtwoord (admin-reset → must-change)".to_string(),
-            "  chpasswd <naam> <oud> <nieuw>  eigen wachtwoord wijzigen (wist must-change)".to_string(),
-            "  lock <naam> / unlock <naam>  account (ont)grendelen".to_string(),
-            "  del <naam>                 soft delete (record blijft voor audit)".to_string(),
-            "  groups                     alle groepen + leden + caps".to_string(),
-            "  audit [--user N|--verify-chain]  het hash-chain audit-log".to_string(),
+            "eurousers — sovereign user management (Sprint K1)".to_string(),
+            "  list                       all users + state".to_string(),
+            "  show <name>                full record (no password hash)".to_string(),
+            "  add <name> <pw> [group,..] create user (Argon2id)".to_string(),
+            "  passwd <name> <new-pw>     password (admin-reset → must-change)".to_string(),
+            "  chpasswd <name> <old> <new>  change own password (clears must-change)".to_string(),
+            "  lock <name> / unlock <name>  (un)lock account".to_string(),
+            "  del <name>                 soft delete (record kept for audit)".to_string(),
+            "  groups                     all groups + members + caps".to_string(),
+            "  audit [--user N|--verify-chain]  the hash-chain audit log".to_string(),
         ],
 
         "list" => {
-            let mut out = alloc::vec![format!("{:<10} {:>5} {:<10} {}", "GEBRUIKER", "UID", "STAAT", "GROEPEN")];
+            let mut out = alloc::vec![format!("{:<10} {:>5} {:<10} {}", "USER", "UID", "STATE", "GROUPS")];
             for u in st.users.all() {
                 let state = match &u.state {
-                    UserState::Active => "actief".to_string(),
-                    UserState::Locked { reason, .. } => format!("vergr.({})", reason.tag()),
-                    UserState::Expired { .. } => "verlopen".to_string(),
-                    UserState::Deleted { .. } => "verwijderd".to_string(),
+                    UserState::Active => "active".to_string(),
+                    UserState::Locked { reason, .. } => format!("locked({})", reason.tag()),
+                    UserState::Expired { .. } => "expired".to_string(),
+                    UserState::Deleted { .. } => "deleted".to_string(),
                 };
                 let groups: Vec<String> = core::iter::once(u.primary_gid)
                     .chain(u.groups.iter().copied())
@@ -592,19 +592,19 @@ pub fn shell(args: &str, actor_uid: u32) -> Vec<String> {
         "show" => {
             let u = match st.users.get_by_name(a1) {
                 Some(u) => u,
-                None => return alloc::vec![format!("eurousers: gebruiker '{a1}' niet gevonden")],
+                None => return alloc::vec![format!("eurousers: user '{a1}' not found")],
             };
             let groups: Vec<String> = u.groups.iter().filter_map(|g| st.groups.get(*g).map(|g| g.name.clone())).collect();
             let must = if u.password.must_change { " (must-change)" } else { "" };
             alloc::vec![
-                format!("gebruiker:    {} (uid={})", u.username, u.uid.0),
-                format!("weergavenaam: {}", u.display_name),
+                format!("user:         {} (uid={})", u.username, u.uid.0),
+                format!("display name: {}", u.display_name),
                 format!("home/shell:   {}  {}", u.home, u.shell),
-                format!("primaire grp: {}", st.groups.get(u.primary_gid).map(|g| g.name.as_str()).unwrap_or("?")),
-                format!("groepen:      {}", groups.join(",")),
-                format!("effectieve caps: {}", caps_summary(state_caps(st, u))),
-                format!("wachtwoord:   Argon2id{must} (hash niet getoond)"),
-                format!("aangemaakt:   t={} door uid={}", u.created_at.0, u.created_by.0),
+                format!("primary grp:  {}", st.groups.get(u.primary_gid).map(|g| g.name.as_str()).unwrap_or("?")),
+                format!("groups:       {}", groups.join(",")),
+                format!("effective caps: {}", caps_summary(state_caps(st, u))),
+                format!("password:     Argon2id{must} (hash not shown)"),
+                format!("created:      t={} by uid={}", u.created_at.0, u.created_by.0),
                 format!("failed-logins: {}", u.failed_logins),
             ]
         }
@@ -614,24 +614,24 @@ pub fn shell(args: &str, actor_uid: u32) -> Vec<String> {
                 return e;
             }
             if a1.is_empty() || a2.is_empty() {
-                return alloc::vec!["gebruik: eurousers add <naam> <wachtwoord> [groep,groep]".to_string()];
+                return alloc::vec!["usage: eurousers add <name> <password> [group,group]".to_string()];
             }
             if let Err(msg) = validate_username(a1) {
                 return alloc::vec![format!("eurousers: {msg}")];
             }
             if st.users.exists(a1) {
-                return alloc::vec![format!("eurousers: gebruiker '{a1}' bestaat al")];
+                return alloc::vec![format!("eurousers: user '{a1}' already exists")];
             }
             if let Err(e) = validate_password(a2, &st.policy) {
                 return alloc::vec![format!("eurousers: {}", e.message())];
             }
-            // Groepen oplossen (default: users).
+            // Resolve groups (default: users).
             let mut gids: Vec<GroupId> = Vec::new();
             if !a3.is_empty() {
                 for g in a3.split(',') {
                     match st.groups.by_name(g) {
                         Some(gr) => gids.push(gr.gid),
-                        None => return alloc::vec![format!("eurousers: onbekende groep '{g}'")],
+                        None => return alloc::vec![format!("eurousers: unknown group '{g}'")],
                     }
                 }
             }
@@ -661,10 +661,10 @@ pub fn shell(args: &str, actor_uid: u32) -> Vec<String> {
                         &AuditEvent::UserCreated { uid, username: a1.to_string(), created_by: actor, groups: gids, caps },
                         now(),
                     );
-                    alloc::vec![format!("[euro/users] gebruiker '{a1}' aangemaakt (uid={})", uid.0)]
+                    alloc::vec![format!("[euro/users] user '{a1}' created (uid={})", uid.0)]
                 }
-                Err(UserError::AlreadyExists(n)) => alloc::vec![format!("eurousers: '{n}' bestaat al")],
-                Err(_) => alloc::vec!["eurousers: aanmaken mislukt".to_string()],
+                Err(UserError::AlreadyExists(n)) => alloc::vec![format!("eurousers: '{n}' already exists")],
+                Err(_) => alloc::vec!["eurousers: creation failed".to_string()],
             }
         }
 
@@ -673,7 +673,7 @@ pub fn shell(args: &str, actor_uid: u32) -> Vec<String> {
                 return e;
             }
             if a1.is_empty() || a2.is_empty() {
-                return alloc::vec!["gebruik: eurousers passwd <naam> <nieuw-wachtwoord>".to_string()];
+                return alloc::vec!["usage: eurousers passwd <name> <new-password>".to_string()];
             }
             if let Err(e) = validate_password(a2, &st.policy) {
                 return alloc::vec![format!("eurousers: {}", e.message())];
@@ -685,27 +685,27 @@ pub fn shell(args: &str, actor_uid: u32) -> Vec<String> {
             {
                 let u = match st.users.get_by_name_mut(a1) {
                     Some(u) => u,
-                    None => return alloc::vec![format!("eurousers: gebruiker '{a1}' niet gevonden")],
+                    None => return alloc::vec![format!("eurousers: user '{a1}' not found")],
                 };
                 if u.password.is_reused(a2.as_bytes(), depth) {
-                    return alloc::vec![format!("eurousers: wachtwoord hergebruikt (laatste {depth} verboden)")];
+                    return alloc::vec![format!("eurousers: password reused (last {depth} forbidden)")];
                 }
                 u.password.set_new(new_hash, depth, now());
-                // Admin-reset → forceer wijziging bij volgende login.
+                // Admin reset → force a change at next login.
                 u.password.must_change = true;
                 target_uid = u.uid;
             }
             st.audit.append(&AuditEvent::PasswordChanged { actor, target: target_uid, admin_reset: true }, now());
-            alloc::vec![format!("[euro/users] wachtwoord van '{a1}' gewijzigd (must-change bij volgende login)")]
+            alloc::vec![format!("[euro/users] password of '{a1}' changed (must-change at next login)")]
         }
 
         "chpasswd" => {
-            // Self-service: een gebruiker wijzigt zijn EIGEN wachtwoord en bewijst
-            // eigendom met het oude. Dit WIST de must-change-vlag (via `set_new`) —
-            // het pad waarmee een gebruiker na een admin-reset weer kan inloggen.
-            // Geen CAP_USER_ADMIN nodig (je verandert enkel je eigen geheim).
+            // Self-service: a user changes their OWN password and proves
+            // ownership with the old one. This CLEARS the must-change flag (via `set_new`) —
+            // the path by which a user can log in again after an admin reset.
+            // No CAP_USER_ADMIN required (you only change your own secret).
             if a1.is_empty() || a2.is_empty() || a3.is_empty() {
-                return alloc::vec!["gebruik: eurousers chpasswd <naam> <oud-pw> <nieuw-pw>".to_string()];
+                return alloc::vec!["usage: eurousers chpasswd <name> <old-pw> <new-pw>".to_string()];
             }
             if let Err(e) = validate_password(a3, &st.policy) {
                 return alloc::vec![format!("eurousers: {}", e.message())];
@@ -717,19 +717,19 @@ pub fn shell(args: &str, actor_uid: u32) -> Vec<String> {
             {
                 let u = match st.users.get_by_name_mut(a1) {
                     Some(u) => u,
-                    None => return alloc::vec![format!("eurousers: gebruiker '{a1}' niet gevonden")],
+                    None => return alloc::vec![format!("eurousers: user '{a1}' not found")],
                 };
                 if !u.password.verify(a2.as_bytes()) {
-                    return alloc::vec!["eurousers: oud wachtwoord onjuist".to_string()];
+                    return alloc::vec!["eurousers: old password incorrect".to_string()];
                 }
                 if u.password.is_reused(a3.as_bytes(), depth) {
-                    return alloc::vec![format!("eurousers: wachtwoord hergebruikt (laatste {depth} verboden)")];
+                    return alloc::vec![format!("eurousers: password reused (last {depth} forbidden)")];
                 }
-                u.password.set_new(new_hash, depth, now()); // wist must_change
+                u.password.set_new(new_hash, depth, now()); // clears must_change
                 target_uid = u.uid;
             }
             st.audit.append(&AuditEvent::PasswordChanged { actor, target: target_uid, admin_reset: false }, now());
-            alloc::vec![format!("[euro/users] wachtwoord van '{a1}' gewijzigd (self-service; must-change gewist)")]
+            alloc::vec![format!("[euro/users] password of '{a1}' changed (self-service; must-change cleared)")]
         }
 
         "lock" => {
@@ -738,11 +738,11 @@ pub fn shell(args: &str, actor_uid: u32) -> Vec<String> {
             }
             let uid = match st.users.get_by_name(a1).map(|u| u.uid) {
                 Some(u) => u,
-                None => return alloc::vec![format!("eurousers: gebruiker '{a1}' niet gevonden")],
+                None => return alloc::vec![format!("eurousers: user '{a1}' not found")],
             };
             st.users.lock(uid, LockReason::AdminLock, actor, now()).ok();
             st.audit.append(&AuditEvent::UserLocked { uid, username: a1.to_string(), reason: LockReason::AdminLock, locked_by: actor }, now());
-            alloc::vec![format!("[euro/users] account '{a1}' vergrendeld")]
+            alloc::vec![format!("[euro/users] account '{a1}' locked")]
         }
 
         "unlock" => {
@@ -751,11 +751,11 @@ pub fn shell(args: &str, actor_uid: u32) -> Vec<String> {
             }
             let uid = match st.users.get_by_name(a1).map(|u| u.uid) {
                 Some(u) => u,
-                None => return alloc::vec![format!("eurousers: gebruiker '{a1}' niet gevonden")],
+                None => return alloc::vec![format!("eurousers: user '{a1}' not found")],
             };
             st.users.unlock(uid).ok();
             st.audit.append(&AuditEvent::UserUnlocked { uid, username: a1.to_string(), unlocked_by: actor }, now());
-            alloc::vec![format!("[euro/users] account '{a1}' ontgrendeld")]
+            alloc::vec![format!("[euro/users] account '{a1}' unlocked")]
         }
 
         "del" => {
@@ -764,15 +764,15 @@ pub fn shell(args: &str, actor_uid: u32) -> Vec<String> {
             }
             let uid = match st.users.get_by_name(a1).map(|u| u.uid) {
                 Some(u) => u,
-                None => return alloc::vec![format!("eurousers: gebruiker '{a1}' niet gevonden")],
+                None => return alloc::vec![format!("eurousers: user '{a1}' not found")],
             };
             st.users.soft_delete(uid, actor, now()).ok();
             st.audit.append(&AuditEvent::UserDeleted { uid, username: a1.to_string(), deleted_by: actor }, now());
-            alloc::vec![format!("[euro/users] '{a1}' soft-deleted (record + home blijven, audit-vereiste)")]
+            alloc::vec![format!("[euro/users] '{a1}' soft-deleted (record + home kept, audit requirement)")]
         }
 
         "groups" => {
-            let mut out = alloc::vec![format!("{:<8} {:>4} {:<24} {}", "GROEP", "GID", "CAPS", "LEDEN")];
+            let mut out = alloc::vec![format!("{:<8} {:>4} {:<24} {}", "GROUP", "GID", "CAPS", "MEMBERS")];
             for g in st.groups.all() {
                 let members: Vec<String> = st
                     .users
@@ -793,14 +793,14 @@ pub fn shell(args: &str, actor_uid: u32) -> Vec<String> {
                     Ok(()) => {
                         let root = euroid::hex(&st.audit.root_hash());
                         alloc::vec![
-                            format!("[euro/audit] keten intact — {entries} events, geen knoeien gedetecteerd."),
+                            format!("[euro/audit] chain intact — {entries} events, no tampering detected."),
                             format!("[euro/audit] root hash: sha256:{}", &root[..32.min(root.len())]),
                         ]
                     }
-                    Err(seq) => alloc::vec![format!("[euro/audit] ✗ KETEN GEBROKEN bij record seq={seq} — knoeien gedetecteerd!")],
+                    Err(seq) => alloc::vec![format!("[euro/audit] ✗ CHAIN BROKEN at record seq={seq} — tampering detected!")],
                 };
             }
-            // Filter optioneel op --user <naam>.
+            // Optionally filter on --user <name>.
             let filter_uid = if a1 == "--user" { st.users.get_by_name(a2).map(|u| u.uid.0) } else { None };
             let mut out = alloc::vec![format!("audit-log ({} events, hash-chain, append-only):", st.audit.len())];
             for e in st.audit.entries() {
@@ -809,15 +809,15 @@ pub fn shell(args: &str, actor_uid: u32) -> Vec<String> {
                         continue;
                     }
                 }
-                // Toon de body (zonder de hash-velden) — compact.
+                // Show the body (without the hash fields) — compact.
                 out.push(format!("  #{:<4} {}", e.seq, e.body));
             }
             if out.len() == 1 {
-                out.push("  (geen overeenkomende events)".to_string());
+                out.push("  (no matching events)".to_string());
             }
             out
         }
 
-        other => alloc::vec![format!("eurousers: onbekend subcommando '{other}' (probeer 'eurousers help')")],
+        other => alloc::vec![format!("eurousers: unknown subcommand '{other}' (try 'eurousers help')")],
     }
 }

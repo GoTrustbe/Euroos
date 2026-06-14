@@ -1,5 +1,5 @@
-//! Boot-zelftest voor **EuroContacts** (AC-3): vCard 3.0 + adresboek.
-//! Kern: [`eurocontacts`].
+//! Boot self-test for **EuroContacts** (AC-3): vCard 3.0 + address book.
+//! Core: [`eurocontacts`].
 
 use crate::serial_println;
 use eurocontacts::AddressBook;
@@ -13,13 +13,13 @@ pub fn selftest() {
     let jan = ab.contacts.iter().find(|c| c.full_name == "Jan Vandenberg");
     let fields_ok = jan.map(|c| c.org == "EuroOS" && c.primary_email() == Some("jan@euro-os.eu")).unwrap_or(false);
     let search_ok = ab.search("euro").len() == 1 && ab.in_group("Kernteam").len() == 1;
-    // Round-trip: exporteren en opnieuw parsen behoudt het aantal.
+    // Round-trip: exporting and re-parsing preserves the count.
     let roundtrip = AddressBook::from_vcards(&ab.export()).contacts.len() == 2;
 
     let ok = parsed && sorted && fields_ok && search_ok && roundtrip;
     serial_println!(
-        "[ct] EuroContacts: vCards={}, sorteer(achternaam)={}, velden(ORG/EMAIL)={}, zoek+groep={}, round-trip={} {}",
+        "[ct] EuroContacts: vCards={}, sort(surname)={}, fields(ORG/EMAIL)={}, search+group={}, round-trip={} {}",
         ab.contacts.len(), sorted, fields_ok, search_ok, roundtrip,
-        if ok { "✓" } else { "✗ FOUT" }
+        if ok { "✓" } else { "✗ FAIL" }
     );
 }

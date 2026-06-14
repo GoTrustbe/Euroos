@@ -1,13 +1,13 @@
-//! TPM 2.0 via de **TIS** (TPM Interface Specification) MMIO-interface — plan O1,
+//! TPM 2.0 via the **TIS** (TPM Interface Specification) MMIO interface — plan O1,
 //! hardware root of trust.
 //!
-//! De TPM-chip hangt op de vaste MMIO-basis `0xFED4_0000` (locality 0, identity-
-//! mapped). Deze module is de transportlaag onder de host-geteste [`eurotpm`]-
-//! commando-codering: ze vraagt de locality op, schrijft een TPM-commando in de
-//! FIFO, geeft de chip de `go`, en leest de respons terug (met burst-count-flow-
-//! control). Daarbovenop draait een boot-zelftest: `Startup`, `GetRandom` (bewijst
-//! dat de TPM leeft), en **PCR-extend** — de meet-operatie die measured boot en
-//! (met K3) een aan de boot-toestand gesealde schijfsleutel mogelijk maakt.
+//! The TPM chip sits at the fixed MMIO base `0xFED4_0000` (locality 0, identity-
+//! mapped). This module is the transport layer beneath the host-tested [`eurotpm`]
+//! command encoding: it requests the locality, writes a TPM command into the
+//! FIFO, gives the chip the `go`, and reads the response back (with burst-count-flow-
+//! control). On top of that runs a boot self-test: `Startup`, `GetRandom` (proves
+//! the TPM is alive), and **PCR-extend** — the measurement operation that enables measured boot and
+//! (with K3) a disk key sealed to the boot state.
 
 use alloc::vec::Vec;
 
@@ -50,7 +50,7 @@ fn spin() {
     }
 }
 
-/// Vraag locality 0 op (request → wacht op activeLocality).
+/// Request locality 0 (request → wait for activeLocality).
 unsafe fn request_locality() -> bool {
     w8(REG_ACCESS, ACCESS_REQUEST_USE);
     for _ in 0..100_000 {
@@ -62,7 +62,7 @@ unsafe fn request_locality() -> bool {
     false
 }
 
-/// Geef locality 0 weer vrij.
+/// Release locality 0 again.
 unsafe fn release_locality() {
     w8(REG_ACCESS, ACCESS_ACTIVE_LOCALITY);
 }
@@ -78,8 +78,8 @@ unsafe fn wait_sts(mask: u32) -> bool {
     false
 }
 
-/// Voer één volledige TPM-transactie uit: stuur `cmd`, lees de respons. None bij
-/// een transport-fout/timeout.
+/// Perform one complete TPM transaction: send `cmd`, read the response. None on
+/// a transport error/timeout.
 pub fn transact(cmd: &[u8]) -> Option<Vec<u8>> {
     unsafe {
         if !PRESENT {
@@ -88,14 +88,14 @@ pub fn transact(cmd: &[u8]) -> Option<Vec<u8>> {
         if !request_locality() {
             return None;
         }
-        // Zet de TPM in command-ready.
+        // Put the TPM into command-ready.
         w8(REG_STS, STS_COMMAND_READY as u8);
         if !wait_sts(STS_COMMAND_READY) {
             release_locality();
             return None;
         }
-        // Schrijf het commando via de FIFO, met burst-count-flow-control. Het laatste
-        // byte pas schrijven als Expect nog gezet is (de TPM weet zo wanneer 't af is).
+        // Write the command via the FIFO, with burst-count-flow-control. Only write the last
+        // byte while Expect is still set (this lets the TPM know when it is done).
         let mut sent = 0;
         while sent < cmd.len() {
             let mut burst = burst_count();
@@ -111,13 +111,13 @@ pub fn transact(cmd: &[u8]) -> Option<Vec<u8>> {
             }
             sent += chunk;
         }
-        // Geef de chip de go.
+        // Give the chip the go.
         w8(REG_STS, STS_TPM_GO as u8);
         if !wait_sts(STS_VALID | STS_DATA_AVAIL) {
             release_locality();
             return None;
         }
-        // Lees de respons: eerst de 10-byte header (voor de size), dan de rest.
+        // Read the response: first the 10-byte header (for the size), then the rest.
         let mut resp = Vec::new();
         let mut guard = 0;
         loop {
@@ -130,7 +130,7 @@ pub fn transact(cmd: &[u8]) -> Option<Vec<u8>> {
                     break;
                 }
                 resp.push(r8(REG_DATA_FIFO));
-                // Stop zodra we de volledige respons (size uit de header) hebben.
+                // Stop as soon as we have the full response (size from the header).
                 if resp.len() >= 6 {
                     let size = u32::from_be_bytes([resp[2], resp[3], resp[4], resp[5]]) as usize;
                     if resp.len() >= size {
@@ -155,24 +155,24 @@ pub fn transact(cmd: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-/// Detecteer de TPM + doe Startup. Geeft true als er een werkende TPM is.
+/// Detect the TPM + do Startup. Returns true if there is a working TPM.
 pub fn init() -> bool {
     unsafe {
-        // DID_VID lezen: 0xFFFFFFFF / 0 = geen chip.
+        // Read DID_VID: 0xFFFFFFFF / 0 = no chip.
         let didvid = ((TIS_BASE + REG_DID_VID) as *const u32).read_volatile();
         if didvid == 0xFFFF_FFFF || didvid == 0 {
-            crate::serial_println!("[tpm] geen TPM-TIS @ {:#x} (DID_VID={:#010x})", TIS_BASE, didvid);
+            crate::serial_println!("[tpm] no TPM-TIS @ {:#x} (DID_VID={:#010x})", TIS_BASE, didvid);
             return false;
         }
         PRESENT = true;
-        // TPM2_Startup(CLEAR). De firmware (OVMF) startte 'm meestal al → dan geeft
-        // dit TPM_RC_INITIALIZE (0x100), wat prima is.
+        // TPM2_Startup(CLEAR). The firmware (OVMF) usually started it already → in that case
+        // this returns TPM_RC_INITIALIZE (0x100), which is fine.
         if let Some(r) = transact(&eurotpm::startup()) {
             if let Some(h) = eurotpm::parse_header(&r) {
                 crate::serial_println!(
                     "[tpm] TPM 2.0 TIS @ {:#x} (DID_VID={:#010x}), Startup rc={:#x}{}",
                     TIS_BASE, didvid, h.rc,
-                    if h.rc == 0 { " (vers gestart)" } else { " (al door firmware gestart)" }
+                    if h.rc == 0 { " (freshly started)" } else { " (already started by firmware)" }
                 );
             }
         }
@@ -184,14 +184,14 @@ pub fn present() -> bool {
     unsafe { PRESENT }
 }
 
-/// Vraag `n` echte willekeurige bytes aan de TPM (voor sleutelgeneratie, K3-FDE).
+/// Request `n` true random bytes from the TPM (for key generation, K3-FDE).
 pub fn get_random(n: u16) -> Option<Vec<u8>> {
     let r = transact(&eurotpm::get_random(n))?;
     eurotpm::parse_random(&r).filter(|b| b.len() >= n as usize)
 }
 
-/// Lees een PCR-waarde (SHA-256, 32 bytes) — de measured-boot-toestand die
-/// remote attestation (O2) in een quote opneemt.
+/// Read a PCR value (SHA-256, 32 bytes) — the measured-boot state that
+/// remote attestation (O2) includes in a quote.
 pub fn read_pcr(index: u32) -> Option<[u8; 32]> {
     let r = transact(&eurotpm::pcr_read(index))?;
     let v = eurotpm::parse_pcr_read(&r)?;
@@ -204,34 +204,34 @@ pub fn read_pcr(index: u32) -> Option<[u8; 32]> {
     }
 }
 
-/// O1-boot-zelftest: bewijs een levende TPM (GetRandom) + measured boot (PCR-extend
-/// verandert de PCR-waarde, precies zoals de boot-keten meet).
+/// O1 boot self-test: prove a live TPM (GetRandom) + measured boot (PCR-extend
+/// changes the PCR value, exactly as the boot chain measures).
 pub fn selftest() {
     if !present() {
         return;
     }
-    // (1) GetRandom — een levende TPM levert echte willekeur.
+    // (1) GetRandom — a live TPM delivers true randomness.
     let rnd = transact(&eurotpm::get_random(16)).and_then(|r| eurotpm::parse_random(&r));
     let rnd_ok = rnd.as_ref().map(|b| b.len() >= 8 && b.iter().any(|&x| x != 0)).unwrap_or(false);
 
-    // (2) PCR 16 (debug-PCR) lezen vóór de extend.
+    // (2) Read PCR 16 (debug PCR) before the extend.
     let before = transact(&eurotpm::pcr_read(16)).and_then(|r| eurotpm::parse_pcr_read(&r));
 
-    // (3) Extend PCR 16 met een meet-digest → de PCR verandert (SHA256(oud || digest)).
+    // (3) Extend PCR 16 with a measurement digest → the PCR changes (SHA256(old || digest)).
     let digest = [0x42u8; eurotpm::SHA256_LEN];
     let extended = transact(&eurotpm::pcr_extend(16, &digest))
         .and_then(|r| eurotpm::parse_header(&r))
         .map(|h| h.ok())
         .unwrap_or(false);
 
-    // (4) PCR 16 opnieuw lezen → moet VERSCHILLEN van vóór de extend.
+    // (4) Read PCR 16 again → must DIFFER from before the extend.
     let after = transact(&eurotpm::pcr_read(16)).and_then(|r| eurotpm::parse_pcr_read(&r));
     let changed = matches!((&before, &after), (Some(b), Some(a)) if b != a);
 
     let rb: Vec<u8> = rnd.unwrap_or_default().into_iter().take(8).collect();
     crate::serial_println!(
-        "[o1] TPM measured boot: GetRandom-OK={} ({:02x?}), PCR16-extend-OK={}, PCR16-veranderd-na-extend={} → {}",
+        "[o1] TPM measured boot: GetRandom-OK={} ({:02x?}), PCR16-extend-OK={}, PCR16-changed-after-extend={} → {}",
         rnd_ok, rb, extended, changed,
-        if rnd_ok && extended && changed { "OK (hardware root of trust werkt) ✓" } else { "MISLUKT/onvolledig" }
+        if rnd_ok && extended && changed { "OK (hardware root of trust works) ✓" } else { "FAILED/incomplete" }
     );
 }

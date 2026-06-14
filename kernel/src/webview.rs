@@ -1,8 +1,8 @@
-//! EuroWeb-browser: een BRUIKBARE browser met tabbladen, een bewerkbare adresbalk
-//! en redirect-volgende navigatie over de echte TCP/TLS-stack ([`crate::net`]).
-//! Pagina's worden ECHT opgehaald (HTTP/HTTPS) en gerenderd door de eigen engine
-//! ([`euroweb`]). De toestand leeft in een globale [`Browser`]; de desktop-loop
-//! muteert 'm (toetsen/muis) en `render` toont 'm.
+//! EuroWeb browser: a USABLE browser with tabs, an editable address bar
+//! and redirect-following navigation over the real TCP/TLS stack ([`crate::net`]).
+//! Pages are REALLY fetched (HTTP/HTTPS) and rendered by the own engine
+//! ([`euroweb`]). The state lives in a global [`Browser`]; the desktop loop
+//! mutates it (keys/mouse) and `render` shows it.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -17,23 +17,23 @@ use euroweb::DisplayItem;
 const TITLEBAR_H: usize = 44;
 const TABBAR_H: usize = 32;
 const ADDR_H: usize = 38;
-const MARGIN: usize = 22; // paginarand (gelijk in render + hit_test)
+const MARGIN: usize = 22; // page margin (equal in render + hit_test)
 
-/// Een gedecodeerde (of mislukte) afbeelding in de paginabeeldcache.
+/// A decoded (or failed) image in the page image cache.
 enum CachedImg {
     Ok(Image),
     Bad,
 }
 
-/// Beeldcache per `src` (gevuld bij navigatie — NOOIT per frame in `render`,
-/// zodat tekenen nooit blokkeert op een netwerk-fetch).
+/// Image cache per `src` (filled on navigation — NEVER per frame in `render`,
+/// so that drawing never blocks on a network fetch).
 static IMG_CACHE: Mutex<Vec<(String, CachedImg)>> = Mutex::new(Vec::new());
-/// Live formulier-veldwaarden per DOM-knoop (overschrijven het `value`-attr).
+/// Live form field values per DOM node (override the `value` attr).
 static FORM_STATE: Mutex<Vec<(usize, String)>> = Mutex::new(Vec::new());
-/// Welk paginaveld (DOM-knoop) heeft focus voor toetsinvoer.
+/// Which page field (DOM node) has focus for keyboard input.
 static FOCUSED_FIELD: Mutex<Option<usize>> = Mutex::new(None);
 
-/// Eén tabblad.
+/// A single tab.
 pub struct Tab {
     pub url: String,
     pub html: String,
@@ -41,7 +41,7 @@ pub struct Tab {
     pub status: String,
 }
 
-/// De browser-toestand (tabbladen + adresbalk-bewerking).
+/// The browser state (tabs + address bar editing).
 pub struct Browser {
     pub tabs: Vec<Tab>,
     pub active: usize,
@@ -51,14 +51,14 @@ pub struct Browser {
 
 static BROWSER: Mutex<Option<Browser>> = Mutex::new(None);
 
-/// Initialiseer de browser met één tabblad op `start_url` (nog niet geladen).
+/// Initialize the browser with one tab on `start_url` (not loaded yet).
 pub fn init(start_url: &str) {
     *BROWSER.lock() = Some(Browser {
         tabs: alloc::vec![Tab {
             url: start_url.to_string(),
             html: String::new(),
-            title: String::from("Nieuw tabblad"),
-            status: String::from("nog niet geladen"),
+            title: String::from("New tab"),
+            status: String::from("not loaded yet"),
         }],
         active: 0,
         editing: false,
@@ -66,7 +66,7 @@ pub fn init(start_url: &str) {
     });
 }
 
-// ── URL-parsing & navigatie ──────────────────────────────────────────────────
+// ── URL parsing & navigation ──────────────────────────────────────────────────
 
 fn parse_url(url: &str) -> (bool, String, u16, String) {
     let url = url.trim();
@@ -114,8 +114,8 @@ fn extract_title(html: &str) -> Option<String> {
     }
 }
 
-/// Navigeer het actieve tabblad naar `input` (volgt redirects, HTTP→HTTPS).
-/// Doet de (blokkerende) netwerk-fetch ZONDER de browser-lock vast te houden.
+/// Navigate the active tab to `input` (follows redirects, HTTP→HTTPS).
+/// Performs the (blocking) network fetch WITHOUT holding the browser lock.
 pub fn navigate(input: &str) {
     let mut cur = input.trim().to_string();
     if cur.is_empty() {
@@ -123,7 +123,7 @@ pub fn navigate(input: &str) {
     }
     let mut final_html = String::new();
     let mut final_url = cur.clone();
-    let mut final_status = String::from("fout");
+    let mut final_status = String::from("error");
     for _ in 0..6 {
         let (tls, host, port, path) = parse_url(&cur);
         crate::serial_println!("[web] GET {}://{host}:{port}{path}", if tls { "https" } else { "http" });
@@ -142,24 +142,24 @@ pub fn navigate(input: &str) {
             }
             None => {
                 final_html = alloc::format!(
-                    "<body><h1>Kon niet laden</h1><p>{host}: geen verbinding of TLS-handshake mislukt.</p></body>"
+                    "<body><h1>Could not load</h1><p>{host}: no connection or TLS handshake failed.</p></body>"
                 );
                 final_url = cur.clone();
-                final_status = String::from("mislukt");
+                final_status = String::from("failed");
                 break;
             }
         }
     }
-    // Redirect-lus uitgeput (6 hops, allemaal omleidingen): toon dit expliciet
-    // i.p.v. een lege pagina — graceful failure, geen verwarrende blanco.
+    // Redirect loop exhausted (6 hops, all redirects): show this explicitly
+    // instead of a blank page — graceful failure, no confusing blank.
     if final_html.is_empty() {
         final_html = alloc::format!(
-            "<body><h1>Te veel omleidingen</h1><p>{cur}: meer dan 6 redirects gevolgd, gestopt.</p></body>"
+            "<body><h1>Too many redirects</h1><p>{cur}: more than 6 redirects followed, stopped.</p></body>"
         );
-        final_status = String::from("omleidingslus");
+        final_status = String::from("redirect loop");
     }
-    // Nieuwe pagina: oude formuliertoestand + focus wissen en de afbeeldingen
-    // vooraf ophalen/decoderen (één keer, hier — niet per frame in `render`).
+    // New page: clear old form state + focus and prefetch/decode the images
+    // (once, here — not per frame in `render`).
     FORM_STATE.lock().clear();
     *FOCUSED_FIELD.lock() = None;
     preload_images(&final_html, &final_url);
@@ -175,10 +175,10 @@ pub fn navigate(input: &str) {
     }
 }
 
-// ── Afbeeldingen: ophalen (data:/http) + decoderen (QOI/PPM), gecachet ───────
+// ── Images: fetch (data:/http) + decode (QOI/PPM), cached ───────
 
-/// Parse, vind alle `<img src>` en vul de beeldcache. `data:`-URI's worden
-/// inline gedecodeerd; http(s) wordt ECHT opgehaald via de TCP/TLS-stack.
+/// Parse, find all `<img src>` and fill the image cache. `data:` URIs are
+/// decoded inline; http(s) is REALLY fetched via the TCP/TLS stack.
 fn preload_images(html: &str, base_url: &str) {
     let mut cache = IMG_CACHE.lock();
     cache.clear();
@@ -199,7 +199,7 @@ fn preload_images(html: &str, base_url: &str) {
     }
 }
 
-/// Haal de bytes van één afbeelding op en decodeer ze (QOI eerst, dan PPM).
+/// Fetch the bytes of one image and decode them (QOI first, then PPM).
 fn resolve_image(src: &str, base_url: &str) -> Option<Image> {
     let bytes: Vec<u8> = if let Some(rest) = src.strip_prefix("data:") {
         // data:[<mime>][;base64],<data>
@@ -212,7 +212,7 @@ fn resolve_image(src: &str, base_url: &str) -> Option<Image> {
             data.as_bytes().to_vec()
         }
     } else {
-        // Relatief/absoluut http(s): los op tegen de pagina-URL en fetch.
+        // Relative/absolute http(s): resolve against the page URL and fetch.
         let abs = if src.starts_with("http://") || src.starts_with("https://") {
             String::from(src)
         } else {
@@ -227,7 +227,7 @@ fn resolve_image(src: &str, base_url: &str) -> Option<Image> {
     euromedia::decode(&bytes).ok().or_else(|| euromedia::decode_ppm(&bytes).ok())
 }
 
-/// Laad het actieve tabblad opnieuw (of voor het eerst) van zijn huidige URL.
+/// Reload the active tab (or for the first time) from its current URL.
 pub fn load_active() {
     let url = BROWSER.lock().as_ref().and_then(|b| b.tabs.get(b.active).map(|t| t.url.clone()));
     if let Some(u) = url {
@@ -235,17 +235,17 @@ pub fn load_active() {
     }
 }
 
-// ── Bewerk-acties (vanuit de desktop-loop) ──────────────────────────────────
+// ── Edit actions (from the desktop loop) ──────────────────────────────────
 
 pub fn begin_edit() {
-    *FOCUSED_FIELD.lock() = None; // adresbalk neemt over van een paginaveld
+    *FOCUSED_FIELD.lock() = None; // address bar takes over from a page field
     if let Some(br) = BROWSER.lock().as_mut() {
         br.editing = true;
-        br.edit_buf = String::new(); // leeg starten zodat typen meteen een nieuw adres bouwt
+        br.edit_buf = String::new(); // start empty so typing immediately builds a new address
     }
 }
 
-/// Verwerk een toets in de adresbalk. Retourneert Some(url) als Enter → navigeren.
+/// Handle a key in the address bar. Returns Some(url) on Enter → navigate.
 pub fn edit_key(ch: char) -> Option<String> {
     let mut b = BROWSER.lock();
     let br = b.as_mut()?;
@@ -272,7 +272,7 @@ pub fn editing() -> bool {
     BROWSER.lock().as_ref().map(|b| b.editing).unwrap_or(false)
 }
 
-/// De (na scriptuitvoering aangevulde) HTML van het actieve tabblad — voor zelftests.
+/// The (after script execution amended) HTML of the active tab — for self-tests.
 pub fn active_html() -> String {
     BROWSER.lock().as_ref().map(|b| b.tabs[b.active].html.clone()).unwrap_or_default()
 }
@@ -282,8 +282,8 @@ pub fn new_tab() {
         br.tabs.push(Tab {
             url: String::from("flowd.be"),
             html: String::new(),
-            title: String::from("Nieuw tabblad"),
-            status: String::from("nog niet geladen"),
+            title: String::from("New tab"),
+            status: String::from("not loaded yet"),
         });
         br.active = br.tabs.len() - 1;
         br.editing = true;
@@ -300,32 +300,32 @@ pub fn switch_tab(i: usize) {
     }
 }
 
-// ── Klik-trefzones ──────────────────────────────────────────────────────────
+// ── Click hit zones ──────────────────────────────────────────────────────────
 
-/// Waar werd geklikt in het browservenster?
+/// Where was the click in the browser window?
 pub enum Hit {
     Tab(usize),
     NewTab,
     UrlBar,
-    /// Een tekst-invoerveld in de pagina (DOM-knoop) → focus voor typen.
+    /// A text input field in the page (DOM node) → focus for typing.
     Field(usize),
-    /// Een knop/verzendknop in de pagina (DOM-knoop) → formulier verzenden.
+    /// A button/submit button in the page (DOM node) → submit form.
     Submit(usize),
     None,
 }
 
-/// Heeft een paginaveld focus (toetsen gaan dan naar het veld i.p.v. de adresbalk)?
+/// Does a page field have focus (keys then go to the field instead of the address bar)?
 pub fn field_focused() -> bool {
     FOCUSED_FIELD.lock().is_some()
 }
 
-/// Geef een paginaveld focus (en stop adresbalk-bewerking).
+/// Give a page field focus (and stop address bar editing).
 pub fn focus_field(node: usize) {
     *FOCUSED_FIELD.lock() = Some(node);
     if let Some(br) = BROWSER.lock().as_mut() {
         br.editing = false;
     }
-    // Zorg dat er een live-waarde-slot bestaat (geseed uit het value-attr).
+    // Make sure a live-value slot exists (seeded from the value attr).
     let mut fs = FORM_STATE.lock();
     if !fs.iter().any(|(n, _)| *n == node) {
         let seed = active_field_value(node);
@@ -333,7 +333,7 @@ pub fn focus_field(node: usize) {
     }
 }
 
-/// Verwerk een toets in het gefocuste paginaveld. `true` = er veranderde iets.
+/// Handle a key in the focused page field. `true` = something changed.
 pub fn field_key(ch: char) -> bool {
     let node = match *FOCUSED_FIELD.lock() {
         Some(n) => n,
@@ -365,7 +365,7 @@ pub fn field_key(ch: char) -> bool {
     true
 }
 
-/// De huidige (begin)waarde van een veld uit het `value`-attr van de actieve pagina.
+/// The current (initial) value of a field from the `value` attr of the active page.
 fn active_field_value(node: usize) -> String {
     let b = BROWSER.lock();
     if let Some(br) = b.as_ref() {
@@ -377,8 +377,8 @@ fn active_field_value(node: usize) -> String {
     String::new()
 }
 
-/// Verzend het formulier dat knoop `btn_node` bevat: bouw de doel-URL en doe een
-/// ECHTE HTTP-GET (via [`navigate`]).
+/// Submit the form that contains node `btn_node`: build the target URL and do a
+/// REAL HTTP GET (via [`navigate`]).
 pub fn submit_form(btn_node: usize) {
     let (method, action_abs, pairs) = match collect_form(btn_node) {
         Some(f) => f,
@@ -390,26 +390,26 @@ pub fn submit_form(btn_node: usize) {
         .collect::<Vec<_>>()
         .join("&");
     if method == "post" {
-        // ECHTE POST: urlencoded body via dezelfde EuroTLS/TCP-stack als GET.
+        // REAL POST: urlencoded body via the same EuroTLS/TCP stack as GET.
         crate::serial_println!("[web] FORM POST \u{2192} {action_abs} ({} B body: {body})", body.len());
         let (tls, host, port, path) = parse_url(&action_abs);
         match crate::net::post_full(&host, port, &path, tls, "application/x-www-form-urlencoded", body.as_bytes()) {
             Some((code, _loc, resp)) => {
                 let html = String::from_utf8_lossy(&resp).into_owned();
                 load_inline(&action_abs, &html);
-                crate::serial_println!("[web] POST → HTTP {code}, {} B antwoord", resp.len());
+                crate::serial_println!("[web] POST → HTTP {code}, {} B response", resp.len());
             }
             None => {
-                // Geen externe server in deze omgeving: toon eerlijk het ECHT
-                // opgebouwde POST-verzoek (methode + body) i.p.v. iets te faken.
+                // No external server in this environment: honestly show the
+                // REALLY built POST request (method + body) instead of faking anything.
                 let echo = alloc::format!(
-                    "<html><head><title>POST verzonden</title></head><body>\
-                     <h1>POST-verzoek opgebouwd</h1>\
-                     <p>Doel: {action_abs}</p>\
+                    "<html><head><title>POST sent</title></head><body>\
+                     <h1>POST request built</h1>\
+                     <p>Target: {action_abs}</p>\
                      <p>Content-Type: application/x-www-form-urlencoded</p>\
                      <p>Body ({} bytes): {body}</p>\
-                     <p>(Geen externe server bereikbaar in deze omgeving — dit is het \
-                     verzoek dat de EuroWeb-engine verzond.)</p></body></html>",
+                     <p>(No external server reachable in this environment — this is the \
+                     request that the EuroWeb engine sent.)</p></body></html>",
                     body.len()
                 );
                 load_inline(&action_abs, &echo);
@@ -421,8 +421,8 @@ pub fn submit_form(btn_node: usize) {
     }
 }
 
-/// Verzamel een formulier: (methode "get"/"post", absolute action-URL, naam/waarde-
-/// paren van de velden). Gedeeld door GET (`submit_target`) en POST (`submit_form`).
+/// Collect a form: (method "get"/"post", absolute action URL, name/value
+/// pairs of the fields). Shared by GET (`submit_target`) and POST (`submit_form`).
 fn collect_form(btn_node: usize) -> Option<(String, String, Vec<(String, String)>)> {
     let (method, action, base_url, pairs) = {
         let b = BROWSER.lock();
@@ -474,8 +474,8 @@ fn collect_form(btn_node: usize) -> Option<(String, String, Vec<(String, String)
     Some((method, action_abs, pairs))
 }
 
-/// Bouw — ZONDER te navigeren — de absolute GET-URL voor het formulier dat
-/// `btn_node` bevat (action + query uit de velden). Voor de zelftest + GET-submit.
+/// Build — WITHOUT navigating — the absolute GET URL for the form that
+/// `btn_node` contains (action + query from the fields). For the self-test + GET submit.
 pub fn submit_target(btn_node: usize) -> Option<String> {
     let (_method, action_abs, pairs) = collect_form(btn_node)?;
     let query = pairs
@@ -493,8 +493,8 @@ pub fn submit_target(btn_node: usize) -> Option<String> {
     Some(target)
 }
 
-/// Bouw het POST-verzoek (absolute action-URL + urlencoded body) voor het formulier
-/// dat `btn_node` bevat — voor de `[post]`-zelftest (geen netwerk vereist).
+/// Build the POST request (absolute action URL + urlencoded body) for the form
+/// that `btn_node` contains — for the `[post]` self-test (no network required).
 pub fn post_request(btn_node: usize) -> Option<(String, String, String)> {
     let (method, action_abs, pairs) = collect_form(btn_node)?;
     let body = pairs
@@ -505,12 +505,12 @@ pub fn post_request(btn_node: usize) -> Option<(String, String, String)> {
     Some((method, action_abs, body))
 }
 
-/// Zet de actieve tab op kant-en-klare HTML (zónder netwerk) en preload de
-/// afbeeldingen. Voor de AG-2 demo/zelftest-pagina.
+/// Set the active tab to ready-made HTML (without network) and preload the
+/// images. For the AG-2 demo/self-test page.
 pub fn load_inline(url: &str, html: &str) {
     FORM_STATE.lock().clear();
     *FOCUSED_FIELD.lock() = None;
-    // Voer paginascripts ÉÉN keer uit bij het laden (niet bij elke render).
+    // Run page scripts ONCE on load (not on every render).
     let html = run_page_scripts(html);
     preload_images(&html, url);
     if let Some(br) = BROWSER.lock().as_mut() {
@@ -523,11 +523,11 @@ pub fn load_inline(url: &str, html: &str) {
     }
 }
 
-/// Voer de `<script>`-inhoud van een pagina uit via de EuroJS-engine (tree-walking,
-/// geen JIT, stap-/diepte-begrensd). `document.write(...)`-uitvoer wordt als ECHTE
-/// pagina-inhoud toegevoegd; `console.log` gaat naar het serieel logboek + een klein
-/// JS-consolepaneel onderaan de pagina. Geeft de aangevulde HTML terug. Scripts
-/// draaien hier eenmalig (bij laden) — niet opnieuw bij elke frame-render.
+/// Run the `<script>` content of a page via the EuroJS engine (tree-walking,
+/// no JIT, step-/depth-bounded). `document.write(...)` output is added as REAL
+/// page content; `console.log` goes to the serial log + a small
+/// JS console panel at the bottom of the page. Returns the amended HTML. Scripts
+/// run here once (on load) — not again on every frame render.
 fn run_page_scripts(html: &str) -> String {
     let dom = euroweb::parse(html);
     let mut logs: Vec<String> = Vec::new();
@@ -544,15 +544,15 @@ fn run_page_scripts(html: &str) -> String {
             logs.extend(l);
             writes.extend(w);
             if let Err(e) = res {
-                logs.push(alloc::format!("[fout] {e}"));
+                logs.push(alloc::format!("[error] {e}"));
             }
         }
     }
     if ran == 0 {
         return String::from(html);
     }
-    crate::serial_println!("[js] EuroJS: {ran} script(s) uitgevoerd · {} console-regel(s) · {} document.write", logs.len(), writes.len());
-    // Bouw een injectieblok: document.write-uitvoer als pagina-inhoud + JS-console.
+    crate::serial_println!("[js] EuroJS: {ran} script(s) executed · {} console line(s) · {} document.write", logs.len(), writes.len());
+    // Build an injection block: document.write output as page content + JS console.
     let mut inject = String::new();
     if !writes.is_empty() {
         inject.push_str("<div>");
@@ -560,7 +560,7 @@ fn run_page_scripts(html: &str) -> String {
         inject.push_str("</div>");
     }
     if !logs.is_empty() {
-        inject.push_str("<p>JS-console:</p>");
+        inject.push_str("<p>JS console:</p>");
         for l in &logs {
             inject.push_str(&alloc::format!("<p>&gt; {l}</p>"));
         }
@@ -574,37 +574,37 @@ fn run_page_scripts(html: &str) -> String {
     }
 }
 
-/// De AG-2 demopagina: een ECHT gegenereerde PPM-afbeelding (als data:-URI,
-/// gedecodeerd door euromedia) + een zoekformulier (GET). Geen mock-pixels.
+/// The AG-2 demo page: a REALLY generated PPM image (as data: URI,
+/// decoded by euromedia) + a search form (GET). No mock pixels.
 pub fn ag2_demo_html() -> String {
     let (w, h) = (24u32, 16u32);
     let mut ppm = alloc::format!("P3 {w} {h} 255");
     for y in 0..h {
         for x in 0..w {
-            // EU-blauw veld met een raster gouden "sterren".
+            // EU blue field with a grid of golden "stars".
             let star = (x % 6 == 3) && (y % 5 == 2);
             let (r, g, b) = if star { (226u32, 163, 58) } else { (45, 107, 224) };
             ppm.push_str(&alloc::format!(" {r} {g} {b}"));
         }
     }
     alloc::format!(
-        "<html><head><title>EuroWeb \u{2014} afbeeldingen en formulieren</title></head>\
-         <body><h1>Afbeeldingen en formulieren</h1>\
-         <p>Een PPM-afbeelding, gedecodeerd door de eigen euromedia-engine:</p>\
+        "<html><head><title>EuroWeb \u{2014} images and forms</title></head>\
+         <body><h1>Images and forms</h1>\
+         <p>A PPM image, decoded by the own euromedia engine:</p>\
          <img src=\"data:image/x-portable-pixmap,{ppm}\" width=\"192\" height=\"128\">\
          <form action=\"/zoek\" method=\"get\">\
-         <p>Zoek het soevereine web:</p>\
-         <input type=\"text\" name=\"q\" value=\"soevereiniteit\">\
-         <input type=\"submit\" value=\"Zoeken\"></form></body></html>"
+         <p>Search the sovereign web:</p>\
+         <input type=\"text\" name=\"q\" value=\"sovereignty\">\
+         <input type=\"submit\" value=\"Search\"></form></body></html>"
     )
 }
 
-/// Eerste `<form>`-voorouder van `node` (of None).
+/// First `<form>` ancestor of `node` (or None).
 fn enclosing_form(dom: &Dom, node: usize) -> Option<usize> {
     (0..dom.len()).find(|&f| dom.tag(f) == Some("form") && is_descendant(dom, f, node))
 }
 
-/// Is `node` een (transitieve) afstammeling van `anc` (of `anc` zelf)?
+/// Is `node` a (transitive) descendant of `anc` (or `anc` itself)?
 fn is_descendant(dom: &Dom, anc: usize, node: usize) -> bool {
     if anc == node {
         return true;
@@ -612,7 +612,7 @@ fn is_descendant(dom: &Dom, anc: usize, node: usize) -> bool {
     dom.nodes[anc].children.iter().any(|&c| is_descendant(dom, c, node))
 }
 
-/// Minimale URL-encoding voor query-waarden (RFC 3986 unreserved blijft, rest %HH).
+/// Minimal URL encoding for query values (RFC 3986 unreserved stays, rest %HH).
 fn url_encode(s: &str) -> String {
     let mut out = String::new();
     for &b in s.as_bytes() {
@@ -628,7 +628,7 @@ fn url_encode(s: &str) -> String {
 pub fn hit_test(win_x: usize, win_y: usize, win_w: usize, mx: usize, my: usize) -> Hit {
     let bx = win_x;
     let by = win_y + TITLEBAR_H;
-    // Tabstrip.
+    // Tab strip.
     if my >= by && my < by + TABBAR_H {
         let n = BROWSER.lock().as_ref().map(|b| b.tabs.len()).unwrap_or(0);
         let tab_w = 150usize;
@@ -644,14 +644,14 @@ pub fn hit_test(win_x: usize, win_y: usize, win_w: usize, mx: usize, my: usize) 
         }
         return Hit::None;
     }
-    // Adresbalk.
+    // Address bar.
     let ay = by + TABBAR_H;
     if my >= ay && my < ay + ADDR_H {
         if mx > bx + 90 && mx < win_x + win_w - 90 {
             return Hit::UrlBar;
         }
     }
-    // Paginagebied: test tegen de gelayoute formulierbesturingen (her-layout).
+    // Page area: test against the laid-out form controls (re-layout).
     let py = ay + ADDR_H;
     if my >= py {
         if let Some(hit) = hit_page_control(win_x, win_y, win_w, mx, my) {
@@ -661,7 +661,7 @@ pub fn hit_test(win_x: usize, win_y: usize, win_w: usize, mx: usize, my: usize) 
     Hit::None
 }
 
-/// Her-layout de actieve pagina en zoek of (mx,my) op een veld/knop valt.
+/// Re-layout the active page and find whether (mx,my) lands on a field/button.
 fn hit_page_control(win_x: usize, win_y: usize, win_w: usize, mx: usize, my: usize) -> Option<Hit> {
     let b = BROWSER.lock();
     let br = b.as_ref()?;
@@ -721,7 +721,7 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
         None => return,
     };
 
-    // ── Tabstrip ──
+    // ── Tab strip ──
     fb.fill_rect(x, y, w, TABBAR_H, Color::SURFACE_3);
     let tab_w = 150usize;
     for (i, t) in br.tabs.iter().enumerate() {
@@ -736,7 +736,7 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
     fb.fill_rounded_rect(plus_x, y + 5, 30, TABBAR_H - 5, 8, Color::CARD);
     text::draw_px(fb, plus_x + 9, y + 9, "+", Color::TEXT_SEC, 18.0);
 
-    // ── Adresbalk ──
+    // ── Address bar ──
     let ay = y + TABBAR_H;
     fb.fill_rect(x, ay, w, ADDR_H, Color::CARD);
     fb.fill_rect(x, ay + ADDR_H - 1, w, 1, Color::BORDER);
@@ -752,7 +752,7 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
         line.push('|'); // cursor
     }
     text::draw_px(fb, pill_x + 14, ay + 11, &line, Color::INK, 13.5);
-    // Status-badge.
+    // Status badge.
     let st = &br.tabs[br.active].status;
     let badge = clip(st, 12);
     let bw = text::width_px(&badge, 11.0) + 16;
@@ -760,18 +760,18 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
     fb.fill_rounded_rect(bx2, ay + 8, bw, ADDR_H - 16, 10, Color::SUCCESS_SOFT);
     text::draw_px(fb, bx2 + 8, ay + 12, &badge, Color::SUCCESS, 11.0);
 
-    // ── Pagina ──
+    // ── Page ──
     let py = ay + ADDR_H;
     let ph = h.saturating_sub(TABBAR_H + ADDR_H);
     fb.fill_rect(x, py, w, ph, Color::SURFACE);
     let html_full = &br.tabs[br.active].html;
     if html_full.trim().is_empty() {
-        text::draw_px(fb, x + 24, py + 24, "Typ een adres en druk Enter om te laden.", Color::TEXT_SEC, 15.0);
+        text::draw_px(fb, x + 24, py + 24, "Type an address and press Enter to load.", Color::TEXT_SEC, 15.0);
         return;
     }
-    // GUARD: kap heel grote pagina's af zodat de engine de kernel-heap niet
-    // uitput (een browser mag het OS NOOIT laten crashen). Met de 96 MiB-heap
-    // past ~150 KB ruim; grotere sites renderen we gedeeltelijk.
+    // GUARD: truncate very large pages so the engine does not exhaust the
+    // kernel heap (a browser must NEVER let the OS crash). With the 96 MiB heap
+    // ~150 KB fits comfortably; larger sites we render partially.
     const MAX_HTML: usize = 150_000;
     let html: &str = if html_full.len() > MAX_HTML {
         let mut e = MAX_HTML;
@@ -823,10 +823,10 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
                     match img {
                         Some(CachedImg::Ok(image)) => blit_image(fb, dx, dy, dw, dh, image),
                         _ => {
-                            // Placeholder voor een ontbrekende/kapotte afbeelding.
+                            // Placeholder for a missing/broken image.
                             fb.fill_rect(dx, dy, dw, dh, Color::SURFACE_3);
                             fb.draw_border(dx, dy, dw, dh, 1, Color::BORDER);
-                            text::draw_px(fb, dx + 8, dy + dh / 2 - 7, "\u{1F5BC} afbeelding", Color::TEXT_DIM, 12.0);
+                            text::draw_px(fb, dx + 8, dy + dh / 2 - 7, "\u{1F5BC} image", Color::TEXT_DIM, 12.0);
                         }
                     }
                 }
@@ -835,7 +835,7 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
                 let dx = ox + *fx as usize;
                 let dy = oy + *fy as usize;
                 if dy + *fh as usize <= max_y {
-                    // Live waarde uit FORM_STATE (géén BROWSER-lock: die houden we hier al vast).
+                    // Live value from FORM_STATE (no BROWSER lock: we already hold that here).
                     let live = FORM_STATE.lock().iter().find(|(n, _)| n == node).map(|(_, v)| v.clone());
                     let shown = live.unwrap_or_else(|| value.clone());
                     let foc = focused == Some(*node);
@@ -862,7 +862,7 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
     }
 }
 
-/// Blit een afbeelding in een dest-vak (w×h) met nearest-neighbor-schaling.
+/// Blit an image into a dest box (w×h) with nearest-neighbor scaling.
 fn blit_image(fb: &FrameBuffer, dx: usize, dy: usize, dw: usize, dh: usize, img: &Image) {
     if img.width == 0 || img.height == 0 {
         return;

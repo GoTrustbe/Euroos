@@ -1,10 +1,10 @@
-//! EuroContacts — het adresboek van EuroOS (Sprint AC-3).
+//! EuroContacts — the address book of EuroOS (Sprint AC-3).
 //!
-//! Leest en schrijft **vCard 3.0** (de standaard die agenda's, mail-clients en
-//! telefoons uitwisselen): `FN`, `N`, `EMAIL`, `TEL`, `ORG`, met `TYPE`-parameters
-//! (`work`/`home`/`cell`). Daarbovenop een [`AddressBook`] met zoeken, sorteren en
-//! groepen. CardDAV-synchronisatie loopt later via een eigen server (soeverein,
-//! geen Google Contacts). Pure `no_std`-logica, host-getest.
+//! Reads and writes **vCard 3.0** (the standard that calendars, mail clients and
+//! phones exchange): `FN`, `N`, `EMAIL`, `TEL`, `ORG`, with `TYPE` parameters
+//! (`work`/`home`/`cell`). On top of that an [`AddressBook`] with search, sort and
+//! groups. CardDAV synchronization comes later via a dedicated server (sovereign,
+//! no Google Contacts). Pure `no_std` logic, host-tested.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -14,26 +14,26 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// Een getypeerde waarde (bv. een e-mail "work" → "jan@x.eu").
+/// A typed value (e.g. an email "work" → "jan@x.eu").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Typed {
     pub typ: String,
     pub value: String,
 }
 
-/// Eén contact.
+/// A single contact.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Contact {
-    /// Volledige weergavenaam (`FN`).
+    /// Full display name (`FN`).
     pub full_name: String,
-    /// Achternaam (`N`-veld 1).
+    /// Family name (`N` field 1).
     pub family: String,
-    /// Voornaam (`N`-veld 2).
+    /// Given name (`N` field 2).
     pub given: String,
     pub org: String,
     pub emails: Vec<Typed>,
     pub phones: Vec<Typed>,
-    /// Vrije groepen/categorieën (`CATEGORIES`).
+    /// Free-form groups/categories (`CATEGORIES`).
     pub groups: Vec<String>,
 }
 
@@ -41,7 +41,7 @@ impl Contact {
     pub fn new(full_name: &str) -> Self {
         Contact { full_name: full_name.to_string(), ..Default::default() }
     }
-    /// Sleutel waarop gesorteerd wordt: achternaam, anders volledige naam.
+    /// Key to sort on: family name, otherwise full name.
     pub fn sort_key(&self) -> String {
         if !self.family.is_empty() {
             alloc::format!("{} {}", self.family, self.given).to_lowercase()
@@ -88,8 +88,8 @@ fn escape(s: &str) -> String {
     out
 }
 
-/// Splits een property-regel in (naam, params, waarde).
-/// Bv. `EMAIL;TYPE=work:jan@x.eu` → ("EMAIL", ["TYPE=work"], "jan@x.eu").
+/// Split a property line into (name, params, value).
+/// E.g. `EMAIL;TYPE=work:jan@x.eu` → ("EMAIL", ["TYPE=work"], "jan@x.eu").
 fn split_prop(line: &str) -> Option<(String, Vec<String>, String)> {
     let colon = line.find(':')?;
     let (head, value) = (&line[..colon], &line[colon + 1..]);
@@ -105,7 +105,7 @@ fn type_of(params: &[String]) -> String {
         if let Some(rest) = up.strip_prefix("TYPE=") {
             return rest.to_lowercase();
         }
-        // vCard staat ook kale type-tokens toe (bv. `EMAIL;WORK:`).
+        // vCard also allows bare type tokens (e.g. `EMAIL;WORK:`).
         if matches!(up.as_str(), "WORK" | "HOME" | "CELL" | "VOICE" | "FAX") {
             return up.to_lowercase();
         }
@@ -113,7 +113,7 @@ fn type_of(params: &[String]) -> String {
     String::new()
 }
 
-/// Parse één of meer vCards uit een tekst. Onbekende properties worden genegeerd.
+/// Parse one or more vCards from a text. Unknown properties are ignored.
 pub fn parse(text: &str) -> Vec<Contact> {
     let mut out = Vec::new();
     let mut cur: Option<Contact> = None;
@@ -148,8 +148,8 @@ pub fn parse(text: &str) -> Vec<Contact> {
                 c.family = unescape(f.first().copied().unwrap_or(""));
                 c.given = unescape(f.get(1).copied().unwrap_or(""));
             }
-            // ORG kan "Bedrijf;Afdeling" zijn, maar splitsen vóór unescape breekt
-            // ge-escapete puntkomma's; we bewaren de volledige (unescaped) waarde.
+            // ORG can be "Company;Department", but splitting before unescape breaks
+            // escaped semicolons; we keep the full (unescaped) value.
             "ORG" => c.org = unescape(&value),
             "EMAIL" => c.emails.push(Typed { typ: type_of(&params), value: unescape(&value) }),
             "TEL" => c.phones.push(Typed { typ: type_of(&params), value: unescape(&value) }),
@@ -163,7 +163,7 @@ pub fn parse(text: &str) -> Vec<Contact> {
             }
             _ => {}
         }
-        // Als FN ontbreekt maar N er is, leid FN af (bij END).
+        // If FN is missing but N is present, derive FN (at END).
         if c.full_name.is_empty() && !c.given.is_empty() {
             c.full_name = alloc::format!("{} {}", c.given, c.family).trim().to_string();
         }
@@ -171,7 +171,7 @@ pub fn parse(text: &str) -> Vec<Contact> {
     out
 }
 
-/// Serialiseer een contact naar vCard 3.0.
+/// Serialize a contact to vCard 3.0.
 pub fn to_vcard(c: &Contact) -> String {
     let mut s = String::new();
     s.push_str("BEGIN:VCARD\r\n");
@@ -203,7 +203,7 @@ pub fn to_vcard(c: &Contact) -> String {
     s
 }
 
-/// Een adresboek met zoeken/sorteren/groepen.
+/// An address book with search/sort/groups.
 #[derive(Debug, Clone, Default)]
 pub struct AddressBook {
     pub contacts: Vec<Contact>,
@@ -213,11 +213,11 @@ impl AddressBook {
     pub fn from_vcards(text: &str) -> Self {
         AddressBook { contacts: parse(text) }
     }
-    /// Sorteer op achternaam (dan voornaam/volledige naam).
+    /// Sort by family name (then given name/full name).
     pub fn sort(&mut self) {
         self.contacts.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
     }
-    /// Zoek op naam/e-mail/organisatie (substring, hoofdletterongevoelig).
+    /// Search by name/email/organization (substring, case-insensitive).
     pub fn search(&self, query: &str) -> Vec<&Contact> {
         let q = query.to_lowercase();
         self.contacts
@@ -230,11 +230,11 @@ impl AddressBook {
             })
             .collect()
     }
-    /// Contacten in een groep/categorie.
+    /// Contacts in a group/category.
     pub fn in_group<'a>(&'a self, group: &str) -> Vec<&'a Contact> {
         self.contacts.iter().filter(|c| c.groups.iter().any(|g| g == group)).collect()
     }
-    /// Exporteer het hele adresboek naar één vCard-bestand.
+    /// Export the entire address book to a single vCard file.
     pub fn export(&self) -> String {
         self.contacts.iter().map(to_vcard).collect::<Vec<_>>().join("")
     }
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn search_and_groups() {
         let ab = AddressBook::from_vcards(SAMPLE);
-        assert_eq!(ab.search("euro").len(), 1); // ORG + email matchen
+        assert_eq!(ab.search("euro").len(), 1); // ORG + email match
         assert_eq!(ab.search("jan@thuis").len(), 1);
         assert_eq!(ab.search("zzz").len(), 0);
         assert_eq!(ab.in_group("Kernteam").len(), 1);

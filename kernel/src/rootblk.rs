@@ -1,8 +1,8 @@
-//! Root-block-device (Run 7): één type dat EuroFS draagt — óf in RAM (live-modus,
-//! geen schijf) óf RECHTSTREEKS op de virtio-blk-schijf (GEÏNSTALLEERDE modus).
-//! In de schijf-modus staat EuroFS als ECHTE root op een GPT-partitie: bestanden
-//! worden van schijf gelezen/geschreven i.p.v. elke boot opnieuw in RAM gebouwd —
-//! het verschil tussen een live-USB en een geïnstalleerd OS.
+//! Root block device (Run 7): one type that carries EuroFS — either in RAM (live mode,
+//! no disk) or DIRECTLY on the virtio-blk disk (INSTALLED mode).
+//! In disk mode EuroFS sits as the REAL root on a GPT partition: files
+//! are read/written from disk instead of being rebuilt in RAM on every boot —
+//! the difference between a live USB and an installed OS.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -12,21 +12,21 @@ use spin::RwLock;
 use eurofs::{BlockDevice, BlockError, BlockResult};
 
 const BS: usize = 4096;
-const SPB: u64 = (BS / 512) as u64; // 512-byte sectoren per 4 KiB EuroFS-blok = 8
+const SPB: u64 = (BS / 512) as u64; // 512-byte sectors per 4 KiB EuroFS block = 8
 
-// ── Write-back block-cache (maakt de schijf-modus snel) ─────────────────────
-// Direct-mapped cache van 4 KiB-blokken; reads vermijden herhaalde schijf-reads,
-// writes worden gebatcht en pas bij `flush()` (= EuroFS-checkpoint) weggeschreven.
+// ── Write-back block cache (makes disk mode fast) ─────────────────────
+// Direct-mapped cache of 4 KiB blocks; reads avoid repeated disk reads,
+// writes are batched and only written out on `flush()` (= EuroFS checkpoint).
 //
-// J1: het slot wordt door een **RwLock** beschermd i.p.v. één globale Mutex, zodat
-// een cache-HIT (de gangbare FS-leesweg) enkel een **read-lock** neemt → meerdere
-// cores lezen tegelijk gecachede FS-blokken zonder elkaar te serialiseren. Alleen
-// een miss/write/flush neemt de write-lock. Write-back-semantiek (dirty tot flush)
-// blijft exact behouden, dus de EuroFS-checkpoint-/crash-consistentie verandert niet.
+// J1: the slot is protected by an **RwLock** instead of a single global Mutex, so
+// a cache HIT (the common FS read path) takes only a **read-lock** → multiple
+// cores read cached FS blocks simultaneously without serializing each other. Only
+// a miss/write/flush takes the write-lock. Write-back semantics (dirty until flush)
+// remain exactly preserved, so the EuroFS checkpoint/crash consistency does not change.
 const CACHE_SLOTS: usize = 1024; // 1024 × 4 KiB = 4 MiB cache
 
 struct Slot {
-    sector: u64, // begin-sector van dit 4 KiB-blok op de schijf
+    sector: u64, // start sector of this 4 KiB block on the disk
     valid: bool,
     dirty: bool,
     data: [u8; BS],
@@ -39,10 +39,10 @@ fn slot_index(sector: u64) -> usize {
     ((sector / SPB) as usize) % CACHE_SLOTS
 }
 
-/// Lees een 4 KiB-blok dat op `sector` begint (via de cache).
+/// Read a 4 KiB block that starts at `sector` (via the cache).
 fn cache_read(sector: u64, out: &mut [u8]) -> bool {
     let i = slot_index(sector);
-    // Snelle weg: read-lock, hit? (concurrent met andere lezers)
+    // Fast path: read-lock, hit? (concurrent with other readers)
     {
         let c = CACHE.read();
         if c[i].valid && c[i].sector == sector {
@@ -50,8 +50,8 @@ fn cache_read(sector: u64, out: &mut [u8]) -> bool {
             return true;
         }
     }
-    // Miss: write-lock, dubbel-check (een andere core kan 'm intussen geladen hebben),
-    // vuile bewoner terugschrijven, dan van schijf laden.
+    // Miss: write-lock, double-check (another core may have loaded it in the meantime),
+    // write back the dirty occupant, then load from disk.
     let mut c = CACHE.write();
     if !(c[i].valid && c[i].sector == sector) {
         if c[i].valid && c[i].dirty {
@@ -74,7 +74,7 @@ fn cache_read(sector: u64, out: &mut [u8]) -> bool {
     true
 }
 
-/// Schrijf een 4 KiB-blok naar `sector` (write-back: blijft in de cache, dirty).
+/// Write a 4 KiB block to `sector` (write-back: stays in the cache, dirty).
 fn cache_write(sector: u64, data: &[u8]) -> bool {
     let mut c = CACHE.write();
     let i = slot_index(sector);
@@ -92,7 +92,7 @@ fn cache_write(sector: u64, data: &[u8]) -> bool {
     true
 }
 
-/// Schrijf alle vuile blokken naar schijf (bij EuroFS-checkpoint / shutdown).
+/// Write all dirty blocks to disk (on EuroFS checkpoint / shutdown).
 pub fn cache_flush() {
     let mut c = CACHE.write();
     for slot in c.iter_mut() {
@@ -106,11 +106,11 @@ pub fn cache_flush() {
 
 #[derive(Clone)]
 pub struct RootBlk {
-    data: Vec<u8>,   // RAM-backing (leeg in schijf-modus)
-    part_start: u64, // schijf-modus: eerste 512-byte sector van de EuroFS-partitie
+    data: Vec<u8>,   // RAM backing (empty in disk mode)
+    part_start: u64, // disk mode: first 512-byte sector of the EuroFS partition
     on_disk: bool,
     blocks: u64,
-    dev: usize, // virtio-blk-apparaatindex (0 = root via cache; >0 = extra disk, direct)
+    dev: usize, // virtio-blk device index (0 = root via cache; >0 = extra disk, direct)
 }
 
 impl RootBlk {
@@ -120,8 +120,8 @@ impl RootBlk {
     pub fn disk(part_start: u64, blocks: u64) -> Self {
         Self::disk_on(0, part_start, blocks)
     }
-    /// Schijf-modus op een specifiek virtio-blk-apparaat (B3 multi-disk). Apparaat 0
-    /// gaat via de blok-cache; verdere apparaten doen ongecachte directe I/O.
+    /// Disk mode on a specific virtio-blk device (B3 multi-disk). Device 0
+    /// goes through the block cache; further devices do uncached direct I/O.
     pub fn disk_on(dev: usize, part_start: u64, blocks: u64) -> Self {
         Self { data: Vec::new(), part_start, on_disk: true, blocks, dev }
     }
@@ -190,12 +190,12 @@ impl BlockDevice for RootBlk {
 
     fn flush(&mut self) -> BlockResult<()> {
         if self.on_disk {
-            // Apparaat 0 gaat via de cache; verdere schijven schrijven direct.
+            // Device 0 goes through the cache; further disks write directly.
             let ok = if self.dev == 0 {
-                cache_flush(); // vuile cache-blokken naar schijf (EuroFS-checkpoint-commit)
-                // Forceer daarna de schijf z'n EIGEN write-back-cache naar het persistente
-                // medium (VIRTIO_BLK_T_FLUSH) — maakt de A/B-superblok-barrière een harde
-                // I/O-barrière. No-op als het device geen vluchtige cache heeft.
+                cache_flush(); // dirty cache blocks to disk (EuroFS checkpoint commit)
+                // Then force the disk's OWN write-back cache to the persistent
+                // medium (VIRTIO_BLK_T_FLUSH) — makes the A/B-superblock barrier a hard
+                // I/O barrier. No-op if the device has no volatile cache.
                 crate::virtio_blk::flush()
             } else {
                 crate::virtio_blk::flush_dev(self.dev)

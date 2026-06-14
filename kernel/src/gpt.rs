@@ -1,10 +1,10 @@
-//! Minimale GPT (GUID Partition Table) — Run 7. Schrijft/leest een GPT met één
-//! EuroFS-partitie zodat het OS van een ECHTE gepartitioneerde schijf draait
-//! (zoals een geïnstalleerd Windows/Linux), i.p.v. een ramdisk.
+//! Minimal GPT (GUID Partition Table) — Run 7. Writes/reads a GPT with a single
+//! EuroFS partition so the OS runs from a REAL partitioned disk
+//! (like an installed Windows/Linux), instead of a ramdisk.
 //!
-//! Layout: LBA0 = protective MBR, LBA1 = GPT-header, LBA2.. = partitie-array
-//! (128×128 B). De EuroFS-partitie begint op LBA 2048 (1 MiB-uitlijning).
-//! (Backup-GPT achteraan: latere verfijning — onze reader gebruikt de primaire.)
+//! Layout: LBA0 = protective MBR, LBA1 = GPT header, LBA2.. = partition array
+//! (128×128 B). The EuroFS partition starts at LBA 2048 (1 MiB alignment).
+//! (Backup GPT at the end: later refinement — our reader uses the primary one.)
 
 use alloc::vec;
 
@@ -13,7 +13,7 @@ const ENTRY_LBA: u64 = 2;
 const NUM_ENTRIES: u32 = 128;
 const ENTRY_SIZE: u32 = 128;
 
-/// Eigen partitie-type-GUID voor EuroFS (raw 16 bytes, consistent geschreven/gelezen).
+/// Own partition-type GUID for EuroFS (raw 16 bytes, written/read consistently).
 const EUROFS_TYPE: [u8; 16] =
     [0x45, 0x55, 0x52, 0x4f, 0x46, 0x53, 0x00, 0x01, 0x80, 0x00, 0x00, 0x45, 0x55, 0x52, 0x4f, 0x53];
 
@@ -39,15 +39,15 @@ fn rd_u32(b: &[u8], o: usize) -> u32 {
     u32::from_le_bytes(v)
 }
 
-/// Lees de GPT-partitie-array van schijf 0 in. Geeft (array_bytes, entry_size, num).
+/// Read in the GPT partition array from disk 0. Returns (array_bytes, entry_size, num).
 fn read_part_array() -> Option<(alloc::vec::Vec<u8>, usize, usize)> {
     let mut hdr = [0u8; 512];
     if !crate::virtio_blk::read_sector(1, &mut hdr) || &hdr[..8] != b"EFI PART" {
         return None;
     }
-    // Verifieer de GPT-header-CRC (audit H10): de CRC dekt de eerste `hdr_size`
-    // bytes met het CRC-veld (16..20) op nul. Een torn/corrupte header → afwijzen
-    // i.p.v. vertrouwen op bogus LBA-/partitievelden.
+    // Verify the GPT header CRC (audit H10): the CRC covers the first `hdr_size`
+    // bytes with the CRC field (16..20) zeroed. A torn/corrupt header → reject
+    // instead of trusting bogus LBA/partition fields.
     let hdr_size = (rd_u32(&hdr, 12) as usize).clamp(92, 512);
     let stored_hcrc = rd_u32(&hdr, 16);
     let mut hcopy = hdr;
@@ -71,14 +71,14 @@ fn read_part_array() -> Option<(alloc::vec::Vec<u8>, usize, usize)> {
         }
         arr[s * 512..s * 512 + 512].copy_from_slice(&tmp);
     }
-    // Verifieer de partitie-array-CRC tegen het header-veld (offset 88).
+    // Verify the partition-array CRC against the header field (offset 88).
     if crc32(&arr[..num * esz]) != rd_u32(&hdr, 88) {
         return None;
     }
     Some((arr, esz, num))
 }
 
-/// Decodeer de UTF-16LE-naam van een partitie-entry (offset 56, 36 tekens).
+/// Decode the UTF-16LE name of a partition entry (offset 56, 36 characters).
 fn entry_name_eq(e: &[u8], want: &str) -> bool {
     let mut buf = [0u16; 36];
     for (k, slot) in buf.iter_mut().enumerate() {
@@ -88,8 +88,8 @@ fn entry_name_eq(e: &[u8], want: &str) -> bool {
     want.encode_utf16().eq(buf[..n].iter().copied())
 }
 
-/// Vind een EuroFS-partitie op naam (G4: EuroOS-A/EuroOS-B/EuroVar/EuroBoot).
-/// Geeft (eerste_sector, aantal_4k_blokken).
+/// Find a EuroFS partition by name (G4: EuroOS-A/EuroOS-B/EuroVar/EuroBoot).
+/// Returns (first_sector, number_of_4k_blocks).
 pub fn find_partition_by_name(name: &str) -> Option<(u64, u64)> {
     let (arr, esz, num) = read_part_array()?;
     for i in 0..num {
@@ -104,8 +104,8 @@ pub fn find_partition_by_name(name: &str) -> Option<(u64, u64)> {
     None
 }
 
-/// Vind de EERSTE EuroFS-partitie (= slot A in de A/B-layout). Geeft
-/// (eerste_sector, aantal_4k_blokken). Houdt de root-mount-weg ongewijzigd.
+/// Find the FIRST EuroFS partition (= slot A in the A/B layout). Returns
+/// (first_sector, number_of_4k_blocks). Keeps the root-mount path unchanged.
 pub fn find_eurofs_partition() -> Option<(u64, u64)> {
     let (arr, esz, num) = read_part_array()?;
     for i in 0..num {
@@ -124,11 +124,11 @@ fn align8(x: u64) -> u64 {
     x & !7
 }
 
-/// Vul een partitie-entry: EuroFS-type, unieke GUID, [first..last], UTF-16-naam.
+/// Fill a partition entry: EuroFS type, unique GUID, [first..last], UTF-16 name.
 fn fill_entry(e: &mut [u8], first: u64, last: u64, name: &str, guid_seed: u8) {
     e[..16].copy_from_slice(&EUROFS_TYPE);
     for (k, slot) in e[16..32].iter_mut().enumerate() {
-        *slot = guid_seed.wrapping_add(k as u8); // unieke partitie-GUID
+        *slot = guid_seed.wrapping_add(k as u8); // unique partition GUID
     }
     e[32..40].copy_from_slice(&first.to_le_bytes());
     e[40..48].copy_from_slice(&last.to_le_bytes());
@@ -139,14 +139,14 @@ fn fill_entry(e: &mut [u8], first: u64, last: u64, name: &str, guid_seed: u8) {
     }
 }
 
-/// Schrijf een verse GPT met de **A/B-layout** (G4): vier EuroFS-partities —
-/// `EuroOS-A` (root slot A), `EuroOS-B` (root slot B, voor updates), `EuroVar`
-/// (schrijfbare data), `EuroBoot` (kernel-images/config). Geeft slot A's
-/// (eerste_sector, 4k-blokken) terug zodat de root-mount-weg ongewijzigd blijft.
+/// Write a fresh GPT with the **A/B layout** (G4): four EuroFS partitions —
+/// `EuroOS-A` (root slot A), `EuroOS-B` (root slot B, for updates), `EuroVar`
+/// (writable data), `EuroBoot` (kernel images/config). Returns slot A's
+/// (first_sector, 4k blocks) so the root-mount path stays unchanged.
 pub fn install(total_sectors: u64) -> (u64, u64) {
     let last_usable = total_sectors.saturating_sub(34);
     let usable = last_usable.saturating_sub(PART_FIRST_LBA);
-    // Verdeel: slot A 34%, slot B 34%, /var 20%, /boot de rest. 8-sector (4 KiB) uitgelijnd.
+    // Split: slot A 34%, slot B 34%, /var 20%, /boot the rest. 8-sector (4 KiB) aligned.
     let slot = align8(usable * 34 / 100).max(8);
     let varsz = align8(usable * 20 / 100).max(8);
     let a_first = PART_FIRST_LBA;
@@ -158,7 +158,7 @@ pub fn install(total_sectors: u64) -> (u64, u64) {
     let bt_first = v_last + 1;
     let bt_last = last_usable - 1;
 
-    // Partitie-array: 4 entries.
+    // Partition array: 4 entries.
     let mut arr = vec![0u8; (NUM_ENTRIES * ENTRY_SIZE) as usize];
     fill_entry(&mut arr[0..128], a_first, a_last, "EuroOS-A", 0x11);
     fill_entry(&mut arr[128..256], b_first, b_last, "EuroOS-B", 0x31);
@@ -166,7 +166,7 @@ pub fn install(total_sectors: u64) -> (u64, u64) {
     fill_entry(&mut arr[384..512], bt_first, bt_last, "EuroBoot", 0x71);
     let arr_crc = crc32(&arr);
 
-    // GPT-header.
+    // GPT header.
     let mut hdr = [0u8; 512];
     hdr[..8].copy_from_slice(b"EFI PART");
     hdr[8..12].copy_from_slice(&0x0001_0000u32.to_le_bytes());
@@ -176,7 +176,7 @@ pub fn install(total_sectors: u64) -> (u64, u64) {
     hdr[40..48].copy_from_slice(&34u64.to_le_bytes());
     hdr[48..56].copy_from_slice(&last_usable.to_le_bytes());
     for (k, slot) in hdr[56..72].iter_mut().enumerate() {
-        *slot = 0x22 + k as u8; // disk-GUID
+        *slot = 0x22 + k as u8; // disk GUID
     }
     hdr[72..80].copy_from_slice(&ENTRY_LBA.to_le_bytes());
     hdr[80..84].copy_from_slice(&NUM_ENTRIES.to_le_bytes());
@@ -200,12 +200,12 @@ pub fn install(total_sectors: u64) -> (u64, u64) {
     }
     let mib = |first: u64, last: u64| (last - first + 1) * 512 / (1024 * 1024);
     crate::serial_println!(
-        "[gpt] A/B-GPT geschreven — EuroOS-A @ LBA {} ({} MiB) · EuroOS-B @ {} ({} MiB) · EuroVar @ {} ({} MiB) · EuroBoot @ {} ({} MiB)",
+        "[gpt] A/B GPT written — EuroOS-A @ LBA {} ({} MiB) · EuroOS-B @ {} ({} MiB) · EuroVar @ {} ({} MiB) · EuroBoot @ {} ({} MiB)",
         a_first, mib(a_first, a_last),
         b_first, mib(b_first, b_last),
         v_first, mib(v_first, v_last),
         bt_first, mib(bt_first, bt_last)
     );
-    // Slot A = root (de eerste EuroFS-partitie); de root-mount-weg blijft ongewijzigd.
+    // Slot A = root (the first EuroFS partition); the root-mount path stays unchanged.
     (a_first, (a_last - a_first + 1) / 8)
 }

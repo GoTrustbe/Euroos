@@ -1,6 +1,6 @@
-//! PCI-enumeratie via de legacy config-poorten (0xCF8/0xCFC) — Run 7 / doc §4.
-//! Ontdekt de aanwezige hardware (netwerk, opslag, ...) zodat drivers gekoppeld
-//! kunnen worden. Fundament voor virtio-blk (echte schijf) en meer.
+//! PCI enumeration via the legacy config ports (0xCF8/0xCFC) — Run 7 / doc §4.
+//! Discovers the present hardware (network, storage, ...) so that drivers can be
+//! attached. Foundation for virtio-blk (real disk) and more.
 
 use alloc::vec::Vec;
 use x86_64::instructions::port::Port;
@@ -22,27 +22,27 @@ impl PciDevice {
     pub fn bar(&self, n: u8) -> u32 {
         cfg_read32(self.bus, self.dev, self.func, 0x10 + n * 4)
     }
-    /// IRQ-lijn (interrupt line).
+    /// IRQ line (interrupt line).
     pub fn irq_line(&self) -> u8 {
         cfg_read32(self.bus, self.dev, self.func, 0x3C) as u8
     }
-    /// Zet de command-register bits (bv. bus-master + I/O/MMIO enable).
+    /// Set the command-register bits (e.g. bus-master + I/O/MMIO enable).
     pub fn enable(&self, bits: u16) {
         let cur = cfg_read32(self.bus, self.dev, self.func, 0x04);
         let new = (cur & 0xFFFF_0000) | (cur as u16 | bits) as u32;
         cfg_write32(self.bus, self.dev, self.func, 0x04, new);
     }
 
-    /// Het MMIO-basisadres van BAR `n` (fysiek = identity-mapped virtueel), met de
-    /// lage flag-bits gemaskeerd. Ondersteunt 64-bit memory-BARs (type 0b10) — die
-    /// gebruikt de moderne virtio-transport. Geeft 0 voor een I/O-BAR.
+    /// The MMIO base address of BAR `n` (physical = identity-mapped virtual), with the
+    /// low flag bits masked off. Supports 64-bit memory BARs (type 0b10) — used by
+    /// the modern virtio transport. Returns 0 for an I/O BAR.
     pub fn bar_addr(&self, n: u8) -> u64 {
         let lo = cfg_read32(self.bus, self.dev, self.func, 0x10 + n * 4);
         if lo & 0x1 == 1 {
-            return 0; // I/O-BAR (legacy), geen MMIO
+            return 0; // I/O BAR (legacy), no MMIO
         }
         if lo & 0x6 == 0x4 {
-            // 64-bit memory-BAR: hoge helft staat in de volgende BAR.
+            // 64-bit memory BAR: high half is in the next BAR.
             let hi = cfg_read32(self.bus, self.dev, self.func, 0x10 + (n + 1) * 4);
             (((hi as u64) << 32) | (lo as u64)) & !0xFu64
         } else {
@@ -50,11 +50,11 @@ impl PciDevice {
         }
     }
 
-    /// Vind de virtio-PCI-capability met het gevraagde `cfg_type`
-    /// (1=common, 2=notify, 3=isr, 4=device). De moderne virtio-1.0-transport
-    /// publiceert zo waar elk registerblok in welke BAR + offset ligt.
+    /// Find the virtio PCI capability with the requested `cfg_type`
+    /// (1=common, 2=notify, 3=isr, 4=device). The modern virtio-1.0 transport
+    /// publishes this way which register block lies in which BAR + offset.
     pub fn virtio_cap(&self, want_cfg_type: u8) -> Option<VirtioCap> {
-        // Capability-lijst aanwezig? (status-register bit 4)
+        // Capability list present? (status-register bit 4)
         let status = (cfg_read32(self.bus, self.dev, self.func, 0x04) >> 16) as u16;
         if status & 0x10 == 0 {
             return None;
@@ -66,7 +66,7 @@ impl PciDevice {
             let w0 = cfg_read32(self.bus, self.dev, self.func, ptr);
             let cap_id = (w0 & 0xFF) as u8;
             let next = ((w0 >> 8) & 0xFF) as u8;
-            // virtio-vendor-cap = 0x09; cfg_type staat in byte 3.
+            // virtio-vendor-cap = 0x09; cfg_type is in byte 3.
             if cap_id == 0x09 && ((w0 >> 24) & 0xFF) as u8 == want_cfg_type {
                 let bar = (cfg_read32(self.bus, self.dev, self.func, ptr + 4) & 0xFF) as u8;
                 let offset = cfg_read32(self.bus, self.dev, self.func, ptr + 8);
@@ -88,8 +88,8 @@ impl PciDevice {
     }
 }
 
-/// Een virtio-modern-registerblok: het identity-mapped MMIO-adres + lengte
-/// (en, voor de notify-cap, de notify-offset-multiplier).
+/// A modern-virtio register block: the identity-mapped MMIO address + length
+/// (and, for the notify cap, the notify-offset multiplier).
 #[derive(Clone, Copy)]
 pub struct VirtioCap {
     pub addr: u64,
@@ -119,7 +119,7 @@ pub fn cfg_write32(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
     }
 }
 
-/// Doorzoek de PCI-bussen (0..=8 dekt QEMU/q35) en verzamel alle apparaten.
+/// Scan the PCI buses (0..=8 covers QEMU/q35) and collect all devices.
 pub fn enumerate() -> Vec<PciDevice> {
     let mut out = Vec::new();
     for bus in 0..=8u8 {
@@ -153,7 +153,7 @@ pub fn enumerate() -> Vec<PciDevice> {
     out
 }
 
-/// Zoek het eerste apparaat dat aan een predicaat voldoet (voor drivers).
+/// Find the first device that satisfies a predicate (for drivers).
 pub fn find(pred: impl Fn(&PciDevice) -> bool) -> Option<PciDevice> {
     enumerate().into_iter().find(pred)
 }
@@ -174,7 +174,7 @@ pub fn class_name(class: u8, subclass: u8) -> &'static str {
     }
 }
 
-/// Een leesbare naam voor bekende vendor/device-IDs (vooral virtio).
+/// A readable name for known vendor/device IDs (especially virtio).
 pub fn device_name(vendor: u16, device: u16) -> &'static str {
     match (vendor, device) {
         (0x1AF4, 0x1000) | (0x1AF4, 0x1041) => "virtio-net",

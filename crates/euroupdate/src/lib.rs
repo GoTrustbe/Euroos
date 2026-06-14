@@ -1,16 +1,16 @@
-//! EuroUpdate — atomische A/B-systeemslots met automatische rollback (plan F1).
+//! EuroUpdate — atomic A/B system slots with automatic rollback (plan F1).
 //!
-//! Twee root-slots (A/B). Een update wordt naar het INACTIEVE slot geschreven; de
-//! bootloader probeert het nieuwe slot een begrensd aantal keer (`tries`). Boot het
-//! niet succesvol (EuroInit roept dan `mark_good` niet aan), dan rolt de volgende
-//! boot automatisch terug naar het laatst-bekende-goede slot. Zo kan een mislukte
-//! update de machine nooit bricken — de industriestandaard (Android/ChromeOS/Fuchsia).
+//! Two root slots (A/B). An update is written to the INACTIVE slot; the
+//! bootloader tries the new slot a bounded number of times (`tries`). If it does
+//! not boot successfully (EuroInit then never calls `mark_good`), the next
+//! boot automatically rolls back to the last-known-good slot. This way a failed
+//! update can never brick the machine — the industry standard (Android/ChromeOS/Fuchsia).
 //!
-//! Pure `no_std`-logica zodat de fout-gevoelige toestandsmachine host-getest is.
+//! Pure `no_std` logic so the error-prone state machine is host-tested.
 
 #![cfg_attr(not(test), no_std)]
 
-/// Welk root-slot.
+/// Which root slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
     A,
@@ -39,13 +39,13 @@ impl Slot {
     }
 }
 
-/// Toestand van een slot.
+/// State of a slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotState {
-    Empty,  // nog nooit een geldig systeem
-    Trying, // net beschreven, nog niet bevestigd goed
-    Good,   // bevestigd succesvol geboot
-    Failed, // boot-pogingen uitgeput → afgekeurd
+    Empty,  // never held a valid system
+    Trying, // just written, not yet confirmed good
+    Good,   // confirmed booted successfully
+    Failed, // boot attempts exhausted → rejected
 }
 
 impl SlotState {
@@ -67,24 +67,24 @@ impl SlotState {
     }
 }
 
-/// Maximaal aantal boot-pogingen voor een nieuw slot vóór rollback.
+/// Maximum number of boot attempts for a new slot before rollback.
 pub const DEFAULT_TRIES: u8 = 3;
 
 const MAGIC: u32 = 0x4555_5044; // "EUPD"
 pub const CONFIG_SIZE: usize = 32;
 
-/// De persistente slot-configuratie (in `/boot`, door de bootloader gelezen).
+/// The persistent slot configuration (in `/boot`, read by the bootloader).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlotConfig {
-    /// Het slot waar het draaiende systeem vandaan kwam.
+    /// The slot the running system came from.
     pub active: Slot,
-    /// Het slot dat de volgende boot geprobeerd moet worden.
+    /// The slot to be tried on the next boot.
     pub next_boot: Slot,
-    /// Resterende boot-pogingen voor `next_boot`.
+    /// Remaining boot attempts for `next_boot`.
     pub tries: u8,
     pub state_a: SlotState,
     pub state_b: SlotState,
-    /// Generatieteller (loopt op bij elke update) — voor diagnose/tie-break.
+    /// Generation counter (increments on each update) — for diagnostics/tie-break.
     pub generation: u32,
 }
 
@@ -95,7 +95,7 @@ impl Default for SlotConfig {
 }
 
 impl SlotConfig {
-    /// Verse installatie: slot A bevat het (goede) systeem, B is leeg.
+    /// Fresh install: slot A holds the (good) system, B is empty.
     pub fn initial() -> Self {
         SlotConfig {
             active: Slot::A,
@@ -120,13 +120,13 @@ impl SlotConfig {
         }
     }
 
-    /// Het slot dat NIET actief is (het doel voor een nieuwe update).
+    /// The slot that is NOT active (the target for a new update).
     pub fn inactive(&self) -> Slot {
         self.active.other()
     }
 
-    /// Stage een update: het image is al naar `target` (= het inactieve slot)
-    /// geschreven en geverifieerd. Markeer het als te-proberen met verse pogingen.
+    /// Stage an update: the image has already been written and verified to
+    /// `target` (= the inactive slot). Mark it as to-be-tried with fresh attempts.
     pub fn stage_update(&mut self) {
         let target = self.inactive();
         self.set_state(target, SlotState::Trying);
@@ -135,36 +135,36 @@ impl SlotConfig {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    /// Bootloader-logica: bepaal welk slot nu geboot wordt en werk de teller bij.
-    /// Roep dit één keer per boot aan (vóór het laden van de kernel).
+    /// Bootloader logic: determine which slot boots now and update the counter.
+    /// Call this once per boot (before loading the kernel).
     pub fn on_boot(&mut self) -> Slot {
         if self.tries > 0 {
-            // Nog pogingen over voor het te-proberen slot.
+            // Still attempts left for the to-be-tried slot.
             self.tries -= 1;
             self.active = self.next_boot;
             self.next_boot
         } else if self.state(self.next_boot) == SlotState::Trying {
-            // Pogingen uitgeput zonder bevestiging → rollback naar het goede slot.
+            // Attempts exhausted without confirmation → rollback to the good slot.
             self.set_state(self.next_boot, SlotState::Failed);
             let good = self.find_good();
             self.next_boot = good;
             self.active = good;
             good
         } else {
-            // Stabiel: boot gewoon het actieve/goede slot.
+            // Stable: just boot the active/good slot.
             self.active = self.next_boot;
             self.next_boot
         }
     }
 
-    /// EuroInit roept dit aan ná een succesvolle boot: het actieve slot is goed.
+    /// EuroInit calls this after a successful boot: the active slot is good.
     pub fn mark_good(&mut self) {
         self.set_state(self.active, SlotState::Good);
         self.tries = 0;
         self.next_boot = self.active;
     }
 
-    /// Forceer een rollback naar het andere goede slot (handmatig `euroupdate rollback`).
+    /// Force a rollback to the other good slot (manual `euroupdate rollback`).
     pub fn rollback(&mut self) -> bool {
         let other = self.active.other();
         if self.state(other) == SlotState::Good {
@@ -176,7 +176,7 @@ impl SlotConfig {
         }
     }
 
-    /// Zoek een goed slot (voorkeur: het andere dan next_boot); fallback slot A.
+    /// Find a good slot (preference: the one other than next_boot); fallback slot A.
     fn find_good(&self) -> Slot {
         let cand = self.next_boot.other();
         if self.state(cand) == SlotState::Good {
@@ -188,11 +188,11 @@ impl SlotConfig {
         }
     }
 
-    // ── Serialisatie (vast 32-byte blok met magic + checksum) ──
+    // ── Serialization (fixed 32-byte block with magic + checksum) ──
     pub fn serialize(&self) -> [u8; CONFIG_SIZE] {
         let mut b = [0u8; CONFIG_SIZE];
         b[0..4].copy_from_slice(&MAGIC.to_le_bytes());
-        b[4] = 1; // versie
+        b[4] = 1; // version
         b[5] = self.active.to_u8();
         b[6] = self.next_boot.to_u8();
         b[7] = self.tries;
@@ -204,8 +204,8 @@ impl SlotConfig {
         b
     }
 
-    /// Lees de configuratie terug; `None` bij verkeerde magic of checksum (dan
-    /// hoort de aanroeper terug te vallen op [`SlotConfig::initial`]).
+    /// Read the configuration back; `None` on wrong magic or checksum (in which case
+    /// the caller should fall back to [`SlotConfig::initial`]).
     pub fn deserialize(b: &[u8]) -> Option<SlotConfig> {
         if b.len() < CONFIG_SIZE {
             return None;
@@ -228,7 +228,7 @@ impl SlotConfig {
     }
 }
 
-/// Eenvoudige Fletcher-32-achtige checksum over het configblok.
+/// Simple Fletcher-32-like checksum over the config block.
 fn checksum(data: &[u8]) -> u32 {
     let mut s1: u32 = 0xFFFF;
     let mut s2: u32 = 0xFFFF;
@@ -248,31 +248,31 @@ mod tests {
         let mut c = SlotConfig::initial();
         assert_eq!(c.active, Slot::A);
         assert_eq!(c.inactive(), Slot::B);
-        // Update naar B (image al weggeschreven).
+        // Update to B (image already written out).
         c.stage_update();
         assert_eq!(c.next_boot, Slot::B);
         assert_eq!(c.tries, DEFAULT_TRIES);
         assert_eq!(c.state(Slot::B), SlotState::Trying);
-        // Reboot: bootloader probeert B (tries 3→2), B boot OK → mark_good.
+        // Reboot: bootloader tries B (tries 3→2), B boots OK → mark_good.
         assert_eq!(c.on_boot(), Slot::B);
         assert_eq!(c.tries, 2);
         c.mark_good();
         assert_eq!(c.state(Slot::B), SlotState::Good);
         assert_eq!(c.active, Slot::B);
         assert_eq!(c.tries, 0);
-        // Volgende boot blijft stabiel op B.
+        // Next boot stays stable on B.
         assert_eq!(c.on_boot(), Slot::B);
     }
 
     #[test]
     fn failed_update_rolls_back_after_tries() {
-        let mut c = SlotConfig::initial(); // A goed, B leeg
-        c.stage_update(); // probeer B, tries=3
-        // B crasht steeds (nooit mark_good): drie pogingen, dan rollback.
+        let mut c = SlotConfig::initial(); // A good, B empty
+        c.stage_update(); // try B, tries=3
+        // B keeps crashing (never mark_good): three attempts, then rollback.
         assert_eq!(c.on_boot(), Slot::B); // tries 3→2
         assert_eq!(c.on_boot(), Slot::B); // 2→1
         assert_eq!(c.on_boot(), Slot::B); // 1→0
-        // Vierde boot: pogingen op, B was Trying → rollback naar A.
+        // Fourth boot: attempts gone, B was Trying → rollback to A.
         assert_eq!(c.on_boot(), Slot::A);
         assert_eq!(c.state(Slot::B), SlotState::Failed);
         assert_eq!(c.active, Slot::A);
@@ -284,10 +284,10 @@ mod tests {
         let mut c = SlotConfig::initial();
         c.stage_update();
         c.on_boot();
-        c.mark_good(); // nu draait B, A nog goed
-        assert!(c.rollback()); // terug naar A
+        c.mark_good(); // now B runs, A still good
+        assert!(c.rollback()); // back to A
         assert_eq!(c.next_boot, Slot::A);
-        // Maar als het andere slot niet goed is, faalt rollback.
+        // But if the other slot is not good, rollback fails.
         let mut fresh = SlotConfig::initial(); // B is Empty
         assert!(!fresh.rollback());
     }
@@ -299,15 +299,15 @@ mod tests {
         c.on_boot();
         let bytes = c.serialize();
         assert_eq!(SlotConfig::deserialize(&bytes), Some(c));
-        // Eén bit flippen → checksum faalt → None (val terug op initial).
+        // Flip one bit → checksum fails → None (fall back to initial).
         let mut bad = bytes;
         bad[7] ^= 0xFF;
         assert_eq!(SlotConfig::deserialize(&bad), None);
-        // Verkeerde magic → None.
+        // Wrong magic → None.
         let mut nomagic = bytes;
         nomagic[0] ^= 0xFF;
         assert_eq!(SlotConfig::deserialize(&nomagic), None);
-        // Te kort → None.
+        // Too short → None.
         assert_eq!(SlotConfig::deserialize(&bytes[..10]), None);
     }
 
@@ -318,7 +318,7 @@ mod tests {
         c.on_boot();
         c.mark_good(); // active B
         assert_eq!(c.inactive(), Slot::A);
-        c.stage_update(); // volgende update gaat naar A
+        c.stage_update(); // next update goes to A
         assert_eq!(c.next_boot, Slot::A);
         c.on_boot();
         c.mark_good();

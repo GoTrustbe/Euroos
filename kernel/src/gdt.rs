@@ -1,9 +1,9 @@
 //! Global Descriptor Table + Task State Segment (Track 3.3).
 //!
-//! In long mode is segmentatie grotendeels uit, maar de GDT is nog nodig voor
-//! privilege levels en de TSS — die levert aparte interrupt-stacks (IST) voor
-//! kritieke excepties (double fault), zodat een kapotte stack geen triple fault
-//! veroorzaakt.
+//! In long mode segmentation is mostly off, but the GDT is still needed for
+//! privilege levels and the TSS — which provides separate interrupt stacks (IST) for
+//! critical exceptions (double fault), so that a broken stack does not cause a triple
+//! fault.
 
 use spin::Lazy;
 use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
@@ -11,10 +11,10 @@ use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
 
 pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
-/// G1: de page-fault-handler draait op een EIGEN IST-stack. Zo kan een kernel-
-/// stack-overflow (die op de guard-pagina faultt) afgehandeld worden — de CPU
-/// pusht het exceptie-frame op deze verse stack i.p.v. op de net-uitgeputte
-/// taak-stack (wat anders meteen een double fault zou geven).
+/// G1: the page-fault handler runs on its OWN IST stack. This way a kernel
+/// stack overflow (which faults on the guard page) can be handled — the CPU
+/// pushes the exception frame onto this fresh stack instead of onto the just-
+/// exhausted task stack (which would otherwise immediately cause a double fault).
 pub const PAGE_FAULT_IST_INDEX: u16 = 1;
 const IST_STACK_SIZE: usize = 4096 * 5;
 
@@ -26,13 +26,13 @@ static TSS: Lazy<TaskStateSegment> = Lazy::new(|| {
     let mut tss = TaskStateSegment::new();
     tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
         let start = VirtAddr::from_ptr(core::ptr::addr_of!(DF_STACK));
-        start + IST_STACK_SIZE as u64 // top (stack groeit naar beneden)
+        start + IST_STACK_SIZE as u64 // top (stack grows downward)
     };
     tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = {
         let start = VirtAddr::from_ptr(core::ptr::addr_of!(PF_STACK));
         start + IST_STACK_SIZE as u64
     };
-    // Kernel-stack voor ring3->ring0 overgangen (privilege change via interrupt).
+    // Kernel stack for ring3->ring0 transitions (privilege change via interrupt).
     tss.privilege_stack_table[0] = {
         let start = VirtAddr::from_ptr(core::ptr::addr_of!(RSP0_STACK));
         start + IST_STACK_SIZE as u64
@@ -48,8 +48,8 @@ pub struct Selectors {
     pub tss: SegmentSelector,
 }
 
-// Volgorde is bewust: kernel_code, kernel_data, user_data, user_code — vereist
-// voor de SYSCALL/SYSRET-selector-layout (user_data = kernel_data+8, user_code
+// The order is deliberate: kernel_code, kernel_data, user_data, user_code — required
+// for the SYSCALL/SYSRET selector layout (user_data = kernel_data+8, user_code
 // = kernel_data+16).
 static GDT: Lazy<(GlobalDescriptorTable, Selectors)> = Lazy::new(|| {
     let mut gdt = GlobalDescriptorTable::new();
@@ -70,24 +70,24 @@ static GDT: Lazy<(GlobalDescriptorTable, Selectors)> = Lazy::new(|| {
     )
 });
 
-/// De segment-selectoren (voor SYSCALL/SYSRET-configuratie en ring-3-entry).
+/// The segment selectors (for SYSCALL/SYSRET configuration and ring-3 entry).
 pub fn selectors() -> &'static Selectors {
     &GDT.1
 }
 
-/// Top van de kernel-stack die de CPU gebruikt bij een interrupt vanuit ring 3
-/// (= TSS.rsp0). Een ring-3 scheduler-taak gebruikt deze voor z'n interrupt-frames.
+/// Top of the kernel stack that the CPU uses on an interrupt from ring 3
+/// (= TSS.rsp0). A ring-3 scheduler task uses this for its interrupt frames.
 pub fn rsp0_top() -> u64 {
     (core::ptr::addr_of!(RSP0_STACK) as u64 + IST_STACK_SIZE as u64) & !0xF
 }
 
-/// Stel TSS.rsp0 in op de kernel-stack van de huidige ring-3 taak. De CPU leest
-/// dit bij elke ring3->ring0 interrupt; de scheduler werkt het bij per taak,
-/// zodat MEERDERE ring-3 processen elk hun eigen interrupt-stack hebben.
+/// Set TSS.rsp0 to the kernel stack of the current ring-3 task. The CPU reads
+/// this on every ring3->ring0 interrupt; the scheduler updates it per task,
+/// so that MULTIPLE ring-3 processes each have their own interrupt stack.
 pub fn set_rsp0(addr: u64) {
     let tss: &TaskStateSegment = &TSS;
     let p = tss as *const TaskStateSegment as *mut TaskStateSegment;
-    // SAFETY: single-core; we schrijven enkel het rsp0-veld dat de CPU uitleest.
+    // SAFETY: single-core; we only write the rsp0 field that the CPU reads out.
     unsafe {
         core::ptr::addr_of_mut!((*p).privilege_stack_table[0]).write_volatile(VirtAddr::new(addr));
     }
@@ -99,8 +99,8 @@ pub fn init() {
     GDT.0.load();
     unsafe {
         CS::set_reg(GDT.1.code);
-        // Herlaad SS/DS/ES naar ons data-segment: de oude UEFI-selectoren staan
-        // niet in onze GDT en zouden bij de eerste iretq een #GP geven.
+        // Reload SS/DS/ES to our data segment: the old UEFI selectors are not
+        // in our GDT and would cause a #GP on the first iretq.
         SS::set_reg(GDT.1.data);
         DS::set_reg(GDT.1.data);
         ES::set_reg(GDT.1.data);
@@ -108,11 +108,11 @@ pub fn init() {
     }
 }
 
-/// Bring-up van een application-processor: laad de **gedeelde** GDT en zet de
-/// kernel-segmenten, zodat de CS-selector in de (gedeelde) IDT-entries geldig is
-/// en de AP ring-0 interrupts kan afhandelen. We laden GEEN TSS: de enige TSS is
-/// die van de BSP (busy-bit), en een geparkeerde/timer-only AP doet geen ring-3
-/// of IST. (Per-CPU TSS is de volgende stap richting AP-taken in ring 3.)
+/// Bring-up of an application processor: load the **shared** GDT and set the
+/// kernel segments, so that the CS selector in the (shared) IDT entries is valid
+/// and the AP can handle ring-0 interrupts. We load NO TSS: the only TSS is
+/// that of the BSP (busy bit), and a parked/timer-only AP does no ring-3
+/// or IST. (Per-CPU TSS is the next step towards AP tasks in ring 3.)
 pub fn init_ap() {
     use x86_64::instructions::segmentation::{Segment, CS, DS, ES, SS};
     GDT.0.load();

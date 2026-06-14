@@ -1,7 +1,7 @@
-/* EuroOS — programma dat de Linux-startup-syscalls van een echte musl-binary
- * nabootst: arch_prctl(SET_FS) voor TLS, set_tid_address, mmap voor een buffer,
- * en writev (musl-stdio). Bewijst dat de Linux-compat-laag een musl-achtige
- * opstartsequentie aankan — de stap vóór ONGEWIJZIGDE musl-binaries draaien. */
+/* EuroOS — program that mimics the Linux startup syscalls of a real musl binary:
+ * arch_prctl(SET_FS) for TLS, set_tid_address, mmap for a buffer,
+ * and writev (musl stdio). Proves that the Linux compat layer can handle a
+ * musl-like startup sequence — the step before running UNMODIFIED musl binaries. */
 
 static long sys(long n, long a1, long a2, long a3) {
     long ret;
@@ -39,42 +39,42 @@ static const char *utoa(unsigned long v, char *end) {
     return p;
 }
 
-/* TLS-blok waar FS naar wijst; musl leest thread-pointer via %fs:0. */
+/* TLS block that FS points to; musl reads the thread pointer via %fs:0. */
 static long tls_area[16];
 
 __attribute__((section(".text.start"))) void _start(void) {
-    /* 1. TLS opzetten zoals musl: FS_BASE -> ons TLS-blok, self-pointer op offset 0. */
+    /* 1. Set up TLS like musl: FS_BASE -> our TLS block, self-pointer at offset 0. */
     tls_area[0] = (long)tls_area;
     long r = sys(L_ARCH_PRCTL, ARCH_SET_FS, (long)tls_area, 0);
-    put(r == 0 ? "arch_prctl(SET_FS): TLS ingesteld OK\n"
-              : "arch_prctl(SET_FS): MISLUKT\n");
+    put(r == 0 ? "arch_prctl(SET_FS): TLS set up OK\n"
+              : "arch_prctl(SET_FS): FAILED\n");
 
-    /* 2. Lees de thread-pointer terug via %fs:0 — bewijst dat FS_BASE werkt. */
+    /* 2. Read the thread pointer back via %fs:0 — proves that FS_BASE works. */
     long tp;
     __asm__ volatile("mov %%fs:0, %0" : "=r"(tp));
-    put(tp == (long)tls_area ? "  %fs:0 leest thread-pointer terug: OK\n"
-                            : "  %fs:0 fout\n");
+    put(tp == (long)tls_area ? "  %fs:0 reads the thread pointer back: OK\n"
+                            : "  %fs:0 error\n");
 
-    /* 3. set_tid_address (musl roept dit in __init_tp). */
+    /* 3. set_tid_address (musl calls this in __init_tp). */
     static long tid;
     long t = sys(L_SET_TID_ADDRESS, (long)&tid, 0, 0);
     char nb[24];
     put("  set_tid_address -> tid "); put(utoa((unsigned long)t, nb + 23)); put("\n");
 
-    /* 4. mmap een anonieme buffer (MAP_PRIVATE|MAP_ANONYMOUS = 0x22). */
+    /* 4. mmap an anonymous buffer (MAP_PRIVATE|MAP_ANONYMOUS = 0x22). */
     long page = sys6(L_MMAP, 0, 4096, 0x3 /*RW*/, 0x22, -1, 0);
     if (page > 0) {
         char *buf = (char *)page;
         buf[0] = 'H'; buf[1] = 'i'; buf[2] = '\n'; buf[3] = 0;
-        put("  mmap(4096) OK, schrijf+lees uit nieuwe pagina: "); put(buf);
+        put("  mmap(4096) OK, write+read from new page: "); put(buf);
     } else {
-        put("  mmap MISLUKT\n");
+        put("  mmap FAILED\n");
     }
 
-    /* 5. writev — zoals musl's gebufferde stdio onder de motorkap. */
+    /* 5. writev — like musl's buffered stdio under the hood. */
     struct iovec iov[2] = {
-        { "  writev: deel-1 ", 16 },
-        { "+ deel-2 (musl-stdio pad)\n", 26 },
+        { "  writev: part-1 ", 16 },
+        { "+ part-2 (musl stdio path)\n", 26 },
     };
     sys(L_WRITEV, 1, (long)iov, 2);
 

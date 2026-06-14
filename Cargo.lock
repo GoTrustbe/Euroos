@@ -420,6 +420,10 @@ name = "eurolocale"
 version = "0.1.0"
 
 [[package]]
+name = "eurolock"
+version = "0.1.0"
+
+[[package]]
 name = "euromail"
 version = "0.1.0"
 

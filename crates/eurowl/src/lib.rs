@@ -1,16 +1,16 @@
-//! EuroWL — de ECHTE Wayland-wire-protocol-server-kern (plan H5).
+//! EuroWL — the REAL Wayland wire-protocol server core (plan H5).
 //!
-//! Waar EuroDisplay (H2) een Wayland-*vormig* eigen frame-protocol droeg, spreekt
-//! deze module het **echte Wayland-draadprotocol**: object-id's, opcodes, de
-//! gestandaardiseerde 8-byte-header `[obj_id:u32][ (size<<16)|opcode :u32 ]` +
-//! word-uitgelijnde argumenten, en de kern-interfaces `wl_display`/`wl_registry`/
+//! Where EuroDisplay (H2) carried a Wayland-*shaped* custom frame protocol, this
+//! module speaks the **real Wayland wire protocol**: object ids, opcodes, the
+//! standardized 8-byte header `[obj_id:u32][ (size<<16)|opcode :u32 ]` +
+//! word-aligned arguments, and the core interfaces `wl_display`/`wl_registry`/
 //! `wl_compositor`/`wl_surface` plus `xdg_wm_base`/`xdg_surface`/`xdg_toplevel`.
 //!
-//! Zo kan (op termijn) een ONGEWIJZIGDE Wayland-client (via libwayland over een
-//! AF_UNIX-socket, H1) tegen EuroDisplay praten. Deze kern verwerkt de client-
-//! requests, stuurt de juiste events terug (registry-globals, xdg-configure), en
-//! levert per gecommitte top-level-surface een teken-klaar [`Window`] aan de
-//! EuroDesktop-compositor. `no_std`+alloc, parser + server volledig host-getest.
+//! This way (eventually) an UNMODIFIED Wayland client (via libwayland over an
+//! AF_UNIX socket, H1) can talk to EuroDisplay. This core processes the client
+//! requests, sends the right events back (registry globals, xdg-configure), and
+//! delivers per committed top-level surface a draw-ready [`Window`] to the
+//! EuroDesktop compositor. `no_std`+alloc, parser + server fully host-tested.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -21,15 +21,15 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-// Vaste object-id's + globals.
+// Fixed object ids + globals.
 const WL_DISPLAY: u32 = 1;
 
-// Onze geadverteerde globals (registry `name` → interface).
+// Our advertised globals (registry `name` → interface).
 const G_COMPOSITOR: u32 = 1;
 const G_XDG_WM_BASE: u32 = 2;
 const G_SHM: u32 = 3;
 
-/// Het soort object achter een Wayland-id (zo weten we welke opcodes gelden).
+/// The kind of object behind a Wayland id (so we know which opcodes apply).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Obj {
     Display,
@@ -43,23 +43,23 @@ enum Obj {
     Other,
 }
 
-/// Een teken-klaar venster: de gecommitte top-level-surface + zijn titel.
+/// A draw-ready window: the committed top-level surface + its title.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Window {
     pub surface: u32,
     pub title: String,
 }
 
-/// De Wayland-server-kern: een object-tabel + surface/toplevel-state. Voed client-
-/// bytes in via [`handle`](Self::handle) (geeft de terug-te-sturen event-bytes), en
-/// lees de zichtbare vensters via [`windows`](Self::windows).
+/// The Wayland server core: an object table + surface/toplevel state. Feed client
+/// bytes in via [`handle`](Self::handle) (returns the event bytes to send back), and
+/// read the visible windows via [`windows`](Self::windows).
 pub struct Server {
     objects: BTreeMap<u32, Obj>,
-    /// xdg_surface-id → surface-id.
+    /// xdg_surface id → surface id.
     xdg_to_surface: BTreeMap<u32, u32>,
-    /// toplevel-id → (xdg_surface-id, titel).
+    /// toplevel id → (xdg_surface id, title).
     toplevels: BTreeMap<u32, (u32, String)>,
-    /// Gecommitte top-level-vensters.
+    /// Committed top-level windows.
     windows: Vec<Window>,
     serial: u32,
 }
@@ -73,7 +73,7 @@ impl Default for Server {
 impl Server {
     pub fn new() -> Self {
         let mut objects = BTreeMap::new();
-        objects.insert(WL_DISPLAY, Obj::Display); // id 1 = wl_display, altijd aanwezig
+        objects.insert(WL_DISPLAY, Obj::Display); // id 1 = wl_display, always present
         Server {
             objects,
             xdg_to_surface: BTreeMap::new(),
@@ -92,8 +92,8 @@ impl Server {
         self.serial
     }
 
-    /// Verwerk alle complete Wayland-berichten in `input`; geef de event-bytes terug
-    /// die naar de client gestuurd moeten worden.
+    /// Process all complete Wayland messages in `input`; return the event bytes
+    /// that must be sent to the client.
     pub fn handle(&mut self, input: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut p = 0;
@@ -103,11 +103,11 @@ impl Server {
             let size = (w2 >> 16) as usize;
             let opcode = (w2 & 0xffff) as u16;
             if size < 8 || p + size > input.len() {
-                break; // onvolledig bericht
+                break; // incomplete message
             }
             let args = &input[p + 8..p + size];
             self.dispatch(obj, opcode, args, &mut out);
-            p += (size + 3) & !3; // word-uitgelijnd
+            p += (size + 3) & !3; // word-aligned
         }
         out
     }
@@ -124,7 +124,7 @@ impl Server {
                     write_msg(out, WL_DISPLAY, 1, &[Arg::U(cb)]); // wl_display.delete_id
                 }
                 1 => {
-                    // wl_display.get_registry(registry) → adverteer de globals.
+                    // wl_display.get_registry(registry) → advertise the globals.
                     let reg = rd_u32(args, 0);
                     self.objects.insert(reg, Obj::Registry);
                     self.advertise(reg, out);
@@ -165,14 +165,14 @@ impl Server {
             }
             Obj::XdgSurface { .. } => match opcode {
                 1 => {
-                    // xdg_surface.get_toplevel(new_id) + stuur een configure.
+                    // xdg_surface.get_toplevel(new_id) + send a configure.
                     let tid = rd_u32(args, 0);
                     self.objects.insert(tid, Obj::XdgToplevel { xdg_surface: obj });
                     self.toplevels.insert(tid, (obj, String::new()));
                     let s = self.next_serial();
                     write_msg(out, obj, 0, &[Arg::U(s)]); // xdg_surface.configure(serial)
                 }
-                4 => { /* ack_configure — geaccepteerd */ }
+                4 => { /* ack_configure — accepted */ }
                 _ => {}
             },
             Obj::XdgToplevel { .. } => {
@@ -186,8 +186,8 @@ impl Server {
             }
             Obj::Surface => {
                 if opcode == 6 {
-                    // wl_surface.commit() → als de surface een top-level met titel
-                    // heeft, is het venster nu klaar om te tekenen.
+                    // wl_surface.commit() → if the surface has a top-level with a
+                    // title, the window is now ready to draw.
                     self.commit_surface(obj);
                 }
             }
@@ -203,14 +203,14 @@ impl Server {
     }
 
     fn commit_surface(&mut self, sid: u32) {
-        // Zoek een top-level wiens xdg_surface naar deze surface verwijst.
+        // Find a top-level whose xdg_surface refers to this surface.
         let found = self
             .toplevels
             .values()
             .find(|(xid, _)| self.xdg_to_surface.get(xid) == Some(&sid))
             .map(|(_, title)| title.clone());
         if let Some(title) = found {
-            // Vervang een bestaand venster voor dezelfde surface (her-commit) of voeg toe.
+            // Replace an existing window for the same surface (re-commit) or add one.
             if let Some(w) = self.windows.iter_mut().find(|w| w.surface == sid) {
                 w.title = title;
             } else {
@@ -223,7 +223,7 @@ impl Server {
     }
 }
 
-// ── Wire-helpers ───────────────────────────────────────────────────────────
+// ── Wire helpers ───────────────────────────────────────────────────────────
 fn rd_u32(b: &[u8], o: usize) -> u32 {
     if o + 4 > b.len() {
         return 0;
@@ -231,38 +231,38 @@ fn rd_u32(b: &[u8], o: usize) -> u32 {
     u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
 }
 
-/// Lees een Wayland-string op offset `o`: `[len:u32][len bytes incl null][pad→4]`.
-/// Geeft (string-zonder-null, offset ná de gepadde string).
+/// Read a Wayland string at offset `o`: `[len:u32][len bytes incl null][pad→4]`.
+/// Returns (string-without-null, offset after the padded string).
 fn rd_string(b: &[u8], o: usize) -> (String, usize) {
     let len = rd_u32(b, o) as usize;
     let start = o + 4;
     if len == 0 || start + len > b.len() {
         return (String::new(), start + ((len + 3) & !3));
     }
-    let bytes = &b[start..start + len - 1]; // laatste byte = null
+    let bytes = &b[start..start + len - 1]; // last byte = null
     let s = String::from_utf8_lossy(bytes).into_owned();
     (s, start + ((len + 3) & !3))
 }
 
-/// Een Wayland-argument (voor het bouwen van requests/events).
+/// A Wayland argument (for building requests/events).
 pub enum Arg<'a> {
     U(u32),
     S(&'a str),
 }
 
-/// Codeer één Wayland-bericht (header + word-uitgelijnde args) tot bytes — handig
-/// om client-requests te bouwen (bv. een in-kernel test-client).
+/// Encode one Wayland message (header + word-aligned args) to bytes — handy
+/// for building client requests (e.g. an in-kernel test client).
 pub fn encode(obj: u32, opcode: u16, args: &[Arg]) -> Vec<u8> {
     let mut out = Vec::new();
     write_msg(&mut out, obj, opcode, args);
     out
 }
 
-/// Schrijf één Wayland-bericht (header + word-uitgelijnde args) naar `out`.
+/// Write one Wayland message (header + word-aligned args) to `out`.
 fn write_msg(out: &mut Vec<u8>, obj: u32, opcode: u16, args: &[Arg]) {
     let start = out.len();
     out.extend_from_slice(&obj.to_le_bytes());
-    out.extend_from_slice(&[0, 0, 0, 0]); // grootte+opcode (later)
+    out.extend_from_slice(&[0, 0, 0, 0]); // size+opcode (filled in later)
     for a in args {
         match a {
             Arg::U(v) => out.extend_from_slice(&v.to_le_bytes()),
@@ -286,7 +286,7 @@ fn write_msg(out: &mut Vec<u8>, obj: u32, opcode: u16, args: &[Arg]) {
 mod tests {
     use super::*;
 
-    // ── Client-zijde-helper om echte Wayland-requests te bouwen ──
+    // ── Client-side helper to build real Wayland requests ──
     fn req(obj: u32, opcode: u16, args: &[Arg]) -> Vec<u8> {
         let mut v = Vec::new();
         write_msg(&mut v, obj, opcode, args);
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn string_arg_padding() {
-        // "wl_shm" = 6 chars + null = 7 → gepad naar 8 bytes na de len-u32.
+        // "wl_shm" = 6 chars + null = 7 → padded to 8 bytes after the len-u32.
         let m = req(1, 0, &[Arg::S("wl_shm")]);
         // size = 8 (header) + 4 (len) + 8 (padded string) = 20
         assert_eq!(rd_u32(&m, 4) >> 16, 20);
@@ -319,7 +319,7 @@ mod tests {
         let mut s = Server::new();
         // wl_display.get_registry(new_id=2)
         let out = s.handle(&req(WL_DISPLAY, 1, &[Arg::U(2)]));
-        // Verwacht 3 global-events op registry-object 2.
+        // Expect 3 global events on registry object 2.
         let mut p = 0;
         let mut globals = Vec::new();
         while p + 8 <= out.len() {
@@ -327,7 +327,7 @@ mod tests {
             let w2 = rd_u32(&out, p + 4);
             let size = (w2 >> 16) as usize;
             assert_eq!(obj, 2); // registry
-            assert_eq!(w2 & 0xffff, 0); // global-event
+            assert_eq!(w2 & 0xffff, 0); // global event
             let (iface, _) = rd_string(&out, p + 8 + 4);
             globals.push(iface);
             p += (size + 3) & !3;
@@ -336,7 +336,7 @@ mod tests {
         assert!(globals.iter().any(|g| g == "xdg_wm_base"));
     }
 
-    /// Volledige handshake die in een getiteld venster eindigt.
+    /// Full handshake that ends in a titled window.
     fn handshake(title: &str) -> Server {
         let mut s = Server::new();
         let mut buf = Vec::new();
@@ -354,10 +354,10 @@ mod tests {
 
     #[test]
     fn full_handshake_creates_titled_window() {
-        let s = handshake("Hallo Wayland");
+        let s = handshake("Hello Wayland");
         assert_eq!(s.windows().len(), 1);
         assert_eq!(s.windows()[0].surface, 5);
-        assert_eq!(s.windows()[0].title, "Hallo Wayland");
+        assert_eq!(s.windows()[0].title, "Hello Wayland");
     }
 
     #[test]
@@ -366,7 +366,7 @@ mod tests {
         let mut buf = Vec::new();
         buf.extend(req(WL_DISPLAY, 1, &[Arg::U(2)]));
         buf.extend(req(2, 0, &[Arg::U(G_COMPOSITOR), Arg::S("wl_compositor"), Arg::U(4), Arg::U(3)]));
-        buf.extend(req(3, 0, &[Arg::U(5)])); // create_surface, maar GEEN commit
+        buf.extend(req(3, 0, &[Arg::U(5)])); // create_surface, but NO commit
         s.handle(&buf);
         assert_eq!(s.windows().len(), 0);
     }
@@ -378,9 +378,9 @@ mod tests {
         buf.extend(req(WL_DISPLAY, 1, &[Arg::U(2)]));
         buf.extend(req(2, 0, &[Arg::U(G_COMPOSITOR), Arg::S("wl_compositor"), Arg::U(4), Arg::U(3)]));
         buf.extend(req(3, 0, &[Arg::U(5)])); // surface 5
-        buf.extend(req(5, 6, &[])); // commit zonder xdg_toplevel
+        buf.extend(req(5, 6, &[])); // commit without xdg_toplevel
         s.handle(&buf);
-        assert_eq!(s.windows().len(), 0); // geen top-level → geen venster
+        assert_eq!(s.windows().len(), 0); // no top-level → no window
     }
 
     #[test]
@@ -396,7 +396,7 @@ mod tests {
         let pre = out.len();
         let out2 = s.handle(&req(6, 1, &[Arg::U(7)])); // get_toplevel
         let _ = pre;
-        // Verwacht een xdg_surface.configure(serial) op object 6, opcode 0.
+        // Expect an xdg_surface.configure(serial) on object 6, opcode 0.
         assert!(out2.len() >= 12);
         assert_eq!(rd_u32(&out2, 0), 6);
         assert_eq!(rd_u32(&out2, 4) & 0xffff, 0);

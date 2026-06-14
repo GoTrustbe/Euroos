@@ -1,13 +1,13 @@
-//! EuroIDM — soevereine bedrijfsidentiteit (plan V).
+//! EuroIDM — sovereign enterprise identity (plan V).
 //!
-//! EuroOS koppelt *identiteit* aan het *capability-model*: een gebruiker hoort bij
-//! groepen, en groepen verlenen EuroGuard-capabilities. Een aanmelding levert een
-//! **getekend token** (OIDC-achtig: subject + groepen + vervaltijd, Ed25519-getekend
-//! door de IDM) dat diensten lokaal kunnen verifiëren zonder de IDM te bevragen — en
-//! waaruit ze de effectieve capabilities afleiden. Geen verplichte externe identity
-//! provider: de IDM draait lokaal (standalone of als brug naar LDAP/OIDC).
+//! EuroOS ties *identity* to the *capability model*: a user belongs to
+//! groups, and groups grant EuroGuard capabilities. A login produces a
+//! **signed token** (OIDC-like: subject + groups + expiry, Ed25519-signed
+//! by the IDM) that services can verify locally without querying the IDM — and
+//! from which they derive the effective capabilities. No mandatory external identity
+//! provider: the IDM runs locally (standalone or as a bridge to LDAP/OIDC).
 //!
-//! Host-getest; `no_std`. Capabilities zijn een `u64`-bitset (subset van EuroGuard).
+//! Host-tested; `no_std`. Capabilities are a `u64` bitset (subset of EuroGuard).
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -20,7 +20,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
 const DOMAIN: &[u8] = b"EuroIDM-token-v1\0";
 
-// ── Capabilities (subset van EuroGuard, voor groep→cap-mapping) ─────────────
+// ── Capabilities (subset of EuroGuard, for group→cap mapping) ───────────────
 pub const CAP_LOGIN: u64 = 1 << 0;
 pub const CAP_NET: u64 = 1 << 1;
 pub const CAP_FS_READ: u64 = 1 << 2;
@@ -30,7 +30,7 @@ pub const CAP_USER_ADMIN: u64 = 1 << 5;
 pub const CAP_IMMUTABLE_ADMIN: u64 = 1 << 6;
 pub const CAP_SHUTDOWN: u64 = 1 << 7;
 
-/// Een gebruiker: een uid, een naam en groepslidmaatschappen.
+/// A user: a uid, a name and group memberships.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct User {
     pub uid: u32,
@@ -38,14 +38,14 @@ pub struct User {
     pub groups: Vec<String>,
 }
 
-/// De identiteitsopslag: gebruikers + de groep→capability-regels + de IDM-sleutel.
+/// The identity store: users + the group→capability rules + the IDM key.
 pub struct Idm {
     key: SigningKey,
     users: Vec<User>,
     group_caps: Vec<(String, u64)>,
 }
 
-/// Een getekend identiteitstoken.
+/// A signed identity token.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Token {
     pub subject: String,
@@ -56,7 +56,7 @@ pub struct Token {
     pub signature: [u8; 64],
 }
 
-/// Waarom een token afgewezen wordt.
+/// Why a token is rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TokenError {
     BadSignature,
@@ -82,17 +82,17 @@ fn tbs(subject: &str, uid: u32, groups: &[String], iat: u64, exp: u64) -> Vec<u8
 }
 
 impl Idm {
-    /// Maak een IDM met een 32-byte sleutel-seed.
+    /// Create an IDM with a 32-byte key seed.
     pub fn new(seed: [u8; 32]) -> Idm {
         Idm { key: SigningKey::from_bytes(&seed), users: Vec::new(), group_caps: Vec::new() }
     }
 
-    /// De publieke sleutel waarmee diensten tokens verifiëren.
+    /// The public key with which services verify tokens.
     pub fn public_key(&self) -> [u8; 32] {
         self.key.verifying_key().to_bytes()
     }
 
-    /// Voeg een gebruiker toe.
+    /// Add a user.
     pub fn add_user(&mut self, uid: u32, name: &str, groups: &[&str]) {
         self.users.push(User {
             uid,
@@ -101,7 +101,7 @@ impl Idm {
         });
     }
 
-    /// Koppel een groep aan een capability-masker.
+    /// Link a group to a capability mask.
     pub fn set_group_caps(&mut self, group: &str, caps: u64) {
         if let Some(e) = self.group_caps.iter_mut().find(|(g, _)| g == group) {
             e.1 = caps;
@@ -114,7 +114,7 @@ impl Idm {
         self.users.iter().find(|u| u.name == name)
     }
 
-    /// De effectieve capabilities van een groepenlijst = de unie van de groep-maskers.
+    /// The effective capabilities of a group list = the union of the group masks.
     pub fn caps_for_groups(&self, groups: &[String]) -> u64 {
         let mut caps = 0u64;
         for g in groups {
@@ -125,7 +125,7 @@ impl Idm {
         caps
     }
 
-    /// Geef (na geslaagde aanmelding) een getekend token uit met geldigheid [`now`, `now+ttl`].
+    /// Issue (after a successful login) a signed token with validity [`now`, `now+ttl`].
     pub fn issue_token(&self, name: &str, now: u64, ttl: u64) -> Option<Token> {
         let u = self.lookup(name)?;
         let exp = now + ttl;
@@ -142,7 +142,7 @@ impl Idm {
 }
 
 impl Token {
-    /// Verifieer het token tegen de IDM-publieke sleutel op tijdstip `now`.
+    /// Verify the token against the IDM public key at time `now`.
     pub fn verify(&self, idm_pubkey: &[u8; 32], now: u64) -> Result<(), TokenError> {
         let vk = VerifyingKey::from_bytes(idm_pubkey).map_err(|_| TokenError::BadIssuerKey)?;
         let sig = Signature::from_bytes(&self.signature);
@@ -180,10 +180,10 @@ mod tests {
         let idm = idm();
         let anke = idm.lookup("anke").unwrap();
         assert_eq!(idm.caps_for_groups(&anke.groups), CAP_LOGIN | CAP_NET | CAP_FS_READ);
-        // Combinatie van twee groepen = unie.
+        // Combination of two groups = union.
         let c = idm.lookup("controle").unwrap();
         assert_eq!(idm.caps_for_groups(&c.groups), CAP_LOGIN | CAP_NET | CAP_FS_READ | CAP_AUDIT_READ);
-        // Admin heeft user-admin, controle niet.
+        // Admin has user-admin, controle does not.
         assert_ne!(idm.caps_for_groups(&idm.lookup("root").unwrap().groups) & CAP_USER_ADMIN, 0);
     }
 
@@ -193,7 +193,7 @@ mod tests {
         let tok = idm.issue_token("anke", T0, 3600).unwrap();
         assert_eq!(tok.verify(&idm.public_key(), T0 + 100), Ok(()));
         assert_eq!(tok.uid, 1000);
-        assert_eq!(idm.caps_for_groups(&tok.groups) & CAP_FS_WRITE, 0); // user mag niet schrijven
+        assert_eq!(idm.caps_for_groups(&tok.groups) & CAP_FS_WRITE, 0); // user may not write
     }
 
     #[test]
@@ -207,7 +207,7 @@ mod tests {
     fn tampered_token_rejected() {
         let idm = idm();
         let mut tok = idm.issue_token("anke", T0, 3600).unwrap();
-        // Privilege-escalatie: voeg 'admins' toe na ondertekening.
+        // Privilege escalation: add 'admins' after signing.
         tok.groups.push(String::from("admins"));
         assert_eq!(tok.verify(&idm.public_key(), T0 + 100), Err(TokenError::BadSignature));
     }

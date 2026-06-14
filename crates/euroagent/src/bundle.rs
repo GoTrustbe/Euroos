@@ -1,42 +1,42 @@
-//! `.euroa`-bundle-verificatie (Sprint AA, stap 1 — sluitstuk).
+//! `.euroa` bundle verification (Sprint AA, step 1 — the keystone).
 //!
-//! Een agent wordt verspreid als een **Ed25519-gesigneerde** bundle: het manifest
-//! (TOML) + de WASM-binary, samen ondertekend door de uitgever. De runtime mag een
-//! agent **nooit** instantiëren zonder een geldige handtekening tegen een vertrouwde
-//! publieke sleutel — zo is de keten "uitgever → bundle → draaiende agent" sluitend
-//! en is de capability-isolatie niet te omzeilen via een vervalst manifest.
+//! An agent is distributed as an **Ed25519-signed** bundle: the manifest
+//! (TOML) + the WASM binary, signed together by the publisher. The runtime must
+//! **never** instantiate an agent without a valid signature against a trusted
+//! public key — this way the chain "publisher → bundle → running agent" is airtight
+//! and the capability isolation cannot be bypassed via a forged manifest.
 //!
-//! Het ondertekende bericht is domein-gescheiden en lengte-geprefixt zodat manifest
-//! en WASM niet door elkaar te schuiven zijn:
+//! The signed message is domain-separated and length-prefixed so that manifest
+//! and WASM cannot be shuffled into one another:
 //! `"EuroAgent-bundle-v1\0" || len(manifest):u32-LE || manifest || wasm`.
 
 use crate::manifest::{AgentManifest, ManifestError};
 use alloc::vec::Vec;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
-/// Domeinscheider — voorkomt dat een handtekening uit een andere context hergebruikt wordt.
+/// Domain separator — prevents a signature from another context being reused.
 const DOMAIN: &[u8] = b"EuroAgent-bundle-v1\0";
 
-/// Een (nog niet geverifieerde) agent-bundle.
+/// A (not yet verified) agent bundle.
 pub struct AgentBundle<'a> {
     pub manifest_toml: &'a str,
     pub wasm: &'a [u8],
-    /// Ed25519-handtekening (64 bytes) over het domein-gescheiden bericht.
+    /// Ed25519 signature (64 bytes) over the domain-separated message.
     pub signature: [u8; 64],
 }
 
-/// Waarom een bundle afgewezen werd.
+/// Why a bundle was rejected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BundleError {
-    /// De publieke sleutel is geen geldig Ed25519-punt.
+    /// The public key is not a valid Ed25519 point.
     BadKey,
-    /// De handtekening klopt niet voor (deze sleutel, dit bericht).
+    /// The signature does not match for (this key, this message).
     BadSignature,
-    /// De handtekening klopt, maar het manifest is ongeldig.
+    /// The signature is correct, but the manifest is invalid.
     Manifest(ManifestError),
 }
 
-/// Bouw het domein-gescheiden, lengte-geprefixte bericht dat ondertekend wordt.
+/// Build the domain-separated, length-prefixed message that gets signed.
 pub fn signing_message(manifest_toml: &str, wasm: &[u8]) -> Vec<u8> {
     let mb = manifest_toml.as_bytes();
     let mut msg = Vec::with_capacity(DOMAIN.len() + 4 + mb.len() + wasm.len());
@@ -48,14 +48,14 @@ pub fn signing_message(manifest_toml: &str, wasm: &[u8]) -> Vec<u8> {
 }
 
 impl<'a> AgentBundle<'a> {
-    /// Verifieer de handtekening tegen `pubkey` en parse dan het manifest.
-    /// Geeft het gevalideerde manifest **alleen** terug als de handtekening klopt.
+    /// Verify the signature against `pubkey` and then parse the manifest.
+    /// Returns the validated manifest **only** if the signature is correct.
     pub fn verify(&self, pubkey: &[u8; 32]) -> Result<AgentManifest, BundleError> {
         let vk = VerifyingKey::from_bytes(pubkey).map_err(|_| BundleError::BadKey)?;
         let sig = Signature::from_bytes(&self.signature);
         let msg = signing_message(self.manifest_toml, self.wasm);
         vk.verify(&msg, &sig).map_err(|_| BundleError::BadSignature)?;
-        // Pas ná de handtekening parsen we het manifest (geen vertrouwen vóór verificatie).
+        // Only after the signature do we parse the manifest (no trust before verification).
         AgentManifest::from_toml(self.manifest_toml).map_err(BundleError::Manifest)
     }
 }
@@ -68,7 +68,7 @@ mod tests {
     const MANIFEST: &str = "[agent]\nname=\"signer\"\nversion=\"1\"\nwasm=\"a.wasm\"\n[capabilities]\nrequired=[\"CAP_AGENT_FS_READ\"]\n";
 
     fn keypair() -> SigningKey {
-        // Deterministische sleutel voor reproduceerbare tests.
+        // Deterministic key for reproducible tests.
         SigningKey::from_bytes(&[7u8; 32])
     }
 
@@ -90,7 +90,7 @@ mod tests {
         let sk = keypair();
         let wasm = b"\0asm";
         let sig = sign(&sk, MANIFEST, wasm);
-        // Verander het manifest ná het tekenen → handtekening moet falen.
+        // Change the manifest after signing → signature must fail.
         let evil = "[agent]\nname=\"evil\"\nversion=\"1\"\nwasm=\"a.wasm\"\n[capabilities]\nrequired=[\"CAP_AGENT_EXEC\"]\n";
         let bundle = AgentBundle { manifest_toml: evil, wasm, signature: sig };
         assert_eq!(bundle.verify(&sk.verifying_key().to_bytes()), Err(BundleError::BadSignature));

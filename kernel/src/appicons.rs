@@ -1,12 +1,12 @@
-//! EuroOS app-icon-systeem — kleurrijke squircle-tegels (uit `appicons.js`).
+//! EuroOS app-icon system — colorful squircle tiles (from `appicons.js`).
 //!
-//! Elke app heeft een afgeronde tegel met een 150°-verloop, een witte euicon-
-//! glyph (~52% van de tegel) en een zachte, getinte slagschaduw — precies zoals
-//! het EDS de app-iconen tekent (zie `assets/appicons.js`, `v3-dock.png`).
+//! Each app has a rounded tile with a 150° gradient, a white euicon
+//! glyph (~52% of the tile) and a soft, tinted drop shadow — exactly as
+//! the EDS draws the app icons (see `assets/appicons.js`, `v3-dock.png`).
 
 use crate::graphics::{Color, FrameBuffer};
 
-/// (verloop-van, verloop-naar, tint/schaduw, glyph-naam in `icons`).
+/// (gradient-from, gradient-to, tint/shadow, glyph name in `icons`).
 struct Def {
     g0: Color,
     g1: Color,
@@ -25,7 +25,7 @@ fn def(id: &str) -> Def {
         "photos" => Def { g0: c(0x9A, 0x7B, 0xEA), g1: c(0x6A, 0x4B, 0xD0), tint: c(0x6A, 0x4B, 0xD0), glyph: "photos" },
         "terminal" => Def { g0: c(0x3A, 0x4A, 0x5E), g1: c(0x1C, 0x27, 0x35), tint: c(0x1C, 0x27, 0x35), glyph: "terminal" },
         "vault" => Def { g0: c(0x2E, 0xA8, 0x6A), g1: c(0x14, 0x7A, 0x4A), tint: c(0x14, 0x7A, 0x4A), glyph: "shieldCheck" },
-        // Nieuwe dock-apps (AG-1): notities (amber), klok (violet), agent (indigo).
+        // New dock apps (AG-1): notes (amber), clock (violet), agent (indigo).
         "notes" => Def { g0: c(0xF6, 0xC8, 0x5A), g1: c(0xE2, 0xA3, 0x3A), tint: c(0xE2, 0xA3, 0x3A), glyph: "doc" },
         "clock" => Def { g0: c(0x9A, 0x7B, 0xEA), g1: c(0x6A, 0x4B, 0xD0), tint: c(0x6A, 0x4B, 0xD0), glyph: "clock" },
         "star" => Def { g0: c(0x6E, 0x8B, 0xF5), g1: c(0x3B, 0x4E, 0xC8), tint: c(0x3B, 0x4E, 0xC8), glyph: "star" },
@@ -36,20 +36,20 @@ fn def(id: &str) -> Def {
     }
 }
 
-/// Teken een app-tegel met linkerbovenhoek (x,y) en zijde `size`.
+/// Draw an app tile with top-left corner (x,y) and side `size`.
 pub fn draw_tile(fb: &FrameBuffer, x: usize, y: usize, size: usize, id: &str) {
     let d = def(id);
-    // Getinte slagschaduw onder de tegel (geeft de "zwevende" look).
+    // Tinted drop shadow under the tile (gives the "floating" look).
     let spread = (size as i32 * 18 / 100).max(5);
     let off = (size as i32 * 9 / 100).max(3);
     fb.drop_shadow(x, y, size, size, spread, off, d.tint);
-    // Verlopen squircle (radius 28% — het EDS-icoonprofiel).
+    // Gradient squircle (radius 28% — the EDS icon profile).
     let r = size * 28 / 100;
     fb.fill_rounded_rect_grad(x, y, size, size, r, d.g0, d.g1);
-    // Subtiele inset-highlight bovenaan (glas-look).
+    // Subtle inset highlight at the top (glass look).
     let hl = (size / 12).max(2);
     fb.fill_rounded_rect(x + r / 2, y + hl / 2, size - r, hl, hl / 2, Color::WHITE.over(d.g0, 70));
-    // Witte glyph, gecentreerd op ~52%.
+    // White glyph, centered at ~52%.
     let gs = size * 52 / 100;
     let gx = x + (size - gs) / 2;
     let gy = y + (size - gs) / 2;

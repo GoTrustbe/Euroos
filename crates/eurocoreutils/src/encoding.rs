@@ -1,4 +1,4 @@
-//! Encoding-commando's (CU-6): base64, base32 (encode/decode) + POSIX `cksum` (CRC).
+//! Encoding commands (CU-6): base64, base32 (encode/decode) + POSIX `cksum` (CRC).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -6,8 +6,8 @@ use alloc::vec::Vec;
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const B32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
-/// `base64` (encode, default) / `base64 -d` (decode). De encoder breekt op 76 kolommen
-/// zoals GNU `base64`.
+/// `base64` (encode, default) / `base64 -d` (decode). The encoder wraps at 76 columns
+/// like GNU `base64`.
 pub fn base64(decode: bool, input: &[u8]) -> Vec<u8> {
     if decode {
         b64_decode(input)
@@ -79,7 +79,7 @@ fn b32_encode(data: &[u8]) -> Vec<u8> {
         buf[..chunk.len()].copy_from_slice(chunk);
         let n = ((buf[0] as u64) << 32) | ((buf[1] as u64) << 24) | ((buf[2] as u64) << 16) | ((buf[3] as u64) << 8) | buf[4] as u64;
         let chars = [(n >> 35) & 31, (n >> 30) & 31, (n >> 25) & 31, (n >> 20) & 31, (n >> 15) & 31, (n >> 10) & 31, (n >> 5) & 31, n & 31];
-        // Aantal geldige output-tekens per ingangsblok-lengte (RFC 4648).
+        // Number of valid output characters per input-block length (RFC 4648).
         let valid = match chunk.len() {
             1 => 2,
             2 => 4,
@@ -131,7 +131,7 @@ fn wrap76(data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// `cksum` — de POSIX CRC + byte-aantal (GNU-compatibel). Uitvoer: `<crc> <len> <naam>`.
+/// `cksum` — the POSIX CRC + byte count (GNU-compatible). Output: `<crc> <len> <name>`.
 pub fn cksum(input: &[u8], name: &str) -> Vec<u8> {
     let crc = posix_cksum_crc(input);
     let mut s = String::new();
@@ -147,7 +147,7 @@ pub fn cksum(input: &[u8], name: &str) -> Vec<u8> {
 }
 
 fn posix_cksum_crc(data: &[u8]) -> u32 {
-    // CRC-32/CKSUM: poly 0x04C11DB7, niet-gereflecteerd, init 0, lengte-bytes mee,
+    // CRC-32/CKSUM: poly 0x04C11DB7, non-reflected, init 0, length bytes included,
     // final XOR 0xFFFFFFFF.
     let mut crc: u32 = 0;
     let step = |crc: u32, byte: u8| -> u32 {

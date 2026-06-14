@@ -1,21 +1,21 @@
-//! Kernel-observability (Sprint S1 / Missing §1): in-memory **kmsg-ringbuffer** +
-//! niveau-logging + rijke panic-context (registers + backtrace + recente historie).
+//! Kernel observability (Sprint S1 / Missing §1): in-memory **kmsg ring buffer** +
+//! level logging + rich panic context (registers + backtrace + recent history).
 //!
-//! ALLE seriële output wordt mee in de ring gecaptured (een tee in `serial::_print`),
-//! zodat `dmesg` en de panic-handler de recente kernelhistorie tonen zónder dat je
-//! de seriële log hoeft te lezen. De ring is een vaste array (géén alloc in het
-//! log-pad), dus veilig aan te roepen vanuit een IRQ of de panic-handler.
+//! ALL serial output is also captured into the ring (a tee in `serial::_print`),
+//! so that `dmesg` and the panic handler show the recent kernel history without you
+//! having to read the serial log. The ring is a fixed array (no alloc in the
+//! log path), so it is safe to call from an IRQ or the panic handler.
 
 use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 
-pub const LINES: usize = 512; // aantal bewaarde regels (ringgrootte)
-pub const LINE_LEN: usize = 160; // max bytes per regel (afgekapt)
-const MAX_CPU: usize = 8; // per-CPU partiële-regel-buffers (J1)
+pub const LINES: usize = 512; // number of retained lines (ring size)
+pub const LINE_LEN: usize = 160; // max bytes per line (truncated)
+const MAX_CPU: usize = 8; // per-CPU partial-line buffers (J1)
 
-/// Bekende grenzen van het kernel-.text-segment (UEFI image base 0x1_4000_0000).
-/// Gebruikt om bij de stack-scan/backtrace echte code-returnadressen te herkennen.
+/// Known boundaries of the kernel .text segment (UEFI image base 0x1_4000_0000).
+/// Used during the stack scan/backtrace to recognize real code return addresses.
 pub const KCODE_LO: u64 = 0x1_4000_0000;
-pub const KCODE_HI: u64 = 0x1_4080_0000; // ruim boven de ~1.7 MiB image
+pub const KCODE_HI: u64 = 0x1_4080_0000; // well above the ~1.7 MiB image
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Level {
@@ -36,34 +36,34 @@ impl Level {
     }
 }
 
-// ── J1: LOCK-VRIJE kmsg-ring ────────────────────────────────────────────────
-// Geen globale Mutex meer op het log-pad (dat werd op ELKE seriële regel genomen,
-// ook vanuit IRQ's en op meerdere cores → contentie + deadlock-risico in de panic-
-// handler). In plaats daarvan:
-//   • De committed-regels-ring is een MPSC-ring: een schrijver claimt een slot met
-//     `HEAD.fetch_add(1)` (atomair, wacht-vrij) en schrijft in `LBUF[idx % LINES]`;
-//     `LLEN[idx]` wordt met Release gepubliceerd. Verschillende cores claimen
-//     verschillende slots → geen content-race binnen het ring-venster.
-//   • De partiële (nog niet afgesloten) regel staat PER-CPU (`PCUR`/`PLEN`), zodat
-//     elke core z'n eigen regel opbouwt zonder enige lock of cross-core-deling.
-// Lezers (dmesg/panic) lezen lock-vrij → de panic-handler kan NOOIT blokkeren.
-static HEAD: AtomicUsize = AtomicUsize::new(0); // totaal aantal ooit geschreven regels
+// ── J1: LOCK-FREE kmsg ring ─────────────────────────────────────────────────
+// No more global Mutex on the log path (which was taken on EVERY serial line,
+// including from IRQs and on multiple cores → contention + deadlock risk in the panic
+// handler). Instead:
+//   • The committed-lines ring is an MPSC ring: a writer claims a slot with
+//     `HEAD.fetch_add(1)` (atomic, wait-free) and writes into `LBUF[idx % LINES]`;
+//     `LLEN[idx]` is published with Release. Different cores claim
+//     different slots → no content race within the ring window.
+//   • The partial (not yet terminated) line lives PER-CPU (`PCUR`/`PLEN`), so
+//     each core builds its own line without any lock or cross-core sharing.
+// Readers (dmesg/panic) read lock-free → the panic handler can NEVER block.
+static HEAD: AtomicUsize = AtomicUsize::new(0); // total number of lines ever written
 static mut LBUF: [[u8; LINE_LEN]; LINES] = [[0; LINE_LEN]; LINES];
 static LLEN: [AtomicU16; LINES] = [const { AtomicU16::new(0) }; LINES];
 static mut PCUR: [[u8; LINE_LEN]; MAX_CPU] = [[0; LINE_LEN]; MAX_CPU];
 static mut PLEN: [usize; MAX_CPU] = [0; MAX_CPU];
-/// Pas ná `apic::init` mag de tee `lapic_id()` lezen (LAPIC-MMIO gemapt + cores live).
-/// Daarvóór is alles single-core BSP → CPU-index 0.
+/// Only after `apic::init` may the tee read `lapic_id()` (LAPIC-MMIO mapped + cores live).
+/// Before that everything is single-core BSP → CPU index 0.
 static APIC_READY: AtomicBool = AtomicBool::new(false);
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Markeer dat de Local-APIC klaar is (door `interrupts::init_timer` aangeroepen).
+/// Mark that the Local-APIC is ready (called by `interrupts::init_timer`).
 pub fn mark_apic_ready() {
     APIC_READY.store(true, Ordering::Release);
 }
 
-/// De CPU-index voor de per-CPU partiële-regel-buffer (veilig vóór APIC-init: 0).
+/// The CPU index for the per-CPU partial-line buffer (safe before APIC init: 0).
 #[inline]
 fn cpu_slot() -> usize {
     if APIC_READY.load(Ordering::Acquire) {
@@ -73,7 +73,7 @@ fn cpu_slot() -> usize {
     }
 }
 
-/// Commit één volledige regel naar de lock-vrije ring (claim slot + publiceer len).
+/// Commit one complete line to the lock-free ring (claim slot + publish len).
 fn commit_line(bytes: &[u8]) {
     let n = bytes.len().min(LINE_LEN);
     let idx = HEAD.fetch_add(1, Ordering::Relaxed) % LINES;
@@ -84,13 +84,13 @@ fn commit_line(bytes: &[u8]) {
     LLEN[idx].store(n as u16, Ordering::Release);
 }
 
-/// Een (raw) pointer naar de inhoud van ring-slot `i`.
+/// A (raw) pointer to the contents of ring slot `i`.
 #[inline]
 fn line_ptr(i: usize) -> *const u8 {
     (core::ptr::addr_of!(LBUF) as *const u8).wrapping_add(i * LINE_LEN)
 }
 
-/// Aantal geldige regels in de ring + de start-index (oudste regel).
+/// Number of valid lines in the ring + the start index (oldest line).
 fn ring_view() -> (usize, usize) {
     let total = HEAD.load(Ordering::Acquire);
     let count = total.min(LINES);
@@ -98,12 +98,12 @@ fn ring_view() -> (usize, usize) {
     (count, start)
 }
 
-/// Tee: elke seriële byte stroomt hier ook doorheen. We line-bufferen PER-CPU tot
-/// '\n' en committen de regel dan lock-vrij naar de ring. '\r' wordt genegeerd.
+/// Tee: every serial byte also flows through here. We line-buffer PER-CPU until
+/// '\n' and then commit the line lock-free to the ring. '\r' is ignored.
 pub fn tee(s: &str) {
     let cpu = cpu_slot();
     unsafe {
-        // Raw pointers naar de per-CPU partiële regel (geen autoref op statics).
+        // Raw pointers to the per-CPU partial line (no autoref on statics).
         let cur = (core::ptr::addr_of_mut!(PCUR) as *mut u8).add(cpu * LINE_LEN);
         let plen = (core::ptr::addr_of_mut!(PLEN) as *mut usize).add(cpu);
         for &b in s.as_bytes() {
@@ -121,16 +121,16 @@ pub fn tee(s: &str) {
     }
 }
 
-/// Structurele log-regel met niveau + uptime-tijdstempel. De tee in `serial::_print`
-/// vangt deze automatisch in de ring; we hoeven hier dus niet apart te pushen.
+/// Structured log line with level + uptime timestamp. The tee in `serial::_print`
+/// captures it into the ring automatically; so we do not need to push separately here.
 pub fn record(level: Level, args: core::fmt::Arguments) {
     let _ = SEQ.fetch_add(1, Ordering::Relaxed);
     let t = crate::interrupts::ticks();
     crate::serial::_print(format_args!("[{:>5}.{:02} {}] {}\n", t / 100, t % 100, level.tag(), args));
 }
 
-/// Snapshot van de hele ring (oudste -> nieuwste) als losse strings. Alloc — alleen
-/// vanuit een normale context (bv. het `dmesg`-shellcommando) aanroepen.
+/// Snapshot of the whole ring (oldest -> newest) as separate strings. Alloc — only
+/// call from a normal context (e.g. the `dmesg` shell command).
 pub fn snapshot() -> alloc::vec::Vec<alloc::string::String> {
     let (count, start) = ring_view();
     let mut out = alloc::vec::Vec::with_capacity(count);
@@ -143,8 +143,8 @@ pub fn snapshot() -> alloc::vec::Vec<alloc::string::String> {
     out
 }
 
-/// Roep `f` aan voor de laatste `n` ringregels (oudste -> nieuwste). Lock-vrij →
-/// blokkeert NOOIT (cruciaal voor de panic-handler).
+/// Call `f` for the last `n` ring lines (oldest -> newest). Lock-free →
+/// NEVER blocks (crucial for the panic handler).
 pub fn with_recent(n: usize, mut f: impl FnMut(&[u8])) {
     let (count, start) = ring_view();
     let cnt = count.min(n);
@@ -157,36 +157,36 @@ pub fn with_recent(n: usize, mut f: impl FnMut(&[u8])) {
     }
 }
 
-/// J1-zelftest: bewijs de lock-vrije ring. Schrijf een burst regels (zoals vanuit
-/// meerdere bronnen), en verifieer dat de HEAD-claim ze allemaal opnam en dat de
-/// inhoud intact terug te lezen is. (De APs loggen bij boot óók via dit lock-vrije
-/// pad — "core APIC-id N online" — dus echte cross-core-concurrency wordt al gedekt.)
+/// J1 self-test: prove the lock-free ring. Write a burst of lines (as if from
+/// multiple sources), and verify that the HEAD claim captured them all and that the
+/// content can be read back intact. (The APs at boot also log via this lock-free
+/// path — "core APIC-id N online" — so real cross-core concurrency is already covered.)
 pub fn lockfree_selftest() -> bool {
     let before = HEAD.load(Ordering::Acquire);
     for i in 0..64u32 {
-        crate::serial_println!("[j1-kmsg] lock-vrije-ring-test-regel {i}");
+        crate::serial_println!("[j1-kmsg] lock-free-ring-test-line {i}");
     }
     let after = HEAD.load(Ordering::Acquire);
-    // Tel hoeveel van onze test-regels intact in de ring staan.
+    // Count how many of our test lines are intact in the ring.
     let mut found = 0;
     let snap = snapshot();
     for line in &snap {
-        if line.starts_with("[j1-kmsg] lock-vrije-ring-test-regel ") {
+        if line.starts_with("[j1-kmsg] lock-free-ring-test-line ") {
             found += 1;
         }
     }
     let ok = after - before >= 64 && found >= 64;
     crate::serial_println!(
-        "[j1] lock-vrije kmsg-ring: {} regels geclaimd (HEAD {}→{}), {} intact teruggelezen → {}",
+        "[j1] lock-free kmsg ring: {} lines claimed (HEAD {}→{}), {} read back intact → {}",
         after - before, before, after, found,
-        if ok { "OK (geen Mutex op het log-pad) ✓" } else { "MISLUKT" }
+        if ok { "OK (no Mutex on the log path) ✓" } else { "FAILED" }
     );
     ok
 }
 
-/// Dump CPU-registers + een stack-backtrace naar de seriële poort. Wordt door de
-/// panic-handler aangeroepen. Loopt eerst de RBP-keten af (force-frame-pointers is
-/// aan), en valt terug op een stack-scan als de keten breekt.
+/// Dump CPU registers + a stack backtrace to the serial port. Called by the
+/// panic handler. First walks the RBP chain (force-frame-pointers is
+/// on), and falls back to a stack scan if the chain breaks.
 pub fn dump_registers_and_backtrace() {
     let (rsp, rbp, cr2, cr3, rflags): (u64, u64, u64, u64, u64);
     unsafe {
@@ -204,21 +204,21 @@ pub fn dump_registers_and_backtrace() {
         "[panic] RSP={rsp:#018x} RBP={rbp:#018x} RFLAGS={rflags:#x}\n[panic] CR2={cr2:#018x} CR3={cr3:#018x}\n"
     ));
 
-    // UEFI verplaatst de PE-image naar een RUNTIME-base (≠ link-base 0x1_4000_0000).
-    // Leid het echte .text-bereik af uit het adres van deze functie zelf, anders
-    // verwerpt de filter elk geldig returnadres. Het ANCHOR-adres (deze functie)
-    // is het ijkpunt voor offline symbolisatie: `scripts/symbolize.sh`.
+    // UEFI relocates the PE image to a RUNTIME base (≠ link base 0x1_4000_0000).
+    // Derive the real .text range from the address of this function itself, otherwise
+    // the filter rejects every valid return address. The ANCHOR address (this function)
+    // is the reference point for offline symbolization: `scripts/symbolize.sh`.
     let anchor = dump_registers_and_backtrace as usize as u64;
-    let code_lo = anchor & !0x3F_FFFF; // 4 MiB omlaag uitgelijnd
-    let code_hi = code_lo + 0x80_0000; // 8 MiB venster — dekt de hele kernel-.text
+    let code_lo = anchor & !0x3F_FFFF; // aligned down to 4 MiB
+    let code_hi = code_lo + 0x80_0000; // 8 MiB window — covers the whole kernel .text
     let in_code = |a: u64| a >= code_lo && a < code_hi;
     crate::serial::_print(format_args!("[panic] anchor dump_registers_and_backtrace @ {anchor:#018x}\n"));
 
-    // Backtrace: probeer eerst de RBP-keten ([rbp]=vorige rbp, [rbp+8]=returnadres).
-    // Bij een paniek breekt die vaak op core::panicking-frames (zonder frame pointer),
-    // dus vallen we terug op een stack-scan. Symboliseer ruwe adressen offline met
+    // Backtrace: first try the RBP chain ([rbp]=previous rbp, [rbp+8]=return address).
+    // On a panic this often breaks on core::panicking frames (without a frame pointer),
+    // so we fall back to a stack scan. Symbolize raw addresses offline with
     // `scripts/symbolize.sh target/kernel.map <anchor> <addr...>`.
-    crate::serial::_print(format_args!("[panic] backtrace (ruwe returnadressen):\n"));
+    crate::serial::_print(format_args!("[panic] backtrace (raw return addresses):\n"));
     let mut bp = rbp;
     let mut frames = 0;
     while frames < 32 && bp >= rsp && bp < rsp + 0x20000 && bp & 0x7 == 0 {
@@ -229,13 +229,13 @@ pub fn dump_registers_and_backtrace() {
             frames += 1;
         }
         if next <= bp {
-            break; // keten loopt niet meer omhoog -> stop
+            break; // chain no longer climbs upward -> stop
         }
         bp = next;
     }
     if frames == 0 {
-        // Terugval: scan de stack op code-adressen (frame pointers ontbraken).
-        crate::serial::_print(format_args!("[panic] (RBP-keten leeg; stack-scan)\n"));
+        // Fallback: scan the stack for code addresses (frame pointers were missing).
+        crate::serial::_print(format_args!("[panic] (RBP chain empty; stack scan)\n"));
         let mut p = rsp;
         let mut shown = 0;
         let mut last = 0u64;

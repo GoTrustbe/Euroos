@@ -1,6 +1,6 @@
-/* EuroOS — EuroIPC-ontvanger. Claimt poort 42 en wacht op een bericht van een
- * ander proces, en print het. Gebruikt de eigen EuroIPC-syscalls (500/501/502)
- * via rauwe syscall-asm. Een gewone musl-binary. */
+/* EuroOS — EuroIPC receiver. Claims port 42 and waits for a message from
+ * another process, then prints it. Uses the native EuroIPC syscalls (500/501/502)
+ * via raw syscall asm. An ordinary musl binary. */
 #include <unistd.h>
 
 static long ipc(long n, long a, long b, long c) {
@@ -10,7 +10,7 @@ static long ipc(long n, long a, long b, long c) {
 }
 
 int main(void) {
-    write(1, "ipcrecv: claim poort 42, wacht op bericht...\n", 44);
+    write(1, "ipcrecv: claim port 42, wait for message...\n", 44);
     ipc(500, 42, 0, 0); /* register port 42 */
 
     char buf[128];
@@ -22,11 +22,11 @@ int main(void) {
         }
     }
     if (n > 0) {
-        write(1, "ipcrecv: ontvangen via EuroIPC: ", 32);
+        write(1, "ipcrecv: received via EuroIPC: ", 31);
         write(1, buf, n);
         write(1, "\n", 1);
     } else {
-        write(1, "ipcrecv: geen bericht ontvangen\n", 32);
+        write(1, "ipcrecv: no message received\n", 29);
     }
     return 0;
 }

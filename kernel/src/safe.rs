@@ -1,11 +1,11 @@
-//! Kernel-zijde van **EuroSafe** (Sprint AC-1): het capability-dashboard.
-//! Bij boot bewijzen we de risico-scoring + aanbevelingen op een voorbeeld-set
-//! apps — het zichtbare gezicht van EuroGuard. Host-geteste kern: [`eurosafe`].
+//! Kernel side of **EuroSafe** (Sprint AC-1): the capability dashboard.
+//! At boot we prove the risk scoring + recommendations on a sample set of
+//! apps — the visible face of EuroGuard. Host-tested core: [`eurosafe`].
 
 use crate::serial_println;
 use eurosafe::{AppPermissions, AuditEvent, Capability, Dashboard, Risk};
 
-/// Boot-zelftest: bouw een dashboard, classificeer risico's, geef aanbevelingen.
+/// Boot self-test: build a dashboard, classify risks, give recommendations.
 pub fn selftest() {
     let mut db = Dashboard::new();
     db.add_app(
@@ -19,7 +19,7 @@ pub fn selftest() {
             .with(Capability::Vault)
             .with(Capability::FileRead),
     );
-    // Gevaarlijke, ongesandboxede, onverifieerde agent.
+    // Dangerous, unsandboxed, unverified agent.
     db.add_app(
         AppPermissions::new("rogue.bin")
             .with(Capability::Vault)
@@ -44,13 +44,13 @@ pub fn selftest() {
         && sys == Risk::High;
 
     serial_println!(
-        "[sf] EuroSafe: {} apps, hoog-risico={}, top-cap={}, geweigerd={}, aanbevelingen={}, systeemrisico={} {}",
+        "[sf] EuroSafe: {} apps, high-risk={}, top-cap={}, denied={}, recommendations={}, system-risk={} {}",
         db.apps.len(),
         high,
         top_cap,
         denied,
         recs.len(),
         sys.label(),
-        if ok { "✓" } else { "✗ FOUT" }
+        if ok { "✓" } else { "✗ FAIL" }
     );
 }

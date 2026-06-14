@@ -1,6 +1,6 @@
-//! Assembleert de SMP AP-trampoline (`asm/trampoline.S`) tot een flat binary op
-//! org 0x8000, die de kernel via `include_bytes!` insluit en naar physiek 0x8000
-//! kopieert vóór de INIT-SIPI-SIPI.
+//! Assembles the SMP AP trampoline (`asm/trampoline.S`) into a flat binary at
+//! org 0x8000, which the kernel embeds via `include_bytes!` and copies to physical
+//! 0x8000 before the INIT-SIPI-SIPI.
 
 use std::env;
 use std::path::Path;
@@ -18,15 +18,15 @@ fn main() {
         .args(["--64", src, "-o"])
         .arg(&obj)
         .status()
-        .expect("kon `as` niet uitvoeren");
-    assert!(status.success(), "as faalde op {src}");
+        .expect("could not run `as`");
+    assert!(status.success(), "as failed on {src}");
 
-    // -Ttext=0x8000 + flat binary: absolute labels resolven naar 0x8000+offset.
+    // -Ttext=0x8000 + flat binary: absolute labels resolve to 0x8000+offset.
     let status = Command::new("ld")
         .args(["-melf_x86_64", "-Ttext=0x8000", "--oformat", "binary", "-o"])
         .arg(&bin)
         .arg(&obj)
         .status()
-        .expect("kon `ld` niet uitvoeren");
-    assert!(status.success(), "ld faalde op de trampoline");
+        .expect("could not run `ld`");
+    assert!(status.success(), "ld failed on the trampoline");
 }

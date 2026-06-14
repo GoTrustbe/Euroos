@@ -1,35 +1,35 @@
-//! EuroCrash — **kernel crash-dump-formaat + recovery** (plan Y).
+//! EuroCrash — **kernel crash-dump format + recovery** (plan Y).
 //!
-//! G1 vangt stack-overflows recoverable op, maar een volwassen kernel legt bij een
-//! fatale `#PF`/`#DF`/`#GP`/paniek een **gestructureerde momentopname** van de
-//! kerneltoestand vast (registers, foutvector, CR2/CR3, build-hash), zodat een
-//! productie-crash achteraf te debuggen is i.p.v. giswerk. Deze crate is het
-//! architectuur-onafhankelijke **dump-formaat** (één 512-byte sector → "minidump"):
-//! coderen/decoderen + checksum. De kernel schrijft 'm naar een gereserveerd
-//! schijf-blok en leest 'm bij de volgende boot terug (recovery-modus).
+//! G1 recoverably catches stack-overflows, but a mature kernel, on a
+//! fatal `#PF`/`#DF`/`#GP`/panic, captures a **structured snapshot** of the
+//! kernel state (registers, fault vector, CR2/CR3, build-hash), so that a
+//! production crash can be debugged afterwards instead of guesswork. This crate is the
+//! architecture-independent **dump format** (one 512-byte sector → "minidump"):
+//! encode/decode + checksum. The kernel writes it to a reserved
+//! disk block and reads it back on the next boot (recovery mode).
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
 pub const CRASH_MAGIC: u64 = 0x4555_524F_4352_5348; // "EUROCRSH"
 pub const DUMP_VERSION: u32 = 1;
-pub const DUMP_BYTES: usize = 512; // één sector = minidump
+pub const DUMP_BYTES: usize = 512; // one sector = minidump
 
-/// Een minidump: registers + fout-context op het crash-moment.
+/// A minidump: registers + fault context at the moment of the crash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CrashDump {
     pub version: u32,
-    pub vector: u8,      // exceptie-vector: #DF=8, #GP=13, #PF=14, paniek=0xFF
+    pub vector: u8,      // exception vector: #DF=8, #GP=13, #PF=14, panic=0xFF
     pub error_code: u64,
     pub rip: u64,
     pub rsp: u64,
     pub rflags: u64,
-    pub cr2: u64,        // faulting address bij #PF
-    pub cr3: u64,        // page-table-root
-    pub regs: [u64; 16], // rax,rbx,rcx,rdx,rsi,rdi,rbp,rsp,r8..r15 (caller-volgorde)
-    pub build_hash: u64, // kernel-build-identiteit
+    pub cr2: u64,        // faulting address on #PF
+    pub cr3: u64,        // page-table root
+    pub regs: [u64; 16], // rax,rbx,rcx,rdx,rsi,rdi,rbp,rsp,r8..r15 (caller order)
+    pub build_hash: u64, // kernel-build identity
     pub uptime_ms: u64,
-    pub seq: u64,        // oplopend per dump (welke is de nieuwste)
+    pub seq: u64,        // increasing per dump (which is the newest)
 }
 
 impl CrashDump {
@@ -50,7 +50,7 @@ impl CrashDump {
         }
     }
 
-    /// Menselijke naam van de exceptie-vector.
+    /// Human-readable name of the exception vector.
     pub fn vector_name(&self) -> &'static str {
         match self.vector {
             8 => "#DF double-fault",
@@ -62,7 +62,7 @@ impl CrashDump {
         }
     }
 
-    /// Codeer naar een 512-byte sector (met magic + checksum).
+    /// Encode into a 512-byte sector (with magic + checksum).
     pub fn encode(&self) -> [u8; DUMP_BYTES] {
         let mut b = [0u8; DUMP_BYTES];
         w64(&mut b, 0, CRASH_MAGIC);
@@ -80,13 +80,13 @@ impl CrashDump {
         w64(&mut b, 192, self.build_hash);
         w64(&mut b, 200, self.uptime_ms);
         w64(&mut b, 208, self.seq);
-        // Checksum (XOR-fold) over alles vóór het checksum-veld op offset 504.
+        // Checksum (XOR-fold) over everything before the checksum field at offset 504.
         let csum = fold(&b[..504]);
         w64(&mut b, 504, csum);
         b
     }
 
-    /// Decodeer een sector → een dump (None bij verkeerde magic/checksum).
+    /// Decode a sector → a dump (None on wrong magic/checksum).
     pub fn decode(b: &[u8]) -> Option<CrashDump> {
         if b.len() < DUMP_BYTES || r64(b, 0) != CRASH_MAGIC {
             return None;
@@ -161,7 +161,7 @@ mod tests {
     fn rejects_bad_magic_and_checksum() {
         assert!(CrashDump::decode(&[0u8; DUMP_BYTES]).is_none());
         let mut enc = CrashDump::new(13, 0, 0x1234, 0, 0).encode();
-        enc[24] ^= 0xFF; // corrupt de rip → checksum mismatch
+        enc[24] ^= 0xFF; // corrupt the rip → checksum mismatch
         assert!(CrashDump::decode(&enc).is_none());
     }
 

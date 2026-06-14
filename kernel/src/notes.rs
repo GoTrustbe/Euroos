@@ -1,8 +1,8 @@
-//! Kernel-zijde van **EuroNotes** (Sprint AC-1): de notitie-app.
-//! Bij boot bewijzen we de Markdown→EuroDoc-pijplijn: koppen, inline-opmaak,
-//! lijsten met niveaus, en `#tag`-extractie. Host-geteste kern: [`euronotes`].
-//! Bevat ook de desktop-GUI (`render`): een notitielijst + de geselecteerde
-//! notitie gerenderd door de ECHTE `euronotes`-engine (geen mock-tekst).
+//! Kernel side of **EuroNotes** (Sprint AC-1): the notes app.
+//! At boot we prove the Markdown→EuroDoc pipeline: headings, inline formatting,
+//! lists with levels, and `#tag` extraction. Host-tested core: [`euronotes`].
+//! Also contains the desktop GUI (`render`): a note list + the selected
+//! note rendered by the REAL `euronotes` engine (no mock text).
 
 use crate::graphics::{Color, FrameBuffer};
 use crate::serial_println;
@@ -10,44 +10,44 @@ use crate::text;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use eurodoc::model::Block;
 
-/// Gelijk aan `compositor::TITLEBAR_H`.
+/// Equal to `compositor::TITLEBAR_H`.
 const TITLEBAR_H: usize = 44;
 
-/// Geseede notities (echte Markdown). De GUI parseert ze live met `euronotes`.
+/// Seeded notes (real Markdown). The GUI parses them live with `euronotes`.
 const NOTES: &[&str] = &[
-    "# Welkom bij EuroNotes #euros\n\n\
-     Dit is een **echte** notitie, geparset door de from-scratch *euronotes*-engine \
-     (Markdown → EuroDoc). Geen mock-tekst.\n\n\
-     Wat werkt:\n\n\
-     - Koppen en inline-opmaak\n\
-     - Lijsten met niveaus\n  - zoals deze geneste regel\n\
-     - `#tag`-extractie\n\n\
-     > Soevereiniteit door ontwerp.\n",
-    "# Sprintplan AG #roadmap\n\n\
-     Breedte-sprint na de Zero-Trust-cyclus:\n\n\
-     - AG-1 desktop-apps #nu\n\
-     - AG-2 browser: afbeeldingen + formulieren\n\
-     - AG-3 installer-executie\n\
-     - AG-4 coreutils long-tail\n\n\
-     Status: **bezig** en *op koers*.\n",
-    "# Boodschappen #thuis\n\n\
-     - Brood\n\
-     - Belgische chocolade\n\
-     - Koffie\n\n\
-     Niet vergeten: het is *soeverein* lekker.\n",
+    "# Welcome to EuroNotes #euros\n\n\
+     This is a **real** note, parsed by the from-scratch *euronotes* engine \
+     (Markdown → EuroDoc). No mock text.\n\n\
+     What works:\n\n\
+     - Headings and inline formatting\n\
+     - Lists with levels\n  - like this nested line\n\
+     - `#tag` extraction\n\n\
+     > Sovereignty by design.\n",
+    "# Sprint plan AG #roadmap\n\n\
+     Breadth sprint after the Zero-Trust cycle:\n\n\
+     - AG-1 desktop apps #now\n\
+     - AG-2 browser: images + forms\n\
+     - AG-3 installer execution\n\
+     - AG-4 coreutils long tail\n\n\
+     Status: **in progress** and *on track*.\n",
+    "# Groceries #home\n\n\
+     - Bread\n\
+     - Belgian chocolate\n\
+     - Coffee\n\n\
+     Don't forget: it is *sovereignly* delicious.\n",
 ];
 
 static SELECTED: AtomicUsize = AtomicUsize::new(0);
 
-/// Welke notitie staat open.
+/// Which note is open.
 pub fn selected() -> usize {
     SELECTED.load(Ordering::Relaxed).min(NOTES.len() - 1)
 }
 
-/// Klik in de notitielijst? Zet de selectie en geef `true` als ze veranderde.
+/// Click in the note list? Set the selection and return `true` if it changed.
 pub fn hit_test(win_x: usize, win_y: usize, mx: usize, my: usize) -> bool {
     let lx = win_x;
-    let ly = win_y + TITLEBAR_H + 44; // onder de lijstkop
+    let ly = win_y + TITLEBAR_H + 44; // below the list header
     let list_w = 210usize;
     if mx < lx || mx >= lx + list_w {
         return false;
@@ -64,21 +64,21 @@ pub fn hit_test(win_x: usize, win_y: usize, mx: usize, my: usize) -> bool {
     false
 }
 
-/// Desktop-GUI: links de notitielijst, rechts de geselecteerde notitie zoals de
-/// `euronotes`-engine ze ontleedt.
+/// Desktop GUI: the note list on the left, the selected note on the right as the
+/// `euronotes` engine parses it.
 pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let bx = x;
     let by = y + TITLEBAR_H;
     let bw = w;
     let bh = h.saturating_sub(TITLEBAR_H);
-    let accent = Color::rgb(0xD6, 0x96, 0x2A); // amber (notities-accent)
+    let accent = Color::rgb(0xD6, 0x96, 0x2A); // amber (notes accent)
     fb.fill_rect(bx, by, bw, bh, Color::SURFACE);
 
-    // ── Lijstpaneel links ───────────────────────────────────────────────────
+    // ── List panel on the left ──────────────────────────────────────────────
     let list_w = 210usize;
     fb.fill_rect(bx, by, list_w, bh, Color::CARD);
     fb.fill_rect(bx + list_w, by, 1, bh, Color::BORDER);
-    text::draw_px(fb, bx + 16, by + 16, "Notities", Color::INK, 14.0);
+    text::draw_px(fb, bx + 16, by + 16, "Notes", Color::INK, 14.0);
     let cnt = alloc::format!("{}", NOTES.len());
     text::draw_px(fb, bx + list_w - text::width_px(&cnt, 12.0) - 16, by + 18, &cnt, Color::TEXT_DIM, 12.0);
 
@@ -94,16 +94,16 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         }
         let title = clip(&note.title, list_w - 40, 13.0);
         text::draw_px(fb, bx + 18, ry + 8, &title, Color::INK, 13.0);
-        // Eerste tag als chip-tekst + bloktelling.
+        // First tag as chip text + block count.
         let sub = if let Some(t) = note.tags.first() {
-            alloc::format!("#{}  ·  {} blokken", t, note.blocks.len())
+            alloc::format!("#{}  ·  {} blocks", t, note.blocks.len())
         } else {
-            alloc::format!("{} blokken", note.blocks.len())
+            alloc::format!("{} blocks", note.blocks.len())
         };
         text::draw_px(fb, bx + 18, ry + 28, &clip(&sub, list_w - 36, 11.0), Color::TEXT_DIM, 11.0);
     }
 
-    // ── Notitie-canvas rechts ────────────────────────────────────────────────
+    // ── Note canvas on the right ─────────────────────────────────────────────
     let note = euronotes::parse(NOTES[sel]);
     let px = bx + list_w + 1;
     let pw = bw - list_w - 1;
@@ -146,7 +146,7 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         }
     }
 
-    // Tag-chips + statusbalk onderaan.
+    // Tag chips + status bar at the bottom.
     let sy = by + bh - 30;
     fb.fill_rect(px, sy, pw, 30, Color::CARD);
     fb.fill_rect(px, sy, pw, 1, Color::BORDER);
@@ -163,7 +163,7 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     }
 }
 
-/// Teken `s` met simpele woord-wrap; geeft de nieuwe y terug.
+/// Draw `s` with simple word wrap; returns the new y.
 fn draw_wrapped(fb: &FrameBuffer, x: usize, mut y: usize, maxw: usize, s: &str, col: Color, size: f32, lead: usize, ymax: usize) -> usize {
     use alloc::string::String;
     let mut line = String::new();
@@ -187,7 +187,7 @@ fn draw_wrapped(fb: &FrameBuffer, x: usize, mut y: usize, maxw: usize, s: &str, 
     y
 }
 
-/// Knip tekst af op pixelbreedte met ellipsis.
+/// Clip text to a pixel width with ellipsis.
 fn clip(s: &str, maxw: usize, size: f32) -> alloc::string::String {
     use alloc::string::String;
     if text::width_px(s, size) <= maxw {
@@ -205,14 +205,14 @@ fn clip(s: &str, maxw: usize, size: f32) -> alloc::string::String {
     out
 }
 
-/// Boot-zelftest: parse een notitie en controleer titel, blokken en tags.
+/// Boot self-test: parse a note and check the title, blocks and tags.
 pub fn selftest() {
-    let md = "# Sprintplan #euros\n\n\
-              Doelen voor #q3-2026:\n\n\
+    let md = "# Sprint plan #euros\n\n\
+              Goals for #q3-2026:\n\n\
               - EuroWeb engine\n\
-              - EuroReken\n  - bitwise modus\n\n\
-              Status is **goed** en *stabiel*.\n\n\
-              > Soevereiniteit door ontwerp.\n";
+              - EuroReken\n  - bitwise mode\n\n\
+              Status is **good** and *stable*.\n\n\
+              > Sovereignty by design.\n";
     let note = euronotes::parse(md);
 
     let headings = note
@@ -231,20 +231,20 @@ pub fn selftest() {
     let has_tags = note.tags.iter().any(|t| t == "euros")
         && note.tags.iter().any(|t| t == "q3-2026");
 
-    let ok = note.title == "Sprintplan #euros"
+    let ok = note.title == "Sprint plan #euros"
         && headings == 1
         && list_items == 3
         && nested
         && has_tags;
 
     serial_println!(
-        "[an] EuroNotes: titel=\"{}\", {} blokken, koppen={} lijstitems={} (genest={}), tags={:?} {}",
+        "[an] EuroNotes: title=\"{}\", {} blocks, headings={} list items={} (nested={}), tags={:?} {}",
         note.title,
         note.blocks.len(),
         headings,
         list_items,
         nested,
         note.tags,
-        if ok { "✓" } else { "✗ FOUT" }
+        if ok { "✓" } else { "✗ FAIL" }
     );
 }

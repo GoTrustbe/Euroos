@@ -1,11 +1,11 @@
-//! EuroAudio — de software-mixer + sample-conversie-kern (plan I2).
+//! EuroAudio — the software mixer + sample-conversion core (plan I2).
 //!
-//! Het hardware-deel (Intel HDA/AC'97-driver) levert één PCM-uitvoerstroom; deze
-//! module is de architectuur-onafhankelijke kern erboven: meerdere applicatie-
-//! streams (elk met eigen volume) worden naar één uitvoerbuffer **gemixt** met
-//! clipping-bescherming, plus de gangbare sample-formaat-conversies (u8/i16/f32).
-//! Pure `no_std`-logica → de mixer-rekenkunde is volledig op de host getest, los
-//! van enige geluidskaart.
+//! The hardware part (Intel HDA/AC'97 driver) provides a single PCM output stream; this
+//! module is the architecture-independent core on top of it: multiple application
+//! streams (each with its own volume) are **mixed** into one output buffer with
+//! clipping protection, plus the common sample-format conversions (u8/i16/f32).
+//! Pure `no_std` logic → the mixer arithmetic is fully tested on the host, independent
+//! of any sound card.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -15,12 +15,12 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// Volume als Q8-vaste-komma (256 = 1.0 = unity gain). Mixen schaalt elke stream
-/// hiermee vóór sommeren.
+/// Volume as Q8 fixed-point (256 = 1.0 = unity gain). Mixing scales each stream
+/// by this before summing.
 pub type Volume = u16;
 pub const UNITY: Volume = 256;
 
-/// Schaal een i16-sample met een Q8-volume, met clamping naar i16.
+/// Scale an i16 sample by a Q8 volume, with clamping to i16.
 #[inline]
 pub fn scale(sample: i16, vol: Volume) -> i16 {
     clamp_i32((sample as i32 * vol as i32) >> 8)
@@ -37,10 +37,10 @@ fn clamp_i32(v: i32) -> i16 {
     }
 }
 
-/// Mix een aantal i16-PCM-streams (elk met eigen volume) in `out`. Alle streams en
-/// `out` hebben dezelfde lengte (geïnterleaved frames). Sommeren gebeurt in i32 en
-/// wordt naar i16 geclamped — zo veroorzaakt overlappend geluid vervorming i.p.v.
-/// wrap-around-gekraak.
+/// Mix a number of i16 PCM streams (each with its own volume) into `out`. All streams and
+/// `out` have the same length (interleaved frames). Summing is done in i32 and
+/// clamped to i16 — so overlapping sound causes distortion instead of
+/// wrap-around crackle.
 pub fn mix(streams: &[(&[i16], Volume)], out: &mut [i16]) {
     for s in out.iter_mut() {
         *s = 0;
@@ -57,9 +57,9 @@ pub fn mix(streams: &[(&[i16], Volume)], out: &mut [i16]) {
     }
 }
 
-// ── Sample-formaat-conversies (naar/van i16, het mixer-interne formaat) ──
+// ── Sample-format conversions (to/from i16, the mixer-internal format) ──
 
-/// Unsigned 8-bit (0..255, midden 128) → i16.
+/// Unsigned 8-bit (0..255, midpoint 128) → i16.
 pub fn u8_to_i16(src: &[u8], out: &mut [i16]) {
     for (o, &s) in out.iter_mut().zip(src.iter()) {
         *o = ((s as i32 - 128) * 256) as i16;
@@ -73,7 +73,7 @@ pub fn i16_to_u8(src: &[i16], out: &mut [u8]) {
     }
 }
 
-/// f32 (genormaliseerd −1.0..1.0) → i16.
+/// f32 (normalized −1.0..1.0) → i16.
 pub fn f32_to_i16(src: &[f32], out: &mut [i16]) {
     for (o, &s) in out.iter_mut().zip(src.iter()) {
         let v = (s * 32767.0) as i32;
@@ -81,8 +81,8 @@ pub fn f32_to_i16(src: &[f32], out: &mut [i16]) {
     }
 }
 
-/// Eenvoudige nearest-neighbour-resampling van mono i16 van `src_hz` naar `dst_hz`.
-/// Genoeg voor een eerste mixer; lineaire/polyphase-interpolatie = latere verfijning.
+/// Simple nearest-neighbour resampling of mono i16 from `src_hz` to `dst_hz`.
+/// Enough for a first mixer; linear/polyphase interpolation = later refinement.
 pub fn resample_nn(src: &[i16], src_hz: u32, dst_hz: u32) -> Vec<i16> {
     if src_hz == 0 || dst_hz == 0 || src.is_empty() {
         return Vec::new();
@@ -141,7 +141,7 @@ mod tests {
         let b = [30000i16];
         let mut out = [0i16; 1];
         mix(&[(&a, UNITY), (&b, UNITY)], &mut out);
-        assert_eq!(out[0], i16::MAX); // 60000 → clamp, geen wrap-around
+        assert_eq!(out[0], i16::MAX); // 60000 → clamp, no wrap-around
     }
 
     #[test]
@@ -149,7 +149,7 @@ mod tests {
         let src = [0u8, 128, 255];
         let mut mid = [0i16; 3];
         u8_to_i16(&src, &mut mid);
-        assert_eq!(mid[1], 0); // 128 = stilte
+        assert_eq!(mid[1], 0); // 128 = silence
         let mut back = [0u8; 3];
         i16_to_u8(&mid, &mut back);
         assert_eq!(back[1], 128);

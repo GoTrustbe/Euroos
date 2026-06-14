@@ -1,11 +1,11 @@
-//! EuroDisplay — een Wayland-vormig display-protocol + de compositor-kant van het
-//! surface-model (plan E2). Apps sturen render-commando's (`Request`), de compositor
-//! beheert surfaces (z-order, damage) en stuurt `Event`s terug (configure/input/frame).
+//! EuroDisplay — a Wayland-shaped display protocol + the compositor side of the
+//! surface model (plan E2). Apps send render commands (`Request`), the compositor
+//! manages surfaces (z-order, damage) and sends `Event`s back (configure/input/frame).
 //!
-//! Dit is de PROTOCOL- + STATE-kern, los van transport: de wire-encoding en het
-//! surface-model zijn pure `no_std`-logica en host-getest. Het Unix-domain-socket-
-//! transport + de live koppeling aan de EuroDesktop-compositor zijn de integratie
-//! erbovenop (vereist Unix-sockets in EuroNet/EuroIPC).
+//! This is the PROTOCOL + STATE core, decoupled from transport: the wire encoding and the
+//! surface model are pure `no_std` logic and host-tested. The Unix-domain-socket
+//! transport + the live binding to the EuroDesktop compositor are the integration
+//! on top (requires Unix sockets in EuroNet/EuroIPC).
 
 #![cfg_attr(not(test), no_std)]
 
@@ -15,35 +15,35 @@ use alloc::vec::Vec;
 
 pub mod server;
 
-/// App → compositor. Spiegelt `wl_surface`/`wl_buffer`-acties.
+/// App → compositor. Mirrors `wl_surface`/`wl_buffer` actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Request {
-    /// `wl_compositor.create_surface` — nieuwe (lege) surface met id.
+    /// `wl_compositor.create_surface` — new (empty) surface with id.
     CreateSurface { id: u32 },
-    /// `wl_surface.attach` — koppel een buffer (gedeeld geheugen) van w×h aan de surface.
+    /// `wl_surface.attach` — attach a buffer (shared memory) of w×h to the surface.
     Attach { id: u32, width: u16, height: u16 },
-    /// `wl_surface.commit` — maak de aangehechte buffer + positie zichtbaar.
+    /// `wl_surface.commit` — make the attached buffer + position visible.
     Commit { id: u32 },
-    /// Verplaats de surface (compositor-beleid bepaalt of dit mag).
+    /// Move the surface (compositor policy decides whether this is allowed).
     Move { id: u32, x: i16, y: i16 },
     /// `wl_surface.destroy`.
     Destroy { id: u32 },
 }
 
-/// Compositor → app. Spiegelt `wl_surface`/`wl_seat`/`wl_output`-events.
+/// Compositor → app. Mirrors `wl_surface`/`wl_seat`/`wl_output` events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
-    /// `xdg_surface.configure` — voorgestelde grootte.
+    /// `xdg_surface.configure` — proposed size.
     Configure { id: u32, width: u16, height: u16 },
-    /// `wl_keyboard.key` — toets naar de gefocuste surface.
+    /// `wl_keyboard.key` — key to the focused surface.
     Key { id: u32, code: u16, pressed: bool },
     /// `wl_pointer.motion`.
     Pointer { id: u32, x: i16, y: i16 },
-    /// `wl_surface.frame` done — klaar om de volgende frame te tekenen.
+    /// `wl_surface.frame` done — ready to draw the next frame.
     FrameDone { id: u32 },
 }
 
-/// Eén surface in het compositor-model.
+/// One surface in the compositor model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Surface {
     pub id: u32,
@@ -51,14 +51,14 @@ pub struct Surface {
     pub y: i16,
     pub width: u16,
     pub height: u16,
-    /// Is er een gecommitte buffer (mag getekend worden)?
+    /// Is there a committed buffer (allowed to be drawn)?
     pub mapped: bool,
 }
 
-/// De compositor-kant: een z-geordende lijst surfaces + damage-bijhouding.
+/// The compositor side: a z-ordered list of surfaces + damage tracking.
 #[derive(Debug, Default)]
 pub struct Display {
-    surfaces: Vec<Surface>, // achteraan = bovenop (hoogste z)
+    surfaces: Vec<Surface>, // last = on top (highest z)
     damaged: bool,
 }
 
@@ -71,7 +71,7 @@ impl Display {
         self.surfaces.iter().position(|s| s.id == id)
     }
 
-    /// Verwerk een app-request; geef optioneel een Event terug (bv. Configure na commit).
+    /// Process an app request; optionally return an Event (e.g. Configure after commit).
     pub fn handle(&mut self, req: Request) -> Option<Event> {
         match req {
             Request::CreateSurface { id } => {
@@ -90,8 +90,8 @@ impl Display {
             }
             Request::Commit { id } => {
                 if let Some(i) = self.index(id) {
-                    // Een commit met een geldige buffer maakt de surface zichtbaar +
-                    // brengt hem naar voren (focus), en markeert damage.
+                    // A commit with a valid buffer makes the surface visible +
+                    // brings it to the front (focus), and marks damage.
                     if self.surfaces[i].width > 0 && self.surfaces[i].height > 0 {
                         let s = self.surfaces.remove(i);
                         self.surfaces.push(Surface { mapped: true, ..s });
@@ -119,23 +119,23 @@ impl Display {
         }
     }
 
-    /// De zichtbare surfaces in z-order (onderaan → boven) voor het tekenen.
+    /// The visible surfaces in z-order (bottom → top) for drawing.
     pub fn scene(&self) -> Vec<Surface> {
         self.surfaces.iter().copied().filter(|s| s.mapped).collect()
     }
 
-    /// De bovenste (gefocuste) surface — daar gaat keyboard-input heen.
+    /// The top (focused) surface — that is where keyboard input goes.
     pub fn focused(&self) -> Option<u32> {
         self.surfaces.iter().rev().find(|s| s.mapped).map(|s| s.id)
     }
 
-    /// Routeer een input-event naar de gefocuste surface (keyboard) of naar de
-    /// surface onder de cursor (pointer, top-most hit).
+    /// Route an input event to the focused surface (keyboard) or to the
+    /// surface under the cursor (pointer, top-most hit).
     pub fn route_key(&self, code: u16, pressed: bool) -> Option<Event> {
         self.focused().map(|id| Event::Key { id, code, pressed })
     }
     pub fn route_pointer(&self, x: i16, y: i16) -> Option<Event> {
-        // Top-most surface die (x,y) bevat.
+        // Top-most surface that contains (x,y).
         self.surfaces.iter().rev().find(|s| {
             s.mapped
                 && x >= s.x
@@ -150,14 +150,14 @@ impl Display {
     }
 }
 
-// ── Wire-encoding (vast 12-byte bericht: opcode + 5×u16/i16-velden) ─────────
+// ── Wire encoding (fixed 12-byte message: opcode + 5×u16/i16 fields) ─────────
 const REQ_CREATE: u8 = 1;
 const REQ_ATTACH: u8 = 2;
 const REQ_COMMIT: u8 = 3;
 const REQ_MOVE: u8 = 4;
 const REQ_DESTROY: u8 = 5;
 
-/// Codeer een request tot 12 bytes (opcode, id, en tot 2 velden).
+/// Encode a request into 12 bytes (opcode, id, and up to 2 fields).
 pub fn encode(req: Request) -> [u8; 12] {
     let mut b = [0u8; 12];
     let (op, id, f0, f1) = match req {
@@ -174,7 +174,7 @@ pub fn encode(req: Request) -> [u8; 12] {
     b
 }
 
-/// Decodeer een 12-byte bericht terug naar een request. `None` bij rommel.
+/// Decode a 12-byte message back into a request. `None` on garbage.
 pub fn decode(b: &[u8]) -> Option<Request> {
     if b.len() < 12 {
         return None;
@@ -200,7 +200,7 @@ mod tests {
     fn surface_lifecycle() {
         let mut d = Display::new();
         d.handle(Request::CreateSurface { id: 1 });
-        assert!(d.scene().is_empty()); // nog niet gemapt (geen buffer/commit)
+        assert!(d.scene().is_empty()); // not yet mapped (no buffer/commit)
         assert_eq!(d.handle(Request::Attach { id: 1, width: 100, height: 50 }), Some(Event::Configure { id: 1, width: 100, height: 50 }));
         assert_eq!(d.handle(Request::Commit { id: 1 }), Some(Event::FrameDone { id: 1 }));
         assert_eq!(d.scene().len(), 1);
@@ -217,9 +217,9 @@ mod tests {
             d.handle(Request::Attach { id, width: 80, height: 80 });
             d.handle(Request::Commit { id });
         }
-        // De laatst-gecommitte (3) staat bovenop en heeft focus.
+        // The last-committed (3) is on top and has focus.
         assert_eq!(d.focused(), Some(3));
-        // Een nieuwe commit van 1 brengt hem naar voren.
+        // A new commit of 1 brings it to the front.
         d.handle(Request::Commit { id: 1 });
         assert_eq!(d.focused(), Some(1));
         assert_eq!(d.scene().len(), 3);
@@ -232,11 +232,11 @@ mod tests {
         d.handle(Request::Attach { id: 1, width: 100, height: 100 });
         d.handle(Request::Move { id: 1, x: 10, y: 10 });
         d.handle(Request::Commit { id: 1 });
-        // Keyboard → gefocuste surface.
+        // Keyboard → focused surface.
         assert_eq!(d.route_key(30, true), Some(Event::Key { id: 1, code: 30, pressed: true }));
-        // Pointer binnen de surface → surface-lokale coördinaten.
+        // Pointer inside the surface → surface-local coordinates.
         assert_eq!(d.route_pointer(15, 20), Some(Event::Pointer { id: 1, x: 5, y: 10 }));
-        // Pointer buiten elke surface → niets.
+        // Pointer outside every surface → nothing.
         assert_eq!(d.route_pointer(5, 5), None);
     }
 
@@ -251,7 +251,7 @@ mod tests {
         ] {
             assert_eq!(decode(&encode(r)), Some(r));
         }
-        // Rommel / te kort → None.
+        // Garbage / too short → None.
         assert_eq!(decode(&[0xFF; 12]), None);
         assert_eq!(decode(&[1, 2, 3]), None);
     }
@@ -263,7 +263,7 @@ mod tests {
         d.handle(Request::CreateSurface { id: 1 });
         d.handle(Request::Attach { id: 1, width: 10, height: 10 });
         d.handle(Request::Commit { id: 1 });
-        assert!(d.take_damage()); // commit veroorzaakt damage
-        assert!(!d.take_damage()); // daarna geveegd
+        assert!(d.take_damage()); // commit causes damage
+        assert!(!d.take_damage()); // cleared afterwards
     }
 }

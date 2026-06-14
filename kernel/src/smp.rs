@@ -1,10 +1,10 @@
-//! SMP-bring-up (Track 3.5): start de application-processors (APs).
+//! SMP bring-up (Track 3.5): start the application processors (APs).
 //!
-//! De BSP kopieert de [`asm/trampoline.S`]-blob naar physiek `0x8000`, patcht de
-//! boot-PML4 (CR3), een per-AP stack en de `ap_main`-entry, en stuurt per core
-//! de INIT-SIPI-SIPI-sequentie via de Local-APIC. Elke AP komt in long mode, telt
-//! zichzelf op in [`AP_ONLINE`] en parkeert (`hlt`). SMP-scheduling (per-CPU
-//! run-queues) is de volgende stap; dit bewijst dat alle cores kernelcode draaien.
+//! The BSP copies the [`asm/trampoline.S`] blob to physical `0x8000`, patches the
+//! boot PML4 (CR3), a per-AP stack and the `ap_main` entry, and sends per core
+//! the INIT-SIPI-SIPI sequence via the Local APIC. Each AP enters long mode, counts
+//! itself up in [`AP_ONLINE`] and parks (`hlt`). SMP scheduling (per-CPU
+//! run queues) is the next step; this proves that all cores run kernel code.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -12,12 +12,12 @@ use alloc::vec::Vec;
 
 use crate::serial_println;
 
-/// Grootte van de parallelle-som-demo (0..N), verdeeld over de cores. Bewust
-/// bescheiden: de demo bewijst de parallelle verdeling + correcte som, maar een
-/// gigantische N kost vooral onder TCG-emulatie nodeloos veel boot-tijd (SPERF).
+/// Size of the parallel-sum demo (0..N), distributed over the cores. Deliberately
+/// modest: the demo proves the parallel distribution + correct sum, but a
+/// gigantic N costs needless boot time especially under TCG emulation (SPERF).
 const WORK_N: u64 = 2_000_000;
 
-/// Door build.rs geassembleerde flat-binary trampoline (org 0x8000).
+/// Flat-binary trampoline assembled by build.rs (org 0x8000).
 static TRAMPOLINE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/trampoline.bin"));
 
 const TRAMP: u64 = 0x8000;
@@ -29,23 +29,23 @@ const MAX_AP: usize = 7;
 const AP_STACK_SIZE: usize = 16 * 1024;
 static mut AP_STACKS: [[u8; AP_STACK_SIZE]; MAX_AP] = [[0; AP_STACK_SIZE]; MAX_AP];
 
-/// G1: per-AP GUARDED kernel-stacktop (0 = niet gezet → val terug op de BSS-stack).
-/// main.rs vult deze vóór `init()` uit de guarded-stack-pool, zodat een AP-stack-
-/// overflow op een niet-gemapte guard-pagina faultt i.p.v. de buur-AP-stack te
-/// overschrijven. De guarded regio zit in de gedeelde hoge PDPT → ook geldig onder
-/// de boot-PML4 waarop de AP's draaien.
+/// G1: per-AP GUARDED kernel stacktop (0 = not set → fall back to the BSS stack).
+/// main.rs fills this before `init()` from the guarded-stack pool, so that an AP-stack
+/// overflow faults on an unmapped guard page instead of overwriting the neighbouring
+/// AP stack. The guarded region sits in the shared high PDPT → also valid under
+/// the boot PML4 on which the APs run.
 static AP_GUARDED_TOP: [AtomicU64; MAX_AP] = [const { AtomicU64::new(0) }; MAX_AP];
 
-/// Zet de guarded stacktop voor AP-slot `idx` (aanroepen vóór [`init`]).
+/// Set the guarded stacktop for AP slot `idx` (call before [`init`]).
 pub fn set_ap_guarded_top(idx: usize, top: u64) {
     if idx < MAX_AP {
         AP_GUARDED_TOP[idx].store(top, Ordering::Release);
     }
 }
 
-/// G1: alloceer guarded kernel-stacks voor álle AP-slots uit de guarded-stack-pool.
-/// Aanroepen vóór [`init`] (de hoofd-frame-allocator is dan nog beschikbaar). Geeft
-/// het aantal gezette stacks terug.
+/// G1: allocate guarded kernel stacks for ALL AP slots from the guarded-stack pool.
+/// Call before [`init`] (the main frame allocator is then still available). Returns
+/// the number of stacks set.
 pub fn setup_guarded_stacks(falloc: &mut euromm::FrameAllocator) -> usize {
     let mut n = 0;
     for idx in 0..MAX_AP {
@@ -59,18 +59,18 @@ pub fn setup_guarded_stacks(falloc: &mut euromm::FrameAllocator) -> usize {
     n
 }
 
-/// Aantal APs dat long mode bereikte en Rust-code draait.
+/// Number of APs that reached long mode and run Rust code.
 pub static AP_ONLINE: AtomicU32 = AtomicU32::new(0);
 
-// ── Parallelle-werk-demo: elke core sommeert een eigen bereik [lo,hi). ──
-// Geïndexeerd op (LAPIC-id & 7); de BSP vult de bereiken vóór de bring-up.
+// ── Parallel-work demo: each core sums its own range [lo,hi). ──
+// Indexed by (LAPIC-id & 7); the BSP fills the ranges before bring-up.
 const MAX_CPU: usize = 8;
 static WORK_LO: [AtomicU64; MAX_CPU] = [const { AtomicU64::new(0) }; MAX_CPU];
 static WORK_HI: [AtomicU64; MAX_CPU] = [const { AtomicU64::new(0) }; MAX_CPU];
 static WORK_SUM: [AtomicU64; MAX_CPU] = [const { AtomicU64::new(0) }; MAX_CPU];
 static WORK_DONE: [AtomicBool; MAX_CPU] = [const { AtomicBool::new(false) }; MAX_CPU];
 
-/// Sommeer `lo..hi` (de kernwerklast — bewijst dat een core écht rekent).
+/// Sum `lo..hi` (the core workload — proves a core really computes).
 fn compute_range(lo: u64, hi: u64) -> u64 {
     let mut s = 0u64;
     let mut i = lo;
@@ -81,22 +81,22 @@ fn compute_range(lo: u64, hi: u64) -> u64 {
     s
 }
 
-/// Entry voor elke AP (vanuit de trampoline, 64-bit): meld je online, reken je
-/// toegewezen stuk van de parallelle som, en parkeer dan (`hlt`).
+/// Entry for each AP (from the trampoline, 64-bit): report yourself online, compute
+/// your assigned part of the parallel sum, then park (`hlt`).
 #[no_mangle]
 pub extern "sysv64" fn ap_main() -> ! {
     let id = (crate::apic::lapic_id() & 7) as usize;
     AP_ONLINE.fetch_add(1, Ordering::SeqCst);
-    // 1) Toegewezen stuk van de parallelle som.
+    // 1) Assigned part of the parallel sum.
     let lo = WORK_LO[id].load(Ordering::Acquire);
     let hi = WORK_HI[id].load(Ordering::Acquire);
     let sum = compute_range(lo, hi);
     WORK_SUM[id].store(sum, Ordering::Release);
     WORK_DONE[id].store(true, Ordering::Release);
-    // 2) Per-CPU scheduler opzetten: gedeelde GDT-segmenten + gedeelde IDT + een
-    //    eigen run-queue (idle + 2 workers) + eigen LAPIC-timer (vector 0x41).
-    //    Na sti tikt deze core zelf en wisselt z'n eigen taken af. Deze hlt-lus
-    //    is de idle-taak: de eerste tick bewaart 'm en switcht naar een worker.
+    // 2) Set up the per-CPU scheduler: shared GDT segments + shared IDT + an
+    //    own run queue (idle + 2 workers) + own LAPIC timer (vector 0x41).
+    //    After sti this core ticks itself and alternates its own tasks. This hlt loop
+    //    is the idle task: the first tick saves it and switches to a worker.
     crate::gdt::init_ap();
     crate::interrupts::init();
     crate::sched::ap_setup(id);
@@ -107,25 +107,25 @@ pub extern "sysv64" fn ap_main() -> ! {
     }
 }
 
-/// Start alle ingeschakelde AP-cores. Aanroepen ná `init_timer` (APIC + timer
-/// gekalibreerd) en vóór `interrupts::enable()` — dan staat de BSP nog op de
-/// boot-PML4 en switcht de scheduler de CR3 nog niet.
+/// Start all enabled AP cores. Call after `init_timer` (APIC + timer
+/// calibrated) and before `interrupts::enable()` — then the BSP is still on the
+/// boot PML4 and the scheduler does not yet switch the CR3.
 pub fn init() {
     let madt = match crate::acpi::parse() {
         Some(m) => m,
         None => {
-            serial_println!("[smp] geen MADT — single-core");
+            serial_println!("[smp] no MADT — single-core");
             return;
         }
     };
     let bsp = crate::apic::lapic_id() as u8;
     let cr3 = crate::sched::boot_pml4();
     if cr3 == 0 {
-        serial_println!("[smp] boot-PML4 onbekend — bring-up overgeslagen");
+        serial_println!("[smp] boot PML4 unknown — bring-up skipped");
         return;
     }
 
-    // Verdeel een parallelle som 0..N over álle ingeschakelde cores (BSP + APs).
+    // Distribute a parallel sum 0..N over ALL enabled cores (BSP + APs).
     let enabled: Vec<u8> = madt.cores.iter().filter(|c| c.enabled).map(|c| c.apic_id).collect();
     let ncores = enabled.len().max(1) as u64;
     let chunk = WORK_N / ncores;
@@ -138,7 +138,7 @@ pub fn init() {
         WORK_DONE[s].store(false, Ordering::Release);
     }
 
-    // Trampoline naar 0x8000 kopiëren + CR3/entry patchen (per-AP stack volgt).
+    // Copy trampoline to 0x8000 + patch CR3/entry (per-AP stack follows).
     unsafe {
         core::ptr::copy_nonoverlapping(TRAMPOLINE.as_ptr(), TRAMP as *mut u8, TRAMPOLINE.len());
         ((TRAMP + OFF_CR3) as *mut u64).write_volatile(cr3);
@@ -154,9 +154,9 @@ pub fn init() {
         if idx >= MAX_AP {
             break;
         }
-        // Per-AP stacktop (16-uitgelijnd); APs starten één voor één, dus geen race.
-        // G1: gebruik een GUARDED stacktop als die gezet is (overflow → guard-#PF
-        // i.p.v. stille corruptie); anders val terug op de BSS-stack.
+        // Per-AP stacktop (16-aligned); APs start one by one, so no race.
+        // G1: use a GUARDED stacktop if it is set (overflow → guard #PF
+        // instead of silent corruption); otherwise fall back to the BSS stack.
         let guarded = AP_GUARDED_TOP[idx].load(Ordering::Acquire);
         let sp = if guarded != 0 {
             guarded & !0xF
@@ -169,14 +169,14 @@ pub fn init() {
         unsafe { ((TRAMP + OFF_STACK) as *mut u64).write_volatile(sp) };
 
         let before = AP_ONLINE.load(Ordering::SeqCst);
-        // INIT-SIPI-SIPI (Intel MP-protocol).
+        // INIT-SIPI-SIPI (Intel MP protocol).
         crate::apic::send_init(c.apic_id);
         crate::apic::busy_wait_us(10_000);
         crate::apic::send_sipi(c.apic_id, (TRAMP >> 12) as u8);
         crate::apic::busy_wait_us(200);
         crate::apic::send_sipi(c.apic_id, (TRAMP >> 12) as u8);
 
-        // Wacht tot deze AP zich meldt (timeout ~100 ms).
+        // Wait until this AP reports in (timeout ~100 ms).
         let mut ok = false;
         for _ in 0..20 {
             crate::apic::busy_wait_us(5_000);
@@ -189,20 +189,20 @@ pub fn init() {
             started += 1;
             serial_println!("[smp] core APIC-id {} online", c.apic_id);
         } else {
-            serial_println!("[smp] core APIC-id {} kwam NIET online (timeout)", c.apic_id);
+            serial_println!("[smp] core APIC-id {} did NOT come online (timeout)", c.apic_id);
         }
         idx += 1;
     }
     serial_println!(
-        "[smp] {}/{} AP-core(s) online (BSP = APIC-id {}, {} cores totaal)",
+        "[smp] {}/{} AP core(s) online (BSP = APIC-id {}, {} cores total)",
         started,
         idx,
         bsp,
         madt.cores.len()
     );
 
-    // De BSP rekent z'n eigen stuk, wacht op de APs en verifieert de totale som —
-    // bewijs dat alle cores écht (parallel) kernel-rekenwerk deden.
+    // The BSP computes its own part, waits for the APs and verifies the total sum —
+    // proof that all cores really did (parallel) kernel computation.
     let bid = (bsp & 7) as usize;
     let blo = WORK_LO[bid].load(Ordering::Acquire);
     let bhi = WORK_HI[bid].load(Ordering::Acquire);
@@ -216,7 +216,7 @@ pub fn init() {
             crate::apic::busy_wait_us(1_000);
             g += 1;
             if g > 5_000 {
-                serial_println!("[smp] core APIC-id {} maakte z'n werk niet af (timeout)", id);
+                serial_println!("[smp] core APIC-id {} did not finish its work (timeout)", id);
                 break;
             }
         }
@@ -231,16 +231,16 @@ pub fn init() {
         WORK_N.wrapping_mul((WORK_N - 1) / 2)
     };
     serial_println!(
-        "[smp] parallelle som 0..{} over {} core(s) = {} (verwacht {}) -> {}",
+        "[smp] parallel sum 0..{} over {} core(s) = {} (expected {}) -> {}",
         WORK_N,
         ncores,
         total,
         expected,
-        if total == expected { "OK" } else { "FOUT" }
+        if total == expected { "OK" } else { "WRONG" }
     );
 
-    // Geef de APs ~80 ms en lees hun per-CPU werk-tellers: bewijs dat elke core
-    // onafhankelijk z'n EIGEN run-queue draait en taken afwisselt (SMP-scheduling).
+    // Give the APs ~80 ms and read their per-CPU work counters: proof that each core
+    // independently runs its OWN run queue and alternates tasks (SMP scheduling).
     crate::apic::busy_wait_us(200_000);
     for &id in &enabled {
         if id == bsp {
@@ -250,13 +250,13 @@ pub fn init() {
         let a = crate::sched::AP_WORK_A[s].load(Ordering::Relaxed);
         let b = crate::sched::AP_WORK_B[s].load(Ordering::Relaxed);
         serial_println!(
-            "[smp] core APIC-id {} per-CPU scheduler: worker-A={} worker-B={} (eigen run-queue)",
+            "[smp] core APIC-id {} per-CPU scheduler: worker-A={} worker-B={} (own run queue)",
             id, a, b
         );
     }
 
-    // ── Run 2: cross-CPU IPIs + TLB-shootdown ──
-    // Ping elke AP 5× en doe één TLB-shootdown; verifieer via de per-CPU tellers.
+    // ── Run 2: cross-CPU IPIs + TLB shootdown ──
+    // Ping each AP 5× and do one TLB shootdown; verify via the per-CPU counters.
     for &id in &enabled {
         if id == bsp {
             continue;
@@ -274,22 +274,22 @@ pub fn init() {
         }
         let s = (id & 7) as usize;
         serial_println!(
-            "[smp] core APIC-id {} cross-CPU: {} ping-IPIs ontvangen, {} TLB-shootdown(s)",
+            "[smp] core APIC-id {} cross-CPU: {} ping IPIs received, {} TLB shootdown(s)",
             id,
             crate::interrupts::IPI_COUNT[s].load(Ordering::Relaxed),
             crate::interrupts::TLB_COUNT[s].load(Ordering::Relaxed)
         );
     }
 
-    // ── Run 2: load-balancing — plaats een extra taak op de minst belaste AP ──
+    // ── Run 2: load-balancing — place an extra task on the least-loaded AP ──
     let aps: Vec<u8> = enabled.iter().copied().filter(|&id| id != bsp).collect();
     if let Some(&target) = aps.iter().min_by_key(|&&id| crate::sched::ap_load((id & 7) as usize)) {
         let s = (target & 7) as usize;
         if crate::sched::ap_enqueue_worker(s) {
-            serial_println!("[smp] load-balance: extra taak geplaatst op minst-belaste core APIC-id {}", target);
+            serial_println!("[smp] load-balance: extra task placed on least-loaded core APIC-id {}", target);
             crate::apic::busy_wait_us(40_000);
             serial_println!(
-                "[smp] core APIC-id {} draait de gebalanceerde taak: worker-C={}",
+                "[smp] core APIC-id {} runs the balanced task: worker-C={}",
                 target,
                 crate::sched::AP_WORK_C[s].load(Ordering::Relaxed)
             );
@@ -297,8 +297,8 @@ pub fn init() {
     }
 }
 
-/// Stuur een TLB-shootdown naar alle andere cores (aanroepen ná het wijzigen van
-/// gedeelde kernel-page-tables, zodat geen core met stale TLB-entries verder draait).
+/// Send a TLB shootdown to all other cores (call after modifying
+/// shared kernel page tables, so that no core keeps running with stale TLB entries).
 pub fn tlb_shootdown(cores: &[u8], self_id: u8) {
     for &id in cores {
         if id != self_id {
@@ -307,7 +307,7 @@ pub fn tlb_shootdown(cores: &[u8], self_id: u8) {
     }
 }
 
-/// Stop alle andere cores (bv. vóór een shutdown of in de panic-handler).
+/// Stop all other cores (e.g. before a shutdown or in the panic handler).
 pub fn halt_others(cores: &[u8], self_id: u8) {
     for &id in cores {
         if id != self_id {

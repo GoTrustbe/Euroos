@@ -1,13 +1,13 @@
-//! EuroOS twee-traps A/B-loader (G4).
+//! EuroOS two-stage A/B loader (G4).
 //!
-//! De UEFI-firmware start DEZE kleine `.efi` (BOOTX64.EFI). Hij leest de A/B-
-//! `slot_config`, kiest het te booten slot, en laadt+start de kernel-image van dat
+//! The UEFI firmware starts THIS small `.efi` (BOOTX64.EFI). It reads the A/B
+//! `slot_config`, chooses the slot to boot, and loads+starts the kernel image of that
 //! slot (`eurokernel-A.efi` / `eurokernel-B.efi`) via UEFI `LoadImage`/`StartImage`
-//! — het Android/ChromeOS-model. Faalt het gekozen slot, dan valt hij terug op A.
+//! — the Android/ChromeOS model. If the chosen slot fails, it falls back to A.
 //!
-//! Zo wordt de A/B-update echt twee-traps: de loader (niet de kernel) kiest welk
-//! systeem-image draait, en kan dus naar een ander slot terugrollen als een kernel
-//! niet eens boot. De kernel blijft `slot_config` beheren (poging-teller, mark-good).
+//! This makes the A/B update truly two-stage: the loader (not the kernel) chooses which
+//! system image runs, and can thus roll back to another slot if a kernel
+//! does not even boot. The kernel keeps managing `slot_config` (attempt counter, mark-good).
 
 #![no_std]
 #![no_main]
@@ -21,7 +21,7 @@ use uefi::fs::{FileSystem, Path};
 use uefi::prelude::*;
 use uefi::{cstr16, CStr16};
 
-// ── COM1-serial via directe poort-I/O (werkt onder Boot Services) ──
+// ── COM1 serial via direct port I/O (works under Boot Services) ──
 #[inline]
 unsafe fn outb(port: u16, val: u8) {
     core::arch::asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
@@ -73,19 +73,19 @@ fn write_file(path: &CStr16, data: &[u8]) -> bool {
     fs.write(Path::new(path), data).is_ok()
 }
 
-/// Twee-traps A/B-beslissing (het echte ChromeOS/Android-model): lees `\slot_config`
-/// van de ESP, voer `on_boot()` uit (poging-teller −1, of automatische terugrol naar
-/// het laatst-goede slot als de pogingen op zijn), SCHRIJF de bijgewerkte config terug
-/// naar de ESP, en geef het te booten slot. Zo regelt de loader — niet de kernel — de
-/// rollback: zelfs een kernel die niet eens boot, kan de machine niet bricken.
-/// `None` → geen/onleesbare config → val terug op slot A.
+/// Two-stage A/B decision (the real ChromeOS/Android model): read `\slot_config`
+/// from the ESP, run `on_boot()` (attempt counter −1, or automatic rollback to
+/// the last-good slot when the attempts are exhausted), WRITE the updated config back
+/// to the ESP, and return the slot to boot. This way the loader — not the kernel — handles
+/// the rollback: even a kernel that does not even boot cannot brick the machine.
+/// `None` → no/unreadable config → fall back to slot A.
 fn decide_slot() -> Option<Slot> {
     let data = read_file(cstr16!("\\slot_config"))?;
     let mut cfg = SlotConfig::deserialize(&data)?;
     let before = (cfg.tries, cfg.next_boot);
     let booted = cfg.on_boot();
-    // Persisteer de bijgewerkte teller/keuze vóór we de kernel starten. Lukt het
-    // schrijven niet, dan booten we alsnog (read-only ESP mag nooit fataal zijn).
+    // Persist the updated counter/choice before we start the kernel. If writing
+    // fails, we still boot anyway (a read-only ESP must never be fatal).
     let _ = write_file(cstr16!("\\slot_config"), &cfg.serialize());
     puts("[loader] on_boot: ");
     puts(match before.1 {
@@ -103,7 +103,7 @@ fn decide_slot() -> Option<Slot> {
 #[entry]
 fn main() -> Status {
     com1_init();
-    puts("\n[loader] EuroOS twee-traps A/B-loader (G4)\n");
+    puts("\n[loader] EuroOS two-stage A/B loader (G4)\n");
 
     let slot = decide_slot().unwrap_or(Slot::A);
     let (name, path): (&str, &CStr16) = match slot {
@@ -117,17 +117,17 @@ fn main() -> Status {
     let image = match read_file(path) {
         Some(b) => b,
         None => {
-            puts("[loader] FOUT: kernel-image van het slot niet gevonden — probeer slot A\n");
+            puts("[loader] ERROR: kernel image of the slot not found — trying slot A\n");
             match read_file(cstr16!("\\EFI\\BOOT\\eurokernel-A.efi")) {
                 Some(b) => b,
                 None => {
-                    puts("[loader] FATAAL: geen kernel-image\n");
+                    puts("[loader] FATAL: no kernel image\n");
                     return Status::LOAD_ERROR;
                 }
             }
         }
     };
-    puts("[loader] kernel-image geladen — LoadImage + StartImage...\n");
+    puts("[loader] kernel image loaded — LoadImage + StartImage...\n");
 
     let loaded = match boot::load_image(
         boot::image_handle(),
@@ -135,12 +135,12 @@ fn main() -> Status {
     ) {
         Ok(h) => h,
         Err(_) => {
-            puts("[loader] FOUT: LoadImage faalde\n");
+            puts("[loader] ERROR: LoadImage failed\n");
             return Status::LOAD_ERROR;
         }
     };
-    // De kernel doet zelf ExitBootServices; start_image keert normaal niet terug.
+    // The kernel does ExitBootServices itself; start_image normally does not return.
     let _ = boot::start_image(loaded);
-    puts("[loader] kernel keerde onverwacht terug\n");
+    puts("[loader] kernel returned unexpectedly\n");
     Status::SUCCESS
 }

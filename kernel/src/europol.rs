@@ -1,7 +1,7 @@
-//! Kernel-zijde van **EuroPol** (plan X): laad een declaratieve policy, compileer 'm
-//! naar een EuroGuard-capability-masker, en dwing 'm af. Policy-violations gaan naar
-//! het append-only audit-spoor (P3). Toont hoe menselijk beleid ("firefox mag geen
-//! systeembestanden wijzigen") één-op-één een capability-resultaat wordt.
+//! Kernel side of **EuroPol** (plan X): load a declarative policy, compile it
+//! into an EuroGuard capability mask, and enforce it. Policy violations go to
+//! the append-only audit trail (P3). Demonstrates how human policy ("firefox may not
+//! modify system files") becomes a capability result one-to-one.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use europol::{Decision, Policy};
 use spin::Mutex;
 
-/// De ingebakken voorbeeld-policy (zou in `/etc/europol/*.policy.toml` staan).
+/// The built-in example policy (would live in `/etc/europol/*.policy.toml`).
 const FIREFOX_POLICY: &str = r#"
 name = "firefox"
 [allow]
@@ -23,8 +23,8 @@ log_denied = true
 
 static POLICY: Mutex<Option<Policy>> = Mutex::new(None);
 
-/// Bereken het effectieve capability-masker voor een app onder de actieve policy.
-/// Zonder policy: ongewijzigd. Met policy: `(base|allow) & !deny` — deny wint.
+/// Compute the effective capability mask for an app under the active policy.
+/// Without a policy: unchanged. With a policy: `(base|allow) & !deny` — deny wins.
 pub fn effective_caps(base: u64) -> u64 {
     match POLICY.lock().as_ref() {
         Some(p) => p.effective_caps(base),
@@ -32,8 +32,8 @@ pub fn effective_caps(base: u64) -> u64 {
     }
 }
 
-/// Boot-zelftest: parse de policy, bewijs de capability-reductie + pad-regel, en log
-/// een violation naar P3.
+/// Boot self-test: parse the policy, prove the capability reduction + path rule, and log
+/// a violation to P3.
 pub fn selftest() {
     let p = europol::parse(FIREFOX_POLICY);
     let all = europol::CAP_CONSOLE | europol::CAP_PROC_INFO | europol::CAP_FILE | europol::CAP_NET | europol::CAP_IMMUTABLE_ADMIN;
@@ -42,26 +42,26 @@ pub fn selftest() {
     let cap_denied = p.check_cap(europol::CAP_IMMUTABLE_ADMIN) == Decision::Deny;
     let path_denied = p.check_path("/etc/shadow") == Decision::Deny;
     let net_allowed = p.check_cap(europol::CAP_NET) == Decision::Allow;
-    // Een policy-violation (firefox vraagt een geweigerde cap) → audit-spoor (P3).
+    // A policy violation (firefox requests a denied cap) → audit trail (P3).
     if cap_denied && p.log_denied {
-        crate::audit::record(crate::audit::Event::CapDenied, "firefox vroeg CAP_IMMUTABLE_ADMIN (europol-deny)");
+        crate::audit::record(crate::audit::Event::CapDenied, "firefox requested CAP_IMMUTABLE_ADMIN (europol-deny)");
     }
 
     let ok = cap_denied && path_denied && net_allowed && (eff & europol::CAP_IMMUTABLE_ADMIN == 0) && (eff & europol::CAP_NET != 0);
     crate::serial_println!(
-        "[x] EuroPol: policy '{}', caps {:#07b}→{:#07b} (CAP_IMMUTABLE_ADMIN ontnomen, CAP_NET behouden), /etc geweigerd={path_denied}, violation→P3-audit → {}",
+        "[x] EuroPol: policy '{}', caps {:#07b}→{:#07b} (CAP_IMMUTABLE_ADMIN revoked, CAP_NET retained), /etc denied={path_denied}, violation→P3-audit → {}",
         p.name, all, eff,
-        if ok { "OK (beleid afgedwongen als capabilities) ✓" } else { "MISLUKT" }
+        if ok { "OK (policy enforced as capabilities) ✓" } else { "FAILED" }
     );
     *POLICY.lock() = Some(p);
 }
 
-/// `europol`-shellcommando: toon/explain het effectieve beleid.
+/// `europol` shell command: show/explain the effective policy.
 pub fn shell(args: &str) -> Vec<String> {
     let guard = POLICY.lock();
     let p = match guard.as_ref() {
         Some(p) => p,
-        None => return alloc::vec![String::from("europol: geen policy geladen")],
+        None => return alloc::vec![String::from("europol: no policy loaded")],
     };
     let mut a = args.split_whitespace();
     match a.next() {
@@ -69,16 +69,16 @@ pub fn shell(args: &str) -> Vec<String> {
             let cap = a.next().and_then(europol::cap_bit);
             match cap {
                 Some(c) => alloc::vec![p.explain_cap(c)],
-                None => alloc::vec![String::from("gebruik: europol explain <CAP_NAAM>")],
+                None => alloc::vec![String::from("usage: europol explain <CAP_NAME>")],
             }
         }
         _ => {
-            let mut v = alloc::vec![alloc::format!("policy '{}' (effectief beleid):", p.name)];
+            let mut v = alloc::vec![alloc::format!("policy '{}' (effective policy):", p.name)];
             for bit in [europol::CAP_CONSOLE, europol::CAP_PROC_INFO, europol::CAP_FILE, europol::CAP_NET, europol::CAP_IMMUTABLE_ADMIN] {
-                let d = if p.check_cap(bit) == Decision::Allow { "toegestaan" } else { "GEWEIGERD" };
+                let d = if p.check_cap(bit) == Decision::Allow { "allowed" } else { "DENIED" };
                 v.push(alloc::format!("  {:<20} {}", europol::cap_name(bit), d));
             }
-            v.push(String::from("commando's: europol | europol explain <CAP_NAAM>"));
+            v.push(String::from("commands: europol | europol explain <CAP_NAME>"));
             v
         }
     }

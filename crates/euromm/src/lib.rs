@@ -1,9 +1,9 @@
-//! EuroMM — fysiek geheugenbeheer (Track 3.1).
+//! EuroMM — physical memory management (Track 3.1).
 //!
-//! Bevat de `FrameAllocator`: een bitmap-allocator voor 4 KiB fysieke frames.
-//! Eén bit per frame (0 = vrij, 1 = in gebruik). Voor 4 GiB RAM is dat 128 KiB
-//! bitmap. Wordt geïnitialiseerd vanuit de UEFI-geheugenkaart (de bruikbare
-//! regio's). `no_std` + `alloc`; volledig host-getest.
+//! Contains the `FrameAllocator`: a bitmap allocator for 4 KiB physical frames.
+//! One bit per frame (0 = free, 1 = in use). For 4 GiB RAM that is a 128 KiB
+//! bitmap. Initialized from the UEFI memory map (the usable
+//! regions). `no_std` + `alloc`; fully host-tested.
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 

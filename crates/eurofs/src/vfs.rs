@@ -1,10 +1,10 @@
-//! Virtuele filesysteem-laag (plan G2): één `FileSystem`-façade over meerdere
-//! gemounte filesystems. Een pad wordt op het LANGSTE matchende mountpoint
-//! gerouteerd, met het mountpoint-prefix gestript, en doorgegeven aan dat FS.
-//! Zo kan de shell `/mnt/...` op een tweede schijf bedienen zonder iets te weten
-//! van mounts. Cross-mount `rename` → `EXDEV`.
+//! Virtual filesystem layer (plan G2): a single `FileSystem` facade over multiple
+//! mounted filesystems. A path is routed to the LONGEST matching mountpoint,
+//! with the mountpoint prefix stripped, and forwarded to that FS.
+//! This way the shell can serve `/mnt/...` on a second disk without knowing anything
+//! about mounts. Cross-mount `rename` → `EXDEV`.
 //!
-//! De routerings-logica is pure data en host-getest met een mock-FS.
+//! The routing logic is pure data and host-tested with a mock FS.
 
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
@@ -17,19 +17,19 @@ struct Mount {
     fs: Box<dyn FileSystem>,
 }
 
-/// Mount-tabel + router. Implementeert zelf `FileSystem`, dus de shell gebruikt
-/// hem transparant als "het" filesysteem.
+/// Mount table + router. Implements `FileSystem` itself, so the shell uses
+/// it transparently as "the" filesystem.
 pub struct Vfs {
     root: Box<dyn FileSystem>,
-    mounts: Vec<Mount>, // gesorteerd: langste mountpoint eerst
+    mounts: Vec<Mount>, // sorted: longest mountpoint first
 }
 
-/// Is `path` gelijk aan of ligt het ONDER mountpoint `mp`?
+/// Is `path` equal to or does it lie UNDER mountpoint `mp`?
 fn path_under(mp: &str, path: &str) -> bool {
     path == mp || (path.starts_with(mp) && path.as_bytes().get(mp.len()) == Some(&b'/'))
 }
 
-/// Strip het mountpoint-prefix → een wortel-relatief pad op dat FS.
+/// Strip the mountpoint prefix → a root-relative path on that FS.
 fn strip(mp: &str, path: &str) -> String {
     let rest = &path[mp.len()..];
     if rest.is_empty() {
@@ -44,26 +44,26 @@ impl Vfs {
         Vfs { root, mounts: Vec::new() }
     }
 
-    /// Mount `fs` op `point` (bv. `/mnt`). Houdt de lijst langste-eerst gesorteerd.
+    /// Mount `fs` at `point` (e.g. `/mnt`). Keeps the list sorted longest-first.
     pub fn mount(&mut self, point: &str, fs: Box<dyn FileSystem>) {
         self.mounts.retain(|m| m.point != point);
         self.mounts.push(Mount { point: point.to_string(), fs });
-        self.mounts.sort_by_key(|m| core::cmp::Reverse(m.point.len())); // langste mountpoint eerst
+        self.mounts.sort_by_key(|m| core::cmp::Reverse(m.point.len())); // longest mountpoint first
     }
 
-    /// Verwijder een mount; `true` als die bestond.
+    /// Remove a mount; `true` if it existed.
     pub fn umount(&mut self, point: &str) -> bool {
         let before = self.mounts.len();
         self.mounts.retain(|m| m.point != point);
         self.mounts.len() != before
     }
 
-    /// De mountpoints (root impliciet `/`), langste-eerst.
+    /// The mountpoints (root implicitly `/`), longest-first.
     pub fn mount_points(&self) -> Vec<String> {
         self.mounts.iter().map(|m| m.point.clone()).collect()
     }
 
-    /// Routeer een pad → (mount-index of None=root, gestript pad).
+    /// Route a path → (mount index or None=root, stripped path).
     fn route(&self, path: &str) -> (Option<usize>, String) {
         for (i, m) in self.mounts.iter().enumerate() {
             if path_under(&m.point, path) {
@@ -113,7 +113,7 @@ impl FileSystem for Vfs {
         let (idx, sub) = self.route(path);
         self.fs_mut(idx).set_flags(&sub, flags)
     }
-    // EuroSnap: snapshots horen bij een mount; we routeren op het pad (default: root).
+    // EuroSnap: snapshots belong to a mount; we route on the path (default: root).
     fn snapshot_create(&mut self, label: &str, flags: u32) -> FsResult<u64> {
         self.fs_mut(None).snapshot_create(label, flags)
     }
@@ -153,7 +153,7 @@ impl FileSystem for Vfs {
     fn space_info(&self) -> (u64, u64) {
         self.root.space_info()
     }
-    /// `df`-regels: ruimte per mount (root + elke mount).
+    /// `df` lines: space per mount (root + each mount).
     fn df(&self) -> Vec<(String, u64, u64)> {
         let mut out = alloc::vec![(String::from("/"), self.root.space_info().0, self.root.space_info().1)];
         for m in &self.mounts {
@@ -182,8 +182,8 @@ mod tests {
     use crate::fs::EntryKind;
     use alloc::collections::BTreeMap;
 
-    /// Minimaal in-geheugen-FS dat onthoudt op welke (gestripte) paden het wordt
-    /// aangesproken — zo bewijzen we de routering.
+    /// Minimal in-memory FS that remembers which (stripped) paths it is
+    /// addressed with — this is how we prove the routing.
     #[derive(Default)]
     struct MockFs {
         files: BTreeMap<String, Vec<u8>>,
@@ -226,20 +226,20 @@ mod tests {
         vfs.mount("/mnt", Box::new(MockFs::default()));
         vfs.mount("/mnt/data", Box::new(MockFs::default()));
 
-        // /etc/x → root (gestript pad blijft /etc/x).
+        // /etc/x → root (stripped path stays /etc/x).
         vfs.write_file("/etc/x", b"r").unwrap();
         assert_eq!(vfs.read_file("/etc/x").unwrap(), b"r");
-        // /mnt/foo → mount /mnt, gestript naar /foo.
+        // /mnt/foo → mount /mnt, stripped to /foo.
         vfs.write_file("/mnt/foo", b"m").unwrap();
-        // /mnt/data/y → mount /mnt/data (LANGSTE prefix), gestript naar /y.
+        // /mnt/data/y → mount /mnt/data (LONGEST prefix), stripped to /y.
         vfs.write_file("/mnt/data/y", b"d").unwrap();
 
-        // Bewijs de isolatie: elk landt in het juiste FS, niet in een ander.
+        // Prove the isolation: each lands in the correct FS, not in another.
         assert_eq!(vfs.read_file("/mnt/foo").unwrap(), b"m");
         assert_eq!(vfs.read_file("/mnt/data/y").unwrap(), b"d");
-        // Het root-FS kent /mnt/foo NIET (dat zit in de mount).
+        // The root FS does NOT know /mnt/foo (that lives in the mount).
         assert_eq!(vfs.fs_ref(None).read_file("/mnt/foo"), Err(FsError::NotFound));
-        // De /mnt-mount kent het pad als /foo, niet /mnt/foo.
+        // The /mnt mount knows the path as /foo, not /mnt/foo.
         assert_eq!(vfs.read_file("/mnt/data/y").unwrap(), b"d");
     }
 
@@ -247,12 +247,12 @@ mod tests {
     fn mount_root_itself_and_strip() {
         let mut vfs = Vfs::new(Box::new(MockFs::default()));
         vfs.mount("/mnt", Box::new(MockFs::default()));
-        // Het mountpoint zelf (`/mnt`) → gestript naar `/`.
+        // The mountpoint itself (`/mnt`) → stripped to `/`.
         assert_eq!(super::strip("/mnt", "/mnt"), "/");
         assert_eq!(super::strip("/mnt", "/mnt/a/b"), "/a/b");
         assert!(super::path_under("/mnt", "/mnt"));
         assert!(super::path_under("/mnt", "/mnt/x"));
-        // Een broer met naam-prefix valt NIET onder de mount.
+        // A sibling with a name prefix does NOT fall under the mount.
         assert!(!super::path_under("/mnt", "/mnt2"));
         assert!(!super::path_under("/mnt", "/mntfoo/x"));
     }
@@ -262,7 +262,7 @@ mod tests {
         let mut vfs = Vfs::new(Box::new(MockFs::default()));
         vfs.mount("/mnt", Box::new(MockFs::default()));
         vfs.write_file("/a", b"x").unwrap();
-        // Rename van root naar de mount → niet ondersteund (EXDEV).
+        // Rename from root to the mount → not supported (EXDEV).
         assert_eq!(vfs.rename("/a", "/mnt/a"), Err(FsError::Unsupported));
     }
 
@@ -272,7 +272,7 @@ mod tests {
         vfs.mount("/mnt", Box::new(MockFs::default()));
         assert_eq!(vfs.df().len(), 2); // root + /mnt
         assert!(vfs.umount("/mnt"));
-        assert!(!vfs.umount("/mnt")); // al weg
+        assert!(!vfs.umount("/mnt")); // already gone
         assert_eq!(vfs.df().len(), 1);
     }
 }

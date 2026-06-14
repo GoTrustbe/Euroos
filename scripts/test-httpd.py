@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Test de ACHTERGROND-HTTP-server: boot met hostfwd (host :5581 -> gast :80) +
-QMP. Typ `httpd` om de server aan te zetten, doe daarna MEERDERE HTTP-verzoeken
-vanaf de host terwijl de desktop interactief blijft. Elk verzoek moet bediend
-worden door net::service() in de desktop-lus. Screenshot toont de teller.
+"""Test the BACKGROUND HTTP server: boot with hostfwd (host :5581 -> guest :80) +
+QMP. Type `httpd` to turn on the server, then make MULTIPLE HTTP requests
+from the host while the desktop stays interactive. Each request must be served
+by net::service() in the desktop loop. Screenshot shows the counter.
 """
 import json, os, socket, subprocess, sys, time
 
@@ -46,23 +46,23 @@ def cmd(obj):
 
 f.readline()
 cmd({"execute": "qmp_capabilities"})
-print(f"[httpd] boot, wacht {WAIT}s...", flush=True)
+print(f"[httpd] boot, waiting {WAIT}s...", flush=True)
 time.sleep(WAIT)
 
 def send_key(qcodes):
     cmd({"execute": "send-key", "arguments": {"keys": [{"type": "qcode", "data": q} for q in qcodes.split("-")]}})
 
-print("[httpd] typt: 'httpd'", flush=True)
+print("[httpd] typing: 'httpd'", flush=True)
 for ch in "httpd\n":
     send_key(QMAP[ch])
     time.sleep(0.08 if ch != "\n" else 0.5)
 time.sleep(1)
 
-# Doe meerdere HTTP-verzoeken; elk moet bediend worden door de desktop-lus.
+# Make multiple HTTP requests; each must be served by the desktop loop.
 ok = 0
 req = b"GET / HTTP/1.0\r\nHost: euroos\r\n\r\n"
 for i in range(5):
-    for _ in range(20):  # retry tot bediend (server pollt per desktop-tick)
+    for _ in range(20):  # retry until served (server polls per desktop tick)
         try:
             c = socket.create_connection(("127.0.0.1", HOSTPORT), timeout=2)
             c.sendall(req)
@@ -76,7 +76,7 @@ for i in range(5):
             c.close()
             if b"EuroOS" in data:
                 ok += 1
-                print(f"[httpd] verzoek {i+1}: bediend ({len(data)} bytes)", flush=True)
+                print(f"[httpd] request {i+1}: served ({len(data)} bytes)", flush=True)
                 break
         except (ConnectionRefusedError, ConnectionResetError, socket.timeout, OSError):
             pass
@@ -93,5 +93,5 @@ try:
 except Exception:
     qemu.kill()
 
-print(f"\n[httpd] {ok}/5 verzoeken bediend door de achtergrond-server.", flush=True)
+print(f"\n[httpd] {ok}/5 requests served by the background server.", flush=True)
 sys.exit(0 if ok >= 3 else 1)

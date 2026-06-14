@@ -1,32 +1,32 @@
-//! Een minimale, eigen XML-pull-parser — genoeg voor OOXML/ODF (WordprocessingML,
-//! OpenDocument). Geen externe crate: een soeverein kantoorpakket parseert zijn
-//! eigen formaten. Levert een stroom [`Event`]s (open/sluit/tekst), met attribuut-
-//! ontleding en de vijf standaard-entiteiten.
+//! A minimal, in-house XML pull-parser — enough for OOXML/ODF (WordprocessingML,
+//! OpenDocument). No external crate: a sovereign office suite parses its
+//! own formats. Yields a stream of [`Event`]s (open/close/text), with attribute
+//! parsing and the five standard entities.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Een XML-gebeurtenis uit de pull-parser.
+/// An XML event from the pull-parser.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Event {
-    /// `<naam attr="x">` — bij een self-closing tag `<naam/>` volgt meteen een `Close`.
+    /// `<name attr="x">` — for a self-closing tag `<name/>` a `Close` follows immediately.
     Open { name: String, attrs: Vec<(String, String)> },
-    /// `</naam>`
+    /// `</name>`
     Close { name: String },
-    /// Tekstinhoud tussen tags (entiteiten al gedecodeerd).
+    /// Text content between tags (entities already decoded).
     Text(String),
 }
 
-/// Parse een XML-document naar een lijst events. Tolereert een XML-declaratie,
-/// commentaar en self-closing tags. Niet-strikt (geen DTD/namespaces-resolutie —
-/// de prefix blijft deel van de naam, bv. `w:p`).
+/// Parse an XML document into a list of events. Tolerates an XML declaration,
+/// comments and self-closing tags. Non-strict (no DTD/namespace resolution —
+/// the prefix stays part of the name, e.g. `w:p`).
 pub fn parse(input: &str) -> Vec<Event> {
     let b = input.as_bytes();
     let mut i = 0;
     let mut out = Vec::new();
     while i < b.len() {
         if b[i] == b'<' {
-            // Commentaar / declaratie / processing-instruction overslaan.
+            // Skip comment / declaration / processing-instruction.
             if b[i..].starts_with(b"<!--") {
                 if let Some(end) = find(b, i + 4, b"-->") {
                     i = end + 3;
@@ -34,7 +34,7 @@ pub fn parse(input: &str) -> Vec<Event> {
                 }
                 break;
             }
-            // Een kale `<` op het einde van de invoer (audit M5): niet b[i+1] indexeren.
+            // A bare `<` at the end of the input (audit M5): do not index b[i+1].
             if i + 1 >= b.len() {
                 break;
             }
@@ -45,7 +45,7 @@ pub fn parse(input: &str) -> Vec<Event> {
                 }
                 break;
             }
-            // Een tag.
+            // A tag.
             let gt = match memchr(b, i, b'>') {
                 Some(p) => p,
                 None => break,
@@ -64,7 +64,7 @@ pub fn parse(input: &str) -> Vec<Event> {
             }
             i = gt + 1;
         } else {
-            // Tekst tot de volgende `<`.
+            // Text up to the next `<`.
             let start = i;
             while i < b.len() && b[i] != b'<' {
                 i += 1;
@@ -78,7 +78,7 @@ pub fn parse(input: &str) -> Vec<Event> {
     out
 }
 
-/// Splits `naam attr1="x" attr2='y'` in de tagnaam + de attributen.
+/// Split `name attr1="x" attr2='y'` into the tag name + the attributes.
 fn parse_tag(inner: &str) -> (String, Vec<(String, String)>) {
     let mut chars = inner.char_indices();
     let mut name_end = inner.len();
@@ -94,7 +94,7 @@ fn parse_tag(inner: &str) -> (String, Vec<(String, String)>) {
     let rb = rest.as_bytes();
     let mut j = 0;
     while j < rb.len() {
-        // Sla witruimte over.
+        // Skip whitespace.
         while j < rb.len() && rb[j].is_ascii_whitespace() {
             j += 1;
         }
@@ -106,7 +106,7 @@ fn parse_tag(inner: &str) -> (String, Vec<(String, String)>) {
             break;
         }
         let key = &rest[key_start..j];
-        // Verwacht =."..."
+        // Expect =."..."
         while j < rb.len() && (rb[j] == b'=' || rb[j].is_ascii_whitespace()) {
             j += 1;
         }
@@ -126,7 +126,7 @@ fn parse_tag(inner: &str) -> (String, Vec<(String, String)>) {
     (name, attrs)
 }
 
-/// Decodeer de vijf XML-standaard-entiteiten.
+/// Decode the five standard XML entities.
 pub fn decode_entities(s: &str) -> String {
     if !s.contains('&') {
         return String::from(s);
@@ -170,7 +170,7 @@ pub fn decode_entities(s: &str) -> String {
     out
 }
 
-/// Codeer tekst voor XML-uitvoer (de vijf entiteiten).
+/// Encode text for XML output (the five entities).
 pub fn encode_entities(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -203,10 +203,10 @@ mod tests {
 
     #[test]
     fn basic_events() {
-        let ev = parse(r#"<a x="1"><b>hoi</b></a>"#);
+        let ev = parse(r#"<a x="1"><b>hi</b></a>"#);
         assert_eq!(ev[0], Event::Open { name: "a".into(), attrs: alloc::vec![("x".into(), "1".into())] });
         assert_eq!(ev[1], Event::Open { name: "b".into(), attrs: alloc::vec![] });
-        assert_eq!(ev[2], Event::Text("hoi".into()));
+        assert_eq!(ev[2], Event::Text("hi".into()));
         assert_eq!(ev[3], Event::Close { name: "b".into() });
         assert_eq!(ev[4], Event::Close { name: "a".into() });
     }

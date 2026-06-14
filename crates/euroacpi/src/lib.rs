@@ -1,11 +1,11 @@
-//! EuroACPI — ACPI-tabel-parsing-kern (plan I3, power management).
+//! EuroACPI — ACPI table parsing core (plan I3, power management).
 //!
-//! Voor echt power-management (nette shutdown/reboot, sleep-states, thermal/battery)
-//! moet EuroOS de ACPI-tabellen lezen: de **SDT-headers** (met checksum-validatie),
-//! de **RSDT/XSDT** (de lijst tabel-pointers), en de **FADT** (FACP) met de power-
-//! management-registers. Deze module is de architectuur-onafhankelijke parser-kern
-//! (de kernel levert de fysieke geheugentoegang erboven). Pure `no_std`-logica →
-//! de checksum- + offset-gevoelige parsing is volledig op de host getest.
+//! For real power management (clean shutdown/reboot, sleep states, thermal/battery)
+//! EuroOS must read the ACPI tables: the **SDT headers** (with checksum validation),
+//! the **RSDT/XSDT** (the list of table pointers), and the **FADT** (FACP) with the power-
+//! management registers. This module is the architecture-independent parser core
+//! (the kernel provides the physical memory access on top). Pure `no_std` logic →
+//! the checksum- and offset-sensitive parsing is fully tested on the host.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -14,7 +14,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-/// De gemeenschappelijke 36-byte ACPI-SDT-header.
+/// The common 36-byte ACPI SDT header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdtHeader {
     pub signature: [u8; 4],
@@ -42,8 +42,8 @@ impl SdtHeader {
     }
 }
 
-/// Een geldige ACPI-tabel heeft een byte-som van 0 (over `length` bytes). Beschermt
-/// tegen corrupte/onvolledige tabellen vóór we de velden vertrouwen.
+/// A valid ACPI table has a byte sum of 0 (over `length` bytes). Protects
+/// against corrupt/incomplete tables before we trust the fields.
 pub fn checksum_ok(table: &[u8]) -> bool {
     let len = match SdtHeader::parse(table) {
         Some(h) => h.length as usize,
@@ -55,16 +55,16 @@ pub fn checksum_ok(table: &[u8]) -> bool {
     table[..len].iter().fold(0u8, |a, &x| a.wrapping_add(x)) == 0
 }
 
-/// Bereken de checksum-byte die `table` (met dat byte op 0) sluitend maakt — handig
-/// om geldige test-tabellen te bouwen.
+/// Compute the checksum byte that makes `table` (with that byte set to 0) sum to zero — handy
+/// for building valid test tables.
 pub fn fix_checksum(table: &mut [u8], checksum_offset: usize) {
     table[checksum_offset] = 0;
     let sum = table.iter().fold(0u8, |a, &x| a.wrapping_add(x));
     table[checksum_offset] = sum.wrapping_neg();
 }
 
-/// Lees de tabel-pointers uit een RSDT (4-byte entries) of XSDT (8-byte entries).
-/// `xsdt=true` → 64-bit pointers. De header (36 bytes) wordt overgeslagen.
+/// Read the table pointers from an RSDT (4-byte entries) or XSDT (8-byte entries).
+/// `xsdt=true` → 64-bit pointers. The header (36 bytes) is skipped.
 pub fn table_pointers(rsdt: &[u8], xsdt: bool) -> Vec<u64> {
     let header = match SdtHeader::parse(rsdt) {
         Some(h) => h,
@@ -86,8 +86,8 @@ pub fn table_pointers(rsdt: &[u8], xsdt: bool) -> Vec<u64> {
     out
 }
 
-/// De power-management-velden uit de FADT (FACP). Genoeg voor nette ACPI-shutdown
-/// (S5 via PM1a_CNT) en reboot (RESET_REG/RESET_VALUE).
+/// The power-management fields from the FADT (FACP). Enough for a clean ACPI shutdown
+/// (S5 via PM1a_CNT) and reboot (RESET_REG/RESET_VALUE).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fadt {
     pub pm1a_evt_blk: u32,
@@ -98,7 +98,7 @@ pub struct Fadt {
 }
 
 impl Fadt {
-    /// Parse de FADT-power-velden (FADT ≥ ACPI 2.0 voor RESET_REG). Valideert de
+    /// Parse the FADT power fields (FADT ≥ ACPI 2.0 for RESET_REG). Validates the
     /// signature ("FACP") + checksum.
     pub fn parse(b: &[u8]) -> Option<Fadt> {
         let h = SdtHeader::parse(b)?;
@@ -111,7 +111,7 @@ impl Fadt {
         Some(Fadt {
             pm1a_evt_blk: u32::from_le_bytes([b[56], b[57], b[58], b[59]]),
             pm1a_cnt_blk: u32::from_le_bytes([b[64], b[65], b[66], b[67]]),
-            // RESET_REG is een 12-byte GAS op offset 116; het 64-bit adres staat op +4.
+            // RESET_REG is a 12-byte GAS at offset 116; the 64-bit address is at +4.
             reset_reg_addr: u64::from_le_bytes([
                 b[120], b[121], b[122], b[123], b[124], b[125], b[126], b[127],
             ]),
@@ -131,7 +131,7 @@ mod tests {
         t[4..8].copy_from_slice(&(len as u32).to_le_bytes());
         t[8] = 2; // revision
         t[16..22].copy_from_slice(b"EUROOS");
-        fix_checksum(&mut t, 9); // checksum-byte op offset 9
+        fix_checksum(&mut t, 9); // checksum byte at offset 9
         t
     }
 
@@ -148,13 +148,13 @@ mod tests {
     #[test]
     fn checksum_detects_corruption() {
         let mut t = make_table(b"APIC", 60);
-        t[40] ^= 0xFF; // corrupt een byte
+        t[40] ^= 0xFF; // corrupt a byte
         assert!(!checksum_ok(&t));
     }
 
     #[test]
     fn rsdt_pointers() {
-        // RSDT-header (36) + 3 × u32-pointers.
+        // RSDT header (36) + 3 × u32 pointers.
         let mut t = make_table(b"RSDT", 36 + 12);
         t[36..40].copy_from_slice(&0x1000u32.to_le_bytes());
         t[40..44].copy_from_slice(&0x2000u32.to_le_bytes());
@@ -190,6 +190,6 @@ mod tests {
     #[test]
     fn fadt_rejects_wrong_signature() {
         let t = make_table(b"APIC", 132);
-        assert!(Fadt::parse(&t).is_none()); // geen FACP
+        assert!(Fadt::parse(&t).is_none()); // not FACP
     }
 }

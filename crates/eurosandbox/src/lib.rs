@@ -1,11 +1,11 @@
-//! EuroSandbox — containers via het EuroGuard-capability-model (plan F2), GEEN
-//! Linux-namespaces. Een container = een proces met:
-//!   - een ge-chroot'e bestandswortel (alle paden blijven binnen `/containers/<naam>`),
-//!   - een ingeperkt capability-masker (alleen wat de container mag),
-//!   - een ingeperkte netwerk-scope (alleen toegestane host:poort).
+//! EuroSandbox — containers via the EuroGuard capability model (plan F2), NOT
+//! Linux namespaces. A container = a process with:
+//!   - a chrooted file root (all paths stay within `/containers/<name>`),
+//!   - a restricted capability mask (only what the container is allowed),
+//!   - a restricted network scope (only permitted host:port).
 //!
-//! Pure `no_std`-logica zodat de veiligheidskritische padresolutie (geen `..`-
-//! ontsnapping uit de container) host-getest is.
+//! Pure `no_std` logic so that the security-critical path resolution (no `..`
+//! escape out of the container) is host-tested.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -14,24 +14,24 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Netwerk-scope van een container.
+/// Network scope of a container.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetScope {
-    /// Geen netwerk.
+    /// No network.
     None,
-    /// Alleen deze (ip, poort)-paren.
+    /// Only these (ip, port) pairs.
     Allow(Vec<([u8; 4], u16)>),
-    /// Onbeperkt (binnen de grenzen van CAP_NET).
+    /// Unrestricted (within the bounds of CAP_NET).
     Any,
 }
 
-/// Het beleid van één container.
+/// The policy of a single container.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Container {
     pub name: String,
-    /// De host-padwortel (`/containers/<naam>`); alle container-paden vallen hieronder.
+    /// The host path root (`/containers/<name>`); all container paths fall under it.
     pub root: String,
-    /// Toegestane capabilities (masker dat over het basismasker wordt gelegd).
+    /// Permitted capabilities (mask laid over the base mask).
     pub caps: u64,
     pub net: NetScope,
 }
@@ -42,13 +42,13 @@ impl Container {
         Container { name: String::from(name), root, caps, net }
     }
 
-    /// Effectieve capabilities = intersectie van het proces-basismasker en wat de
-    /// container toestaat (een container kan rechten alleen INPERKEN, nooit uitbreiden).
+    /// Effective capabilities = intersection of the process base mask and what the
+    /// container permits (a container can only RESTRICT rights, never expand them).
     pub fn effective_caps(&self, base: u64) -> u64 {
         base & self.caps
     }
 
-    /// Mag de container naar (ip, poort) verbinden?
+    /// May the container connect to (ip, port)?
     pub fn allow_connect(&self, ip: [u8; 4], port: u16) -> bool {
         match &self.net {
             NetScope::None => false,
@@ -57,17 +57,17 @@ impl Container {
         }
     }
 
-    /// Vertaal een container-pad naar het echte host-pad ONDER de wortel. `..`-
-    /// componenten kunnen nooit boven de wortel uitkomen (chroot-semantiek), dus
-    /// een container kan z'n bestandssysteem niet ontsnappen. Geeft altijd een pad
-    /// dat met `self.root` begint.
+    /// Translate a container path to the real host path UNDER the root. `..`
+    /// components can never climb above the root (chroot semantics), so
+    /// a container cannot escape its filesystem. Always returns a path
+    /// that begins with `self.root`.
     pub fn resolve(&self, requested: &str) -> String {
         let mut stack: Vec<&str> = Vec::new();
         for comp in requested.split('/') {
             match comp {
-                "" | "." => {}            // lege/`.`-component overslaan
+                "" | "." => {}            // skip empty/`.` component
                 ".." => {
-                    stack.pop(); // nooit voorbij de (virtuele) wortel
+                    stack.pop(); // never past the (virtual) root
                 }
                 other => stack.push(other),
             }
@@ -80,14 +80,14 @@ impl Container {
         out
     }
 
-    /// True als `host_path` daadwerkelijk binnen de container-wortel ligt. Een
-    /// extra verdedigingslaag bovenop [`resolve`].
+    /// True if `host_path` actually lies within the container root. An
+    /// extra defense layer on top of [`resolve`].
     pub fn contains(&self, host_path: &str) -> bool {
         if host_path == self.root {
             return true;
         }
-        // Moet beginnen met "<root>/" — niet enkel met de root als prefix van een
-        // langere naam (bv. "/containers/foobar" mag niet matchen op "/containers/foo").
+        // Must begin with "<root>/" — not just with the root as a prefix of a
+        // longer name (e.g. "/containers/foobar" must not match "/containers/foo").
         host_path.len() > self.root.len()
             && host_path.starts_with(&self.root)
             && host_path.as_bytes()[self.root.len()] == b'/'
@@ -105,9 +105,9 @@ mod tests {
     #[test]
     fn caps_can_only_shrink() {
         let con = Container::new("x", 0b0101, NetScope::None);
-        // Basis heeft alle 4 rechten; container staat alleen bit 0 en 2 toe.
+        // Base has all 4 rights; container permits only bit 0 and 2.
         assert_eq!(con.effective_caps(0b1111), 0b0101);
-        // Een container kan geen recht toevoegen dat het proces niet heeft.
+        // A container cannot add a right that the process does not have.
         assert_eq!(con.effective_caps(0b0001), 0b0001);
     }
 
@@ -116,12 +116,12 @@ mod tests {
         let con = c();
         assert_eq!(con.resolve("data/x.txt"), "/containers/web/data/x.txt");
         assert_eq!(con.resolve("/data/x.txt"), "/containers/web/data/x.txt");
-        // Klassieke ontsnappingspogingen blijven binnen de wortel.
+        // Classic escape attempts stay within the root.
         assert_eq!(con.resolve("../../etc/passwd"), "/containers/web/etc/passwd");
         assert_eq!(con.resolve("../../../"), "/containers/web");
         assert_eq!(con.resolve("a/../../../../b"), "/containers/web/b");
         assert_eq!(con.resolve("./a/./b/../c"), "/containers/web/a/c");
-        // Elk resultaat ligt binnen de container.
+        // Every result lies within the container.
         for p in ["../../x", "a/../../b", "/", "..", "foo/../../../bar"] {
             assert!(con.contains(&con.resolve(p)) || con.resolve(p) == con.root);
         }
@@ -131,8 +131,8 @@ mod tests {
     fn contains_rejects_prefix_siblings() {
         let con = c();
         assert!(con.contains("/containers/web/file"));
-        assert!(con.contains("/containers/web")); // de wortel zelf
-        // Een broer-map met de wortel als naam-prefix mag NIET binnen vallen.
+        assert!(con.contains("/containers/web")); // the root itself
+        // A sibling directory with the root as a name prefix must NOT fall within.
         assert!(!con.contains("/containers/webroot/secret"));
         assert!(!con.contains("/containers/web2"));
         assert!(!con.contains("/etc/passwd"));
@@ -142,8 +142,8 @@ mod tests {
     fn net_scope_enforced() {
         let con = c();
         assert!(con.allow_connect([10, 0, 2, 2], 443));
-        assert!(!con.allow_connect([10, 0, 2, 2], 80)); // verkeerde poort
-        assert!(!con.allow_connect([1, 1, 1, 1], 443)); // verkeerd ip
+        assert!(!con.allow_connect([10, 0, 2, 2], 80)); // wrong port
+        assert!(!con.allow_connect([1, 1, 1, 1], 443)); // wrong ip
         let none = Container::new("n", 0, NetScope::None);
         assert!(!none.allow_connect([10, 0, 2, 2], 443));
         let any = Container::new("a", 0, NetScope::Any);

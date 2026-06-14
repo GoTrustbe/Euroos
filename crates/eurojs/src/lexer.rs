@@ -1,4 +1,4 @@
-//! EuroJS-lexer: bron → tokens.
+//! EuroJS lexer: source → tokens.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -8,7 +8,7 @@ pub enum Tok {
     Num(f64),
     Str(String),
     Ident(String),
-    // sleutelwoorden
+    // keywords
     Let,
     Function,
     Return,
@@ -20,7 +20,7 @@ pub enum Tok {
     False,
     Null,
     Undefined,
-    // operatoren / leestekens
+    // operators / punctuation
     Plus,
     Minus,
     Star,
@@ -61,12 +61,12 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, String> {
     let mut out = Vec::new();
     while i < c.len() {
         let ch = c[i];
-        // witruimte
+        // whitespace
         if ch.is_whitespace() {
             i += 1;
             continue;
         }
-        // commentaar
+        // comment
         if ch == '/' && i + 1 < c.len() && c[i + 1] == '/' {
             while i < c.len() && c[i] != '\n' {
                 i += 1;
@@ -81,7 +81,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, String> {
             i += 2;
             continue;
         }
-        // getallen
+        // numbers
         if ch.is_ascii_digit() || (ch == '.' && i + 1 < c.len() && c[i + 1].is_ascii_digit()) {
             let start = i;
             while i < c.len() && (c[i].is_ascii_digit() || c[i] == '.') {
@@ -97,7 +97,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, String> {
                 }
             }
             let s: String = c[start..i].iter().collect();
-            let n = s.parse::<f64>().map_err(|_| "ongeldig getal".to_string())?;
+            let n = s.parse::<f64>().map_err(|_| "invalid number".to_string())?;
             out.push(Tok::Num(n));
             continue;
         }
@@ -124,11 +124,11 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, String> {
                 }
                 i += 1;
             }
-            i += 1; // sluit-quote
+            i += 1; // closing quote
             out.push(Tok::Str(s));
             continue;
         }
-        // identifiers / sleutelwoorden
+        // identifiers / keywords
         if ch.is_alphabetic() || ch == '_' || ch == '$' {
             let start = i;
             while i < c.len() && (c[i].is_alphanumeric() || c[i] == '_' || c[i] == '$') {
@@ -151,7 +151,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, String> {
             });
             continue;
         }
-        // operatoren (langste eerst)
+        // operators (longest first)
         let two: String = c[i..(i + 2).min(c.len())].iter().collect();
         let three: String = c[i..(i + 3).min(c.len())].iter().collect();
         if three == "===" {
@@ -202,7 +202,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, String> {
             '.' => Tok::Dot,
             ':' => Tok::Colon,
             '?' => Tok::Question,
-            _ => return Err(alloc::format!("onbekend teken '{ch}'")),
+            _ => return Err(alloc::format!("unknown character '{ch}'")),
         };
         out.push(t1);
         i += 1;

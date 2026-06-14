@@ -1,10 +1,10 @@
-//! Gebundelde vertrouwde root-CA's voor EuroTLS-certificaatvalidatie (plan A1).
-//! EU-eerst selectie + de grote internationale CA's, als `&'static` DER. Auto-
-//! gegenereerd uit de systeem-CA-store (openssl x509 -outform DER).
+//! Bundled trusted root CAs for EuroTLS certificate validation (plan A1).
+//! EU-first selection + the major international CAs, as `&'static` DER. Auto-
+//! generated from the system CA store (openssl x509 -outform DER).
 //!
-//! GEEN handmatige edits — hergenereer via het script in de A1-werkstroom.
+//! NO manual edits — regenerate via the script in the A1 workflow.
 
-/// De vertrouwde root-certificaten (DER), aangeboden aan `Tls13Client::set_trust_anchor`.
+/// The trusted root certificates (DER), passed to `Tls13Client::set_trust_anchor`.
 pub static ROOTS: &[&[u8]] = &[
     include_bytes!("tls_roots/Buypass_Class_2_Root_CA.der"),
     include_bytes!("tls_roots/Buypass_Class_3_Root_CA.der"),

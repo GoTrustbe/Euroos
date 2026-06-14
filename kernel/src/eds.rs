@@ -1,26 +1,26 @@
-//! EuroDesign System (EDS) — design-tokens (Track 5 design-system).
+//! EuroDesign System (EDS) — design tokens (Track 5 design system).
 //!
-//! Vaste tokens uit de EDS-spec: de resolutie-onafhankelijke `eu`-eenheid, het
-//! radius-systeem, en de **security-kleurtaal** (security is een eersteklas
-//! semantische kleur). Componenten gebruiken deze tokens — nooit willekeurige waarden.
+//! Fixed tokens from the EDS spec: the resolution-independent `eu` unit, the
+//! radius system, and the **security color language** (security is a first-class
+//! semantic color). Components use these tokens — never arbitrary values.
 
 use crate::graphics::Color;
 
-/// Euro Unit — basis-schaaleenheid (px bij 100% DPI). Grid-basis = 4.
+/// Euro Unit — base scale unit (px at 100% DPI). Grid base = 4.
 pub const EU: usize = 4;
 pub const fn eu(n: usize) -> usize {
     n * EU
 }
 
-// Radius-systeem (geen andere waarden toegestaan).
+// Radius system (no other values allowed).
 pub const RADIUS_S: usize = 8;
 pub const RADIUS_M: usize = 12;
 pub const RADIUS_L: usize = 20;
 #[allow(dead_code)]
 pub const RADIUS_XL: usize = 28;
 
-// ── Security-kleurtaal (EDS) ──────────────────────────────────────────────
-// Groen = Geverifieerd, Blauw = Beschermd, Geel = Aandacht, Rood = Gecompromitteerd, Grijs = Onbekend.
+// ── Security color language (EDS) ──────────────────────────────────────────────
+// Green = Verified, Blue = Protected, Yellow = Attention, Red = Compromised, Gray = Unknown.
 pub const SEC_VERIFIED: Color = Color::SUCCESS;
 pub const SEC_PROTECTED: Color = Color::ACCENT;
 pub const SEC_ATTENTION: Color = Color::YELLOW;
@@ -29,8 +29,8 @@ pub const SEC_COMPROMISED: Color = Color::RED;
 #[allow(dead_code)]
 pub const SEC_UNKNOWN: Color = Color::TEXT_DIM;
 
-/// Security-status van een venster/app (zichtbaar in de titelbalk — "verberg
-/// nooit security": versleuteling/sandbox/netwerk altijd tonen).
+/// Security status of a window/app (visible in the title bar — "never hide
+/// security": always show encryption/sandbox/network).
 #[derive(Clone, Copy)]
 pub struct SecState {
     pub sandboxed: bool,

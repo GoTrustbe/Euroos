@@ -1,21 +1,21 @@
-//! Local APIC + APIC-timer (Track 3.5) — vervangt de 8259-PIT als scheduler-tick.
+//! Local APIC + APIC timer (Track 3.5) — replaces the 8259-PIT as scheduler tick.
 //!
-//! De LAPIC-MMIO ligt op fysiek `0xFEE00000` (identity-mapped supervisor, in de
-//! 3–4 GiB 1-GiB-huge-page van [`crate::paging`]). We:
-//!   1. zetten de LAPIC aan (IA32_APIC_BASE bit 11 + software-enable),
-//!   2. houden de 8259-IRQ's (toetsenbord/muis) levend via LINT0=ExtINT
-//!      (virtual-wire), zodat PS/2 blijft werken,
-//!   3. kalibreren de timer tegen PIT-kanaal 2 en zetten 'm periodiek op `hz` Hz.
+//! The LAPIC MMIO sits at physical `0xFEE00000` (identity-mapped supervisor, in the
+//! 3–4 GiB 1-GiB huge page of [`crate::paging`]). We:
+//!   1. enable the LAPIC (IA32_APIC_BASE bit 11 + software-enable),
+//!   2. keep the 8259 IRQs (keyboard/mouse) alive via LINT0=ExtINT
+//!      (virtual-wire), so PS/2 keeps working,
+//!   3. calibrate the timer against PIT channel 2 and set it periodic at `hz` Hz.
 //!
-//! Dit is de eerste stap richting SMP (meerdere cores): de Local APIC is per-CPU
-//! en de IO-APIC + AP-bring-up bouwen hierop voort.
+//! This is the first step toward SMP (multiple cores): the Local APIC is per-CPU
+//! and the IO-APIC + AP bring-up build on top of it.
 
 use x86_64::instructions::port::Port;
 use x86_64::registers::model_specific::Msr;
 
 const LAPIC_BASE: u64 = 0xFEE0_0000;
 
-// Register-offsets (bytes vanaf de basis).
+// Register offsets (bytes from the base).
 const REG_ID: u64 = 0x020;
 const REG_EOI: u64 = 0x0B0;
 const REG_SPURIOUS: u64 = 0x0F0;
@@ -45,68 +45,68 @@ unsafe fn wr(off: u64, v: u32) {
     ((LAPIC_BASE + off) as *mut u32).write_volatile(v);
 }
 
-/// Local-APIC-ID van de huidige CPU (de BSP bij single-core).
+/// Local-APIC-ID of the current CPU (the BSP when single-core).
 pub fn lapic_id() -> u32 {
     unsafe { rd(REG_ID) >> 24 }
 }
 
-// ── IO-APIC (IRQ-routering, vervangt de 8259-PIC) ──────────────────────────
+// ── IO-APIC (IRQ routing, replaces the 8259-PIC) ──────────────────────────
 unsafe fn ioapic_write(base: u64, reg: u32, val: u32) {
     (base as *mut u32).write_volatile(reg); // IOREGSEL
     ((base + 0x10) as *mut u32).write_volatile(val); // IOWIN
 }
 
-/// Route een GSI (global system interrupt) naar `vector` op core `dest_apic`.
-/// ISA-IRQs zijn edge-triggered, active-high; we zetten de redirection-entry
-/// (low = vector/fixed/physical/unmasked, high = bestemmings-APIC-id).
+/// Route a GSI (global system interrupt) to `vector` on core `dest_apic`.
+/// ISA-IRQs are edge-triggered, active-high; we set the redirection entry
+/// (low = vector/fixed/physical/unmasked, high = destination APIC id).
 pub fn ioapic_route(ioapic_base: u32, gsi: u32, vector: u8, dest_apic: u8) {
     let base = ioapic_base as u64;
     let low = 0x10 + 2 * gsi;
     let high = 0x11 + 2 * gsi;
     unsafe {
-        ioapic_write(base, low, 1 << 16); // eerst maskeren
+        ioapic_write(base, low, 1 << 16); // mask first
         ioapic_write(base, high, (dest_apic as u32) << 24);
         ioapic_write(base, low, vector as u32); // fixed, physical, edge, active-high, unmasked
     }
 }
 
-/// End-Of-Interrupt naar de Local APIC (de timer-vector EOI't hierheen i.p.v. PIC).
+/// End-Of-Interrupt to the Local APIC (the timer vector EOIs here instead of the PIC).
 #[inline]
 pub fn eoi() {
     unsafe { wr(REG_EOI, 0) };
 }
 
-/// Aantal LAPIC-timerticks per `hz`-periode (resultaat van de kalibratie).
+/// Number of LAPIC timer ticks per `hz` period (result of the calibration).
 static mut CAL_COUNT: u32 = 0;
 
-/// Zet de LAPIC aan en start de periodieke timer op `hz` Hz, interrupt-`vector`.
-/// Geeft het gekalibreerde initiële-tellingsgetal terug (diagnostiek).
+/// Enable the LAPIC and start the periodic timer at `hz` Hz, interrupt `vector`.
+/// Returns the calibrated initial count value (diagnostics).
 pub fn init(hz: u32, vector: u8) -> u32 {
     unsafe {
-        // 1. Global enable via IA32_APIC_BASE (bit 11) — firmware zet 'm meestal al.
+        // 1. Global enable via IA32_APIC_BASE (bit 11) — firmware usually sets it already.
         let mut base_msr = Msr::new(IA32_APIC_BASE);
         let base = base_msr.read();
         base_msr.write(base | (1 << 11));
 
-        // 2. Software-enable + spurious-vector 0xFF.
+        // 2. Software-enable + spurious vector 0xFF.
         wr(REG_SPURIOUS, APIC_SW_ENABLE | 0xFF);
 
-        // 3. Virtual-wire: LINT0 = ExtINT (laat 8259 kbd/muis door), LINT1 = NMI.
+        // 3. Virtual-wire: LINT0 = ExtINT (let 8259 kbd/mouse through), LINT1 = NMI.
         wr(REG_LVT_LINT0, DELIVERY_EXTINT);
         wr(REG_LVT_LINT1, DELIVERY_NMI);
 
-        // 4. Kalibreer tegen PIT-kanaal 2 en start de periodieke timer.
+        // 4. Calibrate against PIT channel 2 and start the periodic timer.
         let count = calibrate(hz);
         CAL_COUNT = count;
-        wr(REG_TIMER_DIV, 0x3); // 0b011 = delen door 16
+        wr(REG_TIMER_DIV, 0x3); // 0b011 = divide by 16
         wr(REG_LVT_TIMER, LVT_PERIODIC | vector as u32);
         wr(REG_TIMER_INIT, count);
         count
     }
 }
 
-/// Zet de Local APIC van DEZE cpu aan en start z'n periodieke timer op `vector`,
-/// met de reeds (door de BSP) gekalibreerde tellingswaarde. Voor de APs.
+/// Enable the Local APIC of THIS cpu and start its periodic timer on `vector`,
+/// with the count value already calibrated (by the BSP). For the APs.
 pub fn start_timer_on_this_cpu(vector: u8) {
     unsafe {
         let mut base = Msr::new(IA32_APIC_BASE);
@@ -120,8 +120,8 @@ pub fn start_timer_on_this_cpu(vector: u8) {
     }
 }
 
-/// Stuur een gewone (fixed-delivery) inter-processor interrupt naar `apic_id` op
-/// `vector`. Voor cross-CPU-signalering (reschedule, halt, TLB-shootdown).
+/// Send an ordinary (fixed-delivery) inter-processor interrupt to `apic_id` on
+/// `vector`. For cross-CPU signaling (reschedule, halt, TLB shootdown).
 pub fn send_ipi(apic_id: u8, vector: u8) {
     unsafe {
         wr(REG_ICR_HIGH, (apic_id as u32) << 24);
@@ -130,7 +130,7 @@ pub fn send_ipi(apic_id: u8, vector: u8) {
     }
 }
 
-/// Stuur een INIT-IPI naar core `apic_id` (physieke destination mode).
+/// Send an INIT-IPI to core `apic_id` (physical destination mode).
 pub fn send_init(apic_id: u8) {
     unsafe {
         wr(REG_ICR_HIGH, (apic_id as u32) << 24);
@@ -139,7 +139,7 @@ pub fn send_init(apic_id: u8) {
     }
 }
 
-/// Stuur een Startup-IPI (SIPI) met trampoline-startpagina `vector` (phys >> 12).
+/// Send a Startup-IPI (SIPI) with trampoline start page `vector` (phys >> 12).
 pub fn send_sipi(apic_id: u8, vector: u8) {
     unsafe {
         wr(REG_ICR_HIGH, (apic_id as u32) << 24);
@@ -149,7 +149,7 @@ pub fn send_sipi(apic_id: u8, vector: u8) {
 }
 
 unsafe fn wait_icr_idle() {
-    // ICR-bit 12 (delivery status) blijft 1 zolang de IPC onderweg is.
+    // ICR bit 12 (delivery status) stays 1 while the IPC is in flight.
     let mut guard = 0u32;
     while rd(REG_ICR_LOW) & (1 << 12) != 0 {
         core::hint::spin_loop();
@@ -160,8 +160,8 @@ unsafe fn wait_icr_idle() {
     }
 }
 
-/// Busy-wait ~`us` microseconden via de lopende LAPIC-timer (current-count),
-/// onafhankelijk van interrupts (die staan tijdens de SMP-bring-up nog uit).
+/// Busy-wait ~`us` microseconds via the running LAPIC timer (current-count),
+/// independent of interrupts (which are still off during SMP bring-up).
 pub fn busy_wait_us(us: u32) {
     let cal = unsafe { core::ptr::addr_of!(CAL_COUNT).read() };
     if cal == 0 {
@@ -170,7 +170,7 @@ pub fn busy_wait_us(us: u32) {
         }
         return;
     }
-    // cal ticks = 1 periode = 10_000 us (100 Hz). want = cal * us / 10_000.
+    // cal ticks = 1 period = 10_000 us (100 Hz). want = cal * us / 10_000.
     let want = (cal as u64 * us as u64) / 10_000;
     unsafe {
         let mut last = rd(REG_TIMER_CUR);
@@ -178,7 +178,7 @@ pub fn busy_wait_us(us: u32) {
         let mut guard = 0u64;
         while elapsed < want {
             let cur = rd(REG_TIMER_CUR);
-            // De teller telt AF; bij een herlaad (cur > last) is hij gewrapt.
+            // The counter counts DOWN; on a reload (cur > last) it has wrapped.
             elapsed += if cur <= last {
                 (last - cur) as u64
             } else {
@@ -194,11 +194,11 @@ pub fn busy_wait_us(us: u32) {
     }
 }
 
-/// Meet hoeveel LAPIC-timerticks er in één `hz`-periode passen via PIT-kanaal 2
-/// (mode 0, ~`1/hz` s one-shot, gepolld op de OUT2-statusbit).
+/// Measure how many LAPIC timer ticks fit in one `hz` period via PIT channel 2
+/// (mode 0, ~`1/hz` s one-shot, polled on the OUT2 status bit).
 unsafe fn calibrate(hz: u32) -> u32 {
     let mut p61 = Port::<u8>::new(0x61);
-    // Gate aan (bit0), speaker uit (bit1=0).
+    // Gate on (bit0), speaker off (bit1=0).
     let v = (p61.read() & 0xFC) | 0x01;
     p61.write(v);
 
@@ -209,23 +209,23 @@ unsafe fn calibrate(hz: u32) -> u32 {
     ch2.write((pit_count & 0xFF) as u8);
     ch2.write((pit_count >> 8) as u8);
 
-    // LAPIC-timer op maximum laten lopen.
+    // Let the LAPIC timer run to maximum.
     wr(REG_TIMER_DIV, 0x3);
     wr(REG_TIMER_INIT, 0xFFFF_FFFF);
 
-    // Wacht tot PIT-ch2 z'n terminal count haalt (OUT2 = 0x61 bit5 wordt hoog).
+    // Wait until PIT-ch2 reaches its terminal count (OUT2 = 0x61 bit5 goes high).
     let mut guard = 0u32;
     while (p61.read() & 0x20) == 0 {
         guard += 1;
         if guard > 50_000_000 {
-            break; // veiligheidsklep tegen een hangende kalibratie
+            break; // safety valve against a hanging calibration
         }
     }
 
     wr(REG_LVT_TIMER, LVT_MASKED);
     let elapsed = 0xFFFF_FFFFu32 - rd(REG_TIMER_CUR);
     if elapsed < 1000 {
-        1_000_000 // fallback bij mislukte kalibratie
+        1_000_000 // fallback on a failed calibration
     } else {
         elapsed
     }

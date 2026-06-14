@@ -1,6 +1,6 @@
-/* EuroOS 'cat' — toont een bestand via syscalls. Tweede onafhankelijk
- * gecompileerd userspace-programma (bewijst dat de toolchain + loader generiek
- * zijn, niet hardcoded op één programma). Vrijstaand, geen libc. */
+/* EuroOS 'cat' — displays a file via syscalls. Second independently
+ * compiled userspace program (proves the toolchain + loader are generic,
+ * not hardcoded to one program). Freestanding, no libc. */
 
 static long sys(long n, long a1, long a2, long a3) {
     long ret;
@@ -23,7 +23,7 @@ __attribute__((section(".text.start"))) void _start(void) {
     const char *path = "/etc/eurokernel.conf";
     long fd = sys(SYS_OPEN, (long)path, 0, 0);
     if (fd < 0) {
-        put("cat: kan bestand niet openen\n");
+        put("cat: cannot open file\n");
         sys(SYS_EXIT, 1, 0, 0);
     }
     put("cat /etc/eurokernel.conf:\n");

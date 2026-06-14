@@ -1,10 +1,10 @@
-//! HTML-export van het EuroDoc-UDM — voor preview, web-publicatie en de schermlezer.
+//! HTML export of the EuroDoc UDM — for preview, web publishing, and the screen reader.
 
 use crate::xml::encode_entities;
 use alloc::string::String;
 use eurodoc::model::{Block, Paragraph, Run};
 
-/// Exporteer een lijst blokken naar HTML.
+/// Export a list of blocks to HTML.
 pub fn blocks_to_html(blocks: &[Block]) -> String {
     let mut s = String::new();
     for b in blocks {
@@ -38,7 +38,7 @@ pub fn blocks_to_html(blocks: &[Block]) -> String {
 }
 
 fn para_html(p: &Paragraph, s: &mut String) {
-    // Kies de tag op basis van de stijl: HeadingN → hN, anders p.
+    // Choose the tag based on the style: HeadingN → hN, otherwise p.
     let (open, close) = match p.props.style_id.as_deref() {
         Some(style) if style.starts_with("Heading") => {
             let level = style.trim_start_matches("Heading").parse::<u8>().unwrap_or(1).clamp(1, 6);

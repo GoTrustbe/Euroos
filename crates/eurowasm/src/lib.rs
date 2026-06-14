@@ -1,16 +1,16 @@
-//! EuroWASM — een minimale **no-JIT WebAssembly-interpreter** (plan H4).
+//! EuroWASM — a minimal **no-JIT WebAssembly interpreter** (plan H4).
 //!
-//! Een sandbox-vriendelijk, architectuur-onafhankelijk app-formaat: WASM-modules
-//! draaien geïnterpreteerd (geen native code-generatie), en hun **imports** worden
-//! op **EuroGuard-capabilities** afgebeeld — een host-functie als `fd_write` mag
-//! alleen draaien als het proces de bijbehorende capability (`CAP_FILE`/`CAP_NET`/
-//! `CAP_CONSOLE`) bezit. Zo is "ongesigneerde derde-partij-code draaien" veilig.
+//! A sandbox-friendly, architecture-independent app format: WASM modules run
+//! interpreted (no native code generation), and their **imports** are mapped
+//! onto **EuroGuard capabilities** — a host function like `fd_write` may only
+//! run if the process holds the matching capability (`CAP_FILE`/`CAP_NET`/
+//! `CAP_CONSOLE`). This makes "running unsigned third-party code" safe.
 //!
-//! Ondersteund: i32/i64-rekenkunde + vergelijkingen, lokale variabelen, gestructu-
-//! reerde control-flow (`block`/`loop`/`if`/`else`/`br`/`br_if`/`return`), `call`
-//! (incl. recursie) + geïmporteerde host-calls, lineair geheugen met `i32.load`/
+//! Supported: i32/i64 arithmetic + comparisons, local variables, structured
+//! control flow (`block`/`loop`/`if`/`else`/`br`/`br_if`/`return`), `call`
+//! (incl. recursion) + imported host calls, linear memory with `i32.load`/
 //! `i32.store`/`memory.grow`, `drop`/`select`/`global.get`/`global.set`. `no_std`
-//! + alloc; de parser én de interpreter zijn volledig op de host getest.
+//! + alloc; both the parser and the interpreter are fully host-tested.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -21,10 +21,10 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// Een WASM-waarde. We bewaren alles in een i64; i32-operaties maskeren naar 32 bits.
+/// A WASM value. We keep everything in an i64; i32 operations mask to 32 bits.
 pub type Val = i64;
 
-/// Fouten van parser of interpreter.
+/// Errors from the parser or interpreter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WasmError {
     BadMagic,
@@ -32,12 +32,12 @@ pub enum WasmError {
     Unsupported(&'static str),
     NoSuchExport,
     Trap(&'static str),
-    /// Een host-import vereiste een capability die het proces niet heeft.
+    /// A host import required a capability the process does not have.
     CapabilityDenied(String),
     HostError(String),
 }
 
-// ── LEB128 + byte-reader ───────────────────────────────────────────────────
+// ── LEB128 + byte reader ───────────────────────────────────────────────────
 struct Reader<'a> {
     d: &'a [u8],
     p: usize,
@@ -100,7 +100,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-// ── Gedecodeerde instructie ────────────────────────────────────────────────
+// ── Decoded instruction ────────────────────────────────────────────────────
 #[derive(Debug, Clone)]
 enum Op {
     Unreachable,
@@ -129,12 +129,12 @@ enum Op {
     I32Store(u32),
     MemoryGrow,
     MemorySize,
-    Num(u8), // numerieke opcode, gedispatcht in exec
+    Num(u8), // numeric opcode, dispatched in exec
 }
 
 fn blocktype_arity(b: u8) -> u8 {
-    // 0x40 = leeg, 0x7f/0x7e/0x7d/0x7c = één resultaat. (Type-index-blocktypes:
-    // minimaal niet ondersteund → behandeld als arity 0.)
+    // 0x40 = empty, 0x7f/0x7e/0x7d/0x7c = one result. (Type-index blocktypes:
+    // minimally not supported → treated as arity 0.)
     if b == 0x40 {
         0
     } else {
@@ -147,7 +147,7 @@ struct Func {
     type_idx: u32,
     n_params: u32,
     n_results: u32,
-    n_locals: u32, // gedeclareerde locals (boven de params)
+    n_locals: u32, // declared locals (above the params)
     code: Vec<Op>,
 }
 
@@ -160,28 +160,28 @@ struct ImportFn {
     n_results: u32,
 }
 
-/// Een geparste WASM-module.
+/// A parsed WASM module.
 #[derive(Debug, Clone)]
 pub struct Module {
-    types: Vec<(Vec<u8>, Vec<u8>)>, // (params, results) als valtype-bytes
+    types: Vec<(Vec<u8>, Vec<u8>)>, // (params, results) as valtype bytes
     imports: Vec<ImportFn>,
-    funcs: Vec<Func>, // de IN deze module gedefinieerde functies
-    exports: Vec<(String, u32)>, // naam → globale functie-index (imports eerst)
+    funcs: Vec<Func>, // the functions defined IN this module
+    exports: Vec<(String, u32)>, // name → global function index (imports first)
     mem_min_pages: u32,
     globals: Vec<i64>,
-    /// Actieve data-segmenten (offset, bytes) — initialiseren het lineair geheugen.
+    /// Active data segments (offset, bytes) — initialize the linear memory.
     data: Vec<(u32, Vec<u8>)>,
 }
 
 impl Module {
-    /// Parse een WASM-binary (`\0asm` + secties).
+    /// Parse a WASM binary (`\0asm` + sections).
     pub fn parse(bytes: &[u8]) -> Result<Module, WasmError> {
         let mut r = Reader::new(bytes);
         if r.bytes(4)? != b"\0asm" {
             return Err(WasmError::BadMagic);
         }
         if r.bytes(4)? != [1, 0, 0, 0] {
-            return Err(WasmError::Unsupported("wasm-versie"));
+            return Err(WasmError::Unsupported("wasm-version"));
         }
         let mut m = Module {
             types: Vec::new(),
@@ -192,7 +192,7 @@ impl Module {
             globals: Vec::new(),
             data: Vec::new(),
         };
-        let mut func_type_idx: Vec<u32> = Vec::new(); // type-index per gedefinieerde functie
+        let mut func_type_idx: Vec<u32> = Vec::new(); // type index per defined function
 
         while !r.eof() {
             let id = r.byte()?;
@@ -201,11 +201,11 @@ impl Module {
             let mut s = Reader::new(body);
             match id {
                 1 => {
-                    // Type-sectie.
+                    // Type section.
                     let n = s.uleb()?;
                     for _ in 0..n {
                         if s.byte()? != 0x60 {
-                            return Err(WasmError::Unsupported("functype-vorm"));
+                            return Err(WasmError::Unsupported("functype-shape"));
                         }
                         let np = s.uleb()? as usize;
                         let params = s.bytes(np)?.to_vec();
@@ -215,7 +215,7 @@ impl Module {
                     }
                 }
                 2 => {
-                    // Import-sectie (alleen functie-imports → host-calls).
+                    // Import section (only function imports → host calls).
                     let n = s.uleb()?;
                     for _ in 0..n {
                         let module = s.name()?;
@@ -244,7 +244,7 @@ impl Module {
                                 let _ = s.byte()?; // global valtype
                                 let _ = s.byte()?; // mut
                             }
-                            _ => return Err(WasmError::Unsupported("import-soort")),
+                            _ => return Err(WasmError::Unsupported("import-kind")),
                         }
                     }
                 }
@@ -288,7 +288,7 @@ impl Module {
                         let body_sz = s.uleb()? as usize;
                         let body = s.bytes(body_sz)?;
                         let mut c = Reader::new(body);
-                        // Locals: vec van (count, valtype).
+                        // Locals: vec of (count, valtype).
                         let nl = c.uleb()?;
                         let mut n_locals = 0u32;
                         for _ in 0..nl {
@@ -309,28 +309,28 @@ impl Module {
                     }
                 }
                 11 => {
-                    // Data-sectie: actieve segmenten initialiseren het geheugen.
+                    // Data section: active segments initialize the memory.
                     let n = s.uleb()?;
                     for _ in 0..n {
                         let flags = s.uleb()?;
                         match flags {
                             0 => {
-                                // Actief, mem 0: offset = const-expr, dan byte-vec.
+                                // Active, mem 0: offset = const-expr, then byte-vec.
                                 let off = read_const_expr(&mut s)? as u32;
                                 let len = s.uleb()? as usize;
                                 let bytes = s.bytes(len)?.to_vec();
                                 m.data.push((off, bytes));
                             }
                             1 => {
-                                // Passief segment (geen geheugen-init) — bytes overslaan.
+                                // Passive segment (no memory init) — skip the bytes.
                                 let len = s.uleb()? as usize;
                                 let _ = s.bytes(len)?;
                             }
-                            _ => return Err(WasmError::Unsupported("data-segment-vorm")),
+                            _ => return Err(WasmError::Unsupported("data-segment-shape")),
                         }
                     }
                 }
-                _ => { /* andere secties (custom/element/start) overslaan */ }
+                _ => { /* skip other sections (custom/element/start) */ }
             }
         }
         Ok(m)
@@ -340,7 +340,7 @@ impl Module {
         self.imports.len() as u32
     }
 
-    /// Exporteert de module een functie met deze naam?
+    /// Does the module export a function with this name?
     pub fn has_export(&self, name: &str) -> bool {
         self.exports.iter().any(|(n, _)| n == name)
     }
@@ -366,10 +366,10 @@ fn read_const_expr(s: &mut Reader) -> Result<i64, WasmError> {
     Ok(v)
 }
 
-/// Decodeer een functie-body tot ops met OPGELOSTE control-flow-targets.
+/// Decode a function body into ops with RESOLVED control-flow targets.
 fn decode_body(c: &mut Reader) -> Result<Vec<Op>, WasmError> {
     let mut ops: Vec<Op> = Vec::new();
-    let mut ctrl: Vec<usize> = Vec::new(); // indices van open block/loop/if
+    let mut ctrl: Vec<usize> = Vec::new(); // indices of open block/loop/if
     loop {
         if c.eof() {
             break;
@@ -394,7 +394,7 @@ fn decode_body(c: &mut Reader) -> Result<Vec<Op>, WasmError> {
                 ops.push(Op::If { else_: 0, end: 0, arity: blocktype_arity(bt) });
             }
             0x05 => {
-                // else: koppel aan de open if.
+                // else: link to the open if.
                 let i = *ctrl.last().ok_or(WasmError::Truncated)?;
                 let here = ops.len() as u32;
                 if let Op::If { else_, .. } = &mut ops[i] {
@@ -403,7 +403,7 @@ fn decode_body(c: &mut Reader) -> Result<Vec<Op>, WasmError> {
                 ops.push(Op::Else { end: 0 });
             }
             0x0b => {
-                // end: sluit de bovenste open control (of de functie zelf).
+                // end: close the topmost open control (or the function itself).
                 if let Some(i) = ctrl.pop() {
                     let here = ops.len() as u32;
                     let mut fix_else = None;
@@ -411,7 +411,7 @@ fn decode_body(c: &mut Reader) -> Result<Vec<Op>, WasmError> {
                         Op::Block { end, .. } => *end = here,
                         Op::If { else_, end, .. } => {
                             if *else_ == 0 {
-                                *else_ = here; // geen else → spring naar end
+                                *else_ = here; // no else → jump to end
                             }
                             *end = here;
                             fix_else = Some(*else_);
@@ -419,7 +419,7 @@ fn decode_body(c: &mut Reader) -> Result<Vec<Op>, WasmError> {
                         Op::Loop { .. } => {}
                         _ => {}
                     }
-                    // Vul de Else's end-target in (aparte borrow, na ops[i]).
+                    // Fill in the Else's end target (separate borrow, after ops[i]).
                     if let Some(ei) = fix_else {
                         if let Some(Op::Else { end: ee }) = ops.get_mut(ei as usize) {
                             *ee = here;
@@ -467,8 +467,8 @@ fn decode_body(c: &mut Reader) -> Result<Vec<Op>, WasmError> {
                     b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
                 ])));
             }
-            // Numerieke ops: i32/i64 (rekenkunde/vergelijkingen) + f32/f64 (rekenkunde/
-            // vergelijkingen) + alle conversies/reinterpretaties.
+            // Numeric ops: i32/i64 (arithmetic/comparisons) + f32/f64 (arithmetic/
+            // comparisons) + all conversions/reinterpretations.
             0x45..=0x78 | 0x50..=0x5a | 0x5b..=0x66 | 0x7c..=0x8a | 0x8b..=0xa6 | 0xa7..=0xc4 => {
                 ops.push(Op::Num(op))
             }
@@ -478,11 +478,11 @@ fn decode_body(c: &mut Reader) -> Result<Vec<Op>, WasmError> {
     Ok(ops)
 }
 
-/// Een host-import: roept een EuroGuard-bewaakte host-functie aan. Geeft de
-/// resultaten terug, of een fout (bv. capability geweigerd).
+/// A host import: calls an EuroGuard-guarded host function. Returns the
+/// results, or an error (e.g. capability denied).
 pub trait HostImports {
-    /// `module`/`name` = de import-identiteit (bv. "euro"/"fd_write"). `args` =
-    /// de WASM-stackargumenten. `mem` = lineair geheugen (voor pointers/lengtes).
+    /// `module`/`name` = the import identity (e.g. "euro"/"fd_write"). `args` =
+    /// the WASM stack arguments. `mem` = linear memory (for pointers/lengths).
     fn call(
         &mut self,
         module: &str,
@@ -492,25 +492,25 @@ pub trait HostImports {
     ) -> Result<Vec<Val>, WasmError>;
 }
 
-/// Een host die geen imports aanbiedt (voor pure-rekenmodules).
+/// A host that offers no imports (for pure-compute modules).
 pub struct NoImports;
 impl HostImports for NoImports {
     fn call(&mut self, m: &str, n: &str, _: &[Val], _: &mut [u8]) -> Result<Vec<Val>, WasmError> {
-        Err(WasmError::HostError(alloc::format!("onbekende import {m}.{n}")))
+        Err(WasmError::HostError(alloc::format!("unknown import {m}.{n}")))
     }
 }
 
 const PAGE: usize = 65536;
-/// Harde bovengrens op het lineair geheugen van een module (256 pagina's = 16 MiB):
-/// een onvertrouwde WASM-agent mag de kernel-allocator niet kunnen uitputten (audit H6).
+/// Hard upper bound on a module's linear memory (256 pages = 16 MiB):
+/// an untrusted WASM agent must not be able to exhaust the kernel allocator (audit H6).
 const MAX_MEM_PAGES: usize = 256;
 
 struct Frame {
-    code_idx: usize, // index in module.funcs
+    code_idx: usize, // index into module.funcs
     ip: usize,
     locals: Vec<i64>,
     ctrl: Vec<CtrlEntry>,
-    sp_base: usize, // value-stack-hoogte bij frame-start
+    sp_base: usize, // value-stack height at frame start
 }
 
 #[derive(Clone, Copy)]
@@ -521,8 +521,8 @@ struct CtrlEntry {
     is_loop: bool,
 }
 
-/// Een instantie: een module + zijn lineair geheugen + globals, klaar om
-/// geëxporteerde functies aan te roepen.
+/// An instance: a module + its linear memory + globals, ready to call
+/// exported functions.
 pub struct Instance<'m> {
     m: &'m Module,
     mem: Vec<u8>,
@@ -532,7 +532,7 @@ pub struct Instance<'m> {
 impl<'m> Instance<'m> {
     pub fn new(m: &'m Module) -> Self {
         let mut mem = vec![0u8; m.mem_min_pages as usize * PAGE];
-        // Actieve data-segmenten in het lineair geheugen leggen (binnen de grenzen).
+        // Lay the active data segments into the linear memory (within the bounds).
         for (off, bytes) in &m.data {
             let o = *off as usize;
             if o + bytes.len() <= mem.len() {
@@ -542,7 +542,7 @@ impl<'m> Instance<'m> {
         Instance { m, mem, globals: m.globals.clone() }
     }
 
-    /// Schrijf bytes in het lineair geheugen (om argumenten voor te bereiden).
+    /// Write bytes into the linear memory (to prepare arguments).
     pub fn write_mem(&mut self, off: usize, data: &[u8]) -> Result<(), WasmError> {
         if off + data.len() > self.mem.len() {
             return Err(WasmError::Trap("mem-write out of bounds"));
@@ -555,7 +555,7 @@ impl<'m> Instance<'m> {
         &self.mem
     }
 
-    /// Roep een geëxporteerde functie aan met `args`. Geeft de resultaten.
+    /// Call an exported function with `args`. Returns the results.
     pub fn invoke(
         &mut self,
         export: &str,
@@ -580,7 +580,7 @@ impl<'m> Instance<'m> {
     ) -> Result<Vec<Val>, WasmError> {
         let n_imp = self.m.n_imports();
         if gidx < n_imp {
-            // Directe host-import-call.
+            // Direct host-import call.
             let imp = &self.m.imports[gidx as usize];
             return host.call(&imp.module, &imp.name, args, &mut self.mem);
         }
@@ -600,17 +600,17 @@ impl<'m> Instance<'m> {
 
         let mut steps: u64 = 0;
         'frames: loop {
-            // Werk met de bovenste frame.
+            // Work with the topmost frame.
             let fi = frames.len() - 1;
             loop {
                 steps += 1;
                 if steps > 50_000_000 {
-                    return Err(WasmError::Trap("step-limiet (mogelijke oneindige lus)"));
+                    return Err(WasmError::Trap("step limit (possible infinite loop)"));
                 }
                 let f = &mut frames[fi];
                 let func = &self.m.funcs[f.code_idx];
                 if f.ip >= func.code.len() {
-                    break; // impliciete functie-return
+                    break; // implicit function return
                 }
                 let op = func.code[f.ip].clone();
                 f.ip += 1;
@@ -624,7 +624,7 @@ impl<'m> Instance<'m> {
                         is_loop: false,
                     }),
                     Op::Loop { arity } => f.ctrl.push(CtrlEntry {
-                        target: f.ip as u32, // loop-body-start
+                        target: f.ip as u32, // loop-body start
                         height: stack.len(),
                         arity,
                         is_loop: true,
@@ -642,7 +642,7 @@ impl<'m> Instance<'m> {
                         }
                     }
                     Op::Else { end } => {
-                        // Then-tak klaar → spring over de else-tak; pop de control.
+                        // Then branch done → jump over the else branch; pop the control.
                         f.ctrl.pop();
                         f.ip = (end + 1) as usize;
                     }
@@ -663,7 +663,7 @@ impl<'m> Instance<'m> {
                         let n_imp = self.m.n_imports();
                         let (np, nr) = self.fn_arity(g);
                         if stack.len() < np {
-                            return Err(WasmError::Trap("call: te weinig args"));
+                            return Err(WasmError::Trap("call: too few args"));
                         }
                         let at = stack.len() - np;
                         let cargs: Vec<i64> = stack.split_off(at);
@@ -672,7 +672,7 @@ impl<'m> Instance<'m> {
                             let res = host.call(&imp.module, &imp.name, &cargs, &mut self.mem)?;
                             stack.extend(res);
                         } else {
-                            // Push een nieuwe frame; verlaat de inner-lus.
+                            // Push a new frame; leave the inner loop.
                             let ci = (g - n_imp) as usize;
                             let nf = self.make_frame(ci, &cargs, stack.len())?;
                             frames.push(nf);
@@ -689,8 +689,8 @@ impl<'m> Instance<'m> {
                         let a = stack.pop().ok_or(WasmError::Trap("stack"))?;
                         stack.push(if c != 0 { a } else { b });
                     }
-                    // Lokale-index begrensd (audit H5): een gemaakte module met een
-                    // out-of-range index mag de interpreter niet laten panieken.
+                    // Local index bounded (audit H5): a crafted module with an
+                    // out-of-range index must not make the interpreter panic.
                     Op::LocalGet(i) => {
                         let v = *f.locals.get(i as usize).ok_or(WasmError::Trap("local index"))?;
                         stack.push(v);
@@ -739,9 +739,9 @@ impl<'m> Instance<'m> {
                     Op::MemoryGrow => {
                         let delta = stack.pop().ok_or(WasmError::Trap("stack"))? as u32 as usize;
                         let old = self.mem.len() / PAGE;
-                        // Begrens de groei (audit H6): respecteer een harde pagina-plafond
-                        // zodat een gemaakte module de kernel-allocator niet kan uitputten,
-                        // en vermijd overloop in de groottenberekening. -1 = mislukt.
+                        // Bound the growth (audit H6): respect a hard page ceiling
+                        // so a crafted module cannot exhaust the kernel allocator,
+                        // and avoid overflow in the size calculation. -1 = failed.
                         if delta > MAX_MEM_PAGES || old + delta > MAX_MEM_PAGES {
                             stack.push(-1);
                         } else {
@@ -753,12 +753,12 @@ impl<'m> Instance<'m> {
                 }
             }
 
-            // Frame klaar: resultaten naar de oproeper.
+            // Frame done: results to the caller.
             let done = frames.pop().unwrap();
             let func = &self.m.funcs[done.code_idx];
             let nr = func.n_results as usize;
-            // Houd de bovenste `nr` waarden (de resultaten), gooi de rest van dit
-            // frame's stack weg tot sp_base.
+            // Keep the top `nr` values (the results), discard the rest of this
+            // frame's stack down to sp_base.
             let keep_from = stack.len().saturating_sub(nr);
             let results: Vec<i64> = stack.split_off(keep_from);
             stack.truncate(done.sp_base);
@@ -770,8 +770,8 @@ impl<'m> Instance<'m> {
     }
 
     fn make_frame(&self, code_idx: usize, args: &[Val], sp_base: usize) -> Result<Frame, WasmError> {
-        // Begrens de functie-index (audit H5): een `call N` met out-of-range N mag
-        // de interpreter niet laten panieken — geef een nette trap.
+        // Bound the function index (audit H5): a `call N` with out-of-range N must
+        // not make the interpreter panic — return a clean trap.
         let func = self.m.funcs.get(code_idx).ok_or(WasmError::Trap("func index"))?;
         let mut locals = vec![0i64; (func.n_params + func.n_locals) as usize];
         for (i, a) in args.iter().enumerate().take(func.n_params as usize) {
@@ -794,7 +794,7 @@ impl<'m> Instance<'m> {
                 None => (0, 0),
             }
         } else {
-            // Out-of-range func-index → (0,0); de echte trap volgt in make_frame (audit H5).
+            // Out-of-range func index → (0,0); the real trap follows in make_frame (audit H5).
             match self.m.funcs.get((gidx - n_imp) as usize) {
                 Some(f) => (f.n_params as usize, f.n_results as usize),
                 None => (0, 0),
@@ -805,13 +805,13 @@ impl<'m> Instance<'m> {
 
 fn do_branch(f: &mut Frame, stack: &mut Vec<i64>, depth: u32) -> Result<(), WasmError> {
     if depth as usize >= f.ctrl.len() {
-        // Branch voorbij de buitenste control = functie-return.
+        // Branch past the outermost control = function return.
         f.ip = u32::MAX as usize;
         return Ok(());
     }
     let idx = f.ctrl.len() - 1 - depth as usize;
     let e = f.ctrl[idx];
-    // Behoud de bovenste `arity` waarden als resultaat van het blok.
+    // Keep the top `arity` values as the result of the block.
     let keep: Vec<i64> = if e.arity > 0 {
         let from = stack.len().saturating_sub(e.arity as usize);
         stack.split_off(from)
@@ -821,7 +821,7 @@ fn do_branch(f: &mut Frame, stack: &mut Vec<i64>, depth: u32) -> Result<(), Wasm
     stack.truncate(e.height);
     stack.extend(keep);
     if e.is_loop {
-        f.ctrl.truncate(idx + 1); // loop-entry blijft (her-iteratie)
+        f.ctrl.truncate(idx + 1); // loop entry stays (re-iteration)
     } else {
         f.ctrl.truncate(idx);
     }
@@ -950,7 +950,7 @@ fn exec_num(op: u8, st: &mut Vec<i64>) -> Result<(), WasmError> {
         0x85 => bin_i64!(|a: i64, b: i64| a ^ b),
         0x86 => bin_i64!(|a: i64, b: i64| a.wrapping_shl(b as u32)),
         0x87 => bin_i64!(|a: i64, b: i64| a.wrapping_shr(b as u32)),
-        // conversies
+        // conversions
         0xa7 => {
             let a = pop!();
             st.push(a as i32 as i64); // i32.wrap_i64
@@ -963,8 +963,8 @@ fn exec_num(op: u8, st: &mut Vec<i64>) -> Result<(), WasmError> {
             let a = i32v(pop!()) as u32;
             st.push(a as i64); // i64.extend_i32_u
         }
-        // ── f32/f64 ── (no_std: geen libm → sqrt/ceil/floor/nearest niet ondersteund;
-        // abs/neg via bit-manipulatie, rekenkunde via core-operatoren).
+        // ── f32/f64 ── (no_std: no libm → sqrt/ceil/floor/nearest not supported;
+        // abs/neg via bit manipulation, arithmetic via core operators).
         0x5b => fcmp_f32(st, |a, b| a == b)?,
         0x5c => fcmp_f32(st, |a, b| a != b)?,
         0x5d => fcmp_f32(st, |a, b| a < b)?,
@@ -1005,7 +1005,7 @@ fn exec_num(op: u8, st: &mut Vec<i64>) -> Result<(), WasmError> {
         0xa3 => fbin_f64(st, |a, b| a / b)?,
         0xa4 => fbin_f64(st, |a, b| if a < b { a } else { b })?,
         0xa5 => fbin_f64(st, |a, b| if a > b { a } else { b })?,
-        // conversies float↔int
+        // conversions float↔int
         0xa8 => {
             let a = f32::from_bits(pop!() as u32);
             st.push(a as i32 as i64); // i32.trunc_f32_s
@@ -1042,7 +1042,7 @@ fn exec_num(op: u8, st: &mut Vec<i64>) -> Result<(), WasmError> {
             let v = pop!() as u32;
             st.push(v as i64); // f32.reinterpret_i32
         }
-        0xbd | 0xbf => { /* i64/f64 reinterpret: bits blijven gelijk → no-op */ }
+        0xbd | 0xbf => { /* i64/f64 reinterpret: bits stay the same → no-op */ }
         _ => return Err(WasmError::Unsupported("num-opcode")),
     }
     Ok(())
@@ -1077,7 +1077,7 @@ fn fcmp_f32(st: &mut Vec<i64>, f: impl Fn(f32, f32) -> bool) -> Result<(), WasmE
 mod tests {
     use super::*;
 
-    // ── Hand-geassembleerde WASM-modules ──
+    // ── Hand-assembled WASM modules ──
     fn u(mut n: u32) -> Vec<u8> {
         // uleb128
         let mut o = Vec::new();
@@ -1105,10 +1105,10 @@ mod tests {
 
     #[test]
     fn data_section_inits_memory() {
-        // 1 mem-pagina + een actief data-segment "Hi" op offset 5.
+        // 1 mem page + an active data segment "Hi" at offset 5.
         let mut w = header();
         w.extend(section(5, vec![1, 0x00, 1]));
-        let mut d = vec![1u8, 0u8]; // 1 segment, flags 0 (actief, mem 0)
+        let mut d = vec![1u8, 0u8]; // 1 segment, flags 0 (active, mem 0)
         d.extend_from_slice(&[0x41, 5, 0x0b]); // offset = i32.const 5, end
         d.push(2);
         d.extend_from_slice(b"Hi");
@@ -1116,7 +1116,7 @@ mod tests {
         let m = Module::parse(&w).unwrap();
         let inst = Instance::new(&m);
         assert_eq!(&inst.mem()[5..7], b"Hi");
-        assert_eq!(inst.mem()[4], 0); // ervoor blijft 0
+        assert_eq!(inst.mem()[4], 0); // before it stays 0
     }
 
     /// () -> i32 { 42 }
@@ -1149,7 +1149,7 @@ mod tests {
         w
     }
 
-    /// (i32 n)->i32: som 1..=n via een loop. Lokaal 1 = accumulator, lokaal 2 = i.
+    /// (i32 n)->i32: sum 1..=n via a loop. Local 1 = accumulator, local 2 = i.
     fn mod_sum() -> Vec<u8> {
         let mut w = header();
         w.extend(section(1, vec![1, 0x60, 1, 0x7f, 1, 0x7f])); // (i32)->i32
@@ -1160,7 +1160,7 @@ mod tests {
         w.extend(section(7, ex));
         // 2 extra locals (i32): acc(1), i(2)
         // body:
-        //  block            ;; depth target = na block (exit)
+        //  block            ;; depth target = after block (exit)
         //   loop             ;; depth target = loop-start
         //    local.get 2; local.get 0; i32.gt_s; br_if 1   ;; if i>n exit block
         //    local.get 1; local.get 2; i32.add; local.set 1 ;; acc += i
@@ -1192,7 +1192,7 @@ mod tests {
         w
     }
 
-    /// factorial via recursie: fac(n) = n<2 ? 1 : n*fac(n-1)
+    /// factorial via recursion: fac(n) = n<2 ? 1 : n*fac(n-1)
     fn mod_fac() -> Vec<u8> {
         let mut w = header();
         w.extend(section(1, vec![1, 0x60, 1, 0x7f, 1, 0x7f]));
@@ -1204,7 +1204,7 @@ mod tests {
         // local.get 0; i32.const 2; i32.lt_s; if (result i32) i32.const 1
         //   else local.get 0; local.get 0; i32.const 1; i32.sub; call 0; i32.mul end ; end
         let body = vec![
-            0u8, // geen extra locals
+            0u8, // no extra locals
             0x20, 0, 0x41, 2, 0x48, // n < 2
             0x04, 0x7f, // if (result i32)
             0x41, 1, // then 1
@@ -1240,7 +1240,7 @@ mod tests {
     fn run_sum_loop() {
         let m = Module::parse(&mod_sum()).unwrap();
         let mut inst = Instance::new(&m);
-        // som 1..=100 = 5050
+        // sum 1..=100 = 5050
         assert_eq!(inst.invoke("sum", &[100], &mut NoImports).unwrap(), vec![5050]);
         assert_eq!(inst.invoke("sum", &[10], &mut NoImports).unwrap(), vec![55]);
         assert_eq!(inst.invoke("sum", &[0], &mut NoImports).unwrap(), vec![0]);
@@ -1255,7 +1255,7 @@ mod tests {
         assert_eq!(inst.invoke("fac", &[6], &mut NoImports).unwrap(), vec![720]);
     }
 
-    /// (i32 n)->i32 : trunc(n_as_f64 * 2.5 + 0.5) — oefent f64.convert/mul/add/trunc.
+    /// (i32 n)->i32 : trunc(n_as_f64 * 2.5 + 0.5) — exercises f64.convert/mul/add/trunc.
     fn mod_float() -> Vec<u8> {
         let mut w = header();
         w.extend(section(1, vec![1, 0x60, 1, 0x7f, 1, 0x7f]));
@@ -1264,7 +1264,7 @@ mod tests {
         ex.extend_from_slice(b"fcomp");
         ex.extend_from_slice(&[0, 0]);
         w.extend(section(7, ex));
-        let mut body = vec![0u8]; // geen locals
+        let mut body = vec![0u8]; // no locals
         body.extend_from_slice(&[0x20, 0, 0xb7]); // local.get 0; f64.convert_i32_s
         body.push(0x44); // f64.const 2.5
         body.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0x04, 0x40]);
@@ -1302,9 +1302,9 @@ mod tests {
         assert!(matches!(Module::parse(&[1, 2, 3, 4]), Err(WasmError::BadMagic)));
     }
 
-    // ── WASI-op-capabilities: een module die "euro"/"fd_write" importeert ──
-    /// import "euro"."fd_write" (i32 ptr, i32 len)->i32 ; export "run"()->i32 die
-    /// "hi" in geheugen zet en fd_write(ptr,len) aanroept.
+    // ── WASI-on-capabilities: a module that imports "euro"/"fd_write" ──
+    /// import "euro"."fd_write" (i32 ptr, i32 len)->i32 ; export "run"()->i32 that
+    /// puts "hi" in memory and calls fd_write(ptr,len).
     fn mod_wasi_write() -> Vec<u8> {
         let mut w = header();
         // types: 0 = (i32,i32)->i32 (fd_write), 1 = ()->i32 (run)
@@ -1320,9 +1320,9 @@ mod tests {
         im.extend_from_slice(b"fd_write");
         im.extend_from_slice(&[0x00, 0]); // func, type 0
         w.extend(section(2, im));
-        // function: 1 gedefinieerde functie, type 1
+        // function: 1 defined function, type 1
         w.extend(section(3, vec![1, 1]));
-        // memory: 1 pagina
+        // memory: 1 page
         w.extend(section(5, vec![1, 0x00, 1]));
         // export "run" = func index 1 (import 0 + def 0)
         let mut ex = vec![1, 3];
@@ -1355,27 +1355,27 @@ mod tests {
         fn call(&mut self, m: &str, n: &str, args: &[Val], mem: &mut [u8]) -> Result<Vec<Val>, WasmError> {
             if m == "euro" && n == "fd_write" {
                 if !self.cap_file {
-                    return Err(WasmError::CapabilityDenied("CAP_FILE voor fd_write".into()));
+                    return Err(WasmError::CapabilityDenied("CAP_FILE for fd_write".into()));
                 }
                 let ptr = args[0] as usize;
                 let len = args[1] as usize;
                 self.out.extend_from_slice(&mem[ptr..ptr + len]);
                 return Ok(vec![len as i64]);
             }
-            Err(WasmError::HostError("onbekend".into()))
+            Err(WasmError::HostError("unknown".into()))
         }
     }
 
     #[test]
     fn wasi_import_gated_by_capability() {
         let m = Module::parse(&mod_wasi_write()).unwrap();
-        // Met CAP_FILE: de host-call slaagt en schrijft "HI".
+        // With CAP_FILE: the host call succeeds and writes "HI".
         let mut inst = Instance::new(&m);
         let mut host = CapHost { cap_file: true, out: Vec::new() };
         let r = inst.invoke("run", &[], &mut host).unwrap();
         assert_eq!(r, vec![2]);
         assert_eq!(&host.out, b"HI");
-        // Zonder CAP_FILE: de host weigert → de WASM-trap propageert.
+        // Without CAP_FILE: the host refuses → the WASM trap propagates.
         let mut inst2 = Instance::new(&m);
         let mut deny = CapHost { cap_file: false, out: Vec::new() };
         assert!(matches!(

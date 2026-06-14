@@ -1,23 +1,23 @@
-//! EuroFS on-disk filesysteem (Track 2, Fase 2): copy-on-write, per-blok
-//! integriteit, crash-consistent.
+//! EuroFS on-disk filesystem (Track 2, Phase 2): copy-on-write, per-block
+//! integrity, crash-consistent.
 //!
-//! Ontwerp (bewuste keuzes, expliciet gedocumenteerd):
-//! - **Copy-on-write**: een mutatie overschrijft nooit live data. Nieuwe data
-//!   en een nieuwe inode worden naar VRIJE blokken geschreven; pas de atomische
-//!   superblok-update (checkpoint-bump + flush) maakt ze "live". Crash vóór die
-//!   update → oude staat blijft volledig intact.
-//! - **Allocator zonder on-disk bitmap**: de vrije-ruimte wordt bij `mount`
-//!   gereconstrueerd door vanaf het gecommitte superblok alle bereikbare blokken
-//!   te scannen. Zo zijn niet-gecommitte (gelekte) blokken automatisch weer vrij
-//!   — exact de "space scan" uit de spec. Geen bitmap die kan de-synchroniseren.
-//! - **Object map** (OID → inode-blok): nu een platte, CoW-herschreven tabel.
-//!   Correct en eenvoudig; een B+tree (O(log n) op schaal) is de Fase-3
-//!   vervanging met dezelfde semantiek. BEWUST geen B+tree nu — zie roadmap.
-//! - **Inode** vult één 4 KiB-blok: header + tot 8 extents + inline data
-//!   (≤ 3896 B) + XXH3-checksum. Directories zijn "files" waarvan de data een
-//!   reeks 64-byte dir-entries is — één datapad voor files én mappen.
+//! Design (deliberate choices, explicitly documented):
+//! - **Copy-on-write**: a mutation never overwrites live data. New data
+//!   and a new inode are written to FREE blocks; only the atomic
+//!   superblock update (checkpoint bump + flush) makes them "live". A crash before
+//!   that update → the old state remains fully intact.
+//! - **Allocator without on-disk bitmap**: the free space is reconstructed at `mount`
+//!   by scanning all reachable blocks starting from the committed superblock.
+//!   This way uncommitted (leaked) blocks are automatically free again
+//!   — exactly the "space scan" from the spec. No bitmap that can de-synchronize.
+//! - **Object map** (OID → inode block): currently a flat, CoW-rewritten table.
+//!   Correct and simple; a B+tree (O(log n) at scale) is the Phase-3
+//!   replacement with the same semantics. DELIBERATELY no B+tree now — see roadmap.
+//! - **Inode** fills one 4 KiB block: header + up to 8 extents + inline data
+//!   (≤ 3896 B) + XXH3 checksum. Directories are "files" whose data is a
+//!   sequence of 64-byte dir entries — one data path for files and directories.
 //!
-//! Blokgrootte is vastgezet op 4096 voor Fase 2 (DEFAULT_BLOCK_SIZE).
+//! Block size is fixed at 4096 for Phase 2 (DEFAULT_BLOCK_SIZE).
 
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
@@ -34,18 +34,18 @@ const BS: usize = 4096;
 const INODE_MAGIC: u32 = 0x4546_494E; // "EFIN"
 const ROOT_OID: u64 = 1;
 
-// Inode-blok layout (offsets in bytes).
+// Inode block layout (offsets in bytes).
 const OFF_MAGIC: usize = 0;
 const OFF_OID: usize = 8;
 const OFF_PARENT: usize = 16;
 const OFF_TYPE: usize = 24;
-const OFF_FLAGS: usize = 28; // u32 immutability-vlaggen (L1) — vrije slot, 0 = legacy/mutabel
+const OFF_FLAGS: usize = 28; // u32 immutability flags (L1) — free slot, 0 = legacy/mutable
 const OFF_MODE: usize = 26;
 const OFF_SIZE: usize = 32;
 const OFF_INLINE_LEN: usize = 40;
 const OFF_EXTENT_COUNT: usize = 44;
-const OFF_MTIME: usize = 48; // u64 laatste-wijziging
-const OFF_DATA_CHECKSUM: usize = 56; // u64 XXH3 over de volledige bestandsdata (0 = legacy/onbekend)
+const OFF_MTIME: usize = 48; // u64 last-modified
+const OFF_DATA_CHECKSUM: usize = 56; // u64 XXH3 over the full file data (0 = legacy/unknown)
 const OFF_EXTENTS: usize = 64; // 8 × 16 bytes
 const MAX_EXTENTS: usize = 8;
 const OFF_INLINE: usize = OFF_EXTENTS + MAX_EXTENTS * 16; // 192
@@ -58,7 +58,7 @@ const TYPE_DIR: u8 = 2;
 const DIRENT_SIZE: usize = 64;
 const DIRENT_NAME_CAP: usize = 48;
 
-// ── kleine little-endian helpers ──────────────────────────────────────────
+// ── small little-endian helpers ──────────────────────────────────────────
 fn rd_u16(b: &[u8], o: usize) -> u16 {
     u16::from_le_bytes([b[o], b[o + 1]])
 }
@@ -80,19 +80,19 @@ fn wr_u64(b: &mut [u8], o: usize, v: u64) {
     b[o..o + 8].copy_from_slice(&v.to_le_bytes());
 }
 
-/// In-memory voorstelling van een inode (gedecodeerd uit één blok).
+/// In-memory representation of an inode (decoded from one block).
 #[derive(Clone)]
 struct Inode {
     oid: u64,
     parent: u64,
     otype: u8,
-    /// L1: immutability-vlaggen (FLAG_IMMUTABLE | FLAG_APPEND_ONLY). 0 = mutabel.
+    /// L1: immutability flags (FLAG_IMMUTABLE | FLAG_APPEND_ONLY). 0 = mutable.
     flags: u32,
     mode: u16,
     size: u64,
     mtime: u64,
-    /// XXH3 over de volledige bestandsdata (data-path-integriteit). 0 = niet gezet
-    /// (oud/legacy formaat) → verificatie wordt dan overgeslagen.
+    /// XXH3 over the full file data (data-path integrity). 0 = not set
+    /// (old/legacy format) → verification is then skipped.
     data_checksum: u64,
     extents: Vec<(u64, u32)>, // (physical_block, block_count)
     inline: Vec<u8>,
@@ -149,8 +149,8 @@ impl Inode {
         }
         let inline_len = rd_u32(b, OFF_INLINE_LEN) as usize;
         let ext_count = rd_u32(b, OFF_EXTENT_COUNT) as usize;
-        // Een extent-telling > MAX_EXTENTS is geen geldige inode — eerder stil
-        // afkappen (verloren extents → datalek/leak); behandel als corruptie.
+        // An extent count > MAX_EXTENTS is not a valid inode — rather than silently
+        // truncating (lost extents → data leak/loss), treat it as corruption.
         if ext_count > MAX_EXTENTS {
             return Err(FsError::Corruption);
         }
@@ -174,15 +174,15 @@ impl Inode {
     }
 }
 
-// ── EuroSnap (Sprint S): CoW-snapshots ──────────────────────────────────────
-/// Het gereserveerde blok waarin de snapshot-tabel staat (binnen RESERVED_BLOCKS;
-/// blok 1/2 = superblok-A/B, 0 = boot, 3..15 = slack → 8 is vrij).
+// ── EuroSnap (Sprint S): CoW snapshots ──────────────────────────────────────
+/// The reserved block in which the snapshot table lives (within RESERVED_BLOCKS;
+/// block 1/2 = superblock-A/B, 0 = boot, 3..15 = slack → 8 is free).
 const SNAPSHOT_TABLE_BLOCK: u64 = 8;
 const SNAPSHOT_MAGIC: u32 = 0x5346_4E53; // "SNFS"
 const MAX_SNAPSHOTS: usize = 32;
 const SNAP_ENTRY_LEN: usize = 80; // id+parent+ts+objmap_root+map_blocks+ckpt+flags+label(32)
 
-/// Een snapshot-entry: een bevroren root-pointer naar een complete FS-toestand.
+/// A snapshot entry: a frozen root pointer to a complete FS state.
 #[derive(Clone)]
 struct SnapshotEntry {
     id: u64,
@@ -195,26 +195,26 @@ struct SnapshotEntry {
     label: String,
 }
 
-/// Het on-disk EuroFS-volume over een willekeurig `BlockDevice`.
+/// The on-disk EuroFS volume over an arbitrary `BlockDevice`.
 pub struct EuroFs<D: BlockDevice> {
     dev: D,
     sb: EuroFsSuperblock,
-    /// OID → blok waar de inode staat.
+    /// OID → block where the inode lives.
     objmap: BTreeMap<u64, u64>,
-    /// In-memory vrije-ruimte bitmap (1 bit per blok; true = in gebruik).
+    /// In-memory free-space bitmap (1 bit per block; true = in use).
     used: Vec<bool>,
     next_oid: u64,
     now: u64,
-    /// EuroSnap: actieve snapshots (bevroren root-pointers). Hun blokken worden in
-    /// `rebuild_allocator` GEPIND zodat CoW ze niet reclaimt.
+    /// EuroSnap: active snapshots (frozen root pointers). Their blocks are PINNED in
+    /// `rebuild_allocator` so that CoW does not reclaim them.
     snapshots: Vec<SnapshotEntry>,
     next_snap_id: u64,
 }
 
 impl<D: BlockDevice> EuroFs<D> {
-    /// Formatteer een vers volume en geef een gemount filesysteem terug.
+    /// Format a fresh volume and return a mounted filesystem.
     pub fn format(dev: D, uuid: [u8; 16], now: u64) -> FsResult<Self> {
-        assert_eq!(dev.block_size() as usize, BS, "EuroFS Fase 2 vereist 4096-byte blokken");
+        assert_eq!(dev.block_size() as usize, BS, "EuroFS Phase 2 requires 4096-byte blocks");
         let total = dev.block_count();
         let sb = EuroFsSuperblock::new_empty(total, uuid, now);
         let mut fs = EuroFs {
@@ -227,11 +227,11 @@ impl<D: BlockDevice> EuroFs<D> {
             snapshots: Vec::new(),
             next_snap_id: 1,
         };
-        // Reserveer de eerste blokken (boot/superblok/backup/slack).
+        // Reserve the first blocks (boot/superblock/backup/slack).
         for i in 0..(RESERVED_BLOCKS as usize).min(fs.used.len()) {
             fs.used[i] = true;
         }
-        // Root-directory aanmaken (lege map).
+        // Create the root directory (empty directory).
         let root = Inode::new(ROOT_OID, ROOT_OID, TYPE_DIR, now);
         let blk = fs.alloc_block()?;
         fs.write_block(blk, &root.encode())?;
@@ -240,7 +240,7 @@ impl<D: BlockDevice> EuroFs<D> {
         Ok(fs)
     }
 
-    /// Mount een bestaand volume: lees superblok + object map, herbouw allocator.
+    /// Mount an existing volume: read superblock + object map, rebuild allocator.
     pub fn mount(dev: D, now: u64) -> FsResult<Self> {
         assert_eq!(dev.block_size() as usize, BS);
         let sb = EuroFsSuperblock::read_from(&dev)?;
@@ -259,10 +259,10 @@ impl<D: BlockDevice> EuroFs<D> {
         fs.load_snapshots()?;
         fs.rebuild_allocator()?;
         fs.next_oid = fs.objmap.keys().copied().max().unwrap_or(ROOT_OID) + 1;
-        // Zelf-heling: read_from() slaagde dus minstens één A/B-slot is geldig. Staat
-        // het ANDERE slot corrupt (door een eerdere torn write / bitrot), herstel het
-        // dan stil uit de geldige kopie — zo is de superblok-redundantie meteen na de
-        // mount weer compleet, zonder handmatige `fsck repair`.
+        // Self-healing: read_from() succeeded so at least one A/B slot is valid. If the
+        // OTHER slot is corrupt (due to an earlier torn write / bitrot), repair it
+        // silently from the valid copy — so the superblock redundancy is complete again
+        // right after the mount, without a manual `fsck repair`.
         if EuroFsSuperblock::degraded_slots(&fs.dev) == 1 {
             let _ = EuroFsSuperblock::heal_slots(&mut fs.dev);
         }
@@ -273,7 +273,7 @@ impl<D: BlockDevice> EuroFs<D> {
         &self.sb
     }
 
-    // ── blok-I/O ──────────────────────────────────────────────────────────
+    // ── block I/O ──────────────────────────────────────────────────────────
     fn read_block(&self, blk: u64, buf: &mut [u8; BS]) -> FsResult<()> {
         self.dev.read_blocks(blk, 1, buf).map_err(|_| FsError::IoError)
     }
@@ -317,8 +317,8 @@ impl<D: BlockDevice> EuroFs<D> {
         self.used.iter().filter(|u| !**u).count() as u64
     }
 
-    /// Herbouw de allocator door vanaf het gecommitte superblok alle bereikbare
-    /// blokken te markeren. Reclaimt automatisch alle gelekte/oude blokken.
+    /// Rebuild the allocator by marking all blocks reachable from the committed
+    /// superblock. Automatically reclaims all leaked/old blocks.
     fn rebuild_allocator(&mut self) -> FsResult<()> {
         let n = self.used.len();
         for u in self.used.iter_mut() {
@@ -327,15 +327,15 @@ impl<D: BlockDevice> EuroFs<D> {
         for i in 0..(RESERVED_BLOCKS as usize).min(n) {
             self.used[i] = true;
         }
-        // Object map-blokken.
+        // Object map blocks.
         let map_root = self.sb.object_map_root;
-        let map_blocks = self.sb.extent_tree_root; // hergebruikt veld: #map-blokken
+        let map_blocks = self.sb.extent_tree_root; // reused field: #map blocks
         for b in map_root..map_root + map_blocks {
             if (b as usize) < n {
                 self.used[b as usize] = true;
             }
         }
-        // Inodes + hun extents.
+        // Inodes + their extents.
         let inode_blocks: Vec<u64> = self.objmap.values().copied().collect();
         for blk in inode_blocks {
             if (blk as usize) < n {
@@ -346,15 +346,15 @@ impl<D: BlockDevice> EuroFs<D> {
             let inode = Inode::decode(&buf)?;
             for (phys, cnt) in inode.extents {
                 for k in 0..cnt as u64 {
-                    let bb = phys.saturating_add(k) as usize; // overloop-veilig (corrupte extent)
+                    let bb = phys.saturating_add(k) as usize; // overflow-safe (corrupt extent)
                     if bb < n {
                         self.used[bb] = true;
                     }
                 }
             }
         }
-        // EuroSnap: PIN de blokken van elke actieve snapshot zodat de CoW-reclaim ze
-        // niet hergebruikt — zo blijft elke bevroren toestand intact.
+        // EuroSnap: PIN the blocks of every active snapshot so that the CoW reclaim
+        // does not reuse them — this keeps every frozen state intact.
         let snaps: Vec<(u64, u64)> = self.snapshots.iter().map(|s| (s.objmap_root, s.map_blocks)).collect();
         for (root, blocks) in snaps {
             self.mark_state_blocks(root, blocks)?;
@@ -363,9 +363,9 @@ impl<D: BlockDevice> EuroFs<D> {
         Ok(())
     }
 
-    /// Markeer alle blokken die bereikbaar zijn vanuit de objmap op `objmap_root`
-    /// (de tabel-blokken + de inode-blokken + hun data-extents) als IN GEBRUIK. Voor
-    /// het pinnen van snapshot-toestanden in [`Self::rebuild_allocator`].
+    /// Mark all blocks reachable from the objmap at `objmap_root`
+    /// (the table blocks + the inode blocks + their data extents) as IN USE. For
+    /// pinning snapshot states in [`Self::rebuild_allocator`].
     fn mark_state_blocks(&mut self, objmap_root: u64, map_blocks: u64) -> FsResult<()> {
         let n = self.used.len();
         for b in objmap_root..objmap_root.saturating_add(map_blocks) {
@@ -377,7 +377,7 @@ impl<D: BlockDevice> EuroFs<D> {
         for b in 0..map_blocks {
             let mut buf = [0u8; BS];
             if self.read_block(objmap_root + b, &mut buf).is_err() {
-                return Ok(()); // corrupte snapshot → veilig overslaan
+                return Ok(()); // corrupt snapshot → safely skip
             }
             data.extend_from_slice(&buf);
         }
@@ -401,7 +401,7 @@ impl<D: BlockDevice> EuroFs<D> {
             if let Ok(inode) = Inode::decode(&ib) {
                 for (phys, cnt) in inode.extents {
                     for k in 0..cnt as u64 {
-                        let bb = phys.saturating_add(k) as usize; // overloop-veilig (corrupte extent)
+                        let bb = phys.saturating_add(k) as usize; // overflow-safe (corrupt extent)
                         if bb < n {
                             self.used[bb] = true;
                         }
@@ -412,7 +412,7 @@ impl<D: BlockDevice> EuroFs<D> {
         Ok(())
     }
 
-    /// Lees de snapshot-tabel uit het gereserveerde blok (leeg/legacy = geen snapshots).
+    /// Read the snapshot table from the reserved block (empty/legacy = no snapshots).
     fn load_snapshots(&mut self) -> FsResult<()> {
         let mut buf = [0u8; BS];
         if self.read_block(SNAPSHOT_TABLE_BLOCK, &mut buf).is_err() || rd_u32(&buf, 0) != SNAPSHOT_MAGIC {
@@ -442,7 +442,7 @@ impl<D: BlockDevice> EuroFs<D> {
         Ok(())
     }
 
-    /// Schrijf de snapshot-tabel naar het gereserveerde blok (+ flush voor duurzaamheid).
+    /// Write the snapshot table to the reserved block (+ flush for durability).
     fn save_snapshots(&mut self) -> FsResult<()> {
         let mut buf = [0u8; BS];
         wr_u32(&mut buf, 0, SNAPSHOT_MAGIC);
@@ -465,7 +465,7 @@ impl<D: BlockDevice> EuroFs<D> {
         Ok(())
     }
 
-    // ── object map (platte CoW-tabel) ─────────────────────────────────────
+    // ── object map (flat CoW table) ─────────────────────────────────────
     fn load_objmap(&mut self) -> FsResult<()> {
         let root = self.sb.object_map_root;
         let map_blocks = self.sb.extent_tree_root.max(1);
@@ -475,9 +475,9 @@ impl<D: BlockDevice> EuroFs<D> {
             self.read_block(root + b, &mut buf)?;
             data.extend_from_slice(&buf);
         }
-        // De objmap-tabel is niet apart gechecksumd; begrens `count` op wat er
-        // werkelijk aan data is (audit H9), anders indexeert een corrupt/te groot
-        // aantal buiten `data` en panikeert de FS bij het mounten.
+        // The objmap table is not separately checksummed; bound `count` to what is
+        // actually present as data (audit H9), otherwise a corrupt/too-large
+        // count indexes outside `data` and the FS panics on mount.
         let max_entries = data.len().saturating_sub(8) / 16;
         let count = (rd_u64(&data, 0) as usize).min(max_entries);
         self.objmap.clear();
@@ -488,8 +488,8 @@ impl<D: BlockDevice> EuroFs<D> {
         Ok(())
     }
 
-    /// Serialiseer de object map naar verse blokken (CoW) en geef
-    /// (root_block, block_count) terug.
+    /// Serialize the object map to fresh blocks (CoW) and return
+    /// (root_block, block_count).
     fn write_objmap(&mut self) -> FsResult<(u64, u64)> {
         let entries: Vec<(u64, u64)> = self.objmap.iter().map(|(&k, &v)| (k, v)).collect();
         let bytes_needed = 8 + entries.len() * 16;
@@ -510,12 +510,12 @@ impl<D: BlockDevice> EuroFs<D> {
         Ok((root, blocks_needed as u64))
     }
 
-    /// De atomische commit: schrijf object map + superblok, flush, en herbouw
-    /// daarna de allocator (reclaimt oude blokken).
+    /// The atomic commit: write object map + superblock, flush, and then rebuild
+    /// the allocator (reclaims old blocks).
     fn commit(&mut self) -> FsResult<()> {
         let (root, blocks) = self.write_objmap()?;
         self.sb.object_map_root = root;
-        self.sb.extent_tree_root = blocks; // #map-blokken
+        self.sb.extent_tree_root = blocks; // #map blocks
         self.sb.checkpoint_id += 1;
         self.sb.last_written = self.now;
         self.sb.free_blocks = self.free_count();
@@ -525,7 +525,7 @@ impl<D: BlockDevice> EuroFs<D> {
         Ok(())
     }
 
-    // ── inode-data lezen/schrijven ────────────────────────────────────────
+    // ── reading/writing inode data ────────────────────────────────────────
     fn read_inode(&self, oid: u64) -> FsResult<Inode> {
         let blk = *self.objmap.get(&oid).ok_or(FsError::NotFound)?;
         let mut buf = [0u8; BS];
@@ -541,27 +541,27 @@ impl<D: BlockDevice> EuroFs<D> {
             for &(phys, cnt) in &inode.extents {
                 for k in 0..cnt as u64 {
                     let mut buf = [0u8; BS];
-                    self.read_block(phys.saturating_add(k), &mut buf)?; // overloop-veilig
+                    self.read_block(phys.saturating_add(k), &mut buf)?; // overflow-safe
                     out.extend_from_slice(&buf);
                 }
             }
             out.truncate(inode.size as usize);
             out
         };
-        // Verifieer de data-checksum (overgeslagen voor legacy-inodes met 0). Zo
-        // levert een gecorrumpeerd datablok een fout i.p.v. stil foute bytes.
+        // Verify the data checksum (skipped for legacy inodes with 0). This way
+        // a corrupted data block yields an error instead of silently wrong bytes.
         if inode.data_checksum != 0 && xxh3_64(&out) != inode.data_checksum {
             return Err(FsError::Corruption);
         }
         Ok(out)
     }
 
-    /// Schrijf data voor een (nieuwe) inode via CoW: alloceer verse data- en
-    /// inode-blokken, schrijf ze, en update de object map. Commit gebeurt apart.
+    /// Write data for a (new) inode via CoW: allocate fresh data and
+    /// inode blocks, write them, and update the object map. Commit happens separately.
     fn write_object(&mut self, mut inode: Inode, data: &[u8]) -> FsResult<()> {
         inode.size = data.len() as u64;
-        // Data-path-integriteit: XXH3 over de volledige inhoud, zodat bit-rot in
-        // een datablok (buiten de inode) gedetecteerd kan worden bij lezen/scrub.
+        // Data-path integrity: XXH3 over the full content, so that bit-rot in
+        // a data block (outside the inode) can be detected on read/scrub.
         inode.data_checksum = xxh3_64(data);
         inode.extents.clear();
         inode.inline.clear();
@@ -569,8 +569,8 @@ impl<D: BlockDevice> EuroFs<D> {
             inode.inline = data.to_vec();
         } else {
             let nblocks = data.len().div_ceil(BS);
-            // De extent-blokteller is een u32 op schijf; weiger een bestand dat niet
-            // in één extent past i.p.v. de teller stil af te kappen (→ datalek).
+            // The extent block counter is a u32 on disk; refuse a file that does not
+            // fit in one extent rather than silently truncating the counter (→ data loss).
             if nblocks > u32::MAX as usize {
                 return Err(FsError::NoSpace);
             }
@@ -591,7 +591,7 @@ impl<D: BlockDevice> EuroFs<D> {
         Ok(())
     }
 
-    // ── directory-helpers ─────────────────────────────────────────────────
+    // ── directory helpers ─────────────────────────────────────────────────
     fn read_dir_entries(&self, dir_oid: u64) -> FsResult<Vec<(String, u64, u8)>> {
         let inode = self.read_inode(dir_oid)?;
         if inode.otype != TYPE_DIR {
@@ -640,7 +640,7 @@ impl<D: BlockDevice> EuroFs<D> {
         Ok(oid)
     }
 
-    /// Werk een directory bij (CoW) met een nieuwe entry-lijst.
+    /// Update a directory (CoW) with a new entry list.
     fn rewrite_dir(&mut self, dir_oid: u64, entries: &[(String, u64, u8)]) -> FsResult<()> {
         let inode = self.read_inode(dir_oid)?;
         let data = Self::encode_dir_entries(entries);
@@ -685,17 +685,17 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
             }
         };
 
-        // L1: handhaaf de immutability-vlaggen van een bestaand bestand + behoud ze
-        // over een (toegestane) overschrijving.
+        // L1: enforce the immutability flags of an existing file + preserve them
+        // across a (permitted) overwrite.
         let mut keep_flags = 0u32;
         if existing.is_some() {
             let old = self.read_inode(oid)?;
             keep_flags = old.flags;
             if old.flags & FLAG_IMMUTABLE != 0 {
-                return Err(FsError::PermissionDenied); // immutabel → geen wijziging
+                return Err(FsError::PermissionDenied); // immutable → no change
             }
             if old.flags & FLAG_APPEND_ONLY != 0 {
-                // Append-only: de nieuwe data moet de oude UITBREIDEN (zelfde prefix).
+                // Append-only: the new data must EXTEND the old (same prefix).
                 let old_data = self.read_data(&old)?;
                 if data.len() < old_data.len() || data[..old_data.len()] != old_data[..] {
                     return Err(FsError::PermissionDenied);
@@ -721,7 +721,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
             .position(|(n, _, t)| n == name && *t == TYPE_FILE)
             .ok_or(FsError::NotFound)?;
         let oid = entries[pos].1;
-        // L1: een immutabel of append-only bestand mag NIET verwijderd worden.
+        // L1: an immutable or append-only file may NOT be removed.
         let inode = self.read_inode(oid)?;
         if inode.flags & (FLAG_IMMUTABLE | FLAG_APPEND_ONLY) != 0 {
             return Err(FsError::PermissionDenied);
@@ -737,25 +737,25 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         Ok(self.read_inode(oid)?.flags)
     }
 
-    // ── EuroSnap: CoW-snapshots ──────────────────────────────────────────
+    // ── EuroSnap: CoW snapshots ──────────────────────────────────────────
     fn snapshot_create(&mut self, label: &str, flags: u32) -> FsResult<u64> {
         if self.snapshots.len() >= MAX_SNAPSHOTS {
             return Err(FsError::NoSpace);
         }
-        // Commit eerst → de huidige toestand is een schone, atomair-vastgelegde root.
+        // Commit first → the current state is a clean, atomically-recorded root.
         self.commit()?;
         let id = self.next_snap_id;
         self.next_snap_id += 1;
         self.snapshots.push(SnapshotEntry {
             id,
-            parent: self.sb.checkpoint_id, // herkomst = het checkpoint waarop 't berust
+            parent: self.sb.checkpoint_id, // provenance = the checkpoint it is based on
             timestamp: self.now,
             objmap_root: self.sb.object_map_root,
             map_blocks: self.sb.extent_tree_root,
             checkpoint_id: self.sb.checkpoint_id,
             flags,
-            // Knip op een teken-grens, niet op byte 28 (audit H8: anders paniek op
-            // een multibyte UTF-8-teken rond de grens).
+            // Cut on a character boundary, not at byte 28 (audit H8: otherwise panic on
+            // a multibyte UTF-8 character around the boundary).
             label: label.chars().take(28).collect::<String>(),
         });
         self.save_snapshots()?;
@@ -778,13 +778,13 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
 
     fn snapshot_rollback(&mut self, id: u64) -> FsResult<()> {
         let snap = self.snapshots.iter().find(|s| s.id == id).cloned().ok_or(FsError::NotFound)?;
-        // Zet de root-pointer naar de bevroren toestand + herlaad die objmap.
+        // Point the root pointer to the frozen state + reload that objmap.
         self.sb.object_map_root = snap.objmap_root;
         self.sb.extent_tree_root = snap.map_blocks;
         self.load_objmap()?;
         self.next_oid = self.objmap.keys().copied().max().unwrap_or(ROOT_OID) + 1;
-        // Commit schrijft een verse objmap + superblok; rebuild_allocator reclaimt de
-        // blokken van de verlaten toestand (tenzij door een andere snapshot gepind).
+        // Commit writes a fresh objmap + superblock; rebuild_allocator reclaims the
+        // blocks of the abandoned state (unless pinned by another snapshot).
         self.commit()
     }
 
@@ -795,7 +795,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
             return Err(FsError::NotFound);
         }
         self.save_snapshots()?;
-        // GC: rebuild_allocator (via commit) reclaimt nu de exclusief-snapshot-blokken.
+        // GC: rebuild_allocator (via commit) now reclaims the exclusive-snapshot blocks.
         self.commit()
     }
 
@@ -805,8 +805,8 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         if inode.otype != TYPE_FILE {
             return Err(FsError::NotAFile);
         }
-        // De inode + dezelfde data herschrijven met de nieuwe vlaggen (CoW). De
-        // CAP_IMMUTABLE_ADMIN-controle (L2) zit in de kernel-laag boven deze call.
+        // Rewrite the inode + the same data with the new flags (CoW). The
+        // CAP_IMMUTABLE_ADMIN check (L2) lives in the kernel layer above this call.
         let data = self.read_data(&inode)?;
         let mut ni = inode;
         ni.flags = flags;
@@ -842,7 +842,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
             return Err(FsError::InvalidPath);
         }
 
-        // Bron-entry opzoeken.
+        // Look up the source entry.
         let src = self.read_dir_entries(old_parent)?;
         let (_, oid, otype) = src
             .iter()
@@ -850,7 +850,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
             .cloned()
             .ok_or(FsError::NotFound)?;
 
-        // L1: een immutabel/append-only bestand mag niet hernoemd/verplaatst worden.
+        // L1: an immutable/append-only file may not be renamed/moved.
         if otype == TYPE_FILE {
             let inode = self.read_inode(oid)?;
             if inode.flags & (FLAG_IMMUTABLE | FLAG_APPEND_ONLY) != 0 {
@@ -858,7 +858,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
             }
         }
 
-        // Anti-lus: een map mag niet IN haar eigen substructuur verplaatst worden.
+        // Anti-loop: a directory may not be moved INTO its own substructure.
         if otype == TYPE_DIR {
             let mut walk = new_parent;
             loop {
@@ -873,15 +873,15 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         }
 
         if old_parent == new_parent {
-            // Zelfde map: enkel de naam wijzigen (en evt. een bestaand doelbestand vervangen).
+            // Same directory: only change the name (and possibly replace an existing target file).
             let mut entries = src;
             if let Some(tp) = entries.iter().position(|(n, _, _)| n == new_name) {
                 let (_, t_oid, t_type) = entries[tp].clone();
                 if t_oid == oid {
-                    return Ok(()); // old == new, niets te doen
+                    return Ok(()); // old == new, nothing to do
                 }
                 if t_type == TYPE_DIR {
-                    return Err(FsError::AlreadyExists); // mappen niet overschrijven
+                    return Err(FsError::AlreadyExists); // do not overwrite directories
                 }
                 entries.remove(tp);
                 self.objmap.remove(&t_oid);
@@ -893,7 +893,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
             entries[pos].0 = new_name.to_string();
             self.rewrite_dir(old_parent, &entries)?;
         } else {
-            // Verplaatsen naar een ANDERE map.
+            // Moving to ANOTHER directory.
             let mut from = src;
             let mut to = self.read_dir_entries(new_parent)?;
             if let Some(tp) = to.iter().position(|(n, _, _)| n == new_name) {
@@ -906,7 +906,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
             }
             from.retain(|(n, _, _)| n != old_name);
             to.push((new_name.to_string(), oid, otype));
-            // Een verplaatste MAP draagt z'n ouder-verwijzing mee.
+            // A moved DIRECTORY carries its parent reference along.
             if otype == TYPE_DIR {
                 let mut inode = self.read_inode(oid)?;
                 inode.parent = new_parent;
@@ -922,7 +922,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
     fn remove_dir(&mut self, path: &str) -> FsResult<()> {
         let oid = self.resolve(path)?;
         if oid == ROOT_OID {
-            return Err(FsError::InvalidPath); // de root verwijder je niet
+            return Err(FsError::InvalidPath); // you do not remove the root
         }
         let inode = self.read_inode(oid)?;
         if inode.otype != TYPE_DIR {
@@ -987,51 +987,51 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         (total, free)
     }
 
-    /// Scrub/fsck (S7): verifieer het superblok, élke inode-checksum, en de
-    /// structurele consistentie (extents binnen de schijf, geen cross-links, en de
-    /// gerefereerde blokken stroken met de vrije-ruimte-bitmap).
+    /// Scrub/fsck (S7): verify the superblock, EVERY inode checksum, and the
+    /// structural consistency (extents within the disk, no cross-links, and the
+    /// referenced blocks match the free-space bitmap).
     fn scrub(&self) -> crate::fs::ScrubReport {
         let mut r = crate::fs::ScrubReport { superblock_ok: true, bitmap_ok: true, ..Default::default() };
-        // 1) Superblok: controleer BEIDE A/B-slots afzonderlijk (her-lezen van schijf).
-        //    1 gedegradeerd slot is nog mountbaar én repareerbaar (zie `repair`); pas
-        //    bij twee corrupte slots is het superblok echt verloren.
+        // 1) Superblock: check BOTH A/B slots separately (re-reading from disk).
+        //    1 degraded slot is still mountable AND repairable (see `repair`); only
+        //    with two corrupt slots is the superblock truly lost.
         match EuroFsSuperblock::degraded_slots(&self.dev) {
             0 => {}
             1 => {
                 r.errors += 1;
                 r.messages.push(String::from(
-                    "superblok: 1 A/B-slot gedegradeerd (geldige kopie intact, mountbaar — herstelbaar via repair)",
+                    "superblock: 1 A/B slot degraded (valid copy intact, mountable — recoverable via repair)",
                 ));
             }
             _ => {
                 r.superblock_ok = false;
                 r.errors += 1;
-                r.messages.push(String::from("superblok: BEIDE slots corrupt (magic/checksum)"));
+                r.messages.push(String::from("superblock: BOTH slots corrupt (magic/checksum)"));
             }
         }
-        // 2) Alle inodes + extents kruisverwijzen met een verse referentie-bitmap.
+        // 2) Cross-reference all inodes + extents with a fresh reference bitmap.
         let total = self.dev.block_count();
         let mut referenced = alloc::vec![false; self.used.len()];
         for (&oid, &blk) in &self.objmap {
             r.objects += 1;
             if (blk as usize) < referenced.len() {
-                referenced[blk as usize] = true; // de inode-blok zelf
+                referenced[blk as usize] = true; // the inode block itself
             }
             match self.read_inode(oid) {
                 Ok(inode) => {
-                    // Data-path-scrub: verifieer de XXH3 over de inhoud, zodat bit-rot
-                    // in een datablok (buiten de inode zelf) gedetecteerd wordt — niet
-                    // alleen corruptie van de inode of de structuur.
+                    // Data-path scrub: verify the XXH3 over the content, so that bit-rot
+                    // in a data block (outside the inode itself) is detected — not
+                    // only corruption of the inode or the structure.
                     if inode.data_checksum != 0 {
                         match self.read_data(&inode) {
                             Ok(_) => r.data_verified += 1,
                             Err(_) => {
                                 r.errors += 1;
-                                // Eén schijf, geen redundantie → niet herstelbaar (B3 mirror nodig).
+                                // One disk, no redundancy → not recoverable (B3 mirror needed).
                                 r.data_unrecoverable += 1;
                                 if r.messages.len() < 8 {
                                     r.messages.push(alloc::format!(
-                                        "oid {oid}: DATA-checksum mismatch (bit-rot) — ONHERSTELBAAR (geen redundantie)"
+                                        "oid {oid}: DATA checksum mismatch (bit-rot) — UNRECOVERABLE (no redundancy)"
                                     ));
                                 }
                             }
@@ -1042,7 +1042,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
                         if phys + cnt as u64 > total {
                             r.errors += 1;
                             if r.messages.len() < 8 {
-                                r.messages.push(alloc::format!("oid {oid}: extent {phys}+{cnt} buiten schijf"));
+                                r.messages.push(alloc::format!("oid {oid}: extent {phys}+{cnt} outside disk"));
                             }
                             continue;
                         }
@@ -1054,14 +1054,14 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
                             if referenced[bi] {
                                 r.errors += 1;
                                 if r.messages.len() < 8 {
-                                    r.messages.push(alloc::format!("blok {b}: DUBBEL gerefereerd (cross-link)"));
+                                    r.messages.push(alloc::format!("block {b}: DOUBLE referenced (cross-link)"));
                                 }
                             }
                             referenced[bi] = true;
                             if !self.used[bi] {
                                 r.bitmap_ok = false;
                                 if r.messages.len() < 8 {
-                                    r.messages.push(alloc::format!("blok {b}: gerefereerd maar niet als gebruikt gemarkeerd"));
+                                    r.messages.push(alloc::format!("block {b}: referenced but not marked as used"));
                                 }
                             }
                         }
@@ -1070,7 +1070,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
                 Err(_) => {
                     r.errors += 1;
                     if r.messages.len() < 8 {
-                        r.messages.push(alloc::format!("oid {oid} @ blok {blk}: inode magic/checksum CORRUPT"));
+                        r.messages.push(alloc::format!("oid {oid} @ block {blk}: inode magic/checksum CORRUPT"));
                     }
                 }
             }
@@ -1083,16 +1083,16 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
     }
 
     fn repair(&mut self) -> crate::fs::ScrubReport {
-        // Heel eerst de A/B-superblok-redundantie: staat één slot corrupt en het
-        // andere geldig, dan herschrijven we het corrupte uit de geldige kopie. Het
-        // filesysteem heeft daarna weer twee geldige superblok-kopieën.
+        // First heal the A/B superblock redundancy: if one slot is corrupt and the
+        // other valid, we rewrite the corrupt one from the valid copy. The
+        // filesystem then has two valid superblock copies again.
         let healed = EuroFsSuperblock::heal_slots(&mut self.dev).unwrap_or(0);
-        // Rapporteer de staat NA de heling (zo toont het rapport het herstel).
+        // Report the state AFTER the healing (so the report shows the repair).
         let mut r = self.scrub();
         r.repaired = healed;
         if healed > 0 {
             r.messages.push(alloc::format!(
-                "REPARATIE: {healed} superblok-slot hersteld uit de geldige A/B-kopie"
+                "REPAIR: {healed} superblock slot restored from the valid A/B copy"
             ));
         }
         r
@@ -1120,8 +1120,8 @@ mod tests {
     #[test]
     fn schrijf_lees_klein_bestand() {
         let mut fs = EuroFs::format(dev(256), [2; 16], 1).unwrap();
-        fs.write_file("/hallo.txt", b"Hallo EuroKernel").unwrap();
-        assert_eq!(fs.read_file("/hallo.txt").unwrap(), b"Hallo EuroKernel");
+        fs.write_file("/hallo.txt", b"Hello EuroKernel").unwrap();
+        assert_eq!(fs.read_file("/hallo.txt").unwrap(), b"Hello EuroKernel");
         assert_eq!(fs.list_dir("/").unwrap()[0].name, "hallo.txt");
     }
 
@@ -1136,8 +1136,8 @@ mod tests {
 
     #[test]
     fn inode_met_te_veel_extents_is_corruptie() {
-        // Audit #5: een inode-blok dat ext_count > MAX_EXTENTS claimt mag NIET stil
-        // afgekapt worden (verloren extents → datalek), maar als corruptie falen.
+        // Audit #5: an inode block that claims ext_count > MAX_EXTENTS may NOT be
+        // silently truncated (lost extents → data loss), but must fail as corruption.
         let good = Inode {
             oid: 1,
             parent: 0,
@@ -1152,7 +1152,7 @@ mod tests {
         };
         let mut buf = good.encode();
         wr_u32(&mut buf, OFF_EXTENT_COUNT, (MAX_EXTENTS + 1) as u32);
-        // Checksum opnieuw zetten zodat het NIET op de checksum struikelt maar op de telling.
+        // Recompute the checksum so it does NOT trip on the checksum but on the count.
         let cs = xxh3_64(&buf[..OFF_CHECKSUM]);
         wr_u64(&mut buf, OFF_CHECKSUM, cs);
         assert!(matches!(Inode::decode(&buf), Err(FsError::Corruption)));
@@ -1160,7 +1160,7 @@ mod tests {
 
     #[test]
     fn overloop_veilige_extent_blijft_geldig() {
-        // Het saturating_add-pad mag een normaal groot bestand niet breken.
+        // The saturating_add path must not break a normal large file.
         let mut fs = EuroFs::format(dev(512), [7; 16], 1).unwrap();
         let big: Vec<u8> = (0..50_000u32).map(|i| (i % 97) as u8).collect();
         fs.write_file("/x.bin", &big).unwrap();
@@ -1173,13 +1173,13 @@ mod tests {
         let big: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
         fs.write_file("/big.bin", &big).unwrap();
 
-        // Gezonde scrub: de data-checksum van het bestand is geverifieerd, 0 fouten.
+        // Healthy scrub: the file's data checksum is verified, 0 errors.
         let r = fs.scrub();
-        assert!(r.data_verified >= 1, "scrub hoort de bestandsdata te verifiëren");
+        assert!(r.data_verified >= 1, "scrub should verify the file data");
         assert_eq!(r.errors, 0);
 
-        // Corrumpeer één byte in het eerste datablok van het bestand, rechtstreeks
-        // op het device — dit simuleert bit-rot buiten de inode.
+        // Corrupt one byte in the first data block of the file, directly
+        // on the device — this simulates bit-rot outside the inode.
         let oid = fs.resolve("/big.bin").unwrap();
         let (phys, _) = fs.read_inode(oid).unwrap().extents[0];
         let mut buf = [0u8; BS];
@@ -1187,15 +1187,15 @@ mod tests {
         buf[10] ^= 0xFF;
         fs.write_block(phys, &buf).unwrap();
 
-        // Lezen levert nu een Corruption-fout i.p.v. stil-foute bytes.
+        // Reading now yields a Corruption error instead of silently-wrong bytes.
         assert_eq!(fs.read_file("/big.bin"), Err(FsError::Corruption));
-        // En de scrub detecteert + rapporteert de data-corruptie als ONHERSTELBAAR
-        // (één schijf, geen redundantie).
+        // And the scrub detects + reports the data corruption as UNRECOVERABLE
+        // (one disk, no redundancy).
         let r2 = fs.scrub();
         assert!(r2.errors >= 1);
         assert_eq!(r2.data_unrecoverable, 1);
-        assert!(r2.messages.iter().any(|m| m.contains("ONHERSTELBAAR")));
-        // De mirror-herstel-interface bestaat maar is (één schijf) niet ondersteund.
+        assert!(r2.messages.iter().any(|m| m.contains("UNRECOVERABLE")));
+        // The mirror-repair interface exists but is (one disk) not supported.
         assert_eq!(fs.repair_block(phys, &[0u8; BS]), Err(FsError::Unsupported));
     }
 
@@ -1206,7 +1206,7 @@ mod tests {
             let mut fs = EuroFs::format(&mut dev, [10; 16], 1).unwrap();
             fs.write_file("/big.bin", &[42u8; 9000]).unwrap();
         }
-        // Na hermount blijft de data-checksum geldig en wordt geverifieerd.
+        // After remount the data checksum remains valid and is verified.
         let fs = EuroFs::mount(&mut dev, 2).unwrap();
         assert_eq!(fs.read_file("/big.bin").unwrap(), vec![42u8; 9000]);
         assert!(fs.scrub().data_verified >= 1);
@@ -1232,7 +1232,7 @@ mod tests {
             fs.write_file("/boot/version", b"EuroKernel v0.1\n").unwrap();
             fs.write_file("/boot/grote", &[7u8; 9000]).unwrap();
         }
-        // Opnieuw mounten van hetzelfde device.
+        // Mount the same device again.
         let fs = EuroFs::mount(&mut dev, 2).unwrap();
         assert_eq!(fs.read_file("/boot/version").unwrap(), b"EuroKernel v0.1\n");
         assert_eq!(fs.read_file("/boot/grote").unwrap(), vec![7u8; 9000]);
@@ -1241,10 +1241,10 @@ mod tests {
     #[test]
     fn overschrijven_cow() {
         let mut fs = EuroFs::format(dev(256), [6; 16], 1).unwrap();
-        fs.write_file("/f", b"oud").unwrap();
-        fs.write_file("/f", b"nieuwe inhoud").unwrap();
-        assert_eq!(fs.read_file("/f").unwrap(), b"nieuwe inhoud");
-        assert_eq!(fs.list_dir("/").unwrap().len(), 1); // geen duplicaat
+        fs.write_file("/f", b"old").unwrap();
+        fs.write_file("/f", b"new content").unwrap();
+        assert_eq!(fs.read_file("/f").unwrap(), b"new content");
+        assert_eq!(fs.list_dir("/").unwrap().len(), 1); // no duplicate
     }
 
     #[test]
@@ -1259,29 +1259,29 @@ mod tests {
 
     #[test]
     fn crash_voor_checkpoint_behoudt_oude_staat() {
-        // Bewijs crash-consistentie: een commit die net vóór de atomische
-        // superblok-update "verloren gaat" mag de oude staat niet beschadigen.
+        // Prove crash consistency: a commit that "is lost" right before the atomic
+        // superblock update must not corrupt the old state.
         let mut dev = dev(256);
         let mut fs = EuroFs::format(&mut dev, [8; 16], 1).unwrap();
-        fs.write_file("/f", b"OUD").unwrap();
+        fs.write_file("/f", b"OLD").unwrap();
 
-        // Bewaar het huidige (gecommitte) superblok.
+        // Save the current (committed) superblock.
         let mut sb_old = [0u8; BS];
         fs.read_block(1, &mut sb_old).unwrap();
 
-        // Nieuwe write — committeert volledig.
-        fs.write_file("/f", b"NIEUW").unwrap();
-        assert_eq!(fs.read_file("/f").unwrap(), b"NIEUW");
+        // New write — commits fully.
+        fs.write_file("/f", b"NEW").unwrap();
+        assert_eq!(fs.read_file("/f").unwrap(), b"NEW");
 
-        // Simuleer: de superblok-update van de NIEUW-commit landde nooit
-        // (stroomuitval net vóór stap 5). Herstel oud superblok op blok 1 én 2.
+        // Simulate: the superblock update of the NEW commit never landed
+        // (power loss right before step 5). Restore the old superblock on block 1 and 2.
         fs.write_block(1, &sb_old).unwrap();
         fs.write_block(2, &sb_old).unwrap();
         drop(fs);
 
-        // Remount → moet de OUDE inhoud zien, niet corrupt.
+        // Remount → must see the OLD content, not corrupt.
         let fs = EuroFs::mount(&mut dev, 9).unwrap();
-        assert_eq!(fs.read_file("/f").unwrap(), b"OUD");
+        assert_eq!(fs.read_file("/f").unwrap(), b"OLD");
     }
 
     #[test]
@@ -1292,7 +1292,7 @@ mod tests {
         let blk = *fs.objmap.get(&fs.resolve("/a").unwrap()).unwrap();
         let mut buf = [0u8; BS];
         fs.read_block(blk, &mut buf).unwrap();
-        buf[OFF_INLINE] ^= 0xFF; // corrumpeer inline data
+        buf[OFF_INLINE] ^= 0xFF; // corrupt inline data
         fs.write_block(blk, &buf).unwrap();
         assert_eq!(fs.read_file("/a"), Err(FsError::Corruption));
     }
@@ -1303,18 +1303,18 @@ mod tests {
         let mut dev = dev(256);
         {
             let mut fs = EuroFs::format(&mut dev, [12; 16], 1).unwrap();
-            fs.write_file("/data.txt", b"belangrijk").unwrap();
-            // Corrumpeer het BACK-UP-slot TIJDENS bedrijf (na mount; geen remount, dus
-            // de auto-heling van mount pre-empt dit niet — we testen `repair` zelf).
+            fs.write_file("/data.txt", b"important").unwrap();
+            // Corrupt the BACKUP slot DURING operation (after mount; no remount, so
+            // the auto-heal of mount does not pre-empt this — we test `repair` itself).
             fs.write_block(SUPERBLOCK_BACKUP_BLOCK, &[0xFFu8; BS]).unwrap();
             let before = fs.scrub();
             assert!(before.errors >= 1 && before.superblock_ok);
             let rep = fs.repair();
             assert_eq!(rep.repaired, 1);
-            assert_eq!(rep.errors, 0); // geen superblok-fout meer na heling
-            assert_eq!(fs.read_file("/data.txt").unwrap(), b"belangrijk");
+            assert_eq!(rep.errors, 0); // no superblock error left after healing
+            assert_eq!(fs.read_file("/data.txt").unwrap(), b"important");
         }
-        // Beide slots weer geldig.
+        // Both slots valid again.
         assert_eq!(EuroFsSuperblock::degraded_slots(&dev), 0);
     }
 
@@ -1324,7 +1324,7 @@ mod tests {
         let mut dev = dev(256);
         {
             let mut fs = EuroFs::format(&mut dev, [13; 16], 1).unwrap();
-            fs.write_block(SUPERBLOCK_BLOCK, &[0u8; BS]).unwrap(); // primair corrupt
+            fs.write_block(SUPERBLOCK_BLOCK, &[0u8; BS]).unwrap(); // primary corrupt
             assert_eq!(fs.repair().repaired, 1);
         }
         assert_eq!(EuroFsSuperblock::degraded_slots(&dev), 0);
@@ -1338,15 +1338,15 @@ mod tests {
             let mut fs = EuroFs::format(&mut dev, [15; 16], 1).unwrap();
             fs.write_file("/x", b"y").unwrap();
         }
-        // Corrumpeer een slot op de RUWE schijf (alsof een crash het sloopte).
+        // Corrupt a slot on the RAW disk (as if a crash wrecked it).
         dev.write_blocks(SUPERBLOCK_BACKUP_BLOCK, 1, &[0xFFu8; BS]).unwrap();
         assert_eq!(EuroFsSuperblock::degraded_slots(&dev), 1);
         {
-            // Mount herstelt het slot automatisch (zelf-heling), zonder handmatige fsck.
+            // Mount restores the slot automatically (self-healing), without manual fsck.
             let fs = EuroFs::mount(&mut dev, 2).unwrap();
             assert_eq!(fs.read_file("/x").unwrap(), b"y");
         }
-        assert_eq!(EuroFsSuperblock::degraded_slots(&dev), 0); // automatisch geheeld
+        assert_eq!(EuroFsSuperblock::degraded_slots(&dev), 0); // automatically healed
     }
 
     #[test]
@@ -1359,7 +1359,7 @@ mod tests {
         dev.write_blocks(SUPERBLOCK_BLOCK, 1, &[0xFFu8; BS]).unwrap();
         dev.write_blocks(SUPERBLOCK_BACKUP_BLOCK, 1, &[0xFFu8; BS]).unwrap();
         assert_eq!(EuroFsSuperblock::degraded_slots(&dev), 2);
-        // Geen geldige bron → heal doet (veilig) niets.
+        // No valid source → heal does (safely) nothing.
         assert_eq!(EuroFsSuperblock::heal_slots(&mut dev).unwrap(), 0);
     }
 
@@ -1367,7 +1367,7 @@ mod tests {
     fn mtime_en_mode_bij_aanmaak() {
         let mut dev = dev(256);
         let mut fs = EuroFs::format(&mut dev, [20; 16], 1000).unwrap();
-        fs.write_file("/a.txt", b"hoi").unwrap();
+        fs.write_file("/a.txt", b"hi").unwrap();
         fs.create_dir("/d").unwrap();
         let f = fs.metadata("/a.txt").unwrap();
         assert_eq!(f.mtime, 1000);
@@ -1383,9 +1383,9 @@ mod tests {
         let mut fs = EuroFs::format(&mut dev, [21; 16], 1000).unwrap();
         fs.write_file("/x", b"v1").unwrap();
         assert_eq!(fs.metadata("/x").unwrap().mtime, 1000);
-        // Klok vooruit + herschrijf → mtime volgt.
+        // Clock forward + rewrite → mtime follows.
         fs.set_clock(2500);
-        fs.write_file("/x", b"v2-met-langere-inhoud").unwrap();
+        fs.write_file("/x", b"v2-with-longer-content").unwrap();
         assert_eq!(fs.metadata("/x").unwrap().mtime, 2500);
     }
 
@@ -1393,10 +1393,10 @@ mod tests {
     fn rename_bestand_zelfde_map() {
         let mut dev = dev(256);
         let mut fs = EuroFs::format(&mut dev, [30; 16], 1).unwrap();
-        fs.write_file("/a.txt", b"inhoud").unwrap();
+        fs.write_file("/a.txt", b"content").unwrap();
         fs.rename("/a.txt", "/b.txt").unwrap();
         assert!(!fs.exists("/a.txt"));
-        assert_eq!(fs.read_file("/b.txt").unwrap(), b"inhoud");
+        assert_eq!(fs.read_file("/b.txt").unwrap(), b"content");
     }
 
     #[test]
@@ -1414,11 +1414,11 @@ mod tests {
     fn rename_vervangt_bestaand_bestand() {
         let mut dev = dev(256);
         let mut fs = EuroFs::format(&mut dev, [32; 16], 1).unwrap();
-        fs.write_file("/a", b"nieuw").unwrap();
-        fs.write_file("/b", b"oud").unwrap();
+        fs.write_file("/a", b"new").unwrap();
+        fs.write_file("/b", b"old").unwrap();
         fs.rename("/a", "/b").unwrap();
         assert!(!fs.exists("/a"));
-        assert_eq!(fs.read_file("/b").unwrap(), b"nieuw");
+        assert_eq!(fs.read_file("/b").unwrap(), b"new");
     }
 
     #[test]
@@ -1428,31 +1428,31 @@ mod tests {
         fs.write_file("/sys", b"kernel-config").unwrap();
         fs.set_flags("/sys", FLAG_IMMUTABLE).unwrap();
         assert_eq!(fs.get_flags("/sys").unwrap(), FLAG_IMMUTABLE);
-        // Schrijven, verwijderen, hernoemen → allemaal geweigerd.
-        assert_eq!(fs.write_file("/sys", b"gehackt"), Err(FsError::PermissionDenied));
+        // Writing, removing, renaming → all refused.
+        assert_eq!(fs.write_file("/sys", b"hacked"), Err(FsError::PermissionDenied));
         assert_eq!(fs.remove_file("/sys"), Err(FsError::PermissionDenied));
-        assert_eq!(fs.rename("/sys", "/elders"), Err(FsError::PermissionDenied));
-        // Lezen werkt nog steeds, inhoud ongewijzigd.
+        assert_eq!(fs.rename("/sys", "/elsewhere"), Err(FsError::PermissionDenied));
+        // Reading still works, content unchanged.
         assert_eq!(fs.read_file("/sys").unwrap(), b"kernel-config");
-        // Vlag wissen → weer wijzigbaar (de L2-cap-check zit in de kernel-laag).
+        // Clear the flag → modifiable again (the L2 cap check lives in the kernel layer).
         fs.set_flags("/sys", 0).unwrap();
-        fs.write_file("/sys", b"nu-wel").unwrap();
-        assert_eq!(fs.read_file("/sys").unwrap(), b"nu-wel");
+        fs.write_file("/sys", b"now-allowed").unwrap();
+        assert_eq!(fs.read_file("/sys").unwrap(), b"now-allowed");
     }
 
     #[test]
     fn l1_append_only_alleen_uitbreiden() {
         let mut dev = dev(256);
         let mut fs = EuroFs::format(&mut dev, [41; 16], 1).unwrap();
-        fs.write_file("/audit.log", b"regel1\n").unwrap();
+        fs.write_file("/audit.log", b"line1\n").unwrap();
         fs.set_flags("/audit.log", FLAG_APPEND_ONLY).unwrap();
-        // Uitbreiden (zelfde prefix + langer) → OK.
-        fs.write_file("/audit.log", b"regel1\nregel2\n").unwrap();
-        assert_eq!(fs.read_file("/audit.log").unwrap(), b"regel1\nregel2\n");
-        // Inkorten of een andere prefix → geweigerd (tamper-evident).
-        assert_eq!(fs.write_file("/audit.log", b"regel1\n"), Err(FsError::PermissionDenied));
-        assert_eq!(fs.write_file("/audit.log", b"VERVALST\n..........."), Err(FsError::PermissionDenied));
-        // Verwijderen → geweigerd.
+        // Extending (same prefix + longer) → OK.
+        fs.write_file("/audit.log", b"line1\nline2\n").unwrap();
+        assert_eq!(fs.read_file("/audit.log").unwrap(), b"line1\nline2\n");
+        // Shortening or a different prefix → refused (tamper-evident).
+        assert_eq!(fs.write_file("/audit.log", b"line1\n"), Err(FsError::PermissionDenied));
+        assert_eq!(fs.write_file("/audit.log", b"FORGED\n..........."), Err(FsError::PermissionDenied));
+        // Removing → refused.
         assert_eq!(fs.remove_file("/audit.log"), Err(FsError::PermissionDenied));
     }
 
@@ -1467,7 +1467,7 @@ mod tests {
             });
             fs.set_flags("/boot/kernel", FLAG_IMMUTABLE).unwrap();
         }
-        // Na remount is de vlag persistent → schrijven blijft geweigerd.
+        // After remount the flag is persistent → writing remains refused.
         let mut fs = EuroFs::mount(&mut dev, 2).unwrap();
         assert_eq!(fs.get_flags("/boot/kernel").unwrap(), FLAG_IMMUTABLE);
         assert_eq!(fs.write_file("/boot/kernel", b"x"), Err(FsError::PermissionDenied));
@@ -1477,35 +1477,35 @@ mod tests {
     fn snap_create_modify_rollback() {
         let mut dev = dev(512);
         let mut fs = EuroFs::format(&mut dev, [50; 16], 1).unwrap();
-        fs.write_file("/data", b"originele-inhoud").unwrap();
-        let snap = fs.snapshot_create("voor-wijziging", crate::fs::SNAP_READONLY).unwrap();
-        // Wijzig ná de snapshot.
-        fs.write_file("/data", b"gewijzigd").unwrap();
-        fs.write_file("/nieuw", b"toegevoegd").unwrap();
-        assert_eq!(fs.read_file("/data").unwrap(), b"gewijzigd");
+        fs.write_file("/data", b"original-content").unwrap();
+        let snap = fs.snapshot_create("before-change", crate::fs::SNAP_READONLY).unwrap();
+        // Change after the snapshot.
+        fs.write_file("/data", b"changed").unwrap();
+        fs.write_file("/nieuw", b"added").unwrap();
+        assert_eq!(fs.read_file("/data").unwrap(), b"changed");
         assert!(fs.exists("/nieuw"));
-        // Rollback → terug naar de bevroren toestand.
+        // Rollback → back to the frozen state.
         fs.snapshot_rollback(snap).unwrap();
-        assert_eq!(fs.read_file("/data").unwrap(), b"originele-inhoud");
-        assert!(!fs.exists("/nieuw")); // het na-snapshot-bestand is verdwenen
+        assert_eq!(fs.read_file("/data").unwrap(), b"original-content");
+        assert!(!fs.exists("/nieuw")); // the post-snapshot file is gone
     }
 
     #[test]
     fn snap_pint_grote_bestand_blokken() {
-        // De échte test: na een snapshot moeten de (extent-)blokken van de bevroren
-        // grote-bestand-versie GEPIND blijven, óók als er daarna veel wordt geschreven.
+        // The real test: after a snapshot the (extent) blocks of the frozen
+        // large-file version must stay PINNED, even when a lot is written afterwards.
         let mut dev = dev(1024);
         let mut fs = EuroFs::format(&mut dev, [53; 16], 1).unwrap();
-        let big_a = alloc::vec![0xAAu8; 40000]; // > INLINE_CAP → echte data-extents
+        let big_a = alloc::vec![0xAAu8; 40000]; // > INLINE_CAP → real data extents
         fs.write_file("/big", &big_a).unwrap();
         let snap = fs.snapshot_create("big-v1", 0).unwrap();
-        // Overschrijf + veel extra allocaties: zonder pinning zouden de oude blokken
-        // hergebruikt en de snapshot-data overschreven worden.
+        // Overwrite + many extra allocations: without pinning the old blocks would be
+        // reused and the snapshot data overwritten.
         fs.write_file("/big", &alloc::vec![0xBBu8; 40000]).unwrap();
         for i in 0..8 {
             fs.write_file(&alloc::format!("/f{i}"), &alloc::vec![0xCCu8; 9000]).unwrap();
         }
-        // Rollback → de oude grote data moet BYTE-voor-BYTE intact zijn.
+        // Rollback → the old large data must be BYTE-for-BYTE intact.
         fs.snapshot_rollback(snap).unwrap();
         assert_eq!(fs.read_file("/big").unwrap(), big_a);
     }
@@ -1518,9 +1518,9 @@ mod tests {
             let mut fs = EuroFs::format(&mut dev, [51; 16], 1).unwrap();
             fs.write_file("/x", b"snap-state").unwrap();
             snap = fs.snapshot_create("s1", 0).unwrap();
-            fs.write_file("/x", b"na-snap").unwrap();
+            fs.write_file("/x", b"after-snap").unwrap();
         }
-        // Na remount is de snapshot-tabel persistent.
+        // After remount the snapshot table is persistent.
         let mut fs = EuroFs::mount(&mut dev, 2).unwrap();
         assert_eq!(fs.snapshot_list().len(), 1);
         fs.snapshot_rollback(snap).unwrap();
@@ -1532,17 +1532,17 @@ mod tests {
         let mut dev = dev(512);
         let mut fs = EuroFs::format(&mut dev, [52; 16], 1).unwrap();
         fs.write_file("/a", b"1").unwrap();
-        let s1 = fs.snapshot_create("eerste", 0).unwrap();
+        let s1 = fs.snapshot_create("first", 0).unwrap();
         fs.write_file("/a", b"2").unwrap();
-        let s2 = fs.snapshot_create("tweede", 0).unwrap();
+        let s2 = fs.snapshot_create("second", 0).unwrap();
         assert_eq!(fs.snapshot_list().len(), 2);
         let free_before = fs.space_info().1;
         fs.snapshot_delete(s1).unwrap();
         assert_eq!(fs.snapshot_list().len(), 1);
         assert_eq!(fs.snapshot_delete(s1), Err(FsError::NotFound));
-        // GC gaf ruimte vrij (of hield ze gelijk), nooit minder.
+        // GC freed space (or kept it equal), never less.
         assert!(fs.space_info().1 >= free_before);
-        // s2 blijft bruikbaar voor rollback.
+        // s2 stays usable for rollback.
         fs.write_file("/a", b"3").unwrap();
         fs.snapshot_rollback(s2).unwrap();
         assert_eq!(fs.read_file("/a").unwrap(), b"2");
@@ -1553,11 +1553,11 @@ mod tests {
         let mut dev = dev(256);
         let mut fs = EuroFs::format(&mut dev, [33; 16], 1).unwrap();
         fs.create_dir("/d").unwrap();
-        fs.write_file("/d/f", b"in-map").unwrap();
+        fs.write_file("/d/f", b"in-dir").unwrap();
         fs.create_dir("/dest").unwrap();
         fs.rename("/d", "/dest/d2").unwrap();
         assert!(!fs.exists("/d"));
-        assert_eq!(fs.read_file("/dest/d2/f").unwrap(), b"in-map");
+        assert_eq!(fs.read_file("/dest/d2/f").unwrap(), b"in-dir");
         assert_eq!(fs.metadata("/dest/d2").unwrap().kind, EntryKind::Directory);
     }
 
@@ -1567,9 +1567,9 @@ mod tests {
         let mut fs = EuroFs::format(&mut dev, [34; 16], 1).unwrap();
         fs.create_dir("/a").unwrap();
         fs.create_dir("/b").unwrap();
-        assert_eq!(fs.rename("/a", "/b"), Err(FsError::AlreadyExists)); // map → map
-        assert_eq!(fs.rename("/a", "/a/sub"), Err(FsError::InvalidPath)); // lus
-        assert_eq!(fs.rename("/weg", "/x"), Err(FsError::NotFound)); // bron weg
+        assert_eq!(fs.rename("/a", "/b"), Err(FsError::AlreadyExists)); // dir → dir
+        assert_eq!(fs.rename("/a", "/a/sub"), Err(FsError::InvalidPath)); // loop
+        assert_eq!(fs.rename("/weg", "/x"), Err(FsError::NotFound)); // source gone
     }
 
     #[test]
@@ -1595,7 +1595,7 @@ mod tests {
         }
         let fs = EuroFs::mount(&mut dev, 0).unwrap();
         assert_eq!(fs.metadata("/keep").unwrap().mtime, 7777);
-        // list_dir levert óók mtime/mode per entry.
+        // list_dir ALSO yields mtime/mode per entry.
         let e = &fs.list_dir("/").unwrap()[0];
         assert_eq!(e.name, "keep");
         assert_eq!(e.mtime, 7777);
@@ -1618,12 +1618,12 @@ mod tests {
         let mut fs = EuroFs::format(&mut dev, [41; 16], 1).unwrap();
         fs.create_dir("/d").unwrap();
         fs.write_file("/d/f", b"x").unwrap();
-        assert_eq!(fs.remove_dir("/d"), Err(FsError::NotEmpty)); // niet leeg
+        assert_eq!(fs.remove_dir("/d"), Err(FsError::NotEmpty)); // not empty
         fs.write_file("/file", b"y").unwrap();
-        assert_eq!(fs.remove_dir("/file"), Err(FsError::NotADirectory)); // bestand
-        assert_eq!(fs.remove_dir("/weg"), Err(FsError::NotFound)); // bestaat niet
+        assert_eq!(fs.remove_dir("/file"), Err(FsError::NotADirectory)); // file
+        assert_eq!(fs.remove_dir("/weg"), Err(FsError::NotFound)); // does not exist
         assert_eq!(fs.remove_dir("/"), Err(FsError::InvalidPath)); // root
-        // Leeggemaakt → wel verwijderbaar.
+        // Emptied → now removable.
         fs.remove_file("/d/f").unwrap();
         fs.remove_dir("/d").unwrap();
         assert!(!fs.exists("/d"));

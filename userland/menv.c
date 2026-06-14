@@ -1,6 +1,6 @@
-/* EuroOS — musl-programma dat de OMGEVINGSVARIABELEN leest die de kernel via
- * envp op de SysV-stack doorgeeft. Bewijst dat het systeemmilieu werkt:
- * getenv() en de environ-tabel zijn beschikbaar zoals in elk POSIX-systeem. */
+/* EuroOS — musl program that reads the ENVIRONMENT VARIABLES the kernel passes
+ * via envp on the SysV stack. Proves that the system environment works:
+ * getenv() and the environ table are available as in any POSIX system. */
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -11,12 +11,12 @@ int main(void) {
     const char *keys[] = {"EUROOS_VERSION", "LANG", "TERM", "USER", "SHELL"};
     for (int i = 0; i < 5; i++) {
         const char *v = getenv(keys[i]);
-        printf("  %-15s = %s\n", keys[i], v ? v : "(niet gezet)");
+        printf("  %-15s = %s\n", keys[i], v ? v : "(not set)");
     }
     int n = 0;
     for (char **e = environ; *e; e++) {
         n++;
     }
-    printf("  (%d variabelen in environ)\n", n);
+    printf("  (%d variables in environ)\n", n);
     return 0;
 }

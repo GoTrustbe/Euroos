@@ -56,7 +56,7 @@ pub struct EthernetHeader {
 impl EthernetHeader {
     pub const LEN: usize = 14;
 
-    /// Parse de header; geeft (header, payload) terug.
+    /// Parse the header; returns (header, payload).
     pub fn parse(buf: &[u8]) -> NetResult<(Self, &[u8])> {
         if buf.len() < Self::LEN {
             return Err(NetError::TooShort);

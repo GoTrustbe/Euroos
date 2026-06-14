@@ -1,7 +1,7 @@
-/* EuroOS — een ACHTERGROND-DAEMON: een ring-3 programma dat PREEMPTIEF
- * gescheduled draait (niet synchroon) en periodiek een hartslag schrijft via een
- * syscall. Bewijst dat een geladen programma als echte, onderbreekbare taak
- * naast de desktop en andere taken draait. Eindigt nooit. */
+/* EuroOS — a BACKGROUND DAEMON: a ring-3 program that runs PREEMPTIVELY
+ * scheduled (not synchronously) and periodically writes a heartbeat via a
+ * syscall. Proves that a loaded program runs as a real, interruptible task
+ * alongside the desktop and other tasks. Never terminates. */
 
 static long sys(long n, long a1, long a2, long a3) {
     long r;
@@ -26,11 +26,11 @@ __attribute__((section(".text.start"))) void _start(void) {
     unsigned long n = 0;
     char b[24];
     for (;;) {
-        put("EuroMonitor hartslag #");
+        put("EuroMonitor heartbeat #");
         put(utoa(n, b + 23));
-        put(": kernel + scheduler draaien\n");
+        put(": kernel + scheduler running\n");
         n++;
-        /* Vertraging zodat de hartslag ~1x per kwantum verschijnt (niet floodt). */
+        /* Delay so the heartbeat appears ~1x per quantum (does not flood). */
         for (volatile long i = 0; i < 4000000; i++) {
         }
     }

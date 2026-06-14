@@ -1,12 +1,12 @@
-//! In-memory ramdisk (EuroFS Fase 1).
+//! In-memory ramdisk (EuroFS Phase 1).
 //!
-//! Bootstrap-filesysteem dat de kernel gebruikt vóór het echte on-disk EuroFS
-//! klaar is: kernelmodules, init en config. Geen persistentie. Bewust simpel
-//! en correct — geen performance-trucs. Wordt later vervangen door EuroFS.
+//! Bootstrap filesystem that the kernel uses before the real on-disk EuroFS
+//! is ready: kernel modules, init and config. No persistence. Deliberately
+//! simple and correct — no performance tricks. Replaced later by EuroFS.
 //!
-//! Implementatiekeuze: `BTreeMap<volledig_pad, Node>`. We gebruiken `BTreeMap`
-//! en NIET `HashMap`: `HashMap` is niet beschikbaar in `no_std` + `alloc` (het
-//! vereist een RNG voor DoS-bescherming).
+//! Implementation choice: `BTreeMap<full_path, Node>`. We use `BTreeMap`
+//! and NOT `HashMap`: `HashMap` is not available in `no_std` + `alloc` (it
+//! requires an RNG for DoS protection).
 
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
@@ -18,13 +18,13 @@ use crate::path::{filename, join, normalize, parent};
 #[derive(Clone)]
 enum Node {
     File(Vec<u8>),
-    /// Set van kindnamen (de inhoud zelf staat onder het volledige pad).
+    /// Set of child names (the content itself lives under the full path).
     Directory(BTreeMap<String, ()>),
 }
 
 pub struct RamDisk {
     nodes: BTreeMap<String, Node>,
-    /// 0 = onbegrensd.
+    /// 0 = unbounded.
     max_size: u64,
     used_size: u64,
 }
@@ -40,7 +40,7 @@ impl RamDisk {
         }
     }
 
-    /// Vul met initiële bestanden; maakt parent-directories automatisch aan.
+    /// Fill with initial files; creates parent directories automatically.
     pub fn populate(&mut self, files: &[(&str, &[u8])]) {
         for (path, data) in files {
             let norm = normalize(path);
@@ -86,7 +86,7 @@ impl FileSystem for RamDisk {
             return Err(FsError::InvalidPath);
         }
 
-        // Ruimtecontrole (delta t.o.v. bestaande inhoud).
+        // Space check (delta relative to existing content).
         if self.max_size > 0 {
             let old = match self.nodes.get(&norm) {
                 Some(Node::File(d)) => d.len() as u64,
@@ -168,7 +168,7 @@ impl FileSystem for RamDisk {
                         kind,
                         size,
                         mode: if kind == EntryKind::Directory { 0o755 } else { 0o644 },
-                        mtime: 0, // RAM-FS is vluchtig; geen wijzigingstijd
+                        mtime: 0, // RAM-FS is volatile; no modification time
                     });
                 }
                 Ok(entries)
@@ -194,7 +194,7 @@ impl FileSystem for RamDisk {
             kind,
             size,
             mode: if kind == EntryKind::Directory { 0o755 } else { 0o644 },
-            mtime: 0, // RAM-FS is vluchtig; geen wijzigingstijd
+            mtime: 0, // RAM-FS is volatile; no modification time
         })
     }
 
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn schrijf_en_lees() {
         let mut fs = fresh();
-        // write_file maakt GEEN parents aan (zoals POSIX open): /etc moet bestaan.
+        // write_file does NOT create parents (like POSIX open): /etc must exist.
         fs.create_dir("/etc").unwrap();
         fs.write_file("/etc/hostname", b"eurokernel\n").unwrap();
         assert_eq!(fs.read_file("/etc/hostname").unwrap(), b"eurokernel\n");
@@ -260,7 +260,7 @@ mod tests {
         let (_, free_after_4) = fs.space_info();
         fs.write_file("/f", b"a").unwrap();
         let (_, free_after_1) = fs.space_info();
-        assert!(free_after_1 > free_after_4, "kleiner bestand = meer vrij");
+        assert!(free_after_1 > free_after_4, "smaller file = more free");
         assert_eq!(fs.read_file("/f").unwrap(), b"a");
     }
 
@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(fs.read_file("/bestaat-niet"), Err(FsError::NotFound));
         assert_eq!(fs.write_file("/", b"x"), Err(FsError::InvalidPath));
         fs.write_file("/file", b"x").unwrap();
-        // Een bestand is geen directory:
+        // A file is not a directory:
         assert_eq!(fs.write_file("/file/sub", b"y"), Err(FsError::NotADirectory));
         assert_eq!(fs.create_dir("/file"), Err(FsError::AlreadyExists));
     }

@@ -1,4 +1,4 @@
-//! Gebruikers- en groepsmodel + de in-geheugen stores (`users.db` / `groups.db`).
+//! User and group model + the in-memory stores (`users.db` / `groups.db`).
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -9,13 +9,13 @@ use crate::{
     CAP_VAULT, GROUP_AGENT, GROUP_AUDIT, GROUP_NET, GROUP_USERS, GROUP_VAULT, GROUP_WHEEL,
 };
 
-/// De levensstaat van een account.
+/// The lifecycle state of an account.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UserState {
     Active,
     Locked { reason: LockReason, locked_at: Timestamp, locked_by: UserId },
     Expired { expired_at: Timestamp },
-    /// Verwijderde records worden NOOIT gewist — audit-vereiste (soft delete).
+    /// Deleted records are NEVER erased — audit requirement (soft delete).
     Deleted { deleted_at: Timestamp, deleted_by: UserId },
 }
 
@@ -38,7 +38,7 @@ impl LockReason {
     }
 }
 
-/// Een EuroOS-gebruiker (record in `users.db`).
+/// A EuroOS user (record in `users.db`).
 #[derive(Clone, Debug)]
 pub struct User {
     pub uid: UserId,
@@ -54,7 +54,7 @@ pub struct User {
     pub created_by: UserId,
     pub password: PasswordRecord,
     pub tpm_enrolled: bool,
-    /// Aantal opeenvolgende mislukte aanmeldingen (gereset bij succes).
+    /// Number of consecutive failed logins (reset on success).
     pub failed_logins: u32,
 }
 
@@ -64,7 +64,7 @@ impl User {
     }
 }
 
-/// Een groep (record in `groups.db`).
+/// A group (record in `groups.db`).
 #[derive(Clone, Debug)]
 pub struct Group {
     pub gid: GroupId,
@@ -73,11 +73,11 @@ pub struct Group {
     pub caps: Caps,
     pub created_at: Timestamp,
     pub created_by: UserId,
-    /// Ingebouwde groepen kunnen niet verwijderd worden.
+    /// Built-in groups cannot be deleted.
     pub builtin: bool,
 }
 
-/// De groepsopslag.
+/// The group store.
 #[derive(Clone, Debug, Default)]
 pub struct GroupDb {
     groups: Vec<Group>,
@@ -88,7 +88,7 @@ impl GroupDb {
         GroupDb { groups: Vec::new() }
     }
 
-    /// Maak de groepsopslag met de ingebouwde groepen (systeem-init).
+    /// Create the group store with the built-in groups (system init).
     pub fn with_builtins() -> Self {
         let t = Timestamp(0);
         let mk = |gid: GroupId, name: &str, caps: Caps| Group {
@@ -132,7 +132,7 @@ impl GroupDb {
         &self.groups
     }
 
-    /// Voeg een groep toe; faalt als de naam/gid al bestaat.
+    /// Add a group; fails if the name/gid already exists.
     pub fn add(&mut self, group: Group) -> Result<(), UserError> {
         if self.groups.iter().any(|g| g.name == group.name) {
             return Err(UserError::AlreadyExists(group.name.clone()));
@@ -144,14 +144,14 @@ impl GroupDb {
         Ok(())
     }
 
-    /// Volgende vrije gid boven 100 (voor nieuwe, niet-ingebouwde groepen).
+    /// Next free gid above 100 (for new, non-built-in groups).
     pub fn next_gid(&self) -> GroupId {
         let max = self.groups.iter().map(|g| g.gid.0).filter(|&g| g >= 1000).max().unwrap_or(999);
         GroupId(max + 1)
     }
 }
 
-/// Foutcategorieën bij gebruikersbeheer.
+/// Error categories for user management.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UserError {
     AlreadyExists(String),
@@ -161,7 +161,7 @@ pub enum UserError {
     InvalidGroup(String),
 }
 
-/// De gebruikersopslag.
+/// The user store.
 #[derive(Clone, Debug, Default)]
 pub struct UserDb {
     users: Vec<User>,
@@ -196,7 +196,7 @@ impl UserDb {
         &self.users
     }
 
-    /// Volgende vrije uid. Systeem-accounts vanaf 100, gewone gebruikers vanaf 1000.
+    /// Next free uid. System accounts from 100, regular users from 1000.
     pub fn next_uid(&self, is_system: bool) -> UserId {
         let (floor, ceil) = if is_system {
             (UserId::FIRST_SYSTEM, UserId::FIRST_REGULAR - 1)
@@ -212,7 +212,7 @@ impl UserDb {
         UserId(max.map(|m| m + 1).unwrap_or(floor))
     }
 
-    /// Voeg een gebruiker toe (faalt als de naam al bestaat).
+    /// Add a user (fails if the name already exists).
     pub fn insert(&mut self, user: User) -> Result<(), UserError> {
         if self.exists(&user.username) {
             return Err(UserError::AlreadyExists(user.username.clone()));
@@ -255,7 +255,7 @@ impl UserDb {
         }
     }
 
-    /// Soft delete: het record blijft (audit), maar de staat wordt `Deleted`.
+    /// Soft delete: the record remains (audit), but the state becomes `Deleted`.
     pub fn soft_delete(&mut self, uid: UserId, by: UserId, now: Timestamp) -> Result<(), UserError> {
         let u = self.get_mut(uid).ok_or(UserError::NotFound(alloc::format!("uid {}", uid.0)))?;
         u.state = UserState::Deleted { deleted_at: now, deleted_by: by };
@@ -263,8 +263,8 @@ impl UserDb {
     }
 }
 
-/// De effectieve capabilityset van een gebruiker = eigen caps ∪ groep-caps, daarna
-/// begrensd door het EuroPol-masker (beleid kan alleen wegnemen, nooit toevoegen).
+/// A user's effective capability set = own caps ∪ group caps, then
+/// bounded by the EuroPol mask (policy can only remove, never add).
 pub fn effective_caps(user: &User, db: &GroupDb, europol_allowed: Caps) -> Caps {
     let mut caps = user.caps;
     if let Some(g) = db.get(user.primary_gid) {
@@ -309,12 +309,12 @@ mod tests {
         // alice: primary=users, supplementary=net, own caps = CAP_FILE.
         let alice = mk_user(1000, "alice", GROUP_USERS, &[GROUP_NET], CAP_FILE);
         let caps = effective_caps(&alice, &gdb, ALLOW_ALL);
-        // users → LOGIN|FILE|DISPLAY ; net → LOGIN|NET ; eigen → FILE.
+        // users → LOGIN|FILE|DISPLAY ; net → LOGIN|NET ; own → FILE.
         assert_eq!(caps & CAP_LOGIN, CAP_LOGIN);
         assert_eq!(caps & CAP_NET, CAP_NET);
         assert_eq!(caps & CAP_DISPLAY, CAP_DISPLAY);
         assert_eq!(caps & CAP_FILE, CAP_FILE);
-        // Geen user-admin: alice zit niet in wheel.
+        // No user-admin: alice is not in wheel.
         assert_eq!(caps & CAP_USER_ADMIN, 0);
     }
 
@@ -324,10 +324,10 @@ mod tests {
         let root = mk_user(0, "root", GROUP_WHEEL, &[], 0);
         let full = effective_caps(&root, &gdb, ALLOW_ALL);
         assert_eq!(full & CAP_USER_ADMIN, CAP_USER_ADMIN);
-        // EuroPol weigert CAP_NET aan iedereen → ook wheel verliest het.
+        // EuroPol denies CAP_NET to everyone → even wheel loses it.
         let denied = effective_caps(&root, &gdb, ALLOW_ALL & !CAP_NET);
         assert_eq!(denied & CAP_NET, 0);
-        // Maar de rest blijft.
+        // But the rest remains.
         assert_eq!(denied & CAP_USER_ADMIN, CAP_USER_ADMIN);
     }
 
@@ -355,7 +355,7 @@ mod tests {
         let mut db = UserDb::new();
         db.insert(mk_user(1000, "alice", GROUP_USERS, &[], 0)).unwrap();
         db.soft_delete(UserId(1000), UserId::ROOT, Timestamp(5)).unwrap();
-        // Het record bestaat nog (audit), maar is gemarkeerd als verwijderd.
+        // The record still exists (audit), but is marked as deleted.
         let u = db.get(UserId(1000)).unwrap();
         assert!(matches!(u.state, UserState::Deleted { .. }));
     }

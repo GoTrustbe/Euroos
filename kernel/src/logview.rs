@@ -1,7 +1,7 @@
-//! **EuroLog** (Sprint 4) — een live weergave van het soevereine audit-logboek.
-//! Toont de ECHTE, hash-geketende beveiligingsgebeurtenissen (login, cap-poorten,
-//! immutability, agent-tool-calls, …) die de kernel tijdens deze sessie vastlegde.
-//! Geen mock — `audit::recent()` leest de werkelijke gebeurtenissen.
+//! **EuroLog** (Sprint 4) — a live view of the sovereign audit log.
+//! Shows the REAL, hash-chained security events (login, cap gates,
+//! immutability, agent tool calls, …) that the kernel recorded during this session.
+//! No mock — `audit::recent()` reads the actual events.
 
 use crate::graphics::{Color, FrameBuffer};
 use crate::text;
@@ -20,12 +20,12 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
 
     fb.fill_rect(bx, by, bw, bh, Color::rgb(0xFA, 0xFB, 0xFD));
     let total = crate::audit::count();
-    text::draw_px(fb, bx + 18, by + 16, "EuroLog — audit-logboek (hash-keten)", ink, 19.0);
+    text::draw_px(fb, bx + 18, by + 16, "EuroLog — audit log (hash chain)", ink, 19.0);
     text::draw_px(
         fb,
         bx + 18,
         by + 44,
-        &alloc::format!("{total} gebeurtenis(sen) deze sessie · onveranderbaar geketend", ),
+        &alloc::format!("{total} event(s) this session · immutably chained", ),
         dim,
         13.5,
     );
@@ -40,6 +40,6 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         ty += LINE_H;
     }
     if events.is_empty() {
-        text::draw_px(fb, bx + 26, ty, "(nog geen gebeurtenissen)", dim, 13.5);
+        text::draw_px(fb, bx + 26, ty, "(no events yet)", dim, 13.5);
     }
 }

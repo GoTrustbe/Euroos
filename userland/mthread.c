@@ -1,12 +1,12 @@
-/* EuroOS — bewijs van THREADS (kernel `clone`, CLONE_VM). De hoofd-thread maakt
- * met een rauwe clone()-syscall een tweede thread die DEZELFDE adresruimte deelt
- * (een gedeelde teller `shared`), maar een eigen stack heeft. De thread hoogt de
- * gedeelde teller op; de hoofd-thread leest hem daarna uit.
+/* EuroOS — proof of THREADS (kernel `clone`, CLONE_VM). The main thread creates
+ * with a raw clone() syscall a second thread that shares the SAME address space
+ * (a shared counter `shared`), but has its own stack. The thread increments the
+ * shared counter; the main thread then reads it out.
  *
- * Het child-pad staat VOLLEDIG in rip-relatieve asm: de child hervat met
- * gewiste registers en een eigen stack, dus geen functie-call (PLT), geen
- * rbp-frame en geen register-pointers — alleen rip-relatieve toegang tot de
- * gedeelde globals. Zo is het volledig positie- en register-onafhankelijk. */
+ * The child path lives ENTIRELY in rip-relative asm: the child resumes with
+ * cleared registers and its own stack, so no function call (PLT), no
+ * rbp frame and no register pointers — only rip-relative access to the
+ * shared globals. This makes it fully position- and register-independent. */
 #include <unistd.h>
 #include <stdlib.h>
 
@@ -16,7 +16,7 @@
 #define CLONE_SIGHAND 0x00000800
 #define CLONE_THREAD  0x00010000
 
-volatile long shared = 0; /* GEDEELD tussen de threads (zelfde adresruimte) */
+volatile long shared = 0; /* SHARED between the threads (same address space) */
 volatile int done = 0;
 
 static int slen(const char *s) { int n = 0; while (s[n]) n++; return n; }
@@ -30,26 +30,26 @@ static int utoa(unsigned long v, char *b) {
 }
 
 int main(void) {
-    emit("mthread: hoofd-thread start een 2e thread (clone, CLONE_VM)...\n");
+    emit("mthread: main thread starts a 2nd thread (clone, CLONE_VM)...\n");
     long sz = 32768;
     char *stack = malloc(sz);
-    char *child_sp = stack + sz; /* 16-uitgelijnd; stack groeit omlaag */
+    char *child_sp = stack + sz; /* 16-aligned; stack grows downward */
     long flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
 
     long ret;
-    /* clone(); in de child (rax==0) verhogen we `shared` 500000x, zetten `done`,
-     * en beëindigen de thread — alles rip-relatief, geen call/PLT/rbp. */
+    /* clone(); in the child (rax==0) we increment `shared` 500000x, set `done`,
+     * and terminate the thread — all rip-relative, no call/PLT/rbp. */
     asm volatile(
         "syscall\n\t"
         "test %%rax, %%rax\n\t"
-        "jnz 2f\n\t"                 /* ouder: sla het child-pad over */
+        "jnz 2f\n\t"                 /* parent: skip the child path */
         "mov $500000, %%rcx\n\t"
         "1:\n\t"
-        "incq shared(%%rip)\n\t"     /* gedeelde teller ophogen */
+        "incq shared(%%rip)\n\t"     /* increment shared counter */
         "dec %%rcx\n\t"
         "jnz 1b\n\t"
-        "movl $1, done(%%rip)\n\t"   /* klaar-signaal voor de hoofd-thread */
-        "3:\n\t"                      /* thread beëindigen (exit-lus tot de scheduler wegschakelt) */
+        "movl $1, done(%%rip)\n\t"   /* done signal for the main thread */
+        "3:\n\t"                      /* terminate thread (exit loop until the scheduler switches away) */
         "mov $60, %%rax\n\t"
         "xor %%edi, %%edi\n\t"
         "syscall\n\t"
@@ -59,14 +59,14 @@ int main(void) {
         : "a"(56), "D"(flags), "S"(child_sp), "d"(0)
         : "rcx", "r11", "memory", "cc");
 
-    /* hoofd-thread: wacht tot de 2e thread klaar is, lees de gedeelde teller */
+    /* main thread: wait until the 2nd thread is done, read the shared counter */
     while (!done) {
         for (volatile int i = 0; i < 2000; i++) {
         }
     }
     char msg[80];
     int o = 0;
-    const char *m = "mthread: gedeelde teller (door de 2e thread): ";
+    const char *m = "mthread: shared counter (by the 2nd thread): ";
     while (*m) msg[o++] = *m++;
     o += utoa((unsigned long)shared, msg + o);
     msg[o++] = '\n';

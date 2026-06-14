@@ -1,18 +1,19 @@
-//! HPET — High Precision Event Timer (Sprint S8 / Missing §16.2). Een nauwkeurige,
-//! vrij-lopende teller (typisch 100 MHz) als HAL-tijdbron náást de RTC (wandklok)
-//! en de APIC-timer (scheduling). Bruikbaar voor hoge-resolutie-metingen — o.a. de
-//! SPERF-profilering (boot-fase- en frame-timing) en precieze delays.
+//! HPET — High Precision Event Timer (Sprint S8 / Missing §16.2). An accurate,
+//! free-running counter (typically 100 MHz) as a HAL time source alongside the RTC
+//! (wall clock) and the APIC timer (scheduling). Usable for high-resolution
+//! measurements — among others the SPERF profiling (boot-phase and frame timing) and
+//! precise delays.
 //!
-//! MMIO-registers op de standaard-base 0xFED0_0000 (identity-mapped supervisor):
-//!   0x00 CAP        — bits[63:32] = klokperiode in femtoseconden/tick
-//!   0x10 GEN_CONFIG — bit0 = ENABLE_CNF (hoofdteller aan)
-//!   0xF0 MAIN_CNT   — 64-bit vrij-lopende teller
+//! MMIO registers at the standard base 0xFED0_0000 (identity-mapped supervisor):
+//!   0x00 CAP        — bits[63:32] = clock period in femtoseconds/tick
+//!   0x10 GEN_CONFIG — bit0 = ENABLE_CNF (main counter on)
+//!   0xF0 MAIN_CNT   — 64-bit free-running counter
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const HPET_BASE: u64 = 0xFED0_0000;
 
-static PERIOD_FS: AtomicU64 = AtomicU64::new(0); // femtoseconden per tick
+static PERIOD_FS: AtomicU64 = AtomicU64::new(0); // femtoseconds per tick
 static PRESENT: AtomicBool = AtomicBool::new(false);
 
 #[inline]
@@ -20,16 +21,16 @@ fn reg(off: u64) -> *mut u64 {
     (HPET_BASE + off) as *mut u64
 }
 
-/// Detecteer + activeer de HPET. Geeft true als er een geldige HPET aanwezig is.
+/// Detect + activate the HPET. Returns true if a valid HPET is present.
 pub fn init() -> bool {
     let cap = unsafe { reg(0x00).read_volatile() };
     let period_fs = (cap >> 32) & 0xFFFF_FFFF;
-    // Geldige HPET-periode: 1 fs .. 100 ns (100_000_000 fs). Anders geen/kapotte HPET.
+    // Valid HPET period: 1 fs .. 100 ns (100_000_000 fs). Otherwise no/broken HPET.
     if period_fs == 0 || period_fs > 100_000_000 {
         return false;
     }
     unsafe {
-        // Hoofdteller inschakelen (ENABLE_CNF).
+        // Enable the main counter (ENABLE_CNF).
         let cfg = reg(0x10);
         cfg.write_volatile(cfg.read_volatile() | 1);
     }
@@ -42,7 +43,7 @@ pub fn present() -> bool {
     PRESENT.load(Ordering::Relaxed)
 }
 
-/// Ruwe hoofdteller (HPET-ticks sinds inschakeling).
+/// Raw main counter (HPET ticks since being enabled).
 pub fn counter() -> u64 {
     if !present() {
         return 0;
@@ -50,7 +51,7 @@ pub fn counter() -> u64 {
     unsafe { reg(0xF0).read_volatile() }
 }
 
-/// Klokfrequentie in Hz (10^15 fs/s ÷ periode).
+/// Clock frequency in Hz (10^15 fs/s ÷ period).
 pub fn freq_hz() -> u64 {
     let p = PERIOD_FS.load(Ordering::Relaxed);
     if p == 0 {
@@ -60,13 +61,13 @@ pub fn freq_hz() -> u64 {
     }
 }
 
-/// Verstreken nanoseconden sinds inschakeling (ticks × periode_fs ÷ 10^6).
+/// Elapsed nanoseconds since being enabled (ticks × period_fs ÷ 10^6).
 pub fn ns() -> u64 {
     let p = PERIOD_FS.load(Ordering::Relaxed);
     counter().saturating_mul(p) / 1_000_000
 }
 
-/// Verstreken microseconden.
+/// Elapsed microseconds.
 pub fn us() -> u64 {
     ns() / 1_000
 }

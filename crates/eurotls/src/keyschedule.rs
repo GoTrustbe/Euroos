@@ -1,5 +1,5 @@
-//! TLS 1.3 sleutelschema (RFC 8446 §7.1) met SHA-256: HKDF-Extract,
-//! HKDF-Expand-Label, Derive-Secret en de afleiding van de traffic-secrets.
+//! TLS 1.3 key schedule (RFC 8446 §7.1) with SHA-256: HKDF-Extract,
+//! HKDF-Expand-Label, Derive-Secret and the derivation of the traffic secrets.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -8,8 +8,8 @@ use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 
 pub const HASH_LEN: usize = 32; // SHA-256
-pub const KEY_LEN: usize = 32; // ChaCha20 sleutel
-pub const IV_LEN: usize = 12; // AEAD nonce-basis
+pub const KEY_LEN: usize = 32; // ChaCha20 key
+pub const IV_LEN: usize = 12; // AEAD nonce base
 
 /// HKDF-Extract(salt, IKM) -> PRK (32 bytes).
 pub fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; HASH_LEN] {
@@ -19,8 +19,8 @@ pub fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; HASH_LEN] {
     out
 }
 
-/// HKDF-Expand-Label(secret, label, context, length) (RFC 8446 §7.1). De label
-/// krijgt het verplichte "tls13 "-voorvoegsel.
+/// HKDF-Expand-Label(secret, label, context, length) (RFC 8446 §7.1). The label
+/// gets the mandatory "tls13 " prefix.
 pub fn hkdf_expand_label(secret: &[u8], label: &str, context: &[u8], length: usize) -> Vec<u8> {
     // struct HkdfLabel { uint16 length; opaque label<7..255>; opaque context<0..255>; }
     let mut full_label = Vec::with_capacity(6 + label.len());
@@ -34,9 +34,9 @@ pub fn hkdf_expand_label(secret: &[u8], label: &str, context: &[u8], length: usi
     info.push(context.len() as u8);
     info.extend_from_slice(context);
 
-    let hk = Hkdf::<Sha256>::from_prk(secret).expect("prk lengte >= 32");
+    let hk = Hkdf::<Sha256>::from_prk(secret).expect("prk length >= 32");
     let mut out = vec![0u8; length];
-    hk.expand(&info, &mut out).expect("hkdf expand lengte ok");
+    hk.expand(&info, &mut out).expect("hkdf expand length ok");
     out
 }
 
@@ -48,7 +48,7 @@ pub fn derive_secret(secret: &[u8], label: &str, transcript_hash: &[u8]) -> [u8;
     out
 }
 
-/// SHA-256 over een set bytes (de "lege" transcript-hash = SHA-256("")).
+/// SHA-256 over a set of bytes (the "empty" transcript hash = SHA-256("")).
 pub fn sha256(data: &[u8]) -> [u8; HASH_LEN] {
     let mut h = Sha256::new();
     h.update(data);
@@ -58,7 +58,7 @@ pub fn sha256(data: &[u8]) -> [u8; HASH_LEN] {
     out
 }
 
-/// Lopende transcript-hash van handshake-berichten (RFC 8446 §4.4.1).
+/// Running transcript hash of handshake messages (RFC 8446 §4.4.1).
 #[derive(Clone)]
 pub struct Transcript {
     hasher: Sha256,
@@ -68,11 +68,11 @@ impl Transcript {
     pub fn new() -> Self {
         Transcript { hasher: Sha256::new() }
     }
-    /// Voeg een handshake-bericht (incl. 4-byte handshake-header) toe.
+    /// Add a handshake message (incl. 4-byte handshake header).
     pub fn update(&mut self, msg: &[u8]) {
         self.hasher.update(msg);
     }
-    /// Huidige transcript-hash (kloont, finaliseert niet de echte staat).
+    /// Current transcript hash (clones, does not finalize the real state).
     pub fn hash(&self) -> [u8; HASH_LEN] {
         let d = self.hasher.clone().finalize();
         let mut out = [0u8; HASH_LEN];
@@ -87,7 +87,7 @@ impl Default for Transcript {
     }
 }
 
-/// Een (key, iv) paar plus de finished-sleutel, afgeleid uit een traffic-secret.
+/// A (key, iv) pair plus the finished key, derived from a traffic secret.
 pub struct TrafficKeys {
     pub secret: [u8; HASH_LEN],
     pub key: [u8; KEY_LEN],
@@ -110,7 +110,7 @@ impl TrafficKeys {
     }
 }
 
-/// Het volledige sleutelschema, stap voor stap opgebouwd tijdens de handshake.
+/// The full key schedule, built up step by step during the handshake.
 pub struct KeySchedule {
     pub early_secret: [u8; HASH_LEN],
     pub handshake_secret: [u8; HASH_LEN],
@@ -118,15 +118,15 @@ pub struct KeySchedule {
 }
 
 impl KeySchedule {
-    /// Begin: Early Secret = HKDF-Extract(0, 0).
+    /// Start: Early Secret = HKDF-Extract(0, 0).
     pub fn new() -> Self {
         let early_secret = hkdf_extract(&[0u8; HASH_LEN], &[0u8; HASH_LEN]);
         KeySchedule { early_secret, handshake_secret: [0; HASH_LEN], master_secret: [0; HASH_LEN] }
     }
 
-    /// Na de ECDHE: Handshake Secret = HKDF-Extract(Derive-Secret(ES,"derived",""), ECDHE).
-    /// Geeft de (client, server) handshake-traffic-secrets terug, afgeleid over
-    /// de transcript t/m ServerHello.
+    /// After the ECDHE: Handshake Secret = HKDF-Extract(Derive-Secret(ES,"derived",""), ECDHE).
+    /// Returns the (client, server) handshake traffic secrets, derived over
+    /// the transcript up to and including ServerHello.
     pub fn derive_handshake(&mut self, ecdhe: &[u8; 32], th_client_server_hello: &[u8; HASH_LEN]) -> (TrafficKeys, TrafficKeys) {
         let derived = derive_secret(&self.early_secret, "derived", &sha256(b""));
         self.handshake_secret = hkdf_extract(&derived, ecdhe);
@@ -135,8 +135,8 @@ impl KeySchedule {
         (TrafficKeys::derive(cs), TrafficKeys::derive(ss))
     }
 
-    /// Master Secret + de (client, server) application-traffic-secrets, afgeleid
-    /// over de transcript t/m de server-Finished.
+    /// Master Secret + the (client, server) application traffic secrets, derived
+    /// over the transcript up to and including the server Finished.
     pub fn derive_application(&mut self, th_to_server_finished: &[u8; HASH_LEN]) -> (TrafficKeys, TrafficKeys) {
         let derived = derive_secret(&self.handshake_secret, "derived", &sha256(b""));
         self.master_secret = hkdf_extract(&derived, &[0u8; HASH_LEN]);
@@ -172,21 +172,21 @@ mod tests {
 
     #[test]
     fn expand_label_structure() {
-        // HKDF-Expand-Label moet deterministisch en lengte-correct zijn.
+        // HKDF-Expand-Label must be deterministic and length-correct.
         let secret = [0x42u8; 32];
         let out = hkdf_expand_label(&secret, "key", b"", 32);
         assert_eq!(out.len(), 32);
-        // Tweede keer identiek (deterministisch).
+        // Second time identical (deterministic).
         assert_eq!(out, hkdf_expand_label(&secret, "key", b"", 32));
-        // Andere label -> ander resultaat.
+        // Different label -> different result.
         assert_ne!(out, hkdf_expand_label(&secret, "iv", b"", 32));
     }
 
     #[test]
     fn rfc8446_derived_secret_constant() {
-        // Derive-Secret(Early Secret, "derived", "") is een vaste waarde omdat
-        // Early Secret = HKDF-Extract(0,0) constant is. Dit pint het sleutelschema
-        // vast tegen regressies in HKDF-Expand-Label/Derive-Secret.
+        // Derive-Secret(Early Secret, "derived", "") is a fixed value because
+        // Early Secret = HKDF-Extract(0,0) is constant. This pins the key schedule
+        // against regressions in HKDF-Expand-Label/Derive-Secret.
         let ks = KeySchedule::new();
         let derived = derive_secret(&ks.early_secret, "derived", &sha256(b""));
         assert_eq!(

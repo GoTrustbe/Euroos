@@ -1,8 +1,8 @@
-//! eupkg — EuroKernel Package Manager (Track 6, laag 4).
+//! eupkg — EuroKernel Package Manager (Track 6, layer 4).
 //!
-//! Bouwt en verifieert `.eupkg`-packages: een ZIP met MANIFEST.toml, de binary,
-//! een SHA256-hash van de binary in het manifest, en een Ed25519-handtekening
-//! over het manifest. Privacy-by-design: geen telemetrie, reproduceerbaar.
+//! Builds and verifies `.eupkg` packages: a ZIP with MANIFEST.toml, the binary,
+//! a SHA256 hash of the binary in the manifest, and an Ed25519 signature
+//! over the manifest. Privacy-by-design: no telemetry, reproducible.
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -23,24 +23,24 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Genereer een Ed25519 developer-sleutelpaar (key/pub).
+    /// Generate an Ed25519 developer key pair (key/pub).
     Keygen {
         #[arg(default_value = "keys/dev")]
         out: String,
     },
-    /// Bouw een .eupkg uit een directory met MANIFEST.toml + de binary.
+    /// Build a .eupkg from a directory with MANIFEST.toml + the binary.
     Build {
         dir: String,
         #[arg(long, default_value = "keys/dev.key")]
         key: String,
     },
-    /// Verifieer handtekening + binary-hash van een .eupkg.
+    /// Verify signature + binary hash of a .eupkg.
     Verify {
         pkg: String,
         #[arg(long, default_value = "keys/dev.pub")]
         pubkey: String,
     },
-    /// Toon de inhoud/metadata van een .eupkg.
+    /// Show the contents/metadata of a .eupkg.
     Info { pkg: String },
 }
 
@@ -59,7 +59,7 @@ struct Package {
     version: String,
     description: String,
     license: String,
-    binary: String, // pad naar de binary binnen de package (bv. "bin/hello")
+    binary: String, // path to the binary within the package (e.g. "bin/hello")
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -84,7 +84,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("eupkg: fout: {e}");
+        eprintln!("eupkg: error: {e}");
         std::process::exit(1);
     }
 }
@@ -106,9 +106,9 @@ fn keygen(out: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
     fs::write(format!("{out}.key"), sk.to_bytes())?;
     fs::write(format!("{out}.pub"), vk.to_bytes())?;
-    println!("Ed25519 sleutelpaar:");
-    println!("  privé:  {out}.key");
-    println!("  publiek:{out}.pub  ({})", hex::encode(vk.to_bytes()));
+    println!("Ed25519 key pair:");
+    println!("  private: {out}.key");
+    println!("  public:  {out}.pub  ({})", hex::encode(vk.to_bytes()));
     Ok(())
 }
 
@@ -117,19 +117,19 @@ fn build(dir: &str, key: &str) -> Result<(), Box<dyn std::error::Error>> {
     let manifest_path = dir.join("MANIFEST.toml");
     let mut manifest: Manifest = toml::from_str(&fs::read_to_string(&manifest_path)?)?;
 
-    // Binary inlezen + hashen.
+    // Read and hash the binary.
     let bin_path = dir.join(&manifest.package.binary);
     let bin = fs::read(&bin_path)?;
     let hash = sha256_hex(&bin);
     manifest.build.binary_sha256 = hash.clone();
     let manifest_str = toml::to_string_pretty(&manifest)?;
 
-    // Manifest ondertekenen (Ed25519).
-    let sk_bytes: [u8; 32] = fs::read(key)?.as_slice().try_into().map_err(|_| "ongeldige sleutel")?;
+    // Sign the manifest (Ed25519).
+    let sk_bytes: [u8; 32] = fs::read(key)?.as_slice().try_into().map_err(|_| "invalid key")?;
     let sk = SigningKey::from_bytes(&sk_bytes);
     let sig: Signature = sk.sign(manifest_str.as_bytes());
 
-    // .eupkg (ZIP) schrijven.
+    // Write the .eupkg (ZIP).
     let out = format!("{}-{}.eupkg", manifest.package.name, manifest.package.version);
     let mut zip = zip::ZipWriter::new(File::create(&out)?);
     let opt = SimpleFileOptions::default();
@@ -141,11 +141,11 @@ fn build(dir: &str, key: &str) -> Result<(), Box<dyn std::error::Error>> {
     zip.write_all(&bin)?;
     zip.finish()?;
 
-    println!("gebouwd: {out}");
+    println!("built: {out}");
     println!("  {} v{}", manifest.package.name, manifest.package.version);
     println!("  binary: {} ({} bytes)", manifest.package.binary, bin.len());
     println!("  sha256: {hash}");
-    println!("  ondertekend met Ed25519");
+    println!("  signed with Ed25519");
     Ok(())
 }
 
@@ -162,23 +162,23 @@ fn verify(pkg: &str, pubkey: &str) -> Result<(), Box<dyn std::error::Error>> {
     let sig_bytes = read_zip_file(pkg, "signature.ed25519")?;
     let manifest: Manifest = toml::from_str(std::str::from_utf8(&manifest_bytes)?)?;
 
-    // Handtekening verifiëren.
-    let vk_bytes: [u8; 32] = fs::read(pubkey)?.as_slice().try_into().map_err(|_| "ongeldige pubkey")?;
+    // Verify the signature.
+    let vk_bytes: [u8; 32] = fs::read(pubkey)?.as_slice().try_into().map_err(|_| "invalid pubkey")?;
     let vk = VerifyingKey::from_bytes(&vk_bytes)?;
-    let sig = Signature::from_bytes(sig_bytes.as_slice().try_into().map_err(|_| "ongeldige sig")?);
+    let sig = Signature::from_bytes(sig_bytes.as_slice().try_into().map_err(|_| "invalid sig")?);
     vk.verify(&manifest_bytes, &sig)?;
-    println!("[OK] Ed25519-handtekening geldig");
+    println!("[OK] Ed25519 signature valid");
 
-    // Binary-hash verifiëren.
+    // Verify the binary hash.
     let bin = read_zip_file(pkg, &manifest.package.binary)?;
     let hash = sha256_hex(&bin);
     if hash == manifest.build.binary_sha256 {
-        println!("[OK] binary-SHA256 komt overeen ({hash})");
+        println!("[OK] binary SHA256 matches ({hash})");
     } else {
-        return Err("binary-hash KOMT NIET overeen — package gemanipuleerd!".into());
+        return Err("binary hash DOES NOT match — package tampered with!".into());
     }
     println!(
-        "[OK] {} v{} geverifieerd, klaar om te installeren",
+        "[OK] {} v{} verified, ready to install",
         manifest.package.name, manifest.package.version
     );
     Ok(())
@@ -188,9 +188,9 @@ fn info(pkg: &str) -> Result<(), Box<dyn std::error::Error>> {
     let manifest: Manifest = toml::from_str(std::str::from_utf8(&read_zip_file(pkg, "MANIFEST.toml")?)?)?;
     println!("{} v{}", manifest.package.name, manifest.package.version);
     println!("  {}", manifest.package.description);
-    println!("  licentie:  {}", manifest.package.license);
+    println!("  license:   {}", manifest.package.license);
     println!("  binary:    {}", manifest.package.binary);
     println!("  sha256:    {}", manifest.build.binary_sha256);
-    println!("  sandbox:   netwerk={}  fs={}", manifest.sandbox.network, manifest.sandbox.filesystem);
+    println!("  sandbox:   network={}  fs={}", manifest.sandbox.network, manifest.sandbox.filesystem);
     Ok(())
 }

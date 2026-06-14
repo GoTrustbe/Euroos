@@ -1,5 +1,5 @@
-//! Tekstverwerkings-commando's (CU-3 + CU-4): head/tail/wc/tac/rev/nl/fold/cat +
-//! sort/uniq/cut/tr. Allemaal puur `fn(args, input) -> Vec<u8>`.
+//! Text-processing commands (CU-3 + CU-4): head/tail/wc/tac/rev/nl/fold/cat +
+//! sort/uniq/cut/tr. All purely `fn(args, input) -> Vec<u8>`.
 
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -7,8 +7,8 @@ use alloc::vec::Vec;
 use crate::args::Args;
 use crate::{join_lines, lines};
 
-/// `head [-n N]` — eerste N regels (default 10).
-/// GNU-kortvorm `-N` (bv. `head -2`, `tail -5`): pak het getal uit een `-<cijfers>`-token.
+/// `head [-n N]` — first N lines (default 10).
+/// GNU short form `-N` (e.g. `head -2`, `tail -5`): take the number from a `-<digits>` token.
 fn numeric_shorthand(args: &[&str]) -> Option<usize> {
     args.iter().find_map(|a| {
         let s = a.strip_prefix('-')?;
@@ -27,12 +27,12 @@ pub fn head(args: &[&str], input: &[u8]) -> Vec<u8> {
         let n = c.parse::<usize>().unwrap_or(0).min(input.len());
         return input[..n].to_vec();
     }
-    let default = numeric_shorthand(args).unwrap_or(10); // `head -2`-kortvorm
+    let default = numeric_shorthand(args).unwrap_or(10); // `head -2` short form
     let n = a.num("n", default).min(rows.len());
     join_lines(&rows[..n].iter().map(|r| r.to_vec()).collect::<Vec<_>>())
 }
 
-/// `tail [-n N]` — laatste N regels (default 10).
+/// `tail [-n N]` — last N lines (default 10).
 pub fn tail(args: &[&str], input: &[u8]) -> Vec<u8> {
     let a = Args::parse(args, &['n', 'c']);
     let rows = lines(input);
@@ -40,13 +40,13 @@ pub fn tail(args: &[&str], input: &[u8]) -> Vec<u8> {
         let n = c.parse::<usize>().unwrap_or(0).min(input.len());
         return input[input.len() - n..].to_vec();
     }
-    let default = numeric_shorthand(args).unwrap_or(10); // `tail -2`-kortvorm
+    let default = numeric_shorthand(args).unwrap_or(10); // `tail -2` short form
     let n = a.num("n", default).min(rows.len());
     let start = rows.len() - n;
     join_lines(&rows[start..].iter().map(|r| r.to_vec()).collect::<Vec<_>>())
 }
 
-/// `wc [-l|-w|-c]` — tel regels/woorden/bytes. Zonder vlaggen: alle drie + totaal.
+/// `wc [-l|-w|-c]` — count lines/words/bytes. Without flags: all three + total.
 pub fn wc(args: &[&str], input: &[u8]) -> Vec<u8> {
     let a = Args::parse(args, &[]);
     let l = lines(input).len();
@@ -67,14 +67,14 @@ pub fn wc(args: &[&str], input: &[u8]) -> Vec<u8> {
     out.into_bytes()
 }
 
-/// `tac` — regels in omgekeerde volgorde.
+/// `tac` — lines in reverse order.
 pub fn tac(_args: &[&str], input: &[u8]) -> Vec<u8> {
     let mut rows: Vec<Vec<u8>> = lines(input).iter().map(|r| r.to_vec()).collect();
     rows.reverse();
     join_lines(&rows)
 }
 
-/// `rev` — tekens per regel omdraaien.
+/// `rev` — reverse the characters of each line.
 pub fn rev(_args: &[&str], input: &[u8]) -> Vec<u8> {
     let rows: Vec<Vec<u8>> = lines(input)
         .iter()
@@ -87,7 +87,7 @@ pub fn rev(_args: &[&str], input: &[u8]) -> Vec<u8> {
     join_lines(&rows)
 }
 
-/// `nl` — niet-lege regels nummeren (GNU-default: rechts-uitgelijnd, tab-scheiding).
+/// `nl` — number non-empty lines (GNU default: right-aligned, tab-separated).
 pub fn nl(_args: &[&str], input: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut n = 0;
@@ -104,7 +104,7 @@ pub fn nl(_args: &[&str], input: &[u8]) -> Vec<u8> {
     out
 }
 
-/// `fold [-w N]` — breek regels af op breedte (default 80).
+/// `fold [-w N]` — wrap lines at a given width (default 80).
 pub fn fold(args: &[&str], input: &[u8]) -> Vec<u8> {
     let a = Args::parse(args, &['w']);
     let w = a.num("w", 80).max(1);
@@ -124,7 +124,7 @@ pub fn fold(args: &[&str], input: &[u8]) -> Vec<u8> {
     out
 }
 
-/// `cat [-n]` — passthrough; met `-n` regels nummeren.
+/// `cat [-n]` — passthrough; with `-n` number the lines.
 pub fn cat(args: &[&str], input: &[u8]) -> Vec<u8> {
     let a = Args::parse(args, &[]);
     if !a.flag('n') {
@@ -139,7 +139,7 @@ pub fn cat(args: &[&str], input: &[u8]) -> Vec<u8> {
     out
 }
 
-/// `sort [-r] [-n] [-u]` — sorteer regels (omgekeerd / numeriek / uniek).
+/// `sort [-r] [-n] [-u]` — sort lines (reverse / numeric / unique).
 pub fn sort(args: &[&str], input: &[u8]) -> Vec<u8> {
     let a = Args::parse(args, &[]);
     let mut rows: Vec<Vec<u8>> = lines(input).iter().map(|r| r.to_vec()).collect();
@@ -157,7 +157,7 @@ pub fn sort(args: &[&str], input: &[u8]) -> Vec<u8> {
     join_lines(&rows)
 }
 
-/// `uniq [-c] [-d]` — verwijder/markeer opeenvolgende dubbele regels.
+/// `uniq [-c] [-d]` — remove/mark consecutive duplicate lines.
 pub fn uniq(args: &[&str], input: &[u8]) -> Vec<u8> {
     let a = Args::parse(args, &[]);
     let rows = lines(input);
@@ -181,7 +181,7 @@ pub fn uniq(args: &[&str], input: &[u8]) -> Vec<u8> {
     out
 }
 
-/// `cut -d DELIM -f N` (velden) of `cut -c N-M` (tekens, 1-based).
+/// `cut -d DELIM -f N` (fields) or `cut -c N-M` (characters, 1-based).
 pub fn cut(args: &[&str], input: &[u8]) -> Vec<u8> {
     let a = Args::parse(args, &['d', 'f', 'c']);
     let mut out = Vec::new();
@@ -220,7 +220,7 @@ fn parse_range(spec: &str) -> (usize, usize) {
     }
 }
 
-/// `tr SET1 [SET2]` (vertaal) of `tr -d SET1` (verwijder).
+/// `tr SET1 [SET2]` (translate) or `tr -d SET1` (delete).
 pub fn tr(args: &[&str], input: &[u8]) -> Vec<u8> {
     let a = Args::parse(args, &[]);
     let pos = &a.positional;
@@ -239,8 +239,8 @@ pub fn tr(args: &[&str], input: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// `grep [-i] [-v] [-n] [-c] PATTERN` — print regels die `PATTERN` (substring)
-/// bevatten. `-i` case-insensitive, `-v` invert, `-n` regelnummers, `-c` enkel tellen.
+/// `grep [-i] [-v] [-n] [-c] PATTERN` — print lines that contain `PATTERN`
+/// (substring). `-i` case-insensitive, `-v` invert, `-n` line numbers, `-c` count only.
 pub fn grep(args: &[&str], input: &[u8]) -> Vec<u8> {
     use alloc::string::String;
     let a = Args::parse(args, &[]);
@@ -284,10 +284,10 @@ mod tests {
         let inp = b"1\n2\n3\n4\n5\n";
         assert_eq!(s(head(&["-n", "2"], inp)), "1\n2\n");
         assert_eq!(s(tail(&["-n", "2"], inp)), "4\n5\n");
-        // GNU-kortvorm `-N`.
+        // GNU short form `-N`.
         assert_eq!(s(head(&["-2"], inp)), "1\n2\n");
         assert_eq!(s(tail(&["-2"], inp)), "4\n5\n");
-        assert_eq!(s(head(&[], b"a\nb\n")), "a\nb\n"); // <10 regels → alles
+        assert_eq!(s(head(&[], b"a\nb\n")), "a\nb\n"); // <10 lines -> everything
     }
 
     #[test]
@@ -318,7 +318,7 @@ mod tests {
     fn cut_tr() {
         assert_eq!(s(cut(&["-d", ":", "-f", "2"], b"a:b:c\nx:y:z\n")), "b\ny\n");
         assert_eq!(s(cut(&["-c", "1-3"], b"abcdef\n")), "abc\n");
-        assert_eq!(s(tr(&["abc", "ABC"], b"abc")), "ABC"); // letterlijke set-mapping
+        assert_eq!(s(tr(&["abc", "ABC"], b"abc")), "ABC"); // literal set mapping
         assert_eq!(s(tr(&["abc", "xyz"], b"aabbcc")), "xxyyzz");
         assert_eq!(s(tr(&["-d", "b"], b"aabbcc")), "aacc");
     }

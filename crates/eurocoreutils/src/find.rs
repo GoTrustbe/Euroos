@@ -1,18 +1,18 @@
-//! `find` (CU-5) — de matchlogica, puur en host-getest. Het *lopen* van de VFS-boom
-//! gebeurt shell-zijde (die heeft de `FileSystem`); deze module beslist per gevonden
-//! item of het matcht: `-name <glob>`, `-type f|d`, `-maxdepth N`.
+//! `find` (CU-5) — the match logic, pure and host-tested. *Walking* the VFS tree
+//! happens on the shell side (which has the `FileSystem`); this module decides per
+//! found item whether it matches: `-name <glob>`, `-type f|d`, `-maxdepth N`.
 
 use alloc::string::String;
 
-/// Glob-match: `*` (nul of meer tekens), `?` (één teken), de rest letterlijk.
-/// Een klassieke recursieve matcher — genoeg voor `-name`-patronen.
+/// Glob match: `*` (zero or more characters), `?` (one character), the rest literal.
+/// A classic recursive matcher — enough for `-name` patterns.
 pub fn glob_match(pattern: &str, name: &str) -> bool {
     glob_bytes(pattern.as_bytes(), name.as_bytes())
 }
 
 fn glob_bytes(p: &[u8], n: &[u8]) -> bool {
-    // Iteratief met één terugval-positie voor `*` — O(len) i.p.v. de exponentiële
-    // dubbele recursie (audit H12: `*a*a*…` mag find niet laten hangen).
+    // Iterative with a single backtrack position for `*` — O(len) instead of the
+    // exponential double recursion (audit H12: `*a*a*…` must not hang find).
     let (mut pi, mut ni) = (0usize, 0usize);
     let (mut star_p, mut star_n): (Option<usize>, usize) = (None, 0);
     while ni < n.len() {
@@ -20,11 +20,11 @@ fn glob_bytes(p: &[u8], n: &[u8]) -> bool {
             pi += 1;
             ni += 1;
         } else if pi < p.len() && p[pi] == b'*' {
-            star_p = Some(pi); // onthoud de `*` en val erop terug bij een mismatch
+            star_p = Some(pi); // remember the `*` and backtrack to it on a mismatch
             star_n = ni;
             pi += 1;
         } else if let Some(sp) = star_p {
-            pi = sp + 1; // laat de `*` één teken meer opslokken
+            pi = sp + 1; // let the `*` swallow one more character
             star_n += 1;
             ni = star_n;
         } else {
@@ -37,16 +37,16 @@ fn glob_bytes(p: &[u8], n: &[u8]) -> bool {
     pi == p.len()
 }
 
-/// De gevraagde filters van een `find`-aanroep.
+/// The requested filters of a `find` invocation.
 pub struct FindOpts {
     pub name: Option<String>,
-    /// `Some(true)` = alleen mappen (`-type d`), `Some(false)` = alleen bestanden (`-type f`).
+    /// `Some(true)` = directories only (`-type d`), `Some(false)` = files only (`-type f`).
     pub want_dir: Option<bool>,
     pub maxdepth: Option<usize>,
 }
 
 impl FindOpts {
-    /// Parse `find`-argumenten. `-name <glob>`, `-type f|d`, `-maxdepth N`.
+    /// Parse `find` arguments. `-name <glob>`, `-type f|d`, `-maxdepth N`.
     pub fn parse(args: &[&str]) -> FindOpts {
         let mut o = FindOpts { name: None, want_dir: None, maxdepth: None };
         let mut i = 0;
@@ -79,13 +79,13 @@ impl FindOpts {
         o
     }
 
-    /// De eerste positionele arg = startpad, of `.`. Slaat de waardes van
-    /// `-name`/`-type`/`-maxdepth` over zodat die niet als pad gelezen worden.
+    /// The first positional arg = start path, or `.`. Skips the values of
+    /// `-name`/`-type`/`-maxdepth` so they are not read as a path.
     pub fn start_path(args: &[&str]) -> String {
         let mut i = 0;
         while i < args.len() {
             match args[i] {
-                "-name" | "-type" | "-maxdepth" => i += 2, // optie + waarde overslaan
+                "-name" | "-type" | "-maxdepth" => i += 2, // skip option + value
                 t if t.starts_with('-') => i += 1,
                 t => return String::from(t),
             }
@@ -93,7 +93,7 @@ impl FindOpts {
         String::from(".")
     }
 
-    /// Matcht een item op `depth` (0 = het startpad zelf) deze filters?
+    /// Does an item at `depth` (0 = the start path itself) match these filters?
     pub fn matches(&self, name: &str, is_dir: bool, depth: usize) -> bool {
         if let Some(md) = self.maxdepth {
             if depth > md {
@@ -145,9 +145,9 @@ mod tests {
     fn matching() {
         let o = FindOpts::parse(&["-name", "*.txt", "-type", "f", "-maxdepth", "2"]);
         assert!(o.matches("a.txt", false, 1));
-        assert!(!o.matches("a.txt", true, 1)); // -type f, maar dit is een map
-        assert!(!o.matches("a.md", false, 1)); // naam matcht niet
-        assert!(!o.matches("a.txt", false, 3)); // te diep
+        assert!(!o.matches("a.txt", true, 1)); // -type f, but this is a directory
+        assert!(!o.matches("a.md", false, 1)); // name does not match
+        assert!(!o.matches("a.txt", false, 3)); // too deep
         let any = FindOpts::parse(&[]);
         assert!(any.matches("wat-dan-ook", true, 5));
     }

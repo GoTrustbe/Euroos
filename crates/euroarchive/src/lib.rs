@@ -1,12 +1,12 @@
-//! EuroArchive — de archiefbeheerder van EuroOS (Sprint AC-2).
+//! EuroArchive — the EuroOS archive manager (Sprint AC-2).
 //!
-//! Een soevereine **USTAR tar**-implementatie: lezen en schrijven van het
-//! `tar`-formaat met octale headervelden en **checksum-verificatie**. Tar is de
-//! container; compressie (gzip/zstd) komt als aparte laag erbovenop. Bij het
-//! uitpakken kan een meegeleverd manifest met **Ed25519-handtekeningen**
-//! geverifieerd worden (haak: [`verify_manifest`]).
+//! A sovereign **USTAR tar** implementation: reading and writing the
+//! `tar` format with octal header fields and **checksum verification**. Tar is the
+//! container; compression (gzip/zstd) comes as a separate layer on top. When
+//! unpacking, an accompanying manifest with **Ed25519 signatures** can be
+//! verified (hook: [`verify_manifest`]).
 //!
-//! Pure `no_std`-logica, host-getest. Geen `unsafe`.
+//! Pure `no_std` logic, host-tested. No `unsafe`.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -19,36 +19,36 @@ use alloc::vec::Vec;
 
 const BLOCK: usize = 512;
 
-/// Het soort archief-item.
+/// The kind of archive item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     File,
     Dir,
 }
 
-/// Eén item in een archief.
+/// A single item in an archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub name: String,
     pub kind: Kind,
-    /// Octale Unix-rechten (bv. 0o644).
+    /// Octal Unix permissions (e.g. 0o644).
     pub mode: u32,
     pub data: Vec<u8>,
 }
 
 impl Entry {
-    /// Maak een bestand-item.
+    /// Create a file item.
     pub fn file(name: &str, data: &[u8]) -> Entry {
         Entry { name: name.to_string(), kind: Kind::File, mode: 0o644, data: data.to_vec() }
     }
-    /// Maak een map-item.
+    /// Create a directory item.
     pub fn dir(name: &str) -> Entry {
         let name = if name.ends_with('/') { name.to_string() } else { alloc::format!("{name}/") };
         Entry { name, kind: Kind::Dir, mode: 0o755, data: Vec::new() }
     }
 }
 
-/// Foutsoorten bij het lezen van een archief.
+/// Error kinds when reading an archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArchiveError {
     Truncated,
@@ -56,14 +56,14 @@ pub enum ArchiveError {
     BadNumber,
 }
 
-// ── octale velden ─────────────────────────────────────────────────────────────
+// ── octal fields ──────────────────────────────────────────────────────────────
 
 fn write_octal(buf: &mut [u8], value: u64) {
-    // Veld van n bytes: octaal, rechts uitgelijnd met voorloopnullen, NUL-afgesloten.
+    // Field of n bytes: octal, right-aligned with leading zeros, NUL-terminated.
     let n = buf.len();
     let mut v = value;
     let mut i = n - 1;
-    buf[i] = 0; // afsluitende NUL
+    buf[i] = 0; // trailing NUL
     if i == 0 {
         return;
     }
@@ -76,7 +76,7 @@ fn write_octal(buf: &mut [u8], value: u64) {
         }
         i -= 1;
     }
-    // Vul de rest met '0'.
+    // Fill the rest with '0'.
     while i > 0 {
         i -= 1;
         buf[i] = b'0';
@@ -106,7 +106,7 @@ fn read_octal(field: &[u8]) -> Result<u64, ArchiveError> {
 fn checksum(header: &[u8; BLOCK]) -> u32 {
     let mut sum: u32 = 0;
     for (i, &b) in header.iter().enumerate() {
-        // De 8 chksum-bytes (148..156) tellen als spaties.
+        // The 8 chksum bytes (148..156) count as spaces.
         if (148..156).contains(&i) {
             sum += b' ' as u32;
         } else {
@@ -122,9 +122,9 @@ fn put_str(buf: &mut [u8], s: &str) {
     buf[..n].copy_from_slice(&bytes[..n]);
 }
 
-// ── schrijven ─────────────────────────────────────────────────────────────────
+// ── writing ─────────────────────────────────────────────────────────────────
 
-/// Schrijf een lijst entries naar een tar-bytestroom (USTAR).
+/// Write a list of entries to a tar byte stream (USTAR).
 pub fn write_tar(entries: &[Entry]) -> Vec<u8> {
     let mut out = Vec::new();
     for e in entries {
@@ -135,7 +135,7 @@ pub fn write_tar(entries: &[Entry]) -> Vec<u8> {
         write_octal(&mut header[116..124], 0); // gid
         let size = if e.kind == Kind::Dir { 0 } else { e.data.len() as u64 };
         write_octal(&mut header[124..136], size);
-        write_octal(&mut header[136..148], 0); // mtime (deterministisch = 0)
+        write_octal(&mut header[136..148], 0); // mtime (deterministic = 0)
         header[156] = match e.kind {
             Kind::File => b'0',
             Kind::Dir => b'5',
@@ -143,10 +143,10 @@ pub fn write_tar(entries: &[Entry]) -> Vec<u8> {
         put_str(&mut header[257..263], "ustar\0");
         header[263] = b'0';
         header[264] = b'0';
-        // Checksum als laatste, octaal in 6 cijfers + NUL + spatie.
+        // Checksum last, octal in 6 digits + NUL + space.
         let sum = checksum(&header);
         let mut cs = [0u8; 8];
-        write_octal(&mut cs[..7], sum as u64); // 6 cijfers + NUL op index 6
+        write_octal(&mut cs[..7], sum as u64); // 6 digits + NUL at index 6
         cs[7] = b' ';
         header[148..156].copy_from_slice(&cs);
 
@@ -157,21 +157,21 @@ pub fn write_tar(entries: &[Entry]) -> Vec<u8> {
             out.extend(core::iter::repeat(0u8).take(pad));
         }
     }
-    // Twee lege blokken als einde-markering.
+    // Two empty blocks as the end marker.
     out.extend(vec![0u8; BLOCK * 2]);
     out
 }
 
-// ── lezen ─────────────────────────────────────────────────────────────────────
+// ── reading ─────────────────────────────────────────────────────────────────
 
-/// Lees een tar-bytestroom naar entries; verifieert per header de checksum.
+/// Read a tar byte stream into entries; verifies the checksum per header.
 pub fn read_tar(bytes: &[u8]) -> Result<Vec<Entry>, ArchiveError> {
     let mut entries = Vec::new();
     let mut pos = 0;
     while pos + BLOCK <= bytes.len() {
         let mut header = [0u8; BLOCK];
         header.copy_from_slice(&bytes[pos..pos + BLOCK]);
-        // Einde: een leeg blok.
+        // End: an empty block.
         if header.iter().all(|&b| b == 0) {
             break;
         }
@@ -209,11 +209,11 @@ fn cstr(field: &[u8]) -> String {
     String::from_utf8_lossy(&field[..end]).into_owned()
 }
 
-/// Haak voor Ed25519-manifest-verificatie bij het uitpakken.
+/// Hook for Ed25519 manifest verification during unpacking.
 ///
-/// `verify` is een door de aanroeper geleverde verificatiefunctie
-/// (bv. via `eurotls`), zodat deze crate `no_std`-zuiver en crypto-vrij blijft.
-/// Retourneert de lijst bestandsnamen waarvan de hash-handtekening klopt.
+/// `verify` is a caller-supplied verification function
+/// (e.g. via `eurotls`), so that this crate stays `no_std`-pure and crypto-free.
+/// Returns the list of file names whose hash signature checks out.
 pub fn verify_manifest<F>(entries: &[Entry], manifest: &[(String, Vec<u8>)], mut verify: F) -> Vec<String>
 where
     F: FnMut(&[u8], &[u8]) -> bool,
@@ -255,7 +255,7 @@ mod tests {
     fn checksum_detects_corruption() {
         let tar = write_tar(&[Entry::file("a.txt", b"hallo")]);
         let mut corrupt = tar.clone();
-        corrupt[0] = b'Z'; // verander de naam → checksum klopt niet meer
+        corrupt[0] = b'Z'; // change the name → checksum no longer matches
         assert!(matches!(read_tar(&corrupt), Err(ArchiveError::BadChecksum { .. })));
     }
 
@@ -271,7 +271,7 @@ mod tests {
     fn empty_file_and_block_alignment() {
         let back = read_tar(&write_tar(&[Entry::file("empty", b"")])).unwrap();
         assert_eq!(back[0].data.len(), 0);
-        // Exact 512-byte bestand → geen extra padding-fouten.
+        // Exact 512-byte file → no extra padding errors.
         let big = vec![7u8; 512];
         let back2 = read_tar(&write_tar(&[Entry::file("big", &big)])).unwrap();
         assert_eq!(back2[0].data, big);
@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn manifest_verification_hook() {
         let entries = vec![Entry::file("a", b"alpha"), Entry::file("b", b"beta")];
-        // Nep-verificatie: handtekening == data (alleen voor de test).
+        // Fake verification: signature == data (for the test only).
         let manifest = vec![
             ("a".to_string(), b"alpha".to_vec()),
             ("b".to_string(), b"WRONG".to_vec()),

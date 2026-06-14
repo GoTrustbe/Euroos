@@ -1,11 +1,11 @@
-//! EuroDocIO — document-I/O voor EuroSuite (ES-IO).
+//! EuroDocIO — document I/O for EuroSuite (ES-IO).
 //!
-//! Een soeverein kantoorpakket leest en schrijft de formaten die Europa gebruikt —
-//! **OOXML** (`.docx`/…) en **OpenDocument** (`.odt`/…) — én exporteert naar HTML,
-//! allemaal naar/uit het ene [`eurodoc`]-UDM. Dit crate bevat de eigen XML-parser
-//! plus de format-bindingen, `no_std` en host-getest. De ZIP-container (deflate) is
-//! een aparte, dunne laag die de kernel/`eupkg` levert; hier werken we op de
-//! uitgepakte XML-onderdelen.
+//! A sovereign office suite reads and writes the formats that Europe uses —
+//! **OOXML** (`.docx`/…) and **OpenDocument** (`.odt`/…) — and exports to HTML,
+//! all to/from the single [`eurodoc`] UDM. This crate contains the in-house XML parser
+//! plus the format bindings, `no_std` and host-tested. The ZIP container (deflate) is
+//! a separate, thin layer provided by the kernel/`eupkg`; here we operate on the
+//! unpacked XML parts.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -21,7 +21,7 @@ pub mod xml;
 mod tests {
     use eurodoc::model::Block;
 
-    /// OOXML → UDM → HTML: een kleine end-to-end-pijplijn.
+    /// OOXML → UDM → HTML: a small end-to-end pipeline.
     #[test]
     fn docx_to_html_pipeline() {
         let docx = r#"<w:body>
@@ -35,7 +35,7 @@ mod tests {
         assert!(html.contains(" en gewoon."));
     }
 
-    /// OOXML en ODF die hetzelfde betekenen leveren dezelfde platte tekst.
+    /// OOXML and ODF that mean the same thing yield the same plain text.
     #[test]
     fn ooxml_and_odf_agree_on_text() {
         let docx = r#"<w:body><w:p><w:r><w:t>Hallo</w:t></w:r></w:p></w:body>"#;

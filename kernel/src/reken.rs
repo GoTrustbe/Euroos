@@ -1,11 +1,11 @@
-//! Kernel-zijde van **EuroReken** (Sprint AC-1): de soevereine rekenmachine.
-//! Bij boot bewijzen we de drie modi — standaard/wetenschappelijk (op de eigen
-//! `no_std`-mathkern) en programmeur (bases + bitwise) — plus eenhedenconversie.
-//! Host-geteste kern: [`euroreken`].
+//! Kernel side of **EuroReken** (Sprint AC-1): the sovereign calculator.
+//! At boot we prove the three modes — standard/scientific (on its own
+//! `no_std` math core) and programmer (bases + bitwise) — plus unit conversion.
+//! Host-tested core: [`euroreken`].
 
 use crate::serial_println;
 
-/// Boot-zelftest: rekenkundige precedentie, functies, bases/bitwise, conversie.
+/// Boot self-test: arithmetic precedence, functions, bases/bitwise, conversion.
 pub fn selftest() {
     let arith = euroreken::eval("1 + 2 * 3").unwrap_or(0.0); // 7
     let pow = euroreken::eval("2 ^ 10").unwrap_or(0.0); // 1024
@@ -37,6 +37,6 @@ pub fn selftest() {
         shifted,
         km,
         temp as i64,
-        if ok { "✓" } else { "✗ FOUT" }
+        if ok { "✓" } else { "✗ ERROR" }
     );
 }

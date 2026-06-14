@@ -1,9 +1,9 @@
-//! EuroMusic — de muziekspeler-kern van EuroOS (Sprint AC-3).
+//! EuroMusic — the music player core of EuroOS (Sprint AC-3).
 //!
-//! Een **bibliotheek** (zoeken, sorteren, groeperen per album/artiest), **afspeel-
-//! lijsten**, en een **afspeel-wachtrij** met herhaalmodi (uit/één/alles) en
-//! **shuffle** (deterministisch via een meegeleverde seed, zodat het host-testbaar
-//! blijft). Geen streaming-telemetrie — soeverein en lokaal. Pure `no_std`-logica.
+//! A **library** (search, sort, group by album/artist), **playlists**,
+//! and a **playback queue** with repeat modes (off/one/all) and
+//! **shuffle** (deterministic via a supplied seed, so it stays host-testable).
+//! No streaming telemetry — sovereign and local. Pure `no_std` logic.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -13,7 +13,7 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// Eén muzieknummer.
+/// A single music track.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Track {
     pub title: String,
@@ -37,7 +37,7 @@ impl Track {
     }
 }
 
-/// Formatteer een duur als `M:SS` of `H:MM:SS`.
+/// Format a duration as `M:SS` or `H:MM:SS`.
 pub fn format_duration(secs: u32) -> String {
     let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
     if h > 0 {
@@ -47,7 +47,7 @@ pub fn format_duration(secs: u32) -> String {
     }
 }
 
-/// De muziekbibliotheek.
+/// The music library.
 #[derive(Debug, Clone, Default)]
 pub struct Library {
     pub tracks: Vec<Track>,
@@ -61,7 +61,7 @@ impl Library {
         self.tracks.push(t);
     }
 
-    /// Zoek op titel/artiest/album (substring, hoofdletterongevoelig).
+    /// Search by title/artist/album (substring, case-insensitive).
     pub fn search(&self, query: &str) -> Vec<usize> {
         let q = query.to_lowercase();
         self.tracks
@@ -77,7 +77,7 @@ impl Library {
             .collect()
     }
 
-    /// Track-indexen van een album, op tracknummer gesorteerd.
+    /// Track indices of an album, sorted by track number.
     pub fn album(&self, name: &str) -> Vec<usize> {
         let mut v: Vec<usize> = self
             .tracks
@@ -90,7 +90,7 @@ impl Library {
         v
     }
 
-    /// Unieke artiesten, alfabetisch.
+    /// Unique artists, alphabetically.
     pub fn artists(&self) -> Vec<String> {
         let mut v: Vec<String> = Vec::new();
         for t in &self.tracks {
@@ -102,13 +102,13 @@ impl Library {
         v
     }
 
-    /// Totale speelduur (seconden).
+    /// Total playing time (seconds).
     pub fn total_duration(&self) -> u64 {
         self.tracks.iter().map(|t| t.duration_s as u64).sum()
     }
 }
 
-/// Herhaalmodus.
+/// Repeat mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Repeat {
     Off,
@@ -116,12 +116,12 @@ pub enum Repeat {
     All,
 }
 
-/// Een afspeel-wachtrij over indexen in een [`Library`].
+/// A playback queue over indices into a [`Library`].
 #[derive(Debug, Clone)]
 pub struct Player {
-    /// De grondvolgorde (track-indexen).
+    /// The base order (track indices).
     base: Vec<usize>,
-    /// De actieve volgorde (= base, of een shuffle-permutatie).
+    /// The active order (= base, or a shuffle permutation).
     order: Vec<usize>,
     pos: usize,
     pub repeat: Repeat,
@@ -129,30 +129,30 @@ pub struct Player {
 }
 
 impl Player {
-    /// Maak een wachtrij van een reeks track-indexen.
+    /// Create a queue from a sequence of track indices.
     pub fn new(queue: Vec<usize>) -> Self {
         let order = queue.clone();
         Player { base: queue, order, pos: 0, repeat: Repeat::Off, shuffle: false }
     }
 
-    /// Het huidige track-index (None als de wachtrij leeg/afgelopen is).
+    /// The current track index (None if the queue is empty/finished).
     pub fn current(&self) -> Option<usize> {
         self.order.get(self.pos).copied()
     }
 
-    /// Zet herhaalmodus.
+    /// Set the repeat mode.
     pub fn set_repeat(&mut self, r: Repeat) {
         self.repeat = r;
     }
 
-    /// Zet shuffle aan/uit. Aan → genereer een deterministische permutatie uit
-    /// `seed` (Fisher-Yates met een LCG), met het huidige nummer vooraan.
+    /// Toggle shuffle on/off. On → generate a deterministic permutation from
+    /// `seed` (Fisher-Yates with an LCG), with the current track at the front.
     pub fn set_shuffle(&mut self, on: bool, seed: u64) {
         let cur = self.current();
         self.shuffle = on;
         if on {
             self.order = shuffled(&self.base, seed);
-            // Houd het huidige nummer bovenaan zodat het niet verspringt.
+            // Keep the current track at the top so it does not jump around.
             if let Some(c) = cur {
                 if let Some(p) = self.order.iter().position(|&x| x == c) {
                     self.order.swap(0, p);
@@ -165,30 +165,30 @@ impl Player {
         }
     }
 
-    /// Volgende nummer volgens herhaalmodus. Geeft het nieuwe huidige index.
+    /// Next track according to the repeat mode. Returns the new current index.
     pub fn next(&mut self) -> Option<usize> {
         if self.order.is_empty() {
             return None;
         }
         match self.repeat {
-            Repeat::One => {} // blijf staan
+            Repeat::One => {} // stay put
             Repeat::All => {
-                // Wikkel naar 0, óók vanuit de "gestopt"-toestand (pos == len) na een
-                // eerdere Repeat::Off — `(pos+1) % len` zou daar 1 i.p.v. 0 geven.
+                // Wrap to 0, also from the "stopped" state (pos == len) after a
+                // previous Repeat::Off — `(pos+1) % len` would give 1 instead of 0 there.
                 self.pos = if self.pos + 1 >= self.order.len() { 0 } else { self.pos + 1 };
             }
             Repeat::Off => {
                 if self.pos + 1 < self.order.len() {
                     self.pos += 1;
                 } else {
-                    self.pos = self.order.len(); // voorbij het einde → gestopt
+                    self.pos = self.order.len(); // past the end → stopped
                 }
             }
         }
         self.current()
     }
 
-    /// Vorige nummer.
+    /// Previous track.
     pub fn prev(&mut self) -> Option<usize> {
         if self.order.is_empty() {
             return None;
@@ -204,14 +204,14 @@ impl Player {
     }
 }
 
-/// Deterministische Fisher-Yates-shuffle met een LCG (geen globale RNG).
+/// Deterministic Fisher-Yates shuffle with an LCG (no global RNG).
 fn shuffled(items: &[usize], seed: u64) -> Vec<usize> {
     let mut v = items.to_vec();
     let mut state = seed ^ 0x9E37_79B9_7F4A_7C15;
     let mut i = v.len();
     while i > 1 {
         i -= 1;
-        // LCG (Numerical Recipes-constanten).
+        // LCG (Numerical Recipes constants).
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         let j = (state >> 33) as usize % (i + 1);
         v.swap(i, j);
@@ -242,7 +242,7 @@ mod tests {
         let l = lib();
         assert_eq!(l.search("nord").len(), 2);
         assert_eq!(l.search("cendres"), alloc::vec![2]);
-        // Album op tracknummer gesorteerd → Borealis(1) vóór Aurora(2).
+        // Album sorted by track number → Borealis(1) before Aurora(2).
         let polar = l.album("Polar");
         assert_eq!(polar, alloc::vec![1, 0]);
         assert_eq!(l.artists(), alloc::vec!["Lumière".to_string(), "Nordlys".to_string()]);
@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(p.current(), Some(0));
         assert_eq!(p.next(), Some(1));
         assert_eq!(p.next(), Some(2));
-        assert_eq!(p.next(), None); // voorbij het einde
+        assert_eq!(p.next(), None); // past the end
     }
 
     #[test]
@@ -264,20 +264,20 @@ mod tests {
         p.set_repeat(Repeat::All);
         p.next();
         p.next();
-        assert_eq!(p.next(), Some(0)); // wikkelt om
+        assert_eq!(p.next(), Some(0)); // wraps around
         p.set_repeat(Repeat::One);
-        assert_eq!(p.next(), Some(0)); // blijft staan
+        assert_eq!(p.next(), Some(0)); // stays put
         assert_eq!(p.prev(), Some(0));
     }
 
     #[test]
     fn repeat_all_wraps_from_stopped_state() {
-        // Speel uit met Repeat::Off (pos belandt op len = "gestopt"), schakel dan
-        // naar All en ga verder → moet naar track 0 wikkelen, niet 1.
+        // Play to the end with Repeat::Off (pos lands on len = "stopped"), then switch
+        // to All and continue → must wrap to track 0, not 1.
         let mut p = Player::new(alloc::vec![0, 1, 2]);
         assert_eq!(p.next(), Some(1));
         assert_eq!(p.next(), Some(2));
-        assert_eq!(p.next(), None); // gestopt voorbij het einde
+        assert_eq!(p.next(), None); // stopped past the end
         p.set_repeat(Repeat::All);
         assert_eq!(p.next(), Some(0));
     }
@@ -286,7 +286,7 @@ mod tests {
     fn player_prev_wraps_in_all() {
         let mut p = Player::new(alloc::vec![0, 1, 2]);
         p.set_repeat(Repeat::All);
-        assert_eq!(p.prev(), Some(2)); // 0 → vorige → 2
+        assert_eq!(p.prev(), Some(2)); // 0 → previous → 2
     }
 
     #[test]
@@ -302,8 +302,8 @@ mod tests {
             seen.push(n);
         }
         seen.sort();
-        assert_eq!(seen, alloc::vec![0, 1, 2, 3, 4]); // alle nummers precies één keer
-        // Zelfde seed → zelfde volgorde (reproduceerbaar).
+        assert_eq!(seen, alloc::vec![0, 1, 2, 3, 4]); // all tracks exactly once
+        // Same seed → same order (reproducible).
         let mut q = Player::new(alloc::vec![0, 1, 2, 3, 4]);
         q.set_shuffle(true, 42);
         let mut p2 = Player::new(alloc::vec![0, 1, 2, 3, 4]);
@@ -314,8 +314,8 @@ mod tests {
     #[test]
     fn shuffle_keeps_current_first() {
         let mut p = Player::new(alloc::vec![0, 1, 2, 3, 4]);
-        p.next(); // huidige = 1
+        p.next(); // current = 1
         p.set_shuffle(true, 7);
-        assert_eq!(p.current(), Some(1)); // huidige blijft vooraan
+        assert_eq!(p.current(), Some(1)); // current stays at the front
     }
 }

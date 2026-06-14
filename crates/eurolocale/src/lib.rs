@@ -1,15 +1,15 @@
-//! EuroLocale — soevereine lokalisatie voor de 24 officiële EU-talen (plan P1).
+//! EuroLocale — sovereign localization for the 24 official EU languages (plan P1).
 //!
-//! Een OS voor Europa moet élke EU-taal spreken, niet alleen Engels. Dit crate
-//! levert de CLDR-kern, `no_std` en volledig host-getest, zonder externe data-blobs:
-//! - [`lang`]      — de 24 talen + hun regels (scheidingstekens, datumpatroon, …);
-//! - [`number`]    — getalopmaak (groepering + decimaalteken per taal);
-//! - [`currency`]  — valuta-opmaak (€ of de eigen munt, juiste plaatsing);
-//! - [`datefmt`]   — datumopmaak (kort numeriek + lang met maandnamen);
-//! - [`plural`]    — CLDR-meervoudsregels (one/two/few/many/other per taal);
-//! - [`collation`] — taalbewuste sorteervolgorde (diacritiek + taal-tailoring).
+//! An OS for Europe must speak every EU language, not just English. This crate
+//! provides the CLDR core, `no_std` and fully host-tested, without external data blobs:
+//! - [`lang`]      — the 24 languages + their rules (separators, date pattern, …);
+//! - [`number`]    — number formatting (grouping + decimal separator per language);
+//! - [`currency`]  — currency formatting (€ or the local currency, correct placement);
+//! - [`datefmt`]   — date formatting (short numeric + long with month names);
+//! - [`plural`]    — CLDR plural rules (one/two/few/many/other per language);
+//! - [`collation`] — language-aware sort order (diacritics + language tailoring).
 //!
-//! De [`Locale`] bundelt een taal en biedt de opmaak als methodes.
+//! The [`Locale`] bundles a language and offers the formatting as methods.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -29,60 +29,60 @@ pub use plural::Plural;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Een gebonden locale: een taal + de opmaak-API erop.
+/// A bound locale: a language + the formatting API on it.
 #[derive(Clone, Copy)]
 pub struct Locale {
     pub lang: Lang,
 }
 
 impl Locale {
-    /// Maak een locale uit een taal.
+    /// Create a locale from a language.
     pub fn new(lang: Lang) -> Self {
         Locale { lang }
     }
 
-    /// Parse een BCP-47-achtige tag (`"nl-BE"`, `"de_DE"`) → locale.
+    /// Parse a BCP-47-like tag (`"nl-BE"`, `"de_DE"`) → locale.
     pub fn parse(tag: &str) -> Option<Locale> {
         Lang::parse(tag).map(Locale::new)
     }
 
-    /// Een geheel getal, gegroepeerd per taal.
+    /// An integer, grouped per language.
     pub fn int(&self, value: i64) -> String {
         number::format_int(self.lang, value)
     }
 
-    /// Een geldbedrag in centen (2 decimalen), met valutasymbool.
+    /// A monetary amount in cents (2 decimals), with currency symbol.
     pub fn money(&self, minor: i64) -> String {
         currency::format_minor(self.lang, minor)
     }
 
-    /// De korte numerieke datum.
+    /// The short numeric date.
     pub fn date(&self, year: i32, month: u8, day: u8) -> String {
         datefmt::format_short(self.lang, year, month, day)
     }
 
-    /// De lange datum (met maandnaam waar beschikbaar).
+    /// The long date (with month name where available).
     pub fn date_long(&self, year: i32, month: u8, day: u8) -> String {
         datefmt::format_long(self.lang, year, month, day)
     }
 
-    /// De meervoudscategorie van `n`.
+    /// The plural category of `n`.
     pub fn plural(&self, n: u64) -> Plural {
         plural::category(self.lang, n)
     }
 
-    /// Sorteer strings in de collatie van deze taal.
+    /// Sort strings in the collation of this language.
     pub fn sort(&self, items: &mut [String]) {
         collation::sort(self.lang, items);
     }
 
-    /// De ISO-valutacode van de hoofdregio.
+    /// The ISO currency code of the main region.
     pub fn currency_code(&self) -> &'static str {
         currency::iso_code(self.lang)
     }
 }
 
-/// Alle 24 EU-locales (handig voor een taalkiezer).
+/// All 24 EU locales (handy for a language picker).
 pub fn all_locales() -> Vec<Locale> {
     Lang::ALL.iter().map(|&l| Locale::new(l)).collect()
 }

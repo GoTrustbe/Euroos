@@ -1,5 +1,5 @@
-/* EuroOS — musl-filter: lees STDIN en schrijf alles in HOOFDLETTERS naar stdout.
- * Leest fd 0 (getchar -> read(0)); bewijst pipes: `mecho ... | mupper`. */
+/* EuroOS — musl filter: read STDIN and write everything in UPPERCASE to stdout.
+ * Reads fd 0 (getchar -> read(0)); demonstrates pipes: `mecho ... | mupper`. */
 #include <stdio.h>
 #include <ctype.h>
 

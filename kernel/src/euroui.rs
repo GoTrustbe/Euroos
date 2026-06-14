@@ -1,10 +1,10 @@
-//! EuroUI — een widget- + layout-laag op de compositor (Track 5).
+//! EuroUI — a widget + layout layer on top of the compositor (Track 5).
 //!
-//! Apps bouwen een scherm uit HERBRUIKBARE widgets (heading, rij, toggle, knop,
-//! badge, …) in een verticale stack; EuroUI legt ze uit en tekent ze met de
-//! EDS-tokens (spacing op de `eu`-eenheid, het radius-systeem, de security-
-//! kleurtaal) — nooit met willekeurige waarden. Zo zien alle apps er consistent
-//! uit en hoeven ze geen pixels meer met de hand te tekenen.
+//! Apps build a screen out of REUSABLE widgets (heading, row, toggle, button,
+//! badge, …) in a vertical stack; EuroUI lays them out and draws them with the
+//! EDS tokens (spacing on the `eu` unit, the radius system, the security
+//! color language) — never with arbitrary values. This way all apps look consistent
+//! and no longer have to draw pixels by hand.
 
 use alloc::string::String;
 
@@ -12,28 +12,28 @@ use crate::eds;
 use crate::font::{draw_string, draw_string_centered, text_width, CHAR_HEIGHT};
 use crate::graphics::{Color, FrameBuffer};
 
-/// Een UI-element. Apps stellen een `Vec<Widget>` samen (verticale stack).
+/// A UI element. Apps assemble a `Vec<Widget>` (vertical stack).
 #[derive(Clone)]
 pub enum Widget {
-    /// Sectiekop (groot).
+    /// Section header (large).
     Heading(String),
-    /// Onderschrift / hulptekst (gedimd).
+    /// Caption / help text (dimmed).
     Caption(String),
-    /// Label-rij met een waarde rechts uitgelijnd (settings-stijl).
+    /// Label row with a value right-aligned (settings style).
     Row(String, String),
-    /// Label + aan/uit-schakelaar (groen = aan).
+    /// Label + on/off toggle (green = on).
     Toggle(String, bool),
-    /// Knop; `primary` = gevulde accentknop, anders subtiel.
+    /// Button; `primary` = filled accent button, otherwise subtle.
     Button(String, bool),
-    /// Pill-badge met de security-kleurtaal.
+    /// Pill badge with the security color language.
     Badge(String, Color),
-    /// Dunne scheidingslijn.
+    /// Thin separator line.
     Divider,
-    /// Verticale ruimte (in `eu`-eenheden).
+    /// Vertical space (in `eu` units).
     Spacer(usize),
 }
 
-/// Teken een verticale stack widgets binnen het gebied (`x`,`y`,`w`).
+/// Draw a vertical stack of widgets within the area (`x`,`y`,`w`).
 pub fn draw_panel(fb: &FrameBuffer, x: usize, y: usize, w: usize, widgets: &[Widget]) {
     let pad = eds::eu(4);
     let cx = x + pad;
@@ -64,7 +64,7 @@ pub fn draw_panel(fb: &FrameBuffer, x: usize, y: usize, w: usize, widgets: &[Wid
                 fb.fill_rounded_rect(cx, cy, inner, rowh, eds::RADIUS_S, Color::CARD);
                 let ty = cy + (rowh - CHAR_HEIGHT) / 2;
                 draw_string(fb, cx + eds::eu(3), ty, l, Color::TEXT_SEC, 1);
-                // Schakelaar rechts.
+                // Toggle on the right.
                 let pw = eds::eu(9);
                 let ph = eds::eu(4);
                 let px = cx + inner - pw - eds::eu(3);

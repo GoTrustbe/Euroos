@@ -1,11 +1,11 @@
-//! P3: **append-only audit-log** — tamper-evident vastlegging van veiligheids-events.
+//! P3: **append-only audit log** — tamper-evident recording of security events.
 //!
-//! GDPR/NIS2 vragen een betrouwbaar, niet-vervalsbaar logboek van wie wat deed. We
-//! houden de events in een in-memory ring én persisteren ze naar
-//! `/var/log/audit.log`, die met de L1-`FLAG_APPEND_ONLY`-vlag is gemarkeerd: het
-//! filesysteem laat dan ALLEEN uitbreiding toe — eerdere regels kunnen niet gewist
-//! of gewijzigd worden, zelfs niet door root. Het wissen van die vlag vereist
-//! `CAP_IMMUTABLE_ADMIN` (L2). Zo is het audit-spoor structureel onomkeerbaar.
+//! GDPR/NIS2 require a reliable, non-forgeable record of who did what. We keep
+//! the events in an in-memory ring AND persist them to
+//! `/var/log/audit.log`, which is marked with the L1 `FLAG_APPEND_ONLY` flag: the
+//! file system then allows ONLY extension — earlier lines cannot be erased or
+//! modified, not even by root. Clearing that flag requires
+//! `CAP_IMMUTABLE_ADMIN` (L2). This way the audit trail is structurally irreversible.
 
 use alloc::format;
 use alloc::string::String;
@@ -16,7 +16,7 @@ use spin::Mutex;
 
 use eurofs::{FileSystem, FLAG_APPEND_ONLY};
 
-/// Een veiligheids-event-categorie.
+/// A security event category.
 #[derive(Clone, Copy)]
 pub enum Event {
     ImmutableSet,
@@ -26,8 +26,8 @@ pub enum Event {
     Login,
     Logout,
     Boot,
-    /// Eén EuroAgent MCP-tool-aanroep (toegestaan of geweigerd). Het persistente
-    /// spoor van wat een agent deed — overleeft een herstart (P0.3 / audit #7).
+    /// One EuroAgent MCP tool call (allowed or denied). The persistent
+    /// trail of what an agent did — survives a restart (P0.3 / audit #7).
     AgentTool,
 }
 
@@ -50,12 +50,12 @@ const LOG_PATH: &str = "/var/log/audit.log";
 
 static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static SEQ: AtomicU64 = AtomicU64::new(0);
-/// Aantal in-memory events dat al naar schijf is geschreven (zodat we enkel de
-/// NIEUWE events APPENDEN — de on-disk log groeit monotoon over boots heen).
+/// Number of in-memory events already written to disk (so that we APPEND only the
+/// NEW events — the on-disk log grows monotonically across boots).
 static PERSISTED: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
-/// Leg een event vast in de in-memory audit-ring (lock-beschermd; veilig vanuit elke
-/// kernelcontext). Persisteren naar schijf doet [`persist`] later.
+/// Record an event in the in-memory audit ring (lock-protected; safe from any
+/// kernel context). Persisting to disk is done later by [`persist`].
 pub fn record(event: Event, detail: &str) {
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let t = crate::interrupts::ticks();
@@ -63,23 +63,23 @@ pub fn record(event: Event, detail: &str) {
     LOG.lock().push(line);
 }
 
-/// Aantal vastgelegde events.
+/// Number of recorded events.
 pub fn count() -> usize {
     LOG.lock().len()
 }
 
-/// De laatste `n` audit-regels (voor een shell-`audit`-commando).
+/// The last `n` audit lines (for a shell `audit` command).
 pub fn recent(n: usize) -> Vec<String> {
     let log = LOG.lock();
     let start = log.len().saturating_sub(n);
     log[start..].to_vec()
 }
 
-/// Persisteer de NIEUWE (nog niet weggeschreven) events naar de append-only
-/// `/var/log/audit.log`: lees de bestaande inhoud (vorige boots + eerdere persists)
-/// en APPEND enkel de nieuwe regels — zo breidt de write altijd uit (slaagt de
-/// append-only-FS-controle) en groeit het spoor monotoon. Zet eenmalig de
-/// `FLAG_APPEND_ONLY`-vlag (cap-gated via L2). Geeft true bij succes.
+/// Persist the NEW (not yet written) events to the append-only
+/// `/var/log/audit.log`: read the existing content (previous boots + earlier persists)
+/// and APPEND only the new lines — this way the write always extends (passes the
+/// append-only FS check) and the trail grows monotonically. Set the
+/// `FLAG_APPEND_ONLY` flag once (cap-gated via L2). Returns true on success.
 pub fn persist(fs: &mut dyn FileSystem, caps: u64) -> bool {
     use core::sync::atomic::Ordering;
     let _ = fs.create_dir("/var");
@@ -96,9 +96,9 @@ pub fn persist(fs: &mut dyn FileSystem, caps: u64) -> bool {
         (s, log.len())
     };
     if new_lines.is_empty() && fs.exists(LOG_PATH) {
-        return true; // niets nieuws + bestand bestaat al
+        return true; // nothing new + file already exists
     }
-    // Bestaande on-disk inhoud + de nieuwe events → strikt uitbreidende write.
+    // Existing on-disk content + the new events → strictly extending write.
     let mut body = fs.read_file(LOG_PATH).unwrap_or_default();
     body.extend_from_slice(&new_lines);
     if fs.write_file(LOG_PATH, &body).is_err() {
@@ -111,9 +111,9 @@ pub fn persist(fs: &mut dyn FileSystem, caps: u64) -> bool {
     true
 }
 
-/// P3-boot-zelftest: bewijs dat het audit-spoor onomkeerbaar is — events worden
-/// vastgelegd, gepersisteerd naar een append-only bestand, en een poging het te
-/// vervalsen (inkorten/overschrijven) wordt door de FS geweigerd.
+/// P3 boot self-test: prove that the audit trail is irreversible — events are
+/// recorded, persisted to an append-only file, and an attempt to forge it
+/// (truncate/overwrite) is refused by the FS.
 pub fn selftest(fs: &mut dyn FileSystem, caps: u64) {
     let nl = |fs: &mut dyn FileSystem| fs.read_file(LOG_PATH).map(|d| d.iter().filter(|&&b| b == b'\n').count()).unwrap_or(0);
     record(Event::Boot, "kernel-start");
@@ -122,19 +122,19 @@ pub fn selftest(fs: &mut dyn FileSystem, caps: u64) {
     let append_only = fs.get_flags(LOG_PATH).unwrap_or(0) & FLAG_APPEND_ONLY != 0;
     let lines_before = nl(fs);
 
-    // Tamper-poging: het log inkorten of overschrijven → de append-only-FS weigert.
+    // Tamper attempt: truncate or overwrite the log → the append-only FS refuses.
     let tamper_blocked = fs.write_file(LOG_PATH, b"X").is_err();
 
-    // Een nieuw event + her-persist MOET wél slagen (het breidt enkel uit) en de
-    // on-disk log groeit (werkt ook over reboots, want we appenden i.p.v. herschrijven).
+    // A new event + re-persist MUST succeed (it only extends) and the
+    // on-disk log grows (also works across reboots, since we append instead of rewrite).
     record(Event::ImmutableSet, "/bin/hello");
     let extend_ok = persist(fs, caps);
     let lines_after = nl(fs);
 
     let ok = persisted && append_only && tamper_blocked && extend_ok && lines_after > lines_before;
     crate::serial_println!(
-        "[p3] append-only audit-log: {} events, gepersisteerd={}, append-only-vlag={}, vervalsing-geblokkeerd={}, uitbreiden-OK={}, regels-op-schijf {}→{} → {}",
+        "[p3] append-only audit log: {} events, persisted={}, append-only-flag={}, tamper-blocked={}, extend-OK={}, lines-on-disk {}→{} → {}",
         count(), persisted, append_only, tamper_blocked, extend_ok, lines_before, lines_after,
-        if ok { "OK (tamper-evident audit-spoor) ✓" } else { "MISLUKT" }
+        if ok { "OK (tamper-evident audit trail) ✓" } else { "FAILED" }
     );
 }

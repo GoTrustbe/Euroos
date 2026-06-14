@@ -1,20 +1,20 @@
-//! EuroAgent — sovereign agent-first runtime voor EuroOS (Sprint AA).
+//! EuroAgent — sovereign agent-first runtime for EuroOS (Sprint AA).
 //!
-//! Microsoft's Project Solara (Build 2026) maakt agents de primaire interactie-
-//! eenheid, maar legt de trust boundary in de Microsoft-cloud (Entra ID, Azure-LLM).
-//! EuroAgent doet hetzelfde agent-first model met de trust boundary **in de kernel**:
-//! agents zijn WASM-modules met een declaratief capability-manifest, capability-
-//! geïsoleerd op kernelniveau (EuroGuard), met een open MCP-gateway en volledige
-//! P3-audittrail — en volledig offline (een lokale LLM is de standaard, cloud is
+//! Microsoft's Project Solara (Build 2026) makes agents the primary interaction
+//! unit, but places the trust boundary in the Microsoft cloud (Entra ID, Azure LLM).
+//! EuroAgent does the same agent-first model with the trust boundary **in the kernel**:
+//! agents are WASM modules with a declarative capability manifest, capability-
+//! isolated at the kernel level (EuroGuard), with an open MCP gateway and a full
+//! P3 audit trail — and fully offline (a local LLM is the default, cloud is
 //! opt-in via EuroVault).
 //!
-//! Dit crate bevat de host-geteste, `no_std` kern:
-//! - [`caps`]     — `AgentCaps`: fijnmazige per-agent capabilities (subset EuroGuard);
-//! - [`manifest`] — `AgentManifest`: TOML-parser + validator van de agent-bundle;
-//! - [`policy`]   — afleiding van de effectieve capability-set (least-privilege);
-//! - [`json`]     — minimale JSON voor de MCP-laag;
-//! - [`mcp`]      — `McpGateway`: JSON-RPC tool-dispatch met capability-gating + audit;
-//! - [`intent`]   — deterministische intent→agent routing (EuroDispatch-kern).
+//! This crate contains the host-tested, `no_std` core:
+//! - [`caps`]     — `AgentCaps`: fine-grained per-agent capabilities (subset of EuroGuard);
+//! - [`manifest`] — `AgentManifest`: TOML parser + validator of the agent bundle;
+//! - [`policy`]   — derivation of the effective capability set (least-privilege);
+//! - [`json`]     — minimal JSON for the MCP layer;
+//! - [`mcp`]      — `McpGateway`: JSON-RPC tool dispatch with capability gating + audit;
+//! - [`intent`]   — deterministic intent→agent routing (EuroDispatch core).
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]

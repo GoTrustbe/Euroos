@@ -1,7 +1,7 @@
-//! EuroContainers (plan F2): lichte sandboxes bovenop het EuroGuard-capability-
-//! model — geen Linux-namespaces. Een container ge-chroot't een uitvoering naar
-//! `/containers/<naam>` en perkt capabilities + netwerk in. De veiligheidskritische
-//! padresolutie (geen `..`-ontsnapping) zit in de host-geteste `eurosandbox`-crate.
+//! EuroContainers (plan F2): lightweight sandboxes on top of the EuroGuard capability
+//! model — no Linux namespaces. A container chroots an execution to
+//! `/containers/<name>` and restricts capabilities + network. The security-critical
+//! path resolution (no `..` escape) lives in the host-tested `eurosandbox` crate.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -17,63 +17,63 @@ fn find(name: &str) -> Option<Container> {
     CONTAINERS.lock().iter().find(|c| c.name == name).cloned()
 }
 
-/// Maak een container: registreer hem en leg z'n bestandswortel aan.
+/// Create a container: register it and lay out its file root.
 pub fn create(fs: &mut dyn FileSystem, name: &str, caps: u64, net: NetScope) -> Vec<String> {
     if find(name).is_some() {
-        return alloc::vec![alloc::format!("container '{name}' bestaat al")];
+        return alloc::vec![alloc::format!("container '{name}' already exists")];
     }
     let con = Container::new(name, caps, net);
     let _ = fs.create_dir("/containers");
     let _ = fs.create_dir(&con.root);
     CONTAINERS.lock().push(con.clone());
-    alloc::vec![alloc::format!("container '{name}' aangemaakt — wortel {}, caps {:#06b}", con.root, caps & 0xF)]
+    alloc::vec![alloc::format!("container '{name}' created — root {}, caps {:#06b}", con.root, caps & 0xF)]
 }
 
-/// Lijst de geregistreerde containers.
+/// List the registered containers.
 pub fn list() -> Vec<String> {
     let cs = CONTAINERS.lock();
     if cs.is_empty() {
-        return alloc::vec!["(geen containers)".into()];
+        return alloc::vec!["(no containers)".into()];
     }
-    let mut out = alloc::vec![String::from("CONTAINER         WORTEL                 CAPS   NET")];
+    let mut out = alloc::vec![String::from("CONTAINER         ROOT                   CAPS   NET")];
     for c in cs.iter() {
         let net = match &c.net {
-            NetScope::None => String::from("geen"),
-            NetScope::Any => String::from("vrij"),
-            NetScope::Allow(l) => alloc::format!("{} regel(s)", l.len()),
+            NetScope::None => String::from("none"),
+            NetScope::Any => String::from("any"),
+            NetScope::Allow(l) => alloc::format!("{} rule(s)", l.len()),
         };
         out.push(alloc::format!("  {:<15} {:<22} {:#06b} {}", c.name, c.root, c.caps & 0xF, net));
     }
     out
 }
 
-/// `container run <naam> <pad>` — demonstreer de sandbox: schrijf een bestand via
-/// een container-pad, en toon dat een ontsnappingspoging (`..`) binnen de wortel
-/// blijft. Bewijst de chroot-semantiek met het echte filesysteem.
+/// `container run <name> <path>` — demonstrate the sandbox: write a file via
+/// a container path, and show that an escape attempt (`..`) stays within the root.
+/// Proves the chroot semantics with the real filesystem.
 pub fn run(fs: &mut dyn FileSystem, name: &str, path: &str) -> Vec<String> {
     let con = match find(name) {
         Some(c) => c,
-        None => return alloc::vec![alloc::format!("container '{name}' bestaat niet")],
+        None => return alloc::vec![alloc::format!("container '{name}' does not exist")],
     };
     let mut out = Vec::new();
     let resolved = con.resolve(path);
-    out.push(alloc::format!("container '{name}': pad '{path}' → '{resolved}'"));
+    out.push(alloc::format!("container '{name}': path '{path}' → '{resolved}'"));
     if con.contains(&resolved) || resolved == con.root {
-        out.push("  ✓ binnen de container-wortel (geen ontsnapping)".into());
+        out.push("  ✓ within the container root (no escape)".into());
     } else {
-        out.push("  ✗ ONTSNAPT — dit zou een bug zijn".into());
+        out.push("  ✗ ESCAPED — this would be a bug".into());
     }
-    // Schrijf+lees via het opgeloste pad (echt FS-bewijs).
-    if fs.write_file(&resolved, b"hallo vanuit de container\n").is_ok() {
+    // Write+read via the resolved path (real FS proof).
+    if fs.write_file(&resolved, b"hello from the container\n").is_ok() {
         if let Ok(d) = fs.read_file(&resolved) {
-            out.push(alloc::format!("  {} bytes geschreven+gelezen op het gesandboxte pad ✓", d.len()));
+            out.push(alloc::format!("  {} bytes written+read on the sandboxed path ✓", d.len()));
         }
     }
     out
 }
 
-/// Boot-zelftest (serial-verifieerbaar): maak een container, schrijf erin, en
-/// bewijs dat een `..`-ontsnapping binnen de wortel blijft.
+/// Boot self-test (serial-verifiable): create a container, write into it, and
+/// prove that a `..` escape stays within the root.
 pub fn boot_selftest(fs: &mut dyn FileSystem) {
     let net = NetScope::Allow(alloc::vec![([10, 0, 2, 2], 443)]);
     create(fs, "demo", CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO, net);
@@ -81,13 +81,13 @@ pub fn boot_selftest(fs: &mut dyn FileSystem) {
         Some(c) => c,
         None => return,
     };
-    // Effectieve caps: een proces met ALLE rechten verliest CAP_NET in deze container.
+    // Effective caps: a process with ALL rights loses CAP_NET in this container.
     let eff = con.effective_caps(CAP_CONSOLE | CAP_PROC_INFO | CAP_FILE | CAP_NET);
     let escaped = con.resolve("../../../etc/passwd");
     let contained = con.contains(&escaped) || escaped == con.root;
     let _ = fs.write_file(&con.resolve("data.txt"), b"sandbox\n");
     crate::serial_println!(
-        "[container] 'demo' wortel={} eff_caps={:#06b} (CAP_NET ontnomen={}) | escape '../../../etc/passwd' → {} (binnen={})",
+        "[container] 'demo' root={} eff_caps={:#06b} (CAP_NET removed={}) | escape '../../../etc/passwd' → {} (within={})",
         con.root,
         eff & 0xF,
         eff & CAP_NET == 0,

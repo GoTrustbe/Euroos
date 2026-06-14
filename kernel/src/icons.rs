@@ -1,11 +1,11 @@
-//! EuroOS SVG-icon-renderer (EDS) — tekent de `euicons`-set (24px stroke-grid)
-//! software in het framebuffer. Geen bitmaps: de iconen zijn echte vector-paden
-//! (rect/circle/path met M/L/H/V/C-commando's), getekend als strokes met een
-//! lijndikte. Schaalbaar naar elke grootte (resolutie-onafhankelijk, EDS-eis).
+//! EuroOS SVG icon renderer (EDS) — draws the `euicons` set (24px stroke grid)
+//! in software into the framebuffer. No bitmaps: the icons are real vector paths
+//! (rect/circle/path with M/L/H/V/C commands), drawn as strokes with a
+//! line width. Scalable to any size (resolution-independent, EDS requirement).
 
 use crate::graphics::{Color, FrameBuffer};
 
-// ── De icon-set: mini-SVG element-strings (uit euicons.js). currentColor. ──
+// ── The icon set: mini-SVG element strings (from euicons.js). currentColor. ──
 fn icon_svg(name: &str) -> &'static str {
     match name {
         "files" => "<path d=\"M3 8 V18.5 H21 V8 Z M3 8 V6 H8.5 L10.5 8\"/>",
@@ -37,7 +37,7 @@ fn icon_svg(name: &str) -> &'static str {
     }
 }
 
-/// Teken icon `name` in het vak (`x`,`y`) met grootte `size` px en kleur `color`.
+/// Draw icon `name` in the box (`x`,`y`) with size `size` px and color `color`.
 pub fn draw(fb: &FrameBuffer, name: &str, x: usize, y: usize, size: usize, color: Color) {
     let svg = icon_svg(name);
     if svg.is_empty() {
@@ -46,7 +46,7 @@ pub fn draw(fb: &FrameBuffer, name: &str, x: usize, y: usize, size: usize, color
     let s = size as f32 / 24.0; // viewBox = 24
     let ox = x as f32;
     let oy = y as f32;
-    // Lijndikte schaalt mee (min 1).
+    // Line width scales along (min 1).
     let thick = ((1.7 * s + 0.5) as i32).max(1);
     let tx = |v: f32| ox + v * s;
     let ty = |v: f32| oy + v * s;
@@ -86,19 +86,19 @@ pub fn draw(fb: &FrameBuffer, name: &str, x: usize, y: usize, size: usize, color
     }
 }
 
-// ── Mini-attribuut-parsers ────────────────────────────────────────────────
+// ── Mini attribute parsers ────────────────────────────────────────────────
 fn attr(elem: &str, key: &str) -> f32 {
     attr_str(elem, key).and_then(parse_first_num).unwrap_or(0.0)
 }
 
 fn attr_str<'a>(elem: &'a str, key: &str) -> Option<&'a str> {
-    // zoek key="..."
+    // find key="..."
     let pat = key;
     let mut i = 0;
     let b = elem.as_bytes();
     while i + pat.len() + 2 < b.len() {
         if &elem[i..i + pat.len()] == pat && b[i + pat.len()] == b'=' && b[i + pat.len() + 1] == b'"' {
-            // grens-check: voorafgaand teken is spatie of begin
+            // boundary check: preceding character is a space or the start
             let ok_before = i == 0 || b[i - 1] == b' ';
             if ok_before {
                 let start = i + pat.len() + 2;
@@ -127,7 +127,7 @@ fn parse_first_num(s: &str) -> Option<f32> {
     parse_f32(&s[..end])
 }
 
-/// Eenvoudige f32-parser (geen exponenten nodig voor SVG-paden).
+/// Simple f32 parser (no exponents needed for SVG paths).
 fn parse_f32(s: &str) -> Option<f32> {
     let s = s.trim();
     if s.is_empty() {
@@ -165,7 +165,7 @@ fn parse_f32(s: &str) -> Option<f32> {
     Some(if neg { -v } else { v })
 }
 
-// ── Path-tessellatie (M/L/H/V/C + relatieve varianten; A/Q -> rechte lijn) ──
+// ── Path tessellation (M/L/H/V/C + relative variants; A/Q -> straight line) ──
 fn draw_path(fb: &FrameBuffer, d: &str, tx: &dyn Fn(f32) -> f32, ty: &dyn Fn(f32) -> f32, _s: f32, thick: i32, color: Color) {
     let mut nums = NumIter::new(d);
     let mut cmds = CmdIter::new(d);
@@ -189,7 +189,7 @@ fn draw_path(fb: &FrameBuffer, d: &str, tx: &dyn Fn(f32) -> f32, ty: &dyn Fn(f32
                 px = tx(x);
                 py = ty(y);
                 started = true;
-                // volgende impliciete coords zijn lineto's; CmdIter regelt dat
+                // subsequent implicit coords are lineto's; CmdIter handles that
             }
             b'L' => {
                 let nx = nums.next().unwrap_or(0.0);
@@ -226,7 +226,7 @@ fn draw_path(fb: &FrameBuffer, d: &str, tx: &dyn Fn(f32) -> f32, ty: &dyn Fn(f32
                 let y2 = adj(rel, y, nums.next().unwrap_or(0.0));
                 let ex = adj(rel, x, nums.next().unwrap_or(0.0));
                 let ey = adj(rel, y, nums.next().unwrap_or(0.0));
-                // tessellatie van de cubic bezier
+                // tessellation of the cubic bezier
                 let steps = 14;
                 for i in 1..=steps {
                     let t = i as f32 / steps as f32;
@@ -240,8 +240,8 @@ fn draw_path(fb: &FrameBuffer, d: &str, tx: &dyn Fn(f32) -> f32, ty: &dyn Fn(f32
                 y = ey;
             }
             b'A' | b'Q' | b'S' | b'T' => {
-                // Niet volledig ondersteund: trek een rechte lijn naar het eindpunt.
-                // (De dock-iconen gebruiken deze niet; zo blijft het robuust.)
+                // Not fully supported: draw a straight line to the endpoint.
+                // (The dock icons do not use these; this keeps it robust.)
                 let last_two = nums.skip_to_last_pair();
                 if let Some((ex_r, ey_r)) = last_two {
                     x = adj(rel, x, ex_r);
@@ -283,7 +283,7 @@ fn cubic(x0: f32, y0: f32, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32,
     (a * x0 + b * x1 + c * x2 + dd * x3, a * y0 + b * y1 + c * y2 + dd * y3)
 }
 
-// ── Stroke-primitieven — anti-aliased via de framebuffer (afstand-tot-vorm) ──
+// ── Stroke primitives — anti-aliased via the framebuffer (distance-to-shape) ──
 fn half(thick: i32) -> f32 {
     (thick as f32 * 0.5).max(0.6)
 }
@@ -301,19 +301,19 @@ fn stroke_circle(fb: &FrameBuffer, cx: f32, cy: f32, r: f32, thick: i32, c: Colo
 
 fn stroke_round_rect(fb: &FrameBuffer, x: f32, y: f32, w: f32, h: f32, r: f32, thick: i32, c: Color) {
     let r = r.min(w / 2.0).min(h / 2.0);
-    // Vier rechte zijden (ingekort met de radius).
-    line(fb, x + r, y, x + w - r, y, thick, c); // boven
-    line(fb, x + r, y + h, x + w - r, y + h, thick, c); // onder
-    line(fb, x, y + r, x, y + h - r, thick, c); // links
-    line(fb, x + w, y + r, x + w, y + h - r, thick, c); // rechts
-    // Vier hoeken als kwart-cirkels (kwart van een midpoint-cirkel).
-    quarter(fb, x + r, y + r, r, thick, c, 2); // links-boven
-    quarter(fb, x + w - r, y + r, r, thick, c, 3); // rechts-boven
-    quarter(fb, x + r, y + h - r, r, thick, c, 1); // links-onder
-    quarter(fb, x + w - r, y + h - r, r, thick, c, 0); // rechts-onder
+    // Four straight sides (shortened by the radius).
+    line(fb, x + r, y, x + w - r, y, thick, c); // top
+    line(fb, x + r, y + h, x + w - r, y + h, thick, c); // bottom
+    line(fb, x, y + r, x, y + h - r, thick, c); // left
+    line(fb, x + w, y + r, x + w, y + h - r, thick, c); // right
+    // Four corners as quarter-circles (a quarter of a midpoint circle).
+    quarter(fb, x + r, y + r, r, thick, c, 2); // top-left
+    quarter(fb, x + w - r, y + r, r, thick, c, 3); // top-right
+    quarter(fb, x + r, y + h - r, r, thick, c, 1); // bottom-left
+    quarter(fb, x + w - r, y + h - r, r, thick, c, 0); // bottom-right
 }
 
-/// Kwart-cirkelboog rond (cx,cy); `q`: 0=RB,1=LB,2=LB-boven,3=RB-boven kwadrant.
+/// Quarter-circle arc around (cx,cy); `q`: 0=BR,1=BL,2=top-left,3=top-right quadrant.
 fn quarter(fb: &FrameBuffer, cx: f32, cy: f32, r: f32, thick: i32, c: Color, q: u8) {
     let cx = cx as i32;
     let cy = cy as i32;
@@ -328,10 +328,10 @@ fn quarter(fb: &FrameBuffer, cx: f32, cy: f32, r: f32, thick: i32, c: Color, q: 
         let mut err = 1 - x;
         while x >= y {
             let pts = match q {
-                0 => [(cx + x, cy + y), (cx + y, cy + x)], // rechts-onder
-                1 => [(cx - x, cy + y), (cx - y, cy + x)], // links-onder
-                2 => [(cx - x, cy - y), (cx - y, cy - x)], // links-boven
-                _ => [(cx + x, cy - y), (cx + y, cy - x)], // rechts-boven
+                0 => [(cx + x, cy + y), (cx + y, cy + x)], // bottom-right
+                1 => [(cx - x, cy + y), (cx - y, cy + x)], // bottom-left
+                2 => [(cx - x, cy - y), (cx - y, cy - x)], // top-left
+                _ => [(cx + x, cy - y), (cx + y, cy - x)], // top-right
             };
             for &(px, py) in &pts {
                 if px >= 0 && py >= 0 {
@@ -349,7 +349,7 @@ fn quarter(fb: &FrameBuffer, cx: f32, cy: f32, r: f32, thick: i32, c: Color, q: 
     }
 }
 
-// ── Tokenizers voor het pad: commando's en getallen ───────────────────────
+// ── Tokenizers for the path: commands and numbers ───────────────────────
 struct NumIter<'a> {
     bytes: &'a [u8],
     pos: usize,
@@ -360,7 +360,7 @@ impl<'a> NumIter<'a> {
     }
     fn next(&mut self) -> Option<f32> {
         let b = self.bytes;
-        // sla scheidingstekens over
+        // skip separators
         while self.pos < b.len() && (b[self.pos] == b' ' || b[self.pos] == b',') {
             self.pos += 1;
         }
@@ -385,7 +385,7 @@ impl<'a> NumIter<'a> {
         }
         parse_f32(core::str::from_utf8(&b[start..self.pos]).ok()?)
     }
-    /// Lees alle resterende getallen tot het volgende commando; geef het laatste paar.
+    /// Read all remaining numbers up to the next command; return the last pair.
     fn skip_to_last_pair(&mut self) -> Option<(f32, f32)> {
         let mut last = None;
         let mut prev = None;
@@ -415,15 +415,15 @@ impl<'a> NumIter<'a> {
 struct CmdIter<'a> {
     bytes: &'a [u8],
     pos: usize,
-    repeat: u8, // herhaal-commando voor impliciete coords
+    repeat: u8, // repeat command for implicit coords
 }
 impl<'a> CmdIter<'a> {
     fn new(s: &'a str) -> Self {
         CmdIter { bytes: s.as_bytes(), pos: 0, repeat: 0 }
     }
-    /// Geef het volgende commando-letter. Synchroniseert met `nums` via de pos.
+    /// Return the next command letter. Synchronizes with `nums` via the pos.
     fn next_cmd(&mut self, nums: &mut NumIter) -> Option<u8> {
-        // synchroniseer onze positie met de getallen-iterator
+        // synchronize our position with the numbers iterator
         self.pos = nums.pos;
         let b = self.bytes;
         while self.pos < b.len() && (b[self.pos] == b' ' || b[self.pos] == b',') {
@@ -436,7 +436,7 @@ impl<'a> CmdIter<'a> {
         if c.is_ascii_alphabetic() {
             self.pos += 1;
             nums.pos = self.pos;
-            // M wordt na de eerste coords impliciet L (SVG-regel)
+            // M becomes implicit L after the first coords (SVG rule)
             self.repeat = match c {
                 b'M' => b'L',
                 b'm' => b'l',
@@ -444,7 +444,7 @@ impl<'a> CmdIter<'a> {
             };
             Some(c)
         } else {
-            // impliciete herhaling van het vorige commando
+            // implicit repetition of the previous command
             if self.repeat != 0 {
                 Some(self.repeat)
             } else {

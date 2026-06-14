@@ -1,8 +1,8 @@
-//! PS/2-muis (i8042 auxiliary device), IRQ12 — bestuurt de desktop-cursor.
+//! PS/2 mouse (i8042 auxiliary device), IRQ12 — drives the desktop cursor.
 //!
-//! De controller levert 3-byte pakketten: [flags, dx, dy]. De IRQ12-handler
-//! (interrupts.rs) duwt elke byte hierheen; we decoderen het pakket en werken
-//! de cursorpositie + knopstatus bij (atomair, zodat de desktop-loop ze leest).
+//! The controller delivers 3-byte packets: [flags, dx, dy]. The IRQ12 handler
+//! (interrupts.rs) pushes each byte here; we decode the packet and update
+//! the cursor position + button state (atomically, so the desktop loop reads them).
 
 use core::sync::atomic::{AtomicI32, AtomicU8, AtomicUsize, Ordering};
 
@@ -15,7 +15,7 @@ static BUTTONS: AtomicU8 = AtomicU8::new(0);
 static SCREEN_W: AtomicUsize = AtomicUsize::new(0);
 static SCREEN_H: AtomicUsize = AtomicUsize::new(0);
 
-// Pakket-opbouw: (fase 0..3, bytes).
+// Packet assembly: (phase 0..3, bytes).
 static PACKET: Mutex<(u8, [u8; 3])> = Mutex::new((0, [0; 3]));
 
 fn wait_input_empty(status: &mut Port<u8>) {
@@ -33,7 +33,7 @@ fn wait_output_full(status: &mut Port<u8>) {
     }
 }
 
-/// Initialiseer de PS/2-muis. Moet vóór het demaskeren van IRQ12 gebeuren.
+/// Initialize the PS/2 mouse. Must happen before unmasking IRQ12.
 pub fn init(width: usize, height: usize) {
     SCREEN_W.store(width, Ordering::Relaxed);
     SCREEN_H.store(height, Ordering::Relaxed);
@@ -44,28 +44,28 @@ pub fn init(width: usize, height: usize) {
     let mut cmd = Port::<u8>::new(0x64);
     let mut status = Port::<u8>::new(0x64);
     unsafe {
-        // Schakel het auxiliary device (muis) in.
+        // Enable the auxiliary device (mouse).
         wait_input_empty(&mut status);
         cmd.write(0xA8);
-        // Lees config-byte. Zet BEIDE interrupts aan (bit0=toetsenbord IRQ1,
-        // bit1=muis IRQ12) en BEIDE clocks aan (clear bit4=kbd, bit5=muis).
+        // Read config byte. Turn BOTH interrupts on (bit0=keyboard IRQ1,
+        // bit1=mouse IRQ12) and BOTH clocks on (clear bit4=kbd, bit5=mouse).
         wait_input_empty(&mut status);
         cmd.write(0x20);
         wait_output_full(&mut status);
         let mut cfg = data.read();
-        cfg |= 0b11; // bit0 kbd-IRQ + bit1 muis-IRQ
-        cfg &= !0b11_0000; // clear bit4 (kbd-clock) + bit5 (muis-clock) → beide aan
+        cfg |= 0b11; // bit0 kbd-IRQ + bit1 mouse-IRQ
+        cfg &= !0b11_0000; // clear bit4 (kbd-clock) + bit5 (mouse-clock) → both on
         wait_input_empty(&mut status);
         cmd.write(0x60);
         wait_input_empty(&mut status);
         data.write(cfg);
-        // Toetsenbord: enable scanning (0xF4 direct naar de kbd) zodat toetsen
-        // ECHT scancodes + IRQ1 genereren (anders kwam alleen de self-test-byte binnen).
+        // Keyboard: enable scanning (0xF4 directly to the kbd) so keys
+        // ACTUALLY generate scancodes + IRQ1 (otherwise only the self-test byte arrived).
         wait_input_empty(&mut status);
         data.write(0xF4);
         wait_output_full(&mut status);
         let _ack_kbd = data.read(); // 0xFA
-        // Muis: defaults + data reporting aan (elk met 0xD4-prefix naar aux).
+        // Mouse: defaults + data reporting on (each with 0xD4 prefix to aux).
         mouse_write(&mut cmd, &mut data, &mut status, 0xF6); // set defaults
         mouse_write(&mut cmd, &mut data, &mut status, 0xF4); // enable reporting
     }
@@ -80,11 +80,11 @@ unsafe fn mouse_write(cmd: &mut Port<u8>, data: &mut Port<u8>, status: &mut Port
     let _ack = data.read(); // 0xFA
 }
 
-/// Door de IRQ12-handler aangeroepen met elke ontvangen byte.
+/// Called by the IRQ12 handler with each received byte.
 pub fn push_byte(byte: u8) {
     let mut p = PACKET.lock();
     let phase = p.0;
-    // Hersynchroniseer: byte 0 moet bit 3 gezet hebben.
+    // Resynchronize: byte 0 must have bit 3 set.
     if phase == 0 && byte & 0x08 == 0 {
         return;
     }
@@ -102,16 +102,16 @@ pub fn push_byte(byte: u8) {
     BUTTONS.store(flags & 0x07, Ordering::Relaxed);
     let w = SCREEN_W.load(Ordering::Relaxed) as i32;
     let h = SCREEN_H.load(Ordering::Relaxed) as i32;
-    // Y is geïnverteerd: muis omhoog = positieve dy = cursor omhoog.
+    // Y is inverted: mouse up = positive dy = cursor up.
     let nx = (MOUSE_X.load(Ordering::Relaxed) + dx).clamp(0, w - 1);
     let ny = (MOUSE_Y.load(Ordering::Relaxed) - dy).clamp(0, h - 1);
     MOUSE_X.store(nx, Ordering::Relaxed);
     MOUSE_Y.store(ny, Ordering::Relaxed);
 }
 
-/// Pas een relatieve USB-HID-muisbeweging + knopstatus toe (zelfde cursor-atomics
-/// als de PS/2-muis, zodat de desktop transparant op USB-invoer werkt). `dy` is in
-/// HID-conventie (omlaag positief), dus we tellen 'm direct op bij Y.
+/// Apply a relative USB-HID mouse movement + button state (same cursor atomics
+/// as the PS/2 mouse, so the desktop works transparently on USB input). `dy` is in
+/// HID convention (down positive), so we add it directly to Y.
 pub fn apply_usb(dx: i32, dy: i32, buttons: u8) {
     BUTTONS.store(buttons & 0x07, Ordering::Relaxed);
     let w = SCREEN_W.load(Ordering::Relaxed) as i32;
@@ -132,7 +132,7 @@ pub fn pos() -> (usize, usize) {
     )
 }
 
-/// True als de linkerknop ingedrukt is.
+/// True if the left button is pressed.
 pub fn left_down() -> bool {
     BUTTONS.load(Ordering::Relaxed) & 0x01 != 0
 }

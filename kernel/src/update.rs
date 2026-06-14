@@ -1,14 +1,14 @@
-//! EuroUpdate-integratie in de kernel (plan F1 + G4): laad de A/B-slotconfiguratie
-//! van een GERESERVEERD RAUW BLOK (LBA 40, buiten elke EuroFS-partitie — overleeft
-//! filesystem-corruptie/torn-writes), voer bij elke boot de bootloader-/rollback-
-//! logica uit, en markeer het slot "goed" zodra de boot slaagt. De `euroupdate`-crate
-//! bevat de (host-geteste) toestandsmachine; hier komt de rauw-blok-persistentie +
-//! EuroGuard-getekende `apply`-stroom bovenop. `/boot/slot_config` blijft als
-//! mens-leesbare spiegel bestaan.
+//! EuroUpdate integration in the kernel (plan F1 + G4): load the A/B slot configuration
+//! from a RESERVED RAW BLOCK (LBA 40, outside every EuroFS partition — survives
+//! filesystem corruption/torn-writes), run the bootloader/rollback logic on every
+//! boot, and mark the slot "good" as soon as the boot succeeds. The `euroupdate`
+//! crate contains the (host-tested) state machine; on top of it comes the raw-block
+//! persistence + EuroGuard-signed `apply` flow. `/boot/slot_config` remains as a
+//! human-readable mirror.
 //!
-//! NB: in deze build voert de KERNEL de slotbeslissing uit (onze UEFI-loader kiest
-//! nog geen slot-image). De configuratie-logica is identiek aan wat de bootloader
-//! straks doet; zo is het anti-brick-mechanisme nu al echt en zichtbaar.
+//! NB: in this build the KERNEL makes the slot decision (our UEFI loader does not
+//! yet pick a slot image). The configuration logic is identical to what the bootloader
+//! will eventually do; this way the anti-brick mechanism is already real and visible now.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -19,18 +19,18 @@ use spin::Mutex;
 
 const CONFIG_PATH: &str = "/boot/slot_config";
 
-/// Gereserveerde rauwe LBA voor de A/B-slotconfiguratie (G4). De GPT-partitietabel
-/// vult LBA 2..33 (128 entries) en de eerste partitie begint pas op LBA 2048 — de
-/// gat-sector op LBA 40 ligt dus BUITEN elke EuroFS-partitie. Door de slotstaat
-/// hier (i.p.v. een bestand) op te slaan overleeft hij filesystem-corruptie,
-/// torn-writes in de superblock, en een onbruikbaar slot-image — precies wat een
-/// anti-brick-mechanisme moet kunnen. Dit is de bron-van-waarheid; het bestand
-/// `/boot/slot_config` is nog een mens-leesbare spiegel.
+/// Reserved raw LBA for the A/B slot configuration (G4). The GPT partition table
+/// fills LBA 2..33 (128 entries) and the first partition only begins at LBA 2048 — the
+/// gap sector at LBA 40 thus lies OUTSIDE every EuroFS partition. By storing the slot
+/// state here (instead of a file) it survives filesystem corruption,
+/// torn-writes in the superblock, and an unusable slot image — exactly what an
+/// anti-brick mechanism must be able to do. This is the source of truth; the file
+/// `/boot/slot_config` is still a human-readable mirror.
 const SLOT_LBA: u64 = 40;
 
 static CONFIG: Mutex<Option<SlotConfig>> = Mutex::new(None);
 
-/// Lees de slotconfig van het rauwe gereserveerde blok (los van EuroFS).
+/// Read the slot config from the raw reserved block (independent of EuroFS).
 fn raw_load() -> Option<SlotConfig> {
     if !crate::virtio_blk::present() {
         return None;
@@ -42,7 +42,7 @@ fn raw_load() -> Option<SlotConfig> {
     SlotConfig::deserialize(&buf[..euroupdate::CONFIG_SIZE])
 }
 
-/// Schrijf de slotconfig naar het rauwe gereserveerde blok + flush naar hardware.
+/// Write the slot config to the raw reserved block + flush to hardware.
 fn raw_persist(cfg: &SlotConfig) -> bool {
     if !crate::virtio_blk::present() {
         return false;
@@ -62,8 +62,8 @@ fn slot_name(s: Slot) -> &'static str {
 }
 
 fn load(fs: &mut dyn FileSystem) -> SlotConfig {
-    // Bron-van-waarheid: het rauwe blok (overleeft FS-corruptie). Valt terug op de
-    // FS-spiegel, dan op een verse initiële config.
+    // Source of truth: the raw block (survives FS corruption). Falls back to the
+    // FS mirror, then to a fresh initial config.
     if let Some(cfg) = raw_load() {
         return cfg;
     }
@@ -74,46 +74,46 @@ fn load(fs: &mut dyn FileSystem) -> SlotConfig {
 }
 
 fn persist(fs: &mut dyn FileSystem, cfg: &SlotConfig) {
-    // Primair naar het rauwe blok; daarna de mens-leesbare FS-spiegel.
+    // Primarily to the raw block; then the human-readable FS mirror.
     raw_persist(cfg);
     let _ = fs.create_dir("/boot");
     let _ = fs.write_file(CONFIG_PATH, &cfg.serialize());
 }
 
-/// Eén keer per boot: lees de config, voer `on_boot` uit (kies slot + werk de
-/// poging-teller bij), persisteer, en log de beslissing.
+/// Once per boot: read the config, run `on_boot` (pick slot + update the
+/// attempt counter), persist, and log the decision.
 pub fn boot_init(fs: &mut dyn FileSystem) {
-    // Kwam de slotstaat van het rauwe blok (een vorige boot schreef 'm) of is dit
-    // een verse schijf? Dat onderscheid bewijst cross-reboot-persistentie.
+    // Did the slot state come from the raw block (a previous boot wrote it) or is this
+    // a fresh disk? That distinction proves cross-reboot persistence.
     let from_raw = raw_load().is_some();
     let mut cfg = load(fs);
     let booted = cfg.on_boot();
     persist(fs, &cfg);
     *CONFIG.lock() = Some(cfg);
     crate::serial_println!(
-        "[euroupdate] boot van slot {} (gen {}, {} poging(en) over, A={:?} B={:?})",
+        "[euroupdate] boot from slot {} (gen {}, {} attempt(s) left, A={:?} B={:?})",
         slot_name(booted),
         cfg.generation,
         cfg.tries,
         cfg.state(Slot::A),
         cfg.state(Slot::B),
     );
-    // G4: bewijs dat de slotstaat op het rauwe blok (buiten EuroFS) staat en exact
-    // terugleest — een verse blok-read, los van de in-memory config.
+    // G4: prove that the slot state is on the raw block (outside EuroFS) and reads back
+    // exactly — a fresh block read, independent of the in-memory config.
     match raw_load() {
         Some(rb) if rb == cfg => crate::serial_println!(
-            "[g4] slot_config op rauw blok LBA {} (buiten EuroFS) — {}, round-trip geverifieerd, gen {} ✓",
+            "[g4] slot_config on raw block LBA {} (outside EuroFS) — {}, round-trip verified, gen {} ✓",
             SLOT_LBA,
-            if from_raw { "HERSTELD van vorige boot" } else { "verse schijf → initieel" },
+            if from_raw { "RESTORED from previous boot" } else { "fresh disk → initial" },
             rb.generation
         ),
-        Some(_) => crate::serial_println!("[g4] WAARSCHUWING: rauw-blok slot_config wijkt af van geheugen"),
-        None => crate::serial_println!("[g4] rauw-blok slot_config niet leesbaar (geen virtio-blk?)"),
+        Some(_) => crate::serial_println!("[g4] WARNING: raw-block slot_config differs from memory"),
+        None => crate::serial_println!("[g4] raw-block slot_config not readable (no virtio-blk?)"),
     }
 }
 
-/// Roep dit aan zodra de boot succesvol is (EuroInit/desktop bereikt): markeer
-/// het actieve slot definitief goed, zodat een volgende boot niet terugrolt.
+/// Call this as soon as the boot is successful (EuroInit/desktop reached): mark
+/// the active slot definitively good, so that a next boot does not roll back.
 pub fn mark_boot_good(fs: &mut dyn FileSystem) {
     let mut guard = CONFIG.lock();
     if let Some(cfg) = guard.as_mut() {
@@ -121,24 +121,24 @@ pub fn mark_boot_good(fs: &mut dyn FileSystem) {
         let snapshot = *cfg;
         drop(guard);
         persist(fs, &snapshot);
-        crate::serial_println!("[euroupdate] slot {} bevestigd GOED (boot geslaagd)", slot_name(snapshot.active));
+        crate::serial_println!("[euroupdate] slot {} confirmed GOOD (boot succeeded)", slot_name(snapshot.active));
     }
 }
 
-/// `euroupdate status` — toon de huidige slotconfiguratie.
+/// `euroupdate status` — show the current slot configuration.
 pub fn status(fs: &mut dyn FileSystem) -> Vec<String> {
     let cfg = (*CONFIG.lock()).unwrap_or_else(|| load(fs));
     alloc::vec![
-        String::from("EuroUpdate — A/B-systeemslots"),
-        alloc::format!("  actief slot   : {}", slot_name(cfg.active)),
-        alloc::format!("  volgende boot : {} ({} poging(en) over)", slot_name(cfg.next_boot), cfg.tries),
+        String::from("EuroUpdate — A/B system slots"),
+        alloc::format!("  active slot   : {}", slot_name(cfg.active)),
+        alloc::format!("  next boot     : {} ({} attempt(s) left)", slot_name(cfg.next_boot), cfg.tries),
         alloc::format!("  slot A        : {:?}", cfg.state(Slot::A)),
         alloc::format!("  slot B        : {:?}", cfg.state(Slot::B)),
-        alloc::format!("  generatie     : {}", cfg.generation),
+        alloc::format!("  generation    : {}", cfg.generation),
     ]
 }
 
-/// De GPT-partitienaam van een A/B-slot (G4 multi-partitie-layout).
+/// The GPT partition name of an A/B slot (G4 multi-partition layout).
 fn slot_partition_name(s: Slot) -> &'static str {
     match s {
         Slot::A => "EuroOS-A",
@@ -146,16 +146,16 @@ fn slot_partition_name(s: Slot) -> &'static str {
     }
 }
 
-/// Schrijf `image` direct naar de partitie van `slot` (sector-I/O, buiten EuroFS)
-/// en verifieer met een read-back van de eerste sector. Dit is de echte A/B-
-/// image-write: het slot-image leeft in zijn eigen GPT-partitie, niet in een
-/// bestand op de root-FS. Geeft Ok(bytes) of een foutreden.
+/// Write `image` directly to the partition of `slot` (sector I/O, outside EuroFS)
+/// and verify with a read-back of the first sector. This is the real A/B
+/// image write: the slot image lives in its own GPT partition, not in a
+/// file on the root FS. Returns Ok(bytes) or an error reason.
 fn write_image_to_slot(slot: Slot, image: &[u8]) -> Result<usize, &'static str> {
     let (first_lba, blocks) =
-        crate::gpt::find_partition_by_name(slot_partition_name(slot)).ok_or("slot-partitie niet gevonden")?;
+        crate::gpt::find_partition_by_name(slot_partition_name(slot)).ok_or("slot partition not found")?;
     let nsec = image.len().div_ceil(512);
     if nsec as u64 > blocks * 8 {
-        return Err("image groter dan de slot-partitie");
+        return Err("image larger than the slot partition");
     }
     for i in 0..nsec {
         let off = i * 512;
@@ -163,47 +163,47 @@ fn write_image_to_slot(slot: Slot, image: &[u8]) -> Result<usize, &'static str> 
         let mut sec = [0u8; 512];
         sec[..end - off].copy_from_slice(&image[off..end]);
         if !crate::virtio_blk::write_sector(first_lba + i as u64, &sec) {
-            return Err("schrijven naar slot-partitie mislukt");
+            return Err("writing to slot partition failed");
         }
     }
     crate::virtio_blk::flush();
-    // Read-back-verificatie (eerste sector) — bewijst dat het op de schijf staat.
+    // Read-back verification (first sector) — proves that it is on the disk.
     let mut rb = [0u8; 512];
     if !crate::virtio_blk::read_sector(first_lba, &mut rb) {
-        return Err("read-back mislukt");
+        return Err("read-back failed");
     }
     let first_end = 512.min(image.len());
     if rb[..first_end] != image[..first_end] {
-        return Err("read-back-mismatch");
+        return Err("read-back mismatch");
     }
     Ok(image.len())
 }
 
-/// G4-zelftest: schrijf een patroon naar de (ongebruikte) EuroOS-B-slot-partitie
-/// en lees het terug — bewijst de directe image→partitie-write-weg.
+/// G4 self-test: write a pattern to the (unused) EuroOS-B slot partition
+/// and read it back — proves the direct image→partition write path.
 pub fn slot_partition_selftest() {
     if !crate::virtio_blk::present() {
         return;
     }
-    let pattern = b"EuroOS slot-image partitie-write zelftest (G4) -- niet-FS, directe sector-I/O";
+    let pattern = b"EuroOS slot-image partition-write selftest (G4) -- non-FS, direct sector-I/O";
     match write_image_to_slot(Slot::B, pattern) {
         Ok(n) => crate::serial_println!(
-            "[g4] slot-image-write: {} bytes naar EuroOS-B-partitie geschreven + read-back geverifieerd ✓",
+            "[g4] slot-image-write: {} bytes written to EuroOS-B partition + read-back verified ✓",
             n
         ),
-        Err(e) => crate::serial_println!("[g4] slot-image-write zelftest: {e}"),
+        Err(e) => crate::serial_println!("[g4] slot-image-write selftest: {e}"),
     }
 }
 
-/// `euroupdate apply <image>` — verifieer de Ed25519-handtekening van `<image>`
-/// (verwacht `<image>.sig` ernaast), "schrijf" naar het inactieve slot, en stage
-/// de update zodat de volgende boot het probeert (met automatische rollback).
+/// `euroupdate apply <image>` — verify the Ed25519 signature of `<image>`
+/// (expects `<image>.sig` next to it), "write" to the inactive slot, and stage
+/// the update so that the next boot tries it (with automatic rollback).
 pub fn apply(fs: &mut dyn FileSystem, image_path: &str) -> Vec<String> {
     let mut out = Vec::new();
     let image = match fs.read_file(image_path) {
         Ok(d) => d,
         Err(_) => {
-            out.push(alloc::format!("euroupdate: kan '{image_path}' niet lezen"));
+            out.push(alloc::format!("euroupdate: cannot read '{image_path}'"));
             return out;
         }
     };
@@ -211,33 +211,33 @@ pub fn apply(fs: &mut dyn FileSystem, image_path: &str) -> Vec<String> {
     let sig = match fs.read_file(&sig_path) {
         Ok(d) => d,
         Err(_) => {
-            out.push(alloc::format!("euroupdate: handtekening '{sig_path}' ontbreekt"));
+            out.push(alloc::format!("euroupdate: signature '{sig_path}' missing"));
             return out;
         }
     };
     stage_verified_image(fs, &image, &sig)
 }
 
-/// De kern van een veilige update: verifieer de Ed25519-handtekening over `image`
-/// (verify-before-activate), schrijf het naar het inactieve slot, en stage het.
-/// Gedeeld door `apply` (FS-bron) en `fetch` (netwerkbron). Een ongeldige
-/// handtekening leidt ALTIJD tot weigering — een gemanipuleerde update wordt nooit
-/// gestaged, laat staan geactiveerd.
+/// The core of a secure update: verify the Ed25519 signature over `image`
+/// (verify-before-activate), write it to the inactive slot, and stage it.
+/// Shared by `apply` (FS source) and `fetch` (network source). An invalid
+/// signature ALWAYS leads to refusal — a tampered update is never
+/// staged, let alone activated.
 fn stage_verified_image(fs: &mut dyn FileSystem, image: &[u8], sig: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
-    // EuroGuard: weiger een update zonder geldige EuroOS-handtekening (anti-tamper).
+    // EuroGuard: refuse an update without a valid EuroOS signature (anti-tamper).
     if !crate::crypto::verify(image, sig) {
-        out.push("euroupdate: ONGELDIGE handtekening — update GEWEIGERD".into());
+        out.push("euroupdate: INVALID signature — update REFUSED".into());
         return out;
     }
     let mut cfg = CONFIG.lock().take().unwrap_or_else(|| load(fs));
     let target = cfg.inactive();
-    // Schrijf het image direct naar de PARTITIE van het inactieve slot (G4: echte
-    // A/B-partities + read-back-verificatie). Valt terug op een FS-bestand als de
-    // multi-partitie-GPT (nog) niet aanwezig is.
+    // Write the image directly to the PARTITION of the inactive slot (G4: real
+    // A/B partitions + read-back verification). Falls back to an FS file if the
+    // multi-partition GPT is not (yet) present.
     match write_image_to_slot(target, image) {
         Ok(n) => out.push(alloc::format!(
-            "euroupdate: {} bytes naar de {}-partitie geschreven + read-back ✓",
+            "euroupdate: {} bytes written to the {} partition + read-back ✓",
             n,
             slot_partition_name(target)
         )),
@@ -245,22 +245,22 @@ fn stage_verified_image(fs: &mut dyn FileSystem, image: &[u8], sig: &[u8]) -> Ve
             let slot_file = alloc::format!("/boot/slot_{}.img", slot_name(target));
             let _ = fs.create_dir("/boot");
             if fs.write_file(&slot_file, image).is_err() {
-                out.push("euroupdate: schrijven naar het inactieve slot MISLUKT".into());
+                out.push("euroupdate: writing to the inactive slot FAILED".into());
                 *CONFIG.lock() = Some(cfg);
                 return out;
             }
-            out.push(alloc::format!("euroupdate: (fallback) image naar {slot_file} geschreven"));
+            out.push(alloc::format!("euroupdate: (fallback) image written to {slot_file}"));
         }
     }
     cfg.stage_update();
     persist(fs, &cfg);
     out.push(alloc::format!(
-        "euroupdate: image ({} bytes) geverifieerd + naar slot {} geschreven",
+        "euroupdate: image ({} bytes) verified + written to slot {}",
         image.len(),
         slot_name(target)
     ));
     out.push(alloc::format!(
-        "  volgende boot probeert slot {} ({} pogingen, dan automatische rollback)",
+        "  next boot tries slot {} ({} attempts, then automatic rollback)",
         slot_name(cfg.next_boot),
         cfg.tries
     ));
@@ -268,18 +268,18 @@ fn stage_verified_image(fs: &mut dyn FileSystem, image: &[u8], sig: &[u8]) -> Ve
     out
 }
 
-/// `euroupdate fetch <url>` — haal een GESIGNEERD updatepakket over HTTPS op
-/// (`<url>` = het image, `<url>.sig` = de Ed25519-handtekening), verifieer het
-/// tegen de ingebakken EuroOS-sleutel, en stage het naar het inactieve slot.
-/// Gebruikt de echte EuroTLS-1.3-stack (`net::fetch_full`). In deze sandbox is er
-/// geen externe netwerktoegang, dus rapporteren we de echte fetch-uitkomst eerlijk;
-/// de verify-+-stage-pijplijn die volgt is identiek aan `apply`.
+/// `euroupdate fetch <url>` — fetch a SIGNED update package over HTTPS
+/// (`<url>` = the image, `<url>.sig` = the Ed25519 signature), verify it
+/// against the baked-in EuroOS key, and stage it to the inactive slot.
+/// Uses the real EuroTLS-1.3 stack (`net::fetch_full`). In this sandbox there is
+/// no external network access, so we report the real fetch outcome honestly;
+/// the verify-+-stage pipeline that follows is identical to `apply`.
 pub fn fetch(fs: &mut dyn FileSystem, url: &str) -> Vec<String> {
     let mut out = Vec::new();
     let (host, port, path, tls) = match parse_url(url) {
         Some(p) => p,
         None => {
-            out.push(alloc::format!("euroupdate fetch: ongeldige URL '{url}' (verwacht http(s)://host[:poort]/pad)"));
+            out.push(alloc::format!("euroupdate fetch: invalid URL '{url}' (expected http(s)://host[:port]/path)"));
             return out;
         }
     };
@@ -291,27 +291,27 @@ pub fn fetch(fs: &mut dyn FileSystem, url: &str) -> Vec<String> {
     let image = match crate::net::fetch_full(&host, port, &path, tls) {
         Some((200, _, body)) => body,
         Some((code, _, _)) => {
-            out.push(alloc::format!("euroupdate fetch: server gaf HTTP {code} voor het image — afgebroken"));
+            out.push(alloc::format!("euroupdate fetch: server returned HTTP {code} for the image — aborted"));
             return out;
         }
         None => {
-            out.push("euroupdate fetch: geen verbinding/antwoord (geen externe netwerktoegang in deze omgeving) — afgebroken".into());
+            out.push("euroupdate fetch: no connection/response (no external network access in this environment) — aborted".into());
             return out;
         }
     };
     let sig = match crate::net::fetch_full(&host, port, &sig_path, tls) {
         Some((200, _, body)) => body,
         _ => {
-            out.push(alloc::format!("euroupdate fetch: handtekening {sig_path} niet opgehaald — afgebroken"));
+            out.push(alloc::format!("euroupdate fetch: signature {sig_path} not fetched — aborted"));
             return out;
         }
     };
-    out.push(alloc::format!("euroupdate fetch: {} B image + {} B handtekening opgehaald — verifiëren…", image.len(), sig.len()));
+    out.push(alloc::format!("euroupdate fetch: {} B image + {} B signature fetched — verifying…", image.len(), sig.len()));
     out.extend(stage_verified_image(fs, &image, &sig));
     out
 }
 
-/// Heel eenvoudige URL-parser: `http(s)://host[:poort]/pad`.
+/// Very simple URL parser: `http(s)://host[:port]/path`.
 fn parse_url(url: &str) -> Option<(String, u16, String, bool)> {
     let (tls, rest) = if let Some(r) = url.strip_prefix("https://") {
         (true, r)
@@ -334,9 +334,9 @@ fn parse_url(url: &str) -> Option<(String, u16, String, bool)> {
     Some((String::from(host), port, String::from(path), tls))
 }
 
-/// **[upd3] (pijplijn) — `apply()` aanvaardt een echt pakket en weigert een
-/// gemanipuleerd**, end-to-end op een RAM-EuroFS, met de ECHTE dev.key-handtekening.
-/// Globale slotstaat wordt rond de test bewaard/hersteld (niet-invasief).
+/// **[upd3] (pipeline) — `apply()` accepts a real package and refuses a
+/// tampered one**, end-to-end on a RAM EuroFS, with the REAL dev.key signature.
+/// Global slot state is preserved/restored around the test (non-invasive).
 pub fn apply_gate_selftest(now: u64) {
     use eurofs::{EuroFs, MemoryBlockDevice};
     let saved = *CONFIG.lock();
@@ -344,7 +344,7 @@ pub fn apply_gate_selftest(now: u64) {
     let mut fs = match EuroFs::format(&mut dev, [0x33; 16], now) {
         Ok(f) => f,
         Err(_) => {
-            crate::serial_println!("[upd3] (pijplijn) kon RAM-EuroFS niet formatteren — overgeslagen");
+            crate::serial_println!("[upd3] (pipeline) could not format RAM EuroFS — skipped");
             return;
         }
     };
@@ -352,31 +352,31 @@ pub fn apply_gate_selftest(now: u64) {
     let _ = fs.create_dir("/upd");
     let _ = fs.write_file("/upd/ok.img", img);
     let _ = fs.write_file("/upd/ok.img.sig", sig);
-    let accepted = apply(&mut fs, "/upd/ok.img").iter().any(|l| l.contains("geverifieerd + naar slot"));
+    let accepted = apply(&mut fs, "/upd/ok.img").iter().any(|l| l.contains("verified + written to slot"));
 
     let mut tampered = img.to_vec();
-    tampered[200] ^= 0xFF; // gemanipuleerd image, originele (geldige) handtekening
+    tampered[200] ^= 0xFF; // tampered image, original (valid) signature
     let _ = fs.write_file("/upd/bad.img", &tampered);
     let _ = fs.write_file("/upd/bad.img.sig", sig);
-    let refused = apply(&mut fs, "/upd/bad.img").iter().any(|l| l.contains("GEWEIGERD"));
+    let refused = apply(&mut fs, "/upd/bad.img").iter().any(|l| l.contains("REFUSED"));
 
-    *CONFIG.lock() = saved; // globale slotstaat herstellen
+    *CONFIG.lock() = saved; // restore global slot state
     crate::serial_println!(
-        "[upd3] update-pijplijn: echt pakket gestaged={} · gemanipuleerd pakket geweigerd={} → {}",
+        "[upd3] update pipeline: real package staged={} · tampered package refused={} → {}",
         accepted, refused,
-        if accepted && refused { "OK ✓" } else { "MISLUKT ✗" }
+        if accepted && refused { "OK ✓" } else { "FAILED ✗" }
     );
 }
 
-/// `euroupdate rollback` — forceer terug naar het andere goede slot.
+/// `euroupdate rollback` — force back to the other good slot.
 pub fn rollback(fs: &mut dyn FileSystem) -> Vec<String> {
     let mut cfg = CONFIG.lock().take().unwrap_or_else(|| load(fs));
     let ok = cfg.rollback();
     persist(fs, &cfg);
     let res = if ok {
-        alloc::format!("euroupdate: rollback ingesteld — volgende boot van slot {}", slot_name(cfg.next_boot))
+        alloc::format!("euroupdate: rollback set — next boot from slot {}", slot_name(cfg.next_boot))
     } else {
-        String::from("euroupdate: rollback NIET mogelijk (geen ander goed slot)")
+        String::from("euroupdate: rollback NOT possible (no other good slot)")
     };
     *CONFIG.lock() = Some(cfg);
     alloc::vec![res]

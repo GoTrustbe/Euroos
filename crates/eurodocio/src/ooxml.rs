@@ -1,15 +1,15 @@
-//! OOXML WordprocessingML (`.docx` `word/document.xml`) ↔ het EuroDoc-UDM.
+//! OOXML WordprocessingML (`.docx` `word/document.xml`) ↔ the EuroDoc UDM.
 //!
-//! Werkt op de (al uitgepakte) `document.xml`-inhoud; de ZIP-container is een aparte
-//! laag. Leest paragrafen (`w:p`), runs (`w:r`) met opmaak (`w:b`/`w:i`/`w:u`),
-//! tekst (`w:t`) en paragraaf-stijlen (`w:pStyle`); schrijft hetzelfde terug.
+//! Operates on the (already extracted) `document.xml` content; the ZIP container is a
+//! separate layer. Reads paragraphs (`w:p`), runs (`w:r`) with formatting (`w:b`/`w:i`/`w:u`),
+//! text (`w:t`) and paragraph styles (`w:pStyle`); writes the same back.
 
 use crate::xml::{encode_entities, parse, Event};
 use alloc::string::String;
 use alloc::vec::Vec;
 use eurodoc::model::{Block, Paragraph, ParagraphProperties, Run, RunProperties};
 
-/// Parse de inhoud van een `word/document.xml` naar een lijst blokken.
+/// Parse the content of a `word/document.xml` into a list of blocks.
 pub fn parse_body(xml: &str) -> Vec<Block> {
     let events = parse(xml);
     let mut blocks = Vec::new();
@@ -35,7 +35,7 @@ pub fn parse_body(xml: &str) -> Vec<Block> {
                 _ => {}
             },
             Event::Text(t) => {
-                // Tekst telt alleen binnen een <w:t> (dus binnen een run, niet in rPr).
+                // Text only counts inside a <w:t> (so inside a run, not in rPr).
                 if let Some(r) = run.as_mut() {
                     if !in_rpr {
                         r.text.push_str(t);
@@ -65,7 +65,7 @@ fn attr(attrs: &[(String, String)], key: &str) -> Option<String> {
     attrs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
 }
 
-/// `w:val="false"`/`"0"` betekent de toggle uít.
+/// `w:val="false"`/`"0"` means the toggle is off.
 fn is_false(attrs: &[(String, String)]) -> bool {
     matches!(attr(attrs, "w:val").as_deref(), Some("false") | Some("0"))
 }
@@ -76,7 +76,7 @@ fn set_run(run: &mut Option<Run>, f: impl FnOnce(&mut RunProperties)) {
     }
 }
 
-/// Schrijf een lijst blokken naar `word/document.xml`-inhoud (WordprocessingML).
+/// Write a list of blocks to `word/document.xml` content (WordprocessingML).
 pub fn write_body(blocks: &[Block]) -> String {
     let mut s = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>",

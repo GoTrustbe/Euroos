@@ -1,0 +1,9 @@
+[package]
+name = "eurolock"
+version = "0.1.0"
+edition = "2021"
+description = "Sovereign lock-order checker: a documented kernel lock hierarchy + a runtime inversion detector to prevent deadlocks. no_std, no unsafe."
+license = "EUPL-1.2"
+
+[lib]
+doctest = false

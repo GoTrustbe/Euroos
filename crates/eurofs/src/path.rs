@@ -1,19 +1,19 @@
-//! Pad-utilities voor een no_std omgeving (geen `std::path`).
+//! Path utilities for a no_std environment (no `std::path`).
 //!
-//! Alle paden zijn absoluut en `/`-gescheiden. Er is geen ondersteuning voor
-//! `.` / `..` in deze laag — dat hoort in een hogere VFS-laag thuis zodat de
-//! semantiek (symlink-resolutie, chroot-grenzen) expliciet blijft.
+//! All paths are absolute and `/`-separated. There is no support for
+//! `.` / `..` in this layer — that belongs in a higher VFS layer so the
+//! semantics (symlink resolution, chroot boundaries) stay explicit.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// Splits een pad in niet-lege componenten.
+/// Split a path into non-empty components.
 /// `"/foo//bar/"` → `["foo", "bar"]`.
 pub fn split_path(path: &str) -> Vec<&str> {
     path.split('/').filter(|s| !s.is_empty()).collect()
 }
 
-/// Parent-directory van een pad. `"/a/b/c"` → `"/a/b"`, `"/a"` → `"/"`.
+/// Parent directory of a path. `"/a/b/c"` → `"/a/b"`, `"/a"` → `"/"`.
 pub fn parent(path: &str) -> &str {
     let trimmed = path.trim_end_matches('/');
     match trimmed.rfind('/') {
@@ -22,7 +22,7 @@ pub fn parent(path: &str) -> &str {
     }
 }
 
-/// Laatste component (bestandsnaam). `"/a/b/c.txt"` → `"c.txt"`.
+/// Last component (file name). `"/a/b/c.txt"` → `"c.txt"`.
 pub fn filename(path: &str) -> &str {
     let trimmed = path.trim_end_matches('/');
     match trimmed.rfind('/') {
@@ -31,7 +31,7 @@ pub fn filename(path: &str) -> &str {
     }
 }
 
-/// Normaliseer: forceer absoluut, verwijder dubbele/trailing slashes.
+/// Normalize: force absolute, remove duplicate/trailing slashes.
 /// `""`/`"/"` → `"/"`.
 pub fn normalize(path: &str) -> String {
     let components = split_path(path);
@@ -46,7 +46,7 @@ pub fn normalize(path: &str) -> String {
     result
 }
 
-/// Combineer een directory-pad met een naam.
+/// Combine a directory path with a name.
 pub fn join(base: &str, name: &str) -> String {
     let base = base.trim_end_matches('/');
     let mut s = String::with_capacity(base.len() + 1 + name.len());
@@ -73,7 +73,7 @@ mod tests {
         assert_eq!(parent("/a/b/c"), "/a/b");
         assert_eq!(parent("/a"), "/");
         assert_eq!(parent("/"), "/");
-        assert_eq!(parent("/a/b/"), "/a"); // trailing slash genegeerd
+        assert_eq!(parent("/a/b/"), "/a"); // trailing slash ignored
     }
 
     #[test]

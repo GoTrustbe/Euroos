@@ -1,6 +1,6 @@
-/* EuroOS — programma dat de LINUX x86-64 syscall-ABI gebruikt (andere nummers +
- * semantiek dan onze native ABI). Draait via de Linux-compat-laag van de kernel.
- * Dit is de opstap naar het draaien van ONGEWIJZIGDE musl/Linux-binaries. */
+/* EuroOS — program that uses the LINUX x86-64 syscall ABI (different numbers +
+ * semantics than our native ABI). Runs via the kernel's Linux-compat layer.
+ * This is the stepping stone toward running UNMODIFIED musl/Linux binaries. */
 
 static long sys(long n, long a1, long a2, long a3) {
     long ret;
@@ -11,7 +11,7 @@ static long sys(long n, long a1, long a2, long a3) {
     return ret;
 }
 
-/* Linux x86-64 syscall-nummers */
+/* Linux x86-64 syscall numbers */
 #define L_READ 0
 #define L_WRITE 1
 #define L_OPEN 2
@@ -29,7 +29,7 @@ static long slen(const char *s) {
     while (s[n]) n++;
     return n;
 }
-/* Linux write(fd, buf, count) — count-gebaseerd, niet NUL-getermineerd. */
+/* Linux write(fd, buf, count) — count-based, not NUL-terminated. */
 static void put(const char *s) { sys(L_WRITE, 1, (long)s, slen(s)); }
 
 static const char *utoa(unsigned long v, char *end) {
@@ -42,13 +42,13 @@ static const char *utoa(unsigned long v, char *end) {
     return p;
 }
 
-/* Open een /proc-bestand, lees het, en print de EERSTE regel ("  <pad>: <regel>"). */
+/* Open a /proc file, read it, and print the FIRST line ("  <path>: <line>"). */
 static void cat_proc_line(const char *path) {
     long fd = sys(L_OPEN, (long)path, 0 /*O_RDONLY*/, 0);
     if (fd < 0) {
-        put("  (kon ");
+        put("  (could not open ");
         put(path);
-        put(" niet openen)\n");
+        put(")\n");
         return;
     }
     char buf[256];
@@ -59,7 +59,7 @@ static void cat_proc_line(const char *path) {
     }
     for (long i = 0; i < n; i++) {
         if (buf[i] == '\n') {
-            buf[i] = 0; /* kap af op de eerste regel */
+            buf[i] = 0; /* cut off at the first line */
             break;
         }
     }
@@ -72,15 +72,15 @@ static void cat_proc_line(const char *path) {
 }
 
 __attribute__((section(".text.start"))) void _start(void) {
-    put("Hallo via de LINUX syscall-ABI (write=1, getpid=39, exit=60)!\n");
+    put("Hello via the LINUX syscall ABI (write=1, getpid=39, exit=60)!\n");
     char num[24];
     long pid = sys(L_GETPID, 0, 0, 0);
     put("  Linux getpid()      = ");
     put(utoa((unsigned long)pid, num + 23));
     put("\n");
 
-    /* uname(2): de kernel spiegelt een Linux-utsname zodat echte Linux-binaries
-     * de kernelversie kunnen inspecteren. Veld 0 = sysname, veld 2 = release. */
+    /* uname(2): the kernel mirrors a Linux utsname so that real Linux binaries
+     * can inspect the kernel version. Field 0 = sysname, field 2 = release. */
     char uts[6 * 65];
     if (sys(L_UNAME, (long)uts, 0, 0) == 0) {
         put("  Linux uname.sysname = ");
@@ -90,29 +90,29 @@ __attribute__((section(".text.start"))) void _start(void) {
         put("\n");
     }
 
-    /* getuid(2): EuroOS-voorgrondproces draait als root (0). */
+    /* getuid(2): the EuroOS foreground process runs as root (0). */
     long uid = sys(L_GETUID, 0, 0, 0);
     put("  Linux getuid()      = ");
     put(utoa((unsigned long)uid, num + 23));
     put("\n");
 
-    /* gettimeofday(2): echte wandklok (Unix-epoch) uit de RTC. */
+    /* gettimeofday(2): real wall clock (Unix epoch) from the RTC. */
     long tv[2] = {0, 0};
     if (sys(L_GETTIMEOFDAY, (long)tv, 0, 0) == 0) {
         put("  Linux gettimeofday  = ");
         put(utoa((unsigned long)tv[0], num + 23));
-        put(" (Unix-epoch seconden)\n");
+        put(" (Unix-epoch seconds)\n");
     }
 
-    /* /proc-synthese (Track 8.2): lees echte kernel-info via het Linux-VFS-pad. */
-    put("  --- /proc (live kernel-info) ---\n");
+    /* /proc synthesis (Track 8.2): read real kernel info via the Linux VFS path. */
+    put("  --- /proc (live kernel info) ---\n");
     cat_proc_line("/proc/version");
     cat_proc_line("/proc/cpuinfo");
     cat_proc_line("/proc/meminfo");
     cat_proc_line("/proc/uptime");
     cat_proc_line("/proc/loadavg");
 
-    /* readlink(/proc/self/exe): runtimes vinden zo hun eigen binarypad. */
+    /* readlink(/proc/self/exe): runtimes find their own binary path this way. */
     {
         char ex[64];
         long m = sys(L_READLINK, (long)"/proc/self/exe", (long)ex, sizeof(ex) - 1);
@@ -124,12 +124,12 @@ __attribute__((section(".text.start"))) void _start(void) {
         }
     }
 
-    /* /etc: echte configbestanden, nu zichtbaar voor Linux-programma's via de VFS. */
-    put("  --- /etc (systeemconfig) ---\n");
+    /* /etc: real config files, now visible to Linux programs via the VFS. */
+    put("  --- /etc (system config) ---\n");
     cat_proc_line("/etc/os-release");
     cat_proc_line("/etc/passwd");
 
-    /* Maplisting via openat + getdents64 (zoals ls/find): som /etc op. */
+    /* Directory listing via openat + getdents64 (like ls/find): enumerate /etc. */
     put("  --- getdents64(/etc) ---\n");
     long dfd = sys(L_OPEN, (long)"/etc", 0 /*O_RDONLY*/, 0);
     if (dfd >= 0) {

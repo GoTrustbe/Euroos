@@ -1,14 +1,13 @@
-//! EuroID — soeverein gebruikersbeheer (Sprint K1 + P3 audit).
+//! EuroID — sovereign user management (Sprint K1 + P3 audit).
 //!
-//! De identiteits-autoriteit van EuroOS: gebruikers en groepen, een **Argon2id**-
-//! gehashte credentialopslag, sessie-levenscyclus, per-gebruiker EuroGuard-
-//! capabilities, een afdwingbaar wachtwoordbeleid, en een **hash-chain audit-log**
-//! die elke gebruikersactie onomkeerbaar vastlegt (NIS2 Art. 21, GDPR Art. 5(2)/32,
-//! ISO 27001 A.9).
+//! The identity authority of EuroOS: users and groups, an **Argon2id**-hashed
+//! credential store, session lifecycle, per-user EuroGuard capabilities, an
+//! enforceable password policy, and a **hash-chain audit log** that records every
+//! user action irreversibly (NIS2 Art. 21, GDPR Art. 5(2)/32, ISO 27001 A.9).
 //!
-//! De kern is `no_std` + host-testbaar en bevat geen kloktoegang of RNG: tijd
-//! (`Timestamp`) en zout (salt) worden er door de aanroeper ingebracht (de kernel
-//! levert TPM-RNG en de tick-klok). Zo blijft alles deterministisch testbaar.
+//! The core is `no_std` + host-testable and contains no clock access or RNG: time
+//! (`Timestamp`) and salt are injected by the caller (the kernel provides the
+//! TPM-RNG and the tick clock). This keeps everything deterministically testable.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -34,42 +33,42 @@ pub use policy::{validate_password, validate_username, PasswordPolicy, PolicyErr
 use alloc::string::String;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Newtypes — een uid/gid is NOOIT een kale u32.
+// Newtypes — a uid/gid is NEVER a bare u32.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Een gebruikers-ID. Onveranderlijk na aanmaak.
+/// A user ID. Immutable after creation.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub struct UserId(pub u32);
 
-/// Een groeps-ID.
+/// A group ID.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub struct GroupId(pub u32);
 
 impl UserId {
-    /// Het systeem-/root-subject (uid 0). Gebruikt voor systeemgeïnitieerde acties
-    /// (bv. automatische account-vergrendeling).
+    /// The system/root subject (uid 0). Used for system-initiated actions
+    /// (e.g. automatic account locking).
     pub const SYSTEM: UserId = UserId(0);
     pub const ROOT: UserId = UserId(0);
 
-    /// Eerste uid voor gewone (niet-systeem) gebruikers.
+    /// First uid for regular (non-system) users.
     pub const FIRST_REGULAR: u32 = 1000;
-    /// Eerste uid voor systeem-/service-accounts.
+    /// First uid for system/service accounts.
     pub const FIRST_SYSTEM: u32 = 100;
 }
 
-// Ingebouwde groepen (aangemaakt bij systeem-init, kunnen niet verwijderd worden).
-pub const GROUP_WHEEL: GroupId = GroupId(0); // Volledig admin — CAP_ALL
-pub const GROUP_AUDIT: GroupId = GroupId(1); // Mag het audit-log lezen
-pub const GROUP_NET: GroupId = GroupId(2); // Netwerktoegang
-pub const GROUP_VAULT: GroupId = GroupId(3); // EuroVault-toegang
-pub const GROUP_AGENT: GroupId = GroupId(4); // EuroAgent starten
-pub const GROUP_USERS: GroupId = GroupId(100); // Standaard voor nieuwe gebruikers
+// Built-in groups (created at system init, cannot be deleted).
+pub const GROUP_WHEEL: GroupId = GroupId(0); // Full admin — CAP_ALL
+pub const GROUP_AUDIT: GroupId = GroupId(1); // May read the audit log
+pub const GROUP_NET: GroupId = GroupId(2); // Network access
+pub const GROUP_VAULT: GroupId = GroupId(3); // EuroVault access
+pub const GROUP_AGENT: GroupId = GroupId(4); // Start EuroAgent
+pub const GROUP_USERS: GroupId = GroupId(100); // Default for new users
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Capabilities — bitset (subset/superset van EuroGuard, voor identiteit→cap).
+// Capabilities — bitset (subset/superset of EuroGuard, for identity→cap).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Een EuroGuard-capabilityset als bitmasker.
+/// An EuroGuard capability set as a bitmask.
 pub type Caps = u64;
 
 pub const CAP_LOGIN: Caps = 1 << 0;
@@ -87,10 +86,10 @@ pub const CAP_AUDIT_READ: Caps = 1 << 9;
 pub const CAP_USER_ADMIN: Caps = 1 << 10;
 pub const CAP_IMMUTABLE_ADMIN: Caps = 1 << 11;
 pub const CAP_SHUTDOWN: Caps = 1 << 12;
-/// Alle capabilities (wheel-groep).
+/// All capabilities (wheel group).
 pub const CAP_ALL: Caps = !0;
 
-/// Een door beleid toegestaan masker dat niets weigert (default EuroPol-staat).
+/// A policy-allowed mask that denies nothing (default EuroPol state).
 pub const ALLOW_ALL: Caps = !0;
 
 const CAP_NAMES: &[(&str, Caps)] = &[
@@ -111,7 +110,7 @@ const CAP_NAMES: &[(&str, Caps)] = &[
     ("CAP_SHUTDOWN", CAP_SHUTDOWN),
 ];
 
-/// Zet een capability-naam (bv. `"CAP_NET"`) om naar zijn bit. `CAP_ALL` → alles.
+/// Convert a capability name (e.g. `"CAP_NET"`) to its bit. `CAP_ALL` → everything.
 pub fn cap_from_name(name: &str) -> Option<Caps> {
     let n = name.trim();
     if n.eq_ignore_ascii_case("CAP_ALL") {
@@ -123,14 +122,14 @@ pub fn cap_from_name(name: &str) -> Option<Caps> {
         .map(|(_, v)| *v)
 }
 
-/// Een leesbare opsomming van de gezette capabilities (samenvatting voor audit/`id`).
+/// A readable listing of the set capabilities (summary for audit/`id`).
 pub fn cap_names(caps: Caps) -> alloc::vec::Vec<String> {
     use alloc::string::ToString;
     if caps == CAP_ALL {
         return alloc::vec!["CAP_ALL".to_string()];
     }
     let mut out = alloc::vec::Vec::new();
-    // De samengestelde namen eerst (CAP_FILE, CAP_VAULT) als beide bits gezet zijn.
+    // The composite names first (CAP_FILE, CAP_VAULT) if both bits are set.
     let mut shown: Caps = 0;
     for (name, bit) in [("CAP_FILE", CAP_FILE), ("CAP_VAULT", CAP_VAULT)] {
         if caps & bit == bit {
@@ -151,10 +150,10 @@ pub fn cap_names(caps: Caps) -> alloc::vec::Vec<String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tijd — een eenvoudige seconden-sinds-epoch (door de aanroeper ingebracht).
+// Time — a simple seconds-since-epoch (injected by the caller).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Een tijdstempel in seconden (de kernel levert wandkloktijd; tests een vaste waarde).
+/// A timestamp in seconds (the kernel provides wall-clock time; tests a fixed value).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct Timestamp(pub u64);
 
@@ -164,7 +163,7 @@ impl Timestamp {
     }
 }
 
-/// Constant-time vergelijking van twee byte-slices (tegen timing-zijkanalen).
+/// Constant-time comparison of two byte slices (against timing side channels).
 pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -176,7 +175,7 @@ pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Hex-codering (kleine letters) voor hashes/sessie-ID's in het audit-log.
+/// Hex encoding (lowercase) for hashes/session IDs in the audit log.
 pub fn hex(bytes: &[u8]) -> String {
     use alloc::string::ToString;
     const HEX: &[u8; 16] = b"0123456789abcdef";

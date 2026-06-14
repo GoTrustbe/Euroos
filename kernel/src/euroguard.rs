@@ -1,16 +1,16 @@
-//! EuroGuard — systeembrede toegangs- & netwerkcontrole (Track 7).
+//! EuroGuard — system-wide access & network control (Track 7).
 //!
-//! Eerste, ECHT draaiende snede van de spec: een policy-engine (Niveau 1,
-//! systeembreed), per-app netwerkstatistieken (Fase 7.4) en een audit-ring
-//! (Fase 7.8). Ingehaakt op de socket-`connect`-syscall (Fase 7.1) zodat een
-//! app niet meer willekeurig naar buiten kan verbinden zonder dat de kernel
-//! het beoordeelt én logt. Dit is de "harde policy-grens" van Mijlpaal A —
-//! geen cosmetica.
+//! First, ACTUALLY running slice of the spec: a policy engine (Level 1,
+//! system-wide), per-app network statistics (Phase 7.4) and an audit ring
+//! (Phase 7.8). Hooked into the socket `connect` syscall (Phase 7.1) so an
+//! app can no longer connect outward arbitrarily without the kernel
+//! evaluating and logging it. This is the "hard policy boundary" of Milestone A —
+//! no cosmetics.
 //!
-//! In een volwassen systeem komt de policy uit `/etc/euroguard/system.toml`
-//! (Niveau 1), `~/.config/euroguard/user.toml` (Niveau 2) en per-app TOML
-//! (Niveau 3), gecombineerd als **Systeem > Gebruiker > App**. Hier zit een
-//! ingebouwde systeem-startset; de hiërarchie + TOML-opslag is Fase 7.2.
+//! In a mature system the policy comes from `/etc/euroguard/system.toml`
+//! (Level 1), `~/.config/euroguard/user.toml` (Level 2) and per-app TOML
+//! (Level 3), combined as **System > User > App**. Here there is a
+//! built-in system startup set; the hierarchy + TOML storage is Phase 7.2.
 
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
@@ -21,25 +21,25 @@ use spin::Mutex;
 
 use crate::interrupts::ticks;
 
-/// De beslissing van de policy-engine. (Fase 7.2 voegt `Ask` toe zodra de
-/// userspace-daemon + dialoog-UI er zijn.)
+/// The decision of the policy engine. (Phase 7.2 adds `Ask` once the
+/// userspace daemon + dialog UI exist.)
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     Allow,
     Block,
 }
 
-/// Per-app netwerkstatistieken — het zicht onder de Netwerkmonitor (Fase 7.4).
+/// Per-app network statistics — the view behind the Network monitor (Phase 7.4).
 #[derive(Default, Clone)]
 pub struct AppStats {
     pub connects: u64,
     pub blocked: u64,
     pub bytes_sent: u64,
     pub bytes_recv: u64,
-    pub hosts: Vec<Ipv4Addr>, // unieke gecontacteerde IP's
+    pub hosts: Vec<Ipv4Addr>, // unique contacted IPs
 }
 
-/// Eén regel in het auditlogboek (Fase 7.8). Lokaal, nooit automatisch verstuurd.
+/// One line in the audit log (Phase 7.8). Local, never sent automatically.
 #[derive(Clone)]
 pub struct AuditEvent {
     pub ticks: u64,
@@ -49,18 +49,18 @@ pub struct AuditEvent {
 }
 
 struct EuroGuard {
-    /// Niveau 1 — systeembrede blokkeringen.
+    /// Level 1 — system-wide blocks.
     blocked_ips: Vec<Ipv4Addr>,
     blocked_ports: Vec<u16>,
-    /// DNS-blokkeerlijst: ads/trackers/telemetrie op naam (ook subdomeinen).
+    /// DNS block list: ads/trackers/telemetry by name (including subdomains).
     blocked_domains: Vec<String>,
-    /// Per-app aggregatie (sleutel = app-identiteit, bv. "/bin/msock").
+    /// Per-app aggregation (key = app identity, e.g. "/bin/msock").
     apps: BTreeMap<String, AppStats>,
-    /// DNS-querylog (domein → aantal) voor het "top queries"-overzicht.
+    /// DNS query log (domain → count) for the "top queries" overview.
     dns_log: BTreeMap<String, u64>,
-    /// Audit-ring (begrensd) — nieuwste achteraan.
+    /// Audit ring (bounded) — newest at the back.
     audit: Vec<AuditEvent>,
-    /// Totaal aantal geblokkeerde verzoeken (voor het dashboard-overzicht).
+    /// Total number of blocked requests (for the dashboard overview).
     blocked_total: u64,
 }
 
@@ -90,25 +90,25 @@ impl EuroGuard {
 
 static GUARD: Mutex<EuroGuard> = Mutex::new(EuroGuard::new());
 
-/// Laad de systeem-startpolicy (Niveau 1). Vervangt later het inlezen van
-/// `/etc/euroguard/system.toml`. We blokkeren een bekend tracker/telemetrie-IP
-/// en een paar verouderde/onveilige poorten.
+/// Load the system startup policy (Level 1). Later replaces reading in
+/// `/etc/euroguard/system.toml`. We block a known tracker/telemetry IP
+/// and a few outdated/insecure ports.
 pub fn init() {
     let mut g = GUARD.lock();
-    // 203.0.113.0/24 is TEST-NET-3 — hier als stand-in voor een tracker-endpoint.
+    // 203.0.113.0/24 is TEST-NET-3 — here as a stand-in for a tracker endpoint.
     g.blocked_ips.push(Ipv4Addr([203, 0, 113, 5]));
-    g.blocked_ports.push(23); // telnet (klaartekst)
-    g.blocked_ports.push(1900); // SSDP (lek-gevoelig)
-    // DNS-blokkeerlijst (ads/trackers/telemetrie) — incl. subdomeinen.
+    g.blocked_ports.push(23); // telnet (cleartext)
+    g.blocked_ports.push(1900); // SSDP (leak-prone)
+    // DNS block list (ads/trackers/telemetry) — incl. subdomains.
     for d in ["ads.doubleclick.net", "telemetry.mozilla.org", "google-analytics.com", "graph.facebook.com"] {
         g.blocked_domains.push(d.to_string());
     }
-    g.log("INFO", "euroguard", "systeem-policy geladen (Niveau 1)".to_string());
+    g.log("INFO", "euroguard", "system policy loaded (Level 1)".to_string());
 }
 
-/// Laad de Niveau-1 systeem-policy uit een configbestand (Fase 7.2). Een
-/// eenvoudig, leesbaar regelformaat: `block-ip <ip>`, `block-port <n>`,
-/// `block-domain <naam>`; `#` is commentaar. Vervangt de huidige policy.
+/// Load the Level-1 system policy from a config file (Phase 7.2). A
+/// simple, readable rule format: `block-ip <ip>`, `block-port <n>`,
+/// `block-domain <name>`; `#` is a comment. Replaces the current policy.
 pub fn load_config(text: &str) {
     let mut g = GUARD.lock();
     g.blocked_ips.clear();
@@ -139,23 +139,23 @@ pub fn load_config(text: &str) {
     g.log(
         "INFO",
         "euroguard",
-        alloc::format!("policy uit /etc/euroguard/system.conf: {ni} IP's, {np} poorten, {nd} domeinen"),
+        alloc::format!("policy from /etc/euroguard/system.conf: {ni} IPs, {np} ports, {nd} domains"),
     );
 }
 
-/// Voeg op het systeem een geblokkeerd domein toe (de "Domein toevoegen"-actie
-/// uit de spec — aangepaste blokkeringen). Direct van kracht.
+/// Add a blocked domain on the system (the "Add domain" action
+/// from the spec — custom blocks). Effective immediately.
 pub fn add_blocked_domain(domain: &str) {
     let mut g = GUARD.lock();
     let d = domain.to_ascii_lowercase();
     if !g.blocked_domains.contains(&d) {
         g.blocked_domains.push(d.clone());
     }
-    g.log("INFO", "shell", alloc::format!("domein geblokkeerd: {d}"));
+    g.log("INFO", "shell", alloc::format!("domain blocked: {d}"));
 }
 
-/// Haal een domein van de blokkeerlijst (whitelist-actie). Geeft terug of er
-/// iets verwijderd is.
+/// Remove a domain from the block list (whitelist action). Returns whether
+/// anything was removed.
 pub fn remove_blocked_domain(domain: &str) -> bool {
     let mut g = GUARD.lock();
     let d = domain.to_ascii_lowercase();
@@ -163,19 +163,19 @@ pub fn remove_blocked_domain(domain: &str) -> bool {
     g.blocked_domains.retain(|x| x != &d);
     let removed = g.blocked_domains.len() < before;
     if removed {
-        g.log("INFO", "shell", alloc::format!("domein gedeblokkeerd: {d}"));
+        g.log("INFO", "shell", alloc::format!("domain unblocked: {d}"));
     }
     removed
 }
 
-/// Voeg een app toe aan de tabel als die er nog niet is.
+/// Add an app to the table if it is not there yet.
 fn entry<'a>(g: &'a mut EuroGuard, app: &str) -> &'a mut AppStats {
     g.apps.entry(app.to_string()).or_default()
 }
 
-/// Policy-check voor een uitgaande verbinding (Fase 7.1). Beslist Allow/Block,
-/// werkt de statistieken bij en schrijft een audit-event. Wordt aangeroepen door
-/// de `connect`-syscall VÓÓR er een pakket de deur uitgaat.
+/// Policy check for an outgoing connection (Phase 7.1). Decides Allow/Block,
+/// updates the statistics and writes an audit event. Called by the
+/// `connect` syscall BEFORE a packet goes out the door.
 pub fn check_connect(app: &str, ip: Ipv4Addr, port: u16) -> Decision {
     let mut g = GUARD.lock();
     let blocked = g.blocked_ips.contains(&ip) || g.blocked_ports.contains(&port);
@@ -185,7 +185,7 @@ pub fn check_connect(app: &str, ip: Ipv4Addr, port: u16) -> Decision {
             let s = entry(&mut g, app);
             s.blocked += 1;
         }
-        g.log("BLOCK", app, alloc::format!("connect {}:{} — systeemregel", ipfmt(ip), port));
+        g.log("BLOCK", app, alloc::format!("connect {}:{} — system rule", ipfmt(ip), port));
         Decision::Block
     } else {
         {
@@ -200,7 +200,7 @@ pub fn check_connect(app: &str, ip: Ipv4Addr, port: u16) -> Decision {
     }
 }
 
-/// Tel verzonden/ontvangen bytes per app (Fase 7.4).
+/// Count sent/received bytes per app (Phase 7.4).
 pub fn record_bytes(app: &str, sent: u64, recv: u64) {
     let mut g = GUARD.lock();
     let s = entry(&mut g, app);
@@ -208,10 +208,10 @@ pub fn record_bytes(app: &str, sent: u64, recv: u64) {
     s.bytes_recv += recv;
 }
 
-/// DNS-niveau-filtering (Fase 7.5/7.4): beoordeel + log een DNS-query voordat
-/// die het netwerk op gaat. Een geblokkeerd domein (of subdomein daarvan) wordt
-/// geweigerd — de app krijgt geen IP en kan dus niet verbinden. Dit is de
-/// privacy-kern van EuroGuard: trackers/ads sneuvelen vóór er verkeer ontstaat.
+/// DNS-level filtering (Phase 7.5/7.4): evaluate + log a DNS query before
+/// it goes out onto the network. A blocked domain (or subdomain thereof) is
+/// refused — the app gets no IP and therefore cannot connect. This is the
+/// privacy core of EuroGuard: trackers/ads die before any traffic arises.
 pub fn check_dns(app: &str, domain: &str) -> Decision {
     let mut g = GUARD.lock();
     let d = domain.to_ascii_lowercase();
@@ -222,7 +222,7 @@ pub fn check_dns(app: &str, domain: &str) -> Decision {
     if blocked {
         g.blocked_total += 1;
         entry(&mut g, app).blocked += 1;
-        g.log("DNS-BLOK", app, alloc::format!("dns {domain} — blokkeerlijst"));
+        g.log("DNS-BLOK", app, alloc::format!("dns {domain} — block list"));
         Decision::Block
     } else {
         *g.dns_log.entry(d).or_insert(0) += 1;
@@ -235,7 +235,7 @@ fn ipfmt(ip: Ipv4Addr) -> String {
     alloc::format!("{}.{}.{}.{}", ip.0[0], ip.0[1], ip.0[2], ip.0[3])
 }
 
-/// De DNS-querylog (top opgezochte domeinen) — Fase 7.4 "log_dns_queries".
+/// The DNS query log (top looked-up domains) — Phase 7.4 "log_dns_queries".
 pub fn dns_lines() -> Vec<String> {
     let g = GUARD.lock();
     let mut out = Vec::new();
@@ -251,41 +251,41 @@ pub fn dns_lines() -> Vec<String> {
     out
 }
 
-/// Menselijke samenvatting van de actieve policy (Niveau 1).
+/// Human-readable summary of the active policy (Level 1).
 pub fn policy_lines() -> Vec<String> {
     let g = GUARD.lock();
     let mut out = Vec::new();
-    out.push("policy (Niveau 1 — /etc/euroguard/system.conf):".to_string());
+    out.push("policy (Level 1 — /etc/euroguard/system.conf):".to_string());
     let ips: Vec<String> = g.blocked_ips.iter().map(|i| ipfmt(*i)).collect();
-    out.push(alloc::format!("  geblokkeerde IP's:   {}", ips.join(", ")));
+    out.push(alloc::format!("  blocked IPs:   {}", ips.join(", ")));
     let ports: Vec<String> = g.blocked_ports.iter().map(|p| p.to_string()).collect();
-    out.push(alloc::format!("  geblokkeerde poorten: {}", ports.join(", ")));
-    out.push(alloc::format!("  dns-blokkeerlijst:    {} domeinen", g.blocked_domains.len()));
+    out.push(alloc::format!("  blocked ports: {}", ports.join(", ")));
+    out.push(alloc::format!("  dns block list:    {} domains", g.blocked_domains.len()));
     out
 }
 
-/// De Netwerkmonitor: per-app dataverbruik + verbindingen (Fase 7.4).
+/// The Network monitor: per-app data usage + connections (Phase 7.4).
 pub fn stats_lines() -> Vec<String> {
     let g = GUARD.lock();
     let mut out = Vec::new();
-    out.push(alloc::format!("netwerkmonitor — {} geblokkeerd vandaag", g.blocked_total));
+    out.push(alloc::format!("network monitor — {} blocked today", g.blocked_total));
     if g.apps.is_empty() {
-        out.push("  (nog geen app-activiteit)".to_string());
+        out.push("  (no app activity yet)".to_string());
     }
     for (app, s) in g.apps.iter() {
         out.push(alloc::format!(
-            "  {:<14} {} verb.  tx {} / rx {} bytes  {} geblok.",
+            "  {:<14} {} conn.  tx {} / rx {} bytes  {} blocked",
             app, s.connects, s.bytes_sent, s.bytes_recv, s.blocked
         ));
     }
     out
 }
 
-/// Het auditlogboek (Fase 7.8), nieuwste eerst, max `limit` regels.
+/// The audit log (Phase 7.8), newest first, max `limit` lines.
 pub fn audit_lines(limit: usize) -> Vec<String> {
     let g = GUARD.lock();
     let mut out = Vec::new();
-    out.push("auditlog (lokaal, nooit automatisch verzonden):".to_string());
+    out.push("audit log (local, never sent automatically):".to_string());
     for e in g.audit.iter().rev().take(limit) {
         let mark = match e.kind {
             "BLOCK" | "DNS-BLOK" => "x",

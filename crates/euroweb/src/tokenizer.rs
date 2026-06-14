@@ -1,13 +1,13 @@
-//! EuroWeb HTML5-tokenizer — de eerste fase van de engine.
+//! EuroWeb HTML5 tokenizer — the first phase of the engine.
 //!
-//! Een toestandsmachine die een bytestroom HTML omzet in een reeks [`Token`]s
-//! (start-/eindtags, tekst, commentaar, DOCTYPE), volgens het WHATWG HTML Living
-//! Standard "tokenization"-hoofdstuk. Geïmplementeerd subset dekt het echte web:
-//! tags + attributen (alle vier de waarde-vormen), commentaar, DOCTYPE,
-//! self-closing, **character references** (named + numeriek), en de
-//! **RAWTEXT/RCDATA** content-modellen voor `script/style` resp. `title/textarea`.
+//! A state machine that turns a byte stream of HTML into a sequence of [`Token`]s
+//! (start/end tags, text, comments, DOCTYPE), following the WHATWG HTML Living
+//! Standard "tokenization" chapter. The implemented subset covers the real web:
+//! tags + attributes (all four value forms), comments, DOCTYPE,
+//! self-closing, **character references** (named + numeric), and the
+//! **RAWTEXT/RCDATA** content models for `script/style` and `title/textarea` respectively.
 //!
-//! Pure `no_std`-logica, host-getest tegen HTML5lib-achtige gevallen.
+//! Pure `no_std` logic, host-tested against HTML5lib-style cases.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -15,14 +15,14 @@ use alloc::vec::Vec;
 use crate::dom::Attr;
 use crate::entities::decode_entity;
 
-/// Een tokenizer-token.
+/// A tokenizer token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
     Doctype { name: String, force_quirks: bool },
     StartTag { name: String, attrs: Vec<Attr>, self_closing: bool },
     EndTag { name: String },
     Comment(String),
-    /// Eén tekst-character. De parser voegt opeenvolgende characters samen.
+    /// A single text character. The parser merges consecutive characters.
     Character(char),
     Eof,
 }
@@ -53,12 +53,12 @@ enum State {
     DoctypeName,
     AfterDoctypeName,
     BogusDoctype,
-    /// RAWTEXT (script, style) of RCDATA (title, textarea). `rcdata` bepaalt of
-    /// character references hier nog ontleed worden.
+    /// RAWTEXT (script, style) or RCDATA (title, textarea). `rcdata` determines whether
+    /// character references are still parsed here.
     RawText { rcdata: bool },
 }
 
-/// De content-modus waarin de tokenizer na een starttag verdergaat.
+/// The content mode the tokenizer continues in after a start tag.
 fn content_model(tag: &str) -> Option<bool> {
     match tag {
         "script" | "style" | "xmp" | "iframe" | "noembed" | "noframes" => Some(false), // RAWTEXT
@@ -97,7 +97,7 @@ impl TagBuilder {
 
     fn commit_attr(&mut self) {
         if self.has_cur_attr && !self.cur_name.is_empty() {
-            // Dubbele attribuutnamen: de eerste wint (HTML-regel).
+            // Duplicate attribute names: the first one wins (HTML rule).
             if !self.attrs.iter().any(|a| a.name == self.cur_name) {
                 self.attrs.push(Attr {
                     name: core::mem::take(&mut self.cur_name),
@@ -123,7 +123,7 @@ impl TagBuilder {
     }
 }
 
-/// Tokeniseer een volledige HTML-string naar een reeks tokens (eindigend op [`Token::Eof`]).
+/// Tokenize a complete HTML string into a sequence of tokens (ending in [`Token::Eof`]).
 pub fn tokenize(input: &str) -> Vec<Token> {
     let chars: Vec<char> = input.chars().collect();
     let mut pos = 0usize;
@@ -133,9 +133,9 @@ pub fn tokenize(input: &str) -> Vec<Token> {
     let mut buf = String::new(); // comment / doctype scratch
     let mut last_start: String = String::new();
 
-    // Hulp om een character reference te ontleden vanaf `pos` (vlak ná de '&').
-    // `in_attr` past de attribuut-specifieke regel toe. Retourneert de gedecodeerde
-    // tekst en de nieuwe positie.
+    // Helper to parse a character reference from `pos` (right after the '&').
+    // `in_attr` applies the attribute-specific rule. Returns the decoded
+    // text and the new position.
     fn reference(chars: &[char], pos: usize, in_attr: bool) -> (String, usize) {
         decode_entity(chars, pos, in_attr)
     }
@@ -163,13 +163,13 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                 }
             }
             State::RawText { rcdata } => {
-                // Verzamel tekst tot een passende eindtag `</last_start>`.
+                // Collect text until a matching end tag `</last_start>`.
                 if eof {
                     tokens.push(Token::Eof);
                     break;
                 }
-                // Detecteer `</name`-prefix (case-insensitive) gevolgd door een
-                // tag-afsluiter, anders behandel als tekst.
+                // Detect a `</name` prefix (case-insensitive) followed by a
+                // tag terminator, otherwise treat as text.
                 if c == '<' && pos + 1 < chars.len() && chars[pos + 1] == '/' {
                     let name: Vec<char> = last_start.chars().collect();
                     let mut k = pos + 2;
@@ -185,8 +185,8 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                         && (k >= chars.len()
                             || matches!(chars[k], ' ' | '\t' | '\n' | '\r' | '\u{0C}' | '/' | '>'));
                     if terminator {
-                        // Spring naar de eerste letter van de naam (ná `</`); de
-                        // EndTagOpen-state herverwerkt die letter.
+                        // Jump to the first letter of the name (after `</`); the
+                        // EndTagOpen state reprocesses that letter.
                         state = State::EndTagOpen;
                         pos += 2;
                         continue;
@@ -210,7 +210,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                 } else if c.is_ascii_alphabetic() {
                     tag = Some(TagBuilder::new(false));
                     state = State::TagName;
-                    continue; // herverwerk c in TagName
+                    continue; // reprocess c in TagName
                 } else if c == '?' {
                     buf.clear();
                     state = State::BogusComment;
@@ -491,7 +491,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                 }
             }
             State::MarkupDeclarationOpen => {
-                // `<!--` → comment, `<!DOCTYPE` → doctype, anders bogus comment.
+                // `<!--` → comment, `<!DOCTYPE` → doctype, otherwise bogus comment.
                 if chars[pos..].starts_with(&['-', '-']) {
                     pos += 2;
                     buf.clear();
@@ -636,7 +636,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                     tokens.push(Token::Eof);
                     break;
                 }
-                // PUBLIC/SYSTEM-id's worden niet bewaard; sla ze over tot '>'.
+                // PUBLIC/SYSTEM ids are not kept; skip them until '>'.
                 _ => state = State::BogusDoctype,
             },
             State::BogusDoctype => {

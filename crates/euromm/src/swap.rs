@@ -1,16 +1,16 @@
-//! Swap-subsysteem-kern (plan J3): onder geheugendruk worden anonieme pagina's
-//! naar een swap-partitie/-bestand geschreven en bij toegang weer ingelezen.
+//! Swap subsystem core (plan J3): under memory pressure, anonymous pages are
+//! written to a swap partition/file and read back in on access.
 //!
-//! Deze module is de architectuur-onafhankelijke kern: een **swap-slot-allocator**
-//! (welke swap-blokken vrij/bezet zijn) + een **CLOCK (second-chance) page-
-//! replacement**-policy (welke frame als slachtoffer wordt uitgeswapt). De
-//! daadwerkelijke page-I/O + PTE-manipulatie is kernel-werk dat hierop bouwt. Pure
-//! `no_std`-logica → volledig host-getest, los van enig geheugen.
+//! This module is the architecture-independent core: a **swap-slot allocator**
+//! (which swap blocks are free/used) + a **CLOCK (second-chance) page-
+//! replacement** policy (which frame is chosen as victim to swap out). The
+//! actual page I/O + PTE manipulation is kernel work that builds on this. Pure
+//! `no_std` logic → fully host-tested, independent of any memory.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// Beheert de bezetting van een swap-gebied met `n` slots (elk = één pagina).
+/// Manages the occupancy of a swap area with `n` slots (each = one page).
 pub struct SwapArea {
     used: Vec<bool>,
     used_count: usize,
@@ -24,7 +24,7 @@ impl SwapArea {
         }
     }
 
-    /// Reserveer een vrij swap-slot; `None` als het gebied vol is.
+    /// Reserve a free swap slot; `None` if the area is full.
     pub fn alloc(&mut self) -> Option<usize> {
         let s = self.used.iter().position(|&u| !u)?;
         self.used[s] = true;
@@ -32,7 +32,7 @@ impl SwapArea {
         Some(s)
     }
 
-    /// Geef een swap-slot vrij (de pagina is weer ingelezen).
+    /// Free a swap slot (the page has been read back in).
     pub fn free(&mut self, slot: usize) {
         if slot < self.used.len() && self.used[slot] {
             self.used[slot] = false;
@@ -51,16 +51,16 @@ impl SwapArea {
     }
 }
 
-/// Eén beheerd frame in de CLOCK-policy: een fysiek frame-adres + referentie-bit.
+/// One managed frame in the CLOCK policy: a physical frame address + reference bit.
 struct Page {
     frame: u64,
     referenced: bool,
 }
 
-/// CLOCK / second-chance page-replacement. Frames staan in een ring; de "wijzer"
-/// draait rond: een frame met gezette referentie-bit krijgt een tweede kans (bit
-/// gewist), een frame met gewiste bit wordt het slachtoffer. Zo benadert CLOCK LRU
-/// tegen O(1)-kosten en zonder per-toegang-boekhouding.
+/// CLOCK / second-chance page replacement. Frames sit in a ring; the "hand"
+/// rotates around: a frame with its reference bit set gets a second chance (bit
+/// cleared), a frame with a cleared bit becomes the victim. This way CLOCK
+/// approximates LRU at O(1) cost and without per-access bookkeeping.
 pub struct Clock {
     pages: Vec<Page>,
     hand: usize,
@@ -77,19 +77,19 @@ impl Clock {
         Clock { pages: Vec::new(), hand: 0 }
     }
 
-    /// Neem een nieuw frame in beheer (binnengehaald → referentie-bit gezet).
+    /// Take a new frame under management (brought in → reference bit set).
     pub fn insert(&mut self, frame: u64) {
         self.pages.push(Page { frame, referenced: true });
     }
 
-    /// Markeer een frame als recent gebruikt (zet z'n referentie-bit).
+    /// Mark a frame as recently used (set its reference bit).
     pub fn touch(&mut self, frame: u64) {
         if let Some(p) = self.pages.iter_mut().find(|p| p.frame == frame) {
             p.referenced = true;
         }
     }
 
-    /// Aantal beheerde frames.
+    /// Number of managed frames.
     pub fn len(&self) -> usize {
         self.pages.len()
     }
@@ -97,19 +97,19 @@ impl Clock {
         self.pages.is_empty()
     }
 
-    /// Kies + verwijder een slachtoffer-frame om uit te swappen. Geeft het frame-
-    /// adres, of `None` als er niets beheerd wordt.
+    /// Pick + remove a victim frame to swap out. Returns the frame address, or
+    /// `None` if nothing is being managed.
     pub fn evict(&mut self) -> Option<u64> {
         if self.pages.is_empty() {
             return None;
         }
-        // Draai rond tot een frame met gewiste referentie-bit (max 2× de ring).
+        // Rotate around until a frame with a cleared reference bit (max 2× the ring).
         for _ in 0..self.pages.len() * 2 {
             if self.hand >= self.pages.len() {
                 self.hand = 0;
             }
             if self.pages[self.hand].referenced {
-                self.pages[self.hand].referenced = false; // tweede kans
+                self.pages[self.hand].referenced = false; // second chance
                 self.hand += 1;
             } else {
                 let victim = self.pages.remove(self.hand);
@@ -119,7 +119,7 @@ impl Clock {
                 return Some(victim.frame);
             }
         }
-        // Iedereen had z'n bit gezet → na één ronde zijn ze gewist; neem de huidige.
+        // Everyone had their bit set → after one round they are cleared; take the current one.
         let idx = self.hand % self.pages.len();
         let victim = self.pages.remove(idx);
         Some(victim.frame)
@@ -140,7 +140,7 @@ mod tests {
         assert_eq!(a.used(), 2);
         a.free(s0);
         assert_eq!(a.used(), 1);
-        // hergebruik het vrijgegeven slot
+        // reuse the freed slot
         assert_eq!(a.alloc().unwrap(), s0);
     }
 
@@ -149,7 +149,7 @@ mod tests {
         let mut a = SwapArea::new(2);
         assert!(a.alloc().is_some());
         assert!(a.alloc().is_some());
-        assert_eq!(a.alloc(), None); // vol
+        assert_eq!(a.alloc(), None); // full
         assert_eq!(a.free_count(), 0);
     }
 
@@ -159,8 +159,8 @@ mod tests {
         c.insert(0x1000);
         c.insert(0x2000);
         c.insert(0x3000);
-        // Alle drie hebben hun bit gezet (insert). Eerste evict geeft iedereen een
-        // tweede kans (wist bits) en swapt dan het eerste frame uit.
+        // All three have their bit set (insert). The first evict gives everyone a
+        // second chance (clears bits) and then swaps out the first frame.
         let v = c.evict().unwrap();
         assert_eq!(v, 0x1000);
         assert_eq!(c.len(), 2);
@@ -171,12 +171,12 @@ mod tests {
         let mut c = Clock::new();
         c.insert(0x1000);
         c.insert(0x2000);
-        // Wis ieders bit door een volledige eerste ronde te forceren: evict 0x1000.
+        // Clear everyone's bit by forcing a full first round: evict 0x1000.
         assert_eq!(c.evict().unwrap(), 0x1000);
-        // Nu staat alleen 0x2000 (bit gewist). Touch het → tweede kans.
-        c.insert(0x3000); // bit gezet
-        c.touch(0x2000); // bit gezet
-        // Beide bits gezet → eerste ronde wist ze, slachtoffer = de huidige hand-positie.
+        // Now only 0x2000 remains (bit cleared). Touch it → second chance.
+        c.insert(0x3000); // bit set
+        c.touch(0x2000); // bit set
+        // Both bits set → the first round clears them, victim = the current hand position.
         let v = c.evict().unwrap();
         assert!(v == 0x2000 || v == 0x3000);
         assert_eq!(c.len(), 1);

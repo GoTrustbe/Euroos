@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Start de EuroKernel-image in QEMU met OVMF (UEFI). Met GUI indien beschikbaar,
-# anders headless. KVM wordt gebruikt als /dev/kvm bestaat (anders TCG).
+# Start the EuroKernel image in QEMU with OVMF (UEFI). With GUI if available,
+# otherwise headless. KVM is used if /dev/kvm exists (otherwise TCG).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -13,12 +13,12 @@ OVMF_CANDIDATES=(
 )
 OVMF=""
 for p in "${OVMF_CANDIDATES[@]}"; do [ -f "$p" ] && OVMF="$p" && break; done
-[ -n "$OVMF" ] || { echo "OVMF niet gevonden — installeer 'ovmf'"; exit 1; }
+[ -n "$OVMF" ] || { echo "OVMF not found — install 'ovmf'"; exit 1; }
 
-# KVM: -cpu host levert SMEP/SMAP van de echte CPU. Zonder KVM (TCG) draait een
-# qemu64-CPU die SMEP/SMAP standaard NIET adverteert; expliciet aanzetten zodat de
-# kernel-bescherming (CR4.SMEP/SMAP + het syscall-AC-venster) ook hier afgedwongen
-# en getest wordt — TCG emuleert beide correct.
+# KVM: -cpu host provides SMEP/SMAP from the real CPU. Without KVM (TCG) a
+# qemu64 CPU runs that by default does NOT advertise SMEP/SMAP; enable them explicitly so the
+# kernel protection (CR4.SMEP/SMAP + the syscall AC window) is also enforced
+# and tested here — TCG emulates both correctly.
 ACCEL=(-cpu qemu64,+smep,+smap)
 [ -e /dev/kvm ] && ACCEL=(-enable-kvm -cpu host)
 DISPLAY_ARG=(-display gtk); [ -z "${DISPLAY:-}" ] && DISPLAY_ARG=(-display none -serial stdio)

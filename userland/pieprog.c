@@ -1,8 +1,8 @@
-/* EuroOS — een ECHTE positie-onafhankelijke executable (PIE / ET_DYN) met
- * R_X86_64_RELATIVE-relocaties. De pointer-array hieronder dwingt relocaties af:
- * elke pointer is opgeslagen als een offset-vanaf-0 en moet door de loader met
- * de load-bias worden gecorrigeerd. Verschijnen de woorden correct, dan heeft de
- * kernel de relocaties toegepast — exact wat een musl static-PIE binary vereist. */
+/* EuroOS — a REAL position-independent executable (PIE / ET_DYN) with
+ * R_X86_64_RELATIVE relocations. The pointer array below forces relocations:
+ * each pointer is stored as an offset-from-0 and must be corrected by the loader
+ * with the load bias. If the words appear correctly, then the kernel has applied
+ * the relocations — exactly what a musl static-PIE binary requires. */
 
 static long sys(long n, long a1, long a2, long a3) {
     long ret;
@@ -15,21 +15,21 @@ static long sys(long n, long a1, long a2, long a3) {
 static long slen(const char *s) { long n = 0; while (s[n]) n++; return n; }
 static void put(const char *s) { sys(SYS_WRITE, (long)s, 0, 0); }
 
-/* Array van pointers -> R_X86_64_RELATIVE relocaties in .rela.dyn. */
+/* Array of pointers -> R_X86_64_RELATIVE relocations in .rela.dyn. */
 static const char *const woorden[] = {
-    "soeverein", "Europees", "besturingssysteem",
+    "sovereign", "European", "operating system",
 };
 #define N (sizeof(woorden) / sizeof(woorden[0]))
 
 void real_start(void) {
-    put("PIE met relocaties draait. Gerelokeerde pointers:\n");
+    put("PIE with relocations is running. Relocated pointers:\n");
     for (unsigned i = 0; i < N; i++) {
         unsigned j = i;
-        /* Ondoorzichtige index: dwingt runtime-indexering af zodat de compiler de
-         * pointer-array NIET wegoptimaliseert -> echte R_X86_64_RELATIVE relocs. */
+        /* Opaque index: forces runtime indexing so the compiler does NOT
+         * optimize away the pointer array -> real R_X86_64_RELATIVE relocs. */
         __asm__ volatile("" : "+r"(j));
         put("  - ");
-        put(woorden[j]); /* garbage zonder relocatie, correct mét */
+        put(woorden[j]); /* garbage without relocation, correct with it */
         put("\n");
     }
     sys(SYS_EXIT, 0, 0, 0);

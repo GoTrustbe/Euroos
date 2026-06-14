@@ -1,10 +1,10 @@
-//! EuroMail — de e-mailkern van EuroOS (Sprint AC-4).
+//! EuroMail — the e-mail core of EuroOS (Sprint AC-4).
 //!
-//! De pure, host-geteste parser-kern van de mailclient: **RFC822-headers**
-//! (met unfolding), **adreslijsten** (`Naam <adres>`), **MIME-multipart**-
-//! ontleding, en de decoders **base64**, **quoted-printable** en **RFC2047**
-//! encoded-words (`=?utf-8?B?...?=`) voor headers. De IMAP/SMTP-transportlaag
-//! draait later op [`euronet`]/[`eurotls`]; deze crate raakt het netwerk niet.
+//! The pure, host-tested parser core of the mail client: **RFC822 headers**
+//! (with unfolding), **address lists** (`Name <address>`), **MIME multipart**
+//! parsing, and the decoders **base64**, **quoted-printable** and **RFC2047**
+//! encoded-words (`=?utf-8?B?...?=`) for headers. The IMAP/SMTP transport layer
+//! runs later on [`euronet`]/[`eurotls`]; this crate does not touch the network.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -16,7 +16,7 @@ use alloc::vec::Vec;
 
 // ── decoders ─────────────────────────────────────────────────────────────────
 
-/// Decodeer base64 (negeert witruimte; tolerant t.o.v. ontbrekende padding).
+/// Decode base64 (ignores whitespace; tolerant of missing padding).
 pub fn base64_decode(input: &str) -> Vec<u8> {
     fn val(c: u8) -> Option<u8> {
         match c {
@@ -47,7 +47,7 @@ pub fn base64_decode(input: &str) -> Vec<u8> {
     out
 }
 
-/// Decodeer quoted-printable. `underscore_as_space` voor de RFC2047 "Q"-variant.
+/// Decode quoted-printable. `underscore_as_space` for the RFC2047 "Q" variant.
 pub fn quoted_printable_decode(input: &str, underscore_as_space: bool) -> Vec<u8> {
     let b = input.as_bytes();
     let mut out = Vec::new();
@@ -55,7 +55,7 @@ pub fn quoted_printable_decode(input: &str, underscore_as_space: bool) -> Vec<u8
     while i < b.len() {
         match b[i] {
             b'=' => {
-                // Soft line break "=\r\n" of "=\n".
+                // Soft line break "=\r\n" or "=\n".
                 if i + 1 < b.len() && (b[i + 1] == b'\n' || b[i + 1] == b'\r') {
                     i += 1;
                     while i < b.len() && (b[i] == b'\n' || b[i] == b'\r') {
@@ -95,7 +95,7 @@ fn hex(c: u8) -> Option<u8> {
     }
 }
 
-/// Decodeer RFC2047 encoded-words in een headerwaarde naar UTF-8 tekst.
+/// Decode RFC2047 encoded-words in a header value to UTF-8 text.
 pub fn decode_header(value: &str) -> String {
     let mut out = String::new();
     let mut rest = value;
@@ -108,11 +108,11 @@ pub fn decode_header(value: &str) -> String {
             }
         };
         out.push_str(&rest[..start]);
-        // Vorm: =?charset?enc?text?=  (text bevat zelf geen '?').
+        // Form: =?charset?enc?text?=  (text itself contains no '?').
         let body = &rest[start + 2..];
         let mut marks = body.match_indices('?');
-        let p1 = marks.next(); // ná charset
-        let p2 = marks.next(); // ná enc
+        let p1 = marks.next(); // after charset
+        let p2 = marks.next(); // after enc
         if let (Some((i1, _)), Some((i2, _))) = (p1, p2) {
             let enc = &body[i1 + 1..i2];
             let after_enc = &body[i2 + 1..];
@@ -128,7 +128,7 @@ pub fn decode_header(value: &str) -> String {
                 continue;
             }
         }
-        // Geen geldige encoded-word → letterlijk "=?".
+        // No valid encoded-word → literal "=?".
         out.push_str("=?");
         rest = body;
     }
@@ -137,14 +137,14 @@ pub fn decode_header(value: &str) -> String {
 
 // ── headers ──────────────────────────────────────────────────────────────────
 
-/// Een geparst adres (`Naam <adres>`).
+/// A parsed address (`Name <address>`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Address {
     pub name: String,
     pub email: String,
 }
 
-/// Splits ruwe bericht-tekst in (headers, body) op de eerste lege regel.
+/// Split raw message text into (headers, body) at the first empty line.
 fn split_headers(raw: &str) -> (&str, &str) {
     if let Some(p) = raw.find("\r\n\r\n") {
         (&raw[..p], &raw[p + 4..])
@@ -155,7 +155,7 @@ fn split_headers(raw: &str) -> (&str, &str) {
     }
 }
 
-/// Parse headers met unfolding (vervolgregels beginnen met spatie/tab).
+/// Parse headers with unfolding (continuation lines start with space/tab).
 pub fn parse_headers(head: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     for line in head.split('\n') {
@@ -179,7 +179,7 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
-/// Parse een adreslijst (`A <a@x>, B <b@y>`), respecteert quotes en `<>`.
+/// Parse an address list (`A <a@x>, B <b@y>`), respecting quotes and `<>`.
 pub fn parse_addresses(value: &str) -> Vec<Address> {
     let mut out = Vec::new();
     let mut depth_angle = 0;
@@ -231,7 +231,7 @@ fn parse_one_address(s: &str) -> Option<Address> {
 
 // ── MIME ─────────────────────────────────────────────────────────────────────
 
-/// Een bijlage.
+/// An attachment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attachment {
     pub filename: String,
@@ -239,7 +239,7 @@ pub struct Attachment {
     pub data: Vec<u8>,
 }
 
-/// Een geparst e-mailbericht.
+/// A parsed e-mail message.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Email {
     pub from: Vec<Address>,
@@ -252,7 +252,7 @@ pub struct Email {
 }
 
 fn param(value: &str, key: &str) -> Option<String> {
-    // bv. `multipart/mixed; boundary="abc"` → param "boundary" = abc
+    // e.g. `multipart/mixed; boundary="abc"` → param "boundary" = abc
     for seg in value.split(';').skip(1) {
         let seg = seg.trim();
         if let Some(eq) = seg.find('=') {
@@ -276,7 +276,7 @@ fn decode_body(body: &str, encoding: &str) -> Vec<u8> {
     }
 }
 
-/// Verwerk één MIME-deel (recursief voor multipart), tot diepte `depth`.
+/// Process one MIME part (recursive for multipart), up to depth `depth`.
 fn walk_part(raw: &str, email: &mut Email, depth: u32) {
     if depth > 16 {
         return;
@@ -295,11 +295,11 @@ fn walk_part(raw: &str, email: &mut Email, depth: u32) {
             for seg in body.split(delim.as_str()) {
                 if first {
                     first = false;
-                    continue; // preamble vóór de eerste boundary
+                    continue; // preamble before the first boundary
                 }
                 let seg = seg.trim_start_matches(['\r', '\n']);
                 if seg.starts_with("--") {
-                    break; // afsluitende boundary
+                    break; // closing boundary
                 }
                 walk_part(seg, email, depth + 1);
             }
@@ -307,7 +307,7 @@ fn walk_part(raw: &str, email: &mut Email, depth: u32) {
         return;
     }
 
-    // Leaf-deel.
+    // Leaf part.
     let filename = param(ctype, "name").or_else(|| param(disposition, "filename"));
     if let Some(fname) = filename {
         email.attachments.push(Attachment {
@@ -318,7 +318,7 @@ fn walk_part(raw: &str, email: &mut Email, depth: u32) {
     } else if mtype == "text/html" {
         email.html = String::from_utf8_lossy(&decode_body(body, cte)).into_owned();
     } else {
-        // text/plain (of onbekend) → tekst.
+        // text/plain (or unknown) → text.
         let t = String::from_utf8_lossy(&decode_body(body, cte)).into_owned();
         if email.text.is_empty() {
             email.text = t;
@@ -326,7 +326,7 @@ fn walk_part(raw: &str, email: &mut Email, depth: u32) {
     }
 }
 
-/// Parse een volledig RFC822/MIME-bericht.
+/// Parse a complete RFC822/MIME message.
 pub fn parse(raw: &str) -> Email {
     let (head, _) = split_headers(raw);
     let headers = parse_headers(head);
@@ -349,7 +349,7 @@ mod tests {
     fn base64_roundtrip_known() {
         assert_eq!(base64_decode("aGVsbG8="), b"hello");
         assert_eq!(base64_decode("RXVyb09T"), b"EuroOS");
-        // witruimte genegeerd
+        // whitespace ignored
         assert_eq!(base64_decode("aGVs\r\nbG8="), b"hello");
     }
 
@@ -358,8 +358,8 @@ mod tests {
         assert_eq!(quoted_printable_decode("a=3Db", false), b"a=b");
         assert_eq!(quoted_printable_decode("caf=C3=A9", false), "café".as_bytes());
         // soft line break
-        assert_eq!(quoted_printable_decode("een=\r\ntwee", false), b"eentwee");
-        // Q-variant: _ = spatie
+        assert_eq!(quoted_printable_decode("one=\r\ntwo", false), b"onetwo");
+        // Q variant: _ = space
         assert_eq!(quoted_printable_decode("a_b", true), b"a b");
     }
 
@@ -367,15 +367,15 @@ mod tests {
     fn rfc2047_header_decode() {
         assert_eq!(decode_header("=?utf-8?B?RXVyb09T?="), "EuroOS");
         assert_eq!(decode_header("=?utf-8?Q?caf=C3=A9?="), "café");
-        assert_eq!(decode_header("gewone tekst"), "gewone tekst");
+        assert_eq!(decode_header("plain text"), "plain text");
         assert_eq!(decode_header("Pre =?utf-8?B?RXVybw==?= post"), "Pre Euro post");
     }
 
     #[test]
     fn headers_unfold() {
-        let h = "Subject: lange\r\n regel\r\nFrom: a@b\r\n";
+        let h = "Subject: long\r\n line\r\nFrom: a@b\r\n";
         let parsed = parse_headers(h);
-        assert_eq!(parsed[0], ("Subject".into(), "lange regel".into()));
+        assert_eq!(parsed[0], ("Subject".into(), "long line".into()));
         assert_eq!(parsed[1], ("From".into(), "a@b".into()));
     }
 
@@ -385,32 +385,32 @@ mod tests {
         assert_eq!(a.len(), 2);
         assert_eq!(a[0], Address { name: "Jan Vandenberg".into(), email: "jan@euro-os.eu".into() });
         assert_eq!(a[1].email, "anna@x.be");
-        // komma binnen quotes/angles splitst niet
-        let b = parse_addresses("\"Bedrijf, NV\" <info@bedrijf.be>");
+        // comma inside quotes/angles does not split
+        let b = parse_addresses("\"Company, Ltd\" <info@company.be>");
         assert_eq!(b.len(), 1);
-        assert_eq!(b[0].email, "info@bedrijf.be");
+        assert_eq!(b[0].email, "info@company.be");
     }
 
     #[test]
     fn parse_simple_message() {
-        let raw = "From: Jan <jan@euro-os.eu>\r\nTo: anna@x.be\r\nSubject: =?utf-8?B?SGFsbG8=?=\r\nContent-Type: text/plain\r\n\r\nDit is de tekst.\r\n";
+        let raw = "From: Jan <jan@euro-os.eu>\r\nTo: anna@x.be\r\nSubject: =?utf-8?B?SGFsbG8=?=\r\nContent-Type: text/plain\r\n\r\nThis is the text.\r\n";
         let e = parse(raw);
         assert_eq!(e.from[0].email, "jan@euro-os.eu");
         assert_eq!(e.to[0].email, "anna@x.be");
         assert_eq!(e.subject, "Hallo");
-        assert!(e.text.contains("Dit is de tekst."));
+        assert!(e.text.contains("This is the text."));
     }
 
     #[test]
     fn parse_multipart_with_attachment() {
         let raw = "From: a@b\r\nContent-Type: multipart/mixed; boundary=\"XX\"\r\n\r\n\
-            --XX\r\nContent-Type: text/plain\r\n\r\nHallo wereld\r\n\
-            --XX\r\nContent-Type: text/html\r\n\r\n<p>Hallo</p>\r\n\
+            --XX\r\nContent-Type: text/plain\r\n\r\nHello world\r\n\
+            --XX\r\nContent-Type: text/html\r\n\r\n<p>Hello</p>\r\n\
             --XX\r\nContent-Type: application/octet-stream; name=\"data.bin\"\r\nContent-Transfer-Encoding: base64\r\n\r\nRXVyb09T\r\n\
             --XX--\r\n";
         let e = parse(raw);
-        assert!(e.text.contains("Hallo wereld"));
-        assert!(e.html.contains("<p>Hallo</p>"));
+        assert!(e.text.contains("Hello world"));
+        assert!(e.html.contains("<p>Hello</p>"));
         assert_eq!(e.attachments.len(), 1);
         assert_eq!(e.attachments[0].filename, "data.bin");
         assert_eq!(e.attachments[0].data, b"EuroOS");

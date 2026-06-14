@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Boot, beweeg de PS/2-muis via QMP en (optioneel) sleep een venster, screenshot."""
+"""Boot, move the PS/2 mouse via QMP and (optionally) drag a window, screenshot."""
 import json, os, socket, subprocess, sys, time
 
 IMG = sys.argv[1] if len(sys.argv) > 1 else "eurokernel.img"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "mouse.png"
 WAIT = int(sys.argv[3]) if len(sys.argv) > 3 else 36
-MODE = sys.argv[4] if len(sys.argv) > 4 else "move"  # "move" of "drag"
+MODE = sys.argv[4] if len(sys.argv) > 4 else "move"  # "move" or "drag"
 OVMF = "/usr/share/ovmf/OVMF.fd"
 QMP = "/tmp/ek-mouse.sock"
 
@@ -26,7 +26,7 @@ f = s.makefile("rwb", buffering=0)
 def cmd(o): f.write((json.dumps(o)+"\n").encode()); return json.loads(f.readline().decode())
 f.readline(); cmd({"execute": "qmp_capabilities"})
 
-print(f"[mouse] boot, wacht {WAIT}s...", flush=True)
+print(f"[mouse] boot, waiting {WAIT}s...", flush=True)
 time.sleep(WAIT)
 
 def move(dx, dy, steps=20):
@@ -41,15 +41,15 @@ def button(down):
     cmd({"execute": "input-send-event", "arguments": {"events": [
         {"type": "btn", "data": {"button": "left", "down": down}}]}})
 
-# Cursor start in het midden (~960,540). Beweeg naar de Systeem-titelbalk
-# (rechtsboven, ~x 980, y 166): naar rechts + omhoog.
-move(+4, -18, 22)   # omhoog-rechts naar de titelbalk-zone
+# Cursor starts in the center (~960,540). Move to the System title bar
+# (top right, ~x 980, y 166): to the right + up.
+move(+4, -18, 22)   # up-right toward the title-bar zone
 
 if MODE == "drag":
     time.sleep(0.3)
     button(True)
     time.sleep(0.2)
-    move(-8, +14, 20)   # sleep het venster naar links-onder
+    move(-8, +14, 20)   # drag the window to the bottom-left
     time.sleep(0.2)
     button(False)
 

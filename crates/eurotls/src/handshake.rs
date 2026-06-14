@@ -1,7 +1,7 @@
-//! TLS 1.3-client state machine (RFC 8446 §4). Sans-IO: voed records in via
-//! [`Tls13Client::feed`], verwerk via [`Tls13Client::process`] (geeft te
-//! versturen bytes terug), en wissel daarna applicatiedata uit. Ciphersuite
-//! TLS_CHACHA20_POLY1305_SHA256, sleuteluitwisseling X25519.
+//! TLS 1.3 client state machine (RFC 8446 §4). Sans-IO: feed records in via
+//! [`Tls13Client::feed`], process via [`Tls13Client::process`] (returns the
+//! bytes to send), and afterwards exchange application data. Ciphersuite
+//! TLS_CHACHA20_POLY1305_SHA256, key exchange X25519.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -22,7 +22,7 @@ use crate::{GROUP_X25519, SIG_ECDSA_P256, SIG_ED25519, SIG_RSA_PKCS1_SHA256, SIG
 
 type HmacSha256 = Hmac<Sha256>;
 
-// Handshake-berichttypes.
+// Handshake message types.
 const HS_CLIENT_HELLO: u8 = 1;
 const HS_SERVER_HELLO: u8 = 2;
 const HS_NEW_SESSION_TICKET: u8 = 4;
@@ -75,30 +75,30 @@ pub struct Tls13Client {
     server_seq: u64,
     client_seq: u64,
 
-    rx: Vec<u8>,      // ruwe ontvangen record-bytes
-    hs_buf: Vec<u8>,  // ontsleutelde handshake-bytes (her-assemblage)
-    app_buf: Vec<u8>, // ontsleutelde applicatiedata
+    rx: Vec<u8>,      // raw received record bytes
+    hs_buf: Vec<u8>,  // decrypted handshake bytes (reassembly)
+    app_buf: Vec<u8>, // decrypted application data
 
-    /// Het ruwe servercertificaat (eerste in de keten) voor latere inspectie.
+    /// The raw server certificate (first in the chain) for later inspection.
     pub server_cert: Option<Vec<u8>>,
-    /// De volledige door de server aangeboden keten (leaf eerst), DER per cert.
+    /// The full chain offered by the server (leaf first), DER per cert.
     cert_chain: Vec<Vec<u8>>,
-    /// Peilmoment (epoch-seconden) voor geldigheidscontrole; gezet via
+    /// Reference instant (epoch seconds) for the validity check; set via
     /// [`set_trust_anchor`].
     now: i64,
-    /// Vertrouwde root-CA's (DER). `None` = nog geen trust anchor gezet → de
-    /// handshake FAALT bij certificaatcontrole (fail-closed), tenzij expliciet
-    /// `allow_insecure_no_verification()` is aangeroepen.
+    /// Trusted root CAs (DER). `None` = no trust anchor set yet → the
+    /// handshake FAILS at certificate validation (fail-closed), unless
+    /// `allow_insecure_no_verification()` has been called explicitly.
     trust_roots: Option<&'static [&'static [u8]]>,
-    /// Expliciete, greppable opt-out: sla certificaatvalidatie over (alleen voor
-    /// host-tests/dev zónder trust store). Standaard `false` — nooit stilzwijgend.
+    /// Explicit, greppable opt-out: skip certificate validation (only for
+    /// host tests/dev without a trust store). Defaults to `false` — never silently.
     insecure_skip_verify: bool,
 }
 
 impl Tls13Client {
-    /// Maak een client + de ClientHello-record (klaar om in klare tekst te
-    /// versturen). `random` en `secret_scalar` MOETEN echte willekeur zijn
-    /// (de kernel levert ze via RDRAND).
+    /// Create a client + the ClientHello record (ready to send in cleartext).
+    /// `random` and `secret_scalar` MUST be real randomness
+    /// (the kernel supplies them via RDRAND).
     pub fn new(sni: &str, random: [u8; 32], secret_scalar: [u8; 32]) -> (Self, Vec<u8>) {
         let secret = StaticSecret::from(secret_scalar);
         let pubkey = PublicKey::from(&secret);
@@ -140,25 +140,25 @@ impl Tls13Client {
         self.state == TlsState::Connected
     }
 
-    /// Schakel certificaatvalidatie in: na ontvangst van het servercertificaat
-    /// wordt de keten aan `roots` verankerd (geldigheid + hostnaam + per-stap-
-    /// handtekening) én wordt de CertificateVerify-handtekening gecontroleerd.
-    /// `now` = epoch-seconden (van de kernel-RTC). MOET vóór `process()` worden
-    /// aangeroepen. Wordt dit nooit aangeroepen, dan blijft validatie uit (de
-    /// handshake-MAC blijft hoe dan ook bindend).
+    /// Enable certificate validation: after receiving the server certificate
+    /// the chain is anchored to `roots` (validity + hostname + per-step
+    /// signature) AND the CertificateVerify signature is checked.
+    /// `now` = epoch seconds (from the kernel RTC). MUST be called before
+    /// `process()`. If never called, validation stays off (the
+    /// handshake MAC remains binding regardless).
     pub fn set_trust_anchor(&mut self, now: i64, roots: &'static [&'static [u8]]) {
         self.now = now;
         self.trust_roots = Some(roots);
     }
 
-    /// EXPLICIETE opt-out: sla certificaat- en CertificateVerify-validatie over.
-    /// Uitsluitend voor host-tests/dev zónder trust store — NOOIT in productie.
-    /// De naam is bewust luid en greppable zodat een audit elk onveilig gebruik vindt.
+    /// EXPLICIT opt-out: skip certificate and CertificateVerify validation.
+    /// Strictly for host tests/dev without a trust store — NEVER in production.
+    /// The name is deliberately loud and greppable so an audit finds every insecure use.
     pub fn allow_insecure_no_verification(&mut self) {
         self.insecure_skip_verify = true;
     }
 
-    /// Voeg ontvangen bytes toe aan de interne record-buffer.
+    /// Append received bytes to the internal record buffer.
     pub fn feed(&mut self, data: &[u8]) {
         self.rx.extend_from_slice(data);
     }
@@ -168,7 +168,7 @@ impl Tls13Client {
         let mut b = Vec::new();
         b.extend_from_slice(&[0x03, 0x03]); // legacy_version
         b.extend_from_slice(random);
-        // legacy_session_id: 32 bytes (middlebox-compat), hergebruik wat willekeur.
+        // legacy_session_id: 32 bytes (middlebox compat), reuse some randomness.
         b.push(32);
         b.extend_from_slice(random);
         // cipher_suites
@@ -226,38 +226,38 @@ impl Tls13Client {
         b
     }
 
-    // ── Verwerking ───────────────────────────────────────────────────────
-    /// Verwerk alle volledige records in de buffer; geef te versturen bytes
-    /// terug (kan leeg zijn). Zet de staat door tot `Connected`.
+    // ── Processing ───────────────────────────────────────────────────────
+    /// Process all complete records in the buffer; return the bytes to send
+    /// (may be empty). Drives the state forward until `Connected`.
     pub fn process(&mut self) -> Result<Vec<u8>, TlsError> {
         let mut out = Vec::new();
         loop {
             let (rec, n) = match read_record(&self.rx) {
                 Ok(Some(v)) => v,
-                Ok(None) => break, // nog niet genoeg bytes
-                Err(_) => return Err(TlsError::Protocol("recordlengte > 2^14+256")),
+                Ok(None) => break, // not enough bytes yet
+                Err(_) => return Err(TlsError::Protocol("record length > 2^14+256")),
             };
             self.rx.drain(..n);
             match rec.ctype {
-                CT_CHANGE_CIPHER_SPEC => continue, // middlebox-compat: negeren
+                CT_CHANGE_CIPHER_SPEC => continue, // middlebox compat: ignore
                 CT_ALERT => {
                     self.state = TlsState::Failed;
                     let code = *rec.fragment.get(1).unwrap_or(&0);
                     return Err(TlsError::Alert(code));
                 }
                 CT_HANDSHAKE => {
-                    // Alleen vóór de versleutelde flight: dit is de ServerHello.
+                    // Only before the encrypted flight: this is the ServerHello.
                     self.hs_buf.extend_from_slice(&rec.fragment);
                     self.drain_handshake(&mut out)?;
                 }
                 CT_APPLICATION_DATA => {
-                    // Versleuteld record: ontsleutel met de huidige server-epoch.
+                    // Encrypted record: decrypt with the current server epoch.
                     let keys = match self.server_epoch {
                         Epoch::Handshake => self.server_hs.as_ref(),
                         Epoch::Application => self.server_ap.as_ref(),
-                        Epoch::None => return Err(TlsError::Protocol("data vóór sleutels")),
+                        Epoch::None => return Err(TlsError::Protocol("data before keys")),
                     }
-                    .ok_or(TlsError::Protocol("geen serversleutels"))?;
+                    .ok_or(TlsError::Protocol("no server keys"))?;
                     let aad = aead_aad(rec.fragment.len());
                     let pt = aead::open(&keys.key, &keys.iv, self.server_seq, &aad, &rec.fragment)
                         .ok_or(TlsError::Decrypt)?;
@@ -283,7 +283,7 @@ impl Tls13Client {
         Ok(out)
     }
 
-    /// Parse complete handshake-berichten uit `hs_buf` en verwerk ze.
+    /// Parse complete handshake messages from `hs_buf` and process them.
     fn drain_handshake(&mut self, out: &mut Vec<u8>) -> Result<(), TlsError> {
         loop {
             if self.hs_buf.len() < 4 {
@@ -292,7 +292,7 @@ impl Tls13Client {
             let mtype = self.hs_buf[0];
             let len = ((self.hs_buf[1] as usize) << 16) | ((self.hs_buf[2] as usize) << 8) | (self.hs_buf[3] as usize);
             if self.hs_buf.len() < 4 + len {
-                return Ok(()); // wacht op meer
+                return Ok(()); // wait for more
             }
             let msg: Vec<u8> = self.hs_buf.drain(..4 + len).collect();
             self.handle_handshake_msg(mtype, &msg, out)?;
@@ -311,22 +311,22 @@ impl Tls13Client {
             HS_CERTIFICATE => {
                 self.parse_certificate(&msg[4..]);
                 self.transcript.update(msg);
-                // Verifieer de keten tegen de trust store (indien ingeschakeld).
+                // Verify the chain against the trust store (if enabled).
                 self.validate_chain()?;
             }
             HS_CERTIFICATE_VERIFY => {
-                // De server bewijst hier bezit van de privésleutel van het leaf-
-                // certificaat door de transcript-hash (T/M Certificate) te
-                // ondertekenen. Verifieer vóór we dit bericht aan de transcript
-                // toevoegen (RFC 8446 §4.4.3).
+                // Here the server proves possession of the private key of the
+                // leaf certificate by signing the transcript hash (up to and
+                // including Certificate). Verify before we add this message to
+                // the transcript (RFC 8446 §4.4.3).
                 let th = self.transcript.hash();
                 self.verify_certificate_verify(&msg[4..], &th)?;
                 self.transcript.update(msg);
             }
             HS_FINISHED => {
-                // Server Finished: verifieer de MAC over de transcript T/M
-                // CertificateVerify (dus vóór we dit bericht toevoegen).
-                let server_hs = self.server_hs.as_ref().ok_or(TlsError::Protocol("geen hs-sleutels"))?;
+                // Server Finished: verify the MAC over the transcript up to and
+                // including CertificateVerify (so before we add this message).
+                let server_hs = self.server_hs.as_ref().ok_or(TlsError::Protocol("no hs keys"))?;
                 let expected = hmac_sha256(&server_hs.finished_key, &self.transcript.hash());
                 if msg[4..] != expected[..] {
                     self.state = TlsState::Failed;
@@ -335,8 +335,8 @@ impl Tls13Client {
                 self.transcript.update(msg);
                 self.finish_handshake(out)?;
             }
-            HS_NEW_SESSION_TICKET => { /* na de handshake: negeren (geen resumption) */ }
-            _ => return Err(TlsError::Protocol("onverwacht handshake-bericht")),
+            HS_NEW_SESSION_TICKET => { /* after the handshake: ignore (no resumption) */ }
+            _ => return Err(TlsError::Protocol("unexpected handshake message")),
         }
         Ok(())
     }
@@ -366,7 +366,7 @@ impl Tls13Client {
         if body.len() < ext_end {
             return Err(TlsError::BadRecord);
         }
-        // Zoek de key_share-extensie (0x0033) → server x25519 public key.
+        // Find the key_share extension (0x0033) → server x25519 public key.
         let mut server_pub: Option<[u8; 32]> = None;
         let mut q = p;
         while q + 4 <= ext_end {
@@ -384,9 +384,9 @@ impl Tls13Client {
             }
             q += 4 + elen;
         }
-        let server_pub = server_pub.ok_or(TlsError::Protocol("geen server key_share"))?;
+        let server_pub = server_pub.ok_or(TlsError::Protocol("no server key_share"))?;
 
-        // ECDHE + sleutelschema (handshake-secrets over transcript CH||SH).
+        // ECDHE + key schedule (handshake secrets over transcript CH||SH).
         let shared = self.secret.diffie_hellman(&PublicKey::from(server_pub));
         let ecdhe = *shared.as_bytes();
         let th = self.transcript.hash();
@@ -400,8 +400,8 @@ impl Tls13Client {
     }
 
     fn parse_certificate(&mut self, body: &[u8]) {
-        // certificate_request_context<u8> + certificate_list<u24>. Elke entry =
-        // cert_data<u24> (DER) + extensions<u16>. We bewaren de hele keten.
+        // certificate_request_context<u8> + certificate_list<u24>. Each entry =
+        // cert_data<u24> (DER) + extensions<u16>. We keep the whole chain.
         self.cert_chain.clear();
         if body.is_empty() {
             return;
@@ -422,7 +422,7 @@ impl Tls13Client {
             }
             self.cert_chain.push(body[p..p + cert_len].to_vec());
             p += cert_len;
-            // CertificateEntry-extensies overslaan.
+            // Skip CertificateEntry extensions.
             if p + 2 > list_end {
                 break;
             }
@@ -432,7 +432,7 @@ impl Tls13Client {
         self.server_cert = self.cert_chain.first().cloned();
     }
 
-    /// Diagnostiek: (sig_alg, pubkey_alg, is_ca) per certificaat in de keten.
+    /// Diagnostics: (sig_alg, pubkey_alg, is_ca) per certificate in the chain.
     pub fn cert_chain_info(&self) -> Vec<(crate::x509::SigAlg, PubKeyAlg, bool)> {
         self.cert_chain
             .iter()
@@ -440,23 +440,23 @@ impl Tls13Client {
             .collect()
     }
 
-    /// Verifieer de aangeboden keten tegen de trust store. FAIL-CLOSED: zonder
-    /// trust anchor faalt de verbinding (tenzij expliciet `allow_insecure_no_
-    /// verification()` is gezet). Bij mislukking: faal de verbinding.
+    /// Verify the offered chain against the trust store. FAIL-CLOSED: without a
+    /// trust anchor the connection fails (unless `allow_insecure_no_
+    /// verification()` is set explicitly). On failure: fail the connection.
     fn validate_chain(&mut self) -> Result<(), TlsError> {
         let roots = match self.trust_roots {
             Some(r) => r,
             None => {
                 if self.insecure_skip_verify {
-                    return Ok(()); // expliciete opt-out (host-test/dev)
+                    return Ok(()); // explicit opt-out (host test/dev)
                 }
                 self.state = TlsState::Failed;
-                return Err(TlsError::Protocol("geen trust anchor gezet — validatie verplicht"));
+                return Err(TlsError::Protocol("no trust anchor set — validation required"));
             }
         };
         if self.cert_chain.is_empty() {
             self.state = TlsState::Failed;
-            return Err(TlsError::Protocol("server stuurde geen certificaat"));
+            return Err(TlsError::Protocol("server sent no certificate"));
         }
         let ts = chain::TrustStore::from_ders(roots);
         let slices: Vec<&[u8]> = self.cert_chain.iter().map(|v| v.as_slice()).collect();
@@ -465,55 +465,55 @@ impl Tls13Client {
             Err(e) => {
                 self.state = TlsState::Failed;
                 let why = match e {
-                    chain::ChainError::EmptyChain => "keten leeg",
-                    chain::ChainError::Parse(_) => "cert onleesbaar",
-                    chain::ChainError::Expired => "verlopen / niet geldig",
-                    chain::ChainError::HostnameMismatch => "hostnaam matcht geen SAN",
-                    chain::ChainError::BrokenChain => "keten onderbroken (issuer≠subject)",
-                    chain::ChainError::IssuerNotCa => "uitgever is geen CA",
-                    chain::ChainError::BadSignature => "handtekening in keten ongeldig",
-                    chain::ChainError::UnknownCa => "geen vertrouwde root (onbekende CA)",
+                    chain::ChainError::EmptyChain => "chain empty",
+                    chain::ChainError::Parse(_) => "cert unreadable",
+                    chain::ChainError::Expired => "expired / not valid",
+                    chain::ChainError::HostnameMismatch => "hostname matches no SAN",
+                    chain::ChainError::BrokenChain => "chain broken (issuer≠subject)",
+                    chain::ChainError::IssuerNotCa => "issuer is not a CA",
+                    chain::ChainError::BadSignature => "signature in chain invalid",
+                    chain::ChainError::UnknownCa => "no trusted root (unknown CA)",
                 };
                 Err(TlsError::Protocol(why))
             }
         }
     }
 
-    /// Controleer de CertificateVerify-handtekening met de publieke sleutel van
-    /// het leaf-certificaat (geen-op als validatie uitstaat). `transcript_hash` =
-    /// de transcript-hash T/M het Certificate-bericht.
+    /// Check the CertificateVerify signature with the public key of the leaf
+    /// certificate (no-op if validation is off). `transcript_hash` =
+    /// the transcript hash up to and including the Certificate message.
     fn verify_certificate_verify(&mut self, body: &[u8], transcript_hash: &[u8]) -> Result<(), TlsError> {
         if self.trust_roots.is_none() {
             if self.insecure_skip_verify {
-                return Ok(()); // expliciete opt-out (host-test/dev)
+                return Ok(()); // explicit opt-out (host test/dev)
             }
             self.state = TlsState::Failed;
-            return Err(TlsError::Protocol("geen trust anchor gezet — CertificateVerify verplicht"));
+            return Err(TlsError::Protocol("no trust anchor set — CertificateVerify required"));
         }
         if body.len() < 4 {
             self.state = TlsState::Failed;
-            return Err(TlsError::Protocol("korte CertificateVerify"));
+            return Err(TlsError::Protocol("short CertificateVerify"));
         }
         let scheme = u16::from_be_bytes([body[0], body[1]]);
         let sig_len = u16::from_be_bytes([body[2], body[3]]) as usize;
         if body.len() < 4 + sig_len {
             self.state = TlsState::Failed;
-            return Err(TlsError::Protocol("CertificateVerify-lengte"));
+            return Err(TlsError::Protocol("CertificateVerify length"));
         }
         let signature = &body[4..4 + sig_len];
 
-        // Het ondertekende blok (RFC 8446 §4.4.3): 64×0x20, contextstring, 0x00,
-        // gevolgd door de transcript-hash.
+        // The signed block (RFC 8446 §4.4.3): 64×0x20, context string, 0x00,
+        // followed by the transcript hash.
         let mut content = Vec::with_capacity(64 + 34 + transcript_hash.len());
         content.extend_from_slice(&[0x20u8; 64]);
         content.extend_from_slice(b"TLS 1.3, server CertificateVerify");
         content.push(0x00);
         content.extend_from_slice(transcript_hash);
 
-        let leaf_der = self.cert_chain.first().ok_or(TlsError::Protocol("geen leaf-certificaat"))?;
-        let leaf = Certificate::parse(leaf_der).map_err(|_| TlsError::Protocol("leaf-cert onleesbaar"))?;
+        let leaf_der = self.cert_chain.first().ok_or(TlsError::Protocol("no leaf certificate"))?;
+        let leaf = Certificate::parse(leaf_der).map_err(|_| TlsError::Protocol("leaf cert unreadable"))?;
 
-        // SignatureScheme → primitive; het leaf-sleuteltype moet passen.
+        // SignatureScheme → primitive; the leaf key type must match.
         let ok = match scheme {
             0x0403 => leaf.pubkey_alg == PubKeyAlg::EcP256 && sig::verify_ecdsa_p256(leaf.pubkey, &content, signature),
             0x0807 => leaf.pubkey_alg == PubKeyAlg::Ed25519 && sig::verify_ed25519(leaf.pubkey, &content, signature),
@@ -522,32 +522,32 @@ impl Tls13Client {
         };
         if !ok {
             self.state = TlsState::Failed;
-            return Err(TlsError::Protocol("CertificateVerify-handtekening ongeldig"));
+            return Err(TlsError::Protocol("CertificateVerify signature invalid"));
         }
         Ok(())
     }
 
-    /// Server Finished verifieerd → leid app-sleutels af, stuur (CCS +) onze
-    /// versleutelde Finished, schakel naar de applicatie-epoch.
+    /// Server Finished verified → derive app keys, send (CCS +) our
+    /// encrypted Finished, switch to the application epoch.
     fn finish_handshake(&mut self, out: &mut Vec<u8>) -> Result<(), TlsError> {
-        // App-sleutels over transcript CH..server Finished.
+        // App keys over transcript CH..server Finished.
         let th_sf = self.transcript.hash();
         let (cap, sap) = self.ks.derive_application(&th_sf);
 
-        // Client Finished = HMAC(client_hs.finished_key, transcript-hash) (incl.
-        // server Finished). Verstuur versleuteld in de handshake-epoch.
-        let client_hs = self.client_hs.as_ref().ok_or(TlsError::Protocol("geen client hs"))?;
+        // Client Finished = HMAC(client_hs.finished_key, transcript hash) (incl.
+        // server Finished). Send encrypted in the handshake epoch.
+        let client_hs = self.client_hs.as_ref().ok_or(TlsError::Protocol("no client hs"))?;
         let verify = hmac_sha256(&client_hs.finished_key, &th_sf);
         let fin_msg = wrap_handshake(HS_FINISHED, &verify);
 
-        // Middlebox-compat: een ChangeCipherSpec-record vooraf.
+        // Middlebox compat: a ChangeCipherSpec record beforehand.
         out.extend_from_slice(&build_record(CT_CHANGE_CIPHER_SPEC, &[0x01]));
-        // Versleutel de Finished met de client-handshake-sleutels (seq 0).
+        // Encrypt the Finished with the client handshake keys (seq 0).
         let rec = self.seal_record(CT_HANDSHAKE, &fin_msg, &client_hs.key, &client_hs.iv, self.client_seq);
         self.client_seq += 1;
         out.extend_from_slice(&rec);
 
-        // Schakel beide kanten naar de applicatie-epoch.
+        // Switch both sides to the application epoch.
         self.client_ap = Some(cap);
         self.server_ap = Some(sap);
         self.client_epoch = Epoch::Application;
@@ -562,28 +562,28 @@ impl Tls13Client {
         let mut pt = Vec::with_capacity(content.len() + 1);
         pt.extend_from_slice(content);
         pt.push(inner_type); // inner content type
-        let total = pt.len() + 16; // + AEAD-tag
+        let total = pt.len() + 16; // + AEAD tag
         let aad = aead_aad(total);
         let ct = aead::seal(key, iv, seq, &aad, &pt);
         build_record(CT_APPLICATION_DATA, &ct)
     }
 
-    // ── Applicatiedata ──────────────────────────────────────────────────
-    /// Versleutel applicatiedata tot één te versturen record.
+    // ── Application data ──────────────────────────────────────────────────
+    /// Encrypt application data into one record to send.
     pub fn encrypt_app(&mut self, data: &[u8]) -> Result<Vec<u8>, TlsError> {
-        let keys = self.client_ap.as_ref().ok_or(TlsError::Protocol("niet verbonden"))?;
+        let keys = self.client_ap.as_ref().ok_or(TlsError::Protocol("not connected"))?;
         let rec = self.seal_record(CT_APPLICATION_DATA, data, &keys.key, &keys.iv, self.client_seq);
         self.client_seq += 1;
         Ok(rec)
     }
 
-    /// Haal de tot nu toe ontsleutelde applicatiedata op (en leeg de buffer).
+    /// Fetch the application data decrypted so far (and empty the buffer).
     pub fn take_app_data(&mut self) -> Vec<u8> {
         core::mem::take(&mut self.app_buf)
     }
 }
 
-// ── Hulpfuncties ─────────────────────────────────────────────────────────
+// ── Helper functions ─────────────────────────────────────────────────────
 fn wrap_handshake(mtype: u8, body: &[u8]) -> Vec<u8> {
     let mut m = Vec::with_capacity(4 + body.len());
     m.push(mtype);
@@ -610,8 +610,8 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
     out
 }
 
-/// Strip de AEAD-padding (trailing nul-bytes) en haal de inner content-type
-/// (de laatste niet-nul byte) eruf (RFC 8446 §5.4).
+/// Strip the AEAD padding (trailing zero bytes) and extract the inner content
+/// type (the last non-zero byte) (RFC 8446 §5.4).
 fn split_inner(pt: &[u8]) -> Result<(u8, &[u8]), TlsError> {
     let mut end = pt.len();
     while end > 0 && pt[end - 1] == 0 {
@@ -637,9 +637,9 @@ mod tests {
         assert_eq!(rec.len(), 5 + rlen);
         // handshake msg type = client_hello (1)
         assert_eq!(rec[5], HS_CLIENT_HELLO);
-        // SNI-host moet ergens in de ClientHello zitten
+        // SNI host must appear somewhere in the ClientHello
         assert!(rec.windows(10).any(|w| w == b"euro-os.eu"));
-        // cipher suite chacha20 (0x1303) aanwezig
+        // cipher suite chacha20 (0x1303) present
         assert!(rec.windows(2).any(|w| w == [0x13, 0x03]));
     }
 
@@ -654,20 +654,20 @@ mod tests {
     #[test]
     fn alert_record_surfaces() {
         let (mut c, _) = Tls13Client::new("x", [0; 32], [1; 32]);
-        // Een alert-record (level=fatal=2, desc=handshake_failure=40).
+        // An alert record (level=fatal=2, desc=handshake_failure=40).
         c.feed(&build_record(CT_ALERT, &[2, 40]));
         assert_eq!(c.process(), Err(TlsError::Alert(40)));
     }
 
     #[test]
     fn validatie_is_fail_closed_zonder_trust_anchor() {
-        // Audit #8: zonder trust anchor MOET certificaatvalidatie falen (fail-closed),
-        // niet stilzwijgend elk certificaat aanvaarden.
+        // Audit #8: without a trust anchor certificate validation MUST fail (fail-closed),
+        // not silently accept every certificate.
         let (mut c, _) = Tls13Client::new("x", [0; 32], [1; 32]);
-        assert!(c.validate_chain().is_err(), "geen anchor → moet falen");
-        assert!(c.verify_certificate_verify(&[], &[]).is_err(), "geen anchor → CertVerify moet falen");
-        // Expliciete, greppable opt-out heropent het (alleen host-test/dev).
+        assert!(c.validate_chain().is_err(), "no anchor → must fail");
+        assert!(c.verify_certificate_verify(&[], &[]).is_err(), "no anchor → CertVerify must fail");
+        // Explicit, greppable opt-out reopens it (host test/dev only).
         c.allow_insecure_no_verification();
-        assert!(c.validate_chain().is_ok(), "opt-out → toegestaan");
+        assert!(c.validate_chain().is_ok(), "opt-out → allowed");
     }
 }

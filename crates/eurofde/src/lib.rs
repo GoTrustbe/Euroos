@@ -1,31 +1,31 @@
-//! EuroFDE — **full-disk-encryptie** als transparante blok-laag (plan K3).
+//! EuroFDE — **full-disk encryption** as a transparent block layer (plan K3).
 //!
-//! Een soeverein OS versleutelt de schijf zodat data-at-rest beschermd is bij
-//! verlies/diefstal. EuroFDE versleutelt **per blok**, lengte-behoudend, met het
-//! **ChaCha20**-stroomcijfer (een Europese/IETF-standaard, geen afhankelijkheid van
-//! AES-hardware): de nonce wordt afgeleid van het blok-nummer (LBA), zodat hetzelfde
-//! plaintext-blok op verschillende LBA's verschillende ciphertext geeft. De 256-bit
-//! sleutel komt (met K3 volledig) van de **TPM** ([`eurotpm`]) — bij voorkeur
-//! gesealed aan de boot-PCR-toestand, zodat de schijf enkel ontsleutelt op een
-//! niet-gemanipuleerd systeem.
+//! A sovereign OS encrypts the disk so that data-at-rest is protected on
+//! loss/theft. EuroFDE encrypts **per block**, length-preserving, with the
+//! **ChaCha20** stream cipher (a European/IETF standard, no dependency on
+//! AES hardware): the nonce is derived from the block number (LBA), so that the same
+//! plaintext block at different LBAs yields different ciphertext. The 256-bit
+//! key comes (with K3 complete) from the **TPM** ([`eurotpm`]) — preferably
+//! sealed to the boot-PCR state, so that the disk only decrypts on an
+//! untampered system.
 //!
-//! ## Bekende beperking (audit #10): nonce = f(LBA), niet per schrijf-actie
+//! ## Known limitation (audit #10): nonce = f(LBA), not per write action
 //!
-//! Omdat de nonce enkel van (volume-salt, LBA) afhangt, hergebruikt twee KEER
-//! schrijven naar HETZELFDE fysieke blok dezelfde keystream. Een aanvaller die
-//! beide ciphertext-versies onderschept kan ze XOR-en tot `P₁ ⊕ P₂` (klassieke
-//! "two-time pad"). Dit is inherent aan lengte-behoudende stroomcijfer-FDE: er is
-//! geen ruimte om per schrijf een verse willekeurige IV op te slaan.
+//! Because the nonce depends only on (volume-salt, LBA), writing TWICE
+//! to the SAME physical block reuses the same keystream. An attacker who intercepts
+//! both ciphertext versions can XOR them into `P₁ ⊕ P₂` (classic
+//! "two-time pad"). This is inherent to length-preserving stream-cipher FDE: there is
+//! no room to store a fresh random IV per write.
 //!
-//! **Mitigatie in deze stack:** EuroFS is copy-on-write — een logische overschrijving
-//! alloceert doorgaans een NIEUW fysiek blok i.p.v. hetzelfde te herschrijven, dus
-//! fysieke-LBA-hergebruik met andere inhoud is in de praktijk zeldzaam.
-//! **Productie-upgradepad:** een wide-block-modus — **Adiantum** (ChaCha-gebaseerd,
-//! geen AES-hardware nodig) of XTS — die elke schrijf diffundeert zonder extra opslag.
-//! Tot dan: documenteer dit; claim GEEN volledige IND-CPA per schrijf.
+//! **Mitigation in this stack:** EuroFS is copy-on-write — a logical overwrite
+//! usually allocates a NEW physical block instead of rewriting the same one, so
+//! physical-LBA reuse with different content is rare in practice.
+//! **Production upgrade path:** a wide-block mode — **Adiantum** (ChaCha-based,
+//! no AES hardware needed) or XTS — which diffuses every write without extra storage.
+//! Until then: document this; do NOT claim full IND-CPA per write.
 //!
-//! Als [`EncryptedBlockDevice`] wrapt het elk [`eurofs::BlockDevice`] → de hele
-//! EuroFS draait er transparant bovenop. Pure `no_std`-logica → host-getest.
+//! As [`EncryptedBlockDevice`] it wraps any [`eurofs::BlockDevice`] → the whole
+//! EuroFS runs transparently on top of it. Pure `no_std` logic → host-tested.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -37,8 +37,8 @@ use chacha20::ChaCha20;
 
 use eurofs::{BlockDevice, BlockError, BlockResult};
 
-/// Een FDE-sleutel (256-bit ChaCha20-sleutel + 32-bit volume-salt tegen
-/// cross-volume-nonce-hergebruik).
+/// An FDE key (256-bit ChaCha20 key + 32-bit volume-salt against
+/// cross-volume nonce reuse).
 #[derive(Clone)]
 pub struct FdeKey {
     key: [u8; 32],
@@ -50,10 +50,10 @@ impl FdeKey {
         FdeKey { key, salt }
     }
 
-    /// De 12-byte ChaCha20-nonce voor blok `lba`: [salt(4) | lba(8)]. Uniek per
-    /// (volume, blok) — vermijdt keystream-hergebruik TUSSEN verschillende blokken.
-    /// LET OP: NIET uniek per schrijf-actie; herschrijven van hetzelfde fysieke blok
-    /// hergebruikt de keystream (zie de module-doc "Bekende beperking", audit #10).
+    /// The 12-byte ChaCha20 nonce for block `lba`: [salt(4) | lba(8)]. Unique per
+    /// (volume, block) — avoids keystream reuse BETWEEN different blocks.
+    /// NOTE: NOT unique per write action; rewriting the same physical block
+    /// reuses the keystream (see the module doc "Known limitation", audit #10).
     fn nonce(&self, lba: u64) -> [u8; 12] {
         let mut n = [0u8; 12];
         n[0..4].copy_from_slice(&self.salt.to_le_bytes());
@@ -61,16 +61,16 @@ impl FdeKey {
         n
     }
 
-    /// Versleutel/ontsleutel `buf` in-place voor blok `lba` (ChaCha20 is een
-    /// stroomcijfer → encrypt == decrypt: XOR met dezelfde keystream).
+    /// Encrypt/decrypt `buf` in-place for block `lba` (ChaCha20 is a
+    /// stream cipher → encrypt == decrypt: XOR with the same keystream).
     pub fn xcrypt_block(&self, lba: u64, buf: &mut [u8]) {
         let mut cipher = ChaCha20::new((&self.key).into(), (&self.nonce(lba)).into());
         cipher.apply_keystream(buf);
     }
 }
 
-/// Een transparante FDE-laag over een [`BlockDevice`]: schrijven versleutelt, lezen
-/// ontsleutelt — de bovenliggende FS ziet enkel plaintext, de schijf enkel ciphertext.
+/// A transparent FDE layer over a [`BlockDevice`]: writing encrypts, reading
+/// decrypts — the overlying FS sees only plaintext, the disk only ciphertext.
 pub struct EncryptedBlockDevice<D: BlockDevice> {
     inner: D,
     key: FdeKey,
@@ -108,7 +108,7 @@ impl<D: BlockDevice> BlockDevice for EncryptedBlockDevice<D> {
         if buffer.len() != count as usize * bs {
             return Err(BlockError::NotAligned);
         }
-        // Versleutel naar een tijdelijke buffer (de aanroeper z'n plaintext blijft heel).
+        // Encrypt into a temporary buffer (the caller's plaintext stays intact).
         let mut enc = alloc::vec![0u8; buffer.len()];
         enc.copy_from_slice(buffer);
         for i in 0..count as u64 {
@@ -134,12 +134,12 @@ mod tests {
         let plain = [0x11u8; 64];
         let mut a = plain;
         key.xcrypt_block(5, &mut a);
-        assert_ne!(a, plain); // versleuteld ≠ plaintext
-        // Decrypt (zelfde XOR) → terug naar plaintext.
+        assert_ne!(a, plain); // encrypted ≠ plaintext
+        // Decrypt (same XOR) → back to plaintext.
         let mut b = a;
         key.xcrypt_block(5, &mut b);
         assert_eq!(b, plain);
-        // Zelfde plaintext op een ANDER blok → andere ciphertext (nonce = LBA).
+        // Same plaintext on a DIFFERENT block → different ciphertext (nonce = LBA).
         let mut c = plain;
         key.xcrypt_block(6, &mut c);
         assert_ne!(a, c);
@@ -151,25 +151,25 @@ mod tests {
         let mut enc = EncryptedBlockDevice::new(MemoryBlockDevice::new(64, 4096), key.clone());
         let plain = alloc::vec![0xCDu8; 4096];
         enc.write_blocks(10, 1, &plain).unwrap();
-        // Lees via de FDE-laag → plaintext terug.
+        // Read via the FDE layer → plaintext back.
         let mut back = alloc::vec![0u8; 4096];
         enc.read_blocks(10, 1, &mut back).unwrap();
         assert_eq!(back, plain);
-        // Maar de ONDERLIGGENDE schijf bevat ciphertext (een verkeerde sleutel geeft rommel).
+        // But the UNDERLYING disk contains ciphertext (a wrong key yields garbage).
         let wrong = EncryptedBlockDevice::new(enc.inner, FdeKey::new([0u8; 32], 1));
         let mut garbage = alloc::vec![0u8; 4096];
         wrong.read_blocks(10, 1, &mut garbage).unwrap();
-        assert_ne!(garbage, plain); // zonder de juiste sleutel: onleesbaar
+        assert_ne!(garbage, plain); // without the correct key: unreadable
     }
 
     #[test]
     fn eurofs_mounts_on_encrypted_volume() {
-        // Een echte EuroFS bovenop de versleutelde blok-laag (transparante FDE).
+        // A real EuroFS on top of the encrypted block layer (transparent FDE).
         let key = FdeKey::new([0x5Au8; 32], 0x1234);
         let mut dev = EncryptedBlockDevice::new(MemoryBlockDevice::new(1024, 4096), key.clone());
         EuroFs::format(&mut dev, [9u8; 16], 1).unwrap();
         assert!(EuroFs::mount(&mut dev, 2).is_ok());
-        // Met een verkeerde sleutel is hetzelfde fysieke volume NIET te mounten.
+        // With a wrong key the same physical volume is NOT mountable.
         let raw = dev.inner;
         let mut wrong = EncryptedBlockDevice::new(raw, FdeKey::new([0u8; 32], 0x1234));
         assert!(EuroFs::mount(&mut wrong, 3).is_err());

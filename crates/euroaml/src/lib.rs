@@ -1,16 +1,16 @@
-//! EuroAML — een **minimale ACPI-AML-bytecode-interpreter** (plan I3).
+//! EuroAML — a **minimal ACPI-AML-bytecode interpreter** (plan I3).
 //!
-//! ACPI's DSDT/SSDT-tabellen bevatten geen vaste velden maar **AML-bytecode**: een
-//! kleine bytecode-taal waarin de firmware control-methods uitdrukt zoals `_STA`
-//! (status), `_TMP` (thermal-zone-temperatuur), `_BST`/`_BIF` (batterij) en `_PSR`
-//! (netstroom). Om die te lezen moet een OS de AML *interpreteren*. [`euroacpi`]
-//! levert de tabel-parser; deze crate is de bytecode-laag erboven.
+//! ACPI's DSDT/SSDT tables contain no fixed fields but **AML bytecode**: a
+//! small bytecode language in which the firmware expresses control-methods such as `_STA`
+//! (status), `_TMP` (thermal-zone temperature), `_BST`/`_BIF` (battery) and `_PSR`
+//! (mains power). To read these an OS must *interpret* the AML. [`euroacpi`]
+//! provides the table parser; this crate is the bytecode layer on top.
 //!
-//! Het is bewust een **subset** — genoeg voor de veelvoorkomende read-out-methods
-//! (constanten, packages, buffers, eenvoudige rekenkundige `Return`-expressies en
-//! de naamruimte-opbouw via `Scope`/`Name`/`Method`) — geen volledige AML2.0-machine
-//! (geen OperationRegion/Field-side-effects, geen control-flow). Pure `no_std`-logica
-//! → de offset- en lengte-gevoelige bytecode-parsing is volledig op de host getest.
+//! It is deliberately a **subset** — enough for the common read-out methods
+//! (constants, packages, buffers, simple arithmetic `Return` expressions and
+//! the namespace build-up via `Scope`/`Name`/`Method`) — not a full AML2.0 machine
+//! (no OperationRegion/Field side-effects, no control-flow). Pure `no_std` logic
+//! → the offset- and length-sensitive bytecode parsing is fully tested on the host.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -21,7 +21,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-// ── AML-opcodes (subset) ────────────────────────────────────────────────────
+// ── AML opcodes (subset) ────────────────────────────────────────────────────
 const ZERO_OP: u8 = 0x00;
 const ONE_OP: u8 = 0x01;
 const NAME_OP: u8 = 0x08;
@@ -40,7 +40,7 @@ const ROOT_CHAR: u8 = 0x5C; // '\'
 const PARENT_PREFIX: u8 = 0x5E; // '^'
 const RETURN_OP: u8 = 0xA4;
 const EXT_OP_PREFIX: u8 = 0x5B;
-// Extended-opcodes (na 0x5B).
+// Extended opcodes (after 0x5B).
 const EXT_MUTEX: u8 = 0x01;
 const EXT_EVENT: u8 = 0x02;
 const EXT_OP_REGION: u8 = 0x80;
@@ -55,7 +55,7 @@ const SUBTRACT_OP: u8 = 0x74;
 const MULTIPLY_OP: u8 = 0x77;
 const ONES_OP: u8 = 0xFF;
 
-/// Een geëvalueerde AML-waarde.
+/// An evaluated AML value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AmlValue {
     Integer(u64),
@@ -64,7 +64,7 @@ pub enum AmlValue {
 }
 
 impl AmlValue {
-    /// Geef de integer-waarde (None als het geen integer is).
+    /// Return the integer value (None if it is not an integer).
     pub fn as_int(&self) -> Option<u64> {
         match self {
             AmlValue::Integer(v) => Some(*v),
@@ -79,24 +79,24 @@ impl AmlValue {
     }
 }
 
-/// Een opgeslagen naamruimte-object: ofwel een data-waarde (`Name`) of een
-/// control-method (`Method`, met z'n ruwe body-bytes om later te draaien).
+/// A stored namespace object: either a data value (`Name`) or a
+/// control-method (`Method`, with its raw body bytes to run later).
 #[derive(Debug, Clone)]
 enum Object {
     Value(AmlValue),
     Method { body: Vec<u8> },
 }
 
-/// De geparste AML-naamruimte: een platte map van 4-teken-namen → object. (We
-/// negeren de scope-hiërarchie voor de lookup; de laatste NameSeg is de sleutel —
-/// genoeg voor het opzoeken van methods als `_STA`/`_TMP` op naam.)
+/// The parsed AML namespace: a flat map of 4-character names → object. (We
+/// ignore the scope hierarchy for the lookup; the last NameSeg is the key —
+/// enough for looking up methods like `_STA`/`_TMP` by name.)
 pub struct AmlNamespace {
     objects: BTreeMap<String, Object>,
 }
 
 impl AmlNamespace {
-    /// Parse een AML-byteblok (de body van een DSDT/SSDT na de 36-byte SDT-header)
-    /// tot een naamruimte.
+    /// Parse an AML byte block (the body of a DSDT/SSDT after the 36-byte SDT header)
+    /// into a namespace.
     pub fn parse(aml: &[u8]) -> AmlNamespace {
         let mut ns = AmlNamespace { objects: BTreeMap::new() };
         let mut p = Parser { b: aml, pos: 0 };
@@ -104,7 +104,7 @@ impl AmlNamespace {
         ns
     }
 
-    /// Hoeveel objecten zijn er ontdekt?
+    /// How many objects were discovered?
     pub fn len(&self) -> usize {
         self.objects.len()
     }
@@ -112,14 +112,14 @@ impl AmlNamespace {
         self.objects.is_empty()
     }
 
-    /// Is er een object (Name of Method) met deze (laatste-NameSeg-)naam?
+    /// Is there an object (Name or Method) with this (last-NameSeg) name?
     pub fn contains(&self, name: &str) -> bool {
         self.objects.contains_key(&seg_key(name))
     }
 
-    /// Evalueer een naam: een `Name` geeft z'n waarde terug; een `Method` wordt
-    /// uitgevoerd (subset: een enkele `Return(expr)`). None als onbekend/niet te
-    /// evalueren.
+    /// Evaluate a name: a `Name` returns its value; a `Method` is
+    /// executed (subset: a single `Return(expr)`). None if unknown/not
+    /// evaluable.
     pub fn evaluate(&self, name: &str) -> Option<AmlValue> {
         match self.objects.get(&seg_key(name))? {
             Object::Value(v) => Some(v.clone()),
@@ -131,7 +131,7 @@ impl AmlNamespace {
     }
 }
 
-/// De sleutel waaronder we opslaan/opzoeken: de laatste 4-teken-NameSeg, opgevuld.
+/// The key under which we store/look up: the last 4-character NameSeg, padded.
 fn seg_key(name: &str) -> String {
     let last = name.trim_start_matches(['\\', '^']).rsplit('.').next().unwrap_or(name);
     let mut s = String::new();
@@ -160,8 +160,8 @@ impl<'a> Parser<'a> {
         self.b.get(self.pos).copied()
     }
 
-    /// AML PkgLength: het eerste byte codeert hoeveel vervolgbytes volgen + de lage
-    /// bits van de lengte. Geeft (totale-lengte-incl-pkglength-bytes, bytes-gelezen).
+    /// AML PkgLength: the first byte encodes how many following bytes come + the low
+    /// bits of the length. Returns (total-length-incl-pkglength-bytes, bytes-read).
     fn pkg_length(&mut self) -> usize {
         let start = self.pos;
         let lead = self.byte().unwrap_or(0);
@@ -176,15 +176,15 @@ impl<'a> Parser<'a> {
             }
             v
         };
-        // `len` telt vanaf het EERSTE pkglength-byte. Trek af wat we al lazen.
+        // `len` counts from the FIRST pkglength byte. Subtract what we already read.
         let consumed = self.pos - start;
         len = len.saturating_sub(consumed);
         len
     }
 
-    /// Lees een NameString en geef de laatste NameSeg-sleutel terug.
+    /// Read a NameString and return the last NameSeg key.
     fn name_string(&mut self) -> String {
-        // Voorvoegsels (root/parent) overslaan.
+        // Skip prefixes (root/parent).
         while matches!(self.peek(), Some(ROOT_CHAR) | Some(PARENT_PREFIX)) {
             self.pos += 1;
         }
@@ -219,7 +219,7 @@ impl<'a> Parser<'a> {
         last
     }
 
-    /// Parse een TermList tot `end` (absolute byte-offset in `self.b`).
+    /// Parse a TermList up to `end` (absolute byte offset in `self.b`).
     fn parse_term_list(&mut self, ns: &mut AmlNamespace, end: usize) {
         while self.pos < end {
             let op = match self.byte() {
@@ -237,7 +237,7 @@ impl<'a> Parser<'a> {
                     let len = self.pkg_length();
                     let body_end = self.pos + len;
                     let _scope = self.name_string();
-                    // De inhoud van de scope is zelf een TermList.
+                    // The contents of the scope is itself a TermList.
                     self.parse_term_list(ns, body_end.min(self.b.len()));
                     self.pos = body_end.min(self.b.len());
                 }
@@ -252,23 +252,23 @@ impl<'a> Parser<'a> {
                 }
                 EXT_OP_PREFIX => {
                     if !self.parse_ext_term(ns, end) {
-                        break; // onbekende extended-op → stop veilig
+                        break; // unknown extended op → stop safely
                     }
                 }
                 _ => {
-                    // Onbekende/niet-ondersteunde top-level term: stop veilig (we
-                    // hebben geen volledige grammatica; verder skippen zou de stream
-                    // ontsporen). De al-ontdekte objecten blijven geldig.
+                    // Unknown/unsupported top-level term: stop safely (we
+                    // have no full grammar; skipping further would derail the
+                    // stream). The already-discovered objects remain valid.
                     break;
                 }
             }
         }
     }
 
-    /// Verwerk een extended-term (na 0x5B). Container-objecten (Device/ThermalZone/
-    /// PowerResource/Processor) recursen we in zodat we de methods erin (bv. `_TMP`,
-    /// `_BST`, `_STA`) vinden; niet-container ext-ops slaan we correct over. Geeft
-    /// false als de sub-op onbekend is (dan stopt de caller veilig).
+    /// Process an extended term (after 0x5B). Container objects (Device/ThermalZone/
+    /// PowerResource/Processor) we recurse into so we find the methods inside (e.g. `_TMP`,
+    /// `_BST`, `_STA`); non-container ext-ops we skip correctly. Returns
+    /// false if the sub-op is unknown (then the caller stops safely).
     fn parse_ext_term(&mut self, ns: &mut AmlNamespace, _outer_end: usize) -> bool {
         let sub = match self.byte() {
             Some(s) => s,
@@ -307,7 +307,7 @@ impl<'a> Parser<'a> {
                 true
             }
             EXT_FIELD | EXT_INDEX_FIELD => {
-                // Field/IndexField: PkgLength dekt de hele definitie → overslaan.
+                // Field/IndexField: PkgLength covers the entire definition → skip.
                 let len = self.pkg_length();
                 self.pos = (self.pos + len).min(self.b.len());
                 true
@@ -332,7 +332,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse een DataObject / constante expressie → AmlValue.
+    /// Parse a DataObject / constant expression → AmlValue.
     fn parse_data_object(&mut self) -> Option<AmlValue> {
         let op = self.peek()?;
         match op {
@@ -389,7 +389,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 let len = self.pkg_length();
                 let body_end = (self.pos + len).min(self.b.len());
-                let _size = self.parse_data_object(); // buffer-grootte (genegeerd)
+                let _size = self.parse_data_object(); // buffer size (ignored)
                 let bytes = self.b[self.pos..body_end].to_vec();
                 self.pos = body_end;
                 Some(AmlValue::Buffer(bytes))
@@ -416,7 +416,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 let a = self.parse_data_object()?.as_int()?;
                 let b = self.parse_data_object()?.as_int()?;
-                // Target (waar het resultaat heen gaat) overslaan: meestal Zero/0x00.
+                // Skip the Target (where the result goes): usually Zero/0x00.
                 let _target = self.byte();
                 let r = match op {
                     ADD_OP => a.wrapping_add(b),
@@ -429,40 +429,40 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Voer een method-body uit (subset): zoek de eerste `Return(expr)` en evalueer.
-    /// Een body zonder Return geeft `Integer(0)` (impliciete nul).
+    /// Execute a method body (subset): find the first `Return(expr)` and evaluate.
+    /// A body without Return returns `Integer(0)` (implicit zero).
     fn run_method(&mut self, _ns: &AmlNamespace) -> Option<AmlValue> {
         while let Some(op) = self.peek() {
             if op == RETURN_OP {
                 self.pos += 1;
                 return self.parse_data_object();
             }
-            // Sla onbegrepen statements over door naar het volgende Return te zoeken.
+            // Skip uncomprehended statements by searching for the next Return.
             self.pos += 1;
         }
         Some(AmlValue::Integer(0))
     }
 }
 
-/// AML-encoder-helpers — bouwen geldige AML-byteblokken voor tests (en voor het
-/// genereren van eenvoudige tabellen). Spiegelt de parser.
+/// AML encoder helpers — build valid AML byte blocks for tests (and for
+/// generating simple tables). Mirrors the parser.
 pub mod enc {
     use super::*;
 
-    /// Codeer een PkgLength voor een payload van `len` bytes (de lengte telt de
-    /// pkglength-bytes zelf mee, zoals AML vereist).
+    /// Encode a PkgLength for a payload of `len` bytes (the length counts the
+    /// pkglength bytes themselves, as AML requires).
     pub fn pkg_length(payload_len: usize) -> Vec<u8> {
-        // Probeer 1-byte (≤ 63 incl. zichzelf): totaal = payload + 1.
+        // Try 1-byte (≤ 63 incl. itself): total = payload + 1.
         let total1 = payload_len + 1;
         if total1 <= 0x3F {
             return alloc::vec![total1 as u8];
         }
-        // 2-byte: lead bits[7:6]=01, lage nibble + 1 vervolgbyte. totaal = payload + 2.
+        // 2-byte: lead bits[7:6]=01, low nibble + 1 following byte. total = payload + 2.
         let total2 = payload_len + 2;
         alloc::vec![0x40 | (total2 & 0x0F) as u8, (total2 >> 4) as u8]
     }
 
-    /// Codeer een NameString (enkele 4-teken-seg, opgevuld met '_').
+    /// Encode a NameString (single 4-character seg, padded with '_').
     pub fn name(seg: &str) -> Vec<u8> {
         let mut s: Vec<u8> = seg.bytes().take(4).collect();
         while s.len() < 4 {
@@ -471,7 +471,7 @@ pub mod enc {
         s
     }
 
-    /// Codeer een integer-constante zo compact mogelijk.
+    /// Encode an integer constant as compactly as possible.
     pub fn int(v: u64) -> Vec<u8> {
         if v == 0 {
             alloc::vec![ZERO_OP]
@@ -492,7 +492,7 @@ pub mod enc {
         }
     }
 
-    /// `Name(seg, value)` — een data-object onder een naam.
+    /// `Name(seg, value)` — a data object under a name.
     pub fn name_def(seg: &str, value: &[u8]) -> Vec<u8> {
         let mut o = alloc::vec![NAME_OP];
         o.extend_from_slice(&name(seg));
@@ -522,7 +522,7 @@ pub mod enc {
     /// `Method(seg, flags=0) { body }`.
     pub fn method(seg: &str, body: &[u8]) -> Vec<u8> {
         let mut inner = name(seg);
-        inner.push(0); // method-flags (0 args)
+        inner.push(0); // method flags (0 args)
         inner.extend_from_slice(body);
         let mut o = alloc::vec![METHOD_OP];
         o.extend_from_slice(&pkg_length(inner.len()));
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn method_returns_constant() {
-        // Method(_STA) { Return(0x0F) }  — apparaat aanwezig+ingeschakeld.
+        // Method(_STA) { Return(0x0F) }  — device present+enabled.
         let body = enc::ret(&enc::int(0x0F));
         let aml = enc::method("_STA", &body);
         let ns = AmlNamespace::parse(&aml);
@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn method_returns_package() {
-        // _BST-achtig: Return(Package { 0, 0x7D0, 0x2710, 0x2EE0 })
+        // _BST-like: Return(Package { 0, 0x7D0, 0x2710, 0x2EE0 })
         let body = enc::ret(&enc::package(&[
             enc::int(0),
             enc::int(0x7D0),
@@ -601,7 +601,7 @@ mod tests {
 
     #[test]
     fn buffer_and_string() {
-        // Name(_HID, "PNP0C0A")  (batterij-HID) als string.
+        // Name(_HID, "PNP0C0A")  (battery HID) as string.
         let mut val = alloc::vec![STRING_PREFIX];
         val.extend_from_slice(b"PNP0C0A\0");
         let aml = enc::name_def("_HID", &val);
@@ -618,7 +618,7 @@ mod tests {
 
     #[test]
     fn large_pkg_length_roundtrips() {
-        // Een package met genoeg items dat de PkgLength 2 bytes nodig heeft (> 63).
+        // A package with enough items that the PkgLength needs 2 bytes (> 63).
         let items: Vec<Vec<u8>> = (0..40).map(|i| enc::int(i as u64 & 0xFF)).collect();
         let pkg = enc::package(&items);
         let aml = enc::name_def("BIG_", &pkg);

@@ -1,4 +1,4 @@
-//! IPv4-header (20 bytes zonder opties) + header-checksum.
+//! IPv4 header (20 bytes without options) + header checksum.
 
 use alloc::vec::Vec;
 
@@ -57,7 +57,7 @@ pub struct Ipv4Header {
     pub ttl: u8,
     pub src: Ipv4Addr,
     pub dst: Ipv4Addr,
-    /// Totale lengte (header + payload).
+    /// Total length (header + payload).
     pub total_length: u16,
     pub identification: u16,
 }
@@ -74,16 +74,16 @@ impl Ipv4Header {
         if version != 4 || ihl < Self::LEN || buf.len() < ihl {
             return Err(NetError::Malformed);
         }
-        // Header-checksum verifiëren.
+        // Verify the header checksum.
         if internet_checksum(&buf[..ihl]) != 0 {
             return Err(NetError::BadChecksum);
         }
-        // Fragmentatie: deze stack herassembleert niet. Een fragment (More-Fragments
-        // gezet, óf een niet-nul fragment-offset) draagt slechts een DEEL van het
-        // payload; het als volledig packet doorgeven aan TCP/UDP zou fout zijn. Weiger.
+        // Fragmentation: this stack does not reassemble. A fragment (More-Fragments
+        // set, or a non-zero fragment offset) carries only PART of the payload;
+        // passing it as a complete packet to TCP/UDP would be wrong. Reject it.
         let flags_frag = u16::from_be_bytes([buf[6], buf[7]]);
-        let more_fragments = flags_frag & 0x2000 != 0; // MF-bit (13)
-        let frag_offset = flags_frag & 0x1FFF; // onderste 13 bits
+        let more_fragments = flags_frag & 0x2000 != 0; // MF bit (13)
+        let frag_offset = flags_frag & 0x1FFF; // lowest 13 bits
         if more_fragments || frag_offset != 0 {
             return Err(NetError::Malformed);
         }
@@ -100,18 +100,18 @@ impl Ipv4Header {
         Ok((hdr, &buf[ihl..end]))
     }
 
-    /// Bouw header + payload met correcte lengte en checksum.
+    /// Build header + payload with the correct length and checksum.
     pub fn build(&self, payload: &[u8]) -> Vec<u8> {
         let total = (Self::LEN + payload.len()) as u16;
         let mut h = [0u8; Self::LEN];
-        h[0] = (4 << 4) | 5; // versie 4, IHL 5
+        h[0] = (4 << 4) | 5; // version 4, IHL 5
         h[1] = 0; // DSCP/ECN
         h[2..4].copy_from_slice(&total.to_be_bytes());
         h[4..6].copy_from_slice(&self.identification.to_be_bytes());
         h[6..8].copy_from_slice(&0u16.to_be_bytes()); // flags/fragment
         h[8] = self.ttl;
         h[9] = self.protocol.as_u8();
-        // h[10..12] checksum = 0 tijdens berekening
+        // h[10..12] checksum = 0 during computation
         h[12..16].copy_from_slice(&self.src.0);
         h[16..20].copy_from_slice(&self.dst.0);
         let cs = internet_checksum(&h);
@@ -135,7 +135,7 @@ mod tests {
             ttl: 64,
             src: Ipv4Addr::new(192, 168, 1, 10),
             dst: Ipv4Addr::new(192, 168, 1, 1),
-            total_length: 0, // wordt door build gezet
+            total_length: 0, // set by build
             identification: 0xABCD,
         };
         let pkt = h.build(b"hallo");
@@ -158,7 +158,7 @@ mod tests {
             identification: 1,
         };
         let mut pkt = h.build(&[]);
-        pkt[12] ^= 0xFF; // wijzig src → checksum klopt niet meer
+        pkt[12] ^= 0xFF; // change src → checksum no longer matches
         assert_eq!(Ipv4Header::parse(&pkt).unwrap_err(), NetError::BadChecksum);
     }
 
@@ -173,9 +173,9 @@ mod tests {
             identification: 7,
         };
         let pkt = h.build(b"payload");
-        assert!(Ipv4Header::parse(&pkt).is_ok()); // niet-gefragmenteerd → ok
+        assert!(Ipv4Header::parse(&pkt).is_ok()); // non-fragmented → ok
         let ihl = (pkt[0] & 0x0F) as usize * 4;
-        // (a) More-Fragments-bit gezet (checksum herberekend) → geweigerd.
+        // (a) More-Fragments bit set (checksum recomputed) → rejected.
         let mut mf = pkt.clone();
         mf[6] = 0x20;
         mf[10] = 0;
@@ -183,7 +183,7 @@ mod tests {
         let cs = internet_checksum(&mf[..ihl]);
         mf[10..12].copy_from_slice(&cs.to_be_bytes());
         assert_eq!(Ipv4Header::parse(&mf).unwrap_err(), NetError::Malformed);
-        // (b) Niet-nul fragment-offset → geweigerd.
+        // (b) Non-zero fragment offset → rejected.
         let mut off = pkt.clone();
         off[7] = 1;
         off[10] = 0;

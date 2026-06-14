@@ -1,9 +1,9 @@
-/* EuroOS — bewijst de GEHEUGENISOLATIE van het per-proces-model. Dit proces
- * probeert vanuit ring 3 kernelgeheugen (0x100000 = 1 MiB) te lezen. In zijn
- * eigen page tables is dat adres supervisor-only (geen USER-bit), dus de CPU
- * geeft een page fault. De kernel beëindigt DAARop alleen dit proces; de rest
- * van het systeem draait gewoon door. Komen we voorbij de lezing, dan zou de
- * isolatie LEKKEN — en dat melden we. */
+/* EuroOS — proves the MEMORY ISOLATION of the per-process model. This process
+ * attempts, from ring 3, to read kernel memory (0x100000 = 1 MiB). In its
+ * own page tables that address is supervisor-only (no USER bit), so the CPU
+ * raises a page fault. The kernel THEN terminates only this process; the rest
+ * of the system keeps running normally. If we get past the read, the
+ * isolation would LEAK — and we report that. */
 #include <unistd.h>
 
 static unsigned slen(const char *s) {
@@ -16,12 +16,12 @@ static void emit(const char *s) {
 }
 
 int main(void) {
-    emit("isotest: leest kernelgeheugen 0x100000 vanuit ring 3...\n");
+    emit("isotest: reading kernel memory 0x100000 from ring 3...\n");
     volatile unsigned char *p = (volatile unsigned char *)0x100000;
-    unsigned char v = *p; /* <-- page fault als de isolatie werkt */
-    /* Onbereikbaar bij correcte isolatie: */
+    unsigned char v = *p; /* <-- page fault if isolation works */
+    /* Unreachable with correct isolation: */
     char m[2] = {(char)('0' + (v % 10)), '\n'};
-    emit("isotest: ISOLATIE LEK - lezing toegestaan, byte=");
+    emit("isotest: ISOLATION LEAK - read allowed, byte=");
     write(1, m, 2);
     for (;;) {
     }

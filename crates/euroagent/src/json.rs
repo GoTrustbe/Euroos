@@ -1,18 +1,18 @@
-//! Minimale JSON — net genoeg voor JSON-RPC 2.0 over de MCP-socket.
+//! Minimal JSON — just enough for JSON-RPC 2.0 over the MCP socket.
 //!
-//! `no_std`, geen externe crate. Ondersteunt object/array/string/number/bool/null,
-//! met escapes in strings. Getallen worden als `f64`-vrije `i64`/raw bewaard via
-//! een tekstrepresentatie zodat we geen floating-point nodig hebben in de kernel.
+//! `no_std`, no external crate. Supports object/array/string/number/bool/null,
+//! with escapes in strings. Numbers are kept as `f64`-free `i64`/raw via
+//! a text representation so we don't need floating-point in the kernel.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// Een JSON-waarde.
+/// A JSON value.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Json {
     Null,
     Bool(bool),
-    /// Numeriek, bewaard als brontekst (bv. "30000", "-1.5").
+    /// Numeric, kept as source text (e.g. "30000", "-1.5").
     Num(String),
     Str(String),
     Arr(Vec<Json>),
@@ -38,7 +38,7 @@ impl Json {
             _ => None,
         }
     }
-    /// Zoek een sleutel in een object.
+    /// Look up a key in an object.
     pub fn get(&self, key: &str) -> Option<&Json> {
         match self {
             Json::Obj(pairs) => pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v),
@@ -46,7 +46,7 @@ impl Json {
         }
     }
 
-    /// Serialiseer naar compacte JSON-tekst.
+    /// Serialize to compact JSON text.
     pub fn to_string(&self) -> String {
         let mut s = String::new();
         self.write(&mut s);
@@ -85,7 +85,7 @@ impl Json {
         }
     }
 
-    /// Parse JSON-tekst.
+    /// Parse JSON text.
     pub fn parse(input: &str) -> Result<Json, &'static str> {
         let bytes = input.as_bytes();
         let mut p = Parser { b: bytes, i: 0, depth: 0 };
@@ -117,12 +117,12 @@ fn write_string(s: &str, out: &mut String) {
 struct Parser<'a> {
     b: &'a [u8],
     i: usize,
-    /// Geneste object/array-diepte — begrensd tegen stack-overflow (audit H4):
-    /// de JSON komt van onvertrouwde MCP-/AF_UNIX-/LLM-invoer.
+    /// Nested object/array depth — bounded against stack overflow (audit H4):
+    /// the JSON comes from untrusted MCP/AF_UNIX/LLM input.
     depth: usize,
 }
 
-/// Maximale nesting-diepte van een JSON-document.
+/// Maximum nesting depth of a JSON document.
 const MAX_DEPTH: usize = 128;
 
 impl<'a> Parser<'a> {
@@ -131,7 +131,7 @@ impl<'a> Parser<'a> {
             self.i += 1;
         }
     }
-    /// Diepte-bewaakte wrapper: elke geneste waarde verhoogt de teller.
+    /// Depth-guarded wrapper: each nested value increments the counter.
     fn value(&mut self) -> Result<Json, &'static str> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
@@ -178,7 +178,7 @@ impl<'a> Parser<'a> {
         Ok(Json::Num(s.to_string()))
     }
     fn string(&mut self) -> Result<String, &'static str> {
-        self.i += 1; // openende "
+        self.i += 1; // opening "
         let mut s = String::new();
         while self.i < self.b.len() {
             let c = self.b[self.i];
@@ -214,7 +214,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 _ => {
-                    // Voeg de (mogelijk multi-byte) UTF-8 byte direct toe.
+                    // Add the (possibly multi-byte) UTF-8 byte directly.
                     s.push(c as char);
                 }
             }
@@ -291,7 +291,7 @@ mod tests {
         assert_eq!(v.get("a").unwrap().as_i64(), Some(1));
         assert_eq!(v.get("b").unwrap().as_str(), Some("x"));
         assert_eq!(v.get("d").unwrap().get("e").unwrap().as_bool(), Some(false));
-        // Compacte re-serialisatie is stabiel.
+        // Compact re-serialization is stable.
         assert_eq!(v.to_string(), src);
     }
 

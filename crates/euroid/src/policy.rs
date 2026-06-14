@@ -1,8 +1,8 @@
-//! Wachtwoord- en gebruikersnaambeleid (afdwingbaar, ISO 27001 A.9.4).
+//! Password and username policy (enforceable, ISO 27001 A.9.4).
 
 use alloc::string::String;
 
-/// Systeembreed wachtwoord-/sessiebeleid (uit `/etc/euro/policy.toml`).
+/// System-wide password/session policy (from `/etc/euro/policy.toml`).
 #[derive(Clone, Copy, Debug)]
 pub struct PasswordPolicy {
     pub min_length: usize,
@@ -20,7 +20,7 @@ pub struct PasswordPolicy {
 }
 
 impl Default for PasswordPolicy {
-    /// De soevereine standaard (`/etc/euro/policy.toml`).
+    /// The sovereign default (`/etc/euro/policy.toml`).
     fn default() -> Self {
         PasswordPolicy {
             min_length: 12,
@@ -39,7 +39,7 @@ impl Default for PasswordPolicy {
     }
 }
 
-/// Waarom een wachtwoord het beleid niet haalt.
+/// Why a password fails to meet the policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PolicyError {
     TooShort { min: usize },
@@ -53,17 +53,17 @@ pub enum PolicyError {
 impl PolicyError {
     pub fn message(self) -> String {
         match self {
-            PolicyError::TooShort { min } => alloc::format!("wachtwoord te kort (minimaal {min} tekens)"),
-            PolicyError::TooLong { max } => alloc::format!("wachtwoord te lang (maximaal {max} tekens)"),
-            PolicyError::MissingUppercase => String::from("wachtwoord mist een hoofdletter"),
-            PolicyError::MissingLowercase => String::from("wachtwoord mist een kleine letter"),
-            PolicyError::MissingDigit => String::from("wachtwoord mist een cijfer"),
-            PolicyError::MissingSpecial => String::from("wachtwoord mist een speciaal teken"),
+            PolicyError::TooShort { min } => alloc::format!("password too short (at least {min} characters)"),
+            PolicyError::TooLong { max } => alloc::format!("password too long (at most {max} characters)"),
+            PolicyError::MissingUppercase => String::from("password is missing an uppercase letter"),
+            PolicyError::MissingLowercase => String::from("password is missing a lowercase letter"),
+            PolicyError::MissingDigit => String::from("password is missing a digit"),
+            PolicyError::MissingSpecial => String::from("password is missing a special character"),
         }
     }
 }
 
-/// Toets een wachtwoord aan het beleid. De lengte wordt in Unicode-tekens geteld.
+/// Check a password against the policy. The length is counted in Unicode characters.
 pub fn validate_password(pw: &str, policy: &PasswordPolicy) -> Result<(), PolicyError> {
     let len = pw.chars().count();
     if len < policy.min_length {
@@ -87,24 +87,24 @@ pub fn validate_password(pw: &str, policy: &PasswordPolicy) -> Result<(), Policy
     Ok(())
 }
 
-/// Valideer een gebruikersnaam: 1–32 tekens uit `[a-z0-9_-]`, begint met `[a-z_]`.
+/// Validate a username: 1–32 characters from `[a-z0-9_-]`, starting with `[a-z_]`.
 pub fn validate_username(name: &str) -> Result<(), String> {
     let len = name.len();
     if len == 0 {
-        return Err(String::from("gebruikersnaam mag niet leeg zijn"));
+        return Err(String::from("username may not be empty"));
     }
     if len > 32 {
-        return Err(String::from("gebruikersnaam te lang (maximaal 32 tekens)"));
+        return Err(String::from("username too long (at most 32 characters)"));
     }
     let first = name.as_bytes()[0];
     if !(first.is_ascii_lowercase() || first == b'_') {
-        return Err(String::from("gebruikersnaam moet beginnen met een kleine letter of '_'"));
+        return Err(String::from("username must start with a lowercase letter or '_'"));
     }
     for &b in name.as_bytes() {
         let ok = b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-';
         if !ok {
             return Err(alloc::format!(
-                "ongeldig teken in gebruikersnaam: alleen [a-z0-9_-] toegestaan"
+                "invalid character in username: only [a-z0-9_-] allowed"
             ));
         }
     }
@@ -123,7 +123,7 @@ mod tests {
         assert_eq!(validate_password("ALLUPPERCASE1!", &p), Err(PolicyError::MissingLowercase));
         assert_eq!(validate_password("NoDigitsHere!!", &p), Err(PolicyError::MissingDigit));
         assert_eq!(validate_password("NoSpecial1234A", &p), Err(PolicyError::MissingSpecial));
-        // Sterk: lengte, hoofd-/kleine letter, cijfer, speciaal teken.
+        // Strong: length, upper-/lowercase letter, digit, special character.
         assert_eq!(validate_password("Correct-Horse-9!", &p), Ok(()));
     }
 
@@ -141,10 +141,10 @@ mod tests {
         assert!(validate_username("_system").is_ok());
         assert!(validate_username("a1_b-c").is_ok());
         assert!(validate_username("").is_err());
-        assert!(validate_username("1alice").is_err()); // begint met cijfer
-        assert!(validate_username("-alice").is_err()); // begint met koppelteken
-        assert!(validate_username("Alice").is_err()); // hoofdletter
-        assert!(validate_username("al ice").is_err()); // spatie
+        assert!(validate_username("1alice").is_err()); // starts with a digit
+        assert!(validate_username("-alice").is_err()); // starts with a hyphen
+        assert!(validate_username("Alice").is_err()); // uppercase letter
+        assert!(validate_username("al ice").is_err()); // space
         assert!(validate_username("al/ice").is_err()); // slash
         let toolong: String = core::iter::repeat('a').take(33).collect();
         assert!(validate_username(&toolong).is_err());

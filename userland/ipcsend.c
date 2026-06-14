@@ -1,6 +1,6 @@
-/* EuroOS — EuroIPC-zender. Wacht even (zodat de ontvanger poort 42 kan claimen)
- * en stuurt dan een bericht naar poort 42. Gebruikt de eigen EuroIPC-syscalls.
- * Een gewone musl-binary. */
+/* EuroOS — EuroIPC sender. Waits a moment (so the receiver can claim port 42)
+ * and then sends a message to port 42. Uses the native EuroIPC syscalls.
+ * A plain musl binary. */
 #include <unistd.h>
 
 static long ipc(long n, long a, long b, long c) {
@@ -12,15 +12,15 @@ static long ipc(long n, long a, long b, long c) {
 static int slen(const char *s) { int n = 0; while (s[n]) n++; return n; }
 
 int main(void) {
-    /* geef de ontvanger tijd om poort 42 te claimen */
+    /* give the receiver time to claim port 42 */
     for (volatile long i = 0; i < 8000000; i++) {
     }
-    const char *msg = "Hallo van proces A via EuroIPC!";
-    long r = ipc(501, 42, (long)msg, slen(msg)); /* send naar port 42 */
+    const char *msg = "Hello from process A via EuroIPC!";
+    long r = ipc(501, 42, (long)msg, slen(msg)); /* send to port 42 */
 
     char out[80];
     int o = 0;
-    const char *s = "ipcsend: verzonden naar poort 42 (kernel: ";
+    const char *s = "ipcsend: sent to port 42 (kernel: ";
     while (*s) out[o++] = *s++;
     long v = r;
     if (v < 0) { out[o++] = '-'; v = -v; }

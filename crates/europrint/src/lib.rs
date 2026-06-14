@@ -1,11 +1,11 @@
-//! EuroPrint — IPP (Internet Printing Protocol, RFC 8010/8011) kern (plan I4).
+//! EuroPrint — IPP (Internet Printing Protocol, RFC 8010/8011) core (plan I4).
 //!
-//! IPP is een binair protocol over HTTP waarmee EuroOS naar netwerk-printers print
-//! (de moderne, driverloze standaard — IPP Everywhere). Deze module bouwt geldige
-//! IPP-**requests** (`Print-Job`, `Get-Printer-Attributes`) en parset de **status**
-//! + attributen van een IPP-respons. De HTTP-transportlaag (POST naar de printer)
-//! draait erbovenop via EuroNet/EuroTLS. Pure `no_std`-logica → de fout-gevoelige
-//! binaire codering is volledig op de host getest.
+//! IPP is a binary protocol over HTTP with which EuroOS prints to network printers
+//! (the modern, driverless standard — IPP Everywhere). This module builds valid
+//! IPP **requests** (`Print-Job`, `Get-Printer-Attributes`) and parses the **status**
+//! + attributes of an IPP response. The HTTP transport layer (POST to the printer)
+//! runs on top of it via EuroNet/EuroTLS. Pure `no_std` logic → the error-prone
+//! binary encoding is fully tested on the host.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -15,19 +15,19 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-// IPP operation-id's.
+// IPP operation ids.
 pub const OP_PRINT_JOB: u16 = 0x0002;
 pub const OP_GET_PRINTER_ATTRIBUTES: u16 = 0x000B;
 pub const OP_GET_JOBS: u16 = 0x000A;
 
-// IPP status-codes.
+// IPP status codes.
 pub const STATUS_OK: u16 = 0x0000;
 
-// Attribuut-groep-tags.
+// Attribute group tags.
 const TAG_OPERATION: u8 = 0x01;
 const TAG_END: u8 = 0x03;
 
-// Value-tags.
+// Value tags.
 const TAG_INTEGER: u8 = 0x21;
 const TAG_KEYWORD: u8 = 0x44;
 const TAG_URI: u8 = 0x45;
@@ -35,14 +35,14 @@ const TAG_NAME: u8 = 0x42; // nameWithoutLanguage
 const TAG_CHARSET: u8 = 0x47;
 const TAG_LANGUAGE: u8 = 0x48;
 
-/// Een IPP-attribuut (binnen een operatie-groep).
+/// An IPP attribute (within an operation group).
 struct Attr {
     tag: u8,
     name: String,
     value: Vec<u8>,
 }
 
-/// Een IPP-request in opbouw.
+/// An IPP request under construction.
 pub struct IppRequest {
     operation: u16,
     request_id: u32,
@@ -50,9 +50,9 @@ pub struct IppRequest {
 }
 
 impl IppRequest {
-    /// Begin een request voor `operation` met `request_id`. De verplichte
-    /// `attributes-charset` (utf-8) + `attributes-natural-language` (en) worden als
-    /// EERSTE twee attributen toegevoegd, zoals IPP voorschrijft.
+    /// Begin a request for `operation` with `request_id`. The mandatory
+    /// `attributes-charset` (utf-8) + `attributes-natural-language` (en) are added as
+    /// the FIRST two attributes, as IPP prescribes.
     pub fn new(operation: u16, request_id: u32) -> Self {
         let mut r = IppRequest { operation, request_id, attrs: Vec::new() };
         r.attrs.push(Attr { tag: TAG_CHARSET, name: "attributes-charset".into(), value: b"utf-8".to_vec() });
@@ -64,32 +64,32 @@ impl IppRequest {
         r
     }
 
-    /// Voeg de doel-printer-URI toe (`printer-uri`).
+    /// Add the target printer URI (`printer-uri`).
     pub fn printer_uri(mut self, uri: &str) -> Self {
         self.attrs.push(Attr { tag: TAG_URI, name: "printer-uri".into(), value: uri.as_bytes().to_vec() });
         self
     }
 
-    /// Voeg de job-naam toe (`job-name`).
+    /// Add the job name (`job-name`).
     pub fn job_name(mut self, name: &str) -> Self {
         self.attrs.push(Attr { tag: TAG_NAME, name: "job-name".into(), value: name.as_bytes().to_vec() });
         self
     }
 
-    /// Voeg een keyword-attribuut toe (bv. `document-format`).
+    /// Add a keyword attribute (e.g. `document-format`).
     pub fn keyword(mut self, name: &str, value: &str) -> Self {
         self.attrs.push(Attr { tag: TAG_KEYWORD, name: name.into(), value: value.as_bytes().to_vec() });
         self
     }
 
-    /// Voeg een integer-attribuut toe (bv. `copies`).
+    /// Add an integer attribute (e.g. `copies`).
     pub fn integer(mut self, name: &str, value: i32) -> Self {
         self.attrs.push(Attr { tag: TAG_INTEGER, name: name.into(), value: value.to_be_bytes().to_vec() });
         self
     }
 
-    /// Serialiseer naar de IPP-binaire vorm. `doc` (optioneel) wordt ná de
-    /// end-of-attributes-tag toegevoegd (de te printen documentbytes, bv. PDF).
+    /// Serialize to the IPP binary form. `doc` (optional) is added after the
+    /// end-of-attributes tag (the document bytes to be printed, e.g. PDF).
     pub fn serialize(&self, doc: &[u8]) -> Vec<u8> {
         let mut b = Vec::new();
         b.push(2); // version-major
@@ -110,7 +110,7 @@ impl IppRequest {
     }
 }
 
-/// Een geparste IPP-respons: status + (naam, waarde-bytes)-attributen.
+/// A parsed IPP response: status + (name, value-bytes) attributes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IppResponse {
     pub version: (u8, u8),
@@ -120,7 +120,7 @@ pub struct IppResponse {
 }
 
 impl IppResponse {
-    /// Parse een IPP-respons-header + attributen (tot de end-tag). `None` bij rommel.
+    /// Parse an IPP response header + attributes (up to the end tag). `None` on garbage.
     pub fn parse(data: &[u8]) -> Option<IppResponse> {
         if data.len() < 8 {
             return None;
@@ -137,7 +137,7 @@ impl IppResponse {
                 break;
             }
             if tag <= 0x0F {
-                continue; // groep-begin-tag (operation/job/printer) → volgende attribuut
+                continue; // group-begin tag (operation/job/printer) → next attribute
             }
             // value-tag: name-len, name, value-len, value.
             if p + 2 > data.len() {
@@ -157,7 +157,7 @@ impl IppResponse {
             }
             let value = data[p..p + vlen].to_vec();
             p += vlen;
-            // Een lege naam = vervolgwaarde van het vorige attribuut (1setOf) — sla over.
+            // An empty name = continuation value of the previous attribute (1setOf) — skip.
             if !name.is_empty() {
                 attributes.push((name, value));
             }
@@ -173,16 +173,16 @@ impl IppResponse {
     }
 }
 
-/// HTTP-transportlaag voor IPP (RFC 8010 §5): een IPP-request reist als de **body
-/// van een HTTP POST** met `Content-Type: application/ipp`. Deze module bouwt het
-/// HTTP-envelop rond een geserialiseerde IPP-request en parset de HTTP-respons
-/// (status + body) eruit. De bytes gaan via EuroNet (poort 631) of EuroTLS (ipps).
+/// HTTP transport layer for IPP (RFC 8010 §5): an IPP request travels as the **body
+/// of an HTTP POST** with `Content-Type: application/ipp`. This module builds the
+/// HTTP envelope around a serialized IPP request and parses the HTTP response
+/// (status + body) out of it. The bytes go via EuroNet (port 631) or EuroTLS (ipps).
 pub mod http {
     use alloc::format;
     use alloc::vec::Vec;
 
-    /// Bouw een volledige HTTP/1.1 `POST`-request met de IPP-payload als body.
-    /// `path` is doorgaans `/ipp/print` of `/`; `host` de printer-hostnaam.
+    /// Build a full HTTP/1.1 `POST` request with the IPP payload as body.
+    /// `path` is usually `/ipp/print` or `/`; `host` the printer hostname.
     pub fn post_request(host: &str, path: &str, ipp_body: &[u8]) -> Vec<u8> {
         let head = format!(
             "POST {path} HTTP/1.1\r\n\
@@ -198,21 +198,21 @@ pub mod http {
         out
     }
 
-    /// Parse een HTTP-respons: geef (status-code, body) terug. Ondersteunt zowel
-    /// `Content-Length` als `Transfer-Encoding: chunked` (de twee vormen die
-    /// CUPS/IPP-servers gebruiken). None als de respons malformed is.
+    /// Parse an HTTP response: return (status code, body). Supports both
+    /// `Content-Length` and `Transfer-Encoding: chunked` (the two forms that
+    /// CUPS/IPP servers use). None if the response is malformed.
     pub fn parse_response(data: &[u8]) -> Option<(u16, Vec<u8>)> {
-        // Splits headers/body op de eerste lege regel (CRLFCRLF).
+        // Split headers/body on the first empty line (CRLFCRLF).
         let sep = find_subsequence(data, b"\r\n\r\n")?;
         let header = &data[..sep];
         let body_raw = &data[sep + 4..];
 
-        // Statuscode uit de eerste regel: "HTTP/1.1 200 OK".
+        // Status code from the first line: "HTTP/1.1 200 OK".
         let first_line_end = find_subsequence(header, b"\r\n").unwrap_or(header.len());
         let status_line = core::str::from_utf8(&header[..first_line_end]).ok()?;
         let status: u16 = status_line.split(' ').nth(1)?.parse().ok()?;
 
-        // Header-veld-helper (case-insensitive op naam).
+        // Header-field helper (case-insensitive on name).
         let header_str = core::str::from_utf8(header).ok()?;
         let chunked = header_value(header_str, "transfer-encoding")
             .map(|v| v.to_ascii_lowercase().contains("chunked"))
@@ -239,8 +239,8 @@ pub mod http {
         None
     }
 
-    /// Decodeer een `chunked` body: opeenvolgende `<hex-len>\r\n<data>\r\n`, eindigt
-    /// op een 0-chunk.
+    /// Decode a `chunked` body: successive `<hex-len>\r\n<data>\r\n`, ending
+    /// on a 0-chunk.
     fn dechunk(mut data: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         loop {
@@ -262,7 +262,7 @@ pub mod http {
             let start = nl + 2;
             let end = (start + len).min(data.len());
             out.extend_from_slice(&data[start..end]);
-            // Sla de data + de afsluitende CRLF over.
+            // Skip the data + the trailing CRLF.
             if end + 2 > data.len() {
                 break;
             }
@@ -288,7 +288,7 @@ mod tests {
         assert!(s.starts_with("POST /ipp/print HTTP/1.1\r\n"));
         assert!(s.contains("Content-Type: application/ipp\r\n"));
         assert!(s.contains(&format!("Content-Length: {}\r\n", ipp.len())));
-        // De body ná de lege regel is exact de IPP-payload.
+        // The body after the empty line is exactly the IPP payload.
         let sep = req.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
         assert_eq!(&req[sep + 4..], &ipp[..]);
     }
@@ -304,13 +304,13 @@ mod tests {
         resp.extend_from_slice(&ipp);
         let (status, body) = http::parse_response(&resp).unwrap();
         assert_eq!(status, 200);
-        // De body is een geldige IPP-respons die we kunnen parsen.
+        // The body is a valid IPP response that we can parse.
         assert!(IppResponse::parse(&body).unwrap().is_ok());
     }
 
     #[test]
     fn http_parse_chunked() {
-        // Body "ABCDEFGH" in twee chunks (4 + 4) + 0-terminator.
+        // Body "ABCDEFGH" in two chunks (4 + 4) + 0-terminator.
         let resp = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nABCD\r\n4\r\nEFGH\r\n0\r\n\r\n";
         let (status, body) = http::parse_response(resp).unwrap();
         assert_eq!(status, 200);
@@ -335,11 +335,11 @@ mod tests {
             .keyword("document-format", "application/pdf")
             .serialize(doc);
         // header
-        assert_eq!(&req[0..2], &[2, 0]); // versie 2.0
+        assert_eq!(&req[0..2], &[2, 0]); // version 2.0
         assert_eq!(u16::from_be_bytes([req[2], req[3]]), OP_PRINT_JOB);
         assert_eq!(u32::from_be_bytes([req[4], req[5], req[6], req[7]]), 1);
         assert_eq!(req[8], TAG_OPERATION); // operation-attributes-group
-        // het document staat ná de end-tag.
+        // the document is located after the end tag.
         let end = req.iter().rposition(|&b| b == TAG_END).unwrap();
         assert_eq!(&req[end + 1..], doc);
     }
@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn charset_and_language_are_first() {
         let req = IppRequest::new(OP_GET_PRINTER_ATTRIBUTES, 7).serialize(&[]);
-        // ná de 8-byte header + group-tag (idx 8) komt het eerste attribuut.
+        // after the 8-byte header + group-tag (idx 8) comes the first attribute.
         let nlen = u16::from_be_bytes([req[10], req[11]]) as usize;
         let name = core::str::from_utf8(&req[12..12 + nlen]).unwrap();
         assert_eq!(name, "attributes-charset");
@@ -356,17 +356,17 @@ mod tests {
     #[test]
     fn integer_attribute_is_4_bytes_be() {
         let req = IppRequest::new(OP_PRINT_JOB, 1).integer("copies", 3).serialize(&[]);
-        // zoek "copies" + lees de waarde.
+        // find "copies" + read the value.
         let resp = IppResponse::parse(&req).unwrap();
-        // parse leest de operation-group als attributen; "copies" moet 3 zijn.
+        // parse reads the operation-group as attributes; "copies" must be 3.
         let v = resp.attr("copies").unwrap();
         assert_eq!(v, &3i32.to_be_bytes());
     }
 
     #[test]
     fn response_roundtrip() {
-        // Bouw een "respons" door een request te coderen (zelfde wire-vorm) en hem
-        // terug te parsen — bewijst de header + attribuut-codering.
+        // Build a "response" by encoding a request (same wire form) and parsing it
+        // back — proves the header + attribute encoding.
         let bytes = IppRequest::new(STATUS_OK, 42)
             .printer_uri("ipp://p/")
             .serialize(&[]);

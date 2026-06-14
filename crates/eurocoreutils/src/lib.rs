@@ -1,20 +1,20 @@
-//! EuroCoreutils — GNU-compatibele coreutils-kern voor EuroOS.
+//! EuroCoreutils — GNU-compatible coreutils core for EuroOS.
 //!
-//! Elk commando is een pure functie `fn(args, input) -> Vec<u8>` (of `-> (Vec<u8>,
-//! i32)` waar de exit-code telt): de optie-vlaggen + de stdin-bytes erin, de uitvoer
-//! eruit. De shell ([`kernel::shell`]) leest eventueel een bestand van EuroFS in als
-//! `input` en print de uitvoer. Zo is alle tekstlogica `no_std` + volledig host-getest
-//! tegen de verwachte GNU-uitvoer, zonder QEMU.
+//! Each command is a pure function `fn(args, input) -> Vec<u8>` (or `-> (Vec<u8>,
+//! i32)` where the exit code matters): option flags + the stdin bytes go in, the output
+//! comes out. The shell ([`kernel::shell`]) optionally reads a file from EuroFS as
+//! `input` and prints the output. This way all text logic is `no_std` + fully host-tested
+//! against the expected GNU output, without QEMU.
 //!
-//! Batches: CU-1 (trivial) · CU-3 (tekst-I/O) · CU-4 (transform) · CU-6 (checksums &
-//! encoding). FS-mutaties (cp/mv/touch/…) leven shell-zijde op de EuroFS-primitieven.
+//! Batches: CU-1 (trivial) · CU-3 (text I/O) · CU-4 (transform) · CU-6 (checksums &
+//! encoding). FS mutations (cp/mv/touch/…) live on the shell side on the EuroFS primitives.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
 extern crate alloc;
 
-use alloc::string::ToString as _; // trait in scope voor i64/&str .to_string()
+use alloc::string::ToString as _; // trait in scope for i64/&str .to_string()
 use alloc::vec::Vec;
 
 pub mod args;
@@ -26,20 +26,20 @@ pub mod text;
 
 pub use args::Args;
 
-/// Splits `input` in regels (zonder de afsluitende `\n`), behoudt lege regels.
+/// Splits `input` into lines (without the trailing `\n`), keeps empty lines.
 pub(crate) fn lines(input: &[u8]) -> Vec<&[u8]> {
     if input.is_empty() {
         return Vec::new();
     }
     let mut out: Vec<&[u8]> = input.split(|&b| b == b'\n').collect();
-    // Een afsluitende newline geeft een lege laatste split → weglaten.
+    // A trailing newline yields an empty last split → drop it.
     if input.last() == Some(&b'\n') {
         out.pop();
     }
     out
 }
 
-/// Voeg regels samen mét afsluitende newline per regel.
+/// Join lines together with a trailing newline per line.
 pub(crate) fn join_lines(rows: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
     for r in rows {
@@ -49,9 +49,9 @@ pub(crate) fn join_lines(rows: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
-// ── CU-1: triviale commando's ───────────────────────────────────────────────
+// ── CU-1: trivial commands ───────────────────────────────────────────────────
 
-/// `echo [-n] [-e] ARGS...` — print de argumenten met spaties ertussen.
+/// `echo [-n] [-e] ARGS...` — prints the arguments separated by spaces.
 pub fn echo(args: &[&str]) -> Vec<u8> {
     let mut no_newline = false;
     let mut escapes = false;
@@ -102,14 +102,14 @@ fn unescape(s: &str) -> Vec<u8> {
     out
 }
 
-/// `seq [FIRST [STEP]] LAST` — een reeks getallen, één per regel.
+/// `seq [FIRST [STEP]] LAST` — a range of numbers, one per line.
 pub fn seq(args: &[&str]) -> Vec<u8> {
     let nums: Vec<i64> = args.iter().filter_map(|a| a.parse::<i64>().ok()).collect();
     let (first, step, last) = match nums.len() {
         1 => (1, 1, nums[0]),
         2 => (nums[0], 1, nums[1]),
         3 => (nums[0], nums[1], nums[2]),
-        _ => return b"seq: gebruik: seq [FIRST [STEP]] LAST\n".to_vec(),
+        _ => return b"seq: usage: seq [FIRST [STEP]] LAST\n".to_vec(),
     };
     let mut out = Vec::new();
     if step == 0 {
@@ -124,7 +124,7 @@ pub fn seq(args: &[&str]) -> Vec<u8> {
     out
 }
 
-/// `basename PATH [SUFFIX]` — de laatste padcomponent (zonder suffix).
+/// `basename PATH [SUFFIX]` — the last path component (without suffix).
 pub fn basename(args: &[&str]) -> Vec<u8> {
     let path = args.first().copied().unwrap_or("");
     let trimmed = path.trim_end_matches('/');
@@ -142,7 +142,7 @@ pub fn basename(args: &[&str]) -> Vec<u8> {
     s.into_bytes()
 }
 
-/// `dirname PATH` — het pad zonder de laatste component.
+/// `dirname PATH` — the path without the last component.
 pub fn dirname(args: &[&str]) -> Vec<u8> {
     let path = args.first().copied().unwrap_or("");
     let trimmed = path.trim_end_matches('/');

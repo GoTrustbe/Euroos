@@ -1,5 +1,5 @@
-//! `BlockDevice`-abstractie over fysieke opslag (NVMe/SATA) + een in-memory
-//! implementatie voor unit-tests en de Fase-1 ramdisk-emulatie.
+//! `BlockDevice` abstraction over physical storage (NVMe/SATA) + an in-memory
+//! implementation for unit tests and the Phase-1 ramdisk emulation.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -8,32 +8,32 @@ use alloc::vec::Vec;
 pub enum BlockError {
     OutOfBounds,
     IoError,
-    /// Buffergrootte is geen veelvoud van de blokgrootte.
+    /// Buffer size is not a multiple of the block size.
     NotAligned,
 }
 
 pub type BlockResult<T> = Result<T, BlockError>;
 
-/// Een blok-georiënteerd opslagapparaat. Alle EuroFS-I/O loopt hierdoor.
+/// A block-oriented storage device. All EuroFS I/O runs through this.
 pub trait BlockDevice {
     fn block_size(&self) -> u32;
     fn block_count(&self) -> u64;
 
-    /// Lees `count` blokken vanaf `start_block` in `buffer`.
-    /// `buffer.len()` moet exact `count * block_size` zijn.
+    /// Read `count` blocks starting at `start_block` into `buffer`.
+    /// `buffer.len()` must be exactly `count * block_size`.
     fn read_blocks(&self, start_block: u64, count: u32, buffer: &mut [u8]) -> BlockResult<()>;
 
-    /// Schrijf `count` blokken vanaf `start_block` uit `buffer`.
+    /// Write `count` blocks starting at `start_block` from `buffer`.
     fn write_blocks(&mut self, start_block: u64, count: u32, buffer: &[u8]) -> BlockResult<()>;
 
-    /// Forceer pending writes naar permanente opslag. Verplicht vóór een
-    /// CoW-checkpoint-commit, anders is crash-consistentie niet gegarandeerd.
+    /// Force pending writes to permanent storage. Required before a
+    /// CoW checkpoint commit, otherwise crash consistency is not guaranteed.
     fn flush(&mut self) -> BlockResult<()>;
 }
 
-/// Blanket-impl: een `&mut D` is ook een `BlockDevice`. Maakt remount-tests
-/// mogelijk (`EuroFs::format(&mut dev, ..)` gevolgd door `EuroFs::mount(&mut dev, ..)`)
-/// zonder ownership van het device af te geven.
+/// Blanket impl: a `&mut D` is also a `BlockDevice`. Makes remount tests
+/// possible (`EuroFs::format(&mut dev, ..)` followed by `EuroFs::mount(&mut dev, ..)`)
+/// without giving up ownership of the device.
 impl<D: BlockDevice + ?Sized> BlockDevice for &mut D {
     fn block_size(&self) -> u32 {
         (**self).block_size()
@@ -52,12 +52,12 @@ impl<D: BlockDevice + ?Sized> BlockDevice for &mut D {
     }
 }
 
-/// In-memory block device. Voor tests en als drager onder de ramdisk.
+/// In-memory block device. For tests and as the backing store under the ramdisk.
 pub struct MemoryBlockDevice {
     data: Vec<u8>,
     block_size: u32,
-    /// Telt flushes — handig om in tests te bewijzen dat de checkpoint-commit
-    /// daadwerkelijk een flush forceert.
+    /// Counts flushes — useful in tests to prove that the checkpoint commit
+    /// actually forces a flush.
     pub flush_count: u64,
 }
 
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn verkeerde_buffergrootte_geweigerd() {
         let mut dev = MemoryBlockDevice::new(8, 512);
-        let buf = vec![0u8; 500]; // niet 512
+        let buf = vec![0u8; 500]; // not 512
         assert_eq!(dev.write_blocks(0, 1, &buf), Err(BlockError::NotAligned));
     }
 

@@ -1,6 +1,6 @@
-/* EuroOS — S4 demo-service: schrijft een hartslag en sluit af. EuroInit (de
- * supervisor) herstart het volgens het 'always'-beleid tot het plafond — wat de
- * service-supervisie zichtbaar maakt in de kernel-log. */
+/* EuroOS — S4 demo service: writes a heartbeat and exits. EuroInit (the
+ * supervisor) restarts it according to the 'always' policy up to the ceiling — which
+ * makes the service supervision visible in the kernel log. */
 
 static long sys(long n, long a1, long a2, long a3) {
     long ret;
@@ -17,7 +17,7 @@ static long slen(const char *s) {
 }
 
 __attribute__((section(".text.start"))) void _start(void) {
-    const char *m = "ticker: hartslag -> exit(0)\n";
+    const char *m = "ticker: heartbeat -> exit(0)\n";
     sys(L_WRITE, 1, (long)m, slen(m));
     sys(L_EXIT, 0, 0, 0);
     for (;;) {

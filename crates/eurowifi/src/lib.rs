@@ -1,9 +1,9 @@
-//! EuroWiFi — de 802.11-protocolkern (plan N1).
+//! EuroWiFi — the 802.11 protocol core (plan N1).
 //!
-//! Een soevereine WiFi-stack: deze `no_std`-kern parseert **802.11-frames**
-//! (management/data, beacons met SSID + security), modelleert **scanresultaten**, en
-//! leidt **WPA2/3-sessiesleutels** af via de IEEE-PRF (HMAC-SHA-256). De radio-driver
-//! zelf (PHY/MAC op een AX200/210) is hardware-werk; de logica hier is host-getest.
+//! A sovereign WiFi stack: this `no_std` core parses **802.11 frames**
+//! (management/data, beacons with SSID + security), models **scan results**, and
+//! derives **WPA2/3 session keys** via the IEEE PRF (HMAC-SHA-256). The radio driver
+//! itself (PHY/MAC on an AX200/210) is hardware work; the logic here is host-tested.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -14,9 +14,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use sha2::{Digest, Sha256};
 
-// ── 802.11-frame-parsing ─────────────────────────────────────────────────────
+// ── 802.11 frame parsing ─────────────────────────────────────────────────────
 
-/// Het type van een 802.11-frame (uit de Frame-Control-bytes).
+/// The type of an 802.11 frame (from the Frame-Control bytes).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FrameType {
     Management,
@@ -25,7 +25,7 @@ pub enum FrameType {
     Reserved,
 }
 
-/// De management-subtypes die we herkennen.
+/// The management subtypes we recognize.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MgmtSubtype {
     Beacon,
@@ -38,18 +38,18 @@ pub enum MgmtSubtype {
     Other(u8),
 }
 
-/// De geparseerde kop van een 802.11-frame.
+/// The parsed header of an 802.11 frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameHeader {
     pub frame_type: FrameType,
     pub mgmt_subtype: Option<MgmtSubtype>,
-    /// Adres 1/2/3 (bestemming/bron/BSSID, afhankelijk van richting).
+    /// Address 1/2/3 (destination/source/BSSID, depending on direction).
     pub addr1: [u8; 6],
     pub addr2: [u8; 6],
     pub addr3: [u8; 6],
 }
 
-/// Parse de 24-byte management/data-frame-kop.
+/// Parse the 24-byte management/data frame header.
 pub fn parse_header(frame: &[u8]) -> Option<FrameHeader> {
     if frame.len() < 24 {
         return None;
@@ -85,16 +85,16 @@ pub fn parse_header(frame: &[u8]) -> Option<FrameHeader> {
     Some(FrameHeader { frame_type, mgmt_subtype, addr1: a1, addr2: a2, addr3: a3 })
 }
 
-/// Het beveiligingstype van een netwerk (uit de RSN/privacy-info).
+/// The security type of a network (from the RSN/privacy info).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Security {
     Open,
     Wpa2,
-    /// WPA3 (SAE) — verplicht voor moderne, soevereine deployments.
+    /// WPA3 (SAE) — mandatory for modern, sovereign deployments.
     Wpa3,
 }
 
-/// Een scanresultaat (één gevonden netwerk).
+/// A scan result (one network found).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScanResult {
     pub bssid: [u8; 6],
@@ -103,25 +103,25 @@ pub struct ScanResult {
     pub security: Security,
 }
 
-/// Parse een **beacon**-frame naar een scanresultaat. Loopt de tagged information
-/// elements af (SSID = id 0, DS-Parameter/kanaal = id 3, RSN = id 48).
+/// Parse a **beacon** frame into a scan result. Walks the tagged information
+/// elements (SSID = id 0, DS-Parameter/channel = id 3, RSN = id 48).
 pub fn parse_beacon(frame: &[u8]) -> Option<ScanResult> {
     let hdr = parse_header(frame)?;
     if hdr.mgmt_subtype != Some(MgmtSubtype::Beacon) {
         return None;
     }
-    // 24 byte kop + 12 byte fixed (timestamp/interval/capabilities). Een geldig
-    // beacon is ≥ 36 bytes; een korter (mogelijk kwaadaardig) frame → afwijzen,
-    // anders zou de capabilities-lezing buiten de buffer indexeren (audit C4).
+    // 24-byte header + 12-byte fixed (timestamp/interval/capabilities). A valid
+    // beacon is ≥ 36 bytes; a shorter (possibly malicious) frame → reject,
+    // otherwise the capabilities read would index outside the buffer (audit C4).
     if frame.len() < 36 {
         return None;
     }
-    // 24 byte kop + 12 byte fixed (timestamp/interval/capabilities) → IE's.
+    // 24-byte header + 12-byte fixed (timestamp/interval/capabilities) → IEs.
     let mut i = 36;
     let mut ssid = String::new();
     let mut channel = 0u8;
     let mut security = Security::Open;
-    // Privacy-bit in de capabilities (offset 34..36, little-endian) → minstens WEP/WPA.
+    // Privacy bit in the capabilities (offset 34..36, little-endian) → at least WEP/WPA.
     let caps = u16::from_le_bytes([frame[34], frame[35]]);
     let privacy = caps & 0x10 != 0;
 
@@ -136,16 +136,16 @@ pub fn parse_beacon(frame: &[u8]) -> Option<ScanResult> {
         match id {
             0 => ssid = String::from_utf8_lossy(body).into_owned(),
             3 if !body.is_empty() => channel = body[0],
-            48 => security = Security::Wpa2, // RSN aanwezig
+            48 => security = Security::Wpa2, // RSN present
             221 => {
-                // Vendor-specific; WPA3-SAE adverteert AKM 8 in de RSN, hier vereenvoudigd.
+                // Vendor-specific; WPA3-SAE advertises AKM 8 in the RSN, simplified here.
                 if body.windows(1).any(|_| false) {}
             }
             _ => {}
         }
         i = body_start + len;
     }
-    // WPA3 wordt geadverteerd via de RSN-AKM-suite 00-0F-AC:8 (SAE).
+    // WPA3 is advertised via the RSN-AKM suite 00-0F-AC:8 (SAE).
     if has_sae_akm(frame) {
         security = Security::Wpa3;
     } else if privacy && security == Security::Open {
@@ -154,12 +154,12 @@ pub fn parse_beacon(frame: &[u8]) -> Option<ScanResult> {
     Some(ScanResult { bssid: hdr.addr3, ssid, channel, security })
 }
 
-/// Detecteer de SAE-AKM-suite (00-0F-AC-08) ergens in het frame → WPA3.
+/// Detect the SAE-AKM suite (00-0F-AC-08) anywhere in the frame → WPA3.
 fn has_sae_akm(frame: &[u8]) -> bool {
     frame.windows(4).any(|w| w == [0x00, 0x0F, 0xAC, 0x08])
 }
 
-// ── WPA2/3-sleutelafleiding (IEEE 802.11 PRF op HMAC-SHA-256) ────────────────
+// ── WPA2/3 key derivation (IEEE 802.11 PRF on HMAC-SHA-256) ────────────────
 
 fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
     const BLOCK: usize = 64;
@@ -186,11 +186,11 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
     outer.finalize().into()
 }
 
-/// De IEEE 802.11 PRF: leid `bits/8` bytes af uit `key`, `label` en `data`.
+/// The IEEE 802.11 PRF: derive `bits/8` bytes from `key`, `label` and `data`.
 pub fn prf(key: &[u8], label: &str, data: &[u8], out_len: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(out_len);
-    // De teller is u16 zodat out_len > 255·32 niet overflowt (audit M4); de PRF
-    // levert in de praktijk ≤ 64 bytes (PTK), dus dit is ruim voldoende.
+    // The counter is u16 so that out_len > 255·32 does not overflow (audit M4); the PRF
+    // delivers ≤ 64 bytes (PTK) in practice, so this is more than enough.
     let mut counter: u16 = 0;
     while out.len() < out_len {
         let mut msg = Vec::new();
@@ -205,10 +205,10 @@ pub fn prf(key: &[u8], label: &str, data: &[u8], out_len: usize) -> Vec<u8> {
     out
 }
 
-/// Leid de **Pairwise Transient Key** (PTK) af uit de PMK + de twee nonces + MAC's
-/// (de kern van de WPA 4-way-handshake). Geeft 48 bytes (KCK‖KEK‖TK voor CCMP).
+/// Derive the **Pairwise Transient Key** (PTK) from the PMK + the two nonces + MACs
+/// (the heart of the WPA 4-way handshake). Returns 48 bytes (KCK‖KEK‖TK for CCMP).
 pub fn derive_ptk(pmk: &[u8], aa: &[u8; 6], spa: &[u8; 6], anonce: &[u8; 32], snonce: &[u8; 32]) -> Vec<u8> {
-    // PRF-data = min(AA,SPA) ‖ max(AA,SPA) ‖ min(ANonce,SNonce) ‖ max(ANonce,SNonce).
+    // PRF data = min(AA,SPA) ‖ max(AA,SPA) ‖ min(ANonce,SNonce) ‖ max(ANonce,SNonce).
     let mut data = Vec::new();
     let (min_mac, max_mac) = if aa <= spa { (aa, spa) } else { (spa, aa) };
     data.extend_from_slice(min_mac);
@@ -223,29 +223,29 @@ pub fn derive_ptk(pmk: &[u8], aa: &[u8; 6], spa: &[u8; 6], anonce: &[u8; 32], sn
 mod tests {
     use super::*;
 
-    /// Bouw een minimaal beacon-frame met een SSID-IE + kanaal-IE + RSN-IE.
+    /// Build a minimal beacon frame with an SSID-IE + channel-IE + RSN-IE.
     fn beacon(ssid: &str, channel: u8, with_rsn: bool, sae: bool) -> Vec<u8> {
         let mut f = Vec::new();
         f.push(0x80); // FC: management, subtype beacon (0x8 << 4)
         f.push(0x00);
         f.extend_from_slice(&[0; 2]); // duration
         f.extend_from_slice(&[0xff; 6]); // addr1 (broadcast)
-        f.extend_from_slice(&[0x11; 6]); // addr2 (bron)
+        f.extend_from_slice(&[0x11; 6]); // addr2 (source)
         f.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]); // addr3 (BSSID)
         f.extend_from_slice(&[0; 2]); // seq
         f.extend_from_slice(&[0; 8]); // timestamp
         f.extend_from_slice(&[0x64, 0x00]); // beacon interval
-        let caps: u16 = if with_rsn { 0x0011 } else { 0x0001 }; // privacy-bit bij RSN
+        let caps: u16 = if with_rsn { 0x0011 } else { 0x0001 }; // privacy bit when RSN
         f.extend_from_slice(&caps.to_le_bytes());
         // SSID-IE.
         f.push(0);
         f.push(ssid.len() as u8);
         f.extend_from_slice(ssid.as_bytes());
-        // DS-parameter (kanaal).
+        // DS-parameter (channel).
         f.push(3);
         f.push(1);
         f.push(channel);
-        // RSN-IE (id 48) met optioneel de SAE-AKM-suite.
+        // RSN-IE (id 48) with optionally the SAE-AKM suite.
         if with_rsn {
             let akm = if sae { [0x00, 0x0F, 0xAC, 0x08] } else { [0x00, 0x0F, 0xAC, 0x02] };
             f.push(48);
@@ -284,11 +284,11 @@ mod tests {
 
     #[test]
     fn short_beacon_rejected_no_panic() {
-        // C4: een beacon van 24–35 bytes mag niet OOB-indexeren op de capabilities.
+        // C4: a beacon of 24–35 bytes must not OOB-index on the capabilities.
         for len in 24..36 {
             let frame = alloc::vec![0u8; len];
             let mut f = frame;
-            f[0] = 0x80; // beacon-subtype
+            f[0] = 0x80; // beacon subtype
             assert!(parse_beacon(&f).is_none());
         }
     }
@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn non_beacon_rejected() {
         let mut data = beacon("x", 1, false, false);
-        data[0] = 0x08; // data-frame
+        data[0] = 0x08; // data frame
         assert!(parse_beacon(&data).is_none());
     }
 
@@ -308,11 +308,11 @@ mod tests {
         let an = [3u8; 32];
         let sn = [4u8; 32];
         let ptk1 = derive_ptk(&pmk, &aa, &spa, &an, &sn);
-        // Dezelfde inputs → dezelfde PTK; de min/max-ordening maakt 'm richting-symmetrisch.
+        // The same inputs → the same PTK; the min/max ordering makes it direction-symmetric.
         let ptk2 = derive_ptk(&pmk, &spa, &aa, &sn, &an);
         assert_eq!(ptk1.len(), 48);
         assert_eq!(ptk1, ptk2);
-        // Andere PMK → andere PTK.
+        // Different PMK → different PTK.
         let ptk3 = derive_ptk(&[0x21u8; 32], &aa, &spa, &an, &sn);
         assert_ne!(ptk1, ptk3);
     }

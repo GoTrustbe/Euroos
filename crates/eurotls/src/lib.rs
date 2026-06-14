@@ -1,14 +1,14 @@
-//! EuroTLS — een eigen TLS 1.3-client (RFC 8446) voor EuroOS.
+//! EuroTLS — a custom TLS 1.3 client (RFC 8446) for EuroOS.
 //!
-//! Sans-IO: deze crate kent geen sockets. De caller (de kernel, bovenop een
-//! `TcpConn`) voedt ontvangen records in en krijgt te-versturen bytes terug.
-//! Zo is de hele protocol- en sleutelschema-logica — de fout-gevoeligste laag —
-//! op de host testbaar, zonder NIC of QEMU.
+//! Sans-IO: this crate knows no sockets. The caller (the kernel, on top of a
+//! `TcpConn`) feeds in received records and gets bytes to send back.
+//! This way the entire protocol and key-schedule logic — the most error-prone layer —
+//! is testable on the host, without a NIC or QEMU.
 //!
-//! Ciphersuite: **TLS_CHACHA20_POLY1305_SHA256** (één suite; software-vriendelijk,
-//! geen AES-NI nodig, breed ondersteund). Sleuteluitwisseling: **X25519**.
-//! Handtekening-verificatie van het servercertificaat is een latere fase
-//! (EuroGuard cert-inspectie, 7.8) — de handshake zelf is volledig echt.
+//! Ciphersuite: **TLS_CHACHA20_POLY1305_SHA256** (one suite; software-friendly,
+//! no AES-NI needed, widely supported). Key exchange: **X25519**.
+//! Signature verification of the server certificate is a later phase
+//! (EuroGuard cert inspection, 7.8) — the handshake itself is fully real.
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
@@ -23,11 +23,11 @@ pub mod x509;
 
 pub use handshake::{Tls13Client, TlsError, TlsState};
 
-/// De onderhandelde ciphersuite-code (TLS_CHACHA20_POLY1305_SHA256).
+/// The negotiated ciphersuite code (TLS_CHACHA20_POLY1305_SHA256).
 pub const TLS_CHACHA20_POLY1305_SHA256: u16 = 0x1303;
-/// De named group voor sleuteluitwisseling (x25519).
+/// The named group for key exchange (x25519).
 pub const GROUP_X25519: u16 = 0x001d;
-/// Het handtekening-algoritme dat we adverteren (ed25519).
+/// The signature algorithm we advertise (ed25519).
 pub const SIG_ED25519: u16 = 0x0807;
 pub const SIG_ECDSA_P256: u16 = 0x0403;
 pub const SIG_RSA_PSS_SHA256: u16 = 0x0804;

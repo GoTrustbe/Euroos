@@ -1,12 +1,12 @@
-//! EuroFont — het lettertypebeheer van EuroOS (Sprint AC-2).
+//! EuroFont — the font manager of EuroOS (Sprint AC-2).
 //!
-//! Parseert **sfnt/TrueType**-fonts: de tabel-directory en de `name`-, `head`- en
-//! `maxp`-tabellen, zodat de fontmanager familienaam, stijl, units-per-em en het
-//! aantal glyphs kan tonen — zonder FreeType. Ondersteunt `name`-records van zowel
-//! Windows (platform 3, UTF-16BE) als Macintosh (platform 1, ASCII). Bevat een
-//! kleine font-bouwer ([`build_min_font`]) zodat de parser host-getest kan worden.
+//! Parses **sfnt/TrueType** fonts: the table directory and the `name`, `head` and
+//! `maxp` tables, so the font manager can show the family name, style, units-per-em and the
+//! number of glyphs — without FreeType. Supports `name` records from both
+//! Windows (platform 3, UTF-16BE) and Macintosh (platform 1, ASCII). Contains a
+//! small font builder ([`build_min_font`]) so the parser can be host-tested.
 //!
-//! Pure `no_std`-logica, geen `unsafe`.
+//! Pure `no_std` logic, no `unsafe`.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -23,7 +23,7 @@ fn be32(d: &[u8], o: usize) -> Option<u32> {
     Some(u32::from_be_bytes([*d.get(o)?, *d.get(o + 1)?, *d.get(o + 2)?, *d.get(o + 3)?]))
 }
 
-/// Metadata uit een font.
+/// Metadata from a font.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FontInfo {
     pub family: String,
@@ -33,7 +33,7 @@ pub struct FontInfo {
     pub num_glyphs: u16,
 }
 
-/// Zoek een tabel in de directory; geeft (offset, length).
+/// Find a table in the directory; returns (offset, length).
 fn find_table(d: &[u8], tag: &[u8; 4]) -> Option<(usize, usize)> {
     let num_tables = be16(d, 4)? as usize;
     for i in 0..num_tables {
@@ -48,7 +48,7 @@ fn find_table(d: &[u8], tag: &[u8; 4]) -> Option<(usize, usize)> {
     None
 }
 
-/// Decodeer een naam-string volgens platform/encoding.
+/// Decode a name string according to platform/encoding.
 fn decode_name(platform: u16, bytes: &[u8]) -> String {
     if platform == 3 || platform == 0 {
         // UTF-16BE.
@@ -63,12 +63,12 @@ fn decode_name(platform: u16, bytes: &[u8]) -> String {
         }
         s
     } else {
-        // Macintosh Roman → behandel als ASCII/Latin-1.
+        // Macintosh Roman → treat as ASCII/Latin-1.
         bytes.iter().map(|&b| b as char).collect()
     }
 }
 
-/// Parse de `name`-tabel → (familie, subfamilie, volledige naam).
+/// Parse the `name` table → (family, subfamily, full name).
 fn parse_name_table(d: &[u8], off: usize, len: usize) -> (String, String, String) {
     let t = match d.get(off..off + len) {
         Some(t) => t,
@@ -102,7 +102,7 @@ fn parse_name_table(d: &[u8], off: usize, len: usize) -> (String, String, String
     (family, subfamily, full)
 }
 
-/// Parse een font naar [`FontInfo`]. Geeft `None` als het geen geldig sfnt is.
+/// Parse a font into [`FontInfo`]. Returns `None` if it is not a valid sfnt.
 pub fn parse(d: &[u8]) -> Option<FontInfo> {
     let version = be32(d, 0)?;
     // 0x00010000 = TrueType, 'OTTO' = CFF/OpenType, 'true'/'typ1' = Apple.
@@ -125,7 +125,7 @@ pub fn parse(d: &[u8]) -> Option<FontInfo> {
     Some(info)
 }
 
-// ── minimale font-bouwer (voor tests + als referentie van de structuur) ──
+// ── minimal font builder (for tests + as a reference for the structure) ──
 
 fn push_be16(v: &mut Vec<u8>, x: u16) {
     v.extend_from_slice(&x.to_be_bytes());
@@ -134,10 +134,10 @@ fn push_be32(v: &mut Vec<u8>, x: u32) {
     v.extend_from_slice(&x.to_be_bytes());
 }
 
-/// Bouw een minimaal-geldig TrueType-font met de gegeven metadata. De `name`-
-/// records gebruiken platform 1 (Macintosh, ASCII). Genoeg om [`parse`] te voeden.
+/// Build a minimally-valid TrueType font with the given metadata. The `name`
+/// records use platform 1 (Macintosh, ASCII). Enough to feed [`parse`].
 pub fn build_min_font(family: &str, subfamily: &str, full: &str, units_per_em: u16, num_glyphs: u16) -> Vec<u8> {
-    // name-tabel met 3 records (familie=1, subfamilie=2, volledig=4).
+    // name table with 3 records (family=1, subfamily=2, full=4).
     let strings: [(u16, &str); 3] = [(1, family), (2, subfamily), (4, full)];
     let mut name = Vec::new();
     push_be16(&mut name, 0); // format 0
@@ -157,7 +157,7 @@ pub fn build_min_font(family: &str, subfamily: &str, full: &str, units_per_em: u
     }
     name.extend_from_slice(&string_data);
 
-    // head-tabel: 54 bytes, unitsPerEm @ offset 18.
+    // head table: 54 bytes, unitsPerEm @ offset 18.
     let mut head = alloc::vec![0u8; 54];
     head[18..20].copy_from_slice(&units_per_em.to_be_bytes());
 
@@ -166,7 +166,7 @@ pub fn build_min_font(family: &str, subfamily: &str, full: &str, units_per_em: u
     push_be32(&mut maxp, 0x0000_5000);
     push_be16(&mut maxp, num_glyphs);
 
-    // Tabel-directory (gesorteerd op tag: head, maxp, name).
+    // Table directory (sorted by tag: head, maxp, name).
     let tables: [(&[u8; 4], &Vec<u8>); 3] = [(b"head", &head), (b"maxp", &maxp), (b"name", &name)];
     let num = tables.len();
     let mut out = Vec::new();
@@ -181,7 +181,7 @@ pub fn build_min_font(family: &str, subfamily: &str, full: &str, units_per_em: u
     let mut body = Vec::new();
     for (tag, data) in tables {
         directory.extend_from_slice(tag);
-        push_be32(&mut directory, 0); // checksum (genegeerd door onze parser)
+        push_be32(&mut directory, 0); // checksum (ignored by our parser)
         push_be32(&mut directory, data_off as u32);
         push_be32(&mut directory, data.len() as u32);
         body.extend_from_slice(data);
@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn utf16_name_decoding() {
-        // Bouw een name-record met platform 3 (UTF-16BE) handmatig.
+        // Build a name record with platform 3 (UTF-16BE) by hand.
         let mut name = Vec::new();
         push_be16(&mut name, 0);
         push_be16(&mut name, 1);
@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn missing_tables_are_tolerated() {
-        // Een font zonder head/maxp → nullen, maar parse slaagt op de naam.
+        // A font without head/maxp → zeros, but parse succeeds on the name.
         let font = build_min_font("OnlyName", "", "", 0, 0);
         let info = parse(&font).unwrap();
         assert_eq!(info.family, "OnlyName");
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn truncated_font_no_panic() {
         let font = build_min_font("X", "Y", "X Y", 1000, 5);
-        // Afgekapt → parse mag niet paniekeren (bounds-checked).
+        // Truncated → parse must not panic (bounds-checked).
         let _ = parse(&font[..font.len() / 2]);
         let _ = parse(&font[..15]);
     }

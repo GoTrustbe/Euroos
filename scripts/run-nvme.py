@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Boot EuroOS met een NVMe-controller (B2-harness). Verifieert init + identify +
-read/write-zelftest + SMART via serial-nvme.log."""
+"""Boot EuroOS with an NVMe controller (B2 harness). Verifies init + identify +
+read/write self-test + SMART via serial-nvme.log."""
 import json, os, socket, subprocess, sys, time
 IMG = sys.argv[1] if len(sys.argv) > 1 else "eurokernel.img"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "nvme.png"
@@ -28,10 +28,10 @@ fp = s.makefile("rwb", buffering=0)
 def cmd(o):
     fp.write((json.dumps(o)+"\n").encode()); return json.loads(fp.readline().decode())
 fp.readline(); cmd({"execute":"qmp_capabilities"})
-print(f"[nvme] boot, wacht {WAIT}s...", flush=True); time.sleep(WAIT)
+print(f"[nvme] boot, waiting {WAIT}s...", flush=True); time.sleep(WAIT)
 cmd({"execute":"screendump","arguments":{"filename":os.path.abspath(OUT),"format":"png"}})
 cmd({"execute":"quit"}); time.sleep(1)
 qemu.terminate()
 try: qemu.wait(timeout=5)
 except Exception: qemu.kill()
-print("[nvme] klaar.", flush=True)
+print("[nvme] done.", flush=True)

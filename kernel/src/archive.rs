@@ -1,11 +1,11 @@
-//! Kernel-zijde van **EuroArchive** (Sprint AC-2): de archiefbeheerder.
-//! Bij boot bewijzen we de USTAR tar-round-trip + checksum-verificatie en de
-//! Ed25519-manifest-haak. Host-geteste kern: [`euroarchive`].
+//! Kernel side of **EuroArchive** (Sprint AC-2): the archive manager.
+//! At boot we prove the USTAR tar round-trip + checksum verification and the
+//! Ed25519 manifest hook. Host-tested core: [`euroarchive`].
 
 use crate::serial_println;
 use euroarchive::{read_tar, verify_manifest, write_tar, ArchiveError, Entry, Kind};
 
-/// Boot-zelftest: pak een archief in en weer uit, detecteer corruptie.
+/// Boot self-test: pack an archive and unpack it again, detect corruption.
 pub fn selftest() {
     let entries = [
         Entry::dir("euro"),
@@ -26,12 +26,12 @@ pub fn selftest() {
         Err(_) => false,
     };
 
-    // Corruptie-detectie: verander een headerbyte → checksum-fout.
+    // Corruption detection: alter a header byte → checksum error.
     let mut corrupt = tar.clone();
     corrupt[1] = b'X';
     let corrupt_caught = matches!(read_tar(&corrupt), Err(ArchiveError::BadChecksum { .. }));
 
-    // Manifest-haak: alleen het juiste "handtekening"-paar verifieert.
+    // Manifest hook: only the correct "signature" pair verifies.
     let v = back.unwrap_or_default();
     let manifest = [
         (alloc::string::String::from("euro/hallo.txt"), b"Hallo EuroOS".to_vec()),
@@ -42,11 +42,11 @@ pub fn selftest() {
 
     let ok = roundtrip_ok && corrupt_caught && manifest_ok;
     serial_println!(
-        "[az] EuroArchive: tar {} bytes, round-trip={}, corruptie-gedetecteerd={}, manifest-verify={}/2 {}",
+        "[az] EuroArchive: tar {} bytes, round-trip={}, corruption-detected={}, manifest-verify={}/2 {}",
         tar.len(),
         roundtrip_ok,
         corrupt_caught,
         verified.len(),
-        if ok { "✓" } else { "✗ FOUT" }
+        if ok { "✓" } else { "✗ FAIL" }
     );
 }

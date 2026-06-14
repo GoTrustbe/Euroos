@@ -1,16 +1,16 @@
-/* EuroOS — echte musl-binary die BESTANDS-I/O doet via de C-standaardbibliotheek:
- * fopen/fgets/fclose. musl vertaalt dit naar openat/fstat/read/close (Linux-ABI),
- * die EuroKernel tegen zijn EuroFS-VFS afhandelt. Bewijst dat ongewijzigde musl-
- * programma's het echte filesysteem kunnen lezen. */
+/* EuroOS — a real musl binary that does FILE I/O via the C standard library:
+ * fopen/fgets/fclose. musl translates this to openat/fstat/read/close (Linux ABI),
+ * which EuroKernel handles against its EuroFS VFS. Proves that unmodified musl
+ * programs can read the real filesystem. */
 #include <stdio.h>
 
 int main(void) {
     const char *path = "/etc/eurokernel.conf";
-    printf("musl leest %s via fopen/fgets:\n", path);
+    printf("musl reads %s via fopen/fgets:\n", path);
 
     FILE *f = fopen(path, "r");
     if (!f) {
-        printf("  fopen() MISLUKT\n");
+        printf("  fopen() FAILED\n");
         return 1;
     }
     char line[128];
@@ -20,6 +20,6 @@ int main(void) {
         n++;
     }
     fclose(f);
-    printf("  (%d regels gelezen, fclose OK)\n", n);
+    printf("  (%d lines read, fclose OK)\n", n);
     return 0;
 }

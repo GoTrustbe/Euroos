@@ -1,7 +1,7 @@
-//! Kernel-zijde van **EuroAccess** (plan P2, EN 301 549): de toegankelijkheidslaag.
-//! Bij boot bouwen we een voorbeeld-dialoog als accessibility-boom, navigeren we de
-//! focus en laten we de meertalige schermlezer elke knoop aankondigen. Host-geteste
-//! kern: [`euroaccess`].
+//! Kernel side of **EuroAccess** (plan P2, EN 301 549): the accessibility layer.
+//! At boot we build a sample dialog as an accessibility tree, navigate the
+//! focus and have the multilingual screen reader announce each node. Host-tested
+//! core: [`euroaccess`].
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -19,27 +19,27 @@ fn demo_dialog() -> AccTree {
     AccTree::new(root)
 }
 
-/// Boot-zelftest: focus-volgorde, cyclische navigatie, meertalige aankondigingen.
+/// Boot self-test: focus order, cyclic navigation, multilingual announcements.
 pub fn selftest() {
     let mut t = demo_dialog();
 
-    // Alleen focusbare knopen, in leesvolgorde (kop is niet focusbaar).
+    // Only focusable nodes, in reading order (heading is not focusable).
     let order_ok = t.focus_order() == alloc::vec![3u32, 4, 5, 6];
 
-    // Tab door de dialoog; elke knoop kondigt zich aan in het Nederlands.
+    // Tab through the dialog; each node announces itself in Dutch.
     t.move_focus(true);
-    let a1 = t.announce_focused(Lang::Nl); // tekstveld
+    let a1 = t.announce_focused(Lang::Nl); // text field
     t.move_focus(true);
-    let a2 = t.announce_focused(Lang::Nl); // selectievakje
+    let a2 = t.announce_focused(Lang::Nl); // check box
     let nav_ok = a1.as_deref() == Some("tekstveld: Gebruikersnaam, leeg")
         && a2.as_deref() == Some("selectievakje: Onthoud mij, niet aangevinkt");
 
-    // Cyclische navigatie + achteruit.
-    t.move_focus(true); // knop Aanmelden
-    t.move_focus(true); // knop Annuleren
+    // Cyclic navigation + backwards.
+    t.move_focus(true); // button Aanmelden
+    t.move_focus(true); // button Annuleren
     let wrap_ok = t.move_focus(true) == 3 && t.move_focus(false) == 6;
 
-    // Zelfde knop, andere taal (de schermlezer spreekt de taal van de gebruiker).
+    // Same button, different language (the screen reader speaks the user's language).
     let btn = t.find(5).unwrap();
     let multilang_ok = btn.announce(Lang::Nl) == "knop: Aanmelden"
         && btn.announce(Lang::De) == "Schaltfläche: Aanmelden"
@@ -47,33 +47,33 @@ pub fn selftest() {
 
     let ok = order_ok && nav_ok && wrap_ok && multilang_ok;
     crate::serial_println!(
-        "[p2] EuroAccess: focus-volgorde={order_ok}, schermlezer-aankondiging(nl)={nav_ok}, cyclische-Tab-navigatie={wrap_ok}, meertalig(nl/de/fr)={multilang_ok} → {}",
-        if ok { "OK (toegankelijkheidslaag, EN 301 549, meertalige schermlezer) ✓" } else { "MISLUKT" }
+        "[p2] EuroAccess: focus-order={order_ok}, screen-reader-announcement(nl)={nav_ok}, cyclic-Tab-navigation={wrap_ok}, multilingual(nl/de/fr)={multilang_ok} → {}",
+        if ok { "OK (accessibility layer, EN 301 549, multilingual screen reader) ✓" } else { "FAILED" }
     );
 }
 
-/// `euroaccess`-shellcommando: toon de accessibility-boom van de voorbeeld-dialoog.
+/// `euroaccess` shell command: show the accessibility tree of the sample dialog.
 pub fn shell() -> Vec<String> {
     let t = demo_dialog();
     let mut out = alloc::vec![
-        String::from("EuroAccess — toegankelijkheidslaag (EN 301 549; AT-SPI-equivalent voor EuroDisplay)"),
-        String::from("  voorbeeld-dialoog 'Aanmelden' — schermlezer-aankondigingen (Nederlands):"),
+        String::from("EuroAccess — accessibility layer (EN 301 549; AT-SPI equivalent for EuroDisplay)"),
+        String::from("  sample dialog 'Aanmelden' — screen-reader announcements (Dutch):"),
     ];
     for id in t.focus_order() {
         if let Some(n) = t.find(id) {
             out.push(alloc::format!("    [{id}] {}", n.announce(Lang::Nl)));
         }
     }
-    out.push(String::from("  rol-labels komen uit EuroLocale → de schermlezer spreekt élke EU-taal"));
+    out.push(String::from("  role labels come from EuroLocale → the screen reader speaks every EU language"));
     out
 }
 
-/// **BB-8 boot-zelftest** — LIVE accessibility-events end-to-end (EN 301 549):
-/// navigeer de focus door een echte dialoog, kondig elke knoop aan via de
-/// meertalige schermlezer, en route de aankondiging naar EuroAudio (HDA). Bewijst
-/// de keten widget-boom → focus-event → aankondiging → audio. (Intelligibele
-/// spraaksynthese bovenop dit pad is de volgende mijl; hier: live focus-events,
-/// meertalige aankondigingen, en het EuroAudio-pad dat ze kan laten klinken.)
+/// **BB-8 boot self-test** — LIVE accessibility events end-to-end (EN 301 549):
+/// navigate the focus through a real dialog, announce each node via the
+/// multilingual screen reader, and route the announcement to EuroAudio (HDA). Proves
+/// the chain widget tree → focus event → announcement → audio. (Intelligible
+/// speech synthesis on top of this path is the next milestone; here: live focus events,
+/// multilingual announcements, and the EuroAudio path that can make them sound.)
 pub fn live_selftest() {
     let mut t = demo_dialog();
     let order = t.focus_order();
@@ -85,8 +85,8 @@ pub fn live_selftest() {
         if let Some(a) = t.announce_focused(Lang::Nl) {
             spoken.push(a);
         }
-        // Earcon: een ONDERSCHEIDENDE toon per rol (knop/selectievakje/tekstveld),
-        // door de echte HDA-DAC. De stream-DMA loopt cyclisch → de nieuwe beep klinkt.
+        // Earcon: a DISTINCT tone per role (button/check box/text field),
+        // through the real HDA DAC. The stream DMA loops cyclically → the new beep sounds.
         if let Some(node) = t.find(t.focused) {
             let freq = match node.role {
                 Role::Button => 784,    // G5
@@ -96,16 +96,16 @@ pub fn live_selftest() {
             };
             if crate::hda::earcon(freq) {
                 earcons += 1;
-                // Korte pauze zodat elke beep los hoorbaar is (de QEMU-audiotimer
-                // tikt op wandkloktijd).
+                // Short pause so each beep is audible separately (the QEMU audio timer
+                // ticks on wall-clock time).
                 for _ in 0..2_000_000 {
                     core::hint::spin_loop();
                 }
             }
         }
     }
-    // Wacht ~400 ms (wandklok, via timer-ticks) zodat de trage QEMU-audio-DMA
-    // meetbaar vooruitgaat, en lees of de stream draait (RUN-bit).
+    // Wait ~400 ms (wall clock, via timer ticks) so the slow QEMU audio DMA
+    // advances measurably, and read whether the stream is running (RUN bit).
     let t0 = crate::interrupts::ticks();
     while crate::interrupts::ticks().wrapping_sub(t0) < 40 {
         core::hint::spin_loop();
@@ -113,7 +113,7 @@ pub fn live_selftest() {
     let lpib1 = crate::hda::stream_pos();
     let running = crate::hda::stream_running();
     crate::serial_println!(
-        "[bb8] EuroAccess LIVE-events: {} focus-stappen → schermlezer sprak: [{}] · {} EARCONS door de HDA-DAC (toon per rol: tekstveld 440 · selectievakje 587 · knop 784 Hz) · output-stream draait={} (RUN-bit), LPIB {}\u{2192}{} → keten widget→focus→aankondiging→AUDIO (EN 301 549) ✓; intelligibele spraaksynthese = volgende mijl",
+        "[bb8] EuroAccess LIVE events: {} focus steps → screen reader spoke: [{}] · {} EARCONS through the HDA DAC (tone per role: text field 440 · check box 587 · button 784 Hz) · output stream running={} (RUN bit), LPIB {}\u{2192}{} → chain widget→focus→announcement→AUDIO (EN 301 549) ✓; intelligible speech synthesis = next milestone",
         order.len(),
         spoken.join("  |  "),
         earcons,

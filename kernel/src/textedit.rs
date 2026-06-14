@@ -1,11 +1,11 @@
-//! **EuroText** (Sprint 4) — een ECHTE platte-tekst-editor: typen, backspace,
-//! nieuwe regels, en OPSLAAN naar het echte EuroFS (en terug inlezen na heropenen).
-//! Geen mock: de inhoud wordt als bestand weggeschreven en overleeft een herstart.
+//! **EuroText** (Sprint 4) — a REAL plain-text editor: typing, backspace,
+//! new lines, and SAVING to the real EuroFS (and reading back after reopening).
+//! No mock: the content is written out as a file and survives a restart.
 //!
-//! Beperking (eerlijk): de PS/2-driver levert geen pijltjes/Ctrl, dus de cursor zit
-//! aan het invoegpunt (typemachine-stijl: typen/​backspace/​enter); opslaan gebeurt
-//! via de "Opslaan"-knop in de werkbalk (muis). De bewerk-+-opslag-+-herlees-cyclus
-//! is host-onafhankelijk geverifieerd via de `[edit]`-zelftest.
+//! Limitation (honest): the PS/2 driver provides no arrow keys/Ctrl, so the cursor sits
+//! at the insertion point (typewriter style: type/​backspace/​enter); saving happens
+//! via the "Save" button in the toolbar (mouse). The edit-+-save-+-reload cycle
+//! is host-independently verified via the `[edit]` self-test.
 
 use crate::graphics::{Color, FrameBuffer};
 use crate::{serial_println, text};
@@ -35,13 +35,13 @@ static ED: Mutex<Editor> = Mutex::new(Editor {
     status: String::new(),
 });
 
-/// Open `path` (of het standaardbestand) in de editor; bestaat het niet, dan starten
-/// we met een welkomsttekst. Vult de regelbuffer uit de ECHTE bestandsinhoud.
+/// Open `path` (or the default file) in the editor; if it does not exist, we start
+/// with a welcome text. Fills the line buffer from the REAL file content.
 pub fn open(fs: &mut dyn FileSystem, path: &str) {
     let p = if path.is_empty() { DEFAULT_PATH } else { path };
     let content = match fs.read_file(p) {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-        Err(_) => String::from("Welkom in EuroText.\nTyp hier; klik 'Opslaan' om naar EuroFS te schrijven.\n"),
+        Err(_) => String::from("Welcome to EuroText.\nType here; click 'Save' to write to EuroFS.\n"),
     };
     let mut lines: Vec<String> = content.split('\n').map(String::from).collect();
     if lines.is_empty() {
@@ -51,10 +51,10 @@ pub fn open(fs: &mut dyn FileSystem, path: &str) {
     ed.lines = lines;
     ed.path = String::from(p);
     ed.dirty = false;
-    ed.status = alloc::format!("geopend: {p}");
+    ed.status = alloc::format!("opened: {p}");
 }
 
-/// Verwerk één toets aan het invoegpunt (einde van de buffer).
+/// Process one key at the insertion point (end of the buffer).
 pub fn input(ch: char) {
     let mut ed = ED.lock();
     if ed.lines.is_empty() {
@@ -63,7 +63,7 @@ pub fn input(ch: char) {
     match ch {
         '\r' | '\n' => ed.lines.push(String::new()),
         '\u{8}' | '\u{7f}' => {
-            // Backspace: laatste teken weg, of regels samenvoegen.
+            // Backspace: remove last character, or merge lines.
             if let Some(last) = ed.lines.last_mut() {
                 if last.pop().is_none() && ed.lines.len() > 1 {
                     ed.lines.pop();
@@ -83,17 +83,17 @@ pub fn input(ch: char) {
         _ => return,
     }
     ed.dirty = true;
-    ed.status = "niet-opgeslagen wijzigingen".to_string();
+    ed.status = "unsaved changes".to_string();
 }
 
-/// Schrijf de buffer naar EuroFS (echt, duurzaam). Geeft `true` bij succes.
+/// Write the buffer to EuroFS (real, durable). Returns `true` on success.
 pub fn save(fs: &mut dyn FileSystem) -> bool {
     let (path, body) = {
         let ed = ED.lock();
         (ed.path.clone(), ed.lines.join("\n"))
     };
     let path = if path.is_empty() { DEFAULT_PATH.to_string() } else { path };
-    // Zorg dat de map bestaat.
+    // Make sure the directory exists.
     if let Some(slash) = path.rfind('/') {
         if slash > 0 {
             let _ = fs.create_dir(&path[..slash]);
@@ -103,15 +103,15 @@ pub fn save(fs: &mut dyn FileSystem) -> bool {
     let mut ed = ED.lock();
     ed.dirty = !ok;
     ed.status = if ok {
-        alloc::format!("opgeslagen → {path} ({} B)", body.len())
+        alloc::format!("saved → {path} ({} B)", body.len())
     } else {
-        alloc::format!("OPSLAAN MISLUKT → {path}")
+        alloc::format!("SAVE FAILED → {path}")
     };
-    serial_println!("[edit] save {} → {}", path, if ok { "OK" } else { "MISLUKT" });
+    serial_println!("[edit] save {} → {}", path, if ok { "OK" } else { "FAILED" });
     ok
 }
 
-/// Rechthoek van de "Opslaan"-knop in de werkbalk (voor de muis-hittest).
+/// Rectangle of the "Save" button in the toolbar (for the mouse hit test).
 fn save_button(x: usize, y: usize, w: usize) -> (usize, usize, usize, usize) {
     let bw = 96;
     let bx = x + w.saturating_sub(bw + PAD);
@@ -119,7 +119,7 @@ fn save_button(x: usize, y: usize, w: usize) -> (usize, usize, usize, usize) {
     (bx, by, bw, TOOLBAR_H - 12)
 }
 
-/// Werd op de "Opslaan"-knop geklikt?
+/// Was the "Save" button clicked?
 pub fn save_button_at(x: usize, y: usize, w: usize, mx: usize, my: usize) -> bool {
     let (bx, by, bw, bh) = save_button(x, y, w);
     mx >= bx && mx < bx + bw && my >= by && my < by + bh
@@ -134,16 +134,16 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let accent = Color::rgb(0x2B, 0x6C, 0xB0);
     let ink = Color::rgb(0x20, 0x24, 0x2C);
 
-    // Werkbalk.
+    // Toolbar.
     fb.fill_rect(bx, by, bw, TOOLBAR_H, Color::rgb(0xF1, 0xF3, 0xF7));
     let dot = if ed.dirty { "● " } else { "" };
     text::draw_px(fb, bx + PAD, by + 11, &alloc::format!("{dot}{}", ed.path), ink, 15.0);
-    // Opslaan-knop.
+    // Save button.
     let (sx, sy, sw, sh) = save_button(x, y, w);
     fb.fill_rounded_rect(sx, sy, sw, sh, 6, accent);
-    text::draw_px(fb, sx + 16, sy + 5, "Opslaan", Color::rgb(0xFF, 0xFF, 0xFF), 14.0);
+    text::draw_px(fb, sx + 16, sy + 5, "Save", Color::rgb(0xFF, 0xFF, 0xFF), 14.0);
 
-    // Tekstgebied.
+    // Text area.
     let tx = bx + PAD;
     let mut ty = by + TOOLBAR_H + 8;
     let maxrows = bh.saturating_sub(TOOLBAR_H + 8 + 24) / LINE_H;
@@ -152,7 +152,7 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     for (i, line) in ed.lines.iter().enumerate().skip(start) {
         let last = i + 1 == total;
         let shown = if last {
-            alloc::format!("{line}_") // caret aan het invoegpunt
+            alloc::format!("{line}_") // caret at the insertion point
         } else {
             line.clone()
         };
@@ -160,30 +160,30 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         ty += LINE_H;
     }
 
-    // Statusbalk.
+    // Status bar.
     let sb_y = by + bh.saturating_sub(22);
     fb.fill_rect(bx, sb_y, bw, 22, Color::rgb(0xEC, 0xEF, 0xF4));
     text::draw_px(
         fb,
         bx + PAD,
         sb_y + 4,
-        &alloc::format!("EuroText · {} regels · {}", total, ed.status),
+        &alloc::format!("EuroText · {} lines · {}", total, ed.status),
         Color::rgb(0x55, 0x5C, 0x68),
         12.5,
     );
 }
 
-/// **[edit]** — bewijs de bewerk-→-opslaan-→-herlees-cyclus op het ECHTE EuroFS,
-/// onafhankelijk van toetsenbord/muis: typ tekst in, sla op, herlees, vergelijk.
+/// **[edit]** — prove the edit-→-save-→-reload cycle on the REAL EuroFS,
+/// independent of keyboard/mouse: type text in, save, reload, compare.
 pub fn selftest(fs: &mut dyn FileSystem) {
     let path = "/tmp/edit-selftest.txt";
-    open(fs, path); // verse buffer (bestand bestaat niet → welkomsttekst)
-    // Vervang de buffer door een gecontroleerde inhoud via input().
+    open(fs, path); // fresh buffer (file does not exist → welcome text)
+    // Replace the buffer with controlled content via input().
     {
         let mut ed = ED.lock();
         ed.lines = vec![String::new()];
     }
-    for ch in "Hallo".chars() {
+    for ch in "Hello".chars() {
         input(ch);
     }
     input('\r');
@@ -192,16 +192,16 @@ pub fn selftest(fs: &mut dyn FileSystem) {
     }
     input('\u{8}'); // backspace: "42" → "4"
     let saved = save(fs);
-    // Herlees uit een verse open() — bewijst dat het écht op schijf staat.
+    // Reload from a fresh open() — proves it is really on disk.
     open(fs, path);
     let reread = ED.lock().lines.join("\n");
-    let expected = "Hallo\nEuroOS 4";
+    let expected = "Hello\nEuroOS 4";
     let ok = saved && reread == expected;
     let _ = fs.remove_file(path);
     serial_println!(
-        "[edit] EuroText bewerken+opslaan+herlezen: schrijf-OK={saved}, herlezen={:?} (verwacht {:?}) → {}",
+        "[edit] EuroText edit+save+reread: write-OK={saved}, reread={:?} (expected {:?}) → {}",
         reread,
         expected,
-        if ok { "OK ✓" } else { "MISLUKT ✗" }
+        if ok { "OK ✓" } else { "FAILED ✗" }
     );
 }

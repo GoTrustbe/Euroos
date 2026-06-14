@@ -1,11 +1,11 @@
-//! EuroFW — een **packet-filter / firewall** (plan N3).
+//! EuroFW — a **packet-filter / firewall** (plan N3).
 //!
-//! Netwerk-soevereiniteit vraagt om controle over wat er in- en uitgaat. EuroFW is
-//! een eenvoudige, snelle **5-tuple-regelmotor**: per pakket (richting, protocol,
-//! bron/​bestemming-IP+CIDR, bron/​bestemming-poort) wordt de eerste passende regel
-//! toegepast (`ACCEPT`/`DROP`); matcht niets, dan geldt het **standaardbeleid**.
-//! Pure `no_std`-logica → host-getest, los van de NIC-driver. De kernel roept
-//! [`Firewall::verdict`] aan in het RX/TX-pad.
+//! Network sovereignty requires control over what comes in and goes out. EuroFW is
+//! a simple, fast **5-tuple rule engine**: per packet (direction, protocol,
+//! source/​destination IP+CIDR, source/​destination port) the first matching rule
+//! is applied (`ACCEPT`/`DROP`); if nothing matches, the **default policy** applies.
+//! Pure `no_std` logic → host-tested, independent of the NIC driver. The kernel calls
+//! [`Firewall::verdict`] in the RX/TX path.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -29,7 +29,7 @@ pub enum Proto {
 }
 
 impl Proto {
-    /// IP-protocolnummer → `Proto` (1=ICMP, 6=TCP, 17=UDP).
+    /// IP protocol number → `Proto` (1=ICMP, 6=TCP, 17=UDP).
     pub fn from_ip(n: u8) -> Proto {
         match n {
             1 => Proto::Icmp,
@@ -47,10 +47,10 @@ pub enum Direction {
     Both,
 }
 
-/// Een 5-tuple-beschrijving van een pakket (IPv4 als u32, host-volgorde).
+/// A 5-tuple description of a packet (IPv4 as u32, host order).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Packet {
-    pub direction: Direction, // In of Out (nooit Both)
+    pub direction: Direction, // In or Out (never Both)
     pub proto: Proto,
     pub src: u32,
     pub dst: u32,
@@ -58,13 +58,13 @@ pub struct Packet {
     pub dst_port: u16,
 }
 
-/// Eén firewall-regel. `None`-velden = wildcard (matcht alles).
+/// A single firewall rule. `None` fields = wildcard (matches everything).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rule {
     pub action: Action,
     pub direction: Direction,
     pub proto: Proto,
-    /// (netwerk-IP, prefix-lengte) — CIDR. None = elk IP.
+    /// (network IP, prefix length) — CIDR. None = any IP.
     pub src: Option<(u32, u8)>,
     pub dst: Option<(u32, u8)>,
     pub src_port: Option<u16>,
@@ -72,8 +72,8 @@ pub struct Rule {
 }
 
 impl Rule {
-    /// Een lege "elke-richting, elk-protocol"-regel met de gegeven actie — bouw 'm
-    /// verder uit met de `.*`-helpers.
+    /// An empty "any-direction, any-protocol" rule with the given action — build it
+    /// up further with the `.*` helpers.
     pub fn new(action: Action) -> Rule {
         Rule {
             action,
@@ -114,7 +114,7 @@ impl Rule {
         self.direction == Direction::Both || self.direction == d
     }
 
-    /// Matcht deze regel het pakket?
+    /// Does this rule match the packet?
     pub fn matches(&self, p: &Packet) -> bool {
         self.dir_matches(p.direction)
             && (self.proto == Proto::Any || self.proto == p.proto)
@@ -125,7 +125,7 @@ impl Rule {
     }
 }
 
-/// Valt `ip` binnen het CIDR-blok `net/prefix`?
+/// Does `ip` fall within the CIDR block `net/prefix`?
 pub fn cidr_match(net: u32, prefix: u8, ip: u32) -> bool {
     if prefix == 0 {
         return true;
@@ -134,7 +134,7 @@ pub fn cidr_match(net: u32, prefix: u8, ip: u32) -> bool {
     (ip & mask) == (net & mask)
 }
 
-/// De firewall: een geordende regellijst + een standaardbeleid.
+/// The firewall: an ordered rule list + a default policy.
 pub struct Firewall {
     rules: Vec<Rule>,
     default: Action,
@@ -160,8 +160,8 @@ impl Firewall {
         self.rules.clear();
     }
 
-    /// Bepaal de actie voor een pakket (eerste-match-wint; anders standaardbeleid).
-    /// Werkt de teller bij — handig voor `firewall stats`.
+    /// Determine the action for a packet (first-match-wins; otherwise default policy).
+    /// Updates the counter — handy for `firewall stats`.
     pub fn verdict(&mut self, p: &Packet) -> Action {
         let a = self.rules.iter().find(|r| r.matches(p)).map(|r| r.action).unwrap_or(self.default);
         match a {
@@ -171,7 +171,7 @@ impl Firewall {
         a
     }
 
-    /// Zoals `verdict` maar zonder de tellers te muteren (voor `simulate`/tests).
+    /// Like `verdict` but without mutating the counters (for `simulate`/tests).
     pub fn peek(&self, p: &Packet) -> Action {
         self.rules.iter().find(|r| r.matches(p)).map(|r| r.action).unwrap_or(self.default)
     }
@@ -191,36 +191,36 @@ mod tests {
         assert!(!cidr_match(ip(10, 0, 0, 0), 8, ip(11, 1, 2, 3)));
         assert!(cidr_match(ip(192, 168, 1, 0), 24, ip(192, 168, 1, 50)));
         assert!(!cidr_match(ip(192, 168, 1, 0), 24, ip(192, 168, 2, 50)));
-        assert!(cidr_match(0, 0, ip(8, 8, 8, 8))); // /0 = elk
+        assert!(cidr_match(0, 0, ip(8, 8, 8, 8))); // /0 = any
     }
 
     #[test]
     fn default_deny_with_allowlist() {
         let mut fw = Firewall::new(Action::Drop); // default-deny
-        // Sta uitgaande HTTPS toe + ingaande SSH vanaf het LAN.
+        // Allow outbound HTTPS + inbound SSH from the LAN.
         fw.push(Rule::new(Action::Accept).dir(Direction::Out).proto(Proto::Tcp).dst_port(443));
         fw.push(Rule::new(Action::Accept).dir(Direction::In).proto(Proto::Tcp).dst_port(22).src_cidr(ip(192, 168, 0, 0), 16));
 
-        // Uitgaande HTTPS → toegestaan.
+        // Outbound HTTPS → allowed.
         assert_eq!(fw.peek(&Packet { direction: Direction::Out, proto: Proto::Tcp, src: ip(192,168,1,5), dst: ip(1,1,1,1), src_port: 50000, dst_port: 443 }), Action::Accept);
-        // Uitgaande FTP → geweigerd (default-deny).
+        // Outbound FTP → denied (default-deny).
         assert_eq!(fw.peek(&Packet { direction: Direction::Out, proto: Proto::Tcp, src: ip(192,168,1,5), dst: ip(1,1,1,1), src_port: 50000, dst_port: 21 }), Action::Drop);
-        // Ingaande SSH vanaf het LAN → toegestaan.
+        // Inbound SSH from the LAN → allowed.
         assert_eq!(fw.peek(&Packet { direction: Direction::In, proto: Proto::Tcp, src: ip(192,168,1,9), dst: ip(192,168,1,5), src_port: 40000, dst_port: 22 }), Action::Accept);
-        // Ingaande SSH van BUITEN het LAN → geweigerd.
+        // Inbound SSH from OUTSIDE the LAN → denied.
         assert_eq!(fw.peek(&Packet { direction: Direction::In, proto: Proto::Tcp, src: ip(8,8,8,8), dst: ip(192,168,1,5), src_port: 40000, dst_port: 22 }), Action::Drop);
     }
 
     #[test]
     fn first_match_wins_and_counters() {
         let mut fw = Firewall::new(Action::Accept);
-        fw.push(Rule::new(Action::Drop).proto(Proto::Icmp)); // blokkeer alle ping
-        fw.push(Rule::new(Action::Accept).proto(Proto::Icmp)); // (nooit bereikt)
+        fw.push(Rule::new(Action::Drop).proto(Proto::Icmp)); // block all ping
+        fw.push(Rule::new(Action::Accept).proto(Proto::Icmp)); // (never reached)
         let ping = Packet { direction: Direction::In, proto: Proto::Icmp, src: ip(8,8,8,8), dst: ip(10,0,0,1), src_port: 0, dst_port: 0 };
         assert_eq!(fw.verdict(&ping), Action::Drop);
         assert_eq!(fw.verdict(&ping), Action::Drop);
         assert_eq!(fw.dropped, 2);
-        // Een TCP-pakket valt door naar default-accept.
+        // A TCP packet falls through to default-accept.
         let tcp = Packet { direction: Direction::Out, proto: Proto::Tcp, src: ip(10,0,0,1), dst: ip(1,1,1,1), src_port: 1234, dst_port: 80 };
         assert_eq!(fw.verdict(&tcp), Action::Accept);
         assert_eq!(fw.accepted, 1);

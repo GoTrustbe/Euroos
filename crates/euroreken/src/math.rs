@@ -1,8 +1,8 @@
-//! Soevereine `no_std`-mathkern voor EuroReken — geen `libm`, geen `std`.
+//! Sovereign `no_std` math core for EuroReken — no `libm`, no `std`.
 //!
-//! Transcendente functies via klassieke numerieke methoden (argument-reductie +
-//! reeksen), nauwkeurig genoeg voor een rekenmachine (≈1e-10 relatief op het
-//! gebruikelijke bereik). Bewust leesbaar i.p.v. micro-geoptimaliseerd.
+//! Transcendental functions via classic numerical methods (argument reduction +
+//! series), accurate enough for a calculator (≈1e-10 relative over the
+//! usual range). Deliberately readable rather than micro-optimized.
 
 const PI: f64 = core::f64::consts::PI;
 const LN2: f64 = core::f64::consts::LN_2;
@@ -16,7 +16,7 @@ pub fn fabs(x: f64) -> f64 {
     }
 }
 
-/// Vierkantswortel via Newton-Raphson.
+/// Square root via Newton-Raphson.
 pub fn sqrt(x: f64) -> f64 {
     if x.is_nan() || x < 0.0 {
         return f64::NAN;
@@ -24,7 +24,7 @@ pub fn sqrt(x: f64) -> f64 {
     if x == 0.0 {
         return 0.0;
     }
-    // Startschatting via bit-exponent-halvering benadert; hier volstaat x zelf.
+    // A starting estimate via bit-exponent halving would approximate it; here x itself suffices.
     let mut g = if x > 1.0 { x } else { 1.0 };
     let mut i = 0;
     while i < 60 {
@@ -38,7 +38,7 @@ pub fn sqrt(x: f64) -> f64 {
     g
 }
 
-/// e^x via argument-reductie x = k·ln2 + r en een Taylor-reeks voor e^r.
+/// e^x via argument reduction x = k·ln2 + r and a Taylor series for e^r.
 pub fn exp(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
@@ -51,7 +51,7 @@ pub fn exp(x: f64) -> f64 {
     }
     let k = round(x / LN2);
     let r = x - k * LN2;
-    // Taylor van e^r, r in [-ln2/2, ln2/2] → snelle convergentie.
+    // Taylor series of e^r, r in [-ln2/2, ln2/2] → fast convergence.
     let mut term = 1.0;
     let mut sum = 1.0;
     let mut n = 1.0;
@@ -63,7 +63,7 @@ pub fn exp(x: f64) -> f64 {
     sum * pow2i(k as i64)
 }
 
-/// 2^n voor geheel n, via herhaald vermenigvuldigen (exact binnen f64-bereik).
+/// 2^n for integer n, via repeated multiplication (exact within the f64 range).
 fn pow2i(mut n: i64) -> f64 {
     let mut base = 2.0;
     let mut result = 1.0;
@@ -85,7 +85,7 @@ fn pow2i(mut n: i64) -> f64 {
     }
 }
 
-/// natuurlijke logaritme via ln(x)=ln(m)+k·ln2 met m∈[1,2) en de atanh-reeks.
+/// natural logarithm via ln(x)=ln(m)+k·ln2 with m∈[1,2) and the atanh series.
 pub fn ln(x: f64) -> f64 {
     if x.is_nan() || x < 0.0 {
         return f64::NAN;
@@ -93,7 +93,7 @@ pub fn ln(x: f64) -> f64 {
     if x == 0.0 {
         return f64::NEG_INFINITY;
     }
-    // Normaliseer naar m∈[1,2): tel machten van 2.
+    // Normalize to m∈[1,2): count powers of 2.
     let mut m = x;
     let mut k = 0i64;
     while m >= 2.0 {
@@ -118,12 +118,12 @@ pub fn ln(x: f64) -> f64 {
     2.0 * sum + (k as f64) * LN2
 }
 
-/// logaritme met grondtal 10.
+/// base-10 logarithm.
 pub fn log10(x: f64) -> f64 {
     ln(x) / core::f64::consts::LN_10
 }
 
-/// x^y. Geheeltallige exponenten exact; anders e^(y·ln x) (x>0).
+/// x^y. Integer exponents exact; otherwise e^(y·ln x) (x>0).
 pub fn pow(x: f64, y: f64) -> f64 {
     if y == 0.0 {
         return 1.0;
@@ -131,7 +131,7 @@ pub fn pow(x: f64, y: f64) -> f64 {
     if x == 0.0 {
         return if y > 0.0 { 0.0 } else { f64::INFINITY };
     }
-    // Geheeltallige y: snelle, tekenbestendige machtsverheffing.
+    // Integer y: fast, sign-stable exponentiation.
     if y == round(y) && fabs(y) < 1024.0 {
         let mut n = y as i64;
         let neg = n < 0;
@@ -150,12 +150,12 @@ pub fn pow(x: f64, y: f64) -> f64 {
         return if neg { 1.0 / result } else { result };
     }
     if x < 0.0 {
-        return f64::NAN; // niet-gehele macht van negatief getal
+        return f64::NAN; // non-integer power of a negative number
     }
     exp(y * ln(x))
 }
 
-/// Afronden naar dichtstbijzijnde geheel (half weg van nul).
+/// Round to nearest integer (half away from zero).
 pub fn round(x: f64) -> f64 {
     if x >= 0.0 {
         (x + 0.5) as i64 as f64
@@ -164,7 +164,7 @@ pub fn round(x: f64) -> f64 {
     }
 }
 
-/// Naar beneden afronden.
+/// Round down.
 pub fn floor(x: f64) -> f64 {
     let t = x as i64 as f64;
     if x < 0.0 && t != x {
@@ -175,13 +175,13 @@ pub fn floor(x: f64) -> f64 {
 }
 
 fn reduce_two_pi(x: f64) -> f64 {
-    // Breng x naar [-pi, pi].
+    // Bring x into [-pi, pi].
     let two_pi = 2.0 * PI;
     let k = round(x / two_pi);
     x - k * two_pi
 }
 
-/// sin(x) via Taylor na reductie naar [-pi, pi].
+/// sin(x) via Taylor series after reduction to [-pi, pi].
 pub fn sin(x: f64) -> f64 {
     let r = reduce_two_pi(x);
     let r2 = r * r;
@@ -196,7 +196,7 @@ pub fn sin(x: f64) -> f64 {
     sum
 }
 
-/// cos(x) via Taylor na reductie naar [-pi, pi].
+/// cos(x) via Taylor series after reduction to [-pi, pi].
 pub fn cos(x: f64) -> f64 {
     let r = reduce_two_pi(x);
     let r2 = r * r;
@@ -216,7 +216,7 @@ pub fn tan(x: f64) -> f64 {
     sin(x) / cos(x)
 }
 
-/// n! als f64 (exact tot 170!).
+/// n! as f64 (exact up to 170!).
 pub fn factorial(n: u64) -> f64 {
     let mut r = 1.0;
     let mut i = 2u64;
@@ -265,7 +265,7 @@ mod tests {
         assert!(close(sin(PI / 2.0), 1.0));
         assert!(close(cos(PI), -1.0));
         assert!(close(sin(PI), 0.0));
-        // grote argumenten reduceren correct
+        // large arguments reduce correctly
         assert!(close(sin(10.0 * PI + PI / 6.0), 0.5));
     }
 

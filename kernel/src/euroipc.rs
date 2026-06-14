@@ -1,10 +1,10 @@
-//! EuroIPC — een eenvoudige message-bus tussen processen (Horizon A).
+//! EuroIPC — a simple message bus between processes (Horizon A).
 //!
-//! Processen claimen een poort (een geheeltallige endpoint), sturen berichten
-//! naar een poort, en ontvangen van hun eigen poort. Elk bericht draagt de
-//! **app-identiteit** van de afzender (pid) en wordt **geaudit**. De
-//! permissie-check is nu een open hook (alles toegestaan) — de koppeling met de
-//! EuroGuard-policy is een volgende stap. no_std + alloc, kernel-intern.
+//! Processes claim a port (an integer endpoint), send messages
+//! to a port, and receive from their own port. Each message carries the
+//! **app identity** of the sender (pid) and is **audited**. The
+//! permission check is currently an open hook (everything allowed) — the wiring with the
+//! EuroGuard policy is a next step. no_std + alloc, kernel-internal.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -14,7 +14,7 @@ use spin::Mutex;
 struct Port {
     port: u32,
     owner_pid: u64,
-    queue: Vec<(u64, Vec<u8>)>, // (afzender-pid, data)
+    queue: Vec<(u64, Vec<u8>)>, // (sender-pid, data)
 }
 
 static PORTS: Mutex<Vec<Port>> = Mutex::new(Vec::new());
@@ -29,7 +29,7 @@ fn audit(line: String) {
     }
 }
 
-/// Claim een poort voor `pid`. 1 = ok, 0 = al in gebruik.
+/// Claim a port for `pid`. 1 = ok, 0 = already in use.
 pub fn register(pid: u64, port: u32) -> i64 {
     let mut ps = PORTS.lock();
     if ps.iter().any(|p| p.port == port) {
@@ -37,17 +37,17 @@ pub fn register(pid: u64, port: u32) -> i64 {
     }
     ps.push(Port { port, owner_pid: pid, queue: Vec::new() });
     drop(ps);
-    audit(alloc::format!("pid {pid} claimde port {port}"));
+    audit(alloc::format!("pid {pid} claimed port {port}"));
     1
 }
 
-/// Stuur `data` naar `port`. Geeft het aantal bytes terug, of -ESRCH (-3) als de
-/// poort niet bestaat. Tagt het bericht met de afzender-pid + audit.
+/// Send `data` to `port`. Returns the number of bytes, or -ESRCH (-3) if the
+/// port does not exist. Tags the message with the sender-pid + audit.
 pub fn send(sender_pid: u64, port: u32, data: &[u8]) -> i64 {
     let mut ps = PORTS.lock();
     let owner = match ps.iter_mut().find(|p| p.port == port) {
         Some(p) => {
-            // permissie-check-hook (nu: toegestaan) — later EuroGuard-policy.
+            // permission-check hook (now: allowed) — later EuroGuard policy.
             p.queue.push((sender_pid, data.to_vec()));
             p.owner_pid
         }
@@ -58,9 +58,9 @@ pub fn send(sender_pid: u64, port: u32, data: &[u8]) -> i64 {
     data.len() as i64
 }
 
-/// Ontvang één bericht van de poort van `pid` naar `buf` (max `max` bytes).
-/// Geeft het aantal bytes terug, -EAGAIN (-11) als er niets is, of -ESRCH (-3)
-/// als `pid` geen poort heeft.
+/// Receive one message from the port of `pid` into `buf` (max `max` bytes).
+/// Returns the number of bytes, -EAGAIN (-11) if there is nothing, or -ESRCH (-3)
+/// if `pid` has no port.
 pub fn recv(pid: u64, buf: u64, max: usize) -> i64 {
     let mut ps = PORTS.lock();
     match ps.iter_mut().find(|p| p.owner_pid == pid) {
@@ -70,7 +70,7 @@ pub fn recv(pid: u64, buf: u64, max: usize) -> i64 {
             }
             let (_, data) = p.queue.remove(0);
             let n = data.len().min(max);
-            // SAFETY: buf ligt in de USER-arena van het ontvangende proces.
+            // SAFETY: buf lies in the USER arena of the receiving process.
             unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), buf as *mut u8, n) };
             n as i64
         }
@@ -78,7 +78,7 @@ pub fn recv(pid: u64, buf: u64, max: usize) -> i64 {
     }
 }
 
-/// De recente IPC-audit-regels (voor het systeemvenster).
+/// The recent IPC audit lines (for the system window).
 pub fn audit_lines() -> Vec<String> {
     AUDIT.lock().clone()
 }

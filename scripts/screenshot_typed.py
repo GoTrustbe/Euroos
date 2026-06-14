@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Boot de image, type een reeks commando's via QMP send-key, en screenshot.
-Bewijst de interactieve shell headless (geen GUI, geen KVM)."""
+"""Boot the image, type a sequence of commands via QMP send-key, and screenshot.
+Proves the interactive shell headless (no GUI, no KVM)."""
 import json, os, socket, subprocess, sys, time
 
 IMG = sys.argv[1] if len(sys.argv) > 1 else "eurokernel.img"
@@ -54,7 +54,7 @@ def cmd(obj):
 f.readline()
 cmd({"execute": "qmp_capabilities"})
 
-print(f"[typed] boot, wacht {WAIT}s...", flush=True)
+print(f"[typed] boot, waiting {WAIT}s...", flush=True)
 time.sleep(WAIT)
 
 def send_key(qcodes):
@@ -63,7 +63,7 @@ def send_key(qcodes):
         keys.append({"type": "qcode", "data": q})
     cmd({"execute": "send-key", "arguments": {"keys": keys}})
 
-print(f"[typed] typt: {SCRIPT!r}", flush=True)
+print(f"[typed] typing: {SCRIPT!r}", flush=True)
 for ch in SCRIPT:
     q = QMAP.get(ch)
     if not q:

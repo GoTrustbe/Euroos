@@ -1,6 +1,6 @@
-//! Checksum-commando's (CU-6): de SHA-2-familie via de host-geteste `sha2`-crate.
-//! GNU-uitvoer-formaat: `<hex>  <naam>` (twee spaties). `name` is doorgaans `-`
-//! (stdin) of de bestandsnaam die de shell meegeeft.
+//! Checksum commands (CU-6): the SHA-2 family via the host-tested `sha2` crate.
+//! GNU output format: `<hex>  <name>` (two spaces). `name` is usually `-`
+//! (stdin) or the file name passed by the shell.
 
 use alloc::string::String;
 use alloc::vec::Vec;

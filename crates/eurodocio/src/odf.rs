@@ -1,13 +1,13 @@
-//! OpenDocument Text (`.odt` `content.xml`) → het EuroDoc-UDM. Leest `text:h`
-//! (koppen), `text:p` (paragrafen) en `text:span` (runs, vetdetectie via stijlnaam).
-//! Werkt op de uitgepakte `content.xml`; de ZIP-container is een aparte laag.
+//! OpenDocument Text (`.odt` `content.xml`) → the EuroDoc UDM. Reads `text:h`
+//! (headings), `text:p` (paragraphs) and `text:span` (runs, bold detection via style name).
+//! Works on the unpacked `content.xml`; the ZIP container is a separate layer.
 
 use crate::xml::{parse, Event};
 use alloc::string::String;
 use alloc::vec::Vec;
 use eurodoc::model::{Block, Paragraph, Run, RunProperties};
 
-/// Parse een ODF `content.xml`-tekstbody naar blokken.
+/// Parse an ODF `content.xml` text body into blocks.
 pub fn parse_body(xml: &str) -> Vec<Block> {
     let events = parse(xml);
     let mut blocks = Vec::new();
@@ -21,14 +21,14 @@ pub fn parse_body(xml: &str) -> Vec<Block> {
                 "text:p" => para = Some(Paragraph::default()),
                 "text:h" => {
                     let mut p = Paragraph::default();
-                    // Een kop krijgt een Heading-stijl (niveau uit text:outline-level).
+                    // A heading gets a Heading style (level from text:outline-level).
                     let level = attr(attrs, "text:outline-level").and_then(|v| v.parse::<u8>().ok()).unwrap_or(1);
                     p.props.style_id = Some(alloc::format!("Heading{level}"));
                     para = Some(p);
                 }
                 "text:span" => {
                     depth_in_span += 1;
-                    // Vetdetectie op de stijlnaam (best-effort; volledige stijltabel = ES-IO-uitbreiding).
+                    // Bold detection on the style name (best-effort; full style table = ES-IO extension).
                     let style = attr(attrs, "text:style-name").unwrap_or_default().to_ascii_lowercase();
                     span_bold = style.contains("bold") || style.contains("vet") || style.contains("strong");
                 }
@@ -87,7 +87,7 @@ mod tests {
         }
         if let Block::Paragraph(p) = &blocks[1] {
             assert_eq!(p.plain_text(), "Gewoon vet einde");
-            // De middelste run (binnen text:span "Bold...") is vet.
+            // The middle run (inside text:span "Bold...") is bold.
             let bold_run = p.runs.iter().find(|r| r.text == "vet").unwrap();
             assert!(bold_run.props.bold);
             let plain_run = p.runs.iter().find(|r| r.text.contains("Gewoon")).unwrap();

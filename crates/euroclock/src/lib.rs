@@ -1,11 +1,11 @@
-//! EuroClock — de klok-app van EuroOS (Sprint AC-2).
+//! EuroClock — the EuroOS clock app (Sprint AC-2).
 //!
-//! Pure tijdslogica voor de klok-app: **wereldtijd** per tijdzone met 12/24-uurs
-//! notatie (EuroLocale bepaalt de voorkeur), een **wekker**, een **timer** en een
-//! **stopwatch**. Alles werkt op een meegeleverde "nu"-waarde (unix-seconden of
-//! kernel-ticks), zodat de logica deterministisch en host-testbaar is.
+//! Pure time logic for the clock app: **world time** per time zone with 12/24-hour
+//! notation (EuroLocale determines the preference), an **alarm**, a **timer** and a
+//! **stopwatch**. Everything operates on a supplied "now" value (unix seconds or
+//! kernel ticks), so the logic is deterministic and host-testable.
 //!
-//! Pure `no_std`-logica, host-getest.
+//! Pure `no_std` logic, host-tested.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -17,15 +17,15 @@ use alloc::vec::Vec;
 
 const DAY: u64 = 86_400;
 
-/// Tijd-van-de-dag (uur, minuut, seconde) op een tijdzone-offset (in minuten t.o.v. UTC).
+/// Time-of-day (hour, minute, second) at a time-zone offset (in minutes relative to UTC).
 pub fn time_of_day(epoch_secs: u64, offset_min: i32) -> (u32, u32, u32) {
-    // Pas de offset toe (kan negatief zijn) en neem modulo één dag.
+    // Apply the offset (may be negative) and take modulo one day.
     let shifted = epoch_secs as i64 + offset_min as i64 * 60;
     let day_secs = shifted.rem_euclid(DAY as i64) as u32;
     (day_secs / 3600, (day_secs % 3600) / 60, day_secs % 60)
 }
 
-/// Formatteer een tijd-van-de-dag in 24- of 12-uurs notatie (`hour24=false` → AM/PM).
+/// Format a time-of-day in 24- or 12-hour notation (`hour24=false` → AM/PM).
 pub fn format_time(h: u32, m: u32, hour24: bool) -> String {
     if hour24 {
         alloc::format!("{:02}:{:02}", h, m)
@@ -43,7 +43,7 @@ pub fn format_time(h: u32, m: u32, hour24: bool) -> String {
     }
 }
 
-/// Formatteer een duur (seconden) als `MM:SS` of `H:MM:SS`.
+/// Format a duration (seconds) as `MM:SS` or `H:MM:SS`.
 pub fn format_duration(secs: u64) -> String {
     let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
     if h > 0 {
@@ -53,7 +53,7 @@ pub fn format_duration(secs: u64) -> String {
     }
 }
 
-/// Eén wereldklok-zone.
+/// A single world-clock zone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorldZone {
     pub label: String,
@@ -64,38 +64,38 @@ impl WorldZone {
     pub fn new(label: &str, offset_min: i32) -> Self {
         WorldZone { label: String::from(label), offset_min }
     }
-    /// De huidige tijd in deze zone, geformatteerd.
+    /// The current time in this zone, formatted.
     pub fn formatted(&self, epoch_secs: u64, hour24: bool) -> String {
         let (h, m, _) = time_of_day(epoch_secs, self.offset_min);
         format_time(h, m, hour24)
     }
 }
 
-/// Een wereldklok = een lijst zones.
+/// A world clock = a list of zones.
 #[derive(Debug, Clone, Default)]
 pub struct WorldClock {
     pub zones: Vec<WorldZone>,
 }
 
 impl WorldClock {
-    /// Een standaard EU-georiënteerde set zones.
+    /// A default EU-oriented set of zones.
     pub fn eu_default() -> Self {
         WorldClock {
             zones: alloc::vec![
-                WorldZone::new("Brussel", 60),    // CET (UTC+1)
-                WorldZone::new("Londen", 0),      // GMT
-                WorldZone::new("Athene", 120),    // EET (UTC+2)
+                WorldZone::new("Brussels", 60),   // CET (UTC+1)
+                WorldZone::new("London", 0),      // GMT
+                WorldZone::new("Athens", 120),    // EET (UTC+2)
                 WorldZone::new("New York", -300), // EST (UTC-5)
             ],
         }
     }
 }
 
-/// Een aftellende timer.
+/// A countdown timer.
 #[derive(Debug, Clone, Copy)]
 pub struct Timer {
     duration: u64,
-    /// Resterende tijd toen voor het laatst gepauzeerd; `started`=Some als lopend.
+    /// Time remaining when last paused; `started`=Some while running.
     remaining_at_pause: u64,
     started: Option<u64>,
 }
@@ -117,7 +117,7 @@ impl Timer {
         self.remaining_at_pause = self.duration;
         self.started = None;
     }
-    /// Resterende seconden (0 als afgelopen).
+    /// Remaining seconds (0 when finished).
     pub fn remaining(&self, now: u64) -> u64 {
         match self.started {
             Some(t0) => self.remaining_at_pause.saturating_sub(now.saturating_sub(t0)),
@@ -129,7 +129,7 @@ impl Timer {
     }
 }
 
-/// Een stopwatch met ronde-tijden (laps).
+/// A stopwatch with lap times.
 #[derive(Debug, Clone, Default)]
 pub struct Stopwatch {
     accumulated: u64,
@@ -155,20 +155,20 @@ impl Stopwatch {
         self.started = None;
         self.laps.clear();
     }
-    /// Verstreken tijd (seconden).
+    /// Elapsed time (seconds).
     pub fn elapsed(&self, now: u64) -> u64 {
         match self.started {
             Some(t0) => self.accumulated + now.saturating_sub(t0),
             None => self.accumulated,
         }
     }
-    /// Leg een ronde-tijd vast.
+    /// Record a lap time.
     pub fn lap(&mut self, now: u64) {
         self.laps.push(self.elapsed(now));
     }
 }
 
-/// Een wekker op een tijd-van-de-dag.
+/// An alarm at a time-of-day.
 #[derive(Debug, Clone)]
 pub struct Alarm {
     pub hour: u32,
@@ -181,22 +181,22 @@ impl Alarm {
     pub fn new(hour: u32, minute: u32, label: &str) -> Self {
         Alarm { hour: hour % 24, minute: minute % 60, enabled: true, label: String::from(label) }
     }
-    /// Vuurt de wekker tussen `prev` en `now` (epoch-seconden, op offset)? Detecteert
-    /// het passeren van het wekkertijdstip ook over middernacht heen.
+    /// Does the alarm fire between `prev` and `now` (epoch seconds, at offset)? Detects
+    /// the alarm time being passed even across midnight.
     pub fn fires_between(&self, prev: u64, now: u64, offset_min: i32) -> bool {
         if !self.enabled || now <= prev {
             return false;
         }
         let target = (self.hour * 3600 + self.minute * 60) as i64;
-        // Loop seconde-grof is te duur; check of het doel-tijdstip in [prev,now) valt
-        // door beide naar tod te projecteren en het interval te toetsen (max 1 dag).
+        // A per-second loop is too expensive; check whether the target time falls in [prev,now)
+        // by projecting both to tod and testing the interval (max 1 day).
         let span = now - prev;
         if span >= DAY {
-            return true; // meer dan een dag → zeker gepasseerd
+            return true; // more than a day → certainly passed
         }
         let prev_tod = ((prev as i64 + offset_min as i64 * 60).rem_euclid(DAY as i64)) as i64;
-        let now_tod = prev_tod + span as i64; // kan > DAY zijn (wikkelt om middernacht)
-        // Doel in [prev_tod, now_tod) of, bij omwikkeling, in het volgende etmaal.
+        let now_tod = prev_tod + span as i64; // may be > DAY (wraps around midnight)
+        // Target in [prev_tod, now_tod) or, on wrap-around, in the next day.
         (prev_tod..now_tod).contains(&target) || (prev_tod..now_tod).contains(&(target + DAY as i64))
     }
 }
@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(time_of_day(43_200, 0), (12, 0, 0));
         assert_eq!(time_of_day(43_200, 60), (13, 0, 0)); // CET
         assert_eq!(time_of_day(43_200, -300), (7, 0, 0)); // New York
-        // Net na middernacht UTC, met -300 → vorige dag 19:00.
+        // Just after midnight UTC, with -300 → previous day 19:00.
         assert_eq!(time_of_day(0, -300), (19, 0, 0));
     }
 
@@ -229,7 +229,7 @@ mod tests {
     fn world_clock_zones() {
         let wc = WorldClock::eu_default();
         assert_eq!(wc.zones.len(), 4);
-        // 10:00 UTC → Brussel 11:00, New York 05:00.
+        // 10:00 UTC → Brussels 11:00, New York 05:00.
         assert_eq!(wc.zones[0].formatted(36_000, true), "11:00");
         assert_eq!(wc.zones[3].formatted(36_000, true), "05:00");
     }
@@ -241,11 +241,11 @@ mod tests {
         t.start(100);
         assert_eq!(t.remaining(110), 50);
         t.pause(110);
-        assert_eq!(t.remaining(200), 50); // gepauzeerd → bevroren
+        assert_eq!(t.remaining(200), 50); // paused → frozen
         t.start(200);
         assert_eq!(t.remaining(230), 20);
         assert!(t.is_done(260));
-        assert_eq!(t.remaining(300), 0); // klemt op 0
+        assert_eq!(t.remaining(300), 0); // clamps at 0
     }
 
     #[test]
@@ -256,19 +256,19 @@ mod tests {
         sw.lap(25);
         assert_eq!(sw.laps, alloc::vec![10, 25]);
         sw.stop(30);
-        assert_eq!(sw.elapsed(999), 30); // gestopt → bevroren
+        assert_eq!(sw.elapsed(999), 30); // stopped → frozen
         sw.start(40);
         assert_eq!(sw.elapsed(50), 40); // 30 + 10
     }
 
     #[test]
     fn alarm_fires_when_crossed() {
-        let a = Alarm::new(7, 0, "Opstaan"); // 07:00 = 25200s tod
-        // Interval 06:59:50 → 07:00:10 UTC (offset 0) bevat 07:00.
+        let a = Alarm::new(7, 0, "Wake up"); // 07:00 = 25200s tod
+        // Interval 06:59:50 → 07:00:10 UTC (offset 0) contains 07:00.
         assert!(a.fires_between(25_190, 25_210, 0));
-        // Interval dat 07:00 niet bevat.
+        // Interval that does not contain 07:00.
         assert!(!a.fires_between(25_210, 25_260, 0));
-        // Uitgeschakeld vuurt nooit.
+        // Disabled never fires.
         let mut off = a.clone();
         off.enabled = false;
         assert!(!off.fires_between(25_190, 25_210, 0));
@@ -276,8 +276,8 @@ mod tests {
 
     #[test]
     fn alarm_crosses_midnight() {
-        let a = Alarm::new(0, 0, "Middernacht"); // 00:00
-        // 23:59:50 → 00:00:10 (epoch rond een dagovergang).
+        let a = Alarm::new(0, 0, "Midnight"); // 00:00
+        // 23:59:50 → 00:00:10 (epoch around a day boundary).
         let prev = DAY - 10;
         let now = DAY + 10;
         assert!(a.fires_between(prev, now, 0));
