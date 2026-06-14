@@ -39,6 +39,11 @@ euroagent = { path = "../crates/euroagent" }
 eurolocale = { path = "../crates/eurolocale" }
 euroinstall = { path = "../crates/euroinstall" }
 eurofat = { path = "../crates/eurofat" }
+eurofatfs = { path = "../crates/eurofatfs" }
+euroexfat = { path = "../crates/euroexfat" }
+eurosmb = { path = "../crates/eurosmb" }
+euronfs = { path = "../crates/euronfs" }
+euroext = { path = "../crates/euroext" }
 euroca = { path = "../crates/euroca" }
 euroattest = { path = "../crates/euroattest" }
 euroidm = { path = "../crates/euroidm" }

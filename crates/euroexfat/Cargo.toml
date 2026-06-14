@@ -1,0 +1,12 @@
+[package]
+name = "euroexfat"
+version = "0.1.0"
+edition = "2021"
+description = "Mountable exFAT read driver (implements eurofs::FileSystem over a 512-byte BlockDevice). Read-only (IO-4); write deferred. no_std, no unsafe."
+license = "EUPL-1.2"
+
+[lib]
+doctest = false
+
+[dependencies]
+eurofs = { path = "../eurofs" }

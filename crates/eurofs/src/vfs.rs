@@ -174,6 +174,20 @@ impl FileSystem for Vfs {
             m.fs.set_clock(now);
         }
     }
+    fn mount_fs(&mut self, point: &str, fs: Box<dyn FileSystem>) -> FsResult<()> {
+        self.mount(point, fs);
+        Ok(())
+    }
+    fn umount_fs(&mut self, point: &str) -> FsResult<()> {
+        if self.umount(point) {
+            Ok(())
+        } else {
+            Err(FsError::NotFound)
+        }
+    }
+    fn list_mounts(&self) -> Vec<String> {
+        self.mount_points()
+    }
 }
 
 #[cfg(test)]

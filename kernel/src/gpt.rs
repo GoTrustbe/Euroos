@@ -90,6 +90,43 @@ fn entry_name_eq(e: &[u8], want: &str) -> bool {
 
 /// Find a EuroFS partition by name (G4: EuroOS-A/EuroOS-B/EuroVar/EuroBoot).
 /// Returns (first_sector, number_of_4k_blocks).
+/// Enumerate ALL non-empty GPT partitions on virtio device `dev` as (first_lba,
+/// last_lba). Lenient (no CRC enforcement) so foreign/partitioned disks can be listed
+/// for `lsblk`/`mount`. Empty if there is no GPT.
+pub fn all_partitions_on(dev: usize) -> alloc::vec::Vec<(u64, u64)> {
+    let mut out = alloc::vec::Vec::new();
+    let mut hdr = [0u8; 512];
+    if !crate::virtio_blk::read_io_dev(dev, 1, &mut hdr) || &hdr[..8] != b"EFI PART" {
+        return out;
+    }
+    let ent_lba = rd_u64(&hdr, 72);
+    let num = rd_u32(&hdr, 80).min(NUM_ENTRIES) as usize;
+    let esz = rd_u32(&hdr, 84) as usize;
+    if esz < 128 || ent_lba == 0 {
+        return out;
+    }
+    let sectors = (num * esz).div_ceil(512);
+    let mut arr = vec![0u8; sectors * 512];
+    for s in 0..sectors {
+        let mut t = [0u8; 512];
+        if !crate::virtio_blk::read_io_dev(dev, ent_lba + s as u64, &mut t) {
+            return out;
+        }
+        arr[s * 512..s * 512 + 512].copy_from_slice(&t);
+    }
+    for i in 0..num {
+        let e = &arr[i * esz..i * esz + 128];
+        if e[..16].iter().all(|&b| b == 0) {
+            continue; // unused entry
+        }
+        let (first, last) = (rd_u64(e, 32), rd_u64(e, 40));
+        if last >= first && first != 0 {
+            out.push((first, last));
+        }
+    }
+    out
+}
+
 pub fn find_partition_by_name(name: &str) -> Option<(u64, u64)> {
     let (arr, esz, num) = read_part_array()?;
     for i in 0..num {

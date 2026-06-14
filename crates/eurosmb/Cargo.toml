@@ -1,0 +1,13 @@
+[package]
+name = "eurosmb"
+version = "0.1.0"
+edition = "2021"
+description = "Sovereign SMB2/3 client (SMB2 over TCP + NTLMv2 auth) — mountable network shares for EuroOS. no_std, no unsafe."
+license = "EUPL-1.2"
+
+[lib]
+doctest = false
+
+[dependencies]
+eurofs = { path = "../eurofs" }
+spin = "0.9"

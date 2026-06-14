@@ -457,6 +457,25 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             _ => vec!["euroupdate: status | apply <image> | fetch <url> | rollback".to_string()],
         },
         "euroimmutable" | "immutable" => crate::immutable::shell(fs, arg1, arg2),
+        "lsblk" | "blkid" => crate::fatmount::lsblk(),
+        "mount" => {
+            if arg1.is_empty() {
+                let mut out = vec!["mounted filesystems:".to_string()];
+                for m in fs.list_mounts() {
+                    out.push(format!("  {m}"));
+                }
+                out.push("usage: mount <devN> <mountpoint>   ·   umount <mountpoint>".to_string());
+                out
+            } else if arg1.starts_with("nfs://") {
+                crate::nfsmount::mount_cmd(fs, arg1, arg2) // NFS: mount nfs://ip/export point
+            } else if arg1.starts_with("//") || arg1.starts_with("\\\\") {
+                crate::smbfs::mount_cmd(fs, arg1, arg2) // SMB: mount //ip/share point [user] [pass]
+            } else {
+                crate::fatmount::mount_cmd(fs, arg1, arg2)
+            }
+        }
+        "umount" | "unmount" => crate::fatmount::umount_cmd(fs, arg1),
+        "format" | "mkfs" => crate::fatmount::format_cmd(arg1, arg2),
         "mem" => mem_report(ctx.mem),
         "ls" => {
             let path = if arg1.is_empty() { "/" } else { arg1 };

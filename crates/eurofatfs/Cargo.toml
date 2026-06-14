@@ -1,0 +1,15 @@
+[package]
+name = "eurofatfs"
+version = "0.1.0"
+edition = "2021"
+description = "Mountable FAT32 filesystem driver (implements eurofs::FileSystem over a 512-byte BlockDevice). Read in IO-1, read+write in IO-2. no_std, no unsafe."
+license = "EUPL-1.2"
+
+[lib]
+doctest = false
+
+[dependencies]
+eurofs = { path = "../eurofs" }
+
+[dev-dependencies]
+eurofat = { path = "../eurofat" }

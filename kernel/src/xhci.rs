@@ -1027,6 +1027,27 @@ pub fn usb_read_block(lba: u32, out: &mut [u8]) -> bool {
     }
 }
 
+/// Write one block (`block_size` bytes) to the USB disk from `data` via SCSI WRITE(10)
+/// over the bulk-OUT endpoint. Returns false if there is no USB disk or the write fails.
+/// (IO-2: makes a mounted FAT USB stick writable.)
+pub fn usb_write_block(lba: u32, data: &[u8]) -> bool {
+    unsafe {
+        let x = match (*core::ptr::addr_of_mut!(XHCI)).as_mut() {
+            Some(x) => x,
+            None => return false,
+        };
+        let ms = match (*core::ptr::addr_of_mut!(MASS)).as_mut() {
+            Some(m) => m,
+            None => return false,
+        };
+        let n = data.len().min(ms.block_size as usize);
+        // Stage the block into the data buffer (io+512), zero-padded to one sector.
+        core::ptr::write_bytes((ms.io + 512) as *mut u8, 0, ms.block_size as usize);
+        core::ptr::copy_nonoverlapping(data.as_ptr(), (ms.io + 512) as *mut u8, n);
+        scsi(x, ms, &eurousb::bot::write10(lba, 1), ms.block_size, false) == Some(0)
+    }
+}
+
 /// Is there a USB mass-storage device (USB disk) present?
 pub fn usb_disk_present() -> bool {
     unsafe { (*core::ptr::addr_of!(MASS)).is_some() }

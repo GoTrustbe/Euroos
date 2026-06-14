@@ -108,6 +108,12 @@ mod files;
 mod textedit;
 mod monitor;
 mod logview;
+mod fatmount;
+mod extmount;
+mod smbfs;
+mod nfsmount;
+mod disktest;
+mod stresstest;
 mod media;
 mod xhci;
 
@@ -286,7 +292,22 @@ fn main() -> Status {
     // AG-3: if we have REAL install media AND there is a blank virtio target disk,
     // install a bootable EuroOS onto it (instead of using it as root) and
     // keep running ourselves in live mode — the target disk boots standalone (multidisk harness).
-    let installed = if instexec::media_available() && virtio_blk::present() {
+    let installed = if virtio_blk::present() && disktest::armed() {
+        // [mdisk] harness: the sentinel on disk0 arms the destructive multi-disk
+        // load+functional test. Run it instead of install/update, then continue live.
+        disktest::run();
+        false
+    } else if virtio_blk::present() && stresstest::arm_if_sentinel() {
+        // [stress] harness: the EUROSTRESS sentinel on disk0 arms the big load/stress
+        // test. It must run LATE (after ring3/interrupts/VFS are up), so we only latch
+        // it here and skip install; the run happens just before the shell starts.
+        false
+    } else if virtio_blk::present() && extmount::is_ext(0) {
+        // [io7] harness: disk0 holds a Linux ext2/3/4 volume → read-test it (not blank,
+        // so guard before the install path which would otherwise try to format it).
+        extmount::selftest();
+        false
+    } else if instexec::media_available() && virtio_blk::present() {
         if instexec::disk_is_blank(0) {
             // Fresh target disk → install a bootable, provisioned EuroOS (slot A).
             instexec::install_to_disk(0, &instexec::default_config())
@@ -341,6 +362,8 @@ fn main() -> Status {
     update::apply_gate_selftest(rtc::epoch());
     // [edit] (Sprint 4): edit EuroText → save → re-read on the REAL EuroFS.
     textedit::selftest(&mut fs);
+    // [io1]/[io2] (Sprint IO): FAT32 mount + read + write driver, proven in-kernel.
+    fatmount::selftest();
 
     // J2: bad-block remap on the REAL disk — mark a block bad and prove that
     // I/O is transparently redirected to a spare block (bad-block table ↔ scrub).
@@ -940,6 +963,10 @@ fn main() -> Status {
     for l in &net_lines {
         serial_println!("[net] {l}");
     }
+    // [io5] (Sprint IO): mount an SMB share over the live NIC (SLIRP → host Samba).
+    smbfs::selftest();
+    // [io6] (Sprint IO): mount an NFSv3 export over the live NIC (SLIRP → host nfsd).
+    nfsmount::selftest();
 
     // Load /bin/hello from EuroFS and VERIFY a real ED25519 SIGNATURE over
     // the program bytes against the public key baked into the kernel. Only
@@ -1773,6 +1800,13 @@ fn main() -> Status {
     // /var/log/fsck.log. After that the scrubber runs periodically (rate-limited) from
     // the desktop tick.
     scrub::run(&mut vfs);
+
+    // [stress] big load/stress test, if armed by the EUROSTRESS sentinel on disk0.
+    // Runs here while both `vfs` and `allocator` are still separately borrowable and
+    // ring3/interrupts are live — just before they are moved into the shell context.
+    if stresstest::armed() {
+        stresstest::run(&mut vfs, &mut allocator);
+    }
 
     // ── EuroDesktop compositor (Track 5) ──
     let _ = bp;

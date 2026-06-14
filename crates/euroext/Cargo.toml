@@ -1,0 +1,12 @@
+[package]
+name = "euroext"
+version = "0.1.0"
+edition = "2021"
+description = "Mountable ext2/3/4 read driver (implements eurofs::FileSystem over a BlockDevice). Read-only; covers extents (ext4) + classic block pointers (ext2/3). no_std, no unsafe."
+license = "EUPL-1.2"
+
+[lib]
+doctest = false
+
+[dependencies]
+eurofs = { path = "../eurofs" }
