@@ -1,39 +1,39 @@
-//! Bad-block-remapping (plan J2 — opslag-robuustheid).
+//! Bad-block remapping (plan J2 — storage robustness).
 //!
-//! Wanneer de data-path-scrubber (G5) of een I/O-fout een onherstelbaar blok
-//! detecteert, wordt dat blok als SLECHT gemarkeerd en transparant naar een
-//! reserve-blok (spare) omgeleid: latere reads/writes naar die LBA gaan voortaan
-//! naar de spare, zodat één kapotte sector niet het hele filesysteem fataal maakt.
-//! De tabel persisteert (serialiseerbaar) zodat de remap een herstart overleeft.
+//! When the data-path scrubber (G5) or an I/O error detects an unrecoverable
+//! block, that block is marked as BAD and transparently redirected to a
+//! reserve block (spare): later reads/writes to that LBA go from then on
+//! to the spare, so that one broken sector does not make the whole filesystem fatal.
+//! The table persists (serializable) so the remap survives a restart.
 //!
-//! Pure `no_std`-logica (geen device-I/O), zodat de veiligheidskritische remap-
-//! boekhouding volledig op de host getest is.
+//! Pure `no_std` logic (no device I/O), so the safety-critical remap
+//! bookkeeping is fully tested on the host.
 
 use alloc::vec::Vec;
 
 const MAGIC: u32 = 0x4242_5400; // "BBT\0"
 const ENTRY: usize = 16; // 8 bytes bad-LBA + 8 bytes spare-LBA
 
-/// Eén remap: een slecht blok → zijn reserve-blok.
+/// One remap: a bad block → its reserve block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Remap {
     bad: u64,
     spare: u64,
 }
 
-/// De bad-block-tabel: een lijst remaps + een pool reserve-blokken (een aaneengesloten
-/// reeks LBA's `[spare_base, spare_base + spare_count)` die niet door het filesysteem
-/// wordt gebruikt).
+/// The bad-block table: a list of remaps + a pool of reserve blocks (a contiguous
+/// range of LBAs `[spare_base, spare_base + spare_count)` that is not used by the
+/// filesystem).
 #[derive(Debug, Clone)]
 pub struct BadBlockTable {
     remaps: Vec<Remap>,
     spare_base: u64,
     spare_count: u64,
-    spare_next: u64, // hoeveel spares al uitgegeven
+    spare_next: u64, // how many spares already handed out
 }
 
 impl BadBlockTable {
-    /// Maak een lege tabel met een reserve-pool `[spare_base, spare_base+spare_count)`.
+    /// Create an empty table with a reserve pool `[spare_base, spare_base+spare_count)`.
     pub fn new(spare_base: u64, spare_count: u64) -> Self {
         BadBlockTable {
             remaps: Vec::new(),
@@ -43,26 +43,26 @@ impl BadBlockTable {
         }
     }
 
-    /// Vertaal een LBA: als die geremapt is, geef het spare-blok; anders de LBA zelf.
-    /// Dit is de hot-path die een block-device-wrapper bij elke read/write aanroept.
+    /// Translate an LBA: if it is remapped, return the spare block; otherwise the LBA itself.
+    /// This is the hot path that a block-device wrapper calls on every read/write.
     pub fn translate(&self, lba: u64) -> u64 {
         self.remaps.iter().find(|r| r.bad == lba).map(|r| r.spare).unwrap_or(lba)
     }
 
-    /// Is dit blok als slecht geregistreerd?
+    /// Is this block registered as bad?
     pub fn is_bad(&self, lba: u64) -> bool {
         self.remaps.iter().any(|r| r.bad == lba)
     }
 
-    /// Markeer `lba` als slecht en wijs een reserve-blok toe. Geeft de spare-LBA, of
-    /// `None` als de reserve-pool op is (dan is het blok onherstelbaar verloren).
-    /// Idempotent: een al-geremapt blok geeft zijn bestaande spare terug.
+    /// Mark `lba` as bad and assign a reserve block. Returns the spare-LBA, or
+    /// `None` if the reserve pool is exhausted (then the block is unrecoverably lost).
+    /// Idempotent: an already-remapped block returns its existing spare.
     pub fn mark_bad(&mut self, lba: u64) -> Option<u64> {
         if let Some(r) = self.remaps.iter().find(|r| r.bad == lba) {
             return Some(r.spare);
         }
         if self.spare_next >= self.spare_count {
-            return None; // pool uitgeput
+            return None; // pool exhausted
         }
         let spare = self.spare_base + self.spare_next;
         self.spare_next += 1;
@@ -70,18 +70,18 @@ impl BadBlockTable {
         Some(spare)
     }
 
-    /// Aantal geremapte (slechte) blokken.
+    /// Number of remapped (bad) blocks.
     pub fn bad_count(&self) -> usize {
         self.remaps.len()
     }
 
-    /// Resterende reserve-blokken.
+    /// Remaining reserve blocks.
     pub fn spares_left(&self) -> u64 {
         self.spare_count - self.spare_next
     }
 
-    /// Serialiseer de tabel naar bytes (magic + pool-info + remaps). Vast formaat,
-    /// little-endian; een eenvoudige som-checksum sluit af.
+    /// Serialize the table to bytes (magic + pool info + remaps). Fixed format,
+    /// little-endian; a simple sum checksum closes it off.
     pub fn serialize(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(32 + self.remaps.len() * ENTRY);
         b.extend_from_slice(&MAGIC.to_le_bytes());
@@ -98,7 +98,7 @@ impl BadBlockTable {
         b
     }
 
-    /// Lees een tabel terug; `None` bij verkeerde magic, lengte of checksum.
+    /// Read a table back; `None` on wrong magic, length or checksum.
     pub fn deserialize(data: &[u8]) -> Option<BadBlockTable> {
         if data.len() < 32 + 4 {
             return None;
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn translate_passthrough_when_healthy() {
         let t = BadBlockTable::new(1000, 8);
-        assert_eq!(t.translate(42), 42); // niet geremapt → zichzelf
+        assert_eq!(t.translate(42), 42); // not remapped → itself
         assert!(!t.is_bad(42));
     }
 
@@ -151,10 +151,10 @@ mod tests {
     fn mark_bad_remaps_to_spare() {
         let mut t = BadBlockTable::new(1000, 8);
         let spare = t.mark_bad(42).unwrap();
-        assert_eq!(spare, 1000); // eerste spare
+        assert_eq!(spare, 1000); // first spare
         assert!(t.is_bad(42));
-        assert_eq!(t.translate(42), 1000); // reads/writes gaan nu naar de spare
-        assert_eq!(t.translate(43), 43); // buurblok ongemoeid
+        assert_eq!(t.translate(42), 1000); // reads/writes now go to the spare
+        assert_eq!(t.translate(43), 43); // neighboring block untouched
         assert_eq!(t.bad_count(), 1);
         assert_eq!(t.spares_left(), 7);
     }
@@ -164,7 +164,7 @@ mod tests {
         let mut t = BadBlockTable::new(1000, 8);
         let s1 = t.mark_bad(42).unwrap();
         let s2 = t.mark_bad(42).unwrap();
-        assert_eq!(s1, s2); // zelfde spare, geen tweede toewijzing
+        assert_eq!(s1, s2); // same spare, no second assignment
         assert_eq!(t.bad_count(), 1);
     }
 
@@ -182,7 +182,7 @@ mod tests {
         let mut t = BadBlockTable::new(1000, 2);
         assert!(t.mark_bad(10).is_some());
         assert!(t.mark_bad(20).is_some());
-        assert_eq!(t.mark_bad(30), None); // pool op → onherstelbaar
+        assert_eq!(t.mark_bad(30), None); // pool exhausted → unrecoverable
         assert_eq!(t.spares_left(), 0);
     }
 
@@ -206,8 +206,8 @@ mod tests {
         t.mark_bad(7);
         let mut bytes = t.serialize();
         let n = bytes.len();
-        bytes[n - 6] ^= 0xFF; // corrupt een remap-byte → checksum-mismatch
+        bytes[n - 6] ^= 0xFF; // corrupt a remap byte → checksum mismatch
         assert!(BadBlockTable::deserialize(&bytes).is_none());
-        assert!(BadBlockTable::deserialize(&[1, 2, 3]).is_none()); // te kort/geen magic
+        assert!(BadBlockTable::deserialize(&[1, 2, 3]).is_none()); // too short / no magic
     }
 }

@@ -1,15 +1,15 @@
-//! EuroFS — Europees soeverein filesysteem (Track 2 van EuroKernel).
+//! EuroFS — European sovereign filesystem (Track 2 of EuroKernel).
 //!
-//! Deze crate is `no_std` + `alloc` zodat ze in de kernel draait, maar onder
-//! `cargo test` compileert ze met `std` (via `cfg_attr` hieronder) zodat de
-//! volledige logica op de host getest kan worden — geen QEMU, geen hardware.
+//! This crate is `no_std` + `alloc` so it can run in the kernel, but under
+//! `cargo test` it compiles with `std` (via the `cfg_attr` below) so the
+//! full logic can be tested on the host — no QEMU, no hardware.
 //!
-//! Lagen:
-//! - [`block`]      — `BlockDevice` abstractie + in-memory testdevice
-//! - [`path`]       — pad-parsing utilities (no_std)
-//! - [`fs`]         — `FileSystem` trait, gedeeld door ramdisk en EuroFS
-//! - [`ramdisk`]    — in-memory FS (Fase 1, bootstrap voor de kernel)
-//! - [`superblock`] — on-disk EuroFS superblok (Fase 2, CoW filesysteem)
+//! Layers:
+//! - [`block`]      — `BlockDevice` abstraction + in-memory test device
+//! - [`path`]       — path-parsing utilities (no_std)
+//! - [`fs`]         — `FileSystem` trait, shared by ramdisk and EuroFS
+//! - [`ramdisk`]    — in-memory FS (Phase 1, bootstrap for the kernel)
+//! - [`superblock`] — on-disk EuroFS superblock (Phase 2, CoW filesystem)
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -20,6 +20,7 @@ pub mod block;
 pub mod cache;
 pub mod checksum;
 pub mod disk;
+pub mod faulty;
 pub mod fs;
 pub mod path;
 pub mod ramdisk;

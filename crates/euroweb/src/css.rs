@@ -1,15 +1,15 @@
-//! EuroWeb CSS-engine (Sprint AB-B2): parser + selector-matching + cascade.
+//! EuroWeb CSS engine (Sprint AB-B2): parser + selector matching + cascade.
 //!
-//! Ontleedt een stylesheet naar regels (selector-lijst + declaraties), matcht
-//! selectoren tegen de [`Dom`] met **specificiteit**, en berekent per knoop de
-//! **computed style** via de cascade (UA- vóór author-herkomst, specificiteit,
-//! bronvolgorde, `!important`) plus **overerving** van overgeërfde eigenschappen
-//! en inline `style`-attributen. Pure `no_std`-logica, host-getest.
+//! Parses a stylesheet into rules (selector list + declarations), matches
+//! selectors against the [`Dom`] with **specificity**, and computes the
+//! **computed style** per node via the cascade (UA before author origin, specificity,
+//! source order, `!important`) plus **inheritance** of inherited properties
+//! and inline `style` attributes. Pure `no_std` logic, host-tested.
 //!
-//! Ondersteunde selectoren: type (`div`), universeel (`*`), class (`.x`), id
-//! (`#y`), samengesteld (`div.x#y`), en de combinators descendant (`a b`) en
-//! child (`a > b`), inclusief selector-lijsten (`a, b`). Genoeg voor het echte
-//! web; pseudo-classes/attribuut-selectoren zijn een latere verfijning.
+//! Supported selectors: type (`div`), universal (`*`), class (`.x`), id
+//! (`#y`), compound (`div.x#y`), and the combinators descendant (`a b`) and
+//! child (`a > b`), including selector lists (`a, b`). Enough for the real
+//! web; pseudo-classes/attribute selectors are a later refinement.
 
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 
 use crate::dom::{Dom, NodeId, NodeKind};
 
-/// Eén CSS-declaratie (`naam: waarde` met optioneel `!important`).
+/// One CSS declaration (`name: value` with optional `!important`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Declaration {
     pub name: String,
@@ -31,7 +31,7 @@ enum Combinator {
     Child,
 }
 
-/// Een samengestelde selector: optioneel type, id en classes.
+/// A compound selector: optional type, id and classes.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct Compound {
     tag: Option<String>,
@@ -39,20 +39,20 @@ struct Compound {
     classes: Vec<String>,
 }
 
-/// Een volledige selector: een rij samengestelde selectoren met combinators.
+/// A full selector: a sequence of compound selectors with combinators.
 #[derive(Debug, Clone)]
 pub struct Selector {
     compounds: Vec<Compound>,
-    /// `combinators[i]` staat tussen `compounds[i]` en `compounds[i+1]`.
+    /// `combinators[i]` sits between `compounds[i]` and `compounds[i+1]`.
     combinators: Vec<Combinator>,
 }
 
-/// Specificiteit als (id's, classes, types). Hoger = sterker.
+/// Specificity as (ids, classes, types). Higher = stronger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Specificity(pub u32, pub u32, pub u32);
 
 impl Selector {
-    /// CSS-specificiteit: tel id's, classes en types over alle compounds.
+    /// CSS specificity: count ids, classes and types across all compounds.
     pub fn specificity(&self) -> Specificity {
         let mut a = 0;
         let mut b = 0;
@@ -69,7 +69,7 @@ impl Selector {
         Specificity(a, b, c)
     }
 
-    /// Matcht deze selector de knoop `node` in `dom`?
+    /// Does this selector match the node `node` in `dom`?
     pub fn matches(&self, dom: &Dom, node: NodeId) -> bool {
         let last = self.compounds.len() - 1;
         if !compound_matches(&self.compounds[last], dom, node) {
@@ -112,7 +112,7 @@ impl Selector {
 fn compound_matches(c: &Compound, dom: &Dom, node: NodeId) -> bool {
     let tag = match dom.tag(node) {
         Some(t) => t,
-        None => return false, // alleen elementen matchen
+        None => return false, // only elements match
     };
     if let Some(want) = &c.tag {
         if want != tag {
@@ -135,20 +135,20 @@ fn compound_matches(c: &Compound, dom: &Dom, node: NodeId) -> bool {
     true
 }
 
-/// Eén CSS-regel: een lijst selectoren met een gedeelde set declaraties.
+/// One CSS rule: a list of selectors with a shared set of declarations.
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub selectors: Vec<Selector>,
     pub declarations: Vec<Declaration>,
 }
 
-/// Een geparste stylesheet.
+/// A parsed stylesheet.
 #[derive(Debug, Clone, Default)]
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
 }
 
-/// Verwijder `/* ... */`-commentaar.
+/// Strip `/* ... */` comments.
 fn strip_comments(input: &str) -> String {
     let b: Vec<char> = input.chars().collect();
     let mut out = String::new();
@@ -176,7 +176,7 @@ fn parse_compound(s: &str) -> Option<Compound> {
     let mut comp = Compound::default();
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;
-    // Optioneel leidend type of '*'.
+    // Optional leading type or '*'.
     if chars[i].is_ascii_alphabetic() {
         let start = i;
         while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '-') {
@@ -184,9 +184,9 @@ fn parse_compound(s: &str) -> Option<Compound> {
         }
         comp.tag = Some(chars[start..i].iter().collect::<String>().to_ascii_lowercase());
     } else if chars[i] == '*' {
-        i += 1; // universeel: geen type-constraint
+        i += 1; // universal: no type constraint
     }
-    // Daarna #id en .class in willekeurige volgorde.
+    // Then #id and .class in arbitrary order.
     while i < chars.len() {
         match chars[i] {
             '#' => {
@@ -205,14 +205,14 @@ fn parse_compound(s: &str) -> Option<Compound> {
                 }
                 comp.classes.push(chars[start..i].iter().collect());
             }
-            _ => return None, // niet-ondersteund teken
+            _ => return None, // unsupported character
         }
     }
     Some(comp)
 }
 
 fn parse_selector(s: &str) -> Option<Selector> {
-    // Tokeniseer op whitespace en '>'.
+    // Tokenize on whitespace and '>'.
     let mut compounds = Vec::new();
     let mut combinators = Vec::new();
     let mut pending_child = false;
@@ -222,7 +222,7 @@ fn parse_selector(s: &str) -> Option<Selector> {
             pending_child = true;
             continue;
         }
-        // '>' kan ook aan een compound vastgeplakt zitten (a>b); splits dat.
+        // '>' can also be glued to a compound (a>b); split that.
         for (k, part) in tok.split('>').enumerate() {
             if part.is_empty() {
                 pending_child = true;
@@ -260,7 +260,7 @@ fn parse_declarations(block: &str) -> Vec<Declaration> {
             let mut value = chunk[colon + 1..].trim().to_string();
             let important = value.to_ascii_lowercase().ends_with("!important");
             if important {
-                // verwijder de !important-suffix
+                // remove the !important suffix
                 let cut = value.to_ascii_lowercase().rfind("!important").unwrap();
                 value = value[..cut].trim().to_string();
             }
@@ -272,14 +272,14 @@ fn parse_declarations(block: &str) -> Vec<Declaration> {
     decls
 }
 
-/// Parse een stylesheet-string.
+/// Parse a stylesheet string.
 pub fn parse_stylesheet(input: &str) -> Stylesheet {
     let src = strip_comments(input);
     let mut rules = Vec::new();
     let bytes: Vec<char> = src.chars().collect();
     let mut i = 0;
     while i < bytes.len() {
-        // Lees selector-tekst tot '{'.
+        // Read selector text up to '{'.
         let sel_start = i;
         while i < bytes.len() && bytes[i] != '{' && bytes[i] != '}' {
             i += 1;
@@ -288,16 +288,16 @@ pub fn parse_stylesheet(input: &str) -> Stylesheet {
             break;
         }
         let sel_text: String = bytes[sel_start..i].iter().collect();
-        i += 1; // sla '{' over
+        i += 1; // skip '{'
         let blk_start = i;
         while i < bytes.len() && bytes[i] != '}' {
             i += 1;
         }
         let block: String = bytes[blk_start..i].iter().collect();
         if i < bytes.len() {
-            i += 1; // sla '}' over
+            i += 1; // skip '}'
         }
-        // At-regels (@media, @import, ...) slaan we voorlopig over.
+        // At-rules (@media, @import, ...) we skip for now.
         if sel_text.trim_start().starts_with('@') {
             continue;
         }
@@ -317,10 +317,10 @@ pub fn parse_stylesheet(input: &str) -> Stylesheet {
     Stylesheet { rules }
 }
 
-/// De berekende stijl van één knoop: eigenschap → waarde.
+/// The computed style of one node: property → value.
 pub type ComputedStyle = BTreeMap<String, String>;
 
-/// Eigenschappen die overerven van ouder naar kind (CSS-standaardset, subset).
+/// Properties that inherit from parent to child (CSS standard set, subset).
 fn is_inherited(prop: &str) -> bool {
     matches!(
         prop,
@@ -353,9 +353,9 @@ struct Match {
     value: String,
 }
 
-/// De "sleutel" van een selector = de meest-specifieke simpele selector in de
-/// rechtste compound (id > class > tag > universeel). Wordt gebruikt om regels te
-/// indexeren zodat een knoop alleen relevante regels test (i.p.v. allemaal).
+/// The "key" of a selector = the most-specific simple selector in the
+/// rightmost compound (id > class > tag > universal). Used to index rules
+/// so a node only tests relevant rules (instead of all of them).
 enum SelKey {
     Id(String),
     Class(String),
@@ -378,14 +378,14 @@ impl Selector {
     }
 }
 
-/// Bereken de computed style per knoop, gegeven stylesheets in cascade-volgorde
-/// (UA eerst, daarna author). Past matching, specificiteit, bronvolgorde,
-/// `!important`, inline `style`-attributen en overerving toe.
+/// Compute the computed style per node, given stylesheets in cascade order
+/// (UA first, then author). Applies matching, specificity, source order,
+/// `!important`, inline `style` attributes and inheritance.
 ///
-/// PRESTATIE: regels worden geïndexeerd op hun sleutel-selector (id/class/tag),
-/// zodat elke knoop slechts een handvol kandidaat-regels test i.p.v. álle regels.
-/// Dit maakt het verschil tussen O(knopen × regels) en O(knopen × weinig) — cruciaal
-/// voor echte websites met duizenden elementen en honderden regels.
+/// PERFORMANCE: rules are indexed by their key selector (id/class/tag),
+/// so each node only tests a handful of candidate rules instead of all rules.
+/// This makes the difference between O(nodes × rules) and O(nodes × few) — crucial
+/// for real websites with thousands of elements and hundreds of rules.
 pub fn compute(dom: &Dom, sheets: &[&Stylesheet]) -> Vec<ComputedStyle> {
     let n = dom.len();
     let mut out: Vec<ComputedStyle> = Vec::with_capacity(n);
@@ -393,8 +393,8 @@ pub fn compute(dom: &Dom, sheets: &[&Stylesheet]) -> Vec<ComputedStyle> {
         out.push(ComputedStyle::new());
     }
 
-    // Vlak alle regels af in cascade-volgorde + bereken per regel de order-basis
-    // (cumulatief aantal declaraties ervóór) zodat de bronvolgorde bewaard blijft.
+    // Flatten all rules in cascade order + compute the order base per rule
+    // (cumulative number of declarations before it) so source order is preserved.
     let mut flat: Vec<&Rule> = Vec::new();
     for s in sheets {
         for r in &s.rules {
@@ -408,7 +408,7 @@ pub fn compute(dom: &Dom, sheets: &[&Stylesheet]) -> Vec<ComputedStyle> {
         acc = acc.saturating_add(r.declarations.len() as u32);
     }
 
-    // Index: regel-indices per id / class / tag, plus universele regels.
+    // Index: rule indices per id / class / tag, plus universal rules.
     let mut by_id: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     let mut by_class: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     let mut by_tag: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -424,9 +424,9 @@ pub fn compute(dom: &Dom, sheets: &[&Stylesheet]) -> Vec<ComputedStyle> {
         }
     }
 
-    // Document-volgorde = oplopende NodeId → ouders vóór kinderen → overerving werkt.
+    // Document order = increasing NodeId → parents before children → inheritance works.
     for node in 0..n {
-        // 1) Start met overgeërfde eigenschappen van de ouder.
+        // 1) Start with inherited properties from the parent.
         let mut style = ComputedStyle::new();
         if let Some(parent) = dom.nodes[node].parent {
             for (k, v) in &out[parent] {
@@ -437,7 +437,7 @@ pub fn compute(dom: &Dom, sheets: &[&Stylesheet]) -> Vec<ComputedStyle> {
         }
 
         if matches!(dom.nodes[node].kind, NodeKind::Element { .. }) {
-            // 2) Verzamel kandidaat-regels via de index (universeel + id + classes + tag).
+            // 2) Collect candidate rules via the index (universal + id + classes + tag).
             let mut cands: Vec<usize> = universal.clone();
             if let Some(idv) = dom.attr(node, "id") {
                 if let Some(v) = by_id.get(idv) {
@@ -459,7 +459,7 @@ pub fn compute(dom: &Dom, sheets: &[&Stylesheet]) -> Vec<ComputedStyle> {
             cands.sort_unstable();
             cands.dedup();
 
-            // 3) Test alleen de kandidaten; bewaar gematchte declaraties + order.
+            // 3) Test only the candidates; keep matched declarations + order.
             let mut matches: Vec<Match> = Vec::new();
             for &ri in &cands {
                 let rule = flat[ri];
@@ -483,7 +483,7 @@ pub fn compute(dom: &Dom, sheets: &[&Stylesheet]) -> Vec<ComputedStyle> {
                 }
             }
 
-            // 4) Inline style="" — hoogste author-prioriteit.
+            // 4) Inline style="" — highest author priority.
             if let Some(inline) = dom.attr(node, "style") {
                 for d in parse_declarations(inline) {
                     matches.push(Match {
@@ -496,7 +496,7 @@ pub fn compute(dom: &Dom, sheets: &[&Stylesheet]) -> Vec<ComputedStyle> {
                 }
             }
 
-            // 5) Sorteer (!important > normaal, dan specificiteit, dan bronvolgorde) + pas toe.
+            // 5) Sort (!important > normal, then specificity, then source order) + apply.
             matches.sort_by(|x, y| {
                 x.important
                     .cmp(&y.important)
@@ -563,7 +563,7 @@ mod tests {
         let p = find_tag(&dom, "p");
         assert!(parse_selector("article p").unwrap().matches(&dom, p)); // descendant
         assert!(parse_selector("section > p").unwrap().matches(&dom, p)); // direct child
-        assert!(!parse_selector("article > p").unwrap().matches(&dom, p)); // niet direct kind
+        assert!(!parse_selector("article > p").unwrap().matches(&dom, p)); // not direct child
     }
 
     #[test]
@@ -583,7 +583,7 @@ mod tests {
         let ss = parse_stylesheet(".a { color: blue } .b { color: orange }");
         let styles = compute(&dom, &[&ss]);
         let p = find_tag(&dom, "p");
-        // Gelijke specificiteit → laatste regel wint.
+        // Equal specificity → last rule wins.
         assert_eq!(styles[p].get("color").map(|s| s.as_str()), Some("orange"));
     }
 
@@ -612,17 +612,17 @@ mod tests {
         let author = parse_stylesheet("p { color: navy }");
         let styles = compute(&dom, &[&ua, &author]);
         let p = find_tag(&dom, "p");
-        // Auteur staat later in de cascade → wint bij gelijke specificiteit.
+        // Author comes later in the cascade → wins on equal specificity.
         assert_eq!(styles[p].get("color").map(|s| s.as_str()), Some("navy"));
     }
 
     #[test]
     fn inheritance_of_color() {
-        let dom = parse("<div><p>hi <em>daar</em></p></div>");
+        let dom = parse("<div><p>hi <em>there</em></p></div>");
         let ss = parse_stylesheet("div { color: teal; border: 1px }");
         let styles = compute(&dom, &[&ss]);
         let em = find_tag(&dom, "em");
-        // 'color' erft door tot <em>; 'border' (niet-overgeërfd) niet.
+        // 'color' inherits down to <em>; 'border' (not inherited) does not.
         assert_eq!(styles[em].get("color").map(|s| s.as_str()), Some("teal"));
         assert_eq!(styles[em].get("border"), None);
     }

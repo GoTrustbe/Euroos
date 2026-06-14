@@ -1,7 +1,7 @@
-//! Boot-zelftest voor **vensterbeheer** (sluiten/minimaliseren/maximaliseren).
-//! Verifieert deterministisch — zonder muis — dat de verkeerslicht-trefzones
-//! kloppen en dat maximaliseren ↔ herstellen de juiste geometrie geeft. De
-//! interactieve muis-bediening zelf zit in de desktop-loop (main.rs).
+//! Boot self-test for **window management** (close/minimize/maximize).
+//! Verifies deterministically — without a mouse — that the traffic-light hit zones
+//! are correct and that maximize ↔ restore yields the right geometry. The
+//! interactive mouse control itself lives in the desktop loop (main.rs).
 
 use crate::compositor::{work_area, TitleButton, Window};
 use crate::graphics::Color;
@@ -27,16 +27,16 @@ fn mk() -> Window {
     }
 }
 
-/// Boot-zelftest: verkeerslicht-trefzones + maximaliseer/herstel-geometrie.
+/// Boot self-test: traffic-light hit zones + maximize/restore geometry.
 pub fn selftest() {
     let win = mk();
-    // Trefzones: rood/oranje/groen op x+14/34/54 (midden +6), titelbalk-y.
+    // Hit zones: red/orange/green at x+14/34/54 (center +6), titlebar y.
     let close = win.title_button_at(150, 88) == Some(TitleButton::Close);
     let mini = win.title_button_at(170, 88) == Some(TitleButton::Minimize);
     let maxi = win.title_button_at(190, 88) == Some(TitleButton::Maximize);
     let none = win.title_button_at(400, 88).is_none();
 
-    // Maximaliseren → werkgebied; herstellen → originele geometrie.
+    // Maximize → work area; restore → original geometry.
     let mut w2 = mk();
     let orig = (w2.x, w2.y, w2.w, w2.h);
     let (wx, wy, ww, wh) = work_area(1920, 1080);
@@ -54,15 +54,15 @@ pub fn selftest() {
     }
     let restored_ok = (w2.x, w2.y, w2.w, w2.h) == orig;
 
-    // Zichtbaarheid (sluiten/minimaliseren verbergt).
+    // Visibility (close/minimize hides).
     let mut w3 = mk();
     w3.visible = false;
     let hide_ok = !w3.visible;
 
     let ok = close && mini && maxi && none && maximized_ok && restored_ok && hide_ok;
     serial_println!(
-        "[wm] vensterbeheer: knoppen(sluit={} min={} max={} leeg={}), maximaliseer→werkgebied {}×{} ok={}, herstel ok={}, verberg ok={} {}",
+        "[wm] window management: buttons(close={} min={} max={} empty={}), maximize→work area {}×{} ok={}, restore ok={}, hide ok={} {}",
         close, mini, maxi, none, ww, wh, maximized_ok, restored_ok, hide_ok,
-        if ok { "✓" } else { "✗ FOUT" }
+        if ok { "✓" } else { "✗ FAIL" }
     );
 }

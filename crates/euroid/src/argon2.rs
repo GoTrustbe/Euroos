@@ -1,16 +1,16 @@
-//! Soevereine **Argon2id** wachtwoord-hashing (RFC 9106) — from-scratch, `no_std`.
+//! Sovereign **Argon2id** password hashing (RFC 9106) — from-scratch, `no_std`.
 //!
-//! EuroOS hasht wachtwoorden uitsluitend met Argon2id — nooit MD5/SHA1/bcrypt, en
-//! nooit "onderhandeld omlaag". De geheugen-harde KDF maakt GPU/ASIC-brute-force
-//! onbetaalbaar. We bouwen hem op een eigen **Blake2b** (RFC 7693), zodat er geen
-//! externe crypto-afhankelijkheid is. Correctheid is verankerd aan het officiële
-//! RFC 9106-testvector (zie `tests`).
+//! EuroOS hashes passwords exclusively with Argon2id — never MD5/SHA1/bcrypt, and
+//! never "negotiated down". The memory-hard KDF makes GPU/ASIC brute force
+//! unaffordable. We build it on our own **Blake2b** (RFC 7693), so there is no
+//! external crypto dependency. Correctness is anchored to the official
+//! RFC 9106 test vector (see `tests`).
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Blake2b (RFC 7693) — unkeyed, variabele output 1..=64 bytes.
+// Blake2b (RFC 7693) — unkeyed, variable output 1..=64 bytes.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BLAKE2B_IV: [u64; 8] = [
@@ -50,7 +50,7 @@ struct Blake2b {
 impl Blake2b {
     fn new(outlen: usize) -> Self {
         let mut h = BLAKE2B_IV;
-        // Parameterblok voor unkeyed hash: digest_length | (key_length<<8) | (fanout<<16) | (depth<<24)
+        // Parameter block for unkeyed hash: digest_length | (key_length<<8) | (fanout<<16) | (depth<<24)
         h[0] ^= 0x0101_0000 ^ (outlen as u64);
         Blake2b { h, t: [0, 0], buf: [0u8; 128], buflen: 0, outlen }
     }
@@ -101,8 +101,8 @@ impl Blake2b {
     fn update(&mut self, mut data: &[u8]) {
         while !data.is_empty() {
             if self.buflen == 128 {
-                // Een vol blok wordt pas verwerkt als er MEER data volgt, zodat het
-                // laatste blok (met de last-flag) altijd door finalize gaat.
+                // A full block is only processed once MORE data follows, so that the
+                // last block (with the last-flag) always goes through finalize.
                 self.t[0] = self.t[0].wrapping_add(128);
                 if self.t[0] < 128 {
                     self.t[1] = self.t[1].wrapping_add(1);
@@ -134,7 +134,7 @@ impl Blake2b {
     }
 }
 
-/// Blake2b met variabele digest-lengte `outlen` (1..=64).
+/// Blake2b with variable digest length `outlen` (1..=64).
 pub fn blake2b(outlen: usize, data: &[u8]) -> Vec<u8> {
     let mut h = Blake2b::new(outlen);
     h.update(data);
@@ -143,8 +143,8 @@ pub fn blake2b(outlen: usize, data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// De variabele-lengte hashfunctie H' uit RFC 9106 §3.2 (verlengt Blake2b voorbij
-/// 64 bytes door blokken aan elkaar te rijgen).
+/// The variable-length hash function H' from RFC 9106 §3.2 (extends Blake2b beyond
+/// 64 bytes by chaining blocks together).
 fn h_prime(outlen: usize, input: &[u8]) -> Vec<u8> {
     let mut prefixed = Vec::with_capacity(4 + input.len());
     prefixed.extend_from_slice(&(outlen as u32).to_le_bytes());
@@ -209,8 +209,8 @@ fn permutation_round(block: &mut [u64; ARGON2_BLOCK_WORDS], idx: [usize; 16]) {
     gb(block, idx[3], idx[4], idx[9], idx[14]);
 }
 
-/// De compressiefunctie G: `out = P(R) XOR R` met `R = prev XOR refb` (RFC 9106 §3.5).
-/// Bij `with_xor` wordt de bestaande inhoud van `out` er ook nog in ge-XOR'd (passes >0).
+/// The compression function G: `out = P(R) XOR R` with `R = prev XOR refb` (RFC 9106 §3.5).
+/// With `with_xor` the existing content of `out` is also XOR'd in (passes >0).
 fn fill_block(
     prev: &[u64; ARGON2_BLOCK_WORDS],
     refb: &[u64; ARGON2_BLOCK_WORDS],
@@ -222,7 +222,7 @@ fn fill_block(
         r[i] = prev[i] ^ refb[i];
     }
     let mut block = r;
-    // 8 rij-rondes: 16 opeenvolgende woorden per rij.
+    // 8 row rounds: 16 consecutive words per row.
     for i in 0..8 {
         let base = 16 * i;
         let idx = [
@@ -245,7 +245,7 @@ fn fill_block(
         ];
         permutation_round(&mut block, idx);
     }
-    // 8 kolom-rondes: registers van 2 woorden, rij-stride 16 woorden.
+    // 8 column rounds: registers of 2 words, row stride 16 words.
     for i in 0..8 {
         let b = 2 * i;
         let idx = [
@@ -297,7 +297,7 @@ fn block_to_bytes(blk: &[u64; ARGON2_BLOCK_WORDS]) -> Vec<u8> {
     out
 }
 
-/// Argon2-parameters (geheugenkosten in KiB, iteraties, parallelle lanes, tag-lengte).
+/// Argon2 parameters (memory cost in KiB, iterations, parallel lanes, tag length).
 #[derive(Clone, Copy, Debug)]
 pub struct Params {
     pub m_cost: u32,
@@ -306,19 +306,19 @@ pub struct Params {
     pub tag_len: usize,
 }
 
-/// Bereken de Argon2id-tag voor (`pwd`, `salt`, optionele `secret`/`ad`).
+/// Compute the Argon2id tag for (`pwd`, `salt`, optional `secret`/`ad`).
 pub fn argon2id(pwd: &[u8], salt: &[u8], secret: &[u8], ad: &[u8], p: &Params) -> Vec<u8> {
     let lanes = p.p_cost.max(1) as usize;
     let tag_len = p.tag_len;
 
-    // m' = 4*p*floor(m/(4p)), met minimum 8*p blokken.
+    // m' = 4*p*floor(m/(4p)), with a minimum of 8*p blocks.
     let mut m_prime = p.m_cost as usize;
     let min_mem = 8 * lanes;
     if m_prime < min_mem {
         m_prime = min_mem;
     }
     m_prime = (m_prime / (4 * lanes)) * (4 * lanes);
-    let lane_len = m_prime / lanes; // q (kolommen per lane)
+    let lane_len = m_prime / lanes; // q (columns per lane)
     let seg_len = lane_len / SYNC_POINTS;
 
     // H0 (64 bytes).
@@ -339,10 +339,10 @@ pub fn argon2id(pwd: &[u8], salt: &[u8], secret: &[u8], ad: &[u8], p: &Params) -
     h0_in.extend_from_slice(ad);
     let h0 = blake2b(64, &h0_in);
 
-    // Geheugen: m' blokken van 1024 bytes.
+    // Memory: m' blocks of 1024 bytes.
     let mut mem: Vec<[u64; ARGON2_BLOCK_WORDS]> = vec![[0u64; ARGON2_BLOCK_WORDS]; m_prime];
 
-    // De eerste twee blokken van elke lane.
+    // The first two blocks of each lane.
     for lane in 0..lanes {
         let mut in0 = Vec::with_capacity(72);
         in0.extend_from_slice(&h0);
@@ -360,7 +360,7 @@ pub fn argon2id(pwd: &[u8], salt: &[u8], secret: &[u8], ad: &[u8], p: &Params) -
     let passes = p.t_cost.max(1) as usize;
     for pass in 0..passes {
         for slice in 0..SYNC_POINTS {
-            // Argon2id: data-onafhankelijke adressering in pass 0, slices 0 en 1.
+            // Argon2id: data-independent addressing in pass 0, slices 0 and 1.
             let data_independent = pass == 0 && slice < 2;
             for lane in 0..lanes {
                 fill_segment(
@@ -379,7 +379,7 @@ pub fn argon2id(pwd: &[u8], salt: &[u8], secret: &[u8], ad: &[u8], p: &Params) -
         }
     }
 
-    // Eindblok = XOR van het laatste blok van elke lane.
+    // Final block = XOR of the last block of each lane.
     let mut final_block = mem[lane_len - 1];
     for lane in 1..lanes {
         let b = mem[lane * lane_len + lane_len - 1];
@@ -416,8 +416,8 @@ fn fill_segment(
     }
 
     for i in 0..seg_len {
-        // Genereer pseudo-willekeur. Bij data-onafhankelijke adressering vernieuwen
-        // we elk adresblok per 128 indices — óók voor de overgeslagen eerste blokken.
+        // Generate pseudo-randomness. With data-independent addressing we refresh
+        // each address block per 128 indices — also for the skipped first blocks.
         let mut rand_di: u64 = 0;
         if data_independent {
             if i % ADDRESSES_IN_BLOCK == 0 {
@@ -429,7 +429,7 @@ fn fill_segment(
             rand_di = address_block[i % ADDRESSES_IN_BLOCK];
         }
 
-        // De eerste twee blokken van pass 0 / slice 0 zijn al ingevuld.
+        // The first two blocks of pass 0 / slice 0 are already filled.
         if pass == 0 && slice == 0 && i < 2 {
             continue;
         }
@@ -495,7 +495,7 @@ mod tests {
         assert_eq!(d, expect);
     }
 
-    // RFC 9106 §5.3: officieel Argon2id-testvector.
+    // RFC 9106 §5.3: official Argon2id test vector.
     #[test]
     fn argon2id_rfc9106_vector() {
         let pwd = [0x01u8; 32];
@@ -509,6 +509,6 @@ mod tests {
             0x53, 0xc9, 0xd0, 0x1e, 0xf0, 0x45, 0x2d, 0x75, 0xb6, 0x5e, 0xb5, 0x25, 0x20, 0xe9,
             0x6b, 0x01, 0xe6, 0x59,
         ];
-        assert_eq!(tag, expect, "Argon2id RFC 9106 testvector moet exact kloppen");
+        assert_eq!(tag, expect, "Argon2id RFC 9106 test vector must match exactly");
     }
 }

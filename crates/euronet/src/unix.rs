@@ -1,39 +1,39 @@
-//! AF_UNIX — Unix-domain (lokale) sockets (H1).
+//! AF_UNIX — Unix-domain (local) sockets (H1).
 //!
-//! Een **lokale**, betrouwbare, in-kernel byte-stroom tussen twee processen op
-//! dezelfde machine, geadresseerd via een padnaam (`/run/foo.sock`) i.p.v. een
-//! IP-poort. De bouwsteen voor de live display-server (H2: compositor ↔ app) en
-//! IPC-zware apps — géén netwerk, dus geen checksums/retransmissie, puur
-//! gegarandeerde, geordende bytes.
+//! A **local**, reliable, in-kernel byte stream between two processes on
+//! the same machine, addressed via a path name (`/run/foo.sock`) instead of an
+//! IP port. The building block for the live display server (H2: compositor ↔ app) and
+//! IPC-heavy apps — no network, so no checksums/retransmission, purely
+//! guaranteed, ordered bytes.
 //!
-//! Model: één centrale [`Switchboard`] bezit *alle* verbindingen, zodat er geen
-//! gedeeld eigenaarschap (Rc/Arc) nodig is — in de kernel staat hij achter één
-//! Mutex. Een endpoint is een lichte [`Endpoint`]-handle `(conn, kant)`; de twee
-//! kanten A/B van een verbinding delen twee gekruiste byte-FIFO's. `no_std`+alloc,
-//! volledig op de host testbaar (geen NIC/QEMU).
+//! Model: one central [`Switchboard`] owns *all* connections, so no
+//! shared ownership (Rc/Arc) is needed — in the kernel it sits behind one
+//! Mutex. An endpoint is a lightweight [`Endpoint`] handle `(conn, side)`; the two
+//! sides A/B of a connection share two crossed byte FIFOs. `no_std`+alloc,
+//! fully testable on the host (no NIC/QEMU).
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Welke kant van een verbinding een endpoint is. Kant A is de **client**
-/// (`connect`), kant B de **server** (`accept`). A schrijft in `a_to_b` en leest
-/// uit `b_to_a`; B andersom.
+/// Which side of a connection an endpoint is. Side A is the **client**
+/// (`connect`), side B the **server** (`accept`). A writes into `a_to_b` and reads
+/// from `b_to_a`; B the other way around.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Side {
     A,
     B,
 }
 
-/// Lichte verwijzing naar één kant van één verbinding. Kopieerbaar — past in de
-/// kernel-SOCKETS-tabel zonder eigenaarschap.
+/// Lightweight reference to one side of one connection. Copyable — fits in the
+/// kernel SOCKETS table without ownership.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Endpoint {
     conn: u32,
     side: Side,
 }
 
-/// Eén bidirectionele verbinding: twee byte-FIFO's + een open-vlag per kant.
+/// One bidirectional connection: two byte FIFOs + an open flag per side.
 struct Conn {
     a_to_b: VecDeque<u8>,
     b_to_a: VecDeque<u8>,
@@ -41,30 +41,30 @@ struct Conn {
     b_open: bool,
 }
 
-/// Een luisteraar gebonden aan een pad, met een wachtrij van nog-niet-geaccepteerde
-/// server-endpoints (de B-kanten van inkomende `connect`-aanvragen).
+/// A listener bound to a path, with a queue of not-yet-accepted
+/// server endpoints (the B sides of incoming `connect` requests).
 struct Listener {
     backlog: usize,
     pending: VecDeque<Endpoint>,
 }
 
-/// Foutcodes — bewust dezelfde betekenis als de POSIX-errno's die de Linux-ABI
-/// terugmoet geven.
+/// Error codes — deliberately the same meaning as the POSIX errnos the Linux ABI
+/// must return.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnixError {
-    /// Geen luisteraar op dat pad (ECONNREFUSED).
+    /// No listener on that path (ECONNREFUSED).
     ConnRefused,
-    /// Pad al in gebruik (EADDRINUSE).
+    /// Path already in use (EADDRINUSE).
     AddrInUse,
-    /// Accept-wachtrij vol (de backlog is bereikt).
+    /// Accept queue full (the backlog has been reached).
     Backlog,
-    /// Ongeldig/gesloten endpoint (EBADF).
+    /// Invalid/closed endpoint (EBADF).
     BadEndpoint,
-    /// Andere kant is dicht (EPIPE) — bij schrijven.
+    /// The other side is closed (EPIPE) — on write.
     BrokenPipe,
 }
 
-/// De centrale lokale-socket-schakelaar. Bezit alle luisteraars + verbindingen.
+/// The central local-socket switchboard. Owns all listeners + connections.
 #[derive(Default)]
 pub struct Switchboard {
     listeners: BTreeMap<String, Listener>,
@@ -79,8 +79,8 @@ impl Switchboard {
         }
     }
 
-    /// Bind + luister op `path`. Eén stap (zoals een AF_UNIX-server die `bind`
-    /// dan `listen` doet). Fout als het pad al een luisteraar heeft.
+    /// Bind + listen on `path`. One step (like an AF_UNIX server that does `bind`
+    /// then `listen`). Error if the path already has a listener.
     pub fn bind_listen(&mut self, path: &str, backlog: usize) -> Result<(), UnixError> {
         if self.listeners.contains_key(path) {
             return Err(UnixError::AddrInUse);
@@ -95,20 +95,20 @@ impl Switchboard {
         Ok(())
     }
 
-    /// Verwijder de luisteraar op `path` (al-geaccepteerde verbindingen blijven
-    /// leven; nog-wachtende worden verworpen). Geeft `true` als er één was.
+    /// Remove the listener on `path` (already-accepted connections stay
+    /// alive; still-pending ones are dropped). Returns `true` if there was one.
     pub fn unbind(&mut self, path: &str) -> bool {
         self.listeners.remove(path).is_some()
     }
 
-    /// Is er een luisteraar op dit pad?
+    /// Is there a listener on this path?
     pub fn is_listening(&self, path: &str) -> bool {
         self.listeners.contains_key(path)
     }
 
-    /// Client-zijde: verbind met de luisteraar op `path`. Maakt een nieuwe
-    /// verbinding, zet de **server**-kant (B) in de accept-wachtrij, en geeft de
-    /// **client**-kant (A) terug. Fout als er geen luisteraar is of de backlog vol is.
+    /// Client side: connect to the listener on `path`. Creates a new
+    /// connection, places the **server** side (B) in the accept queue, and returns the
+    /// **client** side (A). Error if there is no listener or the backlog is full.
     pub fn connect(&mut self, path: &str) -> Result<Endpoint, UnixError> {
         let l = self.listeners.get_mut(path).ok_or(UnixError::ConnRefused)?;
         if l.pending.len() >= l.backlog {
@@ -131,13 +131,13 @@ impl Switchboard {
         })
     }
 
-    /// Server-zijde: accepteer de oudste wachtende verbinding op `path`. Geeft de
-    /// **server**-kant (B), of `None` als de wachtrij leeg is (niet-blokkerend).
+    /// Server side: accept the oldest pending connection on `path`. Returns the
+    /// **server** side (B), or `None` if the queue is empty (non-blocking).
     pub fn accept(&mut self, path: &str) -> Option<Endpoint> {
         self.listeners.get_mut(path)?.pending.pop_front()
     }
 
-    /// Aantal wachtende (nog te accepteren) verbindingen op `path`.
+    /// Number of pending (not-yet-accepted) connections on `path`.
     pub fn pending(&self, path: &str) -> usize {
         self.listeners.get(path).map_or(0, |l| l.pending.len())
     }
@@ -156,8 +156,8 @@ impl Switchboard {
             .ok_or(UnixError::BadEndpoint)
     }
 
-    /// Schrijf bytes vanaf `ep`. A schrijft richting B en omgekeerd. Fout als de
-    /// andere kant dicht is (EPIPE). Geeft het aantal geschreven bytes (alles).
+    /// Write bytes from `ep`. A writes toward B and vice versa. Error if the
+    /// other side is closed (EPIPE). Returns the number of bytes written (all).
     pub fn send(&mut self, ep: Endpoint, data: &[u8]) -> Result<usize, UnixError> {
         let c = self.conn_mut(ep)?;
         let peer_open = match ep.side {
@@ -174,8 +174,8 @@ impl Switchboard {
         Ok(data.len())
     }
 
-    /// Lees tot `max` bytes voor `ep` uit zijn inkomende FIFO. A leest `b_to_a`,
-    /// B leest `a_to_b`. Niet-blokkerend: geeft een (mogelijk lege) Vec.
+    /// Read up to `max` bytes for `ep` from its incoming FIFO. A reads `b_to_a`,
+    /// B reads `a_to_b`. Non-blocking: returns a (possibly empty) Vec.
     pub fn recv(&mut self, ep: Endpoint, max: usize) -> Result<Vec<u8>, UnixError> {
         let c = self.conn_mut(ep)?;
         let q = match ep.side {
@@ -186,8 +186,8 @@ impl Switchboard {
         Ok(q.drain(..n).collect())
     }
 
-    /// Is `ep` LEESBAAR? (inkomende data aanwezig, óf de andere kant is dicht →
-    /// EOF is leesbaar zodat `poll`/`recv` 0 teruggeeft i.p.v. eeuwig wachten.)
+    /// Is `ep` READABLE? (incoming data present, or the other side is closed →
+    /// EOF is readable so that `poll`/`recv` returns 0 instead of waiting forever.)
     pub fn readable(&self, ep: Endpoint) -> bool {
         let Ok(c) = self.conn_ref(ep) else {
             return false;
@@ -198,7 +198,7 @@ impl Switchboard {
         }
     }
 
-    /// Aantal direct leesbare bytes voor `ep` (zonder EOF).
+    /// Number of immediately readable bytes for `ep` (without EOF).
     pub fn available(&self, ep: Endpoint) -> usize {
         self.conn_ref(ep).map_or(0, |c| match ep.side {
             Side::A => c.b_to_a.len(),
@@ -206,9 +206,9 @@ impl Switchboard {
         })
     }
 
-    /// Sluit `ep`. De andere kant blijft leesbaar tot zijn FIFO leeg is, daarna
-    /// signaleert `readable` EOF. Als beide kanten dicht zijn, wordt de verbinding
-    /// opgeruimd (slot vrijgegeven).
+    /// Close `ep`. The other side stays readable until its FIFO is empty, after which
+    /// `readable` signals EOF. If both sides are closed, the connection is
+    /// cleaned up (slot freed).
     pub fn close(&mut self, ep: Endpoint) {
         if let Some(slot) = self.conns.get_mut(ep.conn as usize) {
             if let Some(c) = slot.as_mut() {

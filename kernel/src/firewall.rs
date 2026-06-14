@@ -1,6 +1,6 @@
-//! Kernel-zijde van **EuroFW** (plan N3): een globale packet-filter die in het
-//! RX-pad ([`crate::net::service`]) elk inkomend IP-pakket toetst aan de regellijst.
-//! Geblokkeerde pakketten worden stil gedropt (geen RST/ICMP-error → stealth).
+//! Kernel side of **EuroFW** (plan N3): a global packet filter that, in the
+//! RX path ([`crate::net::service`]), checks every incoming IP packet against the rule list.
+//! Blocked packets are dropped silently (no RST/ICMP error → stealth).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -10,21 +10,21 @@ use spin::Mutex;
 
 static FW: Mutex<Option<Firewall>> = Mutex::new(None);
 
-/// Initialiseer de firewall met een redelijk standaardbeleid: ALLES toestaan, maar
-/// een paar bekend-onveilige inkomende diensten blokkeren (stealth) + een
-/// voorbeeld-blocklist. (Een strenger default-deny is een policy-keuze via EuroPol.)
+/// Initialize the firewall with a sensible default policy: allow EVERYTHING, but
+/// block a few known-unsafe incoming services (stealth) + an
+/// example blocklist. (A stricter default-deny is a policy choice via EuroPol.)
 pub fn init() {
     let mut fw = Firewall::new(Action::Accept);
-    // Blokkeer inkomende Telnet (23) en NetBIOS (139) — klassieke aanvalsoppervlakken.
+    // Block incoming Telnet (23) and NetBIOS (139) — classic attack surfaces.
     fw.push(Rule::new(Action::Drop).dir(Direction::In).proto(Proto::Tcp).dst_port(23));
     fw.push(Rule::new(Action::Drop).dir(Direction::In).proto(Proto::Tcp).dst_port(139));
-    // Voorbeeld-blocklist: weiger al het verkeer van 198.51.100.0/24 (TEST-NET-2).
+    // Example blocklist: reject all traffic from 198.51.100.0/24 (TEST-NET-2).
     fw.push(Rule::new(Action::Drop).dir(Direction::In).src_cidr(u32::from_be_bytes([198, 51, 100, 0]), 24));
     *FW.lock() = Some(fw);
 }
 
-/// Door [`crate::net::service`] aangeroepen voor elk inkomend IP-pakket. Geeft true
-/// als het pakket door mag.
+/// Called by [`crate::net::service`] for every incoming IP packet. Returns true
+/// if the packet is allowed through.
 pub fn inbound_allowed(ip_proto: u8, src: u32, dst: u32, src_port: u16, dst_port: u16) -> bool {
     let mut g = FW.lock();
     match g.as_mut() {
@@ -42,7 +42,7 @@ pub fn inbound_allowed(ip_proto: u8, src: u32, dst: u32, src_port: u16, dst_port
     }
 }
 
-/// (geaccepteerd, gedropt).
+/// (accepted, dropped).
 pub fn stats() -> (u64, u64) {
     match FW.lock().as_ref() {
         Some(fw) => (fw.accepted, fw.dropped),
@@ -54,7 +54,7 @@ fn ip(a: u8, b: u8, c: u8, d: u8) -> u32 {
     u32::from_be_bytes([a, b, c, d])
 }
 
-/// Boot-zelftest: bewijs de regelmotor op een paar representatieve pakketten.
+/// Boot self-test: exercise the rule engine on a few representative packets.
 pub fn selftest() {
     let g = FW.lock();
     let fw = match g.as_ref() {
@@ -68,19 +68,19 @@ pub fn selftest() {
     let https_ok = fw.peek(&https) == Action::Accept;
     let src_drop = fw.peek(&blocked_src) == Action::Drop;
     crate::serial_println!(
-        "[n3] EuroFW: {} regels, inkomend Telnet:23-geblokkeerd={telnet_drop}, HTTPS:443-toegestaan={https_ok}, blocklist-bron-geweigerd={src_drop} → {}",
+        "[n3] EuroFW: {} rules, incoming Telnet:23-blocked={telnet_drop}, HTTPS:443-allowed={https_ok}, blocklist-source-rejected={src_drop} → {}",
         fw.rule_count(),
-        if telnet_drop && https_ok && src_drop { "OK (packet-filter werkt in het RX-pad) ✓" } else { "MISLUKT" }
+        if telnet_drop && https_ok && src_drop { "OK (packet filter works in the RX path) ✓" } else { "FAILED" }
     );
 }
 
-/// `firewall`-shellcommando: toon de regels + tellers.
+/// `firewall` shell command: show the rules + counters.
 pub fn shell() -> Vec<String> {
     let (acc, drop) = stats();
     let n = FW.lock().as_ref().map(|f| f.rule_count()).unwrap_or(0);
     alloc::vec![
-        alloc::format!("EuroFW packet-filter: {n} regels, {acc} toegestaan / {drop} gedropt"),
+        alloc::format!("EuroFW packet filter: {n} rules, {acc} allowed / {drop} dropped"),
         String::from("  drop in tcp dport 23 (Telnet) · drop in tcp dport 139 (NetBIOS) · drop in src 198.51.100.0/24"),
-        String::from("  standaardbeleid: ACCEPT (strenger default-deny via EuroPol-policy)"),
+        String::from("  default policy: ACCEPT (stricter default-deny via EuroPol policy)"),
     ]
 }

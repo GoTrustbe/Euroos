@@ -1,12 +1,12 @@
-//! EuroClip — de klembordbeheerder van EuroOS (Sprint AC-2).
+//! EuroClip — the clipboard manager of EuroOS (Sprint AC-2).
 //!
-//! Houdt een **geschiedenis** van gekopieerde items bij met vastmaken, zoeken en
-//! dedup. **GDPR-native**: de geschiedenis wordt nooit naar schijf geschreven
-//! tenzij een item expliciet is vastgemaakt, niet-vastgemaakte items verlopen
-//! automatisch, en **wachtwoord-achtige inhoud wordt herkend en uitgesloten** van
-//! de geschiedenis (zodat een gekopieerd wachtwoord niet blijft rondslingeren).
+//! Keeps a **history** of copied items with pinning, search and dedup.
+//! **GDPR-native**: the history is never written to disk unless an item is
+//! explicitly pinned, unpinned items expire automatically, and
+//! **password-like content is recognized and excluded** from the history (so a
+//! copied password does not stay lying around).
 //!
-//! Pure `no_std`-logica, host-getest.
+//! Pure `no_std` logic, host-tested.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -16,39 +16,39 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// Het soort klembord-item.
+/// The kind of clipboard item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipKind {
     Text,
     Image,
 }
 
-/// Eén item in de klembordgeschiedenis.
+/// One item in the clipboard history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipItem {
     pub kind: ClipKind,
-    /// Tekst-inhoud (voor afbeeldingen: een korte omschrijving/afmeting).
+    /// Text content (for images: a short description/dimensions).
     pub text: String,
-    /// Grootte in bytes (relevant voor afbeeldingen).
+    /// Size in bytes (relevant for images).
     pub bytes: usize,
-    /// Vastgemaakt? Vastgemaakte items verlopen niet en mogen naar schijf.
+    /// Pinned? Pinned items do not expire and may go to disk.
     pub pinned: bool,
-    /// Tijdstempel (kernel-tick of unix-seconde — eenheid bepaalt de aanroeper).
+    /// Timestamp (kernel tick or unix second — the unit is decided by the caller).
     pub ts: u64,
 }
 
-/// Het resultaat van een kopieer-actie.
+/// The result of a copy action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyResult {
-    /// Toegevoegd aan de geschiedenis (vooraan).
+    /// Added to the history (at the front).
     Stored,
-    /// Verplaatst naar voren (was al aanwezig).
+    /// Moved to the front (was already present).
     Promoted,
-    /// Geweigerd: lijkt op een wachtwoord → niet bewaard (privacy).
+    /// Rejected: looks like a password → not retained (privacy).
     RejectedSecret,
 }
 
-/// De klembordbeheerder.
+/// The clipboard manager.
 #[derive(Debug, Clone)]
 pub struct Clipboard {
     items: Vec<ClipItem>,
@@ -57,14 +57,14 @@ pub struct Clipboard {
 }
 
 impl Clipboard {
-    /// `max_items` = maximale geschiedenislengte; `retain` = hoe lang (in dezelfde
-    /// eenheid als `ts`) een niet-vastgemaakt item bewaard blijft.
+    /// `max_items` = maximum history length; `retain` = how long (in the same
+    /// unit as `ts`) an unpinned item is retained.
     pub fn new(max_items: usize, retain: u64) -> Self {
         Clipboard { items: Vec::new(), max_items: max_items.max(1), retain }
     }
 
-    /// Kopieer tekst naar het klembord. Dedup (verplaatst naar voren) en sluit
-    /// wachtwoord-achtige inhoud uit.
+    /// Copy text to the clipboard. Dedup (moves to the front) and excludes
+    /// password-like content.
     pub fn copy_text(&mut self, text: &str, now: u64) -> CopyResult {
         if looks_like_secret(text) {
             return CopyResult::RejectedSecret;
@@ -83,7 +83,7 @@ impl Clipboard {
         CopyResult::Stored
     }
 
-    /// Kopieer een afbeelding (omschrijving + bytes) naar het klembord.
+    /// Copy an image (description + bytes) to the clipboard.
     pub fn copy_image(&mut self, desc: &str, bytes: usize, now: u64) -> CopyResult {
         self.items.insert(
             0,
@@ -93,17 +93,17 @@ impl Clipboard {
         CopyResult::Stored
     }
 
-    /// Het meest recente item (de huidige klembordinhoud).
+    /// The most recent item (the current clipboard content).
     pub fn current(&self) -> Option<&ClipItem> {
         self.items.first()
     }
 
-    /// De volledige geschiedenis (meest recent eerst).
+    /// The full history (most recent first).
     pub fn history(&self) -> &[ClipItem] {
         &self.items
     }
 
-    /// Maak een item vast / los (op index).
+    /// Pin / unpin an item (by index).
     pub fn set_pinned(&mut self, index: usize, pinned: bool) -> bool {
         if let Some(it) = self.items.get_mut(index) {
             it.pinned = pinned;
@@ -113,7 +113,7 @@ impl Clipboard {
         }
     }
 
-    /// Zoek in de geschiedenis (substring, hoofdletterongevoelig).
+    /// Search the history (substring, case-insensitive).
     pub fn search(&self, query: &str) -> Vec<&ClipItem> {
         let q = query.to_lowercase();
         self.items
@@ -122,42 +122,42 @@ impl Clipboard {
             .collect()
     }
 
-    /// Verwijder niet-vastgemaakte items ouder dan `retain`. Vastgemaakte blijven.
+    /// Remove unpinned items older than `retain`. Pinned ones remain.
     pub fn expire(&mut self, now: u64) {
         self.items.retain(|i| i.pinned || now.saturating_sub(i.ts) <= self.retain);
     }
 
-    /// Wis de geschiedenis; vastgemaakte items blijven (privacy-wis).
+    /// Clear the history; pinned items remain (privacy wipe).
     pub fn clear_unpinned(&mut self) {
         self.items.retain(|i| i.pinned);
     }
 
-    /// Wis ALLES, inclusief vastgemaakt.
+    /// Clear EVERYTHING, including pinned.
     pub fn clear_all(&mut self) {
         self.items.clear();
     }
 
-    /// De items die naar schijf MOGEN (GDPR: enkel vastgemaakte persisteren).
+    /// The items that MAY go to disk (GDPR: only pinned ones persist).
     pub fn persistable(&self) -> Vec<&ClipItem> {
         self.items.iter().filter(|i| i.pinned).collect()
     }
 
-    /// Trim tot `max_items`, maar gooi vastgemaakte items nooit weg.
+    /// Trim to `max_items`, but never discard pinned items.
     fn trim(&mut self) {
         while self.items.len() > self.max_items {
-            // Verwijder het oudste NIET-vastgemaakte item.
+            // Remove the oldest NON-pinned item.
             if let Some(pos) = self.items.iter().rposition(|i| !i.pinned) {
                 self.items.remove(pos);
             } else {
-                break; // alles vastgemaakt → niets te trimmen
+                break; // everything pinned → nothing to trim
             }
         }
     }
 }
 
-/// Heuristiek: lijkt deze tekst op een wachtwoord/geheim? Zo ja, niet bewaren.
-/// Eén "woord" (geen spaties/regeleinden), 8–128 tekens, met voldoende variatie
-/// (≥3 van: kleine letter, hoofdletter, cijfer, symbool).
+/// Heuristic: does this text look like a password/secret? If so, do not retain.
+/// One "word" (no spaces/newlines), 8–128 characters, with enough variety
+/// (≥3 of: lowercase letter, uppercase letter, digit, symbol).
 pub fn looks_like_secret(s: &str) -> bool {
     let t = s.trim();
     let len = t.chars().count();
@@ -193,76 +193,76 @@ mod tests {
     #[test]
     fn copy_and_current() {
         let mut cb = Clipboard::new(10, 600);
-        assert_eq!(cb.copy_text("hallo", 1), CopyResult::Stored);
-        assert_eq!(cb.copy_text("wereld", 2), CopyResult::Stored);
-        assert_eq!(cb.current().unwrap().text, "wereld");
+        assert_eq!(cb.copy_text("hello", 1), CopyResult::Stored);
+        assert_eq!(cb.copy_text("world", 2), CopyResult::Stored);
+        assert_eq!(cb.current().unwrap().text, "world");
         assert_eq!(cb.history().len(), 2);
     }
 
     #[test]
     fn dedup_promotes_to_front() {
         let mut cb = Clipboard::new(10, 600);
-        cb.copy_text("een", 1);
-        cb.copy_text("twee", 2);
-        assert_eq!(cb.copy_text("een", 3), CopyResult::Promoted);
-        assert_eq!(cb.current().unwrap().text, "een");
-        assert_eq!(cb.history().len(), 2); // geen duplicaat
+        cb.copy_text("one", 1);
+        cb.copy_text("two", 2);
+        assert_eq!(cb.copy_text("one", 3), CopyResult::Promoted);
+        assert_eq!(cb.current().unwrap().text, "one");
+        assert_eq!(cb.history().len(), 2); // no duplicate
     }
 
     #[test]
     fn secrets_excluded() {
         let mut cb = Clipboard::new(10, 600);
-        // Lijkt op een wachtwoord (lower+upper+digit+symbol, geen spaties).
+        // Looks like a password (lower+upper+digit+symbol, no spaces).
         assert_eq!(cb.copy_text("Xq7!vR2p#Lm", 1), CopyResult::RejectedSecret);
         assert!(cb.current().is_none());
-        // Gewone tekst met spaties → wél bewaard.
-        assert_eq!(cb.copy_text("dit is een zin", 2), CopyResult::Stored);
+        // Ordinary text with spaces → retained.
+        assert_eq!(cb.copy_text("this is a sentence", 2), CopyResult::Stored);
     }
 
     #[test]
     fn secret_heuristic_edges() {
-        assert!(looks_like_secret("Abc123!@x")); // 4 klassen
-        assert!(!looks_like_secret("short1!")); // te kort
-        assert!(!looks_like_secret("alllowercase")); // 1 klasse
-        assert!(!looks_like_secret("twee woorden Ab1!")); // bevat spatie
+        assert!(looks_like_secret("Abc123!@x")); // 4 classes
+        assert!(!looks_like_secret("short1!")); // too short
+        assert!(!looks_like_secret("alllowercase")); // 1 class
+        assert!(!looks_like_secret("two words Ab1!")); // contains a space
         assert!(looks_like_secret("Hunter2-Pass")); // lower+upper+digit+symbol
     }
 
     #[test]
     fn pin_protects_from_expire_and_trim() {
         let mut cb = Clipboard::new(2, 100);
-        cb.copy_text("oud", 1);
-        cb.set_pinned(0, true); // 'oud' vastgemaakt
+        cb.copy_text("old", 1);
+        cb.set_pinned(0, true); // 'old' pinned
         cb.copy_text("a", 2);
-        cb.copy_text("b", 3); // zou 'oud' wegtrimmen, maar die is vastgemaakt
-        assert!(cb.history().iter().any(|i| i.text == "oud"));
-        // Expire ver in de toekomst: vastgemaakt blijft, rest verdwijnt.
+        cb.copy_text("b", 3); // would trim 'old' away, but it is pinned
+        assert!(cb.history().iter().any(|i| i.text == "old"));
+        // Expire far in the future: pinned remains, the rest disappears.
         cb.expire(1000);
         let texts: Vec<&str> = cb.history().iter().map(|i| i.text.as_str()).collect();
-        assert_eq!(texts, alloc::vec!["oud"]);
+        assert_eq!(texts, alloc::vec!["old"]);
     }
 
     #[test]
     fn search_and_clear() {
         let mut cb = Clipboard::new(10, 600);
-        cb.copy_text("Rapport Q1", 1);
-        cb.copy_text("notitie", 2);
-        cb.copy_text("rapport Q2", 3);
-        assert_eq!(cb.search("rapport").len(), 2);
-        cb.set_pinned(0, true); // pin 'rapport Q2'
+        cb.copy_text("Report Q1", 1);
+        cb.copy_text("note", 2);
+        cb.copy_text("report Q2", 3);
+        assert_eq!(cb.search("report").len(), 2);
+        cb.set_pinned(0, true); // pin 'report Q2'
         cb.clear_unpinned();
         assert_eq!(cb.history().len(), 1);
-        assert_eq!(cb.current().unwrap().text, "rapport Q2");
+        assert_eq!(cb.current().unwrap().text, "report Q2");
     }
 
     #[test]
     fn gdpr_only_pinned_persist() {
         let mut cb = Clipboard::new(10, 600);
-        cb.copy_text("vluchtig", 1);
-        cb.copy_text("bewaar mij", 2);
+        cb.copy_text("ephemeral", 1);
+        cb.copy_text("keep me", 2);
         cb.set_pinned(0, true);
         let persist = cb.persistable();
         assert_eq!(persist.len(), 1);
-        assert_eq!(persist[0].text, "bewaar mij");
+        assert_eq!(persist[0].text, "keep me");
     }
 }

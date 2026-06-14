@@ -1,8 +1,8 @@
-/* EuroOS — ECHTE musl-pthreads: pthread_create + pthread_join, ongewijzigd
- * tegen musl gelinkt. De worker-thread (door musl via clone() gestart) hoogt een
- * gedeelde teller op; de hoofd-thread joint en leest het resultaat. Draait dit,
- * dan werkt de volledige pthread-laag op EuroOS' eigen clone + futex(busy-poll)
- * + CLONE_CHILD_CLEARTID-mechaniek. */
+/* EuroOS — REAL musl pthreads: pthread_create + pthread_join, linked unchanged
+ * against musl. The worker thread (started by musl via clone()) increments a
+ * shared counter; the main thread joins and reads the result. If this runs,
+ * then the full pthread layer works on EuroOS' own clone + futex(busy-poll)
+ * + CLONE_CHILD_CLEARTID mechanism. */
 #include <pthread.h>
 #include <unistd.h>
 
@@ -18,17 +18,17 @@ static int slen(const char *s) { int n = 0; while (s[n]) n++; return n; }
 static void emit(const char *s) { write(1, s, slen(s)); }
 
 int main(void) {
-    emit("mpthread: pthread_create + pthread_join (echte musl-pthreads)\n");
+    emit("mpthread: pthread_create + pthread_join (real musl pthreads)\n");
     pthread_t t;
     if (pthread_create(&t, 0, worker, 0) != 0) {
-        emit("  pthread_create faalde\n");
+        emit("  pthread_create failed\n");
         return 1;
     }
     pthread_join(t, 0);
 
     char msg[72];
     int o = 0;
-    const char *m = "  gedeelde teller via pthread: ";
+    const char *m = "  shared counter via pthread: ";
     while (*m) msg[o++] = *m++;
     long v = shared;
     char tmp[24];

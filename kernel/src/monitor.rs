@@ -1,7 +1,7 @@
-//! **EuroMonitor** (Sprint 4) — een live systeemmonitor-app. Toont ECHTE
-//! kernelgegevens: wandkloktijd (RTC), RAM-gebruik (frame-allocator), actieve taken
-//! (scheduler), schijf (virtio-blk-capaciteit) en het aantal beveiligingsgebeurtenissen
-//! (audit-log). Geen mock — elke regel is een directe meting bij het tekenen.
+//! **EuroMonitor** (Sprint 4) — a live system-monitor app. Shows REAL
+//! kernel data: wall-clock time (RTC), RAM usage (frame allocator), active tasks
+//! (scheduler), disk (virtio-blk capacity) and the number of security events
+//! (audit log). No mock — every line is a direct measurement at draw time.
 
 use crate::graphics::{Color, FrameBuffer};
 use crate::{rtc, text};
@@ -9,13 +9,13 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 const TITLEBAR_H: usize = 44;
 
-// De frame-allocator-stats hebben `&mut FrameAllocator` nodig; de desktoplus
-// snapshot ze hierheen (goedkoop) zodat de render-functie ze contextvrij kan tonen.
+// The frame-allocator stats need `&mut FrameAllocator`; the desktop loop
+// snapshots them here (cheaply) so the render function can show them context-free.
 static MEM_USABLE_MIB: AtomicU64 = AtomicU64::new(0);
 static MEM_FREE_MIB: AtomicU64 = AtomicU64::new(0);
 static MEM_FRAMES: AtomicUsize = AtomicUsize::new(0);
 
-/// Door de desktoplus aangeroepen met verse frame-allocator-stats.
+/// Called by the desktop loop with fresh frame-allocator stats.
 pub fn set_mem(usable_mib: u64, free_mib: u64, free_frames: usize) {
     MEM_USABLE_MIB.store(usable_mib, Ordering::Relaxed);
     MEM_FREE_MIB.store(free_mib, Ordering::Relaxed);
@@ -56,7 +56,7 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let net = crate::virtio_net::mac().is_some();
 
     let mut ty = by + 16;
-    text::draw_px(fb, bx + 18, ty, "EuroMonitor — live systeemstatus", ink, 19.0);
+    text::draw_px(fb, bx + 18, ty, "EuroMonitor — live system status", ink, 19.0);
     ty += 34;
     text::draw_px(
         fb,
@@ -68,18 +68,18 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     );
     ty += 34;
 
-    // RAM met balk.
-    text::draw_px(fb, bx + 18, ty, &alloc::format!("RAM   {used} / {usable} MiB gebruikt"), ink, 15.0);
+    // RAM with bar.
+    text::draw_px(fb, bx + 18, ty, &alloc::format!("RAM   {used} / {usable} MiB used"), ink, 15.0);
     bar(fb, bx + 18, ty + 22, bw.saturating_sub(36), used as f32 / usable as f32, accent);
     ty += 50;
-    text::draw_px(fb, bx + 18, ty, &alloc::format!("      {frames} vrije frames (4 KiB)"), dim, 13.0);
+    text::draw_px(fb, bx + 18, ty, &alloc::format!("      {frames} free frames (4 KiB)"), dim, 13.0);
     ty += 30;
 
     for (label, value) in [
-        (alloc::string::String::from("Taken"), alloc::format!("{tasks} actief (scheduler)")),
-        (alloc::string::String::from("Schijf"), if dcount > 0 { alloc::format!("{disk} MiB · {dcount} virtio-blk-apparaat/-aten") } else { "geen virtio-blk (live-modus)".into() }),
-        (alloc::string::String::from("Netwerk"), if net { "virtio-net actief".into() } else { "geen NIC".into() }),
-        (alloc::string::String::from("Beveiliging"), alloc::format!("{sec_events} audit-gebeurtenis(sen) (hash-keten)")),
+        (alloc::string::String::from("Tasks"), alloc::format!("{tasks} active (scheduler)")),
+        (alloc::string::String::from("Disk"), if dcount > 0 { alloc::format!("{disk} MiB · {dcount} virtio-blk device(s)") } else { "no virtio-blk (live mode)".into() }),
+        (alloc::string::String::from("Network"), if net { "virtio-net active".into() } else { "no NIC".into() }),
+        (alloc::string::String::from("Security"), alloc::format!("{sec_events} audit event(s) (hash chain)")),
     ] {
         text::draw_px(fb, bx + 18, ty, &alloc::format!("{label:<11} {value}"), ink, 14.5);
         ty += 28;

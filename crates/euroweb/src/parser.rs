@@ -1,11 +1,11 @@
-//! EuroWeb tree-construction — bouwt een [`Dom`] uit de token-stroom.
+//! EuroWeb tree-construction — builds a [`Dom`] from the token stream.
 //!
-//! Een pragmatische maar echte boom-bouwer: een stapel van open elementen, void-
-//! elementen die geen kinderen krijgen, impliciet sluiten van `<p>`/`<li>`/tabel-
-//! cellen, samenvoegen van opeenvolgende tekst, en het negeren van niet-passende
-//! eindtags (zoals browsers doen). Dit is genoeg om statische pagina's correct te
-//! structureren; de volledige WHATWG "insertion mode"-machine is een latere
-//! verfijning (zie docs/EUROBROWSER-PLAN.md, fase B1).
+//! A pragmatic but real tree builder: a stack of open elements, void
+//! elements that get no children, implicit closing of `<p>`/`<li>`/table
+//! cells, merging of consecutive text, and ignoring of mismatched
+//! end tags (as browsers do). This is enough to structure static pages
+//! correctly; the full WHATWG "insertion mode" machine is a later
+//! refinement (see docs/EUROBROWSER-PLAN.md, phase B1).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 use crate::dom::{Attr, Dom, NodeId, NodeKind};
 use crate::tokenizer::{tokenize, Token};
 
-/// Elementen zonder eindtag/inhoud.
+/// Elements without end tag/content.
 fn is_void(tag: &str) -> bool {
     matches!(
         tag,
@@ -22,7 +22,7 @@ fn is_void(tag: &str) -> bool {
     )
 }
 
-/// Block-/flow-elementen die een open `<p>` impliciet sluiten.
+/// Block-/flow elements that implicitly close an open `<p>`.
 fn closes_p(tag: &str) -> bool {
     matches!(
         tag,
@@ -50,12 +50,12 @@ impl Builder {
         *self.stack.last().unwrap_or(&0)
     }
 
-    /// Is een element met deze tagnaam open op de stapel?
+    /// Is an element with this tag name open on the stack?
     fn in_scope(&self, tag: &str) -> bool {
         self.stack.iter().rev().any(|&id| self.dom.tag(id) == Some(tag))
     }
 
-    /// Sluit (pop) tot en met het dichtstbijzijnde open element met deze tagnaam.
+    /// Close (pop) up to and including the nearest open element with this tag name.
     fn close_to(&mut self, tag: &str) {
         if !self.in_scope(tag) {
             return;
@@ -69,7 +69,7 @@ impl Builder {
         }
     }
 
-    /// Impliciete sluitingsregels vóór het invoegen van `tag`.
+    /// Implicit closing rules before inserting `tag`.
     fn handle_implicit_close(&mut self, tag: &str) {
         match tag {
             "li" => {
@@ -116,7 +116,7 @@ impl Builder {
 
     fn insert_text(&mut self, s: &str) {
         let parent = self.current();
-        // Voeg samen met een direct voorafgaande tekst-knoop.
+        // Merge with a directly preceding text node.
         if let Some(&last) = self.dom.nodes[parent].children.last() {
             if let NodeKind::Text(t) = &mut self.dom.nodes[last].kind {
                 t.push_str(s);
@@ -155,7 +155,7 @@ impl Builder {
                 Token::EndTag { name } => {
                     flush_text!();
                     if is_void(&name) {
-                        continue; // </br> e.d. negeren
+                        continue; // ignore </br> and the like
                     }
                     if self.in_scope(&name) {
                         self.close_to(&name);
@@ -181,7 +181,7 @@ impl Builder {
     }
 }
 
-/// Parse een HTML-string naar een [`Dom`]-boom.
+/// Parse an HTML string into a [`Dom`] tree.
 pub fn parse(html: &str) -> Dom {
     let tokens = tokenize(html);
     Builder::new().run(tokens)

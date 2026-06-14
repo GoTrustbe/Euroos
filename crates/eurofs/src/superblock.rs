@@ -1,13 +1,13 @@
-//! EuroFS on-disk superblok (Track 2, Fase 2).
+//! EuroFS on-disk superblock (Track 2, Phase 2).
 //!
-//! 512 bytes, little-endian (native op x86-64; expliciete conversies houden de
-//! latere ARM64-port correct). Bevat een XXH3-checksum over alle velden vóór
-//! de checksum zelf, en wordt redundant weggeschreven (blok 1 + back-up blok 2).
+//! 512 bytes, little-endian (native on x86-64; explicit conversions keep the
+//! later ARM64 port correct). Contains an XXH3 checksum over all fields before
+//! the checksum itself, and is written redundantly (block 1 + backup block 2).
 //!
-//! `#[repr(C, packed)]`: velden liggen mogelijk niet uitgelijnd. We nemen NOOIT
-//! een referentie naar een veld; we kopiëren Copy-velden naar locals en
-//! (de)serialiseren via `read_unaligned`. Dit is de meest gemaakte fout met
-//! on-disk structs — hier expliciet vermeden.
+//! `#[repr(C, packed)]`: fields may not be aligned. We NEVER take a reference to
+//! a field; we copy Copy fields into locals and (de)serialize via
+//! `read_unaligned`. This is the most common mistake with on-disk structs —
+//! explicitly avoided here.
 
 use core::mem::{offset_of, size_of};
 
@@ -21,7 +21,7 @@ pub const EUROFS_VERSION_MINOR: u16 = 1;
 pub const SUPERBLOCK_BLOCK: u64 = 1;
 pub const SUPERBLOCK_BACKUP_BLOCK: u64 = 2;
 pub const DEFAULT_BLOCK_SIZE: u32 = 4096;
-/// Eerste blokken (boot, super, back-up, checkpoint-zone, b-tree roots).
+/// First blocks (boot, super, backup, checkpoint zone, b-tree roots).
 pub const RESERVED_BLOCKS: u64 = 16;
 
 #[repr(C, packed)]
@@ -53,7 +53,7 @@ pub struct EuroFsSuperblock {
 const _: () = assert!(size_of::<EuroFsSuperblock>() == 512);
 
 impl EuroFsSuperblock {
-    /// Nieuw superblok voor een vers geformatteerd volume.
+    /// New superblock for a freshly formatted volume.
     pub fn new_empty(total_blocks: u64, uuid: [u8; 16], created_at: u64) -> Self {
         let mut sb = EuroFsSuperblock {
             magic: EUROFS_MAGIC,
@@ -82,10 +82,10 @@ impl EuroFsSuperblock {
         sb
     }
 
-    /// Serialiseer naar 512 bytes (raw on-disk representatie).
+    /// Serialize to 512 bytes (raw on-disk representation).
     pub fn to_bytes(&self) -> [u8; 512] {
         let mut out = [0u8; 512];
-        // SAFETY: repr(C, packed), size == 512; we lezen `self` als bytes.
+        // SAFETY: repr(C, packed), size == 512; we read `self` as bytes.
         let raw = unsafe {
             core::slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>())
         };
@@ -93,21 +93,21 @@ impl EuroFsSuperblock {
         out
     }
 
-    /// Deserialiseer uit 512 bytes (zonder validatie).
+    /// Deserialize from 512 bytes (without validation).
     pub fn from_bytes(buf: &[u8; 512]) -> Self {
-        // SAFETY: elke bitpatroon is een geldige EuroFsSuperblock (alle velden
-        // zijn POD), en we lezen unaligned uit de buffer.
+        // SAFETY: every bit pattern is a valid EuroFsSuperblock (all fields
+        // are POD), and we read unaligned from the buffer.
         unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const Self) }
     }
 
-    /// XXH3 over alle bytes vóór het checksum-veld (checksum + padding excl.).
+    /// XXH3 over all bytes before the checksum field (checksum + padding excl.).
     pub fn compute_checksum(&self) -> u64 {
         let bytes = self.to_bytes();
         let end = offset_of!(EuroFsSuperblock, checksum);
         xxh3_64(&bytes[..end])
     }
 
-    /// Volledige validatie: magic, versie, blokgrootte én checksum.
+    /// Full validation: magic, version, block size and checksum.
     pub fn is_valid(&self) -> bool {
         let magic = self.magic;
         let major = self.version_major;
@@ -120,7 +120,7 @@ impl EuroFsSuperblock {
             && stored == self.compute_checksum()
     }
 
-    /// Lees + valideer één superblok-slot (None = afwezig/corrupt).
+    /// Read + validate a single superblock slot (None = absent/corrupt).
     fn read_slot<D: BlockDevice>(dev: &D, loc: u64) -> Option<Self> {
         let bs = dev.block_size() as usize;
         let mut block = alloc::vec![0u8; bs];
@@ -137,22 +137,22 @@ impl EuroFsSuperblock {
         }
     }
 
-    /// A/B-COMMIT van de superblok (S7 crash-consistentie — fix voor de torn-write-race).
+    /// A/B COMMIT of the superblock (S7 crash consistency — fix for the torn-write race).
     ///
-    /// De superblok bestaat in TWEE slots met een GENERATIENUMMER (`checkpoint_id`).
-    /// We schrijven de nieuwe superblok ALTIJD naar het slot met de OUDSTE generatie,
-    /// zodat het andere slot de vorige geldige staat behoudt: wordt deze commit door
-    /// een stroomuitval halverwege afgekapt (torn write), dan blijft minstens één slot
-    /// consistent en mount kiest die. Ordening:
-    ///   1) flush → alle DATA/objmap-blokken staan durabel op schijf (I/O-barrier),
-    ///      zodat de superblok nooit vóór de blokken landt waarnaar ze verwijst;
-    ///   2) schrijf de superblok naar het oudste slot;
-    ///   3) flush → de superblok is durabel vóór de commit als geslaagd geldt.
+    /// The superblock exists in TWO slots with a GENERATION NUMBER (`checkpoint_id`).
+    /// We ALWAYS write the new superblock to the slot with the OLDEST generation,
+    /// so the other slot retains the previous valid state: if this commit is cut
+    /// short by a power failure halfway through (torn write), then at least one slot
+    /// stays consistent and mount picks it. Ordering:
+    ///   1) flush → all DATA/objmap blocks are durably on disk (I/O barrier),
+    ///      so the superblock never lands before the blocks it refers to;
+    ///   2) write the superblock to the oldest slot;
+    ///   3) flush → the superblock is durable before the commit counts as succeeded.
     pub fn write_to<D: BlockDevice>(&self, dev: &mut D) -> BlockResult<()> {
-        // 1) Barrier: data + metadata eerst durabel maken.
+        // 1) Barrier: make data + metadata durable first.
         dev.flush()?;
 
-        // 2) Bepaal het doelslot op basis van de generaties in beide slots.
+        // 2) Determine the target slot based on the generations in both slots.
         let ga = Self::read_slot(dev, SUPERBLOCK_BLOCK).map(|s| s.checkpoint_id);
         let gb = Self::read_slot(dev, SUPERBLOCK_BACKUP_BLOCK).map(|s| s.checkpoint_id);
 
@@ -162,15 +162,15 @@ impl EuroFsSuperblock {
         block[..512].copy_from_slice(&bytes);
 
         match (ga, gb) {
-            // FORMAT / beide slots leeg: vestig BEIDE slots — er is geen vorige
-            // geldige staat om te verliezen, dus er is meteen een back-up.
+            // FORMAT / both slots empty: establish BOTH slots — there is no previous
+            // valid state to lose, so there is immediately a backup.
             (None, None) => {
                 dev.write_blocks(SUPERBLOCK_BLOCK, 1, &block)?;
                 dev.write_blocks(SUPERBLOCK_BACKUP_BLOCK, 1, &block)?;
             }
-            // Steady-state: overschrijf ALLEEN het oudste (of corrupte) slot; het
-            // andere — nieuwere, geldige — slot blijft als fallback staan, zodat een
-            // torn write deze commit nooit de laatste goede staat vernietigt.
+            // Steady-state: overwrite ONLY the oldest (or corrupt) slot; the
+            // other — newer, valid — slot remains as a fallback, so a torn write
+            // never destroys the last good state with this commit.
             _ => {
                 let target = match (ga, gb) {
                     (None, _) => SUPERBLOCK_BLOCK,
@@ -182,32 +182,32 @@ impl EuroFsSuperblock {
             }
         }
 
-        // 3) De nieuwe superblok durabel maken.
+        // 3) Make the new superblock durable.
         dev.flush()
     }
 
-    /// Hoeveel van de twee superblok-slots zijn momenteel ONGELDIG (magic/checksum
-    /// kapot)? 0 = beide intact, 1 = gedegradeerd maar mountbaar (één geldige kopie
-    /// over), 2 = beide corrupt (niet te helen).
+    /// How many of the two superblock slots are currently INVALID (magic/checksum
+    /// broken)? 0 = both intact, 1 = degraded but mountable (one valid copy
+    /// left), 2 = both corrupt (unrecoverable).
     pub fn degraded_slots<D: BlockDevice>(dev: &D) -> u8 {
         let a = Self::read_slot(dev, SUPERBLOCK_BLOCK).is_some();
         let b = Self::read_slot(dev, SUPERBLOCK_BACKUP_BLOCK).is_some();
         (!a as u8) + (!b as u8)
     }
 
-    /// ZELF-HELING van de A/B-redundantie: staat één slot corrupt en het andere
-    /// geldig, herschrijf dan het corrupte slot uit de geldige kopie (en flush).
-    /// Geeft het aantal herstelde slots terug (0 als er niets te helen valt: beide
-    /// geldig, of beide corrupt — dan is er geen goede bron). Dit is de reparatie-
-    /// tegenhanger van de torn-write-bescherming: na een afgekapte commit herstelt
-    /// dit de back-up zodat het filesysteem weer twee geldige kopieën heeft.
+    /// SELF-HEALING of the A/B redundancy: if one slot is corrupt and the other
+    /// valid, rewrite the corrupt slot from the valid copy (and flush).
+    /// Returns the number of repaired slots (0 if there is nothing to heal: both
+    /// valid, or both corrupt — then there is no good source). This is the repair
+    /// counterpart to the torn-write protection: after a cut-short commit this
+    /// restores the backup so the filesystem again has two valid copies.
     pub fn heal_slots<D: BlockDevice>(dev: &mut D) -> BlockResult<usize> {
         let a = Self::read_slot(dev, SUPERBLOCK_BLOCK);
         let b = Self::read_slot(dev, SUPERBLOCK_BACKUP_BLOCK);
         let (loc, bytes) = match (a, b) {
             (Some(valid), None) => (SUPERBLOCK_BACKUP_BLOCK, valid.to_bytes()),
             (None, Some(valid)) => (SUPERBLOCK_BLOCK, valid.to_bytes()),
-            _ => return Ok(0), // beide geldig, of beide corrupt → niets (veilig) te doen
+            _ => return Ok(0), // both valid, or both corrupt → nothing (safe) to do
         };
         let bs = dev.block_size() as usize;
         let mut block = alloc::vec![0u8; bs];
@@ -217,9 +217,9 @@ impl EuroFsSuperblock {
         Ok(1)
     }
 
-    /// Lees + valideer de superblok: kies het slot met de HOOGSTE geldige generatie.
-    /// Is de nieuwste door een torn write corrupt, dan valt dit automatisch terug op
-    /// het oudere, nog-consistente slot.
+    /// Read + validate the superblock: pick the slot with the HIGHEST valid generation.
+    /// If the newest is corrupt due to a torn write, this automatically falls back to
+    /// the older, still-consistent slot.
     pub fn read_from<D: BlockDevice>(dev: &D) -> FsResult<Self> {
         let mut best: Option<Self> = None;
         for loc in [SUPERBLOCK_BLOCK, SUPERBLOCK_BACKUP_BLOCK] {
@@ -257,9 +257,9 @@ mod tests {
     fn checksum_detecteert_corruptie() {
         let sb = EuroFsSuperblock::new_empty(1024, [1; 16], 42);
         let mut bytes = sb.to_bytes();
-        bytes[40] ^= 0xFF; // flip een byte in free_blocks
+        bytes[40] ^= 0xFF; // flip a byte in free_blocks
         let corrupt = EuroFsSuperblock::from_bytes(&bytes);
-        assert!(!corrupt.is_valid(), "bit-flip moet checksum breken");
+        assert!(!corrupt.is_valid(), "bit-flip must break checksum");
     }
 
     #[test]
@@ -267,8 +267,8 @@ mod tests {
         let mut dev = MemoryBlockDevice::new(1024, 4096);
         let sb = EuroFsSuperblock::new_empty(1024, [9; 16], 100);
         sb.write_to(&mut dev).unwrap();
-        // A/B-commit flusht twee keer: een barrier (data eerst durabel) + de superblok.
-        assert_eq!(dev.flush_count, 2, "A/B-commit: barrier-flush + superblok-flush");
+        // A/B commit flushes twice: a barrier (data durable first) + the superblock.
+        assert_eq!(dev.flush_count, 2, "A/B commit: barrier flush + superblock flush");
 
         let mounted = EuroFsSuperblock::read_from(&dev).unwrap();
         assert!(mounted.is_valid());
@@ -278,33 +278,33 @@ mod tests {
 
     #[test]
     fn ab_torn_write_valt_terug_op_vorige_generatie() {
-        // Bewijs de A/B-garantie: een torn write op de NIEUWSTE superblok-slot mag de
-        // vorige geldige generatie niet vernietigen — mount herstelt naar die staat.
+        // Prove the A/B guarantee: a torn write to the NEWEST superblock slot must not
+        // destroy the previous valid generation — mount recovers to that state.
         let mut dev = MemoryBlockDevice::new(1024, 4096);
-        // Generatie 1 (format) -> beide slots.
+        // Generation 1 (format) -> both slots.
         let mut sb = EuroFsSuperblock::new_empty(1024, [5; 16], 100);
         sb.checkpoint_id = 1;
         sb.checksum = sb.compute_checksum();
         sb.write_to(&mut dev).unwrap();
-        // Commit generatie 2 -> gaat naar het oudste slot; het andere houdt gen 1.
+        // Commit generation 2 -> goes to the oldest slot; the other keeps gen 1.
         sb.checkpoint_id = 2;
         sb.checksum = sb.compute_checksum();
         sb.write_to(&mut dev).unwrap();
         let g2 = EuroFsSuperblock::read_from(&dev).unwrap().checkpoint_id;
         assert_eq!(g2, 2);
 
-        // Simuleer een TORN write van de volgende commit: het slot dat gen 2 droeg
-        // raakt corrupt. (gen 2 zat in het slot dat bij commit 2 het oudste was.)
+        // Simulate a TORN write of the next commit: the slot that carried gen 2
+        // becomes corrupt. (gen 2 was in the slot that was the oldest at commit 2.)
         let ga = EuroFsSuperblock::read_slot(&dev, SUPERBLOCK_BLOCK).map(|s| s.checkpoint_id);
         let newest = if ga == Some(2) { SUPERBLOCK_BLOCK } else { SUPERBLOCK_BACKUP_BLOCK };
         dev.write_blocks(newest, 1, &alloc::vec![0xCDu8; 4096]).unwrap();
 
-        // Mount valt terug op de vorige geldige generatie (1) — geen verlies van een
-        // CONSISTENTE staat, alleen van de halfgeschreven commit.
+        // Mount falls back to the previous valid generation (1) — no loss of a
+        // CONSISTENT state, only of the half-written commit.
         let mounted = EuroFsSuperblock::read_from(&dev).unwrap();
         let gen = mounted.checkpoint_id;
         let blocks = mounted.total_blocks;
-        assert_eq!(gen, 1, "moet terugvallen op de vorige generatie");
+        assert_eq!(gen, 1, "must fall back to the previous generation");
         assert_eq!(blocks, 1024);
     }
 
@@ -314,11 +314,11 @@ mod tests {
         let sb = EuroFsSuperblock::new_empty(1024, [3; 16], 100);
         sb.write_to(&mut dev).unwrap();
 
-        // Verniel het primaire superblok (blok 1) volledig.
+        // Destroy the primary superblock (block 1) completely.
         let zero = alloc::vec![0xABu8; 4096];
         dev.write_blocks(SUPERBLOCK_BLOCK, 1, &zero).unwrap();
 
-        // Mount moet slagen via de back-up op blok 2.
+        // Mount must succeed via the backup on block 2.
         let mounted = EuroFsSuperblock::read_from(&dev).unwrap();
         let blocks = mounted.total_blocks;
         assert_eq!(blocks, 1024);

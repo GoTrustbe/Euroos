@@ -1,19 +1,19 @@
-//! Het Universeel Document Model (UDM) — één boom voor tekst, rekenblad én
-//! presentatie. OOXML/ODF/PDF worden hierín geparsed (ES-IO) en de apps
-//! (Writer/Calc/Impress) renderen + bewerken hém. Eén model, drie views.
+//! The Universal Document Model (UDM) — one tree for text, spreadsheet, and
+//! presentation. OOXML/ODF/PDF are parsed into this (ES-IO) and the apps
+//! (Writer/Calc/Impress) render + edit it. One model, three views.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Het soort document.
+/// The kind of document.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DocumentKind {
-    Writer, // tekstdocument
-    Sheet,  // rekenblad
-    Deck,   // presentatie
+    Writer, // text document
+    Sheet,  // spreadsheet
+    Deck,   // presentation
 }
 
-/// Een RGB-kleur.
+/// An RGB color.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Color {
     pub r: u8,
@@ -21,7 +21,7 @@ pub struct Color {
     pub b: u8,
 }
 
-/// Paragraaf-uitlijning.
+/// Paragraph alignment.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Alignment {
     #[default]
@@ -31,21 +31,21 @@ pub enum Alignment {
     Justify,
 }
 
-/// Teken-opmaak van een tekst-run.
+/// Character formatting of a text run.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct RunProperties {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
     pub strikethrough: bool,
-    /// Lettergrootte in halve punten (zo blijft 10,5pt geheeltallig); `None` = erven.
+    /// Font size in half-points (so 10.5pt stays integral); `None` = inherit.
     pub half_points: Option<u16>,
     pub color: Option<Color>,
     pub font_family: Option<String>,
 }
 
 impl RunProperties {
-    /// Overschrijf alleen de gezette velden van `over` over `self` (overerving).
+    /// Override only the set fields of `over` onto `self` (inheritance).
     pub fn merge(&self, over: &RunProperties) -> RunProperties {
         RunProperties {
             bold: self.bold || over.bold,
@@ -59,7 +59,7 @@ impl RunProperties {
     }
 }
 
-/// Een aaneengesloten stuk tekst met uniforme opmaak.
+/// A contiguous piece of text with uniform formatting.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Run {
     pub text: String,
@@ -80,17 +80,17 @@ impl Run {
     }
 }
 
-/// Paragraaf-opmaak.
+/// Paragraph formatting.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct ParagraphProperties {
     pub alignment: Alignment,
-    /// Naar welke benoemde stijl verwijst deze paragraaf (bv. "Heading1")?
+    /// Which named style does this paragraph reference (e.g. "Heading1")?
     pub style_id: Option<String>,
-    /// Lijstniveau (0-gebaseerd) als de paragraaf een lijstitem is.
+    /// List level (0-based) if the paragraph is a list item.
     pub list_level: Option<u8>,
 }
 
-/// Een paragraaf = opmaak + een rij runs.
+/// A paragraph = formatting + a series of runs.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Paragraph {
     pub props: ParagraphProperties,
@@ -101,7 +101,7 @@ impl Paragraph {
     pub fn new() -> Paragraph {
         Paragraph::default()
     }
-    /// Een paragraaf met één platte-tekst-run.
+    /// A paragraph with a single plain-text run.
     pub fn text(s: &str) -> Paragraph {
         Paragraph { props: ParagraphProperties::default(), runs: alloc::vec![Run::new(s)] }
     }
@@ -113,7 +113,7 @@ impl Paragraph {
         self.runs.push(r);
         self
     }
-    /// De platte tekst van de paragraaf (alle runs aaneen).
+    /// The plain text of the paragraph (all runs concatenated).
     pub fn plain_text(&self) -> String {
         let mut s = String::new();
         for r in &self.runs {
@@ -123,13 +123,13 @@ impl Paragraph {
     }
 }
 
-/// Een tabel: rijen × cellen, elke cel een rij paragrafen.
+/// A table: rows × cells, each cell a series of paragraphs.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Table {
     pub rows: Vec<Vec<Vec<Paragraph>>>,
 }
 
-/// Een blok in een tekstdocument.
+/// A block in a text document.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Block {
     Paragraph(Paragraph),
@@ -139,20 +139,20 @@ pub enum Block {
     HorizontalRule,
 }
 
-// ── Rekenblad ───────────────────────────────────────────────────────────────
+// ── Spreadsheet ───────────────────────────────────────────────────────────────
 
-/// De inhoud van een cel.
+/// The content of a cell.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Cell {
     Empty,
-    /// Een getal als geschaalde integer (waarde × 10^`scale`) — geen drijvende komma.
+    /// A number as a scaled integer (value × 10^`scale`) — no floating point.
     Number { scaled: i64, scale: u8 },
     Text(String),
-    /// Een formule (de brontekst, bv. `"=A1+B2"`); de Calc-engine evalueert 'm.
+    /// A formula (the source text, e.g. `"=A1+B2"`); the Calc engine evaluates it.
     Formula(String),
 }
 
-/// Een rekenblad: een dunne (sparse) cellijst geïndexeerd op (rij, kolom), 0-gebaseerd.
+/// A spreadsheet: a sparse cell list indexed by (row, column), 0-based.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct SheetBody {
     pub cells: Vec<(u32, u32, Cell)>,
@@ -171,16 +171,16 @@ impl SheetBody {
     }
 }
 
-// ── Presentatie ─────────────────────────────────────────────────────────────
+// ── Presentation ─────────────────────────────────────────────────────────────
 
-/// Een dia: een titel + blokken (zoals een tekstdocument-sectie).
+/// A slide: a title + blocks (like a text-document section).
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Slide {
     pub title: String,
     pub blocks: Vec<Block>,
 }
 
-/// De body verschilt per documentsoort.
+/// The body differs per document kind.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Body {
     Writer(Vec<Block>),
@@ -188,11 +188,11 @@ pub enum Body {
     Deck(Vec<Slide>),
 }
 
-/// Documentmetadata.
+/// Document metadata.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Metadata {
     pub title: String,
     pub author: String,
-    /// BCP-47-taal-tag (nl-BE, fr-BE, …) — koppelt aan EuroLocale.
+    /// BCP-47 language tag (nl-BE, fr-BE, …) — links to EuroLocale.
     pub language: String,
 }

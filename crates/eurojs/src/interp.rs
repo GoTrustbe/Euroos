@@ -1,4 +1,4 @@
-//! EuroJS tree-walking interpreter (geen JIT → klein aanvalsoppervlak).
+//! EuroJS tree-walking interpreter (no JIT → small attack surface).
 
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
@@ -8,7 +8,7 @@ use core::cell::RefCell;
 
 use crate::ast::{BinOp, Expr, Stmt};
 
-/// Een runtime-waarde.
+/// A runtime value.
 #[derive(Clone)]
 pub enum Value {
     Num(f64),
@@ -71,15 +71,15 @@ enum Flow {
     Return(Value),
 }
 
-/// De interpreter; `output` verzamelt `console.log`-uitvoer.
+/// The interpreter; `output` collects `console.log` output.
 ///
-/// Stabiliteit: deze interpreter draait NIET-VERTROUWDE pagina-scripts in de
-/// kernel. Twee harde grenzen voorkomen dat een script de OS platlegt:
-/// een globaal *stap-budget* (tegen oneindige/zware lussen) en een
-/// *aanroep-diepte*-grens (tegen oneindige recursie → stack-overflow).
+/// Stability: this interpreter runs UNTRUSTED page scripts in the
+/// kernel. Two hard bounds prevent a script from taking down the OS:
+/// a global *step budget* (against infinite/heavy loops) and a
+/// *call-depth* limit (against infinite recursion → stack overflow).
 pub struct Interp {
     pub output: Vec<String>,
-    /// Tekst die paginascripts via `document.write(...)` aan de pagina toevoegen.
+    /// Text that page scripts append to the page via `document.write(...)`.
     pub writes: Vec<String>,
     global: Env,
     steps: u64,
@@ -93,34 +93,34 @@ impl Default for Interp {
 }
 
 impl Interp {
-    /// Maximaal aantal uitgevoerde statements/lus-iteraties vóór afbreken.
+    /// Maximum number of executed statements/loop iterations before aborting.
     const STEP_LIMIT: u64 = 50_000_000;
-    /// Maximale geneste functie-aanroep-diepte (anti stack-overflow). Een
-    /// tree-walking interpreter verbruikt meerdere Rust-frames per JS-aanroep;
-    /// de kernel-taakstack is slechts 16 KiB (met guard-pagina als harde
-    /// vangrail). Deze zachtere grens breekt oneindige recursie netjes met een
-    /// JS-fout af i.p.v. de taak te laten killen door de guard.
+    /// Maximum nested function-call depth (anti stack overflow). A
+    /// tree-walking interpreter consumes multiple Rust frames per JS call;
+    /// the kernel task stack is only 16 KiB (with a guard page as a hard
+    /// backstop). This softer bound breaks infinite recursion cleanly with a
+    /// JS error instead of letting the task be killed by the guard.
     const DEPTH_LIMIT: usize = 256;
 
     pub fn new() -> Self {
         Interp { output: Vec::new(), writes: Vec::new(), global: new_scope(None), steps: 0, depth: 0 }
     }
 
-    /// Tel één uitvoeringsstap; breek af als het budget op is.
+    /// Count one execution step; abort if the budget is exhausted.
     #[inline]
     fn tick(&mut self) -> Result<(), String> {
         self.steps += 1;
         if self.steps > Self::STEP_LIMIT {
-            return Err("uitvoeringsbudget overschreden (mogelijke oneindige lus)".to_string());
+            return Err("execution budget exceeded (possible infinite loop)".to_string());
         }
         Ok(())
     }
 
-    /// Voer een programma uit; geeft de waarde van de laatste expressie.
+    /// Run a program; returns the value of the last expression.
     pub fn run(&mut self, prog: &[Stmt]) -> Result<Value, String> {
         let env = self.global.clone();
         let mut last = Value::Undefined;
-        // Hijs functie-declaraties (zodat ze vóór hun definitie aanroepbaar zijn).
+        // Hoist function declarations (so they are callable before their definition).
         for s in prog {
             if let Stmt::FuncDecl(name, params, body) = s {
                 let f = Value::Func(Rc::new(FuncDef { params: params.clone(), body: body.clone(), env: env.clone() }));
@@ -179,8 +179,8 @@ impl Interp {
             }
             Stmt::While(cond, body) => {
                 while truthy(&self.eval(cond, env)?) {
-                    // Elke iteratie telt mee voor het globale stap-budget,
-                    // ook bij een leeg lichaam — zo is `while(true){}` begrensd.
+                    // Each iteration counts toward the global step budget,
+                    // even with an empty body — so `while(true){}` is bounded.
                     self.tick()?;
                     let inner = new_scope(Some(env.clone()));
                     if let Flow::Return(v) = self.exec_block(body, &inner)? {
@@ -230,7 +230,7 @@ impl Interp {
             Expr::Bool(b) => Ok(Value::Bool(*b)),
             Expr::Null => Ok(Value::Null),
             Expr::Undefined => Ok(Value::Undefined),
-            Expr::Ident(name) => env_get(env, name).ok_or_else(|| alloc::format!("{name} is niet gedefinieerd")),
+            Expr::Ident(name) => env_get(env, name).ok_or_else(|| alloc::format!("{name} is not defined")),
             Expr::Array(items) => {
                 let mut v = Vec::new();
                 for it in items {
@@ -307,7 +307,7 @@ impl Interp {
         match target {
             Expr::Ident(name) => {
                 if !env_set(env, name, val.clone()) {
-                    env_define(&self.global, name, val); // impliciete globale
+                    env_define(&self.global, name, val); // implicit global
                 }
                 Ok(())
             }
@@ -317,7 +317,7 @@ impl Interp {
                     m.borrow_mut().insert(prop.clone(), val);
                     Ok(())
                 } else {
-                    Err("kan eigenschap niet zetten op niet-object".to_string())
+                    Err("cannot set property on non-object".to_string())
                 }
             }
             Expr::Index(obj, idx) => {
@@ -340,10 +340,10 @@ impl Interp {
                         m.borrow_mut().insert(to_string(&i), val);
                         Ok(())
                     }
-                    _ => Err("kan index niet zetten".to_string()),
+                    _ => Err("cannot set index".to_string()),
                 }
             }
-            _ => Err("ongeldig toewijzingsdoel".to_string()),
+            _ => Err("invalid assignment target".to_string()),
         }
     }
 
@@ -388,7 +388,7 @@ impl Interp {
     }
 
     fn eval_call(&mut self, callee: &Expr, args: &[Expr], env: &Env) -> Result<Value, String> {
-        // Methode-/built-in-aanroepen: callee is een Member.
+        // Method/built-in calls: callee is a Member.
         if let Expr::Member(obj_e, method) = callee {
             // console.log(...)
             if let Expr::Ident(name) = obj_e.as_ref() {
@@ -401,7 +401,7 @@ impl Interp {
                     self.output.push(parts.join(" "));
                     return Ok(Value::Undefined);
                 }
-                // document.write(...) / document.writeln(...): voeg tekst toe aan de pagina.
+                // document.write(...) / document.writeln(...): append text to the page.
                 if name == "document" && (method == "write" || method == "writeln") {
                     let mut parts = Vec::new();
                     for a in args {
@@ -430,7 +430,7 @@ impl Interp {
             }
             return self.call_method(&obj, method, av);
         }
-        // Gewone functie-aanroep.
+        // Ordinary function call.
         let f = self.eval(callee, env)?;
         let mut av = Vec::new();
         for a in args {
@@ -461,7 +461,7 @@ impl Interp {
                     let pos = arr.iter().position(|v| loose_eq(v, &target));
                     Ok(Value::Num(pos.map(|p| p as f64).unwrap_or(-1.0)))
                 }
-                _ => Err(alloc::format!("array heeft geen methode '{method}'")),
+                _ => Err(alloc::format!("array has no method '{method}'")),
             },
             Value::Str(s) => match method {
                 "toUpperCase" => Ok(Value::Str(Rc::new(s.to_uppercase()))),
@@ -474,28 +474,28 @@ impl Interp {
                     let needle = args.first().map(to_string).unwrap_or_default();
                     Ok(Value::Bool(s.contains(&needle)))
                 }
-                _ => Err(alloc::format!("string heeft geen methode '{method}'")),
+                _ => Err(alloc::format!("string has no method '{method}'")),
             },
             Value::Object(m) => {
                 let f = m.borrow().get(method).cloned();
                 match f {
                     Some(f) => self.call(&f, args),
-                    None => Err(alloc::format!("object heeft geen methode '{method}'")),
+                    None => Err(alloc::format!("object has no method '{method}'")),
                 }
             }
-            _ => Err(alloc::format!("kan '{method}' niet aanroepen")),
+            _ => Err(alloc::format!("cannot call '{method}'")),
         }
     }
 
     fn call(&mut self, f: &Value, args: Vec<Value>) -> Result<Value, String> {
         match f {
             Value::Func(def) => {
-                // Aanroep-diepte begrenzen: oneindige recursie zou anders de
-                // kernel-stack opblazen. We tellen op, voeren uit, tellen af.
+                // Bound the call depth: infinite recursion would otherwise blow
+                // the kernel stack. We increment, execute, decrement.
                 self.depth += 1;
                 if self.depth > Self::DEPTH_LIMIT {
                     self.depth -= 1;
-                    return Err("aanroep-diepte overschreden (oneindige recursie?)".to_string());
+                    return Err("call depth exceeded (infinite recursion?)".to_string());
                 }
                 let call_env = new_scope(Some(def.env.clone()));
                 for (i, p) in def.params.iter().enumerate() {
@@ -508,12 +508,12 @@ impl Interp {
                     Flow::Normal(_) => Ok(Value::Undefined),
                 }
             }
-            _ => Err("waarde is niet aanroepbaar".to_string()),
+            _ => Err("value is not callable".to_string()),
         }
     }
 }
 
-// ── operatoren & coercie ──
+// ── operators & coercion ──
 
 fn truthy(v: &Value) -> bool {
     match v {
@@ -545,11 +545,11 @@ fn to_string(v: &Value) -> String {
     display(v)
 }
 
-/// JS-achtige stringweergave.
+/// JS-like string representation.
 fn display(v: &Value) -> String {
     match v {
         Value::Num(n) => {
-            // Geheel getal binnen i64-bereik → zonder decimalen tonen (JS-stijl).
+            // Whole number within i64 range → show without decimals (JS style).
             if n.is_finite() && *n == (*n as i64) as f64 {
                 alloc::format!("{}", *n as i64)
             } else {
@@ -569,7 +569,7 @@ fn display(v: &Value) -> String {
 fn binop(op: &BinOp, l: &Value, r: &Value) -> Value {
     match op {
         BinOp::Add => {
-            // String-concatenatie als één van beide een string is.
+            // String concatenation if either side is a string.
             if matches!(l, Value::Str(_)) || matches!(r, Value::Str(_)) {
                 Value::Str(Rc::new(alloc::format!("{}{}", display(l), display(r))))
             } else {
@@ -592,7 +592,7 @@ fn binop(op: &BinOp, l: &Value, r: &Value) -> Value {
 }
 
 fn cmp(l: &Value, r: &Value, f: fn(i32) -> bool) -> Value {
-    // String-vergelijking als beide strings zijn, anders numeriek.
+    // String comparison if both are strings, otherwise numeric.
     if let (Value::Str(a), Value::Str(b)) = (l, r) {
         let o = match a.cmp(b) {
             core::cmp::Ordering::Less => -1,

@@ -1,11 +1,11 @@
-//! EuroWeb paint (Sprint AB-B6): layout-boom → **display-lijst**.
+//! EuroWeb paint (Sprint AB-B6): layout tree → **display list**.
 //!
-//! Wandelt de [`crate::layout::LayoutBox`]-boom en zet hem om in een geordende
-//! lijst teken-commando's ([`DisplayItem`]): achtergrond-rechthoeken (uit
-//! `background`/`background-color`) en tekst (met kleur uit de overgeërfde
-//! `color`). Een aparte rasterlaag (in de kernel) voert de display-lijst uit op
-//! de EuroDisplay-framebuffer. Bevat een CSS-kleurparser (benoemd + `#hex` +
-//! `rgb()`). Pure, host-geteste `no_std`-logica.
+//! Walks the [`crate::layout::LayoutBox`] tree and turns it into an ordered
+//! list of draw commands ([`DisplayItem`]): background rectangles (from
+//! `background`/`background-color`) and text (with color from the inherited
+//! `color`). A separate raster layer (in the kernel) executes the display list on
+//! the EuroDisplay framebuffer. Includes a CSS color parser (named + `#hex` +
+//! `rgb()`). Pure, host-tested `no_std` logic.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -14,22 +14,22 @@ use crate::css::ComputedStyle;
 use crate::dom::Dom;
 use crate::layout::{BoxType, LayoutBox, Replaced};
 
-/// Eén teken-commando in document-volgorde (achter → voor).
+/// A single draw command in document order (back → front).
 #[derive(Debug, Clone, PartialEq)]
 pub enum DisplayItem {
-    /// Gevulde rechthoek (achtergrond), kleur als 0xRRGGBB.
+    /// Filled rectangle (background), color as 0xRRGGBB.
     Rect { x: f32, y: f32, w: f32, h: f32, color: u32 },
-    /// Tekst op (x,y), kleur 0xRRGGBB, fontgrootte in px.
+    /// Text at (x,y), color 0xRRGGBB, font size in px.
     Text { x: f32, y: f32, text: String, color: u32, size: f32 },
-    /// `<img>`-vak: de kernel haalt `src` op (data:/http) en blit de pixels.
+    /// `<img>` box: the kernel fetches `src` (data:/http) and blits the pixels.
     Image { x: f32, y: f32, w: f32, h: f32, src: String },
-    /// Tekst-invoerveld: `node` = DOM-knoop (voor focus/live waarde).
+    /// Text input field: `node` = DOM node (for focus/live value).
     Field { x: f32, y: f32, w: f32, h: f32, node: usize, name: String, value: String },
-    /// Knop/verzendknop: `node` = DOM-knoop (voor klik → formulier-submit).
+    /// Button/submit button: `node` = DOM node (for click → form submit).
     Button { x: f32, y: f32, w: f32, h: f32, node: usize, label: String },
 }
 
-/// Bouw de display-lijst voor een gelayoute pagina.
+/// Build the display list for a laid-out page.
 pub fn paint(dom: &Dom, styles: &[ComputedStyle], root: &LayoutBox) -> Vec<DisplayItem> {
     let mut items = Vec::new();
     walk(dom, styles, root, &mut items);
@@ -37,7 +37,7 @@ pub fn paint(dom: &Dom, styles: &[ComputedStyle], root: &LayoutBox) -> Vec<Displ
 }
 
 fn walk(dom: &Dom, styles: &[ComputedStyle], b: &LayoutBox, out: &mut Vec<DisplayItem>) {
-    // 1) Achtergrond-rechthoek (padding-box) als er een achtergrondkleur is.
+    // 1) Background rectangle (padding box) if there is a background color.
     if let Some(node) = b.node {
         if let Some(style) = styles.get(node) {
             if let Some(color) = bg_color(style) {
@@ -52,14 +52,14 @@ fn walk(dom: &Dom, styles: &[ComputedStyle], b: &LayoutBox, out: &mut Vec<Displa
             }
         }
     }
-    // 2) Tekst.
+    // 2) Text.
     if let BoxType::Text(t) = &b.box_type {
         let color = b
             .node
             .and_then(|n| styles.get(n))
             .and_then(|s| s.get("color"))
             .and_then(|c| parse_color(c))
-            .unwrap_or(0x1A_1714); // standaard inkt
+            .unwrap_or(0x1A_1714); // default ink
         let trimmed = t.trim();
         if !trimmed.is_empty() {
             out.push(DisplayItem::Text {
@@ -71,7 +71,7 @@ fn walk(dom: &Dom, styles: &[ComputedStyle], b: &LayoutBox, out: &mut Vec<Displa
             });
         }
     }
-    // 2b) Vervangen element (afbeelding / formulierbesturing).
+    // 2b) Replaced element (image / form control).
     if let BoxType::Replaced(r) = &b.box_type {
         let d = &b.dimensions;
         let (x, y, w, h) = (d.content.x, d.content.y, d.content.width, d.content.height);
@@ -88,7 +88,7 @@ fn walk(dom: &Dom, styles: &[ComputedStyle], b: &LayoutBox, out: &mut Vec<Displa
             }
         }
     }
-    // 3) Kinderen (boven de achtergrond).
+    // 3) Children (above the background).
     for c in &b.children {
         walk(dom, styles, c, out);
     }
@@ -101,8 +101,8 @@ fn bg_color(style: &ComputedStyle) -> Option<u32> {
         .and_then(|v| parse_color(v))
 }
 
-/// Parse een CSS-kleur naar 0xRRGGBB. Ondersteunt `#rgb`, `#rrggbb`, `rgb(r,g,b)`
-/// en een set benoemde kleuren.
+/// Parse a CSS color into 0xRRGGBB. Supports `#rgb`, `#rrggbb`, `rgb(r,g,b)`
+/// and a set of named colors.
 pub fn parse_color(input: &str) -> Option<u32> {
     let s = input.trim();
     if let Some(hex) = s.strip_prefix('#') {
@@ -168,16 +168,16 @@ mod tests {
 
     #[test]
     fn paints_background_and_text() {
-        let dom = parse("<body><div><p>Hallo EuroOS</p></div></body>");
+        let dom = parse("<body><div><p>Hello EuroOS</p></div></body>");
         let css = parse_stylesheet("div { background-color: #2D6BE0; height: 40px } p { color: white }");
         let styles = compute(&dom, &[&css]);
         let lb = layout(&dom, &styles, 800.0);
         let items = paint(&dom, &styles, &lb);
 
-        // Er is een blauwe achtergrond-rechthoek (de div).
+        // There is a blue background rectangle (the div).
         assert!(items.iter().any(|i| matches!(i, DisplayItem::Rect { color, .. } if *color == 0x2D6BE0)));
-        // En witte tekst "Hallo EuroOS".
-        assert!(items.iter().any(|i| matches!(i, DisplayItem::Text { text, color, .. } if text == "Hallo EuroOS" && *color == 0xFFFFFF)));
+        // And white text "Hello EuroOS".
+        assert!(items.iter().any(|i| matches!(i, DisplayItem::Text { text, color, .. } if text == "Hello EuroOS" && *color == 0xFFFFFF)));
     }
 
     #[test]
@@ -196,9 +196,9 @@ mod tests {
     #[test]
     fn renders_form_field_and_button() {
         let dom = parse(
-            r#"<body><form action="/zoek" method="get">
+            r#"<body><form action="/search" method="get">
                <input type="text" name="q" value="euro">
-               <input type="submit" value="Zoek"></form></body>"#,
+               <input type="submit" value="Search"></form></body>"#,
         );
         let styles = compute(&dom, &[]);
         let lb = layout(&dom, &styles, 800.0);
@@ -212,18 +212,18 @@ mod tests {
             DisplayItem::Button { label, .. } => Some(label.clone()),
             _ => None,
         });
-        assert_eq!(btn, Some(String::from("Zoek")));
+        assert_eq!(btn, Some(String::from("Search")));
     }
 
     #[test]
     fn document_order_background_before_text() {
-        let dom = parse("<body><div><span>tekst</span></div></body>");
+        let dom = parse("<body><div><span>text</span></div></body>");
         let css = parse_stylesheet("div { background: red }");
         let styles = compute(&dom, &[&css]);
         let lb = layout(&dom, &styles, 400.0);
         let items = paint(&dom, &styles, &lb);
         let rect_idx = items.iter().position(|i| matches!(i, DisplayItem::Rect { .. }));
         let text_idx = items.iter().position(|i| matches!(i, DisplayItem::Text { .. }));
-        assert!(rect_idx < text_idx); // achtergrond vóór tekst
+        assert!(rect_idx < text_idx); // background before text
     }
 }

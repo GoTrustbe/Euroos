@@ -1,12 +1,12 @@
-/* EuroOS — bewijs van het PREEMPTIEVE per-proces-model. Dit is een gewone musl
- * static-PIE binary met een THREAD-LOCAL teller (`__thread`). musl zet bij start
- * een eigen TLS-blok op en laadt FS_BASE; de teller wordt dus FS-relatief
- * benaderd. Draaien er twee instanties tegelijk en wisselt de scheduler ze
- * preemptief af, dan blijven hun tellers ALLEEN onafhankelijk als de kernel
- * FS_BASE per proces bewaart/herstelt bij elke context-switch.
+/* EuroOS — proof of the PREEMPTIVE per-process model. This is an ordinary musl
+ * static-PIE binary with a THREAD-LOCAL counter (`__thread`). At startup musl
+ * sets up its own TLS block and loads FS_BASE; the counter is therefore accessed
+ * FS-relative. If two instances run at the same time and the scheduler swaps
+ * them preemptively, their counters stay independent ONLY if the kernel
+ * saves/restores FS_BASE per process on every context switch.
  *
- * Geen printf/malloc — alleen getpid() + write() — om de syscall-set klein te
- * houden. De lus eindigt nooit (een gescheduelde achtergrondtaak). */
+ * No printf/malloc — only getpid() + write() — to keep the syscall set small.
+ * The loop never ends (a scheduled background task). */
 #include <unistd.h>
 
 __thread volatile unsigned long counter = 0;
@@ -35,7 +35,7 @@ int main(void) {
 
     unsigned long i = 0;
     for (;;) {
-        counter++; /* THREAD-LOCAL (fs-relatief) */
+        counter++; /* THREAD-LOCAL (fs-relative) */
         i++;
         if ((i & 0x1FFFF) == 0) {
             char msg[64];
@@ -43,7 +43,7 @@ int main(void) {
             const char *p = "tls-proc ";
             while (*p) msg[o++] = *p++;
             for (int k = 0; k < pn; k++) msg[o++] = pbuf[k];
-            const char *q = ": teller=";
+            const char *q = ": counter=";
             while (*q) msg[o++] = *q++;
             o += utoa(counter, msg + o);
             msg[o++] = '\n';

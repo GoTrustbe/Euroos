@@ -1,8 +1,8 @@
-//! H4: EuroWASM-integratie — draai een WASM-module in de kernel via de no-JIT
-//! interpreter, met de WASI-imports afgebeeld op **EuroGuard-capabilities**. De
-//! zelftest bouwt een module die (a) een loop-som 1..=10 = 55 berekent (bewijst de
-//! interpreter: locals, loop, br_if, rekenkunde) en (b) `euro.fd_write` aanroept om
-//! een bericht te schrijven — dat alleen slaagt als de host de capability verleent.
+//! H4: EuroWASM integration — run a WASM module in the kernel via the no-JIT
+//! interpreter, with the WASI imports mapped onto **EuroGuard capabilities**. The
+//! self-test builds a module that (a) computes a loop sum 1..=10 = 55 (proving the
+//! interpreter: locals, loop, br_if, arithmetic) and (b) calls `euro.fd_write` to
+//! write a message — which only succeeds if the host grants the capability.
 
 use alloc::format;
 use alloc::string::String;
@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use eurofs::FileSystem;
 use eurowasm::{HostImports, Instance, Module, Val, WasmError};
 
-// ── Mini-assembler voor de demo-module (zelfde codering als de host-tests) ──
+// ── Mini-assembler for the demo module (same encoding as the host tests) ──
 fn uleb(mut n: u32) -> Vec<u8> {
     let mut o = Vec::new();
     loop {
@@ -47,14 +47,14 @@ fn sleb(mut v: i64) -> Vec<u8> {
     o
 }
 
-/// Het bericht dat de WASM-module via `fd_write` schrijft. De modulecode geeft de
-/// lengte mee; de kernel legt het in het lineair geheugen vóór de aanroep.
-const MSG: &[u8] = b"EuroWASM: no-JIT interpreter draait in de kernel\n";
+/// The message the WASM module writes via `fd_write`. The module code passes the
+/// length; the kernel places it in linear memory before the call.
+const MSG: &[u8] = b"EuroWASM: no-JIT interpreter runs in the kernel\n";
 
-/// Bouw de demo-module: importeert `euro.fd_write`, exporteert `run()->i32` die
-/// `fd_write(0, MSG.len())` aanroept en daarna de loop-som 1..=10 = 55 teruggeeft.
+/// Build the demo module: imports `euro.fd_write`, exports `run()->i32` which
+/// calls `fd_write(0, MSG.len())` and then returns the loop sum 1..=10 = 55.
 fn build_module() -> Vec<u8> {
-    let mut w = vec![0u8, 0x61, 0x73, 0x6d, 1, 0, 0, 0]; // \0asm + versie
+    let mut w = vec![0u8, 0x61, 0x73, 0x6d, 1, 0, 0, 0]; // \0asm + version
     // types: 0 = (i32,i32)->i32 (fd_write), 1 = ()->i32 (run)
     w.extend(section(1, vec![2, 0x60, 2, 0x7f, 0x7f, 1, 0x7f, 0x60, 0, 1, 0x7f]));
     // import euro.fd_write : type 0
@@ -64,15 +64,15 @@ fn build_module() -> Vec<u8> {
     im.extend_from_slice(b"fd_write");
     im.extend_from_slice(&[0x00, 0]);
     w.extend(section(2, im));
-    w.extend(section(3, vec![1, 1])); // 1 functie, type 1
-    w.extend(section(5, vec![1, 0x00, 1])); // 1 mem-pagina
+    w.extend(section(3, vec![1, 1])); // 1 function, type 1
+    w.extend(section(5, vec![1, 0x00, 1])); // 1 mem page
     let mut ex = vec![1u8, 3];
     ex.extend_from_slice(b"run");
-    ex.extend_from_slice(&[0x00, 1]); // export "run" = functie-index 1 (import 0 + def 0)
+    ex.extend_from_slice(&[0x00, 1]); // export "run" = function index 1 (import 0 + def 0)
     w.extend(section(7, ex));
-    // code: fd_write(0, len); drop; som 1..=10; end. Locals: i(0), acc(1).
-    let len = MSG.len() as u8; // < 128 → één sleb-byte
-    let mut body = vec![1u8, 2, 0x7f]; // 1 local-groep: 2× i32
+    // code: fd_write(0, len); drop; sum 1..=10; end. Locals: i(0), acc(1).
+    let len = MSG.len() as u8; // < 128 → one sleb byte
+    let mut body = vec![1u8, 2, 0x7f]; // 1 local group: 2× i32
     body.extend_from_slice(&[
         0x41, 0x00, 0x41, len, 0x10, 0x00, 0x1a, // fd_write(0,len); drop
         0x41, 0x00, 0x21, 0x01, // acc = 0
@@ -94,9 +94,9 @@ fn build_module() -> Vec<u8> {
     w
 }
 
-/// Een host die `euro.fd_write` op een EuroGuard-capability afbeeldt: zonder de
-/// capability wordt de call geweigerd (de WASM-trap propageert). Mét de capability
-/// schrijft hij de bytes (hier: verzamelt ze + logt naar serial).
+/// A host that maps `euro.fd_write` onto an EuroGuard capability: without the
+/// capability the call is denied (the WASM trap propagates). With the capability
+/// it writes the bytes (here: collects them + logs to serial).
 struct CapHost {
     cap_console: bool,
     out: Vec<u8>,
@@ -106,7 +106,7 @@ impl HostImports for CapHost {
         if m == "euro" && n == "fd_write" {
             if !self.cap_console {
                 return Err(WasmError::CapabilityDenied(alloc::string::String::from(
-                    "CAP_CONSOLE voor fd_write",
+                    "CAP_CONSOLE for fd_write",
                 )));
             }
             let ptr = args[0] as usize;
@@ -116,60 +116,60 @@ impl HostImports for CapHost {
             }
             return Ok(vec![len as i64]);
         }
-        Err(WasmError::HostError(alloc::string::String::from("onbekende import")))
+        Err(WasmError::HostError(alloc::string::String::from("unknown import")))
     }
 }
 
-/// H4-zelftest: parse + draai de WASM-module met EN zonder de capability.
+/// H4 self-test: parse + run the WASM module WITH and WITHOUT the capability.
 pub fn selftest() {
     let bytes = build_module();
     let module = match Module::parse(&bytes) {
         Ok(m) => m,
         Err(e) => {
-            crate::serial_println!("[h4] WASM-parse mislukt: {:?}", e);
+            crate::serial_println!("[h4] WASM parse failed: {:?}", e);
             return;
         }
     };
 
-    // (1) MÉT CAP_CONSOLE: fd_write slaagt, de som komt terug.
+    // (1) WITH CAP_CONSOLE: fd_write succeeds, the sum comes back.
     let mut inst = Instance::new(&module);
-    let _ = inst.write_mem(0, MSG); // kernel legt het bericht in WASM-geheugen
+    let _ = inst.write_mem(0, MSG); // kernel places the message in WASM memory
     let mut host = CapHost { cap_console: true, out: Vec::new() };
     match inst.invoke("run", &[], &mut host) {
         Ok(r) => {
             let sum = r.first().copied().unwrap_or(-1);
             crate::serial_println!(
-                "[h4] WASM run() = {} (verwacht 55), fd_write→capability schreef {} bytes: {:?}",
+                "[h4] WASM run() = {} (expected 55), fd_write→capability wrote {} bytes: {:?}",
                 sum,
                 host.out.len(),
                 core::str::from_utf8(&host.out).unwrap_or("?").trim_end()
             );
         }
-        Err(e) => crate::serial_println!("[h4] WASM-run mislukt: {:?}", e),
+        Err(e) => crate::serial_println!("[h4] WASM run failed: {:?}", e),
     }
 
-    // (2) ZONDER de capability: de WASI-import wordt geweigerd (sandbox-grens).
+    // (2) WITHOUT the capability: the WASI import is denied (sandbox boundary).
     let mut inst2 = Instance::new(&module);
     let _ = inst2.write_mem(0, MSG);
     let mut deny = CapHost { cap_console: false, out: Vec::new() };
     match inst2.invoke("run", &[], &mut deny) {
-        Ok(_) => crate::serial_println!("[h4] FOUT: fd_write zonder capability had geweigerd moeten worden"),
+        Ok(_) => crate::serial_println!("[h4] ERROR: fd_write without capability should have been denied"),
         Err(WasmError::CapabilityDenied(c)) => {
-            crate::serial_println!("[h4] WASI-capability-poort: fd_write GEWEIGERD zonder {} ✓", c)
+            crate::serial_println!("[h4] WASI capability gate: fd_write DENIED without {} ✓", c)
         }
-        Err(e) => crate::serial_println!("[h4] onverwachte fout: {:?}", e),
+        Err(e) => crate::serial_println!("[h4] unexpected error: {:?}", e),
     }
 }
 
-// ── AH-3: een ZELF-DRAGENDE .wasm (eigen data-sectie) + `wasm <bestand>` ──────
+// ── AH-3: a SELF-CONTAINED .wasm (own data section) + `wasm <file>` ──────
 
-/// Zoals [`build_module`], maar met een **data-sectie** zodat het bericht ín de
-/// module zit (geen kernel-`write_mem` meer nodig) — een echte, zelf-dragende
-/// `.wasm` die van schijf geladen en gedraaid kan worden.
+/// Like [`build_module`], but with a **data section** so the message is IN the
+/// module (no kernel `write_mem` needed anymore) — a real, self-contained
+/// `.wasm` that can be loaded from disk and run.
 fn build_demo_wasm() -> Vec<u8> {
     let mut w = build_module();
-    // data: 1 actief segment op offset 0 met MSG (de loader/host hoeft niets te injecteren).
-    let mut d = vec![1u8, 0u8]; // 1 segment, flags 0 (actief, mem 0)
+    // data: 1 active segment at offset 0 with MSG (the loader/host need not inject anything).
+    let mut d = vec![1u8, 0u8]; // 1 segment, flags 0 (active, mem 0)
     d.extend_from_slice(&[0x41, 0x00, 0x0b]); // offset = i32.const 0, end
     d.extend(uleb(MSG.len() as u32));
     d.extend_from_slice(MSG);
@@ -177,25 +177,25 @@ fn build_demo_wasm() -> Vec<u8> {
     w
 }
 
-/// Voer een ECHTE `.wasm` uit het VFS uit (H4-remainder: `wasm <bestand>`), in de
-/// no-JIT sandbox met cap-gated WASI. De gebruiker draaide het zelf → console-cap
-/// verleend; de sandbox-grens blijft (een niet-verleende host-call trapt).
+/// Run a REAL `.wasm` from the VFS (H4 remainder: `wasm <file>`), in the
+/// no-JIT sandbox with cap-gated WASI. The user ran it themselves → console cap
+/// granted; the sandbox boundary remains (a non-granted host call traps).
 pub fn run_file(fs: &mut dyn FileSystem, path: &str) -> Vec<String> {
     match fs.read_file(path) {
         Ok(bytes) => run_bytes(&bytes, path, true),
-        Err(_) => vec![format!("wasm: {path}: bestand niet gevonden")],
+        Err(_) => vec![format!("wasm: {path}: file not found")],
     }
 }
 
-/// Parse + draai WASM-bytes; `cap` = of de console-capability verleend is.
+/// Parse + run WASM bytes; `cap` = whether the console capability is granted.
 fn run_bytes(bytes: &[u8], label: &str, cap: bool) -> Vec<String> {
     let module = match Module::parse(bytes) {
         Ok(m) => m,
-        Err(e) => return vec![format!("wasm: {label}: parse-fout {:?}", e)],
+        Err(e) => return vec![format!("wasm: {label}: parse error {:?}", e)],
     };
     let entry = match ["run", "_start", "main"].into_iter().find(|e| module.has_export(e)) {
         Some(e) => e,
-        None => return vec![format!("wasm: {label}: geen 'run'/'_start'/'main'-export")],
+        None => return vec![format!("wasm: {label}: no 'run'/'_start'/'main' export")],
     };
     let mut inst = Instance::new(&module);
     let mut host = CapHost { cap_console: cap, out: Vec::new() };
@@ -212,13 +212,13 @@ fn run_bytes(bytes: &[u8], label: &str, cap: bool) -> Vec<String> {
             ));
             out
         }
-        Err(WasmError::CapabilityDenied(c)) => vec![format!("wasm: {label}: host-call GEWEIGERD ({c}) — sandbox-grens")],
+        Err(WasmError::CapabilityDenied(c)) => vec![format!("wasm: {label}: host call DENIED ({c}) — sandbox boundary")],
         Err(e) => vec![format!("wasm: {label}: trap {:?}", e)],
     }
 }
 
-/// `[wasm2]`-zelftest: schrijf een echte zelf-dragende `.wasm` naar EuroFS en draai
-/// ze via het `wasm <bestand>`-pad — mét cap (output + som) en zonder (geweigerd).
+/// `[wasm2]` self-test: write a real self-contained `.wasm` to EuroFS and run
+/// it via the `wasm <file>` path — with cap (output + sum) and without (denied).
 pub fn selftest_file(fs: &mut dyn FileSystem) {
     let bytes = build_demo_wasm();
     let _ = fs.create_dir("/agents");
@@ -229,25 +229,25 @@ pub fn selftest_file(fs: &mut dyn FileSystem) {
     let msg_ok = granted.iter().any(|l| l.contains("EuroWASM"));
     let sum_ok = granted.iter().any(|l| l.contains("= 55"));
     let denied = run_bytes(&bytes, "/agents/demo.wasm", false);
-    let denied_ok = denied.iter().any(|l| l.contains("GEWEIGERD"));
+    let denied_ok = denied.iter().any(|l| l.contains("DENIED"));
 
     let ok = on_fs && msg_ok && sum_ok && denied_ok;
     crate::serial_println!(
-        "[wasm2] `wasm <bestand>`: zelf-dragende .wasm (data-sectie) op EuroFS={on_fs}, mét-cap fd_write+run()=55={}, zonder-cap host-call-geweigerd={denied_ok} → {}",
+        "[wasm2] `wasm <file>`: self-contained .wasm (data section) on EuroFS={on_fs}, with-cap fd_write+run()=55={}, without-cap host-call-denied={denied_ok} → {}",
         msg_ok && sum_ok,
-        if ok { "OK (echte .wasm van schijf in de no-JIT sandbox, WASI cap-gated) ✓" } else { "MISLUKT" }
+        if ok { "OK (real .wasm from disk in the no-JIT sandbox, WASI cap-gated) ✓" } else { "FAILED" }
     );
 }
 
-// ── H4-vervolg: bind de WASM-WASI aan een ECHTE EuroSandbox-container ───────
-// De WASI-imports worden gepoort op de container z'n EFFECTIEVE capabilities +
-// netwerk-scope (EuroGuard). Zo wordt een WASM-app daadwerkelijk door het
-// soevereine capability-model bestuurd, niet door een test-vlag.
+// ── H4 follow-up: bind the WASM WASI to a REAL EuroSandbox container ───────
+// The WASI imports are gated on the container's EFFECTIVE capabilities +
+// network scope (EuroGuard). This way a WASM app is actually governed by the
+// sovereign capability model, not by a test flag.
 use crate::ring3::{CAP_CONSOLE, CAP_FILE, CAP_NET};
 use eurosandbox::{Container, NetScope};
 
-/// Een WASI-host gebonden aan één container: elke host-call wordt getoetst aan de
-/// EFFECTIEVE capabilities (`base ∩ container.caps`) en, voor netwerk, de net-scope.
+/// A WASI host bound to one container: every host call is checked against the
+/// EFFECTIVE capabilities (`base ∩ container.caps`) and, for network, the net scope.
 struct ContainerWasiHost<'c> {
     c: &'c Container,
     base: u64,
@@ -275,19 +275,19 @@ impl HostImports for ContainerWasiHost<'_> {
                 let port = args[1] as u16;
                 if !self.c.allow_connect(ip, port) {
                     return Err(WasmError::CapabilityDenied(alloc::format!(
-                        "netwerk-scope verbiedt {}.{}.{}.{}:{}",
+                        "network scope forbids {}.{}.{}.{}:{}",
                         ip[0], ip[1], ip[2], ip[3], port
                     )));
                 }
                 Ok(vec![1])
             }
-            _ => Err(WasmError::HostError(alloc::string::String::from("onbekende import"))),
+            _ => Err(WasmError::HostError(alloc::string::String::from("unknown import"))),
         }
     }
 }
 
-/// Module die `euro.sock_connect(ip, port)` importeert en `try_net()->i32` exporteert
-/// die 10.0.2.2:80 probeert te bereiken — gateway voor de container-test.
+/// Module that imports `euro.sock_connect(ip, port)` and exports `try_net()->i32`
+/// which tries to reach 10.0.2.2:80 — gateway for the container test.
 fn build_net_module() -> Vec<u8> {
     let mut w = vec![0u8, 0x61, 0x73, 0x6d, 1, 0, 0, 0];
     w.extend(section(1, vec![2, 0x60, 2, 0x7f, 0x7f, 1, 0x7f, 0x60, 0, 1, 0x7f]));
@@ -302,12 +302,12 @@ fn build_net_module() -> Vec<u8> {
     ex.extend_from_slice(b"try_net");
     ex.extend_from_slice(&[0x00, 1]);
     w.extend(section(7, ex));
-    let ip = (10i64 << 24) | (2 << 8) | 2; // 10.0.2.2 big-endian gepakt
-    let mut body = vec![0u8]; // geen locals
+    let ip = (10i64 << 24) | (2 << 8) | 2; // 10.0.2.2 big-endian packed
+    let mut body = vec![0u8]; // no locals
     body.push(0x41);
     body.extend(sleb(ip));
     body.push(0x41);
-    body.extend(sleb(80)); // poort 80
+    body.extend(sleb(80)); // port 80
     body.extend_from_slice(&[0x10, 0x00, 0x0b]); // call 0 (sock_connect); end
     let mut code = vec![1u8];
     code.extend(uleb(body.len() as u32));
@@ -316,39 +316,39 @@ fn build_net_module() -> Vec<u8> {
     w
 }
 
-/// H4-vervolgzelftest: draai dezelfde WASM-module in DRIE EuroSandbox-containers en
-/// laat zien dat de WASI-`sock_connect` door de container-capabilities + net-scope
-/// wordt bestuurd: toegestaan, geweigerd-zonder-CAP_NET, geweigerd-door-scope.
+/// H4 follow-up self-test: run the same WASM module in THREE EuroSandbox containers and
+/// show that the WASI `sock_connect` is governed by the container capabilities + net scope:
+/// allowed, denied-without-CAP_NET, denied-by-scope.
 pub fn container_selftest() {
     let bytes = build_net_module();
     let module = match Module::parse(&bytes) {
         Ok(m) => m,
         Err(e) => {
-            crate::serial_println!("[h4-ctr] parse mislukt: {:?}", e);
+            crate::serial_println!("[h4-ctr] parse failed: {:?}", e);
             return;
         }
     };
-    let base = CAP_CONSOLE | CAP_NET | CAP_FILE; // proces-basismasker
+    let base = CAP_CONSOLE | CAP_NET | CAP_FILE; // process base mask
     let ok = Container::new("net-ok", base, NetScope::Allow(vec![([10, 0, 2, 2], 80)]));
-    let no_net = Container::new("no-net", CAP_CONSOLE, NetScope::Any); // CAP_NET ontnomen
+    let no_net = Container::new("no-net", CAP_CONSOLE, NetScope::Any); // CAP_NET removed
     let scoped = Container::new("scoped", base, NetScope::Allow(vec![([1, 1, 1, 1], 443)]));
     for ctr in [&ok, &no_net, &scoped] {
         let mut inst = Instance::new(&module);
         let mut host = ContainerWasiHost { c: ctr, base };
         match inst.invoke("try_net", &[], &mut host) {
             Ok(v) => crate::serial_println!(
-                "[h4-ctr] container '{}' (caps {:#06b}): sock_connect TOEGESTAAN → {:?}",
+                "[h4-ctr] container '{}' (caps {:#06b}): sock_connect ALLOWED → {:?}",
                 ctr.name,
                 ctr.effective_caps(base),
                 v
             ),
             Err(WasmError::CapabilityDenied(why)) => crate::serial_println!(
-                "[h4-ctr] container '{}' (caps {:#06b}): sock_connect GEWEIGERD — {} ✓",
+                "[h4-ctr] container '{}' (caps {:#06b}): sock_connect DENIED — {} ✓",
                 ctr.name,
                 ctr.effective_caps(base),
                 why
             ),
-            Err(e) => crate::serial_println!("[h4-ctr] container '{}': fout {:?}", ctr.name, e),
+            Err(e) => crate::serial_println!("[h4-ctr] container '{}': error {:?}", ctr.name, e),
         }
     }
 }

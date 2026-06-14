@@ -57,7 +57,7 @@ impl IcmpEcho {
         let mut b = Vec::with_capacity(8 + self.payload.len());
         b.push(self.kind.as_u8());
         b.push(0); // code
-        b.extend_from_slice(&[0, 0]); // checksum-placeholder
+        b.extend_from_slice(&[0, 0]); // checksum placeholder
         b.extend_from_slice(&self.identifier.to_be_bytes());
         b.extend_from_slice(&self.sequence.to_be_bytes());
         b.extend_from_slice(&self.payload);
@@ -66,7 +66,7 @@ impl IcmpEcho {
         b
     }
 
-    /// Bouw de echo-reply die hoort bij een ontvangen echo-request.
+    /// Build the echo reply that corresponds to a received echo request.
     pub fn reply_to(req: &IcmpEcho) -> IcmpEcho {
         IcmpEcho {
             kind: IcmpType::EchoReply,
@@ -77,23 +77,23 @@ impl IcmpEcho {
     }
 }
 
-/// ICMP-foutmeldingen (RFC 792): de soort fout die we terugsturen wanneer een
-/// pakket niet afgeleverd kon worden. Het ICMP-bericht draagt de eerste bytes
-/// van het oorspronkelijke datagram terug, zodat de afzender het kan koppelen.
+/// ICMP error messages (RFC 792): the kind of error we send back when a
+/// packet could not be delivered. The ICMP message carries the first bytes
+/// of the original datagram back, so the sender can correlate it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IcmpError {
-    /// Type 3 — bestemming onbereikbaar.
+    /// Type 3 — destination unreachable.
     DestUnreachable(UnreachCode),
-    /// Type 11, code 0 — TTL verlopen onderweg.
+    /// Type 11, code 0 — TTL expired in transit.
     TimeExceeded,
 }
 
-/// Codes onder "Destination Unreachable" (type 3) die wij genereren.
+/// Codes under "Destination Unreachable" (type 3) that we generate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnreachCode {
-    /// Code 1 — geen route naar de host.
+    /// Code 1 — no route to the host.
     Host,
-    /// Code 3 — de poort is gesloten (geen luisteraar).
+    /// Code 3 — the port is closed (no listener).
     Port,
 }
 
@@ -106,29 +106,29 @@ impl IcmpError {
         }
     }
 
-    /// Bouw het ICMP-fout-payload (zónder IP-header) voor het datagram dat de
-    /// fout veroorzaakte. RFC 792 schrijft voor: de IP-header + de eerste 8 bytes
-    /// van de oorspronkelijke data worden teruggestuurd. Een groter origineel wordt
-    /// afgekapt op 28 bytes (20-byte IP-header + 8), zoals klassiek gebruikelijk.
+    /// Build the ICMP error payload (without the IP header) for the datagram that
+    /// caused the error. RFC 792 prescribes: the IP header + the first 8 bytes
+    /// of the original data are sent back. A larger original is truncated
+    /// to 28 bytes (20-byte IP header + 8), as is classically customary.
     pub fn build(self, original_datagram: &[u8]) -> Vec<u8> {
         let (typ, code) = self.type_code();
         let copy = original_datagram.len().min(28);
         let mut b = Vec::with_capacity(8 + copy);
         b.push(typ);
         b.push(code);
-        b.extend_from_slice(&[0, 0]); // checksum-placeholder
-        b.extend_from_slice(&[0, 0, 0, 0]); // ongebruikt (4 bytes)
+        b.extend_from_slice(&[0, 0]); // checksum placeholder
+        b.extend_from_slice(&[0, 0, 0, 0]); // unused (4 bytes)
         b.extend_from_slice(&original_datagram[..copy]);
         let cs = internet_checksum(&b);
         b[2..4].copy_from_slice(&cs.to_be_bytes());
         b
     }
 
-    /// Parse een binnenkomend ICMP-foutbericht: geef de soort fout terug plus de
-    /// teruggestuurde eerste bytes van het oorspronkelijke datagram (de IP-header +
-    /// begin van de L4-header), zodat de afzender de fout aan zijn verbinding kan
-    /// koppelen. Geeft `None` als het geen door ons herkende fout is of de checksum
-    /// niet klopt. Het is de tegenhanger van [`build`](Self::build).
+    /// Parse an incoming ICMP error message: return the kind of error plus the
+    /// returned first bytes of the original datagram (the IP header +
+    /// start of the L4 header), so the sender can correlate the error with its
+    /// connection. Returns `None` if it is not an error we recognize or the checksum
+    /// does not match. It is the counterpart of [`build`](Self::build).
     pub fn parse(buf: &[u8]) -> Option<(IcmpError, Vec<u8>)> {
         if buf.len() < 8 || internet_checksum(buf) != 0 {
             return None;
@@ -139,7 +139,7 @@ impl IcmpError {
             (11, 0) => IcmpError::TimeExceeded,
             _ => return None,
         };
-        // Bytes 4..8 zijn ongebruikt; daarna komt het oorspronkelijke datagram.
+        // Bytes 4..8 are unused; after that comes the original datagram.
         Some((kind, buf[8..].to_vec()))
     }
 }
@@ -174,25 +174,25 @@ mod tests {
         assert_eq!(rep.identifier, 42);
         assert_eq!(rep.sequence, 99);
         assert_eq!(rep.payload, b"abc");
-        // Reply heeft geldige checksum.
+        // Reply has a valid checksum.
         assert!(IcmpEcho::parse(&rep.build()).is_ok());
     }
 
     #[test]
     fn port_unreachable_shape_en_checksum() {
-        // Doe alsof een UDP-datagram binnenkwam op een gesloten poort: 20-byte
-        // IP-header + 8 bytes UDP-header.
+        // Pretend a UDP datagram arrived on a closed port: 20-byte
+        // IP header + 8 bytes UDP header.
         let mut orig = Vec::new();
         orig.extend_from_slice(&[0x45, 0, 0, 28]); // ver/ihl, tos, totlen
-        orig.extend_from_slice(&[0; 16]); // rest van de IP-header
+        orig.extend_from_slice(&[0; 16]); // rest of the IP header
         orig.extend_from_slice(&[0xC0, 0, 0, 53, 0, 8, 0, 0]); // UDP src/dst/len/cs
         let msg = IcmpError::DestUnreachable(UnreachCode::Port).build(&orig);
         assert_eq!(msg[0], 3); // type = dest unreachable
         assert_eq!(msg[1], 3); // code = port
-        assert_eq!(&msg[4..8], &[0, 0, 0, 0]); // ongebruikt veld
-        // Hele bericht moet een geldige internet-checksum hebben.
+        assert_eq!(&msg[4..8], &[0, 0, 0, 0]); // unused field
+        // The whole message must have a valid internet checksum.
         assert_eq!(internet_checksum(&msg), 0);
-        // Het oorspronkelijke datagram zit erin terug (IP-header + 8 bytes).
+        // The original datagram is included back (IP header + 8 bytes).
         assert_eq!(&msg[8..], &orig[..]);
     }
 
@@ -202,7 +202,7 @@ mod tests {
         let msg = IcmpError::TimeExceeded.build(&orig);
         assert_eq!(msg[0], 11); // type = time exceeded
         assert_eq!(msg[1], 0);
-        assert_eq!(msg.len(), 8 + 28); // header + afgekapt origineel
+        assert_eq!(msg.len(), 8 + 28); // header + truncated original
         assert_eq!(internet_checksum(&msg), 0);
     }
 
@@ -215,15 +215,15 @@ mod tests {
         let msg = IcmpError::DestUnreachable(UnreachCode::Port).build(&orig);
         let (kind, embedded) = IcmpError::parse(&msg).unwrap();
         assert_eq!(kind, IcmpError::DestUnreachable(UnreachCode::Port));
-        assert_eq!(embedded, &orig[..]); // origineel datagram komt terug
+        assert_eq!(embedded, &orig[..]); // original datagram comes back
     }
 
     #[test]
     fn parse_weigert_onbekend_type_en_corrupt() {
-        // Een echo-reply (type 0) is geen fout → None.
+        // An echo reply (type 0) is not an error → None.
         let echo = IcmpEcho { kind: IcmpType::EchoReply, identifier: 1, sequence: 1, payload: Vec::new() };
         assert!(IcmpError::parse(&echo.build()).is_none());
-        // Eén byte flippen breekt de checksum → None.
+        // Flipping one byte breaks the checksum → None.
         let mut msg = IcmpError::TimeExceeded.build(&[0u8; 28]);
         msg[9] ^= 0xFF;
         assert!(IcmpError::parse(&msg).is_none());

@@ -1,13 +1,13 @@
-//! EuroPkg — de afhankelijkheids-resolver van de pakketbeheerder (plan M2).
+//! EuroPkg — the dependency resolver of the package manager (plan M2).
 //!
-//! `eupkg` bouwt + verifieert al getekende `.eupkg`-pakketten (ZIP + manifest +
-//! SHA-256 + Ed25519). M2 voegt de ontbrekende kern toe: **semver-versies +
-//! constraints** en een **dependency-resolver** die uit een repository-index een
-//! geldige, topologisch geordende installatievolgorde berekent — met detectie van
-//! ontbrekende pakketten, onvervulbare versie-eisen, conflicten en cycli.
+//! `eupkg` builds + verifies already-signed `.eupkg` packages (ZIP + manifest +
+//! SHA-256 + Ed25519). M2 adds the missing core: **semver versions +
+//! constraints** and a **dependency resolver** that computes from a repository index a
+//! valid, topologically ordered install order — with detection of
+//! missing packages, unsatisfiable version requirements, conflicts and cycles.
 //!
-//! Pure, host-geteste `no_std`-logica; de echte download/verify/unpack koppelt de
-//! kernel/`eupkg` eraan.
+//! Pure, host-tested `no_std` logic; the actual download/verify/unpack is wired in by the
+//! kernel/`eupkg`.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -17,7 +17,7 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// Een semantische versie `major.minor.patch`.
+/// A semantic version `major.minor.patch`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Version {
     pub major: u32,
@@ -29,11 +29,11 @@ impl Version {
     pub fn new(major: u32, minor: u32, patch: u32) -> Self {
         Version { major, minor, patch }
     }
-    /// Parse `"1.2.3"` (ontbrekende delen = 0, dus `"1.2"` = 1.2.0).
+    /// Parse `"1.2.3"` (missing parts = 0, so `"1.2"` = 1.2.0).
     pub fn parse(s: &str) -> Option<Version> {
         let mut it = s.trim().split('.');
         let major = it.next()?.parse().ok()?;
-        // Ontbrekende delen = 0, maar een aanwezig-maar-ongeldig deel ("1.x") faalt.
+        // Missing parts = 0, but a present-but-invalid part ("1.x") fails.
         let minor = match it.next() {
             Some(x) => x.parse().ok()?,
             None => 0,
@@ -49,21 +49,21 @@ impl Version {
     }
 }
 
-/// Een versie-eis op een afhankelijkheid.
+/// A version requirement on a dependency.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Constraint {
-    /// Elke versie.
+    /// Any version.
     Any,
-    /// Exact deze versie.
+    /// Exactly this version.
     Exact(Version),
-    /// Deze versie of hoger.
+    /// This version or higher.
     AtLeast(Version),
-    /// Caret: `^1.2.0` = `>=1.2.0` én zelfde major (`<2.0.0`). Major 0 → zelfde minor.
+    /// Caret: `^1.2.0` = `>=1.2.0` and same major (`<2.0.0`). Major 0 → same minor.
     Caret(Version),
 }
 
 impl Constraint {
-    /// Voldoet `v` aan deze eis?
+    /// Does `v` satisfy this requirement?
     pub fn matches(&self, v: Version) -> bool {
         match self {
             Constraint::Any => true,
@@ -85,7 +85,7 @@ impl Constraint {
     }
 }
 
-/// Een afhankelijkheid: een pakketnaam + een versie-eis.
+/// A dependency: a package name + a version requirement.
 #[derive(Clone, Debug)]
 pub struct Dep {
     pub name: String,
@@ -98,7 +98,7 @@ impl Dep {
     }
 }
 
-/// Een (beschikbaar) pakket in de repository-index.
+/// An (available) package in the repository index.
 #[derive(Clone, Debug)]
 pub struct Package {
     pub name: String,
@@ -106,22 +106,22 @@ pub struct Package {
     pub deps: Vec<Dep>,
 }
 
-/// De repository-index: alle beschikbare pakketten (mogelijk meerdere versies).
+/// The repository index: all available packages (possibly multiple versions).
 #[derive(Default)]
 pub struct Repo {
     pub packages: Vec<Package>,
 }
 
-/// Waarom de resolutie faalt.
+/// Why resolution fails.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolveError {
-    /// Geen pakket met deze naam in de index.
+    /// No package with this name in the index.
     NotFound(String),
-    /// Wel het pakket, maar geen versie die aan de eis voldoet.
+    /// The package exists, but no version satisfies the requirement.
     NoMatchingVersion(String),
-    /// Twee eisen op hetzelfde pakket zijn onverenigbaar (gekozen versies botsen).
+    /// Two requirements on the same package are incompatible (chosen versions clash).
     Conflict(String),
-    /// Een afhankelijkheidscyclus.
+    /// A dependency cycle.
     Cycle(String),
 }
 
@@ -130,12 +130,12 @@ impl Repo {
         Repo { packages: Vec::new() }
     }
 
-    /// Voeg een pakket(versie) toe aan de index.
+    /// Add a package(version) to the index.
     pub fn add(&mut self, name: &str, version: Version, deps: Vec<Dep>) {
         self.packages.push(Package { name: name.to_string(), version, deps });
     }
 
-    /// De hoogste versie van `name` die aan `c` voldoet.
+    /// The highest version of `name` that satisfies `c`.
     fn best(&self, name: &str, c: Constraint) -> Option<&Package> {
         self.packages
             .iter()
@@ -143,15 +143,15 @@ impl Repo {
             .max_by_key(|p| p.version)
     }
 
-    /// Bestaat dit pakket (ongeacht versie)?
+    /// Does this package exist (regardless of version)?
     fn exists(&self, name: &str) -> bool {
         self.packages.iter().any(|p| p.name == name)
     }
 
-    /// Los de afhankelijkheden van `root` op tot een topologisch geordende
-    /// installatievolgorde (afhankelijkheden vóór wie ze gebruikt). De wortel staat
-    /// als laatste. Elk pakket komt één keer voor; een herhaalde eis moet
-    /// verenigbaar zijn met de reeds gekozen versie.
+    /// Resolve the dependencies of `root` into a topologically ordered
+    /// install order (dependencies before whoever uses them). The root comes
+    /// last. Each package appears once; a repeated requirement must be
+    /// compatible with the already-chosen version.
     pub fn resolve(&self, root: &str) -> Result<Vec<(String, Version)>, ResolveError> {
         let mut chosen: Vec<(String, Version)> = Vec::new();
         let mut order: Vec<(String, Version)> = Vec::new();
@@ -168,12 +168,12 @@ impl Repo {
         order: &mut Vec<(String, Version)>,
         on_stack: &mut Vec<String>,
     ) -> Result<(), ResolveError> {
-        // Cyclusdetectie eerst: zit `name` nog in de actieve keten, dan is het een cyclus
-        // (ook al staat hij al in `chosen` — hij is nog niet volledig opgelost).
+        // Cycle detection first: if `name` is still in the active chain, it is a cycle
+        // (even if it is already in `chosen` — it is not yet fully resolved).
         if on_stack.iter().any(|n| n == name) {
             return Err(ResolveError::Cycle(name.to_string()));
         }
-        // Al volledig gekozen? Dan moet de bestaande keuze aan deze eis voldoen.
+        // Already fully chosen? Then the existing choice must satisfy this requirement.
         if let Some((_, v)) = chosen.iter().find(|(n, _)| n == name) {
             if c.matches(*v) {
                 return Ok(());
@@ -187,7 +187,7 @@ impl Repo {
         let version = pkg.version;
         chosen.push((name.to_string(), version));
         on_stack.push(name.to_string());
-        // Afhankelijkheden eerst (diepte-eerst → topologische volgorde).
+        // Dependencies first (depth-first → topological order).
         let deps = pkg.deps.clone();
         for d in &deps {
             self.visit(&d.name, d.constraint, chosen, order, on_stack)?;
@@ -238,14 +238,14 @@ mod tests {
     fn resolves_in_topological_order() {
         let order = repo().resolve("app").unwrap();
         let names: Vec<&str> = order.iter().map(|(n, _)| n.as_str()).collect();
-        // libc vóór libnet/libssl; alles vóór app (laatste). libc maar één keer.
+        // libc before libnet/libssl; everything before app (last). libc only once.
         assert_eq!(names.iter().filter(|n| **n == "libc").count(), 1);
         let pos = |n: &str| names.iter().position(|x| *x == n).unwrap();
         assert!(pos("libc") < pos("libnet"));
         assert!(pos("libc") < pos("libssl"));
         assert!(pos("libnet") < pos("app"));
         assert_eq!(names.last(), Some(&"app"));
-        // Hoogste passende libc gekozen.
+        // Highest matching libc chosen.
         assert_eq!(order.iter().find(|(n, _)| n == "libc").unwrap().1, v(1, 5, 0));
     }
 
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn version_conflict() {
         let mut r = Repo::new();
-        // app eist lib =1.0 én (via mid) lib =2.0 → conflict.
+        // app requires lib =1.0 and (via mid) lib =2.0 → conflict.
         r.add("app", v(1, 0, 0), alloc::vec![Dep::new("lib", Constraint::Exact(v(1, 0, 0))), Dep::new("mid", Constraint::Any)]);
         r.add("mid", v(1, 0, 0), alloc::vec![Dep::new("lib", Constraint::Exact(v(2, 0, 0)))]);
         r.add("lib", v(1, 0, 0), alloc::vec![]);

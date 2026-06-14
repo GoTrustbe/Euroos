@@ -1,5 +1,5 @@
-//! Minimale TCP (RFC 793): segment-header bouwen/parsen met de IPv4-pseudo-header-
-//! checksum. Genoeg voor een eenvoudige client: handshake → data → teardown.
+//! Minimal TCP (RFC 793): build/parse segment header with the IPv4 pseudo-header
+//! checksum. Enough for a simple client: handshake → data → teardown.
 
 use alloc::vec::Vec;
 
@@ -43,11 +43,11 @@ impl TcpSegment {
         seg.extend_from_slice(&self.dst_port.to_be_bytes());
         seg.extend_from_slice(&self.seq.to_be_bytes());
         seg.extend_from_slice(&self.ack.to_be_bytes());
-        // data offset (5 woorden = 20 bytes) << 12 | flags
+        // data offset (5 words = 20 bytes) << 12 | flags
         let off_flags: u16 = (5u16 << 12) | (self.flags as u16);
         seg.extend_from_slice(&off_flags.to_be_bytes());
         seg.extend_from_slice(&self.window.to_be_bytes());
-        seg.extend_from_slice(&[0, 0]); // checksum-placeholder
+        seg.extend_from_slice(&[0, 0]); // checksum placeholder
         seg.extend_from_slice(&[0, 0]); // urgent pointer
         seg.extend_from_slice(&self.payload);
 
@@ -82,14 +82,14 @@ impl TcpSegment {
         self.flags & flag != 0
     }
 
-    /// Bouw het RST-segment dat een gesloten poort (geen luisteraar) hoort terug te
-    /// sturen voor een binnenkomend `incoming`-segment, volgens RFC 793 §3.4. De
-    /// poorten worden gespiegeld. Geeft `None` als `incoming` zélf al een RST is —
-    /// op een reset hoort men nooit te antwoorden (anders een eindeloze RST-storm).
+    /// Build the RST segment that a closed port (no listener) should send back
+    /// for an incoming `incoming` segment, per RFC 793 §3.4. The
+    /// ports are mirrored. Returns `None` if `incoming` is itself already an RST —
+    /// one should never reply to a reset (otherwise an endless RST storm).
     ///
-    /// - Heeft `incoming` ACK gezet, dan: `seq = incoming.ack`, vlaggen = `RST` (geen ACK).
-    /// - Anders: `seq = 0`, `ack = incoming.seq + segmentlengte` (SYN en FIN tellen elk
-    ///   als 1 sequentienummer), vlaggen = `RST | ACK`.
+    /// - If `incoming` has ACK set, then: `seq = incoming.ack`, flags = `RST` (no ACK).
+    /// - Otherwise: `seq = 0`, `ack = incoming.seq + segment length` (SYN and FIN each
+    ///   count as 1 sequence number), flags = `RST | ACK`.
     pub fn reset_to(incoming: &TcpSegment) -> Option<TcpSegment> {
         if incoming.has(RST) {
             return None;
@@ -113,9 +113,9 @@ impl TcpSegment {
         })
     }
 
-    /// Verifieer de TCP-checksum van een rauw segment, inclusief de IPv4-pseudo-
-    /// header (vereist de bron/doel-IP's). True = geldig. Een segment met een foute
-    /// checksum is corrupt onderweg en hoort verworpen te worden.
+    /// Verify the TCP checksum of a raw segment, including the IPv4 pseudo-
+    /// header (requires the source/destination IPs). True = valid. A segment with a wrong
+    /// checksum is corrupt in transit and should be rejected.
     pub fn verify_checksum(seg: &[u8], src: Ipv4Addr, dst: Ipv4Addr) -> bool {
         if seg.len() < Self::HEADER_LEN {
             return false;
@@ -126,8 +126,8 @@ impl TcpSegment {
         internet_checksum(&buf) == 0
     }
 
-    /// Zoals [`parse`], maar verifieert eerst de checksum (pseudo-header + segment)
-    /// en weigert een corrupt segment met `BadChecksum`.
+    /// Like [`parse`], but first verifies the checksum (pseudo-header + segment)
+    /// and rejects a corrupt segment with `BadChecksum`.
     pub fn parse_checked(seg: &[u8], src: Ipv4Addr, dst: Ipv4Addr) -> NetResult<Self> {
         if !Self::verify_checksum(seg, src, dst) {
             return Err(NetError::BadChecksum);
@@ -154,7 +154,7 @@ mod tests {
         let a = Ipv4Addr([10, 0, 2, 15]);
         let b = Ipv4Addr([93, 184, 216, 34]);
         let bytes = s.build(a, b);
-        // checksum over pseudo + segment moet 0 verifiëren
+        // checksum over pseudo + segment must verify to 0
         let mut v = Vec::new();
         v.extend_from_slice(&TcpSegment::pseudo(a, b, bytes.len() as u16));
         v.extend_from_slice(&bytes);
@@ -179,15 +179,15 @@ mod tests {
             payload: b"euroos".to_vec(),
         };
         let bytes = s.build(a, b);
-        // Geldig segment: checksum klopt en parse_checked slaagt.
+        // Valid segment: checksum matches and parse_checked succeeds.
         assert!(TcpSegment::verify_checksum(&bytes, a, b));
         assert!(TcpSegment::parse_checked(&bytes, a, b).is_ok());
-        // Eén header-byte flippen → checksum faalt → BadChecksum.
+        // Flip one header byte → checksum fails → BadChecksum.
         let mut corrupt = bytes.clone();
         corrupt[4] ^= 0xFF;
         assert!(!TcpSegment::verify_checksum(&corrupt, a, b));
         assert_eq!(TcpSegment::parse_checked(&corrupt, a, b), Err(NetError::BadChecksum));
-        // Verkeerd bron/doel-IP → andere pseudo-header → checksum faalt.
+        // Wrong source/destination IP → different pseudo-header → checksum fails.
         assert!(!TcpSegment::verify_checksum(&bytes, a, Ipv4Addr([10, 0, 0, 9])));
     }
 
@@ -203,22 +203,22 @@ mod tests {
 
     #[test]
     fn reset_voor_syn_op_gesloten_poort() {
-        // Een SYN (geen ACK) naar een dichte poort → RST|ACK, seq=0, ack=seq+1.
+        // A SYN (no ACK) to a closed port → RST|ACK, seq=0, ack=seq+1.
         let syn = TcpSegment {
             src_port: 51000, dst_port: 9999, seq: 4242, ack: 0,
             flags: SYN, window: 64240, payload: Vec::new(),
         };
         let rst = TcpSegment::reset_to(&syn).unwrap();
         assert!(rst.has(RST) && rst.has(ACK));
-        assert_eq!(rst.src_port, 9999); // poorten gespiegeld
+        assert_eq!(rst.src_port, 9999); // ports mirrored
         assert_eq!(rst.dst_port, 51000);
         assert_eq!(rst.seq, 0);
-        assert_eq!(rst.ack, 4243); // SYN telt als 1
+        assert_eq!(rst.ack, 4243); // SYN counts as 1
     }
 
     #[test]
     fn reset_voor_ack_segment_spiegelt_seq() {
-        // Een binnenkomend segment mét ACK → RST (geen ACK), seq = incoming.ack.
+        // An incoming segment with ACK → RST (no ACK), seq = incoming.ack.
         let seg = TcpSegment {
             src_port: 40000, dst_port: 9999, seq: 1, ack: 7777,
             flags: ACK, window: 100, payload: Vec::new(),
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn nooit_resetten_op_een_reset() {
-        // Op een RST hoort men nooit te antwoorden — anders een RST-storm.
+        // One should never reply to an RST — otherwise an RST storm.
         let rst_in = TcpSegment {
             src_port: 1, dst_port: 2, seq: 0, ack: 0,
             flags: RST, window: 0, payload: Vec::new(),

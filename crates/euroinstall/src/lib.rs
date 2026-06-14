@@ -1,13 +1,13 @@
-//! EuroInstall — de **planner** voor de begeleide installatie + live-image (plan Q1).
+//! EuroInstall — the **planner** for the guided installation + live image (plan Q1).
 //!
-//! De installer is bewust opgesplitst: de *beslissingslogica* (partitielayout,
-//! validatie, het geordende stappenplan) is pure, host-geteste `no_std`-code; de
-//! *uitvoering* (echte sector-I/O via `gpt`/`eurofs`, FDE-enrol via `eurofde`,
-//! gebruiker via `auth`) koppelt de kernel/het userspace-installerproces eraan.
-//! Zo is het breekbare deel — de schijflayout — volledig te testen zonder schijf.
+//! The installer is deliberately split: the *decision logic* (partition layout,
+//! validation, the ordered step plan) is pure, host-tested `no_std` code; the
+//! *execution* (real sector I/O via `gpt`/`eurofs`, FDE enrol via `eurofde`,
+//! user via `auth`) is wired in by the kernel/the userspace installer process.
+//! This way the fragile part — the disk layout — is fully testable without a disk.
 //!
-//! Twee modi: een echte **installatie** naar schijf (A/B-slots + EuroVar + ESP) en
-//! een **live**-boot die volledig in RAM draait en de schijf onaangeroerd laat.
+//! Two modes: a real **installation** to disk (A/B slots + EuroVar + ESP) and
+//! a **live** boot that runs entirely in RAM and leaves the disk untouched.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -19,36 +19,36 @@ use alloc::vec::Vec;
 
 const SECTOR: u64 = 512;
 const MIB: u64 = 1024 * 1024;
-/// ESP (EFI System Partition) — FAT32 met de loader + A/B-kernels.
+/// ESP (EFI System Partition) — FAT32 with the loader + A/B kernels.
 const ESP_BYTES: u64 = 256 * MIB;
-/// Minimale grootte per systeem-slot.
+/// Minimum size per system slot.
 const SLOT_MIN_BYTES: u64 = 512 * MIB;
-/// Minimale EuroVar (schrijfbare data).
+/// Minimum EuroVar (writable data).
 const VAR_MIN_BYTES: u64 = 256 * MIB;
 
-/// De geometrie van de doelschijf.
+/// The geometry of the target disk.
 #[derive(Clone, Copy, Debug)]
 pub struct Disk {
     pub total_bytes: u64,
 }
 
-/// De keuzes die de gebruiker (of de unattended-config) maakt.
+/// The choices the user (or the unattended config) makes.
 #[derive(Clone, Debug)]
 pub struct Config {
     pub disk: Disk,
-    /// BCP-47-taal-tag, bv. `"nl-BE"` — moet een geldige EU-taal zijn.
+    /// BCP-47 language tag, e.g. `"nl-BE"` — must be a valid EU language.
     pub locale: String,
-    /// Toetsenbordindeling, bv. `"be-azerty"`.
+    /// Keyboard layout, e.g. `"be-azerty"`.
     pub keymap: String,
     pub hostname: String,
     pub username: String,
-    /// Full-disk-encryptie inschakelen (EuroFDE, sleutel via TPM).
+    /// Enable full-disk encryption (EuroFDE, key via TPM).
     pub fde: bool,
-    /// Live-modus: niets naar schijf schrijven, alles in RAM.
+    /// Live mode: write nothing to disk, everything in RAM.
     pub live: bool,
 }
 
-/// Een geplande GPT-partitie (in sectoren van 512 bytes).
+/// A planned GPT partition (in 512-byte sectors).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartitionPlan {
     pub label: &'static str,
@@ -56,53 +56,53 @@ pub struct PartitionPlan {
     pub sectors: u64,
 }
 
-/// Eén stap in het installatieplan, in uitvoeringsvolgorde.
+/// A single step in the installation plan, in execution order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Step {
-    /// Schrijf de GPT met deze partities.
+    /// Write the GPT with these partitions.
     Partition(Vec<PartitionPlan>),
-    /// Formatteer de ESP (FAT32).
+    /// Format the ESP (FAT32).
     FormatEsp,
-    /// Leg EuroFS aan op slot A (en kopieer naar B).
+    /// Create EuroFS on slot A (and copy to B).
     FormatSystem,
-    /// Leg EuroFS aan op de EuroVar-partitie.
+    /// Create EuroFS on the EuroVar partition.
     FormatVar,
-    /// Schrijf het kernel-image naar slot A én B.
+    /// Write the kernel image to slot A and B.
     WriteKernelSlots,
-    /// Installeer de twee-traps-loader op de ESP.
+    /// Install the two-stage loader on the ESP.
     InstallLoader,
-    /// FDE inschakelen (ChaCha20, sleutel verzegeld aan de TPM).
+    /// Enable FDE (ChaCha20, key sealed to the TPM).
     EnrollFde,
-    /// Stel de locale in (gebruikt EuroLocale).
+    /// Set the locale (uses EuroLocale).
     ConfigureLocale(String),
-    /// Stel de toetsenbordindeling in.
+    /// Set the keyboard layout.
     ConfigureKeymap(String),
-    /// Zet de hostnaam.
+    /// Set the hostname.
     SetHostname(String),
-    /// Maak de eerste gebruiker (met sudo).
+    /// Create the first user (with sudo).
     CreateUser(String),
-    /// Provisioneer de EuroCA (lokale certificaatautoriteit).
+    /// Provision the EuroCA (local certificate authority).
     ProvisionEuroCa,
-    /// Schrijf de A/B-bootconfig + activeer slot A.
+    /// Write the A/B boot config + activate slot A.
     FinalizeBoot,
 }
 
-/// Waarom een config geweigerd wordt.
+/// Why a config is rejected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlanError {
-    /// De schijf is te klein voor een A/B-installatie.
+    /// The disk is too small for an A/B installation.
     DiskTooSmall { need_bytes: u64, have_bytes: u64 },
-    /// Ongeldige gebruikersnaam (leeg, te lang, of niet [a-z0-9_-]).
+    /// Invalid username (empty, too long, or not [a-z0-9_-]).
     BadUsername,
-    /// Lege hostnaam.
+    /// Empty hostname.
     BadHostname,
-    /// Onbekende taal-tag (geen EU-taal).
+    /// Unknown language tag (not an EU language).
     BadLocale,
-    /// Lege keymap.
+    /// Empty keymap.
     BadKeymap,
 }
 
-/// Het minimaal vereiste aantal bytes voor een installatie naar schijf.
+/// The minimum number of bytes required for an installation to disk.
 pub fn minimum_disk_bytes() -> u64 {
     ESP_BYTES + 2 * SLOT_MIN_BYTES + VAR_MIN_BYTES
 }
@@ -114,7 +114,7 @@ fn valid_username(u: &str) -> bool {
         && u.bytes().next().is_some_and(|b| b.is_ascii_lowercase())
 }
 
-/// Valideer een config zonder een plan te bouwen.
+/// Validate a config without building a plan.
 pub fn validate(cfg: &Config) -> Result<(), PlanError> {
     if eurolocale::Lang::parse(&cfg.locale).is_none() {
         return Err(PlanError::BadLocale);
@@ -128,7 +128,7 @@ pub fn validate(cfg: &Config) -> Result<(), PlanError> {
     if !valid_username(&cfg.username) {
         return Err(PlanError::BadUsername);
     }
-    // Live-modus stelt geen schijf-eisen.
+    // Live mode imposes no disk requirements.
     if !cfg.live {
         let need = minimum_disk_bytes();
         if cfg.disk.total_bytes < need {
@@ -138,17 +138,17 @@ pub fn validate(cfg: &Config) -> Result<(), PlanError> {
     Ok(())
 }
 
-/// Bereken de GPT-partitielayout: ESP · EuroOS-A · EuroOS-B · EuroVar.
-/// De twee systeem-slots zijn gelijk; EuroVar krijgt de rest.
+/// Compute the GPT partition layout: ESP · EuroOS-A · EuroOS-B · EuroVar.
+/// The two system slots are equal; EuroVar gets the rest.
 fn partition_layout(disk: Disk) -> Vec<PartitionPlan> {
-    let align = MIB / SECTOR; // 1 MiB-uitlijning
+    let align = MIB / SECTOR; // 1 MiB alignment
     let total_sectors = disk.total_bytes / SECTOR;
-    // GPT reserveert sector 0 (MBR) + 1 (header) + 32 (entries) aan elk uiteinde.
-    let first = align; // begin bij 1 MiB
+    // GPT reserves sector 0 (MBR) + 1 (header) + 32 (entries) at each end.
+    let first = align; // start at 1 MiB
     let last_usable = total_sectors - 34;
 
     let esp = ESP_BYTES / SECTOR;
-    // Verdeel de rest: twee gelijke slots + var (slots krijgen elk 3/8, var 2/8).
+    // Divide the rest: two equal slots + var (slots get 3/8 each, var 2/8).
     let remaining = last_usable - first - esp;
     let slot = ((remaining * 3 / 8) / align) * align;
     let mut p = Vec::new();
@@ -164,13 +164,13 @@ fn partition_layout(disk: Disk) -> Vec<PartitionPlan> {
     p
 }
 
-/// Bouw het volledige, geordende installatieplan. Faalt als de config ongeldig is.
+/// Build the full, ordered installation plan. Fails if the config is invalid.
 pub fn plan(cfg: &Config) -> Result<Vec<Step>, PlanError> {
     validate(cfg)?;
     let mut steps = Vec::new();
 
     if cfg.live {
-        // Live-boot: geen schijf-schrijfacties — enkel runtime-configuratie in RAM.
+        // Live boot: no disk writes — only runtime configuration in RAM.
         steps.push(Step::ConfigureLocale(cfg.locale.clone()));
         steps.push(Step::ConfigureKeymap(cfg.keymap.clone()));
         steps.push(Step::SetHostname(cfg.hostname.clone()));
@@ -178,11 +178,11 @@ pub fn plan(cfg: &Config) -> Result<Vec<Step>, PlanError> {
         return Ok(steps);
     }
 
-    // Volledige installatie naar schijf.
+    // Full installation to disk.
     steps.push(Step::Partition(partition_layout(cfg.disk)));
     steps.push(Step::FormatEsp);
     if cfg.fde {
-        // FDE moet vóór het FS-format: het FS leeft op de versleutelde laag.
+        // FDE must come before the FS format: the FS lives on the encrypted layer.
         steps.push(Step::EnrollFde);
     }
     steps.push(Step::FormatSystem);
@@ -198,22 +198,22 @@ pub fn plan(cfg: &Config) -> Result<Vec<Step>, PlanError> {
     Ok(steps)
 }
 
-/// Een mensvriendelijke één-regel-omschrijving van een stap (voor de UI/log).
+/// A human-friendly one-line description of a step (for the UI/log).
 pub fn describe(step: &Step) -> String {
     match step {
-        Step::Partition(p) => alloc::format!("GPT schrijven ({} partities)", p.len()),
-        Step::FormatEsp => "ESP formatteren (FAT32)".to_string(),
-        Step::FormatSystem => "EuroFS aanleggen op slot A/B".to_string(),
-        Step::FormatVar => "EuroVar aanleggen".to_string(),
-        Step::WriteKernelSlots => "kernel naar slot A + B schrijven".to_string(),
-        Step::InstallLoader => "twee-traps-loader op ESP".to_string(),
-        Step::EnrollFde => "full-disk-encryptie inschakelen (TPM-verzegeld)".to_string(),
-        Step::ConfigureLocale(l) => alloc::format!("locale instellen: {l}"),
-        Step::ConfigureKeymap(k) => alloc::format!("toetsenbord: {k}"),
-        Step::SetHostname(h) => alloc::format!("hostnaam: {h}"),
-        Step::CreateUser(u) => alloc::format!("gebruiker aanmaken: {u}"),
-        Step::ProvisionEuroCa => "EuroCA provisioneren".to_string(),
-        Step::FinalizeBoot => "A/B-bootconfig + slot A activeren".to_string(),
+        Step::Partition(p) => alloc::format!("write GPT ({} partitions)", p.len()),
+        Step::FormatEsp => "format ESP (FAT32)".to_string(),
+        Step::FormatSystem => "create EuroFS on slot A/B".to_string(),
+        Step::FormatVar => "create EuroVar".to_string(),
+        Step::WriteKernelSlots => "write kernel to slot A + B".to_string(),
+        Step::InstallLoader => "two-stage loader on ESP".to_string(),
+        Step::EnrollFde => "enable full-disk encryption (TPM-sealed)".to_string(),
+        Step::ConfigureLocale(l) => alloc::format!("set locale: {l}"),
+        Step::ConfigureKeymap(k) => alloc::format!("keyboard: {k}"),
+        Step::SetHostname(h) => alloc::format!("hostname: {h}"),
+        Step::CreateUser(u) => alloc::format!("create user: {u}"),
+        Step::ProvisionEuroCa => "provision EuroCA".to_string(),
+        Step::FinalizeBoot => "A/B boot config + activate slot A".to_string(),
     }
 }
 
@@ -242,7 +242,7 @@ mod tests {
     fn rejects_small_disk() {
         let c = cfg(1, false, false); // 1 GiB < minimum (~1.5 GiB)
         assert!(matches!(validate(&c), Err(PlanError::DiskTooSmall { .. })));
-        // Maar in live-modus maakt schijfgrootte niet uit.
+        // But in live mode the disk size does not matter.
         let mut live = c.clone();
         live.live = true;
         assert_eq!(validate(&live), Ok(()));
@@ -265,24 +265,24 @@ mod tests {
         assert_eq!(parts.len(), 4);
         assert_eq!(parts[0].label, "EuroESP");
         assert_eq!(parts[3].label, "EuroVar");
-        // Partities overlappen niet en blijven binnen de schijf.
+        // Partitions do not overlap and stay within the disk.
         for w in parts.windows(2) {
             assert!(w[0].start_lba + w[0].sectors <= w[1].start_lba);
         }
         let last = &parts[3];
         assert!((last.start_lba + last.sectors) * SECTOR <= disk.total_bytes);
-        // De twee slots zijn even groot.
+        // The two slots are equal in size.
         assert_eq!(parts[1].sectors, parts[2].sectors);
     }
 
     #[test]
     fn plan_disk_order() {
         let steps = plan(&cfg(8, false, true)).unwrap();
-        // FDE komt vóór het FS-format.
+        // FDE comes before the FS format.
         let fde = steps.iter().position(|s| *s == Step::EnrollFde).unwrap();
         let fmt = steps.iter().position(|s| *s == Step::FormatSystem).unwrap();
         assert!(fde < fmt);
-        // Partitioneren is de eerste stap, FinalizeBoot de laatste.
+        // Partitioning is the first step, FinalizeBoot the last.
         assert!(matches!(steps.first(), Some(Step::Partition(_))));
         assert_eq!(steps.last(), Some(&Step::FinalizeBoot));
         assert!(steps.iter().any(|s| *s == Step::CreateUser("anke".to_string())));

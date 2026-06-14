@@ -1,10 +1,10 @@
-//! Datumopmaak per taal: het numerieke patroon (dag-maand-jaar vs jaar-maand-dag)
-//! en de lange vorm met maandnamen.
+//! Date formatting per language: the numeric pattern (day-month-year vs year-month-day)
+//! and the long form with month names.
 
 use crate::lang::{DatePattern, Lang};
 use alloc::string::String;
 
-/// Formatteer een datum in de korte numerieke vorm van de taal.
+/// Format a date in the language's short numeric form.
 /// `2026-12-31` → nl `"31-12-2026"`, en `"31/12/2026"`, sv `"2026-12-31"`.
 pub fn format_short(lang: Lang, year: i32, month: u8, day: u8) -> String {
     let sep = short_separator(lang);
@@ -18,18 +18,18 @@ pub fn format_short(lang: Lang, year: i32, month: u8, day: u8) -> String {
     }
 }
 
-/// Het scheidingsteken in de korte datumvorm.
+/// The separator in the short date form.
 fn short_separator(lang: Lang) -> char {
     use Lang::*;
     match lang {
         Nl | Da | Fi | De => '-',  // 31-12-2026
-        Sv | Lt | Hu => '-',       // ISO-achtig 2026-12-31
+        Sv | Lt | Hu => '-',       // ISO-like 2026-12-31
         _ => '/',                  // 31/12/2026 (en/fr/es/it/…)
     }
 }
 
-/// Formatteer een datum in de lange vorm met maandnaam, waar beschikbaar.
-/// Valt terug op de korte vorm voor talen zonder ingebouwde maandtabel.
+/// Format a date in the long form with month name, where available.
+/// Falls back to the short form for languages without a built-in month table.
 pub fn format_long(lang: Lang, year: i32, month: u8, day: u8) -> String {
     let Some(name) = month_name(lang, month) else {
         return format_short(lang, year, month, day);
@@ -40,7 +40,7 @@ pub fn format_long(lang: Lang, year: i32, month: u8, day: u8) -> String {
     }
 }
 
-/// De maandnaam (1–12) in de taal, of `None` als de taal (nog) geen tabel heeft.
+/// The month name (1–12) in the language, or `None` if the language has no table (yet).
 pub fn month_name(lang: Lang, month: u8) -> Option<&'static str> {
     use Lang::*;
     let idx = month.checked_sub(1)? as usize;
@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn long_falls_back_when_no_table() {
-        // Bulgaars heeft (nog) geen maandtabel → korte vorm.
+        // Bulgarian has no month table (yet) → short form.
         assert_eq!(format_long(Lang::Bg, 2026, 12, 31), "31/12/2026");
     }
 }

@@ -1,18 +1,18 @@
-//! EuroDevice — een **unified device model + driver-framework** (Sprint R).
+//! EuroDevice — a **unified device model + driver framework** (Sprint R).
 //!
-//! Tot nu toe zijn PCI, NVMe, VirtIO, xHCI, HDA en netwerk-drivers los van elkaar
-//! gebouwd: elke driver hervindt het wiel voor discovery, binding, lifecycle en
-//! foutafhandeling. Zonder een gemeenschappelijk device-model wordt de codebase
-//! onhoudbaar zodra WiFi, GPU en USB-hubs erbij komen.
+//! Until now PCI, NVMe, VirtIO, xHCI, HDA and network drivers were built
+//! separately from each other: every driver reinvents the wheel for discovery,
+//! binding, lifecycle and error handling. Without a common device model the
+//! codebase becomes unmaintainable once WiFi, GPU and USB hubs are added.
 //!
-//! Deze crate is de architecturale basis: een **`DeviceTree`** (parent/child-boom
-//! van [`DeviceNode`]s met stabiele [`DeviceId`]-handles), een **`DriverRegistry`**
-//! die drivers op apparaten matcht en bindt, een **`trait Driver`**-lifecycle
-//! (start/stop/suspend/resume), en een **hotplug-event-queue**. De bus-laag (PCI/
-//! VirtIO/platform) vult de boom; de kernel levert de echte `probe`-implementaties.
+//! This crate is the architectural foundation: a **`DeviceTree`** (parent/child tree
+//! of [`DeviceNode`]s with stable [`DeviceId`] handles), a **`DriverRegistry`**
+//! that matches drivers to devices and binds them, a **`trait Driver`** lifecycle
+//! (start/stop/suspend/resume), and a **hotplug event queue**. The bus layer (PCI/
+//! VirtIO/platform) fills the tree; the kernel provides the real `probe` implementations.
 //!
-//! Pure `no_std`-logica (boom + matching + binding + hotplug) → volledig host-getest,
-//! los van enige hardware.
+//! Pure `no_std` logic (tree + matching + binding + hotplug) → fully host-tested,
+//! independent of any hardware.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -23,15 +23,15 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Stabiele handle naar een apparaat in de [`DeviceTree`].
+/// Stable handle to a device in the [`DeviceTree`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DeviceId(pub u64);
 
-/// Stabiele handle naar een geregistreerde driver.
+/// Stable handle to a registered driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DriverId(pub u64);
 
-/// Het soort bus/apparaat (bepaalt hoe het ontdekt + geadresseerd wordt).
+/// The kind of bus/device (determines how it is discovered + addressed).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceKind {
     Root,
@@ -43,7 +43,7 @@ pub enum DeviceKind {
     Other,
 }
 
-/// De bindings-toestand van een apparaat in zijn lifecycle.
+/// The binding state of a device in its lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceState {
     Unbound,
@@ -52,23 +52,23 @@ pub enum DeviceState {
     Suspended,
 }
 
-/// De fysieke resources die een apparaat aan een driver aanbiedt.
+/// The physical resources that a device offers to a driver.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeviceResources {
     pub irq: Option<u8>,
-    pub mmio: Vec<(u64, u64)>, // (basis, lengte)
+    pub mmio: Vec<(u64, u64)>, // (base, length)
     pub io_port: Option<u16>,
-    /// Bus-specifiek adres (PCI: (bus<<16)|(dev<<8)|func; platform: 0).
+    /// Bus-specific address (PCI: (bus<<16)|(dev<<8)|func; platform: 0).
     pub bus_addr: u32,
 }
 
-/// Een node in de device-tree: één ontdekt apparaat.
+/// A node in the device tree: one discovered device.
 #[derive(Debug, Clone)]
 pub struct DeviceNode {
     pub id: DeviceId,
     pub kind: DeviceKind,
     pub name: String,
-    // PCI-identificatie (0 voor niet-PCI) — gebruikt door driver-matchers.
+    // PCI identification (0 for non-PCI) — used by driver matchers.
     pub vendor: u16,
     pub device: u16,
     pub class: u8,
@@ -82,7 +82,7 @@ pub struct DeviceNode {
 }
 
 impl DeviceNode {
-    /// Bouw een kale node (id wordt door de tree toegekend in [`DeviceTree::add`]).
+    /// Build a bare node (id is assigned by the tree in [`DeviceTree::add`]).
     pub fn new(kind: DeviceKind, name: &str) -> DeviceNode {
         DeviceNode {
             id: DeviceId(0),
@@ -101,7 +101,7 @@ impl DeviceNode {
         }
     }
 
-    /// Vul de PCI-identificatie (voor matching).
+    /// Fill in the PCI identification (for matching).
     pub fn with_pci(mut self, vendor: u16, device: u16, class: u8, subclass: u8, prog_if: u8) -> Self {
         self.vendor = vendor;
         self.device = device;
@@ -117,7 +117,7 @@ impl DeviceNode {
     }
 }
 
-/// De device-tree: alle ontdekte apparaten + hun parent/child-relaties.
+/// The device tree: all discovered devices + their parent/child relations.
 pub struct DeviceTree {
     nodes: BTreeMap<u64, DeviceNode>,
     next_id: u64,
@@ -131,7 +131,7 @@ impl Default for DeviceTree {
 }
 
 impl DeviceTree {
-    /// Maak een verse tree met één root-node.
+    /// Create a fresh tree with one root node.
     pub fn new() -> DeviceTree {
         let mut nodes = BTreeMap::new();
         let root = DeviceId(1);
@@ -146,8 +146,8 @@ impl DeviceTree {
         self.root
     }
 
-    /// Voeg een node toe (als kind van root tenzij `parent` gezet is). Geeft de
-    /// toegekende [`DeviceId`].
+    /// Add a node (as a child of root unless `parent` is set). Returns the
+    /// assigned [`DeviceId`].
     pub fn add(&mut self, mut node: DeviceNode) -> DeviceId {
         let id = DeviceId(self.next_id);
         self.next_id += 1;
@@ -168,7 +168,7 @@ impl DeviceTree {
         self.nodes.get_mut(&id.0)
     }
 
-    /// Herhang `child` onder `parent` (corrigeert beide child-lijsten).
+    /// Re-hang `child` under `parent` (fixes up both child lists).
     pub fn set_parent(&mut self, child: DeviceId, parent: DeviceId) {
         let old_parent = self.nodes.get(&child.0).and_then(|n| n.parent);
         if let Some(op) = old_parent {
@@ -186,7 +186,7 @@ impl DeviceTree {
         }
     }
 
-    /// Aantal apparaten (inclusief root).
+    /// Number of devices (including root).
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
@@ -194,12 +194,12 @@ impl DeviceTree {
         self.nodes.is_empty()
     }
 
-    /// Itereer over alle nodes (volgorde = oplopende id).
+    /// Iterate over all nodes (order = ascending id).
     pub fn iter(&self) -> impl Iterator<Item = &DeviceNode> {
         self.nodes.values()
     }
 
-    /// Alle nog-niet-gebonden node-id's (voor `bind_all`).
+    /// All not-yet-bound node ids (for `bind_all`).
     pub fn unbound(&self) -> Vec<DeviceId> {
         self.nodes
             .values()
@@ -209,9 +209,9 @@ impl DeviceTree {
     }
 }
 
-/// Een geregistreerde driver: een naam + een **match-predicaat** dat bepaalt welke
-/// apparaten hij claimt. (De echte `probe`/lifecycle leeft kernel-side achter
-/// [`trait Driver`]; de registry doet de matching.)
+/// A registered driver: a name + a **match predicate** that determines which
+/// devices it claims. (The real `probe`/lifecycle lives kernel-side behind
+/// [`trait Driver`]; the registry does the matching.)
 #[derive(Clone)]
 pub struct DriverDescriptor {
     pub id: DriverId,
@@ -219,7 +219,7 @@ pub struct DriverDescriptor {
     pub matches: fn(&DeviceNode) -> bool,
 }
 
-/// De lifecycle die een gebonden driver implementeert (kernel-side).
+/// The lifecycle that a bound driver implements (kernel-side).
 pub trait Driver: Send {
     fn start(&mut self) -> Result<(), DeviceError>;
     fn stop(&mut self) -> Result<(), DeviceError>;
@@ -231,7 +231,7 @@ pub trait Driver: Send {
     }
 }
 
-/// Foutsoorten in de device-/driver-laag.
+/// Error kinds in the device/driver layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceError {
     NoMatch,
@@ -240,7 +240,7 @@ pub enum DeviceError {
     NotFound,
 }
 
-/// De driver-registry: houdt alle bekende drivers + bindt ze aan apparaten.
+/// The driver registry: keeps all known drivers + binds them to devices.
 #[derive(Default)]
 pub struct DriverRegistry {
     drivers: Vec<DriverDescriptor>,
@@ -252,7 +252,7 @@ impl DriverRegistry {
         DriverRegistry { drivers: Vec::new(), next_id: 1 }
     }
 
-    /// Registreer een driver met z'n match-predicaat. Geeft de [`DriverId`].
+    /// Register a driver with its match predicate. Returns the [`DriverId`].
     pub fn register(&mut self, name: &'static str, matches: fn(&DeviceNode) -> bool) -> DriverId {
         let id = DriverId(self.next_id);
         self.next_id += 1;
@@ -271,8 +271,8 @@ impl DriverRegistry {
         self.drivers.is_empty()
     }
 
-    /// Bind de eerste passende driver aan `node`. Markeert de node `Bound` + zet
-    /// `driver`. Geeft de gekozen [`DriverId`] (of None als niets matcht).
+    /// Bind the first matching driver to `node`. Marks the node `Bound` + sets
+    /// `driver`. Returns the chosen [`DriverId`] (or None if nothing matches).
     pub fn bind(&mut self, tree: &mut DeviceTree, node_id: DeviceId) -> Option<DriverId> {
         let node = tree.get(node_id)?;
         if node.state == DeviceState::Bound {
@@ -288,7 +288,7 @@ impl DriverRegistry {
         chosen
     }
 
-    /// Bind elke nog-ongebonden node; geeft het aantal nieuw-gebonden apparaten.
+    /// Bind every still-unbound node; returns the number of newly bound devices.
     pub fn bind_all(&mut self, tree: &mut DeviceTree) -> usize {
         let mut bound = 0;
         for id in tree.unbound() {
@@ -299,7 +299,7 @@ impl DriverRegistry {
         bound
     }
 
-    /// Ontbind een apparaat (driver weg, terug naar `Unbound`).
+    /// Unbind a device (driver gone, back to `Unbound`).
     pub fn unbind(&mut self, tree: &mut DeviceTree, node_id: DeviceId) {
         if let Some(n) = tree.get_mut(node_id) {
             n.driver = None;
@@ -308,7 +308,7 @@ impl DriverRegistry {
     }
 }
 
-/// Een hotplug-gebeurtenis op de bus.
+/// A hotplug event on the bus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotplugEvent {
     Attached(DeviceId),
@@ -316,8 +316,8 @@ pub enum HotplugEvent {
     Failed(DeviceId),
 }
 
-/// Een eenvoudige FIFO-event-queue (kernel-side wordt dit een lock-vrije ring,
-/// geconsumeerd door de scheduler of een device-fd).
+/// A simple FIFO event queue (kernel-side this becomes a lock-free ring,
+/// consumed by the scheduler or a device fd).
 #[derive(Default)]
 pub struct HotplugQueue {
     events: VecDeque<HotplugEvent>,
@@ -345,7 +345,7 @@ impl HotplugQueue {
 mod tests {
     use super::*;
 
-    // Voorbeeld-matchers (zoals de echte kernel-drivers ze leveren).
+    // Example matchers (as the real kernel drivers provide them).
     fn match_virtio_blk(n: &DeviceNode) -> bool {
         n.vendor == 0x1AF4 && (n.device == 0x1001 || n.device == 0x1042)
     }
@@ -381,14 +381,14 @@ mod tests {
         let mut t = DeviceTree::new();
         let a = t.add(DeviceNode::new(DeviceKind::Pci, "a"));
         let b = t.add(DeviceNode::new(DeviceKind::Pci, "b"));
-        let c = t.add(DeviceNode::new(DeviceKind::Usb, "c")); // onder root
+        let c = t.add(DeviceNode::new(DeviceKind::Usb, "c")); // under root
         t.set_parent(c, a);
         assert!(t.get(a).unwrap().children.contains(&c));
         t.set_parent(c, b);
         assert!(t.get(b).unwrap().children.contains(&c));
-        assert!(!t.get(a).unwrap().children.contains(&c)); // niet meer dubbel
+        assert!(!t.get(a).unwrap().children.contains(&c)); // no longer duplicated
         let root_kids = t.get(t.root()).unwrap().children.len();
-        assert_eq!(root_kids, 2); // a en b (c hangt nu onder b)
+        assert_eq!(root_kids, 2); // a and b (c now hangs under b)
     }
 
     #[test]
@@ -400,13 +400,13 @@ mod tests {
         reg.register("xhci", match_xhci);
         let bound = reg.bind_all(&mut t);
         assert_eq!(bound, 3);
-        // Elk apparaat heeft de juiste driver.
+        // Each device has the correct driver.
         for n in t.iter() {
             match n.name.as_str() {
                 "virtio-blk" => assert_eq!(reg.driver_name(n.driver.unwrap()), Some("virtio-blk")),
                 "nvme" => assert_eq!(reg.driver_name(n.driver.unwrap()), Some("nvme")),
                 "xhci" => assert_eq!(reg.driver_name(n.driver.unwrap()), Some("xhci")),
-                _ => {} // root: ongebonden / geen match
+                _ => {} // root: unbound / no match
             }
         }
     }

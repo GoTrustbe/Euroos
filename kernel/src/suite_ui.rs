@@ -1,7 +1,7 @@
-//! EuroSuite-GUI (BB-5): Word-/Excel-/PowerPoint-achtige rendering van de drie apps
-//! (Writer/Calc/Impress) in de compositor, bovenop het EuroDoc-UDM + de EuroCalc-
-//! formule-engine. Eén rijke render-functie per app: een gekleurde lint-balk
-//! (ribbon) met tabs + knoppen, een document-canvas, en een statusbalk.
+//! EuroSuite GUI (BB-5): Word/Excel/PowerPoint-like rendering of the three apps
+//! (Writer/Calc/Impress) in the compositor, on top of the EuroDoc UDM + the EuroCalc
+//! formula engine. One rich render function per app: a colored ribbon bar
+//! (ribbon) with tabs + buttons, a document canvas, and a status bar.
 
 use crate::graphics::{Color, FrameBuffer};
 use crate::{icons, text};
@@ -10,42 +10,42 @@ use alloc::vec::Vec;
 use eurodoc::model::{Block, Body, Cell, SheetBody, Slide};
 use eurodoc::Document;
 
-/// Welke EuroSuite-app een venster toont (None = gewoon tekst/terminal-venster).
+/// Which EuroSuite app a window shows (None = plain text/terminal window).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SuiteApp {
     None,
     Writer,
     Calc,
     Impress,
-    /// EuroWeb-browser: rendert een echte HTML+CSS-pagina via de eigen engine.
+    /// EuroWeb browser: renders a real HTML+CSS page via the in-house engine.
     Browser,
-    /// EuroReken: een ECHTE interactieve rekenmachine (toestand in `win.content`).
+    /// EuroReken: a REAL interactive calculator (state in `win.content`).
     Reken,
-    /// EuroBeheer: instellingen/beheer — toont en beheert de LIVE kernel-toestand.
+    /// EuroBeheer: settings/management — shows and manages the LIVE kernel state.
     Settings,
-    /// EuroAgent: dispatch-paneel — intent → agent-lus → live cap-gated tool-calls.
+    /// EuroAgent: dispatch panel — intent → agent loop → live cap-gated tool calls.
     Agent,
-    /// EuroInstall: begeleide grafische installer (plan + live FDE-enrol).
+    /// EuroInstall: guided graphical installer (plan + live FDE enrollment).
     Installer,
-    /// EuroFiles: bestandsbeheerder — toont het LIVE EuroFS.
+    /// EuroFiles: file manager — shows the LIVE EuroFS.
     Files,
-    /// EuroNotes: notitie-app — echte Markdown via de euronotes-engine.
+    /// EuroNotes: note-taking app — real Markdown via the euronotes engine.
     Notes,
-    /// EuroClock: wereldklokken + lokale tijd uit de ECHTE RTC.
+    /// EuroClock: world clocks + local time from the REAL RTC.
     Clock,
-    /// EuroText: platte-tekst-editor — bewerkt + slaat ECHT op naar EuroFS.
+    /// EuroText: plain-text editor — edits + REALLY saves to EuroFS.
     Text,
-    /// EuroMonitor: live systeemmonitor (RAM/taken/schijf/audit — echte metingen).
+    /// EuroMonitor: live system monitor (RAM/tasks/disk/audit — real measurements).
     Monitor,
-    /// EuroLog: live weergave van het hash-geketende audit-logboek.
+    /// EuroLog: live view of the hash-chained audit log.
     Log,
 }
 
-const TITLEBAR_H: usize = 44; // moet gelijk zijn aan compositor::TITLEBAR_H
+const TITLEBAR_H: usize = 44; // must equal compositor::TITLEBAR_H
 const RIBBON_H: usize = 64;
 const STATUS_H: usize = 26;
 
-/// Teken de body van een EuroSuite-venster (alles ónder de titelbalk).
+/// Draw the body of a EuroSuite window (everything below the title bar).
 pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize, app: SuiteApp) {
     let bx = x;
     let by = y + TITLEBAR_H;
@@ -55,20 +55,20 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize, app: Sui
         SuiteApp::Writer => writer(fb, bx, by, bw, bh),
         SuiteApp::Calc => calc(fb, bx, by, bw, bh),
         SuiteApp::Impress => impress(fb, bx, by, bw, bh),
-        // Browser/Reken/Settings worden al vóór deze dispatch afgehandeld (ze lezen
-        // hun eigen toestand: opgehaalde HTML / rekenmachine / live kernel-state).
+        // Browser/Reken/Settings are already handled before this dispatch (they read
+        // their own state: fetched HTML / calculator / live kernel state).
         SuiteApp::Browser => {}
         SuiteApp::Reken => {}
         SuiteApp::Settings => {}
         SuiteApp::Agent => {}
         SuiteApp::Installer => {}
-        // Files/Notes/Clock lezen hun eigen toestand en worden vóór deze dispatch
-        // afgehandeld (zie compositor::draw_window_body).
+        // Files/Notes/Clock read their own state and are handled before this
+        // dispatch (see compositor::draw_window_body).
         SuiteApp::Files => {}
         SuiteApp::Notes => {}
         SuiteApp::Clock => {}
-        // EuroText/EuroMonitor/EuroLog lezen hun eigen toestand en worden vóór deze
-        // dispatch afgehandeld (zie compositor::draw_window_body).
+        // EuroText/EuroMonitor/EuroLog read their own state and are handled before this
+        // dispatch (see compositor::draw_window_body).
         SuiteApp::Text => {}
         SuiteApp::Monitor => {}
         SuiteApp::Log => {}
@@ -76,12 +76,12 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize, app: Sui
     }
 }
 
-// ── Gemeenschappelijke chrome ────────────────────────────────────────────────
+// ── Shared chrome ────────────────────────────────────────────────
 
-/// Een lintbalk (ribbon): app-accentkleur, tab-labels en een rij tool-knoppen.
+/// A ribbon bar: app accent color, tab labels and a row of tool buttons.
 fn ribbon(fb: &FrameBuffer, x: usize, y: usize, w: usize, accent: Color, tabs: &[&str], active_tab: usize, tools: &[(&str, &str)]) {
     fb.fill_rect(x, y, w, RIBBON_H, Color::CARD);
-    // Tab-rij.
+    // Tab row.
     let mut tx = x + 16;
     for (i, t) in tabs.iter().enumerate() {
         let tw = text::width_px(t, 12.5) + 18;
@@ -93,9 +93,9 @@ fn ribbon(fb: &FrameBuffer, x: usize, y: usize, w: usize, accent: Color, tabs: &
         }
         tx += tw + 6;
     }
-    // Scheidingslijn onder de tabs.
+    // Separator line below the tabs.
     fb.fill_rect(x, y + 34, w, 1, Color::BORDER);
-    // Tool-knoppen (icoon-tegels).
+    // Tool buttons (icon tiles).
     let mut gx = x + 14;
     let gy = y + 40;
     for (icon, label) in tools {
@@ -111,7 +111,7 @@ fn ribbon(fb: &FrameBuffer, x: usize, y: usize, w: usize, accent: Color, tabs: &
     fb.fill_rect(x, y + RIBBON_H, w, 1, Color::BORDER);
 }
 
-/// Een statusbalk onderaan met links- en rechts-uitgelijnde tekst.
+/// A status bar at the bottom with left- and right-aligned text.
 fn statusbar(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize, accent: Color, left: &str, right: &str) {
     let sy = y + h - STATUS_H;
     fb.fill_rect(x, sy, w, STATUS_H, accent);
@@ -126,27 +126,27 @@ fn demo_writer_doc() -> Document {
     let mut d = Document::writer();
     d.metadata.language = String::from("nl-BE");
     if let Body::Writer(b) = &mut d.body {
-        b.push(Block::Paragraph(eurodoc::model::Paragraph::text("Soevereiniteit door ontwerp").styled("Heading1")));
+        b.push(Block::Paragraph(eurodoc::model::Paragraph::text("Sovereignty by design").styled("Heading1")));
         b.push(Block::Paragraph(eurodoc::model::Paragraph::text(
-            "EuroOS is het eerste volledig soevereine Europese besturingssysteem, van nul gebouwd in Rust. Dit document is geopend in EuroSuite Writer en kan als .docx of .odt bewaard worden.")));
-        b.push(Block::Paragraph(eurodoc::model::Paragraph::text("Kernprincipes").styled("Heading2")));
+            "EuroOS is the first fully sovereign European operating system, built from scratch in Rust. This document is opened in EuroSuite Writer and can be saved as .docx or .odt.")));
+        b.push(Block::Paragraph(eurodoc::model::Paragraph::text("Core principles").styled("Heading2")));
         b.push(Block::Paragraph(
             eurodoc::model::Paragraph::new()
-                .run(eurodoc::model::Run::new("Geen geërfde code").bold())
-                .run(eurodoc::model::Run::new(" — elke laag is origineel: kernel, bestandssysteem, netwerk, TLS en deze tekstverwerker.")),
+                .run(eurodoc::model::Run::new("No inherited code").bold())
+                .run(eurodoc::model::Run::new(" — every layer is original: kernel, file system, network, TLS and this word processor.")),
         ));
         b.push(Block::Paragraph(eurodoc::model::Paragraph::text(
-            "De vertrouwensgrens zit in de kernel, niet in een cloud. AI-agents draaien capability-geïsoleerd en volledig offline.")));
+            "The trust boundary lives in the kernel, not in a cloud. AI agents run capability-isolated and fully offline.")));
     }
     d
 }
 
 fn writer(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let accent = Color::ACCENT;
-    ribbon(fb, x, y, w, accent, &["Start", "Invoegen", "Indeling", "Controleren"], 0,
-        &[("doc", "B"), ("doc", "I"), ("doc", "U"), ("rect", "EuroSans 12"), ("grid", "Stijlen")]);
+    ribbon(fb, x, y, w, accent, &["Home", "Insert", "Layout", "Review"], 0,
+        &[("doc", "B"), ("doc", "I"), ("doc", "U"), ("rect", "EuroSans 12"), ("grid", "Styles")]);
 
-    // Documentwerkblad: grijze achtergrond, een witte 'pagina' gecentreerd met schaduw.
+    // Document worksheet: gray background, a white 'page' centered with a shadow.
     let work_y = y + RIBBON_H + 1;
     let work_h = h.saturating_sub(RIBBON_H + 1 + STATUS_H);
     fb.fill_rect(x, work_y, w, work_h, Color::SURFACE_3);
@@ -158,7 +158,7 @@ fn writer(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     fb.drop_shadow(page_x, page_y, page_w, page_h, 10, 4, Color::rgb(0x1A, 0x22, 0x2C));
     fb.fill_rect(page_x, page_y, page_w, page_h, Color::SURFACE);
 
-    // Render de paragrafen met marges; koppen groter/vetter.
+    // Render the paragraphs with margins; headings larger/bolder.
     let doc = demo_writer_doc();
     let margin = 40;
     let mut ty = page_y + 36;
@@ -172,7 +172,7 @@ fn writer(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
                     Some("Heading2") => (17.0, Color::ACCENT, 26),
                     _ => (13.5, Color::INK, 20),
                 };
-                // Eenvoudige woord-wrap.
+                // Simple word wrap.
                 ty = draw_wrapped(fb, tx, ty, maxw, &p.plain_text(), col, size, lead, page_y + page_h - 30);
                 ty += 8;
             }
@@ -182,11 +182,11 @@ fn writer(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         }
     }
     let words = doc.word_count();
-    statusbar(fb, x, y, w, h, accent, "Pagina 1 van 1   ·   Nederlands (nl-BE)",
-        &alloc::format!("{words} woorden   ·   .docx / .odt   ·   100%"));
+    statusbar(fb, x, y, w, h, accent, "Page 1 of 1   ·   Dutch (nl-BE)",
+        &alloc::format!("{words} words   ·   .docx / .odt   ·   100%"));
 }
 
-/// Teken `s` met simpele woord-wrap; geeft de nieuwe y terug.
+/// Draw `s` with simple word wrap; returns the new y.
 fn draw_wrapped(fb: &FrameBuffer, x: usize, mut y: usize, maxw: usize, s: &str, col: Color, size: f32, lead: usize, ymax: usize) -> usize {
     let mut line = String::new();
     for word in s.split(' ') {
@@ -215,34 +215,34 @@ fn demo_sheet() -> SheetBody {
     let mut s = SheetBody::default();
     let txt = |t: &str| Cell::Text(String::from(t));
     let num = |n: i64| Cell::Number { scaled: n, scale: 0 };
-    s.set(0, 0, txt("Regio"));
+    s.set(0, 0, txt("Region"));
     s.set(0, 1, txt("Q1"));
     s.set(0, 2, txt("Q2"));
-    s.set(0, 3, txt("Totaal"));
-    s.set(1, 0, txt("België"));
+    s.set(0, 3, txt("Total"));
+    s.set(1, 0, txt("Belgium"));
     s.set(1, 1, num(1200));
     s.set(1, 2, num(1450));
     s.set(1, 3, Cell::Formula(String::from("=B2+C2")));
-    s.set(2, 0, txt("Nederland"));
+    s.set(2, 0, txt("Netherlands"));
     s.set(2, 1, num(2100));
     s.set(2, 2, num(1980));
     s.set(2, 3, Cell::Formula(String::from("=B3+C3")));
-    s.set(3, 0, txt("Duitsland"));
+    s.set(3, 0, txt("Germany"));
     s.set(3, 1, num(3400));
     s.set(3, 2, num(3650));
     s.set(3, 3, Cell::Formula(String::from("=B4+C4")));
-    s.set(4, 0, txt("Som"));
+    s.set(4, 0, txt("Sum"));
     s.set(4, 3, Cell::Formula(String::from("=SUM(D2:D4)")));
     s
 }
 
 fn calc(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let accent = Color::SUCCESS;
-    ribbon(fb, x, y, w, accent, &["Start", "Invoegen", "Formules", "Gegevens"], 2,
-        &[("grid", "Σ Som"), ("rect", "Valuta"), ("plus", "Grafiek"), ("doc", "B")]);
+    ribbon(fb, x, y, w, accent, &["Home", "Insert", "Formulas", "Data"], 2,
+        &[("grid", "Σ Sum"), ("rect", "Currency"), ("plus", "Chart"), ("doc", "B")]);
 
     let sheet = demo_sheet();
-    // Formulebalk.
+    // Formula bar.
     let fb_y = y + RIBBON_H + 1;
     fb.fill_rect(x, fb_y, w, 24, Color::SURFACE);
     fb.fill_rounded_rect(x + 10, fb_y + 3, 54, 18, 5, Color::SURFACE_3);
@@ -252,14 +252,14 @@ fn calc(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
 
     // Grid.
     let grid_y = fb_y + 25;
-    let grid_h = h.saturating_sub(RIBBON_H + 1 + 25 + STATUS_H + 24); // -24 voor bladtabs
+    let grid_h = h.saturating_sub(RIBBON_H + 1 + 25 + STATUS_H + 24); // -24 for sheet tabs
     let rowh = 26usize;
     let hdr = 22usize;
     let rownum_w = 38usize;
     let ncols = 5usize;
     let colw = (w.saturating_sub(rownum_w)) / ncols;
 
-    // Kolomkoppen A B C D E.
+    // Column headers A B C D E.
     fb.fill_rect(x, grid_y, w, hdr, Color::SURFACE_3);
     fb.fill_rect(x, grid_y, rownum_w, hdr, Color::SURFACE_3);
     for c in 0..ncols {
@@ -274,12 +274,12 @@ fn calc(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let nrows = (grid_h.saturating_sub(hdr)) / rowh;
     for r in 0..nrows {
         let ry = grid_y + hdr + r * rowh;
-        // Rijnummer.
+        // Row number.
         fb.fill_rect(x, ry, rownum_w, rowh, Color::SURFACE_3);
         let rs = alloc::format!("{}", r + 1);
         text::draw_px(fb, x + 12, ry + 6, &rs, Color::TEXT_SEC, 11.0);
         fb.fill_rect(x, ry + rowh, w, 1, Color::BORDER);
-        // Cellen.
+        // Cells.
         for c in 0..ncols {
             let cx = x + rownum_w + c * colw;
             let val = sheet.get(r as u32, c as u32);
@@ -306,22 +306,22 @@ fn calc(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
             }
         }
     }
-    // Geselecteerde cel D5 highlighten (rij 4, kolom 3).
+    // Highlight the selected cell D5 (row 4, column 3).
     let sel_x = x + rownum_w + 3 * colw;
     let sel_y = grid_y + hdr + 4 * rowh;
     fb.draw_border(sel_x, sel_y, colw, rowh, 2, accent);
 
-    // Bladtabs.
+    // Sheet tabs.
     let tab_y = y + h - STATUS_H - 24;
     fb.fill_rect(x, tab_y, w, 24, Color::CARD);
     fb.fill_rounded_rect(x + 10, tab_y + 3, 60, 18, 5, Color::SURFACE);
-    text::draw_px(fb, x + 20, tab_y + 5, "Blad 1", Color::INK, 11.5);
-    text::draw_px(fb, x + 82, tab_y + 5, "Blad 2", Color::TEXT_SEC, 11.5);
+    text::draw_px(fb, x + 20, tab_y + 5, "Sheet 1", Color::INK, 11.5);
+    text::draw_px(fb, x + 82, tab_y + 5, "Sheet 2", Color::TEXT_SEC, 11.5);
     icons::draw(fb, "plus", x + 140, tab_y + 5, 14, Color::TEXT_SEC);
 
     let total = eurocalc::eval("=SUM(D2:D4)", &sheet).unwrap_or(0.0) as i64;
-    statusbar(fb, x, y, w, h, accent, "Klaar   ·   nl-BE",
-        &alloc::format!("Som: {total}   ·   Cellen: 17   ·   .xlsx / .ods   ·   100%"));
+    statusbar(fb, x, y, w, h, accent, "Ready   ·   nl-BE",
+        &alloc::format!("Sum: {total}   ·   Cells: 17   ·   .xlsx / .ods   ·   100%"));
 }
 
 // ── Impress ──────────────────────────────────────────────────────────────────
@@ -332,24 +332,24 @@ fn demo_deck() -> Vec<Slide> {
         blocks: alloc::vec![Block::Paragraph(eurodoc::model::Paragraph::text(body))],
     };
     alloc::vec![
-        s("EuroOS", "Het soevereine Europese besturingssysteem"),
-        s("Soeverein van ontwerp", "Eigen code · eigen sleutels · gehost in Europa"),
-        s("AI-agents in de kernel", "Capability-geïsoleerd · volledig offline"),
-        s("Bedankt", "euro-os.eu"),
+        s("EuroOS", "The sovereign European operating system"),
+        s("Sovereign by design", "Own code · own keys · hosted in Europe"),
+        s("AI agents in the kernel", "Capability-isolated · fully offline"),
+        s("Thank you", "euro-os.eu"),
     ]
 }
 
 fn impress(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
-    let accent = Color::rgb(0xC0, 0x52, 0x2C); // warm oranje (PowerPoint-achtig)
-    ribbon(fb, x, y, w, accent, &["Start", "Invoegen", "Ontwerp", "Diavoorstelling"], 0,
-        &[("plus", "Nieuwe dia"), ("rect", "Indeling"), ("grid", "Thema"), ("doc", "B")]);
+    let accent = Color::rgb(0xC0, 0x52, 0x2C); // warm orange (PowerPoint-like)
+    ribbon(fb, x, y, w, accent, &["Home", "Insert", "Design", "Slide Show"], 0,
+        &[("plus", "New slide"), ("rect", "Layout"), ("grid", "Theme"), ("doc", "B")]);
 
     let deck = demo_deck();
     let work_y = y + RIBBON_H + 1;
     let work_h = h.saturating_sub(RIBBON_H + 1 + STATUS_H);
     fb.fill_rect(x, work_y, w, work_h, Color::SURFACE_3);
 
-    // Thumbnail-strip links.
+    // Thumbnail strip on the left.
     let strip_w = 150usize;
     fb.fill_rect(x, work_y, strip_w, work_h, Color::CARD);
     fb.fill_rect(x + strip_w, work_y, 1, work_h, Color::BORDER);
@@ -365,7 +365,7 @@ fn impress(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         fb.draw_border(thx, thy, thumb_w, thumb_h, 1, Color::BORDER);
         let num = alloc::format!("{}", i + 1);
         text::draw_px(fb, thx - 1, thy + thumb_h / 2 - 6, &num, Color::TEXT_DIM, 10.0);
-        // mini-titel
+        // mini title
         text::draw_px(fb, thx + 8, thy + 8, &clip(&sl.title, thumb_w - 14, 9.0), Color::INK, 9.0);
         thy += thumb_h + 16;
         if thy > work_y + work_h - thumb_h {
@@ -373,7 +373,7 @@ fn impress(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         }
     }
 
-    // Hoofd-dia-canvas (16:9), gecentreerd in de resterende ruimte.
+    // Main slide canvas (16:9), centered in the remaining space.
     let area_x = x + strip_w + 1;
     let area_w = w - strip_w - 1;
     let slide_w = (area_w * 86 / 100).min(area_w.saturating_sub(40));
@@ -381,23 +381,23 @@ fn impress(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let slide_x = area_x + (area_w - slide_w) / 2;
     let slide_y = work_y + (work_h.saturating_sub(slide_h)) / 2;
     fb.drop_shadow(slide_x, slide_y, slide_w, slide_h, 12, 5, Color::rgb(0x1A, 0x22, 0x2C));
-    // Dia-achtergrond met een accentband bovenaan.
+    // Slide background with an accent band at the top.
     fb.fill_rect(slide_x, slide_y, slide_w, slide_h, Color::SURFACE);
     fb.fill_rect(slide_x, slide_y, slide_w, 8, accent);
-    // Titel + inhoud van dia 1.
+    // Title + content of slide 1.
     let s0 = &deck[0];
     text::draw_px(fb, slide_x + 44, slide_y + slide_h / 2 - 40, &s0.title, Color::INK, 40.0);
     if let Some(Block::Paragraph(p)) = s0.blocks.first() {
         text::draw_px(fb, slide_x + 44, slide_y + slide_h / 2 + 16, &p.plain_text(), Color::TEXT_SEC, 18.0);
     }
-    // Accentstreep onder de titel.
+    // Accent stripe below the title.
     fb.fill_rect(slide_x + 44, slide_y + slide_h / 2 + 4, 90, 4, accent);
 
-    statusbar(fb, x, y, w, h, accent, "Dia 1 van 4   ·   nl-BE",
-        "Presentatie   ·   .pptx / .odp   ·   Klik om te presenteren");
+    statusbar(fb, x, y, w, h, accent, "Slide 1 of 4   ·   nl-BE",
+        "Presentation   ·   .pptx / .odp   ·   Click to present");
 }
 
-/// Knip tekst af op pixelbreedte met een ellipsis.
+/// Truncate text to a pixel width with an ellipsis.
 fn clip(s: &str, maxw: usize, size: f32) -> String {
     if text::width_px(s, size) <= maxw {
         return String::from(s);

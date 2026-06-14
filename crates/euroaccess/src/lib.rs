@@ -1,12 +1,12 @@
-//! EuroAccess — de toegankelijkheidslaag van EuroDisplay (plan P2).
+//! EuroAccess — the accessibility layer of EuroDisplay (plan P2).
 //!
-//! Toegankelijkheid is in de EU een *aanbestedingsvereiste* (EN 301 549), geen extra.
-//! Dit crate is het AT-SPI-equivalent: een **accessibility-boom** (rollen, namen,
-//! toestanden), **focusbeheer** (volgende/vorige focusbare knoop in leesvolgorde) en
-//! een **meertalige schermlezer** die elke knoop in de taal van de gebruiker
-//! aankondigt — soeverein én toegankelijk, want de rol-labels komen uit EuroLocale.
+//! Accessibility is a *procurement requirement* in the EU (EN 301 549), not an extra.
+//! This crate is the AT-SPI equivalent: an **accessibility tree** (roles, names,
+//! states), **focus management** (next/previous focusable node in reading order) and
+//! a **multilingual screen reader** that announces each node in the user's
+//! language — sovereign and accessible, because the role labels come from EuroLocale.
 //!
-//! Pure, host-geteste `no_std`-logica; EuroDisplay vult de boom met echte widgets.
+//! Pure, host-tested `no_std` logic; EuroDisplay fills the tree with real widgets.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -17,7 +17,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use eurolocale::Lang;
 
-/// De rol van een UI-element (een subset van de ARIA/AT-SPI-rollen).
+/// The role of a UI element (a subset of the ARIA/AT-SPI roles).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role {
     Window,
@@ -34,7 +34,7 @@ pub enum Role {
 }
 
 impl Role {
-    /// Is een element met deze rol standaard focusbaar (toetsenbordnavigatie)?
+    /// Is an element with this role focusable by default (keyboard navigation)?
     fn focusable(self) -> bool {
         matches!(
             self,
@@ -42,7 +42,7 @@ impl Role {
         )
     }
 
-    /// Het rol-label in de taal van de gebruiker (schermlezer spreekt EU-talen).
+    /// The role label in the user's language (the screen reader speaks EU languages).
     pub fn label(self, lang: Lang) -> &'static str {
         use Lang::*;
         use Role::*;
@@ -59,7 +59,7 @@ impl Role {
             (Fr, Button) => "bouton", (Fr, TextField) => "champ de texte", (Fr, CheckBox) => "case à cocher",
             (Fr, List) => "liste", (Fr, ListItem) => "élément de liste", (Fr, Menu) => "menu",
             (Fr, MenuItem) => "élément de menu", (Fr, Link) => "lien",
-            // Engelse fallback voor alle overige talen.
+            // English fallback for all other languages.
             (_, Window) => "window", (_, Heading) => "heading", (_, Label) => "label",
             (_, Button) => "button", (_, TextField) => "text field", (_, CheckBox) => "checkbox",
             (_, List) => "list", (_, ListItem) => "list item", (_, Menu) => "menu",
@@ -68,15 +68,15 @@ impl Role {
     }
 }
 
-/// Een knoop in de accessibility-boom.
+/// A node in the accessibility tree.
 #[derive(Clone, Debug)]
 pub struct AccNode {
     pub id: u32,
     pub role: Role,
     pub name: String,
-    /// De waarde (bv. de inhoud van een tekstveld); leeg indien n.v.t.
+    /// The value (e.g. the contents of a text field); empty if not applicable.
     pub value: String,
-    /// Voor selectievakjes: aan/uit.
+    /// For check boxes: on/off.
     pub checked: Option<bool>,
     pub children: Vec<AccNode>,
 }
@@ -98,7 +98,7 @@ impl AccNode {
         self
     }
 
-    /// De schermlezer-aankondiging van déze knoop in `lang`, bv.
+    /// The screen-reader announcement of *this* node in `lang`, e.g.
     /// `"knop: Opslaan"`, `"tekstveld: Naam, leeg"`, `"selectievakje: Akkoord, aangevinkt"`.
     pub fn announce(&self, lang: Lang) -> String {
         let mut s = String::from(self.role.label(lang));
@@ -137,10 +137,10 @@ fn checked_word(lang: Lang, on: bool) -> &'static str {
     }
 }
 
-/// Een accessibility-boom met focusbeheer.
+/// An accessibility tree with focus management.
 pub struct AccTree {
     pub root: AccNode,
-    /// De id van de huidig gefocuste knoop (0 = geen).
+    /// The id of the currently focused node (0 = none).
     pub focused: u32,
 }
 
@@ -149,15 +149,15 @@ impl AccTree {
         AccTree { root, focused: 0 }
     }
 
-    /// De focusbare knopen in leesvolgorde (diepte-eerst).
+    /// The focusable nodes in reading order (depth-first).
     pub fn focus_order(&self) -> Vec<u32> {
         let mut out = Vec::new();
         collect_focusable(&self.root, &mut out);
         out
     }
 
-    /// Verplaats de focus naar de volgende (of vorige) focusbare knoop, cyclisch.
-    /// Geeft de nieuwe gefocuste id terug.
+    /// Move the focus to the next (or previous) focusable node, cyclically.
+    /// Returns the new focused id.
     pub fn move_focus(&mut self, forward: bool) -> u32 {
         let order = self.focus_order();
         if order.is_empty() {
@@ -167,18 +167,18 @@ impl AccTree {
         let next = match cur {
             Some(i) if forward => (i + 1) % order.len(),
             Some(i) => (i + order.len() - 1) % order.len(),
-            None => 0, // nog geen focus → eerste
+            None => 0, // no focus yet → first
         };
         self.focused = order[next];
         self.focused
     }
 
-    /// Zoek een knoop op id.
+    /// Look up a node by id.
     pub fn find(&self, id: u32) -> Option<&AccNode> {
         find_node(&self.root, id)
     }
 
-    /// De schermlezer-aankondiging van de gefocuste knoop in `lang`.
+    /// The screen-reader announcement of the focused node in `lang`.
     pub fn announce_focused(&self, lang: Lang) -> Option<String> {
         self.find(self.focused).map(|n| n.announce(lang))
     }
@@ -210,7 +210,7 @@ mod tests {
     use super::*;
 
     fn dialog() -> AccTree {
-        // venster: kop, tekstveld(Naam), selectievakje(Akkoord), knop(Opslaan), knop(Annuleren)
+        // window: heading, text field(Naam), check box(Akkoord), button(Opslaan), button(Annuleren)
         let root = AccNode::new(1, Role::Window, "Aanmelden")
             .child(AccNode::new(2, Role::Heading, "Welkom"))
             .child(AccNode::new(3, Role::TextField, "Naam"))
@@ -223,19 +223,19 @@ mod tests {
     #[test]
     fn only_focusable_in_order() {
         let t = dialog();
-        // De kop (2) is niet focusbaar; tekstveld/checkbox/knoppen wel.
+        // The heading (2) is not focusable; text field/checkbox/buttons are.
         assert_eq!(t.focus_order(), alloc::vec![3, 4, 5, 6]);
     }
 
     #[test]
     fn focus_navigation_cycles() {
         let mut t = dialog();
-        assert_eq!(t.move_focus(true), 3); // eerste
+        assert_eq!(t.move_focus(true), 3); // first
         assert_eq!(t.move_focus(true), 4);
         assert_eq!(t.move_focus(true), 5);
         assert_eq!(t.move_focus(true), 6);
-        assert_eq!(t.move_focus(true), 3); // cyclisch terug
-        assert_eq!(t.move_focus(false), 6); // achteruit
+        assert_eq!(t.move_focus(true), 3); // cycle back
+        assert_eq!(t.move_focus(false), 6); // backwards
     }
 
     #[test]
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn announce_focused_follows_focus() {
         let mut t = dialog();
-        t.move_focus(true); // focus → tekstveld(3)
+        t.move_focus(true); // focus → text field(3)
         assert_eq!(t.announce_focused(Lang::Nl), Some("tekstveld: Naam, leeg".to_string()));
         t.move_focus(true); // → checkbox(4)
         assert_eq!(t.announce_focused(Lang::Nl), Some("selectievakje: Akkoord, niet aangevinkt".to_string()));

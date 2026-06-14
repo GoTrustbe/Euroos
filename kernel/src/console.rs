@@ -1,5 +1,5 @@
-//! Eenvoudige tekst-console op de framebuffer: scrollback + promptregel.
-//! Gebruikt het 8x8-font (scale 1). Hertekent het console-gebied per toets.
+//! Simple text console on the framebuffer: scrollback + prompt line.
+//! Uses the 8x8 font (scale 1). Redraws the console area on each keystroke.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -36,7 +36,7 @@ impl<'a> Console<'a> {
         self.lines.clear();
     }
 
-    /// Voeg een regel toe; lange regels worden hard afgekapt op `cols`.
+    /// Add a line; long lines are hard-wrapped at `cols`.
     pub fn println(&mut self, s: &str) {
         if s.is_empty() {
             self.lines.push(String::new());
@@ -47,12 +47,12 @@ impl<'a> Console<'a> {
         }
     }
 
-    /// Teken het console-gebied: laatste regels + de actieve invoerregel.
+    /// Draw the console area: last lines + the active input line.
     pub fn render(&self, input: &str) {
         let line_h = CHAR_HEIGHT + 2;
         let area_h = self.rows * line_h;
         let area_w = self.cols * CHAR_WIDTH;
-        // Achtergrond (iets lichter dan bg → "kaart").
+        // Background (slightly lighter than bg → "card").
         self.fb.fill_rect(self.x - 6, self.y - 6, area_w + 12, area_h + 12, Color::CARD);
 
         let visible_rows = self.rows - 1;
@@ -69,19 +69,19 @@ impl<'a> Console<'a> {
             );
             row += 1;
         }
-        // Promptregel onderaan.
+        // Prompt line at the bottom.
         let prompt_y = self.y + visible_rows * line_h;
         self.fb.fill_rect(self.x - 6, prompt_y - 1, area_w + 12, line_h, Color::SURFACE);
         draw_string(self.fb, self.x, prompt_y, &self.prompt, Color::ACCENT, 1);
         let cursor_x = self.x + self.prompt.len() * CHAR_WIDTH;
         draw_string(self.fb, cursor_x, prompt_y, input, Color::WHITE, 1);
-        // Knipperloze blok-cursor.
+        // Non-blinking block cursor.
         let cx = cursor_x + input.chars().count() * CHAR_WIDTH;
         self.fb.fill_rect(cx, prompt_y, CHAR_WIDTH, CHAR_HEIGHT, Color::ACCENT);
     }
 }
 
-/// Splits een string in stukken van maximaal `n` chars (byte-veilig voor ASCII).
+/// Split a string into chunks of at most `n` chars (byte-safe for ASCII).
 struct CharChunks<'a> {
     s: &'a str,
     n: usize,

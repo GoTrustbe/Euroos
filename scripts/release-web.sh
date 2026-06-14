@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  release-web.sh — bouw de publieke download-artefacten uit het laatste image.
+#  release-web.sh — build the public download artifacts from the latest image.
 #
-#  Neemt het verse bootable image (eurokernel.img) en produceert de vier
-#  download-varianten voor euro-os.eu/try/, plus SHA256SUMS en een VERSION-
-#  bestand. Reproduceerbaar: zelfde image → zelfde artefacten (gzip -n, geen
-#  tijdstempels in de tar). Deployen naar de webroot doet de aanroeper apart.
+#  Takes the fresh bootable image (eurokernel.img) and produces the four
+#  download variants for euro-os.eu/try/, plus SHA256SUMS and a VERSION
+#  file. Reproducible: same image → same artifacts (gzip -n, no
+#  timestamps in the tar). Deploying to the webroot is done separately by the caller.
 #
-#  Gebruik:  ./scripts/release-web.sh [OUT_DIR]
+#  Usage:  ./scripts/release-web.sh [OUT_DIR]
 #            (default OUT_DIR = /tmp/euroos-release)
 # ============================================================================
 set -euo pipefail
@@ -19,19 +19,19 @@ OVMF="${OVMF:-/usr/share/ovmf/OVMF.fd}"
 OUT="${1:-/tmp/euroos-release}"
 VERSION="${VERSION:-$(date -u +%Y.%m.%d)}"
 
-[ -f "$SRC_IMG" ] || { echo "image niet gevonden: $SRC_IMG (bouw eerst ./scripts/build.sh release)"; exit 1; }
-[ -f "$OVMF" ]    || { echo "OVMF niet gevonden: $OVMF (installeer 'ovmf')"; exit 1; }
+[ -f "$SRC_IMG" ] || { echo "image not found: $SRC_IMG (build first with ./scripts/build.sh release)"; exit 1; }
+[ -f "$OVMF" ]    || { echo "OVMF not found: $OVMF (install 'ovmf')"; exit 1; }
 
-echo "==> EuroOS web-release $VERSION uit $(basename "$SRC_IMG") ($(du -h "$SRC_IMG" | cut -f1))"
+echo "==> EuroOS web release $VERSION from $(basename "$SRC_IMG") ($(du -h "$SRC_IMG" | cut -f1))"
 rm -rf "$OUT"; mkdir -p "$OUT"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cp "$SRC_IMG" "$WORK/euroos.img"
 
-# 1. Rauw UEFI-image (gzip, deterministisch met -n).
+# 1. Raw UEFI image (gzip, deterministic with -n).
 echo "  -> euroos-x86_64-uefi.img.gz"
 gzip -9 -n -c "$WORK/euroos.img" > "$OUT/euroos-x86_64-uefi.img.gz"
 
-# 2. qcow2 cloud-image.
+# 2. qcow2 cloud image.
 echo "  -> euroos-preview.qcow2.gz"
 qemu-img convert -f raw -O qcow2 "$WORK/euroos.img" "$WORK/euroos-preview.qcow2"
 gzip -9 -n -c "$WORK/euroos-preview.qcow2" > "$OUT/euroos-preview.qcow2.gz"
@@ -41,7 +41,7 @@ echo "  -> euroos-preview.vmdk.gz"
 qemu-img convert -f raw -O vmdk "$WORK/euroos.img" "$WORK/euroos-preview.vmdk"
 gzip -9 -n -c "$WORK/euroos-preview.vmdk" > "$OUT/euroos-preview.vmdk.gz"
 
-# 4. QEMU-bundle (image + firmware + launchers + README).
+# 4. QEMU bundle (image + firmware + launchers + README).
 echo "  -> euroos-preview-x86_64.tar.gz"
 BUNDLE="$WORK/euroos-preview"
 mkdir -p "$BUNDLE"
@@ -72,5 +72,5 @@ raw image size (decompressed): $RAW_SIZE
 built:   $(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
 
-echo "==> klaar in $OUT:"
+echo "==> done in $OUT:"
 ls -lh "$OUT"

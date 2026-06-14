@@ -1,4 +1,4 @@
-//! EuroAuth — de aanmeldstroom (PAM-equivalent), met timing-aanval-preventie.
+//! EuroAuth — the login flow (PAM equivalent), with timing-attack prevention.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -8,15 +8,15 @@ use crate::cred::Argon2idHash;
 use crate::model::{LockReason, UserDb, UserState};
 use crate::{effective_caps, hex, Caps, GroupDb, Timestamp, UserId};
 
-/// Een aanmeld-credential.
+/// A login credential.
 #[derive(Clone, Debug)]
 pub enum Credential {
     Password(String),
-    // TpmKey(..) — TPM-gebonden login is een latere mijl.
+    // TpmKey(..) — TPM-bound login is a later milestone.
 }
 
-/// Waarom een aanmelding faalt. Aan de bovenkant zijn `InvalidCredentials` voor
-/// onbekende gebruiker én verkeerd wachtwoord IDENTIEK (geen enumeratie).
+/// Why a login fails. At the top level, `InvalidCredentials` is IDENTICAL for
+/// an unknown user and a wrong password (no enumeration).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuthError {
     InvalidCredentials,
@@ -25,7 +25,7 @@ pub enum AuthError {
     MustChangePassword,
 }
 
-/// Een actieve sessie.
+/// An active session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Session {
     pub id: [u8; 32],
@@ -43,17 +43,17 @@ impl Session {
     }
 }
 
-/// Het resultaat van [`authenticate`]: de uitkomst plus de audit-events die de
-/// aanroeper MOET wegschrijven (loggen kan niet overgeslagen worden).
+/// The result of [`authenticate`]: the outcome plus the audit events that the
+/// caller MUST persist (logging cannot be skipped).
 pub struct AuthResult {
     pub outcome: Result<Session, AuthError>,
     pub events: Vec<AuditEvent>,
 }
 
-/// Volledige aanmeldsequentie. `dummy` is een vooraf-berekende Argon2id-hash met de
-/// systeemparameters: bij een onbekende gebruiker verifiëren we daartegen, zodat de
-/// looptijd gelijk is aan die van een bestaand account met verkeerd wachtwoord
-/// (geen gebruikersnaam-enumeratie via timing).
+/// Full login sequence. `dummy` is a precomputed Argon2id hash with the
+/// system parameters: for an unknown user we verify against it, so that the
+/// running time equals that of an existing account with a wrong password
+/// (no username enumeration via timing).
 #[allow(clippy::too_many_arguments)]
 pub fn authenticate(
     db: &mut UserDb,
@@ -69,10 +69,10 @@ pub fn authenticate(
     let Credential::Password(password) = cred;
     let mut events = Vec::new();
 
-    // 1. Zoek de gebruiker op.
+    // 1. Look up the user.
     let found = db.get_by_name(username).cloned();
 
-    // 2. Controleer de staat VÓÓR wachtwoordverificatie.
+    // 2. Check the state BEFORE password verification.
     let user = match found {
         Some(u) => match &u.state {
             UserState::Locked { reason, .. } => {
@@ -80,8 +80,8 @@ pub fn authenticate(
                     username: username.to_string(),
                     reason: DenyReason::AccountLocked(*reason),
                 });
-                // Toch tijd verbranden zodat vergrendeld vs. onbekend niet te
-                // onderscheiden is via timing.
+                // Burn time anyway so that locked vs. unknown is not
+                // distinguishable via timing.
                 let _ = dummy.verify(password.as_bytes());
                 return AuthResult { outcome: Err(AuthError::AccountLocked), events };
             }
@@ -94,7 +94,7 @@ pub fn authenticate(
                 return AuthResult { outcome: Err(AuthError::AccountExpired), events };
             }
             UserState::Deleted { .. } => {
-                // Behandel als "onbekend" — onthul de verwijdering niet.
+                // Treat as "unknown" — do not reveal the deletion.
                 let _ = dummy.verify(password.as_bytes());
                 events.push(AuditEvent::LoginDenied {
                     username: username.to_string(),
@@ -105,8 +105,8 @@ pub fn authenticate(
             UserState::Active => u,
         },
         None => {
-            // Onbekende gebruiker: doe een dummy-Argon2id-verificatie (zelfde
-            // looptijd) en faal met dezelfde generieke fout.
+            // Unknown user: do a dummy Argon2id verification (same
+            // running time) and fail with the same generic error.
             let _ = dummy.verify(password.as_bytes());
             events.push(AuditEvent::LoginDenied {
                 username: username.to_string(),
@@ -117,9 +117,9 @@ pub fn authenticate(
     };
 
     let uid = user.uid;
-    let max_failed = 5u32; // policy.max_failed_logins (systeembeleid)
+    let max_failed = 5u32; // policy.max_failed_logins (system policy)
 
-    // 3. Verifieer het wachtwoord.
+    // 3. Verify the password.
     let verified = user.password.verify(password.as_bytes());
 
     if !verified {
@@ -129,7 +129,7 @@ pub fn authenticate(
             username: username.to_string(),
             attempt: attempts,
         });
-        // Vergrendel bij overschrijding van de drempel.
+        // Lock when the threshold is exceeded.
         if attempts >= max_failed {
             let _ = db.lock(uid, LockReason::FailedLoginThreshold, UserId::SYSTEM, now);
             events.push(AuditEvent::UserLocked {
@@ -142,21 +142,21 @@ pub fn authenticate(
         return AuthResult { outcome: Err(AuthError::InvalidCredentials), events };
     }
 
-    // 4. Reset de teller bij succes.
+    // 4. Reset the counter on success.
     db.reset_failed_logins(uid);
 
-    // 5. Moet het wachtwoord gewijzigd worden?
+    // 5. Must the password be changed?
     let must_change = db.get(uid).map(|u| u.password.must_change).unwrap_or(false);
     if must_change {
         return AuthResult { outcome: Err(AuthError::MustChangePassword), events };
     }
 
-    // 6. Leid de capabilityset voor deze sessie af (vast voor de duur van de sessie).
+    // 6. Derive the capability set for this session (fixed for the session's duration).
     let user = db.get(uid).unwrap();
     let caps = effective_caps(user, groups, europol_allowed);
     let uname = user.username.clone();
 
-    // 7. Maak de sessie.
+    // 7. Create the session.
     let session = Session {
         id: session_id,
         uid,
@@ -167,7 +167,7 @@ pub fn authenticate(
         tty: tty.to_string(),
     };
 
-    // 8. Audit — geslaagde aanmelding.
+    // 8. Audit — successful login.
     events.push(AuditEvent::LoginSuccess {
         uid,
         username: uname,
@@ -187,8 +187,8 @@ mod tests {
     use crate::model::{User, UserState};
     use crate::{ALLOW_ALL, GROUP_USERS};
 
-    // Gedeelde, snelle-maar-realistische params voor de timing-pariteit (zowel het
-    // echte record als de dummy gebruiken ze → de looptijd is per definitie gelijk).
+    // Shared, fast-but-realistic params for timing parity (both the
+    // real record and the dummy use them → the running time is equal by definition).
     fn params() -> Params {
         Params { m_cost: 2048, t_cost: 2, p_cost: 1, tag_len: 32 }
     }
@@ -215,7 +215,7 @@ mod tests {
             failed_logins: 0,
         })
         .unwrap();
-        // De dummy gebruikt dezelfde params als echte accounts.
+        // The dummy uses the same params as real accounts.
         let dummy = Argon2idHash::create(b"*", &[0u8; 32], &params());
         (db, gdb, dummy)
     }
@@ -234,9 +234,9 @@ mod tests {
             "/dev/tty1",
             &dummy,
         );
-        let session = r.outcome.expect("login moet lukken");
+        let session = r.outcome.expect("login must succeed");
         assert_eq!(session.uid, UserId(1000));
-        // Caps = eigen FILE ∪ users(LOGIN|FILE|DISPLAY) ∪ net(LOGIN|NET).
+        // Caps = own FILE ∪ users(LOGIN|FILE|DISPLAY) ∪ net(LOGIN|NET).
         assert_eq!(session.caps & crate::CAP_NET, crate::CAP_NET);
         assert_eq!(session.caps & crate::CAP_DISPLAY, crate::CAP_DISPLAY);
         assert!(r.events.iter().any(|e| e.name() == "LoginSuccess"));
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn wrong_password_and_unknown_user_are_indistinguishable() {
         let (mut db, gdb, dummy) = mk_db();
-        // Verkeerd wachtwoord voor een bestaande gebruiker.
+        // Wrong password for an existing user.
         let r1 = authenticate(
             &mut db,
             &gdb,
@@ -257,7 +257,7 @@ mod tests {
             "tty1",
             &dummy,
         );
-        // Onbekende gebruiker.
+        // Unknown user.
         let r2 = authenticate(
             &mut db,
             &gdb,
@@ -269,7 +269,7 @@ mod tests {
             "tty1",
             &dummy,
         );
-        // Aan de bovenkant: exact dezelfde fout (geen enumeratie).
+        // At the top level: exactly the same error (no enumeration).
         assert_eq!(r1.outcome, Err(AuthError::InvalidCredentials));
         assert_eq!(r2.outcome, Err(AuthError::InvalidCredentials));
     }
@@ -278,7 +278,7 @@ mod tests {
     fn timing_unknown_user_matches_wrong_password() {
         use std::time::Instant;
         let (mut db, gdb, dummy) = mk_db();
-        // Meet wrong-password (bestaande gebruiker, echte Argon2id-verificatie).
+        // Measure wrong-password (existing user, real Argon2id verification).
         let t0 = Instant::now();
         let _ = authenticate(
             &mut db,
@@ -292,7 +292,7 @@ mod tests {
             &dummy,
         );
         let wrong = t0.elapsed().as_secs_f64();
-        // Meet unknown-user (dummy Argon2id-verificatie).
+        // Measure unknown-user (dummy Argon2id verification).
         let t1 = Instant::now();
         let _ = authenticate(
             &mut db,
@@ -306,12 +306,12 @@ mod tests {
             &dummy,
         );
         let unknown = t1.elapsed().as_secs_f64();
-        // Beide doen één Argon2id-verificatie met dezelfde params → vergelijkbare tijd.
-        // Ruime tolerantie tegen planner-ruis, maar genoeg om "0 vs. ~ms" te vangen.
+        // Both do one Argon2id verification with the same params → comparable time.
+        // Generous tolerance against scheduler noise, but enough to catch "0 vs. ~ms".
         let ratio = wrong.max(1e-9) / unknown.max(1e-9);
         assert!(
             (0.2..5.0).contains(&ratio),
-            "timing moet vergelijkbaar zijn: wrong={wrong:.6}s unknown={unknown:.6}s ratio={ratio:.2}"
+            "timing must be comparable: wrong={wrong:.6}s unknown={unknown:.6}s ratio={ratio:.2}"
         );
     }
 
@@ -332,7 +332,7 @@ mod tests {
             );
             assert_eq!(r.outcome, Err(AuthError::InvalidCredentials));
         }
-        // Account is nu vergrendeld; zelfs het juiste wachtwoord faalt met Locked.
+        // Account is now locked; even the correct password fails with Locked.
         let r = authenticate(
             &mut db,
             &gdb,
@@ -363,7 +363,7 @@ mod tests {
             "tty1",
             &dummy,
         );
-        // Geen onthulling van verwijdering: generieke InvalidCredentials.
+        // No revelation of deletion: generic InvalidCredentials.
         assert_eq!(r.outcome, Err(AuthError::InvalidCredentials));
     }
 }

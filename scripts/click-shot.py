@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Boot de EuroKernel-image, wacht op de desktop, en INJECTEER muisbewegingen +
-klikken via QMP als RELATIEVE events (de kernel heeft enkel relatieve pointers:
-PS/2 + USB-boot-muis). De cursor start op het scherm-midden (de kernel zet
-mx=width/2, my=height/2); we houden een virtuele positie bij en bewegen in stapjes.
+"""Boot the EuroKernel image, wait for the desktop, and INJECT mouse movements +
+clicks via QMP as RELATIVE events (the kernel has relative pointers only:
+PS/2 + USB boot mouse). The cursor starts at the screen center (the kernel sets
+mx=width/2, my=height/2); we keep a virtual position and move in small steps.
 
-Maakt eerst <prefix>-0.png (desktop in rust), dan na elke klik <prefix>-N.png.
+First makes <prefix>-0.png (desktop at rest), then <prefix>-N.png after each click.
 
-Gebruik:  WAIT=520 python3 scripts/click-shot.py <img> <prefix> "x,y;x,y;..."
+Usage:  WAIT=520 python3 scripts/click-shot.py <img> <prefix> "x,y;x,y;..."
 """
 import json, os, select, socket, subprocess, sys, time
 
@@ -31,11 +31,11 @@ qemu = subprocess.Popen([
     "-qmp", f"unix:{QMP},server,nowait",
     "-netdev", "user,id=n0,ipv4=on,ipv6=on",
     "-device", "virtio-net-pci,netdev=n0,disable-modern=on",
-    # USB-muis: de kernel ondersteunt USB-boot-muis via xHCI (apply_usb), wat de
-    # PS/2-route in deze headless QMP-opstelling niet betrouwbaar deed. Relatieve
-    # input-send-event-events routeren hiernaartoe.
+    # USB mouse: the kernel supports a USB boot mouse via xHCI (apply_usb), which
+    # the PS/2 route in this headless QMP setup did not do reliably. Relative
+    # input-send-event events are routed here.
     "-device", "qemu-xhci,id=xhci",
-    "-device", "usb-kbd,bus=xhci.0",  # USB-toetsenbord: kernel leest via xHCI-HID (run-e2e-methode)
+    "-device", "usb-kbd,bus=xhci.0",  # USB keyboard: kernel reads via xHCI HID (run-e2e method)
     "-no-reboot",
 ], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
@@ -51,7 +51,7 @@ f = s.makefile("rwb", buffering=0)
 
 def cmd(obj):
     f.write((json.dumps(obj) + "\n").encode())
-    # Sla asynchrone events (RTC_CHANGE, …) over; wacht op de echte command-reply.
+    # Skip asynchronous events (RTC_CHANGE, …); wait for the actual command reply.
     while True:
         line = json.loads(f.readline().decode())
         if "event" in line:
@@ -59,20 +59,20 @@ def cmd(obj):
         return line
 
 
-f.readline()  # QMP-greeting
+f.readline()  # QMP greeting
 cmd({"execute": "qmp_capabilities"})
 def drain_qmp():
-    # KRITIEK: leeg de QMP-socket van asynchrone events terwijl we wachten.
-    # Doen we dat niet, dan loopt QEMU's QMP-buffer vol en BEVRIEST de hele VM
-    # (de gast bleef anders op gasttijd ~2s hangen → zwarte schermdump).
+    # CRITICAL: drain the QMP socket of asynchronous events while we wait.
+    # If we don't, QEMU's QMP buffer fills up and FREEZES the whole VM
+    # (the guest otherwise hung at ~2s guest time → black screendump).
     while select.select([s], [], [], 0)[0]:
         if not f.readline():
             break
 
 
-# Wacht GERICHT: poll serial.log tot de desktop écht gerenderd is (+ QMP draaiende
-# houden) i.p.v. blind WAIT seconden te slapen. Scheelt onder TCG veel wachttijd.
-print(f"[click-shot] booting, poll serial tot desktop (max {WAIT}s)...", flush=True)
+# Wait DELIBERATELY: poll serial.log until the desktop is actually rendered (+ keep QMP
+# running) instead of blindly sleeping WAIT seconds. Saves a lot of wait time under TCG.
+print(f"[click-shot] booting, poll serial until desktop (max {WAIT}s)...", flush=True)
 MARKER = "interactieve loop gestart"
 start = time.time()
 deadline = start + WAIT
@@ -87,13 +87,13 @@ while time.time() < deadline:
     except FileNotFoundError:
         pass
     time.sleep(1)
-# Geef de eerste volledige render nog een paar seconden om af te tekenen (+ blijf draineren).
+# Give the first full render a few more seconds to draw (+ keep draining).
 for _ in range(8 if rendered else 0):
     drain_qmp()
     time.sleep(1)
-print(f"[click-shot] desktop gerenderd={rendered} na ~{int(time.time()-start)}s", flush=True)
+print(f"[click-shot] desktop rendered={rendered} after ~{int(time.time()-start)}s", flush=True)
 
-# Virtuele cursorpositie = scherm-midden (zoals de kernel initialiseert).
+# Virtual cursor position = screen center (as the kernel initializes it).
 vx, vy = SCREEN_W // 2, SCREEN_H // 2
 
 
@@ -106,8 +106,8 @@ def rel(dx, dy):
 
 def move_to(tx, ty):
     global vx, vy
-    # Beweeg in stapjes van max 60px zodat de PS/2-emulatie elke delta netjes
-    # in pakketten omzet en de kernel meekomt.
+    # Move in steps of max 60px so the PS/2 emulation turns each delta neatly
+    # into packets and the kernel keeps up.
     while vx != tx or vy != ty:
         dx = max(-60, min(60, tx - vx))
         dy = max(-60, min(60, ty - vy))
@@ -133,8 +133,8 @@ def shot(path):
     print(f"[click-shot] {path}: {r}", flush=True)
 
 
-# Toetsenbord-injectie via QMP send-key (PS/2; betrouwbaar — de shell is interactief).
-# Een token is een qcode of "shift+<qcode>" voor symbolen die shift vereisen.
+# Keyboard injection via QMP send-key (PS/2; reliable — the shell is interactive).
+# A token is a qcode or "shift+<qcode>" for symbols that require shift.
 QK = {
     "1": "1", "2": "2", "3": "3", "4": "4", "5": "5",
     "6": "6", "7": "7", "8": "8", "9": "9", "0": "0",
@@ -142,15 +142,15 @@ QK = {
     "(": "shift+9", ")": "shift+0", ".": "dot", "=": "equal",
     ":": "shift+semicolon", "\n": "ret",
 }
-# Letters a-z (qcode = de letter zelf).
+# Letters a-z (qcode = the letter itself).
 for _c in "abcdefghijklmnopqrstuvwxyz":
     QK[_c] = _c
 
 
 def send_key(token):
-    # Houd elke toets ~0.4s INGEDRUKT zodat de trage USB-HID-poll (xHCI) hem zeker
-    # ziet — anders vallen aanslagen weg onder TCG. Modifiers eerst in/laatst uit.
-    parts = token.split("+")  # bv. ["shift","8"]
+    # Hold each key down ~0.4s so the slow USB-HID poll (xHCI) is sure to
+    # see it — otherwise keystrokes get dropped under TCG. Modifiers down first, up last.
+    parts = token.split("+")  # e.g. ["shift","8"]
     def k(q, down):
         return {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": q}}}
     cmd({"execute": "input-send-event", "arguments": {"events": [k(q, True) for q in parts]}})
@@ -162,11 +162,11 @@ def send_key(token):
 def type_expr(expr):
     for ch in expr:
         if ch in QK:
-            print(f"[click-shot] toets '{ch}'", flush=True)
+            print(f"[click-shot] key '{ch}'", flush=True)
             send_key(QK[ch])
-    # Wacht ná Enter zodat een (blokkerende) echte fetch+render kan voltooien.
+    # Wait after Enter so a (blocking) real fetch+render can complete.
     after = int(os.environ.get("EK_WAIT_AFTER", "3"))
-    print(f"[click-shot] wacht {after}s op fetch/render...", flush=True)
+    print(f"[click-shot] waiting {after}s for fetch/render...", flush=True)
     time.sleep(after)
 
 
@@ -177,15 +177,15 @@ for chunk in CLICKS.split(";"):
     if not chunk:
         continue
     xs, ys = chunk.split(",")
-    print(f"[click-shot] klik {n} -> ({xs},{ys})", flush=True)
+    print(f"[click-shot] click {n} -> ({xs},{ys})", flush=True)
     click_at(int(xs), int(ys))
     shot(f"{PREFIX}-{n}.png")
     n += 1
 
-# Optioneel: typ een expressie via het toetsenbord, dan een eindshot.
+# Optional: type an expression via the keyboard, then a final shot.
 typ = os.environ.get("EK_TYPE", "")
 if typ:
-    print(f"[click-shot] typen: {typ}", flush=True)
+    print(f"[click-shot] typing: {typ}", flush=True)
     type_expr(typ)
     shot(f"{PREFIX}-typed.png")
 
@@ -196,4 +196,4 @@ try:
     qemu.wait(timeout=5)
 except Exception:
     qemu.kill()
-print("[click-shot] klaar.", flush=True)
+print("[click-shot] done.", flush=True)

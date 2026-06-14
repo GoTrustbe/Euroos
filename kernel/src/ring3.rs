@@ -1,13 +1,13 @@
-//! Ring-3 userspace + echte syscalls (Track 3.4).
+//! Ring-3 userspace + real syscalls (Track 3.4).
 //!
-//! Een userspace-programma (geladen uit EuroFS) draait in **ring 3** en roept
-//! syscalls aan via `SYSCALL`:
-//!   - `sys_write(ptr, len)` (nr 1): schrijf tekst naar de kernel-console
-//!   - `sys_exit(code)`      (nr 0): stop het programma, terug naar de kernel
+//! A userspace program (loaded from EuroFS) runs in **ring 3** and invokes
+//! syscalls via `SYSCALL`:
+//!   - `sys_write(ptr, len)` (nr 1): write text to the kernel console
+//!   - `sys_exit(code)`      (nr 0): stop the program, back to the kernel
 //!
-//! `sys_write` keert via `SYSRET` terug naar ring 3 (het programma loopt door);
-//! `sys_exit` keert terug naar de kernel-aanroeper. Privilege-scheiding + een
-//! echte syscall round-trip, met een programma dat van schijf komt.
+//! `sys_write` returns to ring 3 via `SYSRET` (the program keeps running);
+//! `sys_exit` returns to the kernel caller. Privilege separation + a
+//! real syscall round-trip, with a program that comes from disk.
 
 use core::arch::global_asm;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -18,47 +18,47 @@ use euromm::FrameAllocator;
 use spin::Mutex;
 
 // ── Capability-based security (security-spec) ─────────────────────────────
-// Een proces krijgt exact de rechten die het nodig heeft; de kernel handhaaft
-// dit op de syscall-grens (least privilege, géén root/non-root).
-pub const CAP_CONSOLE: u64 = 1 << 0; // schrijven naar console
+// A process gets exactly the rights it needs; the kernel enforces
+// this at the syscall boundary (least privilege, no root/non-root).
+pub const CAP_CONSOLE: u64 = 1 << 0; // write to console
 pub const CAP_PROC_INFO: u64 = 1 << 1; // getpid/uname
 pub const CAP_FILE: u64 = 1 << 2; // open/read/close
-pub const CAP_NET: u64 = 1 << 3; // netwerktoegang
-pub const CAP_IMMUTABLE_ADMIN: u64 = 1 << 4; // L2: immutability-vlaggen zetten/wissen
+pub const CAP_NET: u64 = 1 << 3; // network access
+pub const CAP_IMMUTABLE_ADMIN: u64 = 1 << 4; // L2: set/clear immutability flags
 
 static CURRENT_CAPS: AtomicU64 = AtomicU64::new(0);
-// Als true: het huidige proces gebruikt de LINUX-syscall-ABI (andere nummers +
-// semantiek). De kernel vertaalt dan naar z'n eigen handlers (Track 6 fase 6.6).
+// If true: the current process uses the LINUX syscall ABI (different numbers +
+// semantics). The kernel then translates to its own handlers (Track 6 phase 6.6).
 static LINUX_ABI: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
-// App-identiteit van het draaiende proces (argv[0], bv. "/bin/msock"). EuroGuard
-// (Track 7) gebruikt dit om policy-beslissingen, statistieken en audit-events aan
-// de juiste app toe te wijzen.
+// App identity of the running process (argv[0], e.g. "/bin/msock"). EuroGuard
+// (Track 7) uses this to attribute policy decisions, statistics and audit events
+// to the right app.
 static CURRENT_APP: Mutex<String> = Mutex::new(String::new());
 
-/// De app-identiteit van het huidige ring-3 proces (voor EuroGuard).
+/// The app identity of the current ring-3 process (for EuroGuard).
 pub fn current_app() -> String {
     CURRENT_APP.lock().clone()
 }
 
-// Userspace-heap (voor sbrk/malloc): break-pointer + grens.
+// Userspace heap (for sbrk/malloc): break pointer + limit.
 static HEAP_BREAK: AtomicU64 = AtomicU64::new(0);
 static HEAP_END: AtomicU64 = AtomicU64::new(0);
 
-/// Virtuele basis van de 2 MiB-arena van het lopende ring-3-proces (audit C1).
-/// Gezet bij programmastart; gebruikt om user-pointers te valideren vóór de kernel
-/// ze dereferentieert, zodat een proces geen kernel-geheugen kan laten lezen/schrijven.
+/// Virtual base of the 2 MiB arena of the running ring-3 process (audit C1).
+/// Set at program start; used to validate user pointers before the kernel
+/// dereferences them, so a process cannot make the kernel read/write kernel memory.
 static ARENA_BASE: AtomicU64 = AtomicU64::new(0);
-/// De arena is 2 MiB groot (zelfde `MIB2` als de paging-laag).
+/// The arena is 2 MiB in size (same `MIB2` as the paging layer).
 const ARENA_SPAN: u64 = 2 * 1024 * 1024;
 
-/// Ligt `[ptr, ptr+len)` volledig binnen de arena van het lopende proces?
-/// (Overloop-veilig. Als er nog geen arena gezet is — puur kernel-interne aanroep —
-/// staan we 't toe.)
+/// Does `[ptr, ptr+len)` lie entirely within the arena of the running process?
+/// (Overflow-safe. If no arena has been set yet — a purely kernel-internal call —
+/// we allow it.)
 fn in_user_arena(ptr: u64, len: usize) -> bool {
     let base = ARENA_BASE.load(Ordering::Relaxed);
     if base == 0 {
-        return true; // geen ring-3-context actief
+        return true; // no ring-3 context active
     }
     let top = base + ARENA_SPAN;
     match ptr.checked_add(len as u64) {
@@ -67,37 +67,37 @@ fn in_user_arena(ptr: u64, len: usize) -> bool {
     }
 }
 
-/// `-EFAULT`: door een syscall teruggegeven als een meegeleverde user-pointer niet
-/// volledig in de arena van het lopende proces ligt.
+/// `-EFAULT`: returned by a syscall when a supplied user pointer does not lie
+/// entirely within the arena of the running process.
 const EFAULT: u64 = (-14i64) as u64;
 
-// ── Veilige user-geheugentoegang ──────────────────────────────────────────────
-// ÉÉN poort naar/uit userspace. Elke functie controleert `[ptr, ptr+len)` met
-// `in_user_arena` VÓÓR ze dereferentieert, zodat een proces nooit kernel-geheugen
-// kan laten lezen of overschrijven door een vervalste pointer mee te geven. Alle
-// syscall-handlers die een user-pointer aanraken MOETEN via deze helpers gaan —
-// nooit rechtstreeks `as *mut`/`as *const` op een syscall-argument.
+// ── Safe user memory access ──────────────────────────────────────────────
+// ONE gate into/out of userspace. Each function checks `[ptr, ptr+len)` with
+// `in_user_arena` BEFORE it dereferences, so a process can never make the kernel
+// read or overwrite kernel memory by passing a forged pointer. All
+// syscall handlers that touch a user pointer MUST go through these helpers —
+// never directly `as *mut`/`as *const` on a syscall argument.
 
-/// Kopieer `src` naar user-adres `dst`. `false` = pointer faalt de arena-check
-/// (de aanroeper geeft dan `-EFAULT` terug); er wordt niets geschreven.
+/// Copy `src` to user address `dst`. `false` = pointer fails the arena check
+/// (the caller then returns `-EFAULT`); nothing is written.
 #[must_use]
 fn copy_to_user(dst: u64, src: &[u8]) -> bool {
     if !in_user_arena(dst, src.len()) {
         return false;
     }
-    // SAFETY: arena-gevalideerd; arena is identity-mapped en schrijfbaar.
+    // SAFETY: arena-validated; arena is identity-mapped and writable.
     unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst as *mut u8, src.len()) };
     true
 }
 
-/// Lees `len` bytes vanaf user-adres `src`. `None` = pointer faalt de arena-check.
+/// Read `len` bytes from user address `src`. `None` = pointer fails the arena check.
 #[must_use]
 fn copy_from_user(src: u64, len: usize) -> Option<alloc::vec::Vec<u8>> {
     if !in_user_arena(src, len) {
         return None;
     }
     let mut v = alloc::vec::Vec::with_capacity(len);
-    // SAFETY: arena-gevalideerd; identity-mapped.
+    // SAFETY: arena-validated; identity-mapped.
     unsafe {
         v.set_len(len);
         core::ptr::copy_nonoverlapping(src as *const u8, v.as_mut_ptr(), len);
@@ -105,35 +105,35 @@ fn copy_from_user(src: u64, len: usize) -> Option<alloc::vec::Vec<u8>> {
     Some(v)
 }
 
-/// Schrijf `len` nul-bytes naar user-adres `dst`. `false` = arena-check faalt.
+/// Write `len` zero bytes to user address `dst`. `false` = arena check fails.
 #[must_use]
 fn zero_user(dst: u64, len: usize) -> bool {
     if !in_user_arena(dst, len) {
         return false;
     }
-    // SAFETY: arena-gevalideerd; identity-mapped.
+    // SAFETY: arena-validated; identity-mapped.
     unsafe { core::ptr::write_bytes(dst as *mut u8, 0, len) };
     true
 }
 
-/// Schrijf een scalair (`u32`/`u64`/…) op user-adres `ptr`. `false` = arena-check faalt.
+/// Write a scalar (`u32`/`u64`/…) at user address `ptr`. `false` = arena check fails.
 #[must_use]
 fn write_user<T: Copy>(ptr: u64, val: T) -> bool {
     if !in_user_arena(ptr, core::mem::size_of::<T>()) {
         return false;
     }
-    // SAFETY: arena-gevalideerd; `write_unaligned` vereist geen alignment.
+    // SAFETY: arena-validated; `write_unaligned` requires no alignment.
     unsafe { (ptr as *mut T).write_unaligned(val) };
     true
 }
 
-/// Lees een scalair van user-adres `ptr`. `None` = arena-check faalt.
+/// Read a scalar from user address `ptr`. `None` = arena check fails.
 #[must_use]
 fn read_user<T: Copy>(ptr: u64) -> Option<T> {
     if !in_user_arena(ptr, core::mem::size_of::<T>()) {
         return None;
     }
-    // SAFETY: arena-gevalideerd; `read_unaligned` vereist geen alignment.
+    // SAFETY: arena-validated; `read_unaligned` requires no alignment.
     Some(unsafe { (ptr as *const T).read_unaligned() })
 }
 
@@ -141,14 +141,14 @@ fn has_cap(c: u64) -> bool {
     CURRENT_CAPS.load(Ordering::Relaxed) & c == c
 }
 
-/// De capability die een syscall vereist (0 = altijd toegestaan).
+/// The capability a syscall requires (0 = always allowed).
 fn required_cap(num: u64) -> u64 {
     match num {
         1 => CAP_CONSOLE,
         2 | 4 => CAP_PROC_INFO,
         20 | 21 | 22 => CAP_FILE,
         60 => CAP_NET,
-        _ => 0, // exit (0) e.d. altijd toegestaan
+        _ => 0, // exit (0) and the like always allowed
     }
 }
 use x86_64::registers::control::{Cr4, Cr4Flags};
@@ -156,29 +156,29 @@ use x86_64::registers::model_specific::Msr;
 
 use crate::serial_print;
 
-// Door de assembly-stubs gedeelde globals (single-threaded; userspace draait
-// vóór de scheduler).
+// Globals shared by the assembly stubs (single-threaded; userspace runs
+// before the scheduler).
 #[no_mangle]
-static mut SAVED_KERNEL_RSP: u64 = 0; // terugkeerpunt voor sys_exit
+static mut SAVED_KERNEL_RSP: u64 = 0; // return point for sys_exit
 #[no_mangle]
-static mut KERNEL_RSP: u64 = 0; // stack voor de syscall-handler
+static mut KERNEL_RSP: u64 = 0; // stack for the syscall handler
 #[no_mangle]
-static mut USER_RSP: u64 = 0; // bewaarde user-rsp tijdens een syscall
+static mut USER_RSP: u64 = 0; // saved user-rsp during a syscall
 #[no_mangle]
-static mut USER_RIP: u64 = 0; // bewaarde user-rip (clone: thread-resume-punt)
+static mut USER_RIP: u64 = 0; // saved user-rip (clone: thread resume point)
 #[no_mangle]
-static mut SAVED_REGS: u64 = 0; // wijst naar het opgeslagen registerblok (clone: child erft de regs)
+static mut SAVED_REGS: u64 = 0; // points to the saved register block (clone: child inherits the regs)
 #[no_mangle]
-static mut EXITED: u64 = 0; // door sys_exit gezet
+static mut EXITED: u64 = 0; // set by sys_exit
 
 static mut EXIT_CODE: u64 = 0;
 static OUTPUT: Mutex<String> = Mutex::new(String::new());
 
-/// Het systeemmilieu (omgevingsvariabelen) dat elk ring-3 proces erft via `envp`
-/// op de SysV-stack. Programma's lezen dit met `getenv()` (musl/libc).
+/// The system environment (environment variables) that every ring-3 process inherits
+/// via `envp` on the SysV stack. Programs read this with `getenv()` (musl/libc).
 static ENV: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new());
 
-/// Stel het systeemmilieu in (vervangt de huidige set). Bij boot ingesteld.
+/// Set the system environment (replaces the current set). Set at boot.
 pub fn set_env(vars: &[&str]) {
     let mut e = ENV.lock();
     e.clear();
@@ -187,8 +187,8 @@ pub fn set_env(vars: &[&str]) {
     }
 }
 
-/// Voeg één omgevingsvariabele "KEY=value" toe (of vervang een bestaande met
-/// dezelfde sleutel). Voor runtime-bepaalde waarden, bv. een DNS-resultaat.
+/// Add a single environment variable "KEY=value" (or replace an existing one with
+/// the same key). For runtime-determined values, e.g. a DNS result.
 pub fn push_env(entry: &str) {
     let key = match entry.split_once('=') {
         Some((k, _)) => k,
@@ -199,31 +199,31 @@ pub fn push_env(entry: &str) {
     e.push(String::from(entry));
 }
 
-/// Optionele stdout-omleiding: als gezet, gaat alles wat het proces naar fd 1/2
-/// schrijft naar dit VFS-bestand (index in FILES) i.p.v. de console. Zo doet de
-/// shell `prog > bestand` / `prog >> bestand` (redirectie) af.
+/// Optional stdout redirection: if set, everything the process writes to fd 1/2
+/// goes to this VFS file (index in FILES) instead of the console. This is how the
+/// shell handles `prog > file` / `prog >> file` (redirection).
 static STDOUT_REDIRECT: Mutex<Option<usize>> = Mutex::new(None);
 
-// Minimale VFS voor userspace-file-I/O: bestanden (pad, inhoud) geladen uit
-// EuroFS, plus een open-file-descriptor-tabel. Syscalls open/read/close hierop.
+// Minimal VFS for userspace file I/O: files (path, content) loaded from
+// EuroFS, plus an open-file-descriptor table. Syscalls open/read/close operate on it.
 static FILES: Mutex<alloc::vec::Vec<(String, alloc::vec::Vec<u8>)>> = Mutex::new(alloc::vec::Vec::new());
 const MAX_FD: usize = 16;
 static OPEN_FDS: Mutex<[Option<(usize, usize)>; MAX_FD]> = Mutex::new([None; MAX_FD]);
-/// Open DIRECTORY-fds (Linux getdents64): (genormaliseerd dir-pad, cursor in de
-/// kinderlijst). Aparte tabel zodat een dir-fd niet als bestand wordt gelezen.
+/// Open DIRECTORY fds (Linux getdents64): (normalized dir path, cursor in the
+/// children list). Separate table so a dir fd is not read as a file.
 static OPEN_DIRS: Mutex<[Option<(String, usize)>; MAX_FD]> =
     Mutex::new([const { None }; MAX_FD]);
 
-// ── PIPES (S3 IPC tussen processen) ─────────────────────────────────────────
-// Een pipe is een in-kernel FIFO-buffer met twee uiteinden (lees/schrijf). De
-// `pipe2`-syscall geeft twee fds terug; na fork() delen ouder en kind ze (de
-// fd-tabellen zijn globaal), dus ze kunnen via de pipe communiceren.
+// ── PIPES (S3 IPC between processes) ─────────────────────────────────────────
+// A pipe is an in-kernel FIFO buffer with two ends (read/write). The
+// `pipe2` syscall returns two fds; after fork() parent and child share them (the
+// fd tables are global), so they can communicate over the pipe.
 static PIPES: Mutex<alloc::vec::Vec<alloc::vec::Vec<u8>>> = Mutex::new(alloc::vec::Vec::new());
-/// Pipe-fds: per fd (pipe-id, is_write_end). Aparte tabel naast bestands-/dir-fds.
+/// Pipe fds: per fd (pipe-id, is_write_end). Separate table alongside file/dir fds.
 static PIPE_FDS: Mutex<[Option<(usize, bool)>; MAX_FD]> = Mutex::new([None; MAX_FD]);
 
-/// pipe2(fds, flags): maak een pipe; ken een lees- en een schrijf-fd toe en schrijf
-/// ze naar `fds[0]`/`fds[1]`. Geeft 0 / -EMFILE.
+/// pipe2(fds, flags): create a pipe; assign a read fd and a write fd and write
+/// them to `fds[0]`/`fds[1]`. Returns 0 / -EMFILE.
 fn pipe_create(user_fds: u64) -> u64 {
     let id = {
         let mut p = PIPES.lock();
@@ -247,20 +247,20 @@ fn pipe_create(user_fds: u64) -> u64 {
     if k < 2 {
         return (-24i64) as u64; // -EMFILE
     }
-    // Valideer de uitvoer-pointer (int[2]) VÓÓR we de fds vastleggen, zodat een
-    // vervalste `fds` geen kernel-geheugen overschrijft.
+    // Validate the output pointer (int[2]) BEFORE we commit the fds, so a
+    // forged `fds` cannot overwrite kernel memory.
     let fds = [got[0] as i32, got[1] as i32];
     if !in_user_arena(user_fds, 8) {
         return EFAULT;
     }
-    pf[got[0]] = Some((id, false)); // leesuiteinde
-    pf[got[1]] = Some((id, true)); // schrijfuiteinde
+    pf[got[0]] = Some((id, false)); // read end
+    pf[got[1]] = Some((id, true)); // write end
     let _ = write_user(user_fds, fds[0]);
     let _ = write_user(user_fds + 4, fds[1]);
     0
 }
 
-/// Schrijf naar een pipe-fd (schrijfuiteinde). None = `fd` is geen pipe-schrijf-fd.
+/// Write to a pipe fd (write end). None = `fd` is not a pipe write fd.
 fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
     if fd >= MAX_FD {
         return None;
@@ -272,8 +272,8 @@ fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
     None
 }
 
-/// Lees uit een pipe-fd (leesuiteinde). Leeg -> -EAGAIN (de lezer polt). None = geen
-/// pipe-lees-fd.
+/// Read from a pipe fd (read end). Empty -> -EAGAIN (the reader polls). None = not a
+/// pipe read fd.
 fn pipe_read_fd(fd: usize, buf: u64, len: usize) -> Option<u64> {
     if fd >= MAX_FD {
         return None;
@@ -285,25 +285,25 @@ fn pipe_read_fd(fd: usize, buf: u64, len: usize) -> Option<u64> {
             return Some((-11i64) as u64); // -EAGAIN
         }
         let n = len.min(p.len());
-        // Valideer de doel-buffer VÓÓR we uit de pipe consumeren; bij een
-        // vervalste pointer faalt de read zonder data te verliezen of kernel-
-        // geheugen te raken.
+        // Validate the destination buffer BEFORE we consume from the pipe; on a
+        // forged pointer the read fails without losing data or touching kernel
+        // memory.
         if !in_user_arena(buf, n) {
             return Some(EFAULT);
         }
         let data: alloc::vec::Vec<u8> = p.drain(0..n).collect();
         let _ = copy_to_user(buf, &data);
         if let Ok(s) = core::str::from_utf8(&data) {
-            crate::kinfo!("[pipe] fd {fd} las {n} bytes uit pipe {id}: \"{s}\"");
+            crate::kinfo!("[pipe] fd {fd} read {n} bytes from pipe {id}: \"{s}\"");
         }
         return Some(n as u64);
     }
     None
 }
 
-/// Geef het huidige proces een VERSE fd-tabel (fd 0/1/2 impliciet console/VFS).
-/// In het synchrone voorgrondmodel draait er één proces tegelijk, dus dit geeft
-/// echte per-proces fd-semantiek: open fds lekken niet tussen programma's door.
+/// Give the current process a FRESH fd table (fd 0/1/2 implicitly console/VFS).
+/// In the synchronous foreground model one process runs at a time, so this gives
+/// real per-process fd semantics: open fds do not leak between programs.
 fn reset_fd_table() {
     *OPEN_FDS.lock() = [None; MAX_FD];
     for slot in OPEN_DIRS.lock().iter_mut() {
@@ -311,17 +311,17 @@ fn reset_fd_table() {
     }
 }
 
-/// Registreer een bestand (pad + inhoud) zodat userspace het via open/read kan lezen.
+/// Register a file (path + content) so userspace can read it via open/read.
 pub fn register_file(path: &str, bytes: alloc::vec::Vec<u8>) {
     FILES.lock().push((String::from(path), bytes));
 }
 
-/// Programmaregister: per uitvoerbaar pad de toegekende capabilities en de ABI
-/// (native EuroOS of Linux). Hiermee kan een shell een binary op NAAM starten en
-/// weet de kernel met welke rechten + syscall-ABI die moet draaien.
+/// Program registry: per executable path the granted capabilities and the ABI
+/// (native EuroOS or Linux). This lets a shell start a binary by NAME and lets
+/// the kernel know with which rights + syscall ABI it must run.
 static PROGRAMS: Mutex<alloc::vec::Vec<(String, u64, bool)>> = Mutex::new(alloc::vec::Vec::new());
 
-/// Installeer een uitvoerbaar bestand: leg caps + ABI vast voor latere `exec`.
+/// Install an executable file: record caps + ABI for a later `exec`.
 pub fn register_program(path: &str, caps: u64, linux_abi: bool) {
     let mut p = PROGRAMS.lock();
     if let Some(e) = p.iter_mut().find(|(q, _, _)| q == path) {
@@ -332,7 +332,7 @@ pub fn register_program(path: &str, caps: u64, linux_abi: bool) {
     }
 }
 
-/// Zoek de caps + ABI van een geïnstalleerd programma op (None = onbekend).
+/// Look up the caps + ABI of an installed program (None = unknown).
 pub fn program_caps_abi(path: &str) -> Option<(u64, bool)> {
     PROGRAMS
         .lock()
@@ -341,13 +341,13 @@ pub fn program_caps_abi(path: &str) -> Option<(u64, bool)> {
         .map(|(_, c, a)| (*c, *a))
 }
 
-/// Alle geïnstalleerde programma's met hun toegekende capabilities + ABI-vlag —
-/// voor het `caps`-overzicht dat het NATIEVE EuroGuard-beveiligingsmodel toont.
+/// All installed programs with their granted capabilities + ABI flag —
+/// for the `caps` overview that the NATIVE EuroGuard security model shows.
 pub fn program_list() -> alloc::vec::Vec<(String, u64, bool)> {
     PROGRAMS.lock().clone()
 }
 
-/// Decodeer een capability-bitmasker naar leesbare namen (EuroGuard-rechten).
+/// Decode a capability bitmask into readable names (EuroGuard rights).
 pub fn cap_names(caps: u64) -> String {
     let mut v: alloc::vec::Vec<&str> = alloc::vec::Vec::new();
     if caps & CAP_CONSOLE != 0 {
@@ -363,15 +363,15 @@ pub fn cap_names(caps: u64) -> String {
         v.push("net");
     }
     if v.is_empty() {
-        v.push("(geen)");
+        v.push("(none)");
     }
     v.join(" ")
 }
 
-/// /proc-synthese (Track 8.2): genereer LIVE de inhoud van bekende /proc-bestanden
-/// (version/cpuinfo/meminfo/uptime/self/maps) en zet die in de VFS, zodat Linux-
-/// programma's die /proc lezen echte waarden krijgen i.p.v. -ENOENT. Geeft true als
-/// `path` een /proc-bestand is dat nu (vers gegenereerd) in de VFS staat.
+/// /proc synthesis (Track 8.2): generate the content of known /proc files LIVE
+/// (version/cpuinfo/meminfo/uptime/self/maps) and place it in the VFS, so Linux
+/// programs that read /proc get real values instead of -ENOENT. Returns true if
+/// `path` is a /proc file that is now (freshly generated) in the VFS.
 fn ensure_proc(path: &[u8]) -> bool {
     if !path.starts_with(b"/proc/") {
         return false;
@@ -395,7 +395,7 @@ fn ensure_proc(path: &[u8]) -> bool {
             s.into_bytes()
         }
         b"/proc/meminfo" => {
-            // MemTotal: de QEMU-RAM (256 MiB). MemFree/Available: live kernel-heap-vrij.
+            // MemTotal: the QEMU RAM (256 MiB). MemFree/Available: live kernel-heap-free.
             let free_kb = free as u64 / 1024;
             alloc::format!(
                 "MemTotal:       262144 kB\nMemFree:        {free_kb:>8} kB\n\
@@ -405,7 +405,7 @@ fn ensure_proc(path: &[u8]) -> bool {
         }
         b"/proc/uptime" => alloc::format!("{up}.00 {up}.00\n").into_bytes(),
         b"/proc/self/maps" => {
-            // Eén regel voor het heap-venster van het huidige voorgrondproces.
+            // One line for the heap window of the current foreground process.
             let lo = HEAP_BREAK.load(Ordering::Relaxed) & !0xFFF;
             let hi = (HEAP_END.load(Ordering::Relaxed) + 0xFFF) & !0xFFF;
             alloc::format!("{lo:012x}-{hi:012x} rw-p 00000000 00:00 0          [heap]\n").into_bytes()
@@ -414,14 +414,14 @@ fn ensure_proc(path: &[u8]) -> bool {
             alloc::format!("1 (prog) R 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 {up} 0 0\n").into_bytes()
         }
         b"/proc/self/cmdline" => {
-            // NUL-getermineerde argv (hier alleen argv[0] = het programmapad).
+            // NUL-terminated argv (here only argv[0] = the program path).
             let mut v = CURRENT_APP.lock().clone().into_bytes();
             v.push(0);
             v
         }
         b"/proc/loadavg" => alloc::format!("0.00 0.00 0.00 1/{cores} 1\n").into_bytes(),
         b"/proc/stat" => {
-            // Minimale cpu-regel + per-core regels (zoals tools als `top` lezen).
+            // Minimal cpu line + per-core lines (as tools like `top` read).
             let mut s = alloc::string::String::from("cpu  0 0 0 0 0 0 0 0 0 0\n");
             for i in 0..cores {
                 s.push_str(&alloc::format!("cpu{i} 0 0 0 0 0 0 0 0 0 0\n"));
@@ -434,16 +434,16 @@ fn ensure_proc(path: &[u8]) -> bool {
     let p = String::from_utf8_lossy(path).into_owned();
     let mut files = FILES.lock();
     match files.iter_mut().find(|(q, _)| q.as_str() == p) {
-        Some(e) => e.1 = content, // ververs bestaande /proc-inhoud
+        Some(e) => e.1 = content, // refresh existing /proc content
         None => files.push((p, content)),
     }
     true
 }
 
-/// Open een pad (bytes) in de VFS -> fd, of u64::MAX bij niet gevonden / vol.
-/// Gedeeld door de native (sys_open) en Linux (openat) ABI.
+/// Open a path (bytes) in the VFS -> fd, or u64::MAX if not found / full.
+/// Shared by the native (sys_open) and Linux (openat) ABI.
 fn vfs_open(path: &[u8]) -> u64 {
-    ensure_proc(path); // /proc-bestanden vers genereren vóór de lookup
+    ensure_proc(path); // freshly generate /proc files before the lookup
     let files = FILES.lock();
     match files.iter().position(|(p, _)| p.as_bytes() == path) {
         Some(fi) => {
@@ -460,7 +460,7 @@ fn vfs_open(path: &[u8]) -> u64 {
     }
 }
 
-/// Lees uit een open fd naar een user-buffer -> aantal bytes (u64::MAX bij fout).
+/// Read from an open fd into a user buffer -> number of bytes (u64::MAX on error).
 fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
     if fd >= MAX_FD {
         return u64::MAX;
@@ -473,12 +473,12 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
     let files = FILES.lock();
     let data = &files[fi].1;
     let n = len.min(data.len().saturating_sub(off));
-    // Valideer de user-buffer vóór de kernel erin schrijft (audit C1): een proces mag
-    // geen kernel-geheugen als doel opgeven.
+    // Validate the user buffer before the kernel writes into it (audit C1): a process
+    // may not specify kernel memory as the destination.
     if !in_user_arena(buf, n) {
         return u64::MAX;
     }
-    // SAFETY: buf ligt nu bewezen binnen de arena van het lopende proces.
+    // SAFETY: buf now provably lies within the arena of the running process.
     unsafe {
         core::ptr::copy_nonoverlapping(data[off..].as_ptr(), buf as *mut u8, n);
     }
@@ -486,12 +486,12 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
     n as u64
 }
 
-/// Paden die userspace voor schrijven opende — de shell schrijft deze na afloop
-/// terug naar EuroFS (zodat ze persistent worden + in de bestandslijst verschijnen).
+/// Paths that userspace opened for writing — the shell writes these back to
+/// EuroFS afterward (so they become persistent + appear in the file list).
 static DIRTY: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new());
 
-/// Open een pad voor SCHRIJVEN: maak het aan als het niet bestaat (O_CREAT),
-/// kap het af bij `truncate` (O_TRUNC). Markeert het pad als 'dirty'.
+/// Open a path for WRITING: create it if it does not exist (O_CREAT),
+/// truncate it on `truncate` (O_TRUNC). Marks the path as 'dirty'.
 fn vfs_open_create(path: &[u8], truncate: bool) -> u64 {
     let name = String::from_utf8_lossy(path).into_owned();
     {
@@ -512,8 +512,8 @@ fn vfs_open_create(path: &[u8], truncate: bool) -> u64 {
     vfs_open(path)
 }
 
-/// Schrijf `len` bytes uit een user-buffer naar een open fd (in de VFS); de file
-/// groeit zo nodig mee. Geeft het aantal geschreven bytes terug.
+/// Write `len` bytes from a user buffer to an open fd (in the VFS); the file
+/// grows as needed. Returns the number of bytes written.
 fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
     if fd >= MAX_FD {
         return u64::MAX;
@@ -523,8 +523,8 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
         Some(x) => x,
         None => return u64::MAX,
     };
-    // Valideer de user-buffer + overloop-veilige offsetberekening (audit C1/M9):
-    // de kernel mag alleen uit de arena van het lopende proces lezen.
+    // Validate the user buffer + overflow-safe offset computation (audit C1/M9):
+    // the kernel may only read from the arena of the running process.
     if !in_user_arena(buf, len) {
         return u64::MAX;
     }
@@ -537,7 +537,7 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
     if end > data.len() {
         data.resize(end, 0);
     }
-    // SAFETY: buf ligt nu bewezen binnen de arena van het lopende proces.
+    // SAFETY: buf now provably lies within the arena of the running process.
     unsafe {
         core::ptr::copy_nonoverlapping(buf as *const u8, data[off..].as_mut_ptr(), len);
     }
@@ -545,8 +545,8 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
     len as u64
 }
 
-/// Haal de paden+inhoud op die userspace schreef sinds de vorige aanroep (en wis
-/// de lijst). De shell gebruikt dit om EuroFS te synchroniseren na een `exec`.
+/// Fetch the paths+content that userspace wrote since the previous call (and clear
+/// the list). The shell uses this to synchronize EuroFS after an `exec`.
 pub fn take_dirty() -> alloc::vec::Vec<(String, alloc::vec::Vec<u8>)> {
     let paths: alloc::vec::Vec<String> = core::mem::take(&mut *DIRTY.lock());
     let files = FILES.lock();
@@ -561,9 +561,9 @@ pub fn take_dirty() -> alloc::vec::Vec<(String, alloc::vec::Vec<u8>)> {
         .collect()
 }
 
-/// Leid stdout (fd 1/2) om naar een VFS-bestand voor de duur van de volgende run
-/// (shell-redirectie). `append`=true voegt toe (`>>`), anders afkappen (`>`).
-/// `None` zet de console terug. Het pad wordt 'dirty' (de shell synct het).
+/// Redirect stdout (fd 1/2) to a VFS file for the duration of the next run
+/// (shell redirection). `append`=true appends (`>>`), otherwise truncate (`>`).
+/// `None` restores the console. The path becomes 'dirty' (the shell syncs it).
 pub fn set_stdout_redirect(path: Option<&str>, append: bool) {
     match path {
         Some(p) => {
@@ -592,23 +592,23 @@ pub fn set_stdout_redirect(path: Option<&str>, append: bool) {
     }
 }
 
-/// Voeg bytes toe aan het stdout-omleidingsbestand (intern, voor write/writev).
+/// Append bytes to the stdout redirection file (internal, for write/writev).
 fn redirect_append(fi: usize, bytes: &[u8]) {
     FILES.lock()[fi].1.extend_from_slice(bytes);
 }
 
-/// Standaardinvoer (fd 0): inhoud + leespositie. De shell vult dit met de stdout
-/// van het vorige programma in een pipe (`a | b`); `read(0)` leest eruit.
+/// Standard input (fd 0): content + read position. The shell fills this with the
+/// stdout of the previous program in a pipe (`a | b`); `read(0)` reads from it.
 static STDIN: Mutex<(alloc::vec::Vec<u8>, usize)> = Mutex::new((alloc::vec::Vec::new(), 0));
 
-/// Zet de standaardinvoer voor de volgende run (pipe). Lege slice = geen invoer.
+/// Set the standard input for the next run (pipe). Empty slice = no input.
 pub fn set_stdin(data: &[u8]) {
     let mut s = STDIN.lock();
     s.0 = data.to_vec();
     s.1 = 0;
 }
 
-/// Lees uit de standaardinvoer naar een user-buffer (fd 0). Geeft het aantal bytes.
+/// Read from standard input into a user buffer (fd 0). Returns the number of bytes.
 fn stdin_read(buf: u64, len: usize) -> u64 {
     let mut s = STDIN.lock();
     let off = s.1;
@@ -620,38 +620,38 @@ fn stdin_read(buf: u64, len: usize) -> u64 {
     n as u64
 }
 
-/// Het aantal bytes dat nog in de standaardinvoer staat (voor fstat van fd 0).
+/// The number of bytes still in standard input (for fstat of fd 0).
 fn stdin_len() -> usize {
     STDIN.lock().0.len()
 }
 
-// ── Achtergrond-daemon: een ring-3 programma dat PREEMPTIEF gescheduled draait
-// (niet synchroon zoals run()) en periodiek syscalls doet. Zijn syscalls krijgen
-// een EIGEN dispatcher + uitvoerbuffer, geselecteerd op de huidige scheduler-taak
-// (zo botst het niet met de globale voorgrond-staat; voorgrond-execs draaien IF=0
-// en kunnen dus nooit met de daemon overlappen). De daemon eindigt nooit, dus de
-// lastige "sys_exit vanuit een gescheduelde taak" doet zich niet voor.
+// ── Background daemon: a ring-3 program that runs PREEMPTIVELY scheduled
+// (not synchronously like run()) and periodically does syscalls. Its syscalls get
+// their OWN dispatcher + output buffer, selected on the current scheduler task
+// (so it does not clash with the global foreground state; foreground execs run IF=0
+// and can therefore never overlap with the daemon). The daemon never ends, so the
+// tricky "sys_exit from a scheduled task" does not occur.
 static DAEMON_TASK: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(usize::MAX);
 static DAEMON_OUTPUT: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new());
-/// Onvolledige regel (de daemon schrijft een regel in meerdere write-calls).
+/// Incomplete line (the daemon writes a line in multiple write calls).
 static DAEMON_PARTIAL: Mutex<String> = Mutex::new(String::new());
 
-/// De recente uitvoerregels van de achtergrond-daemon (voor weergave).
+/// The recent output lines of the background daemon (for display).
 pub fn daemon_lines() -> alloc::vec::Vec<String> {
     DAEMON_OUTPUT.lock().clone()
 }
 
-/// Aparte syscall-dispatcher voor de daemon-taak (native ABI; eigen uitvoerbuffer).
+/// Separate syscall dispatcher for the daemon task (native ABI; own output buffer).
 fn daemon_dispatch(num: u64, a1: u64, _a2: u64, _a3: u64) -> u64 {
-    // De daemon eindigt NOOIT: forceer EXITED=0 zodat `syscall_entry` na deze
-    // syscall de normale SYSRET-terugkeer neemt en niet het sys_exit-pad met de
-    // (voor de daemon ongeldige) SAVED_KERNEL_RSP van de laatste voorgrond-exec.
+    // The daemon NEVER ends: force EXITED=0 so that after this syscall
+    // `syscall_entry` takes the normal SYSRET return and not the sys_exit path with the
+    // (for the daemon invalid) SAVED_KERNEL_RSP of the last foreground exec.
     unsafe { EXITED = 0 };
     match num {
         1 => {
-            // sys_write(NUL-string): accumuleer in een regelbuffer; emit complete
-            // regels (de daemon schrijft één regel in meerdere write-calls).
+            // sys_write(NUL-string): accumulate in a line buffer; emit complete
+            // lines (the daemon writes a single line in multiple write calls).
             let s = user_cstr(a1, 512);
             if let Ok(t) = core::str::from_utf8(&s) {
                 let mut partial = DAEMON_PARTIAL.lock();
@@ -662,34 +662,34 @@ fn daemon_dispatch(num: u64, a1: u64, _a2: u64, _a3: u64) -> u64 {
                     out.push(String::from(line.trim_end()));
                     let len = out.len();
                     if len > 14 {
-                        out.drain(0..len - 14); // alleen de recentste regels bewaren
+                        out.drain(0..len - 14); // keep only the most recent lines
                     }
                 }
             }
             s.len() as u64
         }
-        2 => 7, // getpid -> de daemon is pid 7
-        _ => 0, // overige syscalls: stil slagen (daemon eindigt nooit)
+        2 => 7, // getpid -> the daemon is pid 7
+        _ => 0, // other syscalls: silently succeed (daemon never ends)
     }
 }
 
-/// Laad `program` (native ABI) als een PREEMPTIEF gescheduelde achtergrond-daemon.
+/// Load `program` (native ABI) as a PREEMPTIVELY scheduled background daemon.
 pub fn spawn_daemon(falloc: &mut FrameAllocator, program: &[u8]) {
     init_syscall_msrs();
     const MIB2: u64 = 1 << 21;
-    // Eigen geïsoleerde 2 MiB-arena + PML4 (net als bg-musl) i.p.v. losse frames op
-    // de boot-CR3: zo draait de daemon NIET meer op de supervisor-only boot-PML4 en
-    // blijven SMEP/SMAP afgedwongen.
-    // Exact 2 MiB, 2 MiB-uitgelijnd in één keer (de daemon reapt nooit → geen
-    // free-pad; geen 4 MiB-over-allocatie meer).
+    // Own isolated 2 MiB arena + PML4 (just like bg-musl) instead of loose frames on
+    // the boot CR3: this way the daemon NO LONGER runs on the supervisor-only boot PML4 and
+    // SMEP/SMAP stay enforced.
+    // Exactly 2 MiB, 2 MiB-aligned in one go (the daemon never reaps -> no
+    // free path; no more 4 MiB over-allocation).
     let arena = falloc.allocate_aligned(512, 512).expect("daemon-arena");
     let code = arena;
-    let stack_top = arena + MIB2; // user-stack groeit omlaag vanaf de arena-top
+    let stack_top = arena + MIB2; // user stack grows downward from the arena top
     let kstack = falloc.allocate_contiguous(4).expect("daemon-kstack");
     let kstack_top = (kstack + 4 * 4096) & !0xF;
     let pages = program_span_pages(program);
     let info = load_program(program, code, pages);
-    // SysV-stack (argv[0]="daemon") zodat ook musl/native _start geldig opstart.
+    // SysV stack (argv[0]="daemon") so musl/native _start also starts up validly.
     let rsp = unsafe { setup_user_stack(stack_top, &[b"daemon"], &info) };
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
@@ -698,14 +698,14 @@ pub fn spawn_daemon(falloc: &mut FrameAllocator, program: &[u8]) {
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
     crate::sched::set_task_cr3(idx, pml4);
     DAEMON_TASK.store(idx, Ordering::Relaxed);
-    crate::serial_println!("[euro] daemon gescheduled als taak {idx} (pid 7), eigen adresruimte PML4 {pml4:#x}");
+    crate::serial_println!("[euro] daemon scheduled as task {idx} (pid 7), own address space PML4 {pml4:#x}");
 }
 
-// ── Preemptief per-proces-model ───────────────────────────────────────────
-// Meerdere ECHTE musl-processen tegelijk, elk preemptief gescheduled met een
-// EIGEN context: eigen kernel-stack (sched), eigen FS_BASE/TLS (sched bewaart
-// die per taak), eigen heap, eigen uitvoerbuffer en pid. De syscall-laag
-// routeert per taak naar dit per-proces controleblok (PCB).
+// ── Preemptive per-process model ───────────────────────────────────────────
+// Multiple REAL musl processes at once, each preemptively scheduled with its
+// OWN context: own kernel stack (sched), own FS_BASE/TLS (sched saves
+// it per task), own heap, own output buffer and pid. The syscall layer
+// routes per task to this per-process control block (PCB).
 struct BgProc {
     task: usize,
     pid: u64,
@@ -713,53 +713,53 @@ struct BgProc {
     heap_end: u64,
     output: alloc::vec::Vec<String>,
     partial: String,
-    // Fysieke frames van dit proces (om vrij te geven bij reaping).
-    arena_raw: u64, // begin van de arena-allocatie
-    arena_frames: u64, // aantal arena-frames (512 voor uitgelijnde bg-musl, 1024 voor pooled fork)
-    /// VIRTUEEL adres waarop de 2 MiB-arena in DIT proces gemapt is (= waar code/
-    /// stack draaien). Voor identity-processen == fysiek; voor een GEFORKT kind is
-    /// het de virtuele arena van de OUDER (de kopie draait op dezelfde virt. adressen,
-    /// andere frames). execve gebruikt dit als laad-/entry-/stackbasis.
+    // Physical frames of this process (to free on reaping).
+    arena_raw: u64, // start of the arena allocation
+    arena_frames: u64, // number of arena frames (512 for aligned bg-musl, 1024 for pooled fork)
+    /// VIRTUAL address at which the 2 MiB arena is mapped in THIS process (= where code/
+    /// stack run). For identity processes == physical; for a FORKED child it
+    /// is the virtual arena of the PARENT (the copy runs at the same virtual addresses,
+    /// different frames). execve uses this as the load/entry/stack base.
     arena_virt: u64,
     kstack: u64,    // ring-0 stack (4 frames)
-    pml4: u64,      // eigen adresruimte (PML4+PDPT+PD = 3 frames)
-    /// Beëindigd en wachtend op opruiming (frames vrijgeven).
+    pml4: u64,      // own address space (PML4+PDPT+PD = 3 frames)
+    /// Terminated and awaiting cleanup (freeing frames).
     zombie: bool,
-    /// Reden van beëindiging (voor de tombstone in de systeemlog).
+    /// Reason for termination (for the tombstone in the system log).
     kill_reason: Option<String>,
-    /// Scheduler-task-indices van de THREADS van dit proces (clone, CLONE_VM).
-    /// Threads delen de adresruimte/heap/uitvoer/pid; eigen stack/TLS/kstack.
+    /// Scheduler task indices of the THREADS of this process (clone, CLONE_VM).
+    /// Threads share the address space/heap/output/pid; own stack/TLS/kstack.
     threads: alloc::vec::Vec<usize>,
-    /// Per thread-taak het CLONE_CHILD_CLEARTID-adres: bij thread-exit schrijft
-    /// de kernel hier 0 en doet een futex-wake — precies waar pthread_join op
-    /// wacht. (task, ctid-userspace-adres)
+    /// Per thread task the CLONE_CHILD_CLEARTID address: on thread exit the
+    /// kernel writes 0 here and does a futex-wake — exactly where pthread_join
+    /// waits. (task, ctid userspace address)
     thread_ctids: alloc::vec::Vec<(usize, u64)>,
-    /// Ouder-pid (S3 fork): 0 = geen ouder (bv. de boot-demo-processen).
+    /// Parent pid (S3 fork): 0 = no parent (e.g. the boot demo processes).
     ppid: u64,
-    /// Komen de frames van dit proces uit de PROCES-POOL (fork/exec) i.p.v. de
-    /// hoofd-allocator? Bepaalt waar de reaper ze teruggeeft.
+    /// Do this process's frames come from the PROCESS POOL (fork/exec) instead of the
+    /// main allocator? Determines where the reaper returns them.
     pooled: bool,
 }
 
-/// Exit-statussen van beëindigde kinderen, los van het frame-reapen bewaard, zodat
-/// waitpid de status nog kan ophalen nadat de frames al vrij zijn. (ppid, pid, code).
+/// Exit statuses of terminated children, kept separate from frame reaping, so that
+/// waitpid can still retrieve the status after the frames are already freed. (ppid, pid, code).
 static CHILD_EXITS: Mutex<alloc::vec::Vec<(u64, u64, i64)>> = Mutex::new(alloc::vec::Vec::new());
 
-/// Pid-teller voor geforkte kinderen (start hoog, los van de vaste demo-pids 1-16).
+/// Pid counter for forked children (starts high, separate from the fixed demo pids 1-16).
 static NEXT_FORK_PID: AtomicU64 = AtomicU64::new(1000);
 
 static BG: Mutex<alloc::vec::Vec<BgProc>> = Mutex::new(alloc::vec::Vec::new());
-/// Tombstones van opgeruimde processen (voor weergave).
+/// Tombstones of cleaned-up processes (for display).
 static REAPED: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new());
 
-/// De recente "opgeruimd"-meldingen van beëindigde processen.
+/// The recent "cleaned up" notices of terminated processes.
 pub fn reaped_lines() -> alloc::vec::Vec<String> {
     REAPED.lock().clone()
 }
 
-/// Geef de frames van alle beëindigde (zombie) processen vrij en verwijder ze
-/// uit de tabel. Aangeroepen vanuit de desktop-lus (taak 0, boot-PML4), waar het
-/// veilig is: een dood proces draait nooit meer en zijn frames zijn niet in gebruik.
+/// Free the frames of all terminated (zombie) processes and remove them
+/// from the table. Called from the desktop loop (task 0, boot PML4), where it is
+/// safe: a dead process never runs again and its frames are not in use.
 pub fn reap_dead(falloc: &mut FrameAllocator) {
     let mut bg = BG.lock();
     let mut i = 0;
@@ -767,15 +767,15 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
         if bg[i].zombie {
             let p = bg.remove(i);
             if p.pooled {
-                // Geforkte kinderen: frames teruggeven aan de PROCES-POOL.
+                // Forked children: return frames to the PROCESS POOL.
                 for f in 0..p.arena_frames {
                     crate::procpool::free(p.arena_raw + f * 4096);
                 }
                 for f in 0..4u64 {
                     crate::procpool::free(p.kstack + f * 4096);
                 }
-                // Eerst de arena-PT opzoeken (loopt door pml4->pdpt->pd) VÓÓR we die
-                // tabelframes vrijgeven, anders use-after-free.
+                // First look up the arena PT (walks through pml4->pdpt->pd) BEFORE we free
+                // those table frames, otherwise use-after-free.
                 let arena_pt = crate::paging::arena_pt(p.pml4, p.arena_virt);
                 let (a, b, c) = crate::paging::table_frames(p.pml4);
                 crate::procpool::free(a);
@@ -793,16 +793,16 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
                 }
                 crate::paging::free_address_space(falloc, p.pml4);
             }
-            let kib = (p.arena_frames + 4 + 4) as usize * 4; // arena + kstack(4) + tabelframes(~4)
-            // Toon de laatste uitvoer (bv. het resultaat van een job) als die er
-            // is, anders de beëindigingsreden (bv. de isolatie-overtreding).
+            let kib = (p.arena_frames + 4 + 4) as usize * 4; // arena + kstack(4) + table frames(~4)
+            // Show the last output (e.g. the result of a job) if there is
+            // one, otherwise the termination reason (e.g. the isolation violation).
             let label = p
                 .output
                 .last()
                 .cloned()
                 .or(p.kill_reason)
-                .unwrap_or_else(|| String::from("beëindigd"));
-            REAPED.lock().push(alloc::format!("pid {}: {label} -> opgeruimd ({kib} KiB vrij)", p.pid));
+                .unwrap_or_else(|| String::from("terminated"));
+            REAPED.lock().push(alloc::format!("pid {}: {label} -> reaped ({kib} KiB free)", p.pid));
             let n = REAPED.lock().len();
             if n > 4 {
                 REAPED.lock().drain(0..n - 4);
@@ -813,13 +813,13 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
     }
 }
 
-/// Leeft een proces met deze pid nog? (een LEVENDE, niet-zombie BgProc). Door
-/// EuroInit gebruikt om te zien of een service nog draait of herstart moet worden.
+/// Is a process with this pid still alive? (a LIVE, non-zombie BgProc). Used by
+/// EuroInit to see whether a service is still running or must be restarted.
 pub fn is_pid_alive(pid: u64) -> bool {
     BG.lock().iter().any(|p| p.pid == pid && !p.zombie)
 }
 
-/// De recentste uitvoerregel van elk achtergrond-musl-proces (voor weergave).
+/// The most recent output line of each background musl process (for display).
 pub fn bg_lines() -> alloc::vec::Vec<String> {
     let bg = BG.lock();
     let mut out = alloc::vec::Vec::new();
@@ -831,68 +831,68 @@ pub fn bg_lines() -> alloc::vec::Vec<String> {
     out
 }
 
-// Draait er nu een GEÏSOLEERDE voorgrond-exec (eigen PML4, synchroon)? Zo ja,
-// dan beëindigt een page fault dat proces netjes (terug naar run_args) i.p.v.
-// taak 0/de shell te doden.
+// Is an ISOLATED foreground exec running right now (own PML4, synchronous)? If so,
+// a page fault terminates that process cleanly (back to run_args) instead of
+// killing task 0/the shell.
 static FG_ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 pub fn fg_active() -> bool {
     FG_ACTIVE.load(Ordering::Relaxed)
 }
 
-/// Door de fault-handler aangeroepen bij een fout in een voorgrond-exec: zet de
-/// exit-status en spring (via de trampoline) netjes terug in run_args.
+/// Called by the fault handler on a fault in a foreground exec: set the
+/// exit status and jump (via the trampoline) cleanly back into run_args.
 pub fn fg_force_exit(addr: u64) -> ! {
     unsafe {
         EXIT_CODE = 139; // 128 + SIGSEGV
         EXITED = 1;
         FG_ACTIVE.store(false, Ordering::Relaxed);
     }
-    crate::serial_println!("[isolatie] voorgrond-exec page fault op {addr:#x} -> nette exit (code 139)");
-    // SAFETY: SAVED_KERNEL_RSP wijst naar het run_args-terugkeerpunt (enter_ring3
-    // bewaarde het); de trampoline herstelt de stack en keert daar terug.
+    crate::serial_println!("[isolation] foreground exec page fault at {addr:#x} -> clean exit (code 139)");
+    // SAFETY: SAVED_KERNEL_RSP points to the run_args return point (enter_ring3
+    // saved it); the trampoline restores the stack and returns there.
     unsafe { force_kernel_return() };
     loop {
-        core::hint::spin_loop(); // onbereikbaar: de trampoline keert niet hier terug
+        core::hint::spin_loop(); // unreachable: the trampoline does not return here
     }
 }
 
-/// Door de page-fault-handler aangeroepen als een ring-3 proces buiten zijn
-/// adresruimte grijpt: noteer het in z'n uitvoerbuffer en geef de pid terug.
+/// Called by the page-fault handler when a ring-3 process reaches outside its
+/// address space: note it in its output buffer and return the pid.
 pub fn note_isolation_kill(task: usize, addr: u64) -> u64 {
     let mut bg = BG.lock();
     if let Some(p) = bg.iter_mut().find(|p| p.task == task) {
-        p.zombie = true; // klaar om opgeruimd te worden
-        p.output.clear(); // de isolatie-reden is informatiever dan de laatste uitvoer
-        p.kill_reason = Some(alloc::format!("geheugenisolatie: toegang {addr:#x} geweigerd"));
+        p.zombie = true; // ready to be reaped
+        p.output.clear(); // the isolation reason is more informative than the last output
+        p.kill_reason = Some(alloc::format!("memory isolation: access {addr:#x} denied"));
         return p.pid;
     }
     0
 }
 
-/// Procesoverzicht (`ps`): de achtergrond-musl-processen + de vaste systeemtaken.
+/// Process overview (`ps`): the background musl processes + the fixed system tasks.
 pub fn ps_lines() -> alloc::vec::Vec<String> {
     let mut out = alloc::vec::Vec::new();
-    out.push(String::from("  PID  TYPE     ADRESRUIMTE   STATUS"));
-    out.push(String::from("    1  shell    gedeeld       actief (voorgrond)"));
-    out.push(String::from("    7  daemon   gedeeld       actief (EuroMonitor)"));
+    out.push(String::from("  PID  TYPE     ADDRESS SPACE  STATUS"));
+    out.push(String::from("    1  shell    shared        active (foreground)"));
+    out.push(String::from("    7  daemon   shared        active (EuroMonitor)"));
     let bg = BG.lock();
     for p in bg.iter() {
-        let status = if p.zombie { "beëindigd (reap)" } else { "actief" };
-        out.push(alloc::format!("  {:3}  musl     eigen PML4    {}", p.pid, status));
+        let status = if p.zombie { "terminated (reap)" } else { "active" };
+        out.push(alloc::format!("  {:3}  musl     own PML4      {}", p.pid, status));
     }
     out
 }
 
-/// `kill <pid>`: beëindig een achtergrond-musl-proces. Het wordt door de reaper
-/// opgeruimd (frames vrij). Geeft terug of er een proces gevonden is.
+/// `kill <pid>`: terminate a background musl process. It is cleaned up by the reaper
+/// (frames freed). Returns whether a process was found.
 pub fn kill_pid(pid: u64) -> bool {
     let task = {
         let mut bg = BG.lock();
         match bg.iter_mut().find(|p| p.pid == pid && !p.zombie) {
             Some(p) => {
                 p.zombie = true;
-                p.kill_reason = Some(String::from("beëindigd via shell (kill)"));
+                p.kill_reason = Some(String::from("terminated via shell (kill)"));
                 p.task
             }
             None => return false,
@@ -902,12 +902,12 @@ pub fn kill_pid(pid: u64) -> bool {
     true
 }
 
-/// Futex-wachtrij: (userspace-adres, geblokkeerde taak). FUTEX_WAIT blokkeert de
-/// taak (scheduler slaat 'm over); FUTEX_WAKE deblokkeert tot `n` wachters.
+/// Futex wait queue: (userspace address, blocked task). FUTEX_WAIT blocks the
+/// task (the scheduler skips it); FUTEX_WAKE unblocks up to `n` waiters.
 static FUTEX_QUEUE: Mutex<alloc::vec::Vec<(u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
 
-/// futex-wake: deblokkeer tot `n` taken die op `uaddr` wachten. Geeft het aantal
-/// gewekte taken terug.
+/// futex-wake: unblock up to `n` tasks waiting on `uaddr`. Returns the number
+/// of woken tasks.
 fn futex_wake(uaddr: u64, n: i32) -> u32 {
     let mut q = FUTEX_QUEUE.lock();
     let mut woken = 0i32;
@@ -925,16 +925,16 @@ fn futex_wake(uaddr: u64, n: i32) -> u32 {
     woken as u32
 }
 
-/// FUTEX_WAIT: als *uaddr == val, blokkeer de huidige taak op uaddr en geef 0
-/// terug (de waiter wordt op de volgende tick weggeschakeld tot een wake hem
-/// deblokkeert; musl her-controleert na een spurious wakeup). Anders -EAGAIN.
+/// FUTEX_WAIT: if *uaddr == val, block the current task on uaddr and return 0
+/// (the waiter is switched out on the next tick until a wake
+/// unblocks it; musl re-checks after a spurious wakeup). Otherwise -EAGAIN.
 fn futex_wait(uaddr: u64, val: u32) -> u64 {
     let cur_val: u32 = match read_user(uaddr) {
         Some(v) => v,
         None => return EFAULT,
     };
     if cur_val != val {
-        return (-11i64) as u64; // -EAGAIN: de waarde veranderde al
+        return (-11i64) as u64; // -EAGAIN: the value already changed
     }
     let cur = crate::sched::current();
     let mut q = FUTEX_QUEUE.lock();
@@ -946,21 +946,21 @@ fn futex_wait(uaddr: u64, val: u32) -> u64 {
     0
 }
 
-// Statische pool van kernel-stacks voor THREADS (clone). Supervisor-gemapt
-// (kernel .bss), dus een thread kan z'n eigen opgeslagen kernel-context niet
-// vanuit ring 3 aanraken. 8 threads systeembreed (genoeg voor de demo's).
+// Static pool of kernel stacks for THREADS (clone). Supervisor-mapped
+// (kernel .bss), so a thread cannot touch its own saved kernel context
+// from ring 3. 8 threads system-wide (enough for the demos).
 const MAX_THREADS: usize = 8;
 const TKSTACK_SIZE: usize = 16 * 1024;
 static mut THREAD_KSTACKS: [[u8; TKSTACK_SIZE]; MAX_THREADS] = [[0; TKSTACK_SIZE]; MAX_THREADS];
 static THREAD_KSTACK_NEXT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
-/// Per-proces syscall-dispatcher (Linux-ABI-subset) met de staat van ÉÉN proces:
-/// eigen heap, eigen uitvoerbuffer, eigen pid. Threads van het proces routeren
-/// hier ook naartoe (gedeelde heap/uitvoer/pid; eigen stack/TLS).
-/// S3 fork(): dupliceer het achtergrond-proces op index `pos`. Kopieert de 2 MiB
-/// user-arena naar VERSE frames uit de proces-pool, bouwt een geremapte adresruimte
-/// (zelfde virtuele adressen → nieuwe fysieke frames), en start een kind-taak die
-/// in ring 3 hervat met rax=0. De OUDER krijgt de kind-pid terug.
+/// Per-process syscall dispatcher (Linux-ABI subset) with the state of ONE process:
+/// own heap, own output buffer, own pid. Threads of the process also route
+/// here (shared heap/output/pid; own stack/TLS).
+/// S3 fork(): duplicate the background process at index `pos`. Copies the 2 MiB
+/// user arena to FRESH frames from the process pool, builds a remapped address space
+/// (same virtual addresses -> new physical frames), and starts a child task that
+/// resumes in ring 3 with rax=0. The PARENT gets the child pid back.
 fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
     const MIB2: u64 = 1 << 21;
     let (parent_pid, parent_arena_raw, parent_virt, heap_break, heap_end, parent_pml4) = {
@@ -969,7 +969,7 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
     };
     let parent_arena = (parent_arena_raw + (MIB2 - 1)) & !(MIB2 - 1);
 
-    // Frames uit de proces-pool: 4 MiB arena + 4 frames kstack + 3 tabelframes.
+    // Frames from the process pool: 4 MiB arena + 4 frames kstack + 3 table frames.
     let child_raw = match crate::procpool::alloc_contiguous(1024) {
         Some(a) => a,
         None => return (-12i64) as u64, // -ENOMEM
@@ -982,7 +982,7 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
             return (-12i64) as u64;
         }
     };
-    // Vier tabelframes: PML4 + PDPT + PD + de fijnmazige arena-PT (voor W^X).
+    // Four table frames: PML4 + PDPT + PD + the fine-grained arena PT (for W^X).
     let (pml4, pdpt, pd, pt) = match (crate::procpool::alloc(), crate::procpool::alloc(), crate::procpool::alloc(), crate::procpool::alloc()) {
         (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
         (a, b, c, d) => {
@@ -993,18 +993,18 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
         }
     };
 
-    // SAFETY: ouder- en kind-arena liggen beide identity-gemapt; kopieer de hele
-    // 2 MiB (code + stack + heap zoals NU, inclusief het fork-syscall-frame).
+    // SAFETY: parent and child arena are both identity-mapped; copy the whole
+    // 2 MiB (code + stack + heap as it is NOW, including the fork syscall frame).
     unsafe {
         core::ptr::copy_nonoverlapping(parent_arena as *const u8, child_arena as *mut u8, MIB2 as usize);
     }
-    // Map de VIRTUELE arena van de ouder -> de fysieke frames van het kind, met per
-    // pagina DEZELFDE W^X-rechten als de ouder (gekloond uit diens arena-PT).
+    // Map the parent's VIRTUAL arena -> the child's physical frames, with the
+    // SAME W^X rights per page as the parent (cloned from its arena PT).
     let parent_pt = crate::paging::arena_pt(parent_pml4, parent_virt);
     crate::paging::fill_remap_tables_wx(pml4, pdpt, pd, pt, parent_virt, child_arena, parent_pt);
 
-    // Kind-taak: hervat op het fork-returnpunt (USER_RIP) met de OUDER-userstack
-    // (USER_RSP, nu in de kopie) en rax=0; eigen kstack + geremapte adresruimte.
+    // Child task: resume at the fork return point (USER_RIP) with the PARENT user stack
+    // (USER_RSP, now in the copy) and rax=0; own kstack + remapped address space.
     let kstack_top = (child_kstack + 4 * 4096) & !0xF;
     let (user_rip, user_rsp, saved) = unsafe { (USER_RIP, USER_RSP, SAVED_REGS) };
     let fs = unsafe { Msr::new(0xC000_0100).read() };
@@ -1023,8 +1023,8 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
         output: alloc::vec::Vec::new(),
         partial: String::new(),
         arena_raw: child_raw,
-        arena_frames: 1024, // pooled fork-arena: 4 MiB uit de proces-pool
-        arena_virt: parent_virt, // het kind draait op de virtuele arena van de ouder
+        arena_frames: 1024, // pooled fork arena: 4 MiB from the process pool
+        arena_virt: parent_virt, // the child runs on the parent's virtual arena
         kstack: child_kstack,
         pml4,
         zombie: false,
@@ -1034,13 +1034,13 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
         ppid: parent_pid,
         pooled: true,
     });
-    crate::kinfo!("[fork] pid {parent_pid} -> kind pid {child_pid} (taak {task}, kopie-arena {child_arena:#x}, pml4 {pml4:#x})");
-    child_pid // de OUDER krijgt de kind-pid; het kind kreeg rax=0 via spawn_thread
+    crate::kinfo!("[fork] pid {parent_pid} -> child pid {child_pid} (task {task}, copy-arena {child_arena:#x}, pml4 {pml4:#x})");
+    child_pid // the PARENT gets the child pid; the child got rax=0 via spawn_thread
 }
 
-/// S3 waitpid/wait4: NON-BLOCKING reap. Haalt een geëindigd kind van `parent_pid`
-/// uit CHILD_EXITS, schrijft de Linux-waitstatus (WEXITSTATUS = (status>>8)&0xff)
-/// en geeft de kind-pid terug. Nog geen zombie -> 0 (de aanroeper polt opnieuw).
+/// S3 waitpid/wait4: NON-BLOCKING reap. Fetches a finished child of `parent_pid`
+/// from CHILD_EXITS, writes the Linux wait status (WEXITSTATUS = (status>>8)&0xff)
+/// and returns the child pid. No zombie yet -> 0 (the caller polls again).
 fn do_wait4(parent_pid: u64, _pid_arg: u64, status_ptr: u64) -> u64 {
     let mut ce = CHILD_EXITS.lock();
     if let Some(idx) = ce.iter().position(|&(pp, _, _)| pp == parent_pid) {
@@ -1051,35 +1051,35 @@ fn do_wait4(parent_pid: u64, _pid_arg: u64, status_ptr: u64) -> u64 {
                 return EFAULT;
             }
         }
-        crate::kinfo!("[wait] pid {parent_pid} reapte kind {cpid} (exitcode {code})");
+        crate::kinfo!("[wait] pid {parent_pid} reaped child {cpid} (exitcode {code})");
         return cpid;
     }
     0
 }
 
-/// S3 execve(path, argv, envp): vervang het IMAGE van het huidige proces door een
-/// nieuw programma uit de userspace-VFS, IN dezelfde arena/adresruimte. Bij succes
-/// keert de syscall terug in het NIEUWE image (we herschrijven het opgeslagen
-/// registerblok zodat sysret naar de nieuwe entry springt). Faalt -> errno terug.
+/// S3 execve(path, argv, envp): replace the IMAGE of the current process with a
+/// new program from the userspace VFS, IN the same arena/address space. On success
+/// the syscall returns in the NEW image (we rewrite the saved
+/// register block so sysret jumps to the new entry). Fails -> errno returned.
 fn do_execve(p: &mut BgProc, path_ptr: u64, argv_ptr: u64) -> u64 {
     const MIB2: u64 = 1 << 21;
     let path_bytes = user_cstr(path_ptr, 256);
     let path = String::from_utf8_lossy(&path_bytes).into_owned();
-    // Programmabytes uit de VFS; verify-before-execute (Ed25519) zoals elke exec.
+    // Program bytes from the VFS; verify-before-execute (Ed25519) as with every exec.
     let program = match FILES.lock().iter().find(|(q, _)| *q == path) {
         Some((_, d)) => d.clone(),
         None => return (-2i64) as u64, // -ENOENT
     };
     if !verify_program(&path, &program) {
-        return (-13i64) as u64; // -EACCES: ongeldige handtekening
+        return (-13i64) as u64; // -EACCES: invalid signature
     }
-    // argv uit userspace parsen (NULL-getermineerde array van char*).
+    // Parse argv from userspace (NULL-terminated array of char*).
     let mut argv_owned: alloc::vec::Vec<alloc::vec::Vec<u8>> = alloc::vec::Vec::new();
     if argv_ptr != 0 {
         let mut i = 0;
         loop {
-            // Elke argv[i]-pointer wordt arena-gevalideerd gelezen; een vervalste
-            // array-pointer kan zo geen kernel-geheugen als argv-element lekken.
+            // Each argv[i] pointer is read arena-validated; a forged
+            // array pointer thus cannot leak kernel memory as an argv element.
             let pptr: u64 = match read_user(argv_ptr + (i as u64) * 8) {
                 Some(p) => p,
                 None => break,
@@ -1096,15 +1096,15 @@ fn do_execve(p: &mut BgProc, path_ptr: u64, argv_ptr: u64) -> u64 {
     }
     let argv_refs: alloc::vec::Vec<&[u8]> = argv_owned.iter().map(|v| v.as_slice()).collect();
 
-    // Laad in de BESTAANDE arena op het VIRTUELE adres waarop dit proces draait
-    // (voor een geforkt kind ≠ fysiek). De huidige cr3 mapt dit USER -> de eigen
-    // frames; met SMAP uit schrijft de kernel hier doorheen. Verse user-stack + heap.
+    // Load into the EXISTING arena at the VIRTUAL address at which this process runs
+    // (for a forked child != physical). The current cr3 maps this USER -> its own
+    // frames; with SMAP off the kernel writes through here. Fresh user stack + heap.
     let arena = p.arena_virt;
     let stack_top = arena + MIB2;
     let pages = program_span_pages(&program);
-    // W^X: de arena draait R-X-code; maak ze even volledig schrijfbaar om het NIEUWE
-    // image te laden, en herstel daarna W^X op basis van de segmenten van dat image.
-    // (Geen fijnmazige PT -> oude RWX-arena, gewoon laden.)
+    // W^X: the arena runs R-X code; make it fully writable for a moment to load the NEW
+    // image, then restore W^X based on that image's segments.
+    // (No fine-grained PT -> old RWX arena, just load.)
     let arena_pt = crate::paging::arena_pt(p.pml4, arena);
     if let Some(pt) = arena_pt {
         crate::paging::arena_set_writable(pt);
@@ -1117,38 +1117,38 @@ fn do_execve(p: &mut BgProc, path_ptr: u64, argv_ptr: u64) -> u64 {
     p.heap_break = arena + 0x80000;
     p.heap_end = arena + 0x180000;
 
-    // Laat de huidige syscall TERUGKEREN in het nieuwe image: herschrijf het
-    // opgeslagen registerblok (slot 13 = rcx = sysret-rip, slot 12 = r11 = rflags,
-    // 0..11 = gewiste GP-regs) en zet USER_RSP op de verse stack.
+    // Make the current syscall RETURN into the new image: rewrite the
+    // saved register block (slot 13 = rcx = sysret-rip, slot 12 = r11 = rflags,
+    // 0..11 = cleared GP regs) and set USER_RSP to the fresh stack.
     unsafe {
         let regs = SAVED_REGS as *mut u64;
         for k in 0..14 {
             regs.add(k).write(0);
         }
-        regs.add(13).write(info.entry); // sysret-doel = nieuwe entry
-        regs.add(12).write(0x202); // rflags met IF=1
+        regs.add(13).write(info.entry); // sysret target = new entry
+        regs.add(12).write(0x202); // rflags with IF=1
         USER_RSP = rsp;
     }
-    crate::kinfo!("[exec] pid {} execve {path} -> entry {:#x} (zelfde arena {arena:#x})", p.pid, info.entry);
+    crate::kinfo!("[exec] pid {} execve {path} -> entry {:#x} (same arena {arena:#x})", p.pid, info.entry);
     0
 }
 
 fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
-    // Net als de daemon: nooit het globale sys_exit-pad nemen.
+    // Just like the daemon: never take the global sys_exit path.
     unsafe { EXITED = 0 };
     match num {
         1 | 20 => {
-            // write(fd,buf,len) / writev(fd,iov,cnt) -> eigen regelbuffer.
+            // write(fd,buf,len) / writev(fd,iov,cnt) -> own line buffer.
             let text: alloc::vec::Vec<u8> = if num == 1 {
                 match copy_from_user(a2, a3 as usize) {
                     Some(v) => v,
                     None => return EFAULT,
                 }
             } else {
-                // writev: begrens iovcnt en valideer elke iov-struct + base/len
-                // VÓÓR dereferentie. Zonder de bound kan een groot `a3` de kernel
-                // laten dwalen; zonder de base-check kan een vervalste iov kernel-
-                // geheugen uitlezen.
+                // writev: bound iovcnt and validate each iov struct + base/len
+                // BEFORE dereference. Without the bound a large `a3` can make the kernel
+                // wander; without the base check a forged iov can read kernel
+                // memory.
                 if a3 > 1024 {
                     return (-22i64) as u64; // -EINVAL
                 }
@@ -1172,8 +1172,8 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
                 }
                 v
             };
-            // write naar een pipe-schrijf-fd -> de pipe-FIFO (IPC), anders de
-            // eigen regelbuffer (fd 1/2 = console).
+            // write to a pipe write fd -> the pipe FIFO (IPC), otherwise the
+            // own line buffer (fd 1/2 = console).
             if let Some(r) = pipe_write_fd(a1 as usize, &text) {
                 return r;
             }
@@ -1190,11 +1190,11 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             }
             text.len() as u64
         }
-        0 => pipe_read_fd(a1 as usize, a2, a3 as usize).unwrap_or(0), // read: pipe of EOF
+        0 => pipe_read_fd(a1 as usize, a2, a3 as usize).unwrap_or(0), // read: pipe or EOF
         22 | 293 => pipe_create(a1),                                  // pipe / pipe2
-        32 => a1, // dup(fd) -> zelfde fd (vereenvoudigd)
+        32 => a1, // dup(fd) -> same fd (simplified)
         33 => {
-            // dup2(oldfd, newfd): kopieer het pipe-uiteinde naar newfd.
+            // dup2(oldfd, newfd): copy the pipe end to newfd.
             let (old, new) = (a1 as usize, a2 as usize);
             if old < MAX_FD && new < MAX_FD {
                 let v = PIPE_FDS.lock()[old];
@@ -1205,7 +1205,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             }
         }
         9 => {
-            // mmap -> bump uit de EIGEN heap (anonieme allocatie, page-uitgelijnd).
+            // mmap -> bump from the OWN heap (anonymous allocation, page-aligned).
             let len = (a2 + 0xFFF) & !0xFFF;
             let base = (p.heap_break + 0xFFF) & !0xFFF;
             if base + len > p.heap_end {
@@ -1215,7 +1215,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             base
         }
         12 => {
-            // brk(addr) -> nieuwe break uit de eigen heap.
+            // brk(addr) -> new break from the own heap.
             if a1 == 0 || a1 > p.heap_end {
                 return p.heap_break;
             }
@@ -1236,7 +1236,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
         39 => p.pid,  // getpid
         218 => p.pid, // set_tid_address -> tid
         318 => {
-            // getrandom: deterministische vulling (geen crypto-bron nodig hier).
+            // getrandom: deterministic fill (no crypto source needed here).
             if !in_user_arena(a1, a2 as usize) {
                 return EFAULT;
             }
@@ -1246,12 +1246,12 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             a2
         }
         56 => {
-            // clone(flags, child_stack, ptid, ctid, tls): maak een THREAD die de
-            // adresruimte (CLONE_VM) deelt maar een eigen stack/TLS/kernel-stack
-            // heeft. Basis voor pthreads. Geen child_stack = (v)fork: niet onderst.
+            // clone(flags, child_stack, ptid, ctid, tls): create a THREAD that shares
+            // the address space (CLONE_VM) but has its own stack/TLS/kernel
+            // stack. Foundation for pthreads. No child_stack = (v)fork: not supported.
             let (flags, child_stack) = (a1, a2);
             if child_stack == 0 {
-                return (-38i64) as u64; // -ENOSYS (geen fork)
+                return (-38i64) as u64; // -ENOSYS (no fork)
             }
             let slot = THREAD_KSTACK_NEXT.fetch_add(1, Ordering::Relaxed);
             if slot >= MAX_THREADS {
@@ -1263,8 +1263,8 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             let sel = crate::gdt::selectors();
             let user_cs = (sel.user_code.0 | 3) as u64;
             let user_ss = (sel.user_data.0 | 3) as u64;
-            // TLS: bij CLONE_SETTLS (0x80000) gebruik de meegegeven tls (a5),
-            // anders erf de huidige FS_BASE.
+            // TLS: on CLONE_SETTLS (0x80000) use the supplied tls (a5),
+            // otherwise inherit the current FS_BASE.
             let fs = if flags & 0x0008_0000 != 0 {
                 a5
             } else {
@@ -1273,33 +1273,33 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             let saved_regs = unsafe { SAVED_REGS };
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, p.pml4, fs, saved_regs);
             p.threads.push(child);
-            crate::serial_println!("[thread] clone: pid {} -> thread-taak {child} (gedeelde adresruimte, eigen stack/TLS)", p.pid);
+            crate::serial_println!("[thread] clone: pid {} -> thread task {child} (shared address space, own stack/TLS)", p.pid);
             // CLONE_PARENT_SETTID (0x100000) / CLONE_CHILD_SETTID (0x1000000):
-            // schrijf de tid naar *ptid / *ctid.
+            // write the tid to *ptid / *ctid.
             if flags & 0x0010_0000 != 0 && a3 != 0 {
                 let _ = write_user(a3, child as i32);
             }
             if flags & 0x0100_0000 != 0 && a4 != 0 {
                 let _ = write_user(a4, child as i32);
             }
-            // CLONE_CHILD_CLEARTID (0x200000): onthoud het adres; bij thread-exit
-            // schrijft de kernel hier 0 (waar pthread_join op futex-wacht).
+            // CLONE_CHILD_CLEARTID (0x200000): remember the address; on thread exit
+            // the kernel writes 0 here (where pthread_join futex-waits).
             if flags & 0x0020_0000 != 0 && a4 != 0 {
                 p.thread_ctids.push((child, a4));
             }
-            child as u64 // de ouder krijgt de thread-id
+            child as u64 // the parent gets the thread id
         }
         59 => do_execve(p, a1, a2), // execve(path, argv, envp) — image-replace
         202 => {
-            // futex(uaddr, op, val, ...). FUTEX_WAIT=0, FUTEX_WAKE=1 (lage 7 bits;
-            // PRIVATE/CLOCK-vlaggen negeren). Echte blokkering + wake.
+            // futex(uaddr, op, val, ...). FUTEX_WAIT=0, FUTEX_WAKE=1 (low 7 bits;
+            // ignore PRIVATE/CLOCK flags). Real blocking + wake.
             match a2 & 0x7f {
                 0 => futex_wait(a1, a3 as u32),
                 1 => futex_wake(a1, a3 as i32) as u64,
                 _ => 0,
             }
         }
-        // EuroIPC — eigen message-bus-syscalls (eigen nummerruimte 500-502).
+        // EuroIPC — own message-bus syscalls (own number space 500-502).
         500 => crate::euroipc::register(p.pid, a1 as u32) as u64,
         501 => {
             let data = match copy_from_user(a2, a3 as usize) {
@@ -1309,36 +1309,36 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             crate::euroipc::send(p.pid, a1 as u32, &data) as u64
         }
         502 => crate::euroipc::recv(p.pid, a1, a2 as usize) as u64,
-        // Geheugen-/signaal-/tijd-stubs die stil slagen.
+        // Memory/signal/time stubs that silently succeed.
         10 | 11 | 13 | 14 | 16 | 35 | 228 | 234 | 273 => 0,
         60 | 231 => {
             let cur = crate::sched::current();
             if p.threads.contains(&cur) {
-                // THREAD-exit: beëindig alleen deze thread; het proces leeft door.
-                // CLONE_CHILD_CLEARTID: schrijf 0 naar het ctid-adres + futex-wake,
-                // zodat pthread_join in de ouder-thread doorgaat.
+                // THREAD exit: terminate only this thread; the process lives on.
+                // CLONE_CHILD_CLEARTID: write 0 to the ctid address + futex-wake,
+                // so pthread_join in the parent thread continues.
                 if let Some(idx) = p.thread_ctids.iter().position(|&(t, _)| t == cur) {
                     let (_, ctid) = p.thread_ctids[idx];
                     let _ = write_user(ctid, 0i32);
                     futex_wake(ctid, i32::MAX);
                     p.thread_ctids.swap_remove(idx);
                 }
-                // We laten 'm IN p.threads staan: musl roept exit in een for(;;)-lus
-                // aan, en die vervolg-syscalls moeten HIER blijven routeren (zodat
-                // EXITED=0 blijft) tot de scheduler de dode thread overslaat. Hem nu
-                // verwijderen zou de volgende exit naar linux_dispatch laten vallen,
-                // dat EXITED=1 zet -> het sys_exit-pad met een verouderde
-                // SAVED_KERNEL_RSP -> ret naar rommel. (Gevonden met QEMU+gdb.)
+                // We leave it IN p.threads: musl calls exit in a for(;;) loop,
+                // and those follow-up syscalls must keep routing HERE (so that
+                // EXITED=0 stays) until the scheduler skips the dead thread. Removing
+                // it now would let the next exit fall through to linux_dispatch,
+                // which sets EXITED=1 -> the sys_exit path with a stale
+                // SAVED_KERNEL_RSP -> ret into garbage. (Found with QEMU+gdb.)
                 crate::sched::mark_dead(cur);
                 return 0;
             }
-            // PROCES-exit (hoofd-task): markeer het hele proces als klaar (zombie);
-            // de reaper geeft de frames vrij. musl spint hierna tot de timer schakelt.
+            // PROCESS exit (main task): mark the whole process as done (zombie);
+            // the reaper frees the frames. musl spins afterward until the timer switches.
             p.zombie = true;
-            p.kill_reason = Some(alloc::format!("klaar (exit {a1})"));
-            // S3: bewaar de exitstatus voor de ouder (waitpid) — alleen als er een
-            // ouder is (ppid != 0). Services (ppid 0) zouden CHILD_EXITS anders
-            // ongelimiteerd laten groeien (niemand waitpidt op ppid 0).
+            p.kill_reason = Some(alloc::format!("done (exit {a1})"));
+            // S3: save the exit status for the parent (waitpid) — only if there is
+            // a parent (ppid != 0). Services (ppid 0) would otherwise grow CHILD_EXITS
+            // unbounded (nobody waitpids on ppid 0).
             if p.ppid != 0 {
                 CHILD_EXITS.lock().push((p.ppid, p.pid, a1 as i64));
             }
@@ -1349,22 +1349,22 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
     }
 }
 
-/// Laad `program` (musl, Linux-ABI) als een PREEMPTIEF gescheduled proces met
-/// een eigen PCB (heap/uitvoer/pid/TLS). Het programma draait oneindig door.
+/// Load `program` (musl, Linux ABI) as a PREEMPTIVELY scheduled process with
+/// its own PCB (heap/output/pid/TLS). The program runs indefinitely.
 pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv0: &[u8]) {
     init_syscall_msrs();
     const MIB2: u64 = 1 << 21;
-    // Eén 2 MiB-uitgelijnd user-arena: ALLE user-frames van dit proces (code,
-    // stack, heap/TLS) liggen erin. Alleen dít blok krijgt straks de USER-bit in
-    // de eigen PML4 -> geen ander ring-3 proces kan erbij (geheugenisolatie).
-    // Exact 2 MiB, in één keer 2 MiB-uitgelijnd (geen 4 MiB-over-allocatie meer):
-    // bespaart ~2 MiB per achtergrondproces. Bij reaping geven we precies deze 512
-    // frames terug (arena_frames hieronder).
+    // One 2 MiB-aligned user arena: ALL user frames of this process (code,
+    // stack, heap/TLS) lie within it. Only this block gets the USER bit in
+    // its own PML4 -> no other ring-3 process can reach it (memory isolation).
+    // Exactly 2 MiB, 2 MiB-aligned in one go (no more 4 MiB over-allocation):
+    // saves ~2 MiB per background process. On reaping we return exactly these 512
+    // frames (arena_frames below).
     let arena = falloc.allocate_aligned(512, 512).expect("bg-arena");
     let arena_raw = arena;
-    let code = arena; // programmacode/segmenten onderaan het arena
-    let heap = arena + 0x80000; // +512 KiB: eigen heap (musl mmap/TLS-blok)
-    let stack_top = arena + MIB2; // user-stack groeit omlaag vanaf de arena-top
+    let code = arena; // program code/segments at the bottom of the arena
+    let heap = arena + 0x80000; // +512 KiB: own heap (musl mmap/TLS block)
+    let stack_top = arena + MIB2; // user stack grows downward from the arena top
     let kstack = falloc.allocate_contiguous(4).expect("bg-kstack"); // ring-0 stack (supervisor)
     let kstack_top = (kstack + 4 * 4096) & !0xF;
     let pages = program_span_pages(program);
@@ -1374,19 +1374,19 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
     let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top);
-    // Eigen geïsoleerde W^X-adresruimte; vanaf de volgende switch draait dit proces erop.
+    // Own isolated W^X address space; from the next switch on this process runs on it.
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
     crate::sched::set_task_cr3(idx, pml4);
     BG.lock().push(BgProc {
         task: idx,
         pid,
         heap_break: heap,
-        heap_end: arena + 0x180000, // ~1 MiB heap (ruimte voor thread-stacks)
+        heap_end: arena + 0x180000, // ~1 MiB heap (room for thread stacks)
         output: alloc::vec::Vec::new(),
         partial: String::new(),
         arena_raw,
-        arena_frames: 512, // exact 2 MiB (uitgelijnd gealloceerd)
-        arena_virt: arena, // identity-gemapt: virtueel == fysiek
+        arena_frames: 512, // exactly 2 MiB (allocated aligned)
+        arena_virt: arena, // identity-mapped: virtual == physical
         kstack,
         pml4,
         zombie: false,
@@ -1396,10 +1396,10 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
         ppid: 0,
         pooled: false,
     });
-    crate::serial_println!("[euro] bg-musl (pid {pid}) -> taak {idx}, eigen adresruimte PML4 {pml4:#x}, arena {arena:#x}");
+    crate::serial_println!("[euro] bg-musl (pid {pid}) -> task {idx}, own address space PML4 {pml4:#x}, arena {arena:#x}");
 }
 
-/// Sluit een fd.
+/// Close an fd.
 fn vfs_close(fd: usize) -> u64 {
     if fd < MAX_FD {
         OPEN_FDS.lock()[fd] = None;
@@ -1408,8 +1408,8 @@ fn vfs_close(fd: usize) -> u64 {
     0
 }
 
-/// Is `path` een MAP in de userspace-VFS? Een map heeft geen eigen FILES-entry,
-/// maar is het prefix van minstens één bestand (of is de root "/").
+/// Is `path` a DIRECTORY in the userspace VFS? A directory has no FILES entry of its own,
+/// but is the prefix of at least one file (or is the root "/").
 fn is_vfs_dir(path: &[u8]) -> bool {
     if path == b"/" {
         return true;
@@ -1419,8 +1419,8 @@ fn is_vfs_dir(path: &[u8]) -> bool {
     FILES.lock().iter().any(|(p, _)| p.as_bytes().starts_with(&prefix))
 }
 
-/// Directe kinderen van een VFS-map: (naam, is_map). Afgeleid uit de platte
-/// FILES-padlijst — tussenliggende padcomponenten worden als submappen herkend.
+/// Direct children of a VFS directory: (name, is_dir). Derived from the flat
+/// FILES path list — intermediate path components are recognized as subdirectories.
 fn dir_children(path: &str) -> alloc::vec::Vec<(String, bool)> {
     let prefix = if path == "/" { String::from("/") } else { alloc::format!("{path}/") };
     let mut out: alloc::vec::Vec<(String, bool)> = alloc::vec::Vec::new();
@@ -1430,8 +1430,8 @@ fn dir_children(path: &str) -> alloc::vec::Vec<(String, bool)> {
                 continue;
             }
             let (name, is_dir) = match rest.find('/') {
-                Some(i) => (&rest[..i], true), // submap (eerste component)
-                None => (rest, false),         // bestand
+                Some(i) => (&rest[..i], true), // subdirectory (first component)
+                None => (rest, false),         // file
             };
             if !out.iter().any(|(n, _)| n == name) {
                 out.push((String::from(name), is_dir));
@@ -1441,7 +1441,7 @@ fn dir_children(path: &str) -> alloc::vec::Vec<(String, bool)> {
     out
 }
 
-/// Open een MAP -> dir-fd (geregistreerd in OPEN_DIRS), of u64::MAX bij vol.
+/// Open a DIRECTORY -> dir fd (registered in OPEN_DIRS), or u64::MAX if full.
 fn diropen(path: &[u8]) -> u64 {
     let norm = String::from_utf8_lossy(path).into_owned();
     let fds = OPEN_FDS.lock();
@@ -1455,15 +1455,15 @@ fn diropen(path: &[u8]) -> u64 {
     u64::MAX
 }
 
-/// getdents64(fd, buf, count): vul Linux `linux_dirent64`-records vanaf de cursor.
-/// Geeft het aantal geschreven bytes terug, 0 aan het eind.
+/// getdents64(fd, buf, count): fill Linux `linux_dirent64` records from the cursor.
+/// Returns the number of bytes written, 0 at the end.
 fn vfs_getdents64(fd: usize, buf: u64, count: usize) -> u64 {
     if fd >= MAX_FD {
         return (-9i64) as u64; // -EBADF
     }
-    // De hele doel-buffer wordt één keer arena-gevalideerd; daarna liggen alle
-    // per-record-schrijfacties (begrensd op `written + reclen <= count`) gegarandeerd
-    // binnen [buf, buf+count) en kunnen ze geen kernel-geheugen raken.
+    // The entire destination buffer is arena-validated once; after that all
+    // per-record writes (bounded by `written + reclen <= count`) are guaranteed
+    // to lie within [buf, buf+count) and cannot touch kernel memory.
     if !in_user_arena(buf, count) {
         return EFAULT;
     }
@@ -1471,7 +1471,7 @@ fn vfs_getdents64(fd: usize, buf: u64, count: usize) -> u64 {
         Some((p, c)) => (p.clone(), *c),
         None => return (-20i64) as u64, // -ENOTDIR
     };
-    // "." en ".." vooraan, daarna de echte kinderen.
+    // "." and ".." first, then the real children.
     let mut all: alloc::vec::Vec<(String, bool)> =
         alloc::vec![(String::from("."), true), (String::from(".."), true)];
     all.extend(dir_children(&path));
@@ -1479,9 +1479,9 @@ fn vfs_getdents64(fd: usize, buf: u64, count: usize) -> u64 {
     let mut written = 0usize;
     while cursor < all.len() {
         let (name, is_dir) = &all[cursor];
-        let reclen = (19 + name.len() + 1 + 7) & !7; // 8-byte uitgelijnd
+        let reclen = (19 + name.len() + 1 + 7) & !7; // 8-byte aligned
         if written + reclen > count {
-            break; // past niet meer in deze buffer-oproep
+            break; // no longer fits in this buffer call
         }
         let rec = (buf as usize + written) as *mut u8;
         unsafe {
@@ -1499,7 +1499,7 @@ fn vfs_getdents64(fd: usize, buf: u64, count: usize) -> u64 {
     written as u64
 }
 
-/// De grootte (bytes) van het bestand achter een open fd, of None.
+/// The size (bytes) of the file behind an open fd, or None.
 fn vfs_size(fd: usize) -> Option<usize> {
     if fd >= MAX_FD {
         return None;
@@ -1509,7 +1509,7 @@ fn vfs_size(fd: usize) -> Option<usize> {
     Some(FILES.lock()[fi].1.len())
 }
 
-/// lseek(fd, offset, whence) -> nieuwe offset (u64::MAX bij fout).
+/// lseek(fd, offset, whence) -> new offset (u64::MAX on error).
 fn vfs_lseek(fd: usize, offset: i64, whence: u64) -> u64 {
     if fd >= MAX_FD {
         return u64::MAX;
@@ -1537,10 +1537,10 @@ fn vfs_lseek(fd: usize, offset: i64, whence: u64) -> u64 {
     newoff as u64
 }
 
-/// Lees een NUL-getermineerde string uit userspace. Stopt op de NUL, op `max`,
-/// OF zodra de volgende byte buiten de arena zou vallen — zo kan een vervalste
-/// pointer nooit kernel-geheugen laten uitlezen. Een buiten-arena pointer levert
-/// een lege vector op (de aanroeper behandelt dat als "geen pad").
+/// Read a NUL-terminated string from userspace. Stops at the NUL, at `max`,
+/// OR as soon as the next byte would fall outside the arena — so a forged
+/// pointer can never make kernel memory be read out. An out-of-arena pointer yields
+/// an empty vector (the caller treats that as "no path").
 fn user_cstr(ptr: u64, max: usize) -> alloc::vec::Vec<u8> {
     let mut v = alloc::vec::Vec::new();
     let mut i = 0;
@@ -1552,7 +1552,7 @@ fn user_cstr(ptr: u64, max: usize) -> alloc::vec::Vec<u8> {
         if !in_user_arena(addr, 1) {
             break;
         }
-        // SAFETY: per-byte arena-gevalideerd; identity-mapped.
+        // SAFETY: per-byte arena-validated; identity-mapped.
         let b = unsafe { *(addr as *const u8) };
         if b == 0 {
             break;
@@ -1563,26 +1563,26 @@ fn user_cstr(ptr: u64, max: usize) -> alloc::vec::Vec<u8> {
     v
 }
 
-// Kernel-stack voor de syscall-handler.
+// Kernel stack for the syscall handler.
 const KSTACK_SIZE: usize = 16 * 1024;
 static mut KSTACK: [u8; KSTACK_SIZE] = [0; KSTACK_SIZE];
 
 global_asm!(
-    // SYSCALL-entry vanuit ring 3: rcx=user-rip, r11=user-rflags, rsp=user-rsp.
+    // SYSCALL entry from ring 3: rcx=user-rip, r11=user-rflags, rsp=user-rsp.
     ".global syscall_entry",
     "syscall_entry:",
     "mov [rip + USER_RSP], rsp",
     "mov rsp, [rip + KERNEL_RSP]",
-    // SMAP-venster OPEN: zet RFLAGS.AC (bit 18) zodat ring 0 voor de duur van deze
-    // syscall user-pagina's (U=1) mag lezen/schrijven. De syscall draait met IF=0
-    // (FMASK wist IF) → niet-preemptief, dus het venster kan niet door een
-    // taakswitch lekken. AC i.p.v. `stac` → ook correct als de CPU geen SMAP heeft
-    // (no-op). In ring 0 zet AC géén alignment-checks aan (dat vereist CPL=3).
+    // SMAP window OPEN: set RFLAGS.AC (bit 18) so that for the duration of this
+    // syscall ring 0 may read/write user pages (U=1). The syscall runs with IF=0
+    // (FMASK clears IF) -> non-preemptive, so the window cannot leak through a
+    // task switch. AC instead of `stac` -> also correct if the CPU has no SMAP
+    // (no-op). In ring 0 AC enables NO alignment checks (that requires CPL=3).
     "pushfq",
     "bts qword ptr [rsp], 18",
     "popfq",
-    // Bewaar ALLE user-registers die over een syscall heen bewaard moeten
-    // blijven (echte syscall-ABI: alleen rax/rcx/r11 mogen veranderen).
+    // Save ALL user registers that must be preserved across a
+    // syscall (real syscall ABI: only rax/rcx/r11 may change).
     "push rcx",                       // user-rip
     "push r11",                       // user-rflags
     "push rbx",
@@ -1597,19 +1597,19 @@ global_asm!(
     "push r13",
     "push r14",
     "push r15",
-    "mov [rip + SAVED_REGS], rsp",    // pointer naar het opgeslagen registerblok (clone)
-    "mov [rip + USER_RIP], rcx",      // user-rip bewaren (clone: thread-resume-punt)
-    "mov r9, r8",                     // dispatch arg5 = origineel r8 (clone: tls)
-    "mov r8, r10",                    // dispatch arg4 = origineel r10 (clone: ctid)
-    "mov rcx, rdx",                   // dispatch arg3 (origineel rdx)
-    "mov rdx, rsi",                   // dispatch arg2 (rdi/rsi nog origineel)
+    "mov [rip + SAVED_REGS], rsp",    // pointer to the saved register block (clone)
+    "mov [rip + USER_RIP], rcx",      // save user-rip (clone: thread resume point)
+    "mov r9, r8",                     // dispatch arg5 = original r8 (clone: tls)
+    "mov r8, r10",                    // dispatch arg4 = original r10 (clone: ctid)
+    "mov rcx, rdx",                   // dispatch arg3 (original rdx)
+    "mov rdx, rsi",                   // dispatch arg2 (rdi/rsi still original)
     "mov rsi, rdi",                   // dispatch arg1
     "mov rdi, rax",                   // dispatch num
-    "call syscall_dispatch",          // rax = return-waarde
+    "call syscall_dispatch",          // rax = return value
     "mov r10, [rip + EXITED]",
     "test r10, r10",
     "jnz 9f",
-    // Normale syscall → herstel registers (rax blijft return-waarde) en SYSRET.
+    // Normal syscall -> restore registers (rax stays the return value) and SYSRET.
     "pop r15",
     "pop r14",
     "pop r13",
@@ -1626,26 +1626,26 @@ global_asm!(
     "pop rcx",                        // user-rip
     "mov rsp, [rip + USER_RSP]",
     "sysretq",
-    "9:",                             // sys_exit → terug naar de kernel.
+    "9:",                             // sys_exit -> back to the kernel.
     "mov rsp, [rip + SAVED_KERNEL_RSP]",
-    "pushfq",                         // SMAP-venster DICHT: wis AC (geen sysret die r11 herstelt)
+    "pushfq",                         // SMAP window CLOSED: clear AC (no sysret that restores r11)
     "btr qword ptr [rsp], 18",
     "popfq",
-    "pop r15",                        // herstel callee-saved registers van run()
+    "pop r15",                        // restore callee-saved registers of run()
     "pop r14",
     "pop r13",
     "pop r12",
     "pop rbp",
     "pop rbx",
     "ret",
-    // force_kernel_return: identiek aan het sys_exit-epiloog, maar aanroepbaar
-    // vanuit de page-fault-handler om een GEFAULTE voorgrond-exec af te breken
-    // (nette terugkeer naar run_args i.p.v. taak 0/de shell te doden). Keert nooit
-    // terug naar de aanroeper.
+    // force_kernel_return: identical to the sys_exit epilogue, but callable
+    // from the page-fault handler to abort a FAULTED foreground exec
+    // (clean return to run_args instead of killing task 0/the shell). Never returns
+    // to the caller.
     ".global force_kernel_return",
     "force_kernel_return:",
     "mov rsp, [rip + SAVED_KERNEL_RSP]",
-    "pushfq",                         // SMAP-venster DICHT (een gefaulte exec kan AC open hebben gelaten)
+    "pushfq",                         // SMAP window CLOSED (a faulted exec may have left AC open)
     "btr qword ptr [rsp], 18",
     "popfq",
     "pop r15",
@@ -1655,32 +1655,32 @@ global_asm!(
     "pop rbp",
     "pop rbx",
     "ret",
-    // enter_ring3(rdi=cs, rsi=ss, rdx=rip, rcx=rsp): spring ring 3 in via iretq.
+    // enter_ring3(rdi=cs, rsi=ss, rdx=rip, rcx=rsp): jump into ring 3 via iretq.
     ".global enter_ring3",
     "enter_ring3:",
-    // Bewaar callee-saved registers: het ring-3 programma klobbert ze, maar
-    // run() (de aanroeper) verwacht ze intact ná de sys_exit-terugkeer.
+    // Save callee-saved registers: the ring-3 program clobbers them, but
+    // run() (the caller) expects them intact after the sys_exit return.
     "push rbx",
     "push rbp",
     "push r12",
     "push r13",
     "push r14",
     "push r15",
-    "mov [rip + SAVED_KERNEL_RSP], rsp", // wijst nu naar de bewaarde registers
+    "mov [rip + SAVED_KERNEL_RSP], rsp", // now points to the saved registers
     "push rsi",                       // ss
     "push rcx",                       // rsp
-    "push 0x002",                     // rflags (IF=0: run() is synchroon en NIET-preemptief;
-                                      // anders onderbreekt de timer de ring-3-excursie en wisselt
-                                      // de scheduler van stack -> stackcorruptie/canary-fout.
-                                      // Gescheduelde ring-3-taken lopen via sched::spawn_user met IF=1.)
+    "push 0x002",                     // rflags (IF=0: run() is synchronous and NON-preemptive;
+                                      // otherwise the timer interrupts the ring-3 excursion and the
+                                      // scheduler switches stacks -> stack corruption/canary fault.
+                                      // Scheduled ring-3 tasks run via sched::spawn_user with IF=1.)
     "push rdi",                       // cs
     "push rdx",                       // rip
     "iretq",
 );
 
-// Het userspace-programma /bin/hello — een echte, gestripte **ELF64**-binary,
-// door de EuroToolchain (Track 6) uit C-broncode gecompileerd. De kernel parset
-// de ELF-headers en laadt de PT_LOAD-segmenten (zie load_elf64).
+// The userspace program /bin/hello — a real, stripped **ELF64** binary,
+// compiled by the EuroToolchain (Track 6) from C source. The kernel parses
+// the ELF headers and loads the PT_LOAD segments (see load_elf64).
 static HELLO_ELF: &[u8] = include_bytes!("../../userland/hello.elf");
 static CAT_ELF: &[u8] = include_bytes!("../../userland/cat.elf");
 static LINUXPROG_ELF: &[u8] = include_bytes!("../../userland/linuxprog.elf");
@@ -1694,7 +1694,7 @@ static PIEPROG_ELF: &[u8] = include_bytes!("../../userland/pieprog.elf");
 static TLSPROG_ELF: &[u8] = include_bytes!("../../userland/tlsprog.elf");
 static DYNTLS_ELF: &[u8] = include_bytes!("../../userland/dyntls.elf");
 static LIBTLS_SO: &[u8] = include_bytes!("../../userland/libtls.so");
-// H3: dynamische-linking-testartefacten — een dynamisch-gelinkte exe + de .so.
+// H3: dynamic-linking test artifacts — a dynamically-linked exe + the .so.
 static DYNTEST_ELF: &[u8] = include_bytes!("../../userland/dyntest.elf");
 static LIBEURO_SO: &[u8] = include_bytes!("../../userland/libeuro.so");
 static MUSLREAL_ELF: &[u8] = include_bytes!("../../userland/muslreal.elf");
@@ -1718,12 +1718,12 @@ static MMUTEX_ELF: &[u8] = include_bytes!("../../userland/mmutex.elf");
 static IPCRECV_ELF: &[u8] = include_bytes!("../../userland/ipcrecv.elf");
 static IPCSEND_ELF: &[u8] = include_bytes!("../../userland/ipcsend.elf");
 
-/// De ELF-bytes van /bin/mmutex (pthread_mutex onder contentie via futex).
+/// The ELF bytes of /bin/mmutex (pthread_mutex under contention via futex).
 pub fn mmutex_bytes() -> &'static [u8] {
     MMUTEX_ELF
 }
 
-/// De ELF-bytes van de EuroIPC-demo's (ontvanger + zender).
+/// The ELF bytes of the EuroIPC demos (receiver + sender).
 pub fn ipcrecv_bytes() -> &'static [u8] {
     IPCRECV_ELF
 }
@@ -1731,34 +1731,34 @@ pub fn ipcsend_bytes() -> &'static [u8] {
     IPCSEND_ELF
 }
 
-/// De ELF-bytes van /bin/mthread (threads-demo: clone + gedeeld geheugen).
+/// The ELF bytes of /bin/mthread (threads demo: clone + shared memory).
 pub fn mthread_bytes() -> &'static [u8] {
     MTHREAD_ELF
 }
 
-/// De ELF-bytes van /bin/mpthread (echte musl-pthreads: create + join).
+/// The ELF bytes of /bin/mpthread (real musl pthreads: create + join).
 pub fn mpthread_bytes() -> &'static [u8] {
     MPTHREAD_ELF
 }
 
-/// De ELF-bytes van /bin/tlscount (musl-demo: per-proces __thread-teller).
+/// The ELF bytes of /bin/tlscount (musl demo: per-process __thread counter).
 pub fn tlscount_bytes() -> &'static [u8] {
     TLSCOUNT_ELF
 }
 
-/// De ELF-bytes van /bin/isotest (musl-demo: geheugenisolatie-overtreding).
+/// The ELF bytes of /bin/isotest (musl demo: memory-isolation violation).
 pub fn isotest_bytes() -> &'static [u8] {
     ISOTEST_ELF
 }
 
-/// De ELF-bytes van /bin/worker (musl-demo: rekent, rapporteert, exit(0)).
+/// The ELF bytes of /bin/worker (musl demo: computes, reports, exit(0)).
 pub fn worker_bytes() -> &'static [u8] {
     WORKER_ELF
 }
 
-// Een ring-3 proces dat eindeloos een teller in z'n EIGEN user-geheugen ophoogt.
-// Door de scheduler preemptief afgewisseld; de kernel leest de teller en toont
-// dat het proces vooruitgang boekt — bewijs van userspace-multitasking.
+// A ring-3 process that endlessly increments a counter in its OWN user memory.
+// Preemptively interleaved by the scheduler; the kernel reads the counter and shows
+// that the process makes progress — proof of userspace multitasking.
 global_asm!(
     ".global utask_start",
     ".global utask_cnt",
@@ -1776,7 +1776,7 @@ global_asm!(
 extern "sysv64" {
     fn syscall_entry();
     fn enter_ring3(cs: u64, ss: u64, rip: u64, rsp: u64);
-    /// Breek een voorgrond-exec af na een page fault: nette terugkeer in run_args.
+    /// Abort a foreground exec after a page fault: clean return into run_args.
     fn force_kernel_return();
 }
 extern "C" {
@@ -1785,10 +1785,10 @@ extern "C" {
     static utask_end: u8;
 }
 
-/// Start een ring-3 proces dat een teller ophoogt en voeg het toe aan de
-/// scheduler. ELK proces krijgt een eigen code-, stack- ÉN kernel-stack zodat
-/// meerdere ring-3 processen tegelijk preemptief kunnen draaien. Geeft het adres
-/// van de teller terug (de kernel leest 'm uit voor weergave).
+/// Start a ring-3 process that increments a counter and add it to the
+/// scheduler. EACH process gets its own code, stack AND kernel stack so that
+/// multiple ring-3 processes can run preemptively at once. Returns the address
+/// of the counter (the kernel reads it for display).
 pub fn spawn_counter_task(falloc: &mut FrameAllocator) -> u64 {
     init_syscall_msrs();
     const MIB2: u64 = 1 << 21;
@@ -1799,19 +1799,19 @@ pub fn spawn_counter_task(falloc: &mut FrameAllocator) -> u64 {
     let bytes = unsafe { core::slice::from_raw_parts(start as *const u8, end - start) };
     let cnt_off = (cnt - start) as u64;
 
-    // Eigen geïsoleerde 2 MiB-arena + PML4 i.p.v. losse frames op de boot-CR3, zodat
-    // dit ring-3 proces niet op de supervisor-only boot-PML4 draait (SMEP/SMAP-veilig).
-    // 2 MiB, exact 2 MiB-uitgelijnd in één keer (geen 4 MiB-over-allocatie meer):
-    // de teller-taak reapt nooit, dus dit is de veiligste plek om allocate_aligned te
-    // gebruiken. Bespaart ~2 MiB t.o.v. allocate_contiguous(1024)+handmatig uitlijnen.
+    // Own isolated 2 MiB arena + PML4 instead of loose frames on the boot CR3, so that
+    // this ring-3 process does not run on the supervisor-only boot PML4 (SMEP/SMAP-safe).
+    // 2 MiB, exactly 2 MiB-aligned in one go (no more 4 MiB over-allocation):
+    // the counter task never reaps, so this is the safest place to use
+    // allocate_aligned. Saves ~2 MiB compared to allocate_contiguous(1024)+manual alignment.
     let arena = falloc.allocate_aligned(512, 512).expect("utask-arena");
     let code = arena;
-    let stack_top = arena + MIB2; // user-stack groeit omlaag vanaf de arena-top
-    // Eigen kernel-stack (4 frames = 16 KiB) voor de ring3->ring0 interrupt-frames.
+    let stack_top = arena + MIB2; // user stack grows downward from the arena top
+    // Own kernel stack (4 frames = 16 KiB) for the ring3->ring0 interrupt frames.
     let kstack = falloc.allocate_contiguous(4).expect("utask kernel-stack");
     let kstack_top = (kstack + 4 * 4096) & !0xF;
-    // SAFETY: arena ligt in de identity-gemapte onderste 1 GiB; onder de boot-CR3
-    // (waar we nu draaien) is dat een supervisor-pagina -> schrijven mag.
+    // SAFETY: arena lies in the identity-mapped lowest 1 GiB; under the boot CR3
+    // (where we now run) that is a supervisor page -> writing is allowed.
     unsafe {
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), code as *mut u8, bytes.len().min(4096));
     }
@@ -1821,133 +1821,133 @@ pub fn spawn_counter_task(falloc: &mut FrameAllocator) -> u64 {
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
     let idx = crate::sched::spawn_user(code, stack_top, user_cs, user_ss, kstack_top);
-    // Teller-demo: rauw machinecode-blob met teller-variabele IN de codepagina →
-    // code/data niet te scheiden, dus RWX i.p.v. W^X (zie build_address_space_rwx).
+    // Counter demo: raw machine-code blob with the counter variable IN the code page ->
+    // code/data cannot be separated, so RWX instead of W^X (see build_address_space_rwx).
     let pml4 = crate::paging::build_address_space_rwx(falloc, arena);
     crate::sched::set_task_cr3(idx, pml4);
     counter_ptr
 }
 
-/// Lees een tellerstand. `ptr` is het FYSIEKE arena-adres; onder de boot-CR3 (waar
-/// de kernel/shell draait) is dat een supervisor-identity-pagina -> gewoon leesbaar.
+/// Read a counter value. `ptr` is the PHYSICAL arena address; under the boot CR3 (where
+/// the kernel/shell runs) that is a supervisor-identity page -> simply readable.
 pub fn read_counter(ptr: u64) -> u64 {
     if ptr == 0 {
         return 0;
     }
-    // SAFETY: ptr wijst naar de identity-mapped (supervisor) arena-pagina van een proces.
+    // SAFETY: ptr points to the identity-mapped (supervisor) arena page of a process.
     unsafe { core::ptr::read_volatile(ptr as *const u64) }
 }
 
-/// De ELF-bytes van het door de EuroToolchain gecompileerde /bin/hello.
+/// The ELF bytes of /bin/hello compiled by the EuroToolchain.
 pub fn program_bytes() -> &'static [u8] {
     HELLO_ELF
 }
 
-/// De ELF-bytes van /bin/cat.
+/// The ELF bytes of /bin/cat.
 pub fn cat_bytes() -> &'static [u8] {
     CAT_ELF
 }
 
-/// De ELF-bytes van /bin/linuxprog (Linux-ABI).
+/// The ELF bytes of /bin/linuxprog (Linux ABI).
 pub fn linuxprog_bytes() -> &'static [u8] {
     LINUXPROG_ELF
 }
 
-/// De ELF-bytes van /bin/forktest (S3 fork/waitpid-test, Linux-ABI).
+/// The ELF bytes of /bin/forktest (S3 fork/waitpid test, Linux ABI).
 pub fn forktest_bytes() -> &'static [u8] {
     FORKTEST_ELF
 }
 
-/// De ELF-bytes van /bin/execee (S3 execve-doel, Linux-ABI).
+/// The ELF bytes of /bin/execee (S3 execve target, Linux ABI).
 pub fn execee_bytes() -> &'static [u8] {
     EXECEE_ELF
 }
 
-/// De ELF-bytes van /bin/forkpipe (S3 pipe+fork IPC-test, Linux-ABI).
+/// The ELF bytes of /bin/forkpipe (S3 pipe+fork IPC test, Linux ABI).
 pub fn forkpipe_bytes() -> &'static [u8] {
     FORKPIPE_ELF
 }
 
-/// De ELF-bytes van /bin/ticker (S4 demo-service, Linux-ABI).
+/// The ELF bytes of /bin/ticker (S4 demo service, Linux ABI).
 pub fn ticker_bytes() -> &'static [u8] {
     TICKER_ELF
 }
 
-/// De ELF-bytes van /bin/muslprog (musl-achtige Linux-startup).
+/// The ELF bytes of /bin/muslprog (musl-like Linux startup).
 pub fn muslprog_bytes() -> &'static [u8] {
     MUSLPROG_ELF
 }
 
-/// De ELF-bytes van /bin/argvprog (leest argc/argv/envp/auxv van de SysV-stack).
+/// The ELF bytes of /bin/argvprog (reads argc/argv/envp/auxv from the SysV stack).
 pub fn argvprog_bytes() -> &'static [u8] {
     ARGVPROG_ELF
 }
 
-/// De ELF-bytes van /bin/pieprog (echte PIE met R_X86_64_RELATIVE-relocaties).
+/// The ELF bytes of /bin/pieprog (real PIE with R_X86_64_RELATIVE relocations).
 pub fn pieprog_bytes() -> &'static [u8] {
     PIEPROG_ELF
 }
 
-/// De ELF-bytes van /bin/muslreal (echte binary gelinkt tegen musl libc).
+/// The ELF bytes of /bin/muslreal (real binary linked against musl libc).
 pub fn muslreal_bytes() -> &'static [u8] {
     MUSLREAL_ELF
 }
 
-/// De ELF-bytes van /bin/muslfile (musl-binary die EuroFS leest via fopen/fgets).
+/// The ELF bytes of /bin/muslfile (musl binary that reads EuroFS via fopen/fgets).
 pub fn muslfile_bytes() -> &'static [u8] {
     MUSLFILE_ELF
 }
 
-/// De ELF-bytes van /bin/mcat (musl-`cat` die argv[1] als bestandsnaam gebruikt).
+/// The ELF bytes of /bin/mcat (musl `cat` that uses argv[1] as the file name).
 pub fn mcat_bytes() -> &'static [u8] {
     MCAT_ELF
 }
 
-/// De ELF-bytes van /bin/mwrite (musl-binary die een bestand schrijft).
+/// The ELF bytes of /bin/mwrite (musl binary that writes a file).
 pub fn mwrite_bytes() -> &'static [u8] {
     MWRITE_ELF
 }
 
-/// De ELF-bytes van /bin/mecho (musl-`echo`: print de argumenten).
+/// The ELF bytes of /bin/mecho (musl `echo`: print the arguments).
 pub fn mecho_bytes() -> &'static [u8] {
     MECHO_ELF
 }
 
-/// De ELF-bytes van /bin/mupper (musl-filter: stdin -> HOOFDLETTERS).
+/// The ELF bytes of /bin/mupper (musl filter: stdin -> UPPERCASE).
 pub fn mupper_bytes() -> &'static [u8] {
     MUPPER_ELF
 }
 
-/// De ELF-bytes van /bin/daemon (native achtergrond-hartslag-daemon).
+/// The ELF bytes of /bin/daemon (native background heartbeat daemon).
 pub fn daemon_bytes() -> &'static [u8] {
     DAEMON_ELF
 }
 
-/// De ELF-bytes van /bin/menv (musl-programma dat envp/getenv leest).
+/// The ELF bytes of /bin/menv (musl program that reads envp/getenv).
 pub fn menv_bytes() -> &'static [u8] {
     MENV_ELF
 }
 
-/// De ELF-bytes van /bin/msock (musl-programma dat netwerkt via POSIX-sockets).
+/// The ELF bytes of /bin/msock (musl program that networks via POSIX sockets).
 pub fn msock_bytes() -> &'static [u8] {
     MSOCK_ELF
 }
 
-/// De ELF-bytes van /bin/mdns (musl-programma: DNS-lookup via een UDP-socket).
+/// The ELF bytes of /bin/mdns (musl program: DNS lookup via a UDP socket).
 pub fn mdns_bytes() -> &'static [u8] {
     MDNS_ELF
 }
 
-/// De ELF-bytes van /bin/mtrack (EuroGuard-demo: geblokkeerde tracker-verbinding).
+/// The ELF bytes of /bin/mtrack (EuroGuard demo: blocked tracker connection).
 pub fn mtrack_bytes() -> &'static [u8] {
     MTRACK_ELF
 }
 
-/// De ingebakken Ed25519-handtekening (64 bytes) van een geïnstalleerd programma,
-/// gemaakt op de host met de EuroOS-developer-sleutel (userland/sign.py). De kernel
-/// verifieert deze tegen de ingebakken publieke sleutel vóór uitvoering.
-/// Een installeerbaar pakket dat NIET in de boot-set zit: (ELF-bytes, caps, abi).
-/// Wordt via de shell `install <naam>` geïnstalleerd na Ed25519-verificatie.
+/// The baked-in Ed25519 signature (64 bytes) of an installed program,
+/// made on the host with the EuroOS developer key (userland/sign.py). The kernel
+/// verifies it against the baked-in public key before execution.
+/// An installable package that is NOT in the boot set: (ELF bytes, caps, abi).
+/// Installed via the shell `install <name>` after Ed25519 verification.
 pub fn installable(name: &str) -> Option<(&'static [u8], u64, bool)> {
     match name {
         "msum" => Some((MSUM_ELF, CAP_CONSOLE, true)),
@@ -1991,19 +1991,19 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
     })
 }
 
-/// Verifieer de Ed25519-handtekening van een programma (op naam) over de
-/// daadwerkelijk-geladen bytes. `true` = authentiek + ongewijzigd → mag draaien.
+/// Verify the Ed25519 signature of a program (by name) over the
+/// actually-loaded bytes. `true` = authentic + unchanged -> may run.
 pub fn verify_program(path: &str, bytes: &[u8]) -> bool {
     match program_sig(path) {
         Some(sig) => crate::crypto::verify(bytes, sig),
-        None => false, // geen handtekening bekend → niet vertrouwd
+        None => false, // no signature known -> not trusted
     }
 }
 
-// ── Minimale ELF64-loader ─────────────────────────────────────────────────
-// Bounds-veilig (audit H11/kernel-H6): een misvormde/te korte ELF mag deze lezers
-// niet laten panieken; bij een out-of-range offset → 0 (en de bound-checks erboven
-// verwerpen de header verderop).
+// ── Minimal ELF64 loader ─────────────────────────────────────────────────
+// Bounds-safe (audit H11/kernel-H6): a malformed/too-short ELF must not make these
+// readers panic; on an out-of-range offset -> 0 (and the bound checks above
+// reject the header further on).
 fn rd_u16(b: &[u8], o: usize) -> u16 {
     match b.get(o..o + 2) {
         Some(s) => u16::from_le_bytes([s[0], s[1]]),
@@ -2025,12 +2025,12 @@ fn rd_u64(b: &[u8], o: usize) -> u64 {
     u64::from_le_bytes(a)
 }
 
-/// Max. aantal aaneengesloten User-pagina's dat een programma mag beslaan (1 MiB).
-/// Begrenst de allocatie en houdt alles binnen de USER-gemapte onderste 1 GiB.
+/// Max. number of contiguous User pages a program may span (1 MiB).
+/// Bounds the allocation and keeps everything within the USER-mapped lowest 1 GiB.
 const MAX_PROG_PAGES: usize = 256;
 
-/// Hoeveel User-pagina's heeft dit programma nodig (hoogste vaddr+memsz, of de
-/// platte lengte)? Bepaalt vooraf de aaneengesloten frame-allocatie.
+/// How many User pages does this program need (highest vaddr+memsz, or the
+/// flat length)? Determines the contiguous frame allocation in advance.
 fn program_span_pages(program: &[u8]) -> usize {
     let span = if program.len() >= 4 && &program[0..4] == b"\x7fELF" && program.len() >= 64 {
         let e_phoff = rd_u64(program, 32) as usize;
@@ -2040,7 +2040,7 @@ fn program_span_pages(program: &[u8]) -> usize {
         for i in 0..e_phnum {
             let ph = e_phoff + i * e_phentsize;
             if ph + 56 > program.len() || rd_u32(program, ph) != 1 {
-                continue; // alleen PT_LOAD
+                continue; // PT_LOAD only
             }
             hi = hi.max(rd_u64(program, ph + 16) + rd_u64(program, ph + 40)); // vaddr+memsz
         }
@@ -2051,25 +2051,25 @@ fn program_span_pages(program: &[u8]) -> usize {
     (((span + 0xFFF) / 4096).max(1)).min(MAX_PROG_PAGES)
 }
 
-/// Resultaat van het laden: entry + program-header-info voor de auxv.
-/// (musl's `_start` leest AT_PHDR/AT_PHENT/AT_PHNUM/AT_ENTRY/AT_BASE.)
+/// Result of loading: entry + program-header info for the auxv.
+/// (musl's `_start` reads AT_PHDR/AT_PHENT/AT_PHNUM/AT_ENTRY/AT_BASE.)
 #[derive(Clone, Copy)]
 struct LoadInfo {
     entry: u64,
-    phdr: u64,  // runtime-adres van de program-header-tabel (0 = geen)
-    phent: u64, // grootte van één program-header
-    phnum: u64, // aantal program-headers
-    base: u64,  // load-bias (begin van het frame-venster)
-    /// W^X-bitmaps over de 512 4 KiB-pagina's van de 2 MiB-arena. `exec_pages`: pagina
-    /// valt onder een UITVOERBAAR segment (PF_X). `writ_pages`: onder een SCHRIJFBAAR
-    /// segment (PF_W). build_address_space mapt exec-only → R-X, exec+writ → RWX (een
-    /// binary met een gemengd RWE-segment kan W^X niet afdwingen), de rest → RW + NX.
+    phdr: u64,  // runtime address of the program-header table (0 = none)
+    phent: u64, // size of one program header
+    phnum: u64, // number of program headers
+    base: u64,  // load bias (start of the frame window)
+    /// W^X bitmaps over the 512 4 KiB pages of the 2 MiB arena. `exec_pages`: page
+    /// falls under an EXECUTABLE segment (PF_X). `writ_pages`: under a WRITABLE
+    /// segment (PF_W). build_address_space maps exec-only -> R-X, exec+writ -> RWX (a
+    /// binary with a mixed RWE segment cannot enforce W^X), the rest -> RW + NX.
     exec_pages: [u64; 8],
     writ_pages: [u64; 8],
 }
 
-/// Markeer de 4 KiB-pagina's die `[start, start+len)` (arena-relatieve offset)
-/// raken als uitvoerbaar in de W^X-bitmap.
+/// Mark the 4 KiB pages that `[start, start+len)` (arena-relative offset)
+/// touch as executable in the W^X bitmap.
 fn mark_exec_pages(bits: &mut [u64; 8], start: u64, len: u64) {
     if len == 0 {
         return;
@@ -2083,16 +2083,16 @@ fn mark_exec_pages(bits: &mut [u64; 8], start: u64, len: u64) {
     }
 }
 
-/// Pas R_X86_64_RELATIVE-relocaties toe: voor een PIE (ET_DYN) gelinkt op 0 en
-/// geladen op `base` geldt `*(base + r_offset) = base + r_addend`. Dit is precies
-/// wat musl's static-PIE self-reloc anders zelf doet — wij doen het in de kernel.
-/// We lezen alle tabellen uit het GELADEN geheugen (base + vaddr): file-offset en
-/// vaddr lopen in een PIE uiteen, maar in het geladen image klopt vaddr altijd.
+/// Apply R_X86_64_RELATIVE relocations: for a PIE (ET_DYN) linked at 0 and
+/// loaded at `base`, `*(base + r_offset) = base + r_addend` holds. This is exactly
+/// what musl's static-PIE self-reloc otherwise does itself — we do it in the kernel.
+/// We read all tables from the LOADED memory (base + vaddr): file offset and
+/// vaddr diverge in a PIE, but in the loaded image vaddr is always correct.
 fn apply_relocations(elf: &[u8], base: u64, limit: u64) {
     let e_phoff = rd_u64(elf, 32) as usize;
     let e_phentsize = rd_u16(elf, 54) as usize;
     let e_phnum = rd_u16(elf, 56) as usize;
-    // Zoek PT_DYNAMIC (p_type == 2).
+    // Find PT_DYNAMIC (p_type == 2).
     let mut dyn_vaddr = 0u64;
     let mut dyn_sz = 0usize;
     for i in 0..e_phnum {
@@ -2105,9 +2105,9 @@ fn apply_relocations(elf: &[u8], base: u64, limit: u64) {
         break;
     }
     if dyn_vaddr == 0 {
-        return; // geen dynamische sectie (flat/statisch-gelinkte ELF)
+        return; // no dynamic section (flat/statically-linked ELF)
     }
-    // Lees de dynamische entries uit het geladen geheugen; verzamel de RELA-tabel.
+    // Read the dynamic entries from the loaded memory; collect the RELA table.
     let rd_loaded = |a: u64| unsafe { ((base + a) as *const u64).read() };
     let mut rela = 0u64;
     let mut relasz = 0u64;
@@ -2117,7 +2117,7 @@ fn apply_relocations(elf: &[u8], base: u64, limit: u64) {
         let tag = rd_loaded(dyn_vaddr + o);
         let val = rd_loaded(dyn_vaddr + o + 8);
         match tag {
-            7 => rela = val,    // DT_RELA   (vaddr van de tabel)
+            7 => rela = val,    // DT_RELA   (vaddr of the table)
             8 => relasz = val,  // DT_RELASZ (bytes)
             9 => relaent = val, // DT_RELAENT
             0 => break,         // DT_NULL
@@ -2142,15 +2142,15 @@ fn apply_relocations(elf: &[u8], base: u64, limit: u64) {
         }
         off += relaent;
     }
-    crate::serial_println!("[elf] {applied} R_X86_64_RELATIVE relocaties toegepast @ base {base:#x}");
+    crate::serial_println!("[elf] {applied} R_X86_64_RELATIVE relocations applied @ base {base:#x}");
 }
 
-/// Markeer pagina's schrijfbaar in de W^X-bitmap (zelfde mechaniek als exec).
+/// Mark pages writable in the W^X bitmap (same mechanism as exec).
 fn mark_writ_pages(bits: &mut [u64; 8], start: u64, len: u64) {
     mark_exec_pages(bits, start, len);
 }
 
-/// Vind het PT_TLS-segment (p_type==7): (vaddr, filesz, memsz, align≥8).
+/// Find the PT_TLS segment (p_type==7): (vaddr, filesz, memsz, align>=8).
 fn find_pt_tls(elf: &[u8]) -> Option<(u64, u64, u64, u64)> {
     let e_phoff = rd_u64(elf, 32) as usize;
     let e_phentsize = rd_u16(elf, 54) as usize;
@@ -2171,17 +2171,17 @@ fn find_pt_tls(elf: &[u8]) -> Option<(u64, u64, u64, u64)> {
     None
 }
 
-/// Arena-offset voor het statische TLS-blok (boven de heap, onder de stack).
+/// Arena offset for the static TLS block (above the heap, below the stack).
 const TLS_WINDOW: u64 = 0x188000;
 
-/// **Kernel-als-ld.so: statische TLS-setup (variant-II, x86-64).** Bouwt het
-/// statische TLS-blok uit het `PT_TLS` van ELK gegeven module (exe + .so's): elk
-/// module krijgt een offset ONDER de thread-pointer (TP), het TCB-zelfwijzer-woord
-/// staat op TP (`%fs:0x0` → TP). Een `__thread`-var op template-offset v in module m
-/// staat op `TP − tlsoffset[m] + v`. Geeft (TP, [(module_base, tlsoffset)]) terug —
-/// de offsets zijn nodig om `R_X86_64_TPOFF64`-relocaties te patchen.
+/// **Kernel-as-ld.so: static TLS setup (variant-II, x86-64).** Builds the
+/// static TLS block from the `PT_TLS` of EACH given module (exe + .so's): each
+/// module gets an offset BELOW the thread pointer (TP), the TCB self-pointer word
+/// sits at TP (`%fs:0x0` -> TP). A `__thread` var at template offset v in module m
+/// sits at `TP - tlsoffset[m] + v`. Returns (TP, [(module_base, tlsoffset)]) —
+/// the offsets are needed to patch `R_X86_64_TPOFF64` relocations.
 fn setup_static_tls(arena: u64, modules: &[(u64, &[u8])], info: &mut LoadInfo) -> (Option<u64>, Vec<(u64, u64)>) {
-    // Verzamel de TLS-modules: (base, vaddr, filesz, memsz, align).
+    // Collect the TLS modules: (base, vaddr, filesz, memsz, align).
     let mut tls: Vec<(u64, u64, u64, u64, u64)> = Vec::new();
     for (base, elf) in modules {
         if let Some((v, f, m, a)) = find_pt_tls(elf) {
@@ -2191,7 +2191,7 @@ fn setup_static_tls(arena: u64, modules: &[(u64, &[u8])], info: &mut LoadInfo) -
     if tls.is_empty() {
         return (None, Vec::new());
     }
-    // Wijs offsets toe (glibc-algoritme): offset accumuleert per module.
+    // Assign offsets (glibc algorithm): offset accumulates per module.
     let mut offset = 0u64;
     let mut offsets: Vec<(u64, u64)> = Vec::new();
     for (base, _v, _f, memsz, align) in &tls {
@@ -2202,24 +2202,24 @@ fn setup_static_tls(arena: u64, modules: &[(u64, &[u8])], info: &mut LoadInfo) -
     let region = arena + TLS_WINDOW;
     let tp = region + total;
     unsafe {
-        core::ptr::write_bytes(region as *mut u8, 0, (total + 8) as usize); // hele blok + TCB-woord nullen
+        core::ptr::write_bytes(region as *mut u8, 0, (total + 8) as usize); // zero the whole block + TCB word
         for ((base, vaddr, filesz, _memsz, _a), (_b, toff)) in tls.iter().zip(offsets.iter()) {
             let dst = tp - toff;
             core::ptr::copy_nonoverlapping((base + vaddr) as *const u8, dst as *mut u8, *filesz as usize);
         }
-        (tp as *mut u64).write(tp); // TCB self-pointer op TP (%fs:0x0)
+        (tp as *mut u64).write(tp); // TCB self-pointer at TP (%fs:0x0)
     }
     mark_writ_pages(&mut info.writ_pages, TLS_WINDOW, total + 4096);
     crate::serial_println!(
-        "[tls] statisch TLS-blok @ {region:#x}, TP={tp:#x}, {} module(s), totaal {total} B",
+        "[tls] static TLS block @ {region:#x}, TP={tp:#x}, {} module(s), total {total} B",
         tls.len()
     );
     (Some(tp), offsets)
 }
 
-/// Patch de `R_X86_64_TPOFF64`-relocaties (type 18) van één module: schrijf de
-/// initial-exec TP-offset in het GOT-slot — `tpoff = sym.st_value − tlsoffset + addend`
-/// (de var staat op `%fs + tpoff`). Geeft het aantal gepatchte relocaties terug.
+/// Patch the `R_X86_64_TPOFF64` relocations (type 18) of one module: write the
+/// initial-exec TP offset into the GOT slot — `tpoff = sym.st_value - tlsoffset + addend`
+/// (the var sits at `%fs + tpoff`). Returns the number of patched relocations.
 fn apply_tls_relocs(base: u64, elf: &[u8], tlsoffset: u64) -> u32 {
     let symtab = match dyn_value(base, elf, 6) {
         Some(s) => s,
@@ -2254,26 +2254,26 @@ fn apply_tls_relocs(base: u64, elf: &[u8], tlsoffset: u64) -> u32 {
     patched
 }
 
-/// Laad de PT_LOAD-segmenten van een ELF64-binary op basis-adres `base` (positie-
-/// onafhankelijk; gelinkt op vaddr 0). `pages` = grootte van het frame-venster.
+/// Load the PT_LOAD segments of an ELF64 binary at base address `base` (position-
+/// independent; linked at vaddr 0). `pages` = size of the frame window.
 fn load_elf64(elf: &[u8], base: u64, pages: usize) -> Option<LoadInfo> {
     if elf.len() < 64 || &elf[0..4] != b"\x7fELF" || elf[4] != 2 || elf[5] != 1 {
-        return None; // geen 64-bit little-endian ELF
+        return None; // not a 64-bit little-endian ELF
     }
     if rd_u16(elf, 18) != 0x3E {
-        return None; // niet x86-64
+        return None; // not x86-64
     }
     let limit = (pages * 4096) as u64;
     let e_entry = rd_u64(elf, 24);
     let e_phoff = rd_u64(elf, 32) as usize;
     let e_phentsize = rd_u16(elf, 54) as usize;
     let e_phnum = rd_u16(elf, 56) as usize;
-    let mut phdr_vaddr = 0u64; // vaddr van de PHDR-tabel als die in een PT_LOAD valt
-    let mut exec_pages = [0u64; 8]; // W^X: welke pagina's uitvoerbaar zijn (PF_X)
-    let mut writ_pages = [0u64; 8]; // W^X: welke pagina's schrijfbaar zijn (PF_W)
+    let mut phdr_vaddr = 0u64; // vaddr of the PHDR table if it falls in a PT_LOAD
+    let mut exec_pages = [0u64; 8]; // W^X: which pages are executable (PF_X)
+    let mut writ_pages = [0u64; 8]; // W^X: which pages are writable (PF_W)
     for i in 0..e_phnum {
-        // Overloop-veilig (audit H11): een enorme e_phoff/e_phentsize mag de
-        // bound-check niet via wrap-around omzeilen.
+        // Overflow-safe (audit H11): a huge e_phoff/e_phentsize must not bypass the
+        // bound check via wrap-around.
         let ph = match e_phoff.checked_add(i.checked_mul(e_phentsize)?) {
             Some(v) => v,
             None => continue,
@@ -2282,47 +2282,47 @@ fn load_elf64(elf: &[u8], base: u64, pages: usize) -> Option<LoadInfo> {
             continue;
         }
         let p_type = rd_u32(elf, ph);
-        // PT_PHDR (6) geeft de vaddr van de program-header-tabel rechtstreeks.
+        // PT_PHDR (6) gives the vaddr of the program-header table directly.
         if p_type == 6 {
             phdr_vaddr = rd_u64(elf, ph + 16);
         }
         if p_type != 1 {
-            continue; // verder alleen PT_LOAD
+            continue; // beyond this only PT_LOAD
         }
         let p_flags = rd_u32(elf, ph + 4);
         let p_offset = rd_u64(elf, ph + 8) as usize;
         let p_vaddr = rd_u64(elf, ph + 16);
         let p_filesz = rd_u64(elf, ph + 32) as usize;
         let p_memsz = rd_u64(elf, ph + 40) as usize;
-        // Overloop-veilig (audit H11): wrap-around mag de venster-check niet omzeilen.
+        // Overflow-safe (audit H11): wrap-around must not bypass the window check.
         let file_end = p_offset.checked_add(p_filesz)?;
         let mem_end = p_vaddr.checked_add(p_memsz as u64)?;
         if file_end > elf.len() || mem_end > limit {
             return None;
         }
-        // W^X: noteer per pagina of een uitvoerbaar (PF_X = bit 0) en/of schrijfbaar
-        // (PF_W = bit 1) segment hem dekt.
+        // W^X: note per page whether an executable (PF_X = bit 0) and/or writable
+        // (PF_W = bit 1) segment covers it.
         if p_flags & 1 != 0 {
             mark_exec_pages(&mut exec_pages, p_vaddr, p_memsz as u64);
         }
         if p_flags & 2 != 0 {
             mark_exec_pages(&mut writ_pages, p_vaddr, p_memsz as u64);
         }
-        // De PHDR-tabel zit standaard binnen het eerste PT_LOAD (op file-offset
-        // e_phoff). Als er geen PT_PHDR is, leiden we de vaddr daaruit af.
+        // The PHDR table sits by default within the first PT_LOAD (at file offset
+        // e_phoff). If there is no PT_PHDR, we derive the vaddr from it.
         if phdr_vaddr == 0 && p_offset <= e_phoff && e_phoff < p_offset + p_filesz {
             phdr_vaddr = p_vaddr + (e_phoff - p_offset) as u64;
         }
-        // SAFETY: het segment past binnen het toegewezen frame-venster (gecheckt).
+        // SAFETY: the segment fits within the assigned frame window (checked).
         unsafe {
             let dst = (base + p_vaddr) as *mut u8;
             core::ptr::copy_nonoverlapping(elf[p_offset..].as_ptr(), dst, p_filesz);
             if p_memsz > p_filesz {
-                core::ptr::write_bytes(dst.add(p_filesz), 0, p_memsz - p_filesz); // .bss nullen
+                core::ptr::write_bytes(dst.add(p_filesz), 0, p_memsz - p_filesz); // zero .bss
             }
         }
     }
-    // Relocaties toepassen (no-op voor niet-PIE/flat-statische binaries).
+    // Apply relocations (no-op for non-PIE/flat-static binaries).
     apply_relocations(elf, base, limit);
     Some(LoadInfo {
         entry: base + e_entry,
@@ -2335,22 +2335,22 @@ fn load_elf64(elf: &[u8], base: u64, pages: usize) -> Option<LoadInfo> {
     })
 }
 
-/// Laad een programma (ELF of flat) op `base` (venster van `pages` frames).
+/// Load a program (ELF or flat) at `base` (window of `pages` frames).
 fn load_program(program: &[u8], base: u64, pages: usize) -> LoadInfo {
     if program.len() >= 4 && &program[0..4] == b"\x7fELF" {
         if let Some(info) = load_elf64(program, base, pages) {
             return info;
         }
     }
-    // Flat blob (geen ELF): entry = base, geen program-headers. De hele geladen
-    // regio is machinecode → markeer die pagina's uitvoerbaar (W^X).
+    // Flat blob (not ELF): entry = base, no program headers. The entire loaded
+    // region is machine code -> mark those pages executable (W^X).
     let n = program.len().min(pages * 4096);
-    // SAFETY: flat blob, past in het venster.
+    // SAFETY: flat blob, fits in the window.
     unsafe {
         core::ptr::copy_nonoverlapping(program.as_ptr(), base as *mut u8, n);
     }
-    // Flat blob = gemengde code+data (RWX); markeer de geladen regio zowel
-    // uitvoerbaar als schrijfbaar zodat build_address_space hem RWX mapt.
+    // Flat blob = mixed code+data (RWX); mark the loaded region both
+    // executable and writable so build_address_space maps it RWX.
     let mut exec_pages = [0u64; 8];
     let mut writ_pages = [0u64; 8];
     mark_exec_pages(&mut exec_pages, 0, n as u64);
@@ -2358,15 +2358,15 @@ fn load_program(program: &[u8], base: u64, pages: usize) -> LoadInfo {
     LoadInfo { entry: base, phdr: 0, phent: 0, phnum: 0, base, exec_pages, writ_pages }
 }
 
-// ── H3: in-kernel dynamische linker ────────────────────────────────────────
-// Laadt een dynamisch-gelinkte executable + zijn DT_NEEDED-shared-libraries in
-// dezelfde adresruimte en lost de cross-module-symbolen op (R_X86_64_JUMP_SLOT /
-// GLOB_DAT) — zoals een userspace-`ld.so`, maar in de kernel (deterministisch,
-// EuroGuard-bestuurd). Alle tabellen worden uit het GELADEN geheugen (base+vaddr)
-// gelezen; de .so wordt op een eigen sub-offset binnen de 2 MiB-arena geplaatst.
+// ── H3: in-kernel dynamic linker ────────────────────────────────────────
+// Loads a dynamically-linked executable + its DT_NEEDED shared libraries into
+// the same address space and resolves the cross-module symbols (R_X86_64_JUMP_SLOT /
+// GLOB_DAT) — like a userspace `ld.so`, but in the kernel (deterministic,
+// EuroGuard-controlled). All tables are read from the LOADED memory (base+vaddr);
+// the .so is placed at its own sub-offset within the 2 MiB arena.
 
-/// Merge een W^X-bitmap geshift met `page_off` pagina's (voor een module die op een
-/// arena-offset geladen is) in de gecombineerde arena-bitmap.
+/// Merge a W^X bitmap shifted by `page_off` pages (for a module loaded at an
+/// arena offset) into the combined arena bitmap.
 fn merge_shifted(dst: &mut [u64; 8], src: &[u64; 8], page_off: usize) {
     for p in 0..512usize {
         if src[p / 64] & (1u64 << (p % 64)) != 0 {
@@ -2378,7 +2378,7 @@ fn merge_shifted(dst: &mut [u64; 8], src: &[u64; 8], page_off: usize) {
     }
 }
 
-/// Lees een `DT_<want>`-waarde uit de geladen dynamische tabel van een module.
+/// Read a `DT_<want>` value from the loaded dynamic table of a module.
 fn dyn_value(base: u64, elf: &[u8], want: u64) -> Option<u64> {
     let e_phoff = rd_u64(elf, 32) as usize;
     let e_phentsize = rd_u16(elf, 54) as usize;
@@ -2411,7 +2411,7 @@ fn dyn_value(base: u64, elf: &[u8], want: u64) -> Option<u64> {
     None
 }
 
-/// Lees een C-string (max `buf.len()`) op een geladen adres in `buf`; geef de lengte.
+/// Read a C-string (max `buf.len()`) at a loaded address into `buf`; return the length.
 fn read_cstr(addr: u64, buf: &mut [u8]) -> usize {
     let mut n = 0;
     while n + 1 < buf.len() {
@@ -2425,14 +2425,14 @@ fn read_cstr(addr: u64, buf: &mut [u8]) -> usize {
     n
 }
 
-/// Vind een GEËXPORTEERD symbool op naam in een geladen module → `base + st_value`.
-/// Itereert de dynamische symbooltabel (aantal uit DT_HASH's nchain).
+/// Find an EXPORTED symbol by name in a loaded module -> `base + st_value`.
+/// Iterates the dynamic symbol table (count from DT_HASH's nchain).
 fn find_export(base: u64, elf: &[u8], name: &[u8]) -> Option<u64> {
     let symtab = dyn_value(base, elf, 6)?; // DT_SYMTAB
     let strtab = dyn_value(base, elf, 5)?; // DT_STRTAB
-    // Symbool-aantal: uit DT_HASH's nchain als die er is, anders (moderne .so's hebben
-    // alleen GNU_HASH) afgeleid uit (DT_STRTAB − DT_SYMTAB)/DT_SYMENT — de linker legt
-    // `.dynsym` altijd direct vóór `.dynstr`.
+    // Symbol count: from DT_HASH's nchain if present, otherwise (modern .so's have
+    // only GNU_HASH) derived from (DT_STRTAB - DT_SYMTAB)/DT_SYMENT — the linker places
+    // `.dynsym` always directly before `.dynstr`.
     let syment = dyn_value(base, elf, 11).unwrap_or(24); // DT_SYMENT
     let count = if let Some(hash) = dyn_value(base, elf, 4) {
         (unsafe { ((base + hash + 4) as *const u32).read() }) as u64 // DT_HASH nchain
@@ -2447,7 +2447,7 @@ fn find_export(base: u64, elf: &[u8], name: &[u8]) -> Option<u64> {
         let st_name = unsafe { (sym as *const u32).read() } as u64;
         let st_shndx = unsafe { ((sym + 6) as *const u16).read() };
         if st_shndx == 0 {
-            continue; // SHN_UNDEF: niet hier gedefinieerd
+            continue; // SHN_UNDEF: not defined here
         }
         let nl = read_cstr(base + strtab + st_name, &mut nb);
         if &nb[..nl] == name {
@@ -2458,8 +2458,8 @@ fn find_export(base: u64, elf: &[u8], name: &[u8]) -> Option<u64> {
     None
 }
 
-/// Resolve de symbool-relocaties (R_X86_64_JUMP_SLOT + GLOB_DAT) van de exe tegen de
-/// geladen libs: schrijf het echte symbooladres in het GOT-slot. Geeft (resolved,
+/// Resolve the symbol relocations (R_X86_64_JUMP_SLOT + GLOB_DAT) of the exe against the
+/// loaded libs: write the real symbol address into the GOT slot. Returns (resolved,
 /// unresolved).
 fn link_symbol_relocations(exe_base: u64, exe_elf: &[u8], libs: &[(u64, &[u8])]) -> (u32, u32) {
     let (symtab, strtab) = match (dyn_value(exe_base, exe_elf, 6), dyn_value(exe_base, exe_elf, 5)) {
@@ -2485,7 +2485,7 @@ fn link_symbol_relocations(exe_base: u64, exe_elf: &[u8], libs: &[(u64, &[u8])])
             let r_info = unsafe { ((e + 8) as *const u64).read() };
             let rtype = r_info & 0xffff_ffff;
             let sym_idx = r_info >> 32;
-            // 7 = JUMP_SLOT (PLT), 6 = GLOB_DAT (data). Beide: *(GOT) = symbooladres.
+            // 7 = JUMP_SLOT (PLT), 6 = GLOB_DAT (data). Both: *(GOT) = symbol address.
             if (rtype == 7 || rtype == 6) && sym_idx != 0 {
                 let sym = exe_base + symtab + sym_idx * 24;
                 let st_name = unsafe { (sym as *const u32).read() } as u64;
@@ -2503,7 +2503,7 @@ fn link_symbol_relocations(exe_base: u64, exe_elf: &[u8], libs: &[(u64, &[u8])])
                 if !done {
                     unresolved += 1;
                     crate::serial_println!(
-                        "[h3] ONGERESOLVED symbool: {}",
+                        "[h3] UNRESOLVED symbol: {}",
                         core::str::from_utf8(name).unwrap_or("?")
                     );
                 }
@@ -2514,11 +2514,11 @@ fn link_symbol_relocations(exe_base: u64, exe_elf: &[u8], libs: &[(u64, &[u8])])
     (resolved, unresolved)
 }
 
-/// H3-zelftest: laad de dynamisch-gelinkte `dyntest.elf` + `libeuro.so` in één
-/// adresruimte, link ze in-kernel, en draai dyntest in ring 3. dyntest roept
-/// `euro_answer()` aan uit de .so (via PLT/GOT) → "H3: 42" + exit(42). Geeft
+/// H3 self-test: load the dynamically-linked `dyntest.elf` + `libeuro.so` into one
+/// address space, link them in-kernel, and run dyntest in ring 3. dyntest calls
+/// `euro_answer()` from the .so (via PLT/GOT) -> "H3: 42" + exit(42). Returns
 /// (output, exit_code).
-/// De ingebedde dynamisch-gelinkte test-exe + .so (voor populate_fs/zelftests).
+/// The embedded dynamically-linked test exe + .so (for populate_fs/self-tests).
 pub fn dyntest_bytes() -> &'static [u8] {
     DYNTEST_ELF
 }
@@ -2526,8 +2526,8 @@ pub fn libeuro_bytes() -> &'static [u8] {
     LIBEURO_SO
 }
 
-/// Parse de DT_NEEDED-shared-library-namen uit een dynamisch-gelinkte ELF (uit de
-/// FILE-bytes; vertaalt de DT_STRTAB-vaddr naar een file-offset via de PT_LOADs).
+/// Parse the DT_NEEDED shared-library names from a dynamically-linked ELF (from the
+/// FILE bytes; translates the DT_STRTAB vaddr to a file offset via the PT_LOADs).
 pub fn needed_libs(program: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
     if program.len() < 64 || &program[0..4] != b"\x7fELF" {
@@ -2591,9 +2591,9 @@ pub fn needed_libs(program: &[u8]) -> Vec<String> {
     out
 }
 
-/// Laad een dynamisch-gelinkte exe + zijn shared libraries in één adresruimte, link
-/// ze in-kernel (DT_NEEDED → .so laden → JUMP_SLOT/GLOB_DAT resolven), en draai de
-/// exe in ring 3. Geeft (output, exit_code). Tot 2 libs (in de arena vóór de heap).
+/// Load a dynamically-linked exe + its shared libraries into one address space, link
+/// them in-kernel (DT_NEEDED -> load .so -> resolve JUMP_SLOT/GLOB_DAT), and run the
+/// exe in ring 3. Returns (output, exit_code). Up to 2 libs (in the arena before the heap).
 pub fn run_dynamic(
     falloc: &mut FrameAllocator,
     exe: &[u8],
@@ -2616,17 +2616,17 @@ pub fn run_dynamic(
     const MIB2: u64 = 1 << 21;
     let arena = match falloc.allocate_aligned(512, 512) {
         Ok(a) => a,
-        Err(_) => return (String::from("(geen arena)"), u64::MAX),
+        Err(_) => return (String::from("(no arena)"), u64::MAX),
     };
     let code = arena;
     let stack_top = arena + MIB2;
     HEAP_BREAK.store(arena + 0x80000, Ordering::Relaxed);
-    ARENA_BASE.store(arena, Ordering::Relaxed); // audit C1: valideer user-pointers tegen deze arena
+    ARENA_BASE.store(arena, Ordering::Relaxed); // audit C1: validate user pointers against this arena
     HEAP_END.store(arena + 0x180000, Ordering::Relaxed);
 
     let exe_pages = program_span_pages(exe);
     let mut info = load_program(exe, code, exe_pages);
-    // Plaats elke .so op een eigen 128 KiB-venster (0x40000, 0x60000) vóór de heap.
+    // Place each .so in its own 128 KiB window (0x40000, 0x60000) before the heap.
     let mut loaded: Vec<(u64, &[u8])> = Vec::new();
     for (i, lib) in libs.iter().enumerate().take(2) {
         let lib_base = arena + 0x40000 + (i as u64) * 0x20000;
@@ -2640,15 +2640,15 @@ pub fn run_dynamic(
     }
     let (resolved, unresolved) = link_symbol_relocations(code, exe, &loaded);
     crate::serial_println!(
-        "[h3] dynlinker: {} lib(s) geladen, {} symbool-relocatie(s) resolved, {} ongeresolved",
+        "[h3] dynlinker: {} lib(s) loaded, {} symbol relocation(s) resolved, {} unresolved",
         loaded.len(),
         resolved,
         unresolved
     );
 
-    // Kernel-als-ld.so: zet het statische TLS-blok + thread-pointer op (vóór we de
-    // adresruimte bouwen, zodat de TLS-pagina's user-schrijfbaar gemapt worden), en
-    // patch de cross-module TPOFF64-relocaties (IE-TLS) per module.
+    // Kernel-as-ld.so: set up the static TLS block + thread pointer (before we
+    // build the address space, so the TLS pages are mapped user-writable), and
+    // patch the cross-module TPOFF64 relocations (IE-TLS) per module.
     let mut tls_modules: Vec<(u64, &[u8])> = alloc::vec![(code, exe)];
     for (lb, le) in &loaded {
         tls_modules.push((*lb, *le));
@@ -2660,7 +2660,7 @@ pub fn run_dynamic(
         tls_patched += apply_tls_relocs(*mbase, elf, *toff);
     }
     if tls_patched > 0 {
-        crate::serial_println!("[tls] {tls_patched} TPOFF64-relocatie(s) gepatcht (initial-exec)");
+        crate::serial_println!("[tls] {tls_patched} TPOFF64 relocation(s) patched (initial-exec)");
     }
 
     let rsp = unsafe { setup_user_stack(stack_top, argv, &info) };
@@ -2671,12 +2671,12 @@ pub fn run_dynamic(
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
     let boot = crate::sched::boot_pml4();
     unsafe { crate::gdt::set_rsp0(KERNEL_RSP) };
-    // Laad FS_BASE = TP (de musl/IE-TLS-pointer) als het programma TLS gebruikt.
+    // Load FS_BASE = TP (the musl/IE-TLS pointer) if the program uses TLS.
     if let Some(tp) = tls_tp {
         unsafe { Msr::new(0xC000_0100).write(tp) };
     }
     FG_ACTIVE.store(true, Ordering::Relaxed);
-    // SAFETY: zelfde patroon als run_args — terugkeer via sys_exit of force-return.
+    // SAFETY: same pattern as run_args — return via sys_exit or force-return.
     unsafe {
         core::arch::asm!("mov cr3, {}", in(reg) pml4, options(nostack, preserves_flags));
         enter_ring3(user_cs, user_ss, entry, rsp);
@@ -2692,101 +2692,101 @@ pub fn run_dynamic(
     (out, exit_code)
 }
 
-/// H3-zelftest met de ingebedde artefacten: dyntest.elf + libeuro.so.
+/// H3 self-test with the embedded artifacts: dyntest.elf + libeuro.so.
 pub fn dynlink_selftest(falloc: &mut FrameAllocator) -> (String, u64) {
     run_dynamic(falloc, DYNTEST_ELF, &[LIBEURO_SO], &[b"dyntest"], CAP_CONSOLE, true)
 }
 
-/// `[tls]`-zelftest (Sprint 1): draai een vrijstaande PIE met een `__thread`-teller
-/// die GEEN eigen TLS opzet — de kernel-ld.so doet de TLS-setup. tls_value 41→42 →
-/// exit(42) bewijst het statische TLS-blok + FS_BASE.
+/// `[tls]` self-test (Sprint 1): run a standalone PIE with a `__thread` counter
+/// that sets up NO TLS itself — the kernel-ld.so does the TLS setup. tls_value 41->42 ->
+/// exit(42) proves the static TLS block + FS_BASE.
 pub fn tls_selftest(falloc: &mut FrameAllocator) {
     let (_out, code) = run_dynamic(falloc, TLSPROG_ELF, &[], &[b"tlsprog"], CAP_CONSOLE, true);
     crate::serial_println!(
-        "[tls] kernel-ld.so TLS-setup: vrijstaande __thread-PIE (41→42) → exit {} {}",
+        "[tls] kernel-ld.so TLS setup: standalone __thread PIE (41->42) -> exit {} {}",
         code,
-        if code == 42 { "✓ (statisch TLS-blok + FS_BASE door de kernel opgezet)" } else { "✗ FOUT" }
+        if code == 42 { "✓ (static TLS block + FS_BASE set up by the kernel)" } else { "✗ ERROR" }
     );
 }
 
-/// `[tls2]`-zelftest (Sprint 1, stage 1b): CROSS-MODULE TLS — dyntls roept bump()
-/// aan uit libtls.so, die zijn eigen `__thread ctr` via `%fs` (TPOFF64) leest. De
-/// kernel-ld.so zet het multi-module TLS-blok op + patcht de TPOFF64-relocatie.
-/// 41→42 → exit(42) bewijst dynamische cross-module IE-TLS.
+/// `[tls2]` self-test (Sprint 1, stage 1b): CROSS-MODULE TLS — dyntls calls bump()
+/// from libtls.so, which reads its own `__thread ctr` via `%fs` (TPOFF64). The
+/// kernel-ld.so sets up the multi-module TLS block + patches the TPOFF64 relocation.
+/// 41->42 -> exit(42) proves dynamic cross-module IE-TLS.
 pub fn tls_cross_selftest(falloc: &mut FrameAllocator) {
     let (_out, code) = run_dynamic(falloc, DYNTLS_ELF, &[LIBTLS_SO], &[b"dyntls"], CAP_CONSOLE, true);
     crate::serial_println!(
-        "[tls2] cross-module IE-TLS (.so __thread via TPOFF64): bump() 41→42 → exit {} {}",
+        "[tls2] cross-module IE-TLS (.so __thread via TPOFF64): bump() 41->42 -> exit {} {}",
         code,
-        if code == 42 { "✓ (multi-module TLS-blok + TPOFF64-patch door de kernel-ld.so)" } else { "✗ FOUT" }
+        if code == 42 { "✓ (multi-module TLS block + TPOFF64 patch by the kernel-ld.so)" } else { "✗ ERROR" }
     );
 }
 
-/// `[uptr]` — bewijst dat de syscall-laag user-pointers tegen de arena valideert:
-/// een pointer BINNEN de arena slaagt, een vervalste pointer ERBUITEN (kernel-
-/// adres, of een arena-overschrijdende lengte) wordt geweigerd i.p.v. kernel-
-/// geheugen te lezen/schrijven. Stelt tijdelijk een nep-arena in over een echte
-/// stackbuffer en herstelt `ARENA_BASE` daarna.
+/// `[uptr]` — proves that the syscall layer validates user pointers against the arena:
+/// a pointer INSIDE the arena succeeds, a forged pointer OUTSIDE (kernel
+/// address, or a length that overruns the arena) is denied instead of reading/writing
+/// kernel memory. Temporarily sets up a fake arena over a real
+/// stack buffer and restores `ARENA_BASE` afterward.
 pub fn user_ptr_selftest() {
     let mut scratch = [0u8; 64];
     let base = scratch.as_ptr() as u64;
     let prev = ARENA_BASE.load(Ordering::Relaxed);
-    // Nep-arena met `base` als ondergrens. De arena-span is ARENA_SPAN (2 MiB),
-    // dus we raken ALLEEN offset 0 met echte toegang (binnen de 64-B scratch); de
-    // "geweigerd"-gevallen gebruiken adressen ECHT buiten [base, base+ARENA_SPAN),
-    // zodat de check faalt vóór enige dereferentie — geen OOB op de stack.
+    // Fake arena with `base` as the lower bound. The arena span is ARENA_SPAN (2 MiB),
+    // so we touch ONLY offset 0 with real access (within the 64-B scratch); the
+    // "denied" cases use addresses REALLY outside [base, base+ARENA_SPAN),
+    // so the check fails before any dereference — no OOB on the stack.
     ARENA_BASE.store(base, Ordering::Relaxed);
-    let outside = base.wrapping_add(ARENA_SPAN); // == top, valt buiten de arena
+    let outside = base.wrapping_add(ARENA_SPAN); // == top, falls outside the arena
 
-    // 1) Binnen de arena (offset 0): schrijven + teruglezen slaagt.
+    // 1) Inside the arena (offset 0): write + read-back succeeds.
     let inside_ok = copy_to_user(base, b"euro") && {
         let rb: u32 = read_user(base).unwrap_or(0);
         rb == u32::from_le_bytes(*b"euro")
     };
 
-    // 2) Een kernel-adres vlak vóór de arena (base-1) wordt geweigerd.
+    // 2) A kernel address just before the arena (base-1) is denied.
     let below_denied = !in_user_arena(base.wrapping_sub(1), 1)
         && !copy_to_user(base.wrapping_sub(1), b"x")
         && read_user::<u32>(base.wrapping_sub(1)).is_none();
 
-    // 3) Een adres vlak ná de arena (base+ARENA_SPAN) wordt geweigerd; de helpers
-    //    raken het geheugen niet (check faalt eerst).
+    // 3) An address just after the arena (base+ARENA_SPAN) is denied; the helpers
+    //    do not touch the memory (the check fails first).
     let above_denied = !in_user_arena(outside, 1)
         && !copy_to_user(outside, b"x")
         && !write_user(outside, 0xFFu8)
         && copy_from_user(outside, 16).is_none();
 
-    // 4) Een lengte die de arena-bovengrens overschrijdt wordt geweigerd zonder te lezen.
+    // 4) A length that overruns the arena upper bound is denied without reading.
     let span_denied =
         !in_user_arena(base, ARENA_SPAN as usize + 1) && copy_from_user(base, ARENA_SPAN as usize + 1).is_none();
 
-    // 5) user_cstr op een buiten-arena pointer leest niets (lege string).
+    // 5) user_cstr on an out-of-arena pointer reads nothing (empty string).
     let cstr_bounded = user_cstr(outside, 64).is_empty();
 
-    ARENA_BASE.store(prev, Ordering::Relaxed); // arena herstellen
+    ARENA_BASE.store(prev, Ordering::Relaxed); // restore arena
 
     let all = inside_ok && below_denied && above_denied && span_denied && cstr_bounded;
     crate::serial_println!(
-        "[uptr] user-pointer-validatie: binnen={} onder={} boven={} span={} cstr={} -> {}",
+        "[uptr] user-pointer validation: inside={} below={} above={} span={} cstr={} -> {}",
         inside_ok, below_denied, above_denied, span_denied, cstr_bounded,
-        if all { "OK" } else { "FAAL" }
+        if all { "OK" } else { "FAIL" }
     );
 }
 
-/// Bouw een SysV-x86-64 initiële stack: `argc`, `argv[]`, `envp[]`, `auxv[]`,
-/// plus de bijbehorende strings + 16 AT_RANDOM-bytes. Dit is precies het
-/// contract dat een musl/glibc `_start` van de kernel verwacht. `info` levert de
-/// program-header-info voor de auxv. Geeft de (16-uitgelijnde) rsp terug waar
+/// Build a SysV x86-64 initial stack: `argc`, `argv[]`, `envp[]`, `auxv[]`,
+/// plus the associated strings + 16 AT_RANDOM bytes. This is exactly the
+/// contract that a musl/glibc `_start` expects from the kernel. `info` provides the
+/// program-header info for the auxv. Returns the (16-aligned) rsp where
 /// `[rsp]==argc`.
 unsafe fn setup_user_stack(stack_top: u64, argv: &[&[u8]], info: &LoadInfo) -> u64 {
     let mut p = stack_top;
-    // 16 "random" bytes (AT_RANDOM) — musl gebruikt dit voor stack-canary/TLS-guard.
+    // 16 "random" bytes (AT_RANDOM) — musl uses this for stack-canary/TLS-guard.
     p -= 16;
     let random_ptr = p;
     for i in 0..16 {
         (random_ptr as *mut u8).add(i).write(0x5Au8 ^ (i as u8).wrapping_mul(31));
     }
-    // Elke argv-string (NUL-getermineerd) op de stack zetten; pointers bewaren.
+    // Put each argv string (NUL-terminated) on the stack; keep the pointers.
     let mut argptrs: alloc::vec::Vec<u64> = alloc::vec::Vec::with_capacity(argv.len());
     for a in argv {
         p -= a.len() as u64 + 1;
@@ -2797,7 +2797,7 @@ unsafe fn setup_user_stack(stack_top: u64, argv: &[&[u8]], info: &LoadInfo) -> u
         (ptr as *mut u8).add(a.len()).write(0);
         argptrs.push(ptr);
     }
-    // Omgevingsvariabelen (envp) — het systeemmilieu dat elk proces erft.
+    // Environment variables (envp) — the system environment that every process inherits.
     let env = ENV.lock();
     let mut envptrs: alloc::vec::Vec<u64> = alloc::vec::Vec::with_capacity(env.len());
     for e in env.iter() {
@@ -2810,9 +2810,9 @@ unsafe fn setup_user_stack(stack_top: u64, argv: &[&[u8]], info: &LoadInfo) -> u
         (ptr as *mut u8).add(bytes.len()).write(0);
         envptrs.push(ptr);
     }
-    p &= !0xF; // strings-regio 16-uitgelijnd
+    p &= !0xF; // strings region 16-aligned
 
-    // auxv-paren (type, waarde), afgesloten met AT_NULL. Volledige set voor musl:
+    // auxv pairs (type, value), terminated with AT_NULL. Full set for musl:
     //   AT_PHDR=3, AT_PHENT=4, AT_PHNUM=5, AT_PAGESZ=6, AT_BASE=7,
     //   AT_ENTRY=9, AT_RANDOM=25.
     let aux: [(u64, u64); 8] = [
@@ -2820,7 +2820,7 @@ unsafe fn setup_user_stack(stack_top: u64, argv: &[&[u8]], info: &LoadInfo) -> u
         (4, info.phent),
         (5, info.phnum),
         (6, 4096),
-        (7, 0), // geen interpreter (static-PIE)
+        (7, 0), // no interpreter (static-PIE)
         (9, info.entry),
         (25, random_ptr),
         (0, 0), // AT_NULL
@@ -2837,11 +2837,11 @@ unsafe fn setup_user_stack(stack_top: u64, argv: &[&[u8]], info: &LoadInfo) -> u
     for ptr in &argptrs {
         put(*ptr); // argv[i]
     }
-    put(0); // argv-terminator
+    put(0); // argv terminator
     for ptr in &envptrs {
         put(*ptr); // envp[i]
     }
-    put(0); // envp-terminator
+    put(0); // envp terminator
     for (t, v) in aux {
         put(t);
         put(v);
@@ -2849,10 +2849,10 @@ unsafe fn setup_user_stack(stack_top: u64, argv: &[&[u8]], info: &LoadInfo) -> u
     sp
 }
 
-// ── D1a: syscall-profilering (inventarisatie vóór de fijnmazige SMP-locking) ──
-// Per syscall-nummer: aantal + totale tijd (ns), gemeten met de HPET rond de
-// dispatch. Toont waar de kernel-tijd zit — de hot paths die straks per-subsysteem-
-// locks (i.p.v. de globale IF=0-serialisatie) het meest opleveren.
+// ── D1a: syscall profiling (inventory before the fine-grained SMP locking) ──
+// Per syscall number: count + total time (ns), measured with the HPET around the
+// dispatch. Shows where the kernel time goes — the hot paths that per-subsystem
+// locks (instead of the global IF=0 serialization) will benefit most from later.
 const PROF_N: usize = 512;
 static PROF_COUNT: [core::sync::atomic::AtomicU64; PROF_N] = {
     const Z: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -2863,8 +2863,8 @@ static PROF_NS: [core::sync::atomic::AtomicU64; PROF_N] = {
     [Z; PROF_N]
 };
 
-/// RAII-meter: leest de HPET bij entry en boekt de verstreken tijd op exit (elk
-/// `return`-pad). Lichtgewicht; verstoort de syscall-semantiek niet.
+/// RAII meter: reads the HPET on entry and records the elapsed time on exit (every
+/// `return` path). Lightweight; does not disturb the syscall semantics.
 struct SyscallProfile {
     num: usize,
     start: u64,
@@ -2882,41 +2882,41 @@ impl Drop for SyscallProfile {
     }
 }
 
-/// Profielregels: de syscalls gesorteerd op totale tijd (top 12).
+/// Profile lines: the syscalls sorted by total time (top 12).
 pub fn syscall_profile_lines() -> alloc::vec::Vec<alloc::string::String> {
     let mut rows: alloc::vec::Vec<(usize, u64, u64)> = (0..PROF_N)
         .map(|i| (i, PROF_COUNT[i].load(Ordering::Relaxed), PROF_NS[i].load(Ordering::Relaxed)))
         .filter(|&(_, c, _)| c > 0)
         .collect();
-    rows.sort_by(|a, b| b.2.cmp(&a.2)); // op totale tijd
-    let mut out = alloc::vec![alloc::string::String::from("SYSCALL  COUNT      TOTAAL(us)  GEMID(ns)")];
+    rows.sort_by(|a, b| b.2.cmp(&a.2)); // by total time
+    let mut out = alloc::vec![alloc::string::String::from("SYSCALL  COUNT      TOTAL(us)   AVG(ns)")];
     for (num, count, ns) in rows.into_iter().take(12) {
         out.push(alloc::format!("  {num:<5} {count:>8}  {:>9}  {:>9}", ns / 1000, ns / count.max(1)));
     }
     if out.len() == 1 {
-        out.push("  (nog geen syscalls geprofileerd)".into());
+        out.push("  (no syscalls profiled yet)".into());
     }
     out
 }
 
-/// Syscall-dispatcher (ring 0). Geeft de return-waarde in rax.
+/// Syscall dispatcher (ring 0). Returns the return value in rax.
 #[no_mangle]
 pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let _prof = SyscallProfile::start(num);
-    // Komt deze syscall van de gescheduelde achtergrond-daemon? Dan een aparte
-    // dispatcher + uitvoerbuffer (los van de globale voorgrond-staat).
+    // Does this syscall come from the scheduled background daemon? Then a separate
+    // dispatcher + output buffer (independent of the global foreground state).
     let cur = crate::sched::current();
     if cur == DAEMON_TASK.load(Ordering::Relaxed) {
         return daemon_dispatch(num, a1, a2, a3);
     }
-    // Preemptief per-proces (PCB): routeer naar de juiste achtergrond-musl-proces-
-    // staat (eigen heap/uitvoer/pid). Een THREAD deelt de PCB van zijn proces, dus
-    // matchen we op het hoofd-task OF op een van de thread-tasks.
+    // Preemptive per-process (PCB): route to the right background musl process
+    // state (own heap/output/pid). A THREAD shares the PCB of its process, so
+    // we match on the main task OR on one of the thread tasks.
     {
         let mut bg = BG.lock();
         if let Some(pos) = bg.iter().position(|p| p.task == cur || p.threads.contains(&cur)) {
-            // fork/vfork/wait4 MUTEREN de BG-tabel (een kind toevoegen / status
-            // ophalen) en kunnen dus niet onder de p-borrow van bg_dispatch draaien.
+            // fork/vfork/wait4 MUTATE the BG table (add a child / get status)
+            // and therefore cannot run under the p-borrow of bg_dispatch.
             match num {
                 57 | 58 => return do_fork(&mut bg, pos), // fork / vfork
                 61 => {
@@ -2931,27 +2931,27 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
             }
         }
     }
-    // Linux-ABI-compatibiliteit: programma's gecompileerd voor x86_64-linux
-    // gebruiken Linux-syscallnummers + -semantiek. Vertaal naar onze handlers.
+    // Linux-ABI compatibility: programs compiled for x86_64-linux
+    // use Linux syscall numbers + semantics. Translate to our handlers.
     if LINUX_ABI.load(Ordering::Relaxed) {
         return linux_dispatch(num, a1, a2, a3, a4, a5);
     }
-    // Capability-handhaving: weiger syscalls waarvoor het proces geen recht heeft.
+    // Capability enforcement: deny syscalls the process has no right to.
     let need = required_cap(num);
     if need != 0 && !has_cap(need) {
-        crate::serial_println!("[cap] syscall {num} GEWEIGERD — ontbrekende capability");
+        crate::serial_println!("[cap] syscall {num} DENIED — missing capability");
         return u64::MAX; // -EPERM
     }
     match num {
-        60 => 0, // sys_net() — netwerktoegang (vereist CAP_NET; stub die slaagt indien toegestaan)
+        60 => 0, // sys_net() — network access (requires CAP_NET; stub that succeeds if allowed)
         12 => {
-            // sys_sbrk(inc) -> oud break (of -1 bij overschrijding). inc=0 = query.
+            // sys_sbrk(inc) -> old break (or -1 on overrun). inc=0 = query.
             let old = HEAP_BREAK.load(Ordering::Relaxed);
             if a1 == 0 {
                 return old;
             }
-            // Overloop-veilig (audit M7): een enorme `a1` mag de `> HEAP_END`-poort
-            // niet via wrap-around omzeilen.
+            // Overflow-safe (audit M7): a huge `a1` must not bypass the `> HEAP_END`
+            // gate via wrap-around.
             let new = match old.checked_add(a1) {
                 Some(n) => n,
                 None => return u64::MAX,
@@ -2970,34 +2970,34 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
             }
             0
         }
-        2 => 1, // sys_getpid() — eerste userspace-proces = pid 1
+        2 => 1, // sys_getpid() — first userspace process = pid 1
         20 => {
-            // sys_open(path) -> fd (of -1). Pad uit userspace, zoek in de VFS.
+            // sys_open(path) -> fd (or -1). Path from userspace, look up in the VFS.
             let path = user_cstr(a1, 256);
             vfs_open(&path)
         }
         22 => vfs_read(a1 as usize, a2, a3 as usize), // sys_read(fd, buf, len)
         21 => vfs_close(a1 as usize),                 // sys_close(fd)
         4 => {
-            // sys_uname(buf, size) — schrijf de kernelversie in de user-buffer.
+            // sys_uname(buf, size) — write the kernel version into the user buffer.
             let s: &[u8] = b"EuroKernel 0.1-alpha x86_64";
             let cap = (a2 as usize).saturating_sub(1);
             let n = s.len().min(cap);
-            // Valideer buf voor n+1 bytes (data + NUL) vóór het schrijven.
+            // Validate buf for n+1 bytes (data + NUL) before writing.
             if !in_user_arena(a1, n + 1) {
                 return EFAULT;
             }
             let _ = copy_to_user(a1, &s[..n]);
-            let _ = write_user(a1 + n as u64, 0u8); // NUL-terminator
+            let _ = write_user(a1 + n as u64, 0u8); // NUL terminator
             n as u64
         }
         1 => {
-            // sys_write(ptr) — NUL-getermineerde string uit userspace (arena-veilig).
+            // sys_write(ptr) — NUL-terminated string from userspace (arena-safe).
             let bytes = user_cstr(a1, 4096);
             let len = bytes.len();
             if let Ok(text) = core::str::from_utf8(&bytes) {
                 OUTPUT.lock().push_str(text);
-                serial_print!("[ring3→sys_write] {text}\n");
+                serial_print!("[ring3->sys_write] {text}\n");
             }
             len as u64
         }
@@ -3005,14 +3005,14 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
     }
 }
 
-/// Linux x86-64 syscall-ABI → onze handlers. Linux-semantiek (bv. write/read
-/// nemen (fd, buf, count); exit-nummer is 60). Minimale set voor eerste binaries.
-/// De capability die een LINUX-syscall vereist (0 = altijd toegestaan). Zo geldt
-/// least-privilege ook voor de Linux-ABI: een musl-proces zonder CAP_FILE kan
-/// geen bestanden openen, precies zoals onze native programma's.
+/// Linux x86-64 syscall ABI -> our handlers. Linux semantics (e.g. write/read
+/// take (fd, buf, count); the exit number is 60). Minimal set for first binaries.
+/// The capability a LINUX syscall requires (0 = always allowed). This way
+/// least-privilege also applies to the Linux ABI: a musl process without CAP_FILE
+/// cannot open files, exactly like our native programs.
 fn linux_required_cap(num: u64, a1: u64) -> u64 {
-    // I/O op een socket-fd (read/write/close) valt onder CAP_NET — niet onder
-    // CAP_FILE/CAP_CONSOLE. Zo heeft een netwerkprogramma genoeg aan CAP_NET.
+    // I/O on a socket fd (read/write/close) falls under CAP_NET — not under
+    // CAP_FILE/CAP_CONSOLE. This way a network program only needs CAP_NET.
     if crate::net::is_sock_fd(a1) && matches!(num, 0 | 1 | 3) {
         return CAP_NET;
     }
@@ -3021,42 +3021,42 @@ fn linux_required_cap(num: u64, a1: u64) -> u64 {
         0 | 2 | 3 | 5 | 8 | 19 | 89 | 217 | 257 | 262 | 267 => CAP_FILE, // read/open/close/(f)stat/lseek/readv/readlink/getdents64/openat
         41 | 42 | 44 | 45 => CAP_NET,           // socket/connect/sendto/recvfrom
         39 => CAP_PROC_INFO,                    // getpid
-        _ => 0, // geheugen-/procesbeheer (mmap, brk, arch_prctl, exit, …) vrij
+        _ => 0, // memory/process management (mmap, brk, arch_prctl, exit, …) free
     }
 }
 
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
-    let _ = a4; // niet elke syscall gebruikt arg4/arg5 (r10/r8)
-    // Capability-handhaving ook in de Linux-ABI: weiger zonder het juiste recht.
+    let _ = a4; // not every syscall uses arg4/arg5 (r10/r8)
+    // Capability enforcement also in the Linux ABI: deny without the proper right.
     let need = linux_required_cap(num, a1);
     if need != 0 && !has_cap(need) {
-        crate::serial_println!("[cap] Linux-syscall {num} GEWEIGERD — ontbrekende capability");
+        crate::serial_println!("[cap] Linux syscall {num} DENIED — missing capability");
         return (-1i64) as u64; // -EPERM
     }
     match num {
         1 => {
-            // write(fd, buf, count) — count bytes (NIET NUL-getermineerd).
+            // write(fd, buf, count) — count bytes (NOT NUL-terminated).
             if a1 == 1 || a1 == 2 {
                 let bytes = match copy_from_user(a2, a3 as usize) {
                     Some(v) => v,
                     None => return EFAULT,
                 };
                 if let Some(fi) = *STDOUT_REDIRECT.lock() {
-                    redirect_append(fi, &bytes); // shell-redirectie: stdout -> bestand
+                    redirect_append(fi, &bytes); // shell redirection: stdout -> file
                 } else if let Ok(t) = core::str::from_utf8(&bytes) {
                     OUTPUT.lock().push_str(t);
                     serial_print!("[linux-abi] {t}");
                 }
                 a3
             } else if crate::net::is_sock_fd(a1) {
-                // write() naar een socket = send().
+                // write() to a socket = send().
                 let bytes = match copy_from_user(a2, a3 as usize) {
                     Some(v) => v,
                     None => return EFAULT,
                 };
                 crate::net::sock_send(a1, &bytes)
             } else {
-                // Schrijven naar een geopend VFS-bestand (fd >= 3).
+                // Write to an opened VFS file (fd >= 3).
                 vfs_write(a1 as usize, a2, a3 as usize)
             }
         }
@@ -3070,7 +3070,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             0
         }
         12 => {
-            // brk(addr) — Linux-semantiek: zet break, geef NIEUWE break terug.
+            // brk(addr) — Linux semantics: set break, return the NEW break.
             let cur = HEAP_BREAK.load(Ordering::Relaxed);
             if a1 == 0 || a1 > HEAP_END.load(Ordering::Relaxed) {
                 return cur;
@@ -3079,8 +3079,8 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             a1
         }
         9 => {
-            // mmap(addr, len, prot, flags, fd, off) — alleen anonieme allocaties:
-            // bump uit het heap-venster, page-uitgelijnd. Genoeg voor musl TLS/malloc.
+            // mmap(addr, len, prot, flags, fd, off) — anonymous allocations only:
+            // bump from the heap window, page-aligned. Enough for musl TLS/malloc.
             let len = (a2 + 0xFFF) & !0xFFF;
             let base = (HEAP_BREAK.load(Ordering::Relaxed) + 0xFFF) & !0xFFF;
             if base + len > HEAP_END.load(Ordering::Relaxed) {
@@ -3090,9 +3090,9 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             crate::serial_println!("[linux-abi] mmap({len} bytes) -> {base:#x}");
             base
         }
-        11 => 0, // munmap — bump-allocator geeft niet terug, maar slaagt stil
+        11 => 0, // munmap — the bump allocator does not give back, but silently succeeds
         158 => {
-            // arch_prctl(code, addr): ARCH_SET_FS=0x1002 zet FS_BASE (musl TLS).
+            // arch_prctl(code, addr): ARCH_SET_FS=0x1002 sets FS_BASE (musl TLS).
             match a1 {
                 0x1002 => {
                     unsafe { Msr::new(0xC000_0100).write(a2) }; // IA32_FS_BASE
@@ -3107,11 +3107,11 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             }
         }
         20 => {
-            // writev(fd, iov, iovcnt): array van {base,len}; tel geschreven bytes.
-            // fd 1/2 -> console; fd >= 3 -> schrijf naar het VFS-bestand (musl-stdio).
+            // writev(fd, iov, iovcnt): array of {base,len}; count written bytes.
+            // fd 1/2 -> console; fd >= 3 -> write to the VFS file (musl stdio).
             let to_file = a1 != 1 && a1 != 2;
             if a3 > 1024 {
-                return (-22i64) as u64; // -EINVAL: begrens iovcnt
+                return (-22i64) as u64; // -EINVAL: bound iovcnt
             }
             let mut written = 0u64;
             for i in 0..a3 {
@@ -3128,7 +3128,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     continue;
                 }
                 if to_file {
-                    let n = vfs_write(a1 as usize, base, len); // vfs_write valideert base
+                    let n = vfs_write(a1 as usize, base, len); // vfs_write validates base
                     if n == u64::MAX {
                         return if written > 0 { written } else { (-9i64) as u64 };
                     }
@@ -3139,7 +3139,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                         None => return EFAULT,
                     };
                     if let Some(fi) = *STDOUT_REDIRECT.lock() {
-                        redirect_append(fi, &bytes); // shell-redirectie: stdout -> bestand
+                        redirect_append(fi, &bytes); // shell redirection: stdout -> file
                     } else if let Ok(t) = core::str::from_utf8(&bytes) {
                         OUTPUT.lock().push_str(t);
                         serial_print!("[linux-abi] {t}");
@@ -3150,7 +3150,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             written
         }
         0 => {
-            // read(fd, buf, count): fd 0 = standaardinvoer (pipe), socket, of VFS.
+            // read(fd, buf, count): fd 0 = standard input (pipe), socket, or VFS.
             if a1 == 0 {
                 stdin_read(a2, a3 as usize)
             } else if crate::net::is_sock_fd(a1) {
@@ -3164,10 +3164,10 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             }
         }
         19 => {
-            // readv(fd, iov, iovcnt): lees in elke iovec-buffer; tel bytes (musl-stdio).
+            // readv(fd, iov, iovcnt): read into each iovec buffer; count bytes (musl stdio).
             let fd = a1 as usize;
             if a3 > 1024 {
-                return (-22i64) as u64; // -EINVAL: begrens iovcnt
+                return (-22i64) as u64; // -EINVAL: bound iovcnt
             }
             let mut total = 0u64;
             for i in 0..a3 {
@@ -3189,13 +3189,13 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 }
                 total += n;
                 if (n as usize) < len {
-                    break; // korte read = EOF/eind van bestand
+                    break; // short read = EOF/end of file
                 }
             }
             total
         }
         3 => {
-            // close(fd): socket of VFS-bestand.
+            // close(fd): socket or VFS file.
             if crate::net::is_sock_fd(a1) {
                 crate::net::sock_close(a1)
             } else {
@@ -3204,8 +3204,8 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         }
         41 => {
             // socket(domain, type, protocol): AF_INET (2) + SOCK_STREAM (1, TCP)
-            // of SOCK_DGRAM (2, UDP).
-            let typ = a2 & 0xff; // negeer SOCK_CLOEXEC/NONBLOCK-vlaggen
+            // or SOCK_DGRAM (2, UDP).
+            let typ = a2 & 0xff; // ignore SOCK_CLOEXEC/NONBLOCK flags
             match (a1, typ) {
                 (2, 1) => crate::net::sock_open(false), // TCP
                 (2, 2) => crate::net::sock_open(true),  // UDP
@@ -3217,7 +3217,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             if a3 < 8 {
                 return (-1i64) as u64;
             }
-            // Lees de 8-byte sockaddr arena-veilig (port @2..4, addr @4..8).
+            // Read the 8-byte sockaddr arena-safe (port @2..4, addr @4..8).
             let sa = match copy_from_user(a2, 8) {
                 Some(v) => v,
                 None => return EFAULT,
@@ -3226,7 +3226,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             crate::net::sock_connect(a1, euronet::ipv4::Ipv4Addr([sa[4], sa[5], sa[6], sa[7]]), port)
         }
         44 => {
-            // sendto(fd, buf, len, flags, dest, destlen): verbonden TCP → negeer dest.
+            // sendto(fd, buf, len, flags, dest, destlen): connected TCP -> ignore dest.
             let bytes = match copy_from_user(a2, a3 as usize) {
                 Some(v) => v,
                 None => return EFAULT,
@@ -3243,11 +3243,11 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         }
         8 => vfs_lseek(a1 as usize, a2 as i64, a3),  // lseek(fd, offset, whence)
         257 => {
-            // openat(dirfd, path, flags, mode): negeer dirfd (AT_FDCWD). flags in a3.
-            // O_CREAT=0x40 maakt aan; O_TRUNC=0x200 kapt af; O_APPEND=0x400 -> aan 't eind.
+            // openat(dirfd, path, flags, mode): ignore dirfd (AT_FDCWD). flags in a3.
+            // O_CREAT=0x40 creates; O_TRUNC=0x200 truncates; O_APPEND=0x400 -> at the end.
             let path = user_cstr(a2, 256);
             let flags = a3;
-            // Een map openen (geen O_CREAT) -> dir-fd voor getdents64.
+            // Opening a directory (no O_CREAT) -> dir fd for getdents64.
             if flags & 0x40 == 0 && is_vfs_dir(&path) {
                 return diropen(&path);
             }
@@ -3257,7 +3257,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 vfs_open(&path)
             };
             if fd != u64::MAX && flags & 0x400 != 0 {
-                // O_APPEND: zet de schrijfpositie op het eind van het bestand.
+                // O_APPEND: set the write position to the end of the file.
                 if let Some(sz) = vfs_size(fd as usize) {
                     let mut fds = OPEN_FDS.lock();
                     if let Some((fi, _)) = fds[fd as usize] {
@@ -3268,7 +3268,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             fd
         }
         2 => {
-            // open(path, flags, mode) — oudere libc-variant (flags in a2).
+            // open(path, flags, mode) — older libc variant (flags in a2).
             let path = user_cstr(a1, 256);
             if a2 & 0x40 == 0 && is_vfs_dir(&path) {
                 return diropen(&path);
@@ -3281,9 +3281,9 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         }
         5 | 262 => {
             // fstat(fd, statbuf) / newfstatat(dirfd, path, statbuf, flags):
-            // vul een Linux struct stat (144 B) zodat musl het als regulier
-            // bestand met de juiste grootte ziet (anders weigert stdio te bufferen).
-            // fstat op een open dir-fd -> meld een MAP (S_IFDIR), niet -EBADF.
+            // fill a Linux struct stat (144 B) so musl sees it as a regular
+            // file with the correct size (otherwise stdio refuses to buffer).
+            // fstat on an open dir fd -> report a DIRECTORY (S_IFDIR), not -EBADF.
             if num == 5 && (a1 as usize) < MAX_FD && OPEN_DIRS.lock()[a1 as usize].is_some() {
                 if !in_user_arena(a2, 144) {
                     return EFAULT;
@@ -3296,13 +3296,13 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 return 0;
             }
             let (fd_ok, statbuf) = if num == 5 {
-                // fd 0 = standaardinvoer (pipe): rapporteer de buffergrootte.
+                // fd 0 = standard input (pipe): report the buffer size.
                 let sz = if a1 == 0 { Some(stdin_len()) } else { vfs_size(a1 as usize) };
                 (sz, a2)
             } else {
-                // newfstatat: pad in a2, statbuf in a3.
+                // newfstatat: path in a2, statbuf in a3.
                 let path = user_cstr(a2, 256);
-                ensure_proc(&path); // /proc op aanvraag synthetiseren
+                ensure_proc(&path); // synthesize /proc on demand
                 let files = FILES.lock();
                 let sz = files
                     .iter()
@@ -3317,7 +3317,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             if !in_user_arena(statbuf, 144) {
                 return EFAULT;
             }
-            // SAFETY: statbuf-regio (144 B) arena-gevalideerd; identity-mapped.
+            // SAFETY: statbuf region (144 B) arena-validated; identity-mapped.
             unsafe {
                 core::ptr::write_bytes(statbuf as *mut u8, 0, 144);
                 (statbuf as *mut u32).add(6).write(0o100644); // st_mode (offset 24): S_IFREG|0644
@@ -3327,9 +3327,9 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             0
         }
         89 | 267 => {
-            // readlink(path, buf, sz) / readlinkat(dirfd, path, buf, sz): de enige
-            // "symlinks" zijn de /proc/self-pseudolinks. /proc/self/exe -> het pad van
-            // het lopende programma (Python/Go/Node zoeken zo hun eigen binary).
+            // readlink(path, buf, sz) / readlinkat(dirfd, path, buf, sz): the only
+            // "symlinks" are the /proc/self pseudo-links. /proc/self/exe -> the path of
+            // the running program (Python/Go/Node find their own binary this way).
             let (pathptr, bufptr, sz) =
                 if num == 89 { (a1, a2, a3 as usize) } else { (a2, a3, a4 as usize) };
             let path = user_cstr(pathptr, 256);
@@ -3347,20 +3347,20 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     n as u64
                 }
                 Some(_) => 0,
-                None => (-22i64) as u64, // -EINVAL: geen symlink
+                None => (-22i64) as u64, // -EINVAL: not a symlink
             }
         }
         217 => vfs_getdents64(a1 as usize, a2, a3 as usize), // getdents64(fd, dirp, count)
-        16 => 0,  // ioctl — pretend succes (isatty/TCGETS): stdout is een tty
-        10 => 0,  // mprotect — sta toe (musl maakt zijn RELRO read-only); no-op
-        13 => 0,  // rt_sigaction — geen signalen; doe alsof het lukt
+        16 => 0,  // ioctl — pretend success (isatty/TCGETS): stdout is a tty
+        10 => 0,  // mprotect — allow (musl makes its RELRO read-only); no-op
+        13 => 0,  // rt_sigaction — no signals; pretend it succeeds
         14 => 0,  // rt_sigprocmask
         218 => 1, // set_tid_address -> tid
         273 => 0, // set_robust_list
-        202 => 0, // futex — geen contention in single-thread; succes
+        202 => 0, // futex — no contention in single-thread; success
         228 => {
-            // clock_gettime(clk, *timespec): CLOCK_REALTIME(0)/CLOCK_TAI(11) geven de
-            // ECHTE wandklok (RTC-epoch); CLOCK_MONOTONIC(1)/BOOTTIME(7) de uptime.
+            // clock_gettime(clk, *timespec): CLOCK_REALTIME(0)/CLOCK_TAI(11) give the
+            // REAL wall clock (RTC epoch); CLOCK_MONOTONIC(1)/BOOTTIME(7) the uptime.
             if a2 != 0 {
                 let (sec, nsec) = if a1 == 0 || a1 == 11 {
                     (crate::rtc::epoch(), 0)
@@ -3375,7 +3375,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             0
         }
         96 => {
-            // gettimeofday(*timeval, tz): {tv_sec, tv_usec} uit de echte RTC-wandklok.
+            // gettimeofday(*timeval, tz): {tv_sec, tv_usec} from the real RTC wall clock.
             if a1 != 0 {
                 if !write_user(a1, crate::rtc::epoch()) || !write_user(a1 + 8, 0u64) {
                     return EFAULT;
@@ -3384,9 +3384,9 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             0
         }
         63 => {
-            // uname(*utsname): 6 velden van 65 bytes. We spiegelen een Linux-kernel
-            // (sysname "Linux", machine "x86_64") zodat ongewijzigde Linux-binaries
-            // die de kernelversie inspecteren tevreden zijn — release noemt EuroOS.
+            // uname(*utsname): 6 fields of 65 bytes. We mirror a Linux kernel
+            // (sysname "Linux", machine "x86_64") so unmodified Linux binaries
+            // that inspect the kernel version are satisfied — release says EuroOS.
             if a1 != 0 {
                 let fields: [&[u8]; 6] =
                     [b"Linux", b"euroos", b"6.6.0-euroos", b"#1 EuroOS SMP", b"x86_64", b""];
@@ -3404,12 +3404,12 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             }
             0
         }
-        102 | 107 => crate::auth::session_uid() as u64, // getuid/geteuid -> sessie-uid
-        104 | 108 => crate::auth::session_gid() as u64, // getgid/getegid -> sessie-gid
-        24 => 0,                    // sched_yield — single-thread voorgrond: no-op
-        72 => 0,                    // fcntl — F_GETFL/F_SETFL/F_SETFD: doe alsof het lukt
+        102 | 107 => crate::auth::session_uid() as u64, // getuid/geteuid -> session uid
+        104 | 108 => crate::auth::session_gid() as u64, // getgid/getegid -> session gid
+        24 => 0,                    // sched_yield — single-thread foreground: no-op
+        72 => 0,                    // fcntl — F_GETFL/F_SETFL/F_SETFD: pretend it succeeds
         79 => {
-            // getcwd(buf, size): EuroOS-voorgrondproces draait in "/".
+            // getcwd(buf, size): EuroOS foreground process runs in "/".
             if a1 != 0 && a2 >= 2 {
                 if !copy_to_user(a1, b"/\0") {
                     return EFAULT;
@@ -3419,18 +3419,18 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 (-34i64) as u64 // -ERANGE
             }
         }
-        97 | 302 => 0, // getrlimit / prlimit64 — onbeperkt; succes
-        334 => (-38i64) as u64, // rseq — niet ondersteund; glibc valt netjes terug
+        97 | 302 => 0, // getrlimit / prlimit64 — unlimited; success
+        334 => (-38i64) as u64, // rseq — not supported; glibc falls back gracefully
         21 | 269 => {
-            // access(path, mode) / faccessat(dirfd, path, mode): 0 als 't bestaat.
+            // access(path, mode) / faccessat(dirfd, path, mode): 0 if it exists.
             let pathptr = if num == 21 { a1 } else { a2 };
             let path = user_cstr(pathptr, 256);
-            ensure_proc(&path); // /proc op aanvraag synthetiseren
+            ensure_proc(&path); // synthesize /proc on demand
             let exists = FILES.lock().iter().any(|(p, _)| p.as_bytes() == path.as_slice());
             if exists { 0 } else { (-2i64) as u64 } // -ENOENT
         }
         99 => {
-            // sysinfo(*info): vul uptime + ram zodat tools als `uptime`/`free` werken.
+            // sysinfo(*info): fill uptime + ram so tools like `uptime`/`free` work.
             if a1 != 0 {
                 let up = crate::interrupts::ticks() / 100;
                 if !in_user_arena(a1, 112) {
@@ -3438,7 +3438,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 }
                 unsafe {
                     core::ptr::write_bytes(a1 as *mut u8, 0, 112);
-                    (a1 as *mut i64).write(up as i64); // uptime (seconden)
+                    (a1 as *mut i64).write(up as i64); // uptime (seconds)
                     ((a1 + 24) as *mut u64).write(256 * 1024 * 1024); // totalram
                     ((a1 + 32) as *mut u64).write(128 * 1024 * 1024); // freeram
                     ((a1 + 104) as *mut u32).write(1); // mem_unit
@@ -3447,11 +3447,11 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             0
         }
         332 => {
-            // statx(dirfd, path, flags, mask, *statxbuf): moderne glibc-stat. statxbuf
-            // is arg5 (a5). Vul stx_mask/blksize/nlink/mode/size voor een regulier
-            // bestand zodat glibc-stdio het bestand correct ziet.
+            // statx(dirfd, path, flags, mask, *statxbuf): modern glibc stat. statxbuf
+            // is arg5 (a5). Fill stx_mask/blksize/nlink/mode/size for a regular
+            // file so glibc stdio sees the file correctly.
             let path = user_cstr(a2, 256);
-            ensure_proc(&path); // /proc op aanvraag synthetiseren
+            ensure_proc(&path); // synthesize /proc on demand
             let sz = FILES
                 .lock()
                 .iter()
@@ -3477,8 +3477,8 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             }
         }
         318 => {
-            // getrandom(buf, len, flags): pseudo-willekeur (deterministisch maar
-            // gevuld) — genoeg voor musl-init; geen crypto-bron.
+            // getrandom(buf, len, flags): pseudo-randomness (deterministic but
+            // filled) — enough for musl init; no crypto source.
             if !in_user_arena(a1, a2 as usize) {
                 return EFAULT;
             }
@@ -3490,23 +3490,23 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         35 => 0,  // nanosleep
         234 => 0, // tgkill
         _ => {
-            crate::serial_println!("[linux-abi] ENOSYS Linux-syscall {num}");
-            (-38i64) as u64 // -ENOSYS (Linux-conventie: negatieve errno)
+            crate::serial_println!("[linux-abi] ENOSYS Linux syscall {num}");
+            (-38i64) as u64 // -ENOSYS (Linux convention: negative errno)
         }
     }
 }
 
-/// Status van de hardware-bescherming, voor `shell`/diagnostiek.
+/// Status of the hardware protection, for `shell`/diagnostics.
 static SMEP_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static SMAP_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static NX_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static SMAP_LOGGED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
-/// Zet SMEP + SMAP **aan** (mits de CPU ze ondersteunt — anders zou `Cr4::write`
-/// een #GP geven). SMEP belet ring 0 ooit een user-pagina (U=1) uit te voeren;
-/// SMAP belet ring 0 user-pagina's te lezen/schrijven, behalve binnen een
-/// expliciet, kortstondig AC-venster (zie de syscall-entry). Dit vervangt de
-/// vroegere globale *uitschakeling* tijdens proces-setup. Idempotent.
+/// Turn SMEP + SMAP **on** (provided the CPU supports them — otherwise `Cr4::write`
+/// would raise a #GP). SMEP prevents ring 0 from ever executing a user page (U=1);
+/// SMAP prevents ring 0 from reading/writing user pages, except within an
+/// explicit, brief AC window (see the syscall entry). This replaces the
+/// former global *disabling* during process setup. Idempotent.
 pub fn enable_smep_smap() {
     // CPUID.(EAX=7,ECX=0):EBX  bit 7 = SMEP, bit 20 = SMAP.
     let leaf7 = unsafe { core::arch::x86_64::__cpuid_count(7, 0) };
@@ -3526,37 +3526,37 @@ pub fn enable_smep_smap() {
     SMAP_ON.store(smap, Ordering::Relaxed);
     if !SMAP_LOGGED.swap(true, Ordering::Relaxed) {
         crate::serial_println!(
-            "[sec] SMEP {} · SMAP {} (CR4; ring 0 kan user-pagina's niet meer {}, behalve in een kort syscall-venster)",
-            if smep { "AAN" } else { "n/b" },
-            if smap { "AAN" } else { "n/b" },
-            if smep && smap { "uitvoeren/aanraken" } else if smap { "aanraken" } else { "uitvoeren" },
+            "[sec] SMEP {} · SMAP {} (CR4; ring 0 can no longer {} user pages, except in a short syscall window)",
+            if smep { "ON" } else { "n/a" },
+            if smap { "ON" } else { "n/a" },
+            if smep && smap { "execute/touch" } else if smap { "touch" } else { "execute" },
         );
     }
 }
 
-/// Of SMAP nu actief afdwingt (voor de `hardening`-shell-regel).
+/// Whether SMAP is now actively enforcing (for the `hardening` shell line).
 pub fn smap_active() -> bool {
     SMAP_ON.load(Ordering::Relaxed)
 }
 
-/// Of SMEP nu actief afdwingt.
+/// Whether SMEP is now actively enforcing.
 pub fn smep_active() -> bool {
     SMEP_ON.load(Ordering::Relaxed)
 }
 
-/// Of NX (No-Execute / W^X) nu actief afdwingt.
+/// Whether NX (No-Execute / W^X) is now actively enforcing.
 pub fn nx_active() -> bool {
     NX_ON.load(Ordering::Relaxed)
 }
 
 fn init_syscall_msrs() {
-    enable_smep_smap(); // hardware-bescherming AAN vóór elke ring-3-excursie (idempotent)
+    enable_smep_smap(); // hardware protection ON before every ring-3 excursion (idempotent)
     let sel = crate::gdt::selectors();
     let kcode = sel.code.0 as u64;
     let kdata = sel.data.0 as u64;
-    // NX (No-Execute) inschakelen mits de CPU het ondersteunt — CPUID.80000001h:EDX
-    // bit 20. Zonder NXE heeft de NX-bit (bit 63) in een PTE geen effect; mét NXE
-    // dwingt hij W^X af (data/stack/heap niet uitvoerbaar). Idempotent.
+    // Enable NX (No-Execute) provided the CPU supports it — CPUID.80000001h:EDX
+    // bit 20. Without NXE the NX bit (bit 63) in a PTE has no effect; with NXE
+    // it enforces W^X (data/stack/heap not executable). Idempotent.
     let nx = {
         let r = unsafe { core::arch::x86_64::__cpuid(0x8000_0001) };
         r.edx & (1 << 20) != 0
@@ -3569,21 +3569,21 @@ fn init_syscall_msrs() {
         efer.write(v | 1 | nxe); // EFER.SCE (+ NXE)
         Msr::new(0xC000_0081).write((kdata << 48) | (kcode << 32)); // STAR
         Msr::new(0xC000_0082).write(syscall_entry as usize as u64); // LSTAR
-        Msr::new(0xC000_0084).write(0x200); // FMASK: IF wissen bij entry
-        // Kernel-stack voor de syscall-handler.
+        Msr::new(0xC000_0084).write(0x200); // FMASK: clear IF on entry
+        // Kernel stack for the syscall handler.
         let top = (core::ptr::addr_of!(KSTACK) as u64 + KSTACK_SIZE as u64) & !0xF;
         KERNEL_RSP = top;
     }
 }
 
-/// Laad `program` in een User-frame, draai het in ring 3, en geef
-/// `(exit_code, uitvoer)` terug zodra het `sys_exit` doet.
+/// Load `program` into a User frame, run it in ring 3, and return
+/// `(exit_code, output)` once it does `sys_exit`.
 pub fn run(falloc: &mut FrameAllocator, program: &[u8], caps: u64, linux_abi: bool) -> (u64, String) {
     run_args(falloc, program, &[b"prog"], caps, linux_abi)
 }
 
-/// Zoals [`run`], maar met een expliciete programma-naam die als `argv[0]` op de
-/// SysV-stack komt te staan.
+/// Like [`run`], but with an explicit program name that ends up as `argv[0]` on the
+/// SysV stack.
 pub fn run_named(
     falloc: &mut FrameAllocator,
     program: &[u8],
@@ -3594,9 +3594,9 @@ pub fn run_named(
     run_args(falloc, program, &[name], caps, linux_abi)
 }
 
-/// Zoals [`run_named`], maar met een volledige `argv` (argv[0] = pad, argv[1..] =
-/// argumenten). De kernel zet deze op de SysV-stack; het programma leest ze via
-/// het standaard `main(argc, argv)`-contract.
+/// Like [`run_named`], but with a full `argv` (argv[0] = path, argv[1..] =
+/// arguments). The kernel places these on the SysV stack; the program reads them via
+/// the standard `main(argc, argv)` contract.
 pub fn run_args(
     falloc: &mut FrameAllocator,
     program: &[u8],
@@ -3605,9 +3605,9 @@ pub fn run_args(
     linux_abi: bool,
 ) -> (u64, String) {
     init_syscall_msrs();
-    CURRENT_CAPS.store(caps, Ordering::Relaxed); // de rechten van DIT proces
-    LINUX_ABI.store(linux_abi, Ordering::Relaxed); // Linux- of native-ABI
-    // App-identiteit (argv[0]) vastleggen voor EuroGuard (Track 7).
+    CURRENT_CAPS.store(caps, Ordering::Relaxed); // the rights of THIS process
+    LINUX_ABI.store(linux_abi, Ordering::Relaxed); // Linux or native ABI
+    // Record the app identity (argv[0]) for EuroGuard (Track 7).
     *CURRENT_APP.lock() = argv
         .first()
         .map(|a| String::from_utf8_lossy(a).into_owned())
@@ -3617,24 +3617,24 @@ pub fn run_args(
         EXIT_CODE = 0;
     }
     OUTPUT.lock().clear();
-    reset_fd_table(); // verse per-proces fd-tabel
+    reset_fd_table(); // fresh per-process fd table
 
-    // GEÏSOLEERDE adresruimte per voorgrond-exec: alle user-frames in één
-    // 2 MiB-arena, alleen die krijgt de USER-bit. Zo kan een voorgrondprogramma
-    // (ook ongesigneerde/buggy code) geen kernelgeheugen meer lezen/schrijven.
+    // ISOLATED address space per foreground exec: all user frames in one
+    // 2 MiB arena, only that one gets the USER bit. This way a foreground program
+    // (even unsigned/buggy code) can no longer read/write kernel memory.
     const MIB2: u64 = 1 << 21;
-    // Exact 2 MiB, 2 MiB-uitgelijnd (geen 4 MiB-over-allocatie); we geven hieronder
-    // precies deze 512 frames weer vrij na de synchrone exec.
+    // Exactly 2 MiB, 2 MiB-aligned (no 4 MiB over-allocation); below we free
+    // exactly these 512 frames again after the synchronous exec.
     let arena = falloc.allocate_aligned(512, 512).expect("fg-arena");
     let arena_raw = arena;
     let code = arena;
     let heap = arena + 0x80000; // +512 KiB
-    let stack_top = arena + MIB2; // user-stack groeit omlaag vanaf de arena-top
+    let stack_top = arena + MIB2; // user stack grows downward from the arena top
     HEAP_BREAK.store(heap, Ordering::Relaxed);
     ARENA_BASE.store(arena, Ordering::Relaxed); // audit C1
     HEAP_END.store(arena + 0x180000, Ordering::Relaxed); // ~1 MiB heap
 
-    // Laad het programma in de arena (CR3 nog boot: arena is daar schrijfbaar).
+    // Load the program into the arena (CR3 still boot: the arena is writable there).
     let pages = program_span_pages(program);
     let info = load_program(program, code, pages);
     let rsp = unsafe { setup_user_stack(stack_top, argv, &info) };
@@ -3644,16 +3644,16 @@ pub fn run_args(
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
 
-    // Bouw de eigen W^X-PML4 en wissel ernaartoe vlak vóór de ring-3-excursie.
+    // Build the own W^X PML4 and switch to it just before the ring-3 excursion.
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
     let boot = crate::sched::boot_pml4();
-    // Kernel-stack voor een eventuele fault vanuit dit voorgrondproces.
+    // Kernel stack for a possible fault from this foreground process.
     unsafe { crate::gdt::set_rsp0(KERNEL_RSP) };
     FG_ACTIVE.store(true, Ordering::Relaxed);
 
-    // SAFETY: paging/MSR/GDT zijn opgezet. We komen terug via sys_exit (de "9:"-
-    // epiloog) of, bij een page fault, via de force_kernel_return-trampoline —
-    // beide landen ná `enter_ring3`, dus de boot-CR3-herstel hieronder draait.
+    // SAFETY: paging/MSR/GDT are set up. We come back via sys_exit (the "9:"
+    // epilogue) or, on a page fault, via the force_kernel_return trampoline —
+    // both land after `enter_ring3`, so the boot-CR3 restore below runs.
     unsafe {
         core::arch::asm!("mov cr3, {}", in(reg) pml4, options(nostack, preserves_flags));
         enter_ring3(user_cs, user_ss, entry, rsp);
@@ -3661,8 +3661,8 @@ pub fn run_args(
     }
     FG_ACTIVE.store(false, Ordering::Relaxed);
 
-    // Ruim de adresruimte op (frames vrij): geen lek per voorgrond-exec. Precies de
-    // 512 uitgelijnd gealloceerde arena-frames.
+    // Clean up the address space (free frames): no leak per foreground exec. Exactly the
+    // 512 aligned-allocated arena frames.
     for f in 0..512u64 {
         let _ = falloc.free(arena_raw + f * 4096);
     }

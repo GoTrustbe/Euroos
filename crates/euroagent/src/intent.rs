@@ -1,20 +1,20 @@
-//! Intent-routing (Sprint AA, EuroDispatch-kern) — deterministisch, auditeerbaar.
+//! Intent routing (Sprint AA, EuroDispatch core) — deterministic, auditable.
 //!
-//! Geen AI: een intent (spraak→tekst of systeemevent) wordt op de gedeclareerde
-//! triggers van geïnstalleerde agents gematcht. De agent met de hoogste score
-//! wint. Matching is taal-onafhankelijke, case-insensitieve woord-overlap zodat
-//! "vergadering opnemen" ook "start de vergadering opname" vangt — geen regex nodig.
+//! No AI: an intent (speech-to-text or system event) is matched against the
+//! declared triggers of installed agents. The agent with the highest score
+//! wins. Matching is language-independent, case-insensitive word overlap so
+//! "record meeting" also catches "start the meeting recording" — no regex needed.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Een route-kandidaat: een agentnaam met zijn intent-triggers.
+/// A route candidate: an agent name with its intent triggers.
 pub struct Route {
     pub agent: String,
     pub intents: Vec<String>,
 }
 
-/// Normaliseer naar kleine letters en splits in woorden (alfanumeriek).
+/// Normalize to lowercase and split into words (alphanumeric).
 fn words(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -33,9 +33,9 @@ fn words(s: &str) -> Vec<String> {
     out
 }
 
-/// Score hoe goed `intent` op een trigger-patroon `pattern` past.
-/// = aantal trigger-woorden dat in het intent voorkomt; een volledige match
-/// (alle trigger-woorden aanwezig) krijgt een bonus zodat exacte triggers winnen.
+/// Score how well `intent` matches a trigger pattern `pattern`.
+/// = number of trigger words that appear in the intent; a full match
+/// (all trigger words present) gets a bonus so exact triggers win.
 fn score_pattern(intent_words: &[String], pattern: &str) -> u32 {
     let pw = words(pattern);
     if pw.is_empty() {
@@ -52,18 +52,18 @@ fn score_pattern(intent_words: &[String], pattern: &str) -> u32 {
     }
     let mut score = hits;
     if hits as usize == pw.len() {
-        score += 5; // volledige-trigger-bonus
+        score += 5; // full-trigger bonus
     }
     score
 }
 
-/// De beste score van een agent voor dit intent (max over zijn triggers).
+/// The best score of an agent for this intent (max over its triggers).
 pub fn agent_score(intent: &str, route: &Route) -> u32 {
     let iw = words(intent);
     route.intents.iter().map(|p| score_pattern(&iw, p)).max().unwrap_or(0)
 }
 
-/// Kies de best passende agent voor `intent`. `None` als niets matcht.
+/// Pick the best-matching agent for `intent`. `None` if nothing matches.
 pub fn route<'a>(intent: &str, routes: &'a [Route]) -> Option<&'a Route> {
     let iw = words(intent);
     routes
@@ -104,14 +104,14 @@ mod tests {
     #[test]
     fn fuzzy_word_overlap() {
         let r = routes();
-        // Extra woorden eromheen mogen de match niet breken.
+        // Extra words around it must not break the match.
         assert_eq!(route("kun je de vergadering opnemen alsjeblieft", &r).unwrap().agent, "facilitator");
     }
 
     #[test]
     fn picks_highest_score() {
         let r = routes();
-        // "calendar" matcht calendar-assistant volledig; facilitator scoort 0.
+        // "calendar" matches calendar-assistant fully; facilitator scores 0.
         assert_eq!(route("open my calendar", &r).unwrap().agent, "calendar-assistant");
     }
 
@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn partial_beats_nothing() {
         let r = routes();
-        // Slechts één woord overlap ("incident") → toch incident-reporter.
+        // Only one word overlap ("incident") → still incident-reporter.
         assert_eq!(route("er is een incident", &r).unwrap().agent, "incident-reporter");
     }
 }

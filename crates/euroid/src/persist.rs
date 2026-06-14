@@ -1,11 +1,11 @@
-//! **EuroID-persistentie** (Sprint AE-e2e): serialiseer de [`UserDb`] naar een
-//! tekstformaat dat op EuroFS bewaard kan worden, en lees het terug — zodat
-//! gebruikers, wachtwoord-hashes en accountstaat een herstart overleven i.p.v.
-//! elke boot opnieuw opgebouwd te worden.
+//! **EuroID persistence** (Sprint AE-e2e): serialize the [`UserDb`] to a
+//! text format that can be stored on EuroFS, and read it back — so that
+//! users, password hashes and account state survive a restart instead of
+//! being rebuilt on every boot.
 //!
-//! Formaat: regelgebaseerd, versiekop `EUROID-DB-v1`, daarna één gebruiker per
-//! regel met TAB-gescheiden velden. De wachtwoord-hash hergebruikt de PHC-codering
-//! ([`Argon2idHash::encode`]). Pure `no_std`-logica → host-getest.
+//! Format: line-based, version header `EUROID-DB-v1`, then one user per
+//! line with TAB-separated fields. The password hash reuses the PHC encoding
+//! ([`Argon2idHash::encode`]). Pure `no_std` logic → host-tested.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -38,10 +38,10 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Decodeer een PHC-achtige Argon2id-string (`$argon2id$m=..,t=..,p=..$salt$tag`).
-/// Lege salt/tag (een vergrendeld record) is toegestaan.
+/// Decode a PHC-like Argon2id string (`$argon2id$m=..,t=..,p=..$salt$tag`).
+/// An empty salt/tag (a locked record) is allowed.
 pub fn decode_hash(s: &str) -> Option<Argon2idHash> {
-    // delen: ["", "argon2id", "m=..,t=..,p=..", "<salt-hex>", "<tag-hex>"]
+    // parts: ["", "argon2id", "m=..,t=..,p=..", "<salt-hex>", "<tag-hex>"]
     let parts: Vec<&str> = s.split('$').collect();
     if parts.len() != 5 || parts[1] != "argon2id" {
         return None;
@@ -101,8 +101,8 @@ fn decode_state(s: &str) -> Option<UserState> {
     }
 }
 
-// PasswordRecord ⇄ veld: `changed_at;expires|-;mustchange;locked;<curPHC>;<histPHC spatie-gescheiden>`.
-// (PHC bevat geen `;` of spatie, dus deze scheidingstekens zijn veilig.)
+// PasswordRecord ⇄ field: `changed_at;expires|-;mustchange;locked;<curPHC>;<histPHC space-separated>`.
+// (PHC contains no `;` or space, so these separators are safe.)
 fn encode_pw(p: &PasswordRecord) -> String {
     let expires = p.expires_at.map(|t| t.0.to_string()).unwrap_or_else(|| "-".to_string());
     let hist: Vec<String> = p.history.iter().map(|h| h.encode()).collect();
@@ -134,7 +134,7 @@ fn decode_pw(s: &str) -> Option<PasswordRecord> {
     Some(PasswordRecord { hash, changed_at, expires_at, must_change, history, locked })
 }
 
-/// Serialiseer de hele [`UserDb`] naar het persistente tekstformaat.
+/// Serialize the entire [`UserDb`] to the persistent text format.
 pub fn serialize_db(db: &UserDb) -> String {
     let mut out = String::from(HEADER);
     out.push('\n');
@@ -161,8 +161,8 @@ pub fn serialize_db(db: &UserDb) -> String {
     out
 }
 
-/// Lees een [`UserDb`] terug uit het persistente tekstformaat. Regels die niet
-/// parsen worden afgewezen (corruptie) i.p.v. stil overgeslagen.
+/// Read a [`UserDb`] back from the persistent text format. Lines that do not
+/// parse are rejected (corruption) instead of being silently skipped.
 pub fn deserialize_db(data: &str) -> Result<UserDb, PersistError> {
     let mut lines = data.lines();
     if lines.next() != Some(HEADER) {
@@ -213,7 +213,7 @@ mod tests {
 
     fn sample_db() -> UserDb {
         let mut db = UserDb::new();
-        // root: vergrendeld systeem-account.
+        // root: locked system account.
         let mut root = User {
             uid: UserId(0),
             username: "root".to_string(),
@@ -232,7 +232,7 @@ mod tests {
         };
         root.failed_logins = 0;
         db.insert(root).unwrap();
-        // euro: gewone gebruiker met must_change + een history-entry.
+        // euro: ordinary user with must_change + one history entry.
         let mut euro = User {
             uid: UserId(1000),
             username: "euro".to_string(),
@@ -261,7 +261,7 @@ mod tests {
         let text = serialize_db(&db);
         let back = deserialize_db(&text).unwrap();
 
-        // Zelfde aantal gebruikers, en het wachtwoord verifieert nog (hash intact).
+        // Same number of users, and the password still verifies (hash intact).
         assert_eq!(back.all().len(), 2);
         let euro = back.get_by_name("euro").unwrap();
         assert!(euro.password.hash.verify(b"euro"));
@@ -272,11 +272,11 @@ mod tests {
         assert!(euro.tpm_enrolled);
         assert_eq!(euro.caps, 0b1010);
 
-        // root blijft vergrendeld met de juiste reden + lege hash.
+        // root stays locked with the correct reason + empty hash.
         let root = back.get(UserId::ROOT).unwrap();
         assert!(matches!(root.state, UserState::Locked { reason: LockReason::AdminLock, .. }));
         assert!(root.password.locked);
-        // history-entry overleeft en verifieert.
+        // history entry survives and verifies.
         assert_eq!(euro.password.history.len(), 1);
         assert!(euro.password.history[0].verify(b"old"));
     }
@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn corrupt_line_rejected_not_skipped() {
         let mut text = serialize_db(&sample_db());
-        text.push_str("0\t1\t2\n"); // te weinig velden
+        text.push_str("0\t1\t2\n"); // too few fields
         assert_eq!(deserialize_db(&text).err(), Some(PersistError::BadField));
     }
 
@@ -297,7 +297,7 @@ mod tests {
     fn decode_hash_handles_phc_and_empty() {
         let h = Argon2idHash::create(b"pw", b"saltsalt", &P);
         assert_eq!(decode_hash(&h.encode()), Some(h));
-        // Vergrendeld record: lege salt/tag.
+        // Locked record: empty salt/tag.
         let locked = Argon2idHash { salt: Vec::new(), tag: Vec::new(), m_cost: 0, t_cost: 0, p_cost: 0 };
         assert_eq!(decode_hash(&locked.encode()), Some(locked));
     }

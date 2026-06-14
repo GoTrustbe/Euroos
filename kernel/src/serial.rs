@@ -1,8 +1,8 @@
-//! COM1 (16550 UART) seriële poort voor debug-output.
+//! COM1 (16550 UART) serial port for debug output.
 //!
-//! Cruciaal voor kernel-bring-up: dit werkt óók ná `ExitBootServices`, wanneer
-//! er geen UEFI-console meer is. QEMU vangt dit op met `-serial file:serial.log`.
-//! Zo zien we bij een zwart scherm precies tot waar de kernel kwam.
+//! Crucial for kernel bring-up: this also works after `ExitBootServices`, when
+//! there is no longer a UEFI console. QEMU captures it with `-serial file:serial.log`.
+//! That way, on a black screen we can see exactly how far the kernel got.
 
 use core::fmt::{self, Write};
 
@@ -30,19 +30,19 @@ impl Uart {
         let mut lcr = Port::<u8>::new(COM1 + 3);
         let mut mcr = Port::<u8>::new(COM1 + 4);
         unsafe {
-            ier.write(0x00); // interrupts uit
-            lcr.write(0x80); // DLAB aan
+            ier.write(0x00); // interrupts off
+            lcr.write(0x80); // DLAB on
             self.data.write(0x03); // divisor lo = 3 (38400 baud)
             ier.write(0x00); // divisor hi
-            lcr.write(0x03); // 8N1, DLAB uit
-            fcr.write(0xC7); // FIFO aan, clear, 14-byte threshold
+            lcr.write(0x03); // 8N1, DLAB off
+            fcr.write(0xC7); // FIFO on, clear, 14-byte threshold
             mcr.write(0x0B); // RTS/DSR/OUT2
         }
     }
 
     fn write_byte(&mut self, b: u8) {
         unsafe {
-            // Wacht tot de transmit-holding-register leeg is (LSR bit 5).
+            // Wait until the transmit-holding register is empty (LSR bit 5).
             while self.lsr.read() & 0x20 == 0 {}
             self.data.write(b);
         }
@@ -69,9 +69,9 @@ pub fn init() {
 
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
-    // Tee: schrijf naar de UART én naar de kmsg-ring (S1 observability), zodat
-    // `dmesg` en de panic-handler de recente historie hebben. Lock-volgorde is
-    // altijd UART -> RING (klog::tee neemt geen UART-lock), dus geen deadlock.
+    // Tee: write to the UART and to the kmsg ring (S1 observability), so that
+    // `dmesg` and the panic handler have the recent history. Lock order is
+    // always UART -> RING (klog::tee takes no UART lock), so no deadlock.
     let mut uart = UART.lock();
     struct Tee<'a>(&'a mut Uart);
     impl Write for Tee<'_> {
@@ -84,8 +84,8 @@ pub fn _print(args: fmt::Arguments) {
     let _ = Tee(&mut uart).write_fmt(args);
 }
 
-/// Schrijf ruwe bytes RECHTSTREEKS naar de UART (panic-veilig: `try_lock`, en géén
-/// tee terug naar de ring — voorkomt herlock van RING tijdens een paniek-dump).
+/// Write raw bytes DIRECTLY to the UART (panic-safe: `try_lock`, and no
+/// tee back to the ring — prevents re-locking RING during a panic dump).
 pub fn write_raw(bytes: &[u8]) {
     if let Some(mut uart) = UART.try_lock() {
         for &b in bytes {

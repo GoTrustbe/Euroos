@@ -1,11 +1,11 @@
 //! 8x8 bitmap font (IBM PC BIOS / CP437-subset), ASCII 32–126.
-//! Boot-fase font; wordt in EuroDesktop (Track 5) vervangen door fontdue/vector.
+//! Boot-phase font; replaced in EuroDesktop (Track 5) by fontdue/vector.
 
 use crate::graphics::{Color, FrameBuffer};
 
 pub const CHAR_WIDTH: usize = 8;
-/// Visuele regelhoogte van de UI-font @ scale 1 (gebruikt voor verticaal
-/// centreren in titelbalken/rijen). De TTF-renderer bepaalt de echte glyph-grootte.
+/// Visual line height of the UI font @ scale 1 (used for vertically
+/// centering in title bars/rows). The TTF renderer determines the real glyph size.
 pub const CHAR_HEIGHT: usize = 14;
 
 #[rustfmt::skip]
@@ -107,7 +107,7 @@ pub static FONT_DATA: [[u8; 8]; 95] = [
     [0x6E,0x3B,0x00,0x00,0x00,0x00,0x00,0x00], // 126 ~
 ];
 
-/// Teken één geschaald karakter (scale×scale per fontpixel).
+/// Draw one scaled character (scale×scale per font pixel).
 pub fn draw_char(fb: &FrameBuffer, x: usize, y: usize, ch: char, c: Color, scale: usize) {
     let ascii = ch as usize;
     if !(32..=126).contains(&ascii) {
@@ -116,9 +116,9 @@ pub fn draw_char(fb: &FrameBuffer, x: usize, y: usize, ch: char, c: Color, scale
     let glyph = &FONT_DATA[ascii - 32];
     for (row, bits) in glyph.iter().enumerate() {
         for col in 0..CHAR_WIDTH {
-            // In deze CP437-tabel is bit 0 de LINKER pixel (LSB-left). De
-            // klassieke `0x80 >> col` zou elke glyph horizontaal spiegelen
-            // ("b" werd "d") — bewezen door de eerste QEMU-screenshot.
+            // In this CP437 table bit 0 is the LEFT pixel (LSB-left). The
+            // classic `0x80 >> col` would mirror every glyph horizontally
+            // ("b" became "d") — proven by the first QEMU screenshot.
             if bits & (1 << col) != 0 {
                 if scale == 1 {
                     fb.put_pixel(x + col, y + row, c);
@@ -130,8 +130,8 @@ pub fn draw_char(fb: &FrameBuffer, x: usize, y: usize, ch: char, c: Color, scale
     }
 }
 
-/// Teken een string met de **proportionele UI-font** (DM Sans, anti-aliased).
-/// De 8×8 bitmap (`draw_char`/`FONT_DATA`) blijft bestaan als fallback.
+/// Draw a string with the **proportional UI font** (DM Sans, anti-aliased).
+/// The 8×8 bitmap (`draw_char`/`FONT_DATA`) remains as a fallback.
 pub fn draw_string(fb: &FrameBuffer, x: usize, y: usize, s: &str, c: Color, scale: usize) {
     crate::text::draw_string(fb, x, y, s, c, scale);
 }
@@ -140,7 +140,7 @@ pub fn text_width(s: &str, scale: usize) -> usize {
     crate::text::text_width(s, scale)
 }
 
-/// Teken gecentreerd binnen een horizontale zone.
+/// Draw centered within a horizontal zone.
 pub fn draw_string_centered(
     fb: &FrameBuffer,
     zone_x: usize,

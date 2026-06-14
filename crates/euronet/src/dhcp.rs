@@ -1,6 +1,6 @@
-//! DHCP-client (RFC 2131) bovenop BOOTP — genoeg om een echte lease te krijgen:
-//! DISCOVER → OFFER → REQUEST → ACK. Bouwt de BOOTP-payload (240 bytes + opties)
-//! die in een UDP-datagram (poort 68→67) gaat.
+//! DHCP client (RFC 2131) on top of BOOTP — enough to obtain a real lease:
+//! DISCOVER → OFFER → REQUEST → ACK. Builds the BOOTP payload (240 bytes + options)
+//! that goes into a UDP datagram (port 68→67).
 
 use alloc::vec::Vec;
 
@@ -13,7 +13,7 @@ pub const ACK: u8 = 5;
 
 const MAGIC: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
 
-/// Uit een OFFER/ACK geëxtraheerde leasegegevens.
+/// Lease data extracted from an OFFER/ACK.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DhcpInfo {
     pub msg_type: u8,
@@ -25,7 +25,7 @@ pub struct DhcpInfo {
     pub lease_secs: u32,
 }
 
-/// Bouw een DHCP-bericht (BOOTP-request) met de gegeven opties.
+/// Build a DHCP message (BOOTP request) with the given options.
 pub fn build(
     msg_type: u8,
     xid: u32,
@@ -51,7 +51,7 @@ pub fn build(
     b.extend_from_slice(&[0; 128]); // file
     b.extend_from_slice(&MAGIC); // magic cookie
 
-    // Opties.
+    // Options.
     b.extend_from_slice(&[53, 1, msg_type]); // DHCP message type
     if let Some(ip) = requested_ip {
         b.push(50); // requested IP
@@ -89,13 +89,13 @@ fn opt4(buf: &[u8], code: u8) -> Option<Ipv4Addr> {
     None
 }
 
-/// Parse een DHCP-antwoord (OFFER/ACK); geeft de lease-info terug.
+/// Parse a DHCP reply (OFFER/ACK); returns the lease info.
 pub fn parse(buf: &[u8]) -> Option<DhcpInfo> {
     if buf.len() < 240 || buf[236..240] != MAGIC {
         return None;
     }
     let your_ip = Ipv4Addr([buf[16], buf[17], buf[18], buf[19]]);
-    // Optie 53 = message type.
+    // Option 53 = message type.
     let mut msg_type = 0u8;
     let mut lease_secs = 0u32;
     let mut i = 240;
@@ -144,14 +144,14 @@ mod tests {
         assert_eq!(&d[236..240], &MAGIC);
         assert_eq!(d[0], 1); // BOOTREQUEST
         assert_eq!(&d[28..34], &mac); // chaddr
-        // optie 53 = DISCOVER
+        // option 53 = DISCOVER
         assert_eq!(&d[240..243], &[53, 1, DISCOVER]);
     }
 
     #[test]
     fn parse_offer() {
         let mac = [0x52, 0x54, 0, 0x12, 0x34, 0x56];
-        // Bouw een 'OFFER' door zelf yiaddr + opties te zetten.
+        // Build an 'OFFER' by setting yiaddr + options ourselves.
         let mut b = build(OFFER, 1, mac, None, Some(Ipv4Addr([10, 0, 2, 2])));
         b[16..20].copy_from_slice(&[10, 0, 2, 15]); // yiaddr
         let info = parse(&b).unwrap();

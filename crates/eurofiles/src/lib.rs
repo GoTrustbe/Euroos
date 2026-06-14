@@ -1,12 +1,12 @@
-//! EuroFiles — de bestandsbeheerder van EuroOS (Sprint AC-1).
+//! EuroFiles — the EuroOS file manager (Sprint AC-1).
 //!
-//! Het pure model achter de grafische bestandsbeheerder: een maplijst met
-//! **sorteren** en **filteren**, **padbewerkingen** (normaliseren, join, basename,
-//! extensie), mensvriendelijke groottes, en de **soevereine badges** die EuroOS
-//! per bestand toont (immutable 🔒, getekend, append-only, versleuteld). De kernel
-//! vult het uit EuroFS; de compositor rendert het.
+//! The pure model behind the graphical file manager: a directory listing with
+//! **sorting** and **filtering**, **path operations** (normalize, join, basename,
+//! extension), human-friendly sizes, and the **sovereign badges** that EuroOS
+//! shows per file (immutable 🔒, signed, append-only, encrypted). The kernel
+//! fills it from EuroFS; the compositor renders it.
 //!
-//! Pure `no_std`-logica, host-getest.
+//! Pure `no_std` logic, host-tested.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -16,7 +16,7 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// Het soort item in een map.
+/// The kind of item in a directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileKind {
     Dir,
@@ -24,26 +24,26 @@ pub enum FileKind {
     Symlink,
 }
 
-/// Een soevereine EuroOS-eigenschap die per bestand getoond wordt.
+/// A sovereign EuroOS property that is shown per file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Badge {
-    /// Onveranderlijk (EuroFS immutable-vlag) — 🔒.
+    /// Immutable (EuroFS immutable flag) — 🔒.
     Immutable,
-    /// Alleen toevoegen (tamper-evident).
+    /// Append-only (tamper-evident).
     AppendOnly,
-    /// Ed25519-gesigneerd met geldig manifest.
+    /// Ed25519-signed with a valid manifest.
     Signed,
-    /// Versleuteld op schijf (FDE/per-bestand).
+    /// Encrypted on disk (FDE/per-file).
     Encrypted,
 }
 
 impl Badge {
     pub fn label(self) -> &'static str {
         match self {
-            Badge::Immutable => "Onveranderlijk",
+            Badge::Immutable => "Immutable",
             Badge::AppendOnly => "Append-only",
-            Badge::Signed => "Getekend",
-            Badge::Encrypted => "Versleuteld",
+            Badge::Signed => "Signed",
+            Badge::Encrypted => "Encrypted",
         }
     }
     pub fn glyph(self) -> &'static str {
@@ -56,7 +56,7 @@ impl Badge {
     }
 }
 
-/// Eén item in een map.
+/// One item in a directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirEntry {
     pub name: String,
@@ -83,17 +83,17 @@ impl DirEntry {
         self.modified = t;
         self
     }
-    /// Verborgen bestanden beginnen met een punt (Unix-conventie).
+    /// Hidden files begin with a dot (Unix convention).
     pub fn is_hidden(&self) -> bool {
         self.name.starts_with('.')
     }
-    /// De extensie (zonder punt), in kleine letters.
+    /// The extension (without the dot), in lowercase.
     pub fn extension(&self) -> Option<String> {
         extension(&self.name)
     }
 }
 
-/// Hoe te sorteren.
+/// How to sort.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortKey {
     Name,
@@ -108,7 +108,7 @@ pub enum SortOrder {
     Desc,
 }
 
-/// Een maplijst: het pad + de items.
+/// A directory listing: the path + the items.
 #[derive(Debug, Clone, Default)]
 pub struct Listing {
     pub path: String,
@@ -120,15 +120,15 @@ impl Listing {
         Listing { path: normalize(path), entries }
     }
 
-    /// Sorteer in plaats; mappen komen altijd vóór bestanden (verkennersconventie),
-    /// daarna volgens de gekozen sleutel.
+    /// Sort in place; directories always come before files (explorer convention),
+    /// then by the chosen key.
     pub fn sort(&mut self, key: SortKey, order: SortOrder) {
         self.entries.sort_by(|a, b| {
-            // Mappen eerst.
+            // Directories first.
             let dir_a = a.kind == FileKind::Dir;
             let dir_b = b.kind == FileKind::Dir;
             if dir_a != dir_b {
-                return dir_b.cmp(&dir_a); // dir (true) eerst
+                return dir_b.cmp(&dir_a); // dir (true) first
             }
             let ord = match key {
                 SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
@@ -143,8 +143,8 @@ impl Listing {
         });
     }
 
-    /// Filter op een zoekterm (substring, hoofdletterongevoelig) en op het al dan
-    /// niet tonen van verborgen bestanden. Geeft een nieuwe lijst van referenties.
+    /// Filter on a search term (substring, case-insensitive) and on whether or not
+    /// to show hidden files. Returns a new list of references.
     pub fn filter(&self, query: &str, show_hidden: bool) -> Vec<&DirEntry> {
         let q = query.to_lowercase();
         self.entries
@@ -154,12 +154,12 @@ impl Listing {
             .collect()
     }
 
-    /// Totale grootte van de bestanden (mappen tellen niet mee).
+    /// Total size of the files (directories do not count).
     pub fn total_size(&self) -> u64 {
         self.entries.iter().filter(|e| e.kind == FileKind::File).map(|e| e.size).sum()
     }
 
-    /// Aantal mappen en bestanden.
+    /// Number of directories and files.
     pub fn counts(&self) -> (usize, usize) {
         let dirs = self.entries.iter().filter(|e| e.kind == FileKind::Dir).count();
         (dirs, self.entries.len() - dirs)
@@ -174,10 +174,10 @@ fn format_kind(k: FileKind) -> &'static str {
     }
 }
 
-// ── padbewerkingen ────────────────────────────────────────────────────────────
+// ── path operations ─────────────────────────────────────────────────────────
 
-/// Normaliseer een pad: dubbele slashes weg, `.` weg, `..` lost een segment op.
-/// Behoudt of het pad absoluut is (begint met `/`).
+/// Normalize a path: remove double slashes, drop `.`, `..` resolves a segment.
+/// Preserves whether the path is absolute (begins with `/`).
 pub fn normalize(path: &str) -> String {
     let absolute = path.starts_with('/');
     let mut stack: Vec<&str> = Vec::new();
@@ -206,7 +206,7 @@ pub fn normalize(path: &str) -> String {
     }
 }
 
-/// Voeg twee padcomponenten samen en normaliseer.
+/// Join two path components and normalize.
 pub fn join(base: &str, child: &str) -> String {
     if child.starts_with('/') {
         return normalize(child);
@@ -219,7 +219,7 @@ pub fn join(base: &str, child: &str) -> String {
     normalize(&s)
 }
 
-/// De laatste padcomponent.
+/// The last path component.
 pub fn basename(path: &str) -> String {
     let n = normalize(path);
     match n.rsplit('/').next() {
@@ -228,7 +228,7 @@ pub fn basename(path: &str) -> String {
     }
 }
 
-/// Het ouderpad.
+/// The parent path.
 pub fn parent(path: &str) -> String {
     let n = normalize(path);
     if n == "/" {
@@ -241,17 +241,17 @@ pub fn parent(path: &str) -> String {
     }
 }
 
-/// De extensie (zonder punt), in kleine letters.
+/// The extension (without the dot), in lowercase.
 pub fn extension(name: &str) -> Option<String> {
     let base = basename(name);
     let dot = base.rfind('.')?;
     if dot == 0 || dot + 1 >= base.len() {
-        return None; // ".dotfile" of "naam." → geen extensie
+        return None; // ".dotfile" or "name." → no extension
     }
     Some(base[dot + 1..].to_lowercase())
 }
 
-/// Mensvriendelijke grootte (binaire prefixen, 1024-basis).
+/// Human-friendly size (binary prefixes, base 1024).
 pub fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
     if bytes < 1024 {
@@ -263,7 +263,7 @@ pub fn human_size(bytes: u64) -> String {
         v /= 1024.0;
         i += 1;
     }
-    // Eén decimaal, afgekapt voor determinisme.
+    // One decimal, truncated for determinism.
     let scaled = (v * 10.0) as u64;
     alloc::format!("{}.{} {}", scaled / 10, scaled % 10, UNITS[i])
 }
@@ -324,7 +324,7 @@ mod tests {
         );
         l.sort(SortKey::Name, SortOrder::Asc);
         let names: Vec<&str> = l.entries.iter().map(|e| e.name.as_str()).collect();
-        // Mappen eerst (alfabetisch), dan bestanden (alfabetisch).
+        // Directories first (alphabetically), then files (alphabetically).
         assert_eq!(names, alloc::vec!["Assets", "src", "apple.txt", "zebra.txt"]);
     }
 
@@ -354,11 +354,11 @@ mod tests {
                 DirEntry::dir("reports"),
             ],
         );
-        // Zoek 'report' (hoofdletterongevoelig), verberg dotfiles.
+        // Search 'report' (case-insensitive), hide dotfiles.
         let r = l.filter("report", false);
         assert_eq!(r.len(), 3); // report.txt, Report-2.txt, reports
         assert!(!r.iter().any(|e| e.name == ".secret"));
-        // Toon verborgen + lege query → alles.
+        // Show hidden + empty query → everything.
         assert_eq!(l.filter("", true).len(), 4);
     }
 

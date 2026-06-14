@@ -1,8 +1,8 @@
-//! Kernel-side integratie van het **EuroDevice**-framework (Sprint R): bouw de
-//! device-tree uit de ECHTE PCI-enumeratie, registreer de bestaande drivers met hun
-//! match-predicaten, en bind ze. Vervangt de losse ad-hoc driver-discovery door één
-//! samenhangend device-model — de basis waar toekomstige drivers (WiFi/GPU/USB-hubs)
-//! op aansluiten. De `eurodevice`-shellcommando + het `[r]`-boot-zelftest tonen de boom.
+//! Kernel-side integration of the **EuroDevice** framework (Sprint R): build the
+//! device tree from the REAL PCI enumeration, register the existing drivers with their
+//! match predicates, and bind them. Replaces the loose ad-hoc driver discovery with one
+//! coherent device model — the foundation that future drivers (WiFi/GPU/USB hubs)
+//! plug into. The `eurodevice` shell command + the `[r]` boot self-test show the tree.
 
 use alloc::format;
 use alloc::string::String;
@@ -16,7 +16,7 @@ use crate::pci;
 static TREE: Mutex<Option<DeviceTree>> = Mutex::new(None);
 static REGISTRY: Mutex<Option<DriverRegistry>> = Mutex::new(None);
 
-// ── Match-predicaten van de bestaande kernel-drivers ────────────────────────
+// ── Match predicates of the existing kernel drivers ─────────────────────────
 fn m_virtio_blk(n: &DeviceNode) -> bool {
     n.vendor == 0x1AF4 && (n.device == 0x1001 || n.device == 0x1042)
 }
@@ -36,10 +36,10 @@ fn m_virtio_gpu(n: &DeviceNode) -> bool {
     n.vendor == 0x1AF4 && n.device == 0x1050
 }
 fn m_bridge(n: &DeviceNode) -> bool {
-    n.class == 0x06 // host/PCI-bridges — geclaimd door de platform-laag
+    n.class == 0x06 // host/PCI bridges — claimed by the platform layer
 }
 
-/// Bouw de device-tree uit de PCI-enumeratie + registreer + bind de drivers.
+/// Build the device tree from the PCI enumeration + register + bind the drivers.
 pub fn init() {
     let mut tree = DeviceTree::new();
     for d in pci::enumerate() {
@@ -75,8 +75,8 @@ pub fn init() {
     let bound = reg.bind_all(&mut tree);
 
     crate::serial_println!(
-        "[r] EuroDevice: {} apparaten in de device-tree, {} gebonden via {} geregistreerde drivers",
-        tree.len() - 1, // minus de root
+        "[r] EuroDevice: {} devices in the device tree, {} bound via {} registered drivers",
+        tree.len() - 1, // minus the root
         bound,
         reg.len()
     );
@@ -84,8 +84,8 @@ pub fn init() {
     *REGISTRY.lock() = Some(reg);
 }
 
-/// Produceer de `eurodevice probe`-uitvoer: één regel per apparaat met z'n gebonden
-/// driver + toestand (voor de shell + het boot-zelftest).
+/// Produce the `eurodevice probe` output: one line per device with its bound
+/// driver + state (for the shell + the boot self-test).
 pub fn probe_lines() -> Vec<String> {
     let mut out = Vec::new();
     let tg = TREE.lock();
@@ -93,11 +93,11 @@ pub fn probe_lines() -> Vec<String> {
     let (tree, reg) = match (tg.as_ref(), rg.as_ref()) {
         (Some(t), Some(r)) => (t, r),
         _ => {
-            out.push(String::from("eurodevice: niet geïnitialiseerd"));
+            out.push(String::from("eurodevice: not initialized"));
             return out;
         }
     };
-    out.push(format!("EuroDevice — device-tree ({} apparaten):", tree.len() - 1));
+    out.push(format!("EuroDevice — device tree ({} devices):", tree.len() - 1));
     for n in tree.iter() {
         if n.kind == DeviceKind::Root {
             continue;
@@ -107,10 +107,10 @@ pub fn probe_lines() -> Vec<String> {
             None => "—",
         };
         let state = match n.state {
-            DeviceState::Bound => "gebonden",
-            DeviceState::Unbound => "ongebonden",
-            DeviceState::Failed => "gefaald",
-            DeviceState::Suspended => "geschorst",
+            DeviceState::Bound => "bound",
+            DeviceState::Unbound => "unbound",
+            DeviceState::Failed => "failed",
+            DeviceState::Suspended => "suspended",
         };
         let b = n.resources.bus_addr;
         out.push(format!(
@@ -128,7 +128,7 @@ pub fn probe_lines() -> Vec<String> {
     out
 }
 
-/// Boot-zelftest: log de hele device-tree met bindingen (Sprint R-bewijs).
+/// Boot self-test: log the whole device tree with bindings (Sprint R proof).
 pub fn selftest() {
     for line in probe_lines() {
         crate::serial_println!("[r] {line}");

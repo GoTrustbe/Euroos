@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""AH-2 A/B-zelfupdate-test (3 runs, dezelfde doelschijf).
+"""AH-2 A/B self-update test (3 runs, the same target disk).
 
-RUN1 install : live EuroOS + BLANCO virtio-schijf → installeer (slot_config → A).
-RUN2 update  : live EuroOS + de GEÏNSTALLEERDE schijf → stage slot B ([upd2], slot_config → B).
-RUN3 boot-B  : boot de schijf standalone → de loader honoreert slot_config → boot slot B.
+RUN1 install : live EuroOS + BLANK virtio disk → install (slot_config → A).
+RUN2 update  : live EuroOS + the INSTALLED disk → stage slot B ([upd2], slot_config → B).
+RUN3 boot-B  : boot the disk standalone → the loader honors slot_config → boots slot B.
 """
 import json, os, socket, subprocess, time
 
@@ -49,4 +49,4 @@ print(f"[update-test] RUN2 stage A/B update (slot B), {W2}s...", flush=True)
 boot(live_plus_target, "serial-upd-stage.log", W2)
 print(f"[update-test] RUN3 boot the updated disk STANDALONE, {W3}s...", flush=True)
 boot(["-drive", f"format=raw,file={TGT}"], "serial-upd-bootb.log", W3, screenshot="ah2-slotb.png")
-print("[update-test] klaar — RUN2 [upd2], RUN3 loader 'boot slot B' + ah2-slotb.png")
+print("[update-test] done — RUN2 [upd2], RUN3 loader 'boot slot B' + ah2-slotb.png")

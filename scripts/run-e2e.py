@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""End-to-end interactiviteitstest (afmaak-sprint): boot met een USB-toetsenbord,
-wacht tot de desktop draait, TYP via QMP een shell-commando + Enter, en verifieer
-dat de hele lus werkt — USB-toets → xHCI interrupt-IN → scancode-ring → poll_key →
-shell-prompt → Enter → exec → uitvoer (geteed naar serial als `[e2e]`-regels).
+"""End-to-end interactivity test (completion sprint): boot with a USB keyboard,
+wait until the desktop is running, TYPE a shell command + Enter via QMP, and verify
+that the whole loop works — USB key → xHCI interrupt-IN → scancode ring → poll_key →
+shell prompt → Enter → exec → output (teed to serial as `[e2e]` lines).
 
-Bewijst tegelijk dat HLT-idle de invoer-responsiviteit niet breekt (de desktop
-slaapt tussen frames maar wordt door de toetsenbord-IRQ gewekt)."""
+Proves at the same time that HLT-idle does not break input responsiveness (the desktop
+sleeps between frames but is woken by the keyboard IRQ)."""
 import json
 import os
 import socket
@@ -16,11 +16,11 @@ import time
 IMG = sys.argv[1] if len(sys.argv) > 1 else "eurokernel.img"
 LOG = "serial-e2e.log"
 QMP = "/tmp/ek-qmp-e2e.sock"
-# Hergebruik een REEDS-GEFORMATTEERDE schijf (anders kost de eerste-boot format+
-# populate honderden TCG-seconden vóór de desktop draait).
+# Reuse an ALREADY-FORMATTED disk (otherwise the first-boot format+
+# populate costs hundreds of TCG seconds before the desktop runs).
 D1 = os.environ.get("DISK", "/tmp/hdadisk.img")
 WAIT = int(os.environ.get("WAIT", "260"))
-# Het commando dat we "typen" (USB-HID qcodes). Default: `lsdev` (EuroDevice-tree).
+# The command we "type" (USB-HID qcodes). Default: `lsdev` (EuroDevice tree).
 CMD = os.environ.get("CMD", "lsdev")
 
 for p in (LOG, QMP):
@@ -32,7 +32,7 @@ if not os.path.exists(D1):
     subprocess.run(["qemu-img", "create", "-f", "raw", D1, "64M"], check=True, stdout=subprocess.DEVNULL)
 
 OVMF = next((c for c in ("/usr/share/ovmf/OVMF.fd", "/usr/share/OVMF/OVMF.fd") if os.path.exists(c)), None)
-assert OVMF, "OVMF niet gevonden"
+assert OVMF, "OVMF not found"
 
 qemu = subprocess.Popen([
     "qemu-system-x86_64", "-machine", "q35", "-m", "256M", "-cpu", "qemu64,+smep,+smap",
@@ -63,27 +63,27 @@ def send(sock, cmd):
     except OSError:
         pass
 
-# Map gewone tekens → QEMU qcode-namen.
+# Map ordinary characters → QEMU qcode names.
 QCODE = {**{c: c for c in "abcdefghijklmnopqrstuvwxyz0123456789"}, " ": "spc", "/": "slash", "-": "minus", ".": "dot"}
 
 sock = qmp_connect(QMP)
-assert sock, "QMP niet bereikbaar"
+assert sock, "QMP not reachable"
 sock.recv(65536)
 send(sock, {"execute": "qmp_capabilities"})
 
-print(f"[e2e] boot, wacht tot de desktop draait (≤{WAIT}s)...", flush=True)
+print(f"[e2e] booting, waiting until the desktop runs (<={WAIT}s)...", flush=True)
 deadline = time.time() + WAIT
 ready = False
 while time.time() < deadline:
     time.sleep(3)
     if os.path.exists(LOG):
         t = open(LOG, errors="replace").read()
-        # Wacht expliciet tot de INTERACTIEVE desktop-loop draait (en dus xhci::poll
-        # actief de invoer harvest) — anders vallen vroege toetsen weg.
+        # Wait explicitly until the INTERACTIVE desktop loop is running (and thus xhci::poll
+        # is actively harvesting input) — otherwise early keys are dropped.
         if "interactieve loop gestart" in t:
             ready = True
             break
-print(f"[e2e] desktop gereed={ready}; typ nu '{CMD}' + Enter via het USB-toetsenbord...", flush=True)
+print(f"[e2e] desktop ready={ready}; now typing '{CMD}' + Enter via the USB keyboard...", flush=True)
 time.sleep(2)
 
 for ch in CMD:
@@ -94,8 +94,8 @@ for ch in CMD:
 # Enter.
 send(sock, {"execute": "send-key", "arguments": {"keys": [{"type": "qcode", "data": "ret"}]}})
 
-# Geef de desktop-loop tijd om de toetsen te verwerken + uit te voeren (HLT-idle wekt
-# op elke toets-IRQ, maar TCG is traag).
+# Give the desktop loop time to process the keys + execute (HLT-idle wakes
+# on every key IRQ, but TCG is slow).
 time.sleep(20)
 qemu.terminate()
 try:
@@ -103,7 +103,7 @@ try:
 except subprocess.TimeoutExpired:
     qemu.kill()
 
-print("\n===== [e2e]-regels uit serial =====", flush=True)
+print("\n===== [e2e] lines from serial =====", flush=True)
 got_cmd = got_output = False
 if os.path.exists(LOG):
     for line in open(LOG, errors="replace"):
@@ -113,5 +113,5 @@ if os.path.exists(LOG):
                 got_cmd = True
             elif "[e2e]" in line and "$" not in line:
                 got_output = True
-print(f"\n[e2e] RESULTAAT: commando-echo={got_cmd}, uitvoer-ontvangen={got_output} → "
-      + ("GESLAAGD ✓" if got_cmd and got_output else "MISLUKT"))
+print(f"\n[e2e] RESULT: command-echo={got_cmd}, output-received={got_output} -> "
+      + ("PASSED ✓" if got_cmd and got_output else "FAILED"))

@@ -1,5 +1,5 @@
-/* EuroOS — musl `echo`: print de argumenten (argv[1..]) gescheiden door spaties.
- * Schone bron voor pipe-demo's (geen ruis-header). */
+/* EuroOS — musl `echo`: print the arguments (argv[1..]) separated by spaces.
+ * Clean source for pipe demos (no noise header). */
 #include <stdio.h>
 
 int main(int argc, char **argv) {

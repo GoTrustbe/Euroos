@@ -1,19 +1,19 @@
-//! Legacy virtio-net (virtio 0.9.5 / transitional) driver — EuroNet's echte NIC.
+//! Legacy virtio-net (virtio 0.9.5 / transitional) driver — EuroNet's real NIC.
 //!
-//! Tot nu toe bouwde/parseerde EuroNet alleen pakketten. Deze driver praat met een
-//! `virtio-net-pci` apparaat (QEMU, `disable-modern=on` → legacy PIO) en verzendt
-//! én ontvangt ECHTE Ethernet-frames: PCI-scan, feature-onderhandeling, twee
-//! virtqueues (RX=0, TX=1) en de notify/used-ring-afhandeling.
+//! Until now EuroNet only built/parsed packets. This driver talks to a
+//! `virtio-net-pci` device (QEMU, `disable-modern=on` → legacy PIO) and sends
+//! and receives REAL Ethernet frames: PCI scan, feature negotiation, two
+//! virtqueues (RX=0, TX=1) and the notify/used-ring handling.
 //!
-//! Geheugen: de virtqueues + buffers komen uit de frame-allocator. Omdat de kernel
-//! de onderste 1 GiB identiek mapt (virt == fysiek), is een toegewezen frame-adres
-//! meteen het fysieke adres dat het apparaat nodig heeft.
+//! Memory: the virtqueues + buffers come from the frame allocator. Because the kernel
+//! identity-maps the lower 1 GiB (virt == phys), an allocated frame address
+//! is directly the physical address the device needs.
 
 use core::sync::atomic::{compiler_fence, Ordering};
 use euromm::FrameAllocator;
 use x86_64::instructions::port::Port;
 
-// PCI configuratie-toegang (poort 0xCF8/0xCFC).
+// PCI configuration access (port 0xCF8/0xCFC).
 fn pci_cfg_read32(bus: u8, slot: u8, func: u8, off: u8) -> u32 {
     let addr = 0x8000_0000u32
         | ((bus as u32) << 16)
@@ -37,7 +37,7 @@ fn pci_cfg_write32(bus: u8, slot: u8, func: u8, off: u8, val: u32) {
     }
 }
 
-// Legacy virtio I/O-registeroffsets (vanaf BAR0, zonder MSI-X).
+// Legacy virtio I/O register offsets (from BAR0, without MSI-X).
 const VIRTIO_DEVICE_FEATURES: u16 = 0x00;
 const VIRTIO_DRIVER_FEATURES: u16 = 0x04;
 const VIRTIO_QUEUE_PFN: u16 = 0x08;
@@ -45,7 +45,7 @@ const VIRTIO_QUEUE_SIZE: u16 = 0x0C;
 const VIRTIO_QUEUE_SELECT: u16 = 0x0E;
 const VIRTIO_QUEUE_NOTIFY: u16 = 0x10;
 const VIRTIO_STATUS: u16 = 0x12;
-const VIRTIO_NET_CFG_MAC: u16 = 0x14; // 6 bytes MAC (zonder MSI-X)
+const VIRTIO_NET_CFG_MAC: u16 = 0x14; // 6 bytes MAC (without MSI-X)
 
 const STATUS_ACK: u8 = 1;
 const STATUS_DRIVER: u8 = 2;
@@ -58,7 +58,7 @@ const DESC_WRITE: u16 = 2;
 
 const RX_BUFS: usize = 16;
 const BUF_SIZE: usize = 2048;
-const NET_HDR_LEN: usize = 10; // legacy virtio_net_hdr (geen mergeable rx)
+const NET_HDR_LEN: usize = 10; // legacy virtio_net_hdr (no mergeable rx)
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -69,14 +69,14 @@ struct VqDesc {
     next: u16,
 }
 
-/// Een opgezette virtqueue (legacy split-ring layout, één contiguë regio).
+/// A set-up virtqueue (legacy split-ring layout, one contiguous region).
 struct VirtQueue {
     size: u16,
-    base: u64,      // start van de ring-regio (= fysiek = virt)
-    desc: u64,      // descriptortabel
+    base: u64,      // start of the ring region (= phys = virt)
+    desc: u64,      // descriptor table
     avail: u64,     // available ring
     used: u64,      // used ring
-    last_used: u16, // laatste verwerkte used-index
+    last_used: u16, // last processed used index
 }
 
 impl VirtQueue {
@@ -101,7 +101,7 @@ impl VirtQueue {
 }
 
 pub struct VirtioNet {
-    io: u16,        // BAR0 I/O-basis
+    io: u16,        // BAR0 I/O base
     pub mac: [u8; 6],
     rx: VirtQueue,
     tx: VirtQueue,
@@ -133,15 +133,15 @@ fn setup_queue(io: u16, sel: u16, falloc: &mut FrameAllocator) -> Option<VirtQue
         let desc = base;
         let avail = desc + 16 * qsz as u64;
         let used = (avail + 6 + 2 * qsz as u64 + 4095) & !4095;
-        // queue address = fysieke PFN (>>12)
+        // queue address = physical PFN (>>12)
         Port::new(io + VIRTIO_QUEUE_PFN).write((base >> 12) as u32);
         Some(VirtQueue { size: qsz, base, desc, avail, used, last_used: 0 })
     }
 }
 
-/// Zoek + initialiseer het virtio-net apparaat. Geeft true bij succes.
+/// Find + initialize the virtio-net device. Returns true on success.
 pub fn init(falloc: &mut FrameAllocator) -> bool {
-    // 1. PCI-scan: zoek 0x1AF4:0x1000 (legacy virtio-net).
+    // 1. PCI scan: look for 0x1AF4:0x1000 (legacy virtio-net).
     let mut found = None;
     'scan: for slot in 0u8..32 {
         let id = pci_cfg_read32(0, slot, 0, 0x00);
@@ -159,12 +159,12 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
     let slot = match found {
         Some(s) => s,
         None => {
-            crate::serial_println!("[net] geen virtio-net apparaat gevonden");
+            crate::serial_println!("[net] no virtio-net device found");
             return false;
         }
     };
 
-    // 2. BAR0 = I/O-poortbasis; zet I/O + bus-master aan in command-register.
+    // 2. BAR0 = I/O port base; enable I/O + bus-master in the command register.
     let bar0 = pci_cfg_read32(0, slot, 0, 0x10);
     let io = (bar0 & 0xFFFC) as u16;
     let cmd = pci_cfg_read32(0, slot, 0, 0x04);
@@ -178,18 +178,18 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         status.write(STATUS_ACK);
         status.write(STATUS_ACK | STATUS_DRIVER);
 
-        // 4. Feature-onderhandeling: alleen MAC (geen mergeable rx, geen csum-offload).
+        // 4. Feature negotiation: MAC only (no mergeable rx, no csum offload).
         let dev_feat: u32 = Port::new(io + VIRTIO_DEVICE_FEATURES).read();
         let drv_feat = dev_feat & VIRTIO_NET_F_MAC;
         Port::new(io + VIRTIO_DRIVER_FEATURES).write(drv_feat);
 
-        // 5. MAC uit de device-config lezen.
+        // 5. Read the MAC from the device config.
         let mut mac = [0u8; 6];
         for (i, b) in mac.iter_mut().enumerate() {
             *b = Port::<u8>::new(io + VIRTIO_NET_CFG_MAC + i as u16).read();
         }
 
-        // 6. RX (queue 0) en TX (queue 1) virtqueues opzetten.
+        // 6. Set up RX (queue 0) and TX (queue 1) virtqueues.
         let mut rx = match setup_queue(io, 0, falloc) {
             Some(q) => q,
             None => return false,
@@ -199,7 +199,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
             None => return false,
         };
 
-        // 7. RX-buffers toewijzen en in de avail-ring zetten (device schrijft erin).
+        // 7. Allocate RX buffers and put them in the avail ring (device writes into them).
         let mut rx_bufs = [0u64; RX_BUFS];
         for i in 0..RX_BUFS {
             let buf = falloc.allocate().expect("rx-buf");
@@ -207,19 +207,19 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
             let d = rx.desc(i as u16);
             (*d).addr = buf;
             (*d).len = BUF_SIZE as u32;
-            (*d).flags = DESC_WRITE; // device → ons
+            (*d).flags = DESC_WRITE; // device → us
             (*d).next = 0;
             rx.avail_ring(i as u16).write(i as u16);
         }
         compiler_fence(Ordering::SeqCst);
         rx.avail_idx_ptr().write(RX_BUFS as u16);
 
-        // TX-buffer (één, synchroon hergebruikt).
+        // TX buffer (one, reused synchronously).
         let tx_buf = falloc.allocate().expect("tx-buf");
 
-        // 8. DRIVER_OK — apparaat is nu live.
+        // 8. DRIVER_OK — device is now live.
         status.write(STATUS_ACK | STATUS_DRIVER | STATUS_DRIVER_OK);
-        // RX-queue notificeren zodat het apparaat de buffers oppakt.
+        // Notify the RX queue so the device picks up the buffers.
         Port::<u16>::new(io + VIRTIO_QUEUE_NOTIFY).write(0);
 
         NIC = Some(VirtioNet { io, mac, rx, tx, rx_bufs, tx_buf });
@@ -231,12 +231,12 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
     true
 }
 
-/// Het MAC-adres van de NIC (na init).
+/// The MAC address of the NIC (after init).
 pub fn mac() -> Option<[u8; 6]> {
     unsafe { (*core::ptr::addr_of!(NIC)).as_ref().map(|n| n.mac) }
 }
 
-/// Verzend één Ethernet-frame (met virtio_net_hdr ervoor). Synchroon.
+/// Send one Ethernet frame (with virtio_net_hdr prepended). Synchronous.
 pub fn send(frame: &[u8]) -> bool {
     unsafe {
         let nic = match (*core::ptr::addr_of_mut!(NIC)).as_mut() {
@@ -246,7 +246,7 @@ pub fn send(frame: &[u8]) -> bool {
         if NET_HDR_LEN + frame.len() > BUF_SIZE {
             return false;
         }
-        // virtio_net_hdr (10 bytes nul) + frame in de TX-buffer.
+        // virtio_net_hdr (10 zero bytes) + frame in the TX buffer.
         core::ptr::write_bytes(nic.tx_buf as *mut u8, 0, NET_HDR_LEN);
         core::ptr::copy_nonoverlapping(frame.as_ptr(), (nic.tx_buf + NET_HDR_LEN as u64) as *mut u8, frame.len());
         let d = nic.tx.desc(0);
@@ -260,7 +260,7 @@ pub fn send(frame: &[u8]) -> bool {
         nic.tx.avail_idx_ptr().write(idx.wrapping_add(1));
         compiler_fence(Ordering::SeqCst);
         Port::<u16>::new(nic.io + VIRTIO_QUEUE_NOTIFY).write(1);
-        // Wacht (kort) tot het apparaat de descriptor heeft verwerkt.
+        // Wait (briefly) until the device has processed the descriptor.
         for _ in 0..1_000_000 {
             if nic.tx.used_idx() != nic.tx.last_used {
                 nic.tx.last_used = nic.tx.used_idx();
@@ -272,7 +272,7 @@ pub fn send(frame: &[u8]) -> bool {
     }
 }
 
-/// Poll één ontvangen frame (zonder de virtio_net_hdr). Geeft None als er niets is.
+/// Poll one received frame (without the virtio_net_hdr). Returns None if there is nothing.
 pub fn poll_recv() -> Option<alloc::vec::Vec<u8>> {
     unsafe {
         let nic = (*core::ptr::addr_of_mut!(NIC)).as_mut()?;
@@ -283,9 +283,9 @@ pub fn poll_recv() -> Option<alloc::vec::Vec<u8>> {
         let slot = nic.rx.last_used % nic.rx.size;
         let (id, len) = nic.rx.used_elem(slot);
         let id = id as usize;
-        // De door het apparaat gerapporteerde lengte mag de buffer NOOIT overschrijden:
-        // een kwaadaardig/buggy virtio-apparaat dat len > BUF_SIZE claimt zou anders een
-        // out-of-bounds read uit de rx-buffer veroorzaken. Klem op BUF_SIZE.
+        // The length reported by the device must NEVER exceed the buffer:
+        // a malicious/buggy virtio device claiming len > BUF_SIZE would otherwise cause an
+        // out-of-bounds read from the rx buffer. Clamp to BUF_SIZE.
         let total = (len as usize).min(BUF_SIZE);
         let mut out = alloc::vec::Vec::new();
         if total > NET_HDR_LEN && id < RX_BUFS {
@@ -293,7 +293,7 @@ pub fn poll_recv() -> Option<alloc::vec::Vec<u8>> {
             let frame = core::slice::from_raw_parts((buf + NET_HDR_LEN as u64) as *const u8, total - NET_HDR_LEN);
             out.extend_from_slice(frame);
         }
-        // Buffer teruggeven aan het apparaat (opnieuw beschikbaar maken).
+        // Return the buffer to the device (make it available again).
         nic.rx.last_used = nic.rx.last_used.wrapping_add(1);
         let aidx = nic.rx.avail_idx_ptr().read();
         nic.rx.avail_ring(aidx % nic.rx.size).write(id as u16);

@@ -1,24 +1,24 @@
-//! LLM-backend (Sprint AA, stap 5) — de soevereine standaard is **lokaal**.
+//! LLM backend (Sprint AA, step 5) — the sovereign default is **local**.
 //!
-//! Een agent praat met een taalmodel via de [`LlmBackend`]-trait. De standaard-
-//! implementatie spreekt het **Ollama-compatibele** `/api/chat`-protocol (JSON over
-//! HTTP naar `localhost:11434`) — volledig lokaal, geen cloud. Een cloud-backend is
-//! opt-in per gebruiker (sleutel via EuroVault, elke call → P3). Dit module bevat de
-//! trait + de host-geteste request/response-(de)serialisatie; de echte HTTP-transport
-//! koppelt de kernel/userspace-daemon via EuroNet.
+//! An agent talks to a language model via the [`LlmBackend`] trait. The default
+//! implementation speaks the **Ollama-compatible** `/api/chat` protocol (JSON over
+//! HTTP to `localhost:11434`) — fully local, no cloud. A cloud backend is
+//! opt-in per user (key via EuroVault, every call → P3). This module contains the
+//! trait + the host-tested request/response (de)serialization; the real HTTP transport
+//! is wired up by the kernel/userspace daemon via EuroNet.
 
 use crate::json::Json;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// De rol van een bericht in de conversatie.
+/// The role of a message in the conversation.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role {
     System,
     User,
     Assistant,
-    /// Het resultaat van een tool-aanroep, teruggevoerd naar het model.
+    /// The result of a tool call, fed back to the model.
     Tool,
 }
 
@@ -33,7 +33,7 @@ impl Role {
     }
 }
 
-/// Eén bericht in de conversatie.
+/// A single message in the conversation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Message {
     pub role: Role,
@@ -52,25 +52,25 @@ impl Message {
     }
 }
 
-/// Wat het model terugkomt: ofwel een eindantwoord, ofwel een tool-aanroep.
+/// What the model returns: either a final answer, or a tool call.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LlmResponse {
-    /// Het model geeft een eindantwoord (geen tool meer nodig).
+    /// The model gives a final answer (no more tools needed).
     Text(String),
-    /// Het model wil een MCP-tool aanroepen met deze argumenten.
+    /// The model wants to call an MCP tool with these arguments.
     ToolCall { name: String, arguments: Json },
 }
 
-/// Een taalmodel-backend (lokaal of cloud — transparant voor de agent).
+/// A language-model backend (local or cloud — transparent to the agent).
 pub trait LlmBackend {
-    /// Voer een conversatie-stap uit: gegeven de geschiedenis + de beschikbare
-    /// tool-namen, geef het volgende antwoord van het model.
+    /// Execute one conversation step: given the history + the available
+    /// tool names, return the model's next response.
     fn step(&mut self, messages: &[Message], tools: &[&str]) -> LlmResponse;
 }
 
-/// Bouw een Ollama-`/api/chat`-request-body (JSON) voor een lokaal model.
-/// `tools` wordt als systeem-context meegegeven (functie-namen) — modellen zonder
-/// native tool-API krijgen ze zo toch aangereikt.
+/// Build an Ollama `/api/chat` request body (JSON) for a local model.
+/// `tools` is passed as system context (function names) — models without
+/// a native tool API are still given them this way.
 pub fn ollama_request(model: &str, messages: &[Message], tools: &[&str], stream: bool) -> String {
     let msgs: Vec<Json> = messages
         .iter()
@@ -91,11 +91,11 @@ pub fn ollama_request(model: &str, messages: &[Message], tools: &[&str], stream:
     .to_string()
 }
 
-/// Parse een Ollama-`/api/chat`-response-body naar een [`LlmResponse`].
+/// Parse an Ollama `/api/chat` response body into an [`LlmResponse`].
 ///
-/// Ollama geeft `{"message":{"role":"assistant","content":"...","tool_calls":[
-/// {"function":{"name":"fs_read","arguments":{...}}}]}}`. Is er een `tool_calls`,
-/// dan is het een [`LlmResponse::ToolCall`]; anders de tekst-`content`.
+/// Ollama returns `{"message":{"role":"assistant","content":"...","tool_calls":[
+/// {"function":{"name":"fs_read","arguments":{...}}}]}}`. If there is a `tool_calls`,
+/// then it is an [`LlmResponse::ToolCall`]; otherwise the text `content`.
 pub fn parse_ollama_response(body: &str) -> Result<LlmResponse, &'static str> {
     let v = Json::parse(body).map_err(|_| "json")?;
     let msg = v.get("message").ok_or("no message")?;
@@ -111,9 +111,9 @@ pub fn parse_ollama_response(body: &str) -> Result<LlmResponse, &'static str> {
     Ok(LlmResponse::Text(content.to_string()))
 }
 
-/// Bouw een volledige **HTTP/1.1 POST `/api/chat`**-request naar een lokale Ollama
-/// (`host` bv. `"localhost:11434"`). De kernel hoeft enkel deze bytes over een
-/// EuroNet-TCP-socket te sturen; het protocol is hier host-getest.
+/// Build a full **HTTP/1.1 POST `/api/chat`** request to a local Ollama
+/// (`host` e.g. `"localhost:11434"`). The kernel only needs to send these bytes over an
+/// EuroNet TCP socket; the protocol is host-tested here.
 pub fn ollama_http_request(host: &str, model: &str, messages: &[Message], tools: &[&str]) -> alloc::vec::Vec<u8> {
     let body = ollama_request(model, messages, tools, false);
     let mut req = String::new();
@@ -130,16 +130,16 @@ pub fn ollama_http_request(host: &str, model: &str, messages: &[Message], tools:
     req.into_bytes()
 }
 
-/// Parse een rauwe HTTP-respons (headers + body) van Ollama naar een [`LlmResponse`].
-/// Splitst op de lege regel tussen headers en body en parseert de JSON-body.
+/// Parse a raw HTTP response (headers + body) from Ollama into an [`LlmResponse`].
+/// Splits on the blank line between headers and body and parses the JSON body.
 pub fn parse_http_response(raw: &[u8]) -> Result<LlmResponse, &'static str> {
-    // Vind het einde van de headers (`\r\n\r\n`).
+    // Find the end of the headers (`\r\n\r\n`).
     let split = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
-        .ok_or("geen header-einde")?;
+        .ok_or("no header end")?;
     let body = &raw[split + 4..];
-    let text = core::str::from_utf8(body).map_err(|_| "body niet-utf8")?;
+    let text = core::str::from_utf8(body).map_err(|_| "body not utf-8")?;
     parse_ollama_response(text.trim())
 }
 
@@ -149,12 +149,12 @@ mod tests {
 
     #[test]
     fn http_request_framing() {
-        let req = ollama_http_request("localhost:11434", "mistral:7b", &[Message::user("hoi")], &["fs_read"]);
+        let req = ollama_http_request("localhost:11434", "mistral:7b", &[Message::user("hi")], &["fs_read"]);
         let s = alloc::string::String::from_utf8(req).unwrap();
         assert!(s.starts_with("POST /api/chat HTTP/1.1\r\n"));
         assert!(s.contains("Host: localhost:11434\r\n"));
         assert!(s.contains("Content-Type: application/json\r\n"));
-        // Content-Length moet de echte body-lengte zijn.
+        // Content-Length must be the real body length.
         let body = s.split("\r\n\r\n").nth(1).unwrap();
         assert!(s.contains(&alloc::format!("Content-Length: {}\r\n", body.len())));
         assert!(body.contains("\"model\":\"mistral:7b\""));
@@ -162,15 +162,15 @@ mod tests {
 
     #[test]
     fn http_response_parsing() {
-        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 48\r\n\r\n{\"message\":{\"role\":\"assistant\",\"content\":\"Klaar.\"}}";
-        assert_eq!(parse_http_response(raw).unwrap(), LlmResponse::Text("Klaar.".to_string()));
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 48\r\n\r\n{\"message\":{\"role\":\"assistant\",\"content\":\"Done.\"}}";
+        assert_eq!(parse_http_response(raw).unwrap(), LlmResponse::Text("Done.".to_string()));
     }
 
     #[test]
     fn request_shape() {
         let req = ollama_request(
             "mistral:7b-instruct",
-            &[Message::system("je bent een assistent"), Message::user("hoi")],
+            &[Message::system("you are an assistant"), Message::user("hi")],
             &["fs_read", "fs_write"],
             false,
         );
@@ -180,7 +180,7 @@ mod tests {
         if let Json::Arr(m) = v.get("messages").unwrap() {
             assert_eq!(m.len(), 2);
             assert_eq!(m[0].get("role").unwrap().as_str(), Some("system"));
-            assert_eq!(m[1].get("content").unwrap().as_str(), Some("hoi"));
+            assert_eq!(m[1].get("content").unwrap().as_str(), Some("hi"));
         } else {
             panic!();
         }
@@ -188,8 +188,8 @@ mod tests {
 
     #[test]
     fn parse_text_response() {
-        let body = r#"{"message":{"role":"assistant","content":"Klaar."}}"#;
-        assert_eq!(parse_ollama_response(body).unwrap(), LlmResponse::Text("Klaar.".to_string()));
+        let body = r#"{"message":{"role":"assistant","content":"Done."}}"#;
+        assert_eq!(parse_ollama_response(body).unwrap(), LlmResponse::Text("Done.".to_string()));
     }
 
     #[test]

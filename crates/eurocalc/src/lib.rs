@@ -1,10 +1,10 @@
-//! EuroCalc — de formule-engine van EuroSuite Calc (ES-Calc).
+//! EuroCalc — the formula engine of EuroSuite Calc (ES-Calc).
 //!
-//! Parseert en evalueert rekenblad-formules over een [`eurodoc`]-`SheetBody`:
-//! getallen, **celverwijzingen** (`A1`), **bereiken** (`A1:B3`), de operatoren
-//! `+ - * / ^ %`, haakjes, en functies (`SUM AVERAGE MIN MAX COUNT IF ROUND ABS`).
-//! Formule-cellen die naar elkaar verwijzen worden recursief geëvalueerd, met
-//! **cyclusdetectie**. Pure, host-geteste `no_std`-logica (f64-rekenkern).
+//! Parses and evaluates spreadsheet formulas over a [`eurodoc`]-`SheetBody`:
+//! numbers, **cell references** (`A1`), **ranges** (`A1:B3`), the operators
+//! `+ - * / ^ %`, parentheses, and functions (`SUM AVERAGE MIN MAX COUNT IF ROUND ABS`).
+//! Formula cells that reference each other are evaluated recursively, with
+//! **cycle detection**. Pure, host-tested `no_std` logic (f64 compute core).
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -15,27 +15,27 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use eurodoc::model::{Cell, SheetBody};
 
-/// Een evaluatiefout.
+/// An evaluation error.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum CalcError {
-    /// Syntaxfout in de formule.
+    /// Syntax error in the formula.
     Syntax,
-    /// Verwijzing naar een ongeldige cel/naam.
+    /// Reference to an invalid cell/name.
     BadRef,
-    /// Deling door nul.
+    /// Division by zero.
     DivZero,
-    /// Een cel verwijst (in)direct naar zichzelf.
+    /// A cell references itself (in)directly.
     Cycle,
 }
 
-/// Zet een A1-celnaam om naar (rij, kolom), 0-gebaseerd. `"B3"` → (2, 1).
+/// Converts an A1 cell name to (row, column), 0-based. `"B3"` → (2, 1).
 pub fn parse_ref(s: &str) -> Option<(u32, u32)> {
     let s = s.trim();
     let mut col: u32 = 0;
     let mut i = 0;
     let bytes = s.as_bytes();
     while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
-        // Overloop-veilig (audit C5): een te lange kolomnaam → geen geldige ref.
+        // Overflow-safe (audit C5): a too-long column name → not a valid ref.
         col = col
             .checked_mul(26)?
             .checked_add((bytes[i].to_ascii_uppercase() - b'A' + 1) as u32)?;
@@ -56,7 +56,7 @@ pub fn parse_ref(s: &str) -> Option<(u32, u32)> {
 #[derive(Clone, PartialEq, Debug)]
 enum Tok {
     Num(f64),
-    Ident(String), // functienaam of celnaam
+    Ident(String), // function name or cell name
     Op(char),
     LParen,
     RParen,
@@ -113,19 +113,19 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, CalcError> {
     Ok(out)
 }
 
-// ── Parser (recursive descent met precedentie) ──────────────────────────────
+// ── Parser (recursive descent with precedence) ──────────────────────────────
 
 struct Parser<'a> {
     toks: &'a [Tok],
     pos: usize,
-    /// Recursiediepte — begrensd zodat diep-geneste invoer de stack niet overloopt (audit H13).
+    /// Recursion depth — bounded so deeply nested input does not overflow the stack (audit H13).
     depth: usize,
 }
 
-/// Maximale nesting-diepte van een formule (haakjes/unair/macht).
+/// Maximum nesting depth of a formula (parentheses/unary/power).
 const MAX_DEPTH: usize = 256;
 
-/// Een geparseerde expressieboom.
+/// A parsed expression tree.
 enum Expr {
     Num(f64),
     Ref(u32, u32),
@@ -177,14 +177,14 @@ impl<'a> Parser<'a> {
         let left = self.parse_unary()?;
         if let Some(Tok::Op('^')) = self.peek() {
             self.pos += 1;
-            let right = self.parse_pow()?; // rechts-associatief
+            let right = self.parse_pow()?; // right-associative
             return Ok(Expr::Bin('^', alloc::boxed::Box::new(left), alloc::boxed::Box::new(right)));
         }
         Ok(left)
     }
 
     fn parse_unary(&mut self) -> Result<Expr, CalcError> {
-        // Elke recursielaag (haakjes/unair/macht) passeert hier precies één keer.
+        // Each recursion layer (parentheses/unary/power) passes through here exactly once.
         self.depth += 1;
         if self.depth > MAX_DEPTH {
             return Err(CalcError::Syntax);
@@ -218,7 +218,7 @@ impl<'a> Parser<'a> {
             }
             Some(Tok::Ident(id)) => {
                 if self.peek() == Some(&Tok::LParen) {
-                    // Functie-aanroep.
+                    // Function call.
                     self.pos += 1;
                     let mut args = Vec::new();
                     if self.peek() != Some(&Tok::RParen) {
@@ -235,7 +235,7 @@ impl<'a> Parser<'a> {
                     }
                     Ok(Expr::Call(id.to_ascii_uppercase(), args))
                 } else if self.peek() == Some(&Tok::Colon) {
-                    // Bereik A1:B3.
+                    // Range A1:B3.
                     let from = parse_ref(&id).ok_or(CalcError::BadRef)?;
                     self.pos += 1;
                     let to_id = match self.bump() {
@@ -254,7 +254,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// Evalueer een formule (`"=A1+SUM(B1:B3)"` of zonder `=`) over `sheet`.
+/// Evaluate a formula (`"=A1+SUM(B1:B3)"` or without `=`) over `sheet`.
 pub fn eval(formula: &str, sheet: &SheetBody) -> Result<f64, CalcError> {
     let f = formula.trim().strip_prefix('=').unwrap_or(formula.trim());
     let toks = tokenize(f)?;
@@ -267,14 +267,14 @@ pub fn eval(formula: &str, sheet: &SheetBody) -> Result<f64, CalcError> {
     eval_expr(&expr, sheet, &mut stack)
 }
 
-/// Evalueer de numerieke waarde van een cel (formules recursief, met cyclusdetectie).
+/// Evaluate the numeric value of a cell (formulas recursively, with cycle detection).
 fn cell_value(row: u32, col: u32, sheet: &SheetBody, stack: &mut Vec<(u32, u32)>) -> Result<f64, CalcError> {
     if stack.contains(&(row, col)) {
         return Err(CalcError::Cycle);
     }
     match sheet.get(row, col) {
         Cell::Empty => Ok(0.0),
-        Cell::Text(_) => Ok(0.0), // tekst telt als 0 in rekenkundige context
+        Cell::Text(_) => Ok(0.0), // text counts as 0 in an arithmetic context
         Cell::Number { scaled, scale } => Ok(scaled as f64 / powf(10.0, scale as f64)),
         Cell::Formula(f) => {
             stack.push((row, col));
@@ -293,7 +293,7 @@ fn eval_expr(e: &Expr, sheet: &SheetBody, stack: &mut Vec<(u32, u32)>) -> Result
     match e {
         Expr::Num(n) => Ok(*n),
         Expr::Ref(r, c) => cell_value(*r, *c, sheet, stack),
-        Expr::Range(..) => Err(CalcError::Syntax), // een kaal bereik is geen scalair
+        Expr::Range(..) => Err(CalcError::Syntax), // a bare range is not a scalar
         Expr::Neg(x) => Ok(-eval_expr(x, sheet, stack)?),
         Expr::Bin(op, a, b) => {
             let x = eval_expr(a, sheet, stack)?;
@@ -310,7 +310,7 @@ fn eval_expr(e: &Expr, sheet: &SheetBody, stack: &mut Vec<(u32, u32)>) -> Result
                 }
                 '%' => {
                     if y == 0.0 {
-                        return Err(CalcError::DivZero); // audit M2: zoals '/'
+                        return Err(CalcError::DivZero); // audit M2: like '/'
                     }
                     x % y
                 }
@@ -322,7 +322,7 @@ fn eval_expr(e: &Expr, sheet: &SheetBody, stack: &mut Vec<(u32, u32)>) -> Result
     }
 }
 
-/// Verzamel de scalaire waarden van een argument (een bereik levert meerdere).
+/// Collect the scalar values of an argument (a range yields several).
 fn collect(e: &Expr, sheet: &SheetBody, stack: &mut Vec<(u32, u32)>, out: &mut Vec<f64>) -> Result<(), CalcError> {
     match e {
         Expr::Range((r0, c0), (r1, c1)) => {
@@ -375,7 +375,7 @@ fn eval_call(name: &str, args: &[Expr], sheet: &SheetBody, stack: &mut Vec<(u32,
     }
 }
 
-// no_std-vriendelijke helpers (geen libm nodig voor deze gevallen).
+// no_std-friendly helpers (no libm needed for these cases).
 fn round_half(x: f64) -> f64 {
     if x >= 0.0 {
         (x + 0.5) as i64 as f64
@@ -384,7 +384,7 @@ fn round_half(x: f64) -> f64 {
     }
 }
 
-/// Gehele machten (de enige die het rekenblad in de praktijk nodig heeft).
+/// Integer powers (the only ones the spreadsheet needs in practice).
 fn powf(base: f64, exp: f64) -> f64 {
     let n = exp as i64;
     if n as f64 == exp {
@@ -404,7 +404,7 @@ fn powf(base: f64, exp: f64) -> f64 {
             r
         }
     } else {
-        // Niet-gehele exponent: niet ondersteund zonder libm → benader 0.
+        // Non-integer exponent: unsupported without libm → approximate 0.
         base
     }
 }
@@ -477,14 +477,14 @@ mod tests {
     #[test]
     fn audit_regressions() {
         let s = sheet();
-        // C5: te lange kolomnaam → geen panic, nette fout.
+        // C5: too-long column name → no panic, clean error.
         assert_eq!(eval("=ZZZZZZZ1", &s), Err(CalcError::BadRef));
-        // H13: diep-geneste invoer → geen stack-overflow, nette syntaxfout.
+        // H13: deeply nested input → no stack overflow, clean syntax error.
         let deep = alloc::format!("={}1{}", "(".repeat(5000), ")".repeat(5000));
         assert_eq!(eval(&deep, &s), Err(CalcError::Syntax));
         let neg = alloc::format!("={}1", "-".repeat(5000));
         assert_eq!(eval(&neg, &s), Err(CalcError::Syntax));
-        // M2: modulo door nul → DivZero (zoals '/').
+        // M2: modulo by zero → DivZero (like '/').
         assert_eq!(eval("=5%0", &s), Err(CalcError::DivZero));
     }
 

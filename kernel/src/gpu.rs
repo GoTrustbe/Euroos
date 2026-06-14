@@ -1,12 +1,12 @@
-//! Kernel-zijde van **EuroGPU** (plan K4): het virtio-gpu commandoprotocol. Bij boot
-//! bouwen we de volledige commando-sequentie (displayinfo → 2D-resource → backing →
-//! scanout → transfer → flush) en parseren we een respons, deterministisch. De
-//! host-geteste kern leeft in [`eurogpu`].
+//! Kernel side of **EuroGPU** (plan K4): the virtio-gpu command protocol. At boot
+//! we build the full command sequence (displayinfo → 2D resource → backing →
+//! scanout → transfer → flush) and parse a response, deterministically. The
+//! host-tested core lives in [`eurogpu`].
 //!
-//! NB: de échte device-driver vereist de **moderne** virtio-transport (virtio-gpu is
-//! virtio-1.0-only; de bestaande virtio-blk/-net gebruiken de legacy-poort-I/O). Die
-//! transport + framebuffer-scanout is hardware-attended werk; het protocol hier is
-//! volledig en host-getest.
+//! NB: the real device driver requires the **modern** virtio transport (virtio-gpu is
+//! virtio-1.0-only; the existing virtio-blk/-net use legacy port I/O). That
+//! transport + framebuffer scanout is hardware-attended work; the protocol here is
+//! complete and host-tested.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -16,9 +16,9 @@ use eurogpu::{
     set_scanout, transfer_to_host_2d, FORMAT_B8G8R8A8_UNORM, RESP_OK_DISPLAY_INFO, RESP_OK_NODATA,
 };
 
-/// Boot-zelftest: bouw de hele virtio-gpu-commandostroom + parse een respons.
+/// Boot self-test: build the whole virtio-gpu command stream + parse a response.
 pub fn selftest() {
-    // De commando-sequentie die de driver naar de control-virtqueue zou sturen.
+    // The command sequence that the driver would send to the control virtqueue.
     let info = get_display_info();
     let create = resource_create_2d(1, FORMAT_B8G8R8A8_UNORM, 1024, 768);
     let backing = resource_attach_backing(1, 0x1_0000_0000, 1024 * 768 * 4);
@@ -26,7 +26,7 @@ pub fn selftest() {
     let transfer = transfer_to_host_2d(1, 1024, 768);
     let flush = resource_flush(1, 1024, 768);
 
-    // Alle commando's dragen een geldige 24-byte-header met het juiste type.
+    // All commands carry a valid 24-byte header with the correct type.
     let cmds_ok = info.len() == 24
         && create.len() == 40
         && backing.len() >= 48
@@ -34,8 +34,8 @@ pub fn selftest() {
         && transfer.len() >= 48
         && flush.len() >= 44;
 
-    // Simuleer een OK_DISPLAY_INFO-respons (zoals het device 'm zou geven): scanout
-    // 0 ingeschakeld op 1024×768 → de driver leest de resolutie eruit.
+    // Simulate an OK_DISPLAY_INFO response (as the device would give it): scanout
+    // 0 enabled at 1024×768 → the driver reads the resolution out of it.
     let mut resp = RESP_OK_DISPLAY_INFO.to_le_bytes().to_vec();
     resp.extend_from_slice(&[0u8; 20]);
     resp.extend_from_slice(&0u32.to_le_bytes()); // x
@@ -47,24 +47,24 @@ pub fn selftest() {
     let res = parse_display_info(&resp);
     let resp_ok = is_ok(&resp) && res == Some((1024, 768));
 
-    // Een OK_NODATA-respons op een create/scanout/flush wordt als succes herkend.
+    // An OK_NODATA response to a create/scanout/flush is recognized as success.
     let nodata_ok = is_ok(&RESP_OK_NODATA.to_le_bytes());
 
     let ok = cmds_ok && resp_ok && nodata_ok;
     crate::serial_println!(
-        "[k4] EuroGPU: virtio-gpu-commandostroom (displayinfo→create-2d→backing→scanout→transfer→flush)={cmds_ok}, displayinfo-respons-geparsed={:?}, OK-respons-herkend={nodata_ok} → {}",
+        "[k4] EuroGPU: virtio-gpu command stream (displayinfo→create-2d→backing→scanout→transfer→flush)={cmds_ok}, displayinfo-response-parsed={:?}, OK-response-recognized={nodata_ok} → {}",
         res,
-        if ok { "OK (virtio-gpu-protocolkern; moderne-virtio-driver = hardware-attended) ✓" } else { "MISLUKT" }
+        if ok { "OK (virtio-gpu protocol core; modern-virtio driver = hardware-attended) ✓" } else { "FAILED" }
     );
 }
 
-/// `gpu`-shellcommando: toon de virtio-gpu-protocolstatus.
+/// `gpu` shell command: show the virtio-gpu protocol status.
 pub fn shell() -> Vec<String> {
     let create = resource_create_2d(1, FORMAT_B8G8R8A8_UNORM, 1920, 1080);
     alloc::vec![
-        String::from("EuroGPU — virtio-gpu 2D-acceleratie (protocolkern host-getest)"),
-        alloc::format!("  commando's: GET_DISPLAY_INFO · RESOURCE_CREATE_2D ({} B) · ATTACH_BACKING · SET_SCANOUT · TRANSFER_TO_HOST_2D · RESOURCE_FLUSH", create.len()),
-        String::from("  formaat B8G8R8A8 (zoals de GOP-framebuffer); een 2D-resource = de scanout-framebuffer"),
-        String::from("  driver-binding vereist de moderne virtio-transport (virtio-1.0) — hardware-attended vervolg"),
+        String::from("EuroGPU — virtio-gpu 2D acceleration (protocol core host-tested)"),
+        alloc::format!("  commands: GET_DISPLAY_INFO · RESOURCE_CREATE_2D ({} B) · ATTACH_BACKING · SET_SCANOUT · TRANSFER_TO_HOST_2D · RESOURCE_FLUSH", create.len()),
+        String::from("  format B8G8R8A8 (like the GOP framebuffer); a 2D resource = the scanout framebuffer"),
+        String::from("  driver binding requires the modern virtio transport (virtio-1.0) — hardware-attended follow-up"),
     ]
 }

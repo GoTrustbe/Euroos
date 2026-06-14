@@ -1,14 +1,14 @@
-//! EuroCA — een soevereine, lokale certificaatautoriteit (plan O3).
+//! EuroCA — a sovereign, local certificate authority (plan O3).
 //!
-//! EuroOS vertrouwt geen buitenlandse CA-hiërarchie als enige anker: een organisatie
-//! kan haar eigen wortel-CA draaien en daarmee diensten, gebruikers en agents
-//! ondertekenen. Dit crate is de host-geteste kern: een **wortel-CA** (zelf-getekend),
-//! het **uitgeven** van certificaten op een CSR, **ketenverificatie** (handtekening +
-//! geldigheidsvenster + CA-vlag) en **revocatie**. Crypto = Ed25519 (`ed25519-dalek`)
-//! + SHA-256-vingerafdrukken (`sha2`); geen klok-afhankelijkheid (de tijd komt binnen).
+//! EuroOS does not trust a foreign CA hierarchy as its sole anchor: an organization
+//! can run its own root CA and use it to sign services, users and agents.
+//! This crate is the host-tested core: a **root CA** (self-signed),
+//! the **issuance** of certificates from a CSR, **chain verification** (signature +
+//! validity window + CA flag) and **revocation**. Crypto = Ed25519 (`ed25519-dalek`)
+//! + SHA-256 fingerprints (`sha2`); no clock dependency (time is passed in).
 //!
-//! Het is bewust geen X.509/ASN.1 (dat is een compat-laag in EuroTLS): het is een
-//! compact, eigen, eenduidig te encoderen formaat — soeverein by design.
+//! It is deliberately not X.509/ASN.1 (that is a compat layer in EuroTLS): it is a
+//! compact, custom, unambiguously encodable format — sovereign by design.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -22,49 +22,49 @@ use sha2::{Digest, Sha256};
 
 const DOMAIN: &[u8] = b"EuroCA-cert-v1\0";
 
-/// Een uitgegeven certificaat: identiteit + sleutel + geldigheid + handtekening.
+/// An issued certificate: identity + key + validity + signature.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Certificate {
     pub serial: u64,
     pub subject: String,
-    /// De publieke sleutel van het subject (Ed25519, 32 bytes).
+    /// The public key of the subject (Ed25519, 32 bytes).
     pub subject_key: [u8; 32],
     pub issuer: String,
-    /// Geldigheidsvenster (seconden sinds epoch).
+    /// Validity window (seconds since epoch).
     pub not_before: u64,
     pub not_after: u64,
-    /// Mag dit certificaat zelf certificaten ondertekenen (een (sub-)CA)?
+    /// May this certificate itself sign certificates (a (sub-)CA)?
     pub is_ca: bool,
-    /// Ed25519-handtekening van de **uitgever** over de TBS-bytes.
+    /// Ed25519 signature of the **issuer** over the TBS bytes.
     pub signature: [u8; 64],
 }
 
-/// Een certificaataanvraag (Certificate Signing Request).
+/// A certificate request (Certificate Signing Request).
 pub struct Csr {
     pub subject: String,
     pub subject_key: [u8; 32],
     pub is_ca: bool,
 }
 
-/// Waarom een certificaat ongeldig is.
+/// Why a certificate is invalid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CertError {
-    /// De handtekening klopt niet voor de uitgever-sleutel.
+    /// The signature does not match the issuer key.
     BadSignature,
-    /// `now` ligt vóór `not_before`.
+    /// `now` is before `not_before`.
     NotYetValid,
-    /// `now` ligt ná `not_after`.
+    /// `now` is after `not_after`.
     Expired,
-    /// De uitgever is geen CA (mag niet tekenen).
+    /// The issuer is not a CA (not allowed to sign).
     IssuerNotCa,
-    /// Het certificaat staat op de revocatielijst.
+    /// The certificate is on the revocation list.
     Revoked,
-    /// De uitgever-sleutel is geen geldig Ed25519-punt.
+    /// The issuer key is not a valid Ed25519 point.
     BadIssuerKey,
 }
 
-/// De "to-be-signed"-bytes: een canonieke, lengte-geprefixte encodering van alle
-/// velden behalve de handtekening. Domein-gescheiden tegen hergebruik.
+/// The "to-be-signed" bytes: a canonical, length-prefixed encoding of all
+/// fields except the signature. Domain-separated against reuse.
 fn tbs(serial: u64, subject: &str, key: &[u8; 32], issuer: &str, nb: u64, na: u64, is_ca: bool) -> Vec<u8> {
     let mut b = Vec::new();
     b.extend_from_slice(DOMAIN);
@@ -84,12 +84,12 @@ fn push_str(b: &mut Vec<u8>, s: &str) {
 }
 
 impl Certificate {
-    /// De TBS-bytes van dit certificaat (voor (her)verificatie).
+    /// The TBS bytes of this certificate (for (re)verification).
     fn tbs_bytes(&self) -> Vec<u8> {
         tbs(self.serial, &self.subject, &self.subject_key, &self.issuer, self.not_before, self.not_after, self.is_ca)
     }
 
-    /// De SHA-256-vingerafdruk (hex) van het volledige certificaat — een stabiele id.
+    /// The SHA-256 fingerprint (hex) of the complete certificate — a stable id.
     pub fn fingerprint(&self) -> String {
         let mut h = Sha256::new();
         h.update(self.tbs_bytes());
@@ -102,7 +102,7 @@ impl Certificate {
         s
     }
 
-    /// Verifieer de handtekening + geldigheidsvenster tegen een uitgever-sleutel op `now`.
+    /// Verify the signature + validity window against an issuer key at `now`.
     pub fn verify(&self, issuer_key: &[u8; 32], now: u64) -> Result<(), CertError> {
         let vk = VerifyingKey::from_bytes(issuer_key).map_err(|_| CertError::BadIssuerKey)?;
         let sig = Signature::from_bytes(&self.signature);
@@ -117,7 +117,7 @@ impl Certificate {
     }
 }
 
-/// Een (wortel- of sub-)certificaatautoriteit: een sleutel + het eigen certificaat.
+/// A (root or sub-)certificate authority: a key + its own certificate.
 pub struct CertAuthority {
     key: SigningKey,
     pub cert: Certificate,
@@ -126,7 +126,7 @@ pub struct CertAuthority {
 }
 
 impl CertAuthority {
-    /// Maak een **wortel-CA**: een zelf-getekend CA-certificaat uit een 32-byte seed.
+    /// Create a **root CA**: a self-signed CA certificate from a 32-byte seed.
     pub fn new_root(name: &str, seed: [u8; 32], not_before: u64, not_after: u64) -> CertAuthority {
         let key = SigningKey::from_bytes(&seed);
         let pubkey = key.verifying_key().to_bytes();
@@ -145,13 +145,13 @@ impl CertAuthority {
         CertAuthority { key, cert, next_serial: 1, revoked: Vec::new() }
     }
 
-    /// De publieke sleutel van deze CA.
+    /// The public key of this CA.
     pub fn public_key(&self) -> [u8; 32] {
         self.cert.subject_key
     }
 
-    /// Geef een certificaat uit op een CSR (de CA tekent het). Het geldigheidsvenster
-    /// wordt geklemd binnen dat van de CA zelf.
+    /// Issue a certificate from a CSR (the CA signs it). The validity window
+    /// is clamped within that of the CA itself.
     pub fn issue(&mut self, csr: &Csr, not_before: u64, not_after: u64) -> Certificate {
         let nb = not_before.max(self.cert.not_before);
         let na = not_after.min(self.cert.not_after);
@@ -171,7 +171,7 @@ impl CertAuthority {
         }
     }
 
-    /// Trek een uitgegeven certificaat in (op serienummer).
+    /// Revoke an issued certificate (by serial number).
     pub fn revoke(&mut self, serial: u64) {
         if !self.revoked.contains(&serial) {
             self.revoked.push(serial);
@@ -182,19 +182,19 @@ impl CertAuthority {
         self.revoked.contains(&serial)
     }
 
-    /// Verifieer een door **deze** CA uitgegeven certificaat: handtekening + venster +
-    /// dat de CA zelf geldig is + niet-ingetrokken. De volledige ketencheck.
+    /// Verify a certificate issued by **this** CA: signature + window +
+    /// that the CA itself is valid + not revoked. The full chain check.
     pub fn verify_issued(&self, cert: &Certificate, now: u64) -> Result<(), CertError> {
-        // 1. De CA moet zelf een geldige CA zijn op `now`.
+        // 1. The CA must itself be a valid CA at `now`.
         if !self.cert.is_ca {
             return Err(CertError::IssuerNotCa);
         }
-        self.cert.verify(&self.cert.subject_key, now)?; // zelf-getekend
-        // 2. Niet ingetrokken.
+        self.cert.verify(&self.cert.subject_key, now)?; // self-signed
+        // 2. Not revoked.
         if self.is_revoked(cert.serial) {
             return Err(CertError::Revoked);
         }
-        // 3. Het blad verifieert tegen onze sleutel.
+        // 3. The leaf verifies against our key.
         cert.verify(&self.public_key(), now)
     }
 }
@@ -211,7 +211,7 @@ mod tests {
     }
 
     fn leaf_csr() -> Csr {
-        // Een dienst met zijn eigen sleutel.
+        // A service with its own key.
         let key = SigningKey::from_bytes(&[7u8; 32]);
         Csr { subject: "service.gov.eu".into(), subject_key: key.verifying_key().to_bytes(), is_ca: false }
     }
@@ -235,7 +235,7 @@ mod tests {
     fn tampered_cert_rejected() {
         let mut ca = root();
         let mut leaf = ca.issue(&leaf_csr(), T0, T0 + YEAR);
-        leaf.subject = "evil.example.com".into(); // na ondertekening gewijzigd
+        leaf.subject = "evil.example.com".into(); // modified after signing
         assert_eq!(ca.verify_issued(&leaf, T0 + 100), Err(CertError::BadSignature));
     }
 
@@ -268,7 +268,7 @@ mod tests {
     fn fingerprint_stable_and_unique() {
         let mut ca = root();
         let a = ca.issue(&leaf_csr(), T0, T0 + YEAR);
-        let b = ca.issue(&leaf_csr(), T0, T0 + YEAR); // ander serienummer
+        let b = ca.issue(&leaf_csr(), T0, T0 + YEAR); // different serial number
         assert_eq!(a.fingerprint(), a.fingerprint());
         assert_ne!(a.fingerprint(), b.fingerprint());
         assert_eq!(a.fingerprint().len(), 64);

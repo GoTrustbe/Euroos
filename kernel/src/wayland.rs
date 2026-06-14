@@ -1,11 +1,11 @@
-//! H5: EuroWL — de ECHTE Wayland-wire-protocol-server in de kernel, vóór EuroDisplay.
+//! H5: EuroWL — the REAL Wayland wire-protocol server in the kernel, ahead of EuroDisplay.
 //!
-//! Een in-kernel Wayland-test-client doorloopt de echte handshake (`get_registry`
+//! An in-kernel Wayland test client runs through the real handshake (`get_registry`
 //! → `bind` → `create_surface` → `xdg_wm_base.get_xdg_surface` → `get_toplevel` →
-//! `set_title` → `commit`); de [`eurowl::Server`] verwerkt de echte protocol-bytes
-//! en levert een getiteld venster, dat de EuroDesktop-compositor tekent. Dit is het
-//! fundament waarop (met libwayland over een AF_UNIX-socket, H1) een ONGEWIJZIGDE
-//! Wayland-client tegen EuroOS kan draaien.
+//! `set_title` → `commit`); the [`eurowl::Server`] processes the real protocol bytes
+//! and produces a titled window, which the EuroDesktop compositor draws. This is the
+//! foundation on which (with libwayland over an AF_UNIX socket, H1) an UNMODIFIED
+//! Wayland client can run against EuroOS.
 
 use alloc::string::String;
 use eurowl::{encode, Arg, Server};
@@ -13,8 +13,8 @@ use eurowl::{encode, Arg, Server};
 const G_COMPOSITOR: u32 = 1;
 const G_XDG_WM_BASE: u32 = 2;
 
-/// Draai een complete, ECHTE Wayland-handshake door de server en geef
-/// (surface_id, titel) van het resulterende top-level-venster.
+/// Run a complete, REAL Wayland handshake through the server and return
+/// (surface_id, title) of the resulting top-level window.
 pub fn run_handshake(title: &str) -> Option<(u32, String)> {
     let mut srv = Server::new();
     let mut buf = alloc::vec::Vec::new();
@@ -28,21 +28,21 @@ pub fn run_handshake(title: &str) -> Option<(u32, String)> {
     buf.extend(encode(5, 6, &[])); // wl_surface.commit
     let events = srv.handle(&buf);
     crate::serial_println!(
-        "[h5] echt Wayland-protocol: handshake verwerkt, {} bytes events terug (registry-globals + xdg-configure), {} venster(s)",
+        "[h5] real Wayland protocol: handshake processed, {} bytes of events back (registry globals + xdg-configure), {} window(s)",
         events.len(),
         srv.windows().len()
     );
     srv.windows().first().map(|w| (w.surface, w.title.clone()))
 }
 
-/// H5-zelftest: verifieer dat de echte Wayland-handshake een getiteld venster maakt.
+/// H5 self-test: verify that the real Wayland handshake produces a titled window.
 pub fn selftest() {
-    match run_handshake("EuroOS — echt Wayland-protocol") {
+    match run_handshake("EuroOS — real Wayland protocol") {
         Some((sid, title)) => crate::serial_println!(
-            "[h5] Wayland-server: surface {} gecommit → venster \"{}\" ✓",
+            "[h5] Wayland server: surface {} committed → window \"{}\" ✓",
             sid,
             title
         ),
-        None => crate::serial_println!("[h5] FOUT: geen venster uit de Wayland-handshake"),
+        None => crate::serial_println!("[h5] ERROR: no window from the Wayland handshake"),
     }
 }

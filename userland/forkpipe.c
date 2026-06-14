@@ -1,6 +1,6 @@
-/* EuroOS — S3-test: pipe() + fork() IPC. De ouder maakt een pipe, forkt, en het
- * kind schrijft een bericht in de pipe dat de ouder uitleest. Bewijst inter-proces-
- * communicatie tussen twee ECHTE processen via een in-kernel FIFO. */
+/* EuroOS — S3 test: pipe() + fork() IPC. The parent makes a pipe, forks, and the
+ * child writes a message into the pipe that the parent reads back. Proves inter-process
+ * communication between two REAL processes via an in-kernel FIFO. */
 
 static long sys(long n, long a1, long a2, long a3) {
     long ret;
@@ -26,27 +26,27 @@ __attribute__((section(".text.start"))) void _start(void) {
     int fds[2];
     fds[0] = fds[1] = -1;
     if (sys(L_PIPE2, (long)fds, 0, 0) != 0) {
-        put("  pipe2 faalde\n");
+        put("  pipe2 failed\n");
         sys(L_EXIT, 1, 0, 0);
         for (;;) {
         }
     }
     long pid = sys(L_FORK, 0, 0, 0);
     if (pid == 0) {
-        /* kind: schrijf een bericht in het schrijfuiteinde en sluit af. */
-        const char *m = "hallo-van-kind-via-pipe";
+        /* child: write a message into the write end and exit. */
+        const char *m = "hello-from-child-via-pipe";
         sys(L_WRITE, fds[1], (long)m, slen(m));
         sys(L_EXIT, 0, 0, 0);
         for (;;) {
         }
     } else {
-        /* ouder: lees (pollend) uit het leesuiteinde, daarna kind reapen. */
+        /* parent: read (polling) from the read end, then reap the child. */
         char buf[64];
         long n;
         do {
             n = sys(L_READ, fds[0], (long)buf, 64);
-        } while (n <= 0); /* -EAGAIN (leeg) of 0 -> opnieuw proberen */
-        put("  [parent] uit pipe: ");
+        } while (n <= 0); /* -EAGAIN (empty) or 0 -> try again */
+        put("  [parent] from pipe: ");
         sys(L_WRITE, 1, (long)buf, n);
         put("\n");
         int st;
@@ -54,7 +54,7 @@ __attribute__((section(".text.start"))) void _start(void) {
         do {
             w = sys(L_WAIT4, -1, (long)&st, 0);
         } while (w == 0);
-        put("  [parent] kind gereaped\n");
+        put("  [parent] child reaped\n");
         sys(L_EXIT, 0, 0, 0);
         for (;;) {
         }

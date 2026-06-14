@@ -1,8 +1,8 @@
-//! Agent-register (Sprint AA, stap 1 — tweede helft). Beheert de *geïnstalleerde*
-//! agents: een agent komt er alleen in via een geldig-ondertekende bundle, wordt
-//! op naam bijgehouden, en kan niet stiekem door een andere uitgever overschreven
-//! worden (anti-kaping). Het register is `no_std` en serialiseerbaar zodat de
-//! kernel het op EuroFS kan persisteren.
+//! Agent registry (Sprint AA, step 1 — second half). Manages the *installed*
+//! agents: an agent only enters via a validly-signed bundle, is tracked by
+//! name, and cannot be secretly overwritten by a different publisher
+//! (anti-hijacking). The registry is `no_std` and serializable so the
+//! kernel can persist it on EuroFS.
 
 use crate::bundle::AgentBundle;
 use crate::caps::AgentCaps;
@@ -10,28 +10,28 @@ use crate::manifest::AgentManifest;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// Een geïnstalleerde agent: het gevalideerde manifest + wie hem ondertekende.
+/// An installed agent: the validated manifest + who signed it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InstalledAgent {
     pub name: String,
     pub version: String,
-    /// De publieke sleutel (hex) van de uitgever — vastgezet bij eerste installatie.
+    /// The publisher's public key (hex) — pinned on first installation.
     pub publisher: String,
-    /// De effectieve caps die het manifest *vraagt* (required), als snelle index.
+    /// The effective caps the manifest *requests* (required), as a fast index.
     pub required: AgentCaps,
     pub manifest_toml: String,
 }
 
-/// Waarom een installatie geweigerd werd.
+/// Why an installation was rejected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RegistryError {
-    /// De bundle-handtekening klopt niet (of een ongeldig manifest).
+    /// The bundle signature does not match (or an invalid manifest).
     Rejected,
-    /// Er is al een agent met deze naam van een *andere* uitgever (anti-kaping).
+    /// There is already an agent with this name from a *different* publisher (anti-hijacking).
     PublisherMismatch,
 }
 
-/// Het register van geïnstalleerde agents.
+/// The registry of installed agents.
 #[derive(Default)]
 pub struct AgentRegistry {
     agents: Vec<InstalledAgent>,
@@ -65,13 +65,13 @@ impl AgentRegistry {
         self.agents.iter().find(|a| a.name == name)
     }
 
-    /// De namen van alle geïnstalleerde agents (in installatievolgorde).
+    /// The names of all installed agents (in installation order).
     pub fn list(&self) -> Vec<&str> {
         self.agents.iter().map(|a| a.name.as_str()).collect()
     }
 
-    /// Installeer een agent uit een bundle, geverifieerd tegen `trusted_pubkey`.
-    /// Een update (zelfde naam) mag alleen van *dezelfde* uitgever. Geeft de naam terug.
+    /// Install an agent from a bundle, verified against `trusted_pubkey`.
+    /// An update (same name) is only allowed from the *same* publisher. Returns the name.
     pub fn install(
         &mut self,
         bundle: &AgentBundle,
@@ -101,7 +101,7 @@ impl AgentRegistry {
         Ok(name)
     }
 
-    /// Verwijder een agent. `true` als hij bestond.
+    /// Remove an agent. `true` if it existed.
     pub fn remove(&mut self, name: &str) -> bool {
         match self.find_idx(name) {
             Some(idx) => {
@@ -112,9 +112,9 @@ impl AgentRegistry {
         }
     }
 
-    /// Serialiseer de index naar een regelgebaseerd, persisteerbaar formaat
-    /// (`name\tversion\tpublisher\trequired_bits`). Het manifest zelf wordt
-    /// content-adres-gewijs apart opgeslagen door de kernel.
+    /// Serialize the index to a line-based, persistable format
+    /// (`name\tversion\tpublisher\trequired_bits`). The manifest itself is
+    /// stored separately content-addressed by the kernel.
     pub fn serialize_index(&self) -> Vec<u8> {
         let mut s = String::from("# euroagent-registry v1\n");
         for a in &self.agents {
@@ -170,11 +170,11 @@ mod tests {
         let mut reg = AgentRegistry::new();
         let m = manifest("alpha");
         reg.install(&signed(&sk1, &m, b"w"), &sk1.verifying_key().to_bytes()).unwrap();
-        // Een andere uitgever mag 'alpha' niet overschrijven, ook al is zijn eigen
-        // handtekening geldig.
+        // A different publisher may not overwrite 'alpha', even if its own
+        // signature is valid.
         let r = reg.install(&signed(&sk2, &m, b"w"), &sk2.verifying_key().to_bytes());
         assert_eq!(r, Err(RegistryError::PublisherMismatch));
-        // De originele uitgever mag wél updaten.
+        // The original publisher *is* allowed to update.
         let m2 = manifest("alpha").replace("1.0", "2.0");
         reg.install(&signed(&sk1, &m2, b"w"), &sk1.verifying_key().to_bytes()).unwrap();
         assert_eq!(reg.get("alpha").unwrap().version, "2.0");
@@ -191,7 +191,7 @@ mod tests {
         assert!(reg.remove("a"));
         assert!(!reg.remove("a"));
         assert_eq!(reg.list(), alloc::vec!["b"]);
-        // De index serialiseert.
+        // The index serializes.
         let idx = reg.serialize_index();
         assert!(String::from_utf8(idx).unwrap().contains("b\t1.0"));
     }

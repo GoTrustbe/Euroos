@@ -1,19 +1,19 @@
-//! EuroWeb — de soevereine browser-engine van EuroOS (Spoor B, zie
+//! EuroWeb — the sovereign browser engine of EuroOS (Track B, see
 //! `docs/EUROBROWSER-PLAN.md`).
 //!
-//! Van scratch in Rust, `no_std`, geen foreign engine, geen ICU/NSS. Dit is de
-//! **fundament-laag**: HTML5-tokenizer + tree-construction → DOM. Daarop volgen in
-//! latere sprints CSS (cascade/selectors), layout (block/inline/flex) en paint naar
-//! de EuroDisplay-framebuffer; JavaScript komt als tree-walking interpreter met
-//! per-tab EuroGuard-capabilities.
+//! From scratch in Rust, `no_std`, no foreign engine, no ICU/NSS. This is the
+//! **foundation layer**: HTML5 tokenizer + tree construction → DOM. On top of that,
+//! later sprints add CSS (cascade/selectors), layout (block/inline/flex) and paint to
+//! the EuroDisplay framebuffer; JavaScript arrives as a tree-walking interpreter with
+//! per-tab EuroGuard capabilities.
 //!
-//! Architectuur-keuzes:
-//! - **Eén `Vec<Node>`-arena** voor de DOM (geen `Rc`/`RefCell`), `#![forbid(unsafe_code)]`.
-//! - **Spec-getrouwe tokenizer-toestandsmachine** (WHATWG), inclusief RAWTEXT/RCDATA
-//!   en character references — host-getest tegen HTML5lib-achtige gevallen.
-//! - **Pragmatische tree-construction** (open-element-stapel, void-elementen,
-//!   impliciet sluiten) — genoeg voor statische pagina's; de volledige
-//!   insertion-mode-machine is een latere verfijning.
+//! Architecture choices:
+//! - **A single `Vec<Node>` arena** for the DOM (no `Rc`/`RefCell`), `#![forbid(unsafe_code)]`.
+//! - **Spec-faithful tokenizer state machine** (WHATWG), including RAWTEXT/RCDATA
+//!   and character references — host-tested against HTML5lib-like cases.
+//! - **Pragmatic tree construction** (open-element stack, void elements,
+//!   implicit closing) — enough for static pages; the full
+//!   insertion-mode machine is a later refinement.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -56,9 +56,9 @@ mod tests {
 
     #[test]
     fn tokenize_simple_tag_and_text() {
-        let t = tokenize("<p>Hallo</p>");
+        let t = tokenize("<p>Hello</p>");
         assert_eq!(t[0], Token::StartTag { name: "p".into(), attrs: Vec::new(), self_closing: false });
-        assert_eq!(chars_of(&t), "Hallo");
+        assert_eq!(chars_of(&t), "Hello");
         assert_eq!(t[t.len() - 2], Token::EndTag { name: "p".into() });
         assert_eq!(t[t.len() - 1], Token::Eof);
     }
@@ -74,7 +74,7 @@ mod tests {
             assert_eq!(attrs[2], Attr { name: "data".into(), value: "z".into() });
             assert_eq!(attrs[3], Attr { name: "disabled".into(), value: String::new() });
         } else {
-            panic!("verwachtte StartTag, kreeg {:?}", t[0]);
+            panic!("expected StartTag, got {:?}", t[0]);
         }
     }
 
@@ -93,9 +93,9 @@ mod tests {
 
     #[test]
     fn tokenize_comment_and_doctype() {
-        let t = tokenize("<!DOCTYPE html><!-- hoi -->");
+        let t = tokenize("<!DOCTYPE html><!-- hi -->");
         assert_eq!(t[0], Token::Doctype { name: "html".into(), force_quirks: false });
-        assert_eq!(t[1], Token::Comment(" hoi ".into()));
+        assert_eq!(t[1], Token::Comment(" hi ".into()));
     }
 
     #[test]
@@ -106,14 +106,14 @@ mod tests {
 
     #[test]
     fn tokenize_entity_without_semicolon_legacy() {
-        // &copy zonder ; is een legacy entiteit in tekst.
+        // &copy without ; is a legacy entity in text.
         let t = tokenize("\u{A9}: &copy 2026");
         assert_eq!(chars_of(&t), "©: © 2026");
     }
 
     #[test]
     fn tokenize_ambiguous_ampersand_left_literal() {
-        // &notanentity; → '&' blijft letterlijk (geen match).
+        // &notanentity; → '&' stays literal (no match).
         let t = tokenize("x &zzz; y");
         assert_eq!(chars_of(&t), "x &zzz; y");
     }
@@ -121,12 +121,12 @@ mod tests {
     #[test]
     fn tokenize_rawtext_script_keeps_markup() {
         let t = tokenize("<script>if (a<b && c>d) x()</script>after");
-        // Binnen <script> blijft '<b' tekst; pas </script> sluit af.
+        // Inside <script> '<b' stays text; only </script> closes it.
         let txt = chars_of(&t);
-        assert!(txt.contains("if (a<b && c>d) x()"), "script-inhoud verloren: {txt:?}");
+        assert!(txt.contains("if (a<b && c>d) x()"), "script content lost: {txt:?}");
         assert!(txt.ends_with("after"));
         assert!(t.iter().any(|x| *x == Token::EndTag { name: "script".into() }));
-        // Géén losse <b>-starttag binnen de script-rawtext.
+        // No stray <b> start tag inside the script rawtext.
         assert!(!t.iter().any(|x| matches!(x, Token::StartTag { name, .. } if name == "b")));
     }
 
@@ -151,24 +151,24 @@ mod tests {
 
     #[test]
     fn parse_nested_structure() {
-        let dom = parse("<html><body><h1>Titel</h1><p>Tekst</p></body></html>");
+        let dom = parse("<html><body><h1>Title</h1><p>Text</p></body></html>");
         assert_eq!(dom.count_tag("html"), 1);
         assert_eq!(dom.count_tag("body"), 1);
         assert_eq!(dom.count_tag("h1"), 1);
         assert_eq!(dom.count_tag("p"), 1);
-        assert_eq!(dom.text_content(dom.root()), "TitelTekst");
+        assert_eq!(dom.text_content(dom.root()), "TitleText");
     }
 
     #[test]
     fn parse_implicit_p_close() {
-        // <p>a<p>b → twee zelfstandige paragrafen, niet genest.
+        // <p>a<p>b → two independent paragraphs, not nested.
         let dom = parse("<p>a<p>b");
         assert_eq!(dom.count_tag("p"), 2);
-        // Geen p binnen een p.
+        // No p inside a p.
         for (i, n) in dom.nodes.iter().enumerate() {
             if dom.tag(i) == Some("p") {
                 for &c in &n.children {
-                    assert_ne!(dom.tag(c), Some("p"), "p genest in p");
+                    assert_ne!(dom.tag(c), Some("p"), "p nested in p");
                 }
             }
         }
@@ -176,9 +176,9 @@ mod tests {
 
     #[test]
     fn parse_list_items_autoclose() {
-        let dom = parse("<ul><li>een<li>twee<li>drie</ul>");
+        let dom = parse("<ul><li>one<li>two<li>three</ul>");
         assert_eq!(dom.count_tag("li"), 3);
-        // Elke li is direct kind van ul (niet genest).
+        // Each li is a direct child of ul (not nested).
         let ul = (0..dom.len()).find(|&i| dom.tag(i) == Some("ul")).unwrap();
         let li_children = dom.nodes[ul].children.iter().filter(|&&c| dom.tag(c) == Some("li")).count();
         assert_eq!(li_children, 3);
@@ -186,12 +186,12 @@ mod tests {
 
     #[test]
     fn parse_void_elements_have_no_children() {
-        let dom = parse("<div><img src='a'><br>tekst</div>");
+        let dom = parse("<div><img src='a'><br>text</div>");
         let img = (0..dom.len()).find(|&i| dom.tag(i) == Some("img")).unwrap();
         assert!(dom.nodes[img].children.is_empty());
-        // 'tekst' hangt onder div, niet onder br.
+        // 'text' hangs under div, not under br.
         let div = (0..dom.len()).find(|&i| dom.tag(i) == Some("div")).unwrap();
-        assert_eq!(dom.text_content(div), "tekst");
+        assert_eq!(dom.text_content(div), "text");
     }
 
     #[test]
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn parse_mismatched_end_tag_ignored() {
-        // </span> zonder open span mag de boom niet breken.
+        // </span> without an open span must not break the tree.
         let dom = parse("<div>x</span>y</div>");
         assert_eq!(dom.count_tag("div"), 1);
         let div = (0..dom.len()).find(|&i| dom.tag(i) == Some("div")).unwrap();
@@ -219,12 +219,12 @@ mod tests {
             <html lang="nl">
               <head><meta charset="utf-8"><title>EuroOS</title></head>
               <body>
-                <header><h1>EuroOS &mdash; soeverein</h1></header>
+                <header><h1>EuroOS &mdash; sovereign</h1></header>
                 <main>
-                  <p class="lead">Van nul gebouwd in <strong>Rust</strong>.</p>
+                  <p class="lead">Built from scratch in <strong>Rust</strong>.</p>
                   <ul><li>HTML</li><li>CSS</li><li>Layout</li></ul>
                 </main>
-                <!-- footer komt later -->
+                <!-- footer comes later -->
               </body>
             </html>"#;
         let dom = parse(html);
@@ -233,16 +233,16 @@ mod tests {
         assert_eq!(dom.count_tag("li"), 3);
         assert_eq!(dom.count_tag("strong"), 1);
         let h1 = (0..dom.len()).find(|&i| dom.tag(i) == Some("h1")).unwrap();
-        assert_eq!(dom.text_content(h1), "EuroOS — soeverein");
+        assert_eq!(dom.text_content(h1), "EuroOS — sovereign");
         let html_el = (0..dom.len()).find(|&i| dom.tag(i) == Some("html")).unwrap();
         assert_eq!(dom.attr(html_el, "lang"), Some("nl"));
     }
 
-    // ---- Robuustheid / stabiliteit: kwaadwillige & misvormde invoer ----
+    // ---- Robustness / stability: malicious & malformed input ----
     //
-    // De engine draait in de kernel; ZIJ MAG NOOIT crashen op slechte invoer.
-    // Deze tests jagen de VOLLEDIGE pijplijn (parse → compute → layout → paint)
-    // door pathologische pagina's en eisen: geen paniek, begrensde uitvoer.
+    // The engine runs in the kernel; IT MUST NEVER crash on bad input.
+    // These tests drive the FULL pipeline (parse → compute → layout → paint)
+    // through pathological pages and require: no panic, bounded output.
 
     fn full_pipeline(html: &str, css: &str) -> usize {
         let dom = parse(html);
@@ -253,26 +253,26 @@ mod tests {
         items.len()
     }
 
-    /// Diep geneste `<div>` (zou zonder diepte-grens de kernel-stack opblazen).
+    /// Deeply nested `<div>` (would blow the kernel stack without a depth bound).
     #[test]
     fn robust_deeply_nested_does_not_overflow() {
         let mut html = String::new();
         for _ in 0..20_000 {
             html.push_str("<div>");
         }
-        html.push_str("diep");
+        html.push_str("deep");
         for _ in 0..20_000 {
             html.push_str("</div>");
         }
-        // Mag niet paniceren/overflowen; de layout-boom is begrensd op MAX_DEPTH.
+        // Must not panic/overflow; the layout tree is bounded by MAX_DEPTH.
         let _ = full_pipeline(&html, "div{color:#222;padding:1px}");
-        // De DOM bevat wél alle knopen (parser is iteratief), maar build_box
-        // daalt niet dieper dan MAX_DEPTH af.
+        // The DOM does contain all nodes (the parser is iterative), but build_box
+        // does not descend deeper than MAX_DEPTH.
         let dom = parse(&html);
-        assert!(dom.len() >= 20_000, "parser moet alle knopen aanmaken");
+        assert!(dom.len() >= 20_000, "parser must create all nodes");
     }
 
-    /// Diep geneste tekst-knoop via text_content (eigen diepte-grens).
+    /// Deeply nested text node via text_content (own depth bound).
     #[test]
     fn robust_text_content_deep_no_overflow() {
         let mut html = String::new();
@@ -282,20 +282,20 @@ mod tests {
         html.push('x');
         let dom = parse(&html);
         let root = 0;
-        let _ = dom.text_content(root); // mag niet overflowen
+        let _ = dom.text_content(root); // must not overflow
     }
 
-    /// Misvormde / niet-gesloten / rommel-markup.
+    /// Malformed / unclosed / junk markup.
     #[test]
     fn robust_malformed_markup() {
         let cases = [
             "<<<>>><p<<<",
             "<div class=\"unterminated",
-            "<p>tekst</nonexistent></p></p></p>",
+            "<p>text</nonexistent></p></p></p>",
             "<a href=>&&&;&#;&#x;&zzz;",
             "</div></div></div>",
-            "<!-- niet gesloten comment",
-            "<script>onafgesloten",
+            "<!-- unclosed comment",
+            "<script>unterminated",
             "<style>body{color: ; ;;; } broken",
             "",
             "<>",
@@ -306,34 +306,34 @@ mod tests {
         }
     }
 
-    /// Misvormde CSS mag de cascade niet laten crashen.
+    /// Malformed CSS must not let the cascade crash.
     #[test]
     fn robust_malformed_css() {
         let css = "}}}{{{ : ; color color color ;; @媒体 { x } .a..b###{} div > > p {} *{padding:-99999px}";
         let _ = full_pipeline("<div class='a'><p>hi</p></div>", css);
     }
 
-    /// Heel veel siblings (breedte i.p.v. diepte) — begrensde, maar grote, invoer.
+    /// Lots of siblings (width instead of depth) — bounded, but large, input.
     #[test]
     fn robust_many_siblings() {
         let mut html = String::from("<body>");
         for i in 0..10_000 {
             html.push_str("<p>item ");
-            // varieer de inhoud zodat het geen identieke strings zijn
-            html.push_str(if i % 2 == 0 { "even" } else { "oneven" });
+            // vary the content so they are not identical strings
+            html.push_str(if i % 2 == 0 { "even" } else { "odd" });
             html.push_str("</p>");
         }
         html.push_str("</body>");
         let n = full_pipeline(&html, "p{font-size:14px}");
-        assert!(n > 0, "moet display-items opleveren");
+        assert!(n > 0, "must produce display items");
     }
 
-    /// Lange ongesplitste tekst en rare unicode mag niet paniceren.
+    /// Long unsplit text and odd unicode must not panic.
     #[test]
     fn robust_long_unicode_text() {
         let mut html = String::from("<p>");
         for _ in 0..2_000 {
-            html.push_str("woord\u{200B}\u{00A0}€中文🇪🇺 ");
+            html.push_str("word\u{200B}\u{00A0}€中文🇪🇺 ");
         }
         html.push_str("</p>");
         let _ = full_pipeline(&html, "p{}");

@@ -1,41 +1,41 @@
-//! `AgentCaps` — fijnmazige, per-agent capabilities.
+//! `AgentCaps` — fine-grained, per-agent capabilities.
 //!
-//! Dit zijn *subsets* van de EuroGuard-capabilities, verder opgesplitst zodat
-//! een agent het principe van least-privilege kan respecteren: een agent krijgt
-//! exact wat hij in zijn manifest declareert, nooit meer. De set is een simpele
-//! `u64`-bitset zodat hij `no_std` is en triviaal te (de)serialiseren naar P3.
+//! These are *subsets* of the EuroGuard capabilities, split up further so that
+//! an agent can respect the principle of least privilege: an agent gets
+//! exactly what it declares in its manifest, never more. The set is a simple
+//! `u64` bitset so that it is `no_std` and trivial to (de)serialize to P3.
 
 use alloc::vec::Vec;
 
-/// Een bitset van agent-capabilities (subset van EuroGuard).
+/// A bitset of agent capabilities (subset of EuroGuard).
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub struct AgentCaps(pub u64);
 
-// ── Opslag ──────────────────────────────────────────────────────────────────
-pub const FS_READ: u64 = 1 << 0; // EuroFS lezen binnen de sandbox
-pub const FS_WRITE: u64 = 1 << 1; // EuroFS schrijven binnen de sandbox
-pub const FS_READ_GLOBAL: u64 = 1 << 2; // EuroFS lezen buiten de sandbox (privileged)
-pub const VAULT_READ: u64 = 1 << 3; // EuroVault secrets lezen
-pub const VAULT_WRITE: u64 = 1 << 4; // EuroVault secrets schrijven
-// ── Netwerk ─────────────────────────────────────────────────────────────────
+// ── Storage ─────────────────────────────────────────────────────────────────
+pub const FS_READ: u64 = 1 << 0; // read EuroFS within the sandbox
+pub const FS_WRITE: u64 = 1 << 1; // write EuroFS within the sandbox
+pub const FS_READ_GLOBAL: u64 = 1 << 2; // read EuroFS outside the sandbox (privileged)
+pub const VAULT_READ: u64 = 1 << 3; // read EuroVault secrets
+pub const VAULT_WRITE: u64 = 1 << 4; // write EuroVault secrets
+// ── Network ─────────────────────────────────────────────────────────────────
 pub const NET_GET: u64 = 1 << 8; // HTTP/HTTPS GET
 pub const NET_POST: u64 = 1 << 9; // HTTP/HTTPS POST/PUT/DELETE
-pub const NET_LISTEN: u64 = 1 << 10; // Inkomende verbindingen aanvaarden
+pub const NET_LISTEN: u64 = 1 << 10; // accept incoming connections
 // ── Hardware ────────────────────────────────────────────────────────────────
-pub const MIC: u64 = 1 << 16; // Microfoon
-pub const CAMERA: u64 = 1 << 17; // Camera
-pub const SPEAKER: u64 = 1 << 18; // Luidspreker
-// ── Systeem ─────────────────────────────────────────────────────────────────
-pub const DISPLAY: u64 = 1 << 24; // EuroDisplay notificaties + vensters
-pub const CALENDAR: u64 = 1 << 25; // Agenda lezen/schrijven
-pub const EXEC: u64 = 1 << 26; // Subprocessen starten (zeer privileged)
-pub const AGENT_SPAWN: u64 = 1 << 27; // Andere agents spawnen
-pub const IPC_SEND: u64 = 1 << 28; // Berichten naar andere agents
+pub const MIC: u64 = 1 << 16; // microphone
+pub const CAMERA: u64 = 1 << 17; // camera
+pub const SPEAKER: u64 = 1 << 18; // speaker
+// ── System ──────────────────────────────────────────────────────────────────
+pub const DISPLAY: u64 = 1 << 24; // EuroDisplay notifications + windows
+pub const CALENDAR: u64 = 1 << 25; // read/write calendar
+pub const EXEC: u64 = 1 << 26; // start subprocesses (highly privileged)
+pub const AGENT_SPAWN: u64 = 1 << 27; // spawn other agents
+pub const IPC_SEND: u64 = 1 << 28; // messages to other agents
 
-/// De caps die als "verhoogd" gelden — een grant ervan vereist user-bevestiging.
+/// The caps that count as "elevated" — granting one of them requires user confirmation.
 pub const ELEVATED: u64 = EXEC | VAULT_WRITE | FS_READ_GLOBAL | AGENT_SPAWN | NET_LISTEN;
 
-/// Alle bekende caps (voor validatie van onbekende namen).
+/// All known caps (for validation of unknown names).
 pub const ALL: u64 = FS_READ
     | FS_WRITE
     | FS_READ_GLOBAL
@@ -53,8 +53,8 @@ pub const ALL: u64 = FS_READ
     | AGENT_SPAWN
     | IPC_SEND;
 
-/// Map een manifest-capabilitynaam (`CAP_AGENT_*`) naar zijn bit. `None` =
-/// onbekende cap → het manifest wordt verworpen.
+/// Map a manifest capability name (`CAP_AGENT_*`) to its bit. `None` =
+/// unknown cap → the manifest is rejected.
 pub fn from_name(name: &str) -> Option<u64> {
     let bit = match name.trim() {
         "CAP_AGENT_FS_READ" => FS_READ,
@@ -78,7 +78,7 @@ pub fn from_name(name: &str) -> Option<u64> {
     Some(bit)
 }
 
-/// De canonieke naam van een enkele cap-bit.
+/// The canonical name of a single cap bit.
 pub fn to_name(bit: u64) -> &'static str {
     match bit {
         FS_READ => "CAP_AGENT_FS_READ",
@@ -114,16 +114,16 @@ impl AgentCaps {
     pub fn remove(&mut self, bits: u64) {
         self.0 &= !bits;
     }
-    /// De doorsnede met een andere set (gebruikt om te clampen op user-caps).
+    /// The intersection with another set (used to clamp against user caps).
     pub fn intersect(self, other: AgentCaps) -> AgentCaps {
         AgentCaps(self.0 & other.0)
     }
-    /// Bevat deze set verhoogde (bevestiging-vereisende) caps?
+    /// Does this set contain elevated (confirmation-requiring) caps?
     pub fn has_elevated(self) -> bool {
         self.0 & ELEVATED != 0
     }
-    /// Bouw een set uit een lijst van `CAP_AGENT_*`-namen. `Err(name)` bij een
-    /// onbekende naam.
+    /// Build a set from a list of `CAP_AGENT_*` names. `Err(name)` on an
+    /// unknown name.
     pub fn from_names(names: &[&str]) -> Result<AgentCaps, alloc::string::String> {
         use alloc::string::ToString;
         let mut c = AgentCaps(0);
@@ -135,7 +135,7 @@ impl AgentCaps {
         }
         Ok(c)
     }
-    /// De namen van alle gezette caps, oplopend op bit.
+    /// The names of all set caps, ascending by bit.
     pub fn names(self) -> Vec<&'static str> {
         let mut out = Vec::new();
         let mut bit = 1u64;

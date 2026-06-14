@@ -1,21 +1,21 @@
-//! Display-server laag (H2): draagt de [`Request`]/[`Event`]-protocol-objecten
-//! over een **byte-stroom** (in de kernel: een AF_UNIX-socket, H1) en vertaalt de
-//! resulterende surfaces naar concrete **venster-views** die de EuroDesktop-
-//! compositor kan tekenen.
+//! Display-server layer (H2): carries the [`Request`]/[`Event`] protocol objects
+//! over a **byte stream** (in the kernel: an AF_UNIX socket, H1) and translates the
+//! resulting surfaces into concrete **window views** that the EuroDesktop
+//! compositor can draw.
 //!
-//! De surface-model van [`crate::Display`] is puur geometrie (id/x/y/w/h/mapped).
-//! De compositor tekent vensters met een **titel** + **tekstregels** (monospace),
-//! geen pixel-buffers. Deze laag voegt die compositor-only metadata toe via twee
-//! extra berichten ([`ServerMsg::Title`]/[`ServerMsg::Line`]) bovenop het normale
-//! surface-lifecycle-verkeer, en levert per zichtbare surface een [`WindowView`].
+//! The surface model of [`crate::Display`] is pure geometry (id/x/y/w/h/mapped).
+//! The compositor draws windows with a **title** + **text lines** (monospace),
+//! no pixel buffers. This layer adds that compositor-only metadata via two
+//! extra messages ([`ServerMsg::Title`]/[`ServerMsg::Line`]) on top of the normal
+//! surface-lifecycle traffic, and provides a [`WindowView`] per visible surface.
 //!
-//! Frame-formaat op de stroom (uniform, lengte-geprefixt — zodat vaste én
-//! variabele berichten op één stroom ondubbelzinnig te demuxen zijn):
+//! Frame format on the stream (uniform, length-prefixed — so that fixed and
+//! variable messages on one stream can be demuxed unambiguously):
 //! ```text
 //! [op:u8][id:u32 LE][a:i16 LE][b:i16 LE][len:u16 LE][payload: len bytes]
 //! ```
-//! Header = 11 bytes. `a`/`b` dragen geometrie (w/h of x/y); `payload` draagt
-//! UTF-8 tekst voor Title/Line. `no_std`+alloc, volledig host-testbaar.
+//! Header = 11 bytes. `a`/`b` carry geometry (w/h or x/y); `payload` carries
+//! UTF-8 text for Title/Line. `no_std`+alloc, fully host-testable.
 
 use crate::{Display, Request};
 use alloc::collections::BTreeMap;
@@ -33,20 +33,20 @@ const OP_CLEAR: u8 = 0x12;
 
 const HDR: usize = 11;
 
-/// Eén bericht op de display-server-stroom: óf een surface-[`Request`], óf
-/// compositor-metadata (venstertitel / inhoudsregel).
+/// One message on the display-server stream: either a surface-[`Request`], or
+/// compositor metadata (window title / content line).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerMsg {
     Req(Request),
-    /// Zet de venstertitel voor surface `id`.
+    /// Set the window title for surface `id`.
     Title(u32, String),
-    /// Voeg een inhoudsregel toe aan surface `id`.
+    /// Add a content line to surface `id`.
     Line(u32, String),
-    /// Wis alle inhoudsregels van surface `id`.
+    /// Clear all content lines of surface `id`.
     ClearLines(u32),
 }
 
-/// Codeer één bericht tot een lengte-geprefixt frame.
+/// Encode one message into a length-prefixed frame.
 pub fn encode_frame(msg: &ServerMsg) -> Vec<u8> {
     let mut b = Vec::with_capacity(HDR);
     let (op, id, a, bb, payload): (u8, u32, i16, i16, &[u8]) = match msg {
@@ -70,9 +70,9 @@ pub fn encode_frame(msg: &ServerMsg) -> Vec<u8> {
     b
 }
 
-/// Parse zoveel volledige frames als in `buf` staan. Geeft de berichten + het
-/// aantal verbruikte bytes (een onvolledig staart-frame blijft staan voor de
-/// volgende aanroep — veilig voor een stroom-protocol).
+/// Parse as many complete frames as are in `buf`. Returns the messages + the
+/// number of bytes consumed (an incomplete trailing frame is left for the
+/// next call — safe for a stream protocol).
 pub fn parse_frames(buf: &[u8]) -> (Vec<ServerMsg>, usize) {
     let mut msgs = Vec::new();
     let mut off = 0;
@@ -83,7 +83,7 @@ pub fn parse_frames(buf: &[u8]) -> (Vec<ServerMsg>, usize) {
         let bb = i16::from_le_bytes([buf[off + 7], buf[off + 8]]);
         let len = u16::from_le_bytes([buf[off + 9], buf[off + 10]]) as usize;
         if off + HDR + len > buf.len() {
-            break; // onvolledig frame — wacht op meer bytes
+            break; // incomplete frame — wait for more bytes
         }
         let payload = &buf[off + HDR..off + HDR + len];
         let msg = match op {
@@ -100,7 +100,7 @@ pub fn parse_frames(buf: &[u8]) -> (Vec<ServerMsg>, usize) {
             OP_LINE => ServerMsg::Line(id, String::from_utf8_lossy(payload).into_owned()),
             OP_CLEAR => ServerMsg::ClearLines(id),
             _ => {
-                off += HDR + len; // onbekend opcode — sla over
+                off += HDR + len; // unknown opcode — skip
                 continue;
             }
         };
@@ -110,7 +110,7 @@ pub fn parse_frames(buf: &[u8]) -> (Vec<ServerMsg>, usize) {
     (msgs, off)
 }
 
-/// Een teken-klare venster-view: surface-geometrie + compositor-metadata.
+/// A draw-ready window view: surface geometry + compositor metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowView {
     pub id: u32,
@@ -122,8 +122,8 @@ pub struct WindowView {
     pub content: Vec<String>,
 }
 
-/// De server-state: de surface-[`Display`] + per-surface compositor-metadata.
-/// Voedt berichten in via [`ingest`](Self::ingest) en levert teken-klare
+/// The server state: the surface-[`Display`] + per-surface compositor metadata.
+/// Feeds messages in via [`ingest`](Self::ingest) and provides draw-ready
 /// [`WindowView`]s via [`windows`](Self::windows).
 #[derive(Default)]
 pub struct ServerView {
@@ -139,8 +139,8 @@ impl ServerView {
         }
     }
 
-    /// Verwerk een batch berichten. Geeft `true` als er iets veranderde dat een
-    /// hertekening vereist (nieuwe/gewijzigde/verdwenen vensters).
+    /// Process a batch of messages. Returns `true` if something changed that
+    /// requires a redraw (new/modified/disappeared windows).
     pub fn ingest(&mut self, msgs: &[ServerMsg]) -> bool {
         let mut changed = false;
         for m in msgs {
@@ -172,12 +172,12 @@ impl ServerView {
                 }
             }
         }
-        // De damage-vlag van de Display dekt Commit-hertekeningen.
+        // The Display's damage flag covers Commit redraws.
         changed | self.disp.take_damage()
     }
 
-    /// De zichtbare vensters in z-order (onderaan → boven), elk met titel +
-    /// inhoud. Surfaces zonder expliciete titel krijgen `App <id>`.
+    /// The visible windows in z-order (bottom → top), each with title +
+    /// content. Surfaces without an explicit title get `App <id>`.
     pub fn windows(&self) -> Vec<WindowView> {
         self.disp
             .scene()
@@ -206,7 +206,7 @@ impl ServerView {
             .collect()
     }
 
-    /// Aantal zichtbare vensters.
+    /// Number of visible windows.
     pub fn window_count(&self) -> usize {
         self.disp.scene().len()
     }
@@ -240,8 +240,8 @@ mod tests {
             ServerMsg::Req(Request::Move { id: 7, x: -5, y: 40 }),
             ServerMsg::Req(Request::Commit { id: 7 }),
             ServerMsg::Req(Request::Destroy { id: 7 }),
-            ServerMsg::Title(7, String::from("Hallo")),
-            ServerMsg::Line(7, String::from("regel één")),
+            ServerMsg::Title(7, String::from("Hello")),
+            ServerMsg::Line(7, String::from("line one")),
             ServerMsg::ClearLines(7),
         ];
         let mut buf = Vec::new();
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn full_open_produces_one_window() {
-        let bytes = open_window_bytes(1, 640, 480, "EuroApp", &["Hallo van", "een AF_UNIX-app"]);
+        let bytes = open_window_bytes(1, 640, 480, "EuroApp", &["Hello from", "an AF_UNIX app"]);
         let (msgs, _) = parse_frames(&bytes);
         let mut sv = ServerView::new();
         assert!(sv.ingest(&msgs));
@@ -275,12 +275,12 @@ mod tests {
         assert_eq!(wins[0].width, 640);
         assert_eq!(wins[0].height, 480);
         assert_eq!(wins[0].title, "EuroApp");
-        assert_eq!(wins[0].content, alloc::vec!["Hallo van", "een AF_UNIX-app"]);
+        assert_eq!(wins[0].content, alloc::vec!["Hello from", "an AF_UNIX app"]);
     }
 
     #[test]
     fn unmapped_surface_is_not_a_window() {
-        // Create + Attach maar GEEN Commit → niet zichtbaar.
+        // Create + Attach but NO Commit → not visible.
         let mut b = encode_frame(&ServerMsg::Req(Request::CreateSurface { id: 1 }));
         b.extend(encode_frame(&ServerMsg::Req(Request::Attach { id: 1, width: 10, height: 10 })));
         let (msgs, _) = parse_frames(&b);
@@ -320,7 +320,7 @@ mod tests {
         sv.ingest(&msgs);
         let wins = sv.windows();
         assert_eq!(wins.len(), 2);
-        // laatst-gecommit = bovenaan = laatste in z-order
+        // last-committed = topmost = last in z-order
         assert_eq!(wins[0].title, "first");
         assert_eq!(wins[1].title, "second");
     }

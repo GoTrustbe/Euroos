@@ -1,18 +1,18 @@
-//! Transparante, fault-gedreven swap (plan J3, slot 2) — de paging-helft van de
-//! swap-cyclus die [`euromm::swap`] (CLOCK + SwapArea) al host-getest levert.
+//! Transparent, fault-driven swap (plan J3, slot 2) — the paging half of the
+//! swap cycle that [`euromm::swap`] (CLOCK + SwapArea) already provides host-tested.
 //!
-//! Waar de `[j3]`-zelftest de mechaniek (slachtofferkeuze + schijf-I/O) bewijst,
-//! maakt deze module het **transparant**: een uitgeswapte pagina krijgt z'n PTE
-//! op *niet-present* met de swap-slot in de bovenste bits gecodeerd. Raakt iets
-//! die pagina later aan, dan vuurt een **page fault** — en de fault-handler
-//! ([`crate::interrupts`]) roept [`try_swap_in`] aan, die het frame terugleest van
-//! schijf, de PTE weer present maakt en de instructie hervat. Het proces merkt er
-//! niets van: de pagina "was er altijd".
+//! Where the `[j3]` self-test proves the mechanism (victim selection + disk I/O),
+//! this module makes it **transparent**: a swapped-out page gets its PTE
+//! set to *non-present* with the swap slot encoded in the upper bits. If something
+//! later touches that page, a **page fault** fires — and the fault handler
+//! ([`crate::interrupts`]) calls [`try_swap_in`], which reads the frame back from
+//! disk, makes the PTE present again, and resumes the instruction. The process
+//! notices nothing: the page "was always there".
 //!
-//! Alle page-tables zijn identity-mapped (virtueel = fysiek < 512 GiB), dus we
-//! lopen ze direct met fysieke pointers. De swap-I/O gaat via [`crate::virtio_blk`]
-//! (busy-poll, werkt ook met interrupts uit — precies wat een fault-handler nodig
-//! heeft).
+//! All page tables are identity-mapped (virtual = physical < 512 GiB), so we
+//! walk them directly with physical pointers. The swap I/O goes via [`crate::virtio_blk`]
+//! (busy-poll, works even with interrupts off — exactly what a fault handler
+//! needs).
 
 use alloc::vec::Vec;
 use spin::Mutex;
@@ -26,15 +26,15 @@ use euromm::FrameAllocator;
 const PRESENT: u64 = 1 << 0;
 const WRITABLE: u64 = 1 << 1;
 const HUGE: u64 = 1 << 7;
-/// Marker-bit in een NIET-present PTE: "deze pagina is uitgeswapt". Omdat present=0
-/// negeert de CPU alle overige bits, dus we mogen er vrij de swap-slot in coderen.
+/// Marker bit in a NON-present PTE: "this page is swapped out". Because present=0
+/// the CPU ignores all the other bits, so we may freely encode the swap slot in them.
 const SWAPPED: u64 = 1 << 9;
 const PHYS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 const SECTORS_PER_PAGE: u64 = 8; // 4096 / 512
 
 struct SwapMgr {
     area: SwapArea,
-    /// Vrije fysieke frames voor swap-in (gevuld bij swap-out, geleegd bij swap-in).
+    /// Free physical frames for swap-in (filled on swap-out, emptied on swap-in).
     pool: Vec<u64>,
     base_lba: u64,
     swap_ins: u64,
@@ -43,13 +43,13 @@ struct SwapMgr {
 
 static MGR: Mutex<Option<SwapMgr>> = Mutex::new(None);
 
-/// Fysiek basisadres van de actieve PML4 (uit CR3).
+/// Physical base address of the active PML4 (from CR3).
 fn active_pml4() -> *mut u64 {
     Cr3::read().0.start_address().as_u64() as *mut u64
 }
 
-/// Loop de 4 niveaus naar de PTE (4 KiB) van `virt`. Geeft None bij een huge-page
-/// of een ontbrekend tussenniveau (dan is het geen swappable 4 KiB-pagina).
+/// Walk the 4 levels down to the PTE (4 KiB) of `virt`. Returns None for a huge page
+/// or a missing intermediate level (then it is not a swappable 4 KiB page).
 unsafe fn walk_pte(virt: u64) -> Option<*mut u64> {
     let i4 = ((virt >> 39) & 0x1FF) as isize;
     let i3 = ((virt >> 30) & 0x1FF) as isize;
@@ -73,7 +73,7 @@ unsafe fn walk_pte(virt: u64) -> Option<*mut u64> {
     Some(pt.offset(i1))
 }
 
-/// Zorg dat de tabel-entry naar een present sub-tabel wijst; alloceer er anders een.
+/// Ensure the table entry points to a present sub-table; otherwise allocate one.
 unsafe fn ensure_table(entry: *mut u64, falloc: &mut FrameAllocator) -> u64 {
     let e = *entry;
     if e & PRESENT != 0 {
@@ -85,8 +85,8 @@ unsafe fn ensure_table(entry: *mut u64, falloc: &mut FrameAllocator) -> u64 {
     f
 }
 
-/// Map één 4 KiB-pagina `virt` → `frame` in de actieve adresruimte, en bouw daarbij
-/// de PDPT/PD/PT-keten zo nodig op (fijnmazig, zodat de pagina swappable is).
+/// Map one 4 KiB page `virt` → `frame` in the active address space, building up
+/// the PDPT/PD/PT chain as needed (fine-grained, so the page is swappable).
 pub fn map_one_page(falloc: &mut FrameAllocator, virt: u64, frame: u64) {
     unsafe {
         let i4 = ((virt >> 39) & 0x1FF) as isize;
@@ -102,8 +102,8 @@ pub fn map_one_page(falloc: &mut FrameAllocator, virt: u64, frame: u64) {
     }
 }
 
-/// Initialiseer de swap-manager: `slots` swap-slots vanaf `base_lba` op schijf 0,
-/// met een kleine pool vrije frames voor de swap-in.
+/// Initialize the swap manager: `slots` swap slots starting at `base_lba` on disk 0,
+/// with a small pool of free frames for swap-in.
 pub fn init(base_lba: u64, slots: usize, pool: Vec<u64>) {
     *MGR.lock() = Some(SwapMgr {
         area: SwapArea::new(slots),
@@ -114,9 +114,9 @@ pub fn init(base_lba: u64, slots: usize, pool: Vec<u64>) {
     });
 }
 
-/// Swap de pagina op `virt` UIT: schrijf 'm naar een swap-slot, maak de PTE niet-
-/// present (met de slot gecodeerd), en geef het frame vrij aan de pool. Geeft true
-/// bij succes. Hierna faultt elke toegang tot `virt` → [`try_swap_in`].
+/// Swap the page at `virt` OUT: write it to a swap slot, make the PTE non-
+/// present (with the slot encoded), and return the frame to the pool. Returns true
+/// on success. After this, every access to `virt` faults → [`try_swap_in`].
 pub fn swap_out(virt: u64) -> bool {
     let mut guard = MGR.lock();
     let mgr = match guard.as_mut() {
@@ -130,21 +130,21 @@ pub fn swap_out(virt: u64) -> bool {
         };
         let e = *pte;
         if e & PRESENT == 0 {
-            return false; // niet (meer) present → niets om uit te swappen
+            return false; // not (any longer) present → nothing to swap out
         }
         let frame = e & PHYS_MASK;
         let slot = match mgr.area.alloc() {
             Some(s) => s,
-            None => return false, // swap vol
+            None => return false, // swap full
         };
-        // 4 KiB (8 sectoren) van het frame naar de swap-slot schrijven.
+        // Write 4 KiB (8 sectors) of the frame to the swap slot.
         for s in 0..SECTORS_PER_PAGE {
             let mut sec = [0u8; 512];
             core::ptr::copy_nonoverlapping((frame + s * 512) as *const u8, sec.as_mut_ptr(), 512);
             crate::virtio_blk::write_sector(mgr.base_lba + slot as u64 * SECTORS_PER_PAGE + s, &sec);
         }
         crate::virtio_blk::flush();
-        // PTE niet-present + slot gecodeerd in de bovenste bits + SWAPPED-marker.
+        // PTE non-present + slot encoded in the upper bits + SWAPPED marker.
         *pte = ((slot as u64) << 12) | SWAPPED;
         tlb::flush(VirtAddr::new(virt));
         mgr.pool.push(frame);
@@ -153,12 +153,12 @@ pub fn swap_out(virt: u64) -> bool {
     true
 }
 
-/// Door de page-fault-handler aangeroepen: als `virt` een uitgeswapte pagina is,
-/// lees 'm terug in een vers frame, maak de PTE weer present en geef true (de
-/// instructie wordt hervat). False = geen swap-pagina → een echte fault.
+/// Called by the page-fault handler: if `virt` is a swapped-out page,
+/// read it back into a fresh frame, make the PTE present again and return true (the
+/// instruction is resumed). False = not a swap page → a real fault.
 pub fn try_swap_in(virt: u64) -> bool {
-    // De fault-handler draait op de PF-IST-stack; een gewone try_lock voorkomt een
-    // deadlock mocht er ooit genest gefault worden terwijl we de lock al houden.
+    // The fault handler runs on the PF IST stack; a plain try_lock prevents a
+    // deadlock should a nested fault ever occur while we already hold the lock.
     let mut guard = match MGR.try_lock() {
         Some(g) => g,
         None => return false,
@@ -174,12 +174,12 @@ pub fn try_swap_in(virt: u64) -> bool {
         };
         let e = *pte;
         if e & PRESENT != 0 || e & SWAPPED == 0 {
-            return false; // present of niet-onze-marker → echte fault
+            return false; // present or not-our-marker → real fault
         }
         let slot = ((e >> 12) & 0xFFFFF) as usize;
         let frame = match mgr.pool.pop() {
             Some(f) => f,
-            None => return false, // geen vrij frame → kan niet inswappen
+            None => return false, // no free frame → cannot swap in
         };
         for s in 0..SECTORS_PER_PAGE {
             let mut sec = [0u8; 512];
@@ -194,7 +194,7 @@ pub fn try_swap_in(virt: u64) -> bool {
     true
 }
 
-/// (swap-ins, swap-outs) — diagnostiek voor de zelftest.
+/// (swap-ins, swap-outs) — diagnostics for the self-test.
 pub fn stats() -> (u64, u64) {
     match MGR.lock().as_ref() {
         Some(m) => (m.swap_ins, m.swap_outs),

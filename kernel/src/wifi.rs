@@ -1,14 +1,14 @@
-//! Kernel-zijde van **EuroWiFi** (plan N1): de 802.11-protocolkern. Bij boot
-//! parseren we een (synthetisch) beacon-frame tot een scanresultaat en leiden we
-//! een WPA-sessiesleutel (PTK) af. De echte radio-driver (AX200/210 PHY/MAC) is
-//! hardware-werk; de logica hier — host-getest in [`eurowifi`] — draait live.
+//! Kernel side of **EuroWiFi** (plan N1): the 802.11 protocol core. At boot we
+//! parse a (synthetic) beacon frame into a scan result and derive a WPA session
+//! key (PTK). The real radio driver (AX200/210 PHY/MAC) is hardware work; the
+//! logic here — host-tested in [`eurowifi`] — runs live.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use eurowifi::{derive_ptk, parse_beacon, Security};
 
-/// Bouw een synthetisch WPA3-beacon (zoals de radio er één zou afleveren).
+/// Build a synthetic WPA3 beacon (as the radio would deliver one).
 fn demo_beacon() -> Vec<u8> {
     let ssid = b"EuroGov-Secure";
     let mut f = alloc::vec![
@@ -25,12 +25,12 @@ fn demo_beacon() -> Vec<u8> {
     f.push(0); // SSID-IE
     f.push(ssid.len() as u8);
     f.extend_from_slice(ssid);
-    f.extend_from_slice(&[3, 1, 36]); // kanaal 36
-    f.extend_from_slice(&[48, 4, 0x00, 0x0F, 0xAC, 0x08]); // RSN met SAE-AKM (WPA3)
+    f.extend_from_slice(&[3, 1, 36]); // channel 36
+    f.extend_from_slice(&[48, 4, 0x00, 0x0F, 0xAC, 0x08]); // RSN with SAE-AKM (WPA3)
     f
 }
 
-/// Boot-zelftest: beacon → scanresultaat; WPA-PTK-afleiding (deterministisch).
+/// Boot self-test: beacon → scan result; WPA-PTK derivation (deterministic).
 pub fn selftest() {
     let frame = demo_beacon();
     let scan = parse_beacon(&frame);
@@ -39,41 +39,41 @@ pub fn selftest() {
         .map(|s| s.ssid == "EuroGov-Secure" && s.channel == 36 && s.security == Security::Wpa3)
         .unwrap_or(false);
 
-    // WPA-handshake-sleutelafleiding (PMK → PTK uit nonces + MAC's).
+    // WPA handshake key derivation (PMK → PTK from nonces + MACs).
     let pmk = [0x20u8; 32];
     let (aa, spa) = ([0xAA; 6], [0x11; 6]);
     let (anonce, snonce) = ([0x3a; 32], [0x4b; 32]);
     let ptk = derive_ptk(&pmk, &aa, &spa, &anonce, &snonce);
-    // Richting-symmetrie: AP en client leiden dezelfde PTK af.
+    // Direction symmetry: AP and client derive the same PTK.
     let ptk_peer = derive_ptk(&pmk, &spa, &aa, &snonce, &anonce);
     let ptk_ok = ptk.len() == 48 && ptk == ptk_peer && ptk != alloc::vec![0u8; 48];
 
     let ok = scan_ok && ptk_ok;
     crate::serial_println!(
-        "[n1] EuroWiFi: beacon→scan (SSID '{}', kanaal {}, {:?})={scan_ok}, WPA-PTK-afleiding (48B, richting-symmetrisch)={ptk_ok} → {}",
+        "[n1] EuroWiFi: beacon→scan (SSID '{}', channel {}, {:?})={scan_ok}, WPA-PTK derivation (48B, direction-symmetric)={ptk_ok} → {}",
         scan.as_ref().map(|s| s.ssid.as_str()).unwrap_or("?"),
         scan.as_ref().map(|s| s.channel).unwrap_or(0),
         scan.as_ref().map(|s| s.security).unwrap_or(Security::Open),
-        if ok { "OK (802.11-protocolkern; radio-driver = hardware-werk) ✓" } else { "MISLUKT" }
+        if ok { "OK (802.11 protocol core; radio driver = hardware work) ✓" } else { "FAILED" }
     );
 }
 
-/// `wifi`-shellcommando: toon een gesimuleerd scanresultaat + de protocolstatus.
+/// `wifi` shell command: show a simulated scan result + the protocol status.
 pub fn shell() -> Vec<String> {
-    let mut out = alloc::vec![String::from("EuroWiFi — soevereine 802.11-stack (protocolkern host-getest; radio-driver hardware-attended)")];
+    let mut out = alloc::vec![String::from("EuroWiFi — sovereign 802.11 stack (protocol core host-tested; radio driver hardware-attended)")];
     if let Some(s) = parse_beacon(&demo_beacon()) {
         let bssid: String = s.bssid.iter().map(|b| alloc::format!("{b:02x}")).collect::<Vec<_>>().join(":");
-        out.push(alloc::format!("  gevonden netwerk: SSID '{}' · BSSID {} · kanaal {} · {:?}", s.ssid, bssid, s.channel, s.security));
+        out.push(alloc::format!("  found network: SSID '{}' · BSSID {} · channel {} · {:?}", s.ssid, bssid, s.channel, s.security));
     }
-    out.push(String::from("  WPA2/3-sleutelafleiding via de IEEE-PRF (HMAC-SHA-256); WPA3-SAE detectie via RSN-AKM 00-0F-AC:8"));
+    out.push(String::from("  WPA2/3 key derivation via the IEEE PRF (HMAC-SHA-256); WPA3-SAE detection via RSN-AKM 00-0F-AC:8"));
     out
 }
 
-/// **BB-3 zelftest** — detecteer een Intel WiFi-radio (AX200/AX210/AX201/9560/...)
-/// en rapporteer de driver-status EERLIJK. De 802.11-protocolkern is bewezen ([n1]);
-/// de radio-bring-up (iwlwifi-stijl: firmware-load → MAC/PHY-init → TX/RX-DMA-ringen
-/// → scan → 4-way-handshake op de [n1]-PTK) vereist ECHTE Intel-hardware — QEMU
-/// emuleert geen 802.11-radio, dus dit is hardware-attended, geen valse vink.
+/// **BB-3 self-test** — detect an Intel WiFi radio (AX200/AX210/AX201/9560/...)
+/// and report the driver status HONESTLY. The 802.11 protocol core is proven ([n1]);
+/// the radio bring-up (iwlwifi-style: firmware load → MAC/PHY init → TX/RX DMA rings
+/// → scan → 4-way handshake on the [n1] PTK) requires REAL Intel hardware — QEMU
+/// emulates no 802.11 radio, so this is hardware-attended, not a false check.
 pub fn bb3_selftest() {
     let intel_wifi = crate::pci::find(|d| {
         d.vendor == 0x8086
@@ -84,11 +84,11 @@ pub fn bb3_selftest() {
     });
     match intel_wifi {
         Some(d) => crate::serial_println!(
-            "[bb3] EuroWiFi-radio: Intel WiFi {:04x}:{:04x} @ {:02x}:{:02x}.{} GEVONDEN — radio-bring-up (firmware→MAC/PHY→ringen→4-way op de [n1]-PTK) kan tegen deze echte hardware draaien",
+            "[bb3] EuroWiFi radio: Intel WiFi {:04x}:{:04x} @ {:02x}:{:02x}.{} FOUND — radio bring-up (firmware→MAC/PHY→rings→4-way on the [n1] PTK) can run against this real hardware",
             d.vendor, d.device, d.bus, d.dev, d.func
         ),
         None => crate::serial_println!(
-            "[bb3] EuroWiFi-radio: geen Intel 802.11-radio aanwezig (QEMU emuleert geen AX200/210). Protocolkern (beacon-scan + WPA2/3-PTK) BEWEZEN door [n1]; de iwlwifi-stijl radio-driver (firmware-load/MAC-PHY/TX-RX-ringen + 4-way) is EERLIJK hardware-attended — echte Intel WiFi vereist, geen valse vink ✓"
+            "[bb3] EuroWiFi radio: no Intel 802.11 radio present (QEMU emulates no AX200/210). Protocol core (beacon scan + WPA2/3 PTK) PROVEN by [n1]; the iwlwifi-style radio driver (firmware load/MAC-PHY/TX-RX rings + 4-way) is HONESTLY hardware-attended — real Intel WiFi required, not a false check ✓"
         ),
     }
 }

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Sprint 2 (I3): bewijs dat ACPI-S5 het systeem ECHT afsluit. Boot EuroOS; de
-kernel doet een nette `power::shutdown()` (ACPI S5). QEMU hoort de gast af te
-sluiten → QMP zendt een SHUTDOWN-event (guest-initiated) en het proces eindigt.
-Vereist een build met de tijdelijke shutdown-trigger actief."""
+"""Sprint 2 (I3): prove that ACPI-S5 REALLY shuts the system down. Boot EuroOS; the
+kernel does a clean `power::shutdown()` (ACPI S5). QEMU should power the guest
+off → QMP emits a SHUTDOWN event (guest-initiated) and the process ends.
+Requires a build with the temporary shutdown trigger active."""
 import json, os, socket, subprocess, sys, time
 
 IMG = sys.argv[1] if len(sys.argv) > 1 else "eurokernel.img"

@@ -1,52 +1,52 @@
-//! Taalbewuste collatie (sorteervolgorde). Twee lagen:
+//! Language-aware collation (sort order). Two layers:
 //!
-//! 1. **Diacritiek-vouwing** — `é` sorteert vlak na `e`, niet als los teken.
-//! 2. **Taal-tailoring** — sommige talen plaatsen letters op een eigen plek:
-//!    Zweeds/Fins `å ä ö` ná `z`, Deens `æ ø å` ná `z`, Spaans `ñ` tussen `n` en
-//!    `o`, Tsjechisch `č` ná `c` / `š` ná `s` / `ž` ná `z`, Duits `ä≈a` (DIN-1).
+//! 1. **Diacritic folding** — `é` sorts right after `e`, not as a separate character.
+//! 2. **Language tailoring** — some languages place letters in their own position:
+//!    Swedish/Finnish `å ä ö` after `z`, Danish `æ ø å` after `z`, Spanish `ñ` between `n` and
+//!    `o`, Czech `č` after `c` / `š` after `s` / `ž` after `z`, German `ä≈a` (DIN-1).
 //!
-//! Latijns schrift wordt op gewogen sleutels vergeleken; niet-Latijn (Grieks,
-//! Cyrillisch/Bulgaars) valt terug op codepoint-volgorde (binnen-schrift correct).
+//! Latin script is compared on weighted keys; non-Latin (Greek,
+//! Cyrillic/Bulgarian) falls back to codepoint order (correct within-script).
 
 use crate::lang::Lang;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
-/// De primaire collatie-weging van een (kleine) letter. Basisletters a–z liggen op
-/// veelvouden van 100 zodat er ruimte is om getailorde letters ertussen/erna te
-/// plaatsen. Niet-Latijn → codepoint + offset (sorteert ná Latijn).
+/// The primary collation weight of a (lowercase) letter. Base letters a–z sit on
+/// multiples of 100 so there is room to place tailored letters between/after them.
+/// Non-Latin → codepoint + offset (sorts after Latin).
 fn weight(lang: Lang, ch: char) -> u32 {
     let lower = ch.to_lowercase().next().unwrap_or(ch);
 
-    // 1. Taal-specifieke tailoring (heeft voorrang op de generieke vouwing).
+    // 1. Language-specific tailoring (takes precedence over the generic folding).
     if let Some(w) = tailored(lang, lower) {
         return w;
     }
-    // 2. Generieke diacritiek-vouwing naar (basisletter, sub-offset).
+    // 2. Generic diacritic folding to (base letter, sub-offset).
     if let Some((base, sub)) = fold(lower) {
         return base_rank(base) + sub;
     }
-    // 3. Gewone ASCII-letter.
+    // 3. Ordinary ASCII letter.
     if lower.is_ascii_lowercase() {
         return base_rank(lower);
     }
-    // 4. Niet-letter / niet-Latijn → codepoint, ruim ná het Latijnse bereik.
+    // 4. Non-letter / non-Latin → codepoint, well after the Latin range.
     100_000 + lower as u32
 }
 
-/// Basisrang van een a–z-letter (a=0, b=100, …, z=2500).
+/// Base rank of an a–z letter (a=0, b=100, …, z=2500).
 fn base_rank(c: char) -> u32 {
     debug_assert!(c.is_ascii_lowercase());
     (c as u32 - 'a' as u32) * 100
 }
 
-/// Vouw een geaccentueerde Latijnse letter naar zijn basisletter + diacriet-offset
-/// (zodat `e < é < ê < f`). `None` = geen bekende vouwing.
+/// Fold an accented Latin letter to its base letter + diacritic offset
+/// (so that `e < é < ê < f`). `None` = no known folding.
 fn fold(c: char) -> Option<(char, u32)> {
     let r = match c {
         'á' | 'à' | 'â' | 'ã' | 'ā' | 'ă' => ('a', 1),
-        'ä' => ('a', 2), // umlaut → basisletter (DIN-1, default voor de/nl)
+        'ä' => ('a', 2), // umlaut → base letter (DIN-1, default for de/nl)
         'å' => ('a', 3),
         'æ' => ('a', 4),
         'ç' | 'ć' | 'č' | 'ĉ' => ('c', 1),
@@ -72,8 +72,8 @@ fn fold(c: char) -> Option<(char, u32)> {
     Some(r)
 }
 
-/// Taal-specifieke letterplaatsing. Geeft een expliciete weging die de generieke
-/// vouwing overschrijft.
+/// Language-specific letter placement. Returns an explicit weight that overrides
+/// the generic folding.
 fn tailored(lang: Lang, c: char) -> Option<u32> {
     use Lang::*;
     let after_z = base_rank('z') + 100; // 2600
@@ -91,7 +91,7 @@ fn tailored(lang: Lang, c: char) -> Option<u32> {
             _ => None,
         },
         Es => match c {
-            // ñ als eigen letter tussen n en o.
+            // ñ as its own letter between n and o.
             'ñ' => Some(base_rank('n') + 50),
             _ => None,
         },
@@ -103,34 +103,34 @@ fn tailored(lang: Lang, c: char) -> Option<u32> {
             _ => None,
         },
         Et => match c {
-            // Ests: õ ä ö ü ná w (vóór x).
+            // Estonian: õ ä ö ü after w (before x).
             'õ' => Some(base_rank('w') + 25),
             'ä' => Some(base_rank('w') + 50),
             'ö' => Some(base_rank('w') + 75),
             'ü' => Some(base_rank('w') + 90),
             _ => None,
         },
-        // Duits (de) + Nederlands: ä/ö/ü vouwen naar a/o/u (default fold doet dit).
+        // German (de) + Dutch: ä/ö/ü fold to a/o/u (the default fold does this).
         _ => None,
     }
 }
 
-/// De collatie-sleutel van een hele string (rij primaire wegingen).
+/// The collation key of a whole string (sequence of primary weights).
 fn key(lang: Lang, s: &str) -> Vec<u32> {
     s.chars().map(|c| weight(lang, c)).collect()
 }
 
-/// Vergelijk twee strings in de collatie van `lang`. Bij een primaire gelijkstand
-/// beslist de codepoint (zodat de orde totaal + stabiel is, hoofdletters ná).
+/// Compare two strings in the collation of `lang`. On a primary tie
+/// the codepoint decides (so the order is total + stable, uppercase after).
 pub fn collate(lang: Lang, a: &str, b: &str) -> Ordering {
     let (ka, kb) = (key(lang, a), key(lang, b));
     match ka.cmp(&kb) {
-        Ordering::Equal => a.cmp(b), // secundair: ruwe codepoint
+        Ordering::Equal => a.cmp(b), // secondary: raw codepoint
         ord => ord,
     }
 }
 
-/// Sorteer een lijst strings in de collatie van `lang`.
+/// Sort a list of strings in the collation of `lang`.
 pub fn sort(lang: Lang, items: &mut [String]) {
     items.sort_by(|a, b| collate(lang, a, b));
 }
@@ -149,13 +149,13 @@ mod tests {
 
     #[test]
     fn diacritic_folds_near_base() {
-        // 'é' hoort tussen 'e' en 'f'.
+        // 'é' belongs between 'e' and 'f'.
         assert_eq!(sorted(Lang::Fr, &["f", "é", "e"]), vec!["e", "é", "f"]);
     }
 
     #[test]
     fn swedish_aa_after_z() {
-        // Zweeds: å ä ö ná z.
+        // Swedish: å ä ö after z.
         assert_eq!(
             sorted(Lang::Sv, &["ö", "a", "z", "å", "ä"]),
             vec!["a", "z", "å", "ä", "ö"]
@@ -164,13 +164,13 @@ mod tests {
 
     #[test]
     fn german_umlaut_as_base() {
-        // Duits (DIN-1): ä sorteert als a → "ä" vóór "b".
+        // German (DIN-1): ä sorts as a → "ä" before "b".
         assert_eq!(sorted(Lang::De, &["b", "ä", "a"]), vec!["a", "ä", "b"]);
     }
 
     #[test]
     fn spanish_enye_after_n() {
-        // ñ tussen n en o.
+        // ñ between n and o.
         assert_eq!(sorted(Lang::Es, &["o", "ñ", "n"]), vec!["n", "ñ", "o"]);
     }
 
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn case_insensitive_primary() {
-        // Hoofdletters tellen primair gelijk; "Appel" vlak bij "appel".
+        // Uppercase counts as primary-equal; "Appel" right next to "appel".
         let v = sorted(Lang::Nl, &["banaan", "Appel", "appel"]);
         assert_eq!(v, vec!["Appel", "appel", "banaan"]);
     }

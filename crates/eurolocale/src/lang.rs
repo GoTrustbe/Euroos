@@ -1,82 +1,82 @@
-//! De 24 officiële talen van de Europese Unie + hun lokalisatieregels.
+//! The 24 official languages of the European Union + their localization rules.
 //!
-//! Elke taal draagt de CLDR-kerngegevens die de rest van het crate gebruikt:
-//! scheidingstekens (getal/groepering), valutaplaatsing, datumpatroon en de
-//! meervouds-familie. Soevereiniteit op taalniveau: EuroOS spreekt élke EU-taal,
-//! niet alleen Engels.
+//! Each language carries the CLDR core data that the rest of the crate uses:
+//! separators (number/grouping), currency placement, date pattern and the
+//! plural family. Sovereignty at the language level: EuroOS speaks every EU language,
+//! not just English.
 
-/// Een EU-taal (ISO 639-1). De 24 officiële talen van de Unie.
+/// An EU language (ISO 639-1). The 24 official languages of the Union.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lang {
-    Bg, // Bulgaars
-    Hr, // Kroatisch
-    Cs, // Tsjechisch
-    Da, // Deens
-    Nl, // Nederlands
-    En, // Engels
-    Et, // Ests
-    Fi, // Fins
-    Fr, // Frans
-    De, // Duits
-    El, // Grieks
-    Hu, // Hongaars
-    Ga, // Iers
-    It, // Italiaans
-    Lv, // Lets
-    Lt, // Litouws
-    Mt, // Maltees
-    Pl, // Pools
-    Pt, // Portugees
-    Ro, // Roemeens
-    Sk, // Slowaaks
-    Sl, // Sloveens
-    Es, // Spaans
-    Sv, // Zweeds
+    Bg, // Bulgarian
+    Hr, // Croatian
+    Cs, // Czech
+    Da, // Danish
+    Nl, // Dutch
+    En, // English
+    Et, // Estonian
+    Fi, // Finnish
+    Fr, // French
+    De, // German
+    El, // Greek
+    Hu, // Hungarian
+    Ga, // Irish
+    It, // Italian
+    Lv, // Latvian
+    Lt, // Lithuanian
+    Mt, // Maltese
+    Pl, // Polish
+    Pt, // Portuguese
+    Ro, // Romanian
+    Sk, // Slovak
+    Sl, // Slovenian
+    Es, // Spanish
+    Sv, // Swedish
 }
 
-/// Het decimaal- en groeperingsteken van een taal.
+/// The decimal and grouping separator of a language.
 pub struct Separators {
     pub decimal: char,
     pub group: char,
 }
 
-/// Het meervouds-systeem (CLDR-categorieën die de taal onderscheidt).
+/// The plural system (CLDR categories the language distinguishes).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PluralSystem {
-    /// Geen onderscheid (bv. Hongaars, Turks-stijl): altijd `other`.
+    /// No distinction (e.g. Hungarian, Turkish-style): always `other`.
     None,
-    /// Engels-stijl: `one` (n=1) vs `other`.
+    /// English-style: `one` (n=1) vs `other`.
     OneOther,
-    /// Frans-stijl: `one` (n=0,1) vs `other`.
+    /// French-style: `one` (n=0,1) vs `other`.
     FrenchOneOther,
-    /// West-Slavisch (Tsjechisch/Slowaaks): one / few (2-4) / many (fracties) / other.
+    /// West Slavic (Czech/Slovak): one / few (2-4) / many (fractions) / other.
     WestSlavic,
-    /// Pools: one / few / many.
+    /// Polish: one / few / many.
     Polish,
-    /// Kroatisch (BCS): one / few / other.
+    /// Croatian (BCS): one / few / other.
     Croatian,
-    /// Lets: zero / one / other.
+    /// Latvian: zero / one / other.
     Latvian,
-    /// Litouws: one / few / many.
+    /// Lithuanian: one / few / many.
     Lithuanian,
-    /// Sloveens: one (n%100==1) / two (==2) / few (3,4) / other.
+    /// Slovenian: one (n%100==1) / two (==2) / few (3,4) / other.
     Slovenian,
-    /// Iers: one / two / few / many / other.
+    /// Irish: one / two / few / many / other.
     Irish,
-    /// Maltees: one / few / many / other.
+    /// Maltese: one / few / many / other.
     Maltese,
-    /// Roemeens: one / few / other.
+    /// Romanian: one / few / other.
     Romanian,
 }
 
 impl Lang {
-    /// Alle 24 talen (vaste volgorde).
+    /// All 24 languages (fixed order).
     pub const ALL: [Lang; 24] = {
         use Lang::*;
         [Bg, Hr, Cs, Da, Nl, En, Et, Fi, Fr, De, El, Hu, Ga, It, Lv, Lt, Mt, Pl, Pt, Ro, Sk, Sl, Es, Sv]
     };
 
-    /// De ISO 639-1-code (`"nl"`, `"de"`, …).
+    /// The ISO 639-1 code (`"nl"`, `"de"`, …).
     pub fn code(self) -> &'static str {
         use Lang::*;
         match self {
@@ -87,7 +87,7 @@ impl Lang {
         }
     }
 
-    /// De eigennaam van de taal (endoniem).
+    /// The proper name of the language (endonym).
     pub fn native_name(self) -> &'static str {
         use Lang::*;
         match self {
@@ -100,7 +100,7 @@ impl Lang {
         }
     }
 
-    /// Parse een taal-tag als `"nl"`, `"nl-BE"`, `"de_DE"` → de taal (regio genegeerd).
+    /// Parse a language tag such as `"nl"`, `"nl-BE"`, `"de_DE"` → the language (region ignored).
     pub fn parse(tag: &str) -> Option<Lang> {
         let lang = tag
             .split(|c| c == '-' || c == '_')
@@ -110,54 +110,54 @@ impl Lang {
         Lang::ALL.into_iter().find(|l| l.code() == lang)
     }
 
-    /// Gebruikt deze taal (in zijn hoofdregio) de euro?
+    /// Does this language (in its main region) use the euro?
     pub fn is_eurozone(self) -> bool {
         use Lang::*;
-        // Eurozone-talen (incl. Kroatië sinds 2023, en Engels = Ierland/Malta);
-        // de niet-euro EU-munten (BGN/CZK/DKK/HUF/PLN/RON/SEK) staan in [`crate::currency`].
+        // Eurozone languages (incl. Croatia since 2023, and English = Ireland/Malta);
+        // the non-euro EU currencies (BGN/CZK/DKK/HUF/PLN/RON/SEK) are in [`crate::currency`].
         matches!(
             self,
             En | Nl | De | Fr | It | Es | Pt | Fi | El | Ga | Mt | Sk | Sl | Et | Lv | Lt | Hr
         )
     }
 
-    /// Decimaal- en groeperingsteken.
+    /// Decimal and grouping separator.
     pub fn separators(self) -> Separators {
         use Lang::*;
-        // Engels/Iers/Maltees: punt-decimaal, komma-groepering.
-        // De meeste continentale talen: komma-decimaal, punt of spatie-groepering.
+        // English/Irish/Maltese: dot decimal, comma grouping.
+        // Most continental languages: comma decimal, dot or space grouping.
         match self {
             En | Ga | Mt => Separators { decimal: '.', group: ',' },
-            // Spatie-groepering (smal vaste spatie vereenvoudigd tot gewone spatie).
+            // Space grouping (narrow no-break space simplified to a regular space).
             Fr | Cs | Sk | Pl | Hu | Sv | Fi | Et | Lv | Lt | Bg => {
                 Separators { decimal: ',', group: ' ' }
             }
-            // Zwitsers-Duits gebruikt ', maar EU-Duits (de-DE) gebruikt punt-groepering.
+            // Swiss German uses ', but EU German (de-DE) uses dot grouping.
             De | Nl | It | Es | Pt | Da | El | Hr | Ro | Sl => {
                 Separators { decimal: ',', group: '.' }
             }
         }
     }
 
-    /// Wordt het valutasymbool vóór het bedrag geplaatst? (anders erachter)
+    /// Is the currency symbol placed before the amount? (otherwise after)
     pub fn currency_before(self) -> bool {
         use Lang::*;
-        // Engels/Iers/Maltees/Nederlands: symbool vóór ("€1,00"); de meeste andere erna ("1,00 €").
+        // English/Irish/Maltese/Dutch: symbol before ("€1,00"); most others after ("1,00 €").
         matches!(self, En | Ga | Mt | Nl)
     }
 
-    /// Het datumpatroon (korte numerieke vorm) van de taal.
+    /// The date pattern (short numeric form) of the language.
     pub fn date_pattern(self) -> DatePattern {
         use Lang::*;
         match self {
-            // ISO-achtig (jaar eerst): Zweeds, Litouws, Hongaars.
+            // ISO-like (year first): Swedish, Lithuanian, Hungarian.
             Sv | Lt | Hu => DatePattern::Ymd,
-            // De rest van de EU: dag-maand-jaar.
+            // The rest of the EU: day-month-year.
             _ => DatePattern::Dmy,
         }
     }
 
-    /// Het meervouds-systeem.
+    /// The plural system.
     pub fn plural_system(self) -> PluralSystem {
         use Lang::*;
         use PluralSystem::*;
@@ -177,12 +177,12 @@ impl Lang {
     }
 }
 
-/// Numeriek datumpatroon.
+/// Numeric date pattern.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DatePattern {
-    /// dag/maand/jaar (bv. 31/12/2026).
+    /// day/month/year (e.g. 31/12/2026).
     Dmy,
-    /// jaar-maand-dag (bv. 2026-12-31).
+    /// year-month-day (e.g. 2026-12-31).
     Ymd,
 }
 

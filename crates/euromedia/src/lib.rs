@@ -1,12 +1,12 @@
-//! EuroMedia — de afbeeldingsviewer-kern van EuroOS (Sprint AC-1).
+//! EuroMedia — the image-viewer core of EuroOS (Sprint AC-1).
 //!
-//! Een soevereine **QOI**-codec (Quite OK Image): een eenvoudig, modern,
-//! patentvrij beeldformaat dat volledig van scratch te implementeren is — geen
-//! `libpng`/`libjpeg`-afhankelijkheid. Decodeert en codeert lossless RGBA, plus
-//! een [`Image`]-model met basisbewerkingen (pixeltoegang, bijsnijden, flip).
-//! PNG/JPEG/WebP komen er als aparte decoders bij; QOI bewijst de pijplijn.
+//! A sovereign **QOI** codec (Quite OK Image): a simple, modern,
+//! patent-free image format that can be fully implemented from scratch — no
+//! `libpng`/`libjpeg` dependency. Decodes and encodes lossless RGBA, plus
+//! an [`Image`] model with basic operations (pixel access, cropping, flip).
+//! PNG/JPEG/WebP will be added as separate decoders; QOI proves the pipeline.
 //!
-//! Pure `no_std`-logica, host-getest. Geen `unsafe`.
+//! Pure `no_std` logic, host-tested. No `unsafe`.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -16,10 +16,10 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// Een RGBA-pixel.
+/// An RGBA pixel.
 pub type Rgba = [u8; 4];
 
-/// Een afbeelding: breedte × hoogte RGBA-pixels (rij na rij).
+/// An image: width × height RGBA pixels (row by row).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
     pub width: u32,
@@ -28,11 +28,11 @@ pub struct Image {
 }
 
 impl Image {
-    /// Maak een afbeelding gevuld met één kleur.
+    /// Create an image filled with a single color.
     pub fn new(width: u32, height: u32, fill: Rgba) -> Self {
         Image { width, height, pixels: vec![fill; (width * height) as usize] }
     }
-    /// Lees een pixel (None buiten bereik).
+    /// Read a pixel (None out of bounds).
     pub fn get(&self, x: u32, y: u32) -> Option<Rgba> {
         if x < self.width && y < self.height {
             Some(self.pixels[(y * self.width + x) as usize])
@@ -40,13 +40,13 @@ impl Image {
             None
         }
     }
-    /// Zet een pixel.
+    /// Set a pixel.
     pub fn set(&mut self, x: u32, y: u32, px: Rgba) {
         if x < self.width && y < self.height {
             self.pixels[(y * self.width + x) as usize] = px;
         }
     }
-    /// Verticaal spiegelen (op zijn kop).
+    /// Flip vertically (upside down).
     pub fn flip_vertical(&self) -> Image {
         let mut out = self.pixels.clone();
         for y in 0..self.height {
@@ -58,7 +58,7 @@ impl Image {
         }
         Image { width: self.width, height: self.height, pixels: out }
     }
-    /// Een rechthoek uitsnijden (geclampt op de randen).
+    /// Crop out a rectangle (clamped to the edges).
     pub fn crop(&self, x: u32, y: u32, w: u32, h: u32) -> Image {
         let w = w.min(self.width.saturating_sub(x));
         let h = h.min(self.height.saturating_sub(y));
@@ -72,7 +72,7 @@ impl Image {
     }
 }
 
-/// Foutsoorten bij het decoderen.
+/// Error kinds during decoding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QoiError {
     BadMagic,
@@ -92,14 +92,14 @@ fn hash(px: Rgba) -> usize {
     (px[0] as usize * 3 + px[1] as usize * 5 + px[2] as usize * 7 + px[3] as usize * 11) % 64
 }
 
-/// Codeer een afbeelding naar een QOI-bytestroom (RGBA, lineaire colorspace).
+/// Encode an image into a QOI byte stream (RGBA, linear colorspace).
 pub fn encode(img: &Image) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(b"qoif");
     out.extend_from_slice(&img.width.to_be_bytes());
     out.extend_from_slice(&img.height.to_be_bytes());
     out.push(4); // channels
-    out.push(0); // colorspace: 0 = sRGB met lineaire alpha
+    out.push(0); // colorspace: 0 = sRGB with linear alpha
 
     let mut index = [[0u8; 4]; 64];
     let mut prev: Rgba = [0, 0, 0, 255];
@@ -154,12 +154,12 @@ pub fn encode(img: &Image) -> Vec<u8> {
         }
         prev = px;
     }
-    // Einde-marker: 7× 0x00 + 0x01.
+    // End marker: 7× 0x00 + 0x01.
     out.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 1]);
     out
 }
 
-/// Decodeer een QOI-bytestroom naar een [`Image`].
+/// Decode a QOI byte stream into an [`Image`].
 pub fn decode(data: &[u8]) -> Result<Image, QoiError> {
     if data.len() < 14 || &data[0..4] != b"qoif" {
         return Err(QoiError::BadMagic);
@@ -250,7 +250,7 @@ pub fn decode(data: &[u8]) -> Result<Image, QoiError> {
     Ok(Image { width, height, pixels })
 }
 
-/// Foutsoorten bij het decoderen van een PPM/PGM.
+/// Error kinds when decoding a PPM/PGM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PpmError {
     BadMagic,
@@ -259,9 +259,9 @@ pub enum PpmError {
     Unsupported,
 }
 
-/// Decodeer een **Netpbm**-afbeelding (PPM `P3`/`P6` of PGM `P2`/`P5`) naar [`Image`].
-/// Een simpel, header-leesbaar formaat — handig naast QOI omdat veel tooling het
-/// rechtstreeks schrijft. Ondersteunt 8-bit (maxval ≤ 255). Geen `unsafe`.
+/// Decode a **Netpbm** image (PPM `P3`/`P6` or PGM `P2`/`P5`) into an [`Image`].
+/// A simple, header-readable format — handy alongside QOI because much tooling
+/// writes it directly. Supports 8-bit (maxval ≤ 255). No `unsafe`.
 pub fn decode_ppm(data: &[u8]) -> Result<Image, PpmError> {
     if data.len() < 2 || data[0] != b'P' {
         return Err(PpmError::BadMagic);
@@ -270,11 +270,11 @@ pub fn decode_ppm(data: &[u8]) -> Result<Image, PpmError> {
     let (ascii, gray) = match magic {
         b'2' => (true, true),   // PGM ascii
         b'3' => (true, false),  // PPM ascii
-        b'5' => (false, true),  // PGM binair
-        b'6' => (false, false), // PPM binair
+        b'5' => (false, true),  // PGM binary
+        b'6' => (false, false), // PPM binary
         _ => return Err(PpmError::BadMagic),
     };
-    // Header-tokens (breedte, hoogte, maxval) lezen — whitespace + #-commentaar.
+    // Read header tokens (width, height, maxval) — whitespace + #-comments.
     let mut pos = 2usize;
     let next_token = |pos: &mut usize| -> Option<u32> {
         loop {
@@ -307,7 +307,7 @@ pub fn decode_ppm(data: &[u8]) -> Result<Image, PpmError> {
     let n = (width * height) as usize;
     let mut pixels = Vec::with_capacity(n);
     if ascii {
-        // ASCII-samples: per pixel 1 (gray) of 3 (rgb) getallen.
+        // ASCII samples: 1 (gray) or 3 (rgb) numbers per pixel.
         for _ in 0..n {
             if gray {
                 let v = next_token(&mut pos).ok_or(PpmError::Truncated)? as u8;
@@ -320,8 +320,8 @@ pub fn decode_ppm(data: &[u8]) -> Result<Image, PpmError> {
             }
         }
     } else {
-        // Binair: precies één whitespace na maxval, dan ruwe bytes.
-        pos += 1; // de scheidende whitespace
+        // Binary: exactly one whitespace after maxval, then raw bytes.
+        pos += 1; // the separating whitespace
         let per = if gray { 1 } else { 3 };
         if pos + n * per > data.len() {
             return Err(PpmError::Truncated);
@@ -344,8 +344,8 @@ mod tests {
     use super::*;
 
     fn sample() -> Image {
-        // Een afbeelding die alle chunk-types uitlokt: vlakken (RUN), kleine
-        // verschillen (DIFF/LUMA), grote sprongen (RGB/RGBA) en herhaling (INDEX).
+        // An image that triggers all chunk types: flat areas (RUN), small
+        // differences (DIFF/LUMA), large jumps (RGB/RGBA) and repetition (INDEX).
         let mut img = Image::new(8, 8, [10, 20, 30, 255]);
         for y in 0..8 {
             for x in 0..8 {
@@ -356,7 +356,7 @@ mod tests {
                 img.set(x, y, [r, g, b, a]);
             }
         }
-        // Een vlak gebied voor RUN.
+        // A flat region for RUN.
         for x in 0..8 {
             img.set(x, 3, [77, 77, 77, 255]);
         }
@@ -371,15 +371,15 @@ mod tests {
         let dec = decode(&enc).unwrap();
         assert_eq!(dec.width, 8);
         assert_eq!(dec.height, 8);
-        assert_eq!(dec, img, "QOI moet lossless zijn");
+        assert_eq!(dec, img, "QOI must be lossless");
     }
 
     #[test]
     fn roundtrip_solid_uses_runs() {
         let img = Image::new(32, 32, [200, 100, 50, 255]);
         let enc = encode(&img);
-        // Een effen vlak comprimeert sterk (header 14 + paar runs + 8 eind).
-        assert!(enc.len() < 60, "effen vlak te groot: {}", enc.len());
+        // A solid area compresses strongly (header 14 + a few runs + 8 end).
+        assert!(enc.len() < 60, "solid area too large: {}", enc.len());
         assert_eq!(decode(&enc).unwrap(), img);
     }
 
@@ -392,7 +392,7 @@ mod tests {
     #[test]
     fn truncated_rejected() {
         let enc = encode(&Image::new(4, 4, [1, 2, 3, 255]));
-        // Kap de stream af na de header → te weinig data.
+        // Cut off the stream after the header → too little data.
         assert!(matches!(decode(&enc[0..15]), Err(QoiError::Truncated)));
     }
 
@@ -404,14 +404,14 @@ mod tests {
         assert_eq!(img.get(0, 0), Some([1, 1, 1, 255]));
         assert_eq!(img.get(3, 0), None);
         let f = img.flip_vertical();
-        assert_eq!(f.get(0, 1), Some([1, 1, 1, 255])); // rij 0 → rij 1
+        assert_eq!(f.get(0, 1), Some([1, 1, 1, 255])); // row 0 → row 1
         let c = img.crop(1, 0, 2, 2);
         assert_eq!((c.width, c.height), (2, 2));
     }
 
     #[test]
     fn alpha_transitions_roundtrip() {
-        // Wisselende alpha lokt QOI_OP_RGBA uit.
+        // Alternating alpha triggers QOI_OP_RGBA.
         let mut img = Image::new(4, 1, [0, 0, 0, 255]);
         img.set(0, 0, [255, 0, 0, 255]);
         img.set(1, 0, [255, 0, 0, 64]);
@@ -422,8 +422,8 @@ mod tests {
 
     #[test]
     fn ppm_p3_ascii() {
-        // 2×2 PPM met commentaar + extra whitespace.
-        let src = b"P3\n# een commentaar\n2 2\n255\n 255 0 0  0 255 0\n0 0 255  255 255 0\n";
+        // 2×2 PPM with a comment + extra whitespace.
+        let src = b"P3\n# a comment\n2 2\n255\n 255 0 0  0 255 0\n0 0 255  255 255 0\n";
         let img = decode_ppm(src).unwrap();
         assert_eq!((img.width, img.height), (2, 2));
         assert_eq!(img.get(0, 0), Some([255, 0, 0, 255]));
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn ppm_p6_binary() {
-        // 2×1 binaire PPM: rood, groen.
+        // 2×1 binary PPM: red, green.
         let mut src = Vec::from(&b"P6\n2 1\n255\n"[..]);
         src.extend_from_slice(&[255, 0, 0, 0, 255, 0]);
         let img = decode_ppm(&src).unwrap();

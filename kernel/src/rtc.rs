@@ -1,6 +1,6 @@
-//! RTC/CMOS-driver (Run 3 / doc §16.1) — ECHTE wandkloktijd uit de CMOS-registers
-//! (poorten 0x70/0x71). Vervangt de gehardcodeerde "Mon 1 June" + de boot-tick-klok
-//! door de werkelijke datum/tijd, zodat het statuspaneel live de echte tijd toont.
+//! RTC/CMOS driver (Run 3 / doc §16.1) — REAL wall-clock time from the CMOS registers
+//! (ports 0x70/0x71). Replaces the hardcoded "Mon 1 June" + the boot-tick clock
+//! with the actual date/time, so the status panel shows the real time live.
 
 use x86_64::instructions::port::Port;
 
@@ -29,13 +29,13 @@ fn bcd_to_bin(v: u8) -> u8 {
     (v >> 4) * 10 + (v & 0x0F)
 }
 
-/// Lees de huidige datum/tijd uit de RTC. Leest herhaald tot twee opeenvolgende
-/// metingen identiek zijn (voorkomt een waarde die middenin een tik verandert).
+/// Read the current date/time from the RTC. Reads repeatedly until two consecutive
+/// readings are identical (prevents a value that changes in the middle of a tick).
 pub fn now() -> DateTime {
     unsafe {
         let raw = || {
-            // Wacht tot geen update bezig is — met veiligheidsklep tegen een
-            // RTC die de update-in-progress-bit nooit cleart (zou anders hangen).
+            // Wait until no update is in progress — with a safety valve against an
+            // RTC that never clears the update-in-progress bit (would otherwise hang).
             let mut g = 0u32;
             while update_in_progress() {
                 g += 1;
@@ -67,7 +67,7 @@ pub fn now() -> DateTime {
         let pm = hour_raw & 0x80 != 0;
         let mut hour = hour_raw & 0x7F;
         if regb & 0x04 == 0 {
-            // BCD-modus → binair.
+            // BCD mode → binary.
             sec = bcd_to_bin(sec);
             min = bcd_to_bin(min);
             hour = bcd_to_bin(hour);
@@ -76,7 +76,7 @@ pub fn now() -> DateTime {
             year = bcd_to_bin(year);
         }
         let _ = &mut hour_raw;
-        // 12-uurs → 24-uurs.
+        // 12-hour → 24-hour.
         if regb & 0x02 == 0 {
             if pm && hour != 12 {
                 hour += 12;
@@ -88,9 +88,9 @@ pub fn now() -> DateTime {
     }
 }
 
-/// Unix-tijd (seconden sinds 1970-01-01 UTC) uit de RTC — de ECHTE wandklok voor
-/// `clock_gettime(CLOCK_REALTIME)` en `gettimeofday` in de Linux-compat-laag, zodat
-/// tijd-bewuste Linux-programma's de werkelijke tijd zien i.p.v. de boot-uptime.
+/// Unix time (seconds since 1970-01-01 UTC) from the RTC — the REAL wall clock for
+/// `clock_gettime(CLOCK_REALTIME)` and `gettimeofday` in the Linux compat layer, so
+/// time-aware Linux programs see the actual time instead of the boot uptime.
 pub fn epoch() -> u64 {
     let d = now();
     fn is_leap(y: u16) -> bool {
@@ -107,14 +107,14 @@ pub fn epoch() -> u64 {
     for (i, &md) in MDAYS.iter().enumerate().take(m) {
         days += md;
         if i == 1 && is_leap(d.year) {
-            days += 1; // schrikkeldag in februari
+            days += 1; // leap day in February
         }
     }
     days += d.day.saturating_sub(1) as u64;
     days * 86_400 + d.hour as u64 * 3600 + d.min as u64 * 60 + d.sec as u64
 }
 
-/// Dag van de week (0 = zondag) via Sakamoto's algoritme.
+/// Day of the week (0 = Sunday) via Sakamoto's algorithm.
 pub fn weekday(dt: &DateTime) -> u8 {
     let t = [0u32, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
     let mut y = dt.year as u32;
@@ -131,13 +131,13 @@ const MONTHS: [&str; 12] = [
     "September", "October", "November", "December",
 ];
 
-/// "HH:MM" (24-uurs) uit de RTC.
+/// "HH:MM" (24-hour) from the RTC.
 pub fn clock_string() -> alloc::string::String {
     let d = now();
     alloc::format!("{:02}:{:02}", d.hour, d.min)
 }
 
-/// "Wed 2 June" — echte datumregel voor het statuspaneel.
+/// "Wed 2 June" — real date line for the status panel.
 pub fn date_string() -> alloc::string::String {
     let d = now();
     let m = MONTHS[(d.month.max(1) as usize - 1).min(11)];

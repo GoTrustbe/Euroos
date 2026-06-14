@@ -1,10 +1,10 @@
-//! Minimale ACPI-parser: vind de **MADT** (APIC-tabel) en tel de CPU-cores +
-//! de IO-APIC. Dit is het fundament voor SMP (meerdere cores) en voor het
-//! routeren van IRQ's via de IO-APIC i.p.v. de 8259-PIC.
+//! Minimal ACPI parser: find the **MADT** (APIC table) and count the CPU cores +
+//! the IO-APIC. This is the foundation for SMP (multiple cores) and for
+//! routing IRQs via the IO-APIC instead of the 8259 PIC.
 //!
-//! De RSDP-pointer wordt vóór `ExitBootServices` uit de UEFI-configuratietabel
-//! gehaald (zie `set_rsdp`). Alle ACPI-tabellen liggen in identity-mapped RAM
-//! (<4 GiB), dus we lezen ze rechtstreeks fysiek.
+//! The RSDP pointer is taken from the UEFI configuration table before
+//! `ExitBootServices` (see `set_rsdp`). All ACPI tables lie in identity-mapped RAM
+//! (<4 GiB), so we read them directly physically.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 
 static RSDP: AtomicU64 = AtomicU64::new(0);
 
-/// Sla het fysieke RSDP-adres op (aanroepen vóór ExitBootServices).
+/// Store the physical RSDP address (call before ExitBootServices).
 pub fn set_rsdp(addr: u64) {
     RSDP.store(addr, Ordering::Relaxed);
 }
@@ -23,8 +23,8 @@ pub struct Core {
     pub enabled: bool,
 }
 
-/// Interrupt Source Override: een ISA-IRQ kan op een andere GSI + andere
-/// polariteit/trigger zitten dan de identiteit (bv. IRQ0 -> GSI2 in QEMU).
+/// Interrupt Source Override: an ISA IRQ may sit on a different GSI + different
+/// polarity/trigger than the identity (e.g. IRQ0 -> GSI2 in QEMU).
 #[derive(Clone, Copy)]
 pub struct Override {
     pub source_irq: u8,
@@ -32,7 +32,7 @@ pub struct Override {
     pub flags: u16,
 }
 
-/// Resultaat van het MADT-parsen.
+/// Result of parsing the MADT.
 pub struct Madt {
     pub cores: Vec<Core>,
     pub lapic_addr: u32,
@@ -42,7 +42,7 @@ pub struct Madt {
 }
 
 impl Madt {
-    /// Vertaal een ISA-IRQ naar z'n GSI via de overrides (identiteit als geen).
+    /// Translate an ISA IRQ to its GSI via the overrides (identity if none).
     pub fn gsi_for(&self, irq: u8) -> u32 {
         for o in &self.overrides {
             if o.source_irq == irq {
@@ -68,7 +68,7 @@ fn signature(addr: u64) -> [u8; 4] {
     unsafe { rd::<[u8; 4]>(addr) }
 }
 
-/// Vind een ACPI-tabel op signatuur (bv. `b"FACP"`); geeft het fysieke adres.
+/// Find an ACPI table by signature (e.g. `b"FACP"`); returns the physical address.
 pub fn find_table(sig: &[u8; 4]) -> Option<u64> {
     let rsdp = RSDP.load(Ordering::Relaxed);
     if rsdp == 0 {
@@ -99,16 +99,16 @@ pub fn find_table(sig: &[u8; 4]) -> Option<u64> {
     None
 }
 
-/// Fixed ACPI Description Table-velden die we voor power management nodig hebben.
+/// Fixed ACPI Description Table fields that we need for power management.
 pub struct Fadt {
-    pub pm1a_cnt: u16, // PM1a control register-poort (S5/shutdown)
+    pub pm1a_cnt: u16, // PM1a control register port (S5/shutdown)
     pub reset_supported: bool,
     pub reset_is_io: bool,
     pub reset_addr: u64,
     pub reset_val: u8,
 }
 
-/// Parse de FADT (signatuur "FACP") voor shutdown/reboot.
+/// Parse the FADT (signature "FACP") for shutdown/reboot.
 pub fn fadt() -> Option<Fadt> {
     let f = find_table(b"FACP")?;
     unsafe {
@@ -128,14 +128,14 @@ pub fn fadt() -> Option<Fadt> {
     }
 }
 
-/// Geef (adres, lengte) van de DSDT-AML-body (ná de 36-byte SDT-header). De DSDT
-/// staat niet in de RSDT/XSDT-lijst maar wordt door de FADT aangewezen: DSDT @ +40
-/// (32-bit) of X_DSDT @ +140 (64-bit). Voor de AML-interpreter (I3).
+/// Return (address, length) of the DSDT AML body (after the 36-byte SDT header). The DSDT
+/// is not in the RSDT/XSDT list but is pointed to by the FADT: DSDT @ +40
+/// (32-bit) or X_DSDT @ +140 (64-bit). For the AML interpreter (I3).
 pub fn dsdt_aml() -> Option<(u64, usize)> {
     let f = find_table(b"FACP")?;
     unsafe {
         let len_fadt: u32 = rd(f + 4);
-        // X_DSDT (64-bit) heeft voorrang als de FADT lang genoeg is en 't veld gezet is.
+        // X_DSDT (64-bit) takes precedence if the FADT is long enough and the field is set.
         let dsdt: u64 = if len_fadt >= 148 {
             let x: u64 = rd(f + 140);
             if x != 0 {
@@ -157,7 +157,7 @@ pub fn dsdt_aml() -> Option<(u64, usize)> {
     }
 }
 
-/// Parse de ACPI-tabellen en geef de MADT-inhoud terug (cores + IO-APIC).
+/// Parse the ACPI tables and return the MADT contents (cores + IO-APIC).
 pub fn parse() -> Option<Madt> {
     let rsdp = RSDP.load(Ordering::Relaxed);
     if rsdp == 0 {
@@ -177,7 +177,7 @@ pub fn parse() -> Option<Madt> {
             (rd::<u32>(rsdp + 16) as u64, 4usize)
         };
 
-        // Doorloop de (X)SDT-pointers, zoek de "APIC"-tabel (MADT).
+        // Walk the (X)SDT pointers, look for the "APIC" table (MADT).
         let len: u32 = rd(sdt + 4);
         let entries = (len as usize).saturating_sub(36) / esize;
         let mut madt_addr = 0u64;
@@ -193,7 +193,7 @@ pub fn parse() -> Option<Madt> {
             return None;
         }
 
-        // MADT-header: 36 bytes, +36 local_apic_address (u32), +40 flags, +44 entries.
+        // MADT header: 36 bytes, +36 local_apic_address (u32), +40 flags, +44 entries.
         let lapic_addr: u32 = rd(madt_addr + 36);
         let madt_len: u32 = rd(madt_addr + 4);
         let mut cores: Vec<Core> = Vec::new();
@@ -207,7 +207,7 @@ pub fn parse() -> Option<Madt> {
             let etype: u8 = rd(p);
             let elen: u8 = rd(p + 1);
             if elen < 2 {
-                break; // beschadigde tabel — stop
+                break; // corrupted table — stop
             }
             match etype {
                 0 => {

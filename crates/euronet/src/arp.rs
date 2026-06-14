@@ -1,4 +1,4 @@
-//! ARP (RFC 826) voor IPv4-over-Ethernet.
+//! ARP (RFC 826) for IPv4-over-Ethernet.
 
 use alloc::vec::Vec;
 
@@ -48,7 +48,7 @@ impl ArpPacket {
         }
         let htype = u16::from_be_bytes([buf[0], buf[1]]);
         let ptype = u16::from_be_bytes([buf[2], buf[3]]);
-        // Alleen Ethernet (1) + IPv4 (0x0800), hlen 6, plen 4.
+        // Ethernet (1) + IPv4 (0x0800) only, hlen 6, plen 4.
         if htype != 1 || ptype != 0x0800 || buf[4] != 6 || buf[5] != 4 {
             return Err(NetError::Unsupported);
         }
@@ -79,7 +79,7 @@ impl ArpPacket {
         b
     }
 
-    /// Maak een ARP-reply op een binnenkomende request: "wie heeft `my_ip`?".
+    /// Build an ARP reply to an incoming request: "who has `my_ip`?".
     pub fn reply_to(request: &ArpPacket, my_mac: MacAddr) -> ArpPacket {
         ArpPacket {
             op: ArpOp::Reply,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Boot EuroOS met TWEE virtio-blk-schijven (B3 multi-disk-harness). Schijf 0 =
-root-EuroFS (op disk1.img), schijf 1 = extra mount (disk2.img). Headless, serial
-naar serial-multidisk.log, screenshot via QMP. Bewijst meerdere schijven +
+"""Boot EuroOS with TWO virtio-blk disks (B3 multi-disk harness). Disk 0 =
+root EuroFS (on disk1.img), disk 1 = extra mount (disk2.img). Headless, serial
+to serial-multidisk.log, screenshot via QMP. Proves multiple disks +
 mountpoints + df.
 """
 import json, os, socket, subprocess, sys, time
@@ -23,13 +23,13 @@ qemu = subprocess.Popen([
     "-smp", os.environ.get("SMP", "1"),
     "-cpu", "qemu64,+smep,+smap",
     "-bios", OVMF,
-    "-drive", f"format=raw,file={IMG}",  # UEFI-boot-image (FAT32)
-    # Twee virtio-blk-schijven: root + extra mount.
+    "-drive", f"format=raw,file={IMG}",  # UEFI boot image (FAT32)
+    # Two virtio-blk disks: root + extra mount.
     "-drive", f"format=raw,file={D1},if=none,id=d1",
     "-device", "virtio-blk-pci,drive=d1,disable-modern=on",
     "-drive", f"format=raw,file={D2},if=none,id=d2",
     "-device", "virtio-blk-pci,drive=d2,disable-modern=on",
-    # Plus een NVMe-schijf (G2/B2: EuroFS-on-NVMe @ /nvme).
+    # Plus an NVMe disk (G2/B2: EuroFS-on-NVMe @ /nvme).
     "-drive", f"format=raw,file={os.environ.get('NVME', '/tmp/nvme.img')},if=none,id=nv",
     "-device", "nvme,drive=nv,serial=euronvme01",
     "-display", "none", "-serial", "file:serial-multidisk.log",
@@ -52,7 +52,7 @@ def cmd(obj):
 
 fp.readline()
 cmd({"execute": "qmp_capabilities"})
-print(f"[multidisk] boot, wacht {WAIT}s...", flush=True)
+print(f"[multidisk] boot, waiting {WAIT}s...", flush=True)
 time.sleep(WAIT)
 cmd({"execute": "screendump", "arguments": {"filename": os.path.abspath(OUT), "format": "png"}})
 cmd({"execute": "quit"})
@@ -62,4 +62,4 @@ try:
     qemu.wait(timeout=5)
 except Exception:
     qemu.kill()
-print("[multidisk] klaar.", flush=True)
+print("[multidisk] done.", flush=True)

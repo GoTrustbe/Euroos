@@ -1,21 +1,21 @@
-//! Sectorgebaseerde FAT32-toegang voor de KERNEL (post-ExitBootServices, geen
-//! UEFI-bestandssysteem meer). Leest/overschrijft een KLEIN bestand in de root van
-//! een ESP via 512-byte-sector-callbacks, zónder de hele ESP (~40 MiB) in te laden.
+//! Sector-based FAT32 access for the KERNEL (post-ExitBootServices, no more
+//! UEFI file system). Reads/overwrites a SMALL file in the root of an ESP via
+//! 512-byte sector callbacks, WITHOUT loading the whole ESP (~40 MiB) into memory.
 //!
-//! Bewust beperkt tot root-bestanden van ≤ 1 cluster (genoeg voor `\slot_config`,
-//! 32 bytes). Zo kan de kernel ná een succesvolle boot het door de loader beheerde
-//! `\slot_config` op de ESP "goed" markeren (mark-good), zodat de A/B-rollback
-//! stopt zodra een update bevestigd is — de loader zelf regelt het terugrollen.
+//! Deliberately limited to root files of ≤ 1 cluster (enough for `\slot_config`,
+//! 32 bytes). This lets the kernel, after a successful boot, mark the loader-managed
+//! `\slot_config` on the ESP as "good" (mark-good), so that the A/B rollback
+//! stops once an update is confirmed — the loader itself handles the rollback.
 //!
-//! Pure `no_std`-logica; host-getest door de callbacks met een in-RAM-ESP (door
-//! `FatFs` gebouwd) te backen.
+//! Pure `no_std` logic; host-tested by backing the callbacks with an in-RAM ESP
+//! (built by `FatFs`).
 
 use alloc::vec::Vec;
 
 const SECTOR: usize = 512;
-const EOC: u32 = 0x0FFF_FFF8; // ≥ deze waarde = einde-keten (FAT32)
+const EOC: u32 = 0x0FFF_FFF8; // ≥ this value = end-of-chain (FAT32)
 
-/// Uit de BPB (sector 0 van de ESP) geparste geometrie.
+/// Geometry parsed from the BPB (sector 0 of the ESP).
 struct Bpb {
     reserved: u32,
     num_fats: u32,
@@ -31,7 +31,7 @@ impl Bpb {
         }
         let bps = u16::from_le_bytes([sec0[11], sec0[12]]) as u32;
         if bps != SECTOR as u32 {
-            return None; // we ondersteunen alleen 512 B/sector
+            return None; // we only support 512 B/sector
         }
         let spc = sec0[13] as u32;
         let reserved = u16::from_le_bytes([sec0[14], sec0[15]]) as u32;
@@ -46,13 +46,13 @@ impl Bpb {
     fn data_start(&self) -> u32 {
         self.reserved + self.num_fats * self.spf
     }
-    /// Eerste sector (binnen het volume) van datacluster `cl`.
+    /// First sector (within the volume) of data cluster `cl`.
     fn cluster_sector(&self, cl: u32) -> u32 {
         self.data_start() + (cl - 2) * self.spc
     }
 }
 
-/// Lees de FAT-entry voor cluster `cl` (om de root-mapketen te volgen).
+/// Read the FAT entry for cluster `cl` (to follow the root directory chain).
 fn fat_next<R: FnMut(u64, &mut [u8]) -> bool>(bpb: &Bpb, esp_first: u64, cl: u32, read: &mut R) -> u32 {
     let byte = bpb.reserved as u64 * SECTOR as u64 + cl as u64 * 4;
     let sec = esp_first + byte / SECTOR as u64;
@@ -64,17 +64,17 @@ fn fat_next<R: FnMut(u64, &mut [u8]) -> bool>(bpb: &Bpb, esp_first: u64, cl: u32
     u32::from_le_bytes([buf[within], buf[within + 1], buf[within + 2], buf[within + 3]]) & 0x0FFF_FFFF
 }
 
-/// Doorloop de root-map (volg de clusterketen, verzamel de 32-byte-entries met hun
-/// absolute sector + offset) en geef voor `name` terug: (absolute datacluster-sector,
-/// absolute SFN-entry-sector, byte-offset binnen die sector, opgeslagen grootte).
-/// Reconstrueert LFN-namen, dus matcht ook lange namen zoals `slot_config`.
+/// Walk the root directory (follow the cluster chain, collect the 32-byte entries with
+/// their absolute sector + offset) and return for `name`: (absolute data-cluster sector,
+/// absolute SFN-entry sector, byte offset within that sector, stored size).
+/// Reconstructs LFN names, so it also matches long names like `slot_config`.
 fn locate_in_root<R: FnMut(u64, &mut [u8]) -> bool>(
     bpb: &Bpb,
     esp_first: u64,
     name: &str,
     read: &mut R,
 ) -> Option<(u64, u64, usize, u32)> {
-    // Verzamel root-dir-entries: (sector-lba, offset-in-sector, 32 bytes).
+    // Collect root-dir entries: (sector-lba, offset-in-sector, 32 bytes).
     let mut entries: Vec<(u64, usize, [u8; 32])> = Vec::new();
     let mut cl = bpb.root_cluster;
     let mut guard = 0;
@@ -89,7 +89,7 @@ fn locate_in_root<R: FnMut(u64, &mut [u8]) -> bool>(
             let mut e = 0;
             while e + 32 <= SECTOR {
                 if buf[e] == 0x00 {
-                    break 'outer; // einde van de map
+                    break 'outer; // end of the directory
                 }
                 let mut ent = [0u8; 32];
                 ent.copy_from_slice(&buf[e..e + 32]);
@@ -100,7 +100,7 @@ fn locate_in_root<R: FnMut(u64, &mut [u8]) -> bool>(
         cl = fat_next(bpb, esp_first, cl, read);
     }
 
-    // Parse met LFN-reconstructie.
+    // Parse with LFN reconstruction.
     let name83 = pack83(name);
     let mut lfn = alloc::string::String::new();
     for (lba, off, ent) in &entries {
@@ -109,7 +109,7 @@ fn locate_in_root<R: FnMut(u64, &mut [u8]) -> bool>(
             continue;
         }
         if ent[11] == 0x0F {
-            // LFN-fragment: zet vooraan (entries staan in omgekeerde volgorde).
+            // LFN fragment: prepend (entries are in reverse order).
             let frag = lfn_chars(ent);
             let mut s = frag;
             s.push_str(&lfn);
@@ -131,7 +131,7 @@ fn locate_in_root<R: FnMut(u64, &mut [u8]) -> bool>(
     None
 }
 
-/// Reconstrueer de 13 UTF-16-tekens uit een LFN-entry (posities 1..11, 14..26, 28..32).
+/// Reconstruct the 13 UTF-16 characters from an LFN entry (positions 1..11, 14..26, 28..32).
 fn lfn_chars(ent: &[u8; 32]) -> alloc::string::String {
     let mut u: Vec<u16> = Vec::new();
     let mut push = |off: usize| {
@@ -152,8 +152,8 @@ fn lfn_chars(ent: &[u8; 32]) -> alloc::string::String {
     alloc::string::String::from_utf16_lossy(&u)
 }
 
-/// Pak een root-bestandsnaam als 8.3 (11 bytes, met spaties opgevuld), of None bij
-/// een lange naam (die wordt dan via LFN-reconstructie gematcht).
+/// Pack a root file name as 8.3 (11 bytes, space-padded), or None for
+/// a long name (which is then matched via LFN reconstruction).
 fn pack83(name: &str) -> Option<[u8; 11]> {
     let (base, ext) = match name.rsplit_once('.') {
         Some((b, e)) => (b, e),
@@ -172,8 +172,8 @@ fn pack83(name: &str) -> Option<[u8; 11]> {
     Some(out)
 }
 
-/// Lees een klein root-bestand (≤ 1 cluster) van een ESP via sector-callbacks.
-/// Geeft de bestandsbytes (afgekapt op de opgeslagen grootte) of None.
+/// Read a small root file (≤ 1 cluster) from an ESP via sector callbacks.
+/// Returns the file bytes (truncated to the stored size) or None.
 pub fn read_small_file<R: FnMut(u64, &mut [u8]) -> bool>(
     esp_first: u64,
     name: &str,
@@ -202,10 +202,10 @@ pub fn read_small_file<R: FnMut(u64, &mut [u8]) -> bool>(
     Some(out)
 }
 
-/// Overschrijf een klein root-bestand (≤ 1 cluster) op een ESP IN-PLACE via sector-
-/// callbacks: werkt de data-cluster + de grootte in de SFN-entry bij. Verandert geen
-/// FAT-ketens (de clusterindeling blijft gelijk), dus veilig voor `\slot_config`.
-/// Geeft `true` bij succes.
+/// Overwrite a small root file (≤ 1 cluster) on an ESP IN-PLACE via sector
+/// callbacks: updates the data cluster + the size in the SFN entry. Does not change
+/// any FAT chains (the cluster layout stays the same), so it is safe for `\slot_config`.
+/// Returns `true` on success.
 pub fn write_small_file<R, W>(esp_first: u64, name: &str, data: &[u8], mut read: R, mut write: W) -> bool
 where
     R: FnMut(u64, &mut [u8]) -> bool,
@@ -220,13 +220,13 @@ where
         None => return false,
     };
     if data.len() > bpb.spc as usize * SECTOR {
-        return false; // alleen ≤ 1 cluster
+        return false; // only ≤ 1 cluster
     }
     let (data_sec, esec, eoff, _size) = match locate_in_root(&bpb, esp_first, name, &mut read) {
         Some(x) => x,
         None => return false,
     };
-    // 1) Schrijf de nieuwe data (eerste sector(en) van de cluster), met nul-padding.
+    // 1) Write the new data (first sector(s) of the cluster), with zero padding.
     let mut rem = data;
     let mut s = 0u64;
     while !rem.is_empty() || s == 0 {
@@ -242,7 +242,7 @@ where
             break;
         }
     }
-    // 2) Werk de grootte in de SFN-directory-entry bij.
+    // 2) Update the size in the SFN directory entry.
     let mut esecbuf = [0u8; SECTOR];
     if !read(esec, &mut esecbuf) {
         return false;
@@ -256,7 +256,7 @@ mod tests {
     use super::*;
     use crate::FatFs;
 
-    /// Bouw een ESP-image met een paar bestanden + een 32-byte `slot_config`.
+    /// Build an ESP image with a few files + a 32-byte `slot_config`.
     fn make_esp() -> Vec<u8> {
         let sectors = 48 * 1024 * 1024 / SECTOR as u32;
         let mut fs = FatFs::new(sectors, 0xCAFE_F00D, "EUROKERNEL");
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn inplace_update_roundtrips_via_sectors() {
         let mut esp = make_esp();
-        // Nieuwe 32-byte config (ander patroon).
+        // New 32-byte config (different pattern).
         let mut newcfg = [0u8; 32];
         for (i, b) in newcfg.iter_mut().enumerate() {
             *b = i as u8;
@@ -305,7 +305,7 @@ mod tests {
             };
             assert!(write_small_file(0, "slot_config", &newcfg, read, write));
         }
-        // Lees terug via de sector-lezer + via de volledige-image-lezer.
+        // Read back via the sector reader + via the full-image reader.
         let read = |lba: u64, buf: &mut [u8]| {
             let off = lba as usize * SECTOR;
             buf[..SECTOR].copy_from_slice(&esp[off..off + SECTOR]);
@@ -313,14 +313,14 @@ mod tests {
         };
         assert_eq!(read_small_file(0, "slot_config", read), Some(newcfg.to_vec()));
         assert_eq!(crate::read_file(&esp, "/slot_config"), Some(newcfg.to_vec()));
-        // De andere bestanden zijn ongemoeid.
+        // The other files are untouched.
         assert_eq!(crate::read_file(&esp, "/EFI/BOOT/eurokernel-A.efi"), Some(alloc::vec![0x11u8; 100_000]));
     }
 
     #[test]
     fn esp_first_lba_offset_is_honoured() {
-        // Plaats de ESP op een niet-nul LBA (zoals in een GPT-disk) en bewijs dat
-        // read/write met een esp_first-offset correct werken.
+        // Place the ESP at a non-zero LBA (as in a GPT disk) and prove that
+        // read/write work correctly with an esp_first offset.
         let esp = make_esp();
         let offset_lba = 2048u64;
         let mut disk = alloc::vec![0u8; offset_lba as usize * SECTOR + esp.len()];

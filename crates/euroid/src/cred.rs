@@ -1,4 +1,4 @@
-//! Credential-opslag: Argon2id-gehashte wachtwoorden, met geschiedenis (geen hergebruik).
+//! Credential storage: Argon2id-hashed passwords, with history (no reuse).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -6,19 +6,19 @@ use alloc::vec::Vec;
 use crate::argon2::{self, Params};
 use crate::{ct_eq, hex, Timestamp};
 
-/// Argon2id-parameters — soevereine defaults, nooit omlaag onderhandeld.
-pub const ARGON2_M_COST: u32 = 65536; // 64 MiB geheugen
-pub const ARGON2_T_COST: u32 = 3; // 3 iteraties
-pub const ARGON2_P_COST: u32 = 4; // 4 parallelle lanes
-pub const SALT_LEN: usize = 32; // 256-bit zout (TPM-RNG)
+/// Argon2id parameters — sovereign defaults, never negotiated down.
+pub const ARGON2_M_COST: u32 = 65536; // 64 MiB memory
+pub const ARGON2_T_COST: u32 = 3; // 3 iterations
+pub const ARGON2_P_COST: u32 = 4; // 4 parallel lanes
+pub const SALT_LEN: usize = 32; // 256-bit salt (TPM-RNG)
 const TAG_LEN: usize = 32;
 
-/// De soevereine standaardparameters.
+/// The sovereign default parameters.
 pub fn default_params() -> Params {
     Params { m_cost: ARGON2_M_COST, t_cost: ARGON2_T_COST, p_cost: ARGON2_P_COST, tag_len: TAG_LEN }
 }
 
-/// Eén Argon2id-hash met zijn zout en parameters (zelf-beschrijvend, PHC-achtig).
+/// A single Argon2id hash with its salt and parameters (self-describing, PHC-like).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Argon2idHash {
     pub salt: Vec<u8>,
@@ -29,8 +29,8 @@ pub struct Argon2idHash {
 }
 
 impl Argon2idHash {
-    /// Hash een wachtwoord met de gegeven parameters en het (door de aanroeper
-    /// geleverde, bij voorkeur TPM-RNG) zout.
+    /// Hash a password with the given parameters and the (caller-supplied,
+    /// preferably TPM-RNG) salt.
     pub fn create(password: &[u8], salt: &[u8], params: &Params) -> Argon2idHash {
         let tag = argon2::argon2id(password, salt, &[], &[], params);
         Argon2idHash {
@@ -42,13 +42,13 @@ impl Argon2idHash {
         }
     }
 
-    /// Hash met de soevereine standaardparameters.
+    /// Hash with the sovereign default parameters.
     pub fn create_default(password: &[u8], salt: &[u8]) -> Argon2idHash {
         Argon2idHash::create(password, salt, &default_params())
     }
 
-    /// Verifieer een wachtwoord tegen deze hash — herberekent de tag met hetzelfde
-    /// zout en dezelfde parameters en vergelijkt constant-time.
+    /// Verify a password against this hash — recomputes the tag with the same
+    /// salt and the same parameters and compares constant-time.
     pub fn verify(&self, password: &[u8]) -> bool {
         let params = Params {
             m_cost: self.m_cost,
@@ -60,7 +60,7 @@ impl Argon2idHash {
         ct_eq(&got, &self.tag)
     }
 
-    /// PHC-achtige codering, bv. `$argon2id$m=65536,t=3,p=4$<salt-hex>$<tag-hex>`.
+    /// PHC-like encoding, e.g. `$argon2id$m=65536,t=3,p=4$<salt-hex>$<tag-hex>`.
     pub fn encode(&self) -> String {
         alloc::format!(
             "$argon2id$m={},t={},p={}${}${}",
@@ -73,21 +73,21 @@ impl Argon2idHash {
     }
 }
 
-/// Het wachtwoord-record van een gebruiker (in `shadow.db`).
+/// A user's password record (in `shadow.db`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PasswordRecord {
     pub hash: Argon2idHash,
     pub changed_at: Timestamp,
     pub expires_at: Option<Timestamp>,
     pub must_change: bool,
-    /// De laatste N hashes (om hergebruik te voorkomen).
+    /// The last N hashes (to prevent reuse).
     pub history: Vec<Argon2idHash>,
-    /// Een account zónder bruikbaar wachtwoord (vergrendeld tot er één gezet wordt).
+    /// An account without a usable password (locked until one is set).
     pub locked: bool,
 }
 
 impl PasswordRecord {
-    /// Maak een record door een wachtwoord te hashen.
+    /// Create a record by hashing a password.
     pub fn hash_password(password: &[u8], salt: &[u8], params: &Params, now: Timestamp) -> PasswordRecord {
         PasswordRecord {
             hash: Argon2idHash::create(password, salt, params),
@@ -99,7 +99,7 @@ impl PasswordRecord {
         }
     }
 
-    /// Een account zonder wachtwoord — vergrendeld tot er één gezet wordt.
+    /// An account without a password — locked until one is set.
     pub fn locked() -> PasswordRecord {
         PasswordRecord {
             hash: Argon2idHash { salt: Vec::new(), tag: Vec::new(), m_cost: 0, t_cost: 0, p_cost: 0 },
@@ -111,7 +111,7 @@ impl PasswordRecord {
         }
     }
 
-    /// Verifieer een wachtwoord (false als het account vergrendeld is / geen hash heeft).
+    /// Verify a password (false if the account is locked / has no hash).
     pub fn verify(&self, password: &[u8]) -> bool {
         if self.locked || self.hash.tag.is_empty() {
             return false;
@@ -119,7 +119,7 @@ impl PasswordRecord {
         self.hash.verify(password)
     }
 
-    /// Is dit wachtwoord gelijk aan de huidige of een van de laatste `depth` hashes?
+    /// Is this password equal to the current or one of the last `depth` hashes?
     pub fn is_reused(&self, password: &[u8], depth: usize) -> bool {
         if !self.hash.tag.is_empty() && self.hash.verify(password) {
             return true;
@@ -132,7 +132,7 @@ impl PasswordRecord {
         false
     }
 
-    /// Vervang de hash; bewaar de oude in de geschiedenis (begrensd op `history_depth`).
+    /// Replace the hash; keep the old one in the history (bounded by `history_depth`).
     pub fn set_new(&mut self, new_hash: Argon2idHash, history_depth: usize, now: Timestamp) {
         if !self.hash.tag.is_empty() {
             self.history.insert(0, self.hash.clone());
@@ -146,7 +146,7 @@ impl PasswordRecord {
         self.locked = false;
     }
 
-    /// Is het wachtwoord verlopen op tijdstip `now`?
+    /// Is the password expired at time `now`?
     pub fn is_expired(&self, now: Timestamp) -> bool {
         matches!(self.expires_at, Some(e) if now > e)
     }
@@ -156,7 +156,7 @@ impl PasswordRecord {
 mod tests {
     use super::*;
 
-    // Snelle testparameters (de RFC-correctheid is elders met de echte params getest).
+    // Fast test parameters (the RFC correctness is tested elsewhere with the real params).
     fn fast() -> Params {
         Params { m_cost: 256, t_cost: 2, p_cost: 1, tag_len: 32 }
     }
@@ -180,16 +180,16 @@ mod tests {
     fn history_blocks_reuse() {
         let salt = [1u8; SALT_LEN];
         let mut rec = PasswordRecord::hash_password(b"Pw-one-111!", &salt, &fast(), Timestamp(1));
-        // Roteer door 12 wachtwoorden.
+        // Rotate through 12 passwords.
         for n in 2..=12u32 {
             let pw = alloc::format!("Pw-num-{n:03}!");
             let salt2 = [n as u8; SALT_LEN];
             let h = Argon2idHash::create(pw.as_bytes(), &salt2, &fast());
             rec.set_new(h, 12, Timestamp(n as u64));
         }
-        // Het allereerste wachtwoord zit nog in de geschiedenis → hergebruik geweigerd.
+        // The very first password is still in the history → reuse rejected.
         assert!(rec.is_reused(b"Pw-one-111!", 12));
-        // Een vers wachtwoord is niet hergebruikt.
+        // A fresh password is not reused.
         assert!(!rec.is_reused(b"Brand-New-42!", 12));
     }
 

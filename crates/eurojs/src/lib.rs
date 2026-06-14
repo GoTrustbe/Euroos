@@ -1,12 +1,12 @@
-//! EuroJS — de JavaScript-engine van EuroWeb (Sprint AB-B5).
+//! EuroJS — the JavaScript engine of EuroWeb (Sprint AB-B5).
 //!
-//! Een **tree-walking interpreter** — bewust geen JIT, want dat zou een groot
-//! aanvalsoppervlak toevoegen. Ondersteunt een echte JS-subset: getallen, strings,
-//! booleans, `null`/`undefined`, `let`/`var`/`const`, alle gangbare operatoren,
-//! `if`/`while`/`for`, functies (declaraties, expressies, arrows) met **closures**,
-//! arrays en objecten met methoden, `Math.*`, en `console.log`. Per-tab krijgt een
-//! interpreter in de browser een beperkte capability-set (zie EUROBROWSER-PLAN);
-//! deze crate is de pure, host-geteste rekenkern. `no_std`, geen `unsafe`.
+//! A **tree-walking interpreter** — deliberately no JIT, because that would add a large
+//! attack surface. Supports a real JS subset: numbers, strings,
+//! booleans, `null`/`undefined`, `let`/`var`/`const`, all common operators,
+//! `if`/`while`/`for`, functions (declarations, expressions, arrows) with **closures**,
+//! arrays and objects with methods, `Math.*`, and `console.log`. Per tab an
+//! interpreter in the browser gets a limited capability set (see EUROBROWSER-PLAN);
+//! this crate is the pure, host-tested compute core. `no_std`, no `unsafe`.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -23,14 +23,14 @@ use alloc::vec::Vec;
 
 pub use interp::{Interp, Value};
 
-/// Parse + voer JS-broncode uit; geeft de waarde van de laatste expressie.
+/// Parse + execute JS source code; returns the value of the last expression.
 pub fn eval(src: &str) -> Result<Value, String> {
     let toks = lexer::lex(src)?;
     let prog = parser::Parser::new(toks).parse_program()?;
     Interp::new().run(&prog)
 }
 
-/// Voer JS uit en geef (resultaat, console.log-uitvoer) terug.
+/// Execute JS and return (result, console.log output).
 pub fn run_capture(src: &str) -> (Result<Value, String>, Vec<String>) {
     let toks = match lexer::lex(src) {
         Ok(t) => t,
@@ -45,9 +45,9 @@ pub fn run_capture(src: &str) -> (Result<Value, String>, Vec<String>) {
     (r, it.output)
 }
 
-/// Voer een paginascript uit en geef (resultaat, console.log-uitvoer,
-/// `document.write`-uitvoer) terug — voor de EuroWeb-integratie: de writes worden
-/// als tekst aan de gerenderde pagina toegevoegd.
+/// Execute a page script and return (result, console.log output,
+/// `document.write` output) — for the EuroWeb integration: the writes are
+/// appended as text to the rendered page.
 pub fn run_page(src: &str) -> (Result<Value, String>, Vec<String>, Vec<String>) {
     let toks = match lexer::lex(src) {
         Ok(t) => t,
@@ -62,7 +62,7 @@ pub fn run_page(src: &str) -> (Result<Value, String>, Vec<String>, Vec<String>) 
     (r, it.output, it.writes)
 }
 
-/// Hulp: een numeriek resultaat eruit halen (voor tests/integratie).
+/// Helper: extract a numeric result (for tests/integration).
 pub fn as_num(v: &Value) -> Option<f64> {
     match v {
         Value::Num(n) => Some(*n),
@@ -77,14 +77,14 @@ mod page_tests {
     #[test]
     fn document_write_and_console_captured() {
         let (_r, logs, writes) =
-            run_page("console.log('hoi'); document.write('Som: ' + (6*7)); document.writeln('!');");
+            run_page("console.log('hi'); document.write('Sum: ' + (6*7)); document.writeln('!');");
         assert_eq!(logs.len(), 1);
-        assert_eq!(logs[0], "hoi");
-        assert_eq!(writes.join(""), "Som: 42!\n");
+        assert_eq!(logs[0], "hi");
+        assert_eq!(writes.join(""), "Sum: 42!\n");
     }
 }
 
-/// Hulp: een stringresultaat.
+/// Helper: a string result.
 pub fn as_str(v: &Value) -> Option<alloc::string::String> {
     match v {
         Value::Str(s) => Some((**s).clone()),
@@ -92,7 +92,7 @@ pub fn as_str(v: &Value) -> Option<alloc::string::String> {
     }
 }
 
-// ── kleine no_std-mathkern voor Math.* (geen libm) ──
+// ── small no_std math core for Math.* (no libm) ──
 
 pub(crate) fn flr(x: f64) -> f64 {
     let t = x as i64 as f64;
@@ -125,7 +125,7 @@ pub(crate) fn sqrt(x: f64) -> f64 {
 }
 
 pub(crate) fn powi(base: f64, exp: f64) -> f64 {
-    // Geheeltallige exponent → herhaald vermenigvuldigen; anders benadering.
+    // Integer exponent → repeated multiplication; otherwise approximation.
     if exp == flr(exp) && (if exp < 0.0 { -exp } else { exp }) < 1024.0 {
         let mut n = exp as i64;
         let neg = n < 0;
@@ -207,29 +207,29 @@ mod tests {
         assert_eq!(num("let add = (a, b) => a + b; add(4, 38)"), 42.0);
     }
 
-    // ---- Robuustheid / stabiliteit: niet-vertrouwde scripts ----
+    // ---- Robustness / stability: untrusted scripts ----
     //
-    // Pagina-JS draait in de kernel. Een script MAG de OS niet platleggen:
-    // het moet netjes met Err afbreken (geen hang, geen stack-overflow),
-    // terwijl legitieme programma's blijven werken.
+    // Page JS runs in the kernel. A script MUST NOT take down the OS:
+    // it must abort cleanly with Err (no hang, no stack overflow),
+    // while legitimate programs keep working.
 
     #[test]
     fn robust_infinite_while_is_bounded() {
-        // Mag niet eindeloos hangen: het stap-budget breekt af met Err.
+        // Must not hang forever: the step budget aborts with Err.
         let r = eval("while (true) { }");
-        assert!(r.is_err(), "oneindige while moet afbreken (stap-budget)");
+        assert!(r.is_err(), "infinite while must abort (step budget)");
     }
 
     #[test]
     fn robust_infinite_for_is_bounded() {
         let r = eval("for (;;) { let x = 1; }");
-        assert!(r.is_err(), "oneindige for moet afbreken (stap-budget)");
+        assert!(r.is_err(), "infinite for must abort (step budget)");
     }
 
-    /// Voer JS uit op een ruime stack zodat de TEST zelf nooit overflowt; we
-    /// testen hier de diepte-GRENS-logica (geeft die netjes Err?), niet de
-    /// stackgrootte van de test-thread. In de kernel is de 16 KiB guarded
-    /// taakstack de harde vangrail; deze grens is de zachte, nette laag.
+    /// Run JS on a generous stack so the TEST itself never overflows; here we
+    /// test the depth-LIMIT logic (does it return Err cleanly?), not the
+    /// stack size of the test thread. In the kernel the 16 KiB guarded
+    /// task stack is the hard guardrail; this limit is the soft, clean layer.
     fn eval_on_big_stack(src: &'static str) -> Result<Value, String> {
         std::thread::Builder::new()
             .stack_size(64 * 1024 * 1024)
@@ -242,25 +242,25 @@ mod tests {
 
     #[test]
     fn robust_infinite_recursion_no_overflow() {
-        // Oneindige recursie zou de kernel-stack opblazen → moet netjes Err geven.
+        // Infinite recursion would blow the kernel stack → must return Err cleanly.
         let r = eval_on_big_stack("function f(){ return f(); } f()");
-        assert!(r.is_err(), "oneindige recursie moet afbreken (diepte-grens)");
+        assert!(r.is_err(), "infinite recursion must abort (depth limit)");
         let mutual = "function a(){return b();} function b(){return a();} a()";
-        assert!(eval_on_big_stack(mutual).is_err(), "wederzijdse recursie moet afbreken");
+        assert!(eval_on_big_stack(mutual).is_err(), "mutual recursion must abort");
     }
 
     #[test]
     fn robust_legit_deep_recursion_still_works() {
-        // Een echte, begrensde recursie (diepte 150 < grens) moet gewoon werken —
-        // de grens mag legitiem gebruik niet breken.
+        // A real, bounded recursion (depth 150 < limit) must just work —
+        // the limit must not break legitimate use.
         let src = "function sum(n){ if(n==0) return 0; return n + sum(n-1); } sum(150)";
         let r = eval_on_big_stack(src);
-        assert!(r.is_ok(), "legitieme recursie van diepte 150 moet slagen");
+        assert!(r.is_ok(), "legitimate recursion of depth 150 must succeed");
     }
 
     #[test]
     fn robust_legit_long_loop_still_works() {
-        // Een lange-maar-eindige lus (binnen budget) moet correct doorlopen.
+        // A long-but-finite loop (within budget) must run through correctly.
         let src = "let s = 0; for (let i = 0; i < 100000; i++) { s = s + 1; } s";
         assert_eq!(num(src), 100000.0);
     }
@@ -313,13 +313,13 @@ mod tests {
 
     #[test]
     fn console_log_capture() {
-        let (_, out) = run_capture("console.log('Hallo', 'EuroOS'); console.log(1 + 2);");
-        assert_eq!(out, alloc::vec!["Hallo EuroOS".to_string(), "3".to_string()]);
+        let (_, out) = run_capture("console.log('Hello', 'EuroOS'); console.log(1 + 2);");
+        assert_eq!(out, alloc::vec!["Hello EuroOS".to_string(), "3".to_string()]);
     }
 
     #[test]
     fn realistic_program() {
-        // Bouw een lijst, filter even getallen, tel ze op via een functie.
+        // Build a list, filter even numbers, sum them via a function.
         let src = "
             function sumEven(arr) {
                 let total = 0;
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn errors_are_reported() {
-        assert!(eval("let x = ;").is_err()); // syntaxfout
-        assert!(eval("undefinedVar + 1").is_err()); // niet gedefinieerd
+        assert!(eval("let x = ;").is_err()); // syntax error
+        assert!(eval("undefinedVar + 1").is_err()); // not defined
     }
 }

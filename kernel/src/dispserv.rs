@@ -1,14 +1,14 @@
-//! EuroDisplay-server (H2) — de live koppeling tussen het display-protocol en de
-//! echte EuroDesktop-compositor.
+//! EuroDisplay server (H2) — the live link between the display protocol and the
+//! real EuroDesktop compositor.
 //!
-//! Een app-proces verbindt over een lokale **AF_UNIX-socket** (H1), spreekt het
-//! **eurodisplay Request/Event**-protocol (surfaces aanmaken/attach/commit + een
-//! titel & inhoudsregels), en deze server vertaalt elke zichtbare surface naar een
-//! teken-klare [`WindowView`] die de compositor als een écht venster rendert. Geen
-//! mockup: het venster bestaat omdat een ander stuk code er via een socket om vroeg.
+//! An app process connects over a local **AF_UNIX socket** (H1), speaks the
+//! **eurodisplay Request/Event** protocol (create/attach/commit surfaces + a
+//! title & content lines), and this server translates every visible surface into a
+//! draw-ready [`WindowView`] that the compositor renders as a real window. No
+//! mockup: the window exists because another piece of code asked for it over a socket.
 //!
-//! De protocol- + vertaal-logica zit host-getest in `eurodisplay::server`; deze
-//! module is dunne kernel-lijm: socket-accept + bytes-lezen + frames doorgeven.
+//! The protocol + translation logic lives host-tested in `eurodisplay::server`; this
+//! module is thin kernel glue: socket-accept + byte-read + frame forwarding.
 
 use crate::net;
 use alloc::string::String;
@@ -16,11 +16,11 @@ use alloc::vec::Vec;
 use eurodisplay::server::{encode_frame, parse_frames, ServerMsg, ServerView, WindowView};
 use eurodisplay::Request;
 
-/// Het standaard-socketpad waar de display-server op luistert.
+/// The default socket path the display server listens on.
 pub const SOCK_PATH: &str = "/run/eurodisplay.sock";
 
-/// De server-state: de surface/venster-view + per-client een AF_UNIX-endpoint met
-/// een rest-buffer (voor onvolledige frames op de byte-stroom).
+/// The server state: the surface/window view + per-client an AF_UNIX endpoint with
+/// a remainder buffer (for incomplete frames on the byte stream).
 pub struct DispServer {
     sv: ServerView,
     path: &'static str,
@@ -36,14 +36,14 @@ impl DispServer {
         }
     }
 
-    /// Bind+luister op het socketpad. `true` bij succes.
+    /// Bind+listen on the socket path. `true` on success.
     pub fn bind(&self) -> bool {
         net::unix_bind_listen(self.path, 8).is_ok()
     }
 
-    /// Accepteer nieuwe clients, lees al hun beschikbare bytes, parse complete
-    /// frames en voer ze in de view. Geeft `true` als er iets veranderde (nieuw/
-    /// gewijzigd/verdwenen venster) — dan moet de compositor hertekenen.
+    /// Accept new clients, read all their available bytes, parse complete
+    /// frames and feed them into the view. Returns `true` if anything changed (new/
+    /// modified/removed window) — then the compositor must redraw.
     pub fn pump(&mut self) -> bool {
         while let Some(ep) = net::unix_accept(self.path) {
             self.clients.push((ep, Vec::new()));
@@ -68,20 +68,20 @@ impl DispServer {
         changed
     }
 
-    /// De zichtbare app-vensters in z-order.
+    /// The visible app windows in z-order.
     pub fn windows(&self) -> Vec<WindowView> {
         self.sv.windows()
     }
 
-    /// Aantal verbonden clients.
+    /// Number of connected clients.
     pub fn client_count(&self) -> usize {
         self.clients.len()
     }
 }
 
-/// Een in-kernel demo-app die over AF_UNIX verbindt en één venster opent — bewijst
-/// de volledige keten app → socket → server → compositor zonder een userspace-
-/// programma. Geeft het client-endpoint terug (open te houden).
+/// An in-kernel demo app that connects over AF_UNIX and opens one window — proves
+/// the full chain app → socket → server → compositor without a userspace
+/// program. Returns the client endpoint (keep it open).
 pub fn demo_app(path: &str) -> Option<net::UnixEndpoint> {
     let c = net::unix_connect(path).ok()?;
     let id = 100u32;
@@ -90,11 +90,11 @@ pub fn demo_app(path: &str) -> Option<net::UnixEndpoint> {
     };
     send(ServerMsg::Req(Request::CreateSurface { id }));
     send(ServerMsg::Title(id, String::from("EuroApp  -  via AF_UNIX")));
-    send(ServerMsg::Line(id, String::from("Dit venster is GEEN mockup.")));
-    send(ServerMsg::Line(id, String::from("Een app-proces sprak het")));
-    send(ServerMsg::Line(id, String::from("eurodisplay-protocol (Request)")));
-    send(ServerMsg::Line(id, String::from("over een lokale Unix-socket (H1);")));
-    send(ServerMsg::Line(id, String::from("de compositor tekende het (H2).")));
+    send(ServerMsg::Line(id, String::from("This window is NOT a mockup.")));
+    send(ServerMsg::Line(id, String::from("An app process spoke the")));
+    send(ServerMsg::Line(id, String::from("eurodisplay protocol (Request)")));
+    send(ServerMsg::Line(id, String::from("over a local Unix socket (H1);")));
+    send(ServerMsg::Line(id, String::from("the compositor drew it (H2).")));
     send(ServerMsg::Req(Request::Attach { id, width: 560, height: 360 }));
     send(ServerMsg::Req(Request::Commit { id }));
     Some(c)

@@ -1,11 +1,11 @@
-//! **EuroFAT** — een soevereine, van-nul FAT32-bouwer + lezer voor de EFI System
-//! Partition (ESP) die de EuroOS-installer schrijft. Produceert een byte-image van
-//! een geldig FAT32-volume (BPB, FSInfo, twee FAT's, mappen met 8.3 + LFN, en
-//! bestandsdata) dat door UEFI-firmware (OVMF) geboot kan worden — geen `mkfs.fat`,
-//! geen libfat. Pure `no_std`-logica, host-getest (round-trip + `mtools`-validatie).
+//! **EuroFAT** — a sovereign, from-scratch FAT32 builder + reader for the EFI System
+//! Partition (ESP) that the EuroOS installer writes. Produces a byte image of
+//! a valid FAT32 volume (BPB, FSInfo, two FATs, directories with 8.3 + LFN, and
+//! file data) that can be booted by UEFI firmware (OVMF) — no `mkfs.fat`,
+//! no libfat. Pure `no_std` logic, host-tested (round-trip + `mtools` validation).
 //!
-//! Bewust eenvoudig: 512 B/sector, 1 sector/cluster, twee FAT's, korte boom. Genoeg
-//! voor een ESP met `\EFI\BOOT\BOOTX64.EFI` + de A/B-kernelimages.
+//! Deliberately simple: 512 B/sector, 1 sector/cluster, two FATs, shallow tree. Enough
+//! for an ESP with `\EFI\BOOT\BOOTX64.EFI` + the A/B kernel images.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -22,15 +22,15 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 const SECTOR: usize = 512;
-const SPC: u32 = 1; // sectoren per cluster
-const RESERVED: u32 = 32; // gereserveerde sectoren (boot + fsinfo + backup + ruimte)
+const SPC: u32 = 1; // sectors per cluster
+const RESERVED: u32 = 32; // reserved sectors (boot + fsinfo + backup + room)
 const NUM_FATS: u32 = 2;
 const CLUSTER_BYTES: usize = SPC as usize * SECTOR;
 const EOC: u32 = 0x0FFF_FFFF; // end-of-chain
 const ATTR_DIR: u8 = 0x10;
 const ATTR_LFN: u8 = 0x0F;
 
-/// Een knoop in de te bouwen mapboom.
+/// A node in the directory tree to be built.
 struct Node {
     name: String,
     is_dir: bool,
@@ -40,7 +40,7 @@ struct Node {
     clusters: u32,
 }
 
-/// De FAT32-bouwer: voeg bestanden toe op een pad, en `build()` levert de image.
+/// The FAT32 builder: add files at a path, and `build()` produces the image.
 pub struct FatFs {
     total_sectors: u32,
     volume_id: u32,
@@ -49,8 +49,8 @@ pub struct FatFs {
 }
 
 impl FatFs {
-    /// Nieuw leeg FAT32-volume van `total_sectors` × 512 B. `volume_id` is willekeurig
-    /// (bv. uit de RTC); `label` ≤ 11 tekens.
+    /// New empty FAT32 volume of `total_sectors` × 512 B. `volume_id` is arbitrary
+    /// (e.g. from the RTC); `label` ≤ 11 characters.
     pub fn new(total_sectors: u32, volume_id: u32, label: &str) -> Self {
         let mut lbl = [b' '; 11];
         for (i, b) in label.bytes().take(11).enumerate() {
@@ -71,8 +71,8 @@ impl FatFs {
         }
     }
 
-    /// Voeg een bestand toe op `path` (bv. `/EFI/BOOT/BOOTX64.EFI`). Tussenliggende
-    /// mappen worden aangemaakt.
+    /// Add a file at `path` (e.g. `/EFI/BOOT/BOOTX64.EFI`). Intermediate
+    /// directories are created.
     pub fn add_file(&mut self, path: &str, data: &[u8]) {
         let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
         if parts.is_empty() {
@@ -82,7 +82,7 @@ impl FatFs {
         for (i, part) in parts.iter().enumerate() {
             let last = i + 1 == parts.len();
             if last {
-                // bestand
+                // file
                 let idx = self.nodes.len();
                 self.nodes.push(Node {
                     name: String::from(*part),
@@ -94,7 +94,7 @@ impl FatFs {
                 });
                 self.nodes[cur].children.push(idx);
             } else {
-                // map: hergebruik of maak
+                // directory: reuse or create
                 let existing = self.nodes[cur]
                     .children
                     .iter()
@@ -120,16 +120,16 @@ impl FatFs {
         }
     }
 
-    /// Hoeveel 32-byte directory-entries heeft een map (incl. LFN + ./.. + eindmarker)?
+    /// How many 32-byte directory entries does a directory have (incl. LFN + ./.. + end marker)?
     fn dir_entry_count(&self, node: usize, is_root: bool) -> usize {
-        let mut n = if is_root { 1 } else { 2 }; // root: volume-label · submap: "." + ".."
+        let mut n = if is_root { 1 } else { 2 }; // root: volume label · subdir: "." + ".."
         for &c in &self.nodes[node].children {
             n += entries_for_name(&self.nodes[c].name);
         }
-        n + 1 // eind-marker (0x00) telt als minstens één entry-plek
+        n + 1 // end marker (0x00) counts as at least one entry slot
     }
 
-    /// Bereken voor elke knoop het aantal clusters dat hij nodig heeft.
+    /// Compute for each node the number of clusters it needs.
     fn compute_cluster_counts(&mut self) {
         let n = self.nodes.len();
         for i in 0..n {
@@ -139,13 +139,13 @@ impl FatFs {
                 self.nodes[i].clusters = ((bytes + CLUSTER_BYTES - 1) / CLUSTER_BYTES).max(1) as u32;
             } else {
                 let bytes = self.nodes[i].data.len();
-                self.nodes[i].clusters = ((bytes + CLUSTER_BYTES - 1) / CLUSTER_BYTES) as u32; // 0 voor leeg bestand
+                self.nodes[i].clusters = ((bytes + CLUSTER_BYTES - 1) / CLUSTER_BYTES) as u32; // 0 for empty file
             }
         }
     }
 
-    /// Wijs clusters toe (root = cluster 2), diepte-eerst, en geef het hoogst
-    /// gebruikte cluster terug.
+    /// Allocate clusters (root = cluster 2), depth-first, and return the highest
+    /// used cluster.
     fn allocate(&mut self) -> u32 {
         let mut next = 2u32;
         self.alloc_node(0, &mut next);
@@ -164,35 +164,35 @@ impl FatFs {
         }
     }
 
-    /// Bouw de volledige FAT32-image (`total_sectors` × 512 B).
+    /// Build the full FAT32 image (`total_sectors` × 512 B).
     pub fn build(&mut self) -> Vec<u8> {
         self.compute_cluster_counts();
         let highest = self.allocate();
         let cluster_count = highest.saturating_sub(2).max(1);
 
-        // sectors_per_fat (mkfs.fat-formule voor FAT32).
+        // sectors_per_fat (mkfs.fat formula for FAT32).
         let tmp1 = self.total_sectors.saturating_sub(RESERVED);
         let tmp2 = (256 * SPC + NUM_FATS) / 2;
         let spf = (tmp1 + tmp2 - 1) / tmp2.max(1);
-        let data_start = RESERVED + NUM_FATS * spf; // eerste data-sector (cluster 2)
+        let data_start = RESERVED + NUM_FATS * spf; // first data sector (cluster 2)
 
         let mut img = vec![0u8; self.total_sectors as usize * SECTOR];
 
-        // ── Boot-sector (BPB) ──
+        // ── Boot sector (BPB) ──
         self.write_boot_sector(&mut img, spf);
-        // Backup op sector 6.
+        // Backup at sector 6.
         let bs = img[0..SECTOR].to_vec();
         img[6 * SECTOR..7 * SECTOR].copy_from_slice(&bs);
-        // FSInfo op sector 1 (+ backup op sector 7) — met het echte vrije-clusteraantal.
+        // FSInfo at sector 1 (+ backup at sector 7) — with the real free-cluster count.
         let total_clusters = self.total_sectors.saturating_sub(data_start) / SPC;
         let used: u32 = self.nodes.iter().map(|n| n.clusters).sum();
         let free = total_clusters.saturating_sub(used);
-        let next_free = highest; // eerste cluster ná wat we gebruikten
+        let next_free = highest; // first cluster after what we used
         write_fsinfo(&mut img[SECTOR..2 * SECTOR], free, next_free);
         let fsi = img[SECTOR..2 * SECTOR].to_vec();
         img[7 * SECTOR..8 * SECTOR].copy_from_slice(&fsi);
 
-        // ── FAT-tabel opbouwen (in clusters) ──
+        // ── Build the FAT table (in clusters) ──
         let mut fat = vec![0u32; (data_start as usize) + cluster_count as usize + 8];
         fat[0] = 0x0FFF_FFF8; // media descriptor
         fat[1] = EOC;
@@ -204,7 +204,7 @@ impl FatFs {
                 fat[cl as usize] = if k + 1 == cnt { EOC } else { cl + 1 };
             }
         }
-        // Schrijf de twee FAT-kopieën.
+        // Write the two FAT copies.
         for f in 0..NUM_FATS {
             let base = (RESERVED + f * spf) as usize * SECTOR;
             for (cl, &val) in fat.iter().enumerate() {
@@ -215,9 +215,9 @@ impl FatFs {
             }
         }
 
-        // ── Map- en bestandsdata in de clusters ──
+        // ── Directory and file data in the clusters ──
         let cluster_off = |cl: u32| (data_start as usize + (cl as usize - 2) * SPC as usize) * SECTOR;
-        // Mappen.
+        // Directories.
         for i in 0..self.nodes.len() {
             if !self.nodes[i].is_dir {
                 continue;
@@ -233,7 +233,7 @@ impl FatFs {
                 off += 1;
             }
         }
-        // Bestanden.
+        // Files.
         for i in 0..self.nodes.len() {
             if self.nodes[i].is_dir || self.nodes[i].clusters == 0 {
                 continue;
@@ -263,10 +263,10 @@ impl FatFs {
         // 22..24 sectors_per_fat_16 = 0
         b[24..26].copy_from_slice(&32u16.to_le_bytes()); // sectors per track
         b[26..28].copy_from_slice(&64u16.to_le_bytes()); // heads
-        // 28..32 hidden sectors = 0 (de partitie-LBA wordt door de GPT-laag geregeld)
+        // 28..32 hidden sectors = 0 (the partition LBA is handled by the GPT layer)
         b[32..36].copy_from_slice(&self.total_sectors.to_le_bytes());
         b[36..40].copy_from_slice(&spf.to_le_bytes());
-        // 40..42 ext flags = 0 (FAT mirroring aan)
+        // 40..42 ext flags = 0 (FAT mirroring on)
         // 42..44 fs version = 0
         b[44..48].copy_from_slice(&2u32.to_le_bytes()); // root cluster
         b[48..50].copy_from_slice(&1u16.to_le_bytes()); // fsinfo sector
@@ -280,17 +280,17 @@ impl FatFs {
         b[511] = 0xAA;
     }
 
-    /// Bouw de directory-entry-bytes voor map `node`.
+    /// Build the directory-entry bytes for directory `node`.
     fn build_dir_data(&self, node: usize, is_root: bool) -> Vec<u8> {
         let mut out: Vec<u8> = Vec::new();
         if is_root {
-            // Volume-label-entry (ATTR_VOLUME_ID 0x08) — spiegelt het BPB-label.
+            // Volume-label entry (ATTR_VOLUME_ID 0x08) — mirrors the BPB label.
             let mut e = sfn_entry(&self.label, 0x08, 0, 0);
             e[0] = self.label[0];
             out.extend_from_slice(&e);
         } else {
             out.extend_from_slice(&dot_entry(b".          ", self.nodes[node].first_cluster));
-            // ".." verwijst naar de ouder; root-ouder = cluster 0.
+            // ".." points to the parent; root parent = cluster 0.
             let parent_cl = self.parent_cluster(node);
             out.extend_from_slice(&dot_entry(b"..         ", parent_cl));
         }
@@ -299,7 +299,7 @@ impl FatFs {
             let child = &self.nodes[c];
             let attr = if child.is_dir { ATTR_DIR } else { 0 };
             let size = if child.is_dir { 0 } else { child.data.len() as u32 };
-            // Kies een UNIEKE 8.3-naam in deze map (BASE~N bij botsing/LFN).
+            // Pick a UNIQUE 8.3 name in this directory (BASE~N on collision/LFN).
             let short = match short83(&child.name) {
                 Some(s) if !used.contains(&s) => s,
                 _ => {
@@ -316,7 +316,7 @@ impl FatFs {
             used.push(short);
             out.extend_from_slice(&dir_entries_for(&child.name, short, attr, child.first_cluster, size));
         }
-        out // de rest van de cluster is al 0 (eindmarker)
+        out // the rest of the cluster is already 0 (end marker)
     }
 
     fn parent_cluster(&self, node: usize) -> u32 {
@@ -331,7 +331,7 @@ impl FatFs {
 
 // ── 8.3 + LFN helpers ────────────────────────────────────────────────────────
 
-/// Geef de gepakte 8.3-naam (11 bytes) als `name` een geldige korte naam is, anders None.
+/// Return the packed 8.3 name (11 bytes) if `name` is a valid short name, else None.
 fn short83(name: &str) -> Option<[u8; 11]> {
     let (base, ext) = match name.rsplit_once('.') {
         Some((b, e)) => (b, e),
@@ -354,7 +354,7 @@ fn short83(name: &str) -> Option<[u8; 11]> {
     Some(out)
 }
 
-/// Mangle een lange naam naar een unieke 8.3 `BASE~N.EXT`-vorm.
+/// Mangle a long name into a unique 8.3 `BASE~N.EXT` form.
 fn mangle83(name: &str, n: u32) -> [u8; 11] {
     let (base, ext) = match name.rsplit_once('.') {
         Some((b, e)) => (b, e),
@@ -382,26 +382,26 @@ fn mangle83(name: &str, n: u32) -> [u8; 11] {
     out
 }
 
-/// Hoeveel 32-byte entries kost deze naam (LFN-entries + 1 korte entry)?
+/// How many 32-byte entries does this name cost (LFN entries + 1 short entry)?
 fn entries_for_name(name: &str) -> usize {
     if short83(name).is_some() {
         1
     } else {
         let len = name.chars().count();
-        let lfn = (len + 12) / 13; // 13 UTF-16-tekens per LFN-entry
+        let lfn = (len + 12) / 13; // 13 UTF-16 characters per LFN entry
         lfn + 1
     }
 }
 
-/// Bouw de directory-entries (LFN + 8.3) voor één kind met een reeds gekozen
-/// (unieke) korte naam `short`.
+/// Build the directory entries (LFN + 8.3) for one child with an already-chosen
+/// (unique) short name `short`.
 fn dir_entries_for(name: &str, short: [u8; 11], attr: u8, first_cluster: u32, size: u32) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::new();
-    // LFN nodig wanneer de naam geen geldige 8.3 is, óf als de korte naam gemangled
-    // werd (bv. bij een botsing) — dan moet de echte naam in een LFN bewaard blijven.
+    // LFN needed when the name is not a valid 8.3, or when the short name was
+    // mangled (e.g. on a collision) — then the real name must be preserved in an LFN.
     let need_lfn = short83(name).map(|s| s != short).unwrap_or(true);
     if need_lfn {
-        // LFN-entries (omgekeerde volgorde), met checksum van de korte naam.
+        // LFN entries (reverse order), with the checksum of the short name.
         let chksum = lfn_checksum(&short);
         let utf16: Vec<u16> = name.encode_utf16().collect();
         let groups = (utf16.len() + 12) / 13;
@@ -427,7 +427,7 @@ fn lfn_entry(order: u8, chksum: u8, utf16: &[u16], start: usize) -> [u8; 32] {
     e[0] = order;
     e[11] = ATTR_LFN;
     e[13] = chksum;
-    // 13 tekens verdeeld over posities 1..11, 14..26, 28..32.
+    // 13 characters spread over positions 1..11, 14..26, 28..32.
     let put = |e: &mut [u8; 32], slot: usize, off: usize| {
         let ch = if start + slot < utf16.len() {
             utf16[start + slot]
@@ -454,13 +454,13 @@ fn sfn_entry(short: &[u8; 11], attr: u8, first_cluster: u32, size: u32) -> [u8; 
     let mut e = [0u8; 32];
     e[0..11].copy_from_slice(short);
     e[11] = attr;
-    // Geldige datum 1980-01-01 (dag 1, maand 1, jaar 0) in creatie/wijzig/toegang.
+    // Valid date 1980-01-01 (day 1, month 1, year 0) in creation/modify/access.
     const DATE_1980: u16 = (1 << 5) | 1;
-    e[14..16].copy_from_slice(&0u16.to_le_bytes()); // creatie-tijd
-    e[16..18].copy_from_slice(&DATE_1980.to_le_bytes()); // creatie-datum
-    e[18..20].copy_from_slice(&DATE_1980.to_le_bytes()); // laatste toegang
-    e[22..24].copy_from_slice(&0u16.to_le_bytes()); // wijzig-tijd
-    e[24..26].copy_from_slice(&DATE_1980.to_le_bytes()); // wijzig-datum
+    e[14..16].copy_from_slice(&0u16.to_le_bytes()); // creation time
+    e[16..18].copy_from_slice(&DATE_1980.to_le_bytes()); // creation date
+    e[18..20].copy_from_slice(&DATE_1980.to_le_bytes()); // last access
+    e[22..24].copy_from_slice(&0u16.to_le_bytes()); // modify time
+    e[24..26].copy_from_slice(&DATE_1980.to_le_bytes()); // modify date
     e[20..22].copy_from_slice(&((first_cluster >> 16) as u16).to_le_bytes());
     e[26..28].copy_from_slice(&(first_cluster as u16).to_le_bytes());
     e[28..32].copy_from_slice(&size.to_le_bytes());
@@ -481,9 +481,9 @@ fn write_fsinfo(s: &mut [u8], free_count: u32, next_free: u32) {
     s[508..512].copy_from_slice(&0xAA55_0000u32.to_le_bytes());
 }
 
-// ── Lezer (voor round-trip-verificatie) ──────────────────────────────────────
+// ── Reader (for round-trip verification) ──────────────────────────────────────
 
-/// Lees een bestand uit een FAT32-image op `path` (8.3 of LFN). None als niet gevonden.
+/// Read a file from a FAT32 image at `path` (8.3 or LFN). None if not found.
 pub fn read_file(img: &[u8], path: &str) -> Option<Vec<u8>> {
     let r = Reader::new(img)?;
     let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
@@ -555,7 +555,7 @@ impl<'a> Reader<'a> {
         out.truncate(size);
         out
     }
-    /// Verzamel de directory-bytes (alle clusters van de map).
+    /// Collect the directory bytes (all clusters of the directory).
     fn dir_bytes(&self, start: u32) -> Vec<u8> {
         let mut out = Vec::new();
         let mut cl = start;
@@ -568,7 +568,7 @@ impl<'a> Reader<'a> {
         }
         out
     }
-    /// Zoek `name` (case-insensitief) in map `dir_cluster`; geef (cluster, size, is_dir).
+    /// Look up `name` (case-insensitive) in directory `dir_cluster`; return (cluster, size, is_dir).
     fn find_in_dir(&self, dir_cluster: u32, name: &str) -> Option<(u32, u32, bool)> {
         let bytes = self.dir_bytes(dir_cluster);
         let mut lfn = String::new();
@@ -584,14 +584,14 @@ impl<'a> Reader<'a> {
                 continue;
             }
             if ent[11] == ATTR_LFN {
-                // LFN-fragment vooraan zetten.
+                // Prepend the LFN fragment.
                 let frag = lfn_chars(ent);
                 let mut s = frag;
                 s.push_str(&lfn);
                 lfn = s;
                 continue;
             }
-            // Korte entry.
+            // Short entry.
             let long = lfn.trim_end_matches('\u{0}');
             let short = sfn_name(ent);
             let matches = (!long.is_empty() && long.eq_ignore_ascii_case(name)) || short.eq_ignore_ascii_case(name);
@@ -644,7 +644,7 @@ mod tests {
 
     #[test]
     fn roundtrip_esp_layout() {
-        // 48 MiB volume (geldig FAT32: ≥ ~65525 clusters bij 512 B/cluster).
+        // 48 MiB volume (valid FAT32: ≥ ~65525 clusters at 512 B/cluster).
         let sectors = 48 * 1024 * 1024 / SECTOR as u32;
         let mut fs = FatFs::new(sectors, 0x1234_5678, "EUROKERNEL");
         let loader = vec![0xABu8; 24 * 1024];
@@ -655,11 +655,11 @@ mod tests {
         fs.add_file("/EFI/BOOT/eurokernel-B.efi", &kernel_b);
         let img = fs.build();
         assert_eq!(img.len(), sectors as usize * SECTOR);
-        // BPB-handtekening + FAT32-veld.
+        // BPB signature + FAT32 field.
         assert_eq!(&img[82..90], b"FAT32   ");
         assert_eq!(img[510], 0x55);
         assert_eq!(img[511], 0xAA);
-        // Round-trip: lees de drie bestanden terug.
+        // Round-trip: read the three files back.
         assert_eq!(read_file(&img, "/EFI/BOOT/BOOTX64.EFI"), Some(loader));
         assert_eq!(read_file(&img, "/EFI/BOOT/eurokernel-A.efi"), Some(kernel_a));
         assert_eq!(read_file(&img, "/EFI/BOOT/eurokernel-B.efi"), Some(kernel_b));
@@ -670,9 +670,9 @@ mod tests {
     fn short_and_long_names() {
         assert!(short83("BOOTX64.EFI").is_some());
         assert!(short83("EFI").is_some());
-        assert!(short83("eurokernel-A.efi").is_none()); // kleine letters + te lang
+        assert!(short83("eurokernel-A.efi").is_none()); // lowercase letters + too long
         assert_eq!(entries_for_name("BOOTX64.EFI"), 1);
-        assert_eq!(entries_for_name("eurokernel-A.efi"), 1 + 2); // 16 tekens → 2 LFN
+        assert_eq!(entries_for_name("eurokernel-A.efi"), 1 + 2); // 16 characters → 2 LFN
     }
 
     #[test]

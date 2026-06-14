@@ -1,5 +1,5 @@
-//! Host-validatie: bouw een ESP-image en schrijf hem naar /tmp/esp.img zodat
-//! `mtools` (een onafhankelijke FAT-implementatie) hem kan verifiëren.
+//! Host validation: build an ESP image and write it to /tmp/esp.img so that
+//! `mtools` (an independent FAT implementation) can verify it.
 
 fn main() {
     let sectors = 48 * 1024 * 1024 / 512;

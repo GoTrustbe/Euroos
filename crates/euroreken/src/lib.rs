@@ -1,15 +1,15 @@
-//! EuroReken — de rekenmachine van EuroOS (Sprint AC-1).
+//! EuroReken — the calculator of EuroOS (Sprint AC-1).
 //!
-//! Eén expressie-evaluator met drie gezichten:
-//! - **Standaard**: `+ - * / % ^`, haakjes, decimale getallen.
-//! - **Wetenschappelijk**: idem + functies (`sin cos tan sqrt ln log exp abs
-//!   floor round`) en constanten (`pi`, `e`), op de soevereine [`math`]-kern
-//!   (geen `libm`).
-//! - **Programmeur**: gehele getallen in `0x`/`0o`/`0b`/decimaal, bitwise
-//!   `& | xor ~ << >>`, en uitvoer in hex/oct/bin/dec.
+//! One expression evaluator with three faces:
+//! - **Standard**: `+ - * / % ^`, parentheses, decimal numbers.
+//! - **Scientific**: same + functions (`sin cos tan sqrt ln log exp abs
+//!   floor round`) and constants (`pi`, `e`), on the sovereign [`math`] core
+//!   (no `libm`).
+//! - **Programmer**: integers in `0x`/`0o`/`0b`/decimal, bitwise
+//!   `& | xor ~ << >>`, and output in hex/oct/bin/dec.
 //!
-//! Plus [`convert`] voor eenhedenconversie (lengte/massa/temperatuur/data).
-//! Pure `no_std`-logica, host-getest.
+//! Plus [`convert`] for unit conversion (length/mass/temperature/data).
+//! Pure `no_std` logic, host-tested.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -21,7 +21,7 @@ pub mod math;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// De modus bepaalt vooral de invoer-/uitvoervorm; de evaluator is gedeeld.
+/// The mode mainly determines the input/output form; the evaluator is shared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Standard,
@@ -29,7 +29,7 @@ pub enum Mode {
     Programmer,
 }
 
-/// Fouten bij het evalueren van een expressie.
+/// Errors when evaluating an expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CalcError {
     Syntax(String),
@@ -47,7 +47,7 @@ enum Tok {
     Star,
     Slash,
     Percent,
-    Caret, // machtsverheffing
+    Caret, // exponentiation
     Amp,
     Pipe,
     Tilde,
@@ -75,7 +75,7 @@ fn lex(input: &str) -> Result<Vec<Tok>, CalcError> {
                 i += 1;
             }
             '*' => {
-                // '**' = machtsverheffing alias.
+                // '**' = exponentiation alias.
                 if i + 1 < chars.len() && chars[i + 1] == '*' {
                     toks.push(Tok::Caret);
                     i += 2;
@@ -140,14 +140,14 @@ fn lex(input: &str) -> Result<Vec<Tok>, CalcError> {
                 }
                 toks.push(Tok::Ident(chars[start..i].iter().collect()));
             }
-            _ => return Err(CalcError::Syntax(alloc::format!("onbekend teken '{c}'"))),
+            _ => return Err(CalcError::Syntax(alloc::format!("unknown character '{c}'"))),
         }
     }
     Ok(toks)
 }
 
 fn lex_number(chars: &[char], start: usize) -> Result<(Tok, usize), CalcError> {
-    // Basis-prefixen 0x / 0o / 0b.
+    // Base prefixes 0x / 0o / 0b.
     if chars[start] == '0' && start + 1 < chars.len() {
         let p = chars[start + 1].to_ascii_lowercase();
         let radix = match p {
@@ -179,7 +179,7 @@ fn lex_number(chars: &[char], start: usize) -> Result<(Tok, usize), CalcError> {
             return Ok((Tok::Num(val as f64), i));
         }
     }
-    // Decimaal met fractie en exponent.
+    // Decimal with fraction and exponent.
     let mut i = start;
     while i < chars.len() && chars[i].is_ascii_digit() {
         i += 1;
@@ -191,7 +191,7 @@ fn lex_number(chars: &[char], start: usize) -> Result<(Tok, usize), CalcError> {
         }
     }
     if i < chars.len() && (chars[i] == 'e' || chars[i] == 'E') {
-        // Exponent enkel als er een cijfer (met optioneel teken) volgt.
+        // Exponent only if a digit (with optional sign) follows.
         let mut j = i + 1;
         if j < chars.len() && (chars[j] == '+' || chars[j] == '-') {
             j += 1;
@@ -233,11 +233,11 @@ impl Parser {
         }
     }
 
-    // Precedentieladder, laagste eerst.
+    // Precedence ladder, lowest first.
     fn parse(&mut self) -> Result<f64, CalcError> {
         let v = self.or()?;
         if self.pos != self.toks.len() {
-            return Err(CalcError::Syntax("overtollige invoer".to_string()));
+            return Err(CalcError::Syntax("excess input".to_string()));
         }
         Ok(v)
     }
@@ -341,7 +341,7 @@ impl Parser {
     fn power(&mut self) -> Result<f64, CalcError> {
         let base = self.atom()?;
         if self.eat(&Tok::Caret) {
-            // rechts-associatief
+            // right-associative
             let exp = self.unary()?;
             return Ok(math::pow(base, exp));
         }
@@ -353,12 +353,12 @@ impl Parser {
             Some(Tok::LParen) => {
                 let v = self.or()?;
                 if !self.eat(&Tok::RParen) {
-                    return Err(CalcError::Syntax("')' verwacht".to_string()));
+                    return Err(CalcError::Syntax("')' expected".to_string()));
                 }
                 Ok(v)
             }
             Some(Tok::Ident(name)) => {
-                // Constante of functie-aanroep.
+                // Constant or function call.
                 match name.as_str() {
                     "pi" => return Ok(core::f64::consts::PI),
                     "e" => return Ok(core::f64::consts::E),
@@ -368,13 +368,13 @@ impl Parser {
                 if self.eat(&Tok::LParen) {
                     let arg = self.or()?;
                     if !self.eat(&Tok::RParen) {
-                        return Err(CalcError::Syntax("')' na functie-argument".to_string()));
+                        return Err(CalcError::Syntax("')' after function argument".to_string()));
                     }
                     return apply_fn(&name, arg);
                 }
                 Err(CalcError::UnknownIdent(name))
             }
-            other => Err(CalcError::Syntax(alloc::format!("onverwacht: {other:?}"))),
+            other => Err(CalcError::Syntax(alloc::format!("unexpected: {other:?}"))),
         }
     }
 }
@@ -396,23 +396,23 @@ fn apply_fn(name: &str, x: f64) -> Result<f64, CalcError> {
     Ok(v)
 }
 
-/// Evalueer een expressie naar een `f64` (Standaard/Wetenschappelijk).
+/// Evaluate an expression to an `f64` (Standard/Scientific).
 pub fn eval(expr: &str) -> Result<f64, CalcError> {
     let toks = lex(expr)?;
     if toks.is_empty() {
-        return Err(CalcError::Syntax("lege invoer".to_string()));
+        return Err(CalcError::Syntax("empty input".to_string()));
     }
     let mut p = Parser { toks, pos: 0 };
     p.parse()
 }
 
-/// Evalueer in programmeursmodus naar een geheel getal (`i64`). Bitwise + bases.
+/// Evaluate in programmer mode to an integer (`i64`). Bitwise + bases.
 pub fn eval_programmer(expr: &str) -> Result<i64, CalcError> {
     let v = eval(expr)?;
     Ok(v as i64)
 }
 
-/// Formatteer een geheel getal in een gegeven basis met EuroOS-prefix.
+/// Format an integer in a given base with EuroOS prefix.
 pub fn format_base(value: i64, radix: u32) -> String {
     let prefix = match radix {
         16 => "0x",
@@ -441,9 +441,9 @@ pub fn format_base(value: i64, radix: u32) -> String {
     }
 }
 
-/// Eenhedenconversie tussen twee eenheden van dezelfde categorie.
+/// Unit conversion between two units of the same category.
 pub fn convert(value: f64, from: &str, to: &str) -> Result<f64, CalcError> {
-    // Temperatuur is niet-lineair: apart.
+    // Temperature is non-linear: handled separately.
     let from_l = from.to_ascii_lowercase();
     let to_l = to.to_ascii_lowercase();
     if let (Some(cf), Some(_ct)) = (temp_kind(&from_l), temp_kind(&to_l)) {
@@ -464,7 +464,7 @@ pub fn convert(value: f64, from: &str, to: &str) -> Result<f64, CalcError> {
     let (tcat, tfac) = unit_factor(&to_l).ok_or_else(|| CalcError::UnknownIdent(to.to_string()))?;
     if fcat != tcat {
         return Err(CalcError::Syntax(alloc::format!(
-            "onverenigbare eenheden: {from} ({fcat}) ↔ {to} ({tcat})"
+            "incompatible units: {from} ({fcat}) ↔ {to} ({tcat})"
         )));
     }
     Ok(value * ffac / tfac)
@@ -474,10 +474,10 @@ fn temp_kind(u: &str) -> Option<char> {
     matches!(u, "c" | "f" | "k").then_some('t')
 }
 
-/// (categorie, factor naar basiseenheid).
+/// (category, factor to base unit).
 fn unit_factor(u: &str) -> Option<(&'static str, f64)> {
     let v = match u {
-        // lengte (basis: meter)
+        // length (base: meter)
         "m" => ("len", 1.0),
         "km" => ("len", 1000.0),
         "cm" => ("len", 0.01),
@@ -486,14 +486,14 @@ fn unit_factor(u: &str) -> Option<(&'static str, f64)> {
         "yd" => ("len", 0.9144),
         "ft" => ("len", 0.3048),
         "in" => ("len", 0.0254),
-        // massa (basis: kg)
+        // mass (base: kg)
         "kg" => ("mass", 1.0),
         "g" => ("mass", 0.001),
         "mg" => ("mass", 1e-6),
         "t" => ("mass", 1000.0),
         "lb" => ("mass", 0.453_592_37),
         "oz" => ("mass", 0.028_349_523_125),
-        // data (basis: byte, binaire prefixen)
+        // data (base: byte, binary prefixes)
         "b" => ("data", 1.0),
         "kb" => ("data", 1024.0),
         "mb" => ("data", 1024.0 * 1024.0),
@@ -517,7 +517,7 @@ mod tests {
         assert!(close(eval("1 + 2 * 3").unwrap(), 7.0));
         assert!(close(eval("(1 + 2) * 3").unwrap(), 9.0));
         assert!(close(eval("2 ^ 10").unwrap(), 1024.0));
-        assert!(close(eval("2 ^ 3 ^ 2").unwrap(), 512.0)); // rechts-assoc
+        assert!(close(eval("2 ^ 3 ^ 2").unwrap(), 512.0)); // right-assoc
         assert!(close(eval("-3 + 4").unwrap(), 1.0));
         assert!(close(eval("10 % 3").unwrap(), 1.0));
         assert!(close(eval("7 / 2").unwrap(), 3.5));
@@ -573,11 +573,11 @@ mod tests {
         assert!(close(convert(1.0, "kg", "g").unwrap(), 1000.0));
         assert!(close(convert(1.0, "lb", "kg").unwrap(), 0.45359237));
         assert!(close(convert(1.0, "gb", "mb").unwrap(), 1024.0));
-        // temperatuur
+        // temperature
         assert!(close(convert(0.0, "c", "k").unwrap(), 273.15));
         assert!(close(convert(100.0, "c", "f").unwrap(), 212.0));
         assert!(close(convert(32.0, "f", "c").unwrap(), 0.0));
-        // onverenigbaar
+        // incompatible
         assert!(matches!(convert(1.0, "kg", "m"), Err(CalcError::Syntax(_))));
     }
 }

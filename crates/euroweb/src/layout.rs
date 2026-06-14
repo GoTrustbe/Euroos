@@ -1,14 +1,14 @@
-//! EuroWeb layout-engine (Sprint AB-B3): het CSS-boxmodel.
+//! EuroWeb layout engine (Sprint AB-B3): the CSS box model.
 //!
-//! Zet de [`Dom`] + berekende stijlen ([`crate::css::ComputedStyle`]) om in een
-//! **layout-boom** van gepositioneerde boxen. Implementeert een echt block
-//! formatting context (verticaal stapelen, marge/rand/opvulling/breedte/hoogte)
-//! plus inline tekst-flow met **regelafbreking** voor de hoogteberekening. Volgt
-//! het klassieke CSS-boxmodel-algoritme (à la "robinson").
+//! Turns the [`Dom`] + computed styles ([`crate::css::ComputedStyle`]) into a
+//! **layout tree** of positioned boxes. Implements a real block
+//! formatting context (vertical stacking, margin/border/padding/width/height)
+//! plus inline text flow with **line breaking** for the height calculation. Follows
+//! the classic CSS box-model algorithm (à la "robinson").
 //!
-//! Bewust afgebakend: floats, flex en grid komen later (B4); inline-elementen
-//! worden in deze eerste versie als tekst in de ouder-flow meegenomen. Pure
-//! `no_std`-logica, host-getest.
+//! Deliberately scoped: floats, flex and grid come later (B4); inline elements
+//! are in this first version included as text in the parent flow. Pure
+//! `no_std` logic, host-tested.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -16,7 +16,7 @@ use alloc::vec::Vec;
 use crate::css::ComputedStyle;
 use crate::dom::{Dom, NodeId, NodeKind};
 
-/// Een rechthoek (content-box), in px.
+/// A rectangle (content box), in px.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Rect {
     pub x: f32,
@@ -25,7 +25,7 @@ pub struct Rect {
     pub height: f32,
 }
 
-/// Randwaarden (marge/rand/opvulling) per zijde.
+/// Edge values (margin/border/padding) per side.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct EdgeSizes {
     pub left: f32,
@@ -34,7 +34,7 @@ pub struct EdgeSizes {
     pub bottom: f32,
 }
 
-/// De afmetingen van een box: content + opvulling + rand + marge.
+/// The dimensions of a box: content + padding + border + margin.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Dimensions {
     pub content: Rect,
@@ -44,7 +44,7 @@ pub struct Dimensions {
 }
 
 impl Dimensions {
-    /// De marge-box: content + opvulling + rand + marge.
+    /// The margin box: content + padding + border + margin.
     pub fn margin_box(&self) -> Rect {
         let p = self.padding;
         let b = self.border;
@@ -67,33 +67,33 @@ impl Dimensions {
     }
 }
 
-/// Een vervangen/controle-element (intrinsieke grootte i.p.v. tekstflow): een
-/// afbeelding of een formulierbesturing. Maten in px (u32 → `Eq`-bruikbaar).
+/// A replaced/control element (intrinsic size instead of text flow): an
+/// image or a form control. Sizes in px (u32 → usable with `Eq`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Replaced {
-    /// `<img>` — de kernel haalt `src` op en blit de pixels.
+    /// `<img>` — the kernel fetches `src` and blits the pixels.
     Image { src: String, w: u32, h: u32 },
-    /// `<input type=text>`/`textarea` — naam + (begin)waarde.
+    /// `<input type=text>`/`textarea` — name + (initial) value.
     Field { name: String, value: String, w: u32, h: u32 },
-    /// `<button>`/`<input type=submit>` — knoplabel.
+    /// `<button>`/`<input type=submit>` — button label.
     Button { label: String, w: u32, h: u32 },
 }
 
-/// Het soort layout-box.
+/// The kind of layout box.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BoxType {
     Block,
-    /// Een tekstfragment (inline-inhoud), met de tekst zelf.
+    /// A text fragment (inline content), with the text itself.
     Text(String),
-    /// Anonieme block-box die inline-inhoud groepeert.
+    /// Anonymous block box that groups inline content.
     Anonymous,
-    /// Een vervangen element (afbeelding of formulierbesturing) met vaste maat.
+    /// A replaced element (image or form control) with fixed size.
     Replaced(Replaced),
 }
 
-/// Bepaal of een (inline) element een vervangen/controle-box wordt, en met welke
-/// intrinsieke maat. Leest de relevante attributen uit de DOM. `None` = gewoon
-/// element (geen replaced box).
+/// Determine whether an (inline) element becomes a replaced/control box, and with
+/// which intrinsic size. Reads the relevant attributes from the DOM. `None` = ordinary
+/// element (no replaced box).
 fn replaced_for(name: &str, dom: &Dom, node: NodeId) -> Option<Replaced> {
     let attr = |k: &str| dom.attr(node, k).map(String::from);
     let px = |k: &str, d: u32| dom.attr(node, k).and_then(|v| v.trim().trim_end_matches("px").trim().parse::<u32>().ok()).unwrap_or(d);
@@ -106,7 +106,7 @@ fn replaced_for(name: &str, dom: &Dom, node: NodeId) -> Option<Replaced> {
         "input" => {
             let ty = attr("type").unwrap_or_else(|| String::from("text"));
             if ty == "submit" || ty == "button" {
-                let label = attr("value").unwrap_or_else(|| String::from("Verzenden"));
+                let label = attr("value").unwrap_or_else(|| String::from("Submit"));
                 let w = (label.chars().count() as u32 * 9 + 28).clamp(64, 320);
                 Some(Replaced::Button { label, w, h: 30 })
             } else if ty == "hidden" {
@@ -123,7 +123,7 @@ fn replaced_for(name: &str, dom: &Dom, node: NodeId) -> Option<Replaced> {
         "button" => {
             let label = {
                 let t = dom.text_content(node);
-                if t.trim().is_empty() { String::from("Knop") } else { String::from(t.trim()) }
+                if t.trim().is_empty() { String::from("Button") } else { String::from(t.trim()) }
             };
             let w = (label.chars().count() as u32 * 9 + 28).clamp(64, 320);
             Some(Replaced::Button { label, w, h: 30 })
@@ -138,23 +138,23 @@ fn replaced_for(name: &str, dom: &Dom, node: NodeId) -> Option<Replaced> {
     }
 }
 
-/// Eén knoop in de layout-boom.
+/// One node in the layout tree.
 #[derive(Debug, Clone)]
 pub struct LayoutBox {
     pub box_type: BoxType,
     pub node: Option<NodeId>,
     pub dimensions: Dimensions,
     pub children: Vec<LayoutBox>,
-    /// Aantal regels na afbreking (alleen voor [`BoxType::Text`]).
+    /// Number of lines after breaking (only for [`BoxType::Text`]).
     pub line_count: usize,
-    /// Effectieve fontgrootte (px) van deze box.
+    /// Effective font size (px) of this box.
     pub font_size: f32,
 }
 
-/// Tekst-opmeetfunctie: (tekst, fontgrootte) → breedte in px.
+/// Text measuring function: (text, font size) → width in px.
 pub type Measure = fn(&str, f32) -> f32;
 
-/// Standaard-metric: monospace-benadering (advance ≈ 0,5·fontgrootte per teken).
+/// Default metric: monospace approximation (advance ≈ 0.5·font-size per character).
 pub fn monospace_measure(text: &str, font_size: f32) -> f32 {
     text.chars().count() as f32 * 0.5 * font_size
 }
@@ -170,7 +170,7 @@ fn is_block_tag(tag: &str) -> bool {
     )
 }
 
-/// Niet-renderende elementen (geen box).
+/// Non-rendering elements (no box).
 fn is_non_visual(tag: &str) -> bool {
     matches!(tag, "head" | "script" | "style" | "title" | "meta" | "link" | "base")
 }
@@ -183,7 +183,7 @@ fn parse_px(style: &ComputedStyle, prop: &str) -> Option<f32> {
     } else if v == "0" {
         Some(0.0)
     } else {
-        // "auto"/percentages/keywords → niet als vaste px.
+        // "auto"/percentages/keywords → not as fixed px.
         v.parse::<f32>().ok()
     }
 }
@@ -196,12 +196,12 @@ fn display_none(style: &ComputedStyle) -> bool {
     style.get("display").map(|d| d == "none").unwrap_or(false)
 }
 
-/// Maximale nesting-diepte die we opbouwen. Voorbij dit punt stoppen we met
-/// afdalen: dit voorkomt een stack-overflow op kwaadwillig/diep geneste pagina's
-/// (bv. duizenden `<div>` in elkaar) — een stabiliteitsgrens, geen cosmetische.
+/// Maximum nesting depth that we build up. Beyond this point we stop
+/// descending: this prevents a stack overflow on malicious/deeply nested pages
+/// (e.g. thousands of `<div>` inside each other) — a stability bound, not a cosmetic one.
 pub const MAX_DEPTH: usize = 80;
 
-/// Bouw de layout-boom (zonder posities) uit DOM + stijlen, vanaf `<body>`.
+/// Build the layout tree (without positions) from DOM + styles, starting at `<body>`.
 fn build_box(
     dom: &Dom,
     styles: &[ComputedStyle],
@@ -223,7 +223,7 @@ fn build_box(
                 line_count: 0,
                 font_size: fs,
             };
-            // Stop met afdalen voorbij de veilige diepte (anti stack-overflow).
+            // Stop descending beyond the safe depth (anti stack-overflow).
             if depth < MAX_DEPTH {
                 collect_children(dom, styles, node, fs, &mut bx.children, depth + 1);
             }
@@ -246,8 +246,8 @@ fn build_box(
     }
 }
 
-/// Verzamel de kinderen van `node`; inline-elementen worden afgevlakt (hun
-/// tekst stroomt in de ouder-flow mee).
+/// Collect the children of `node`; inline elements are flattened (their
+/// text flows along in the parent flow).
 fn collect_children(
     dom: &Dom,
     styles: &[ComputedStyle],
@@ -256,7 +256,7 @@ fn collect_children(
     out: &mut Vec<LayoutBox>,
     depth: usize,
 ) {
-    // Veiligheidsgrens: dieper dan dit niet meer afdalen (anti stack-overflow).
+    // Safety bound: do not descend deeper than this (anti stack-overflow).
     if depth >= MAX_DEPTH {
         return;
     }
@@ -267,7 +267,7 @@ fn collect_children(
                     continue;
                 }
                 if let Some(rep) = replaced_for(name, dom, child) {
-                    // Vervangen element (img/input/button): eigen box met vaste maat.
+                    // Replaced element (img/input/button): own box with fixed size.
                     out.push(LayoutBox {
                         box_type: BoxType::Replaced(rep),
                         node: Some(child),
@@ -281,7 +281,7 @@ fn collect_children(
                         out.push(b);
                     }
                 } else {
-                    // Inline element: vlak af in dezelfde flow.
+                    // Inline element: flatten into the same flow.
                     let fs = font_size_of(&styles[child], font);
                     collect_children(dom, styles, child, fs, out, depth + 1);
                 }
@@ -296,7 +296,7 @@ fn collect_children(
     }
 }
 
-/// Breek tekst in regels binnen `width`; geeft het aantal regels.
+/// Break text into lines within `width`; returns the number of lines.
 fn wrap_lines(text: &str, width: f32, font_size: f32, measure: Measure) -> usize {
     let space = measure(" ", font_size);
     let mut lines = 1usize;
@@ -328,8 +328,8 @@ impl LayoutBox {
         }
     }
 
-    /// Plaats een vervangen element (img/input/button): vaste intrinsieke maat,
-    /// onder de tot nu toe gevulde hoogte van het containing block.
+    /// Place a replaced element (img/input/button): fixed intrinsic size,
+    /// below the height of the containing block filled so far.
     fn layout_replaced(&mut self, containing: Dimensions) {
         let (w, h) = match &self.box_type {
             BoxType::Replaced(Replaced::Image { w, h, .. })
@@ -351,12 +351,12 @@ impl LayoutBox {
     fn layout_block(&mut self, containing: Dimensions, styles: &[ComputedStyle], measure: Measure) {
         self.calculate_width(containing, styles);
         self.calculate_position(containing, styles);
-        // Layout kinderen, hoogte accumuleert in self.dimensions.content.height.
+        // Layout children, height accumulates in self.dimensions.content.height.
         for child in &mut self.children {
             child.layout(self.dimensions, styles, measure);
             self.dimensions.content.height += child.dimensions.margin_box_height();
         }
-        // Expliciete hoogte overschrijft.
+        // Explicit height overrides.
         if let Some(s) = self.style(styles) {
             if let Some(h) = parse_px(s, "height") {
                 self.dimensions.content.height = h;
@@ -396,7 +396,7 @@ impl LayoutBox {
         d.margin.bottom = get("margin-bottom").max(self_or(s, "margin"));
 
         d.content.x = containing.content.x + d.margin.left + d.border.left + d.padding.left;
-        // Stapel onder de tot nu toe gevulde hoogte van het containing block.
+        // Stack below the height of the containing block filled so far.
         d.content.y = containing.content.y + containing.content.height + d.margin.top + d.border.top + d.padding.top;
         d.content.height = 0.0;
     }
@@ -422,7 +422,7 @@ fn self_or(s: Option<&ComputedStyle>, shorthand: &str) -> f32 {
     s.and_then(|s| parse_px(s, shorthand)).unwrap_or(0.0)
 }
 fn border_shorthand(s: Option<&ComputedStyle>) -> f32 {
-    // "border: 1px ..." → pak het eerste px-getal.
+    // "border: 1px ..." → take the first px number.
     let v = match s.and_then(|s| s.get("border")) {
         Some(v) => v,
         None => return 0.0,
@@ -437,7 +437,7 @@ fn border_shorthand(s: Option<&ComputedStyle>) -> f32 {
     0.0
 }
 
-/// Bepaal de wortel (`<body>`, anders `<html>`, anders document-root).
+/// Determine the root (`<body>`, otherwise `<html>`, otherwise document root).
 fn root_node(dom: &Dom) -> NodeId {
     (0..dom.len())
         .find(|&i| dom.tag(i) == Some("body"))
@@ -445,12 +445,12 @@ fn root_node(dom: &Dom) -> NodeId {
         .unwrap_or_else(|| dom.root())
 }
 
-/// Bereken de layout-boom voor een viewport-breedte met de standaard-metric.
+/// Compute the layout tree for a viewport width with the default metric.
 pub fn layout(dom: &Dom, styles: &[ComputedStyle], viewport_width: f32) -> LayoutBox {
     layout_with(dom, styles, viewport_width, monospace_measure)
 }
 
-/// Zoals [`layout`], maar met een eigen tekst-opmeetfunctie (font-rasterizer).
+/// Like [`layout`], but with a custom text measuring function (font rasterizer).
 pub fn layout_with(dom: &Dom, styles: &[ComputedStyle], viewport_width: f32, measure: Measure) -> LayoutBox {
     let root = root_node(dom);
     let base_font = font_size_of(&styles[root], 16.0);
@@ -494,7 +494,7 @@ mod tests {
         );
         assert_eq!(lb.children.len(), 2);
         assert_eq!(lb.children[0].dimensions.content.y, 0.0);
-        // Tweede div begint onder de eerste (50px hoog).
+        // Second div starts below the first (50px tall).
         assert_eq!(lb.children[1].dimensions.content.y, 50.0);
     }
 
@@ -526,19 +526,19 @@ mod tests {
 
     #[test]
     fn text_wraps_into_multiple_lines() {
-        // 10 woorden van 4 tekens; monospace 16px → 8px/teken → ~32px/woord +8px spatie.
-        // Bij 100px breed passen er ~2 woorden per regel → meerdere regels.
+        // 10 words of 4 characters; monospace 16px → 8px/char → ~32px/word +8px space.
+        // At 100px wide ~2 words fit per line → multiple lines.
         let lb = build(
             "<body><p>aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa</p></body>",
             "p { width: 100px }",
             800.0,
         );
         let p = &lb.children[0];
-        // De <p> bevat één Text-kind.
+        // The <p> contains one Text child.
         let text = &p.children[0];
         assert!(matches!(text.box_type, BoxType::Text(_)));
-        assert!(text.line_count >= 3, "verwachtte meerdere regels, kreeg {}", text.line_count);
-        // Hoogte = regels × 1,2 × fontgrootte(16) = regels × 19,2.
+        assert!(text.line_count >= 3, "expected multiple lines, got {}", text.line_count);
+        // Height = lines × 1.2 × font-size(16) = lines × 19.2.
         let expected = text.line_count as f32 * 1.2 * 16.0;
         assert!((text.dimensions.content.height - expected).abs() < 0.01);
     }
@@ -568,7 +568,7 @@ mod tests {
             800.0,
         );
         let section = &lb.children[0];
-        // Twee divs van 40px → section content-hoogte 80px.
+        // Two divs of 40px → section content height 80px.
         assert_eq!(section.dimensions.content.height, 80.0);
     }
 }

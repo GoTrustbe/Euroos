@@ -1,15 +1,15 @@
-//! Framebuffer-primitieven voor de UEFI GOP.
+//! Framebuffer primitives for the UEFI GOP.
 //!
-//! Best-choice details die de spec-MVP oversloeg:
-//! - **Pixelformaat-detectie** (RGB vs BGR) i.p.v. hardcoded BGR.
-//! - **Stride** wordt gerespecteerd: de scanline-breedte in geheugen kan
-//!   groter zijn dan de zichtbare breedte (`stride >= width`).
-//! - Alle writes zijn `write_volatile` zodat de compiler ze niet wegoptimaliseert.
+//! Best-choice details the spec-MVP skipped:
+//! - **Pixel-format detection** (RGB vs BGR) instead of hardcoded BGR.
+//! - **Stride** is respected: the scanline width in memory can be
+//!   larger than the visible width (`stride >= width`).
+//! - All writes are `write_volatile` so the compiler does not optimize them away.
 
 use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
 
-/// Kies de beste GOP-mode: voorkeur 1024x768, anders grootste ≤1920x1080.
-/// Best-effort — bij geen geschikte mode blijft de huidige mode staan.
+/// Pick the best GOP mode: prefer 1024x768, otherwise the largest ≤1920x1080.
+/// Best-effort — if no suitable mode is found, the current mode stays.
 pub fn set_best_mode(gop: &mut GraphicsOutput) {
     let modes: alloc::vec::Vec<_> = gop.modes().collect();
     let mut best: Option<usize> = None;
@@ -50,7 +50,7 @@ impl Color {
         Self { r, g, b }
     }
 
-    /// Pak naar 0x00RRGGBB (backbuffer-formaat, los van het GOP-pixelformaat).
+    /// Pack into 0x00RRGGBB (backbuffer format, independent of the GOP pixel format).
     #[inline]
     pub const fn pack(self) -> u32 {
         ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
@@ -61,7 +61,7 @@ impl Color {
         Self { r: (v >> 16) as u8, g: (v >> 8) as u8, b: v as u8 }
     }
 
-    /// Lineaire interpolatie tussen twee kleuren (t = 0..1).
+    /// Linear interpolation between two colors (t = 0..1).
     #[inline]
     pub fn lerp(self, other: Color, t: f32) -> Color {
         let t = t.clamp(0.0, 1.0);
@@ -72,7 +72,7 @@ impl Color {
         )
     }
 
-    /// Alpha-mengen: `self` over `dst` met dekking `a` (0..=255).
+    /// Alpha-blend: `self` over `dst` with opacity `a` (0..=255).
     #[inline]
     pub fn over(self, dst: Color, a: u8) -> Color {
         let a = a as u32;
@@ -84,51 +84,51 @@ impl Color {
         )
     }
 
-    // EuroOS-palet — EDS light-thema (euro.css). Warme zand-desktop, witte
-    // oppervlakken, Europees blauw als accent.
-    pub const BACKGROUND: Self = Self::rgb(0xF4, 0xF1, 0xEB); // --paper (warme zand)
+    // EuroOS palette — EDS light theme (euro.css). Warm sand desktop, white
+    // surfaces, European blue as accent.
+    pub const BACKGROUND: Self = Self::rgb(0xF4, 0xF1, 0xEB); // --paper (warm sand)
     pub const PAPER_2: Self = Self::rgb(0xEF, 0xEA, 0xE1); // --paper-2
-    pub const SURFACE: Self = Self::rgb(0xFF, 0xFF, 0xFF); // --surface (wit)
+    pub const SURFACE: Self = Self::rgb(0xFF, 0xFF, 0xFF); // --surface (white)
     pub const CARD: Self = Self::rgb(0xFB, 0xF9, 0xF5); // --surface-2
     pub const SURFACE_3: Self = Self::rgb(0xF5, 0xF2, 0xEC); // --surface-3
     pub const BORDER: Self = Self::rgb(0xE7, 0xE1, 0xD6); // --line
     pub const TASKBAR: Self = Self::rgb(0xFF, 0xFF, 0xFF);
     pub const HOVER: Self = Self::rgb(0xF5, 0xF2, 0xEC); // --surface-3
-    pub const ACCENT: Self = Self::rgb(0x2D, 0x6B, 0xE0); // Europees blauw --accent
+    pub const ACCENT: Self = Self::rgb(0x2D, 0x6B, 0xE0); // European blue --accent
     pub const ACCENT_SOFT: Self = Self::rgb(0xEA, 0xF1, 0xFD); // --accent-soft
     pub const BLUE: Self = Self::rgb(0x1E, 0x4F, 0xB0); // --accent-deep
-    pub const WHITE: Self = Self::rgb(0xFF, 0xFF, 0xFF); // echt wit (tekst op kleur)
-    pub const INK: Self = Self::rgb(0x24, 0x30, 0x3B); // --ink (primaire tekst, donker)
+    pub const WHITE: Self = Self::rgb(0xFF, 0xFF, 0xFF); // true white (text on color)
+    pub const INK: Self = Self::rgb(0x24, 0x30, 0x3B); // --ink (primary text, dark)
     pub const TEXT_SEC: Self = Self::rgb(0x5C, 0x66, 0x72); // --ink-soft
     pub const TEXT_DIM: Self = Self::rgb(0x8E, 0x96, 0xA1); // --ink-faint
-    pub const GOLD: Self = Self::rgb(0xE2, 0xA3, 0x3A); // --gold (EU-sterren)
-    pub const SUCCESS: Self = Self::rgb(0x2E, 0x9E, 0x5B); // --ok (geverifieerd)
+    pub const GOLD: Self = Self::rgb(0xE2, 0xA3, 0x3A); // --gold (EU stars)
+    pub const SUCCESS: Self = Self::rgb(0x2E, 0x9E, 0x5B); // --ok (verified)
     pub const SUCCESS_SOFT: Self = Self::rgb(0xE4, 0xF4, 0xEA); // --ok-soft
     pub const YELLOW: Self = Self::rgb(0xD9, 0x98, 0x2B); // --warn
     pub const RED: Self = Self::rgb(0xD6, 0x45, 0x3D); // --danger
 }
 
-/// Een bezeten (owned) view op de UEFI framebuffer.
+/// An owned view onto the UEFI framebuffer.
 ///
-/// Tekenen gaat naar een RAM-**backbuffer** (`buf`, 0x00RRGGBB) zodat we
-/// alpha-mengen en anti-aliasing kunnen doen zonder trage read-modify-write op
-/// MMIO; `present()` blit de backbuffer in één keer naar de GOP (geen tearing).
-/// Als `buf` null is werkt de FrameBuffer in *directe* modus (schrijft meteen
-/// naar MMIO) — zo blijft de panic-handler werken zonder te alloceren.
+/// Drawing goes to a RAM **backbuffer** (`buf`, 0x00RRGGBB) so we can
+/// alpha-blend and anti-alias without slow read-modify-write on
+/// MMIO; `present()` blits the backbuffer all at once to the GOP (no tearing).
+/// If `buf` is null the FrameBuffer works in *direct* mode (writes straight
+/// to MMIO) — this keeps the panic handler working without allocating.
 pub struct FrameBuffer {
     base: *mut u8,
     buf: *mut u32,
     width: usize,
     height: usize,
-    /// Scanline-breedte in *pixels* (kan > width zijn).
+    /// Scanline width in *pixels* (can be > width).
     stride: usize,
     format: PixelFormat,
 }
 
 impl FrameBuffer {
-    /// De RAM-backbuffer (0x00RRGGBB-pixels) + afmetingen, voor consumenten die het
-    /// beeld elders heen kopiëren (bv. de virtio-gpu-scanout, BB-2). `None` in
-    /// directe modus (geen backbuffer).
+    /// The RAM backbuffer (0x00RRGGBB pixels) + dimensions, for consumers that copy the
+    /// image elsewhere (e.g. the virtio-gpu scanout, BB-2). `None` in
+    /// direct mode (no backbuffer).
     pub fn backbuffer(&self) -> Option<(*const u32, usize, usize, usize)> {
         if self.buf.is_null() {
             None
@@ -137,10 +137,10 @@ impl FrameBuffer {
         }
     }
 
-    /// Directe modus (geen backbuffer) — voor de panic-handler.
+    /// Direct mode (no backbuffer) — for the panic handler.
     /// # Safety
-    /// `base` moet wijzen naar een geldige GOP-framebuffer van minstens
-    /// `stride * height * 4` bytes, geldig voor de duur van dit object.
+    /// `base` must point to a valid GOP framebuffer of at least
+    /// `stride * height * 4` bytes, valid for the lifetime of this object.
     pub unsafe fn new(
         base: *mut u8,
         width: usize,
@@ -151,10 +151,10 @@ impl FrameBuffer {
         Self { base, buf: core::ptr::null_mut(), width, height, stride, format }
     }
 
-    /// Gebufferde modus: alloceert een RAM-backbuffer (geleakt — de FrameBuffer
-    /// leeft zo lang als de kernel). Tekenen gaat hierheen; `present()` blit.
+    /// Buffered mode: allocates a RAM backbuffer (leaked — the FrameBuffer
+    /// lives as long as the kernel). Drawing goes here; `present()` blits.
     /// # Safety
-    /// Zie `new`.
+    /// See `new`.
     pub unsafe fn new_buffered(
         base: *mut u8,
         width: usize,
@@ -166,7 +166,7 @@ impl FrameBuffer {
         Self { base, buf: owned.as_mut_ptr(), width, height, stride, format }
     }
 
-    /// Schrijf één pixel rechtstreeks naar de GOP-MMIO (met pixelformaat).
+    /// Write one pixel straight to the GOP MMIO (with pixel format).
     #[inline]
     fn write_mmio(&self, x: usize, y: usize, c: Color) {
         let offset = (y * self.stride + x) * 4;
@@ -188,15 +188,15 @@ impl FrameBuffer {
         }
     }
 
-    /// Blit de backbuffer volledig naar de GOP.
+    /// Blit the entire backbuffer to the GOP.
     pub fn present(&self) {
         self.present_rect(0, 0, self.width, self.height);
     }
 
-    /// Blit alleen het gebied (x,y,w,h). Schrijft één `u32` per pixel i.p.v. drie
-    /// losse bytes — fors sneller. De backbuffer (0x00RRGGBB) heeft in LE de
-    /// byte-volgorde B,G,R,0 = precies het BGR-formaat, dus voor BGR is het een
-    /// directe u32-kopie; voor RGB wisselen we R/B om.
+    /// Blit only the region (x,y,w,h). Writes one `u32` per pixel instead of three
+    /// separate bytes — much faster. The backbuffer (0x00RRGGBB) has, in LE, the
+    /// byte order B,G,R,0 = exactly the BGR format, so for BGR it is a
+    /// direct u32 copy; for RGB we swap R/B.
     pub fn present_rect(&self, x: usize, y: usize, w: usize, h: usize) {
         if self.buf.is_null() {
             return;
@@ -220,7 +220,7 @@ impl FrameBuffer {
         }
     }
 
-    /// Meng `c` met dekking `a` over de bestaande pixel (anti-aliasing).
+    /// Blend `c` with opacity `a` over the existing pixel (anti-aliasing).
     #[inline]
     pub fn blend(&self, x: usize, y: usize, c: Color, a: u8) {
         if a == 0 || x >= self.width || y >= self.height {
@@ -247,21 +247,21 @@ impl FrameBuffer {
             return;
         }
         if self.buf.is_null() {
-            self.write_mmio(x, y, c); // directe modus (panic)
+            self.write_mmio(x, y, c); // direct mode (panic)
         } else {
-            // SAFETY: bounds gecheckt; index < width*height.
+            // SAFETY: bounds checked; index < width*height.
             unsafe { *self.buf.add(y * self.width + x) = c.pack() };
         }
     }
 
-    /// Lees een pixel terug (cursor save-under + alpha-mengen).
+    /// Read a pixel back (cursor save-under + alpha-blend).
     pub fn get_pixel(&self, x: usize, y: usize) -> Color {
         if x >= self.width || y >= self.height {
             return Color::BACKGROUND;
         }
         if self.buf.is_null() {
             let offset = (y * self.stride + x) * 4;
-            // SAFETY: bounds gecheckt.
+            // SAFETY: bounds checked.
             unsafe {
                 let p = self.base.add(offset);
                 let b0 = p.read_volatile();
@@ -291,9 +291,9 @@ impl FrameBuffer {
         self.fill_rect(0, 0, self.width, self.height, c);
     }
 
-    /// Gevulde rechthoek met afgeronde hoeken (radius `r`), **anti-aliased**.
-    /// In de hoeken wordt de dekking 4×4 ge-supersampled tegen de hoekcirkel,
-    /// zodat de randen vloeiend in de achtergrond overlopen i.p.v. getrapt.
+    /// Filled rectangle with rounded corners (radius `r`), **anti-aliased**.
+    /// In the corners the coverage is 4×4 supersampled against the corner circle,
+    /// so the edges blend smoothly into the background instead of being stepped.
     pub fn fill_rounded_rect(&self, x: usize, y: usize, w: usize, h: usize, r: usize, c: Color) {
         let r = r.min(w / 2).min(h / 2);
         if r == 0 {
@@ -303,7 +303,7 @@ impl FrameBuffer {
         let rf = r as f32;
         let r2 = rf * rf;
         for row in 0..h {
-            // Verticale hoekkernen: alleen de boven/onderranden buigen.
+            // Vertical corner cores: only the top/bottom edges curve.
             let cy = if row < r {
                 Some(rf)
             } else if row >= h - r {
@@ -321,7 +321,7 @@ impl FrameBuffer {
                 };
                 match (cx, cy) {
                     (Some(ccx), Some(ccy)) => {
-                        // Echte hoek: supersample de dekking.
+                        // Real corner: supersample the coverage.
                         let mut inside = 0u32;
                         let mut sy = 0;
                         while sy < 4 {
@@ -344,20 +344,20 @@ impl FrameBuffer {
                             self.blend(x + col, y + row, c, (inside * 255 / 16) as u8);
                         }
                     }
-                    // Rechte randstrook: vol.
+                    // Straight edge strip: solid.
                     _ => self.put_pixel(x + col, y + row, c),
                 }
             }
         }
     }
 
-    /// Afgeronde rechthoek met een 150°-lineair verloop (`c0`→`c1`), AA-hoeken.
-    /// Voor de kleurrijke app-icoontegels (squircles) uit het EDS.
+    /// Rounded rectangle with a 150° linear gradient (`c0`→`c1`), AA corners.
+    /// For the colorful app icon tiles (squircles) from the EDS.
     pub fn fill_rounded_rect_grad(&self, x: usize, y: usize, w: usize, h: usize, r: usize, c0: Color, c1: Color) {
         let r = r.min(w / 2).min(h / 2);
         let rf = r as f32;
         let r2 = rf * rf;
-        // CSS linear-gradient(150deg): richting (sin150°, -cos150°) = (0.5, 0.866).
+        // CSS linear-gradient(150deg): direction (sin150°, -cos150°) = (0.5, 0.866).
         let (gdx, gdy) = (0.5f32, 0.866f32);
         let maxp = (w as f32) * gdx + (h as f32) * gdy;
         for row in 0..h {
@@ -408,7 +408,7 @@ impl FrameBuffer {
         }
     }
 
-    /// Anti-aliased dik lijnsegment met ronde uiteinden (afstand-tot-segment).
+    /// Anti-aliased thick line segment with round caps (distance-to-segment).
     pub fn aa_seg(&self, x0: f32, y0: f32, x1: f32, y1: f32, half: f32, c: Color) {
         let half = half.max(0.5);
         let minx = (x0.min(x1) - half - 1.0).max(0.0) as usize;
@@ -422,7 +422,7 @@ impl FrameBuffer {
             for px in minx..=maxx {
                 let fx = px as f32 + 0.5;
                 let fy = py as f32 + 0.5;
-                // Projecteer (fx,fy) op het segment → afstand d.
+                // Project (fx,fy) onto the segment → distance d.
                 let t = if len2 > 0.0 {
                     (((fx - x0) * vx + (fy - y0) * vy) / len2).clamp(0.0, 1.0)
                 } else {
@@ -439,7 +439,7 @@ impl FrameBuffer {
         }
     }
 
-    /// Anti-aliased cirkelring (omtrek) met dikte `2*half` rond (cx,cy), straal `r`.
+    /// Anti-aliased circle ring (outline) of thickness `2*half` around (cx,cy), radius `r`.
     pub fn aa_ring(&self, cx: f32, cy: f32, r: f32, half: f32, c: Color) {
         let outer = r + half + 1.0;
         let minx = (cx - outer).max(0.0) as usize;
@@ -459,15 +459,15 @@ impl FrameBuffer {
         }
     }
 
-    /// Zachte slagschaduw rond een (afgeronde) rechthoek: dekking valt vloeiend
-    /// af met de afstand tot de rand. Het interieur wordt overgeslagen (het
-    /// venster tekent daar zelf overheen) zodat alleen de halo gemengd wordt.
+    /// Soft drop shadow around a (rounded) rectangle: coverage falls off smoothly
+    /// with the distance to the edge. The interior is skipped (the
+    /// window draws over it itself) so only the halo is blended.
     pub fn drop_shadow(&self, wx: usize, wy: usize, w: usize, h: usize, spread: i32, dyoff: i32, c: Color) {
         let x0 = wx as i32;
         let y0 = wy as i32;
         let x1 = x0 + w as i32;
         let y1 = y0 + h as i32;
-        // De schaduw-rechthoek staat iets lager (licht van bovenaf).
+        // The shadow rectangle sits slightly lower (light from above).
         let (rx0, ry0, rx1, ry1) = (x0, y0 + dyoff, x1, y1 + dyoff);
         let py_start = (y0 - spread).max(0);
         let py_end = (y1 + spread + dyoff).min(self.height as i32);
@@ -477,7 +477,7 @@ impl FrameBuffer {
         for py in py_start..py_end {
             for px in px_start..px_end {
                 if px >= x0 && px < x1 && py >= y0 && py < y1 {
-                    continue; // interieur — venster overschrijft dit
+                    continue; // interior — window overwrites this
                 }
                 let ddx = (rx0 - px).max(px - rx1).max(0) as f32;
                 let ddy = (ry0 - py).max(py - ry1).max(0) as f32;
@@ -500,9 +500,9 @@ impl FrameBuffer {
     }
 }
 
-/// Vierkantswortel zonder libm (geen std/float-intrinsics in no_std).
-/// Bit-truc voor een ruwe schatting + twee Newton-stappen → ruim genoeg
-/// nauwkeurig voor anti-aliasing-dekking.
+/// Square root without libm (no std/float intrinsics in no_std).
+/// Bit trick for a rough estimate + two Newton steps → plenty
+/// accurate for anti-aliasing coverage.
 #[inline]
 pub fn sqrtf(x: f32) -> f32 {
     if x <= 0.0 {

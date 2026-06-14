@@ -1,6 +1,6 @@
-//! IPv6 (RFC 8200): 40-byte header + adres-helpers (SLAAC link-local via EUI-64,
-//! solicited-node multicast, multicast→MAC mapping) en de pseudo-header-checksum
-//! die ICMPv6/UDP nodig hebben.
+//! IPv6 (RFC 8200): 40-byte header + address helpers (SLAAC link-local via EUI-64,
+//! solicited-node multicast, multicast→MAC mapping) and the pseudo-header checksum
+//! that ICMPv6/UDP need.
 
 use alloc::vec::Vec;
 
@@ -12,10 +12,10 @@ pub struct Ipv6Addr(pub [u8; 16]);
 
 impl Ipv6Addr {
     pub const UNSPECIFIED: Ipv6Addr = Ipv6Addr([0; 16]);
-    /// ff02::1 — alle nodes op de link.
+    /// ff02::1 — all nodes on the link.
     pub const ALL_NODES: Ipv6Addr =
         Ipv6Addr([0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
-    /// ff02::2 — alle routers op de link.
+    /// ff02::2 — all routers on the link.
     pub const ALL_ROUTERS: Ipv6Addr =
         Ipv6Addr([0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
 
@@ -23,12 +23,12 @@ impl Ipv6Addr {
         self.0[0] == 0xff
     }
 
-    /// SLAAC: link-local adres (fe80::/64) uit het MAC-adres via EUI-64.
+    /// SLAAC: link-local address (fe80::/64) from the MAC address via EUI-64.
     pub fn link_local_from_mac(mac: [u8; 6]) -> Ipv6Addr {
         let mut a = [0u8; 16];
         a[0] = 0xfe;
         a[1] = 0x80;
-        // EUI-64: mac[0..3] ff fe mac[3..6], met de U/L-bit (bit 1) geflipt.
+        // EUI-64: mac[0..3] ff fe mac[3..6], with the U/L bit (bit 1) flipped.
         a[8] = mac[0] ^ 0x02;
         a[9] = mac[1];
         a[10] = mac[2];
@@ -40,7 +40,7 @@ impl Ipv6Addr {
         Ipv6Addr(a)
     }
 
-    /// Vorm een adres uit een /64-prefix (eerste 8 bytes) + onze interface-id.
+    /// Form an address from a /64 prefix (first 8 bytes) + our interface id.
     pub fn from_prefix(prefix: [u8; 8], link_local: &Ipv6Addr) -> Ipv6Addr {
         let mut a = [0u8; 16];
         a[..8].copy_from_slice(&prefix);
@@ -48,7 +48,7 @@ impl Ipv6Addr {
         Ipv6Addr(a)
     }
 
-    /// Solicited-node multicast: ff02::1:ffXX:XXXX (laatste 3 bytes van het adres).
+    /// Solicited-node multicast: ff02::1:ffXX:XXXX (last 3 bytes of the address).
     pub fn solicited_node(&self) -> Ipv6Addr {
         let mut a = [0u8; 16];
         a[0] = 0xff;
@@ -61,7 +61,7 @@ impl Ipv6Addr {
         Ipv6Addr(a)
     }
 
-    /// Ethernet-MAC voor een IPv6-multicast-adres: 33:33 + laatste 4 bytes.
+    /// Ethernet MAC for an IPv6 multicast address: 33:33 + last 4 bytes.
     pub fn multicast_mac(&self) -> [u8; 6] {
         [0x33, 0x33, self.0[12], self.0[13], self.0[14], self.0[15]]
     }
@@ -81,7 +81,7 @@ impl Ipv6Header {
 
     pub fn build(&self, payload: &[u8]) -> Vec<u8> {
         let mut h = Vec::with_capacity(Self::LEN + payload.len());
-        h.extend_from_slice(&[0x60, 0, 0, 0]); // versie 6, traffic class/flow = 0
+        h.extend_from_slice(&[0x60, 0, 0, 0]); // version 6, traffic class/flow = 0
         h.extend_from_slice(&(payload.len() as u16).to_be_bytes());
         h.push(self.next_header);
         h.push(self.hop_limit);
@@ -117,7 +117,7 @@ impl Ipv6Header {
     }
 }
 
-/// Checksum over de IPv6-pseudo-header + upper-layer-payload (voor ICMPv6/UDP).
+/// Checksum over the IPv6 pseudo-header + upper-layer payload (for ICMPv6/UDP).
 pub fn pseudo_checksum(src: Ipv6Addr, dst: Ipv6Addr, next_header: u8, payload: &[u8]) -> u16 {
     let mut buf = Vec::with_capacity(40 + payload.len());
     buf.extend_from_slice(&src.0);

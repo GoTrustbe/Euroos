@@ -1,7 +1,7 @@
-/* EuroOS — een ECHT 'job'-proces: het doet rekenwerk (priemgetallen tellen),
- * rapporteert het resultaat en sluit NETJES af met exit(0). De kernel ruimt het
- * daarna op (frames vrij). Dit is de nette exit-route van de proces-levenscyclus
- * (naast de isolatie-kill van isotest). Een gewone musl static-PIE binary. */
+/* EuroOS — a REAL 'job' process: it does compute work (counting primes),
+ * reports the result and exits CLEANLY with exit(0). The kernel then cleans it
+ * up (frees frames). This is the clean exit route of the process life cycle
+ * (besides the isolation kill of isotest). A plain musl static-PIE binary. */
 #include <unistd.h>
 #include <stdlib.h>
 
@@ -46,7 +46,7 @@ int main(void) {
     const char *h = "worker pid ";
     while (*h) hdr[o++] = *h++;
     for (int k = 0; k < pn; k++) hdr[o++] = pb[k];
-    const char *h2 = ": telt priemgetallen tot 30000...\n";
+    const char *h2 = ": counting primes up to 30000...\n";
     while (*h2) hdr[o++] = *h2++;
     write(1, hdr, o);
 
@@ -60,12 +60,12 @@ int main(void) {
     const char *m = "worker pid ";
     while (*m) msg[o++] = *m++;
     for (int k = 0; k < pn; k++) msg[o++] = pb[k];
-    const char *m2 = ": resultaat=";
+    const char *m2 = ": result=";
     while (*m2) msg[o++] = *m2++;
     o += utoa((unsigned long)count, msg + o);
-    const char *m3 = " priemgetallen, exit(0)\n";
+    const char *m3 = " primes, exit(0)\n";
     while (*m3) msg[o++] = *m3++;
     write(1, msg, o);
 
-    exit(0); /* nette beëindiging -> de kernel ruimt dit proces op */
+    exit(0); /* clean termination -> the kernel cleans up this process */
 }

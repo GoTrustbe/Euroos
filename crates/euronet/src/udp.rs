@@ -1,4 +1,4 @@
-//! UDP (RFC 768), inclusief de IPv4-pseudo-header-checksum.
+//! UDP (RFC 768), including the IPv4 pseudo-header checksum.
 
 use alloc::vec::Vec;
 
@@ -16,7 +16,7 @@ pub struct UdpDatagram {
 impl UdpDatagram {
     pub const HEADER_LEN: usize = 8;
 
-    /// Bouw de pseudo-header voor de checksum-berekening.
+    /// Build the pseudo-header for the checksum computation.
     fn pseudo(src: Ipv4Addr, dst: Ipv4Addr, udp_len: u16) -> [u8; 12] {
         let mut p = [0u8; 12];
         p[0..4].copy_from_slice(&src.0);
@@ -33,7 +33,7 @@ impl UdpDatagram {
         seg.extend_from_slice(&self.src_port.to_be_bytes());
         seg.extend_from_slice(&self.dst_port.to_be_bytes());
         seg.extend_from_slice(&udp_len.to_be_bytes());
-        seg.extend_from_slice(&[0, 0]); // checksum-placeholder
+        seg.extend_from_slice(&[0, 0]); // checksum placeholder
 
         seg.extend_from_slice(&self.payload);
 
@@ -43,13 +43,13 @@ impl UdpDatagram {
         buf.extend_from_slice(&seg);
         let mut cs = internet_checksum(&buf);
         if cs == 0 {
-            cs = 0xFFFF; // 0 betekent "geen checksum"; gebruik all-ones.
+            cs = 0xFFFF; // 0 means "no checksum"; use all-ones.
         }
         seg[6..8].copy_from_slice(&cs.to_be_bytes());
         seg
     }
 
-    /// Parse + verifieer de checksum (vereist src/dst voor de pseudo-header).
+    /// Parse + verify the checksum (requires src/dst for the pseudo-header).
     pub fn parse(buf: &[u8], src: Ipv4Addr, dst: Ipv4Addr) -> NetResult<Self> {
         if buf.len() < Self::HEADER_LEN {
             return Err(NetError::TooShort);
@@ -103,7 +103,7 @@ mod tests {
             payload: b"x".to_vec(),
         };
         let seg = dg.build(src, dst);
-        // Parse met VERKEERD bron-adres → pseudo-header anders → checksum fout.
+        // Parse with WRONG source address -> different pseudo-header -> checksum error.
         let wrong = Ipv4Addr::new(10, 0, 0, 9);
         assert_eq!(
             UdpDatagram::parse(&seg, wrong, dst).unwrap_err(),

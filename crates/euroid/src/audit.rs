@@ -1,10 +1,10 @@
-//! Append-only **hash-chain audit-log** (P3 + GDPR Art. 5(2)/32, NIS2 Art. 21).
+//! Append-only **hash-chain audit log** (P3 + GDPR Art. 5(2)/32, NIS2 Art. 21).
 //!
-//! Elke gebruikersactie wordt als zelf-beschrijvend JSON-record vastgelegd. Elk
-//! record bevat de hash van het vórige record (`prev_hash`) plus zijn eigen `hash`
-//! over `seq ‖ prev_hash ‖ body`. Daardoor maakt élke wijziging aan een ouder
-//! record alle volgende hashes ongeldig — het log is tamper-evident, zélfs zonder
-//! de EuroFS APPEND_ONLY-vlag (die het bovendien fysiek onomkeerbaar maakt).
+//! Every user action is recorded as a self-describing JSON record. Each record
+//! contains the hash of the previous record (`prev_hash`) plus its own `hash`
+//! over `seq ‖ prev_hash ‖ body`. As a result, any change to an older record
+//! invalidates all following hashes — the log is tamper-evident, even without
+//! the EuroFS APPEND_ONLY flag (which additionally makes it physically irreversible).
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -63,7 +63,7 @@ fn json_caps(caps: Caps) -> String {
     s
 }
 
-/// Waarom een aanmelding geweigerd werd (zonder te onthullen óf de gebruiker bestaat).
+/// Why a login was denied (without revealing whether the user exists).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DenyReason {
     UnknownUser,
@@ -83,7 +83,7 @@ impl DenyReason {
     }
 }
 
-/// Elk audit-event. Wordt als JSON naar het append-only log geserialiseerd.
+/// Each audit event. Serialized as JSON to the append-only log.
 #[derive(Clone, Debug)]
 pub enum AuditEvent {
     Boot,
@@ -104,7 +104,7 @@ pub enum AuditEvent {
 }
 
 impl AuditEvent {
-    /// De event-naam (`"event"`-veld).
+    /// The event name (`"event"` field).
     pub fn name(&self) -> &'static str {
         match self {
             AuditEvent::Boot => "Boot",
@@ -125,8 +125,8 @@ impl AuditEvent {
         }
     }
 
-    /// De event-specifieke velden als JSON-fragment (zonder accolades).
-    /// GDPR Art. 32 pseudonimisatie: we loggen UID's, geen namen-als-sleutel.
+    /// The event-specific fields as a JSON fragment (without braces).
+    /// GDPR Art. 32 pseudonymization: we log UIDs, not names-as-key.
     fn fields_json(&self) -> String {
         match self {
             AuditEvent::Boot | AuditEvent::SystemInit => String::new(),
@@ -219,13 +219,13 @@ impl AuditEvent {
     }
 }
 
-/// Eén record in de keten.
+/// One record in the chain.
 #[derive(Clone, Debug)]
 pub struct AuditEntry {
     pub seq: u64,
     pub event: String,
     pub timestamp: Timestamp,
-    /// De geserialiseerde body (`seq` + `event` + velden + `timestamp`) waarover gehasht wordt.
+    /// The serialized body (`seq` + `event` + fields + `timestamp`) that is hashed over.
     pub body: String,
     pub prev_hash: [u8; 32],
     pub hash: [u8; 32],
@@ -240,14 +240,14 @@ impl AuditEntry {
         sha256(&buf)
     }
 
-    /// De volledige JSON-regel zoals die op schijf staat (incl. prev_hash/hash).
+    /// The full JSON line as stored on disk (incl. prev_hash/hash).
     pub fn line(&self) -> String {
         alloc::format!(
             "{{\"seq\":{},\"event\":{}{},\"timestamp\":{},\"prev_hash\":\"sha256:{}\",\"hash\":\"sha256:{}\"}}",
             self.seq,
             json_str(&self.event),
-            // body bevat al de event-velden; we hergebruiken de body-velden hier niet
-            // dubbel — de body is het canonieke pre-image, de regel is de weergave.
+            // body already contains the event fields; we don't reuse the body fields
+            // here twice — the body is the canonical pre-image, the line is the rendering.
             self.field_suffix(),
             self.timestamp.0,
             hex(&self.prev_hash),
@@ -255,16 +255,16 @@ impl AuditEntry {
         )
     }
 
-    // De velden komen uit de body (alles na seq/event tot timestamp). We hergebruiken
-    // de body als bron van waarheid; voor de weergave plukken we de event-velden eruit.
+    // The fields come from the body (everything after seq/event up to timestamp). We reuse
+    // the body as the source of truth; for the rendering we pluck the event fields out of it.
     fn field_suffix(&self) -> String {
-        // body = {"seq":..,"event":".."<velden>,"timestamp":..}
-        // We willen alleen <velden>. Vind het stuk tussen de event-string en ,"timestamp".
+        // body = {"seq":..,"event":".."<fields>,"timestamp":..}
+        // We only want <fields>. Find the part between the event string and ,"timestamp".
         if let Some(ts_pos) = self.body.rfind(",\"timestamp\"") {
             if let Some(ev_pos) = self.body.find("\"event\":") {
-                // ev_pos wijst naar "event": ; spring voorbij de event-stringwaarde.
+                // ev_pos points at "event": ; jump past the event string value.
                 let after_key = &self.body[ev_pos + 8..ts_pos];
-                // after_key = "Naam"<velden> → verwijder de eerste JSON-string.
+                // after_key = "Name"<fields> → remove the first JSON string.
                 if let Some(close) = after_key[1..].find('"') {
                     return after_key[close + 2..].to_string();
                 }
@@ -274,7 +274,7 @@ impl AuditEntry {
     }
 }
 
-/// Het append-only audit-log met hash-keten.
+/// The append-only audit log with hash chain.
 #[derive(Clone, Debug, Default)]
 pub struct AuditLog {
     entries: Vec<AuditEntry>,
@@ -286,7 +286,7 @@ impl AuditLog {
         AuditLog { entries: Vec::new(), last_hash: [0u8; 32] }
     }
 
-    /// Voeg een event achteraan toe en sluit het in de keten.
+    /// Append an event at the end and seal it into the chain.
     pub fn append(&mut self, event: &AuditEvent, ts: Timestamp) -> &AuditEntry {
         let seq = self.entries.len() as u64;
         let body = alloc::format!(
@@ -322,20 +322,20 @@ impl AuditLog {
         &self.entries
     }
 
-    /// De wortelhash (hash van het laatste record) — een vingerafdruk van het log.
+    /// The root hash (hash of the last record) — a fingerprint of the log.
     pub fn root_hash(&self) -> [u8; 32] {
         self.last_hash
     }
 
-    /// Verifieer de integriteit van de hele keten. `Err(seq)` = eerste kapotte schakel.
+    /// Verify the integrity of the whole chain. `Err(seq)` = first broken link.
     pub fn verify_chain(&self) -> Result<(), u64> {
         let mut prev = [0u8; 32];
         for e in &self.entries {
-            // 1. De opgeslagen prev_hash moet de hash van het vorige record zijn.
+            // 1. The stored prev_hash must be the hash of the previous record.
             if e.prev_hash != prev {
                 return Err(e.seq);
             }
-            // 2. De opgeslagen hash moet de body opnieuw uitrekenen.
+            // 2. The stored hash must recompute from the body.
             let recomputed = AuditEntry::compute_hash(e.seq, &e.prev_hash, &e.body);
             if recomputed != e.hash {
                 return Err(e.seq);
@@ -345,12 +345,12 @@ impl AuditLog {
         Ok(())
     }
 
-    /// Alle regels (JSON) — voor persistentie naar `/var/log/euro/audit.log`.
+    /// All lines (JSON) — for persistence to `/var/log/euro/audit.log`.
     pub fn lines(&self) -> Vec<String> {
         self.entries.iter().map(|e| e.line()).collect()
     }
 
-    /// Filter op event-naam (substring-match, voor `eurousers audit --events`).
+    /// Filter by event name (substring match, for `eurousers audit --events`).
     pub fn filter_event<'a>(&'a self, names: &[&str]) -> Vec<&'a AuditEntry> {
         self.entries
             .iter()
@@ -399,8 +399,8 @@ mod tests {
     #[test]
     fn tampering_a_past_entry_breaks_the_chain() {
         let mut log = sample_log();
-        // Manipuleer de body van record 1 (de useradd) — bv. caps verhogen.
-        // Zonder de hash bij te werken faalt de her-berekening op exact dat record.
+        // Tamper with the body of record 1 (the useradd) — e.g. raise caps.
+        // Without updating the hash, the recomputation fails on exactly that record.
         log.entries[1].body = log.entries[1].body.replace("alice", "mallory");
         assert_eq!(log.verify_chain(), Err(1));
     }
@@ -408,11 +408,11 @@ mod tests {
     #[test]
     fn tampering_body_and_hash_still_breaks_link() {
         let mut log = sample_log();
-        // Geavanceerder: werk óók de hash bij zodat record 1 zelf klopt...
+        // More advanced: also update the hash so record 1 itself is consistent...
         let forged = AuditEntry::compute_hash(1, &log.entries[1].prev_hash, "forged-body");
         log.entries[1].body = "forged-body".to_string();
         log.entries[1].hash = forged;
-        // ...maar record 2 verwijst nog naar de OUDE hash → de keten breekt bij seq 2.
+        // ...but record 2 still refers to the OLD hash → the chain breaks at seq 2.
         assert_eq!(log.verify_chain(), Err(2));
     }
 

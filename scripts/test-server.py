@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Test EuroOS' eigen HTTP-SERVER end-to-end.
+"""Test EuroOS' own HTTP SERVER end-to-end.
 
-Boot de image met een hostfwd (host :5580 -> gast :80) én een QMP-socket. Wacht
-op de boot, typ `serve` in de interactieve shell (EuroOS gaat dan op :80 luisteren
-via net::tcp_serve_once), en verbind meteen daarna vanaf de host. EuroNet's eigen
-TCP-stack voltooit de handshake en serveert onze pagina. We controleren het
-antwoord én maken een screenshot van de desktop ('client bediend').
+Boot the image with a hostfwd (host :5580 -> guest :80) and a QMP socket. Wait
+for the boot, type `serve` in the interactive shell (EuroOS then starts listening on :80
+via net::tcp_serve_once), and connect immediately afterwards from the host. EuroNet's own
+TCP stack completes the handshake and serves our page. We check the
+response and take a screenshot of the desktop ('client served').
 """
 import json, os, socket, subprocess, sys, time
 
@@ -51,20 +51,20 @@ def cmd(obj):
 f.readline()
 cmd({"execute": "qmp_capabilities"})
 
-print(f"[server] boot, wacht {WAIT}s...", flush=True)
+print(f"[server] booting, waiting {WAIT}s...", flush=True)
 time.sleep(WAIT)
 
 def send_key(qcodes):
     keys = [{"type": "qcode", "data": q} for q in qcodes.split("-")]
     cmd({"execute": "send-key", "arguments": {"keys": keys}})
 
-print("[server] typt: 'serve'", flush=True)
+print("[server] typing: 'serve'", flush=True)
 for ch in "serve\n":
     send_key(QMAP[ch])
     time.sleep(0.08 if ch != "\n" else 0.5)
 
-# EuroOS luistert nu op :80. Verbind vanaf de host (met retry).
-print(f"[server] verbinden met localhost:{HOSTPORT} ...", flush=True)
+# EuroOS is now listening on :80. Connect from the host (with retry).
+print(f"[server] connecting to localhost:{HOSTPORT} ...", flush=True)
 request = b"GET / HTTP/1.0\r\nHost: euroos.local\r\n\r\n"
 response = None
 for attempt in range(40):
@@ -98,10 +98,10 @@ except Exception:
     qemu.kill()
 
 if response:
-    print("\n[server] ANTWOORD van EuroOS' eigen HTTP-server:\n", flush=True)
+    print("\n[server] RESPONSE from EuroOS' own HTTP server:\n", flush=True)
     print(response.decode("utf-8", "replace"))
-    print(f"\n[server] OK — {len(response)} bytes geserveerd door EuroNet.", flush=True)
+    print(f"\n[server] OK — {len(response)} bytes served by EuroNet.", flush=True)
     sys.exit(0)
 else:
-    print("[server] FOUT — geen antwoord ontvangen.", flush=True)
+    print("[server] FAIL — no response received.", flush=True)
     sys.exit(1)

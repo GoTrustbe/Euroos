@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Test de POSIX server-sockets (C2): boot met hostfwd (host :5582 -> gast :8080),
-typ `tcpserve` in de terminal (luistert op :8080 via listen()/accept()), verbind
-daarna vanaf de host en controleer of de server-socket de verbinding aannam en
-antwoordde. Bewijst de passieve-open keten end-to-end met een echte client.
+"""Test the POSIX server sockets (C2): boot with hostfwd (host :5582 -> guest :8080),
+type `tcpserve` in the terminal (listens on :8080 via listen()/accept()), then connect
+from the host and check whether the server socket accepted the connection and
+replied. Proves the passive-open chain end-to-end with a real client.
 """
 import json, os, socket, subprocess, sys, time
 
@@ -47,19 +47,19 @@ def cmd(obj):
 
 f.readline()
 cmd({"execute": "qmp_capabilities"})
-print(f"[tcpserve] boot, wacht {WAIT}s...", flush=True)
+print(f"[tcpserve] boot, wait {WAIT}s...", flush=True)
 time.sleep(WAIT)
 
 def send_key(qcodes):
     cmd({"execute": "send-key", "arguments": {"keys": [{"type": "qcode", "data": q} for q in qcodes.split("-")]}})
 
-print("[tcpserve] typt: 'tcpserve'", flush=True)
+print("[tcpserve] types: 'tcpserve'", flush=True)
 for ch in "tcpserve\n":
     send_key(QMAP[ch])
     time.sleep(0.08 if ch != "\n" else 0.5)
 
-# Geef de shell even om listen() te doen, verbind dan vanaf de host. De accept()
-# in de gast blokkeert (~6 s gast-tijd); onder TCG ruim genoeg wall-clock.
+# Give the shell a moment to call listen(), then connect from the host. The accept()
+# in the guest blocks (~6 s guest time); under TCG that is plenty of wall-clock.
 ok = False
 got = b""
 req = b"GET / HTTP/1.0\r\nHost: euroos\r\n\r\n"
@@ -76,7 +76,7 @@ for attempt in range(40):
         c.close()
         if b"accept() werkt" in got or b"EuroOS" in got:
             ok = True
-            print(f"[tcpserve] server-socket antwoordde ({len(got)} bytes)", flush=True)
+            print(f"[tcpserve] server socket replied ({len(got)} bytes)", flush=True)
             break
     except (ConnectionRefusedError, ConnectionResetError, socket.timeout, OSError):
         pass
@@ -92,5 +92,5 @@ try:
 except Exception:
     qemu.kill()
 
-print(f"[tcpserve] resultaat: {'PASS' if ok else 'FAIL'} ({len(got)} bytes ontvangen)", flush=True)
+print(f"[tcpserve] result: {'PASS' if ok else 'FAIL'} ({len(got)} bytes received)", flush=True)
 sys.exit(0 if ok else 1)

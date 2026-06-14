@@ -1,6 +1,6 @@
-/* EuroOS — S3 execve-doel: een MINIMAAL programma dat het kind-image vervangt.
- * Print een regel en sluit af met code 9, zodat de ouder (via waitpid) kan zien
- * dat execve het image écht vervangen heeft. */
+/* EuroOS — S3 execve target: a MINIMAL program that replaces the child image.
+ * Prints a line and exits with code 9, so the parent (via waitpid) can see
+ * that execve actually replaced the image. */
 
 static long sys(long n, long a1, long a2, long a3) {
     long ret;
@@ -17,7 +17,7 @@ static long slen(const char *s) {
 }
 
 __attribute__((section(".text.start"))) void _start(void) {
-    const char *m = "  [execee] nieuw image draait na execve -> exit(9)\n";
+    const char *m = "  [execee] new image running after execve -> exit(9)\n";
     sys(L_WRITE, 1, (long)m, slen(m));
     sys(L_EXIT, 9, 0, 0);
     for (;;) {

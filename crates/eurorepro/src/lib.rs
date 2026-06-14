@@ -1,13 +1,13 @@
-//! EuroRepro — reproduceerbare builds (plan M3/Q2).
+//! EuroRepro — reproducible builds (plan M3/Q2).
 //!
-//! Soevereiniteit vereist *verifieerbaarheid*: een derde moet kunnen aantonen dat
-//! een binary écht uit de gepubliceerde broncode komt. Dit crate levert de kern:
-//! een **deterministische build-spec** (genormaliseerde inputs → stabiele hash), een
-//! door de bouwer **Ed25519-getekende attestatie** (`spec_id` + `output_hash`), en
-//! **onafhankelijke-reproductie-consensus** — als ≥2 losse bouwers dezelfde output
-//! voor dezelfde spec attesteren, is de build *reproduceerbaar bevestigd*.
+//! Sovereignty requires *verifiability*: a third party must be able to demonstrate that
+//! a binary really comes from the published source code. This crate provides the core:
+//! a **deterministic build spec** (normalized inputs → stable hash), an
+//! **Ed25519-signed attestation** by the builder (`spec_id` + `output_hash`), and
+//! **independent-reproduction consensus** — if ≥2 separate builders attest the same output
+//! for the same spec, the build is *confirmed reproducible*.
 //!
-//! Pure, host-geteste `no_std`-logica (`sha2` + `ed25519-dalek`).
+//! Pure, host-tested `no_std` logic (`sha2` + `ed25519-dalek`).
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -21,31 +21,31 @@ use sha2::{Digest, Sha256};
 
 const DOMAIN: &[u8] = b"EuroRepro-attest-v1\0";
 
-/// Een SHA-256-hash.
+/// A SHA-256 hash.
 pub type Hash = [u8; 32];
 
-/// SHA-256 van wat bytes.
+/// SHA-256 of some bytes.
 pub fn sha256(data: &[u8]) -> Hash {
     let mut h = Sha256::new();
     h.update(data);
     h.finalize().into()
 }
 
-/// De genormaliseerde inputs van een build. De *spec-id* is hun deterministische
-/// hash: dezelfde inputs → dezelfde id, ongeacht volgorde van env/flags.
+/// The normalized inputs of a build. The *spec id* is their deterministic
+/// hash: the same inputs → the same id, regardless of the order of env/flags.
 pub struct BuildSpec {
     pub source_hash: Hash,
     pub toolchain: String,
     pub flags: Vec<String>,
-    /// Omgevingsvariabelen (worden gesorteerd → volgorde-onafhankelijk).
+    /// Environment variables (are sorted → order-independent).
     pub env: Vec<(String, String)>,
 }
 
-/// Volatiele env-vars die een build niet-reproduceerbaar maken (tijd, willekeur, paden).
+/// Volatile env vars that make a build non-reproducible (time, randomness, paths).
 const VOLATILE_ENV: &[&str] = &["SOURCE_DATE_EPOCH", "RANDOM", "HOSTNAME", "PWD", "BUILD_ID", "TIMESTAMP"];
 
 impl BuildSpec {
-    /// De deterministische spec-id (hash van de canoniek-geëncodeerde inputs).
+    /// The deterministic spec id (hash of the canonically-encoded inputs).
     pub fn id(&self) -> Hash {
         let mut flags = self.flags.clone();
         flags.sort();
@@ -68,8 +68,8 @@ impl BuildSpec {
         h.finalize().into()
     }
 
-    /// Welke (genormaliseerde) env-keys zijn volatiel? Hun aanwezigheid betekent dat
-    /// de build niet bit-voor-bit reproduceerbaar zal zijn — een waarschuwing.
+    /// Which (normalized) env keys are volatile? Their presence means that
+    /// the build will not be bit-for-bit reproducible — a warning.
     pub fn volatile_inputs(&self) -> Vec<String> {
         self.env
             .iter()
@@ -79,7 +79,7 @@ impl BuildSpec {
             .collect()
     }
 
-    /// Is deze spec deterministisch (geen volatiele inputs)?
+    /// Is this spec deterministic (no volatile inputs)?
     pub fn is_deterministic(&self) -> bool {
         self.volatile_inputs().is_empty()
     }
@@ -90,8 +90,8 @@ fn push(h: &mut Sha256, b: &[u8]) {
     h.update(b);
 }
 
-/// Een door één bouwer getekende build-attestatie: "spec `spec_id` produceerde
-/// een binary met hash `output_hash`".
+/// A build attestation signed by one builder: "spec `spec_id` produced
+/// a binary with hash `output_hash`".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attestation {
     pub spec_id: Hash,
@@ -100,12 +100,12 @@ pub struct Attestation {
     pub signature: [u8; 64],
 }
 
-/// De uitkomst van een reproductie-poging.
+/// The outcome of a reproduction attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reproduction {
-    /// Onze herbouwde output komt bit-voor-bit overeen met de attestatie.
+    /// Our rebuilt output matches the attestation bit-for-bit.
     Reproducible,
-    /// De output wijkt af — de attestatie klopt niet bij deze bron/toolchain.
+    /// The output differs — the attestation does not match this source/toolchain.
     Mismatch,
 }
 
@@ -117,14 +117,14 @@ fn attest_tbs(spec_id: &Hash, output_hash: &Hash) -> Vec<u8> {
     b
 }
 
-/// Maak een getekende attestatie (de bouwer ondertekent spec_id ‖ output_hash).
+/// Create a signed attestation (the builder signs spec_id ‖ output_hash).
 pub fn attest(builder: &SigningKey, spec_id: Hash, output_hash: Hash) -> Attestation {
     let signature = builder.sign(&attest_tbs(&spec_id, &output_hash)).to_bytes();
     Attestation { spec_id, output_hash, builder: builder.verifying_key().to_bytes(), signature }
 }
 
 impl Attestation {
-    /// Verifieer de handtekening van de bouwer over de attestatie.
+    /// Verify the builder's signature over the attestation.
     pub fn verify(&self) -> bool {
         let Ok(vk) = VerifyingKey::from_bytes(&self.builder) else {
             return false;
@@ -133,7 +133,7 @@ impl Attestation {
         vk.verify(&attest_tbs(&self.spec_id, &self.output_hash), &sig).is_ok()
     }
 
-    /// Vergelijk onze eigen herbouwde binary met de geattesteerde output.
+    /// Compare our own rebuilt binary against the attested output.
     pub fn reproduce(&self, rebuilt_output: &[u8]) -> Reproduction {
         if sha256(rebuilt_output) == self.output_hash {
             Reproduction::Reproducible
@@ -143,11 +143,11 @@ impl Attestation {
     }
 }
 
-/// Onafhankelijke-reproductie-consensus: gegeven attestaties van losse bouwers voor
-/// dezelfde `spec_id`, geef de `output_hash` waarover **minstens `quorum`** geldig-
-/// getekende, *verschillende* bouwers het eens zijn. `None` = geen consensus.
+/// Independent-reproduction consensus: given attestations from separate builders for
+/// the same `spec_id`, return the `output_hash` that **at least `quorum`** validly-
+/// signed, *different* builders agree on. `None` = no consensus.
 pub fn consensus(spec_id: &Hash, attestations: &[Attestation], quorum: usize) -> Option<Hash> {
-    // Tel per output_hash het aantal unieke, geldige bouwers.
+    // Tally the number of unique, valid builders per output_hash.
     let mut tally: Vec<(Hash, Vec<[u8; 32]>)> = Vec::new();
     for a in attestations {
         if &a.spec_id != spec_id || !a.verify() {
@@ -187,7 +187,7 @@ mod tests {
         b.flags.reverse();
         b.env.push(("EXTRA".to_string(), "1".to_string()));
         b.env.reverse();
-        // Zelfde flags (andere volgorde) → zelfde id; extra env → andere id.
+        // Same flags (different order) → same id; extra env → different id.
         assert_eq!(a.id(), { let mut c = spec(); c.flags.reverse(); c.id() });
         assert_ne!(a.id(), b.id());
     }
@@ -215,7 +215,7 @@ mod tests {
     fn tampered_attestation_fails() {
         let builder = SigningKey::from_bytes(&[1u8; 32]);
         let mut att = attest(&builder, spec().id(), sha256(b"x"));
-        att.output_hash[0] ^= 0xFF; // claim een andere output zonder her-tekenen
+        att.output_hash[0] ^= 0xFF; // claim a different output without re-signing
         assert!(!att.verify());
     }
 
@@ -226,14 +226,14 @@ mod tests {
         let b1 = SigningKey::from_bytes(&[1u8; 32]);
         let b2 = SigningKey::from_bytes(&[2u8; 32]);
         let b3 = SigningKey::from_bytes(&[3u8; 32]);
-        // Twee bouwers eens over `out`, één bouwer een afwijkende output.
+        // Two builders agree on `out`, one builder a differing output.
         let atts = alloc::vec![
             attest(&b1, id, out),
             attest(&b2, id, out),
             attest(&b3, id, sha256(b"compromised binary")),
         ];
         assert_eq!(consensus(&id, &atts, 2), Some(out));
-        // Quorum 3 wordt niet gehaald.
+        // Quorum 3 is not reached.
         assert_eq!(consensus(&id, &atts, 3), None);
     }
 
@@ -242,7 +242,7 @@ mod tests {
         let id = spec().id();
         let out = sha256(b"bin");
         let b1 = SigningKey::from_bytes(&[1u8; 32]);
-        // Dezelfde bouwer twee keer telt als één.
+        // The same builder twice counts as one.
         let atts = alloc::vec![attest(&b1, id, out), attest(&b1, id, out)];
         assert_eq!(consensus(&id, &atts, 2), None);
     }

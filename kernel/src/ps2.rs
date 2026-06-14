@@ -1,9 +1,9 @@
-//! PS/2-toetsenbord (i8042), scancode set 1 — US QWERTY.
+//! PS/2 keyboard (i8042), scancode set 1 — US QWERTY.
 //!
-//! **IRQ-gestuurd**: de IRQ1-handler (interrupts.rs) leest de scancode van poort
-//! 0x60 en duwt 'm in een ring-buffer via [`push_scancode`]. De shell haalt
-//! gedecodeerde tekens op met [`poll_key`]. Zo gaat er geen toets verloren als
-//! de shell door de scheduler even niet draait (anders dan bij pollen).
+//! **IRQ-driven**: the IRQ1 handler (interrupts.rs) reads the scancode from port
+//! 0x60 and pushes it into a ring buffer via [`push_scancode`]. The shell fetches
+//! decoded characters with [`poll_key`]. This way no key is lost if
+//! the shell is not running for a moment due to the scheduler (unlike with polling).
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -26,7 +26,7 @@ static SCANCODES: Mutex<Ring> = Mutex::new(Ring {
     tail: 0,
 });
 
-/// Aangeroepen vanuit de IRQ1-handler (interrupts al uit): buffer de scancode.
+/// Called from the IRQ1 handler (interrupts already disabled): buffer the scancode.
 pub fn push_scancode(sc: u8) {
     let mut r = SCANCODES.lock();
     let next = (r.tail + 1) % RING_SIZE;
@@ -35,7 +35,7 @@ pub fn push_scancode(sc: u8) {
         r.buf[tail] = sc;
         r.tail = next;
     }
-    // Buffer vol → nieuwste scancode laten vallen (zou hoogst zelden gebeuren).
+    // Buffer full → drop the newest scancode (should very rarely happen).
 }
 
 fn pop_scancode() -> Option<u8> {
@@ -51,14 +51,14 @@ fn pop_scancode() -> Option<u8> {
     })
 }
 
-/// Haal het volgende gedecodeerde teken op uit de buffer (of `None`).
-/// Geeft `'\r'` (enter), `'\u{8}'` (backspace) of een printbaar teken.
+/// Fetch the next decoded character from the buffer (or `None`).
+/// Returns `'\r'` (enter), `'\u{8}'` (backspace) or a printable character.
 pub fn poll_key() -> Option<char> {
     while let Some(sc) = pop_scancode() {
         match sc {
             0x2A | 0x36 => SHIFT.store(true, Ordering::Relaxed),
             0xAA | 0xB6 => SHIFT.store(false, Ordering::Relaxed),
-            _ if sc & 0x80 != 0 => {} // overige break-codes negeren
+            _ if sc & 0x80 != 0 => {} // ignore other break codes
             _ => {
                 if let Some(c) = translate(sc, SHIFT.load(Ordering::Relaxed)) {
                     return Some(c);

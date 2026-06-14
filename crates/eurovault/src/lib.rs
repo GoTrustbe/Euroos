@@ -1,16 +1,16 @@
-//! EuroVault — een **capability-gated, versleutelde secrets-store** (plan U).
+//! EuroVault — a **capability-gated, encrypted secrets store** (plan U).
 //!
-//! TPM (O1) levert hardware-sleutelopslag, capabilities (EuroGuard) regelen toegang.
-//! EuroVault is de laag ertussen: een store die secrets (DB-wachtwoorden, API-keys)
-//! koppelt aan een **`read_caps`-capability-eis** en ze **versleuteld** (ChaCha20-
-//! Poly1305) op schijf bewaart, ontsleuteld met een master-sleutel die (met K3/O1)
-//! TPM-sealed is. Een proces vraagt een secret via een capability-gated call; zonder
-//! de juiste capability volgt `EPERM`. Secret-bytes worden bij drop gewist
-//! (`zeroize`). Elke toegang hoort in het P3-audit-spoor. Pure `no_std` → host-getest.
+//! TPM (O1) provides hardware key storage, capabilities (EuroGuard) govern access.
+//! EuroVault is the layer in between: a store that ties secrets (DB passwords, API keys)
+//! to a **`read_caps` capability requirement** and keeps them **encrypted** (ChaCha20-
+//! Poly1305) on disk, decrypted with a master key that (with K3/O1) is
+//! TPM-sealed. A process requests a secret via a capability-gated call; without
+//! the proper capability it gets `EPERM`. Secret bytes are wiped on drop
+//! (`zeroize`). Every access belongs in the P3 audit trail. Pure `no_std` → host-tested.
 
 #![cfg_attr(not(test), no_std)]
-// Eén gericht stukje `unsafe`: het volatile-wissen van secret-bytes bij drop, zodat
-// de compiler het niet weg-optimaliseert (echte zeroize). Verder géén unsafe.
+// One targeted piece of `unsafe`: the volatile wiping of secret bytes on drop, so
+// the compiler does not optimize it away (real zeroize). Otherwise no unsafe.
 
 extern crate alloc;
 
@@ -28,23 +28,23 @@ pub enum VaultError {
     Corrupt,
 }
 
-/// Eén secret. De waarde wordt bij drop met nullen overschreven (anti-forensisch).
+/// One secret. The value is overwritten with zeros on drop (anti-forensic).
 pub struct Secret {
     pub label: String,
     value: Vec<u8>,
-    pub read_caps: u64, // het capability-masker dat leesrecht geeft (0 = altijd)
+    pub read_caps: u64, // the capability mask that grants read access (0 = always)
 }
 
 impl Drop for Secret {
     fn drop(&mut self) {
-        // Wis de geheime bytes — ze mogen niet in vrijgegeven geheugen achterblijven.
+        // Wipe the secret bytes — they must not remain in freed memory.
         for b in self.value.iter_mut() {
             unsafe { core::ptr::write_volatile(b, 0) };
         }
     }
 }
 
-/// De secrets-store. Versleuteld te (de)serialiseren met een 32-byte master-sleutel.
+/// The secrets store. (De)serialized encrypted with a 32-byte master key.
 #[derive(Default)]
 pub struct Vault {
     secrets: Vec<Secret>,
@@ -55,7 +55,7 @@ impl Vault {
         Vault { secrets: Vec::new() }
     }
 
-    /// Plaats/overschrijf een secret met z'n capability-eis.
+    /// Place/overwrite a secret with its capability requirement.
     pub fn set(&mut self, label: &str, value: &[u8], read_caps: u64) {
         if let Some(s) = self.secrets.iter_mut().find(|s| s.label == label) {
             s.value.clear();
@@ -70,8 +70,8 @@ impl Vault {
         }
     }
 
-    /// Lees een secret — ALLEEN als `caller_caps` de vereiste `read_caps` bevat.
-    /// Geeft een kopie (de aanroeper wist 'm zelf na gebruik).
+    /// Read a secret — ONLY if `caller_caps` contains the required `read_caps`.
+    /// Returns a copy (the caller wipes it themselves after use).
     pub fn get(&self, label: &str, caller_caps: u64) -> Result<Vec<u8>, VaultError> {
         let s = self.secrets.iter().find(|s| s.label == label).ok_or(VaultError::NotFound)?;
         if s.read_caps != 0 && (caller_caps & s.read_caps) != s.read_caps {
@@ -80,7 +80,7 @@ impl Vault {
         Ok(s.value.clone())
     }
 
-    /// De labels + hun capability-eis (NOOIT de waarden) — voor `vault list`.
+    /// The labels + their capability requirement (NEVER the values) — for `vault list`.
     pub fn list(&self) -> Vec<(String, u64)> {
         self.secrets.iter().map(|s| (s.label.clone(), s.read_caps)).collect()
     }
@@ -92,7 +92,7 @@ impl Vault {
         self.secrets.is_empty()
     }
 
-    /// Serialiseer (platte bytes) → label/​caps/​value per secret.
+    /// Serialize (flat bytes) → label/​caps/​value per secret.
     fn serialize(&self) -> Vec<u8> {
         let mut b = Vec::new();
         b.extend_from_slice(&(self.secrets.len() as u32).to_le_bytes());
@@ -136,9 +136,9 @@ impl Vault {
         Ok(v)
     }
 
-    /// **Verzegel** de hele vault tot een versleutelde blob (ChaCha20-Poly1305) met
-    /// `master_key` (256-bit, idealiter TPM-sealed) + een 12-byte `nonce`. De blob =
-    /// `nonce ‖ ciphertext+tag` → tamper-evident (de tag detecteert wijziging).
+    /// **Seal** the whole vault into an encrypted blob (ChaCha20-Poly1305) with
+    /// `master_key` (256-bit, ideally TPM-sealed) + a 12-byte `nonce`. The blob =
+    /// `nonce ‖ ciphertext+tag` → tamper-evident (the tag detects modification).
     pub fn seal(&self, master_key: &[u8; 32], nonce: &[u8; 12]) -> Result<Vec<u8>, VaultError> {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(master_key));
         let ct = cipher
@@ -150,8 +150,8 @@ impl Vault {
         Ok(out)
     }
 
-    /// **Ontzegel** een blob met de master-sleutel. Faalt (`Decrypt`) bij een verkeerde
-    /// sleutel of een gemanipuleerde blob (Poly1305-tag mismatch).
+    /// **Unseal** a blob with the master key. Fails (`Decrypt`) on a wrong
+    /// key or a tampered blob (Poly1305 tag mismatch).
     pub fn unseal(blob: &[u8], master_key: &[u8; 32]) -> Result<Vault, VaultError> {
         if blob.len() < 12 {
             return Err(VaultError::Corrupt);
@@ -163,28 +163,28 @@ impl Vault {
         Vault::deserialize(&pt)
     }
 
-    /// **Verzegel gebonden aan de boot-meting (PCR-seal, AF / Zero-Trust).** De
-    /// effectieve sleutel is `SHA256("EuroVault-PCR-seal-v1" ‖ master ‖ pcr_digest)`:
-    /// de verzegeling is zo cryptografisch gebonden aan de measured-boot-toestand.
-    /// Op een GEMANIPULEERD systeem verschillen de PCR's → een andere afgeleide
-    /// sleutel → de Poly1305-tag faalt en ontzegelen wordt geweigerd. Zo opent het
-    /// geheim (bv. de FDE-master) enkel op een niet-gemanipuleerde boot.
+    /// **Seal bound to the boot measurement (PCR-seal, AF / Zero-Trust).** The
+    /// effective key is `SHA256("EuroVault-PCR-seal-v1" ‖ master ‖ pcr_digest)`:
+    /// the seal is thus cryptographically bound to the measured-boot state.
+    /// On a TAMPERED system the PCRs differ → a different derived
+    /// key → the Poly1305 tag fails and unsealing is refused. This way the
+    /// secret (e.g. the FDE master) opens only on a non-tampered boot.
     pub fn seal_to_pcr(&self, master_key: &[u8; 32], pcr_digest: &[u8; 32], nonce: &[u8; 12]) -> Result<Vec<u8>, VaultError> {
         let k = derive_pcr_key(master_key, pcr_digest);
         self.seal(&k, nonce)
     }
 
-    /// Ontzegel een PCR-gebonden blob met de master-sleutel en de HUIDIGE PCR-meting.
-    /// Komen de PCR's niet overeen met die bij het verzegelen (gewijzigde boot), dan
-    /// faalt dit met `Decrypt` — het geheim blijft ontoegankelijk.
+    /// Unseal a PCR-bound blob with the master key and the CURRENT PCR measurement.
+    /// If the PCRs do not match those at sealing time (changed boot), this
+    /// fails with `Decrypt` — the secret remains inaccessible.
     pub fn unseal_from_pcr(blob: &[u8], master_key: &[u8; 32], current_pcr_digest: &[u8; 32]) -> Result<Vault, VaultError> {
         let k = derive_pcr_key(master_key, current_pcr_digest);
         Vault::unseal(blob, &k)
     }
 }
 
-/// KDF die de ontzegelsleutel aan (master, PCR-toestand) bindt. Domein-gescheiden
-/// zodat de afgeleide sleutel nergens anders voor (her)gebruikt kan worden.
+/// KDF that binds the unseal key to (master, PCR state). Domain-separated
+/// so the derived key cannot be (re)used for anything else.
 fn derive_pcr_key(master_key: &[u8; 32], pcr_digest: &[u8; 32]) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
@@ -208,11 +208,11 @@ mod tests {
     fn capability_gated_read() {
         let mut v = Vault::new();
         v.set("db-password", b"s3cr3t", CAP_DB);
-        // Met de juiste cap → de waarde.
+        // With the correct cap → the value.
         assert_eq!(v.get("db-password", CAP_DB | CAP_OTHER).unwrap(), b"s3cr3t");
-        // Zonder de cap → EPERM, óók al ken je het label.
+        // Without the cap → EPERM, even if you know the label.
         assert_eq!(v.get("db-password", CAP_OTHER), Err(VaultError::PermissionDenied));
-        // Onbekend label.
+        // Unknown label.
         assert_eq!(v.get("weg", CAP_DB), Err(VaultError::NotFound));
     }
 
@@ -224,7 +224,7 @@ mod tests {
         assert_eq!(l.len(), 1);
         assert_eq!(l[0].0, "api-key");
         assert_eq!(l[0].1, CAP_DB);
-        // (list geeft enkel labels + caps — de waarden komen er niet uit)
+        // (list returns only labels + caps — the values do not come out)
     }
 
     #[test]
@@ -235,7 +235,7 @@ mod tests {
         v.set("db-password", b"hunter2", CAP_DB);
         v.set("ssh-key", b"-----BEGIN-----", 0);
         let blob = v.seal(&key, &nonce).unwrap();
-        // De blob bevat GEEN plaintext.
+        // The blob contains NO plaintext.
         assert!(!blob.windows(7).any(|w| w == b"hunter2"));
         let v2 = Vault::unseal(&blob, &key).unwrap();
         assert_eq!(v2.get("db-password", CAP_DB).unwrap(), b"hunter2");
@@ -244,25 +244,25 @@ mod tests {
 
     #[test]
     fn pcr_seal_only_unseals_on_matching_boot_state() {
-        // AF / PCR-seal: een vault gebonden aan PCR-toestand A opent ALLEEN onder
-        // diezelfde PCR's. Een gewijzigde boot (andere PCR-digest) → ontzegelen faalt.
+        // AF / PCR-seal: a vault bound to PCR state A opens ONLY under
+        // those same PCRs. A changed boot (different PCR digest) → unsealing fails.
         let master = [0x77u8; 32];
         let nonce = [9u8; 12];
-        let pcr_good = [0xAAu8; 32]; // measured-boot-digest bij verzegelen
-        let pcr_tampered = [0xABu8; 32]; // één bit anders = gewijzigde boot-keten
+        let pcr_good = [0xAAu8; 32]; // measured-boot digest at seal time
+        let pcr_tampered = [0xABu8; 32]; // one bit different = changed boot chain
 
         let mut v = Vault::new();
         v.set("fde-master", b"disk-key-material", CAP_DB);
         let blob = v.seal_to_pcr(&master, &pcr_good, &nonce).unwrap();
 
-        // Zelfde PCR's → ontzegelt.
+        // Same PCRs → unseals.
         let ok = Vault::unseal_from_pcr(&blob, &master, &pcr_good).unwrap();
         assert_eq!(ok.get("fde-master", CAP_DB).unwrap(), b"disk-key-material");
-        // Gemanipuleerde boot (andere PCR's) → geweigerd.
+        // Tampered boot (different PCRs) → refused.
         assert_eq!(Vault::unseal_from_pcr(&blob, &master, &pcr_tampered).err(), Some(VaultError::Decrypt));
-        // Juiste PCR's maar verkeerde master → ook geweigerd.
+        // Correct PCRs but wrong master → also refused.
         assert_eq!(Vault::unseal_from_pcr(&blob, &[0u8; 32], &pcr_good).err(), Some(VaultError::Decrypt));
-        // Een blob die PCR-gebonden is, opent NIET met de kale master (binding is echt).
+        // A blob that is PCR-bound does NOT open with the bare master (the binding is real).
         assert_eq!(Vault::unseal(&blob, &master).err(), Some(VaultError::Decrypt));
     }
 
@@ -273,9 +273,9 @@ mod tests {
         let mut v = Vault::new();
         v.set("x", b"geheim", 0);
         let mut blob = v.seal(&key, &nonce).unwrap();
-        // Verkeerde sleutel → Decrypt-fout.
+        // Wrong key → Decrypt error.
         assert_eq!(Vault::unseal(&blob, &[0u8; 32]).err(), Some(VaultError::Decrypt));
-        // Eén byte flippen (tamper) → Poly1305 detecteert het.
+        // Flip one byte (tamper) → Poly1305 detects it.
         let n = blob.len();
         blob[n - 1] ^= 0xFF;
         assert_eq!(Vault::unseal(&blob, &key).err(), Some(VaultError::Decrypt));

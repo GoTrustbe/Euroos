@@ -1,12 +1,12 @@
-//! EuroNet — eigen, RFC-conforme netwerkstack (Track 4 van EuroKernel).
+//! EuroNet — in-house, RFC-compliant network stack (Track 4 of EuroKernel).
 //!
-//! Deze crate doet (Fase 1) puur **packet parsing/building + checksums**: geen
-//! driver, geen sockets. Dat is bewust de meest fout-gevoelige laag van een OS
-//! en is volledig op de host testbaar — zonder NIC of QEMU. De driver-/socket-
-//! integratie (VirtIO, TCP-state machine) is een latere fase.
+//! This crate does (Phase 1) purely **packet parsing/building + checksums**: no
+//! driver, no sockets. That is deliberately the most error-prone layer of an OS
+//! and is fully testable on the host — without a NIC or QEMU. The driver/socket
+//! integration (VirtIO, TCP state machine) is a later phase.
 //!
-//! Alles is **big-endian** (network byte order) via expliciete `from_be_bytes`/
-//! `to_be_bytes` — nooit directe casts. `no_std` + `alloc`; tests draaien std.
+//! Everything is **big-endian** (network byte order) via explicit `from_be_bytes`/
+//! `to_be_bytes` — never direct casts. `no_std` + `alloc`; tests run on std.
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
@@ -33,7 +33,7 @@ pub use icmp::{IcmpEcho, IcmpError, IcmpType, UnreachCode};
 pub use ipv4::{Ipv4Addr, Ipv4Header, Protocol};
 pub use udp::UdpDatagram;
 
-/// Gedeelde parse-fout.
+/// Shared parse error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetError {
     TooShort,

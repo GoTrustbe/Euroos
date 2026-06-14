@@ -1,4 +1,4 @@
-//! EuroJS-parser: tokens → AST (recursief dalend, met precedentie-klimmen).
+//! EuroJS parser: tokens → AST (recursive descent, with precedence climbing).
 
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
@@ -41,7 +41,7 @@ impl Parser {
         if self.eat(t) {
             Ok(())
         } else {
-            Err(alloc::format!("verwachtte {:?}, kreeg {:?}", t, self.peek()))
+            Err(alloc::format!("expected {:?}, got {:?}", t, self.peek()))
         }
     }
 
@@ -121,7 +121,7 @@ impl Parser {
                     self.next();
                     None
                 } else {
-                    let s = self.statement()?; // verbruikt de ';'
+                    let s = self.statement()?; // consumes the ';'
                     Some(Box::new(s))
                 };
                 let cond = if *self.peek() == Tok::Semi { None } else { Some(self.expr()?) };
@@ -151,7 +151,7 @@ impl Parser {
     fn ident(&mut self) -> P<String> {
         match self.next() {
             Tok::Ident(s) => Ok(s),
-            other => Err(alloc::format!("verwachtte identifier, kreeg {other:?}")),
+            other => Err(alloc::format!("expected identifier, got {other:?}")),
         }
     }
 
@@ -168,7 +168,7 @@ impl Parser {
         Ok(ps)
     }
 
-    // ── expressies ──
+    // ── expressions ──
 
     fn expr(&mut self) -> P<Expr> {
         self.assignment()
@@ -194,7 +194,7 @@ impl Parser {
         Ok(c)
     }
 
-    /// Precedentie-klimmen voor binaire/logische operatoren.
+    /// Precedence climbing for binary/logical operators.
     fn binary(&mut self, min_prec: u8) -> P<Expr> {
         let mut left = self.unary()?;
         loop {
@@ -261,8 +261,8 @@ impl Parser {
                     let args = self.args()?;
                     e = Expr::Call(Box::new(e), args);
                 }
-                // Postfix ++/-- (`i++`); voor onze doeleinden gelijk aan een Update
-                // op de lvalue (de oude-waarde-semantiek doet er als statement niet toe).
+                // Postfix ++/-- (`i++`); for our purposes equivalent to an Update
+                // on the lvalue (the old-value semantics don't matter as a statement).
                 Tok::PlusPlus => {
                     self.next();
                     e = Expr::Update(true, Box::new(e));
@@ -301,7 +301,7 @@ impl Parser {
             Tok::Null => Ok(Expr::Null),
             Tok::Undefined => Ok(Expr::Undefined),
             Tok::Ident(s) => {
-                // arrow met één parameter: x => expr
+                // arrow with one parameter: x => expr
                 if *self.peek() == Tok::Arrow {
                     self.next();
                     let body = self.arrow_body()?;
@@ -310,7 +310,7 @@ impl Parser {
                 Ok(Expr::Ident(s))
             }
             Tok::LParen => {
-                // Zou een arrow-parameterlijst kunnen zijn: (a, b) => ...
+                // Could be an arrow parameter list: (a, b) => ...
                 let save = self.i - 1;
                 if let Some(params) = self.try_arrow_params(save) {
                     let body = self.arrow_body()?;
@@ -337,7 +337,7 @@ impl Parser {
                     let key = match self.next() {
                         Tok::Ident(s) => s,
                         Tok::Str(s) => s,
-                        other => return Err(alloc::format!("ongeldige objectsleutel {other:?}")),
+                        other => return Err(alloc::format!("invalid object key {other:?}")),
                     };
                     self.expect(&Tok::Colon)?;
                     let val = self.assignment()?;
@@ -354,7 +354,7 @@ impl Parser {
                 let body = self.block()?;
                 Ok(Expr::Func(params, body))
             }
-            other => Err(alloc::format!("onverwacht token {other:?}")),
+            other => Err(alloc::format!("unexpected token {other:?}")),
         }
     }
 
@@ -362,16 +362,16 @@ impl Parser {
         if *self.peek() == Tok::LBrace {
             self.block()
         } else {
-            // expression-body arrow → impliciete return
+            // expression-body arrow → implicit return
             let e = self.assignment()?;
             Ok(alloc::vec![Stmt::Return(Some(e))])
         }
     }
 
-    /// Probeer `(params) =>` te herkennen vanaf de openende `(` op index `lparen`.
+    /// Try to recognize `(params) =>` starting from the opening `(` at index `lparen`.
     fn try_arrow_params(&mut self, lparen: usize) -> Option<Vec<String>> {
-        // We staan net ná de '('. Scan vooruit naar de bijbehorende ')' en kijk of
-        // er een '=>' op volgt; zo ja, parse de parameterlijst.
+        // We are right after the '('. Scan ahead to the matching ')' and check
+        // whether a '=>' follows; if so, parse the parameter list.
         let mut j = lparen + 1;
         let mut params = Vec::new();
         loop {
@@ -396,7 +396,7 @@ impl Parser {
             }
         }
         if self.t.get(j) == Some(&Tok::Arrow) {
-            self.i = j + 1; // consumeer ') =>'
+            self.i = j + 1; // consume ') =>'
             Some(params)
         } else {
             None

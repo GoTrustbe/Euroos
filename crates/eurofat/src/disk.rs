@@ -1,11 +1,11 @@
-//! Volledige **bootbare schijf-image**: een GPT met een EFI System Partition
-//! (FAT32, via [`crate::FatFs`]) + een EuroFS-rootpartitie. Exact dezelfde bytes
-//! worden door de installer naar een echte virtio-blk-schijf geschreven én op de
-//! host gevalideerd (QEMU-boot/`gdisk`/`fsck`). Pure `no_std`-logica.
+//! Complete **bootable disk image**: a GPT with an EFI System Partition
+//! (FAT32, via [`crate::FatFs`]) + a EuroFS root partition. The exact same bytes
+//! are written by the installer to a real virtio-blk disk and validated on the
+//! host (QEMU boot/`gdisk`/`fsck`). Pure `no_std` logic.
 //!
-//! Kernel-vriendelijk: [`write_boot_disk`] **streamt** via een callback (≤ 4 KiB
-//! per stuk) zodat de kernel nooit de hele schijf in RAM hoeft te houden — alleen
-//! de ESP (≈ 40 MiB) bestaat kort als één buffer.
+//! Kernel-friendly: [`write_boot_disk`] **streams** via a callback (≤ 4 KiB
+//! per chunk) so the kernel never has to hold the whole disk in RAM — only
+//! the ESP (≈ 40 MiB) briefly exists as a single buffer.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -13,21 +13,21 @@ use alloc::vec::Vec;
 use crate::FatFs;
 
 const SECTOR: usize = 512;
-const ESP_FIRST_LBA: u64 = 2048; // 1 MiB-uitlijning
+const ESP_FIRST_LBA: u64 = 2048; // 1 MiB alignment
 const ENTRY_LBA: u64 = 2;
 const NUM_ENTRIES: u32 = 128;
 const ENTRY_SIZE: u32 = 128;
-const ESP_MIN_BYTES: u64 = 40 * 1024 * 1024; // ruim ≥ FAT32-minimum (≈34 MiB)
-const CHUNK: usize = 4096; // virtio-blk DATA_MAX (8 sectoren)
+const ESP_MIN_BYTES: u64 = 40 * 1024 * 1024; // comfortably ≥ FAT32 minimum (≈34 MiB)
+const CHUNK: usize = 4096; // virtio-blk DATA_MAX (8 sectors)
 
-/// Type-GUID van een EFI System Partition (C12A7328-F81F-11D2-BA4B-00A0C93EC93B),
-/// in GPT-byte-volgorde (eerste 3 velden little-endian, laatste 2 big-endian).
+/// Type GUID of an EFI System Partition (C12A7328-F81F-11D2-BA4B-00A0C93EC93B),
+/// in GPT byte order (first 3 fields little-endian, last 2 big-endian).
 const ESP_TYPE: [u8; 16] = [
     0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
 ];
 
-/// Eigen EuroFS-partitietype — MOET gelijk zijn aan `kernel::gpt::EUROFS_TYPE`,
-/// anders vindt de kernel de rootpartitie niet (`find_eurofs_partition`).
+/// Own EuroFS partition type — MUST equal `kernel::gpt::EUROFS_TYPE`,
+/// otherwise the kernel will not find the root partition (`find_eurofs_partition`).
 const EUROFS_TYPE: [u8; 16] = [
     0x45, 0x55, 0x52, 0x4f, 0x46, 0x53, 0x00, 0x01, 0x80, 0x00, 0x00, 0x45, 0x55, 0x52, 0x4f, 0x53,
 ];
@@ -47,7 +47,7 @@ fn align8(x: u64) -> u64 {
     (x + 7) & !7
 }
 
-/// De partities in de geassembleerde schijf.
+/// The partitions in the assembled disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Layout {
     pub esp_first: u64,
@@ -57,7 +57,7 @@ pub struct Layout {
     pub backup_lba: u64,
 }
 
-/// Bereken de partitie-layout voor een schijf van `total_sectors`.
+/// Compute the partition layout for a disk of `total_sectors`.
 pub fn layout_for(total_sectors: u64) -> Layout {
     let last_usable = total_sectors.saturating_sub(34);
     let esp_sectors = align8(ESP_MIN_BYTES / SECTOR as u64);
@@ -123,13 +123,13 @@ fn gpt_header(primary: bool, total_sectors: u64, last_usable: u64, arr_crc: u32)
     hdr
 }
 
-/// Bouw alleen de FAT32-ESP (loader + A/B-kernel) als één buffer.
+/// Build only the FAT32 ESP (loader + A/B kernel) as a single buffer.
 pub fn build_esp(esp_sectors: u64, volume_id: u32, loader: &[u8], kernel_a: &[u8], kernel_b: &[u8]) -> Vec<u8> {
     build_esp_cfg(esp_sectors, volume_id, loader, kernel_a, kernel_b, &[])
 }
 
-/// Zoals [`build_esp`], maar voegt een `\slot_config`-bestand toe (de A/B-loader
-/// leest het om het te-booten slot te kiezen). Leeg = geen slot_config.
+/// Like [`build_esp`], but adds a `\slot_config` file (the A/B loader
+/// reads it to choose the slot to boot). Empty = no slot_config.
 pub fn build_esp_cfg(esp_sectors: u64, volume_id: u32, loader: &[u8], kernel_a: &[u8], kernel_b: &[u8], slot_config: &[u8]) -> Vec<u8> {
     let mut esp = FatFs::new(esp_sectors as u32, volume_id, "EUROKERNEL");
     esp.add_file("/EFI/BOOT/BOOTX64.EFI", loader);
@@ -141,10 +141,10 @@ pub fn build_esp_cfg(esp_sectors: u64, volume_id: u32, loader: &[u8], kernel_a: 
     esp.build()
 }
 
-/// **Streamende** schrijver: bouw een bootbare schijf en lever ze in stukken
-/// (≤ 4 KiB, LBA-uitgelijnd) aan `write(lba, bytes)`. De kernel verbindt dit met
-/// `virtio_blk::write_io_dev`. Materialiseert NOOIT de hele schijf — alleen de ESP.
-/// De EuroFS-partitie blijft ongeschreven (blank → de kernel formatteert bij boot).
+/// **Streaming** writer: build a bootable disk and deliver it in chunks
+/// (≤ 4 KiB, LBA-aligned) to `write(lba, bytes)`. The kernel connects this to
+/// `virtio_blk::write_io_dev`. NEVER materializes the whole disk — only the ESP.
+/// The EuroFS partition stays unwritten (blank → the kernel formats it at boot).
 pub fn write_boot_disk<W: FnMut(u64, &[u8])>(
     total_sectors: u64,
     volume_id: u32,
@@ -168,29 +168,29 @@ pub fn write_boot_disk<W: FnMut(u64, &[u8])>(
     mbr[511] = 0xAA;
     write(0, &mbr);
 
-    // ── Primaire GPT-header (LBA1) + array (LBA2..) ──
+    // ── Primary GPT header (LBA1) + array (LBA2..) ──
     write(1, &gpt_header(true, total_sectors, last_usable, arr_crc));
     write_blob(ENTRY_LBA, &arr, &mut write);
 
-    // ── ESP (FAT32, incl. optioneel slot_config) gestreamd naar zijn LBA ──
+    // ── ESP (FAT32, incl. optional slot_config) streamed to its LBA ──
     let esp = build_esp_cfg(layout.esp_sectors, volume_id, loader, kernel_a, kernel_b, slot_config);
     write_blob(layout.esp_first, &esp, &mut write);
     drop(esp);
 
-    // ── Eerste sectoren van de EuroFS-partitie nullen (forceer verse format) ──
+    // ── Zero the first sectors of the EuroFS partition (force a fresh format) ──
     let zeros = [0u8; CHUNK];
     for s in 0..16u64 {
         write(layout.eurofs_first + s * 8, &zeros);
     }
 
-    // ── Backup-GPT: array op last_usable+1.., header op laatste sector ──
+    // ── Backup GPT: array at last_usable+1.., header at the last sector ──
     write_blob(last_usable + 1, &arr, &mut write);
     write(layout.backup_lba, &gpt_header(false, total_sectors, last_usable, arr_crc));
 
     layout
 }
 
-/// Schrijf `data` vanaf `start_lba` in stukken van ≤ 4 KiB (8 sectoren).
+/// Write `data` starting at `start_lba` in chunks of ≤ 4 KiB (8 sectors).
 fn write_blob<W: FnMut(u64, &[u8])>(start_lba: u64, data: &[u8], write: &mut W) {
     let mut lba = start_lba;
     for c in data.chunks(CHUNK) {
@@ -199,7 +199,7 @@ fn write_blob<W: FnMut(u64, &[u8])>(start_lba: u64, data: &[u8], write: &mut W) 
     }
 }
 
-/// Host-gemak: assembleer de hele schijf in geheugen (voor validatie + tests).
+/// Host convenience: assemble the whole disk in memory (for validation + tests).
 pub fn build_boot_disk(
     total_sectors: u64,
     volume_id: u32,
@@ -229,10 +229,10 @@ mod tests {
         assert_eq!(img.len(), total as usize * SECTOR);
         assert_eq!(img[450], 0xEE);
         assert_eq!(&img[SECTOR..SECTOR + 8], b"EFI PART");
-        // Backup-GPT-handtekening achteraan.
+        // Backup GPT signature at the end.
         let bak = layout.backup_lba as usize * SECTOR;
         assert_eq!(&img[bak..bak + 8], b"EFI PART");
-        // De ESP is een geldige FAT32 met de drie bestanden.
+        // The ESP is a valid FAT32 with the three files.
         let esp_off = layout.esp_first as usize * SECTOR;
         let esp = &img[esp_off..esp_off + layout.esp_sectors as usize * SECTOR];
         assert_eq!(crate::read_file(esp, "/EFI/BOOT/BOOTX64.EFI"), Some(loader));
@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn streaming_matches_inmemory() {
-        // De streamende schrijver en de in-memory build moeten identiek zijn.
+        // The streaming writer and the in-memory build must be identical.
         let total = 256 * 1024 * 1024 / SECTOR as u64;
         let (img, _l) = build_boot_disk(total, 7, &[1, 2, 3], &[4; 1000], &[5; 1000]);
         let mut streamed = vec![0u8; total as usize * SECTOR];

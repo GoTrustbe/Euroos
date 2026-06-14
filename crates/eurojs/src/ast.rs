@@ -1,4 +1,4 @@
-//! EuroJS abstracte syntaxboom.
+//! EuroJS abstract syntax tree.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -41,9 +41,9 @@ pub enum Expr {
     Call(Box<Expr>, Vec<Expr>),
     Member(Box<Expr>, String),
     Index(Box<Expr>, Box<Expr>),
-    /// Functie-expressie / arrow: params + body.
+    /// Function expression / arrow: params + body.
     Func(Vec<String>, Vec<Stmt>),
-    /// Pre-increment/decrement op een lvalue (`++x`, `--x`).
+    /// Pre-increment/decrement on an lvalue (`++x`, `--x`).
     Update(bool, Box<Expr>),
 }
 

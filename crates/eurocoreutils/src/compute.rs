@@ -1,14 +1,14 @@
-//! Reken- & control-commando's (CU-7): `printf · expr · test`/`[` · `numfmt · factor`.
-//! Allemaal pure functies: `fn(args[, input]) -> Vec<u8>` of `-> (Vec<u8>, i32)`
-//! waar de exit-code telt (test/`[`). Host-getest tegen de verwachte GNU-uitvoer.
+//! Compute & control commands (CU-7): `printf · expr · test`/`[` · `numfmt · factor`.
+//! All pure functions: `fn(args[, input]) -> Vec<u8>` or `-> (Vec<u8>, i32)`
+//! where the exit code matters (test/`[`). Host-tested against the expected GNU output.
 
 use crate::args::Args;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// `printf FORMAT [ARGS...]` — C-achtige opmaak. Ondersteunt `%s %d %i %x %X %o
-/// %c %%` + breedte (`%5s`, `%-5s`, `%05d`) en backslash-escapes (`\n \t \\` …).
-/// Argumenten worden cyclisch hergebruikt zolang het format ze consumeert (GNU).
+/// `printf FORMAT [ARGS...]` — C-like formatting. Supports `%s %d %i %x %X %o
+/// %c %%` + width (`%5s`, `%-5s`, `%05d`) and backslash escapes (`\n \t \\` …).
+/// Arguments are reused cyclically as long as the format consumes them (GNU).
 pub fn printf(args: &[&str]) -> Vec<u8> {
     if args.is_empty() {
         return Vec::new();
@@ -17,11 +17,11 @@ pub fn printf(args: &[&str]) -> Vec<u8> {
     let rest = &args[1..];
     let mut out = Vec::new();
     let mut ai = 0usize;
-    // Bij ≥1 conversie blijft GNU het format herhalen tot de args op zijn.
+    // With ≥1 conversion GNU keeps repeating the format until the args run out.
     loop {
         let consumed_before = ai;
         apply_format(format, rest, &mut ai, &mut out);
-        // Stop als er geen args meer geconsumeerd zijn (geen conversies of klaar).
+        // Stop when no more args were consumed (no conversions or done).
         if ai >= rest.len() || ai == consumed_before {
             break;
         }
@@ -51,7 +51,7 @@ fn apply_format(format: &str, args: &[&str], ai: &mut usize, out: &mut Vec<u8>) 
                 i += 1;
             }
             b'%' if i + 1 < b.len() => {
-                // Lees de conversie-specificatie: %[-][0][width]<conv>
+                // Read the conversion specification: %[-][0][width]<conv>
                 let start = i;
                 i += 1;
                 if b[i] == b'%' {
@@ -75,7 +75,7 @@ fn apply_format(format: &str, args: &[&str], ai: &mut usize, out: &mut Vec<u8>) 
                     i += 1;
                 }
                 if i >= b.len() {
-                    // Onvolledige spec → letterlijk.
+                    // Incomplete spec → literal.
                     out.extend_from_slice(&b[start..]);
                     return;
                 }
@@ -125,10 +125,10 @@ fn pad(s: &str, width: usize, left: bool, zero: bool, out: &mut Vec<u8>) {
     }
 }
 
-/// `expr` — evalueer een eenvoudige rekenkundige/vergelijkende expressie.
-/// Ondersteunt `+ - * / %` met `*`/`/`/`%`-precedentie en haakjes; vergelijkingen
-/// `= != < <= > >=` (1/0); `length STR`. Geeft `(uitvoer, exit-code)`: exit 0 als
-/// het resultaat niet-nul/niet-leeg is, anders 1 (GNU-semantiek).
+/// `expr` — evaluate a simple arithmetic/comparison expression.
+/// Supports `+ - * / %` with `*`/`/`/`%` precedence and parentheses; comparisons
+/// `= != < <= > >=` (1/0); `length STR`. Returns `(output, exit-code)`: exit 0 if
+/// the result is non-zero/non-empty, otherwise 1 (GNU semantics).
 pub fn expr(args: &[&str]) -> (Vec<u8>, i32) {
     if args.len() == 2 && args[0] == "length" {
         let n = args[1].chars().count() as i64;
@@ -137,7 +137,7 @@ pub fn expr(args: &[&str]) -> (Vec<u8>, i32) {
     let mut p = ExprParser { toks: args, pos: 0 };
     match p.parse_cmp() {
         Some(v) if p.pos == args.len() => num_result(v),
-        _ => (b"expr: syntaxfout\n".to_vec(), 2),
+        _ => (b"expr: syntax error\n".to_vec(), 2),
     }
 }
 
@@ -192,7 +192,7 @@ impl<'a> ExprParser<'a> {
             }
             self.pos += 1;
             let right = self.parse_mul()?;
-            // Verzadigend i.p.v. overlopend (audit M3): geen panic op grote args.
+            // Saturating instead of overflowing (audit M3): no panic on large args.
             left = if op == "+" { left.saturating_add(right) } else { left.saturating_sub(right) };
         }
         Some(left)
@@ -228,22 +228,22 @@ impl<'a> ExprParser<'a> {
     }
 }
 
-/// `test EXPR` / `[ EXPR ]` — POSIX-conditie. Geeft enkel een exit-code (0=waar).
-/// Ondersteunt string (`-z -n = !=`), integer (`-eq -ne -lt -le -gt -ge`), en de
-/// unaire `!`-negatie. (Bestands-tests zoals `-f`/`-d` doet de shell zelf.)
+/// `test EXPR` / `[ EXPR ]` — POSIX condition. Returns only an exit code (0=true).
+/// Supports string (`-z -n = !=`), integer (`-eq -ne -lt -le -gt -ge`), and the
+/// unary `!` negation. (File tests like `-f`/`-d` are handled by the shell itself.)
 pub fn test(args: &[&str]) -> i32 {
-    // `[ ... ]`: laatste `]` weghalen.
+    // `[ ... ]`: strip the trailing `]`.
     let mut a = args;
     if a.last() == Some(&"]") {
         a = &a[..a.len() - 1];
     }
-    // Algemene `! EXPR`-negatie (geldt voor elke lengte ≥ 2).
+    // General `! EXPR` negation (applies to any length ≥ 2).
     if a.len() >= 2 && a[0] == "!" {
         return (test(&a[1..]) == 0) as i32;
     }
     match a.len() {
         0 => 1,
-        1 => (!a[0].is_empty()) as i32 ^ 1, // niet-lege string = waar(0)
+        1 => (!a[0].is_empty()) as i32 ^ 1, // non-empty string = true(0)
         2 => {
             let r = match a[0] {
                 "-z" => a[1].is_empty(),
@@ -279,8 +279,8 @@ fn int_cmp(l: &str, r: &str, f: impl Fn(i64, i64) -> bool) -> bool {
     }
 }
 
-/// `numfmt --to=iec N` — maak een getal mensvriendelijk (IEC: K/M/G/T op 1024).
-/// Met `--to=si` op 1000. Zonder `--to` echo't het de invoer.
+/// `numfmt --to=iec N` — make a number human-friendly (IEC: K/M/G/T on 1024).
+/// With `--to=si` on 1000. Without `--to` it echoes the input.
 pub fn numfmt(args: &[&str]) -> Vec<u8> {
     let a = Args::parse(args, &[]);
     let to = a
@@ -315,21 +315,21 @@ fn human(mut v: f64, base: f64) -> String {
         v /= base;
         u += 1;
     }
-    // GNU rondt naar boven op 1 decimaal voor <10, anders heel getal.
+    // GNU rounds up to 1 decimal for <10, otherwise a whole number.
     if u == 0 {
         return alloc::format!("{}", v as i64);
     }
-    let scaled = (v * 10.0 + 0.5) as i64; // 1 decimaal, afgerond
+    let scaled = (v * 10.0 + 0.5) as i64; // 1 decimal, rounded
     let whole = scaled / 10;
     let frac = scaled % 10;
     if whole < 10 {
-        alloc::format!("{whole}.{frac}{}", UNITS[u]) // GNU toont altijd 1 decimaal < 10
+        alloc::format!("{whole}.{frac}{}", UNITS[u]) // GNU always shows 1 decimal < 10
     } else {
         alloc::format!("{}{}", scaled / 10, UNITS[u])
     }
 }
 
-/// `factor N...` — priemfactorisatie, GNU-formaat `N: p p q`.
+/// `factor N...` — prime factorization, GNU format `N: p p q`.
 pub fn factor(args: &[&str]) -> Vec<u8> {
     let mut out = Vec::new();
     for tok in args {
@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn printf_recycles_args() {
-        // GNU herhaalt het format tot de args op zijn.
+        // GNU repeats the format until the args run out.
         assert_eq!(s(printf(&["[%s]", "a", "b", "c"])), "[a][b][c]");
     }
 
@@ -386,7 +386,7 @@ mod tests {
     fn expr_arith() {
         assert_eq!(s(expr(&["2", "+", "3", "*", "4"]).0), "14\n");
         assert_eq!(s(expr(&["(", "2", "+", "3", ")", "*", "4"]).0), "20\n");
-        assert_eq!(expr(&["5", "-", "5"]).1, 1); // resultaat 0 → exit 1
+        assert_eq!(expr(&["5", "-", "5"]).1, 1); // result 0 → exit 1
         assert_eq!(s(expr(&["10", "%", "3"]).0), "1\n");
         assert_eq!(s(expr(&["3", "<", "5"]).0), "1\n");
         assert_eq!(s(expr(&["length", "hallo"]).0), "5\n");
@@ -400,7 +400,7 @@ mod tests {
         assert_eq!(test(&["abc", "=", "xyz"]), 1);
         assert_eq!(test(&["5", "-gt", "3"]), 0);
         assert_eq!(test(&["5", "-lt", "3"]), 1);
-        assert_eq!(test(&["5", "-eq", "5", "]"]), 0); // `[ ... ]`-vorm
+        assert_eq!(test(&["5", "-eq", "5", "]"]), 0); // `[ ... ]` form
         assert_eq!(test(&["!", "x", "=", "y"]), 0);
     }
 

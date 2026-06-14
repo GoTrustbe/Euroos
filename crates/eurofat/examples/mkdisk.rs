@@ -1,6 +1,6 @@
-//! Host-validatie: assembleer een VOLLEDIGE bootbare schijf uit de echte
-//! build-binaries (loader.efi + eurokernel.efi) en schrijf hem naar /tmp/disk2.img,
-//! zodat sgdisk/fsck/mtools — en QEMU zelf — hem kunnen verifiëren.
+//! Host validation: assemble a COMPLETE bootable disk from the real
+//! build binaries (loader.efi + eurokernel.efi) and write it to /tmp/disk2.img,
+//! so that sgdisk/fsck/mtools — and QEMU itself — can verify it.
 
 fn main() {
     let dir = "target/x86_64-unknown-uefi/release";
@@ -18,7 +18,7 @@ fn main() {
         layout.esp_sectors * 512 / 1024 / 1024,
         layout.eurofs_first
     );
-    // ESP los wegschrijven zodat fsck/mtools hem direct kunnen checken.
+    // Write the ESP out separately so fsck/mtools can check it directly.
     let off = layout.esp_first as usize * 512;
     let esp = &img[off..off + layout.esp_sectors as usize * 512];
     std::fs::write("/tmp/disk2-esp.img", esp).unwrap();

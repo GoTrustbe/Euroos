@@ -1,11 +1,11 @@
-//! EuroShot — de schermafbeelding-tool van EuroOS (Sprint AC-1).
+//! EuroShot — the screenshot tool of EuroOS (Sprint AC-1).
 //!
-//! De pure kern achter de screenshot-app: **regio-geometrie** (volledig scherm,
-//! venster of selectie, met clamping), **annotaties** (pijl, kader, markering,
-//! tekst), en — de soevereine sleutel — een **canoniek manifest** dat met Ed25519
-//! ondertekend kan worden zodat een screenshot bewijsbaar ongewijzigd is ("gemaakt
-//! op <ts>, <b>×<h>, inhoudshash …"). De kernel levert de pixels + de handtekening;
-//! deze crate blijft crypto-vrij en host-testbaar.
+//! The pure core behind the screenshot app: **region geometry** (full screen,
+//! window or selection, with clamping), **annotations** (arrow, box, highlight,
+//! text), and — the sovereign key — a **canonical manifest** that can be signed
+//! with Ed25519 so a screenshot is provably unchanged ("taken
+//! at <ts>, <w>×<h>, content hash …"). The kernel provides the pixels + the signature;
+//! this crate stays crypto-free and host-testable.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -15,7 +15,7 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// Een rechthoekige regio in schermpixels.
+/// A rectangular region in screen pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Region {
     pub x: u32,
@@ -28,7 +28,7 @@ impl Region {
     pub fn new(x: u32, y: u32, w: u32, h: u32) -> Self {
         Region { x, y, w, h }
     }
-    /// Klem de regio binnen het scherm (`sw`×`sh`).
+    /// Clamp the region within the screen (`sw`×`sh`).
     pub fn clamp_to(self, sw: u32, sh: u32) -> Region {
         let x = self.x.min(sw);
         let y = self.y.min(sh);
@@ -42,7 +42,7 @@ impl Region {
     }
 }
 
-/// Wat er vastgelegd wordt.
+/// What gets captured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
     FullScreen,
@@ -50,7 +50,7 @@ pub enum Target {
     Region,
 }
 
-/// Bepaal de uiteindelijke (geklemde) regio voor een opname.
+/// Determine the final (clamped) region for a capture.
 pub fn capture_region(target: Target, sel: Region, screen_w: u32, screen_h: u32) -> Region {
     match target {
         Target::FullScreen => Region::new(0, 0, screen_w, screen_h),
@@ -58,7 +58,7 @@ pub fn capture_region(target: Target, sel: Region, screen_w: u32, screen_h: u32)
     }
 }
 
-/// Het soort annotatie.
+/// The kind of annotation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnotKind {
     Arrow,
@@ -67,7 +67,7 @@ pub enum AnnotKind {
     Text,
 }
 
-/// Eén annotatie op een screenshot.
+/// One annotation on a screenshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Annotation {
     pub kind: AnnotKind,
@@ -91,26 +91,26 @@ impl Annotation {
     }
 }
 
-/// Het manifest van een screenshot — het canoniek-ondertekenbare bewijs.
+/// The manifest of a screenshot — the canonically-signable proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShotManifest {
     pub width: u32,
     pub height: u32,
-    /// Tijdstip van opname (unix-seconden).
+    /// Time of capture (unix seconds).
     pub taken_at: u64,
-    /// Inhoudshash van de pixels (FNV-1a-64) — wijzigt de afbeelding → wijzigt de hash.
+    /// Content hash of the pixels (FNV-1a-64) — change the image → change the hash.
     pub content_hash: u64,
     pub annotated: bool,
 }
 
 impl ShotManifest {
-    /// Bouw een manifest uit de pixel-bytes (RGBA of QOI — wat de aanroeper hasht).
+    /// Build a manifest from the pixel bytes (RGBA or QOI — whatever the caller hashes).
     pub fn from_pixels(width: u32, height: u32, taken_at: u64, pixels: &[u8], annotated: bool) -> Self {
         ShotManifest { width, height, taken_at, content_hash: fnv1a_64(pixels), annotated }
     }
 
-    /// De **canonieke bytes** die ondertekend worden (Ed25519). Deterministisch en
-    /// stabiel formaat zodat verificatie elders exact reproduceerbaar is.
+    /// The **canonical bytes** that get signed (Ed25519). Deterministic and
+    /// stable format so verification elsewhere is exactly reproducible.
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut s = String::new();
         s.push_str("EuroShot-v1\n");
@@ -121,21 +121,21 @@ impl ShotManifest {
         s.into_bytes()
     }
 
-    /// Mensvriendelijke samenvatting (voor de eigenschappen-weergave).
+    /// Human-friendly summary (for the properties view).
     pub fn summary(&self) -> String {
         alloc::format!(
-            "{}×{} \u{00B7} gemaakt op {} \u{00B7} hash {:016x}{}",
+            "{}×{} \u{00B7} taken at {} \u{00B7} hash {:016x}{}",
             self.width,
             self.height,
             self.taken_at,
             self.content_hash,
-            if self.annotated { " \u{00B7} geannoteerd" } else { "" }
+            if self.annotated { " \u{00B7} annotated" } else { "" }
         )
     }
 }
 
-/// FNV-1a 64-bit hash — klein, snel, geen afhankelijkheden (geen crypto-claim;
-/// de integriteit komt van de Ed25519-handtekening over [`ShotManifest::canonical_bytes`]).
+/// FNV-1a 64-bit hash — small, fast, no dependencies (no crypto claim;
+/// the integrity comes from the Ed25519 signature over [`ShotManifest::canonical_bytes`]).
 pub fn fnv1a_64(data: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for &b in data {
@@ -169,7 +169,7 @@ mod tests {
         let a = ShotManifest::from_pixels(4, 4, 1000, &[1, 2, 3, 4], false);
         let b = ShotManifest::from_pixels(4, 4, 1000, &[1, 2, 3, 5], false);
         assert_ne!(a.content_hash, b.content_hash);
-        // Zelfde pixels + meta → zelfde manifest (deterministisch).
+        // Same pixels + meta → same manifest (deterministic).
         let c = ShotManifest::from_pixels(4, 4, 1000, &[1, 2, 3, 4], false);
         assert_eq!(a, c);
     }
@@ -183,7 +183,7 @@ mod tests {
         assert!(s.contains("size=1920x1080\n"));
         assert!(s.contains("taken_at=1700000000\n"));
         assert!(s.contains("annotated=true\n"));
-        // Tampering met de afbeelding wijzigt de payload → handtekening ongeldig.
+        // Tampering with the image changes the payload → signature invalid.
         let m2 = ShotManifest::from_pixels(1920, 1080, 1_700_000_000, b"PIXELS", true);
         assert_ne!(m.canonical_bytes(), m2.canonical_bytes());
     }
@@ -192,16 +192,16 @@ mod tests {
     fn annotations_build() {
         let a = Annotation::arrow(0, 0, 10, 10, 0xFF0000);
         assert_eq!(a.kind, AnnotKind::Arrow);
-        let t = Annotation::label(5, 5, "Let op", 0x000000);
+        let t = Annotation::label(5, 5, "Note", 0x000000);
         assert_eq!(t.kind, AnnotKind::Text);
-        assert_eq!(t.text, "Let op");
+        assert_eq!(t.text, "Note");
     }
 
     #[test]
     fn fnv_known_vector() {
-        // FNV-1a van de lege invoer = de offset basis.
+        // FNV-1a of the empty input = the offset basis.
         assert_eq!(fnv1a_64(b""), 0xcbf29ce484222325);
-        // Stabiel over aanroepen.
+        // Stable across calls.
         assert_eq!(fnv1a_64(b"EuroOS"), fnv1a_64(b"EuroOS"));
     }
 }

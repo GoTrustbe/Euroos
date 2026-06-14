@@ -1,8 +1,8 @@
-/* EuroOS — programma dat zijn INITIËLE STACK leest: argc, argv[], envp[] en de
- * auxiliary vector (auxv). Dit is het SysV-x86-64 proces-entry-contract dat een
- * echte musl/glibc `_start` van de kernel verwacht. Bewijst dat EuroKernel een
- * conforme stack opbouwt — de andere helft (naast de syscall-ABI) van het
- * draaien van ongewijzigde Linux-binaries. */
+/* EuroOS — program that reads its INITIAL STACK: argc, argv[], envp[] and the
+ * auxiliary vector (auxv). This is the SysV-x86-64 process-entry contract that a
+ * real musl/glibc `_start` expects from the kernel. Proves that EuroKernel builds
+ * a conforming stack — the other half (besides the syscall ABI) of
+ * running unmodified Linux binaries. */
 
 static long sys(long n, long a1, long a2, long a3) {
     long ret;
@@ -21,8 +21,8 @@ static char *utoa(unsigned long v, char *end) {
     return p;
 }
 
-/* _start zonder prologue: pak rsp (wijst naar argc) vóór elke stackmanipulatie
- * en geef het door aan real_start. */
+/* _start without prologue: grab rsp (points to argc) before any stack manipulation
+ * and pass it to real_start. */
 __asm__(".section .text.start\n"
         ".globl _start\n"
         "_start:\n"
@@ -40,17 +40,17 @@ void real_start(unsigned long *sp) {
     char **argv = (char **)(sp + 1);
     char **envp = argv + argc + 1;
 
-    put("SysV-stack gelezen door het proces:\n");
+    put("SysV stack read by the process:\n");
     put("  argc = "); put(utoa(argc, nb + 23)); put("\n");
     put("  argv[0] = "); put(argv[0] ? argv[0] : "(null)"); put("\n");
 
-    /* envp doorlopen tot de NULL-terminator, dan begint auxv. */
+    /* walk envp to the NULL terminator, then auxv begins. */
     char **e = envp;
     unsigned long envc = 0;
     while (*e) { e++; envc++; }
     put("  envc = "); put(utoa(envc, nb + 23)); put("\n");
 
-    /* auxv: paren (type, waarde) tot AT_NULL. */
+    /* auxv: pairs (type, value) until AT_NULL. */
     unsigned long *aux = (unsigned long *)(e + 1);
     unsigned long pagesz = 0, *rnd = 0;
     for (; aux[0] != AT_NULL; aux += 2) {

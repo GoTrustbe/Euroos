@@ -1,10 +1,10 @@
-//! De agent-uitvoeringslus (Sprint AA, stap 5) — het hart van de runtime.
+//! The agent execution loop (Sprint AA, step 5) — the heart of the runtime.
 //!
-//! Deterministisch en auditeerbaar: gegeven een gebruikers-intent draait de lus
-//! `model → (tool-call → MCP-gateway → resultaat → model)* → eindantwoord`. Elke
-//! tool-aanroep gaat door de [`McpGateway`] (capability-gate + P3-audit), dus de
-//! lus kan een agent nooit meer laten doen dan zijn `AgentCaps` toestaan. De LLM
-//! zit achter de [`LlmBackend`]-trait — host-getest met een gescript mock-model.
+//! Deterministic and auditable: given a user intent the loop runs
+//! `model → (tool-call → MCP-gateway → result → model)* → final answer`. Each
+//! tool call passes through the [`McpGateway`] (capability gate + P3 audit), so the
+//! loop can never let an agent do more than its `AgentCaps` allow. The LLM
+//! sits behind the [`LlmBackend`] trait — host-tested with a scripted mock model.
 
 use crate::caps::AgentCaps;
 use crate::json::Json;
@@ -14,30 +14,30 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// Het resultaat van een volledige agent-run.
+/// The result of a full agent run.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentRun {
-    /// Het eindantwoord van het model.
+    /// The model's final answer.
     pub answer: String,
-    /// Het aantal tool-aanroepen dat onderweg gedaan is.
+    /// The number of tool calls made along the way.
     pub tool_calls: usize,
-    /// Hoeveel daarvan door de capability-gate geweigerd zijn.
+    /// How many of those were denied by the capability gate.
     pub denied: usize,
-    /// Bereikt de lus de step-limiet zonder eindantwoord?
+    /// Did the loop reach the step limit without a final answer?
     pub truncated: bool,
-    /// Per-stap transcript (voor de live audit-weergave in de dispatch-GUI):
-    /// elke tool-aanroep + of de capability-gate ze toestond of weigerde.
+    /// Per-step transcript (for the live audit view in the dispatch GUI):
+    /// each tool call + whether the capability gate allowed or denied it.
     pub log: Vec<String>,
 }
 
-/// Draai de agent-lus tot een eindantwoord of tot `max_steps` bereikt is.
+/// Run the agent loop until a final answer or until `max_steps` is reached.
 ///
-/// - `name`     — agent-identiteit (voor de audit-trail);
-/// - `caps`     — de effectieve capability-set (gate voor elke tool);
-/// - `llm`      — het taalmodel;
-/// - `gateway`  — de MCP-gateway (cap-gate + audit);
-/// - `tools`    — de backend die geautoriseerde tools uitvoert;
-/// - `messages` — de start-conversatie (system + user-intent).
+/// - `name`     — agent identity (for the audit trail);
+/// - `caps`     — the effective capability set (gate for each tool);
+/// - `llm`      — the language model;
+/// - `gateway`  — the MCP gateway (cap gate + audit);
+/// - `tools`    — the backend that executes authorized tools;
+/// - `messages` — the starting conversation (system + user intent).
 pub fn run(
     name: &str,
     caps: AgentCaps,
@@ -60,17 +60,17 @@ pub fn run(
             }
             LlmResponse::ToolCall { name: tool, arguments } => {
                 tool_calls += 1;
-                // Voer de tool uit via de gateway (cap-gate + audit) als JSON-RPC.
+                // Execute the tool via the gateway (cap gate + audit) as JSON-RPC.
                 let req = jsonrpc_call(&tool, &arguments, tool_calls as i64);
                 let raw = gateway.handle(name, caps, &req, tools);
                 let (content, was_denied) = summarize(&raw);
                 if was_denied {
                     denied += 1;
-                    log.push(alloc::format!("tool {tool} → GEWEIGERD door de capability-gate (toestemming vereist)"));
+                    log.push(alloc::format!("tool {tool} → DENIED by the capability gate (permission required)"));
                 } else {
-                    log.push(alloc::format!("tool {tool} → toegestaan, uitgevoerd, geaudit"));
+                    log.push(alloc::format!("tool {tool} → allowed, executed, audited"));
                 }
-                // Voer het resultaat terug naar het model.
+                // Feed the result back into the model.
                 messages.push(Message::new(Role::Assistant, alloc::format!("[tool {tool}]")));
                 messages.push(Message::new(Role::Tool, content));
             }
@@ -86,9 +86,9 @@ pub fn run(
     }
 }
 
-/// De namen van de tools die deze cap-set mag aanroepen.
+/// The names of the tools this cap set is allowed to call.
 fn gateway_tool_names(gateway: &McpGateway, caps: AgentCaps) -> Vec<&'static str> {
-    // `list_for` levert exact de zichtbare tools; haal de namen eruit.
+    // `list_for` returns exactly the visible tools; extract the names.
     match gateway.list_for(caps).get("tools") {
         Some(Json::Arr(items)) => items
             .iter()
@@ -99,7 +99,7 @@ fn gateway_tool_names(gateway: &McpGateway, caps: AgentCaps) -> Vec<&'static str
     }
 }
 
-/// Map een tool-naam naar zijn `'static`-variant (de gateway-tools zijn vast).
+/// Map a tool name to its `'static` variant (the gateway tools are fixed).
 fn static_name(n: &str) -> &'static str {
     for t in crate::mcp::builtin_tools() {
         if t.name == n {
@@ -125,8 +125,8 @@ fn jsonrpc_call(tool: &str, args: &Json, id: i64) -> String {
     .to_string()
 }
 
-/// Vat een JSON-RPC-antwoord samen tot tekst voor het model + of het een
-/// capability-weigering was.
+/// Summarize a JSON-RPC response into text for the model + whether it was a
+/// capability denial.
 fn summarize(raw: &str) -> (String, bool) {
     match Json::parse(raw) {
         Ok(v) => {
@@ -134,16 +134,16 @@ fn summarize(raw: &str) -> (String, bool) {
                 let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
                 let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("error");
                 (
-                    alloc::format!("FOUT: {msg}"),
+                    alloc::format!("ERROR: {msg}"),
                     code == crate::mcp::ERR_CAP_DENIED,
                 )
             } else if let Some(res) = v.get("result") {
                 (res.to_string(), false)
             } else {
-                (String::from("(leeg)"), false)
+                (String::from("(empty)"), false)
             }
         }
-        Err(_) => (String::from("(onleesbaar antwoord)"), false),
+        Err(_) => (String::from("(unreadable response)"), false),
     }
 }
 
@@ -152,20 +152,20 @@ mod tests {
     use super::*;
     use crate::caps::*;
 
-    /// Een gescript mock-model: doorloopt een vaste lijst antwoorden.
+    /// A scripted mock model: walks through a fixed list of answers.
     struct ScriptedLlm {
         script: Vec<LlmResponse>,
         idx: usize,
     }
     impl LlmBackend for ScriptedLlm {
         fn step(&mut self, _m: &[Message], _t: &[&str]) -> LlmResponse {
-            let r = self.script.get(self.idx).cloned().unwrap_or(LlmResponse::Text("(einde)".into()));
+            let r = self.script.get(self.idx).cloned().unwrap_or(LlmResponse::Text("(end)".into()));
             self.idx += 1;
             r
         }
     }
 
-    /// Tool-backend die een vast resultaat teruggeeft.
+    /// Tool backend that returns a fixed result.
     struct EchoTools;
     impl ToolBackend for EchoTools {
         fn execute(&mut self, _tool: &str, input: &Json) -> Result<Json, String> {
@@ -182,11 +182,11 @@ mod tests {
 
     #[test]
     fn loop_runs_tool_then_answers() {
-        // Model: roep fs_read aan, geef daarna een eindantwoord.
+        // Model: call fs_read, then give a final answer.
         let mut llm = ScriptedLlm {
             script: vec![
                 tool_call("fs_read", "path", "notes.txt"),
-                LlmResponse::Text("De notitie zegt: hallo.".to_string()),
+                LlmResponse::Text("The note says: hello.".to_string()),
             ],
             idx: 0,
         };
@@ -194,53 +194,53 @@ mod tests {
         let mut tools = EchoTools;
         let caps = AgentCaps(FS_READ);
         let run = run(
-            "assistent",
+            "assistant",
             caps,
             &mut llm,
             &mut gw,
             &mut tools,
-            vec![Message::user("wat staat er in notes.txt?")],
+            vec![Message::user("what is in notes.txt?")],
             8,
         );
-        assert_eq!(run.answer, "De notitie zegt: hallo.");
+        assert_eq!(run.answer, "The note says: hello.");
         assert_eq!(run.tool_calls, 1);
         assert_eq!(run.denied, 0);
         assert!(!run.truncated);
-        // De tool-aanroep is geauditeerd in de gateway.
+        // The tool call is audited in the gateway.
         assert_eq!(gw.audit.len(), 1);
         assert!(gw.audit[0].allowed);
     }
 
     #[test]
     fn capability_denied_is_recorded() {
-        // Model probeert exec zonder de EXEC-cap → geweigerd, dan geeft het op.
+        // Model tries exec without the EXEC cap → denied, then gives up.
         let mut llm = ScriptedLlm {
             script: vec![
                 tool_call("exec", "cmd", "rm -rf /"),
-                LlmResponse::Text("Mag niet, ik stop.".to_string()),
+                LlmResponse::Text("Not allowed, I'll stop.".to_string()),
             ],
             idx: 0,
         };
         let mut gw = McpGateway::new();
         let mut tools = EchoTools;
-        let caps = AgentCaps(FS_READ); // GEEN exec
-        let run = run("assistent", caps, &mut llm, &mut gw, &mut tools, vec![Message::user("verwijder alles")], 8);
+        let caps = AgentCaps(FS_READ); // NO exec
+        let run = run("assistant", caps, &mut llm, &mut gw, &mut tools, vec![Message::user("delete everything")], 8);
         assert_eq!(run.tool_calls, 1);
         assert_eq!(run.denied, 1);
-        assert_eq!(run.answer, "Mag niet, ik stop.");
+        assert_eq!(run.answer, "Not allowed, I'll stop.");
         assert!(!gw.audit[0].allowed);
     }
 
     #[test]
     fn loop_truncates_at_step_limit() {
-        // Model blijft eindeloos tools aanroepen → de lus kapt af.
+        // Model keeps calling tools forever → the loop truncates.
         let mut llm = ScriptedLlm {
             script: vec![tool_call("fs_read", "path", "a"); 20],
             idx: 0,
         };
         let mut gw = McpGateway::new();
         let mut tools = EchoTools;
-        let run = run("assistent", AgentCaps(FS_READ), &mut llm, &mut gw, &mut tools, vec![Message::user("loop")], 3);
+        let run = run("assistant", AgentCaps(FS_READ), &mut llm, &mut gw, &mut tools, vec![Message::user("loop")], 3);
         assert!(run.truncated);
         assert_eq!(run.tool_calls, 3);
         assert!(run.answer.is_empty());

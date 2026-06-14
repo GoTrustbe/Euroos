@@ -1,33 +1,33 @@
-//! X.509-ketenvalidatie (plan A1, fase 3): bind een door de server aangeboden
-//! certificaatketen aan een vertrouwde root, met geldigheids- en hostnaamcontrole.
-//! Een vereenvoudigde RFC 5280 §6.1-padvalidatie: naam-koppeling + handtekening
-//! per stap + basicConstraints(CA) op tussencertificaten + tijdvenster + SAN.
+//! X.509 chain validation (plan A1, phase 3): bind a server-offered
+//! certificate chain to a trusted root, with validity and hostname checks.
+//! A simplified RFC 5280 §6.1 path validation: name chaining + signature
+//! per step + basicConstraints(CA) on intermediate certificates + time window + SAN.
 //!
-//! Geen paniek op rommel; elke afwijking geeft een `ChainError`.
+//! No panic on garbage; every deviation yields a `ChainError`.
 
 use alloc::vec::Vec;
 
 use crate::sig;
 use crate::x509::{Certificate, PubKeyAlg, X509Error};
 
-/// Reden waarom een keten niet vertrouwd kon worden.
+/// Reason why a chain could not be trusted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChainError {
-    /// De keten was leeg.
+    /// The chain was empty.
     EmptyChain,
-    /// Een certificaat kon niet ontleed worden.
+    /// A certificate could not be parsed.
     Parse(X509Error),
-    /// Een certificaat is verlopen of nog niet geldig op het peilmoment.
+    /// A certificate is expired or not yet valid at the reference time.
     Expired,
-    /// De hostnaam matcht met geen enkele SubjectAltName-dNSName.
+    /// The hostname matches none of the SubjectAltName dNSNames.
     HostnameMismatch,
-    /// issuer (kind) ≠ subject (uitgever): de keten is niet aaneengesloten.
+    /// issuer (child) ≠ subject (issuer): the chain is not contiguous.
     BrokenChain,
-    /// Een uitgever in de keten is geen CA (basicConstraints CA:TRUE ontbreekt).
+    /// An issuer in the chain is not a CA (basicConstraints CA:TRUE missing).
     IssuerNotCa,
-    /// Een handtekening in de keten klopte niet.
+    /// A signature in the chain did not verify.
     BadSignature,
-    /// Geen van de ketenankerpunten zit in de trust store.
+    /// None of the chain anchor points is in the trust store.
     UnknownCa,
 }
 
@@ -37,15 +37,15 @@ impl From<X509Error> for ChainError {
     }
 }
 
-/// Een verzameling vertrouwde root-CA's. Leent de DER-bytes (`'a`), zodat de
-/// kernel een `'static` gebundelde EU/Mozilla-store kan aanbieden zonder kopie.
+/// A collection of trusted root CAs. Borrows the DER bytes (`'a`), so the
+/// kernel can offer a `'static` bundled EU/Mozilla store without a copy.
 pub struct TrustStore<'a> {
     roots: Vec<Certificate<'a>>,
 }
 
 impl<'a> TrustStore<'a> {
-    /// Bouw een trust store uit DER-gecodeerde root-certificaten. Onleesbare
-    /// roots worden overgeslagen (een kapotte bundel-entry sloopt de store niet).
+    /// Build a trust store from DER-encoded root certificates. Unreadable
+    /// roots are skipped (a broken bundle entry does not wreck the store).
     pub fn from_ders(ders: &[&'a [u8]]) -> Self {
         let mut roots = Vec::new();
         for der in ders {
@@ -63,33 +63,33 @@ impl<'a> TrustStore<'a> {
         self.roots.is_empty()
     }
 
-    /// Zoek een vertrouwde root waarvan de subject-naam gelijk is aan `issuer`.
+    /// Find a trusted root whose subject name equals `issuer`.
     fn find_issuer(&self, issuer: &[u8]) -> Option<&Certificate<'a>> {
         self.roots.iter().find(|r| r.subject_der == issuer)
     }
 }
 
-/// Validatieresultaat: het geverifieerde leaf-sleutelmateriaal, klaar om de
-/// server-handtekening in de TLS-handshake (CertificateVerify) mee te checken.
+/// Validation result: the verified leaf key material, ready to check the
+/// server signature in the TLS handshake (CertificateVerify).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verified {
     pub leaf_pubkey_alg: PubKeyAlg,
     pub leaf_pubkey: Vec<u8>,
 }
 
-/// Valideer een certificaatketen (leaf eerst, daarna tussencertificaten; de
-/// root hoort in de trust store, niet in de keten). `now` = epoch-seconden.
+/// Validate a certificate chain (leaf first, then intermediates; the
+/// root belongs in the trust store, not in the chain). `now` = epoch seconds.
 pub fn validate(chain_der: &[&[u8]], hostname: &str, now: i64, trust: &TrustStore) -> Result<Verified, ChainError> {
     if chain_der.is_empty() {
         return Err(ChainError::EmptyChain);
     }
-    // Ontleed de hele keten.
+    // Parse the entire chain.
     let mut certs: Vec<Certificate> = Vec::with_capacity(chain_der.len());
     for der in chain_der {
         certs.push(Certificate::parse(der)?);
     }
 
-    // Leaf: tijdvenster + hostnaam.
+    // Leaf: time window + hostname.
     let leaf = &certs[0];
     if !leaf.valid_at(now) {
         return Err(ChainError::Expired);
@@ -98,13 +98,13 @@ pub fn validate(chain_der: &[&[u8]], hostname: &str, now: i64, trust: &TrustStor
         return Err(ChainError::HostnameMismatch);
     }
 
-    // Loop door de keten en probeer bij elk certificaat te verankeren zodra zijn
-    // uitgever een vertrouwde root is. Zo kunnen extra cross-sign-certificaten die
-    // de server bovenop een al vertrouwde tussenroot stuurt, genegeerd worden
-    // (bv. ISRG Root X2 cross-signed door X1, terwijl X2 zelf al vertrouwd is).
+    // Loop through the chain and try to anchor at each certificate as soon as its
+    // issuer is a trusted root. This way extra cross-sign certificates that
+    // the server sends on top of an already trusted intermediate root can be ignored
+    // (e.g. ISRG Root X2 cross-signed by X1, while X2 itself is already trusted).
     for i in 0..certs.len() {
         let cert = &certs[i];
-        // Anker: is de uitgever van dit certificaat een vertrouwde root?
+        // Anchor: is the issuer of this certificate a trusted root?
         if let Some(root) = trust.find_issuer(cert.issuer_der) {
             if root.valid_at(now)
                 && sig::verify(cert.sig_alg, root.pubkey_alg, root.pubkey, cert.tbs_der, cert.signature)
@@ -115,10 +115,10 @@ pub fn validate(chain_der: &[&[u8]], hostname: &str, now: i64, trust: &TrustStor
                 });
             }
         }
-        // Anders: dit certificaat moet door het volgende in de keten ondertekend
-        // zijn, en dat volgende moet een geldige CA zijn.
+        // Otherwise: this certificate must be signed by the next one in the chain,
+        // and that next one must be a valid CA.
         if i + 1 >= certs.len() {
-            return Err(ChainError::UnknownCa); // geen anker gevonden
+            return Err(ChainError::UnknownCa); // no anchor found
         }
         let issuer = &certs[i + 1];
         if cert.issuer_der != issuer.subject_der {
@@ -145,7 +145,7 @@ mod tests {
     const EC_LEAF: &[u8] = include_bytes!("../testdata/ec_leaf.der");
     const RSA: &[u8] = include_bytes!("../testdata/rsa.der");
 
-    // Een peilmoment dat zeker binnen het geldigheidsvenster van de leaf valt.
+    // A reference time that surely falls within the validity window of the leaf.
     fn mid_validity() -> i64 {
         let leaf = Certificate::parse(EC_LEAF).unwrap();
         leaf.not_before + 100
@@ -157,7 +157,7 @@ mod tests {
         let v = validate(&[EC_LEAF], "example.test", mid_validity(), &trust).unwrap();
         assert_eq!(v.leaf_pubkey_alg, PubKeyAlg::EcP256);
         assert_eq!(v.leaf_pubkey.len(), 65);
-        // Ook de tweede SAN matcht.
+        // The second SAN matches too.
         assert!(validate(&[EC_LEAF], "www.example.test", mid_validity(), &trust).is_ok());
     }
 
@@ -186,14 +186,14 @@ mod tests {
 
     #[test]
     fn wrong_root_is_unknown_ca() {
-        // De leaf zelf als "root" → zijn subject ≠ de issuer-naam van de leaf.
+        // The leaf itself as "root" → its subject ≠ the issuer name of the leaf.
         let trust = TrustStore::from_ders(&[EC_LEAF]);
         assert_eq!(validate(&[EC_LEAF], "example.test", mid_validity(), &trust), Err(ChainError::UnknownCa));
     }
 
     #[test]
     fn self_signed_rsa_anchored_to_itself() {
-        // Een zelfondertekende cert die we expliciet vertrouwen valideert.
+        // A self-signed cert that we explicitly trust validates.
         let trust = TrustStore::from_ders(&[RSA]);
         let rsa = Certificate::parse(RSA).unwrap();
         let now = rsa.not_before + 100;
@@ -241,9 +241,9 @@ mod realworld_tests {
     fn transit_verifies_against_sslcom_root() {
         let root = Certificate::parse(SSLCOM_ROOT).unwrap();
         let transit = Certificate::parse(SSLCOM_TRANSIT).unwrap();
-        // De namen moeten koppelen.
+        // The names must chain.
         assert_eq!(transit.issuer_der, root.subject_der, "issuer != root subject");
-        // En de handtekening moet verifiëren.
+        // And the signature must verify.
         assert!(
             crate::sig::verify(transit.sig_alg, root.pubkey_alg, root.pubkey, transit.tbs_der, transit.signature),
             "transit signature did not verify against SSL.com root"

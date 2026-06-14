@@ -1,7 +1,7 @@
-//! TLS-recordlaag (RFC 8446 §5.1): TLSPlaintext/TLSCiphertext-framing. Een
+//! TLS record layer (RFC 8446 §5.1): TLSPlaintext/TLSCiphertext framing. A
 //! record is `type(1) || legacy_version(2)=0x0303 || length(2) || fragment`.
-//! In TLS 1.3 dragen versleutelde records buiten-type application_data(23); het
-//! echte content-type staat als laatste plaintext-byte vóór de AEAD-tag.
+//! In TLS 1.3 encrypted records carry the outer type application_data(23); the
+//! real content type is the last plaintext byte before the AEAD tag.
 
 use alloc::vec::Vec;
 
@@ -15,20 +15,20 @@ pub struct Record {
     pub fragment: Vec<u8>,
 }
 
-/// Maximale recordfragment-lengte (RFC 8446 §5.1): een TLSCiphertext mag niet
-/// groter zijn dan 2^14 + 256 bytes. Een server die een grotere lengte claimt,
-/// pleegt een protocolovertreding (`record_overflow`) en wordt geweigerd.
+/// Maximum record fragment length (RFC 8446 §5.1): a TLSCiphertext may not be
+/// larger than 2^14 + 256 bytes. A server claiming a larger length commits a
+/// protocol violation (`record_overflow`) and is rejected.
 pub const MAX_RECORD_LEN: usize = (1 << 14) + 256;
 
-/// Een record claimde een lengte > [`MAX_RECORD_LEN`] (RFC 8446 §5.1 `record_overflow`).
+/// A record claimed a length > [`MAX_RECORD_LEN`] (RFC 8446 §5.1 `record_overflow`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordOverflow;
 
-/// Probeer één volledig record uit `buf` te lezen.
-/// - `Ok(Some((record, n)))`: een volledig record van `n` verbruikte bytes;
-/// - `Ok(None)`: nog niet genoeg bytes (wacht op meer);
-/// - `Err(RecordOverflow)`: de geclaimde lengte overschrijdt `MAX_RECORD_LEN`
-///   (malformed) — geen reden om te wachten; de aanroeper breekt de verbinding af.
+/// Try to read one complete record from `buf`.
+/// - `Ok(Some((record, n)))`: a complete record consuming `n` bytes;
+/// - `Ok(None)`: not enough bytes yet (wait for more);
+/// - `Err(RecordOverflow)`: the claimed length exceeds `MAX_RECORD_LEN`
+///   (malformed) — no reason to wait; the caller terminates the connection.
 pub fn read_record(buf: &[u8]) -> Result<Option<(Record, usize)>, RecordOverflow> {
     if buf.len() < 5 {
         return Ok(None);
@@ -44,7 +44,7 @@ pub fn read_record(buf: &[u8]) -> Result<Option<(Record, usize)>, RecordOverflow
     Ok(Some((Record { ctype, fragment: buf[5..5 + len].to_vec() }, 5 + len)))
 }
 
-/// Bouw een platte (onversleutelde) record met de gegeven content-type.
+/// Build a plain (unencrypted) record with the given content type.
 pub fn build_record(ctype: u8, fragment: &[u8]) -> Vec<u8> {
     let mut r = Vec::with_capacity(5 + fragment.len());
     r.push(ctype);
@@ -54,8 +54,8 @@ pub fn build_record(ctype: u8, fragment: &[u8]) -> Vec<u8> {
     r
 }
 
-/// De 5-byte record-header die als AAD dient bij AEAD-records (buiten-type
-/// application_data, lengte = ciphertext incl. tag).
+/// The 5-byte record header that serves as AAD for AEAD records (outer type
+/// application_data, length = ciphertext incl. tag).
 pub fn aead_aad(ciphertext_len: usize) -> [u8; 5] {
     [
         CT_APPLICATION_DATA,
@@ -79,18 +79,18 @@ mod tests {
         assert_eq!(rec.ctype, CT_HANDSHAKE);
         assert_eq!(rec.fragment, b"hello");
         assert_eq!(n, r.len());
-        // Onvolledige buffer -> Ok(None).
+        // Incomplete buffer -> Ok(None).
         assert!(matches!(read_record(&r[..4]), Ok(None)));
         assert!(matches!(read_record(&r[..r.len() - 1]), Ok(None)));
     }
 
     #[test]
     fn record_te_groot_wordt_geweigerd() {
-        // Header die een lengte > MAX_RECORD_LEN claimt → Err (protocolovertreding).
+        // Header claiming a length > MAX_RECORD_LEN → Err (protocol violation).
         let mut hdr = alloc::vec![CT_HANDSHAKE, 0x03, 0x03];
         hdr.extend_from_slice(&((MAX_RECORD_LEN as u16) + 1).to_be_bytes());
         assert!(read_record(&hdr).is_err());
-        // Precies MAX is toegestaan: met een onvolledige buffer → Ok(None), niet Err.
+        // Exactly MAX is allowed: with an incomplete buffer → Ok(None), not Err.
         let mut ok = alloc::vec![CT_HANDSHAKE, 0x03, 0x03];
         ok.extend_from_slice(&(MAX_RECORD_LEN as u16).to_be_bytes());
         assert!(matches!(read_record(&ok), Ok(None)));

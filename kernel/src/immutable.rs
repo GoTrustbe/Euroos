@@ -1,20 +1,20 @@
-//! L1 + L2: bestands-**immutability** + de **`CAP_IMMUTABLE_ADMIN`**-poort.
+//! L1 + L2: file **immutability** + the **`CAP_IMMUTABLE_ADMIN`** gate.
 //!
-//! De soevereine veiligheids-ruggengraat begint hier. EuroFS draagt per inode
-//! immutability-vlaggen (L1: [`eurofs::FLAG_IMMUTABLE`] / [`eurofs::FLAG_APPEND_ONLY`])
-//! die schrijven/verwijderen/hernoemen IN HET FILESYSTEEM tegenhouden — onafhankelijk
-//! van POSIX-rechten of root. Deze module is de kernel-poort erboven (L2): het
-//! **zetten of wissen** van die vlaggen vereist de aparte capability
-//! [`CAP_IMMUTABLE_ADMIN`]. Zo kan zelfs een root-shell systeembestanden niet
-//! ontgrendelen zonder die expliciete, auditeerbare bevoegdheid — de basis voor een
-//! verifieerbaar onveranderbaar systeem (en, met L3, voor verity-partities).
+//! The sovereign security backbone starts here. EuroFS carries per-inode
+//! immutability flags (L1: [`eurofs::FLAG_IMMUTABLE`] / [`eurofs::FLAG_APPEND_ONLY`])
+//! that block writing/deleting/renaming IN THE FILESYSTEM — independent
+//! of POSIX permissions or root. This module is the kernel gate above it (L2): the
+//! **setting or clearing** of those flags requires the separate capability
+//! [`CAP_IMMUTABLE_ADMIN`]. So even a root shell cannot unlock system files
+//! without that explicit, auditable privilege — the foundation for a
+//! verifiably immutable system (and, with L3, for verity partitions).
 
 use eurofs::{FileSystem, FsError, FLAG_APPEND_ONLY, FLAG_IMMUTABLE};
 
 use crate::ring3::CAP_IMMUTABLE_ADMIN;
 
-/// L2: zet/wis de immutability-vlaggen van `path` — ALLEEN als `caps` de
-/// `CAP_IMMUTABLE_ADMIN`-bit bevat. Anders `PermissionDenied`, óók voor root.
+/// L2: set/clear the immutability flags of `path` — ONLY if `caps` contains the
+/// `CAP_IMMUTABLE_ADMIN` bit. Otherwise `PermissionDenied`, even for root.
 pub fn set_protected(fs: &mut dyn FileSystem, path: &str, flags: u32, caps: u64) -> Result<(), FsError> {
     if caps & CAP_IMMUTABLE_ADMIN == 0 {
         crate::audit::record(crate::audit::Event::ImmutableDenied, path);
@@ -34,8 +34,8 @@ pub fn set_protected(fs: &mut dyn FileSystem, path: &str, flags: u32, caps: u64)
     r
 }
 
-/// Markeer de meegeleverde systeembinaries + kritieke config IMMUTABEL — tamper-proof
-/// systeembestanden. Geeft het aantal beschermde bestanden terug.
+/// Mark the bundled system binaries + critical config IMMUTABLE — tamper-proof
+/// system files. Returns the number of protected files.
 pub fn protect_system_files(fs: &mut dyn FileSystem, caps: u64) -> usize {
     let mut n = 0;
     for &p in SYSTEM_FILES {
@@ -46,8 +46,8 @@ pub fn protect_system_files(fs: &mut dyn FileSystem, caps: u64) -> usize {
     n
 }
 
-/// De meegeleverde, tegen-manipulatie-beschermde systeembestanden (gespiegeld in
-/// [`protect_system_files`]) — voor de `euroimmutable list`-weergave.
+/// The bundled, tamper-protected system files (mirrored in
+/// [`protect_system_files`]) — for the `euroimmutable list` view.
 const SYSTEM_FILES: &[&str] = &[
     "/bin/hello",
     "/bin/cat",
@@ -59,43 +59,43 @@ const SYSTEM_FILES: &[&str] = &[
 
 fn describe_flags(flags: u32) -> &'static str {
     if flags & FLAG_IMMUTABLE != 0 && flags & FLAG_APPEND_ONLY != 0 {
-        "immutabel + append-only"
+        "immutable + append-only"
     } else if flags & FLAG_IMMUTABLE != 0 {
-        "immutabel (i)"
+        "immutable (i)"
     } else if flags & FLAG_APPEND_ONLY != 0 {
         "append-only (a)"
     } else {
-        "mutabel"
+        "mutable"
     }
 }
 
-/// `euroimmutable` — de bevoegde immutability-admintool (L2-API). Het ZETTEN/WISSEN
-/// van vlaggen loopt via [`set_protected`] en vereist dus `CAP_IMMUTABLE_ADMIN`; dit
-/// is de getekende admintool die die capability houdt. Statuslezen is vrij.
+/// `euroimmutable` — the privileged immutability admin tool (L2 API). The SETTING/CLEARING
+/// of flags goes through [`set_protected`] and thus requires `CAP_IMMUTABLE_ADMIN`; this
+/// is the signed admin tool that holds that capability. Reading status is free.
 ///
-/// Subcommando's: `status <pad>` · `list` · `lock <pad>` (+i) · `unlock <pad>` (−i).
+/// Subcommands: `status <path>` · `list` · `lock <path>` (+i) · `unlock <path>` (−i).
 pub fn shell(fs: &mut dyn FileSystem, sub: &str, path: &str) -> alloc::vec::Vec<alloc::string::String> {
     use alloc::string::ToString;
     use alloc::vec;
     match sub {
         "" | "help" => vec![
-            "euroimmutable — onveranderbaarheid (L1/L2):".to_string(),
-            "  status <pad>   toon de immutability-vlaggen van een bestand".to_string(),
-            "  list           toon de beschermde systeembestanden".to_string(),
-            "  lock <pad>     markeer immutabel (+i) — vereist CAP_IMMUTABLE_ADMIN".to_string(),
-            "  unlock <pad>   wis de vlaggen (−i) — vereist CAP_IMMUTABLE_ADMIN".to_string(),
+            "euroimmutable — immutability (L1/L2):".to_string(),
+            "  status <path>  show the immutability flags of a file".to_string(),
+            "  list           show the protected system files".to_string(),
+            "  lock <path>    mark immutable (+i) — requires CAP_IMMUTABLE_ADMIN".to_string(),
+            "  unlock <path>  clear the flags (−i) — requires CAP_IMMUTABLE_ADMIN".to_string(),
         ],
         "status" => {
             if path.is_empty() {
-                return vec!["gebruik: euroimmutable status <pad>".to_string()];
+                return vec!["usage: euroimmutable status <path>".to_string()];
             }
             match fs.get_flags(path) {
-                Ok(f) => vec![alloc::format!("{path}: {} (vlaggen={f:#x})", describe_flags(f))],
-                Err(_) => vec![alloc::format!("euroimmutable: kan '{path}' niet lezen")],
+                Ok(f) => vec![alloc::format!("{path}: {} (flags={f:#x})", describe_flags(f))],
+                Err(_) => vec![alloc::format!("euroimmutable: cannot read '{path}'")],
             }
         }
         "list" => {
-            let mut out = vec!["beschermde systeembestanden:".to_string()];
+            let mut out = vec!["protected system files:".to_string()];
             for &p in SYSTEM_FILES {
                 if fs.exists(p) {
                     let f = fs.get_flags(p).unwrap_or(0);
@@ -106,44 +106,44 @@ pub fn shell(fs: &mut dyn FileSystem, sub: &str, path: &str) -> alloc::vec::Vec<
         }
         "lock" | "unlock" => {
             if path.is_empty() {
-                return vec![alloc::format!("gebruik: euroimmutable {sub} <pad>")];
+                return vec![alloc::format!("usage: euroimmutable {sub} <path>")];
             }
             let flags = if sub == "lock" { FLAG_IMMUTABLE } else { 0 };
             match set_protected(fs, path, flags, CAP_IMMUTABLE_ADMIN) {
                 Ok(()) => vec![alloc::format!(
-                    "euroimmutable: {path} is nu {} (geauditeerd)",
+                    "euroimmutable: {path} is now {} (audited)",
                     describe_flags(flags)
                 )],
                 Err(_) => vec![alloc::format!(
-                    "euroimmutable: GEWEIGERD voor {path} — vereist CAP_IMMUTABLE_ADMIN"
+                    "euroimmutable: DENIED for {path} — requires CAP_IMMUTABLE_ADMIN"
                 )],
             }
         }
-        _ => vec![alloc::format!("euroimmutable: onbekend subcommando '{sub}' (zie: euroimmutable help)")],
+        _ => vec![alloc::format!("euroimmutable: unknown subcommand '{sub}' (see: euroimmutable help)")],
     }
 }
 
-/// L1/L2-boot-zelftest: bewijs (a) de cap-poort op het zetten van de vlag, en (b) dat
-/// de FS-laag een immutabel bestand écht beschermt tegen schrijven/verwijderen.
+/// L1/L2 boot self-test: prove (a) the cap gate on setting the flag, and (b) that
+/// the FS layer really protects an immutable file against writing/deleting.
 pub fn selftest(fs: &mut dyn FileSystem) {
     let path = "/tmp/l1-test";
     let _ = fs.create_dir("/tmp");
     if fs.write_file(path, b"origineel").is_err() {
-        crate::serial_println!("[l1] zelftest: kon testbestand niet maken");
+        crate::serial_println!("[l1] self-test: could not create test file");
         return;
     }
 
-    // (L2) Zonder CAP_IMMUTABLE_ADMIN mag de vlag NIET gezet worden — ook niet "als root".
+    // (L2) Without CAP_IMMUTABLE_ADMIN the flag must NOT be settable — not even "as root".
     let no_cap = set_protected(fs, path, FLAG_IMMUTABLE, crate::ring3::CAP_FILE);
-    // (L2) Mét de capability lukt het wel.
+    // (L2) With the capability it does succeed.
     let with_cap = set_protected(fs, path, FLAG_IMMUTABLE, CAP_IMMUTABLE_ADMIN);
 
-    // (L1) Nu immutabel: schrijven + verwijderen worden door de FS geweigerd.
+    // (L1) Now immutable: writing + deleting are rejected by the FS.
     let write_blocked = fs.write_file(path, b"gehackt") == Err(FsError::PermissionDenied);
     let remove_blocked = fs.remove_file(path) == Err(FsError::PermissionDenied);
     let intact = fs.read_file(path).map(|d| d == b"origineel").unwrap_or(false);
 
-    // (L2) Vlag wissen vereist óók de capability; daarna weer wijzigbaar.
+    // (L2) Clearing the flag also requires the capability; afterwards modifiable again.
     let clear_no_cap = set_protected(fs, path, 0, crate::ring3::CAP_FILE) == Err(FsError::PermissionDenied);
     let _ = set_protected(fs, path, 0, CAP_IMMUTABLE_ADMIN);
     let writable_again = fs.write_file(path, b"weer-mutabel").is_ok();
@@ -157,9 +157,9 @@ pub fn selftest(fs: &mut dyn FileSystem) {
         && clear_no_cap
         && writable_again;
     crate::serial_println!(
-        "[l1] immutability + CAP_IMMUTABLE_ADMIN: cap-poort-op-set={}, schrijf-geblokkeerd={}, verwijder-geblokkeerd={}, inhoud-intact={}, cap-poort-op-clear={}, weer-mutabel-na-clear={} → {}",
+        "[l1] immutability + CAP_IMMUTABLE_ADMIN: cap-gate-on-set={}, write-blocked={}, delete-blocked={}, content-intact={}, cap-gate-on-clear={}, mutable-again-after-clear={} → {}",
         no_cap == Err(FsError::PermissionDenied), write_blocked, remove_blocked, intact, clear_no_cap, writable_again,
-        if ok { "OK (zelfs root kan zonder de cap niets wijzigen) ✓" } else { "MISLUKT" }
+        if ok { "OK (even root cannot change anything without the cap) ✓" } else { "FAILED" }
     );
-    let _ = FLAG_APPEND_ONLY; // (P3 gebruikt deze vlag — zie audit.rs)
+    let _ = FLAG_APPEND_ONLY; // (P3 uses this flag — see audit.rs)
 }

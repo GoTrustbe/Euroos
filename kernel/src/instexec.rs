@@ -1,11 +1,11 @@
-//! **Installer-uitvoering** (Q1 sluitstuk): de `euroinstall`-*planner* wordt nu écht
-//! uitgevoerd — een schijf formatteren tot EuroFS en de configuratiestappen
-//! (locale/keymap/hostname/gebruiker/EuroCA) als bestanden wegschrijven — en de
-//! installatie **overleeft een remount** (zoals een echte reboot na installatie).
+//! **Installer execution** (Q1 capstone): the `euroinstall` *planner* is now
+//! actually executed — formatting a disk to EuroFS and writing the configuration
+//! steps (locale/keymap/hostname/user/EuroCA) out as files — and the
+//! installation **survives a remount** (like a real reboot after installation).
 //!
-//! Hier draait het op een RAM-schijf (`MemoryBlockDevice`) zodat het deterministisch
-//! en niet-destructief te verifiëren is; exact dezelfde executor draait op een
-//! virtio-blk-partitie voor een echte installatie naar schijf.
+//! Here it runs on a RAM disk (`MemoryBlockDevice`) so it can be verified
+//! deterministically and non-destructively; the exact same executor runs on a
+//! virtio-blk partition for a real installation to disk.
 
 use alloc::format;
 use alloc::string::String;
@@ -15,9 +15,9 @@ use spin::Mutex;
 use euroinstall::{plan, Config, Disk, Step};
 use eurofs::{EuroFs, FileSystem, MemoryBlockDevice};
 
-/// De install-media die de kernel bij boot van zijn EIGEN ESP las (de UEFI-loader
-/// + de A/B-kernelimages). Geen embed, geen mock — de echte bytes waarmee deze
-/// machine zelf opstartte, klaar om naar een doelschijf te schrijven.
+/// The install media that the kernel read at boot from its OWN ESP (the UEFI loader
+/// + the A/B kernel images). No embed, no mock — the real bytes this
+/// machine itself booted from, ready to be written to a target disk.
 pub struct InstallMedia {
     pub loader: Vec<u8>,
     pub kernel_a: Vec<u8>,
@@ -26,10 +26,10 @@ pub struct InstallMedia {
 
 static MEDIA: Mutex<Option<InstallMedia>> = Mutex::new(None);
 
-/// Lees `\EFI\BOOT\{BOOTX64.EFI, eurokernel-A.efi, eurokernel-B.efi}` van het
-/// boot-volume via UEFI Simple File System. **Moet vóór ExitBootServices draaien.**
-/// De kernel werd door de loader uit een geheugenbuffer gestart (geen device-handle
-/// op zijn LoadedImage), dus we doorzoeken ALLE SFS-volumes naar onze ESP-bestanden.
+/// Read `\EFI\BOOT\{BOOTX64.EFI, eurokernel-A.efi, eurokernel-B.efi}` from the
+/// boot volume via UEFI Simple File System. **Must run before ExitBootServices.**
+/// The kernel was started by the loader from a memory buffer (no device handle
+/// on its LoadedImage), so we search ALL SFS volumes for our ESP files.
 pub fn capture_media() {
     use uefi::boot;
     use uefi::cstr16;
@@ -39,7 +39,7 @@ pub fn capture_media() {
     let handles = match boot::find_handles::<SimpleFileSystem>() {
         Ok(h) => h,
         Err(_) => {
-            crate::serial_println!("[inst] geen SFS-volumes — install-media niet beschikbaar");
+            crate::serial_println!("[inst] no SFS volumes — install media not available");
             return;
         }
     };
@@ -49,7 +49,7 @@ pub fn capture_media() {
             Err(_) => continue,
         };
         let mut fs = FileSystem::new(sfs);
-        // Dit volume is onze ESP als de kernel-A-image erop staat.
+        // This volume is our ESP if the kernel-A image is on it.
         let kernel_a = match fs.read(cstr16!("\\EFI\\BOOT\\eurokernel-A.efi")) {
             Ok(d) => d,
             Err(_) => continue,
@@ -60,23 +60,23 @@ pub fn capture_media() {
         };
         let kernel_b = fs.read(cstr16!("\\EFI\\BOOT\\eurokernel-B.efi")).unwrap_or_else(|_| kernel_a.clone());
         crate::serial_println!(
-            "[inst] install-media gelezen van eigen ESP: loader {} B · kernel-A {} B · kernel-B {} B",
+            "[inst] install media read from own ESP: loader {} B · kernel-A {} B · kernel-B {} B",
             loader.len(), kernel_a.len(), kernel_b.len()
         );
         *MEDIA.lock() = Some(InstallMedia { loader, kernel_a, kernel_b });
         return;
     }
-    crate::serial_println!("[inst] ESP-bestanden niet gevonden op enig SFS-volume — install-media niet beschikbaar");
+    crate::serial_println!("[inst] ESP files not found on any SFS volume — install media not available");
 }
 
-/// Heeft de kernel echte install-media (van zijn eigen ESP)?
+/// Does the kernel have real install media (from its own ESP)?
 pub fn media_available() -> bool {
     MEDIA.lock().is_some()
 }
 
-/// Is virtio-schijf `dev` "blanco" (geen GPT/protective-MBR) — d.w.z. een verse
-/// doelschijf waarop we veilig mogen installeren (idempotent: niet over een al
-/// geïnstalleerde schijf heen).
+/// Is virtio disk `dev` "blank" (no GPT/protective MBR) — i.e. a fresh
+/// target disk we may safely install to (idempotent: not over an already
+/// installed disk).
 pub fn disk_is_blank(dev: usize) -> bool {
     let mut s0 = [0u8; 512];
     if !crate::virtio_blk::read_io_dev(dev, 0, &mut s0) {
@@ -86,12 +86,12 @@ pub fn disk_is_blank(dev: usize) -> bool {
     !protective_mbr
 }
 
-/// Installeer een ECHTE bootbare EuroOS naar virtio-schijf `dev`: GPT + FAT32-ESP
-/// (loader + A/B-kernel van de eigen media) + een lege EuroFS-rootpartitie. De
-/// schrijver streamt (≤ 4 KiB) zodat we nooit de hele schijf in RAM houden.
-/// + de EuroFS-rootpartitie wordt geformatteerd en GEPROVISIONEERD met `cfg`
-/// (locale/keymap/hostname/gebruiker/EuroCA). Geeft `true` als alles geschreven
-/// én geverifieerd is (incl. provisioning na een remount van de partitie).
+/// Install a REAL bootable EuroOS to virtio disk `dev`: GPT + FAT32 ESP
+/// (loader + A/B kernel from the own media) + an empty EuroFS root partition. The
+/// writer streams (≤ 4 KiB) so we never hold the whole disk in RAM.
+/// + the EuroFS root partition is formatted and PROVISIONED with `cfg`
+/// (locale/keymap/hostname/user/EuroCA). Returns `true` if everything was written
+/// and verified (incl. provisioning after a remount of the partition).
 pub fn install_to_disk(dev: usize, cfg: &Config) -> bool {
     let (loader, kernel_a, kernel_b) = {
         let guard = MEDIA.lock();
@@ -105,19 +105,19 @@ pub fn install_to_disk(dev: usize, cfg: &Config) -> bool {
     }
     let total = crate::virtio_blk::capacity_sectors_dev(dev);
     if total < 128 * 1024 * 1024 / 512 {
-        crate::serial_println!("[q1x3] doelschijf {dev} te klein ({} MiB) voor installatie", total * 512 / 1024 / 1024);
+        crate::serial_println!("[q1x3] target disk {dev} too small ({} MiB) for installation", total * 512 / 1024 / 1024);
         return false;
     }
     let vid = (crate::rtc::epoch() as u32) ^ 0xE040_5053;
-    // Verse installatie: slot_config → boot slot A (de loader honoreert dit bestand).
+    // Fresh install: slot_config → boot slot A (the loader honors this file).
     let slot_a = euroupdate::SlotConfig::initial().serialize();
     let layout = eurofat::write_boot_disk(total, vid, &loader, &kernel_a, &kernel_b, &slot_a, |lba, bytes| {
         let _ = crate::virtio_blk::write_io_dev(dev, lba, bytes);
     });
 
-    // ── Formatteer + provisioneer de EuroFS-rootpartitie (echte installatie) ──
+    // ── Format + provision the EuroFS root partition (real installation) ──
     let now = crate::rtc::epoch();
-    let blocks = layout.eurofs_sectors / 8; // 8 sectoren per 4 KiB-blok
+    let blocks = layout.eurofs_sectors / 8; // 8 sectors per 4 KiB block
     let pdev = crate::rootblk::RootBlk::disk_on(dev, layout.eurofs_first, blocks);
     let steps = plan(cfg).unwrap_or_default();
     let provisioned = match EuroFs::format(pdev.clone(), [vid as u8; 16], now) {
@@ -126,13 +126,13 @@ pub fn install_to_disk(dev: usize, cfg: &Config) -> bool {
     };
     crate::virtio_blk::flush_dev(dev);
 
-    // ── Verificatie: herlees GPT + ESP-bootsector + remount de EuroFS-partitie ──
+    // ── Verification: re-read GPT + ESP boot sector + remount the EuroFS partition ──
     let mut hdr = [0u8; 512];
     let gpt_ok = crate::virtio_blk::read_io_dev(dev, 1, &mut hdr) && &hdr[..8] == b"EFI PART";
     let mut esp0 = [0u8; 512];
     let esp_ok = crate::virtio_blk::read_io_dev(dev, layout.esp_first, &mut esp0)
         && esp0[510] == 0x55 && esp0[511] == 0xAA && &esp0[82..87] == b"FAT32";
-    // Provisioning moet een remount overleven (≈ reboot na installatie).
+    // Provisioning must survive a remount (≈ reboot after installation).
     let want_host = alloc::format!("{}\n", cfg.hostname);
     let (host_ok, user_ok) = match EuroFs::mount(pdev, now) {
         Ok(fs) => (
@@ -143,17 +143,17 @@ pub fn install_to_disk(dev: usize, cfg: &Config) -> bool {
     };
     let ok = gpt_ok && esp_ok && provisioned >= 4 && host_ok && user_ok;
     crate::serial_println!(
-        "[q1x3] EuroInstall → schijf {dev} ({} MiB): GPT={gpt_ok} ESP-FAT32={esp_ok}; EuroFS-root geformatteerd + {provisioned} stappen geprovisioneerd, ná remount hostname='{}'={host_ok} gebruiker='{}'={user_ok} → {}",
+        "[q1x3] EuroInstall → disk {dev} ({} MiB): GPT={gpt_ok} ESP-FAT32={esp_ok}; EuroFS root formatted + {provisioned} steps provisioned, after remount hostname='{}'={host_ok} user='{}'={user_ok} → {}",
         total * 512 / 1024 / 1024, cfg.hostname, cfg.username,
-        if ok { "OK (bootbare + geprovisioneerde installatie uit eigen media; boot standalone)" } else { "MISLUKT" }
+        if ok { "OK (bootable + provisioned installation from own media; boots standalone)" } else { "FAILED" }
     );
     ok
 }
 
-/// **A/B-zelfupdate (AH-2):** stage een nieuwe kernel in het INACTIEVE slot B van
-/// een al-geïnstalleerde schijf `dev` en zet `slot_config` → boot slot B (Trying).
-/// Herbouwt de ESP (slot A onveranderd, slot B = nieuwe image) en herschrijft de
-/// ESP-regio. Na een reboot kiest de loader slot B; faalt B's image → terug naar A.
+/// **A/B self-update (AH-2):** stage a new kernel in the INACTIVE slot B of
+/// an already-installed disk `dev` and set `slot_config` → boot slot B (Trying).
+/// Rebuilds the ESP (slot A unchanged, slot B = new image) and rewrites the
+/// ESP region. After a reboot the loader picks slot B; if B's image fails → back to A.
 pub fn stage_update_b(dev: usize) -> bool {
     let (loader, kernel_a, kernel_b) = {
         let guard = MEDIA.lock();
@@ -163,19 +163,19 @@ pub fn stage_update_b(dev: usize) -> bool {
         }
     };
     if !crate::virtio_blk::present_dev(dev) || disk_is_blank(dev) {
-        return false; // alleen op een al-geïnstalleerde schijf
+        return false; // only on an already-installed disk
     }
     let total = crate::virtio_blk::capacity_sectors_dev(dev);
     let layout = eurofat::layout_for(total);
     let vid = (crate::rtc::epoch() as u32) ^ 0x0B0B_5053;
 
-    // slot_config: stage het inactieve slot (B) als te-proberen, next_boot = B.
+    // slot_config: stage the inactive slot (B) as to-be-tried, next_boot = B.
     let mut cfg = euroupdate::SlotConfig::initial();
     cfg.stage_update();
     let sc = cfg.serialize();
 
-    // Herbouw de ESP: slot A = huidige kernel, slot B = de "nieuwe" image (hier
-    // dezelfde versie, gestaged in B), + het slot_config-bestand → B.
+    // Rebuild the ESP: slot A = current kernel, slot B = the "new" image (here
+    // the same version, staged in B), + the slot_config file → B.
     let esp = eurofat::build_esp_cfg(layout.esp_sectors, vid, &loader, &kernel_a, &kernel_b, &sc);
     let mut lba = layout.esp_first;
     for chunk in esp.chunks(4096) {
@@ -185,22 +185,22 @@ pub fn stage_update_b(dev: usize) -> bool {
     crate::virtio_blk::flush_dev(dev);
 
     crate::serial_println!(
-        "[upd2] A/B-zelfupdate gestaged op schijf {dev}: ESP herbouwd, slot_config → boot slot B (Trying, {} pogingen), B-image {} B → na reboot kiest de loader slot B (loader valt terug op A als B's image faalt) ✓",
+        "[upd2] A/B self-update staged on disk {dev}: ESP rebuilt, slot_config → boot slot B (Trying, {} attempts), B image {} B → after reboot the loader picks slot B (loader falls back to A if B's image fails) ✓",
         cfg.tries, kernel_b.len()
     );
     true
 }
 
-/// **[upd4] — twee-traps A/B-rollback bewezen op de ECHTE on-disk ESP.**
+/// **[upd4] — two-stage A/B rollback proven on the REAL on-disk ESP.**
 ///
-/// Leest `\slot_config` van de geïnstalleerde ESP via de sector-gebaseerde FAT32-
-/// primitief (`eurofat::sectored`, dezelfde weg die de loader/kernel gebruiken),
-/// en draait de VOLLEDIGE levenscyclus die de loader bij elke boot uitvoert —
-/// `on_boot()` aftellen tot de pogingen op zijn, automatische terugrol naar het
-/// goede slot, en dan `mark_good()` dat de rollback stopt — waarbij na ELKE stap
-/// een VERSE schijf-read bevestigt dat de bijgewerkte staat echt op de ESP staat.
-/// Niet-destructief: de oorspronkelijke (gestagede) config wordt achteraf hersteld,
-/// zodat de standalone-bootrun (RUN3) ongemoeid slot B blijft proberen.
+/// Reads `\slot_config` from the installed ESP via the sector-based FAT32
+/// primitive (`eurofat::sectored`, the same path the loader/kernel use),
+/// and runs the FULL lifecycle the loader performs on each boot —
+/// `on_boot()` counting down until the attempts are exhausted, automatic rollback to the
+/// good slot, and then `mark_good()` which stops the rollback — where after EACH step
+/// a FRESH disk read confirms the updated state is really on the ESP.
+/// Non-destructive: the original (staged) config is restored afterwards,
+/// so the standalone boot run (RUN3) keeps trying slot B undisturbed.
 pub fn rollback_selftest(dev: usize) {
     if !crate::virtio_blk::present_dev(dev) || disk_is_blank(dev) {
         return;
@@ -214,23 +214,23 @@ pub fn rollback_selftest(dev: usize) {
         ok
     };
 
-    // Bewaar de huidige (gestagede) config om hem later te herstellen.
+    // Save the current (staged) config to restore it later.
     let original = match eurofat::read_small_file(esp, "slot_config", read) {
         Some(d) if d.len() >= euroupdate::CONFIG_SIZE => d,
         _ => {
-            crate::serial_println!("[upd4] kon \\slot_config niet van de ESP lezen — sla rollback-zelftest over");
+            crate::serial_println!("[upd4] could not read \\slot_config from the ESP — skipping rollback self-test");
             return;
         }
     };
     let mut cfg = match euroupdate::SlotConfig::deserialize(&original) {
         Some(c) => c,
         None => {
-            crate::serial_println!("[upd4] \\slot_config op de ESP is corrupt — sla over");
+            crate::serial_println!("[upd4] \\slot_config on the ESP is corrupt — skipping");
             return;
         }
     };
 
-    // Helper: schrijf cfg naar de ESP en lees 'm vers terug ter bevestiging.
+    // Helper: write cfg to the ESP and read it back fresh as confirmation.
     let commit = |cfg: &euroupdate::SlotConfig| -> Option<euroupdate::SlotConfig> {
         if !eurofat::write_small_file(esp, "slot_config", &cfg.serialize(), read, write) {
             return None;
@@ -240,17 +240,17 @@ pub fn rollback_selftest(dev: usize) {
 
     let start_tries = cfg.tries;
     let mut ok = matches!(cfg.next_boot, euroupdate::Slot::B) && cfg.state(euroupdate::Slot::B) == euroupdate::SlotState::Trying;
-    // Tel de pogingen af; elke boot schrijft de loader de bijgewerkte teller terug.
+    // Count down the attempts; each boot the loader writes the updated counter back.
     for _ in 0..start_tries {
         let chosen = cfg.on_boot();
         ok &= matches!(chosen, euroupdate::Slot::B);
         match commit(&cfg) {
-            Some(rb) => ok &= rb == cfg, // verse schijf-read == in-memory ✓
+            Some(rb) => ok &= rb == cfg, // fresh disk read == in-memory ✓
             None => ok = false,
         }
     }
     ok &= cfg.tries == 0;
-    // Pogingen uitgeput, B nooit bevestigd → automatische terugrol naar A.
+    // Attempts exhausted, B never confirmed → automatic rollback to A.
     let rolled = cfg.on_boot();
     ok &= matches!(rolled, euroupdate::Slot::A) && cfg.state(euroupdate::Slot::B) == euroupdate::SlotState::Failed;
     match commit(&cfg) {
@@ -258,32 +258,32 @@ pub fn rollback_selftest(dev: usize) {
         None => ok = false,
     }
 
-    // Tegenproef: had B wél bevestigd (mark_good), dan stopt de rollback.
+    // Counter-check: had B been confirmed (mark_good), the rollback stops.
     let mut good = euroupdate::SlotConfig::initial();
     good.stage_update(); // → B Trying
-    good.on_boot(); // loader probeert B
-    good.mark_good(); // boot geslaagd → B definitief goed
+    good.on_boot(); // loader tries B
+    good.mark_good(); // boot succeeded → B definitively good
     match commit(&good) {
         Some(rb) => {
             ok &= rb.state(euroupdate::Slot::B) == euroupdate::SlotState::Good && rb.tries == 0;
-            // Volgende boot blijft stabiel op B (geen rollback meer).
+            // Next boot stays stable on B (no more rollback).
             let mut g2 = rb;
             ok &= matches!(g2.on_boot(), euroupdate::Slot::B);
         }
         None => ok = false,
     }
 
-    // Herstel de oorspronkelijke gestagede config (niet-destructief voor RUN3).
+    // Restore the original staged config (non-destructive for RUN3).
     let _ = eurofat::write_small_file(esp, "slot_config", &original, read, write);
 
     crate::serial_println!(
-        "[upd4] twee-traps A/B-rollback op de ECHTE ESP (LBA {esp}): {start_tries} pogingen afgeteld → auto-rollback naar A (B=Failed) → mark_good pint B vast → {} (sector-FAT read/modify/write op on-disk \\slot_config, niet-destructief hersteld) {}",
-        if ok { "OK" } else { "MISLUKT" },
+        "[upd4] two-stage A/B rollback on the REAL ESP (LBA {esp}): {start_tries} attempts counted down → auto-rollback to A (B=Failed) → mark_good pins B → {} (sector-FAT read/modify/write on on-disk \\slot_config, non-destructively restored) {}",
+        if ok { "OK" } else { "FAILED" },
         if ok { "✓" } else { "✗" }
     );
 }
 
-/// Standaard-installconfig (overschrijfbaar via `euroinstall --hostname/--user`).
+/// Default install config (overridable via `euroinstall --hostname/--user`).
 pub fn default_config() -> Config {
     Config {
         disk: Disk { total_bytes: 16 * 1024 * 1024 * 1024 },
@@ -296,8 +296,8 @@ pub fn default_config() -> Config {
     }
 }
 
-/// Voer de configuratie-stappen van het plan uit op een gemonteerde EuroFS:
-/// schrijf de provisioning-bestanden. Geeft het aantal uitgevoerde stappen terug.
+/// Execute the configuration steps of the plan on a mounted EuroFS:
+/// write the provisioning files. Returns the number of executed steps.
 fn provision(fs: &mut dyn FileSystem, steps: &[Step]) -> usize {
     let _ = fs.create_dir("/etc");
     let _ = fs.create_dir("/etc/euroca");
@@ -321,33 +321,33 @@ fn provision(fs: &mut dyn FileSystem, steps: &[Step]) -> usize {
                 done += 1;
             }
             Step::ProvisionEuroCa => {
-                let _ = fs.write_file("/etc/euroca/root.crt", b"EuroCA wortel-certificaat (geprovisioneerd)\n");
+                let _ = fs.write_file("/etc/euroca/root.crt", b"EuroCA root certificate (provisioned)\n");
                 done += 1;
             }
-            // De schijf-stappen (Partition/Format/WriteKernelSlots/…) zijn hier door
-            // het EuroFS-format zelf gerealiseerd op de RAM-schijf.
+            // The disk steps (Partition/Format/WriteKernelSlots/…) are realized here
+            // by the EuroFS format itself on the RAM disk.
             _ => {}
         }
     }
     done
 }
 
-/// Boot-zelftest: voer een installatie écht uit op een RAM-schijf en bewijs dat ze
-/// een remount (≈ reboot) overleeft.
+/// Boot self-test: actually run an installation on a RAM disk and prove that it
+/// survives a remount (≈ reboot).
 pub fn selftest(now: u64) {
     let cfg = default_config();
     let steps = match plan(&cfg) {
         Ok(s) => s,
         Err(e) => {
-            crate::serial_println!("[q1x] installer-plan ongeldig: {e:?}");
+            crate::serial_println!("[q1x] installer plan invalid: {e:?}");
             return;
         }
     };
 
-    // Een 4 MiB RAM-schijf als doel (1024 × 4 KiB-blokken).
+    // A 4 MiB RAM disk as the target (1024 × 4 KiB blocks).
     let mut dev = MemoryBlockDevice::new(1024, 4096);
 
-    // ── Uitvoeren: formatteren tot EuroFS + provisioneren. ──
+    // ── Execute: format to EuroFS + provision. ──
     let provisioned;
     let format_ok = {
         match EuroFs::format(&mut dev, [0x2a; 16], now) {
@@ -362,7 +362,7 @@ pub fn selftest(now: u64) {
         }
     };
 
-    // ── Remount (≈ reboot na installatie): de provisioning moet persistent zijn. ──
+    // ── Remount (≈ reboot after installation): the provisioning must be persistent. ──
     let mut hostname_ok = false;
     let mut user_ok = false;
     let mut locale_ok = false;
@@ -384,16 +384,16 @@ pub fn selftest(now: u64) {
 
     let ok = format_ok && provisioned >= 4 && hostname_ok && user_ok && locale_ok && ca_ok;
     crate::serial_println!(
-        "[q1x] EuroInstall-uitvoering: EuroFS-format={format_ok}, {provisioned} stappen geprovisioneerd, ná remount: hostname={hostname_ok}, gebruiker={user_ok}, locale={locale_ok}, EuroCA={ca_ok} → {}",
-        if ok { "OK (installatie écht uitgevoerd + overleeft reboot) ✓" } else { "MISLUKT" }
+        "[q1x] EuroInstall execution: EuroFS-format={format_ok}, {provisioned} steps provisioned, after remount: hostname={hostname_ok}, user={user_ok}, locale={locale_ok}, EuroCA={ca_ok} → {}",
+        if ok { "OK (installation actually executed + survives reboot) ✓" } else { "FAILED" }
     );
 }
 
-/// `euroinstall exec`-uitbreiding: voer een dry-run-uitvoering uit en rapporteer.
+/// `euroinstall exec` extension: run a dry-run execution and report.
 pub fn shell() -> Vec<String> {
     alloc::vec![
-        String::from("EuroInstall-uitvoering — formatteert EuroFS + provisioneert (locale/keymap/hostname/gebruiker/EuroCA)"),
-        String::from("  boot-zelftest [q1x] draait dit op een RAM-schijf en bewijst dat de installatie een remount overleeft"),
-        String::from("  dezelfde executor draait op een virtio-blk-partitie voor een echte installatie naar schijf"),
+        String::from("EuroInstall execution — formats EuroFS + provisions (locale/keymap/hostname/user/EuroCA)"),
+        String::from("  boot self-test [q1x] runs this on a RAM disk and proves the installation survives a remount"),
+        String::from("  the same executor runs on a virtio-blk partition for a real installation to disk"),
     ]
 }

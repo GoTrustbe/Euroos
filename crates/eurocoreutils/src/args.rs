@@ -1,5 +1,5 @@
-//! Gedeelde argument-parser (CU-0): korte vlaggen (`-r`), gecombineerde vlaggen
-//! (`-rf`), lange opties (`--max-depth=3` / `-n 5`) en positionele argumenten.
+//! Shared argument parser (CU-0): short flags (`-r`), combined flags
+//! (`-rf`), long options (`--max-depth=3` / `-n 5`) and positional arguments.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -11,8 +11,8 @@ pub struct Args {
 }
 
 impl Args {
-    /// Parse de argumenten. Opties die een waarde verwachten (`value_opts`, bv. `n`,
-    /// `c`, `d`, `f`, `w`) nemen het VOLGENDE token als waarde (`-n 5`).
+    /// Parse the arguments. Options that expect a value (`value_opts`, e.g. `n`,
+    /// `c`, `d`, `f`, `w`) take the NEXT token as their value (`-n 5`).
     pub fn parse(input: &[&str], value_opts: &[char]) -> Args {
         let mut a = Args { flags: Vec::new(), options: Vec::new(), positional: Vec::new() };
         let mut i = 0;
@@ -30,7 +30,7 @@ impl Args {
                 while j < chars.len() {
                     let c = chars[j];
                     if value_opts.contains(&c) {
-                        // Waarde: rest van dit token, of het volgende token.
+                        // Value: the rest of this token, or the next token.
                         let rest: String = chars[j + 1..].iter().collect();
                         if !rest.is_empty() {
                             a.options.push((c.to_string(), rest));
@@ -38,7 +38,7 @@ impl Args {
                             i += 1;
                             a.options.push((c.to_string(), input[i].into()));
                         }
-                        break; // rest van dit token is opgebruikt
+                        break; // the rest of this token is consumed
                     } else {
                         a.flags.push(c);
                     }
@@ -60,7 +60,7 @@ impl Args {
         self.options.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
     }
 
-    /// Numerieke optie (bv. `-n 5`); valt terug op `default`.
+    /// Numeric option (e.g. `-n 5`); falls back to `default`.
     pub fn num(&self, name: &str, default: usize) -> usize {
         self.opt(name).and_then(|v| v.parse().ok()).unwrap_or(default)
     }

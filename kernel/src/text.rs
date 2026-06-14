@@ -1,12 +1,12 @@
-//! Moderne tekst-rendering: anti-aliased TTF-glyphs via `ab_glyph`.
+//! Modern text rendering: anti-aliased TTF glyphs via `ab_glyph`.
 //!
-//! Vervangt de 8×8 bitmapfont. Twee ingebedde fonts:
-//! - **UI** (DM Sans) — proportioneel, voor desktop-chrome, labels, knoppen.
-//! - **MONO** (DejaVu Sans Mono) — voor terminal/bestandslijsten waar kolommen
-//!   moeten uitlijnen.
+//! Replaces the 8×8 bitmap font. Two embedded fonts:
+//! - **UI** (DM Sans) — proportional, for desktop chrome, labels, buttons.
+//! - **MONO** (DejaVu Sans Mono) — for terminal/file listings where columns
+//!   must line up.
 //!
-//! Glyphs worden gerasterd naar dekkings-waarden (0..1) en met `fb.blend`
-//! over de achtergrond gemengd — vandaar de zachte, niet-getrapte randen.
+//! Glyphs are rasterized to coverage values (0..1) and blended over the
+//! background with `fb.blend` — hence the soft, non-stepped edges.
 
 use ab_glyph::{Font, FontRef, GlyphId, PxScale, ScaleFont};
 use spin::Once;
@@ -18,17 +18,17 @@ static MONO: Once<FontRef<'static>> = Once::new();
 
 fn ui() -> &'static FontRef<'static> {
     UI.call_once(|| {
-        FontRef::try_from_slice(include_bytes!("../assets/ui.ttf")).expect("ui.ttf ongeldig")
+        FontRef::try_from_slice(include_bytes!("../assets/ui.ttf")).expect("ui.ttf invalid")
     })
 }
 
 fn mono() -> &'static FontRef<'static> {
     MONO.call_once(|| {
-        FontRef::try_from_slice(include_bytes!("../assets/mono.ttf")).expect("mono.ttf ongeldig")
+        FontRef::try_from_slice(include_bytes!("../assets/mono.ttf")).expect("mono.ttf invalid")
     })
 }
 
-/// Pixelhoogte voor een gegeven legacy-`scale` (1/2/3) — UI-font.
+/// Pixel height for a given legacy `scale` (1/2/3) — UI font.
 #[inline]
 pub fn ui_px(scale: usize) -> f32 {
     match scale {
@@ -39,14 +39,14 @@ pub fn ui_px(scale: usize) -> f32 {
     }
 }
 
-/// Pixelhoogte voor de mono-font; gekozen zodat de advance ≈ 8 px (rasterbreedte).
+/// Pixel height for the mono font; chosen so that the advance ≈ 8 px (raster width).
 #[inline]
 pub fn mono_px(scale: usize) -> f32 {
     13.0 * scale as f32
 }
 
-/// Kernrenderer: teken `s` met `font` op px-grootte `px`. `y` is de bovenkant
-/// van de tekstregel (baseline = y + ascent), zoals de oude bitmap-API.
+/// Core renderer: draw `s` with `font` at px size `px`. `y` is the top
+/// of the text line (baseline = y + ascent), like the old bitmap API.
 fn render(fb: &FrameBuffer, font: &FontRef, x: usize, y: usize, s: &str, c: Color, px: f32) {
     let scale = PxScale::from(px);
     let sf = font.as_scaled(scale);
@@ -91,7 +91,7 @@ fn measure(font: &FontRef, s: &str, px: f32) -> usize {
     w as usize
 }
 
-// ── Publieke API (proportioneel, UI-font) ──────────────────────────────────
+// ── Public API (proportional, UI font) ──────────────────────────────────────
 pub fn draw_string(fb: &FrameBuffer, x: usize, y: usize, s: &str, c: Color, scale: usize) {
     render(fb, ui(), x, y, s, c, ui_px(scale));
 }
@@ -114,7 +114,7 @@ pub fn draw_string_centered(
     render(fb, ui(), x, y, s, c, ui_px(scale));
 }
 
-// ── Exacte px-groottes (voor design-getrouwe kaarten: klok 44px enz.) ───────
+// ── Exact px sizes (for design-faithful cards: clock 44px etc.) ─────────────
 pub fn draw_px(fb: &FrameBuffer, x: usize, y: usize, s: &str, c: Color, px: f32) {
     render(fb, ui(), x, y, s, c, px);
 }
@@ -123,7 +123,7 @@ pub fn width_px(s: &str, px: f32) -> usize {
     measure(ui(), s, px)
 }
 
-/// Hoogte (ascent+descent) van de UI-font op px-grootte — voor verticaal centreren.
+/// Height (ascent+descent) of the UI font at px size — for vertical centering.
 pub fn line_height(px: f32) -> usize {
     let sf = ui().as_scaled(PxScale::from(px));
     (sf.ascent() - sf.descent()) as usize
@@ -138,7 +138,7 @@ pub fn mono_width(s: &str, scale: usize) -> usize {
     measure(mono(), s, mono_px(scale))
 }
 
-/// Advance van één mono-teken (voor cursor-/kolomberekening).
+/// Advance of a single mono character (for cursor/column calculation).
 pub fn mono_advance(scale: usize) -> usize {
     let f = mono();
     let sf = f.as_scaled(PxScale::from(mono_px(scale)));

@@ -1,12 +1,12 @@
-//! EuroSafe — het privacy-/capability-dashboard van EuroOS (Sprint AC-1).
+//! EuroSafe — the privacy/capability dashboard of EuroOS (Sprint AC-1).
 //!
-//! Het **zichtbare gezicht van EuroGuard**: geen mainstream OS toont een
-//! realtime overzicht van welke app welke kernel-capabilities bezit. Deze crate
-//! is het pure model + de risico-scoring + de samenvatting die de kernel uit de
-//! live EuroGuard/EuroPol-staat vult en de compositor rendert.
+//! The **visible face of EuroGuard**: no mainstream OS shows a
+//! realtime overview of which app holds which kernel capabilities. This crate
+//! is the pure model + the risk scoring + the summary that the kernel populates
+//! from the live EuroGuard/EuroPol state and the compositor renders.
 //!
-//! Pure `no_std`-logica, host-getest. De kernel mapt zijn eigen
-//! capability-representatie naar [`Capability`].
+//! Pure `no_std` logic, host-tested. The kernel maps its own
+//! capability representation onto [`Capability`].
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -16,37 +16,37 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// Een kernel-capability die een app kan bezitten.
+/// A kernel capability that an app can hold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
-    /// Toegang tot de sleutelkluis (EuroVault) — het gevoeligst.
+    /// Access to the key vault (EuroVault) — the most sensitive.
     Vault,
-    /// Andere programma's uitvoeren.
+    /// Run other programs.
     Exec,
     /// Camera.
     Camera,
-    /// Microfoon.
+    /// Microphone.
     Microphone,
-    /// Locatie.
+    /// Location.
     Location,
-    /// Naar bestanden schrijven.
+    /// Write to files.
     FileWrite,
-    /// Netwerktoegang.
+    /// Network access.
     Net,
-    /// Bestanden lezen.
+    /// Read files.
     FileRead,
-    /// Geluid afspelen.
+    /// Play audio.
     Audio,
-    /// Op het scherm tekenen.
+    /// Draw on the screen.
     Display,
-    /// Klembord.
+    /// Clipboard.
     Clipboard,
-    /// Meldingen tonen.
+    /// Show notifications.
     Notifications,
 }
 
 impl Capability {
-    /// Risicogewicht (hoger = gevoeliger).
+    /// Risk weight (higher = more sensitive).
     pub fn weight(self) -> u32 {
         match self {
             Capability::Vault => 10,
@@ -64,26 +64,26 @@ impl Capability {
         }
     }
 
-    /// Mensvriendelijke naam (NL).
+    /// Human-friendly name.
     pub fn label(self) -> &'static str {
         match self {
-            Capability::Vault => "Sleutelkluis",
-            Capability::Exec => "Programma's uitvoeren",
+            Capability::Vault => "Key vault",
+            Capability::Exec => "Run programs",
             Capability::Camera => "Camera",
-            Capability::Microphone => "Microfoon",
-            Capability::Location => "Locatie",
-            Capability::FileWrite => "Bestanden schrijven",
-            Capability::Net => "Netwerk",
-            Capability::FileRead => "Bestanden lezen",
-            Capability::Audio => "Geluid",
-            Capability::Display => "Scherm",
-            Capability::Clipboard => "Klembord",
-            Capability::Notifications => "Meldingen",
+            Capability::Microphone => "Microphone",
+            Capability::Location => "Location",
+            Capability::FileWrite => "Write files",
+            Capability::Net => "Network",
+            Capability::FileRead => "Read files",
+            Capability::Audio => "Audio",
+            Capability::Display => "Display",
+            Capability::Clipboard => "Clipboard",
+            Capability::Notifications => "Notifications",
         }
     }
 }
 
-/// Risicoclassificatie van een app of het systeem.
+/// Risk classification of an app or the system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Risk {
     Low,
@@ -94,21 +94,21 @@ pub enum Risk {
 impl Risk {
     pub fn label(self) -> &'static str {
         match self {
-            Risk::Low => "Laag",
-            Risk::Medium => "Gemiddeld",
-            Risk::High => "Hoog",
+            Risk::Low => "Low",
+            Risk::Medium => "Medium",
+            Risk::High => "High",
         }
     }
 }
 
-/// De capabilities die één app bezit, plus of hij gesandboxed draait.
+/// The capabilities one app holds, plus whether it runs sandboxed.
 #[derive(Debug, Clone)]
 pub struct AppPermissions {
     pub app: String,
     pub caps: Vec<Capability>,
-    /// Draait de app in een EuroGuard-sandbox (verlaagt het effectieve risico)?
+    /// Does the app run in an EuroGuard sandbox (lowers the effective risk)?
     pub sandboxed: bool,
-    /// Is de app gesigneerd/geverifieerd (EuroGuard-manifest)?
+    /// Is the app signed/verified (EuroGuard manifest)?
     pub verified: bool,
 }
 
@@ -131,13 +131,13 @@ impl AppPermissions {
         self
     }
 
-    /// Ruwe risicoscore = som van capability-gewichten.
+    /// Raw risk score = sum of capability weights.
     pub fn raw_score(&self) -> u32 {
         self.caps.iter().map(|c| c.weight()).sum()
     }
 
-    /// Effectieve score: sandbox dempt (×0,6, naar boven afgerond); een
-    /// niet-geverifieerde app krijgt een opslag (×1,5).
+    /// Effective score: sandbox dampens (×0.6, rounded up); a
+    /// non-verified app gets a surcharge (×1.5).
     pub fn effective_score(&self) -> u32 {
         let mut s = self.raw_score();
         if self.sandboxed {
@@ -149,12 +149,12 @@ impl AppPermissions {
         s
     }
 
-    /// Risicoklasse op basis van de effectieve score.
+    /// Risk class based on the effective score.
     pub fn risk(&self) -> Risk {
         classify(self.effective_score())
     }
 
-    /// Een gevaarlijke combinatie (kluis + netwerk + uitvoeren) → exfiltratie-risico.
+    /// A dangerous combination (vault + network + exec) → exfiltration risk.
     pub fn is_dangerous_combo(&self) -> bool {
         let has = |c| self.caps.contains(&c);
         has(Capability::Vault) && has(Capability::Net) && has(Capability::Exec)
@@ -171,7 +171,7 @@ fn classify(score: u32) -> Risk {
     }
 }
 
-/// Eén gebeurtenis uit het audit-log.
+/// One event from the audit log.
 #[derive(Debug, Clone)]
 pub struct AuditEvent {
     pub app: String,
@@ -179,14 +179,14 @@ pub struct AuditEvent {
     pub allowed: bool,
 }
 
-/// Het volledige dashboard: apps + recente audit-gebeurtenissen.
+/// The full dashboard: apps + recent audit events.
 #[derive(Debug, Clone, Default)]
 pub struct Dashboard {
     pub apps: Vec<AppPermissions>,
     pub events: Vec<AuditEvent>,
 }
 
-/// Een aanbeveling voor de gebruiker.
+/// A recommendation for the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recommendation {
     pub app: String,
@@ -205,13 +205,13 @@ impl Dashboard {
         self.events.push(ev);
     }
 
-    /// Apps met een hoog risico.
+    /// Apps with a high risk.
     pub fn high_risk_apps(&self) -> Vec<&AppPermissions> {
         self.apps.iter().filter(|a| a.risk() == Risk::High).collect()
     }
 
-    /// Alle in gebruik zijnde capabilities met het aantal apps dat ze bezit,
-    /// gesorteerd van gevoelig naar minder gevoelig.
+    /// All capabilities in use with the number of apps that hold them,
+    /// sorted from sensitive to less sensitive.
     pub fn caps_in_use(&self) -> Vec<(Capability, usize)> {
         let order = [
             Capability::Vault,
@@ -237,12 +237,12 @@ impl Dashboard {
         out
     }
 
-    /// Aantal geweigerde audit-gebeurtenissen (EuroGuard hield iets tegen).
+    /// Number of denied audit events (EuroGuard blocked something).
     pub fn denied_count(&self) -> usize {
         self.events.iter().filter(|e| !e.allowed).count()
     }
 
-    /// Systeembrede risicoklasse = de hoogste app-klasse.
+    /// System-wide risk class = the highest app class.
     pub fn system_risk(&self) -> Risk {
         if self.apps.iter().any(|a| a.risk() == Risk::High) {
             Risk::High
@@ -253,28 +253,28 @@ impl Dashboard {
         }
     }
 
-    /// Concrete aanbevelingen (gevaarlijke combo's, onverifieerde apps met kluis...).
+    /// Concrete recommendations (dangerous combos, unverified apps with vault...).
     pub fn recommendations(&self) -> Vec<Recommendation> {
         let mut recs = Vec::new();
         for a in &self.apps {
             if a.is_dangerous_combo() {
                 recs.push(Recommendation {
                     app: a.app.clone(),
-                    message: "Bezit kluis + netwerk + uitvoeren — exfiltratie-risico. Beperk een van deze.".to_string(),
+                    message: "Holds vault + network + exec — exfiltration risk. Restrict one of these.".to_string(),
                     severity: Risk::High,
                 });
             }
             if !a.verified && a.caps.contains(&Capability::Vault) {
                 recs.push(Recommendation {
                     app: a.app.clone(),
-                    message: "Niet-geverifieerde app met sleutelkluis-toegang. Trek de toegang in.".to_string(),
+                    message: "Unverified app with key vault access. Revoke the access.".to_string(),
                     severity: Risk::High,
                 });
             }
             if !a.sandboxed {
                 recs.push(Recommendation {
                     app: a.app.clone(),
-                    message: "Draait buiten de sandbox. Zet de app in een EuroGuard-sandbox.".to_string(),
+                    message: "Runs outside the sandbox. Put the app in an EuroGuard sandbox.".to_string(),
                     severity: Risk::Medium,
                 });
             }
@@ -289,14 +289,14 @@ mod tests {
 
     #[test]
     fn risk_classification() {
-        // Lichte app: scherm + geluid → laag.
+        // Light app: display + audio → low.
         let viewer = AppPermissions::new("EuroMedia")
             .with(Capability::Display)
             .with(Capability::Audio)
             .with(Capability::FileRead);
         assert_eq!(viewer.risk(), Risk::Low);
 
-        // Zware, ongesandboxede, onverifieerde app → hoog.
+        // Heavy, unsandboxed, unverified app → high.
         let bad = AppPermissions::new("rare.bin")
             .with(Capability::Vault)
             .with(Capability::Exec)
@@ -346,7 +346,7 @@ mod tests {
         db.add_event(AuditEvent { app: "rare.bin".into(), cap: Capability::Vault, allowed: false });
 
         let caps = db.caps_in_use();
-        // Vault staat vóór Net vóór Display (gesorteerd op gevoeligheid).
+        // Vault comes before Net before Display (sorted by sensitivity).
         assert_eq!(caps[0].0, Capability::Vault);
         assert!(caps.iter().any(|(c, n)| *c == Capability::Display && *n == 1));
         assert_eq!(db.denied_count(), 1);
@@ -364,7 +364,7 @@ mod tests {
                 .sandboxed(false),
         );
         let recs = db.recommendations();
-        // combo + onverifieerde-kluis + buiten-sandbox = 3 aanbevelingen.
+        // combo + unverified-vault + outside-sandbox = 3 recommendations.
         assert_eq!(recs.len(), 3);
         assert!(recs.iter().any(|r| r.severity == Risk::High));
         assert_eq!(db.system_risk(), Risk::High);
@@ -372,8 +372,8 @@ mod tests {
 
     #[test]
     fn capability_labels_and_weights() {
-        assert_eq!(Capability::Vault.label(), "Sleutelkluis");
+        assert_eq!(Capability::Vault.label(), "Key vault");
         assert!(Capability::Vault.weight() > Capability::Display.weight());
-        assert_eq!(Risk::High.label(), "Hoog");
+        assert_eq!(Risk::High.label(), "High");
     }
 }

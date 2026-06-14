@@ -1,12 +1,12 @@
-//! EuroUSB — USB-descriptor-parsing + HID-boot-protocol-kern (plan I1).
+//! EuroUSB — USB descriptor parsing + HID boot protocol core (plan I1).
 //!
-//! Moderne machines hebben geen PS/2; zonder USB-HID kan EuroOS er geen invoer
-//! krijgen. De xHCI-controllerdriver (de hardware-laag) levert ruwe USB-transfers;
-//! deze module is de architectuur-onafhankelijke kern erboven: het **parsen van
-//! USB-descriptors** (device/configuration/interface/endpoint) om een apparaat te
-//! herkennen, en het **HID-boot-protocol** dat de 8-byte-toetsenbord- en muis-
-//! rapporten naar invoer-events vertaalt. Pure `no_std`-logica → host-getest, los
-//! van enige controller.
+//! Modern machines have no PS/2; without USB HID, EuroOS cannot receive input from
+//! them. The xHCI controller driver (the hardware layer) delivers raw USB transfers;
+//! this module is the architecture-independent core above it: the **parsing of
+//! USB descriptors** (device/configuration/interface/endpoint) to recognize a device,
+//! and the **HID boot protocol** that translates the 8-byte keyboard and mouse
+//! reports into input events. Pure `no_std` logic → host-tested, independent of
+//! any controller.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -15,19 +15,19 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-// Descriptor-types.
+// Descriptor types.
 const DT_DEVICE: u8 = 1;
 const DT_CONFIG: u8 = 2;
 const DT_INTERFACE: u8 = 4;
 const DT_ENDPOINT: u8 = 5;
 
-// USB-klassen.
+// USB classes.
 pub const CLASS_HID: u8 = 0x03;
 pub const HID_SUBCLASS_BOOT: u8 = 0x01;
 pub const HID_PROTOCOL_KEYBOARD: u8 = 0x01;
 pub const HID_PROTOCOL_MOUSE: u8 = 0x02;
 
-/// Het USB device-descriptor (18 bytes) — identiteit + klasse van het apparaat.
+/// The USB device descriptor (18 bytes) — identity + class of the device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceDescriptor {
     pub usb_version: u16,
@@ -58,10 +58,10 @@ impl DeviceDescriptor {
     }
 }
 
-/// Een endpoint-descriptor.
+/// An endpoint descriptor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Endpoint {
-    pub address: u8, // bit7 = IN-richting
+    pub address: u8, // bit7 = IN direction
     pub attributes: u8,
     pub max_packet: u16,
     pub interval: u8,
@@ -76,7 +76,7 @@ impl Endpoint {
     }
 }
 
-/// Een interface + zijn endpoints.
+/// An interface + its endpoints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interface {
     pub number: u8,
@@ -87,18 +87,18 @@ pub struct Interface {
 }
 
 impl Interface {
-    /// Is dit een HID-boot-toetsenbord? (klasse 3, subclass boot, protocol 1)
+    /// Is this a HID boot keyboard? (class 3, subclass boot, protocol 1)
     pub fn is_boot_keyboard(&self) -> bool {
         self.class == CLASS_HID && self.subclass == HID_SUBCLASS_BOOT && self.protocol == HID_PROTOCOL_KEYBOARD
     }
-    /// Is dit een HID-boot-muis?
+    /// Is this a HID boot mouse?
     pub fn is_boot_mouse(&self) -> bool {
         self.class == CLASS_HID && self.subclass == HID_SUBCLASS_BOOT && self.protocol == HID_PROTOCOL_MOUSE
     }
 }
 
-/// Een geparste configuratie: alle interfaces + endpoints uit het config-blok
-/// (config-descriptor gevolgd door interface/endpoint-descriptors).
+/// A parsed configuration: all interfaces + endpoints from the config block
+/// (config descriptor followed by interface/endpoint descriptors).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Configuration {
     pub value: u8,
@@ -106,7 +106,7 @@ pub struct Configuration {
 }
 
 impl Configuration {
-    /// Parse een volledig configuratie-blok (loopt de geketende descriptors af).
+    /// Parse a complete configuration block (walks the chained descriptors).
     pub fn parse(b: &[u8]) -> Option<Configuration> {
         if b.len() < 9 || b[1] != DT_CONFIG {
             return None;
@@ -114,7 +114,7 @@ impl Configuration {
         let total = u16::from_le_bytes([b[2], b[3]]) as usize;
         let value = b[5];
         let mut interfaces: Vec<Interface> = Vec::new();
-        let mut p = b[0] as usize; // ná de config-descriptor zelf
+        let mut p = b[0] as usize; // after the config descriptor itself
         let end = total.min(b.len());
         while p + 2 <= end {
             let len = b[p] as usize;
@@ -142,7 +142,7 @@ impl Configuration {
                         });
                     }
                 }
-                _ => {} // klasse-specifieke descriptors (bv. HID) overslaan
+                _ => {} // skip class-specific descriptors (e.g. HID)
             }
             p += len;
         }
@@ -150,17 +150,17 @@ impl Configuration {
     }
 }
 
-/// Een toetsenbord-invoer-event uit een HID-boot-rapport.
+/// A keyboard input event from a HID boot report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyEvent {
-    pub keycode: u8, // USB HID usage-id
+    pub keycode: u8, // USB HID usage id
     pub pressed: bool,
     pub modifiers: u8, // bit0=LCtrl,1=LShift,2=LAlt,3=LGui,4=RCtrl,…
 }
 
-/// HID-boot-toetsenbord: vergelijkt twee opeenvolgende 8-byte-rapporten en levert
-/// de press/release-events (rapport = `[modifiers][reserved][6× keycode]`). Een
-/// stateful decoder zodat herhaalde toetsen niet dubbel tellen.
+/// HID boot keyboard: compares two consecutive 8-byte reports and emits the
+/// press/release events (report = `[modifiers][reserved][6× keycode]`). A
+/// stateful decoder so repeated keys don't count twice.
 #[derive(Default)]
 pub struct BootKeyboard {
     prev: [u8; 6],
@@ -171,7 +171,7 @@ impl BootKeyboard {
         BootKeyboard { prev: [0; 6] }
     }
 
-    /// Voed een nieuw 8-byte-rapport; geef de press/release-events sinds het vorige.
+    /// Feed a new 8-byte report; emit the press/release events since the previous one.
     pub fn feed(&mut self, report: &[u8]) -> Vec<KeyEvent> {
         let mut events = Vec::new();
         if report.len() < 8 {
@@ -179,13 +179,13 @@ impl BootKeyboard {
         }
         let mods = report[0];
         let cur = [report[2], report[3], report[4], report[5], report[6], report[7]];
-        // Ingedrukt: in `cur` maar niet in `prev`.
+        // Pressed: in `cur` but not in `prev`.
         for &k in cur.iter() {
             if k != 0 && !self.prev.contains(&k) {
                 events.push(KeyEvent { keycode: k, pressed: true, modifiers: mods });
             }
         }
-        // Losgelaten: in `prev` maar niet in `cur`.
+        // Released: in `prev` but not in `cur`.
         for &k in self.prev.iter() {
             if k != 0 && !cur.contains(&k) {
                 events.push(KeyEvent { keycode: k, pressed: false, modifiers: mods });
@@ -196,16 +196,16 @@ impl BootKeyboard {
     }
 }
 
-/// Een muis-bewegings-event uit een HID-boot-rapport.
+/// A mouse movement event from a HID boot report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MouseEvent {
-    pub buttons: u8, // bit0=links,1=rechts,2=midden
+    pub buttons: u8, // bit0=left,1=right,2=middle
     pub dx: i8,
     pub dy: i8,
     pub wheel: i8,
 }
 
-/// Decodeer een HID-boot-muis-rapport (`[buttons][dx][dy]` (+wheel)).
+/// Decode a HID boot mouse report (`[buttons][dx][dy]` (+wheel)).
 pub fn parse_mouse(report: &[u8]) -> Option<MouseEvent> {
     if report.len() < 3 {
         return None;
@@ -218,13 +218,13 @@ pub fn parse_mouse(report: &[u8]) -> Option<MouseEvent> {
     })
 }
 
-// USB Mass-Storage-klasse (plan I1 — USB-schijf).
+// USB Mass Storage class (plan I1 — USB disk).
 pub const CLASS_MASS_STORAGE: u8 = 0x08;
 pub const MSC_SUBCLASS_SCSI: u8 = 0x06;
 pub const MSC_PROTOCOL_BOT: u8 = 0x50; // Bulk-Only Transport
 
 impl Interface {
-    /// Is dit een SCSI-Bulk-Only-Transport-massastoragge-interface? (USB-schijf)
+    /// Is this a SCSI Bulk-Only-Transport mass-storage interface? (USB disk)
     pub fn is_mass_storage_bot(&self) -> bool {
         self.class == CLASS_MASS_STORAGE
             && self.subclass == MSC_SUBCLASS_SCSI
@@ -232,11 +232,11 @@ impl Interface {
     }
 }
 
-/// Bulk-Only-Transport (BOT) + SCSI — de byte-laag van een USB-schijf. Pure
-/// `no_std`-bouwers/parsers (host-getest); de xHCI-bulk-transport stuurt ze.
+/// Bulk-Only Transport (BOT) + SCSI — the byte layer of a USB disk. Pure
+/// `no_std` builders/parsers (host-tested); the xHCI bulk transport drives them.
 pub mod bot {
-    /// Bouw een 31-byte Command Block Wrapper (CBW). `data_len` = verwachte data-
-    /// fase-lengte, `in_dir` = data device→host, `cdb` = het SCSI-commandoblok.
+    /// Build a 31-byte Command Block Wrapper (CBW). `data_len` = expected data-
+    /// phase length, `in_dir` = data device→host, `cdb` = the SCSI command block.
     pub fn cbw(tag: u32, data_len: u32, in_dir: bool, lun: u8, cdb: &[u8]) -> [u8; 31] {
         let mut b = [0u8; 31];
         b[0..4].copy_from_slice(&0x4342_5355u32.to_le_bytes()); // "USBC"
@@ -249,8 +249,8 @@ pub mod bot {
         b
     }
 
-    /// Parse een 13-byte Command Status Wrapper (CSW). Geeft (tag, residue, status)
-    /// als de signature klopt (0 = geslaagd, 1 = mislukt, 2 = phase-error).
+    /// Parse a 13-byte Command Status Wrapper (CSW). Returns (tag, residue, status)
+    /// if the signature matches (0 = success, 1 = failure, 2 = phase-error).
     pub fn parse_csw(b: &[u8]) -> Option<(u32, u32, u8)> {
         if b.len() < 13 || u32::from_le_bytes([b[0], b[1], b[2], b[3]]) != 0x5342_5355 {
             return None; // "USBS"
@@ -262,22 +262,22 @@ pub mod bot {
         ))
     }
 
-    /// SCSI INQUIRY (6-byte CDB) — vraagt 36 bytes apparaat-identiteit.
+    /// SCSI INQUIRY (6-byte CDB) — requests 36 bytes of device identity.
     pub fn inquiry() -> [u8; 6] {
         [0x12, 0, 0, 0, 36, 0]
     }
 
-    /// SCSI TEST UNIT READY (6-byte CDB) — pollt of het medium klaar is.
+    /// SCSI TEST UNIT READY (6-byte CDB) — polls whether the medium is ready.
     pub fn test_unit_ready() -> [u8; 6] {
         [0x00, 0, 0, 0, 0, 0]
     }
 
-    /// SCSI READ CAPACITY(10) (10-byte CDB) — geeft (laatste-LBA, blokgrootte) terug.
+    /// SCSI READ CAPACITY(10) (10-byte CDB) — returns (last LBA, block size).
     pub fn read_capacity10() -> [u8; 10] {
         [0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     }
 
-    /// Decodeer een 8-byte READ-CAPACITY(10)-respons: (laatste-LBA, blokgrootte), big-endian.
+    /// Decode an 8-byte READ CAPACITY(10) response: (last LBA, block size), big-endian.
     pub fn parse_capacity(b: &[u8]) -> Option<(u32, u32)> {
         if b.len() < 8 {
             return None;
@@ -288,14 +288,14 @@ pub mod bot {
         ))
     }
 
-    /// SCSI READ(10) (10-byte CDB) — lees `count` blokken vanaf `lba` (big-endian velden).
+    /// SCSI READ(10) (10-byte CDB) — read `count` blocks from `lba` (big-endian fields).
     pub fn read10(lba: u32, count: u16) -> [u8; 10] {
         let l = lba.to_be_bytes();
         let c = count.to_be_bytes();
         [0x28, 0, l[0], l[1], l[2], l[3], 0, c[0], c[1], 0]
     }
 
-    /// SCSI WRITE(10) (10-byte CDB) — schrijf `count` blokken vanaf `lba`.
+    /// SCSI WRITE(10) (10-byte CDB) — write `count` blocks from `lba`.
     pub fn write10(lba: u32, count: u16) -> [u8; 10] {
         let l = lba.to_be_bytes();
         let c = count.to_be_bytes();
@@ -313,7 +313,7 @@ mod tests {
             0x00, 0x00, 0x00, 8, // class/sub/proto 0 (per-interface), maxpkt 8
             0x6d, 0x04, 0x00, 0xc0, // vendor 0x046d, product 0xc000
             0x00, 0x01, 1, 2, 0, // bcdDevice, iMan, iProd, iSerial
-            1, // 1 configuratie
+            1, // 1 configuration
         ]
     }
 
@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn reject_bad_device_descriptor() {
-        assert!(DeviceDescriptor::parse(&[18, 99]).is_none()); // verkeerd type/len
+        assert!(DeviceDescriptor::parse(&[18, 99]).is_none()); // wrong type/len
         assert!(DeviceDescriptor::parse(&[1, 2, 3]).is_none());
     }
 
@@ -339,7 +339,7 @@ mod tests {
             9, DT_INTERFACE, 0, 0, 1, CLASS_HID, HID_SUBCLASS_BOOT, HID_PROTOCOL_KEYBOARD, 0,
             7, DT_ENDPOINT, 0x81, 0x03, 8, 0, 10, // ep 1 IN, interrupt, maxpkt 8
         ];
-        v[2] = v.len() as u8; // wTotalLength bijwerken
+        v[2] = v.len() as u8; // update wTotalLength
         v
     }
 
@@ -359,16 +359,16 @@ mod tests {
     #[test]
     fn keyboard_press_and_release() {
         let mut kb = BootKeyboard::new();
-        // 'a' (0x04) ingedrukt met Left-Shift (mod bit1).
+        // 'a' (0x04) pressed with Left-Shift (mod bit1).
         let e1 = kb.feed(&[0x02, 0, 0x04, 0, 0, 0, 0, 0]);
         assert_eq!(e1.len(), 1);
         assert_eq!(e1[0].keycode, 0x04);
         assert!(e1[0].pressed);
         assert_eq!(e1[0].modifiers, 0x02);
-        // 'a' vastgehouden → geen nieuw event.
+        // 'a' held down → no new event.
         let e2 = kb.feed(&[0x02, 0, 0x04, 0, 0, 0, 0, 0]);
         assert_eq!(e2.len(), 0);
-        // losgelaten.
+        // released.
         let e3 = kb.feed(&[0, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(e3.len(), 1);
         assert!(!e3[0].pressed);
@@ -379,14 +379,14 @@ mod tests {
     fn keyboard_multiple_keys() {
         let mut kb = BootKeyboard::new();
         let e = kb.feed(&[0, 0, 0x04, 0x05, 0x06, 0, 0, 0]);
-        assert_eq!(e.len(), 3); // 3 toetsen tegelijk ingedrukt
+        assert_eq!(e.len(), 3); // 3 keys pressed at once
         let down: Vec<u8> = e.iter().filter(|k| k.pressed).map(|k| k.keycode).collect();
         assert!(down.contains(&0x04) && down.contains(&0x05) && down.contains(&0x06));
     }
 
     #[test]
     fn mouse_report() {
-        let m = parse_mouse(&[0x01, 5, 0xFB, 0]).unwrap(); // links, dx=+5, dy=-5
+        let m = parse_mouse(&[0x01, 5, 0xFB, 0]).unwrap(); // left, dx=+5, dy=-5
         assert_eq!(m.buttons, 0x01);
         assert_eq!(m.dx, 5);
         assert_eq!(m.dy, -5);
@@ -401,10 +401,10 @@ mod tests {
         assert_eq!(u32::from_le_bytes([w[4], w[5], w[6], w[7]]), 0xDEAD_BEEF);
         assert_eq!(u32::from_le_bytes([w[8], w[9], w[10], w[11]]), 8 * 512);
         assert_eq!(w[12], 0x80); // IN
-        assert_eq!(w[14], 10); // READ(10) CDB-lengte
+        assert_eq!(w[14], 10); // READ(10) CDB length
         assert_eq!(w[15], 0x28); // opcode READ(10)
 
-        // Een geldige CSW: status geslaagd, geen residue.
+        // A valid CSW: status success, no residue.
         let mut csw = [0u8; 13];
         csw[0..4].copy_from_slice(b"USBS");
         csw[4..8].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
@@ -413,12 +413,12 @@ mod tests {
         assert_eq!(tag, 0xDEAD_BEEF);
         assert_eq!(residue, 0);
         assert_eq!(status, 0);
-        assert!(bot::parse_csw(&[0u8; 13]).is_none()); // verkeerde signature
+        assert!(bot::parse_csw(&[0u8; 13]).is_none()); // wrong signature
     }
 
     #[test]
     fn scsi_read_capacity_decode() {
-        // laatste-LBA = 0x0001_0000 (65536 blokken), blokgrootte = 512.
+        // last LBA = 0x0001_0000 (65536 blocks), block size = 512.
         let resp = [0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00];
         let (last_lba, bs) = bot::parse_capacity(&resp).unwrap();
         assert_eq!(last_lba, 0x0001_0000);

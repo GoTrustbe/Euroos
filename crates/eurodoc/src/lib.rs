@@ -1,10 +1,10 @@
-//! EuroDoc — het Universeel Document Model (ES-Core van EuroSuite).
+//! EuroDoc — the Universal Document Model (ES-Core of EuroSuite).
 //!
-//! Eén boom voor Writer (tekst), Calc (rekenblad) en Impress (presentatie). De
-//! parsers (ES-IO: OOXML/ODF/PDF) bouwen 'm; de apps renderen + bewerken 'm. Dit
-//! crate levert het model, een **stijlregister met overerving**, en afgeleide
-//! bewerkingen (tekstextractie, woord-/tekenstatistiek) — pure, host-geteste
-//! `no_std`-logica zonder externe afhankelijkheden.
+//! One tree for Writer (text), Calc (spreadsheet) and Impress (presentation). The
+//! parsers (ES-IO: OOXML/ODF/PDF) build it; the apps render and edit it. This
+//! crate provides the model, a **style registry with inheritance**, and derived
+//! operations (text extraction, word/character statistics) — pure, host-tested
+//! `no_std` logic without external dependencies.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -21,7 +21,7 @@ pub use model::{
     Alignment, Color, DocumentKind, Metadata, Paragraph, ParagraphProperties, Run, SheetBody, Slide, Table,
 };
 
-/// Een benoemde stijl (kan van een ouder-stijl erven).
+/// A named style (can inherit from a parent style).
 #[derive(Clone, PartialEq, Debug)]
 pub struct Style {
     pub id: String,
@@ -29,7 +29,7 @@ pub struct Style {
     pub run: RunProperties,
 }
 
-/// Het stijlregister: benoemde stijlen met overerving.
+/// The style registry: named styles with inheritance.
 #[derive(Default)]
 pub struct StyleRegistry {
     styles: Vec<Style>,
@@ -53,8 +53,8 @@ impl StyleRegistry {
         self.styles.iter().find(|s| s.id == id)
     }
 
-    /// Los de effectieve run-opmaak van een stijl op door de ouderketen samen te
-    /// vouwen (ouder eerst, kind overschrijft). Cyclus-veilig (diepte-limiet).
+    /// Resolve the effective run formatting of a style by folding the parent
+    /// chain (parent first, child overrides). Cycle-safe (depth limit).
     pub fn resolve(&self, id: &str) -> RunProperties {
         let mut chain: Vec<&Style> = Vec::new();
         let mut cur = self.get(id);
@@ -63,11 +63,11 @@ impl StyleRegistry {
             chain.push(s);
             guard += 1;
             if guard > 32 {
-                break; // cyclus-bescherming
+                break; // cycle protection
             }
             cur = s.parent.as_deref().and_then(|p| self.get(p));
         }
-        // Van ouder (achteraan) naar kind (vooraan) samenvouwen.
+        // Fold from parent (at the end) to child (at the front).
         let mut props = RunProperties::default();
         for s in chain.iter().rev() {
             props = props.merge(&s.run);
@@ -76,7 +76,7 @@ impl StyleRegistry {
     }
 }
 
-/// Een document: soort + metadata + body + stijlen.
+/// A document: kind + metadata + body + styles.
 pub struct Document {
     pub kind: DocumentKind,
     pub metadata: Metadata,
@@ -110,7 +110,7 @@ impl Document {
         }
     }
 
-    /// De platte tekst van het hele document (voor indexering, zoeken, schermlezer).
+    /// The plain text of the whole document (for indexing, search, screen reader).
     pub fn plain_text(&self) -> String {
         let mut out = String::new();
         match &self.body {
@@ -138,17 +138,17 @@ impl Document {
         out
     }
 
-    /// Woordental van het hele document (witruimte-gescheiden tokens).
+    /// Word count of the whole document (whitespace-separated tokens).
     pub fn word_count(&self) -> usize {
         self.plain_text().split_whitespace().filter(|w| !w.is_empty()).count()
     }
 
-    /// Tekental (Unicode-tekens) van het hele document.
+    /// Character count (Unicode characters) of the whole document.
     pub fn char_count(&self) -> usize {
         self.plain_text().chars().filter(|c| !c.is_whitespace()).count()
     }
 
-    /// Het aantal paragrafen (Writer) / cellen (Sheet) / dia's (Deck).
+    /// The number of paragraphs (Writer) / cells (Sheet) / slides (Deck).
     pub fn element_count(&self) -> usize {
         match &self.body {
             Body::Writer(blocks) => blocks.iter().filter(|b| matches!(b, Block::Paragraph(_))).count(),
@@ -196,7 +196,7 @@ fn cell_text(c: &Cell) -> String {
         Cell::Empty => String::new(),
         Cell::Text(s) | Cell::Formula(s) => s.clone(),
         Cell::Number { scaled, scale } => {
-            // Compacte weergave zonder drijvende komma.
+            // Compact rendering without floating point.
             if *scale == 0 {
                 return alloc::format!("{scaled}");
             }
@@ -215,10 +215,10 @@ mod tests {
     fn writer_text_and_stats() {
         let mut doc = Document::writer();
         if let Body::Writer(b) = &mut doc.body {
-            b.push(Block::Paragraph(Paragraph::text("Hallo wereld van EuroOS").styled("Heading1")));
-            b.push(Block::Paragraph(Paragraph::new().run(Run::new("Vet").bold()).run(Run::new(" en gewoon"))));
+            b.push(Block::Paragraph(Paragraph::text("Hello world from EuroOS").styled("Heading1")));
+            b.push(Block::Paragraph(Paragraph::new().run(Run::new("Bold").bold()).run(Run::new(" and normal"))));
         }
-        assert_eq!(doc.plain_text(), "Hallo wereld van EuroOS\nVet en gewoon\n");
+        assert_eq!(doc.plain_text(), "Hello world from EuroOS\nBold and normal\n");
         assert_eq!(doc.word_count(), 7);
         assert_eq!(doc.element_count(), 2);
     }
@@ -232,13 +232,13 @@ mod tests {
         reg.define("Normal", None, base);
         let mut h1 = RunProperties::default();
         h1.bold = true;
-        h1.half_points = Some(40); // 20pt overschrijft
+        h1.half_points = Some(40); // 20pt overrides
         reg.define("Heading1", Some("Normal"), h1);
 
         let r = reg.resolve("Heading1");
-        assert!(r.bold); // van Heading1
-        assert_eq!(r.half_points, Some(40)); // kind overschrijft ouder
-        assert_eq!(r.font_family.as_deref(), Some("EuroSans")); // geërfd van Normal
+        assert!(r.bold); // from Heading1
+        assert_eq!(r.half_points, Some(40)); // child overrides parent
+        assert_eq!(r.font_family.as_deref(), Some("EuroSans")); // inherited from Normal
     }
 
     #[test]
@@ -246,18 +246,18 @@ mod tests {
         let mut reg = StyleRegistry::new();
         reg.define("A", Some("B"), RunProperties::default());
         reg.define("B", Some("A"), RunProperties::default());
-        let _ = reg.resolve("A"); // mag niet hangen
+        let _ = reg.resolve("A"); // must not hang
     }
 
     #[test]
     fn sheet_text() {
         let mut doc = Document::sheet();
         if let Body::Sheet(s) = &mut doc.body {
-            s.set(0, 0, Cell::Text(String::from("Omzet")));
+            s.set(0, 0, Cell::Text(String::from("Revenue")));
             s.set(0, 1, Cell::Number { scaled: 123456, scale: 2 }); // 1234.56
             s.set(1, 0, Cell::Formula(String::from("=SUM(B1:B9)")));
         }
-        assert_eq!(doc.plain_text(), "Omzet\t1234.56\t=SUM(B1:B9)");
+        assert_eq!(doc.plain_text(), "Revenue\t1234.56\t=SUM(B1:B9)");
         assert_eq!(doc.element_count(), 3);
     }
 
@@ -265,12 +265,12 @@ mod tests {
     fn deck_text() {
         let mut doc = Document::deck();
         if let Body::Deck(s) = &mut doc.body {
-            s.push(Slide { title: String::from("Welkom"), blocks: alloc::vec![Block::Paragraph(Paragraph::text("Eerste dia"))] });
-            s.push(Slide { title: String::from("Einde"), blocks: alloc::vec![] });
+            s.push(Slide { title: String::from("Welcome"), blocks: alloc::vec![Block::Paragraph(Paragraph::text("First slide"))] });
+            s.push(Slide { title: String::from("End"), blocks: alloc::vec![] });
         }
         assert_eq!(doc.element_count(), 2);
-        assert!(doc.plain_text().contains("Welkom"));
-        assert!(doc.plain_text().contains("Eerste dia"));
+        assert!(doc.plain_text().contains("Welcome"));
+        assert!(doc.plain_text().contains("First slide"));
     }
 
     #[test]

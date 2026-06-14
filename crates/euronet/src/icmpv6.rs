@@ -1,6 +1,6 @@
 //! ICMPv6 (RFC 4443) + Neighbor Discovery (RFC 4861): echo, Router Solicitation,
-//! Neighbor Solicitation, en het parsen van Router/Neighbor Advertisements. De
-//! checksum gebruikt de IPv6-pseudo-header.
+//! Neighbor Solicitation, and parsing Router/Neighbor Advertisements. The
+//! checksum uses the IPv6 pseudo-header.
 
 use alloc::vec::Vec;
 
@@ -15,7 +15,7 @@ pub const NEIGHBOR_ADVERT: u8 = 136;
 
 const NEXT_ICMPV6: u8 = 58;
 
-/// Zet de checksum (over de pseudo-header) in een opgebouwd ICMPv6-bericht.
+/// Set the checksum (over the pseudo-header) in an assembled ICMPv6 message.
 fn finalize(mut msg: Vec<u8>, src: Ipv6Addr, dst: Ipv6Addr) -> Vec<u8> {
     msg[2] = 0;
     msg[3] = 0;
@@ -33,16 +33,16 @@ pub fn echo_request(id: u16, seq: u16, data: &[u8], src: Ipv6Addr, dst: Ipv6Addr
     finalize(m, src, dst)
 }
 
-/// Router Solicitation (met source link-layer-optie) — vraag om een RA.
+/// Router Solicitation (with source link-layer option) — request an RA.
 pub fn router_solicit(src_mac: [u8; 6], src: Ipv6Addr, dst: Ipv6Addr) -> Vec<u8> {
     let mut m = alloc::vec![ROUTER_SOLICIT, 0, 0, 0, 0, 0, 0, 0];
-    m.push(1); // optie: source link-layer address
-    m.push(1); // lengte in eenheden van 8 bytes
+    m.push(1); // option: source link-layer address
+    m.push(1); // length in units of 8 bytes
     m.extend_from_slice(&src_mac);
     finalize(m, src, dst)
 }
 
-/// Neighbor Solicitation — "wie heeft `target`?" (de IPv6-tegenhanger van ARP).
+/// Neighbor Solicitation — "who has `target`?" (the IPv6 counterpart of ARP).
 pub fn neighbor_solicit(target: Ipv6Addr, src_mac: [u8; 6], src: Ipv6Addr, dst: Ipv6Addr) -> Vec<u8> {
     let mut m = alloc::vec![NEIGHBOR_SOLICIT, 0, 0, 0, 0, 0, 0, 0];
     m.extend_from_slice(&target.0);
@@ -52,16 +52,16 @@ pub fn neighbor_solicit(target: Ipv6Addr, src_mac: [u8; 6], src: Ipv6Addr, dst: 
     finalize(m, src, dst)
 }
 
-/// Het ICMPv6-type van een bericht.
+/// The ICMPv6 type of a message.
 pub fn msg_type(buf: &[u8]) -> Option<u8> {
     buf.first().copied()
 }
 
-/// Parse een Router Advertisement: (prefix /64, router-MAC) uit de opties.
+/// Parse a Router Advertisement: (prefix /64, router MAC) from the options.
 pub fn ra_info(buf: &[u8]) -> (Option<[u8; 8]>, Option<[u8; 6]>) {
     let mut prefix = None;
     let mut mac = None;
-    let mut i = 16; // RA-header is 16 bytes
+    let mut i = 16; // RA header is 16 bytes
     while i + 2 <= buf.len() {
         let t = buf[i];
         let l = buf[i + 1] as usize * 8;
@@ -69,7 +69,7 @@ pub fn ra_info(buf: &[u8]) -> (Option<[u8; 8]>, Option<[u8; 6]>) {
             break;
         }
         if t == 3 && l >= 32 {
-            // Prefix Information: prefix begint op offset +16 binnen de optie.
+            // Prefix Information: prefix begins at offset +16 within the option.
             let mut p = [0u8; 8];
             p.copy_from_slice(&buf[i + 16..i + 24]);
             prefix = Some(p);
@@ -83,9 +83,9 @@ pub fn ra_info(buf: &[u8]) -> (Option<[u8; 8]>, Option<[u8; 6]>) {
     (prefix, mac)
 }
 
-/// Parse een Neighbor Advertisement: target link-layer-adres (MAC).
+/// Parse a Neighbor Advertisement: target link-layer address (MAC).
 pub fn na_mac(buf: &[u8]) -> Option<[u8; 6]> {
-    let mut i = 24; // NA-header is 24 bytes (type,code,cksum,flags(4),target(16))
+    let mut i = 24; // NA header is 24 bytes (type,code,cksum,flags(4),target(16))
     while i + 2 <= buf.len() {
         let t = buf[i];
         let l = buf[i + 1] as usize * 8;
@@ -112,13 +112,13 @@ mod tests {
         let dst = Ipv6Addr::ALL_NODES;
         let m = echo_request(0x1234, 1, b"hoi", src, dst);
         assert_eq!(m[0], ECHO_REQUEST);
-        // checksum over pseudo+msg moet 0 verifiëren
+        // checksum over pseudo+msg must verify to 0
         assert_eq!(pseudo_checksum(src, dst, 58, &m), 0);
     }
 
     #[test]
     fn parse_ra() {
-        // RA-header (16) + prefix-optie (type 3, len 4) + SLLA (type 1, len 1).
+        // RA header (16) + prefix option (type 3, len 4) + SLLA (type 1, len 1).
         let mut b = alloc::vec![134u8, 0, 0, 0, 64, 0, 0x07, 0x08, 0, 0, 0, 0, 0, 0, 0, 0];
         // prefix info: type3 len4 prefixlen64 flags valid(4) pref(4) res(4) prefix(16)
         b.extend_from_slice(&[3, 4, 64, 0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);

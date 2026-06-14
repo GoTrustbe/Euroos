@@ -1,10 +1,10 @@
 //! EuroObserve — **in-kernel observability** (plan W).
 //!
-//! Operators willen meer dan logs: CPU/geheugen-metrics, teller-reeksen, latency-
-//! histogrammen — en die kunnen scrapen met standaard-tooling. EuroObserve levert
-//! **lock-vrije metric-primitieven** (`Counter`/`Gauge`/`Histogram`, pure atomics →
-//! nul-overhead als niemand leest) en een **OpenMetrics**-renderer, zodat Prometheus
-//! EuroOS rechtstreeks kan uitlezen. Pure `no_std`-logica → host-getest.
+//! Operators want more than logs: CPU/memory metrics, counter series, latency
+//! histograms — and they want to scrape them with standard tooling. EuroObserve
+//! provides **lock-free metric primitives** (`Counter`/`Gauge`/`Histogram`, pure
+//! atomics → zero overhead when nobody reads) and an **OpenMetrics** renderer, so
+//! Prometheus can read EuroOS directly. Pure `no_std` logic → host-tested.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -15,7 +15,7 @@ use alloc::format;
 use alloc::string::String;
 use core::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
-/// Een monotone teller (alleen omhoog).
+/// A monotonic counter (only goes up).
 pub struct Counter(AtomicU64);
 impl Counter {
     pub const fn new() -> Self {
@@ -37,7 +37,7 @@ impl Default for Counter {
     }
 }
 
-/// Een meter die op en neer kan (bv. vrije pagina's).
+/// A gauge that can go up and down (e.g. free pages).
 pub struct Gauge(AtomicI64);
 impl Gauge {
     pub const fn new() -> Self {
@@ -59,12 +59,12 @@ impl Default for Gauge {
     }
 }
 
-/// Een latency-histogram met vaste `le`-grenzen (microseconden). `BUCKETS` grenzen +
-/// een impliciete `+Inf`-emmer; lock-vrij.
+/// A latency histogram with fixed `le` bounds (microseconds). `BUCKETS` bounds +
+/// an implicit `+Inf` bucket; lock-free.
 pub const HIST_BOUNDS: [u64; 6] = [10, 50, 100, 500, 1000, 5000];
 
 pub struct Histogram {
-    buckets: [AtomicU64; 7], // 6 grenzen + +Inf
+    buckets: [AtomicU64; 7], // 6 bounds + +Inf
     sum: AtomicU64,
 }
 impl Histogram {
@@ -74,11 +74,11 @@ impl Histogram {
             sum: AtomicU64::new(0),
         }
     }
-    /// Registreer een waarneming (µs).
+    /// Record an observation (µs).
     pub fn observe(&self, us: u64) {
         self.sum.fetch_add(us, Ordering::Relaxed);
         let idx = HIST_BOUNDS.iter().position(|&b| us <= b).unwrap_or(6);
-        // OpenMetrics-histogram-emmers zijn CUMULATIEF (≤ grens): tel alle hogere mee.
+        // OpenMetrics histogram buckets are CUMULATIVE (≤ bound): count all higher ones too.
         for b in idx..7 {
             self.buckets[b].fetch_add(1, Ordering::Relaxed);
         }
@@ -96,18 +96,18 @@ impl Default for Histogram {
     }
 }
 
-// ── OpenMetrics-rendering (Prometheus-tekstformaat) ─────────────────────────
-/// Render een counter-regel: `# TYPE`/`# HELP` + waarde.
+// ── OpenMetrics rendering (Prometheus text format) ──────────────────────────
+/// Render a counter line: `# TYPE`/`# HELP` + value.
 pub fn render_counter(name: &str, help: &str, c: &Counter) -> String {
     format!("# HELP {name} {help}\n# TYPE {name} counter\n{name} {}\n", c.get())
 }
 
-/// Render een gauge-regel.
+/// Render a gauge line.
 pub fn render_gauge(name: &str, help: &str, g: &Gauge) -> String {
     format!("# HELP {name} {help}\n# TYPE {name} gauge\n{name} {}\n", g.get())
 }
 
-/// Render een histogram (cumulatieve `_bucket{le=...}` + `_sum` + `_count`).
+/// Render a histogram (cumulative `_bucket{le=...}` + `_sum` + `_count`).
 pub fn render_histogram(name: &str, help: &str, h: &Histogram) -> String {
     let mut s = format!("# HELP {name} {help}\n# TYPE {name} histogram\n");
     for (i, &b) in HIST_BOUNDS.iter().enumerate() {
@@ -143,7 +143,7 @@ mod tests {
         h.observe(20000); // +Inf
         assert_eq!(h.count(), 3);
         assert_eq!(h.sum(), 5 + 75 + 20000);
-        // le=10 telt 1 (de 5), le=100 telt 2 (5 + 75), +Inf telt 3.
+        // le=10 counts 1 (the 5), le=100 counts 2 (5 + 75), +Inf counts 3.
         assert_eq!(h.buckets[0].load(Ordering::Relaxed), 1);
         assert_eq!(h.buckets[2].load(Ordering::Relaxed), 2);
         assert_eq!(h.buckets[6].load(Ordering::Relaxed), 3);
@@ -153,19 +153,19 @@ mod tests {
     fn openmetrics_format() {
         let c = Counter::new();
         c.add(42);
-        let out = render_counter("euroos_syscalls_total", "Aantal syscalls", &c);
+        let out = render_counter("euroos_syscalls_total", "Number of syscalls", &c);
         assert!(out.contains("# TYPE euroos_syscalls_total counter\n"));
         assert!(out.contains("euroos_syscalls_total 42\n"));
         let g = Gauge::new();
         g.set(2048);
-        assert!(render_gauge("euroos_free_pages", "Vrije pagina's", &g).contains("euroos_free_pages 2048\n"));
+        assert!(render_gauge("euroos_free_pages", "Free pages", &g).contains("euroos_free_pages 2048\n"));
     }
 
     #[test]
     fn histogram_render_has_buckets_sum_count() {
         let h = Histogram::new();
         h.observe(30);
-        let out = render_histogram("euroos_fs_read_us", "FS-leeslatentie", &h);
+        let out = render_histogram("euroos_fs_read_us", "FS read latency", &h);
         assert!(out.contains("# TYPE euroos_fs_read_us histogram\n"));
         assert!(out.contains("euroos_fs_read_us_bucket{le=\"50\"} 1\n"));
         assert!(out.contains("euroos_fs_read_us_bucket{le=\"+Inf\"} 1\n"));

@@ -1,12 +1,12 @@
-//! EuroSign — soevereine documentondertekening voor EuroOS (Sprint AC-4).
+//! EuroSign — sovereign document signing for EuroOS (Sprint AC-4).
 //!
-//! Bestanden ondertekenen met Ed25519 (sleutel uit EuroVault), handtekeningen
-//! verifiëren, en een visuele handtekening in een document plaatsen — zonder
-//! externe cloud of betaaldienst. Deze crate levert het **canonieke manifest**
-//! (doc-hash + ondertekenaar + tijd + doel), een **`.eurosig`-envelopformaat**
-//! (tekstueel, parse/serialiseer) en **bindings-verificatie** (klopt de doc-hash
-//! met de envelop?). De Ed25519-bewerking zelf blijft in [`eurotls`]/EuroVault;
-//! deze crate is crypto-vrij en host-getest.
+//! Sign files with Ed25519 (key from EuroVault), verify signatures,
+//! and place a visual signature in a document — without
+//! an external cloud or paid service. This crate provides the **canonical manifest**
+//! (doc hash + signer + time + purpose), a **`.eurosig` envelope format**
+//! (textual, parse/serialize) and **binding verification** (does the doc hash
+//! match the envelope?). The Ed25519 operation itself stays in [`eurotls`]/EuroVault;
+//! this crate is crypto-free and host-tested.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -16,15 +16,15 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// Het canonieke manifest dat ondertekend wordt.
+/// The canonical manifest that gets signed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignManifest {
     pub doc_name: String,
-    /// Hex-gecodeerde document-hash (bv. SHA-256, door de kernel berekend).
+    /// Hex-encoded document hash (e.g. SHA-256, computed by the kernel).
     pub doc_hash: String,
     pub signer: String,
     pub signed_at: u64,
-    /// Doel/strekking (bv. "akkoord", "ontvangst", "auteur").
+    /// Purpose/intent (e.g. "agreement", "receipt", "author").
     pub purpose: String,
 }
 
@@ -39,9 +39,9 @@ impl SignManifest {
         }
     }
 
-    /// De **canonieke bytes** die exact ondertekend/geverifieerd worden. Stabiel
-    /// formaat (sleutel=waarde, vaste volgorde) zodat verificatie elders
-    /// bit-voor-bit reproduceerbaar is.
+    /// The **canonical bytes** that are signed/verified exactly. Stable
+    /// format (key=value, fixed order) so verification elsewhere is
+    /// bit-for-bit reproducible.
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut s = String::new();
         s.push_str("EuroSign-v1\n");
@@ -54,7 +54,7 @@ impl SignManifest {
     }
 }
 
-/// Een visuele handtekening-plaatsing in een document (voor PDF-weergave).
+/// A visual signature placement in a document (for PDF rendering).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct VisualAnchor {
     pub page: u32,
@@ -64,19 +64,19 @@ pub struct VisualAnchor {
     pub h: u32,
 }
 
-/// Een complete `.eurosig`-envelop: manifest + handtekening (+ optionele plaatsing).
+/// A complete `.eurosig` envelope: manifest + signature (+ optional placement).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignEnvelope {
     pub manifest: SignManifest,
-    /// Hex-gecodeerde Ed25519-handtekening over `manifest.canonical_bytes()`.
+    /// Hex-encoded Ed25519 signature over `manifest.canonical_bytes()`.
     pub signature_hex: String,
-    /// Hex-gecodeerde publieke sleutel van de ondertekenaar.
+    /// Hex-encoded public key of the signer.
     pub pubkey_hex: String,
     pub anchor: Option<VisualAnchor>,
 }
 
 impl SignEnvelope {
-    /// Serialiseer naar het tekstuele `.eurosig`-formaat.
+    /// Serialize to the textual `.eurosig` format.
     pub fn to_text(&self) -> String {
         let m = &self.manifest;
         let mut s = String::new();
@@ -95,7 +95,7 @@ impl SignEnvelope {
         s
     }
 
-    /// Parse het `.eurosig`-formaat. Geeft `None` bij ontbrekende verplichte velden.
+    /// Parse the `.eurosig` format. Returns `None` on missing required fields.
     pub fn from_text(text: &str) -> Option<SignEnvelope> {
         let mut doc = None;
         let mut hash = None;
@@ -146,25 +146,25 @@ impl SignEnvelope {
     }
 }
 
-/// Het resultaat van een verificatie.
+/// The result of a verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
-    /// Geldig: doc-hash bindt én de handtekening klopt.
+    /// Valid: doc hash binds AND the signature is correct.
     Valid,
-    /// De handtekening is geldig maar het document is gewijzigd (hash wijkt af).
+    /// The signature is valid but the document was changed (hash differs).
     DocumentTampered,
-    /// De handtekening zelf is ongeldig.
+    /// The signature itself is invalid.
     BadSignature,
 }
 
-/// Verifieer een envelop tegen de actuele document-hash en een Ed25519-checker.
+/// Verify an envelope against the current document hash and an Ed25519 checker.
 ///
-/// `actual_doc_hash` = hex-hash van het document zoals het nú is. `verify_sig` is
-/// een door de aanroeper geleverde Ed25519-verificatie over de canonieke bytes
-/// (zo blijft deze crate crypto-vrij; de kernel levert eurotls).
+/// `actual_doc_hash` = hex hash of the document as it is now. `verify_sig` is
+/// a caller-supplied Ed25519 verification over the canonical bytes
+/// (so this crate stays crypto-free; the kernel provides eurotls).
 pub fn verify<F>(env: &SignEnvelope, actual_doc_hash: &str, mut verify_sig: F) -> Verdict
 where
-    F: FnMut(&[u8], &str, &str) -> bool, // (canoniek, sig_hex, pubkey_hex) -> ok
+    F: FnMut(&[u8], &str, &str) -> bool, // (canonical, sig_hex, pubkey_hex) -> ok
 {
     let sig_ok = verify_sig(&env.manifest.canonical_bytes(), &env.signature_hex, &env.pubkey_hex);
     if !sig_ok {
@@ -182,7 +182,7 @@ mod tests {
 
     fn sample() -> SignEnvelope {
         SignEnvelope {
-            manifest: SignManifest::new("contract.pdf", "ABCDEF01", "Jan Vandenberg", 1_700_000_000, "akkoord"),
+            manifest: SignManifest::new("contract.pdf", "ABCDEF01", "Jan Vandenberg", 1_700_000_000, "agreement"),
             signature_hex: "deadbeef".to_string(),
             pubkey_hex: "0011aa".to_string(),
             anchor: Some(VisualAnchor { page: 1, x: 100, y: 700, w: 180, h: 60 }),
@@ -194,7 +194,7 @@ mod tests {
         let m = SignManifest::new("d", "ABCD", "s", 5, "p");
         let s = alloc::string::String::from_utf8(m.canonical_bytes()).unwrap();
         assert!(s.starts_with("EuroSign-v1\n"));
-        assert!(s.contains("hash=abcd\n")); // hash genormaliseerd naar lowercase
+        assert!(s.contains("hash=abcd\n")); // hash normalized to lowercase
     }
 
     #[test]
@@ -209,13 +209,13 @@ mod tests {
     #[test]
     fn parse_missing_field_fails() {
         let bad = "-----BEGIN EUROSIG-----\ndoc: x\nsigner: y\n-----END EUROSIG-----\n";
-        assert!(SignEnvelope::from_text(bad).is_none()); // geen hash/at/sig
+        assert!(SignEnvelope::from_text(bad).is_none()); // no hash/at/sig
     }
 
     #[test]
     fn verify_valid() {
         let env = sample();
-        // Nep-checker: handtekening "klopt" als pubkey niet leeg is.
+        // Fake checker: signature "matches" if pubkey is not empty.
         let v = verify(&env, "abcdef01", |_canon, sig, pk| !sig.is_empty() && !pk.is_empty());
         assert_eq!(v, Verdict::Valid);
     }
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn verify_detects_tamper() {
         let env = sample();
-        // Document gewijzigd → andere hash, maar handtekening "geldig".
+        // Document changed → different hash, but signature "valid".
         let v = verify(&env, "ffffffff", |_c, _s, _p| true);
         assert_eq!(v, Verdict::DocumentTampered);
     }
@@ -237,9 +237,9 @@ mod tests {
 
     #[test]
     fn canonical_changes_break_signature() {
-        // Twee manifesten met verschillende inhoud → verschillende canonieke bytes.
+        // Two manifests with different content → different canonical bytes.
         let a = SignManifest::new("d", "aa", "s", 1, "p");
-        let b = SignManifest::new("d", "aa", "s", 2, "p"); // ander tijdstip
+        let b = SignManifest::new("d", "aa", "s", 2, "p"); // different timestamp
         assert_ne!(a.canonical_bytes(), b.canonical_bytes());
     }
 }

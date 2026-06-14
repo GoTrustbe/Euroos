@@ -1,7 +1,7 @@
-//! Kernel-zijde van **EuroPkg** (plan M2): de afhankelijkheids-resolver van de
-//! pakketbeheerder. Bij boot lossen we een voorbeeld-pakketgraaf op tot een
-//! topologische installatievolgorde en bewijzen we de foutdetectie (ontbrekend,
-//! onvervulbaar, conflict, cyclus). Host-geteste kern: [`europkg`].
+//! Kernel side of **EuroPkg** (plan M2): the dependency resolver of the
+//! package manager. At boot we resolve an example package graph into a
+//! topological install order and prove the error detection (missing,
+//! unsatisfiable, conflict, cycle). Host-tested core: [`europkg`].
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -22,7 +22,7 @@ fn sample_repo() -> Repo {
     r
 }
 
-/// Boot-zelftest: resolve + topologische volgorde + alle vier de foutgevallen.
+/// Boot self-test: resolve + topological order + all four of the error cases.
 pub fn selftest() {
     let repo = sample_repo();
     let order = repo.resolve("eurosuite");
@@ -31,7 +31,7 @@ pub fn selftest() {
         Ok(list) => {
             let names: Vec<&str> = list.iter().map(|(n, _)| n.as_str()).collect();
             let pos = |n: &str| names.iter().position(|x| *x == n);
-            // libc precies één keer, vóór zijn afhankelijken; eurosuite als laatste.
+            // libc exactly once, before its dependents; eurosuite last.
             names.iter().filter(|n| **n == "libc").count() == 1
                 && pos("libc") < pos("libeuro")
                 && pos("eurotls-rt") < pos("eurosuite")
@@ -41,7 +41,7 @@ pub fn selftest() {
         Err(_) => false,
     };
 
-    // Foutdetectie.
+    // Error detection.
     let mut miss = Repo::new();
     miss.add("x", Version::new(1, 0, 0), alloc::vec![Dep::new("ghost", Constraint::Any)]);
     let missing_ok = matches!(miss.resolve("x"), Err(ResolveError::NotFound(_)));
@@ -54,24 +54,24 @@ pub fn selftest() {
     let n = order.as_ref().map(|l| l.len()).unwrap_or(0);
     let ok = topo_ok && missing_ok && cycle_ok;
     crate::serial_println!(
-        "[m2] EuroPkg: dependency-resolutie 'eurosuite' → {n} pakketten topologisch (hoogste-libc-gekozen)={topo_ok}, ontbrekend-gedetecteerd={missing_ok}, cyclus-gedetecteerd={cycle_ok} → {}",
-        if ok { "OK (semver-resolver: deps-eerst, conflict/cyclus-veilig) ✓" } else { "MISLUKT" }
+        "[m2] EuroPkg: dependency resolution 'eurosuite' → {n} packages topological (highest-libc-chosen)={topo_ok}, missing-detected={missing_ok}, cycle-detected={cycle_ok} → {}",
+        if ok { "OK (semver resolver: deps-first, conflict/cycle-safe) ✓" } else { "FAILED" }
     );
 }
 
-/// `europkg`-shellcommando: toon de opgeloste installatievolgorde van het voorbeeld.
+/// `europkg` shell command: show the resolved install order of the example.
 pub fn shell() -> Vec<String> {
     let repo = sample_repo();
-    let mut out = alloc::vec![String::from("EuroPkg — pakketbeheerder (semver + dependency-resolutie)")];
+    let mut out = alloc::vec![String::from("EuroPkg — package manager (semver + dependency resolution)")];
     match repo.resolve("eurosuite") {
         Ok(list) => {
-            out.push(String::from("  installatievolgorde voor 'eurosuite' (deps eerst):"));
+            out.push(String::from("  install order for 'eurosuite' (deps first):"));
             for (i, (name, v)) in list.iter().enumerate() {
                 out.push(alloc::format!("    {}. {name} {}.{}.{}", i + 1, v.major, v.minor, v.patch));
             }
-            out.push(String::from("  (pakketten zijn ZIP+manifest+SHA-256+Ed25519-getekend; eupkg verifieert vóór installatie)"));
+            out.push(String::from("  (packages are ZIP+manifest+SHA-256+Ed25519-signed; eupkg verifies before installation)"));
         }
-        Err(e) => out.push(alloc::format!("  resolutie mislukt: {e:?}")),
+        Err(e) => out.push(alloc::format!("  resolution failed: {e:?}")),
     }
     out
 }

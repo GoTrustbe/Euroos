@@ -1,8 +1,8 @@
-//! Kernel-zijde van **EuroIDM** (plan V): soevereine bedrijfsidentiteit. Bij boot
-//! zetten we een lokale IDM op (gebruikers + groep→capability-regels), geven we een
-//! getekend token uit, leiden we de effectieve capabilities af, en bewijzen we dat
-//! een privilege-escalatie (groep toevoegen ná ondertekening) faalt. Host-geteste
-//! kern: [`euroidm`].
+//! Kernel side of **EuroIDM** (plan V): sovereign enterprise identity. At boot
+//! we set up a local IDM (users + group→capability rules), issue a signed
+//! token, derive the effective capabilities, and prove that a privilege
+//! escalation (adding a group after signing) fails. Host-tested
+//! core: [`euroidm`].
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -26,19 +26,19 @@ fn build_idm(seed: [u8; 32]) -> Idm {
     idm
 }
 
-/// Boot-zelftest: token uitgeven + verifiëren + caps afleiden + escalatie weigeren.
+/// Boot self-test: issue token + verify + derive caps + deny escalation.
 pub fn selftest(seed: [u8; 32], from_tpm: bool, now: u64) {
     let idm = build_idm(seed);
     *IDM_PUB.lock() = Some(idm.public_key());
 
-    // Geef 'anke' (groep users) een token van 1 uur.
+    // Give 'anke' (group users) a token valid for 1 hour.
     let tok = idm.issue_token("anke", now, 3600);
     let verified = tok.as_ref().map(|t| t.verify(&idm.public_key(), now + 60).is_ok()).unwrap_or(false);
     let caps = tok.as_ref().map(|t| idm.caps_for_groups(&t.groups)).unwrap_or(0);
-    // 'anke' mag lezen + netwerk, maar NIET schrijven of user-admin.
+    // 'anke' may read + network, but NOT write or user-admin.
     let caps_ok = caps & (CAP_LOGIN | CAP_NET) == (CAP_LOGIN | CAP_NET) && caps & (CAP_FS_WRITE | CAP_USER_ADMIN) == 0;
 
-    // Privilege-escalatie: voeg 'admins' toe ná ondertekening → handtekening moet falen.
+    // Privilege escalation: add 'admins' after signing → signature must fail.
     let escalation_blocked = match tok {
         Some(mut t) => {
             t.groups.push(String::from("admins"));
@@ -49,27 +49,27 @@ pub fn selftest(seed: [u8; 32], from_tpm: bool, now: u64) {
 
     let ok = verified && caps_ok && escalation_blocked;
     crate::serial_println!(
-        "[v] EuroIDM: token 'anke'(users) uitgegeven+geverifieerd={verified} (IDM-seed-van-TPM={from_tpm}), caps=lezen+net-geen-schrijven={caps_ok}, escalatie(groep-toevoegen)-geweigerd={escalation_blocked} → {}",
-        if ok { "OK (identiteit→capabilities, getekende tokens, lokaal soeverein) ✓" } else { "MISLUKT" }
+        "[v] EuroIDM: token 'anke'(users) issued+verified={verified} (IDM-seed-from-TPM={from_tpm}), caps=read+net-no-write={caps_ok}, escalation(add-group)-denied={escalation_blocked} → {}",
+        if ok { "OK (identity→capabilities, signed tokens, locally sovereign) ✓" } else { "FAILED" }
     );
 }
 
-/// `euroidm`-shellcommando: toon de identiteitsopslag + groep→cap-regels.
+/// `euroidm` shell command: show the identity store + group→cap rules.
 pub fn shell() -> Vec<String> {
-    // Toon een dry-run met een vaste seed (de echte IDM-staat leeft in een daemon).
+    // Show a dry run with a fixed seed (the real IDM state lives in a daemon).
     let idm = build_idm([0x1d; 32]);
     let mut out = alloc::vec![
-        String::from("EuroIDM — soevereine bedrijfsidentiteit (lokaal; brug naar LDAP/OIDC optioneel)"),
-        String::from("  identiteit → capabilities via groepslidmaatschap; getekende OIDC-achtige tokens (Ed25519)"),
+        String::from("EuroIDM — sovereign enterprise identity (local; bridge to LDAP/OIDC optional)"),
+        String::from("  identity → capabilities via group membership; signed OIDC-like tokens (Ed25519)"),
     ];
     if let Some(pk) = &*IDM_PUB.lock() {
         let hex: String = pk.iter().take(8).map(|b| alloc::format!("{b:02x}")).collect();
-        out.push(alloc::format!("  IDM-verificatiesleutel: {hex}…"));
+        out.push(alloc::format!("  IDM verification key: {hex}…"));
     }
     for name in ["anke", "root", "controle"] {
         if let Some(u) = idm.lookup(name) {
             let caps = idm.caps_for_groups(&u.groups);
-            out.push(alloc::format!("  {:<9} uid={:<5} groepen={:?}  caps=0b{:08b}", u.name, u.uid, u.groups, caps));
+            out.push(alloc::format!("  {:<9} uid={:<5} groups={:?}  caps=0b{:08b}", u.name, u.uid, u.groups, caps));
         }
     }
     out
