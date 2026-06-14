@@ -1,0 +1,13 @@
+[package]
+name = "euronfs"
+version = "0.1.0"
+edition = "2021"
+description = "Sovereign NFSv3 client (ONC RPC + XDR over TCP, AUTH_UNIX) — mountable Unix network shares for EuroOS. no_std, no unsafe."
+license = "EUPL-1.2"
+
+[lib]
+doctest = false
+
+[dependencies]
+eurofs = { path = "../eurofs" }
+spin = "0.9"

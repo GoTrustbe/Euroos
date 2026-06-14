@@ -9,7 +9,7 @@ every binary signature check, and every network call. Zero telemetry. Licensed
 under the **European Union Public Licence (EUPL) v1.2**.
 
 > ⚠️ **Alpha preview.** EuroOS boots to a working desktop with real networking and
-> on-disk persistence, and **706 host tests** pass. It is something to study,
+> on-disk persistence, and **755 host tests** pass. It is something to study,
 > build on, and experiment with — not yet a daily-driver OS.
 
 **Try it without building:** one-click QEMU / VirtualBox / cloud images at
@@ -30,6 +30,10 @@ boots in ~1–2 seconds.
   a bridge, never the identity.
 - **EuroFS** — a copy-on-write on-disk filesystem (inodes, extents, checkpoints,
   CoW snapshots + rollback, crash-consistent A/B superblocks, data checksums).
+- **Mounts other filesystems too** — FAT32 (read **+ write**), exFAT and ext2/3/4 (read),
+  plus **SMB2/3** (NTLMv2) and **NFSv3** network shares — each verified against the real
+  reference tools (`fsck.fat`/`mtools`, `mkfs.exfat`, `mkfs.ext4`, Samba, Linux `nfsd`).
+  A `format`/mkfs command and an auto-detecting `mount`/`lsblk`; multi-disk tested to 64 GiB.
 - A real **network stack** (Ethernet/ARP/IPv4/IPv6/ICMP/UDP/TCP/DNS/DHCP), a
   stateful **firewall**, and a forward-secret **VPN** (X25519 + ChaCha20-Poly1305).
 - **EuroDesktop** — a windowed compositor (z-order, dragging, PS/2 + USB input),
@@ -68,7 +72,7 @@ sudo apt install qemu-system-x86 ovmf dosfstools mtools   # Debian/Ubuntu
 
 The security-critical logic lives in pure, host-tested `crates/euro*` libraries
 (`cargo test`, no VM); the kernel module is thin glue that wires it onto hardware
-and prints a `[xx]` boot self-test. That is why there are 700+ host tests **and** a
+and prints a `[xx]` boot self-test. That is why there are 750+ host tests **and** a
 live boot marker for almost everything.
 
 ## Repository layout

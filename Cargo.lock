@@ -351,8 +351,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "euroexfat"
+version = "0.1.0"
+dependencies = [
+ "eurofs",
+]
+
+[[package]]
+name = "euroext"
+version = "0.1.0"
+dependencies = [
+ "eurofs",
+]
+
+[[package]]
 name = "eurofat"
 version = "0.1.0"
+
+[[package]]
+name = "eurofatfs"
+version = "0.1.0"
+dependencies = [
+ "eurofat",
+ "eurofs",
+]
 
 [[package]]
 name = "eurofde"
@@ -444,6 +466,14 @@ name = "euronet"
 version = "0.1.0"
 
 [[package]]
+name = "euronfs"
+version = "0.1.0"
+dependencies = [
+ "eurofs",
+ "spin",
+]
+
+[[package]]
 name = "euronotes"
 version = "0.1.0"
 dependencies = [
@@ -493,6 +523,14 @@ version = "0.1.0"
 [[package]]
 name = "eurosign"
 version = "0.1.0"
+
+[[package]]
+name = "eurosmb"
+version = "0.1.0"
+dependencies = [
+ "eurofs",
+ "spin",
+]
 
 [[package]]
 name = "eurotls"
@@ -647,7 +685,10 @@ dependencies = [
  "eurodisplay",
  "eurodoc",
  "eurodocio",
+ "euroexfat",
+ "euroext",
  "eurofat",
+ "eurofatfs",
  "eurofde",
  "eurofiles",
  "eurofont",
@@ -665,6 +706,7 @@ dependencies = [
  "euromm",
  "euromusic",
  "euronet",
+ "euronfs",
  "euronotes",
  "euroobserve",
  "europkg",
@@ -676,6 +718,7 @@ dependencies = [
  "eurosandbox",
  "euroshot",
  "eurosign",
+ "eurosmb",
  "eurotls",
  "eurotpm",
  "euroupdate",

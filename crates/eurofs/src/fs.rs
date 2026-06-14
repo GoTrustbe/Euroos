@@ -190,4 +190,18 @@ pub trait FileSystem {
     fn set_clock(&mut self, now: u64) {
         let _ = now;
     }
+
+    /// Mount another filesystem at `point` (only a VFS supports this). Lets the shell
+    /// attach a foreign FS (FAT/SMB/…) through a `&mut dyn FileSystem` that is a VFS.
+    fn mount_fs(&mut self, _point: &str, _fs: alloc::boxed::Box<dyn FileSystem>) -> FsResult<()> {
+        Err(FsError::Unsupported)
+    }
+    /// Unmount the filesystem at `point` (only a VFS supports this).
+    fn umount_fs(&mut self, _point: &str) -> FsResult<()> {
+        Err(FsError::Unsupported)
+    }
+    /// List the active mount points (only a VFS reports any).
+    fn list_mounts(&self) -> Vec<String> {
+        Vec::new()
+    }
 }

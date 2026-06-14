@@ -481,6 +481,97 @@ fn write_fsinfo(s: &mut [u8], free_count: u32, next_free: u32) {
     s[508..512].copy_from_slice(&0xAA55_0000u32.to_le_bytes());
 }
 
+// ── Streaming formatter (IO-3 `format`) ───────────────────────────────────────
+
+/// Sectors-per-cluster for a FAT32 volume of `total_sectors` (roughly mkfs.fat). Small
+/// volumes use 1 to maximise the cluster count (a valid FAT32 needs ≥ 65525 clusters).
+fn fat32_spc(total_sectors: u32) -> u32 {
+    match total_sectors {
+        0..=1_048_576 => 1,    // ≤ 512 MiB
+        ..=16_777_216 => 8,    // ≤ 8 GiB
+        ..=67_108_864 => 32,   // ≤ 32 GiB
+        _ => 64,
+    }
+}
+
+fn bpb_sector(total_sectors: u32, volume_id: u32, label: &[u8; 11], spc: u32, spf: u32) -> [u8; SECTOR] {
+    let mut b = [0u8; SECTOR];
+    b[0] = 0xEB;
+    b[1] = 0x58;
+    b[2] = 0x90;
+    b[3..11].copy_from_slice(b"MSWIN4.1");
+    b[11..13].copy_from_slice(&(SECTOR as u16).to_le_bytes());
+    b[13] = spc as u8;
+    b[14..16].copy_from_slice(&(RESERVED as u16).to_le_bytes());
+    b[16] = NUM_FATS as u8;
+    b[21] = 0xF8; // media
+    b[24..26].copy_from_slice(&32u16.to_le_bytes());
+    b[26..28].copy_from_slice(&64u16.to_le_bytes());
+    b[32..36].copy_from_slice(&total_sectors.to_le_bytes());
+    b[36..40].copy_from_slice(&spf.to_le_bytes());
+    b[44..48].copy_from_slice(&2u32.to_le_bytes()); // root cluster
+    b[48..50].copy_from_slice(&1u16.to_le_bytes()); // fsinfo sector
+    b[50..52].copy_from_slice(&6u16.to_le_bytes()); // backup boot sector
+    b[64] = 0x80;
+    b[66] = 0x29;
+    b[67..71].copy_from_slice(&volume_id.to_le_bytes());
+    b[71..82].copy_from_slice(label);
+    b[82..90].copy_from_slice(b"FAT32   ");
+    b[510] = 0x55;
+    b[511] = 0xAA;
+    b
+}
+
+/// **Streaming FAT32 formatter** (IO-3 `format`): write a fresh, empty FAT32 onto a
+/// `total_sectors`-sector volume via the `write(lba, bytes)` callback — RAM-light, only
+/// the BPB, FSInfo, both FATs and the root cluster are written (the data region is left
+/// as-is). The result mounts with `eurofatfs` and validates with `fsck.fat` (≥ ~33 MiB).
+pub fn format_fat32<W: FnMut(u64, &[u8])>(total_sectors: u32, volume_id: u32, label: &str, mut write: W) {
+    let spc = fat32_spc(total_sectors);
+    let tmp1 = total_sectors.saturating_sub(RESERVED);
+    let tmp2 = (256 * spc + NUM_FATS) / 2;
+    let spf = (tmp1 + tmp2 - 1) / tmp2.max(1);
+    let data_start = RESERVED + NUM_FATS * spf;
+    let total_clusters = total_sectors.saturating_sub(data_start) / spc;
+
+    let mut lbl = [b' '; 11];
+    for (i, b) in label.bytes().take(11).enumerate() {
+        lbl[i] = b.to_ascii_uppercase();
+    }
+
+    // BPB (sector 0) + backup (sector 6).
+    let bpb = bpb_sector(total_sectors, volume_id, &lbl, spc, spf);
+    write(0, &bpb);
+    write(6, &bpb);
+    // FSInfo (sector 1) + backup (sector 7): one cluster used (the root directory).
+    let mut fsi = [0u8; SECTOR];
+    write_fsinfo(&mut fsi, total_clusters.saturating_sub(1), 3);
+    write(1, &fsi);
+    write(7, &fsi);
+    // Zero each FAT, then set entries 0/1/2 (media, EOC, root-EOC) in its first sector.
+    let zero = [0u8; SECTOR];
+    for f in 0..NUM_FATS {
+        let base = RESERVED + f * spf;
+        for s in 0..spf {
+            write((base + s) as u64, &zero);
+        }
+        let mut first = [0u8; SECTOR];
+        first[0..4].copy_from_slice(&0x0FFF_FFF8u32.to_le_bytes());
+        first[4..8].copy_from_slice(&EOC.to_le_bytes());
+        first[8..12].copy_from_slice(&EOC.to_le_bytes()); // root cluster (2) = end of chain
+        write(base as u64, &first);
+    }
+    // Zero the root cluster + write the volume-label entry at its start.
+    for s in 0..spc {
+        write((data_start + s) as u64, &zero);
+    }
+    let mut root = [0u8; SECTOR];
+    let mut vol = sfn_entry(&lbl, 0x08, 0, 0);
+    vol[0] = lbl[0];
+    root[0..32].copy_from_slice(&vol);
+    write(data_start as u64, &root);
+}
+
 // ── Reader (for round-trip verification) ──────────────────────────────────────
 
 /// Read a file from a FAT32 image at `path` (8.3 or LFN). None if not found.
