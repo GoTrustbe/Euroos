@@ -9,7 +9,7 @@ every binary signature check, and every network call. Zero telemetry. Licensed
 under the **European Union Public Licence (EUPL) v1.2**.
 
 > ⚠️ **Alpha preview.** EuroOS boots to a working desktop with real networking and
-> on-disk persistence, and **755 host tests** pass. It is something to study,
+> on-disk persistence, and **793 host tests** pass. It is something to study,
 > build on, and experiment with — not yet a daily-driver OS.
 
 **Try it without building:** one-click QEMU / VirtualBox / cloud images at
@@ -30,10 +30,13 @@ boots in ~1–2 seconds.
   a bridge, never the identity.
 - **EuroFS** — a copy-on-write on-disk filesystem (inodes, extents, checkpoints,
   CoW snapshots + rollback, crash-consistent A/B superblocks, data checksums).
-- **Mounts other filesystems too** — FAT32 (read **+ write**), exFAT and ext2/3/4 (read),
-  plus **SMB2/3** (NTLMv2) and **NFSv3** network shares — each verified against the real
-  reference tools (`fsck.fat`/`mtools`, `mkfs.exfat`, `mkfs.ext4`, Samba, Linux `nfsd`).
-  A `format`/mkfs command and an auto-detecting `mount`/`lsblk`; multi-disk tested to 64 GiB.
+- **Mounts other filesystems too** — FAT32, **exFAT** and **ext2** now **read + write**,
+  ext3/4 read (ext4 extent trees), plus **SMB2/3** (NTLMv2) and **NFSv3** network shares —
+  each verified against the real reference tools (`fsck.fat`/`mtools`, `mkfs.exfat`,
+  `mkfs.ext4`, Samba, Linux `nfsd`). A `format`/mkfs command, an auto-detecting `mount`/`lsblk`,
+  **USB sticks auto-mount at `/usb`**, and **TRIM/discard** through the block stack;
+  multi-disk tested to 64 GiB. EuroFS also has **symbolic links** and runs the live root
+  through a write-through block cache.
 - A real **network stack** (Ethernet/ARP/IPv4/IPv6/ICMP/UDP/TCP/DNS/DHCP), a
   stateful **firewall**, and a forward-secret **VPN** (X25519 + ChaCha20-Poly1305).
 - **EuroDesktop** — a windowed compositor (z-order, dragging, PS/2 + USB input),
@@ -92,7 +95,7 @@ eurokernel/
 
 - [`STATUS.md`](STATUS.md) — what's built and how it works, with the roadmap.
 - [`docs/EUROOS-DEEP-TECHNICAL-REFERENCE.md`](docs/EUROOS-DEEP-TECHNICAL-REFERENCE.md) — the deepest per-subsystem reference.
-- [`docs/CODE-AUDIT-2026-06-10.md`](docs/CODE-AUDIT-2026-06-10.md) — the full internal security audit.
+- [`docs/CODE-AUDIT-2026-06-10.md`](docs/CODE-AUDIT-2026-06-10.md) · [`docs/CODE-AUDIT-2026-06-14.md`](docs/CODE-AUDIT-2026-06-14.md) — the internal security/correctness audits.
 - [`docs/ZERO-TRUST-FOR-AI-AGENTS-MAPPING.md`](docs/ZERO-TRUST-FOR-AI-AGENTS-MAPPING.md) — how EuroAgent maps onto Zero-Trust.
 
 ## Contributing

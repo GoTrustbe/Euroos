@@ -28,7 +28,15 @@ static SCANCODES: Mutex<Ring> = Mutex::new(Ring {
 
 /// Called from the IRQ1 handler (interrupts already disabled): buffer the scancode.
 pub fn push_scancode(sc: u8) {
-    let mut r = SCANCODES.lock();
+    // try_lock, NOT lock (BUG-007 class): this runs in PS/2 IRQ context AND in task context
+    // (the USB-HID harvest in `xhci::poll`, called from the desktop loop). A blocking lock
+    // deadlocks if a keyboard IRQ fires while the task side holds it — the IRQ would spin
+    // with interrupts off while the holder it just preempted can never release it. Dropping
+    // one scancode on contention is harmless.
+    let mut r = match SCANCODES.try_lock() {
+        Some(r) => r,
+        None => return,
+    };
     let next = (r.tail + 1) % RING_SIZE;
     if next != r.head {
         let tail = r.tail;

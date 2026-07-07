@@ -129,6 +129,21 @@ pub trait FileSystem {
         Err(FsError::Unsupported)
     }
 
+    /// Create a symbolic link at `path` pointing at `target` (an arbitrary string, not
+    /// required to exist — like `symlink(2)`). Default: not supported.
+    fn create_symlink(&mut self, path: &str, target: &str) -> FsResult<()> {
+        let _ = (path, target);
+        Err(FsError::Unsupported)
+    }
+
+    /// Read the target of the symbolic link at `path` *without* following it
+    /// (like `readlink(2)`). `InvalidPath` (EINVAL) if `path` is a regular file/dir.
+    /// Default: not supported.
+    fn read_link(&self, path: &str) -> FsResult<String> {
+        let _ = path;
+        Err(FsError::Unsupported)
+    }
+
     // ── EuroSnap (Sprint S): CoW snapshots — not supported by default ──
     /// Make a snapshot of the current FS state (cheap thanks to CoW: just a
     /// frozen root pointer). Returns the snapshot id.
@@ -163,6 +178,12 @@ pub trait FileSystem {
     fn df(&self) -> Vec<(String, u64, u64)> {
         let (t, f) = self.space_info();
         alloc::vec![(String::from("/"), t, f)]
+    }
+
+    /// Diagnostic: a human-readable dump of the block allocator (total/free blocks,
+    /// largest contiguous free run, fragmentation). Default: not supported.
+    fn alloc_debug(&self, _path: &str) -> Option<alloc::string::String> {
+        None
     }
 
     /// Integrity check (scrub/fsck): verify superblock + all inode checksums

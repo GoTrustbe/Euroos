@@ -29,6 +29,16 @@ pub trait BlockDevice {
     /// Force pending writes to permanent storage. Required before a
     /// CoW checkpoint commit, otherwise crash consistency is not guaranteed.
     fn flush(&mut self) -> BlockResult<()>;
+
+    /// Hint that `count` blocks starting at `start_block` are no longer in use
+    /// (TRIM/discard). Purely advisory: the device may zero, keep, or forget the
+    /// blocks. Default: no-op (devices/medias without discard simply ignore it).
+    /// EuroFS calls this when freeing blocks so an SSD/thin-provisioned backend
+    /// can reclaim them.
+    fn discard(&mut self, start_block: u64, count: u32) -> BlockResult<()> {
+        let _ = (start_block, count);
+        Ok(())
+    }
 }
 
 /// Blanket impl: a `&mut D` is also a `BlockDevice`. Makes remount tests
@@ -50,6 +60,9 @@ impl<D: BlockDevice + ?Sized> BlockDevice for &mut D {
     fn flush(&mut self) -> BlockResult<()> {
         (**self).flush()
     }
+    fn discard(&mut self, start: u64, count: u32) -> BlockResult<()> {
+        (**self).discard(start, count)
+    }
 }
 
 /// In-memory block device. For tests and as the backing store under the ramdisk.
@@ -59,6 +72,9 @@ pub struct MemoryBlockDevice {
     /// Counts flushes — useful in tests to prove that the checkpoint commit
     /// actually forces a flush.
     pub flush_count: u64,
+    /// Records `(start_block, count)` of every discard — lets tests prove that
+    /// freeing data issues TRIM to the device.
+    pub discards: Vec<(u64, u32)>,
 }
 
 impl MemoryBlockDevice {
@@ -68,7 +84,13 @@ impl MemoryBlockDevice {
             data: vec![0u8; (block_count * block_size as u64) as usize],
             block_size,
             flush_count: 0,
+            discards: Vec::new(),
         }
+    }
+
+    /// Total number of blocks discarded so far (sum of all discard counts).
+    pub fn discarded_blocks(&self) -> u64 {
+        self.discards.iter().map(|(_, c)| *c as u64).sum()
     }
 
     fn span(&self, start: u64, count: u32) -> BlockResult<(usize, usize)> {
@@ -113,6 +135,17 @@ impl BlockDevice for MemoryBlockDevice {
 
     fn flush(&mut self) -> BlockResult<()> {
         self.flush_count += 1;
+        Ok(())
+    }
+
+    fn discard(&mut self, start: u64, count: u32) -> BlockResult<()> {
+        // Verify the range is in-bounds, then record it (and zero it, modelling a
+        // discard-zeroes device — handy for tests).
+        let (offset, len) = self.span(start, count)?;
+        for b in &mut self.data[offset..offset + len] {
+            *b = 0;
+        }
+        self.discards.push((start, count));
         Ok(())
     }
 }

@@ -82,7 +82,13 @@ unsafe fn mouse_write(cmd: &mut Port<u8>, data: &mut Port<u8>, status: &mut Port
 
 /// Called by the IRQ12 handler with each received byte.
 pub fn push_byte(byte: u8) {
-    let mut p = PACKET.lock();
+    // try_lock, NOT lock (BUG-007 class): called from the PS/2 mouse IRQ and from the
+    // USB-HID harvest in task context; a blocking acquire risks the same IRQ-vs-task
+    // deadlock as push_scancode. Drop the byte on contention (mouse resync handles it).
+    let mut p = match PACKET.try_lock() {
+        Some(p) => p,
+        None => return,
+    };
     let phase = p.0;
     // Resynchronize: byte 0 must have bit 3 set.
     if phase == 0 && byte & 0x08 == 0 {

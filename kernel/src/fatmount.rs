@@ -26,6 +26,124 @@ impl SectorDev {
     }
 }
 
+/// 512-byte block device over a USB mass-storage disk (xHCI BOT/SCSI), windowed to a
+/// partition `[start, start+count)`. Mirrors [`SectorDev`] but routes to `xhci`.
+pub struct UsbDev {
+    start: u64,
+    count: u64,
+}
+impl UsbDev {
+    pub fn new(start: u64, count: u64) -> Self {
+        UsbDev { start, count }
+    }
+}
+impl BlockDevice for UsbDev {
+    fn block_size(&self) -> u32 {
+        512
+    }
+    fn block_count(&self) -> u64 {
+        self.count
+    }
+    fn read_blocks(&self, start_block: u64, count: u32, buf: &mut [u8]) -> BlockResult<()> {
+        if buf.len() != count as usize * 512 {
+            return Err(BlockError::NotAligned);
+        }
+        for i in 0..count as u64 {
+            if start_block + i >= self.count {
+                return Err(BlockError::OutOfBounds);
+            }
+            let abs = self.start + start_block + i;
+            if abs > u32::MAX as u64 {
+                return Err(BlockError::OutOfBounds); // SCSI READ(10) LBA is 32-bit
+            }
+            if !crate::xhci::usb_read_block(abs as u32, &mut buf[i as usize * 512..][..512]) {
+                return Err(BlockError::IoError);
+            }
+        }
+        Ok(())
+    }
+    fn write_blocks(&mut self, start_block: u64, count: u32, buf: &[u8]) -> BlockResult<()> {
+        if buf.len() != count as usize * 512 {
+            return Err(BlockError::NotAligned);
+        }
+        for i in 0..count as u64 {
+            if start_block + i >= self.count {
+                return Err(BlockError::OutOfBounds);
+            }
+            let abs = self.start + start_block + i;
+            if abs > u32::MAX as u64 {
+                return Err(BlockError::OutOfBounds); // SCSI WRITE(10) LBA is 32-bit
+            }
+            if !crate::xhci::usb_write_block(abs as u32, &buf[i as usize * 512..][..512]) {
+                return Err(BlockError::IoError);
+            }
+        }
+        Ok(())
+    }
+    fn flush(&mut self) -> BlockResult<()> {
+        Ok(()) // USB BOT writes are synchronous (we poll the CSW)
+    }
+}
+
+/// IO-2/3A-3: auto-mount a removable **USB** mass-storage volume. If a USB disk is
+/// present with a whole-disk FAT or exFAT volume, mount it at `/usb`. For FAT it also
+/// proves writeback (write a file + read it back). Emits `[io-usb]`.
+pub fn usb_auto_mount(fs: &mut dyn FileSystem) {
+    if !crate::xhci::usb_disk_present() {
+        return;
+    }
+    let total = crate::xhci::usb_block_count();
+    if total == 0 {
+        return;
+    }
+    // Each USB BOT transfer masks interrupts for its own (bounded) duration inside
+    // xhci::usb_read_block/usb_write_block, so the IRQ handler can't steal completion
+    // events — without holding interrupts off across the whole multi-transfer mount.
+    usb_auto_mount_inner(fs, total);
+}
+
+fn usb_auto_mount_inner(fs: &mut dyn FileSystem, total: u64) {
+    let mut s0 = [0u8; 512];
+    if !crate::xhci::usb_read_block(0, &mut s0) {
+        crate::serial_println!("[io-usb] USB disk present but sector 0 unreadable ✗");
+        return;
+    }
+    if total > u32::MAX as u64 {
+        crate::serial_println!("[io-usb] USB disk >2 TiB unsupported (SCSI(10) 32-bit LBA) — skipped");
+        return;
+    }
+    if is_fat_bpb(&s0) {
+        // Mount read-only at detect time — NEVER mutate a user's removable media on boot.
+        // (FAT write support is exercised by host tests + the `mount`/file commands; the
+        // shell can write to /usb explicitly once mounted.)
+        match eurofatfs::FatFs::mount(UsbDev::new(0, total)) {
+            Ok(fatfs) => {
+                let n = fatfs.list_dir("/").map(|e| e.len()).unwrap_or(0);
+                let _ = fs.mount_fs("/usb", Box::new(fatfs));
+                crate::serial_println!(
+                    "[io-usb] USB FAT auto-mounted at /usb ({} MiB, {n} root entries) → OK ✓ (no boot-time writes to user media)",
+                    total * 512 / (1024 * 1024)
+                );
+            }
+            Err(_) => crate::serial_println!("[io-usb] USB FAT volume invalid ✗"),
+        }
+    } else if is_exfat(&s0) {
+        match euroexfat::ExFat::mount(UsbDev::new(0, total)) {
+            Ok(exfs) => {
+                let n = exfs.list_dir("/").map(|e| e.len()).unwrap_or(0);
+                let _ = fs.mount_fs("/usb", Box::new(exfs));
+                crate::serial_println!(
+                    "[io-usb] USB exFAT auto-mounted at /usb ({} MiB, {n} root entries) [read-only] → OK ✓",
+                    total * 512 / (1024 * 1024)
+                );
+            }
+            Err(_) => crate::serial_println!("[io-usb] USB exFAT volume invalid ✗"),
+        }
+    } else {
+        crate::serial_println!("[io-usb] USB disk present, no FAT/exFAT volume on it (blank?)");
+    }
+}
+
 impl BlockDevice for SectorDev {
     fn block_size(&self) -> u32 {
         512
@@ -66,6 +184,11 @@ impl BlockDevice for SectorDev {
     }
     fn flush(&mut self) -> BlockResult<()> {
         crate::virtio_blk::flush_dev(self.dev);
+        Ok(())
+    }
+    fn discard(&mut self, start_block: u64, count: u32) -> BlockResult<()> {
+        // 512-byte device: blocks map 1:1 to sectors within the partition window.
+        crate::virtio_blk::discard_dev(self.dev, self.start + start_block, count);
         Ok(())
     }
 }

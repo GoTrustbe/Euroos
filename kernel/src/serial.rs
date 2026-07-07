@@ -47,6 +47,18 @@ impl Uart {
             self.data.write(b);
         }
     }
+
+    /// Non-blocking read of one byte from the UART; `None` if no data is ready
+    /// (LSR bit 0 = Data Ready). Powers the host-driven serial console (COM1 input).
+    fn read_byte(&mut self) -> Option<u8> {
+        unsafe {
+            if self.lsr.read() & 0x01 != 0 {
+                Some(self.data.read())
+            } else {
+                None
+            }
+        }
+    }
 }
 
 impl Write for Uart {
@@ -82,6 +94,12 @@ pub fn _print(args: fmt::Arguments) {
         }
     }
     let _ = Tee(&mut uart).write_fmt(args);
+}
+
+/// Non-blocking read of one input byte from COM1 (`None` if nothing pending).
+/// Used by the host-driven serial console to stream shell commands in.
+pub fn read_byte() -> Option<u8> {
+    UART.try_lock().and_then(|mut u| u.read_byte())
 }
 
 /// Write raw bytes DIRECTLY to the UART (panic-safe: `try_lock`, and no

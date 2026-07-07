@@ -2,7 +2,7 @@
 
 *Read this first. It is the single entry point so you (the agent — written for "Fable") can be productive without spelunking the whole tree. It tells you what EuroOS is, how it's built, what already works and is proven, where we are today, what still has to happen, and exactly where and how to work — including how to turn the Red Hat and Anthropic "Zero Trust for AI agents" guidance into code so the OS actually does what we promise.*
 
-**Repo:** `/home/user/eurokernel` · **Build of record:** `2026.06.08`, alpha · **Scale:** 104 kernel modules + 57 library crates, ~63 000 lines of `no_std` Rust, **690 host tests**, 0 boot panics.
+**Repo:** `/home/user/eurokernel` · **Build of record:** `2026.06.08`, alpha · **Scale:** 104 kernel modules + 57 library crates, ~63 000 lines of `no_std` Rust, **793 host tests** (current), 0 boot panics.
 
 ---
 
@@ -30,7 +30,7 @@ A lot of that is **already real and boot-verified**. Some of it is still **scaff
 - **Boot:** two-stage A/B UEFI loader → `no_std` kernel that does its own `ExitBootServices`, paging, GDT/IDT/APIC, SMP, scheduler. Identity-maps the lower 512 GiB (1 GiB huge pages) so MMIO + heap are phys=virt → DMA without an IOMMU.
 - **Security primitive:** the **capability**. A process holds a `u64` capability mask checked at the syscall boundary; rights are **dropped but never regained**; policy (EuroPol) can only *reduce* the set. "A capability you don't hold isn't a slower path — it's no path."
 - **The `Euro*` stack:** EuroFS (CoW filesystem, A/B superblock, snapshots, immutability), EuroNet (own TCP/IP), EuroTLS 1.3, EuroGuard (caps), EuroVault (secrets), EuroID (users/Argon2id), EuroAgent (the AI-agent runtime), EuroTPM (measured boot), and ~50 more — see the glossary in the deep reference.
-- **The pattern you'll see everywhere:** the security-critical logic lives in a pure, host-tested `crates/euro*` library (compiles under `std`, `cargo test`); the kernel module is thin glue wiring it onto hardware and printing a `[xx]` boot self-test. **This is why there are 690 host tests *and* a boot self-test for almost everything — replicate this pattern for anything you add.**
+- **The pattern you'll see everywhere:** the security-critical logic lives in a pure, host-tested `crates/euro*` library (compiles under `std`, `cargo test`); the kernel module is thin glue wiring it onto hardware and printing a `[xx]` boot self-test. **This is why there are 793 host tests *and* a boot self-test for almost everything — replicate this pattern for anything you add.**
 
 You do **not** need to read all the code to understand a subsystem. The authoritative references are:
 - **`docs/EUROOS-DEEP-TECHNICAL-REFERENCE.md`** — the deepest per-subsystem description (data structures, algorithms, formats, file:line citations, honest status). **This is your encyclopedia — grep it before reading source.**
