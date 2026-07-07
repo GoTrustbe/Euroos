@@ -71,7 +71,7 @@ const DIRENT_NAME_CAP: usize = 48;
 /// truncating it (a truncated name is stored under a different key and is then
 /// unreachable by the name the caller used — `write` would falsely report success).
 fn check_name(name: &str) -> FsResult<()> {
-    if name.as_bytes().len() > DIRENT_NAME_CAP {
+    if name.len() > DIRENT_NAME_CAP {
         Err(FsError::InvalidPath)
     } else {
         Ok(())
