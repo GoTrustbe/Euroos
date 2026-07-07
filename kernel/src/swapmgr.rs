@@ -39,6 +39,11 @@ struct SwapMgr {
     base_lba: u64,
     swap_ins: u64,
     swap_outs: u64,
+    /// CLOCK registry of swappable user pages (virtual addresses) + the hand.
+    swappable: Vec<u64>,
+    hand: usize,
+    /// Swap-in reserve to keep in `pool` so an evicted page can always fault back in.
+    reserve: usize,
 }
 
 static MGR: Mutex<Option<SwapMgr>> = Mutex::new(None);
@@ -105,13 +110,72 @@ pub fn map_one_page(falloc: &mut FrameAllocator, virt: u64, frame: u64) {
 /// Initialize the swap manager: `slots` swap slots starting at `base_lba` on disk 0,
 /// with a small pool of free frames for swap-in.
 pub fn init(base_lba: u64, slots: usize, pool: Vec<u64>) {
+    let reserve = pool.len();
     *MGR.lock() = Some(SwapMgr {
         area: SwapArea::new(slots),
         pool,
         base_lba,
         swap_ins: 0,
         swap_outs: 0,
+        swappable: Vec::new(),
+        hand: 0,
+        reserve,
     });
+}
+
+/// Register a user virtual page as a candidate for CLOCK auto-eviction.
+pub fn register_swappable(virt: u64) {
+    if let Some(mgr) = MGR.lock().as_mut() {
+        if !mgr.swappable.contains(&virt) {
+            mgr.swappable.push(virt);
+        }
+    }
+}
+
+/// Auto-evict under memory pressure: pick the next registered page (CLOCK order),
+/// swap it OUT, and hand its physical frame back to the global allocator `falloc`
+/// (keeping a swap-in reserve in the pool so the page can later fault back in).
+/// Returns the freed physical frame, or `None` if nothing could be reclaimed.
+/// The page becomes non-present; the next access transparently swaps it in.
+pub fn auto_evict(falloc: &mut FrameAllocator) -> Option<u64> {
+    // Choose a victim (present, registered) using the CLOCK hand.
+    let victim = {
+        let mut guard = MGR.lock();
+        let mgr = guard.as_mut()?;
+        if mgr.swappable.is_empty() {
+            return None;
+        }
+        let n = mgr.swappable.len();
+        let mut chosen = None;
+        for _ in 0..n {
+            let v = mgr.swappable[mgr.hand % n];
+            mgr.hand = mgr.hand.wrapping_add(1);
+            // Is it present (worth evicting)?
+            let present = unsafe { walk_pte(v).map(|p| *p & PRESENT != 0).unwrap_or(false) };
+            if present {
+                chosen = Some(v);
+                break;
+            }
+        }
+        chosen?
+    };
+    // swap_out takes the lock itself → call it outside the guard above.
+    if !swap_out(victim) {
+        return None;
+    }
+    // The freed frame is now in the pool; return it to the global allocator,
+    // but never drop below the swap-in reserve.
+    let mut guard = MGR.lock();
+    let mgr = guard.as_mut()?;
+    if mgr.pool.len() > mgr.reserve {
+        let frame = mgr.pool.pop()?;
+        let _ = falloc.free(frame);
+        Some(frame)
+    } else {
+        // Pool at reserve floor: the page is swapped out (pressure relieved on the
+        // swap device) but we keep the frame as swap-in headroom.
+        None
+    }
 }
 
 /// Swap the page at `virt` OUT: write it to a swap slot, make the PTE non-

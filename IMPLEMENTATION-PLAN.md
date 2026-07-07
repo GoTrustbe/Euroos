@@ -2,7 +2,7 @@
 
 *Canonical actionable plan. Merges the 2026-06-04 implementation plan with work already shipped this session. Pairs with [STATUS.md](STATUS.md) (what is built today) and the broader vision in [ROADMAP.md](ROADMAP.md).*
 
-**Baseline now:** 107 host tests green (eurofs 52 · euronet 35 · eurotls 12 · euromm 8) · kernel builds clean (release) · clippy clean · boots to desktop, 0 unexpected faults.
+**Baseline (at this plan's writing, 2026-06-04):** 107 host tests green (eurofs 52 · euronet 35 · eurotls 12 · euromm 8). **Current: 793 host tests** — see [STATUS.md](STATUS.md). Kernel builds clean (release) · clippy clean · boots to desktop, 0 unexpected faults.
 
 Status legend: ✅ done · 🟡 partial (core shipped, remainder listed) · ⬜ todo
 

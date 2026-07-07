@@ -2,7 +2,7 @@
 
 *A complete, code-grounded description of every subsystem in EuroOS: what it does, how it works, the data structures and algorithms behind it, the on-disk and on-the-wire formats, and exactly what is implemented and verified versus what is a stub or a planned next step.*
 
-**Version of record:** build `2026.06.08` · 57 library crates + the kernel · ~63 000 lines of `no_std` Rust · 690 host tests.
+**Version of record:** build `2026.06.08` · 57 library crates + the kernel · ~63 000 lines of `no_std` Rust · **793 host tests (current)**.
 **Source tree:** `/home/user/eurokernel`. **Companion docs:** `docs/TECHNICAL-OVERVIEW.md` (condensed), `docs/ROADMAP.md` (plan), `docs/SECURITY-AUDIT.md`.
 
 ---
@@ -53,7 +53,7 @@ This reference is organised into six **Parts**, each covering one cluster of sub
 
 The recurring design themes you will see throughout:
 
-1. **Sans-IO, host-tested cores.** The fiddly, security-critical logic (packet framing, TLS state machine, Argon2id, the filesystem, the AML interpreter, the office formats) lives in pure `crates/euro*` libraries that compile and unit-test under `std` on a normal host with `cargo test`. The kernel modules are thin glue that wire those verified cores onto real hardware. This is why there are 690 host tests *and* a boot self-test for almost everything.
+1. **Sans-IO, host-tested cores.** The fiddly, security-critical logic (packet framing, TLS state machine, Argon2id, the filesystem, the AML interpreter, the office formats) lives in pure `crates/euro*` libraries that compile and unit-test under `std` on a normal host with `cargo test`. The kernel modules are thin glue that wire those verified cores onto real hardware. This is why there are 793 host tests *and* a boot self-test for almost everything.
 2. **Capabilities, not ambient authority.** There is no root, no setuid. A process holds a capability bitmask checked at the syscall boundary; rights can be dropped but never regained. Policy (EuroPol) can only *reduce* the set, never add.
 3. **Sovereignty by construction.** Cryptography (Argon2id, Blake2b, ChaCha20-Poly1305, X25519, Ed25519, the TLS key schedule, RSA/ECDSA verification) is either implemented from scratch and pinned to official RFC test vectors, or built on audited RustCrypto primitives — never a dependency on a non-EU service. The trust store is EU-CA-first. Data formats (`EUROFS01`, `.euroa`, `.eupkg`, EuroCA certs) are owned.
 4. **Tamper-evidence everywhere.** Append-only audit logs (filesystem-enforced), hash-chained audit records (cryptographically enforced), Ed25519-signed binaries verified before execution, and reproducible-build consensus.
@@ -1556,7 +1556,7 @@ qemu-system-x86_64 -machine q35 -m 256M -cpu qemu64,+smep,+smap \
 #   → grep the serial output for the [xx] markers in Appendix A.
 #   (No KVM in the build sandbox → TCG is ~60× slower; on real hardware/KVM it boots in ~1–2 s.)
 
-# 4. Run the 690 host tests (no VM; the sans-IO crate cores under std)
+# 4. Run the 793 host tests (no VM; the sans-IO crate cores under std)
 cargo test
 
 # 5. Screenshot the desktop (QMP screendump)

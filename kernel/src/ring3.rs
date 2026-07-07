@@ -548,24 +548,34 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
 /// Fetch the paths+content that userspace wrote since the previous call (and clear
 /// the list). The shell uses this to synchronize EuroFS after an `exec`.
 pub fn take_dirty() -> alloc::vec::Vec<(String, alloc::vec::Vec<u8>)> {
-    let paths: alloc::vec::Vec<String> = core::mem::take(&mut *DIRTY.lock());
-    let files = FILES.lock();
-    paths
-        .into_iter()
-        .filter_map(|p| {
-            files
-                .iter()
-                .find(|(q, _)| q == &p)
-                .map(|(_, d)| (p.clone(), d.clone()))
-        })
-        .collect()
+    // BUG-007 class: FILES + DIRTY are also taken by syscall_dispatch (interrupts OFF via
+    // FMASK). This task-context caller holds FILES across `d.clone()`; if a timer preempts
+    // it mid-hold and switches to a bg-musl process whose file syscall takes FILES, that
+    // syscall spins forever on the lock we still hold → deadlock. Hold them irqsave so no
+    // preemption can occur while held (mirrors the reap_dead/BG fix).
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let paths: alloc::vec::Vec<String> = core::mem::take(&mut *DIRTY.lock());
+        let files = FILES.lock();
+        paths
+            .into_iter()
+            .filter_map(|p| {
+                files
+                    .iter()
+                    .find(|(q, _)| q == &p)
+                    .map(|(_, d)| (p.clone(), d.clone()))
+            })
+            .collect()
+    })
 }
 
 /// Redirect stdout (fd 1/2) to a VFS file for the duration of the next run
 /// (shell redirection). `append`=true appends (`>>`), otherwise truncate (`>`).
 /// `None` restores the console. The path becomes 'dirty' (the shell syncs it).
 pub fn set_stdout_redirect(path: Option<&str>, append: bool) {
-    match path {
+    // BUG-007 class: FILES/DIRTY/STDOUT_REDIRECT are also taken by syscall_dispatch with
+    // interrupts off; hold them irqsave here so this task-context caller can't be preempted
+    // mid-hold and deadlock a bg-musl file syscall spinning on the same lock.
+    x86_64::instructions::interrupts::without_interrupts(|| match path {
         Some(p) => {
             let idx = {
                 let mut files = FILES.lock();
@@ -589,7 +599,7 @@ pub fn set_stdout_redirect(path: Option<&str>, append: bool) {
             *STDOUT_REDIRECT.lock() = Some(idx);
         }
         None => *STDOUT_REDIRECT.lock() = None,
-    }
+    })
 }
 
 /// Append bytes to the stdout redirection file (internal, for write/writev).
@@ -694,9 +704,10 @@ pub fn spawn_daemon(falloc: &mut FrameAllocator, program: &[u8]) {
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top);
+    // Build the address space FIRST, then spawn the task with its cr3 already set
+    // (before it is Ready) — see BUG-007 / spawn_user.
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
-    crate::sched::set_task_cr3(idx, pml4);
+    let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
     DAEMON_TASK.store(idx, Ordering::Relaxed);
     crate::serial_println!("[euro] daemon scheduled as task {idx} (pid 7), own address space PML4 {pml4:#x}");
 }
@@ -761,54 +772,66 @@ pub fn reaped_lines() -> alloc::vec::Vec<String> {
 /// from the table. Called from the desktop loop (task 0, boot PML4), where it is
 /// safe: a dead process never runs again and its frames are not in use.
 pub fn reap_dead(falloc: &mut FrameAllocator) {
-    let mut bg = BG.lock();
-    let mut i = 0;
-    while i < bg.len() {
-        if bg[i].zombie {
-            let p = bg.remove(i);
-            if p.pooled {
-                // Forked children: return frames to the PROCESS POOL.
-                for f in 0..p.arena_frames {
-                    crate::procpool::free(p.arena_raw + f * 4096);
+    // BUG-007: do NOT hold BG.lock() across the (preemptible) frame-freeing below. If the
+    // timer preempts task 0 mid-free, the scheduler may switch to a bg-musl process whose
+    // `syscall_dispatch` also takes BG.lock() — it would spin on the lock we still hold while
+    // we can't run to release it: a silent core deadlock. So extract the zombies under a
+    // SHORT, interrupt-free critical section, then free their resources with BG RELEASED.
+    let dead: alloc::vec::Vec<BgProc> =
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let mut bg = BG.lock();
+            let mut out = alloc::vec::Vec::new();
+            let mut i = 0;
+            while i < bg.len() {
+                if bg[i].zombie {
+                    out.push(bg.remove(i));
+                } else {
+                    i += 1;
                 }
-                for f in 0..4u64 {
-                    crate::procpool::free(p.kstack + f * 4096);
-                }
-                // First look up the arena PT (walks through pml4->pdpt->pd) BEFORE we free
-                // those table frames, otherwise use-after-free.
-                let arena_pt = crate::paging::arena_pt(p.pml4, p.arena_virt);
-                let (a, b, c) = crate::paging::table_frames(p.pml4);
-                crate::procpool::free(a);
-                crate::procpool::free(b);
-                crate::procpool::free(c);
-                if let Some(ptf) = arena_pt {
-                    crate::procpool::free(ptf);
-                }
-            } else {
-                for f in 0..p.arena_frames {
-                    let _ = falloc.free(p.arena_raw + f * 4096);
-                }
-                for f in 0..4u64 {
-                    let _ = falloc.free(p.kstack + f * 4096);
-                }
-                crate::paging::free_address_space(falloc, p.pml4);
             }
-            let kib = (p.arena_frames + 4 + 4) as usize * 4; // arena + kstack(4) + table frames(~4)
-            // Show the last output (e.g. the result of a job) if there is
-            // one, otherwise the termination reason (e.g. the isolation violation).
-            let label = p
-                .output
-                .last()
-                .cloned()
-                .or(p.kill_reason)
-                .unwrap_or_else(|| String::from("terminated"));
-            REAPED.lock().push(alloc::format!("pid {}: {label} -> reaped ({kib} KiB free)", p.pid));
-            let n = REAPED.lock().len();
-            if n > 4 {
-                REAPED.lock().drain(0..n - 4);
+            out
+        });
+    for p in dead {
+        if p.pooled {
+            // Forked children: return frames to the PROCESS POOL.
+            for f in 0..p.arena_frames {
+                crate::procpool::free(p.arena_raw + f * 4096);
+            }
+            for f in 0..4u64 {
+                crate::procpool::free(p.kstack + f * 4096);
+            }
+            // First look up the arena PT (walks through pml4->pdpt->pd) BEFORE we free
+            // those table frames, otherwise use-after-free.
+            let arena_pt = crate::paging::arena_pt(p.pml4, p.arena_virt);
+            let (a, b, c) = crate::paging::table_frames(p.pml4);
+            crate::procpool::free(a);
+            crate::procpool::free(b);
+            crate::procpool::free(c);
+            if let Some(ptf) = arena_pt {
+                crate::procpool::free(ptf);
             }
         } else {
-            i += 1;
+            for f in 0..p.arena_frames {
+                let _ = falloc.free(p.arena_raw + f * 4096);
+            }
+            for f in 0..4u64 {
+                let _ = falloc.free(p.kstack + f * 4096);
+            }
+            crate::paging::free_address_space(falloc, p.pml4);
+        }
+        let kib = (p.arena_frames + 4 + 4) as usize * 4; // arena + kstack(4) + table frames(~4)
+        // Show the last output (e.g. the result of a job) if there is
+        // one, otherwise the termination reason (e.g. the isolation violation).
+        let label = p
+            .output
+            .last()
+            .cloned()
+            .or(p.kill_reason)
+            .unwrap_or_else(|| String::from("terminated"));
+        REAPED.lock().push(alloc::format!("pid {}: {label} -> reaped ({kib} KiB free)", p.pid));
+        let n = REAPED.lock().len();
+        if n > 4 {
+            REAPED.lock().drain(0..n - 4);
         }
     }
 }
@@ -816,19 +839,26 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
 /// Is a process with this pid still alive? (a LIVE, non-zombie BgProc). Used by
 /// EuroInit to see whether a service is still running or must be restarted.
 pub fn is_pid_alive(pid: u64) -> bool {
-    BG.lock().iter().any(|p| p.pid == pid && !p.zombie)
+    // BUG-007 hardening: hold BG non-preemptibly (irqsave) so task 0 is never suspended
+    // while holding it — matching the interrupts-off syscall path. See reap_dead.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        BG.lock().iter().any(|p| p.pid == pid && !p.zombie)
+    })
 }
 
 /// The most recent output line of each background musl process (for display).
 pub fn bg_lines() -> alloc::vec::Vec<String> {
-    let bg = BG.lock();
-    let mut out = alloc::vec::Vec::new();
-    for p in bg.iter() {
-        if let Some(last) = p.output.last() {
-            out.push(last.clone());
+    // BUG-007 hardening: irqsave BG hold (non-preemptible).
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let bg = BG.lock();
+        let mut out = alloc::vec::Vec::new();
+        for p in bg.iter() {
+            if let Some(last) = p.output.last() {
+                out.push(last.clone());
+            }
         }
-    }
-    out
+        out
+    })
 }
 
 // Is an ISOLATED foreground exec running right now (own PML4, synchronous)? If so,
@@ -876,27 +906,32 @@ pub fn ps_lines() -> alloc::vec::Vec<String> {
     out.push(String::from("  PID  TYPE     ADDRESS SPACE  STATUS"));
     out.push(String::from("    1  shell    shared        active (foreground)"));
     out.push(String::from("    7  daemon   shared        active (EuroMonitor)"));
-    let bg = BG.lock();
-    for p in bg.iter() {
-        let status = if p.zombie { "terminated (reap)" } else { "active" };
-        out.push(alloc::format!("  {:3}  musl     own PML4      {}", p.pid, status));
-    }
+    // BUG-007 hardening: irqsave BG hold (non-preemptible).
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let bg = BG.lock();
+        for p in bg.iter() {
+            let status = if p.zombie { "terminated (reap)" } else { "active" };
+            out.push(alloc::format!("  {:3}  musl     own PML4      {}", p.pid, status));
+        }
+    });
     out
 }
 
 /// `kill <pid>`: terminate a background musl process. It is cleaned up by the reaper
 /// (frames freed). Returns whether a process was found.
 pub fn kill_pid(pid: u64) -> bool {
-    let task = {
+    // BUG-007 hardening: irqsave BG hold (non-preemptible).
+    let task = x86_64::instructions::interrupts::without_interrupts(|| {
         let mut bg = BG.lock();
-        match bg.iter_mut().find(|p| p.pid == pid && !p.zombie) {
-            Some(p) => {
-                p.zombie = true;
-                p.kill_reason = Some(String::from("terminated via shell (kill)"));
-                p.task
-            }
-            None => return false,
-        }
+        bg.iter_mut().find(|p| p.pid == pid && !p.zombie).map(|p| {
+            p.zombie = true;
+            p.kill_reason = Some(String::from("terminated via shell (kill)"));
+            p.task
+        })
+    });
+    let task = match task {
+        Some(t) => t,
+        None => return false,
     };
     crate::sched::mark_dead(task);
     true
@@ -1373,28 +1408,32 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top);
     // Own isolated W^X address space; from the next switch on this process runs on it.
+    // Build it FIRST, then spawn with cr3 set before Ready (BUG-007: a task must never be
+    // schedulable with cr3=0, or a preempting timer IRQ runs its ring-3 code on the boot PML4).
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
-    crate::sched::set_task_cr3(idx, pml4);
-    BG.lock().push(BgProc {
-        task: idx,
-        pid,
-        heap_break: heap,
-        heap_end: arena + 0x180000, // ~1 MiB heap (room for thread stacks)
-        output: alloc::vec::Vec::new(),
-        partial: String::new(),
-        arena_raw,
-        arena_frames: 512, // exactly 2 MiB (allocated aligned)
-        arena_virt: arena, // identity-mapped: virtual == physical
-        kstack,
-        pml4,
-        zombie: false,
-        kill_reason: None,
-        threads: alloc::vec::Vec::new(),
-        thread_ctids: alloc::vec::Vec::new(),
-        ppid: 0,
-        pooled: false,
+    let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
+    // BUG-007 hardening: irqsave BG hold (non-preemptible) for the registration push.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        BG.lock().push(BgProc {
+            task: idx,
+            pid,
+            heap_break: heap,
+            heap_end: arena + 0x180000, // ~1 MiB heap (room for thread stacks)
+            output: alloc::vec::Vec::new(),
+            partial: String::new(),
+            arena_raw,
+            arena_frames: 512, // exactly 2 MiB (allocated aligned)
+            arena_virt: arena, // identity-mapped: virtual == physical
+            kstack,
+            pml4,
+            zombie: false,
+            kill_reason: None,
+            threads: alloc::vec::Vec::new(),
+            thread_ctids: alloc::vec::Vec::new(),
+            ppid: 0,
+            pooled: false,
+        });
     });
     crate::serial_println!("[euro] bg-musl (pid {pid}) -> task {idx}, own address space PML4 {pml4:#x}, arena {arena:#x}");
 }
@@ -1820,11 +1859,11 @@ pub fn spawn_counter_task(falloc: &mut FrameAllocator) -> u64 {
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let idx = crate::sched::spawn_user(code, stack_top, user_cs, user_ss, kstack_top);
     // Counter demo: raw machine-code blob with the counter variable IN the code page ->
     // code/data cannot be separated, so RWX instead of W^X (see build_address_space_rwx).
+    // Build the address space first, then spawn with cr3 set before Ready (BUG-007).
     let pml4 = crate::paging::build_address_space_rwx(falloc, arena);
-    crate::sched::set_task_cr3(idx, pml4);
+    let idx = crate::sched::spawn_user(code, stack_top, user_cs, user_ss, kstack_top, pml4);
     counter_ptr
 }
 

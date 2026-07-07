@@ -1009,7 +1009,9 @@ unsafe fn setup_mass_storage(
 /// Read one block (`block_size` bytes) from the USB disk into `out`. Returns false if
 /// there is no USB disk or the SCSI READ fails.
 pub fn usb_read_block(lba: u32, out: &mut [u8]) -> bool {
-    unsafe {
+    // Mask interrupts for this single BOT transfer so the xHCI IRQ handler can't consume
+    // the completion event our busy-poll is waiting on (bounded, one transfer).
+    x86_64::instructions::interrupts::without_interrupts(|| unsafe {
         let x = match (*core::ptr::addr_of_mut!(XHCI)).as_mut() {
             Some(x) => x,
             None => return false,
@@ -1024,14 +1026,14 @@ pub fn usb_read_block(lba: u32, out: &mut [u8]) -> bool {
         }
         core::ptr::copy_nonoverlapping((ms.io + 512) as *const u8, out.as_mut_ptr(), n);
         true
-    }
+    })
 }
 
 /// Write one block (`block_size` bytes) to the USB disk from `data` via SCSI WRITE(10)
 /// over the bulk-OUT endpoint. Returns false if there is no USB disk or the write fails.
 /// (IO-2: makes a mounted FAT USB stick writable.)
 pub fn usb_write_block(lba: u32, data: &[u8]) -> bool {
-    unsafe {
+    x86_64::instructions::interrupts::without_interrupts(|| unsafe {
         let x = match (*core::ptr::addr_of_mut!(XHCI)).as_mut() {
             Some(x) => x,
             None => return false,
@@ -1045,12 +1047,19 @@ pub fn usb_write_block(lba: u32, data: &[u8]) -> bool {
         core::ptr::write_bytes((ms.io + 512) as *mut u8, 0, ms.block_size as usize);
         core::ptr::copy_nonoverlapping(data.as_ptr(), (ms.io + 512) as *mut u8, n);
         scsi(x, ms, &eurousb::bot::write10(lba, 1), ms.block_size, false) == Some(0)
-    }
+    })
 }
 
 /// Is there a USB mass-storage device (USB disk) present?
 pub fn usb_disk_present() -> bool {
     unsafe { (*core::ptr::addr_of!(MASS)).is_some() }
+}
+
+/// Number of 512-byte-equivalent blocks on the USB disk (`last_lba + 1`), 0 if none.
+pub fn usb_block_count() -> u64 {
+    unsafe {
+        (*core::ptr::addr_of!(MASS)).as_ref().map(|m| m.last_lba as u64 + 1).unwrap_or(0)
+    }
 }
 
 /// Is an xHCI controller initialized?

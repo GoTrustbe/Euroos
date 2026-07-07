@@ -29,6 +29,12 @@ use crate::checksum::xxh3_64;
 use crate::fs::{DirEntry, EntryKind, FileSystem, FsError, FsResult, SnapshotInfo, FLAG_APPEND_ONLY, FLAG_IMMUTABLE};
 use crate::path::{filename, parent, split_path};
 use crate::superblock::{EuroFsSuperblock, RESERVED_BLOCKS};
+use core::sync::atomic::{AtomicU64, Ordering};
+
+// PERF instrumentation (temporary): exposed via alloc_debug / `fsdebug`.
+static RESOLVE_HITS: AtomicU64 = AtomicU64::new(0);
+static RESOLVE_MISS: AtomicU64 = AtomicU64::new(0);
+static BLOCK_READS: AtomicU64 = AtomicU64::new(0);
 
 const BS: usize = 4096;
 const INODE_MAGIC: u32 = 0x4546_494E; // "EFIN"
@@ -54,9 +60,23 @@ const INLINE_CAP: usize = OFF_CHECKSUM - OFF_INLINE; // 3896
 
 const TYPE_FILE: u8 = 1;
 const TYPE_DIR: u8 = 2;
+const TYPE_SYMLINK: u8 = 3;
+/// Max symlink hops before declaring a loop (POSIX `ELOOP`).
+const SYMLINK_MAX_HOPS: u32 = 40;
 
 const DIRENT_SIZE: usize = 64;
 const DIRENT_NAME_CAP: usize = 48;
+
+/// BUG-008: reject a name that would not fit a directory entry instead of silently
+/// truncating it (a truncated name is stored under a different key and is then
+/// unreachable by the name the caller used — `write` would falsely report success).
+fn check_name(name: &str) -> FsResult<()> {
+    if name.as_bytes().len() > DIRENT_NAME_CAP {
+        Err(FsError::InvalidPath)
+    } else {
+        Ok(())
+    }
+}
 
 // ── small little-endian helpers ──────────────────────────────────────────
 fn rd_u16(b: &[u8], o: usize) -> u16 {
@@ -209,6 +229,27 @@ pub struct EuroFs<D: BlockDevice> {
     /// `rebuild_allocator` so that CoW does not reclaim them.
     snapshots: Vec<SnapshotEntry>,
     next_snap_id: u64,
+    /// TRIM is deferred by one commit: blocks freed at commit N are discarded at
+    /// commit N+1 (if still free). This preserves the single-generation rollback
+    /// window — the previous checkpoint's blocks stay physically intact right after
+    /// a commit, exactly what the A/B-superblock crash recovery relies on.
+    pending_trim: Vec<u64>,
+    /// PERF-001: path → oid resolution cache (interior-mutable, so `resolve` can read it
+    /// behind `&self`). Path resolution is otherwise O(depth) per call (walk from root),
+    /// making deep-tree workloads O(N²). Only successful, symlink-free `follow_final`
+    /// resolutions are cached. INVALIDATION: cleared wholesale on `remove_file`/`remove_dir`/
+    /// `rename`/`snapshot_rollback` — the only ops that can change a name→oid mapping.
+    /// `create`/`write` only ADD names (never change an existing path's oid) so they don't
+    /// invalidate. CoW changes the block an inode lives in, not its oid, so writes are safe.
+    path_cache: spin::Mutex<BTreeMap<alloc::string::String, u64>>,
+    /// PERF-002: oid → data extents, kept in sync by `write_object`. `rebuild_allocator`
+    /// otherwise re-reads EVERY inode from disk on EVERY commit (O(objects) disk I/O per
+    /// commit → O(N²) for bulk create). With this cache the rebuild marks `used` from
+    /// memory. SAFETY: it's a hint — a missing entry self-heals by reading the inode from
+    /// disk; it is CLEARED whenever the on-disk tree is reloaded (rollback/recovery), and
+    /// `write_object` is the only code that changes an inode's extents, so it never goes
+    /// stale for an object still in `objmap`.
+    extents_cache: BTreeMap<u64, Vec<(u64, u32)>>,
 }
 
 impl<D: BlockDevice> EuroFs<D> {
@@ -226,6 +267,9 @@ impl<D: BlockDevice> EuroFs<D> {
             now,
             snapshots: Vec::new(),
             next_snap_id: 1,
+            pending_trim: Vec::new(),
+            path_cache: spin::Mutex::new(BTreeMap::new()),
+            extents_cache: BTreeMap::new(),
         };
         // Reserve the first blocks (boot/superblock/backup/slack).
         for i in 0..(RESERVED_BLOCKS as usize).min(fs.used.len()) {
@@ -254,6 +298,9 @@ impl<D: BlockDevice> EuroFs<D> {
             now,
             snapshots: Vec::new(),
             next_snap_id: 1,
+            pending_trim: Vec::new(),
+            path_cache: spin::Mutex::new(BTreeMap::new()),
+            extents_cache: BTreeMap::new(),
         };
         fs.load_objmap()?;
         fs.load_snapshots()?;
@@ -275,6 +322,7 @@ impl<D: BlockDevice> EuroFs<D> {
 
     // ── block I/O ──────────────────────────────────────────────────────────
     fn read_block(&self, blk: u64, buf: &mut [u8; BS]) -> FsResult<()> {
+        BLOCK_READS.fetch_add(1, Ordering::Relaxed);
         self.dev.read_blocks(blk, 1, buf).map_err(|_| FsError::IoError)
     }
     fn write_block(&mut self, blk: u64, data: &[u8; BS]) -> FsResult<()> {
@@ -320,7 +368,16 @@ impl<D: BlockDevice> EuroFs<D> {
     /// Rebuild the allocator by marking all blocks reachable from the committed
     /// superblock. Automatically reclaims all leaked/old blocks.
     fn rebuild_allocator(&mut self) -> FsResult<()> {
+        self.rebuild_allocator_trim(false)
+    }
+
+    /// As [`Self::rebuild_allocator`], but when `emit_trim` is set, every block that
+    /// transitions allocated→free in this rebuild is reported to the backing device via
+    /// [`BlockDevice::discard`] (TRIM). Used on the commit path so an SSD / thin backend
+    /// can reclaim the CoW-superseded blocks; advisory, so discard errors are ignored.
+    fn rebuild_allocator_trim(&mut self, emit_trim: bool) -> FsResult<()> {
         let n = self.used.len();
+        let prev: Vec<bool> = if emit_trim { self.used.clone() } else { Vec::new() };
         for u in self.used.iter_mut() {
             *u = false;
         }
@@ -335,16 +392,26 @@ impl<D: BlockDevice> EuroFs<D> {
                 self.used[b as usize] = true;
             }
         }
-        // Inodes + their extents.
-        let inode_blocks: Vec<u64> = self.objmap.values().copied().collect();
-        for blk in inode_blocks {
+        // Inodes + their data extents. PERF-002: take each object's extents from the
+        // in-memory cache (no disk read) and fall back to reading the inode ONLY on a
+        // cache miss — which also repopulates the cache. Correctness is independent of
+        // cache state; only speed depends on it.
+        let objs: Vec<(u64, u64)> = self.objmap.iter().map(|(&o, &b)| (o, b)).collect();
+        for (oid, blk) in objs {
             if (blk as usize) < n {
                 self.used[blk as usize] = true;
             }
-            let mut buf = [0u8; BS];
-            self.read_block(blk, &mut buf)?;
-            let inode = Inode::decode(&buf)?;
-            for (phys, cnt) in inode.extents {
+            let exts = match self.extents_cache.get(&oid) {
+                Some(e) => e.clone(),
+                None => {
+                    let mut buf = [0u8; BS];
+                    self.read_block(blk, &mut buf)?;
+                    let e = Inode::decode(&buf)?.extents;
+                    self.extents_cache.insert(oid, e.clone());
+                    e
+                }
+            };
+            for (phys, cnt) in exts {
                 for k in 0..cnt as u64 {
                     let bb = phys.saturating_add(k) as usize; // overflow-safe (corrupt extent)
                     if bb < n {
@@ -360,6 +427,26 @@ impl<D: BlockDevice> EuroFs<D> {
             self.mark_state_blocks(root, blocks)?;
         }
         self.sb.free_blocks = self.free_count();
+        // TRIM, deferred one generation: discard the blocks freed at the *previous*
+        // commit that are STILL free now — so the just-committed checkpoint's freed
+        // blocks stay physically intact for a one-generation rollback (the A/B
+        // superblock crash-recovery guarantee). Then record this commit's newly-freed
+        // blocks as the next pending set. Advisory: discard errors are ignored.
+        if emit_trim {
+            let pending = core::mem::take(&mut self.pending_trim);
+            for &b in &pending {
+                if (b as usize) < n && !self.used[b as usize] {
+                    let _ = self.dev.discard(b, 1);
+                }
+            }
+            let mut freed_now = Vec::new();
+            for i in 0..n {
+                if prev.get(i).copied().unwrap_or(false) && !self.used[i] {
+                    freed_now.push(i as u64);
+                }
+            }
+            self.pending_trim = freed_now;
+        }
         Ok(())
     }
 
@@ -521,7 +608,8 @@ impl<D: BlockDevice> EuroFs<D> {
         self.sb.free_blocks = self.free_count();
         self.sb.checksum = self.sb.compute_checksum();
         self.sb.write_to(&mut self.dev).map_err(|_| FsError::IoError)?;
-        self.rebuild_allocator()?;
+        // Reclaim + TRIM the CoW-superseded blocks now that the new checkpoint is durable.
+        self.rebuild_allocator_trim(true)?;
         Ok(())
     }
 
@@ -588,6 +676,10 @@ impl<D: BlockDevice> EuroFs<D> {
         let enc = inode.encode();
         self.write_block(blk, &enc)?;
         self.objmap.insert(inode.oid, blk);
+        // PERF-002: keep the in-memory extents cache in sync (write_object is the ONLY
+        // place an object's extents change), so rebuild_allocator needn't re-read this
+        // inode from disk on the next commit.
+        self.extents_cache.insert(inode.oid, inode.extents.clone());
         Ok(())
     }
 
@@ -628,16 +720,72 @@ impl<D: BlockDevice> EuroFs<D> {
     }
 
     fn resolve(&self, path: &str) -> FsResult<u64> {
-        let mut oid = ROOT_OID;
-        for comp in split_path(path) {
-            let entries = self.read_dir_entries(oid)?;
-            oid = entries
-                .iter()
-                .find(|(name, _, _)| name == comp)
-                .map(|(_, o, _)| *o)
-                .ok_or(FsError::NotFound)?;
+        self.resolve_follow(path, true)
+    }
+
+    /// Resolve a path to an OID, following symlinks on every intermediate component
+    /// and — when `follow_final` is true — on the final component too. An absolute
+    /// symlink target restarts from root; a relative one resolves against the directory
+    /// holding the link. Bounded by [`SYMLINK_MAX_HOPS`] (→ `InvalidPath` on a loop).
+    fn resolve_follow(&self, path: &str, follow_final: bool) -> FsResult<u64> {
+        // PERF-001 fast path: a cached symlink-free resolution (follow_final only).
+        if follow_final {
+            if let Some(&oid) = self.path_cache.lock().get(path) {
+                RESOLVE_HITS.fetch_add(1, Ordering::Relaxed);
+                return Ok(oid);
+            }
+            RESOLVE_MISS.fetch_add(1, Ordering::Relaxed);
         }
-        Ok(oid)
+        let mut cur = ROOT_OID;
+        let mut comps: Vec<String> = split_path(path).iter().map(|c| c.to_string()).collect();
+        let mut i = 0;
+        let mut hops = 0u32;
+        while i < comps.len() {
+            let entries = self.read_dir_entries(cur)?;
+            let (oid, otype) = entries
+                .iter()
+                .find(|(name, _, _)| name == &comps[i])
+                .map(|(_, o, t)| (*o, *t))
+                .ok_or(FsError::NotFound)?;
+            let is_last = i + 1 == comps.len();
+            if otype == TYPE_SYMLINK && (!is_last || follow_final) {
+                hops += 1;
+                if hops > SYMLINK_MAX_HOPS {
+                    return Err(FsError::InvalidPath); // ELOOP
+                }
+                let target = self.read_symlink_target(oid)?;
+                let mut next: Vec<String> = split_path(&target).iter().map(|c| c.to_string()).collect();
+                next.extend_from_slice(&comps[i + 1..]);
+                if target.starts_with('/') {
+                    cur = ROOT_OID; // absolute target → restart at root
+                }
+                // relative target → keep `cur` (the directory containing the link)
+                comps = next;
+                i = 0;
+                continue;
+            }
+            cur = oid;
+            i += 1;
+        }
+        // PERF-001: cache a successful, symlink-free resolution (bounded size).
+        if follow_final && hops == 0 {
+            let mut c = self.path_cache.lock();
+            if c.len() >= 1024 {
+                c.clear();
+            }
+            c.insert(path.to_string(), cur);
+        }
+        Ok(cur)
+    }
+
+    /// Read a symlink inode's stored target string (no following).
+    fn read_symlink_target(&self, oid: u64) -> FsResult<String> {
+        let inode = self.read_inode(oid)?;
+        if inode.otype != TYPE_SYMLINK {
+            return Err(FsError::InvalidPath);
+        }
+        let bytes = self.read_data(&inode)?;
+        String::from_utf8(bytes).map_err(|_| FsError::Corruption)
     }
 
     /// Update a directory (CoW) with a new entry list.
@@ -652,30 +800,38 @@ impl<D: BlockDevice> EuroFs<D> {
         };
         self.write_object(fresh, &data)
     }
-}
 
-impl<D: BlockDevice> FileSystem for EuroFs<D> {
-    fn read_file(&self, path: &str) -> FsResult<Vec<u8>> {
-        let oid = self.resolve(path)?;
-        let inode = self.read_inode(oid)?;
-        if inode.otype != TYPE_FILE {
-            return Err(FsError::NotAFile);
-        }
-        self.read_data(&inode)
-    }
-
-    fn write_file(&mut self, path: &str, data: &[u8]) -> FsResult<()> {
+    /// Body of `write_file`, with `depth` bounding symlink-follow recursion.
+    fn write_file_impl(&mut self, path: &str, data: &[u8], depth: u32) -> FsResult<()> {
         let parent_path = parent(path);
         let name = filename(path);
         if name.is_empty() {
             return Err(FsError::InvalidPath);
         }
+        check_name(name)?; // BUG-008: don't silently truncate an over-long name
         let parent_oid = self.resolve(parent_path)?;
         let mut entries = self.read_dir_entries(parent_oid)?;
 
         let existing = entries.iter().find(|(n, _, _)| n == name).map(|(_, o, t)| (*o, *t));
         let oid = match existing {
             Some((_, t)) if t == TYPE_DIR => return Err(FsError::NotAFile),
+            // POSIX: writing through a symlink writes its TARGET (it must NOT clobber the
+            // link inode while leaving the dir-entry kind as Symlink — that desyncs the
+            // entry/inode type). Redirect to the resolved target path, bounded by depth.
+            Some((o, t)) if t == TYPE_SYMLINK => {
+                if depth >= SYMLINK_MAX_HOPS {
+                    return Err(FsError::InvalidPath); // ELOOP
+                }
+                let target = self.read_symlink_target(o)?;
+                let real = if target.starts_with('/') {
+                    target
+                } else if parent_path.is_empty() || parent_path == "/" {
+                    alloc::format!("/{target}")
+                } else {
+                    alloc::format!("{parent_path}/{target}")
+                };
+                return self.write_file_impl(&real, data, depth + 1);
+            }
             Some((o, _)) => o,
             None => {
                 let o = self.next_oid;
@@ -711,6 +867,21 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         }
         self.commit()
     }
+}
+
+impl<D: BlockDevice> FileSystem for EuroFs<D> {
+    fn read_file(&self, path: &str) -> FsResult<Vec<u8>> {
+        let oid = self.resolve(path)?;
+        let inode = self.read_inode(oid)?;
+        if inode.otype != TYPE_FILE {
+            return Err(FsError::NotAFile);
+        }
+        self.read_data(&inode)
+    }
+
+    fn write_file(&mut self, path: &str, data: &[u8]) -> FsResult<()> {
+        self.write_file_impl(path, data, 0)
+    }
 
     fn remove_file(&mut self, path: &str) -> FsResult<()> {
         let parent_oid = self.resolve(parent(path))?;
@@ -729,6 +900,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         entries.remove(pos);
         self.objmap.remove(&oid);
         self.rewrite_dir(parent_oid, &entries)?;
+        self.path_cache.lock().clear(); // PERF-001: a name→oid mapping was removed
         self.commit()
     }
 
@@ -785,6 +957,10 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         self.next_oid = self.objmap.keys().copied().max().unwrap_or(ROOT_OID) + 1;
         // Commit writes a fresh objmap + superblock; rebuild_allocator reclaims the
         // blocks of the abandoned state (unless pinned by another snapshot).
+        self.path_cache.lock().clear(); // PERF-001: the whole tree changed
+        // PERF-002: the on-disk tree was reloaded → drop any cached extents from the
+        // abandoned state; rebuild_allocator will self-heal them from the rolled-back inodes.
+        self.extents_cache.clear();
         self.commit()
     }
 
@@ -820,6 +996,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         if name.is_empty() {
             return Ok(()); // root
         }
+        check_name(name)?; // BUG-008
         let mut entries = self.read_dir_entries(parent_oid)?;
         if entries.iter().any(|(n, _, _)| n == name) {
             return Err(FsError::AlreadyExists);
@@ -830,7 +1007,39 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         self.write_object(dir, &[])?;
         entries.push((name.to_string(), oid, TYPE_DIR));
         self.rewrite_dir(parent_oid, &entries)?;
+        self.commit()?;
+        // PERF-001: cache the freshly-created dir so the NEXT-level mkdir resolves its
+        // parent in O(1) instead of re-walking from root — turns deep-tree creation from
+        // O(N²) into O(N). (Safe: a new name can't change an existing path's oid.)
+        self.path_cache.lock().insert(path.to_string(), oid);
+        Ok(())
+    }
+
+    fn create_symlink(&mut self, path: &str, target: &str) -> FsResult<()> {
+        let parent_oid = self.resolve(parent(path))?;
+        let name = filename(path);
+        if name.is_empty() {
+            return Err(FsError::InvalidPath);
+        }
+        check_name(name)?; // BUG-008
+        let mut entries = self.read_dir_entries(parent_oid)?;
+        if entries.iter().any(|(n, _, _)| n == name) {
+            return Err(FsError::AlreadyExists);
+        }
+        let oid = self.next_oid;
+        self.next_oid += 1;
+        let link = Inode::new(oid, parent_oid, TYPE_SYMLINK, self.now);
+        // The target string is the symlink's "data" (inline for the usual short paths).
+        self.write_object(link, target.as_bytes())?;
+        entries.push((name.to_string(), oid, TYPE_SYMLINK));
+        self.rewrite_dir(parent_oid, &entries)?;
         self.commit()
+    }
+
+    fn read_link(&self, path: &str) -> FsResult<String> {
+        // Resolve WITHOUT following the final component, so we read the link itself.
+        let oid = self.resolve_follow(path, false)?;
+        self.read_symlink_target(oid)
     }
 
     fn rename(&mut self, old: &str, new: &str) -> FsResult<()> {
@@ -841,6 +1050,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         if old_name.is_empty() || new_name.is_empty() {
             return Err(FsError::InvalidPath);
         }
+        check_name(new_name)?; // BUG-008
 
         // Look up the source entry.
         let src = self.read_dir_entries(old_parent)?;
@@ -916,6 +1126,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
             self.rewrite_dir(old_parent, &from)?;
             self.rewrite_dir(new_parent, &to)?;
         }
+        self.path_cache.lock().clear(); // PERF-001: a name→oid mapping changed
         self.commit()
     }
 
@@ -941,6 +1152,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         entries.remove(pos);
         self.objmap.remove(&oid);
         self.rewrite_dir(parent_oid, &entries)?;
+        self.path_cache.lock().clear(); // PERF-001: a name→oid mapping was removed
         self.commit()
     }
 
@@ -956,7 +1168,11 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
             };
             out.push(DirEntry {
                 name,
-                kind: if otype == TYPE_DIR { EntryKind::Directory } else { EntryKind::File },
+                kind: match otype {
+                    TYPE_DIR => EntryKind::Directory,
+                    TYPE_SYMLINK => EntryKind::Symlink,
+                    _ => EntryKind::File,
+                },
                 size,
                 mode,
                 mtime,
@@ -974,7 +1190,11 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         let inode = self.read_inode(oid)?;
         Ok(DirEntry {
             name: filename(path).to_string(),
-            kind: if inode.otype == TYPE_DIR { EntryKind::Directory } else { EntryKind::File },
+            kind: match inode.otype {
+                TYPE_DIR => EntryKind::Directory,
+                TYPE_SYMLINK => EntryKind::Symlink,
+                _ => EntryKind::File,
+            },
             size: inode.size,
             mode: inode.mode,
             mtime: inode.mtime,
@@ -985,6 +1205,42 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         let total = self.used.len() as u64 * BS as u64;
         let free = self.free_count() * BS as u64;
         (total, free)
+    }
+
+    fn alloc_debug(&self, _path: &str) -> Option<alloc::string::String> {
+        let n = self.used.len();
+        let free = self.free_count();
+        // Largest contiguous free run, number of free runs, and a sample of the first
+        // used-block positions (to see whether used blocks cluster low or scatter).
+        let (mut largest, mut cur, mut runs, mut in_free) = (0usize, 0usize, 0usize, false);
+        let mut first_used: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+        for i in 0..n {
+            if self.used[i] {
+                if first_used.len() < 24 {
+                    first_used.push(i);
+                }
+                in_free = false;
+                cur = 0;
+            } else {
+                if !in_free {
+                    in_free = true;
+                    runs += 1;
+                }
+                cur += 1;
+                if cur > largest {
+                    largest = cur;
+                }
+            }
+        }
+        Some(alloc::format!(
+            "blocks={n} free={free} ({} MiB) largest_free_run={largest} blk ({} KiB) free_runs={runs} used={}\nfirst_used_blocks={first_used:?}\nperf: resolve_hits={} resolve_miss={} block_reads={}",
+            free * BS as u64 / (1024 * 1024),
+            largest * BS / 1024,
+            n as u64 - free,
+            RESOLVE_HITS.load(Ordering::Relaxed),
+            RESOLVE_MISS.load(Ordering::Relaxed),
+            BLOCK_READS.load(Ordering::Relaxed),
+        ))
     }
 
     /// Scrub/fsck (S7): verify the superblock, EVERY inode checksum, and the
@@ -1115,6 +1371,33 @@ mod tests {
         assert_eq!(fs.list_dir("/").unwrap().len(), 0);
         let ckpt = fs.superblock().checkpoint_id;
         assert_eq!(ckpt, 2); // format commit
+    }
+
+    #[test]
+    fn path_cache_invalidates_on_remove_and_rename() {
+        // PERF-001: the path→oid cache must never serve a stale mapping after a
+        // remove/rename. create/write must NOT need invalidation; remove/rename/rmdir must.
+        let mut fs = EuroFs::format(dev(512), [9; 16], 1).unwrap();
+        fs.create_dir("/d").unwrap();
+        fs.write_file("/d/a.txt", b"first").unwrap();
+        assert_eq!(fs.read_file("/d/a.txt").unwrap(), b"first"); // populates the cache
+        // remove → a cached path must resolve NotFound, not stale.
+        fs.remove_file("/d/a.txt").unwrap();
+        assert_eq!(fs.read_file("/d/a.txt"), Err(FsError::NotFound));
+        // recreate at the same path (new oid + content) → must read the NEW content.
+        fs.write_file("/d/a.txt", b"second").unwrap();
+        assert_eq!(fs.read_file("/d/a.txt").unwrap(), b"second");
+        // rename → old name gone, new name resolves.
+        fs.rename("/d/a.txt", "/d/b.txt").unwrap();
+        assert_eq!(fs.read_file("/d/a.txt"), Err(FsError::NotFound));
+        assert_eq!(fs.read_file("/d/b.txt").unwrap(), b"second");
+        // rmdir + recreate the directory → no stale /d oid.
+        fs.remove_file("/d/b.txt").unwrap();
+        fs.remove_dir("/d").unwrap();
+        assert_eq!(fs.list_dir("/d"), Err(FsError::NotFound));
+        fs.create_dir("/d").unwrap();
+        fs.write_file("/d/c.txt", b"third").unwrap();
+        assert_eq!(fs.read_file("/d/c.txt").unwrap(), b"third");
     }
 
     #[test]
@@ -1627,5 +1910,89 @@ mod tests {
         fs.remove_file("/d/f").unwrap();
         fs.remove_dir("/d").unwrap();
         assert!(!fs.exists("/d"));
+    }
+
+    #[test]
+    fn symlink_create_readlink_and_follow() {
+        let mut fs = EuroFs::format(dev(256), [9; 16], 100).unwrap();
+        fs.write_file("/target.txt", b"hello via symlink").unwrap();
+        // Absolute-target symlink.
+        fs.create_symlink("/link", "/target.txt").unwrap();
+        // read_link does NOT follow → returns the stored target.
+        assert_eq!(fs.read_link("/link").unwrap(), "/target.txt");
+        // metadata/list_dir report it as a symlink.
+        assert_eq!(fs.metadata("/link").map(|m| m.kind), Ok(EntryKind::File)); // metadata follows → target is a file
+        let entries = fs.list_dir("/").unwrap();
+        assert!(entries.iter().any(|e| e.name == "link" && e.kind == EntryKind::Symlink));
+        // Reading through the symlink follows to the target's contents.
+        assert_eq!(fs.read_file("/link").unwrap(), b"hello via symlink");
+        // read_link on a non-symlink is EINVAL.
+        assert_eq!(fs.read_link("/target.txt"), Err(FsError::InvalidPath));
+    }
+
+    #[test]
+    fn symlink_relative_target_and_intermediate_dir() {
+        let mut fs = EuroFs::format(dev(256), [9; 16], 100).unwrap();
+        fs.create_dir("/d").unwrap();
+        fs.write_file("/d/f.txt", b"in d").unwrap();
+        // Relative target resolves against the directory holding the link (/d).
+        fs.create_symlink("/d/rel", "f.txt").unwrap();
+        assert_eq!(fs.read_file("/d/rel").unwrap(), b"in d");
+        // Symlink to a directory used as an intermediate path component.
+        fs.create_symlink("/dlink", "/d").unwrap();
+        assert_eq!(fs.read_file("/dlink/f.txt").unwrap(), b"in d");
+    }
+
+    #[test]
+    fn trim_discards_freed_cow_blocks() {
+        let mut dev = dev(256);
+        {
+            let mut fs = EuroFs::format(&mut dev, [7; 16], 1).unwrap();
+            // A multi-block file, then overwrite + remove it. Each commit supersedes the
+            // previous CoW blocks, which rebuild_allocator_trim should TRIM.
+            fs.write_file("/big", &alloc::vec![0xAB; 40 * 1024]).unwrap();
+            fs.write_file("/big", &alloc::vec![0xCD; 40 * 1024]).unwrap();
+            fs.remove_file("/big").unwrap();
+        }
+        assert!(
+            dev.discarded_blocks() > 0,
+            "expected TRIM (discard) of CoW-superseded blocks, got none"
+        );
+    }
+
+    #[test]
+    fn write_through_symlink_writes_target_not_corrupt() {
+        let mut fs = EuroFs::format(dev(256), [9; 16], 100).unwrap();
+        fs.write_file("/target.txt", b"old").unwrap();
+        fs.create_symlink("/link", "/target.txt").unwrap();
+        // Writing through the symlink must update the TARGET, and leave the link intact.
+        fs.write_file("/link", b"new via link").unwrap();
+        assert_eq!(fs.read_file("/target.txt").unwrap(), b"new via link");
+        assert_eq!(fs.read_link("/link").unwrap(), "/target.txt"); // link still a symlink
+        assert_eq!(fs.read_file("/link").unwrap(), b"new via link"); // follows to target
+        // A self-referential symlink write must fail cleanly (ELOOP), not corrupt/hang.
+        fs.create_symlink("/loop", "/loop").unwrap();
+        assert_eq!(fs.write_file("/loop", b"x"), Err(FsError::InvalidPath));
+    }
+
+    #[test]
+    fn symlink_loop_is_bounded() {
+        let mut fs = EuroFs::format(dev(256), [9; 16], 100).unwrap();
+        fs.create_symlink("/a", "/b").unwrap();
+        fs.create_symlink("/b", "/a").unwrap();
+        assert_eq!(fs.read_file("/a"), Err(FsError::InvalidPath)); // ELOOP, not a hang
+    }
+
+    #[test]
+    fn symlink_survives_remount() {
+        let mut dev = dev(256);
+        {
+            let mut fs = EuroFs::format(&mut dev, [9; 16], 1).unwrap();
+            fs.write_file("/t", b"persisted").unwrap();
+            fs.create_symlink("/l", "/t").unwrap();
+        }
+        let fs = EuroFs::mount(&mut dev, 2).unwrap();
+        assert_eq!(fs.read_link("/l").unwrap(), "/t");
+        assert_eq!(fs.read_file("/l").unwrap(), b"persisted");
     }
 }

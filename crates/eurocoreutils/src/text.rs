@@ -270,6 +270,66 @@ pub fn grep(args: &[&str], input: &[u8]) -> Vec<u8> {
     out
 }
 
+/// `shuf [-n N] [-e ARGS...] [-i LO-HI]` — randomly permute the input lines.
+///
+/// DETERMINISM (by design): there is no entropy source in the kernel, so this is
+/// a deterministic pseudo-shuffle. A 64-bit xorshift PRNG is seeded from a fixed
+/// constant XORed with the input length, so the same input always yields the same
+/// permutation. This is intentional (host-testable, reproducible) and is NOT a
+/// cryptographic or security-grade shuffle.
+///
+/// Modes:
+/// - default: shuffle the lines of `input`.
+/// - `-e ARG...`: treat the positional args as the lines to shuffle (ignore input).
+/// - `-i LO-HI`: shuffle the integer range `LO..=HI`.
+/// - `-n N`: output at most N lines (head of the shuffled result).
+pub fn shuf(args: &[&str], input: &[u8]) -> Vec<u8> {
+    let a = Args::parse(args, &['n', 'i']);
+
+    // Build the candidate item set.
+    let mut items: Vec<Vec<u8>> = if let Some(range) = a.opt("i") {
+        // `-i LO-HI`: bound the materialised range. An open-ended `-i 5-` (HI = usize::MAX)
+        // or a huge range would otherwise try to allocate billions of strings (OOM/hang).
+        const SHUF_RANGE_CAP: usize = 1_000_000;
+        let (lo, hi) = parse_range(range);
+        if hi < lo {
+            Vec::new()
+        } else {
+            let span = hi - lo; // inclusive count = span + 1
+            let capped_hi = if span >= SHUF_RANGE_CAP { lo + SHUF_RANGE_CAP - 1 } else { hi };
+            (lo..=capped_hi).map(|n| n.to_string().into_bytes()).collect()
+        }
+    } else if a.flag('e') {
+        a.positional.iter().map(|p| p.clone().into_bytes()).collect()
+    } else {
+        lines(input).iter().map(|r| r.to_vec()).collect()
+    };
+
+    // Deterministic seed: fixed constant XOR item count XOR total byte length.
+    let total_len: usize = items.iter().map(|i| i.len()).sum();
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15 ^ (items.len() as u64) ^ ((total_len as u64) << 17);
+    if state == 0 {
+        state = 0xDEAD_BEEF_CAFE_F00D; // xorshift must not be seeded with 0
+    }
+    let mut next = || {
+        // xorshift64
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+
+    // Fisher–Yates with the deterministic PRNG.
+    let n = items.len();
+    for i in (1..n).rev() {
+        let j = (next() % (i as u64 + 1)) as usize;
+        items.swap(i, j);
+    }
+
+    let limit = a.opt("n").and_then(|v| v.parse::<usize>().ok()).unwrap_or(items.len()).min(items.len());
+    join_lines(&items[..limit])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +386,46 @@ mod tests {
     #[test]
     fn fold_w() {
         assert_eq!(s(fold(&["-w", "3"], b"abcdefg\n")), "abc\ndef\ng\n");
+    }
+
+    #[test]
+    fn shuf_is_deterministic_permutation() {
+        let inp = b"a\nb\nc\nd\ne\n";
+        let out1 = s(shuf(&[], inp));
+        let out2 = s(shuf(&[], inp));
+        // Deterministic: identical across calls.
+        assert_eq!(out1, out2);
+        // A permutation: same multiset of lines.
+        let mut got: Vec<&str> = out1.lines().collect();
+        let mut want = alloc::vec!["a", "b", "c", "d", "e"];
+        got.sort();
+        want.sort();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn shuf_n_limit() {
+        let inp = b"a\nb\nc\nd\ne\n";
+        let out = s(shuf(&["-n", "3"], inp));
+        assert_eq!(out.lines().count(), 3);
+        // The head-of-shuffled is a prefix of the full shuffle.
+        let full = s(shuf(&[], inp));
+        let full3: String = full.lines().take(3).map(|l| alloc::format!("{l}\n")).collect();
+        assert_eq!(out, full3);
+    }
+
+    #[test]
+    fn shuf_e_and_i() {
+        // -e: args are the items.
+        let out = s(shuf(&["-e", "x", "y", "z"], b""));
+        let mut got: Vec<&str> = out.lines().collect();
+        got.sort();
+        assert_eq!(got, alloc::vec!["x", "y", "z"]);
+        // -i LO-HI: integer range.
+        let out = s(shuf(&["-i", "1-5"], b""));
+        let mut got: Vec<i32> = out.lines().map(|l| l.parse().unwrap()).collect();
+        got.sort();
+        assert_eq!(got, alloc::vec![1, 2, 3, 4, 5]);
     }
 
     #[test]

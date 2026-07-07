@@ -114,6 +114,7 @@ mod smbfs;
 mod nfsmount;
 mod disktest;
 mod stresstest;
+mod scon;
 mod media;
 mod xhci;
 
@@ -321,31 +322,44 @@ fn main() -> Status {
     } else {
         false
     };
-    let rootdev = if virtio_blk::present() && !installed {
+    // Prefer a REAL, persistent on-disk EuroFS root whenever a virtio-blk disk is present —
+    // including right after a fresh install or an A/B update. (Previously the post-install
+    // `installed` path fell back to an 8 MiB RAM root, so an installed system never actually
+    // ran from its large on-disk root.) `sync_system_files` + `ensure_etc_skeleton` below
+    // complete /bin + /etc on a disk root that only carries install-time config.
+    let rootdev = if virtio_blk::present() {
         let total = virtio_blk::capacity_sectors();
         let (start, blocks) = gpt::find_eurofs_partition().unwrap_or_else(|| gpt::install(total));
+        if installed {
+            serial_println!("[euro] live root = the on-disk EuroFS (installed/updated this boot)");
+        }
         rootblk::RootBlk::disk(start, blocks)
     } else {
-        rootblk::RootBlk::ram(2048) // 8 MiB live ramdisk (also after an installation)
+        rootblk::RootBlk::ram(2048) // RAM root only when there is NO disk at all
     };
     // The install media (~6 MiB) stays available so the user can install LATER
     // from the running desktop too (`euroinstall --to N`).
     let on_disk = rootdev.is_disk();
-    let mut fs = match EuroFs::mount(rootdev.clone(), rtc::epoch()) {
+    // J1/3C-1: the live root FS runs THROUGH a write-through block cache (concurrent
+    // read-lock hits, CLOCK eviction, dirty write-back). 256 × 4 KiB = 1 MiB.
+    const ROOT_CACHE_BLOCKS: usize = 256;
+    use eurofs::cache::BlockCache;
+    let mut fs = match EuroFs::mount(BlockCache::new(rootdev.clone(), ROOT_CACHE_BLOCKS), rtc::epoch()) {
         Ok(f) => {
             let cp = f.superblock().checkpoint_id; // copy out of the packed struct
             serial_println!(
-                "[euro] EuroFS mounted{} (existing, checkpoint {})",
+                "[euro] EuroFS mounted{} via 1 MiB block cache (existing, checkpoint {})",
                 if on_disk { " from DISK" } else { "" },
                 cp
             );
             f
         }
         Err(_) => {
-            let mut f = EuroFs::format(rootdev, [0x5A; 16], rtc::epoch()).expect("EuroFS format");
+            let mut f = EuroFs::format(BlockCache::new(rootdev, ROOT_CACHE_BLOCKS), [0x5A; 16], rtc::epoch())
+                .expect("EuroFS format");
             populate_fs(&mut f);
             serial_println!(
-                "[euro] EuroFS formatted + populated{}",
+                "[euro] EuroFS formatted + populated{} (through 1 MiB block cache)",
                 if on_disk { " on DISK (installation)" } else { " in RAM (live)" }
             );
             f
@@ -454,6 +468,30 @@ fn main() -> Status {
                 serial_println!(
                     "[j3-fault] transparent swap: swapped-out={out}, after page-fault data-intact={} (swap-ins={}, swap-outs={}) ✓",
                     intact, ins, outs
+                );
+            }
+        }
+
+        // [j3-evict] (3C-7): CLOCK auto-evict under memory pressure hands a frame back
+        // to the GLOBAL allocator; the evicted page transparently faults back in.
+        {
+            const EVICT_VIRT: u64 = 0x4000_0000_1000; // another page in the unused PML4 slot
+            if let Ok(page) = allocator.allocate() {
+                swapmgr::map_one_page(&mut allocator, EVICT_VIRT, page);
+                let pat: [u8; 4096] = core::array::from_fn(|i| (i as u8) ^ 0x5A);
+                unsafe {
+                    core::ptr::copy_nonoverlapping(pat.as_ptr(), EVICT_VIRT as *mut u8, 4096);
+                }
+                swapmgr::register_swappable(EVICT_VIRT);
+                let before = allocator.free_frames();
+                let freed = swapmgr::auto_evict(&mut allocator);
+                let after = allocator.free_frames();
+                // Touch the evicted page → fault → transparent swap-in from the reserve.
+                let intact = unsafe { core::slice::from_raw_parts(EVICT_VIRT as *const u8, 4096) } == &pat[..];
+                let reclaimed = freed.is_some() && after > before;
+                serial_println!(
+                    "[j3-evict] CLOCK auto-evict under pressure: frame-reclaimed-to-allocator={reclaimed} (free {before}→{after}), swap-in-on-access-intact={intact} → {}",
+                    if reclaimed && intact { "OK ✓" } else { "FAILED ✗" }
                 );
             }
         }
@@ -1376,6 +1414,32 @@ fn main() -> Status {
             }
         }
     }
+
+    // [sym]/[cu2] (Sprint 3C): symbolic links on the live EuroFS + the new coreutils.
+    {
+        use eurocoreutils as cu;
+        let _ = vfs.write_file("/symtarget", b"symlink payload");
+        let sym_ok = vfs.create_symlink("/symlink", "/symtarget").is_ok()
+            && vfs.read_link("/symlink").ok().as_deref() == Some("/symtarget")
+            && vfs.read_file("/symlink").ok().as_deref() == Some(b"symlink payload".as_ref());
+        serial_println!(
+            "[sym] EuroFS symlinks: create+readlink+follow-through={sym_ok} → {}",
+            if sym_ok { "OK ✓" } else { "FAILED ✗" }
+        );
+        let _ = vfs.remove_file("/symlink");
+        let _ = vfs.remove_file("/symtarget");
+        let md5 = String::from_utf8_lossy(&cu::checksum::md5sum(b"abc", "-")).into_owned();
+        let sha1 = String::from_utf8_lossy(&cu::checksum::sha1sum(b"abc", "-")).into_owned();
+        let cu_ok = md5.starts_with("900150983cd24fb0d6963f7d28e17f72")
+            && sha1.starts_with("a9993e364706816aba3e25717850c26c9cd0d89d");
+        serial_println!(
+            "[cu2] coreutils long-tail: md5sum/sha1sum vectors={cu_ok} · b2sum/shuf/comm/join/split/ln/readlink/realpath/mktemp/env wired → {}",
+            if cu_ok { "OK ✓" } else { "FAILED ✗" }
+        );
+    }
+
+    // 3A-3: auto-mount a removable USB mass-storage volume (FAT/exFAT) at /usb.
+    fatmount::usb_auto_mount(&mut vfs);
 
     let has_mnt = fs2.is_some();
     if let Some(f2) = fs2 {
@@ -2393,6 +2457,10 @@ fn main() -> Status {
     // does not hold the loop.
     serial_println!("[desktop] interactive loop started — input + shell live");
     loop {
+        // Host-driven serial console: execute any command streamed in over COM1
+        // (the load-test harness drives the shell this way — no GUI/QMP needed).
+        scon::poll(&mut ctx);
+
         let (px, py) = mouse::pos();
         let ldown = mouse::left_down();
         let mut need_full = false;

@@ -528,6 +528,124 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             Ok(()) => vec![format!("removed: {arg1}")],
             Err(e) => vec![format!("rm: {arg1}: {e:?}")],
         },
+        // CU-2: ln -s <target> <linkpath> — create a symbolic link (3C-9).
+        "ln" => {
+            let toks: Vec<&str> = line.split_whitespace().skip(1).collect();
+            let symbolic = toks.iter().any(|t| *t == "-s");
+            let pos: Vec<&str> = toks.iter().filter(|t| !t.starts_with('-')).copied().collect();
+            if !symbolic {
+                vec!["ln: only symbolic links are supported — use 'ln -s <target> <link>'".to_string()]
+            } else if pos.len() != 2 {
+                vec!["usage: ln -s <target> <linkpath>".to_string()]
+            } else {
+                match fs.create_symlink(pos[1], pos[0]) {
+                    Ok(()) => vec![format!("'{}' -> '{}'", pos[1], pos[0])],
+                    Err(e) => vec![format!("ln: {}: {e:?}", pos[1])],
+                }
+            }
+        }
+        // CU-2: readlink <path> — print a symlink's target (no following).
+        "readlink" => match fs.read_link(arg1) {
+            Ok(t) => vec![t],
+            Err(e) => vec![format!("readlink: {arg1}: {e:?}")],
+        },
+        // CU-2: realpath <path> — follow a final symlink to its target, else echo the path.
+        "realpath" => {
+            if let Ok(t) = fs.read_link(arg1) {
+                // Absolute target is canonical; a relative one resolves against the link's dir.
+                if t.starts_with('/') {
+                    vec![t]
+                } else {
+                    let dir = arg1.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+                    vec![format!("{dir}/{t}")]
+                }
+            } else if fs.exists(arg1) {
+                vec![arg1.to_string()]
+            } else {
+                vec![format!("realpath: {arg1}: NotFound")]
+            }
+        }
+        // CU-2: mktemp — create a uniquely-named empty file under /tmp and print its path.
+        "mktemp" => {
+            let _ = fs.create_dir("/tmp");
+            let stamp = crate::rtc::epoch() ^ (crate::interrupts::ticks().wrapping_mul(2654435761));
+            let path = format!("/tmp/tmp.{:08x}", stamp & 0xFFFF_FFFF);
+            match fs.write_file(&path, b"") {
+                Ok(()) => vec![path],
+                Err(e) => vec![format!("mktemp: {e:?}")],
+            }
+        }
+        // CU-7: env / printenv — show the system environment.
+        "env" | "printenv" => {
+            let uid = crate::auth::session_uid();
+            let user = crate::auth::name_for_uid(fs, uid);
+            let home = if uid == 0 { String::from("/root") } else { format!("/home/{user}") };
+            let lang = fs.read_file("/etc/locale.conf").ok().and_then(|d| String::from_utf8(d).ok())
+                .and_then(|s| s.lines().find_map(|l| l.strip_prefix("LANG=").map(String::from)))
+                .unwrap_or_else(|| String::from("en_EU.UTF-8"));
+            let envv = [
+                format!("PATH=/bin"),
+                format!("HOME={home}"),
+                format!("USER={user}"),
+                format!("SHELL=/bin/eurosh"),
+                format!("TERM=euroterm"),
+                format!("LANG={lang}"),
+            ];
+            let toks: Vec<&str> = line.split_whitespace().skip(1).collect();
+            if cmd == "printenv" && !toks.is_empty() {
+                // printenv VAR → just that variable's value
+                let key = format!("{}=", toks[0]);
+                envv.iter().find_map(|e| e.strip_prefix(&key).map(String::from)).into_iter().collect()
+            } else {
+                envv.to_vec()
+            }
+        }
+        // CU-4: comm / join — two SORTED file inputs. The two inputs are the last two
+        // tokens that name readable files; everything else (in order) is passed through
+        // as args so value-options like `-1 N` / `-t C` survive (don't split on '-').
+        "comm" | "join" => {
+            let toks: Vec<&str> = line.split_whitespace().skip(1).collect();
+            let file_idxs: Vec<usize> = toks.iter().enumerate().filter(|(_, t)| fs.exists(t)).map(|(i, _)| i).collect();
+            if file_idxs.len() < 2 {
+                vec![format!("usage: {cmd} [opts] <file1> <file2>")]
+            } else {
+                let fa = file_idxs[file_idxs.len() - 2];
+                let fb = file_idxs[file_idxs.len() - 1];
+                match (fs.read_file(toks[fa]), fs.read_file(toks[fb])) {
+                    (Ok(a), Ok(b)) => {
+                        let args: Vec<&str> = toks.iter().enumerate().filter(|(i, _)| *i != fa && *i != fb).map(|(_, t)| *t).collect();
+                        let out = if cmd == "comm" {
+                            eurocoreutils::compare::comm(&args, &a, &b)
+                        } else {
+                            eurocoreutils::compare::join(&args, &a, &b)
+                        };
+                        render_bytes(out)
+                    }
+                    _ => vec![format!("{cmd}: cannot read both input files")],
+                }
+            }
+        }
+        // CU-4: split — break a file into pieces written back to the FS.
+        "split" => {
+            let toks: Vec<&str> = line.split_whitespace().skip(1).collect();
+            let infile = toks.iter().rev().find(|t| !t.starts_with('-') && fs.exists(t)).copied();
+            match infile.map(|f| fs.read_file(f)) {
+                Some(Ok(data)) => {
+                    let cargs: Vec<&str> = toks.iter().filter(|t| Some(**t) != infile).copied().collect();
+                    let pieces = eurocoreutils::compare::split(&cargs, &data);
+                    let mut out = Vec::new();
+                    for (name, chunk) in &pieces {
+                        let p = format!("/{name}");
+                        match fs.write_file(&p, chunk) {
+                            Ok(()) => out.push(format!("{p} ({} bytes)", chunk.len())),
+                            Err(e) => out.push(format!("split: {p}: {e:?}")),
+                        }
+                    }
+                    if out.is_empty() { vec!["split: no output".to_string()] } else { out }
+                }
+                _ => vec!["usage: split [-l N|-b N] <file> [prefix]".to_string()],
+            }
+        }
         // CU-2: cp — copy arg1 → arg2 (on the EuroFS primitives).
         "cp" => match fs.read_file(arg1) {
             Ok(data) => match fs.write_file(arg2, &data) {
@@ -606,6 +724,13 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
                 free / 1024,
                 (total - free) / 1024
             )]
+        }
+        "fsdebug" => {
+            let path = if arg1.is_empty() { "/" } else { arg1 };
+            match fs.alloc_debug(path) {
+                Some(s) => s.lines().map(|l| l.to_string()).collect(),
+                None => vec![format!("fsdebug: {path}: not supported by this filesystem")],
+            }
         }
         "clear" => vec!["\x0c".to_string()], // signal for main to clear
         other => vec![format!("unknown command: {other}  (type 'help')")],
@@ -881,6 +1006,10 @@ fn coreutils(cmd: &str, line: &str, fs: &mut dyn FileSystem) -> Option<Vec<Strin
         "sha512sum" => cu::checksum::sha512sum(&input, name),
         "sha224sum" => cu::checksum::sha224sum(&input, name),
         "sha384sum" => cu::checksum::sha384sum(&input, name),
+        "sha1sum" => cu::checksum::sha1sum(&input, name),
+        "md5sum" => cu::checksum::md5sum(&input, name),
+        "b2sum" => cu::checksum::b2sum(&input, name),
+        "shuf" => cu::text::shuf(&cargs, &input),
         "base64" => cu::encoding::base64(has_d, &input),
         "base32" => cu::encoding::base32(has_d, &input),
         "cksum" => cu::encoding::cksum(&input, name),
@@ -930,6 +1059,10 @@ pub(crate) fn coreutils_filter(cmd: &str, args: &[&str], input: &[u8]) -> Option
         "sha512sum" => cu::checksum::sha512sum(input, "-"),
         "sha224sum" => cu::checksum::sha224sum(input, "-"),
         "sha384sum" => cu::checksum::sha384sum(input, "-"),
+        "sha1sum" => cu::checksum::sha1sum(input, "-"),
+        "md5sum" => cu::checksum::md5sum(input, "-"),
+        "b2sum" => cu::checksum::b2sum(input, "-"),
+        "shuf" => cu::text::shuf(args, input),
         "cksum" => cu::encoding::cksum(input, "-"),
         _ => return None,
     };

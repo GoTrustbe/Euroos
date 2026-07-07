@@ -227,6 +227,22 @@ impl<D: BlockDevice> BlockDevice for BlockCache<D> {
     fn flush(&mut self) -> BlockResult<()> {
         BlockCache::flush(self)
     }
+
+    fn discard(&mut self, start_block: u64, count: u32) -> BlockResult<()> {
+        // Invalidate any cached slots in the discarded range (their contents are gone),
+        // then forward the TRIM to the backing device.
+        {
+            let mut c = self.cache.write();
+            for slot in c.slots.iter_mut() {
+                if slot.valid && slot.lba >= start_block && slot.lba < start_block + count as u64 {
+                    slot.valid = false;
+                    slot.dirty = false;
+                    slot.lba = u64::MAX;
+                }
+            }
+        }
+        self.dev.lock().discard(start_block, count)
+    }
 }
 
 #[cfg(test)]

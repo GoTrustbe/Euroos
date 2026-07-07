@@ -121,6 +121,10 @@ impl<D: BlockDevice> BlockDevice for EncryptedBlockDevice<D> {
     fn flush(&mut self) -> BlockResult<()> {
         self.inner.flush()
     }
+    fn discard(&mut self, start_block: u64, count: u32) -> BlockResult<()> {
+        // TRIM passes straight through — freed ciphertext blocks can be reclaimed.
+        self.inner.discard(start_block, count)
+    }
 }
 
 #[cfg(test)]

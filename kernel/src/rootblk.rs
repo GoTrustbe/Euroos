@@ -206,4 +206,15 @@ impl BlockDevice for RootBlk {
         }
         Ok(())
     }
+
+    fn discard(&mut self, start: u64, count: u32) -> BlockResult<()> {
+        // TRIM only makes sense on a real disk; the RAM ramdisk ignores it.
+        if self.on_disk {
+            let sector = self.part_start + start * SPB;
+            let nsec = count as u64 * SPB;
+            // Advisory: discard_dev is a no-op if the device lacks VIRTIO_BLK_F_DISCARD.
+            crate::virtio_blk::discard_dev(self.dev, sector, nsec as u32);
+        }
+        Ok(())
+    }
 }

@@ -19,9 +19,11 @@ use alloc::vec::Vec;
 
 pub mod args;
 pub mod checksum;
+pub mod compare;
 pub mod compute;
 pub mod encoding;
 pub mod find;
+pub mod hashes;
 pub mod text;
 
 pub use args::Args;
