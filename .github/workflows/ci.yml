@@ -50,13 +50,17 @@ jobs:
           rustup default nightly-2026-05-31
       - name: Build userland ELFs + the UEFI kernel
         run: |
-          # The kernel include_bytes!()'s the userland/*.elf programs, which are
-          # git-ignored build output — compile them first or kbuild can't find
-          # them (a fresh CI checkout has no ELFs). 19 of the 33 are musl
-          # static-PIE binaries, so musl-gcc (musl-tools) is required or
-          # userland/build.sh silently skips them and kbuild still fails.
+          # The kernel include_bytes!()'s the userland/*.elf(+.elf.sig) programs
+          # plus dev.pub. The .elf/.sig are git-ignored build output, and the
+          # private signing seed (dev.key) is deliberately NOT in the repo, so:
+          #   1. install musl-tools — 19 of the 33 programs are musl static-PIE
+          #      (without it userland/build.sh silently skips them);
+          #   2. generate a fresh dev keypair (dev.key + matching dev.pub) exactly
+          #      as CONTRIBUTING.md documents, so sign.py can sign the userland;
+          #   3. build the signed userland, then kbuild (which embeds .elf/.sig).
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends musl-tools
+          python3 toolchain/eupkg/gen-dev-key.py
           ./userland/build.sh
           cargo kbuild-release
       - name: Image + headless QEMU boot + screenshot
