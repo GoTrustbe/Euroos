@@ -108,7 +108,7 @@ real**. Be kind: see the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
 ## Security
 
-Found a vulnerability? Please email **jeroen@gotrust.be** privately — do not open a
+Found a vulnerability? Please email **info@euro-os.eu** privately, and do not open a
 public issue. See [`SECURITY.md`](SECURITY.md).
 
 ## License

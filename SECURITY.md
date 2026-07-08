@@ -9,7 +9,7 @@ reports seriously and appreciate responsible disclosure.
 
 Report them privately by email to:
 
-> **jeroen@gotrust.be**
+> **info@euro-os.eu**
 
 Please include, where possible:
 
