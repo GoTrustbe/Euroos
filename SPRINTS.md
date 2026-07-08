@@ -2,7 +2,7 @@
 
 *Pick a sprint/task ID and tell me to work on it. Details: [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) · What's built: [STATUS.md](STATUS.md).*
 
-**Now:** 162 host tests green · clippy clean · boots to desktop, 0 faults · HTTPS validated end-to-end · multi-disk + NVMe verified.
+**Now:** **793 host tests green** · clippy clean · boots to desktop, 0 faults · HTTPS validated end-to-end · multi-disk + NVMe verified.
 **Legend:** ✅ done · 🟡 core done (remainder noted) · 🔒 attended/large remainder.
 
 After a long marathon, **every sprint A–F has been advanced**; the cores are built + verified, with large integrations remaining where noted.

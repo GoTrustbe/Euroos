@@ -210,11 +210,6 @@ pub fn boot_pml4() -> u64 {
     BOOT_PML4.load(Ordering::Relaxed)
 }
 
-/// Give task `idx` its own address space (CR3). From the next switch on, that
-/// task runs on its own page tables.
-pub fn set_task_cr3(idx: usize, cr3: u64) {
-    SCHED.lock().tasks[idx].cr3 = cr3;
-}
 
 struct Scheduler {
     tasks: [Task; MAX_TASKS],
@@ -273,11 +268,31 @@ pub fn stub_addr() -> u64 {
 ///
 /// NOTE: explicit `sysv64` — the UEFI target turns `extern "C"` into the Win64
 /// ABI (argument in RCX), but our stub provides the argument in RDI (SysV).
+/// BUG-007 diagnostic: timer ticks that found SCHED already held (in task context) and
+/// were safely skipped instead of deadlocking. Nonzero ⇒ the deadlock window was hit.
+pub static SCHED_SKIPS: AtomicU64 = AtomicU64::new(0);
+
 #[no_mangle]
 pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     crate::interrupts::TICKS.fetch_add(1, Ordering::Relaxed);
     crate::interrupts::send_timer_eoi();
-    let mut s = SCHED.lock();
+    // BUG-007: the timer must NEVER block on SCHED. Task-context code (the desktop loop,
+    // syscalls, supervise/reap) holds SCHED.lock() with interrupts ENABLED; a blocking
+    // acquire here would deadlock the core — this handler spins with interrupts off while
+    // the lock holder, the very task we just preempted, can never run to release it
+    // (total silence, no fault). So TRY the lock and, if it's held, skip this preemption
+    // tick: the holder frees it within microseconds and the next tick schedules normally.
+    let mut s = match SCHED.try_lock() {
+        Some(g) => g,
+        None => {
+            if SCHED_SKIPS.fetch_add(1, Ordering::Relaxed) == 0 {
+                crate::serial_println!(
+                    "[sched-guard] preemption tick skipped — SCHED held in task context (BUG-007 deadlock averted)"
+                );
+            }
+            return rsp; // keep running the current task; do not switch this tick
+        }
+    };
     let cur = s.current;
     s.tasks[cur].rsp = rsp;
     // S6 stack guard: is the canary of the just-run task still intact? If not,
@@ -442,7 +457,7 @@ fn alloc_slot(s: &mut Scheduler) -> Option<usize> {
     None
 }
 
-pub fn spawn_user(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64) -> usize {
+pub fn spawn_user(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u64) -> usize {
     let mut s = SCHED.lock();
     let idx = alloc_slot(&mut s).expect("scheduler task table full");
     let ctx = kstack_top - (CONTEXT_WORDS as u64) * 8;
@@ -460,6 +475,11 @@ pub fn spawn_user(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64) -> usiz
     }
     s.tasks[idx].rsp = ctx;
     s.tasks[idx].kstack = kstack_top; // own interrupt stack for this task
+    // cr3 MUST be set before the task becomes Ready (BUG-007): otherwise a timer-driven
+    // preemption can pick this runnable task while its cr3 is still 0, and the scheduler
+    // (see the `else boot` fallback in `switch`) would run its ring-3 code on the boot
+    // PML4, where the user arena is supervisor-only -> fault/hang. Mirrors spawn_thread.
+    s.tasks[idx].cr3 = cr3;
     s.tasks[idx].state = State::Ready;
     s.tasks[idx].vruntime = s.tasks[s.current].vruntime; // start fairly at equal level
     s.tasks[idx].nice = 0;

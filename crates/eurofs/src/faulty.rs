@@ -99,6 +99,13 @@ impl<D: BlockDevice> BlockDevice for FaultyBlockDevice<D> {
         }
         self.inner.flush()
     }
+    fn discard(&mut self, start: u64, count: u32) -> BlockResult<()> {
+        // A crashed (powered-off) disk mutates nothing — including TRIM.
+        if self.crashed {
+            return Ok(());
+        }
+        self.inner.discard(start, count)
+    }
 }
 
 #[cfg(test)]

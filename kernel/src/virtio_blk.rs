@@ -30,7 +30,9 @@ pub const SECTOR: usize = 512;
 const VIRTIO_BLK_T_IN: u32 = 0; // read (device → us)
 const VIRTIO_BLK_T_OUT: u32 = 1; // write (us → device)
 const VIRTIO_BLK_T_FLUSH: u32 = 4; // force device cache → persistent medium
+const VIRTIO_BLK_T_DISCARD: u32 = 11; // TRIM: tell the device a range is unused
 const VIRTIO_BLK_F_FLUSH: u32 = 1 << 9; // device supports the FLUSH command
+const VIRTIO_BLK_F_DISCARD: u32 = 1 << 13; // device supports the DISCARD command
 
 #[repr(C)]
 struct VqDesc {
@@ -71,6 +73,7 @@ pub struct VirtioBlk {
     data: u64,
     status: u64,
     flush_ok: bool, // VIRTIO_BLK_F_FLUSH negotiated → the FLUSH command is valid
+    discard_ok: bool, // VIRTIO_BLK_F_DISCARD negotiated → the DISCARD (TRIM) command is valid
 }
 
 /// Up to 4 virtio-blk disks (root + extra mounts). Index 0 = the first/root.
@@ -159,7 +162,15 @@ fn setup_device(dev: &crate::pci::PciDevice, falloc: &mut FrameAllocator) -> Opt
         // instead of in the disk's write-back cache. No other features.
         let dev_features = Port::<u32>::new(io + VIRTIO_DEVICE_FEATURES).read();
         let flush_ok = dev_features & VIRTIO_BLK_F_FLUSH != 0;
-        Port::<u32>::new(io + VIRTIO_DRIVER_FEATURES).write(if flush_ok { VIRTIO_BLK_F_FLUSH } else { 0 });
+        let discard_ok = dev_features & VIRTIO_BLK_F_DISCARD != 0;
+        let mut accept = 0u32;
+        if flush_ok {
+            accept |= VIRTIO_BLK_F_FLUSH;
+        }
+        if discard_ok {
+            accept |= VIRTIO_BLK_F_DISCARD;
+        }
+        Port::<u32>::new(io + VIRTIO_DRIVER_FEATURES).write(accept);
 
         let capacity_sectors: u64 = {
             let lo = Port::<u32>::new(io + VIRTIO_BLK_CAPACITY).read() as u64;
@@ -204,7 +215,7 @@ fn setup_device(dev: &crate::pci::PciDevice, falloc: &mut FrameAllocator) -> Opt
             io,
             if flush_ok { "on (real durability)" } else { "n/a" }
         );
-        Some(VirtioBlk { io, vq, capacity_sectors, hdr, data, status: status_buf, flush_ok })
+        Some(VirtioBlk { io, vq, capacity_sectors, hdr, data, status: status_buf, flush_ok, discard_ok })
     }
 }
 
@@ -299,6 +310,59 @@ pub fn flush_dev(dev: usize) -> bool {
             return true; // no negotiated FLUSH feature → nothing to do
         }
         submit_flush(blk)
+    }
+}
+
+/// Send a VIRTIO_BLK_T_DISCARD (TRIM) for one range. The request carries a single
+/// 16-byte `virtio_blk_discard_write_zeroes { sector:u64, num_sectors:u32, flags:u32 }`
+/// segment in the data descriptor (device reads it).
+unsafe fn submit_discard(blk: &mut VirtioBlk, sector: u64, num_sectors: u32) -> bool {
+    (blk.hdr as *mut u32).write_volatile(VIRTIO_BLK_T_DISCARD);
+    ((blk.hdr + 4) as *mut u32).write_volatile(0);
+    ((blk.hdr + 8) as *mut u64).write_volatile(0); // header sector ignored for DISCARD
+    // The 16-byte discard segment goes in the data buffer.
+    (blk.data as *mut u64).write_volatile(sector);
+    ((blk.data + 8) as *mut u32).write_volatile(num_sectors);
+    ((blk.data + 12) as *mut u32).write_volatile(0); // flags (no UNMAP)
+    (blk.status as *mut u8).write_volatile(0xFF);
+
+    let d0 = blk.vq.desc(0);
+    (*d0).addr = blk.hdr;
+    (*d0).len = 16;
+    (*d0).flags = DESC_NEXT;
+    (*d0).next = 1;
+    let d1 = blk.vq.desc(1);
+    (*d1).addr = blk.data;
+    (*d1).len = 16;
+    (*d1).flags = DESC_NEXT; // device READS the segment
+    (*d1).next = 2;
+    let d2 = blk.vq.desc(2);
+    (*d2).addr = blk.status;
+    (*d2).len = 1;
+    (*d2).flags = DESC_WRITE;
+    (*d2).next = 0;
+
+    kick_and_wait(blk)
+}
+
+/// DISCARD (TRIM) `count` 512-byte sectors starting at `sector` on disk `dev`. Advisory:
+/// if the device did not negotiate VIRTIO_BLK_F_DISCARD this is a successful no-op.
+pub fn discard_dev(dev: usize, sector: u64, count: u32) -> bool {
+    if count == 0 {
+        return true;
+    }
+    unsafe {
+        let blk = match dev_mut(dev) {
+            Some(b) => b,
+            None => return false,
+        };
+        if !blk.discard_ok {
+            return true; // no DISCARD feature → nothing to do (honest no-op)
+        }
+        if sector.saturating_add(count as u64) > blk.capacity_sectors {
+            return false; // out of range (mirror the read/write bounds checks)
+        }
+        submit_discard(blk, sector, count)
     }
 }
 

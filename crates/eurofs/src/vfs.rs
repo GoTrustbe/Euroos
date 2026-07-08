@@ -113,6 +113,14 @@ impl FileSystem for Vfs {
         let (idx, sub) = self.route(path);
         self.fs_mut(idx).set_flags(&sub, flags)
     }
+    fn create_symlink(&mut self, path: &str, target: &str) -> FsResult<()> {
+        let (idx, sub) = self.route(path);
+        self.fs_mut(idx).create_symlink(&sub, target)
+    }
+    fn read_link(&self, path: &str) -> FsResult<String> {
+        let (idx, sub) = self.route(path);
+        self.fs_ref(idx).read_link(&sub)
+    }
     // EuroSnap: snapshots belong to a mount; we route on the path (default: root).
     fn snapshot_create(&mut self, label: &str, flags: u32) -> FsResult<u64> {
         self.fs_mut(None).snapshot_create(label, flags)
@@ -152,6 +160,10 @@ impl FileSystem for Vfs {
     }
     fn space_info(&self) -> (u64, u64) {
         self.root.space_info()
+    }
+    fn alloc_debug(&self, path: &str) -> Option<String> {
+        let (idx, sub) = self.route(path);
+        self.fs_ref(idx).alloc_debug(&sub)
     }
     /// `df` lines: space per mount (root + each mount).
     fn df(&self) -> Vec<(String, u64, u64)> {

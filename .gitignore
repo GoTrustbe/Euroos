@@ -37,3 +37,13 @@ toolchain/eupkg/keys/dev.key
 
 # Local Playwright/browser testing (node_modules)
 /web-test/
+
+# ── Loadtest / stress-run artifacts (raw run logs + result CSVs, regenerable) ─
+# The summarized results live in docs/LOADTEST-TRACKER.md; raw runs stay local.
+loadtest-*.out
+loadtest-*.csv
+scripts/loadtest-bugs.csv
+scripts/__pycache__/
+
+# ── Local site backup archives (not part of the OS source) ───────────────────
+web-backup-*.tgz

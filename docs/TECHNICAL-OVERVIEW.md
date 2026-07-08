@@ -2,7 +2,7 @@
 
 *A from-scratch, sovereign European operating system written in Rust.*
 
-**Document status:** current as of 2026-06-05 · build: `x86-64 UEFI`, alpha · **484 host tests green** (41 library crates), boots to a live desktop, 0 unexpected faults across the verification matrix.
+**Document status:** current as of 2026-06-14 · build: `x86-64 UEFI`, alpha · **793 host tests green**, boots to a live desktop, 0 unexpected faults across the verification matrix.
 
 ---
 
@@ -260,7 +260,7 @@ The interactive terminal supports pipes (`a | b`), redirection (`>`/`>>`), argum
 
 ## 13. Test & verification posture
 
-- **690 host tests** (no VM, run under `std`) across **57 library crates**: eurofs · euronet · eurotls · euromm · euroupdate · eurosandbox · eurodisplay · eurowasm · eurowl · euroaudio · europrint · eurousb · euroacpi · euroaml · eurodevice · eurotpm · eurofde · europol · euroobserve · eurovault · eurocrash · eurohealth · eurofw · eurovpn · eurocoreutils · euroagent · eurolocale · euroinstall · euroca · euroattest · euroidm · **euroid** (Sprint K1: from-scratch Argon2id verified against the RFC 9106 test vector) · europkg · eurorepro · euroaccess · the EuroSuite/office + EuroApps crates · eurojs · euroweb. Clippy-clean.
+- **793 host tests** (no VM, run under `std`) across the library crates: eurofs · euronet · eurotls · euromm · euroupdate · eurosandbox · eurodisplay · eurowasm · eurowl · euroaudio · europrint · eurousb · euroacpi · euroaml · eurodevice · eurotpm · eurofde · europol · euroobserve · eurovault · eurocrash · eurohealth · eurofw · eurovpn · eurocoreutils · euroagent · eurolocale · euroinstall · euroca · euroattest · euroidm · **euroid** (Sprint K1: from-scratch Argon2id verified against the RFC 9106 test vector) · europkg · eurorepro · euroaccess · the EuroSuite/office + EuroApps crates · eurojs · euroweb. Clippy-clean.
 - **Tier-2 verification:** UEFI build → QEMU boot → serial-log assertions → framebuffer screenshot. Every feature in this document was confirmed to boot to the desktop with **0 unexpected faults**.
 - **Multi-config harnesses:** single-disk, two-virtio-blk + NVMe multi-disk, and `-smp 4` SMP boots.
 - *Note:* the kernel binary itself cannot be host-unit-tested (it is `no_std` with its own panic handler — `cargo test --workspace` would hit a duplicate `panic_impl`); kernel paths are verified by boot self-tests. Use `cargo test -p <crate>` per library crate.

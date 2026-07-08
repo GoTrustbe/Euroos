@@ -16,8 +16,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust nightly
         run: |
-          rustup toolchain install nightly --profile minimal --component rust-src
-          rustup default nightly
+          rustup toolchain install nightly-2026-05-31 --profile minimal --component rust-src
+          rustup default nightly-2026-05-31
       - name: cargo test (host)
         run: cargo test
 
@@ -31,13 +31,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust nightly + clippy
         run: |
-          rustup toolchain install nightly --profile minimal --component clippy
-          rustup default nightly
+          rustup toolchain install nightly-2026-05-31 --profile minimal --component clippy
+          rustup default nightly-2026-05-31
       - run: cargo clippy -p eurofs -p euronet -- -D warnings
 
-  # ── Informational only: the UEFI kernel build uses -Z build-std (nightly-
-  #    sensitive) and a headless QEMU boot (no KVM on hosted runners → slow TCG).
-  #    Useful as an artifact, not a gate.
+  # ── Informational only: the UEFI kernel build uses -Z build-std (now pinned,
+  #    see rust-toolchain.toml) and a headless QEMU boot (no KVM on hosted
+  #    runners → slow TCG). Useful as an artifact, not a gate.
   kernel-boot:
     name: Kernel build + QEMU boot (informational)
     runs-on: ubuntu-latest
@@ -46,10 +46,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust nightly + build-std prerequisites
         run: |
-          rustup toolchain install nightly --profile minimal --component rust-src --target x86_64-unknown-uefi
-          rustup default nightly
-      - name: Build the UEFI kernel
-        run: cargo kbuild-release
+          rustup toolchain install nightly-2026-05-31 --profile minimal --component rust-src --target x86_64-unknown-uefi
+          rustup default nightly-2026-05-31
+      - name: Build userland ELFs + the UEFI kernel
+        run: |
+          # The kernel include_bytes!()'s the userland/*.elf(+.elf.sig) programs
+          # plus dev.pub. The .elf/.sig are git-ignored build output, and the
+          # private signing seed (dev.key) is deliberately NOT in the repo, so:
+          #   1. install musl-tools — 19 of the 33 programs are musl static-PIE
+          #      (without it userland/build.sh silently skips them);
+          #   2. generate a fresh dev keypair (dev.key + matching dev.pub) exactly
+          #      as CONTRIBUTING.md documents, so sign.py can sign the userland;
+          #   3. build the signed userland, then kbuild (which embeds .elf/.sig).
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+          python3 toolchain/eupkg/gen-dev-key.py
+          ./userland/build.sh
+          cargo kbuild-release
       - name: Image + headless QEMU boot + screenshot
         run: |
           sudo apt-get update
