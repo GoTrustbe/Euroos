@@ -35,9 +35,9 @@ jobs:
           rustup default nightly-2026-05-31
       - run: cargo clippy -p eurofs -p euronet -- -D warnings
 
-  # ── Informational only: the UEFI kernel build uses -Z build-std (nightly-
-  #    sensitive) and a headless QEMU boot (no KVM on hosted runners → slow TCG).
-  #    Useful as an artifact, not a gate.
+  # ── Informational only: the UEFI kernel build uses -Z build-std (now pinned,
+  #    see rust-toolchain.toml) and a headless QEMU boot (no KVM on hosted
+  #    runners → slow TCG). Useful as an artifact, not a gate.
   kernel-boot:
     name: Kernel build + QEMU boot (informational)
     runs-on: ubuntu-latest
@@ -48,8 +48,17 @@ jobs:
         run: |
           rustup toolchain install nightly-2026-05-31 --profile minimal --component rust-src --target x86_64-unknown-uefi
           rustup default nightly-2026-05-31
-      - name: Build the UEFI kernel
-        run: cargo kbuild-release
+      - name: Build userland ELFs + the UEFI kernel
+        run: |
+          # The kernel include_bytes!()'s the userland/*.elf programs, which are
+          # git-ignored build output — compile them first or kbuild can't find
+          # them (a fresh CI checkout has no ELFs). 19 of the 33 are musl
+          # static-PIE binaries, so musl-gcc (musl-tools) is required or
+          # userland/build.sh silently skips them and kbuild still fails.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+          ./userland/build.sh
+          cargo kbuild-release
       - name: Image + headless QEMU boot + screenshot
         run: |
           sudo apt-get update
