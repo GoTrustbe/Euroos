@@ -1,5 +1,9 @@
 [toolchain]
-channel = "nightly"
+# Pinned to a specific dated nightly for reproducible builds (Cargo.lock is also
+# committed). -Z build-std and clippy lints drift between nightlies, so an unpinned
+# "nightly" made the informational CI jobs fail on toolchain churn, not real
+# regressions. Bump this date deliberately after verifying kbuild + QEMU boot.
+channel = "nightly-2026-05-31"
 targets = ["x86_64-unknown-uefi"]
 # Only require what the build actually needs (rust-src for -Z build-std). clippy /
 # rustfmt / llvm-tools-preview are installed on demand in CI — requiring them here
