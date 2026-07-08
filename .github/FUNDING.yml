@@ -9,9 +9,9 @@
 github: [GoTrustbe]
 
 # European, non-profit, no-fee recurring donations (good fit for a sovereign EU
-# project). Create the account first, then uncomment with your handle:
-# liberapay: EuroOS
+# project). Live now:
+liberapay: euro-os
 # open_collective: euroos
 
-# Always-on fallback that works today — the project site:
+# Always-on fallback that works today, the project site:
 custom: ["https://euro-os.eu"]
