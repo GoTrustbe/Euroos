@@ -19,6 +19,8 @@ pub enum FsError {
     Unsupported,
     /// Directory is not empty (e.g. with `remove_dir`).
     NotEmpty,
+    /// 3E-9: the owner's disk quota would be exceeded by this write (POSIX `EDQUOT`).
+    QuotaExceeded,
 }
 
 pub type FsResult<T> = Result<T, FsError>;
@@ -127,6 +129,40 @@ pub trait FileSystem {
     fn set_flags(&mut self, path: &str, flags: u32) -> FsResult<()> {
         let _ = (path, flags);
         Err(FsError::Unsupported)
+    }
+
+    // ── 3E-3/3E-9: ownership + per-user disk quota — not supported by default ──
+    /// Set the uid that OWNS files created from now on (the session identity the
+    /// kernel sets at login/su). 0 = system/unowned (quota-exempt). Default: no-op.
+    fn set_uid_context(&mut self, uid: u32) {
+        let _ = uid;
+    }
+    /// Owner uid of the file/dir at `path` (0 = system/legacy). Default: not supported.
+    fn owner(&self, path: &str) -> FsResult<u32> {
+        let _ = path;
+        Err(FsError::Unsupported)
+    }
+    /// Change the owner of `path` to `uid` (like `chown(2)`; the capability check
+    /// lives in the kernel layer above). Default: not supported.
+    fn chown(&mut self, path: &str, uid: u32) -> FsResult<()> {
+        let _ = (path, uid);
+        Err(FsError::Unsupported)
+    }
+    /// 3E-9: set the disk quota for `uid` in BLOCKS (0 = remove the limit).
+    /// Default: not supported.
+    fn quota_set(&mut self, uid: u32, limit_blocks: u64) -> FsResult<()> {
+        let _ = (uid, limit_blocks);
+        Err(FsError::Unsupported)
+    }
+    /// 3E-9: `(used_blocks, limit_blocks)` for `uid` (limit 0 = no limit set).
+    /// Default: not supported.
+    fn quota_info(&self, uid: u32) -> FsResult<(u64, u64)> {
+        let _ = uid;
+        Err(FsError::Unsupported)
+    }
+    /// 3E-9: all uids with a quota limit and/or usage, `(uid, used, limit)`.
+    fn quota_list(&self) -> Vec<(u32, u64, u64)> {
+        Vec::new()
     }
 
     /// Create a symbolic link at `path` pointing at `target` (an arbitrary string, not

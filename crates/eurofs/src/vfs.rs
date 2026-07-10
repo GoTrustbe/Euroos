@@ -117,6 +117,32 @@ impl FileSystem for Vfs {
         let (idx, sub) = self.route(path);
         self.fs_mut(idx).create_symlink(&sub, target)
     }
+    // 3E-3/3E-9: ownership + quota. The uid context goes to EVERY mount (the session
+    // identity is FS-independent); owner/chown route on the path; quotas live on
+    // the root FS (where /home is).
+    fn set_uid_context(&mut self, uid: u32) {
+        self.root.set_uid_context(uid);
+        for m in &mut self.mounts {
+            m.fs.set_uid_context(uid);
+        }
+    }
+    fn owner(&self, path: &str) -> FsResult<u32> {
+        let (idx, sub) = self.route(path);
+        self.fs_ref(idx).owner(&sub)
+    }
+    fn chown(&mut self, path: &str, uid: u32) -> FsResult<()> {
+        let (idx, sub) = self.route(path);
+        self.fs_mut(idx).chown(&sub, uid)
+    }
+    fn quota_set(&mut self, uid: u32, limit_blocks: u64) -> FsResult<()> {
+        self.fs_mut(None).quota_set(uid, limit_blocks)
+    }
+    fn quota_info(&self, uid: u32) -> FsResult<(u64, u64)> {
+        self.fs_ref(None).quota_info(uid)
+    }
+    fn quota_list(&self) -> Vec<(u32, u64, u64)> {
+        self.fs_ref(None).quota_list()
+    }
     fn read_link(&self, path: &str) -> FsResult<String> {
         let (idx, sub) = self.route(path);
         self.fs_ref(idx).read_link(&sub)

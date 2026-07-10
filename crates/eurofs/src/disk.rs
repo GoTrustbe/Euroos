@@ -42,6 +42,7 @@ const ROOT_OID: u64 = 1;
 
 // Inode block layout (offsets in bytes).
 const OFF_MAGIC: usize = 0;
+const OFF_UID: usize = 4; // u32 owner uid (3E-3/3E-9) — was padding, so 0 = legacy/system
 const OFF_OID: usize = 8;
 const OFF_PARENT: usize = 16;
 const OFF_TYPE: usize = 24;
@@ -108,6 +109,8 @@ struct Inode {
     otype: u8,
     /// L1: immutability flags (FLAG_IMMUTABLE | FLAG_APPEND_ONLY). 0 = mutable.
     flags: u32,
+    /// 3E-3/3E-9: owner uid (0 = system/legacy — quota-exempt).
+    uid: u32,
     mode: u16,
     size: u64,
     mtime: u64,
@@ -125,6 +128,7 @@ impl Inode {
             parent,
             otype,
             flags: 0,
+            uid: 0,
             mode: if otype == TYPE_DIR { 0o755 } else { 0o644 },
             size: 0,
             mtime: now,
@@ -137,6 +141,7 @@ impl Inode {
     fn encode(&self) -> [u8; BS] {
         let mut b = [0u8; BS];
         wr_u32(&mut b, OFF_MAGIC, INODE_MAGIC);
+        wr_u32(&mut b, OFF_UID, self.uid);
         wr_u64(&mut b, OFF_OID, self.oid);
         wr_u64(&mut b, OFF_PARENT, self.parent);
         b[OFF_TYPE] = self.otype;
@@ -184,6 +189,7 @@ impl Inode {
             parent: rd_u64(b, OFF_PARENT),
             otype: b[OFF_TYPE],
             flags: rd_u32(b, OFF_FLAGS),
+            uid: rd_u32(b, OFF_UID),
             mode: rd_u16(b, OFF_MODE),
             size: rd_u64(b, OFF_SIZE),
             mtime: rd_u64(b, OFF_MTIME),
@@ -199,6 +205,12 @@ impl Inode {
 /// block 1/2 = superblock-A/B, 0 = boot, 3..15 = slack → 8 is free).
 const SNAPSHOT_TABLE_BLOCK: u64 = 8;
 const SNAPSHOT_MAGIC: u32 = 0x5346_4E53; // "SNFS"
+/// 3E-9: the reserved block holding the quota table (block 9 = next free slack slot).
+const QUOTA_TABLE_BLOCK: u64 = 9;
+const QUOTA_MAGIC: u32 = 0x4154_5145; // "EQTA"
+/// uid (u32) + limit (u64) per entry.
+const QUOTA_ENTRY_LEN: usize = 12;
+const MAX_QUOTA_ENTRIES: usize = (BS - 8) / QUOTA_ENTRY_LEN;
 const MAX_SNAPSHOTS: usize = 32;
 const SNAP_ENTRY_LEN: usize = 80; // id+parent+ts+objmap_root+map_blocks+ckpt+flags+label(32)
 
@@ -250,6 +262,15 @@ pub struct EuroFs<D: BlockDevice> {
     /// `write_object` is the only code that changes an inode's extents, so it never goes
     /// stale for an object still in `objmap`.
     extents_cache: BTreeMap<u64, Vec<(u64, u32)>>,
+    /// 3E-3: the uid that owns files CREATED from now on (session identity, set by the
+    /// kernel at login/su). 0 = system/unowned.
+    ctx_uid: u32,
+    /// 3E-9: uid → quota limit in blocks (persisted in the reserved quota block).
+    quota_limits: BTreeMap<u32, u64>,
+    /// 3E-9: uid → LIVE data blocks in use (rebuilt at mount, maintained by
+    /// `write_object`/`remove_*`). Counts the current tree only — blocks pinned by
+    /// snapshots are deliberately not charged (they are system history, not user data).
+    usage: BTreeMap<u32, u64>,
 }
 
 impl<D: BlockDevice> EuroFs<D> {
@@ -270,6 +291,9 @@ impl<D: BlockDevice> EuroFs<D> {
             pending_trim: Vec::new(),
             path_cache: spin::Mutex::new(BTreeMap::new()),
             extents_cache: BTreeMap::new(),
+            ctx_uid: 0,
+            quota_limits: BTreeMap::new(),
+            usage: BTreeMap::new(),
         };
         // Reserve the first blocks (boot/superblock/backup/slack).
         for i in 0..(RESERVED_BLOCKS as usize).min(fs.used.len()) {
@@ -301,10 +325,15 @@ impl<D: BlockDevice> EuroFs<D> {
             pending_trim: Vec::new(),
             path_cache: spin::Mutex::new(BTreeMap::new()),
             extents_cache: BTreeMap::new(),
+            ctx_uid: 0,
+            quota_limits: BTreeMap::new(),
+            usage: BTreeMap::new(),
         };
         fs.load_objmap()?;
         fs.load_snapshots()?;
         fs.rebuild_allocator()?;
+        fs.load_quota()?;
+        fs.rebuild_usage()?;
         fs.next_oid = fs.objmap.keys().copied().max().unwrap_or(ROOT_OID) + 1;
         // Self-healing: read_from() succeeded so at least one A/B slot is valid. If the
         // OTHER slot is corrupt (due to an earlier torn write / bitrot), repair it
@@ -552,6 +581,76 @@ impl<D: BlockDevice> EuroFs<D> {
         Ok(())
     }
 
+    // ── 3E-9: per-user disk quota ─────────────────────────────────────────
+    /// Number of DATA blocks an inode occupies (inline data lives in the inode
+    /// block itself and is not charged).
+    fn data_blocks_of(inode: &Inode) -> u64 {
+        inode.extents.iter().map(|&(_, cnt)| cnt as u64).sum()
+    }
+
+    fn usage_add(&mut self, uid: u32, blocks: u64) {
+        if blocks > 0 {
+            *self.usage.entry(uid).or_insert(0) += blocks;
+        }
+    }
+
+    fn usage_sub(&mut self, uid: u32, blocks: u64) {
+        if blocks > 0 {
+            if let Some(u) = self.usage.get_mut(&uid) {
+                *u = u.saturating_sub(blocks);
+            }
+        }
+    }
+
+    /// Load the quota table from its reserved block. A missing/foreign block is
+    /// simply "no quotas" (legacy volume).
+    fn load_quota(&mut self) -> FsResult<()> {
+        let mut buf = [0u8; BS];
+        if self.read_block(QUOTA_TABLE_BLOCK, &mut buf).is_err() || rd_u32(&buf, 0) != QUOTA_MAGIC {
+            return Ok(());
+        }
+        let count = (rd_u32(&buf, 4) as usize).min(MAX_QUOTA_ENTRIES);
+        self.quota_limits.clear();
+        for i in 0..count {
+            let o = 8 + i * QUOTA_ENTRY_LEN;
+            let uid = rd_u32(&buf, o);
+            let limit = rd_u64(&buf, o + 4);
+            if uid != 0 && limit != 0 {
+                self.quota_limits.insert(uid, limit);
+            }
+        }
+        Ok(())
+    }
+
+    /// Persist the quota table to its reserved block (+ flush for durability).
+    fn save_quota(&mut self) -> FsResult<()> {
+        let mut buf = [0u8; BS];
+        wr_u32(&mut buf, 0, QUOTA_MAGIC);
+        wr_u32(&mut buf, 4, self.quota_limits.len().min(MAX_QUOTA_ENTRIES) as u32);
+        for (i, (&uid, &limit)) in self.quota_limits.iter().take(MAX_QUOTA_ENTRIES).enumerate() {
+            let o = 8 + i * QUOTA_ENTRY_LEN;
+            wr_u32(&mut buf, o, uid);
+            wr_u64(&mut buf, o + 4, limit);
+        }
+        self.write_block(QUOTA_TABLE_BLOCK, &buf)?;
+        let _ = self.dev.flush();
+        Ok(())
+    }
+
+    /// Rebuild the per-uid usage accounting by scanning the LIVE tree (mount-time;
+    /// also after a snapshot rollback, when the whole tree changed).
+    fn rebuild_usage(&mut self) -> FsResult<()> {
+        self.usage.clear();
+        let oids: Vec<u64> = self.objmap.keys().copied().collect();
+        for oid in oids {
+            if let Ok(inode) = self.read_inode(oid) {
+                let blocks = Self::data_blocks_of(&inode);
+                self.usage_add(inode.uid, blocks);
+            }
+        }
+        Ok(())
+    }
+
     // ── object map (flat CoW table) ─────────────────────────────────────
     fn load_objmap(&mut self) -> FsResult<()> {
         let root = self.sb.object_map_root;
@@ -647,6 +746,29 @@ impl<D: BlockDevice> EuroFs<D> {
     /// Write data for a (new) inode via CoW: allocate fresh data and
     /// inode blocks, write them, and update the object map. Commit happens separately.
     fn write_object(&mut self, mut inode: Inode, data: &[u8]) -> FsResult<()> {
+        // 3E-9 quota: this is the ONLY place an object's extents change, so all
+        // per-uid accounting lives here. Credit the previous version's data blocks
+        // (CoW supersedes them at the next commit), charge the new ones, and
+        // enforce the owner's limit BEFORE allocating anything.
+        let (old_blocks, old_uid) = match self.objmap.get(&inode.oid) {
+            Some(_) => {
+                let old = self.read_inode(inode.oid)?;
+                (Self::data_blocks_of(&old), old.uid)
+            }
+            None => (0, inode.uid),
+        };
+        let new_blocks = if data.len() <= INLINE_CAP { 0 } else { data.len().div_ceil(BS) as u64 };
+        if inode.uid != 0 {
+            if let Some(&limit) = self.quota_limits.get(&inode.uid) {
+                let cur = self.usage.get(&inode.uid).copied().unwrap_or(0);
+                // The old version's blocks are freed by this write — don't double-count
+                // them against the owner (only if the owner stays the same).
+                let base = if old_uid == inode.uid { cur.saturating_sub(old_blocks) } else { cur };
+                if base + new_blocks > limit {
+                    return Err(FsError::QuotaExceeded);
+                }
+            }
+        }
         inode.size = data.len() as u64;
         // Data-path integrity: XXH3 over the full content, so that bit-rot in
         // a data block (outside the inode) can be detected on read/scrub.
@@ -680,6 +802,9 @@ impl<D: BlockDevice> EuroFs<D> {
         // place an object's extents change), so rebuild_allocator needn't re-read this
         // inode from disk on the next commit.
         self.extents_cache.insert(inode.oid, inode.extents.clone());
+        // 3E-9: the write landed — settle the accounting.
+        self.usage_sub(old_uid, old_blocks);
+        self.usage_add(inode.uid, new_blocks);
         Ok(())
     }
 
@@ -844,9 +969,11 @@ impl<D: BlockDevice> EuroFs<D> {
         // L1: enforce the immutability flags of an existing file + preserve them
         // across a (permitted) overwrite.
         let mut keep_flags = 0u32;
+        let mut keep_uid = self.ctx_uid; // new file → owned by the session identity
         if existing.is_some() {
             let old = self.read_inode(oid)?;
             keep_flags = old.flags;
+            keep_uid = old.uid; // overwrite keeps the existing owner (3E-3)
             if old.flags & FLAG_IMMUTABLE != 0 {
                 return Err(FsError::PermissionDenied); // immutable → no change
             }
@@ -861,6 +988,7 @@ impl<D: BlockDevice> EuroFs<D> {
 
         let mut inode = Inode::new(oid, parent_oid, TYPE_FILE, self.now);
         inode.flags = keep_flags;
+        inode.uid = keep_uid;
         self.write_object(inode, data)?;
         if existing.is_none() {
             self.rewrite_dir(parent_oid, &entries)?;
@@ -887,9 +1015,11 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         let parent_oid = self.resolve(parent(path))?;
         let name = filename(path);
         let mut entries = self.read_dir_entries(parent_oid)?;
+        // POSIX `unlink`: removes a regular file OR a symlink (the link itself,
+        // never its target). Directories go via `remove_dir`.
         let pos = entries
             .iter()
-            .position(|(n, _, t)| n == name && *t == TYPE_FILE)
+            .position(|(n, _, t)| n == name && (*t == TYPE_FILE || *t == TYPE_SYMLINK))
             .ok_or(FsError::NotFound)?;
         let oid = entries[pos].1;
         // L1: an immutable or append-only file may NOT be removed.
@@ -897,11 +1027,74 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         if inode.flags & (FLAG_IMMUTABLE | FLAG_APPEND_ONLY) != 0 {
             return Err(FsError::PermissionDenied);
         }
+        // 3E-9: the file's data blocks return to the owner's quota.
+        self.usage_sub(inode.uid, Self::data_blocks_of(&inode));
         entries.remove(pos);
         self.objmap.remove(&oid);
         self.rewrite_dir(parent_oid, &entries)?;
         self.path_cache.lock().clear(); // PERF-001: a name→oid mapping was removed
         self.commit()
+    }
+
+    // ── 3E-3/3E-9: ownership + per-user disk quota ────────────────────────
+    fn set_uid_context(&mut self, uid: u32) {
+        self.ctx_uid = uid;
+    }
+
+    fn owner(&self, path: &str) -> FsResult<u32> {
+        let oid = self.resolve(path)?;
+        Ok(self.read_inode(oid)?.uid)
+    }
+
+    fn chown(&mut self, path: &str, uid: u32) -> FsResult<()> {
+        let oid = self.resolve(path)?;
+        let inode = self.read_inode(oid)?;
+        if inode.flags & FLAG_IMMUTABLE != 0 {
+            return Err(FsError::PermissionDenied); // immutable → metadata frozen too
+        }
+        if inode.uid == uid {
+            return Ok(());
+        }
+        // CoW-rewrite with the new owner; write_object settles the quota transfer
+        // (credits the old owner, charges — and enforces — the new one).
+        let data = self.read_data(&inode)?;
+        let mut ni = inode;
+        ni.uid = uid;
+        self.write_object(ni, &data)?;
+        self.commit()
+    }
+
+    fn quota_set(&mut self, uid: u32, limit_blocks: u64) -> FsResult<()> {
+        if uid == 0 {
+            return Err(FsError::PermissionDenied); // uid 0 = system, always exempt
+        }
+        if limit_blocks == 0 {
+            self.quota_limits.remove(&uid);
+        } else {
+            if self.quota_limits.len() >= MAX_QUOTA_ENTRIES && !self.quota_limits.contains_key(&uid) {
+                return Err(FsError::NoSpace);
+            }
+            self.quota_limits.insert(uid, limit_blocks);
+        }
+        self.save_quota()
+    }
+
+    fn quota_info(&self, uid: u32) -> FsResult<(u64, u64)> {
+        let used = self.usage.get(&uid).copied().unwrap_or(0);
+        let limit = self.quota_limits.get(&uid).copied().unwrap_or(0);
+        Ok((used, limit))
+    }
+
+    fn quota_list(&self) -> Vec<(u32, u64, u64)> {
+        let mut uids: Vec<u32> = self.quota_limits.keys().chain(self.usage.keys()).copied().collect();
+        uids.sort_unstable();
+        uids.dedup();
+        uids.retain(|&u| u != 0);
+        uids.iter()
+            .map(|&u| {
+                (u, self.usage.get(&u).copied().unwrap_or(0), self.quota_limits.get(&u).copied().unwrap_or(0))
+            })
+            .collect()
     }
 
     fn get_flags(&self, path: &str) -> FsResult<u32> {
@@ -961,6 +1154,8 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         // PERF-002: the on-disk tree was reloaded → drop any cached extents from the
         // abandoned state; rebuild_allocator will self-heal them from the rolled-back inodes.
         self.extents_cache.clear();
+        // 3E-9: usage reflects the LIVE tree, which just changed wholesale.
+        self.rebuild_usage()?;
         self.commit()
     }
 
@@ -1003,7 +1198,8 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         }
         let oid = self.next_oid;
         self.next_oid += 1;
-        let dir = Inode::new(oid, parent_oid, TYPE_DIR, self.now);
+        let mut dir = Inode::new(oid, parent_oid, TYPE_DIR, self.now);
+        dir.uid = self.ctx_uid;
         self.write_object(dir, &[])?;
         entries.push((name.to_string(), oid, TYPE_DIR));
         self.rewrite_dir(parent_oid, &entries)?;
@@ -1028,7 +1224,8 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         }
         let oid = self.next_oid;
         self.next_oid += 1;
-        let link = Inode::new(oid, parent_oid, TYPE_SYMLINK, self.now);
+        let mut link = Inode::new(oid, parent_oid, TYPE_SYMLINK, self.now);
+        link.uid = self.ctx_uid;
         // The target string is the symlink's "data" (inline for the usual short paths).
         self.write_object(link, target.as_bytes())?;
         entries.push((name.to_string(), oid, TYPE_SYMLINK));
@@ -1142,6 +1339,8 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         if !self.read_dir_entries(oid)?.is_empty() {
             return Err(FsError::NotEmpty);
         }
+        // 3E-9: a (large) directory's entry blocks return to the owner's quota.
+        self.usage_sub(inode.uid, Self::data_blocks_of(&inode));
         let parent_oid = self.resolve(parent(path))?;
         let name = filename(path);
         let mut entries = self.read_dir_entries(parent_oid)?;
@@ -1426,6 +1625,7 @@ mod tests {
             parent: 0,
             otype: 1,
             flags: 0,
+            uid: 0,
             mode: 0,
             size: 0,
             mtime: 0,
@@ -1994,5 +2194,126 @@ mod tests {
         let fs = EuroFs::mount(&mut dev, 2).unwrap();
         assert_eq!(fs.read_link("/l").unwrap(), "/t");
         assert_eq!(fs.read_file("/l").unwrap(), b"persisted");
+    }
+
+    // ── 3E-3/3E-9: ownership + per-user disk quota ────────────────────────
+
+    #[test]
+    fn uid_owner_persists_across_remount() {
+        let mut dev = dev(256);
+        {
+            let mut fs = EuroFs::format(&mut dev, [50; 16], 1).unwrap();
+            fs.set_uid_context(1002); // alice
+            fs.write_file("/a.txt", b"alice's file").unwrap();
+            fs.create_dir("/adir").unwrap();
+            fs.set_uid_context(0);
+            fs.write_file("/sys.txt", b"system file").unwrap();
+            assert_eq!(fs.owner("/a.txt").unwrap(), 1002);
+            assert_eq!(fs.owner("/adir").unwrap(), 1002);
+            assert_eq!(fs.owner("/sys.txt").unwrap(), 0);
+        }
+        let fs = EuroFs::mount(&mut dev, 2).unwrap();
+        assert_eq!(fs.owner("/a.txt").unwrap(), 1002);
+        assert_eq!(fs.owner("/adir").unwrap(), 1002);
+        assert_eq!(fs.owner("/sys.txt").unwrap(), 0);
+    }
+
+    #[test]
+    fn overwrite_keeps_owner() {
+        let mut dev = dev(256);
+        let mut fs = EuroFs::format(&mut dev, [51; 16], 1).unwrap();
+        fs.set_uid_context(1002);
+        fs.write_file("/f", b"v1").unwrap();
+        fs.set_uid_context(1003); // bob overwrites alice's file → owner stays alice
+        fs.write_file("/f", b"v2 by bob").unwrap();
+        assert_eq!(fs.owner("/f").unwrap(), 1002);
+    }
+
+    #[test]
+    fn quota_enforced_and_credited_on_delete() {
+        let mut dev = dev(4096);
+        let mut fs = EuroFs::format(&mut dev, [52; 16], 1).unwrap();
+        fs.quota_set(1002, 4).unwrap(); // 4 blocks = 16 KiB of extent data
+        fs.set_uid_context(1002);
+        // Inline files (≤ INLINE_CAP) cost 0 data blocks → always fine.
+        fs.write_file("/small", b"tiny").unwrap();
+        // 3 blocks: within quota.
+        fs.write_file("/big1", &vec![0xAA; 3 * 4096]).unwrap();
+        let (used, limit) = fs.quota_info(1002).unwrap();
+        assert_eq!((used, limit), (3, 4));
+        // 2 more blocks would make 5 > 4 → refused, and the file does NOT appear.
+        assert_eq!(fs.write_file("/big2", &vec![0xBB; 2 * 4096]), Err(FsError::QuotaExceeded));
+        assert!(!fs.exists("/big2"));
+        // Delete the big file → blocks are credited back → the write now succeeds.
+        fs.remove_file("/big1").unwrap();
+        assert_eq!(fs.quota_info(1002).unwrap().0, 0);
+        fs.write_file("/big2", &vec![0xBB; 2 * 4096]).unwrap();
+        // uid 0 (system) is always exempt.
+        fs.set_uid_context(0);
+        fs.write_file("/sysbig", &vec![0xCC; 8 * 4096]).unwrap();
+    }
+
+    #[test]
+    fn quota_limits_persist_and_usage_rebuilt_on_mount() {
+        let mut dev = dev(4096);
+        {
+            let mut fs = EuroFs::format(&mut dev, [53; 16], 1).unwrap();
+            fs.quota_set(1002, 10).unwrap();
+            fs.set_uid_context(1002);
+            fs.write_file("/data", &vec![0x11; 5 * 4096]).unwrap();
+        }
+        let fs = EuroFs::mount(&mut dev, 2).unwrap();
+        // Limit came from the quota block, usage from the live-tree scan.
+        assert_eq!(fs.quota_info(1002).unwrap(), (5, 10));
+        assert_eq!(fs.quota_list(), alloc::vec![(1002, 5, 10)]);
+    }
+
+    #[test]
+    fn chown_transfers_usage_and_enforces_target_quota() {
+        let mut dev = dev(4096);
+        let mut fs = EuroFs::format(&mut dev, [54; 16], 1).unwrap();
+        fs.set_uid_context(1002);
+        fs.write_file("/f", &vec![0x22; 3 * 4096]).unwrap();
+        assert_eq!(fs.quota_info(1002).unwrap().0, 3);
+        // Transfer to bob → alice credited, bob charged.
+        fs.chown("/f", 1003).unwrap();
+        assert_eq!(fs.owner("/f").unwrap(), 1003);
+        assert_eq!(fs.quota_info(1002).unwrap().0, 0);
+        assert_eq!(fs.quota_info(1003).unwrap().0, 3);
+        // A chown INTO a too-small quota is refused (the write_object gate).
+        fs.quota_set(1004, 2).unwrap();
+        assert_eq!(fs.chown("/f", 1004), Err(FsError::QuotaExceeded));
+        assert_eq!(fs.owner("/f").unwrap(), 1003); // unchanged
+    }
+
+    #[test]
+    fn quota_set_rejects_uid0_and_zero_removes() {
+        let mut dev = dev(256);
+        let mut fs = EuroFs::format(&mut dev, [55; 16], 1).unwrap();
+        assert_eq!(fs.quota_set(0, 100), Err(FsError::PermissionDenied));
+        fs.quota_set(1002, 100).unwrap();
+        assert_eq!(fs.quota_info(1002).unwrap().1, 100);
+        fs.quota_set(1002, 0).unwrap(); // 0 = remove the limit
+        assert_eq!(fs.quota_info(1002).unwrap().1, 0);
+    }
+
+    #[test]
+    fn unlink_removes_symlink_not_target() {
+        let mut dev = dev(256);
+        let mut fs = EuroFs::format(&mut dev, [57; 16], 1).unwrap();
+        fs.write_file("/target", b"payload").unwrap();
+        fs.create_symlink("/link", "/target").unwrap();
+        fs.remove_file("/link").unwrap(); // POSIX unlink: the LINK goes...
+        assert!(!fs.exists("/link"));
+        assert_eq!(fs.read_file("/target").unwrap(), b"payload"); // ...the target stays
+    }
+
+    #[test]
+    fn legacy_uid0_inodes_read_as_system() {
+        // decode() of a pre-3E inode block (bytes 4..8 were padding zeros) → uid 0.
+        let mut dev = dev(256);
+        let mut fs = EuroFs::format(&mut dev, [56; 16], 1).unwrap();
+        fs.write_file("/legacy", b"x").unwrap(); // ctx_uid defaults to 0
+        assert_eq!(fs.owner("/legacy").unwrap(), 0);
     }
 }

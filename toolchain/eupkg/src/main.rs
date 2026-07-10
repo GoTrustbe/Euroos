@@ -132,7 +132,10 @@ fn build(dir: &str, key: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Write the .eupkg (ZIP).
     let out = format!("{}-{}.eupkg", manifest.package.name, manifest.package.version);
     let mut zip = zip::ZipWriter::new(File::create(&out)?);
-    let opt = SimpleFileOptions::default();
+    // STORED (no compression): the kernel-side installer (3E-6, `europkg::zipread`)
+    // reads the package with a minimal, auditable ZIP reader — no inflate in ring 0.
+    // Packages are small binaries; the signature covers the manifest either way.
+    let opt = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     zip.start_file("MANIFEST.toml", opt)?;
     zip.write_all(manifest_str.as_bytes())?;
     zip.start_file("signature.ed25519", opt)?;
