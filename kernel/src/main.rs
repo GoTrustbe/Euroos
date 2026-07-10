@@ -1354,6 +1354,9 @@ fn main() -> Status {
     nts::selftest();
     // 3D-2: system-image integrity — Ed25519-signed Merkle root, tamper detection.
     verity::selftest();
+    // 3D-2 wiring: verity on the LIVE EuroFS read path (VerityBlk verifies every
+    // block against the signed root; a tampered backing block fails the read).
+    verity::wire_selftest();
     interrupts::init_timer(100);
     // G1: give each application processor a GUARDED kernel stack from the pool (an
     // AP-stack overflow then faults on an unmapped guard page instead of silently
