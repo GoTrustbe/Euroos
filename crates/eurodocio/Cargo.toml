@@ -8,6 +8,7 @@ description = "EuroDocIO — document-I/O voor EuroSuite (ES-IO): eigen XML-pars
 
 [dependencies]
 eurodoc = { path = "../eurodoc" }
+euroflate = { path = "../euroflate" }
 
 [features]
 default = []

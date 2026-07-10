@@ -1,0 +1,12 @@
+[package]
+name = "eurokeymap"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroKeymap — keyboard layout translation (scancode set 1 → char) for US-QWERTY, BE/FR-AZERTY and DE-QWERTZ. Selectable active layout for the installer keymap (3F-4). no_std, host-testbaar."
+
+[dependencies]
+
+[features]
+default = []

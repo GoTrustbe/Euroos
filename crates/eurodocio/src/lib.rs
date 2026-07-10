@@ -3,19 +3,22 @@
 //! A sovereign office suite reads and writes the formats that Europe uses —
 //! **OOXML** (`.docx`/…) and **OpenDocument** (`.odt`/…) — and exports to HTML,
 //! all to/from the single [`eurodoc`] UDM. This crate contains the in-house XML parser
-//! plus the format bindings, `no_std` and host-tested. The ZIP container (deflate) is
-//! a separate, thin layer provided by the kernel/`eupkg`; here we operate on the
-//! unpacked XML parts.
+//! plus the format bindings, `no_std` and host-tested. The **ZIP container
+//! (DEFLATE)** now lives here too ([`zip`] + [`docx`], on [`euroflate`]), so a
+//! real `.docx` opens and saves end-to-end — not just a pre-extracted
+//! `document.xml`.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
 extern crate alloc;
 
+pub mod docx;
 pub mod html;
 pub mod odf;
 pub mod ooxml;
 pub mod xml;
+pub mod zip;
 
 #[cfg(test)]
 mod tests {
