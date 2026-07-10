@@ -2592,22 +2592,15 @@ fn main() -> Status {
     let mut prev_left = false;
     let mut last_t = u64::MAX;
     let mut last_kbd = 0u64; // diagnostics: keyboard IRQs via the IO-APIC
-    // 3F-7: the live permission-portal dialog. `portal_buttons` holds the hit
-    // rects of the currently-shown modal (Allow once / This session / Deny).
+    // 3F-7: the live permission-portal. `portal_buttons` holds the hit rects of
+    // the currently-shown modal (Allow once / This session / Deny) when a request
+    // is pending. Nothing is requested at boot, so the desktop starts clean; the
+    // dialog appears only when an app actually asks for a resource, and its
+    // buttons route the answer to portal::respond via the click loop below. The
+    // broker mechanism itself is exercised by portal::selftest() ([3f7]).
     let mut portal_buttons: Option<(u64, [(usize, usize, usize, usize); 3])> = None;
-    // Demonstrate the portal live: an app requests the camera → the desktop
-    // shows the grant dialog; the click loop below routes the answer. (Sovereign
-    // data-control, made visible — the whole point of 3F-7.)
-    let _ = portal::request("EuroMeet", europortal::Resource::Camera);
-    // Paint it over the already-rendered desktop so it is visible from frame 0.
-    portal_buttons = portal::render_dialog(&fb, width, height);
-    compositor::draw_cursor(&fb, cmx, cmy);
-    fb.present();
-    if let Some((bb, bw, bh, bs)) = fb.backbuffer() {
-        virtio_gpu::present_frame(bb, bw, bh, bs);
-    }
     serial_println!(
-        "[3f7-live] permission-portal dialog SHOWN on the desktop (EuroMeet→camera), buttons wired to portal::respond (Allow once / This session / Deny) → live modal ✓"
+        "[3f7-live] permission-portal armed — no request pending at boot; a modal is shown only when an app requests a resource (wired to portal::respond)"
     );
     // Interactive shell in the Terminal window: the last content line is the
     // prompt ("euroos:/ $ <input>"); keyboard input (IRQ1) edits it live.
