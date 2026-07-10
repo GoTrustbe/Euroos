@@ -41,6 +41,7 @@ mod msix;
 mod net;
 mod paging;
 mod gpt;
+mod audio;
 mod hda;
 mod hpet;
 mod pci;
@@ -75,6 +76,7 @@ mod virtio_net;
 mod vpn;
 mod agent;
 mod locale;
+mod mime;
 mod installer;
 mod ca;
 mod attest;
@@ -1741,6 +1743,8 @@ fn main() -> Status {
     ps2::keymap_selftest();
     // 3F-7: capability-scoped app permission portals (request → ask → scoped grant).
     portal::selftest();
+    // 3F-6: audio routing — per-app streams, per-device routing, default policy.
+    audio::selftest();
 
     // EuroWeb (AB-B1): sovereign browser engine — HTML5 tokenizer + DOM.
     web::selftest();
@@ -1917,6 +1921,8 @@ fn main() -> Status {
     // quota — both on the LIVE root FS.
     session::selftest(&mut vfs);
     session::quota_selftest(&mut vfs);
+    // 3F-5: MIME detection + default-app associations on the live FS.
+    mime::selftest(&mut vfs);
     // Sprint AE-e2e: must-change-password enforced end-to-end (login refuses until
     // the user changes their own password).
     euroid::must_change_selftest();

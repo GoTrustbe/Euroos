@@ -275,6 +275,10 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "locale" => crate::locale::shell(&format!("{arg1} {arg2}")),
         // 3F-7: app permission portals — list grants + audit.
         "portal" => crate::portal::shell(),
+        // 3F-6: audio routing — devices, default, per-app streams.
+        "audio" => crate::audio::shell(),
+        // 3F-5: MIME type + default-app for a file (file-manager open, in the shell).
+        "open" => crate::mime::shell(fs, arg1, arg2),
         // 3F-4: show or set the keyboard layout (us / be-azerty / fr-azerty / de-qwertz).
         "keymap" => {
             if arg1.is_empty() {
