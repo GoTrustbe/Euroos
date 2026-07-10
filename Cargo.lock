@@ -518,6 +518,10 @@ name = "euromedia"
 version = "0.1.0"
 
 [[package]]
+name = "euromime"
+version = "0.1.0"
+
+[[package]]
 name = "euromm"
 version = "0.1.0"
 
@@ -840,6 +844,7 @@ dependencies = [
  "euromail",
  "euromdns",
  "euromedia",
+ "euromime",
  "euromm",
  "euromusic",
  "euronet",

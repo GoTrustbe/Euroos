@@ -12,6 +12,9 @@
 
 extern crate alloc;
 
+pub mod router;
+pub use router::{Device, Router, Stream};
+
 use alloc::vec;
 use alloc::vec::Vec;
 
