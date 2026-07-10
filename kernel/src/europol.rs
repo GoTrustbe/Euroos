@@ -32,6 +32,50 @@ pub fn effective_caps(base: u64) -> u64 {
     }
 }
 
+/// 3D-4 boot self-test: a policy is a security-critical input, so it must be
+/// **signed and verified before it can change any capability**. Serialize the
+/// policy into a bundle, sign it, verify-before-load, then prove a tampered
+/// bundle is refused and the safe default (no elevation) is kept.
+pub fn bundle_selftest() {
+    use ed25519_dalek::SigningKey;
+    let policies = alloc::vec![europol::parse(FIREFOX_POLICY)];
+    let bytes = europol::bundle::serialize(&policies);
+
+    // Sign with a release key (from the CSPRNG here; offline in production).
+    let mut seed = [0u8; 32];
+    crate::entropy::getrandom(&mut seed);
+    let key = SigningKey::from_bytes(&seed);
+    let pubkey = key.verifying_key().to_bytes();
+    let sig = europol::bundle::sign(&bytes, &key);
+
+    // Verify-before-load: a valid bundle loads and yields the policy.
+    let loaded = europol::bundle::load_verified(&bytes, &sig, &pubkey);
+    let load_ok = loaded.as_ref().map(|v| v.len() == 1 && v[0].name == "firefox").unwrap_or(false);
+
+    // A tampered bundle is REFUSED (returns None) → the default policy stands.
+    let mut evil = bytes.clone();
+    let ei = evil.len() - 8;
+    evil[ei] ^= 0xFF; // flip a byte in the last policy
+    let tamper_refused = europol::bundle::load_verified(&evil, &sig, &pubkey).is_none();
+
+    // A bundle signed by the wrong key is refused.
+    let other = SigningKey::from_bytes(&[0xEE; 32]).verifying_key().to_bytes();
+    let wrong_key_refused = europol::bundle::load_verified(&bytes, &sig, &other).is_none();
+
+    // Apply only the verified policy.
+    if let Some(v) = loaded {
+        if let Some(p) = v.into_iter().next() {
+            *POLICY.lock() = Some(p);
+        }
+    }
+
+    let ok = load_ok && tamper_refused && wrong_key_refused;
+    crate::serial_println!(
+        "[3d4] EuroPol signed bundles (Ed25519 verify-before-load): valid-bundle-loaded={load_ok}, tampered-bundle-REFUSED={tamper_refused}, wrong-signer-REFUSED={wrong_key_refused} → {}",
+        if ok { "OK (a policy can only change capabilities if it is signed by the release key) ✓" } else { "FAILED" }
+    );
+}
+
 /// Boot self-test: parse the policy, prove the capability reduction + path rule, and log
 /// a violation to P3.
 pub fn selftest() {

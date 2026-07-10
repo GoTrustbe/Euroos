@@ -204,6 +204,69 @@ pub fn read_pcr(index: u32) -> Option<[u8; 32]> {
     }
 }
 
+/// The measured-boot PCR the FDE key + vault master are sealed to (extended by
+/// the O1 measured-boot step). A changed boot chain changes this PCR → the TPM
+/// refuses to unseal.
+pub const SEAL_PCR: u32 = 16;
+
+/// **Real TPM2 seal (3D-1)** — keep `secret` INSIDE the TPM, releasable only
+/// under a policy session matching PCR `pcr`. Returns the opaque (private,
+/// public) blob to persist; the key itself never leaves the chip in the blob.
+///
+/// Flow: `CreatePrimary` (deterministic owner storage parent) → trial session +
+/// `PolicyPCR` + `PolicyGetDigest` (the authPolicy) → `Create` (seal under that
+/// policy). Unlike the old software KDF, the sealed key cannot be re-derived from
+/// kernel RAM — only the TPM can release it, and only on a matching boot state.
+pub fn seal_to_pcr(pcr: u32, secret: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    if !present() {
+        return None;
+    }
+    let parent = eurotpm::parse_handle(&transact(&eurotpm::create_primary_owner())?)?;
+    let out = (|| {
+        let nonce = get_random(16).unwrap_or_else(|| alloc::vec![0x5A; 16]);
+        let trial = eurotpm::parse_handle(&transact(&eurotpm::start_auth_session(true, &nonce))?)?;
+        transact(&eurotpm::policy_pcr(trial, pcr))?;
+        let policy = eurotpm::parse_policy_digest(&transact(&eurotpm::policy_get_digest(trial))?)?;
+        transact(&eurotpm::flush_context(trial));
+        let blob = eurotpm::parse_create(&transact(&eurotpm::create_sealed(parent, &policy, secret))?)?;
+        Some((blob.private, blob.public))
+    })();
+    transact(&eurotpm::flush_context(parent));
+    out
+}
+
+/// **Real TPM2 unseal (3D-1)** — reproduce the parent, `Load` the blob, open a
+/// policy session bound to the LIVE value of PCR `pcr`, and ask the TPM to
+/// release the secret. On a tampered/changed boot the TPM itself refuses
+/// (`TPM_RC_POLICY_FAIL`) and this returns `None` — fail-closed by hardware.
+pub fn unseal_from_pcr(pcr: u32, private: &[u8], public: &[u8]) -> Option<Vec<u8>> {
+    if !present() {
+        return None;
+    }
+    let parent = eurotpm::parse_handle(&transact(&eurotpm::create_primary_owner())?)?;
+    let out = (|| {
+        let item = eurotpm::parse_handle(&transact(&eurotpm::load(parent, private, public))?)?;
+        let nonce = get_random(16).unwrap_or_else(|| alloc::vec![0x5A; 16]);
+        let sess = eurotpm::parse_handle(&transact(&eurotpm::start_auth_session(false, &nonce))?)?;
+        transact(&eurotpm::policy_pcr(sess, pcr))?;
+        let secret = transact(&eurotpm::unseal(item, sess)).and_then(|r| eurotpm::parse_unseal(&r));
+        transact(&eurotpm::flush_context(sess));
+        transact(&eurotpm::flush_context(item));
+        secret
+    })();
+    transact(&eurotpm::flush_context(parent));
+    out
+}
+
+/// Extend PCR `pcr` with `digest` (measured-boot / tamper simulation). Returns
+/// whether the TPM accepted the extend.
+pub fn extend_pcr(pcr: u32, digest: &[u8; 32]) -> bool {
+    transact(&eurotpm::pcr_extend(pcr, digest))
+        .and_then(|r| eurotpm::parse_header(&r))
+        .map(|h| h.ok())
+        .unwrap_or(false)
+}
+
 /// O1 boot self-test: prove a live TPM (GetRandom) + measured boot (PCR-extend
 /// changes the PCR value, exactly as the boot chain measures).
 pub fn selftest() {

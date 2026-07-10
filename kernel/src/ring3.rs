@@ -1736,6 +1736,11 @@ static LIBTLS_SO: &[u8] = include_bytes!("../../userland/libtls.so");
 // H3: dynamic-linking test artifacts — a dynamically-linked exe + the .so.
 static DYNTEST_ELF: &[u8] = include_bytes!("../../userland/dyntest.elf");
 static LIBEURO_SO: &[u8] = include_bytes!("../../userland/libeuro.so");
+// 3C-3: PT_INTERP path — a dynamically-linked exe + a from-scratch USERSPACE
+// dynamic linker (ld-euro.so) + its libc-euro.so.
+static INTERPEXE_ELF: &[u8] = include_bytes!("../../userland/interpexe.elf");
+static LDEURO_SO: &[u8] = include_bytes!("../../userland/ld-euro.so");
+static LIBCEURO_SO: &[u8] = include_bytes!("../../userland/libc-euro.so");
 static MUSLREAL_ELF: &[u8] = include_bytes!("../../userland/muslreal.elf");
 static MUSLFILE_ELF: &[u8] = include_bytes!("../../userland/muslfile.elf");
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
@@ -2736,6 +2741,101 @@ pub fn dynlink_selftest(falloc: &mut FrameAllocator) -> (String, u64) {
     run_dynamic(falloc, DYNTEST_ELF, &[LIBEURO_SO], &[b"dyntest"], CAP_CONSOLE, true)
 }
 
+/// **3C-3: the PT_INTERP path.** Unlike [`run_dynamic`] (which links in-kernel),
+/// this loads `exe` + `libc` + the **interpreter** (`ld-euro.so`), leaves the
+/// exe's symbol relocations UNRESOLVED, and jumps to the *interpreter's* entry
+/// with an auxv carrying `AT_BASE` + the exe/libc load bases. The userspace
+/// `ld-euro.so` then performs the JUMP_SLOT/GLOB_DAT/RELATIVE relocations itself
+/// — the real Linux dynamic-linking flow — before entering the program.
+pub fn run_interp(
+    falloc: &mut FrameAllocator,
+    exe: &[u8],
+    libc: &[u8],
+    interp: &[u8],
+    argv: &[&[u8]],
+    caps: u64,
+) -> (String, u64) {
+    init_syscall_msrs();
+    CURRENT_CAPS.store(caps, Ordering::Relaxed);
+    LINUX_ABI.store(true, Ordering::Relaxed);
+    *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
+    unsafe {
+        EXITED = 0;
+        EXIT_CODE = 0;
+    }
+    OUTPUT.lock().clear();
+    reset_fd_table();
+
+    const MIB2: u64 = 1 << 21;
+    let arena = match falloc.allocate_aligned(512, 512) {
+        Ok(a) => a,
+        Err(_) => return (String::from("(no arena)"), u64::MAX),
+    };
+    let code = arena;
+    let stack_top = arena + MIB2;
+    HEAP_BREAK.store(arena + 0x80000, Ordering::Relaxed);
+    ARENA_BASE.store(arena, Ordering::Relaxed);
+    HEAP_END.store(arena + 0x180000, Ordering::Relaxed);
+
+    // Load the exe (its own R_X86_64_RELATIVE are applied by load_program; the
+    // JUMP_SLOT/GLOB_DAT are deliberately LEFT for the userspace interpreter).
+    let mut info = load_program(exe, code, program_span_pages(exe));
+    // libc-euro.so and the interpreter each get a 128 KiB window.
+    let libc_base = arena + 0x40000;
+    let interp_base = arena + 0x60000;
+    let mut interp_entry = 0u64;
+    if let Some(li) = load_elf64(libc, libc_base, program_span_pages(libc)) {
+        merge_shifted(&mut info.exec_pages, &li.exec_pages, 0x40000 / 4096);
+        merge_shifted(&mut info.writ_pages, &li.writ_pages, 0x40000 / 4096);
+    }
+    if let Some(ii) = load_elf64(interp, interp_base, program_span_pages(interp)) {
+        merge_shifted(&mut info.exec_pages, &ii.exec_pages, 0x60000 / 4096);
+        merge_shifted(&mut info.writ_pages, &ii.writ_pages, 0x60000 / 4096);
+        interp_entry = ii.entry;
+    }
+
+    let rsp = unsafe { setup_user_stack_interp(stack_top, argv, &info, interp_base, code, libc_base) };
+    let sel = crate::gdt::selectors();
+    let user_cs = (sel.user_code.0 | 3) as u64;
+    let user_ss = (sel.user_data.0 | 3) as u64;
+    let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
+    let boot = crate::sched::boot_pml4();
+    unsafe { crate::gdt::set_rsp0(KERNEL_RSP) };
+    FG_ACTIVE.store(true, Ordering::Relaxed);
+    // Enter the INTERPRETER (not the exe); it links the exe and jumps to AT_ENTRY.
+    unsafe {
+        core::arch::asm!("mov cr3, {}", in(reg) pml4, options(nostack, preserves_flags));
+        enter_ring3(user_cs, user_ss, interp_entry, rsp);
+        core::arch::asm!("mov cr3, {}", in(reg) boot, options(nostack, preserves_flags));
+    }
+    FG_ACTIVE.store(false, Ordering::Relaxed);
+    for f in 0..512u64 {
+        let _ = falloc.free(arena + f * 4096);
+    }
+    crate::paging::free_address_space(falloc, pml4);
+    let exit_code = unsafe { EXIT_CODE };
+    let out = OUTPUT.lock().clone();
+    (out, exit_code)
+}
+
+/// `[3c3]` self-test: run a PT_INTERP dynamically-linked program whose external
+/// symbol is resolved by the from-scratch **userspace** `ld-euro.so`.
+pub fn interp_selftest(falloc: &mut FrameAllocator) {
+    let has_interp = INTERPEXE_ELF.windows(13).any(|w| w == b"/lib/ld-euro.");
+    let (out, code) = run_interp(falloc, INTERPEXE_ELF, LIBCEURO_SO, LDEURO_SO, &[b"interpexe"], CAP_CONSOLE);
+    crate::serial_println!(
+        "[3c3] PT_INTERP + userspace ld.so: exe names /lib/ld-euro.so={}, interpreter resolved the cross-module symbol in userspace → output={:?} exit={} {}",
+        has_interp,
+        out.trim_end(),
+        code,
+        if code == 42 && out.contains("3C3: 42") {
+            "OK (dynamic linking done by a userspace interpreter via PT_INTERP, not the kernel) ✓"
+        } else {
+            "✗ ERROR"
+        }
+    );
+}
+
 /// `[tls]` self-test (Sprint 1): run a standalone PIE with a `__thread` counter
 /// that sets up NO TLS itself — the kernel-ld.so does the TLS setup. tls_value 41->42 ->
 /// exit(42) proves the static TLS block + FS_BASE.
@@ -2881,6 +2981,70 @@ unsafe fn setup_user_stack(stack_top: u64, argv: &[&[u8]], info: &LoadInfo) -> u
         put(*ptr); // envp[i]
     }
     put(0); // envp terminator
+    for (t, v) in aux {
+        put(t);
+        put(v);
+    }
+    sp
+}
+
+/// 3C-3 variant of [`setup_user_stack`] for the **PT_INTERP** path: the auxv
+/// carries `AT_BASE` = the interpreter's load base and `AT_ENTRY` = the exe's
+/// real entry, plus two EuroOS entries (`0x6E01`/`0x6E02`) giving the exe and
+/// libc load bases so the userspace `ld-euro.so` can do the relocations.
+unsafe fn setup_user_stack_interp(
+    stack_top: u64,
+    argv: &[&[u8]],
+    info: &LoadInfo,
+    interp_base: u64,
+    exe_base: u64,
+    libc_base: u64,
+) -> u64 {
+    let mut p = stack_top;
+    p -= 16;
+    let random_ptr = p;
+    for i in 0..16 {
+        (random_ptr as *mut u8).add(i).write(0x5Au8 ^ (i as u8).wrapping_mul(31));
+    }
+    let mut argptrs: alloc::vec::Vec<u64> = alloc::vec::Vec::with_capacity(argv.len());
+    for a in argv {
+        p -= a.len() as u64 + 1;
+        let ptr = p;
+        for (i, b) in a.iter().enumerate() {
+            (ptr as *mut u8).add(i).write(*b);
+        }
+        (ptr as *mut u8).add(a.len()).write(0);
+        argptrs.push(ptr);
+    }
+    p &= !0xF;
+
+    // AT_PHDR/PHENT/PHNUM describe the EXE; AT_BASE is the interpreter; AT_ENTRY
+    // is the exe's real entry (the interpreter jumps there after linking).
+    let aux: [(u64, u64); 10] = [
+        (3, info.phdr),
+        (4, info.phent),
+        (5, info.phnum),
+        (6, 4096),
+        (7, interp_base),   // AT_BASE = interpreter load base
+        (9, info.entry),    // AT_ENTRY = exe entry
+        (25, random_ptr),   // AT_RANDOM
+        (0x6E01, exe_base), // AT_EURO_EXE_BASE
+        (0x6E02, libc_base),// AT_EURO_LIBC_BASE
+        (0, 0),             // AT_NULL
+    ];
+    let nslots = 1 + argptrs.len() as u64 + 1 + 1 + (aux.len() as u64) * 2; // no envp here
+    let sp = (p - nslots * 8) & !0xF;
+    let mut w = sp;
+    let mut put = |val: u64| {
+        (w as *mut u64).write(val);
+        w += 8;
+    };
+    put(argptrs.len() as u64);
+    for ptr in &argptrs {
+        put(*ptr);
+    }
+    put(0); // argv terminator
+    put(0); // empty envp terminator
     for (t, v) in aux {
         put(t);
         put(v);

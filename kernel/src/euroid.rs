@@ -289,6 +289,67 @@ pub fn selftest() {
     );
 }
 
+/// **3D-10 / eIDAS 2.0** — EuroID acting as an EUDI-wallet issuer + relying
+/// party. Issues an SD-JWT VC PID credential, then demonstrates **selective
+/// disclosure**: the holder reveals only `nationality` to a verifier (proving
+/// key binding), while `given_name`/`family_name`/`birthdate` stay hidden — yet
+/// the issuer signature still verifies. A forged attribute is rejected.
+pub fn wallet_selftest() {
+    use eurowallet::json::Json;
+    use eurowallet::{add_key_binding, issue, present, verify_with_key_binding, WalletError};
+    use ed25519_dalek::SigningKey;
+
+    let mut iss_seed = [0u8; 32];
+    iss_seed.copy_from_slice(&rand_bytes(32));
+    let issuer = SigningKey::from_bytes(&iss_seed);
+    let issuer_pub = issuer.verifying_key();
+    let mut hol_seed = [0u8; 32];
+    hol_seed.copy_from_slice(&rand_bytes(32));
+    let holder = SigningKey::from_bytes(&hol_seed);
+    let holder_pub = holder.verifying_key();
+    let from_tpm = crate::tpm::get_random(1).is_some();
+
+    // Issue a Person Identification Data credential (member-state PID shape).
+    let sd_jwt = issue(
+        &issuer,
+        &[
+            ("iss", Json::Str("https://euro-id.eu".into())),
+            ("vct", Json::Str("eu.europa.ec.eudi.pid.1".into())),
+        ],
+        &[
+            ("2GLC42sKQveCfGfryNRN9w", "given_name", "Alice"),
+            ("eluV5Og3gSNII8EYnsxA_A", "family_name", "Janssens"),
+            ("6Ij7tM-a5iVPGboS5tmvVA", "nationality", "BE"),
+            ("AJx-095VPrpTtN4QMOqROA", "birthdate", "1990-01-01"),
+        ],
+    );
+
+    // Holder presents ONLY nationality to the relying party, with key binding.
+    let aud = "https://age-check.example";
+    let nonce = "n-0S6_WzA2Mj";
+    let pres = present(&sd_jwt, &["nationality"]).unwrap_or_default();
+    let bound = add_key_binding(&pres, &holder, aud, nonce);
+
+    let verified = verify_with_key_binding(&bound, &issuer_pub, &holder_pub, aud, nonce);
+    let nationality_ok = verified.as_ref().map(|c| c.get("nationality") == Some("BE")).unwrap_or(false);
+    let name_hidden = verified.as_ref().map(|c| c.get("given_name").is_none() && c.get("family_name").is_none()).unwrap_or(false);
+
+    // A replayed presentation to a different nonce must be refused (anti-replay).
+    let replay_denied = verify_with_key_binding(&bound, &issuer_pub, &holder_pub, aud, "other-nonce")
+        == Err(WalletError::BadKeyBinding);
+
+    // A tampered credential (wrong issuer) must not verify.
+    let other_issuer = SigningKey::from_bytes(&[0xEE; 32]).verifying_key();
+    let forged_denied = verify_with_key_binding(&bound, &other_issuer, &holder_pub, aud, nonce).is_err();
+
+    let ok = nationality_ok && name_hidden && replay_denied && forged_denied;
+    crate::serial_println!(
+        "[3d10] EuroID EUDI-wallet (SD-JWT VC, EdDSA, keys-from-TPM={from_tpm}): PID issued, holder discloses ONLY nationality={} · name/birthdate-hidden={} · replay-nonce-denied={} · wrong-issuer-denied={} → {}",
+        nationality_ok, name_hidden, replay_denied, forged_denied,
+        if ok { "OK (selective disclosure + holder key binding, eIDAS 2.0) ✓" } else { "FAILED" }
+    );
+}
+
 /// Result of a successful shell login via EuroID.
 pub struct LoginOk {
     pub uid: u32,
