@@ -97,6 +97,7 @@ eurokernel/
 - [`docs/EUROOS-DEEP-TECHNICAL-REFERENCE.md`](docs/EUROOS-DEEP-TECHNICAL-REFERENCE.md) — the deepest per-subsystem reference.
 - [`docs/CODE-AUDIT-2026-06-10.md`](docs/CODE-AUDIT-2026-06-10.md) · [`docs/CODE-AUDIT-2026-06-14.md`](docs/CODE-AUDIT-2026-06-14.md) — the internal security/correctness audits.
 - [`docs/ZERO-TRUST-FOR-AI-AGENTS-MAPPING.md`](docs/ZERO-TRUST-FOR-AI-AGENTS-MAPPING.md) — how EuroAgent maps onto Zero-Trust.
+- [`docs/CRA-CONFORMANCE.md`](docs/CRA-CONFORMANCE.md) — honest self-assessment against the EU Cyber Resilience Act (SBOM, coordinated disclosure, secure-by-design), with the compliance timeline.
 
 ## Contributing
 
