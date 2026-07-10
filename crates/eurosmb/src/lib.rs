@@ -14,6 +14,7 @@ extern crate alloc;
 pub mod crypto;
 pub mod ntlm;
 pub mod smb2;
+pub mod signing;
 
 pub use smb2::{SmbClient, SmbError, Transport};
 

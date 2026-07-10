@@ -133,6 +133,112 @@ fn clone_secret(id: &Identity) -> StaticSecret {
     StaticSecret::from(id.secret.to_bytes())
 }
 
+// ── Hybrid post-quantum handshake (3D-9): X25519 + ML-KEM-768 ──────────────
+//
+// The classic path above stays as-is. The hybrid path adds an ML-KEM-768
+// exchange (initiator sends its encapsulation key; responder returns a
+// ciphertext) and mixes the resulting PQ shared secret into the same HKDF.
+// The tunnel key then depends on BOTH the four X25519 DHs AND the ML-KEM
+// secret — so it stays secret if *either* survives (classical break OR a future
+// quantum attack against the recorded X25519 traffic).
+
+/// Combine the four DHs **and** the ML-KEM shared secret into the tunnel keys.
+fn derive_hybrid(dh1: [u8; 32], dh2: [u8; 32], dh3: [u8; 32], dh4: [u8; 32], pq: &[u8], initiator: bool) -> Tunnel {
+    let mut ikm = Vec::with_capacity(160);
+    ikm.extend_from_slice(&dh1);
+    ikm.extend_from_slice(&dh2);
+    ikm.extend_from_slice(&dh3);
+    ikm.extend_from_slice(&dh4);
+    ikm.extend_from_slice(pq); // the post-quantum secret
+    let hk = Hkdf::<Sha256>::new(Some(b"EuroVPN-hybrid-v1"), &ikm);
+    let mut k_i2r = [0u8; 32];
+    let mut k_r2i = [0u8; 32];
+    hk.expand(b"i2r", &mut k_i2r).unwrap();
+    hk.expand(b"r2i", &mut k_r2i).unwrap();
+    if initiator {
+        Tunnel { send_key: k_i2r, recv_key: k_r2i, send_ctr: 0, recv_ctr: 0, replay_window: 0 }
+    } else {
+        Tunnel { send_key: k_r2i, recv_key: k_i2r, send_ctr: 0, recv_ctr: 0, replay_window: 0 }
+    }
+}
+
+/// Derive an ML-KEM-768 key pair from a 32-byte seed (e.g. TPM-RNG).
+fn mlkem_keypair(seed: &[u8; 32]) -> (Vec<u8>, Vec<u8>) {
+    let mut dz = [0u8; 64];
+    europq::keccak::shake256(seed, &mut dz);
+    let mut d = [0u8; 32];
+    let mut z = [0u8; 32];
+    d.copy_from_slice(&dz[..32]);
+    z.copy_from_slice(&dz[32..]);
+    europq::keygen(&d, &z)
+}
+
+/// **Hybrid initiator step 1.** Returns (X25519 ephemeral pubkey, ML-KEM
+/// encapsulation key — both sent to the responder, continuation state).
+pub fn initiate_hybrid(
+    our: &Identity,
+    peer_static: [u8; 32],
+    eph_seed: [u8; 32],
+    kem_seed: [u8; 32],
+) -> ([u8; 32], Vec<u8>, PendingInitiatorHybrid) {
+    let eph = Identity::from_seed(eph_seed);
+    let our_eph_pub = eph.public;
+    let (ek, dk) = mlkem_keypair(&kem_seed);
+    (
+        our_eph_pub,
+        ek,
+        PendingInitiatorHybrid {
+            our_static_secret_seed: clone_secret(our),
+            our_static_pub: our.public,
+            eph,
+            peer_static,
+            dk,
+        },
+    )
+}
+
+/// Initiator state between the two hybrid steps.
+pub struct PendingInitiatorHybrid {
+    our_static_secret_seed: StaticSecret,
+    our_static_pub: [u8; 32],
+    eph: Identity,
+    peer_static: [u8; 32],
+    dk: Vec<u8>, // ML-KEM decapsulation key
+}
+
+impl PendingInitiatorHybrid {
+    /// Complete with the responder's ephemeral pubkey **and** ML-KEM ciphertext.
+    pub fn finish(self, resp_eph_pub: [u8; 32], kem_ct: &[u8]) -> Tunnel {
+        let s_i = Identity { secret: self.our_static_secret_seed, public: self.our_static_pub };
+        let dh1 = self.eph.dh(&resp_eph_pub);
+        let dh2 = self.eph.dh(&self.peer_static);
+        let dh3 = s_i.dh(&resp_eph_pub);
+        let dh4 = s_i.dh(&self.peer_static);
+        let pq = europq::decaps(&self.dk, kem_ct); // implicit-rejection safe
+        derive_hybrid(dh1, dh2, dh3, dh4, &pq, true)
+    }
+}
+
+/// **Hybrid responder.** Encapsulates against the initiator's ML-KEM key and
+/// returns (our X25519 ephemeral pubkey, the ML-KEM ciphertext, the tunnel).
+pub fn respond_hybrid(
+    our: &Identity,
+    peer_static: [u8; 32],
+    init_eph_pub: [u8; 32],
+    init_ek: &[u8],
+    eph_seed: [u8; 32],
+    kem_rand: [u8; 32],
+) -> ([u8; 32], Vec<u8>, Tunnel) {
+    let eph = Identity::from_seed(eph_seed);
+    let our_eph_pub = eph.public;
+    let dh1 = eph.dh(&init_eph_pub);
+    let dh2 = our.dh(&init_eph_pub);
+    let dh3 = eph.dh(&peer_static);
+    let dh4 = our.dh(&peer_static);
+    let (pq, ct) = europq::encaps(init_ek, &kem_rand);
+    (our_eph_pub, ct, derive_hybrid(dh1, dh2, dh3, dh4, &pq, false))
+}
+
 impl Tunnel {
     /// Encrypt an outgoing packet (ChaCha20-Poly1305, nonce = send counter).
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Vec<u8> {
@@ -217,6 +323,36 @@ mod tests {
         // And Bob → Alice.
         let ct2 = bob_t.encrypt(b"reply");
         assert_eq!(alice_t.decrypt(&ct2).unwrap(), b"reply");
+    }
+
+    #[test]
+    fn hybrid_handshake_derives_matching_keys() {
+        // 3D-9: X25519 + ML-KEM-768. Both sides must land on the same tunnel keys.
+        let alice = Identity::from_seed([1u8; 32]);
+        let bob = Identity::from_seed([2u8; 32]);
+        let (a_eph, ek, pending) = initiate_hybrid(&alice, bob.public, [3u8; 32], [8u8; 32]);
+        let (b_eph, ct, mut bob_t) = respond_hybrid(&bob, alice.public, a_eph, &ek, [4u8; 32], [9u8; 32]);
+        let mut alice_t = pending.finish(b_eph, &ct);
+        // A real round-trip proves the hybrid keys agree in both directions.
+        let p = alice_t.encrypt(b"post-quantum tunnel");
+        assert_eq!(bob_t.decrypt(&p).unwrap(), b"post-quantum tunnel");
+        let r = bob_t.encrypt(b"pong");
+        assert_eq!(alice_t.decrypt(&r).unwrap(), b"pong");
+    }
+
+    #[test]
+    fn hybrid_key_actually_depends_on_ml_kem() {
+        // Corrupting the ML-KEM ciphertext changes the initiator's PQ secret
+        // (implicit rejection) → the tunnels no longer match. Proves the PQ
+        // secret is genuinely mixed into the key, not decorative.
+        let alice = Identity::from_seed([1u8; 32]);
+        let bob = Identity::from_seed([2u8; 32]);
+        let (a_eph, ek, pending) = initiate_hybrid(&alice, bob.public, [3u8; 32], [8u8; 32]);
+        let (b_eph, mut ct, mut bob_t) = respond_hybrid(&bob, alice.public, a_eph, &ek, [4u8; 32], [9u8; 32]);
+        ct[0] ^= 0xFF; // tamper the KEM ciphertext in flight
+        let mut alice_t = pending.finish(b_eph, &ct);
+        let p = alice_t.encrypt(b"should not decrypt");
+        assert!(bob_t.decrypt(&p).is_none());
     }
 
     #[test]

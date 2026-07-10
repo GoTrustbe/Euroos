@@ -17,6 +17,43 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use eurolocale::Lang;
 
+pub mod keynav;
+pub mod magnify;
+pub mod theme;
+
+/// An 8-bit-per-channel sRGB colour (shared by the theme/contrast layer).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rgb(pub u8, pub u8, pub u8);
+
+/// The on-screen bounding box of an accessibility node (drives follow-focus
+/// magnification and the focus ring).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Rect {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+}
+impl Rect {
+    pub fn new(x: i32, y: i32, w: u32, h: u32) -> Rect {
+        Rect { x, y, w, h }
+    }
+    pub fn center(&self) -> (i32, i32) {
+        (self.x + self.w as i32 / 2, self.y + self.h as i32 / 2)
+    }
+}
+
+/// An action a user can invoke on a focused node (keyboard or AT).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Activate,  // press a button / open a link / menu item
+    Toggle,    // flip a checkbox
+    Select,    // choose a radio / list item
+    Increment, // slider up
+    Decrement, // slider down
+    Cancel,    // Escape — dismiss a dialog
+}
+
 /// The role of a UI element (a subset of the ARIA/AT-SPI roles).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role {
@@ -31,6 +68,13 @@ pub enum Role {
     Menu,
     MenuItem,
     Link,
+    Slider,
+    Radio,
+    Tab,
+    ProgressBar,
+    Dialog,
+    Panel,
+    Toolbar,
 }
 
 impl Role {
@@ -38,7 +82,15 @@ impl Role {
     fn focusable(self) -> bool {
         matches!(
             self,
-            Role::Button | Role::TextField | Role::CheckBox | Role::ListItem | Role::MenuItem | Role::Link
+            Role::Button
+                | Role::TextField
+                | Role::CheckBox
+                | Role::ListItem
+                | Role::MenuItem
+                | Role::Link
+                | Role::Slider
+                | Role::Radio
+                | Role::Tab
         )
     }
 
@@ -59,11 +111,24 @@ impl Role {
             (Fr, Button) => "bouton", (Fr, TextField) => "champ de texte", (Fr, CheckBox) => "case à cocher",
             (Fr, List) => "liste", (Fr, ListItem) => "élément de liste", (Fr, Menu) => "menu",
             (Fr, MenuItem) => "élément de menu", (Fr, Link) => "lien",
+            // New roles (3F-3), nl/de/fr.
+            (Nl, Slider) => "schuifregelaar", (Nl, Radio) => "keuzerondje", (Nl, Tab) => "tabblad",
+            (Nl, ProgressBar) => "voortgangsbalk", (Nl, Dialog) => "dialoogvenster", (Nl, Panel) => "paneel",
+            (Nl, Toolbar) => "werkbalk",
+            (De, Slider) => "Schieberegler", (De, Radio) => "Optionsfeld", (De, Tab) => "Registerkarte",
+            (De, ProgressBar) => "Fortschrittsbalken", (De, Dialog) => "Dialogfeld", (De, Panel) => "Bereich",
+            (De, Toolbar) => "Symbolleiste",
+            (Fr, Slider) => "curseur", (Fr, Radio) => "bouton radio", (Fr, Tab) => "onglet",
+            (Fr, ProgressBar) => "barre de progression", (Fr, Dialog) => "boîte de dialogue", (Fr, Panel) => "panneau",
+            (Fr, Toolbar) => "barre d'outils",
             // English fallback for all other languages.
             (_, Window) => "window", (_, Heading) => "heading", (_, Label) => "label",
             (_, Button) => "button", (_, TextField) => "text field", (_, CheckBox) => "checkbox",
             (_, List) => "list", (_, ListItem) => "list item", (_, Menu) => "menu",
             (_, MenuItem) => "menu item", (_, Link) => "link",
+            (_, Slider) => "slider", (_, Radio) => "radio button", (_, Tab) => "tab",
+            (_, ProgressBar) => "progress bar", (_, Dialog) => "dialog", (_, Panel) => "panel",
+            (_, Toolbar) => "toolbar",
         }
     }
 }
@@ -78,12 +143,34 @@ pub struct AccNode {
     pub value: String,
     /// For check boxes: on/off.
     pub checked: Option<bool>,
+    /// Greyed-out / not interactive.
+    pub disabled: bool,
+    /// For radios / list items / tabs: selected or not.
+    pub selected: Option<bool>,
+    /// For menus / tree items: expanded or collapsed.
+    pub expanded: Option<bool>,
+    /// For sliders / progress bars: (min, max, current).
+    pub range: Option<(i32, i32, i32)>,
+    /// On-screen bounds (for the focus ring + follow-focus magnifier).
+    pub bounds: Rect,
     pub children: Vec<AccNode>,
 }
 
 impl AccNode {
     pub fn new(id: u32, role: Role, name: &str) -> AccNode {
-        AccNode { id, role, name: name.to_string(), value: String::new(), checked: None, children: Vec::new() }
+        AccNode {
+            id,
+            role,
+            name: name.to_string(),
+            value: String::new(),
+            checked: None,
+            disabled: false,
+            selected: None,
+            expanded: None,
+            range: None,
+            bounds: Rect::default(),
+            children: Vec::new(),
+        }
     }
     pub fn with_value(mut self, v: &str) -> Self {
         self.value = v.to_string();
@@ -93,9 +180,41 @@ impl AccNode {
         self.checked = Some(c);
         self
     }
+    pub fn disabled(mut self, d: bool) -> Self {
+        self.disabled = d;
+        self
+    }
+    pub fn selected(mut self, s: bool) -> Self {
+        self.selected = Some(s);
+        self
+    }
+    pub fn expanded(mut self, e: bool) -> Self {
+        self.expanded = Some(e);
+        self
+    }
+    /// A slider/progress value: min..=max, current.
+    pub fn range(mut self, min: i32, max: i32, val: i32) -> Self {
+        self.range = Some((min, max, val.clamp(min, max)));
+        self
+    }
+    pub fn at(mut self, x: i32, y: i32, w: u32, h: u32) -> Self {
+        self.bounds = Rect::new(x, y, w, h);
+        self
+    }
     pub fn child(mut self, n: AccNode) -> Self {
         self.children.push(n);
         self
+    }
+
+    /// The value of a range node as a percentage (0–100), for announcements.
+    pub fn percent(&self) -> Option<u32> {
+        self.range.map(|(lo, hi, v)| {
+            if hi <= lo {
+                0
+            } else {
+                (((v - lo) as i64 * 100) / (hi - lo) as i64) as u32
+            }
+        })
     }
 
     /// The screen-reader announcement of *this* node in `lang`, e.g.
@@ -113,9 +232,55 @@ impl AccNode {
                 s.push_str(", ");
                 s.push_str(checked_word(lang, self.checked.unwrap_or(false)));
             }
+            Role::Slider | Role::ProgressBar => {
+                if let Some(p) = self.percent() {
+                    s.push_str(", ");
+                    s.push_str(&alloc::format!("{p}%"));
+                }
+            }
             _ => {}
         }
+        // Selection (radios / tabs / list items).
+        if let Some(sel) = self.selected {
+            s.push_str(", ");
+            s.push_str(selected_word(lang, sel));
+        }
+        // Expanded / collapsed (menus / disclosure).
+        if let Some(ex) = self.expanded {
+            s.push_str(", ");
+            s.push_str(expanded_word(lang, ex));
+        }
+        // Disabled state is announced last (EN 301 549: convey state, not only look).
+        if self.disabled {
+            s.push_str(", ");
+            s.push_str(disabled_word(lang));
+        }
         s
+    }
+}
+
+fn selected_word(lang: Lang, on: bool) -> &'static str {
+    match (lang, on) {
+        (Lang::Nl, true) => "geselecteerd", (Lang::Nl, false) => "niet geselecteerd",
+        (Lang::De, true) => "ausgewählt", (Lang::De, false) => "nicht ausgewählt",
+        (Lang::Fr, true) => "sélectionné", (Lang::Fr, false) => "non sélectionné",
+        (_, true) => "selected", (_, false) => "not selected",
+    }
+}
+fn expanded_word(lang: Lang, on: bool) -> &'static str {
+    match (lang, on) {
+        (Lang::Nl, true) => "uitgevouwen", (Lang::Nl, false) => "samengevouwen",
+        (Lang::De, true) => "erweitert", (Lang::De, false) => "reduziert",
+        (Lang::Fr, true) => "développé", (Lang::Fr, false) => "réduit",
+        (_, true) => "expanded", (_, false) => "collapsed",
+    }
+}
+fn disabled_word(lang: Lang) -> &'static str {
+    match lang {
+        Lang::Nl => "uitgeschakeld",
+        Lang::De => "deaktiviert",
+        Lang::Fr => "désactivé",
+        _ => "disabled",
     }
 }
 
@@ -182,9 +347,61 @@ impl AccTree {
     pub fn announce_focused(&self, lang: Lang) -> Option<String> {
         self.find(self.focused).map(|n| n.announce(lang))
     }
+
+    /// Look up a node by id (mutable).
+    pub fn find_mut(&mut self, id: u32) -> Option<&mut AccNode> {
+        find_node_mut(&mut self.root, id)
+    }
+
+    /// The on-screen bounds of the focused node (for the focus ring / magnifier).
+    pub fn focused_bounds(&self) -> Option<Rect> {
+        self.find(self.focused).map(|n| n.bounds)
+    }
+
+    /// Activate the focused node (Enter/Space): toggle a checkbox, select a
+    /// radio/list item/tab, or activate a button/link/menu item. Returns the
+    /// action performed (`None` if the node is disabled or not actionable).
+    pub fn activate_focused(&mut self) -> Option<Action> {
+        let id = self.focused;
+        let n = self.find_mut(id)?;
+        if n.disabled {
+            return None;
+        }
+        match n.role {
+            Role::CheckBox => {
+                let now = !n.checked.unwrap_or(false);
+                n.checked = Some(now);
+                Some(Action::Toggle)
+            }
+            Role::Radio | Role::ListItem | Role::Tab => {
+                n.selected = Some(true);
+                Some(Action::Select)
+            }
+            Role::Button | Role::Link | Role::MenuItem => Some(Action::Activate),
+            _ => None,
+        }
+    }
+
+    /// Adjust the focused slider by `delta` (arrow keys). Returns the resulting
+    /// action, or `None` if the focused node is not an adjustable range.
+    pub fn adjust_focused(&mut self, delta: i32) -> Option<Action> {
+        let id = self.focused;
+        let n = self.find_mut(id)?;
+        if n.disabled || delta == 0 {
+            return None;
+        }
+        match n.role {
+            Role::Slider => {
+                let (lo, hi, v) = n.range?;
+                n.range = Some((lo, hi, (v + delta).clamp(lo, hi)));
+                Some(if delta > 0 { Action::Increment } else { Action::Decrement })
+            }
+            _ => None,
+        }
+    }
 }
 
-fn collect_focusable<'a>(n: &'a AccNode, out: &mut Vec<u32>) {
+fn collect_focusable(n: &AccNode, out: &mut Vec<u32>) {
     if n.role.focusable() {
         out.push(n.id);
     }
@@ -199,6 +416,18 @@ fn find_node(n: &AccNode, id: u32) -> Option<&AccNode> {
     }
     for c in &n.children {
         if let Some(f) = find_node(c, id) {
+            return Some(f);
+        }
+    }
+    None
+}
+
+fn find_node_mut(n: &mut AccNode, id: u32) -> Option<&mut AccNode> {
+    if n.id == id {
+        return Some(n);
+    }
+    for c in &mut n.children {
+        if let Some(f) = find_node_mut(c, id) {
             return Some(f);
         }
     }

@@ -1,0 +1,13 @@
+[package]
+name = "euroaudit"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroAudit — a tamper-evident, hash-chained GDPR audit log with JSON export, query and rotation. no_std, host-tested."
+
+[dependencies]
+sha2 = { version = "0.10", default-features = false }
+
+[features]
+default = []

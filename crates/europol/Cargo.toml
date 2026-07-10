@@ -7,6 +7,7 @@ authors.workspace = true
 description = "EuroPol — declaratieve policy-engine die menselijk beleid naar EuroGuard-capabilities vertaalt (plan X). no_std, host-testbaar."
 
 [dependencies]
+ed25519-dalek = { version = "2", default-features = false }
 
 [features]
 default = []

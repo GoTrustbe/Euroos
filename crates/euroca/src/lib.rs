@@ -150,6 +150,13 @@ impl CertAuthority {
         self.cert.subject_key
     }
 
+    /// Build a **(sub-)CA** from an already-issued CA certificate and the seed of
+    /// its key — so an intermediate CA (issued by the root) can itself sign leaf
+    /// certificates.
+    pub fn from_cert(seed: [u8; 32], cert: Certificate) -> CertAuthority {
+        CertAuthority { key: SigningKey::from_bytes(&seed), cert, next_serial: 1, revoked: Vec::new() }
+    }
+
     /// Issue a certificate from a CSR (the CA signs it). The validity window
     /// is clamped within that of the CA itself.
     pub fn issue(&mut self, csr: &Csr, not_before: u64, not_after: u64) -> Certificate {
@@ -199,6 +206,155 @@ impl CertAuthority {
     }
 }
 
+// ── 3D-3: serialization, chain verification, and an on-disk store ───────────
+struct Reader<'a> {
+    b: &'a [u8],
+    p: usize,
+}
+impl Reader<'_> {
+    fn take(&mut self, n: usize) -> Option<&[u8]> {
+        let s = self.b.get(self.p..self.p + n)?;
+        self.p += n;
+        Some(s)
+    }
+    fn u64(&mut self) -> Option<u64> {
+        Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
+    }
+    fn u32(&mut self) -> Option<u32> {
+        Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
+    }
+    fn arr32(&mut self) -> Option<[u8; 32]> {
+        self.take(32)?.try_into().ok()
+    }
+    fn arr64(&mut self) -> Option<[u8; 64]> {
+        self.take(64)?.try_into().ok()
+    }
+    fn byte(&mut self) -> Option<u8> {
+        Some(self.take(1)?[0])
+    }
+    fn string(&mut self) -> Option<String> {
+        let n = self.u32()? as usize;
+        Some(String::from_utf8_lossy(self.take(n)?).into_owned())
+    }
+}
+
+impl Certificate {
+    /// Serialize the certificate to a canonical byte form (for an on-disk store
+    /// or network transport).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&self.serial.to_le_bytes());
+        push_str(&mut b, &self.subject);
+        b.extend_from_slice(&self.subject_key);
+        push_str(&mut b, &self.issuer);
+        b.extend_from_slice(&self.not_before.to_le_bytes());
+        b.extend_from_slice(&self.not_after.to_le_bytes());
+        b.push(self.is_ca as u8);
+        b.extend_from_slice(&self.signature);
+        b
+    }
+    fn read(r: &mut Reader) -> Option<Certificate> {
+        let serial = r.u64()?;
+        let subject = r.string()?;
+        let subject_key = r.arr32()?;
+        let issuer = r.string()?;
+        let not_before = r.u64()?;
+        let not_after = r.u64()?;
+        let is_ca = r.byte()? != 0;
+        let signature = r.arr64()?;
+        Some(Certificate { serial, subject, subject_key, issuer, not_before, not_after, is_ca, signature })
+    }
+    /// Parse a certificate from bytes produced by [`to_bytes`](Self::to_bytes).
+    pub fn from_bytes(data: &[u8]) -> Option<Certificate> {
+        Certificate::read(&mut Reader { b: data, p: 0 })
+    }
+}
+
+/// Verify a full certificate **chain** against a trust anchor's public key.
+/// `chain` is ordered root-first: `chain[0]` must be signed by `anchor_key` and
+/// be a CA, each subsequent cert is signed by the previous one (which must be a
+/// CA), and the final cert is the leaf. Every cert must be within its validity
+/// window at `now`.
+pub fn verify_chain(chain: &[Certificate], anchor_key: &[u8; 32], now: u64) -> Result<(), CertError> {
+    if chain.is_empty() {
+        return Err(CertError::BadSignature);
+    }
+    let mut issuer_key = *anchor_key;
+    for (i, cert) in chain.iter().enumerate() {
+        cert.verify(&issuer_key, now)?;
+        // Every cert except the leaf must itself be a CA to sign the next one.
+        if i + 1 < chain.len() && !cert.is_ca {
+            return Err(CertError::IssuerNotCa);
+        }
+        issuer_key = cert.subject_key;
+    }
+    Ok(())
+}
+
+/// A persistable certificate store: the root cert, every issued cert, and the
+/// revocation list (CRL). Serializes to bytes for on-disk persistence.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CertStore {
+    pub root: Option<Certificate>,
+    pub issued: Vec<Certificate>,
+    pub revoked: Vec<u64>,
+}
+
+impl CertStore {
+    pub fn new(root: Certificate) -> CertStore {
+        CertStore { root: Some(root), issued: Vec::new(), revoked: Vec::new() }
+    }
+    pub fn add(&mut self, cert: Certificate) {
+        self.issued.push(cert);
+    }
+    pub fn revoke(&mut self, serial: u64) {
+        if !self.revoked.contains(&serial) {
+            self.revoked.push(serial);
+        }
+    }
+    pub fn is_revoked(&self, serial: u64) -> bool {
+        self.revoked.contains(&serial)
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(b"EuroCA-store-v1\0");
+        b.push(self.root.is_some() as u8);
+        if let Some(r) = &self.root {
+            b.extend_from_slice(&r.to_bytes());
+        }
+        b.extend_from_slice(&(self.issued.len() as u32).to_le_bytes());
+        for c in &self.issued {
+            b.extend_from_slice(&c.to_bytes());
+        }
+        b.extend_from_slice(&(self.revoked.len() as u32).to_le_bytes());
+        for s in &self.revoked {
+            b.extend_from_slice(&s.to_le_bytes());
+        }
+        b
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Option<CertStore> {
+        const MAGIC: &[u8] = b"EuroCA-store-v1\0";
+        if !data.starts_with(MAGIC) {
+            return None;
+        }
+        let mut r = Reader { b: data, p: MAGIC.len() };
+        let root = if r.byte()? != 0 { Some(Certificate::read(&mut r)?) } else { None };
+        let ni = r.u32()? as usize;
+        let mut issued = Vec::with_capacity(ni);
+        for _ in 0..ni {
+            issued.push(Certificate::read(&mut r)?);
+        }
+        let nr = r.u32()? as usize;
+        let mut revoked = Vec::with_capacity(nr);
+        for _ in 0..nr {
+            revoked.push(r.u64()?);
+        }
+        Some(CertStore { root, issued, revoked })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +376,54 @@ mod tests {
     fn root_self_signed_verifies() {
         let ca = root();
         assert_eq!(ca.cert.verify(&ca.public_key(), T0 + YEAR), Ok(()));
+    }
+
+    #[test]
+    fn cert_serialization_roundtrip() {
+        let mut ca = root();
+        let leaf = ca.issue(&leaf_csr(), T0, T0 + YEAR);
+        let bytes = leaf.to_bytes();
+        assert_eq!(Certificate::from_bytes(&bytes), Some(leaf));
+    }
+
+    #[test]
+    fn three_level_chain_verifies() {
+        // root → intermediate CA → leaf.
+        let mut root_ca = root();
+        let inter_key = SigningKey::from_bytes(&[9u8; 32]);
+        let inter_cert = root_ca.issue(
+            &Csr { subject: "EuroCA Intermediate".into(), subject_key: inter_key.verifying_key().to_bytes(), is_ca: true },
+            T0,
+            T0 + 5 * YEAR,
+        );
+        // The intermediate signs a leaf.
+        let mut inter_ca =
+            CertAuthority { key: inter_key, cert: inter_cert.clone(), next_serial: 100, revoked: alloc::vec::Vec::new() };
+        let leaf = inter_ca.issue(&leaf_csr(), T0, T0 + YEAR);
+        // The full chain verifies against the ROOT key only.
+        let chain = alloc::vec![inter_cert.clone(), leaf.clone()];
+        assert_eq!(verify_chain(&chain, &root_ca.public_key(), T0 + 100), Ok(()));
+        // A non-CA in the middle breaks the chain.
+        let bad_inter = {
+            let mut c = inter_cert.clone();
+            c.is_ca = false;
+            c
+        };
+        assert!(verify_chain(&alloc::vec![bad_inter, leaf], &root_ca.public_key(), T0 + 100).is_err());
+    }
+
+    #[test]
+    fn cert_store_roundtrips_on_disk() {
+        let mut ca = root();
+        let leaf = ca.issue(&leaf_csr(), T0, T0 + YEAR);
+        let mut store = CertStore::new(ca.cert.clone());
+        store.add(leaf.clone());
+        store.revoke(1);
+        let bytes = store.to_bytes();
+        let back = CertStore::from_bytes(&bytes).unwrap();
+        assert_eq!(back, store);
+        assert!(back.is_revoked(1));
+        assert_eq!(back.issued[0], leaf);
     }
 
     #[test]

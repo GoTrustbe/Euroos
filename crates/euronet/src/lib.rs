@@ -14,6 +14,7 @@ extern crate alloc;
 
 pub mod arp;
 pub mod dhcp;
+pub mod dhcpv6;
 pub mod dns;
 pub mod checksum;
 pub mod ethernet;

@@ -1,0 +1,19 @@
+[package]
+name = "eurofuzz"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroFuzz — a deterministic fuzz harness over EuroOS's untrusted-input parsers (must never panic on malformed input). CRA secure-by-design evidence."
+
+[dependencies]
+europol = { path = "../europol" }
+euroca = { path = "../euroca" }
+euronet = { path = "../euronet" }
+eurowallet = { path = "../eurowallet" }
+eurotpm = { path = "../eurotpm" }
+eurodns = { path = "../eurodns" }
+ed25519-dalek = { version = "2", default-features = false }
+
+[features]
+default = []

@@ -1,0 +1,15 @@
+[package]
+name = "euronts"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroNTS — Network Time Security (RFC 8915): authenticated NTP with the RFC 8446 TLS exporter key schedule + NTS extension fields. Anti-tamper time. no_std, host-tested."
+
+[dependencies]
+sha2 = { version = "0.10", default-features = false }
+hkdf = { version = "0.12", default-features = false }
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+
+[features]
+default = []

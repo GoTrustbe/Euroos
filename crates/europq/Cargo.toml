@@ -1,0 +1,12 @@
+[package]
+name = "europq"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroPQ — sovereign post-quantum crypto from scratch: Keccak/SHA3/SHAKE + ML-KEM-768 (FIPS 203). no_std, NIST-KAT-verified."
+
+[dependencies]
+
+[features]
+default = []
