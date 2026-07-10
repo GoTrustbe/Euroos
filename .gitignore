@@ -47,3 +47,6 @@ scripts/__pycache__/
 
 # ── Local site backup archives (not part of the OS source) ───────────────────
 web-backup-*.tgz
+
+# Generated SBOM (CycloneDX) — produced deterministically in CI per release
+sbom.cdx.json

@@ -95,3 +95,21 @@ if [ "$tpoff" -lt 1 ]; then
     echo "ERROR: libtls.so has no R_X86_64_TPOFF64 — cross-module-TLS test pointless!"; exit 1
 fi
 echo "==> dyntls.elf + libtls.so: $tpoff TPOFF64 relocation(s)"
+
+# 3C-3: PT_INTERP + a from-scratch USERSPACE dynamic linker (ld-euro.so). Unlike
+# the H3 in-kernel linker, here the kernel loads the exe + libc-euro.so + the
+# interpreter and jumps to the interpreter, which resolves the JUMP_SLOT symbol
+# in userspace (the real Linux dynamic-linking flow via PT_INTERP).
+echo "==> 3C-3: PT_INTERP + userspace ld.so (interpexe.elf + ld-euro.so + libc-euro.so)..."
+gcc -ffreestanding -nostdlib -fPIC -shared -Os -Wl,--hash-style=sysv -o libc-euro.so libceuro.c
+gcc -ffreestanding -nostdlib -fPIC -Os -c ldeuro.c -o ldeuro.o
+ld -pie -nostdlib -e _start -o ld-euro.so ldeuro.o
+gcc -ffreestanding -nostdlib -fPIC -Os -c interpexe.c -o interpexe.o
+ld -pie -nostdlib -e _start --dynamic-linker=/lib/ld-euro.so -o interpexe.elf interpexe.o libc-euro.so
+rm -f ldeuro.o interpexe.o
+interp=$(readelf -lW interpexe.elf 2>/dev/null | grep -c "program interpreter" || true)
+jslot=$(readelf -rW interpexe.elf 2>/dev/null | grep -c JUMP_SLOT || true)
+if [ "$interp" -lt 1 ] || [ "$jslot" -lt 1 ]; then
+    echo "ERROR: interpexe missing PT_INTERP or JUMP_SLOT — 3C-3 test pointless!"; exit 1
+fi
+echo "==> interpexe.elf: PT_INTERP=$interp, $jslot JUMP_SLOT · ld-euro.so $(stat -c%s ld-euro.so)B · libc-euro.so $(stat -c%s libc-euro.so)B"
