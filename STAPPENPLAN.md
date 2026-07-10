@@ -34,15 +34,15 @@ Er staat een werkende Cargo-workspace in `/home/user/eurokernel/`:
 
 | Onderdeel | Track | Bewijs |
 |---|---|---|
-| Bootable UEFI-kernel + GOP-desktop (EuroOS-splash) | 1 | Boot in QEMU+OVMF, `boot.png` |
-| EuroFS on-disk **CoW**-FS: inodes, extents, dirs, checkpoints, crash-consistent | 2 | 36 host-tests; gemount in kernel, `boot-eurofs.png` |
-| Interactieve shell (UEFI-toetsenbord): ls/cat/write/mkdir/df/net/mem | 1 | live op EuroFS, `shell.png` |
-| EuroNet: Ethernet/ARP/IPv4/ICMP/UDP parse+build+checksums | 4 | 13 host-tests; `net`-selftest, `net.png` |
-| EuroMM: fysieke frame-allocator + UEFI memory-map | 3.1 | 6 host-tests; `mem`-commando, `mem.png` |
-| **Kernelmodus**: ExitBootServices + eigen GDT/IDT/exceptions + PS/2 + panic + COM1 | 3.2 | interactieve shell zónder UEFI, `kernelmode-typed.png` |
-| **Preemptief multitasking**: PIT-IRQ + round-robin scheduler + context-switch | 3.3 | 3 taken + shell parallel, `sched-typed.png` |
-| **IRQ-toetsenbord** + **eigen paging** (4-niveau, eigen CR3) | 3.3/3.4 | `irqkbd.png`, `paging.png` |
-| **Ring-3 userspace + SYSCALL** (privilege-scheiding) | 3.4 | userspace trapt naar kernel, `ring3.png` |
+| Bootable UEFI-kernel + GOP-desktop (EuroOS-splash) | 1 | Boot in QEMU+OVMF, `screenshots/boot.png` |
+| EuroFS on-disk **CoW**-FS: inodes, extents, dirs, checkpoints, crash-consistent | 2 | 36 host-tests; gemount in kernel, `screenshots/boot-eurofs.png` |
+| Interactieve shell (UEFI-toetsenbord): ls/cat/write/mkdir/df/net/mem | 1 | live op EuroFS, `screenshots/shell.png` |
+| EuroNet: Ethernet/ARP/IPv4/ICMP/UDP parse+build+checksums | 4 | 13 host-tests; `net`-selftest, `screenshots/net.png` |
+| EuroMM: fysieke frame-allocator + UEFI memory-map | 3.1 | 6 host-tests; `mem`-commando, `screenshots/mem.png` |
+| **Kernelmodus**: ExitBootServices + eigen GDT/IDT/exceptions + PS/2 + panic + COM1 | 3.2 | interactieve shell zónder UEFI, `screenshots/kernelmode-typed.png` |
+| **Preemptief multitasking**: PIT-IRQ + round-robin scheduler + context-switch | 3.3 | 3 taken + shell parallel, `screenshots/sched-typed.png` |
+| **IRQ-toetsenbord** + **eigen paging** (4-niveau, eigen CR3) | 3.3/3.4 | `screenshots/irqkbd.png`, `screenshots/paging.png` |
+| **Ring-3 userspace + SYSCALL** (privilege-scheiding) | 3.4 | userspace trapt naar kernel, `screenshots/ring3.png` |
 | Huisstijl uit UI-prototype (palet + EUROOS-wordmark) | 5 | toegepast op bootscherm |
 
 **Totaal 55 host-tests groen, clippy schoon, kernel boot + screenshot in CI.**
