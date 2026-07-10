@@ -60,6 +60,7 @@ eurowatchdog = { path = "../crates/eurowatchdog" }
 eurojournal = { path = "../crates/eurojournal" }
 europkg = { path = "../crates/europkg" }
 eurorepro = { path = "../crates/eurorepro" }
+eurogdb = { path = "../crates/eurogdb" }
 euroaccess = { path = "../crates/euroaccess" }
 eurodoc = { path = "../crates/eurodoc" }
 eurodocio = { path = "../crates/eurodocio" }

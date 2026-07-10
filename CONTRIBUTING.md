@@ -86,6 +86,19 @@ Please **do not** open a public issue for security vulnerabilities. Report them
 privately to the maintainers (see the repository's Security policy / contact in
 the README). We'll coordinate a fix and disclosure.
 
+## Reporting hardware compatibility
+
+EuroOS keeps an honest **Hardware Compatibility List**
+([`docs/HARDWARE-COMPAT.md`](docs/HARDWARE-COMPAT.md)): what is verified working,
+what has a protocol core but needs real silicon, and what is unsupported. To add
+a result, open an issue titled `HCL: <vendor> <device>` with the device IDs,
+the EuroOS commit, and the relevant serial-log `[...]` markers or a screenshot.
+A device only enters the *verified* table once a maintainer can reproduce or
+accept the report from that evidence — never on an unverified claim.
+
+Support commitments and the release/security-update cadence are stated in
+[`SUPPORT-POLICY.md`](SUPPORT-POLICY.md).
+
 ## Governance (current)
 
 EuroOS is at an early stage. Today the GoTrust maintainers own merge rights and

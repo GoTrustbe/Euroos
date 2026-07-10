@@ -93,6 +93,9 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             "  whoami / id          current session user".to_string(),
             "  login <u> <pw> / su  log in (verify against /etc/shadow)".to_string(),
             "  sudo <cmd> / logout  run as root / reset session".to_string(),
+            "  sessions             session table (3E-3 lifecycle)".to_string(),
+            "  chown <uid> <path>   change file owner (3E-3)".to_string(),
+            "  quota [set <uid> <blocks>]  per-user disk quota (3E-9)".to_string(),
             "  hostname             system name (from /etc/hostname)".to_string(),
             "  uname [-a/-r/-m/-n]  system info / clear".to_string(),
         ],
@@ -118,15 +121,71 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
                 Ok(ok) => {
                     // gid from /etc/passwd (POSIX mapping); fall back to the euroid uid.
                     let gid = crate::auth::lookup_user(fs, &ok.name).map(|(_, g)| g).unwrap_or(ok.uid);
-                    crate::auth::set_session(ok.uid, gid, &ok.name);
-                    vec![format!("logged in as {} (uid={}, gid={}, EuroID-Argon2id)", ok.name, ok.uid, gid)]
+                    // 3E-3: real session lifecycle — closes the previous session,
+                    // auto-creates the user-OWNED home, sets the FS uid-context.
+                    let sid = crate::session::open(fs, ok.uid, gid, &ok.name, ok.caps, if cmd == "su" { "su" } else { "login" });
+                    vec![format!("logged in as {} (uid={}, gid={}, session #{sid}, EuroID-Argon2id)", ok.name, ok.uid, gid)]
                 }
                 Err(reason) => vec![format!("login: {reason}")],
             }
         }
         "logout" => {
-            crate::auth::set_session(1000, 1000, "euro");
+            // 3E-3: close the session; the seat falls back to the default desktop user.
+            crate::session::close_active();
+            let (uid, caps) = crate::euroid::user_caps("euro").unwrap_or((1000, 0));
+            crate::session::open(fs, uid, uid, "euro", caps, "auto");
             vec!["logged out — back to the euro session".to_string()]
+        }
+        "sessions" => crate::session::list_lines(),
+        "chown" => {
+            // chown <uid> <path> — 3E-3 ownership. Reserved for the admin seat
+            // (root or the wheel desktop user), like the other admin commands.
+            let su = crate::auth::session_uid();
+            if su != 0 && su != 1000 {
+                return vec!["chown: permission denied (admin only)".to_string()];
+            }
+            let mut it = arg2.split_whitespace();
+            match (arg1.parse::<u32>(), it.next()) {
+                (Ok(uid), Some(path)) => match fs.chown(path, uid) {
+                    Ok(()) => vec![format!("owner of {path} → uid {uid}")],
+                    Err(e) => vec![format!("chown: {e:?}")],
+                },
+                _ => vec!["usage: chown <uid> <path>".to_string()],
+            }
+        }
+        "quota" => {
+            // quota                → list (uid, used, limit) on the root FS
+            // quota set <uid> <n>  → set the limit to n blocks (0 = remove)
+            if arg1 == "set" {
+                let su = crate::auth::session_uid();
+                if su != 0 && su != 1000 {
+                    return vec!["quota: permission denied (admin only)".to_string()];
+                }
+                let mut it = arg2.split_whitespace();
+                match (it.next().and_then(|s| s.parse::<u32>().ok()), it.next().and_then(|s| s.parse::<u64>().ok())) {
+                    (Some(uid), Some(blocks)) => match fs.quota_set(uid, blocks) {
+                        Ok(()) => vec![format!("quota for uid {uid} → {blocks} blocks ({} KiB)", blocks * 4)],
+                        Err(e) => vec![format!("quota: {e:?}")],
+                    },
+                    _ => vec!["usage: quota set <uid> <blocks>".to_string()],
+                }
+            } else {
+                let list = fs.quota_list();
+                if list.is_empty() {
+                    vec!["no quotas set and no owned blocks (quota set <uid> <blocks>)".to_string()]
+                } else {
+                    let mut out = vec![format!("{:<8} {:>12} {:>12}", "UID", "USED(blk)", "LIMIT(blk)")];
+                    for (uid, used, limit) in list {
+                        out.push(format!(
+                            "{:<8} {:>12} {:>12}",
+                            uid,
+                            used,
+                            if limit == 0 { "-".to_string() } else { format!("{limit}") }
+                        ));
+                    }
+                    out
+                }
+            }
         }
         "id" => {
             let (u, uid, gid) = current_user(fs);
@@ -454,8 +513,23 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
                     crate::update::fetch(fs, arg2)
                 }
             }
-            _ => vec!["euroupdate: status | apply <image> | fetch <url> | rollback".to_string()],
+            // 3E-2: check a release channel on the update server (default = the
+            // SLIRP host gateway; override: euroupdate check <channel> <host:port>).
+            "check" => {
+                let mut it = arg2.split_whitespace();
+                let channel = it.next().unwrap_or("stable");
+                let (host, port) = match it.next().and_then(|hp| hp.rsplit_once(':')) {
+                    Some((h, p)) => (String::from(h), p.parse().unwrap_or(8722)),
+                    None => (String::from("10.0.2.2"), 8722),
+                };
+                crate::update::check_channel(fs, &host, port, channel)
+            }
+            _ => vec!["euroupdate: status | check [stable|beta] | apply <image> | fetch <url> | rollback".to_string()],
         },
+        // 3E-6: the package-manager EXECUTOR (signed index + content-addressed store).
+        "eupkg" => crate::pkg::eupkg_shell(fs, arg1, arg2),
+        // 3E-5: GDB serial-stub attach instructions.
+        "gdbstub" => crate::gdbstub::shell(),
         "euroimmutable" | "immutable" => crate::immutable::shell(fs, arg1, arg2),
         "lsblk" | "blkid" => crate::fatmount::lsblk(),
         "mount" => {

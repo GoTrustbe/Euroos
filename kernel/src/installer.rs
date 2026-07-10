@@ -8,11 +8,15 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use euroinstall::{plan, Config, Disk, Step};
+use spin::Mutex;
 
 use crate::graphics::{Color, FrameBuffer};
 use crate::text;
 
 const TITLEBAR_H: usize = 44;
+
+/// 3E-1: status line of the LAST GUI install action (shown above the button).
+static GUI_STATUS: Mutex<String> = Mutex::new(String::new());
 
 /// A sample config for the self-test + the shell dry-run.
 fn sample_config(live: bool) -> Config {
@@ -214,10 +218,55 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
         }
     }
 
-    // ── Install button ──
+    // ── Status of the last GUI install action (3E-1: the button is REAL) ──
+    let status = GUI_STATUS.lock().clone();
+    if !status.is_empty() {
+        text::draw_px(fb, x + 28, y + h - 46, &status, Color::TEXT_SEC, 12.0);
+    }
+
+    // ── Install button (wired to `gui_install` via the compositor hit-test) ──
     let bw = 200usize;
     let bx = x + w - bw - 28;
     let by = y + h - 52;
     fb.fill_rounded_rect(bx, by, bw, 36, crate::eds::RADIUS_M, Color::ACCENT);
     text::draw_px(fb, bx + 40, by + 9, "Install EuroOS", Color::WHITE, 14.0);
+}
+
+/// 3E-1: does (px,py) hit the "Install EuroOS" button? Mirrors the geometry in
+/// [`render`] (button bottom-right of the window).
+pub fn button_at(win_x: usize, win_y: usize, win_w: usize, win_h: usize, px: usize, py: usize) -> bool {
+    let bw = 200usize;
+    let bh = 36usize;
+    let bx = win_x + win_w - bw - 28;
+    let by = win_y + win_h - 52;
+    px >= bx && px < bx + bw && py >= by && py < by + bh
+}
+
+/// 3E-1: the GUI button actually installs — to the first BLANK virtio disk
+/// (never over an in-use disk; the shell path `--to N` is the explicit
+/// destructive route). Result lands in the status line + the serial log.
+pub fn gui_install() {
+    let mut status = GUI_STATUS.lock();
+    if !crate::instexec::media_available() {
+        *status = String::from("\u{2717} no install media (only available after a real UEFI boot)");
+        return;
+    }
+    let n = crate::virtio_blk::device_count();
+    let target = (0..n).find(|&d| crate::virtio_blk::present_dev(d) && crate::instexec::disk_is_blank(d));
+    let dev = match target {
+        Some(d) => d,
+        None => {
+            *status = String::from("\u{2717} no blank target disk \u{2014} attach an empty virtio disk (in-use disks are never overwritten)");
+            return;
+        }
+    };
+    drop(status); // install_to_disk logs to serial; don't hold the lock across it
+    let cfg = crate::instexec::default_config();
+    let ok = crate::instexec::install_to_disk(dev, &cfg);
+    let mib = crate::virtio_blk::capacity_sectors_dev(dev) * 512 / 1024 / 1024;
+    *GUI_STATUS.lock() = if ok {
+        alloc::format!("\u{2713} installed to virtio-blk {dev} ({mib} MiB) \u{2014} bootable standalone (see [q1x3])")
+    } else {
+        alloc::format!("\u{2717} install to virtio-blk {dev} failed (see serial log)")
+    };
 }

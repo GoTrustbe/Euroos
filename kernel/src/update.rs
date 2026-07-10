@@ -368,6 +368,142 @@ pub fn apply_gate_selftest(now: u64) {
     );
 }
 
+// ── 3E-2: EuroUpdate delivery — signed channel manifests over the network ──
+
+/// The version THIS build runs (compared against the channel manifest).
+pub const RUNNING_VERSION: u64 = 1;
+
+/// Minimal field extraction from the (signature-verified) channel manifest.
+/// The manifest is OUR controlled format — deliberately not a general JSON parser.
+fn manifest_u64(s: &str, key: &str) -> Option<u64> {
+    let pat = alloc::format!("\"{key}\":");
+    let i = s.find(&pat)? + pat.len();
+    let rest = s[i..].trim_start();
+    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+fn manifest_str<'a>(s: &'a str, key: &str) -> Option<&'a str> {
+    let pat = alloc::format!("\"{key}\":\"");
+    let i = s.find(&pat)? + pat.len();
+    let rest = &s[i..];
+    Some(&rest[..rest.find('"')?])
+}
+
+/// `euroupdate check [channel]` — **the delivery chain (3E-2)**: fetch the
+/// channel manifest + its Ed25519 signature from the update server, REFUSE an
+/// unsigned/forged manifest, compare versions, and on a newer release fetch the
+/// image (sha256 pinned by the manifest, Ed25519-signed) and stage it to the
+/// inactive A/B slot. Security model = signed metadata + signed payload (the
+/// APT model): a hostile mirror/MITM can at worst serve nothing — never a
+/// tampered image. Transport here is HTTP; HTTPS runs over the same
+/// `net::fetch_full(tls=true)` path when the server has a kernel-trusted cert.
+pub fn check_channel(fs: &mut dyn FileSystem, host: &str, port: u16, channel: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mpath = alloc::format!("/channel/{channel}.json");
+    out.push(alloc::format!("euroupdate check: {host}:{port} channel '{channel}' (Ed25519-signed manifest)…"));
+    let man = match crate::net::fetch_full(host, port, &mpath, false) {
+        Some((200, _, b)) => b,
+        Some((code, _, _)) => {
+            out.push(alloc::format!("  manifest HTTP {code} — aborted"));
+            return out;
+        }
+        None => {
+            out.push("  no connection to the update server — aborted".into());
+            return out;
+        }
+    };
+    let msig = match crate::net::fetch_full(host, port, &alloc::format!("{mpath}.sig"), false) {
+        Some((200, _, b)) => b,
+        _ => {
+            out.push("  manifest signature missing — channel REFUSED".into());
+            return out;
+        }
+    };
+    if !crate::crypto::verify(&man, &msig) {
+        out.push("  manifest signature INVALID — channel REFUSED (nothing fetched)".into());
+        return out;
+    }
+    let text = String::from_utf8_lossy(&man).into_owned();
+    let (version, image, sha_hex) =
+        match (manifest_u64(&text, "version"), manifest_str(&text, "image"), manifest_str(&text, "sha256")) {
+            (Some(v), Some(i), Some(s)) => (v, String::from(i), String::from(s)),
+            _ => {
+                out.push("  manifest malformed — REFUSED".into());
+                return out;
+            }
+        };
+    out.push(alloc::format!("  manifest OK (signature valid): version {version}, running {RUNNING_VERSION}"));
+    if version <= RUNNING_VERSION {
+        out.push("  already up to date — nothing to do".into());
+        return out;
+    }
+    let img = match crate::net::fetch_full(host, port, &image, false) {
+        Some((200, _, b)) => b,
+        _ => {
+            out.push(alloc::format!("  image {image} not fetched — aborted"));
+            return out;
+        }
+    };
+    let isig = match crate::net::fetch_full(host, port, &alloc::format!("{image}.sig"), false) {
+        Some((200, _, b)) => b,
+        _ => {
+            out.push("  image signature not fetched — aborted".into());
+            return out;
+        }
+    };
+    // Defense-in-depth: the SIGNED manifest pins the image hash.
+    let h = eurotls::keyschedule::sha256(&img);
+    let hex: String = h.iter().map(|b| alloc::format!("{b:02x}")).collect();
+    if hex != sha_hex {
+        out.push("  image sha256 does not match the signed manifest — REFUSED".into());
+        return out;
+    }
+    out.push(alloc::format!("  image {} B fetched, sha256 pinned by manifest ✓", img.len()));
+    out.extend(stage_verified_image(fs, &img, &isig));
+    out
+}
+
+/// **[3e2] — EuroUpdate delivery server, live.** If an update server answers on
+/// the SLIRP host gateway (10.0.2.2:8722 — `toolchain/update-server/serve.py`),
+/// run the FULL delivery chain live over EuroNet TCP: signed `stable` manifest →
+/// newer version → image hash-pinned + Ed25519-verified + staged to the inactive
+/// slot; the `old` channel reports up-to-date; the `evil` channel (forged
+/// manifest signature) is REFUSED before any image is fetched. Slot state is
+/// saved/restored (non-invasive, like [upd3]). Without a server the client is
+/// honestly reported READY — the verify+stage pipeline itself is proven on FS
+/// by [upd3] every boot.
+pub fn channel_selftest(now: u64) {
+    use eurofs::{EuroFs, MemoryBlockDevice};
+    if crate::net::fetch_full("10.0.2.2", 8722, "/channel/stable.json", false).is_none() {
+        crate::serial_println!(
+            "[3e2] EuroUpdate delivery: client READY (signed channel manifest → version compare → sha256-pinned + Ed25519-verified image → A/B stage); no update server on 10.0.2.2:8722 — start toolchain/update-server/serve.py for the live end-to-end"
+        );
+        return;
+    }
+    let saved = *CONFIG.lock();
+    let mut dev = MemoryBlockDevice::new(1024, 4096);
+    let mut fs = match EuroFs::format(&mut dev, [0x44; 16], now) {
+        Ok(f) => f,
+        Err(_) => {
+            crate::serial_println!("[3e2] could not format RAM EuroFS — skipped");
+            return;
+        }
+    };
+    let up = check_channel(&mut fs, "10.0.2.2", 8722, "stable");
+    let staged = up.iter().any(|l| l.contains("verified + written to slot"));
+    let old = check_channel(&mut fs, "10.0.2.2", 8722, "old");
+    let uptodate = old.iter().any(|l| l.contains("up to date"));
+    let evil = check_channel(&mut fs, "10.0.2.2", 8722, "evil");
+    let refused = evil.iter().any(|l| l.contains("REFUSED"));
+    *CONFIG.lock() = saved; // restore global slot state
+    let ok = staged && uptodate && refused;
+    crate::serial_println!(
+        "[3e2] EuroUpdate delivery server LIVE (10.0.2.2:8722 over EuroNet TCP): stable-manifest-verified+image-staged={staged}, old-channel-up-to-date={uptodate}, forged-manifest-REFUSED-before-fetch={refused} → {}",
+        if ok { "OK (signed OTA delivery end-to-end) ✓" } else { "FAILED ✗" }
+    );
+}
+
 /// `euroupdate rollback` — force back to the other good slot.
 pub fn rollback(fs: &mut dyn FileSystem) -> Vec<String> {
     let mut cfg = CONFIG.lock().take().unwrap_or_else(|| load(fs));

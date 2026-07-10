@@ -81,6 +81,93 @@ jobs:
           rustup default nightly-2026-05-31
       - run: cargo clippy -p eurofs -p euronet -- -D warnings
 
+  # ── 3E-4: reproducible-build check. Builds the UEFI kernel TWICE with the
+  #    reproducibility flags (--remap-path-prefix + lld /Brepro to zero the PE
+  #    timestamp) and asserts the two eurokernel.efi hashes are byte-identical.
+  #    Informational for now: build-std across toolchain minor versions can still
+  #    drift, so this reports rather than gates (see docs/CRA-CONFORMANCE.md).
+  repro-check:
+    name: Reproducible build (3E-4, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust nightly + build-std prerequisites
+        run: |
+          rustup toolchain install nightly-2026-05-31 --profile minimal --component rust-src --target x86_64-unknown-uefi
+          rustup default nightly-2026-05-31
+      - name: Build the signed userland (the kernel include_bytes!'s the ELFs)
+        run: |
+          # Same prerequisites as the kernel-boot job: the kernel embeds
+          # userland/*.elf(+.sig), which are git-ignored build output. Without
+          # them `cargo build -p kernel` fails, so build them first here too.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+          python3 toolchain/eupkg/gen-dev-key.py
+          ./userland/build.sh
+      - name: Build twice and compare kernel hashes
+        run: |
+          ./scripts/repro-build.sh
+          H1=$(sha256sum target/x86_64-unknown-uefi/release/eurokernel.efi | cut -d' ' -f1)
+          rm -f target/x86_64-unknown-uefi/release/eurokernel.efi
+          touch kernel/src/main.rs
+          ./scripts/repro-build.sh
+          H2=$(sha256sum target/x86_64-unknown-uefi/release/eurokernel.efi | cut -d' ' -f1)
+          echo "build #1: $H1"
+          echo "build #2: $H2"
+          test "$H1" = "$H2" && echo "REPRODUCIBLE ✓" || { echo "NON-REPRODUCIBLE ✗"; exit 1; }
+
+  # ── 3E-4: signed release pipeline. On a tag: build the reproducible image,
+  #    generate a signed release manifest (source commit → binary hashes, Ed25519
+  #    with the dev key from a repo secret) + the SBOM, and attach all of it to
+  #    the GitHub release. This is the source-commit → binary-hash → signed
+  #    manifest chain the plan calls for.
+  release:
+    name: Signed release (3E-4)
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust nightly + build-std prerequisites
+        run: |
+          rustup toolchain install nightly-2026-05-31 --profile minimal --component rust-src --target x86_64-unknown-uefi
+          rustup default nightly-2026-05-31
+      - name: Build the signed userland + reproducible kernel + image
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools qemu-system-x86 ovmf dosfstools mtools
+          python3 toolchain/eupkg/gen-dev-key.py
+          ./userland/build.sh
+          ./scripts/repro-build.sh
+          ./scripts/build.sh release
+      - name: Provide the release signing key
+        env:
+          EUROOS_DEV_KEY: ${{ secrets.EUROOS_DEV_KEY }}
+        run: |
+          # The private Ed25519 seed is a repo secret (base64). Absent on forks →
+          # the manifest is generated unsigned (the step still succeeds).
+          if [ -n "${EUROOS_DEV_KEY:-}" ]; then
+            echo "$EUROOS_DEV_KEY" | base64 -d > toolchain/eupkg/keys/dev.key
+          fi
+      - name: Generate the signed release manifest + SBOM
+        run: |
+          python3 toolchain/sbom/gen-sbom.py --version "$GITHUB_REF_NAME" \
+            --timestamp "$(git log -1 --format=%cI)" -o sbom.cdx.json
+          python3 toolchain/release/make-release-manifest.py \
+            --version "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" \
+            --toolchain nightly-2026-05-31 --timestamp "$(git log -1 --format=%cI)" \
+            --out release-manifest.json \
+            target/x86_64-unknown-uefi/release/eurokernel.efi \
+            target/x86_64-unknown-uefi/release/loader.efi \
+            eurokernel.img
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            eurokernel.img
+            release-manifest.json
+            release-manifest.json.sig
+            sbom.cdx.json
+
   # ── Informational only: the UEFI kernel build uses -Z build-std (now pinned,
   #    see rust-toolchain.toml) and a headless QEMU boot (no KVM on hosted
   #    runners → slow TCG). Useful as an artifact, not a gate.

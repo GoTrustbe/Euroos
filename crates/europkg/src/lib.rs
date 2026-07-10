@@ -6,16 +6,30 @@
 //! valid, topologically ordered install order — with detection of
 //! missing packages, unsatisfiable version requirements, conflicts and cycles.
 //!
-//! Pure, host-tested `no_std` logic; the actual download/verify/unpack is wired in by the
-//! kernel/`eupkg`.
+//! Pure, host-tested `no_std` logic. **3E-6 adds the EXECUTION**: [`store`]
+//! (install/remove/upgrade on a content-addressed store, signed index) and
+//! [`zipread`] (a minimal STORED-only ZIP reader, so ring 0 needs no inflate).
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
 extern crate alloc;
 
+pub mod store;
+pub mod zipread;
+
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+
+/// One row of the (Ed25519-signed) repository index — 3E-6.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PkgIndexEntry {
+    pub name: String,
+    pub version: String,
+    /// Repository path of the `.eupkg` file (fetched via FS/HTTP).
+    pub file: String,
+    pub deps: Vec<String>,
+}
 
 /// A semantic version `major.minor.patch`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -28,6 +42,10 @@ pub struct Version {
 impl Version {
     pub fn new(major: u32, minor: u32, patch: u32) -> Self {
         Version { major, minor, patch }
+    }
+    /// `"1.2.3"` — the canonical form `parse` accepts.
+    pub fn to_string_dotted(&self) -> String {
+        alloc::format!("{}.{}.{}", self.major, self.minor, self.patch)
     }
     /// Parse `"1.2.3"` (missing parts = 0, so `"1.2"` = 1.2.0).
     pub fn parse(s: &str) -> Option<Version> {

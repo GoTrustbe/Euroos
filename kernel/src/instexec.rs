@@ -296,6 +296,47 @@ pub fn default_config() -> Config {
     }
 }
 
+/// **3E-1: FDE key enrolment, actually executed.** The disk key comes from the
+/// TPM RNG and is **hardware-sealed** to the measured-boot PCR (the 3D-1
+/// `TPM2_Create`+PolicyPCR path) — only the SEALED blob is written to the
+/// installed disk (`/etc/fde/root.seal`), never the key. Proves the round-trip
+/// (the TPM releases the key on the same PCR state) and that neither blob leaks
+/// the key bytes. Returns `Some(ok)` with a TPM; `None` without one —
+/// honestly skipped, fail-closed: no plaintext-key fallback on disk.
+///
+/// Honest scope: the seal binds to THIS machine's TPM+PCR (the normal
+/// install-on-the-machine-itself case). Cross-machine install media would need
+/// key-escrow/recovery enrolment, which is future work.
+pub fn enroll_fde(fs: &mut dyn FileSystem) -> Option<bool> {
+    if !crate::tpm::present() {
+        crate::serial_println!("[3e1] EnrollFde: no TPM — skipped (fail-closed: no plaintext fallback)");
+        return None;
+    }
+    let key = crate::tpm::get_random(32)?;
+    let (priv_b, pub_b) = crate::tpm::seal_to_pcr(16, &key)?;
+    // Round-trip: the TPM releases the key only under the same PCR policy.
+    let roundtrip = crate::tpm::unseal_from_pcr(16, &priv_b, &pub_b).as_deref() == Some(&key[..]);
+    // Neither blob may contain the key in plaintext.
+    let no_leak = !priv_b.windows(key.len()).any(|w| w == &key[..])
+        && !pub_b.windows(key.len()).any(|w| w == &key[..]);
+    // Persist ONLY the sealed blob on the target: [priv_len u32][priv][pub].
+    let mut blob = Vec::with_capacity(4 + priv_b.len() + pub_b.len());
+    blob.extend_from_slice(&(priv_b.len() as u32).to_le_bytes());
+    blob.extend_from_slice(&priv_b);
+    blob.extend_from_slice(&pub_b);
+    let _ = fs.create_dir("/etc");
+    let _ = fs.create_dir("/etc/fde");
+    let wrote = fs.write_file("/etc/fde/root.seal", &blob).is_ok()
+        && fs.write_file("/etc/fde/enrolled", b"sealed-to=pcr16\ncipher=chacha20-poly1305\n").is_ok();
+    let ok = roundtrip && no_leak && wrote;
+    crate::serial_println!(
+        "[3e1] EnrollFde EXECUTED: key-from-TPM-RNG, TPM2-sealed-to-PCR16 (priv {} B + pub {} B), unseal-roundtrip={roundtrip}, blobs-leak-no-key={no_leak}, sealed-blob-on-target={wrote} → {}",
+        priv_b.len(), pub_b.len(),
+        if ok { "OK (installer enrols FDE for real) ✓" } else { "FAILED ✗" }
+    );
+    Some(ok)
+}
+
 /// Execute the configuration steps of the plan on a mounted EuroFS:
 /// write the provisioning files. Returns the number of executed steps.
 fn provision(fs: &mut dyn FileSystem, steps: &[Step]) -> usize {
@@ -323,6 +364,12 @@ fn provision(fs: &mut dyn FileSystem, steps: &[Step]) -> usize {
             Step::ProvisionEuroCa => {
                 let _ = fs.write_file("/etc/euroca/root.crt", b"EuroCA root certificate (provisioned)\n");
                 done += 1;
+            }
+            // 3E-1: FDE enrolment is now a REAL step (was a planned no-op).
+            Step::EnrollFde => {
+                if enroll_fde(fs) == Some(true) {
+                    done += 1;
+                }
             }
             // The disk steps (Partition/Format/WriteKernelSlots/…) are realized here
             // by the EuroFS format itself on the RAM disk.
