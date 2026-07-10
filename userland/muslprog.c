@@ -21,6 +21,7 @@ static long sys6(long n, long a1, long a2, long a3, long a4, long a5, long a6) {
 }
 
 #define L_WRITE 1
+#define L_OPEN 2
 #define L_MMAP 9
 #define L_WRITEV 20
 #define L_GETPID 39
@@ -77,6 +78,27 @@ __attribute__((section(".text.start"))) void _start(void) {
         { "+ part-2 (musl stdio path)\n", 26 },
     };
     sys(L_WRITEV, 1, (long)iov, 2);
+
+    /* 6. 3C-3: FILE-BACKED mmap — open a file the kernel seeded and mmap its
+     * contents into the address space (fd, offset 0, PROT_READ, MAP_PRIVATE),
+     * then verify the mapped bytes. This is the primitive a dynamic loader uses
+     * to map a library's LOAD segments. */
+    long fd = sys(L_OPEN, (long)"/etc/mmap-test", 0 /*O_RDONLY*/, 0);
+    if (fd >= 0) {
+        long fp = sys6(L_MMAP, 0, 4096, 0x1 /*PROT_READ*/, 0x2 /*MAP_PRIVATE*/, fd, 0);
+        if (fp > 0) {
+            const char *m = (const char *)fp;
+            const char *exp = "EUROOS-FILEMMAP-OK";
+            int ok = 1;
+            for (int i = 0; exp[i]; i++) { if (m[i] != exp[i]) { ok = 0; break; } }
+            put(ok ? "  file-backed mmap: mapped file bytes MATCH -> FILE-BACKED-MMAP-OK\n"
+                   : "  file-backed mmap: MISMATCH -> FILE-BACKED-MMAP-FAIL\n");
+        } else {
+            put("  file-backed mmap FAILED (no mapping)\n");
+        }
+    } else {
+        put("  file-backed mmap: /etc/mmap-test not open\n");
+    }
 
     sys(L_EXIT, 0, 0, 0);
     __builtin_unreachable();

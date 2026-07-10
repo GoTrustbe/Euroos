@@ -696,7 +696,7 @@ fn main() -> Status {
         ("/bin/execee", CO, true), // S3: execve target
         ("/bin/forkpipe", CO, true), // S3: pipe() + fork() IPC
         ("/bin/ticker", CO, true), // S4: demo service (supervision)
-        ("/bin/muslprog", CO, true),
+        ("/bin/muslprog", CO | FI, true), // 3C-3: also opens /etc/mmap-test for file-backed mmap
         ("/bin/argvprog", CO, false),
         ("/bin/pieprog", CO, false),
         ("/bin/muslreal", CO | PR, true),
@@ -1110,6 +1110,10 @@ fn main() -> Status {
     wasm::container_selftest();
     // H5: the REAL Wayland wire-protocol server — a handshake → a titled window.
     wayland::selftest();
+
+    // 3C-3: seed a known file so the muslprog boot binary can prove FILE-BACKED
+    // mmap — it opens this and mmaps its contents into its address space.
+    ring3::register_file("/etc/mmap-test", b"EUROOS-FILEMMAP-OK-0123456789abcdef".to_vec());
 
     // ── EXEC-BY-NAME: a small "boot script" that loads and runs every program by
     // NAME from EuroFS. The kernel looks up the caps + ABI per path in the program
