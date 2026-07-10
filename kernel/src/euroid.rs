@@ -357,6 +357,16 @@ pub struct LoginOk {
     pub caps: u64,
 }
 
+/// The uid + effective capabilities of `username` WITHOUT authentication — for
+/// session bookkeeping only (e.g. reopening the default session at logout,
+/// 3E-3). This never grants a login; it just reads the store.
+pub fn user_caps(username: &str) -> Option<(u32, u64)> {
+    let guard = STATE.lock();
+    let st = guard.as_ref()?;
+    let u = st.users.get_by_name(username)?;
+    Some((u.uid.0, effective_caps(u, &st.groups, ALLOW_ALL)))
+}
+
 /// **Audit #3 / Sprint AE** — authenticate against the live EuroID store with
 /// Argon2id (memory-hard), account-state check, lockout counter and a tamper-
 /// evident audit log. This replaces the old iterated-SHA-256 verification against

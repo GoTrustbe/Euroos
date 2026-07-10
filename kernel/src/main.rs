@@ -56,6 +56,8 @@ mod ring3;
 mod rtc;
 mod sched;
 mod serial;
+mod gdbstub;
+mod session;
 mod shell;
 mod smp;
 mod nvme;
@@ -1703,6 +1705,14 @@ fn main() -> Status {
 
     // EuroPkg (M2): dependency resolution of the package manager.
     pkg::selftest();
+    // 3E-6: the package-manager EXECUTOR — signed index → resolver → verify →
+    // content-addressed store → /bin link; tamper/forgery refused; remove+GC.
+    pkg::exec_selftest(rtc::epoch());
+
+    // 3E-5: GDB Remote Serial Protocol stub over COM2 — prove the wire protocol
+    // against live kernel register/memory state (a real gdb attaches via COM2→tcp).
+    gdbstub::init();
+    gdbstub::selftest();
 
     // EuroRepro (M3/Q2): reproducible builds — attestation + consensus.
     repro::selftest();
@@ -1866,6 +1876,11 @@ fn main() -> Status {
         );
     }
 
+    // 3E-2: EuroUpdate delivery — live signed-channel check against the update
+    // server on the SLIRP host gateway (verify manifest → version → hash-pinned
+    // signed image → A/B stage); READY-reported when no server runs.
+    update::channel_selftest(rtc::epoch());
+
     // EuroAgent real tools (Phase 2C): an agent really writes+reads on EuroFS via
     // the cap-gated MCP gateway, sandbox-clamped — no longer a stub.
     agent::real_tools_selftest(&mut vfs);
@@ -1889,6 +1904,10 @@ fn main() -> Status {
     // Sprint AE-e2e: EuroID storage (users + Argon2id hashes + state) persistent
     // on EuroFS — survives a restart instead of being rebuilt every boot.
     euroid::persist_selftest(&mut vfs);
+    // 3E-3/3E-9: session lifecycle (owned homes, uid-context) + per-user disk
+    // quota — both on the LIVE root FS.
+    session::selftest(&mut vfs);
+    session::quota_selftest(&mut vfs);
     // Sprint AE-e2e: must-change-password enforced end-to-end (login refuses until
     // the user changes their own password).
     euroid::must_change_selftest();
@@ -2468,7 +2487,16 @@ fn main() -> Status {
     // authenticate the desktop session via EuroID (Argon2id) before the desktop starts.
     // Unattended/CI boots log in automatically after a short grace period (honestly logged).
     lockscreen::selftest(&fb);
-    let _session_user = lockscreen::gate(&fb, "euro");
+    let session_user = lockscreen::gate(&fb, "euro");
+    // 3E-3: register the authenticated desktop session in the session table —
+    // this closes the boot self-test session, ensures the user's OWNED home and
+    // sets the FS uid-context (files created on the desktop belong to the user).
+    {
+        let uid = auth::session_uid();
+        let gid = auth::session_gid();
+        let caps = euroid::user_caps(&session_user).map(|(_, c)| c).unwrap_or(0);
+        session::open(ctx.fs, uid, gid, &session_user, caps, "desktop");
+    }
 
     // EuroMonitor's first paint must show the real RAM figures (not the 0 atomics).
     monitor::set_mem(
@@ -2665,6 +2693,12 @@ fn main() -> Status {
                         // Click on "Save" → write the buffer REALLY to EuroFS.
                         if textedit::save_button_at(windows[i].x, windows[i].y, windows[i].w, px, py) {
                             textedit::save(ctx.fs);
+                        }
+                    } else if windows[i].app == suite_ui::SuiteApp::Installer {
+                        // 3E-1: "Install EuroOS" button → REAL install to the first
+                        // BLANK virtio disk (in-use disks are never touched).
+                        if installer::button_at(windows[i].x, windows[i].y, windows[i].w, windows[i].h, px, py) {
+                            installer::gui_install();
                         }
                     }
                     need_full = true;
