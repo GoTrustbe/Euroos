@@ -1102,6 +1102,9 @@ fn main() -> Status {
     // H4: EuroWASM — run a WASM module via the no-JIT interpreter; the WASI import
     // `fd_write` is mapped to an EuroGuard capability (denied without it).
     wasm::selftest();
+    // 3C-4: a REAL wasi_snapshot_preview1 host (true iovec fd_write ABI, proc_exit,
+    // random_get, clock, environ/args) running a real wasm32-wasi-shaped module.
+    wasm::wasi_selftest();
     // H4 follow-up: bind the WASM-WASI to REAL EuroSandbox containers (capability +
     // net scope determine whether an import is allowed) — the sovereign sandbox model closed.
     wasm::container_selftest();
