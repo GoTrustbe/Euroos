@@ -273,6 +273,8 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         }
         // P1: EuroLocale — localization for the 24 EU languages.
         "locale" => crate::locale::shell(&format!("{arg1} {arg2}")),
+        // 3F-7: app permission portals — list grants + audit.
+        "portal" => crate::portal::shell(),
         // 3F-4: show or set the keyboard layout (us / be-azerty / fr-azerty / de-qwertz).
         "keymap" => {
             if arg1.is_empty() {

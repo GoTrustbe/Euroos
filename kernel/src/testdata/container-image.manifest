@@ -1,0 +1,5 @@
+name=web
+caps=7
+limits=67108864,16,5000,60000
+net=euro-os.eu:443
+rootfs=euroos-rootfs-v1

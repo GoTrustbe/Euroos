@@ -84,6 +84,7 @@ mod phase3a;
 mod idm;
 mod euroid;
 mod pkg;
+mod portal;
 mod repro;
 mod access;
 mod suite;
@@ -539,6 +540,8 @@ fn main() -> Status {
 
     // EuroContainers (F2): self-test of the capability sandbox (chroot + caps + net).
     container::boot_selftest(&mut fs);
+    // 3F-1: the container RUNTIME — signed images + ResourceLimits + CoW overlay.
+    container::runtime_selftest();
 
     // EuroDisplay (E2): drive the Wayland-shaped surface protocol through a
     // lifecycle in the kernel (no_std proof). Live compositor binding +
@@ -1736,6 +1739,8 @@ fn main() -> Status {
     suite::docx_selftest();
     // 3F-4: selectable keyboard layouts (US-QWERTY/AZERTY/QWERTZ).
     ps2::keymap_selftest();
+    // 3F-7: capability-scoped app permission portals (request → ask → scoped grant).
+    portal::selftest();
 
     // EuroWeb (AB-B1): sovereign browser engine — HTML5 tokenizer + DOM.
     web::selftest();
