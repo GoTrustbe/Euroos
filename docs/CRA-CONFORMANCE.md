@@ -52,24 +52,30 @@ machine-readable SBOM (below).
 | Strong authentication | **EuroID** with memory-hard **Argon2id** (RFC 9106), lockout, persistent tamper-evident audit. | 🟢 |
 | Access control (least privilege) | EuroGuard capabilities + a declarative policy engine; JIT capability elevation with auto-revoke. | 🟢 |
 | Data minimisation | **Zero telemetry** in the OS by design. | 🟢 |
-| Resilience to DoS / availability | Watchdog, resource limits, kernel-hardening baseline. | ⬜ planned (3G-2/3G-3) |
+| Resilience to DoS / availability | **Deadman watchdog** (3G-2), resource limits, and a boot-checked **kernel-hardening baseline** — CR0.WP / SMEP / SMAP / NX all verified on + W^X per page + stack canary (3G-3). | 🟢 |
 | Modern cryptography / future-proofing | From-scratch, constant-time-minded crypto; **post-quantum** hybrid X25519+ML-KEM-768 (NIST-KAT) in the VPN (3D-9); **authenticated time** via NTS (3D-7); a **NIST-KAT HMAC-DRBG** CSPRNG gated on real entropy (3D-8). | 🟢 (KEM); ML-DSA signing ⬜ |
-| Secure logging | Append-only, tamper-evident audit log; a general persistent journal is planned (3G-1). | 🟡 |
+| Secure logging | Append-only, tamper-evident audit log **plus** a structured, queryable, severity/facility-tagged **journal** with panic-minidump capture (3G-1). | 🟢 |
+| Secure update mechanism | Signed A/B updates (Ed25519 verify-before-activate, auto-rollback); a **signed delivery channel** (signed manifest + hash-pinned signed image, 3E-2); a **signed package manager** on a content-addressed store (3E-6). | 🟢 |
+| Reproducible / verifiable builds | Reproducible kernel build (`--remap-path-prefix` + lld `/Brepro` → byte-identical `eurokernel.efi`; CI double-builds and compares) + a **signed release manifest** binding source commit → binary hashes (3E-4). | 🟢 |
 
 ## Annex II — information & instructions to the user
 
 Provided today: `README.md`, [`STATUS.md`](../STATUS.md), the deep technical
-reference, this document, and the per-release **SBOM**. A formal single point of
-contact, the support-period statement, and secure-configuration guidance will be
+reference, this document, the per-release **SBOM** + **signed release manifest**,
+a **hardware-compatibility list** ([`HARDWARE-COMPAT.md`](HARDWARE-COMPAT.md)),
+and a stated **support & release policy** ([`SUPPORT-POLICY.md`](../SUPPORT-POLICY.md)),
+which fixes the release channels and the (initial) support period. A formal
+single point of contact and secure-configuration hardening guide will be
 finalised for the first stable release.
 
 ## What is explicitly NOT done
 
 - **No CE marking, no Declaration of Conformity, no notified-body assessment.**
 - No formal technical documentation package (Annex VII) yet.
-- Support-period length not yet fixed (pre-1.0).
-- Automated vulnerability scanning of dependencies + fuzzing not yet in CI.
+- The support period is *stated* (SUPPORT-POLICY.md) but pre-1.0 and will be
+  raised to the CRA minimum before EuroOS is offered as an in-scope product.
+- Dependency-advisory scanning is not yet a CI gate (fuzzing IS — `fuzz` job).
 
-These are tracked in [`SPRINT-PLAN-PHASE3.md`](SPRINT-PLAN-PHASE3.md) (3E-8, 3G-3,
-3G-4). This file will be updated as items land; nothing here should be read as a
-claim of legal conformity while EuroOS is an alpha preview.
+These are tracked in [`SPRINT-PLAN-PHASE3.md`](SPRINT-PLAN-PHASE3.md). This file
+will be updated as items land; nothing here should be read as a claim of legal
+conformity while EuroOS is an alpha preview.
