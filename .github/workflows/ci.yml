@@ -96,6 +96,15 @@ jobs:
         run: |
           rustup toolchain install nightly-2026-05-31 --profile minimal --component rust-src --target x86_64-unknown-uefi
           rustup default nightly-2026-05-31
+      - name: Build the signed userland (the kernel include_bytes!'s the ELFs)
+        run: |
+          # Same prerequisites as the kernel-boot job: the kernel embeds
+          # userland/*.elf(+.sig), which are git-ignored build output. Without
+          # them `cargo build -p kernel` fails, so build them first here too.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+          python3 toolchain/eupkg/gen-dev-key.py
+          ./userland/build.sh
       - name: Build twice and compare kernel hashes
         run: |
           ./scripts/repro-build.sh
