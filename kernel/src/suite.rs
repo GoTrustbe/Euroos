@@ -58,6 +58,49 @@ pub fn selftest() {
     );
 }
 
+/// A real `.docx` produced by a real tool (python `zipfile`, real DEFLATE) —
+/// the same fixture eurodocio's host interop test opens. Embedded so the kernel
+/// proves the full ZIP+DEFLATE+OOXML path on live hardware.
+const REAL_DOCX: &[u8] = include_bytes!("../../crates/eurodocio/tests/real.docx");
+
+/// **[3f2] boot self-test** — open a REAL `.docx` (ZIP + DEFLATE + OOXML) on the
+/// live kernel, then save EuroSuite's own `.docx` and re-open it. Closes the
+/// "static demo" gap: the suite now reads and writes real Office containers, not
+/// pre-extracted XML.
+pub fn docx_selftest() {
+    // (1) Open a real-tool .docx — inflate its DEFLATE parts + parse the body.
+    let opened = eurodocio::docx::open(REAL_DOCX);
+    let read_ok = opened
+        .as_ref()
+        .map(|b| {
+            let t = eurodocio::docx::plain_text(b);
+            t.contains("EuroOS reads real Office files.") && t.contains("Bold heading paragraph")
+        })
+        .unwrap_or(false);
+
+    // (2) Save our own .docx and prove it is a valid ZIP that round-trips.
+    let blocks = alloc::vec![
+        Block::Paragraph(Paragraph::text("Saved by EuroSuite on EuroOS.")),
+        Block::Paragraph(Paragraph::new().run(Run::new("Bold").bold()).run(Run::new(" then plain."))),
+    ];
+    let saved = eurodocio::docx::save(&blocks);
+    let parts_ok = eurodocio::zip::read(&saved)
+        .map(|es| es.iter().any(|e| e.name == "word/document.xml"))
+        .unwrap_or(false);
+    let reopened = eurodocio::docx::open(&saved);
+    let save_ok = parts_ok
+        && reopened
+            .as_ref()
+            .map(|b| eurodocio::docx::plain_text(b).contains("Saved by EuroSuite on EuroOS."))
+            .unwrap_or(false);
+
+    let ok = read_ok && save_ok;
+    crate::serial_println!(
+        "[3f2] EuroSuite real Office files (ZIP+DEFLATE via euroflate): open-real-.docx(inflate+OOXML)={read_ok}, save-.docx(deflate)+reopen={save_ok} → {}",
+        if ok { "OK (opens & saves real .docx end-to-end) ✓" } else { "FAILED ✗" }
+    );
+}
+
 /// `eurosuite` shell command: show the capabilities + a live Calc evaluation.
 pub fn shell(args: &str) -> Vec<String> {
     // Optional: `eurosuite calc <formula>` evaluates a formula over a demo sheet.

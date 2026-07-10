@@ -364,6 +364,7 @@ name = "eurodocio"
 version = "0.1.0"
 dependencies = [
  "eurodoc",
+ "euroflate",
 ]
 
 [[package]]
@@ -409,6 +410,10 @@ dependencies = [
 
 [[package]]
 name = "eurofiles"
+version = "0.1.0"
+
+[[package]]
+name = "euroflate"
 version = "0.1.0"
 
 [[package]]
@@ -486,6 +491,10 @@ name = "eurojs"
 version = "0.1.0"
 
 [[package]]
+name = "eurokeymap"
+version = "0.1.0"
+
+[[package]]
 name = "eurolocale"
 version = "0.1.0"
 
@@ -506,6 +515,10 @@ dependencies = [
 
 [[package]]
 name = "euromedia"
+version = "0.1.0"
+
+[[package]]
+name = "euromime"
 version = "0.1.0"
 
 [[package]]
@@ -569,6 +582,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "europortal"
+version = "0.1.0"
+
+[[package]]
 name = "europq"
 version = "0.1.0"
 
@@ -595,6 +612,9 @@ version = "0.1.0"
 [[package]]
 name = "eurosandbox"
 version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+]
 
 [[package]]
 name = "euroshot"
@@ -819,10 +839,12 @@ dependencies = [
  "euroinstall",
  "eurojournal",
  "eurojs",
+ "eurokeymap",
  "eurolocale",
  "euromail",
  "euromdns",
  "euromedia",
+ "euromime",
  "euromm",
  "euromusic",
  "euronet",
@@ -832,6 +854,7 @@ dependencies = [
  "euroobserve",
  "europkg",
  "europol",
+ "europortal",
  "europrint",
  "euroreken",
  "eurorepro",

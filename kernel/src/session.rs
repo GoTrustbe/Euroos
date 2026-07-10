@@ -50,6 +50,8 @@ pub fn close_active() -> Option<u64> {
         if s.closed_at == 0 {
             s.closed_at = n.max(s.opened_at);
             crate::audit::record(crate::audit::Event::Logout, "session closed");
+            // 3F-7: session-scoped portal grants end with the session.
+            crate::portal::end_session();
             return Some(s.id);
         }
     }

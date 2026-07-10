@@ -1,0 +1,12 @@
+[package]
+name = "europortal"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroPortal — capability-scoped app permission portals (3F-7). An app requests a sensitive resource; the broker resolves it against policy (allow/deny/ask), records scoped user grants (once/session/persistent, auto-revoke), and audits every decision. Caps, not namespaces. no_std, host-testbaar."
+
+[dependencies]
+
+[features]
+default = []

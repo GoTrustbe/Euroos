@@ -72,6 +72,56 @@ pub fn run(fs: &mut dyn FileSystem, name: &str, path: &str) -> Vec<String> {
     out
 }
 
+/// **[3f1] boot self-test** — the container-runtime pieces that were missing:
+/// a **signed image** (tampered manifest refused), **ResourceLimits** enforced
+/// (allocation refused at the ceiling), and a **CoW overlay** (write copies up,
+/// delete whiteouts the lower image). Complements the chroot+caps `[container]`.
+pub fn runtime_selftest() {
+    use eurosandbox::image::{verify_image, ImageManifest, SignedImage};
+    use eurosandbox::{Layer, Overlay, ResourceLimits, Usage};
+
+    // (1) Signed image: the committed dev.key-signed manifest fixture verifies
+    // against the baked-in dev.pub; then tamper (elevate caps) and prove refusal.
+    // The manifest bytes are the exact `ImageManifest::to_bytes()` canonical form.
+    let bytes: &[u8] = include_bytes!("testdata/container-image.manifest");
+    let sig: &[u8] = include_bytes!("testdata/container-image.sig");
+    let verify = |m: &[u8], s: &[u8]| crate::crypto::verify(m, s);
+    let good = verify_image(&SignedImage { manifest: bytes.to_vec(), signature: sig.to_vec() }, &verify, Some("euroos-rootfs-v1")).is_ok();
+    // Sanity: the parsed manifest carries the constrained caps, not everything.
+    let manifest = ImageManifest::from_bytes(bytes);
+    let caps_ok = manifest.as_ref().map(|m| m.caps == 0b0111).unwrap_or(false);
+    let mut evil = manifest.unwrap_or(ImageManifest {
+        name: String::new(),
+        caps: 0,
+        limits: ResourceLimits::default(),
+        net: Vec::new(),
+        rootfs_sha256: String::new(),
+    });
+    evil.caps = u64::MAX; // grab every capability, keep the old signature
+    let tampered_refused = verify_image(&SignedImage { manifest: evil.to_bytes(), signature: sig.to_vec() }, &verify, None).is_err();
+
+    // (2) ResourceLimits: a 4 KiB memory ceiling admits 3 KiB, refuses the next 2 KiB.
+    let lim = ResourceLimits::new(4096, 0, 0, 0);
+    let mut usage = Usage::default();
+    let within = usage.check_alloc(&lim, 3072, 0).is_ok();
+    usage.charge(3072, 0);
+    let over_refused = usage.check_alloc(&lim, 2048, 0).is_err();
+
+    // (3) CoW overlay: write copies up (lower untouched), delete whiteouts.
+    let mut ov = Overlay::new();
+    let reads_lower = ov.resolve_read("/etc/os-release", true) == Layer::Lower;
+    ov.on_write("/etc/os-release");
+    let copied_up = ov.resolve_read("/etc/os-release", true) == Layer::Upper;
+    ov.on_delete("/etc/hosts");
+    let whiteout = ov.resolve_read("/etc/hosts", true) == Layer::Whiteout;
+
+    let ok = good && caps_ok && tampered_refused && within && over_refused && reads_lower && copied_up && whiteout;
+    crate::serial_println!(
+        "[3f1] EuroContainer runtime: signed-image-verify={good} (constrained-caps={caps_ok}), tampered-manifest-REFUSED={tampered_refused}, mem-limit-enforced(3K-ok,+2K-refused)={over_refused}, overlay-CoW(copy-up={copied_up},whiteout={whiteout}) → {}",
+        if ok { "OK (signed images + ResourceLimits + EuroFS overlay, on EuroGuard caps) ✓" } else { "FAILED ✗" }
+    );
+}
+
 /// Boot self-test (serial-verifiable): create a container, write into it, and
 /// prove that a `..` escape stays within the root.
 pub fn boot_selftest(fs: &mut dyn FileSystem) {

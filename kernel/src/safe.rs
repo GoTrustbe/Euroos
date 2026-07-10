@@ -38,7 +38,7 @@ pub fn selftest() {
     let sys = db.system_risk();
 
     let ok = high == 1
-        && top_cap == "Sleutelkluis"
+        && top_cap == "Key vault"
         && denied == 1
         && recs.len() >= 2
         && sys == Risk::High;

@@ -61,6 +61,9 @@ eurojournal = { path = "../crates/eurojournal" }
 europkg = { path = "../crates/europkg" }
 eurorepro = { path = "../crates/eurorepro" }
 eurogdb = { path = "../crates/eurogdb" }
+eurokeymap = { path = "../crates/eurokeymap" }
+europortal = { path = "../crates/europortal" }
+euromime = { path = "../crates/euromime" }
 euroaccess = { path = "../crates/euroaccess" }
 eurodoc = { path = "../crates/eurodoc" }
 eurodocio = { path = "../crates/eurodocio" }

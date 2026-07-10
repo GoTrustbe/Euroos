@@ -273,6 +273,26 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         }
         // P1: EuroLocale — localization for the 24 EU languages.
         "locale" => crate::locale::shell(&format!("{arg1} {arg2}")),
+        // 3F-7: app permission portals — list grants + audit.
+        "portal" => crate::portal::shell(),
+        // 3F-6: audio routing — devices, default, per-app streams.
+        "audio" => crate::audio::shell(),
+        // 3F-5: MIME type + default-app for a file (file-manager open, in the shell).
+        "open" => crate::mime::shell(fs, arg1, arg2),
+        // 3F-4: show or set the keyboard layout (us / be-azerty / fr-azerty / de-qwertz).
+        "keymap" => {
+            if arg1.is_empty() {
+                let cur = crate::ps2::layout();
+                let mut out = vec![format!("active keyboard layout: {} ({})", cur.name(), cur.tag())];
+                out.push("available: us · be-azerty · fr-azerty · de-qwertz".to_string());
+                out.push("usage: keymap <tag>".to_string());
+                out
+            } else if crate::ps2::set_layout_tag(arg1) {
+                vec![format!("keyboard layout → {} ({})", crate::ps2::layout().name(), crate::ps2::layout().tag())]
+            } else {
+                vec![format!("keymap: unknown layout '{arg1}' (us/be-azerty/fr-azerty/de-qwertz)")]
+            }
+        }
         // Q1/AH-1: EuroInstall — dry-run plan, or `--to N` for a REAL installation.
         "euroinstall" => crate::installer::shell(line),
         // O3: EuroCA — sovereign local certificate authority.

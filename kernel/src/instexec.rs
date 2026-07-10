@@ -350,6 +350,9 @@ fn provision(fs: &mut dyn FileSystem, steps: &[Step]) -> usize {
                 done += 1;
             }
             Step::ConfigureKeymap(k) => {
+                // 3F-4: actually apply the layout to the live PS/2 driver as well
+                // as persisting it (the installer runs on the target machine).
+                crate::ps2::set_layout_tag(k);
                 let _ = fs.write_file("/etc/keymap", format!("{k}\n").as_bytes());
                 done += 1;
             }
