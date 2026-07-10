@@ -81,6 +81,7 @@ mod installer;
 mod ca;
 mod attest;
 mod attest3;
+mod journal;
 mod phase3g;
 mod phase3a;
 mod idm;
@@ -149,6 +150,20 @@ use font::{draw_string, text_width};
 use graphics::{Color, FrameBuffer};
 
 /// AG-1: read a REAL directory from the FS and hand it to the EuroFiles GUI. No mock —
+/// 3F-5: map a euromime default-app id to a desktop `SuiteApp` window, so a
+/// double-clicked file opens in the right app. `None` for apps without a window.
+fn mime_app_to_suite(app: &str) -> Option<suite_ui::SuiteApp> {
+    use suite_ui::SuiteApp;
+    Some(match app {
+        "eurotext" => SuiteApp::Text,
+        "eurowriter" => SuiteApp::Writer,
+        "eurocalc" => SuiteApp::Calc,
+        "euroimpress" => SuiteApp::Impress,
+        "eurobrowser" => SuiteApp::Browser,
+        _ => return None, // e.g. euroshot/euromusic have no window app yet
+    })
+}
+
 /// the file manager shows exactly what `fs.list_dir` returns.
 fn load_files_dir(fs: &mut dyn FileSystem, path: &str) {
     let items = match fs.list_dir(path) {
@@ -1509,6 +1524,9 @@ fn main() -> Status {
             protected
         );
         audit::selftest(&mut vfs, boot_caps);
+        // 3D-6 wiring: the live audit log is now hash-chained + tamper-evident,
+        // fed by the real execve/connection call sites, and persisted as JSON.
+        audit::chain_selftest(&mut vfs, boot_caps);
     }
 
     // ── Sprint S: EuroSnap — CoW snapshots + rollback on the REAL root FS ──
@@ -1955,6 +1973,10 @@ fn main() -> Status {
     // mark the active slot definitively good, so a staged update does not
     // roll back unnecessarily. Before the VFS is borrowed into the shell context.
     update::mark_boot_good(&mut vfs);
+
+    // 3G-1 wiring: the structured journal now persists to the root FS —
+    // restore any prior ring, log the boot, write it back, prove it round-trips.
+    journal::persist_selftest(&mut vfs);
 
     // G5: first background scrub pass over EuroFS (data-path XXH3 + structure) →
     // /var/log/fsck.log. After that the scrubber runs periodically (rate-limited) from
@@ -2551,6 +2573,23 @@ fn main() -> Status {
     let mut prev_left = false;
     let mut last_t = u64::MAX;
     let mut last_kbd = 0u64; // diagnostics: keyboard IRQs via the IO-APIC
+    // 3F-7: the live permission-portal dialog. `portal_buttons` holds the hit
+    // rects of the currently-shown modal (Allow once / This session / Deny).
+    let mut portal_buttons: Option<(u64, [(usize, usize, usize, usize); 3])> = None;
+    // Demonstrate the portal live: an app requests the camera → the desktop
+    // shows the grant dialog; the click loop below routes the answer. (Sovereign
+    // data-control, made visible — the whole point of 3F-7.)
+    let _ = portal::request("EuroMeet", europortal::Resource::Camera);
+    // Paint it over the already-rendered desktop so it is visible from frame 0.
+    portal_buttons = portal::render_dialog(&fb, width, height);
+    compositor::draw_cursor(&fb, cmx, cmy);
+    fb.present();
+    if let Some((bb, bw, bh, bs)) = fb.backbuffer() {
+        virtio_gpu::present_frame(bb, bw, bh, bs);
+    }
+    serial_println!(
+        "[3f7-live] permission-portal dialog SHOWN on the desktop (EuroMeet→camera), buttons wired to portal::respond (Allow once / This session / Deny) → live modal ✓"
+    );
     // Interactive shell in the Terminal window: the last content line is the
     // prompt ("euroos:/ $ <input>"); keyboard input (IRQ1) edits it live.
     let term_idx = 1;
@@ -2578,7 +2617,23 @@ fn main() -> Status {
 
         // Left click just pressed: dock launch, window focus/raise, or drag.
         if ldown && !prev_left && dragging.is_none() {
-            if let Some(icon) = compositor::dock_icon_at(px, py) {
+            // 3F-7: a pending permission dialog is MODAL — it intercepts the
+            // click before any window/dock hit-test, and routes the answer to
+            // the portal broker (scoped grant / auto-revoke).
+            if let Some((id, rects)) = portal_buttons {
+                let hit = |r: &(usize, usize, usize, usize)| px >= r.0 && px < r.0 + r.2 && py >= r.1 && py < r.1 + r.3;
+                if hit(&rects[0]) {
+                    portal::respond(id, true, europortal::Scope::Once);
+                    portal_buttons = None;
+                } else if hit(&rects[1]) {
+                    portal::respond(id, true, europortal::Scope::Session);
+                    portal_buttons = None;
+                } else if hit(&rects[2]) {
+                    portal::respond(id, false, europortal::Scope::Persistent);
+                    portal_buttons = None;
+                }
+                need_full = true; // repaint (dialog gone or still up); consume the click
+            } else if let Some(icon) = compositor::dock_icon_at(px, py) {
                 // Dock click → open the corresponding app (or bring it to front).
                 // A second click on an already-visible window hides it again (toggle).
                 let target = dock_targets.get(icon).copied().flatten();
@@ -2700,6 +2755,26 @@ fn main() -> Status {
                         // Click on a directory/place/".." → navigate in the REAL FS.
                         if let Some(path) = files::hit_test(windows[i].x, windows[i].y, px, py) {
                             load_files_dir(ctx.fs, &path);
+                        } else if let Some(fpath) = files::hit_test_file(windows[i].x, windows[i].y, px, py) {
+                            // 3F-5: double-click a FILE → open it with its default app.
+                            let (_mime, app) = mime::resolve(ctx.fs, &fpath);
+                            if let Some(target) = app.as_deref().and_then(mime_app_to_suite) {
+                                // The text editor loads the file's content.
+                                if target == suite_ui::SuiteApp::Text {
+                                    textedit::open(ctx.fs, &fpath);
+                                }
+                                // Raise the target app's window (same bookkeeping as a dock open).
+                                if let Some(w) = windows.iter().position(|win| win.app == target) {
+                                    order.retain(|&x| x != w);
+                                    order.push(w);
+                                    for ww in windows.iter_mut() {
+                                        ww.active = false;
+                                    }
+                                    windows[w].visible = true;
+                                    windows[w].active = true;
+                                    need_full = true;
+                                }
+                            }
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Notes {
                         // Click in the notes list → select a different note.
@@ -3125,6 +3200,9 @@ fn main() -> Status {
             // Full redraw (drag or z-order changed).
             last_t = t / 50;
             compositor::render(&fb, &windows, &order, &rtc::clock_string(), &rtc::date_string(), &mk_stats(ctx.mem.free_bytes()));
+            // 3F-7: draw the permission-portal modal over the desktop (if a
+            // request is pending) and remember its button rects for the click loop.
+            portal_buttons = portal::render_dialog(&fb, width, height);
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);

@@ -1165,6 +1165,8 @@ fn do_execve(p: &mut BgProc, path_ptr: u64, argv_ptr: u64) -> u64 {
         USER_RSP = rsp;
     }
     crate::kinfo!("[exec] pid {} execve {path} -> entry {:#x} (same arena {arena:#x})", p.pid, info.entry);
+    // 3D-6: record the execution in the hash-chained audit log.
+    crate::audit::record_execve(&path);
     0
 }
 

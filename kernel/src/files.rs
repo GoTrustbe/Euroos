@@ -92,6 +92,30 @@ pub fn hit_test(win_x: usize, win_y: usize, mx: usize, my: usize) -> Option<Stri
     None
 }
 
+/// 3F-5: like [`hit_test`] but returns the path of a clicked **file** (not a
+/// directory) — so the file manager can open it with its default app.
+pub fn hit_test_file(win_x: usize, win_y: usize, mx: usize, my: usize) -> Option<String> {
+    let by = win_y + TITLEBAR_H;
+    let list_x = win_x + PLACES_W;
+    let list_y = by + 40;
+    if mx < list_x || my < list_y {
+        return None;
+    }
+    let row = (my - list_y) / ROW_H;
+    if row == 0 {
+        return None; // ".." row
+    }
+    let cur = current_path();
+    let guard = LISTING.lock();
+    let l = guard.as_ref()?;
+    let e = l.entries.get(row - 1)?;
+    if e.kind == FileKind::File {
+        Some(join(&cur, &e.name))
+    } else {
+        None
+    }
+}
+
 /// Desktop GUI: sidebar with places + the live directory list of the real EuroFS.
 pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let bx = x;

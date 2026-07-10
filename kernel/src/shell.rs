@@ -279,6 +279,8 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "audio" => crate::audio::shell(),
         // 3F-5: MIME type + default-app for a file (file-manager open, in the shell).
         "open" => crate::mime::shell(fs, arg1, arg2),
+        // 3G-1: the structured system journal (persisted across reboot).
+        "journal" | "journalctl" => crate::journal::shell(arg1),
         // 3F-4: show or set the keyboard layout (us / be-azerty / fr-azerty / de-qwertz).
         "keymap" => {
             if arg1.is_empty() {
