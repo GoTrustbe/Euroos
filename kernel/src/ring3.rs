@@ -55,6 +55,22 @@ const ARENA_SPAN: u64 = 2 * 1024 * 1024;
 /// Does `[ptr, ptr+len)` lie entirely within the arena of the running process?
 /// (Overflow-safe. If no arena has been set yet — a purely kernel-internal call —
 /// we allow it.)
+/// Recover mmap's 6th argument (`off`) from the syscall trampoline's saved
+/// register block. The trampoline pushes registers in a fixed order before
+/// remapping the sysv args; the original `r9` (Linux syscall arg6) lands at
+/// `SAVED_REGS + 40` (r15@0, r14@8, r13@16, r12@24, r10@32, r9@40). A bogus/huge
+/// value (no active saved block) is clamped to 0 by the caller's bounds checks.
+///
+/// # Safety
+/// Reads a kernel-owned saved-register slot; only meaningful inside a syscall.
+unsafe fn recover_mmap_offset() -> u64 {
+    let regs = SAVED_REGS;
+    if regs == 0 {
+        return 0;
+    }
+    core::ptr::read_volatile((regs + 40) as *const u64)
+}
+
 fn in_user_arena(ptr: u64, len: usize) -> bool {
     let base = ARENA_BASE.load(Ordering::Relaxed);
     if base == 0 {
@@ -3284,16 +3300,64 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             a1
         }
         9 => {
-            // mmap(addr, len, prot, flags, fd, off) — anonymous allocations only:
-            // bump from the heap window, page-aligned. Enough for musl TLS/malloc.
+            // mmap(addr=a1, len=a2, prot=a3, flags=a4, fd=a5, off=a6).
+            // The 6th arg (off) is in the original r9, saved by the syscall
+            // trampoline; recover it from the saved register block (r9 sits at
+            // SAVED_REGS+40 given the push order in the asm handler).
+            const MAP_ANONYMOUS: u64 = 0x20;
+            const MAP_FIXED: u64 = 0x10;
             let len = (a2 + 0xFFF) & !0xFFF;
-            let base = (HEAP_BREAK.load(Ordering::Relaxed) + 0xFFF) & !0xFFF;
-            if base + len > HEAP_END.load(Ordering::Relaxed) {
-                return (-12i64) as u64; // -ENOMEM
+            let file_backed = a4 & MAP_ANONYMOUS == 0 && (a5 as usize) < MAX_FD && a5 != u64::MAX;
+
+            // Pick the target region: MAP_FIXED honours addr (must be in-arena +
+            // page-aligned); otherwise bump the heap window.
+            let base = if a4 & MAP_FIXED != 0 && a1 != 0 {
+                let fixed = a1 & !0xFFF;
+                if !in_user_arena(fixed, len as usize) {
+                    return (-12i64) as u64; // -ENOMEM: fixed addr out of the arena
+                }
+                fixed
+            } else {
+                let b = (HEAP_BREAK.load(Ordering::Relaxed) + 0xFFF) & !0xFFF;
+                if b + len > HEAP_END.load(Ordering::Relaxed) {
+                    return (-12i64) as u64; // -ENOMEM
+                }
+                HEAP_BREAK.store(b + len, Ordering::Relaxed);
+                b
+            };
+
+            if file_backed {
+                // File-backed mmap (MAP_PRIVATE copy): read fd's file bytes at
+                // `off` and place them at `base`, zero-filling past EOF — exactly
+                // what a dynamic loader needs to map a library's LOAD segments.
+                let off = unsafe { recover_mmap_offset() } as usize;
+                let fds = OPEN_FDS.lock();
+                let fi = match fds.get(a5 as usize).and_then(|s| *s) {
+                    Some((fi, _)) => fi,
+                    None => return (-9i64) as u64, // -EBADF
+                };
+                drop(fds);
+                let files = FILES.lock();
+                let data = &files[fi].1;
+                let copy = if off < data.len() { (data.len() - off).min(len as usize) } else { 0 };
+                if !in_user_arena(base, len as usize) {
+                    return (-12i64) as u64;
+                }
+                unsafe {
+                    if copy > 0 {
+                        core::ptr::copy_nonoverlapping(data[off..].as_ptr(), base as *mut u8, copy);
+                    }
+                    // Zero the tail past EOF (mmap fills the rest of the page with 0).
+                    if (len as usize) > copy {
+                        core::ptr::write_bytes((base + copy as u64) as *mut u8, 0, len as usize - copy);
+                    }
+                }
+                crate::serial_println!("[linux-abi] mmap(fd={a5}, off={off}, {len} B) file-backed -> {base:#x} ({copy} B copied)");
+                base
+            } else {
+                crate::serial_println!("[linux-abi] mmap({len} bytes, anon) -> {base:#x}");
+                base
             }
-            HEAP_BREAK.store(base + len, Ordering::Relaxed);
-            crate::serial_println!("[linux-abi] mmap({len} bytes) -> {base:#x}");
-            base
         }
         11 => 0, // munmap — the bump allocator does not give back, but silently succeeds
         158 => {

@@ -73,6 +73,7 @@ mod euroattr;
 mod gdpr;
 mod virtio_blk;
 mod virtio_gpu;
+mod virtio_snd;
 mod virtio_net;
 mod vpn;
 mod agent;
@@ -711,7 +712,7 @@ fn main() -> Status {
         ("/bin/execee", CO, true), // S3: execve target
         ("/bin/forkpipe", CO, true), // S3: pipe() + fork() IPC
         ("/bin/ticker", CO, true), // S4: demo service (supervision)
-        ("/bin/muslprog", CO, true),
+        ("/bin/muslprog", CO | FI, true), // 3C-3: also opens /etc/mmap-test for file-backed mmap
         ("/bin/argvprog", CO, false),
         ("/bin/pieprog", CO, false),
         ("/bin/muslreal", CO | PR, true),
@@ -1117,11 +1118,18 @@ fn main() -> Status {
     // H4: EuroWASM — run a WASM module via the no-JIT interpreter; the WASI import
     // `fd_write` is mapped to an EuroGuard capability (denied without it).
     wasm::selftest();
+    // 3C-4: a REAL wasi_snapshot_preview1 host (true iovec fd_write ABI, proc_exit,
+    // random_get, clock, environ/args) running a real wasm32-wasi-shaped module.
+    wasm::wasi_selftest();
     // H4 follow-up: bind the WASM-WASI to REAL EuroSandbox containers (capability +
     // net scope determine whether an import is allowed) — the sovereign sandbox model closed.
     wasm::container_selftest();
     // H5: the REAL Wayland wire-protocol server — a handshake → a titled window.
     wayland::selftest();
+
+    // 3C-3: seed a known file so the muslprog boot binary can prove FILE-BACKED
+    // mmap — it opens this and mmaps its contents into its address space.
+    ring3::register_file("/etc/mmap-test", b"EUROOS-FILEMMAP-OK-0123456789abcdef".to_vec());
 
     // ── EXEC-BY-NAME: a small "boot script" that loads and runs every program by
     // NAME from EuroFS. The kernel looks up the caps + ABI per path in the program
@@ -1824,6 +1832,8 @@ fn main() -> Status {
     // BB-2: NATIVE modern-virtio transport + virtio-gpu driver against a real
     // device (init handshake + GET_DISPLAY_INFO over the control virtqueue).
     virtio_gpu::selftest();
+    // 3B-7: native modern-virtio virtio-sound driver (control-queue round-trip).
+    virtio_snd::selftest();
 
     // BB-4: EuroPrint — real IPP-over-TCP round-trip to a network printer/CUPS
     // (10.0.2.2:631 via SLIRP host); Get-Printer-Attributes + Print-Job.
