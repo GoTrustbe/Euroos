@@ -276,6 +276,9 @@ pub static SCHED_SKIPS: AtomicU64 = AtomicU64::new(0);
 pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     crate::interrupts::TICKS.fetch_add(1, Ordering::Relaxed);
     crate::interrupts::send_timer_eoi();
+    // 3G-2: the independent deadman check — runs even while the main loop is busy;
+    // trips if the loop stopped petting the watchdog (a hang).
+    crate::watchdog::tick_check();
     // BUG-007: the timer must NEVER block on SCHED. Task-context code (the desktop loop,
     // syscalls, supervise/reap) holds SCHED.lock() with interrupts ENABLED; a blocking
     // acquire here would deadlock the core — this handler spins with interrupts off while

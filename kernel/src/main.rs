@@ -56,6 +56,7 @@ mod ps2;
 mod ring3;
 mod rtc;
 mod sched;
+mod watchdog;
 mod serial;
 mod gdbstub;
 mod session;
@@ -1628,6 +1629,11 @@ fn main() -> Status {
         vault::tpm_seal_selftest(mk);
     }
 
+    // 3E-1 wiring: the FDE unseal-at-boot cycle — enrol (seal + persist), then
+    // re-read the sealed blob and unseal it via the TPM (PCR16) as a normal boot
+    // would, auto-recovering the disk key on an untampered system.
+    instexec::fde_unseal_selftest(&mut vfs);
+
     // Z: EuroHealth — SMART (if NVMe) + FS scrub + memory → health score.
     {
         use eurofs::FileSystem;
@@ -2603,7 +2609,22 @@ fn main() -> Status {
     // The E2E test waits for this before it injects keys; also proves that HLT-idle
     // does not hold the loop.
     serial_println!("[desktop] interactive loop started — input + shell live");
+    // 3G-2: arm the live deadman watchdog (5 s grace at 100 Hz). The loop pets it
+    // each iteration; the scheduler tick checks it independently.
+    watchdog::arm(500);
+    let mut wd_reported = false;
     loop {
+        // 3G-2: the main loop is alive → pet the watchdog.
+        watchdog::pet();
+        // One-shot liveness proof once the loop has petted a while.
+        if !wd_reported && watchdog::pets() >= 20 {
+            wd_reported = true;
+            serial_println!(
+                "[3g2-wire] deadman watchdog LIVE: main loop petting (pets={}), scheduler-tick checking, tripped={} → OK (hang would trip the timer-IRQ deadman) ✓",
+                watchdog::pets(),
+                watchdog::is_tripped()
+            );
+        }
         // Host-driven serial console: execute any command streamed in over COM1
         // (the load-test harness drives the shell this way — no GUI/QMP needed).
         scon::poll(&mut ctx);
