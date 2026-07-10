@@ -97,6 +97,73 @@ impl Journal {
             .collect()
     }
 
+    /// Serialize the ring to a compact binary blob for on-disk persistence.
+    /// Layout: magic "EJRN" · u32 count · u64 next_seq · u64 dropped, then per
+    /// entry: u64 seq · u64 ts · u8 severity · u16 flen · facility · u32 mlen ·
+    /// message. Big-endian.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut o = Vec::new();
+        o.extend_from_slice(b"EJRN");
+        o.extend_from_slice(&(self.ring.len() as u32).to_be_bytes());
+        o.extend_from_slice(&self.next_seq.to_be_bytes());
+        o.extend_from_slice(&self.dropped.to_be_bytes());
+        for e in &self.ring {
+            o.extend_from_slice(&e.seq.to_be_bytes());
+            o.extend_from_slice(&e.ts.to_be_bytes());
+            o.push(e.severity as u8);
+            let f = e.facility.as_bytes();
+            o.extend_from_slice(&(f.len().min(u16::MAX as usize) as u16).to_be_bytes());
+            o.extend_from_slice(&f[..f.len().min(u16::MAX as usize)]);
+            let m = e.message.as_bytes();
+            o.extend_from_slice(&(m.len() as u32).to_be_bytes());
+            o.extend_from_slice(m);
+        }
+        o
+    }
+
+    /// Reload a journal from [`Self::encode`] output with capacity `cap`.
+    /// Returns `None` on a bad magic / truncated blob.
+    pub fn decode(data: &[u8], cap: usize) -> Option<Journal> {
+        if data.len() < 24 || &data[0..4] != b"EJRN" {
+            return None;
+        }
+        let count = u32::from_be_bytes([data[4], data[5], data[6], data[7]]) as usize;
+        let next_seq = u64::from_be_bytes(data[8..16].try_into().ok()?);
+        let dropped = u64::from_be_bytes(data[16..24].try_into().ok()?);
+        let mut j = Journal::new(cap);
+        j.next_seq = next_seq;
+        j.dropped = dropped;
+        let mut p = 24;
+        for _ in 0..count {
+            if p + 19 > data.len() {
+                return None;
+            }
+            let seq = u64::from_be_bytes(data[p..p + 8].try_into().ok()?);
+            let ts = u64::from_be_bytes(data[p + 8..p + 16].try_into().ok()?);
+            let severity = severity_from_u8(data[p + 16]);
+            let flen = u16::from_be_bytes([data[p + 17], data[p + 18]]) as usize;
+            p += 19;
+            if p + flen + 4 > data.len() {
+                return None;
+            }
+            let facility = core::str::from_utf8(&data[p..p + flen]).ok()?.to_string();
+            p += flen;
+            let mlen = u32::from_be_bytes(data[p..p + 4].try_into().ok()?) as usize;
+            p += 4;
+            if p + mlen > data.len() {
+                return None;
+            }
+            let message = core::str::from_utf8(&data[p..p + mlen]).ok()?.to_string();
+            p += mlen;
+            // Bound to cap (keep newest).
+            if j.ring.len() == j.cap {
+                j.ring.pop_front();
+            }
+            j.ring.push_back(Entry { seq, ts, severity, facility, message });
+        }
+        Some(j)
+    }
+
     /// Export the whole journal as a JSON array (for a SIEM / support bundle).
     pub fn to_json(&self) -> String {
         let mut s = String::from("[");
@@ -115,6 +182,19 @@ impl Journal {
         }
         s.push(']');
         s
+    }
+}
+
+fn severity_from_u8(v: u8) -> Severity {
+    match v {
+        0 => Severity::Emerg,
+        1 => Severity::Alert,
+        2 => Severity::Crit,
+        3 => Severity::Err,
+        4 => Severity::Warning,
+        5 => Severity::Notice,
+        7 => Severity::Debug,
+        _ => Severity::Info,
     }
 }
 
@@ -162,6 +242,37 @@ mod tests {
         let s = j.to_json();
         assert!(s.contains("\"severity\":\"err\"") && s.contains("\"facility\":\"net\""));
         assert!(s.contains("link down"));
+    }
+
+    #[test]
+    fn encode_decode_roundtrip() {
+        let j = j();
+        let blob = j.encode();
+        let back = Journal::decode(&blob, 100).expect("decode");
+        assert_eq!(back.len(), 4);
+        assert_eq!(back.to_json(), j.to_json());
+        // Sequence + drop counters survive.
+        assert_eq!(back.query(Some(Severity::Err), None).len(), 1);
+        assert_eq!(back.query(None, Some("net")).len(), 2);
+    }
+
+    #[test]
+    fn decode_rejects_bad_magic() {
+        assert!(Journal::decode(b"XXXX not a journal", 10).is_none());
+        assert!(Journal::decode(&[], 10).is_none());
+    }
+
+    #[test]
+    fn decode_respects_capacity_keeping_newest() {
+        let mut j = Journal::new(100);
+        for i in 0..10 {
+            j.log(i, Severity::Info, "f", "m");
+        }
+        let blob = j.encode();
+        // Reload into a smaller ring — keeps the newest 3.
+        let back = Journal::decode(&blob, 3).unwrap();
+        assert_eq!(back.len(), 3);
+        assert_eq!(back.query(None, None).first().unwrap().seq, 7);
     }
 
     #[test]
