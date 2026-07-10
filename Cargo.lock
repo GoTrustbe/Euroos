@@ -578,6 +578,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "europortal"
+version = "0.1.0"
+
+[[package]]
 name = "europq"
 version = "0.1.0"
 
@@ -604,6 +608,9 @@ version = "0.1.0"
 [[package]]
 name = "eurosandbox"
 version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+]
 
 [[package]]
 name = "euroshot"
@@ -842,6 +849,7 @@ dependencies = [
  "euroobserve",
  "europkg",
  "europol",
+ "europortal",
  "europrint",
  "euroreken",
  "eurorepro",

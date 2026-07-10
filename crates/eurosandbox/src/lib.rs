@@ -11,6 +11,14 @@
 
 extern crate alloc;
 
+pub mod image;
+pub mod limits;
+pub mod overlay;
+
+pub use image::{verify_image, ImageError, ImageManifest, SignedImage};
+pub use limits::{LimitBreach, ResourceLimits, Usage};
+pub use overlay::{Layer, Overlay};
+
 use alloc::string::String;
 use alloc::vec::Vec;
 

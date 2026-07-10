@@ -7,3 +7,6 @@ authors.workspace = true
 description = "EuroSandbox — capability-scoped containers via het EuroGuard-model (plan F2). Pure no_std-logica, host-getest."
 
 [dependencies]
+
+[dev-dependencies]
+ed25519-dalek = { version = "2", default-features = false, features = ["rand_core"] }
