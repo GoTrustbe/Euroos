@@ -1732,6 +1732,10 @@ fn main() -> Status {
 
     // EuroSuite (ES-Core/IO/Calc): sovereign office suite on one UDM.
     suite::selftest();
+    // 3F-2: open & save REAL .docx (ZIP + DEFLATE via euroflate + OOXML).
+    suite::docx_selftest();
+    // 3F-4: selectable keyboard layouts (US-QWERTY/AZERTY/QWERTZ).
+    ps2::keymap_selftest();
 
     // EuroWeb (AB-B1): sovereign browser engine — HTML5 tokenizer + DOM.
     web::selftest();

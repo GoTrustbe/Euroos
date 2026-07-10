@@ -1,16 +1,66 @@
-//! PS/2 keyboard (i8042), scancode set 1 — US QWERTY.
+//! PS/2 keyboard (i8042), scancode set 1. The active **keyboard layout** is
+//! selectable (3F-4): US-QWERTY (default), BE/FR-AZERTY, DE-QWERTZ — decoded by
+//! the host-tested [`eurokeymap`] crate.
 //!
 //! **IRQ-driven**: the IRQ1 handler (interrupts.rs) reads the scancode from port
 //! 0x60 and pushes it into a ring buffer via [`push_scancode`]. The shell fetches
 //! decoded characters with [`poll_key`]. This way no key is lost if
 //! the shell is not running for a moment due to the scheduler (unlike with polling).
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+use eurokeymap::Layout;
 use spin::Mutex;
 use x86_64::instructions::interrupts::without_interrupts;
 
 static SHIFT: AtomicBool = AtomicBool::new(false);
+/// The active layout, as `Layout::ALL` index. Default 0 = US QWERTY.
+static LAYOUT: AtomicU8 = AtomicU8::new(0);
+
+/// Set the active keyboard layout (installer keymap / `keymap` command).
+pub fn set_layout(layout: Layout) {
+    let idx = Layout::ALL.iter().position(|&l| l == layout).unwrap_or(0);
+    LAYOUT.store(idx as u8, Ordering::Relaxed);
+}
+
+/// The active keyboard layout.
+pub fn layout() -> Layout {
+    Layout::ALL[LAYOUT.load(Ordering::Relaxed) as usize % Layout::ALL.len()]
+}
+
+/// Set the layout from a tag (`"be-azerty"`, `"de"`, …); `true` if recognised.
+pub fn set_layout_tag(tag: &str) -> bool {
+    match Layout::parse(tag) {
+        Some(l) => {
+            set_layout(l);
+            true
+        }
+        None => false,
+    }
+}
+
+/// `[3f4]` boot self-test — the same physical keys decode differently per active
+/// layout (the AZERTY/QWERTZ transpositions), and the active layout is
+/// switchable (installer keymap). Restores US-QWERTY afterwards.
+pub fn keymap_selftest() {
+    let saved = layout();
+    // Scancode 0x10 = the physical 'Q' key; 0x2C = physical 'Z'; 0x15 = physical 'Y'.
+    set_layout(Layout::UsQwerty);
+    let us = eurokeymap::translate(layout(), 0x10, false); // 'q'
+    set_layout(Layout::BeAzerty);
+    let be = eurokeymap::translate(layout(), 0x10, false); // 'a'
+    let be_digit = eurokeymap::translate(layout(), 0x02, true); // shift → '1'
+    set_layout(Layout::DeQwertz);
+    let de = eurokeymap::translate(layout(), 0x2C, false); // 'y'
+    let switched = set_layout_tag("fr-azerty") && layout() == Layout::FrAzerty;
+    set_layout(saved);
+
+    let ok = us == Some('q') && be == Some('a') && be_digit == Some('1') && de == Some('y') && switched;
+    crate::serial_println!(
+        "[3f4] keyboard layouts (eurokeymap): US 'Q'-key={us:?}, AZERTY same key={be:?} (+shift-digit={be_digit:?}), QWERTZ 'Z'-key={de:?}, switch-by-tag={switched} → {}",
+        if ok { "OK (US-QWERTY/BE-AZERTY/FR-AZERTY/DE-QWERTZ, installer-selectable) ✓" } else { "FAILED ✗" }
+    );
+}
 
 const RING_SIZE: usize = 256;
 
@@ -68,49 +118,12 @@ pub fn poll_key() -> Option<char> {
             0xAA | 0xB6 => SHIFT.store(false, Ordering::Relaxed),
             _ if sc & 0x80 != 0 => {} // ignore other break codes
             _ => {
-                if let Some(c) = translate(sc, SHIFT.load(Ordering::Relaxed)) {
+                // Decode under the active layout (host-tested in eurokeymap).
+                if let Some(c) = eurokeymap::translate(layout(), sc, SHIFT.load(Ordering::Relaxed)) {
                     return Some(c);
                 }
             }
         }
     }
     None
-}
-
-fn translate(sc: u8, shift: bool) -> Option<char> {
-    let base = match sc {
-        0x02 => '1', 0x03 => '2', 0x04 => '3', 0x05 => '4', 0x06 => '5',
-        0x07 => '6', 0x08 => '7', 0x09 => '8', 0x0A => '9', 0x0B => '0',
-        0x0C => '-', 0x0D => '=',
-        0x0E => '\u{8}', // backspace
-        0x0F => '\t',
-        0x10 => 'q', 0x11 => 'w', 0x12 => 'e', 0x13 => 'r', 0x14 => 't',
-        0x15 => 'y', 0x16 => 'u', 0x17 => 'i', 0x18 => 'o', 0x19 => 'p',
-        0x1A => '[', 0x1B => ']',
-        0x1C => '\r', // enter
-        0x1E => 'a', 0x1F => 's', 0x20 => 'd', 0x21 => 'f', 0x22 => 'g',
-        0x23 => 'h', 0x24 => 'j', 0x25 => 'k', 0x26 => 'l', 0x27 => ';',
-        0x28 => '\'', 0x29 => '`', 0x2B => '\\',
-        0x2C => 'z', 0x2D => 'x', 0x2E => 'c', 0x2F => 'v', 0x30 => 'b',
-        0x31 => 'n', 0x32 => 'm', 0x33 => ',', 0x34 => '.', 0x35 => '/',
-        0x39 => ' ',
-        _ => return None,
-    };
-    if shift && base.is_ascii_alphabetic() {
-        Some(base.to_ascii_uppercase())
-    } else if shift {
-        Some(shifted_symbol(base))
-    } else {
-        Some(base)
-    }
-}
-
-fn shifted_symbol(c: char) -> char {
-    match c {
-        '1' => '!', '2' => '@', '3' => '#', '4' => '$', '5' => '%',
-        '6' => '^', '7' => '&', '8' => '*', '9' => '(', '0' => ')',
-        '-' => '_', '=' => '+', '/' => '?', '.' => '>', ',' => '<',
-        ';' => ':', '\'' => '"', '\\' => '|', '[' => '{', ']' => '}', '`' => '~',
-        _ => c,
-    }
 }

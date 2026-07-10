@@ -35,9 +35,24 @@ pub fn selftest() {
     Locale::new(Lang::Sv).sort(&mut words);
     let collation_ok = words == ["abc", "zoo", "åes", "ärlig", "öl"];
 
-    let ok = money_ok && date_ok && plural_ok && collation_ok;
+    // 3F-4: month + weekday names now complete for ALL 24 languages (CLDR).
+    let mut names_ok = true;
+    for lang in Lang::ALL {
+        for m in 1..=12u8 {
+            names_ok &= eurolocale::datefmt::month_name(lang, m).is_some();
+        }
+        for d in 0..7u8 {
+            names_ok &= eurolocale::datefmt::weekday_name(lang, d).is_some();
+        }
+    }
+    // Live long-form date with a computed weekday (Greek): 2026-06-06 is a Saturday.
+    let dow = eurolocale::datefmt::day_of_week(2026, 6, 6);
+    let el_day = eurolocale::datefmt::weekday_name(Lang::El, dow) == Some("Σάββατο");
+    let bg_long = eurolocale::datefmt::format_long(Lang::Bg, 2026, 12, 31) == "31 декември 2026";
+
+    let ok = money_ok && date_ok && plural_ok && collation_ok && names_ok && el_day && bg_long;
     crate::serial_println!(
-        "[loc] EuroLocale: 24 EU languages — currency(€1.234,56/€1,234.56/1.234,56 €)={money_ok}, date(nl/en/sv)={date_ok}, plural(pl/fr/en)={plural_ok}, collation(sv å<ä<ö after z)={collation_ok} → {}",
+        "[loc] EuroLocale: 24 EU languages — currency={money_ok}, date(nl/en/sv)={date_ok}, plural(pl/fr/en)={plural_ok}, collation={collation_ok}, month+weekday-names(all 24, CLDR)={names_ok}, weekday-calc(el Σάββατο)={el_day}, long-date(bg)={bg_long} → {}",
         if ok { "OK (sovereign localization for the whole EU) ✓" } else { "FAILED" }
     );
 }
