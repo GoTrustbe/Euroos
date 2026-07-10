@@ -72,6 +72,7 @@ mod euroattr;
 mod gdpr;
 mod virtio_blk;
 mod virtio_gpu;
+mod virtio_snd;
 mod virtio_net;
 mod vpn;
 mod agent;
@@ -1797,6 +1798,8 @@ fn main() -> Status {
     // BB-2: NATIVE modern-virtio transport + virtio-gpu driver against a real
     // device (init handshake + GET_DISPLAY_INFO over the control virtqueue).
     virtio_gpu::selftest();
+    // 3B-7: native modern-virtio virtio-sound driver (control-queue round-trip).
+    virtio_snd::selftest();
 
     // BB-4: EuroPrint — real IPP-over-TCP round-trip to a network printer/CUPS
     // (10.0.2.2:631 via SLIRP host); Get-Printer-Attributes + Print-Job.

@@ -56,7 +56,7 @@ that turns "engine works" into "feature works end-to-end".
 | 3B-4 | ACPI S3 suspend/resume | 🟡→🔒 | CPU + device save/restore across firmware sleep. Not headless-verifiable. |
 | 3B-5 | USB hubs + USB EuroFS writeback | 🟡 | Multi-tier hubs; write + mount a USB-resident EuroFS volume. |
 | 3B-6 | NVMe MSI-X completion wait-queue | 🟢 | IRQ-blocking wait-queue (vs poll); NVMe MSI-X; live-FS auto-remap. Mostly in-QEMU. |
-| 3B-7 | **Audio device driver** **[NEW]** | 🔒 | HDA + USB-audio codec driver (virtio-audio testable in VM first, then metal). Engine half of audio; desktop/routing half is 3F-6. |
+| 3B-7 | **Audio device driver** **[NEW]** | 🟢 **virtio-snd VM-verified; HDA/USB metal pending** | New [`virtio_snd`](../kernel/src/virtio_snd.rs): a native **modern-virtio (virtio-1.0)** **virtio-sound** driver on the same PCI-caps transport as virtio-gpu — reset→VERSION_1→control-vq→DRIVER_OK, reads the device config (jacks/streams/chmaps), and round-trips a `VIRTIO_SND_R_PCM_INFO` control request the device answers `VIRTIO_SND_S_OK`. `[3b7]` verified in QEMU with `-device virtio-sound-pci` (2 PCM streams; harness `scripts/run-snd.py`). **REMAINING:** actual PCM playback (SET_PARAMS→PREPARE→START + PCM frames on the tx queue, fed by the [`euroaudio::Router`] mix), and the real Intel-HDA / USB-audio codec paths on metal (3F-6 is the routing half). |
 | 3B-8 | **Bluetooth** **[NEW]** | 🔒 | HCI stack + pairing; peripherals + BT audio on real hardware. |
 | 3B-9 | **Power & thermal** **[NEW]** | 🔒 | CPU freq scaling/governors, ACPI battery, thermal throttling. Laptop usability + eco-argument. |
 | 3B-10 | **Multi-monitor / HiDPI / display-hotplug** **[NEW]** | 🔒 | Extends 3B-1 (scanout) into a usable desktop on real panels. |
