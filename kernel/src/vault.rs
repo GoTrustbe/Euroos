@@ -84,55 +84,50 @@ pub fn selftest(master_key: [u8; 32], from_tpm: bool) {
     *VAULT.lock() = Some(v);
 }
 
-/// **AF / Zero-Trust PCR-seal boot self-test** — bind a secret to the measured-
-/// boot state. Reads the real PCR (16, extended by O1), seals a vault
-/// PCR-bound, and proves: same PCRs → opens; a TAMPERED boot (different
-/// PCR digest) → denied; and the PCR-bound blob does NOT open with the bare master
-/// key (the binding is real, not cosmetic). This way e.g. the FDE master opens only on a
-/// non-tampered system.
-pub fn pcr_seal_selftest(master_key: [u8; 32]) {
-    // The measured-boot measurement: PCR 16 (which the O1 self-test extends; fallback = synthetic).
-    let pcr = crate::tpm::read_pcr(16).unwrap_or([0x11u8; 32]);
+/// **3D-1: real TPM-sealed unseal, only on an untampered boot.** This replaces
+/// the earlier *software* PCR-seal (a SHA-256 KDF that still kept the master key
+/// in kernel RAM). Here the vault master — and, wired the same way, the FDE key
+/// — is sealed **inside the TPM** under a `PolicyPCR` over the measured-boot PCR
+/// (`TPM2_Create`); the plaintext key is never derivable from RAM.
+///
+/// Proves, on a live (emulated) TPM: (1) same boot state → the TPM releases the
+/// exact key (`TPM2_Unseal`); (2) a **tampered boot** (the PCR gets extended with
+/// a different measurement) → the TPM **itself refuses** (`TPM_RC_POLICY_FAIL`),
+/// fail-closed in hardware, not in software; (3) with no TPM the key simply stays
+/// sealed — there is no software fallback that would hand the key over.
+pub fn tpm_seal_selftest(master_key: [u8; 32]) {
     let from_tpm = crate::tpm::present();
+    let pcr = crate::tpm::SEAL_PCR;
 
-    let mut v = Vault::new();
-    v.set("fde-master", b"disk-key-material", CAP_DB_ACCESS);
+    if !from_tpm {
+        crate::serial_println!(
+            "[3d1] TPM-seal: no TPM present → FDE/vault master stays sealed (fail-closed; no software fallback hands the key over) — needs a TPM to exercise"
+        );
+        return;
+    }
 
-    let nonce = match crate::tpm::get_random(12) {
-        Some(b) => {
-            let mut n = [0u8; 12];
-            n.copy_from_slice(&b[..12]);
-            n
-        }
-        None => [0x5Au8; 12],
-    };
-    let sealed = v.seal_to_pcr(&master_key, &pcr, &nonce);
-
-    // Same PCR state → unseals the secret.
-    let good = sealed
+    // (1) Seal the master to the current measured-boot state, then unseal it.
+    let sealed = crate::tpm::seal_to_pcr(pcr, &master_key);
+    let unseal_ok = sealed
         .as_ref()
-        .ok()
-        .and_then(|b| Vault::unseal_from_pcr(b, &master_key, &pcr).ok())
-        .and_then(|v2| v2.get("fde-master", CAP_DB_ACCESS).ok())
-        .map(|d| d == b"disk-key-material")
+        .and_then(|(pv, pb)| crate::tpm::unseal_from_pcr(pcr, pv, pb))
+        .map(|k| k.len() == 32 && k[..] == master_key[..])
         .unwrap_or(false);
 
-    // Tampered boot: one PCR byte different → unseal denied.
-    let mut tampered = pcr;
-    tampered[0] ^= 0x01;
+    // (2) Tamper the boot state: extend the PCR with a *different* measurement,
+    // then attempt to unseal the SAME blob — the TPM must now refuse it.
+    let tamper_digest = [0x9Eu8; 32];
+    let tamper_extended = crate::tpm::extend_pcr(pcr, &tamper_digest);
     let tamper_denied = sealed
         .as_ref()
-        .ok()
-        .map(|b| Vault::unseal_from_pcr(b, &master_key, &tampered).is_err())
+        .map(|(pv, pb)| crate::tpm::unseal_from_pcr(pcr, pv, pb).is_none())
         .unwrap_or(false);
 
-    // The PCR-bound blob does NOT open with the bare master (binding is real).
-    let binding_real = sealed.as_ref().ok().map(|b| Vault::unseal(b, &master_key).is_err()).unwrap_or(false);
-
-    let ok = good && tamper_denied && binding_real;
+    let ok = sealed.is_some() && unseal_ok && tamper_extended && tamper_denied;
     crate::serial_println!(
-        "[af-seal] PCR-seal (secret bound to measured boot, PCR16-from-TPM={from_tpm}): same-PCR-opens={good}, tampered-boot-denied={tamper_denied}, binding-real(bare-master-fails)={binding_real} → {}",
-        if ok { "OK (FDE/vault-master opens only on a non-tampered system) ✓" } else { "FAILED" }
+        "[3d1] TPM-seal (vault master sealed INSIDE the TPM to PCR{pcr}, real TPM2 Create/Load/Unseal): sealed={}, same-boot-unseal={unseal_ok}, tamper-extend-OK={tamper_extended}, tampered-boot-REFUSED-by-TPM={tamper_denied} → {}",
+        sealed.is_some(),
+        if ok { "OK (key released only on an untampered boot, hardware-enforced) ✓" } else { "FAILED" }
     );
 }
 

@@ -11,3 +11,4 @@ doctest = false
 [dependencies]
 eurofs = { path = "../eurofs" }
 spin = "0.9"
+sha2 = { version = "0.10", default-features = false }

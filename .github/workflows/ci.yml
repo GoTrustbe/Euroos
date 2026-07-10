@@ -21,6 +21,52 @@ jobs:
       - name: cargo test (host)
         run: cargo test
 
+  # ── CRA (Cyber Resilience Act) evidence: a machine-readable CycloneDX SBOM for
+  #    every build, deterministic (reproducible from the committed Cargo.lock) and
+  #    self-validated. Uploaded as an artifact + attached to releases. This is the
+  #    Annex II obligation; it must exist before the 11 Sep 2026 reporting date.
+  sbom:
+    name: SBOM (CycloneDX, CRA Annex II)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust nightly
+        run: |
+          rustup toolchain install nightly-2026-05-31 --profile minimal --component rust-src
+          rustup default nightly-2026-05-31
+      - name: Generate the SBOM
+        run: |
+          python3 toolchain/sbom/gen-sbom.py \
+            --version "${GITHUB_REF_NAME:-alpha}" \
+            --timestamp "$(git log -1 --format=%cI)" \
+            -o sbom.cdx.json
+      - name: Validate the SBOM (structural CycloneDX 1.5 check)
+        run: python3 toolchain/sbom/gen-sbom.py --check sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+      - name: Attach the SBOM to a release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sbom.cdx.json
+
+  # ── Fuzz the untrusted-input parsers (must never panic on malformed input) —
+  #    the fuzzing half of the CRA "security testing" evidence (3G-4). Runs the
+  #    deterministic eurofuzz harness (seeded → any failure is replayable).
+  fuzz:
+    name: Fuzz parsers (eurofuzz, CRA)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust nightly
+        run: |
+          rustup toolchain install nightly-2026-05-31 --profile minimal --component rust-src
+          rustup default nightly-2026-05-31
+      - name: Run the fuzz harness (200k iterations/parser)
+        run: cargo test -p eurofuzz --release
+
   # ── Informational only (continue-on-error): clippy lints drift between nightly
   #    versions, so -D warnings must never block a green run.
   lint:

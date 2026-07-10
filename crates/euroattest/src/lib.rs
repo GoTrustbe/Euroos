@@ -99,6 +99,44 @@ pub fn verify(
     Ok(())
 }
 
+fn hex(b: &[u8]) -> alloc::string::String {
+    let mut s = alloc::string::String::with_capacity(b.len() * 2);
+    for x in b {
+        s.push(core::char::from_digit((x >> 4) as u32, 16).unwrap());
+        s.push(core::char::from_digit((x & 0xf) as u32, 16).unwrap());
+    }
+    s
+}
+
+/// A full attestation report a verifier consumes over the network: the AK
+/// public key + the signed quote. `to_json` serializes it for HTTPS transport;
+/// the verifier deserializes it and calls [`verify`].
+pub struct Report<'a> {
+    pub ak_pubkey: &'a [u8; 32],
+    pub quote: &'a Quote,
+}
+impl Report<'_> {
+    /// Serialize the report as JSON (the on-the-wire attestation document).
+    pub fn to_json(&self) -> alloc::string::String {
+        use alloc::string::String;
+        let mut s = String::from("{\"ak\":\"");
+        s.push_str(&hex(self.ak_pubkey));
+        s.push_str("\",\"nonce\":\"");
+        s.push_str(&hex(&self.quote.nonce));
+        s.push_str("\",\"sig\":\"");
+        s.push_str(&hex(&self.quote.signature));
+        s.push_str("\",\"pcrs\":[");
+        for (i, (idx, h)) in self.quote.pcrs.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            s.push_str(&alloc::format!("{{\"index\":{},\"value\":\"{}\"}}", idx, hex(h)));
+        }
+        s.push_str("]}");
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,6 +12,8 @@
 
 extern crate alloc;
 
+pub mod bundle;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 

@@ -290,6 +290,13 @@ name = "euroaudio"
 version = "0.1.0"
 
 [[package]]
+name = "euroaudit"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "euroca"
 version = "0.1.0"
 dependencies = [
@@ -340,6 +347,14 @@ name = "eurodisplay"
 version = "0.1.0"
 
 [[package]]
+name = "eurodns"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "sha2",
+]
+
+[[package]]
 name = "eurodoc"
 version = "0.1.0"
 
@@ -348,6 +363,13 @@ name = "eurodocio"
 version = "0.1.0"
 dependencies = [
  "eurodoc",
+]
+
+[[package]]
+name = "euroentropy"
+version = "0.1.0"
+dependencies = [
+ "sha2",
 ]
 
 [[package]]
@@ -401,6 +423,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "eurofsid"
+version = "0.1.0"
+
+[[package]]
+name = "eurofuzz"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "euroca",
+ "eurodns",
+ "euronet",
+ "europol",
+ "eurotpm",
+ "eurowallet",
+]
+
+[[package]]
 name = "eurofw"
 version = "0.1.0"
 
@@ -434,6 +473,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "eurojournal"
+version = "0.1.0"
+
+[[package]]
 name = "eurojs"
 version = "0.1.0"
 
@@ -448,6 +491,13 @@ version = "0.1.0"
 [[package]]
 name = "euromail"
 version = "0.1.0"
+
+[[package]]
+name = "euromdns"
+version = "0.1.0"
+dependencies = [
+ "eurodns",
+]
 
 [[package]]
 name = "euromedia"
@@ -481,6 +531,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "eurontfs"
+version = "0.1.0"
+
+[[package]]
+name = "euronts"
+version = "0.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "hkdf",
+ "sha2",
+]
+
+[[package]]
 name = "euroobserve"
 version = "0.1.0"
 
@@ -490,6 +553,13 @@ version = "0.1.0"
 
 [[package]]
 name = "europol"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+]
+
+[[package]]
+name = "europq"
 version = "0.1.0"
 
 [[package]]
@@ -529,6 +599,7 @@ name = "eurosmb"
 version = "0.1.0"
 dependencies = [
  "eurofs",
+ "sha2",
  "spin",
 ]
 
@@ -568,17 +639,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "euroverity"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "sha2",
+]
+
+[[package]]
 name = "eurovpn"
 version = "0.1.0"
 dependencies = [
  "chacha20poly1305",
+ "europq",
  "hkdf",
  "sha2",
  "x25519-dalek",
 ]
 
 [[package]]
+name = "eurowallet"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "sha2",
+]
+
+[[package]]
 name = "eurowasm"
+version = "0.1.0"
+
+[[package]]
+name = "eurowatchdog"
 version = "0.1.0"
 
 [[package]]
@@ -673,6 +765,7 @@ dependencies = [
  "euroarchive",
  "euroattest",
  "euroaudio",
+ "euroaudit",
  "euroca",
  "eurocalc",
  "eurocalendar",
@@ -683,8 +776,10 @@ dependencies = [
  "eurocrash",
  "eurodevice",
  "eurodisplay",
+ "eurodns",
  "eurodoc",
  "eurodocio",
+ "euroentropy",
  "euroexfat",
  "euroext",
  "eurofat",
@@ -693,21 +788,25 @@ dependencies = [
  "eurofiles",
  "eurofont",
  "eurofs",
+ "eurofsid",
  "eurofw",
  "eurogpu",
  "eurohealth",
  "euroid",
  "euroidm",
  "euroinstall",
+ "eurojournal",
  "eurojs",
  "eurolocale",
  "euromail",
+ "euromdns",
  "euromedia",
  "euromm",
  "euromusic",
  "euronet",
  "euronfs",
  "euronotes",
+ "euronts",
  "euroobserve",
  "europkg",
  "europol",
@@ -724,8 +823,11 @@ dependencies = [
  "euroupdate",
  "eurousb",
  "eurovault",
+ "euroverity",
  "eurovpn",
+ "eurowallet",
  "eurowasm",
+ "eurowatchdog",
  "euroweb",
  "eurowifi",
  "eurowl",

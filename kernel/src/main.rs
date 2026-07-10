@@ -62,6 +62,11 @@ mod nvme;
 mod tls_roots;
 mod update;
 mod tpm;
+mod entropy;
+mod nts;
+mod verity;
+mod euroattr;
+mod gdpr;
 mod virtio_blk;
 mod virtio_gpu;
 mod virtio_net;
@@ -71,6 +76,9 @@ mod locale;
 mod installer;
 mod ca;
 mod attest;
+mod attest3;
+mod phase3g;
+mod phase3a;
 mod idm;
 mod euroid;
 mod pkg;
@@ -1055,6 +1063,9 @@ fn main() -> Status {
         // and patches cross-module IE-TLS (TPOFF64) for a .so `__thread`.
         ring3::tls_selftest(&mut allocator);
         ring3::tls_cross_selftest(&mut allocator);
+        // 3C-3: the PT_INTERP path — a from-scratch USERSPACE ld.so does the
+        // dynamic linking (not the kernel), the way unmodified Linux binaries link.
+        ring3::interp_selftest(&mut allocator);
     }
 
     // H3 follow-up: run a dynamically-linked binary BY NAME from the FS — the .so
@@ -1312,6 +1323,15 @@ fn main() -> Status {
     if tpm::init() {
         tpm::selftest();
     }
+    // 3D-8: seed the sovereign CSPRNG (CPU jitter + the TPM RNG if present) and
+    // prove the getrandom readiness gate. Runs regardless of a TPM — CPU jitter
+    // alone reaches the entropy threshold — so it is OUTSIDE the TPM block.
+    entropy::selftest();
+    // 3D-7: Network Time Security (RFC 8915) authenticated-time core — proves the
+    // clock only trusts a cryptographically-bound server (uses the 3D-8 CSPRNG).
+    nts::selftest();
+    // 3D-2: system-image integrity — Ed25519-signed Merkle root, tamper detection.
+    verity::selftest();
     interrupts::init_timer(100);
     // G1: give each application processor a GUARDED kernel stack from the pool (an
     // AP-stack overflow then faults on an unmapped guard page instead of silently
@@ -1522,6 +1542,18 @@ fn main() -> Status {
         };
         let mut key = [0u8; 32];
         key.copy_from_slice(&key_bytes[..32]);
+        // 3D-1: seal the FDE key to the measured-boot state and use the
+        // TPM-unsealed copy — so the disk key only exists after the TPM releases
+        // it on an untampered boot (not just a fresh RNG blob in RAM).
+        let fde_sealed = match tpm::seal_to_pcr(tpm::SEAL_PCR, &key)
+            .and_then(|(pv, pb)| tpm::unseal_from_pcr(tpm::SEAL_PCR, &pv, &pb))
+        {
+            Some(k) if k.len() == 32 => {
+                key.copy_from_slice(&k[..32]);
+                true
+            }
+            _ => false,
+        };
         let fde = eurofde::FdeKey::new(key, 0xE0_05);
         let enc = eurofde::EncryptedBlockDevice::new(rootblk::RootBlk::ram(128), fde);
         let mut enc = enc;
@@ -1533,7 +1565,7 @@ fn main() -> Status {
         })();
         match result {
             Ok(ok) => serial_println!(
-                "[k3] FDE: EuroFS on encrypted block layer (ChaCha20), key-from-TPM={from_tpm}, read-after-write-intact={ok} → {}",
+                "[k3] FDE: EuroFS on encrypted block layer (ChaCha20), key-from-TPM={from_tpm}, key-TPM-sealed-to-boot={fde_sealed}, read-after-write-intact={ok} → {}",
                 if ok { "OK (transparent full-disk encryption works) ✓" } else { "FAILED" }
             ),
             Err(e) => serial_println!("[k3] FDE: failed ({e:?})"),
@@ -1543,6 +1575,12 @@ fn main() -> Status {
     // ── Phase 2B follow-up: X (policy), W (observability), U (secrets) ──
     // X: EuroPol — declarative policy → EuroGuard capabilities (violations → P3).
     europol::selftest();
+    // 3D-4: signed policy bundles — a policy can only change caps if Ed25519-signed.
+    europol::bundle_selftest();
+    // 3D-5: user-scoped file immutability (own home files, no admin cap).
+    euroattr::selftest();
+    // 3D-6: hash-chained GDPR audit + sealed-vault persistence.
+    gdpr::selftest();
     // W: EuroObserve — lock-free kernel metrics + OpenMetrics export.
     observe::selftest(allocator.free_frames() as u64);
     // U: EuroVault — capability-gated, encrypted secrets with a TPM master key.
@@ -1556,9 +1594,10 @@ fn main() -> Status {
             None => ([0xA5u8; 32], false),
         };
         vault::selftest(mk, from_tpm);
-        // AF / Zero-Trust: PCR-seal — bind a secret to the measured-boot state,
-        // so it only unseals on a non-tampered system.
-        vault::pcr_seal_selftest(mk);
+        // 3D-1: real TPM seal — the master key is sealed INSIDE the TPM to the
+        // measured-boot PCR and released only on an untampered boot (replaces the
+        // earlier software-KDF PCR-seal).
+        vault::tpm_seal_selftest(mk);
     }
 
     // Z: EuroHealth — SMART (if NVMe) + FS scrub + memory → health score.
@@ -1585,6 +1624,17 @@ fn main() -> Status {
             }
         }
         vpn::selftest(seeds[0], seeds[1], seeds[2], seeds[3], from_tpm);
+        // 3D-9: the hybrid post-quantum tunnel (X25519 + ML-KEM-768). Two more
+        // seeds for the ML-KEM key pair + encapsulation randomness.
+        let mut kem_seed = [0x21u8; 32];
+        let mut kem_rand = [0x22u8; 32];
+        if let Some(b) = tpm::get_random(32) {
+            kem_seed.copy_from_slice(&b[..32]);
+        }
+        if let Some(b) = tpm::get_random(32) {
+            kem_rand.copy_from_slice(&b[..32]);
+        }
+        vpn::selftest_hybrid(seeds[0], seeds[1], seeds[2], seeds[3], kem_seed, kem_rand, from_tpm);
     }
 
     // EuroAgent (Sprint AA): prove the sovereign agent-runtime core at boot —
@@ -1627,6 +1677,9 @@ fn main() -> Status {
         };
         attest::selftest(ak_seed, nonce, from_tpm);
     }
+    // 3D-3: CA hierarchy (root→intermediate→leaf) + on-disk store + a JSON
+    // attestation report a remote verifier checks against the boot PCRs.
+    attest3::selftest();
 
     // EuroIDM (V): sovereign enterprise identity (identity → capabilities).
     {
@@ -1644,6 +1697,9 @@ fn main() -> Status {
     // EuroID (K1 + P3): sovereign user management — Argon2id credentials, sessions,
     // per-user caps, lockout, and a tamper-evident hash-chain audit log.
     euroid::selftest();
+    // 3D-10: EuroID as an eIDAS 2.0 EUDI-wallet issuer + relying party
+    // (SD-JWT VC selective disclosure + holder key binding).
+    euroid::wallet_selftest();
 
     // EuroPkg (M2): dependency resolution of the package manager.
     pkg::selftest();
@@ -1657,6 +1713,12 @@ fn main() -> Status {
     // BB-8: LIVE accessibility events — focus navigation through a dialog → multilingual
     // screen-reader announcements → routed to EuroAudio (HDA). EN 301 549 end-to-end.
     access::live_selftest();
+    // 3F-3: the broadened European Accessibility Act surface — accessibility tree
+    // + states, complete keyboard navigation, WCAG high-contrast, magnification.
+    access::eaa_selftest();
+    // Phase 3G: journal, watchdog, hardening baseline, DHCPv6, mDNS, DNSSEC.
+    phase3g::selftest();
+    phase3a::selftest();
 
     // EuroSuite (ES-Core/IO/Calc): sovereign office suite on one UDM.
     suite::selftest();
@@ -3368,6 +3430,9 @@ fn panic(info: &PanicInfo) -> ! {
     serial::write_raw(b"\n========== KERNEL PANIC ==========\n");
     serial_println!("[PANIC] {info}");
     klog::dump_registers_and_backtrace();
+    // 3G-1: persist a minidump for a Rust panic too (vector 0xFF), not only for
+    // the CPU faults (#GP/#PF/#DF) — so a `panic!` is recoverable across a reboot.
+    crashdump::capture(0xFF, 0, 0, 0, 0);
     serial::write_raw(b"[panic] --- recent kernel log (kmsg) ---\n");
     klog::with_recent(24, |line| {
         serial::write_raw(b"  | ");

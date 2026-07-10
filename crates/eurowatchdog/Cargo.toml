@@ -1,0 +1,12 @@
+[package]
+name = "eurowatchdog"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroWatchdog — a deadman software watchdog: a liveness deadline that must be petted or it trips (→ reset). no_std, host-tested."
+
+[dependencies]
+
+[features]
+default = []
