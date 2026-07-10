@@ -969,9 +969,14 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     // outgoing connection BEFORE a packet leaves. A blocked app
     // gets -EPERM and the request is audited — a hard policy boundary.
     let app = crate::ring3::current_app();
+    let dst = alloc::format!("{}.{}.{}.{}:{port}", server.0[0], server.0[1], server.0[2], server.0[3]);
     if crate::euroguard::check_connect(&app, server, port) == crate::euroguard::Decision::Block {
+        // 3D-6: a blocked connection is a policy violation in the hash-chained log.
+        crate::audit::record_connection(&dst, false);
         return (-1i64) as u64; // -EPERM: denied by EuroGuard
     }
+    // 3D-6: record the (allowed) outbound connection.
+    crate::audit::record_connection(&dst, true);
     let cfg = match get() {
         Some(c) => c,
         None => return (-1i64) as u64,

@@ -337,6 +337,75 @@ pub fn enroll_fde(fs: &mut dyn FileSystem) -> Option<bool> {
     Some(ok)
 }
 
+/// **3E-1 wiring — unseal the FDE key at boot.** The counterpart to
+/// [`enroll_fde`]: on a normal boot the system reads the sealed blob its
+/// installer wrote (`/etc/fde/root.seal`) and asks the TPM to release the FDE
+/// key — which it does ONLY if the measured-boot state (PCR16) still matches,
+/// so the disk opens automatically on an untampered system and refuses on a
+/// tampered one. Returns the recovered key length on success.
+pub fn unseal_fde_at_boot(fs: &mut dyn FileSystem) -> Option<usize> {
+    if !crate::tpm::present() {
+        return None;
+    }
+    let blob = fs.read_file("/etc/fde/root.seal").ok()?;
+    if blob.len() < 4 {
+        return None;
+    }
+    let priv_len = u32::from_le_bytes([blob[0], blob[1], blob[2], blob[3]]) as usize;
+    if 4 + priv_len > blob.len() {
+        return None;
+    }
+    let priv_b = &blob[4..4 + priv_len];
+    let pub_b = &blob[4 + priv_len..];
+    let key = crate::tpm::unseal_from_pcr(16, priv_b, pub_b)?;
+    Some(key.len())
+}
+
+/// `[3e1-wire]` boot self-test — the enrol → persist → **unseal-at-boot** cycle
+/// on the live FS: enrol (seal + write the blob), then re-read the blob and
+/// unseal it exactly as a normal boot would (auto-recovering the key), and prove
+/// a corrupted sealed blob does NOT release a key.
+pub fn fde_unseal_selftest(fs: &mut dyn FileSystem) {
+    if !crate::tpm::present() {
+        crate::serial_println!("[3e1-wire] FDE unseal-at-boot: no TPM — skipped (fail-closed)");
+        return;
+    }
+    // Enrol writes /etc/fde/root.seal (as the installer does on the target).
+    let enrolled = enroll_fde(fs) == Some(true);
+    // Boot recovery: read the persisted blob + unseal via the TPM (PCR16 policy).
+    let recovered = unseal_fde_at_boot(fs) == Some(32);
+    // A corrupted sealed blob must not release the key.
+    let tamper_refused = {
+        if let Ok(mut blob) = fs.read_file("/etc/fde/root.seal") {
+            let n = blob.len();
+            blob[n / 2] ^= 0xFF; // corrupt the sealed private area
+            let _ = fs.write_file("/etc/fde/root.seal.bad", &blob);
+            unseal_fde_at_boot_from(fs, "/etc/fde/root.seal.bad").is_none()
+        } else {
+            false
+        }
+    };
+    let ok = enrolled && recovered && tamper_refused;
+    crate::serial_println!(
+        "[3e1-wire] FDE unseal-at-boot: enrolled+persisted={enrolled}, sealed-blob-read+TPM-unseal-recovers-key={recovered}, corrupted-blob-REFUSED={tamper_refused} → {}",
+        if ok { "OK (disk opens automatically on an untampered boot; TPM-enforced) ✓" } else { "FAILED ✗" }
+    );
+}
+
+/// Like [`unseal_fde_at_boot`] but from an explicit path (for the tamper check).
+fn unseal_fde_at_boot_from(fs: &mut dyn FileSystem, path: &str) -> Option<usize> {
+    let blob = fs.read_file(path).ok()?;
+    if blob.len() < 4 {
+        return None;
+    }
+    let priv_len = u32::from_le_bytes([blob[0], blob[1], blob[2], blob[3]]) as usize;
+    if 4 + priv_len > blob.len() {
+        return None;
+    }
+    let key = crate::tpm::unseal_from_pcr(16, &blob[4..4 + priv_len], &blob[4 + priv_len..])?;
+    Some(key.len())
+}
+
 /// Execute the configuration steps of the plan on a mounted EuroFS:
 /// write the provisioning files. Returns the number of executed steps.
 fn provision(fs: &mut dyn FileSystem, steps: &[Step]) -> usize {

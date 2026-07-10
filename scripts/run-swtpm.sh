@@ -54,4 +54,4 @@ kill "$QEMU_PID" 2>/dev/null || true
 
 echo
 echo "===== TPM / seal markers from serial ($LOG) ====="
-grep -E "\[tpm\]|\[o1\]|\[k3\]|\[u\]|\[af-seal\]|\[3d1\]|\[n2\]|\[3d9\]|\[3d8\]|\[3d7\]|\[3c3\]|\[3d10\]|\[3e1\]|\[q1x\]" "$LOG" || echo "(no TPM markers found)"
+grep -E "\[tpm\]|\[o1\]|\[k3\]|\[u\]|\[af-seal\]|\[3d1\]|\[n2\]|\[3d9\]|\[3d8\]|\[3d7\]|\[3c3\]|\[3d10\]|\[3e1\]|\[q1x\]|\[3e1-wire\]" "$LOG" || echo "(no TPM markers found)"
