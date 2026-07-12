@@ -82,8 +82,12 @@ pub fn disk_is_blank(dev: usize) -> bool {
     if !crate::virtio_blk::read_io_dev(dev, 0, &mut s0) {
         return false;
     }
-    let protective_mbr = s0[510] == 0x55 && s0[511] == 0xAA && s0[450] == 0xEE;
-    !protective_mbr
+    // "Blank" means safe to format as our own disk. Any 0x55AA boot signature
+    // means the disk already holds something — a GPT protective MBR, an MBR
+    // partition table, or a superfloppy FAT/exFAT/NTFS boot sector. NEVER treat
+    // such a disk as blank: doing so would overwrite a user's data disk. Only a
+    // disk with no boot signature at all is blank.
+    !(s0[510] == 0x55 && s0[511] == 0xAA)
 }
 
 /// Install a REAL bootable EuroOS to virtio disk `dev`: GPT + FAT32 ESP

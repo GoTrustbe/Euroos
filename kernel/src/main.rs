@@ -342,12 +342,16 @@ fn main() -> Status {
         if instexec::disk_is_blank(0) {
             // Fresh target disk → install a bootable, provisioned EuroOS (slot A).
             instexec::install_to_disk(0, &instexec::default_config())
-        } else {
-            // Already installed → demonstrate the A/B SELF-UPDATE: stage slot B + flip
-            // slot_config. After a standalone reboot the loader picks slot B (AH-2).
+        } else if gpt::find_eurofs_partition().is_some() {
+            // Our own installed disk → demonstrate the A/B SELF-UPDATE: stage slot B
+            // + flip slot_config. After a standalone reboot the loader picks slot B.
             instexec::stage_update_b(0);
             instexec::rollback_selftest(0); // [upd4]: prove the two-stage rollback on the real ESP
             true // we keep running live; the disk is the boot/update target
+        } else {
+            // Disk 0 holds someone else's filesystem (exFAT/FAT/NTFS/…) — do NOT
+            // stage an update onto it. Leave it untouched; it stays mountable.
+            false
         }
     } else {
         false
@@ -359,13 +363,28 @@ fn main() -> Status {
     // complete /bin + /etc on a disk root that only carries install-time config.
     let rootdev = if virtio_blk::present() {
         let total = virtio_blk::capacity_sectors();
-        let (start, blocks) = gpt::find_eurofs_partition().unwrap_or_else(|| gpt::install(total));
-        if installed {
-            serial_println!("[euro] live root = the on-disk EuroFS (installed/updated this boot)");
+        match gpt::find_eurofs_partition() {
+            Some((start, blocks)) => {
+                if installed {
+                    serial_println!("[euro] live root = the on-disk EuroFS (installed/updated this boot)");
+                }
+                rootblk::RootBlk::disk(start, blocks)
+            }
+            None if instexec::disk_is_blank(0) => {
+                // Blank disk → lay down our GPT + EuroFS root.
+                let (start, blocks) = gpt::install(total);
+                rootblk::RootBlk::disk(start, blocks)
+            }
+            None => {
+                // Disk 0 carries a NON-EuroFS filesystem (exFAT/FAT/ext/NTFS/…).
+                // Never format/clobber it as our root — boot a RAM root instead;
+                // the disk stays intact and can be mounted (mount vblkN /mnt).
+                serial_println!("[euro] disk 0 is not EuroFS and not blank — booting a RAM root; the disk is left intact + mountable");
+                rootblk::RootBlk::ram(2048)
+            }
         }
-        rootblk::RootBlk::disk(start, blocks)
     } else {
-        rootblk::RootBlk::ram(2048) // RAM root only when there is NO disk at all
+        rootblk::RootBlk::ram(2048) // RAM root when there is NO disk at all
     };
     // The install media (~6 MiB) stays available so the user can install LATER
     // from the running desktop too (`euroinstall --to N`).
