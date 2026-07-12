@@ -43,12 +43,10 @@ pub fn load_dir(path: &str, items: Vec<(String, bool, u64)>) {
             if is_dir {
                 DirEntry::dir(&name)
             } else {
-                let mut e = DirEntry::file(&name, size);
-                // Honest badge: signed artifacts are really Ed25519-signed.
-                if name.ends_with(".efi") || name.ends_with(".signed") {
-                    e = e.with_badge(Badge::Signed);
-                }
-                e
+                // No "signed" badge here: the file manager does not verify a
+                // signature, so we must not imply one from the filename alone.
+                // (Boot images ARE Ed25519-verified — but by the loader, not here.)
+                DirEntry::file(&name, size)
             }
         })
         .collect();

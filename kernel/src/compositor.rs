@@ -446,15 +446,26 @@ pub fn draw_status_panel(fb: &FrameBuffer, w: usize, _h: usize, hm: &str, date: 
     fb.fill_rounded_rect(tbx + 1, tby + 1, tb - 2, tb - 2, (tb - 2) / 2, Color::SURFACE);
     crate::icons::draw(fb, "moon", tbx + 8, tby + 8, 18, Color::TEXT_SEC);
 
-    // "Your device is safe" card (green).
+    // Security-summary card — HONEST: measured boot + full-disk encryption are
+    // sealed to a TPM, so we only assert them when a TPM is actually present.
+    // Without one (e.g. this QEMU image) FDE is skipped, so we claim only the
+    // capability sandbox, which is always on. Never show encryption that is off.
     let gy = py + 90;
     let gx = px + 14;
     let gw = PANEL_W - 28;
     let gh = 46usize;
-    fb.fill_rounded_rect(gx, gy, gw, gh, eds::RADIUS_M, Color::SUCCESS_SOFT);
-    crate::icons::draw(fb, "shieldCheck", gx + 12, gy + 12, 22, Color::SUCCESS);
-    crate::text::draw_px(fb, gx + 44, gy + 9, "Your device is safe", Color::INK, 13.0);
-    crate::text::draw_px(fb, gx + 44, gy + 26, "Verified boot \u{00B7} encrypted \u{00B7} sandboxed", Color::TEXT_SEC, 11.5);
+    let tpm = crate::tpm::present();
+    let (bg, fg, icon, head, sub): (Color, Color, &str, &str, &str) = if tpm {
+        (Color::SUCCESS_SOFT, Color::SUCCESS, "shieldCheck", "Your device is safe",
+         "Measured boot \u{00B7} encrypted \u{00B7} sandboxed")
+    } else {
+        (Color::SURFACE_3, Color::TEXT_SEC, "lock", "Capability-sandboxed",
+         "No TPM \u{2014} full-disk encryption needs one")
+    };
+    fb.fill_rounded_rect(gx, gy, gw, gh, eds::RADIUS_M, bg);
+    crate::icons::draw(fb, icon, gx + 12, gy + 12, 22, fg);
+    crate::text::draw_px(fb, gx + 44, gy + 9, head, Color::INK, 13.0);
+    crate::text::draw_px(fb, gx + 44, gy + 26, sub, Color::TEXT_SEC, 11.5);
 
     // ── Live system card (real, changing figures) ──
     let sy = py + ch + 12;

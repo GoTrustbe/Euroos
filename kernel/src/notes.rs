@@ -16,8 +16,8 @@ const TITLEBAR_H: usize = 44;
 /// Seeded notes (real Markdown). The GUI parses them live with `euronotes`.
 const NOTES: &[&str] = &[
     "# Welcome to EuroNotes #euros\n\n\
-     This is a **real** note, parsed by the from-scratch *euronotes* engine \
-     (Markdown → EuroDoc). No mock text.\n\n\
+     This is a **sample** note. The parser is real (from-scratch *euronotes*, \
+     Markdown → EuroDoc); the notes themselves are seeded read-only samples.\n\n\
      What works:\n\n\
      - Headings and inline formatting\n\
      - Lists with levels\n  - like this nested line\n\
@@ -78,7 +78,7 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let list_w = 210usize;
     fb.fill_rect(bx, by, list_w, bh, Color::CARD);
     fb.fill_rect(bx + list_w, by, 1, bh, Color::BORDER);
-    text::draw_px(fb, bx + 16, by + 16, "Notes", Color::INK, 14.0);
+    text::draw_px(fb, bx + 16, by + 16, "Notes  \u{00B7}  sample (read-only)", Color::INK, 14.0);
     let cnt = alloc::format!("{}", NOTES.len());
     text::draw_px(fb, bx + list_w - text::width_px(&cnt, 12.0) - 16, by + 18, &cnt, Color::TEXT_DIM, 12.0);
 
