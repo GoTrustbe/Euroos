@@ -2145,7 +2145,7 @@ fn main() -> Status {
             active: true, accent: Color::SUCCESS,
             sec: eds::SecState::new(true, false, true),
             app: suite_ui::SuiteApp::None,
-            visible: false,
+            visible: true, // default-open: the interactive shell is the clean first-run window (focused)
             restore: None,
         },
     ];
@@ -2476,10 +2476,10 @@ fn main() -> Status {
             x: SIDEBAR_W + 120, y: 110, w: 620, h: 560,
             title: String::from("EuroMonitor"),
             content: Vec::new(), ui: Vec::new(),
-            active: true, accent: Color::rgb(0x1F, 0x9D, 0x6B),
+            active: false, accent: Color::rgb(0x1F, 0x9D, 0x6B),
             sec: eds::SecState::new(true, true, false),
             app: suite_ui::SuiteApp::Monitor,
-            visible: true, // opened at boot: immediately shows live system status (screenshot)
+            visible: false, // hidden by default; open from the dock (no window covers the Terminal)
             restore: None,
         });
         order.push(i_mon);
@@ -2498,12 +2498,12 @@ fn main() -> Status {
         });
         order.push(i_log);
         dock_targets[10] = Some(i_log); // dock: log icon → EuroLog
-        compositor::set_active_dock(Some(9)); // EuroMonitor is opened at boot
+        compositor::set_active_dock(Some(4)); // Terminal is the default-open window (clean first-run)
 
         // Pre-fill EuroFiles with the REAL root directory of the FS, so the
         // first dock open immediately shows content.
         load_files_dir(ctx.fs, "/");
-        compositor::set_active_dock(None);
+        compositor::set_active_dock(Some(4)); // Terminal tile highlighted (default-open window)
         let fl_path = files::current_path();
         serial_println!(
             "[ag] EuroApps: EuroFiles (live FS @ {}), EuroNotes (euronotes), EuroClock (RTC {}) — 3 windows + dock tiles 0/1/2 ✓",
