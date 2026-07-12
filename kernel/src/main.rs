@@ -2589,7 +2589,6 @@ fn main() -> Status {
     // ── Desktop loop: mouse cursor, window dragging, live system window. ──
     let mut dragging: Option<usize> = None;
     let mut drag_off = (0usize, 0usize);
-    let mut prev_left = false;
     let mut last_t = u64::MAX;
     let mut last_kbd = 0u64; // diagnostics: keyboard IRQs via the IO-APIC
     // 3F-7: the live permission-portal. `portal_buttons` holds the hit rects of
@@ -2614,7 +2613,7 @@ fn main() -> Status {
     serial_println!("[desktop] interactive loop started — input + shell live");
     // 3G-2: arm the live deadman watchdog (5 s grace at 100 Hz). The loop pets it
     // each iteration; the scheduler tick checks it independently.
-    watchdog::arm(500);
+    watchdog::arm(1500); // 15s: a full software render is a few seconds under TCG (fast on real HW)
     let mut wd_reported = false;
     loop {
         // 3G-2: the main loop is alive → pet the watchdog.
@@ -2643,7 +2642,9 @@ fn main() -> Status {
         );
 
         // Left click just pressed: dock launch, window focus/raise, or drag.
-        if ldown && !prev_left && dragging.is_none() {
+        // Uses the press LATCH (mouse::take_press) instead of sampling the button
+        // this iteration, so a quick tap is never missed on the emulated poll.
+        if dragging.is_none() && mouse::take_press().is_some() {
             // 3F-7: a pending permission dialog is MODAL — it intercepts the
             // click before any window/dock hit-test, and routes the answer to
             // the portal broker (scoped grant / auto-revoke).
@@ -2834,7 +2835,6 @@ fn main() -> Status {
                 need_full = true;
             }
         }
-        prev_left = ldown;
 
         // I1: harvest USB-HID interrupt transfers (keyboard/mouse) and inject them
         // into the same scancode/mouse paths as PS/2 — before we read the keys.

@@ -333,7 +333,30 @@ fn draw_sidebar(fb: &FrameBuffer, h: usize) {
 /// Wallpaper in the "desktop.html" reference look, in software pixels:
 /// 1) a cool→warm vertical gradient, 2) a soft EU-blue radial glow
 /// center-left, 3) a subtle dotted grid. Replaces the flat `clear()`.
+/// Cached wallpaper: the gradient + radial glow + dotted grid below cost a few
+/// million float ops (sqrtf per glow block) — cheap on real hardware but seconds
+/// of guest time under TCG, which made every full redraw (e.g. opening an app)
+/// stall and trip the deadman watchdog. It only depends on width/height, so we
+/// compute it once and restore it with a memcpy on every later frame.
+static WALLPAPER_CACHE: spin::Mutex<alloc::vec::Vec<u32>> = spin::Mutex::new(alloc::vec::Vec::new());
+
 fn draw_wallpaper(fb: &FrameBuffer) {
+    {
+        let cache = WALLPAPER_CACHE.lock();
+        if cache.len() == fb.width() * fb.height() {
+            fb.restore(&cache);
+            return;
+        }
+    }
+    // First time (or a resolution change): compute the expensive layer once.
+    // draw_wallpaper runs before anything else in render(), so after this the
+    // backbuffer holds only the wallpaper — snapshot it for reuse.
+    draw_wallpaper_compute(fb);
+    let mut cache = WALLPAPER_CACHE.lock();
+    fb.snapshot(&mut cache);
+}
+
+fn draw_wallpaper_compute(fb: &FrameBuffer) {
     let w = fb.width();
     let h = fb.height().max(1);
     // Diagonal gradient: cool blue-grey (top-left) → warm sand-beige

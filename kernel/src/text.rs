@@ -9,9 +9,27 @@
 //! background with `fb.blend` — hence the soft, non-stepped edges.
 
 use ab_glyph::{Font, FontRef, GlyphId, PxScale, ScaleFont};
-use spin::Once;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+use spin::{Mutex, Once};
 
 use crate::graphics::{Color, FrameBuffer};
+
+/// A rasterized glyph: coverage bitmap + placement relative to the pen.
+/// Rasterizing a TTF outline (ab_glyph `outline_glyph` + scan-conversion) is
+/// expensive and was redone for every character on every full redraw — the
+/// dominant cost of a desktop repaint under TCG. We do it once per
+/// (font, char, size) and reuse the coverage; only the (cheap) alpha blend runs
+/// per draw. `None` = a glyph with no outline (e.g. space).
+struct CachedGlyph {
+    w: usize,
+    h: usize,
+    left: i32,
+    top: i32,
+    cov: Vec<u8>,
+}
+
+static GLYPH_CACHE: Mutex<BTreeMap<(u8, char, u32), Option<CachedGlyph>>> = Mutex::new(BTreeMap::new());
 
 static UI: Once<FontRef<'static>> = Once::new();
 static MONO: Once<FontRef<'static>> = Once::new();
@@ -47,29 +65,60 @@ pub fn mono_px(scale: usize) -> f32 {
 
 /// Core renderer: draw `s` with `font` at px size `px`. `y` is the top
 /// of the text line (baseline = y + ascent), like the old bitmap API.
-fn render(fb: &FrameBuffer, font: &FontRef, x: usize, y: usize, s: &str, c: Color, px: f32) {
+fn render(fb: &FrameBuffer, font: &FontRef, font_id: u8, x: usize, y: usize, s: &str, c: Color, px: f32) {
     let scale = PxScale::from(px);
     let sf = font.as_scaled(scale);
-    let baseline = y as f32 + sf.ascent();
+    let baseline = (y as f32 + sf.ascent() + 0.5) as i32;
+    let px_key = px.to_bits();
     let mut caret = x as f32;
     let mut prev: Option<GlyphId> = None;
+    let mut cache = GLYPH_CACHE.lock();
     for ch in s.chars() {
         let gid = font.glyph_id(ch);
         if let Some(p) = prev {
             caret += sf.kern(p, gid);
         }
-        let glyph = gid.with_scale_and_position(scale, ab_glyph::point(caret, baseline));
-        if let Some(outlined) = font.outline_glyph(glyph) {
-            let bb = outlined.px_bounds();
-            let ox = bb.min.x as i32;
-            let oy = bb.min.y as i32;
-            outlined.draw(|gx, gy, cov| {
-                let px_ = ox + gx as i32;
-                let py_ = oy + gy as i32;
-                if px_ >= 0 && py_ >= 0 && cov > 0.0 {
-                    fb.blend(px_ as usize, py_ as usize, c, (cov * 255.0) as u8);
+        let entry = cache.entry((font_id, ch, px_key)).or_insert_with(|| {
+            // Rasterize the glyph once, with the pen at the origin, so the stored
+            // coverage + (left,top) offsets are pen-relative and reusable.
+            let g = gid.with_scale_and_position(scale, ab_glyph::point(0.0, 0.0));
+            font.outline_glyph(g).map(|outlined| {
+                let bb = outlined.px_bounds();
+                let left = bb.min.x as i32;
+                let top = bb.min.y as i32;
+                // +2 px of slack so the rasterizer's coverage grid always fits
+                // (no floor/ceil in no_std; `as` truncates toward zero).
+                let gw = (bb.max.x - bb.min.x) as usize + 2;
+                let gh = (bb.max.y - bb.min.y) as usize + 2;
+                let mut cov = alloc::vec![0u8; gw * gh];
+                outlined.draw(|gx, gy, v| {
+                    let (ix, iy) = (gx as usize, gy as usize);
+                    if ix < gw && iy < gh {
+                        cov[iy * gw + ix] = (v * 255.0) as u8;
+                    }
+                });
+                CachedGlyph { w: gw, h: gh, left, top, cov }
+            })
+        });
+        if let Some(g) = entry {
+            let base_x = (caret + 0.5) as i32 + g.left;
+            let base_y = baseline + g.top;
+            for gy in 0..g.h {
+                let sy = base_y + gy as i32;
+                if sy < 0 {
+                    continue;
                 }
-            });
+                let row = gy * g.w;
+                for gx in 0..g.w {
+                    let a = g.cov[row + gx];
+                    if a > 0 {
+                        let sx = base_x + gx as i32;
+                        if sx >= 0 {
+                            fb.blend(sx as usize, sy as usize, c, a);
+                        }
+                    }
+                }
+            }
         }
         caret += sf.h_advance(gid);
         prev = Some(gid);
@@ -93,7 +142,7 @@ fn measure(font: &FontRef, s: &str, px: f32) -> usize {
 
 // ── Public API (proportional, UI font) ──────────────────────────────────────
 pub fn draw_string(fb: &FrameBuffer, x: usize, y: usize, s: &str, c: Color, scale: usize) {
-    render(fb, ui(), x, y, s, c, ui_px(scale));
+    render(fb, ui(), 0, x, y, s, c, ui_px(scale));
 }
 
 pub fn text_width(s: &str, scale: usize) -> usize {
@@ -111,12 +160,12 @@ pub fn draw_string_centered(
 ) {
     let w = text_width(s, scale);
     let x = if w < zone_w { zone_x + (zone_w - w) / 2 } else { zone_x };
-    render(fb, ui(), x, y, s, c, ui_px(scale));
+    render(fb, ui(), 0, x, y, s, c, ui_px(scale));
 }
 
 // ── Exact px sizes (for design-faithful cards: clock 44px etc.) ─────────────
 pub fn draw_px(fb: &FrameBuffer, x: usize, y: usize, s: &str, c: Color, px: f32) {
-    render(fb, ui(), x, y, s, c, px);
+    render(fb, ui(), 0, x, y, s, c, px);
 }
 
 pub fn width_px(s: &str, px: f32) -> usize {
@@ -131,7 +180,7 @@ pub fn line_height(px: f32) -> usize {
 
 // ── Monospace (terminal/code) ──────────────────────────────────────────────
 pub fn draw_mono(fb: &FrameBuffer, x: usize, y: usize, s: &str, c: Color, scale: usize) {
-    render(fb, mono(), x, y, s, c, mono_px(scale));
+    render(fb, mono(), 1, x, y, s, c, mono_px(scale));
 }
 
 pub fn mono_width(s: &str, scale: usize) -> usize {
