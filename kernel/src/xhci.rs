@@ -167,6 +167,7 @@ struct HidDevice {
     ring: Ring,
     buf: u64, // 8-byte report buffer (interrupt transfers land here)
     is_keyboard: bool,
+    is_abs_pointer: bool, // usb-tablet / touchscreen: absolute X/Y report
     kb: eurousb::BootKeyboard,
     prev_mods: u8,
     armed: bool,
@@ -517,22 +518,23 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
     }
 
     // Look for a HID boot interface (keyboard or mouse) + its interrupt-IN endpoint.
-    let mut chosen: Option<(bool, u8, u8, u16, u8)> = None; // (is_kbd, iface, ep_addr, max_pkt, interval)
+    let mut chosen: Option<(bool, bool, u8, u8, u16, u8)> = None; // (is_kbd, is_abs, iface, ep_addr, max_pkt, interval)
     for iface in &cfg.interfaces {
         let kbd = iface.is_boot_keyboard();
         let mouse = iface.is_boot_mouse();
-        if !(kbd || mouse) {
+        let abs = iface.is_hid_absolute_pointer(); // usb-tablet / touchscreen
+        if !(kbd || mouse || abs) {
             continue;
         }
         if let Some(ep) = iface.endpoints.iter().find(|e| e.is_in() && (e.attributes & 0x03) == 0x03) {
-            chosen = Some((kbd, iface.number, ep.address, ep.max_packet, ep.interval));
+            chosen = Some((kbd, abs, iface.number, ep.address, ep.max_packet, ep.interval));
             break;
         }
     }
-    let (is_kbd, iface_num, ep_addr, ep_pkt, ep_interval) = match chosen {
+    let (is_kbd, is_abs, iface_num, ep_addr, ep_pkt, ep_interval) = match chosen {
         Some(c) => c,
         None => {
-            crate::serial_println!("[xhci] slot {slot}: no HID boot interface");
+            crate::serial_println!("[xhci] slot {slot}: no HID input interface");
             return false;
         }
     };
@@ -569,8 +571,11 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
         return false;
     }
 
-    // SET_PROTOCOL(boot=0) on the HID interface (class request 0x21/0x0B).
-    let _ = control_no_data(x, slot, &mut ep0_ring, 0x21, 0x0B, 0, iface_num as u16);
+    // SET_PROTOCOL(boot=0) on boot keyboards/mice only. The usb-tablet has no
+    // boot protocol; it stays in report protocol (its native absolute format).
+    if !is_abs {
+        let _ = control_no_data(x, slot, &mut ep0_ring, 0x21, 0x0B, 0, iface_num as u16);
+    }
 
     // Register the device + arm the first interrupt-IN transfer.
     let report_buf = falloc.allocate().expect("xhci report-buf");
@@ -581,14 +586,15 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
         ring: ep_ring,
         buf: report_buf,
         is_keyboard: is_kbd,
+        is_abs_pointer: is_abs,
         kb: eurousb::BootKeyboard::new(),
         prev_mods: 0,
         armed: false,
     };
     arm_interrupt(x, &mut hid);
     crate::serial_println!(
-        "[xhci] slot {slot}: HID-boot {} configured (ep DCI {ep_dci}, interval {ep_interval}) → live",
-        if is_kbd { "keyboard" } else { "mouse" }
+        "[xhci] slot {slot}: HID {} configured (ep DCI {ep_dci}, interval {ep_interval}) → live",
+        if is_kbd { "keyboard" } else if is_abs { "tablet (absolute)" } else { "mouse" }
     );
     for s in (*core::ptr::addr_of_mut!(HIDS)).iter_mut() {
         if s.is_none() {
@@ -763,13 +769,15 @@ fn poll_inner() {
                                 REPORTS_LOGGED += 1;
                                 crate::serial_println!(
                                     "[xhci-rpt] slot {} {}: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
-                                    slot, if hid.is_keyboard { "kbd" } else { "mouse" },
+                                    slot, if hid.is_keyboard { "kbd" } else if hid.is_abs_pointer { "tablet" } else { "mouse" },
                                     report[0], report[1], report[2], report[3],
                                     report[4], report[5], report[6], report[7]
                                 );
                             }
                             if hid.is_keyboard {
                                 inject_keyboard(hid, report);
+                            } else if hid.is_abs_pointer {
+                                inject_tablet(report);
                             } else {
                                 inject_mouse(report);
                             }
@@ -812,6 +820,13 @@ fn inject_keyboard(hid: &mut HidDevice, report: &[u8]) {
 fn inject_mouse(report: &[u8]) {
     if let Some(m) = eurousb::parse_mouse(report) {
         crate::mouse::apply_usb(m.dx as i32, m.dy as i32, m.buttons);
+    }
+}
+
+/// Translate a usb-tablet report into an ABSOLUTE cursor position + buttons.
+fn inject_tablet(report: &[u8]) {
+    if let Some(a) = eurousb::parse_tablet(report) {
+        crate::mouse::apply_usb_abs(a.x, a.y, a.buttons);
     }
 }
 

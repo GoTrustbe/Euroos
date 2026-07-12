@@ -131,6 +131,23 @@ pub fn apply_usb(dx: i32, dy: i32, buttons: u8) {
     MOUSE_Y.store(ny, Ordering::Relaxed);
 }
 
+/// Apply an ABSOLUTE USB-HID pointer report (usb-tablet / touchscreen). The
+/// device reports X/Y in a fixed logical range (0..=0x7FFF) which we scale to
+/// the framebuffer, setting the cursor directly. Unlike the relative mouse this
+/// tracks a VNC/remote pointer exactly — no drift, no "two cursors".
+pub fn apply_usb_abs(x_abs: u16, y_abs: u16, buttons: u8) {
+    BUTTONS.store(buttons & 0x07, Ordering::Relaxed);
+    let w = SCREEN_W.load(Ordering::Relaxed) as i32;
+    let h = SCREEN_H.load(Ordering::Relaxed) as i32;
+    if w == 0 || h == 0 {
+        return;
+    }
+    let nx = ((x_abs as i32) * (w - 1) / 0x7FFF).clamp(0, w - 1);
+    let ny = ((y_abs as i32) * (h - 1) / 0x7FFF).clamp(0, h - 1);
+    MOUSE_X.store(nx, Ordering::Relaxed);
+    MOUSE_Y.store(ny, Ordering::Relaxed);
+}
+
 pub fn pos() -> (usize, usize) {
     (
         MOUSE_X.load(Ordering::Relaxed) as usize,

@@ -95,6 +95,12 @@ impl Interface {
     pub fn is_boot_mouse(&self) -> bool {
         self.class == CLASS_HID && self.subclass == HID_SUBCLASS_BOOT && self.protocol == HID_PROTOCOL_MOUSE
     }
+    /// Is this a HID absolute pointer (usb-tablet / touchscreen)? These report
+    /// under the report protocol (not boot), so subclass/protocol are 0. Used to
+    /// get exact, drift-free cursor tracking (e.g. over VNC).
+    pub fn is_hid_absolute_pointer(&self) -> bool {
+        self.class == CLASS_HID && self.subclass == 0 && self.protocol == 0
+    }
 }
 
 /// A parsed configuration: all interfaces + endpoints from the config block
@@ -215,6 +221,28 @@ pub fn parse_mouse(report: &[u8]) -> Option<MouseEvent> {
         dx: report[1] as i8,
         dy: report[2] as i8,
         wheel: report.get(3).map(|&w| w as i8).unwrap_or(0),
+    })
+}
+
+/// An absolute-pointer report: `buttons` + `x`/`y` in the device's logical range
+/// (0..=0x7FFF for the QEMU usb-tablet and most touchscreens).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AbsPointerEvent {
+    pub buttons: u8,
+    pub x: u16,
+    pub y: u16,
+}
+
+/// Decode a usb-tablet / absolute-pointer report:
+/// `[buttons, x_lo, x_hi, y_lo, y_hi, (wheel)]`, X/Y little-endian in 0..=0x7FFF.
+pub fn parse_tablet(report: &[u8]) -> Option<AbsPointerEvent> {
+    if report.len() < 5 {
+        return None;
+    }
+    Some(AbsPointerEvent {
+        buttons: report[0],
+        x: (report[1] as u16) | ((report[2] as u16) << 8),
+        y: (report[3] as u16) | ((report[4] as u16) << 8),
     })
 }
 
@@ -354,6 +382,19 @@ mod tests {
         assert_eq!(iface.endpoints.len(), 1);
         assert!(iface.endpoints[0].is_in());
         assert_eq!(iface.endpoints[0].number(), 1);
+    }
+
+    #[test]
+    fn parse_tablet_absolute_report() {
+        // buttons=left(0x01), X=0x1234, Y=0x5678 (little-endian), wheel=0.
+        let a = parse_tablet(&[0x01, 0x34, 0x12, 0x78, 0x56, 0x00]).unwrap();
+        assert_eq!(a.buttons, 0x01);
+        assert_eq!(a.x, 0x1234);
+        assert_eq!(a.y, 0x5678);
+        // Full-scale corner and too-short guard.
+        let hi = parse_tablet(&[0, 0xFF, 0x7F, 0xFF, 0x7F]).unwrap();
+        assert_eq!((hi.x, hi.y), (0x7FFF, 0x7FFF));
+        assert!(parse_tablet(&[0, 1, 2]).is_none());
     }
 
     #[test]
