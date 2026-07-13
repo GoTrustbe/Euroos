@@ -94,11 +94,11 @@ AHCI write/read + boot-medium read-only proof).
 | M4-3 | UAC2 USB audio (class driver) | ⬜ | `-device usb-audio`: stream out through `euroaudio` mixer. LPIB-style DMA-consumption proof like HDA. |
 | M4-4 | xHCI robustness pass | 🟡 | Ring-full handling, stall recovery, disconnect mid-transfer; fuzz the descriptor parser in `eurofuzz`. |
 
-### M-5 — ACPI laptop basics
+### M-5 — ACPI laptop basics — ✅ CORE DONE 2026-07-13 (power button verified; battery decode host-tested, EC dynamic deferred)
 | ID | Task | Status | Scope & verification |
 |----|------|--------|----------------------|
-| M5-1 | Battery + AC status (`_BST`/`_PSR` via euroaml) | ⬜🔒 | AML interpreter exists (`euroaml`) — wire the battery/AC methods; desktop indicator. QEMU can fake ACPI battery only partially → host-test AML against dumped real-laptop tables (users submit via `hwprobe`). |
-| M5-2 | Lid/power-button GPE events | ⬜ | Fixed-event + GPE dispatch; lid → lock screen, button → shutdown flow ([s5] exists). Verify: QMP `system_powerdown` event path in q35. |
+| M5-1 | Battery + AC status (`_BST`/`_PSR` via euroaml) | ✅ (static decode) 🔒 (EC dynamic) | euroaml BatteryStatus decode + has_battery/ac/lid + `battery` shell cmd + boot report. Host-tested. EC-backed `_BST` needs an EC driver (deferred); QEMU has no battery, reported honestly. |
+| M5-2 | Lid/power-button ACPI events | ✅ (power button) | FADT SCI + PM1a event block; SCI routed level/active-low → clean S5 on PWRBTN_STS. Verified: QMP `system_powerdown` → clean shutdown (matrix `power` leg + test-powerbutton.py). Lid switch (no QEMU device) deferred. |
 | M5-3 | Backlight + thermal read-out | 🔒 | Only where standard ACPI methods expose it; never vendor-specific EC hacks in phase 4. |
 
 ### M-6 — Trust hardware on metal
