@@ -17,6 +17,8 @@ Legs:
   usbhub  keyboard ONLY behind a usb-hub         -> typing works through the hub (M4-1)
   usbnet  ONLY NIC = usb-net (CDC-ECM)            -> DHCP/ping over USB ethernet (M3-3)
   power   base leg + ACPI power-button press       -> armed + clean S5 shutdown (M5-2)
+  tpm     + swtpm tpm-tis @ 0xFED40000             -> real TPM2 seal/unseal to PCR16 (M6-1)
+  printer + host mock IPP server via guestfwd      -> IPP Print-Job round-trip (M7-1)
   hwprobe base leg + typed `hwprobe` command    -> inventory lines over serial
 
 Usage: python3 scripts/run-metal-matrix.py [image] [--legs a,b,c]
@@ -29,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import shutil
 
 IMG = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "eurokernel.img"
 OVMF = "/usr/share/ovmf/OVMF.fd"
@@ -38,10 +41,13 @@ RETRIES = 2  # the boot race is fixed (BUG-010); retries only guard infra flakes
 
 AZ = {"a": "q", "q": "a", "z": "w", "w": "z", "m": "semicolon", " ": "spc"}
 
+# Side processes (swtpm / mock IPP server) started per-leg, torn down after.
+SIDE = {}
+
 
 def leg_devices(leg):
     """Extra QEMU args per leg (on top of the common q35 + xhci-kbd base)."""
-    if leg in ("base", "hwprobe", "power"):
+    if leg in ("base", "hwprobe", "power", "printer"):
         return []
     if leg == "nvme":
         img = os.path.join(WORK, "nvme.img")
@@ -83,6 +89,17 @@ def leg_devices(leg):
         return ["-device", "usb-hub,bus=xhci.0,port=3",
                 "-drive", f"format=raw,file={img},if=none,id=ud0",
                 "-device", "usb-storage,drive=ud0,bus=xhci.0,port=4"]
+    if leg == "tpm":
+        # swtpm is started in run_leg (needs teardown); here just attach it.
+        sock = SIDE.get("tpm_sock")
+        return ["-chardev", f"socket,id=chrtpm,path={sock}",
+                "-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
+                "-device", "tpm-tis,tpmdev=tpm0"]
+    if leg == "printer":
+        # No special netdev: slirp already forwards guest -> 10.0.2.2:631 to the
+        # host's service on :631 (same mechanism the OTA server on :8722 uses).
+        # The mock IPP server (start_side) listens on the host at :631.
+        return []
     raise SystemExit(f"unknown leg {leg}")
 
 
@@ -106,6 +123,10 @@ LEGS = {
                 "interactive loop started"], []),
     "hwprobe": (["interactive loop started"], []),
     "power": (["[acpi] power button armed", "[acpi-pwr]", "interactive loop started"], []),
+    "tpm": (["TPM 2.0 TIS @ 0xfed40000", "[3e1] EnrollFde EXECUTED", "unseal-roundtrip=true",
+             "interactive loop started"], ["unseal-roundtrip=false"]),
+    "printer": (["[bb4] EuroPrint IPP-over-TCP", "Print-Job status=0x0000 (ok=true)",
+                 "interactive loop started"], ["ok=false"]),
 }
 
 
@@ -155,8 +176,58 @@ def qmp_type(qmp, text):
     s.close()
 
 
+def start_side(leg):
+    if leg == "tpm":
+        state = tempfile.mkdtemp(prefix="ek-swtpm-")
+        sock = os.path.join(state, "sock")
+        p = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={state}",
+                              "--ctrl", f"type=unixio,path={sock}", "--log", "level=1"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        for _ in range(50):
+            if os.path.exists(sock):
+                break
+            time.sleep(0.1)
+        SIDE["tpm_proc"] = p
+        SIDE["tpm_state"] = state
+        SIDE["tpm_sock"] = sock
+    elif leg == "printer":
+        spool = tempfile.mkdtemp(prefix="ek-ipp-")
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mock-ipp-server.py")
+        p = subprocess.Popen(["sudo", "-n", sys.executable, script, "--port", "631", "--spool", spool],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        time.sleep(1.5)
+        SIDE["ipp_proc"] = p
+        SIDE["ipp_spool"] = spool
+
+
+def stop_side(leg):
+    ipp = SIDE.pop("ipp_proc", None)
+    if ipp:
+        # The server runs under sudo; pkill it by script name.
+        subprocess.run(["sudo", "-n", "pkill", "-f", "mock-ipp-server.py"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            ipp.wait(timeout=6)
+        except Exception:
+            pass
+    p = SIDE.pop("tpm_proc", None)
+    if p:
+        try:
+            p.kill()
+            p.wait(timeout=6)
+        except Exception:
+            pass
+    st = SIDE.pop("tpm_state", None)
+    if st:
+        shutil.rmtree(st, ignore_errors=True)
+    SIDE.pop("tpm_sock", None)
+    SIDE.pop("ipp_port", None)
+    SIDE.pop("ipp_spool", None)
+
+
 def run_leg(leg):
     need, forbid = LEGS[leg]
+    start_side(leg)
     extra = leg_devices(leg)
     log = os.path.join(WORK, f"{leg}.serial.log")
     qmp = os.path.join(WORK, f"{leg}.qmp.sock")
@@ -181,6 +252,7 @@ def run_leg(leg):
         print(f"  [{leg}] FAIL: never reached the interactive loop; serial tail:")
         for l in serial(log).splitlines()[-6:]:
             print("    | " + l)
+        stop_side(leg)
         return False
 
     if leg == "hwprobe":
@@ -239,12 +311,16 @@ def run_leg(leg):
         qemu.wait(timeout=6)
     except Exception:
         pass
+    stop_side(leg)
     print(f"  [{leg}] {'PASS ✓' if ok else 'FAIL ✗'}", flush=True)
     return ok
 
 
 def main():
-    legs = list(LEGS)
+    # `printer` needs a privileged IPP endpoint on host :631 (slirp forwards
+    # guest -> 10.0.2.2:631 there). It is opt-in via --legs printer; the default
+    # sweep is the fully self-contained set.
+    legs = [l for l in LEGS if l != "printer"]
     for i, a in enumerate(sys.argv):
         if a == "--legs":
             legs = sys.argv[i + 1].split(",")

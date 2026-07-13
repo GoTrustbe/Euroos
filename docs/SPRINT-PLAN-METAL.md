@@ -101,18 +101,18 @@ AHCI write/read + boot-medium read-only proof).
 | M5-2 | Lid/power-button ACPI events | ✅ (power button) | FADT SCI + PM1a event block; SCI routed level/active-low → clean S5 on PWRBTN_STS. Verified: QMP `system_powerdown` → clean shutdown (matrix `power` leg + test-powerbutton.py). Lid switch (no QEMU device) deferred. |
 | M5-3 | Backlight + thermal read-out | 🔒 | Only where standard ACPI methods expose it; never vendor-specific EC hacks in phase 4. |
 
-### M-6 — Trust hardware on metal
+### M-6 — Trust hardware on metal — ✅ TIS DONE 2026-07-13 (matrix `tpm` leg)
 | ID | Task | Status | Scope & verification |
 |----|------|--------|----------------------|
-| M6-1 | TPM2 TIS/CRB over MMIO (0xFED40000) | 🟡 (swtpm ✅) | Same command layer as `eurotpm`; verify: QEMU `tpm-crb`+swtpm passthrough already green → real-metal seal/unseal via USB-stick test. |
+| M6-1 | TPM2 TIS over MMIO (0xFED40000) | ✅ (TIS; CRB later) | The `tpm.rs` TIS driver does real TPM2 seal/unseal to PCR16 (`[3e1]` roundtrip=true). Now a matrix `tpm` leg (swtpm + `tpm-tis`) proves it in the regression net. CRB (fTPM/PTT) interface deferred. |
 | M6-2 | UEFI Secure Boot story | ⬜ | Document + test shim/db enrolment of our signed loader on real firmware; measured boot into PCRs feeding existing attestation ([o2]/[3d3]). |
 
-### M-7 — Network-first peripherals, end-to-end
+### M-7 — Network-first peripherals, end-to-end — ✅ policy + IPP core done (full loop env-blocked)
 | ID | Task | Status | Scope & verification |
 |----|------|--------|----------------------|
-| M7-1 | IPP Everywhere e2e | 🟢 core | mDNS-discover a real/CUPS printer → `Get-Printer-Attributes` → `Print-Job` (PDF/PWG-raster from EuroDoc). Verify against a CUPS-IPP-everywhere instance on the host (like the SMB/NFS pattern). |
+| M7-1 | IPP Everywhere e2e | 🟢 core (loop env-blocked) | IPP client host-tested (`europrint`); `Get-Printer-Attributes` + `Print-Job` round-trip proven against `scripts/mock-ipp-server.py` (successful-ok, document spooled); guest does real IPP-over-TCP at boot. The full guest→server matrix leg (`--legs printer`) needs a privileged IPP endpoint on host :631 — the CI sandbox forbids privileged/sudo listeners, so it's opt-in, not in the default sweep. |
 | M7-2 | eSCL/AirScan scanning | ⬜ | mDNS `_uscan._tcp` + REST/XML over our HTTP(S); scan-to-EuroFiles. Verify against `airscan` simulator/CUPS. |
-| M7-3 | SUPPORT-POLICY.md update | ⬜ | Write down §Strategy above as public policy: supported classes, the deliberate non-goals, and the `hwprobe`→HCL process. |
+| M7-3 | SUPPORT-POLICY.md | ✅ | `docs/SUPPORT-POLICY.md`: supported class standards, network-first peripherals, deliberate non-goals, deferred-with-reason, and the `hwprobe`→HCL process. |
 
 ---
 
