@@ -82,7 +82,7 @@ AHCI write/read + boot-medium read-only proof).
 ### M-3 — Wired network on metal *(unlocks web/VPN/update/IPP on real machines)*
 | ID | Task | Status | Scope & verification |
 |----|------|--------|----------------------|
-| M3-1 | Intel e1000e (82574/I219 family) | ⬜ | TX/RX rings + EEPROM MAC + link status + MSI-X. Verify: q35 `-device e1000e` — DHCP, ping, DNS, TLS fetch, signed-update fetch all green (the whole [net] suite on the new NIC). |
+| M3-1 | Intel e1000e (82574/I219 family) | ✅ (82540+82574, polled) | `e1000.rs` + `nic.rs` dispatch: the whole net suite runs on the Intel NIC (matrix leg: DHCP OFFER + ping required, DNS observed). I219/I225 unbound until real-metal hwprobe validation. MSI-X + TSO later if needed. |
 | M3-2 | Realtek RTL8168/8125 (2.5G) | 🔒 | The majority of consumer boards. QEMU has no model — write against datasheet/OSS references, gate behind `hwprobe` + real-metal validation. Honest label until then. |
 | M3-3 | USB CDC-NCM/ECM (USB ethernet + phone tethering) | ⬜ | Class driver over existing xHCI. Verify: QEMU `-device usb-net` end-to-end DHCP→TLS; this is also the interim "WiFi" answer on laptops. |
 
