@@ -58,12 +58,16 @@ ACPI RSDP/MADT/FADT-S5 + HPET + IO-APIC/MSI-X + SMP AP bring-up · PCI enum (leg
 
 ## Sprints
 
-### M-1 — PCIe done right *(foundation, small)*
+### M-1 — PCIe done right *(foundation, small)* — ✅ DONE 2026-07-13
+All four items landed (commit `pci: ECAM config access + shared capability
+walker + hwprobe`): ECAM live on q35 (`[ecam] … @ 0xe0000000, port-verified`),
+MSI-X + virtio on the shared walker, `hwprobe` verified end-to-end, and the
+metal matrix runs 7/7 legs green (also in CI as an informational job).
 | ID | Task | Status | Scope & verification |
 |----|------|--------|----------------------|
-| M1-1 | ECAM via ACPI MCFG | ⬜ | Parse MCFG, memory-mapped config for all segments/buses; keep 0xCF8 fallback. Verify: q35 lspci-equivalent (`pci` shell cmd) identical via both paths, boot marker `[ecam]`. |
-| M1-2 | Capability walker + MSI-X everywhere | ⬜ | One shared helper for BAR/MSI-X/power caps (today per-driver). Verify: xhci/nvme/hda re-enumerate through it, no regressions ([q1x2]/[usb]/[snd] markers stay green). |
-| M1-3 | `hwprobe` shell command | ⬜ | Dump PCI inventory + which driver claimed what + firmware/ACPI ids, in copy-pasteable HCL format. Verify: output on the q35 matrix matches reality; doc how users submit it. |
+| M1-1 | ECAM via ACPI MCFG | ✅ | Parse MCFG, memory-mapped config for all segments/buses; keep 0xCF8 fallback. Verify: q35 lspci-equivalent (`pci` shell cmd) identical via both paths, boot marker `[ecam]`. |
+| M1-2 | Capability walker + MSI-X everywhere | ✅ | One shared helper for BAR/MSI-X/power caps (today per-driver). Verify: xhci/nvme/hda re-enumerate through it, no regressions ([q1x2]/[usb]/[snd] markers stay green). |
+| M1-3 | `hwprobe` shell command | ✅ | Dump PCI inventory + which driver claimed what + firmware/ACPI ids, in copy-pasteable HCL format. Verify: output on the q35 matrix matches reality; doc how users submit it. |
 
 ### M-2 — Storage on metal
 | ID | Task | Status | Scope & verification |
