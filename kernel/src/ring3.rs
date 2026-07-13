@@ -49,8 +49,13 @@ static HEAP_END: AtomicU64 = AtomicU64::new(0);
 /// Set at program start; used to validate user pointers before the kernel
 /// dereferences them, so a process cannot make the kernel read/write kernel memory.
 static ARENA_BASE: AtomicU64 = AtomicU64::new(0);
-/// The arena is 2 MiB in size (same `MIB2` as the paging layer).
+/// The default arena is 2 MiB in size (same `MIB2` as the paging layer).
 const ARENA_SPAN: u64 = 2 * 1024 * 1024;
+/// Span of the CURRENTLY running process's arena. Set alongside `ARENA_BASE`
+/// on every context/exec switch. Defaults to `ARENA_SPAN`; a large-arena app
+/// (e.g. the DOOM port, [[eurokernel-project]]) raises it so that user-pointer
+/// validation covers its whole arena instead of clamping at 2 MiB.
+static ARENA_SPAN_DYN: AtomicU64 = AtomicU64::new(ARENA_SPAN);
 
 /// Does `[ptr, ptr+len)` lie entirely within the arena of the running process?
 /// (Overflow-safe. If no arena has been set yet — a purely kernel-internal call —
@@ -76,7 +81,7 @@ fn in_user_arena(ptr: u64, len: usize) -> bool {
     if base == 0 {
         return true; // no ring-3 context active
     }
-    let top = base + ARENA_SPAN;
+    let top = base + ARENA_SPAN_DYN.load(Ordering::Relaxed);
     match ptr.checked_add(len as u64) {
         Some(end) => ptr >= base && end <= top,
         None => false,
@@ -458,7 +463,24 @@ fn ensure_proc(path: &[u8]) -> bool {
 
 /// Open a path (bytes) in the VFS -> fd, or u64::MAX if not found / full.
 /// Shared by the native (sys_open) and Linux (openat) ABI.
+/// Sentinel file-index in OPEN_FDS meaning "the embedded DOOM IWAD" — served
+/// straight from the kernel image (DOOM_WAD) instead of the scrubbed VFS, so the
+/// 4 MiB WAD neither bloats the RAM filesystem nor makes the boot-time FS scrub
+/// crawl for minutes under TCG.
+const WAD_FI: usize = usize::MAX;
+
 fn vfs_open(path: &[u8]) -> u64 {
+    // The DOOM IWAD is served from the kernel image, not the VFS.
+    if path == b"/doom1.wad" {
+        let mut fds = OPEN_FDS.lock();
+        for (fd, slot) in fds.iter_mut().enumerate().skip(3) {
+            if slot.is_none() {
+                *slot = Some((WAD_FI, 0));
+                return fd as u64;
+            }
+        }
+        return u64::MAX;
+    }
     ensure_proc(path); // freshly generate /proc files before the lookup
     let files = FILES.lock();
     match files.iter().position(|(p, _)| p.as_bytes() == path) {
@@ -486,6 +508,19 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
         Some(x) => x,
         None => return u64::MAX,
     };
+    // The embedded DOOM IWAD (served from the kernel image).
+    if fi == WAD_FI {
+        let data = DOOM_WAD;
+        let n = len.min(data.len().saturating_sub(off));
+        if !in_user_arena(buf, n) {
+            return u64::MAX;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(data[off..].as_ptr(), buf as *mut u8, n);
+        }
+        fds[fd] = Some((fi, off + n));
+        return n as u64;
+    }
     let files = FILES.lock();
     let data = &files[fi].1;
     let n = len.min(data.len().saturating_sub(off));
@@ -1186,6 +1221,24 @@ fn do_execve(p: &mut BgProc, path_ptr: u64, argv_ptr: u64) -> u64 {
     0
 }
 
+/// Read from a bg process's `fd` into `buf` (`len` bytes): a pipe read first,
+/// else a VFS file read (including the embedded DOOM WAD), else 0/EOF WITHOUT
+/// touching the VFS locks (a bg read of stdin must not contend FILES.lock with
+/// the boot self-tests). Shared by read() and readv().
+fn bg_read_fd(fd: usize, buf: u64, len: usize) -> u64 {
+    // A real open FILE takes precedence over a pipe: PIPE_FDS is GLOBAL across bg
+    // processes, so a boot demo (forkpipe) can leave a stale pipe on the same fd
+    // number that this process later opens a file on. Checking the file first
+    // stops the DOOM port's WAD reads (fd 3) routing into that stale pipe.
+    if fd < MAX_FD && OPEN_FDS.lock()[fd].is_some() {
+        vfs_read(fd, buf, len)
+    } else if let Some(r) = pipe_read_fd(fd, buf, len) {
+        r
+    } else {
+        0
+    }
+}
+
 fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     // Just like the daemon: never take the global sys_exit path.
     unsafe { EXITED = 0 };
@@ -1234,6 +1287,12 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
                 p.partial.push_str(t);
                 while let Some(nl) = p.partial.find('\n') {
                     let line: String = p.partial.drain(..=nl).collect();
+                    // Diagnostics: a fullscreen app owns the display, so its
+                    // console output is invisible — mirror it to serial (the
+                    // DOOM port's init banner, e.g.). Cheap: apps print little.
+                    if p.pid != 0 && p.pid == crate::appgfx::app_pid() {
+                        crate::serial_println!("[app-out] {}", line.trim_end());
+                    }
                     p.output.push(String::from(line.trim_end()));
                     let len = p.output.len();
                     if len > 6 {
@@ -1243,7 +1302,110 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             }
             text.len() as u64
         }
-        0 => pipe_read_fd(a1 as usize, a2, a3 as usize).unwrap_or(0), // read: pipe or EOF
+        // EuroOS app-graphics bridge (the DOOM port etc.). High numbers that do
+        // not collide with any Linux syscall.
+        0x6000 => {
+            // fb_present(buf, w, h): hand an XRGB8888 frame to the compositor
+            // bridge. `buf` must lie in THIS process's arena and be u32-aligned.
+            let (w, h) = (a2 as usize, a3 as usize);
+            {
+                // Diagnostics: log the first few presents so we can see the app
+                // reaching the bridge (and with what geometry).
+                static N: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+                let n = N.fetch_add(1, Ordering::Relaxed);
+                if n < 4 {
+                    crate::serial_println!("[appgfx] fb_present #{n} pid {} buf={a1:#x} w={w} h={h}", p.pid);
+                }
+            }
+            if w == 0 || h == 0 || w > 1920 || h > 1200 || a1 & 3 != 0 {
+                crate::serial_println!("[appgfx] fb_present REJECT-EINVAL w={w} h={h} buf={a1:#x}");
+                return (-22i64) as u64; // -EINVAL
+            }
+            let bytes = (w * h * 4) as u64;
+            let arena_top = p.arena_virt + p.arena_frames * 4096;
+            if a1 < p.arena_virt || a1.checked_add(bytes).map_or(true, |e| e > arena_top) {
+                crate::serial_println!("[appgfx] fb_present REJECT-EFAULT buf={a1:#x} not in {:#x}..{arena_top:#x}", p.arena_virt);
+                return EFAULT;
+            }
+            // SAFETY: bounds-checked against this process's identity-mapped arena;
+            // running under the process's CR3 during its own syscall.
+            let px = unsafe { core::slice::from_raw_parts(a1 as *const u32, w * h) };
+            crate::appgfx::present(px, w, h);
+            0
+        }
+        0x6001 => crate::appgfx::getkey() as u64, // getkey() -> pressed<<8|code, or 0
+        // read(fd,buf,len): a pipe read first; else a VFS read ONLY if `fd` is an
+        // actually-open file (the DOOM port reads its 4 MiB WAD through here).
+        // For anything else (e.g. stdin fd 0) return 0/EOF WITHOUT touching the
+        // VFS locks — a bg process reading fd 0 must not contend FILES.lock with
+        // the boot self-tests (that deadlocks boot).
+        0 => bg_read_fd(a1 as usize, a2, a3 as usize),
+        // readv(fd, iov, iovcnt): musl's stdio (fread) reads through readv, NOT
+        // plain read — so the DOOM port's WAD loading lands here. Read into each
+        // iov in turn; stop on a short read (EOF) or error.
+        19 => {
+            if a3 > 1024 {
+                return (-22i64) as u64; // -EINVAL
+            }
+            let mut total = 0u64;
+            for i in 0..a3 {
+                let iov_base = a2 + i * 16;
+                let base = match read_user::<u64>(iov_base) {
+                    Some(b) => b,
+                    None => return EFAULT,
+                };
+                let len = match read_user::<u64>(iov_base + 8) {
+                    Some(l) => l as usize,
+                    None => return EFAULT,
+                };
+                if len == 0 {
+                    continue;
+                }
+                let r = bg_read_fd(a1 as usize, base, len);
+                if r == u64::MAX {
+                    break; // error on this fd
+                }
+                total += r;
+                if (r as usize) < len {
+                    break; // short read / EOF
+                }
+            }
+            total
+        }
+        // File I/O for a scheduled app (open/openat/lseek/close/fstat) — enough
+        // for musl stdio to fopen/fread/fseek a data file (the WAD).
+        2 => {
+            // open(path, flags, mode)
+            let path = user_cstr(a1, 256);
+            vfs_open(&path)
+        }
+        257 => {
+            // openat(dirfd, path, flags, mode) — musl fopen uses this.
+            let path = user_cstr(a2, 256);
+            vfs_open(&path)
+        }
+        3 => vfs_close(a1 as usize),                     // close(fd)
+        8 => vfs_lseek(a1 as usize, a2 as i64, a3),      // lseek(fd, off, whence)
+        5 => {
+            // fstat(fd, statbuf): fill a 144-byte Linux struct stat with the file
+            // size + regular-file mode, so musl stdio buffers the WAD correctly.
+            let sz = match vfs_size(a1 as usize) {
+                Some(s) => s,
+                None => return (-9i64) as u64, // -EBADF
+            };
+            if !in_user_arena(a2, 144) {
+                return EFAULT;
+            }
+            // SAFETY: statbuf (144 B) arena-validated; identity-mapped.
+            unsafe {
+                core::ptr::write_bytes(a2 as *mut u8, 0, 144);
+                (a2 as *mut u32).add(6).write(0o100644); // st_mode: S_IFREG|0644
+                ((a2 + 48) as *mut u64).write(sz as u64); // st_size
+                ((a2 + 56) as *mut u64).write(4096); // st_blksize
+                ((a2 + 64) as *mut u64).write(((sz + 511) / 512) as u64); // st_blocks
+            }
+            0
+        }
         22 | 293 => pipe_create(a1),                                  // pipe / pipe2
         32 => a1, // dup(fd) -> same fd (simplified)
         33 => {
@@ -1362,8 +1524,29 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             crate::euroipc::send(p.pid, a1 as u32, &data) as u64
         }
         502 => crate::euroipc::recv(p.pid, a1, a2 as usize) as u64,
-        // Memory/signal/time stubs that silently succeed.
-        10 | 11 | 13 | 14 | 16 | 35 | 228 | 234 | 273 => 0,
+        // Memory/signal/time stubs that silently succeed. nanosleep (35) /
+        // clock_nanosleep (230) are no-ops here ON PURPOSE: bg_dispatch runs
+        // under the held BG spinlock, so it must NEVER yield/block (doing so
+        // switches away with the lock held → deadlock). A graphical app that
+        // wants to pace itself busy-loops; the preemptive timer still gives the
+        // desktop CPU, so this only wastes cycles, it never hangs.
+        10 | 11 | 13 | 14 | 16 | 35 | 230 | 234 | 273 => 0,
+        228 => {
+            // clock_gettime(clk, *ts): monotonic time from the 100 Hz tick counter,
+            // so the DOOM port's DG_GetTicksMs advances (game tics + timing work).
+            // a1 = clockid (ignored), a2 = *timespec {i64 sec, i64 nsec}.
+            let t = crate::interrupts::ticks();
+            let (sec, nsec) = ((t / 100) as i64, ((t % 100) * 10_000_000) as i64);
+            let top = p.arena_virt + p.arena_frames * 4096;
+            if a2 >= p.arena_virt && a2.checked_add(16).map_or(false, |e| e <= top) && a2 & 7 == 0 {
+                // SAFETY: bounds-checked against this process's identity-mapped arena.
+                unsafe {
+                    (a2 as *mut i64).write(sec);
+                    ((a2 + 8) as *mut i64).write(nsec);
+                }
+            }
+            0
+        }
         60 | 231 => {
             let cur = crate::sched::current();
             if p.threads.contains(&cur) {
@@ -1389,6 +1572,13 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             // the reaper frees the frames. musl spins afterward until the timer switches.
             p.zombie = true;
             p.kill_reason = Some(alloc::format!("done (exit {a1})"));
+            // If the app that owned the screen just exited, release ownership.
+            // set_active(false) is a single atomic store (LOCK-FREE), so it is
+            // safe under the held BG spinlock; and during boot app_pid()==0 never
+            // matches an exiting pid, so this is a no-op until an app is launched.
+            if p.pid == crate::appgfx::app_pid() {
+                crate::appgfx::set_active(false);
+            }
             // S3: save the exit status for the parent (waitpid) — only if there is
             // a parent (ppid != 0). Services (ppid 0) would otherwise grow CHILD_EXITS
             // unbounded (nobody waitpids on ppid 0).
@@ -1454,6 +1644,75 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
         });
     });
     crate::serial_println!("[euro] bg-musl (pid {pid}) -> task {idx}, own address space PML4 {pml4:#x}, arena {arena:#x}");
+}
+
+/// Like [`spawn_bg_musl`] but with a LARGE arena (`arena_mib`, e.g. 32 MiB) for a
+/// heavyweight app — the DOOM port needs room for code + a 4 MiB WAD + its zone
+/// heap, far more than the 2 MiB a demo process gets. Layout: block 0 holds the
+/// code (W^X); the heap spans blocks 1..N-1; the top 2 MiB block is the stack.
+/// Returns the scheduler task index (for later reaping), or `None` if RAM is short.
+pub fn spawn_bg_app(
+    falloc: &mut FrameAllocator,
+    program: &[u8],
+    pid: u64,
+    argv: &[&[u8]],
+    arena_mib: u64,
+) -> Option<usize> {
+    init_syscall_msrs();
+    const MIB2: u64 = 1 << 21;
+    let nblocks = (arena_mib / 2).max(2); // 2 MiB per block; at least 2 blocks
+    let frames = nblocks * 512;
+    // 2 MiB-aligned (block 0 must sit on a 2 MiB boundary for the fine-grained PT).
+    let arena = falloc.allocate_aligned(frames as usize, 512).ok()?;
+    let arena_raw = arena;
+    let code = arena; // code/data/bss at the bottom (must fit in the first 2 MiB)
+    let heap = arena + MIB2; // heap starts at block 1
+    let heap_end = arena + (nblocks - 1) * MIB2; // stops below the stack block
+    let stack_top = arena + nblocks * MIB2; // stack grows down from the arena top
+    let kstack = falloc.allocate_contiguous(4).expect("app-kstack");
+    let kstack_top = (kstack + 4 * 4096) & !0xF;
+    let pages = program_span_pages(program);
+    if pages > 512 {
+        // Code+data+bss must fit in the fine-grained first 2 MiB block. musl
+        // static-PIE DOOM is well under this; log loudly if a future binary isn't.
+        crate::serial_println!("[euro] WARN app pid {pid}: load span {pages} pages > 512 (2 MiB) — code may not be mapped W^X");
+    }
+    let info = load_program(program, code, pages);
+    let rsp = unsafe { setup_user_stack(stack_top, argv, &info) };
+    let sel = crate::gdt::selectors();
+    let user_cs = (sel.user_code.0 | 3) as u64;
+    let user_ss = (sel.user_data.0 | 3) as u64;
+    let pml4 = crate::paging::build_address_space_big(
+        falloc,
+        arena,
+        nblocks,
+        &info.exec_pages,
+        &info.writ_pages,
+    );
+    let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        BG.lock().push(BgProc {
+            task: idx,
+            pid,
+            heap_break: heap,
+            heap_end,
+            output: alloc::vec::Vec::new(),
+            partial: String::new(),
+            arena_raw,
+            arena_frames: frames,
+            arena_virt: arena,
+            kstack,
+            pml4,
+            zombie: false,
+            kill_reason: None,
+            threads: alloc::vec::Vec::new(),
+            thread_ctids: alloc::vec::Vec::new(),
+            ppid: 0,
+            pooled: false,
+        });
+    });
+    crate::serial_println!("[euro] bg-app (pid {pid}) -> task {idx}, arena {arena:#x} span {arena_mib} MiB, heap {heap:#x}..{heap_end:#x}, PML4 {pml4:#x}");
+    Some(idx)
 }
 
 /// Close an fd.
@@ -1563,6 +1822,9 @@ fn vfs_size(fd: usize) -> Option<usize> {
     }
     let fds = OPEN_FDS.lock();
     let (fi, _) = fds[fd]?;
+    if fi == WAD_FI {
+        return Some(DOOM_WAD.len());
+    }
     Some(FILES.lock()[fi].1.len())
 }
 
@@ -1761,6 +2023,12 @@ static LDEURO_SO: &[u8] = include_bytes!("../../userland/ld-euro.so");
 static LIBCEURO_SO: &[u8] = include_bytes!("../../userland/libc-euro.so");
 static MUSLREAL_ELF: &[u8] = include_bytes!("../../userland/muslreal.elf");
 static MUSLFILE_ELF: &[u8] = include_bytes!("../../userland/muslfile.elf");
+// App-graphics smoke test (large-arena scheduled app: fb_present + getkey).
+static FBTEST_ELF: &[u8] = include_bytes!("../../userland/fbtest.elf");
+// The DOOM port (doomgeneric, id GPL DOOM) + the freely-redistributable
+// shareware IWAD it plays.
+static DOOM_ELF: &[u8] = include_bytes!("../../userland/doom.elf");
+static DOOM_WAD: &[u8] = include_bytes!("../../userland/doom1.wad");
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
 static MWRITE_ELF: &[u8] = include_bytes!("../../userland/mwrite.elf");
 static MECHO_ELF: &[u8] = include_bytes!("../../userland/mecho.elf");
@@ -1950,6 +2218,21 @@ pub fn pieprog_bytes() -> &'static [u8] {
     PIEPROG_ELF
 }
 
+/// The ELF bytes of /bin/fbtest (app-graphics smoke test: fb_present + getkey).
+pub fn fbtest_bytes() -> &'static [u8] {
+    FBTEST_ELF
+}
+
+/// The ELF bytes of /bin/doom (doomgeneric port, musl static-PIE).
+pub fn doom_bytes() -> &'static [u8] {
+    DOOM_ELF
+}
+
+/// The shareware DOOM IWAD (written to /doom1.wad at boot; read by the game).
+pub fn doom_wad_bytes() -> &'static [u8] {
+    DOOM_WAD
+}
+
 /// The ELF bytes of /bin/muslreal (real binary linked against musl libc).
 pub fn muslreal_bytes() -> &'static [u8] {
     MUSLREAL_ELF
@@ -2044,6 +2327,8 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/pieprog" => include_bytes!("../../userland/pieprog.elf.sig"),
         "/bin/muslreal" => include_bytes!("../../userland/muslreal.elf.sig"),
         "/bin/muslfile" => include_bytes!("../../userland/muslfile.elf.sig"),
+        "/bin/fbtest" => include_bytes!("../../userland/fbtest.elf.sig"),
+        "/bin/doom" => include_bytes!("../../userland/doom.elf.sig"),
         "/bin/mcat" => include_bytes!("../../userland/mcat.elf.sig"),
         "/bin/mwrite" => include_bytes!("../../userland/mwrite.elf.sig"),
         "/bin/mecho" => include_bytes!("../../userland/mecho.elf.sig"),
@@ -3136,20 +3421,41 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
     {
         let mut bg = BG.lock();
         if let Some(pos) = bg.iter().position(|p| p.task == cur || p.threads.contains(&cur)) {
+            // nanosleep / clock_nanosleep: PACE the caller by sleeping it a couple
+            // of ticks, so a graphical app (the DOOM port) yields the CPU and the
+            // desktop loop runs often enough to blit smoothly + catch keystrokes.
+            // Handled HERE, not in bg_dispatch: sleep_ticks takes SCHED.lock, and
+            // taking it while holding BG.lock would invert the scheduler's own
+            // SCHED->BG order (timer reaper) and deadlock. So drop BG first. It
+            // takes no user pointers, so it needs no arena set-up.
+            if num == 35 || num == 230 {
+                drop(bg);
+                crate::sched::sleep_ticks(2);
+                return 0;
+            }
+            // Validate THIS process's user pointers against ITS OWN arena for the
+            // duration of the syscall (the global default span is only 2 MiB; a
+            // large-arena app like DOOM needs its full 32 MiB span so the file
+            // syscalls' in_user_arena checks pass for its heap buffers). Atomic
+            // swap + restore — no locks, safe under the held BG spinlock.
+            let prev_base = ARENA_BASE.swap(bg[pos].arena_virt, Ordering::Relaxed);
+            let prev_span = ARENA_SPAN_DYN.swap(bg[pos].arena_frames * 4096, Ordering::Relaxed);
             // fork/vfork/wait4 MUTATE the BG table (add a child / get status)
             // and therefore cannot run under the p-borrow of bg_dispatch.
-            match num {
-                57 | 58 => return do_fork(&mut bg, pos), // fork / vfork
+            let r = match num {
+                57 | 58 => do_fork(&mut bg, pos), // fork / vfork
                 61 => {
-                    // wait4(pid, *status, options, *rusage): non-blocking reap.
                     let parent_pid = bg[pos].pid;
-                    return do_wait4(parent_pid, a1, a2);
+                    do_wait4(parent_pid, a1, a2)
                 }
                 _ => {
                     let p = &mut bg[pos];
-                    return bg_dispatch(p, num, a1, a2, a3, a4, a5);
+                    bg_dispatch(p, num, a1, a2, a3, a4, a5)
                 }
-            }
+            };
+            ARENA_BASE.store(prev_base, Ordering::Relaxed);
+            ARENA_SPAN_DYN.store(prev_span, Ordering::Relaxed);
+            return r;
         }
     }
     // Linux-ABI compatibility: programs compiled for x86_64-linux

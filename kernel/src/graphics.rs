@@ -354,6 +354,44 @@ impl FrameBuffer {
         self.fill_rect(0, 0, self.width, self.height, c);
     }
 
+    /// Blit an XRGB8888 (`0x00RRGGBB`) source image into the backbuffer at
+    /// `(dx,dy)`, integer-scaled by `scale`. The source pixel format is IDENTICAL
+    /// to the backbuffer format (see [`Color::pack`]), so pixels are copied
+    /// verbatim — no per-pixel repack. Used by the app-graphics bridge: a
+    /// scheduled userspace app (the DOOM port) hands over frames this way, and
+    /// `present_rect` does the final BGR conversion at scan-out.
+    pub fn blit_xrgb(&self, dx: usize, dy: usize, src: &[u32], sw: usize, sh: usize, scale: usize) {
+        if self.buf.is_null() || sw == 0 || sh == 0 {
+            return;
+        }
+        let scale = scale.max(1);
+        for sy in 0..sh {
+            let src_row = &src[sy * sw..sy * sw + sw];
+            for k in 0..scale {
+                let ty = dy + sy * scale + k;
+                if ty >= self.height {
+                    return;
+                }
+                let maxrun = self.width.saturating_sub(dx);
+                if maxrun == 0 {
+                    continue;
+                }
+                // SAFETY: `ty < height`, and we clamp the run to `maxrun` below.
+                let dst = unsafe { core::slice::from_raw_parts_mut(self.buf.add(ty * self.width + dx), maxrun) };
+                let mut di = 0usize;
+                for &v in src_row {
+                    for _ in 0..scale {
+                        if di >= maxrun {
+                            break;
+                        }
+                        dst[di] = v;
+                        di += 1;
+                    }
+                }
+            }
+        }
+    }
+
     /// Filled rectangle with rounded corners (radius `r`), **anti-aliased**.
     /// In the corners the coverage is 4×4 supersampled against the corner circle,
     /// so the edges blend smoothly into the background instead of being stepped.

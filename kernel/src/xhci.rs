@@ -171,6 +171,7 @@ struct HidDevice {
     kb: eurousb::BootKeyboard,
     prev_mods: u8,
     armed: bool,
+    last_arm: u64, // tick of the last endpoint (re-)arm — for idle re-arming
 }
 
 #[inline]
@@ -590,6 +591,7 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
         kb: eurousb::BootKeyboard::new(),
         prev_mods: 0,
         armed: false,
+        last_arm: 0,
     };
     arm_interrupt(x, &mut hid);
     crate::serial_println!(
@@ -688,6 +690,7 @@ unsafe fn arm_interrupt(x: &Xhci, hid: &mut HidDevice) {
     hid.ring.push(hid.buf as u32, (hid.buf >> 32) as u32, 8, (TRB_NORMAL << 10) | (1 << 5)); // IOC
     doorbell(x, hid.slot, hid.ep_dci as u32);
     hid.armed = true;
+    hid.last_arm = crate::interrupts::ticks();
 }
 
 /// Called by the desktop loop: harvest incoming interrupt transfers and

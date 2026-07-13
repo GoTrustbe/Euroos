@@ -279,6 +279,13 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     // 3G-2: the independent deadman check — runs even while the main loop is busy;
     // trips if the loop stopped petting the watchdog (a hang).
     crate::watchdog::tick_check();
+    // Service the USB host controller on EVERY timer tick (100 Hz), independent of
+    // task scheduling. A full-screen app (the DOOM port) can starve the desktop
+    // loop down to a few Hz — far below the ~125 Hz an emulated USB keyboard's
+    // interrupt endpoint expects — so keystrokes were being dropped. Polling here
+    // keeps the endpoint serviced + re-armed regardless of load. IRQ-safe: the
+    // `POLLING` guard bails if a task-context poll is mid-flight.
+    crate::xhci::poll();
     // BUG-007: the timer must NEVER block on SCHED. Task-context code (the desktop loop,
     // syscalls, supervise/reap) holds SCHED.lock() with interrupts ENABLED; a blocking
     // acquire here would deadlock the core — this handler spins with interrupts off while

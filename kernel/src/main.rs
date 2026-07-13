@@ -24,6 +24,7 @@ mod vault;
 mod euroipc;
 mod acpi;
 mod apic;
+mod appgfx;
 mod appicons;
 mod auth;
 mod euroui;
@@ -210,12 +211,72 @@ struct FbInfo {
 }
 static FB_INFO: spin::Once<FbInfo> = spin::Once::new();
 
+/// Blit an app's XRGB8888 (`0x00RRGGBB`) frame STRAIGHT to the GOP framebuffer,
+/// integer-scaled + centered. Called from the `fb_present` syscall (under the
+/// app's own CR3 — the GOP MMIO is mapped supervisor in every address space), so
+/// a full-screen app (the DOOM port) paints at its own frame rate instead of
+/// depending on the desktop loop, which a heavyweight app can starve down to a
+/// couple of Hz. `src` is `sw*sh` pixels.
+pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
+    let fbi = match FB_INFO.get() {
+        Some(i) => i,
+        None => return,
+    };
+    if sw == 0 || sh == 0 || src.len() < sw * sh {
+        return;
+    }
+    let scale = core::cmp::min(
+        fbi.width.saturating_sub(40) / sw,
+        fbi.height.saturating_sub(120) / sh,
+    )
+    .clamp(1, 4);
+    let (dw, dh) = (sw * scale, sh * scale);
+    if dw > fbi.width || dh > fbi.height {
+        return;
+    }
+    let dx = (fbi.width - dw) / 2;
+    let dy = (fbi.height - dh) / 2;
+    let dst = fbi.base as *mut u32;
+    let rgb = matches!(fbi.pf, PixelFormat::Rgb);
+    for sy in 0..sh {
+        let row = &src[sy * sw..sy * sw + sw];
+        for k in 0..scale {
+            let ty = dy + sy * scale + k;
+            if ty >= fbi.height {
+                return;
+            }
+            let dst_row = ty * fbi.stride;
+            let mut dc = dx;
+            for &v in row {
+                // v is 0x00RRGGBB; a BGR framebuffer wants exactly those low three
+                // bytes (B,G,R little-endian), so write it verbatim — only an RGB
+                // panel needs the R/B swap (matches `FrameBuffer::present_rect`).
+                let out = if rgb { ((v & 0xFF) << 16) | (v & 0x0000_FF00) | ((v >> 16) & 0xFF) } else { v };
+                for _ in 0..scale {
+                    if dc >= fbi.width {
+                        break;
+                    }
+                    unsafe { dst.add(dst_row + dc).write_volatile(out) };
+                    dc += 1;
+                }
+            }
+        }
+    }
+}
+
 #[entry]
 fn main() -> Status {
     // ── First of all: our own heap + serial (work even after ExitBootServices). ──
     allocator::init();
     serial::init();
     serial_println!("\n[euro] EuroKernel bring-up — heap ({} MiB) + COM1 active", allocator::size() / (1024 * 1024));
+    // Symbolization anchor at BOOT (not only on panic): a hung boot leaves no
+    // panic dump, so print the runtime address of the anchor function now. Any
+    // externally sampled RIP can then be resolved with scripts/symbolize.sh.
+    serial_println!(
+        "[euro] anchor dump_registers_and_backtrace @ {:#018x}",
+        klog::dump_registers_and_backtrace as usize as u64
+    );
 
     // EuroFS is set up later (after virtio-blk init): either on the GPT disk
     // (installed, persistent) or in RAM (live mode). See `populate_fs`.
@@ -723,7 +784,9 @@ fn main() -> Status {
     // granted capabilities (least-privilege) and the syscall ABI. This lets a
     // shell later start them by NAME — the kernel itself knows with which rights + ABI.
     use ring3::{CAP_CONSOLE as CO, CAP_FILE as FI, CAP_NET as NE, CAP_PROC_INFO as PR};
-    let installed: [(&str, u64, bool); 22] = [
+    let installed: [(&str, u64, bool); 24] = [
+        ("/bin/fbtest", CO, true), // app-graphics smoke test (large-arena scheduled)
+        ("/bin/doom", CO | FI, true), // the DOOM port: draws frames + reads its WAD (CAP_FILE)
         ("/bin/hello", CO | PR | FI, false),
         ("/bin/cat", CO | FI, false),
         ("/bin/linuxprog", CO | PR | FI, true), // now reads /proc too (CAP_FILE)
@@ -2634,6 +2697,8 @@ fn main() -> Status {
     // each iteration; the scheduler tick checks it independently.
     watchdog::arm(1500); // 15s: a full software render is a few seconds under TCG (fast on real HW)
     let mut wd_reported = false;
+    let mut app_blitted = false; // one-shot log when the app-graphics bridge first paints
+    let mut last_app_blit = 0u64; // tick of the last app blit (throttle to keep the loop responsive)
     loop {
         // 3G-2: the main loop is alive → pet the watchdog.
         watchdog::pet();
@@ -2858,6 +2923,34 @@ fn main() -> Status {
         // I1: harvest USB-HID interrupt transfers (keyboard/mouse) and inject them
         // into the same scancode/mouse paths as PS/2 — before we read the keys.
         xhci::poll();
+
+        // A graphical app (the DOOM port) owns the keyboard while it runs: route
+        // RAW scancodes (press/release + arrows/ctrl, which poll_key's char
+        // interface cannot express) to the app-graphics bridge, and skip the
+        // shell/window key handling entirely. Draining the scancode ring here
+        // starves the poll_key loop below (it finds nothing).
+        if appgfx::active() {
+            // A full-screen app owns the display. Its frames are painted straight
+            // to the framebuffer by the `fb_present` syscall (crate::screen_present
+            // _xrgb) at the app's own rate — the desktop loop only routes RAW
+            // scancodes to it and gets out of the way (no blit, no compositor
+            // repaint), so nothing the loop's scheduling starvation can hurt.
+            while let Some(sc) = ps2::poll_scancode() {
+                if sc == 0xE0 {
+                    continue; // extended prefix: the FOLLOWING code carries the key
+                }
+                // set-1: high bit = break (release); low 7 bits = key.
+                appgfx::push_key(sc & 0x7F, sc & 0x80 == 0);
+            }
+            let _ = last_app_blit;
+            app_blitted = true; // remember to repaint the desktop once it exits
+            continue;
+        } else if app_blitted {
+            // The app just exited (active() went false): force one full desktop
+            // repaint to clear its frame off the screen.
+            app_blitted = false;
+            need_full = true;
+        }
 
         // The focused (topmost visible) window determines where keys go.
         let focused = order.iter().rev().copied().find(|&i| windows[i].visible);
@@ -3111,6 +3204,45 @@ fn main() -> Status {
                         for l in shell::exec(&mut ctx, &exec_cmd) {
                             out.push(l);
                         }
+                    } else if {
+                        let n = exec_cmd.split_whitespace().next().unwrap_or("");
+                        n == "doom" || n == "fbtest"
+                    } {
+                        // Graphical app: a PREEMPTIVELY-scheduled userspace program
+                        // that draws to its own centered framebuffer (fb_present)
+                        // and reads the keyboard (getkey). Unlike a /bin program it
+                        // does NOT run to completion — it owns the screen until it
+                        // exits, so we spawn it on the scheduler and return at once.
+                        let name = exec_cmd.split_whitespace().next().unwrap_or("");
+                        let path = format!("/bin/{name}");
+                        match ring3::program_caps_abi(&path) {
+                            None => out.push(format!("{name}: not installed")),
+                            Some(_) => {
+                                let bytes = ctx.fs.read_file(&path).unwrap_or_default();
+                                if !ring3::verify_program(&path, &bytes) {
+                                    out.push(format!("[sec] {path}: REJECTED — invalid Ed25519 signature"));
+                                } else {
+                                    let mem = &mut *ctx.mem;
+                                    let pid: u64 = 90;
+                                    // DOOM needs its IWAD; fbtest takes no args.
+                                    let argv: Vec<&[u8]> = if name == "doom" {
+                                        alloc::vec![b"doom".as_slice(), b"-iwad".as_slice(), b"/doom1.wad".as_slice(), b"-nosound".as_slice(), b"-nomusic".as_slice()]
+                                    } else {
+                                        alloc::vec![name.as_bytes()]
+                                    };
+                                    let spawned = x86_64::instructions::interrupts::without_interrupts(|| {
+                                        ring3::spawn_bg_app(mem, &bytes, pid, &argv, 32)
+                                    });
+                                    if spawned.is_some() {
+                                        appgfx::set_app_pid(pid);
+                                        appgfx::set_active(true);
+                                        out.push(format!("{name}: launched (pid {pid}) — drawing to the screen; Esc quits"));
+                                    } else {
+                                        out.push(format!("{name}: out of memory (needs a 32 MiB arena)"));
+                                    }
+                                }
+                            }
+                        }
                     } else if !exec_cmd.is_empty() {
                         // Pipeline: split on '|' into stages; stdout of stage N -> stdin of N+1.
                         // Redirection (>) applies to the stdout of the LAST stage.
@@ -3350,8 +3482,10 @@ fn eurojs_show(v: &eurojs::Value) -> String {
     }
 }
 
-fn system_binaries() -> [(&'static str, &'static [u8]); 29] {
+fn system_binaries() -> [(&'static str, &'static [u8]); 31] {
     [
+        ("/bin/fbtest", ring3::fbtest_bytes()),
+        ("/bin/doom", ring3::doom_bytes()),
         ("/bin/hello", ring3::program_bytes()),
         ("/bin/cat", ring3::cat_bytes()),
         ("/bin/linuxprog", ring3::linuxprog_bytes()),
@@ -3485,6 +3619,9 @@ fn populate_fs(fs: &mut dyn FileSystem) {
     for (path, bytes) in system_binaries() {
         fs.write_file(path, bytes).unwrap();
     }
+    // NOTE: /doom1.wad is served straight from the kernel image (ring3::vfs_open
+    // special-case) — NOT written to the RAM FS, so it neither doubles the WAD's
+    // RAM nor makes the boot-time FS scrub crawl over 4 MiB under TCG.
     // Record the build-id so the next boot sees that /bin is up to date.
     fs.write_file("/etc/system.ver", format!("{:016x}\n", system_digest()).as_bytes()).unwrap();
     fs.create_dir("/tmp").unwrap();
@@ -3574,6 +3711,7 @@ fn sync_system_files(fs: &mut dyn FileSystem) -> bool {
         let _ = fs.set_flags(path, 0);
         let _ = fs.write_file(path, bytes);
     }
+    // /doom1.wad is served from the kernel image (see the fresh-FS branch).
     let _ = fs.write_file("/boot/version", b"EuroKernel v0.1-alpha\n");
     let _ = fs.write_file("/etc/system.ver", want.as_bytes());
     true
