@@ -172,6 +172,9 @@ struct HidDevice {
     prev_mods: u8,
     armed: bool,
     last_arm: u64, // tick of the last endpoint (re-)arm — for idle re-arming
+    // M4-2: layout parsed from the device's HID report descriptor (report-
+    // protocol pointers). None = boot-protocol/fallback fixed layout.
+    map: Option<eurousb::InputMap>,
 }
 
 #[inline]
@@ -422,6 +425,25 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
     }
     let psc = r32(portsc(x, port));
     let speed = (psc >> 10) & 0xF;
+    // A root-port device has an empty route string and no parent hub.
+    enumerate_device(falloc, port, 0, speed, None, 0)
+}
+
+/// Address + configure one USB device (M4-1: shared by root ports and hub
+/// downstream ports). `route` is the xHCI route string (one 4-bit hub-port
+/// nibble per tier); `parent` = (hub slot, hub port, hub speed) when the
+/// device sits behind a hub — needed for the TT fields when a low/full-speed
+/// device hangs off a high-speed hub.
+unsafe fn enumerate_device(
+    falloc: &mut FrameAllocator,
+    root_port: u8,
+    route: u32,
+    speed: u32,
+    parent: Option<(u8, u8, u32)>,
+    depth: u8,
+) -> bool {
+    let xp = core::ptr::addr_of_mut!(XHCI);
+    let x = (*xp).as_mut().unwrap();
     let max_pkt0: u16 = match speed {
         2 => 8,    // Low-speed
         4 | 5 => 512, // Super(Plus)-speed
@@ -432,12 +454,12 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
     let (cc, slot) = match run_command(x, 0, 0, TRB_ENABLE_SLOT << 10) {
         Some(v) => v,
         None => {
-            crate::serial_println!("[xhci] port {port}: Enable-Slot timeout");
+            crate::serial_println!("[xhci] port {root_port}: Enable-Slot timeout");
             return false;
         }
     };
     if cc != CC_SUCCESS || slot == 0 {
-        crate::serial_println!("[xhci] port {port}: Enable-Slot cc={cc}");
+        crate::serial_println!("[xhci] port {root_port}: Enable-Slot cc={cc}");
         return false;
     }
 
@@ -451,11 +473,21 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
     let ep0_ring_frame = falloc.allocate().expect("xhci ep0-ring");
     let mut ep0_ring = Ring::new(ep0_ring_frame);
 
+    // TT fields (slot-context DW2): only a LS/FS device behind a HS hub needs
+    // the hub's slot/port for split transactions.
+    let tt = match parent {
+        Some((hub_slot, hub_port, hub_speed)) if hub_speed == 3 && (speed == 1 || speed == 2) => {
+            (hub_slot as u32) | ((hub_port as u32) << 8)
+        }
+        _ => 0,
+    };
+
     build_input_context(in_ctx, cs, 0b11, |slot_ctx, ep_ctxs| {
-        // Slot context: context-entries=1, speed, root-hub port = `port`.
-        w32(slot_ctx, (1 << 27) | (speed << 20));
-        w32(slot_ctx + 4, (port as u32) << 16);
-        // EP0 context (interrupt? no, Control type=4), max-packet, TR-dequeue.
+        // Slot context: route string, context-entries=1, speed, root-hub port.
+        w32(slot_ctx, (route & 0xF_FFFF) | (1 << 27) | (speed << 20));
+        w32(slot_ctx + 4, (root_port as u32) << 16);
+        w32(slot_ctx + 8, tt);
+        // EP0 context (Control type=4), max-packet, TR-dequeue.
         let ep0 = ep_ctxs; // DCI 1 = first endpoint context
         w32(ep0 + 4, (4 << 3) | (3 << 1) | ((max_pkt0 as u32) << 16)); // type=Control, CErr=3
         w64(ep0 + 8, ep0_ring_frame | 1); // TR-dequeue | DCS
@@ -466,7 +498,7 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
     let (cc, _) = run_command(x, in_ctx as u32, (in_ctx >> 32) as u32, (TRB_ADDRESS_DEVICE << 10) | ((slot as u32) << 24))
         .unwrap_or((0, 0));
     if cc != CC_SUCCESS {
-        crate::serial_println!("[xhci] port {port}/slot {slot}: Address-Device cc={cc}");
+        crate::serial_println!("[xhci] port {root_port}/slot {slot}: Address-Device cc={cc}");
         return false;
     }
 
@@ -489,7 +521,8 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
         }
     };
     crate::serial_println!(
-        "[xhci] slot {slot} port {port}: USB {:x}.{:x} device {:04x}:{:04x}",
+        "[xhci] slot {slot} port {root_port}{}: USB {:x}.{:x} device {:04x}:{:04x}",
+        if route != 0 { " (behind hub)" } else { "" },
         dd.usb_version >> 8, (dd.usb_version >> 4) & 0xF, dd.vendor, dd.product
     );
 
@@ -514,9 +547,19 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
         None => return false,
     };
 
+    // A hub (device class 9): power its ports and enumerate what hangs off
+    // them (M4-1). Bounded depth so a misbehaving topology can't recurse away.
+    if dd.class == 0x09 {
+        if depth >= 2 {
+            crate::serial_println!("[xhci] slot {slot}: hub depth limit reached — skipped");
+            return false;
+        }
+        return setup_hub(falloc, slot, root_port, route, speed, cfg.value, &mut ep0_ring, in_ctx, cs, buf, depth);
+    }
+
     // Mass storage (USB disk) takes priority: configure the bulk endpoints + SCSI.
     if let Some(iface) = cfg.interfaces.iter().find(|i| i.is_mass_storage_bot()) {
-        return setup_mass_storage(x, falloc, slot, port, speed, cfg.value, iface, &mut ep0_ring, in_ctx, cs, buf);
+        return setup_mass_storage(x, falloc, slot, root_port, speed, cfg.value, iface, &mut ep0_ring, in_ctx, cs, buf);
     }
 
     // Look for a HID boot interface (keyboard or mouse) + its interrupt-IN endpoint.
@@ -547,6 +590,28 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
         return false;
     }
 
+    // M4-2: report-protocol devices (the absolute pointer) describe their
+    // report layout in a HID report descriptor — fetch + parse it so decoding
+    // follows the device instead of a hardcoded format. 256 bytes is plenty
+    // for pointer descriptors; the device short-terminates.
+    let mut input_map: Option<eurousb::InputMap> = None;
+    if is_abs {
+        if control_in(x, slot, &mut ep0_ring, 0x81, 6, 0x2200, iface_num as u16, 256, buf) {
+            let d = core::slice::from_raw_parts(buf as *const u8, 256);
+            input_map = eurousb::parse_report_descriptor(d);
+            if let Some(m) = &input_map {
+                crate::serial_println!(
+                    "[xhci] slot {slot}: HID report descriptor parsed — X {}@{} bits, Y @{}, {} button(s), max {}",
+                    if m.x.unwrap().relative { "rel" } else { "abs" },
+                    m.x.unwrap().bit_off, m.y.unwrap().bit_off, m.buttons_n,
+                    m.x.unwrap().logical_max
+                );
+            } else {
+                crate::serial_println!("[xhci] slot {slot}: report descriptor not a pointer map — fallback layout");
+            }
+        }
+    }
+
     // Configure Endpoint: add the interrupt-IN endpoint to the device context.
     // DCI = (endpoint number × 2) + (IN ? 1 : 0).
     let ep_num = (ep_addr & 0x0F) as u32;
@@ -556,8 +621,9 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
 
     build_input_context(in_ctx, cs, 1 | (1 << ep_dci), |slot_ctx, ep_ctxs| {
         // Slot context: bump context-entries up to the highest DCI.
-        w32(slot_ctx, (((ep_dci as u32) & 0x1F) << 27) | (speed << 20));
-        w32(slot_ctx + 4, (port as u32) << 16);
+        w32(slot_ctx, (route & 0xF_FFFF) | (((ep_dci as u32) & 0x1F) << 27) | (speed << 20));
+        w32(slot_ctx + 4, (root_port as u32) << 16);
+        w32(slot_ctx + 8, tt);
         // The interrupt-IN endpoint context at DCI `ep_dci`.
         let epc = ep_ctxs + (ep_dci as u64 - 1) * cs;
         let interval = encode_interval(speed, ep_interval);
@@ -593,11 +659,13 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
         prev_mods: 0,
         armed: false,
         last_arm: 0,
+        map: input_map,
     };
     arm_interrupt(x, &mut hid);
     crate::serial_println!(
-        "[xhci] slot {slot}: HID {} configured (ep DCI {ep_dci}, interval {ep_interval}) → live",
-        if is_kbd { "keyboard" } else if is_abs { "tablet (absolute)" } else { "mouse" }
+        "[xhci] slot {slot}: HID {} configured (ep DCI {ep_dci}, interval {ep_interval}){} → live",
+        if is_kbd { "keyboard" } else if is_abs { "tablet (absolute)" } else { "mouse" },
+        if route != 0 { " via hub" } else { "" }
     );
     for s in (*core::ptr::addr_of_mut!(HIDS)).iter_mut() {
         if s.is_none() {
@@ -606,6 +674,105 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
         }
     }
     true
+}
+
+/// Bring up a hub (M4-1): mark the slot as a hub, power the downstream ports,
+/// reset whatever is connected and enumerate it with the extended route string.
+#[allow(clippy::too_many_arguments)]
+unsafe fn setup_hub(
+    falloc: &mut FrameAllocator,
+    slot: u8,
+    root_port: u8,
+    route: u32,
+    hub_speed: u32,
+    cfg_value: u8,
+    ep0_ring: &mut Ring,
+    in_ctx: u64,
+    cs: u64,
+    buf: u64,
+    depth: u8,
+) -> bool {
+    let xp = core::ptr::addr_of_mut!(XHCI);
+    let x = (*xp).as_mut().unwrap();
+
+    if !control_no_data(x, slot, ep0_ring, 0x00, 9, cfg_value as u16, 0) {
+        crate::serial_println!("[xhci] hub slot {slot}: SET_CONFIGURATION failed");
+        return false;
+    }
+    // Hub class descriptor (0x29): bNbrPorts at offset 2.
+    if !control_in(x, slot, ep0_ring, 0xA0, 6, 0x2900, 0, 9, buf) {
+        crate::serial_println!("[xhci] hub slot {slot}: hub descriptor failed");
+        return false;
+    }
+    let nports = core::slice::from_raw_parts(buf as *const u8, 9)[2].min(8);
+
+    // Tell the controller this slot is a hub (slot-context HUB bit + port
+    // count) — required for downstream addressing/TT handling.
+    build_input_context(in_ctx, cs, 0b1, |slot_ctx, _| {
+        w32(slot_ctx, (route & 0xF_FFFF) | (1 << 27) | (hub_speed << 20) | (1 << 26));
+        w32(slot_ctx + 4, ((root_port as u32) << 16) | ((nports as u32) << 24));
+    });
+    let _ = run_command(x, in_ctx as u32, (in_ctx >> 32) as u32, (TRB_CONFIGURE_ENDPOINT << 10) | ((slot as u32) << 24));
+
+    crate::serial_println!("[xhci] hub slot {slot}: {nports} port(s) — powering + scanning");
+    let mut found = false;
+    for p in 1..=nports as u16 {
+        // SET_FEATURE(PORT_POWER), settle, then read the port status.
+        let _ = control_no_data(x, slot, ep0_ring, 0x23, 3, 8, p);
+        for _ in 0..3_000_000u64 {
+            core::hint::spin_loop();
+        }
+        if !control_in(x, slot, ep0_ring, 0xA3, 0, 0, p, 4, buf) {
+            continue;
+        }
+        let st = core::slice::from_raw_parts(buf as *const u8, 4);
+        let status = u16::from_le_bytes([st[0], st[1]]);
+        if status & 1 == 0 {
+            continue; // no device on this hub port
+        }
+        // Reset the port; poll until the reset-change bit reports completion.
+        let _ = control_no_data(x, slot, ep0_ring, 0x23, 3, 4, p);
+        let mut child_status = 0u16;
+        for _ in 0..40 {
+            for _ in 0..1_000_000u64 {
+                core::hint::spin_loop();
+            }
+            if !control_in(x, slot, ep0_ring, 0xA3, 0, 0, p, 4, buf) {
+                break;
+            }
+            let st = core::slice::from_raw_parts(buf as *const u8, 4);
+            let change = u16::from_le_bytes([st[2], st[3]]);
+            child_status = u16::from_le_bytes([st[0], st[1]]);
+            if change & (1 << 4) != 0 {
+                // C_PORT_RESET: acknowledge it (+ the connect change).
+                let _ = control_no_data(x, slot, ep0_ring, 0x23, 1, 20, p);
+                let _ = control_no_data(x, slot, ep0_ring, 0x23, 1, 16, p);
+                break;
+            }
+        }
+        if child_status & 2 == 0 {
+            crate::serial_println!("[xhci] hub slot {slot} port {p}: reset did not enable — skipped");
+            continue;
+        }
+        // Child speed from the hub port status (LS bit9, HS bit10, else FS).
+        let child_speed = if child_status & (1 << 9) != 0 {
+            2 // low
+        } else if child_status & (1 << 10) != 0 {
+            3 // high
+        } else {
+            1 // full
+        };
+        // Extend the route string: this tier's nibble carries the hub port.
+        let nibble_shift = 4 * depth;
+        let child_route = route | ((p as u32 & 0xF) << nibble_shift);
+        crate::serial_println!(
+            "[xhci] hub slot {slot} port {p}: device (speed {child_speed}) → enumerating (route {child_route:#x})"
+        );
+        if enumerate_device(falloc, root_port, child_route, child_speed, Some((slot, p as u8, hub_speed)), depth + 1) {
+            found = true;
+        }
+    }
+    found
 }
 
 /// Encode the xHCI endpoint interval (logarithmic) from the USB bInterval.
@@ -781,7 +948,7 @@ fn poll_inner() {
                             if hid.is_keyboard {
                                 inject_keyboard(hid, report);
                             } else if hid.is_abs_pointer {
-                                inject_tablet(report);
+                                inject_pointer(hid, report);
                             } else {
                                 inject_mouse(report);
                             }
@@ -827,8 +994,26 @@ fn inject_mouse(report: &[u8]) {
     }
 }
 
-/// Translate a usb-tablet report into an ABSOLUTE cursor position + buttons.
-fn inject_tablet(report: &[u8]) {
+/// Translate a report-protocol pointer report into cursor position + buttons.
+/// M4-2: decode via the device's parsed report descriptor when available
+/// (layout + logical range straight from the device); otherwise fall back to
+/// the fixed usb-tablet layout.
+fn inject_pointer(hid: &HidDevice, report: &[u8]) {
+    if let Some(m) = &hid.map {
+        if let Some((x, y, buttons, absolute)) = m.decode(report) {
+            if absolute {
+                // Rescale the device's logical range to the 0..0x7FFF the
+                // cursor math expects.
+                let lmax = m.x.map(|f| f.logical_max).unwrap_or(0x7FFF).max(1);
+                let sx = (x.clamp(0, lmax) as i64 * 0x7FFF / lmax as i64) as u16;
+                let sy = (y.clamp(0, lmax) as i64 * 0x7FFF / lmax as i64) as u16;
+                crate::mouse::apply_usb_abs(sx, sy, buttons);
+            } else {
+                crate::mouse::apply_usb(x, y, buttons);
+            }
+            return;
+        }
+    }
     if let Some(a) = eurousb::parse_tablet(report) {
         crate::mouse::apply_usb_abs(a.x, a.y, a.buttons);
     }

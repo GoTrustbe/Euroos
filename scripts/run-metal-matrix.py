@@ -14,6 +14,7 @@ Legs:
   e1000e  + Intel e1000e NIC                    -> full DHCP/ping net suite on the e1000 driver (M3-1)
   hda     + intel-hda with output codec         -> [hda]/[snd] init lines
   usb     + xhci: kbd, tablet, hub, usb-storage -> xHCI HID + mass-storage markers
+  usbhub  keyboard ONLY behind a usb-hub         -> typing works through the hub (M4-1)
   hwprobe base leg + typed `hwprobe` command    -> inventory lines over serial
 
 Usage: python3 scripts/run-metal-matrix.py [image] [--legs a,b,c]
@@ -57,6 +58,11 @@ def leg_devices(leg):
         return ["-netdev", "user,id=en0", "-device", "e1000e,netdev=en0"]
     if leg == "hda":
         return ["-device", "intel-hda,id=hda0", "-device", "hda-output,bus=hda0.0"]
+    if leg == "usbhub":
+        # The ONLY keyboard sits behind a hub: typing proves hub enumeration
+        # end-to-end (route strings + interrupt-IN through the hub).
+        return ["-device", "usb-hub,bus=xhci.0,port=3",
+                "-device", "usb-kbd,bus=xhci.0,port=3.1"]
     if leg == "usb":
         img = os.path.join(WORK, "usbdisk.img")
         subprocess.run(["truncate", "-s", "16M", img], check=True)
@@ -80,6 +86,7 @@ LEGS = {
                 "PING 10.0.2.2: echo-reply OK ✓", "interactive loop started"], []),
     "hda": (["interactive loop started"], []),  # + dynamic check below: hda init line
     "usb": (["mass storage LIVE", "interactive loop started"], []),
+    "usbhub": (["(behind hub)", "via hub", "interactive loop started"], []),
     "hwprobe": (["interactive loop started"], []),
 }
 
@@ -90,13 +97,14 @@ def boot(leg, extra, log, qmp):
             os.remove(p)
         except FileNotFoundError:
             pass
-    args = ["qemu-system-x86_64", "-machine", "q35", "-m", "512M",
+    base_kbd = [] if leg == "usbhub" else ["-device", "usb-kbd,bus=xhci.0"]
+    args = (["qemu-system-x86_64", "-machine", "q35", "-m", "512M",
             "-cpu", "qemu64,+smep,+smap", "-bios", OVMF,
             "-drive", f"format=raw,file={IMG}",
-            "-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0",
-            "-device", "usb-tablet,bus=xhci.0",
+            "-device", "qemu-xhci,id=xhci"] + base_kbd +
+            ["-device", "usb-tablet,bus=xhci.0",
             "-display", "none", "-serial", f"file:{log}",
-            "-qmp", f"unix:{qmp},server,nowait", "-no-reboot"] + extra
+            "-qmp", f"unix:{qmp},server,nowait", "-no-reboot"] + extra)
     return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
 
@@ -161,6 +169,10 @@ def run_leg(leg):
         time.sleep(10)
         qmp_type(qmp, "hwprobe")
         time.sleep(8)
+    if leg == "usbhub":
+        time.sleep(10)
+        qmp_type(qmp, "uname")
+        time.sleep(8)
 
     txt = serial(log)
     ok = True
@@ -174,6 +186,9 @@ def run_leg(leg):
             ok = False
     if leg == "hda" and "[hda]" not in txt and "[snd]" not in txt:
         print(f"  [{leg}] FAIL: no [hda]/[snd] init line with intel-hda attached")
+        ok = False
+    if leg == "usbhub" and "[e2e] $ uname" not in txt:
+        print(f"  [{leg}] FAIL: typed uname never echoed — hub keyboard not delivering")
         ok = False
     if leg == "hwprobe":
         if "EuroOS hwprobe" not in txt or "summary:" not in txt:

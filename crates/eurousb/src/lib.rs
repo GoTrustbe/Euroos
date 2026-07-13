@@ -331,6 +331,255 @@ pub mod bot {
     }
 }
 
+// ── HID report-descriptor parsing (Metal M4-2) ───────────────────────────────
+//
+// Real keyboards, mice, touchpads and tablets describe their input reports in
+// a HID *report descriptor*; only keyboards/mice guarantee the fixed "boot
+// protocol" layout. This parser walks the descriptor's short items and builds
+// an [`InputMap`]: where X, Y, wheel and the buttons live (bit offset/size),
+// whether X/Y are relative or absolute, the logical maximum (for scaling
+// absolute coordinates) and the report id — so the driver can decode input
+// from arbitrary pointing devices instead of assuming a layout.
+
+/// Location of one numeric field inside an input report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HidField {
+    pub bit_off: u16,
+    pub bit_size: u8,
+    pub relative: bool,
+    pub logical_max: i32,
+}
+
+/// Decoded layout of one pointing-device input report.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InputMap {
+    pub report_id: Option<u8>, // reports start with this id byte when Some
+    pub x: Option<HidField>,
+    pub y: Option<HidField>,
+    pub wheel: Option<HidField>,
+    pub buttons_off: u16, // bit offset of button 1
+    pub buttons_n: u8,    // number of button bits (0 = none found)
+}
+
+/// Extract an unsigned little-endian bit field from a report.
+pub fn extract_bits(report: &[u8], bit_off: u16, bit_size: u8) -> u32 {
+    let mut v: u32 = 0;
+    for i in 0..bit_size as u16 {
+        let bit = bit_off + i;
+        let byte = (bit / 8) as usize;
+        if byte >= report.len() {
+            break;
+        }
+        if report[byte] >> (bit % 8) & 1 != 0 {
+            v |= 1 << i;
+        }
+    }
+    v
+}
+
+/// Extract a field with sign extension (relative deltas are signed).
+pub fn extract_signed(report: &[u8], f: &HidField) -> i32 {
+    let raw = extract_bits(report, f.bit_off, f.bit_size);
+    if f.bit_size < 32 && raw & (1 << (f.bit_size - 1)) != 0 {
+        (raw as i32) - (1i32 << f.bit_size)
+    } else {
+        raw as i32
+    }
+}
+
+/// Parse a HID report descriptor into an [`InputMap`]. Returns `None` when no
+/// X/Y usage pair is found (not a pointing device). Handles report ids (the
+/// map binds to the report that carries X); usages we don't track only
+/// advance the bit cursor.
+pub fn parse_report_descriptor(d: &[u8]) -> Option<InputMap> {
+    const UP_GENERIC_DESKTOP: u32 = 0x01;
+    const UP_BUTTON: u32 = 0x09;
+    const U_X: u32 = 0x30;
+    const U_Y: u32 = 0x31;
+    const U_WHEEL: u32 = 0x38;
+
+    let mut map = InputMap::default();
+    let mut usage_page: u32 = 0;
+    let mut report_size: u32 = 0;
+    let mut report_count: u32 = 0;
+    let mut logical_max: i32 = 0;
+    let mut cur_id: Option<u8> = None;
+    // Per-report-id bit cursors — descriptors may interleave report ids.
+    let mut cursors: heapless_cursors::Cursors = Default::default();
+    let mut usages: [u32; 16] = [0; 16]; // full usage: page<<16 | usage
+    let mut n_usages = 0usize;
+    // Local Usage Minimum/Maximum: how ranges (e.g. Button 1..N) are declared.
+    let mut usage_min: Option<u32> = None;
+
+    let mut i = 0usize;
+    while i < d.len() {
+        let prefix = d[i];
+        if prefix == 0xFE {
+            // Long item: skip over its payload.
+            let sz = *d.get(i + 1)? as usize;
+            i += 3 + sz;
+            continue;
+        }
+        let bsize = match prefix & 0x03 {
+            0 => 0,
+            1 => 1,
+            2 => 2,
+            _ => 4,
+        };
+        let btype = (prefix >> 2) & 0x03;
+        let btag = prefix >> 4;
+        if i + 1 + bsize > d.len() {
+            return None;
+        }
+        let mut data: u32 = 0;
+        for k in 0..bsize {
+            data |= (d[i + 1 + k] as u32) << (8 * k);
+        }
+        let sdata = match bsize {
+            1 => d[i + 1] as i8 as i32,
+            2 => i16::from_le_bytes([d[i + 1], d[i + 2]]) as i32,
+            4 => data as i32,
+            _ => 0,
+        };
+        match (btype, btag) {
+            (1, 0) => usage_page = data,         // Global: Usage Page
+            (1, 2) => logical_max = sdata,       // Global: Logical Maximum
+            (1, 7) => report_size = data,        // Global: Report Size
+            (1, 8) => cur_id = Some(data as u8), // Global: Report ID
+            (1, 9) => report_count = data,       // Global: Report Count
+            (2, 0) => {
+                // Local: Usage. The 4-byte form carries its own page.
+                let full = if bsize == 4 { data } else { (usage_page << 16) | data };
+                if n_usages < usages.len() {
+                    usages[n_usages] = full;
+                    n_usages += 1;
+                }
+            }
+            (2, 1) => usage_min = Some((usage_page << 16) | data), // Local: Usage Minimum
+            (2, 2) => {
+                // Local: Usage Maximum — expand the min..=max range into usages.
+                if let Some(mn) = usage_min {
+                    let mx = (usage_page << 16) | data;
+                    let mut u = mn;
+                    while u <= mx && n_usages < usages.len() {
+                        usages[n_usages] = u;
+                        n_usages += 1;
+                        u += 1;
+                    }
+                }
+            }
+            (0, 8) => {
+                // Main: Input item — report_count fields of report_size bits.
+                let relative = data & (1 << 2) != 0;
+                let constant = data & 1 != 0;
+                let base = cursors.get(cur_id);
+                if !constant && n_usages > 0 {
+                    for slot in 0..report_count {
+                        let u = usages[(slot as usize).min(n_usages - 1)];
+                        let field = HidField {
+                            bit_off: base + (slot as u16) * report_size as u16,
+                            bit_size: report_size as u8,
+                            relative,
+                            logical_max,
+                        };
+                        let (page, usage) = (u >> 16, u & 0xFFFF);
+                        if page == UP_GENERIC_DESKTOP && usage == U_X && map.x.is_none() {
+                            map.x = Some(field);
+                            map.report_id = cur_id;
+                        } else if page == UP_GENERIC_DESKTOP && usage == U_Y && map.y.is_none() {
+                            map.y = Some(field);
+                        } else if page == UP_GENERIC_DESKTOP && usage == U_WHEEL && map.wheel.is_none() {
+                            map.wheel = Some(field);
+                        } else if page == UP_BUTTON && map.buttons_n == 0 {
+                            map.buttons_off = field.bit_off;
+                            map.buttons_n = report_count.min(8) as u8;
+                        }
+                    }
+                }
+                cursors.advance(cur_id, (report_size * report_count) as u16);
+                n_usages = 0;
+                usage_min = None;
+            }
+            (0, _) => {
+                // Other Main items (Output/Feature/Collection): clear locals.
+                n_usages = 0;
+                usage_min = None;
+            }
+            _ => {}
+        }
+        i += 1 + bsize;
+    }
+    if map.x.is_some() && map.y.is_some() {
+        Some(map)
+    } else {
+        None
+    }
+}
+
+/// Tiny fixed-capacity map of per-report-id bit cursors (no_std, no alloc).
+mod heapless_cursors {
+    #[derive(Default)]
+    pub struct Cursors {
+        slots: [(u8, u16, bool); 8], // (report id, bit cursor, used)
+    }
+    impl Cursors {
+        fn idx(&mut self, id: Option<u8>) -> usize {
+            let key = id.unwrap_or(0);
+            if let Some(i) = self.slots.iter().position(|s| s.2 && s.0 == key) {
+                return i;
+            }
+            if let Some(i) = self.slots.iter().position(|s| !s.2) {
+                self.slots[i] = (key, 0, true);
+                return i;
+            }
+            7
+        }
+        pub fn get(&mut self, id: Option<u8>) -> u16 {
+            let i = self.idx(id);
+            self.slots[i].1
+        }
+        pub fn advance(&mut self, id: Option<u8>, bits: u16) {
+            let i = self.idx(id);
+            self.slots[i].1 = self.slots[i].1.saturating_add(bits);
+        }
+    }
+}
+
+impl InputMap {
+    /// Decode a pointing-device input report using this map. Returns
+    /// `(x, y, buttons, x_is_absolute)`; with a report id set, a report
+    /// carrying a different id yields `None`.
+    pub fn decode(&self, report: &[u8]) -> Option<(i32, i32, u8, bool)> {
+        let body = match self.report_id {
+            Some(id) => {
+                if report.first() != Some(&id) {
+                    return None;
+                }
+                &report[1..]
+            }
+            None => report,
+        };
+        let fx = self.x.as_ref()?;
+        let fy = self.y.as_ref()?;
+        let x = if fx.relative {
+            extract_signed(body, fx)
+        } else {
+            extract_bits(body, fx.bit_off, fx.bit_size) as i32
+        };
+        let y = if fy.relative {
+            extract_signed(body, fy)
+        } else {
+            extract_bits(body, fy.bit_off, fy.bit_size) as i32
+        };
+        let buttons = if self.buttons_n > 0 {
+            extract_bits(body, self.buttons_off, self.buttons_n) as u8
+        } else {
+            0
+        };
+        Some((x, y, buttons, !fx.relative))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,5 +728,80 @@ mod tests {
         };
         assert!(iface.is_mass_storage_bot());
         assert!(!iface.is_boot_keyboard());
+    }
+
+    #[test]
+    fn report_descriptor_boot_mouse() {
+        // Classic 3-button relative mouse: 3 button bits + 5 pad, X/Y 8-bit rel.
+        let d = [
+            0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x09, 0x01, 0xA1, 0x00, // GD, Mouse, Coll, Pointer, Coll
+            0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01, // Buttons 1..3, logical 0..1
+            0x95, 0x03, 0x75, 0x01, 0x81, 0x02, // count 3, size 1, Input(Data,Var)
+            0x95, 0x01, 0x75, 0x05, 0x81, 0x01, // count 1, size 5, Input(Const) padding
+            0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x15, 0x81, 0x25, 0x7F, // GD, X, Y, logical -127..127
+            0x75, 0x08, 0x95, 0x02, 0x81, 0x06, // size 8, count 2, Input(Data,Var,Rel)
+            0xC0, 0xC0,
+        ];
+        let m = parse_report_descriptor(&d).unwrap();
+        assert_eq!((m.buttons_off, m.buttons_n), (0, 3));
+        let x = m.x.unwrap();
+        assert!(x.relative);
+        assert_eq!((x.bit_off, x.bit_size), (8, 8));
+        assert_eq!(m.y.unwrap().bit_off, 16);
+        // Report: button 1 down, dx=-2, dy=+5.
+        let (dx, dy, b, abs) = m.decode(&[0x01, 0xFE, 0x05]).unwrap();
+        assert_eq!((dx, dy, b, abs), (-2, 5, 1, false));
+    }
+
+    #[test]
+    fn report_descriptor_abs_tablet() {
+        // Tablet-like: 3 buttons + pad, X/Y 16-bit absolute 0..32767, wheel 8-bit rel.
+        let d = [
+            0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x09, 0x01, 0xA1, 0x00,
+            0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01,
+            0x95, 0x03, 0x75, 0x01, 0x81, 0x02,
+            0x95, 0x01, 0x75, 0x05, 0x81, 0x01,
+            0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x15, 0x00, 0x26, 0xFF, 0x7F, // logical max 32767
+            0x75, 0x10, 0x95, 0x02, 0x81, 0x02, // X/Y 16-bit absolute
+            0x09, 0x38, 0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x01, 0x81, 0x06, // wheel 8-bit rel
+            0xC0, 0xC0,
+        ];
+        let m = parse_report_descriptor(&d).unwrap();
+        let x = m.x.unwrap();
+        assert!(!x.relative);
+        assert_eq!((x.bit_off, x.bit_size), (8, 16));
+        assert_eq!(x.logical_max, 32767);
+        assert_eq!(m.y.unwrap().bit_off, 24);
+        assert_eq!(m.wheel.unwrap().bit_off, 40);
+        // Report: buttons=0b101, x=0x1234, y=0x7FFF, wheel=-1.
+        let rpt = [0x05, 0x34, 0x12, 0xFF, 0x7F, 0xFF];
+        let (x, y, b, abs) = m.decode(&rpt).unwrap();
+        assert_eq!((x, y, b, abs), (0x1234, 0x7FFF, 5, true));
+    }
+
+    #[test]
+    fn report_descriptor_with_report_id() {
+        // Same tablet but behind report id 7; decode must demand the id byte.
+        let d = [
+            0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x85, 0x07, // Report ID 7
+            0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01,
+            0x95, 0x03, 0x75, 0x01, 0x81, 0x02,
+            0x95, 0x01, 0x75, 0x05, 0x81, 0x01,
+            0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x15, 0x00, 0x26, 0xFF, 0x7F,
+            0x75, 0x10, 0x95, 0x02, 0x81, 0x02,
+            0xC0,
+        ];
+        let m = parse_report_descriptor(&d).unwrap();
+        assert_eq!(m.report_id, Some(7));
+        assert!(m.decode(&[0x06, 0, 0, 0, 0, 0]).is_none()); // wrong id
+        let (x, y, _, abs) = m.decode(&[0x07, 0x00, 0x00, 0x40, 0x00, 0x20]).unwrap();
+        assert_eq!((x, y, abs), (0x4000, 0x2000, true));
+    }
+
+    #[test]
+    fn report_descriptor_rejects_non_pointer() {
+        // A keyboard-ish descriptor without X/Y yields no map.
+        let d = [0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x75, 0x08, 0x95, 0x08, 0x81, 0x02, 0xC0];
+        assert!(parse_report_descriptor(&d).is_none());
     }
 }
