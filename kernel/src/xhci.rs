@@ -238,6 +238,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
             return false;
         }
     };
+    pci::claim(dev.bus, dev.dev, dev.func, "xhci"); // hwprobe (M1-3)
     // 64-bit MMIO-BAR0 (BAR0 lo + BAR1 hi); mask type bits.
     let bar0 = dev.bar(0);
     let mmio = if bar0 & 0x6 == 0x4 {

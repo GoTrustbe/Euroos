@@ -157,6 +157,41 @@ pub fn dsdt_aml() -> Option<(u64, usize)> {
     }
 }
 
+/// One MCFG allocation: an ECAM window for a PCI segment group (M1-1).
+#[derive(Clone, Copy)]
+pub struct EcamWindow {
+    pub base: u64,     // physical base of the ECAM region (identity-mapped)
+    pub segment: u16,  // PCI segment group (0 on q35 and most machines)
+    pub bus_start: u8, // first decoded bus
+    pub bus_end: u8,   // last decoded bus
+}
+
+/// Parse the MCFG table (PCIe memory-mapped configuration — ECAM). Modern
+/// machines publish the config space this way; the legacy 0xCF8/0xCFC ports
+/// only reach the first 256 bytes and only segment 0.
+pub fn mcfg() -> Option<alloc::vec::Vec<EcamWindow>> {
+    let t = find_table(b"MCFG")?;
+    unsafe {
+        let len: u32 = rd(t + 4);
+        if len < 44 {
+            return None; // header (36) + reserved (8), no allocations
+        }
+        // Allocations start at offset 44; each entry is 16 bytes.
+        let n = ((len as u64 - 44) / 16) as usize;
+        let mut out = alloc::vec::Vec::with_capacity(n);
+        for i in 0..n {
+            let e = t + 44 + (i as u64) * 16;
+            out.push(EcamWindow {
+                base: rd(e),
+                segment: rd(e + 8),
+                bus_start: rd(e + 10),
+                bus_end: rd(e + 11),
+            });
+        }
+        if out.is_empty() { None } else { Some(out) }
+    }
+}
+
 /// Parse the ACPI tables and return the MADT contents (cores + IO-APIC).
 pub fn parse() -> Option<Madt> {
     let rsdp = RSDP.load(Ordering::Relaxed);

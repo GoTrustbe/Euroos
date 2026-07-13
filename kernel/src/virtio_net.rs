@@ -163,6 +163,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
             return false;
         }
     };
+    crate::pci::claim(0, slot, 0, "virtio-net"); // hwprobe (M1-3)
 
     // 2. BAR0 = I/O port base; enable I/O + bus-master in the command register.
     let bar0 = pci_cfg_read32(0, slot, 0, 0x10);

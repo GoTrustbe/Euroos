@@ -112,6 +112,7 @@ impl VirtioSnd {
     /// and read the device config.
     pub fn init() -> Option<VirtioSnd> {
         let dev = find_snd()?;
+        pci::claim(dev.bus, dev.dev, dev.func, "virtio-snd"); // hwprobe (M1-3)
         dev.enable(0x0006); // bus-master + MMIO decode
         let common = dev.virtio_cap(1)?.addr; // common cfg
         let notify_cap = dev.virtio_cap(2)?; // notify cfg

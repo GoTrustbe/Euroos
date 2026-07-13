@@ -142,6 +142,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
                 (*core::ptr::addr_of_mut!(BLKS))[count] = Some(blk);
             }
             count += 1;
+            crate::pci::claim(d.bus, d.dev, d.func, "virtio-blk"); // hwprobe (M1-3)
         }
     }
     crate::serial_println!("[blk] {count} virtio-blk disk(s) initialized");

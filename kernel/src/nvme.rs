@@ -101,6 +101,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         Some(d) => d,
         None => return false,
     };
+    crate::pci::claim(dev.bus, dev.dev, dev.func, "nvme"); // hwprobe (M1-3)
     dev.enable(0x6); // bus-master + memory space
     let bar0 = dev.bar(0) as u64 & 0xFFFF_FFF0;
     let bar1 = dev.bar(1) as u64;

@@ -207,3 +207,29 @@ jobs:
         with:
           name: boot-screenshot
           path: boot.png
+
+  # ── M1-4 (docs/SPRINT-PLAN-METAL.md): the q35 "metal matrix" — the same image
+  #    booted against the QEMU device sets that mirror modern real hardware
+  #    (NVMe, AHCI, e1000e, intel-hda, xHCI zoo). Each leg must reach the
+  #    interactive loop + its driver markers. Informational for now (TCG on
+  #    hosted runners is slow); becomes a gate when the Metal drivers land.
+  metal-matrix:
+    name: q35 metal matrix (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: kernel-boot
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust nightly + build-std prerequisites
+        run: |
+          rustup toolchain install nightly-2026-05-31 --profile minimal --component rust-src --target x86_64-unknown-uefi
+          rustup default nightly-2026-05-31
+      - name: Build the signed image (fresh dev key, like kernel-boot)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools qemu-system-x86 ovmf dosfstools mtools
+          python3 toolchain/eupkg/gen-dev-key.py
+          ./userland/build.sh
+          ./scripts/build.sh release
+      - name: Run the matrix
+        run: python3 scripts/run-metal-matrix.py eurokernel.img

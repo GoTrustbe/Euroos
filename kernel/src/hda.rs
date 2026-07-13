@@ -152,6 +152,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
             return false;
         }
     };
+    pci::claim(dev.bus, dev.dev, dev.func, "hda"); // hwprobe (M1-3)
     let bar0 = dev.bar(0);
     let mmio = if bar0 & 0x6 == 0x4 {
         ((dev.bar(1) as u64) << 32) | (bar0 as u64 & 0xFFFF_FFF0)

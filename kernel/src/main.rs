@@ -1374,6 +1374,16 @@ fn main() -> Status {
     } else {
         serial_println!("[acpi] no MADT found");
     }
+    // M1-1: switch PCI config access to ECAM (memory-mapped, via the ACPI MCFG)
+    // — the modern path, full 4 KiB config space. `init_ecam` only activates the
+    // window after verifying every port-visible function reads identically
+    // through it; on any mismatch we stay on the legacy 0xCF8/0xCFC ports.
+    match pci::init_ecam() {
+        Some((base, b0, b1)) => serial_println!(
+            "[ecam] PCIe config via ECAM @ {base:#x} (buses {b0}..={b1}, MCFG, port-verified) ✓"
+        ),
+        None => serial_println!("[ecam] no verified MCFG — staying on legacy config ports"),
+    }
     // PCI enumeration: discover the attached hardware (network, storage, ...).
     {
         let devs = pci::enumerate();
