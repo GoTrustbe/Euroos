@@ -39,7 +39,9 @@ mod interrupts;
 mod klog;
 mod mouse;
 mod ahci;
+mod e1000;
 mod msix;
+mod nic;
 mod net;
 mod paging;
 mod gpt;
@@ -855,11 +857,12 @@ fn main() -> Status {
     use euronet::udp::UdpDatagram;
     let ipfmt = |ip: Ipv4Addr| format!("{}.{}.{}.{}", ip.0[0], ip.0[1], ip.0[2], ip.0[3]);
     let mut net_lines: Vec<String> = Vec::new();
-    if virtio_net::init(&mut allocator) {
-        let my_mac = MacAddr(virtio_net::mac().unwrap_or([0; 6]));
+    if nic::init(&mut allocator) {
+        let my_mac = MacAddr(nic::mac().unwrap_or([0; 6]));
         let gw_ip = Ipv4Addr::new(10, 0, 2, 2);
         net_lines.push(format!(
-            "NIC: virtio-net MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            "NIC: {} MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            nic::kind(),
             my_mac.0[0], my_mac.0[1], my_mac.0[2], my_mac.0[3], my_mac.0[4], my_mac.0[5]
         ));
 
@@ -876,13 +879,13 @@ fn main() -> Status {
             }
             .build(&seg);
             let frame = EthernetHeader { dst: MacAddr::BROADCAST, src: my_mac, ethertype: EtherType::Ipv4 }.build(&ipf);
-            virtio_net::send(&frame);
+            nic::send(&frame);
         };
         // Poll for a DHCP reply of the desired type (UDP 67->68; manual
         // UDP parse so a missing checksum does not block us).
         let poll_dhcp = |want: u8| -> Option<dhcp::DhcpInfo> {
             for _ in 0..6_000_000u64 {
-                if let Some(rx) = virtio_net::poll_recv() {
+                if let Some(rx) = nic::poll_recv() {
                     if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                         if h.ethertype == EtherType::Ipv4 {
                             if let Ok((iph, ipl)) = Ipv4Header::parse(p) {
@@ -910,7 +913,7 @@ fn main() -> Status {
         let mut offer = None;
         for _ in 0..12 {
             for _ in 0..16 {
-                if virtio_net::poll_recv().is_none() {
+                if nic::poll_recv().is_none() {
                     break;
                 }
             }
@@ -1050,12 +1053,12 @@ fn main() -> Status {
             ethertype: EtherType::Ipv6,
         }
         .build(&rsh.build(&rs_msg));
-        virtio_net::send(&rsframe);
+        nic::send(&rsframe);
         net_lines.push("IPv6: Router Solicitation -> ff02::2 sent".into());
         // Poll for a Router Advertisement.
         let mut router: Option<(Ipv6Addr, MacAddr, Option<[u8; 8]>)> = None;
         'ra: for _ in 0..8_000_000u64 {
-            if let Some(rx) = virtio_net::poll_recv() {
+            if let Some(rx) = nic::poll_recv() {
                 if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                     if h.ethertype == EtherType::Ipv6 {
                         if let Ok((ih, pl)) = Ipv6Header::parse(p) {
@@ -1079,10 +1082,10 @@ fn main() -> Status {
             let echo = icmpv6::echo_request(0xE6, 1, b"euroos-ping6", ll, router_ll);
             let eh = Ipv6Header { next_header: 58, hop_limit: 255, src: ll, dst: router_ll, payload_len: 0 };
             let pframe = EthernetHeader { dst: router_mac, src: my_mac, ethertype: EtherType::Ipv6 }.build(&eh.build(&echo));
-            virtio_net::send(&pframe);
+            nic::send(&pframe);
             let mut pong6 = false;
             'p6: for _ in 0..8_000_000u64 {
-                if let Some(rx) = virtio_net::poll_recv() {
+                if let Some(rx) = nic::poll_recv() {
                     if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                         if h.ethertype == EtherType::Ipv6 {
                             if let Ok((ih, pl)) = Ipv6Header::parse(p) {

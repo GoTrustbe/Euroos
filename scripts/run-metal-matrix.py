@@ -11,7 +11,7 @@ Legs:
   base    virtio disk/net (today's default)     -> [ecam] verified + [pci]
   nvme    + NVMe data disk                      -> [nvme] self-test OK
   ahci    + ICH9 AHCI with a SATA disk          -> [ahci] blank-disk write/read self-test (M2-2 driver)
-  e1000e  + Intel e1000e NIC                    -> boot resilience (no driver yet)
+  e1000e  + Intel e1000e NIC                    -> full DHCP/ping net suite on the e1000 driver (M3-1)
   hda     + intel-hda with output codec         -> [hda]/[snd] init lines
   usb     + xhci: kbd, tablet, hub, usb-storage -> xHCI HID + mass-storage markers
   hwprobe base leg + typed `hwprobe` command    -> inventory lines over serial
@@ -76,7 +76,8 @@ LEGS = {
              ["self-test: write FAILED", "self-test: read FAILED", "MISMATCH"]),
     "ahci": (["[ahci] disk 1", "self-test write/read: sector OK ✓ · 64 KiB OK ✓",
               "interactive loop started"], ["MISMATCH", "FAILED ✗"]),
-    "e1000e": (["interactive loop started"], []),
+    "e1000e": (["NIC: e1000 MAC", "[net] DHCP OFFER:",
+                "PING 10.0.2.2: echo-reply OK ✓", "interactive loop started"], []),
     "hda": (["interactive loop started"], []),  # + dynamic check below: hda init line
     "usb": (["mass storage LIVE", "interactive loop started"], []),
     "hwprobe": (["interactive loop started"], []),

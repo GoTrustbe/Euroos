@@ -18,7 +18,7 @@ use euronet::ipv6::{Ipv6Addr, Ipv6Header};
 use euronet::tcp::{self, TcpSegment};
 use euronet::udp::UdpDatagram;
 
-use crate::virtio_net;
+use crate::nic;
 
 /// The network configuration as discovered during boot bring-up.
 #[derive(Clone, Copy)]
@@ -50,7 +50,7 @@ const SPINS: u64 = 4_000_000;
 /// slirp's ARP cache stays fresh and IPv4 replies arrive.
 fn drain() {
     for _ in 0..64 {
-        if virtio_net::poll_recv().is_none() {
+        if nic::poll_recv().is_none() {
             break;
         }
     }
@@ -64,7 +64,7 @@ fn drain() {
         };
         let frame = EthernetHeader { dst: MacAddr::BROADCAST, src: c.my_mac, ethertype: EtherType::Arp }
             .build(&g.build());
-        virtio_net::send(&frame);
+        nic::send(&frame);
     }
 }
 
@@ -79,9 +79,9 @@ pub fn arp_resolve(my_mac: MacAddr, my_ip: Ipv4Addr, ip: Ipv4Addr) -> Option<Mac
         target_ip: ip,
     };
     let frame = EthernetHeader { dst: MacAddr::BROADCAST, src: my_mac, ethertype: EtherType::Arp }.build(&req.build());
-    virtio_net::send(&frame);
+    nic::send(&frame);
     for _ in 0..SPINS {
-        if let Some(rx) = virtio_net::poll_recv() {
+        if let Some(rx) = nic::poll_recv() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Arp {
                     if let Ok(a) = ArpPacket::parse(p) {
@@ -102,9 +102,9 @@ pub fn icmp_ping(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, dst: Ipv4Ad
     let icmp = IcmpEcho { kind: IcmpType::EchoRequest, identifier: 0xE401, sequence: 1, payload: b"euroos-ping".to_vec() };
     let iph = Ipv4Header { protocol: Protocol::Icmp, ttl: 64, src: my_ip, dst, total_length: 0, identification: 1 };
     let frame = EthernetHeader { dst: nexthop, src: my_mac, ethertype: EtherType::Ipv4 }.build(&iph.build(&icmp.build()));
-    virtio_net::send(&frame);
+    nic::send(&frame);
     for _ in 0..SPINS * 2 {
-        if let Some(rx) = virtio_net::poll_recv() {
+        if let Some(rx) = nic::poll_recv() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Ipv4 {
                     if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
@@ -144,9 +144,9 @@ pub fn dns_query(my_mac: MacAddr, my_ip: Ipv4Addr, dns_mac: MacAddr, dns_ip: Ipv
     let seg = UdpDatagram { src_port, dst_port: 53, payload: q }.build(my_ip, dns_ip);
     let iph = Ipv4Header { protocol: Protocol::Udp, ttl: 64, src: my_ip, dst: dns_ip, total_length: 0, identification: 2 };
     let frame = EthernetHeader { dst: dns_mac, src: my_mac, ethertype: EtherType::Ipv4 }.build(&iph.build(&seg));
-    virtio_net::send(&frame);
+    nic::send(&frame);
     for _ in 0..SPINS * 2 {
-        if let Some(rx) = virtio_net::poll_recv() {
+        if let Some(rx) = nic::poll_recv() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Ipv4 {
                     if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
@@ -176,9 +176,9 @@ pub fn icmp6_ping(my_mac: MacAddr, src_ll: Ipv6Addr, dst_mac: MacAddr, dst: Ipv6
     let echo = icmpv6::echo_request(0xE6, 1, b"euroos-ping6", src_ll, dst);
     let eh = Ipv6Header { next_header: 58, hop_limit: 255, src: src_ll, dst, payload_len: 0 };
     let frame = EthernetHeader { dst: dst_mac, src: my_mac, ethertype: EtherType::Ipv6 }.build(&eh.build(&echo));
-    virtio_net::send(&frame);
+    nic::send(&frame);
     for _ in 0..SPINS * 2 {
-        if let Some(rx) = virtio_net::poll_recv() {
+        if let Some(rx) = nic::poll_recv() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Ipv6 {
                     if let Ok((ih, pl)) = Ipv6Header::parse(p) {
@@ -218,7 +218,7 @@ fn embedded_udp_matches(orig: &[u8], sport: u16, dport: u16) -> bool {
 fn send_ipv4(my_mac: MacAddr, my_ip: Ipv4Addr, dst_mac: MacAddr, dst_ip: Ipv4Addr, proto: Protocol, l4: &[u8]) {
     let iph = Ipv4Header { protocol: proto, ttl: 64, src: my_ip, dst: dst_ip, total_length: 0, identification: 9 };
     let frame = EthernetHeader { dst: dst_mac, src: my_mac, ethertype: EtherType::Ipv4 }.build(&iph.build(l4));
-    virtio_net::send(&frame);
+    nic::send(&frame);
 }
 
 /// Rate limiter for outgoing ICMP/RST error messages (anti-amplification):
@@ -259,7 +259,7 @@ pub fn service() {
         None => return,
     };
     for _ in 0..8 {
-        let rx = match virtio_net::poll_recv() {
+        let rx = match nic::poll_recv() {
             Some(r) => r,
             None => break,
         };
@@ -270,7 +270,7 @@ pub fn service() {
                         let reply = ArpPacket::reply_to(&a, cfg.my_mac);
                         let frame = EthernetHeader { dst: a.sender_mac, src: cfg.my_mac, ethertype: EtherType::Arp }
                             .build(&reply.build());
-                        virtio_net::send(&frame);
+                        nic::send(&frame);
                     }
                 }
             } else if h.ethertype == EtherType::Ipv4 {
@@ -389,13 +389,13 @@ impl TcpConn {
         let iph = Ipv4Header { protocol: Protocol::Tcp, ttl: 64, src: self.my_ip, dst: self.server, total_length: 0, identification: 3 };
         let frame = EthernetHeader { dst: self.nexthop, src: self.my_mac, ethertype: EtherType::Ipv4 }
             .build(&iph.build(&seg.build(self.my_ip, self.server)));
-        virtio_net::send(&frame);
+        nic::send(&frame);
     }
 
     /// Wait for the next TCP segment from our peer for this port.
     fn poll_seg(&self) -> Option<TcpSegment> {
         for _ in 0..SPINS * 3 {
-            if let Some(rx) = virtio_net::poll_recv() {
+            if let Some(rx) = nic::poll_recv() {
                 if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                     if h.ethertype == EtherType::Ipv4 {
                         if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
@@ -892,13 +892,13 @@ impl UdpSock {
         let iph = Ipv4Header { protocol: Protocol::Udp, ttl: 64, src: self.my_ip, dst: self.server, total_length: 0, identification: 4 };
         let frame = EthernetHeader { dst: self.nexthop, src: self.my_mac, ethertype: EtherType::Ipv4 }
             .build(&iph.build(&dg.build(self.my_ip, self.server)));
-        virtio_net::send(&frame);
+        nic::send(&frame);
     }
 
     /// Wait for one datagram from the destination, back on our source port.
     pub fn recv(&self) -> alloc::vec::Vec<u8> {
         for _ in 0..SPINS * 3 {
-            if let Some(rx) = virtio_net::poll_recv() {
+            if let Some(rx) = nic::poll_recv() {
                 if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                     if h.ethertype == EtherType::Ipv4 {
                         if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
@@ -1374,7 +1374,7 @@ pub fn tcp_serve_once(port: u16, response: &[u8], timeout_spins: u64) -> Option<
     // (source MAC for the return route, source IP, the segment itself).
     let poll = |spins: u64| -> Option<(MacAddr, Ipv4Addr, TcpSegment)> {
         for _ in 0..spins {
-            if let Some(rx) = virtio_net::poll_recv() {
+            if let Some(rx) = nic::poll_recv() {
                 if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                     if h.ethertype == EtherType::Ipv4 {
                         if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
@@ -1409,7 +1409,7 @@ pub fn tcp_serve_once(port: u16, response: &[u8], timeout_spins: u64) -> Option<
         let iph = Ipv4Header { protocol: Protocol::Tcp, ttl: 64, src: my_ip, dst: peer_ip, total_length: 0, identification: 5 };
         let frame = EthernetHeader { dst: peer_mac, src: my_mac, ethertype: EtherType::Ipv4 }
             .build(&iph.build(&seg.build(my_ip, peer_ip)));
-        virtio_net::send(&frame);
+        nic::send(&frame);
     };
 
     // 2. SYN-ACK; our SYN counts as 1 in the sequence space.
@@ -1492,11 +1492,11 @@ fn serve_connection(my_mac: MacAddr, my_ip: Ipv4Addr, peer_mac: MacAddr, peer_ip
         let iph = Ipv4Header { protocol: Protocol::Tcp, ttl: 64, src: my_ip, dst: peer_ip, total_length: 0, identification: 7 };
         let frame = EthernetHeader { dst: peer_mac, src: my_mac, ethertype: EtherType::Ipv4 }
             .build(&iph.build(&seg.build(my_ip, peer_ip)));
-        virtio_net::send(&frame);
+        nic::send(&frame);
     };
     let poll = || -> Option<TcpSegment> {
         for _ in 0..SPINS {
-            if let Some(rx) = virtio_net::poll_recv() {
+            if let Some(rx) = nic::poll_recv() {
                 if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                     if h.ethertype == EtherType::Ipv4 {
                         if let Ok((ih, ipl)) = Ipv4Header::parse(p) {

@@ -53,7 +53,7 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     } else {
         (0, 0)
     };
-    let net = crate::virtio_net::mac().is_some();
+    let net = crate::nic::mac().is_some();
 
     let mut ty = by + 16;
     text::draw_px(fb, bx + 18, ty, "EuroMonitor — live system status", ink, 19.0);
