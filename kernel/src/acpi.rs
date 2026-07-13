@@ -106,9 +106,15 @@ pub struct Fadt {
     pub reset_is_io: bool,
     pub reset_addr: u64,
     pub reset_val: u8,
+    // M5-2: ACPI event delivery (power button etc.).
+    pub sci_int: u16,       // SCI interrupt (GSI) — level, active-low
+    pub pm1a_evt: u16,      // PM1a event register block I/O port (status @ +0)
+    pub pm1_evt_len: u8,    // total length; enable register = block + len/2
+    pub smi_cmd: u32,       // SMI command port (0 = already in ACPI mode)
+    pub acpi_enable: u8,    // value to write to SMI_CMD to enter ACPI mode
 }
 
-/// Parse the FADT (signature "FACP") for shutdown/reboot.
+/// Parse the FADT (signature "FACP") for shutdown/reboot + ACPI events.
 pub fn fadt() -> Option<Fadt> {
     let f = find_table(b"FACP")?;
     unsafe {
@@ -124,6 +130,11 @@ pub fn fadt() -> Option<Fadt> {
             reset_is_io: reset_space == 1,
             reset_addr,
             reset_val,
+            sci_int: rd::<u16>(f + 46),
+            pm1a_evt: rd::<u32>(f + 56) as u16,
+            pm1_evt_len: rd::<u8>(f + 88),
+            smi_cmd: rd::<u32>(f + 48),
+            acpi_enable: rd::<u8>(f + 52),
         })
     }
 }

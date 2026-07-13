@@ -16,6 +16,7 @@ Legs:
   usb     + xhci: kbd, tablet, hub, usb-storage -> xHCI HID + mass-storage markers
   usbhub  keyboard ONLY behind a usb-hub         -> typing works through the hub (M4-1)
   usbnet  ONLY NIC = usb-net (CDC-ECM)            -> DHCP/ping over USB ethernet (M3-3)
+  power   base leg + ACPI power-button press       -> armed + clean S5 shutdown (M5-2)
   hwprobe base leg + typed `hwprobe` command    -> inventory lines over serial
 
 Usage: python3 scripts/run-metal-matrix.py [image] [--legs a,b,c]
@@ -40,7 +41,7 @@ AZ = {"a": "q", "q": "a", "z": "w", "w": "z", "m": "semicolon", " ": "spc"}
 
 def leg_devices(leg):
     """Extra QEMU args per leg (on top of the common q35 + xhci-kbd base)."""
-    if leg in ("base", "hwprobe"):
+    if leg in ("base", "hwprobe", "power"):
         return []
     if leg == "nvme":
         img = os.path.join(WORK, "nvme.img")
@@ -104,6 +105,7 @@ LEGS = {
                 "[net] DHCP OFFER:", "PING 10.0.2.2: echo-reply OK ✓",
                 "interactive loop started"], []),
     "hwprobe": (["interactive loop started"], []),
+    "power": (["[acpi] power button armed", "[acpi-pwr]", "interactive loop started"], []),
 }
 
 
@@ -189,6 +191,16 @@ def run_leg(leg):
         time.sleep(10)
         qmp_type(qmp, "uname")
         time.sleep(8)
+    if leg == "power":
+        time.sleep(8)
+        # Press the ACPI power button; the guest must shut itself down cleanly.
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect(qmp); s.settimeout(5)
+        s.recv(65536); s.sendall(b'{"execute":"qmp_capabilities"}\n'); time.sleep(0.2); s.recv(65536)
+        s.sendall(b'{"execute":"system_powerdown"}\n'); time.sleep(0.3); s.close()
+        for _ in range(60):
+            if qemu.poll() is not None:
+                break
+            time.sleep(1)
 
     txt = serial(log)
     ok = True
@@ -206,6 +218,14 @@ def run_leg(leg):
     if leg == "usbhub" and "[e2e] $ uname" not in txt:
         print(f"  [{leg}] FAIL: typed uname never echoed — hub keyboard not delivering")
         ok = False
+    if leg == "power":
+        txt = serial(log)
+        if "power button pressed" not in txt or "shutting down system (ACPI S5" not in txt:
+            print(f"  [{leg}] FAIL: power button did not trigger a clean ACPI S5 shutdown")
+            ok = False
+        if qemu.poll() is None:
+            print(f"  [{leg}] FAIL: guest did not power off on its own")
+            ok = False
     if leg == "hwprobe":
         if "EuroOS hwprobe" not in txt or "summary:" not in txt:
             print(f"  [{leg}] FAIL: hwprobe output not seen over serial")

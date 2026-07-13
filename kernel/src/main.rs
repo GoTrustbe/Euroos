@@ -23,6 +23,7 @@ mod observe;
 mod vault;
 mod euroipc;
 mod acpi;
+mod acpi_power;
 mod apic;
 mod appgfx;
 mod appicons;
@@ -1439,6 +1440,11 @@ fn main() -> Status {
             "[i3-aml] DSDT interpreted: {} bytes → {} AML objects. \\_S5={:?}, known methods present: {:?}",
             aml_len, ns.len(), s5, present
         );
+        // M5-1: ACPI power sources (battery / AC / lid). On a desktop or VM the
+        // DSDT has none of these; on a laptop it does. A battery whose _BST
+        // reads Embedded-Controller fields needs an EC driver (deferred) — we
+        // decode statically-evaluable _BST/_PSR and report the device presence.
+        acpi_power::report(&ns);
     } else {
         serial_println!("[i3-aml] no DSDT found via FADT");
     }
