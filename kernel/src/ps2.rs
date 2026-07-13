@@ -78,21 +78,22 @@ static SCANCODES: Mutex<Ring> = Mutex::new(Ring {
 
 /// Called from the IRQ1 handler (interrupts already disabled): buffer the scancode.
 pub fn push_scancode(sc: u8) {
-    // try_lock, NOT lock (BUG-007 class): this runs in PS/2 IRQ context AND in task context
-    // (the USB-HID harvest in `xhci::poll`, called from the desktop loop). A blocking lock
-    // deadlocks if a keyboard IRQ fires while the task side holds it — the IRQ would spin
-    // with interrupts off while the holder it just preempted can never release it. Dropping
-    // one scancode on contention is harmless.
-    let mut r = match SCANCODES.try_lock() {
-        Some(r) => r,
-        None => return,
-    };
-    let next = (r.tail + 1) % RING_SIZE;
-    if next != r.head {
-        let tail = r.tail;
-        r.buf[tail] = sc;
-        r.tail = next;
-    }
+    // IF-off + blocking lock (BUG-007 class, done right): this runs in IRQ context
+    // AND in task context (the USB-HID harvest in `xhci::poll`, called from both the
+    // desktop loop and the timer tick). The old `try_lock` avoided the IRQ-vs-task
+    // deadlock but silently DROPPED the scancode on contention — a real make/break
+    // code lost forever (the flaky-first-keystroke bug). Since every acquisition of
+    // SCANCODES now happens with interrupts disabled, an IRQ can never preempt a
+    // holder on this CPU: the blocking lock is deadlock-free AND lossless.
+    without_interrupts(|| {
+        let mut r = SCANCODES.lock();
+        let next = (r.tail + 1) % RING_SIZE;
+        if next != r.head {
+            let tail = r.tail;
+            r.buf[tail] = sc;
+            r.tail = next;
+        }
+    });
     // Buffer full → drop the newest scancode (should very rarely happen).
 }
 
@@ -107,6 +108,14 @@ fn pop_scancode() -> Option<u8> {
             Some(sc)
         }
     })
+}
+
+/// Raw scancode (set 1) for a program that owns the keyboard — e.g. the DOOM
+/// port, which needs press/release + arrow/ctrl keys that `poll_key`'s char
+/// interface cannot express. Returns the next make/break code, or `None`.
+/// Draining this starves `poll_key`, so callers use exactly one of the two.
+pub fn poll_scancode() -> Option<u8> {
+    pop_scancode()
 }
 
 /// Fetch the next decoded character from the buffer (or `None`).

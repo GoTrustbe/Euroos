@@ -113,28 +113,26 @@ unsafe fn mouse_write(cmd: &mut Port<u8>, data: &mut Port<u8>, status: &mut Port
 
 /// Called by the IRQ12 handler with each received byte.
 pub fn push_byte(byte: u8) {
-    // try_lock, NOT lock (BUG-007 class): called from the PS/2 mouse IRQ and from the
-    // USB-HID harvest in task context; a blocking acquire risks the same IRQ-vs-task
-    // deadlock as push_scancode. Drop the byte on contention (mouse resync handles it).
-    let mut p = match PACKET.try_lock() {
-        Some(p) => p,
-        None => return,
-    };
-    let phase = p.0;
-    // Resynchronize: byte 0 must have bit 3 set.
-    if phase == 0 && byte & 0x08 == 0 {
-        return;
-    }
-    p.1[phase as usize] = byte;
-    if phase < 2 {
-        p.0 = phase + 1;
-        return;
-    }
-    p.0 = 0;
-    let flags = p.1[0];
-    let dx = p.1[1] as i8 as i32;
-    let dy = p.1[2] as i8 as i32;
-    drop(p);
+    // IF-off + blocking lock (BUG-007 class, same rule as push_scancode): called
+    // from the PS/2 mouse IRQ and from task context. Every PACKET acquisition
+    // happens with interrupts disabled, so an IRQ can never preempt a holder on
+    // this CPU — deadlock-free without silently dropping bytes on contention.
+    let done = x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut p = PACKET.lock();
+        let phase = p.0;
+        // Resynchronize: byte 0 must have bit 3 set.
+        if phase == 0 && byte & 0x08 == 0 {
+            return None;
+        }
+        p.1[phase as usize] = byte;
+        if phase < 2 {
+            p.0 = phase + 1;
+            return None;
+        }
+        p.0 = 0;
+        Some((p.1[0], p.1[1] as i8 as i32, p.1[2] as i8 as i32))
+    });
+    let Some((flags, dx, dy)) = done else { return };
 
     let w = SCREEN_W.load(Ordering::Relaxed) as i32;
     let h = SCREEN_H.load(Ordering::Relaxed) as i32;

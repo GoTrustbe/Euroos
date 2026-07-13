@@ -84,16 +84,24 @@ pub fn _print(args: fmt::Arguments) {
     // Tee: write to the UART and to the kmsg ring (S1 observability), so that
     // `dmesg` and the panic handler have the recent history. Lock order is
     // always UART -> RING (klog::tee takes no UART lock), so no deadlock.
-    let mut uart = UART.lock();
-    struct Tee<'a>(&'a mut Uart);
-    impl Write for Tee<'_> {
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            self.0.write_str(s)?;
-            crate::klog::tee(s);
-            Ok(())
+    //
+    // Interrupts OFF while the UART lock is held (BUG-007 class): interrupt
+    // handlers print too (the xHCI MSI-X harvest logs its first reports); if one
+    // preempts a task mid-print, it spins forever on this lock with interrupts
+    // disabled — a silent boot hang. With the lock only ever held under IF=0,
+    // an IRQ-context print can never see it taken on this CPU.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut uart = UART.lock();
+        struct Tee<'a>(&'a mut Uart);
+        impl Write for Tee<'_> {
+            fn write_str(&mut self, s: &str) -> fmt::Result {
+                self.0.write_str(s)?;
+                crate::klog::tee(s);
+                Ok(())
+            }
         }
-    }
-    let _ = Tee(&mut uart).write_fmt(args);
+        let _ = Tee(&mut uart).write_fmt(args);
+    });
 }
 
 /// Non-blocking read of one input byte from COM1 (`None` if nothing pending).
