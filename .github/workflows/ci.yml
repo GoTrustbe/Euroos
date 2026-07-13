@@ -227,7 +227,7 @@ jobs:
       - name: Build the signed image (fresh dev key, like kernel-boot)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends musl-tools qemu-system-x86 ovmf dosfstools mtools
+          sudo apt-get install -y --no-install-recommends musl-tools qemu-system-x86 ovmf dosfstools mtools swtpm
           python3 toolchain/eupkg/gen-dev-key.py
           ./userland/build.sh
           ./scripts/build.sh release
