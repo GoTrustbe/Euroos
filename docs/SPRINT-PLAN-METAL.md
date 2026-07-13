@@ -89,8 +89,8 @@ AHCI write/read + boot-medium read-only proof).
 ### M-4 — USB grown up
 | ID | Task | Status | Scope & verification |
 |----|------|--------|----------------------|
-| M4-1 | Hub support (incl. root-hub port trees) | ⬜ | Enumerate through `-device usb-hub`; hotplug attach/detach events. |
-| M4-2 | HID report protocol (report-descriptor parsing) | ⬜ | Real keyboards/mice/touchpads aren't all boot-protocol. Host-test the descriptor parser (`eurousb`), boot-verify with QEMU HID variants. |
+| M4-1 | Hub support (incl. root-hub port trees) | ✅ (boot-time; hotplug open) | Route strings + TT fields + hub port power/reset/scan, depth 2. Matrix `usbhub` leg: the only keyboard behind a hub types `uname` end-to-end. Hotplug events deferred. |
+| M4-2 | HID report protocol (report-descriptor parsing) | ✅ | `eurousb::parse_report_descriptor` (short items, usage ranges, report ids) host-tested; xHCI decodes report-protocol pointers through the parsed map with device logical ranges (QEMU tablet live-verified). |
 | M4-3 | UAC2 USB audio (class driver) | ⬜ | `-device usb-audio`: stream out through `euroaudio` mixer. LPIB-style DMA-consumption proof like HDA. |
 | M4-4 | xHCI robustness pass | 🟡 | Ring-full handling, stall recovery, disconnect mid-transfer; fuzz the descriptor parser in `eurofuzz`. |
 
