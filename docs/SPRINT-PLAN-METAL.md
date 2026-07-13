@@ -84,7 +84,7 @@ AHCI write/read + boot-medium read-only proof).
 |----|------|--------|----------------------|
 | M3-1 | Intel e1000e (82574/I219 family) | ✅ (82540+82574, polled) | `e1000.rs` + `nic.rs` dispatch: the whole net suite runs on the Intel NIC (matrix leg: DHCP OFFER + ping required, DNS observed). I219/I225 unbound until real-metal hwprobe validation. MSI-X + TSO later if needed. |
 | M3-2 | Realtek RTL8168/8125 (2.5G) | 🔒 | The majority of consumer boards. QEMU has no model — write against datasheet/OSS references, gate behind `hwprobe` + real-metal validation. Honest label until then. |
-| M3-3 | USB CDC-NCM/ECM (USB ethernet + phone tethering) | ⬜ | Class driver over existing xHCI. Verify: QEMU `-device usb-net` end-to-end DHCP→TLS; this is also the interim "WiFi" answer on laptops. |
+| M3-3 | USB CDC-ECM (USB ethernet + phone tethering) | ✅ (ECM; NCM later) | `xhci::setup_usbnet` + nic 3rd backend + net::late_bring_up. Matrix `usbnet` leg: DHCP + gateway ping over usb-net (restrict=on), ~51s to loop. Heavy TCP over emulated USB is slow under TCG (emulator tax, not a defect). |
 
 ### M-4 — USB grown up
 | ID | Task | Status | Scope & verification |
