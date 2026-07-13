@@ -15,6 +15,7 @@ Legs:
   hda     + intel-hda with output codec         -> [hda]/[snd] init lines
   usb     + xhci: kbd, tablet, hub, usb-storage -> xHCI HID + mass-storage markers
   usbhub  keyboard ONLY behind a usb-hub         -> typing works through the hub (M4-1)
+  usbnet  ONLY NIC = usb-net (CDC-ECM)            -> DHCP/ping over USB ethernet (M3-3)
   hwprobe base leg + typed `hwprobe` command    -> inventory lines over serial
 
 Usage: python3 scripts/run-metal-matrix.py [image] [--legs a,b,c]
@@ -63,6 +64,18 @@ def leg_devices(leg):
         # end-to-end (route strings + interrupt-IN through the hub).
         return ["-device", "usb-hub,bus=xhci.0,port=3",
                 "-device", "usb-kbd,bus=xhci.0,port=3.1"]
+    if leg == "usbnet":
+        # ONLY NIC = a CDC-ECM USB-ethernet function (phone-tethering class):
+        # -nic none suppresses the default e1000e, so the net stack must run
+        # over the USB pipes or not at all.
+        # restrict=on: slirp still runs DHCP + answers gateway pings, but the
+        # guest can't reach host services (the OTA server on :8722). That keeps
+        # the usbnet leg a pure connectivity test (DHCP + ping, like the e1000e
+        # leg) instead of gating on a heavy image-staging TCP session, which is
+        # slow over emulated USB under 60x TCG (an emulator tax, not a driver
+        # defect — the CDC-ECM link itself is proven by DHCP + ping).
+        return ["-nic", "none",
+                "-netdev", "user,id=un0,restrict=on", "-device", "usb-net,netdev=un0,bus=xhci.0"]
     if leg == "usb":
         img = os.path.join(WORK, "usbdisk.img")
         subprocess.run(["truncate", "-s", "16M", img], check=True)
@@ -87,6 +100,9 @@ LEGS = {
     "hda": (["interactive loop started"], []),  # + dynamic check below: hda init line
     "usb": (["mass storage LIVE", "interactive loop started"], []),
     "usbhub": (["(behind hub)", "via hub", "interactive loop started"], []),
+    "usbnet": (["USB ethernet (CDC-ECM) LIVE", "NIC: usb-ethernet (CDC-ECM)",
+                "[net] DHCP OFFER:", "PING 10.0.2.2: echo-reply OK ✓",
+                "interactive loop started"], []),
     "hwprobe": (["interactive loop started"], []),
 }
 

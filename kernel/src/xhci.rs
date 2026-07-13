@@ -562,6 +562,46 @@ unsafe fn enumerate_device(
         return setup_mass_storage(x, falloc, slot, root_port, speed, cfg.value, iface, &mut ep0_ring, in_ctx, cs, buf);
     }
 
+    // CDC-ECM USB ethernet (M3-3). QEMU's usb-net (and some real dongles) put
+    // RNDIS in the FIRST configuration and CDC-ECM in the SECOND — check the
+    // current config, then walk the others.
+    {
+        let mut ecm_cfg = None;
+        let has_ecm = |c: &eurousb::Configuration| {
+            c.interfaces.iter().any(|i| i.class == 0x02 && i.subclass == 0x06)
+        };
+        if has_ecm(&cfg) {
+            ecm_cfg = Some((cfg.clone(), total));
+        } else {
+            for ci in 1..dd.num_configurations.min(4) as u16 {
+                if !control_in(x, slot, &mut ep0_ring, 0x80, 6, 0x0200 | ci, 0, 9, buf) {
+                    break;
+                }
+                let t = {
+                    let b = core::slice::from_raw_parts(buf as *const u8, 9);
+                    u16::from_le_bytes([b[2], b[3]])
+                }
+                .min(512);
+                if !control_in(x, slot, &mut ep0_ring, 0x80, 6, 0x0200 | ci, 0, t, buf) {
+                    break;
+                }
+                let c = {
+                    let bytes = core::slice::from_raw_parts(buf as *const u8, t as usize);
+                    eurousb::Configuration::parse(bytes)
+                };
+                if let Some(c) = c {
+                    if has_ecm(&c) {
+                        ecm_cfg = Some((c, t));
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some((ecm, raw_len)) = ecm_cfg {
+            return setup_usbnet(x, falloc, slot, root_port, route, speed, tt, &ecm, raw_len, &mut ep0_ring, in_ctx, cs, buf);
+        }
+    }
+
     // Look for a HID boot interface (keyboard or mouse) + its interrupt-IN endpoint.
     let mut chosen: Option<(bool, bool, u8, u8, u16, u8)> = None; // (is_kbd, is_abs, iface, ep_addr, max_pkt, interval)
     for iface in &cfg.interfaces {
@@ -926,6 +966,33 @@ fn poll_inner() {
             if ttype != TRB_EVT_TRANSFER {
                 continue;
             }
+            // CDC-ECM traffic (M3-3): queue completed receives, release TX.
+            if let Some(n) = (*core::ptr::addr_of_mut!(USBNET)).as_mut() {
+                if slot == n.slot && ep_id == n.in_dci as u32 {
+                    if cc == CC_SUCCESS || cc == 13 {
+                        // Event status bits 0..23 = REMAINING transfer length.
+                        let got = 2048usize.saturating_sub((r32(trb + 8) & 0xFF_FFFF) as usize);
+                        let src = n.rx_bufs[n.rx_deq % USBNET_RX_BUFS];
+                        if got > 0 && got <= 2048 {
+                            let mut f = alloc::vec![0u8; got];
+                            core::ptr::copy_nonoverlapping(src as *const u8, f.as_mut_ptr(), got);
+                            x86_64::instructions::interrupts::without_interrupts(|| {
+                                let mut q = USBNET_RX.lock();
+                                if q.len() >= 64 {
+                                    q.pop_front(); // drop oldest under overload
+                                }
+                                q.push_back(f);
+                            });
+                        }
+                        usbnet_rearm_one(x, n);
+                    }
+                    continue;
+                }
+                if slot == n.slot && ep_id == n.out_dci as u32 {
+                    USBNET_TX_BUSY.store(false, core::sync::atomic::Ordering::Release);
+                    continue;
+                }
+            }
             // Find the HID device that belongs to (slot, ep_id).
             let hids = core::ptr::addr_of_mut!(HIDS);
             for s in (*hids).iter_mut() {
@@ -1056,6 +1123,113 @@ struct MassStorage {
     last_lba: u32,
 }
 static mut MASS: Option<MassStorage> = None;
+
+/// A CDC-ECM USB network function (M3-3): bulk pipes carrying raw ethernet
+/// frames. This is the class real USB-ethernet dongles and phone tethering
+/// speak (ECM here; NCM is framing on top — later if needed).
+const USBNET_RX_BUFS: usize = 8; // in-flight receive buffers (burst tolerance)
+
+struct UsbNet {
+    slot: u8,
+    in_dci: u8,
+    out_dci: u8,
+    in_ring: Ring,
+    out_ring: Ring,
+    rx_bufs: [u64; USBNET_RX_BUFS], // ring of 2 KiB receive buffers
+    rx_deq: usize,                  // next buffer expected to complete (FIFO)
+    tx_buf: u64,
+    mac: [u8; 6],
+}
+
+static mut USBNET: Option<UsbNet> = None;
+/// TX-in-flight flag, cleared by the event harvest when the OUT transfer
+/// completes (poll runs in IRQ context too → atomics only).
+static USBNET_TX_BUSY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Received frames, queued by the event harvest (IRQ context!) and popped by
+/// `usbnet_poll_recv` (task context) — so the lock follows the irqsave rule.
+static USBNET_RX: spin::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>> =
+    spin::Mutex::new(alloc::collections::VecDeque::new());
+
+pub fn usbnet_present() -> bool {
+    unsafe { (*core::ptr::addr_of!(USBNET)).is_some() }
+}
+
+pub fn usbnet_mac() -> Option<[u8; 6]> {
+    unsafe { (*core::ptr::addr_of!(USBNET)).as_ref().map(|n| n.mac) }
+}
+
+/// Transmit one ethernet frame over the bulk-OUT pipe. Waits (bounded) for a
+/// previous in-flight transmit, then fires without blocking on completion.
+pub fn usbnet_send(frame: &[u8]) -> bool {
+    use core::sync::atomic::Ordering;
+    if frame.is_empty() || frame.len() > 2048 {
+        return false;
+    }
+    // Drain a previous in-flight TX first. The 100 Hz timer + MSI-X harvest
+    // clear TX_BUSY in the background; poll() here only as a light nudge so a
+    // wedged pipe cannot hang the caller (bounded).
+    for i in 0..200_000u64 {
+        if !USBNET_TX_BUSY.load(Ordering::Acquire) {
+            break;
+        }
+        if i % 4096 == 0 {
+            poll();
+        }
+        core::hint::spin_loop();
+    }
+    if USBNET_TX_BUSY.load(Ordering::Acquire) {
+        return false;
+    }
+    unsafe {
+        let xp = core::ptr::addr_of_mut!(XHCI);
+        let x = match (*xp).as_mut() {
+            Some(x) => x,
+            None => return false,
+        };
+        let n = match (*core::ptr::addr_of_mut!(USBNET)).as_mut() {
+            Some(n) => n,
+            None => return false,
+        };
+        core::ptr::copy_nonoverlapping(frame.as_ptr(), n.tx_buf as *mut u8, frame.len());
+        USBNET_TX_BUSY.store(true, Ordering::Release);
+        n.out_ring.push(n.tx_buf as u32, (n.tx_buf >> 32) as u32, frame.len() as u32, (TRB_NORMAL << 10) | (1 << 5));
+        doorbell(x, n.slot, n.out_dci as u32);
+    }
+    true
+}
+
+/// Non-blocking receive of the next queued frame. A cheap pop: the 100 Hz
+/// timer tick and the xHCI MSI-X handler harvest completed receives into the
+/// queue in the background, so the network layer's millions-of-spins timeouts
+/// don't each pay for an event-ring drain (that made TCP over USB effectively
+/// hang). A rare empty-queue nudge covers the case where neither fired yet.
+pub fn usbnet_poll_recv() -> Option<alloc::vec::Vec<u8>> {
+    if let Some(f) = x86_64::instructions::interrupts::without_interrupts(|| USBNET_RX.lock().pop_front()) {
+        return Some(f);
+    }
+    static NUDGE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    if NUDGE.fetch_add(1, core::sync::atomic::Ordering::Relaxed) % 1024 == 0 {
+        poll();
+        return x86_64::instructions::interrupts::without_interrupts(|| USBNET_RX.lock().pop_front());
+    }
+    None
+}
+
+/// Arm ALL receive buffers on the bulk-IN ring (burst tolerance).
+unsafe fn usbnet_arm_all_rx(x: &Xhci, n: &mut UsbNet) {
+    for &b in &n.rx_bufs {
+        n.in_ring.push(b as u32, (b >> 32) as u32, 2048, (TRB_NORMAL << 10) | (1 << 5));
+    }
+    doorbell(x, n.slot, n.in_dci as u32);
+}
+
+/// Re-arm the buffer that just completed (FIFO) and advance the dequeue index.
+unsafe fn usbnet_rearm_one(x: &Xhci, n: &mut UsbNet) {
+    let b = n.rx_bufs[n.rx_deq % USBNET_RX_BUFS];
+    n.in_ring.push(b as u32, (b >> 32) as u32, 2048, (TRB_NORMAL << 10) | (1 << 5));
+    n.rx_deq = n.rx_deq.wrapping_add(1);
+    doorbell(x, n.slot, n.in_dci as u32);
+}
 static mut BOT_TAG: u32 = 0x1000;
 
 /// One bulk transfer (Normal-TRB + doorbell + wait for the transfer event).
@@ -1101,6 +1275,150 @@ unsafe fn scsi(x: &mut Xhci, ms: &mut MassStorage, cdb: &[u8], data_len: u32, in
     }
     let bytes = core::slice::from_raw_parts(csw as *const u8, 13);
     eurousb::bot::parse_csw(bytes).map(|(_, _, status)| status)
+}
+
+/// Configure a CDC-ECM interface pair (M3-3): select the ECM configuration,
+/// switch the data interface to its endpoint-bearing alternate setting, read
+/// the MAC from the Ethernet functional descriptor's string, and open the
+/// bulk pipes. `buf` still holds the RAW config blob of the chosen config.
+#[allow(clippy::too_many_arguments)]
+unsafe fn setup_usbnet(
+    x: &mut Xhci,
+    falloc: &mut FrameAllocator,
+    slot: u8,
+    port: u8,
+    route: u32,
+    speed: u32,
+    tt: u32,
+    cfg: &eurousb::Configuration,
+    raw_len: u16,
+    ep0: &mut Ring,
+    in_ctx: u64,
+    cs: u64,
+    buf: u64,
+) -> bool {
+    // The data interface: class 0x0A with both bulk endpoints (that parse
+    // entry is the endpoint-bearing alternate setting).
+    let data = match cfg.interfaces.iter().find(|i| {
+        i.class == 0x0A
+            && i.endpoints.iter().any(|e| e.is_in() && e.attributes & 3 == 2)
+            && i.endpoints.iter().any(|e| !e.is_in() && e.attributes & 3 == 2)
+    }) {
+        Some(d) => d,
+        None => {
+            crate::serial_println!("[xhci] slot {slot}: ECM without a bulk data interface");
+            return false;
+        }
+    };
+    let raw = core::slice::from_raw_parts(buf as *const u8, raw_len as usize);
+    // Ethernet functional descriptor (0x24/0x0F): iMACAddress at offset 3.
+    // Also recover the data interface's alternate-setting number from the raw
+    // blob (Configuration::parse drops bAlternateSetting).
+    let mut imac = 0u8;
+    let mut alt = 1u8;
+    let mut p = 0usize;
+    while p + 2 <= raw.len() {
+        let l = raw[p] as usize;
+        if l == 0 || p + l > raw.len() {
+            break;
+        }
+        if l >= 4 && raw[p + 1] == 0x24 && raw[p + 2] == 0x0F {
+            imac = raw[p + 3];
+        }
+        if l >= 9 && raw[p + 1] == 4 && raw[p + 2] == data.number && raw[p + 4] > 0 {
+            alt = raw[p + 3]; // interface descriptor with endpoints → its alt id
+        }
+        p += l;
+    }
+
+    // SET_CONFIGURATION for the ECM config, then activate the data alt-setting.
+    if !control_no_data(x, slot, ep0, 0x00, 9, cfg.value as u16, 0) {
+        crate::serial_println!("[xhci] slot {slot}: SET_CONFIGURATION (ECM) failed");
+        return false;
+    }
+    let _ = control_no_data(x, slot, ep0, 0x01, 11, alt as u16, data.number as u16); // SET_INTERFACE
+
+    // MAC address: a string descriptor of 12 UTF-16LE hex digits.
+    let mut mac = [0u8; 6];
+    if imac != 0
+        && control_in(x, slot, ep0, 0x80, 6, 0x0300 | imac as u16, 0x0409, 64, buf)
+    {
+        let sd = core::slice::from_raw_parts(buf as *const u8, 64);
+        let n = (sd[0] as usize).min(64);
+        let hexval = |c: u8| -> Option<u8> {
+            match c {
+                b'0'..=b'9' => Some(c - b'0'),
+                b'a'..=b'f' => Some(c - b'a' + 10),
+                b'A'..=b'F' => Some(c - b'A' + 10),
+                _ => None,
+            }
+        };
+        let mut nib = [0u8; 12];
+        let mut got = 0usize;
+        let mut q = 2;
+        while q + 1 < n && got < 12 {
+            if let Some(v) = hexval(sd[q]) {
+                nib[got] = v;
+                got += 1;
+            }
+            q += 2; // UTF-16LE: every other byte
+        }
+        if got == 12 {
+            for k in 0..6 {
+                mac[k] = (nib[k * 2] << 4) | nib[k * 2 + 1];
+            }
+        }
+    }
+    if mac == [0u8; 6] {
+        // No usable iMACAddress: derive a stable locally-administered one.
+        mac = [0x02, 0x45, 0x55, 0x52, 0x4F, slot];
+        crate::serial_println!("[xhci] slot {slot}: ECM without MAC string — using locally administered");
+    }
+
+    // Open the bulk pipes (same shape as mass storage).
+    let ein = data.endpoints.iter().find(|e| e.is_in() && e.attributes & 3 == 2).unwrap();
+    let eout = data.endpoints.iter().find(|e| !e.is_in() && e.attributes & 3 == 2).unwrap();
+    let in_dci = ((ein.address & 0x0F) * 2 + 1) as u8;
+    let out_dci = ((eout.address & 0x0F) * 2) as u8;
+    let in_ring_frame = falloc.allocate().expect("xhci ecm-in-ring");
+    let out_ring_frame = falloc.allocate().expect("xhci ecm-out-ring");
+    let in_ring = Ring::new(in_ring_frame);
+    let out_ring = Ring::new(out_ring_frame);
+    let max_dci = in_dci.max(out_dci) as u32;
+    build_input_context(in_ctx, cs, 1 | (1 << in_dci) | (1 << out_dci), |slot_ctx, ep_ctxs| {
+        w32(slot_ctx, (route & 0xF_FFFF) | ((max_dci & 0x1F) << 27) | (speed << 20));
+        w32(slot_ctx + 4, (port as u32) << 16);
+        w32(slot_ctx + 8, tt);
+        let oc = ep_ctxs + (out_dci as u64 - 1) * cs;
+        w32(oc + 4, (2 << 3) | (3 << 1) | ((eout.max_packet as u32) << 16));
+        w64(oc + 8, out_ring_frame | 1);
+        w32(oc + 16, eout.max_packet as u32);
+        let ic = ep_ctxs + (in_dci as u64 - 1) * cs;
+        w32(ic + 4, (6 << 3) | (3 << 1) | ((ein.max_packet as u32) << 16));
+        w64(ic + 8, in_ring_frame | 1);
+        w32(ic + 16, ein.max_packet as u32);
+    });
+    let (cc, _) = run_command(x, in_ctx as u32, (in_ctx >> 32) as u32, (TRB_CONFIGURE_ENDPOINT << 10) | ((slot as u32) << 24))
+        .unwrap_or((0, 0));
+    if cc != CC_SUCCESS {
+        crate::serial_println!("[xhci] slot {slot}: Configure-Endpoint (ECM) cc={cc}");
+        return false;
+    }
+
+    let mut rx_bufs = [0u64; USBNET_RX_BUFS];
+    for b in &mut rx_bufs {
+        *b = falloc.allocate().expect("xhci ecm-rx");
+        core::ptr::write_bytes(*b as *mut u8, 0, 4096);
+    }
+    let tx_buf = falloc.allocate().expect("xhci ecm-tx");
+    let mut un = UsbNet { slot, in_dci, out_dci, in_ring, out_ring, rx_bufs, rx_deq: 0, tx_buf, mac };
+    usbnet_arm_all_rx(x, &mut un);
+    crate::serial_println!(
+        "[xhci] slot {slot}: USB ethernet (CDC-ECM) LIVE — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ✓",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    );
+    USBNET = Some(un);
+    true
 }
 
 /// Configure a USB mass-storage interface (bulk-IN + bulk-OUT) and run a

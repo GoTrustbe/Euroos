@@ -11,6 +11,7 @@ use euromm::FrameAllocator;
 const KIND_NONE: u8 = 0;
 const KIND_VIRTIO: u8 = 1;
 const KIND_E1000: u8 = 2;
+const KIND_USBNET: u8 = 3;
 
 static KIND: AtomicU8 = AtomicU8::new(KIND_NONE);
 
@@ -24,6 +25,22 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         KIND.store(KIND_E1000, Ordering::Relaxed);
         return true;
     }
+    // CDC-ECM USB ethernet (M3-3) — already brought up during xHCI init.
+    if crate::xhci::usbnet_present() {
+        KIND.store(KIND_USBNET, Ordering::Relaxed);
+        return true;
+    }
+    false
+}
+
+/// Late rebind (M3-3): USB ethernet only exists after xHCI enumeration, which
+/// runs AFTER the main net bring-up. When nothing bound earlier, adopt the
+/// CDC-ECM function now. Returns true when usbnet was adopted.
+pub fn late_bind_usbnet() -> bool {
+    if KIND.load(Ordering::Relaxed) == KIND_NONE && crate::xhci::usbnet_present() {
+        KIND.store(KIND_USBNET, Ordering::Relaxed);
+        return true;
+    }
     false
 }
 
@@ -32,6 +49,7 @@ pub fn kind() -> &'static str {
     match KIND.load(Ordering::Relaxed) {
         KIND_VIRTIO => "virtio-net",
         KIND_E1000 => "e1000",
+        KIND_USBNET => "usb-ethernet (CDC-ECM)",
         _ => "none",
     }
 }
@@ -40,6 +58,7 @@ pub fn mac() -> Option<[u8; 6]> {
     match KIND.load(Ordering::Relaxed) {
         KIND_VIRTIO => crate::virtio_net::mac(),
         KIND_E1000 => crate::e1000::mac(),
+        KIND_USBNET => crate::xhci::usbnet_mac(),
         _ => None,
     }
 }
@@ -48,6 +67,7 @@ pub fn send(frame: &[u8]) -> bool {
     match KIND.load(Ordering::Relaxed) {
         KIND_VIRTIO => crate::virtio_net::send(frame),
         KIND_E1000 => crate::e1000::send(frame),
+        KIND_USBNET => crate::xhci::usbnet_send(frame),
         _ => false,
     }
 }
@@ -56,6 +76,7 @@ pub fn poll_recv() -> Option<alloc::vec::Vec<u8>> {
     match KIND.load(Ordering::Relaxed) {
         KIND_VIRTIO => crate::virtio_net::poll_recv(),
         KIND_E1000 => crate::e1000::poll_recv(),
+        KIND_USBNET => crate::xhci::usbnet_poll_recv(),
         _ => None,
     }
 }

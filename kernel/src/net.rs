@@ -69,6 +69,123 @@ fn drain() {
 }
 
 /// ARP: ask for the MAC address of `ip` (in our subnet).
+/// Compact network bring-up for a NIC that appears late in boot (M3-3: the
+/// CDC-ECM function exists only after xHCI enumeration). DHCP → ARP the
+/// gateway → ping it → save the config, with the same serial markers as the
+/// main bring-up so tests treat both paths identically.
+pub fn late_bring_up() {
+    use euronet::dhcp;
+    use euronet::ethernet::EtherType;
+    use euronet::ipv4::{Ipv4Header, Protocol};
+    use euronet::udp::UdpDatagram;
+
+    if !crate::nic::late_bind_usbnet() {
+        return;
+    }
+    let my_mac = MacAddr(match crate::nic::mac() {
+        Some(m) => m,
+        None => return,
+    });
+    crate::serial_println!(
+        "[net] NIC: {} MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (late bring-up)",
+        crate::nic::kind(),
+        my_mac.0[0], my_mac.0[1], my_mac.0[2], my_mac.0[3], my_mac.0[4], my_mac.0[5]
+    );
+
+    let any = Ipv4Addr([0, 0, 0, 0]);
+    let bcast = Ipv4Addr([255, 255, 255, 255]);
+    let xid = 0x4C41_5445u32; // "LATE"
+    let send_dhcp = |mt: u8, req: Option<Ipv4Addr>, sid: Option<Ipv4Addr>| {
+        let payload = dhcp::build(mt, xid, my_mac.0, req, sid);
+        let seg = UdpDatagram { src_port: 68, dst_port: 67, payload }.build(any, bcast);
+        let ipf = Ipv4Header {
+            protocol: Protocol::Udp, ttl: 64, src: any, dst: bcast,
+            total_length: 0, identification: 0x4c54,
+        }
+        .build(&seg);
+        let frame = EthernetHeader { dst: MacAddr::BROADCAST, src: my_mac, ethertype: EtherType::Ipv4 }.build(&ipf);
+        nic::send(&frame);
+    };
+    let poll_dhcp = |want: u8| -> Option<dhcp::DhcpInfo> {
+        for _ in 0..6_000_000u64 {
+            if let Some(rx) = nic::poll_recv() {
+                if let Ok((h, p)) = EthernetHeader::parse(&rx) {
+                    if h.ethertype == EtherType::Ipv4 {
+                        if let Ok((iph, ipl)) = Ipv4Header::parse(p) {
+                            if iph.protocol == Protocol::Udp && ipl.len() > 8 {
+                                let dport = u16::from_be_bytes([ipl[2], ipl[3]]);
+                                if dport == 68 {
+                                    if let Some(info) = dhcp::parse(&ipl[8..]) {
+                                        if info.msg_type == want {
+                                            return Some(info);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    };
+    let mut offer = None;
+    for _ in 0..6 {
+        send_dhcp(dhcp::DISCOVER, None, None);
+        offer = poll_dhcp(dhcp::OFFER);
+        if offer.is_some() {
+            break;
+        }
+        for _ in 0..20_000_000u64 {
+            core::hint::spin_loop();
+        }
+    }
+    let o = match offer {
+        Some(o) => o,
+        None => {
+            crate::serial_println!("[net] late bring-up: no DHCP OFFER over {}", crate::nic::kind());
+            return;
+        }
+    };
+    crate::serial_println!(
+        "[net] DHCP OFFER: {}.{}.{}.{} from server {}.{}.{}.{}",
+        o.your_ip.0[0], o.your_ip.0[1], o.your_ip.0[2], o.your_ip.0[3],
+        o.server_id.0[0], o.server_id.0[1], o.server_id.0[2], o.server_id.0[3]
+    );
+    send_dhcp(dhcp::REQUEST, Some(o.your_ip), Some(o.server_id));
+    let _ = poll_dhcp(dhcp::ACK);
+    let my_ip = o.your_ip;
+    let gw_ip = o.router.unwrap_or(o.server_id);
+    let dns_ip = o.dns.unwrap_or(gw_ip);
+
+    let gw_mac = match arp_resolve(my_mac, my_ip, gw_ip) {
+        Some(m) => m,
+        None => {
+            crate::serial_println!("[net] late bring-up: gateway ARP failed");
+            return;
+        }
+    };
+    let dns_mac = arp_resolve(my_mac, my_ip, dns_ip).unwrap_or(gw_mac);
+    let pong = icmp_ping(my_mac, my_ip, gw_mac, gw_ip);
+    crate::serial_println!(
+        "[net] PING {}.{}.{}.{}: {}",
+        gw_ip.0[0], gw_ip.0[1], gw_ip.0[2], gw_ip.0[3],
+        if pong { "echo-reply OK ✓" } else { "(no reply)" }
+    );
+    save(NetCfg {
+        my_mac,
+        my_ip,
+        gw_ip,
+        gw_mac,
+        dns_ip,
+        dns_mac,
+        link_local: euronet::ipv6::Ipv6Addr::link_local_from_mac(my_mac.0),
+        router_ll: None,
+        router_mac: None,
+    });
+    crate::serial_println!("[net] ✓ EuroOS is on the network (late bring-up over {})", crate::nic::kind());
+}
+
 pub fn arp_resolve(my_mac: MacAddr, my_ip: Ipv4Addr, ip: Ipv4Addr) -> Option<MacAddr> {
     drain();
     let req = ArpPacket {

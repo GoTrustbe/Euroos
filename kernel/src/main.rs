@@ -1504,6 +1504,9 @@ fn main() -> Status {
     // M2-1: NVMe MSI-X delivery proof — must run with interrupts ON (the boot
     // self-test above ran before this point, so its completions were unseen).
     nvme::msix_proof();
+    // M3-3: a CDC-ECM USB NIC only exists after xHCI enumeration (above) — if
+    // no NIC bound during the main net bring-up, adopt it and bring it up now.
+    net::late_bring_up();
     serial_println!("[euro] APIC timer 100 Hz + interrupts ON -> preemptive multitasking (incl. ring 3)");
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.
