@@ -10,7 +10,7 @@ break a real machine breaks a leg here first.
 Legs:
   base    virtio disk/net (today's default)     -> [ecam] verified + [pci]
   nvme    + NVMe data disk                      -> [nvme] self-test OK
-  ahci    + ICH9 AHCI with a SATA disk          -> boot resilience (no driver yet: must NOT hang or break others)
+  ahci    + ICH9 AHCI with a SATA disk          -> [ahci] blank-disk write/read self-test (M2-2 driver)
   e1000e  + Intel e1000e NIC                    -> boot resilience (no driver yet)
   hda     + intel-hda with output codec         -> [hda]/[snd] init lines
   usb     + xhci: kbd, tablet, hub, usb-storage -> xHCI HID + mass-storage markers
@@ -68,10 +68,14 @@ def leg_devices(leg):
 
 # (leg, [required serial markers], [forbidden serial markers])
 LEGS = {
-    "base": (["[ecam] PCIe config via ECAM", "[pci]", "interactive loop started"], []),
-    "nvme": (["[nvme] self-test read/write", "OK ✓", "interactive loop started"],
+    "base": (["[ecam] PCIe config via ECAM", "[pci]",
+              "[ahci] disk 0 read-only self-test (boot sector via DMA): OK",
+              "interactive loop started"], ["FAILED ✗"]),
+    "nvme": (["[nvme] self-test read/write", "[nvme] self-test 64 KiB PRP-list @ LBA 2000: OK",
+              "[nvme] MSI-X delivery confirmed", "interactive loop started"],
              ["self-test: write FAILED", "self-test: read FAILED", "MISMATCH"]),
-    "ahci": (["interactive loop started"], []),
+    "ahci": (["[ahci] disk 1", "self-test write/read: sector OK ✓ · 64 KiB OK ✓",
+              "interactive loop started"], ["MISMATCH", "FAILED ✗"]),
     "e1000e": (["interactive loop started"], []),
     "hda": (["interactive loop started"], []),  # + dynamic check below: hda init line
     "usb": (["mass storage LIVE", "interactive loop started"], []),

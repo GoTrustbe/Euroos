@@ -40,8 +40,12 @@ pub const XHCI_MSIX_VECTOR: u8 = 0x46; // xHCI event ring via MSI-X (J2)
 /// Number of received xHCI MSI-X interrupts (proves MSI-X delivery).
 pub static XHCI_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 pub const VIRTIO_BLK_MSIX_VECTOR: u8 = 0x47; // virtio-blk completion via MSI-X (J2)
+pub const NVME_MSIX_VECTOR: u8 = 0x48; // NVMe I/O completion via MSI-X (Metal M2-1)
 /// Number of received virtio-blk completion MSI-X interrupts.
 pub static BLK_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Number of NVMe completion interrupts received via MSI-X (M2-1: proof of
+/// interrupt-driven NVMe completion; the data path polls, additive only).
+pub static NVME_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Per-CPU counter of received ping IPIs (proves cross-CPU signaling).
 pub static IPI_COUNT: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 /// Per-CPU counter of handled TLB shootdowns.
@@ -106,6 +110,7 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     idt[IPI_TLB_VECTOR].set_handler_fn(ipi_tlb_handler);
     idt[XHCI_MSIX_VECTOR].set_handler_fn(xhci_msix_handler);
     idt[VIRTIO_BLK_MSIX_VECTOR].set_handler_fn(blk_msix_handler);
+    idt[NVME_MSIX_VECTOR].set_handler_fn(nvme_msix_handler);
     // Harmless spurious handler (LAPIC vector 0xFF).
     idt[0xFF].set_handler_fn(spurious_handler);
     idt
@@ -158,6 +163,13 @@ extern "x86-interrupt" fn xhci_msix_handler(_frame: InterruptStackFrame) {
 /// driver confirms the actual completion (additive, no regression risk).
 extern "x86-interrupt" fn blk_msix_handler(_frame: InterruptStackFrame) {
     BLK_MSIX_COUNT.fetch_add(1, Ordering::Relaxed);
+    crate::apic::eoi();
+}
+
+/// NVMe completion via MSI-X (M2-1): counted as delivery proof; the driver's
+/// polling `wait()` consumes the actual completion entries.
+extern "x86-interrupt" fn nvme_msix_handler(_frame: InterruptStackFrame) {
+    NVME_MSIX_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::apic::eoi();
 }
 

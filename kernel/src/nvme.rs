@@ -1,8 +1,13 @@
-//! Minimal NVMe driver (NVM Express 1.4) — B2. Enough to find an NVMe disk,
-//! initialize the controller (admin + I/O queues), identify it,
-//! and read/write blocks via PRP. Polling instead of interrupts (simple +
-//! reliable for early boot). Memory is identity-mapped, so physical = virtual
-//! for both the MMIO registers and the DMA queues/buffers.
+//! Minimal NVMe driver (NVM Express 1.4) — B2, extended by Metal M2-1
+//! (docs/SPRINT-PLAN-METAL.md). Finds an NVMe disk, initializes the controller
+//! (admin + I/O queues), identifies it, and reads/writes blocks via PRP —
+//! including **PRP lists** for transfers beyond 8 KiB (64 KiB DMA buffer, so a
+//! whole EuroFS block run moves in one command). Completion is **polled** (the
+//! proven, boot-safe data path); the I/O CQ additionally signals **MSI-X
+//! vector 0** and the kernel counts those interrupts as delivery proof
+//! (interrupts::NVME_MSIX_COUNT), the same additive pattern as virtio-blk.
+//! Memory is identity-mapped, so physical = virtual for both the MMIO
+//! registers and the DMA queues/buffers.
 
 use euromm::FrameAllocator;
 
@@ -34,7 +39,8 @@ pub struct Nvme {
     lba_bytes: u32,
     admin: Queue,
     io: Queue,
-    data: u64, // 4 KiB DMA data buffer
+    data: u64, // DATA_MAX-byte contiguous DMA data buffer (16 frames)
+    prpl: u64, // 4 KiB PRP-list page (for transfers > 8 KiB)
     next_cid: u16,
     model: [u8; 40],
 }
@@ -156,11 +162,18 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         }
 
         let admin = Queue::new(asq, acq, db_base, db_base + db_stride);
-        let data = match falloc.allocate() {
+        // M2-1: 16 contiguous frames = 64 KiB DMA window (PRP-list territory)
+        // + one page for the PRP list itself.
+        let data = match falloc.allocate_aligned(DATA_MAX / 4096, 1) {
             Ok(a) => a,
             Err(_) => return false,
         };
-        core::ptr::write_bytes(data as *mut u8, 0, 4096);
+        core::ptr::write_bytes(data as *mut u8, 0, DATA_MAX);
+        let prpl = match falloc.allocate() {
+            Ok(a) => a,
+            Err(_) => return false,
+        };
+        core::ptr::write_bytes(prpl as *mut u8, 0, 4096);
 
         let mut nv = Nvme {
             mmio,
@@ -169,6 +182,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
             admin,
             io: Queue::new(0, 0, 0, 0), // gets filled in shortly
             data,
+            prpl,
             next_cid: 1,
             model: [0; 40],
         };
@@ -193,6 +207,17 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
             nv.lba_bytes = 1u32 << lbads;
         }
 
+        // M2-1: point MSI-X entry 0 at our NVMe vector BEFORE creating the I/O
+        // CQ, so completions also raise a counted interrupt (delivery proof;
+        // the data path still polls). 0 entries = device without MSI-X: fine,
+        // the CQ then simply stays polled.
+        let msix_n = crate::msix::enable(
+            &dev,
+            0,
+            crate::interrupts::NVME_MSIX_VECTOR,
+            crate::apic::lapic_id() as u8,
+        );
+
         // Create I/O completion + submission queue (qid 1).
         let iocq = match falloc.allocate() {
             Ok(a) => a,
@@ -210,7 +235,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
             db_base + 2 * db_stride, // SQ1 tail doorbell
             db_base + 3 * db_stride, // CQ1 head doorbell
         );
-        if !nv.create_io_cq(iocq) || !nv.create_io_sq(iosq) {
+        if !nv.create_io_cq(iocq, msix_n > 0) || !nv.create_io_sq(iosq) {
             return false;
         }
 
@@ -247,13 +272,14 @@ impl Nvme {
         matches!(self.admin.wait(), Some(0))
     }
 
-    unsafe fn create_io_cq(&mut self, cq: u64) -> bool {
+    unsafe fn create_io_cq(&mut self, cq: u64, irq: bool) -> bool {
         let mut cmd = [0u32; 16];
         cmd[0] = 0x05 | ((self.cid() as u32) << 16); // Create I/O CQ
         cmd[6] = (cq & 0xFFFF_FFFF) as u32;
         cmd[7] = (cq >> 32) as u32;
         cmd[10] = (((QDEPTH - 1) as u32) << 16) | 1; // qsize-1 | qid=1
-        cmd[11] = 1; // PC=1, interrupts off
+        // IV=0 (MSI-X entry 0) | IEN when MSI-X is wired | PC=1.
+        cmd[11] = if irq { (1 << 1) | 1 } else { 1 };
         self.admin.submit(&cmd);
         matches!(self.admin.wait(), Some(0))
     }
@@ -269,13 +295,33 @@ impl Nvme {
         matches!(self.admin.wait(), Some(0))
     }
 
-    /// I/O Read(0x02)/Write(0x01) of `nlb` LBAs from `slba` via the data buffer.
+    /// I/O Read(0x02)/Write(0x01) of `nlb` LBAs from `slba` via the data
+    /// buffer. PRP rules (M2-1): one page → PRP1 only; two pages → PRP2 is the
+    /// second page; more → PRP2 points at a **PRP list** of the remaining pages.
     unsafe fn rw(&mut self, write: bool, slba: u64, nlb: u16) -> bool {
+        let bytes = nlb as usize * self.lba_bytes as usize;
+        if bytes > DATA_MAX {
+            return false;
+        }
+        let npages = bytes.div_ceil(4096);
+        let prp2: u64 = match npages {
+            0 | 1 => 0,
+            2 => self.data + 4096,
+            n => {
+                // PRP list: entries for pages 1..n (page 0 lives in PRP1).
+                for i in 1..n {
+                    wr64(self.prpl + ((i - 1) as u64) * 8, self.data + (i as u64) * 4096);
+                }
+                self.prpl
+            }
+        };
         let mut cmd = [0u32; 16];
         cmd[0] = if write { 0x01 } else { 0x02 } | ((self.cid() as u32) << 16);
         cmd[1] = 1; // NSID
         cmd[6] = (self.data & 0xFFFF_FFFF) as u32; // PRP1
         cmd[7] = (self.data >> 32) as u32;
+        cmd[8] = (prp2 & 0xFFFF_FFFF) as u32; // PRP2 (page 2 or PRP list)
+        cmd[9] = (prp2 >> 32) as u32;
         cmd[10] = (slba & 0xFFFF_FFFF) as u32; // SLBA low
         cmd[11] = (slba >> 32) as u32; // SLBA high
         cmd[12] = (nlb - 1) as u32; // 0-based number of LBAs
@@ -284,40 +330,56 @@ impl Nvme {
     }
 }
 
-const DATA_MAX: usize = 4096;
+/// DMA window: 64 KiB (16 contiguous frames) — one command moves up to 128
+/// 512-byte LBAs via a PRP list. Larger requests are chunked transparently.
+const DATA_MAX: usize = 64 * 1024;
 
-/// Read `buf.len()` bytes (≤ 4096) from byte-LBA `lba` (512-byte sectors).
+/// Read `buf.len()` bytes from byte-LBA `lba` (512-byte sectors). Requests
+/// larger than the DMA window are split into 64 KiB commands.
 pub fn read_sectors(lba: u64, buf: &mut [u8]) -> bool {
     unsafe {
         let nv = match (*core::ptr::addr_of_mut!(NVME)).as_mut() {
             Some(n) => n,
             None => return false,
         };
-        let n = buf.len().min(DATA_MAX);
-        let nlb = ((n + nv.lba_bytes as usize - 1) / nv.lba_bytes as usize).max(1) as u16;
-        if !nv.rw(false, lba, nlb) {
-            return false;
+        let lb = nv.lba_bytes as usize;
+        let mut done = 0usize;
+        while done < buf.len() {
+            let n = (buf.len() - done).min(DATA_MAX);
+            let nlb = n.div_ceil(lb).max(1) as u16;
+            if !nv.rw(false, lba + (done / lb) as u64, nlb) {
+                return false;
+            }
+            core::ptr::copy_nonoverlapping(nv.data as *const u8, buf.as_mut_ptr().add(done), n);
+            done += n;
         }
-        core::ptr::copy_nonoverlapping(nv.data as *const u8, buf.as_mut_ptr(), n);
         true
     }
 }
 
-/// Write `buf.len()` bytes (≤ 4096) from byte-LBA `lba`.
+/// Write `buf.len()` bytes from byte-LBA `lba` (chunked like `read_sectors`).
 pub fn write_sectors(lba: u64, buf: &[u8]) -> bool {
     unsafe {
         let nv = match (*core::ptr::addr_of_mut!(NVME)).as_mut() {
             Some(n) => n,
             None => return false,
         };
-        let n = buf.len().min(DATA_MAX);
-        core::ptr::copy_nonoverlapping(buf.as_ptr(), nv.data as *mut u8, n);
-        let dlen = (n + nv.lba_bytes as usize - 1) / nv.lba_bytes as usize * nv.lba_bytes as usize;
-        if dlen > n {
-            core::ptr::write_bytes((nv.data + n as u64) as *mut u8, 0, dlen - n);
+        let lb = nv.lba_bytes as usize;
+        let mut done = 0usize;
+        while done < buf.len() {
+            let n = (buf.len() - done).min(DATA_MAX);
+            core::ptr::copy_nonoverlapping(buf.as_ptr().add(done), nv.data as *mut u8, n);
+            let dlen = n.div_ceil(lb) * lb;
+            if dlen > n {
+                core::ptr::write_bytes((nv.data + n as u64) as *mut u8, 0, dlen - n);
+            }
+            let nlb = (dlen / lb).max(1) as u16;
+            if !nv.rw(true, lba + (done / lb) as u64, nlb) {
+                return false;
+            }
+            done += n;
         }
-        let nlb = (dlen / nv.lba_bytes as usize).max(1) as u16;
-        nv.rw(true, lba, nlb)
+        true
     }
 }
 
@@ -405,26 +467,49 @@ impl eurofs::BlockDevice for NvmeBlock {
         self.blocks
     }
     fn read_blocks(&self, start: u64, count: u32, buf: &mut [u8]) -> eurofs::BlockResult<()> {
-        for i in 0..count as u64 {
-            let o = (i * 4096) as usize;
-            if !read_sectors((start + i) * 8, &mut buf[o..o + 4096]) {
-                return Err(eurofs::BlockError::IoError);
-            }
+        // One chunked call: read_sectors slices this into 64 KiB PRP-list
+        // commands (16 EuroFS blocks each) instead of 4 KiB singles.
+        let n = count as usize * 4096;
+        if !read_sectors(start * 8, &mut buf[..n]) {
+            return Err(eurofs::BlockError::IoError);
         }
         Ok(())
     }
     fn write_blocks(&mut self, start: u64, count: u32, buf: &[u8]) -> eurofs::BlockResult<()> {
-        for i in 0..count as u64 {
-            let o = (i * 4096) as usize;
-            if !write_sectors((start + i) * 8, &buf[o..o + 4096]) {
-                return Err(eurofs::BlockError::IoError);
-            }
+        let n = count as usize * 4096;
+        if !write_sectors(start * 8, &buf[..n]) {
+            return Err(eurofs::BlockError::IoError);
         }
         Ok(())
     }
     fn flush(&mut self) -> eurofs::BlockResult<()> {
         // NVMe writes are synchronous (we poll for completion) → already durable.
         Ok(())
+    }
+}
+
+/// MSI-X delivery proof (M2-1). The boot self-test runs with interrupts still
+/// DISABLED, so its completions can never be counted; this runs after
+/// `interrupts::enable()` in the boot flow: one small read, then report the
+/// interrupt counter honestly (confirmed or polled-only).
+pub fn msix_proof() {
+    if !present() {
+        return;
+    }
+    let mut buf = [0u8; 512];
+    let _ = read_sectors(0, &mut buf);
+    // The MSI fires at CQE post time; give the (TCG) machine a beat.
+    for _ in 0..500_000u64 {
+        if crate::interrupts::NVME_MSIX_COUNT.load(core::sync::atomic::Ordering::Relaxed) > 0 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let n = crate::interrupts::NVME_MSIX_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+    if n > 0 {
+        crate::serial_println!("[nvme] MSI-X delivery confirmed: {n} completion interrupt(s) ✓");
+    } else {
+        crate::serial_println!("[nvme] MSI-X wired but no interrupt counted — completions remain polled");
     }
 }
 
@@ -449,6 +534,21 @@ pub fn self_test() {
     }
     let ok = wbuf == rbuf;
     crate::serial_println!("[nvme] self-test read/write @ LBA {lba}: {}", if ok { "OK ✓" } else { "MISMATCH ✗" });
+
+    // M2-1: a 64 KiB transfer (128 LBAs) crosses 16 pages → exercises the PRP
+    // list end-to-end, and its completions should raise counted MSI-X vectors.
+    let mut big = alloc::vec![0u8; 64 * 1024];
+    for (i, b) in big.iter_mut().enumerate() {
+        *b = (i as u8).wrapping_mul(31) ^ (i >> 8) as u8;
+    }
+    let big_lba = 2000u64;
+    let mut big_rd = alloc::vec![0u8; 64 * 1024];
+    let big_ok = write_sectors(big_lba, &big) && read_sectors(big_lba, &mut big_rd) && big == big_rd;
+    crate::serial_println!(
+        "[nvme] self-test 64 KiB PRP-list @ LBA {big_lba}: {}",
+        if big_ok { "OK ✓" } else { "MISMATCH ✗" }
+    );
+
     if let Some((temp, used)) = smart() {
         crate::serial_println!("[nvme] SMART: temperature {} K ({} °C), {}% used", temp, temp.saturating_sub(273), used);
     }

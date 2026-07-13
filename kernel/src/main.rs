@@ -38,6 +38,7 @@ mod init;
 mod interrupts;
 mod klog;
 mod mouse;
+mod ahci;
 mod msix;
 mod net;
 mod paging;
@@ -375,6 +376,14 @@ fn main() -> Status {
     // identify), do a read/write self-test + SMART readout. No-op without NVMe.
     if nvme::init(&mut allocator) {
         nvme::self_test();
+    }
+
+    // AHCI/SATA (Metal M2-2): bring up every SATA disk behind an AHCI
+    // controller (q35's built-in ICH9 carries the boot medium; the metal
+    // matrix attaches scratch disks). Read-only self-test on partitioned
+    // disks, full write/read/verify on blank ones. No-op without AHCI.
+    if ahci::init(&mut allocator) > 0 {
+        ahci::self_test();
     }
 
     // ── ROOT FILESYSTEM ── EuroFS lives ON the disk (installed, persistent)
@@ -1489,6 +1498,9 @@ fn main() -> Status {
         serial_println!("[euro] HD-Audio initialized — stream playing (LPIB={})", hda::stream_pos());
     }
     x86_64::instructions::interrupts::enable();
+    // M2-1: NVMe MSI-X delivery proof — must run with interrupts ON (the boot
+    // self-test above ran before this point, so its completions were unseen).
+    nvme::msix_proof();
     serial_println!("[euro] APIC timer 100 Hz + interrupts ON -> preemptive multitasking (incl. ring 3)");
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.

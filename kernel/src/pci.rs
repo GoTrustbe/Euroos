@@ -369,6 +369,23 @@ pub fn hwprobe_lines() -> Vec<String> {
             who.unwrap_or("-")
         ));
     }
+    // M2-3: block-device inventory — what storage EuroOS can actually address.
+    if crate::nvme::present() {
+        out.push(format!(
+            "disk nvme0: {} MiB (PRP-list I/O, 64 KiB window)",
+            crate::nvme::capacity_sectors() * 512 / (1024 * 1024)
+        ));
+    }
+    for i in 0..4 {
+        let sectors = crate::ahci::disk_sectors(i);
+        if sectors > 0 {
+            out.push(format!(
+                "disk sata{i}: {} MiB ({})",
+                sectors * 512 / (1024 * 1024),
+                if crate::ahci::disk_partitioned(i) { "partitioned" } else { "blank" }
+            ));
+        }
+    }
     out.push(format!(
         "summary: {}/{} PCI function(s) driven by EuroOS drivers",
         driven,
