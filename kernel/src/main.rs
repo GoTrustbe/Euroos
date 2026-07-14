@@ -435,6 +435,9 @@ fn main() -> Status {
     // `installed` path fell back to an 8 MiB RAM root, so an installed system never actually
     // ran from its large on-disk root.) `sync_system_files` + `ensure_etc_skeleton` below
     // complete /bin + /etc on a disk root that only carries install-time config.
+    // Metal M2-3: true when the NVMe disk carries the live root (so the later
+    // /nvme data-disk demo doesn't double-mount it).
+    let mut nvme_root = false;
     let rootdev = if virtio_blk::present() {
         let total = virtio_blk::capacity_sectors();
         match gpt::find_eurofs_partition() {
@@ -454,6 +457,36 @@ fn main() -> Status {
                 // Never format/clobber it as our root — boot a RAM root instead;
                 // the disk stays intact and can be mounted (mount vblkN /mnt).
                 serial_println!("[euro] disk 0 is not EuroFS and not blank — booting a RAM root; the disk is left intact + mountable");
+                rootblk::RootBlk::ram(2048)
+            }
+        }
+    } else if nvme::present() {
+        // Metal M2-3: no virtio-blk, but an NVMe disk is here. A modern
+        // (NVMe-only) laptop boots from NVMe: mount the root on it. Its own
+        // installed EuroFS partition, else install onto a blank NVMe from the
+        // boot media, else — a non-EuroFS NVMe — leave it intact + RAM root.
+        match instexec::nvme_eurofs_partition() {
+            Some((start, blocks)) => {
+                serial_println!("[euro] live root = the on-disk EuroFS on NVMe (standalone NVMe boot)");
+                nvme_root = true;
+                rootblk::RootBlk::nvme(start, blocks)
+            }
+            None if instexec::media_available() && instexec::nvme_is_blank() => {
+                if instexec::install_to_nvme(&instexec::default_config()) {
+                    match instexec::nvme_eurofs_partition() {
+                        Some((start, blocks)) => {
+                            serial_println!("[euro] live root = the freshly-installed EuroFS on NVMe");
+                            nvme_root = true;
+                            rootblk::RootBlk::nvme(start, blocks)
+                        }
+                        None => rootblk::RootBlk::ram(2048),
+                    }
+                } else {
+                    rootblk::RootBlk::ram(2048)
+                }
+            }
+            None => {
+                serial_println!("[euro] NVMe disk is not EuroFS and not blank — booting a RAM root; it stays intact + mountable at /nvme");
                 rootblk::RootBlk::ram(2048)
             }
         }
@@ -1620,7 +1653,9 @@ fn main() -> Status {
     // G2/B2: if there is an NVMe disk, mount an EuroFS on it (/nvme). Proves that
     // the NVMe driver carries a real filesystem (now works under any CR3 thanks to A2's
     // shared high region that maps the NVMe MMIO @768 GiB everywhere).
-    if let Some(nb) = nvme::NvmeBlock::new() {
+    // Metal M2-3: skip when NVMe already carries the live ROOT (mounted at / via
+    // the block cache) — mounting the same disk again here would be a double mount.
+    if let Some(nb) = nvme::NvmeBlock::new().filter(|_| !nvme_root) {
         let nfs = match EuroFs::mount(nb, rtc::epoch()) {
             Ok(f) => {
                 serial_println!("[g2] EuroFS mounted on NVMe (existing)");

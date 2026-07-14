@@ -104,18 +104,28 @@ pub fn cache_flush() {
     }
 }
 
+/// Which storage carries the root partition (Metal M2-3: NVMe/AHCI in addition
+/// to virtio-blk). Virtio keeps its `dev` index (device 0 uses the write-back
+/// cache above); NVMe/AHCI do uncached direct I/O like the extra virtio disks.
+#[derive(Clone, Copy)]
+enum Backend {
+    Virtio(usize),
+    Nvme,
+    Ahci(usize),
+}
+
 #[derive(Clone)]
 pub struct RootBlk {
     data: Vec<u8>,   // RAM backing (empty in disk mode)
     part_start: u64, // disk mode: first 512-byte sector of the EuroFS partition
     on_disk: bool,
     blocks: u64,
-    dev: usize, // virtio-blk device index (0 = root via cache; >0 = extra disk, direct)
+    backend: Backend,
 }
 
 impl RootBlk {
     pub fn ram(blocks: u64) -> Self {
-        Self { data: vec![0u8; (blocks * BS as u64) as usize], part_start: 0, on_disk: false, blocks, dev: 0 }
+        Self { data: vec![0u8; (blocks * BS as u64) as usize], part_start: 0, on_disk: false, blocks, backend: Backend::Virtio(0) }
     }
     pub fn disk(part_start: u64, blocks: u64) -> Self {
         Self::disk_on(0, part_start, blocks)
@@ -123,10 +133,38 @@ impl RootBlk {
     /// Disk mode on a specific virtio-blk device (B3 multi-disk). Device 0
     /// goes through the block cache; further devices do uncached direct I/O.
     pub fn disk_on(dev: usize, part_start: u64, blocks: u64) -> Self {
-        Self { data: Vec::new(), part_start, on_disk: true, blocks, dev }
+        Self { data: Vec::new(), part_start, on_disk: true, blocks, backend: Backend::Virtio(dev) }
+    }
+    /// Disk mode on the NVMe controller (Metal M2-3). Direct, uncached I/O.
+    pub fn nvme(part_start: u64, blocks: u64) -> Self {
+        Self { data: Vec::new(), part_start, on_disk: true, blocks, backend: Backend::Nvme }
+    }
+    /// Disk mode on an AHCI/SATA disk (Metal M2-3). Direct, uncached I/O.
+    pub fn ahci(idx: usize, part_start: u64, blocks: u64) -> Self {
+        Self { data: Vec::new(), part_start, on_disk: true, blocks, backend: Backend::Ahci(idx) }
     }
     pub fn is_disk(&self) -> bool {
         self.on_disk
+    }
+
+    /// Read one 4 KiB block starting at 512-byte sector `base` from the backend.
+    fn backend_read(&self, base: u64, out: &mut [u8]) -> bool {
+        match self.backend {
+            Backend::Virtio(0) => cache_read(base, out),
+            Backend::Virtio(dev) => crate::virtio_blk::read_io_dev(dev, base, out),
+            Backend::Nvme => crate::nvme::read_sectors(base, out),
+            Backend::Ahci(idx) => crate::ahci::read_sectors(idx, base, out),
+        }
+    }
+
+    /// Write one 4 KiB block starting at 512-byte sector `base` to the backend.
+    fn backend_write(&self, base: u64, data: &[u8]) -> bool {
+        match self.backend {
+            Backend::Virtio(0) => cache_write(base, data),
+            Backend::Virtio(dev) => crate::virtio_blk::write_io_dev(dev, base, data),
+            Backend::Nvme => crate::nvme::write_sectors(base, data),
+            Backend::Ahci(idx) => crate::ahci::write_sectors(idx, base, data),
+        }
     }
 }
 
@@ -151,12 +189,7 @@ impl BlockDevice for RootBlk {
         for i in 0..count as u64 {
             let base = self.part_start + (start + i) * SPB;
             let o = (i * BS as u64) as usize;
-            let ok = if self.dev == 0 {
-                cache_read(base, &mut buf[o..o + BS])
-            } else {
-                crate::virtio_blk::read_io_dev(self.dev, base, &mut buf[o..o + BS])
-            };
-            if !ok {
+            if !self.backend_read(base, &mut buf[o..o + BS]) {
                 return Err(BlockError::IoError);
             }
         }
@@ -176,12 +209,7 @@ impl BlockDevice for RootBlk {
         for i in 0..count as u64 {
             let base = self.part_start + (start + i) * SPB;
             let o = (i * BS as u64) as usize;
-            let ok = if self.dev == 0 {
-                cache_write(base, &buf[o..o + BS])
-            } else {
-                crate::virtio_blk::write_io_dev(self.dev, base, &buf[o..o + BS])
-            };
-            if !ok {
+            if !self.backend_write(base, &buf[o..o + BS]) {
                 return Err(BlockError::IoError);
             }
         }
@@ -190,15 +218,18 @@ impl BlockDevice for RootBlk {
 
     fn flush(&mut self) -> BlockResult<()> {
         if self.on_disk {
-            // Device 0 goes through the cache; further disks write directly.
-            let ok = if self.dev == 0 {
-                cache_flush(); // dirty cache blocks to disk (EuroFS checkpoint commit)
-                // Then force the disk's OWN write-back cache to the persistent
-                // medium (VIRTIO_BLK_T_FLUSH) — makes the A/B-superblock barrier a hard
-                // I/O barrier. No-op if the device has no volatile cache.
-                crate::virtio_blk::flush()
-            } else {
-                crate::virtio_blk::flush_dev(self.dev)
+            let ok = match self.backend {
+                Backend::Virtio(0) => {
+                    cache_flush(); // dirty cache blocks to disk (EuroFS checkpoint commit)
+                    // Then force the disk's OWN write-back cache to the persistent
+                    // medium (VIRTIO_BLK_T_FLUSH) — makes the A/B-superblock barrier a hard
+                    // I/O barrier. No-op if the device has no volatile cache.
+                    crate::virtio_blk::flush()
+                }
+                Backend::Virtio(dev) => crate::virtio_blk::flush_dev(dev),
+                // NVMe writes here are synchronous (we poll for completion) and
+                // AHCI writes are polled DMA — both are durable on completion.
+                Backend::Nvme | Backend::Ahci(_) => true,
             };
             if !ok {
                 return Err(BlockError::IoError);
@@ -210,10 +241,12 @@ impl BlockDevice for RootBlk {
     fn discard(&mut self, start: u64, count: u32) -> BlockResult<()> {
         // TRIM only makes sense on a real disk; the RAM ramdisk ignores it.
         if self.on_disk {
-            let sector = self.part_start + start * SPB;
-            let nsec = count as u64 * SPB;
-            // Advisory: discard_dev is a no-op if the device lacks VIRTIO_BLK_F_DISCARD.
-            crate::virtio_blk::discard_dev(self.dev, sector, nsec as u32);
+            if let Backend::Virtio(dev) = self.backend {
+                let sector = self.part_start + start * SPB;
+                let nsec = count as u64 * SPB;
+                // Advisory: discard_dev is a no-op if the device lacks VIRTIO_BLK_F_DISCARD.
+                crate::virtio_blk::discard_dev(dev, sector, nsec as u32);
+            }
         }
         Ok(())
     }

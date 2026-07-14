@@ -21,6 +21,7 @@ Legs:
   tpmcrb  + swtpm tpm-crb @ 0xFED40000             -> same, via the CRB fTPM/PTT interface (M6-1)
   printer + host mock IPP server via guestfwd      -> IPP Print-Job round-trip (M7-1)
   scan    + host mock eSCL scanner on :8631        -> driverless scan round-trip → image (M7-2)
+  nvmeroot install to a blank NVMe → boot from it  -> standalone boot with root on NVMe (M2-3)
   hwprobe base leg + typed `hwprobe` command    -> inventory lines over serial
 
 Usage: python3 scripts/run-metal-matrix.py [image] [--legs a,b,c]
@@ -127,6 +128,7 @@ LEGS = {
                 "interactive loop started"], []),
     "hwprobe": (["interactive loop started"], []),
     "scan": (["[m72] EuroScan eSCL ✓", "EuroScan Virtual 3000", "NextDocument", "interactive loop started"], []),
+    "nvmeroot": ([], []),  # handled specially in run_leg (two-phase install→boot)
     "power": (["[acpi] power button armed", "[acpi-pwr]", "interactive loop started"], []),
     "tpm": (["TPM 2.0 TIS @ 0xfed40000", "[3e1] EnrollFde EXECUTED", "unseal-roundtrip=true",
              "interactive loop started"], ["unseal-roundtrip=false"]),
@@ -240,6 +242,16 @@ def stop_side(leg):
 
 
 def run_leg(leg):
+    if leg == "nvmeroot":
+        # Two-phase (install to NVMe → standalone boot from NVMe) — delegated to
+        # the dedicated harness so the disk image persists across both boots.
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test-nvme-root.py")
+        r = subprocess.run([sys.executable, script, IMG], capture_output=True, text=True)
+        for l in r.stdout.splitlines():
+            print("  " + l, flush=True)
+        ok = r.returncode == 0
+        print(f"  [nvmeroot] {'PASS ✓' if ok else 'FAIL ✗'}", flush=True)
+        return ok
     need, forbid = LEGS[leg]
     start_side(leg)
     extra = leg_devices(leg)

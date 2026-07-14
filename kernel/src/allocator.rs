@@ -33,11 +33,14 @@ unsafe impl GlobalAlloc for IrqSafeHeap {
 #[global_allocator]
 static ALLOCATOR: IrqSafeHeap = IrqSafeHeap(LockedHeap::empty());
 
-/// 96 MiB kernel heap. Plenty for the EuroFS volume, console history, packets AND the
-/// browser engine: a real web page (~140 KB, ~3000 elements) builds a large
-/// DOM + per-node computed style; 32 MiB ran out on that → OOM panic. The VM has
-/// 256 MiB, so a 96 MiB heap is safe.
-const HEAP_SIZE: usize = 96 * 1024 * 1024;
+/// 128 MiB kernel heap. Plenty for the EuroFS volume, console history, packets,
+/// the browser engine's DOM (~140 KB page → large DOM + computed style; 32 MiB
+/// OOM'd on that), AND the installer: writing a bootable disk builds the whole
+/// ~40 MiB ESP (loader + two kernel copies) in RAM in one allocation — with the
+/// captured media also resident, a 96 MiB heap had no contiguous 40 MiB block
+/// left for the NVMe/AHCI install path (Metal M2-3). Safe on the 256 MiB
+/// screenshot VM (no install there) and the 512 MiB matrix/DOOM VMs.
+const HEAP_SIZE: usize = 128 * 1024 * 1024;
 static mut HEAP: [u8; HEAP_SIZE] = [0u8; HEAP_SIZE];
 
 /// Initialize the heap. Must be the VERY FIRST action in the kernel,

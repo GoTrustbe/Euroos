@@ -157,6 +157,58 @@ pub fn find_eurofs_partition() -> Option<(u64, u64)> {
     None
 }
 
+/// Read the GPT partition array via an arbitrary sector-read closure (Metal
+/// M2-3: NVMe/AHCI, not just virtio-blk). `read(lba, buf)` reads one 512-byte
+/// sector. Verifies both CRCs, like `read_part_array`.
+fn read_part_array_with(read: impl Fn(u64, &mut [u8]) -> bool) -> Option<(alloc::vec::Vec<u8>, usize, usize)> {
+    let mut hdr = [0u8; 512];
+    if !read(1, &mut hdr) || &hdr[..8] != b"EFI PART" {
+        return None;
+    }
+    let hdr_size = (rd_u32(&hdr, 12) as usize).clamp(92, 512);
+    let stored_hcrc = rd_u32(&hdr, 16);
+    let mut hcopy = hdr;
+    hcopy[16..20].copy_from_slice(&[0, 0, 0, 0]);
+    if crc32(&hcopy[..hdr_size]) != stored_hcrc {
+        return None;
+    }
+    let ent_lba = rd_u64(&hdr, 72);
+    let num = rd_u32(&hdr, 80).min(NUM_ENTRIES) as usize;
+    let esz = rd_u32(&hdr, 84) as usize;
+    if esz < 128 || ent_lba == 0 {
+        return None;
+    }
+    let sectors = (num * esz).div_ceil(512);
+    let mut arr = vec![0u8; sectors * 512];
+    for s in 0..sectors {
+        let mut tmp = [0u8; 512];
+        if !read(ent_lba + s as u64, &mut tmp) {
+            return None;
+        }
+        arr[s * 512..s * 512 + 512].copy_from_slice(&tmp);
+    }
+    if crc32(&arr[..num * esz]) != rd_u32(&hdr, 88) {
+        return None;
+    }
+    Some((arr, esz, num))
+}
+
+/// Find the EuroFS root partition on a device read via `read` (Metal M2-3).
+/// Returns (first-sector, 4 KiB-block-count).
+pub fn find_eurofs_partition_read(read: impl Fn(u64, &mut [u8]) -> bool) -> Option<(u64, u64)> {
+    let (arr, esz, num) = read_part_array_with(read)?;
+    for i in 0..num {
+        let e = &arr[i * esz..i * esz + 128];
+        if e[..16] == EUROFS_TYPE {
+            let (first, last) = (rd_u64(e, 32), rd_u64(e, 40));
+            if last >= first {
+                return Some((first, (last - first + 1) / 8));
+            }
+        }
+    }
+    None
+}
+
 fn align8(x: u64) -> u64 {
     x & !7
 }
