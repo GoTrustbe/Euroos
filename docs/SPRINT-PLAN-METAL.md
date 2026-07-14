@@ -101,10 +101,10 @@ AHCI write/read + boot-medium read-only proof).
 | M5-2 | Lid/power-button ACPI events | ✅ (power button) | FADT SCI + PM1a event block; SCI routed level/active-low → clean S5 on PWRBTN_STS. Verified: QMP `system_powerdown` → clean shutdown (matrix `power` leg + test-powerbutton.py). Lid switch (no QEMU device) deferred. |
 | M5-3 | Backlight + thermal read-out | 🔒 | Only where standard ACPI methods expose it; never vendor-specific EC hacks in phase 4. |
 
-### M-6 — Trust hardware on metal — ✅ TIS DONE 2026-07-13 (matrix `tpm` leg)
+### M-6 — Trust hardware on metal — ✅ DONE 2026-07-14 (TIS + CRB, matrix `tpm` + `tpmcrb` legs)
 | ID | Task | Status | Scope & verification |
 |----|------|--------|----------------------|
-| M6-1 | TPM2 TIS over MMIO (0xFED40000) | ✅ (TIS; CRB later) | The `tpm.rs` TIS driver does real TPM2 seal/unseal to PCR16 (`[3e1]` roundtrip=true). Now a matrix `tpm` leg (swtpm + `tpm-tis`) proves it in the regression net. CRB (fTPM/PTT) interface deferred. |
+| M6-1 | TPM2 TIS + CRB over MMIO (0xFED40000) | ✅ | `tpm.rs` speaks both interfaces: TIS FIFO (discrete chips) and CRB (firmware TPMs — Intel PTT / AMD fTPM), auto-detected via TPM_INTERFACE_ID. Real seal/unseal to PCR16 on both, proven by the matrix `tpm` (tpm-tis) and `tpmcrb` (tpm-crb) legs. |
 | M6-2 | UEFI Secure Boot story | ⬜ | Document + test shim/db enrolment of our signed loader on real firmware; measured boot into PCRs feeding existing attestation ([o2]/[3d3]). |
 
 ### M-7 — Network-first peripherals, end-to-end — ✅ policy + IPP core done (full loop env-blocked)
