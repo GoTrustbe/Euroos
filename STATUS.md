@@ -2,7 +2,11 @@
 
 *A sovereign, security-first operating system for Europe — built from scratch in Rust (`no_std`, x86-64 UEFI). No Linux or BSD underneath. Sovereignty is an architectural property, baked into every syscall, every binary verification, and every network call.*
 
-Last updated: 2026-07-10 · **971 host tests green** · 76+ host-tested library crates · boots to desktop in ~1.5–2 s (on KVM/HVF/WHPX).
+Last updated: 2026-07-14 · **987 host tests green** · 78+ host-tested library crates · boots to desktop in ~1.5–2 s (on KVM/HVF/WHPX).
+
+> **Phase 4 "Metal" — modern-hardware support, COMPLETE (matrix-verified):** EuroOS goes from "runs in a VM" to "boots and is usable on a modern laptop, installs to its NVMe/SATA disk, and runs standalone from it." The strategy is deliberate: support modern hardware through a small set of **class standards** (one from-scratch Rust driver each), not a legacy driver base, and take peripherals **network-first** (protocols, not drivers). Public policy: [`docs/SUPPORT-POLICY.md`](docs/SUPPORT-POLICY.md); plan + honest status: [`docs/SPRINT-PLAN-METAL.md`](docs/SPRINT-PLAN-METAL.md). **PCIe:** ECAM config access (ACPI MCFG, `[ecam]`), a shared capability walker, and an `hwprobe` inventory for the HCL. **Storage:** NVMe 1.4 (PRP lists, MSI-X) and a from-scratch **AHCI/SATA** class driver, plus **root-on-NVMe *and* root-on-AHCI** (install to a blank disk, boot standalone from it; the boot medium is structurally protected). **Network:** Intel **e1000/e1000e**, and **CDC-ECM USB ethernet** (USB dongles / phone tethering) as a third NIC backend. **USB:** hub enumeration (route strings + TT), HID **report-descriptor** parsing (arbitrary pointing devices, not just boot protocol), and **UAC1 audio** over isochronous xHCI with a live mixer→USB path. **ACPI:** the power button (SCI → clean S5) and battery/AC decode. **Trust:** TPM 2.0 over **both TIS and CRB** (the fTPM/PTT interface modern machines present). **Peripherals:** driverless **IPP printing** and **eSCL scanning**, end to end. Verified by a q35 **metal matrix** ([`scripts/run-metal-matrix.py`](scripts/run-metal-matrix.py), 17 legs, all pass) + fuzzing (which found and fixed a HID-parser overflow). Deliberately deferred to real hardware (no QEMU model): WiFi radios, EC-backed battery, Realtek RTL8125, UAC2.
+
+> **DOOM plays on EuroOS:** the real 1993 id Software engine (vendored GPL doomgeneric + the shareware WAD, a musl userspace binary) runs in-game on the from-scratch kernel, keyboard-driven from the menu into E1M1. Getting it running forced the platform to grow up (32 MiB app arenas, real libc file I/O, a framebuffer+input syscall bridge) and its test harness root-caused two long-lived flaky bugs, both fixed with one rule: locks reachable from interrupt context are only ever held with interrupts disabled. Write-up: <https://euro-os.eu/blog/doom-on-euroos/>.
 
 > **Phase 3F (apps & desktop) — 3F-1…3F-7 core done, all boot-verified:** the apps/desktop phase lands (each `[3fN]` marker in one clean boot; interactive-GUI/live-hardware tails honestly remain). **3F-1** container runtime — [`eurosandbox`] gained **ResourceLimits** (mem/pids/cpu/wall accounting that refuses the over-ceiling alloc), a **CoW overlay** (read-only lower + writable upper, copy-up/whiteout), and a **signed `ImageManifest`** (Ed25519 verify-before-run) on the chroot+caps core. **3F-2** real Office files — new [`euroflate`](crates/euroflate) `no_std` **DEFLATE/INFLATE** (INFLATE decodes real `zlib` incl. dynamic Huffman; DEFLATE read back by real `zlib`) → [`eurodocio::zip`]/`docx` **open & save a real `.docx`**. **3F-4** — **month+weekday names for all 24 EU languages** (CLDR) + new [`eurokeymap`](crates/eurokeymap) (US-QWERTY/BE-AZERTY/FR-AZERTY/DE-QWERTZ, installer-selectable). **3F-5** — new [`euromime`](crates/euromime): MIME detection (magic beats extension) + a default-app registry (`open` resolves a real `.docx`→Writer). **3F-6** — new [`euroaudio::Router`](crates/euroaudio/src/router.rs): per-app streams + per-device routing + default-device hotplug policy + master/per-stream volume/mute. **3F-7** — new [`europortal`](crates/europortal): capability-scoped permission portals (request → allow/deny/**ask** → scoped grant: once/session/persistent, auto-revoke, host-scoped, audited) — "caps, not namespaces." Also fixed the stale `[sf]` EuroSafe label. *(3F-3 accessibility already done.)* **Honest REMAINING** (per row in the plan): containerised process exec; interactive suite GUIs + `.xlsx`/`.pptx`/PDF; live compositor portal dialog + file-manager open-with launch; the HDA per-period pull. Plan: [`docs/SPRINT-PLAN-PHASE3.md`](docs/SPRINT-PLAN-PHASE3.md).
 
@@ -172,12 +176,22 @@ Ordered by value × safety. Each item ships with tests (host where possible) + a
 
 ### Sprint E — compatibility (Phase 3)
 - [ ] **glibc-compat** layer (run more unmodified Linux binaries).
-- [ ] **Display server** (framebuffer → an X11/Wayland-shaped API) and real **audio / USB** input.
+- [x] Real **audio / USB** input (Phase 4 "Metal": Intel HDA + **UAC1 USB audio**; USB HID keyboards/mice/tablets **through hubs**, report-descriptor-driven).
 
-### Sprint F — updates & isolation (Phase 4)
+### Phase 4 "Metal" — modern hardware (COMPLETE, matrix-verified)
+- [x] **PCIe ECAM** config access (ACPI MCFG) + shared capability walker + `hwprobe` inventory.
+- [x] **NVMe** (PRP lists, MSI-X) + from-scratch **AHCI/SATA** class driver.
+- [x] **Root-on-NVMe and root-on-AHCI**: install to a blank disk, boot standalone from it (boot medium structurally protected).
+- [x] **Intel e1000/e1000e** NIC + **CDC-ECM USB ethernet** (tethering).
+- [x] **USB hubs** + **HID report-descriptor** parsing + **UAC1 USB audio** (isochronous).
+- [x] **ACPI power button** (clean S5) + battery/AC decode; **TPM 2.0 TIS + CRB**.
+- [x] **Driverless printing (IPP Everywhere)** + **scanning (eSCL/AirScan)**, end to end.
+- [ ] Real-hardware only (no QEMU model): WiFi radios, EC-backed battery, Realtek RTL8125, UAC2.
+
+### Sprint F — updates & isolation
 - [~] **EuroUpdate**: atomic A/B system slots with rollback. State machine host-tested (5); F1 kernel integration shipped; **G4**: (a) `slot_config` on a **raw GPT-reserved block** (LBA 40, outside EuroFS) — survives FS corruption, verified persistent across a real reboot; (b) **multi-partition A/B GPT** — `install` lays down EuroOS-A/EuroOS-B/EuroVar/EuroBoot, `/var` mounts the EuroVar partition (verified `[g4]`, root-mount path unchanged); (c) **image→slot-partition write** — `apply` writes the verified image directly to the inactive slot's partition (sector I/O + read-back), verified by self-test. (d) **two-stage `loader.efi`** — a separate UEFI binary (`loader/` crate) is now `BOOTX64.EFI`; reads slot_config, picks the slot, `LoadImage`/`StartImage`s `eurokernel-{A,B}.efi`. Verified end-to-end (`[loader] boot slot A → kernel bring-up → desktop`, 0 faults). *(refinement: unify the loader's slot source with the kernel's raw-block config via BlockIO.)*
 - [ ] **Containers / WASM** sandbox using the capability model.
-- [ ] Printer support (last, per the original priority matrix).
+- [x] Printer support — **IPP Everywhere** (driverless, network-first) + **eSCL/AirScan** scanning. Delivered in Phase 4 "Metal".
 
 ### Continuous
 - [ ] Native-speaker review of the 24-language site copy.
