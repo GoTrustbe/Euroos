@@ -91,7 +91,7 @@ AHCI write/read + boot-medium read-only proof).
 |----|------|--------|----------------------|
 | M4-1 | Hub support (incl. root-hub port trees) | ✅ (boot-time; hotplug open) | Route strings + TT fields + hub port power/reset/scan, depth 2. Matrix `usbhub` leg: the only keyboard behind a hub types `uname` end-to-end. Hotplug events deferred. |
 | M4-2 | HID report protocol (report-descriptor parsing) | ✅ | `eurousb::parse_report_descriptor` (short items, usage ranges, report ids) host-tested; xHCI decodes report-protocol pointers through the parsed map with device logical ranges (QEMU tablet live-verified). |
-| M4-3 | UAC2 USB audio (class driver) | ⬜ | `-device usb-audio`: stream out through `euroaudio` mixer. LPIB-style DMA-consumption proof like HDA. |
+| M4-3 | USB audio (class driver) | ✅ UAC1 (UAC2 🔒 real hw) | Isochronous OUT over xHCI (first isoch endpoint in the driver, FS-isoch log2 bInterval, control_out SET_CUR): a real euroaudio tone streamed as 96×1 ms packets, all consumed (`[m43] … 96/96 ✓`, matrix `usbaudio` leg). Ongoing mixer→USB wiring is follow-up. |
 | M4-4 | xHCI robustness pass | 🟡 | Ring-full handling, stall recovery, disconnect mid-transfer; fuzz the descriptor parser in `eurofuzz`. |
 
 ### M-5 — ACPI laptop basics — ✅ CORE DONE 2026-07-13 (power button verified; battery decode host-tested, EC dynamic deferred)
@@ -107,10 +107,10 @@ AHCI write/read + boot-medium read-only proof).
 | M6-1 | TPM2 TIS + CRB over MMIO (0xFED40000) | ✅ | `tpm.rs` speaks both interfaces: TIS FIFO (discrete chips) and CRB (firmware TPMs — Intel PTT / AMD fTPM), auto-detected via TPM_INTERFACE_ID. Real seal/unseal to PCR16 on both, proven by the matrix `tpm` (tpm-tis) and `tpmcrb` (tpm-crb) legs. |
 | M6-2 | UEFI Secure Boot story | ⬜ | Document + test shim/db enrolment of our signed loader on real firmware; measured boot into PCRs feeding existing attestation ([o2]/[3d3]). |
 
-### M-7 — Network-first peripherals, end-to-end — ✅ policy + IPP core + eSCL scanning e2e (IPP full-loop env-blocked, eSCL full-loop verified)
+### M-7 — Network-first peripherals, end-to-end — ✅ DONE (IPP + eSCL both full-loop verified, policy published)
 | ID | Task | Status | Scope & verification |
 |----|------|--------|----------------------|
-| M7-1 | IPP Everywhere e2e | 🟢 core (loop env-blocked) | IPP client host-tested (`europrint`); `Get-Printer-Attributes` + `Print-Job` round-trip proven against `scripts/mock-ipp-server.py` (successful-ok, document spooled); guest does real IPP-over-TCP at boot. The full guest→server matrix leg (`--legs printer`) needs a privileged IPP endpoint on host :631 — the CI sandbox forbids privileged/sudo listeners, so it's opt-in, not in the default sweep. |
+| M7-1 | IPP Everywhere e2e | ✅ full loop | The guest probes port 631 then 6631 (the unprivileged-CUPS/ippserver alternate), so the matrix `printer` leg runs the mock IPP server on 6631 with no privilege and sits in the DEFAULT sweep: Get-Printer-Attributes + Print-Job both `successful-ok` guest→server. |
 | M7-2 | eSCL/AirScan scanning | ✅ e2e | NEW crate `euroscan` (host-tested) + kernel `scan.rs`: ScannerCapabilities → ScanJobs (201+Location) → NextDocument, scan-to-EuroFiles + `scan` shell cmd. Matrix `scan` leg = FULL guest→server loop (mock eSCL on :8631, high port so no privilege): `[m72] EuroScan eSCL ✓ … NextDocument 91 bytes`. |
 | M7-3 | SUPPORT-POLICY.md | ✅ | `docs/SUPPORT-POLICY.md`: supported class standards, network-first peripherals, deliberate non-goals, deferred-with-reason, and the `hwprobe`→HCL process. |
 
