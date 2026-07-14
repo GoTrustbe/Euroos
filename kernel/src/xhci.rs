@@ -58,6 +58,7 @@ const TRB_NORMAL: u32 = 1;
 const TRB_SETUP: u32 = 2;
 const TRB_DATA: u32 = 3;
 const TRB_STATUS: u32 = 4;
+const TRB_ISOCH: u32 = 5;
 const TRB_LINK: u32 = 6;
 const TRB_ENABLE_SLOT: u32 = 9;
 const TRB_ADDRESS_DEVICE: u32 = 11;
@@ -602,6 +603,12 @@ unsafe fn enumerate_device(
         }
     }
 
+    // USB audio (M4-3): an AudioStreaming interface (class 1, subclass 2) with
+    // an isochronous OUT endpoint in an alternate setting.
+    if cfg.interfaces.iter().any(|i| i.class == 0x01 && i.subclass == 0x02) {
+        return setup_usbaudio(x, falloc, slot, root_port, route, speed, tt, &cfg, total, &mut ep0_ring, in_ctx, cs, buf);
+    }
+
     // Look for a HID boot interface (keyboard or mouse) + its interrupt-IN endpoint.
     let mut chosen: Option<(bool, bool, u8, u8, u16, u8)> = None; // (is_kbd, is_abs, iface, ep_addr, max_pkt, interval)
     for iface in &cfg.interfaces {
@@ -890,6 +897,34 @@ unsafe fn control_no_data(
     w_index: u16,
 ) -> bool {
     control_in(x, slot, ep0, bm_request_type, b_request, w_value, w_index, 0, 0)
+}
+
+/// A control transfer with an OUT data stage (e.g. the UAC SET_CUR sampling
+/// frequency, M4-3). `buf` holds `len` bytes to send to the device.
+#[allow(clippy::too_many_arguments)]
+unsafe fn control_out(
+    x: &mut Xhci,
+    slot: u8,
+    ep0: &mut Ring,
+    bm_request_type: u8,
+    b_request: u8,
+    w_value: u16,
+    w_index: u16,
+    len: u16,
+    buf: u64,
+) -> bool {
+    let setup_lo = (bm_request_type as u32) | ((b_request as u32) << 8) | ((w_value as u32) << 16);
+    let setup_hi = (w_index as u32) | ((len as u32) << 16);
+    // TRT = 2: OUT data stage follows.
+    ep0.push(setup_lo, setup_hi, 8, (TRB_SETUP << 10) | (1 << 6) | (2 << 16)); // IDT=1
+    ep0.push(buf as u32, (buf >> 32) as u32, len as u32, TRB_DATA << 10); // DIR=OUT
+    // Status stage: IN (opposite of the data direction), IOC.
+    ep0.push(0, 0, 0, (TRB_STATUS << 10) | (1 << 5) | (1 << 16));
+    doorbell(x, slot, 1);
+    match wait_event(x, TRB_EVT_TRANSFER, 20_000_000) {
+        Some(ev) => ((ev[2] >> 24) & 0xFF) == CC_SUCCESS,
+        None => false,
+    }
 }
 
 /// Place a Normal-TRB on the interrupt-IN ring (8-byte report) + ring the doorbell.
@@ -1275,6 +1310,147 @@ unsafe fn scsi(x: &mut Xhci, ms: &mut MassStorage, cdb: &[u8], data_len: u32, in
     }
     let bytes = core::slice::from_raw_parts(csw as *const u8, 13);
     eurousb::bot::parse_csw(bytes).map(|(_, _, status)| status)
+}
+
+/// Configure a USB Audio Class playback function (M4-3) and prove the
+/// isochronous OUT path: select the endpoint-bearing alternate setting of the
+/// AudioStreaming interface, set the sampling frequency (UAC1 SET_CUR), then
+/// stream a real stereo tone (euroaudio::mix) as 1 ms isochronous packets and
+/// count the transfer completions — DMA-consumption proof, like HDA's LPIB.
+///
+/// Scope, honestly: UAC1 (what QEMU's usb-audio emulates and simple DACs/
+/// headsets speak). UAC2-only devices (different descriptors/clock units) are
+/// deferred until real-hardware validation. Playback proof only; the ongoing
+/// mixer→USB wiring is follow-up work.
+#[allow(clippy::too_many_arguments)]
+unsafe fn setup_usbaudio(
+    x: &mut Xhci,
+    falloc: &mut FrameAllocator,
+    slot: u8,
+    port: u8,
+    route: u32,
+    speed: u32,
+    tt: u32,
+    cfg: &eurousb::Configuration,
+    raw_len: u16,
+    ep0: &mut Ring,
+    in_ctx: u64,
+    cs: u64,
+    buf: u64,
+) -> bool {
+    // The AudioStreaming interface entry WITH the isoch OUT endpoint (that
+    // parse entry is the endpoint-bearing alternate setting).
+    let stream = match cfg.interfaces.iter().find(|i| {
+        i.class == 0x01
+            && i.subclass == 0x02
+            && i.endpoints.iter().any(|e| !e.is_in() && e.attributes & 3 == 1)
+    }) {
+        Some(i) => i,
+        None => {
+            crate::serial_println!("[xhci] slot {slot}: audio without an isoch OUT endpoint");
+            return false;
+        }
+    };
+    let ep = stream.endpoints.iter().find(|e| !e.is_in() && e.attributes & 3 == 1).unwrap();
+
+    // Recover the alternate-setting number from the raw config blob
+    // (Configuration::parse drops bAlternateSetting).
+    let raw = core::slice::from_raw_parts(buf as *const u8, raw_len as usize);
+    let mut alt = 1u8;
+    let mut p = 0usize;
+    while p + 2 <= raw.len() {
+        let l = raw[p] as usize;
+        if l == 0 || p + l > raw.len() {
+            break;
+        }
+        if l >= 9 && raw[p + 1] == 4 && raw[p + 2] == stream.number && raw[p + 4] > 0 {
+            alt = raw[p + 3];
+        }
+        p += l;
+    }
+
+    if !control_no_data(x, slot, ep0, 0x00, 9, cfg.value as u16, 0) {
+        crate::serial_println!("[xhci] slot {slot}: SET_CONFIGURATION (audio) failed");
+        return false;
+    }
+    let _ = control_no_data(x, slot, ep0, 0x01, 11, alt as u16, stream.number as u16); // SET_INTERFACE
+
+    // Configure the isochronous OUT endpoint. FS isoch bInterval is log2-coded
+    // (2^(b-1) frames) — unlike FS interrupt (frames) — so encode directly.
+    let ep_num = (ep.address & 0x0F) as u32;
+    let ep_dci = (ep_num * 2) as u8; // OUT
+    let ring_frame = falloc.allocate().expect("xhci audio-ring");
+    let mut iso_ring = Ring::new(ring_frame);
+    let interval = match speed {
+        1 | 2 => (ep.interval.max(1) as u32 - 1 + 3).min(15), // FS/LS isoch: log2 + 3
+        _ => encode_interval(speed, ep.interval),
+    };
+    build_input_context(in_ctx, cs, 1 | (1 << ep_dci), |slot_ctx, ep_ctxs| {
+        w32(slot_ctx, (route & 0xF_FFFF) | (((ep_dci as u32) & 0x1F) << 27) | (speed << 20));
+        w32(slot_ctx + 4, (port as u32) << 16);
+        w32(slot_ctx + 8, tt);
+        let epc = ep_ctxs + (ep_dci as u64 - 1) * cs;
+        w32(epc, interval << 16);
+        // type 1 = Isoch OUT; CErr must be 0 for isochronous endpoints.
+        w32(epc + 4, (1 << 3) | ((ep.max_packet as u32) << 16));
+        w64(epc + 8, ring_frame | 1);
+        w32(epc + 16, ep.max_packet as u32);
+    });
+    let (cc, _) = run_command(x, in_ctx as u32, (in_ctx >> 32) as u32, (TRB_CONFIGURE_ENDPOINT << 10) | ((slot as u32) << 24))
+        .unwrap_or((0, 0));
+    if cc != CC_SUCCESS {
+        crate::serial_println!("[xhci] slot {slot}: Configure-Endpoint (isoch audio) cc={cc}");
+        return false;
+    }
+
+    // UAC1 SET_CUR sampling frequency on the endpoint: 48 kHz little-endian.
+    let rate_buf = falloc.allocate().expect("xhci audio-rate");
+    let rate = 48_000u32;
+    core::ptr::copy_nonoverlapping(rate.to_le_bytes().as_ptr(), rate_buf as *mut u8, 3);
+    let rate_ok = control_out(x, slot, ep0, 0x22, 0x01, 0x0100, ep.address as u16, 3, rate_buf);
+
+    // Stream a real tone: 96 packets of 1 ms @ 48 kHz stereo 16-bit = 192 B each.
+    const PKT_BYTES: usize = 192; // 48 samples × 2 ch × 2 B
+    const NPKTS: usize = 96;
+    let audio_buf = falloc
+        .allocate_aligned((NPKTS * PKT_BYTES).div_ceil(4096), 1)
+        .expect("xhci audio-buf");
+    let tone = crate::hda::tone_for_usb(NPKTS * PKT_BYTES / 2); // i16 samples
+    core::ptr::copy_nonoverlapping(tone.as_ptr() as *const u8, audio_buf as *mut u8, NPKTS * PKT_BYTES);
+
+    // Queue the isoch TRBs (SIA = start ASAP), IOC on each for countable events.
+    for k in 0..NPKTS {
+        let pa = audio_buf + (k * PKT_BYTES) as u64;
+        iso_ring.push(
+            pa as u32,
+            (pa >> 32) as u32,
+            PKT_BYTES as u32,
+            (TRB_ISOCH << 10) | (1 << 5) | (1 << 31), // IOC | SIA
+        );
+    }
+    doorbell(x, slot, ep_dci as u32);
+
+    // Count the completions (DMA-consumption proof). Bounded wait.
+    let mut done = 0usize;
+    for _ in 0..NPKTS {
+        match wait_event(x, TRB_EVT_TRANSFER, 30_000_000) {
+            Some(ev) => {
+                let ev_slot = ((ev[3] >> 24) & 0xFF) as u8;
+                let ev_ep = (ev[3] >> 16) & 0x1F;
+                if ev_slot == slot && ev_ep == ep_dci as u32 {
+                    done += 1;
+                }
+            }
+            None => break,
+        }
+    }
+    let ok = done >= NPKTS / 2;
+    crate::serial_println!(
+        "[m43] USB audio (UAC1) {}: isoch OUT ep DCI {ep_dci} @48 kHz stereo (rate-set={rate_ok}), {done}/{NPKTS} packets consumed by the device {}",
+        if ok { "LIVE" } else { "NOT streaming" },
+        if ok { "✓" } else { "✗" }
+    );
+    ok
 }
 
 /// Configure a CDC-ECM interface pair (M3-3): select the ECM configuration,

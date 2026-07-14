@@ -16,10 +16,11 @@ Legs:
   usb     + xhci: kbd, tablet, hub, usb-storage -> xHCI HID + mass-storage markers
   usbhub  keyboard ONLY behind a usb-hub         -> typing works through the hub (M4-1)
   usbnet  ONLY NIC = usb-net (CDC-ECM)            -> DHCP/ping over USB ethernet (M3-3)
+  usbaudio + usb-audio (UAC1)                      -> isoch OUT streaming, packets consumed (M4-3)
   power   base leg + ACPI power-button press       -> armed + clean S5 shutdown (M5-2)
   tpm     + swtpm tpm-tis @ 0xFED40000             -> real TPM2 seal/unseal to PCR16 via TIS (M6-1)
   tpmcrb  + swtpm tpm-crb @ 0xFED40000             -> same, via the CRB fTPM/PTT interface (M6-1)
-  printer + host mock IPP server via guestfwd      -> IPP Print-Job round-trip (M7-1)
+  printer + host mock IPP server on :6631          -> full IPP Print-Job round-trip (M7-1)
   scan    + host mock eSCL scanner on :8631        -> driverless scan round-trip → image (M7-2)
   nvmeroot install to a blank NVMe → boot from it  -> standalone boot with root on NVMe (M2-3)
   hwprobe base leg + typed `hwprobe` command    -> inventory lines over serial
@@ -86,6 +87,11 @@ def leg_devices(leg):
         # defect — the CDC-ECM link itself is proven by DHCP + ping).
         return ["-nic", "none",
                 "-netdev", "user,id=un0,restrict=on", "-device", "usb-net,netdev=un0,bus=xhci.0"]
+    if leg == "usbaudio":
+        # A USB Audio Class (UAC1) speaker function: the kernel must stream
+        # real isochronous packets that the device consumes (M4-3).
+        return ["-audiodev", "none,id=au0",
+                "-device", "usb-audio,audiodev=au0,bus=xhci.0"]
     if leg == "usb":
         img = os.path.join(WORK, "usbdisk.img")
         subprocess.run(["truncate", "-s", "16M", img], check=True)
@@ -123,6 +129,8 @@ LEGS = {
     "hda": (["interactive loop started"], []),  # + dynamic check below: hda init line
     "usb": (["mass storage LIVE", "interactive loop started"], []),
     "usbhub": (["(behind hub)", "via hub", "interactive loop started"], []),
+    "usbaudio": (["[m43] USB audio (UAC1) LIVE", "packets consumed by the device ✓",
+                  "interactive loop started"], ["NOT streaming"]),
     "usbnet": (["USB ethernet (CDC-ECM) LIVE", "NIC: usb-ethernet (CDC-ECM)",
                 "[net] DHCP OFFER:", "PING 10.0.2.2: echo-reply OK ✓",
                 "interactive loop started"], []),
@@ -135,7 +143,7 @@ LEGS = {
     "tpmcrb": (["TPM 2.0 CRB @ 0xfed40000", "[3e1] EnrollFde EXECUTED", "unseal-roundtrip=true",
                 "interactive loop started"], ["unseal-roundtrip=false"]),
     "printer": (["[bb4] EuroPrint IPP-over-TCP", "Print-Job status=0x0000 (ok=true)",
-                 "interactive loop started"], ["ok=false"]),
+                 "IPP round-trip to 10.0.2.2:6631", "interactive loop started"], ["ok=false"]),
 }
 
 
@@ -206,11 +214,13 @@ def start_side(leg):
         time.sleep(1.2)
         SIDE["escl_proc"] = p
     elif leg == "printer":
+        # High port 6631 (no privilege): the guest probes 631 first, then 6631
+        # (print.rs PRINTER_PORTS) — same unprivileged pattern as the eSCL leg.
         spool = tempfile.mkdtemp(prefix="ek-ipp-")
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mock-ipp-server.py")
-        p = subprocess.Popen(["sudo", "-n", sys.executable, script, "--port", "631", "--spool", spool],
+        p = subprocess.Popen([sys.executable, script, "--port", "6631", "--spool", spool],
                              stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-        time.sleep(1.5)
+        time.sleep(1.2)
         SIDE["ipp_proc"] = p
         SIDE["ipp_spool"] = spool
 
@@ -218,10 +228,8 @@ def start_side(leg):
 def stop_side(leg):
     ipp = SIDE.pop("ipp_proc", None)
     if ipp:
-        # The server runs under sudo; pkill it by script name.
-        subprocess.run(["sudo", "-n", "pkill", "-f", "mock-ipp-server.py"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
+            ipp.kill()
             ipp.wait(timeout=6)
         except Exception:
             pass
@@ -343,10 +351,7 @@ def run_leg(leg):
 
 
 def main():
-    # `printer` needs a privileged IPP endpoint on host :631 (slirp forwards
-    # guest -> 10.0.2.2:631 there). It is opt-in via --legs printer; the default
-    # sweep is the fully self-contained set.
-    legs = [l for l in LEGS if l != "printer"]
+    legs = list(LEGS)
     for i, a in enumerate(sys.argv):
         if a == "--legs":
             legs = sys.argv[i + 1].split(",")

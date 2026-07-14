@@ -11,23 +11,34 @@ use alloc::vec::Vec;
 use europrint::{IppRequest, IppResponse, OP_GET_PRINTER_ATTRIBUTES, OP_PRINT_JOB};
 
 const PRINTER_IP: &str = "10.0.2.2";
-const PRINTER_PORT: u16 = 631;
+/// IPP endpoints probed in order: the standard privileged port 631 first, then
+/// 6631 — the common alternate for unprivileged setups (CUPS/ippserver running
+/// as a user, and CI sandboxes where nothing may bind ports < 1024). Same
+/// pattern as the eSCL scanner, which lives on a high port by convention.
+const PRINTER_PORTS: [u16; 2] = [631, 6631];
 const PRINTER_URI: &str = "ipp://10.0.2.2:631/ipp/print";
 
 /// Wrap an IPP request in an HTTP/1.1 POST and do the round-trip; return the
-/// parsed IPP response. Bounded (cannot make the boot hang).
-fn ipp_roundtrip(ipp: &[u8]) -> Option<IppResponse> {
-    let header = alloc::format!(
-        "POST /ipp/print HTTP/1.1\r\nHost: {PRINTER_IP}:{PRINTER_PORT}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        ipp.len()
-    );
-    let mut req: Vec<u8> = Vec::with_capacity(header.len() + ipp.len());
-    req.extend_from_slice(header.as_bytes());
-    req.extend_from_slice(ipp);
-    let raw = crate::net::http_post_raw(PRINTER_IP, PRINTER_PORT, &req)?;
-    // The HTTP body (after the blank line) is the IPP response.
-    let body_start = raw.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4)?;
-    IppResponse::parse(&raw[body_start..])
+/// parsed IPP response + the port that answered. Bounded (cannot hang boot).
+fn ipp_roundtrip(ipp: &[u8]) -> Option<(IppResponse, u16)> {
+    for &port in &PRINTER_PORTS {
+        let header = alloc::format!(
+            "POST /ipp/print HTTP/1.1\r\nHost: {PRINTER_IP}:{port}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            ipp.len()
+        );
+        let mut req: Vec<u8> = Vec::with_capacity(header.len() + ipp.len());
+        req.extend_from_slice(header.as_bytes());
+        req.extend_from_slice(ipp);
+        if let Some(raw) = crate::net::http_post_raw(PRINTER_IP, port, &req) {
+            // The HTTP body (after the blank line) is the IPP response.
+            if let Some(body_start) = raw.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4) {
+                if let Some(r) = IppResponse::parse(&raw[body_start..]) {
+                    return Some((r, port));
+                }
+            }
+        }
+    }
+    None
 }
 
 /// **BB-4 boot self-test** — do a real IPP round-trip over EuroNet-TCP:
@@ -50,12 +61,12 @@ pub fn selftest() {
     let job = ipp_roundtrip(&pj);
 
     match (&attrs, &job) {
-        (Some(a), Some(j)) => crate::serial_println!(
-            "[bb4] EuroPrint IPP-over-TCP ✓: Get-Printer-Attributes status={:#06x} (ok={}), Print-Job status={:#06x} (ok={}) → real IPP round-trip to 10.0.2.2:631 (driverless, sovereign)",
+        (Some((a, port)), Some((j, _))) => crate::serial_println!(
+            "[bb4] EuroPrint IPP-over-TCP ✓: Get-Printer-Attributes status={:#06x} (ok={}), Print-Job status={:#06x} (ok={}) → real IPP round-trip to 10.0.2.2:{port} (driverless, sovereign)",
             a.status, a.is_ok(), j.status, j.is_ok()
         ),
         _ => crate::serial_println!(
-            "[bb4] EuroPrint IPP transport READY: IPP request built + HTTP/1.1 POST over EuroNet-TCP; no printer/CUPS reachable on 10.0.2.2:631 (start one to see the print job) ✓"
+            "[bb4] EuroPrint IPP transport READY: IPP request built + HTTP/1.1 POST over EuroNet-TCP; no printer/CUPS reachable on 10.0.2.2:{{631,6631}} (start one to see the print job) ✓"
         ),
     }
 }
@@ -70,14 +81,14 @@ pub fn shell(args: &str) -> Vec<String> {
         .keyword("document-format", "text/plain")
         .serialize(text.as_bytes());
     match ipp_roundtrip(&pj) {
-        Some(r) => alloc::vec![
-            alloc::format!("EuroPrint → {PRINTER_URI}"),
+        Some((r, port)) => alloc::vec![
+            alloc::format!("EuroPrint → ipp://{PRINTER_IP}:{port}/ipp/print"),
             alloc::format!("  IPP Print-Job status: {:#06x} ({})", r.status, if r.is_ok() { "accepted" } else { "rejected" }),
             String::from("  driverless (IPP Everywhere), over EuroNet-TCP, no cloud"),
         ],
         None => alloc::vec![
             alloc::format!("EuroPrint → {PRINTER_URI}: no printer reachable"),
-            String::from("  (IPP request is built; start an IPP/CUPS endpoint on port 631)"),
+            String::from("  (IPP request is built; start an IPP/CUPS endpoint on port 631 or 6631)"),
         ],
     }
 }
