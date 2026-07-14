@@ -107,11 +107,11 @@ AHCI write/read + boot-medium read-only proof).
 | M6-1 | TPM2 TIS + CRB over MMIO (0xFED40000) | ✅ | `tpm.rs` speaks both interfaces: TIS FIFO (discrete chips) and CRB (firmware TPMs — Intel PTT / AMD fTPM), auto-detected via TPM_INTERFACE_ID. Real seal/unseal to PCR16 on both, proven by the matrix `tpm` (tpm-tis) and `tpmcrb` (tpm-crb) legs. |
 | M6-2 | UEFI Secure Boot story | ⬜ | Document + test shim/db enrolment of our signed loader on real firmware; measured boot into PCRs feeding existing attestation ([o2]/[3d3]). |
 
-### M-7 — Network-first peripherals, end-to-end — ✅ policy + IPP core done (full loop env-blocked)
+### M-7 — Network-first peripherals, end-to-end — ✅ policy + IPP core + eSCL scanning e2e (IPP full-loop env-blocked, eSCL full-loop verified)
 | ID | Task | Status | Scope & verification |
 |----|------|--------|----------------------|
 | M7-1 | IPP Everywhere e2e | 🟢 core (loop env-blocked) | IPP client host-tested (`europrint`); `Get-Printer-Attributes` + `Print-Job` round-trip proven against `scripts/mock-ipp-server.py` (successful-ok, document spooled); guest does real IPP-over-TCP at boot. The full guest→server matrix leg (`--legs printer`) needs a privileged IPP endpoint on host :631 — the CI sandbox forbids privileged/sudo listeners, so it's opt-in, not in the default sweep. |
-| M7-2 | eSCL/AirScan scanning | ⬜ | mDNS `_uscan._tcp` + REST/XML over our HTTP(S); scan-to-EuroFiles. Verify against `airscan` simulator/CUPS. |
+| M7-2 | eSCL/AirScan scanning | ✅ e2e | NEW crate `euroscan` (host-tested) + kernel `scan.rs`: ScannerCapabilities → ScanJobs (201+Location) → NextDocument, scan-to-EuroFiles + `scan` shell cmd. Matrix `scan` leg = FULL guest→server loop (mock eSCL on :8631, high port so no privilege): `[m72] EuroScan eSCL ✓ … NextDocument 91 bytes`. |
 | M7-3 | SUPPORT-POLICY.md | ✅ | `docs/SUPPORT-POLICY.md`: supported class standards, network-first peripherals, deliberate non-goals, deferred-with-reason, and the `hwprobe`→HCL process. |
 
 ---
