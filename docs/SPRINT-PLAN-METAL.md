@@ -69,7 +69,7 @@ metal matrix runs 7/7 legs green (also in CI as an informational job).
 | M1-2 | Capability walker + MSI-X everywhere | ✅ | One shared helper for BAR/MSI-X/power caps (today per-driver). Verify: xhci/nvme/hda re-enumerate through it, no regressions ([q1x2]/[usb]/[snd] markers stay green). |
 | M1-3 | `hwprobe` shell command | ✅ | Dump PCI inventory + which driver claimed what + firmware/ACPI ids, in copy-pasteable HCL format. Verify: output on the q35 matrix matches reality; doc how users submit it. |
 
-### M-2 — Storage on metal — ✅ CORE DONE 2026-07-13
+### M-2 — Storage on metal — ✅ DONE (root-on-NVMe end-to-end, 2026-07-14)
 Commit `storage: AHCI/SATA class driver + NVMe PRP lists and MSI-X`. Matrix 7/7
 with tightened legs (PRP-list self-test + MSI-X confirmation + blank-disk
 AHCI write/read + boot-medium read-only proof).
@@ -77,7 +77,7 @@ AHCI write/read + boot-medium read-only proof).
 |----|------|--------|----------------------|
 | M2-1 | NVMe: MSI-X + PRP lists for >8 KiB | ✅ (single I/O queue) | 64 KiB PRP-list transfers verified; `[nvme] MSI-X delivery confirmed` after interrupts enable. Per-core queue pairs deferred until SMP scheduling needs them. |
 | M2-2 | AHCI/SATA (one class driver) | ✅ (polled, no NCQ/hotplug) | `ahci.rs`: port bring-up, IDENTIFY, LBA48 DMA r/w, 64 KiB PRDT window; blank-disk write/read self-test, boot medium read-only proof. AhciBlock = EuroFS BlockDevice. |
-| M2-3 | Boot-device generality | 🟡 | NvmeBlock/AhciBlock mountable + hwprobe disk inventory DONE; **root-on-NVMe/AHCI install/boot still open** (loader + installer changes). |
+| M2-3 | Boot-device generality | ✅ (NVMe) | RootBlk backend (Virtio/Nvme/Ahci) + install_to_nvme + GPT scan over any backend + root-selection fallback. Verified: install to a blank NVMe → boot from that NVMe alone → root on NVMe (`nvmeroot` leg). AHCI-root deliberately not auto-selected (q35 SATA = boot medium). |
 
 ### M-3 — Wired network on metal *(unlocks web/VPN/update/IPP on real machines)*
 | ID | Task | Status | Scope & verification |
