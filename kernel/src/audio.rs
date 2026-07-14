@@ -42,6 +42,32 @@ pub fn render_default(frames: usize) -> Vec<i16> {
     })
 }
 
+/// M4-3 live wiring: register the USB DAC as a routable output device and prove
+/// the mixer→USB path — open an app stream, mix it through the router, and play
+/// the rendered PCM to the USB audio endpoint (isochronous). Runs only when a
+/// USB audio device was enumerated.
+pub fn usb_wire_selftest() {
+    if !crate::xhci::usbaudio_present() {
+        return;
+    }
+    let played = with_router(|r| {
+        // Add the USB DAC as device 3 and make it the default output.
+        r.add_device(3, "USB Audio");
+        r.set_default_device(3);
+        let s = r.open_stream("euromusic");
+        // 96 frames of a constant PCM level, mixed through the router.
+        let src: Vec<i16> = alloc::vec![4000i16; 96 * 2];
+        r.submit(s, &src);
+        // Render the device mix (interleaved stereo) and stream it to USB.
+        let mixed = r.render(3, 96 * 2);
+        crate::xhci::usbaudio_play(&mixed)
+    });
+    crate::serial_println!(
+        "[m43-wire] mixer→USB path: euroaudio::Router (device 'USB Audio') → isoch stream → {played} packet(s) consumed by the USB DAC → {}",
+        if played > 0 { "LIVE ✓" } else { "no consumption ✗" }
+    );
+}
+
 /// `[3f6]` boot self-test — per-app streams, per-app routing to different
 /// devices, per-stream + master volume/mute, and a default-device hotplug
 /// re-route, all mixed through the host-tested router.

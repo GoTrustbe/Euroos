@@ -152,6 +152,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
             return false;
         }
     };
+    pci::claim(dev.bus, dev.dev, dev.func, "hda"); // hwprobe (M1-3)
     let bar0 = dev.bar(0);
     let mmio = if bar0 & 0x6 == 0x4 {
         ((dev.bar(1) as u64) << 32) | (bar0 as u64 & 0xFFFF_FFF0)
@@ -368,6 +369,11 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
 /// Generate a 48 kHz 16-bit STEREO PCM tone by mixing two square waves (A4 440 Hz +
 /// E5 660 Hz) via [`euroaudio::mix`] — proves the mixer→hardware chain.
 fn build_tone(nsamples: usize) -> alloc::vec::Vec<i16> {
+    tone_for_usb(nsamples)
+}
+
+/// The same mixed stereo tone, shared with the USB-audio isoch path (M4-3).
+pub fn tone_for_usb(nsamples: usize) -> alloc::vec::Vec<i16> {
     let frames = nsamples / 2; // stereo
     let sr = 48_000u32;
     let amp = 6000i16;

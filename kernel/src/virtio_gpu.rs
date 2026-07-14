@@ -150,6 +150,7 @@ impl VirtioGpu {
     /// Bring the device up via the **modern** transport and set up the control queue.
     pub fn init() -> Option<VirtioGpu> {
         let dev = find_gpu()?;
+        pci::claim(dev.bus, dev.dev, dev.func, "virtio-gpu"); // hwprobe (M1-3)
         // Enable bus-master (DMA) + MMIO decode.
         dev.enable(0x0006);
         let common = dev.virtio_cap(1)?.addr; // common cfg

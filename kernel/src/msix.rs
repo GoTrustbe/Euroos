@@ -29,50 +29,39 @@ fn bar_base(dev: &PciDevice, bir: u8) -> u64 {
 /// on `vector` to core `dest_apic`, and enable MSI-X (+ disable INTx). Returns
 /// the number of table entries (0 = no MSI-X capability).
 pub fn enable(dev: &PciDevice, entry: u16, vector: u8, dest_apic: u8) -> u16 {
-    // Does the device have a capability list? (status register bit4)
-    let status = pci::cfg_read32(dev.bus, dev.dev, dev.func, 0x04) >> 16;
-    if status & (1 << 4) == 0 {
+    // M1-2: capability lookup via the shared walker in `pci` (one bounded,
+    // ECAM-aware implementation instead of a private copy per driver).
+    let Some(ptr) = dev.find_cap(CAP_ID_MSIX) else {
+        return 0;
+    };
+    let head = pci::cfg_read32(dev.bus, dev.dev, dev.func, ptr);
+    let mc = (head >> 16) as u16;
+    let table_size = (mc & 0x7FF) + 1;
+    // Table-offset/BIR register at cap+4.
+    let tbl = pci::cfg_read32(dev.bus, dev.dev, dev.func, ptr + 4);
+    let bir = (tbl & 0x7) as u8;
+    let off = (tbl & !0x7) as u64;
+    let table = bar_base(dev, bir) + off;
+    if table == 0 {
         return 0;
     }
-    let mut ptr = (pci::cfg_read32(dev.bus, dev.dev, dev.func, 0x34) & 0xFC) as u8;
-    let mut guard = 0;
-    while ptr != 0 && guard < 48 {
-        guard += 1;
-        let head = pci::cfg_read32(dev.bus, dev.dev, dev.func, ptr);
-        let id = (head & 0xFF) as u8;
-        let next = ((head >> 8) & 0xFC) as u8;
-        if id == CAP_ID_MSIX {
-            let mc = (head >> 16) as u16;
-            let table_size = (mc & 0x7FF) + 1;
-            // Table-offset/BIR register at cap+4.
-            let tbl = pci::cfg_read32(dev.bus, dev.dev, dev.func, ptr + 4);
-            let bir = (tbl & 0x7) as u8;
-            let off = (tbl & !0x7) as u64;
-            let table = bar_base(dev, bir) + off;
-            if table == 0 {
-                return 0;
-            }
-            unsafe {
-                // Entry = 16 bytes: [msg_addr_lo][msg_addr_hi][msg_data][vector_control].
-                let e = table + entry as u64 * 16;
-                // LAPIC MSI address: 0xFEE0_0000 | (destination-APIC-id << 12).
-                ((e) as *mut u32).write_volatile(0xFEE0_0000 | ((dest_apic as u32) << 12));
-                ((e + 4) as *mut u32).write_volatile(0);
-                ((e + 8) as *mut u32).write_volatile(vector as u32); // fixed-delivery, edge
-                ((e + 12) as *mut u32).write_volatile(0); // vector-control: unmask (bit0=0)
-            }
-            // Enable MSI-X (bit15) + clear function-mask (bit14).
-            let new_mc = (mc | (1 << 15)) & !(1 << 14);
-            pci::cfg_write32(
-                dev.bus, dev.dev, dev.func, ptr,
-                (head & 0x0000_FFFF) | ((new_mc as u32) << 16),
-            );
-            // Disable legacy INTx (command register bit10) so only MSI-X delivers.
-            let cmd = pci::cfg_read32(dev.bus, dev.dev, dev.func, 0x04);
-            pci::cfg_write32(dev.bus, dev.dev, dev.func, 0x04, cmd | (1 << 10));
-            return table_size;
-        }
-        ptr = next;
+    unsafe {
+        // Entry = 16 bytes: [msg_addr_lo][msg_addr_hi][msg_data][vector_control].
+        let e = table + entry as u64 * 16;
+        // LAPIC MSI address: 0xFEE0_0000 | (destination-APIC-id << 12).
+        ((e) as *mut u32).write_volatile(0xFEE0_0000 | ((dest_apic as u32) << 12));
+        ((e + 4) as *mut u32).write_volatile(0);
+        ((e + 8) as *mut u32).write_volatile(vector as u32); // fixed-delivery, edge
+        ((e + 12) as *mut u32).write_volatile(0); // vector-control: unmask (bit0=0)
     }
-    0
+    // Enable MSI-X (bit15) + clear function-mask (bit14).
+    let new_mc = (mc | (1 << 15)) & !(1 << 14);
+    pci::cfg_write32(
+        dev.bus, dev.dev, dev.func, ptr,
+        (head & 0x0000_FFFF) | ((new_mc as u32) << 16),
+    );
+    // Disable legacy INTx (command register bit10) so only MSI-X delivers.
+    let cmd = pci::cfg_read32(dev.bus, dev.dev, dev.func, 0x04);
+    pci::cfg_write32(dev.bus, dev.dev, dev.func, 0x04, cmd | (1 << 10));
+    table_size
 }

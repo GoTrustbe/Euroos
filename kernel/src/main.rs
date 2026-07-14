@@ -23,7 +23,9 @@ mod observe;
 mod vault;
 mod euroipc;
 mod acpi;
+mod acpi_power;
 mod apic;
+mod appgfx;
 mod appicons;
 mod auth;
 mod euroui;
@@ -37,7 +39,10 @@ mod init;
 mod interrupts;
 mod klog;
 mod mouse;
+mod ahci;
+mod e1000;
 mod msix;
+mod nic;
 mod net;
 mod paging;
 mod gpt;
@@ -96,6 +101,7 @@ mod suite;
 mod wifi;
 mod gpu;
 mod print;
+mod scan;
 mod mcpd;
 mod wagent;
 mod instexec;
@@ -210,12 +216,72 @@ struct FbInfo {
 }
 static FB_INFO: spin::Once<FbInfo> = spin::Once::new();
 
+/// Blit an app's XRGB8888 (`0x00RRGGBB`) frame STRAIGHT to the GOP framebuffer,
+/// integer-scaled + centered. Called from the `fb_present` syscall (under the
+/// app's own CR3 — the GOP MMIO is mapped supervisor in every address space), so
+/// a full-screen app (the DOOM port) paints at its own frame rate instead of
+/// depending on the desktop loop, which a heavyweight app can starve down to a
+/// couple of Hz. `src` is `sw*sh` pixels.
+pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
+    let fbi = match FB_INFO.get() {
+        Some(i) => i,
+        None => return,
+    };
+    if sw == 0 || sh == 0 || src.len() < sw * sh {
+        return;
+    }
+    let scale = core::cmp::min(
+        fbi.width.saturating_sub(40) / sw,
+        fbi.height.saturating_sub(120) / sh,
+    )
+    .clamp(1, 4);
+    let (dw, dh) = (sw * scale, sh * scale);
+    if dw > fbi.width || dh > fbi.height {
+        return;
+    }
+    let dx = (fbi.width - dw) / 2;
+    let dy = (fbi.height - dh) / 2;
+    let dst = fbi.base as *mut u32;
+    let rgb = matches!(fbi.pf, PixelFormat::Rgb);
+    for sy in 0..sh {
+        let row = &src[sy * sw..sy * sw + sw];
+        for k in 0..scale {
+            let ty = dy + sy * scale + k;
+            if ty >= fbi.height {
+                return;
+            }
+            let dst_row = ty * fbi.stride;
+            let mut dc = dx;
+            for &v in row {
+                // v is 0x00RRGGBB; a BGR framebuffer wants exactly those low three
+                // bytes (B,G,R little-endian), so write it verbatim — only an RGB
+                // panel needs the R/B swap (matches `FrameBuffer::present_rect`).
+                let out = if rgb { ((v & 0xFF) << 16) | (v & 0x0000_FF00) | ((v >> 16) & 0xFF) } else { v };
+                for _ in 0..scale {
+                    if dc >= fbi.width {
+                        break;
+                    }
+                    unsafe { dst.add(dst_row + dc).write_volatile(out) };
+                    dc += 1;
+                }
+            }
+        }
+    }
+}
+
 #[entry]
 fn main() -> Status {
     // ── First of all: our own heap + serial (work even after ExitBootServices). ──
     allocator::init();
     serial::init();
     serial_println!("\n[euro] EuroKernel bring-up — heap ({} MiB) + COM1 active", allocator::size() / (1024 * 1024));
+    // Symbolization anchor at BOOT (not only on panic): a hung boot leaves no
+    // panic dump, so print the runtime address of the anchor function now. Any
+    // externally sampled RIP can then be resolved with scripts/symbolize.sh.
+    serial_println!(
+        "[euro] anchor dump_registers_and_backtrace @ {:#018x}",
+        klog::dump_registers_and_backtrace as usize as u64
+    );
 
     // EuroFS is set up later (after virtio-blk init): either on the GPT disk
     // (installed, persistent) or in RAM (live mode). See `populate_fs`.
@@ -316,6 +382,14 @@ fn main() -> Status {
         nvme::self_test();
     }
 
+    // AHCI/SATA (Metal M2-2): bring up every SATA disk behind an AHCI
+    // controller (q35's built-in ICH9 carries the boot medium; the metal
+    // matrix attaches scratch disks). Read-only self-test on partitioned
+    // disks, full write/read/verify on blank ones. No-op without AHCI.
+    if ahci::init(&mut allocator) > 0 {
+        ahci::self_test();
+    }
+
     // ── ROOT FILESYSTEM ── EuroFS lives ON the disk (installed, persistent)
     // if there is a virtio-blk disk, otherwise in RAM (live mode). An existing FS
     // is mounted; a fresh/empty disk is formatted + populated
@@ -342,12 +416,16 @@ fn main() -> Status {
         if instexec::disk_is_blank(0) {
             // Fresh target disk → install a bootable, provisioned EuroOS (slot A).
             instexec::install_to_disk(0, &instexec::default_config())
-        } else {
-            // Already installed → demonstrate the A/B SELF-UPDATE: stage slot B + flip
-            // slot_config. After a standalone reboot the loader picks slot B (AH-2).
+        } else if gpt::find_eurofs_partition().is_some() {
+            // Our own installed disk → demonstrate the A/B SELF-UPDATE: stage slot B
+            // + flip slot_config. After a standalone reboot the loader picks slot B.
             instexec::stage_update_b(0);
             instexec::rollback_selftest(0); // [upd4]: prove the two-stage rollback on the real ESP
             true // we keep running live; the disk is the boot/update target
+        } else {
+            // Disk 0 holds someone else's filesystem (exFAT/FAT/NTFS/…) — do NOT
+            // stage an update onto it. Leave it untouched; it stays mountable.
+            false
         }
     } else {
         false
@@ -357,15 +435,91 @@ fn main() -> Status {
     // `installed` path fell back to an 8 MiB RAM root, so an installed system never actually
     // ran from its large on-disk root.) `sync_system_files` + `ensure_etc_skeleton` below
     // complete /bin + /etc on a disk root that only carries install-time config.
+    // Metal M2-3: true when the NVMe disk carries the live root (so the later
+    // /nvme data-disk demo doesn't double-mount it).
+    let mut nvme_root = false;
     let rootdev = if virtio_blk::present() {
         let total = virtio_blk::capacity_sectors();
-        let (start, blocks) = gpt::find_eurofs_partition().unwrap_or_else(|| gpt::install(total));
-        if installed {
-            serial_println!("[euro] live root = the on-disk EuroFS (installed/updated this boot)");
+        match gpt::find_eurofs_partition() {
+            Some((start, blocks)) => {
+                if installed {
+                    serial_println!("[euro] live root = the on-disk EuroFS (installed/updated this boot)");
+                }
+                rootblk::RootBlk::disk(start, blocks)
+            }
+            None if instexec::disk_is_blank(0) => {
+                // Blank disk → lay down our GPT + EuroFS root.
+                let (start, blocks) = gpt::install(total);
+                rootblk::RootBlk::disk(start, blocks)
+            }
+            None => {
+                // Disk 0 carries a NON-EuroFS filesystem (exFAT/FAT/ext/NTFS/…).
+                // Never format/clobber it as our root — boot a RAM root instead;
+                // the disk stays intact and can be mounted (mount vblkN /mnt).
+                serial_println!("[euro] disk 0 is not EuroFS and not blank — booting a RAM root; the disk is left intact + mountable");
+                rootblk::RootBlk::ram(2048)
+            }
         }
-        rootblk::RootBlk::disk(start, blocks)
+    } else if nvme::present() {
+        // Metal M2-3: no virtio-blk, but an NVMe disk is here. A modern
+        // (NVMe-only) laptop boots from NVMe: mount the root on it. Its own
+        // installed EuroFS partition, else install onto a blank NVMe from the
+        // boot media, else — a non-EuroFS NVMe — leave it intact + RAM root.
+        match instexec::nvme_eurofs_partition() {
+            Some((start, blocks)) => {
+                serial_println!("[euro] live root = the on-disk EuroFS on NVMe (standalone NVMe boot)");
+                nvme_root = true;
+                rootblk::RootBlk::nvme(start, blocks)
+            }
+            None if instexec::media_available() && instexec::nvme_is_blank() => {
+                if instexec::install_to_nvme(&instexec::default_config()) {
+                    match instexec::nvme_eurofs_partition() {
+                        Some((start, blocks)) => {
+                            serial_println!("[euro] live root = the freshly-installed EuroFS on NVMe");
+                            nvme_root = true;
+                            rootblk::RootBlk::nvme(start, blocks)
+                        }
+                        None => rootblk::RootBlk::ram(2048),
+                    }
+                } else {
+                    rootblk::RootBlk::ram(2048)
+                }
+            }
+            None => {
+                serial_println!("[euro] NVMe disk is not EuroFS and not blank — booting a RAM root; it stays intact + mountable at /nvme");
+                rootblk::RootBlk::ram(2048)
+            }
+        }
+    } else if ahci::disk_count() > 0 {
+        // Metal M2-3: no virtio-blk and no NVMe, but SATA disks are here. Scan
+        // them for our installed EuroFS, else install onto a blank one. The boot
+        // medium (q35 exposes it on SATA) is partitioned + non-EuroFS, so both
+        // rules skip it — it is never clobbered.
+        let mut chosen = None;
+        for idx in 0..ahci::disk_count() {
+            if let Some((start, blocks)) = instexec::ahci_eurofs_partition(idx) {
+                serial_println!("[euro] live root = the on-disk EuroFS on AHCI disk {idx} (standalone SATA boot)");
+                chosen = Some(rootblk::RootBlk::ahci(idx, start, blocks));
+                break;
+            }
+        }
+        if chosen.is_none() && instexec::media_available() {
+            for idx in 0..ahci::disk_count() {
+                if instexec::ahci_is_blank(idx) && instexec::install_to_ahci(idx, &instexec::default_config()) {
+                    if let Some((start, blocks)) = instexec::ahci_eurofs_partition(idx) {
+                        serial_println!("[euro] live root = the freshly-installed EuroFS on AHCI disk {idx}");
+                        chosen = Some(rootblk::RootBlk::ahci(idx, start, blocks));
+                    }
+                    break;
+                }
+            }
+        }
+        chosen.unwrap_or_else(|| {
+            serial_println!("[euro] no installable/EuroFS SATA disk — booting a RAM root (disks left intact)");
+            rootblk::RootBlk::ram(2048)
+        })
     } else {
-        rootblk::RootBlk::ram(2048) // RAM root only when there is NO disk at all
+        rootblk::RootBlk::ram(2048) // RAM root when there is NO disk at all
     };
     // The install media (~6 MiB) stays available so the user can install LATER
     // from the running desktop too (`euroinstall --to N`).
@@ -704,7 +858,9 @@ fn main() -> Status {
     // granted capabilities (least-privilege) and the syscall ABI. This lets a
     // shell later start them by NAME — the kernel itself knows with which rights + ABI.
     use ring3::{CAP_CONSOLE as CO, CAP_FILE as FI, CAP_NET as NE, CAP_PROC_INFO as PR};
-    let installed: [(&str, u64, bool); 22] = [
+    let installed: [(&str, u64, bool); 24] = [
+        ("/bin/fbtest", CO, true), // app-graphics smoke test (large-arena scheduled)
+        ("/bin/doom", CO | FI, true), // the DOOM port: draws frames + reads its WAD (CAP_FILE)
         ("/bin/hello", CO | PR | FI, false),
         ("/bin/cat", CO | FI, false),
         ("/bin/linuxprog", CO | PR | FI, true), // now reads /proc too (CAP_FILE)
@@ -764,11 +920,12 @@ fn main() -> Status {
     use euronet::udp::UdpDatagram;
     let ipfmt = |ip: Ipv4Addr| format!("{}.{}.{}.{}", ip.0[0], ip.0[1], ip.0[2], ip.0[3]);
     let mut net_lines: Vec<String> = Vec::new();
-    if virtio_net::init(&mut allocator) {
-        let my_mac = MacAddr(virtio_net::mac().unwrap_or([0; 6]));
+    if nic::init(&mut allocator) {
+        let my_mac = MacAddr(nic::mac().unwrap_or([0; 6]));
         let gw_ip = Ipv4Addr::new(10, 0, 2, 2);
         net_lines.push(format!(
-            "NIC: virtio-net MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            "NIC: {} MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            nic::kind(),
             my_mac.0[0], my_mac.0[1], my_mac.0[2], my_mac.0[3], my_mac.0[4], my_mac.0[5]
         ));
 
@@ -785,13 +942,13 @@ fn main() -> Status {
             }
             .build(&seg);
             let frame = EthernetHeader { dst: MacAddr::BROADCAST, src: my_mac, ethertype: EtherType::Ipv4 }.build(&ipf);
-            virtio_net::send(&frame);
+            nic::send(&frame);
         };
         // Poll for a DHCP reply of the desired type (UDP 67->68; manual
         // UDP parse so a missing checksum does not block us).
         let poll_dhcp = |want: u8| -> Option<dhcp::DhcpInfo> {
             for _ in 0..6_000_000u64 {
-                if let Some(rx) = virtio_net::poll_recv() {
+                if let Some(rx) = nic::poll_recv() {
                     if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                         if h.ethertype == EtherType::Ipv4 {
                             if let Ok((iph, ipl)) = Ipv4Header::parse(p) {
@@ -819,7 +976,7 @@ fn main() -> Status {
         let mut offer = None;
         for _ in 0..12 {
             for _ in 0..16 {
-                if virtio_net::poll_recv().is_none() {
+                if nic::poll_recv().is_none() {
                     break;
                 }
             }
@@ -959,12 +1116,12 @@ fn main() -> Status {
             ethertype: EtherType::Ipv6,
         }
         .build(&rsh.build(&rs_msg));
-        virtio_net::send(&rsframe);
+        nic::send(&rsframe);
         net_lines.push("IPv6: Router Solicitation -> ff02::2 sent".into());
         // Poll for a Router Advertisement.
         let mut router: Option<(Ipv6Addr, MacAddr, Option<[u8; 8]>)> = None;
         'ra: for _ in 0..8_000_000u64 {
-            if let Some(rx) = virtio_net::poll_recv() {
+            if let Some(rx) = nic::poll_recv() {
                 if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                     if h.ethertype == EtherType::Ipv6 {
                         if let Ok((ih, pl)) = Ipv6Header::parse(p) {
@@ -988,10 +1145,10 @@ fn main() -> Status {
             let echo = icmpv6::echo_request(0xE6, 1, b"euroos-ping6", ll, router_ll);
             let eh = Ipv6Header { next_header: 58, hop_limit: 255, src: ll, dst: router_ll, payload_len: 0 };
             let pframe = EthernetHeader { dst: router_mac, src: my_mac, ethertype: EtherType::Ipv6 }.build(&eh.build(&echo));
-            virtio_net::send(&pframe);
+            nic::send(&pframe);
             let mut pong6 = false;
             'p6: for _ in 0..8_000_000u64 {
-                if let Some(rx) = virtio_net::poll_recv() {
+                if let Some(rx) = nic::poll_recv() {
                     if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                         if h.ethertype == EtherType::Ipv6 {
                             if let Ok((ih, pl)) = Ipv6Header::parse(p) {
@@ -1292,6 +1449,16 @@ fn main() -> Status {
     } else {
         serial_println!("[acpi] no MADT found");
     }
+    // M1-1: switch PCI config access to ECAM (memory-mapped, via the ACPI MCFG)
+    // — the modern path, full 4 KiB config space. `init_ecam` only activates the
+    // window after verifying every port-visible function reads identically
+    // through it; on any mismatch we stay on the legacy 0xCF8/0xCFC ports.
+    match pci::init_ecam() {
+        Some((base, b0, b1)) => serial_println!(
+            "[ecam] PCIe config via ECAM @ {base:#x} (buses {b0}..={b1}, MCFG, port-verified) ✓"
+        ),
+        None => serial_println!("[ecam] no verified MCFG — staying on legacy config ports"),
+    }
     // PCI enumeration: discover the attached hardware (network, storage, ...).
     {
         let devs = pci::enumerate();
@@ -1335,6 +1502,11 @@ fn main() -> Status {
             "[i3-aml] DSDT interpreted: {} bytes → {} AML objects. \\_S5={:?}, known methods present: {:?}",
             aml_len, ns.len(), s5, present
         );
+        // M5-1: ACPI power sources (battery / AC / lid). On a desktop or VM the
+        // DSDT has none of these; on a laptop it does. A battery whose _BST
+        // reads Embedded-Controller fields needs an EC driver (deferred) — we
+        // decode statically-evaluable _BST/_PSR and report the device presence.
+        acpi_power::report(&ns);
     } else {
         serial_println!("[i3-aml] no DSDT found via FADT");
     }
@@ -1397,6 +1569,15 @@ fn main() -> Status {
         serial_println!("[euro] HD-Audio initialized — stream playing (LPIB={})", hda::stream_pos());
     }
     x86_64::instructions::interrupts::enable();
+    // M2-1: NVMe MSI-X delivery proof — must run with interrupts ON (the boot
+    // self-test above ran before this point, so its completions were unseen).
+    nvme::msix_proof();
+    // M3-3: a CDC-ECM USB NIC only exists after xHCI enumeration (above) — if
+    // no NIC bound during the main net bring-up, adopt it and bring it up now.
+    net::late_bring_up();
+    // M4-3 live wiring: a USB DAC also only exists after xHCI enumeration —
+    // route the euroaudio mixer's output to it (no-op without one).
+    audio::usb_wire_selftest();
     serial_println!("[euro] APIC timer 100 Hz + interrupts ON -> preemptive multitasking (incl. ring 3)");
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.
@@ -1503,7 +1684,9 @@ fn main() -> Status {
     // G2/B2: if there is an NVMe disk, mount an EuroFS on it (/nvme). Proves that
     // the NVMe driver carries a real filesystem (now works under any CR3 thanks to A2's
     // shared high region that maps the NVMe MMIO @768 GiB everywhere).
-    if let Some(nb) = nvme::NvmeBlock::new() {
+    // Metal M2-3: skip when NVMe already carries the live ROOT (mounted at / via
+    // the block cache) — mounting the same disk again here would be a double mount.
+    if let Some(nb) = nvme::NvmeBlock::new().filter(|_| !nvme_root) {
         let nfs = match EuroFs::mount(nb, rtc::epoch()) {
             Ok(f) => {
                 serial_println!("[g2] EuroFS mounted on NVMe (existing)");
@@ -1838,6 +2021,7 @@ fn main() -> Status {
     // BB-4: EuroPrint — real IPP-over-TCP round-trip to a network printer/CUPS
     // (10.0.2.2:631 via SLIRP host); Get-Printer-Attributes + Print-Job.
     print::selftest();
+    scan::selftest();
 
     // EuroCoreutils (CU-7): prove the compute/control commands live in the kernel
     // (deterministic — not dependent on USB keystrokes under slow TCG).
@@ -2145,7 +2329,7 @@ fn main() -> Status {
             active: true, accent: Color::SUCCESS,
             sec: eds::SecState::new(true, false, true),
             app: suite_ui::SuiteApp::None,
-            visible: false,
+            visible: true, // default-open: the interactive shell is the clean first-run window (focused)
             restore: None,
         },
     ];
@@ -2476,10 +2660,10 @@ fn main() -> Status {
             x: SIDEBAR_W + 120, y: 110, w: 620, h: 560,
             title: String::from("EuroMonitor"),
             content: Vec::new(), ui: Vec::new(),
-            active: true, accent: Color::rgb(0x1F, 0x9D, 0x6B),
+            active: false, accent: Color::rgb(0x1F, 0x9D, 0x6B),
             sec: eds::SecState::new(true, true, false),
             app: suite_ui::SuiteApp::Monitor,
-            visible: true, // opened at boot: immediately shows live system status (screenshot)
+            visible: false, // hidden by default; open from the dock (no window covers the Terminal)
             restore: None,
         });
         order.push(i_mon);
@@ -2498,12 +2682,12 @@ fn main() -> Status {
         });
         order.push(i_log);
         dock_targets[10] = Some(i_log); // dock: log icon → EuroLog
-        compositor::set_active_dock(Some(9)); // EuroMonitor is opened at boot
+        compositor::set_active_dock(Some(4)); // Terminal is the default-open window (clean first-run)
 
         // Pre-fill EuroFiles with the REAL root directory of the FS, so the
         // first dock open immediately shows content.
         load_files_dir(ctx.fs, "/");
-        compositor::set_active_dock(None);
+        compositor::set_active_dock(Some(4)); // Terminal tile highlighted (default-open window)
         let fl_path = files::current_path();
         serial_println!(
             "[ag] EuroApps: EuroFiles (live FS @ {}), EuroNotes (euronotes), EuroClock (RTC {}) — 3 windows + dock tiles 0/1/2 ✓",
@@ -2589,25 +2773,17 @@ fn main() -> Status {
     // ── Desktop loop: mouse cursor, window dragging, live system window. ──
     let mut dragging: Option<usize> = None;
     let mut drag_off = (0usize, 0usize);
-    let mut prev_left = false;
     let mut last_t = u64::MAX;
     let mut last_kbd = 0u64; // diagnostics: keyboard IRQs via the IO-APIC
-    // 3F-7: the live permission-portal dialog. `portal_buttons` holds the hit
-    // rects of the currently-shown modal (Allow once / This session / Deny).
+    // 3F-7: the live permission-portal. `portal_buttons` holds the hit rects of
+    // the currently-shown modal (Allow once / This session / Deny) when a request
+    // is pending. Nothing is requested at boot, so the desktop starts clean; the
+    // dialog appears only when an app actually asks for a resource, and its
+    // buttons route the answer to portal::respond via the click loop below. The
+    // broker mechanism itself is exercised by portal::selftest() ([3f7]).
     let mut portal_buttons: Option<(u64, [(usize, usize, usize, usize); 3])> = None;
-    // Demonstrate the portal live: an app requests the camera → the desktop
-    // shows the grant dialog; the click loop below routes the answer. (Sovereign
-    // data-control, made visible — the whole point of 3F-7.)
-    let _ = portal::request("EuroMeet", europortal::Resource::Camera);
-    // Paint it over the already-rendered desktop so it is visible from frame 0.
-    portal_buttons = portal::render_dialog(&fb, width, height);
-    compositor::draw_cursor(&fb, cmx, cmy);
-    fb.present();
-    if let Some((bb, bw, bh, bs)) = fb.backbuffer() {
-        virtio_gpu::present_frame(bb, bw, bh, bs);
-    }
     serial_println!(
-        "[3f7-live] permission-portal dialog SHOWN on the desktop (EuroMeet→camera), buttons wired to portal::respond (Allow once / This session / Deny) → live modal ✓"
+        "[3f7-live] permission-portal armed — no request pending at boot; a modal is shown only when an app requests a resource (wired to portal::respond)"
     );
     // Interactive shell in the Terminal window: the last content line is the
     // prompt ("euroos:/ $ <input>"); keyboard input (IRQ1) edits it live.
@@ -2621,8 +2797,10 @@ fn main() -> Status {
     serial_println!("[desktop] interactive loop started — input + shell live");
     // 3G-2: arm the live deadman watchdog (5 s grace at 100 Hz). The loop pets it
     // each iteration; the scheduler tick checks it independently.
-    watchdog::arm(500);
+    watchdog::arm(1500); // 15s: a full software render is a few seconds under TCG (fast on real HW)
     let mut wd_reported = false;
+    let mut app_blitted = false; // one-shot log when the app-graphics bridge first paints
+    let mut last_app_blit = 0u64; // tick of the last app blit (throttle to keep the loop responsive)
     loop {
         // 3G-2: the main loop is alive → pet the watchdog.
         watchdog::pet();
@@ -2650,7 +2828,9 @@ fn main() -> Status {
         );
 
         // Left click just pressed: dock launch, window focus/raise, or drag.
-        if ldown && !prev_left && dragging.is_none() {
+        // Uses the press LATCH (mouse::take_press) instead of sampling the button
+        // this iteration, so a quick tap is never missed on the emulated poll.
+        if dragging.is_none() && mouse::take_press().is_some() {
             // 3F-7: a pending permission dialog is MODAL — it intercepts the
             // click before any window/dock hit-test, and routes the answer to
             // the portal broker (scoped grant / auto-revoke).
@@ -2841,11 +3021,38 @@ fn main() -> Status {
                 need_full = true;
             }
         }
-        prev_left = ldown;
 
         // I1: harvest USB-HID interrupt transfers (keyboard/mouse) and inject them
         // into the same scancode/mouse paths as PS/2 — before we read the keys.
         xhci::poll();
+
+        // A graphical app (the DOOM port) owns the keyboard while it runs: route
+        // RAW scancodes (press/release + arrows/ctrl, which poll_key's char
+        // interface cannot express) to the app-graphics bridge, and skip the
+        // shell/window key handling entirely. Draining the scancode ring here
+        // starves the poll_key loop below (it finds nothing).
+        if appgfx::active() {
+            // A full-screen app owns the display. Its frames are painted straight
+            // to the framebuffer by the `fb_present` syscall (crate::screen_present
+            // _xrgb) at the app's own rate — the desktop loop only routes RAW
+            // scancodes to it and gets out of the way (no blit, no compositor
+            // repaint), so nothing the loop's scheduling starvation can hurt.
+            while let Some(sc) = ps2::poll_scancode() {
+                if sc == 0xE0 {
+                    continue; // extended prefix: the FOLLOWING code carries the key
+                }
+                // set-1: high bit = break (release); low 7 bits = key.
+                appgfx::push_key(sc & 0x7F, sc & 0x80 == 0);
+            }
+            let _ = last_app_blit;
+            app_blitted = true; // remember to repaint the desktop once it exits
+            continue;
+        } else if app_blitted {
+            // The app just exited (active() went false): force one full desktop
+            // repaint to clear its frame off the screen.
+            app_blitted = false;
+            need_full = true;
+        }
 
         // The focused (topmost visible) window determines where keys go.
         let focused = order.iter().rev().copied().find(|&i| windows[i].visible);
@@ -3099,6 +3306,45 @@ fn main() -> Status {
                         for l in shell::exec(&mut ctx, &exec_cmd) {
                             out.push(l);
                         }
+                    } else if {
+                        let n = exec_cmd.split_whitespace().next().unwrap_or("");
+                        n == "doom" || n == "fbtest"
+                    } {
+                        // Graphical app: a PREEMPTIVELY-scheduled userspace program
+                        // that draws to its own centered framebuffer (fb_present)
+                        // and reads the keyboard (getkey). Unlike a /bin program it
+                        // does NOT run to completion — it owns the screen until it
+                        // exits, so we spawn it on the scheduler and return at once.
+                        let name = exec_cmd.split_whitespace().next().unwrap_or("");
+                        let path = format!("/bin/{name}");
+                        match ring3::program_caps_abi(&path) {
+                            None => out.push(format!("{name}: not installed")),
+                            Some(_) => {
+                                let bytes = ctx.fs.read_file(&path).unwrap_or_default();
+                                if !ring3::verify_program(&path, &bytes) {
+                                    out.push(format!("[sec] {path}: REJECTED — invalid Ed25519 signature"));
+                                } else {
+                                    let mem = &mut *ctx.mem;
+                                    let pid: u64 = 90;
+                                    // DOOM needs its IWAD; fbtest takes no args.
+                                    let argv: Vec<&[u8]> = if name == "doom" {
+                                        alloc::vec![b"doom".as_slice(), b"-iwad".as_slice(), b"/doom1.wad".as_slice(), b"-nosound".as_slice(), b"-nomusic".as_slice()]
+                                    } else {
+                                        alloc::vec![name.as_bytes()]
+                                    };
+                                    let spawned = x86_64::instructions::interrupts::without_interrupts(|| {
+                                        ring3::spawn_bg_app(mem, &bytes, pid, &argv, 32)
+                                    });
+                                    if spawned.is_some() {
+                                        appgfx::set_app_pid(pid);
+                                        appgfx::set_active(true);
+                                        out.push(format!("{name}: launched (pid {pid}) — drawing to the screen; Esc quits"));
+                                    } else {
+                                        out.push(format!("{name}: out of memory (needs a 32 MiB arena)"));
+                                    }
+                                }
+                            }
+                        }
                     } else if !exec_cmd.is_empty() {
                         // Pipeline: split on '|' into stages; stdout of stage N -> stdin of N+1.
                         // Redirection (>) applies to the stdout of the LAST stage.
@@ -3338,8 +3584,10 @@ fn eurojs_show(v: &eurojs::Value) -> String {
     }
 }
 
-fn system_binaries() -> [(&'static str, &'static [u8]); 29] {
+fn system_binaries() -> [(&'static str, &'static [u8]); 31] {
     [
+        ("/bin/fbtest", ring3::fbtest_bytes()),
+        ("/bin/doom", ring3::doom_bytes()),
         ("/bin/hello", ring3::program_bytes()),
         ("/bin/cat", ring3::cat_bytes()),
         ("/bin/linuxprog", ring3::linuxprog_bytes()),
@@ -3473,6 +3721,9 @@ fn populate_fs(fs: &mut dyn FileSystem) {
     for (path, bytes) in system_binaries() {
         fs.write_file(path, bytes).unwrap();
     }
+    // NOTE: /doom1.wad is served straight from the kernel image (ring3::vfs_open
+    // special-case) — NOT written to the RAM FS, so it neither doubles the WAD's
+    // RAM nor makes the boot-time FS scrub crawl over 4 MiB under TCG.
     // Record the build-id so the next boot sees that /bin is up to date.
     fs.write_file("/etc/system.ver", format!("{:016x}\n", system_digest()).as_bytes()).unwrap();
     fs.create_dir("/tmp").unwrap();
@@ -3562,6 +3813,7 @@ fn sync_system_files(fs: &mut dyn FileSystem) -> bool {
         let _ = fs.set_flags(path, 0);
         let _ = fs.write_file(path, bytes);
     }
+    // /doom1.wad is served from the kernel image (see the fresh-FS branch).
     let _ = fs.write_file("/boot/version", b"EuroKernel v0.1-alpha\n");
     let _ = fs.write_file("/etc/system.ver", want.as_bytes());
     true

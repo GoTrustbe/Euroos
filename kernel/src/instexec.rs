@@ -82,8 +82,71 @@ pub fn disk_is_blank(dev: usize) -> bool {
     if !crate::virtio_blk::read_io_dev(dev, 0, &mut s0) {
         return false;
     }
-    let protective_mbr = s0[510] == 0x55 && s0[511] == 0xAA && s0[450] == 0xEE;
-    !protective_mbr
+    // "Blank" means safe to format as our own disk. Any 0x55AA boot signature
+    // means the disk already holds something — a GPT protective MBR, an MBR
+    // partition table, or a superfloppy FAT/exFAT/NTFS boot sector. NEVER treat
+    // such a disk as blank: doing so would overwrite a user's data disk. Only a
+    // disk with no boot signature at all is blank.
+    !(s0[510] == 0x55 && s0[511] == 0xAA)
+}
+
+/// Is the NVMe disk blank (safe to install onto) — same boot-signature rule as
+/// `disk_is_blank`, over the NVMe driver. Metal M2-3.
+pub fn nvme_is_blank() -> bool {
+    if !crate::nvme::present() {
+        return false;
+    }
+    let mut s0 = [0u8; 512];
+    if !crate::nvme::read_sectors(0, &mut s0) {
+        return false;
+    }
+    !(s0[510] == 0x55 && s0[511] == 0xAA)
+}
+
+/// Does the NVMe disk already carry an EuroFS GPT partition (our own installed
+/// disk)? Returns its (first-sector, 4 KiB-block-count). Metal M2-3.
+pub fn nvme_eurofs_partition() -> Option<(u64, u64)> {
+    crate::gpt::find_eurofs_partition_read(|lba, buf| crate::nvme::read_sectors(lba, buf))
+}
+
+/// Is AHCI disk `idx` blank (safe to install onto)? Boot-medium safety: q35
+/// exposes the boot image on SATA, but it is partitioned (0x55AA) so never
+/// blank — install-to-blank only ever targets a genuine fresh disk. Metal M2-3.
+pub fn ahci_is_blank(idx: usize) -> bool {
+    if idx >= crate::ahci::disk_count() {
+        return false;
+    }
+    let mut s0 = [0u8; 512];
+    if !crate::ahci::read_sectors(idx, 0, &mut s0) {
+        return false;
+    }
+    !(s0[510] == 0x55 && s0[511] == 0xAA)
+}
+
+/// Does AHCI disk `idx` carry an EuroFS GPT partition? (first-sector, blocks).
+pub fn ahci_eurofs_partition(idx: usize) -> Option<(u64, u64)> {
+    crate::gpt::find_eurofs_partition_read(|lba, buf| crate::ahci::read_sectors(idx, lba, buf))
+}
+
+/// Install a bootable EuroOS to AHCI/SATA disk `idx` (Metal M2-3). Same GPT +
+/// ESP + EuroFS root over the AHCI driver. Only ever called on a blank disk, so
+/// the boot medium (partitioned) is never touched.
+pub fn install_to_ahci(idx: usize, cfg: &Config) -> bool {
+    let total = crate::ahci::disk_sectors(idx);
+    if total == 0 {
+        return false;
+    }
+    install_to_target(
+        cfg,
+        total,
+        &alloc::format!("AHCI disk {idx}"),
+        |lba, bytes| {
+            crate::ahci::write_sectors(idx, lba, bytes);
+        },
+        |lba, buf| crate::ahci::read_sectors(idx, lba, buf),
+        || {}, // AHCI writes are polled DMA → durable on completion
+        |first, blocks| crate::rootblk::RootBlk::ahci(idx, first, blocks),
+    )
 }
 
 /// Install a REAL bootable EuroOS to virtio disk `dev`: GPT + FAT32 ESP
@@ -93,6 +156,60 @@ pub fn disk_is_blank(dev: usize) -> bool {
 /// (locale/keymap/hostname/user/EuroCA). Returns `true` if everything was written
 /// and verified (incl. provisioning after a remount of the partition).
 pub fn install_to_disk(dev: usize, cfg: &Config) -> bool {
+    if !crate::virtio_blk::present_dev(dev) {
+        return false;
+    }
+    let total = crate::virtio_blk::capacity_sectors_dev(dev);
+    install_to_target(
+        cfg,
+        total,
+        &alloc::format!("virtio disk {dev}"),
+        |lba, bytes| {
+            crate::virtio_blk::write_io_dev(dev, lba, bytes);
+        },
+        |lba, buf| crate::virtio_blk::read_io_dev(dev, lba, buf),
+        || {
+            crate::virtio_blk::flush_dev(dev);
+        },
+        |first, blocks| crate::rootblk::RootBlk::disk_on(dev, first, blocks),
+    )
+}
+
+/// Install a bootable EuroOS to the NVMe disk (Metal M2-3). Same GPT + ESP +
+/// EuroFS-root writer, over the NVMe block driver instead of virtio-blk. After
+/// this, UEFI firmware can boot the NVMe ESP and the kernel mounts its root on
+/// the NVMe EuroFS partition — a modern (NVMe-only) laptop boots standalone.
+pub fn install_to_nvme(cfg: &Config) -> bool {
+    if !crate::nvme::present() {
+        return false;
+    }
+    let total = crate::nvme::capacity_sectors();
+    install_to_target(
+        cfg,
+        total,
+        "NVMe disk",
+        |lba, bytes| {
+            crate::nvme::write_sectors(lba, bytes);
+        },
+        |lba, buf| crate::nvme::read_sectors(lba, buf),
+        || {}, // NVMe writes are synchronous (polled completion) → already durable
+        |first, blocks| crate::rootblk::RootBlk::nvme(first, blocks),
+    )
+}
+
+/// The device-agnostic installer core: GPT + FAT32 ESP (loader + A/B kernel from
+/// the own media) + a formatted, provisioned EuroFS root, written through the
+/// given `write`/`read`/`flush` closures, then verified after a remount.
+#[allow(clippy::too_many_arguments)]
+fn install_to_target(
+    cfg: &Config,
+    total: u64,
+    label: &str,
+    write: impl Fn(u64, &[u8]),
+    read: impl Fn(u64, &mut [u8]) -> bool,
+    flush: impl Fn(),
+    make_root: impl Fn(u64, u64) -> crate::rootblk::RootBlk,
+) -> bool {
     let (loader, kernel_a, kernel_b) = {
         let guard = MEDIA.lock();
         match guard.as_ref() {
@@ -100,37 +217,33 @@ pub fn install_to_disk(dev: usize, cfg: &Config) -> bool {
             None => return false,
         }
     };
-    if !crate::virtio_blk::present_dev(dev) {
-        return false;
-    }
-    let total = crate::virtio_blk::capacity_sectors_dev(dev);
     if total < 128 * 1024 * 1024 / 512 {
-        crate::serial_println!("[q1x3] target disk {dev} too small ({} MiB) for installation", total * 512 / 1024 / 1024);
+        crate::serial_println!("[q1x3] target {label} too small ({} MiB) for installation", total * 512 / 1024 / 1024);
         return false;
     }
     let vid = (crate::rtc::epoch() as u32) ^ 0xE040_5053;
     // Fresh install: slot_config → boot slot A (the loader honors this file).
     let slot_a = euroupdate::SlotConfig::initial().serialize();
     let layout = eurofat::write_boot_disk(total, vid, &loader, &kernel_a, &kernel_b, &slot_a, |lba, bytes| {
-        let _ = crate::virtio_blk::write_io_dev(dev, lba, bytes);
+        write(lba, bytes);
     });
 
     // ── Format + provision the EuroFS root partition (real installation) ──
     let now = crate::rtc::epoch();
     let blocks = layout.eurofs_sectors / 8; // 8 sectors per 4 KiB block
-    let pdev = crate::rootblk::RootBlk::disk_on(dev, layout.eurofs_first, blocks);
+    let pdev = make_root(layout.eurofs_first, blocks);
     let steps = plan(cfg).unwrap_or_default();
     let provisioned = match EuroFs::format(pdev.clone(), [vid as u8; 16], now) {
         Ok(mut fs) => provision(&mut fs, &steps),
         Err(_) => 0,
     };
-    crate::virtio_blk::flush_dev(dev);
+    flush();
 
     // ── Verification: re-read GPT + ESP boot sector + remount the EuroFS partition ──
     let mut hdr = [0u8; 512];
-    let gpt_ok = crate::virtio_blk::read_io_dev(dev, 1, &mut hdr) && &hdr[..8] == b"EFI PART";
+    let gpt_ok = read(1, &mut hdr) && &hdr[..8] == b"EFI PART";
     let mut esp0 = [0u8; 512];
-    let esp_ok = crate::virtio_blk::read_io_dev(dev, layout.esp_first, &mut esp0)
+    let esp_ok = read(layout.esp_first, &mut esp0)
         && esp0[510] == 0x55 && esp0[511] == 0xAA && &esp0[82..87] == b"FAT32";
     // Provisioning must survive a remount (≈ reboot after installation).
     let want_host = alloc::format!("{}\n", cfg.hostname);
@@ -143,7 +256,7 @@ pub fn install_to_disk(dev: usize, cfg: &Config) -> bool {
     };
     let ok = gpt_ok && esp_ok && provisioned >= 4 && host_ok && user_ok;
     crate::serial_println!(
-        "[q1x3] EuroInstall → disk {dev} ({} MiB): GPT={gpt_ok} ESP-FAT32={esp_ok}; EuroFS root formatted + {provisioned} steps provisioned, after remount hostname='{}'={host_ok} user='{}'={user_ok} → {}",
+        "[q1x3] EuroInstall → {label} ({} MiB): GPT={gpt_ok} ESP-FAT32={esp_ok}; EuroFS root formatted + {provisioned} steps provisioned, after remount hostname='{}'={host_ok} user='{}'={user_ok} → {}",
         total * 512 / 1024 / 1024, cfg.hostname, cfg.username,
         if ok { "OK (bootable + provisioned installation from own media; boots standalone)" } else { "FAILED" }
     );

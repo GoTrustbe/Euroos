@@ -333,7 +333,30 @@ fn draw_sidebar(fb: &FrameBuffer, h: usize) {
 /// Wallpaper in the "desktop.html" reference look, in software pixels:
 /// 1) a cool→warm vertical gradient, 2) a soft EU-blue radial glow
 /// center-left, 3) a subtle dotted grid. Replaces the flat `clear()`.
+/// Cached wallpaper: the gradient + radial glow + dotted grid below cost a few
+/// million float ops (sqrtf per glow block) — cheap on real hardware but seconds
+/// of guest time under TCG, which made every full redraw (e.g. opening an app)
+/// stall and trip the deadman watchdog. It only depends on width/height, so we
+/// compute it once and restore it with a memcpy on every later frame.
+static WALLPAPER_CACHE: spin::Mutex<alloc::vec::Vec<u32>> = spin::Mutex::new(alloc::vec::Vec::new());
+
 fn draw_wallpaper(fb: &FrameBuffer) {
+    {
+        let cache = WALLPAPER_CACHE.lock();
+        if cache.len() == fb.width() * fb.height() {
+            fb.restore(&cache);
+            return;
+        }
+    }
+    // First time (or a resolution change): compute the expensive layer once.
+    // draw_wallpaper runs before anything else in render(), so after this the
+    // backbuffer holds only the wallpaper — snapshot it for reuse.
+    draw_wallpaper_compute(fb);
+    let mut cache = WALLPAPER_CACHE.lock();
+    fb.snapshot(&mut cache);
+}
+
+fn draw_wallpaper_compute(fb: &FrameBuffer) {
     let w = fb.width();
     let h = fb.height().max(1);
     // Diagonal gradient: cool blue-grey (top-left) → warm sand-beige
@@ -446,15 +469,26 @@ pub fn draw_status_panel(fb: &FrameBuffer, w: usize, _h: usize, hm: &str, date: 
     fb.fill_rounded_rect(tbx + 1, tby + 1, tb - 2, tb - 2, (tb - 2) / 2, Color::SURFACE);
     crate::icons::draw(fb, "moon", tbx + 8, tby + 8, 18, Color::TEXT_SEC);
 
-    // "Your device is safe" card (green).
+    // Security-summary card — HONEST: measured boot + full-disk encryption are
+    // sealed to a TPM, so we only assert them when a TPM is actually present.
+    // Without one (e.g. this QEMU image) FDE is skipped, so we claim only the
+    // capability sandbox, which is always on. Never show encryption that is off.
     let gy = py + 90;
     let gx = px + 14;
     let gw = PANEL_W - 28;
     let gh = 46usize;
-    fb.fill_rounded_rect(gx, gy, gw, gh, eds::RADIUS_M, Color::SUCCESS_SOFT);
-    crate::icons::draw(fb, "shieldCheck", gx + 12, gy + 12, 22, Color::SUCCESS);
-    crate::text::draw_px(fb, gx + 44, gy + 9, "Your device is safe", Color::INK, 13.0);
-    crate::text::draw_px(fb, gx + 44, gy + 26, "Verified boot \u{00B7} encrypted \u{00B7} sandboxed", Color::TEXT_SEC, 11.5);
+    let tpm = crate::tpm::present();
+    let (bg, fg, icon, head, sub): (Color, Color, &str, &str, &str) = if tpm {
+        (Color::SUCCESS_SOFT, Color::SUCCESS, "shieldCheck", "Your device is safe",
+         "Measured boot \u{00B7} encrypted \u{00B7} sandboxed")
+    } else {
+        (Color::SURFACE_3, Color::TEXT_SEC, "lock", "Capability-sandboxed",
+         "No TPM \u{2014} full-disk encryption needs one")
+    };
+    fb.fill_rounded_rect(gx, gy, gw, gh, eds::RADIUS_M, bg);
+    crate::icons::draw(fb, icon, gx + 12, gy + 12, 22, fg);
+    crate::text::draw_px(fb, gx + 44, gy + 9, head, Color::INK, 13.0);
+    crate::text::draw_px(fb, gx + 44, gy + 26, sub, Color::TEXT_SEC, 11.5);
 
     // ── Live system card (real, changing figures) ──
     let sy = py + ch + 12;

@@ -177,7 +177,7 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
     let cyt = y + 84;
     fb.fill_rounded_rect(cx, cyt, cw, 232, crate::eds::RADIUS_M, Color::CARD);
     fb.draw_border(cx, cyt, cw, 232, 1, Color::BORDER);
-    text::draw_px(fb, cx + 18, cyt + 16, "Configuration", Color::INK, 15.0);
+    text::draw_px(fb, cx + 18, cyt + 16, "Configuration (example)", Color::INK, 15.0);
     let rows = [
         ("Target disk", alloc::format!("{} GiB (GPT, A/B)", cfg.disk.total_bytes / (1024 * 1024 * 1024))),
         ("Language", cfg.locale.clone()),

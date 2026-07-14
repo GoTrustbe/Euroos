@@ -40,8 +40,13 @@ pub const XHCI_MSIX_VECTOR: u8 = 0x46; // xHCI event ring via MSI-X (J2)
 /// Number of received xHCI MSI-X interrupts (proves MSI-X delivery).
 pub static XHCI_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 pub const VIRTIO_BLK_MSIX_VECTOR: u8 = 0x47; // virtio-blk completion via MSI-X (J2)
+pub const NVME_MSIX_VECTOR: u8 = 0x48; // NVMe I/O completion via MSI-X (Metal M2-1)
+pub const SCI_VECTOR: u8 = 0x49; // ACPI SCI (power button etc.) — Metal M5-2
 /// Number of received virtio-blk completion MSI-X interrupts.
 pub static BLK_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Number of NVMe completion interrupts received via MSI-X (M2-1: proof of
+/// interrupt-driven NVMe completion; the data path polls, additive only).
+pub static NVME_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Per-CPU counter of received ping IPIs (proves cross-CPU signaling).
 pub static IPI_COUNT: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 /// Per-CPU counter of handled TLB shootdowns.
@@ -95,6 +100,7 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     }
     idt[KEYBOARD_VECTOR].set_handler_fn(keyboard_handler);
     idt[MOUSE_VECTOR].set_handler_fn(mouse_handler);
+    idt[SCI_VECTOR].set_handler_fn(sci_handler);
     // Per-CPU AP timer → the AP context-switch stub (per-CPU scheduler, sched.rs).
     // SAFETY: ap_stub_addr() is a valid interrupt handler in our (shared) CS.
     unsafe {
@@ -106,6 +112,7 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     idt[IPI_TLB_VECTOR].set_handler_fn(ipi_tlb_handler);
     idt[XHCI_MSIX_VECTOR].set_handler_fn(xhci_msix_handler);
     idt[VIRTIO_BLK_MSIX_VECTOR].set_handler_fn(blk_msix_handler);
+    idt[NVME_MSIX_VECTOR].set_handler_fn(nvme_msix_handler);
     // Harmless spurious handler (LAPIC vector 0xFF).
     idt[0xFF].set_handler_fn(spurious_handler);
     idt
@@ -161,6 +168,13 @@ extern "x86-interrupt" fn blk_msix_handler(_frame: InterruptStackFrame) {
     crate::apic::eoi();
 }
 
+/// NVMe completion via MSI-X (M2-1): counted as delivery proof; the driver's
+/// polling `wait()` consumes the actual completion entries.
+extern "x86-interrupt" fn nvme_msix_handler(_frame: InterruptStackFrame) {
+    NVME_MSIX_COUNT.fetch_add(1, Ordering::Relaxed);
+    crate::apic::eoi();
+}
+
 /// Number of handled keyboard IRQs (verification of the IO-APIC routing).
 pub static KBD_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -170,6 +184,19 @@ extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {
     let byte = unsafe { Port::<u8>::new(0x60).read() };
     crate::mouse::push_byte(byte);
     crate::apic::eoi();
+}
+
+/// ACPI SCI (M5-2): a fixed/GPE ACPI event. Today we act on the power button —
+/// a press performs a clean OS-controlled shutdown (ACPI S5) instead of a hard
+/// cut. Other SCI sources are acknowledged (status cleared by the source check)
+/// and ignored for now.
+extern "x86-interrupt" fn sci_handler(_frame: InterruptStackFrame) {
+    let power_button = crate::power::sci_is_power_button();
+    crate::apic::eoi();
+    if power_button {
+        crate::serial_println!("[acpi] power button pressed → clean ACPI S5 shutdown");
+        crate::power::shutdown();
+    }
 }
 
 /// Send End-Of-Interrupt for the timer (called from the scheduler).
@@ -204,6 +231,14 @@ pub fn route_io_apic(madt: &crate::acpi::Madt) {
     let mouse_gsi = madt.gsi_for(12);
     crate::apic::ioapic_route(madt.ioapic_addr, kbd_gsi, KEYBOARD_VECTOR, dest);
     crate::apic::ioapic_route(madt.ioapic_addr, mouse_gsi, MOUSE_VECTOR, dest);
+    // M5-2: the ACPI SCI (power button) — level-triggered, active-low. Enable
+    // the fixed power-button event, then route its GSI to the SCI handler.
+    if let Some(sci_int) = crate::power::enable_power_button() {
+        // SCI_INT from the FADT is a GSI; apply an ISA override if one exists.
+        let sci_gsi = if sci_int < 16 { madt.gsi_for(sci_int as u8) } else { sci_int as u32 };
+        crate::apic::ioapic_route_level_low(madt.ioapic_addr, sci_gsi, SCI_VECTOR, dest);
+        serial_println!("[acpi] power button armed → SCI GSI{} vec {:#x} (press = clean S5)", sci_gsi, SCI_VECTOR);
+    }
     serial_println!(
         "[ioapic] @ {:#x}: kbd IRQ1->GSI{} vec {:#x}, mouse IRQ12->GSI{} vec {:#x} -> BSP #{} (8259 masked)",
         madt.ioapic_addr, kbd_gsi, KEYBOARD_VECTOR, mouse_gsi, MOUSE_VECTOR, dest

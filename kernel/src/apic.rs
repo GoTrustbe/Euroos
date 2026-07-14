@@ -70,6 +70,19 @@ pub fn ioapic_route(ioapic_base: u32, gsi: u32, vector: u8, dest_apic: u8) {
     }
 }
 
+/// Route a GSI as **level-triggered, active-low** (the ACPI SCI convention).
+pub fn ioapic_route_level_low(ioapic_base: u32, gsi: u32, vector: u8, dest_apic: u8) {
+    let base = ioapic_base as u64;
+    let low = 0x10 + 2 * gsi;
+    let high = 0x11 + 2 * gsi;
+    unsafe {
+        ioapic_write(base, low, 1 << 16); // mask first
+        ioapic_write(base, high, (dest_apic as u32) << 24);
+        // vector | active-low polarity (bit13) | level trigger (bit15), unmasked.
+        ioapic_write(base, low, vector as u32 | (1 << 13) | (1 << 15));
+    }
+}
+
 /// End-Of-Interrupt to the Local APIC (the timer vector EOIs here instead of the PIC).
 #[inline]
 pub fn eoi() {

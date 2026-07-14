@@ -128,7 +128,7 @@ fn demo_writer_doc() -> Document {
     if let Body::Writer(b) = &mut d.body {
         b.push(Block::Paragraph(eurodoc::model::Paragraph::text("Sovereignty by design").styled("Heading1")));
         b.push(Block::Paragraph(eurodoc::model::Paragraph::text(
-            "EuroOS is the first fully sovereign European operating system, built from scratch in Rust. This document is opened in EuroSuite Writer and can be saved as .docx or .odt.")));
+            "EuroOS is the first fully sovereign European operating system, built from scratch in Rust. This is a read-only sample document rendered by EuroSuite Writer (editing/export not yet wired).")));
         b.push(Block::Paragraph(eurodoc::model::Paragraph::text("Core principles").styled("Heading2")));
         b.push(Block::Paragraph(
             eurodoc::model::Paragraph::new()
@@ -183,7 +183,7 @@ fn writer(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     }
     let words = doc.word_count();
     statusbar(fb, x, y, w, h, accent, "Page 1 of 1   ·   Dutch (nl-BE)",
-        &alloc::format!("{words} words   ·   .docx / .odt   ·   100%"));
+        &alloc::format!("{words} words   ·   sample document (read-only preview)   ·   100%"));
 }
 
 /// Draw `s` with simple word wrap; returns the new y.
@@ -321,7 +321,7 @@ fn calc(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
 
     let total = eurocalc::eval("=SUM(D2:D4)", &sheet).unwrap_or(0.0) as i64;
     statusbar(fb, x, y, w, h, accent, "Ready   ·   nl-BE",
-        &alloc::format!("Sum: {total}   ·   Cells: 17   ·   .xlsx / .ods   ·   100%"));
+        &alloc::format!("Sum: {total}   ·   sample workbook (live formula engine)   ·   100%"));
 }
 
 // ── Impress ──────────────────────────────────────────────────────────────────
@@ -394,7 +394,7 @@ fn impress(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     fb.fill_rect(slide_x + 44, slide_y + slide_h / 2 + 4, 90, 4, accent);
 
     statusbar(fb, x, y, w, h, accent, "Slide 1 of 4   ·   nl-BE",
-        "Presentation   ·   .pptx / .odp   ·   Click to present");
+        "Sample deck (preview)   ·   only slide 1 renders   ·   not yet interactive");
 }
 
 /// Truncate text to a pixel width with an ellipsis.

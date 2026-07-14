@@ -87,6 +87,46 @@ enum Object {
     Method { body: Vec<u8> },
 }
 
+/// Decoded ACPI battery status (from a `_BST` package), plus a percentage when
+/// a full/design capacity is known (from `_BIX`/`_BIF`). Metal M5-1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BatteryStatus {
+    pub charging: bool,       // _BST[0] bit1
+    pub discharging: bool,    // _BST[0] bit0
+    pub rate: u32,            // present rate (mW or mA, per _BIF power-unit)
+    pub remaining: u32,       // remaining capacity (mWh or mAh)
+    pub voltage_mv: u32,      // present voltage (mV)
+    pub percent: Option<u8>,  // remaining / last-full, if last-full is known
+}
+
+impl BatteryStatus {
+    /// Decode a `_BST` package `[state, present-rate, remaining, voltage]`.
+    /// `full` is the last-full capacity from `_BIX`/`_BIF` for the percentage.
+    pub fn from_bst(bst: &[AmlValue], full: Option<u64>) -> Option<BatteryStatus> {
+        if bst.len() < 4 {
+            return None;
+        }
+        let f = |i: usize| bst[i].as_int().unwrap_or(0);
+        let state = f(0);
+        let remaining = f(2) as u32;
+        // 0xFFFFFFFF = "unknown" per ACPI; treat as no percentage.
+        let percent = match full {
+            Some(fu) if fu != 0 && fu != 0xFFFF_FFFF && remaining != 0xFFFF_FFFF => {
+                Some(((remaining as u64 * 100 / fu).min(100)) as u8)
+            }
+            _ => None,
+        };
+        Some(BatteryStatus {
+            charging: state & 0b10 != 0,
+            discharging: state & 0b01 != 0,
+            rate: f(1) as u32,
+            remaining,
+            voltage_mv: f(3) as u32,
+            percent,
+        })
+    }
+}
+
 /// The parsed AML namespace: a flat map of 4-character names → object. (We
 /// ignore the scope hierarchy for the lookup; the last NameSeg is the key —
 /// enough for looking up methods like `_STA`/`_TMP` by name.)
@@ -128,6 +168,54 @@ impl AmlNamespace {
                 p.run_method(self)
             }
         }
+    }
+
+    // ── M5-1: ACPI power/battery helpers ──────────────────────────────────────
+
+    /// True when the DSDT declares an ACPI battery (a `_BST` method exists).
+    pub fn has_battery(&self) -> bool {
+        self.contains("_BST")
+    }
+
+    /// True when the DSDT declares an AC adapter (a `_PSR` method exists).
+    pub fn has_ac_adapter(&self) -> bool {
+        self.contains("_PSR")
+    }
+
+    /// True when the DSDT declares a lid switch (`_LID` method exists).
+    pub fn has_lid(&self) -> bool {
+        self.contains("_LID")
+    }
+
+    /// AC online? Evaluates `_PSR` (0 = on battery, 1 = on AC). `None` when the
+    /// method is absent or reads a value we can't evaluate statically (an
+    /// EC-backed `_PSR` needs an Embedded-Controller driver — deferred).
+    pub fn ac_online(&self) -> Option<bool> {
+        Some(self.evaluate("_PSR")?.as_int()? != 0)
+    }
+
+    /// Last-full (or design) battery capacity from `_BIX`/`_BIF`, for the
+    /// percentage. `_BIX` package: [rev, power-unit, design-cap, last-full, …];
+    /// `_BIF`: [power-unit, design-cap, last-full, …]. Prefer last-full.
+    pub fn battery_full_capacity(&self) -> Option<u64> {
+        if let Some(bix) = self.evaluate("_BIX").as_ref().and_then(|v| v.as_package().map(|p| p.to_vec())) {
+            // _BIX: last-full-charge capacity is field index 3.
+            return bix.get(3).and_then(|v| v.as_int()).filter(|&c| c != 0 && c != 0xFFFF_FFFF);
+        }
+        if let Some(bif) = self.evaluate("_BIF").as_ref().and_then(|v| v.as_package().map(|p| p.to_vec())) {
+            // _BIF: last-full-charge capacity is field index 2.
+            return bif.get(2).and_then(|v| v.as_int()).filter(|&c| c != 0 && c != 0xFFFF_FFFF);
+        }
+        None
+    }
+
+    /// Decoded battery status from `_BST` (+ `_BIX`/`_BIF` for the percentage).
+    /// `None` when `_BST` is absent or not statically evaluable (EC-backed
+    /// `_BST` reads Embedded-Controller fields — that needs an EC driver, which
+    /// is deferred; this decodes literal/computed `_BST` packages).
+    pub fn battery_status(&self) -> Option<BatteryStatus> {
+        let bst = self.evaluate("_BST")?;
+        BatteryStatus::from_bst(bst.as_package()?, self.battery_full_capacity())
     }
 }
 
@@ -581,6 +669,78 @@ mod tests {
         let aml = enc::method("_TMP", &enc::ret(&expr));
         let ns = AmlNamespace::parse(&aml);
         assert_eq!(ns.evaluate("_TMP").and_then(|v| v.as_int()), Some(0x0BB8));
+    }
+
+    #[test]
+    fn battery_status_decode_discharging() {
+        // A battery Device (M5-1): _BST returns [state=1(discharging), rate=2000,
+        // remaining=8000, voltage=12000] and _BIF gives last-full=10000.
+        // Device(BAT0) { Name(_BIF, Package{...}) Method(_BST){Return(Package{...})} }
+        let bif = enc::name_def(
+            "_BIF",
+            &enc::package(&[
+                enc::int(0),     // power unit
+                enc::int(10000), // design capacity
+                enc::int(10000), // last-full capacity (index 2)
+                enc::int(1),     // technology
+            ]),
+        );
+        let bst = enc::method(
+            "_BST",
+            &enc::ret(&enc::package(&[
+                enc::int(1),     // state: discharging
+                enc::int(2000),  // present rate
+                enc::int(8000),  // remaining capacity
+                enc::int(12000), // present voltage
+            ])),
+        );
+        let mut inner = bif;
+        inner.extend_from_slice(&bst);
+        let mut dev = alloc::vec![EXT_OP_PREFIX, EXT_DEVICE];
+        let mut body = enc::name("BAT0");
+        body.extend_from_slice(&inner);
+        dev.extend_from_slice(&enc::pkg_length(body.len()));
+        dev.extend_from_slice(&body);
+        let ns = AmlNamespace::parse(&dev);
+
+        assert!(ns.has_battery());
+        assert!(!ns.has_ac_adapter());
+        assert_eq!(ns.battery_full_capacity(), Some(10000));
+        let b = ns.battery_status().unwrap();
+        assert!(b.discharging && !b.charging);
+        assert_eq!(b.rate, 2000);
+        assert_eq!(b.remaining, 8000);
+        assert_eq!(b.voltage_mv, 12000);
+        assert_eq!(b.percent, Some(80)); // 8000 / 10000
+    }
+
+    #[test]
+    fn ac_adapter_online() {
+        // Method(_PSR) { Return(1) } → AC online.
+        let ns = AmlNamespace::parse(&enc::method("_PSR", &enc::ret(&enc::int(1))));
+        assert!(ns.has_ac_adapter());
+        assert_eq!(ns.ac_online(), Some(true));
+        let off = AmlNamespace::parse(&enc::method("_PSR", &enc::ret(&enc::int(0))));
+        assert_eq!(off.ac_online(), Some(false));
+    }
+
+    #[test]
+    fn battery_unknown_capacity_no_percent() {
+        // remaining = 0xFFFFFFFF (unknown) → no percentage, still decodes.
+        let bst = enc::method(
+            "_BST",
+            &enc::ret(&enc::package(&[
+                enc::int(2),          // charging
+                enc::int(0),
+                enc::int(0xFFFF_FFFF),
+                enc::int(11100),
+            ])),
+        );
+        let ns = AmlNamespace::parse(&bst);
+        let b = ns.battery_status().unwrap();
+        assert!(b.charging && !b.discharging);
+        assert_eq!(b.percent, None);
+        assert_eq!(b.voltage_mv, 11100);
     }
 
     #[test]

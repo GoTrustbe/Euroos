@@ -9,8 +9,9 @@ every binary signature check, and every network call. Zero telemetry. Licensed
 under the **European Union Public Licence (EUPL) v1.2**.
 
 > ⚠️ **Alpha preview.** EuroOS boots to a working desktop with real networking and
-> on-disk persistence, and **793 host tests** pass. It is something to study,
-> build on, and experiment with — not yet a daily-driver OS.
+> on-disk persistence, installs to and boots from an NVMe/SATA disk, and **987 host
+> tests** pass. It is something to study, build on, and experiment with — not yet a
+> daily-driver OS.
 
 **Try it without building:** one-click QEMU / VirtualBox / cloud images at
 **[euro-os.eu/try](https://euro-os.eu/try/)**. With hardware virtualization it
@@ -41,6 +42,22 @@ boots in ~1–2 seconds.
   stateful **firewall**, and a forward-secret **VPN** (X25519 + ChaCha20-Poly1305).
 - **EuroDesktop** — a windowed compositor (z-order, dragging, PS/2 + USB input),
   an interactive shell, a GNU-compatible **coreutils** set, and a live display server.
+
+**Modern hardware ("Metal") — matrix-verified**
+- **Boots and installs on a modern machine**: ECAM PCIe config, from-scratch
+  **NVMe** and **AHCI/SATA** class drivers, and **install-to-and-boot-from
+  NVMe or SATA** (a modern, NVMe-only laptop boots standalone from its disk).
+- **Networking on real NICs**: Intel **e1000/e1000e**, plus **USB ethernet**
+  (CDC-ECM) for dongles and phone tethering.
+- **USB done right**: hub enumeration, HID report-descriptor parsing (arbitrary
+  keyboards/mice/touchpads), and **USB audio** (UAC1) alongside Intel HDA.
+- **ACPI** power button (clean shutdown) and battery/AC readout; **TPM 2.0**
+  over both the TIS and CRB (firmware-TPM / fTPM / PTT) interfaces.
+- **Driverless peripherals**: printing over **IPP Everywhere** and scanning over
+  **eSCL/AirScan** — a protocol, no per-vendor driver. See
+  [`docs/SUPPORT-POLICY.md`](docs/SUPPORT-POLICY.md).
+- **Plays DOOM** — the real 1993 engine as an unmodified userspace binary
+  ([write-up](https://euro-os.eu/blog/doom-on-euroos/)).
 
 **Sovereign identity & Zero-Trust security**
 - **EuroID** — sovereign user management with memory-hard **Argon2id** credentials

@@ -60,6 +60,59 @@ pub fn shutdown() -> ! {
     }
 }
 
+// ── M5-2: ACPI events (power button) ──────────────────────────────────────────
+//
+// A laptop's power button is a "fixed feature" ACPI event: pressing it sets
+// PWRBTN_STS (bit 8) in the PM1 status register and raises the SCI interrupt.
+// We enter ACPI mode (if the firmware asks), enable the power-button event and
+// route the SCI so the press performs a clean OS-controlled shutdown instead of
+// a hard power cut. QEMU's `system_powerdown` drives exactly this path.
+
+const PM1_PWRBTN_STS: u16 = 1 << 8;
+const PM1_PWRBTN_EN: u16 = 1 << 8;
+
+static PM1A_STS_PORT: AtomicU32 = AtomicU32::new(0);
+
+/// Enable ACPI power-button event delivery. Returns the SCI GSI to route, or
+/// `None` when the firmware exposes no PM1 event block.
+pub fn enable_power_button() -> Option<u16> {
+    let f = crate::acpi::fadt()?;
+    if f.pm1a_evt == 0 || f.pm1_evt_len == 0 {
+        return None;
+    }
+    let sts_port = f.pm1a_evt;
+    let en_port = f.pm1a_evt + (f.pm1_evt_len / 2) as u16;
+    PM1A_STS_PORT.store(sts_port as u32, Ordering::Relaxed);
+    unsafe {
+        // Enter ACPI mode if the firmware uses a legacy/ACPI toggle (SMI_CMD).
+        if f.smi_cmd != 0 && f.acpi_enable != 0 {
+            Port::<u8>::new(f.smi_cmd as u16).write(f.acpi_enable);
+        }
+        // Clear a stale power-button status, then enable the event.
+        Port::<u16>::new(sts_port).write(PM1_PWRBTN_STS);
+        let en = Port::<u16>::new(en_port).read();
+        Port::<u16>::new(en_port).write(en | PM1_PWRBTN_EN);
+    }
+    Some(f.sci_int)
+}
+
+/// Called from the SCI interrupt handler. Returns true when the power button was
+/// the source (status cleared); the caller then performs the shutdown.
+pub fn sci_is_power_button() -> bool {
+    let sts_port = PM1A_STS_PORT.load(Ordering::Relaxed) as u16;
+    if sts_port == 0 {
+        return false;
+    }
+    unsafe {
+        let sts = Port::<u16>::new(sts_port).read();
+        if sts & PM1_PWRBTN_STS != 0 {
+            Port::<u16>::new(sts_port).write(PM1_PWRBTN_STS); // write-1-clear
+            return true;
+        }
+    }
+    false
+}
+
 /// Restart the system. Uses the FADT reset register if supported,
 /// otherwise the PCI reset port 0xCF9 and finally the keyboard controller (0xFE).
 pub fn reboot() -> ! {

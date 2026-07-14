@@ -58,6 +58,7 @@ const TRB_NORMAL: u32 = 1;
 const TRB_SETUP: u32 = 2;
 const TRB_DATA: u32 = 3;
 const TRB_STATUS: u32 = 4;
+const TRB_ISOCH: u32 = 5;
 const TRB_LINK: u32 = 6;
 const TRB_ENABLE_SLOT: u32 = 9;
 const TRB_ADDRESS_DEVICE: u32 = 11;
@@ -167,9 +168,14 @@ struct HidDevice {
     ring: Ring,
     buf: u64, // 8-byte report buffer (interrupt transfers land here)
     is_keyboard: bool,
+    is_abs_pointer: bool, // usb-tablet / touchscreen: absolute X/Y report
     kb: eurousb::BootKeyboard,
     prev_mods: u8,
     armed: bool,
+    last_arm: u64, // tick of the last endpoint (re-)arm — for idle re-arming
+    // M4-2: layout parsed from the device's HID report descriptor (report-
+    // protocol pointers). None = boot-protocol/fallback fixed layout.
+    map: Option<eurousb::InputMap>,
 }
 
 #[inline]
@@ -236,6 +242,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
             return false;
         }
     };
+    pci::claim(dev.bus, dev.dev, dev.func, "xhci"); // hwprobe (M1-3)
     // 64-bit MMIO-BAR0 (BAR0 lo + BAR1 hi); mask type bits.
     let bar0 = dev.bar(0);
     let mmio = if bar0 & 0x6 == 0x4 {
@@ -419,6 +426,25 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
     }
     let psc = r32(portsc(x, port));
     let speed = (psc >> 10) & 0xF;
+    // A root-port device has an empty route string and no parent hub.
+    enumerate_device(falloc, port, 0, speed, None, 0)
+}
+
+/// Address + configure one USB device (M4-1: shared by root ports and hub
+/// downstream ports). `route` is the xHCI route string (one 4-bit hub-port
+/// nibble per tier); `parent` = (hub slot, hub port, hub speed) when the
+/// device sits behind a hub — needed for the TT fields when a low/full-speed
+/// device hangs off a high-speed hub.
+unsafe fn enumerate_device(
+    falloc: &mut FrameAllocator,
+    root_port: u8,
+    route: u32,
+    speed: u32,
+    parent: Option<(u8, u8, u32)>,
+    depth: u8,
+) -> bool {
+    let xp = core::ptr::addr_of_mut!(XHCI);
+    let x = (*xp).as_mut().unwrap();
     let max_pkt0: u16 = match speed {
         2 => 8,    // Low-speed
         4 | 5 => 512, // Super(Plus)-speed
@@ -429,12 +455,12 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
     let (cc, slot) = match run_command(x, 0, 0, TRB_ENABLE_SLOT << 10) {
         Some(v) => v,
         None => {
-            crate::serial_println!("[xhci] port {port}: Enable-Slot timeout");
+            crate::serial_println!("[xhci] port {root_port}: Enable-Slot timeout");
             return false;
         }
     };
     if cc != CC_SUCCESS || slot == 0 {
-        crate::serial_println!("[xhci] port {port}: Enable-Slot cc={cc}");
+        crate::serial_println!("[xhci] port {root_port}: Enable-Slot cc={cc}");
         return false;
     }
 
@@ -448,11 +474,21 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
     let ep0_ring_frame = falloc.allocate().expect("xhci ep0-ring");
     let mut ep0_ring = Ring::new(ep0_ring_frame);
 
+    // TT fields (slot-context DW2): only a LS/FS device behind a HS hub needs
+    // the hub's slot/port for split transactions.
+    let tt = match parent {
+        Some((hub_slot, hub_port, hub_speed)) if hub_speed == 3 && (speed == 1 || speed == 2) => {
+            (hub_slot as u32) | ((hub_port as u32) << 8)
+        }
+        _ => 0,
+    };
+
     build_input_context(in_ctx, cs, 0b11, |slot_ctx, ep_ctxs| {
-        // Slot context: context-entries=1, speed, root-hub port = `port`.
-        w32(slot_ctx, (1 << 27) | (speed << 20));
-        w32(slot_ctx + 4, (port as u32) << 16);
-        // EP0 context (interrupt? no, Control type=4), max-packet, TR-dequeue.
+        // Slot context: route string, context-entries=1, speed, root-hub port.
+        w32(slot_ctx, (route & 0xF_FFFF) | (1 << 27) | (speed << 20));
+        w32(slot_ctx + 4, (root_port as u32) << 16);
+        w32(slot_ctx + 8, tt);
+        // EP0 context (Control type=4), max-packet, TR-dequeue.
         let ep0 = ep_ctxs; // DCI 1 = first endpoint context
         w32(ep0 + 4, (4 << 3) | (3 << 1) | ((max_pkt0 as u32) << 16)); // type=Control, CErr=3
         w64(ep0 + 8, ep0_ring_frame | 1); // TR-dequeue | DCS
@@ -463,7 +499,7 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
     let (cc, _) = run_command(x, in_ctx as u32, (in_ctx >> 32) as u32, (TRB_ADDRESS_DEVICE << 10) | ((slot as u32) << 24))
         .unwrap_or((0, 0));
     if cc != CC_SUCCESS {
-        crate::serial_println!("[xhci] port {port}/slot {slot}: Address-Device cc={cc}");
+        crate::serial_println!("[xhci] port {root_port}/slot {slot}: Address-Device cc={cc}");
         return false;
     }
 
@@ -486,7 +522,8 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
         }
     };
     crate::serial_println!(
-        "[xhci] slot {slot} port {port}: USB {:x}.{:x} device {:04x}:{:04x}",
+        "[xhci] slot {slot} port {root_port}{}: USB {:x}.{:x} device {:04x}:{:04x}",
+        if route != 0 { " (behind hub)" } else { "" },
         dd.usb_version >> 8, (dd.usb_version >> 4) & 0xF, dd.vendor, dd.product
     );
 
@@ -511,28 +548,85 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
         None => return false,
     };
 
+    // A hub (device class 9): power its ports and enumerate what hangs off
+    // them (M4-1). Bounded depth so a misbehaving topology can't recurse away.
+    if dd.class == 0x09 {
+        if depth >= 2 {
+            crate::serial_println!("[xhci] slot {slot}: hub depth limit reached — skipped");
+            return false;
+        }
+        return setup_hub(falloc, slot, root_port, route, speed, cfg.value, &mut ep0_ring, in_ctx, cs, buf, depth);
+    }
+
     // Mass storage (USB disk) takes priority: configure the bulk endpoints + SCSI.
     if let Some(iface) = cfg.interfaces.iter().find(|i| i.is_mass_storage_bot()) {
-        return setup_mass_storage(x, falloc, slot, port, speed, cfg.value, iface, &mut ep0_ring, in_ctx, cs, buf);
+        return setup_mass_storage(x, falloc, slot, root_port, speed, cfg.value, iface, &mut ep0_ring, in_ctx, cs, buf);
+    }
+
+    // CDC-ECM USB ethernet (M3-3). QEMU's usb-net (and some real dongles) put
+    // RNDIS in the FIRST configuration and CDC-ECM in the SECOND — check the
+    // current config, then walk the others.
+    {
+        let mut ecm_cfg = None;
+        let has_ecm = |c: &eurousb::Configuration| {
+            c.interfaces.iter().any(|i| i.class == 0x02 && i.subclass == 0x06)
+        };
+        if has_ecm(&cfg) {
+            ecm_cfg = Some((cfg.clone(), total));
+        } else {
+            for ci in 1..dd.num_configurations.min(4) as u16 {
+                if !control_in(x, slot, &mut ep0_ring, 0x80, 6, 0x0200 | ci, 0, 9, buf) {
+                    break;
+                }
+                let t = {
+                    let b = core::slice::from_raw_parts(buf as *const u8, 9);
+                    u16::from_le_bytes([b[2], b[3]])
+                }
+                .min(512);
+                if !control_in(x, slot, &mut ep0_ring, 0x80, 6, 0x0200 | ci, 0, t, buf) {
+                    break;
+                }
+                let c = {
+                    let bytes = core::slice::from_raw_parts(buf as *const u8, t as usize);
+                    eurousb::Configuration::parse(bytes)
+                };
+                if let Some(c) = c {
+                    if has_ecm(&c) {
+                        ecm_cfg = Some((c, t));
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some((ecm, raw_len)) = ecm_cfg {
+            return setup_usbnet(x, falloc, slot, root_port, route, speed, tt, &ecm, raw_len, &mut ep0_ring, in_ctx, cs, buf);
+        }
+    }
+
+    // USB audio (M4-3): an AudioStreaming interface (class 1, subclass 2) with
+    // an isochronous OUT endpoint in an alternate setting.
+    if cfg.interfaces.iter().any(|i| i.class == 0x01 && i.subclass == 0x02) {
+        return setup_usbaudio(x, falloc, slot, root_port, route, speed, tt, &cfg, total, &mut ep0_ring, in_ctx, cs, buf);
     }
 
     // Look for a HID boot interface (keyboard or mouse) + its interrupt-IN endpoint.
-    let mut chosen: Option<(bool, u8, u8, u16, u8)> = None; // (is_kbd, iface, ep_addr, max_pkt, interval)
+    let mut chosen: Option<(bool, bool, u8, u8, u16, u8)> = None; // (is_kbd, is_abs, iface, ep_addr, max_pkt, interval)
     for iface in &cfg.interfaces {
         let kbd = iface.is_boot_keyboard();
         let mouse = iface.is_boot_mouse();
-        if !(kbd || mouse) {
+        let abs = iface.is_hid_absolute_pointer(); // usb-tablet / touchscreen
+        if !(kbd || mouse || abs) {
             continue;
         }
         if let Some(ep) = iface.endpoints.iter().find(|e| e.is_in() && (e.attributes & 0x03) == 0x03) {
-            chosen = Some((kbd, iface.number, ep.address, ep.max_packet, ep.interval));
+            chosen = Some((kbd, abs, iface.number, ep.address, ep.max_packet, ep.interval));
             break;
         }
     }
-    let (is_kbd, iface_num, ep_addr, ep_pkt, ep_interval) = match chosen {
+    let (is_kbd, is_abs, iface_num, ep_addr, ep_pkt, ep_interval) = match chosen {
         Some(c) => c,
         None => {
-            crate::serial_println!("[xhci] slot {slot}: no HID boot interface");
+            crate::serial_println!("[xhci] slot {slot}: no HID input interface");
             return false;
         }
     };
@@ -541,6 +635,28 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
     if !control_no_data(x, slot, &mut ep0_ring, 0x00, 9, cfg.value as u16, 0) {
         crate::serial_println!("[xhci] slot {slot}: SET_CONFIGURATION failed");
         return false;
+    }
+
+    // M4-2: report-protocol devices (the absolute pointer) describe their
+    // report layout in a HID report descriptor — fetch + parse it so decoding
+    // follows the device instead of a hardcoded format. 256 bytes is plenty
+    // for pointer descriptors; the device short-terminates.
+    let mut input_map: Option<eurousb::InputMap> = None;
+    if is_abs {
+        if control_in(x, slot, &mut ep0_ring, 0x81, 6, 0x2200, iface_num as u16, 256, buf) {
+            let d = core::slice::from_raw_parts(buf as *const u8, 256);
+            input_map = eurousb::parse_report_descriptor(d);
+            if let Some(m) = &input_map {
+                crate::serial_println!(
+                    "[xhci] slot {slot}: HID report descriptor parsed — X {}@{} bits, Y @{}, {} button(s), max {}",
+                    if m.x.unwrap().relative { "rel" } else { "abs" },
+                    m.x.unwrap().bit_off, m.y.unwrap().bit_off, m.buttons_n,
+                    m.x.unwrap().logical_max
+                );
+            } else {
+                crate::serial_println!("[xhci] slot {slot}: report descriptor not a pointer map — fallback layout");
+            }
+        }
     }
 
     // Configure Endpoint: add the interrupt-IN endpoint to the device context.
@@ -552,8 +668,9 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
 
     build_input_context(in_ctx, cs, 1 | (1 << ep_dci), |slot_ctx, ep_ctxs| {
         // Slot context: bump context-entries up to the highest DCI.
-        w32(slot_ctx, (((ep_dci as u32) & 0x1F) << 27) | (speed << 20));
-        w32(slot_ctx + 4, (port as u32) << 16);
+        w32(slot_ctx, (route & 0xF_FFFF) | (((ep_dci as u32) & 0x1F) << 27) | (speed << 20));
+        w32(slot_ctx + 4, (root_port as u32) << 16);
+        w32(slot_ctx + 8, tt);
         // The interrupt-IN endpoint context at DCI `ep_dci`.
         let epc = ep_ctxs + (ep_dci as u64 - 1) * cs;
         let interval = encode_interval(speed, ep_interval);
@@ -569,8 +686,11 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
         return false;
     }
 
-    // SET_PROTOCOL(boot=0) on the HID interface (class request 0x21/0x0B).
-    let _ = control_no_data(x, slot, &mut ep0_ring, 0x21, 0x0B, 0, iface_num as u16);
+    // SET_PROTOCOL(boot=0) on boot keyboards/mice only. The usb-tablet has no
+    // boot protocol; it stays in report protocol (its native absolute format).
+    if !is_abs {
+        let _ = control_no_data(x, slot, &mut ep0_ring, 0x21, 0x0B, 0, iface_num as u16);
+    }
 
     // Register the device + arm the first interrupt-IN transfer.
     let report_buf = falloc.allocate().expect("xhci report-buf");
@@ -581,14 +701,18 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
         ring: ep_ring,
         buf: report_buf,
         is_keyboard: is_kbd,
+        is_abs_pointer: is_abs,
         kb: eurousb::BootKeyboard::new(),
         prev_mods: 0,
         armed: false,
+        last_arm: 0,
+        map: input_map,
     };
     arm_interrupt(x, &mut hid);
     crate::serial_println!(
-        "[xhci] slot {slot}: HID-boot {} configured (ep DCI {ep_dci}, interval {ep_interval}) → live",
-        if is_kbd { "keyboard" } else { "mouse" }
+        "[xhci] slot {slot}: HID {} configured (ep DCI {ep_dci}, interval {ep_interval}){} → live",
+        if is_kbd { "keyboard" } else if is_abs { "tablet (absolute)" } else { "mouse" },
+        if route != 0 { " via hub" } else { "" }
     );
     for s in (*core::ptr::addr_of_mut!(HIDS)).iter_mut() {
         if s.is_none() {
@@ -597,6 +721,105 @@ unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
         }
     }
     true
+}
+
+/// Bring up a hub (M4-1): mark the slot as a hub, power the downstream ports,
+/// reset whatever is connected and enumerate it with the extended route string.
+#[allow(clippy::too_many_arguments)]
+unsafe fn setup_hub(
+    falloc: &mut FrameAllocator,
+    slot: u8,
+    root_port: u8,
+    route: u32,
+    hub_speed: u32,
+    cfg_value: u8,
+    ep0_ring: &mut Ring,
+    in_ctx: u64,
+    cs: u64,
+    buf: u64,
+    depth: u8,
+) -> bool {
+    let xp = core::ptr::addr_of_mut!(XHCI);
+    let x = (*xp).as_mut().unwrap();
+
+    if !control_no_data(x, slot, ep0_ring, 0x00, 9, cfg_value as u16, 0) {
+        crate::serial_println!("[xhci] hub slot {slot}: SET_CONFIGURATION failed");
+        return false;
+    }
+    // Hub class descriptor (0x29): bNbrPorts at offset 2.
+    if !control_in(x, slot, ep0_ring, 0xA0, 6, 0x2900, 0, 9, buf) {
+        crate::serial_println!("[xhci] hub slot {slot}: hub descriptor failed");
+        return false;
+    }
+    let nports = core::slice::from_raw_parts(buf as *const u8, 9)[2].min(8);
+
+    // Tell the controller this slot is a hub (slot-context HUB bit + port
+    // count) — required for downstream addressing/TT handling.
+    build_input_context(in_ctx, cs, 0b1, |slot_ctx, _| {
+        w32(slot_ctx, (route & 0xF_FFFF) | (1 << 27) | (hub_speed << 20) | (1 << 26));
+        w32(slot_ctx + 4, ((root_port as u32) << 16) | ((nports as u32) << 24));
+    });
+    let _ = run_command(x, in_ctx as u32, (in_ctx >> 32) as u32, (TRB_CONFIGURE_ENDPOINT << 10) | ((slot as u32) << 24));
+
+    crate::serial_println!("[xhci] hub slot {slot}: {nports} port(s) — powering + scanning");
+    let mut found = false;
+    for p in 1..=nports as u16 {
+        // SET_FEATURE(PORT_POWER), settle, then read the port status.
+        let _ = control_no_data(x, slot, ep0_ring, 0x23, 3, 8, p);
+        for _ in 0..3_000_000u64 {
+            core::hint::spin_loop();
+        }
+        if !control_in(x, slot, ep0_ring, 0xA3, 0, 0, p, 4, buf) {
+            continue;
+        }
+        let st = core::slice::from_raw_parts(buf as *const u8, 4);
+        let status = u16::from_le_bytes([st[0], st[1]]);
+        if status & 1 == 0 {
+            continue; // no device on this hub port
+        }
+        // Reset the port; poll until the reset-change bit reports completion.
+        let _ = control_no_data(x, slot, ep0_ring, 0x23, 3, 4, p);
+        let mut child_status = 0u16;
+        for _ in 0..40 {
+            for _ in 0..1_000_000u64 {
+                core::hint::spin_loop();
+            }
+            if !control_in(x, slot, ep0_ring, 0xA3, 0, 0, p, 4, buf) {
+                break;
+            }
+            let st = core::slice::from_raw_parts(buf as *const u8, 4);
+            let change = u16::from_le_bytes([st[2], st[3]]);
+            child_status = u16::from_le_bytes([st[0], st[1]]);
+            if change & (1 << 4) != 0 {
+                // C_PORT_RESET: acknowledge it (+ the connect change).
+                let _ = control_no_data(x, slot, ep0_ring, 0x23, 1, 20, p);
+                let _ = control_no_data(x, slot, ep0_ring, 0x23, 1, 16, p);
+                break;
+            }
+        }
+        if child_status & 2 == 0 {
+            crate::serial_println!("[xhci] hub slot {slot} port {p}: reset did not enable — skipped");
+            continue;
+        }
+        // Child speed from the hub port status (LS bit9, HS bit10, else FS).
+        let child_speed = if child_status & (1 << 9) != 0 {
+            2 // low
+        } else if child_status & (1 << 10) != 0 {
+            3 // high
+        } else {
+            1 // full
+        };
+        // Extend the route string: this tier's nibble carries the hub port.
+        let nibble_shift = 4 * depth;
+        let child_route = route | ((p as u32 & 0xF) << nibble_shift);
+        crate::serial_println!(
+            "[xhci] hub slot {slot} port {p}: device (speed {child_speed}) → enumerating (route {child_route:#x})"
+        );
+        if enumerate_device(falloc, root_port, child_route, child_speed, Some((slot, p as u8, hub_speed)), depth + 1) {
+            found = true;
+        }
+    }
+    found
 }
 
 /// Encode the xHCI endpoint interval (logarithmic) from the USB bInterval.
@@ -676,12 +899,41 @@ unsafe fn control_no_data(
     control_in(x, slot, ep0, bm_request_type, b_request, w_value, w_index, 0, 0)
 }
 
+/// A control transfer with an OUT data stage (e.g. the UAC SET_CUR sampling
+/// frequency, M4-3). `buf` holds `len` bytes to send to the device.
+#[allow(clippy::too_many_arguments)]
+unsafe fn control_out(
+    x: &mut Xhci,
+    slot: u8,
+    ep0: &mut Ring,
+    bm_request_type: u8,
+    b_request: u8,
+    w_value: u16,
+    w_index: u16,
+    len: u16,
+    buf: u64,
+) -> bool {
+    let setup_lo = (bm_request_type as u32) | ((b_request as u32) << 8) | ((w_value as u32) << 16);
+    let setup_hi = (w_index as u32) | ((len as u32) << 16);
+    // TRT = 2: OUT data stage follows.
+    ep0.push(setup_lo, setup_hi, 8, (TRB_SETUP << 10) | (1 << 6) | (2 << 16)); // IDT=1
+    ep0.push(buf as u32, (buf >> 32) as u32, len as u32, TRB_DATA << 10); // DIR=OUT
+    // Status stage: IN (opposite of the data direction), IOC.
+    ep0.push(0, 0, 0, (TRB_STATUS << 10) | (1 << 5) | (1 << 16));
+    doorbell(x, slot, 1);
+    match wait_event(x, TRB_EVT_TRANSFER, 20_000_000) {
+        Some(ev) => ((ev[2] >> 24) & 0xFF) == CC_SUCCESS,
+        None => false,
+    }
+}
+
 /// Place a Normal-TRB on the interrupt-IN ring (8-byte report) + ring the doorbell.
 unsafe fn arm_interrupt(x: &Xhci, hid: &mut HidDevice) {
     core::ptr::write_bytes(hid.buf as *mut u8, 0, 8);
     hid.ring.push(hid.buf as u32, (hid.buf >> 32) as u32, 8, (TRB_NORMAL << 10) | (1 << 5)); // IOC
     doorbell(x, hid.slot, hid.ep_dci as u32);
     hid.armed = true;
+    hid.last_arm = crate::interrupts::ticks();
 }
 
 /// Called by the desktop loop: harvest incoming interrupt transfers and
@@ -749,6 +1001,33 @@ fn poll_inner() {
             if ttype != TRB_EVT_TRANSFER {
                 continue;
             }
+            // CDC-ECM traffic (M3-3): queue completed receives, release TX.
+            if let Some(n) = (*core::ptr::addr_of_mut!(USBNET)).as_mut() {
+                if slot == n.slot && ep_id == n.in_dci as u32 {
+                    if cc == CC_SUCCESS || cc == 13 {
+                        // Event status bits 0..23 = REMAINING transfer length.
+                        let got = 2048usize.saturating_sub((r32(trb + 8) & 0xFF_FFFF) as usize);
+                        let src = n.rx_bufs[n.rx_deq % USBNET_RX_BUFS];
+                        if got > 0 && got <= 2048 {
+                            let mut f = alloc::vec![0u8; got];
+                            core::ptr::copy_nonoverlapping(src as *const u8, f.as_mut_ptr(), got);
+                            x86_64::instructions::interrupts::without_interrupts(|| {
+                                let mut q = USBNET_RX.lock();
+                                if q.len() >= 64 {
+                                    q.pop_front(); // drop oldest under overload
+                                }
+                                q.push_back(f);
+                            });
+                        }
+                        usbnet_rearm_one(x, n);
+                    }
+                    continue;
+                }
+                if slot == n.slot && ep_id == n.out_dci as u32 {
+                    USBNET_TX_BUSY.store(false, core::sync::atomic::Ordering::Release);
+                    continue;
+                }
+            }
             // Find the HID device that belongs to (slot, ep_id).
             let hids = core::ptr::addr_of_mut!(HIDS);
             for s in (*hids).iter_mut() {
@@ -763,13 +1042,15 @@ fn poll_inner() {
                                 REPORTS_LOGGED += 1;
                                 crate::serial_println!(
                                     "[xhci-rpt] slot {} {}: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
-                                    slot, if hid.is_keyboard { "kbd" } else { "mouse" },
+                                    slot, if hid.is_keyboard { "kbd" } else if hid.is_abs_pointer { "tablet" } else { "mouse" },
                                     report[0], report[1], report[2], report[3],
                                     report[4], report[5], report[6], report[7]
                                 );
                             }
                             if hid.is_keyboard {
                                 inject_keyboard(hid, report);
+                            } else if hid.is_abs_pointer {
+                                inject_pointer(hid, report);
                             } else {
                                 inject_mouse(report);
                             }
@@ -815,6 +1096,31 @@ fn inject_mouse(report: &[u8]) {
     }
 }
 
+/// Translate a report-protocol pointer report into cursor position + buttons.
+/// M4-2: decode via the device's parsed report descriptor when available
+/// (layout + logical range straight from the device); otherwise fall back to
+/// the fixed usb-tablet layout.
+fn inject_pointer(hid: &HidDevice, report: &[u8]) {
+    if let Some(m) = &hid.map {
+        if let Some((x, y, buttons, absolute)) = m.decode(report) {
+            if absolute {
+                // Rescale the device's logical range to the 0..0x7FFF the
+                // cursor math expects.
+                let lmax = m.x.map(|f| f.logical_max).unwrap_or(0x7FFF).max(1);
+                let sx = (x.clamp(0, lmax) as i64 * 0x7FFF / lmax as i64) as u16;
+                let sy = (y.clamp(0, lmax) as i64 * 0x7FFF / lmax as i64) as u16;
+                crate::mouse::apply_usb_abs(sx, sy, buttons);
+            } else {
+                crate::mouse::apply_usb(x, y, buttons);
+            }
+            return;
+        }
+    }
+    if let Some(a) = eurousb::parse_tablet(report) {
+        crate::mouse::apply_usb_abs(a.x, a.y, a.buttons);
+    }
+}
+
 /// USB-HID usage id (Keyboard/Keypad page) → PS/2 scancode-set-1 make code.
 fn hid_to_set1(usage: u8) -> Option<u8> {
     Some(match usage {
@@ -852,6 +1158,167 @@ struct MassStorage {
     last_lba: u32,
 }
 static mut MASS: Option<MassStorage> = None;
+
+/// A CDC-ECM USB network function (M3-3): bulk pipes carrying raw ethernet
+/// frames. This is the class real USB-ethernet dongles and phone tethering
+/// speak (ECM here; NCM is framing on top — later if needed).
+const USBNET_RX_BUFS: usize = 8; // in-flight receive buffers (burst tolerance)
+
+/// A configured USB Audio (UAC1) playback endpoint kept alive so the audio
+/// layer can stream into it (M4-3 live wiring, not just the one-shot proof).
+struct UsbAudio {
+    slot: u8,
+    ep_dci: u8,
+    ring: Ring,
+    buf: u64,      // contiguous DMA staging buffer for isoch packets
+    buf_bytes: usize,
+}
+
+static mut USBAUDIO: Option<UsbAudio> = None;
+
+pub fn usbaudio_present() -> bool {
+    unsafe { (*core::ptr::addr_of!(USBAUDIO)).is_some() }
+}
+
+/// Stream a stereo-interleaved 16-bit PCM buffer (48 kHz) to the USB DAC as 1 ms
+/// isochronous packets; returns the number of packets the device consumed.
+/// This is the live mixer→USB path (fed by `euroaudio::Router::render`).
+pub fn usbaudio_play(pcm: &[i16]) -> usize {
+    unsafe {
+        let xp = core::ptr::addr_of_mut!(XHCI);
+        let x = match (*xp).as_mut() {
+            Some(x) => x,
+            None => return 0,
+        };
+        let a = match (*core::ptr::addr_of_mut!(USBAUDIO)).as_mut() {
+            Some(a) => a,
+            None => return 0,
+        };
+        const PKT_BYTES: usize = 192; // 48 frames × 2 ch × 2 B = 1 ms @ 48 kHz
+        let bytes = (pcm.len() * 2).min(a.buf_bytes);
+        core::ptr::copy_nonoverlapping(pcm.as_ptr() as *const u8, a.buf as *mut u8, bytes);
+        let npkts = bytes / PKT_BYTES;
+        for k in 0..npkts {
+            let pa = a.buf + (k * PKT_BYTES) as u64;
+            a.ring.push(pa as u32, (pa >> 32) as u32, PKT_BYTES as u32, (TRB_ISOCH << 10) | (1 << 5) | (1 << 31));
+        }
+        doorbell(x, a.slot, a.ep_dci as u32);
+        let mut done = 0usize;
+        for _ in 0..npkts {
+            match wait_event(x, TRB_EVT_TRANSFER, 30_000_000) {
+                Some(ev) => {
+                    if ((ev[3] >> 24) & 0xFF) as u8 == a.slot && (ev[3] >> 16) & 0x1F == a.ep_dci as u32 {
+                        done += 1;
+                    }
+                }
+                None => break,
+            }
+        }
+        done
+    }
+}
+
+struct UsbNet {
+    slot: u8,
+    in_dci: u8,
+    out_dci: u8,
+    in_ring: Ring,
+    out_ring: Ring,
+    rx_bufs: [u64; USBNET_RX_BUFS], // ring of 2 KiB receive buffers
+    rx_deq: usize,                  // next buffer expected to complete (FIFO)
+    tx_buf: u64,
+    mac: [u8; 6],
+}
+
+static mut USBNET: Option<UsbNet> = None;
+/// TX-in-flight flag, cleared by the event harvest when the OUT transfer
+/// completes (poll runs in IRQ context too → atomics only).
+static USBNET_TX_BUSY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Received frames, queued by the event harvest (IRQ context!) and popped by
+/// `usbnet_poll_recv` (task context) — so the lock follows the irqsave rule.
+static USBNET_RX: spin::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>> =
+    spin::Mutex::new(alloc::collections::VecDeque::new());
+
+pub fn usbnet_present() -> bool {
+    unsafe { (*core::ptr::addr_of!(USBNET)).is_some() }
+}
+
+pub fn usbnet_mac() -> Option<[u8; 6]> {
+    unsafe { (*core::ptr::addr_of!(USBNET)).as_ref().map(|n| n.mac) }
+}
+
+/// Transmit one ethernet frame over the bulk-OUT pipe. Waits (bounded) for a
+/// previous in-flight transmit, then fires without blocking on completion.
+pub fn usbnet_send(frame: &[u8]) -> bool {
+    use core::sync::atomic::Ordering;
+    if frame.is_empty() || frame.len() > 2048 {
+        return false;
+    }
+    // Drain a previous in-flight TX first. The 100 Hz timer + MSI-X harvest
+    // clear TX_BUSY in the background; poll() here only as a light nudge so a
+    // wedged pipe cannot hang the caller (bounded).
+    for i in 0..200_000u64 {
+        if !USBNET_TX_BUSY.load(Ordering::Acquire) {
+            break;
+        }
+        if i % 4096 == 0 {
+            poll();
+        }
+        core::hint::spin_loop();
+    }
+    if USBNET_TX_BUSY.load(Ordering::Acquire) {
+        return false;
+    }
+    unsafe {
+        let xp = core::ptr::addr_of_mut!(XHCI);
+        let x = match (*xp).as_mut() {
+            Some(x) => x,
+            None => return false,
+        };
+        let n = match (*core::ptr::addr_of_mut!(USBNET)).as_mut() {
+            Some(n) => n,
+            None => return false,
+        };
+        core::ptr::copy_nonoverlapping(frame.as_ptr(), n.tx_buf as *mut u8, frame.len());
+        USBNET_TX_BUSY.store(true, Ordering::Release);
+        n.out_ring.push(n.tx_buf as u32, (n.tx_buf >> 32) as u32, frame.len() as u32, (TRB_NORMAL << 10) | (1 << 5));
+        doorbell(x, n.slot, n.out_dci as u32);
+    }
+    true
+}
+
+/// Non-blocking receive of the next queued frame. A cheap pop: the 100 Hz
+/// timer tick and the xHCI MSI-X handler harvest completed receives into the
+/// queue in the background, so the network layer's millions-of-spins timeouts
+/// don't each pay for an event-ring drain (that made TCP over USB effectively
+/// hang). A rare empty-queue nudge covers the case where neither fired yet.
+pub fn usbnet_poll_recv() -> Option<alloc::vec::Vec<u8>> {
+    if let Some(f) = x86_64::instructions::interrupts::without_interrupts(|| USBNET_RX.lock().pop_front()) {
+        return Some(f);
+    }
+    static NUDGE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    if NUDGE.fetch_add(1, core::sync::atomic::Ordering::Relaxed) % 1024 == 0 {
+        poll();
+        return x86_64::instructions::interrupts::without_interrupts(|| USBNET_RX.lock().pop_front());
+    }
+    None
+}
+
+/// Arm ALL receive buffers on the bulk-IN ring (burst tolerance).
+unsafe fn usbnet_arm_all_rx(x: &Xhci, n: &mut UsbNet) {
+    for &b in &n.rx_bufs {
+        n.in_ring.push(b as u32, (b >> 32) as u32, 2048, (TRB_NORMAL << 10) | (1 << 5));
+    }
+    doorbell(x, n.slot, n.in_dci as u32);
+}
+
+/// Re-arm the buffer that just completed (FIFO) and advance the dequeue index.
+unsafe fn usbnet_rearm_one(x: &Xhci, n: &mut UsbNet) {
+    let b = n.rx_bufs[n.rx_deq % USBNET_RX_BUFS];
+    n.in_ring.push(b as u32, (b >> 32) as u32, 2048, (TRB_NORMAL << 10) | (1 << 5));
+    n.rx_deq = n.rx_deq.wrapping_add(1);
+    doorbell(x, n.slot, n.in_dci as u32);
+}
 static mut BOT_TAG: u32 = 0x1000;
 
 /// One bulk transfer (Normal-TRB + doorbell + wait for the transfer event).
@@ -897,6 +1364,275 @@ unsafe fn scsi(x: &mut Xhci, ms: &mut MassStorage, cdb: &[u8], data_len: u32, in
     }
     let bytes = core::slice::from_raw_parts(csw as *const u8, 13);
     eurousb::bot::parse_csw(bytes).map(|(_, _, status)| status)
+}
+
+/// Configure a USB Audio Class playback function (M4-3) and prove the
+/// isochronous OUT path: select the endpoint-bearing alternate setting of the
+/// AudioStreaming interface, set the sampling frequency (UAC1 SET_CUR), then
+/// stream a real stereo tone (euroaudio::mix) as 1 ms isochronous packets and
+/// count the transfer completions — DMA-consumption proof, like HDA's LPIB.
+///
+/// Scope, honestly: UAC1 (what QEMU's usb-audio emulates and simple DACs/
+/// headsets speak). UAC2-only devices (different descriptors/clock units) are
+/// deferred until real-hardware validation. Playback proof only; the ongoing
+/// mixer→USB wiring is follow-up work.
+#[allow(clippy::too_many_arguments)]
+unsafe fn setup_usbaudio(
+    x: &mut Xhci,
+    falloc: &mut FrameAllocator,
+    slot: u8,
+    port: u8,
+    route: u32,
+    speed: u32,
+    tt: u32,
+    cfg: &eurousb::Configuration,
+    raw_len: u16,
+    ep0: &mut Ring,
+    in_ctx: u64,
+    cs: u64,
+    buf: u64,
+) -> bool {
+    // The AudioStreaming interface entry WITH the isoch OUT endpoint (that
+    // parse entry is the endpoint-bearing alternate setting).
+    let stream = match cfg.interfaces.iter().find(|i| {
+        i.class == 0x01
+            && i.subclass == 0x02
+            && i.endpoints.iter().any(|e| !e.is_in() && e.attributes & 3 == 1)
+    }) {
+        Some(i) => i,
+        None => {
+            crate::serial_println!("[xhci] slot {slot}: audio without an isoch OUT endpoint");
+            return false;
+        }
+    };
+    let ep = stream.endpoints.iter().find(|e| !e.is_in() && e.attributes & 3 == 1).unwrap();
+
+    // Recover the alternate-setting number from the raw config blob
+    // (Configuration::parse drops bAlternateSetting).
+    let raw = core::slice::from_raw_parts(buf as *const u8, raw_len as usize);
+    let mut alt = 1u8;
+    let mut p = 0usize;
+    while p + 2 <= raw.len() {
+        let l = raw[p] as usize;
+        if l == 0 || p + l > raw.len() {
+            break;
+        }
+        if l >= 9 && raw[p + 1] == 4 && raw[p + 2] == stream.number && raw[p + 4] > 0 {
+            alt = raw[p + 3];
+        }
+        p += l;
+    }
+
+    if !control_no_data(x, slot, ep0, 0x00, 9, cfg.value as u16, 0) {
+        crate::serial_println!("[xhci] slot {slot}: SET_CONFIGURATION (audio) failed");
+        return false;
+    }
+    let _ = control_no_data(x, slot, ep0, 0x01, 11, alt as u16, stream.number as u16); // SET_INTERFACE
+
+    // Configure the isochronous OUT endpoint. FS isoch bInterval is log2-coded
+    // (2^(b-1) frames) — unlike FS interrupt (frames) — so encode directly.
+    let ep_num = (ep.address & 0x0F) as u32;
+    let ep_dci = (ep_num * 2) as u8; // OUT
+    let ring_frame = falloc.allocate().expect("xhci audio-ring");
+    let mut iso_ring = Ring::new(ring_frame);
+    let interval = match speed {
+        1 | 2 => (ep.interval.max(1) as u32 - 1 + 3).min(15), // FS/LS isoch: log2 + 3
+        _ => encode_interval(speed, ep.interval),
+    };
+    build_input_context(in_ctx, cs, 1 | (1 << ep_dci), |slot_ctx, ep_ctxs| {
+        w32(slot_ctx, (route & 0xF_FFFF) | (((ep_dci as u32) & 0x1F) << 27) | (speed << 20));
+        w32(slot_ctx + 4, (port as u32) << 16);
+        w32(slot_ctx + 8, tt);
+        let epc = ep_ctxs + (ep_dci as u64 - 1) * cs;
+        w32(epc, interval << 16);
+        // type 1 = Isoch OUT; CErr must be 0 for isochronous endpoints.
+        w32(epc + 4, (1 << 3) | ((ep.max_packet as u32) << 16));
+        w64(epc + 8, ring_frame | 1);
+        w32(epc + 16, ep.max_packet as u32);
+    });
+    let (cc, _) = run_command(x, in_ctx as u32, (in_ctx >> 32) as u32, (TRB_CONFIGURE_ENDPOINT << 10) | ((slot as u32) << 24))
+        .unwrap_or((0, 0));
+    if cc != CC_SUCCESS {
+        crate::serial_println!("[xhci] slot {slot}: Configure-Endpoint (isoch audio) cc={cc}");
+        return false;
+    }
+
+    // UAC1 SET_CUR sampling frequency on the endpoint: 48 kHz little-endian.
+    let rate_buf = falloc.allocate().expect("xhci audio-rate");
+    let rate = 48_000u32;
+    core::ptr::copy_nonoverlapping(rate.to_le_bytes().as_ptr(), rate_buf as *mut u8, 3);
+    let rate_ok = control_out(x, slot, ep0, 0x22, 0x01, 0x0100, ep.address as u16, 3, rate_buf);
+
+    // Stream a real tone: 96 packets of 1 ms @ 48 kHz stereo 16-bit = 192 B each.
+    const PKT_BYTES: usize = 192; // 48 samples × 2 ch × 2 B
+    const NPKTS: usize = 96;
+    let audio_buf = falloc
+        .allocate_aligned((NPKTS * PKT_BYTES).div_ceil(4096), 1)
+        .expect("xhci audio-buf");
+    let tone = crate::hda::tone_for_usb(NPKTS * PKT_BYTES / 2); // i16 samples; usbaudio_play copies it in
+
+    // Keep the endpoint alive so the audio layer can stream into it later.
+    USBAUDIO = Some(UsbAudio {
+        slot,
+        ep_dci,
+        ring: iso_ring,
+        buf: audio_buf,
+        buf_bytes: NPKTS * PKT_BYTES,
+    });
+
+    // Initial DMA-consumption proof: stream the tone once and count completions.
+    let done = usbaudio_play(&tone);
+    let ok = done >= NPKTS / 2;
+    crate::serial_println!(
+        "[m43] USB audio (UAC1) {}: isoch OUT ep DCI {ep_dci} @48 kHz stereo (rate-set={rate_ok}), {done}/{NPKTS} packets consumed by the device {}",
+        if ok { "LIVE" } else { "NOT streaming" },
+        if ok { "✓" } else { "✗" }
+    );
+    ok
+}
+
+/// Configure a CDC-ECM interface pair (M3-3): select the ECM configuration,
+/// switch the data interface to its endpoint-bearing alternate setting, read
+/// the MAC from the Ethernet functional descriptor's string, and open the
+/// bulk pipes. `buf` still holds the RAW config blob of the chosen config.
+#[allow(clippy::too_many_arguments)]
+unsafe fn setup_usbnet(
+    x: &mut Xhci,
+    falloc: &mut FrameAllocator,
+    slot: u8,
+    port: u8,
+    route: u32,
+    speed: u32,
+    tt: u32,
+    cfg: &eurousb::Configuration,
+    raw_len: u16,
+    ep0: &mut Ring,
+    in_ctx: u64,
+    cs: u64,
+    buf: u64,
+) -> bool {
+    // The data interface: class 0x0A with both bulk endpoints (that parse
+    // entry is the endpoint-bearing alternate setting).
+    let data = match cfg.interfaces.iter().find(|i| {
+        i.class == 0x0A
+            && i.endpoints.iter().any(|e| e.is_in() && e.attributes & 3 == 2)
+            && i.endpoints.iter().any(|e| !e.is_in() && e.attributes & 3 == 2)
+    }) {
+        Some(d) => d,
+        None => {
+            crate::serial_println!("[xhci] slot {slot}: ECM without a bulk data interface");
+            return false;
+        }
+    };
+    let raw = core::slice::from_raw_parts(buf as *const u8, raw_len as usize);
+    // Ethernet functional descriptor (0x24/0x0F): iMACAddress at offset 3.
+    // Also recover the data interface's alternate-setting number from the raw
+    // blob (Configuration::parse drops bAlternateSetting).
+    let mut imac = 0u8;
+    let mut alt = 1u8;
+    let mut p = 0usize;
+    while p + 2 <= raw.len() {
+        let l = raw[p] as usize;
+        if l == 0 || p + l > raw.len() {
+            break;
+        }
+        if l >= 4 && raw[p + 1] == 0x24 && raw[p + 2] == 0x0F {
+            imac = raw[p + 3];
+        }
+        if l >= 9 && raw[p + 1] == 4 && raw[p + 2] == data.number && raw[p + 4] > 0 {
+            alt = raw[p + 3]; // interface descriptor with endpoints → its alt id
+        }
+        p += l;
+    }
+
+    // SET_CONFIGURATION for the ECM config, then activate the data alt-setting.
+    if !control_no_data(x, slot, ep0, 0x00, 9, cfg.value as u16, 0) {
+        crate::serial_println!("[xhci] slot {slot}: SET_CONFIGURATION (ECM) failed");
+        return false;
+    }
+    let _ = control_no_data(x, slot, ep0, 0x01, 11, alt as u16, data.number as u16); // SET_INTERFACE
+
+    // MAC address: a string descriptor of 12 UTF-16LE hex digits.
+    let mut mac = [0u8; 6];
+    if imac != 0
+        && control_in(x, slot, ep0, 0x80, 6, 0x0300 | imac as u16, 0x0409, 64, buf)
+    {
+        let sd = core::slice::from_raw_parts(buf as *const u8, 64);
+        let n = (sd[0] as usize).min(64);
+        let hexval = |c: u8| -> Option<u8> {
+            match c {
+                b'0'..=b'9' => Some(c - b'0'),
+                b'a'..=b'f' => Some(c - b'a' + 10),
+                b'A'..=b'F' => Some(c - b'A' + 10),
+                _ => None,
+            }
+        };
+        let mut nib = [0u8; 12];
+        let mut got = 0usize;
+        let mut q = 2;
+        while q + 1 < n && got < 12 {
+            if let Some(v) = hexval(sd[q]) {
+                nib[got] = v;
+                got += 1;
+            }
+            q += 2; // UTF-16LE: every other byte
+        }
+        if got == 12 {
+            for k in 0..6 {
+                mac[k] = (nib[k * 2] << 4) | nib[k * 2 + 1];
+            }
+        }
+    }
+    if mac == [0u8; 6] {
+        // No usable iMACAddress: derive a stable locally-administered one.
+        mac = [0x02, 0x45, 0x55, 0x52, 0x4F, slot];
+        crate::serial_println!("[xhci] slot {slot}: ECM without MAC string — using locally administered");
+    }
+
+    // Open the bulk pipes (same shape as mass storage).
+    let ein = data.endpoints.iter().find(|e| e.is_in() && e.attributes & 3 == 2).unwrap();
+    let eout = data.endpoints.iter().find(|e| !e.is_in() && e.attributes & 3 == 2).unwrap();
+    let in_dci = ((ein.address & 0x0F) * 2 + 1) as u8;
+    let out_dci = ((eout.address & 0x0F) * 2) as u8;
+    let in_ring_frame = falloc.allocate().expect("xhci ecm-in-ring");
+    let out_ring_frame = falloc.allocate().expect("xhci ecm-out-ring");
+    let in_ring = Ring::new(in_ring_frame);
+    let out_ring = Ring::new(out_ring_frame);
+    let max_dci = in_dci.max(out_dci) as u32;
+    build_input_context(in_ctx, cs, 1 | (1 << in_dci) | (1 << out_dci), |slot_ctx, ep_ctxs| {
+        w32(slot_ctx, (route & 0xF_FFFF) | ((max_dci & 0x1F) << 27) | (speed << 20));
+        w32(slot_ctx + 4, (port as u32) << 16);
+        w32(slot_ctx + 8, tt);
+        let oc = ep_ctxs + (out_dci as u64 - 1) * cs;
+        w32(oc + 4, (2 << 3) | (3 << 1) | ((eout.max_packet as u32) << 16));
+        w64(oc + 8, out_ring_frame | 1);
+        w32(oc + 16, eout.max_packet as u32);
+        let ic = ep_ctxs + (in_dci as u64 - 1) * cs;
+        w32(ic + 4, (6 << 3) | (3 << 1) | ((ein.max_packet as u32) << 16));
+        w64(ic + 8, in_ring_frame | 1);
+        w32(ic + 16, ein.max_packet as u32);
+    });
+    let (cc, _) = run_command(x, in_ctx as u32, (in_ctx >> 32) as u32, (TRB_CONFIGURE_ENDPOINT << 10) | ((slot as u32) << 24))
+        .unwrap_or((0, 0));
+    if cc != CC_SUCCESS {
+        crate::serial_println!("[xhci] slot {slot}: Configure-Endpoint (ECM) cc={cc}");
+        return false;
+    }
+
+    let mut rx_bufs = [0u64; USBNET_RX_BUFS];
+    for b in &mut rx_bufs {
+        *b = falloc.allocate().expect("xhci ecm-rx");
+        core::ptr::write_bytes(*b as *mut u8, 0, 4096);
+    }
+    let tx_buf = falloc.allocate().expect("xhci ecm-tx");
+    let mut un = UsbNet { slot, in_dci, out_dci, in_ring, out_ring, rx_bufs, rx_deq: 0, tx_buf, mac };
+    usbnet_arm_all_rx(x, &mut un);
+    crate::serial_println!(
+        "[xhci] slot {slot}: USB ethernet (CDC-ECM) LIVE — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ✓",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    );
+    USBNET = Some(un);
+    true
 }
 
 /// Configure a USB mass-storage interface (bulk-IN + bulk-OUT) and run a

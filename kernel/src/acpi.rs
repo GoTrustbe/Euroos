@@ -106,9 +106,15 @@ pub struct Fadt {
     pub reset_is_io: bool,
     pub reset_addr: u64,
     pub reset_val: u8,
+    // M5-2: ACPI event delivery (power button etc.).
+    pub sci_int: u16,       // SCI interrupt (GSI) — level, active-low
+    pub pm1a_evt: u16,      // PM1a event register block I/O port (status @ +0)
+    pub pm1_evt_len: u8,    // total length; enable register = block + len/2
+    pub smi_cmd: u32,       // SMI command port (0 = already in ACPI mode)
+    pub acpi_enable: u8,    // value to write to SMI_CMD to enter ACPI mode
 }
 
-/// Parse the FADT (signature "FACP") for shutdown/reboot.
+/// Parse the FADT (signature "FACP") for shutdown/reboot + ACPI events.
 pub fn fadt() -> Option<Fadt> {
     let f = find_table(b"FACP")?;
     unsafe {
@@ -124,6 +130,11 @@ pub fn fadt() -> Option<Fadt> {
             reset_is_io: reset_space == 1,
             reset_addr,
             reset_val,
+            sci_int: rd::<u16>(f + 46),
+            pm1a_evt: rd::<u32>(f + 56) as u16,
+            pm1_evt_len: rd::<u8>(f + 88),
+            smi_cmd: rd::<u32>(f + 48),
+            acpi_enable: rd::<u8>(f + 52),
         })
     }
 }
@@ -154,6 +165,41 @@ pub fn dsdt_aml() -> Option<(u64, usize)> {
             return None;
         }
         Some((dsdt + 36, (total - 36) as usize))
+    }
+}
+
+/// One MCFG allocation: an ECAM window for a PCI segment group (M1-1).
+#[derive(Clone, Copy)]
+pub struct EcamWindow {
+    pub base: u64,     // physical base of the ECAM region (identity-mapped)
+    pub segment: u16,  // PCI segment group (0 on q35 and most machines)
+    pub bus_start: u8, // first decoded bus
+    pub bus_end: u8,   // last decoded bus
+}
+
+/// Parse the MCFG table (PCIe memory-mapped configuration — ECAM). Modern
+/// machines publish the config space this way; the legacy 0xCF8/0xCFC ports
+/// only reach the first 256 bytes and only segment 0.
+pub fn mcfg() -> Option<alloc::vec::Vec<EcamWindow>> {
+    let t = find_table(b"MCFG")?;
+    unsafe {
+        let len: u32 = rd(t + 4);
+        if len < 44 {
+            return None; // header (36) + reserved (8), no allocations
+        }
+        // Allocations start at offset 44; each entry is 16 bytes.
+        let n = ((len as u64 - 44) / 16) as usize;
+        let mut out = alloc::vec::Vec::with_capacity(n);
+        for i in 0..n {
+            let e = t + 44 + (i as u64) * 16;
+            out.push(EcamWindow {
+                base: rd(e),
+                segment: rd(e + 8),
+                bus_start: rd(e + 10),
+                bus_end: rd(e + 11),
+            });
+        }
+        if out.is_empty() { None } else { Some(out) }
     }
 }
 

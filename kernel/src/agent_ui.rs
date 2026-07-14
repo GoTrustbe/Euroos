@@ -129,7 +129,7 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
         fb,
         x + 24,
         fy + 42,
-        "type + Enter \u{2192} send to the local agent (model via EuroNet TCP, BB-1)",
+        "type + Enter \u{2192} run intent (scripted demo model \u{2014} no live LLM/tool effects)",
         Color::TEXT_DIM,
         11.5,
     );
@@ -154,8 +154,8 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
         let py = (ty + 6).min(y + h - 46);
         fb.fill_rounded_rect(x + 24, py, fw, 38, crate::eds::RADIUS_M, Color::SURFACE_3);
         fb.draw_border(x + 24, py, fw, 38, 1, Color::GOLD);
-        text::draw_px(fb, x + 36, py + 11, "\u{26A0} 'exec' requests elevated rights \u{2014} capability grant required:", Color::INK, 12.5);
-        // Two buttons (visual): allow / deny.
+        text::draw_px(fb, x + 36, py + 11, "\u{26A0} 'exec' needs elevated rights \u{2014} the capability gate denied it (buttons illustrative):", Color::INK, 12.5);
+        // Two buttons (visual only — the cap-gate decision above is automatic): allow / deny.
         let bw = 96usize;
         let bx2 = x + 24 + fw - bw - 12;
         let bx1 = bx2 - bw - 8;

@@ -1,0 +1,9 @@
+[package]
+name = "euroscan"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroScan — eSCL / AirScan (driverless scanning, mDNS + REST/XML) request-building + response-parsing (plan M7-2). Pure no_std logic, host-tested."
+
+[dependencies]

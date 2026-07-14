@@ -105,6 +105,43 @@ pub fn build_address_space(
     pml4
 }
 
+/// Like [`build_address_space`] but for a LARGE arena spanning `nblocks`
+/// consecutive 2 MiB blocks (the DOOM port needs ~32 MiB for code + WAD + heap).
+/// Block 0 keeps the fine-grained W^X PT (code/data/bss must fit in its 2 MiB);
+/// the remaining blocks are mapped as RW+NX 2 MiB huge pages with the USER bit —
+/// exactly right for heap + stack (pure data, never executable). Falls back to
+/// the single-block layout when `nblocks == 1`.
+pub fn build_address_space_big(
+    falloc: &mut FrameAllocator,
+    arena_phys: u64,
+    nblocks: u64,
+    exec_pages: &[u64; 8],
+    writ_pages: &[u64; 8],
+) -> u64 {
+    let pml4 = build_address_space(falloc, arena_phys, exec_pages, writ_pages);
+    if nblocks <= 1 {
+        return pml4;
+    }
+    // Reach into the freshly built PD (PDPT[0] -> PD) and promote the arena's
+    // extra blocks from supervisor-huge to USER RW+NX huge pages.
+    let arena_idx = (arena_phys / MIB2) as usize;
+    // SAFETY: identity-mapped page tables we just allocated; single-threaded here.
+    unsafe {
+        let pdpt = (*(pml4 as *const u64)) & 0x000f_ffff_ffff_f000;
+        let pd = (*(pdpt as *const u64)) & 0x000f_ffff_ffff_f000;
+        let pdp = pd as *mut u64;
+        for b in 1..nblocks as usize {
+            let i = arena_idx + b;
+            if i >= 512 {
+                break; // stays within the lower 1 GiB PD
+            }
+            pdp.add(i)
+                .write_volatile((i as u64 * MIB2) | PRESENT | WRITABLE | USER | HUGE | NX);
+        }
+    }
+    pml4
+}
+
 /// Like [`build_address_space`], but maps the arena block as a single 2 MiB USER
 /// page with RWX (no W^X). For the counter demo (`spawn_counter_task`): it runs a
 /// raw machine-code blob with a counter variable IN the same page, so code and

@@ -400,4 +400,48 @@ used-block distribution — the diagnostic that resolved the BUG-009 confusion i
 `fsstress` scenario now logs fs size up front and documents the **`--disks 64M,2G`** (2-disk)
 requirement for `/mnt`.
 
+### BUG-010 — flaky boot hang: heap + UART spinlocks not interrupt-safe (BUG-007 class, the two missed instances) ✅ FIXED
+- **Status:**   ✅ FIXED (class-level) · validated by RIP-sampling + boot sweep
+- **Severity:** CRITICAL (silent kernel hang, ~50%+ of TCG boots during the DOOM test campaign)
+- **Found:**    2026-07-13 · the DOOM auto-retry harness turned "boots sometimes hang" into a
+  measured rate; a new hang-catcher (`scratchpad/bootdbg.py`) samples RIP via QMP on stall.
+- **Evidence (empirical, definitive):** hung boot mid-self-test-storm; **30/30 RIP samples at
+  the exact same instruction** — `<LockedHeap as GlobalAlloc>::alloc +0x1e`, the heap-lock spin
+  loop — with **RFLAGS.IF=0**. Symbolized offline via the new boot-time anchor line
+  (`[euro] anchor dump_registers_and_backtrace @ …`, printed at boot so a hang needs no panic
+  dump) + `scripts/symbolize.sh`.
+- **Root cause:** the BUG-007c hardening pass covered `SCHED`/`SCANCODES`/`PACKET`/`BG` but
+  missed the two most global locks in the kernel:
+  1. **the heap** (`LockedHeap`, a plain spin::Mutex): IF=0 contexts allocate — the xHCI MSI-X
+     harvest builds key-event `Vec`s (`eurousb kb.feed`), and **every bg-app syscall runs with
+     IF=0** (FMASK clears IF) and allocates in the vfs paths. If such a context runs while a
+     preempted task holds the heap lock → eternal spin, interrupts off, total silence.
+  2. **the UART** (`serial::_print` blocking `UART.lock()`): the same IF=0 contexts also print
+     (`[xhci-rpt]`, MSI-X-confirmed, `[doom-out]`, syscall traces) → identical deadlock on the
+     console lock, hit-probability proportional to how much the boot task prints (a lot).
+  Both windows are hit during the boot self-test print storm with bg-musl demos running —
+  hence "varying self-tests, 100% CPU, no fault, load-sensitive".
+- **Fix (rule, not patch):** every lock reachable from an IF=0 context is only ever held with
+  interrupts disabled. `allocator.rs`: `IrqSafeHeap` wrapper — `alloc`/`dealloc` under
+  `without_interrupts`. `serial.rs`: `_print` holds `UART` under `without_interrupts`.
+- **Validation:** pre-fix baseline: 1 sampled hang + historical ~50%+ under load; post-fix
+  boot sweep on the fixed image: see sweep tally in the session log (target 0/20). Host
+  suite: 975 tests pass.
+
+### BUG-011 — first keystrokes after boot intermittently lost (`push_scancode` try_lock drops) ✅ FIXED
+- **Status:**   ✅ FIXED · validating with a first-keystroke harness
+- **Severity:** HIGH (input loss, ~1-in-3 boots lost the first typed characters)
+- **Root cause:** BUG-007b's fix #3 made `push_scancode`/`push_byte` use `try_lock` and **drop
+  the byte on contention** — it traded the deadlock for silent data loss. Contention is real:
+  the USB-HID harvest pushes scancodes from task context (desktop loop) *and* from the 100 Hz
+  timer tick + xHCI MSI-X handler; a timer poll landing inside a task-side push window dropped
+  a make/break code — a lost keystroke, worst right after boot when the loop runs hot.
+- **Fix:** the definitive BUG-007-class rule instead of the lossy compromise: `SCANCODES` and
+  `PACKET` are acquired **only under `without_interrupts` + a normal blocking lock** (irqsave).
+  A holder can never be preempted on its CPU, so an IF=0 acquirer never spins on a suspended
+  holder — deadlock-free **and lossless**. Files: `kernel/src/ps2.rs`, `kernel/src/mouse.rs`.
+- **Note:** QMP-injected keys in the sandbox QEMU have a separate, host-side flakiness
+  (send-key sometimes produces no HID report at all while a fullscreen app runs — diagnosed
+  via QEMU tracing during the DOOM sprint); that is outside the kernel and not covered here.
+
 <!-- Add BUG-NNN entries above this line. Keep newest at the bottom of the relevant group. -->

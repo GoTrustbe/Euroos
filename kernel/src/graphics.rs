@@ -137,6 +137,42 @@ impl FrameBuffer {
         }
     }
 
+    /// Copy the whole backbuffer (width*height pixels) out to `dst` — used to
+    /// cache an expensive-to-draw layer (e.g. the wallpaper) so later frames can
+    /// restore it with a cheap memcpy instead of recomputing it.
+    pub fn snapshot(&self, dst: &mut alloc::vec::Vec<u32>) {
+        if self.buf.is_null() {
+            return;
+        }
+        let n = self.width * self.height;
+        dst.clear();
+        dst.reserve(n);
+        unsafe {
+            dst.set_len(n);
+            core::ptr::copy_nonoverlapping(self.buf, dst.as_mut_ptr(), n);
+        }
+    }
+
+    /// Short tag for the GOP pixel format (diagnostics).
+    pub fn format_tag(&self) -> &'static str {
+        match self.format {
+            PixelFormat::Rgb => "RGB",
+            PixelFormat::Bgr => "BGR",
+            PixelFormat::Bitmask => "MASK",
+            PixelFormat::BltOnly => "BLT",
+        }
+    }
+
+    /// Restore a previously snapshotted layer into the backbuffer (cheap memcpy).
+    pub fn restore(&self, src: &[u32]) {
+        if self.buf.is_null() || src.len() != self.width * self.height {
+            return;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(src.as_ptr(), self.buf, src.len());
+        }
+    }
+
     /// Direct mode (no backbuffer) — for the panic handler.
     /// # Safety
     /// `base` must point to a valid GOP framebuffer of at least
@@ -203,19 +239,29 @@ impl FrameBuffer {
         }
         let x_end = (x + w).min(self.width);
         let y_end = (y + h).min(self.height);
+        if x_end <= x || y_end <= y {
+            return;
+        }
         let dst = self.base as *mut u32;
         let rgb = matches!(self.format, PixelFormat::Rgb);
+        let run = x_end - x;
         for row in y..y_end {
             let src_row = row * self.width;
             let dst_row = row * self.stride;
-            for col in x..x_end {
-                let v = unsafe { *self.buf.add(src_row + col) };
-                let out = if rgb {
-                    ((v & 0xFF) << 16) | (v & 0x0000_FF00) | ((v >> 16) & 0xFF)
-                } else {
-                    v
-                };
-                unsafe { dst.add(dst_row + col).write_volatile(out) };
+            if !rgb {
+                // BGR framebuffer: the backbuffer u32 is already the exact byte
+                // order — copy the whole row segment at once (a memcpy is orders
+                // of magnitude faster than per-pixel volatile writes, which is
+                // what made full-screen presents crawl under TCG emulation).
+                unsafe {
+                    core::ptr::copy_nonoverlapping(self.buf.add(src_row + x), dst.add(dst_row + x), run);
+                }
+            } else {
+                for col in x..x_end {
+                    let v = unsafe { *self.buf.add(src_row + col) };
+                    let out = ((v & 0xFF) << 16) | (v & 0x0000_FF00) | ((v >> 16) & 0xFF);
+                    unsafe { dst.add(dst_row + col).write_volatile(out) };
+                }
             }
         }
     }
@@ -280,15 +326,70 @@ impl FrameBuffer {
     pub fn fill_rect(&self, x: usize, y: usize, w: usize, h: usize, c: Color) {
         let x_end = (x + w).min(self.width);
         let y_end = (y + h).min(self.height);
-        for row in y..y_end {
-            for col in x..x_end {
-                self.put_pixel(col, row, c);
+        if x_end <= x || y_end <= y {
+            return;
+        }
+        if self.buf.is_null() {
+            // Direct (panic) mode: no backbuffer — write straight to MMIO.
+            for row in y..y_end {
+                for col in x..x_end {
+                    self.write_mmio(col, row, c);
+                }
             }
+            return;
+        }
+        // Buffered mode: pack the color ONCE and fill each row with a bulk
+        // memset-style write (no per-pixel bounds check / repack), which is
+        // orders of magnitude faster than per-pixel put_pixel under TCG.
+        let packed = c.pack();
+        let run = x_end - x;
+        for row in y..y_end {
+            let base = row * self.width + x;
+            let slice = unsafe { core::slice::from_raw_parts_mut(self.buf.add(base), run) };
+            slice.fill(packed);
         }
     }
 
     pub fn clear(&self, c: Color) {
         self.fill_rect(0, 0, self.width, self.height, c);
+    }
+
+    /// Blit an XRGB8888 (`0x00RRGGBB`) source image into the backbuffer at
+    /// `(dx,dy)`, integer-scaled by `scale`. The source pixel format is IDENTICAL
+    /// to the backbuffer format (see [`Color::pack`]), so pixels are copied
+    /// verbatim — no per-pixel repack. Used by the app-graphics bridge: a
+    /// scheduled userspace app (the DOOM port) hands over frames this way, and
+    /// `present_rect` does the final BGR conversion at scan-out.
+    pub fn blit_xrgb(&self, dx: usize, dy: usize, src: &[u32], sw: usize, sh: usize, scale: usize) {
+        if self.buf.is_null() || sw == 0 || sh == 0 {
+            return;
+        }
+        let scale = scale.max(1);
+        for sy in 0..sh {
+            let src_row = &src[sy * sw..sy * sw + sw];
+            for k in 0..scale {
+                let ty = dy + sy * scale + k;
+                if ty >= self.height {
+                    return;
+                }
+                let maxrun = self.width.saturating_sub(dx);
+                if maxrun == 0 {
+                    continue;
+                }
+                // SAFETY: `ty < height`, and we clamp the run to `maxrun` below.
+                let dst = unsafe { core::slice::from_raw_parts_mut(self.buf.add(ty * self.width + dx), maxrun) };
+                let mut di = 0usize;
+                for &v in src_row {
+                    for _ in 0..scale {
+                        if di >= maxrun {
+                            break;
+                        }
+                        dst[di] = v;
+                        di += 1;
+                    }
+                }
+            }
+        }
     }
 
     /// Filled rectangle with rounded corners (radius `r`), **anti-aliased**.
@@ -300,52 +401,46 @@ impl FrameBuffer {
             self.fill_rect(x, y, w, h, c);
             return;
         }
+        // Bulk-fill the solid interior with three fast rects; only the four
+        // rounded corners need per-pixel supersampled coverage (was: per-pixel
+        // over the ENTIRE window, the bulk of a window's draw cost under TCG).
+        self.fill_rect(x, y + r, w, h - 2 * r, c); // middle band, full width
+        self.fill_rect(x + r, y, w - 2 * r, r, c); // top straight strip
+        self.fill_rect(x + r, y + h - r, w - 2 * r, r, c); // bottom straight strip
+
         let rf = r as f32;
         let r2 = rf * rf;
-        for row in 0..h {
-            // Vertical corner cores: only the top/bottom edges curve.
-            let cy = if row < r {
-                Some(rf)
-            } else if row >= h - r {
-                Some((h - r) as f32)
-            } else {
-                None
-            };
-            for col in 0..w {
-                let cx = if col < r {
-                    Some(rf)
-                } else if col >= w - r {
-                    Some((w - r) as f32)
-                } else {
-                    None
-                };
-                match (cx, cy) {
-                    (Some(ccx), Some(ccy)) => {
-                        // Real corner: supersample the coverage.
-                        let mut inside = 0u32;
-                        let mut sy = 0;
-                        while sy < 4 {
-                            let py = row as f32 + (sy as f32 + 0.5) * 0.25;
-                            let dy = py - ccy;
-                            let mut sx = 0;
-                            while sx < 4 {
-                                let px = col as f32 + (sx as f32 + 0.5) * 0.25;
-                                let dx = px - ccx;
-                                if dx * dx + dy * dy <= r2 {
-                                    inside += 1;
-                                }
-                                sx += 1;
+        // (corner-cell top-left in window coords, arc-center in window coords)
+        let corners = [
+            (0usize, 0usize, rf, rf),
+            (w - r, 0, (w - r) as f32, rf),
+            (0, h - r, rf, (h - r) as f32),
+            (w - r, h - r, (w - r) as f32, (h - r) as f32),
+        ];
+        for (cx0, cy0, ccx, ccy) in corners {
+            for row in cy0..cy0 + r {
+                for col in cx0..cx0 + r {
+                    let mut inside = 0u32;
+                    let mut sy = 0;
+                    while sy < 4 {
+                        let py = row as f32 + (sy as f32 + 0.5) * 0.25;
+                        let dy = py - ccy;
+                        let mut sx = 0;
+                        while sx < 4 {
+                            let px = col as f32 + (sx as f32 + 0.5) * 0.25;
+                            let dx = px - ccx;
+                            if dx * dx + dy * dy <= r2 {
+                                inside += 1;
                             }
-                            sy += 1;
+                            sx += 1;
                         }
-                        if inside == 16 {
-                            self.put_pixel(x + col, y + row, c);
-                        } else if inside > 0 {
-                            self.blend(x + col, y + row, c, (inside * 255 / 16) as u8);
-                        }
+                        sy += 1;
                     }
-                    // Straight edge strip: solid.
-                    _ => self.put_pixel(x + col, y + row, c),
+                    if inside == 16 {
+                        self.put_pixel(x + col, y + row, c);
+                    } else if inside > 0 {
+                        self.blend(x + col, y + row, c, (inside * 255 / 16) as u8);
+                    }
                 }
             }
         }

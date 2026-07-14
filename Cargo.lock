@@ -437,11 +437,15 @@ name = "eurofuzz"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "euroaml",
  "euroca",
  "eurodns",
  "euronet",
  "europol",
+ "europrint",
+ "euroscan",
  "eurotpm",
+ "eurousb",
  "eurowallet",
 ]
 
@@ -615,6 +619,10 @@ version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
 ]
+
+[[package]]
+name = "euroscan"
+version = "0.1.0"
 
 [[package]]
 name = "euroshot"
@@ -860,6 +868,7 @@ dependencies = [
  "eurorepro",
  "eurosafe",
  "eurosandbox",
+ "euroscan",
  "euroshot",
  "eurosign",
  "eurosmb",

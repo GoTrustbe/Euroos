@@ -66,6 +66,20 @@ mod tests {
             let _ = eurotpm::parse_unseal(&b);
             let _ = eurotpm::parse_create(&b);
 
+            // USB descriptors (off the wire, from any plugged-in device —
+            // Metal M1..M4). A hostile/broken device must never crash the host.
+            let _ = eurousb::DeviceDescriptor::parse(&b);
+            let _ = eurousb::Configuration::parse(&b);
+            let _ = eurousb::parse_report_descriptor(&b); // HID report descriptor
+            let _ = eurousb::parse_mouse(&b);
+            let _ = eurousb::parse_tablet(&b);
+            let _ = eurousb::bot::parse_csw(&b);
+
+            // Driverless-peripheral responses (off the network — Metal M7).
+            let _ = euroscan::Capabilities::parse(&String::from_utf8_lossy(&b));
+            let _ = euroscan::parse_http(&b);
+            let _ = europrint::IppResponse::parse(&b);
+
             // Wallet: base64url + JSON + a full SD-JWT presentation.
             if let Ok(s) = core::str::from_utf8(&b) {
                 let _ = eurowallet::b64::decode(s);
