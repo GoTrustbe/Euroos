@@ -617,6 +617,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "euroscan"
+version = "0.1.0"
+
+[[package]]
 name = "euroshot"
 version = "0.1.0"
 
@@ -860,6 +864,7 @@ dependencies = [
  "eurorepro",
  "eurosafe",
  "eurosandbox",
+ "euroscan",
  "euroshot",
  "eurosign",
  "eurosmb",

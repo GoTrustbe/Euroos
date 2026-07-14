@@ -89,6 +89,8 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             "  services / euroctl   EuroInit service status".to_string(),
             "  hwprobe              hardware/driver inventory (paste into the HCL)".to_string(),
             "  battery / power      ACPI battery + AC adapter status".to_string(),
+            "  print [text]         driverless print via IPP Everywhere".to_string(),
+            "  scan [path]          driverless scan via eSCL/AirScan → EuroFiles".to_string(),
             "  uptime               timer ticks since boot".to_string(),
             "  reboot / shutdown    restart/shut down the system".to_string(),
             "  free                 memory usage (total/used/free)".to_string(),
@@ -436,6 +438,8 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "services" | "euroctl" => crate::init::status_lines(),
         "hwprobe" => crate::pci::hwprobe_lines(),
         "battery" | "power" => crate::acpi_power::status_lines(),
+        "scan" => crate::scan::shell(fs, line),
+        "print" => crate::print::shell(line),
         "dmesg" => {
             // Kernel message buffer (kmsg ring). `dmesg N` shows the last N lines.
             let all = crate::klog::snapshot();

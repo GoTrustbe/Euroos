@@ -20,6 +20,7 @@ Legs:
   tpm     + swtpm tpm-tis @ 0xFED40000             -> real TPM2 seal/unseal to PCR16 via TIS (M6-1)
   tpmcrb  + swtpm tpm-crb @ 0xFED40000             -> same, via the CRB fTPM/PTT interface (M6-1)
   printer + host mock IPP server via guestfwd      -> IPP Print-Job round-trip (M7-1)
+  scan    + host mock eSCL scanner on :8631        -> driverless scan round-trip → image (M7-2)
   hwprobe base leg + typed `hwprobe` command    -> inventory lines over serial
 
 Usage: python3 scripts/run-metal-matrix.py [image] [--legs a,b,c]
@@ -48,7 +49,7 @@ SIDE = {}
 
 def leg_devices(leg):
     """Extra QEMU args per leg (on top of the common q35 + xhci-kbd base)."""
-    if leg in ("base", "hwprobe", "power", "printer"):
+    if leg in ("base", "hwprobe", "power", "printer", "scan"):
         return []
     if leg == "nvme":
         img = os.path.join(WORK, "nvme.img")
@@ -125,6 +126,7 @@ LEGS = {
                 "[net] DHCP OFFER:", "PING 10.0.2.2: echo-reply OK ✓",
                 "interactive loop started"], []),
     "hwprobe": (["interactive loop started"], []),
+    "scan": (["[m72] EuroScan eSCL ✓", "EuroScan Virtual 3000", "NextDocument", "interactive loop started"], []),
     "power": (["[acpi] power button armed", "[acpi-pwr]", "interactive loop started"], []),
     "tpm": (["TPM 2.0 TIS @ 0xfed40000", "[3e1] EnrollFde EXECUTED", "unseal-roundtrip=true",
              "interactive loop started"], ["unseal-roundtrip=false"]),
@@ -195,6 +197,12 @@ def start_side(leg):
         SIDE["tpm_proc"] = p
         SIDE["tpm_state"] = state
         SIDE["tpm_sock"] = sock
+    elif leg == "scan":
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mock-escl-server.py")
+        p = subprocess.Popen([sys.executable, script, "--port", "8631"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        time.sleep(1.2)
+        SIDE["escl_proc"] = p
     elif leg == "printer":
         spool = tempfile.mkdtemp(prefix="ek-ipp-")
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mock-ipp-server.py")
@@ -215,13 +223,14 @@ def stop_side(leg):
             ipp.wait(timeout=6)
         except Exception:
             pass
-    p = SIDE.pop("tpm_proc", None)
-    if p:
-        try:
-            p.kill()
-            p.wait(timeout=6)
-        except Exception:
-            pass
+    for key in ("tpm_proc", "escl_proc"):
+        p = SIDE.pop(key, None)
+        if p:
+            try:
+                p.kill()
+                p.wait(timeout=6)
+            except Exception:
+                pass
     st = SIDE.pop("tpm_state", None)
     if st:
         shutil.rmtree(st, ignore_errors=True)

@@ -101,6 +101,7 @@ mod suite;
 mod wifi;
 mod gpu;
 mod print;
+mod scan;
 mod mcpd;
 mod wagent;
 mod instexec;
@@ -1954,6 +1955,7 @@ fn main() -> Status {
     // BB-4: EuroPrint — real IPP-over-TCP round-trip to a network printer/CUPS
     // (10.0.2.2:631 via SLIRP host); Get-Printer-Attributes + Print-Job.
     print::selftest();
+    scan::selftest();
 
     // EuroCoreutils (CU-7): prove the compute/control commands live in the kernel
     // (deterministic — not dependent on USB keystrokes under slow TCG).
