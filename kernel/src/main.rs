@@ -490,6 +490,34 @@ fn main() -> Status {
                 rootblk::RootBlk::ram(2048)
             }
         }
+    } else if ahci::disk_count() > 0 {
+        // Metal M2-3: no virtio-blk and no NVMe, but SATA disks are here. Scan
+        // them for our installed EuroFS, else install onto a blank one. The boot
+        // medium (q35 exposes it on SATA) is partitioned + non-EuroFS, so both
+        // rules skip it — it is never clobbered.
+        let mut chosen = None;
+        for idx in 0..ahci::disk_count() {
+            if let Some((start, blocks)) = instexec::ahci_eurofs_partition(idx) {
+                serial_println!("[euro] live root = the on-disk EuroFS on AHCI disk {idx} (standalone SATA boot)");
+                chosen = Some(rootblk::RootBlk::ahci(idx, start, blocks));
+                break;
+            }
+        }
+        if chosen.is_none() && instexec::media_available() {
+            for idx in 0..ahci::disk_count() {
+                if instexec::ahci_is_blank(idx) && instexec::install_to_ahci(idx, &instexec::default_config()) {
+                    if let Some((start, blocks)) = instexec::ahci_eurofs_partition(idx) {
+                        serial_println!("[euro] live root = the freshly-installed EuroFS on AHCI disk {idx}");
+                        chosen = Some(rootblk::RootBlk::ahci(idx, start, blocks));
+                    }
+                    break;
+                }
+            }
+        }
+        chosen.unwrap_or_else(|| {
+            serial_println!("[euro] no installable/EuroFS SATA disk — booting a RAM root (disks left intact)");
+            rootblk::RootBlk::ram(2048)
+        })
     } else {
         rootblk::RootBlk::ram(2048) // RAM root when there is NO disk at all
     };
@@ -1547,6 +1575,9 @@ fn main() -> Status {
     // M3-3: a CDC-ECM USB NIC only exists after xHCI enumeration (above) — if
     // no NIC bound during the main net bring-up, adopt it and bring it up now.
     net::late_bring_up();
+    // M4-3 live wiring: a USB DAC also only exists after xHCI enumeration —
+    // route the euroaudio mixer's output to it (no-op without one).
+    audio::usb_wire_selftest();
     serial_println!("[euro] APIC timer 100 Hz + interrupts ON -> preemptive multitasking (incl. ring 3)");
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.

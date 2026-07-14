@@ -444,9 +444,13 @@ pub fn parse_report_descriptor(d: &[u8]) -> Option<InputMap> {
         match (btype, btag) {
             (1, 0) => usage_page = data,         // Global: Usage Page
             (1, 2) => logical_max = sdata,       // Global: Logical Maximum
-            (1, 7) => report_size = data,        // Global: Report Size
+            // Global: Report Size. Clamp to a sane HID bound so a hostile
+            // descriptor can't overflow the bit-offset arithmetic below.
+            (1, 7) => report_size = data.min(64),
             (1, 8) => cur_id = Some(data as u8), // Global: Report ID
-            (1, 9) => report_count = data,       // Global: Report Count
+            // Global: Report Count. Clamped for the same overflow reason (a real
+            // report is at most a few thousand fields).
+            (1, 9) => report_count = data.min(4096),
             (2, 0) => {
                 // Local: Usage. The 4-byte form carries its own page.
                 let full = if bsize == 4 { data } else { (usage_page << 16) | data };
@@ -476,8 +480,11 @@ pub fn parse_report_descriptor(d: &[u8]) -> Option<InputMap> {
                 if !constant && n_usages > 0 {
                     for slot in 0..report_count {
                         let u = usages[(slot as usize).min(n_usages - 1)];
+                        // Bit offsets are u16 (a report is ≤ 8 KiB); saturate so
+                        // a crafted descriptor can't overflow (fuzz-found).
+                        let off = (base as u32).saturating_add(slot.saturating_mul(report_size));
                         let field = HidField {
-                            bit_off: base + (slot as u16) * report_size as u16,
+                            bit_off: off.min(u16::MAX as u32) as u16,
                             bit_size: report_size as u8,
                             relative,
                             logical_max,
@@ -496,7 +503,7 @@ pub fn parse_report_descriptor(d: &[u8]) -> Option<InputMap> {
                         }
                     }
                 }
-                cursors.advance(cur_id, (report_size * report_count) as u16);
+                cursors.advance(cur_id, report_size.saturating_mul(report_count).min(u16::MAX as u32) as u16);
                 n_usages = 0;
                 usage_min = None;
             }

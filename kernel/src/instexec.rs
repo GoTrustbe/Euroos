@@ -109,6 +109,46 @@ pub fn nvme_eurofs_partition() -> Option<(u64, u64)> {
     crate::gpt::find_eurofs_partition_read(|lba, buf| crate::nvme::read_sectors(lba, buf))
 }
 
+/// Is AHCI disk `idx` blank (safe to install onto)? Boot-medium safety: q35
+/// exposes the boot image on SATA, but it is partitioned (0x55AA) so never
+/// blank — install-to-blank only ever targets a genuine fresh disk. Metal M2-3.
+pub fn ahci_is_blank(idx: usize) -> bool {
+    if idx >= crate::ahci::disk_count() {
+        return false;
+    }
+    let mut s0 = [0u8; 512];
+    if !crate::ahci::read_sectors(idx, 0, &mut s0) {
+        return false;
+    }
+    !(s0[510] == 0x55 && s0[511] == 0xAA)
+}
+
+/// Does AHCI disk `idx` carry an EuroFS GPT partition? (first-sector, blocks).
+pub fn ahci_eurofs_partition(idx: usize) -> Option<(u64, u64)> {
+    crate::gpt::find_eurofs_partition_read(|lba, buf| crate::ahci::read_sectors(idx, lba, buf))
+}
+
+/// Install a bootable EuroOS to AHCI/SATA disk `idx` (Metal M2-3). Same GPT +
+/// ESP + EuroFS root over the AHCI driver. Only ever called on a blank disk, so
+/// the boot medium (partitioned) is never touched.
+pub fn install_to_ahci(idx: usize, cfg: &Config) -> bool {
+    let total = crate::ahci::disk_sectors(idx);
+    if total == 0 {
+        return false;
+    }
+    install_to_target(
+        cfg,
+        total,
+        &alloc::format!("AHCI disk {idx}"),
+        |lba, bytes| {
+            crate::ahci::write_sectors(idx, lba, bytes);
+        },
+        |lba, buf| crate::ahci::read_sectors(idx, lba, buf),
+        || {}, // AHCI writes are polled DMA → durable on completion
+        |first, blocks| crate::rootblk::RootBlk::ahci(idx, first, blocks),
+    )
+}
+
 /// Install a REAL bootable EuroOS to virtio disk `dev`: GPT + FAT32 ESP
 /// (loader + A/B kernel from the own media) + an empty EuroFS root partition. The
 /// writer streams (≤ 4 KiB) so we never hold the whole disk in RAM.

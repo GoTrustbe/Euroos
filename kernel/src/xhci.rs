@@ -1164,6 +1164,60 @@ static mut MASS: Option<MassStorage> = None;
 /// speak (ECM here; NCM is framing on top — later if needed).
 const USBNET_RX_BUFS: usize = 8; // in-flight receive buffers (burst tolerance)
 
+/// A configured USB Audio (UAC1) playback endpoint kept alive so the audio
+/// layer can stream into it (M4-3 live wiring, not just the one-shot proof).
+struct UsbAudio {
+    slot: u8,
+    ep_dci: u8,
+    ring: Ring,
+    buf: u64,      // contiguous DMA staging buffer for isoch packets
+    buf_bytes: usize,
+}
+
+static mut USBAUDIO: Option<UsbAudio> = None;
+
+pub fn usbaudio_present() -> bool {
+    unsafe { (*core::ptr::addr_of!(USBAUDIO)).is_some() }
+}
+
+/// Stream a stereo-interleaved 16-bit PCM buffer (48 kHz) to the USB DAC as 1 ms
+/// isochronous packets; returns the number of packets the device consumed.
+/// This is the live mixer→USB path (fed by `euroaudio::Router::render`).
+pub fn usbaudio_play(pcm: &[i16]) -> usize {
+    unsafe {
+        let xp = core::ptr::addr_of_mut!(XHCI);
+        let x = match (*xp).as_mut() {
+            Some(x) => x,
+            None => return 0,
+        };
+        let a = match (*core::ptr::addr_of_mut!(USBAUDIO)).as_mut() {
+            Some(a) => a,
+            None => return 0,
+        };
+        const PKT_BYTES: usize = 192; // 48 frames × 2 ch × 2 B = 1 ms @ 48 kHz
+        let bytes = (pcm.len() * 2).min(a.buf_bytes);
+        core::ptr::copy_nonoverlapping(pcm.as_ptr() as *const u8, a.buf as *mut u8, bytes);
+        let npkts = bytes / PKT_BYTES;
+        for k in 0..npkts {
+            let pa = a.buf + (k * PKT_BYTES) as u64;
+            a.ring.push(pa as u32, (pa >> 32) as u32, PKT_BYTES as u32, (TRB_ISOCH << 10) | (1 << 5) | (1 << 31));
+        }
+        doorbell(x, a.slot, a.ep_dci as u32);
+        let mut done = 0usize;
+        for _ in 0..npkts {
+            match wait_event(x, TRB_EVT_TRANSFER, 30_000_000) {
+                Some(ev) => {
+                    if ((ev[3] >> 24) & 0xFF) as u8 == a.slot && (ev[3] >> 16) & 0x1F == a.ep_dci as u32 {
+                        done += 1;
+                    }
+                }
+                None => break,
+            }
+        }
+        done
+    }
+}
+
 struct UsbNet {
     slot: u8,
     in_dci: u8,
@@ -1415,35 +1469,19 @@ unsafe fn setup_usbaudio(
     let audio_buf = falloc
         .allocate_aligned((NPKTS * PKT_BYTES).div_ceil(4096), 1)
         .expect("xhci audio-buf");
-    let tone = crate::hda::tone_for_usb(NPKTS * PKT_BYTES / 2); // i16 samples
-    core::ptr::copy_nonoverlapping(tone.as_ptr() as *const u8, audio_buf as *mut u8, NPKTS * PKT_BYTES);
+    let tone = crate::hda::tone_for_usb(NPKTS * PKT_BYTES / 2); // i16 samples; usbaudio_play copies it in
 
-    // Queue the isoch TRBs (SIA = start ASAP), IOC on each for countable events.
-    for k in 0..NPKTS {
-        let pa = audio_buf + (k * PKT_BYTES) as u64;
-        iso_ring.push(
-            pa as u32,
-            (pa >> 32) as u32,
-            PKT_BYTES as u32,
-            (TRB_ISOCH << 10) | (1 << 5) | (1 << 31), // IOC | SIA
-        );
-    }
-    doorbell(x, slot, ep_dci as u32);
+    // Keep the endpoint alive so the audio layer can stream into it later.
+    USBAUDIO = Some(UsbAudio {
+        slot,
+        ep_dci,
+        ring: iso_ring,
+        buf: audio_buf,
+        buf_bytes: NPKTS * PKT_BYTES,
+    });
 
-    // Count the completions (DMA-consumption proof). Bounded wait.
-    let mut done = 0usize;
-    for _ in 0..NPKTS {
-        match wait_event(x, TRB_EVT_TRANSFER, 30_000_000) {
-            Some(ev) => {
-                let ev_slot = ((ev[3] >> 24) & 0xFF) as u8;
-                let ev_ep = (ev[3] >> 16) & 0x1F;
-                if ev_slot == slot && ev_ep == ep_dci as u32 {
-                    done += 1;
-                }
-            }
-            None => break,
-        }
-    }
+    // Initial DMA-consumption proof: stream the tone once and count completions.
+    let done = usbaudio_play(&tone);
     let ok = done >= NPKTS / 2;
     crate::serial_println!(
         "[m43] USB audio (UAC1) {}: isoch OUT ep DCI {ep_dci} @48 kHz stereo (rate-set={rate_ok}), {done}/{NPKTS} packets consumed by the device {}",

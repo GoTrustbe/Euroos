@@ -13,6 +13,10 @@ euronet = { path = "../euronet" }
 eurowallet = { path = "../eurowallet" }
 eurotpm = { path = "../eurotpm" }
 eurodns = { path = "../eurodns" }
+euroaml = { path = "../euroaml" }
+europrint = { path = "../europrint" }
+euroscan = { path = "../euroscan" }
+eurousb = { path = "../eurousb" }
 ed25519-dalek = { version = "2", default-features = false }
 
 [features]

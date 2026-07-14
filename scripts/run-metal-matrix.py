@@ -23,6 +23,7 @@ Legs:
   printer + host mock IPP server on :6631          -> full IPP Print-Job round-trip (M7-1)
   scan    + host mock eSCL scanner on :8631        -> driverless scan round-trip → image (M7-2)
   nvmeroot install to a blank NVMe → boot from it  -> standalone boot with root on NVMe (M2-3)
+  ahciroot install to a blank SATA → boot from it  -> standalone boot on SATA, boot-medium safe (M2-3)
   hwprobe base leg + typed `hwprobe` command    -> inventory lines over serial
 
 Usage: python3 scripts/run-metal-matrix.py [image] [--legs a,b,c]
@@ -130,13 +131,15 @@ LEGS = {
     "usb": (["mass storage LIVE", "interactive loop started"], []),
     "usbhub": (["(behind hub)", "via hub", "interactive loop started"], []),
     "usbaudio": (["[m43] USB audio (UAC1) LIVE", "packets consumed by the device ✓",
-                  "interactive loop started"], ["NOT streaming"]),
+                  "[m43-wire] mixer→USB path", "LIVE ✓",
+                  "interactive loop started"], ["NOT streaming", "no consumption"]),
     "usbnet": (["USB ethernet (CDC-ECM) LIVE", "NIC: usb-ethernet (CDC-ECM)",
                 "[net] DHCP OFFER:", "PING 10.0.2.2: echo-reply OK ✓",
                 "interactive loop started"], []),
     "hwprobe": (["interactive loop started"], []),
     "scan": (["[m72] EuroScan eSCL ✓", "EuroScan Virtual 3000", "NextDocument", "interactive loop started"], []),
     "nvmeroot": ([], []),  # handled specially in run_leg (two-phase install→boot)
+    "ahciroot": ([], []),  # handled specially (two-phase; boot-medium safety verified)
     "power": (["[acpi] power button armed", "[acpi-pwr]", "interactive loop started"], []),
     "tpm": (["TPM 2.0 TIS @ 0xfed40000", "[3e1] EnrollFde EXECUTED", "unseal-roundtrip=true",
              "interactive loop started"], ["unseal-roundtrip=false"]),
@@ -250,15 +253,16 @@ def stop_side(leg):
 
 
 def run_leg(leg):
-    if leg == "nvmeroot":
-        # Two-phase (install to NVMe → standalone boot from NVMe) — delegated to
-        # the dedicated harness so the disk image persists across both boots.
-        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test-nvme-root.py")
+    if leg in ("nvmeroot", "ahciroot"):
+        # Two-phase (install → standalone boot from the disk) — delegated to the
+        # dedicated harness so the disk image persists across both boots.
+        h = "test-nvme-root.py" if leg == "nvmeroot" else "test-ahci-root.py"
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), h)
         r = subprocess.run([sys.executable, script, IMG], capture_output=True, text=True)
         for l in r.stdout.splitlines():
             print("  " + l, flush=True)
         ok = r.returncode == 0
-        print(f"  [nvmeroot] {'PASS ✓' if ok else 'FAIL ✗'}", flush=True)
+        print(f"  [{leg}] {'PASS ✓' if ok else 'FAIL ✗'}", flush=True)
         return ok
     need, forbid = LEGS[leg]
     start_side(leg)
