@@ -232,4 +232,12 @@ jobs:
           ./userland/build.sh
           ./scripts/build.sh release
       - name: Run the matrix
-        run: python3 scripts/run-metal-matrix.py eurokernel.img
+        # GitHub runners have no KVM, so every QEMU boot runs under TCG (much
+        # slower). Run a representative fast subset (every driver path, single
+        # boot each) with a generous per-boot deadline, and skip the legs that
+        # are pathologically slow without KVM: the two-phase install-and-boot
+        # legs (nvmeroot/ahciroot) and the TPM seal/unseal legs (tpm/tpmcrb).
+        # Those stay in the full local matrix, which runs on a KVM-capable host.
+        env:
+          EK_BOOT_DEADLINE: "900"
+        run: python3 scripts/run-metal-matrix.py eurokernel.img --legs base,nvme,ahci,e1000e,hda,usb,usbhub,usbaudio,usbnet,scan,printer,power,hwprobe

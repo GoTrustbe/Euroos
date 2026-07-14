@@ -41,7 +41,7 @@ import shutil
 IMG = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "eurokernel.img"
 OVMF = "/usr/share/ovmf/OVMF.fd"
 WORK = tempfile.mkdtemp(prefix="ek-matrix-")
-BOOT_DEADLINE = 420
+BOOT_DEADLINE = int(os.environ.get("EK_BOOT_DEADLINE", "420"))  # bump on slow no-KVM CI
 RETRIES = 2  # the boot race is fixed (BUG-010); retries only guard infra flakes
 
 AZ = {"a": "q", "q": "a", "z": "w", "w": "z", "m": "semicolon", " ": "spc"}
