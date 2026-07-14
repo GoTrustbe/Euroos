@@ -1,20 +1,23 @@
-//! TPM 2.0 via the **TIS** (TPM Interface Specification) MMIO interface — plan O1,
-//! hardware root of trust.
+//! TPM 2.0 over MMIO at the fixed base `0xFED4_0000` — plan O1 / Metal M6-1,
+//! hardware root of trust. Two transport interfaces, both at that base:
 //!
-//! The TPM chip sits at the fixed MMIO base `0xFED4_0000` (locality 0, identity-
-//! mapped). This module is the transport layer beneath the host-tested [`eurotpm`]
-//! command encoding: it requests the locality, writes a TPM command into the
-//! FIFO, gives the chip the `go`, and reads the response back (with burst-count-flow-
-//! control). On top of that runs a boot self-test: `Startup`, `GetRandom` (proves
-//! the TPM is alive), and **PCR-extend** — the measurement operation that enables measured boot and
-//! (with K3) a disk key sealed to the boot state.
+//! - **TIS** (FIFO): the classic discrete-chip interface. Command goes into a
+//!   FIFO with burst-count flow control; the chip signals data-available.
+//! - **CRB** (Command Response Buffer): the interface that firmware TPMs —
+//!   Intel PTT, AMD fTPM — present on modern machines. Command and response
+//!   live in an MMIO buffer; a `start` bit runs the command.
+//!
+//! `init()` reads the interface-id register to pick the backend; `transact()`
+//! dispatches to it. On top runs a boot self-test: `Startup`, `GetRandom` and
+//! **PCR-extend** (measured boot; with K3 a disk key sealed to the boot state).
 
 use alloc::vec::Vec;
 
-const TIS_BASE: u64 = 0xFED4_0000; // locality 0
+const TIS_BASE: u64 = 0xFED4_0000; // locality 0 (both TIS and CRB)
 const REG_ACCESS: u64 = 0x00;
 const REG_STS: u64 = 0x18;
 const REG_DATA_FIFO: u64 = 0x24;
+const REG_INTF_ID: u64 = 0x30; // TPM_INTERFACE_ID: low nibble = interface type
 const REG_DID_VID: u64 = 0xF00;
 
 const ACCESS_ACTIVE_LOCALITY: u8 = 1 << 5;
@@ -25,7 +28,28 @@ const STS_TPM_GO: u32 = 1 << 5;
 const STS_DATA_AVAIL: u32 = 1 << 4;
 const STS_EXPECT: u32 = 1 << 3;
 
+// ── CRB interface registers (offsets from TIS_BASE) ───────────────────────────
+const CRB_LOC_STATE: u64 = 0x00; // bit1 locAssigned, bits2-4 activeLocality, bit7 valid
+const CRB_LOC_CTRL: u64 = 0x08; // bit0 requestAccess, bit1 relinquish
+const CRB_LOC_STS: u64 = 0x0C; // bit0 Granted
+const CRB_CTRL_REQ: u64 = 0x40; // bit0 cmdReady, bit1 goIdle
+const CRB_CTRL_STS: u64 = 0x44; // bit0 tpmSts(error), bit1 tpmIdle
+const CRB_CTRL_START: u64 = 0x4C; // bit0 start
+const CRB_CTRL_CMD_SIZE: u64 = 0x58;
+const CRB_CTRL_CMD_LADDR: u64 = 0x5C;
+const CRB_CTRL_CMD_HADDR: u64 = 0x60;
+const CRB_CTRL_RSP_SIZE: u64 = 0x64;
+const CRB_CTRL_RSP_ADDR: u64 = 0x68; // 64-bit
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    None,
+    Tis,
+    Crb,
+}
+
 static mut PRESENT: bool = false;
+static mut BACKEND: Backend = Backend::None;
 
 #[inline]
 unsafe fn r8(off: u64) -> u8 {
@@ -78,12 +102,101 @@ unsafe fn wait_sts(mask: u32) -> bool {
     false
 }
 
+#[inline]
+unsafe fn r32(off: u64) -> u32 {
+    ((TIS_BASE + off) as *const u32).read_volatile()
+}
+#[inline]
+unsafe fn w32(off: u64, v: u32) {
+    ((TIS_BASE + off) as *mut u32).write_volatile(v);
+}
+
+/// One complete CRB transaction (Metal M6-1): request locality, set the command
+/// buffer, run `start`, read the response. None on a transport error/timeout.
+unsafe fn crb_transact(cmd: &[u8]) -> Option<Vec<u8>> {
+    // 1. Request locality 0.
+    w32(CRB_LOC_CTRL, 1); // requestAccess
+    let mut got = false;
+    for _ in 0..100_000 {
+        if r32(CRB_LOC_STS) & 1 != 0 || r32(CRB_LOC_STATE) & (1 << 1) != 0 {
+            got = true;
+            break;
+        }
+        spin();
+    }
+    if !got {
+        return None;
+    }
+    // 2. Command-ready.
+    w32(CRB_CTRL_REQ, 1); // cmdReady
+    for _ in 0..100_000 {
+        if r32(CRB_CTRL_REQ) & 1 == 0 {
+            break;
+        }
+        spin();
+    }
+    // 3. Command + response buffer addresses (from the control registers).
+    let cmd_addr = (r32(CRB_CTRL_CMD_LADDR) as u64) | ((r32(CRB_CTRL_CMD_HADDR) as u64) << 32);
+    let cmd_size = r32(CRB_CTRL_CMD_SIZE) as usize;
+    let rsp_addr = (r32(CRB_CTRL_RSP_ADDR) as u64) | ((r32(CRB_CTRL_RSP_ADDR + 4) as u64) << 32);
+    let rsp_size = r32(CRB_CTRL_RSP_SIZE) as usize;
+    if cmd_addr == 0 || rsp_addr == 0 || cmd.len() > cmd_size {
+        w32(CRB_CTRL_REQ, 2); // goIdle
+        w32(CRB_LOC_CTRL, 2); // relinquish
+        return None;
+    }
+    // 4. Write the command into the MMIO command buffer (identity-mapped).
+    for (i, &b) in cmd.iter().enumerate() {
+        ((cmd_addr + i as u64) as *mut u8).write_volatile(b);
+    }
+    // 5. Run it: set start, wait for it to clear.
+    w32(CRB_CTRL_START, 1);
+    let mut done = false;
+    for _ in 0..2_000_000 {
+        if r32(CRB_CTRL_START) & 1 == 0 {
+            done = true;
+            break;
+        }
+        spin();
+    }
+    if !done || r32(CRB_CTRL_STS) & 1 != 0 {
+        w32(CRB_CTRL_REQ, 2);
+        w32(CRB_LOC_CTRL, 2);
+        return None;
+    }
+    // 6. Read the response header (10 bytes) for its size, then the whole thing.
+    let mut resp = Vec::new();
+    for i in 0..6.min(rsp_size) {
+        resp.push(((rsp_addr + i as u64) as *const u8).read_volatile());
+    }
+    let size = if resp.len() >= 6 {
+        u32::from_be_bytes([resp[2], resp[3], resp[4], resp[5]]) as usize
+    } else {
+        0
+    };
+    let total = size.clamp(resp.len(), rsp_size);
+    for i in resp.len()..total {
+        resp.push(((rsp_addr + i as u64) as *const u8).read_volatile());
+    }
+    // 7. Back to idle + release the locality.
+    w32(CRB_CTRL_REQ, 2); // goIdle
+    w32(CRB_LOC_CTRL, 2); // relinquish
+    if resp.len() >= 10 {
+        Some(resp)
+    } else {
+        None
+    }
+}
+
 /// Perform one complete TPM transaction: send `cmd`, read the response. None on
-/// a transport error/timeout.
+/// a transport error/timeout. Dispatches to the detected interface (TIS or CRB).
 pub fn transact(cmd: &[u8]) -> Option<Vec<u8>> {
     unsafe {
         if !PRESENT {
             return None;
+        }
+        if BACKEND == Backend::Crb {
+            return crb_transact(cmd);
         }
         if !request_locality() {
             return None;
@@ -155,16 +268,46 @@ pub fn transact(cmd: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-/// Detect the TPM + do Startup. Returns true if there is a working TPM.
+/// Detect the TPM + its interface + do Startup. Returns true if there is a
+/// working TPM. Prefers CRB when the interface-id register reports it (firmware
+/// TPMs), else falls back to the TIS FIFO (discrete chips / QEMU tpm-tis).
 pub fn init() -> bool {
     unsafe {
-        // Read DID_VID: 0xFFFFFFFF / 0 = no chip.
+        // TPM_INTERFACE_ID (0x30): low nibble = InterfaceType. 1 = CRB, 0 = FIFO
+        // (TIS). QEMU's tpm-crb reports 1 here; tpm-tis reports 0/0xF.
+        let intf = ((TIS_BASE + REG_INTF_ID) as *const u32).read_volatile();
+        let intf_type = intf & 0xF;
+        let is_crb = intf != 0xFFFF_FFFF && intf_type == 1;
+
+        if is_crb {
+            // A CRB TPM: probe the command-buffer registers to confirm it's real.
+            let cmd_addr = (r32(CRB_CTRL_CMD_LADDR) as u64) | ((r32(CRB_CTRL_CMD_HADDR) as u64) << 32);
+            if cmd_addr == 0 || cmd_addr == 0xFFFF_FFFF_FFFF_FFFF {
+                crate::serial_println!("[tpm] CRB interface reported but no command buffer — no TPM");
+                return false;
+            }
+            PRESENT = true;
+            BACKEND = Backend::Crb;
+            if let Some(r) = transact(&eurotpm::startup()) {
+                if let Some(h) = eurotpm::parse_header(&r) {
+                    crate::serial_println!(
+                        "[tpm] TPM 2.0 CRB @ {:#x} (cmd-buf {:#x}), Startup rc={:#x}{} — firmware-TPM interface (fTPM/PTT)",
+                        TIS_BASE, cmd_addr, h.rc,
+                        if h.rc == 0 { " (freshly started)" } else { " (already started by firmware)" }
+                    );
+                }
+            }
+            return true;
+        }
+
+        // TIS FIFO path. DID_VID: 0xFFFFFFFF / 0 = no chip.
         let didvid = ((TIS_BASE + REG_DID_VID) as *const u32).read_volatile();
         if didvid == 0xFFFF_FFFF || didvid == 0 {
-            crate::serial_println!("[tpm] no TPM-TIS @ {:#x} (DID_VID={:#010x})", TIS_BASE, didvid);
+            crate::serial_println!("[tpm] no TPM @ {:#x} (intf-id={:#010x}, DID_VID={:#010x})", TIS_BASE, intf, didvid);
             return false;
         }
         PRESENT = true;
+        BACKEND = Backend::Tis;
         // TPM2_Startup(CLEAR). The firmware (OVMF) usually started it already → in that case
         // this returns TPM_RC_INITIALIZE (0x100), which is fine.
         if let Some(r) = transact(&eurotpm::startup()) {

@@ -17,7 +17,8 @@ Legs:
   usbhub  keyboard ONLY behind a usb-hub         -> typing works through the hub (M4-1)
   usbnet  ONLY NIC = usb-net (CDC-ECM)            -> DHCP/ping over USB ethernet (M3-3)
   power   base leg + ACPI power-button press       -> armed + clean S5 shutdown (M5-2)
-  tpm     + swtpm tpm-tis @ 0xFED40000             -> real TPM2 seal/unseal to PCR16 (M6-1)
+  tpm     + swtpm tpm-tis @ 0xFED40000             -> real TPM2 seal/unseal to PCR16 via TIS (M6-1)
+  tpmcrb  + swtpm tpm-crb @ 0xFED40000             -> same, via the CRB fTPM/PTT interface (M6-1)
   printer + host mock IPP server via guestfwd      -> IPP Print-Job round-trip (M7-1)
   hwprobe base leg + typed `hwprobe` command    -> inventory lines over serial
 
@@ -89,12 +90,14 @@ def leg_devices(leg):
         return ["-device", "usb-hub,bus=xhci.0,port=3",
                 "-drive", f"format=raw,file={img},if=none,id=ud0",
                 "-device", "usb-storage,drive=ud0,bus=xhci.0,port=4"]
-    if leg == "tpm":
+    if leg in ("tpm", "tpmcrb"):
         # swtpm is started in run_leg (needs teardown); here just attach it.
+        # tpm = TIS (discrete-chip interface); tpmcrb = CRB (fTPM/PTT interface).
         sock = SIDE.get("tpm_sock")
+        dev = "tpm-crb" if leg == "tpmcrb" else "tpm-tis"
         return ["-chardev", f"socket,id=chrtpm,path={sock}",
                 "-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
-                "-device", "tpm-tis,tpmdev=tpm0"]
+                "-device", f"{dev},tpmdev=tpm0"]
     if leg == "printer":
         # No special netdev: slirp already forwards guest -> 10.0.2.2:631 to the
         # host's service on :631 (same mechanism the OTA server on :8722 uses).
@@ -125,6 +128,8 @@ LEGS = {
     "power": (["[acpi] power button armed", "[acpi-pwr]", "interactive loop started"], []),
     "tpm": (["TPM 2.0 TIS @ 0xfed40000", "[3e1] EnrollFde EXECUTED", "unseal-roundtrip=true",
              "interactive loop started"], ["unseal-roundtrip=false"]),
+    "tpmcrb": (["TPM 2.0 CRB @ 0xfed40000", "[3e1] EnrollFde EXECUTED", "unseal-roundtrip=true",
+                "interactive loop started"], ["unseal-roundtrip=false"]),
     "printer": (["[bb4] EuroPrint IPP-over-TCP", "Print-Job status=0x0000 (ok=true)",
                  "interactive loop started"], ["ok=false"]),
 }
@@ -177,7 +182,7 @@ def qmp_type(qmp, text):
 
 
 def start_side(leg):
-    if leg == "tpm":
+    if leg in ("tpm", "tpmcrb"):
         state = tempfile.mkdtemp(prefix="ek-swtpm-")
         sock = os.path.join(state, "sock")
         p = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={state}",
