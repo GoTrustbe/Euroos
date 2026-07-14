@@ -77,7 +77,7 @@ AHCI write/read + boot-medium read-only proof).
 |----|------|--------|----------------------|
 | M2-1 | NVMe: MSI-X + PRP lists for >8 KiB | ✅ (single I/O queue) | 64 KiB PRP-list transfers verified; `[nvme] MSI-X delivery confirmed` after interrupts enable. Per-core queue pairs deferred until SMP scheduling needs them. |
 | M2-2 | AHCI/SATA (one class driver) | ✅ (polled, no NCQ/hotplug) | `ahci.rs`: port bring-up, IDENTIFY, LBA48 DMA r/w, 64 KiB PRDT window; blank-disk write/read self-test, boot medium read-only proof. AhciBlock = EuroFS BlockDevice. |
-| M2-3 | Boot-device generality | ✅ (NVMe) | RootBlk backend (Virtio/Nvme/Ahci) + install_to_nvme + GPT scan over any backend + root-selection fallback. Verified: install to a blank NVMe → boot from that NVMe alone → root on NVMe (`nvmeroot` leg). AHCI-root deliberately not auto-selected (q35 SATA = boot medium). |
+| M2-3 | Boot-device generality | ✅ (NVMe + AHCI) | RootBlk backend (Virtio/Nvme/Ahci) + install_to_nvme/ahci + GPT scan over any backend + root-selection fallback. Verified: install→standalone-boot→root on NVMe (`nvmeroot`) and on SATA (`ahciroot`, boot-medium structurally safe: partitioned+non-EuroFS is always skipped). |
 
 ### M-3 — Wired network on metal *(unlocks web/VPN/update/IPP on real machines)*
 | ID | Task | Status | Scope & verification |
@@ -91,7 +91,7 @@ AHCI write/read + boot-medium read-only proof).
 |----|------|--------|----------------------|
 | M4-1 | Hub support (incl. root-hub port trees) | ✅ (boot-time; hotplug open) | Route strings + TT fields + hub port power/reset/scan, depth 2. Matrix `usbhub` leg: the only keyboard behind a hub types `uname` end-to-end. Hotplug events deferred. |
 | M4-2 | HID report protocol (report-descriptor parsing) | ✅ | `eurousb::parse_report_descriptor` (short items, usage ranges, report ids) host-tested; xHCI decodes report-protocol pointers through the parsed map with device logical ranges (QEMU tablet live-verified). |
-| M4-3 | USB audio (class driver) | ✅ UAC1 (UAC2 🔒 real hw) | Isochronous OUT over xHCI (first isoch endpoint in the driver, FS-isoch log2 bInterval, control_out SET_CUR): a real euroaudio tone streamed as 96×1 ms packets, all consumed (`[m43] … 96/96 ✓`, matrix `usbaudio` leg). Ongoing mixer→USB wiring is follow-up. |
+| M4-3 | USB audio (class driver) | ✅ UAC1 + live wiring (UAC2 🔒) | Isochronous OUT over xHCI (first isoch endpoint in the driver, FS-isoch log2 bInterval, control_out SET_CUR). The endpoint stays configured (`usbaudio_play`) and the euroaudio Router routes its mix to the USB DAC — `[m43-wire] mixer→USB path … LIVE`. UAC2-only devices deferred to real hw. |
 | M4-4 | xHCI robustness pass | 🟡 | Ring-full handling, stall recovery, disconnect mid-transfer; fuzz the descriptor parser in `eurofuzz`. |
 
 ### M-5 — ACPI laptop basics — ✅ CORE DONE 2026-07-13 (power button verified; battery decode host-tested, EC dynamic deferred)
