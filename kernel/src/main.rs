@@ -132,6 +132,9 @@ mod launcher;
 mod filedialog;
 mod notify;
 mod screenshot;
+mod tooltip;
+mod symbolpicker;
+mod spell;
 mod agent_ui;
 mod files;
 mod textedit;
@@ -247,12 +250,16 @@ fn build_context_menu(
             }
             // Text-bearing windows → Paste (enabled only when the clipboard has text).
             suite_ui::SuiteApp::None | suite_ui::SuiteApp::Text | suite_ui::SuiteApp::Notes => {
-                let paste = if clipboard::has_content() {
+                let mut paste = if clipboard::has_content() {
                     Item::new("Paste", "Ctrl V", Action::Paste)
                 } else {
                     Item::disabled("Paste")
                 };
-                ctxmenu::open(rx, ry, alloc::vec![paste], sw, sh);
+                paste.sep_after = true;
+                ctxmenu::open(rx, ry, alloc::vec![
+                    paste,
+                    Item::new("Insert symbol", "", Action::InsertSymbol),
+                ], sw, sh);
             }
             _ => {}
         }
@@ -273,6 +280,31 @@ fn build_context_menu(
     }
     items.push(Item::new("Refresh", "F5", Action::Refresh));
     ctxmenu::open(rx, ry, items, sw, sh);
+}
+
+/// The tooltip text for whatever control is under the cursor, if any: the EU
+/// mark, a dock tile, the status panel, or a window's traffic-light buttons.
+fn tooltip_for(px: usize, py: usize, windows: &[compositor::Window], order: &[usize], width: usize) -> Option<String> {
+    if compositor::brand_button_at(px, py) {
+        return Some(String::from("Open the app launcher"));
+    }
+    if let Some(icon) = compositor::dock_icon_at(px, py) {
+        return launcher::name_for_icon(icon).map(String::from);
+    }
+    let (rx, ry, rw, rh) = compositor::status_panel_rect(width);
+    if px >= rx && px < rx + rw && py >= ry && py < ry + rh {
+        return Some(String::from("Notifications"));
+    }
+    if let Some(i) = order.iter().rev().copied().find(|&i| windows[i].visible && windows[i].contains(px, py)) {
+        if let Some(btn) = windows[i].title_button_at(px, py) {
+            return Some(String::from(match btn {
+                compositor::TitleButton::Close => "Close",
+                compositor::TitleButton::Minimize => "Minimize",
+                compositor::TitleButton::Maximize => "Maximize",
+            }));
+        }
+    }
+    None
 }
 
 const PROMPT: &str = "euroos:/ $ ";
@@ -2072,6 +2104,9 @@ fn main() -> Status {
     filedialog::selftest();
     notify::selftest();
     screenshot::selftest();
+    tooltip::selftest();
+    symbolpicker::selftest();
+    spell::selftest();
     // 3F-6: audio routing — per-app streams, per-device routing, default policy.
     audio::selftest();
 
@@ -2883,6 +2918,10 @@ fn main() -> Status {
 
     // ── Desktop loop: mouse cursor, window dragging, live system window. ──
     let mut dragging: Option<usize> = None;
+    // Tooltip hover state: what the cursor is over, and since when.
+    let mut hover_txt: Option<String> = None;
+    let mut hover_since = 0u64;
+    let mut tip_shown = false;
     let mut drag_off = (0usize, 0usize);
     let mut last_t = u64::MAX;
     let mut last_kbd = 0u64; // diagnostics: keyboard IRQs via the IO-APIC
@@ -2939,8 +2978,24 @@ fn main() -> Status {
         // A screenshot requested this iteration, captured after a clean render.
         let mut pending_shot = false;
 
-        // The file dialog is modal (highest priority): its click chooses/navigates.
-        if filedialog::is_open() {
+        // The symbol picker is modal: a click inserts the chosen symbol into the
+        // focused text field (or dismisses).
+        if symbolpicker::is_open() {
+            if let Some((cx, cy)) = mouse::take_press() {
+                if let Some(sym) = symbolpicker::click_at(cx, cy, width, height) {
+                    let to_terminal = order.iter().rev().copied()
+                        .find(|&i| windows[i].visible)
+                        .map(|i| windows[i].app == suite_ui::SuiteApp::None)
+                        .unwrap_or(false);
+                    if to_terminal {
+                        input.push_str(&sym);
+                    } else {
+                        for ch in sym.chars() { textedit::input(ch); }
+                    }
+                }
+                need_full = true;
+            }
+        } else if filedialog::is_open() {
             if let Some((cx, cy)) = mouse::take_press() {
                 filedialog::click_at(cx, cy, width, height);
                 need_full = true;
@@ -2994,6 +3049,7 @@ fn main() -> Status {
                             }
                         }
                         Screenshot => { pending_shot = true; }
+                        InsertSymbol => { symbolpicker::open(); }
                         NewFolder(dir) => {
                             let base = if dir.ends_with('/') { dir.clone() } else { alloc::format!("{dir}/") };
                             // Find a free name by trying to create it (no metadata() on the FS).
@@ -3057,7 +3113,7 @@ fn main() -> Status {
                 need_full = true;
             }
         } else if let Some((rx, ry)) = mouse::take_right_press() {
-            if portal_buttons.is_none() && !launcher::is_open() && !filedialog::is_open() {
+            if portal_buttons.is_none() && !launcher::is_open() && !filedialog::is_open() && !symbolpicker::is_open() {
                 build_context_menu(rx, ry, &windows, &order, &dock_targets, width, height);
                 need_full = true;
             }
@@ -3351,6 +3407,12 @@ fn main() -> Status {
         let mut term_dirty = false;
         let mut calc_dirty = false;
         while let Some(k) = ps2::poll_key() {
+            // The symbol picker only needs Esc to dismiss.
+            if symbolpicker::is_open() {
+                if k == '\u{1b}' { symbolpicker::close(); }
+                need_full = true;
+                continue;
+            }
             // The file dialog captures the keyboard while it is open (navigate /
             // type a name / Enter / Esc).
             if filedialog::is_open() {
@@ -3816,10 +3878,30 @@ fn main() -> Status {
         let t = interrupts::ticks();
         let tick = t / 50 != last_t;
 
+        // Tooltips: after a short dwell over a control, show its label. Any open
+        // overlay suppresses tooltips.
+        let overlay_up = ctxmenu::is_open() || launcher::is_open() || filedialog::is_open() || notify::is_centre_open();
+        let target = if overlay_up { None } else { tooltip_for(px, py, &windows, &order, width) };
+        if target != hover_txt {
+            hover_txt = target;
+            hover_since = t;
+            if tip_shown {
+                tooltip::clear();
+                tip_shown = false;
+                need_full = true;
+            }
+        } else if let Some(txt) = &hover_txt {
+            if !tip_shown && t.saturating_sub(hover_since) > 35 {
+                tooltip::set(txt, px, py);
+                tip_shown = true;
+                need_full = true;
+            }
+        }
+
         // While a context menu or the launcher is open, keep repainting so the
         // hovered row tracks the cursor and the overlay stays above everything.
         if ctxmenu::is_open() || launcher::is_open() || filedialog::is_open()
-            || notify::has_active_toasts(t) || notify::is_centre_open()
+            || symbolpicker::is_open() || notify::has_active_toasts(t) || notify::is_centre_open()
         {
             need_full = true;
         }
@@ -3836,9 +3918,13 @@ fn main() -> Status {
             launcher::render(&fb, width, height);
             // The file open/save dialog is the topmost overlay when active.
             filedialog::render(&fb, width, height);
+            // The symbol picker overlay.
+            symbolpicker::render(&fb, width, height);
             // Notification toasts and the centre shade sit above the desktop.
             notify::render_toasts(&fb, width, t);
             notify::render_centre(&fb, width, height);
+            // A hover tooltip, if one is showing, sits just under the cursor.
+            tooltip::render(&fb, width, height);
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);

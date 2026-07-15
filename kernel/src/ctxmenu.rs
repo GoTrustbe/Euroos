@@ -38,6 +38,8 @@ pub enum Action {
     Refresh,
     /// Capture the screen to an image file.
     Screenshot,
+    /// Open the symbol/emoji picker to insert into the focused text.
+    InsertSymbol,
 }
 
 /// One row in a menu. `action: None` renders as a disabled (greyed) row.

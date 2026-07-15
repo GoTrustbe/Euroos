@@ -41,6 +41,11 @@ pub fn is_open() -> bool {
     LAUNCHER.lock().is_some()
 }
 
+/// The display name for a dock tile index (for tooltips). None if unmapped.
+pub fn name_for_icon(icon: usize) -> Option<&'static str> {
+    CATALOG.iter().find(|(_, i)| *i == icon).map(|(n, _)| *n)
+}
+
 pub fn open() {
     *LAUNCHER.lock() = Some(State { query: String::new(), sel: 0 });
 }
