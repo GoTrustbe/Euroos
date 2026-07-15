@@ -2922,6 +2922,8 @@ fn main() -> Status {
     let mut hover_txt: Option<String> = None;
     let mut hover_since = 0u64;
     let mut tip_shown = false;
+    // Drag-and-drop: a file being dragged out of EuroFiles (path + press point).
+    let mut file_drag: Option<(String, usize, usize)> = None;
     let mut drag_off = (0usize, 0usize);
     let mut last_t = u64::MAX;
     let mut last_kbd = 0u64; // diagnostics: keyboard IRQs via the IO-APIC
@@ -3294,25 +3296,10 @@ fn main() -> Status {
                         if let Some(path) = files::hit_test(windows[i].x, windows[i].y, px, py) {
                             load_files_dir(ctx.fs, &path);
                         } else if let Some(fpath) = files::hit_test_file(windows[i].x, windows[i].y, px, py) {
-                            // 3F-5: double-click a FILE → open it with its default app.
-                            let (_mime, app) = mime::resolve(ctx.fs, &fpath);
-                            if let Some(target) = app.as_deref().and_then(mime_app_to_suite) {
-                                // The text editor loads the file's content.
-                                if target == suite_ui::SuiteApp::Text {
-                                    textedit::open(ctx.fs, &fpath);
-                                }
-                                // Raise the target app's window (same bookkeeping as a dock open).
-                                if let Some(w) = windows.iter().position(|win| win.app == target) {
-                                    order.retain(|&x| x != w);
-                                    order.push(w);
-                                    for ww in windows.iter_mut() {
-                                        ww.active = false;
-                                    }
-                                    windows[w].visible = true;
-                                    windows[w].active = true;
-                                    need_full = true;
-                                }
-                            }
+                            // Press on a file starts a potential drag; the drop
+                            // handler either opens it in the target app (drag onto
+                            // EuroText) or, if it did not move, opens it normally.
+                            file_drag = Some((fpath, px, py));
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Notes {
                         // Click in the notes list → select a different note.
@@ -3336,6 +3323,42 @@ fn main() -> Status {
             }
         }
         if !ldown {
+            // Drop a file dragged out of EuroFiles.
+            if let Some((path, sx, sy)) = file_drag.take() {
+                let moved = (px as i64 - sx as i64).abs() + (py as i64 - sy as i64).abs() > 14;
+                let target = order.iter().rev().copied()
+                    .find(|&i| windows[i].visible && windows[i].contains(px, py) && windows[i].app != suite_ui::SuiteApp::Files);
+                let dropped_in_text = moved
+                    && target.map(|i| windows[i].app == suite_ui::SuiteApp::Text).unwrap_or(false);
+                if dropped_in_text {
+                    // Drag onto EuroText → open it there.
+                    textedit::open(ctx.fs, &path);
+                    if let Some(w) = windows.iter().position(|win| win.app == suite_ui::SuiteApp::Text) {
+                        order.retain(|&x| x != w);
+                        order.push(w);
+                        for ww in windows.iter_mut() { ww.active = false; }
+                        windows[w].visible = true;
+                        windows[w].active = true;
+                    }
+                    notify::push("Opened in EuroText", &path, interrupts::ticks());
+                } else if !moved {
+                    // A plain click → open with the default app (previous behaviour).
+                    let (_m, app) = mime::resolve(ctx.fs, &path);
+                    if let Some(tgt) = app.as_deref().and_then(mime_app_to_suite) {
+                        if tgt == suite_ui::SuiteApp::Text {
+                            textedit::open(ctx.fs, &path);
+                        }
+                        if let Some(w) = windows.iter().position(|win| win.app == tgt) {
+                            order.retain(|&x| x != w);
+                            order.push(w);
+                            for ww in windows.iter_mut() { ww.active = false; }
+                            windows[w].visible = true;
+                            windows[w].active = true;
+                        }
+                    }
+                }
+                need_full = true;
+            }
             // Drop: if released in an edge zone, snap the window there (Windows-
             // style half/half + top-to-maximize), remembering its floating size.
             if let Some(idx) = dragging.take() {
@@ -3902,6 +3925,7 @@ fn main() -> Status {
         // hovered row tracks the cursor and the overlay stays above everything.
         if ctxmenu::is_open() || launcher::is_open() || filedialog::is_open()
             || symbolpicker::is_open() || notify::has_active_toasts(t) || notify::is_centre_open()
+            || file_drag.is_some()
         {
             need_full = true;
         }
@@ -3925,6 +3949,15 @@ fn main() -> Status {
             notify::render_centre(&fb, width, height);
             // A hover tooltip, if one is showing, sits just under the cursor.
             tooltip::render(&fb, width, height);
+            // A drag ghost while a file is being dragged out of EuroFiles.
+            if let Some((ref path, _, _)) = file_drag {
+                let name = path.rsplit('/').next().unwrap_or(path);
+                let tw = text::width_px(name, 12.0);
+                let gx = px + 12;
+                let gy = py + 12;
+                fb.fill_rounded_rect(gx, gy, tw + 22, 24, eds::RADIUS_S, Color::ACCENT);
+                text::draw_px(&fb, gx + 11, gy + 5, name, Color::WHITE, 12.0);
+            }
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
