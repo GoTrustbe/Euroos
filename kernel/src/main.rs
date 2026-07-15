@@ -135,6 +135,8 @@ mod screenshot;
 mod tooltip;
 mod symbolpicker;
 mod spell;
+mod switcher;
+mod workspace;
 mod agent_ui;
 mod files;
 mod textedit;
@@ -2107,6 +2109,8 @@ fn main() -> Status {
     tooltip::selftest();
     symbolpicker::selftest();
     spell::selftest();
+    switcher::selftest();
+    workspace::selftest();
     // 3F-6: audio routing — per-app streams, per-device routing, default policy.
     audio::selftest();
 
@@ -2924,6 +2928,10 @@ fn main() -> Status {
     let mut tip_shown = false;
     // Drag-and-drop: a file being dragged out of EuroFiles (path + press point).
     let mut file_drag: Option<(String, usize, usize)> = None;
+    // Workspaces: the active virtual desktop and each other one's saved window
+    // visibility (None = never visited).
+    let mut active_ws = 0usize;
+    let mut ws_saved: [Option<alloc::vec::Vec<bool>>; workspace::COUNT] = [None, None, None, None];
     let mut drag_off = (0usize, 0usize);
     let mut last_t = u64::MAX;
     let mut last_kbd = 0u64; // diagnostics: keyboard IRQs via the IO-APIC
@@ -3901,6 +3909,46 @@ fn main() -> Status {
         let t = interrupts::ticks();
         let tick = t / 50 != last_t;
 
+        // Alt-Tab app switcher: tap Tab (Alt held) to cycle; release Alt to raise.
+        if ps2::take_alt_tab() {
+            if switcher::is_open() {
+                switcher::advance();
+            } else {
+                let items: alloc::vec::Vec<(usize, String)> = order.iter().rev().copied()
+                    .filter(|&i| windows[i].visible)
+                    .map(|i| (i, windows[i].title.clone()))
+                    .collect();
+                switcher::begin(items);
+            }
+            need_full = true;
+        }
+        if switcher::is_open() && !ps2::alt_down() {
+            if let Some(w) = switcher::selected() {
+                order.retain(|&x| x != w);
+                order.push(w);
+                for ww in windows.iter_mut() { ww.active = false; }
+                windows[w].active = true;
+                windows[w].visible = true;
+            }
+            switcher::close();
+            need_full = true;
+        }
+
+        // Workspaces: Alt+1..4 switches virtual desktops (save/restore visibility).
+        if let Some(k) = ps2::take_ws_switch() {
+            if k < workspace::COUNT && k != active_ws {
+                ws_saved[active_ws] = Some(windows.iter().map(|w| w.visible).collect());
+                let target = ws_saved[k].as_deref();
+                let vis = workspace::switch_visibility(windows.len(), target);
+                for (i, v) in vis.iter().enumerate() {
+                    windows[i].visible = *v;
+                }
+                active_ws = k;
+                notify::push("Workspace", &alloc::format!("Switched to desktop {}", k + 1), t);
+                need_full = true;
+            }
+        }
+
         // Tooltips: after a short dwell over a control, show its label. Any open
         // overlay suppresses tooltips.
         let overlay_up = ctxmenu::is_open() || launcher::is_open() || filedialog::is_open() || notify::is_centre_open();
@@ -3925,7 +3973,7 @@ fn main() -> Status {
         // hovered row tracks the cursor and the overlay stays above everything.
         if ctxmenu::is_open() || launcher::is_open() || filedialog::is_open()
             || symbolpicker::is_open() || notify::has_active_toasts(t) || notify::is_centre_open()
-            || file_drag.is_some()
+            || file_drag.is_some() || switcher::is_open()
         {
             need_full = true;
         }
@@ -3957,6 +4005,20 @@ fn main() -> Status {
                 let gy = py + 12;
                 fb.fill_rounded_rect(gx, gy, tw + 22, 24, eds::RADIUS_S, Color::ACCENT);
                 text::draw_px(&fb, gx + 11, gy + 5, name, Color::WHITE, 12.0);
+            }
+            // The Alt-Tab switcher overlay.
+            switcher::render(&fb, width, height);
+            // Workspace pager: one dot per virtual desktop, the active one filled.
+            {
+                let n = workspace::COUNT;
+                let (dot, gap) = (10usize, 10usize);
+                let total = n * dot + (n - 1) * gap;
+                let sx = width.saturating_sub(total) / 2;
+                let sy = height.saturating_sub(26);
+                for i in 0..n {
+                    let c = if i == active_ws { Color::ACCENT } else { Color::BORDER };
+                    fb.fill_rounded_rect(sx + i * (dot + gap), sy, dot, dot, dot / 2, c);
+                }
             }
             cmx = px;
             cmy = py;
