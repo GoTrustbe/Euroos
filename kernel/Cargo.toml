@@ -89,6 +89,7 @@ eurowifi = { path = "../crates/eurowifi" }
 eurogpu = { path = "../crates/eurogpu" }
 europrint = { path = "../crates/europrint" }
 euroscan = { path = "../crates/euroscan" }
+eurogeo = { path = "../crates/eurogeo" }
 # Kernelmodus (Track 3.2+):
 x86_64 = "0.15"                       # GDT/IDT/poort-I/O structuren (HW-abstractie, geen kernel)
 linked_list_allocator = "0.10"        # kernel-heap; wordt later EuroMM's eigen slab (Track 3.4)

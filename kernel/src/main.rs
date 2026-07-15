@@ -909,6 +909,12 @@ fn main() -> Status {
         Ok(bytes) => euroguard::load_config(&String::from_utf8_lossy(&bytes)),
         Err(_) => euroguard::init(), // fallback: built-in starter set
     }
+    // A geo feed extends the built-in country table if present (full GeoIP drops
+    // in as data, no code change). Then prove the network-control core.
+    if let Ok(bytes) = fs.read_file("/etc/euroguard/geoip.conf") {
+        euroguard::load_geo_feed(&String::from_utf8_lossy(&bytes));
+    }
+    euroguard::selftest();
 
     // ── REAL NETWORKING: initialize the virtio-net NIC and do a live ARP exchange
     // with the gateway. EuroNet now not only builds/parses packets — they

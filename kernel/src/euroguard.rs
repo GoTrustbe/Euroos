@@ -37,6 +37,23 @@ pub struct AppStats {
     pub bytes_sent: u64,
     pub bytes_recv: u64,
     pub hosts: Vec<Ipv4Addr>, // unique contacted IPs
+    /// Per-country connection counts (the "which apps go to which countries"
+    /// view). Key = ISO alpha-2, e.g. "CN"; "??" = not in the geo table.
+    pub countries: BTreeMap<String, u64>,
+}
+
+/// A per-app network rule (the user-controllable "what can this app reach"
+/// policy). This is the Level-3 (per-app) layer the module always intended.
+#[derive(Clone, Default)]
+pub enum AppNet {
+    /// No per-app restriction (system + geo rules still apply).
+    #[default]
+    Default,
+    /// The app may not open any outbound connection at all.
+    Blocked,
+    /// The app may connect ONLY to these CIDR blocks (allow-list); everything
+    /// else is refused. Empty list = block everything, same as `Blocked`.
+    AllowOnly(Vec<(u32, u8)>),
 }
 
 /// One line in the audit log (Phase 7.8). Local, never sent automatically.
@@ -54,6 +71,13 @@ struct EuroGuard {
     blocked_ports: Vec<u16>,
     /// DNS block list: ads/trackers/telemetry by name (including subdomains).
     blocked_domains: Vec<String>,
+    /// Geo-blocked countries (ISO alpha-2, e.g. "CN"). No connection is allowed
+    /// to an IP the geo table attributes to one of these.
+    blocked_countries: Vec<String>,
+    /// The IP-to-country table (curated built-in + a loaded feed).
+    geo: eurogeo::Table,
+    /// Per-app network policy (Level 3) — the user-controllable rules.
+    app_rules: BTreeMap<String, AppNet>,
     /// Per-app aggregation (key = app identity, e.g. "/bin/msock").
     apps: BTreeMap<String, AppStats>,
     /// DNS query log (domain → count) for the "top queries" overview.
@@ -73,6 +97,9 @@ impl EuroGuard {
             blocked_ips: Vec::new(),
             blocked_ports: Vec::new(),
             blocked_domains: Vec::new(),
+            blocked_countries: Vec::new(),
+            geo: eurogeo::Table::new(),
+            app_rules: BTreeMap::new(),
             apps: BTreeMap::new(),
             dns_log: BTreeMap::new(),
             audit: Vec::new(),
@@ -114,6 +141,7 @@ pub fn load_config(text: &str) {
     g.blocked_ips.clear();
     g.blocked_ports.clear();
     g.blocked_domains.clear();
+    g.blocked_countries.clear();
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -132,6 +160,12 @@ pub fn load_config(text: &str) {
                 }
             }
             (Some("block-domain"), Some(v)) => g.blocked_domains.push(v.to_ascii_lowercase()),
+            (Some("block-country"), Some(v)) => {
+                let cc = v.to_ascii_uppercase();
+                if !g.blocked_countries.contains(&cc) {
+                    g.blocked_countries.push(cc);
+                }
+            }
             _ => {}
         }
     }
@@ -173,31 +207,117 @@ fn entry<'a>(g: &'a mut EuroGuard, app: &str) -> &'a mut AppStats {
     g.apps.entry(app.to_string()).or_default()
 }
 
+/// The host-byte-order u32 of an IPv4 (for the geo table + CIDR checks).
+fn ip_u32(ip: Ipv4Addr) -> u32 {
+    u32::from_be_bytes(ip.0)
+}
+
+fn cidr_has(net: u32, prefix: u8, ip: u32) -> bool {
+    if prefix == 0 {
+        return true;
+    }
+    let mask = if prefix >= 32 { u32::MAX } else { !((1u32 << (32 - prefix)) - 1) };
+    (ip & mask) == (net & mask)
+}
+
 /// Policy check for an outgoing connection (Phase 7.1). Decides Allow/Block,
-/// updates the statistics and writes an audit event. Called by the
-/// `connect` syscall BEFORE a packet goes out the door.
+/// updates the per-app statistics (incl. destination country) and writes an
+/// audit event. Called by the `connect` syscall BEFORE a packet goes out the
+/// door. Order of evaluation: per-app rule → system IP/port block → geo block.
 pub fn check_connect(app: &str, ip: Ipv4Addr, port: u16) -> Decision {
     let mut g = GUARD.lock();
-    let blocked = g.blocked_ips.contains(&ip) || g.blocked_ports.contains(&port);
-    if blocked {
+    let u = ip_u32(ip);
+    let country = g.geo.country_of(u).map(|c| c.to_string());
+    let cc = country.clone().unwrap_or_else(|| "??".to_string());
+
+    // 1. Per-app rule (the user's per-app network policy).
+    let app_block = match g.app_rules.get(app) {
+        Some(AppNet::Blocked) => Some("app blocked from the network"),
+        Some(AppNet::AllowOnly(list)) => {
+            if list.iter().any(|(n, p)| cidr_has(*n, *p, u)) {
+                None
+            } else {
+                Some("outside the app's allow-list")
+            }
+        }
+        _ => None,
+    };
+    // 2. System-wide IP / port block.
+    let sys_block = g.blocked_ips.contains(&ip) || g.blocked_ports.contains(&port);
+    // 3. Geo (country) block.
+    let geo_block = country.as_deref().map(|c| g.blocked_countries.iter().any(|b| b == c)).unwrap_or(false);
+
+    let reason = app_block
+        .map(|r| r.to_string())
+        .or_else(|| sys_block.then(|| "system rule".to_string()))
+        .or_else(|| geo_block.then(|| alloc::format!("geo-block {cc}")));
+
+    if let Some(reason) = reason {
         g.blocked_total += 1;
         {
             let s = entry(&mut g, app);
             s.blocked += 1;
+            *s.countries.entry(cc.clone()).or_insert(0) += 1;
         }
-        g.log("BLOCK", app, alloc::format!("connect {}:{} — system rule", ipfmt(ip), port));
+        g.log("BLOCK", app, alloc::format!("connect {}:{} [{cc}] — {reason}", ipfmt(ip), port));
         Decision::Block
     } else {
         {
             let s = entry(&mut g, app);
             s.connects += 1;
+            *s.countries.entry(cc.clone()).or_insert(0) += 1;
             if !s.hosts.contains(&ip) && s.hosts.len() < HOSTS_MAX {
                 s.hosts.push(ip);
             }
         }
-        g.log("CONNECT", app, alloc::format!("{}:{}", ipfmt(ip), port));
+        g.log("CONNECT", app, alloc::format!("{}:{} [{cc}]", ipfmt(ip), port));
         Decision::Allow
     }
+}
+
+// ── User-controllable network policy (the per-app + geo control surface) ──────
+
+/// Block (or unblock) all connections to a country by ISO alpha-2 code.
+pub fn set_country_blocked(cc: &str, blocked: bool) {
+    let cc = cc.to_ascii_uppercase();
+    let mut g = GUARD.lock();
+    g.blocked_countries.retain(|c| c != &cc);
+    if blocked {
+        g.blocked_countries.push(cc.clone());
+        g.log("INFO", "shell", alloc::format!("country blocked: {cc}"));
+    } else {
+        g.log("INFO", "shell", alloc::format!("country unblocked: {cc}"));
+    }
+}
+
+/// Set the per-app network policy (the user's "what can this app reach").
+pub fn set_app_net(app: &str, rule: AppNet) {
+    let mut g = GUARD.lock();
+    let label = match &rule {
+        AppNet::Default => "default (system + geo rules only)",
+        AppNet::Blocked => "network BLOCKED",
+        AppNet::AllowOnly(_) => "restricted to an allow-list",
+    };
+    if matches!(rule, AppNet::Default) {
+        g.app_rules.remove(app);
+    } else {
+        g.app_rules.insert(app.to_string(), rule);
+    }
+    g.log("INFO", "shell", alloc::format!("app {app}: {label}"));
+}
+
+/// Load additional IP-to-country blocks from a geo feed (e.g.
+/// `/etc/euroguard/geoip.conf`). Extends the built-in curated table.
+pub fn load_geo_feed(text: &str) -> usize {
+    let mut g = GUARD.lock();
+    let n = g.geo.load_feed(text);
+    g.log("INFO", "euroguard", alloc::format!("geo feed loaded: +{n} blocks"));
+    n
+}
+
+/// The country the geo table attributes `ip` to (for callers / the report).
+pub fn country_of(ip: Ipv4Addr) -> Option<String> {
+    GUARD.lock().geo.country_of(ip_u32(ip)).map(|c| c.to_string())
 }
 
 /// Count sent/received bytes per app (Phase 7.4).
@@ -251,7 +371,7 @@ pub fn dns_lines() -> Vec<String> {
     out
 }
 
-/// Human-readable summary of the active policy (Level 1).
+/// Human-readable summary of the active policy (Level 1 + geo + per-app).
 pub fn policy_lines() -> Vec<String> {
     let g = GUARD.lock();
     let mut out = Vec::new();
@@ -261,6 +381,67 @@ pub fn policy_lines() -> Vec<String> {
     let ports: Vec<String> = g.blocked_ports.iter().map(|p| p.to_string()).collect();
     out.push(alloc::format!("  blocked ports: {}", ports.join(", ")));
     out.push(alloc::format!("  dns block list:    {} domains", g.blocked_domains.len()));
+    out.push(alloc::format!(
+        "  geo-block:     {} ({} country blocks in the table)",
+        if g.blocked_countries.is_empty() { "none".to_string() } else { g.blocked_countries.join(", ") },
+        g.geo.len()
+    ));
+    if !g.app_rules.is_empty() {
+        out.push("  per-app network rules:".to_string());
+        for (app, rule) in g.app_rules.iter() {
+            let d = match rule {
+                AppNet::Blocked => "network blocked".to_string(),
+                AppNet::AllowOnly(l) => alloc::format!("allow-only ({} block(s))", l.len()),
+                AppNet::Default => "default".to_string(),
+            };
+            out.push(alloc::format!("    {:<16} {}", app, d));
+        }
+    }
+    out
+}
+
+/// The per-app network report: for each app, its connection/blocked counts,
+/// bytes, and the destination countries it talked to ("which apps go to which
+/// countries"). This is the reporting surface behind the network monitor.
+pub fn app_report_lines() -> Vec<String> {
+    let g = GUARD.lock();
+    let mut out = Vec::new();
+    out.push(alloc::format!("per-app network report — {} blocked total", g.blocked_total));
+    if g.apps.is_empty() {
+        out.push("  (no app network activity yet)".to_string());
+        return out;
+    }
+    for (app, s) in g.apps.iter() {
+        let rule = match g.app_rules.get(app) {
+            Some(AppNet::Blocked) => " [BLOCKED]",
+            Some(AppNet::AllowOnly(_)) => " [allow-only]",
+            _ => "",
+        };
+        out.push(alloc::format!(
+            "  {:<16}{} {} conn · {} blocked · tx {} / rx {} B",
+            app, rule, s.connects, s.blocked, s.bytes_sent, s.bytes_recv
+        ));
+        // Destination countries (sorted by count).
+        let mut cs: Vec<(&String, &u64)> = s.countries.iter().collect();
+        cs.sort_by(|a, b| b.1.cmp(a.1));
+        if !cs.is_empty() {
+            let parts: Vec<String> = cs.iter().take(6).map(|(c, n)| alloc::format!("{c}:{n}")).collect();
+            out.push(alloc::format!("      countries: {}", parts.join("  ")));
+        }
+        // A few contacted IPs (with country).
+        if !s.hosts.is_empty() {
+            let ips: Vec<String> = s
+                .hosts
+                .iter()
+                .take(6)
+                .map(|ip| {
+                    let cc = g.geo.country_of(ip_u32(*ip)).unwrap_or("??");
+                    alloc::format!("{}[{cc}]", ipfmt(*ip))
+                })
+                .collect();
+            out.push(alloc::format!("      hosts: {}", ips.join("  ")));
+        }
+    }
     out
 }
 
@@ -279,6 +460,53 @@ pub fn stats_lines() -> Vec<String> {
         ));
     }
     out
+}
+
+/// Boot self-test for the network-control core (geo-block + per-app policy +
+/// report). Proves, in one boot, that: a country block refuses a connection to
+/// a China-attributed IP while a local IP is allowed; a per-app block cuts an
+/// app off entirely; an allow-list restricts an app to its CIDR; and the report
+/// attributes flows to countries. Uses distinct test app names so it never
+/// perturbs a real app's policy.
+pub fn selftest() {
+    use euronet::ipv4::Ipv4Addr;
+    let cn = Ipv4Addr([202, 96, 0, 5]); // inside China Telecom 202.96.0.0/11
+    let local = Ipv4Addr([10, 0, 2, 2]); // the test gateway, not geo-mapped
+
+    // Country attribution from the built-in geo table.
+    let cn_detected = country_of(cn).as_deref() == Some("CN");
+    let local_unmapped = country_of(local).is_none();
+
+    // Geo-block: block CN, then a connection to a CN IP must be refused, a local
+    // one allowed.
+    set_country_blocked("CN", true);
+    let cn_blocked = check_connect("euroguard-test", cn, 443) == Decision::Block;
+    let local_allowed = check_connect("euroguard-test", local, 443) == Decision::Allow;
+    set_country_blocked("CN", false); // leave the system as we found it
+
+    // Per-app block: cut a named app off the network entirely.
+    set_app_net("euroguard-evil", AppNet::Blocked);
+    let app_blocked = check_connect("euroguard-evil", local, 443) == Decision::Block;
+    set_app_net("euroguard-evil", AppNet::Default);
+
+    // Allow-list: an app restricted to 10.0.0.0/8 reaches the gateway but not
+    // an outside address (the AI-agent-clamp shape).
+    set_app_net("euroguard-agent", AppNet::AllowOnly(alloc::vec![(u32::from_be_bytes([10, 0, 0, 0]), 8)]));
+    let allow_in = check_connect("euroguard-agent", local, 443) == Decision::Allow;
+    let allow_out = check_connect("euroguard-agent", Ipv4Addr([1, 2, 3, 4]), 443) == Decision::Block;
+    set_app_net("euroguard-agent", AppNet::Default);
+
+    let ok = cn_detected && local_unmapped && cn_blocked && local_allowed && app_blocked && allow_in && allow_out;
+    crate::serial_println!(
+        "[7guard] EuroGuard network control: geo-attribution(CN={cn_detected}, local-unmapped={local_unmapped}), \
+         geo-block(CN-refused={cn_blocked}, local-allowed={local_allowed}), per-app-block={app_blocked}, \
+         allow-list(in={allow_in}, out-refused={allow_out}) → {}",
+        if ok {
+            "OK (per-app + geo network control: block a country, cut an app off, or clamp an agent to an allow-list) ✓"
+        } else {
+            "FAILED ✗"
+        }
+    );
 }
 
 /// The audit log (Phase 7.8), newest first, max `limit` lines.

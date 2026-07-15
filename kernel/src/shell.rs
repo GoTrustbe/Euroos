@@ -89,6 +89,7 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             "  services / euroctl   EuroInit service status".to_string(),
             "  hwprobe              hardware/driver inventory (paste into the HCL)".to_string(),
             "  battery / power      ACPI battery + AC adapter status".to_string(),
+            "  guard                per-app + geo network control (block-country, app policy, report)".to_string(),
             "  print [text]         driverless print via IPP Everywhere".to_string(),
             "  scan [path]          driverless scan via eSCL/AirScan → EuroFiles".to_string(),
             "  uptime               timer ticks since boot".to_string(),
@@ -390,8 +391,13 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             out.push(String::new());
             out.push("network policy (EuroGuard firewall):".to_string());
             out.extend(crate::euroguard::policy_lines());
+            out.push(String::new());
+            out.push("(try `guard` to control per-app + geo network policy)".to_string());
             out
         }
+        // The user's network-control surface (Part 1): geo-blocking, per-app
+        // network policy, and the per-app traffic report.
+        "guard" => guard_cmd(line),
         "fsck" | "scrub" => {
             // EuroFSck (S7): verify superblock + all inode checksums + structure.
             // `fsck repair` additionally heals a degraded superblock slot from the
@@ -1055,6 +1061,86 @@ fn net_selftest() -> Vec<String> {
 /// EuroCoreutils dispatch: GNU-compatible coreutils as shell built-ins. The last
 /// existing file argument is read as input (stdin replacement); the remaining
 /// tokens are the options. Returns None if `cmd` is not a coreutils command.
+/// The `guard` command family: the user's per-app + geo network-control surface.
+///   guard                         overview: policy + per-app report
+///   guard report                  the per-app traffic report (app -> country/IP/bytes)
+///   guard block-country <CC>      block all traffic to a country (e.g. CN)
+///   guard unblock-country <CC>    lift a country block
+///   guard app <name> block        cut an app off the network entirely
+///   guard app <name> allow        remove an app's per-app restriction
+///   guard app <name> only <cidr>  restrict an app to one CIDR (repeatable)
+fn guard_cmd(line: &str) -> Vec<String> {
+    use crate::euroguard::{self, AppNet};
+    let mut t = line.split_whitespace();
+    t.next(); // "guard"
+    match t.next() {
+        None => {
+            let mut out = euroguard::policy_lines();
+            out.push(String::new());
+            out.extend(euroguard::app_report_lines());
+            out
+        }
+        Some("report") => euroguard::app_report_lines(),
+        Some("block-country") => match t.next() {
+            Some(cc) => {
+                euroguard::set_country_blocked(cc, true);
+                vec![format!("blocking all traffic to {} — connections to that country are now refused", cc.to_ascii_uppercase())]
+            }
+            None => vec!["usage: guard block-country <CC>   (e.g. CN, RU)".to_string()],
+        },
+        Some("unblock-country") => match t.next() {
+            Some(cc) => {
+                euroguard::set_country_blocked(cc, false);
+                vec![format!("unblocked {}", cc.to_ascii_uppercase())]
+            }
+            None => vec!["usage: guard unblock-country <CC>".to_string()],
+        },
+        Some("app") => {
+            let name = match t.next() {
+                Some(n) => n,
+                None => return vec!["usage: guard app <name> <block|allow|only <cidr>>".to_string()],
+            };
+            match t.next() {
+                Some("block") => {
+                    euroguard::set_app_net(name, AppNet::Blocked);
+                    vec![format!("'{name}' is cut off from the network (all outbound connections refused)")]
+                }
+                Some("allow") => {
+                    euroguard::set_app_net(name, AppNet::Default);
+                    vec![format!("'{name}' back to default (system + geo rules only)")]
+                }
+                Some("only") => {
+                    let mut nets = Vec::new();
+                    for c in t {
+                        if let Some((net, prefix)) = parse_cidr(c) {
+                            nets.push((net, prefix));
+                        }
+                    }
+                    if nets.is_empty() {
+                        return vec!["usage: guard app <name> only <cidr> [<cidr>...]   (e.g. 10.0.0.0/8)".to_string()];
+                    }
+                    let n = nets.len();
+                    euroguard::set_app_net(name, AppNet::AllowOnly(nets));
+                    vec![format!("'{name}' restricted to {n} allow-listed network(s); everything else refused")]
+                }
+                _ => vec![format!("usage: guard app {name} <block|allow|only <cidr>>")],
+            }
+        }
+        Some(other) => vec![format!("unknown: guard {other}   (try: report, block-country, app)")],
+    }
+}
+
+/// Parse `a.b.c.d/prefix` into (host-byte-order net, prefix).
+fn parse_cidr(s: &str) -> Option<(u32, u8)> {
+    let (addr, pfx) = s.split_once('/')?;
+    let ip = crate::net::parse_ipv4(addr)?;
+    let prefix: u8 = pfx.parse().ok()?;
+    if prefix > 32 {
+        return None;
+    }
+    Some((u32::from_be_bytes(ip.0), prefix))
+}
+
 fn coreutils(cmd: &str, line: &str, fs: &mut dyn FileSystem) -> Option<Vec<String>> {
     use eurocoreutils as cu;
     let toks: Vec<&str> = line.split_whitespace().skip(1).collect();
