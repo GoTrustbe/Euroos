@@ -1061,13 +1061,53 @@ fn futex_wait(uaddr: u64, val: u32) -> u64 {
     0
 }
 
-// Static pool of kernel stacks for THREADS (clone). Supervisor-mapped
-// (kernel .bss), so a thread cannot touch its own saved kernel context
-// from ring 3. 8 threads system-wide (enough for the demos).
-const MAX_THREADS: usize = 8;
+
+// Static pool of kernel stacks for THREADS (clone) and scheduled glibc mains.
+// Supervisor-mapped (kernel .bss), so a thread cannot touch its own saved kernel
+// context from ring 3. Slots are RECYCLED (freed when the owning task dies), so
+// long-lived programs that spin up many threads (the pthreads/Chromium path)
+// don't exhaust the pool the way a monotonic bump counter did.
+const MAX_THREADS: usize = 64;
 const TKSTACK_SIZE: usize = 16 * 1024;
 static mut THREAD_KSTACKS: [[u8; TKSTACK_SIZE]; MAX_THREADS] = [[0; TKSTACK_SIZE]; MAX_THREADS];
-static THREAD_KSTACK_NEXT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+// Per-slot in-use flag (lock-free bitmap allocator).
+static THREAD_KSTACK_USED: [core::sync::atomic::AtomicBool; MAX_THREADS] =
+    [const { core::sync::atomic::AtomicBool::new(false) }; MAX_THREADS];
+// task id -> slot, so a dying task frees its kernel stack back to the pool.
+static THREAD_KSTACK_OWNER: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
+// (legacy monotonic counter removed — slots are now a recycling bitmap allocator.)
+
+/// Reserve a free thread-kstack slot, returning (slot, kstack_top). None if the
+/// pool is exhausted (all MAX_THREADS live at once). The caller learns the task
+/// id from spawn_*, then calls `register_thread_kstack(task, slot)` so the slot
+/// is freed when that task dies.
+fn alloc_thread_kstack() -> Option<(usize, u64)> {
+    for i in 0..MAX_THREADS {
+        if THREAD_KSTACK_USED[i]
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let kbase = unsafe { core::ptr::addr_of_mut!(THREAD_KSTACKS[i]) as u64 };
+            let top = (kbase + TKSTACK_SIZE as u64) & !0xF;
+            return Some((i, top));
+        }
+    }
+    None
+}
+
+/// Record that `task` owns kstack `slot`, so its death frees the slot.
+fn register_thread_kstack(task: usize, slot: usize) {
+    THREAD_KSTACK_OWNER.lock().push((task, slot));
+}
+
+/// Return the kernel-stack slot owned by `task` to the pool (idempotent).
+fn free_thread_kstack(task: usize) {
+    let mut owners = THREAD_KSTACK_OWNER.lock();
+    if let Some(pos) = owners.iter().position(|&(t, _)| t == task) {
+        let (_, slot) = owners.swap_remove(pos);
+        THREAD_KSTACK_USED[slot].store(false, Ordering::Release);
+    }
+}
 
 /// Per-process syscall dispatcher (Linux-ABI subset) with the state of ONE process:
 /// own heap, own output buffer, own pid. Threads of the process also route
@@ -1549,12 +1589,10 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             if child_stack == 0 {
                 return (-38i64) as u64; // -ENOSYS (no fork)
             }
-            let slot = THREAD_KSTACK_NEXT.fetch_add(1, Ordering::Relaxed);
-            if slot >= MAX_THREADS {
-                return (-11i64) as u64; // -EAGAIN
-            }
-            let kbase = unsafe { core::ptr::addr_of_mut!(THREAD_KSTACKS[slot]) as u64 };
-            let kstack_top = (kbase + TKSTACK_SIZE as u64) & !0xF;
+            let (slot, kstack_top) = match alloc_thread_kstack() {
+                Some(s) => s,
+                None => return (-11i64) as u64, // -EAGAIN: thread-kstack pool exhausted
+            };
             let user_rip = unsafe { USER_RIP };
             let sel = crate::gdt::selectors();
             let user_cs = (sel.user_code.0 | 3) as u64;
@@ -1568,6 +1606,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             };
             let saved_regs = unsafe { SAVED_REGS };
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, p.pml4, fs, saved_regs);
+            register_thread_kstack(child, slot);
             p.threads.push(child);
             crate::serial_println!("[thread] clone: pid {} -> thread task {child} (shared address space, own stack/TLS)", p.pid);
             // CLONE_PARENT_SETTID (0x100000) / CLONE_CHILD_SETTID (0x1000000):
@@ -1646,6 +1685,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
                 // it now would let the next exit fall through to linux_dispatch,
                 // which sets EXITED=1 -> the sys_exit path with a stale
                 // SAVED_KERNEL_RSP -> ret into garbage. (Found with QEMU+gdb.)
+                free_thread_kstack(cur); // recycle its kernel stack (idempotent)
                 crate::sched::mark_dead(cur);
                 return 0;
             }
@@ -3366,6 +3406,9 @@ static GLIBC_CTIDS: Mutex<alloc::vec::Vec<(usize, u64)>> = Mutex::new(alloc::vec
 static GLIBC_MAIN_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
 static GLIBC_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static GLIBC_EXIT_CODE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// How many 100 Hz ticks the launcher waits for a glibc process to exit before
+/// giving up (default ~120 s guest; lowered during pthreads bring-up debugging).
+pub static GLIBC_DEADLINE_TICKS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(12000);
 
 pub fn run_glibc(
     falloc: &mut FrameAllocator,
@@ -3430,19 +3473,18 @@ pub fn run_glibc(
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
 
-    // Own kernel stack for the main thread (from the thread kstack pool).
-    let slot = THREAD_KSTACK_NEXT.fetch_add(1, Ordering::Relaxed);
-    if slot >= MAX_THREADS {
-        return (String::from("(no kernel stack)"), u64::MAX);
-    }
-    let kbase = unsafe { core::ptr::addr_of_mut!(THREAD_KSTACKS[slot]) as u64 };
-    let main_kstack = (kbase + TKSTACK_SIZE as u64) & !0xF;
+    // Own kernel stack for the main thread (from the recycling thread-kstack pool).
+    let (main_slot, main_kstack) = match alloc_thread_kstack() {
+        Some(s) => s,
+        None => return (String::from("(no kernel stack)"), u64::MAX),
+    };
 
     // Run the glibc program as a FIRST-CLASS SCHEDULED process: spawn its main
     // thread as a normal ring-3 scheduler task (own kstack, glibc CR3). Its
     // pthread workers are scheduler siblings, so blocking + preemption + waking
     // all work — unlike a boot-task excursion, which starved.
     let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
+    register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
     crate::serial_println!(
         "[glibc] spawned scheduled task {main_task}: ld-entry@{:#x} rsp@{rsp:#x} phdr@{:#x} phnum={}",
@@ -3450,12 +3492,20 @@ pub fn run_glibc(
     );
 
     // The launcher (boot task) waits, yielding so the glibc tasks get the CPU.
-    let deadline = crate::interrupts::ticks() + 12000; // ~120 s guest-time cap
+    let deadline = crate::interrupts::ticks() + GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
     while !GLIBC_DONE.load(Ordering::Relaxed) && crate::interrupts::ticks() < deadline {
+        // Sleep a tick; the timer then switches to the runnable glibc tasks. (The
+        // wait stays timer-driven to match the non-preemptive, IF=0 syscall model.)
         crate::sched::sleep_ticks(1);
     }
     if !GLIBC_DONE.load(Ordering::Relaxed) {
         crate::serial_println!("[glibc] TIMEOUT waiting for the process to exit");
+        // Reclaim any kstacks still held by this run's tasks (idempotent on the
+        // clean-exit path, which already freed them).
+        free_thread_kstack(main_task);
+        for &t in GLIBC_THREADS.lock().iter() {
+            free_thread_kstack(t);
+        }
     }
     GLIBC_MAIN_TASK.store(usize::MAX, Ordering::Relaxed);
     let out = OUTPUT.lock().clone();
@@ -3938,13 +3988,26 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 // CLONE_CHILD_CLEARTID: write 0 to the ctid + futex-wake, so the
                 // main thread's pthread_join wakes. Then mark this thread dead; it
                 // keeps re-entering here until the scheduler skips it (like musl).
-                if let Some(idx) = GLIBC_CTIDS.lock().iter().position(|&(t, _)| t == cur) {
-                    let ctid = GLIBC_CTIDS.lock()[idx].1;
+                // NB: resolve (idx, ctid) in ONE lock scope and DROP it before doing
+                // anything else — an `if let Some(_) = MUTEX.lock()....` holds the
+                // guard for the whole body, so a second .lock() inside would deadlock
+                // (spin mutex, IF=0 → the whole core freezes). This was the pthread-
+                // join hang: the first worker to exit self-deadlocked here.
+                let hit = {
+                    let ctids = GLIBC_CTIDS.lock();
+                    ctids.iter().position(|&(t, _)| t == cur).map(|idx| (idx, ctids[idx].1))
+                };
+                if let Some((idx, ctid)) = hit {
                     let _ = write_user(ctid, 0i32);
                     futex_wake(ctid, i32::MAX);
                     GLIBC_CTIDS.lock().swap_remove(idx);
                 }
+                free_thread_kstack(cur); // recycle its kernel stack back to the pool
                 crate::sched::mark_dead(cur);
+                // Do NOT yield here: this runs in the (non-preemptive, IF=0) syscall
+                // context on the shared kernel stack; switching tasks mid-syscall would
+                // corrupt it. glibc's exit loop spins in ring 3 until the timer skips
+                // this now-Dead task.
                 return 0;
             }
             if main != usize::MAX {
@@ -3952,8 +4015,10 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 // worker threads, signal the waiting launcher, mark this task dead.
                 GLIBC_EXIT_CODE.store(a1, Ordering::Relaxed);
                 for &t in GLIBC_THREADS.lock().iter() {
+                    free_thread_kstack(t); // recycle any leftover worker kstacks
                     crate::sched::mark_dead(t);
                 }
+                free_thread_kstack(cur); // recycle the main thread's kstack
                 GLIBC_DONE.store(true, Ordering::Relaxed);
                 crate::sched::mark_dead(cur);
                 return 0;
@@ -3972,12 +4037,10 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             if child_stack == 0 {
                 return (-38i64) as u64; // no fork via clone here
             }
-            let slot = THREAD_KSTACK_NEXT.fetch_add(1, Ordering::Relaxed);
-            if slot >= MAX_THREADS {
-                return (-11i64) as u64; // -EAGAIN
-            }
-            let kbase = unsafe { core::ptr::addr_of_mut!(THREAD_KSTACKS[slot]) as u64 };
-            let kstack_top = (kbase + TKSTACK_SIZE as u64) & !0xF;
+            let (slot, kstack_top) = match alloc_thread_kstack() {
+                Some(s) => s,
+                None => return (-11i64) as u64, // -EAGAIN: thread-kstack pool exhausted
+            };
             let user_rip = unsafe { USER_RIP };
             let sel = crate::gdt::selectors();
             let user_cs = (sel.user_code.0 | 3) as u64;
@@ -3986,6 +4049,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             let saved_regs = unsafe { SAVED_REGS };
             let pml4 = GLIBC_PML4.load(Ordering::Relaxed);
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, pml4, fs, saved_regs);
+            register_thread_kstack(child, slot);
             GLIBC_THREADS.lock().push(child);
             crate::serial_println!("[glibc-thread] clone -> thread task {child} (shared address space)");
             if flags & 0x0010_0000 != 0 && a3 != 0 {
@@ -4362,7 +4426,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // glibc's pthread_join uses FUTEX_WAIT_BITSET (9) / WAKE_BITSET (10),
             // not plain WAIT (0) / WAKE (1) — handle both (bitset ignored = any).
             match a2 & 0x7f {
-                0 | 9 => futex_wait(a1, a3 as u32),        // WAIT / WAIT_BITSET
+                0 | 9 => futex_wait(a1, a3 as u32),         // WAIT / WAIT_BITSET (block; timer switches out)
                 1 | 10 => futex_wake(a1, a3 as i32) as u64, // WAKE / WAKE_BITSET
                 _ => 0,
             }

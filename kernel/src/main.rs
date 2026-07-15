@@ -1729,9 +1729,11 @@ fn main() -> Status {
         let (o2, e2) = ring3::run_glibc(&mut allocator, ring3::gtest_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gtest"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] gtest (printf+malloc+qsort): exit={e2}");
         for l in o2.lines() { serial_println!("[glibc]   {l}"); }
-        // NOTE: gthread (pthreads) via run_glibc still hangs on join — worker
-        // threads do not run to completion under the demo-task competition; kept
-        // out of the boot path until fixed (would stall boot on the timeout).
+        // gthread: pthread_create + join of 3 workers (REAL glibc pthreads —
+        // clone + futex + thread-exit + pthread_join, on the scheduled process).
+        let (o3, e3) = ring3::run_glibc(&mut allocator, ring3::gthread_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gthread"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gthread (pthreads): exit={e3}");
+        for l in o3.lines() { serial_println!("[glibc]   {l}"); }
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.

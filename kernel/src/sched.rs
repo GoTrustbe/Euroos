@@ -199,6 +199,7 @@ pub fn mark_dead(idx: usize) {
     }
 }
 
+
 /// The shared boot PML4 (kernel address space). Set by main after `paging::init`.
 static BOOT_PML4: AtomicU64 = AtomicU64::new(0);
 
@@ -255,12 +256,49 @@ global_asm!(
     "iretq",
 );
 
+// Cooperative-yield stub: identical to `timer_switch`, but its Rust callee
+// (`yield_tick`) does NOT send an APIC EOI (this is a software interrupt, not a
+// hardware IRQ). Invoked via `int YIELD_VECTOR` from `yield_now` after a task
+// has blocked/slept itself, so the switch happens now instead of at the next tick.
+global_asm!(
+    ".global yield_switch",
+    "yield_switch:",
+    "push rax", "push rbx", "push rcx", "push rdx", "push rsi", "push rdi", "push rbp",
+    "push r8", "push r9", "push r10", "push r11", "push r12", "push r13", "push r14", "push r15",
+    "mov rdi, rsp",
+    "and rsp, -16",
+    "call yield_tick",
+    "mov rsp, rax",
+    "pop r15", "pop r14", "pop r13", "pop r12", "pop r11", "pop r10", "pop r9", "pop r8",
+    "pop rbp", "pop rdi", "pop rsi", "pop rdx", "pop rcx", "pop rbx", "pop rax",
+    "iretq",
+);
+
 extern "C" {
     fn timer_switch();
+    fn yield_switch();
 }
 
 pub fn stub_addr() -> u64 {
     timer_switch as usize as u64
+}
+
+/// Address of the cooperative-yield stub (registered on `YIELD_VECTOR` in the IDT).
+pub fn yield_stub_addr() -> u64 {
+    yield_switch as usize as u64
+}
+
+/// Cooperative yield: switch to another runnable task RIGHT NOW. The caller must
+/// already have moved the current task off Ready (block_current / sleep_ticks);
+/// otherwise it just round-robins. Must hold NO locks (SCHED especially). Safe
+/// from a syscall (ring-0) context: the software interrupt saves this task's
+/// kernel context so it resumes exactly here when scheduled again.
+pub fn yield_now() {
+    // SAFETY: YIELD_VECTOR is wired to `yield_switch` in the IDT (interrupts::init).
+    // No options: the software interrupt pushes a frame (uses the stack) and the
+    // context switch reads/writes scheduler memory; the switch preserves all GP
+    // registers, so the compiler's default caller-saved assumptions are correct.
+    unsafe { core::arch::asm!("int {v}", v = const crate::interrupts::YIELD_VECTOR) };
 }
 
 /// Called by the assembly stub: save the current rsp, pick the next
@@ -294,6 +332,23 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     // the lock holder, the very task we just preempted, can never run to release it
     // (total silence, no fault). So TRY the lock and, if it's held, skip this preemption
     // tick: the holder frees it within microseconds and the next tick schedules normally.
+    schedule_core(rsp, false)
+}
+
+/// Cooperative YIELD: a task that just blocked/slept itself calls this to switch
+/// away IMMEDIATELY instead of running (uselessly) until the next timer tick.
+/// Entered via a dedicated software-interrupt vector (see `yield_switch`), so it
+/// runs the SAME context switch as the timer, but WITHOUT the timer prelude
+/// (no TICKS bump, no EOI, no watchdog/USB poll). Called from `yield_now`.
+#[no_mangle]
+pub extern "sysv64" fn yield_tick(rsp: u64) -> u64 {
+    schedule_core(rsp, true)
+}
+
+/// The shared scheduling core: save the outgoing rsp, pick the next runnable task
+/// (mini-CFS) and return its rsp. Used by both the timer tick and a cooperative
+/// yield. Does NO EOI — the caller owns interrupt acknowledgement.
+fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     let mut s = match SCHED.try_lock() {
         Some(g) => g,
         None => {
@@ -350,6 +405,7 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     if !found {
         best = if s.tasks[cur].state == State::Ready { cur } else { 0 };
     }
+    let _ = via_yield;
     s.current = best;
     let next = s.current;
     unsafe { fs.write(s.tasks[next].fs_base) };
@@ -580,22 +636,48 @@ fn busy() {
     }
 }
 
+/// Once the S2 priority self-test has reported its counters, the demo tasks
+/// task_a/b/c have served their purpose. They are infinite busy-loops, so left
+/// running they steal ~half the CPU from real work (the glibc/pthreads/Chromium
+/// path crawls behind them). PARK them: they then sleep instead of spinning,
+/// freeing the CPU for scheduled user processes. Flipped by task_sleeper.
+pub static DEMO_PARK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// A parked demo task: sleep in long stretches (yielding the CPU) forever, so the
+/// self-test tasks stop competing with real work after they've reported.
+fn demo_park_forever() -> ! {
+    loop {
+        sleep_ticks(1000); // ~10 s asleep per cycle
+        x86_64::instructions::hlt(); // yield now; the next tick keeps skipping us
+    }
+}
+
 // Equal workload (one `busy()`) — the difference in counters now comes PURELY from
-// the nice priority (S2), not from different loop durations.
+// the nice priority (S2), not from different loop durations. After the self-test
+// reports, the task parks (see DEMO_PARK) so it stops stealing CPU from real work.
 extern "C" fn task_a() -> ! {
     loop {
+        if DEMO_PARK.load(Ordering::Relaxed) {
+            demo_park_forever();
+        }
         TASK_COUNTERS[1].fetch_add(1, Ordering::Relaxed);
         busy();
     }
 }
 extern "C" fn task_b() -> ! {
     loop {
+        if DEMO_PARK.load(Ordering::Relaxed) {
+            demo_park_forever();
+        }
         TASK_COUNTERS[2].fetch_add(1, Ordering::Relaxed);
         busy();
     }
 }
 extern "C" fn task_c() -> ! {
     loop {
+        if DEMO_PARK.load(Ordering::Relaxed) {
+            demo_park_forever();
+        }
         TASK_COUNTERS[3].fetch_add(1, Ordering::Relaxed);
         busy();
     }
@@ -640,6 +722,9 @@ extern "C" fn task_sleeper() -> ! {
             let b = TASK_COUNTERS[2].load(Ordering::Relaxed);
             let c = TASK_COUNTERS[3].load(Ordering::Relaxed);
             crate::kinfo!("S2 prio-selftest: counters nice(-10/0/+10) = {a}/{b}/{c}, sleeper={}", TASK_COUNTERS[4].load(Ordering::Relaxed));
+            // The priority demo has proven its point; stop the busy-loops from
+            // stealing CPU so real user processes (glibc/pthreads) get the core.
+            DEMO_PARK.store(true, Ordering::Relaxed);
         }
         sleep_ticks(50); // sleep ~0.5 s
         x86_64::instructions::hlt(); // yield CPU; the next tick switches away (Sleeping)

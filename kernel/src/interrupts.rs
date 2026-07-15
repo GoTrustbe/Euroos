@@ -42,6 +42,10 @@ pub static XHCI_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 pub const VIRTIO_BLK_MSIX_VECTOR: u8 = 0x47; // virtio-blk completion via MSI-X (J2)
 pub const NVME_MSIX_VECTOR: u8 = 0x48; // NVMe I/O completion via MSI-X (Metal M2-1)
 pub const SCI_VECTOR: u8 = 0x49; // ACPI SCI (power button etc.) — Metal M5-2
+/// Cooperative-yield software interrupt: a blocked/sleeping task triggers this
+/// (`int YIELD_VECTOR`) to switch away immediately (sched::yield_now). Not a
+/// hardware IRQ — its handler sends no EOI.
+pub const YIELD_VECTOR: u8 = 0x4A;
 /// Number of received virtio-blk completion MSI-X interrupts.
 pub static BLK_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Number of NVMe completion interrupts received via MSI-X (M2-1: proof of
@@ -97,6 +101,14 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     // SAFETY: stub_addr() is a valid, present interrupt handler in our CS.
     unsafe {
         idt[TIMER_VECTOR].set_handler_addr(x86_64::VirtAddr::new(crate::sched::stub_addr()));
+    }
+    // Cooperative-yield vector → the yield context-switch stub (sched.rs). Like
+    // the timer stub it must preserve the full register state, so it is set by
+    // raw address. DPL stays 0: only kernel code (a syscall that just blocked)
+    // triggers it, never ring 3.
+    // SAFETY: yield_stub_addr() is a valid, present interrupt handler in our CS.
+    unsafe {
+        idt[YIELD_VECTOR].set_handler_addr(x86_64::VirtAddr::new(crate::sched::yield_stub_addr()));
     }
     idt[KEYBOARD_VECTOR].set_handler_fn(keyboard_handler);
     idt[MOUSE_VECTOR].set_handler_fn(mouse_handler);
