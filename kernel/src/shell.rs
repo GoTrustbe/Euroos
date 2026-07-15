@@ -403,6 +403,20 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         // permission grants + network policy + traffic, all in one place, with
         // actions to restrict an app or an AI agent.
         "app" | "apps" => app_cmd(line),
+        // The system clipboard: `clip` shows history, `clip <text>` copies.
+        "clip" => {
+            let rest = line.strip_prefix("clip").unwrap_or("").trim();
+            if rest.is_empty() {
+                let mut out = vec!["System clipboard (most recent first; * = pinned):".to_string()];
+                let h = crate::clipboard::history_lines();
+                if h.is_empty() { out.push("  (empty)".to_string()); } else { out.extend(h.into_iter().map(|l| format!("  {l}"))); }
+                out
+            } else if crate::clipboard::copy(rest) {
+                vec![format!("copied to clipboard: {rest}")]
+            } else {
+                vec!["not copied: looks like a secret (excluded by privacy policy)".to_string()]
+            }
+        }
         "fsck" | "scrub" => {
             // EuroFSck (S7): verify superblock + all inode checksums + structure.
             // `fsck repair` additionally heals a degraded superblock slot from the

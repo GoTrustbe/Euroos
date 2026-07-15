@@ -21,6 +21,11 @@ static SCREEN_H: AtomicUsize = AtomicUsize::new(0);
 static PRESS_PENDING: AtomicBool = AtomicBool::new(false);
 static CLICK_X: AtomicI32 = AtomicI32::new(0);
 static CLICK_Y: AtomicI32 = AtomicI32::new(0);
+// Right-button press LATCH (same rationale as the left latch): opens the
+// context menu at the exact spot the user right-clicked.
+static RPRESS_PENDING: AtomicBool = AtomicBool::new(false);
+static RCLICK_X: AtomicI32 = AtomicI32::new(0);
+static RCLICK_Y: AtomicI32 = AtomicI32::new(0);
 
 /// Store the new button bitmap and latch a left-press edge (with cursor pos).
 /// Callers must update MOUSE_X/MOUSE_Y *before* calling this so the latched
@@ -31,6 +36,12 @@ fn update_buttons(new: u8) {
         CLICK_X.store(MOUSE_X.load(Ordering::Relaxed), Ordering::Relaxed);
         CLICK_Y.store(MOUSE_Y.load(Ordering::Relaxed), Ordering::Relaxed);
         PRESS_PENDING.store(true, Ordering::Relaxed);
+    }
+    // Right-button 0→1 edge (bit1): latch for the context menu.
+    if old & 0x02 == 0 && new & 0x02 != 0 {
+        RCLICK_X.store(MOUSE_X.load(Ordering::Relaxed), Ordering::Relaxed);
+        RCLICK_Y.store(MOUSE_Y.load(Ordering::Relaxed), Ordering::Relaxed);
+        RPRESS_PENDING.store(true, Ordering::Relaxed);
     }
 }
 
@@ -187,4 +198,17 @@ pub fn pos() -> (usize, usize) {
 /// True if the left button is pressed.
 pub fn left_down() -> bool {
     BUTTONS.load(Ordering::Relaxed) & 0x01 != 0
+}
+
+/// Consume a pending right-button press → the screen position where it happened
+/// (drives the context menu).
+pub fn take_right_press() -> Option<(usize, usize)> {
+    if RPRESS_PENDING.swap(false, Ordering::Relaxed) {
+        Some((
+            RCLICK_X.load(Ordering::Relaxed).max(0) as usize,
+            RCLICK_Y.load(Ordering::Relaxed).max(0) as usize,
+        ))
+    } else {
+        None
+    }
 }

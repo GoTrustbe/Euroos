@@ -125,6 +125,8 @@ mod jsapp;
 mod webview;
 mod calc_ui;
 mod settings_ui;
+mod clipboard;
+mod ctxmenu;
 mod agent_ui;
 mod files;
 mod textedit;
@@ -182,6 +184,76 @@ fn load_files_dir(fs: &mut dyn FileSystem, path: &str) {
         Err(_) => alloc::vec::Vec::new(),
     };
     files::load_dir(path, items);
+}
+
+/// Build the right-click context menu for whatever object is under the cursor:
+/// a file or directory in EuroFiles, an empty file-manager area, a text field,
+/// a dock tile, or the bare desktop. Each surface gets its own action list.
+fn build_context_menu(
+    rx: usize,
+    ry: usize,
+    windows: &[compositor::Window],
+    order: &[usize],
+    dock_targets: &[Option<usize>; 11],
+    sw: usize,
+    sh: usize,
+) {
+    use ctxmenu::{Action, Item};
+
+    // A dock tile? (the dock sits left of every window.)
+    if let Some(icon) = compositor::dock_icon_at(rx, ry) {
+        if dock_targets.get(icon).copied().flatten().is_some() {
+            ctxmenu::open(rx, ry, alloc::vec![Item::new("Open", "", Action::OpenApp(icon))], sw, sh);
+            return;
+        }
+    }
+
+    // The topmost visible window under the cursor.
+    let win = order.iter().rev().copied().find(|&i| windows[i].visible && windows[i].contains(rx, ry));
+    if let Some(i) = win {
+        let (wx, wy) = (windows[i].x, windows[i].y);
+        match windows[i].app {
+            suite_ui::SuiteApp::Files => {
+                if let Some(dir) = files::hit_test(wx, wy, rx, ry) {
+                    ctxmenu::open(rx, ry, alloc::vec![
+                        Item::new("Open", "", Action::OpenDir(dir.clone())).sep(),
+                        Item::new("Copy path", "Ctrl C", Action::CopyText(dir)),
+                    ], sw, sh);
+                } else if let Some(file) = files::hit_test_file(wx, wy, rx, ry) {
+                    ctxmenu::open(rx, ry, alloc::vec![
+                        Item::new("Open", "Enter", Action::OpenFile(file.clone())).sep(),
+                        Item::new("Copy path", "Ctrl C", Action::CopyText(file)),
+                    ], sw, sh);
+                } else {
+                    // Empty area of the file manager → folder actions on the current dir.
+                    let cur = files::current_path();
+                    let dir = if cur.is_empty() { String::from("/") } else { cur };
+                    ctxmenu::open(rx, ry, alloc::vec![
+                        Item::new("New folder", "Ctrl Shift N", Action::NewFolder(dir)).sep(),
+                        Item::new("Refresh", "F5", Action::Refresh),
+                    ], sw, sh);
+                }
+            }
+            // Text-bearing windows → Paste (enabled only when the clipboard has text).
+            suite_ui::SuiteApp::None | suite_ui::SuiteApp::Text | suite_ui::SuiteApp::Notes => {
+                let paste = if clipboard::has_content() {
+                    Item::new("Paste", "Ctrl V", Action::Paste)
+                } else {
+                    Item::disabled("Paste")
+                };
+                ctxmenu::open(rx, ry, alloc::vec![paste], sw, sh);
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    // The bare desktop.
+    ctxmenu::open(rx, ry, alloc::vec![
+        Item::new("Open Terminal", "", Action::OpenTerminal),
+        Item::new("Display settings", "", Action::OpenDisplaySettings).sep(),
+        Item::new("Refresh", "F5", Action::Refresh),
+    ], sw, sh);
 }
 
 const PROMPT: &str = "euroos:/ $ ";
@@ -1971,6 +2043,9 @@ fn main() -> Status {
     shell::selftest();
     // Part 3: the desktop per-app control screen's actions do real kernel work.
     settings_ui::selftest();
+    // Everyday-conveniences layer: live clipboard + right-click context menus.
+    clipboard::selftest();
+    ctxmenu::selftest();
     // 3F-6: audio routing — per-app streams, per-device routing, default policy.
     audio::selftest();
 
@@ -2830,6 +2905,100 @@ fn main() -> Status {
         let (px, py) = mouse::pos();
         let ldown = mouse::left_down();
         let mut need_full = false;
+
+        // ── Right-click context menus (the everyday-conveniences layer) ──
+        // A right-press opens the menu for whatever is under the cursor; the
+        // next left click chooses an item or dismisses it.
+        if ctxmenu::is_open() {
+            if let Some((cx, cy)) = mouse::take_press() {
+                if let ctxmenu::Hit::Chosen(action) = ctxmenu::click_at(cx, cy) {
+                    use ctxmenu::Action::*;
+                    match action {
+                        OpenDir(p) => load_files_dir(ctx.fs, &p),
+                        OpenFile(p) => {
+                            let (_mime, app) = mime::resolve(ctx.fs, &p);
+                            if let Some(target) = app.as_deref().and_then(mime_app_to_suite) {
+                                if target == suite_ui::SuiteApp::Text {
+                                    textedit::open(ctx.fs, &p);
+                                }
+                                if let Some(w) = windows.iter().position(|win| win.app == target) {
+                                    order.retain(|&x| x != w);
+                                    order.push(w);
+                                    for ww in windows.iter_mut() { ww.active = false; }
+                                    windows[w].visible = true;
+                                    windows[w].active = true;
+                                }
+                            }
+                        }
+                        CopyText(t) => { clipboard::copy(&t); }
+                        NewFolder(dir) => {
+                            let base = if dir.ends_with('/') { dir.clone() } else { alloc::format!("{dir}/") };
+                            // Find a free name by trying to create it (no metadata() on the FS).
+                            let mut created = None;
+                            for n in 1..=20 {
+                                let path = if n == 1 { alloc::format!("{base}New folder") } else { alloc::format!("{base}New folder {n}") };
+                                if ctx.fs.create_dir(&path).is_ok() {
+                                    created = Some(path);
+                                    break;
+                                }
+                            }
+                            if let Some(path) = created {
+                                let cur = files::current_path();
+                                if !cur.is_empty() { load_files_dir(ctx.fs, &cur); }
+                                serial_println!("[ctx] context menu: created folder {path}");
+                            }
+                        }
+                        Paste => {
+                            if let Some(text) = clipboard::paste() {
+                                let to_terminal = order.iter().rev().copied()
+                                    .find(|&i| windows[i].visible)
+                                    .map(|i| windows[i].app == suite_ui::SuiteApp::None)
+                                    .unwrap_or(false);
+                                for ch in text.chars() {
+                                    if to_terminal { input.push(ch); } else { textedit::input(ch); }
+                                }
+                            }
+                        }
+                        OpenTerminal => {
+                            order.retain(|&x| x != term_idx);
+                            order.push(term_idx);
+                            for ww in windows.iter_mut() { ww.active = false; }
+                            windows[term_idx].visible = true;
+                            windows[term_idx].active = true;
+                        }
+                        OpenDisplaySettings => {
+                            if let Some(w) = windows.iter().position(|win| win.app == suite_ui::SuiteApp::Settings) {
+                                settings_ui::set_section(3); // System
+                                order.retain(|&x| x != w);
+                                order.push(w);
+                                for ww in windows.iter_mut() { ww.active = false; }
+                                windows[w].visible = true;
+                                windows[w].active = true;
+                            }
+                        }
+                        OpenApp(icon) => {
+                            if let Some(w) = dock_targets.get(icon).copied().flatten().filter(|&w| w < windows.len()) {
+                                order.retain(|&x| x != w);
+                                order.push(w);
+                                for ww in windows.iter_mut() { ww.active = false; }
+                                windows[w].visible = true;
+                                windows[w].active = true;
+                                if windows[w].app == suite_ui::SuiteApp::Files && files::current_path().is_empty() {
+                                    load_files_dir(ctx.fs, "/");
+                                }
+                            }
+                        }
+                        Refresh => {}
+                    }
+                }
+                need_full = true;
+            }
+        } else if let Some((rx, ry)) = mouse::take_right_press() {
+            if portal_buttons.is_none() {
+                build_context_menu(rx, ry, &windows, &order, &dock_targets, width, height);
+                need_full = true;
+            }
+        }
         // Live RAM snapshot for EuroMonitor (context-free readable in the render fn).
         monitor::set_mem(
             ctx.mem.usable_bytes() / (1024 * 1024),
@@ -3492,6 +3661,11 @@ fn main() -> Status {
         let t = interrupts::ticks();
         let tick = t / 50 != last_t;
 
+        // While a context menu is open, keep repainting so the hovered row
+        // tracks the cursor and the menu stays above everything.
+        if ctxmenu::is_open() {
+            need_full = true;
+        }
         if need_full {
             // Full redraw (drag or z-order changed).
             last_t = t / 50;
@@ -3499,6 +3673,8 @@ fn main() -> Status {
             // 3F-7: draw the permission-portal modal over the desktop (if a
             // request is pending) and remember its button rects for the click loop.
             portal_buttons = portal::render_dialog(&fb, width, height);
+            // The right-click context menu overlays the desktop, under the cursor.
+            ctxmenu::render(&fb, px, py);
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
