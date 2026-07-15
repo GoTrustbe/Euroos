@@ -2190,6 +2190,8 @@ static GCPP_ELF: &[u8] = include_bytes!("../../userland/glibc/gcpp");
 static GLIBC_LIBGMP: &[u8] = include_bytes!("../../userland/glibc/libgmp.so.10");
 static REAL_SEQ_ELF: &[u8] = include_bytes!("../../userland/glibc/seq");
 static REAL_FACTOR_ELF: &[u8] = include_bytes!("../../userland/glibc/factor");
+// Address-space-scaling test: mallocs + touches 200 MiB (needs a big arena).
+static GBIG_ELF: &[u8] = include_bytes!("../../userland/glibc/gbig");
 
 /// The real glibc loader bytes.
 pub fn ldlinux_bytes() -> &'static [u8] { LDLINUX_ELF }
@@ -2214,6 +2216,8 @@ pub fn gcpp_bytes() -> &'static [u8] { GCPP_ELF }
 pub fn glibc_libgmp_bytes() -> &'static [u8] { GLIBC_LIBGMP }
 pub fn real_seq_bytes() -> &'static [u8] { REAL_SEQ_ELF }
 pub fn real_factor_bytes() -> &'static [u8] { REAL_FACTOR_ELF }
+/// A large-heap test (mallocs + touches 200 MiB) for address-space scaling.
+pub fn gbig_bytes() -> &'static [u8] { GBIG_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
 static MWRITE_ELF: &[u8] = include_bytes!("../../userland/mwrite.elf");
 static MECHO_ELF: &[u8] = include_bytes!("../../userland/mecho.elf");
@@ -3435,6 +3439,10 @@ static GLIBC_EXIT_CODE: core::sync::atomic::AtomicU64 = core::sync::atomic::Atom
 /// How many 100 Hz ticks the launcher waits for a glibc process to exit before
 /// giving up (default ~120 s guest; lowered during pthreads bring-up debugging).
 pub static GLIBC_DEADLINE_TICKS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(12000);
+/// Identity-mapped arena size (MiB) for the next run_glibc. Default 96; bump for a
+/// large program, restore after. The whole span is mapped upfront (no demand paging
+/// yet), so it needs that many contiguous physical frames from the allocator.
+pub static GLIBC_ARENA_MIB: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(96);
 
 pub fn run_glibc(
     falloc: &mut FrameAllocator,
@@ -3456,13 +3464,22 @@ pub fn run_glibc(
     reset_fd_table();
 
     const MIB2: u64 = 1 << 21;
-    let arena_mib: u64 = 96; // room for ld.so + libc (mmap'd) + heap + stack
+    // Arena size (MiB): default 96 (ld.so + libc + heap + stack). Tunable via
+    // GLIBC_ARENA_MIB so a large program can get a bigger identity-mapped span —
+    // the address-space-scaling knob toward Chromium's hundreds of MB.
+    let arena_mib: u64 = GLIBC_ARENA_MIB.load(Ordering::Relaxed);
     let nblocks = arena_mib / 2;
     let frames = (nblocks * 512) as usize;
     let arena = match falloc.allocate_aligned(frames, 512) {
         Ok(a) => a,
         Err(_) => return (String::from("(no arena for glibc)"), u64::MAX),
     };
+    // Zero the whole arena. Frames are RECYCLED between runs (we free the arena on
+    // exit), so without this a run would see the PREVIOUS program's leftover data
+    // where it expects zeros — ld.so read stale bytes and tripped its link-map
+    // assertions. (The arena is identity-mapped in the boot space, so the kernel can
+    // clear it directly here.) SAFETY: `frames` contiguous frames we just reserved.
+    unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
 
     // Arena layout.
     let exe_base = arena; // PIE exe: first PT_LOAD has p_vaddr 0
@@ -3536,6 +3553,15 @@ pub fn run_glibc(
     GLIBC_MAIN_TASK.store(usize::MAX, Ordering::Relaxed);
     let out = OUTPUT.lock().clone();
     let code = GLIBC_EXIT_CODE.load(Ordering::Relaxed);
+    // Reclaim this run's address space: free the page tables (pml4/pdpt/pd) AND the
+    // big contiguous arena back to the frame allocator. All this run's tasks are Dead
+    // (never rescheduled) and the launcher runs on the boot PML4, so nothing
+    // references this address space. Without this, every run leaked its arena (96 MiB
+    // each) and ~8 runs exhausted RAM — and a large arena could never be allocated.
+    crate::paging::free_address_space(falloc, pml4);
+    for i in 0..frames as u64 {
+        let _ = falloc.free(arena + i * 4096);
+    }
     (out, code)
 }
 

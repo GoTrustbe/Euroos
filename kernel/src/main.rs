@@ -1759,6 +1759,14 @@ fn main() -> Status {
         serial_println!("[glibc] /usr/bin/seq 1 2 9 -> exit={e6}, output={:?}", o6.trim_end());
         let (o7, e7) = ring3::run_glibc(&mut allocator, ring3::real_factor_bytes(), ring3::ldlinux_bytes(), &[b"factor", b"360360"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] /usr/bin/factor 360360 -> exit={e7}, output={:?}", o7.trim_end());
+        // Address-space scaling: run gbig with a 384 MiB arena (vs the default 96),
+        // proving the identity-mapped model handles hundreds of MB toward chrome scale.
+        serial_println!("[glibc] === address-space scaling (384 MiB arena) ===");
+        ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed);
+        let (o8, e8) = ring3::run_glibc(&mut allocator, ring3::gbig_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gbig"], &[b"PATH=/bin"], caps);
+        ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gbig (200 MiB heap): exit={e8}");
+        for l in o8.lines() { serial_println!("[glibc]   {l}"); }
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.
