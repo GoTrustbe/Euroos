@@ -2116,6 +2116,7 @@ static BROWSER_ELF: &[u8] = include_bytes!("../../userland/browser.elf");
 static LDLINUX_ELF: &[u8] = include_bytes!("../../userland/glibc/ld-linux-x86-64.so.2");
 static GLIBC_LIBC: &[u8] = include_bytes!("../../userland/glibc/libc.so.6");
 static GTINY_ELF: &[u8] = include_bytes!("../../userland/glibc/gtiny");
+static GTEST_ELF: &[u8] = include_bytes!("../../userland/glibc/gtest");
 
 /// The real glibc loader bytes.
 pub fn ldlinux_bytes() -> &'static [u8] { LDLINUX_ELF }
@@ -2123,6 +2124,8 @@ pub fn ldlinux_bytes() -> &'static [u8] { LDLINUX_ELF }
 pub fn glibc_libc_bytes() -> &'static [u8] { GLIBC_LIBC }
 /// The tiny dynamic glibc test binary.
 pub fn gtiny_bytes() -> &'static [u8] { GTINY_ELF }
+/// A richer glibc test: printf + malloc + pthreads.
+pub fn gtest_bytes() -> &'static [u8] { GTEST_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
 static MWRITE_ELF: &[u8] = include_bytes!("../../userland/mwrite.elf");
 static MECHO_ELF: &[u8] = include_bytes!("../../userland/mecho.elf");
@@ -3325,6 +3328,9 @@ pub fn user_ptr_selftest() {
 /// and jump to the loader. ld.so then opens libc.so.6 (and any other DT_NEEDED)
 /// via the VFS, mmaps + relocates them, and enters the program. This is the
 /// bottom rung for running normal Linux binaries, up to (eventually) Chromium.
+/// When set, every Linux syscall is traced to serial (glibc bring-up debugging).
+pub static TRACE_SYS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 pub fn run_glibc(
     falloc: &mut FrameAllocator,
     exe: &[u8],
@@ -3826,6 +3832,9 @@ fn linux_required_cap(num: u64, a1: u64) -> u64 {
 
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let _ = a4; // not every syscall uses arg4/arg5 (r10/r8)
+    if TRACE_SYS.load(Ordering::Relaxed) {
+        crate::serial_println!("[sys] {num}({a1:#x},{a2:#x},{a3:#x})");
+    }
     // Capability enforcement also in the Linux ABI: deny without the proper right.
     let need = linux_required_cap(num, a1);
     if need != 0 && !has_cap(need) {
@@ -3933,7 +3942,13 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 crate::serial_println!("[linux-abi] mmap(fd={a5}, off={off}, {len} B) file-backed -> {base:#x} ({copy} B copied)");
                 base
             } else {
-                crate::serial_println!("[linux-abi] mmap({len} bytes, anon) -> {base:#x}");
+                // Anonymous mmap MUST return ZEROED memory (POSIX): the arena is
+                // reused/leftover, so without this a library's .bss (mapped anon by
+                // ld.so) contains garbage — e.g. a glibc lock word reads nonzero,
+                // the lock looks "contended", and glibc futex-deadlocks at startup.
+                if in_user_arena(base, len as usize) {
+                    unsafe { core::ptr::write_bytes(base as *mut u8, 0, len as usize); }
+                }
                 base
             }
         }

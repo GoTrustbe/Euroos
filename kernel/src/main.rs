@@ -1385,6 +1385,17 @@ fn main() -> Status {
                 ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO,
             );
             serial_println!("[glibc] gtiny via real ld-linux: exit={gexit}, output={:?}", gout.trim_end());
+            // Richer test: printf + malloc(1 MiB) + qsort + snprintf via real glibc.
+            let (tout, texit) = ring3::run_glibc(
+                &mut allocator,
+                ring3::gtest_bytes(),
+                ring3::ldlinux_bytes(),
+                &[b"/bin/gtest"],
+                &[b"PATH=/bin", b"HOME=/root"],
+                ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO,
+            );
+            serial_println!("[glibc] gtest (printf+malloc+qsort+snprintf): exit={texit}");
+            for l in tout.lines() { serial_println!("[glibc]   {l}"); }
         }
         let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
         serial_println!(
