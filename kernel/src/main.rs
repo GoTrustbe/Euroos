@@ -128,6 +128,7 @@ mod settings_ui;
 mod clipboard;
 mod ctxmenu;
 mod trash;
+mod launcher;
 mod agent_ui;
 mod files;
 mod textedit;
@@ -2063,6 +2064,7 @@ fn main() -> Status {
     clipboard::selftest();
     ctxmenu::selftest();
     compositor::snap_selftest();
+    launcher::selftest();
     // 3F-6: audio routing — per-app streams, per-device routing, default policy.
     audio::selftest();
 
@@ -2922,6 +2924,20 @@ fn main() -> Status {
         let (px, py) = mouse::pos();
         let ldown = mouse::left_down();
         let mut need_full = false;
+        // An app the user asked to open this iteration (via launcher or menu),
+        // raised in one place after input handling.
+        let mut launch_icon: Option<usize> = None;
+
+        // The app launcher is modal: while open, the next left click chooses a
+        // result or dismisses it.
+        if launcher::is_open() {
+            if let Some((cx, cy)) = mouse::take_press() {
+                if let Some(icon) = launcher::click_at(cx, cy, width, height) {
+                    launch_icon = Some(icon);
+                }
+                need_full = true;
+            }
+        }
 
         // ── Right-click context menus (the everyday-conveniences layer) ──
         // A right-press opens the menu for whatever is under the cursor; the
@@ -3025,7 +3041,7 @@ fn main() -> Status {
                 need_full = true;
             }
         } else if let Some((rx, ry)) = mouse::take_right_press() {
-            if portal_buttons.is_none() {
+            if portal_buttons.is_none() && !launcher::is_open() {
                 build_context_menu(rx, ry, &windows, &order, &dock_targets, width, height);
                 need_full = true;
             }
@@ -3057,6 +3073,10 @@ fn main() -> Status {
                     portal_buttons = None;
                 }
                 need_full = true; // repaint (dialog gone or still up); consume the click
+            } else if compositor::brand_button_at(px, py) {
+                // The EU mark is the "start button": open the app launcher.
+                launcher::open();
+                need_full = true;
             } else if let Some(icon) = compositor::dock_icon_at(px, py) {
                 // Dock click → open the corresponding app (or bring it to front).
                 // A second click on an already-visible window hides it again (toggle).
@@ -3306,6 +3326,15 @@ fn main() -> Status {
         let mut term_dirty = false;
         let mut calc_dirty = false;
         while let Some(k) = ps2::poll_key() {
+            // The app launcher captures the keyboard while it is open (type to
+            // filter, Enter to open, Esc to dismiss).
+            if launcher::is_open() {
+                if let Some(icon) = launcher::key(k) {
+                    launch_icon = Some(icon);
+                }
+                need_full = true;
+                continue;
+            }
             // If the REAL calculator has focus → keys go to euroreken.
             if calc_focused {
                 let fi = focused.unwrap();
@@ -3687,6 +3716,22 @@ fn main() -> Status {
                 _ => {}
             }
         }
+
+        // Open an app requested by the launcher or a menu (single place).
+        if let Some(icon) = launch_icon {
+            if let Some(w) = dock_targets.get(icon).copied().flatten().filter(|&w| w < windows.len()) {
+                order.retain(|&x| x != w);
+                order.push(w);
+                for ww in windows.iter_mut() { ww.active = false; }
+                windows[w].visible = true;
+                windows[w].active = true;
+                if windows[w].app == suite_ui::SuiteApp::Files && files::current_path().is_empty() {
+                    load_files_dir(ctx.fs, "/");
+                }
+            }
+            need_full = true;
+        }
+
         if term_dirty && windows[term_idx].visible {
             compositor::restore_cursor_bg(&fb, cmx, cmy, &cur_bg);
             // The Terminal is the front window and overlaps nothing above it, so only
@@ -3714,9 +3759,9 @@ fn main() -> Status {
         let t = interrupts::ticks();
         let tick = t / 50 != last_t;
 
-        // While a context menu is open, keep repainting so the hovered row
-        // tracks the cursor and the menu stays above everything.
-        if ctxmenu::is_open() {
+        // While a context menu or the launcher is open, keep repainting so the
+        // hovered row tracks the cursor and the overlay stays above everything.
+        if ctxmenu::is_open() || launcher::is_open() {
             need_full = true;
         }
         if need_full {
@@ -3728,6 +3773,8 @@ fn main() -> Status {
             portal_buttons = portal::render_dialog(&fb, width, height);
             // The right-click context menu overlays the desktop, under the cursor.
             ctxmenu::render(&fb, px, py);
+            // The app launcher overlays everything (a centered search palette).
+            launcher::render(&fb, width, height);
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);

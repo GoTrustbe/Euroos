@@ -104,6 +104,12 @@ impl Window {
 
 /// Which dock tile index (see [`DOCK_APPS`]) is under (px,py)? None if the
 /// click does not fall on a tile.
+/// The EU brand mark at the top of the dock doubles as the "start button":
+/// clicking it opens the app launcher.
+pub fn brand_button_at(px: usize, py: usize) -> bool {
+    px >= DOCK_X && px < DOCK_X + DOCK_W && py >= DOCK_M && py < DOCK_M + 54
+}
+
 pub fn dock_icon_at(px: usize, py: usize) -> Option<usize> {
     if px < DOCK_X || px >= DOCK_X + DOCK_W {
         return None;
