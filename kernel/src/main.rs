@@ -1787,7 +1787,15 @@ fn main() -> Status {
         ring3::set_stdin(b"EuroOS");
         let (o12, e12) = ring3::run_glibc(&mut allocator, ring3::real_sha256_bytes(), ring3::ldlinux_bytes(), &[b"sha256sum"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] /usr/bin/sha256sum <\"EuroOS\"> -> exit={e12}, output={:?}", o12.trim_end());
+        // sort: a real stdin line sorter (reuses the already-served libcrypto).
+        ring3::set_stdin(b"pear\napple\ncherry\nbanana\n");
+        let (o13, e13) = ring3::run_glibc(&mut allocator, ring3::real_sort_bytes(), ring3::ldlinux_bytes(), &[b"sort"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] /usr/bin/sort <stdin> -> exit={e13}, output={:?}", o13.trim_end());
         ring3::set_stdin(b"");
+        // gfile: file-I/O roundtrip (create+write a file, reopen+read, verify).
+        let (o14, e14) = ring3::run_glibc(&mut allocator, ring3::gfile_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gfile"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gfile (file I/O roundtrip): exit={e14}");
+        for l in o14.lines() { serial_println!("[glibc]   {l}"); }
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.

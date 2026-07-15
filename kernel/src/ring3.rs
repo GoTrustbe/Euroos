@@ -2200,6 +2200,10 @@ static REAL_SHA256_ELF: &[u8] = include_bytes!("../../userland/glibc/sha256sum")
 static GBIG_ELF: &[u8] = include_bytes!("../../userland/glibc/gbig");
 // pthread mutex + condition-variable producer/consumer (deep futex exercise).
 static GSYNC_ELF: &[u8] = include_bytes!("../../userland/glibc/gsync");
+// File I/O roundtrip test (open O_CREAT|write, reopen|read, verify).
+static GFILE_ELF: &[u8] = include_bytes!("../../userland/glibc/gfile");
+// REAL /usr/bin/sort (stdin filter; reuses the already-served libcrypto).
+static REAL_SORT_ELF: &[u8] = include_bytes!("../../userland/glibc/sort");
 
 /// The real glibc loader bytes.
 pub fn ldlinux_bytes() -> &'static [u8] { LDLINUX_ELF }
@@ -2232,6 +2236,10 @@ pub fn real_sha256_bytes() -> &'static [u8] { REAL_SHA256_ELF }
 pub fn gbig_bytes() -> &'static [u8] { GBIG_ELF }
 /// A pthread mutex + condvar producer/consumer test (deep futex exercise).
 pub fn gsync_bytes() -> &'static [u8] { GSYNC_ELF }
+/// A file-I/O roundtrip test (create+write, reopen+read, verify).
+pub fn gfile_bytes() -> &'static [u8] { GFILE_ELF }
+/// The real /usr/bin/sort (stdin line sorter).
+pub fn real_sort_bytes() -> &'static [u8] { REAL_SORT_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
 static MWRITE_ELF: &[u8] = include_bytes!("../../userland/mwrite.elf");
 static MECHO_ELF: &[u8] = include_bytes!("../../userland/mecho.elf");
