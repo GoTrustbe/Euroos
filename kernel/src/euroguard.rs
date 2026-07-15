@@ -400,6 +400,11 @@ pub fn policy_lines() -> Vec<String> {
     out
 }
 
+/// Whether an app is currently cut off from the network entirely.
+pub fn app_is_blocked(app: &str) -> bool {
+    matches!(GUARD.lock().app_rules.get(app), Some(AppNet::Blocked))
+}
+
 /// A one-word label for an app's network policy (for the `apps` roster column).
 pub fn app_net_label(app: &str) -> String {
     let g = GUARD.lock();

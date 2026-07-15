@@ -1969,6 +1969,8 @@ fn main() -> Status {
     portal::selftest();
     // Part 2: unified per-app control surface (caps + permissions + network in one).
     shell::selftest();
+    // Part 3: the desktop per-app control screen's actions do real kernel work.
+    settings_ui::selftest();
     // 3F-6: audio routing — per-app streams, per-device routing, default policy.
     audio::selftest();
 
@@ -2967,6 +2969,12 @@ fn main() -> Status {
                             settings_ui::begin_domain_edit();
                         } else if settings_ui::toggle_at(windows[i].x, windows[i].y, px, py) {
                             settings_ui::toggle_httpd(); // REAL kernel action
+                        } else if let Some(row) = settings_ui::app_row_at(windows[i].x, windows[i].y, px, py) {
+                            settings_ui::select_app(row); // pick an app to control
+                        } else if settings_ui::app_net_toggle_at(windows[i].x, windows[i].y, px, py) {
+                            settings_ui::toggle_app_net(); // REAL: cut/allow the app's network
+                        } else if settings_ui::app_revoke_at(windows[i].x, windows[i].y, px, py) {
+                            settings_ui::revoke_app_perms(); // REAL: reset its permissions
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Agent {
                         // Click on the intent field → start typing.
