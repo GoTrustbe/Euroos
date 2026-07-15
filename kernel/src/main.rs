@@ -1377,6 +1377,10 @@ fn main() -> Status {
         // A SECOND real shared library, so ld.so can resolve a multi-lib DT_NEEDED
         // chain (the Chromium path needs ~30) + runtime dlopen/dlsym of it.
         ring3::register_file("/lib/x86_64-linux-gnu/libm.so.6", ring3::glibc_libm_bytes().to_vec());
+        // The C++ runtime + unwinder, so a transitive chain (exe -> libstdc++ ->
+        // {libc, libm, libgcc_s}) resolves — Chromium is C++ at this scale.
+        ring3::register_file("/lib/x86_64-linux-gnu/libstdc++.so.6", ring3::glibc_libstdcpp_bytes().to_vec());
+        ring3::register_file("/lib/x86_64-linux-gnu/libgcc_s.so.1", ring3::glibc_libgccs_bytes().to_vec());
         let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
         serial_println!(
             "[h3] dyntest (dynamically linked) done: exit={h3_exit}, output={:?}",
@@ -1742,6 +1746,10 @@ fn main() -> Status {
         let (o4, e4) = ring3::run_glibc(&mut allocator, ring3::gmath_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gmath"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] gmath (libm + dlopen/dlsym): exit={e4}");
         for l in o4.lines() { serial_println!("[glibc]   {l}"); }
+        // gcpp: a C++ program — transitive libstdc++ chain + STL + exceptions.
+        let (o5, e5) = ring3::run_glibc(&mut allocator, ring3::gcpp_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gcpp"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gcpp (C++ STL + exceptions): exit={e5}");
+        for l in o5.lines() { serial_println!("[glibc]   {l}"); }
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.

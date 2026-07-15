@@ -2180,6 +2180,11 @@ static GTHREAD_ELF: &[u8] = include_bytes!("../../userland/glibc/gthread");
 // Multi-library test: needs libm.so.6 (a SECOND real shared lib) + dlopen/dlsym.
 static GLIBC_LIBM: &[u8] = include_bytes!("../../userland/glibc/libm.so.6");
 static GMATH_ELF: &[u8] = include_bytes!("../../userland/glibc/gmath");
+// C++ runtime test: a TRANSITIVE DT_NEEDED chain gcpp -> libstdc++ -> {libc, libm,
+// libgcc_s} + C++ exception unwinding (the Chromium language + runtime).
+static GLIBC_LIBSTDCPP: &[u8] = include_bytes!("../../userland/glibc/libstdc++.so.6");
+static GLIBC_LIBGCCS: &[u8] = include_bytes!("../../userland/glibc/libgcc_s.so.1");
+static GCPP_ELF: &[u8] = include_bytes!("../../userland/glibc/gcpp");
 
 /// The real glibc loader bytes.
 pub fn ldlinux_bytes() -> &'static [u8] { LDLINUX_ELF }
@@ -2195,6 +2200,11 @@ pub fn gthread_bytes() -> &'static [u8] { GTHREAD_ELF }
 pub fn glibc_libm_bytes() -> &'static [u8] { GLIBC_LIBM }
 /// A multi-library glibc test: libm math + dlopen/dlsym at runtime.
 pub fn gmath_bytes() -> &'static [u8] { GMATH_ELF }
+/// The real libstdc++.so.6 / libgcc_s.so.1 bytes (C++ runtime + unwinder).
+pub fn glibc_libstdcpp_bytes() -> &'static [u8] { GLIBC_LIBSTDCPP }
+pub fn glibc_libgccs_bytes() -> &'static [u8] { GLIBC_LIBGCCS }
+/// A C++ STL + exceptions test (transitive DT_NEEDED chain via libstdc++).
+pub fn gcpp_bytes() -> &'static [u8] { GCPP_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
 static MWRITE_ELF: &[u8] = include_bytes!("../../userland/mwrite.elf");
 static MECHO_ELF: &[u8] = include_bytes!("../../userland/mecho.elf");
