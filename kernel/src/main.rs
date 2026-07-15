@@ -1767,6 +1767,11 @@ fn main() -> Status {
         ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
         serial_println!("[glibc] gbig (200 MiB heap): exit={e8}");
         for l in o8.lines() { serial_println!("[glibc]   {l}"); }
+        // gsync: pthread mutex + condition variables (producer/consumer) — a much
+        // deeper futex exercise than join (mutex lock/unlock + cond wait/signal).
+        let (o9, e9) = ring3::run_glibc(&mut allocator, ring3::gsync_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsync"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsync (mutex+condvar): exit={e9}");
+        for l in o9.lines() { serial_println!("[glibc]   {l}"); }
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.

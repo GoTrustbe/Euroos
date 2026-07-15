@@ -2192,6 +2192,8 @@ static REAL_SEQ_ELF: &[u8] = include_bytes!("../../userland/glibc/seq");
 static REAL_FACTOR_ELF: &[u8] = include_bytes!("../../userland/glibc/factor");
 // Address-space-scaling test: mallocs + touches 200 MiB (needs a big arena).
 static GBIG_ELF: &[u8] = include_bytes!("../../userland/glibc/gbig");
+// pthread mutex + condition-variable producer/consumer (deep futex exercise).
+static GSYNC_ELF: &[u8] = include_bytes!("../../userland/glibc/gsync");
 
 /// The real glibc loader bytes.
 pub fn ldlinux_bytes() -> &'static [u8] { LDLINUX_ELF }
@@ -2218,6 +2220,8 @@ pub fn real_seq_bytes() -> &'static [u8] { REAL_SEQ_ELF }
 pub fn real_factor_bytes() -> &'static [u8] { REAL_FACTOR_ELF }
 /// A large-heap test (mallocs + touches 200 MiB) for address-space scaling.
 pub fn gbig_bytes() -> &'static [u8] { GBIG_ELF }
+/// A pthread mutex + condvar producer/consumer test (deep futex exercise).
+pub fn gsync_bytes() -> &'static [u8] { GSYNC_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
 static MWRITE_ELF: &[u8] = include_bytes!("../../userland/mwrite.elf");
 static MECHO_ELF: &[u8] = include_bytes!("../../userland/mecho.elf");
