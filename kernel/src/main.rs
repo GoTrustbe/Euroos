@@ -1967,6 +1967,8 @@ fn main() -> Status {
     ps2::keymap_selftest();
     // 3F-7: capability-scoped app permission portals (request → ask → scoped grant).
     portal::selftest();
+    // Part 2: unified per-app control surface (caps + permissions + network in one).
+    shell::selftest();
     // 3F-6: audio routing — per-app streams, per-device routing, default policy.
     audio::selftest();
 

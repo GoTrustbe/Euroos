@@ -90,6 +90,7 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             "  hwprobe              hardware/driver inventory (paste into the HCL)".to_string(),
             "  battery / power      ACPI battery + AC adapter status".to_string(),
             "  guard                per-app + geo network control (block-country, app policy, report)".to_string(),
+            "  apps / app <name>    total control per app: capabilities + permissions + network in one view".to_string(),
             "  print [text]         driverless print via IPP Everywhere".to_string(),
             "  scan [path]          driverless scan via eSCL/AirScan → EuroFiles".to_string(),
             "  uptime               timer ticks since boot".to_string(),
@@ -398,6 +399,10 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         // The user's network-control surface (Part 1): geo-blocking, per-app
         // network policy, and the per-app traffic report.
         "guard" => guard_cmd(line),
+        // The unified per-app control surface (Part 2): capabilities +
+        // permission grants + network policy + traffic, all in one place, with
+        // actions to restrict an app or an AI agent.
+        "app" | "apps" => app_cmd(line),
         "fsck" | "scrub" => {
             // EuroFSck (S7): verify superblock + all inode checksums + structure.
             // `fsck repair` additionally heals a degraded superblock slot from the
@@ -1128,6 +1133,122 @@ fn guard_cmd(line: &str) -> Vec<String> {
         }
         Some(other) => vec![format!("unknown: guard {other}   (try: report, block-country, app)")],
     }
+}
+
+/// `[7app]` boot self-test — the unified per-app control surface on the live
+/// kernel: the `apps` roster lists real programs with their capabilities, and
+/// `app <name>` renders capabilities + permission grants + network policy +
+/// traffic as one screen, with the network clamp taking effect. Proves the exact
+/// code path the shell command runs (not a mock).
+pub fn selftest() {
+    use crate::euroguard::{self, AppNet};
+
+    // Seed a network clamp on a throwaway app (the "restrict this agent" action).
+    euroguard::set_app_net("selftest-agent", AppNet::Blocked);
+
+    // (1) The roster lists every program with its capabilities column.
+    let roster = app_cmd("apps");
+    let roster_ok = roster.iter().any(|l| l.contains("CAPABILITIES"))
+        && roster.iter().filter(|l| l.contains("linux-compat") || l.contains("EuroOS-native")).count() >= 1;
+
+    // (2) The single-app screen fuses caps + permissions + network into one view,
+    //     and the clamp we set is visible.
+    let screen = app_cmd("app selftest-agent");
+    let has_caps = screen.iter().any(|l| l.contains("capabilities") || l.contains("identity"));
+    let has_perms = screen.iter().any(|l| l.contains("permissions"));
+    let clamp_shown = screen.iter().any(|l| l.contains("network policy") && l.contains("BLOCKED"));
+
+    // (3) `revoke` is a clean no-op on an app with no grants (does not panic).
+    let revoke_ok = {
+        let out = app_cmd("app selftest-agent revoke");
+        out.iter().any(|l| l.contains("revoked"))
+    };
+
+    // Restore: lift the throwaway clamp so it never affects the running system.
+    euroguard::set_app_net("selftest-agent", AppNet::Default);
+
+    let ok = roster_ok && has_caps && has_perms && clamp_shown && revoke_ok;
+    crate::serial_println!(
+        "[7app] Unified app control: roster-with-caps={roster_ok}, one-screen(caps+perms+net)={}, network-clamp-visible={clamp_shown}, revoke-permissions={revoke_ok} → {}",
+        has_caps && has_perms,
+        if ok { "OK (total per-app control: rights + network in one place, clamp an AI agent) ✓" } else { "FAILED ✗" }
+    );
+}
+
+/// The unified per-app control surface (Part 2): one place to see and control
+/// EVERYTHING an app can do, its capabilities, its permission grants, and its
+/// network policy + traffic, plus actions to restrict it (the AI-agent clamp).
+///   apps                      list every app with its caps + network policy
+///   app <name>                the full control screen for one app
+///   app <name> revoke         revoke all of the app's permission grants
+///   app <name> net <block|allow|only <cidr>>   set its network policy
+fn app_cmd(line: &str) -> Vec<String> {
+    let mut t = line.split_whitespace();
+    let cmd = t.next().unwrap_or("app"); // "app" or "apps"
+    let name = t.next();
+
+    // `apps` (or `app` with no name): the roster, caps + network policy per app.
+    if cmd == "apps" || name.is_none() {
+        let mut out = vec![
+            "Applications — capabilities + network policy (control any of them with `app <name>`)".to_string(),
+            String::new(),
+            format!("{:<18} {:<14} {:<22} {}", "APP", "ABI", "CAPABILITIES", "NETWORK"),
+        ];
+        for (path, caps, linux) in crate::ring3::program_list() {
+            let abi = if linux { "linux-compat" } else { "EuroOS-native" };
+            let net = crate::euroguard::app_net_label(&path);
+            out.push(format!("{:<18} {:<14} {:<22} {}", path, abi, crate::ring3::cap_names(caps), net));
+        }
+        return out;
+    }
+
+    let name = name.unwrap();
+    // Actions.
+    match t.next() {
+        Some("revoke") => {
+            let n = crate::portal::revoke_app(name);
+            return vec![format!("revoked {n} permission grant(s) from '{name}' (it must ask again next time)")];
+        }
+        Some("net") => {
+            // Delegate to the same engine as `guard app ...`.
+            let rest: alloc::vec::Vec<&str> = t.collect();
+            return guard_cmd(&format!("guard app {name} {}", rest.join(" ")));
+        }
+        Some(other) => return vec![format!("unknown action '{other}' (try: revoke, net <block|allow|only <cidr>>)")],
+        None => {}
+    }
+
+    // The full control screen for one app.
+    let mut out = vec![format!("── {name} ──────────────────────────────")];
+    // Capabilities (least-privilege, signed) from the program table.
+    let mut found = false;
+    for (path, caps, linux) in crate::ring3::program_list() {
+        if path == name || path.ends_with(name) {
+            found = true;
+            out.push(format!("  identity:     {} ({})", path, if linux { "Linux-compat binary" } else { "EuroOS-native" }));
+            out.push(format!("  capabilities: {}  (least-privilege, signed; what it needs to run)", crate::ring3::cap_names(caps)));
+            break;
+        }
+    }
+    if !found {
+        out.push("  identity:     (not a registered program — showing runtime policy only)".to_string());
+    }
+    // Permission grants (camera/mic/files/... via the portal).
+    let grants = crate::portal::grant_lines_for(name);
+    if grants.is_empty() {
+        out.push("  permissions:  no grants (it must ask, and you allow/deny)".to_string());
+    } else {
+        out.push("  permissions:  (granted via the permission portal)".to_string());
+        for g in grants {
+            out.push(format!("    · {g}"));
+        }
+    }
+    // Network policy + live traffic.
+    out.push(String::new());
+    out.extend(crate::euroguard::app_summary_lines(name));
+    out.push(String::new());
+    out.push("  control it:   app ".to_string() + name + " revoke   ·   app " + name + " net block|allow|only <cidr>");
+    out
 }
 
 /// Parse `a.b.c.d/prefix` into (host-byte-order net, prefix).

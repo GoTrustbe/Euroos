@@ -400,6 +400,57 @@ pub fn policy_lines() -> Vec<String> {
     out
 }
 
+/// A one-word label for an app's network policy (for the `apps` roster column).
+pub fn app_net_label(app: &str) -> String {
+    let g = GUARD.lock();
+    match g.app_rules.get(app) {
+        Some(AppNet::Blocked) => "BLOCKED".to_string(),
+        Some(AppNet::AllowOnly(l)) => alloc::format!("allow-only({})", l.len()),
+        _ => "default".to_string(),
+    }
+}
+
+/// The network summary for ONE app (its rule + traffic + countries + hosts),
+/// for the unified per-app control screen. Empty vec if the app has no activity
+/// and no rule.
+pub fn app_summary_lines(app: &str) -> Vec<String> {
+    let g = GUARD.lock();
+    let mut out = Vec::new();
+    let rule = match g.app_rules.get(app) {
+        Some(AppNet::Blocked) => "BLOCKED (no network)".to_string(),
+        Some(AppNet::AllowOnly(l)) => alloc::format!("allow-only ({} network(s))", l.len()),
+        _ => "default (system + geo rules only)".to_string(),
+    };
+    out.push(alloc::format!("  network policy: {rule}"));
+    if let Some(s) = g.apps.get(app) {
+        out.push(alloc::format!(
+            "  traffic: {} conn · {} blocked · tx {} / rx {} B",
+            s.connects, s.blocked, s.bytes_sent, s.bytes_recv
+        ));
+        let mut cs: Vec<(&String, &u64)> = s.countries.iter().collect();
+        cs.sort_by(|a, b| b.1.cmp(a.1));
+        if !cs.is_empty() {
+            let parts: Vec<String> = cs.iter().take(8).map(|(c, n)| alloc::format!("{c}:{n}")).collect();
+            out.push(alloc::format!("  countries: {}", parts.join("  ")));
+        }
+        if !s.hosts.is_empty() {
+            let ips: Vec<String> = s
+                .hosts
+                .iter()
+                .take(8)
+                .map(|ip| {
+                    let cc = g.geo.country_of(ip_u32(*ip)).unwrap_or("??");
+                    alloc::format!("{}[{cc}]", ipfmt(*ip))
+                })
+                .collect();
+            out.push(alloc::format!("  hosts: {}", ips.join("  ")));
+        }
+    } else {
+        out.push("  traffic: (no connections yet)".to_string());
+    }
+    out
+}
+
 /// The per-app network report: for each app, its connection/blocked counts,
 /// bytes, and the destination countries it talked to ("which apps go to which
 /// countries"). This is the reporting surface behind the network monitor.

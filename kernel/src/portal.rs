@@ -132,6 +132,28 @@ pub fn render_dialog(fb: &FrameBuffer, screen_w: usize, screen_h: usize) -> Opti
 }
 
 /// `portal` shell command: list current grants + the recent audit trail.
+/// The permission grants held by one app (formatted), for the unified per-app
+/// control screen. Each line is "<what> (<scope>)".
+pub fn grant_lines_for(app: &str) -> Vec<String> {
+    with_broker(|b| {
+        b.list_grants()
+            .into_iter()
+            .filter(|(a, _, _)| a == app)
+            .map(|(_, res, scope)| alloc::format!("{} ({:?})", res.describe(), scope))
+            .collect()
+    })
+}
+
+/// Revoke every permission grant held by `app` (the "reset this app's
+/// permissions" action). Returns how many grants were revoked.
+pub fn revoke_app(app: &str) -> usize {
+    with_broker(|b| {
+        let n = b.list_grants().iter().filter(|(a, _, _)| a == app).count();
+        b.revoke_all(app);
+        n
+    })
+}
+
 pub fn shell() -> Vec<String> {
     with_broker(|b| {
         let mut out = alloc::vec![String::from("EuroPortal — app permissions (caps, not namespaces)")];
