@@ -272,6 +272,8 @@ pub fn stub_addr() -> u64 {
 /// were safely skipped instead of deadlocking. Nonzero ⇒ the deadlock window was hit.
 pub static SCHED_SKIPS: AtomicU64 = AtomicU64::new(0);
 
+pub static TRACE_SCHED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 #[no_mangle]
 pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     crate::interrupts::TICKS.fetch_add(1, Ordering::Relaxed);
@@ -447,6 +449,22 @@ pub fn init() {
 /// distinguish a scheduled background task from a synchronous foreground exec).
 pub fn current() -> usize {
     SCHED.lock().current
+}
+
+/// The current task's recorded (cr3, kstack) — so a foreground excursion can save
+/// them, install its own, and restore them afterwards. Needed when the boot task
+/// runs a program that BLOCKS (a threaded glibc process joining its workers): the
+/// preemptive switch must resume the task with the right address space + rsp0.
+pub fn current_cr3_kstack() -> (u64, u64) {
+    let s = SCHED.lock();
+    let cur = s.current;
+    (s.tasks[cur].cr3, s.tasks[cur].kstack)
+}
+pub fn set_current_cr3_kstack(cr3: u64, kstack: u64) {
+    let mut s = SCHED.lock();
+    let cur = s.current;
+    s.tasks[cur].cr3 = cr3;
+    s.tasks[cur].kstack = kstack;
 }
 
 /// Number of scheduler tasks (for the live system panel).

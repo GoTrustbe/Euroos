@@ -2076,6 +2076,25 @@ global_asm!(
     "push rdi",                       // cs
     "push rdx",                       // rip
     "iretq",
+    // Like enter_ring3 but IF=1 (PREEMPTIBLE): for a threaded glibc process whose
+    // main thread blocks on a futex and must yield to its worker threads. Safe
+    // only because the caller records the current scheduler task's kstack+cr3
+    // (set_current_cr3_kstack), so a preemption switches stacks correctly.
+    ".global enter_ring3_preempt",
+    "enter_ring3_preempt:",
+    "push rbx",
+    "push rbp",
+    "push r12",
+    "push r13",
+    "push r14",
+    "push r15",
+    "mov [rip + SAVED_KERNEL_RSP], rsp",
+    "push rsi",                       // ss
+    "push rcx",                       // rsp
+    "push 0x202",                     // rflags with IF=1 (preemptible)
+    "push rdi",                       // cs
+    "push rdx",                       // rip
+    "iretq",
 );
 
 // The userspace program /bin/hello — a real, stripped **ELF64** binary,
@@ -2117,6 +2136,7 @@ static LDLINUX_ELF: &[u8] = include_bytes!("../../userland/glibc/ld-linux-x86-64
 static GLIBC_LIBC: &[u8] = include_bytes!("../../userland/glibc/libc.so.6");
 static GTINY_ELF: &[u8] = include_bytes!("../../userland/glibc/gtiny");
 static GTEST_ELF: &[u8] = include_bytes!("../../userland/glibc/gtest");
+static GTHREAD_ELF: &[u8] = include_bytes!("../../userland/glibc/gthread");
 
 /// The real glibc loader bytes.
 pub fn ldlinux_bytes() -> &'static [u8] { LDLINUX_ELF }
@@ -2126,6 +2146,8 @@ pub fn glibc_libc_bytes() -> &'static [u8] { GLIBC_LIBC }
 pub fn gtiny_bytes() -> &'static [u8] { GTINY_ELF }
 /// A richer glibc test: printf + malloc + pthreads.
 pub fn gtest_bytes() -> &'static [u8] { GTEST_ELF }
+/// A threaded glibc test: pthread_create + join of 3 workers.
+pub fn gthread_bytes() -> &'static [u8] { GTHREAD_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
 static MWRITE_ELF: &[u8] = include_bytes!("../../userland/mwrite.elf");
 static MECHO_ELF: &[u8] = include_bytes!("../../userland/mecho.elf");
@@ -2203,6 +2225,8 @@ global_asm!(
 extern "sysv64" {
     fn syscall_entry();
     fn enter_ring3(cs: u64, ss: u64, rip: u64, rsp: u64);
+    /// Preemptible ring-3 entry (IF=1) for a threaded glibc process.
+    fn enter_ring3_preempt(cs: u64, ss: u64, rip: u64, rsp: u64);
     /// Abort a foreground exec after a page fault: clean return into run_args.
     fn force_kernel_return();
 }
@@ -3400,18 +3424,29 @@ pub fn run_glibc(
     GLIBC_CTIDS.lock().clear();
     let boot = crate::sched::boot_pml4();
     unsafe { crate::gdt::set_rsp0(KERNEL_RSP) };
+    // Record this glibc address space + kernel stack on the CURRENT scheduler task,
+    // so if a preemption switches away (to a worker thread) and back, the task
+    // resumes with the glibc CR3 + rsp0 (not the boot ones). Restored below.
+    let (saved_cr3, saved_kstack) = crate::sched::current_cr3_kstack();
+    crate::sched::set_current_cr3_kstack(pml4, unsafe { KERNEL_RSP });
     FG_ACTIVE.store(true, Ordering::Relaxed);
     crate::serial_println!(
         "[glibc] launching real ld-linux: exe@{exe_base:#x} ld.so@{ldso_base:#x} ld-entry@{:#x} rsp@{rsp:#x} phdr@{:#x} phnum={}",
         ld_info.entry, exe_info.phdr, exe_info.phnum
     );
     // SAFETY: paging/MSR/GDT set up; returns via sys_exit or a fault trampoline.
+    // PREEMPTIBLE entry (IF=1): a threaded glibc main blocks on a futex and the
+    // timer must switch to its worker threads. The scheduler task's kstack+cr3
+    // were recorded above so a preemption switches stacks correctly.
     unsafe {
         core::arch::asm!("mov cr3, {}", in(reg) pml4, options(nostack, preserves_flags));
-        enter_ring3(user_cs, user_ss, ld_info.entry, rsp);
+        enter_ring3_preempt(user_cs, user_ss, ld_info.entry, rsp);
         core::arch::asm!("mov cr3, {}", in(reg) boot, options(nostack, preserves_flags));
     }
     FG_ACTIVE.store(false, Ordering::Relaxed);
+    // Restore the boot task's original address space + kernel stack.
+    crate::sched::set_current_cr3_kstack(saved_cr3, saved_kstack);
+    unsafe { crate::gdt::set_rsp0(KERNEL_RSP) };
     let out = OUTPUT.lock().clone();
     let code = unsafe { EXIT_CODE };
     (out, code)
@@ -4299,9 +4334,11 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         202 => {
             // futex(uaddr, op, val, ...): real blocking wait + wake, so pthread
             // mutexes/joins work. Low 7 bits select the op (ignore PRIVATE/CLOCK).
+            // glibc's pthread_join uses FUTEX_WAIT_BITSET (9) / WAKE_BITSET (10),
+            // not plain WAIT (0) / WAKE (1) — handle both (bitset ignored = any).
             match a2 & 0x7f {
-                0 => futex_wait(a1, a3 as u32),      // FUTEX_WAIT
-                1 => futex_wake(a1, a3 as i32) as u64, // FUTEX_WAKE
+                0 | 9 => futex_wait(a1, a3 as u32),        // WAIT / WAIT_BITSET
+                1 | 10 => futex_wake(a1, a3 as i32) as u64, // WAKE / WAKE_BITSET
                 _ => 0,
             }
         }
