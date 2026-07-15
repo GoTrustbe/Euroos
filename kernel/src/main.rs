@@ -1772,6 +1772,15 @@ fn main() -> Status {
         let (o9, e9) = ring3::run_glibc(&mut allocator, ring3::gsync_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsync"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] gsync (mutex+condvar): exit={e9}");
         for l in o9.lines() { serial_println!("[glibc]   {l}"); }
+        // REAL stdin FILTERS: feed fd 0 and run unmodified Ubuntu tools that read it.
+        serial_println!("[glibc] === REAL Ubuntu stdin filters (fd 0) ===");
+        ring3::set_stdin(b"EuroOS runs real Linux tools");
+        let (o10, e10) = ring3::run_glibc(&mut allocator, ring3::real_base64_bytes(), ring3::ldlinux_bytes(), &[b"base64"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] /usr/bin/base64 <stdin> -> exit={e10}, output={:?}", o10.trim_end());
+        ring3::set_stdin(b"one two three\nfour five\n");
+        let (o11, e11) = ring3::run_glibc(&mut allocator, ring3::real_wc_bytes(), ring3::ldlinux_bytes(), &[b"wc"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] /usr/bin/wc <stdin> -> exit={e11}, output={:?}", o11.trim_end());
+        ring3::set_stdin(b"");
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.

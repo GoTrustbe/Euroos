@@ -2190,6 +2190,9 @@ static GCPP_ELF: &[u8] = include_bytes!("../../userland/glibc/gcpp");
 static GLIBC_LIBGMP: &[u8] = include_bytes!("../../userland/glibc/libgmp.so.10");
 static REAL_SEQ_ELF: &[u8] = include_bytes!("../../userland/glibc/seq");
 static REAL_FACTOR_ELF: &[u8] = include_bytes!("../../userland/glibc/factor");
+// REAL Ubuntu stdin FILTERS (read fd 0): base64 encoder + wc counter.
+static REAL_BASE64_ELF: &[u8] = include_bytes!("../../userland/glibc/base64");
+static REAL_WC_ELF: &[u8] = include_bytes!("../../userland/glibc/wc");
 // Address-space-scaling test: mallocs + touches 200 MiB (needs a big arena).
 static GBIG_ELF: &[u8] = include_bytes!("../../userland/glibc/gbig");
 // pthread mutex + condition-variable producer/consumer (deep futex exercise).
@@ -2218,6 +2221,8 @@ pub fn gcpp_bytes() -> &'static [u8] { GCPP_ELF }
 pub fn glibc_libgmp_bytes() -> &'static [u8] { GLIBC_LIBGMP }
 pub fn real_seq_bytes() -> &'static [u8] { REAL_SEQ_ELF }
 pub fn real_factor_bytes() -> &'static [u8] { REAL_FACTOR_ELF }
+pub fn real_base64_bytes() -> &'static [u8] { REAL_BASE64_ELF }
+pub fn real_wc_bytes() -> &'static [u8] { REAL_WC_ELF }
 /// A large-heap test (mallocs + touches 200 MiB) for address-space scaling.
 pub fn gbig_bytes() -> &'static [u8] { GBIG_ELF }
 /// A pthread mutex + condvar producer/consumer test (deep futex exercise).
