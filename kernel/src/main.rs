@@ -137,6 +137,7 @@ mod symbolpicker;
 mod spell;
 mod switcher;
 mod workspace;
+mod netbridge;
 mod agent_ui;
 mod files;
 mod textedit;
@@ -2111,6 +2112,7 @@ fn main() -> Status {
     spell::selftest();
     switcher::selftest();
     workspace::selftest();
+    netbridge::selftest();
     // 3F-6: audio routing — per-app streams, per-device routing, default policy.
     audio::selftest();
 
@@ -2963,9 +2965,16 @@ fn main() -> Status {
     let mut wd_reported = false;
     let mut app_blitted = false; // one-shot log when the app-graphics bridge first paints
     let mut last_app_blit = 0u64; // tick of the last app blit (throttle to keep the loop responsive)
+    // Tell the app-graphics bridge the framebuffer size (the browser renders at
+    // native resolution and maps the mouse 1:1).
+    appgfx::set_screen(width, height);
     loop {
         // 3G-2: the main loop is alive → pet the watchdog.
         watchdog::pet();
+        // Service any pending network request from a graphics app (the browser):
+        // the real HTTP/TLS/DNS fetch runs HERE, in the desktop-loop task context
+        // (interrupts on, no bg lock), not inside the app's no-yield syscall.
+        netbridge::service();
         // One-shot liveness proof once the loop has petted a while.
         if !wd_reported && watchdog::pets() >= 20 {
             wd_reported = true;

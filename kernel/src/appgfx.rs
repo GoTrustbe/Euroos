@@ -29,6 +29,24 @@ static ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::
 /// The pid of the app that owns the screen (the desktop loop polls its liveness
 /// to release ownership when it exits — see `main.rs`).
 static APP_PID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// The framebuffer size, so an app (the browser) can render at native resolution
+/// and map mouse coordinates 1:1.
+static SCREEN_W: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static SCREEN_H: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Record the framebuffer dimensions (called once at boot).
+pub fn set_screen(w: usize, h: usize) {
+    SCREEN_W.store(w as u32, core::sync::atomic::Ordering::Relaxed);
+    SCREEN_H.store(h as u32, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// The framebuffer dimensions (w, h).
+pub fn screen() -> (usize, usize) {
+    (
+        SCREEN_W.load(core::sync::atomic::Ordering::Relaxed) as usize,
+        SCREEN_H.load(core::sync::atomic::Ordering::Relaxed) as usize,
+    )
+}
 
 /// Record the owning app's pid (set by the launcher alongside `set_active(true)`).
 pub fn set_app_pid(pid: u64) {

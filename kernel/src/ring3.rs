@@ -1334,6 +1334,54 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             0
         }
         0x6001 => crate::appgfx::getkey() as u64, // getkey() -> pressed<<8|code, or 0
+        // fetch_start(url_ptr, url_len): ask the desktop loop to fetch a URL over
+        // the real HTTP/TLS/DNS stack (non-blocking). Returns 0 (queued) or -1 (busy).
+        0x6002 => {
+            let bytes = match copy_from_user(a1, a2 as usize) {
+                Some(v) => v,
+                None => return EFAULT,
+            };
+            let url = String::from_utf8_lossy(&bytes);
+            if crate::netbridge::request(&url) { 0 } else { (-1i64) as u64 }
+        }
+        // fetch_poll(out_ptr, cap): if a result is ready, copy up to `cap` body
+        // bytes to out and return (status<<32 | len); else return u64::MAX (pending).
+        0x6003 => {
+            match crate::netbridge::take_result() {
+                Some((status, body)) => {
+                    let n = core::cmp::min(a2 as usize, body.len());
+                    if n > 0 && !copy_to_user(a1, &body[..n]) {
+                        return EFAULT;
+                    }
+                    ((status as u64) << 32) | n as u64
+                }
+                None => u64::MAX,
+            }
+        }
+        // get_mouse(out_ptr): write [i32 x, i32 y, u32 buttons] (screen coords).
+        0x6004 => {
+            let (mx, my) = crate::mouse::pos();
+            let btn = crate::mouse::buttons() as u32;
+            let mut buf = [0u8; 12];
+            buf[0..4].copy_from_slice(&(mx as i32).to_le_bytes());
+            buf[4..8].copy_from_slice(&(my as i32).to_le_bytes());
+            buf[8..12].copy_from_slice(&btn.to_le_bytes());
+            if !copy_to_user(a1, &buf) {
+                return EFAULT;
+            }
+            0
+        }
+        // get_screen(out_ptr): write [u32 w, u32 h] (framebuffer size).
+        0x6005 => {
+            let (w, h) = crate::appgfx::screen();
+            let mut buf = [0u8; 8];
+            buf[0..4].copy_from_slice(&(w as u32).to_le_bytes());
+            buf[4..8].copy_from_slice(&(h as u32).to_le_bytes());
+            if !copy_to_user(a1, &buf) {
+                return EFAULT;
+            }
+            0
+        }
         // read(fd,buf,len): a pipe read first; else a VFS read ONLY if `fd` is an
         // actually-open file (the DOOM port reads its 4 MiB WAD through here).
         // For anything else (e.g. stdin fd 0) return 0/EOF WITHOUT touching the

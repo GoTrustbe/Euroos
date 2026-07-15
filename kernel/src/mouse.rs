@@ -200,6 +200,12 @@ pub fn left_down() -> bool {
     BUTTONS.load(Ordering::Relaxed) & 0x01 != 0
 }
 
+/// The raw button bitmap (bit0 left, bit1 right, bit2 middle) — for apps that
+/// read the pointer via the app-graphics bridge (e.g. the browser).
+pub fn buttons() -> u8 {
+    BUTTONS.load(Ordering::Relaxed)
+}
+
 /// Consume a pending right-button press → the screen position where it happened
 /// (drives the context menu).
 pub fn take_right_press() -> Option<(usize, usize)> {
