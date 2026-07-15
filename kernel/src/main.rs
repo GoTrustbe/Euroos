@@ -1796,6 +1796,8 @@ fn main() -> Status {
         let (o14, e14) = ring3::run_glibc(&mut allocator, ring3::gfile_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gfile"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] gfile (file I/O roundtrip): exit={e14}");
         for l in o14.lines() { serial_println!("[glibc]   {l}"); }
+        // (Reclamation validated out-of-band: 30 mixed runs incl. threaded kept the
+        // task table at index 31 with free_frames stable — see commit notes.)
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.
