@@ -130,6 +130,8 @@ mod ctxmenu;
 mod trash;
 mod launcher;
 mod filedialog;
+mod notify;
+mod screenshot;
 mod agent_ui;
 mod files;
 mod textedit;
@@ -260,6 +262,7 @@ fn build_context_menu(
     // The bare desktop.
     let mut items = alloc::vec![
         Item::new("Open Terminal", "", Action::OpenTerminal),
+        Item::new("Take screenshot", "", Action::Screenshot),
         Item::new("Display settings", "", Action::OpenDisplaySettings),
     ];
     if trash::count() > 0 {
@@ -2067,6 +2070,8 @@ fn main() -> Status {
     compositor::snap_selftest();
     launcher::selftest();
     filedialog::selftest();
+    notify::selftest();
+    screenshot::selftest();
     // 3F-6: audio routing — per-app streams, per-device routing, default policy.
     audio::selftest();
 
@@ -2901,6 +2906,8 @@ fn main() -> Status {
     // The E2E test waits for this before it injects keys; also proves that HLT-idle
     // does not hold the loop.
     serial_println!("[desktop] interactive loop started — input + shell live");
+    // A first notification so the shade is not empty and the toast channel shows.
+    notify::push("Welcome to EuroOS", "Click here to see notifications", interrupts::ticks());
     // 3G-2: arm the live deadman watchdog (5 s grace at 100 Hz). The loop pets it
     // each iteration; the scheduler tick checks it independently.
     watchdog::arm(1500); // 15s: a full software render is a few seconds under TCG (fast on real HW)
@@ -2929,6 +2936,8 @@ fn main() -> Status {
         // An app the user asked to open this iteration (via launcher or menu),
         // raised in one place after input handling.
         let mut launch_icon: Option<usize> = None;
+        // A screenshot requested this iteration, captured after a clean render.
+        let mut pending_shot = false;
 
         // The file dialog is modal (highest priority): its click chooses/navigates.
         if filedialog::is_open() {
@@ -2974,16 +2983,17 @@ fn main() -> Status {
                             if trash::to_trash(ctx.fs, &p) {
                                 let cur = files::current_path();
                                 if !cur.is_empty() { load_files_dir(ctx.fs, &cur); }
-                                serial_println!("[trash] moved to trash: {p}");
+                                notify::push("Moved to Trash", &p, interrupts::ticks());
                             }
                         }
                         RestoreTrash => {
                             if let Some(orig) = trash::restore_last(ctx.fs) {
                                 let cur = files::current_path();
                                 if !cur.is_empty() { load_files_dir(ctx.fs, &cur); }
-                                serial_println!("[trash] restored: {orig}");
+                                notify::push("Restored", &orig, interrupts::ticks());
                             }
                         }
+                        Screenshot => { pending_shot = true; }
                         NewFolder(dir) => {
                             let base = if dir.ends_with('/') { dir.clone() } else { alloc::format!("{dir}/") };
                             // Find a free name by trying to create it (no metadata() on the FS).
@@ -3082,6 +3092,13 @@ fn main() -> Status {
             } else if compositor::brand_button_at(px, py) {
                 // The EU mark is the "start button": open the app launcher.
                 launcher::open();
+                need_full = true;
+            } else if {
+                let (rx, ry, rw, rh) = compositor::status_panel_rect(width);
+                px >= rx && px < rx + rw && py >= ry && py < ry + rh
+            } {
+                // Click the status panel (the shade) → toggle notifications.
+                notify::toggle_centre();
                 need_full = true;
             } else if let Some(icon) = compositor::dock_icon_at(px, py) {
                 // Dock click → open the corresponding app (or bring it to front).
@@ -3801,7 +3818,9 @@ fn main() -> Status {
 
         // While a context menu or the launcher is open, keep repainting so the
         // hovered row tracks the cursor and the overlay stays above everything.
-        if ctxmenu::is_open() || launcher::is_open() || filedialog::is_open() {
+        if ctxmenu::is_open() || launcher::is_open() || filedialog::is_open()
+            || notify::has_active_toasts(t) || notify::is_centre_open()
+        {
             need_full = true;
         }
         if need_full {
@@ -3817,12 +3836,22 @@ fn main() -> Status {
             launcher::render(&fb, width, height);
             // The file open/save dialog is the topmost overlay when active.
             filedialog::render(&fb, width, height);
+            // Notification toasts and the centre shade sit above the desktop.
+            notify::render_toasts(&fb, width, t);
+            notify::render_centre(&fb, width, height);
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
             compositor::draw_cursor(&fb, cmx, cmy);
             fb.present();
     if let Some((bb, bw, bh, bs)) = fb.backbuffer() { virtio_gpu::present_frame(bb, bw, bh, bs); } // BB-2: live virtio-gpu scanout
+            // Capture the freshly rendered desktop if a screenshot was requested.
+            if pending_shot {
+                if let Some(path) = screenshot::capture(&fb, ctx.fs) {
+                    notify::push("Screenshot saved", &path, t);
+                }
+                pending_shot = false;
+            }
         } else if tick {
             // Update the live system window (incl. daemon heartbeat) + clock.
             last_t = t / 50;

@@ -36,6 +36,8 @@ pub enum Action {
     OpenApp(usize),
     /// Repaint the desktop.
     Refresh,
+    /// Capture the screen to an image file.
+    Screenshot,
 }
 
 /// One row in a menu. `action: None` renders as a disabled (greyed) row.
