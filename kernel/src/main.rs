@@ -1381,6 +1381,8 @@ fn main() -> Status {
         // {libc, libm, libgcc_s}) resolves — Chromium is C++ at this scale.
         ring3::register_file("/lib/x86_64-linux-gnu/libstdc++.so.6", ring3::glibc_libstdcpp_bytes().to_vec());
         ring3::register_file("/lib/x86_64-linux-gnu/libgcc_s.so.1", ring3::glibc_libgccs_bytes().to_vec());
+        // libgmp: needed by the REAL /usr/bin/factor binary (bignum arithmetic).
+        ring3::register_file("/lib/x86_64-linux-gnu/libgmp.so.10", ring3::glibc_libgmp_bytes().to_vec());
         let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
         serial_println!(
             "[h3] dyntest (dynamically linked) done: exit={h3_exit}, output={:?}",
@@ -1750,6 +1752,13 @@ fn main() -> Status {
         let (o5, e5) = ring3::run_glibc(&mut allocator, ring3::gcpp_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gcpp"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] gcpp (C++ STL + exceptions): exit={e5}");
         for l in o5.lines() { serial_println!("[glibc]   {l}"); }
+        // REAL unmodified Ubuntu coreutils binaries, run WITH ARGUMENTS. Proof that
+        // arbitrary Linux software runs on EuroOS, not just our own test stubs.
+        serial_println!("[glibc] === REAL Ubuntu binaries (unmodified /usr/bin) ===");
+        let (o6, e6) = ring3::run_glibc(&mut allocator, ring3::real_seq_bytes(), ring3::ldlinux_bytes(), &[b"seq", b"1", b"2", b"9"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] /usr/bin/seq 1 2 9 -> exit={e6}, output={:?}", o6.trim_end());
+        let (o7, e7) = ring3::run_glibc(&mut allocator, ring3::real_factor_bytes(), ring3::ldlinux_bytes(), &[b"factor", b"360360"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] /usr/bin/factor 360360 -> exit={e7}, output={:?}", o7.trim_end());
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.

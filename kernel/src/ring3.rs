@@ -2185,6 +2185,11 @@ static GMATH_ELF: &[u8] = include_bytes!("../../userland/glibc/gmath");
 static GLIBC_LIBSTDCPP: &[u8] = include_bytes!("../../userland/glibc/libstdc++.so.6");
 static GLIBC_LIBGCCS: &[u8] = include_bytes!("../../userland/glibc/libgcc_s.so.1");
 static GCPP_ELF: &[u8] = include_bytes!("../../userland/glibc/gcpp");
+// REAL unmodified Ubuntu GNU coreutils binaries (not hand-written tests): seq
+// (libc only) + factor (libc + libgmp.so.10) — proof arbitrary Linux software runs.
+static GLIBC_LIBGMP: &[u8] = include_bytes!("../../userland/glibc/libgmp.so.10");
+static REAL_SEQ_ELF: &[u8] = include_bytes!("../../userland/glibc/seq");
+static REAL_FACTOR_ELF: &[u8] = include_bytes!("../../userland/glibc/factor");
 
 /// The real glibc loader bytes.
 pub fn ldlinux_bytes() -> &'static [u8] { LDLINUX_ELF }
@@ -2205,6 +2210,10 @@ pub fn glibc_libstdcpp_bytes() -> &'static [u8] { GLIBC_LIBSTDCPP }
 pub fn glibc_libgccs_bytes() -> &'static [u8] { GLIBC_LIBGCCS }
 /// A C++ STL + exceptions test (transitive DT_NEEDED chain via libstdc++).
 pub fn gcpp_bytes() -> &'static [u8] { GCPP_ELF }
+/// Real Ubuntu libgmp.so.10 + the real /usr/bin/seq and /usr/bin/factor binaries.
+pub fn glibc_libgmp_bytes() -> &'static [u8] { GLIBC_LIBGMP }
+pub fn real_seq_bytes() -> &'static [u8] { REAL_SEQ_ELF }
+pub fn real_factor_bytes() -> &'static [u8] { REAL_FACTOR_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
 static MWRITE_ELF: &[u8] = include_bytes!("../../userland/mwrite.elf");
 static MECHO_ELF: &[u8] = include_bytes!("../../userland/mecho.elf");
