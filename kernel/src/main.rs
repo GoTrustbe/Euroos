@@ -129,6 +129,7 @@ mod clipboard;
 mod ctxmenu;
 mod trash;
 mod launcher;
+mod filedialog;
 mod agent_ui;
 mod files;
 mod textedit;
@@ -2065,6 +2066,7 @@ fn main() -> Status {
     ctxmenu::selftest();
     compositor::snap_selftest();
     launcher::selftest();
+    filedialog::selftest();
     // 3F-6: audio routing — per-app streams, per-device routing, default policy.
     audio::selftest();
 
@@ -2928,9 +2930,13 @@ fn main() -> Status {
         // raised in one place after input handling.
         let mut launch_icon: Option<usize> = None;
 
-        // The app launcher is modal: while open, the next left click chooses a
-        // result or dismisses it.
-        if launcher::is_open() {
+        // The file dialog is modal (highest priority): its click chooses/navigates.
+        if filedialog::is_open() {
+            if let Some((cx, cy)) = mouse::take_press() {
+                filedialog::click_at(cx, cy, width, height);
+                need_full = true;
+            }
+        } else if launcher::is_open() {
             if let Some((cx, cy)) = mouse::take_press() {
                 if let Some(icon) = launcher::click_at(cx, cy, width, height) {
                     launch_icon = Some(icon);
@@ -3041,7 +3047,7 @@ fn main() -> Status {
                 need_full = true;
             }
         } else if let Some((rx, ry)) = mouse::take_right_press() {
-            if portal_buttons.is_none() && !launcher::is_open() {
+            if portal_buttons.is_none() && !launcher::is_open() && !filedialog::is_open() {
                 build_context_menu(rx, ry, &windows, &order, &dock_targets, width, height);
                 need_full = true;
             }
@@ -3239,8 +3245,10 @@ fn main() -> Status {
                         // Click in the notes list → select a different note.
                         notes::hit_test(windows[i].x, windows[i].y, px, py);
                     } else if windows[i].app == suite_ui::SuiteApp::Text {
-                        // Click on "Save" → write the buffer REALLY to EuroFS.
-                        if textedit::save_button_at(windows[i].x, windows[i].y, windows[i].w, px, py) {
+                        // Click on "Open" → the file picker; "Save" → write to EuroFS.
+                        if textedit::open_button_at(windows[i].x, windows[i].y, windows[i].w, px, py) {
+                            filedialog::open(filedialog::Mode::Open, "/");
+                        } else if textedit::save_button_at(windows[i].x, windows[i].y, windows[i].w, px, py) {
                             textedit::save(ctx.fs);
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Installer {
@@ -3326,6 +3334,13 @@ fn main() -> Status {
         let mut term_dirty = false;
         let mut calc_dirty = false;
         while let Some(k) = ps2::poll_key() {
+            // The file dialog captures the keyboard while it is open (navigate /
+            // type a name / Enter / Esc).
+            if filedialog::is_open() {
+                filedialog::key(k);
+                need_full = true;
+                continue;
+            }
             // The app launcher captures the keyboard while it is open (type to
             // filter, Enter to open, Esc to dismiss).
             if launcher::is_open() {
@@ -3717,6 +3732,31 @@ fn main() -> Status {
             }
         }
 
+        // File dialog: list a directory it asked for, and carry out a chosen path.
+        if let Some(dir) = filedialog::needs_load() {
+            let items = match ctx.fs.list_dir(&dir) {
+                Ok(v) => v.into_iter().map(|e| (e.name, e.kind == eurofs::EntryKind::Directory)).collect::<Vec<_>>(),
+                Err(_) => Vec::new(),
+            };
+            filedialog::set_entries(&dir, items);
+            need_full = true;
+        }
+        if let Some((mode, path)) = filedialog::take_result() {
+            match mode {
+                filedialog::Mode::Open => textedit::open(ctx.fs, &path),
+                filedialog::Mode::Save => { textedit::save_to(ctx.fs, &path); }
+            }
+            // Raise the EuroText window so the result is visible.
+            if let Some(w) = windows.iter().position(|win| win.app == suite_ui::SuiteApp::Text) {
+                order.retain(|&x| x != w);
+                order.push(w);
+                for ww in windows.iter_mut() { ww.active = false; }
+                windows[w].visible = true;
+                windows[w].active = true;
+            }
+            need_full = true;
+        }
+
         // Open an app requested by the launcher or a menu (single place).
         if let Some(icon) = launch_icon {
             if let Some(w) = dock_targets.get(icon).copied().flatten().filter(|&w| w < windows.len()) {
@@ -3761,7 +3801,7 @@ fn main() -> Status {
 
         // While a context menu or the launcher is open, keep repainting so the
         // hovered row tracks the cursor and the overlay stays above everything.
-        if ctxmenu::is_open() || launcher::is_open() {
+        if ctxmenu::is_open() || launcher::is_open() || filedialog::is_open() {
             need_full = true;
         }
         if need_full {
@@ -3775,6 +3815,8 @@ fn main() -> Status {
             ctxmenu::render(&fb, px, py);
             // The app launcher overlays everything (a centered search palette).
             launcher::render(&fb, width, height);
+            // The file open/save dialog is the topmost overlay when active.
+            filedialog::render(&fb, width, height);
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
