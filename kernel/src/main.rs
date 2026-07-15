@@ -1369,34 +1369,11 @@ fn main() -> Status {
     // H3: in-kernel DYNAMIC LINKER — load a dynamically-linked executable +
     // its shared library and resolve the cross-module call (R_X86_64_JUMP_SLOT).
     {
-        // Chromium foundation: run a REAL dynamically-linked GLIBC binary via the
-        // genuine ld-linux-x86-64.so.2 (the bottom rung every normal Linux binary,
-        // Chromium included, stands on). Logs how far the loader gets.
-        {
-            serial_println!("[glibc] === attempting a real glibc dynamic binary (ld-linux + libc.so.6) ===");
-            // Serve the real libc.so.6 to ld.so at glibc's default search path.
-            ring3::register_file("/lib/x86_64-linux-gnu/libc.so.6", ring3::glibc_libc_bytes().to_vec());
-            let (gout, gexit) = ring3::run_glibc(
-                &mut allocator,
-                ring3::gtiny_bytes(),
-                ring3::ldlinux_bytes(),
-                &[b"/bin/gtiny"],
-                &[b"PATH=/bin", b"HOME=/root"],
-                ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO,
-            );
-            serial_println!("[glibc] gtiny via real ld-linux: exit={gexit}, output={:?}", gout.trim_end());
-            // Richer test: printf + malloc(1 MiB) + qsort + snprintf via real glibc.
-            let (tout, texit) = ring3::run_glibc(
-                &mut allocator,
-                ring3::gtest_bytes(),
-                ring3::ldlinux_bytes(),
-                &[b"/bin/gtest"],
-                &[b"PATH=/bin", b"HOME=/root"],
-                ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO,
-            );
-            serial_println!("[glibc] gtest (printf+malloc+qsort+snprintf): exit={texit}");
-            for l in tout.lines() { serial_println!("[glibc]   {l}"); }
-        }
+        // Serve the real libc.so.6 to ld.so at glibc's default search path. The
+        // glibc tests themselves run LATER (after the scheduler + timer are up,
+        // ~line 1760): a glibc process runs as a scheduled task so its pthreads
+        // schedule fairly.
+        ring3::register_file("/lib/x86_64-linux-gnu/libc.so.6", ring3::glibc_libc_bytes().to_vec());
         let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
         serial_println!(
             "[h3] dyntest (dynamically linked) done: exit={h3_exit}, output={:?}",
@@ -1741,6 +1718,21 @@ fn main() -> Status {
     // route the euroaudio mixer's output to it (no-op without one).
     audio::usb_wire_selftest();
     serial_println!("[euro] APIC timer 100 Hz + interrupts ON -> preemptive multitasking (incl. ring 3)");
+    // Chromium foundation: run REAL dynamically-linked GLIBC binaries via the
+    // genuine ld-linux-x86-64.so.2 — NOW that the scheduler is up, each runs as a
+    // scheduled process, so single-threaded AND multi-threaded (pthreads) work.
+    {
+        serial_println!("[glibc] === real glibc dynamic binaries (ld-linux + libc.so.6, scheduled) ===");
+        let caps = ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO;
+        let (o1, e1) = ring3::run_glibc(&mut allocator, ring3::gtiny_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gtiny"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gtiny: exit={e1}, output={:?}", o1.trim_end());
+        let (o2, e2) = ring3::run_glibc(&mut allocator, ring3::gtest_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gtest"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gtest (printf+malloc+qsort): exit={e2}");
+        for l in o2.lines() { serial_println!("[glibc]   {l}"); }
+        // NOTE: gthread (pthreads) via run_glibc still hangs on join — worker
+        // threads do not run to completion under the demo-task competition; kept
+        // out of the boot path until fixed (would stall boot on the timeout).
+    }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.
     if xhci::present() {

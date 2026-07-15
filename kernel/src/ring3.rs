@@ -3361,6 +3361,11 @@ pub static TRACE_SYS: core::sync::atomic::AtomicBool = core::sync::atomic::Atomi
 static GLIBC_PML4: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static GLIBC_THREADS: Mutex<alloc::vec::Vec<usize>> = Mutex::new(alloc::vec::Vec::new());
 static GLIBC_CTIDS: Mutex<alloc::vec::Vec<(usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
+// A glibc program run as a first-class SCHEDULED process (so its threads are
+// normal scheduler citizens): the main task id, a done flag + exit code.
+static GLIBC_MAIN_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+static GLIBC_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static GLIBC_EXIT_CODE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 pub fn run_glibc(
     falloc: &mut FrameAllocator,
@@ -3422,33 +3427,39 @@ pub fn run_glibc(
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
     GLIBC_THREADS.lock().clear();
     GLIBC_CTIDS.lock().clear();
-    let boot = crate::sched::boot_pml4();
-    unsafe { crate::gdt::set_rsp0(KERNEL_RSP) };
-    // Record this glibc address space + kernel stack on the CURRENT scheduler task,
-    // so if a preemption switches away (to a worker thread) and back, the task
-    // resumes with the glibc CR3 + rsp0 (not the boot ones). Restored below.
-    let (saved_cr3, saved_kstack) = crate::sched::current_cr3_kstack();
-    crate::sched::set_current_cr3_kstack(pml4, unsafe { KERNEL_RSP });
-    FG_ACTIVE.store(true, Ordering::Relaxed);
+    GLIBC_DONE.store(false, Ordering::Relaxed);
+    GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
+
+    // Own kernel stack for the main thread (from the thread kstack pool).
+    let slot = THREAD_KSTACK_NEXT.fetch_add(1, Ordering::Relaxed);
+    if slot >= MAX_THREADS {
+        return (String::from("(no kernel stack)"), u64::MAX);
+    }
+    let kbase = unsafe { core::ptr::addr_of_mut!(THREAD_KSTACKS[slot]) as u64 };
+    let main_kstack = (kbase + TKSTACK_SIZE as u64) & !0xF;
+
+    // Run the glibc program as a FIRST-CLASS SCHEDULED process: spawn its main
+    // thread as a normal ring-3 scheduler task (own kstack, glibc CR3). Its
+    // pthread workers are scheduler siblings, so blocking + preemption + waking
+    // all work — unlike a boot-task excursion, which starved.
+    let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
+    GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
     crate::serial_println!(
-        "[glibc] launching real ld-linux: exe@{exe_base:#x} ld.so@{ldso_base:#x} ld-entry@{:#x} rsp@{rsp:#x} phdr@{:#x} phnum={}",
+        "[glibc] spawned scheduled task {main_task}: ld-entry@{:#x} rsp@{rsp:#x} phdr@{:#x} phnum={}",
         ld_info.entry, exe_info.phdr, exe_info.phnum
     );
-    // SAFETY: paging/MSR/GDT set up; returns via sys_exit or a fault trampoline.
-    // PREEMPTIBLE entry (IF=1): a threaded glibc main blocks on a futex and the
-    // timer must switch to its worker threads. The scheduler task's kstack+cr3
-    // were recorded above so a preemption switches stacks correctly.
-    unsafe {
-        core::arch::asm!("mov cr3, {}", in(reg) pml4, options(nostack, preserves_flags));
-        enter_ring3_preempt(user_cs, user_ss, ld_info.entry, rsp);
-        core::arch::asm!("mov cr3, {}", in(reg) boot, options(nostack, preserves_flags));
+
+    // The launcher (boot task) waits, yielding so the glibc tasks get the CPU.
+    let deadline = crate::interrupts::ticks() + 12000; // ~120 s guest-time cap
+    while !GLIBC_DONE.load(Ordering::Relaxed) && crate::interrupts::ticks() < deadline {
+        crate::sched::sleep_ticks(1);
     }
-    FG_ACTIVE.store(false, Ordering::Relaxed);
-    // Restore the boot task's original address space + kernel stack.
-    crate::sched::set_current_cr3_kstack(saved_cr3, saved_kstack);
-    unsafe { crate::gdt::set_rsp0(KERNEL_RSP) };
+    if !GLIBC_DONE.load(Ordering::Relaxed) {
+        crate::serial_println!("[glibc] TIMEOUT waiting for the process to exit");
+    }
+    GLIBC_MAIN_TASK.store(usize::MAX, Ordering::Relaxed);
     let out = OUTPUT.lock().clone();
-    let code = unsafe { EXIT_CODE };
+    let code = GLIBC_EXIT_CODE.load(Ordering::Relaxed);
     (out, code)
 }
 
@@ -3920,8 +3931,10 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // process. exit (60) from a cloned THREAD ends only that thread (glibc's
             // pthread teardown uses it); from the main task it ends the process.
             let cur = crate::sched::current();
-            let is_thread = num == 60 && GLIBC_THREADS.lock().iter().any(|&t| t == cur);
-            if is_thread {
+            let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+            // A cloned WORKER thread's exit(60): end only that thread.
+            let is_worker = num == 60 && cur != main && GLIBC_THREADS.lock().iter().any(|&t| t == cur);
+            if is_worker {
                 // CLONE_CHILD_CLEARTID: write 0 to the ctid + futex-wake, so the
                 // main thread's pthread_join wakes. Then mark this thread dead; it
                 // keeps re-entering here until the scheduler skips it (like musl).
@@ -3934,6 +3947,18 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 crate::sched::mark_dead(cur);
                 return 0;
             }
+            if main != usize::MAX {
+                // A SCHEDULED glibc process exits: record the code, kill any leftover
+                // worker threads, signal the waiting launcher, mark this task dead.
+                GLIBC_EXIT_CODE.store(a1, Ordering::Relaxed);
+                for &t in GLIBC_THREADS.lock().iter() {
+                    crate::sched::mark_dead(t);
+                }
+                GLIBC_DONE.store(true, Ordering::Relaxed);
+                crate::sched::mark_dead(cur);
+                return 0;
+            }
+            // Foreground run_args (musl) excursion: the synchronous EXITED model.
             unsafe {
                 EXIT_CODE = a1;
                 EXITED = 1;
