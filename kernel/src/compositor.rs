@@ -129,6 +129,44 @@ pub fn work_area(screen_w: usize, screen_h: usize) -> (usize, usize, usize, usiz
     (x, y, w, h)
 }
 
+/// Window snapping: if the pointer is in an edge zone at drop time, return the
+/// geometry the window should snap to. Left edge → left half of the work area,
+/// right edge → right half, top edge → maximized. `None` means no snap.
+pub fn snap_target(px: usize, py: usize, screen_w: usize, screen_h: usize) -> Option<(usize, usize, usize, usize)> {
+    const ZONE: usize = 18;
+    let (wx, wy, ww, wh) = work_area(screen_w, screen_h);
+    if py <= ZONE {
+        Some((wx, wy, ww, wh)) // top → maximize to the work area
+    } else if px <= SIDEBAR_W + ZONE {
+        Some((wx, wy, ww / 2, wh)) // left half
+    } else if px + ZONE >= screen_w {
+        let half = ww / 2;
+        Some((wx + ww - half, wy, half, wh)) // right half
+    } else {
+        None
+    }
+}
+
+/// `[snap]` boot self-test: dropping in each edge zone yields the right target,
+/// the centre yields none, and left+right halves tile the work area exactly.
+pub fn snap_selftest() {
+    let (w, h) = (1920usize, 1080usize);
+    let (wx, _wy, ww, _wh) = work_area(w, h);
+    let left = snap_target(wx, 500, w, h);
+    let right = snap_target(w - 1, 500, w, h);
+    let top = snap_target(500, 3, w, h);
+    let center = snap_target(w / 2, h / 2, w, h);
+    let halves_tile = matches!((left, right), (Some((lx, _, lw, _)), Some((rx, _, rw, _)))
+        if lx == wx && lw == ww / 2 && rx == wx + ww - ww / 2 && rw == ww / 2 && rx == lx + lw);
+    let top_max = matches!(top, Some((_, _, tw, _)) if tw == ww);
+    let center_none = center.is_none();
+    let ok = halves_tile && top_max && center_none;
+    crate::serial_println!(
+        "[snap] Window snapping: left+right halves tile={halves_tile}, top→maximize={top_max}, centre→none={center_none} → {}",
+        if ok { "OK (drag to an edge to snap) ✓" } else { "FAILED ✗" }
+    );
+}
+
 pub fn draw_window(fb: &FrameBuffer, win: &Window) {
     // Soft drop shadow — stronger for the active window (depth/EDS).
     let (spread, off) = if win.active { (16, 7) } else { (9, 4) };

@@ -2043,9 +2043,11 @@ fn main() -> Status {
     shell::selftest();
     // Part 3: the desktop per-app control screen's actions do real kernel work.
     settings_ui::selftest();
-    // Everyday-conveniences layer: live clipboard + right-click context menus.
+    // Everyday-conveniences layer: live clipboard + right-click context menus +
+    // window snapping (drag to a screen edge).
     clipboard::selftest();
     ctxmenu::selftest();
+    compositor::snap_selftest();
     // 3F-6: audio routing — per-app streams, per-device routing, default policy.
     audio::selftest();
 
@@ -3111,6 +3113,15 @@ fn main() -> Status {
                     }
                     windows[i].active = true;
                     if windows[i].titlebar_contains(px, py) {
+                        // Un-snap on pickup: a snapped or maximized window returns to
+                        // its floating size, popping under the cursor so the drag feels
+                        // natural (Windows/GNOME behaviour).
+                        if let Some((_rx, _ry, rw, rh)) = windows[i].restore.take() {
+                            windows[i].w = rw;
+                            windows[i].h = rh;
+                            windows[i].x = px.saturating_sub(rw / 2);
+                            windows[i].y = py.saturating_sub(14);
+                        }
                         drag_off = (px.saturating_sub(windows[i].x), py.saturating_sub(windows[i].y));
                         dragging = Some(i);
                     } else if windows[i].app == suite_ui::SuiteApp::Reken {
@@ -3195,7 +3206,20 @@ fn main() -> Status {
             }
         }
         if !ldown {
-            dragging = None;
+            // Drop: if released in an edge zone, snap the window there (Windows-
+            // style half/half + top-to-maximize), remembering its floating size.
+            if let Some(idx) = dragging.take() {
+                if let Some((sx, sy, sw2, sh2)) = compositor::snap_target(px, py, width, height) {
+                    if windows[idx].restore.is_none() {
+                        windows[idx].restore = Some((windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h));
+                    }
+                    windows[idx].x = sx;
+                    windows[idx].y = sy;
+                    windows[idx].w = sw2;
+                    windows[idx].h = sh2;
+                    need_full = true;
+                }
+            }
         }
         if let Some(idx) = dragging {
             let nx = px.saturating_sub(drag_off.0);
