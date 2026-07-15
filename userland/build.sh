@@ -38,7 +38,7 @@ echo "==> pieprog.elf: $(stat -c%s pieprog.elf) bytes (PIE, $relcount RELATIVE r
 # syscall stubs, uses printf/malloc/strlen from musl. Proves that EuroKernel
 # runs unmodified musl userspace via the Linux ABI + ELF relocations.
 if command -v musl-gcc >/dev/null 2>&1; then
-    for m in muslreal muslfile mcat mwrite mecho mupper msum menv msock mdns mtrack tlscount isotest worker mthread mpthread mmutex ipcrecv ipcsend fbtest; do
+    for m in muslreal muslfile mcat mwrite mecho mupper msum menv msock mdns mtrack tlscount isotest worker mthread mpthread mmutex ipcrecv ipcsend fbtest browser; do
         musl-gcc -static-pie -Os -o "$m.elf" "$m.c"
         mrel=$(objdump -R "$m.elf" 2>/dev/null | grep -c R_X86_64_RELATIVE || true)
         mbad=$(readelf -r "$m.elf" 2>/dev/null | awk '{print $3}' | grep -cE "R_X86_64_(IRELATIVE|TPOFF|DTPMOD|DTPOFF)" || true)

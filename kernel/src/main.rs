@@ -985,9 +985,10 @@ fn main() -> Status {
     // granted capabilities (least-privilege) and the syscall ABI. This lets a
     // shell later start them by NAME — the kernel itself knows with which rights + ABI.
     use ring3::{CAP_CONSOLE as CO, CAP_FILE as FI, CAP_NET as NE, CAP_PROC_INFO as PR};
-    let installed: [(&str, u64, bool); 24] = [
+    let installed: [(&str, u64, bool); 25] = [
         ("/bin/fbtest", CO, true), // app-graphics smoke test (large-arena scheduled)
         ("/bin/doom", CO | FI, true), // the DOOM port: draws frames + reads its WAD (CAP_FILE)
+        ("/bin/browser", CO | FI | NE, true), // EuroBrowser: draws + fetches live sites (CAP_NET)
         ("/bin/hello", CO | PR | FI, false),
         ("/bin/cat", CO | FI, false),
         ("/bin/linuxprog", CO | PR | FI, true), // now reads /proc too (CAP_FILE)
@@ -3709,14 +3710,15 @@ fn main() -> Status {
                         }
                     } else if {
                         let n = exec_cmd.split_whitespace().next().unwrap_or("");
-                        n == "doom" || n == "fbtest"
+                        n == "doom" || n == "fbtest" || n == "browser" || n == "surf"
                     } {
                         // Graphical app: a PREEMPTIVELY-scheduled userspace program
                         // that draws to its own centered framebuffer (fb_present)
                         // and reads the keyboard (getkey). Unlike a /bin program it
                         // does NOT run to completion — it owns the screen until it
                         // exits, so we spawn it on the scheduler and return at once.
-                        let name = exec_cmd.split_whitespace().next().unwrap_or("");
+                        let raw = exec_cmd.split_whitespace().next().unwrap_or("");
+                        let name = if raw == "surf" { "browser" } else { raw }; // alias (avoids a keymap quirk)
                         let path = format!("/bin/{name}");
                         match ring3::program_caps_abi(&path) {
                             None => out.push(format!("{name}: not installed")),
@@ -3733,15 +3735,18 @@ fn main() -> Status {
                                     } else {
                                         alloc::vec![name.as_bytes()]
                                     };
+                                    // The browser renders a full-screen framebuffer
+                                    // + page/link buffers, so it needs a larger arena.
+                                    let arena_mib = if name == "browser" { 48 } else { 32 };
                                     let spawned = x86_64::instructions::interrupts::without_interrupts(|| {
-                                        ring3::spawn_bg_app(mem, &bytes, pid, &argv, 32)
+                                        ring3::spawn_bg_app(mem, &bytes, pid, &argv, arena_mib)
                                     });
                                     if spawned.is_some() {
                                         appgfx::set_app_pid(pid);
                                         appgfx::set_active(true);
                                         out.push(format!("{name}: launched (pid {pid}) — drawing to the screen; Esc quits"));
                                     } else {
-                                        out.push(format!("{name}: out of memory (needs a 32 MiB arena)"));
+                                        out.push(format!("{name}: out of memory (needs a {arena_mib} MiB arena)"));
                                     }
                                 }
                             }
@@ -4137,10 +4142,11 @@ fn eurojs_show(v: &eurojs::Value) -> String {
     }
 }
 
-fn system_binaries() -> [(&'static str, &'static [u8]); 31] {
+fn system_binaries() -> [(&'static str, &'static [u8]); 32] {
     [
         ("/bin/fbtest", ring3::fbtest_bytes()),
         ("/bin/doom", ring3::doom_bytes()),
+        ("/bin/browser", ring3::browser_bytes()),
         ("/bin/hello", ring3::program_bytes()),
         ("/bin/cat", ring3::cat_bytes()),
         ("/bin/linuxprog", ring3::linuxprog_bytes()),

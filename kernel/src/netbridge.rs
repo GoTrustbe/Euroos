@@ -55,7 +55,9 @@ pub fn service() {
             None => return,
         }
     };
+    crate::serial_println!("[netbridge] fetching {url} for the browser");
     let (status, body) = fetch_url(&url);
+    crate::serial_println!("[netbridge] fetched: status {status}, {} bytes", body.len());
     let mut b = BRIDGE.lock();
     b.result = Some((status, body));
     b.busy = false;
@@ -131,6 +133,8 @@ pub fn selftest() {
     { BRIDGE.lock().result = Some((200, alloc::vec![b'h', b'i'])); BRIDGE.lock().busy = false; }
     let got = take_result().map(|(s, b)| s == 200 && b == b"hi").unwrap_or(false);
     let cleared = take_result().is_none();
+    // Leave the bridge clean (no stale pending request from the test).
+    { let mut b = BRIDGE.lock(); b.pending = None; b.result = None; b.busy = false; }
     let ok = parse_ok && parse2 && req && busy && got && cleared;
     crate::serial_println!(
         "[netb] Net bridge for apps: url-parse={parse_ok}/{parse2}, request→busy={busy}, poll-returns-result={got}, cleared={cleared} → {}",

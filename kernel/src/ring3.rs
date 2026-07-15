@@ -1336,6 +1336,10 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
         0x6001 => crate::appgfx::getkey() as u64, // getkey() -> pressed<<8|code, or 0
         // fetch_start(url_ptr, url_len): ask the desktop loop to fetch a URL over
         // the real HTTP/TLS/DNS stack (non-blocking). Returns 0 (queued) or -1 (busy).
+        // fetch_start(url_ptr, url_len): queue a URL for the desktop loop to fetch
+        // (non-blocking). The real fetch_full runs there, under the boot CR3 with
+        // the full kernel mappings + interrupts on — the correct context for the
+        // network stack. The app yields (nanosleep) and polls with fetch_poll.
         0x6002 => {
             let bytes = match copy_from_user(a1, a2 as usize) {
                 Some(v) => v,
@@ -2077,6 +2081,7 @@ static FBTEST_ELF: &[u8] = include_bytes!("../../userland/fbtest.elf");
 // shareware IWAD it plays.
 static DOOM_ELF: &[u8] = include_bytes!("../../userland/doom.elf");
 static DOOM_WAD: &[u8] = include_bytes!("../../userland/doom1.wad");
+static BROWSER_ELF: &[u8] = include_bytes!("../../userland/browser.elf");
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
 static MWRITE_ELF: &[u8] = include_bytes!("../../userland/mwrite.elf");
 static MECHO_ELF: &[u8] = include_bytes!("../../userland/mecho.elf");
@@ -2281,6 +2286,11 @@ pub fn doom_wad_bytes() -> &'static [u8] {
     DOOM_WAD
 }
 
+/// The ELF bytes of /bin/browser (EuroBrowser, musl static-PIE).
+pub fn browser_bytes() -> &'static [u8] {
+    BROWSER_ELF
+}
+
 /// The ELF bytes of /bin/muslreal (real binary linked against musl libc).
 pub fn muslreal_bytes() -> &'static [u8] {
     MUSLREAL_ELF
@@ -2377,6 +2387,7 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/muslfile" => include_bytes!("../../userland/muslfile.elf.sig"),
         "/bin/fbtest" => include_bytes!("../../userland/fbtest.elf.sig"),
         "/bin/doom" => include_bytes!("../../userland/doom.elf.sig"),
+        "/bin/browser" => include_bytes!("../../userland/browser.elf.sig"),
         "/bin/mcat" => include_bytes!("../../userland/mcat.elf.sig"),
         "/bin/mwrite" => include_bytes!("../../userland/mwrite.elf.sig"),
         "/bin/mecho" => include_bytes!("../../userland/mecho.elf.sig"),
