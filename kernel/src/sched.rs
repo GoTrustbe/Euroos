@@ -212,10 +212,16 @@ pub fn boot_pml4() -> u64 {
 }
 
 
+/// A pristine, unused task slot (used to reset a slot before it is recycled).
+const EMPTY_TASK: Task = Task { rsp: 0, kstack: 0, fs_base: 0, cr3: 0, state: State::Dead, nice: 0, vruntime: 0, pid: 0, ppid: 0, stack_bottom: 0 };
+
 struct Scheduler {
     tasks: [Task; MAX_TASKS],
     count: usize,
     current: usize,
+    /// Slots of fully-finished tasks (resources freed, no BgProc) available for
+    /// reuse — so the OS can run unbounded programs without exhausting the table.
+    free_slots: alloc::vec::Vec<usize>,
 }
 
 static SCHED: Mutex<Scheduler> = Mutex::new(Scheduler {
@@ -224,6 +230,7 @@ static SCHED: Mutex<Scheduler> = Mutex::new(Scheduler {
     }; MAX_TASKS],
     count: 1,
     current: 0,
+    free_slots: alloc::vec::Vec::new(),
 });
 
 // Stacks for the background tasks (task 0 uses the existing kernel stack).
@@ -528,17 +535,37 @@ pub fn task_count() -> usize {
     SCHED.lock().count
 }
 
-/// Pick a free task slot (grows the table). Returns None if the table is full.
-/// NB: no reuse of DEAD slots yet — that requires the associated BgProc
-/// to already be reaped (otherwise a new process shares the slot with a zombie). With
-/// MAX_TASKS=48 there is plenty for the current workload; slot recycling = later.
+/// Pick a task slot: first reuse a RECLAIMED slot (a finished task whose resources
+/// were freed and which has no pending BgProc — see [`reclaim_task`]), otherwise
+/// grow the table. Returns None only if the table is full AND nothing is reclaimable.
+/// A reused slot is reset to a pristine [`EMPTY_TASK`] so no stale field (pid,
+/// stack_bottom, …) leaks from its previous occupant.
 fn alloc_slot(s: &mut Scheduler) -> Option<usize> {
+    while let Some(i) = s.free_slots.pop() {
+        // Defensive: only reuse a slot that is genuinely Dead and not the current
+        // task (should always hold, since reclaim_task enforces it).
+        if i < s.count && i != s.current && s.tasks[i].state == State::Dead {
+            s.tasks[i] = EMPTY_TASK;
+            return Some(i);
+        }
+    }
     if s.count < MAX_TASKS {
         let i = s.count;
         s.count += 1;
         return Some(i);
     }
     None
+}
+
+/// Offer a finished task's slot for reuse. Safe ONLY for tasks whose resources are
+/// already released (kernel stack, address space) and which have NO associated
+/// BgProc/zombie awaiting waitpid — i.e. glibc run_glibc tasks. The task must be
+/// Dead and not current. Idempotent (won't double-list a slot).
+pub fn reclaim_task(idx: usize) {
+    let mut s = SCHED.lock();
+    if idx < s.count && idx != s.current && s.tasks[idx].state == State::Dead && !s.free_slots.contains(&idx) {
+        s.free_slots.push(idx);
+    }
 }
 
 pub fn spawn_user(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u64) -> usize {

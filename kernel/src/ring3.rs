@@ -3573,6 +3573,13 @@ pub fn run_glibc(
         }
     }
     GLIBC_MAIN_TASK.store(usize::MAX, Ordering::Relaxed);
+    // Recycle this run's scheduler slots (main + any workers). They are Dead, their
+    // kernel stacks + address space are freed, and glibc tasks have no BgProc, so the
+    // slots can be reused — otherwise the 48-slot table fills after ~14 programs.
+    crate::sched::reclaim_task(main_task);
+    for &t in GLIBC_THREADS.lock().iter() {
+        crate::sched::reclaim_task(t);
+    }
     let out = OUTPUT.lock().clone();
     let code = GLIBC_EXIT_CODE.load(Ordering::Relaxed);
     // Reclaim this run's address space: free the page tables (pml4/pdpt/pd) AND the
