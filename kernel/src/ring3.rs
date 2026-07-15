@@ -3331,6 +3331,13 @@ pub fn user_ptr_selftest() {
 /// When set, every Linux syscall is traced to serial (glibc bring-up debugging).
 pub static TRACE_SYS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
+// Threading state for a foreground glibc process (only one runs at a time). The
+// arena's page tables are SHARED with every thread it clones; the thread task
+// ids + their CLONE_CHILD_CLEARTID addresses drive pthread_join.
+static GLIBC_PML4: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static GLIBC_THREADS: Mutex<alloc::vec::Vec<usize>> = Mutex::new(alloc::vec::Vec::new());
+static GLIBC_CTIDS: Mutex<alloc::vec::Vec<(usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
+
 pub fn run_glibc(
     falloc: &mut FrameAllocator,
     exe: &[u8],
@@ -3387,6 +3394,10 @@ pub fn run_glibc(
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
     let pml4 = crate::paging::build_address_space_rwx_big(falloc, arena, nblocks);
+    // Threads this process clones share this address space.
+    GLIBC_PML4.store(pml4, Ordering::Relaxed);
+    GLIBC_THREADS.lock().clear();
+    GLIBC_CTIDS.lock().clear();
     let boot = crate::sched::boot_pml4();
     unsafe { crate::gdt::set_rsp0(KERNEL_RSP) };
     FG_ACTIVE.store(true, Ordering::Relaxed);
@@ -3833,7 +3844,7 @@ fn linux_required_cap(num: u64, a1: u64) -> u64 {
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let _ = a4; // not every syscall uses arg4/arg5 (r10/r8)
     if TRACE_SYS.load(Ordering::Relaxed) {
-        crate::serial_println!("[sys] {num}({a1:#x},{a2:#x},{a3:#x})");
+        crate::serial_println!("[sys t{}] {num}({a1:#x},{a2:#x},{a3:#x})", crate::sched::current());
     }
     // Capability enforcement also in the Linux ABI: deny without the proper right.
     let need = linux_required_cap(num, a1);
@@ -3870,12 +3881,63 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         }
         39 => 1,  // getpid()
         60 | 231 => {
-            // exit(code) / exit_group(code)
+            // exit(code) / exit_group(code). exit_group (231) always ends the whole
+            // process. exit (60) from a cloned THREAD ends only that thread (glibc's
+            // pthread teardown uses it); from the main task it ends the process.
+            let cur = crate::sched::current();
+            let is_thread = num == 60 && GLIBC_THREADS.lock().iter().any(|&t| t == cur);
+            if is_thread {
+                // CLONE_CHILD_CLEARTID: write 0 to the ctid + futex-wake, so the
+                // main thread's pthread_join wakes. Then mark this thread dead; it
+                // keeps re-entering here until the scheduler skips it (like musl).
+                if let Some(idx) = GLIBC_CTIDS.lock().iter().position(|&(t, _)| t == cur) {
+                    let ctid = GLIBC_CTIDS.lock()[idx].1;
+                    let _ = write_user(ctid, 0i32);
+                    futex_wake(ctid, i32::MAX);
+                    GLIBC_CTIDS.lock().swap_remove(idx);
+                }
+                crate::sched::mark_dead(cur);
+                return 0;
+            }
             unsafe {
                 EXIT_CODE = a1;
                 EXITED = 1;
             }
             0
+        }
+        56 => {
+            // clone(flags, child_stack, ptid, ctid, tls): a THREAD sharing this
+            // glibc process's address space (pthread_create). Mirrors the bg path.
+            let (flags, child_stack) = (a1, a2);
+            if child_stack == 0 {
+                return (-38i64) as u64; // no fork via clone here
+            }
+            let slot = THREAD_KSTACK_NEXT.fetch_add(1, Ordering::Relaxed);
+            if slot >= MAX_THREADS {
+                return (-11i64) as u64; // -EAGAIN
+            }
+            let kbase = unsafe { core::ptr::addr_of_mut!(THREAD_KSTACKS[slot]) as u64 };
+            let kstack_top = (kbase + TKSTACK_SIZE as u64) & !0xF;
+            let user_rip = unsafe { USER_RIP };
+            let sel = crate::gdt::selectors();
+            let user_cs = (sel.user_code.0 | 3) as u64;
+            let user_ss = (sel.user_data.0 | 3) as u64;
+            let fs = if flags & 0x0008_0000 != 0 { a5 } else { unsafe { Msr::new(0xC000_0100).read() } };
+            let saved_regs = unsafe { SAVED_REGS };
+            let pml4 = GLIBC_PML4.load(Ordering::Relaxed);
+            let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, pml4, fs, saved_regs);
+            GLIBC_THREADS.lock().push(child);
+            crate::serial_println!("[glibc-thread] clone -> thread task {child} (shared address space)");
+            if flags & 0x0010_0000 != 0 && a3 != 0 {
+                let _ = write_user(a3, child as i32);
+            }
+            if flags & 0x0100_0000 != 0 && a4 != 0 {
+                let _ = write_user(a4, child as i32);
+            }
+            if flags & 0x0020_0000 != 0 && a4 != 0 {
+                GLIBC_CTIDS.lock().push((child, a4));
+            }
+            child as u64
         }
         12 => {
             // brk(addr) — Linux semantics: set break, return the NEW break.
@@ -4234,7 +4296,15 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         14 => 0,  // rt_sigprocmask
         218 => 1, // set_tid_address -> tid
         273 => 0, // set_robust_list
-        202 => 0, // futex — no contention in single-thread; success
+        202 => {
+            // futex(uaddr, op, val, ...): real blocking wait + wake, so pthread
+            // mutexes/joins work. Low 7 bits select the op (ignore PRIVATE/CLOCK).
+            match a2 & 0x7f {
+                0 => futex_wait(a1, a3 as u32),      // FUTEX_WAIT
+                1 => futex_wake(a1, a3 as i32) as u64, // FUTEX_WAKE
+                _ => 0,
+            }
+        }
         228 => {
             // clock_gettime(clk, *timespec): CLOCK_REALTIME(0)/CLOCK_TAI(11) give the
             // REAL wall clock (RTC epoch); CLOCK_MONOTONIC(1)/BOOTTIME(7) the uptime.

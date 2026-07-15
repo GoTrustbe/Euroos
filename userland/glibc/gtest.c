@@ -10,8 +10,6 @@ int main(void){
     int v[8]={5,3,8,1,9,2,7,4}; qsort(v,8,sizeof(int),cmp);
     printf("GTEST: qsort -> %d %d %d ... %d\n", v[0],v[1],v[2],v[7]);
     char buf[64]; snprintf(buf,sizeof buf,"%d-%x-%s", 42, 255, "euro");
-    long n = strtol("12345", NULL, 10);
-    printf("GTEST: snprintf='%s' strtol=%ld\n", buf, n);
-    fflush(stdout);
-    _exit(55);
+    printf("GTEST: snprintf='%s' strtol=%ld\n", buf, strtol("12345",NULL,10));
+    fflush(stdout); _exit(55);
 }
