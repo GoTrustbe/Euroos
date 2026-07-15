@@ -1374,6 +1374,9 @@ fn main() -> Status {
         // ~line 1760): a glibc process runs as a scheduled task so its pthreads
         // schedule fairly.
         ring3::register_file("/lib/x86_64-linux-gnu/libc.so.6", ring3::glibc_libc_bytes().to_vec());
+        // A SECOND real shared library, so ld.so can resolve a multi-lib DT_NEEDED
+        // chain (the Chromium path needs ~30) + runtime dlopen/dlsym of it.
+        ring3::register_file("/lib/x86_64-linux-gnu/libm.so.6", ring3::glibc_libm_bytes().to_vec());
         let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
         serial_println!(
             "[h3] dyntest (dynamically linked) done: exit={h3_exit}, output={:?}",
@@ -1734,6 +1737,11 @@ fn main() -> Status {
         let (o3, e3) = ring3::run_glibc(&mut allocator, ring3::gthread_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gthread"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] gthread (pthreads): exit={e3}");
         for l in o3.lines() { serial_println!("[glibc]   {l}"); }
+        // gmath: a SECOND real shared library (libm.so.6) resolved via the ld.so
+        // DT_NEEDED chain + runtime dlopen/dlsym — the multi-library Chromium path.
+        let (o4, e4) = ring3::run_glibc(&mut allocator, ring3::gmath_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gmath"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gmath (libm + dlopen/dlsym): exit={e4}");
+        for l in o4.lines() { serial_println!("[glibc]   {l}"); }
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.

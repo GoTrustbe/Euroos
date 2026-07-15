@@ -2177,6 +2177,9 @@ static GLIBC_LIBC: &[u8] = include_bytes!("../../userland/glibc/libc.so.6");
 static GTINY_ELF: &[u8] = include_bytes!("../../userland/glibc/gtiny");
 static GTEST_ELF: &[u8] = include_bytes!("../../userland/glibc/gtest");
 static GTHREAD_ELF: &[u8] = include_bytes!("../../userland/glibc/gthread");
+// Multi-library test: needs libm.so.6 (a SECOND real shared lib) + dlopen/dlsym.
+static GLIBC_LIBM: &[u8] = include_bytes!("../../userland/glibc/libm.so.6");
+static GMATH_ELF: &[u8] = include_bytes!("../../userland/glibc/gmath");
 
 /// The real glibc loader bytes.
 pub fn ldlinux_bytes() -> &'static [u8] { LDLINUX_ELF }
@@ -2188,6 +2191,10 @@ pub fn gtiny_bytes() -> &'static [u8] { GTINY_ELF }
 pub fn gtest_bytes() -> &'static [u8] { GTEST_ELF }
 /// A threaded glibc test: pthread_create + join of 3 workers.
 pub fn gthread_bytes() -> &'static [u8] { GTHREAD_ELF }
+/// The real glibc libm.so.6 bytes (served to ld.so as a second DT_NEEDED lib).
+pub fn glibc_libm_bytes() -> &'static [u8] { GLIBC_LIBM }
+/// A multi-library glibc test: libm math + dlopen/dlsym at runtime.
+pub fn gmath_bytes() -> &'static [u8] { GMATH_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
 static MWRITE_ELF: &[u8] = include_bytes!("../../userland/mwrite.elf");
 static MECHO_ELF: &[u8] = include_bytes!("../../userland/mecho.elf");
@@ -4004,11 +4011,13 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 }
                 free_thread_kstack(cur); // recycle its kernel stack back to the pool
                 crate::sched::mark_dead(cur);
-                // Do NOT yield here: this runs in the (non-preemptive, IF=0) syscall
-                // context on the shared kernel stack; switching tasks mid-syscall would
-                // corrupt it. glibc's exit loop spins in ring 3 until the timer skips
-                // this now-Dead task.
-                return 0;
+                // Switch away NOW and never come back: this thread is Dead, so it does
+                // not need its (shared, IF=0) syscall stack or user-context preserved —
+                // the usual "don't yield mid-syscall" hazard doesn't apply to a task
+                // that never resumes. Yielding here avoids running glibc's post-exit
+                // ring-3 garbage (which else spins, or GP-faults, until the timer skips it).
+                crate::sched::yield_now();
+                return 0; // unreachable in practice (Dead task is never rescheduled)
             }
             if main != usize::MAX {
                 // A SCHEDULED glibc process exits: record the code, kill any leftover
@@ -4021,6 +4030,10 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 free_thread_kstack(cur); // recycle the main thread's kstack
                 GLIBC_DONE.store(true, Ordering::Relaxed);
                 crate::sched::mark_dead(cur);
+                // Switch away for good (same reasoning as the worker path): the Dead
+                // main must not run glibc's post-exit_group code (it GP-faults once
+                // libraries like libm are mapped). The launcher already has its result.
+                crate::sched::yield_now();
                 return 0;
             }
             // Foreground run_args (musl) excursion: the synchronous EXITED model.
