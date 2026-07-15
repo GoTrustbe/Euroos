@@ -1383,6 +1383,8 @@ fn main() -> Status {
         ring3::register_file("/lib/x86_64-linux-gnu/libgcc_s.so.1", ring3::glibc_libgccs_bytes().to_vec());
         // libgmp: needed by the REAL /usr/bin/factor binary (bignum arithmetic).
         ring3::register_file("/lib/x86_64-linux-gnu/libgmp.so.10", ring3::glibc_libgmp_bytes().to_vec());
+        // libcrypto (OpenSSL, 5 MB): needed by the REAL /usr/bin/sha256sum.
+        ring3::register_file("/lib/x86_64-linux-gnu/libcrypto.so.3", ring3::glibc_libcrypto_bytes().to_vec());
         let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
         serial_println!(
             "[h3] dyntest (dynamically linked) done: exit={h3_exit}, output={:?}",
@@ -1780,6 +1782,11 @@ fn main() -> Status {
         ring3::set_stdin(b"one two three\nfour five\n");
         let (o11, e11) = ring3::run_glibc(&mut allocator, ring3::real_wc_bytes(), ring3::ldlinux_bytes(), &[b"wc"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] /usr/bin/wc <stdin> -> exit={e11}, output={:?}", o11.trim_end());
+        // sha256sum: a REAL crypto tool driving the big (5 MB) libcrypto.so.3.
+        // Expected SHA-256 of "EuroOS" = b4d1c474...620504.
+        ring3::set_stdin(b"EuroOS");
+        let (o12, e12) = ring3::run_glibc(&mut allocator, ring3::real_sha256_bytes(), ring3::ldlinux_bytes(), &[b"sha256sum"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] /usr/bin/sha256sum <\"EuroOS\"> -> exit={e12}, output={:?}", o12.trim_end());
         ring3::set_stdin(b"");
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB

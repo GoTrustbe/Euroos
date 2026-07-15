@@ -2193,6 +2193,9 @@ static REAL_FACTOR_ELF: &[u8] = include_bytes!("../../userland/glibc/factor");
 // REAL Ubuntu stdin FILTERS (read fd 0): base64 encoder + wc counter.
 static REAL_BASE64_ELF: &[u8] = include_bytes!("../../userland/glibc/base64");
 static REAL_WC_ELF: &[u8] = include_bytes!("../../userland/glibc/wc");
+// REAL crypto tool: sha256sum needs the big (5 MB) libcrypto.so.3.
+static GLIBC_LIBCRYPTO: &[u8] = include_bytes!("../../userland/glibc/libcrypto.so.3");
+static REAL_SHA256_ELF: &[u8] = include_bytes!("../../userland/glibc/sha256sum");
 // Address-space-scaling test: mallocs + touches 200 MiB (needs a big arena).
 static GBIG_ELF: &[u8] = include_bytes!("../../userland/glibc/gbig");
 // pthread mutex + condition-variable producer/consumer (deep futex exercise).
@@ -2223,6 +2226,8 @@ pub fn real_seq_bytes() -> &'static [u8] { REAL_SEQ_ELF }
 pub fn real_factor_bytes() -> &'static [u8] { REAL_FACTOR_ELF }
 pub fn real_base64_bytes() -> &'static [u8] { REAL_BASE64_ELF }
 pub fn real_wc_bytes() -> &'static [u8] { REAL_WC_ELF }
+pub fn glibc_libcrypto_bytes() -> &'static [u8] { GLIBC_LIBCRYPTO }
+pub fn real_sha256_bytes() -> &'static [u8] { REAL_SHA256_ELF }
 /// A large-heap test (mallocs + touches 200 MiB) for address-space scaling.
 pub fn gbig_bytes() -> &'static [u8] { GBIG_ELF }
 /// A pthread mutex + condvar producer/consumer test (deep futex exercise).
@@ -4560,6 +4565,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             }
         }
         97 | 302 => 0, // getrlimit / prlimit64 — unlimited; success
+        221 | 28 => 0, // fadvise64 / madvise — advisory only; safe no-op success
         334 => (-38i64) as u64, // rseq — not supported; glibc falls back gracefully
         21 | 269 => {
             // access(path, mode) / faccessat(dirfd, path, mode): 0 if it exists.
