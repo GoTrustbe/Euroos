@@ -1369,6 +1369,23 @@ fn main() -> Status {
     // H3: in-kernel DYNAMIC LINKER — load a dynamically-linked executable +
     // its shared library and resolve the cross-module call (R_X86_64_JUMP_SLOT).
     {
+        // Chromium foundation: run a REAL dynamically-linked GLIBC binary via the
+        // genuine ld-linux-x86-64.so.2 (the bottom rung every normal Linux binary,
+        // Chromium included, stands on). Logs how far the loader gets.
+        {
+            serial_println!("[glibc] === attempting a real glibc dynamic binary (ld-linux + libc.so.6) ===");
+            // Serve the real libc.so.6 to ld.so at glibc's default search path.
+            ring3::register_file("/lib/x86_64-linux-gnu/libc.so.6", ring3::glibc_libc_bytes().to_vec());
+            let (gout, gexit) = ring3::run_glibc(
+                &mut allocator,
+                ring3::gtiny_bytes(),
+                ring3::ldlinux_bytes(),
+                &[b"/bin/gtiny"],
+                &[b"PATH=/bin", b"HOME=/root"],
+                ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO,
+            );
+            serial_println!("[glibc] gtiny via real ld-linux: exit={gexit}, output={:?}", gout.trim_end());
+        }
         let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
         serial_println!(
             "[h3] dyntest (dynamically linked) done: exit={h3_exit}, output={:?}",

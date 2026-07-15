@@ -175,6 +175,34 @@ pub fn build_address_space_rwx(falloc: &mut FrameAllocator, arena_phys: u64) -> 
     pml4
 }
 
+/// A large all-RWX USER arena spanning `nblocks` 2 MiB huge pages, for running a
+/// real glibc dynamic program: the loader (ld-linux) mmaps libc + the exe's code
+/// at addresses IT chooses, scattered across the arena, so code and data cannot
+/// be separated into fixed W^X regions. Every arena block is PRESENT|WRITABLE|
+/// USER|HUGE with NO NX — W^X is deliberately relaxed for this compatibility
+/// sandbox (the arena is still isolated: only its blocks carry the USER bit).
+pub fn build_address_space_rwx_big(falloc: &mut FrameAllocator, arena_phys: u64, nblocks: u64) -> u64 {
+    let pml4 = build_address_space_rwx(falloc, arena_phys);
+    if nblocks <= 1 {
+        return pml4;
+    }
+    let arena_idx = (arena_phys / MIB2) as usize;
+    // SAFETY: identity-mapped tables we just built; single-threaded here.
+    unsafe {
+        let pdpt = (*(pml4 as *const u64)) & 0x000f_ffff_ffff_f000;
+        let pd = (*(pdpt as *const u64)) & 0x000f_ffff_ffff_f000;
+        let pdp = pd as *mut u64;
+        for b in 1..nblocks as usize {
+            let i = arena_idx + b;
+            if i >= 512 {
+                break;
+            }
+            pdp.add(i).write_volatile((i as u64 * MIB2) | PRESENT | WRITABLE | USER | HUGE);
+        }
+    }
+    pml4
+}
+
 /// Like [`build_address_space`], but for a FORKED child: the USER arena lies at a
 /// DIFFERENT physical address than where it appears virtually. We map the VIRTUAL
 /// arena (= the 2 MiB block of the PARENT, because the copied stack/code carry

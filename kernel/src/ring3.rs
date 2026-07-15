@@ -499,6 +499,35 @@ fn vfs_open(path: &[u8]) -> u64 {
 }
 
 /// Read from an open fd into a user buffer -> number of bytes (u64::MAX on error).
+/// pread(2): read `len` bytes from file `fd` at absolute `offset` into `buf`,
+/// WITHOUT changing the fd's position. Serves the embedded WAD and VFS files.
+fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
+    if fd >= MAX_FD {
+        return u64::MAX;
+    }
+    let fi = match OPEN_FDS.lock()[fd] {
+        Some((fi, _)) => fi,
+        None => return u64::MAX,
+    };
+    if fi == WAD_FI {
+        let data = DOOM_WAD;
+        let n = len.min(data.len().saturating_sub(offset));
+        if !in_user_arena(buf, n) {
+            return u64::MAX;
+        }
+        unsafe { core::ptr::copy_nonoverlapping(data[offset..].as_ptr(), buf as *mut u8, n); }
+        return n as u64;
+    }
+    let files = FILES.lock();
+    let data = &files[fi].1;
+    let n = len.min(data.len().saturating_sub(offset));
+    if !in_user_arena(buf, n) {
+        return u64::MAX;
+    }
+    unsafe { core::ptr::copy_nonoverlapping(data[offset..].as_ptr(), buf as *mut u8, n); }
+    n as u64
+}
+
 fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
     if fd >= MAX_FD {
         return u64::MAX;
@@ -2082,6 +2111,18 @@ static FBTEST_ELF: &[u8] = include_bytes!("../../userland/fbtest.elf");
 static DOOM_ELF: &[u8] = include_bytes!("../../userland/doom.elf");
 static DOOM_WAD: &[u8] = include_bytes!("../../userland/doom1.wad");
 static BROWSER_ELF: &[u8] = include_bytes!("../../userland/browser.elf");
+// GLIBC dynamic-binary support: the REAL glibc loader + libc + a tiny test exe.
+// This is the foundation for running normal Linux binaries (the Chromium path).
+static LDLINUX_ELF: &[u8] = include_bytes!("../../userland/glibc/ld-linux-x86-64.so.2");
+static GLIBC_LIBC: &[u8] = include_bytes!("../../userland/glibc/libc.so.6");
+static GTINY_ELF: &[u8] = include_bytes!("../../userland/glibc/gtiny");
+
+/// The real glibc loader bytes.
+pub fn ldlinux_bytes() -> &'static [u8] { LDLINUX_ELF }
+/// The real glibc libc.so.6 bytes (served to ld.so via the VFS).
+pub fn glibc_libc_bytes() -> &'static [u8] { GLIBC_LIBC }
+/// The tiny dynamic glibc test binary.
+pub fn gtiny_bytes() -> &'static [u8] { GTINY_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
 static MWRITE_ELF: &[u8] = include_bytes!("../../userland/mwrite.elf");
 static MECHO_ELF: &[u8] = include_bytes!("../../userland/mecho.elf");
@@ -3279,6 +3320,178 @@ pub fn user_ptr_selftest() {
 /// contract that a musl/glibc `_start` expects from the kernel. `info` provides the
 /// program-header info for the auxv. Returns the (16-aligned) rsp where
 /// `[rsp]==argc`.
+/// Run a REAL dynamically-linked glibc binary: load the exe + the genuine
+/// `ld-linux-x86-64.so.2` into a large all-RWX arena, build a full SysV auxv,
+/// and jump to the loader. ld.so then opens libc.so.6 (and any other DT_NEEDED)
+/// via the VFS, mmaps + relocates them, and enters the program. This is the
+/// bottom rung for running normal Linux binaries, up to (eventually) Chromium.
+pub fn run_glibc(
+    falloc: &mut FrameAllocator,
+    exe: &[u8],
+    ldso: &[u8],
+    argv: &[&[u8]],
+    envp: &[&[u8]],
+    caps: u64,
+) -> (String, u64) {
+    init_syscall_msrs();
+    CURRENT_CAPS.store(caps, Ordering::Relaxed);
+    LINUX_ABI.store(true, Ordering::Relaxed);
+    *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
+    unsafe {
+        EXITED = 0;
+        EXIT_CODE = 0;
+    }
+    OUTPUT.lock().clear();
+    reset_fd_table();
+
+    const MIB2: u64 = 1 << 21;
+    let arena_mib: u64 = 96; // room for ld.so + libc (mmap'd) + heap + stack
+    let nblocks = arena_mib / 2;
+    let frames = (nblocks * 512) as usize;
+    let arena = match falloc.allocate_aligned(frames, 512) {
+        Ok(a) => a,
+        Err(_) => return (String::from("(no arena for glibc)"), u64::MAX),
+    };
+
+    // Arena layout.
+    let exe_base = arena; // PIE exe: first PT_LOAD has p_vaddr 0
+    let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
+    let mmap_start = arena + 0x0200_0000; // runtime mmaps (libc, …) bump from +32 MiB
+    let stack_top = arena + nblocks * MIB2 - 0x0010_0000; // near the arena top
+
+    ARENA_BASE.store(arena, Ordering::Relaxed);
+    ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
+    HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
+    HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
+
+    // load_elf64 places PT_LOAD at base+p_vaddr and applies R_X86_64_RELATIVE
+    // (idempotent: ld.so also self-relocates).
+    let exe_info = match load_elf64(exe, exe_base, program_span_pages(exe)) {
+        Some(i) => i,
+        None => return (String::from("(bad exe ELF)"), u64::MAX),
+    };
+    let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
+        Some(i) => i,
+        None => return (String::from("(bad ld.so ELF)"), u64::MAX),
+    };
+
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, argv, envp, &exe_info, ldso_base) };
+
+    let sel = crate::gdt::selectors();
+    let user_cs = (sel.user_code.0 | 3) as u64;
+    let user_ss = (sel.user_data.0 | 3) as u64;
+    let pml4 = crate::paging::build_address_space_rwx_big(falloc, arena, nblocks);
+    let boot = crate::sched::boot_pml4();
+    unsafe { crate::gdt::set_rsp0(KERNEL_RSP) };
+    FG_ACTIVE.store(true, Ordering::Relaxed);
+    crate::serial_println!(
+        "[glibc] launching real ld-linux: exe@{exe_base:#x} ld.so@{ldso_base:#x} ld-entry@{:#x} rsp@{rsp:#x} phdr@{:#x} phnum={}",
+        ld_info.entry, exe_info.phdr, exe_info.phnum
+    );
+    // SAFETY: paging/MSR/GDT set up; returns via sys_exit or a fault trampoline.
+    unsafe {
+        core::arch::asm!("mov cr3, {}", in(reg) pml4, options(nostack, preserves_flags));
+        enter_ring3(user_cs, user_ss, ld_info.entry, rsp);
+        core::arch::asm!("mov cr3, {}", in(reg) boot, options(nostack, preserves_flags));
+    }
+    FG_ACTIVE.store(false, Ordering::Relaxed);
+    let out = OUTPUT.lock().clone();
+    let code = unsafe { EXIT_CODE };
+    (out, code)
+}
+
+/// Build the SysV x86-64 initial stack for a real glibc program: argc, argv[],
+/// envp[], and a FULL auxv (AT_PHDR/PHENT/PHNUM/PAGESZ/BASE/FLAGS/ENTRY/UID/GID/
+/// PLATFORM/HWCAP/CLKTCK/SECURE/RANDOM/EXECFN) that glibc's ld.so requires.
+unsafe fn setup_user_stack_glibc(
+    stack_top: u64,
+    argv: &[&[u8]],
+    envp: &[&[u8]],
+    info: &LoadInfo,
+    interp_base: u64,
+) -> u64 {
+    let mut p = stack_top;
+    // 16 AT_RANDOM bytes.
+    p -= 16;
+    let random_ptr = p;
+    for i in 0..16 {
+        (random_ptr as *mut u8).add(i).write(0x5Au8 ^ (i as u8).wrapping_mul(31));
+    }
+    // AT_PLATFORM string.
+    let plat = b"x86_64\0";
+    p -= plat.len() as u64;
+    let plat_ptr = p;
+    for (i, b) in plat.iter().enumerate() {
+        (plat_ptr as *mut u8).add(i).write(*b);
+    }
+    // argv strings.
+    let mut argptrs: alloc::vec::Vec<u64> = alloc::vec::Vec::with_capacity(argv.len());
+    for a in argv {
+        p -= a.len() as u64 + 1;
+        let ptr = p;
+        for (i, b) in a.iter().enumerate() {
+            (ptr as *mut u8).add(i).write(*b);
+        }
+        (ptr as *mut u8).add(a.len()).write(0);
+        argptrs.push(ptr);
+    }
+    // envp strings.
+    let mut envptrs: alloc::vec::Vec<u64> = alloc::vec::Vec::with_capacity(envp.len());
+    for e in envp {
+        p -= e.len() as u64 + 1;
+        let ptr = p;
+        for (i, b) in e.iter().enumerate() {
+            (ptr as *mut u8).add(i).write(*b);
+        }
+        (ptr as *mut u8).add(e.len()).write(0);
+        envptrs.push(ptr);
+    }
+    let execfn = *argptrs.first().unwrap_or(&0);
+    p &= !0xF;
+
+    let aux: [(u64, u64); 18] = [
+        (3, info.phdr),       // AT_PHDR
+        (4, 56),              // AT_PHENT
+        (5, info.phnum),      // AT_PHNUM
+        (6, 4096),            // AT_PAGESZ
+        (7, interp_base),     // AT_BASE (ld.so load base)
+        (8, 0),               // AT_FLAGS
+        (9, info.entry),      // AT_ENTRY (exe entry)
+        (11, 0),              // AT_UID
+        (12, 0),              // AT_EUID
+        (13, 0),              // AT_GID
+        (14, 0),              // AT_EGID
+        (15, plat_ptr),       // AT_PLATFORM
+        (16, 0x078b_fbff),    // AT_HWCAP (glibc also probes CPUID for IFUNCs)
+        (17, 100),            // AT_CLKTCK
+        (23, 0),              // AT_SECURE
+        (25, random_ptr),     // AT_RANDOM
+        (31, execfn),         // AT_EXECFN
+        (0, 0),               // AT_NULL
+    ];
+    let nslots = 1 + argptrs.len() as u64 + 1 + envptrs.len() as u64 + 1 + (aux.len() as u64) * 2;
+    let sp = (p - nslots * 8) & !0xF;
+    let mut w = sp;
+    let mut put = |val: u64| {
+        (w as *mut u64).write(val);
+        w += 8;
+    };
+    put(argptrs.len() as u64);
+    for ptr in &argptrs {
+        put(*ptr);
+    }
+    put(0);
+    for ptr in &envptrs {
+        put(*ptr);
+    }
+    put(0);
+    for (t, v) in aux {
+        put(t);
+        put(v);
+    }
+    sp
+}
+
 unsafe fn setup_user_stack(stack_top: u64, argv: &[&[u8]], info: &LoadInfo) -> u64 {
     let mut p = stack_top;
     // 16 "random" bytes (AT_RANDOM) — musl uses this for stack-canary/TLS-guard.
@@ -3604,7 +3817,7 @@ fn linux_required_cap(num: u64, a1: u64) -> u64 {
     }
     match num {
         1 | 16 | 20 => CAP_CONSOLE,            // write/ioctl/writev (tty)
-        0 | 2 | 3 | 5 | 8 | 19 | 89 | 217 | 257 | 262 | 267 => CAP_FILE, // read/open/close/(f)stat/lseek/readv/readlink/getdents64/openat
+        0 | 2 | 3 | 5 | 8 | 17 | 19 | 89 | 217 | 257 | 262 | 267 => CAP_FILE, // read/open/close/(f)stat/lseek/pread64/readv/readlink/getdents64/openat
         41 | 42 | 44 | 45 => CAP_NET,           // socket/connect/sendto/recvfrom
         39 => CAP_PROC_INFO,                    // getpid
         _ => 0, // memory/process management (mmap, brk, arch_prctl, exit, …) free
@@ -3797,6 +4010,12 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 vfs_read(a1 as usize, a2, a3 as usize)
             }
         }
+        17 => {
+            // pread64(fd, buf, count, offset): read at an explicit offset without
+            // moving the file position. glibc's ld.so uses this to read ELF/section
+            // headers of a shared library it is loading.
+            vfs_pread(a1 as usize, a2, a3 as usize, a4 as usize)
+        }
         19 => {
             // readv(fd, iov, iovcnt): read into each iovec buffer; count bytes (musl stdio).
             let fd = a1 as usize;
@@ -3929,20 +4148,26 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 }
                 return 0;
             }
-            let (fd_ok, statbuf) = if num == 5 {
-                // fd 0 = standard input (pipe): report the buffer size.
-                let sz = if a1 == 0 { Some(stdin_len()) } else { vfs_size(a1 as usize) };
-                (sz, a2)
+            // (size, statbuf_ptr, inode). The inode MUST be unique per file: glibc's
+            // ld.so deduplicates already-loaded shared objects by (st_dev, st_ino), so
+            // a zero inode makes it think every library is already loaded and skip
+            // mapping libc.so.6 entirely. Use the FILES index + 1 as a stable inode.
+            let (fd_ok, statbuf, ino) = if num == 5 {
+                if a1 == 0 {
+                    (Some(stdin_len()), a2, 0u64)
+                } else {
+                    let fi = OPEN_FDS.lock().get(a1 as usize).and_then(|s| *s).map(|(fi, _)| fi);
+                    (vfs_size(a1 as usize), a2, fi.map(|f| f as u64 + 1).unwrap_or(0))
+                }
             } else {
                 // newfstatat: path in a2, statbuf in a3.
                 let path = user_cstr(a2, 256);
                 ensure_proc(&path); // synthesize /proc on demand
                 let files = FILES.lock();
-                let sz = files
-                    .iter()
-                    .find(|(p, _)| p.as_bytes() == path.as_slice())
-                    .map(|(_, d)| d.len());
-                (sz, a3)
+                let found = files.iter().enumerate().find(|(_, (p, _))| p.as_bytes() == path.as_slice());
+                let sz = found.map(|(_, (_, d))| d.len());
+                let ino = found.map(|(i, _)| i as u64 + 1).unwrap_or(0);
+                (sz, a3, ino)
             };
             let size = match fd_ok {
                 Some(s) => s,
@@ -3954,6 +4179,9 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // SAFETY: statbuf region (144 B) arena-validated; identity-mapped.
             unsafe {
                 core::ptr::write_bytes(statbuf as *mut u8, 0, 144);
+                (statbuf as *mut u64).write(1); // st_dev (offset 0): nonzero device
+                ((statbuf + 8) as *mut u64).write(ino); // st_ino (offset 8): UNIQUE per file
+                ((statbuf + 16) as *mut u64).write(1); // st_nlink (offset 16)
                 (statbuf as *mut u32).add(6).write(0o100644); // st_mode (offset 24): S_IFREG|0644
                 ((statbuf + 48) as *mut u64).write(size as u64); // st_size (offset 48)
                 ((statbuf + 56) as *mut u64).write(4096); // st_blksize (offset 56)
