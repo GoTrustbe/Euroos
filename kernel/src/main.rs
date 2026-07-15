@@ -127,6 +127,7 @@ mod calc_ui;
 mod settings_ui;
 mod clipboard;
 mod ctxmenu;
+mod trash;
 mod agent_ui;
 mod files;
 mod textedit;
@@ -221,17 +222,23 @@ fn build_context_menu(
                     ], sw, sh);
                 } else if let Some(file) = files::hit_test_file(wx, wy, rx, ry) {
                     ctxmenu::open(rx, ry, alloc::vec![
-                        Item::new("Open", "Enter", Action::OpenFile(file.clone())).sep(),
-                        Item::new("Copy path", "Ctrl C", Action::CopyText(file)),
+                        Item::new("Open", "Enter", Action::OpenFile(file.clone())),
+                        Item::new("Copy path", "Ctrl C", Action::CopyText(file.clone())).sep(),
+                        Item::new("Move to Trash", "Del", Action::Trash(file)),
                     ], sw, sh);
                 } else {
                     // Empty area of the file manager → folder actions on the current dir.
                     let cur = files::current_path();
                     let dir = if cur.is_empty() { String::from("/") } else { cur };
-                    ctxmenu::open(rx, ry, alloc::vec![
-                        Item::new("New folder", "Ctrl Shift N", Action::NewFolder(dir)).sep(),
-                        Item::new("Refresh", "F5", Action::Refresh),
-                    ], sw, sh);
+                    let mut items = alloc::vec![Item::new("New folder", "Ctrl Shift N", Action::NewFolder(dir))];
+                    if trash::count() > 0 {
+                        items.push(Item::new("Restore last deleted", "Ctrl Z", Action::RestoreTrash));
+                    }
+                    if let Some(last) = items.last_mut() {
+                        last.sep_after = true; // separator before Refresh
+                    }
+                    items.push(Item::new("Refresh", "F5", Action::Refresh));
+                    ctxmenu::open(rx, ry, items, sw, sh);
                 }
             }
             // Text-bearing windows → Paste (enabled only when the clipboard has text).
@@ -249,11 +256,18 @@ fn build_context_menu(
     }
 
     // The bare desktop.
-    ctxmenu::open(rx, ry, alloc::vec![
+    let mut items = alloc::vec![
         Item::new("Open Terminal", "", Action::OpenTerminal),
-        Item::new("Display settings", "", Action::OpenDisplaySettings).sep(),
-        Item::new("Refresh", "F5", Action::Refresh),
-    ], sw, sh);
+        Item::new("Display settings", "", Action::OpenDisplaySettings),
+    ];
+    if trash::count() > 0 {
+        items.push(Item::new("Restore last deleted", "Ctrl Z", Action::RestoreTrash));
+    }
+    if let Some(last) = items.last_mut() {
+        last.sep_after = true;
+    }
+    items.push(Item::new("Refresh", "F5", Action::Refresh));
+    ctxmenu::open(rx, ry, items, sw, sh);
 }
 
 const PROMPT: &str = "euroos:/ $ ";
@@ -632,6 +646,7 @@ fn main() -> Status {
     update::apply_gate_selftest(rtc::epoch());
     // [edit] (Sprint 4): edit EuroText → save → re-read on the REAL EuroFS.
     textedit::selftest(&mut fs);
+    trash::selftest(&mut fs); // conveniences: delete-to-trash + undo
     // [io1]/[io2] (Sprint IO): FAT32 mount + read + write driver, proven in-kernel.
     fatmount::selftest();
 
@@ -2933,6 +2948,20 @@ fn main() -> Status {
                             }
                         }
                         CopyText(t) => { clipboard::copy(&t); }
+                        Trash(p) => {
+                            if trash::to_trash(ctx.fs, &p) {
+                                let cur = files::current_path();
+                                if !cur.is_empty() { load_files_dir(ctx.fs, &cur); }
+                                serial_println!("[trash] moved to trash: {p}");
+                            }
+                        }
+                        RestoreTrash => {
+                            if let Some(orig) = trash::restore_last(ctx.fs) {
+                                let cur = files::current_path();
+                                if !cur.is_empty() { load_files_dir(ctx.fs, &cur); }
+                                serial_println!("[trash] restored: {orig}");
+                            }
+                        }
                         NewFolder(dir) => {
                             let base = if dir.ends_with('/') { dir.clone() } else { alloc::format!("{dir}/") };
                             // Find a free name by trying to create it (no metadata() on the FS).

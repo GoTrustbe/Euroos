@@ -403,6 +403,12 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         // permission grants + network policy + traffic, all in one place, with
         // actions to restrict an app or an AI agent.
         "app" | "apps" => app_cmd(line),
+        // The trash: `trash` lists recoverable deletes (restore/empty via the desktop menu).
+        "trash" => {
+            let mut out = vec![format!("Trash: {} item(s) (right-click the desktop to restore)", crate::trash::count())];
+            for l in crate::trash::list_lines() { out.push(format!("  {l}")); }
+            out
+        }
         // The system clipboard: `clip` shows history, `clip <text>` copies.
         "clip" => {
             let rest = line.strip_prefix("clip").unwrap_or("").trim();

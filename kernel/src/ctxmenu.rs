@@ -22,6 +22,10 @@ pub enum Action {
     CopyText(String),
     /// Create a new folder inside the given directory.
     NewFolder(String),
+    /// Move a file to the trash (recoverable delete).
+    Trash(String),
+    /// Restore the most recently trashed item (undo delete).
+    RestoreTrash,
     /// Paste the clipboard into the focused text field.
     Paste,
     /// Open (or focus) the terminal.
