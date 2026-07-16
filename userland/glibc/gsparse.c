@@ -8,7 +8,7 @@ int main(void){
     unsigned char *p = mmap(NULL, SIZE, PROT_READ|PROT_WRITE,
                             MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
     if(p==MAP_FAILED){ printf("GSPARSE: mmap(4GiB) FAILED\n"); fflush(stdout); return 1; }
-    int N=256;
+    int N=1024;
     size_t stride = SIZE/N;             /* one touch every 16 MiB */
     for(int i=0;i<N;i++) p[(size_t)i*stride] = (unsigned char)(i*7+1);
     int ok=0;

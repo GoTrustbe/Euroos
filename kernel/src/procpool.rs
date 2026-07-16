@@ -64,3 +64,9 @@ pub fn demand_free(addr: u64) {
 pub fn demand_free_frames() -> usize {
     DEMAND_POOL.lock().as_ref().map(|p| p.free_frames()).unwrap_or(0)
 }
+/// Tear down the demand pool (its backing region is freed by the caller). Used with
+/// the PER-RUN pool model: a demand run reserves a large region, installs it here,
+/// then uninstalls + returns the whole region to the main allocator on exit.
+pub fn demand_uninstall() {
+    *DEMAND_POOL.lock() = None;
+}

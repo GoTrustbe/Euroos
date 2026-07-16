@@ -3619,6 +3619,23 @@ pub fn run_glibc(
     DEMAND_NEXT.store(DEMAND_BASE, Ordering::Relaxed);
     DEMAND_COMMITTED.store(0, Ordering::Relaxed);
     DEMAND_USED.store(false, Ordering::Relaxed);
+    // If this run uses demand paging, reserve a LARGE contiguous region from the main
+    // allocator NOW and install it as the demand pool (committed pages come from it).
+    // Per-run (not permanent) so it doesn't tie up RAM between runs or collide with a
+    // big arena in another run. Freed as a whole back to the allocator on exit.
+    let (dp_base, dp_frames) = if DEMAND_ENABLED.load(Ordering::Relaxed) {
+        const DP_FRAMES: usize = 65536; // 256 MiB demand working-set capacity
+        match falloc.allocate_contiguous(DP_FRAMES) {
+            Ok(b) => {
+                crate::procpool::demand_install(b, DP_FRAMES);
+                crate::serial_println!("[glibc] demand pool: 256 MiB @ {b:#x} (this run)");
+                (b, DP_FRAMES)
+            }
+            Err(_) => (0, 0), // couldn't reserve -> demand faults will fail (graceful)
+        }
+    } else {
+        (0, 0)
+    };
 
     // Own kernel stack for the main thread (from the recycling thread-kstack pool).
     let (main_slot, main_kstack) = match alloc_thread_kstack() {
@@ -3664,10 +3681,15 @@ pub fn run_glibc(
     }
     let out = OUTPUT.lock().clone();
     let code = GLIBC_EXIT_CODE.load(Ordering::Relaxed);
-    // If this run used the demand region, return its committed pages + demand page
-    // tables to the process pool BEFORE freeing the pml4 frame (which we walk here).
-    if DEMAND_USED.load(Ordering::Relaxed) {
-        crate::paging::free_demand_region(pml4, DEMAND_PML4_IDX);
+    // Tear down this run's demand pool: uninstall it and return its ENTIRE backing
+    // region (committed pages, demand page tables, and all) to the main allocator in
+    // one sweep — simpler and complete vs. walking PML4[2]. (The pml4 itself, incl.
+    // the now-stale PML4[2] entry, is freed just below.)
+    if dp_frames != 0 {
+        crate::procpool::demand_uninstall();
+        for i in 0..dp_frames as u64 {
+            let _ = falloc.free(dp_base + i * 4096);
+        }
     }
     // Reclaim this run's address space: free the page tables (pml4/pdpt/pd) AND the
     // big contiguous arena back to the frame allocator. All this run's tasks are Dead

@@ -498,17 +498,6 @@ fn main() -> Status {
         }
         Err(_) => serial_println!("[mm] WARNING: no process frame pool (fork disabled)"),
     }
-    // DEMAND-PAGING pool (96 MiB): committed frames for sparse mmaps come from here.
-    // Separate from the fork pool; sized so it + fork pool still leave room for a
-    // large (384 MiB) glibc arena on this 808 MiB machine.
-    const DEMAND_POOL_FRAMES: usize = 24576; // 96 MiB
-    match allocator.allocate_contiguous(DEMAND_POOL_FRAMES) {
-        Ok(base) => {
-            procpool::demand_install(base, DEMAND_POOL_FRAMES);
-            serial_println!("[mm] demand-paging pool: 96 MiB @ {base:#x} (sparse mmap commits)");
-        }
-        Err(_) => serial_println!("[mm] WARNING: no demand-paging pool"),
-    }
 
     // virtio-blk: initialize the real disk (PIO/DMA works on our identity map).
     virtio_blk::init(&mut allocator);
