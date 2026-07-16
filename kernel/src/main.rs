@@ -1395,6 +1395,11 @@ fn main() -> Status {
         for (name, bytes) in ring3::cairo_libs() {
             ring3::register_file(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes.to_vec());
         }
+        // Pango text-layout engine (HarfBuzz shaping + GObject/GIO) — the real i18n
+        // text stack GTK apps and browsers use on top of Cairo/FreeType.
+        for (name, bytes) in ring3::pango_libs() {
+            ring3::register_file(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes.to_vec());
+        }
         // X11 client stack: a real Xlib client + its 6 transitive libs (the GUI rung).
         ring3::register_file("/lib/x86_64-linux-gnu/libX11.so.6", ring3::glibc_libx11_bytes().to_vec());
         ring3::register_file("/lib/x86_64-linux-gnu/libxcb.so.1", ring3::glibc_libxcb_bytes().to_vec());
@@ -1930,6 +1935,22 @@ fn main() -> Status {
         ring3::GLIBC_DEADLINE_TICKS.store(12_000, core::sync::atomic::Ordering::Relaxed);
         serial_println!("[glibc] gxlive (live interactive X app; block reacted to staged input):");
         for l in ol.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gpango: REAL Pango text LAYOUT with HarfBuzz shaping (the i18n text engine
+        // GTK apps and browsers use). Resolves fonts via fontconfig, shapes glyphs via
+        // HarfBuzz, lays out runs (markup, mixed scripts), renders via cairo->XPutImage.
+        // Give fontconfig a minimal config; the client adds the font explicitly (no dir
+        // scan) so it works without VFS readdir. Run LAST so its window is the final one
+        // painted and stays on screen into the desktop (clean, unobscured render).
+        {
+            const FONTS_CONF: &[u8] = b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <dir>/usr/share/fonts</dir>\n</fontconfig>\n";
+            ring3::register_file("/etc/fonts/fonts.conf", FONTS_CONF.to_vec());
+            xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+            let (opo, epo) = ring3::run_glibc(&mut allocator, ring3::gpango_bytes(), ring3::ldlinux_bytes(), &[b"gpango"], &[b"DISPLAY=:0", b"PATH=/bin", b"FONTCONFIG_PATH=/etc/fonts"], caps_net);
+            xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[glibc] gpango (Pango+HarfBuzz layout): exit={epo}");
+            for l in opo.lines() { serial_println!("[glibc]   {l}"); }
+        }
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.

@@ -41,9 +41,17 @@ pub fn current_app() -> String {
     CURRENT_APP.lock().clone()
 }
 
-// Userspace heap (for sbrk/malloc): break pointer + limit.
+// Userspace heap (for sbrk/malloc): break pointer + limit. For the glibc Linux-ABI
+// path HEAP_BREAK doubles as the mmap bump pointer.
 static HEAP_BREAK: AtomicU64 = AtomicU64::new(0);
 static HEAP_END: AtomicU64 = AtomicU64::new(0);
+// The glibc brk() heap lives in its OWN region, DISJOINT from the mmap bump area:
+// glibc grows its main arena with brk() while ld.so/malloc mmap independently, and
+// if the two shared one pointer, a brk() would rewind the mmap cursor and later
+// mmaps would collide with already-mapped regions (thread stacks, fonts). BRK_CUR is
+// the brk break; BRK_END is where the brk region ends (== the mmap region start).
+static BRK_CUR: AtomicU64 = AtomicU64::new(0);
+static BRK_END: AtomicU64 = AtomicU64::new(0);
 
 /// Virtual base of the 2 MiB arena of the running ring-3 process (audit C1).
 /// Set at program start; used to validate user pointers before the kernel
@@ -2252,6 +2260,23 @@ static GLIBC_LIBBROTLICOMMON: &[u8] = include_bytes!("../../userland/glibc/libbr
 static GCAIRO_ELF: &[u8] = include_bytes!("../../userland/glibc/gcairo");
 static GCAIROTEXT_ELF: &[u8] = include_bytes!("../../userland/glibc/gcairotext");
 static DEJAVU_TTF: &[u8] = include_bytes!("../../userland/glibc/DejaVuSans.ttf");
+// Pango text-layout engine (HarfBuzz shaping) + its GObject/GIO transitive chain.
+static GLIBC_LIBHARFBUZZ: &[u8] = include_bytes!("../../userland/glibc/libharfbuzz.so.0");
+static GLIBC_LIBGRAPHITE2: &[u8] = include_bytes!("../../userland/glibc/libgraphite2.so.3");
+static GLIBC_LIBFRIBIDI: &[u8] = include_bytes!("../../userland/glibc/libfribidi.so.0");
+static GLIBC_LIBTHAI: &[u8] = include_bytes!("../../userland/glibc/libthai.so.0");
+static GLIBC_LIBDATRIE: &[u8] = include_bytes!("../../userland/glibc/libdatrie.so.1");
+static GLIBC_LIBGOBJECT: &[u8] = include_bytes!("../../userland/glibc/libgobject-2.0.so.0");
+static GLIBC_LIBGIO: &[u8] = include_bytes!("../../userland/glibc/libgio-2.0.so.0");
+static GLIBC_LIBGMODULE: &[u8] = include_bytes!("../../userland/glibc/libgmodule-2.0.so.0");
+static GLIBC_LIBFFI: &[u8] = include_bytes!("../../userland/glibc/libffi.so.8");
+static GLIBC_LIBMOUNT: &[u8] = include_bytes!("../../userland/glibc/libmount.so.1");
+static GLIBC_LIBBLKID: &[u8] = include_bytes!("../../userland/glibc/libblkid.so.1");
+static GLIBC_LIBSELINUX: &[u8] = include_bytes!("../../userland/glibc/libselinux.so.1");
+static GLIBC_LIBPANGO: &[u8] = include_bytes!("../../userland/glibc/libpango-1.0.so.0");
+static GLIBC_LIBPANGOCAIRO: &[u8] = include_bytes!("../../userland/glibc/libpangocairo-1.0.so.0");
+static GLIBC_LIBPANGOFT2: &[u8] = include_bytes!("../../userland/glibc/libpangoft2-1.0.so.0");
+static GPANGO_ELF: &[u8] = include_bytes!("../../userland/glibc/gpango");
 // File I/O roundtrip test (open O_CREAT|write, reopen|read, verify).
 static GFILE_ELF: &[u8] = include_bytes!("../../userland/glibc/gfile");
 // REAL /usr/bin/sort (stdin filter; reuses the already-served libcrypto).
@@ -2344,6 +2369,28 @@ pub fn gcairo_bytes() -> &'static [u8] { GCAIRO_ELF }
 /// A Cairo + FreeType TEXT rendering client, and the DejaVu font it uses.
 pub fn gcairotext_bytes() -> &'static [u8] { GCAIROTEXT_ELF }
 pub fn dejavu_ttf_bytes() -> &'static [u8] { DEJAVU_TTF }
+/// The Pango text-layout stack (HarfBuzz shaping + GObject/GIO) library bytes.
+pub fn pango_libs() -> [(&'static str, &'static [u8]); 15] {
+    [
+        ("libharfbuzz.so.0", GLIBC_LIBHARFBUZZ),
+        ("libgraphite2.so.3", GLIBC_LIBGRAPHITE2),
+        ("libfribidi.so.0", GLIBC_LIBFRIBIDI),
+        ("libthai.so.0", GLIBC_LIBTHAI),
+        ("libdatrie.so.1", GLIBC_LIBDATRIE),
+        ("libgobject-2.0.so.0", GLIBC_LIBGOBJECT),
+        ("libgio-2.0.so.0", GLIBC_LIBGIO),
+        ("libgmodule-2.0.so.0", GLIBC_LIBGMODULE),
+        ("libffi.so.8", GLIBC_LIBFFI),
+        ("libmount.so.1", GLIBC_LIBMOUNT),
+        ("libblkid.so.1", GLIBC_LIBBLKID),
+        ("libselinux.so.1", GLIBC_LIBSELINUX),
+        ("libpango-1.0.so.0", GLIBC_LIBPANGO),
+        ("libpangocairo-1.0.so.0", GLIBC_LIBPANGOCAIRO),
+        ("libpangoft2-1.0.so.0", GLIBC_LIBPANGOFT2),
+    ]
+}
+/// A real Pango + HarfBuzz text-layout client (renders shaped text via cairo→X11).
+pub fn gpango_bytes() -> &'static [u8] { GPANGO_ELF }
 /// The real /usr/bin/sort (stdin line sorter).
 pub fn real_sort_bytes() -> &'static [u8] { REAL_SORT_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
@@ -3659,10 +3706,15 @@ pub fn spawn_glibc_persistent(
 
     let exe_base = arena;
     let ldso_base = arena + 0x0080_0000;
-    let mmap_start = arena + 0x0200_0000;
+    // brk heap: [arena+32MiB, arena+64MiB); mmap bump area starts AFTER it so brk() and
+    // mmap() never share a cursor (see BRK_CUR/BRK_END).
+    let brk_start = arena + 0x0200_0000;
+    let mmap_start = arena + 0x0400_0000;
     let stack_top = arena + nblocks * MIB2 - 0x0010_0000;
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
+    BRK_CUR.store(brk_start, Ordering::Relaxed);
+    BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
     HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
 
@@ -3726,11 +3778,15 @@ pub fn run_glibc(
     // Arena layout.
     let exe_base = arena; // PIE exe: first PT_LOAD has p_vaddr 0
     let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
-    let mmap_start = arena + 0x0200_0000; // runtime mmaps (libc, …) bump from +32 MiB
+    // brk heap [+32 MiB, +64 MiB); mmap bump area starts after it (disjoint cursors).
+    let brk_start = arena + 0x0200_0000;
+    let mmap_start = arena + 0x0400_0000; // runtime mmaps (libc, …) bump from +64 MiB
     let stack_top = arena + nblocks * MIB2 - 0x0010_0000; // near the arena top
 
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
+    BRK_CUR.store(brk_start, Ordering::Relaxed);
+    BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
     HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
 
@@ -4427,13 +4483,62 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             }
             child as u64
         }
+        435 => {
+            // clone3(cl_args, size): modern glibc's PRIMARY pthread_create path. We
+            // implement it natively (rather than ENOSYS-forcing the fragile clone3->
+            // clone fallback, which sets up the child stack for the wrong ABI and made
+            // glib worker threads start with a corrupt RSP/RIP). struct clone_args:
+            //   0:flags 8:pidfd 16:child_tid* 24:parent_tid* 32:exit_signal
+            //   40:stack(low) 48:stack_size 56:tls 64:set_tid ...
+            let cl = a1;
+            let flags: u64 = match read_user(cl) { Some(v) => v, None => return EFAULT };
+            let child_tid: u64 = read_user(cl + 16).unwrap_or(0);
+            let parent_tid: u64 = read_user(cl + 24).unwrap_or(0);
+            let stack: u64 = read_user(cl + 40).unwrap_or(0);
+            let stack_size: u64 = read_user(cl + 48).unwrap_or(0);
+            let tls: u64 = read_user(cl + 56).unwrap_or(0);
+            if stack == 0 {
+                return (-38i64) as u64; // no fork via clone3 here
+            }
+            // clone3 gives the LOW address + size; the child SP is the TOP.
+            let child_stack = stack + stack_size;
+            let (slot, kstack_top) = match alloc_thread_kstack() {
+                Some(s) => s,
+                None => return (-11i64) as u64,
+            };
+            let user_rip = unsafe { USER_RIP };
+            let sel = crate::gdt::selectors();
+            let user_cs = (sel.user_code.0 | 3) as u64;
+            let user_ss = (sel.user_data.0 | 3) as u64;
+            let fs = if flags & 0x0008_0000 != 0 { tls } else { unsafe { Msr::new(0xC000_0100).read() } };
+            let saved_regs = unsafe { SAVED_REGS };
+            let pml4 = GLIBC_PML4.load(Ordering::Relaxed);
+            let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, pml4, fs, saved_regs);
+            register_thread_kstack(child, slot);
+            GLIBC_THREADS.lock().push(child);
+            crate::serial_println!("[glibc-thread] clone3 -> thread task {child} (shared address space, sp={child_stack:#x})");
+            if flags & 0x0010_0000 != 0 && parent_tid != 0 {
+                let _ = write_user(parent_tid, child as i32);
+            }
+            if flags & 0x0100_0000 != 0 && child_tid != 0 {
+                let _ = write_user(child_tid, child as i32);
+            }
+            if flags & 0x0020_0000 != 0 && child_tid != 0 {
+                GLIBC_CTIDS.lock().push((child, child_tid));
+            }
+            child as u64
+        }
         12 => {
-            // brk(addr) — Linux semantics: set break, return the NEW break.
-            let cur = HEAP_BREAK.load(Ordering::Relaxed);
-            if a1 == 0 || a1 > HEAP_END.load(Ordering::Relaxed) {
+            // brk(addr) — Linux semantics: return the NEW break on success, else the
+            // UNCHANGED current break (glibc reads that as "cannot grow" and falls back
+            // to mmap). Uses the DEDICATED brk region (BRK_CUR/BRK_END), NOT the mmap
+            // bump pointer — otherwise growing the heap would rewind mmap and later
+            // mappings (thread stacks, mmap'd fonts) would be handed overlapping memory.
+            let cur = BRK_CUR.load(Ordering::Relaxed);
+            if a1 == 0 || a1 > BRK_END.load(Ordering::Relaxed) {
                 return cur;
             }
-            HEAP_BREAK.store(a1, Ordering::Relaxed);
+            BRK_CUR.store(a1, Ordering::Relaxed);
             a1
         }
         9 => {

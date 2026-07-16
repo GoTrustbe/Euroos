@@ -304,6 +304,54 @@ extern "x86-interrupt" fn gp_handler(frame: InterruptStackFrame, code: u64) {
     halt();
 }
 
+/// Read a u64 from a user virtual address by manually walking the current CR3
+/// page tables. Returns None if any level is not present (so a corrupt pointer
+/// can never fault us). Only used for post-mortem fault diagnostics.
+fn read_user_qword(vaddr: u64) -> Option<u64> {
+    // The kernel identity-maps physical memory (virtual == physical), so a physical
+    // table/frame address can be dereferenced directly.
+    if vaddr & 7 != 0 {
+        return None;
+    }
+    let (cr3, _) = x86_64::registers::control::Cr3::read();
+    let mut table_phys = cr3.start_address().as_u64();
+    let idx = [
+        (vaddr >> 39) & 0x1ff,
+        (vaddr >> 30) & 0x1ff,
+        (vaddr >> 21) & 0x1ff,
+        (vaddr >> 12) & 0x1ff,
+    ];
+    for (level, &i) in idx.iter().enumerate() {
+        let entry_ptr = (table_phys + i * 8) as *const u64;
+        let entry = unsafe { core::ptr::read_volatile(entry_ptr) };
+        if entry & 1 == 0 {
+            return None; // not present
+        }
+        let next = entry & 0x000f_ffff_ffff_f000;
+        // A huge page (bit 7) at level 1 (2 MiB) or 2 (1 GiB) ends the walk.
+        if level >= 1 && entry & 0x80 != 0 {
+            let page_off = vaddr & ((1u64 << (12 + (3 - level as u32) * 9)) - 1);
+            return Some(read_phys_u64(next + page_off));
+        }
+        table_phys = next;
+    }
+    Some(read_phys_u64(table_phys + (vaddr & 0xfff)))
+}
+
+/// Read a u64 from an identity-mapped physical address, permitting supervisor
+/// access to a user-accessible page (SMAP) via STAC/CLAC around the load.
+#[inline(never)]
+fn read_phys_u64(pa: u64) -> u64 {
+    // No `nomem`: the asm must act as a compiler barrier so the volatile read is not
+    // hoisted before STAC (which is what re-enabled SMAP and re-faulted us).
+    unsafe {
+        core::arch::asm!("stac", options(nostack));
+        let v = core::ptr::read_volatile(pa as *const u64);
+        core::arch::asm!("clac", options(nostack));
+        v
+    }
+}
+
 extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: PageFaultErrorCode) {
     let addr = x86_64::registers::control::Cr2::read_raw();
     // DEMAND PAGING (opt-in): a fault in the running glibc process's sparse mmap
@@ -330,6 +378,23 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
         serial_println!(
             "[isolation] ring-3 page fault addr={addr:#x} code={code:?} -> process pid {pid} (task {idx}) TERMINATED"
         );
+        // Diagnostic: for an instruction-fetch fault (a bad jump/call target), dump
+        // the faulting thread's RIP/RSP and the top of its stack so we can see which
+        // library made the bad call. Reads are guarded by a manual CR3 page-walk so a
+        // corrupt RSP can never double-fault us. Gated on INSTRUCTION_FETCH so the
+        // intentional data-fault isolation selftests early in boot stay quiet.
+        if code.contains(PageFaultErrorCode::INSTRUCTION_FETCH) {
+            let rip = frame.instruction_pointer.as_u64();
+            let rsp = frame.stack_pointer.as_u64();
+            serial_println!("[pf-diag] rip={rip:#x} rsp={rsp:#x}");
+            for i in 0..8u64 {
+                let a = rsp.wrapping_add(i * 8);
+                match read_user_qword(a) {
+                    Some(v) => serial_println!("[pf-diag]   [rsp+{:#04x}] = {v:#x}", i * 8),
+                    None => serial_println!("[pf-diag]   [rsp+{:#04x}] = <unmapped>", i * 8),
+                }
+            }
+        }
         x86_64::instructions::interrupts::enable();
         loop {
             x86_64::instructions::hlt(); // the timer switches to another task
