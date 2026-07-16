@@ -3624,15 +3624,27 @@ pub fn run_glibc(
     // Per-run (not permanent) so it doesn't tie up RAM between runs or collide with a
     // big arena in another run. Freed as a whole back to the allocator on exit.
     let (dp_base, dp_frames) = if DEMAND_ENABLED.load(Ordering::Relaxed) {
-        const DP_FRAMES: usize = 65536; // 256 MiB demand working-set capacity
-        match falloc.allocate_contiguous(DP_FRAMES) {
-            Ok(b) => {
-                crate::procpool::demand_install(b, DP_FRAMES);
-                crate::serial_println!("[glibc] demand pool: 256 MiB @ {b:#x} (this run)");
-                (b, DP_FRAMES)
+        // Grab (almost) ALL remaining free RAM for the demand pool — this is what
+        // gives a demand run a chrome-scale working set. Leave a safety margin, and
+        // halve on failure so we still get the largest contiguous chunk available
+        // even when RAM is fragmented. Freed as a whole on exit, so it costs nothing
+        // between runs.
+        const MARGIN: usize = 8192; // keep 32 MiB free for kernel allocations
+        let mut want = falloc.free_frames().saturating_sub(MARGIN);
+        let mut got = (0u64, 0usize);
+        while want >= 4096 {
+            // >= 16 MiB
+            if let Ok(b) = falloc.allocate_contiguous(want) {
+                got = (b, want);
+                break;
             }
-            Err(_) => (0, 0), // couldn't reserve -> demand faults will fail (graceful)
+            want /= 2; // fragmentation: try a smaller contiguous run
         }
+        if got.1 != 0 {
+            crate::procpool::demand_install(got.0, got.1);
+            crate::serial_println!("[glibc] demand pool: {} MiB @ {:#x} (this run, ~all free RAM)", got.1 / 256, got.0);
+        }
+        got
     } else {
         (0, 0)
     };
