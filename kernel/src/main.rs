@@ -1388,6 +1388,8 @@ fn main() -> Status {
         // GLib + libpcre2: the GTK/desktop-stack core library (a real Chromium dep).
         ring3::register_file("/lib/x86_64-linux-gnu/libglib-2.0.so.0", ring3::glibc_libglib_bytes().to_vec());
         ring3::register_file("/lib/x86_64-linux-gnu/libpcre2-8.so.0", ring3::glibc_libpcre2_bytes().to_vec());
+        // zlib: universal compression, a real Chromium dep.
+        ring3::register_file("/lib/x86_64-linux-gnu/libz.so.1", ring3::glibc_libz_bytes().to_vec());
         let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
         serial_println!(
             "[h3] dyntest (dynamically linked) done: exit={h3_exit}, output={:?}",
@@ -1804,6 +1806,10 @@ fn main() -> Status {
         let (o15, e15) = ring3::run_glibc(&mut allocator, ring3::gglib_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gglib"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] gglib (GLib GHashTable): exit={e15}");
         for l in o15.lines() { serial_println!("[glibc]   {l}"); }
+        // gzlib: zlib compress/decompress roundtrip (universal compression lib).
+        let (oz, ez) = ring3::run_glibc(&mut allocator, ring3::gzlib_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gzlib"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gzlib (zlib compress): exit={ez}");
+        for l in oz.lines() { serial_println!("[glibc]   {l}"); }
         // gsparse: DEMAND PAGING — reserve 4 GiB virtual (far beyond RAM), touch a
         // few scattered pages; only touched pages commit physical frames. Opt-in.
         let pool_before = procpool::demand_free_frames();

@@ -2210,6 +2210,9 @@ static REAL_SHA256_ELF: &[u8] = include_bytes!("../../userland/glibc/sha256sum")
 static GLIBC_LIBGLIB: &[u8] = include_bytes!("../../userland/glibc/libglib-2.0.so.0");
 static GLIBC_LIBPCRE2: &[u8] = include_bytes!("../../userland/glibc/libpcre2-8.so.0");
 static GGLIB_ELF: &[u8] = include_bytes!("../../userland/glibc/gglib");
+// zlib (libz): universal compression (a real Chromium dep). Compress/decompress test.
+static GLIBC_LIBZ: &[u8] = include_bytes!("../../userland/glibc/libz.so.1");
+static GZLIB_ELF: &[u8] = include_bytes!("../../userland/glibc/gzlib");
 // Address-space-scaling test: mallocs + touches 200 MiB (needs a big arena).
 static GBIG_ELF: &[u8] = include_bytes!("../../userland/glibc/gbig");
 // pthread mutex + condition-variable producer/consumer (deep futex exercise).
@@ -2252,6 +2255,9 @@ pub fn glibc_libglib_bytes() -> &'static [u8] { GLIBC_LIBGLIB }
 pub fn glibc_libpcre2_bytes() -> &'static [u8] { GLIBC_LIBPCRE2 }
 /// A GLib GHashTable test (the desktop-stack core library + transitive libpcre2).
 pub fn gglib_bytes() -> &'static [u8] { GGLIB_ELF }
+pub fn glibc_libz_bytes() -> &'static [u8] { GLIBC_LIBZ }
+/// A zlib compress/decompress roundtrip test.
+pub fn gzlib_bytes() -> &'static [u8] { GZLIB_ELF }
 /// A large-heap test (mallocs + touches 200 MiB) for address-space scaling.
 pub fn gbig_bytes() -> &'static [u8] { GBIG_ELF }
 /// A pthread mutex + condvar producer/consumer test (deep futex exercise).
