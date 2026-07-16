@@ -1804,6 +1804,16 @@ fn main() -> Status {
         let (o15, e15) = ring3::run_glibc(&mut allocator, ring3::gglib_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gglib"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] gglib (GLib GHashTable): exit={e15}");
         for l in o15.lines() { serial_println!("[glibc]   {l}"); }
+        // gsparse: DEMAND PAGING — reserve 4 GiB virtual (far beyond RAM), touch a
+        // few scattered pages; only touched pages commit physical frames. Opt-in.
+        let pool_before = procpool::free_frames();
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (o16, e16) = ring3::run_glibc(&mut allocator, ring3::gsparse_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsparse"], &[b"PATH=/bin"], caps);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        let pool_after = procpool::free_frames();
+        serial_println!("[glibc] gsparse (demand paging): exit={e16}, committed={} pages ({} KiB), pool delta={} frames (reclaimed after exit)",
+            ring3::demand_committed_pages(), ring3::demand_committed_pages()*4, pool_before as i64 - pool_after as i64);
+        for l in o16.lines() { serial_println!("[glibc]   {l}"); }
         // (Reclamation validated out-of-band: 30 mixed runs incl. threaded kept the
         // task table at index 31 with free_frames stable — see commit notes.)
     }

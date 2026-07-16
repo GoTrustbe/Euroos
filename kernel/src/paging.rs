@@ -492,6 +492,79 @@ pub fn table_frames(pml4: u64) -> (u64, u64, u64) {
     }
 }
 
+/// DEMAND PAGING: map a single 4 KiB USER RW page `phys` at `virt` in process
+/// `pml4`, creating the PDPT/PD/PT levels on demand (frames from the global process
+/// pool, zeroed). This backs a large SPARSE mmap region committed one page at a time
+/// on fault — the basis for Chromium-scale address spaces (reserve huge virtual,
+/// commit little physical). Returns false if the pool is exhausted. All table frames
+/// live in low RAM (identity-mapped in the process PML4[0]), so this is reachable
+/// with the process CR3 active (i.e. from the page-fault handler).
+pub fn map_demand_4k(pml4: u64, virt: u64, phys: u64) -> bool {
+    // SAFETY: pml4 + all table frames are identity-mapped low RAM; page-aligned.
+    unsafe {
+        let i4 = ((virt >> 39) & 0x1FF) as usize;
+        let i3 = ((virt >> 30) & 0x1FF) as usize;
+        let i2 = ((virt >> 21) & 0x1FF) as usize;
+        let i1 = ((virt >> 12) & 0x1FF) as usize;
+        let pdpt = match ensure_table((pml4 as *mut u64).add(i4)) { Some(p) => p, None => return false };
+        let pd = match ensure_table((pdpt as *mut u64).add(i3)) { Some(p) => p, None => return false };
+        let pt = match ensure_table((pd as *mut u64).add(i2)) { Some(p) => p, None => return false };
+        (pt as *mut u64).add(i1).write_volatile(phys | PRESENT | WRITABLE | USER);
+    }
+    true
+}
+
+/// Ensure the table entry at `slot` points to a present next-level table, creating a
+/// fresh zeroed one (from the process pool) if absent. Returns its physical address.
+unsafe fn ensure_table(slot: *mut u64) -> Option<u64> {
+    let e = slot.read_volatile();
+    if e & PRESENT != 0 {
+        return Some(e & ADDR_MASK);
+    }
+    let frame = crate::procpool::alloc()?;
+    core::ptr::write_bytes(frame as *mut u8, 0, 4096);
+    slot.write_volatile(frame | PRESENT | WRITABLE | USER);
+    Some(frame)
+}
+
+/// Free a demand-paged region: walk PML4[`idx`] and return every committed data page
+/// AND every page-table frame to the process pool, then clear the PML4 entry. Mirrors
+/// [`map_demand_4k`]. Called when a process that used demand paging exits.
+pub fn free_demand_region(pml4: u64, idx: usize) {
+    // SAFETY: identity-mapped table chain; called single-threaded at process teardown.
+    unsafe {
+        let e4 = (pml4 as *const u64).add(idx).read_volatile();
+        if e4 & PRESENT == 0 {
+            return;
+        }
+        let pdpt = e4 & ADDR_MASK;
+        for i3 in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i3).read_volatile();
+            if e3 & PRESENT == 0 {
+                continue;
+            }
+            let pd = e3 & ADDR_MASK;
+            for i2 in 0..512usize {
+                let e2 = (pd as *const u64).add(i2).read_volatile();
+                if e2 & PRESENT == 0 {
+                    continue;
+                }
+                let pt = e2 & ADDR_MASK;
+                for i1 in 0..512usize {
+                    let e1 = (pt as *const u64).add(i1).read_volatile();
+                    if e1 & PRESENT != 0 {
+                        crate::procpool::free(e1 & ADDR_MASK); // committed data page
+                    }
+                }
+                crate::procpool::free(pt);
+            }
+            crate::procpool::free(pd);
+        }
+        crate::procpool::free(pdpt);
+        (pml4 as *mut u64).add(idx).write_volatile(0);
+    }
+}
+
 /// Free the page-table frames of a process address space (PML4+PDPT+PD+arena PT).
 /// The arena data pages themselves are freed separately by the caller.
 pub fn free_address_space(falloc: &mut FrameAllocator, pml4: u64) {

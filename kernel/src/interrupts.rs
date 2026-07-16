@@ -306,6 +306,14 @@ extern "x86-interrupt" fn gp_handler(frame: InterruptStackFrame, code: u64) {
 
 extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: PageFaultErrorCode) {
     let addr = x86_64::registers::control::Cr2::read_raw();
+    // DEMAND PAGING (opt-in): a fault in the running glibc process's sparse mmap
+    // region is committed here (a fresh zeroed frame mapped on the spot) and the
+    // instruction retried. No-op unless enabled + in-range, so the normal fault
+    // handling below is untouched for every other case (incl. ring 0 kernel copies
+    // that touch a not-yet-committed demand page during a syscall).
+    if crate::ring3::handle_demand_fault(addr) {
+        return;
+    }
     // A fault from RING 3 = a process reaching outside its own address space
     // (memory isolation). Terminate ONLY that process and give the CPU back
     // to the scheduler — the rest of the system (desktop, other processes)

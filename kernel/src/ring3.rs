@@ -81,6 +81,16 @@ fn in_user_arena(ptr: u64, len: usize) -> bool {
     if base == 0 {
         return true; // no ring-3 context active
     }
+    // A buffer in the demand-paged region is also legitimate user memory. It lies far
+    // above the arena (own PML4 slot); accepting it lets copy_to/from_user validate
+    // demand-region pointers. Un-committed pages fault in on kernel touch (ring-0
+    // demand fault), so it is safe to hand the kernel these addresses.
+    if DEMAND_ENABLED.load(Ordering::Relaxed) && ptr >= DEMAND_BASE {
+        return match ptr.checked_add(len as u64) {
+            Some(end) => end <= DEMAND_BASE + DEMAND_SIZE,
+            None => false,
+        };
+    }
     let top = base + ARENA_SPAN_DYN.load(Ordering::Relaxed);
     match ptr.checked_add(len as u64) {
         Some(end) => ptr >= base && end <= top,
@@ -2204,6 +2214,8 @@ static GGLIB_ELF: &[u8] = include_bytes!("../../userland/glibc/gglib");
 static GBIG_ELF: &[u8] = include_bytes!("../../userland/glibc/gbig");
 // pthread mutex + condition-variable producer/consumer (deep futex exercise).
 static GSYNC_ELF: &[u8] = include_bytes!("../../userland/glibc/gsync");
+// DEMAND-PAGING test: mmap 4 GiB sparse, touch scattered pages (only those commit).
+static GSPARSE_ELF: &[u8] = include_bytes!("../../userland/glibc/gsparse");
 // File I/O roundtrip test (open O_CREAT|write, reopen|read, verify).
 static GFILE_ELF: &[u8] = include_bytes!("../../userland/glibc/gfile");
 // REAL /usr/bin/sort (stdin filter; reuses the already-served libcrypto).
@@ -2246,6 +2258,8 @@ pub fn gbig_bytes() -> &'static [u8] { GBIG_ELF }
 pub fn gsync_bytes() -> &'static [u8] { GSYNC_ELF }
 /// A file-I/O roundtrip test (create+write, reopen+read, verify).
 pub fn gfile_bytes() -> &'static [u8] { GFILE_ELF }
+/// A sparse-mmap demand-paging test (reserve 4 GiB, touch a few pages).
+pub fn gsparse_bytes() -> &'static [u8] { GSPARSE_ELF }
 /// The real /usr/bin/sort (stdin line sorter).
 pub fn real_sort_bytes() -> &'static [u8] { REAL_SORT_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
@@ -3469,6 +3483,62 @@ static GLIBC_EXIT_CODE: core::sync::atomic::AtomicU64 = core::sync::atomic::Atom
 /// How many 100 Hz ticks the launcher waits for a glibc process to exit before
 /// giving up (default ~120 s guest; lowered during pthreads bring-up debugging).
 pub static GLIBC_DEADLINE_TICKS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(12000);
+
+// ── DEMAND PAGING (opt-in) ──────────────────────────────────────────────────
+// A large SPARSE virtual region, separate from the identity arena (its own PML4
+// slot). Anon mmaps of >= DEMAND_MIN_BYTES are placed here and backed one 4 KiB
+// page at a time on fault (frames from the process pool) — reserve huge virtual,
+// commit only touched physical. Opt-in (DEMAND_ENABLED) so it CANNOT affect the
+// default identity-arena path: with the flag off, handle_demand_fault is a no-op
+// and mmap routing is unchanged. This is the Chromium-scale-memory foundation.
+const DEMAND_PML4_IDX: usize = 2; // virtual [1 TiB, 1.5 TiB)
+const DEMAND_BASE: u64 = (DEMAND_PML4_IDX as u64) << 39; // 0x100_0000_0000
+const DEMAND_SIZE: u64 = 64 * (1 << 30); // 64 GiB of reservable virtual space
+const DEMAND_MIN_BYTES: u64 = 16 * (1 << 20); // route anon mmaps >= 16 MiB here
+pub static DEMAND_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
+static DEMAND_COMMITTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static DEMAND_USED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Number of 4 KiB pages committed on demand so far (diagnostics).
+pub fn demand_committed_pages() -> u64 { DEMAND_COMMITTED.load(Ordering::Relaxed) }
+
+/// Page-fault entry point for demand paging (called first from the #PF handler).
+/// Returns true if the fault was a demand page we just committed (resume), false to
+/// let the normal fault path run. A no-op unless DEMAND_ENABLED and `addr` is in the
+/// demand region of the running glibc process.
+pub fn handle_demand_fault(addr: u64) -> bool {
+    if !DEMAND_ENABLED.load(Ordering::Relaxed) {
+        return false;
+    }
+    if addr < DEMAND_BASE || addr >= DEMAND_BASE + DEMAND_SIZE {
+        return false;
+    }
+    let pml4 = GLIBC_PML4.load(Ordering::Relaxed);
+    if pml4 == 0 {
+        return false;
+    }
+    // Only within the region actually handed out by mmap (else it's a wild pointer).
+    if addr >= DEMAND_NEXT.load(Ordering::Relaxed) {
+        return false;
+    }
+    let page = addr & !0xFFF;
+    let phys = match crate::procpool::alloc() {
+        Some(p) => p,
+        None => return false, // pool exhausted -> real OOM, let it terminate
+    };
+    // SAFETY: `phys` is an identity-mapped free frame; zero it (anon = zeroed).
+    unsafe { core::ptr::write_bytes(phys as *mut u8, 0, 4096); }
+    if !crate::paging::map_demand_4k(pml4, page, phys) {
+        crate::procpool::free(phys);
+        return false;
+    }
+    // Flush any stale not-present TLB entry for this page.
+    unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
+    DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
+    DEMAND_USED.store(true, Ordering::Relaxed);
+    true
+}
 /// Identity-mapped arena size (MiB) for the next run_glibc. Default 96; bump for a
 /// large program, restore after. The whole span is mapped upfront (no demand paging
 /// yet), so it needs that many contiguous physical frames from the allocator.
@@ -3545,6 +3615,10 @@ pub fn run_glibc(
     GLIBC_CTIDS.lock().clear();
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
+    // Fresh demand-paging state for this run (bump pointer, counters, used flag).
+    DEMAND_NEXT.store(DEMAND_BASE, Ordering::Relaxed);
+    DEMAND_COMMITTED.store(0, Ordering::Relaxed);
+    DEMAND_USED.store(false, Ordering::Relaxed);
 
     // Own kernel stack for the main thread (from the recycling thread-kstack pool).
     let (main_slot, main_kstack) = match alloc_thread_kstack() {
@@ -3590,6 +3664,11 @@ pub fn run_glibc(
     }
     let out = OUTPUT.lock().clone();
     let code = GLIBC_EXIT_CODE.load(Ordering::Relaxed);
+    // If this run used the demand region, return its committed pages + demand page
+    // tables to the process pool BEFORE freeing the pml4 frame (which we walk here).
+    if DEMAND_USED.load(Ordering::Relaxed) {
+        crate::paging::free_demand_region(pml4, DEMAND_PML4_IDX);
+    }
     // Reclaim this run's address space: free the page tables (pml4/pdpt/pd) AND the
     // big contiguous arena back to the frame allocator. All this run's tasks are Dead
     // (never rescheduled) and the launcher runs on the boot PML4, so nothing
@@ -4176,6 +4255,23 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             const MAP_FIXED: u64 = 0x10;
             let len = (a2 + 0xFFF) & !0xFFF;
             let file_backed = a4 & MAP_ANONYMOUS == 0 && (a5 as usize) < MAX_FD && a5 != u64::MAX;
+
+            // DEMAND PAGING (opt-in): route a LARGE anonymous, non-fixed mmap into the
+            // sparse demand region. We only RESERVE virtual address space here (bump the
+            // pointer) — physical frames are committed page-by-page on fault. This is how
+            // a program can mmap far more than RAM and pay only for what it touches.
+            if DEMAND_ENABLED.load(Ordering::Relaxed)
+                && a4 & MAP_ANONYMOUS != 0
+                && a4 & MAP_FIXED == 0
+                && len >= DEMAND_MIN_BYTES
+            {
+                let start = DEMAND_NEXT.fetch_add(len, Ordering::Relaxed);
+                if start + len > DEMAND_BASE + DEMAND_SIZE {
+                    DEMAND_NEXT.fetch_sub(len, Ordering::Relaxed);
+                    return (-12i64) as u64; // -ENOMEM: out of demand virtual space
+                }
+                return start; // untouched -> committed lazily by handle_demand_fault
+            }
 
             // Pick the target region: MAP_FIXED honours addr (must be in-arena +
             // page-aligned); otherwise bump the heap window.
