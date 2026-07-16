@@ -35,12 +35,31 @@ enum State {
     Connected,
 }
 
+/// A client window: geometry + an XRGB8888 pixel buffer we draw into and present.
+struct XWindow {
+    id: u32,
+    x: i16,
+    y: i16,
+    w: u16,
+    h: u16,
+    mapped: bool,
+    buf: Vec<u32>,
+}
+
+/// A graphics context — for the first rendering rung we only track the fill colour.
+struct XGc {
+    id: u32,
+    fg: u32,
+}
+
 struct XConn {
     inbuf: Vec<u8>,   // accumulated request bytes not yet consumed
     outbuf: Vec<u8>,  // reply/event bytes waiting to be read()
     state: State,
     seq: u16,         // last request's sequence number (server-side counter)
     swap: bool,       // client is big-endian (byte-swap multi-byte fields)
+    windows: Vec<XWindow>,
+    gcs: Vec<XGc>,
 }
 
 static XCONNS: Mutex<[Option<XConn>; MAX_XCONN]> = Mutex::new([const { None }; MAX_XCONN]);
@@ -57,7 +76,7 @@ pub fn open() -> Option<u64> {
     let mut t = XCONNS.lock();
     for (i, s) in t.iter_mut().enumerate() {
         if s.is_none() {
-            *s = Some(XConn { inbuf: Vec::new(), outbuf: Vec::new(), state: State::PreSetup, seq: 0, swap: false });
+            *s = Some(XConn { inbuf: Vec::new(), outbuf: Vec::new(), state: State::PreSetup, seq: 0, swap: false, windows: Vec::new(), gcs: Vec::new() });
             trace(format_args!("client connected -> xconn fd {}", XCONN_FD_BASE + i as u64));
             return Some(XCONN_FD_BASE + i as u64);
         }
@@ -179,10 +198,100 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             pad_reply(&mut r);
             c.outbuf.extend_from_slice(&r);
         }
-        // CreateGC(55), MapWindow(8), ChangeWindowAttributes(2), CreateWindow(1),
-        // etc. — no reply. Acknowledged by consuming the request. (Real drawing +
-        // window mapping into the compositor is the next milestone.)
+        // CreateWindow(1): wid@4, x@12(i16), y@14, w@16(u16), h@18. Allocate a window
+        // with an XRGB8888 backing buffer (init dark). No reply.
+        1 => {
+            let id = ru32(c, req, 4);
+            let x = ru16(c, req, 12) as i16;
+            let y = ru16(c, req, 14) as i16;
+            let w = ru16(c, req, 16).max(1);
+            let h = ru16(c, req, 18).max(1);
+            let buf = alloc::vec![0xff20_2020u32; w as usize * h as usize]; // opaque dark
+            c.windows.push(XWindow { id, x, y, w, h, mapped: false, buf });
+            trace(format_args!("CreateWindow id={id:#x} {w}x{h} @({x},{y})"));
+        }
+        // CreateGC(55): cid@4, drawable@8, value-mask@12, values@16.
+        55 => {
+            let id = ru32(c, req, 4);
+            let fg = gc_foreground(c, req, 12, 16).unwrap_or(0);
+            c.gcs.push(XGc { id, fg });
+            trace(format_args!("CreateGC id={id:#x} fg={fg:#08x}"));
+        }
+        // ChangeGC(56): gc@4, value-mask@8, values@12 (XSetForeground uses this).
+        56 => {
+            let id = ru32(c, req, 4);
+            if let Some(fg) = gc_foreground(c, req, 8, 12) {
+                if let Some(g) = c.gcs.iter_mut().find(|g| g.id == id) {
+                    g.fg = fg;
+                }
+                trace(format_args!("ChangeGC id={id:#x} fg={fg:#08x}"));
+            }
+        }
+        // MapWindow(8): window@4 -> visible; present it to the screen.
+        8 => {
+            let id = ru32(c, req, 4);
+            if let Some(win) = c.windows.iter_mut().find(|w| w.id == id) {
+                win.mapped = true;
+            }
+            trace(format_args!("MapWindow id={id:#x}"));
+            present(c, id);
+        }
+        // PolyFillRectangle(70): drawable@4, gc@8, rectangles@12 (each x,y i16; w,h u16).
+        70 => {
+            let draw = ru32(c, req, 4);
+            let gcid = ru32(c, req, 8);
+            let fg = c.gcs.iter().find(|g| g.id == gcid).map(|g| g.fg | 0xff00_0000).unwrap_or(0xffff_ffff);
+            let mut off = 12;
+            while off + 8 <= req.len() {
+                let rx = ru16(c, req, off) as i16 as i32;
+                let ry = ru16(c, req, off + 2) as i16 as i32;
+                let rw = ru16(c, req, off + 4) as i32;
+                let rh = ru16(c, req, off + 6) as i32;
+                fill_rect(c, draw, rx, ry, rw, rh, fg);
+                off += 8;
+            }
+            trace(format_args!("PolyFillRectangle draw={draw:#x} gc={gcid:#x} fg={fg:#08x}"));
+            present(c, draw);
+        }
+        // Everything else (no reply): acknowledged by consuming the request.
         _ => {}
+    }
+}
+
+/// Extract the GCForeground value from a GC value-list, if the mask sets it. The
+/// mask is at `mask_off`; the packed 4-byte values start at `vals_off` in bit order.
+fn gc_foreground(c: &XConn, req: &[u8], mask_off: usize, vals_off: usize) -> Option<u32> {
+    const GC_FOREGROUND: u32 = 0x0000_0004;
+    let mask = ru32(c, req, mask_off);
+    if mask & GC_FOREGROUND == 0 {
+        return None;
+    }
+    let idx = (mask & (GC_FOREGROUND - 1)).count_ones() as usize; // values below foreground
+    let at = vals_off + idx * 4;
+    if at + 4 <= req.len() { Some(ru32(c, req, at)) } else { None }
+}
+
+/// Fill a rectangle in the target window's buffer (clipped) with `argb`.
+fn fill_rect(c: &mut XConn, draw: u32, rx: i32, ry: i32, rw: i32, rh: i32, argb: u32) {
+    if let Some(win) = c.windows.iter_mut().find(|w| w.id == draw) {
+        let ww = win.w as i32;
+        let wh = win.h as i32;
+        for yy in ry.max(0)..(ry + rh).min(wh) {
+            for xx in rx.max(0)..(rx + rw).min(ww) {
+                win.buf[(yy * ww + xx) as usize] = argb;
+            }
+        }
+    }
+}
+
+/// Present the given (mapped) window to the real framebuffer + verify a sample
+/// pixel for the bring-up log. Reuses the app-graphics XRGB blit (as DOOM does).
+fn present(c: &XConn, id: u32) {
+    if let Some(win) = c.windows.iter().find(|w| w.id == id && w.mapped) {
+        crate::screen_present_xrgb(&win.buf, win.w as usize, win.h as usize);
+        let ctr = (win.h as usize / 2) * win.w as usize + win.w as usize / 2;
+        let sample = win.buf.get(ctr).copied().unwrap_or(0);
+        trace(format_args!("present id={id:#x} {}x{} centre-pixel={sample:#08x}", win.w, win.h));
     }
 }
 
@@ -276,6 +385,18 @@ fn setup_reply(swap: bool) -> Vec<u8> {
 // ── Byte helpers (respect the client's byte order) ──────────────────────────
 
 fn pad4(n: usize) -> usize { (n + 3) & !3 }
+
+/// Read a u16/u32 from a request slice at `off`, respecting the client's byte order.
+fn ru16(c: &XConn, req: &[u8], off: usize) -> u16 {
+    if off + 2 > req.len() { return 0; }
+    let b = [req[off], req[off + 1]];
+    if c.swap { u16::from_be_bytes(b) } else { u16::from_le_bytes(b) }
+}
+fn ru32(c: &XConn, req: &[u8], off: usize) -> u32 {
+    if off + 4 > req.len() { return 0; }
+    let b = [req[off], req[off + 1], req[off + 2], req[off + 3]];
+    if c.swap { u32::from_be_bytes(b) } else { u32::from_le_bytes(b) }
+}
 
 fn rd16(c: &XConn, off: usize) -> u16 {
     let b = [c.inbuf[off], c.inbuf[off + 1]];

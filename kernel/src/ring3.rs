@@ -2229,6 +2229,7 @@ static GLIBC_LIBXDMCP: &[u8] = include_bytes!("../../userland/glibc/libXdmcp.so.
 static GLIBC_LIBBSD: &[u8] = include_bytes!("../../userland/glibc/libbsd.so.0");
 static GLIBC_LIBMD: &[u8] = include_bytes!("../../userland/glibc/libmd.so.0");
 static GX11_ELF: &[u8] = include_bytes!("../../userland/glibc/gx11");
+static GXDRAW_ELF: &[u8] = include_bytes!("../../userland/glibc/gxdraw");
 // File I/O roundtrip test (open O_CREAT|write, reopen|read, verify).
 static GFILE_ELF: &[u8] = include_bytes!("../../userland/glibc/gfile");
 // REAL /usr/bin/sort (stdin filter; reuses the already-served libcrypto).
@@ -2287,6 +2288,8 @@ pub fn glibc_libbsd_bytes() -> &'static [u8] { GLIBC_LIBBSD }
 pub fn glibc_libmd_bytes() -> &'static [u8] { GLIBC_LIBMD }
 /// A trivial Xlib client (XOpenDisplay) — first GUI/X11 milestone.
 pub fn gx11_bytes() -> &'static [u8] { GX11_ELF }
+/// An Xlib client that creates + maps + fills a window (renders on screen).
+pub fn gxdraw_bytes() -> &'static [u8] { GXDRAW_ELF }
 /// The real /usr/bin/sort (stdin line sorter).
 pub fn real_sort_bytes() -> &'static [u8] { REAL_SORT_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");

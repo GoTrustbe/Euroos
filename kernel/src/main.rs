@@ -1830,6 +1830,13 @@ fn main() -> Status {
         let (ox, ex) = ring3::run_glibc(&mut allocator, ring3::gx11_bytes(), ring3::ldlinux_bytes(), &[b"gx11"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
         serial_println!("[glibc] gx11 (XOpenDisplay -> EuroOS X server): exit={ex}");
         for l in ox.lines() { serial_println!("[glibc]   {l}"); }
+        // gxdraw: an Xlib client that creates a window, maps it, and fills a
+        // rectangle — the X server renders it to the EuroOS framebuffer.
+        xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (oxd, exd) = ring3::run_glibc(&mut allocator, ring3::gxdraw_bytes(), ring3::ldlinux_bytes(), &[b"gxdraw"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
+        xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gxdraw (X11 window + fill): exit={exd}");
+        for l in oxd.lines() { serial_println!("[glibc]   {l}"); }
         // gsparse: DEMAND PAGING — reserve 4 GiB virtual (far beyond RAM), touch a
         // few scattered pages; only touched pages commit physical frames. Opt-in.
         let pool_before = procpool::demand_free_frames();
@@ -1844,7 +1851,7 @@ fn main() -> Status {
         // task table at index 31 with free_frames stable — see commit notes.)
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
-        let results: [(&str, u64, u64); 18] = [
+        let results: [(&str, u64, u64); 19] = [
             ("gtiny(dyn-link)", e1, 42), ("gtest(stdio/malloc/qsort)", e2, 55),
             ("gthread(pthreads)", e3, 88), ("gmath(libm+dlopen)", e4, 77),
             ("gcpp(C++/exceptions)", e5, 66), ("seq(argv)", e6, 0), ("factor(libgmp)", e7, 0),
@@ -1852,7 +1859,7 @@ fn main() -> Status {
             ("base64(stdin)", e10, 0), ("wc(stdin)", e11, 0), ("sha256sum(libcrypto)", e12, 0),
             ("sort(stdin)", e13, 0), ("gfile(file I/O)", e14, 44), ("gglib(GLib)", e15, 55),
             ("gsparse(demand-paging)", e16, 123), ("gunix(AF_UNIX socketpair)", eu, 67),
-            ("gx11(X11 XOpenDisplay)", ex, 0),
+            ("gx11(X11 XOpenDisplay)", ex, 0), ("gxdraw(X11 window+fill)", exd, 0),
         ];
         let pass = results.iter().filter(|(_, got, want)| got == want).count()
             + if ez == 33 { 1 } else { 0 };
@@ -1861,7 +1868,7 @@ fn main() -> Status {
             pass, results.len() + 1
         );
         serial_println!(
-            "[glibc]   dynamic-linking · pthreads+mutex/condvar · C++/exceptions · dlopen · file-I/O · demand-paging(4GiB sparse) · AF_UNIX-IPC · X11-client(XOpenDisplay)"
+            "[glibc]   dynamic-linking · pthreads+mutex/condvar · C++/exceptions · dlopen · file-I/O · demand-paging(4GiB sparse) · AF_UNIX-IPC · X11-window(render+fill)"
         );
         serial_println!(
             "[glibc]   9 real libs served: libc libm libstdc++ libgcc_s libgmp libcrypto libglib-2.0 libpcre2 libz | real bins: seq factor base64 wc sha256sum sort"
