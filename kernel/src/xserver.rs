@@ -43,6 +43,7 @@ struct XWindow {
     w: u16,
     h: u16,
     mapped: bool,
+    event_mask: u32, // XSelectInput: which events this window wants
     buf: Vec<u32>,
 }
 
@@ -207,8 +208,10 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             let w = ru16(c, req, 16).max(1);
             let h = ru16(c, req, 18).max(1);
             let buf = alloc::vec![0xff20_2020u32; w as usize * h as usize]; // opaque dark
-            c.windows.push(XWindow { id, x, y, w, h, mapped: false, buf });
-            trace(format_args!("CreateWindow id={id:#x} {w}x{h} @({x},{y})"));
+            // CreateWindow can carry an event-mask too (value-mask @28, CWEventMask=0x800).
+            let em = win_event_mask(c, req, 28, 32);
+            c.windows.push(XWindow { id, x, y, w, h, mapped: false, event_mask: em, buf });
+            trace(format_args!("CreateWindow id={id:#x} {w}x{h} @({x},{y}) mask={em:#x}"));
         }
         // CreateGC(55): cid@4, drawable@8, value-mask@12, values@16.
         55 => {
@@ -227,14 +230,40 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                 trace(format_args!("ChangeGC id={id:#x} fg={fg:#08x}"));
             }
         }
-        // MapWindow(8): window@4 -> visible; present it to the screen.
+        // ChangeWindowAttributes(2): window@4, value-mask@8, values@12. XSelectInput
+        // sends this with CWEventMask (0x800) + the event mask -> store it.
+        2 => {
+            let id = ru32(c, req, 4);
+            let em = win_event_mask(c, req, 8, 12);
+            if let Some(win) = c.windows.iter_mut().find(|w| w.id == id) {
+                win.event_mask |= em;
+            }
+            trace(format_args!("ChangeWindowAttributes id={id:#x} event-mask={em:#x}"));
+        }
+        // MapWindow(8): window@4 -> visible; present it; then deliver the events the
+        // window asked for (Expose always; test key/button when injection is enabled).
         8 => {
             let id = ru32(c, req, 4);
-            if let Some(win) = c.windows.iter_mut().find(|w| w.id == id) {
-                win.mapped = true;
-            }
-            trace(format_args!("MapWindow id={id:#x}"));
+            let (mask, w, h) = match c.windows.iter_mut().find(|w| w.id == id) {
+                Some(win) => { win.mapped = true; (win.event_mask, win.w, win.h) }
+                None => (0, 0, 0),
+            };
+            trace(format_args!("MapWindow id={id:#x} mask={mask:#x}"));
             present(c, id);
+            const EXPOSURE: u32 = 0x8000;
+            const KEY_PRESS: u32 = 0x0001;
+            const BUTTON_PRESS: u32 = 0x0004;
+            if mask & EXPOSURE != 0 {
+                send_expose(c, id, w, h);
+            }
+            if INJECT_TEST_INPUT.load(core::sync::atomic::Ordering::Relaxed) {
+                if mask & KEY_PRESS != 0 {
+                    send_input(c, 2, 38, id, 100, 60); // KeyPress, keycode 38 ('a')
+                }
+                if mask & BUTTON_PRESS != 0 {
+                    send_input(c, 4, 1, id, 100, 60); // ButtonPress, button 1
+                }
+            }
         }
         // PolyFillRectangle(70): drawable@4, gc@8, rectangles@12 (each x,y i16; w,h u16).
         70 => {
@@ -303,6 +332,55 @@ fn put_image(c: &mut XConn, draw: u32, dst_x: i32, dst_y: i32, w: usize, h: usiz
             }
         }
     }
+}
+
+/// When set, MapWindow also delivers a synthetic KeyPress + ButtonPress to a window
+/// that selected them — so event delivery is testable without live hardware input.
+/// (Real apps get only legitimate events; this is gated for the gxevent self-test.)
+pub static INJECT_TEST_INPUT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Extract a window's event-mask from an attribute value-list, if CWEventMask is set.
+/// The mask word is at `mask_off`; packed values start at `vals_off` in bit order.
+fn win_event_mask(c: &XConn, req: &[u8], mask_off: usize, vals_off: usize) -> u32 {
+    const CW_EVENT_MASK: u32 = 0x0000_0800;
+    let mask = ru32(c, req, mask_off);
+    if mask & CW_EVENT_MASK == 0 {
+        return 0;
+    }
+    let idx = (mask & (CW_EVENT_MASK - 1)).count_ones() as usize;
+    let at = vals_off + idx * 4;
+    if at + 4 <= req.len() { ru32(c, req, at) } else { 0 }
+}
+
+/// Queue a 32-byte Expose event for a window (sent on map so the client repaints).
+fn send_expose(c: &mut XConn, window: u32, w: u16, h: u16) {
+    let mut e = [0u8; 32];
+    e[0] = 12; // Expose
+    e[2..4].copy_from_slice(&c.seq.to_le_bytes());
+    e[4..8].copy_from_slice(&window.to_le_bytes());
+    // x@8=0, y@10=0, width@12, height@14, count@16=0
+    e[12..14].copy_from_slice(&w.to_le_bytes());
+    e[14..16].copy_from_slice(&h.to_le_bytes());
+    c.outbuf.extend_from_slice(&e);
+    trace(format_args!("-> Expose window={window:#x} {w}x{h}"));
+}
+
+/// Queue a 32-byte input event (KeyPress=2/ButtonPress=4). `detail` is the keycode
+/// or button number; (ex,ey) the event coordinates in the window.
+fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, ex: i16, ey: i16) {
+    let mut e = [0u8; 32];
+    e[0] = kind;
+    e[1] = detail;
+    e[2..4].copy_from_slice(&c.seq.to_le_bytes());
+    // time@4=0, root@8=ROOT, event(window)@12, child@16=0
+    e[8..12].copy_from_slice(&ROOT_WINDOW.to_le_bytes());
+    e[12..16].copy_from_slice(&window.to_le_bytes());
+    // root-x@20, root-y@22, event-x@24, event-y@26
+    e[24..26].copy_from_slice(&ex.to_le_bytes());
+    e[26..28].copy_from_slice(&ey.to_le_bytes());
+    e[30] = 1; // same-screen
+    c.outbuf.extend_from_slice(&e);
+    trace(format_args!("-> input kind={kind} detail={detail} window={window:#x}"));
 }
 
 /// Extract the GCForeground value from a GC value-list, if the mask sets it. The

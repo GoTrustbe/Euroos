@@ -2231,6 +2231,7 @@ static GLIBC_LIBMD: &[u8] = include_bytes!("../../userland/glibc/libmd.so.0");
 static GX11_ELF: &[u8] = include_bytes!("../../userland/glibc/gx11");
 static GXDRAW_ELF: &[u8] = include_bytes!("../../userland/glibc/gxdraw");
 static GXIMG_ELF: &[u8] = include_bytes!("../../userland/glibc/gximg");
+static GXEVENT_ELF: &[u8] = include_bytes!("../../userland/glibc/gxevent");
 // File I/O roundtrip test (open O_CREAT|write, reopen|read, verify).
 static GFILE_ELF: &[u8] = include_bytes!("../../userland/glibc/gfile");
 // REAL /usr/bin/sort (stdin filter; reuses the already-served libcrypto).
@@ -2293,6 +2294,8 @@ pub fn gx11_bytes() -> &'static [u8] { GX11_ELF }
 pub fn gxdraw_bytes() -> &'static [u8] { GXDRAW_ELF }
 /// An Xlib client that uploads a raster via XPutImage (arbitrary pixels).
 pub fn gximg_bytes() -> &'static [u8] { GXIMG_ELF }
+/// An Xlib client that selects input + reacts to events (Expose/Key/Button).
+pub fn gxevent_bytes() -> &'static [u8] { GXEVENT_ELF }
 /// The real /usr/bin/sort (stdin line sorter).
 pub fn real_sort_bytes() -> &'static [u8] { REAL_SORT_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
