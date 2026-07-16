@@ -1895,6 +1895,15 @@ fn main() -> Status {
         xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
         serial_println!("[glibc] gcairo (Cairo 2D -> XPutImage): exit={ec}");
         for l in oc.lines() { serial_println!("[glibc]   {l}"); }
+        // gcairotext: Cairo + FreeType TEXT — real font rasterization. Serve the TTF;
+        // the client FT_New_Face's it (via the VFS), makes a cairo font face, and
+        // cairo_show_text's — the last piece before real UI widgets.
+        ring3::register_file("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", ring3::dejavu_ttf_bytes().to_vec());
+        xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (oct, ect) = ring3::run_glibc(&mut allocator, ring3::gcairotext_bytes(), ring3::ldlinux_bytes(), &[b"gcairotext"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
+        xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gcairotext (Cairo+FreeType text): exit={ect}");
+        for l in oct.lines() { serial_println!("[glibc]   {l}"); }
 
         // LAUNCH A PERSISTENT, LIVE X APP that runs ALONGSIDE the desktop: gxlive is
         // a real Xlib event-loop client (key = colour, click = move). It owns the

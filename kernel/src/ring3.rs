@@ -2250,6 +2250,8 @@ static GLIBC_LIBBZ2: &[u8] = include_bytes!("../../userland/glibc/libbz2.so.1.0"
 static GLIBC_LIBBROTLIDEC: &[u8] = include_bytes!("../../userland/glibc/libbrotlidec.so.1");
 static GLIBC_LIBBROTLICOMMON: &[u8] = include_bytes!("../../userland/glibc/libbrotlicommon.so.1");
 static GCAIRO_ELF: &[u8] = include_bytes!("../../userland/glibc/gcairo");
+static GCAIROTEXT_ELF: &[u8] = include_bytes!("../../userland/glibc/gcairotext");
+static DEJAVU_TTF: &[u8] = include_bytes!("../../userland/glibc/DejaVuSans.ttf");
 // File I/O roundtrip test (open O_CREAT|write, reopen|read, verify).
 static GFILE_ELF: &[u8] = include_bytes!("../../userland/glibc/gfile");
 // REAL /usr/bin/sort (stdin filter; reuses the already-served libcrypto).
@@ -2339,6 +2341,9 @@ pub fn cairo_libs() -> [(&'static str, &'static [u8]); 13] {
     ]
 }
 pub fn gcairo_bytes() -> &'static [u8] { GCAIRO_ELF }
+/// A Cairo + FreeType TEXT rendering client, and the DejaVu font it uses.
+pub fn gcairotext_bytes() -> &'static [u8] { GCAIROTEXT_ELF }
+pub fn dejavu_ttf_bytes() -> &'static [u8] { DEJAVU_TTF }
 /// The real /usr/bin/sort (stdin line sorter).
 pub fn real_sort_bytes() -> &'static [u8] { REAL_SORT_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
