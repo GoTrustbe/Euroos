@@ -2219,6 +2219,8 @@ static GBIG_ELF: &[u8] = include_bytes!("../../userland/glibc/gbig");
 static GSYNC_ELF: &[u8] = include_bytes!("../../userland/glibc/gsync");
 // DEMAND-PAGING test: mmap 4 GiB sparse, touch scattered pages (only those commit).
 static GSPARSE_ELF: &[u8] = include_bytes!("../../userland/glibc/gsparse");
+// AF_UNIX socketpair round-trip (local IPC — the X11/dbus transport).
+static GUNIX_ELF: &[u8] = include_bytes!("../../userland/glibc/gunix");
 // File I/O roundtrip test (open O_CREAT|write, reopen|read, verify).
 static GFILE_ELF: &[u8] = include_bytes!("../../userland/glibc/gfile");
 // REAL /usr/bin/sort (stdin filter; reuses the already-served libcrypto).
@@ -2266,6 +2268,8 @@ pub fn gsync_bytes() -> &'static [u8] { GSYNC_ELF }
 pub fn gfile_bytes() -> &'static [u8] { GFILE_ELF }
 /// A sparse-mmap demand-paging test (reserve 4 GiB, touch a few pages).
 pub fn gsparse_bytes() -> &'static [u8] { GSPARSE_ELF }
+/// An AF_UNIX socketpair round-trip test (local IPC transport).
+pub fn gunix_bytes() -> &'static [u8] { GUNIX_ELF }
 /// The real /usr/bin/sort (stdin line sorter).
 pub fn real_sort_bytes() -> &'static [u8] { REAL_SORT_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
@@ -4178,6 +4182,13 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     None => return EFAULT,
                 };
                 crate::net::sock_send(a1, &bytes)
+            } else if crate::net::is_unix_fd(a1) {
+                // write() to an AF_UNIX socket.
+                let bytes = match copy_from_user(a2, a3 as usize) {
+                    Some(v) => v,
+                    None => return EFAULT,
+                };
+                crate::net::unix_fd_send(a1, &bytes)
             } else {
                 // Write to an opened VFS file (fd >= 3).
                 vfs_write(a1 as usize, a2, a3 as usize)
@@ -4438,6 +4449,12 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     return EFAULT;
                 }
                 data.len() as u64
+            } else if crate::net::is_unix_fd(a1) {
+                let data = crate::net::unix_fd_recv(a1, a3 as usize);
+                if !copy_to_user(a2, &data) {
+                    return EFAULT;
+                }
+                data.len() as u64
             } else {
                 vfs_read(a1 as usize, a2, a3 as usize)
             }
@@ -4480,11 +4497,29 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             total
         }
         3 => {
-            // close(fd): socket or VFS file.
+            // close(fd): socket, AF_UNIX socket, or VFS file.
             if crate::net::is_sock_fd(a1) {
                 crate::net::sock_close(a1)
+            } else if crate::net::is_unix_fd(a1) {
+                crate::net::unix_fd_close(a1)
             } else {
                 vfs_close(a1 as usize)
+            }
+        }
+        53 => {
+            // socketpair(domain, type, protocol, sv[2]): a connected pair. AF_UNIX(1)
+            // + SOCK_STREAM(1) only. Writes the two fds into the user's int[2].
+            if a1 != 1 {
+                return (-22i64) as u64; // -EINVAL: only AF_UNIX
+            }
+            match crate::net::unix_socketpair() {
+                Some((a, b)) => {
+                    if !write_user(a4, a as i32) || !write_user(a4 + 4, b as i32) {
+                        return EFAULT;
+                    }
+                    0
+                }
+                None => (-24i64) as u64, // -EMFILE
             }
         }
         41 => {
