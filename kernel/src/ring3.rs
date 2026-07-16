@@ -245,7 +245,10 @@ static STDOUT_REDIRECT: Mutex<Option<usize>> = Mutex::new(None);
 
 // Minimal VFS for userspace file I/O: files (path, content) loaded from
 // EuroFS, plus an open-file-descriptor table. Syscalls open/read/close operate on it.
-static FILES: Mutex<alloc::vec::Vec<(String, alloc::vec::Vec<u8>)>> = Mutex::new(alloc::vec::Vec::new());
+// Content is a Cow: embedded read-only libraries/binaries are served BORROWED straight
+// from the kernel image (include_bytes! → &'static), so the ~50 MiB desktop-graphics
+// lib set costs zero heap; writable files (/proc, created files, redirects) are Owned.
+static FILES: Mutex<alloc::vec::Vec<(String, alloc::borrow::Cow<'static, [u8]>)>> = Mutex::new(alloc::vec::Vec::new());
 const MAX_FD: usize = 16;
 static OPEN_FDS: Mutex<[Option<(usize, usize)>; MAX_FD]> = Mutex::new([None; MAX_FD]);
 /// Open DIRECTORY fds (Linux getdents64): (normalized dir path, cursor in the
@@ -352,7 +355,14 @@ fn reset_fd_table() {
 
 /// Register a file (path + content) so userspace can read it via open/read.
 pub fn register_file(path: &str, bytes: alloc::vec::Vec<u8>) {
-    FILES.lock().push((String::from(path), bytes));
+    FILES.lock().push((String::from(path), alloc::borrow::Cow::Owned(bytes)));
+}
+
+/// Register a file served ZERO-COPY from the kernel image (an include_bytes! slice).
+/// Use this for read-only embedded libraries/binaries so they cost no heap; a write
+/// to one would transparently clone-on-write (Cow), but the served .so's never are.
+pub fn register_file_static(path: &str, bytes: &'static [u8]) {
+    FILES.lock().push((String::from(path), alloc::borrow::Cow::Borrowed(bytes)));
 }
 
 /// Program registry: per executable path the granted capabilities and the ABI
@@ -473,8 +483,8 @@ fn ensure_proc(path: &[u8]) -> bool {
     let p = String::from_utf8_lossy(path).into_owned();
     let mut files = FILES.lock();
     match files.iter_mut().find(|(q, _)| q.as_str() == p) {
-        Some(e) => e.1 = content, // refresh existing /proc content
-        None => files.push((p, content)),
+        Some(e) => e.1 = alloc::borrow::Cow::Owned(content), // refresh existing /proc content
+        None => files.push((p, alloc::borrow::Cow::Owned(content))),
     }
     true
 }
@@ -597,10 +607,10 @@ fn vfs_open_create(path: &[u8], truncate: bool) -> u64 {
         match files.iter_mut().find(|(p, _)| p.as_bytes() == path) {
             Some((_, d)) => {
                 if truncate {
-                    d.clear();
+                    d.to_mut().clear();
                 }
             }
-            None => files.push((name.clone(), alloc::vec::Vec::new())),
+            None => files.push((name.clone(), alloc::borrow::Cow::Owned(alloc::vec::Vec::new()))),
         }
     }
     let mut dirty = DIRTY.lock();
@@ -631,7 +641,7 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
         None => return u64::MAX,
     };
     let mut files = FILES.lock();
-    let data = &mut files[fi].1;
+    let data = files[fi].1.to_mut(); // clone-on-write if this were a borrowed lib (never)
     if end > data.len() {
         data.resize(end, 0);
     }
@@ -660,7 +670,7 @@ pub fn take_dirty() -> alloc::vec::Vec<(String, alloc::vec::Vec<u8>)> {
                 files
                     .iter()
                     .find(|(q, _)| q == &p)
-                    .map(|(_, d)| (p.clone(), d.clone()))
+                    .map(|(_, d)| (p.clone(), d.to_vec()))
             })
             .collect()
     })
@@ -680,12 +690,12 @@ pub fn set_stdout_redirect(path: Option<&str>, append: bool) {
                 match files.iter().position(|(q, _)| q.as_str() == p) {
                     Some(i) => {
                         if !append {
-                            files[i].1.clear();
+                            files[i].1.to_mut().clear();
                         }
                         i
                     }
                     None => {
-                        files.push((String::from(p), alloc::vec::Vec::new()));
+                        files.push((String::from(p), alloc::borrow::Cow::Owned(alloc::vec::Vec::new())));
                         files.len() - 1
                     }
                 }
@@ -702,7 +712,7 @@ pub fn set_stdout_redirect(path: Option<&str>, append: bool) {
 
 /// Append bytes to the stdout redirection file (internal, for write/writev).
 fn redirect_append(fi: usize, bytes: &[u8]) {
-    FILES.lock()[fi].1.extend_from_slice(bytes);
+    FILES.lock()[fi].1.to_mut().extend_from_slice(bytes);
 }
 
 /// Standard input (fd 0): content + read position. The shell fills this with the

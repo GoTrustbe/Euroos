@@ -1374,39 +1374,39 @@ fn main() -> Status {
         // glibc tests themselves run LATER (after the scheduler + timer are up,
         // ~line 1760): a glibc process runs as a scheduled task so its pthreads
         // schedule fairly.
-        ring3::register_file("/lib/x86_64-linux-gnu/libc.so.6", ring3::glibc_libc_bytes().to_vec());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libc.so.6", ring3::glibc_libc_bytes());
         // A SECOND real shared library, so ld.so can resolve a multi-lib DT_NEEDED
         // chain (the Chromium path needs ~30) + runtime dlopen/dlsym of it.
-        ring3::register_file("/lib/x86_64-linux-gnu/libm.so.6", ring3::glibc_libm_bytes().to_vec());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libm.so.6", ring3::glibc_libm_bytes());
         // The C++ runtime + unwinder, so a transitive chain (exe -> libstdc++ ->
         // {libc, libm, libgcc_s}) resolves — Chromium is C++ at this scale.
-        ring3::register_file("/lib/x86_64-linux-gnu/libstdc++.so.6", ring3::glibc_libstdcpp_bytes().to_vec());
-        ring3::register_file("/lib/x86_64-linux-gnu/libgcc_s.so.1", ring3::glibc_libgccs_bytes().to_vec());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libstdc++.so.6", ring3::glibc_libstdcpp_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libgcc_s.so.1", ring3::glibc_libgccs_bytes());
         // libgmp: needed by the REAL /usr/bin/factor binary (bignum arithmetic).
-        ring3::register_file("/lib/x86_64-linux-gnu/libgmp.so.10", ring3::glibc_libgmp_bytes().to_vec());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libgmp.so.10", ring3::glibc_libgmp_bytes());
         // libcrypto (OpenSSL, 5 MB): needed by the REAL /usr/bin/sha256sum.
-        ring3::register_file("/lib/x86_64-linux-gnu/libcrypto.so.3", ring3::glibc_libcrypto_bytes().to_vec());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libcrypto.so.3", ring3::glibc_libcrypto_bytes());
         // GLib + libpcre2: the GTK/desktop-stack core library (a real Chromium dep).
-        ring3::register_file("/lib/x86_64-linux-gnu/libglib-2.0.so.0", ring3::glibc_libglib_bytes().to_vec());
-        ring3::register_file("/lib/x86_64-linux-gnu/libpcre2-8.so.0", ring3::glibc_libpcre2_bytes().to_vec());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libglib-2.0.so.0", ring3::glibc_libglib_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libpcre2-8.so.0", ring3::glibc_libpcre2_bytes());
         // zlib: universal compression, a real Chromium dep.
-        ring3::register_file("/lib/x86_64-linux-gnu/libz.so.1", ring3::glibc_libz_bytes().to_vec());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libz.so.1", ring3::glibc_libz_bytes());
         // Cairo 2D graphics stack (the vector-graphics lib GTK/Firefox render with).
         for (name, bytes) in ring3::cairo_libs() {
-            ring3::register_file(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes.to_vec());
+            ring3::register_file_static(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes);
         }
         // Pango text-layout engine (HarfBuzz shaping + GObject/GIO) — the real i18n
         // text stack GTK apps and browsers use on top of Cairo/FreeType.
         for (name, bytes) in ring3::pango_libs() {
-            ring3::register_file(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes.to_vec());
+            ring3::register_file_static(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes);
         }
         // X11 client stack: a real Xlib client + its 6 transitive libs (the GUI rung).
-        ring3::register_file("/lib/x86_64-linux-gnu/libX11.so.6", ring3::glibc_libx11_bytes().to_vec());
-        ring3::register_file("/lib/x86_64-linux-gnu/libxcb.so.1", ring3::glibc_libxcb_bytes().to_vec());
-        ring3::register_file("/lib/x86_64-linux-gnu/libXau.so.6", ring3::glibc_libxau_bytes().to_vec());
-        ring3::register_file("/lib/x86_64-linux-gnu/libXdmcp.so.6", ring3::glibc_libxdmcp_bytes().to_vec());
-        ring3::register_file("/lib/x86_64-linux-gnu/libbsd.so.0", ring3::glibc_libbsd_bytes().to_vec());
-        ring3::register_file("/lib/x86_64-linux-gnu/libmd.so.0", ring3::glibc_libmd_bytes().to_vec());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libX11.so.6", ring3::glibc_libx11_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libxcb.so.1", ring3::glibc_libxcb_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libXau.so.6", ring3::glibc_libxau_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libXdmcp.so.6", ring3::glibc_libxdmcp_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libbsd.so.0", ring3::glibc_libbsd_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libmd.so.0", ring3::glibc_libmd_bytes());
         let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
         serial_println!(
             "[h3] dyntest (dynamically linked) done: exit={h3_exit}, output={:?}",
@@ -1903,7 +1903,7 @@ fn main() -> Status {
         // gcairotext: Cairo + FreeType TEXT — real font rasterization. Serve the TTF;
         // the client FT_New_Face's it (via the VFS), makes a cairo font face, and
         // cairo_show_text's — the last piece before real UI widgets.
-        ring3::register_file("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", ring3::dejavu_ttf_bytes().to_vec());
+        ring3::register_file_static("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", ring3::dejavu_ttf_bytes());
         xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
         let (oct, ect) = ring3::run_glibc(&mut allocator, ring3::gcairotext_bytes(), ring3::ldlinux_bytes(), &[b"gcairotext"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
         xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
