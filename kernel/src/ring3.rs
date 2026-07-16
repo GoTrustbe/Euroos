@@ -2196,6 +2196,10 @@ static REAL_WC_ELF: &[u8] = include_bytes!("../../userland/glibc/wc");
 // REAL crypto tool: sha256sum needs the big (5 MB) libcrypto.so.3.
 static GLIBC_LIBCRYPTO: &[u8] = include_bytes!("../../userland/glibc/libcrypto.so.3");
 static REAL_SHA256_ELF: &[u8] = include_bytes!("../../userland/glibc/sha256sum");
+// GLib (the GTK/desktop-stack core lib) + its DT_NEEDED libpcre2. A GHashTable test.
+static GLIBC_LIBGLIB: &[u8] = include_bytes!("../../userland/glibc/libglib-2.0.so.0");
+static GLIBC_LIBPCRE2: &[u8] = include_bytes!("../../userland/glibc/libpcre2-8.so.0");
+static GGLIB_ELF: &[u8] = include_bytes!("../../userland/glibc/gglib");
 // Address-space-scaling test: mallocs + touches 200 MiB (needs a big arena).
 static GBIG_ELF: &[u8] = include_bytes!("../../userland/glibc/gbig");
 // pthread mutex + condition-variable producer/consumer (deep futex exercise).
@@ -2232,6 +2236,10 @@ pub fn real_base64_bytes() -> &'static [u8] { REAL_BASE64_ELF }
 pub fn real_wc_bytes() -> &'static [u8] { REAL_WC_ELF }
 pub fn glibc_libcrypto_bytes() -> &'static [u8] { GLIBC_LIBCRYPTO }
 pub fn real_sha256_bytes() -> &'static [u8] { REAL_SHA256_ELF }
+pub fn glibc_libglib_bytes() -> &'static [u8] { GLIBC_LIBGLIB }
+pub fn glibc_libpcre2_bytes() -> &'static [u8] { GLIBC_LIBPCRE2 }
+/// A GLib GHashTable test (the desktop-stack core library + transitive libpcre2).
+pub fn gglib_bytes() -> &'static [u8] { GGLIB_ELF }
 /// A large-heap test (mallocs + touches 200 MiB) for address-space scaling.
 pub fn gbig_bytes() -> &'static [u8] { GBIG_ELF }
 /// A pthread mutex + condvar producer/consumer test (deep futex exercise).

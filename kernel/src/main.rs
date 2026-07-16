@@ -1385,6 +1385,9 @@ fn main() -> Status {
         ring3::register_file("/lib/x86_64-linux-gnu/libgmp.so.10", ring3::glibc_libgmp_bytes().to_vec());
         // libcrypto (OpenSSL, 5 MB): needed by the REAL /usr/bin/sha256sum.
         ring3::register_file("/lib/x86_64-linux-gnu/libcrypto.so.3", ring3::glibc_libcrypto_bytes().to_vec());
+        // GLib + libpcre2: the GTK/desktop-stack core library (a real Chromium dep).
+        ring3::register_file("/lib/x86_64-linux-gnu/libglib-2.0.so.0", ring3::glibc_libglib_bytes().to_vec());
+        ring3::register_file("/lib/x86_64-linux-gnu/libpcre2-8.so.0", ring3::glibc_libpcre2_bytes().to_vec());
         let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
         serial_println!(
             "[h3] dyntest (dynamically linked) done: exit={h3_exit}, output={:?}",
@@ -1796,6 +1799,11 @@ fn main() -> Status {
         let (o14, e14) = ring3::run_glibc(&mut allocator, ring3::gfile_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gfile"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] gfile (file I/O roundtrip): exit={e14}");
         for l in o14.lines() { serial_println!("[glibc]   {l}"); }
+        // gglib: GLib GHashTable — a core GTK/desktop-stack library (real Chromium
+        // dep) with a transitive chain gglib -> libglib -> {libc, libm, libpcre2}.
+        let (o15, e15) = ring3::run_glibc(&mut allocator, ring3::gglib_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gglib"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gglib (GLib GHashTable): exit={e15}");
+        for l in o15.lines() { serial_println!("[glibc]   {l}"); }
         // (Reclamation validated out-of-band: 30 mixed runs incl. threaded kept the
         // task table at index 31 with free_frames stable — see commit notes.)
     }
