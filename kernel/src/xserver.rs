@@ -160,24 +160,35 @@ pub fn pump_keyboard() {
 /// Pump REAL mouse input into X ButtonPress events. Consumes a left-button press
 /// latch from the mouse driver and delivers ButtonPress(button 1) to a window that
 /// selected it, with the click position. Called from the run_glibc wait loop.
+static LAST_MOUSE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
 pub fn pump_mouse() {
+    // ButtonPressMask(0x4) or PointerMotionMask(0x40) selected by any mapped window?
     let wants = {
         let t = XCONNS.lock();
-        t.iter().flatten().any(|c| c.windows.iter().any(|w| w.mapped && w.event_mask & 0x4 != 0))
+        t.iter().flatten().any(|c| c.windows.iter().any(|w| w.mapped && w.event_mask & 0x44 != 0))
     };
     if !wants {
         return;
     }
+    // Left-button press -> ButtonPress(1).
     if let Some((mx, my)) = crate::mouse::take_press() {
         let mut t = XCONNS.lock();
         for conn in t.iter_mut().flatten() {
-            let wid = conn
-                .windows
-                .iter()
-                .find(|w| w.mapped && w.event_mask & 0x4 != 0)
-                .map(|w| w.id);
+            let wid = conn.windows.iter().find(|w| w.mapped && w.event_mask & 0x4 != 0).map(|w| w.id);
             if let Some(wid) = wid {
                 send_input(conn, 4, 1, wid, mx as i16, my as i16); // ButtonPress, button 1
+            }
+        }
+    }
+    // Cursor moved -> MotionNotify(6) (button field 0).
+    let (px, py) = crate::mouse::pos();
+    let packed = ((px as u32 & 0xffff) << 16) | (py as u32 & 0xffff);
+    if LAST_MOUSE.swap(packed, core::sync::atomic::Ordering::Relaxed) != packed {
+        let mut t = XCONNS.lock();
+        for conn in t.iter_mut().flatten() {
+            let wid = conn.windows.iter().find(|w| w.mapped && w.event_mask & 0x40 != 0).map(|w| w.id);
+            if let Some(wid) = wid {
+                send_input(conn, 6, 0, wid, px as i16, py as i16); // MotionNotify
             }
         }
     }
