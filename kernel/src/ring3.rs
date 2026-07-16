@@ -2232,6 +2232,8 @@ static GX11_ELF: &[u8] = include_bytes!("../../userland/glibc/gx11");
 static GXDRAW_ELF: &[u8] = include_bytes!("../../userland/glibc/gxdraw");
 static GXIMG_ELF: &[u8] = include_bytes!("../../userland/glibc/gximg");
 static GXEVENT_ELF: &[u8] = include_bytes!("../../userland/glibc/gxevent");
+static GXKEY_ELF: &[u8] = include_bytes!("../../userland/glibc/gxkey");
+static GXWIN_ELF: &[u8] = include_bytes!("../../userland/glibc/gxwin");
 // File I/O roundtrip test (open O_CREAT|write, reopen|read, verify).
 static GFILE_ELF: &[u8] = include_bytes!("../../userland/glibc/gfile");
 // REAL /usr/bin/sort (stdin filter; reuses the already-served libcrypto).
@@ -2296,6 +2298,10 @@ pub fn gxdraw_bytes() -> &'static [u8] { GXDRAW_ELF }
 pub fn gximg_bytes() -> &'static [u8] { GXIMG_ELF }
 /// An Xlib client that selects input + reacts to events (Expose/Key/Button).
 pub fn gxevent_bytes() -> &'static [u8] { GXEVENT_ELF }
+/// An Xlib client that waits for REAL keyboard input (routed from PS/2).
+pub fn gxkey_bytes() -> &'static [u8] { GXKEY_ELF }
+/// The combined X11 client: connect+window+fill+PutImage+events+real-keyboard.
+pub fn gxwin_bytes() -> &'static [u8] { GXWIN_ELF }
 /// The real /usr/bin/sort (stdin line sorter).
 pub fn real_sort_bytes() -> &'static [u8] { REAL_SORT_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
@@ -3706,6 +3712,9 @@ pub fn run_glibc(
     // The launcher (boot task) waits, yielding so the glibc tasks get the CPU.
     let deadline = crate::interrupts::ticks() + GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
     while !GLIBC_DONE.load(Ordering::Relaxed) && crate::interrupts::ticks() < deadline {
+        // Route real keyboard input into X events for a running X client (no-op
+        // unless one has a key-selecting window mapped).
+        crate::xserver::pump_keyboard();
         // Sleep a tick; the timer then switches to the runnable glibc tasks. (The
         // wait stays timer-driven to match the non-preemptive, IF=0 syscall model.)
         crate::sched::sleep_ticks(1);

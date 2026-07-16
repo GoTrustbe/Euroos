@@ -124,6 +124,39 @@ pub fn readable(fd: u64) -> bool {
         .unwrap_or(false)
 }
 
+/// Pump REAL keyboard input into X key events. Pops PS/2 scancodes and delivers a
+/// KeyPress(2)/KeyRelease(3) to every connection whose mapped window selected that
+/// event (X keycode = scancode + 8). Called from the run_glibc wait loop while an X
+/// client is up — this is how live hardware input reaches an X window (vs. the
+/// injected self-test events). No-op (pops nothing) unless a window wants keys.
+pub fn pump_keyboard() {
+    // Fast path: only touch the scancode ring if some window actually wants keys.
+    let wants = {
+        let t = XCONNS.lock();
+        t.iter().flatten().any(|c| c.windows.iter().any(|w| w.mapped && w.event_mask & 0x3 != 0))
+    };
+    if !wants {
+        return;
+    }
+    while let Some(sc) = crate::ps2::poll_scancode() {
+        let pressed = sc & 0x80 == 0;
+        let keycode = (sc & 0x7f) + 8; // X keycode = PS/2 scancode + 8
+        let want: u32 = if pressed { 0x1 } else { 0x2 }; // KeyPress / KeyRelease mask
+        let kind: u8 = if pressed { 2 } else { 3 };
+        let mut t = XCONNS.lock();
+        for conn in t.iter_mut().flatten() {
+            let wid = conn
+                .windows
+                .iter()
+                .find(|w| w.mapped && w.event_mask & want != 0)
+                .map(|w| w.id);
+            if let Some(wid) = wid {
+                send_input(conn, kind, keycode, wid, 0, 0);
+            }
+        }
+    }
+}
+
 fn trace(args: core::fmt::Arguments) {
     if TRACE.load(core::sync::atomic::Ordering::Relaxed) {
         crate::serial_println!("[xserver] {args}");
