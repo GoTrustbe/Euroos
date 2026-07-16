@@ -379,6 +379,92 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             }
             present(c, draw);
         }
+        // GetSelectionOwner(23): report None (0) — no selection owner. GTK checks the
+        // clipboard/WM/CM selections at startup; None is a valid answer.
+        23 => {
+            let mut r = reply_header(c, 0);
+            wr32(c, &mut r, 8, 0); // owner = None
+            c.outbuf.extend_from_slice(&r);
+        }
+        // GetGeometry(14): drawable@4. Reply: depth in r[1], root, x,y,w,h,border.
+        14 => {
+            let id = ru32(c, req, 4);
+            let (x, y, w, h) = c.windows.iter().find(|w| w.id == id)
+                .map(|win| (win.x, win.y, win.w, win.h))
+                .unwrap_or((0, 0, SCREEN_W, SCREEN_H));
+            let mut r = reply_header(c, 0);
+            r[1] = 24; // depth
+            wr32(c, &mut r, 8, ROOT_WINDOW); // root
+            put16(c, &mut r, 12, x as u16);
+            put16(c, &mut r, 14, y as u16);
+            put16(c, &mut r, 16, w);
+            put16(c, &mut r, 18, h);
+            put16(c, &mut r, 20, 0); // border width
+            c.outbuf.extend_from_slice(&r);
+        }
+        // QueryTree(15): root, parent=None, no children.
+        15 => {
+            let mut r = reply_header(c, 0);
+            wr32(c, &mut r, 8, ROOT_WINDOW);  // root
+            wr32(c, &mut r, 12, 0);           // parent = None
+            put16(c, &mut r, 16, 0);          // number of children
+            c.outbuf.extend_from_slice(&r);
+        }
+        // GetWindowAttributes(3): a plausible InputOutput/Viewable window on our one
+        // TrueColor visual. Reply is 3 extra 4-byte units (44 bytes total).
+        3 => {
+            let id = ru32(c, req, 4);
+            let mapped = c.windows.iter().find(|w| w.id == id).map(|w| w.mapped).unwrap_or(true);
+            let mut r = reply_header(c, 3);
+            r[1] = 0; // backing-store = NotUseful
+            wr32(c, &mut r, 8, ROOT_VISUAL);          // visual
+            put16(c, &mut r, 12, 1);                  // class = InputOutput
+            r[14] = 0;                                // bit gravity = Forget
+            r[15] = 1;                                // win gravity = NorthWest
+            wr32(c, &mut r, 16, 0);                   // backing planes
+            wr32(c, &mut r, 20, 0);                   // backing pixel
+            r[24] = 0;                                // save-under
+            r[25] = 1;                                // map-is-installed
+            r[26] = if mapped { 2 } else { 0 };       // map-state = Viewable/Unmapped
+            r[27] = 0;                                // override-redirect
+            wr32(c, &mut r, 28, DEFAULT_CMAP);        // colormap
+            wr32(c, &mut r, 32, 0);                   // all-event-masks
+            wr32(c, &mut r, 36, 0);                   // your-event-mask
+            put16(c, &mut r, 40, 0);                  // do-not-propagate-mask
+            c.outbuf.extend_from_slice(&r);
+        }
+        // QueryPointer(38): pointer on root, at the live mouse position, no buttons.
+        38 => {
+            let (mx, my) = crate::mouse::pos();
+            let mut r = reply_header(c, 0);
+            r[1] = 1; // same-screen = true
+            wr32(c, &mut r, 8, ROOT_WINDOW);   // root
+            wr32(c, &mut r, 12, 0);            // child = None
+            put16(c, &mut r, 16, mx as u16);   // root-x
+            put16(c, &mut r, 18, my as u16);   // root-y
+            put16(c, &mut r, 20, mx as u16);   // win-x
+            put16(c, &mut r, 22, my as u16);   // win-y
+            put16(c, &mut r, 24, 0);           // mask (buttons/mods)
+            c.outbuf.extend_from_slice(&r);
+        }
+        // TranslateCoordinates(40): src-x@12(i16), src-y@14 → echo (windows share the
+        // root's coordinate space here). child = None.
+        40 => {
+            let sx = ru16(c, req, 12);
+            let sy = ru16(c, req, 14);
+            let mut r = reply_header(c, 0);
+            r[1] = 1; // same-screen
+            wr32(c, &mut r, 8, 0); // child = None
+            put16(c, &mut r, 12, sx);
+            put16(c, &mut r, 14, sy);
+            c.outbuf.extend_from_slice(&r);
+        }
+        // GetMotionEvents(39): no history.
+        39 => {
+            let mut r = reply_header(c, 0);
+            wr32(c, &mut r, 8, 0); // number of events = 0
+            c.outbuf.extend_from_slice(&r);
+        }
         // Everything else (no reply): acknowledged by consuming the request.
         _ => {}
     }

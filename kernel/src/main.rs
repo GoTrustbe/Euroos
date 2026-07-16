@@ -1400,6 +1400,11 @@ fn main() -> Status {
         for (name, bytes) in ring3::pango_libs() {
             ring3::register_file_static(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes);
         }
+        // GTK3 toolkit chain (gtk/gdk/gdk-pixbuf/atk + X11 extension client libs) —
+        // the real widget toolkit. Served zero-copy; the runtime test is ggtk.
+        for (name, bytes) in ring3::gtk_libs() {
+            ring3::register_file_static(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes);
+        }
         // X11 client stack: a real Xlib client + its 6 transitive libs (the GUI rung).
         ring3::register_file_static("/lib/x86_64-linux-gnu/libX11.so.6", ring3::glibc_libx11_bytes());
         ring3::register_file_static("/lib/x86_64-linux-gnu/libxcb.so.1", ring3::glibc_libxcb_bytes());
@@ -1909,6 +1914,27 @@ fn main() -> Status {
         xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
         serial_println!("[glibc] gcairotext (Cairo+FreeType text): exit={ect}");
         for l in oct.lines() { serial_println!("[glibc]   {l}"); }
+
+        // ggtk: PROBE — a real GTK3 toolkit app (gtk_init + window + label + gtk_main).
+        // This is the first real widget-toolkit run; GTK drives the X server hard
+        // (extension queries, properties, XRender, input). Bounded deadline so a hang
+        // in GTK init (an X request/reply we don't yet serve) does NOT stall boot; X
+        // TRACE on to reveal exactly where it walls. Fontconfig config already served.
+        {
+            ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <dir>/usr/share/fonts</dir>\n</fontconfig>\n".to_vec());
+            serial_println!("[glibc] === GTK3 toolkit probe (ggtk) ===");
+            ring3::GLIBC_DEADLINE_TICKS.store(2_000, core::sync::atomic::Ordering::Relaxed);
+            // GTK pulls ~40 libraries; the default 96 MiB arena's mmap window is too
+            // small to map them all. Give this run a 384 MiB arena.
+            ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed);
+            xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+            let (ogtk, egtk) = ring3::run_glibc(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net);
+            xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
+            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+            ring3::GLIBC_DEADLINE_TICKS.store(12_000, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[glibc] ggtk (GTK3 toolkit): exit={egtk}");
+            for l in ogtk.lines() { serial_println!("[glibc]   {l}"); }
+        }
 
         // LAUNCH A PERSISTENT, LIVE X APP that runs ALONGSIDE the desktop: gxlive is
         // a real Xlib event-loop client (key = colour, click = move). It owns the

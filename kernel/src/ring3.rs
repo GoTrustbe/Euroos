@@ -2401,6 +2401,74 @@ pub fn pango_libs() -> [(&'static str, &'static [u8]); 15] {
 }
 /// A real Pango + HarfBuzz text-layout client (renders shaped text via cairo→X11).
 pub fn gpango_bytes() -> &'static [u8] { GPANGO_ELF }
+
+// GTK3 toolkit chain (27 libs) — served zero-copy via register_file_static.
+static GTK_LIBATK_1_0: &[u8] = include_bytes!("../../userland/glibc/libatk-1.0.so.0");
+static GTK_LIBATK_BRIDGE_2_0: &[u8] = include_bytes!("../../userland/glibc/libatk-bridge-2.0.so.0");
+static GTK_LIBATSPI: &[u8] = include_bytes!("../../userland/glibc/libatspi.so.0");
+static GTK_LIBCAP: &[u8] = include_bytes!("../../userland/glibc/libcap.so.2");
+static GTK_LIBDBUS_1: &[u8] = include_bytes!("../../userland/glibc/libdbus-1.so.3");
+static GTK_LIBEPOXY: &[u8] = include_bytes!("../../userland/glibc/libepoxy.so.0");
+static GTK_LIBGCRYPT: &[u8] = include_bytes!("../../userland/glibc/libgcrypt.so.20");
+static GTK_LIBGDK_3: &[u8] = include_bytes!("../../userland/glibc/libgdk-3.so.0");
+static GTK_LIBGDK_PIXBUF_2_0: &[u8] = include_bytes!("../../userland/glibc/libgdk_pixbuf-2.0.so.0");
+static GTK_LIBGPG_ERROR: &[u8] = include_bytes!("../../userland/glibc/libgpg-error.so.0");
+static GTK_LIBGTK_3: &[u8] = include_bytes!("../../userland/glibc/libgtk-3.so.0");
+static GTK_LIBJPEG: &[u8] = include_bytes!("../../userland/glibc/libjpeg.so.8");
+static GTK_LIBLZ4: &[u8] = include_bytes!("../../userland/glibc/liblz4.so.1");
+static GTK_LIBLZMA: &[u8] = include_bytes!("../../userland/glibc/liblzma.so.5");
+static GTK_LIBSYSTEMD: &[u8] = include_bytes!("../../userland/glibc/libsystemd.so.0");
+static GTK_LIBWAYLAND_CLIENT: &[u8] = include_bytes!("../../userland/glibc/libwayland-client.so.0");
+static GTK_LIBWAYLAND_CURSOR: &[u8] = include_bytes!("../../userland/glibc/libwayland-cursor.so.0");
+static GTK_LIBWAYLAND_EGL: &[u8] = include_bytes!("../../userland/glibc/libwayland-egl.so.1");
+static GTK_LIBXCOMPOSITE: &[u8] = include_bytes!("../../userland/glibc/libXcomposite.so.1");
+static GTK_LIBXCURSOR: &[u8] = include_bytes!("../../userland/glibc/libXcursor.so.1");
+static GTK_LIBXDAMAGE: &[u8] = include_bytes!("../../userland/glibc/libXdamage.so.1");
+static GTK_LIBXFIXES: &[u8] = include_bytes!("../../userland/glibc/libXfixes.so.3");
+static GTK_LIBXINERAMA: &[u8] = include_bytes!("../../userland/glibc/libXinerama.so.1");
+static GTK_LIBXI: &[u8] = include_bytes!("../../userland/glibc/libXi.so.6");
+static GTK_LIBXKBCOMMON: &[u8] = include_bytes!("../../userland/glibc/libxkbcommon.so.0");
+static GTK_LIBXRANDR: &[u8] = include_bytes!("../../userland/glibc/libXrandr.so.2");
+static GTK_LIBZSTD: &[u8] = include_bytes!("../../userland/glibc/libzstd.so.1");
+
+static GTK_LIBCAIRO_GOBJECT: &[u8] = include_bytes!("../../userland/glibc/libcairo-gobject.so.2");
+static GGTK_ELF: &[u8] = include_bytes!("../../userland/glibc/ggtk");
+
+/// The GTK3 toolkit library chain (27 libs), served zero-copy from the image.
+pub fn gtk_libs() -> [(&'static str, &'static [u8]); 28] {
+    [
+        ("libcairo-gobject.so.2", GTK_LIBCAIRO_GOBJECT),
+        ("libatk-1.0.so.0", GTK_LIBATK_1_0),
+        ("libatk-bridge-2.0.so.0", GTK_LIBATK_BRIDGE_2_0),
+        ("libatspi.so.0", GTK_LIBATSPI),
+        ("libcap.so.2", GTK_LIBCAP),
+        ("libdbus-1.so.3", GTK_LIBDBUS_1),
+        ("libepoxy.so.0", GTK_LIBEPOXY),
+        ("libgcrypt.so.20", GTK_LIBGCRYPT),
+        ("libgdk-3.so.0", GTK_LIBGDK_3),
+        ("libgdk_pixbuf-2.0.so.0", GTK_LIBGDK_PIXBUF_2_0),
+        ("libgpg-error.so.0", GTK_LIBGPG_ERROR),
+        ("libgtk-3.so.0", GTK_LIBGTK_3),
+        ("libjpeg.so.8", GTK_LIBJPEG),
+        ("liblz4.so.1", GTK_LIBLZ4),
+        ("liblzma.so.5", GTK_LIBLZMA),
+        ("libsystemd.so.0", GTK_LIBSYSTEMD),
+        ("libwayland-client.so.0", GTK_LIBWAYLAND_CLIENT),
+        ("libwayland-cursor.so.0", GTK_LIBWAYLAND_CURSOR),
+        ("libwayland-egl.so.1", GTK_LIBWAYLAND_EGL),
+        ("libXcomposite.so.1", GTK_LIBXCOMPOSITE),
+        ("libXcursor.so.1", GTK_LIBXCURSOR),
+        ("libXdamage.so.1", GTK_LIBXDAMAGE),
+        ("libXfixes.so.3", GTK_LIBXFIXES),
+        ("libXinerama.so.1", GTK_LIBXINERAMA),
+        ("libXi.so.6", GTK_LIBXI),
+        ("libxkbcommon.so.0", GTK_LIBXKBCOMMON),
+        ("libXrandr.so.2", GTK_LIBXRANDR),
+        ("libzstd.so.1", GTK_LIBZSTD),
+    ]
+}
+pub fn ggtk_bytes() -> &'static [u8] { GGTK_ELF }
+
 /// The real /usr/bin/sort (stdin line sorter).
 pub fn real_sort_bytes() -> &'static [u8] { REAL_SORT_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
@@ -3771,13 +3839,32 @@ pub fn run_glibc(
     // Arena size (MiB): default 96 (ld.so + libc + heap + stack). Tunable via
     // GLIBC_ARENA_MIB so a large program can get a bigger identity-mapped span —
     // the address-space-scaling knob toward Chromium's hundreds of MB.
-    let arena_mib: u64 = GLIBC_ARENA_MIB.load(Ordering::Relaxed);
+    let want_mib: u64 = GLIBC_ARENA_MIB.load(Ordering::Relaxed);
+    // Try the requested span; if that many CONTIGUOUS frames aren't available (RAM gets
+    // fragmented by many alloc/free cycles across a boot), fall back to progressively
+    // smaller spans down to a 64 MiB floor, so a big program still gets the largest
+    // arena on offer instead of failing outright.
+    let (arena, arena_mib) = {
+        let mut got = None;
+        let mut mib = want_mib;
+        while mib >= 64 {
+            let f = ((mib / 2) * 512) as usize;
+            if let Ok(a) = falloc.allocate_aligned(f, 512) {
+                got = Some((a, mib));
+                break;
+            }
+            mib /= 2;
+        }
+        match got {
+            Some(v) => v,
+            None => return (String::from("(no arena for glibc)"), u64::MAX),
+        }
+    };
+    if arena_mib != want_mib {
+        crate::serial_println!("[glibc] arena: {want_mib} MiB unavailable (fragmented) -> using {arena_mib} MiB");
+    }
     let nblocks = arena_mib / 2;
     let frames = (nblocks * 512) as usize;
-    let arena = match falloc.allocate_aligned(frames, 512) {
-        Ok(a) => a,
-        Err(_) => return (String::from("(no arena for glibc)"), u64::MAX),
-    };
     // Zero the whole arena. Frames are RECYCLED between runs (we free the arena on
     // exit), so without this a run would see the PREVIOUS program's leftover data
     // where it expects zeros — ld.so read stale bytes and tripped its link-map
