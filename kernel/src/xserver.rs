@@ -253,8 +253,55 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             trace(format_args!("PolyFillRectangle draw={draw:#x} gc={gcid:#x} fg={fg:#08x}"));
             present(c, draw);
         }
+        // PutImage(72): upload a raster into a drawable. format(detail): 2=ZPixmap.
+        // drawable@4, gc@8, width@12(u16), height@14, dst-x@16(i16), dst-y@18,
+        // left-pad@20, depth@21, image data@24. For ZPixmap depth>=24 (32 bpp) each
+        // pixel is 4 bytes, LSBFirst (0x00RRGGBB). This is how toolkits/fonts draw.
+        72 => {
+            let draw = ru32(c, req, 4);
+            let width = ru16(c, req, 12) as usize;
+            let height = ru16(c, req, 14) as usize;
+            let dst_x = ru16(c, req, 16) as i16 as i32;
+            let dst_y = ru16(c, req, 18) as i16 as i32;
+            let data = &req[24.min(req.len())..];
+            if detail == 2 && width > 0 && height > 0 {
+                put_image(c, draw, dst_x, dst_y, width, height, data);
+            }
+            trace(format_args!("PutImage draw={draw:#x} fmt={detail} {width}x{height} @({dst_x},{dst_y})"));
+            // Verify: sample the four quadrant centres in the rendered window.
+            if let Some(win) = c.windows.iter().find(|w| w.id == draw) {
+                let (ww, wh) = (win.w as usize, win.h as usize);
+                let at = |x: usize, y: usize| win.buf.get(y * ww + x).copied().unwrap_or(0);
+                trace(format_args!(
+                    "PutImage quadrants TL={:#08x} TR={:#08x} BL={:#08x} BR={:#08x}",
+                    at(ww / 4, wh / 4), at(ww * 3 / 4, wh / 4), at(ww / 4, wh * 3 / 4), at(ww * 3 / 4, wh * 3 / 4)
+                ));
+            }
+            present(c, draw);
+        }
         // Everything else (no reply): acknowledged by consuming the request.
         _ => {}
+    }
+}
+
+/// Copy a ZPixmap (32-bpp, LSBFirst) into the target window buffer, clipped.
+fn put_image(c: &mut XConn, draw: u32, dst_x: i32, dst_y: i32, w: usize, h: usize, data: &[u8]) {
+    if let Some(win) = c.windows.iter_mut().find(|win| win.id == draw) {
+        let ww = win.w as i32;
+        let wh = win.h as i32;
+        let stride = w * 4; // 32 bpp, scanline already 4-aligned
+        for sy in 0..h {
+            let dy = dst_y + sy as i32;
+            if dy < 0 || dy >= wh { continue; }
+            for sx in 0..w {
+                let dx = dst_x + sx as i32;
+                if dx < 0 || dx >= ww { continue; }
+                let o = sy * stride + sx * 4;
+                if o + 4 > data.len() { break; }
+                let px = u32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]);
+                win.buf[(dy * ww + dx) as usize] = 0xff00_0000 | (px & 0x00ff_ffff);
+            }
+        }
     }
 }
 
