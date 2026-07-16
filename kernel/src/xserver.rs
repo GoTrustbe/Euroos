@@ -157,6 +157,32 @@ pub fn pump_keyboard() {
     }
 }
 
+/// Pump REAL mouse input into X ButtonPress events. Consumes a left-button press
+/// latch from the mouse driver and delivers ButtonPress(button 1) to a window that
+/// selected it, with the click position. Called from the run_glibc wait loop.
+pub fn pump_mouse() {
+    let wants = {
+        let t = XCONNS.lock();
+        t.iter().flatten().any(|c| c.windows.iter().any(|w| w.mapped && w.event_mask & 0x4 != 0))
+    };
+    if !wants {
+        return;
+    }
+    if let Some((mx, my)) = crate::mouse::take_press() {
+        let mut t = XCONNS.lock();
+        for conn in t.iter_mut().flatten() {
+            let wid = conn
+                .windows
+                .iter()
+                .find(|w| w.mapped && w.event_mask & 0x4 != 0)
+                .map(|w| w.id);
+            if let Some(wid) = wid {
+                send_input(conn, 4, 1, wid, mx as i16, my as i16); // ButtonPress, button 1
+            }
+        }
+    }
+}
+
 fn trace(args: core::fmt::Arguments) {
     if TRACE.load(core::sync::atomic::Ordering::Relaxed) {
         crate::serial_println!("[xserver] {args}");

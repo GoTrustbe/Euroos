@@ -1835,6 +1835,10 @@ fn main() -> Status {
         ps2::push_scancode(0x1e); // 'a'  ->  X KeyPress via ps2 ring -> pump
         ps2::push_scancode(0x30); // 'b'
         ps2::push_scancode(0x2e); // 'c'
+        // Stage a left-mouse-button press (PS/2 mouse packets: [flags, dx, dy]); the
+        // 0->1 edge latches a press that pump_mouse() delivers as an X ButtonPress.
+        mouse::push_byte(0x08); mouse::push_byte(0); mouse::push_byte(0); // buttons up
+        mouse::push_byte(0x09); mouse::push_byte(0); mouse::push_byte(0); // left down
         xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
         let (ox, ex) = ring3::run_glibc(&mut allocator, ring3::gxwin_bytes(), ring3::ldlinux_bytes(), &[b"gxwin"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
         xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);

@@ -3712,9 +3712,10 @@ pub fn run_glibc(
     // The launcher (boot task) waits, yielding so the glibc tasks get the CPU.
     let deadline = crate::interrupts::ticks() + GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
     while !GLIBC_DONE.load(Ordering::Relaxed) && crate::interrupts::ticks() < deadline {
-        // Route real keyboard input into X events for a running X client (no-op
-        // unless one has a key-selecting window mapped).
+        // Route real keyboard + mouse input into X events for a running X client
+        // (no-op unless one has an input-selecting window mapped).
         crate::xserver::pump_keyboard();
+        crate::xserver::pump_mouse();
         // Sleep a tick; the timer then switches to the runnable glibc tasks. (The
         // wait stays timer-driven to match the non-preemptive, IF=0 syscall model.)
         crate::sched::sleep_ticks(1);

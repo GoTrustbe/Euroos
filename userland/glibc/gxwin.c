@@ -30,7 +30,7 @@ int main(void){
     if(!d){ printf("GXWIN: XOpenDisplay NULL\n"); fflush(stdout); _exit(7); }
     int s = XDefaultScreen(d);
     Window w = XCreateSimpleWindow(d, XDefaultRootWindow(d), 0,0, 300,200, 0,0, 0x181818);
-    XSelectInput(d, w, 0x8000 | 0x1);         /* Exposure | KeyPress */
+    XSelectInput(d, w, 0x8000 | 0x1 | 0x4);  /* Exposure|KeyPress|ButtonPress */
     XMapWindow(d, w);
     GC gc = XCreateGC(d, w, 0, 0);
     XSetForeground(d, gc, 0x3366cc);
@@ -45,18 +45,17 @@ int main(void){
     XPutImage(d, w, gc, img, 0,0, 90,130, IW, IH);
     XFlush(d);
     printf("GXWIN: window mapped, filled, PutImage done; waiting for events...\n"); fflush(stdout);
-    int expose=0, keys=0, tries=0; char ev[256];
-    while((!expose || keys<3) && tries<400){
+    int expose=0, keys=0, button=0, tries=0; char ev[256];
+    while((!expose || keys<3 || button<1) && tries<400){
         if(XPending(d) > 0){
             XNextEvent(d, ev);
             int t = *(int*)ev;
-            if(t==12) expose=1; else if(t==2) keys++;
+            if(t==12) expose=1; else if(t==2) keys++; else if(t==4) button++;
         } else { for(volatile int i=0;i<150000;i++) ; tries++; }
     }
-    printf("GXWIN: connect=1 render+putimage=1 expose=%d keys=%d -> %s\n",
-           expose, keys, (expose && keys>=3) ? "PASS":"PARTIAL");
+    printf("GXWIN: connect=1 render+putimage=1 expose=%d keys=%d button=%d -> %s\n", expose, keys, button, (expose && keys>=3 && button>=1) ? "PASS":"PARTIAL");
     fflush(stdout);
     for(volatile long i=0;i<20000000;i++) ;   /* hold for a screenshot */
     XCloseDisplay(d);
-    _exit((expose && keys>=3) ? 90 : 1);
+    _exit((expose && keys>=3 && button>=1) ? 90 : 1);
 }
