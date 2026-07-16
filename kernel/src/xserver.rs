@@ -275,8 +275,11 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             let id = ru32(c, req, 4);
             let x = ru16(c, req, 12) as i16;
             let y = ru16(c, req, 14) as i16;
-            let w = ru16(c, req, 16).max(1);
-            let h = ru16(c, req, 18).max(1);
+            // Clamp to the screen: GTK creates windows at 0x7fff (size-unset) before it
+            // allocates them; a literal 460x32767 backing buffer would be a ~60 MiB
+            // kernel-heap allocation for a window that is never that big on screen.
+            let w = ru16(c, req, 16).clamp(1, SCREEN_W);
+            let h = ru16(c, req, 18).clamp(1, SCREEN_H);
             let buf = alloc::vec![0xff20_2020u32; w as usize * h as usize]; // opaque dark
             // CreateWindow can carry an event-mask too (value-mask @28, CWEventMask=0x800).
             let em = win_event_mask(c, req, 28, 32);

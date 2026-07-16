@@ -1915,27 +1915,6 @@ fn main() -> Status {
         serial_println!("[glibc] gcairotext (Cairo+FreeType text): exit={ect}");
         for l in oct.lines() { serial_println!("[glibc]   {l}"); }
 
-        // ggtk: PROBE — a real GTK3 toolkit app (gtk_init + window + label + gtk_main).
-        // This is the first real widget-toolkit run; GTK drives the X server hard
-        // (extension queries, properties, XRender, input). Bounded deadline so a hang
-        // in GTK init (an X request/reply we don't yet serve) does NOT stall boot; X
-        // TRACE on to reveal exactly where it walls. Fontconfig config already served.
-        {
-            ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <dir>/usr/share/fonts</dir>\n</fontconfig>\n".to_vec());
-            serial_println!("[glibc] === GTK3 toolkit probe (ggtk) ===");
-            ring3::GLIBC_DEADLINE_TICKS.store(9_000, core::sync::atomic::Ordering::Relaxed);
-            // GTK pulls ~40 libraries; the default 96 MiB arena's mmap window is too
-            // small to map them all. Give this run a 384 MiB arena.
-            ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed);
-            xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
-            let (ogtk, egtk) = ring3::run_glibc(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net);
-            xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
-            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
-            ring3::GLIBC_DEADLINE_TICKS.store(12_000, core::sync::atomic::Ordering::Relaxed);
-            serial_println!("[glibc] ggtk (GTK3 toolkit): exit={egtk}");
-            for l in ogtk.lines() { serial_println!("[glibc]   {l}"); }
-        }
-
         // LAUNCH A PERSISTENT, LIVE X APP that runs ALONGSIDE the desktop: gxlive is
         // a real Xlib event-loop client (key = colour, click = move). It owns the
         // screen (its window is painted by the X server); the desktop loop pumps live
@@ -1976,6 +1955,24 @@ fn main() -> Status {
             xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
             serial_println!("[glibc] gpango (Pango+HarfBuzz layout): exit={epo}");
             for l in opo.lines() { serial_println!("[glibc]   {l}"); }
+        }
+
+        // ggtk: a REAL GTK3 toolkit app (gtk_init + window with a label + button, then a
+        // GMainLoop polling the eventfd wakeup + the X connection). Proves the GNOME
+        // toolkit runs end to end on EuroOS. It self-quits after ~1.2 s so boot
+        // continues. (GTK paints widget pixels via XRender, which the in-kernel X
+        // server does not implement yet, so the window is created/mapped/run but the
+        // Adwaita widgets are not composited to the framebuffer.)
+        {
+            ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <dir>/usr/share/fonts</dir>\n</fontconfig>\n".to_vec());
+            serial_println!("[glibc] === GTK3 toolkit app (ggtk) ===");
+            ring3::GLIBC_DEADLINE_TICKS.store(4_000, core::sync::atomic::Ordering::Relaxed);
+            ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed); // ~40 libs
+            let (ogtk, egtk) = ring3::run_glibc(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net);
+            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+            ring3::GLIBC_DEADLINE_TICKS.store(12_000, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[glibc] ggtk (GTK3 toolkit): exit={egtk}");
+            for l in ogtk.lines() { serial_println!("[glibc]   {l}"); }
         }
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
