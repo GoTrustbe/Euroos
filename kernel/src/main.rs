@@ -498,6 +498,17 @@ fn main() -> Status {
         }
         Err(_) => serial_println!("[mm] WARNING: no process frame pool (fork disabled)"),
     }
+    // DEMAND-PAGING pool (96 MiB): committed frames for sparse mmaps come from here.
+    // Separate from the fork pool; sized so it + fork pool still leave room for a
+    // large (384 MiB) glibc arena on this 808 MiB machine.
+    const DEMAND_POOL_FRAMES: usize = 24576; // 96 MiB
+    match allocator.allocate_contiguous(DEMAND_POOL_FRAMES) {
+        Ok(base) => {
+            procpool::demand_install(base, DEMAND_POOL_FRAMES);
+            serial_println!("[mm] demand-paging pool: 96 MiB @ {base:#x} (sparse mmap commits)");
+        }
+        Err(_) => serial_println!("[mm] WARNING: no demand-paging pool"),
+    }
 
     // virtio-blk: initialize the real disk (PIO/DMA works on our identity map).
     virtio_blk::init(&mut allocator);
@@ -1806,11 +1817,11 @@ fn main() -> Status {
         for l in o15.lines() { serial_println!("[glibc]   {l}"); }
         // gsparse: DEMAND PAGING — reserve 4 GiB virtual (far beyond RAM), touch a
         // few scattered pages; only touched pages commit physical frames. Opt-in.
-        let pool_before = procpool::free_frames();
+        let pool_before = procpool::demand_free_frames();
         ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
         let (o16, e16) = ring3::run_glibc(&mut allocator, ring3::gsparse_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsparse"], &[b"PATH=/bin"], caps);
         ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
-        let pool_after = procpool::free_frames();
+        let pool_after = procpool::demand_free_frames();
         serial_println!("[glibc] gsparse (demand paging): exit={e16}, committed={} pages ({} KiB), pool delta={} frames (reclaimed after exit)",
             ring3::demand_committed_pages(), ring3::demand_committed_pages()*4, pool_before as i64 - pool_after as i64);
         for l in o16.lines() { serial_println!("[glibc]   {l}"); }

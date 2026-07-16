@@ -3523,14 +3523,14 @@ pub fn handle_demand_fault(addr: u64) -> bool {
         return false;
     }
     let page = addr & !0xFFF;
-    let phys = match crate::procpool::alloc() {
+    let phys = match crate::procpool::demand_alloc() {
         Some(p) => p,
-        None => return false, // pool exhausted -> real OOM, let it terminate
+        None => return false, // demand pool exhausted -> real OOM, let it terminate
     };
     // SAFETY: `phys` is an identity-mapped free frame; zero it (anon = zeroed).
     unsafe { core::ptr::write_bytes(phys as *mut u8, 0, 4096); }
     if !crate::paging::map_demand_4k(pml4, page, phys) {
-        crate::procpool::free(phys);
+        crate::procpool::demand_free(phys);
         return false;
     }
     // Flush any stale not-present TLB entry for this page.

@@ -521,7 +521,7 @@ unsafe fn ensure_table(slot: *mut u64) -> Option<u64> {
     if e & PRESENT != 0 {
         return Some(e & ADDR_MASK);
     }
-    let frame = crate::procpool::alloc()?;
+    let frame = crate::procpool::demand_alloc()?;
     core::ptr::write_bytes(frame as *mut u8, 0, 4096);
     slot.write_volatile(frame | PRESENT | WRITABLE | USER);
     Some(frame)
@@ -553,14 +553,14 @@ pub fn free_demand_region(pml4: u64, idx: usize) {
                 for i1 in 0..512usize {
                     let e1 = (pt as *const u64).add(i1).read_volatile();
                     if e1 & PRESENT != 0 {
-                        crate::procpool::free(e1 & ADDR_MASK); // committed data page
+                        crate::procpool::demand_free(e1 & ADDR_MASK); // committed data page
                     }
                 }
-                crate::procpool::free(pt);
+                crate::procpool::demand_free(pt);
             }
-            crate::procpool::free(pd);
+            crate::procpool::demand_free(pd);
         }
-        crate::procpool::free(pdpt);
+        crate::procpool::demand_free(pdpt);
         (pml4 as *mut u64).add(idx).write_volatile(0);
     }
 }
