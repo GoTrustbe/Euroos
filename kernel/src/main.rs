@@ -1923,7 +1923,7 @@ fn main() -> Status {
         {
             ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <dir>/usr/share/fonts</dir>\n</fontconfig>\n".to_vec());
             serial_println!("[glibc] === GTK3 toolkit probe (ggtk) ===");
-            ring3::GLIBC_DEADLINE_TICKS.store(2_000, core::sync::atomic::Ordering::Relaxed);
+            ring3::GLIBC_DEADLINE_TICKS.store(9_000, core::sync::atomic::Ordering::Relaxed);
             // GTK pulls ~40 libraries; the default 96 MiB arena's mmap window is too
             // small to map them all. Give this run a 384 MiB arena.
             ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed);

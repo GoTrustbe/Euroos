@@ -1444,6 +1444,67 @@ pub fn unix_close(ep: UnixEndpoint) {
 pub const UNIX_FD_BASE: u64 = 600;
 const MAX_UNIX_FD: usize = 32;
 
+// ── eventfd (Linux) ────────────────────────────────────────────────────────
+// A counter-backed fd used by GLib's GMainContext (GWakeup) to break a poll():
+// signal = write(+n), the loop polls it readable, acknowledge = read (drains).
+// Essential for any GLib/GTK main loop. Own fd range so read/write/poll/close route.
+pub const EVENTFD_BASE: u64 = 800;
+const MAX_EVENTFD: usize = 32;
+static EVENTFDS: Mutex<[Option<u64>; MAX_EVENTFD]> = Mutex::new([const { None }; MAX_EVENTFD]);
+
+pub fn is_eventfd(fd: u64) -> bool {
+    fd >= EVENTFD_BASE && (fd - EVENTFD_BASE) < MAX_EVENTFD as u64
+}
+/// eventfd2(initval, flags) — allocate a counter fd. Returns None if the table is full.
+pub fn eventfd_create(initval: u64) -> Option<u64> {
+    let mut t = EVENTFDS.lock();
+    for (i, s) in t.iter_mut().enumerate() {
+        if s.is_none() {
+            *s = Some(initval);
+            return Some(EVENTFD_BASE + i as u64);
+        }
+    }
+    None
+}
+pub fn eventfd_readable(fd: u64) -> bool {
+    is_eventfd(fd) && EVENTFDS.lock()[(fd - EVENTFD_BASE) as usize].map_or(false, |c| c > 0)
+}
+/// read(): return the current counter and reset to 0. Some(0) => the caller should
+/// return -EAGAIN (nothing to read). None => not a live eventfd.
+pub fn eventfd_read(fd: u64) -> Option<u64> {
+    if !is_eventfd(fd) {
+        return None;
+    }
+    let mut t = EVENTFDS.lock();
+    match t[(fd - EVENTFD_BASE) as usize].as_mut() {
+        Some(c) => {
+            let v = *c;
+            *c = 0;
+            Some(v)
+        }
+        None => None,
+    }
+}
+/// write(): add to the counter. Returns false if not a live eventfd.
+pub fn eventfd_write(fd: u64, add: u64) -> bool {
+    if !is_eventfd(fd) {
+        return false;
+    }
+    let mut t = EVENTFDS.lock();
+    match t[(fd - EVENTFD_BASE) as usize].as_mut() {
+        Some(c) => {
+            *c = c.saturating_add(add);
+            true
+        }
+        None => false,
+    }
+}
+pub fn eventfd_close(fd: u64) {
+    if is_eventfd(fd) {
+        EVENTFDS.lock()[(fd - EVENTFD_BASE) as usize] = None;
+    }
+}
+
 /// What an AF_UNIX fd is backed by. socket() makes a Pending fd; connect()/socketpair
 /// resolve it to a Switchboard stream, or — for the X display socket — to an X-server
 /// connection that forwards to the kernel X server.

@@ -4467,6 +4467,10 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     serial_print!("[linux-abi] {t}");
                 }
                 a3
+            } else if crate::net::is_eventfd(a1) {
+                // eventfd write: add the 8-byte value to the counter (GWakeup signal).
+                let v = match read_user::<u64>(a2) { Some(v) => v, None => return EFAULT };
+                if crate::net::eventfd_write(a1, v) { 8 } else { (-9i64) as u64 }
             } else if crate::net::is_sock_fd(a1) {
                 // write() to a socket = send().
                 let bytes = match copy_from_user(a2, a3 as usize) {
@@ -4803,6 +4807,17 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // read(fd, buf, count): fd 0 = standard input (pipe), socket, or VFS.
             if a1 == 0 {
                 stdin_read(a2, a3 as usize)
+            } else if crate::net::is_eventfd(a1) {
+                // eventfd read: 8-byte counter, then reset. 0 => -EAGAIN (nonblocking).
+                match crate::net::eventfd_read(a1) {
+                    Some(0) | None => (-11i64) as u64, // -EAGAIN
+                    Some(v) => {
+                        if a3 < 8 || !copy_to_user(a2, &v.to_le_bytes()) {
+                            return EFAULT;
+                        }
+                        8
+                    }
+                }
             } else if crate::net::is_sock_fd(a1) {
                 let data = crate::net::sock_recv(a1, a3 as usize);
                 if !copy_to_user(a2, &data) {
@@ -4888,13 +4903,25 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             total
         }
         3 => {
-            // close(fd): socket, AF_UNIX socket, or VFS file.
-            if crate::net::is_sock_fd(a1) {
+            // close(fd): eventfd, socket, AF_UNIX socket, or VFS file.
+            if crate::net::is_eventfd(a1) {
+                crate::net::eventfd_close(a1);
+                0
+            } else if crate::net::is_sock_fd(a1) {
                 crate::net::sock_close(a1)
             } else if crate::net::is_unix_fd(a1) {
                 crate::net::unix_fd_close(a1)
             } else {
                 vfs_close(a1 as usize)
+            }
+        }
+        290 => {
+            // eventfd2(initval, flags): GLib's GMainContext wakeup fd (GWakeup). flags
+            // (EFD_CLOEXEC/EFD_NONBLOCK/EFD_SEMAPHORE) are accepted and ignored — our
+            // eventfd is always non-blocking and non-semaphore.
+            match crate::net::eventfd_create(a1) {
+                Some(fd) => fd,
+                None => (-24i64) as u64, // -EMFILE
             }
         }
         7 => {
@@ -4911,7 +4938,13 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 let fd = match read_user::<i32>(ent) { Some(v) => v as i64 as u64, None => return EFAULT };
                 let events = read_user::<u16>(ent + 4).unwrap_or(0);
                 let mut re = 0u16;
-                if crate::net::is_unix_fd(fd) || crate::net::is_sock_fd(fd) {
+                if crate::net::is_eventfd(fd) {
+                    // eventfd: always writable; readable when the counter is nonzero.
+                    re |= events & POLLOUT;
+                    if crate::net::eventfd_readable(fd) {
+                        re |= events & POLLIN;
+                    }
+                } else if crate::net::is_unix_fd(fd) || crate::net::is_sock_fd(fd) {
                     re |= events & POLLOUT;
                     if crate::net::is_unix_fd(fd) && crate::net::unix_fd_readable(fd) {
                         re |= events & POLLIN;
