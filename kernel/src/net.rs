@@ -1443,27 +1443,68 @@ pub fn unix_close(ep: UnixEndpoint) {
 // is the transport a real X11 client (and dbus, etc.) uses to reach a server.
 pub const UNIX_FD_BASE: u64 = 600;
 const MAX_UNIX_FD: usize = 32;
-static UNIX_FDS: Mutex<[Option<UnixEndpoint>; MAX_UNIX_FD]> = Mutex::new([const { None }; MAX_UNIX_FD]);
+
+/// What an AF_UNIX fd is backed by. socket() makes a Pending fd; connect()/socketpair
+/// resolve it to a Switchboard stream, or — for the X display socket — to an X-server
+/// connection that forwards to the kernel X server.
+enum UnixSock {
+    Pending,
+    Stream(UnixEndpoint),
+    X(u64), // xserver connection fd
+}
+
+static UNIX_FDS: Mutex<[Option<UnixSock>; MAX_UNIX_FD]> = Mutex::new([const { None }; MAX_UNIX_FD]);
 static UNIX_PAIR_CTR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 pub fn is_unix_fd(fd: u64) -> bool {
     fd >= UNIX_FD_BASE && (fd - UNIX_FD_BASE) < MAX_UNIX_FD as u64
 }
 
-fn unix_alloc_fd(ep: UnixEndpoint) -> Option<u64> {
+fn unix_alloc(sock: UnixSock) -> Option<u64> {
     let mut t = UNIX_FDS.lock();
     for (i, s) in t.iter_mut().enumerate() {
         if s.is_none() {
-            *s = Some(ep);
+            *s = Some(sock);
             return Some(UNIX_FD_BASE + i as u64);
         }
     }
     None
 }
 
-/// socketpair(AF_UNIX, SOCK_STREAM): a connected pair of fds. Built on the existing
-/// Switchboard — bind a unique temp path, connect, accept, unbind — so writes to one
-/// fd are readable on the other. Returns the two fd numbers.
+/// socket(AF_UNIX, SOCK_STREAM): an unconnected fd, resolved later by connect().
+pub fn unix_socket() -> u64 {
+    unix_alloc(UnixSock::Pending).unwrap_or((-24i64) as u64) // -EMFILE
+}
+
+/// connect(fd, sockaddr_un path): resolve a Pending AF_UNIX fd. The X display socket
+/// (/tmp/.X11-unix/X0, filesystem or abstract) routes to the kernel X server; any
+/// other path goes to the Switchboard. Returns 0 or -errno.
+pub fn unix_connect_fd(fd: u64, path: &str) -> u64 {
+    let idx = (fd - UNIX_FD_BASE) as usize;
+    let is_x = path.contains(".X11-unix/X") || path.ends_with("/X0");
+    let new = if is_x {
+        match crate::xserver::open() {
+            Some(xfd) => UnixSock::X(xfd),
+            None => return (-111i64) as u64, // -ECONNREFUSED
+        }
+    } else {
+        match unix_connect(path) {
+            Ok(ep) => UnixSock::Stream(ep),
+            Err(_) => return (-111i64) as u64,
+        }
+    };
+    let mut t = UNIX_FDS.lock();
+    match t.get_mut(idx) {
+        Some(slot @ Some(_)) => {
+            *slot = Some(new);
+            0
+        }
+        _ => (-9i64) as u64, // -EBADF
+    }
+}
+
+/// socketpair(AF_UNIX, SOCK_STREAM): a connected pair of fds (bind/connect/accept on
+/// a unique temp path). Writes to one are readable on the other.
 pub fn unix_socketpair() -> Option<(u64, u64)> {
     let n = UNIX_PAIR_CTR.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let path = alloc::format!("/run/euro-sp-{n}.sock");
@@ -1471,44 +1512,66 @@ pub fn unix_socketpair() -> Option<(u64, u64)> {
     let client = unix_connect(&path).ok()?;
     let server = unix_accept(&path)?;
     UNIX_SWITCH.lock().unbind(&path);
-    let a = unix_alloc_fd(client)?;
-    let b = unix_alloc_fd(server)?;
+    let a = unix_alloc(UnixSock::Stream(client))?;
+    let b = unix_alloc(UnixSock::Stream(server))?;
     Some((a, b))
 }
 
-/// write() to a UNIX-socket fd.
+/// write() to a UNIX-socket fd (Switchboard stream or X-server connection).
 pub fn unix_fd_send(fd: u64, data: &[u8]) -> u64 {
-    let ep = match UNIX_FDS.lock().get((fd - UNIX_FD_BASE) as usize).and_then(|s| *s) {
-        Some(e) => e,
-        None => return (-9i64) as u64, // -EBADF
+    let (ep, xfd) = {
+        let t = UNIX_FDS.lock();
+        match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
+            Some(UnixSock::Stream(e)) => (Some(*e), 0),
+            Some(UnixSock::X(x)) => (None, *x),
+            _ => return (-9i64) as u64, // -EBADF / not connected
+        }
     };
-    match unix_send(ep, data) {
-        Ok(n) => n as u64,
-        Err(_) => (-1i64) as u64,
+    if let Some(e) = ep {
+        return match unix_send(e, data) {
+            Ok(n) => n as u64,
+            Err(_) => (-1i64) as u64,
+        };
     }
+    crate::xserver::write(xfd, data)
 }
 
 /// read() from a UNIX-socket fd.
 pub fn unix_fd_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
-    let ep = match UNIX_FDS.lock().get((fd - UNIX_FD_BASE) as usize).and_then(|s| *s) {
-        Some(e) => e,
-        None => return alloc::vec::Vec::new(),
+    let (ep, xfd) = {
+        let t = UNIX_FDS.lock();
+        match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
+            Some(UnixSock::Stream(e)) => (Some(*e), 0),
+            Some(UnixSock::X(x)) => (None, *x),
+            _ => return alloc::vec::Vec::new(),
+        }
     };
-    unix_recv(ep, max).unwrap_or_default()
+    if let Some(e) = ep {
+        return unix_recv(e, max).unwrap_or_default();
+    }
+    crate::xserver::read(xfd, max)
+}
+
+/// Is a UNIX-socket fd readable now (queued data)? For poll().
+pub fn unix_fd_readable(fd: u64) -> bool {
+    let t = UNIX_FDS.lock();
+    match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
+        Some(UnixSock::Stream(e)) => unix_readable(*e),
+        Some(UnixSock::X(x)) => crate::xserver::readable(*x),
+        _ => false,
+    }
 }
 
 /// close() a UNIX-socket fd.
 pub fn unix_fd_close(fd: u64) -> u64 {
     let idx = (fd - UNIX_FD_BASE) as usize;
-    let mut t = UNIX_FDS.lock();
-    if let Some(slot) = t.get_mut(idx) {
-        if let Some(ep) = slot.take() {
-            drop(t);
-            unix_close(ep);
-            return 0;
-        }
+    let taken = UNIX_FDS.lock().get_mut(idx).and_then(|s| s.take());
+    match taken {
+        Some(UnixSock::Stream(e)) => { unix_close(e); 0 }
+        Some(UnixSock::X(x)) => { crate::xserver::close(x); 0 }
+        Some(UnixSock::Pending) => 0,
+        None => (-9i64) as u64,
     }
-    (-9i64) as u64
 }
 
 /// H1 self-test: a full local AF_UNIX round-trip — server binds+listens,

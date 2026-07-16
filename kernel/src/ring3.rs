@@ -2221,6 +2221,14 @@ static GSYNC_ELF: &[u8] = include_bytes!("../../userland/glibc/gsync");
 static GSPARSE_ELF: &[u8] = include_bytes!("../../userland/glibc/gsparse");
 // AF_UNIX socketpair round-trip (local IPC — the X11/dbus transport).
 static GUNIX_ELF: &[u8] = include_bytes!("../../userland/glibc/gunix");
+// X11 CLIENT stack (a real Xlib client + its 6 transitive libs) — the GUI rung.
+static GLIBC_LIBX11: &[u8] = include_bytes!("../../userland/glibc/libX11.so.6");
+static GLIBC_LIBXCB: &[u8] = include_bytes!("../../userland/glibc/libxcb.so.1");
+static GLIBC_LIBXAU: &[u8] = include_bytes!("../../userland/glibc/libXau.so.6");
+static GLIBC_LIBXDMCP: &[u8] = include_bytes!("../../userland/glibc/libXdmcp.so.6");
+static GLIBC_LIBBSD: &[u8] = include_bytes!("../../userland/glibc/libbsd.so.0");
+static GLIBC_LIBMD: &[u8] = include_bytes!("../../userland/glibc/libmd.so.0");
+static GX11_ELF: &[u8] = include_bytes!("../../userland/glibc/gx11");
 // File I/O roundtrip test (open O_CREAT|write, reopen|read, verify).
 static GFILE_ELF: &[u8] = include_bytes!("../../userland/glibc/gfile");
 // REAL /usr/bin/sort (stdin filter; reuses the already-served libcrypto).
@@ -2270,6 +2278,15 @@ pub fn gfile_bytes() -> &'static [u8] { GFILE_ELF }
 pub fn gsparse_bytes() -> &'static [u8] { GSPARSE_ELF }
 /// An AF_UNIX socketpair round-trip test (local IPC transport).
 pub fn gunix_bytes() -> &'static [u8] { GUNIX_ELF }
+/// The X11 client libraries (served to ld.so for a real Xlib client).
+pub fn glibc_libx11_bytes() -> &'static [u8] { GLIBC_LIBX11 }
+pub fn glibc_libxcb_bytes() -> &'static [u8] { GLIBC_LIBXCB }
+pub fn glibc_libxau_bytes() -> &'static [u8] { GLIBC_LIBXAU }
+pub fn glibc_libxdmcp_bytes() -> &'static [u8] { GLIBC_LIBXDMCP }
+pub fn glibc_libbsd_bytes() -> &'static [u8] { GLIBC_LIBBSD }
+pub fn glibc_libmd_bytes() -> &'static [u8] { GLIBC_LIBMD }
+/// A trivial Xlib client (XOpenDisplay) — first GUI/X11 milestone.
+pub fn gx11_bytes() -> &'static [u8] { GX11_ELF }
 /// The real /usr/bin/sort (stdin line sorter).
 pub fn real_sort_bytes() -> &'static [u8] { REAL_SORT_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
@@ -4399,10 +4416,29 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         20 => {
             // writev(fd, iov, iovcnt): array of {base,len}; count written bytes.
             // fd 1/2 -> console; fd >= 3 -> write to the VFS file (musl stdio).
-            let to_file = a1 != 1 && a1 != 2;
             if a3 > 1024 {
                 return (-22i64) as u64; // -EINVAL: bound iovcnt
             }
+            // A socket / AF_UNIX(+X) fd: gather all iovecs and send as one message
+            // (xcb sends the X setup request + protocol via writev).
+            if crate::net::is_sock_fd(a1) || crate::net::is_unix_fd(a1) {
+                let mut buf: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+                for i in 0..a3 {
+                    let iov_base = a2 + (i * 16);
+                    let base: u64 = match read_user(iov_base) { Some(b) => b, None => return EFAULT };
+                    let len = match read_user::<u64>(iov_base + 8) { Some(l) => l as usize, None => return EFAULT };
+                    if len == 0 { continue; }
+                    match copy_from_user(base, len) {
+                        Some(v) => buf.extend_from_slice(&v),
+                        None => return EFAULT,
+                    }
+                }
+                let total = buf.len() as u64;
+                if crate::net::is_unix_fd(a1) { crate::net::unix_fd_send(a1, &buf); }
+                else { crate::net::sock_send(a1, &buf); }
+                return total;
+            }
+            let to_file = a1 != 1 && a1 != 2;
             let mut written = 0u64;
             for i in 0..a3 {
                 let iov_base = a2 + (i * 16);
@@ -4451,6 +4487,9 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 data.len() as u64
             } else if crate::net::is_unix_fd(a1) {
                 let data = crate::net::unix_fd_recv(a1, a3 as usize);
+                if data.is_empty() {
+                    return (-11i64) as u64; // -EAGAIN: non-blocking, no data (NOT EOF)
+                }
                 if !copy_to_user(a2, &data) {
                     return EFAULT;
                 }
@@ -4470,6 +4509,34 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             let fd = a1 as usize;
             if a3 > 1024 {
                 return (-22i64) as u64; // -EINVAL: bound iovcnt
+            }
+            // socket / AF_UNIX(+X): pull one message and scatter it across the iovecs.
+            if crate::net::is_sock_fd(a1) || crate::net::is_unix_fd(a1) {
+                // total capacity requested
+                let mut cap = 0usize;
+                for i in 0..a3 {
+                    cap += read_user::<u64>(a2 + i * 16 + 8).unwrap_or(0) as usize;
+                }
+                let data = if crate::net::is_unix_fd(a1) {
+                    crate::net::unix_fd_recv(a1, cap)
+                } else {
+                    crate::net::sock_recv(a1, cap)
+                };
+                if data.is_empty() && crate::net::is_unix_fd(a1) {
+                    return (-11i64) as u64; // -EAGAIN
+                }
+                let mut off = 0usize;
+                for i in 0..a3 {
+                    if off >= data.len() { break; }
+                    let base: u64 = read_user(a2 + i * 16).unwrap_or(0);
+                    let len = read_user::<u64>(a2 + i * 16 + 8).unwrap_or(0) as usize;
+                    let n = len.min(data.len() - off);
+                    if n > 0 && !copy_to_user(base, &data[off..off + n]) {
+                        return EFAULT;
+                    }
+                    off += n;
+                }
+                return off as u64;
             }
             let mut total = 0u64;
             for i in 0..a3 {
@@ -4506,6 +4573,46 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 vfs_close(a1 as usize)
             }
         }
+        7 => {
+            // poll(fds, nfds, timeout): report readiness. Each pollfd is 8 bytes
+            // {i32 fd, i16 events, i16 revents}. For a UNIX/X socket fd: always
+            // writable (our writes are instant), readable when data is queued.
+            // Enough for xcb's connection setup (it polls the X socket).
+            const POLLIN: u16 = 0x001;
+            const POLLOUT: u16 = 0x004;
+            let nfds = (a2 as usize).min(64);
+            let mut ready = 0u64;
+            for i in 0..nfds {
+                let ent = a1 + (i as u64) * 8;
+                let fd = match read_user::<i32>(ent) { Some(v) => v as i64 as u64, None => return EFAULT };
+                let events = read_user::<u16>(ent + 4).unwrap_or(0);
+                let mut re = 0u16;
+                if crate::net::is_unix_fd(fd) || crate::net::is_sock_fd(fd) {
+                    re |= events & POLLOUT;
+                    if crate::net::is_unix_fd(fd) && crate::net::unix_fd_readable(fd) {
+                        re |= events & POLLIN;
+                    }
+                } else {
+                    // Regular/stdin fds: report as ready (best-effort, non-blocking).
+                    re = events & (POLLIN | POLLOUT);
+                }
+                let _ = write_user(ent + 6, re);
+                if re != 0 { ready += 1; }
+            }
+            ready
+        }
+        48 => 0, // shutdown(fd, how): accept, no-op
+        51 | 52 => {
+            // getsockname(51) / getpeername(52): report a minimal AF_UNIX address so
+            // xcb's connection checks succeed. addr @a2, addrlen* @a3.
+            if crate::net::is_unix_fd(a1) {
+                let _ = write_user(a2, 1u16); // sa_family = AF_UNIX
+                let _ = write_user(a3, 2u32); // *addrlen = 2 (family only)
+                0
+            } else {
+                (-1i64) as u64
+            }
+        }
         53 => {
             // socketpair(domain, type, protocol, sv[2]): a connected pair. AF_UNIX(1)
             // + SOCK_STREAM(1) only. Writes the two fds into the user's int[2].
@@ -4527,39 +4634,118 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // or SOCK_DGRAM (2, UDP).
             let typ = a2 & 0xff; // ignore SOCK_CLOEXEC/NONBLOCK flags
             match (a1, typ) {
-                (2, 1) => crate::net::sock_open(false), // TCP
-                (2, 2) => crate::net::sock_open(true),  // UDP
+                (2, 1) => crate::net::sock_open(false), // AF_INET TCP
+                (2, 2) => crate::net::sock_open(true),  // AF_INET UDP
+                (1, 1) => crate::net::unix_socket(),    // AF_UNIX stream (local IPC / X)
                 _ => (-1i64) as u64,
             }
         }
         42 => {
-            // connect(fd, *sockaddr_in, addrlen): sin_port BE @2, sin_addr @4.
+            // connect(fd, *sockaddr, addrlen) — dispatch on the address family @0..2.
             if a3 < 8 {
                 return (-1i64) as u64;
             }
-            // Read the 8-byte sockaddr arena-safe (port @2..4, addr @4..8).
-            let sa = match copy_from_user(a2, 8) {
+            let want = (a3 as usize).min(128);
+            let sa = match copy_from_user(a2, want) {
                 Some(v) => v,
                 None => return EFAULT,
             };
+            let family = (sa[0] as u16) | ((sa[1] as u16) << 8);
+            if family == 1 && crate::net::is_unix_fd(a1) {
+                // AF_UNIX: sun_path @2. Abstract if it begins with a NUL byte
+                // (the name follows), else a NUL-terminated filesystem path.
+                let path = if sa.len() > 2 && sa[2] == 0 {
+                    let raw = &sa[3..];
+                    let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+                    core::str::from_utf8(&raw[..end]).unwrap_or("")
+                } else {
+                    let raw = &sa[2..];
+                    let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+                    core::str::from_utf8(&raw[..end]).unwrap_or("")
+                };
+                return crate::net::unix_connect_fd(a1, path);
+            }
+            // AF_INET: sin_port BE @2, sin_addr @4.
             let port = ((sa[2] as u16) << 8) | sa[3] as u16;
             crate::net::sock_connect(a1, euronet::ipv4::Ipv4Addr([sa[4], sa[5], sa[6], sa[7]]), port)
         }
         44 => {
-            // sendto(fd, buf, len, flags, dest, destlen): connected TCP -> ignore dest.
+            // sendto(fd, buf, len, flags, dest, destlen): connected -> ignore dest.
             let bytes = match copy_from_user(a2, a3 as usize) {
                 Some(v) => v,
                 None => return EFAULT,
             };
-            crate::net::sock_send(a1, &bytes)
+            if crate::net::is_unix_fd(a1) {
+                crate::net::unix_fd_send(a1, &bytes)
+            } else {
+                crate::net::sock_send(a1, &bytes)
+            }
         }
         45 => {
-            // recvfrom(fd, buf, len, flags, src, srclen).
-            let data = crate::net::sock_recv(a1, a3 as usize);
+            // recvfrom(fd, buf, len, flags, src, srclen). xcb reads the X reply here.
+            let data = if crate::net::is_unix_fd(a1) {
+                crate::net::unix_fd_recv(a1, a3 as usize)
+            } else {
+                crate::net::sock_recv(a1, a3 as usize)
+            };
+            if data.is_empty() && crate::net::is_unix_fd(a1) {
+                return (-11i64) as u64; // -EAGAIN: non-blocking, no data yet
+            }
             if !copy_to_user(a2, &data) {
                 return EFAULT;
             }
             data.len() as u64
+        }
+        46 => {
+            // sendmsg(fd, msghdr, flags): gather msg_iov and send as one message.
+            if !(crate::net::is_unix_fd(a1) || crate::net::is_sock_fd(a1)) {
+                return (-38i64) as u64;
+            }
+            let iov = read_user::<u64>(a2 + 16).unwrap_or(0);
+            let iovlen = (read_user::<u64>(a2 + 24).unwrap_or(0)).min(1024);
+            let mut buf: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+            for i in 0..iovlen {
+                let base = read_user::<u64>(iov + i * 16).unwrap_or(0);
+                let len = read_user::<u64>(iov + i * 16 + 8).unwrap_or(0) as usize;
+                if len == 0 { continue; }
+                match copy_from_user(base, len) { Some(v) => buf.extend_from_slice(&v), None => return EFAULT }
+            }
+            let total = buf.len() as u64;
+            if crate::net::is_unix_fd(a1) { crate::net::unix_fd_send(a1, &buf); } else { crate::net::sock_send(a1, &buf); }
+            total
+        }
+        47 => {
+            // recvmsg(fd, msghdr, flags): scatter one received message across msg_iov.
+            // xcb reads X replies/events through this.
+            if !(crate::net::is_unix_fd(a1) || crate::net::is_sock_fd(a1)) {
+                return (-38i64) as u64;
+            }
+            let iov = read_user::<u64>(a2 + 16).unwrap_or(0);
+            let iovlen = (read_user::<u64>(a2 + 24).unwrap_or(0)).min(1024);
+            let mut cap = 0usize;
+            for i in 0..iovlen {
+                cap += read_user::<u64>(iov + i * 16 + 8).unwrap_or(0) as usize;
+            }
+            let data = if crate::net::is_unix_fd(a1) {
+                crate::net::unix_fd_recv(a1, cap)
+            } else {
+                crate::net::sock_recv(a1, cap)
+            };
+            if data.is_empty() && crate::net::is_unix_fd(a1) {
+                return (-11i64) as u64; // -EAGAIN: non-blocking, no data (NOT EOF)
+            }
+            let mut off = 0usize;
+            for i in 0..iovlen {
+                if off >= data.len() { break; }
+                let base = read_user::<u64>(iov + i * 16).unwrap_or(0);
+                let len = read_user::<u64>(iov + i * 16 + 8).unwrap_or(0) as usize;
+                let n = len.min(data.len() - off);
+                if n > 0 && !copy_to_user(base, &data[off..off + n]) { return EFAULT; }
+                off += n;
+            }
+            // msg_controllen = 0 (no ancillary data).
+            let _ = write_user(a2 + 40, 0u64);
+            off as u64
         }
         8 => vfs_lseek(a1 as usize, a2 as i64, a3),  // lseek(fd, offset, whence)
         257 => {

@@ -52,6 +52,7 @@ mod hpet;
 mod pci;
 mod power;
 mod procpool;
+mod xserver;
 mod rootblk;
 mod scrub;
 mod swapmgr;
@@ -1390,6 +1391,13 @@ fn main() -> Status {
         ring3::register_file("/lib/x86_64-linux-gnu/libpcre2-8.so.0", ring3::glibc_libpcre2_bytes().to_vec());
         // zlib: universal compression, a real Chromium dep.
         ring3::register_file("/lib/x86_64-linux-gnu/libz.so.1", ring3::glibc_libz_bytes().to_vec());
+        // X11 client stack: a real Xlib client + its 6 transitive libs (the GUI rung).
+        ring3::register_file("/lib/x86_64-linux-gnu/libX11.so.6", ring3::glibc_libx11_bytes().to_vec());
+        ring3::register_file("/lib/x86_64-linux-gnu/libxcb.so.1", ring3::glibc_libxcb_bytes().to_vec());
+        ring3::register_file("/lib/x86_64-linux-gnu/libXau.so.6", ring3::glibc_libxau_bytes().to_vec());
+        ring3::register_file("/lib/x86_64-linux-gnu/libXdmcp.so.6", ring3::glibc_libxdmcp_bytes().to_vec());
+        ring3::register_file("/lib/x86_64-linux-gnu/libbsd.so.0", ring3::glibc_libbsd_bytes().to_vec());
+        ring3::register_file("/lib/x86_64-linux-gnu/libmd.so.0", ring3::glibc_libmd_bytes().to_vec());
         let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
         serial_println!(
             "[h3] dyntest (dynamically linked) done: exit={h3_exit}, output={:?}",
@@ -1816,6 +1824,12 @@ fn main() -> Status {
         let (ou, eu) = ring3::run_glibc(&mut allocator, ring3::gunix_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gunix"], &[b"PATH=/bin"], caps_net);
         serial_println!("[glibc] gunix (AF_UNIX socketpair): exit={eu}");
         for l in ou.lines() { serial_println!("[glibc]   {l}"); }
+        // gx11: a REAL Xlib client — XOpenDisplay against the EuroOS X server. First
+        // GUI/X11 milestone (a 6-library client stack + the connection handshake).
+        serial_println!("[glibc] === X11: real Xlib client (XOpenDisplay) ===");
+        let (ox, ex) = ring3::run_glibc(&mut allocator, ring3::gx11_bytes(), ring3::ldlinux_bytes(), &[b"gx11"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
+        serial_println!("[glibc] gx11 (XOpenDisplay -> EuroOS X server): exit={ex}");
+        for l in ox.lines() { serial_println!("[glibc]   {l}"); }
         // gsparse: DEMAND PAGING — reserve 4 GiB virtual (far beyond RAM), touch a
         // few scattered pages; only touched pages commit physical frames. Opt-in.
         let pool_before = procpool::demand_free_frames();
@@ -1830,7 +1844,7 @@ fn main() -> Status {
         // task table at index 31 with free_frames stable — see commit notes.)
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
-        let results: [(&str, u64, u64); 17] = [
+        let results: [(&str, u64, u64); 18] = [
             ("gtiny(dyn-link)", e1, 42), ("gtest(stdio/malloc/qsort)", e2, 55),
             ("gthread(pthreads)", e3, 88), ("gmath(libm+dlopen)", e4, 77),
             ("gcpp(C++/exceptions)", e5, 66), ("seq(argv)", e6, 0), ("factor(libgmp)", e7, 0),
@@ -1838,6 +1852,7 @@ fn main() -> Status {
             ("base64(stdin)", e10, 0), ("wc(stdin)", e11, 0), ("sha256sum(libcrypto)", e12, 0),
             ("sort(stdin)", e13, 0), ("gfile(file I/O)", e14, 44), ("gglib(GLib)", e15, 55),
             ("gsparse(demand-paging)", e16, 123), ("gunix(AF_UNIX socketpair)", eu, 67),
+            ("gx11(X11 XOpenDisplay)", ex, 0),
         ];
         let pass = results.iter().filter(|(_, got, want)| got == want).count()
             + if ez == 33 { 1 } else { 0 };
@@ -1846,7 +1861,7 @@ fn main() -> Status {
             pass, results.len() + 1
         );
         serial_println!(
-            "[glibc]   dynamic-linking · pthreads+mutex/condvar · C++/exceptions · dlopen · file-I/O · demand-paging(4GiB sparse) · AF_UNIX-IPC"
+            "[glibc]   dynamic-linking · pthreads+mutex/condvar · C++/exceptions · dlopen · file-I/O · demand-paging(4GiB sparse) · AF_UNIX-IPC · X11-client(XOpenDisplay)"
         );
         serial_println!(
             "[glibc]   9 real libs served: libc libm libstdc++ libgcc_s libgmp libcrypto libglib-2.0 libpcre2 libz | real bins: seq factor base64 wc sha256sum sort"
