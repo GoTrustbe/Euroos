@@ -2235,6 +2235,21 @@ static GXEVENT_ELF: &[u8] = include_bytes!("../../userland/glibc/gxevent");
 static GXKEY_ELF: &[u8] = include_bytes!("../../userland/glibc/gxkey");
 static GXWIN_ELF: &[u8] = include_bytes!("../../userland/glibc/gxwin");
 static GXLIVE_ELF: &[u8] = include_bytes!("../../userland/glibc/gxlive");
+// Cairo 2D graphics stack (the library real toolkits/Firefox render with).
+static GLIBC_LIBCAIRO: &[u8] = include_bytes!("../../userland/glibc/libcairo.so.2");
+static GLIBC_LIBPNG: &[u8] = include_bytes!("../../userland/glibc/libpng16.so.16");
+static GLIBC_LIBFC: &[u8] = include_bytes!("../../userland/glibc/libfontconfig.so.1");
+static GLIBC_LIBFT: &[u8] = include_bytes!("../../userland/glibc/libfreetype.so.6");
+static GLIBC_LIBXEXT: &[u8] = include_bytes!("../../userland/glibc/libXext.so.6");
+static GLIBC_LIBXRENDER: &[u8] = include_bytes!("../../userland/glibc/libXrender.so.1");
+static GLIBC_LIBXCBRENDER: &[u8] = include_bytes!("../../userland/glibc/libxcb-render.so.0");
+static GLIBC_LIBXCBSHM: &[u8] = include_bytes!("../../userland/glibc/libxcb-shm.so.0");
+static GLIBC_LIBPIXMAN: &[u8] = include_bytes!("../../userland/glibc/libpixman-1.so.0");
+static GLIBC_LIBEXPAT: &[u8] = include_bytes!("../../userland/glibc/libexpat.so.1");
+static GLIBC_LIBBZ2: &[u8] = include_bytes!("../../userland/glibc/libbz2.so.1.0");
+static GLIBC_LIBBROTLIDEC: &[u8] = include_bytes!("../../userland/glibc/libbrotlidec.so.1");
+static GLIBC_LIBBROTLICOMMON: &[u8] = include_bytes!("../../userland/glibc/libbrotlicommon.so.1");
+static GCAIRO_ELF: &[u8] = include_bytes!("../../userland/glibc/gcairo");
 // File I/O roundtrip test (open O_CREAT|write, reopen|read, verify).
 static GFILE_ELF: &[u8] = include_bytes!("../../userland/glibc/gfile");
 // REAL /usr/bin/sort (stdin filter; reuses the already-served libcrypto).
@@ -2305,6 +2320,25 @@ pub fn gxkey_bytes() -> &'static [u8] { GXKEY_ELF }
 pub fn gxwin_bytes() -> &'static [u8] { GXWIN_ELF }
 /// A persistent, interactive X client (event loop) for the live desktop.
 pub fn gxlive_bytes() -> &'static [u8] { GXLIVE_ELF }
+/// The Cairo 2D graphics stack (library bytes) + a cairo→XPutImage test client.
+pub fn cairo_libs() -> [(&'static str, &'static [u8]); 13] {
+    [
+        ("libcairo.so.2", GLIBC_LIBCAIRO),
+        ("libpng16.so.16", GLIBC_LIBPNG),
+        ("libfontconfig.so.1", GLIBC_LIBFC),
+        ("libfreetype.so.6", GLIBC_LIBFT),
+        ("libXext.so.6", GLIBC_LIBXEXT),
+        ("libXrender.so.1", GLIBC_LIBXRENDER),
+        ("libxcb-render.so.0", GLIBC_LIBXCBRENDER),
+        ("libxcb-shm.so.0", GLIBC_LIBXCBSHM),
+        ("libpixman-1.so.0", GLIBC_LIBPIXMAN),
+        ("libexpat.so.1", GLIBC_LIBEXPAT),
+        ("libbz2.so.1.0", GLIBC_LIBBZ2),
+        ("libbrotlidec.so.1", GLIBC_LIBBROTLIDEC),
+        ("libbrotlicommon.so.1", GLIBC_LIBBROTLICOMMON),
+    ]
+}
+pub fn gcairo_bytes() -> &'static [u8] { GCAIRO_ELF }
 /// The real /usr/bin/sort (stdin line sorter).
 pub fn real_sort_bytes() -> &'static [u8] { REAL_SORT_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");

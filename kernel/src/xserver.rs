@@ -372,8 +372,9 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                 let (ww, wh) = (win.w as usize, win.h as usize);
                 let at = |x: usize, y: usize| win.buf.get(y * ww + x).copied().unwrap_or(0);
                 trace(format_args!(
-                    "PutImage quadrants TL={:#08x} TR={:#08x} BL={:#08x} BR={:#08x}",
-                    at(ww / 4, wh / 4), at(ww * 3 / 4, wh / 4), at(ww / 4, wh * 3 / 4), at(ww * 3 / 4, wh * 3 / 4)
+                    "PutImage samples q(TL={:#08x} BR={:#08x}) p(100,110)={:#08x} p(220,110)={:#08x} p(150,150)={:#08x}",
+                    at(ww / 4, wh / 4), at(ww * 3 / 4, wh * 3 / 4),
+                    at(100.min(ww - 1), 110.min(wh - 1)), at(220.min(ww - 1), 110.min(wh - 1)), at(150.min(ww - 1), 150.min(wh - 1))
                 ));
             }
             present(c, draw);

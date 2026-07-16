@@ -1391,6 +1391,10 @@ fn main() -> Status {
         ring3::register_file("/lib/x86_64-linux-gnu/libpcre2-8.so.0", ring3::glibc_libpcre2_bytes().to_vec());
         // zlib: universal compression, a real Chromium dep.
         ring3::register_file("/lib/x86_64-linux-gnu/libz.so.1", ring3::glibc_libz_bytes().to_vec());
+        // Cairo 2D graphics stack (the vector-graphics lib GTK/Firefox render with).
+        for (name, bytes) in ring3::cairo_libs() {
+            ring3::register_file(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes.to_vec());
+        }
         // X11 client stack: a real Xlib client + its 6 transitive libs (the GUI rung).
         ring3::register_file("/lib/x86_64-linux-gnu/libX11.so.6", ring3::glibc_libx11_bytes().to_vec());
         ring3::register_file("/lib/x86_64-linux-gnu/libxcb.so.1", ring3::glibc_libxcb_bytes().to_vec());
@@ -1880,6 +1884,17 @@ fn main() -> Status {
         serial_println!(
             "[glibc]   9 real libs served: libc libm libstdc++ libgcc_s libgmp libcrypto libglib-2.0 libpcre2 libz | real bins: seq factor base64 wc sha256sum sort"
         );
+
+        // gcairo: a REAL 2D vector-graphics library (Cairo — what GTK/Firefox render
+        // with) draws a scene (filled circle, rectangle, stroked line, anti-aliased)
+        // into an image surface, then XPutImages it into an X window. Resolves the full
+        // ~22-lib Cairo transitive chain via ld.so.
+        serial_println!("[glibc] === X11: real Cairo 2D graphics -> X window ===");
+        xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (oc, ec) = ring3::run_glibc(&mut allocator, ring3::gcairo_bytes(), ring3::ldlinux_bytes(), &[b"gcairo"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
+        xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gcairo (Cairo 2D -> XPutImage): exit={ec}");
+        for l in oc.lines() { serial_println!("[glibc]   {l}"); }
 
         // LAUNCH A PERSISTENT, LIVE X APP that runs ALONGSIDE the desktop: gxlive is
         // a real Xlib event-loop client (key = colour, click = move). It owns the
