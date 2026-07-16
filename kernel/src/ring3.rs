@@ -2234,6 +2234,7 @@ static GXIMG_ELF: &[u8] = include_bytes!("../../userland/glibc/gximg");
 static GXEVENT_ELF: &[u8] = include_bytes!("../../userland/glibc/gxevent");
 static GXKEY_ELF: &[u8] = include_bytes!("../../userland/glibc/gxkey");
 static GXWIN_ELF: &[u8] = include_bytes!("../../userland/glibc/gxwin");
+static GXLIVE_ELF: &[u8] = include_bytes!("../../userland/glibc/gxlive");
 // File I/O roundtrip test (open O_CREAT|write, reopen|read, verify).
 static GFILE_ELF: &[u8] = include_bytes!("../../userland/glibc/gfile");
 // REAL /usr/bin/sort (stdin filter; reuses the already-served libcrypto).
@@ -2302,6 +2303,8 @@ pub fn gxevent_bytes() -> &'static [u8] { GXEVENT_ELF }
 pub fn gxkey_bytes() -> &'static [u8] { GXKEY_ELF }
 /// The combined X11 client: connect+window+fill+PutImage+events+real-keyboard.
 pub fn gxwin_bytes() -> &'static [u8] { GXWIN_ELF }
+/// A persistent, interactive X client (event loop) for the live desktop.
+pub fn gxlive_bytes() -> &'static [u8] { GXLIVE_ELF }
 /// The real /usr/bin/sort (stdin line sorter).
 pub fn real_sort_bytes() -> &'static [u8] { REAL_SORT_ELF }
 static MCAT_ELF: &[u8] = include_bytes!("../../userland/mcat.elf");
@@ -3586,6 +3589,64 @@ pub fn handle_demand_fault(addr: u64) -> bool {
 /// yet), so it needs that many contiguous physical frames from the allocator.
 pub static GLIBC_ARENA_MIB: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(96);
 
+/// Spawn a glibc program as a PERSISTENT scheduled process and return WITHOUT
+/// blocking — the caller (the desktop loop) keeps running alongside it. Used for a
+/// live, desktop-integrated X client: it runs an event loop forever, its window is
+/// painted straight to the framebuffer by the X server, and the desktop loop pumps
+/// live keyboard/mouse into it (see xserver::pump_*). Returns the main task index,
+/// or None on failure. The arena is intentionally NOT reclaimed (the app runs until
+/// shutdown). Only one persistent glibc app at a time (shares the GLIBC_* globals).
+pub fn spawn_glibc_persistent(
+    falloc: &mut FrameAllocator,
+    exe: &[u8],
+    ldso: &[u8],
+    argv: &[&[u8]],
+    envp: &[&[u8]],
+    caps: u64,
+) -> Option<usize> {
+    init_syscall_msrs();
+    CURRENT_CAPS.store(caps, Ordering::Relaxed);
+    LINUX_ABI.store(true, Ordering::Relaxed);
+    *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
+    OUTPUT.lock().clear();
+    reset_fd_table();
+
+    const MIB2: u64 = 1 << 21;
+    let arena_mib: u64 = 96;
+    let nblocks = arena_mib / 2;
+    let frames = (nblocks * 512) as usize;
+    let arena = falloc.allocate_aligned(frames, 512).ok()?;
+    unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
+
+    let exe_base = arena;
+    let ldso_base = arena + 0x0080_0000;
+    let mmap_start = arena + 0x0200_0000;
+    let stack_top = arena + nblocks * MIB2 - 0x0010_0000;
+    ARENA_BASE.store(arena, Ordering::Relaxed);
+    ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
+    HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
+    HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
+
+    let exe_info = load_elf64(exe, exe_base, program_span_pages(exe))?;
+    let ld_info = load_elf64(ldso, ldso_base, program_span_pages(ldso))?;
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, argv, envp, &exe_info, ldso_base) };
+    let sel = crate::gdt::selectors();
+    let user_cs = (sel.user_code.0 | 3) as u64;
+    let user_ss = (sel.user_data.0 | 3) as u64;
+    let pml4 = crate::paging::build_address_space_rwx_big(falloc, arena, nblocks);
+    GLIBC_PML4.store(pml4, Ordering::Relaxed);
+    GLIBC_THREADS.lock().clear();
+    GLIBC_CTIDS.lock().clear();
+    GLIBC_DONE.store(false, Ordering::Relaxed);
+    GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
+    let (main_slot, main_kstack) = alloc_thread_kstack()?;
+    let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
+    register_thread_kstack(main_task, main_slot);
+    GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
+    crate::serial_println!("[glibc] persistent app: scheduled task {main_task} (runs alongside the desktop)");
+    Some(main_task)
+}
+
 pub fn run_glibc(
     falloc: &mut FrameAllocator,
     exe: &[u8],
@@ -3716,9 +3777,12 @@ pub fn run_glibc(
         // (no-op unless one has an input-selecting window mapped).
         crate::xserver::pump_keyboard();
         crate::xserver::pump_mouse();
-        // Sleep a tick; the timer then switches to the runnable glibc tasks. (The
-        // wait stays timer-driven to match the non-preemptive, IF=0 syscall model.)
+        // Sleep a tick, then YIELD immediately so the glibc task gets the CPU now
+        // instead of the launcher spinning this whole quantum. Without the yield the
+        // launcher busy-loops (pump+sleep) hundreds of times per tick, which under
+        // TCG crawls the whole guest — this keeps a live X client responsive.
         crate::sched::sleep_ticks(1);
+        crate::sched::yield_now();
     }
     if !GLIBC_DONE.load(Ordering::Relaxed) {
         crate::serial_println!("[glibc] TIMEOUT waiting for the process to exit");

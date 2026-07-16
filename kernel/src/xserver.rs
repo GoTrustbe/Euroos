@@ -398,6 +398,12 @@ fn put_image(c: &mut XConn, draw: u32, dst_x: i32, dst_y: i32, w: usize, h: usiz
 /// (Real apps get only legitimate events; this is gated for the gxevent self-test.)
 pub static INJECT_TEST_INPUT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
+/// True while a persistent, desktop-integrated X client owns the screen. The desktop
+/// loop checks this to route live keyboard/mouse into the X server (pump_*) instead
+/// of the DOOM-style appgfx bridge.
+pub static X_APP_ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+pub fn x_app_active() -> bool { X_APP_ACTIVE.load(core::sync::atomic::Ordering::Relaxed) }
+
 /// Extract a window's event-mask from an attribute value-list, if CWEventMask is set.
 /// The mask word is at `mask_off`; packed values start at `vals_off` in bit order.
 fn win_event_mask(c: &XConn, req: &[u8], mask_off: usize, vals_off: usize) -> u32 {

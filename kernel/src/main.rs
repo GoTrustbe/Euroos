@@ -1880,6 +1880,32 @@ fn main() -> Status {
         serial_println!(
             "[glibc]   9 real libs served: libc libm libstdc++ libgcc_s libgmp libcrypto libglib-2.0 libpcre2 libz | real bins: seq factor base64 wc sha256sum sort"
         );
+
+        // LAUNCH A PERSISTENT, LIVE X APP that runs ALONGSIDE the desktop: gxlive is
+        // a real Xlib event-loop client (key = colour, click = move). It owns the
+        // screen (its window is painted by the X server); the desktop loop pumps live
+        // keyboard/mouse into it (xserver::pump_* via the X_APP_ACTIVE path). This is
+        // the async/desktop-integrated milestone — an interactive X program on EuroOS.
+        serial_println!("[glibc] === X11: live interactive desktop app (gxlive) ===");
+        // Run gxlive (a real Xlib event-loop client) with a long deadline: run_glibc's
+        // wait loop pumps live keyboard/mouse into the X server (xserver::pump_*), the
+        // X server delivers them to gxlive's window, and gxlive redraws — an
+        // interactive X program on EuroOS, using the proven run_glibc path.
+        // Stage some input so the live app visibly reacts even without live QMP keys:
+        // 3 key scancodes (colour cycles 3x) + 2 mouse-button packets (block moves 2x).
+        // These flow through the REAL ring/latch that pump_keyboard/pump_mouse drain.
+        ps2::push_scancode(0x1e); ps2::push_scancode(0x30); ps2::push_scancode(0x2e);
+        mouse::push_byte(0x08); mouse::push_byte(0); mouse::push_byte(0);
+        mouse::push_byte(0x09); mouse::push_byte(0); mouse::push_byte(0);
+        mouse::push_byte(0x08); mouse::push_byte(0); mouse::push_byte(0);
+        mouse::push_byte(0x09); mouse::push_byte(0); mouse::push_byte(0);
+        ring3::GLIBC_DEADLINE_TICKS.store(1_500, core::sync::atomic::Ordering::Relaxed); // ~15s bounded demo (gxlive loops forever)
+        xserver::X_APP_ACTIVE.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (ol, _egl) = ring3::run_glibc(&mut allocator, ring3::gxlive_bytes(), ring3::ldlinux_bytes(), &[b"gxlive"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
+        xserver::X_APP_ACTIVE.store(false, core::sync::atomic::Ordering::Relaxed);
+        ring3::GLIBC_DEADLINE_TICKS.store(12_000, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gxlive (live interactive X app; block reacted to staged input):");
+        for l in ol.lines() { serial_println!("[glibc]   {l}"); }
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.
@@ -3581,16 +3607,22 @@ fn main() -> Status {
         // starves the poll_key loop below (it finds nothing).
         if appgfx::active() {
             // A full-screen app owns the display. Its frames are painted straight
-            // to the framebuffer by the `fb_present` syscall (crate::screen_present
-            // _xrgb) at the app's own rate — the desktop loop only routes RAW
-            // scancodes to it and gets out of the way (no blit, no compositor
-            // repaint), so nothing the loop's scheduling starvation can hurt.
-            while let Some(sc) = ps2::poll_scancode() {
-                if sc == 0xE0 {
-                    continue; // extended prefix: the FOLLOWING code carries the key
+            // to the framebuffer (by fb_present for a musl app, or by the X server's
+            // present for a live X client). The desktop loop only routes RAW input to
+            // it and gets out of the way (no blit, no compositor repaint).
+            if xserver::x_app_active() {
+                // Live X client: route real keyboard + mouse into X events. The X
+                // server delivers them to the focused window; the client redraws.
+                xserver::pump_keyboard();
+                xserver::pump_mouse();
+            } else {
+                while let Some(sc) = ps2::poll_scancode() {
+                    if sc == 0xE0 {
+                        continue; // extended prefix: the FOLLOWING code carries the key
+                    }
+                    // set-1: high bit = break (release); low 7 bits = key.
+                    appgfx::push_key(sc & 0x7F, sc & 0x80 == 0);
                 }
-                // set-1: high bit = break (release); low 7 bits = key.
-                appgfx::push_key(sc & 0x7F, sc & 0x80 == 0);
             }
             let _ = last_app_blit;
             app_blitted = true; // remember to repaint the desktop once it exits
