@@ -2080,13 +2080,37 @@ fn vfs_close(fd: usize) -> u64 {
 
 /// Is `path` a DIRECTORY in the userspace VFS? A directory has no FILES entry of its own,
 /// but is the prefix of at least one file (or is the root "/").
+/// Directories created explicitly via mkdir (may still be empty). The flat FILES
+/// list only implies a directory once it contains a file, so a freshly-created but
+/// empty dir (chrome's headless user-data-dir) needs to be tracked here too.
+static MKDIRS: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new());
+
 fn is_vfs_dir(path: &[u8]) -> bool {
     if path == b"/" {
         return true;
     }
-    let mut prefix = path.to_vec();
+    let p = path.strip_suffix(b"/").unwrap_or(path);
+    if MKDIRS.lock().iter().any(|d| d.as_bytes() == p) {
+        return true;
+    }
+    let mut prefix = p.to_vec();
     prefix.push(b'/');
-    FILES.lock().iter().any(|(p, _)| p.as_bytes().starts_with(&prefix))
+    FILES.lock().iter().any(|(q, _)| q.as_bytes().starts_with(&prefix))
+}
+
+/// mkdir(path): register an explicit (possibly empty) directory. Idempotent; always
+/// succeeds (0). The flat FILES VFS needs no on-disk structure — child files are
+/// created under the path by openat(O_CREAT).
+fn vfs_mkdir(path: &[u8]) -> u64 {
+    if path.is_empty() {
+        return (-2i64) as u64; // -ENOENT
+    }
+    let p = String::from_utf8_lossy(path.strip_suffix(b"/").unwrap_or(path)).into_owned();
+    let mut dirs = MKDIRS.lock();
+    if !dirs.iter().any(|d| *d == p) {
+        dirs.push(p);
+    }
+    0
 }
 
 /// Direct children of a VFS directory: (name, is_dir). Derived from the flat
@@ -5212,6 +5236,14 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             }
         }
         39 => 1,  // getpid()
+        83 => {
+            // mkdir(path, mode): chrome creates its (headless) user-data-dir here.
+            vfs_mkdir(&user_cstr(a1, 256))
+        }
+        258 => {
+            // mkdirat(dirfd, path, mode): ignore dirfd (AT_FDCWD).
+            vfs_mkdir(&user_cstr(a2, 256))
+        }
         186 => {
             // gettid(): the main task reports tid==pid==1 (programs assume this); a
             // cloned thread reports its unique kernel task id. chrome tags threads by tid.
@@ -5812,6 +5844,16 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             } else {
                 (-1i64) as u64
             }
+        }
+        54 => 0, // setsockopt(fd, level, optname, optval, optlen): accept as no-op
+                 // (SO_PASSCRED/SO_REUSEADDR/… — chrome's crashpad + net stack set these).
+        55 => {
+            // getsockopt(fd, level, optname, optval, optlen): return 0 in *optval.
+            if a4 != 0 && a5 != 0 {
+                let _ = write_user(a4, 0i32);
+                let _ = write_user(a5, 4i32); // *optlen = 4
+            }
+            0
         }
         53 => {
             // socketpair(domain, type, protocol, sv[2]): a connected pair. AF_UNIX(1)

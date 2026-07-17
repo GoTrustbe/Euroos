@@ -1950,9 +1950,22 @@ fn main() -> Status {
             ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
             let (o, e) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome", ring3::ldlinux_bytes(),
                 &[b"/pack/chrome", b"--version"], &[b"PATH=/bin", b"LANG=C", b"DISPLAY=:0"], caps);
-            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
             serial_println!("[chrome-disk] chrome --version from DISK (485 MB demand-paged exe): exit={e}");
             for l in o.lines() { serial_println!("[chrome-disk]   {l}"); }
+
+            // Push past --version toward real rendering: headless, single-process, no
+            // GPU, no sandbox — dump the DOM of a trivial inline page. This names the
+            // next real blocker (multi-process/GPU/sandbox/syscall) beyond startup.
+            let (o2, e2) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome", ring3::ldlinux_bytes(),
+                &[b"/pack/chrome", b"--headless=old", b"--no-sandbox", b"--single-process",
+                  b"--disable-gpu", b"--no-zygote", b"--disable-dev-shm-usage",
+                  b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
+                  b"--dump-dom", b"data:text/html,<html><body><h1>EuroOS</h1></body></html>"],
+                &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
+                  b"CHROME_DEVEL_SANDBOX=/dev/null"], caps);
+            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[chrome-disk] chrome --headless --dump-dom from DISK: exit={e2}");
+            for l in o2.lines() { serial_println!("[chrome-disk]   {l}"); }
         }
         // (Reclamation validated out-of-band: 30 mixed runs incl. threaded kept the
         // task table at index 31 with free_frames stable — see commit notes.)
