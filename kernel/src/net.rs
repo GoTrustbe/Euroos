@@ -1516,9 +1516,42 @@ enum UnixSock {
 
 static UNIX_FDS: Mutex<[Option<UnixSock>; MAX_UNIX_FD]> = Mutex::new([const { None }; MAX_UNIX_FD]);
 static UNIX_PAIR_CTR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+// Server-side bind: the path an AF_UNIX fd is bound+listening on (chrome's
+// ProcessSingleton listens on SingletonSocket). Tracked alongside UNIX_FDS so the
+// existing recv/send/close match arms need no new variant.
+static UNIX_BOUND: Mutex<[Option<alloc::string::String>; MAX_UNIX_FD]> =
+    Mutex::new([const { None }; MAX_UNIX_FD]);
 
 pub fn is_unix_fd(fd: u64) -> bool {
     fd >= UNIX_FD_BASE && (fd - UNIX_FD_BASE) < MAX_UNIX_FD as u64
+}
+
+/// bind(fd, AF_UNIX path): bind+listen the fd on `path` (server side). Returns 0.
+pub fn unix_bind_fd(fd: u64, path: &str) -> u64 {
+    if !is_unix_fd(fd) {
+        return (-9i64) as u64; // -EBADF
+    }
+    let idx = (fd - UNIX_FD_BASE) as usize;
+    let _ = unix_bind_listen(path, 128);
+    UNIX_BOUND.lock()[idx] = Some(alloc::string::String::from(path));
+    0
+}
+
+/// accept(fd): accept a pending connection on a bound fd → a new stream fd, or
+/// -EAGAIN when none is waiting (chrome's single-instance singleton: never any).
+pub fn unix_accept_fd(fd: u64) -> u64 {
+    if !is_unix_fd(fd) {
+        return (-9i64) as u64;
+    }
+    let idx = (fd - UNIX_FD_BASE) as usize;
+    let path = match UNIX_BOUND.lock()[idx].clone() {
+        Some(p) => p,
+        None => return (-22i64) as u64, // -EINVAL: not a listening socket
+    };
+    match unix_accept(&path) {
+        Some(ep) => unix_alloc(UnixSock::Stream(ep)).unwrap_or((-24i64) as u64),
+        None => (-11i64) as u64, // -EAGAIN
+    }
 }
 
 fn unix_alloc(sock: UnixSock) -> Option<u64> {

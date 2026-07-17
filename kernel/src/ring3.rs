@@ -2098,6 +2098,17 @@ static MKDIRS: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new(
 /// `SingletonLock` as a symlink encoding hostname:pid, then readlinks it back.
 static SYMLINKS: Mutex<alloc::vec::Vec<(String, String)>> = Mutex::new(alloc::vec::Vec::new());
 
+/// unlink(path): remove a file/symlink/dir marker from the flat VFS. chrome clears
+/// stale ProcessSingleton lock/socket/cookie files. Succeeds even if absent (chrome
+/// tolerates that) — returns 0.
+fn vfs_unlink(path: &[u8]) -> u64 {
+    let p = String::from_utf8_lossy(path).into_owned();
+    FILES.lock().retain(|(q, _)| *q != p);
+    SYMLINKS.lock().retain(|(q, _)| *q != p);
+    MKDIRS.lock().retain(|q| *q != p);
+    0
+}
+
 /// symlink(target, linkpath): record a symlink. Replaces any existing one (chrome
 /// re-links). Empty linkpath -> ENOENT; else success (0).
 fn vfs_symlink(target: &[u8], link: &[u8]) -> u64 {
@@ -5207,7 +5218,7 @@ fn linux_required_cap(num: u64, a1: u64) -> u64 {
     match num {
         1 | 16 | 20 => CAP_CONSOLE,            // write/ioctl/writev (tty)
         0 | 2 | 3 | 5 | 8 | 17 | 19 | 89 | 217 | 257 | 262 | 267 => CAP_FILE, // read/open/close/(f)stat/lseek/pread64/readv/readlink/getdents64/openat
-        41 | 42 | 44 | 45 => CAP_NET,           // socket/connect/sendto/recvfrom
+        41 | 42 | 43 | 44 | 45 | 49 | 50 => CAP_NET, // socket/connect/accept/sendto/recvfrom/bind/listen
         39 => CAP_PROC_INFO,                    // getpid
         _ => 0, // memory/process management (mmap, brk, arch_prctl, exit, …) free
     }
@@ -5989,6 +6000,23 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             let port = ((sa[2] as u16) << 8) | sa[3] as u16;
             crate::net::sock_connect(a1, euronet::ipv4::Ipv4Addr([sa[4], sa[5], sa[6], sa[7]]), port)
         }
+        49 => {
+            // bind(fd, *sockaddr, addrlen): AF_UNIX server side (chrome ProcessSingleton
+            // listens on SingletonSocket). Parse sun_path like connect and bind+listen.
+            if a3 < 3 || !crate::net::is_unix_fd(a1) {
+                return 0; // AF_INET bind: accept as no-op (we don't need inbound TCP)
+            }
+            let sa = match copy_from_user(a2, (a3 as usize).min(128)) {
+                Some(v) => v,
+                None => return EFAULT,
+            };
+            let raw = if sa.len() > 2 && sa[2] == 0 { &sa[3..] } else { &sa[2..] };
+            let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+            let path = core::str::from_utf8(&raw[..end]).unwrap_or("");
+            crate::net::unix_bind_fd(a1, path)
+        }
+        50 => 0, // listen(fd, backlog): bind already listens (Switchboard) -> success
+        43 => crate::net::unix_accept_fd(a1), // accept(fd, addr, len)
         44 => {
             // sendto(fd, buf, len, flags, dest, destlen): connected -> ignore dest.
             let bytes = match copy_from_user(a2, a3 as usize) {
@@ -6217,6 +6245,8 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         }
         88 => vfs_symlink(&user_cstr(a1, 256), &user_cstr(a2, 256)), // symlink(target, link)
         266 => vfs_symlink(&user_cstr(a1, 256), &user_cstr(a3, 256)), // symlinkat(target, dfd, link)
+        87 => vfs_unlink(&user_cstr(a1, 256)),  // unlink(path)
+        263 => vfs_unlink(&user_cstr(a2, 256)), // unlinkat(dirfd, path, flags)
         217 => vfs_getdents64(a1 as usize, a2, a3 as usize), // getdents64(fd, dirp, count)
         16 => 0,  // ioctl — pretend success (isatty/TCGETS): stdout is a tty
         10 => 0,  // mprotect — allow (musl makes its RELRO read-only); no-op
