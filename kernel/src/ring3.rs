@@ -319,6 +319,23 @@ fn is_pipe_fd(fd: usize) -> bool {
     fd < MAX_FD && PIPE_FDS.lock()[fd].is_some()
 }
 
+/// Set/get a pipe fd's O_NONBLOCK (via fcntl F_SETFL/F_GETFL). chrome creates pipes
+/// blocking with pipe() then flips O_NONBLOCK per fd — untracked, a "non-blocking"
+/// read would park the caller forever and deadlock the browser.
+fn pipe_set_nonblock(fd: usize, nb: bool) {
+    if let Some((id, _)) = PIPE_FDS.lock().get(fd).copied().flatten() {
+        if let Some(slot) = PIPE_NONBLOCK.lock().get_mut(id) {
+            *slot = nb;
+        }
+    }
+}
+fn pipe_is_nonblock(fd: usize) -> bool {
+    match PIPE_FDS.lock().get(fd).copied().flatten() {
+        Some((id, _)) => PIPE_NONBLOCK.lock().get(id).copied().unwrap_or(false),
+        None => false,
+    }
+}
+
 // ── epoll (chrome's message-pump event loop) ────────────────────────────────
 // A minimal, non-blocking epoll: an instance tracks (fd, events, user-data); wait
 // reports the currently-ready fds (or 0 = "timeout") so the pump keeps turning. It
@@ -6519,7 +6536,23 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         102 | 107 => crate::auth::session_uid() as u64, // getuid/geteuid -> session uid
         104 | 108 => crate::auth::session_gid() as u64, // getgid/getegid -> session gid
         24 => 0,                    // sched_yield — single-thread foreground: no-op
-        72 => 0,                    // fcntl — F_GETFL/F_SETFL/F_SETFD: pretend it succeeds
+        72 => {
+            // fcntl(fd, cmd, arg). Track O_NONBLOCK (0x800) per pipe fd so chrome's
+            // non-blocking pipes return EAGAIN instead of parking the caller forever.
+            match a2 {
+                3 => { // F_GETFL
+                    let nb = (a1 as usize) < MAX_FD && is_pipe_fd(a1 as usize) && pipe_is_nonblock(a1 as usize);
+                    0x2 | if nb { 0x800 } else { 0 } // O_RDWR (+ O_NONBLOCK)
+                }
+                4 => { // F_SETFL
+                    if (a1 as usize) < MAX_FD && is_pipe_fd(a1 as usize) {
+                        pipe_set_nonblock(a1 as usize, a3 & 0x800 != 0);
+                    }
+                    0
+                }
+                _ => 0, // F_SETFD/F_GETFD/F_DUPFD/… pretend success
+            }
+        }
         79 => {
             // getcwd(buf, size): EuroOS foreground process runs in "/".
             if a1 != 0 && a2 >= 2 {
