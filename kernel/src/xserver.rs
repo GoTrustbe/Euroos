@@ -329,7 +329,25 @@ fn process(c: &mut XConn) {
         let detail = c.inbuf[1];
         let req: Vec<u8> = c.inbuf.drain(0..req_len).collect();
         c.seq = c.seq.wrapping_add(1);
+        let out_before = c.outbuf.len();
         handle_request(c, opcode, detail, &req);
+        // Reply-length audit: for a REPLY (type 1) verify actual bytes == 32 + length*4.
+        // A mismatch corrupts Xlib's stream (the class of bug that broke SDL/GTK).
+        if TRACE.load(core::sync::atomic::Ordering::Relaxed) {
+            let added = c.outbuf.len() - out_before;
+            if added >= 8 && c.outbuf[out_before] == 1 {
+                let declared = u32::from_le_bytes([
+                    c.outbuf[out_before + 4], c.outbuf[out_before + 5],
+                    c.outbuf[out_before + 6], c.outbuf[out_before + 7],
+                ]) as usize;
+                let expect = 32 + declared * 4;
+                if added != expect {
+                    crate::serial_println!("[xserver] !! op={opcode} REPLY LEN MISMATCH: sent {added} B, declared {declared} units -> expect {expect} B");
+                } else {
+                    trace(format_args!("reply op={opcode} ok ({added} B, {declared} units)"));
+                }
+            }
+        }
     }
 }
 
