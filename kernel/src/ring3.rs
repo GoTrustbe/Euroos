@@ -307,6 +307,105 @@ fn is_pipe_fd(fd: usize) -> bool {
     fd < MAX_FD && PIPE_FDS.lock()[fd].is_some()
 }
 
+// ── epoll (chrome's message-pump event loop) ────────────────────────────────
+// A minimal, non-blocking epoll: an instance tracks (fd, events, user-data); wait
+// reports the currently-ready fds (or 0 = "timeout") so the pump keeps turning. It
+// does NOT block the calling thread — chrome's other threads run at syscall
+// boundaries and post wake-ups (an eventfd) that the next wait observes as ready.
+const EPOLL_FD_BASE: u64 = 900;
+const MAX_EPOLL: usize = 64;
+static EPOLLS: Mutex<[Option<alloc::vec::Vec<(i32, u32, u64)>>; MAX_EPOLL]> =
+    Mutex::new([const { None }; MAX_EPOLL]);
+
+fn is_epoll_fd(fd: u64) -> bool {
+    fd >= EPOLL_FD_BASE && (fd - EPOLL_FD_BASE) < MAX_EPOLL as u64
+}
+
+fn epoll_create() -> u64 {
+    let mut e = EPOLLS.lock();
+    for (i, s) in e.iter_mut().enumerate() {
+        if s.is_none() {
+            *s = Some(alloc::vec::Vec::new());
+            return EPOLL_FD_BASE + i as u64;
+        }
+    }
+    (-24i64) as u64 // -EMFILE
+}
+
+/// epoll_ctl(epfd, op, fd, *event). op: ADD=1, DEL=2, MOD=3. struct epoll_event is
+/// PACKED: u32 events @0, u64 data @4.
+fn epoll_ctl(epfd: u64, op: u64, fd: u64, ev: u64) -> u64 {
+    if !is_epoll_fd(epfd) {
+        return (-9i64) as u64; // -EBADF
+    }
+    let mut e = EPOLLS.lock();
+    let list = match &mut e[(epfd - EPOLL_FD_BASE) as usize] {
+        Some(l) => l,
+        None => return (-9i64) as u64,
+    };
+    let fdi = fd as i32;
+    match op {
+        1 | 3 => {
+            let events: u32 = read_user(ev).unwrap_or(0);
+            let data: u64 = read_user(ev + 4).unwrap_or(0);
+            list.retain(|(f, _, _)| *f != fdi);
+            list.push((fdi, events, data));
+            0
+        }
+        2 => {
+            list.retain(|(f, _, _)| *f != fdi);
+            0
+        }
+        _ => (-22i64) as u64, // -EINVAL
+    }
+}
+
+/// Is `fd` currently readable (EPOLLIN)?  Optimistic for regular files.
+fn epoll_fd_ready(fd: u64) -> bool {
+    if crate::net::is_eventfd(fd) {
+        crate::net::eventfd_readable(fd)
+    } else if crate::net::is_unix_fd(fd) {
+        crate::net::unix_fd_readable(fd)
+    } else if (fd as usize) < MAX_FD && is_pipe_fd(fd as usize) {
+        match PIPE_FDS.lock()[fd as usize] {
+            Some((id, false)) => !PIPES.lock()[id].is_empty(), // read end w/ data
+            _ => false,                                        // write end: not "readable"
+        }
+    } else {
+        true // regular file / stdin: always readable
+    }
+}
+
+/// epoll_wait(epfd, *events, maxevents, timeout): report ready fds now (non-blocking).
+fn epoll_wait(epfd: u64, events: u64, maxevents: u64, _timeout: u64) -> u64 {
+    if !is_epoll_fd(epfd) {
+        return (-9i64) as u64;
+    }
+    let list = match &EPOLLS.lock()[(epfd - EPOLL_FD_BASE) as usize] {
+        Some(l) => l.clone(),
+        None => return (-9i64) as u64,
+    };
+    let mut n = 0u64;
+    for (fd, evmask, data) in list {
+        if n >= maxevents {
+            break;
+        }
+        if evmask & 0x1 != 0 && epoll_fd_ready(fd as u64) {
+            // struct epoll_event {u32 events; u64 data} packed = 12 bytes.
+            let base = events + n * 12;
+            if !in_user_arena(base, 12) {
+                return EFAULT;
+            }
+            unsafe {
+                (base as *mut u32).write(0x1); // EPOLLIN
+                ((base + 4) as *mut u64).write(data);
+            }
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Write to a pipe fd (write end). None = `fd` is not a pipe write fd.
 fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
     if fd >= MAX_FD {
@@ -1310,7 +1409,7 @@ fn futex_wait(uaddr: u64, val: u32) -> u64 {
 // context from ring 3. Slots are RECYCLED (freed when the owning task dies), so
 // long-lived programs that spin up many threads (the pthreads/Chromium path)
 // don't exhaust the pool the way a monotonic bump counter did.
-const MAX_THREADS: usize = 64;
+const MAX_THREADS: usize = 224; // chrome-scale: dozens of pthreads (< MAX_TASKS)
 const TKSTACK_SIZE: usize = 16 * 1024;
 static mut THREAD_KSTACKS: [[u8; TKSTACK_SIZE]; MAX_THREADS] = [[0; TKSTACK_SIZE]; MAX_THREADS];
 // Per-slot in-use flag (lock-free bitmap allocator).
@@ -1341,6 +1440,12 @@ fn alloc_thread_kstack() -> Option<(usize, u64)> {
 /// Record that `task` owns kstack `slot`, so its death frees the slot.
 fn register_thread_kstack(task: usize, slot: usize) {
     THREAD_KSTACK_OWNER.lock().push((task, slot));
+}
+
+/// Release a kstack slot that was allocated but never bound to a task (clone failed
+/// after alloc_thread_kstack because the scheduler table was full).
+fn free_thread_kstack_slot(slot: usize) {
+    THREAD_KSTACK_USED[slot].store(false, Ordering::Release);
 }
 
 /// Return the kernel-stack slot owned by `task` to the pool (idempotent).
@@ -5295,6 +5400,10 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         39 => 1,  // getpid()
         22 | 293 => pipe_create(a1), // pipe(fds) / pipe2(fds, flags): chrome's
                                      // SandboxHost + IPC create pipes for signalling.
+        213 | 291 => epoll_create(),          // epoll_create(size) / epoll_create1(flags)
+        233 => epoll_ctl(a1, a2, a3, a4),     // epoll_ctl(epfd, op, fd, *event)
+        232 => epoll_wait(a1, a2, a3, a4),    // epoll_wait(epfd, *events, max, timeout)
+        281 => epoll_wait(a1, a2, a3, a4),    // epoll_pwait(epfd, *events, max, timeout, sigmask)
         4 => {
             // stat(path, statbuf): a path-based stat (chrome verifies its socket temp
             // dir is mode 0700 via stat, not newfstatat). 144-byte Linux struct stat.
@@ -5431,6 +5540,10 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             let saved_regs = unsafe { SAVED_REGS };
             let pml4 = GLIBC_PML4.load(Ordering::Relaxed);
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, pml4, fs, saved_regs);
+            if child == usize::MAX {
+                free_thread_kstack_slot(slot); // scheduler table full -> -EAGAIN, no crash
+                return (-11i64) as u64;
+            }
             register_thread_kstack(child, slot);
             GLIBC_THREADS.lock().push(child);
             crate::serial_println!("[glibc-thread] clone -> thread task {child} (shared address space)");
@@ -5476,6 +5589,10 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             let saved_regs = unsafe { SAVED_REGS };
             let pml4 = GLIBC_PML4.load(Ordering::Relaxed);
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, pml4, fs, saved_regs);
+            if child == usize::MAX {
+                free_thread_kstack_slot(slot); // scheduler table full -> -EAGAIN, no crash
+                return (-11i64) as u64;
+            }
             register_thread_kstack(child, slot);
             GLIBC_THREADS.lock().push(child);
             crate::serial_println!("[glibc-thread] clone3 -> thread task {child} (shared address space, sp={child_stack:#x})");
@@ -5878,8 +5995,13 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             total
         }
         3 => {
-            // close(fd): eventfd, socket, AF_UNIX socket, or VFS file.
-            if crate::net::is_eventfd(a1) {
+            // close(fd): epoll, eventfd, socket, AF_UNIX socket, or VFS file.
+            if is_epoll_fd(a1) {
+                if let Some(slot) = EPOLLS.lock().get_mut((a1 - EPOLL_FD_BASE) as usize) {
+                    *slot = None;
+                }
+                0
+            } else if crate::net::is_eventfd(a1) {
                 crate::net::eventfd_close(a1);
                 0
             } else if crate::net::is_sock_fd(a1) {

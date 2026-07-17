@@ -17,7 +17,10 @@ use x86_64::registers::model_specific::Msr;
 
 const IA32_FS_BASE: u32 = 0xC000_0100;
 
-const MAX_TASKS: usize = 48;
+// Chrome (even --single-process headless) spawns dozens of threads (thread pool,
+// compositor, IO, message pumps). 48 was fine for the shell + a few glibc apps; a
+// browser needs far more scheduler slots. Each slot costs one 16 KiB kernel stack.
+const MAX_TASKS: usize = 256;
 const STACK_SIZE: usize = 16 * 1024;
 const CONTEXT_WORDS: usize = 20; // 15 GP registers + 5 (rip,cs,rflags,rsp,ss)
 
@@ -570,7 +573,12 @@ pub fn reclaim_task(idx: usize) {
 
 pub fn spawn_user(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u64) -> usize {
     let mut s = SCHED.lock();
-    let idx = alloc_slot(&mut s).expect("scheduler task table full");
+    // Return a sentinel instead of panicking when the table is full: a program that
+    // spawns too many threads (chrome) must get -EAGAIN, never crash the kernel.
+    let idx = match alloc_slot(&mut s) {
+        Some(i) => i,
+        None => return usize::MAX,
+    };
     let ctx = kstack_top - (CONTEXT_WORDS as u64) * 8;
     let words = ctx as *mut u64;
     // SAFETY: kstack_top is a valid, exclusive kernel stack for this task.
@@ -603,7 +611,11 @@ pub fn spawn_user(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u6
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_thread(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u64, fs_base: u64, saved_regs: u64) -> usize {
     let mut s = SCHED.lock();
-    let idx = alloc_slot(&mut s).expect("scheduler task table full");
+    // Sentinel (not panic) when full: the clone syscall turns this into -EAGAIN.
+    let idx = match alloc_slot(&mut s) {
+        Some(i) => i,
+        None => return usize::MAX,
+    };
     let ctx = kstack_top - (CONTEXT_WORDS as u64) * 8;
     let words = ctx as *mut u64;
     // SAFETY: kstack_top is an exclusive kernel stack for this thread.
