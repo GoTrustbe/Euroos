@@ -502,6 +502,9 @@ fn main() -> Status {
 
     // virtio-blk: initialize the real disk (PIO/DMA works on our identity map).
     virtio_blk::init(&mut allocator);
+    // EuroPack: register files served straight from a pack disk (no RAM copy) —
+    // how binaries too large to embed (chrome) reach the glibc loader.
+    ring3::europack_scan();
 
     // NVMe (B2): detect + initialize an NVMe controller (admin/I/O queues,
     // identify), do a read/write self-test + SMART readout. No-op without NVMe.
@@ -680,7 +683,10 @@ fn main() -> Status {
     // EuroUpdate (F1): A/B slot decision + attempt counter/rollback on every boot.
     update::boot_init(&mut fs);
     // G4: prove the direct image→slot-partition write (EuroOS-B, sector I/O + read-back).
-    update::slot_partition_selftest();
+    // Skip if virtio dev 0 is a foreign EuroPack data disk (would overwrite it).
+    if !ring3::europack_on_vblk0() {
+        update::slot_partition_selftest();
+    }
     // [upd3] (Sprint 3): verify-before-activate with a REAL Ed25519 signature +
     // prove that the update pipeline rejects a tampered package.
     crypto::selftest();
@@ -693,7 +699,10 @@ fn main() -> Status {
 
     // J2: bad-block remap on the REAL disk — mark a block bad and prove that
     // I/O is transparently redirected to a spare block (bad-block table ↔ scrub).
-    if virtio_blk::present() {
+    // Skip when virtio dev 0 is a foreign DATA disk (a EuroPack chrome-serving
+    // volume): these tests scribble on GPT-gap LBAs (50, 60+) that hold the served
+    // file's bytes there — never write over a data disk we do not own.
+    if virtio_blk::present() && !ring3::europack_on_vblk0() {
         let mut bbt = eurofs::badblocks::BadBlockTable::new(50, 8); // spare pool LBA 50..58 (GPT gap)
         let bad = 48u64;
         if let Some(spare) = bbt.mark_bad(bad) {
@@ -1905,6 +1914,25 @@ fn main() -> Status {
         serial_println!("[chrome] chrome_crashpad_handler (REAL chrome binary): exit={ecp}, lib-pages demand-loaded={}",
             ring3::demand_file_pages() - cp_pages_before);
         for l in ocp.lines() { serial_println!("[chrome]   {l}"); }
+
+        // ── DISK-BACKED serving (EuroPack) ─────────────────────────────────────
+        // gdiskmap: a file served straight from a pack disk (never RAM-resident)
+        // must read AND demand-fault-mmap byte-identically to the embedded copy of
+        // the same file. This is how a 485 MB chrome binary reaches the loader.
+        // Skipped (honestly reported) when no pack disk is attached.
+        if ring3::europack_present() {
+            ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+            ring3::DEMAND_FILE_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+            let (odm, edm) = ring3::run_glibc(&mut allocator, ring3::gdiskmap_bytes(), ring3::ldlinux_bytes(),
+                &[b"/bin/gdiskmap"], &[b"PATH=/bin"], caps);
+            ring3::DEMAND_FILE_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+            ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+            ring3::clear_demand_file_maps();
+            serial_println!("[europack] gdiskmap (disk-backed mmap+pread): exit={edm} (want 125)");
+            for l in odm.lines() { serial_println!("[europack]   {l}"); }
+        } else {
+            serial_println!("[europack] no pack disk attached — disk-backed serving test SKIPPED");
+        }
         // (Reclamation validated out-of-band: 30 mixed runs incl. threaded kept the
         // task table at index 31 with free_frames stable — see commit notes.)
 

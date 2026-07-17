@@ -496,6 +496,101 @@ fn ensure_proc(path: &[u8]) -> bool {
 /// 4 MiB WAD neither bloats the RAM filesystem nor makes the boot-time FS scrub
 /// crawl for minutes under TCG.
 const WAD_FI: usize = usize::MAX;
+// ── DISK-BACKED files (EuroPack) ────────────────────────────────────────────
+// Files served straight from a virtio pack disk WITHOUT loading their bytes into
+// RAM — how a 485 MB chrome binary is served when it cannot be embedded in the
+// kernel image. A registry entry is (served path, virtio dev, byte offset, size);
+// reads and demand-fault fills do polled 4 KiB virtio reads at the right offset.
+// Registry indices are carried in OPEN_FDS as fi = DISK_FI_BASE + idx (below the
+// PROC_MEM_FI/WAD_FI sentinels, far above any real FILES index).
+const DISK_FI_BASE: usize = usize::MAX / 2;
+static DISK_FILES: Mutex<alloc::vec::Vec<(String, usize, u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+
+/// Scan all virtio disks for a EuroPack volume ("EUROPCK1" at sector 0) and
+/// register every contained file as disk-backed. Called once at boot.
+pub fn europack_scan() {
+    for dev in 0..crate::virtio_blk::device_count() {
+        if !crate::virtio_blk::present_dev(dev) {
+            continue;
+        }
+        let mut hdr = [0u8; 4096];
+        if !crate::virtio_blk::read_io_dev(dev, 0, &mut hdr) || &hdr[0..8] != b"EUROPCK1" {
+            continue;
+        }
+        let count = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]) as usize;
+        let mut reg = DISK_FILES.lock();
+        for i in 0..count.min(4096) {
+            const ENTRY: usize = 208;
+            let ent_off = 16 + i * ENTRY;
+            // Entries can spill past the first 4 KiB for large manifests: read the
+            // sector each entry lives in on demand.
+            let mut ent = [0u8; ENTRY + 512];
+            let sec = (ent_off / 512) as u64;
+            let within = ent_off % 512;
+            let need = ((within + ENTRY + 511) / 512) * 512;
+            if !crate::virtio_blk::read_io_dev(dev, sec, &mut ent[..need.min(4096)]) {
+                break;
+            }
+            let e = &ent[within..within + ENTRY];
+            let path_len = e[..192].iter().position(|&b| b == 0).unwrap_or(192);
+            let path = String::from_utf8_lossy(&e[..path_len]).into_owned();
+            let off = u64::from_le_bytes(e[192..200].try_into().unwrap());
+            let size = u64::from_le_bytes(e[200..208].try_into().unwrap());
+            if path.is_empty() {
+                continue;
+            }
+            crate::serial_println!("[europack] vblk{dev}: {path} ({} KiB) served disk-backed", size / 1024);
+            reg.push((path, dev, off, size));
+        }
+    }
+}
+
+/// Read `dst.len()` bytes from virtio disk `dev` at BYTE offset `off` (handles
+/// sector misalignment via a bounce sector; chunks of <= 4 KiB per virtio op).
+fn disk_read_bytes(dev: usize, mut off: u64, mut dst: &mut [u8]) -> bool {
+    // Leading partial sector.
+    let head = (off % 512) as usize;
+    if head != 0 {
+        let mut sec = [0u8; 512];
+        if !crate::virtio_blk::read_io_dev(dev, off / 512, &mut sec) {
+            return false;
+        }
+        let n = (512 - head).min(dst.len());
+        dst[..n].copy_from_slice(&sec[head..head + n]);
+        off += n as u64;
+        dst = &mut dst[n..];
+    }
+    // Aligned middle in 4 KiB chunks (+ a final partial-sector tail via bounce).
+    while !dst.is_empty() {
+        let n = dst.len().min(4096);
+        if n >= 512 && n % 512 == 0 {
+            if !crate::virtio_blk::read_io_dev(dev, off / 512, &mut dst[..n]) {
+                return false;
+            }
+            off += n as u64;
+            dst = &mut dst[n..];
+        } else {
+            let full = n & !511;
+            if full > 0 {
+                if !crate::virtio_blk::read_io_dev(dev, off / 512, &mut dst[..full]) {
+                    return false;
+                }
+                off += full as u64;
+                dst = &mut dst[full..];
+                continue;
+            }
+            let mut sec = [0u8; 512];
+            if !crate::virtio_blk::read_io_dev(dev, off / 512, &mut sec) {
+                return false;
+            }
+            let rem = dst.len();
+            dst.copy_from_slice(&sec[..rem]);
+            break;
+        }
+    }
+    true
+}
+
 // Sentinel file-index for /proc/self/mem: a live window into the process's OWN
 // virtual memory. read/pread at offset O returns the bytes at virtual address O;
 // write/pwrite stores them there (the classic trick to write through a read-only
@@ -562,7 +657,21 @@ fn vfs_open(path: &[u8]) -> u64 {
             }
             u64::MAX
         }
-        None => u64::MAX,
+        None => {
+            drop(files);
+            // A disk-backed (EuroPack) file? Served without loading bytes into RAM.
+            let di = DISK_FILES.lock().iter().position(|(p, _, _, _)| p.as_bytes() == path);
+            if let Some(di) = di {
+                let mut fds = OPEN_FDS.lock();
+                for (fd, slot) in fds.iter_mut().enumerate().skip(3) {
+                    if slot.is_none() {
+                        *slot = Some((DISK_FI_BASE + di, 0));
+                        return fd as u64;
+                    }
+                }
+            }
+            u64::MAX
+        }
     }
 }
 
@@ -580,6 +689,27 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
     if fi == PROC_MEM_FI {
         // pread(/proc/self/mem, buf, len, off) reads memory at virtual address `off`.
         return proc_mem_xfer(offset as u64, buf, len, false);
+    }
+    if fi >= DISK_FI_BASE && fi != WAD_FI {
+        // Disk-backed (EuroPack): polled virtio read at the file's disk offset.
+        let (dev, dbase, dsize) = match DISK_FILES.lock().get(fi - DISK_FI_BASE) {
+            Some(&(_, dev, off, size)) => (dev, off, size),
+            None => return u64::MAX,
+        };
+        let n = len.min(dsize.saturating_sub(offset as u64) as usize);
+        if n == 0 {
+            return 0;
+        }
+        if !in_user_arena(buf, n) {
+            return u64::MAX;
+        }
+        let mut tmp = alloc::vec![0u8; n];
+        if !disk_read_bytes(dev, dbase + offset as u64, &mut tmp) {
+            return u64::MAX;
+        }
+        // SAFETY: buf validated as user memory of at least n bytes.
+        unsafe { core::ptr::copy_nonoverlapping(tmp.as_ptr(), buf as *mut u8, n); }
+        return n as u64;
     }
     if fi == WAD_FI {
         let data = DOOM_WAD;
@@ -615,6 +745,15 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
         let n = proc_mem_xfer(off as u64, buf, len, false);
         if n != u64::MAX {
             fds[fd] = Some((fi, off + n as usize));
+        }
+        return n;
+    }
+    // Disk-backed (EuroPack): sequential read from disk, advancing the position.
+    if fi >= DISK_FI_BASE && fi != WAD_FI {
+        drop(fds);
+        let n = vfs_pread(fd, buf, len, off);
+        if n != u64::MAX {
+            OPEN_FDS.lock()[fd] = Some((fi, off + n as usize));
         }
         return n;
     }
@@ -692,6 +831,9 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
             fds[fd] = Some((fi, off + n as usize));
         }
         return n;
+    }
+    if fi >= DISK_FI_BASE {
+        return u64::MAX; // disk-backed (EuroPack) files are read-only
     }
     // Validate the user buffer + overflow-safe offset computation (audit C1/M9):
     // the kernel may only read from the arena of the running process.
@@ -2039,6 +2181,9 @@ fn vfs_size(fd: usize) -> Option<usize> {
     if fi == PROC_MEM_FI {
         return Some(1usize << 46); // /proc/self/mem: large, canonical, non-overflowing
     }
+    if fi >= DISK_FI_BASE {
+        return DISK_FILES.lock().get(fi - DISK_FI_BASE).map(|&(_, _, _, size)| size as usize);
+    }
     Some(FILES.lock()[fi].1.len())
 }
 
@@ -2311,6 +2456,9 @@ static GFMMAP_ELF: &[u8] = include_bytes!("../../userland/glibc/gfmmap");
 static GLIBC_LIBDL: &[u8] = include_bytes!("../../userland/glibc/libdl.so.2");
 static GLIBC_LIBPTHREAD: &[u8] = include_bytes!("../../userland/glibc/libpthread.so.0");
 static CRASHPAD_ELF: &[u8] = include_bytes!("../../userland/glibc/chrome_crashpad_handler");
+// DISK-BACKED serving test: mmap+pread a EuroPack-served file, verify vs the
+// embedded copy of the same file.
+static GDISKMAP_ELF: &[u8] = include_bytes!("../../userland/glibc/gdiskmap");
 // AF_UNIX socketpair round-trip (local IPC — the X11/dbus transport).
 static GUNIX_ELF: &[u8] = include_bytes!("../../userland/glibc/gunix");
 // X11 CLIENT stack (a real Xlib client + its 6 transitive libs) — the GUI rung.
@@ -2415,6 +2563,15 @@ pub fn glibc_libdl_bytes() -> &'static [u8] { GLIBC_LIBDL }
 pub fn glibc_libpthread_bytes() -> &'static [u8] { GLIBC_LIBPTHREAD }
 /// A REAL chrome component: the crashpad crash handler (demand-paged).
 pub fn crashpad_bytes() -> &'static [u8] { CRASHPAD_ELF }
+/// A disk-backed (EuroPack) serving test: mmap+pread from disk vs embedded copy.
+pub fn gdiskmap_bytes() -> &'static [u8] { GDISKMAP_ELF }
+/// True if any EuroPack disk-backed files were registered at boot.
+pub fn europack_present() -> bool { !DISK_FILES.lock().is_empty() }
+/// True if virtio dev 0 is a EuroPack DATA disk — boot self-tests that scribble on
+/// dev 0's GPT-gap LBAs must skip, or they corrupt the served files.
+pub fn europack_on_vblk0() -> bool {
+    DISK_FILES.lock().iter().any(|&(_, dev, _, _)| dev == 0)
+}
 /// An AF_UNIX socketpair round-trip test (local IPC transport).
 pub fn gunix_bytes() -> &'static [u8] { GUNIX_ELF }
 /// The X11 client libraries (served to ld.so for a real Xlib client).
@@ -3942,7 +4099,32 @@ pub fn handle_demand_fault(addr: u64) -> bool {
         if let Some(&(base, _len, fidx, foff)) =
             maps.iter().rev().find(|&&(b, l, _, _)| page >= b && page < b + l)
         {
-            if fidx != usize::MAX {
+            if fidx == usize::MAX {
+                // Zero-fill shadow (.bss) — frame is already zeroed.
+            } else if fidx >= DISK_FI_BASE {
+                // DISK-BACKED (EuroPack): fill the page with a polled 4 KiB virtio
+                // read at the file's disk offset. This is the fault path that serves
+                // a chrome-sized binary without ever holding it in RAM.
+                let src = DISK_FILES.lock().get(fidx - DISK_FI_BASE).map(|&(_, dev, off, size)| (dev, off, size));
+                if let Some((dev, dbase, dsize)) = src {
+                    let file_pos = foff as u64 + (page - base);
+                    if file_pos < dsize {
+                        let n = (dsize - file_pos).min(4096) as usize;
+                        // SAFETY: `phys` is an identity-mapped, zeroed 4 KiB frame.
+                        let dst = unsafe { core::slice::from_raw_parts_mut(phys as *mut u8, n) };
+                        // IF=0 around the polled virtio op: this fault came from USER
+                        // code (IF=1), and a timer preemption mid-poll would let another
+                        // task clobber the device's single request slot (BUG-010 class).
+                        // Syscall-context reads are already IF=0 via FMASK.
+                        let ok = x86_64::instructions::interrupts::without_interrupts(|| {
+                            disk_read_bytes(dev, dbase + file_pos, dst)
+                        });
+                        if !ok {
+                            crate::serial_println!("[europack] fault-fill read FAILED @file_pos={file_pos:#x}");
+                        }
+                    }
+                }
+            } else {
                 let file_pos = foff + (page - base) as usize;
                 let files = FILES.lock();
                 if let Some(f) = files.get(fidx) {
@@ -3955,7 +4137,7 @@ pub fn handle_demand_fault(addr: u64) -> bool {
                         }
                     }
                 }
-            } // else: zero-fill shadow (.bss) — frame is already zeroed.
+            }
             DEMAND_FILE_FILLED.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -5051,12 +5233,31 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     None => return (-9i64) as u64, // -EBADF
                 };
                 drop(fds);
-                let files = FILES.lock();
-                let data = &files[fi].1;
-                let copy = if off < data.len() { (data.len() - off).min(len as usize) } else { 0 };
                 if !in_user_arena(base, len as usize) {
                     return (-12i64) as u64;
                 }
+                if fi >= DISK_FI_BASE && fi != WAD_FI && fi != PROC_MEM_FI {
+                    // Disk-backed (EuroPack): eager copy of a SMALL segment from disk.
+                    let src = DISK_FILES.lock().get(fi - DISK_FI_BASE).map(|&(_, dev, doff, size)| (dev, doff, size));
+                    let (dev, dbase, dsize) = match src {
+                        Some(t) => t,
+                        None => return (-9i64) as u64,
+                    };
+                    let copy = if (off as u64) < dsize { (dsize - off as u64).min(len) as usize } else { 0 };
+                    unsafe { core::ptr::write_bytes(base as *mut u8, 0, len as usize); }
+                    if copy > 0 {
+                        // SAFETY: base..base+copy validated in-arena above.
+                        let dst = unsafe { core::slice::from_raw_parts_mut(base as *mut u8, copy) };
+                        if !disk_read_bytes(dev, dbase + off as u64, dst) {
+                            return (-5i64) as u64; // -EIO
+                        }
+                    }
+                    crate::serial_println!("[linux-abi] mmap(fd={a5}, off={off}, {len} B) DISK-backed -> {base:#x} ({copy} B read)");
+                    return base;
+                }
+                let files = FILES.lock();
+                let data = &files[fi].1;
+                let copy = if off < data.len() { (data.len() - off).min(len as usize) } else { 0 };
                 unsafe {
                     if copy > 0 {
                         core::ptr::copy_nonoverlapping(data[off..].as_ptr(), base as *mut u8, copy);

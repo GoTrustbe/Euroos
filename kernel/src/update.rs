@@ -30,9 +30,17 @@ const SLOT_LBA: u64 = 40;
 
 static CONFIG: Mutex<Option<SlotConfig>> = Mutex::new(None);
 
+/// Is virtio dev 0 a foreign DATA disk (a EuroPack chrome-serving disk), NOT our
+/// boot disk? Then LBA 40 holds the served file's bytes, not a slot config — we
+/// must NEVER read a "slot config" from it or (worse) write one over it.
+fn virtio0_is_foreign() -> bool {
+    let mut s0 = [0u8; 512];
+    crate::virtio_blk::read_sector(0, &mut s0) && &s0[0..8] == b"EUROPCK1"
+}
+
 /// Read the slot config from the raw reserved block (independent of EuroFS).
 fn raw_load() -> Option<SlotConfig> {
-    if !crate::virtio_blk::present() {
+    if !crate::virtio_blk::present() || virtio0_is_foreign() {
         return None;
     }
     let mut buf = [0u8; 512];
@@ -44,7 +52,7 @@ fn raw_load() -> Option<SlotConfig> {
 
 /// Write the slot config to the raw reserved block + flush to hardware.
 fn raw_persist(cfg: &SlotConfig) -> bool {
-    if !crate::virtio_blk::present() {
+    if !crate::virtio_blk::present() || virtio0_is_foreign() {
         return false;
     }
     let mut buf = [0u8; 512];

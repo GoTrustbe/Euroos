@@ -86,7 +86,11 @@ pub fn disk_is_blank(dev: usize) -> bool {
     // means the disk already holds something — a GPT protective MBR, an MBR
     // partition table, or a superfloppy FAT/exFAT/NTFS boot sector. NEVER treat
     // such a disk as blank: doing so would overwrite a user's data disk. Only a
-    // disk with no boot signature at all is blank.
+    // disk with no boot signature at all is blank. A EuroPack data disk (chrome
+    // serving) carries no boot signature either — but it IS data, never a target.
+    if &s0[0..8] == b"EUROPCK1" {
+        return false;
+    }
     !(s0[510] == 0x55 && s0[511] == 0xAA)
 }
 
