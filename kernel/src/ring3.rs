@@ -2134,6 +2134,9 @@ fn is_vfs_dir(path: &[u8]) -> bool {
     let mut prefix = p.to_vec();
     prefix.push(b'/');
     FILES.lock().iter().any(|(q, _)| q.as_bytes().starts_with(&prefix))
+        // Disk-backed (EuroPack) files imply their parent dirs too (e.g. chrome's
+        // /pack/locales holds en-US.pak served from disk).
+        || DISK_FILES.lock().iter().any(|(q, _, _, _)| q.as_bytes().starts_with(&prefix))
 }
 
 /// mkdir(path): register an explicit (possibly empty) directory. Idempotent; always
@@ -2156,18 +2159,26 @@ fn vfs_mkdir(path: &[u8]) -> u64 {
 fn dir_children(path: &str) -> alloc::vec::Vec<(String, bool)> {
     let prefix = if path == "/" { String::from("/") } else { alloc::format!("{path}/") };
     let mut out: alloc::vec::Vec<(String, bool)> = alloc::vec::Vec::new();
+    let mut add = |rest: &str| {
+        if rest.is_empty() {
+            return;
+        }
+        let (name, is_dir) = match rest.find('/') {
+            Some(i) => (&rest[..i], true),
+            None => (rest, false),
+        };
+        if !out.iter().any(|(n, _)| n == name) {
+            out.push((String::from(name), is_dir));
+        }
+    };
     for (p, _) in FILES.lock().iter() {
         if let Some(rest) = p.strip_prefix(&prefix) {
-            if rest.is_empty() {
-                continue;
-            }
-            let (name, is_dir) = match rest.find('/') {
-                Some(i) => (&rest[..i], true), // subdirectory (first component)
-                None => (rest, false),         // file
-            };
-            if !out.iter().any(|(n, _)| n == name) {
-                out.push((String::from(name), is_dir));
-            }
+            add(rest);
+        }
+    }
+    for (p, _, _, _) in DISK_FILES.lock().iter() {
+        if let Some(rest) = p.strip_prefix(&prefix) {
+            add(rest);
         }
     }
     out
