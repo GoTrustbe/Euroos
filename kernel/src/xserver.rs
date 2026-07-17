@@ -140,31 +140,37 @@ pub fn readable(fd: u64) -> bool {
 /// client is up — this is how live hardware input reaches an X window (vs. the
 /// injected self-test events). No-op (pops nothing) unless a window wants keys.
 pub fn pump_keyboard() {
-    // Fast path: only touch the scancode ring if some window actually wants keys.
-    let wants = {
-        let t = XCONNS.lock();
-        t.iter().flatten().any(|c| c.windows.iter().any(|w| w.mapped && w.event_mask & 0x3 != 0))
-    };
-    if !wants {
-        return;
-    }
-    while let Some(sc) = crate::ps2::poll_scancode() {
-        let pressed = sc & 0x80 == 0;
-        let keycode = (sc & 0x7f) + 8; // X keycode = PS/2 scancode + 8
-        let want: u32 = if pressed { 0x1 } else { 0x2 }; // KeyPress / KeyRelease mask
-        let kind: u8 = if pressed { 2 } else { 3 };
-        let mut t = XCONNS.lock();
-        for conn in t.iter_mut().flatten() {
-            let wid = conn
-                .windows
-                .iter()
-                .find(|w| w.mapped && w.event_mask & want != 0)
-                .map(|w| w.id);
-            if let Some(wid) = wid {
-                send_input(conn, kind, keycode, wid, 0, 0);
+    // IRQ-safe: called from task 0 (desktop) while the client's read/process spins on
+    // XCONNS with IF=0 — a preemption holding this lock would deadlock (BUG-007 class).
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let wants = {
+            let t = XCONNS.lock();
+            t.iter().flatten().any(|c| c.windows.iter().any(|w| w.mapped && w.event_mask & 0x3 != 0))
+        };
+        if !wants {
+            return;
+        }
+        while let Some(sc) = crate::ps2::poll_scancode() {
+            let pressed = sc & 0x80 == 0;
+            let keycode = (sc & 0x7f) + 8; // X keycode = PS/2 scancode + 8
+            let want: u32 = if pressed { 0x1 } else { 0x2 }; // KeyPress / KeyRelease mask
+            let kind: u8 = if pressed { 2 } else { 3 };
+            let mut t = XCONNS.lock();
+            for conn in t.iter_mut().flatten() {
+                // Deliver to the LARGEST mapped window (the toplevel GTK listens on),
+                // not a small GDK input-only child that may also select keys.
+                let wid = conn
+                    .windows
+                    .iter()
+                    .filter(|w| w.mapped && w.w > 1 && w.h > 1 && w.event_mask & want != 0)
+                    .max_by_key(|w| w.w as u32 * w.h as u32)
+                    .map(|w| w.id);
+                if let Some(wid) = wid {
+                    send_input(conn, kind, keycode, wid, 0, 0);
+                }
             }
         }
-    }
+    });
 }
 
 /// Pump REAL mouse input into X ButtonPress events. Consumes a left-button press
@@ -208,6 +214,29 @@ pub fn pump_mouse() {
 /// at WINDOW-LOCAL coordinates — used by the desktop to route a click on a hosted X
 /// app's framed window to the app (so its GTK button activates). IRQ-safe: task 0 must
 /// not hold XCONNS across a preemption while the IF=0 client read/process spins on it.
+/// Deliver FocusIn(9) / FocusOut(10) to the front mapped window. GTK/GDK only routes
+/// key events to widgets once its window has keyboard focus (a FocusIn), so the desktop
+/// sends this when the hosted X window gains/loses focus. IRQ-safe.
+pub fn deliver_focus(focused: bool) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut t = XCONNS.lock();
+        for conn in t.iter_mut().flatten() {
+            if let Some(wid) = conn.windows.iter().filter(|w| w.mapped && w.w > 1 && w.h > 1)
+                .max_by_key(|w| w.w as u32 * w.h as u32).map(|w| w.id)
+            {
+                let mut e = [0u8; 32];
+                e[0] = if focused { 9 } else { 10 }; // FocusIn / FocusOut
+                e[1] = 0; // detail = NotifyAncestor
+                e[2..4].copy_from_slice(&conn.seq.to_le_bytes());
+                e[4..8].copy_from_slice(&wid.to_le_bytes()); // event window
+                // mode@8 = 0 (NotifyNormal); rest unused
+                conn.outbuf.extend_from_slice(&e);
+                trace(format_args!("deliver_focus({focused}) -> win {wid:#x}"));
+            }
+        }
+    });
+}
+
 pub fn deliver_button(lx: i16, ly: i16) {
     x86_64::instructions::interrupts::without_interrupts(|| {
         let mut t = XCONNS.lock();
@@ -223,6 +252,42 @@ pub fn deliver_button(lx: i16, ly: i16) {
             }
         }
     });
+}
+
+/// US-QWERTY X keysyms for a keycode (which is PS/2 set-1 scancode + 8, matching the
+/// standard X keycodes): returns (unshifted, shifted). NoSymbol (0,0) if unmapped.
+fn keysym_for(kc: u8) -> (u32, u32) {
+    // Letters: lowercase = ASCII, shifted = uppercase.
+    let letter = |c: u8| (c as u32, (c - 0x20) as u32);
+    match kc {
+        9 => (0xff1b, 0xff1b),   // Escape
+        10 => (0x31, 0x21), 11 => (0x32, 0x40), 12 => (0x33, 0x23), 13 => (0x34, 0x24),
+        14 => (0x35, 0x25), 15 => (0x36, 0x5e), 16 => (0x37, 0x26), 17 => (0x38, 0x2a),
+        18 => (0x39, 0x28), 19 => (0x30, 0x29), // 1..9 0
+        20 => (0x2d, 0x5f), 21 => (0x3d, 0x2b), // - =
+        22 => (0xff08, 0xff08), // BackSpace
+        23 => (0xff09, 0xff09), // Tab
+        24 => letter(b'q'), 25 => letter(b'w'), 26 => letter(b'e'), 27 => letter(b'r'),
+        28 => letter(b't'), 29 => letter(b'y'), 30 => letter(b'u'), 31 => letter(b'i'),
+        32 => letter(b'o'), 33 => letter(b'p'),
+        34 => (0x5b, 0x7b), 35 => (0x5d, 0x7d), // [ ]
+        36 => (0xff0d, 0xff0d), // Return
+        37 => (0xffe3, 0xffe3), // Control_L
+        38 => letter(b'a'), 39 => letter(b's'), 40 => letter(b'd'), 41 => letter(b'f'),
+        42 => letter(b'g'), 43 => letter(b'h'), 44 => letter(b'j'), 45 => letter(b'k'),
+        46 => letter(b'l'),
+        47 => (0x3b, 0x3a), 48 => (0x27, 0x22), 49 => (0x60, 0x7e), // ; ' `
+        50 => (0xffe1, 0xffe1), // Shift_L
+        51 => (0x5c, 0x7c), // backslash |
+        52 => letter(b'z'), 53 => letter(b'x'), 54 => letter(b'c'), 55 => letter(b'v'),
+        56 => letter(b'b'), 57 => letter(b'n'), 58 => letter(b'm'),
+        59 => (0x2c, 0x3c), 60 => (0x2e, 0x3e), 61 => (0x2f, 0x3f), // , . /
+        62 => (0xffe2, 0xffe2), // Shift_R
+        64 => (0xffe9, 0xffe9), // Alt_L
+        65 => (0x20, 0x20), // space
+        66 => (0xffe5, 0xffe5), // Caps_Lock
+        _ => (0, 0),
+    }
 }
 
 fn trace(args: core::fmt::Arguments) {
@@ -620,6 +685,45 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
         39 => {
             let mut r = reply_header(c, 0);
             wr32(c, &mut r, 8, 0); // number of events = 0
+            c.outbuf.extend_from_slice(&r);
+        }
+        // GetKeyboardMapping(101): first-keycode@4, count@5. Return a US-QWERTY keymap
+        // (2 keysyms/keycode: unshifted, shifted). Our keycodes are scancode+8, which
+        // match the standard X keycodes, so a toolkit maps keycode->keysym->character.
+        101 => {
+            let first = req.get(4).copied().unwrap_or(8);
+            let count = req.get(5).copied().unwrap_or(0) as usize;
+            const N: usize = 2; // keysyms per keycode
+            let mut r = reply_header(c, (count * N) as u32);
+            r[1] = N as u8;
+            for i in 0..count {
+                let kc = first.wrapping_add(i as u8);
+                let (lo, hi) = keysym_for(kc);
+                let base = 32 + i * N * 4;
+                r[base..base + 4].copy_from_slice(&lo.to_le_bytes());
+                r[base + 4..base + 8].copy_from_slice(&hi.to_le_bytes());
+            }
+            c.outbuf.extend_from_slice(&r);
+            trace(format_args!("GetKeyboardMapping first={first} count={count}"));
+        }
+        // GetModifierMapping(119): keycodes-per-modifier in r[1]; 8 modifiers ×
+        // that many keycodes (Shift, Lock, Control, Mod1..5). Provide the standard set.
+        119 => {
+            const KPM: usize = 2; // keycodes per modifier
+            let mut r = reply_header(c, (8 * KPM) as u32);
+            r[1] = KPM as u8;
+            // modifier index: 0 Shift, 1 Lock, 2 Control, 3 Mod1(Alt) ...
+            let mods: [(usize, u8); 4] = [(0, 50), (1, 66), (2, 37), (3, 64)]; // Shift_L, Caps, Ctrl_L, Alt_L
+            for (m, kc) in mods {
+                r[32 + m * KPM] = kc; // first keycode for that modifier
+            }
+            c.outbuf.extend_from_slice(&r);
+            trace(format_args!("GetModifierMapping"));
+        }
+        // GetKeyboardControl(103): a plausible reply (global auto-repeat on, etc.).
+        103 => {
+            let mut r = reply_header(c, 5); // 5 extra units = 20 bytes (bell/led/repeat map)
+            r[1] = 1; // global-auto-repeat = On
             c.outbuf.extend_from_slice(&r);
         }
         // Everything else (no reply): acknowledged by consuming the request.

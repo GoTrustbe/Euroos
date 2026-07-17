@@ -3581,6 +3581,7 @@ fn main() -> Status {
                             let ox = bx + bw.saturating_sub(xw) / 2;
                             let oy = by + bh.saturating_sub(xh) / 2;
                             if px >= ox && py >= oy && px < ox + xw && py < oy + xh {
+                                xserver::deliver_focus(true); // clicking the window focuses it
                                 xserver::deliver_button((px - ox) as i16, (py - oy) as i16);
                             }
                         }
@@ -4434,20 +4435,25 @@ fn main() -> Status {
         // One-shot self-test: after the live GTK window has been up a while, synthesize a
         // click on its Reset button (through the normal desktop click path) to prove
         // desktop->X input routing end-to-end (the on-screen counter visibly resets).
-        if !gtk_click_done && windows[gtk_idx].visible {
-            if let Some((xw, xh)) = xserver::front_window_size() {
-                gtk_dtick += 1;
-                if gtk_dtick % 20 == 0 { serial_println!("[gtk-test] desktop iterations with GTK up: {gtk_dtick}"); }
-                if gtk_dtick == 40 {
-                    // Deliver a click straight to the GTK window at the Reset button's
-                    // window-local coords (bottom-centre) — proves X-delivery + GTK
-                    // dispatch. (The desktop click-chain forwarding is separate.)
+        if !gtk_click_done && windows[gtk_idx].visible && xserver::front_window_size().is_some() {
+            gtk_dtick += 1;
+            // One-shot: click the Reset button (X delivery + GTK dispatch) to prove
+            // interactivity in a headless boot.
+            if gtk_dtick == 40 {
+                if let Some((xw, xh)) = xserver::front_window_size() {
                     let (lx, ly) = ((xw / 2) as i16, xh.saturating_sub(18) as i16);
                     serial_println!("[gtk-test] deliver_button to Reset @local({lx},{ly}) of {xw}x{xh}");
                     xserver::deliver_button(lx, ly);
-                    gtk_click_done = true;
                 }
+                gtk_click_done = true;
             }
+        }
+
+        // Keyboard focus: when the hosted GTK window is the active window, route real
+        // keystrokes to it (X KeyPress via the keymap) instead of the shell. Otherwise
+        // the shell keeps the keyboard as normal.
+        if windows[gtk_idx].visible && windows[gtk_idx].active {
+            xserver::pump_keyboard();
         }
 
         // Cooperatively yield so a hosted persistent glibc app (the live GTK window)
