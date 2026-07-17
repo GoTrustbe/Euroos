@@ -836,7 +836,11 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
     if !in_user_arena(buf, n) {
         return u64::MAX;
     }
-    unsafe { core::ptr::copy_nonoverlapping(data[offset..].as_ptr(), buf as *mut u8, n); }
+    // `offset` may be past EOF (chrome pread's an empty file at a nonzero offset) —
+    // n is then 0, but `data[offset..]` would still panic, so guard the slice.
+    if n > 0 {
+        unsafe { core::ptr::copy_nonoverlapping(data[offset..].as_ptr(), buf as *mut u8, n); }
+    }
     n as u64
 }
 
