@@ -302,6 +302,11 @@ fn pipe_create(user_fds: u64) -> u64 {
     0
 }
 
+/// True if `fd` is either end of a pipe.
+fn is_pipe_fd(fd: usize) -> bool {
+    fd < MAX_FD && PIPE_FDS.lock()[fd].is_some()
+}
+
 /// Write to a pipe fd (write end). None = `fd` is not a pipe write fd.
 fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
     if fd >= MAX_FD {
@@ -5230,12 +5235,21 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     None => return EFAULT,
                 };
                 crate::net::unix_fd_send(a1, &bytes)
+            } else if is_pipe_fd(a1 as usize) {
+                // a pipe write end (chrome SandboxHost/IPC signalling).
+                let bytes = match copy_from_user(a2, a3 as usize) {
+                    Some(v) => v,
+                    None => return EFAULT,
+                };
+                pipe_write_fd(a1 as usize, &bytes).unwrap_or(a3)
             } else {
                 // Write to an opened VFS file (fd >= 3).
                 vfs_write(a1 as usize, a2, a3 as usize)
             }
         }
         39 => 1,  // getpid()
+        22 | 293 => pipe_create(a1), // pipe(fds) / pipe2(fds, flags): chrome's
+                                     // SandboxHost + IPC create pipes for signalling.
         83 => {
             // mkdir(path, mode): chrome creates its (headless) user-data-dir here.
             vfs_mkdir(&user_cstr(a1, 256))
@@ -5688,6 +5702,8 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     return EFAULT;
                 }
                 data.len() as u64
+            } else if let Some(r) = pipe_read_fd(a1 as usize, a2, a3 as usize) {
+                r // a pipe read end (chrome SandboxHost/IPC)
             } else {
                 vfs_read(a1 as usize, a2, a3 as usize)
             }

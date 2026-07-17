@@ -1960,6 +1960,7 @@ fn main() -> Status {
                 &[b"/pack/chrome", b"--headless=old", b"--no-sandbox", b"--single-process",
                   b"--disable-gpu", b"--no-zygote", b"--disable-dev-shm-usage",
                   b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
+                  b"--disable-crashpad-for-testing", b"--disable-breakpad", b"--disable-in-process-stack-traces",
                   b"--dump-dom", b"data:text/html,<html><body><h1>EuroOS</h1></body></html>"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"CHROME_DEVEL_SANDBOX=/dev/null"], caps);
