@@ -2429,6 +2429,57 @@ pub fn pango_libs() -> [(&'static str, &'static [u8]); 15] {
 }
 /// A real Pango + HarfBuzz text-layout client (renders shaped text via cairo→X11).
 pub fn gpango_bytes() -> &'static [u8] { GPANGO_ELF }
+// SDL2 chain (20 libs) — served zero-copy. Proves the toolkit foundation is not
+// GTK-specific (SDL uses X11 + a software framebuffer -> XPutImage).
+static SDL_LIBSDL2_2_0: &[u8] = include_bytes!("../../userland/glibc/libSDL2-2.0.so.0");
+static SDL_LIBASOUND: &[u8] = include_bytes!("../../userland/glibc/libasound.so.2");
+static SDL_LIBPULSE: &[u8] = include_bytes!("../../userland/glibc/libpulse.so.0");
+static SDL_LIBSAMPLERATE: &[u8] = include_bytes!("../../userland/glibc/libsamplerate.so.0");
+static SDL_LIBXSS: &[u8] = include_bytes!("../../userland/glibc/libXss.so.1");
+static SDL_LIBDRM: &[u8] = include_bytes!("../../userland/glibc/libdrm.so.2");
+static SDL_LIBGBM: &[u8] = include_bytes!("../../userland/glibc/libgbm.so.1");
+static SDL_LIBDECOR_0: &[u8] = include_bytes!("../../userland/glibc/libdecor-0.so.0");
+static SDL_LIBPULSECOMMON_16_1: &[u8] = include_bytes!("../../userland/glibc/libpulsecommon-16.1.so");
+static SDL_LIBSNDFILE: &[u8] = include_bytes!("../../userland/glibc/libsndfile.so.1");
+static SDL_LIBX11_XCB: &[u8] = include_bytes!("../../userland/glibc/libX11-xcb.so.1");
+static SDL_LIBASYNCNS: &[u8] = include_bytes!("../../userland/glibc/libasyncns.so.0");
+static SDL_LIBAPPARMOR: &[u8] = include_bytes!("../../userland/glibc/libapparmor.so.1");
+static SDL_LIBFLAC: &[u8] = include_bytes!("../../userland/glibc/libFLAC.so.12");
+static SDL_LIBVORBIS: &[u8] = include_bytes!("../../userland/glibc/libvorbis.so.0");
+static SDL_LIBVORBISENC: &[u8] = include_bytes!("../../userland/glibc/libvorbisenc.so.2");
+static SDL_LIBOPUS: &[u8] = include_bytes!("../../userland/glibc/libopus.so.0");
+static SDL_LIBOGG: &[u8] = include_bytes!("../../userland/glibc/libogg.so.0");
+static SDL_LIBMPG123: &[u8] = include_bytes!("../../userland/glibc/libmpg123.so.0");
+static SDL_LIBMP3LAME: &[u8] = include_bytes!("../../userland/glibc/libmp3lame.so.0");
+static GSDL_ELF: &[u8] = include_bytes!("../../userland/glibc/gsdl");
+
+/// The SDL2 library chain (20 libs), served zero-copy from the image.
+pub fn sdl_libs() -> [(&'static str, &'static [u8]); 20] {
+    [
+        ("libSDL2-2.0.so.0", SDL_LIBSDL2_2_0),
+        ("libasound.so.2", SDL_LIBASOUND),
+        ("libpulse.so.0", SDL_LIBPULSE),
+        ("libsamplerate.so.0", SDL_LIBSAMPLERATE),
+        ("libXss.so.1", SDL_LIBXSS),
+        ("libdrm.so.2", SDL_LIBDRM),
+        ("libgbm.so.1", SDL_LIBGBM),
+        ("libdecor-0.so.0", SDL_LIBDECOR_0),
+        ("libpulsecommon-16.1.so", SDL_LIBPULSECOMMON_16_1),
+        ("libsndfile.so.1", SDL_LIBSNDFILE),
+        ("libX11-xcb.so.1", SDL_LIBX11_XCB),
+        ("libasyncns.so.0", SDL_LIBASYNCNS),
+        ("libapparmor.so.1", SDL_LIBAPPARMOR),
+        ("libFLAC.so.12", SDL_LIBFLAC),
+        ("libvorbis.so.0", SDL_LIBVORBIS),
+        ("libvorbisenc.so.2", SDL_LIBVORBISENC),
+        ("libopus.so.0", SDL_LIBOPUS),
+        ("libogg.so.0", SDL_LIBOGG),
+        ("libmpg123.so.0", SDL_LIBMPG123),
+        ("libmp3lame.so.0", SDL_LIBMP3LAME),
+    ]
+}
+pub fn gsdl_bytes() -> &'static [u8] { GSDL_ELF }
+
 
 // GTK3 toolkit chain (27 libs) — served zero-copy via register_file_static.
 static GTK_LIBATK_1_0: &[u8] = include_bytes!("../../userland/glibc/libatk-1.0.so.0");

@@ -1957,6 +1957,25 @@ fn main() -> Status {
             for l in opo.lines() { serial_println!("[glibc]   {l}"); }
         }
 
+        // gsdl: a REAL SDL2 app (Leg C) — different toolkit, same X11 path. Creates an
+        // X window + draws a gradient + moving box to its software surface
+        // (SDL_UpdateWindowSurface -> XPutImage). Proves the foundation is not
+        // GTK-specific. Bounded fullscreen demo (it loops forever; the deadline ends it).
+        {
+            for (name, bytes) in ring3::sdl_libs() {
+                ring3::register_file_static(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes);
+            }
+            serial_println!("[glibc] === SDL2 app (gsdl) ===");
+            xserver::set_windowed(false); // fullscreen demo blit (not the hosted window)
+            ring3::GLIBC_DEADLINE_TICKS.store(3_000, core::sync::atomic::Ordering::Relaxed);
+            ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
+            let (osdl, esdl) = ring3::run_glibc(&mut allocator, ring3::gsdl_bytes(), ring3::ldlinux_bytes(), &[b"gsdl"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"SDL_VIDEODRIVER=x11", b"SDL_AUDIODRIVER=dummy"], caps_net);
+            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+            ring3::GLIBC_DEADLINE_TICKS.store(12_000, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[glibc] gsdl (SDL2): exit={esdl}");
+            for l in osdl.lines() { serial_println!("[glibc]   {l}"); }
+        }
+
         // ggtk LAST: a REAL GTK3 app (gtk_init + a window whose GtkDrawingArea draws
         // with cairo, + a GMainLoop over the eventfd + X fd). The X server RENDERS it
         // fully: GTK draws into an off-screen pixmap (solid fills -> core-X

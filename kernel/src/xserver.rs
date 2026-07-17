@@ -710,7 +710,8 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
         // that many keycodes (Shift, Lock, Control, Mod1..5). Provide the standard set.
         119 => {
             const KPM: usize = 2; // keycodes per modifier
-            let mut r = reply_header(c, (8 * KPM) as u32);
+            // Data = 8 modifiers × KPM keycodes × 1 byte = 8*KPM bytes = 2*KPM units.
+            let mut r = reply_header(c, (2 * KPM) as u32);
             r[1] = KPM as u8;
             // modifier index: 0 Shift, 1 Lock, 2 Control, 3 Mod1(Alt) ...
             let mods: [(usize, u8); 4] = [(0, 50), (1, 66), (2, 37), (3, 64)]; // Shift_L, Caps, Ctrl_L, Alt_L
@@ -726,6 +727,20 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             r[1] = 1; // global-auto-repeat = On
             c.outbuf.extend_from_slice(&r);
         }
+        // QueryKeymap(44): 32-byte bitmap of currently-pressed keys (all zero = none).
+        // Reply is 8-byte header + 32 keys = length 2 units beyond the 32-byte base.
+        44 => {
+            let r = reply_header(c, 2); // 40 bytes, keys @8..40 already zero
+            c.outbuf.extend_from_slice(&r);
+        }
+        // QueryFont(47): a minimal font reply so a core-font query doesn't hang. Reply
+        // has 7 extra fixed units (min/max bounds + counts, all zero = an empty font).
+        47 => {
+            let r = reply_header(c, 7);
+            c.outbuf.extend_from_slice(&r);
+        }
+        // Bell(104)/ChangeKeyboardControl(102)/NoOperation(127): no reply.
+        104 | 102 | 127 => {}
         // Everything else (no reply): acknowledged by consuming the request.
         _ => {}
     }
