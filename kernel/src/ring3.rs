@@ -3872,7 +3872,11 @@ pub static GLIBC_DEADLINE_TICKS: core::sync::atomic::AtomicU64 = core::sync::ato
 // and mmap routing is unchanged. This is the Chromium-scale-memory foundation.
 const DEMAND_PML4_IDX: usize = 2; // virtual [1 TiB, 1.5 TiB)
 const DEMAND_BASE: u64 = (DEMAND_PML4_IDX as u64) << 39; // 0x100_0000_0000
-const DEMAND_SIZE: u64 = 64 * (1 << 30); // 64 GiB of reservable virtual space
+// 256 GiB of reservable virtual space (within PML4 slot 2's 512 GiB). chrome's
+// PartitionAlloc reserves several GigaCage pools (observed 4 + 32 + 16 GiB), each
+// aligned to its own size, so ~130 GiB with alignment padding — 64 GiB was too
+// small. Virtual-only: physical frames + page tables commit per touched page.
+const DEMAND_SIZE: u64 = 256 * (1 << 30);
 const DEMAND_MIN_BYTES: u64 = 16 * (1 << 20); // route anon mmaps >= 16 MiB here
 pub static DEMAND_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
@@ -4758,6 +4762,18 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             }
         }
         39 => 1,  // getpid()
+        186 => {
+            // gettid(): the main task reports tid==pid==1 (programs assume this); a
+            // cloned thread reports its unique kernel task id. chrome tags threads by tid.
+            let cur = crate::sched::current();
+            if cur == GLIBC_MAIN_TASK.load(Ordering::Relaxed) { 1 } else { cur as u64 }
+        }
+        157 => {
+            // prctl(option, ...): accept the common setters as no-ops (PR_SET_NAME,
+            // PR_SET_DUMPABLE, PR_SET_PDEATHSIG, PR_SET_VMA mapping-naming, …). chrome
+            // calls these during thread + allocator setup; success is the safe answer.
+            0
+        }
         60 | 231 => {
             // exit(code) / exit_group(code). exit_group (231) always ends the whole
             // process. exit (60) from a cloned THREAD ends only that thread (glibc's
@@ -4928,10 +4944,24 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 && a4 & MAP_FIXED == 0
                 && len >= DEMAND_MIN_BYTES
             {
-                let start = DEMAND_NEXT.fetch_add(len, Ordering::Relaxed);
-                if start + len > DEMAND_BASE + DEMAND_SIZE {
-                    DEMAND_NEXT.fetch_sub(len, Ordering::Relaxed);
+                // Reserve VA. For a LARGE power-of-two reservation (>= 1 GiB) align the
+                // base to its own size: chrome's PartitionAlloc reserves its GigaCage
+                // pools this way and CHECK-fails on an unaligned base. Aligning here
+                // lets its first attempt succeed instead of over-allocating 2x to trim.
+                let align: u64 = if len >= (1 << 30) && len.is_power_of_two() { len as u64 } else { 4096 };
+                let mut start = DEMAND_NEXT.load(Ordering::Relaxed);
+                start = (start + (align - 1)) & !(align - 1);
+                let new_next = start + len;
+                if new_next > DEMAND_BASE + DEMAND_SIZE {
+                    if len >= (1 << 30) {
+                        crate::serial_println!("[linux-abi] mmap anon RESERVE {} MiB align={:#x} -> ENOMEM (demand region {} GiB exhausted, next={:#x})",
+                            len >> 20, align, DEMAND_SIZE >> 30, DEMAND_NEXT.load(Ordering::Relaxed));
+                    }
                     return (-12i64) as u64; // -ENOMEM: out of demand virtual space
+                }
+                DEMAND_NEXT.store(new_next, Ordering::Relaxed);
+                if len >= (1 << 30) {
+                    crate::serial_println!("[linux-abi] mmap anon RESERVE {} MiB align={:#x} -> {:#x} (lazy)", len >> 20, align, start);
                 }
                 return start; // untouched -> committed lazily by handle_demand_fault
             }
