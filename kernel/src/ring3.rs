@@ -523,12 +523,13 @@ pub fn europack_scan() {
             const ENTRY: usize = 208;
             let ent_off = 16 + i * ENTRY;
             // Entries can spill past the first 4 KiB for large manifests: read the
-            // sector each entry lives in on demand.
-            let mut ent = [0u8; ENTRY + 512];
+            // sector(s) each entry lives in on demand. A 208 B entry straddles at most
+            // two 512 B sectors, so 1024 B of buffer + `need` (<= 1024) always fit.
+            let mut ent = [0u8; 1024];
             let sec = (ent_off / 512) as u64;
             let within = ent_off % 512;
-            let need = ((within + ENTRY + 511) / 512) * 512;
-            if !crate::virtio_blk::read_io_dev(dev, sec, &mut ent[..need.min(4096)]) {
+            let need = (((within + ENTRY + 511) / 512) * 512).min(ent.len());
+            if !crate::virtio_blk::read_io_dev(dev, sec, &mut ent[..need]) {
                 break;
             }
             let e = &ent[within..within + ENTRY];
