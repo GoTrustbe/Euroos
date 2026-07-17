@@ -23,7 +23,7 @@ LOADER="target/x86_64-unknown-uefi/${PROFILE}/loader.efi"
 echo "==> kernel: $(du -h "$EFI" | cut -f1) · loader: $(du -h "$LOADER" | cut -f1)"
 
 echo "==> building FAT32 image ($IMG) via mtools (no root needed)"
-dd if=/dev/zero of="$IMG" bs=1M count=64 status=none
+dd if=/dev/zero of="$IMG" bs=1M count=256 status=none
 mkfs.fat -F 32 -n EUROKERNEL "$IMG" >/dev/null
 mmd -i "$IMG" ::/EFI ::/EFI/BOOT
 # G4 TWO-STAGE: BOOTX64.EFI = loader; the kernel sits as slot image A and B.

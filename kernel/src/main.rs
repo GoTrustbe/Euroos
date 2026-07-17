@@ -1868,18 +1868,35 @@ fn main() -> Status {
         serial_println!("[glibc] gsparse (demand paging): exit={e16}, committed={} pages ({} KiB), pool delta={} frames (reclaimed after exit)",
             ring3::demand_committed_pages(), ring3::demand_committed_pages()*4, pool_before as i64 - pool_after as i64);
         for l in o16.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gfmmap: FILE-BACKED demand paging — mmap a large (5 MiB) served library the
+        // way a dynamic loader maps a LOAD segment, but fault each page in from the
+        // file lazily instead of copying the whole segment. Proves the mmap view is
+        // byte-identical to read(). This is the foundation for loading binaries far
+        // larger than RAM (a browser's hundreds-of-MiB .text) without a giant arena.
+        let fpages_before = ring3::demand_file_pages();
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        ring3::DEMAND_FILE_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (ofm, efm) = ring3::run_glibc(&mut allocator, ring3::gfmmap_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gfmmap"], &[b"PATH=/bin"], caps);
+        ring3::DEMAND_FILE_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        ring3::clear_demand_file_maps();
+        serial_println!("[glibc] gfmmap (file-backed demand paging): exit={efm} (want 124), pages filled-from-file={}",
+            ring3::demand_file_pages() - fpages_before);
+        for l in ofm.lines() { serial_println!("[glibc]   {l}"); }
         // (Reclamation validated out-of-band: 30 mixed runs incl. threaded kept the
         // task table at index 31 with free_frames stable — see commit notes.)
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
-        let results: [(&str, u64, u64); 18] = [
+        let results: [(&str, u64, u64); 19] = [
             ("gtiny(dyn-link)", e1, 42), ("gtest(stdio/malloc/qsort)", e2, 55),
             ("gthread(pthreads)", e3, 88), ("gmath(libm+dlopen)", e4, 77),
             ("gcpp(C++/exceptions)", e5, 66), ("seq(argv)", e6, 0), ("factor(libgmp)", e7, 0),
             ("gbig(200MiB heap)", e8, 111), ("gsync(mutex+condvar)", e9, 99),
             ("base64(stdin)", e10, 0), ("wc(stdin)", e11, 0), ("sha256sum(libcrypto)", e12, 0),
             ("sort(stdin)", e13, 0), ("gfile(file I/O)", e14, 44), ("gglib(GLib)", e15, 55),
-            ("gsparse(demand-paging)", e16, 123), ("gunix(AF_UNIX socketpair)", eu, 67),
+            ("gsparse(demand-paging)", e16, 123), ("gfmmap(file-backed demand-paging)", efm, 124),
+            ("gunix(AF_UNIX socketpair)", eu, 67),
             ("gxwin(X11 window+render+PutImage+events+real-kbd)", ex, 90),
         ];
         let pass = results.iter().filter(|(_, got, want)| got == want).count()

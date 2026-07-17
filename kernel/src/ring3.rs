@@ -2237,6 +2237,9 @@ static GBIG_ELF: &[u8] = include_bytes!("../../userland/glibc/gbig");
 static GSYNC_ELF: &[u8] = include_bytes!("../../userland/glibc/gsync");
 // DEMAND-PAGING test: mmap 4 GiB sparse, touch scattered pages (only those commit).
 static GSPARSE_ELF: &[u8] = include_bytes!("../../userland/glibc/gsparse");
+// FILE-BACKED demand-paging test: mmap a large served lib, verify the lazily
+// faulted mmap view equals the read() view (the loader's LOAD-segment path).
+static GFMMAP_ELF: &[u8] = include_bytes!("../../userland/glibc/gfmmap");
 // AF_UNIX socketpair round-trip (local IPC — the X11/dbus transport).
 static GUNIX_ELF: &[u8] = include_bytes!("../../userland/glibc/gunix");
 // X11 CLIENT stack (a real Xlib client + its 6 transitive libs) — the GUI rung.
@@ -2334,6 +2337,8 @@ pub fn gsync_bytes() -> &'static [u8] { GSYNC_ELF }
 pub fn gfile_bytes() -> &'static [u8] { GFILE_ELF }
 /// A sparse-mmap demand-paging test (reserve 4 GiB, touch a few pages).
 pub fn gsparse_bytes() -> &'static [u8] { GSPARSE_ELF }
+/// A file-backed demand-paging test (mmap a large lib, verify vs read()).
+pub fn gfmmap_bytes() -> &'static [u8] { GFMMAP_ELF }
 /// An AF_UNIX socketpair round-trip test (local IPC transport).
 pub fn gunix_bytes() -> &'static [u8] { GUNIX_ELF }
 /// The X11 client libraries (served to ld.so for a real Xlib client).
@@ -3793,6 +3798,26 @@ static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU6
 static DEMAND_COMMITTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static DEMAND_USED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
+// ── FILE-BACKED demand paging (opt-in, separate flag) ───────────────────────
+// A large file-backed mmap (a dynamic loader mapping a library's LOAD segment)
+// reserves virtual space in the demand region and records a descriptor here;
+// each 4 KiB page is filled from the file the first time it faults, instead of
+// copying the whole segment up-front. This is what lets a program map a binary
+// far larger than RAM (Chromium's .text is hundreds of MiB) and pay only for the
+// code pages it actually runs. Gated by its OWN flag so the verified eager
+// file-mmap path (small toolkit libs) is byte-for-byte unchanged when off.
+pub static DEMAND_FILE_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+const DEMAND_FILE_MIN_BYTES: u64 = 1 << 20; // route file-backed mmaps >= 1 MiB here
+// (reserve base, byte length, FILES index, file offset) per lazy file mapping.
+static DEMAND_FILE_MAPS: Mutex<alloc::vec::Vec<(u64, u64, usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static DEMAND_FILE_FILLED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Pages filled from a file by demand paging so far (diagnostics).
+pub fn demand_file_pages() -> u64 { DEMAND_FILE_FILLED.load(Ordering::Relaxed) }
+/// Drop all lazy file-mapping descriptors (called when a process address space is
+/// torn down, so a later run cannot fill a fresh frame from a stale file index).
+pub fn clear_demand_file_maps() { DEMAND_FILE_MAPS.lock().clear(); }
+
 /// Number of 4 KiB pages committed on demand so far (diagnostics).
 pub fn demand_committed_pages() -> u64 { DEMAND_COMMITTED.load(Ordering::Relaxed) }
 
@@ -3822,6 +3847,33 @@ pub fn handle_demand_fault(addr: u64) -> bool {
     };
     // SAFETY: `phys` is an identity-mapped free frame; zero it (anon = zeroed).
     unsafe { core::ptr::write_bytes(phys as *mut u8, 0, 4096); }
+    // If this page belongs to a lazy FILE-backed mapping, fill it from the file at
+    // the right offset (bytes past EOF stay zero — matches mmap semantics). The
+    // frame is already zeroed, so a partial-page copy leaves a correct zero tail.
+    {
+        let maps = DEMAND_FILE_MAPS.lock();
+        // Search newest-first so a MAP_FIXED segment overlay wins over the flat
+        // whole-library mapping beneath it (and a bss zero-shadow wins over both).
+        if let Some(&(base, _len, fidx, foff)) =
+            maps.iter().rev().find(|&&(b, l, _, _)| page >= b && page < b + l)
+        {
+            if fidx != usize::MAX {
+                let file_pos = foff + (page - base) as usize;
+                let files = FILES.lock();
+                if let Some(f) = files.get(fidx) {
+                    let data = &f.1;
+                    if file_pos < data.len() {
+                        let n = (data.len() - file_pos).min(4096);
+                        // SAFETY: `phys` is an identity-mapped 4 KiB frame; `n <= 4096`.
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(data[file_pos..].as_ptr(), phys as *mut u8, n);
+                        }
+                    }
+                }
+            } // else: zero-fill shadow (.bss) — frame is already zeroed.
+            DEMAND_FILE_FILLED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
     if !crate::paging::map_demand_4k(pml4, page, phys) {
         crate::procpool::demand_free(phys);
         return false;
@@ -4801,6 +4853,63 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     return (-12i64) as u64; // -ENOMEM: out of demand virtual space
                 }
                 return start; // untouched -> committed lazily by handle_demand_fault
+            }
+
+            // FILE-BACKED / lazy demand paging (opt-in via DEMAND_FILE_ENABLED). This
+            // implements the pattern a dynamic loader uses to map a library too big to
+            // copy eagerly: reserve the whole span, then MAP_FIXED-overlay each LOAD
+            // segment (and an anon overlay for .bss). Every page faults in from the file
+            // (or as zero for bss) on first touch — see handle_demand_fault.
+            if DEMAND_ENABLED.load(Ordering::Relaxed) && DEMAND_FILE_ENABLED.load(Ordering::Relaxed) {
+                const PROT_RWX: u64 = 0x7; // PROT_READ|WRITE|EXEC
+                let in_demand = |x: u64| x >= DEMAND_BASE && x < DEMAND_BASE + DEMAND_SIZE;
+
+                // (A) A MAP_FIXED overlay landing inside a reserved demand span: the
+                // loader placing a segment (file-backed) or .bss (anon) at base+vaddr.
+                if a4 & MAP_FIXED != 0 && a1 != 0 && in_demand(a1 & !0xFFF) {
+                    let base = a1 & !0xFFF;
+                    if file_backed {
+                        let off = unsafe { recover_mmap_offset() } as usize;
+                        let fds = OPEN_FDS.lock();
+                        let fi = match fds.get(a5 as usize).and_then(|s| *s) {
+                            Some((fi, _)) => fi,
+                            None => return (-9i64) as u64, // -EBADF
+                        };
+                        drop(fds);
+                        DEMAND_FILE_MAPS.lock().push((base, len, fi, off));
+                    } else {
+                        // Anon overlay (.bss): a zero-fill shadow (fidx == !0) that hides
+                        // any flat file descriptor beneath it, so bss reads back zero.
+                        DEMAND_FILE_MAPS.lock().push((base, len, usize::MAX, 0));
+                    }
+                    return base;
+                }
+
+                // (B) A large non-fixed file-backed mmap: the loader's initial whole-
+                // library mapping (or a program mmapping a big file). Reserve the span;
+                // a readable mapping also gets a flat fill descriptor (offset 0 = the
+                // first segment / a plain file view), a PROT_NONE reservation gets none.
+                if file_backed && a4 & MAP_FIXED == 0 && len >= DEMAND_FILE_MIN_BYTES {
+                    let off = unsafe { recover_mmap_offset() } as usize;
+                    let fds = OPEN_FDS.lock();
+                    let fi = match fds.get(a5 as usize).and_then(|s| *s) {
+                        Some((fi, _)) => fi,
+                        None => return (-9i64) as u64, // -EBADF
+                    };
+                    drop(fds);
+                    let start = DEMAND_NEXT.fetch_add(len, Ordering::Relaxed);
+                    if start + len > DEMAND_BASE + DEMAND_SIZE {
+                        DEMAND_NEXT.fetch_sub(len, Ordering::Relaxed);
+                        return (-12i64) as u64; // -ENOMEM
+                    }
+                    if a3 & PROT_RWX != 0 {
+                        DEMAND_FILE_MAPS.lock().push((start, len, fi, off));
+                    }
+                    crate::serial_println!(
+                        "[linux-abi] mmap file-backed DEMAND fd={a5} off={off} len={len} prot={a3:#x} -> {start:#x} (lazy)"
+                    );
+                    return start;
+                }
             }
 
             // Pick the target region: MAP_FIXED honours addr (must be in-arena +
