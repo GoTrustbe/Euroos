@@ -1485,20 +1485,25 @@ fn futex_wake(uaddr: u64, n: i32) -> u32 {
 /// (the waiter is switched out on the next tick until a wake
 /// unblocks it; musl re-checks after a spurious wakeup). Otherwise -EAGAIN.
 fn futex_wait(uaddr: u64, val: u32) -> u64 {
+    let cur = crate::sched::current();
+    // Hold FUTEX_QUEUE across the value re-read + enqueue + block, so a concurrent
+    // futex_wake (which also locks FUTEX_QUEUE) cannot slip in AFTER our value check
+    // but BEFORE we are enqueued — the classic wake-before-wait race that loses the
+    // wake and blocks the waiter forever. Rare with a few threads, deterministic at
+    // chrome's ~30-thread contention (was the thread-pool-init deadlock).
+    let mut q = FUTEX_QUEUE.lock();
     let cur_val: u32 = match read_user(uaddr) {
         Some(v) => v,
         None => return EFAULT,
     };
     if cur_val != val {
-        return (-11i64) as u64; // -EAGAIN: the value already changed
+        return (-11i64) as u64; // -EAGAIN: the value already changed (drops q)
     }
-    let cur = crate::sched::current();
-    let mut q = FUTEX_QUEUE.lock();
     if !q.iter().any(|&(a, t)| a == uaddr && t == cur) {
         q.push((uaddr, cur));
     }
+    crate::sched::block_current(); // mark Blocked while still holding q
     drop(q);
-    crate::sched::block_current();
     0
 }
 
