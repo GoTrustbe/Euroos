@@ -1957,13 +1957,12 @@ fn main() -> Status {
             for l in opo.lines() { serial_println!("[glibc]   {l}"); }
         }
 
-        // ggtk LAST: a REAL GTK3 app (gtk_init + window with a label + button, Adwaita
-        // theme, GMainLoop over the eventfd + X fd). The X server now renders it: GTK
-        // draws its widget tree into a pixmap (CreatePixmap + PolyFillRectangle) and
-        // CopyAreas it onto the window, which is composited to the framebuffer — the
-        // GTK window shows on screen with its real Adwaita background. It self-quits
-        // after the window renders. (Child-widget glyphs need server-side XRender,
-        // which is not implemented, so the window background shows but not the text.)
+        // ggtk LAST: a REAL GTK3 app (gtk_init + a window whose GtkDrawingArea draws
+        // with cairo, + a GMainLoop over the eventfd + X fd). The X server RENDERS it
+        // fully: GTK draws into an off-screen pixmap (solid fills -> core-X
+        // PolyFillRectangle; lines/gradients/TEXT -> cairo's image fallback via
+        // GetImage+PutImage) and CopyAreas it onto the window, composited to the
+        // framebuffer — shapes AND anti-aliased text appear. Self-quits after rendering.
         {
             ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <dir>/usr/share/fonts</dir>\n</fontconfig>\n".to_vec());
             serial_println!("[glibc] === GTK3 toolkit app (ggtk) ===");
