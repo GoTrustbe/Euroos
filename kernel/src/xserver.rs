@@ -204,6 +204,27 @@ pub fn pump_mouse() {
     }
 }
 
+/// Deliver a click (ButtonPress + ButtonRelease, button 1) to the front mapped window
+/// at WINDOW-LOCAL coordinates — used by the desktop to route a click on a hosted X
+/// app's framed window to the app (so its GTK button activates). IRQ-safe: task 0 must
+/// not hold XCONNS across a preemption while the IF=0 client read/process spins on it.
+pub fn deliver_button(lx: i16, ly: i16) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut t = XCONNS.lock();
+        for conn in t.iter_mut().flatten() {
+            // The GTK toplevel routes events to its client-side child widgets itself, so
+            // deliver to the largest mapped window (the toplevel) — no mask bit required.
+            if let Some(wid) = conn.windows.iter().filter(|w| w.mapped && w.w > 1 && w.h > 1)
+                .max_by_key(|w| w.w as u32 * w.h as u32).map(|w| w.id)
+            {
+                send_input(conn, 4, 1, wid, lx, ly); // ButtonPress, button 1
+                send_input(conn, 5, 1, wid, lx, ly); // ButtonRelease, button 1
+                trace(format_args!("deliver_button local=({lx},{ly}) -> win {wid:#x}"));
+            }
+        }
+    });
+}
+
 fn trace(args: core::fmt::Arguments) {
     if TRACE.load(core::sync::atomic::Ordering::Relaxed) {
         crate::serial_println!("[xserver] {args}");

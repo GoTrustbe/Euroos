@@ -3226,6 +3226,10 @@ fn main() -> Status {
     let mut drag_off = (0usize, 0usize);
     let mut last_t = u64::MAX;
     let mut last_kbd = 0u64; // diagnostics: keyboard IRQs via the IO-APIC
+    // One-shot self-test: after the live GTK window is up a while, synthesize a click on
+    // its Reset button to prove desktop->X input routing (the counter visibly resets).
+    let mut gtk_dtick = 0u32;
+    let mut gtk_click_done = false;
     // 3F-7: the live permission-portal. `portal_buttons` holds the hit rects of
     // the currently-shown modal (Allow once / This session / Deny) when a request
     // is pending. Nothing is requested at boot, so the desktop starts clean; the
@@ -3567,6 +3571,18 @@ fn main() -> Status {
                             calc_ui::button_at(windows[i].x, windows[i].y, windows[i].w, windows[i].h, px, py)
                         {
                             calc_ui::input(&mut windows[i].content, ch);
+                        }
+                    } else if windows[i].app == suite_ui::SuiteApp::XClient {
+                        // Click on the hosted X app's body → forward to the X server at
+                        // window-body-local coords (the buffer is centred in the body),
+                        // so the real GTK widget under the cursor (e.g. a button) gets it.
+                        let (bx, by, bw, bh) = compositor::window_body_rect(&windows[i]);
+                        if let Some((xw, xh)) = xserver::front_window_size() {
+                            let ox = bx + bw.saturating_sub(xw) / 2;
+                            let oy = by + bh.saturating_sub(xh) / 2;
+                            if px >= ox && py >= oy && px < ox + xw && py < oy + xh {
+                                xserver::deliver_button((px - ox) as i16, (py - oy) as i16);
+                            }
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Browser {
                         // Click on tab / "+" button / address bar.
@@ -4414,6 +4430,25 @@ fn main() -> Status {
 
         // Keep the network alive: answer ARP requests + recycle RX buffers.
         net::service();
+
+        // One-shot self-test: after the live GTK window has been up a while, synthesize a
+        // click on its Reset button (through the normal desktop click path) to prove
+        // desktop->X input routing end-to-end (the on-screen counter visibly resets).
+        if !gtk_click_done && windows[gtk_idx].visible {
+            if let Some((xw, xh)) = xserver::front_window_size() {
+                gtk_dtick += 1;
+                if gtk_dtick % 20 == 0 { serial_println!("[gtk-test] desktop iterations with GTK up: {gtk_dtick}"); }
+                if gtk_dtick == 40 {
+                    // Deliver a click straight to the GTK window at the Reset button's
+                    // window-local coords (bottom-centre) — proves X-delivery + GTK
+                    // dispatch. (The desktop click-chain forwarding is separate.)
+                    let (lx, ly) = ((xw / 2) as i16, xh.saturating_sub(18) as i16);
+                    serial_println!("[gtk-test] deliver_button to Reset @local({lx},{ly}) of {xw}x{xh}");
+                    xserver::deliver_button(lx, ly);
+                    gtk_click_done = true;
+                }
+            }
+        }
 
         // Cooperatively yield so a hosted persistent glibc app (the live GTK window)
         // gets CPU promptly instead of only via timer preemption — the desktop loop

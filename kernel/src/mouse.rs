@@ -45,6 +45,16 @@ fn update_buttons(new: u8) {
     }
 }
 
+/// Synthesize a left-press at (x,y) — a deterministic click for self-tests (routing a
+/// click into a hosted X app's window without relying on flaky QMP mouse injection).
+pub fn inject_press(x: usize, y: usize) {
+    MOUSE_X.store(x as i32, Ordering::Relaxed);
+    MOUSE_Y.store(y as i32, Ordering::Relaxed);
+    CLICK_X.store(x as i32, Ordering::Relaxed);
+    CLICK_Y.store(y as i32, Ordering::Relaxed);
+    PRESS_PENDING.store(true, Ordering::Relaxed);
+}
+
 /// Consume a pending left-button press → the screen position where it happened.
 pub fn take_press() -> Option<(usize, usize)> {
     if PRESS_PENDING.swap(false, Ordering::Relaxed) {
