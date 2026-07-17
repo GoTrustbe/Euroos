@@ -3506,6 +3506,11 @@ fn main() -> Status {
                 if let Some(btn) = windows[i].title_button_at(px, py) {
                     match btn {
                         compositor::TitleButton::Close => {
+                            // Closing the hosted X app window terminates the glibc app
+                            // + frees its arena (spawn_glibc_persistent has no teardown).
+                            if windows[i].app == suite_ui::SuiteApp::XClient {
+                                ring3::kill_persistent_glibc(ctx.mem);
+                            }
                             windows[i].visible = false;
                             order.retain(|&x| x != i);
                             // Focus to the now-topmost visible window.
@@ -4435,17 +4440,26 @@ fn main() -> Status {
         // One-shot self-test: after the live GTK window has been up a while, synthesize a
         // click on its Reset button (through the normal desktop click path) to prove
         // desktop->X input routing end-to-end (the on-screen counter visibly resets).
-        if !gtk_click_done && windows[gtk_idx].visible && xserver::front_window_size().is_some() {
+        if windows[gtk_idx].visible && xserver::front_window_size().is_some() {
             gtk_dtick += 1;
-            // One-shot: click the Reset button (X delivery + GTK dispatch) to prove
-            // interactivity in a headless boot.
-            if gtk_dtick == 40 {
+            // Self-test 1: click the Reset button (X delivery + GTK dispatch).
+            if gtk_dtick == 40 && !gtk_click_done {
                 if let Some((xw, xh)) = xserver::front_window_size() {
                     let (lx, ly) = ((xw / 2) as i16, xh.saturating_sub(18) as i16);
                     serial_println!("[gtk-test] deliver_button to Reset @local({lx},{ly}) of {xw}x{xh}");
                     xserver::deliver_button(lx, ly);
                 }
                 gtk_click_done = true;
+            }
+            // Self-test 2 (Leg B): close the window -> terminate the app + free its arena.
+            if gtk_dtick == 90 {
+                let free_before = ctx.mem.free_bytes();
+                ring3::kill_persistent_glibc(ctx.mem);
+                windows[gtk_idx].visible = false;
+                order.retain(|&x| x != gtk_idx);
+                need_full = true;
+                serial_println!("[gtk-test] closed GTK window; free RAM {} -> {} MiB",
+                    free_before / (1 << 20), ctx.mem.free_bytes() / (1 << 20));
             }
         }
 

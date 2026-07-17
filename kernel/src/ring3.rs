@@ -3716,6 +3716,11 @@ static GLIBC_CTIDS: Mutex<alloc::vec::Vec<(usize, u64)>> = Mutex::new(alloc::vec
 // normal scheduler citizens): the main task id, a done flag + exit code.
 static GLIBC_MAIN_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
 static GLIBC_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+// A PERSISTENT glibc app (spawn_glibc_persistent) keeps running with no wait loop to
+// free it, so remember its address space to tear down when its window is closed.
+static PERSIST_ARENA: AtomicU64 = AtomicU64::new(0);
+static PERSIST_PML4: AtomicU64 = AtomicU64::new(0);
+static PERSIST_FRAMES: AtomicU64 = AtomicU64::new(0);
 static GLIBC_EXIT_CODE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// How many 100 Hz ticks the launcher waits for a glibc process to exit before
 /// giving up (default ~120 s guest; lowered during pthreads bring-up debugging).
@@ -3854,8 +3859,44 @@ pub fn spawn_glibc_persistent(
     let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
+    PERSIST_ARENA.store(arena, Ordering::Relaxed);
+    PERSIST_PML4.store(pml4, Ordering::Relaxed);
+    PERSIST_FRAMES.store(frames as u64, Ordering::Relaxed);
     crate::serial_println!("[glibc] persistent app: scheduled task {main_task} (runs alongside the desktop)");
     Some(main_task)
+}
+
+/// Terminate the persistent glibc app (spawn_glibc_persistent) and free its address
+/// space + arena — the teardown that path lacks. Called by the desktop when the hosted
+/// window is closed. Safe from task 0: the app's tasks are other tasks (not current),
+/// marked Dead so the scheduler never runs them again, then reclaimed and freed.
+pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
+    let main = GLIBC_MAIN_TASK.swap(usize::MAX, Ordering::Relaxed);
+    if main == usize::MAX {
+        return;
+    }
+    crate::sched::mark_dead(main);
+    crate::sched::reclaim_task(main);
+    for &t in GLIBC_THREADS.lock().iter() {
+        crate::sched::mark_dead(t);
+        crate::sched::reclaim_task(t);
+    }
+    GLIBC_THREADS.lock().clear();
+    GLIBC_CTIDS.lock().clear();
+    let pml4 = PERSIST_PML4.swap(0, Ordering::Relaxed);
+    let arena = PERSIST_ARENA.swap(0, Ordering::Relaxed);
+    let frames = PERSIST_FRAMES.swap(0, Ordering::Relaxed);
+    if pml4 != 0 {
+        crate::paging::free_address_space(falloc, pml4);
+    }
+    if arena != 0 && frames != 0 {
+        for i in 0..frames {
+            let _ = falloc.free(arena + i * 4096);
+        }
+    }
+    crate::xserver::set_windowed(false);
+    *crate::xserver::RETAINED_WINDOW.lock() = None;
+    crate::serial_println!("[glibc] persistent app (task {main}) terminated + arena freed");
 }
 
 pub fn run_glibc(
