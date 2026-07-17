@@ -405,34 +405,45 @@ fn epoll_fd_ready(fd: u64) -> bool {
     }
 }
 
-/// epoll_wait(epfd, *events, maxevents, timeout): report ready fds now (non-blocking).
-fn epoll_wait(epfd: u64, events: u64, maxevents: u64, _timeout: u64) -> u64 {
+/// epoll_wait(epfd, *events, maxevents, timeout): report ready fds. When nothing is
+/// ready and a wait was requested, YIELD (bounded) so chrome's worker threads and
+/// timers advance instead of the main thread busy-spinning — then return 0 so the
+/// pump re-checks its timer queue. This keeps a cooperative kernel making progress.
+fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
     if !is_epoll_fd(epfd) {
         return (-9i64) as u64;
     }
-    let list = match &EPOLLS.lock()[(epfd - EPOLL_FD_BASE) as usize] {
-        Some(l) => l.clone(),
-        None => return (-9i64) as u64,
-    };
-    let mut n = 0u64;
-    for (fd, evmask, data) in list {
-        if n >= maxevents {
-            break;
-        }
-        if evmask & 0x1 != 0 && epoll_fd_ready(fd as u64) {
-            // struct epoll_event {u32 events; u64 data} packed = 12 bytes.
-            let base = events + n * 12;
-            if !in_user_arena(base, 12) {
-                return EFAULT;
+    let idx = (epfd - EPOLL_FD_BASE) as usize;
+    let mut tries = 0u32;
+    loop {
+        let list = match &EPOLLS.lock()[idx] {
+            Some(l) => l.clone(),
+            None => return (-9i64) as u64,
+        };
+        let mut n = 0u64;
+        for (fd, evmask, data) in list {
+            if n >= maxevents {
+                break;
             }
-            unsafe {
-                (base as *mut u32).write(0x1); // EPOLLIN
-                ((base + 4) as *mut u64).write(data);
+            if evmask & 0x1 != 0 && epoll_fd_ready(fd as u64) {
+                // struct epoll_event {u32 events; u64 data} packed = 12 bytes.
+                let base = events + n * 12;
+                if !in_user_arena(base, 12) {
+                    return EFAULT;
+                }
+                unsafe {
+                    (base as *mut u32).write(0x1); // EPOLLIN
+                    ((base + 4) as *mut u64).write(data);
+                }
+                n += 1;
             }
-            n += 1;
         }
+        if n > 0 || timeout == 0 || tries >= 8 {
+            return n; // ready fds, non-blocking, or gave the CPU up enough — let the pump run
+        }
+        tries += 1;
+        crate::sched::sleep_ticks(1); // yield to worker threads + advance timers
     }
-    n
 }
 
 /// Write to a pipe fd (write end). None = `fd` is not a pipe write fd.
@@ -5492,13 +5503,24 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         233 => epoll_ctl(a1, a2, a3, a4),     // epoll_ctl(epfd, op, fd, *event)
         232 => epoll_wait(a1, a2, a3, a4),    // epoll_wait(epfd, *events, max, timeout)
         281 => epoll_wait(a1, a2, a3, a4),    // epoll_pwait(epfd, *events, max, timeout, sigmask)
-        4 => {
-            // stat(path, statbuf): a path-based stat (chrome verifies its socket temp
-            // dir is mode 0700 via stat, not newfstatat). 144-byte Linux struct stat.
+        4 | 6 => {
+            // stat(path, statbuf) / lstat(path, statbuf): a path-based stat (chrome
+            // verifies its socket temp dir is 0700 via stat). 144-byte struct stat.
             let path = user_cstr(a1, 256);
             ensure_proc(&path);
             if !in_user_arena(a2, 144) {
                 return EFAULT;
+            }
+            // lstat: a symlink reports S_IFLNK (don't follow).
+            if num == 6 {
+                if let Some((_, t)) = SYMLINKS.lock().iter().find(|(p, _)| p.as_bytes() == path.as_slice()).cloned() {
+                    unsafe {
+                        core::ptr::write_bytes(a2 as *mut u8, 0, 144);
+                        (a2 as *mut u32).add(6).write(0o120777); // S_IFLNK|0777
+                        ((a2 + 48) as *mut u64).write(t.len() as u64); // st_size = target len
+                    }
+                    return 0;
+                }
             }
             if is_vfs_dir(&path) {
                 unsafe {
