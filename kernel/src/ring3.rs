@@ -6345,7 +6345,10 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             let pathptr = if num == 21 { a1 } else { a2 };
             let path = user_cstr(pathptr, 256);
             ensure_proc(&path); // synthesize /proc on demand
-            let exists = FILES.lock().iter().any(|(p, _)| p.as_bytes() == path.as_slice());
+            let exists = FILES.lock().iter().any(|(p, _)| p.as_bytes() == path.as_slice())
+                || DISK_FILES.lock().iter().any(|(p, _, _, _)| p.as_bytes() == path.as_slice())
+                || SYMLINKS.lock().iter().any(|(p, _)| p.as_bytes() == path.as_slice())
+                || is_vfs_dir(&path); // chrome access()es its disk-served locale paks + dirs
             if exists { 0 } else { (-2i64) as u64 } // -ENOENT
         }
         99 => {
