@@ -1933,6 +1933,27 @@ fn main() -> Status {
         } else {
             serial_println!("[europack] no pack disk attached — disk-backed serving test SKIPPED");
         }
+
+        // ── DISK-SERVED DEMAND-PAGED EXE LOADER ────────────────────────────────
+        // Run a real binary whose executable is served from disk (never RAM-
+        // resident) — the path to the 485 MB chrome main binary. Validate on
+        // crashpad-from-disk (small, known-good embedded) first, then chrome.
+        if ring3::europack_has("/pack/crashpad") {
+            ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
+            let (o, e) = ring3::run_glibc_disk(&mut allocator, "/pack/crashpad", ring3::ldlinux_bytes(),
+                &[b"chrome_crashpad_handler", b"--help"], &[b"PATH=/bin", b"LANG=C"], caps);
+            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[chrome-disk] crashpad from DISK (demand-paged exe): exit={e}");
+            for l in o.lines() { serial_println!("[chrome-disk]   {l}"); }
+        }
+        if ring3::europack_has("/pack/chrome") {
+            ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
+            let (o, e) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome", ring3::ldlinux_bytes(),
+                &[b"/pack/chrome", b"--version"], &[b"PATH=/bin", b"LANG=C", b"DISPLAY=:0"], caps);
+            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[chrome-disk] chrome --version from DISK (485 MB demand-paged exe): exit={e}");
+            for l in o.lines() { serial_println!("[chrome-disk]   {l}"); }
+        }
         // (Reclamation validated out-of-band: 30 mixed runs incl. threaded kept the
         // task table at index 31 with free_frames stable — see commit notes.)
 

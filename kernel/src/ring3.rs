@@ -2572,6 +2572,10 @@ pub fn europack_present() -> bool { !DISK_FILES.lock().is_empty() }
 pub fn europack_on_vblk0() -> bool {
     DISK_FILES.lock().iter().any(|&(_, dev, _, _)| dev == 0)
 }
+/// True if a disk-served file with this exact path was registered from a pack disk.
+pub fn europack_has(path: &str) -> bool {
+    DISK_FILES.lock().iter().any(|(p, _, _, _)| p == path)
+}
 /// An AF_UNIX socketpair round-trip test (local IPC transport).
 pub fn gunix_bytes() -> &'static [u8] { GUNIX_ELF }
 /// The X11 client libraries (served to ld.so for a real Xlib client).
@@ -4051,7 +4055,11 @@ static DEMAND_USED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicB
 pub static DEMAND_FILE_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 const DEMAND_FILE_MIN_BYTES: u64 = 1 << 20; // route file-backed mmaps >= 1 MiB here
 // (reserve base, byte length, FILES index, file offset) per lazy file mapping.
-static DEMAND_FILE_MAPS: Mutex<alloc::vec::Vec<(u64, u64, usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
+// (base, byte length, FILES/DISK index (usize::MAX = zero-fill .bss), file offset,
+//  valid bytes from mapping start — beyond this the mapping reads as zero). `valid`
+//  lets one PT_LOAD segment map its filesz from the file and zero-fill the memsz
+//  tail (.bss) even when the boundary falls mid-page — the ELF loader's semantics.
+static DEMAND_FILE_MAPS: Mutex<alloc::vec::Vec<(u64, u64, usize, usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
 static DEMAND_FILE_FILLED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Pages filled from a file by demand paging so far (diagnostics).
@@ -4096,20 +4104,22 @@ pub fn handle_demand_fault(addr: u64) -> bool {
         let maps = DEMAND_FILE_MAPS.lock();
         // Search newest-first so a MAP_FIXED segment overlay wins over the flat
         // whole-library mapping beneath it (and a bss zero-shadow wins over both).
-        if let Some(&(base, _len, fidx, foff)) =
-            maps.iter().rev().find(|&&(b, l, _, _)| page >= b && page < b + l)
+        if let Some(&(base, _len, fidx, foff, valid)) =
+            maps.iter().rev().find(|&&(b, l, _, _, _)| page >= b && page < b + l)
         {
-            if fidx == usize::MAX {
-                // Zero-fill shadow (.bss) — frame is already zeroed.
+            let moff = page - base; // byte offset of this page into the mapping
+            // Bytes of this page that are real source data (rest = .bss zero tail).
+            let fill = valid.saturating_sub(moff).min(4096) as usize;
+            if fidx == usize::MAX || fill == 0 {
+                // Zero-fill shadow (.bss / past filesz) — frame is already zeroed.
             } else if fidx >= DISK_FI_BASE {
-                // DISK-BACKED (EuroPack): fill the page with a polled 4 KiB virtio
-                // read at the file's disk offset. This is the fault path that serves
-                // a chrome-sized binary without ever holding it in RAM.
+                // DISK-BACKED (EuroPack): fill from a polled virtio read at the file's
+                // disk offset. This serves a chrome-sized binary without RAM residency.
                 let src = DISK_FILES.lock().get(fidx - DISK_FI_BASE).map(|&(_, dev, off, size)| (dev, off, size));
                 if let Some((dev, dbase, dsize)) = src {
-                    let file_pos = foff as u64 + (page - base);
+                    let file_pos = foff as u64 + moff;
                     if file_pos < dsize {
-                        let n = (dsize - file_pos).min(4096) as usize;
+                        let n = fill.min((dsize - file_pos) as usize);
                         // SAFETY: `phys` is an identity-mapped, zeroed 4 KiB frame.
                         let dst = unsafe { core::slice::from_raw_parts_mut(phys as *mut u8, n) };
                         // IF=0 around the polled virtio op: this fault came from USER
@@ -4125,12 +4135,12 @@ pub fn handle_demand_fault(addr: u64) -> bool {
                     }
                 }
             } else {
-                let file_pos = foff + (page - base) as usize;
+                let file_pos = foff + moff as usize;
                 let files = FILES.lock();
                 if let Some(f) = files.get(fidx) {
                     let data = &f.1;
                     if file_pos < data.len() {
-                        let n = (data.len() - file_pos).min(4096);
+                        let n = fill.min(data.len() - file_pos);
                         // SAFETY: `phys` is an identity-mapped 4 KiB frame; `n <= 4096`.
                         unsafe {
                             core::ptr::copy_nonoverlapping(data[file_pos..].as_ptr(), phys as *mut u8, n);
@@ -4267,6 +4277,263 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
     crate::xserver::set_windowed(false);
     *crate::xserver::RETAINED_WINDOW.lock() = None;
     crate::serial_println!("[glibc] persistent app (task {main}) terminated + arena freed");
+}
+
+/// Read a disk-served ELF's header + program headers and build its LoadInfo, placing
+/// it at `exe_base` in the demand region. Reads only the first 8 KiB from disk (the
+/// ELF header + phdrs live there) — the LOAD segments themselves are NOT read; they
+/// fault in from disk page-by-page. `register_disk_exe_segments` must run afterwards.
+fn read_disk_exe_info(dev: usize, doff: u64, exe_base: u64) -> Option<LoadInfo> {
+    let mut hdr = alloc::vec![0u8; 8192];
+    if !disk_read_bytes(dev, doff, &mut hdr) {
+        return None;
+    }
+    if hdr.len() < 64 || &hdr[0..4] != b"\x7fELF" || hdr[4] != 2 || hdr[5] != 1 || rd_u16(&hdr, 18) != 0x3E {
+        return None;
+    }
+    let e_entry = rd_u64(&hdr, 24);
+    let e_phoff = rd_u64(&hdr, 32) as usize;
+    let e_phentsize = rd_u16(&hdr, 54) as usize;
+    let e_phnum = rd_u16(&hdr, 56) as usize;
+    let mut phdr_vaddr = 0u64;
+    for i in 0..e_phnum {
+        let ph = e_phoff + i * e_phentsize;
+        if ph + 56 > hdr.len() {
+            break;
+        }
+        let p_type = rd_u32(&hdr, ph);
+        if p_type == 6 {
+            phdr_vaddr = rd_u64(&hdr, ph + 16); // PT_PHDR
+        }
+        if p_type == 1 && phdr_vaddr == 0 {
+            let p_offset = rd_u64(&hdr, ph + 8);
+            let p_vaddr = rd_u64(&hdr, ph + 16);
+            let p_filesz = rd_u64(&hdr, ph + 32);
+            if p_offset <= e_phoff as u64 && (e_phoff as u64) < p_offset + p_filesz {
+                phdr_vaddr = p_vaddr + (e_phoff as u64 - p_offset);
+            }
+        }
+    }
+    Some(LoadInfo {
+        entry: exe_base + e_entry,
+        phdr: if phdr_vaddr != 0 { exe_base + phdr_vaddr } else { 0 },
+        phent: e_phentsize as u64,
+        phnum: e_phnum as u64,
+        base: exe_base,
+        exec_pages: [0u64; 8], // exe lives in the demand region (RWX), not the arena
+        writ_pages: [0u64; 8],
+    })
+}
+
+/// Register each PT_LOAD of a disk-served exe as a disk-backed demand mapping at
+/// `exe_base`, and reserve its VA span. Call AFTER DEMAND_NEXT is reset for the run.
+/// Returns false on a bad/oversized header.
+fn register_disk_exe_segments(diskidx: usize, dev: usize, doff: u64, exe_base: u64) -> bool {
+    let mut hdr = alloc::vec![0u8; 8192];
+    if !disk_read_bytes(dev, doff, &mut hdr) {
+        return false;
+    }
+    let e_phoff = rd_u64(&hdr, 32) as usize;
+    let e_phentsize = rd_u16(&hdr, 54) as usize;
+    let e_phnum = rd_u16(&hdr, 56) as usize;
+    let fidx = DISK_FI_BASE + diskidx;
+    let mut hi = 0u64;
+    {
+        let mut maps = DEMAND_FILE_MAPS.lock();
+        for i in 0..e_phnum {
+            let ph = e_phoff + i * e_phentsize;
+            if ph + 56 > hdr.len() || rd_u32(&hdr, ph) != 1 {
+                continue; // PT_LOAD only
+            }
+            let p_offset = rd_u64(&hdr, ph + 8);
+            let p_vaddr = rd_u64(&hdr, ph + 16);
+            let p_filesz = rd_u64(&hdr, ph + 32);
+            let p_memsz = rd_u64(&hdr, ph + 40);
+            // Page-aligned mapping (ELF guarantees p_offset ≡ p_vaddr mod 4096): the
+            // file part of this page range faults from disk, the .bss tail zeroes.
+            let slop = p_vaddr & 0xFFF;
+            let base = exe_base + (p_vaddr & !0xFFF);
+            let foff = (p_offset & !0xFFF) as usize;
+            let valid = slop + p_filesz; // real file bytes measured from `base`
+            let len = (slop + p_memsz + 0xFFF) & !0xFFF; // whole segment incl. bss
+            maps.push((base, len, fidx, foff, valid));
+            hi = hi.max(p_vaddr + p_memsz);
+        }
+    }
+    // Reserve the exe's VA span so demand faults inside it are accepted.
+    let end = exe_base + ((hi + 0xFFF) & !0xFFF);
+    if end > DEMAND_NEXT.load(Ordering::Relaxed) {
+        DEMAND_NEXT.store(end, Ordering::Relaxed);
+    }
+    true
+}
+
+/// Run a REAL glibc program whose executable is served from a EuroPack disk (too
+/// large to hold in RAM — a 485 MB chrome binary). The exe's LOAD segments fault in
+/// from disk page-by-page in the demand region; ld.so + libc + heap + stack live in
+/// the identity arena as usual. Mirrors `run_glibc`'s lifecycle.
+pub fn run_glibc_disk(
+    falloc: &mut FrameAllocator,
+    exe_path: &str,
+    ldso: &[u8],
+    argv: &[&[u8]],
+    envp: &[&[u8]],
+    caps: u64,
+) -> (String, u64) {
+    // Resolve the disk-served executable.
+    let (diskidx, dev, doff, dsize) = {
+        let reg = DISK_FILES.lock();
+        match reg.iter().position(|(p, _, _, _)| p == exe_path) {
+            Some(i) => {
+                let (_, dev, off, size) = reg[i];
+                (i, dev, off, size)
+            }
+            None => return (String::from("(disk exe not found)"), u64::MAX),
+        }
+    };
+    init_syscall_msrs();
+    CURRENT_CAPS.store(caps, Ordering::Relaxed);
+    LINUX_ABI.store(true, Ordering::Relaxed);
+    *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
+    unsafe {
+        EXITED = 0;
+        EXIT_CODE = 0;
+    }
+    OUTPUT.lock().clear();
+    reset_fd_table();
+
+    // The exe is placed at the START of the demand region; ld.so libs reserve above it.
+    let exe_base = DEMAND_BASE;
+    let exe_info = match read_disk_exe_info(dev, doff, exe_base) {
+        Some(i) => i,
+        None => return (String::from("(bad disk exe ELF)"), u64::MAX),
+    };
+    crate::serial_println!(
+        "[glibc-disk] {exe_path}: {} MiB on disk, entry@{:#x} phdr@{:#x} phnum={} (demand-paged from disk)",
+        dsize / (1 << 20), exe_info.entry, exe_info.phdr, exe_info.phnum
+    );
+
+    // Demand paging is mandatory here (the exe faults in from disk).
+    let prev_demand = DEMAND_ENABLED.swap(true, Ordering::Relaxed);
+    let prev_file = DEMAND_FILE_ENABLED.swap(true, Ordering::Relaxed);
+
+    const MIB2: u64 = 1 << 21;
+    let want_mib: u64 = GLIBC_ARENA_MIB.load(Ordering::Relaxed).max(96);
+    let (arena, arena_mib) = {
+        let mut got = None;
+        let mut mib = want_mib;
+        while mib >= 64 {
+            let f = ((mib / 2) * 512) as usize;
+            if let Ok(a) = falloc.allocate_aligned(f, 512) {
+                got = Some((a, mib));
+                break;
+            }
+            mib /= 2;
+        }
+        match got {
+            Some(v) => v,
+            None => return (String::from("(no arena for glibc)"), u64::MAX),
+        }
+    };
+    let nblocks = arena_mib / 2;
+    let frames = (nblocks * 512) as usize;
+    unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
+
+    let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
+    let brk_start = arena + 0x0200_0000;
+    let mmap_start = arena + 0x0400_0000;
+    let stack_top = arena + nblocks * MIB2 - 0x0010_0000;
+    ARENA_BASE.store(arena, Ordering::Relaxed);
+    ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
+    BRK_CUR.store(brk_start, Ordering::Relaxed);
+    BRK_END.store(mmap_start, Ordering::Relaxed);
+    HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
+    HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
+
+    let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
+        Some(i) => i,
+        None => return (String::from("(bad ld.so ELF)"), u64::MAX),
+    };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, argv, envp, &exe_info, ldso_base) };
+
+    let sel = crate::gdt::selectors();
+    let user_cs = (sel.user_code.0 | 3) as u64;
+    let user_ss = (sel.user_data.0 | 3) as u64;
+    let pml4 = crate::paging::build_address_space_rwx_big(falloc, arena, nblocks);
+    GLIBC_PML4.store(pml4, Ordering::Relaxed);
+    GLIBC_THREADS.lock().clear();
+    GLIBC_CTIDS.lock().clear();
+    GLIBC_DONE.store(false, Ordering::Relaxed);
+    GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
+    DEMAND_NEXT.store(DEMAND_BASE, Ordering::Relaxed);
+    DEMAND_COMMITTED.store(0, Ordering::Relaxed);
+    DEMAND_USED.store(false, Ordering::Relaxed);
+    // Register the exe's disk-backed segments NOW (after the DEMAND_NEXT reset).
+    if !register_disk_exe_segments(diskidx, dev, doff, exe_base) {
+        return (String::from("(disk exe segment map failed)"), u64::MAX);
+    }
+
+    // Demand pool = (almost) all remaining RAM, for a chrome-scale working set.
+    const MARGIN: usize = 8192;
+    let mut want = falloc.free_frames().saturating_sub(MARGIN);
+    let mut dp = (0u64, 0usize);
+    while want >= 4096 {
+        if let Ok(b) = falloc.allocate_contiguous(want) {
+            dp = (b, want);
+            break;
+        }
+        want /= 2;
+    }
+    if dp.1 != 0 {
+        crate::procpool::demand_install(dp.0, dp.1);
+        crate::serial_println!("[glibc-disk] demand pool: {} MiB @ {:#x}", dp.1 / 256, dp.0);
+    }
+    let (dp_base, dp_frames) = dp;
+
+    let (main_slot, main_kstack) = match alloc_thread_kstack() {
+        Some(s) => s,
+        None => return (String::from("(no kernel stack)"), u64::MAX),
+    };
+    let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
+    register_thread_kstack(main_task, main_slot);
+    GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
+
+    let deadline = crate::interrupts::ticks() + GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
+    while !GLIBC_DONE.load(Ordering::Relaxed) && crate::interrupts::ticks() < deadline {
+        crate::xserver::pump_keyboard();
+        crate::xserver::pump_mouse();
+        crate::sched::sleep_ticks(1);
+        crate::sched::yield_now();
+    }
+    if !GLIBC_DONE.load(Ordering::Relaxed) {
+        crate::serial_println!("[glibc-disk] TIMEOUT waiting for the process to exit (committed {} demand pages, {} from-file/disk)",
+            DEMAND_COMMITTED.load(Ordering::Relaxed), DEMAND_FILE_FILLED.load(Ordering::Relaxed));
+        free_thread_kstack(main_task);
+        for &t in GLIBC_THREADS.lock().iter() {
+            free_thread_kstack(t);
+        }
+    }
+    GLIBC_MAIN_TASK.store(usize::MAX, Ordering::Relaxed);
+    crate::sched::reclaim_task(main_task);
+    for &t in GLIBC_THREADS.lock().iter() {
+        crate::sched::reclaim_task(t);
+    }
+    let out = OUTPUT.lock().clone();
+    let code = GLIBC_EXIT_CODE.load(Ordering::Relaxed);
+    if dp_frames != 0 {
+        crate::procpool::demand_uninstall();
+        for i in 0..dp_frames as u64 {
+            let _ = falloc.free(dp_base + i * 4096);
+        }
+    }
+    crate::paging::free_address_space(falloc, pml4);
+    for i in 0..frames as u64 {
+        let _ = falloc.free(arena + i * 4096);
+    }
+    DEMAND_FILE_MAPS.lock().clear();
+    DEMAND_ENABLED.store(prev_demand, Ordering::Relaxed);
+    DEMAND_FILE_ENABLED.store(prev_file, Ordering::Relaxed);
+    (out, code)
 }
 
 pub fn run_glibc(
@@ -5169,11 +5436,11 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                             None => return (-9i64) as u64, // -EBADF
                         };
                         drop(fds);
-                        DEMAND_FILE_MAPS.lock().push((base, len, fi, off));
+                        DEMAND_FILE_MAPS.lock().push((base, len, fi, off, len));
                     } else {
                         // Anon overlay (.bss): a zero-fill shadow (fidx == !0) that hides
                         // any flat file descriptor beneath it, so bss reads back zero.
-                        DEMAND_FILE_MAPS.lock().push((base, len, usize::MAX, 0));
+                        DEMAND_FILE_MAPS.lock().push((base, len, usize::MAX, 0, 0));
                     }
                     return base;
                 }
@@ -5196,7 +5463,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                         return (-12i64) as u64; // -ENOMEM
                     }
                     if a3 & PROT_RWX != 0 {
-                        DEMAND_FILE_MAPS.lock().push((start, len, fi, off));
+                        DEMAND_FILE_MAPS.lock().push((start, len, fi, off, len));
                     }
                     crate::serial_println!(
                         "[linux-abi] mmap file-backed DEMAND fd={a5} off={off} len={len} prot={a3:#x} -> {start:#x} (lazy)"
