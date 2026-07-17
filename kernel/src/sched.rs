@@ -89,6 +89,34 @@ pub fn block_current() {
     block_on(0);
 }
 
+/// Diagnostic: summarise every live task's state (Ready/Sleeping/Blocked/Zombie).
+/// Used by the glibc launcher's stall detector to see a many-thread deadlock.
+pub fn dump_states() {
+    let s = SCHED.lock();
+    let mut ready = 0usize;
+    let mut blocked = 0usize;
+    let mut sleeping = 0usize;
+    for i in 0..s.count {
+        match s.tasks[i].state {
+            State::Ready => {
+                ready += 1;
+                crate::serial_println!("[stall]   task {i}: Ready (cr3={:#x})", s.tasks[i].cr3);
+            }
+            State::Sleeping(w) => {
+                sleeping += 1;
+                crate::serial_println!("[stall]   task {i}: Sleeping(until {w})");
+            }
+            State::Blocked(c) => {
+                blocked += 1;
+                crate::serial_println!("[stall]   task {i}: Blocked(chan={c:#x})");
+            }
+            _ => {}
+        }
+    }
+    crate::serial_println!("[stall] summary: {ready} Ready, {blocked} Blocked, {sleeping} Sleeping (of {} tasks); current={}",
+        s.count, s.current);
+}
+
 /// Block the CURRENT task on wait channel `chan` (an address/token). The scheduler
 /// skips it until [`wake`]`(chan, ..)`. Basis for futex, pipes, waitpid.
 pub fn block_on(chan: u64) {

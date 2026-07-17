@@ -1461,6 +1461,9 @@ pub fn kill_pid(pid: u64) -> bool {
 /// Futex wait queue: (userspace address, blocked task). FUTEX_WAIT blocks the
 /// task (the scheduler skips it); FUTEX_WAKE unblocks up to `n` waiters.
 static FUTEX_QUEUE: Mutex<alloc::vec::Vec<(u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
+/// Monotonic count of Linux syscalls dispatched — a progress heartbeat the launcher's
+/// stall detector watches to catch a many-thread deadlock (no syscall = frozen).
+static SYSCALL_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// futex-wake: unblock up to `n` tasks waiting on `uaddr`. Returns the number
 /// of woken tasks.
@@ -4782,9 +4785,34 @@ pub fn run_glibc_disk(
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
 
     let deadline = crate::interrupts::ticks() + GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
+    // Stall detector: if no syscall is dispatched for a while, all glibc threads are
+    // blocked (a deadlock) — dump every task's wait state + the futex/pipe queues ONCE.
+    let mut last_seq = SYSCALL_SEQ.load(Ordering::Relaxed);
+    let mut last_change = crate::interrupts::ticks();
+    let mut dumped = false;
     while !GLIBC_DONE.load(Ordering::Relaxed) && crate::interrupts::ticks() < deadline {
         crate::xserver::pump_keyboard();
         crate::xserver::pump_mouse();
+        let seq = SYSCALL_SEQ.load(Ordering::Relaxed);
+        let now = crate::interrupts::ticks();
+        if seq != last_seq {
+            last_seq = seq;
+            last_change = now;
+            dumped = false;
+        } else if !dumped && now.saturating_sub(last_change) > 400 {
+            crate::serial_println!("[stall] no syscall progress for >400 ticks at seq={seq} — dumping thread + wait state:");
+            crate::sched::dump_states();
+            {
+                let fq = FUTEX_QUEUE.lock();
+                crate::serial_println!("[stall] FUTEX_QUEUE ({}): {:x?}", fq.len(), &fq[..fq.len().min(40)]);
+            }
+            {
+                let pw = PIPE_WAITERS.lock();
+                crate::serial_println!("[stall] PIPE_WAITERS ({}): {:?}", pw.len(), &pw[..pw.len().min(40)]);
+            }
+            crate::serial_println!("[stall] GLIBC_THREADS: {:?}", &*GLIBC_THREADS.lock());
+            dumped = true;
+        }
         crate::sched::sleep_ticks(1);
         crate::sched::yield_now();
     }
@@ -5446,6 +5474,7 @@ fn linux_required_cap(num: u64, a1: u64) -> u64 {
 
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let _ = a4; // not every syscall uses arg4/arg5 (r10/r8)
+    SYSCALL_SEQ.fetch_add(1, Ordering::Relaxed); // progress heartbeat (stall detector)
     if TRACE_SYS.load(Ordering::Relaxed) {
         crate::serial_println!("[sys t{}] {num}({a1:#x},{a2:#x},{a3:#x})", crate::sched::current());
     }
