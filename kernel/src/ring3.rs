@@ -496,6 +496,46 @@ fn ensure_proc(path: &[u8]) -> bool {
 /// 4 MiB WAD neither bloats the RAM filesystem nor makes the boot-time FS scrub
 /// crawl for minutes under TCG.
 const WAD_FI: usize = usize::MAX;
+// Sentinel file-index for /proc/self/mem: a live window into the process's OWN
+// virtual memory. read/pread at offset O returns the bytes at virtual address O;
+// write/pwrite stores them there (the classic trick to write through a read-only
+// mapping — our arena is RWX so a plain store works). chrome's PartitionAlloc opens
+// it during startup. The fd's stored "position" IS the current virtual address.
+const PROC_MEM_FI: usize = usize::MAX - 1;
+
+/// open("/proc/self/mem"): reserve an fd slot tagged as the live-memory window.
+fn proc_mem_open() -> u64 {
+    let mut fds = OPEN_FDS.lock();
+    for (fd, slot) in fds.iter_mut().enumerate().skip(3) {
+        if slot.is_none() {
+            *slot = Some((PROC_MEM_FI, 0));
+            return fd as u64;
+        }
+    }
+    u64::MAX
+}
+
+/// Copy `len` bytes between a user buffer and virtual address `vaddr` (the
+/// /proc/self/mem semantics). `to_mem=true` writes buf->vaddr, else reads vaddr->buf.
+/// Both endpoints must be valid user memory; returns bytes moved (0 on bad address).
+fn proc_mem_xfer(vaddr: u64, buf: u64, len: usize, to_mem: bool) -> u64 {
+    if len == 0 {
+        return 0;
+    }
+    if !in_user_arena(vaddr, len) || !in_user_arena(buf, len) {
+        return 0; // out-of-range address -> short read/write (EOF-like), never fault
+    }
+    // SAFETY: both ranges validated as user memory in the current address space;
+    // demand-region pages fault in on kernel touch. RWX arena permits the store.
+    unsafe {
+        if to_mem {
+            core::ptr::copy(buf as *const u8, vaddr as *mut u8, len);
+        } else {
+            core::ptr::copy(vaddr as *const u8, buf as *mut u8, len);
+        }
+    }
+    len as u64
+}
 
 fn vfs_open(path: &[u8]) -> u64 {
     // The DOOM IWAD is served from the kernel image, not the VFS.
@@ -537,6 +577,10 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
         Some((fi, _)) => fi,
         None => return u64::MAX,
     };
+    if fi == PROC_MEM_FI {
+        // pread(/proc/self/mem, buf, len, off) reads memory at virtual address `off`.
+        return proc_mem_xfer(offset as u64, buf, len, false);
+    }
     if fi == WAD_FI {
         let data = DOOM_WAD;
         let n = len.min(data.len().saturating_sub(offset));
@@ -565,6 +609,15 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
         Some(x) => x,
         None => return u64::MAX,
     };
+    // /proc/self/mem: read the process's own memory at the current position (= the
+    // virtual address set by a prior lseek), then advance past it.
+    if fi == PROC_MEM_FI {
+        let n = proc_mem_xfer(off as u64, buf, len, false);
+        if n != u64::MAX {
+            fds[fd] = Some((fi, off + n as usize));
+        }
+        return n;
+    }
     // The embedded DOOM IWAD (served from the kernel image).
     if fi == WAD_FI {
         let data = DOOM_WAD;
@@ -631,6 +684,15 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
         Some(x) => x,
         None => return u64::MAX,
     };
+    // /proc/self/mem: write into the process's own memory at the current position
+    // (= virtual address set by lseek), then advance past it.
+    if fi == PROC_MEM_FI {
+        let n = proc_mem_xfer(off as u64, buf, len, true);
+        if n != u64::MAX {
+            fds[fd] = Some((fi, off + n as usize));
+        }
+        return n;
+    }
     // Validate the user buffer + overflow-safe offset computation (audit C1/M9):
     // the kernel may only read from the arena of the running process.
     if !in_user_arena(buf, len) {
@@ -1973,6 +2035,9 @@ fn vfs_size(fd: usize) -> Option<usize> {
     let (fi, _) = fds[fd]?;
     if fi == WAD_FI {
         return Some(DOOM_WAD.len());
+    }
+    if fi == PROC_MEM_FI {
+        return Some(1usize << 46); // /proc/self/mem: large, canonical, non-overflowing
     }
     Some(FILES.lock()[fi].1.len())
 }
@@ -5102,6 +5167,26 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // headers of a shared library it is loading.
             vfs_pread(a1 as usize, a2, a3 as usize, a4 as usize)
         }
+        18 => {
+            // pwrite64(fd, buf, count, offset). For /proc/self/mem this writes into the
+            // process's memory at virtual address `offset` (chrome uses this to poke a
+            // read-only mapping). For a normal file, seek+write without moving the pos.
+            let fi = OPEN_FDS.lock().get(a1 as usize).and_then(|s| *s).map(|(fi, _)| fi);
+            if fi == Some(PROC_MEM_FI) {
+                return proc_mem_xfer(a4, a2, a3 as usize, true);
+            }
+            // Generic file pwrite: temporarily set the position, write, restore.
+            let saved = OPEN_FDS.lock().get(a1 as usize).and_then(|s| *s);
+            if let Some((f, _)) = saved {
+                OPEN_FDS.lock()[a1 as usize] = Some((f, a4 as usize));
+                let n = vfs_write(a1 as usize, a2, a3 as usize);
+                if let Some(cur) = OPEN_FDS.lock().get_mut(a1 as usize) {
+                    if let Some((f2, _)) = *cur { *cur = Some((f2, saved.unwrap().1)); }
+                }
+                return n;
+            }
+            (-9i64) as u64 // -EBADF
+        }
         19 => {
             // readv(fd, iov, iovcnt): read into each iovec buffer; count bytes (musl stdio).
             let fd = a1 as usize;
@@ -5369,6 +5454,11 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // O_CREAT=0x40 creates; O_TRUNC=0x200 truncates; O_APPEND=0x400 -> at the end.
             let path = user_cstr(a2, 256);
             let flags = a3;
+            // /proc/self/mem: a live window into the process's own memory (chrome's
+            // PartitionAlloc opens it). Not a static VFS file — a special live fd.
+            if path == b"/proc/self/mem" || path == b"/proc/thread-self/mem" {
+                return proc_mem_open();
+            }
             // Opening a directory (no O_CREAT) -> dir fd for getdents64.
             if flags & 0x40 == 0 && is_vfs_dir(&path) {
                 return diropen(&path);
@@ -5392,6 +5482,9 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         2 => {
             // open(path, flags, mode) — older libc variant (flags in a2).
             let path = user_cstr(a1, 256);
+            if path == b"/proc/self/mem" || path == b"/proc/thread-self/mem" {
+                return proc_mem_open();
+            }
             if a2 & 0x40 == 0 && is_vfs_dir(&path) {
                 return diropen(&path);
             }
