@@ -1907,7 +1907,7 @@ fn main() -> Status {
         ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
         ring3::DEMAND_FILE_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
         let (ocp, ecp) = ring3::run_glibc(&mut allocator, ring3::crashpad_bytes(), ring3::ldlinux_bytes(),
-            &[b"chrome_crashpad_handler", b"--help"], &[b"PATH=/bin", b"LANG=C"], caps);
+            &[b"chrome_crashpad_handler", b"--help"], &[b"PATH=/bin", b"LANG=C"], caps_net);
         ring3::DEMAND_FILE_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
         ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
         ring3::clear_demand_file_maps();
@@ -1941,7 +1941,7 @@ fn main() -> Status {
         if ring3::europack_has("/pack/crashpad") {
             ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
             let (o, e) = ring3::run_glibc_disk(&mut allocator, "/pack/crashpad", ring3::ldlinux_bytes(),
-                &[b"chrome_crashpad_handler", b"--help"], &[b"PATH=/bin", b"LANG=C"], caps);
+                &[b"chrome_crashpad_handler", b"--help"], &[b"PATH=/bin", b"LANG=C"], caps_net);
             ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
             serial_println!("[chrome-disk] crashpad from DISK (demand-paged exe): exit={e}");
             for l in o.lines() { serial_println!("[chrome-disk]   {l}"); }
@@ -1949,7 +1949,7 @@ fn main() -> Status {
         if ring3::europack_has("/pack/chrome") {
             ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
             let (o, e) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome", ring3::ldlinux_bytes(),
-                &[b"/pack/chrome", b"--version"], &[b"PATH=/bin", b"LANG=C", b"DISPLAY=:0"], caps);
+                &[b"/pack/chrome", b"--version"], &[b"PATH=/bin", b"LANG=C", b"DISPLAY=:0"], caps_net);
             serial_println!("[chrome-disk] chrome --version from DISK (485 MB demand-paged exe): exit={e}");
             for l in o.lines() { serial_println!("[chrome-disk]   {l}"); }
 
@@ -1963,7 +1963,7 @@ fn main() -> Status {
                   b"--disable-crashpad-for-testing", b"--disable-breakpad", b"--disable-in-process-stack-traces",
                   b"--dump-dom", b"data:text/html,<html><body><h1>EuroOS</h1></body></html>"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
-                  b"CHROME_DEVEL_SANDBOX=/dev/null"], caps);
+                  b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
             ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
             serial_println!("[chrome-disk] chrome --headless --dump-dom from DISK: exit={e2}");
             for l in o2.lines() { serial_println!("[chrome-disk]   {l}"); }

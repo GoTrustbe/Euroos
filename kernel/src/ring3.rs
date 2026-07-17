@@ -356,6 +356,11 @@ fn reset_fd_table() {
     for slot in OPEN_DIRS.lock().iter_mut() {
         *slot = None;
     }
+    // Clear any pipe fds left by an earlier program (PIPE_FDS/PIPES are global): a
+    // stale pipe marker on fd 3 would otherwise hijack this program's libc reads on
+    // that fd number (EAGAIN "cannot read file data"). See the bg_read_fd note.
+    *PIPE_FDS.lock() = [None; MAX_FD];
+    PIPES.lock().clear();
 }
 
 /// Register a file (path + content) so userspace can read it via open/read.
@@ -5235,8 +5240,9 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     None => return EFAULT,
                 };
                 crate::net::unix_fd_send(a1, &bytes)
-            } else if is_pipe_fd(a1 as usize) {
-                // a pipe write end (chrome SandboxHost/IPC signalling).
+            } else if (a1 as usize) < MAX_FD && OPEN_FDS.lock()[a1 as usize].is_none() && is_pipe_fd(a1 as usize) {
+                // a pipe write end (chrome SandboxHost/IPC signalling). A real open
+                // file on this fd number always wins over a stale global pipe marker.
                 let bytes = match copy_from_user(a2, a3 as usize) {
                     Some(v) => v,
                     None => return EFAULT,
@@ -5702,8 +5708,10 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     return EFAULT;
                 }
                 data.len() as u64
-            } else if let Some(r) = pipe_read_fd(a1 as usize, a2, a3 as usize) {
-                r // a pipe read end (chrome SandboxHost/IPC)
+            } else if (a1 as usize) < MAX_FD && OPEN_FDS.lock()[a1 as usize].is_none() && is_pipe_fd(a1 as usize) {
+                // a pipe read end (chrome SandboxHost/IPC). A real open file on this
+                // fd number always wins (a stale global pipe marker must not hijack it).
+                pipe_read_fd(a1 as usize, a2, a3 as usize).unwrap_or(0)
             } else {
                 vfs_read(a1 as usize, a2, a3 as usize)
             }
