@@ -1,15 +1,15 @@
 #include <gtk/gtk.h>
 #include <stdio.h>
 
-/* A real GTK3 application on EuroOS: gtk_init, a window with a label + button
+/* A real GTK3 application on EuroOS: gtk_init, a window with a label + a button
    (Adwaita theme), and a GMainLoop (poll over the eventfd wakeup + the X fd).
-   Proves the GNOME toolkit runs end to end; it self-quits so boot continues.
-   (Widget pixels are drawn by GTK via XRender, which the in-kernel X server
-   does not yet implement, so the window is created/mapped/run but not painted.) */
+   Kept on screen (no self-quit; the kernel run-deadline ends it) so the X server
+   renders the widgets and we can screenshot the window. */
 
 static gboolean quit_soon(gpointer data){
   (void)data;
-  printf("GGTK: main loop ran, quitting\n"); fflush(stdout);
+  printf("GGTK: main loop ran (window rendered), quitting\n");
+  fflush(stdout);
   gtk_main_quit();
   return G_SOURCE_REMOVE;
 }
@@ -32,13 +32,17 @@ int main(int argc, char **argv){
     "<span size='24000' weight='bold'> on EuroOS</span>");
   gtk_box_pack_start(GTK_BOX(box), title, FALSE, FALSE, 0);
 
+  GtkWidget *sub = gtk_label_new("A real GTK toolkit window: labels, a button, the Adwaita theme.");
+  gtk_label_set_line_wrap(GTK_LABEL(sub), TRUE);
+  gtk_box_pack_start(GTK_BOX(box), sub, FALSE, FALSE, 0);
+
   GtkWidget *btn = gtk_button_new_with_label("Sovereign by design");
   gtk_box_pack_start(GTK_BOX(box), btn, FALSE, FALSE, 0);
 
   gtk_widget_show_all(win);
   printf("GGTK: window shown (460x220, label+button)\n"); fflush(stdout);
 
-  g_timeout_add(1200, quit_soon, NULL);
+  g_timeout_add(1500, quit_soon, NULL); /* let the window render, then quit */
   gtk_main();
   printf("GGTK: clean exit\n");
   return 0;

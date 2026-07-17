@@ -1957,16 +1957,17 @@ fn main() -> Status {
             for l in opo.lines() { serial_println!("[glibc]   {l}"); }
         }
 
-        // ggtk: a REAL GTK3 toolkit app (gtk_init + window with a label + button, then a
-        // GMainLoop polling the eventfd wakeup + the X connection). Proves the GNOME
-        // toolkit runs end to end on EuroOS. It self-quits after ~1.2 s so boot
-        // continues. (GTK paints widget pixels via XRender, which the in-kernel X
-        // server does not implement yet, so the window is created/mapped/run but the
-        // Adwaita widgets are not composited to the framebuffer.)
+        // ggtk LAST: a REAL GTK3 app (gtk_init + window with a label + button, Adwaita
+        // theme, GMainLoop over the eventfd + X fd). The X server now renders it: GTK
+        // draws its widget tree into a pixmap (CreatePixmap + PolyFillRectangle) and
+        // CopyAreas it onto the window, which is composited to the framebuffer — the
+        // GTK window shows on screen with its real Adwaita background. It self-quits
+        // after the window renders. (Child-widget glyphs need server-side XRender,
+        // which is not implemented, so the window background shows but not the text.)
         {
             ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <dir>/usr/share/fonts</dir>\n</fontconfig>\n".to_vec());
             serial_println!("[glibc] === GTK3 toolkit app (ggtk) ===");
-            ring3::GLIBC_DEADLINE_TICKS.store(4_000, core::sync::atomic::Ordering::Relaxed);
+            ring3::GLIBC_DEADLINE_TICKS.store(6_000, core::sync::atomic::Ordering::Relaxed);
             ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed); // ~40 libs
             let (ogtk, egtk) = ring3::run_glibc(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net);
             ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);

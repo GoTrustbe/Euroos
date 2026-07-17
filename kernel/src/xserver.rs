@@ -53,6 +53,15 @@ struct XGc {
     fg: u32,
 }
 
+/// An off-screen drawable. Toolkits (GTK) render their widget tree into a pixmap,
+/// then CopyArea it onto the window — so a pixmap needs a real backing buffer.
+struct XPixmap {
+    id: u32,
+    w: u16,
+    h: u16,
+    buf: Vec<u32>,
+}
+
 struct XConn {
     inbuf: Vec<u8>,   // accumulated request bytes not yet consumed
     outbuf: Vec<u8>,  // reply/event bytes waiting to be read()
@@ -61,6 +70,7 @@ struct XConn {
     swap: bool,       // client is big-endian (byte-swap multi-byte fields)
     windows: Vec<XWindow>,
     gcs: Vec<XGc>,
+    pixmaps: Vec<XPixmap>,
 }
 
 static XCONNS: Mutex<[Option<XConn>; MAX_XCONN]> = Mutex::new([const { None }; MAX_XCONN]);
@@ -77,7 +87,7 @@ pub fn open() -> Option<u64> {
     let mut t = XCONNS.lock();
     for (i, s) in t.iter_mut().enumerate() {
         if s.is_none() {
-            *s = Some(XConn { inbuf: Vec::new(), outbuf: Vec::new(), state: State::PreSetup, seq: 0, swap: false, windows: Vec::new(), gcs: Vec::new() });
+            *s = Some(XConn { inbuf: Vec::new(), outbuf: Vec::new(), state: State::PreSetup, seq: 0, swap: false, windows: Vec::new(), gcs: Vec::new(), pixmaps: Vec::new() });
             trace(format_args!("client connected -> xconn fd {}", XCONN_FD_BASE + i as u64));
             return Some(XCONN_FD_BASE + i as u64);
         }
@@ -275,11 +285,15 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             let id = ru32(c, req, 4);
             let x = ru16(c, req, 12) as i16;
             let y = ru16(c, req, 14) as i16;
-            // Clamp to the screen: GTK creates windows at 0x7fff (size-unset) before it
-            // allocates them; a literal 460x32767 backing buffer would be a ~60 MiB
-            // kernel-heap allocation for a window that is never that big on screen.
-            let w = ru16(c, req, 16).clamp(1, SCREEN_W);
-            let h = ru16(c, req, 18).clamp(1, SCREEN_H);
+            // GTK creates its toplevel at 0x7fff (size-unset) before it applies the
+            // real size. A literal 32767 dimension would be a ~60 MiB buffer AND, if
+            // reported back via ConfigureNotify, would wedge GTK's layout at that size.
+            // Map an absurd (>=8192) request to a sane default so GTK's own resize
+            // (set_default_size -> ConfigureWindow) then drives the final geometry.
+            let raw_w = ru16(c, req, 16);
+            let raw_h = ru16(c, req, 18);
+            let w = if raw_w >= 8192 { 400 } else { raw_w.clamp(1, SCREEN_W) };
+            let h = if raw_h >= 8192 { 260 } else { raw_h.clamp(1, SCREEN_H) };
             let buf = alloc::vec![0xff20_2020u32; w as usize * h as usize]; // opaque dark
             // CreateWindow can carry an event-mask too (value-mask @28, CWEventMask=0x800).
             let em = win_event_mask(c, req, 28, 32);
@@ -317,15 +331,23 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
         // window asked for (Expose always; test key/button when injection is enabled).
         8 => {
             let id = ru32(c, req, 4);
-            let (mask, w, h) = match c.windows.iter_mut().find(|w| w.id == id) {
-                Some(win) => { win.mapped = true; (win.event_mask, win.w, win.h) }
-                None => (0, 0, 0),
+            let (mask, x, y, w, h) = match c.windows.iter_mut().find(|w| w.id == id) {
+                Some(win) => { win.mapped = true; (win.event_mask, win.x, win.y, win.w, win.h) }
+                None => (0, 0, 0, 0, 0),
             };
             trace(format_args!("MapWindow id={id:#x} mask={mask:#x}"));
             present(c, id);
             const EXPOSURE: u32 = 0x8000;
+            const STRUCTURE_NOTIFY: u32 = 0x0002_0000;
             const KEY_PRESS: u32 = 0x0001;
             const BUTTON_PRESS: u32 = 0x0004;
+            // A toolkit (GTK) that selected StructureNotify waits for MapNotify +
+            // ConfigureNotify to learn its mapped size before it size-allocates its
+            // widgets and draws. Send them before Expose so the draw cycle proceeds.
+            if mask & STRUCTURE_NOTIFY != 0 {
+                send_map_notify(c, id);
+                send_configure_notify(c, id, x, y, w, h);
+            }
             if mask & EXPOSURE != 0 {
                 send_expose(c, id, w, h);
             }
@@ -381,6 +403,117 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                 ));
             }
             present(c, draw);
+        }
+        // ConfigureWindow(12): window@4, value-mask@8(u16), values@12 (4 bytes each in
+        // bit order: x,y,width,height,border,sibling,stack). GTK resizes its toplevel to
+        // the real size after creating it at 0x7fff; honour width/height + re-ConfigureNotify
+        // so GTK size-allocates to the correct geometry (not the clamped 800).
+        12 => {
+            let id = ru32(c, req, 4);
+            let mask = ru16(c, req, 8) as u32;
+            let mut voff = 12usize;
+            let (mut nw, mut nh) = (None, None);
+            for bit in 0..7 {
+                if mask & (1 << bit) != 0 {
+                    let v = ru32(c, req, voff);
+                    // Ignore an absurd (unconstrained, >=8192) width/height — WM-less GTK
+                    // asks for its full unconstrained size; honouring it would make a
+                    // giant window. Keep the current size for those.
+                    match bit {
+                        2 if v < 8192 => nw = Some((v as u16).clamp(1, SCREEN_W)),
+                        3 if v < 8192 => nh = Some((v as u16).clamp(1, SCREEN_H)),
+                        _ => {}
+                    }
+                    voff += 4;
+                }
+            }
+            let mut notify = None;
+            if let Some(win) = c.windows.iter_mut().find(|w| w.id == id) {
+                let w = nw.unwrap_or(win.w);
+                let h = nh.unwrap_or(win.h);
+                if w != win.w || h != win.h {
+                    win.w = w;
+                    win.h = h;
+                    win.buf = alloc::vec![0xff20_2020u32; w as usize * h as usize];
+                }
+                if win.event_mask & 0x0002_0000 != 0 {
+                    notify = Some((win.x, win.y, win.w, win.h));
+                }
+            }
+            trace(format_args!("ConfigureWindow id={id:#x} -> {:?}x{:?}", nw, nh));
+            if let Some((x, y, w, h)) = notify {
+                send_configure_notify(c, id, x, y, w, h);
+                send_expose(c, id, w, h);
+            }
+        }
+        // GetImage(73): read pixels back from a drawable. cairo's xlib image-fallback
+        // (used when RENDER is absent — which we report) reads the destination, composites
+        // glyphs/images in client memory, and writes back via PutImage. Without this the
+        // window shows only solid fills and no text. Reply carries width*height ZPixmaps.
+        73 => {
+            let draw = ru32(c, req, 4);
+            let ix = ru16(c, req, 8) as i16 as i32;
+            let iy = ru16(c, req, 10) as i16 as i32;
+            let iw = ru16(c, req, 12) as usize;
+            let ih = ru16(c, req, 14) as usize;
+            // Snapshot the requested region (window or pixmap) into a temp buffer.
+            let dims = c.windows.iter().find(|w| w.id == draw).map(|w| (w.w as i32, w.h as i32))
+                .or_else(|| c.pixmaps.iter().find(|p| p.id == draw).map(|p| (p.w as i32, p.h as i32)));
+            let (sw, sh) = dims.unwrap_or((0, 0));
+            let mut pixels = alloc::vec![0u32; iw * ih];
+            if sw > 0 {
+                let src: &[u32] = if let Some(w) = c.windows.iter().find(|w| w.id == draw) { &w.buf }
+                    else if let Some(p) = c.pixmaps.iter().find(|p| p.id == draw) { &p.buf } else { &[] };
+                for row in 0..ih {
+                    let syy = iy + row as i32;
+                    if syy < 0 || syy >= sh { continue; }
+                    for col in 0..iw {
+                        let sxx = ix + col as i32;
+                        if sxx < 0 || sxx >= sw { continue; }
+                        pixels[row * iw + col] = src[(syy * sw + sxx) as usize];
+                    }
+                }
+            }
+            let units = iw * ih; // 1 unit (4 bytes) per pixel
+            let mut r = reply_header(c, units as u32);
+            r[1] = 24; // depth
+            wr32(c, &mut r, 8, ROOT_VISUAL);
+            for (i, px) in pixels.iter().enumerate() {
+                let o = 32 + i * 4;
+                r[o..o + 4].copy_from_slice(&(px & 0x00ff_ffff).to_le_bytes()); // ZPixmap 0x00RRGGBB, LSBFirst
+            }
+            c.outbuf.extend_from_slice(&r);
+            trace(format_args!("GetImage draw={draw:#x} {iw}x{ih} @({ix},{iy})"));
+        }
+        // CreatePixmap(53): depth@detail, pid@4, drawable@8, width@12, height@14.
+        // An off-screen buffer GTK renders its widget tree into. No reply.
+        53 => {
+            let id = ru32(c, req, 4);
+            let w = ru16(c, req, 12).clamp(1, SCREEN_W);
+            let h = ru16(c, req, 14).clamp(1, SCREEN_H);
+            c.pixmaps.push(XPixmap { id, w, h, buf: alloc::vec![0xff00_0000u32; w as usize * h as usize] });
+            trace(format_args!("CreatePixmap id={id:#x} {w}x{h}"));
+        }
+        // FreePixmap(54): pid@4.
+        54 => {
+            let id = ru32(c, req, 4);
+            c.pixmaps.retain(|p| p.id != id);
+        }
+        // CopyArea(62): src@4, dst@8, gc@12, src-x@16, src-y@18, dst-x@20, dst-y@22,
+        // width@24, height@26. Copies a pixmap region onto the window (or vice versa)
+        // — how GTK flushes its rendered widgets to the visible window. Present after.
+        62 => {
+            let src = ru32(c, req, 4);
+            let dst = ru32(c, req, 8);
+            let sx = ru16(c, req, 16) as i16 as i32;
+            let sy = ru16(c, req, 18) as i16 as i32;
+            let dx = ru16(c, req, 20) as i16 as i32;
+            let dy = ru16(c, req, 22) as i16 as i32;
+            let w = ru16(c, req, 24) as i32;
+            let h = ru16(c, req, 26) as i32;
+            copy_area(c, src, dst, sx, sy, dx, dy, w, h);
+            trace(format_args!("CopyArea src={src:#x} dst={dst:#x} {w}x{h} @({dx},{dy})"));
+            present(c, dst);
         }
         // GetSelectionOwner(23): report None (0) — no selection owner. GTK checks the
         // clipboard/WM/CM selections at startup; None is a valid answer.
@@ -474,23 +607,28 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
 }
 
 /// Copy a ZPixmap (32-bpp, LSBFirst) into the target window buffer, clipped.
+/// Blit a 32-bpp ZPixmap into a drawable buffer at (dst_x,dst_y), clipped.
+fn blit_image(buf: &mut [u32], ww: i32, wh: i32, dst_x: i32, dst_y: i32, w: usize, h: usize, data: &[u8]) {
+    let stride = w * 4; // 32 bpp, scanline already 4-aligned
+    for sy in 0..h {
+        let dy = dst_y + sy as i32;
+        if dy < 0 || dy >= wh { continue; }
+        for sx in 0..w {
+            let dx = dst_x + sx as i32;
+            if dx < 0 || dx >= ww { continue; }
+            let o = sy * stride + sx * 4;
+            if o + 4 > data.len() { break; }
+            let px = u32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]);
+            buf[(dy * ww + dx) as usize] = 0xff00_0000 | (px & 0x00ff_ffff);
+        }
+    }
+}
+
 fn put_image(c: &mut XConn, draw: u32, dst_x: i32, dst_y: i32, w: usize, h: usize, data: &[u8]) {
     if let Some(win) = c.windows.iter_mut().find(|win| win.id == draw) {
-        let ww = win.w as i32;
-        let wh = win.h as i32;
-        let stride = w * 4; // 32 bpp, scanline already 4-aligned
-        for sy in 0..h {
-            let dy = dst_y + sy as i32;
-            if dy < 0 || dy >= wh { continue; }
-            for sx in 0..w {
-                let dx = dst_x + sx as i32;
-                if dx < 0 || dx >= ww { continue; }
-                let o = sy * stride + sx * 4;
-                if o + 4 > data.len() { break; }
-                let px = u32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]);
-                win.buf[(dy * ww + dx) as usize] = 0xff00_0000 | (px & 0x00ff_ffff);
-            }
-        }
+        blit_image(&mut win.buf, win.w as i32, win.h as i32, dst_x, dst_y, w, h, data);
+    } else if let Some(pm) = c.pixmaps.iter_mut().find(|p| p.id == draw) {
+        blit_image(&mut pm.buf, pm.w as i32, pm.h as i32, dst_x, dst_y, w, h, data);
     }
 }
 
@@ -531,6 +669,36 @@ fn send_expose(c: &mut XConn, window: u32, w: u16, h: u16) {
     trace(format_args!("-> Expose window={window:#x} {w}x{h}"));
 }
 
+/// Queue a MapNotify(19) — tells the client its window is now mapped/viewable.
+fn send_map_notify(c: &mut XConn, window: u32) {
+    let mut e = [0u8; 32];
+    e[0] = 19; // MapNotify
+    e[2..4].copy_from_slice(&c.seq.to_le_bytes());
+    e[4..8].copy_from_slice(&window.to_le_bytes());  // event window
+    e[8..12].copy_from_slice(&window.to_le_bytes()); // window
+    // override-redirect@12 = 0
+    c.outbuf.extend_from_slice(&e);
+    trace(format_args!("-> MapNotify window={window:#x}"));
+}
+
+/// Queue a ConfigureNotify(22) with the window's geometry. GTK/GDK waits for this
+/// to learn its real size, size-allocate its widget tree, and only THEN draw.
+fn send_configure_notify(c: &mut XConn, window: u32, x: i16, y: i16, w: u16, h: u16) {
+    let mut e = [0u8; 32];
+    e[0] = 22; // ConfigureNotify
+    e[2..4].copy_from_slice(&c.seq.to_le_bytes());
+    e[4..8].copy_from_slice(&window.to_le_bytes());  // event window
+    e[8..12].copy_from_slice(&window.to_le_bytes()); // window
+    // above-sibling@12 = None(0)
+    e[16..18].copy_from_slice(&x.to_le_bytes());
+    e[18..20].copy_from_slice(&y.to_le_bytes());
+    e[20..22].copy_from_slice(&w.to_le_bytes());
+    e[22..24].copy_from_slice(&h.to_le_bytes());
+    // border-width@24 = 0, override-redirect@26 = 0
+    c.outbuf.extend_from_slice(&e);
+    trace(format_args!("-> ConfigureNotify window={window:#x} {w}x{h} @({x},{y})"));
+}
+
 /// Queue a 32-byte input event (KeyPress=2/ButtonPress=4). `detail` is the keycode
 /// or button number; (ex,ey) the event coordinates in the window.
 fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, ex: i16, ey: i16) {
@@ -563,15 +731,59 @@ fn gc_foreground(c: &XConn, req: &[u8], mask_off: usize, vals_off: usize) -> Opt
 }
 
 /// Fill a rectangle in the target window's buffer (clipped) with `argb`.
+fn fill_buf(buf: &mut [u32], ww: i32, wh: i32, rx: i32, ry: i32, rw: i32, rh: i32, argb: u32) {
+    for yy in ry.max(0)..(ry + rh).min(wh) {
+        for xx in rx.max(0)..(rx + rw).min(ww) {
+            buf[(yy * ww + xx) as usize] = argb;
+        }
+    }
+}
+
 fn fill_rect(c: &mut XConn, draw: u32, rx: i32, ry: i32, rw: i32, rh: i32, argb: u32) {
     if let Some(win) = c.windows.iter_mut().find(|w| w.id == draw) {
-        let ww = win.w as i32;
-        let wh = win.h as i32;
-        for yy in ry.max(0)..(ry + rh).min(wh) {
-            for xx in rx.max(0)..(rx + rw).min(ww) {
-                win.buf[(yy * ww + xx) as usize] = argb;
+        fill_buf(&mut win.buf, win.w as i32, win.h as i32, rx, ry, rw, rh, argb);
+    } else if let Some(pm) = c.pixmaps.iter_mut().find(|p| p.id == draw) {
+        fill_buf(&mut pm.buf, pm.w as i32, pm.h as i32, rx, ry, rw, rh, argb);
+    }
+}
+
+/// CopyArea: copy a rectangle from one drawable (window or pixmap) into another.
+/// GTK renders its widget tree into a pixmap and CopyAreas it onto the window.
+fn copy_area(c: &mut XConn, src: u32, dst: u32, sx: i32, sy: i32, dx: i32, dy: i32, w: i32, h: i32) {
+    // Snapshot the source region (pixmap or window) into a temp buffer.
+    let src_dims = c.windows.iter().find(|w| w.id == src).map(|w| (w.w as i32, w.h as i32))
+        .or_else(|| c.pixmaps.iter().find(|p| p.id == src).map(|p| (p.w as i32, p.h as i32)));
+    let (sw, sh) = match src_dims { Some(v) => v, None => return };
+    let mut tmp = alloc::vec![0u32; (w.max(0) * h.max(0)) as usize];
+    {
+        let src_buf: &[u32] = if let Some(win) = c.windows.iter().find(|w| w.id == src) { &win.buf }
+            else if let Some(pm) = c.pixmaps.iter().find(|p| p.id == src) { &pm.buf } else { return };
+        for row in 0..h {
+            let syy = sy + row;
+            if syy < 0 || syy >= sh { continue; }
+            for col in 0..w {
+                let sxx = sx + col;
+                if sxx < 0 || sxx >= sw { continue; }
+                tmp[(row * w + col) as usize] = src_buf[(syy * sw + sxx) as usize];
             }
         }
+    }
+    // Blit into the destination.
+    let put = |buf: &mut [u32], dw: i32, dh: i32| {
+        for row in 0..h {
+            let dyy = dy + row;
+            if dyy < 0 || dyy >= dh { continue; }
+            for col in 0..w {
+                let dxx = dx + col;
+                if dxx < 0 || dxx >= dw { continue; }
+                buf[(dyy * dw + dxx) as usize] = tmp[(row * w + col) as usize];
+            }
+        }
+    };
+    if let Some(win) = c.windows.iter_mut().find(|w| w.id == dst) {
+        put(&mut win.buf, win.w as i32, win.h as i32);
+    } else if let Some(pm) = c.pixmaps.iter_mut().find(|p| p.id == dst) {
+        put(&mut pm.buf, pm.w as i32, pm.h as i32);
     }
 }
 
