@@ -2094,6 +2094,23 @@ fn vfs_close(fd: usize) -> u64 {
 /// list only implies a directory once it contains a file, so a freshly-created but
 /// empty dir (chrome's headless user-data-dir) needs to be tracked here too.
 static MKDIRS: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new());
+/// (linkpath, target) symlinks in the flat VFS. chrome's ProcessSingleton creates
+/// `SingletonLock` as a symlink encoding hostname:pid, then readlinks it back.
+static SYMLINKS: Mutex<alloc::vec::Vec<(String, String)>> = Mutex::new(alloc::vec::Vec::new());
+
+/// symlink(target, linkpath): record a symlink. Replaces any existing one (chrome
+/// re-links). Empty linkpath -> ENOENT; else success (0).
+fn vfs_symlink(target: &[u8], link: &[u8]) -> u64 {
+    if link.is_empty() {
+        return (-2i64) as u64; // -ENOENT
+    }
+    let lp = String::from_utf8_lossy(link).into_owned();
+    let tg = String::from_utf8_lossy(target).into_owned();
+    let mut sl = SYMLINKS.lock();
+    sl.retain(|(p, _)| *p != lp);
+    sl.push((lp, tg));
+    0
+}
 
 fn is_vfs_dir(path: &[u8]) -> bool {
     if path == b"/" {
@@ -6141,7 +6158,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             let target: Option<String> = match path.as_slice() {
                 b"/proc/self/exe" => Some(CURRENT_APP.lock().clone()),
                 b"/proc/self/cwd" | b"/proc/self/root" => Some(String::from("/")),
-                _ => None,
+                _ => SYMLINKS.lock().iter().find(|(p, _)| p.as_bytes() == path.as_slice()).map(|(_, t)| t.clone()),
             };
             match target {
                 Some(t) if bufptr != 0 => {
@@ -6152,9 +6169,17 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     n as u64
                 }
                 Some(_) => 0,
-                None => (-22i64) as u64, // -EINVAL: not a symlink
+                // Not a symlink: ENOENT if the path doesn't exist at all (chrome's
+                // "no lock yet" path), EINVAL if it exists but isn't a link.
+                None if is_vfs_dir(&path)
+                    || FILES.lock().iter().any(|(q, _)| q.as_bytes() == path.as_slice())
+                    || DISK_FILES.lock().iter().any(|(q, _, _, _)| q.as_bytes() == path.as_slice())
+                    => (-22i64) as u64, // -EINVAL
+                None => (-2i64) as u64, // -ENOENT
             }
         }
+        88 => vfs_symlink(&user_cstr(a1, 256), &user_cstr(a2, 256)), // symlink(target, link)
+        266 => vfs_symlink(&user_cstr(a1, 256), &user_cstr(a3, 256)), // symlinkat(target, dfd, link)
         217 => vfs_getdents64(a1 as usize, a2, a3 as usize), // getdents64(fd, dirp, count)
         16 => 0,  // ioctl — pretend success (isatty/TCGETS): stdout is a tty
         10 => 0,  // mprotect — allow (musl makes its RELRO read-only); no-op
