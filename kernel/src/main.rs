@@ -1975,17 +1975,18 @@ fn main() -> Status {
             }
             ring3::register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", ring3::fc_dejavu_cache());
             ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n  <alias><family>Sans</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>Cantarell</family><prefer><family>DejaVu Sans</family></prefer></alias>\n</fontconfig>\n".to_vec());
-            serial_println!("[glibc] === GTK3 toolkit app (ggtk) ===");
-            ring3::GLIBC_DEADLINE_TICKS.store(6_000, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[glibc] === GTK3 toolkit app (ggtk) — LIVE, alongside desktop ===");
             ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed); // ~40 libs
             // WINDOWED: retain the GTK window's pixels instead of blitting fullscreen, so
-            // the desktop composites it as a framed window (leave on for the desktop).
+            // the desktop composites it as a framed window.
             xserver::set_windowed(true);
-            let (ogtk, egtk) = ring3::run_glibc(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net);
-            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
-            ring3::GLIBC_DEADLINE_TICKS.store(12_000, core::sync::atomic::Ordering::Relaxed);
-            serial_println!("[glibc] ggtk (GTK3 toolkit): exit={egtk}");
-            for l in ogtk.lines() { serial_println!("[glibc]   {l}"); }
+            // PERSISTENT: spawn the GTK app as a scheduled task that keeps running its
+            // GMainLoop ALONGSIDE the desktop (does NOT block boot). It redraws a live
+            // counter; the desktop recomposites its window each time it repaints.
+            match ring3::spawn_glibc_persistent(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net) {
+                Some(t) => serial_println!("[glibc] ggtk live on task {t}"),
+                None => serial_println!("[glibc] ggtk spawn FAILED (no arena)"),
+            }
         }
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
@@ -2769,7 +2770,7 @@ fn main() -> Status {
             active: false, accent: Color::BLUE,
             sec: eds::SecState::new(true, false, false),
             app: suite_ui::SuiteApp::XClient,
-            visible: xserver::front_window_size().is_some(), // only if the app rendered
+            visible: true, // the persistent GTK app renders into it live
             restore: None,
         },
     ];
@@ -3239,6 +3240,7 @@ fn main() -> Status {
     // prompt ("euroos:/ $ <input>"); keyboard input (IRQ1) edits it live.
     let term_idx = 1;
     let sys_idx = 0; // the live System window (behind the Terminal)
+    let gtk_idx = 2; // the hosted live GTK app window (SuiteApp::XClient)
     let mut input = String::new();
     let vis_lines = ((windows[term_idx].h - 44) / 16) as usize;
     // Marker: from here the interactive desktop loop runs (polls input + shell).
@@ -4370,6 +4372,12 @@ fn main() -> Status {
                 windows[sys_idx].content = sysinfo(t, ctx.mem.free_bytes());
                 compositor::draw_window_body(&fb, &windows[sys_idx]);
             }
+            // Live GTK app: if it repainted (X client presented a new frame), recomposite
+            // its window body from the retained X buffer + blit only that rect.
+            let gtk_vis = windows[gtk_idx].visible && xserver::take_dirty();
+            if gtk_vis {
+                compositor::draw_window_body(&fb, &windows[gtk_idx]);
+            }
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
@@ -4381,6 +4389,10 @@ fn main() -> Status {
             if sys_vis {
                 let (sx, sy, sw, sh) = compositor::window_body_rect(&windows[sys_idx]);
                 fb.present_rect(sx, sy, sw, sh);
+            }
+            if gtk_vis {
+                let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
+                fb.present_rect(gx, gy, gw, gh);
             }
             fb.present_rect(ox, oy, compositor::CURSOR_W, compositor::CURSOR_H);
             fb.present_rect(cmx, cmy, compositor::CURSOR_W, compositor::CURSOR_H);
@@ -4402,6 +4414,13 @@ fn main() -> Status {
 
         // Keep the network alive: answer ARP requests + recycle RX buffers.
         net::service();
+
+        // Cooperatively yield so a hosted persistent glibc app (the live GTK window)
+        // gets CPU promptly instead of only via timer preemption — the desktop loop
+        // otherwise just hlt()s, which the Explore mapping flagged as starving it.
+        if xserver::x_windowed() {
+            crate::sched::yield_now();
+        }
 
         // Finishing sprint: HLT idle. Yield the CPU until the NEXT interrupt (timer
         // 100 Hz or keyboard/mouse/USB input) instead of spinning 100% — the CPU

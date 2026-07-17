@@ -648,6 +648,7 @@ pub fn x_app_active() -> bool { X_APP_ACTIVE.load(core::sync::atomic::Ordering::
 /// and draws it as a framed desktop window. Set by the desktop when it hosts an X app.
 pub static X_WINDOWED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 pub fn set_windowed(on: bool) { X_WINDOWED.store(on, core::sync::atomic::Ordering::Relaxed); }
+pub fn x_windowed() -> bool { X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) }
 
 /// The RETAINED pixel buffer of a hosted X client's window: (w, h, pixels 0x00RRGGBB).
 /// Captured by `present()` in windowed mode so the desktop can composite the app as a
@@ -655,19 +656,25 @@ pub fn set_windowed(on: bool) { X_WINDOWED.store(on, core::sync::atomic::Orderin
 pub static RETAINED_WINDOW: Mutex<Option<(usize, usize, Vec<u32>)>> = Mutex::new(None);
 
 /// Hand the retained hosted-X-window pixels to `f` (w, h, &buf). Returns true if there
-/// is a retained window. The desktop compositor calls this to draw the app body.
+/// is a retained window. The desktop compositor (task 0) calls this — hold the lock
+/// IRQ-SAFE so a timer preemption can't leave it held while the (IF=0, non-preemptible)
+/// glibc app spins on the same lock inside present() → deadlock (BUG-007 class).
 pub fn with_front_window(f: impl FnOnce(usize, usize, &[u32])) -> bool {
-    if let Some((w, h, buf)) = RETAINED_WINDOW.lock().as_ref() {
-        f(*w, *h, buf);
-        true
-    } else {
-        false
-    }
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if let Some((w, h, buf)) = RETAINED_WINDOW.lock().as_ref() {
+            f(*w, *h, buf);
+            true
+        } else {
+            false
+        }
+    })
 }
 
 /// (w, h) of the retained hosted X window, for the desktop to size its frame.
 pub fn front_window_size() -> Option<(usize, usize)> {
-    RETAINED_WINDOW.lock().as_ref().map(|(w, h, _)| (*w, *h))
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        RETAINED_WINDOW.lock().as_ref().map(|(w, h, _)| (*w, *h))
+    })
 }
 
 /// Extract a window's event-mask from an attribute value-list, if CWEventMask is set.

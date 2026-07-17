@@ -3804,10 +3804,24 @@ pub fn spawn_glibc_persistent(
     reset_fd_table();
 
     const MIB2: u64 = 1 << 21;
-    let arena_mib: u64 = 96;
+    // Honour GLIBC_ARENA_MIB with a fragmentation fallback (a persistent GTK app needs
+    // the big arena / mmap window, like run_glibc).
+    let want_mib: u64 = GLIBC_ARENA_MIB.load(Ordering::Relaxed).max(96);
+    let (arena, arena_mib) = {
+        let mut got = None;
+        let mut mib = want_mib;
+        while mib >= 64 {
+            let f = ((mib / 2) * 512) as usize;
+            if let Ok(a) = falloc.allocate_aligned(f, 512) {
+                got = Some((a, mib));
+                break;
+            }
+            mib /= 2;
+        }
+        got?
+    };
     let nblocks = arena_mib / 2;
     let frames = (nblocks * 512) as usize;
-    let arena = falloc.allocate_aligned(frames, 512).ok()?;
     unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
 
     let exe_base = arena;
