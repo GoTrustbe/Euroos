@@ -2240,6 +2240,12 @@ static GSPARSE_ELF: &[u8] = include_bytes!("../../userland/glibc/gsparse");
 // FILE-BACKED demand-paging test: mmap a large served lib, verify the lazily
 // faulted mmap view equals the read() view (the loader's LOAD-segment path).
 static GFMMAP_ELF: &[u8] = include_bytes!("../../userland/glibc/gfmmap");
+// CHROMIUM bring-up: two glibc stub libs (their real code lives in libc.so.6) that
+// chrome binaries declare as DT_NEEDED, + a REAL chrome component — the crashpad
+// crash handler (3.4 MB, dynamically linked, loaded via demand paging).
+static GLIBC_LIBDL: &[u8] = include_bytes!("../../userland/glibc/libdl.so.2");
+static GLIBC_LIBPTHREAD: &[u8] = include_bytes!("../../userland/glibc/libpthread.so.0");
+static CRASHPAD_ELF: &[u8] = include_bytes!("../../userland/glibc/chrome_crashpad_handler");
 // AF_UNIX socketpair round-trip (local IPC — the X11/dbus transport).
 static GUNIX_ELF: &[u8] = include_bytes!("../../userland/glibc/gunix");
 // X11 CLIENT stack (a real Xlib client + its 6 transitive libs) — the GUI rung.
@@ -2339,6 +2345,11 @@ pub fn gfile_bytes() -> &'static [u8] { GFILE_ELF }
 pub fn gsparse_bytes() -> &'static [u8] { GSPARSE_ELF }
 /// A file-backed demand-paging test (mmap a large lib, verify vs read()).
 pub fn gfmmap_bytes() -> &'static [u8] { GFMMAP_ELF }
+/// glibc stub libs chrome declares as NEEDED (real code is in libc.so.6).
+pub fn glibc_libdl_bytes() -> &'static [u8] { GLIBC_LIBDL }
+pub fn glibc_libpthread_bytes() -> &'static [u8] { GLIBC_LIBPTHREAD }
+/// A REAL chrome component: the crashpad crash handler (demand-paged).
+pub fn crashpad_bytes() -> &'static [u8] { CRASHPAD_ELF }
 /// An AF_UNIX socketpair round-trip test (local IPC transport).
 pub fn gunix_bytes() -> &'static [u8] { GUNIX_ELF }
 /// The X11 client libraries (served to ld.so for a real Xlib client).
@@ -2908,7 +2919,12 @@ fn rd_u64(b: &[u8], o: usize) -> u64 {
 
 /// Max. number of contiguous User pages a program may span (1 MiB).
 /// Bounds the allocation and keeps everything within the USER-mapped lowest 1 GiB.
-const MAX_PROG_PAGES: usize = 256;
+// Max eager-loaded program span. The exe window is [arena, arena+8 MiB) (ld.so sits
+// at +8 MiB), so cap at 6 MiB to leave margin. Real chrome components (e.g. the 2.1
+// MiB crashpad handler) exceed the old 1 MiB cap. NOTE: only the first 2 MiB block is
+// exec-capable (W^X bitmap + block-0 mapping); an exe whose .text extends past 2 MiB
+// would need the exec window widened — fine for today's targets (text < 2 MiB).
+const MAX_PROG_PAGES: usize = 1536;
 
 /// How many User pages does this program need (highest vaddr+memsz, or the
 /// flat length)? Determines the contiguous frame allocation in advance.

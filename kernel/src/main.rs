@@ -1386,6 +1386,9 @@ fn main() -> Status {
         ring3::register_file_static("/lib/x86_64-linux-gnu/libgmp.so.10", ring3::glibc_libgmp_bytes());
         // libcrypto (OpenSSL, 5 MB): needed by the REAL /usr/bin/sha256sum.
         ring3::register_file_static("/lib/x86_64-linux-gnu/libcrypto.so.3", ring3::glibc_libcrypto_bytes());
+        // glibc stub libs chrome binaries declare as NEEDED (real code is in libc.so.6).
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libdl.so.2", ring3::glibc_libdl_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libpthread.so.0", ring3::glibc_libpthread_bytes());
         // GLib + libpcre2: the GTK/desktop-stack core library (a real Chromium dep).
         ring3::register_file_static("/lib/x86_64-linux-gnu/libglib-2.0.so.0", ring3::glibc_libglib_bytes());
         ring3::register_file_static("/lib/x86_64-linux-gnu/libpcre2-8.so.0", ring3::glibc_libpcre2_bytes());
@@ -1884,6 +1887,24 @@ fn main() -> Status {
         serial_println!("[glibc] gfmmap (file-backed demand paging): exit={efm} (want 124), pages filled-from-file={}",
             ring3::demand_file_pages() - fpages_before);
         for l in ofm.lines() { serial_println!("[glibc]   {l}"); }
+
+        // ── CHROMIUM bring-up, step 1 ──────────────────────────────────────────
+        // Run a REAL chrome component: chrome_crashpad_handler (3.4 MB, dynamically
+        // linked). Its libs (libc/libm/libgcc_s + the libdl/libpthread stubs) load
+        // via ld.so with demand paging. This is the first genuine chrome binary to
+        // execute on EuroOS — it discovers the next real blocker (a missing syscall,
+        // an unhandled feature) rather than us guessing. --help exits after arg parse.
+        let cp_pages_before = ring3::demand_file_pages();
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        ring3::DEMAND_FILE_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (ocp, ecp) = ring3::run_glibc(&mut allocator, ring3::crashpad_bytes(), ring3::ldlinux_bytes(),
+            &[b"chrome_crashpad_handler", b"--help"], &[b"PATH=/bin", b"LANG=C"], caps);
+        ring3::DEMAND_FILE_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        ring3::clear_demand_file_maps();
+        serial_println!("[chrome] chrome_crashpad_handler (REAL chrome binary): exit={ecp}, lib-pages demand-loaded={}",
+            ring3::demand_file_pages() - cp_pages_before);
+        for l in ocp.lines() { serial_println!("[chrome]   {l}"); }
         // (Reclamation validated out-of-band: 30 mixed runs incl. threaded kept the
         // task table at index 31 with free_frames stable — see commit notes.)
 
