@@ -11,11 +11,23 @@ then a headless screenshot (Blink paints), then an interactive window on the des
 Work top-to-bottom. Commit after each green step. Each `[ ]` is a boot-verified step.
 
 ## Phase A — get past crashpad to a rendered DOM (cheapest path first)
-- [ ] A1. Skip the crashpad handler so `--headless --dump-dom` proceeds without fork.
-      Try, in order: env `CHROME_HEADLESS_NO_CRASH`, switches `--disable-crashpad`,
-      `--disable-features=Crashpad`, `--crash-dumps-dir` tricks, and building the arg
-      set that makes `crash_reporter::InitializeCrashpad` a no-op. If a switch works →
-      chrome should reach Blink and dump the DOM.
+- [x] A1. crashpad skipped via `--disable-crashpad-for-testing` (2026-07-17). Then a
+      LONG chain of syscall/VFS blockers, each named by chrome, each fixed + committed:
+      pipe/pipe2 (22/293) + CAP_NET · AF_UNIX socket/bind/listen/accept/unlink ·
+      symlink/readlink · stat(4)/lstat(6) + dirs report 0700 · access() disk-aware ·
+      VFS dir-awareness for disk files (locale bundle) · epoll (create/ctl/wait) ·
+      MAX_TASKS 48→256, MAX_THREADS 64→224, clone→-EAGAIN (no panic) · blocking pipe
+      reads + fcntl O_NONBLOCK · vfs_pread EOF-slice panic fix · epoll_wait yields.
+      chrome --headless now runs DEEP into browser init: PartitionAlloc, ProcessSingleton,
+      ResourceBundle (en-US locale), ~30 threads, dbus/inotify probes (non-fatal).
+      **BLOCKED: a multi-threaded DEADLOCK during thread-pool init — freezes right
+      after spawning the ~30th thread (task 39); all threads park (a lost wake or
+      circular block under the cooperative scheduler). This is the real remaining wall
+      before Blink.** Next: instrument futex/block points to see what each thread waits
+      on; likely a futex/eventfd wake that our scheduler drops under many-thread load,
+      or the launcher's yield loop starving a Ready thread. Chrome pack: /tmp/chrome-pack.img
+      (550 MiB). Boot: -m 3072M + pack as virtio-blk; --headless run needs a long
+      timeout (rendering is ~60x slow under TCG).
 - [ ] A2. If no switch skips it: make crashpad's `fork()` survivable — implement a
       minimal `fork(57)`/`clone(process)` that returns a child PID and a child task in
       a COPIED address space, and `execve(59)` that replaces the child image with the
