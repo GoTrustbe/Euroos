@@ -898,10 +898,16 @@ fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, ex: i16, ey: i16
     e[0] = kind;
     e[1] = detail;
     e[2..4].copy_from_slice(&c.seq.to_le_bytes());
-    // time@4=0, root@8=ROOT, event(window)@12, child@16=0
+    // time@4: a real, monotonically-increasing server time (ms). GDK's key/focus
+    // dispatch tracks event time (double-click, key-repeat); time=0 made it drop keys.
+    let t = (crate::interrupts::ticks() * 10) as u32;
+    e[4..8].copy_from_slice(&t.to_le_bytes());
+    // root@8=ROOT, event(window)@12, child@16=0
     e[8..12].copy_from_slice(&ROOT_WINDOW.to_le_bytes());
     e[12..16].copy_from_slice(&window.to_le_bytes());
-    // root-x@20, root-y@22, event-x@24, event-y@26
+    // root-x@20, root-y@22 (screen), event-x@24, event-y@26 (window-local)
+    e[20..22].copy_from_slice(&ex.to_le_bytes());
+    e[22..24].copy_from_slice(&ey.to_le_bytes());
     e[24..26].copy_from_slice(&ex.to_le_bytes());
     e[26..28].copy_from_slice(&ey.to_le_bytes());
     e[30] = 1; // same-screen

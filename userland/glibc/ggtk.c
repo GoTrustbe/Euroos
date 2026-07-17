@@ -46,29 +46,46 @@ static void on_reset(GtkButton *b, gpointer data){
   gtk_widget_queue_draw(g_area);
 }
 
+static gboolean on_key(GtkWidget *w, GdkEventKey *ev, gpointer data){
+  (void)w; (void)data;
+  printf("GGTK: KEY keyval=%u '%s'\n", ev->keyval, ev->string ? ev->string : ""); fflush(stdout);
+  return FALSE;
+}
+static void on_entry_changed(GtkEditable *e, gpointer data){
+  (void)data;
+  printf("GGTK: entry = '%s'\n", gtk_entry_get_text(GTK_ENTRY(e))); fflush(stdout);
+}
+
 int main(int argc, char **argv){
   if(!gtk_init_check(&argc,&argv)){ printf("GGTK: gtk_init_check FAILED\n"); return 2; }
   printf("GGTK: gtk_init ok\n"); fflush(stdout);
 
   GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   gtk_window_set_title(GTK_WINDOW(win), "EuroOS GTK");
-  gtk_window_set_default_size(GTK_WINDOW(win), 480, 250);
+  gtk_window_set_default_size(GTK_WINDOW(win), 480, 290);
+  g_signal_connect(win, "key-press-event", G_CALLBACK(on_key), NULL);
 
-  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
   gtk_container_set_border_width(GTK_CONTAINER(box), 12);
   gtk_container_add(GTK_CONTAINER(win), box);
 
   g_area = gtk_drawing_area_new();
-  gtk_widget_set_size_request(g_area, 456, 150);
+  gtk_widget_set_size_request(g_area, 456, 120);
   g_signal_connect(g_area, "draw", G_CALLBACK(on_draw), NULL);
   gtk_box_pack_start(GTK_BOX(box), g_area, TRUE, TRUE, 0);
+
+  GtkWidget *entry = gtk_entry_new();
+  gtk_entry_set_placeholder_text(GTK_ENTRY(entry), "type here...");
+  g_signal_connect(entry, "changed", G_CALLBACK(on_entry_changed), NULL);
+  gtk_box_pack_start(GTK_BOX(box), entry, FALSE, FALSE, 0);
 
   GtkWidget *btn = gtk_button_new_with_label("Reset counter");
   g_signal_connect(btn, "clicked", G_CALLBACK(on_reset), NULL);
   gtk_box_pack_start(GTK_BOX(box), btn, FALSE, FALSE, 0);
 
   gtk_widget_show_all(win);
-  printf("GGTK: window shown (live counter + reset button)\n"); fflush(stdout);
+  gtk_widget_grab_focus(entry);
+  printf("GGTK: window shown (counter + entry + button)\n"); fflush(stdout);
 
   g_timeout_add(500, tick, NULL);
   gtk_main();

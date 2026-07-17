@@ -4461,8 +4461,17 @@ fn main() -> Status {
         // desktop->X input routing end-to-end (the on-screen counter visibly resets).
         if windows[gtk_idx].visible && xserver::front_window_size().is_some() {
             gtk_dtick += 1;
-            // Self-test 1: click the Reset button (X delivery + GTK dispatch).
-            if gtk_dtick == 40 && !gtk_click_done {
+            // Self-test 1a: focus the window + type "hi" into the entry (keyboard).
+            if gtk_dtick == 30 {
+                for ww in windows.iter_mut() { ww.active = false; }
+                windows[gtk_idx].active = true;
+                xserver::deliver_focus(true);
+                ps2::push_scancode(0x23); ps2::push_scancode(0x23 | 0x80); // h
+                ps2::push_scancode(0x17); ps2::push_scancode(0x17 | 0x80); // i
+                serial_println!("[gtk-test] focused + typed 'hi'");
+            }
+            // Self-test 1b: click the Reset button (X delivery + GTK dispatch).
+            if gtk_dtick == 45 && !gtk_click_done {
                 if let Some((xw, xh)) = xserver::front_window_size() {
                     let (lx, ly) = ((xw / 2) as i16, xh.saturating_sub(18) as i16);
                     serial_println!("[gtk-test] deliver_button to Reset @local({lx},{ly}) of {xw}x{xh}");
