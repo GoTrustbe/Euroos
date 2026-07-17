@@ -1978,6 +1978,9 @@ fn main() -> Status {
             serial_println!("[glibc] === GTK3 toolkit app (ggtk) ===");
             ring3::GLIBC_DEADLINE_TICKS.store(6_000, core::sync::atomic::Ordering::Relaxed);
             ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed); // ~40 libs
+            // WINDOWED: retain the GTK window's pixels instead of blitting fullscreen, so
+            // the desktop composites it as a framed window (leave on for the desktop).
+            xserver::set_windowed(true);
             let (ogtk, egtk) = ring3::run_glibc(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net);
             ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
             ring3::GLIBC_DEADLINE_TICKS.store(12_000, core::sync::atomic::Ordering::Relaxed);
@@ -2757,9 +2760,21 @@ fn main() -> Status {
             visible: true, // default-open: the interactive shell is the clean first-run window (focused)
             restore: None,
         },
+        // A real GTK3 app hosted as a framed desktop window: its body is the live
+        // pixel buffer the in-kernel X server rendered (see SuiteApp::XClient).
+        compositor::Window {
+            x: SIDEBAR_W + 90, y: 470, w: 540, h: 320,
+            title: String::from("EuroOS GTK  -  ggtk"),
+            content: Vec::new(), ui: Vec::new(),
+            active: false, accent: Color::BLUE,
+            sec: eds::SecState::new(true, false, false),
+            app: suite_ui::SuiteApp::XClient,
+            visible: xserver::front_window_size().is_some(), // only if the app rendered
+            restore: None,
+        },
     ];
-    // Z-order (back-to-front): System back, Terminal front.
-    let mut order: Vec<usize> = alloc::vec![0, 1];
+    // Z-order (back-to-front): System back, Terminal, GTK window front.
+    let mut order: Vec<usize> = alloc::vec![0, 1, 2];
     // Dock tile (see compositor::DOCK_APPS: files/notes/clock/browser/terminal/
     // settings/store/star) → window index. The desktop starts EMPTY (all windows
     // hidden); a dock click opens an app. (AG-1 added files/notes/clock.)

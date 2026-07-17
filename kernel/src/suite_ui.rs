@@ -39,6 +39,9 @@ pub enum SuiteApp {
     Monitor,
     /// EuroLog: live view of the hash-chained audit log.
     Log,
+    /// A hosted X11 client (e.g. a real GTK app): its window body is the live pixel
+    /// buffer from the in-kernel X server, composited as a framed desktop window.
+    XClient,
 }
 
 const TITLEBAR_H: usize = 44; // must equal compositor::TITLEBAR_H
@@ -72,6 +75,8 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize, app: Sui
         SuiteApp::Text => {}
         SuiteApp::Monitor => {}
         SuiteApp::Log => {}
+        // XClient body is the hosted X-server pixel buffer, drawn before this dispatch.
+        SuiteApp::XClient => {}
         SuiteApp::None => {}
     }
 }

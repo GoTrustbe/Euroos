@@ -643,6 +643,33 @@ pub static INJECT_TEST_INPUT: core::sync::atomic::AtomicBool = core::sync::atomi
 pub static X_APP_ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 pub fn x_app_active() -> bool { X_APP_ACTIVE.load(core::sync::atomic::Ordering::Relaxed) }
 
+/// WINDOWED mode: when true, an X client's window is NOT blitted fullscreen by
+/// `present()`; instead the desktop compositor pulls its pixels (with_front_window)
+/// and draws it as a framed desktop window. Set by the desktop when it hosts an X app.
+pub static X_WINDOWED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+pub fn set_windowed(on: bool) { X_WINDOWED.store(on, core::sync::atomic::Ordering::Relaxed); }
+
+/// The RETAINED pixel buffer of a hosted X client's window: (w, h, pixels 0x00RRGGBB).
+/// Captured by `present()` in windowed mode so the desktop can composite the app as a
+/// framed window — and keep showing it even after the (boot-run) client exits.
+pub static RETAINED_WINDOW: Mutex<Option<(usize, usize, Vec<u32>)>> = Mutex::new(None);
+
+/// Hand the retained hosted-X-window pixels to `f` (w, h, &buf). Returns true if there
+/// is a retained window. The desktop compositor calls this to draw the app body.
+pub fn with_front_window(f: impl FnOnce(usize, usize, &[u32])) -> bool {
+    if let Some((w, h, buf)) = RETAINED_WINDOW.lock().as_ref() {
+        f(*w, *h, buf);
+        true
+    } else {
+        false
+    }
+}
+
+/// (w, h) of the retained hosted X window, for the desktop to size its frame.
+pub fn front_window_size() -> Option<(usize, usize)> {
+    RETAINED_WINDOW.lock().as_ref().map(|(w, h, _)| (*w, *h))
+}
+
 /// Extract a window's event-mask from an attribute value-list, if CWEventMask is set.
 /// The mask word is at `mask_off`; packed values start at `vals_off` in bit order.
 fn win_event_mask(c: &XConn, req: &[u8], mask_off: usize, vals_off: usize) -> u32 {
@@ -791,12 +818,27 @@ fn copy_area(c: &mut XConn, src: u32, dst: u32, sx: i32, sy: i32, dx: i32, dy: i
 /// pixel for the bring-up log. Reuses the app-graphics XRGB blit (as DOOM does).
 fn present(c: &XConn, id: u32) {
     if let Some(win) = c.windows.iter().find(|w| w.id == id && w.mapped) {
-        crate::screen_present_xrgb(&win.buf, win.w as usize, win.h as usize);
+        // Windowed mode: the desktop compositor draws the frame + pulls the pixels, so
+        // skip the fullscreen blit (it would fight the compositor). RETAIN the pixels so
+        // the app shows as a framed window and keeps showing after a boot-run client
+        // exits, and flag a repaint.
+        if X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) {
+            if win.w > 1 && win.h > 1 {
+                *RETAINED_WINDOW.lock() = Some((win.w as usize, win.h as usize, win.buf.clone()));
+            }
+            X_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
+        } else {
+            crate::screen_present_xrgb(&win.buf, win.w as usize, win.h as usize);
+        }
         let ctr = (win.h as usize / 2) * win.w as usize + win.w as usize / 2;
         let sample = win.buf.get(ctr).copied().unwrap_or(0);
         trace(format_args!("present id={id:#x} {}x{} centre-pixel={sample:#08x}", win.w, win.h));
     }
 }
+
+/// Set when a windowed X client repainted, so the desktop knows to recomposite it.
+pub static X_DIRTY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+pub fn take_dirty() -> bool { X_DIRTY.swap(false, core::sync::atomic::Ordering::Relaxed) }
 
 /// Build an 8-byte reply header (reply type 1, sequence, length-in-units field).
 /// `extra_units` is beyond the fixed 32-byte reply body — 0 for all simple replies
