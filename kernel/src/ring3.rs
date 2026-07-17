@@ -5273,6 +5273,43 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         39 => 1,  // getpid()
         22 | 293 => pipe_create(a1), // pipe(fds) / pipe2(fds, flags): chrome's
                                      // SandboxHost + IPC create pipes for signalling.
+        4 => {
+            // stat(path, statbuf): a path-based stat (chrome verifies its socket temp
+            // dir is mode 0700 via stat, not newfstatat). 144-byte Linux struct stat.
+            let path = user_cstr(a1, 256);
+            ensure_proc(&path);
+            if !in_user_arena(a2, 144) {
+                return EFAULT;
+            }
+            if is_vfs_dir(&path) {
+                unsafe {
+                    core::ptr::write_bytes(a2 as *mut u8, 0, 144);
+                    (a2 as *mut u64).write(1); // st_dev
+                    ((a2 + 16) as *mut u64).write(2); // st_nlink
+                    (a2 as *mut u32).add(6).write(0o040700); // S_IFDIR|0700
+                    ((a2 + 56) as *mut u64).write(4096); // st_blksize
+                }
+                return 0;
+            }
+            // A regular file (embedded or disk-backed).
+            let sz = FILES.lock().iter().find(|(p, _)| p.as_bytes() == path.as_slice()).map(|(_, d)| d.len())
+                .or_else(|| DISK_FILES.lock().iter().find(|(p, _, _, _)| p.as_bytes() == path.as_slice()).map(|&(_, _, _, s)| s as usize))
+                .or_else(|| SYMLINKS.lock().iter().find(|(p, _)| p.as_bytes() == path.as_slice()).map(|(_, t)| t.len()));
+            match sz {
+                Some(n) => {
+                    unsafe {
+                        core::ptr::write_bytes(a2 as *mut u8, 0, 144);
+                        (a2 as *mut u64).write(1); // st_dev
+                        ((a2 + 16) as *mut u64).write(1); // st_nlink
+                        (a2 as *mut u32).add(6).write(0o100644); // S_IFREG|0644
+                        ((a2 + 48) as *mut u64).write(n as u64); // st_size
+                        ((a2 + 56) as *mut u64).write(4096); // st_blksize
+                    }
+                    0
+                }
+                None => (-2i64) as u64, // -ENOENT
+            }
+        }
         83 => {
             // mkdir(path, mode): chrome creates its (headless) user-data-dir here.
             vfs_mkdir(&user_cstr(a1, 256))
@@ -6087,7 +6124,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 }
                 unsafe {
                     core::ptr::write_bytes(a2 as *mut u8, 0, 144);
-                    (a2 as *mut u32).add(6).write(0o040755); // st_mode: S_IFDIR|0755
+                    (a2 as *mut u32).add(6).write(0o040700); // st_mode: S_IFDIR|0700 (chrome wants profile/socket dirs user-only)
                     ((a2 + 56) as *mut u64).write(4096); // st_blksize
                 }
                 return 0;
@@ -6118,7 +6155,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                         core::ptr::write_bytes(a3 as *mut u8, 0, 144);
                         (a3 as *mut u64).write(1); // st_dev
                         ((a3 + 16) as *mut u64).write(2); // st_nlink (dirs: >=2)
-                        (a3 as *mut u32).add(6).write(0o040755); // st_mode: S_IFDIR|0755
+                        (a3 as *mut u32).add(6).write(0o040700); // st_mode: S_IFDIR|0700 (chrome wants profile/socket dirs user-only)
                         ((a3 + 56) as *mut u64).write(4096); // st_blksize
                     }
                     return 0;
@@ -6303,7 +6340,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     (a5 as *mut u32).write(0x7ff); // stx_mask = STATX_BASIC_STATS
                     ((a5 + 0x04) as *mut u32).write(4096); // stx_blksize
                     ((a5 + 0x10) as *mut u32).write(2); // stx_nlink
-                    ((a5 + 0x1c) as *mut u16).write(0o040755); // stx_mode: S_IFDIR|0755
+                    ((a5 + 0x1c) as *mut u16).write(0o040700); // stx_mode: S_IFDIR|0700
                 }
                 return 0;
             }
