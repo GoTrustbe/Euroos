@@ -263,13 +263,25 @@ static OPEN_DIRS: Mutex<[Option<(String, usize)>; MAX_FD]> =
 static PIPES: Mutex<alloc::vec::Vec<alloc::vec::Vec<u8>>> = Mutex::new(alloc::vec::Vec::new());
 /// Pipe fds: per fd (pipe-id, is_write_end). Separate table alongside file/dir fds.
 static PIPE_FDS: Mutex<[Option<(usize, bool)>; MAX_FD]> = Mutex::new([None; MAX_FD]);
+/// Per pipe-id: is the pipe non-blocking (O_NONBLOCK)? A BLOCKING read on an empty
+/// pipe parks the caller (chrome's shutdown-detector thread reads a signal pipe that
+/// way and FATALs on a spurious EAGAIN). Parallel to PIPES by index.
+static PIPE_NONBLOCK: Mutex<alloc::vec::Vec<bool>> = Mutex::new(alloc::vec::Vec::new());
+/// Tasks blocked in a read on an empty pipe: (pipe-id, task). Woken by a write.
+static PIPE_WAITERS: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
 
 /// pipe2(fds, flags): create a pipe; assign a read fd and a write fd and write
 /// them to `fds[0]`/`fds[1]`. Returns 0 / -EMFILE.
 fn pipe_create(user_fds: u64) -> u64 {
+    pipe_create2(user_fds, 0)
+}
+
+/// pipe2 with flags (O_NONBLOCK = 0x800). Records the pipe's blocking mode.
+fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     let id = {
         let mut p = PIPES.lock();
         p.push(alloc::vec::Vec::new());
+        PIPE_NONBLOCK.lock().push(flags & 0x800 != 0);
         p.len() - 1
     };
     let files = OPEN_FDS.lock();
@@ -413,9 +425,62 @@ fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
     }
     if let Some((id, true)) = PIPE_FDS.lock()[fd] {
         PIPES.lock()[id].extend_from_slice(bytes);
+        // Wake any tasks blocked reading this pipe.
+        let mut w = PIPE_WAITERS.lock();
+        let mut i = 0;
+        while i < w.len() {
+            if w[i].0 == id {
+                crate::sched::unblock(w[i].1);
+                w.swap_remove(i);
+            } else {
+                i += 1;
+            }
+        }
         return Some(bytes.len() as u64);
     }
     None
+}
+
+/// Blocking read on a pipe read-end fd: parks the caller until data arrives (or
+/// returns immediately if the pipe is non-blocking / already has data). Returns the
+/// byte count, -EAGAIN (nonblocking + empty), or None if `fd` is not a pipe read end.
+fn pipe_read_blocking(fd: usize, buf: u64, len: usize) -> Option<u64> {
+    let (id, is_read) = match PIPE_FDS.lock().get(fd).copied().flatten() {
+        Some((id, w)) => (id, !w),
+        None => return None,
+    };
+    if !is_read {
+        return None;
+    }
+    loop {
+        // Data available? copy + return.
+        {
+            let mut pipes = PIPES.lock();
+            let p = &mut pipes[id];
+            if !p.is_empty() {
+                let n = len.min(p.len());
+                if !in_user_arena(buf, n) {
+                    return Some(EFAULT);
+                }
+                let data: alloc::vec::Vec<u8> = p.drain(0..n).collect();
+                let _ = copy_to_user(buf, &data);
+                return Some(n as u64);
+            }
+        }
+        // Empty: non-blocking pipe -> EAGAIN; blocking -> park until a write wakes us.
+        let nonblock = PIPE_NONBLOCK.lock().get(id).copied().unwrap_or(false);
+        if nonblock {
+            return Some((-11i64) as u64); // -EAGAIN
+        }
+        let cur = crate::sched::current();
+        {
+            let mut w = PIPE_WAITERS.lock();
+            if !w.iter().any(|&(pid, t)| pid == id && t == cur) {
+                w.push((id, cur));
+            }
+        }
+        crate::sched::block_current(); // resumes when a write unblocks us; re-check
+    }
 }
 
 /// Read from a pipe fd (read end). Empty -> -EAGAIN (the reader polls). None = not a
@@ -460,6 +525,8 @@ fn reset_fd_table() {
     // that fd number (EAGAIN "cannot read file data"). See the bg_read_fd note.
     *PIPE_FDS.lock() = [None; MAX_FD];
     PIPES.lock().clear();
+    PIPE_NONBLOCK.lock().clear();
+    PIPE_WAITERS.lock().clear();
 }
 
 /// Register a file (path + content) so userspace can read it via open/read.
@@ -5402,8 +5469,8 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             }
         }
         39 => 1,  // getpid()
-        22 | 293 => pipe_create(a1), // pipe(fds) / pipe2(fds, flags): chrome's
-                                     // SandboxHost + IPC create pipes for signalling.
+        22 => pipe_create2(a1, 0),   // pipe(fds): always blocking
+        293 => pipe_create2(a1, a2), // pipe2(fds, flags): honour O_NONBLOCK
         213 | 291 => epoll_create(),          // epoll_create(size) / epoll_create1(flags)
         233 => epoll_ctl(a1, a2, a3, a4),     // epoll_ctl(epfd, op, fd, *event)
         232 => epoll_wait(a1, a2, a3, a4),    // epoll_wait(epfd, *events, max, timeout)
@@ -5906,9 +5973,10 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 }
                 data.len() as u64
             } else if (a1 as usize) < MAX_FD && OPEN_FDS.lock()[a1 as usize].is_none() && is_pipe_fd(a1 as usize) {
-                // a pipe read end (chrome SandboxHost/IPC). A real open file on this
-                // fd number always wins (a stale global pipe marker must not hijack it).
-                pipe_read_fd(a1 as usize, a2, a3 as usize).unwrap_or(0)
+                // a pipe read end (chrome SandboxHost/IPC/shutdown-detector). A real
+                // open file on this fd number always wins over a stale pipe marker.
+                // Blocking pipes park the caller until a write (POSIX default).
+                pipe_read_blocking(a1 as usize, a2, a3 as usize).unwrap_or(0)
             } else {
                 vfs_read(a1 as usize, a2, a3 as usize)
             }
