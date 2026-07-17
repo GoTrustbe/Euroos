@@ -2379,6 +2379,34 @@ pub fn gcairo_bytes() -> &'static [u8] { GCAIRO_ELF }
 /// A Cairo + FreeType TEXT rendering client, and the DejaVu font it uses.
 pub fn gcairotext_bytes() -> &'static [u8] { GCAIROTEXT_ELF }
 pub fn dejavu_ttf_bytes() -> &'static [u8] { DEJAVU_TTF }
+// DejaVu font family (8 faces) + a prebuilt fontconfig cache, so fontconfig
+// resolves fonts at runtime WITHOUT scanning (its runtime dir-scan finds 0 fonts
+// through the VFS; real systems ship prebuilt caches from fc-cache).
+static DEJAVUSANS_BOLD_TTF: &[u8] = include_bytes!("../../userland/glibc/DejaVuSans-Bold.ttf");
+static DEJAVUSANSMONO_BOLDOBLIQUE_TTF: &[u8] = include_bytes!("../../userland/glibc/DejaVuSansMono-BoldOblique.ttf");
+static DEJAVUSANSMONO_BOLD_TTF: &[u8] = include_bytes!("../../userland/glibc/DejaVuSansMono-Bold.ttf");
+static DEJAVUSANSMONO_OBLIQUE_TTF: &[u8] = include_bytes!("../../userland/glibc/DejaVuSansMono-Oblique.ttf");
+static DEJAVUSANSMONO_TTF: &[u8] = include_bytes!("../../userland/glibc/DejaVuSansMono.ttf");
+static DEJAVUSERIF_BOLD_TTF: &[u8] = include_bytes!("../../userland/glibc/DejaVuSerif-Bold.ttf");
+static DEJAVUSERIF_TTF: &[u8] = include_bytes!("../../userland/glibc/DejaVuSerif.ttf");
+static FC_DEJAVU_CACHE: &[u8] = include_bytes!("../../userland/glibc/fc-dejavu.cache-9");
+
+/// All served DejaVu faces (path basename, bytes) — DejaVuSans is DEJAVU_TTF.
+pub fn dejavu_fonts() -> [(&'static str, &'static [u8]); 8] {
+    [
+        ("DejaVuSans.ttf", DEJAVU_TTF),
+        ("DejaVuSans-Bold.ttf", DEJAVUSANS_BOLD_TTF),
+        ("DejaVuSansMono-BoldOblique.ttf", DEJAVUSANSMONO_BOLDOBLIQUE_TTF),
+        ("DejaVuSansMono-Bold.ttf", DEJAVUSANSMONO_BOLD_TTF),
+        ("DejaVuSansMono-Oblique.ttf", DEJAVUSANSMONO_OBLIQUE_TTF),
+        ("DejaVuSansMono.ttf", DEJAVUSANSMONO_TTF),
+        ("DejaVuSerif-Bold.ttf", DEJAVUSERIF_BOLD_TTF),
+        ("DejaVuSerif.ttf", DEJAVUSERIF_TTF),
+    ]
+}
+/// The prebuilt fontconfig cache for /usr/share/fonts/truetype/dejavu (le64, v9).
+pub fn fc_dejavu_cache() -> &'static [u8] { FC_DEJAVU_CACHE }
+
 /// The Pango text-layout stack (HarfBuzz shaping + GObject/GIO) library bytes.
 pub fn pango_libs() -> [(&'static str, &'static [u8]); 15] {
     [
@@ -5173,6 +5201,22 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 // newfstatat: path in a2, statbuf in a3.
                 let path = user_cstr(a2, 256);
                 ensure_proc(&path); // synthesize /proc on demand
+                // A DIRECTORY path matches no exact file — report S_IFDIR so callers
+                // that stat a dir before scanning it (fontconfig scanning
+                // /usr/share/fonts for fonts) see a real directory instead of ENOENT.
+                if is_vfs_dir(&path) {
+                    if !in_user_arena(a3, 144) {
+                        return EFAULT;
+                    }
+                    unsafe {
+                        core::ptr::write_bytes(a3 as *mut u8, 0, 144);
+                        (a3 as *mut u64).write(1); // st_dev
+                        ((a3 + 16) as *mut u64).write(2); // st_nlink (dirs: >=2)
+                        (a3 as *mut u32).add(6).write(0o040755); // st_mode: S_IFDIR|0755
+                        ((a3 + 56) as *mut u64).write(4096); // st_blksize
+                    }
+                    return 0;
+                }
                 let files = FILES.lock();
                 let found = files.iter().enumerate().find(|(_, (p, _))| p.as_bytes() == path.as_slice());
                 let sz = found.map(|(_, (_, d))| d.len());
@@ -5335,6 +5379,20 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // file so glibc stdio sees the file correctly.
             let path = user_cstr(a2, 256);
             ensure_proc(&path); // synthesize /proc on demand
+            // Directory path -> S_IFDIR (so fontconfig's font-dir scan proceeds).
+            if is_vfs_dir(&path) && a5 != 0 {
+                if !in_user_arena(a5, 256) {
+                    return EFAULT;
+                }
+                unsafe {
+                    core::ptr::write_bytes(a5 as *mut u8, 0, 256);
+                    (a5 as *mut u32).write(0x7ff); // stx_mask = STATX_BASIC_STATS
+                    ((a5 + 0x04) as *mut u32).write(4096); // stx_blksize
+                    ((a5 + 0x10) as *mut u32).write(2); // stx_nlink
+                    ((a5 + 0x1c) as *mut u16).write(0o040755); // stx_mode: S_IFDIR|0755
+                }
+                return 0;
+            }
             let sz = FILES
                 .lock()
                 .iter()
@@ -5372,6 +5430,27 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         }
         35 => 0,  // nanosleep
         234 => 0, // tgkill
+        137 | 138 => {
+            // statfs(path, buf) / fstatfs(fd, buf): report a normal LOCAL filesystem.
+            // fontconfig statfs()es its font + cache dirs to detect network mounts; an
+            // ENOSYS made it treat the scan/cache as unusable, so its font-dir scan
+            // produced no usable font (Pango rendered .notdef). buf is a2 for both.
+            const TMPFS_MAGIC: u64 = 0x0102_1994;
+            if !in_user_arena(a2, 120) {
+                return EFAULT;
+            }
+            unsafe {
+                core::ptr::write_bytes(a2 as *mut u8, 0, 120);
+                (a2 as *mut u64).write(TMPFS_MAGIC); // f_type (local, non-network)
+                ((a2 + 8) as *mut u64).write(4096);  // f_bsize
+                ((a2 + 16) as *mut u64).write(1 << 20); // f_blocks
+                ((a2 + 24) as *mut u64).write(1 << 19); // f_bfree
+                ((a2 + 32) as *mut u64).write(1 << 19); // f_bavail
+                ((a2 + 64) as *mut u64).write(255);  // f_namelen
+                ((a2 + 72) as *mut u64).write(4096); // f_frsize
+            }
+            0
+        }
         _ => {
             crate::serial_println!("[linux-abi] ENOSYS Linux syscall {num}");
             (-38i64) as u64 // -ENOSYS (Linux convention: negative errno)

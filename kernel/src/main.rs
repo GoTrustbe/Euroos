@@ -1948,7 +1948,7 @@ fn main() -> Status {
         // scan) so it works without VFS readdir. Run LAST so its window is the final one
         // painted and stays on screen into the desktop (clean, unobscured render).
         {
-            const FONTS_CONF: &[u8] = b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <dir>/usr/share/fonts</dir>\n</fontconfig>\n";
+            const FONTS_CONF: &[u8] = b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>Sans</family><prefer><family>DejaVu Sans</family></prefer></alias>\n</fontconfig>\n";
             ring3::register_file("/etc/fonts/fonts.conf", FONTS_CONF.to_vec());
             xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
             let (opo, epo) = ring3::run_glibc(&mut allocator, ring3::gpango_bytes(), ring3::ldlinux_bytes(), &[b"gpango"], &[b"DISPLAY=:0", b"PATH=/bin", b"FONTCONFIG_PATH=/etc/fonts"], caps_net);
@@ -1964,7 +1964,17 @@ fn main() -> Status {
         // GetImage+PutImage) and CopyAreas it onto the window, composited to the
         // framebuffer — shapes AND anti-aliased text appear. Self-quits after rendering.
         {
-            ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <dir>/usr/share/fonts</dir>\n</fontconfig>\n".to_vec());
+            // Full fontconfig setup so ANY app (incl. GTK, which resolves fonts via
+            // fontconfig internally) finds real glyphs: serve the DejaVu family, a
+            // PREBUILT fc-cache (fontconfig's runtime dir-scan finds nothing through the
+            // VFS, so — like a real distro — we ship the cache fc-cache produced), and a
+            // config whose <dir> is the dejavu dir (so only that one cache is needed).
+            // The VFS reports dir mtime 0, so the cache always validates as current.
+            for (name, bytes) in ring3::dejavu_fonts() {
+                ring3::register_file_static(&alloc::format!("/usr/share/fonts/truetype/dejavu/{name}"), bytes);
+            }
+            ring3::register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", ring3::fc_dejavu_cache());
+            ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n  <alias><family>Sans</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>Cantarell</family><prefer><family>DejaVu Sans</family></prefer></alias>\n</fontconfig>\n".to_vec());
             serial_println!("[glibc] === GTK3 toolkit app (ggtk) ===");
             ring3::GLIBC_DEADLINE_TICKS.store(6_000, core::sync::atomic::Ordering::Relaxed);
             ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed); // ~40 libs
