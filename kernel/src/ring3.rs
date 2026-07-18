@@ -410,6 +410,7 @@ fn epoll_fd_ready(fd: u64) -> bool {
 /// timers advance instead of the main thread busy-spinning — then return 0 so the
 /// pump re-checks its timer queue. This keeps a cooperative kernel making progress.
 fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
+    EPOLL_WAIT_COUNT.fetch_add(1, Ordering::Relaxed);
     if !is_epoll_fd(epfd) {
         return (-9i64) as u64;
     }
@@ -1464,6 +1465,10 @@ static FUTEX_QUEUE: Mutex<alloc::vec::Vec<(u64, usize)>> = Mutex::new(alloc::vec
 /// Monotonic count of Linux syscalls dispatched — a progress heartbeat the launcher's
 /// stall detector watches to catch a many-thread deadlock (no syscall = frozen).
 static SYSCALL_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Count of futex_wait calls — a busy-spin (timer-driven block that never truly
+/// deschedules under many-thread contention) shows up as a runaway count here.
+static FUTEX_WAIT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static EPOLL_WAIT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// futex-wake: unblock up to `n` tasks waiting on `uaddr`. Returns the number
 /// of woken tasks.
@@ -1488,6 +1493,7 @@ fn futex_wake(uaddr: u64, n: i32) -> u32 {
 /// (the waiter is switched out on the next tick until a wake
 /// unblocks it; musl re-checks after a spurious wakeup). Otherwise -EAGAIN.
 fn futex_wait(uaddr: u64, val: u32) -> u64 {
+    FUTEX_WAIT_COUNT.fetch_add(1, Ordering::Relaxed);
     let cur = crate::sched::current();
     // Hold FUTEX_QUEUE across the value re-read + enqueue + block, so a concurrent
     // futex_wake (which also locks FUTEX_QUEUE) cannot slip in AFTER our value check
@@ -4785,33 +4791,28 @@ pub fn run_glibc_disk(
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
 
     let deadline = crate::interrupts::ticks() + GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
-    // Stall detector: if no syscall is dispatched for a while, all glibc threads are
-    // blocked (a deadlock) — dump every task's wait state + the futex/pipe queues ONCE.
-    let mut last_seq = SYSCALL_SEQ.load(Ordering::Relaxed);
-    let mut last_change = crate::interrupts::ticks();
-    let mut dumped = false;
+    // Periodic snapshot: every ~700 ticks while the run is active, dump syscall/futex/
+    // epoll rates + task states — a busy-spin livelock shows as a runaway futex/epoll
+    // count with no syscall-log output; a hard deadlock shows all-Blocked.
+    let mut next_snap = crate::interrupts::ticks() + 700;
+    let mut prev_seq = SYSCALL_SEQ.load(Ordering::Relaxed);
+    let mut prev_futex = FUTEX_WAIT_COUNT.load(Ordering::Relaxed);
+    let mut prev_epoll = EPOLL_WAIT_COUNT.load(Ordering::Relaxed);
+    let mut snaps = 0u32;
     while !GLIBC_DONE.load(Ordering::Relaxed) && crate::interrupts::ticks() < deadline {
         crate::xserver::pump_keyboard();
         crate::xserver::pump_mouse();
-        let seq = SYSCALL_SEQ.load(Ordering::Relaxed);
         let now = crate::interrupts::ticks();
-        if seq != last_seq {
-            last_seq = seq;
-            last_change = now;
-            dumped = false;
-        } else if !dumped && now.saturating_sub(last_change) > 400 {
-            crate::serial_println!("[stall] no syscall progress for >400 ticks at seq={seq} — dumping thread + wait state:");
+        if now >= next_snap && snaps < 6 {
+            let seq = SYSCALL_SEQ.load(Ordering::Relaxed);
+            let fx = FUTEX_WAIT_COUNT.load(Ordering::Relaxed);
+            let ep = EPOLL_WAIT_COUNT.load(Ordering::Relaxed);
+            crate::serial_println!("[stall] snap {snaps}: +{} syscalls, +{} futex_wait, +{} epoll_wait in ~700t | threads={}",
+                seq - prev_seq, fx - prev_futex, ep - prev_epoll, GLIBC_THREADS.lock().len());
             crate::sched::dump_states();
-            {
-                let fq = FUTEX_QUEUE.lock();
-                crate::serial_println!("[stall] FUTEX_QUEUE ({}): {:x?}", fq.len(), &fq[..fq.len().min(40)]);
-            }
-            {
-                let pw = PIPE_WAITERS.lock();
-                crate::serial_println!("[stall] PIPE_WAITERS ({}): {:?}", pw.len(), &pw[..pw.len().min(40)]);
-            }
-            crate::serial_println!("[stall] GLIBC_THREADS: {:?}", &*GLIBC_THREADS.lock());
-            dumped = true;
+            prev_seq = seq; prev_futex = fx; prev_epoll = ep;
+            next_snap = now + 700;
+            snaps += 1;
         }
         crate::sched::sleep_ticks(1);
         crate::sched::yield_now();
