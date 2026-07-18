@@ -389,7 +389,10 @@ fn epoll_ctl(epfd: u64, op: u64, fd: u64, ev: u64) -> u64 {
     }
 }
 
-/// Is `fd` currently readable (EPOLLIN)?  Optimistic for regular files.
+/// Is `fd` currently readable (EPOLLIN)? Only report a fd we actually track as ready
+/// when it has data — an UNKNOWN fd defaults to NOT-ready. (Reporting unknown/regular
+/// fds as always-ready made epoll_wait return a fake-ready fd every call, spinning
+/// chrome's message pump so worker threads never got the CPU — the livelock.)
 fn epoll_fd_ready(fd: u64) -> bool {
     if crate::net::is_eventfd(fd) {
         crate::net::eventfd_readable(fd)
@@ -401,7 +404,7 @@ fn epoll_fd_ready(fd: u64) -> bool {
             _ => false,                                        // write end: not "readable"
         }
     } else {
-        true // regular file / stdin: always readable
+        false // unknown/regular fd: NOT ready (avoid the fake-ready spin)
     }
 }
 
