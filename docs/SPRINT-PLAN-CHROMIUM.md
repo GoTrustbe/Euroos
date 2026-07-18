@@ -20,14 +20,26 @@ Work top-to-bottom. Commit after each green step. Each `[ ]` is a boot-verified 
       reads + fcntl O_NONBLOCK · vfs_pread EOF-slice panic fix · epoll_wait yields.
       chrome --headless now runs DEEP into browser init: PartitionAlloc, ProcessSingleton,
       ResourceBundle (en-US locale), ~30 threads, dbus/inotify probes (non-fatal).
-      **BLOCKED: a multi-threaded DEADLOCK during thread-pool init — freezes right
-      after spawning the ~30th thread (task 39); all threads park (a lost wake or
-      circular block under the cooperative scheduler). This is the real remaining wall
-      before Blink.** Next: instrument futex/block points to see what each thread waits
-      on; likely a futex/eventfd wake that our scheduler drops under many-thread load,
-      or the launcher's yield loop starving a Ready thread. Chrome pack: /tmp/chrome-pack.img
-      (550 MiB). Boot: -m 3072M + pack as virtio-blk; --headless run needs a long
-      timeout (rendering is ~60x slow under TCG).
+      **BLOCKED (root-caused 2026-07-18): a busy-spin LIVELOCK, not a deadlock.**
+      Diagnostic snapshots (gate: ring3::STALL_DIAG): +38952 futex_wait + ~13000
+      epoll_wait per 700 ticks, 7 Blocked / 10 Ready, zero forward progress.
+      ROOT CAUSE: the syscall handler runs on ONE shared KERNEL_RSP stack, and
+      USER_RSP/USER_RIP/SAVED_REGS are globals (ring3.rs ~L201) set on entry + used
+      on exit. A glibc thread therefore CANNOT deschedule mid-syscall (a yield lets
+      another thread's syscall clobber the shared stack + ring3-return state), so
+      futex_wait can only mark Blocked + return, and the thread busy-spins re-checking
+      until the timer preempts it — fine at few threads (gsync/gthread pass), fatal at
+      chrome's ~30-thread contention.
+      **THE FIX (next, P0): per-task syscall reentrancy** — give each thread its own
+      syscall kernel stack, make USER_RSP/USER_RIP/SAVED_REGS/KERNEL_RSP per-task
+      (fields on Task, saved+restored in the context switch, KERNEL_RSP set to the
+      incoming task's syscall-stack top). Then futex_wait/epoll_wait can truly yield
+      (sched::yield_now) and a Blocked thread uses ZERO cpu until woken. Touch points:
+      syscall_entry asm (ring3.rs ~L2545, uses [rip+KERNEL_RSP]/[rip+USER_RSP]), the
+      Task struct + context switch (sched.rs). Delicate — breaks ALL glibc if wrong;
+      test incrementally (gtiny first, then gthread/gsync, then chrome). Chrome pack:
+      /tmp/chrome-pack.img (550 MiB, 92 files incl locales/en-US.pak). Boot: -m 3072M
+      + pack as virtio-blk; --headless needs a long timeout (~60x slow under TCG).
 - [ ] A2. If no switch skips it: make crashpad's `fork()` survivable — implement a
       minimal `fork(57)`/`clone(process)` that returns a child PID and a child task in
       a COPIED address space, and `execve(59)` that replaces the child image with the
