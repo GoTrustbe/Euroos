@@ -30,7 +30,21 @@ Work top-to-bottom. Commit after each green step. Each `[ ]` is a boot-verified 
       futex_wait can only mark Blocked + return, and the thread busy-spins re-checking
       until the timer preempts it — fine at few threads (gsync/gthread pass), fatal at
       chrome's ~30-thread contention.
-      **THE FIX (next, P0): per-task syscall reentrancy** — give each thread its own
+      **ATTEMPT 1 (2026-07-18, reverted — saved as docs/wip/per-task-syscall-reentrancy.patch):**
+      implemented per-task syscall stack (CURRENT_SC_STACK global set by schedule_core
+      to the incoming task's kstack; syscall_entry uses it not KERNEL_RSP) + saved/
+      restored USER_RSP/USER_RIP/SAVED_REGS as Task fields in schedule_core + made
+      futex_wait/epoll_wait call sched::yield_now after block_current. Basic single-
+      thread syscalls fine, but it HANGS the musl fork+clone+pthread_join test (freezes
+      right after `[thread] clone -> task 24`, where the known-good boot continues to
+      `GTHREAD ... 3 threads joined -> PASS`). So a descheduled-mid-futex musl joiner
+      never resumes (or its worker never runs) — a subtle bug in the yield/resume or
+      the per-task-stack handling of a forked child's first run. Reverted to keep the
+      working system (chrome --version, GTK, DOOM, 20/20). NEXT debugging: add a log in
+      futex_wait (after yield_now returns) + futex_wake/unblock to trace the wake→resume
+      of the yielded joiner; check the forked-child first-run path (sc_* = 0 → set_
+      syscall_globals) and whether yield_switch fully preserves a mid-syscall frame.
+      **THE FIX (P0): per-task syscall reentrancy** — give each thread its own
       syscall kernel stack, make USER_RSP/USER_RIP/SAVED_REGS/KERNEL_RSP per-task
       (fields on Task, saved+restored in the context switch, KERNEL_RSP set to the
       incoming task's syscall-stack top). Then futex_wait/epoll_wait can truly yield

@@ -1,0 +1,147 @@
+diff --git a/kernel/src/ring3.rs b/kernel/src/ring3.rs
+index d37fc1c..046534a 100644
+--- a/kernel/src/ring3.rs
++++ b/kernel/src/ring3.rs
+@@ -200,7 +200,12 @@ use crate::serial_print;
+ #[no_mangle]
+ static mut SAVED_KERNEL_RSP: u64 = 0; // return point for sys_exit
+ #[no_mangle]
+-static mut KERNEL_RSP: u64 = 0; // stack for the syscall handler
++static mut KERNEL_RSP: u64 = 0; // (legacy) global syscall stack — fallback default only
++#[no_mangle]
++static mut CURRENT_SC_STACK: u64 = 0; // PER-TASK syscall kernel stack top: syscall_entry
++// switches rsp to this. schedule_core points it at the incoming task's kstack, so a
++// thread descheduled MID-SYSCALL (futex/epoll yield) keeps its own syscall stack and a
++// concurrent thread's syscall cannot clobber it.
+ #[no_mangle]
+ static mut USER_RSP: u64 = 0; // saved user-rsp during a syscall
+ #[no_mangle]
+@@ -446,7 +451,8 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
+             return n; // ready fds, non-blocking, or gave the CPU up enough — let the pump run
+         }
+         tries += 1;
+-        crate::sched::sleep_ticks(1); // yield to worker threads + advance timers
++        crate::sched::sleep_ticks(1); // sleep a tick...
++        crate::sched::yield_now();    // ...and actually deschedule (safe: per-task sc stack)
+     }
+ }
+ 
+@@ -1518,6 +1524,10 @@ fn futex_wait(uaddr: u64, val: u32) -> u64 {
+     }
+     crate::sched::block_current(); // mark Blocked while still holding q
+     drop(q);
++    // Deschedule NOW (per-task syscall stack makes a mid-syscall yield safe): the
++    // thread uses ZERO cpu until a futex_wake unblocks it — no busy-spin until the
++    // timer. When rescheduled, this returns and glibc re-checks the futex word.
++    crate::sched::yield_now();
+     0
+ }
+ 
+@@ -2547,7 +2557,7 @@ global_asm!(
+     ".global syscall_entry",
+     "syscall_entry:",
+     "mov [rip + USER_RSP], rsp",
+-    "mov rsp, [rip + KERNEL_RSP]",
++    "mov rsp, [rip + CURRENT_SC_STACK]", // per-task syscall stack (was global KERNEL_RSP)
+     // SMAP window OPEN: set RFLAGS.AC (bit 18) so that for the duration of this
+     // syscall ring 0 may read/write user pages (U=1). The syscall runs with IF=0
+     // (FMASK clears IF) -> non-preemptive, so the window cannot leak through a
+@@ -6816,9 +6826,32 @@ fn init_syscall_msrs() {
+         Msr::new(0xC000_0081).write((kdata << 48) | (kcode << 32)); // STAR
+         Msr::new(0xC000_0082).write(syscall_entry as usize as u64); // LSTAR
+         Msr::new(0xC000_0084).write(0x200); // FMASK: clear IF on entry
+-        // Kernel stack for the syscall handler.
++        // Kernel stack for the syscall handler. CURRENT_SC_STACK is the per-task
++        // syscall stack the entry actually uses; default it to the global KSTACK for
++        // any syscall before the first context switch (schedule_core then keeps it
++        // pointed at the running task's own kstack).
+         let top = (core::ptr::addr_of!(KSTACK) as u64 + KSTACK_SIZE as u64) & !0xF;
+         KERNEL_RSP = top;
++        CURRENT_SC_STACK = top;
++    }
++}
++
++/// Save the current task's in-flight syscall state (for schedule_core, mid-syscall
++/// switch): (user_rsp, user_rip, saved_regs).
++pub fn get_syscall_globals() -> (u64, u64, u64) {
++    unsafe { (USER_RSP, USER_RIP, SAVED_REGS) }
++}
++/// Restore the incoming task's syscall state + point the syscall stack at ITS kstack
++/// (only when `sc_stack` != 0; kernel tasks keep the previous stack — they never make
++/// ring-3 syscalls).
++pub fn set_syscall_globals(user_rsp: u64, user_rip: u64, saved_regs: u64, sc_stack: u64) {
++    unsafe {
++        USER_RSP = user_rsp;
++        USER_RIP = user_rip;
++        SAVED_REGS = saved_regs;
++        if sc_stack != 0 {
++            CURRENT_SC_STACK = sc_stack;
++        }
+     }
+ }
+ 
+diff --git a/kernel/src/sched.rs b/kernel/src/sched.rs
+index 461adc4..acb2179 100644
+--- a/kernel/src/sched.rs
++++ b/kernel/src/sched.rs
+@@ -72,6 +72,13 @@ struct Task {
+     /// stack overflow (the stack grows down past this point) overwrites the
+     /// canary and is thus detected instead of silently corrupting neighboring memory (S6).
+     stack_bottom: u64,
++    /// Per-task SYSCALL state. Because a thread can now be descheduled MID-SYSCALL
++    /// (futex/epoll yield), the syscall globals must travel with the task: saved on
++    /// switch-out, restored on switch-in, so a concurrent thread's syscall cannot
++    /// clobber this one's user-return state. (0 when the task is not in a syscall.)
++    sc_user_rsp: u64,
++    sc_user_rip: u64,
++    sc_saved_regs: u64,
+ }
+ 
+ /// Stack-guard canary (S6 memory hardening). Unlikely value at the bottom of each
+@@ -244,7 +251,7 @@ pub fn boot_pml4() -> u64 {
+ 
+ 
+ /// A pristine, unused task slot (used to reset a slot before it is recycled).
+-const EMPTY_TASK: Task = Task { rsp: 0, kstack: 0, fs_base: 0, cr3: 0, state: State::Dead, nice: 0, vruntime: 0, pid: 0, ppid: 0, stack_bottom: 0 };
++const EMPTY_TASK: Task = Task { rsp: 0, kstack: 0, fs_base: 0, cr3: 0, state: State::Dead, nice: 0, vruntime: 0, pid: 0, ppid: 0, stack_bottom: 0, sc_user_rsp: 0, sc_user_rip: 0, sc_saved_regs: 0 };
+ 
+ struct Scheduler {
+     tasks: [Task; MAX_TASKS],
+@@ -257,7 +264,7 @@ struct Scheduler {
+ 
+ static SCHED: Mutex<Scheduler> = Mutex::new(Scheduler {
+     tasks: [const {
+-        Task { rsp: 0, kstack: 0, fs_base: 0, cr3: 0, state: State::Ready, nice: 0, vruntime: 0, pid: 0, ppid: 0, stack_bottom: 0 }
++        Task { rsp: 0, kstack: 0, fs_base: 0, cr3: 0, state: State::Ready, nice: 0, vruntime: 0, pid: 0, ppid: 0, stack_bottom: 0, sc_user_rsp: 0, sc_user_rip: 0, sc_saved_regs: 0 }
+     }; MAX_TASKS],
+     count: 1,
+     current: 0,
+@@ -400,6 +407,13 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
+     };
+     let cur = s.current;
+     s.tasks[cur].rsp = rsp;
++    // Save the OUTGOING task's in-flight syscall state (it may be mid-syscall, having
++    // yielded from futex/epoll) so a concurrent thread's syscall cannot clobber its
++    // user-return state; restored when this task is scheduled again.
++    let (u_rsp, u_rip, s_regs) = crate::ring3::get_syscall_globals();
++    s.tasks[cur].sc_user_rsp = u_rsp;
++    s.tasks[cur].sc_user_rip = u_rip;
++    s.tasks[cur].sc_saved_regs = s_regs;
+     // S6 stack guard: is the canary of the just-run task still intact? If not,
+     // its kernel stack overflowed -> stop with a clear diagnosis instead of
+     // silently letting neighboring memory get corrupted.
+@@ -463,6 +477,14 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
+     if ks != 0 {
+         crate::gdt::set_rsp0(ks);
+     }
++    // Restore the INCOMING task's syscall state + point the syscall stack at its own
++    // kstack, so its (possibly mid-syscall) execution resumes on its own stack.
++    crate::ring3::set_syscall_globals(
++        s.tasks[next].sc_user_rsp,
++        s.tasks[next].sc_user_rip,
++        s.tasks[next].sc_saved_regs,
++        ks,
++    );
+     s.tasks[next].rsp
+ }
+ 
