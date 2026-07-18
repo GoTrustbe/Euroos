@@ -1472,6 +1472,8 @@ static SYSCALL_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU6
 /// deschedules under many-thread contention) shows up as a runaway count here.
 static FUTEX_WAIT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static EPOLL_WAIT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Enable the periodic thread-state/syscall-rate snapshots (deadlock diagnostics).
+pub static STALL_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// futex-wake: unblock up to `n` tasks waiting on `uaddr`. Returns the number
 /// of woken tasks.
@@ -4806,7 +4808,7 @@ pub fn run_glibc_disk(
         crate::xserver::pump_keyboard();
         crate::xserver::pump_mouse();
         let now = crate::interrupts::ticks();
-        if now >= next_snap && snaps < 6 {
+        if STALL_DIAG.load(Ordering::Relaxed) && now >= next_snap && snaps < 6 {
             let seq = SYSCALL_SEQ.load(Ordering::Relaxed);
             let fx = FUTEX_WAIT_COUNT.load(Ordering::Relaxed);
             let ep = EPOLL_WAIT_COUNT.load(Ordering::Relaxed);
