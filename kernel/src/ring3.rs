@@ -200,7 +200,12 @@ use crate::serial_print;
 #[no_mangle]
 static mut SAVED_KERNEL_RSP: u64 = 0; // return point for sys_exit
 #[no_mangle]
-static mut KERNEL_RSP: u64 = 0; // stack for the syscall handler
+static mut KERNEL_RSP: u64 = 0; // (legacy) global syscall stack — fallback default only
+#[no_mangle]
+static mut CURRENT_SC_STACK: u64 = 0; // PER-TASK syscall kernel stack top: syscall_entry
+// switches rsp to this. schedule_core points it at the incoming task's kstack, so a
+// thread descheduled MID-SYSCALL (futex/epoll yield) keeps its own syscall stack and a
+// concurrent thread's syscall cannot clobber it.
 #[no_mangle]
 static mut USER_RSP: u64 = 0; // saved user-rsp during a syscall
 #[no_mangle]
@@ -446,7 +451,10 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
             return n; // ready fds, non-blocking, or gave the CPU up enough — let the pump run
         }
         tries += 1;
-        crate::sched::sleep_ticks(1); // yield to worker threads + advance timers
+        crate::sched::sleep_ticks(1); // sleep a tick...
+        if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+            crate::sched::yield_now(); // ...and deschedule (glibc lock-free path only)
+        }
     }
 }
 
@@ -1518,8 +1526,19 @@ fn futex_wait(uaddr: u64, val: u32) -> u64 {
     }
     crate::sched::block_current(); // mark Blocked while still holding q
     drop(q);
+    // Deschedule NOW (per-task syscall stack makes a mid-syscall yield safe) — BUT only
+    // on the lock-free glibc path (linux_dispatch). The musl/DOOM path (bg_dispatch)
+    // runs the whole syscall UNDER BG.lock, so yielding there would let the next bg
+    // task spin forever on BG.lock → total wedge. musl keeps the old timer-driven block
+    // (fine at its low thread counts); chrome (glibc, ~30 threads) gets the real yield.
+    if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+        crate::sched::yield_now();
+    }
     0
 }
+/// True only while a lock-free glibc syscall (linux_dispatch) is executing — set on
+/// its entry, cleared by the musl bg path — so futex/epoll only yield when it's safe.
+pub static SYSCALL_YIELD_OK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 
 // Static pool of kernel stacks for THREADS (clone) and scheduled glibc mains.
@@ -1777,6 +1796,9 @@ fn bg_read_fd(fd: usize, buf: u64, len: usize) -> u64 {
 fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     // Just like the daemon: never take the global sys_exit path.
     unsafe { EXITED = 0 };
+    // This path runs the whole syscall UNDER BG.lock -> a mid-syscall yield would
+    // deadlock the next bg task on BG.lock. Forbid futex/epoll yields here.
+    SYSCALL_YIELD_OK.store(false, Ordering::Relaxed);
     match num {
         1 | 20 => {
             // write(fd,buf,len) / writev(fd,iov,cnt) -> own line buffer.
@@ -2547,7 +2569,7 @@ global_asm!(
     ".global syscall_entry",
     "syscall_entry:",
     "mov [rip + USER_RSP], rsp",
-    "mov rsp, [rip + KERNEL_RSP]",
+    "mov rsp, [rip + CURRENT_SC_STACK]", // per-task syscall stack (was global KERNEL_RSP)
     // SMAP window OPEN: set RFLAGS.AC (bit 18) so that for the duration of this
     // syscall ring 0 may read/write user pages (U=1). The syscall runs with IF=0
     // (FMASK clears IF) -> non-preemptive, so the window cannot leak through a
@@ -5481,6 +5503,7 @@ fn linux_required_cap(num: u64, a1: u64) -> u64 {
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let _ = a4; // not every syscall uses arg4/arg5 (r10/r8)
     SYSCALL_SEQ.fetch_add(1, Ordering::Relaxed); // progress heartbeat (stall detector)
+    SYSCALL_YIELD_OK.store(true, Ordering::Relaxed); // lock-free path: futex/epoll may yield
     if TRACE_SYS.load(Ordering::Relaxed) {
         crate::serial_println!("[sys t{}] {num}({a1:#x},{a2:#x},{a3:#x})", crate::sched::current());
     }
@@ -6816,9 +6839,32 @@ fn init_syscall_msrs() {
         Msr::new(0xC000_0081).write((kdata << 48) | (kcode << 32)); // STAR
         Msr::new(0xC000_0082).write(syscall_entry as usize as u64); // LSTAR
         Msr::new(0xC000_0084).write(0x200); // FMASK: clear IF on entry
-        // Kernel stack for the syscall handler.
+        // Kernel stack for the syscall handler. CURRENT_SC_STACK is the per-task
+        // syscall stack the entry actually uses; default it to the global KSTACK for
+        // any syscall before the first context switch (schedule_core then keeps it
+        // pointed at the running task's own kstack).
         let top = (core::ptr::addr_of!(KSTACK) as u64 + KSTACK_SIZE as u64) & !0xF;
         KERNEL_RSP = top;
+        CURRENT_SC_STACK = top;
+    }
+}
+
+/// Save the current task's in-flight syscall state (for schedule_core, mid-syscall
+/// switch): (user_rsp, user_rip, saved_regs).
+pub fn get_syscall_globals() -> (u64, u64, u64) {
+    unsafe { (USER_RSP, USER_RIP, SAVED_REGS) }
+}
+/// Restore the incoming task's syscall state + point the syscall stack at ITS kstack
+/// (only when `sc_stack` != 0; kernel tasks keep the previous stack — they never make
+/// ring-3 syscalls).
+pub fn set_syscall_globals(user_rsp: u64, user_rip: u64, saved_regs: u64, sc_stack: u64) {
+    unsafe {
+        USER_RSP = user_rsp;
+        USER_RIP = user_rip;
+        SAVED_REGS = saved_regs;
+        if sc_stack != 0 {
+            CURRENT_SC_STACK = sc_stack;
+        }
     }
 }
 

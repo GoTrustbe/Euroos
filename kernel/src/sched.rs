@@ -72,6 +72,13 @@ struct Task {
     /// stack overflow (the stack grows down past this point) overwrites the
     /// canary and is thus detected instead of silently corrupting neighboring memory (S6).
     stack_bottom: u64,
+    /// Per-task SYSCALL state. Because a thread can now be descheduled MID-SYSCALL
+    /// (futex/epoll yield), the syscall globals must travel with the task: saved on
+    /// switch-out, restored on switch-in, so a concurrent thread's syscall cannot
+    /// clobber this one's user-return state. (0 when the task is not in a syscall.)
+    sc_user_rsp: u64,
+    sc_user_rip: u64,
+    sc_saved_regs: u64,
 }
 
 /// Stack-guard canary (S6 memory hardening). Unlikely value at the bottom of each
@@ -244,7 +251,7 @@ pub fn boot_pml4() -> u64 {
 
 
 /// A pristine, unused task slot (used to reset a slot before it is recycled).
-const EMPTY_TASK: Task = Task { rsp: 0, kstack: 0, fs_base: 0, cr3: 0, state: State::Dead, nice: 0, vruntime: 0, pid: 0, ppid: 0, stack_bottom: 0 };
+const EMPTY_TASK: Task = Task { rsp: 0, kstack: 0, fs_base: 0, cr3: 0, state: State::Dead, nice: 0, vruntime: 0, pid: 0, ppid: 0, stack_bottom: 0, sc_user_rsp: 0, sc_user_rip: 0, sc_saved_regs: 0 };
 
 struct Scheduler {
     tasks: [Task; MAX_TASKS],
@@ -257,7 +264,7 @@ struct Scheduler {
 
 static SCHED: Mutex<Scheduler> = Mutex::new(Scheduler {
     tasks: [const {
-        Task { rsp: 0, kstack: 0, fs_base: 0, cr3: 0, state: State::Ready, nice: 0, vruntime: 0, pid: 0, ppid: 0, stack_bottom: 0 }
+        Task { rsp: 0, kstack: 0, fs_base: 0, cr3: 0, state: State::Ready, nice: 0, vruntime: 0, pid: 0, ppid: 0, stack_bottom: 0, sc_user_rsp: 0, sc_user_rip: 0, sc_saved_regs: 0 }
     }; MAX_TASKS],
     count: 1,
     current: 0,
@@ -400,6 +407,13 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     };
     let cur = s.current;
     s.tasks[cur].rsp = rsp;
+    // Save the OUTGOING task's in-flight syscall state (it may be mid-syscall, having
+    // yielded from futex/epoll) so a concurrent thread's syscall cannot clobber its
+    // user-return state; restored when this task is scheduled again.
+    let (u_rsp, u_rip, s_regs) = crate::ring3::get_syscall_globals();
+    s.tasks[cur].sc_user_rsp = u_rsp;
+    s.tasks[cur].sc_user_rip = u_rip;
+    s.tasks[cur].sc_saved_regs = s_regs;
     // S6 stack guard: is the canary of the just-run task still intact? If not,
     // its kernel stack overflowed -> stop with a clear diagnosis instead of
     // silently letting neighboring memory get corrupted.
@@ -463,6 +477,14 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     if ks != 0 {
         crate::gdt::set_rsp0(ks);
     }
+    // Restore the INCOMING task's syscall state + point the syscall stack at its own
+    // kstack, so its (possibly mid-syscall) execution resumes on its own stack.
+    crate::ring3::set_syscall_globals(
+        s.tasks[next].sc_user_rsp,
+        s.tasks[next].sc_user_rip,
+        s.tasks[next].sc_saved_regs,
+        ks,
+    );
     s.tasks[next].rsp
 }
 
