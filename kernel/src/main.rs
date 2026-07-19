@@ -1966,7 +1966,7 @@ fn main() -> Status {
             // Push past --version toward real rendering: headless, single-process, no
             // GPU, no sandbox — dump the DOM of a trivial inline page.
             let (o2, e2) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome", ring3::ldlinux_bytes(),
-                &[b"/pack/chrome", b"--headless=old", b"--no-sandbox", b"--single-process",
+                &[b"/pack/chrome", b"--headless=new", b"--no-sandbox", b"--single-process",
                   b"--disable-gpu", b"--no-zygote", b"--disable-dev-shm-usage",
                   b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
                   b"--disable-crashpad-for-testing", b"--disable-breakpad", b"--disable-in-process-stack-traces",
