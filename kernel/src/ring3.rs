@@ -4589,6 +4589,8 @@ const DEMAND_FILE_MIN_BYTES: u64 = 1 << 20; // route file-backed mmaps >= 1 MiB 
 //  tail (.bss) even when the boundary falls mid-page — the ELF loader's semantics.
 static DEMAND_FILE_MAPS: Mutex<alloc::vec::Vec<(u64, u64, usize, usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
 static DEMAND_FILE_FILLED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static DEMAND_POOL_OOM: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static DEMAND_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Pages filled from a file by demand paging so far (diagnostics).
 pub fn demand_file_pages() -> u64 { DEMAND_FILE_FILLED.load(Ordering::Relaxed) }
@@ -4604,24 +4606,47 @@ pub fn demand_committed_pages() -> u64 { DEMAND_COMMITTED.load(Ordering::Relaxed
 /// let the normal fault path run. A no-op unless DEMAND_ENABLED and `addr` is in the
 /// demand region of the running glibc process.
 pub fn handle_demand_fault(addr: u64) -> bool {
+    let in_region = addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE;
     if !DEMAND_ENABLED.load(Ordering::Relaxed) {
+        if in_region && !DEMAND_DIAG.swap(true, Ordering::Relaxed) {
+            crate::serial_println!("[demand] REJECT addr={addr:#x}: DEMAND_ENABLED=false");
+        }
         return false;
     }
-    if addr < DEMAND_BASE || addr >= DEMAND_BASE + DEMAND_SIZE {
+    if !in_region {
         return false;
     }
     let pml4 = GLIBC_PML4.load(Ordering::Relaxed);
     if pml4 == 0 {
+        if !DEMAND_DIAG.swap(true, Ordering::Relaxed) {
+            crate::serial_println!("[demand] REJECT addr={addr:#x}: PML4=0");
+        }
         return false;
     }
     // Only within the region actually handed out by mmap (else it's a wild pointer).
-    if addr >= DEMAND_NEXT.load(Ordering::Relaxed) {
+    let next = DEMAND_NEXT.load(Ordering::Relaxed);
+    if addr >= next {
+        if !DEMAND_DIAG.swap(true, Ordering::Relaxed) {
+            crate::serial_println!("[demand] REJECT addr={addr:#x}: >= DEMAND_NEXT={next:#x} (enabled={} filemaps)", DEMAND_FILE_ENABLED.load(Ordering::Relaxed));
+        }
         return false;
     }
     let page = addr & !0xFFF;
     let phys = match crate::procpool::demand_alloc() {
         Some(p) => p,
-        None => return false, // demand pool exhausted -> real OOM, let it terminate
+        None => {
+            // demand pool exhausted -> real OOM. Log ONCE so we can tell a genuine
+            // wild-pointer fault from "chrome's working set outgrew the pool" (which
+            // manifests as threads dying at whatever page they were faulting).
+            if !DEMAND_POOL_OOM.swap(true, Ordering::Relaxed) {
+                crate::serial_println!(
+                    "[demand] POOL EXHAUSTED at addr={addr:#x} (committed={} pages ~{} MiB)",
+                    DEMAND_COMMITTED.load(Ordering::Relaxed),
+                    DEMAND_COMMITTED.load(Ordering::Relaxed) / 256
+                );
+            }
+            return false;
+        }
     };
     // SAFETY: `phys` is an identity-mapped free frame; zero it (anon = zeroed).
     unsafe { core::ptr::write_bytes(phys as *mut u8, 0, 4096); }
