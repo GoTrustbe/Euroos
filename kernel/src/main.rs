@@ -409,6 +409,7 @@ fn main() -> Status {
         "[euro] anchor dump_registers_and_backtrace @ {:#018x}",
         klog::dump_registers_and_backtrace as usize as u64
     );
+    ring3::dump_suspect_addrs(); // for mapping an NMI-captured wedge RIP
 
     // EuroFS is set up later (after virtio-blk init): either on the GPT disk
     // (installed, persistent) or in RAM (live mode). See `populate_fs`.

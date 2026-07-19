@@ -16,11 +16,16 @@ pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 /// pushes the exception frame onto this fresh stack instead of onto the just-
 /// exhausted task stack (which would otherwise immediately cause a double fault).
 pub const PAGE_FAULT_IST_INDEX: u16 = 1;
+/// NMI runs on its own IST stack: an NMI is delivered even with IF=0, so it fires
+/// during an IF=0 wedge (a spinlock/loop that killed the timer). Its handler dumps
+/// the interrupted RIP to name the spinning code.
+pub const NMI_IST_INDEX: u16 = 2;
 const IST_STACK_SIZE: usize = 4096 * 5;
 
 static mut DF_STACK: [u8; IST_STACK_SIZE] = [0; IST_STACK_SIZE];
 static mut RSP0_STACK: [u8; IST_STACK_SIZE] = [0; IST_STACK_SIZE];
 static mut PF_STACK: [u8; IST_STACK_SIZE] = [0; IST_STACK_SIZE];
+static mut NMI_STACK: [u8; IST_STACK_SIZE] = [0; IST_STACK_SIZE];
 
 static TSS: Lazy<TaskStateSegment> = Lazy::new(|| {
     let mut tss = TaskStateSegment::new();
@@ -30,6 +35,10 @@ static TSS: Lazy<TaskStateSegment> = Lazy::new(|| {
     };
     tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = {
         let start = VirtAddr::from_ptr(core::ptr::addr_of!(PF_STACK));
+        start + IST_STACK_SIZE as u64
+    };
+    tss.interrupt_stack_table[NMI_IST_INDEX as usize] = {
+        let start = VirtAddr::from_ptr(core::ptr::addr_of!(NMI_STACK));
         start + IST_STACK_SIZE as u64
     };
     // Kernel stack for ring3->ring0 transitions (privilege change via interrupt).

@@ -520,6 +520,17 @@ fn pipe_read_blocking(fd: usize, buf: u64, len: usize) -> Option<u64> {
             }
         }
         crate::sched::block_current(); // resumes when a write unblocks us; re-check
+        // MUST yield here (per-task syscall stack makes it safe on the glibc path):
+        // block_current only MARKS Blocked, it does not switch away. Without the yield
+        // this loop spins IF=0 forever on an empty blocking pipe — the timer dies and
+        // the whole system wedges (the chrome --headless task-39 hang; NMI-confirmed
+        // RIP inside this function). On the musl bg path (SYSCALL_YIELD_OK=false) a
+        // mid-syscall yield is unsafe (BG.lock), so fall back to a non-blocking return.
+        if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+            crate::sched::yield_now();
+        } else {
+            return Some((-11i64) as u64); // -EAGAIN (bg path: caller polls)
+        }
     }
 }
 
@@ -724,6 +735,26 @@ static DISK_FILES: Mutex<alloc::vec::Vec<(String, usize, u64, u64)>> = Mutex::ne
 
 /// Scan all virtio disks for a EuroPack volume ("EUROPCK1" at sector 0) and
 /// register every contained file as disk-backed. Called once at boot.
+/// Print the runtime addresses of the functions that could be the IF=0 wedge spin,
+/// so an NMI-captured RIP can be mapped to one (the .efi is stripped). Called at boot.
+pub fn dump_suspect_addrs() {
+    macro_rules! a { ($f:expr, $n:expr) => { crate::serial_println!("[addr] {:#018x}  {}", $f as usize as u64, $n); } }
+    a!(handle_demand_fault, "handle_demand_fault");
+    a!(disk_read_bytes, "disk_read_bytes");
+    a!(futex_wait, "futex_wait");
+    a!(futex_wake, "futex_wake");
+    a!(vfs_read, "vfs_read");
+    a!(vfs_pread, "vfs_pread");
+    a!(vfs_write, "vfs_write");
+    a!(pipe_read_blocking, "pipe_read_blocking");
+    a!(epoll_wait, "epoll_wait");
+    a!(proc_mem_xfer, "proc_mem_xfer");
+    a!(crate::virtio_blk::read_io_dev, "virtio_blk::read_io_dev");
+    a!(crate::net::unix_fd_recv, "net::unix_fd_recv");
+    a!(crate::sched::yield_now, "sched::yield_now");
+    a!(crate::sched::block_current, "sched::block_current");
+}
+
 pub fn europack_scan() {
     for dev in 0..crate::virtio_blk::device_count() {
         if !crate::virtio_blk::present_dev(dev) {

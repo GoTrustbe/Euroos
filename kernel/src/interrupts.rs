@@ -95,6 +95,11 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
         idt.double_fault
             .set_handler_fn(double_fault_handler)
             .set_stack_index(DOUBLE_FAULT_IST_INDEX);
+        // NMI: fires even with IF=0 → a live probe of an IF=0 wedge. Injected via QMP
+        // when chrome --headless freezes; the handler prints the interrupted RIP.
+        idt.non_maskable_interrupt
+            .set_handler_fn(nmi_handler)
+            .set_stack_index(crate::gdt::NMI_IST_INDEX);
     }
     // The timer vector points to the context-switch stub (sched.rs), not to
     // an ordinary handler — that one must preserve the full register state.
@@ -264,6 +269,35 @@ pub fn init() {
 extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {
     serial_println!("[idt] BREAKPOINT @ {:#x}", frame.instruction_pointer.as_u64());
     BREAKPOINT_HIT.store(true, Ordering::SeqCst);
+}
+
+/// NMI probe: fires even under IF=0, so it captures where the CPU is spinning during
+/// an IF=0 wedge. Dumps the interrupted RIP + a raw scan of the interrupted stack for
+/// return addresses (symbolize offline against the kernel .efi). Then returns (iret)
+/// so the guest keeps running — this is a probe, not a fatal.
+extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
+    let rip = frame.instruction_pointer.as_u64();
+    let rsp = frame.stack_pointer.as_u64();
+    let cs = frame.code_segment.0;
+    let rflags = frame.cpu_flags;
+    serial_println!("========== NMI PROBE (wedge RIP capture) ==========");
+    serial_println!("[nmi] interrupted RIP={rip:#018x} CS={cs:#x} RSP={rsp:#018x} RFLAGS={:#x}", rflags.bits());
+    serial_println!("[nmi] anchor kernel_base ~ nmi_handler @ {:#018x}", nmi_handler as usize as u64);
+    // Scan the interrupted stack for plausible kernel code return addresses (RBP
+    // chains are unreliable in release). Kernel code lives high (>= 0x2000_0000).
+    serial_println!("[nmi] stack scan (return addresses):");
+    let mut printed = 0;
+    let mut p = rsp & !0x7;
+    let end = (rsp + 0x800) & !0x7; // scan 2 KiB of the interrupted stack
+    while p < end && printed < 24 {
+        let v = unsafe { (p as *const u64).read_volatile() };
+        if (0x2000_0000..0x8000_0000).contains(&v) {
+            serial_println!("[nmi]   {v:#018x}");
+            printed += 1;
+        }
+        p += 8;
+    }
+    serial_println!("========== END NMI PROBE ==========");
 }
 
 extern "x86-interrupt" fn invalid_opcode_handler(frame: InterruptStackFrame) {
