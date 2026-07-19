@@ -4821,24 +4821,27 @@ pub fn run_glibc_disk(
     // Periodic snapshot: every ~700 ticks while the run is active, dump syscall/futex/
     // epoll rates + task states — a busy-spin livelock shows as a runaway futex/epoll
     // count with no syscall-log output; a hard deadlock shows all-Blocked.
-    let mut next_snap = crate::interrupts::ticks() + 700;
     let mut prev_seq = SYSCALL_SEQ.load(Ordering::Relaxed);
     let mut prev_futex = FUTEX_WAIT_COUNT.load(Ordering::Relaxed);
     let mut prev_epoll = EPOLL_WAIT_COUNT.load(Ordering::Relaxed);
+    let mut prev_tick = crate::interrupts::ticks();
     let mut snaps = 0u32;
+    let mut iters: u64 = 0; // loop-iteration counter — snapshots off THIS, not ticks,
+                            // so a dead timer (frozen ticks) still dumps the state.
     while !GLIBC_DONE.load(Ordering::Relaxed) && crate::interrupts::ticks() < deadline {
         crate::xserver::pump_keyboard();
         crate::xserver::pump_mouse();
-        let now = crate::interrupts::ticks();
-        if STALL_DIAG.load(Ordering::Relaxed) && now >= next_snap && snaps < 6 {
+        iters += 1;
+        if STALL_DIAG.load(Ordering::Relaxed) && iters % 4000 == 0 && snaps < 8 {
             let seq = SYSCALL_SEQ.load(Ordering::Relaxed);
             let fx = FUTEX_WAIT_COUNT.load(Ordering::Relaxed);
             let ep = EPOLL_WAIT_COUNT.load(Ordering::Relaxed);
-            crate::serial_println!("[stall] snap {snaps}: +{} syscalls, +{} futex_wait, +{} epoll_wait in ~700t | threads={}",
-                seq - prev_seq, fx - prev_futex, ep - prev_epoll, GLIBC_THREADS.lock().len());
+            let tick = crate::interrupts::ticks();
+            crate::serial_println!("[stall] snap {snaps} ({iters} iters): +{} syscalls +{} futex +{} epoll, ticks {}->{} ({}) | threads={}",
+                seq - prev_seq, fx - prev_futex, ep - prev_epoll, prev_tick, tick,
+                if tick == prev_tick { "TIMER DEAD" } else { "ticking" }, GLIBC_THREADS.lock().len());
             crate::sched::dump_states();
-            prev_seq = seq; prev_futex = fx; prev_epoll = ep;
-            next_snap = now + 700;
+            prev_seq = seq; prev_futex = fx; prev_epoll = ep; prev_tick = tick;
             snaps += 1;
         }
         crate::sched::sleep_ticks(1);
