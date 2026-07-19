@@ -1520,6 +1520,7 @@ static FUTEX_QUEUE: Mutex<alloc::vec::Vec<(u64, usize)>> = Mutex::new(alloc::vec
 /// Monotonic count of Linux syscalls dispatched — a progress heartbeat the launcher's
 /// stall detector watches to catch a many-thread deadlock (no syscall = frozen).
 static SYSCALL_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static MEMFD_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Count of futex_wait calls — a busy-spin (timer-driven block that never truly
 /// deschedules under many-thread contention) shows up as a runaway count here.
 static FUTEX_WAIT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -6649,6 +6650,16 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         266 => vfs_symlink(&user_cstr(a1, 256), &user_cstr(a3, 256)), // symlinkat(target, dfd, link)
         87 => vfs_unlink(&user_cstr(a1, 256)),  // unlink(path)
         263 => vfs_unlink(&user_cstr(a2, 256)), // unlinkat(dirfd, path, flags)
+        319 => {
+            // memfd_create(name, flags): an anonymous in-RAM file — chrome's preferred
+            // shared-memory handle (base::SharedMemory). Back it with a unique FILES
+            // entry and return an fd; chrome then ftruncate+mmaps it.
+            let name = user_cstr(a1, 128);
+            let seq = MEMFD_SEQ.fetch_add(1, Ordering::Relaxed);
+            let path = alloc::format!("/memfd:{}:{seq}", String::from_utf8_lossy(&name));
+            register_file(&path, alloc::vec::Vec::new());
+            vfs_open(path.as_bytes())
+        }
         77 => vfs_ftruncate(a1 as usize, a2 as usize), // ftruncate(fd, len)
         74 | 75 => 0, // fsync / fdatasync: VFS is in-RAM -> nothing to flush, succeed
         82 => vfs_rename(&user_cstr(a1, 256), &user_cstr(a2, 256)), // rename(old, new)
