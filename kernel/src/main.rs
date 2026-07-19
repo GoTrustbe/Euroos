@@ -2005,6 +2005,9 @@ fn main() -> Status {
             ring3::register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", ring3::fc_dejavu_cache());
             ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n</fontconfig>\n".to_vec());
             ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+            // Serve the test page from the VFS so we can navigate to a file:// URL
+            // (rules out data:-URL parsing; exercises the real file-load path).
+            ring3::register_file("/tmp/euro.html", b"<html><body><h1>EuroOS</h1></body></html>".to_vec());
             let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
                 &[b"/pack/chrome-headless-shell", b"--no-sandbox", b"--single-process",
                   b"--disable-gpu", b"--disable-dev-shm-usage", b"--user-data-dir=/tmp/hs",
@@ -2015,9 +2018,16 @@ fn main() -> Status {
                   // keep Skia's CPU rasterizer ON (it dispatches to SSE on qemu64, no AVX2)
                   // so the compositor can commit a frame — the load-complete that triggers
                   // --dump-dom. run-all-compositor-stages forces that commit deterministically.
-                  b"--in-process-gpu", b"--disable-vulkan", b"--use-gl=disabled",
+                  // GL disabled (SwiftShader = AVX2 #UD; qemu64 + no-XCR0 kernel can't run
+                  // it). Headless software surface. NOTE: --dump-dom does not yet emit a DOM
+                  // — Viz starts but GPU/compositor init doesn't complete in this single-
+                  // process, no-GPU env, so the initial WebContents/navigation never starts
+                  // (chrome exits ~3s clean). Getting the DOM needs multi-process (fork+exec
+                  // of demand-paged procs, currently ENOSYS on the glibc path) or software-
+                  // compositor bring-up. hshell running to exit 0 is the current landmark.
+                  b"--disable-vulkan", b"--use-gl=disabled", b"--ozone-platform=headless",
                   b"--enable-logging=stderr",
-                  b"--dump-dom", b"data:text/html,<html><body><h1>EuroOS</h1></body></html>"],
+                  b"--dump-dom", b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
             serial_println!("[hshell] chrome-headless-shell --dump-dom from DISK: exit={e3}");
