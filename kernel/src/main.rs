@@ -2005,6 +2005,13 @@ fn main() -> Status {
             ring3::register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", ring3::fc_dejavu_cache());
             ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n</fontconfig>\n".to_vec());
             ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+            // Chrome's full init under TCG (~60x slow) + ~40 threads + demand-paging 85
+            // libraries needs more than the default 12000-tick deadline. Give it a larger
+            // budget (a bigger deadline won't reach the DOM on its own, though: ~half the
+            // worker threads currently die to a not-yet-root-caused context-corruption
+            // fault (rip=0 / GP in demand-region code) and the survivors then spin in
+            // epoll_wait forever waiting on the dead threads — see docs/memory).
+            ring3::GLIBC_DEADLINE_TICKS.store(60000, core::sync::atomic::Ordering::Relaxed);
             // Serve the test page from the VFS so we can navigate to a file:// URL
             // (rules out data:-URL parsing; exercises the real file-load path).
             ring3::register_file("/tmp/euro.html", b"<html><body><h1>EuroOS</h1></body></html>".to_vec());

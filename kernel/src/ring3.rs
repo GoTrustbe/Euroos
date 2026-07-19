@@ -923,6 +923,15 @@ fn vfs_open(path: &[u8]) -> u64 {
     }
 }
 
+/// The path behind a file index (FILES or DISK_FILES), for diagnostics. So a demand
+/// mapping / a fault address can be named by its library.
+fn fi_path(fi: usize) -> alloc::string::String {
+    if fi >= DISK_FI_BASE && fi < usize::MAX / 2 + 0x1000 {
+        return DISK_FILES.lock().get(fi - DISK_FI_BASE).map(|(p, _, _, _)| p.clone()).unwrap_or_default();
+    }
+    FILES.lock().get(fi).map(|(p, _)| p.clone()).unwrap_or_default()
+}
+
 /// Bind file-index `fi` to the lowest free regular fd (collision-safe across the
 /// OPEN_FDS/PIPE_FDS/OPEN_DIRS tables and below the socket range). u64::MAX on EMFILE.
 fn open_low_fd(fi: usize) -> u64 {
@@ -6129,7 +6138,8 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                         DEMAND_FILE_MAPS.lock().push((start, len, fi, off, len));
                     }
                     crate::serial_println!(
-                        "[linux-abi] mmap file-backed DEMAND fd={a5} off={off} len={len} prot={a3:#x} -> {start:#x} (lazy)"
+                        "[mmaplib] {start:#x}..{:#x} prot={a3:#x} <- {}",
+                        start + len, fi_path(fi)
                     );
                     return start;
                 }

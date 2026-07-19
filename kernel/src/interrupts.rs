@@ -421,14 +421,20 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
             let rip = frame.instruction_pointer.as_u64();
             let rsp = frame.stack_pointer.as_u64();
             serial_println!("[pf-diag] task={idx} rip={rip:#x} rsp={rsp:#x}");
-            // Read a window that straddles rsp: negative offsets show values already
-            // popped (glibc's clone3 child does `pop %rax(fn); pop %rdi(arg); call *%rax`
-            // — a null fn here means it popped 0 off a zeroed child stack).
-            for i in -4i64..8i64 {
-                let a = rsp.wrapping_add((i * 8) as u64);
-                match read_user_qword(a) {
-                    Some(v) => serial_println!("[pf-diag]   [rsp{:+#05x}] = {v:#x}", i * 8),
-                    None => serial_println!("[pf-diag]   [rsp{:+#05x}] = <unmapped>", i * 8),
+            // Scan the stack upward for return addresses into user code (chrome's libs
+            // live in the demand region 0x100_0000_0000.. ; the arena is lower). These
+            // name the call chain that reached the null/wild jump — map each against the
+            // [mmaplib] ranges to identify the crashing library.
+            let mut printed = 0;
+            for i in 0..96u64 {
+                let a = rsp.wrapping_add(i * 8);
+                if let Some(v) = read_user_qword(a) {
+                    // Plausible code pointer: in the demand region (libs/code) or arena.
+                    if (v >= 0x1_0000_0000_00 && v < 0x1_4000_0000_00) || (v >= 0x0100_0000 && v < 0x1000_0000) {
+                        serial_println!("[pf-diag]   ret[{:#05x}] -> {v:#x}", i * 8);
+                        printed += 1;
+                        if printed >= 12 { break; }
+                    }
                 }
             }
         }
