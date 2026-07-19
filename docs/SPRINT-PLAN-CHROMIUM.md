@@ -45,12 +45,20 @@ Work top-to-bottom. Commit after each green step. Each `[ ]` is a boot-verified 
       and the iteration-based snapshot (commit e16ea57, gated STALL_DIAG) never dumps →
       a scheduling wedge (likely a dead timer / IF=0 spin, or all-Blocked + a lost wake
       that also starves task 0's fallback). This is a DEEPER scheduler-scale issue than
-      the futex livelock.** NEXT debug ideas: (a) log every schedule_core pick + SCHED
-      try_lock failures during the chrome run to see if a lock is stuck / task 0 never
-      selected; (b) check whether a glibc thread's yield can leave IF=0 with no path back
-      to the timer; (c) verify the fallback `best=0` actually runs task 0 when all glibc
-      threads are Blocked; (d) try fewer threads (chrome flags to cap the thread pool) to
-      see if the wedge is purely thread-count-dependent.
+      the futex livelock.** NARROWED (commit 8df6eb0): schedule_core logging shows the
+      scheduler is NOT called after task ~39 AND no sched-guard skip message → the CPU is
+      in a tight IF=0 spin that never yields nor takes a timer (timer dead) = a spinlock/
+      self-deadlock, NOT a scheduling bug and NOT the futex livelock. Distinct from the
+      pre-reentrancy userspace busy-spin (which kept the timer alive). PRIME SUSPECT: a
+      syscall holds a spin::Mutex (FILES/DISK_FILES/DEMAND_FILE_MAPS/OPEN_FDS) then touches
+      DEMAND memory → the #PF demand-fault handler (handle_demand_fault, ring3.rs ~L4423,
+      takes DEMAND_FILE_MAPS+DISK_FILES+FILES) wants the same lock → self-deadlock, IF=0,
+      timer dead. e.g. vfs_read/vfs_pread hold FILES.lock while copy_nonoverlapping'ing to
+      a user buffer that lives in the demand region → fault mid-copy. NEXT: (a) confirm —
+      make handle_demand_fault try_lock those + log on contention; (b) fix — never hold
+      FILES/etc across a user-memory copy that can fault (clone bytes, drop lock, then
+      copy); audit every vfs_* + demand-mmap path. A lock-ordering bug exposed at chrome's
+      concurrent-demand-fault scale.
       **ATTEMPT 1 (2026-07-18, reverted):**
       implemented per-task syscall stack (CURRENT_SC_STACK global set by schedule_core
       to the incoming task's kstack; syscall_entry uses it not KERNEL_RSP) + saved/

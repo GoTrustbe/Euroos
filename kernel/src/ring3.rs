@@ -937,18 +937,27 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
         unsafe { core::ptr::copy_nonoverlapping(data[offset..].as_ptr(), buf as *mut u8, n); }
         return n as u64;
     }
-    let files = FILES.lock();
-    let data = &files[fi].1;
-    let n = len.min(data.len().saturating_sub(offset));
-    if !in_user_arena(buf, n) {
+    // Clone the bytes, then DROP FILES.lock BEFORE copying to the user buffer. The
+    // buffer may live in demand memory: touching it can #PF, and handle_demand_fault
+    // takes FILES.lock — holding it here would self-deadlock (IF=0, timer dead). This
+    // is the chrome-scale wedge. (Disk-backed reads already clone-then-copy.)
+    let chunk: alloc::vec::Vec<u8> = {
+        let files = FILES.lock();
+        let data = &files[fi].1;
+        let n = len.min(data.len().saturating_sub(offset));
+        if n == 0 {
+            alloc::vec::Vec::new()
+        } else {
+            data[offset..offset + n].to_vec()
+        }
+    };
+    if !in_user_arena(buf, chunk.len()) {
         return u64::MAX;
     }
-    // `offset` may be past EOF (chrome pread's an empty file at a nonzero offset) —
-    // n is then 0, but `data[offset..]` would still panic, so guard the slice.
-    if n > 0 {
-        unsafe { core::ptr::copy_nonoverlapping(data[offset..].as_ptr(), buf as *mut u8, n); }
+    if !chunk.is_empty() {
+        let _ = copy_to_user(buf, &chunk);
     }
-    n as u64
+    chunk.len() as u64
 }
 
 fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
@@ -991,17 +1000,21 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
         fds[fd] = Some((fi, off + n));
         return n as u64;
     }
-    let files = FILES.lock();
-    let data = &files[fi].1;
-    let n = len.min(data.len().saturating_sub(off));
-    // Validate the user buffer before the kernel writes into it (audit C1): a process
-    // may not specify kernel memory as the destination.
+    // Clone under FILES.lock, DROP it, THEN copy to the user buffer — the buffer may
+    // be in demand memory and #PF mid-copy, and handle_demand_fault takes FILES.lock
+    // (self-deadlock, IF=0, timer dead — the chrome-scale wedge). OPEN_FDS (fds) is
+    // safe to keep held: the fault handler does not take it.
+    let (chunk, n) = {
+        let files = FILES.lock();
+        let data = &files[fi].1;
+        let n = len.min(data.len().saturating_sub(off));
+        (if n > 0 { data[off..off + n].to_vec() } else { alloc::vec::Vec::new() }, n)
+    };
     if !in_user_arena(buf, n) {
         return u64::MAX;
     }
-    // SAFETY: buf now provably lies within the arena of the running process.
-    unsafe {
-        core::ptr::copy_nonoverlapping(data[off..].as_ptr(), buf as *mut u8, n);
+    if n > 0 {
+        let _ = copy_to_user(buf, &chunk);
     }
     fds[fd] = Some((fi, off + n));
     n as u64
