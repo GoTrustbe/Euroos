@@ -1858,6 +1858,14 @@ fn main() -> Status {
         // the launcher's pump (xserver::pump_keyboard) -> X KeyPress events, i.e. the
         // same path a live keyboard IRQ uses. (The individual gx11/gxdraw/gximg/gxevent/
         // gxkey clients are still committed for isolated debugging.)
+        // Scorecard vars from the GUI/demo tests below; default to "not run" (fail)
+        // so a lean chrome-headless-shell boot still compiles and reports honestly.
+        let (mut e16, mut efm, mut ex) = (u64::MAX, u64::MAX, u64::MAX);
+        // LEAN chrome-headless-shell run: skip the GUI/demo glibc tests (X11/gsparse/
+        // gfmmap/crashpad/gdiskmap). They inflate guest memory and, on a memory-tight
+        // host, OOM-kill qemu before hshell is reached. Jump straight to the disk-
+        // served exe loader (crashpad/chrome/hshell) below.
+        if !ring3::europack_has("/pack/chrome-headless-shell") {
         serial_println!("[glibc] === X11: real Xlib client (window + render + events) ===");
         ps2::push_scancode(0x1e); // 'a'  ->  X KeyPress via ps2 ring -> pump
         ps2::push_scancode(0x30); // 'b'
@@ -1867,7 +1875,7 @@ fn main() -> Status {
         mouse::push_byte(0x08); mouse::push_byte(0); mouse::push_byte(0); // buttons up
         mouse::push_byte(0x09); mouse::push_byte(0); mouse::push_byte(0); // left down
         xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
-        let (ox, ex) = ring3::run_glibc(&mut allocator, ring3::gxwin_bytes(), ring3::ldlinux_bytes(), &[b"gxwin"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
+        let ox; (ox, ex) = ring3::run_glibc(&mut allocator, ring3::gxwin_bytes(), ring3::ldlinux_bytes(), &[b"gxwin"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
         xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
         serial_println!("[glibc] gxwin (X11 connect+render+PutImage+events+real-kbd): exit={ex}");
         for l in ox.lines() { serial_println!("[glibc]   {l}"); }
@@ -1875,7 +1883,7 @@ fn main() -> Status {
         // few scattered pages; only touched pages commit physical frames. Opt-in.
         let pool_before = procpool::demand_free_frames();
         ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
-        let (o16, e16) = ring3::run_glibc(&mut allocator, ring3::gsparse_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsparse"], &[b"PATH=/bin"], caps);
+        let o16; (o16, e16) = ring3::run_glibc(&mut allocator, ring3::gsparse_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsparse"], &[b"PATH=/bin"], caps);
         ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
         let pool_after = procpool::demand_free_frames();
         serial_println!("[glibc] gsparse (demand paging): exit={e16}, committed={} pages ({} KiB), pool delta={} frames (reclaimed after exit)",
@@ -1890,7 +1898,7 @@ fn main() -> Status {
         let fpages_before = ring3::demand_file_pages();
         ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
         ring3::DEMAND_FILE_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
-        let (ofm, efm) = ring3::run_glibc(&mut allocator, ring3::gfmmap_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gfmmap"], &[b"PATH=/bin"], caps);
+        let ofm; (ofm, efm) = ring3::run_glibc(&mut allocator, ring3::gfmmap_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gfmmap"], &[b"PATH=/bin"], caps);
         ring3::DEMAND_FILE_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
         ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
         ring3::clear_demand_file_maps();
@@ -1934,6 +1942,7 @@ fn main() -> Status {
         } else {
             serial_println!("[europack] no pack disk attached — disk-backed serving test SKIPPED");
         }
+        } // end !chrome-headless-shell (lean-run) guard
 
         // ── DISK-SERVED DEMAND-PAGED EXE LOADER ────────────────────────────────
         // Run a real binary whose executable is served from disk (never RAM-
@@ -1984,6 +1993,35 @@ fn main() -> Status {
             ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
             serial_println!("[chrome-disk] chrome --headless --dump-dom from DISK: exit={e2}");
             for l in o2.lines() { serial_println!("[chrome-disk]   {l}"); }
+        }
+        // chrome-headless-shell: the DEDICATED single-process headless binary. Unlike
+        // full chrome (--headless=new expects a multi-process browser+renderer split
+        // we lack), headless-shell drives Blink in one process and --dump-dom is its
+        // primary feature. This is the right tool to round-trip a page through Blink.
+        if ring3::europack_has("/pack/chrome-headless-shell") {
+            for (name, bytes) in ring3::dejavu_fonts() {
+                ring3::register_file_static(&alloc::format!("/usr/share/fonts/truetype/dejavu/{name}"), bytes);
+            }
+            ring3::register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", ring3::fc_dejavu_cache());
+            ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n</fontconfig>\n".to_vec());
+            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+            let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
+                &[b"/pack/chrome-headless-shell", b"--no-sandbox", b"--single-process",
+                  b"--disable-gpu", b"--disable-dev-shm-usage", b"--user-data-dir=/tmp/hs",
+                  b"--disable-crashpad-for-testing", b"--disable-breakpad",
+                  b"--disable-in-process-stack-traces", b"--no-zygote", b"--lang=en-US",
+                  // NO SwiftShader/ANGLE GL: its software GL uses AVX2, which qemu64 + the
+                  // EuroOS kernel (no XCR0/AVX enablement) can't run (#UD). Disable GL, but
+                  // keep Skia's CPU rasterizer ON (it dispatches to SSE on qemu64, no AVX2)
+                  // so the compositor can commit a frame — the load-complete that triggers
+                  // --dump-dom. run-all-compositor-stages forces that commit deterministically.
+                  b"--in-process-gpu", b"--disable-vulkan", b"--use-gl=disabled",
+                  b"--enable-logging=stderr",
+                  b"--dump-dom", b"data:text/html,<html><body><h1>EuroOS</h1></body></html>"],
+                &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
+                  b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
+            serial_println!("[hshell] chrome-headless-shell --dump-dom from DISK: exit={e3}");
+            for l in o3.lines() { serial_println!("[hshell]   {l}"); }
         }
         // (Reclamation validated out-of-band: 30 mixed runs incl. threaded kept the
         // task table at index 31 with free_frames stable — see commit notes.)

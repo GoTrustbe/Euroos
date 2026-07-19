@@ -6597,13 +6597,25 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 }
                 let files = FILES.lock();
                 let found = files.iter().enumerate().find(|(_, (p, _))| p.as_bytes() == path.as_slice());
-                let sz = found.map(|(_, (_, d))| d.len());
-                let ino = found.map(|(i, _)| i as u64 + 1).unwrap_or(0);
+                let mut sz = found.map(|(_, (_, d))| d.len());
+                let mut ino = found.map(|(i, _)| i as u64 + 1).unwrap_or(0);
+                drop(files);
+                if sz.is_none() {
+                    // Disk-backed (EuroPack) file: report its real size so stat() succeeds
+                    // (e.g. chrome dlopen'ing /pack/*.so stats it first).
+                    if let Some(di) = DISK_FILES.lock().iter().position(|(p, _, _, _)| p.as_bytes() == path.as_slice()) {
+                        sz = Some(DISK_FILES.lock()[di].3 as usize);
+                        ino = 0x5000_0000 + di as u64;
+                    }
+                }
                 (sz, a3, ino)
             };
             let size = match fd_ok {
                 Some(s) => s,
-                None => return (-9i64) as u64, // -EBADF / -ENOENT
+                // fstat(2) on a bad fd -> EBADF; a path-based stat of a missing file
+                // MUST be ENOENT (chrome's SimpleCache treats EBADF as on-disk
+                // corruption and aborts storage init, which blocks all navigation).
+                None => return if num == 5 { (-9i64) as u64 } else { (-2i64) as u64 },
             };
             if !in_user_arena(statbuf, 144) {
                 return EFAULT;
@@ -6820,7 +6832,8 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 .lock()
                 .iter()
                 .find(|(p, _)| p.as_bytes() == path.as_slice())
-                .map(|(_, d)| d.len());
+                .map(|(_, d)| d.len())
+                .or_else(|| DISK_FILES.lock().iter().find(|(p, _, _, _)| p.as_bytes() == path.as_slice()).map(|&(_, _, _, s)| s as usize));
             match sz {
                 Some(size) if a5 != 0 => {
                     if !in_user_arena(a5, 256) {
