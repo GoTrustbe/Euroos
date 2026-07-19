@@ -1613,7 +1613,12 @@ pub static SYSCALL_YIELD_OK: core::sync::atomic::AtomicBool = core::sync::atomic
 // long-lived programs that spin up many threads (the pthreads/Chromium path)
 // don't exhaust the pool the way a monotonic bump counter did.
 const MAX_THREADS: usize = 224; // chrome-scale: dozens of pthreads (< MAX_TASKS)
-const TKSTACK_SIZE: usize = 16 * 1024;
+// 64 KiB per-thread kernel stack. 16 KiB was too small: chrome's deep syscall paths
+// plus a ring-0 demand-fault (disk-read bounce buffers) mid-syscall can overflow it,
+// and THREAD_KSTACKS is a flat array with NO guard pages between slots — so an overflow
+// silently corrupts the ADJACENT thread's saved context (its RIP), which then jumps to
+// garbage (rip=0 / GP fault). A larger stack removes that overflow.
+const TKSTACK_SIZE: usize = 64 * 1024;
 static mut THREAD_KSTACKS: [[u8; TKSTACK_SIZE]; MAX_THREADS] = [[0; TKSTACK_SIZE]; MAX_THREADS];
 // Per-slot in-use flag (lock-free bitmap allocator).
 static THREAD_KSTACK_USED: [core::sync::atomic::AtomicBool; MAX_THREADS] =
