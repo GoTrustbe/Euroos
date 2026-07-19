@@ -59,6 +59,16 @@ Work top-to-bottom. Commit after each green step. Each `[ ]` is a boot-verified 
       FILES/etc across a user-memory copy that can fault (clone bytes, drop lock, then
       copy); audit every vfs_* + demand-mmap path. A lock-ordering bug exposed at chrome's
       concurrent-demand-fault scale.
+      UPDATE (commit 2fd493d): FIXED the vfs_read/vfs_pread instance (clone-then-copy,
+      drop FILES.lock before the user copy) — verified safe (all glibc read tests +
+      crashpad + chrome --version pass) — BUT chrome --headless STILL wedges at task ~39.
+      So that FILES self-deadlock was real but NOT the chrome wedge. The wedge remains a
+      tight IF=0 spin (scheduler never re-entered, timer dead) in chrome's multithreaded
+      startup; it resisted scheduler-level instrumentation. NEXT: capture the RIP of the
+      spin — a watchdog/NMI (or a 2nd CPU via SMP) that dumps the current instruction
+      pointer when ticks stall for N wall-ms — to name the exact spinning function, then
+      fix that lock/loop. All else (futex livelock, per-task syscall reentrancy, FILES
+      deadlock) is fixed + committed.
       **ATTEMPT 1 (2026-07-18, reverted):**
       implemented per-task syscall stack (CURRENT_SC_STACK global set by schedule_core
       to the incoming task's kstack; syscall_entry uses it not KERNEL_RSP) + saved/
