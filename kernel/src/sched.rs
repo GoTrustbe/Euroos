@@ -354,6 +354,7 @@ pub fn yield_now() {
 /// BUG-007 diagnostic: timer ticks that found SCHED already held (in task context) and
 /// were safely skipped instead of deadlocking. Nonzero ⇒ the deadlock window was hit.
 pub static SCHED_SKIPS: AtomicU64 = AtomicU64::new(0);
+static SCHED_LOG_CTR: AtomicU64 = AtomicU64::new(0);
 
 pub static TRACE_SCHED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
@@ -456,6 +457,23 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     }
     if !found {
         best = if s.tasks[cur].state == State::Ready { cur } else { 0 };
+    }
+    // Wedge diagnostic (gated): rate-limited log of what the scheduler picks — fires
+    // from the scheduler itself, so it works even when the launcher task is starved.
+    if crate::ring3::STALL_DIAG.load(Ordering::Relaxed) {
+        let n = SCHED_LOG_CTR.fetch_add(1, Ordering::Relaxed);
+        if n % 30000 == 0 {
+            let mut rdy = 0usize;
+            let mut blk = 0usize;
+            for i in 0..s.count {
+                match s.tasks[i].state {
+                    State::Ready => rdy += 1,
+                    State::Blocked(_) => blk += 1,
+                    _ => {}
+                }
+            }
+            crate::serial_println!("[sched] #{n} cur={cur} -> next={best} found={found} | {rdy} Ready {blk} Blocked (via_yield={via_yield})");
+        }
     }
     let _ = via_yield;
     s.current = best;
