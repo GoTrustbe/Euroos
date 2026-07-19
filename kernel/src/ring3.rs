@@ -254,7 +254,11 @@ static STDOUT_REDIRECT: Mutex<Option<usize>> = Mutex::new(None);
 // from the kernel image (include_bytes! → &'static), so the ~50 MiB desktop-graphics
 // lib set costs zero heap; writable files (/proc, created files, redirects) are Owned.
 static FILES: Mutex<alloc::vec::Vec<(String, alloc::borrow::Cow<'static, [u8]>)>> = Mutex::new(alloc::vec::Vec::new());
-const MAX_FD: usize = 16;
+// Max open file descriptors per the flat VFS. 16 was fine for the shell + small
+// apps but chrome opens hundreds (libs, profile DBs, memfd shm, pipes, epoll) — a
+// full table made EVERY new open return -1 (EPERM): the shm/README/history failures.
+// Kept below UNIX_FD_BASE (600) so regular fds never collide with the socket range.
+const MAX_FD: usize = 512;
 static OPEN_FDS: Mutex<[Option<(usize, usize)>; MAX_FD]> = Mutex::new([None; MAX_FD]);
 /// Open DIRECTORY fds (Linux getdents64): (normalized dir path, cursor in the
 /// children list). Separate table so a dir fd is not read as a file.
