@@ -1954,9 +1954,17 @@ fn main() -> Status {
             serial_println!("[chrome-disk] chrome --version from DISK (485 MB demand-paged exe): exit={e}");
             for l in o.lines() { serial_println!("[chrome-disk]   {l}"); }
 
+            // Fontconfig for chrome (its own setup runs LATER in boot): DejaVu fonts +
+            // prebuilt cache + a fonts.conf, so Blink's text layout initializes (else
+            // "Cannot load default config file" and the page load may not complete).
+            for (name, bytes) in ring3::dejavu_fonts() {
+                ring3::register_file_static(&alloc::format!("/usr/share/fonts/truetype/dejavu/{name}"), bytes);
+            }
+            ring3::register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", ring3::fc_dejavu_cache());
+            ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n</fontconfig>\n".to_vec());
+
             // Push past --version toward real rendering: headless, single-process, no
-            // GPU, no sandbox — dump the DOM of a trivial inline page. This names the
-            // next real blocker (multi-process/GPU/sandbox/syscall) beyond startup.
+            // GPU, no sandbox — dump the DOM of a trivial inline page.
             let (o2, e2) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome", ring3::ldlinux_bytes(),
                 &[b"/pack/chrome", b"--headless=old", b"--no-sandbox", b"--single-process",
                   b"--disable-gpu", b"--no-zygote", b"--disable-dev-shm-usage",
@@ -1967,9 +1975,12 @@ fn main() -> Status {
                   // needs Blink (DOM), not a GPU/GL context — turn every GL path off.
                   b"--disable-gpu-compositing", b"--disable-software-rasterizer",
                   b"--use-gl=disabled", b"--disable-vulkan", b"--in-process-gpu",
+                  // Give the page load a virtual-time budget so --dump-dom fires once the
+                  // (trivial) page finishes loading, without depending on wall-clock timers.
+                  b"--virtual-time-budget=8000",
                   b"--dump-dom", b"data:text/html,<html><body><h1>EuroOS</h1></body></html>"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
-                  b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
+                  b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
             ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
             serial_println!("[chrome-disk] chrome --headless --dump-dom from DISK: exit={e2}");
             for l in o2.lines() { serial_println!("[chrome-disk]   {l}"); }
