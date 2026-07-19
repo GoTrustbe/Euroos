@@ -417,6 +417,17 @@ fn epoll_fd_ready(fd: u64) -> bool {
     }
 }
 
+/// Is `fd` ready to ACCEPT a write (EPOLLOUT)? Our AF_UNIX sockets, pipes and
+/// eventfds are backed by unbounded in-RAM buffers, so a valid write endpoint is
+/// essentially always writable. Reporting this lets chrome's Mojo Channel (which
+/// waits for socket writability before sending, e.g. the GPU thread's init message)
+/// make progress instead of spinning on a never-signalled EPOLLOUT.
+fn epoll_fd_writable(fd: u64) -> bool {
+    crate::net::is_eventfd(fd)
+        || crate::net::is_unix_fd(fd)
+        || ((fd as usize) < MAX_FD && is_pipe_fd(fd as usize))
+}
+
 /// epoll_wait(epfd, *events, maxevents, timeout): report ready fds. When nothing is
 /// ready and a wait was requested, YIELD (bounded) so chrome's worker threads and
 /// timers advance instead of the main thread busy-spinning — then return 0 so the
@@ -438,14 +449,27 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
             if n >= maxevents {
                 break;
             }
+            // Report BOTH readability (EPOLLIN) and writability (EPOLLOUT). Reporting
+            // EPOLLOUT matters: chrome's Mojo Channel waits for its socket to become
+            // writable before sending init messages (e.g. the in-process GPU thread's
+            // start message). Our sockets/pipes/eventfds have unbounded RAM buffers, so
+            // a write endpoint is essentially always ready — never signalling EPOLLOUT
+            // left that send-wait spinning and the message undelivered.
+            let mut evs = 0u32;
             if evmask & 0x1 != 0 && epoll_fd_ready(fd as u64) {
+                evs |= 0x1; // EPOLLIN
+            }
+            if evmask & 0x4 != 0 && epoll_fd_writable(fd as u64) {
+                evs |= 0x4; // EPOLLOUT
+            }
+            if evs != 0 {
                 // struct epoll_event {u32 events; u64 data} packed = 12 bytes.
                 let base = events + n * 12;
                 if !in_user_arena(base, 12) {
                     return EFAULT;
                 }
                 unsafe {
-                    (base as *mut u32).write(0x1); // EPOLLIN
+                    (base as *mut u32).write(evs);
                     ((base + 4) as *mut u64).write(data);
                 }
                 n += 1;
@@ -2380,6 +2404,93 @@ fn vfs_close(fd: usize) -> u64 {
         OPEN_DIRS.lock()[fd] = None;
     }
     0
+}
+
+/// dup(oldfd): allocate a NEW fd aliasing the same open object. fd numbers encode
+/// their class by range (unix 600+, eventfd 800+, epoll 900+), so the dup is made
+/// in the SAME class. Runs non-preemptively (IF=0) so brief nested table locks can't
+/// deadlock. Chrome's Mojo dups channel socket/eventfd/pipe handles; without dup it
+/// gets ENOSYS and IPC channel setup (incl. the in-process GPU channel) fails.
+fn dup_fd(oldfd: u64) -> u64 {
+    if crate::net::is_eventfd(oldfd) {
+        return crate::net::eventfd_dup(oldfd);
+    }
+    if crate::net::is_unix_fd(oldfd) {
+        return crate::net::unix_fd_dup(oldfd);
+    }
+    if is_epoll_fd(oldfd) {
+        let src = EPOLLS.lock().get((oldfd - EPOLL_FD_BASE) as usize).cloned().flatten();
+        let list = match src {
+            Some(l) => l,
+            None => return (-9i64) as u64,
+        };
+        let mut e = EPOLLS.lock();
+        for (i, slot) in e.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(list);
+                return EPOLL_FD_BASE + i as u64;
+            }
+        }
+        return (-24i64) as u64; // -EMFILE
+    }
+    let ofd = oldfd as usize;
+    if ofd >= MAX_FD {
+        return (-9i64) as u64; // -EBADF
+    }
+    // Pipe end: alias into a new fd sharing the same pipe buffer (by id).
+    if let Some(pe) = PIPE_FDS.lock()[ofd] {
+        let open = OPEN_FDS.lock();
+        let mut p = PIPE_FDS.lock();
+        for fd in 3..MAX_FD {
+            if open[fd].is_none() && p[fd].is_none() {
+                p[fd] = Some(pe);
+                return fd as u64;
+            }
+        }
+        return (-24i64) as u64;
+    }
+    // Regular VFS file: alias the (file-index, offset).
+    let entry = match OPEN_FDS.lock()[ofd] {
+        Some(e) => e,
+        None => return (-9i64) as u64,
+    };
+    let mut fds = OPEN_FDS.lock();
+    for fd in 3..MAX_FD {
+        if fds[fd].is_none() {
+            fds[fd] = Some(entry);
+            return fd as u64;
+        }
+    }
+    (-24i64) as u64
+}
+
+/// dup2(oldfd, newfd)/dup3: point newfd at oldfd's object. Supports the common
+/// regular-fd case (stdio redirection); a same-number dup2 is a no-op. Cross-class
+/// dup2 (placing a 600+ socket at a low fd number) doesn't fit the range-encoded fd
+/// model and is refused.
+fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
+    if oldfd == newfd {
+        return newfd;
+    }
+    let nfd = newfd as usize;
+    if nfd >= MAX_FD {
+        return (-9i64) as u64; // -EBADF: can't target a class-encoded high fd
+    }
+    if (oldfd as usize) < MAX_FD {
+        if let Some(pe) = PIPE_FDS.lock()[oldfd as usize] {
+            OPEN_FDS.lock()[nfd] = None;
+            OPEN_DIRS.lock()[nfd] = None;
+            PIPE_FDS.lock()[nfd] = Some(pe);
+            return newfd;
+        }
+        if let Some(entry) = OPEN_FDS.lock()[oldfd as usize] {
+            PIPE_FDS.lock()[nfd] = None;
+            OPEN_DIRS.lock()[nfd] = None;
+            OPEN_FDS.lock()[nfd] = Some(entry);
+            return newfd;
+        }
+    }
+    (-9i64) as u64
 }
 
 /// Is `path` a DIRECTORY in the userspace VFS? A directory has no FILES entry of its own,
@@ -6285,6 +6396,62 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             } else {
                 vfs_close(a1 as usize)
             }
+        }
+        32 => dup_fd(a1),                 // dup(oldfd)
+        33 | 292 => dup2_fd(a1, a2),       // dup2(old,new) / dup3(old,new,flags)
+        285 => {
+            // fallocate(fd, mode, offset, len): ensure the file spans [0, offset+len).
+            // chrome sizes its memfd shared memory this way; without it the memfd stays
+            // 0-length and a later mmap access page-faults. mode (KEEP_SIZE/PUNCH_HOLE)
+            // is ignored — we only ever grow (never shrink/punch).
+            let need = a3.saturating_add(a4) as usize;
+            let fd = a1 as usize;
+            if fd >= MAX_FD {
+                return (-9i64) as u64;
+            }
+            let fi = match OPEN_FDS.lock()[fd] {
+                Some((fi, _)) => fi,
+                None => return (-9i64) as u64,
+            };
+            if fi >= DISK_FI_BASE {
+                return (-9i64) as u64; // disk/WAD/proc-mem fds not fallocatable
+            }
+            let mut files = FILES.lock();
+            match files.get_mut(fi) {
+                Some(f) => {
+                    if f.1.len() < need {
+                        f.1.to_mut().resize(need, 0);
+                    }
+                    0
+                }
+                None => (-9i64) as u64,
+            }
+        }
+        141 => 0, // setpriority — no thread priorities; succeed (glibc thread setup)
+        201 => {
+            // time(tloc): seconds since epoch; also write *tloc when non-null.
+            let e = crate::rtc::epoch();
+            if a1 != 0 {
+                let _ = write_user(a1, e);
+            }
+            e
+        }
+        280 => 0, // utimensat — timestamps are a no-op in the flat VFS; succeed
+        204 => {
+            // sched_getaffinity(pid, cpusetsize, *mask): report a 1-CPU mask so
+            // chrome's processor-count detection returns >=1 (0 breaks thread-pool
+            // sizing). Return the number of bytes written into the mask.
+            let sz = (a2 as usize).min(128).max(8);
+            if a3 != 0 {
+                if !in_user_arena(a3, sz) {
+                    return EFAULT;
+                }
+                unsafe {
+                    core::ptr::write_bytes(a3 as *mut u8, 0, sz);
+                    *(a3 as *mut u8) = 0x1; // CPU 0 present
+                }
+            }
+            8
         }
         290 => {
             // eventfd2(initval, flags): GLib's GMainContext wakeup fd (GWakeup). flags

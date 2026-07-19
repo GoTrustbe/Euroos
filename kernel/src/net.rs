@@ -1508,6 +1508,7 @@ pub fn eventfd_close(fd: u64) {
 /// What an AF_UNIX fd is backed by. socket() makes a Pending fd; connect()/socketpair
 /// resolve it to a Switchboard stream, or — for the X display socket — to an X-server
 /// connection that forwards to the kernel X server.
+#[derive(Clone, Copy)]
 enum UnixSock {
     Pending,
     Stream(UnixEndpoint),
@@ -1568,6 +1569,43 @@ fn unix_alloc(sock: UnixSock) -> Option<u64> {
 /// socket(AF_UNIX, SOCK_STREAM): an unconnected fd, resolved later by connect().
 pub fn unix_socket() -> u64 {
     unix_alloc(UnixSock::Pending).unwrap_or((-24i64) as u64) // -EMFILE
+}
+
+/// dup(AF_UNIX fd): a NEW fd aliasing the SAME endpoint (UnixSock is Copy, so both
+/// fds share the endpoint's buffers). close() of either just clears its slot; the
+/// endpoint outlives both. Chrome's Mojo dups channel socket handles.
+pub fn unix_fd_dup(fd: u64) -> u64 {
+    if !is_unix_fd(fd) {
+        return (-9i64) as u64; // -EBADF
+    }
+    let sock = UNIX_FDS.lock()[(fd - UNIX_FD_BASE) as usize];
+    match sock {
+        Some(s) => unix_alloc(s).unwrap_or((-24i64) as u64), // -EMFILE
+        None => (-9i64) as u64,
+    }
+}
+
+/// dup(eventfd): a new eventfd fd seeded with the current counter value. Note this
+/// does NOT share the counter (our table is per-slot); adequate for the common
+/// dup-to-transfer-then-close-original pattern chrome uses for platform handles.
+pub fn eventfd_dup(fd: u64) -> u64 {
+    if !is_eventfd(fd) {
+        return (-9i64) as u64;
+    }
+    let val = EVENTFDS.lock()[(fd - EVENTFD_BASE) as usize];
+    match val {
+        Some(v) => {
+            let mut t = EVENTFDS.lock();
+            for (i, s) in t.iter_mut().enumerate() {
+                if s.is_none() {
+                    *s = Some(v);
+                    return EVENTFD_BASE + i as u64;
+                }
+            }
+            (-24i64) as u64 // -EMFILE
+        }
+        None => (-9i64) as u64,
+    }
 }
 
 /// connect(fd, sockaddr_un path): resolve a Pending AF_UNIX fd. The X display socket
