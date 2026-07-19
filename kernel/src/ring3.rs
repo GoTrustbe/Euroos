@@ -2387,6 +2387,54 @@ static MKDIRS: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new(
 /// `SingletonLock` as a symlink encoding hostname:pid, then readlinks it back.
 static SYMLINKS: Mutex<alloc::vec::Vec<(String, String)>> = Mutex::new(alloc::vec::Vec::new());
 
+/// ftruncate(fd, len): resize the open VFS file to `len` bytes (zero-extend / cut).
+/// SQLite + atomic file writers need this; without it they report a disk-I/O error.
+fn vfs_ftruncate(fd: usize, len: usize) -> u64 {
+    if fd >= MAX_FD {
+        return (-9i64) as u64; // -EBADF
+    }
+    let fi = match OPEN_FDS.lock()[fd] {
+        Some((fi, _)) => fi,
+        None => return (-9i64) as u64,
+    };
+    if fi >= DISK_FI_BASE {
+        return (-9i64) as u64; // WAD/proc-mem/disk fds are not truncatable
+    }
+    let mut files = FILES.lock();
+    if let Some(f) = files.get_mut(fi) {
+        f.1.to_mut().resize(len, 0);
+        return 0;
+    }
+    (-9i64) as u64
+}
+
+/// rename(old, new): move a flat-VFS file/symlink to a new path (replacing any file
+/// already there). chrome writes files atomically (write temp, then rename).
+fn vfs_rename(oldp: &[u8], newp: &[u8]) -> u64 {
+    let o = String::from_utf8_lossy(oldp).into_owned();
+    let n = String::from_utf8_lossy(newp).into_owned();
+    if o.is_empty() || n.is_empty() {
+        return (-2i64) as u64; // -ENOENT
+    }
+    {
+        let mut files = FILES.lock();
+        files.retain(|(p, _)| *p != n); // replace an existing destination
+        if let Some(e) = files.iter_mut().find(|(p, _)| *p == o) {
+            e.0 = n.clone();
+            return 0;
+        }
+    }
+    // Or a symlink rename.
+    let mut sl = SYMLINKS.lock();
+    if let Some(e) = sl.iter_mut().find(|(p, _)| *p == o) {
+        let t = e.1.clone();
+        sl.retain(|(p, _)| *p != n && *p != o);
+        sl.push((n, t));
+        return 0;
+    }
+    (-2i64) as u64 // -ENOENT: nothing to rename
+}
+
 /// unlink(path): remove a file/symlink/dir marker from the flat VFS. chrome clears
 /// stale ProcessSingleton lock/socket/cookie files. Succeeds even if absent (chrome
 /// tolerates that) — returns 0.
@@ -6601,6 +6649,12 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         266 => vfs_symlink(&user_cstr(a1, 256), &user_cstr(a3, 256)), // symlinkat(target, dfd, link)
         87 => vfs_unlink(&user_cstr(a1, 256)),  // unlink(path)
         263 => vfs_unlink(&user_cstr(a2, 256)), // unlinkat(dirfd, path, flags)
+        77 => vfs_ftruncate(a1 as usize, a2 as usize), // ftruncate(fd, len)
+        74 | 75 => 0, // fsync / fdatasync: VFS is in-RAM -> nothing to flush, succeed
+        82 => vfs_rename(&user_cstr(a1, 256), &user_cstr(a2, 256)), // rename(old, new)
+        264 => vfs_rename(&user_cstr(a2, 256), &user_cstr(a4, 256)), // renameat(ofd,old,nfd,new)
+        316 => vfs_rename(&user_cstr(a2, 256), &user_cstr(a4, 256)), // renameat2(ofd,old,nfd,new,flags)
+        85 => vfs_open_create(&user_cstr(a1, 256), true), // creat(path, mode) = open O_CREAT|O_TRUNC
         217 => vfs_getdents64(a1 as usize, a2, a3 as usize), // getdents64(fd, dirp, count)
         16 => 0,  // ioctl — pretend success (isatty/TCGETS): stdout is a tty
         10 => 0,  // mprotect — allow (musl makes its RELRO read-only); no-op
