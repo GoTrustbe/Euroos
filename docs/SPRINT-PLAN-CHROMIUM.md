@@ -30,7 +30,28 @@ Work top-to-bottom. Commit after each green step. Each `[ ]` is a boot-verified 
       futex_wait can only mark Blocked + return, and the thread busy-spins re-checking
       until the timer preempts it — fine at few threads (gsync/gthread pass), fatal at
       chrome's ~30-thread contention.
-      **ATTEMPT 1 (2026-07-18, reverted — saved as docs/wip/per-task-syscall-reentrancy.patch):**
+      **DONE + committed (2026-07-19, commit `40e8822`): per-task syscall reentrancy
+      WORKS and is SAFE.** CURRENT_SC_STACK per-task (schedule_core points it at the
+      incoming task's kstack; syscall_entry uses it not KERNEL_RSP) + USER_RSP/USER_RIP/
+      SAVED_REGS as per-task Task fields saved/restored on switch + futex_wait/epoll_wait
+      yield after block_current — GATED by SYSCALL_YIELD_OK (true in linux_dispatch, false
+      in bg_dispatch, because the musl/DOOM bg path holds BG.lock across the syscall so a
+      mid-syscall yield there wedges on BG.lock; attempt-1 hung the musl thread test for
+      exactly this). Verified: musl fork+clone+pthread_join, glibc gthread + gsync(mutex/
+      condvar), LINUX COMPAT 20/20 all pass. glibc futex threads now truly block (0 cpu)
+      instead of the +38952 futex_wait/700t busy-spin.
+      **BUT chrome --headless STILL wedges at ~30 threads (task 39), and now HARDER: the
+      diagnostic snapshot can no longer fire — even the launcher task 0 can't get CPU,
+      and the iteration-based snapshot (commit e16ea57, gated STALL_DIAG) never dumps →
+      a scheduling wedge (likely a dead timer / IF=0 spin, or all-Blocked + a lost wake
+      that also starves task 0's fallback). This is a DEEPER scheduler-scale issue than
+      the futex livelock.** NEXT debug ideas: (a) log every schedule_core pick + SCHED
+      try_lock failures during the chrome run to see if a lock is stuck / task 0 never
+      selected; (b) check whether a glibc thread's yield can leave IF=0 with no path back
+      to the timer; (c) verify the fallback `best=0` actually runs task 0 when all glibc
+      threads are Blocked; (d) try fewer threads (chrome flags to cap the thread pool) to
+      see if the wedge is purely thread-count-dependent.
+      **ATTEMPT 1 (2026-07-18, reverted):**
       implemented per-task syscall stack (CURRENT_SC_STACK global set by schedule_core
       to the incoming task's kstack; syscall_entry uses it not KERNEL_RSP) + saved/
       restored USER_RSP/USER_RIP/SAVED_REGS as Task fields in schedule_core + made
