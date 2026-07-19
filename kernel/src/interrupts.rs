@@ -420,12 +420,15 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
         if code.contains(PageFaultErrorCode::INSTRUCTION_FETCH) {
             let rip = frame.instruction_pointer.as_u64();
             let rsp = frame.stack_pointer.as_u64();
-            serial_println!("[pf-diag] rip={rip:#x} rsp={rsp:#x}");
-            for i in 0..8u64 {
-                let a = rsp.wrapping_add(i * 8);
+            serial_println!("[pf-diag] task={idx} rip={rip:#x} rsp={rsp:#x}");
+            // Read a window that straddles rsp: negative offsets show values already
+            // popped (glibc's clone3 child does `pop %rax(fn); pop %rdi(arg); call *%rax`
+            // — a null fn here means it popped 0 off a zeroed child stack).
+            for i in -4i64..8i64 {
+                let a = rsp.wrapping_add((i * 8) as u64);
                 match read_user_qword(a) {
-                    Some(v) => serial_println!("[pf-diag]   [rsp+{:#04x}] = {v:#x}", i * 8),
-                    None => serial_println!("[pf-diag]   [rsp+{:#04x}] = <unmapped>", i * 8),
+                    Some(v) => serial_println!("[pf-diag]   [rsp{:+#05x}] = {v:#x}", i * 8),
+                    None => serial_println!("[pf-diag]   [rsp{:+#05x}] = <unmapped>", i * 8),
                 }
             }
         }

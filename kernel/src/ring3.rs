@@ -293,12 +293,13 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
         PIPE_NONBLOCK.lock().push(flags & 0x800 != 0);
         p.len() - 1
     };
+    let ceil = (crate::net::SOCK_FD_BASE as usize).min(MAX_FD); // stay below socket fds
     let files = OPEN_FDS.lock();
     let dirs = OPEN_DIRS.lock();
     let mut pf = PIPE_FDS.lock();
     let mut got = [usize::MAX; 2];
     let mut k = 0;
-    for fd in 3..MAX_FD {
+    for fd in 3..ceil {
         if pf[fd].is_none() && files[fd].is_none() && dirs[fd].is_none() {
             got[k] = fd;
             k += 1;
@@ -876,14 +877,7 @@ const PROC_MEM_FI: usize = usize::MAX - 1;
 
 /// open("/proc/self/mem"): reserve an fd slot tagged as the live-memory window.
 fn proc_mem_open() -> u64 {
-    let mut fds = OPEN_FDS.lock();
-    for (fd, slot) in fds.iter_mut().enumerate().skip(3) {
-        if slot.is_none() {
-            *slot = Some((PROC_MEM_FI, 0));
-            return fd as u64;
-        }
-    }
-    u64::MAX
+    open_low_fd(PROC_MEM_FI)
 }
 
 /// Copy `len` bytes between a user buffer and virtual address `vaddr` (the
@@ -911,43 +905,33 @@ fn proc_mem_xfer(vaddr: u64, buf: u64, len: usize, to_mem: bool) -> u64 {
 fn vfs_open(path: &[u8]) -> u64 {
     // The DOOM IWAD is served from the kernel image, not the VFS.
     if path == b"/doom1.wad" {
-        let mut fds = OPEN_FDS.lock();
-        for (fd, slot) in fds.iter_mut().enumerate().skip(3) {
-            if slot.is_none() {
-                *slot = Some((WAD_FI, 0));
-                return fd as u64;
-            }
-        }
-        return u64::MAX;
+        return open_low_fd(WAD_FI);
     }
     ensure_proc(path); // freshly generate /proc files before the lookup
     let files = FILES.lock();
-    match files.iter().position(|(p, _)| p.as_bytes() == path) {
-        Some(fi) => {
-            let mut fds = OPEN_FDS.lock();
-            for (fd, slot) in fds.iter_mut().enumerate().skip(3) {
-                if slot.is_none() {
-                    *slot = Some((fi, 0));
-                    return fd as u64;
-                }
-            }
-            u64::MAX
-        }
+    let found = files.iter().position(|(p, _)| p.as_bytes() == path);
+    drop(files);
+    match found {
+        Some(fi) => open_low_fd(fi),
         None => {
-            drop(files);
             // A disk-backed (EuroPack) file? Served without loading bytes into RAM.
-            let di = DISK_FILES.lock().iter().position(|(p, _, _, _)| p.as_bytes() == path);
-            if let Some(di) = di {
-                let mut fds = OPEN_FDS.lock();
-                for (fd, slot) in fds.iter_mut().enumerate().skip(3) {
-                    if slot.is_none() {
-                        *slot = Some((DISK_FI_BASE + di, 0));
-                        return fd as u64;
-                    }
-                }
+            match DISK_FILES.lock().iter().position(|(p, _, _, _)| p.as_bytes() == path) {
+                Some(di) => open_low_fd(DISK_FI_BASE + di),
+                None => u64::MAX,
             }
-            u64::MAX
         }
+    }
+}
+
+/// Bind file-index `fi` to the lowest free regular fd (collision-safe across the
+/// OPEN_FDS/PIPE_FDS/OPEN_DIRS tables and below the socket range). u64::MAX on EMFILE.
+fn open_low_fd(fi: usize) -> u64 {
+    match alloc_low_fd() {
+        Some(fd) => {
+            OPEN_FDS.lock()[fd] = Some((fi, 0));
+            fd as u64
+        }
+        None => u64::MAX,
     }
 }
 
@@ -2437,31 +2421,45 @@ fn dup_fd(oldfd: u64) -> u64 {
     if ofd >= MAX_FD {
         return (-9i64) as u64; // -EBADF
     }
-    // Pipe end: alias into a new fd sharing the same pipe buffer (by id).
-    if let Some(pe) = PIPE_FDS.lock()[ofd] {
-        let open = OPEN_FDS.lock();
-        let mut p = PIPE_FDS.lock();
-        for fd in 3..MAX_FD {
-            if open[fd].is_none() && p[fd].is_none() {
-                p[fd] = Some(pe);
-                return fd as u64;
-            }
+    // Pipe end: alias into a new fd sharing the same pipe buffer (by id). NOTE the
+    // value MUST be read out of PIPE_FDS before re-locking it below — an `if let
+    // Some(_) = PIPE_FDS.lock()[..]` would hold the guard across the block and the
+    // inner lock would self-deadlock the spinlock (IF=0 spin forever).
+    let pipe_ent = PIPE_FDS.lock()[ofd];
+    if let Some(pe) = pipe_ent {
+        if let Some(fd) = alloc_low_fd() {
+            PIPE_FDS.lock()[fd] = Some(pe);
+            return fd as u64;
         }
         return (-24i64) as u64;
     }
     // Regular VFS file: alias the (file-index, offset).
-    let entry = match OPEN_FDS.lock()[ofd] {
+    let entry = OPEN_FDS.lock()[ofd];
+    let entry = match entry {
         Some(e) => e,
         None => return (-9i64) as u64,
     };
-    let mut fds = OPEN_FDS.lock();
-    for fd in 3..MAX_FD {
-        if fds[fd].is_none() {
-            fds[fd] = Some(entry);
-            return fd as u64;
-        }
+    if let Some(fd) = alloc_low_fd() {
+        OPEN_FDS.lock()[fd] = Some(entry);
+        return fd as u64;
     }
     (-24i64) as u64
+}
+
+/// The lowest free fd in the regular (< MAX_FD) number space. A regular file, an
+/// open directory and a pipe end all share this range, so a free fd must be free in
+/// ALL THREE tables — otherwise dup() could hand back a number that is already an
+/// open pipe/dir fd chrome owns, tripping its "FD ownership violation" CHECK.
+fn alloc_low_fd() -> Option<usize> {
+    // Cap BELOW SOCK_FD_BASE (500): socket fds live at 500+, so a regular/pipe/dir fd
+    // at >=500 would collide with a socket fd — chrome owns fds across all classes and
+    // CHECK-crashes ("FD ownership violation") if the kernel hands out a number it
+    // already owns in another table.
+    let ceil = (crate::net::SOCK_FD_BASE as usize).min(MAX_FD);
+    let open = OPEN_FDS.lock();
+    let pipes = PIPE_FDS.lock();
+    let dirs = OPEN_DIRS.lock();
+    (3..ceil).find(|&fd| open[fd].is_none() && pipes[fd].is_none() && dirs[fd].is_none())
 }
 
 /// dup2(oldfd, newfd)/dup3: point newfd at oldfd's object. Supports the common
@@ -2477,13 +2475,18 @@ fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
         return (-9i64) as u64; // -EBADF: can't target a class-encoded high fd
     }
     if (oldfd as usize) < MAX_FD {
-        if let Some(pe) = PIPE_FDS.lock()[oldfd as usize] {
+        // Read the source slot values out FIRST (drop the guard) before writing newfd —
+        // re-locking the same table inside an `if let Some(_) = TABLE.lock()[..]` block
+        // would self-deadlock the spinlock.
+        let pipe_ent = PIPE_FDS.lock()[oldfd as usize];
+        if let Some(pe) = pipe_ent {
             OPEN_FDS.lock()[nfd] = None;
             OPEN_DIRS.lock()[nfd] = None;
             PIPE_FDS.lock()[nfd] = Some(pe);
             return newfd;
         }
-        if let Some(entry) = OPEN_FDS.lock()[oldfd as usize] {
+        let reg_ent = OPEN_FDS.lock()[oldfd as usize];
+        if let Some(entry) = reg_ent {
             PIPE_FDS.lock()[nfd] = None;
             OPEN_DIRS.lock()[nfd] = None;
             OPEN_FDS.lock()[nfd] = Some(entry);
@@ -2640,15 +2643,13 @@ fn dir_children(path: &str) -> alloc::vec::Vec<(String, bool)> {
 /// Open a DIRECTORY -> dir fd (registered in OPEN_DIRS), or u64::MAX if full.
 fn diropen(path: &[u8]) -> u64 {
     let norm = String::from_utf8_lossy(path).into_owned();
-    let fds = OPEN_FDS.lock();
-    let mut dirs = OPEN_DIRS.lock();
-    for fd in 3..MAX_FD {
-        if fds[fd].is_none() && dirs[fd].is_none() {
-            dirs[fd] = Some((norm, 0));
-            return fd as u64;
+    match alloc_low_fd() {
+        Some(fd) => {
+            OPEN_DIRS.lock()[fd] = Some((norm, 0));
+            fd as u64
         }
+        None => u64::MAX,
     }
-    u64::MAX
 }
 
 /// getdents64(fd, buf, count): fill Linux `linux_dirent64` records from the cursor.
@@ -5979,7 +5980,14 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             }
             register_thread_kstack(child, slot);
             GLIBC_THREADS.lock().push(child);
-            crate::serial_println!("[glibc-thread] clone3 -> thread task {child} (shared address space, sp={child_stack:#x})");
+            // Diag: what the child will `pop`/`call` first. glibc's clone3 child pops the
+            // fn off the top of child_stack (or uses a preserved reg). Log the stack top
+            // + rdx/r9 so a rip=0 faulting thread can be matched against a working one.
+            let sp_top: u64 = read_user(child_stack).unwrap_or(0);
+            let sp_m8: u64 = read_user(child_stack.wrapping_sub(8)).unwrap_or(0);
+            let rdx_f = unsafe { *((saved_regs + 7 * 8) as *const u64) };
+            let r9_f = unsafe { *((saved_regs + 5 * 8) as *const u64) };
+            crate::serial_println!("[glibc-thread] clone3 -> task {child} sp={child_stack:#x} [sp]={sp_top:#x} [sp-8]={sp_m8:#x} rdx={rdx_f:#x} r9={r9_f:#x}");
             if flags & 0x0010_0000 != 0 && parent_tid != 0 {
                 let _ = write_user(parent_tid, child as i32);
             }
