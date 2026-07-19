@@ -1971,13 +1971,13 @@ fn main() -> Status {
                   b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
                   b"--disable-crashpad-for-testing", b"--disable-breakpad", b"--disable-in-process-stack-traces",
                   b"--lang=en-US",
-                  // No GL: QEMU has no Vulkan, so SwiftShader-via-ANGLE fails. --dump-dom
-                  // needs Blink (DOM), not a GPU/GL context — turn every GL path off.
-                  b"--disable-gpu-compositing", b"--disable-software-rasterizer",
-                  b"--use-gl=disabled", b"--disable-vulkan", b"--in-process-gpu",
-                  // Give the page load a virtual-time budget so --dump-dom fires once the
-                  // (trivial) page finishes loading, without depending on wall-clock timers.
-                  b"--virtual-time-budget=8000",
+                  // Software rendering only (QEMU has no Vulkan). Keep the CPU rasterizer
+                  // ON (do NOT --disable-software-rasterizer) so the page load can commit
+                  // a frame and complete — --dump-dom fires after the load event.
+                  b"--in-process-gpu", b"--disable-vulkan",
+                  b"--run-all-compositor-stages-before-draw",
+                  // Virtual-time budget so the (trivial) page load completes deterministically.
+                  b"--virtual-time-budget=10000",
                   b"--dump-dom", b"data:text/html,<html><body><h1>EuroOS</h1></body></html>"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
