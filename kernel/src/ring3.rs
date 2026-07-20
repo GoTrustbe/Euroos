@@ -4630,13 +4630,20 @@ pub fn handle_demand_fault(addr: u64) -> bool {
     if !in_region {
         return false;
     }
-    let pml4 = GLIBC_PML4.load(Ordering::Relaxed);
-    if pml4 == 0 {
+    // Gate: a demand-paged glibc process must be active at all.
+    if GLIBC_PML4.load(Ordering::Relaxed) == 0 {
         if !DEMAND_DIAG.swap(true, Ordering::Relaxed) {
             crate::serial_println!("[demand] REJECT addr={addr:#x}: PML4=0");
         }
         return false;
     }
+    // Map into the CURRENT address space (the faulting task's own CR3), NOT just the
+    // single global GLIBC_PML4. For one process these are identical; for a forked
+    // child this is what lets it fault into its OWN address space. M1 foundation.
+    let pml4 = {
+        use x86_64::registers::control::Cr3;
+        Cr3::read().0.start_address().as_u64()
+    };
     // Only within the region actually handed out by mmap (else it's a wild pointer).
     let next = DEMAND_NEXT.load(Ordering::Relaxed);
     if addr >= next {
