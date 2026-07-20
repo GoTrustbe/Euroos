@@ -5949,7 +5949,9 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // clone(flags, child_stack, ptid, ctid, tls): a THREAD sharing this
             // glibc process's address space (pthread_create). Mirrors the bg path.
             let (flags, child_stack) = (a1, a2);
-            if child_stack == 0 {
+            if child_stack == 0 || flags & 0x0000_0100 == 0 {
+                // No CLONE_VM (or no stack) = a real fork/vfork (new address space).
+                crate::serial_println!("[spawndiag] clone(flags={flags:#x} stack={child_stack:#x}) = FORK request -> ENOSYS");
                 return (-38i64) as u64; // no fork via clone here
             }
             let (slot, kstack_top) = match alloc_thread_kstack() {
@@ -6447,6 +6449,19 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         }
         32 => dup_fd(a1),                 // dup(oldfd)
         33 | 292 => dup2_fd(a1, a2),       // dup2(old,new) / dup3(old,new,flags)
+        57 | 58 => {
+            crate::serial_println!("[spawndiag] {} syscall -> ENOSYS", if num == 57 { "fork" } else { "vfork" });
+            (-38i64) as u64
+        }
+        59 => {
+            // execve(path, argv, envp): log the target so we can see chrome's child
+            // process types (--type=renderer/gpu/utility) before implementing spawn.
+            let path = user_cstr(a1, 256);
+            let arg1 = { let p: u64 = read_user(a2 + 8).unwrap_or(0); if p != 0 { user_cstr(p, 128) } else { alloc::vec::Vec::new() } };
+            crate::serial_println!("[spawndiag] execve({}) arg1={} -> ENOSYS",
+                String::from_utf8_lossy(&path), String::from_utf8_lossy(&arg1));
+            (-38i64) as u64
+        }
         285 => {
             // fallocate(fd, mode, offset, len): ensure the file spans [0, offset+len).
             // chrome sizes its memfd shared memory this way; without it the memfd stays
