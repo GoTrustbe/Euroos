@@ -554,24 +554,34 @@ fn task_stack_bottom(index: usize) -> u64 {
 /// Start the background tasks and activate round-robin scheduling.
 pub fn init() {
     let mut s = SCHED.lock();
-    s.tasks[1].rsp = init_stack(1, task_a);
-    s.tasks[2].rsp = init_stack(2, task_b);
-    s.tasks[3].rsp = init_stack(3, task_c);
-    s.tasks[4].rsp = init_stack(4, task_sleeper);
-    // G1 self-test: a task on a GUARDED stack that intentionally overflows its
-    // stack. The guard page catches it as a hardware #PF; the fault handler
-    // terminates ONLY this task and the kernel keeps running (proof of recovery).
-    s.tasks[5].rsp = init_stack(5, task_overflow);
-    // S6: register the stack bottom (canary location) for the overflow watchdog.
-    for i in 1..=5 {
-        s.tasks[i].stack_bottom = task_stack_bottom(i);
+    // The kernel demo tasks (S2 priority a/b/c, the S2 sleeper, the G1 guarded-stack
+    // overflow) are dev self-tests: they prove the mini-CFS priority ordering and
+    // kernel-stack-overflow recovery. task_a/b/c busy-spin (until they park ~2.5 s in)
+    // and task_overflow deliberately faults — neither belongs in a shipping image, so
+    // spawn them only under `selftest`. The public image starts with just the boot
+    // task (slot 0); real processes fill slots 1+ as they are spawned.
+    if cfg!(feature = "selftest") {
+        s.tasks[1].rsp = init_stack(1, task_a);
+        s.tasks[2].rsp = init_stack(2, task_b);
+        s.tasks[3].rsp = init_stack(3, task_c);
+        s.tasks[4].rsp = init_stack(4, task_sleeper);
+        // G1 self-test: a task on a GUARDED stack that intentionally overflows its
+        // stack. The guard page catches it as a hardware #PF; the fault handler
+        // terminates ONLY this task and the kernel keeps running (proof of recovery).
+        s.tasks[5].rsp = init_stack(5, task_overflow);
+        // S6: register the stack bottom (canary location) for the overflow watchdog.
+        for i in 1..=5 {
+            s.tasks[i].stack_bottom = task_stack_bottom(i);
+        }
+        // S2 priority demo: a/b/c do EQUAL workload but get different
+        // nice — their counters show that the mini-CFS schedules high priority more often.
+        s.tasks[1].nice = -10; // high priority  -> most turns
+        s.tasks[2].nice = 0; //   normal
+        s.tasks[3].nice = 10; //  low priority  -> fewest turns
+        s.count = 6;
+    } else {
+        s.count = 1;
     }
-    // S2 priority demo: a/b/c do EQUAL workload but get different
-    // nice — their counters show that the mini-CFS schedules high priority more often.
-    s.tasks[1].nice = -10; // high priority  -> most turns
-    s.tasks[2].nice = 0; //   normal
-    s.tasks[3].nice = 10; //  low priority  -> fewest turns
-    s.count = 6;
     s.current = 0;
 }
 

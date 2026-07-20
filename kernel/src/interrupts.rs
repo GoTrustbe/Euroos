@@ -243,6 +243,11 @@ pub fn route_io_apic(madt: &crate::acpi::Madt) {
     unsafe {
         PICS.lock().write_masks(0xFF, 0xFF);
     }
+    // Virtual-wire ExtINT on LINT0 was only needed while the 8259 still delivered
+    // interrupts. Now that the PIC is masked and the IO-APIC routes kbd/mouse, mask
+    // LINT0 so a stray ExtINT can't make the CPU fetch a spurious vector from the
+    // inert PIC (harmless under TCG, wedges input under KVM). See apic::mask_lint0.
+    crate::apic::mask_lint0();
     let dest = crate::apic::lapic_id() as u8; // BSP
     let kbd_gsi = madt.gsi_for(1);
     let mouse_gsi = madt.gsi_for(12);

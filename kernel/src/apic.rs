@@ -89,6 +89,18 @@ pub fn eoi() {
     unsafe { wr(REG_EOI, 0) };
 }
 
+/// Mask LINT0. During early boot we run virtual-wire mode (LINT0 = ExtINT) so the
+/// legacy 8259 can deliver the keyboard/mouse before the IO-APIC exists. Once the
+/// IO-APIC takes over and the 8259 is fully masked, ExtINT on LINT0 is not just
+/// pointless, it is a hazard: an ExtINT delivery makes the CPU run an 8259 INTA
+/// cycle to fetch its vector, but the masked/inert PIC never answers, so the core
+/// latches a spurious vector. TCG happens to tolerate this; KVM's stricter LAPIC
+/// then wedges further interrupt delivery — the "keyboard dead under KVM" symptom.
+/// Masking LINT0 after the IO-APIC is live removes that path entirely.
+pub fn mask_lint0() {
+    unsafe { wr(REG_LVT_LINT0, LVT_MASKED) };
+}
+
 /// Number of LAPIC timer ticks per `hz` period (result of the calibration).
 static mut CAL_COUNT: u32 = 0;
 

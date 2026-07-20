@@ -6,6 +6,18 @@ license.workspace = true
 authors.workspace = true
 description = "EuroKernel — bootable UEFI kernel (Track 1)."
 
+[features]
+# selftest ON by default so a normal `cargo build` / dev/CI still runs the full
+# glibc/GUI/chrome self-test + demo suite. The DOWNLOAD/VNC release image is built
+# with `--no-default-features` so it SKIPS that ~5-minute suite and boots straight to
+# a clean, idle desktop (the tester on hup.hu saw the suite, not a real idle hang).
+default = ["selftest"]
+selftest = []
+# Persistent live-animating demo apps on the desktop (e.g. the ggtk GMainLoop
+# counter). OFF by default: they keep the guest permanently runnable, so under
+# pure emulation (no KVM) the host core sits at ~100% and input is starved.
+live-demos = []
+
 [[bin]]
 name = "eurokernel"
 path = "src/main.rs"

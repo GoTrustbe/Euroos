@@ -1549,81 +1549,94 @@ fn main() -> Status {
     // Scheduler: shell + 3 kernel tasks + TWO ring-3 userspace processes,
     // each with its own kernel stack (TSS.rsp0 switches per task).
     sched::init();
-    let ucnt1 = ring3::spawn_counter_task(&mut allocator);
-    let ucnt2 = ring3::spawn_counter_task(&mut allocator);
-    // Background daemon: a loaded program that runs PREEMPTIVELY as a real task
-    // and periodically (via syscalls) writes a heartbeat.
-    let daemon_prog = fs.read_file("/bin/daemon").unwrap_or_default();
-    ring3::spawn_daemon(&mut allocator, &daemon_prog);
-    // PREEMPTIVE PER-PROCESS MODEL: two REAL musl processes at once, each with
-    // its own __thread counter. Their counters stay independent only because
-    // the scheduler saves/restores FS_BASE (the musl TLS pointer) per process.
-    let tls_prog = fs.read_file("/bin/tlscount").unwrap_or_default();
-    if ring3::verify_program("/bin/tlscount", &tls_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &tls_prog, 8, b"tlscount");
-        ring3::spawn_bg_musl(&mut allocator, &tls_prog, 9, b"tlscount");
-        serial_println!("[euro] 2x musl process (pid 8,9) scheduled — own TLS per process");
-    }
-    // A third process that tests MEMORY ISOLATION: it reaches into kernel memory
-    // and is terminated by the page-fault handler — while the rest keeps running.
-    let iso_prog = fs.read_file("/bin/isotest").unwrap_or_default();
-    if ring3::verify_program("/bin/isotest", &iso_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &iso_prog, 10, b"isotest");
-        serial_println!("[euro] isotest (pid 10) scheduled — tests memory isolation");
-    }
-    // A 'job' process: computes, reports, exits cleanly with exit(0) and is
-    // then cleaned up — the clean exit path of the process lifecycle.
-    let work_prog = fs.read_file("/bin/worker").unwrap_or_default();
-    if ring3::verify_program("/bin/worker", &work_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &work_prog, 11, b"worker");
-        serial_println!("[euro] worker (pid 11) scheduled — compute job + clean exit");
-    }
-    // S3: REAL fork() + waitpid() — forks a child with a copied address space
-    // and reaps it. Proves process creation (see [fork]/[wait] lines in dmesg).
-    let fork_prog = fs.read_file("/bin/forktest").unwrap_or_default();
-    if ring3::verify_program("/bin/forktest", &fork_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &fork_prog, 20, b"forktest");
-        serial_println!("[euro] forktest (pid 20) scheduled — S3 fork()+waitpid()");
-    }
-    // S3: pipe() + fork() IPC — child writes via a pipe to the parent.
-    let pipe_prog = fs.read_file("/bin/forkpipe").unwrap_or_default();
-    if ring3::verify_program("/bin/forkpipe", &pipe_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &pipe_prog, 21, b"forkpipe");
-        serial_println!("[euro] forkpipe (pid 21) scheduled — S3 pipe()+fork() IPC");
-    }
-    // S4: EuroInit — start the declared services under supervision (restart
-    // on exit per policy); the supervision tick runs in the desktop loop.
+    // S4: EuroInit — start the declared services under supervision (restart on exit
+    // per policy); the supervision tick runs in the desktop loop. Real system infra,
+    // so it runs in every build (its services sleep/block when idle).
     init::start_all(&mut allocator, &mut fs);
-    // Threads: clone() is implemented kernel-side + verified (a
-    // thread task sharing the address space is created). The userspace
-    // thread RESUMPTION still has a subtle bug (ring-0 GP @ user address) that
-    // deserves its own debug session; therefore NOT started automatically at boot.
-    // /bin/mthread stays available for manual tests.
-    let thr_prog = fs.read_file("/bin/mthread").unwrap_or_default();
-    if ring3::verify_program("/bin/mthread", &thr_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &thr_prog, 12, b"mthread");
+    // ── DEV SELF-TEST WORKLOAD (gated) ──────────────────────────────────────────
+    // The following ~15 background ring-3 processes DEMONSTRATE the preemptive
+    // per-process model: counter tasks, a heartbeat daemon, per-process musl TLS,
+    // memory isolation, fork()+waitpid(), pipe IPC, pthreads, EuroIPC. Several are
+    // INFINITE loops with no blocking wait (the two counter tasks, the daemon, the
+    // two tlscount processes). Left running they busy-spin and — under pure emulation
+    // (no KVM), where a spinning guest task pins the host core — keep the host CPU at
+    // ~80% even on an "idle" desktop (exactly the hup.hu tester's 98%-idle report).
+    // They are a dev/CI proof, NOT shipping-image content, so gate them on `selftest`.
+    // The public download/VNC image (`--no-default-features`) then boots to a desktop
+    // whose only runnable task is the compositor loop, which HLTs → the host idles.
+    let (mut ucnt1, mut ucnt2) = (0u64, 0u64);
+    if cfg!(feature = "selftest") {
+        ucnt1 = ring3::spawn_counter_task(&mut allocator);
+        ucnt2 = ring3::spawn_counter_task(&mut allocator);
+        // Background daemon: a loaded program that runs PREEMPTIVELY as a real task
+        // and periodically (via syscalls) writes a heartbeat.
+        let daemon_prog = fs.read_file("/bin/daemon").unwrap_or_default();
+        ring3::spawn_daemon(&mut allocator, &daemon_prog);
+        // PREEMPTIVE PER-PROCESS MODEL: two REAL musl processes at once, each with
+        // its own __thread counter. Their counters stay independent only because
+        // the scheduler saves/restores FS_BASE (the musl TLS pointer) per process.
+        let tls_prog = fs.read_file("/bin/tlscount").unwrap_or_default();
+        if ring3::verify_program("/bin/tlscount", &tls_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &tls_prog, 8, b"tlscount");
+            ring3::spawn_bg_musl(&mut allocator, &tls_prog, 9, b"tlscount");
+            serial_println!("[euro] 2x musl process (pid 8,9) scheduled — own TLS per process");
+        }
+        // A third process that tests MEMORY ISOLATION: it reaches into kernel memory
+        // and is terminated by the page-fault handler — while the rest keeps running.
+        let iso_prog = fs.read_file("/bin/isotest").unwrap_or_default();
+        if ring3::verify_program("/bin/isotest", &iso_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &iso_prog, 10, b"isotest");
+            serial_println!("[euro] isotest (pid 10) scheduled — tests memory isolation");
+        }
+        // A 'job' process: computes, reports, exits cleanly with exit(0) and is
+        // then cleaned up — the clean exit path of the process lifecycle.
+        let work_prog = fs.read_file("/bin/worker").unwrap_or_default();
+        if ring3::verify_program("/bin/worker", &work_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &work_prog, 11, b"worker");
+            serial_println!("[euro] worker (pid 11) scheduled — compute job + clean exit");
+        }
+        // S3: REAL fork() + waitpid() — forks a child with a copied address space
+        // and reaps it. Proves process creation (see [fork]/[wait] lines in dmesg).
+        let fork_prog = fs.read_file("/bin/forktest").unwrap_or_default();
+        if ring3::verify_program("/bin/forktest", &fork_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &fork_prog, 20, b"forktest");
+            serial_println!("[euro] forktest (pid 20) scheduled — S3 fork()+waitpid()");
+        }
+        // S3: pipe() + fork() IPC — child writes via a pipe to the parent.
+        let pipe_prog = fs.read_file("/bin/forkpipe").unwrap_or_default();
+        if ring3::verify_program("/bin/forkpipe", &pipe_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &pipe_prog, 21, b"forkpipe");
+            serial_println!("[euro] forkpipe (pid 21) scheduled — S3 pipe()+fork() IPC");
+        }
+        // Threads: clone() is implemented kernel-side + verified (a thread task sharing
+        // the address space is created). /bin/mthread stays available for manual tests.
+        let thr_prog = fs.read_file("/bin/mthread").unwrap_or_default();
+        if ring3::verify_program("/bin/mthread", &thr_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &thr_prog, 12, b"mthread");
+        }
+        // Real musl pthreads: pthread_create + pthread_join.
+        let pthr_prog = fs.read_file("/bin/mpthread").unwrap_or_default();
+        if ring3::verify_program("/bin/mpthread", &pthr_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &pthr_prog, 13, b"mpthread");
+        }
+        // pthread_mutex under contention (2 threads): tests the blocking futex.
+        let mtx_prog = fs.read_file("/bin/mmutex").unwrap_or_default();
+        if ring3::verify_program("/bin/mmutex", &mtx_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &mtx_prog, 14, b"mmutex");
+        }
+        // EuroIPC: a receiver (claims port 42) + a sender. The receiver first,
+        // so the port is claimed before the sender sends.
+        let rcv = fs.read_file("/bin/ipcrecv").unwrap_or_default();
+        if ring3::verify_program("/bin/ipcrecv", &rcv) {
+            ring3::spawn_bg_musl(&mut allocator, &rcv, 15, b"ipcrecv");
+        }
+        let snd = fs.read_file("/bin/ipcsend").unwrap_or_default();
+        if ring3::verify_program("/bin/ipcsend", &snd) {
+            ring3::spawn_bg_musl(&mut allocator, &snd, 16, b"ipcsend");
+        }
+        serial_println!("[euro] scheduler: shell + 3 kernel + 2 ring-3 + daemon + 2 musl @ {ucnt1:#x},{ucnt2:#x}");
     }
-    // Real musl pthreads: pthread_create + pthread_join.
-    let pthr_prog = fs.read_file("/bin/mpthread").unwrap_or_default();
-    if ring3::verify_program("/bin/mpthread", &pthr_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &pthr_prog, 13, b"mpthread");
-    }
-    // pthread_mutex under contention (2 threads): tests the blocking futex.
-    let mtx_prog = fs.read_file("/bin/mmutex").unwrap_or_default();
-    if ring3::verify_program("/bin/mmutex", &mtx_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &mtx_prog, 14, b"mmutex");
-    }
-    // EuroIPC: a receiver (claims port 42) + a sender. The receiver first,
-    // so the port is claimed before the sender sends.
-    let rcv = fs.read_file("/bin/ipcrecv").unwrap_or_default();
-    if ring3::verify_program("/bin/ipcrecv", &rcv) {
-        ring3::spawn_bg_musl(&mut allocator, &rcv, 15, b"ipcrecv");
-    }
-    let snd = fs.read_file("/bin/ipcsend").unwrap_or_default();
-    if ring3::verify_program("/bin/ipcsend", &snd) {
-        ring3::spawn_bg_musl(&mut allocator, &snd, 16, b"ipcsend");
-    }
-    serial_println!("[euro] scheduler: shell + 3 kernel + 2 ring-3 + daemon + 2 musl @ {ucnt1:#x},{ucnt2:#x}");
+    let _ = (ucnt1, ucnt2);
     // ACPI MADT: discover the CPU cores + IO-APIC (foundation for SMP).
     if let Some(madt) = acpi::parse() {
         serial_println!(
@@ -1772,7 +1785,15 @@ fn main() -> Status {
     // Chromium foundation: run REAL dynamically-linked GLIBC binaries via the
     // genuine ld-linux-x86-64.so.2 — NOW that the scheduler is up, each runs as a
     // scheduled process, so single-threaded AND multi-threaded (pthreads) work.
-    {
+    //
+    // PERF FIX (boot time): this whole block is the DEV/CI self-test + demo suite (the
+    // glibc LINUX-COMPAT tests, X11/Cairo/Pango/GTK, chrome bring-up, ...). Under pure
+    // emulation (no KVM) it runs for ~5 minutes at ~100% host-CPU, which is exactly the
+    // "big hourglass session, 98% CPU" a tester on the download image reported. It is
+    // gated behind the `selftest` feature (ON by default so dev/CI is unchanged); the
+    // download/VNC release image is built with `--no-default-features` so it boots
+    // straight to a clean, idle desktop.
+    if cfg!(feature = "selftest") {
         serial_println!("[glibc] === real glibc dynamic binaries (ld-linux + libc.so.6, scheduled) ===");
         let caps = ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO;
         let (o1, e1) = ring3::run_glibc(&mut allocator, ring3::gtiny_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gtiny"], &[b"PATH=/bin"], caps);
@@ -2180,15 +2201,26 @@ fn main() -> Status {
             ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n  <alias><family>Sans</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>Cantarell</family><prefer><family>DejaVu Sans</family></prefer></alias>\n</fontconfig>\n".to_vec());
             serial_println!("[glibc] === GTK3 toolkit app (ggtk) — LIVE, alongside desktop ===");
             ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed); // ~40 libs
-            // WINDOWED: retain the GTK window's pixels instead of blitting fullscreen, so
-            // the desktop composites it as a framed window.
-            xserver::set_windowed(true);
-            // PERSISTENT: spawn the GTK app as a scheduled task that keeps running its
-            // GMainLoop ALONGSIDE the desktop (does NOT block boot). It redraws a live
-            // counter; the desktop recomposites its window each time it repaints.
-            match ring3::spawn_glibc_persistent(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net) {
-                Some(t) => serial_println!("[glibc] ggtk live on task {t}"),
-                None => serial_println!("[glibc] ggtk spawn FAILED (no arena)"),
+            // PERF FIX (idle CPU): the persistent GTK demo runs a GMainLoop that redraws a
+            // live counter forever, so it stays permanently Ready and the desktop
+            // recomposites it every repaint. Under pure emulation (no KVM) that means the
+            // guest NEVER reaches an all-`hlt` idle, so the QEMU process pegs one host core
+            // at ~100% and starves the desktop's input handling (keyboard/mouse feel
+            // frozen). It is a demo, not a capability: GTK rendering is already proven by
+            // the bounded ggtk render test above. Default OFF so the stock/download image
+            // idles cleanly; flip to true (or build with the `live-demos` feature) to show
+            // a live GTK window on the desktop.
+            let live_gtk_demo = cfg!(feature = "live-demos");
+            if live_gtk_demo {
+                // WINDOWED: retain the GTK window's pixels instead of blitting fullscreen,
+                // so the desktop composites it as a framed window.
+                xserver::set_windowed(true);
+                match ring3::spawn_glibc_persistent(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net) {
+                    Some(t) => serial_println!("[glibc] ggtk live on task {t}"),
+                    None => serial_println!("[glibc] ggtk spawn FAILED (no arena)"),
+                }
+            } else {
+                serial_println!("[glibc] ggtk live-demo skipped (idle-friendly default; build --features live-demos to enable)");
             }
         }
     }
@@ -3946,6 +3978,11 @@ fn main() -> Status {
             }
             let _ = last_app_blit;
             app_blitted = true; // remember to repaint the desktop once it exits
+            // PERF FIX (idle CPU): a full-screen app owns the display, so we skip the
+            // compositor blit — but we must STILL park the CPU. Without this hlt the loop
+            // busy-polls input forever and pegs the (emulated) host core at ~100%, which
+            // also starves input handling. The next timer tick or input IRQ wakes us.
+            x86_64::instructions::hlt();
             continue;
         } else if app_blitted {
             // The app just exited (active() went false): force one full desktop
@@ -4441,7 +4478,14 @@ fn main() -> Status {
         }
 
         let t = interrupts::ticks();
-        let tick = t / 50 != last_t;
+        // PERF FIX (idle CPU): the periodic status-panel + system-window repaint is the
+        // desktop's only idle work, and each repaint is software-rendered text that costs
+        // ~370 ms under pure emulation (no KVM). At 0.5 s (t/50) that pegged the host core
+        // at ~96% even on a truly idle desktop. The clock is "HH:MM" (changes once a
+        // minute) and the live counters are informational, so a 2 s cadence (t/200) is
+        // ample — it drops idle host-CPU ~4x while input/cursor stay instant (handled by
+        // their own IRQ-woken paths, not this tick).
+        let tick = t / 200 != last_t;
 
         // Alt-Tab app switcher: tap Tab (Alt held) to cycle; release Alt to raise.
         if ps2::take_alt_tab() {
@@ -4513,7 +4557,7 @@ fn main() -> Status {
         }
         if need_full {
             // Full redraw (drag or z-order changed).
-            last_t = t / 50;
+            last_t = t / 200;
             compositor::render(&fb, &windows, &order, &rtc::clock_string(), &rtc::date_string(), &mk_stats(ctx.mem.free_bytes()));
             // 3F-7: draw the permission-portal modal over the desktop (if a
             // request is pending) and remember its button rects for the click loop.
@@ -4569,7 +4613,7 @@ fn main() -> Status {
             }
         } else if tick {
             // Update the live system window (incl. daemon heartbeat) + clock.
-            last_t = t / 50;
+            last_t = t / 200;
             // Diagnostics: log the number of keyboard IRQs (via IO-APIC) on change.
             let kc = interrupts::KBD_IRQ_COUNT.load(Ordering::Relaxed);
             if kc != last_kbd {
