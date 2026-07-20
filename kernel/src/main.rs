@@ -492,7 +492,7 @@ fn main() -> Status {
     // S3: reserve a PROCESS FRAME POOL (64 MiB) from the main allocator. fork()/
     // execve() allocate from it while running in a syscall (the main allocator is
     // then unreachable). Identity-mapped, so kernel-accessible.
-    const POOL_FRAMES: usize = 16384; // 64 MiB
+    const POOL_FRAMES: usize = 40960; // 160 MiB (fits a 96 MiB glibc fork arena)
     match allocator.allocate_contiguous(POOL_FRAMES) {
         Ok(base) => {
             procpool::install(base, POOL_FRAMES);
@@ -2015,8 +2015,14 @@ fn main() -> Status {
             // Serve the test page from the VFS so we can navigate to a file:// URL
             // (rules out data:-URL parsing; exercises the real file-load path).
             ring3::register_file("/tmp/euro.html", b"<html><body><h1>EuroOS</h1></body></html>".to_vec());
+            // /dev special files: chrome's fork+exec child setup opens /dev/null to
+            // redirect fds; libc/nss read /dev/urandom for entropy. Without these the
+            // child exec setup fails (exit 127).
+            ring3::register_file("/dev/null", alloc::vec::Vec::new());
+            ring3::register_file("/dev/zero", alloc::vec![0u8; 4096]);
+            ring3::register_file("/dev/urandom", (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect());
             let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
-                &[b"/pack/chrome-headless-shell", b"--no-sandbox", b"--single-process",
+                &[b"/pack/chrome-headless-shell", b"--no-sandbox",
                   b"--disable-gpu", b"--disable-dev-shm-usage", b"--user-data-dir=/tmp/hs",
                   b"--disable-crashpad-for-testing", b"--disable-breakpad",
                   b"--disable-in-process-stack-traces", b"--no-zygote", b"--lang=en-US",

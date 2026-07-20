@@ -4551,6 +4551,80 @@ pub static TRACE_SYS: core::sync::atomic::AtomicBool = core::sync::atomic::Atomi
 // ids + their CLONE_CHILD_CLEARTID addresses drive pthread_join.
 static GLIBC_PML4: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static GLIBC_THREADS: Mutex<alloc::vec::Vec<usize>> = Mutex::new(alloc::vec::Vec::new());
+/// M1 fork children of the glibc process: (pid, task, child_pml4, child_arena, frames).
+/// Tracked for wait4/teardown (M3). Chrome forks its renderer/gpu/utility processes.
+static GLIBC_FORK_CHILDREN: Mutex<alloc::vec::Vec<(u64, usize, u64, u64, usize)>> =
+    Mutex::new(alloc::vec::Vec::new());
+
+/// fork() for the demand-paged glibc process (M1): the child gets its OWN address
+/// space — the multi-block arena remapped onto its own physical frames (copied) plus
+/// a copy of every committed demand page (the parent's runtime state) — and a task
+/// that resumes at the fork return with rax=0. Chrome launches renderer/gpu/utility
+/// children this way (`clone(SIGCHLD, no CLONE_VM)` then `execve`). Returns the child
+/// pid to the parent (child returns 0), or -errno.
+fn do_glibc_fork() -> u64 {
+    use x86_64::registers::control::Cr3;
+    let parent_pml4 = Cr3::read().0.start_address().as_u64();
+    let arena = ARENA_BASE.load(Ordering::Relaxed);
+    let span = ARENA_SPAN_DYN.load(Ordering::Relaxed);
+    if arena == 0 || span == 0 {
+        return (-38i64) as u64; // no glibc process active
+    }
+    let nblocks = span >> 21;
+    let arena_frames = (nblocks * 512) as usize;
+    // Child arena: 2 MiB-ALIGNED contiguous frames from the fork pool (the arena is
+    // mapped with 2 MiB HUGE pages — an unaligned base faults MALFORMED_TABLE).
+    let child_arena = match crate::procpool::alloc_aligned(arena_frames, 512) {
+        Some(a) => a,
+        None => {
+            crate::serial_println!("[fork] arena alloc FAILED ({} MiB, pool has {} MiB)",
+                span >> 20, crate::procpool::free_frames() / 256);
+            return (-12i64) as u64; // -ENOMEM
+        }
+    };
+    // Copy the parent arena (ld.so/libc/heap/stack) into the child's frames.
+    unsafe { core::ptr::copy_nonoverlapping(arena as *const u8, child_arena as *mut u8, arena_frames * 4096); }
+    // Child page tables (PML4/PDPT/PD) from the fork pool.
+    let (pml4, pdpt, pd) = match (crate::procpool::alloc(), crate::procpool::alloc(), crate::procpool::alloc()) {
+        (Some(a), Some(b), Some(c)) => (a, b, c),
+        _ => {
+            crate::procpool::free(child_arena);
+            crate::serial_println!("[fork] page-table alloc FAILED");
+            return (-12i64) as u64;
+        }
+    };
+    crate::paging::fill_remap_tables_multiblock(pml4, pdpt, pd, arena, child_arena, nblocks);
+    // Copy every committed demand page (exe data/bss, heap-in-demand) into the child.
+    if !crate::paging::clone_demand_region(parent_pml4, pml4, DEMAND_PML4_IDX) {
+        crate::serial_println!("[fork] clone_demand_region OOM");
+        return (-12i64) as u64;
+    }
+    // Child task: resume at the fork-return RIP on the child's own address space,
+    // with rax=0 (spawn_thread forces it) and the parent's user RSP (same VA, own
+    // frames via the arena copy).
+    let (slot, kstack_top) = match alloc_thread_kstack() {
+        Some(s) => s,
+        None => return (-11i64) as u64, // -EAGAIN
+    };
+    let (urip, ursp, sregs) = unsafe { (USER_RIP, USER_RSP, SAVED_REGS) };
+    let fs = unsafe { Msr::new(0xC000_0100).read() };
+    let sel = crate::gdt::selectors();
+    let cs = (sel.user_code.0 | 3) as u64;
+    let ss = (sel.user_data.0 | 3) as u64;
+    let child = crate::sched::spawn_thread(urip, ursp, cs, ss, kstack_top, pml4, fs, sregs);
+    if child == usize::MAX {
+        free_thread_kstack_slot(slot);
+        return (-11i64) as u64;
+    }
+    register_thread_kstack(child, slot);
+    let pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
+    GLIBC_FORK_CHILDREN.lock().push((pid, child, pml4, child_arena, arena_frames));
+    crate::serial_println!(
+        "[fork] pid {pid} -> child task {child} (own pml4={pml4:#x} arena={child_arena:#x} {} MiB)",
+        span >> 20
+    );
+    pid
+}
 static GLIBC_CTIDS: Mutex<alloc::vec::Vec<(usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
 // A glibc program run as a first-class SCHEDULED process (so its threads are
 // normal scheduler citizens): the main task id, a done flag + exit code.
@@ -5957,9 +6031,9 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // glibc process's address space (pthread_create). Mirrors the bg path.
             let (flags, child_stack) = (a1, a2);
             if child_stack == 0 || flags & 0x0000_0100 == 0 {
-                // No CLONE_VM (or no stack) = a real fork/vfork (new address space).
-                crate::serial_println!("[spawndiag] clone(flags={flags:#x} stack={child_stack:#x}) = FORK request -> ENOSYS");
-                return (-38i64) as u64; // no fork via clone here
+                // No CLONE_VM (or no stack) = a real fork (new address space). M1.
+                crate::serial_println!("[fork] clone(flags={flags:#x}) = fork -> do_glibc_fork");
+                return do_glibc_fork();
             }
             let (slot, kstack_top) = match alloc_thread_kstack() {
                 Some(s) => s,
@@ -6457,8 +6531,8 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         32 => dup_fd(a1),                 // dup(oldfd)
         33 | 292 => dup2_fd(a1, a2),       // dup2(old,new) / dup3(old,new,flags)
         57 | 58 => {
-            crate::serial_println!("[spawndiag] {} syscall -> ENOSYS", if num == 57 { "fork" } else { "vfork" });
-            (-38i64) as u64
+            crate::serial_println!("[fork] {} syscall -> do_glibc_fork", if num == 57 { "fork" } else { "vfork" });
+            do_glibc_fork()
         }
         59 => {
             // execve(path, argv, envp): log the target so we can see chrome's child

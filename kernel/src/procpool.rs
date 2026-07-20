@@ -29,6 +29,13 @@ pub fn alloc_contiguous(count: usize) -> Option<u64> {
     POOL.lock().as_mut()?.allocate_contiguous(count).ok()
 }
 
+/// Allocate `count` contiguous frames aligned to `align_frames` (e.g. 512 = 2 MiB) —
+/// required for a fork child's arena, which is mapped with 2 MiB HUGE pages (the base
+/// must be 2 MiB-aligned or the CPU faults with a MALFORMED_TABLE reserved-bit error).
+pub fn alloc_aligned(count: usize, align_frames: usize) -> Option<u64> {
+    POOL.lock().as_mut()?.allocate_aligned(count, align_frames).ok()
+}
+
 /// Allocate one frame from the pool.
 pub fn alloc() -> Option<u64> {
     POOL.lock().as_mut()?.allocate().ok()
