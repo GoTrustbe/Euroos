@@ -40,6 +40,39 @@ SEPARATE address space (PML4) per process.
 - **Verify:** a SMALL glibc program that `fork()`s, both branches print, parent
   `wait4`s the child. (Need a glibc forktest.elf — current forktest is musl/bg.)
 
+#### M1 concrete recipe (derived + partly built this session)
+DONE (verified): `handle_demand_fault` maps into the CURRENT CR3 (commit 71b757f).
+DONE (compiles, not yet wired): `paging::fill_remap_tables_multiblock` (child PML4
+remapping the multi-block arena to child frames, kernel identity preserved) +
+`paging::clone_demand_region(parent, child, idx)` (copies every committed demand
+page into fresh pool frames at the same VA in the child).
+
+`do_glibc_fork()` (to write, wire into clone(56, no CLONE_VM)/fork(57)):
+1. Allocate the child arena PAGE-BY-PAGE from the DEMAND pool (procpool::demand_alloc)
+   — the process pool (procpool::alloc/alloc_contiguous) is too small (the demand
+   pool took ~all RAM), so a contiguous 96 MiB huge-page arena isn't available.
+   => write a 4 KiB-page variant of fill_remap_tables_multiblock (map each arena page
+   via map_demand_4k) instead of the 2 MiB-huge version, OR copy arena pages into the
+   demand region tables. Copy each parent arena page's bytes into the child frame.
+   (Optimization later: skip all-zero pages via a shared zero frame; chrome touches
+   maybe 10-20 MiB of the 96 MiB arena.)
+2. PML4: fresh frame; set kernel/high entries like fill_remap_tables_*, arena entries
+   to child frames.
+3. `clone_demand_region(parent_pml4, child_pml4, DEMAND_PML4_IDX)` for the exe/heap.
+4. Child task: sched::spawn_thread-style but with the CHILD PML4 (its own cr3), rax=0,
+   resume at USER_RIP (fork return). NOT a thread (own address space).
+5. FILES fd table: today OPEN_FDS is a single global — the child must get its OWN copy
+   (fds inherited then diverge). Snapshot OPEN_FDS into the child; needs per-process fd
+   state (or a fork-time clone keyed by task). This is the FILES part of the refactor.
+6. Process table entry (pid, child_pml4, exit status) for wait4/SIGCHLD (M3).
+7. Return child pid to parent; child returns 0.
+GOTCHA: DEMAND_NEXT/DEMAND_FILE_MAPS are global — OK for the fork window (child faults
+EXISTING mappings into its own CR3) but execve (M2) must not clobber the parent's; the
+shared-descriptor analysis (each mapping at a unique VA via the shared bump) may let
+them stay global if execve only ADDS the child's new VAs. Verify empirically.
+TEST: chrome WITHOUT --single-process → [spawndiag] should show fork SUCCEED (child
+task spawned) then the child's execve(--type=renderer) attempt.
+
 ### M2 — `execve()` for the demand-paged model
 - Replace the child image: tear down its arena+demand, re-run the
   `run_glibc_disk` loader path (load ld.so + disk exe, build argv/envp/auxv),

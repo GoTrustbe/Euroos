@@ -527,6 +527,94 @@ unsafe fn ensure_table(slot: *mut u64) -> Option<u64> {
     Some(frame)
 }
 
+/// fork() for the demand-paged glibc model — MULTI-BLOCK arena remap. Like
+/// [`fill_remap_tables`] but remaps `nblocks` consecutive 2 MiB arena blocks
+/// (`virt_arena`..) to the child's own physical blocks (`phys_arena`.., must be
+/// `nblocks`*2 MiB contiguous). Kernel identity + high region are preserved so the
+/// child can run ring-0 (syscalls/faults). Used by do_glibc_fork.
+pub fn fill_remap_tables_multiblock(pml4: u64, pdpt: u64, pd: u64,
+                                    virt_arena: u64, phys_arena: u64, nblocks: u64) {
+    // SAFETY: three fresh identity-mapped frames; filled completely.
+    unsafe {
+        core::ptr::write_bytes(pml4 as *mut u8, 0, 4096);
+        core::ptr::write_bytes(pdpt as *mut u8, 0, 4096);
+        core::ptr::write_bytes(pd as *mut u8, 0, 4096);
+        let pml4p = pml4 as *mut u64;
+        let pdptp = pdpt as *mut u64;
+        let pdp = pd as *mut u64;
+        pml4p.write_volatile(pdpt | PRESENT | WRITABLE | USER);
+        pml4p.add(1).write_volatile(high_pdpt_entry()); // share high region (MMIO)
+        pdptp.write_volatile(pd | PRESENT | WRITABLE | USER);
+        for i in 1..512u64 {
+            pdptp.add(i as usize).write_volatile((i * GIB) | PRESENT | WRITABLE | HUGE);
+        }
+        let virt_idx = (virt_arena / MIB2) as usize;
+        for i in 0..512usize {
+            // The child's arena blocks (USER, RWX-huge) point at its OWN frames; every
+            // other 2 MiB block stays identity supervisor (kernel/low RAM shared).
+            let entry = if i >= virt_idx && (i as u64) < virt_idx as u64 + nblocks {
+                (phys_arena + (i as u64 - virt_idx as u64) * MIB2) | PRESENT | WRITABLE | HUGE | USER
+            } else {
+                (i as u64 * MIB2) | PRESENT | WRITABLE | HUGE
+            };
+            pdp.add(i).write_volatile(entry);
+        }
+    }
+}
+
+/// fork(): copy every COMMITTED page of the demand region PML4[`idx`] from `parent`
+/// into fresh pool frames mapped at the SAME virtual address in `child`. Read-only
+/// exe/lib pages could be re-faulted from disk, but the child must observe the
+/// parent's RUNTIME writes (heap, initialized data, chrome globals), so we copy every
+/// committed page. Returns false on pool exhaustion (caller tears the child down).
+pub fn clone_demand_region(parent: u64, child: u64, idx: usize) -> bool {
+    // SAFETY: identity-mapped table chains for both address spaces; single-threaded
+    // (IF=0 syscall). Frame copies read the parent's phys (identity) and write fresh
+    // pool frames (identity), both reachable with the current CR3.
+    unsafe {
+        let e4 = (parent as *const u64).add(idx).read_volatile();
+        if e4 & PRESENT == 0 {
+            return true;
+        }
+        let pdpt = e4 & ADDR_MASK;
+        for i3 in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i3).read_volatile();
+            if e3 & PRESENT == 0 {
+                continue;
+            }
+            let pd = e3 & ADDR_MASK;
+            for i2 in 0..512usize {
+                let e2 = (pd as *const u64).add(i2).read_volatile();
+                if e2 & PRESENT == 0 {
+                    continue;
+                }
+                let pt = e2 & ADDR_MASK;
+                for i1 in 0..512usize {
+                    let e1 = (pt as *const u64).add(i1).read_volatile();
+                    if e1 & PRESENT == 0 {
+                        continue;
+                    }
+                    let src = e1 & ADDR_MASK;
+                    let va = ((idx as u64) << 39)
+                        | ((i3 as u64) << 30)
+                        | ((i2 as u64) << 21)
+                        | ((i1 as u64) << 12);
+                    let dst = match crate::procpool::demand_alloc() {
+                        Some(f) => f,
+                        None => return false,
+                    };
+                    core::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, 4096);
+                    if !map_demand_4k(child, va, dst) {
+                        crate::procpool::demand_free(dst);
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Free a demand-paged region: walk PML4[`idx`] and return every committed data page
 /// AND every page-table frame to the process pool, then clear the PML4 entry. Mirrors
 /// [`map_demand_4k`]. Called when a process that used demand paging exits.
