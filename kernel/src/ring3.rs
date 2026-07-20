@@ -6598,9 +6598,16 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             8
         }
         290 => {
-            // eventfd2(initval, flags): GLib's GMainContext wakeup fd (GWakeup). flags
-            // (EFD_CLOEXEC/EFD_NONBLOCK/EFD_SEMAPHORE) are accepted and ignored — our
-            // eventfd is always non-blocking and non-semaphore.
+            // eventfd2(initval, flags): GLib's GMainContext wakeup fd (GWakeup). Only
+            // EFD_SEMAPHORE(1)/EFD_NONBLOCK(0x800)/EFD_CLOEXEC(0x80000) are valid; any
+            // OTHER bit MUST be rejected with -EINVAL. Chrome's Mojo eventfd channel
+            // (channel_linux.cc KernelSupported) deliberately probes eventfd2 with an
+            // invalid flag and PCHECK-FATALs unless the kernel returns EINVAL — so a
+            // permissive "ignore flags" here crashes multi-process chrome.
+            const EFD_VALID: u64 = 0x1 | 0x800 | 0x8_0000;
+            if a2 & !EFD_VALID != 0 {
+                return (-22i64) as u64; // -EINVAL
+            }
             match crate::net::eventfd_create(a1) {
                 Some(fd) => fd,
                 None => (-24i64) as u64, // -EMFILE

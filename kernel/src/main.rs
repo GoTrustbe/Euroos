@@ -2039,6 +2039,11 @@ fn main() -> Status {
                   // of demand-paged procs, currently ENOSYS on the glibc path) or software-
                   // compositor bring-up. hshell running to exit 0 is the current landmark.
                   b"--disable-vulkan", b"--use-gl=disabled", b"--ozone-platform=headless",
+                  // MojoUseEventFd = chrome's eventfd shared-mem Mojo channel; its probe
+                  // PCHECKs that eventfd2(invalid flags) FAILS, but our eventfd2 accepts
+                  // it -> FATAL channel_linux.cc:926. Disable -> fall back to the socket
+                  // Mojo channel (works over our fork-inherited socketpair).
+                  b"--disable-features=MojoUseEventFd",
                   b"--enable-logging=stderr",
                   b"--dump-dom", b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
