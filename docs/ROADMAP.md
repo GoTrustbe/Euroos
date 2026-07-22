@@ -241,6 +241,15 @@ Full **CLDR**-based locale support for all 24 EU official languages: collation, 
 - **Why:** "European OS" with English-only locale support is a contradiction. Locale correctness is a compliance requirement for public-sector deployments.
 - **Verify:** date formatting, number formatting, and sort order are correct for NL, FR, DE, and PL locales under host tests.
 
+### P1a — Discoverable keyboard-layout switching `N 🧪` (added 2026-07-22, from hup.hu live-VNC feedback)
+Make choosing and switching the keyboard layout **simple and visible from the desktop**, not just a shell command. Today the engine is complete but under-exposed: `crates/eurokeymap` decodes US-QWERTY / BE-AZERTY / FR-AZERTY / DE-QWERTZ, `ps2::set_layout_tag` switches at runtime, and the shell has a `keymap <tag>` command, but there is **no GUI indicator or picker**, and **boot does not apply the persisted `/etc/keymap`** (it always starts on the US-QWERTY default). Sub-tasks:
+- **Panel indicator + picker:** a small layout badge in the desktop status panel / quick-settings that shows the active layout and opens a picker (the four current layouts + a path to add more EU/international ones).
+- **Persist + apply at boot:** read `/etc/keymap` on boot and call `ps2::set_layout_tag` so an installed choice survives reboot (the installer already writes it via `instexec.rs`; the boot path just never reads it back).
+- **More layouts:** extend `eurokeymap` beyond the initial four (UK, ES, IT, PL, Nordic, …).
+- **Live-VNC robustness:** a US-QWERTY tester on the try-in-browser VNC reported a single key ('m') not registering. The EuroOS decode chain is correct end to end (verified: VNC keysym 'm' → HID `0x10` → PS/2 `0x32` → 'm' under the US default), so this is a noVNC "QEMU Extended Key Event" client quirk, not an OS bug. Consider exposing a layout selector on the `/live/` page and/or pinning the noVNC keyboard mode for predictable behaviour.
+- **Why:** international users must not be stuck guessing which physical key produces which character, with no obvious way to fix it. Discoverable layout switching is table stakes for a desktop OS.
+- **Verify:** the panel shows the active layout; selecting a layout takes effect immediately and persists across a reboot; a fresh boot honours an installed `/etc/keymap`.
+
 ### P2 — Accessibility layer `N 🧪`
 An **AT-SPI2**-equivalent accessibility protocol for EuroDisplay: structured widget trees, focus events, text content exposure, and a screen reader hook. A minimal `euroread` screen reader as the reference consumer.
 - **Why:** EU public procurement (EN 301 549) requires accessibility. An OS without it cannot be used in government or education contexts.
