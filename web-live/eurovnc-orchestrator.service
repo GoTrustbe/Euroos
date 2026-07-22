@@ -10,6 +10,10 @@ Group=eurovnc
 Environment=EUROVNC_HOST=127.0.0.1
 Environment=EUROVNC_PORT=6070
 Environment=EUROVNC_MAX_SESSIONS=3
+# RAM per session. The preview kernel image grew (embedded fonts/icons/userland),
+# so 256M no longer loads the loader+kernel and OVMF drops to the UEFI shell.
+# 512M boots reliably and matches the download launcher; 3 x 512M fits the host.
+Environment=EUROVNC_VM_RAM=512M
 Environment=EUROVNC_TTL=1800
 Environment=EUROVNC_IP_COOLDOWN=120
 Environment=EUROVNC_DISPLAY_MIN=1

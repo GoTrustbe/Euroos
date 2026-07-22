@@ -49,7 +49,7 @@ TOKEN_DIR        = os.environ.get("EUROVNC_TOKEN_DIR", "/run/eurovnc/tokens")
 SESSION_DIR      = os.environ.get("EUROVNC_SESSION_DIR", "/run/eurovnc/sessions")
 SIGNUP_LOG       = os.environ.get("EUROVNC_SIGNUP_LOG", "/var/lib/eurovnc/signups.log")
 QEMU             = os.environ.get("EUROVNC_QEMU", "qemu-system-x86_64")
-VM_RAM           = os.environ.get("EUROVNC_VM_RAM", "256M")
+VM_RAM           = os.environ.get("EUROVNC_VM_RAM", "512M")
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$")
 
