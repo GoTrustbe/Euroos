@@ -217,3 +217,21 @@ this session), boot green to [scon-ready].
 NEXT LEVERS (ranked): (1) get chromium channel_linux.cc source for line 926 and fix
 the exact syscall/feature it needs; (2) dump the faulting instruction at the GP to
 fix the worker-thread #GP; (3) try harder to force the plain socket Mojo channel.
+
+## Wall chain cleared 2026-08-10 (headless-shell, single-process DOM path)
+Empirically walked chrome-headless-shell (the right --dump-dom tool) forward,
+clearing walls in sequence:
+1. thread-pool "deadlock" (~30 threads) -> FPU/SSE context-switch save (ab37d17).
+   Now spawns 44+ threads. Root cause was XMM state corruption, not a lost wake.
+2. Mojo FATAL channel_linux.cc:926 -> memfd_create flag validation (2de2b1a). The
+   Mojo channel probes memfd_create with invalid flags and PCHECKs it FAILS; our
+   permissive impl made it succeed. Confirmed against upstream channel_linux.cc
+   (~:901 KernelSupportsUpgradeRequirements). FATAL now gone (count 0).
+3. Next wall: chrome IMMEDIATE_CRASH (int3;ud2, decoded via the new GP insn dump
+   55fae87). A DELIBERATE abort on a failed CHECK in the main process (task 31),
+   surfacing as ring-3 #GP code=0x1a (int3 -> DPL-0 #BP gate). Last chrome logs
+   before it: disk-cache "Unable to create cache" (/tmp/hs/Default/Code Cache) +
+   ENOSYS 444(landlock)/253(inotify)/303, dbus/netlink/udev failures.
+   To pin the exact CHECK: need chrome DEBUG SYMBOLS (shipped binary is stripped;
+   addr2line = ??). Or bisect by fixing the remaining env gaps (disk cache, the
+   ENOSYS probes) until the crash moves. This is the current frontier.
