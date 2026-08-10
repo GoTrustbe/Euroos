@@ -317,7 +317,32 @@ extern "x86-interrupt" fn gp_handler(frame: InterruptStackFrame, code: u64) {
     // system (same policy as the page-fault handler).
     if cs & 3 == 3 {
         let cur = crate::sched::current();
-        serial_println!("[idt] ring-3 GP FAULT code={code:#x} @ {ip:#x} (task {cur}) -> process terminated");
+        // Dump the faulting instruction bytes when RIP is in a plausible, mapped user
+        // code range (the identity arena low, or the demand region), read through a
+        // brief SMAP AC window. This turns an opaque ring-3 #GP into a decodable
+        // instruction — e.g. it identified chrome's IMMEDIATE_CRASH (`cc 0f 0b` =
+        // int3;ud2), and a ring-3 int3 hitting the DPL-0 #BP gate is exactly a #GP with
+        // error code (3<<3)|2 = 0x1a. Guarded so a wild/unmapped RIP can't nest-fault
+        // the handler into a double fault.
+        let in_code = ip >= 0x1000
+            && (ip < 0x1_0000_0000 || (0x100_0000_0000..0x1_0100_0000_0000).contains(&ip));
+        if in_code {
+            let mut b = [0u8; 16];
+            unsafe {
+                core::arch::asm!("stac", options(nomem, nostack, preserves_flags));
+                for (i, bi) in b.iter_mut().enumerate() {
+                    *bi = ((ip + i as u64) as *const u8).read_volatile();
+                }
+                core::arch::asm!("clac", options(nomem, nostack, preserves_flags));
+            }
+            let imm_crash = b[0] == 0xcc && b[1] == 0x0f && b[2] == 0x0b; // int3;ud2
+            serial_println!(
+                "[idt] ring-3 GP FAULT code={code:#x} @ {ip:#x} (task {cur}) insn={b:02x?}{} -> process terminated",
+                if imm_crash { " = IMMEDIATE_CRASH (deliberate CHECK abort)" } else { "" }
+            );
+        } else {
+            serial_println!("[idt] ring-3 GP FAULT code={code:#x} @ {ip:#x} (task {cur}) -> process terminated");
+        }
         if crate::ring3::fg_active() {
             crate::ring3::fg_force_exit(ip);
         }
