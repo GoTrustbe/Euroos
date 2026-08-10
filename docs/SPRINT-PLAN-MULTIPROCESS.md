@@ -168,3 +168,20 @@ qemu-system-x86_64 -machine q35 -m 4096M -cpu qemu64,+smep,+smap -bios OVMF.fd \
 ```
 NB harness: `pkill` is blocked (workload classifier); launch qemu via the Bash
 background feature and stop via TaskStop; foreground qemu is killed after ~30 s.
+
+## AVX enablement result 2026-08-10 (commit c5c762f)
+Enabled AVX (CR4.OSXSAVE + XCR0[x87|SSE|AVX]) + switched the context save to XSAVE
+when the CPU supports it (verified: qemu64 keeps FXSAVE/AVX-off; -cpu Skylake-Client
+gets XSAVE/AVX-on; both LINUX COMPAT 20/20, 0 faults). Booted chrome with
+`-cpu Skylake-Client` (AVX2) + pack. **Result: the SwiftShader GL wall did NOT
+move** — still `ANGLE Display::initialize error 0: Internal Vulkan error (-3) ...
+vk_renderer.cpp:2487`, identical to the qemu64 run. So AVX is NECESSARY
+infrastructure but NOT SUFFICIENT: SwiftShader's Vulkan device init
+(VK_ERROR_INITIALIZATION_FAILED) fails for a deeper, implementation-specific reason,
+not an AVX #UD. Note the pack ships NO SwiftShader/GL/Vulkan .so (only libglib), so
+ANGLE's Vulkan backend is whatever is built into the chrome binary; vk_swiftshader
+may need files/features we don't provide. Also: chrome-headless-shell with
+`--use-gl=disabled` ALSO emits no DOM, so GL is not the sole blocker for --dump-dom
+— navigation not starting in the single-process/no-service env is a separate wall.
+NEXT (uncertain, iteration-heavy): investigate what vk_renderer.cpp:2487 needs, or
+pursue the DOM via a no-GL software path / the execve multi-process route.
