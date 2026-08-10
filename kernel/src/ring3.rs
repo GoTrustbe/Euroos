@@ -290,6 +290,39 @@ static FD_NONBLOCK: [core::sync::atomic::AtomicBool; MAX_FD] =
 static FD_ACCMODE: [core::sync::atomic::AtomicU8; MAX_FD] =
     [const { core::sync::atomic::AtomicU8::new(2) }; MAX_FD];
 
+/// Monotonic counter behind getrandom, so every call yields DIFFERENT bytes. The
+/// previous fill was deterministic on byte position only, so every getrandom(n)
+/// returned the SAME n bytes — programs that mint "random" IDs/tokens/keys (chrome's
+/// UnguessableToken, map keys, HashMap seeds) then got COLLISIONS, and a later
+/// lookup CHECK for the second, supposedly-distinct value crashed. splitmix64 over a
+/// fetch_add counter (+ a boot-tick seed) is unique-per-call and race-free. Not a
+/// CSPRNG (euroentropy is), but sufficient for uniqueness/distribution here.
+static RNG_CTR: AtomicU64 = AtomicU64::new(0);
+fn next_rand_u64() -> u64 {
+    let seed = crate::interrupts::ticks().wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut z = RNG_CTR
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(seed)
+        .wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+/// Fill `len` user bytes at `buf` with unique-per-call pseudo-randomness. Caller must
+/// have validated `buf`. Returns false on a copy fault.
+fn fill_random(buf: u64, len: u64) -> bool {
+    let mut i = 0u64;
+    while i < len {
+        let r = next_rand_u64().to_le_bytes();
+        let n = core::cmp::min(8, len - i) as usize;
+        if !copy_to_user(buf + i, &r[..n]) {
+            return false;
+        }
+        i += 8;
+    }
+    true
+}
+
 /// Copy a fd's access mode + O_NONBLOCK to another fd number (dup semantics), so a
 /// duplicated fd reports the same flags via fcntl(F_GETFL) as its source.
 fn copy_fd_flags(from: usize, to: usize) {
@@ -2227,13 +2260,13 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
         39 => p.pid,  // getpid
         218 => p.pid, // set_tid_address -> tid
         318 => {
-            // getrandom: deterministic fill (no crypto source needed here).
+            // getrandom: unique-per-call pseudo-randomness (see fill_random).
             if !in_user_arena(a1, a2 as usize) {
                 return EFAULT;
             }
-            let buf: alloc::vec::Vec<u8> =
-                (0..a2).map(|i| (0x9Eu64.wrapping_mul(i + 1)) as u8).collect();
-            let _ = copy_to_user(a1, &buf);
+            if !fill_random(a1, a2) {
+                return EFAULT;
+            }
             a2
         }
         56 => {
@@ -7356,14 +7389,14 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             }
         }
         318 => {
-            // getrandom(buf, len, flags): pseudo-randomness (deterministic but
-            // filled) — enough for musl init; no crypto source.
+            // getrandom(buf, len, flags): unique-per-call pseudo-randomness (see
+            // fill_random) — programs rely on distinct values across calls.
             if !in_user_arena(a1, a2 as usize) {
                 return EFAULT;
             }
-            let buf: alloc::vec::Vec<u8> =
-                (0..a2).map(|i| (0x9Eu64.wrapping_mul(i + 1)) as u8).collect();
-            let _ = copy_to_user(a1, &buf);
+            if !fill_random(a1, a2) {
+                return EFAULT;
+            }
             a2
         }
         35 => 0,  // nanosleep
