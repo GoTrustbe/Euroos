@@ -235,3 +235,28 @@ clearing walls in sequence:
    To pin the exact CHECK: need chrome DEBUG SYMBOLS (shipped binary is stripped;
    addr2line = ??). Or bisect by fixing the remaining env gaps (disk cache, the
    ENOSYS probes) until the crash moves. This is the current frontier.
+
+## fcntl access-mode wall cleared 2026-08-10 (crash keeps advancing)
+Traced the IMMEDIATE_CRASH precisely with new diagnostics (per-task last-syscall +
+ring-3 #GP instruction decode + fd_kind): the abort's last syscall was
+fcntl(F_GETFL) on a file fd, and the crash site disassembles to
+`and $3,eax; cmp ecx,eax; jne crash` — chrome CHECKing (F_GETFL & O_ACCMODE) ==
+how it opened the fd. Our F_GETFL hardcoded O_RDWR. Root cause: dup() aliased the
+fd but dropped the access mode, so a dup'd O_RDONLY resource file read back O_RDWR.
+Fix chain (commits 241fbb5, then dup fix): track real per-fd access mode at
+open/openat/creat + per pipe end + propagated through dup/dup2; F_GETFL reports it;
+general O_NONBLOCK tracking for all fd kinds; fcntl -EBADF for unopened fds.
+
+RESULT: the fcntl crash at 0x2a1d1d8 is GONE. Chrome now advances to a NEW crash at
+0x335d4a6 (last-syscall getrandom(318)=16 ok), in an XML/cxxbridge region — a
+downstream CHECK, not a simple syscall-result mismatch, so harder to bisect. Thread
+high-water 44->45.
+
+### Walls cleared this session (chrome-headless-shell, the single-process DOM tool)
+1. thread-pool deadlock (~30 threads)      -> FPU/SSE context save (ab37d17)
+2. Mojo FATAL channel_linux.cc:926          -> memfd_create flag validation (2de2b1a)
+3. fcntl(F_GETFL) access-mode IMMEDIATE_CRASH -> dup preserves fd access mode
+Each fix moved the crash strictly forward. Current frontier: the getrandom-area
+IMMEDIATE_CRASH at 0x335d4a6 (needs the same disasm-the-branch technique, but the
+enclosing logic is call-heavy XML/cxxbridge code, not an obvious ABI gap).
+Permanent diagnostics added: last_syscall(), fd_kind(), ring-3 #GP insn decode.
