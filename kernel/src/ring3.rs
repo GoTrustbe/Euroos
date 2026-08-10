@@ -303,15 +303,8 @@ fn copy_fd_flags(from: usize, to: usize) {
 fn set_fd_accmode(fd: u64, flags: u64) {
     if fd != u64::MAX && (fd as usize) < MAX_FD {
         FD_ACCMODE[fd as usize].store((flags & 3) as u8, Ordering::Relaxed);
-        // TEMP diag: trace opens so a fd whose fcntl(F_GETFL) mode chrome CHECK-crashes
-        // on can be matched to its open (path + flags). Rate-limited.
-        let n = OPEN_DIAG.fetch_add(1, Ordering::Relaxed);
-        if n < 80 {
-            crate::serial_println!("[opendiag] fd {fd} accmode={} flags={flags:#x}", flags & 3);
-        }
     }
 }
-static OPEN_DIAG: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Tasks blocked in a read on an empty pipe: (pipe-id, task). Woken by a write.
 static PIPE_WAITERS: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
 
