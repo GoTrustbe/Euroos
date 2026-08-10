@@ -490,16 +490,35 @@ fn main() -> Status {
         );
     }
 
-    // S3: reserve a PROCESS FRAME POOL (64 MiB) from the main allocator. fork()/
-    // execve() allocate from it while running in a syscall (the main allocator is
-    // then unreachable). Identity-mapped, so kernel-accessible.
-    const POOL_FRAMES: usize = 40960; // 160 MiB (fits a 96 MiB glibc fork arena)
-    match allocator.allocate_contiguous(POOL_FRAMES) {
-        Ok(base) => {
-            procpool::install(base, POOL_FRAMES);
-            serial_println!("[mm] process frame pool: 64 MiB @ {base:#x} (fork/exec)");
+    // S3: reserve a PROCESS FRAME POOL from the main allocator. fork()/execve()
+    // allocate from it while running in a syscall (the main allocator is then
+    // unreachable). Identity-mapped, so kernel-accessible.
+    //
+    // Sizing: a glibc fork() eagerly copies the parent arena into a fresh contiguous
+    // region here. Chrome's arena is 256 MiB, and chrome forks its GPU/renderer/
+    // utility children, so 160 MiB could not hold even one — the [fork] arena-alloc
+    // failed on the chrome multi-process path. Reserve enough for a couple of
+    // concurrent 256 MiB child arenas WHEN there is RAM for it, falling back so the
+    // lean 512 MiB public image still boots. We only reserve up to ~1/5 of usable RAM.
+    {
+        let usable_frames = (allocator.usable_bytes() / 4096) as usize;
+        let cap = usable_frames / 5; // never take more than a fifth of RAM
+        // Candidates: 640 MiB (2+ chrome arenas) → 160 MiB → 64 MiB, first that fits.
+        let mut installed = false;
+        for &want in &[163_840usize, 40_960, 16_384] {
+            if want > cap {
+                continue;
+            }
+            if let Ok(base) = allocator.allocate_contiguous(want) {
+                procpool::install(base, want);
+                serial_println!("[mm] process frame pool: {} MiB @ {base:#x} (fork/exec)", want / 256);
+                installed = true;
+                break;
+            }
         }
-        Err(_) => serial_println!("[mm] WARNING: no process frame pool (fork disabled)"),
+        if !installed {
+            serial_println!("[mm] WARNING: no process frame pool (fork disabled)");
+        }
     }
 
     // virtio-blk: initialize the real disk (PIO/DMA works on our identity map).
@@ -2001,6 +2020,16 @@ fn main() -> Status {
             ring3::register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", ring3::fc_dejavu_cache());
             ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n</fontconfig>\n".to_vec());
 
+            // /dev special files: chrome's fork+exec child redirects its stdio to
+            // /dev/null before execve, and libc/nss read /dev/urandom for entropy.
+            // Without these the forked child's fd setup fails ("Failed to open
+            // /dev/null") and it _exit(127)s before ever reaching execve — which, with
+            // the demand-paged multi-process (fork) path now working, is exactly where
+            // the chrome renderer child was dying. Register them for THIS run too (they
+            // were previously only registered for the chrome-headless-shell block).
+            ring3::register_file("/dev/null", alloc::vec::Vec::new());
+            ring3::register_file("/dev/zero", alloc::vec![0u8; 4096]);
+            ring3::register_file("/dev/urandom", (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect());
             // Push past --version toward real rendering: headless, single-process, no
             // GPU, no sandbox — dump the DOM of a trivial inline page.
             let (o2, e2) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome", ring3::ldlinux_bytes(),
