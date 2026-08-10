@@ -7034,6 +7034,38 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             }
             0
         }
+        229 => {
+            // clock_getres(clk, *timespec): the resolution of the given clock. Report
+            // 1 ns for the high-resolution clocks so glibc/chrome size their timers with
+            // full precision (the actual tick is coarser, but the resolution query only
+            // bounds rounding). chrome calls this during time-subsystem init -> was ENOSYS.
+            if a2 != 0 && (!write_user(a2, 0u64) || !write_user(a2 + 8, 1u64)) {
+                return EFAULT;
+            }
+            0
+        }
+        118 => {
+            // getresuid(*ruid, *euid, *suid): real/effective/saved uid — all the session
+            // uid here (no set-uid transitions). chrome reads these during sandbox/privilege
+            // checks. Args are 32-bit uid_t pointers.
+            let uid = crate::auth::session_uid() as u32;
+            for p in [a1, a2, a3] {
+                if p != 0 && !write_user(p, uid) {
+                    return EFAULT;
+                }
+            }
+            0
+        }
+        120 => {
+            // getresgid(*rgid, *egid, *sgid): real/effective/saved gid — all the session gid.
+            let gid = crate::auth::session_gid() as u32;
+            for p in [a1, a2, a3] {
+                if p != 0 && !write_user(p, gid) {
+                    return EFAULT;
+                }
+            }
+            0
+        }
         96 => {
             // gettimeofday(*timeval, tz): {tv_sec, tv_usec} from the real RTC wall clock.
             if a1 != 0 {
