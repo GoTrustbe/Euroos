@@ -185,3 +185,35 @@ may need files/features we don't provide. Also: chrome-headless-shell with
 — navigation not starting in the single-process/no-service env is a separate wall.
 NEXT (uncertain, iteration-heavy): investigate what vk_renderer.cpp:2487 needs, or
 pursue the DOM via a no-GL software path / the execve multi-process route.
+
+## Headless-shell advance 2026-08-10 (FPU fix cleared the thread-pool wall)
+Booted `/tmp/hs-pack.img` (has /pack/chrome-headless-shell — the SINGLE-process,
+GL-disabled, --dump-dom DOM tool; the /tmp/chrome-pack.img only has full multiproc
+/pack/chrome). This is the right target: no GPU wall (--use-gl=disabled), no execve
+(single-process), so the FPU/SSE fix was the variable.
+
+**RESULT: chrome-headless-shell now spawns 40+ threads (tasks 33..44+), PAST the
+previously-documented "~30th thread thread-pool deadlock" wall.** The FPU/SSE
+context-switch fix (ab37d17) cleared it — the "deadlock" was thread XMM/FP state
+corruption, not a lost wake. Verified: syscalls 229/118/120 now handled (added
+this session), boot green to [scon-ready].
+
+**New wall (the DOM frontier now):**
+- `[FATAL:mojo/core/channel_linux.cc:926] Check failed: . : No such file or
+  directory (2)` — the Mojo IPC channel. Note: --disable-features=MojoUseEventFd
+  IS set AND eventfd2 already rejects invalid flags (ring3.rs:6600), yet it still
+  fires, so the old eventfd2-probe theory is incomplete. The ENOENT errno is likely
+  stale (a stripped CHECK in the release build). Needs the exact chromium source for
+  channel_linux.cc:926 (Chrome ~148) to fix precisely — not determinable from the
+  stripped binary alone.
+- 2x ring-3 GP FAULT code=0x1a in worker threads (@ demand-region code addrs). Could
+  be misaligned MOVAPS/MOVDQA (#GP on unaligned aligned-SSE) or a bad address; worth
+  a faulting-instruction dump next.
+- Disk-cache "wrong file structure on disk / Unable to create cache" at
+  /tmp/hs/Default/Code Cache — our VFS doesn't fully support chrome's cache dir ops
+  (likely non-fatal; chrome runs cacheless).
+- Chrome never navigates to file:///tmp/euro.html -> times out -> no DOM.
+
+NEXT LEVERS (ranked): (1) get chromium channel_linux.cc source for line 926 and fix
+the exact syscall/feature it needs; (2) dump the faulting instruction at the GP to
+fix the worker-thread #GP; (3) try harder to force the plain socket Mojo channel.
