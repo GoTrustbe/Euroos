@@ -336,9 +336,13 @@ extern "x86-interrupt" fn gp_handler(frame: InterruptStackFrame, code: u64) {
                 core::arch::asm!("clac", options(nomem, nostack, preserves_flags));
             }
             let imm_crash = b[0] == 0xcc && b[1] == 0x0f && b[2] == 0x0b; // int3;ud2
+            let (sn, sa1, sr) = crate::ring3::last_syscall(cur);
             serial_println!(
-                "[idt] ring-3 GP FAULT code={code:#x} @ {ip:#x} (task {cur}) insn={b:02x?}{} -> process terminated",
-                if imm_crash { " = IMMEDIATE_CRASH (deliberate CHECK abort)" } else { "" }
+                "[idt] ring-3 GP FAULT code={code:#x} @ {ip:#x} (task {cur}) insn={b:02x?}{} | last-syscall={sn}(a1={sa1:#x}=fd:{})->{:#x} ({}) -> process terminated",
+                if imm_crash { " = IMMEDIATE_CRASH (deliberate CHECK abort)" } else { "" },
+                crate::ring3::fd_kind(sa1),
+                sr,
+                if (sr as i64) < 0 { "ERROR" } else { "ok" }
             );
         } else {
             serial_println!("[idt] ring-3 GP FAULT code={code:#x} @ {ip:#x} (task {cur}) -> process terminated");

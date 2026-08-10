@@ -276,6 +276,26 @@ static PIPE_FDS: Mutex<[Option<(usize, bool)>; MAX_FD]> = Mutex::new([None; MAX_
 /// pipe parks the caller (chrome's shutdown-detector thread reads a signal pipe that
 /// way and FATALs on a spurious EAGAIN). Parallel to PIPES by index.
 static PIPE_NONBLOCK: Mutex<alloc::vec::Vec<bool>> = Mutex::new(alloc::vec::Vec::new());
+/// Per-fd-NUMBER O_NONBLOCK, for ANY fd kind (socket, eventfd, memfd, file), set via
+/// fcntl(F_SETFL) and reported via fcntl(F_GETFL). Previously only pipe fds tracked
+/// it, so chrome setting a Mojo SOCKET non-blocking then verifying with F_GETFL saw
+/// its flag missing -> invariant violation -> IMMEDIATE_CRASH. Cleared on close.
+static FD_NONBLOCK: [core::sync::atomic::AtomicBool; MAX_FD] =
+    [const { core::sync::atomic::AtomicBool::new(false) }; MAX_FD];
+/// Per-fd access mode (O_RDONLY=0 / O_WRONLY=1 / O_RDWR=2), captured from the open
+/// flags, reported via fcntl(F_GETFL). Default 2 (O_RDWR) so sockets/pipes/eventfd/
+/// memfd (not opened via open()) read back read-write, unchanged. Chrome verifies
+/// (F_GETFL & O_ACCMODE) matches how it opened the fd and IMMEDIATE_CRASHes on a
+/// mismatch — so a read-only file must report O_RDONLY, not a hardcoded O_RDWR.
+static FD_ACCMODE: [core::sync::atomic::AtomicU8; MAX_FD] =
+    [const { core::sync::atomic::AtomicU8::new(2) }; MAX_FD];
+
+/// Record the access mode (low 2 bits of the open `flags`) for a freshly-opened fd.
+fn set_fd_accmode(fd: u64, flags: u64) {
+    if fd != u64::MAX && (fd as usize) < MAX_FD {
+        FD_ACCMODE[fd as usize].store((flags & 3) as u8, Ordering::Relaxed);
+    }
+}
 /// Tasks blocked in a read on an empty pipe: (pipe-id, task). Woken by a write.
 static PIPE_WAITERS: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
 
@@ -319,6 +339,11 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     }
     pf[got[0]] = Some((id, false)); // read end
     pf[got[1]] = Some((id, true)); // write end
+    // Access mode per pipe end, so fcntl(F_GETFL) reports the truth: chrome creates a
+    // pipe and CHECKs each end's access mode (read end O_RDONLY, write end O_WRONLY);
+    // a hardcoded O_RDWR for both was the mismatch that IMMEDIATE_CRASHed it.
+    FD_ACCMODE[got[0]].store(0, Ordering::Relaxed); // O_RDONLY (read end)
+    FD_ACCMODE[got[1]].store(1, Ordering::Relaxed); // O_WRONLY (write end)
     let _ = write_user(user_fds, fds[0]);
     let _ = write_user(user_fds + 4, fds[1]);
     0
@@ -327,6 +352,48 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
 /// True if `fd` is either end of a pipe.
 fn is_pipe_fd(fd: usize) -> bool {
     fd < MAX_FD && PIPE_FDS.lock()[fd].is_some()
+}
+
+/// Is `fd` a currently-open descriptor of ANY kind (VFS file, pipe, epoll, eventfd,
+/// AF_UNIX/inet socket)? A real kernel returns -EBADF for operations on a closed or
+/// never-opened fd; several EuroOS syscalls used to "succeed" on any number, which
+/// breaks programs (chrome) that probe fd validity with fcntl(F_GETFL) and CHECK the
+/// result. stdin/stdout/stderr (0/1/2) are always considered open.
+fn fd_is_open(fd: u64) -> bool {
+    if fd < 3 {
+        return true;
+    }
+    let u = fd as usize;
+    (u < MAX_FD && OPEN_FDS.lock()[u].is_some())
+        || is_pipe_fd(u)
+        || is_epoll_fd(fd)
+        || crate::net::is_eventfd(fd)
+        || crate::net::is_unix_fd(fd)
+        || crate::net::is_sock_fd(fd)
+}
+
+/// Diagnostic: the kind of `fd` (for the #GP handler to explain a fd-related crash).
+pub fn fd_kind(fd: u64) -> &'static str {
+    let u = fd as usize;
+    if is_pipe_fd(u) {
+        "pipe"
+    } else if is_epoll_fd(fd) {
+        "epoll"
+    } else if crate::net::is_eventfd(fd) {
+        "eventfd"
+    } else if crate::net::is_unix_fd(fd) {
+        "unix-sock"
+    } else if crate::net::is_sock_fd(fd) {
+        "inet-sock"
+    } else if u < MAX_FD && OPEN_DIRS.lock()[u].is_some() {
+        "dir"
+    } else if u < MAX_FD && OPEN_FDS.lock()[u].is_some() {
+        "file"
+    } else if fd < 3 {
+        "std"
+    } else {
+        "none"
+    }
 }
 
 /// Set/get a pipe fd's O_NONBLOCK (via fcntl F_SETFL/F_GETFL). chrome creates pipes
@@ -1541,6 +1608,26 @@ static FUTEX_QUEUE: Mutex<alloc::vec::Vec<(u64, usize)>> = Mutex::new(alloc::vec
 /// Monotonic count of Linux syscalls dispatched — a progress heartbeat the launcher's
 /// stall detector watches to catch a many-thread deadlock (no syscall = frozen).
 static SYSCALL_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Per-task last Linux syscall (num, arg1, return) — for the #GP handler to report
+/// what a CHECK-crashing program (chrome IMMEDIATE_CRASH) last did. 64 slots is
+/// enough to index by task id (chrome uses tasks < 64 in these boots).
+type SysRec = (core::sync::atomic::AtomicU64, core::sync::atomic::AtomicU64, core::sync::atomic::AtomicU64);
+static LAST_SYS: [SysRec; 64] = [const { (
+    core::sync::atomic::AtomicU64::new(0),
+    core::sync::atomic::AtomicU64::new(0),
+    core::sync::atomic::AtomicU64::new(0),
+) }; 64];
+/// (num, arg1, return) of the last Linux syscall made by task `t`.
+pub fn last_syscall(t: usize) -> (u64, u64, u64) {
+    if t >= LAST_SYS.len() {
+        return (0, 0, 0);
+    }
+    (
+        LAST_SYS[t].0.load(Ordering::Relaxed),
+        LAST_SYS[t].1.load(Ordering::Relaxed),
+        LAST_SYS[t].2.load(Ordering::Relaxed),
+    )
+}
 static MEMFD_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Count of futex_wait calls — a busy-spin (timer-driven block that never truly
 /// deschedules under many-thread contention) shows up as a runaway count here.
@@ -2398,6 +2485,8 @@ pub fn spawn_bg_app(
 /// Close an fd.
 fn vfs_close(fd: usize) -> u64 {
     if fd < MAX_FD {
+        FD_NONBLOCK[fd].store(false, Ordering::Relaxed); // reset status flags for reuse
+        FD_ACCMODE[fd].store(2, Ordering::Relaxed);      // back to default O_RDWR for reuse
         OPEN_FDS.lock()[fd] = None;
         OPEN_DIRS.lock()[fd] = None;
     }
@@ -2489,6 +2578,10 @@ fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
         return (-9i64) as u64; // -EBADF: can't target a class-encoded high fd
     }
     if (oldfd as usize) < MAX_FD {
+        // dup2 duplicates the fd: the new fd shares the source's access mode + nonblock,
+        // so a later fcntl(F_GETFL) on it reports the truth (chrome CHECKs this).
+        FD_ACCMODE[nfd].store(FD_ACCMODE[oldfd as usize].load(Ordering::Relaxed), Ordering::Relaxed);
+        FD_NONBLOCK[nfd].store(FD_NONBLOCK[oldfd as usize].load(Ordering::Relaxed), Ordering::Relaxed);
         // Read the source slot values out FIRST (drop the guard) before writing newfd —
         // re-locking the same table inside an `if let Some(_) = TABLE.lock()[..]` block
         // would self-deadlock the spinlock.
@@ -5741,7 +5834,15 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
     // Linux-ABI compatibility: programs compiled for x86_64-linux
     // use Linux syscall numbers + semantics. Translate to our handlers.
     if LINUX_ABI.load(Ordering::Relaxed) {
-        return linux_dispatch(num, a1, a2, a3, a4, a5);
+        let r = linux_dispatch(num, a1, a2, a3, a4, a5);
+        // Record the last Linux syscall + result per task, so the #GP handler can name
+        // the operation whose (unexpected) error a program CHECK-crashed on. Chrome's
+        // IMMEDIATE_CRASH aborts right after a failing syscall; this shows which one.
+        let t = crate::sched::current().min(LAST_SYS.len() - 1);
+        LAST_SYS[t].0.store(num, Ordering::Relaxed);
+        LAST_SYS[t].1.store(a1, Ordering::Relaxed);
+        LAST_SYS[t].2.store(r, Ordering::Relaxed);
+        return r;
     }
     // Capability enforcement: deny syscalls the process has no right to.
     let need = required_cap(num);
@@ -6833,13 +6934,16 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             }
             // Opening a directory (no O_CREAT) -> dir fd for getdents64.
             if flags & 0x40 == 0 && is_vfs_dir(&path) {
-                return diropen(&path);
+                let fd = diropen(&path);
+                set_fd_accmode(fd, flags);
+                return fd;
             }
             let fd = if flags & 0x40 != 0 {
                 vfs_open_create(&path, flags & 0x200 != 0)
             } else {
                 vfs_open(&path)
             };
+            set_fd_accmode(fd, flags); // report the real access mode in F_GETFL
             if fd != u64::MAX && flags & 0x400 != 0 {
                 // O_APPEND: set the write position to the end of the file.
                 if let Some(sz) = vfs_size(fd as usize) {
@@ -6858,13 +6962,17 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 return proc_mem_open();
             }
             if a2 & 0x40 == 0 && is_vfs_dir(&path) {
-                return diropen(&path);
+                let fd = diropen(&path);
+                set_fd_accmode(fd, a2);
+                return fd;
             }
-            if a2 & 0x40 != 0 {
+            let fd = if a2 & 0x40 != 0 {
                 vfs_open_create(&path, a2 & 0x200 != 0)
             } else {
                 vfs_open(&path)
-            }
+            };
+            set_fd_accmode(fd, a2);
+            fd
         }
         5 | 262 => {
             // fstat(fd, statbuf) / newfstatat(dirfd, path, statbuf, flags):
@@ -7118,14 +7226,31 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         72 => {
             // fcntl(fd, cmd, arg). Track O_NONBLOCK (0x800) per pipe fd so chrome's
             // non-blocking pipes return EAGAIN instead of parking the caller forever.
+            //
+            // Return -EBADF for a fd that is not actually open — a real kernel does, and
+            // chrome validates fds with fcntl(F_GETFL); a false "success" on a bad fd let
+            // chrome proceed on a nonexistent fd and then IMMEDIATE_CRASH on the resulting
+            // invariant violation (traced: last-syscall before the abort was
+            // fcntl(F_GETFL) succeeding on an unopened fd).
+            if !fd_is_open(a1) {
+                return (-9i64) as u64; // -EBADF
+            }
             match a2 {
-                3 => { // F_GETFL
-                    let nb = (a1 as usize) < MAX_FD && is_pipe_fd(a1 as usize) && pipe_is_nonblock(a1 as usize);
-                    0x2 | if nb { 0x800 } else { 0 } // O_RDWR (+ O_NONBLOCK)
+                3 => { // F_GETFL: the fd's real access mode + tracked O_NONBLOCK.
+                    let fd = a1 as usize;
+                    let acc = if fd < MAX_FD { FD_ACCMODE[fd].load(Ordering::Relaxed) as u64 } else { 2 };
+                    let nb = fd < MAX_FD
+                        && (FD_NONBLOCK[fd].load(Ordering::Relaxed)
+                            || (is_pipe_fd(fd) && pipe_is_nonblock(fd)));
+                    acc | if nb { 0x800 } else { 0 }
                 }
-                4 => { // F_SETFL
-                    if (a1 as usize) < MAX_FD && is_pipe_fd(a1 as usize) {
-                        pipe_set_nonblock(a1 as usize, a3 & 0x800 != 0);
+                4 => { // F_SETFL: remember O_NONBLOCK for ANY fd (pipe + general table).
+                    let fd = a1 as usize;
+                    if fd < MAX_FD {
+                        FD_NONBLOCK[fd].store(a3 & 0x800 != 0, Ordering::Relaxed);
+                        if is_pipe_fd(fd) {
+                            pipe_set_nonblock(fd, a3 & 0x800 != 0);
+                        }
                     }
                     0
                 }
