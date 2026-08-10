@@ -6988,6 +6988,22 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // memfd_create(name, flags): an anonymous in-RAM file — chrome's preferred
             // shared-memory handle (base::SharedMemory). Back it with a unique FILES
             // entry and return an fd; chrome then ftruncate+mmaps it.
+            //
+            // FLAG VALIDATION IS LOAD-BEARING: chrome's Mojo channel probes memfd_create
+            // with INVALID flags and PCHECKs that it fails with EINVAL/ENOSYS/EPERM
+            // (mojo/core/channel_linux.cc KernelSupportsUpgradeRequirements, ~:901). A
+            // permissive "ignore flags" implementation makes the probe SUCCEED, the
+            // PCHECK fires, and chrome FATALs at channel_linux.cc:926 (the wall the
+            // demand-paged multi-process path was hitting). Reject unknown bits exactly
+            // like a real kernel does. Valid: MFD_CLOEXEC(1) | MFD_ALLOW_SEALING(2) |
+            // MFD_HUGETLB(4) | MFD_NOEXEC_SEAL(8) | MFD_EXEC(0x10); huge-page size bits
+            // (26..31) only with MFD_HUGETLB. (Mirrors the eventfd2 flag fix.)
+            const MFD_HUGETLB: u64 = 0x4;
+            const MFD_VALID: u64 = 0x1 | 0x2 | 0x4 | 0x8 | 0x10;
+            let huge_size = if a2 & MFD_HUGETLB != 0 { 0xFC00_0000u64 } else { 0 };
+            if a2 & !(MFD_VALID | huge_size) != 0 {
+                return (-22i64) as u64; // -EINVAL — chrome's channel_linux.cc probe requires this
+            }
             let name = user_cstr(a1, 128);
             let seq = MEMFD_SEQ.fetch_add(1, Ordering::Relaxed);
             let path = alloc::format!("/memfd:{}:{seq}", String::from_utf8_lossy(&name));
