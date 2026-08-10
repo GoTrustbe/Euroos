@@ -290,12 +290,28 @@ static FD_NONBLOCK: [core::sync::atomic::AtomicBool; MAX_FD] =
 static FD_ACCMODE: [core::sync::atomic::AtomicU8; MAX_FD] =
     [const { core::sync::atomic::AtomicU8::new(2) }; MAX_FD];
 
+/// Copy a fd's access mode + O_NONBLOCK to another fd number (dup semantics), so a
+/// duplicated fd reports the same flags via fcntl(F_GETFL) as its source.
+fn copy_fd_flags(from: usize, to: usize) {
+    if from < MAX_FD && to < MAX_FD {
+        FD_ACCMODE[to].store(FD_ACCMODE[from].load(Ordering::Relaxed), Ordering::Relaxed);
+        FD_NONBLOCK[to].store(FD_NONBLOCK[from].load(Ordering::Relaxed), Ordering::Relaxed);
+    }
+}
+
 /// Record the access mode (low 2 bits of the open `flags`) for a freshly-opened fd.
 fn set_fd_accmode(fd: u64, flags: u64) {
     if fd != u64::MAX && (fd as usize) < MAX_FD {
         FD_ACCMODE[fd as usize].store((flags & 3) as u8, Ordering::Relaxed);
+        // TEMP diag: trace opens so a fd whose fcntl(F_GETFL) mode chrome CHECK-crashes
+        // on can be matched to its open (path + flags). Rate-limited.
+        let n = OPEN_DIAG.fetch_add(1, Ordering::Relaxed);
+        if n < 80 {
+            crate::serial_println!("[opendiag] fd {fd} accmode={} flags={flags:#x}", flags & 3);
+        }
     }
 }
+static OPEN_DIAG: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Tasks blocked in a read on an empty pipe: (pipe-id, task). Woken by a write.
 static PIPE_WAITERS: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
 
@@ -2532,6 +2548,7 @@ fn dup_fd(oldfd: u64) -> u64 {
     if let Some(pe) = pipe_ent {
         if let Some(fd) = alloc_low_fd() {
             PIPE_FDS.lock()[fd] = Some(pe);
+            copy_fd_flags(ofd, fd); // dup preserves access mode + O_NONBLOCK
             return fd as u64;
         }
         return (-24i64) as u64;
@@ -2544,6 +2561,7 @@ fn dup_fd(oldfd: u64) -> u64 {
     };
     if let Some(fd) = alloc_low_fd() {
         OPEN_FDS.lock()[fd] = Some(entry);
+        copy_fd_flags(ofd, fd); // dup preserves access mode + O_NONBLOCK (else F_GETFL lies)
         return fd as u64;
     }
     (-24i64) as u64
