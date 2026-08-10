@@ -9,7 +9,7 @@
 //! increasing counters prove they really run in parallel (interleaved).
 
 use core::arch::global_asm;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use spin::Mutex;
 use x86_64::instructions::segmentation::{Segment, CS, SS};
@@ -274,6 +274,52 @@ static SCHED: Mutex<Scheduler> = Mutex::new(Scheduler {
 // Stacks for the background tasks (task 0 uses the existing kernel stack).
 static mut STACKS: [[u8; STACK_SIZE]; MAX_TASKS] = [[0; STACK_SIZE]; MAX_TASKS];
 
+// ── Per-task FPU / SSE (XMM) state ──────────────────────────────────────────
+// The context switch previously saved GP regs + FS_BASE + syscall state, but NOT
+// the x87/SSE register file. Real userland (glibc memcpy/strlen, chrome's Skia
+// rasterizer, any -msse code) keeps live data in XMM0-15/MXCSR; without saving it
+// on switch, two preemptively-scheduled threads silently clobber each other's XMM
+// state. That corruption manifests as wild pointers / rip=0 / GP faults — the
+// "worker threads die" wall on the chrome multi-process path. Fix: FXSAVE the
+// outgoing task's FPU/SSE state and FXRSTOR the incoming task's on every switch.
+// (FXSAVE = x87 + SSE, 512 bytes; sufficient because AVX/XCR0 is not enabled, so
+// there is no YMM/ZMM state to preserve. When AVX lands this must become XSAVE.)
+#[repr(C, align(16))]
+struct FpuArea([u8; 512]);
+static mut FPU_AREAS: [FpuArea; MAX_TASKS] = [const { FpuArea([0; 512]) }; MAX_TASKS];
+// A clean FXSAVE image (FNINIT state) copied into a slot the first time a task is
+// switched to, so its first FXRSTOR loads a valid, zeroed FPU rather than garbage.
+static mut FPU_TEMPLATE: FpuArea = FpuArea([0; 512]);
+static FPU_VALID: [AtomicBool; MAX_TASKS] = [const { AtomicBool::new(false) }; MAX_TASKS];
+
+/// Capture a clean FXSAVE image (after FNINIT) into the template. Call once at boot
+/// before preemptive scheduling starts. Requires CR4.OSFXSR (set whenever SSE is
+/// usable, which it already is here).
+pub fn fpu_init() {
+    unsafe {
+        let p = core::ptr::addr_of_mut!(FPU_TEMPLATE) as *mut u8;
+        core::arch::asm!("fninit", "fxsave [{}]", in(reg) p, options(nostack, preserves_flags));
+    }
+}
+
+/// FXSAVE the outgoing task's FPU/SSE state, FXRSTOR the incoming task's. Only the
+/// switch path calls this, with `out != inc`.
+#[inline]
+unsafe fn fpu_switch(out: usize, inc: usize) {
+    let areas = core::ptr::addr_of_mut!(FPU_AREAS) as *mut FpuArea;
+    let out_p = (*areas.add(out)).0.as_mut_ptr();
+    core::arch::asm!("fxsave [{}]", in(reg) out_p, options(nostack, preserves_flags));
+    FPU_VALID[out].store(true, Ordering::Relaxed);
+    let src = if FPU_VALID[inc].load(Ordering::Relaxed) {
+        (*areas.add(inc)).0.as_ptr()
+    } else {
+        // First time this slot runs: load the clean template.
+        core::ptr::addr_of!(FPU_TEMPLATE) as *const u8
+    };
+    core::arch::asm!("fxrstor [{}]", in(reg) src, options(nostack, preserves_flags));
+    FPU_VALID[inc].store(true, Ordering::Relaxed);
+}
+
 /// G1: a GUARDED kernel stack top per task slot (0 = not set → fall back on the
 /// BSS `STACKS`). main.rs fills these before `init()` from the guarded-stack pool, so
 /// that a kernel-task overflow faults on an unmapped guard page (→ hardware #PF,
@@ -476,6 +522,12 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
         }
     }
     let _ = via_yield;
+    // Save the outgoing task's x87/SSE (XMM) register file and restore the incoming
+    // task's, so preemptively-scheduled threads don't clobber each other's FP/XMM
+    // state (the multithreaded-corruption fix). Only when the task actually changes.
+    if best != cur {
+        unsafe { fpu_switch(cur, best) };
+    }
     s.current = best;
     let next = s.current;
     unsafe { fs.write(s.tasks[next].fs_base) };
@@ -646,6 +698,9 @@ pub fn reclaim_task(idx: usize) {
     let mut s = SCHED.lock();
     if idx < s.count && idx != s.current && s.tasks[idx].state == State::Dead && !s.free_slots.contains(&idx) {
         s.free_slots.push(idx);
+        // A reused slot must start with a clean FPU/SSE state, not the dead task's:
+        // invalidate so its first switch-in restores the FNINIT template.
+        FPU_VALID[idx].store(false, Ordering::Relaxed);
     }
 }
 

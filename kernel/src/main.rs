@@ -1566,6 +1566,10 @@ fn main() -> Status {
         paging::guarded_stack_count()
     );
 
+    // Capture a clean FPU/SSE (FXSAVE) template before scheduling starts, so the
+    // context switch can save/restore each task's x87/SSE register file (prevents
+    // preemptively-scheduled threads from clobbering each other's XMM state).
+    sched::fpu_init();
     // Scheduler: shell + 3 kernel tasks + TWO ring-3 userspace processes,
     // each with its own kernel stack (TSS.rsp0 switches per task).
     sched::init();
