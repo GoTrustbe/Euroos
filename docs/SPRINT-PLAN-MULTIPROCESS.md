@@ -120,3 +120,51 @@ Build `./scripts/build.sh release`; boot foreground (host has ~2.4 GiB free →
 `-m 1536M`..`1900M`), qemu MUST be `-serial stdio | tee` (background re-sandboxes;
 `-serial file:` is killed as a no-output hang). Pack `/tmp/hs-pack.img`. Each boot
 ~3-4 min wall (TCG ~60x). `[spawndiag]` logs fork/exec attempts.
+
+## Session findings 2026-08-10 (real boot data, +4 GB host RAM)
+Booted the chrome pack (`/tmp/chrome-pack.img`, 92 files) with `-m 4096M` and a
+second virtio-blk disk. Concrete, verified findings + fixes (commits on
+`feature/app-control`):
+
+- **fork() now SUCCEEDS for chrome** (commit e332008). The process frame pool was a
+  fixed 160 MiB but chrome's arena is 256 MiB, so `do_glibc_fork` OOM'd ("arena
+  alloc FAILED (256 MiB, pool has 151 MiB)"). Grew the pool to 640 MiB (scaled,
+  cap 1/5 RAM, fallback for the 512 MiB image). Chrome now spawns a real child:
+  `[fork] pid 1002 -> child task 52 (own pml4 arena=256 MiB)`.
+- **Child /dev/null** (same commit): the fork child redirects stdio to /dev/null
+  before execve; it was only registered for the headless-shell run, so the child
+  died "Failed to open /dev/null" -> _exit(127). Registered for /pack/chrome too.
+- **FPU/SSE context-switch save** (commit ab37d17): the scheduler saved GP regs +
+  FS_BASE + syscall state but NOT the x87/SSE (XMM) register file. Preempted
+  threads clobbered each other's XMM state -> wild pointers / rip=0 / faults on
+  0xaaaa poison. Added per-task FXSAVE/FXRSTOR. Verified: LINUX COMPAT 20/20,
+  boot green. **Chrome impact: the `addr=0xaaaaaaaaaaaaaaaa` death signature went
+  to 0, and chrome committed 61,728 demand pages vs 16,880 pre-fix (~4x further)
+  before timing out.** (Racy under TCG; one-run signal, but the fix is a real
+  correctness bug regardless.)
+
+### Remaining walls to the DOM (ranked, from this data)
+1. **GPU / compositor** — the dominant blocker. ANGLE/SwiftShader deterministically
+   fail EGL init ("Internal Vulkan error (-3)"): SwiftShader's Vulkan/GL uses AVX2,
+   but `qemu64` lacks AVX2 AND the kernel never enables AVX (no CR4.OSXSAVE / XCR0).
+   --dump-dom needs a completed navigation, which needs the compositor to commit a
+   frame. **Next lever: enable AVX (CR4.OSXSAVE + XSETBV XCR0 bits) and boot with an
+   AVX2 CPU (`-cpu Skylake-Client`/`max`); THEN the FXSAVE save must become XSAVE**
+   (bigger area) to preserve YMM across preemption.
+2. **execve (M2)** still ENOSYS for the demand-paged child (renderer never launches).
+   Blocked on per-process state (DEMAND_NEXT/DEMAND_FILE_MAPS/exe_base/GLIBC_PML4/
+   demand-pool ownership are singletons). This is the big refactor.
+3. **Per-process exit state (M3)**: GLIBC_DONE/GLIBC_EXIT_CODE are global — a fork
+   child's exit prematurely ends the parent browser's run loop.
+4. **Nondeterminism**: chrome's fork/thread races vary run-to-run under the
+   cooperative scheduler + TCG (run A forked once, run B timed out before forking).
+
+### Boot command (this session, works)
+```
+qemu-system-x86_64 -machine q35 -m 4096M -cpu qemu64,+smep,+smap -bios OVMF.fd \
+  -drive format=raw,file=eurokernel.img,file.locking=off \
+  -drive format=raw,file=/tmp/chrome-pack.img,if=none,id=pk,file.locking=off \
+  -device virtio-blk-pci,drive=pk -display none -serial file:/tmp/x.log -no-reboot
+```
+NB harness: `pkill` is blocked (workload classifier); launch qemu via the Bash
+background feature and stop via TaskStop; foreground qemu is killed after ~30 s.
