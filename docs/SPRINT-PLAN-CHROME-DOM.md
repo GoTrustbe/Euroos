@@ -33,3 +33,28 @@ last-syscall **getrandom(318)=16**, in an XML/cxxbridge region.
 - Keep every fix a correct, general ABI improvement; never special-case chrome.
 - Commit each cleared wall separately (no Claude trailers; do not push).
 - Permanent diagnostics (last_syscall/fd_kind/#GP insn decode) stay in.
+
+## Iteration 1 result (2026-08-10): WALL 4 CLEARED
+S1 diagnosed 0x335d4a6 = a memcmp tree-walk ending in `cmp expected_ptr; jne crash`
+(a map/tree lookup CHECK), right after getrandom(318). Root cause: our getrandom
+filled from byte POSITION only → every call returned identical bytes → "random"
+IDs/tokens collided → a map had 1 entry where 2 were expected → lookup CHECK
+crashed. S2 fix (commit c511ab0): getrandom now unique-per-call (splitmix64 over a
+fetch_add counter). VERIFIED: IMMEDIATE_CRASH count 0; chrome advances past it into
+resource loading (file-backed .pak mmaps).
+
+Wall chain now: thread-pool → Mojo → fcntl-accmode → getrandom-uniqueness (4 cleared).
+
+## Next iteration target
+Chrome now forks (headless-shell forks ~3 children; 1 succeeds, 2 fail
+"[fork] arena alloc FAILED (96 MiB, pool has 55 MiB)"). The forked child does NOT
+execve (so NOT the M2 wall). Boot then stalls during resource loading (log stops at
+a successful disk-backed mmap; no crash, no fatal). Two threads to pull:
+- FORK POOL DEPLETION: the 640 MiB procpool drops to 55 MiB after one 96 MiB fork —
+  clone_demand_region (paging.rs:570) likely copies committed demand pages from
+  procpool; a process with a big committed demand region depletes it. Fix: copy into
+  the DEMAND pool (or COW) so forks don't exhaust procpool; and/or free child arenas.
+- THE STALL: determine if chrome is hung (waiting on the failed-fork child / disk
+  cache) or just slow. Add progress instrumentation or a longer boot. Disk-cache
+  "Unable to create cache" persists (our VFS cache-dir ops) — likely non-fatal but
+  worth ruling out.
