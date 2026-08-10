@@ -284,39 +284,90 @@ static mut STACKS: [[u8; STACK_SIZE]; MAX_TASKS] = [[0; STACK_SIZE]; MAX_TASKS];
 // outgoing task's FPU/SSE state and FXRSTOR the incoming task's on every switch.
 // (FXSAVE = x87 + SSE, 512 bytes; sufficient because AVX/XCR0 is not enabled, so
 // there is no YMM/ZMM state to preserve. When AVX lands this must become XSAVE.)
-#[repr(C, align(16))]
-struct FpuArea([u8; 512]);
-static mut FPU_AREAS: [FpuArea; MAX_TASKS] = [const { FpuArea([0; 512]) }; MAX_TASKS];
-// A clean FXSAVE image (FNINIT state) copied into a slot the first time a task is
-// switched to, so its first FXRSTOR loads a valid, zeroed FPU rather than garbage.
-static mut FPU_TEMPLATE: FpuArea = FpuArea([0; 512]);
+// 64-byte aligned + large enough for an XSAVE area with x87+SSE+AVX (legacy 512 +
+// header 64 + YMM_Hi 256 = 832 B); 1 KiB gives margin. 64-byte alignment satisfies
+// both XSAVE (needs 64) and FXSAVE (needs 16). When AVX is off only the first 512 B
+// (the FXSAVE image) are used.
+#[repr(C, align(64))]
+struct FpuArea([u8; 1024]);
+static mut FPU_AREAS: [FpuArea; MAX_TASKS] = [const { FpuArea([0; 1024]) }; MAX_TASKS];
+// A clean save image (FNINIT state) copied into a slot the first time a task is
+// switched to, so its first restore loads a valid, zeroed FPU rather than garbage.
+static mut FPU_TEMPLATE: FpuArea = FpuArea([0; 1024]);
 static FPU_VALID: [AtomicBool; MAX_TASKS] = [const { AtomicBool::new(false) }; MAX_TASKS];
+// True once AVX is enabled (CR4.OSXSAVE + XCR0[x87|SSE|AVX]) — the context switch
+// then uses XSAVE/XRSTOR (preserving YMM) instead of FXSAVE/FXRSTOR. Stays false on
+// CPUs without XSAVE/AVX (e.g. the default qemu64 the public image boots on), so
+// that path is byte-for-byte the verified SSE-only behavior.
+static AVX_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// Capture a clean FXSAVE image (after FNINIT) into the template. Call once at boot
-/// before preemptive scheduling starts. Requires CR4.OSFXSR (set whenever SSE is
-/// usable, which it already is here).
-pub fn fpu_init() {
-    unsafe {
-        let p = core::ptr::addr_of_mut!(FPU_TEMPLATE) as *mut u8;
-        core::arch::asm!("fninit", "fxsave [{}]", in(reg) p, options(nostack, preserves_flags));
-    }
+/// Whether AVX was enabled at boot (for the System panel / diagnostics).
+pub fn avx_enabled() -> bool {
+    AVX_ENABLED.load(Ordering::Relaxed)
 }
 
-/// FXSAVE the outgoing task's FPU/SSE state, FXRSTOR the incoming task's. Only the
-/// switch path calls this, with `out != inc`.
+/// Enable AVX if the CPU supports it, then capture a clean FPU save template. Call
+/// once at boot before preemptive scheduling starts.
+///
+/// AVX matters for real userland: chrome's SwiftShader software GL (and much SIMD
+/// code) uses AVX2, which #UDs unless the OS sets CR4.OSXSAVE and enables the AVX
+/// state bit in XCR0. Gated on CPUID so the lean image on plain qemu64 (no AVX) is
+/// unaffected. Enabling AVX also means the switch must preserve YMM (XSAVE), which
+/// is why FpuArea is XSAVE-sized above.
+pub fn fpu_init() {
+    // CPUID.1:ECX bit 26 = XSAVE, bit 28 = AVX.
+    let c1 = unsafe { core::arch::x86_64::__cpuid(1) };
+    let has_xsave = c1.ecx & (1 << 26) != 0;
+    let has_avx = c1.ecx & (1 << 28) != 0;
+    if has_xsave && has_avx {
+        unsafe {
+            // CR4.OSXSAVE (bit 18): allow XSETBV/XGETBV and OS-managed extended state.
+            let mut cr4: u64;
+            core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack, preserves_flags));
+            cr4 |= 1 << 18;
+            core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nomem, nostack, preserves_flags));
+            // XCR0 |= x87(0) | SSE(1) | AVX(2) = 0x7. ECX=0 selects XCR0.
+            core::arch::asm!("xsetbv", in("ecx") 0u32, in("eax") 0x7u32, in("edx") 0u32,
+                options(nomem, nostack, preserves_flags));
+        }
+        AVX_ENABLED.store(true, Ordering::Relaxed);
+    }
+    // Capture the clean template in whichever format the switch will use.
+    unsafe {
+        let p = core::ptr::addr_of_mut!(FPU_TEMPLATE) as *mut u8;
+        if AVX_ENABLED.load(Ordering::Relaxed) {
+            core::arch::asm!("fninit", "xsave [{}]", in(reg) p, in("eax") 7u32, in("edx") 0u32,
+                options(nostack, preserves_flags));
+        } else {
+            core::arch::asm!("fninit", "fxsave [{}]", in(reg) p, options(nostack, preserves_flags));
+        }
+    }
+    crate::serial_println!("[fpu] context-switch FPU save: {} (AVX {})",
+        if AVX_ENABLED.load(Ordering::Relaxed) { "XSAVE (x87+SSE+AVX/YMM)" } else { "FXSAVE (x87+SSE)" },
+        if AVX_ENABLED.load(Ordering::Relaxed) { "ON" } else { "off" });
+}
+
+/// Save the outgoing task's FPU state and restore the incoming task's. Uses XSAVE
+/// (YMM-preserving) when AVX is enabled, else FXSAVE. Only the switch path calls
+/// this, with `out != inc`.
 #[inline]
 unsafe fn fpu_switch(out: usize, inc: usize) {
     let areas = core::ptr::addr_of_mut!(FPU_AREAS) as *mut FpuArea;
     let out_p = (*areas.add(out)).0.as_mut_ptr();
-    core::arch::asm!("fxsave [{}]", in(reg) out_p, options(nostack, preserves_flags));
-    FPU_VALID[out].store(true, Ordering::Relaxed);
-    let src = if FPU_VALID[inc].load(Ordering::Relaxed) {
+    let valid = FPU_VALID[inc].load(Ordering::Relaxed);
+    let src = if valid {
         (*areas.add(inc)).0.as_ptr()
     } else {
-        // First time this slot runs: load the clean template.
-        core::ptr::addr_of!(FPU_TEMPLATE) as *const u8
+        core::ptr::addr_of!(FPU_TEMPLATE) as *const u8 // first run: clean template
     };
-    core::arch::asm!("fxrstor [{}]", in(reg) src, options(nostack, preserves_flags));
+    if AVX_ENABLED.load(Ordering::Relaxed) {
+        core::arch::asm!("xsave [{}]", in(reg) out_p, in("eax") 7u32, in("edx") 0u32, options(nostack, preserves_flags));
+        core::arch::asm!("xrstor [{}]", in(reg) src, in("eax") 7u32, in("edx") 0u32, options(nostack, preserves_flags));
+    } else {
+        core::arch::asm!("fxsave [{}]", in(reg) out_p, options(nostack, preserves_flags));
+        core::arch::asm!("fxrstor [{}]", in(reg) src, options(nostack, preserves_flags));
+    }
+    FPU_VALID[out].store(true, Ordering::Relaxed);
     FPU_VALID[inc].store(true, Ordering::Relaxed);
 }
 
