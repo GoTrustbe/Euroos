@@ -25,6 +25,7 @@ mod euroipc;
 mod acpi;
 mod acpi_power;
 mod apic;
+mod iommu;
 mod appgfx;
 mod appicons;
 mod auth;
@@ -1652,6 +1653,13 @@ fn main() -> Status {
     } else {
         serial_println!("[acpi] no MADT found");
     }
+    // IOMMU / DMA-isolation check (GitHub #11): every DMA-capable device programs
+    // physical addresses directly, so without an IOMMU a rogue device bypasses the
+    // whole capability model. Detect the platform VT-d units, report the DMA-exposure
+    // state honestly, and enforce the boot policy (Warn by default; Required =
+    // fail-closed). This is detection + policy; active per-device translation is the
+    // follow-on tracked on the roadmap.
+    iommu::detect_and_enforce();
     // M1-1: switch PCI config access to ECAM (memory-mapped, via the ACPI MCFG)
     // — the modern path, full 4 KiB config space. `init_ecam` only activates the
     // window after verifying every port-visible function reads identically
@@ -2934,6 +2942,9 @@ fn main() -> Status {
                 if ring3::smep_active() { "on" } else { "n/a" },
                 if ring3::smap_active() { "on" } else { "n/a" },
                 if ring3::nx_active() { "on" } else { "n/a" }),
+            // Honest DMA-isolation state (GitHub #11): capability checks at the syscall
+            // boundary are incomplete while devices can DMA anywhere. Show it plainly.
+            format!("DMA isolation  {}", iommu::status_line()),
             String::new(),
             String::from("preemptive scheduler (per-process address spaces):"),
             format!("  kernel-threads   A={a} B={b} C={c}"),

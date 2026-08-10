@@ -232,6 +232,13 @@ Replace the current 25-entry EU-oriented TLS trust store with a **EuroCA** infra
 - **Why:** today EuroOS trusts third-party CAs for TLS. A truly sovereign OS controls its own trust anchors, especially for the update and attestation paths.
 - **Verify:** a certificate signed by EuroCA is accepted by `eurotls`; a certificate signed by an unknown CA is rejected; the root key ceremony is documented and reproducible.
 
+### O4 — IOMMU / DMA isolation `N 🔒` (raised as GitHub #11, 2026-08-10)
+Confine every DMA-capable device (NVMe, AHCI, e1000, xHCI, virtio) to only its own buffers, so a buggy or **malicious peripheral cannot DMA over arbitrary physical memory** and bypass the capability model, signatures and audit log (the DMA / "Thunderclap" attack class). Without this, syscall-boundary capability checks are **incomplete** — the critical gap the issue names.
+- **Phase 1 — detection + boot policy `DONE 2026-08-10` (commit on `feature/app-control`):** parse the ACPI **DMAR** (Intel VT-d), read each remapping unit's capability registers, report the DMA-exposure state honestly, and enforce a boot policy (`Warn` default; `Required` = fail-closed when no usable IOMMU). New `kernel/src/iommu.rs` + `acpi::dmar()`. The System panel now shows the true DMA-isolation state. **Verified** under QEMU both ways: plain q35 → "no DMAR, DMA UNRESTRICTED"; `-device intel-iommu` → detects `unit0 @ 0xfed90000 ver 1.0 ... ir=true`.
+- **Phase 2 — active translation `N` (the real isolation):** program per-device root/context tables + second-level page tables so each device sees only an identity map of its legitimate DMA buffers and faults on anything else; queued invalidation + DMA-remapping fault handling; wire buffer (un)map into the driver DMA-alloc path. AMD-Vi (IVRS) as the parallel path. Then default the policy toward `Required` on installs.
+- **Why:** an OS that markets sovereign isolation must not let hardware bypass it. Phase 1 makes the gap visible and enforceable; Phase 2 closes it.
+- **Verify (Phase 2):** with translation on, a device DMA to an unmapped physical page raises a DMAR fault (logged) instead of succeeding; legitimate driver I/O (NVMe read, NIC RX/TX) still works; boot survives with `policy=Required`.
+
 ---
 
 ## 10. EU compliance & localisation (Sprint P)
