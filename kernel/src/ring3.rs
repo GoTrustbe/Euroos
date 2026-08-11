@@ -6278,8 +6278,14 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 };
                 if let Some(fi) = *STDOUT_REDIRECT.lock() {
                     redirect_append(fi, &bytes); // shell redirection: stdout -> file
-                } else if let Ok(t) = core::str::from_utf8(&bytes) {
-                    OUTPUT.lock().push_str(t);
+                } else {
+                    // Lossy, never dropped: a write whose bytes are not valid UTF-8 (a
+                    // chunk split mid-sequence, a path with odd bytes) used to be
+                    // DISCARDED WHOLE — so a program's error message could vanish and
+                    // the log looked like it simply stopped talking. Diagnostics must
+                    // not depend on a program's encoding.
+                    let t = alloc::string::String::from_utf8_lossy(&bytes);
+                    OUTPUT.lock().push_str(&t);
                     serial_print!("[linux-abi] {t}");
                 }
                 a3
@@ -6912,8 +6918,9 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     };
                     if let Some(fi) = *STDOUT_REDIRECT.lock() {
                         redirect_append(fi, &bytes); // shell redirection: stdout -> file
-                    } else if let Ok(t) = core::str::from_utf8(&bytes) {
-                        OUTPUT.lock().push_str(t);
+                    } else {
+                        let t = alloc::string::String::from_utf8_lossy(&bytes); // never drop output (see write())
+                        OUTPUT.lock().push_str(&t);
                         serial_print!("[linux-abi] {t}");
                     }
                     written += len as u64;

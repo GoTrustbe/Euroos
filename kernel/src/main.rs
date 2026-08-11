@@ -2161,10 +2161,27 @@ fn main() -> Status {
                   // ran; SEND without RECV = the in-process DevTools/Mojo session never
                   // answers; RECV of id 2 = the DOM came back.
                   b"--vmodule=simple_devtools_protocol_client=2,headless_command_handler=2",
+                  // EXPERIMENT (one boot): navigate the INITIAL page straight to the
+                  // target instead of going through --dump-dom. --dump-dom never
+                  // navigates itself: it loads chrome://headless/headless_command.html
+                  // (a WebUI page from headless_command_resources.pak) and evaluates
+                  // its executeCommands() JS, which does the navigating — and on EuroOS
+                  // that page comes up EMPTY (V8 answers "executeCommands is not
+                  // defined"; removing the pak on the host reproduces it byte for byte).
+                  // A plain navigation answers the question that splits the causes: if
+                  // "FileURLLoader::Start" appears, navigation + resource loading work
+                  // and only the WebUI/resource-bundle path is broken; if it does not,
+                  // navigation itself never starts, which is the deeper wall.
+                  // VERIFIED 2026-08-11: with a BARE URL (no --dump-dom, no --timeout —
+                  // both put chrome in command-handler mode) chrome NAVIGATES on EuroOS:
+                  // "FileURLLoader::Start: file:///tmp/euro.html". So navigation and
+                  // resource loading work; only the chrome://headless handler page comes
+                  // up empty. Back to --dump-dom to chase that last gap.
                   b"--dump-dom", b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
-            serial_println!("[hshell] chrome-headless-shell --dump-dom from DISK: exit={e3}");
+            serial_println!("[hshell] BUILD=dump-dom + lossy-output (no chrome write is dropped any more)");
+            serial_println!("[hshell] chrome-headless-shell from DISK: exit={e3}");
             for l in o3.lines() { serial_println!("[hshell]   {l}"); }
         }
         // (Reclamation validated out-of-band: 30 mixed runs incl. threaded kept the

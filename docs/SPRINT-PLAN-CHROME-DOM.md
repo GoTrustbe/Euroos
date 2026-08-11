@@ -249,3 +249,60 @@ requested stack size) to pin the EAGAIN source.
 blockers). chrome-headless-shell --single-process runs crash-free, no deadlock, no
 livelock, deep into font/pango init. DOM not yet emitted; the open wall is the pango
 thread EAGAIN (arena-size-entangled, needs dedicated debugging, not resource tuning).
+
+## Wall 13 CLEARED 2026-08-11: MAP_SHARED was a private copy (the empty-document wall)
+After the dir-enumeration fixes, chrome ran further than ever and then exited
+CLEANLY with code 0 and no DOM, in the middle of storage init. Two diagnostics
+settled what "cleanly" meant:
+- `[exitgrp]`: the MAIN task called exit_group(0), and the user-stack return
+  addresses were the _start/__libc_start_main/main frames. So chrome's main()
+  RETURNED normally: the browser main loop had simply ended. Not a crash, not a
+  timeout (the host still dumps a DOM with --timeout=1, so the shell timeout is
+  not the mechanism).
+- `--vmodule=simple_devtools_protocol_client=2` (the host oracle proves --dump-dom
+  is driven entirely over CDP): EuroOS produced the FULL round-trip —
+  Target.exposeDevToolsProtocol -> RECV, Inspector.enable, Runtime.evaluate of
+  `executeCommands(...)` -> RECV. **V8 runs JS on EuroOS.** The answer was
+  `ReferenceError: executeCommands is not defined`.
+
+That function is defined by chrome://headless/headless_command.html, the handler
+page whose resources come from headless_command_resources.pak. `[packpath]`
+tracing proved the pak was found (access -> 0), opened (fd 37) and read (3033 B).
+So the resource was present and the page was still empty.
+
+ROOT CAUSE: our file-backed mmap ALWAYS made a private copy — MAP_SHARED did not
+exist. Mojo moves every resource body through a memfd ring buffer that producer
+and consumer map separately (even in one process), so the reader saw zeros: an
+empty document, no error anywhere. Fix (commit 917c60b): a MAP_SHARED mapping of
+an in-RAM file maps the whole file into ONE arena region, and every later mapping
+resolves to that region; read()/write() reconcile at the fd boundary. Verified by
+a new test gshm (16/16 pages mismatched before, PASS after) — LINUX COMPAT 21/21.
+
+Method note: the host oracle (same binary, same flags, native Linux) was decisive
+twice — it named the CDP mechanism and it ruled out the shell timeout.
+
+## VERIFIED 2026-08-11: NAVIGATION WORKS — the gap is only the chrome://headless page
+Ran chrome-headless-shell with a BARE URL (no --dump-dom, no --timeout: the host
+oracle proves BOTH put chrome in command-handler mode, so neither tests plain
+navigation). Result on EuroOS:
+
+    [hshell] BUILD=bare-url-navigation
+    CDP=0  FILEURL=2
+    VERBOSE1:content/browser/loader/file_url_loader_factory.cc:474]
+        FileURLLoader::Start: file:///tmp/euro.html
+
+So chrome NAVIGATES on EuroOS and its loader starts reading the page. Navigation,
+the URL loader and Mojo resource plumbing all work. The single remaining gap is
+that `chrome://headless/headless_command.html` (the WebUI page that defines the
+`executeCommands` JS which --dump-dom evaluates) comes up EMPTY — silently: with
+output capture made lossy (a write with invalid UTF-8 used to be dropped WHOLE,
+which could have hidden a message) chrome still reports NOTHING about the pak. It
+finds it (access -> 0), opens it (fd 37) and reads all 3033 bytes (verified
+byte-identical to the real file inside the pack image).
+
+Status of the DOM: chrome runs, navigates, loads the page and executes JS; the
+only thing missing is the injected command JS. Next step = drive CDP OURSELVES
+via `--remote-debugging-pipe` (fd 3 in / fd 4 out, JSON messages NUL-separated):
+the kernel sends Page.navigate + Runtime.evaluate("document.documentElement
+.outerHTML") and reads the DOM back. That bypasses the WebUI page entirely and
+uses only the two things now proven to work: navigation and V8.
