@@ -2119,17 +2119,23 @@ fn main() -> Status {
                   // tried before and crashed worker threads on failed CHECKs — but those
                   // were the IMMEDIATE_CRASH walls we just cleared (FPU/SSE state,
                   // fcntl access-mode, getrandom uniqueness, memfd flags). Retest now.
-                  b"--single-process", b"--in-process-gpu",
+                  b"--single-process",
+                  // Force SOFTWARE compositing with no GPU thread at all: --in-process-gpu
+                  // + --run-all-compositor-stages made navigation WAIT on a compositor
+                  // frame that never commits without GL (chrome inited but never opened
+                  // the page). Disable gpu-compositing + accelerated video so the browser
+                  // reaches PreMainMessageLoopRun and actually navigates.
+                  b"--disable-gpu-compositing", b"--disable-accelerated-video-decode",
+                  b"--disable-features=VaapiVideoDecoder,VaapiVideoEncoder",
                   // MojoUseEventFd = chrome's eventfd shared-mem Mojo channel; its probe
                   // PCHECKs that eventfd2(invalid flags) FAILS, but our eventfd2 accepts
                   // it -> FATAL channel_linux.cc:926. Disable -> fall back to the socket
                   // Mojo channel (works over our fork-inherited socketpair).
                   b"--disable-features=MojoUseEventFd",
-                  // Force a deterministic navigation + completion: virtual time advances
-                  // fast and the page-load (which triggers --dump-dom) fires after the
-                  // budget, rather than waiting on real timers/services that never come
-                  // up here. run-all-compositor-stages commits a frame deterministically.
-                  b"--virtual-time-budget=15000", b"--run-all-compositor-stages-before-draw",
+                  // Virtual time advances Blink's clock fast so the load completes
+                  // deterministically (triggers --dump-dom). No run-all-compositor-stages:
+                  // a DOM dump needs the LOAD event, not a painted frame.
+                  b"--virtual-time-budget=15000",
                   b"--enable-logging=stderr", b"--v=1",
                   b"--dump-dom", b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
