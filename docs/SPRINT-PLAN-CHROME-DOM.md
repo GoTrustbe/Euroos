@@ -82,3 +82,20 @@ far past any prior point. The remaining wall is structural (multi-process fork+I
 the same rock flagged from the start. Next real work = M2 (make chrome's forks a
 first-class success, incl. per-process state) — a multi-day project, not a syscall
 patch. All 4 wall fixes are general Linux-ABI correctness wins independent of chrome.
+
+## Iteration 4 (2026-08-11): forks succeed at -m 4096M, but LIVELOCK PERSISTS
+The procpool "depletion" was just sizing: it scales to ~1/5 RAM, so -m 2048M gives a
+160 MiB pool (one 96 MiB fork fits, the second OOMs); -m 4096M gives 640 MiB. At 4 GB
+all 3 chrome forks SUCCEED (tasks 42/44/47). BUT the epoll livelock is UNCHANGED
+(~535K epoll/window, 12 Ready spinning / 13 Blocked). So fork success is not enough:
+the forked children NEVER execve (no [spawndiag] execve) into their helper process
+types, so chrome's main process keeps blocking on their IPC sockets forever.
+
+CONCLUSION (definitive): the DOM wall is the MULTI-PROCESS MODEL — chrome forks
+helper children that must execve into --type=utility/... processes with their own
+per-process state and connect back over Mojo IPC. Our fork creates the child task
+but it does not become a functional helper (execve = M2 is ENOSYS on the demand-
+paged model; the child also shares the parent's singleton globals = M3). This is the
+same structural rock flagged from the start, now reached with certainty AFTER
+clearing every deliberate-CHECK crash. Getting the DOM = the M2/M3 multi-process
+project (multi-day), not a syscall patch.
