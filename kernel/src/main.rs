@@ -2083,6 +2083,7 @@ fn main() -> Status {
             // states while chrome runs, so a stall shows as spinning (runaway futex/
             // epoll, no new syscalls) vs a hard deadlock (all-Blocked) vs slow progress.
             ring3::STALL_DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
+            ring3::CACHE_DIR_DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
             // Serve the test page from the VFS so we can navigate to a file:// URL
             // (rules out data:-URL parsing; exercises the real file-load path).
             ring3::register_file("/tmp/euro.html", b"<html><body><h1>EuroOS</h1></body></html>".to_vec());
@@ -2137,6 +2138,12 @@ fn main() -> Status {
                   // a DOM dump needs the LOAD event, not a painted frame.
                   b"--virtual-time-budget=15000",
                   b"--enable-logging=stderr", b"--v=1",
+                  // Trace the navigation/headless decision path so a boot log shows WHERE
+                  // navigation dies. Host oracle proves these exact flags dump a DOM on
+                  // Linux (even single-core, broken-cache, no-virtual-time) -> the blocker
+                  // is EuroOS-kernel-specific and lives between browser-start and
+                  // FileURLLoader::Start (which the host reaches, EuroOS does not).
+                  b"--vmodule=headless_shell=2,*headless*=1,navigation_request=1,navigation_controller_impl=1,web_contents_impl=1,render_frame_host_impl=1,render_process_host_impl=1,file_url_loader_factory=1,scheduler=1",
                   b"--dump-dom", b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);

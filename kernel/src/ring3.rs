@@ -478,6 +478,7 @@ fn fd_is_open(fd: u64) -> bool {
     }
     let u = fd as usize;
     (u < MAX_FD && OPEN_FDS.lock()[u].is_some())
+        || (u < MAX_FD && OPEN_DIRS.lock()[u].is_some()) // open DIRECTORY fds count too
         || is_pipe_fd(u)
         || is_epoll_fd(fd)
         || crate::net::is_eventfd(fd)
@@ -1748,6 +1749,8 @@ static FUTEX_WAIT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::Ato
 static EPOLL_WAIT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Enable the periodic thread-state/syscall-rate snapshots (deadlock diagnostics).
 pub static STALL_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Log directory open/getdents results (chrome disk-cache init diagnostics).
+pub static CACHE_DIR_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// futex-wake: unblock up to `n` tasks waiting on `uaddr`. Returns the number
 /// of woken tasks.
@@ -2818,11 +2821,36 @@ fn vfs_rename(oldp: &[u8], newp: &[u8]) -> u64 {
         }
     }
     // Or a symlink rename.
-    let mut sl = SYMLINKS.lock();
-    if let Some(e) = sl.iter_mut().find(|(p, _)| *p == o) {
-        let t = e.1.clone();
-        sl.retain(|(p, _)| *p != n && *p != o);
-        sl.push((n, t));
+    {
+        let mut sl = SYMLINKS.lock();
+        if let Some(e) = sl.iter_mut().find(|(p, _)| *p == o) {
+            let t = e.1.clone();
+            sl.retain(|(p, _)| *p != n && *p != o);
+            sl.push((n, t));
+            return 0;
+        }
+    }
+    // DIRECTORY rename: chrome's disk-cache reset renames the whole cache dir aside
+    // (e.g. "Cache" -> "old_Cache_000") before deleting it. Re-prefix every child
+    // file, subdir marker, and symlink from `o/` to `n/`, plus the `o` mkdir marker
+    // itself. Without this, the flat VFS reports ENOENT, chrome cannot reset a
+    // "corrupt" cache, and storage init (which gates the first navigation) stalls.
+    let op = alloc::format!("{o}/");
+    let np = alloc::format!("{n}/");
+    let is_dir = MKDIRS.lock().iter().any(|d| *d == o)
+        || FILES.lock().iter().any(|(p, _)| p.starts_with(&op))
+        || MKDIRS.lock().iter().any(|d| d.starts_with(&op));
+    if is_dir {
+        for (p, _) in FILES.lock().iter_mut() {
+            if let Some(rest) = p.strip_prefix(&op) { *p = alloc::format!("{np}{rest}"); }
+        }
+        for d in MKDIRS.lock().iter_mut() {
+            if *d == o { *d = n.clone(); }
+            else if let Some(rest) = d.strip_prefix(&op) { *d = alloc::format!("{np}{rest}"); }
+        }
+        for (p, _) in SYMLINKS.lock().iter_mut() {
+            if let Some(rest) = p.strip_prefix(&op) { *p = alloc::format!("{np}{rest}"); }
+        }
         return 0;
     }
     (-2i64) as u64 // -ENOENT: nothing to rename
@@ -2940,7 +2968,12 @@ fn vfs_getdents64(fd: usize, buf: u64, count: usize) -> u64 {
     }
     let (path, mut cursor) = match &OPEN_DIRS.lock()[fd] {
         Some((p, c)) => (p.clone(), *c),
-        None => return (-20i64) as u64, // -ENOTDIR
+        None => {
+            if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
+                crate::serial_println!("[getdents] fd={fd} NOT a dir fd (OPEN_DIRS empty) -> ENOTDIR; is_open_reg={}", OPEN_FDS.lock()[fd].is_some());
+            }
+            return (-20i64) as u64; // -ENOTDIR
+        }
     };
     // "." and ".." first, then the real children.
     let mut all: alloc::vec::Vec<(String, bool)> =
@@ -6033,6 +6066,14 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
     // use Linux syscall numbers + semantics. Translate to our handlers.
     if LINUX_ABI.load(Ordering::Relaxed) {
         let r = linux_dispatch(num, a1, a2, a3, a4, a5);
+        // Trace every EBADF return during chrome's disk-cache init: pin which syscall
+        // (num) on which fd/path chrome sees as "Bad file descriptor" -> the op that
+        // stalls storage init and blocks the first navigation.
+        if CACHE_DIR_DIAG.load(Ordering::Relaxed) && r == (-9i64) as u64 {
+            let p = user_cstr(a2, 64);
+            crate::serial_println!("[ebadf] syscall {num} a1={a1:#x} a2={:?} -> EBADF",
+                core::str::from_utf8(&p).unwrap_or("?"));
+        }
         // Record the last Linux syscall + result per task, so the #GP handler can name
         // the operation whose (unexpected) error a program CHECK-crashed on. Chrome's
         // IMMEDIATE_CRASH aborts right after a failing syscall; this shows which one.
@@ -7148,9 +7189,20 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             if path == b"/proc/self/mem" || path == b"/proc/thread-self/mem" {
                 return proc_mem_open();
             }
-            // Opening a directory (no O_CREAT) -> dir fd for getdents64.
-            if flags & 0x40 == 0 && is_vfs_dir(&path) {
+            // Opening a directory (no O_CREAT) -> dir fd for getdents64. O_DIRECTORY
+            // (0x10000): chrome's disk-cache backend opens each cache dir this way to
+            // enumerate it. Treat ANY O_DIRECTORY open as a directory even if the flat
+            // VFS has no children/mkdir marker yet (a freshly-created cache dir is empty)
+            // — else it falls through to vfs_open, fails, and chrome reports "wrong file
+            // structure on disk" and never finishes storage init (which gates the first
+            // navigation). An empty dir fd enumerates to just "."/".." -> chrome then
+            // creates the index cleanly, exactly as on native Linux.
+            if flags & 0x40 == 0 && (is_vfs_dir(&path) || flags & 0x1_0000 != 0) {
                 let fd = diropen(&path);
+                if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
+                    crate::serial_println!("[diropen] {:?} flags={flags:#x} is_dir={} -> fd={fd}",
+                        core::str::from_utf8(&path).unwrap_or("?"), is_vfs_dir(&path));
+                }
                 set_fd_accmode(fd, flags);
                 return fd;
             }
@@ -7194,22 +7246,71 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // fstat(fd, statbuf) / newfstatat(dirfd, path, statbuf, flags):
             // fill a Linux struct stat (144 B) so musl sees it as a regular
             // file with the correct size (otherwise stdio refuses to buffer).
-            // fstat on an open dir fd -> report a DIRECTORY (S_IFDIR), not -EBADF.
-            if num == 5 && (a1 as usize) < MAX_FD && OPEN_DIRS.lock()[a1 as usize].is_some() {
-                if !in_user_arena(a2, 144) {
+            // fstat(fd) OR newfstatat(fd, "", AT_EMPTY_PATH) on an open dir fd -> report a
+            // DIRECTORY (S_IFDIR), not -EBADF. glibc's fdopendir(fd) verifies the fd this
+            // way: modern glibc implements fstat(fd) as newfstatat(fd, "", AT_EMPTY_PATH),
+            // so chrome's FileEnumerator (recursive cache delete) opens a dir fd then
+            // fdopendir's it -> without the 262 branch it fell through to a path-stat of ""
+            // -> failure -> "Cannot start reading dir: Bad file descriptor" -> storage init
+            // never completes -> the first navigation never starts. AT_EMPTY_PATH=0x1000,
+            // in a4 for newfstatat; statbuf is a2 for fstat, a3 for newfstatat.
+            let empty_at_fd = num == 262 && a4 & 0x1000 != 0 && user_cstr(a2, 2).is_empty();
+            let stat_fd = if num == 5 { a1 } else { a1 };
+            let stat_buf = if num == 5 { a2 } else { a3 };
+            if (num == 5 || empty_at_fd) && (stat_fd as usize) < MAX_FD
+                && OPEN_DIRS.lock()[stat_fd as usize].is_some()
+            {
+                if !in_user_arena(stat_buf, 144) {
                     return EFAULT;
                 }
                 unsafe {
-                    core::ptr::write_bytes(a2 as *mut u8, 0, 144);
-                    (a2 as *mut u32).add(6).write(0o040700); // st_mode: S_IFDIR|0700 (chrome wants profile/socket dirs user-only)
-                    ((a2 + 56) as *mut u64).write(4096); // st_blksize
+                    core::ptr::write_bytes(stat_buf as *mut u8, 0, 144);
+                    ((stat_buf + 16) as *mut u64).write(2); // st_nlink (dirs: >=2)
+                    (stat_buf as *mut u32).add(6).write(0o040700); // st_mode: S_IFDIR|0700
+                    ((stat_buf + 56) as *mut u64).write(4096); // st_blksize
                 }
                 return 0;
+            }
+            // newfstatat(fd, "", AT_EMPTY_PATH) on a REGULAR open fd -> fstat semantics.
+            if empty_at_fd {
+                if let Some(sz) = vfs_size(stat_fd as usize) {
+                    if !in_user_arena(stat_buf, 144) {
+                        return EFAULT;
+                    }
+                    let ino = OPEN_FDS.lock().get(stat_fd as usize).and_then(|s| *s)
+                        .map(|(fi, _)| fi as u64 + 1).unwrap_or(0);
+                    unsafe {
+                        core::ptr::write_bytes(stat_buf as *mut u8, 0, 144);
+                        (stat_buf as *mut u64).write(1); // st_dev
+                        ((stat_buf + 8) as *mut u64).write(ino); // st_ino
+                        ((stat_buf + 16) as *mut u64).write(1); // st_nlink
+                        (stat_buf as *mut u32).add(6).write(0o100644); // S_IFREG|0644
+                        ((stat_buf + 48) as *mut u64).write(sz as u64); // st_size
+                        ((stat_buf + 56) as *mut u64).write(4096); // st_blksize
+                    }
+                    return 0;
+                }
             }
             // (size, statbuf_ptr, inode). The inode MUST be unique per file: glibc's
             // ld.so deduplicates already-loaded shared objects by (st_dev, st_ino), so
             // a zero inode makes it think every library is already loaded and skip
             // mapping libc.so.6 entirely. Use the FILES index + 1 as a stable inode.
+            // fstat(1)/fstat(2): stdout/stderr are character devices, not VFS files.
+            // Returning EBADF here made chrome (which fstats stdout before writing the
+            // --dump-dom output) treat stdout as closed. Report a char device (S_IFCHR).
+            if num == 5 && (a1 == 1 || a1 == 2) {
+                if !in_user_arena(a2, 144) {
+                    return EFAULT;
+                }
+                unsafe {
+                    core::ptr::write_bytes(a2 as *mut u8, 0, 144);
+                    (a2 as *mut u64).write(1); // st_dev
+                    ((a2 + 16) as *mut u64).write(1); // st_nlink
+                    (a2 as *mut u32).add(6).write(0o020620); // st_mode: S_IFCHR|0620 (a tty)
+                    ((a2 + 56) as *mut u64).write(4096); // st_blksize
+                }
+                return 0;
+            }
             let (fd_ok, statbuf, ino) = if num == 5 {
                 if a1 == 0 {
                     (Some(stdin_len()), a2, 0u64)
