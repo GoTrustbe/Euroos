@@ -5441,15 +5441,6 @@ pub fn run_glibc_disk(
                 seq - prev_seq, fx - prev_futex, ep - prev_epoll, prev_tick, tick,
                 if tick == prev_tick { "TIMER DEAD" } else { "ticking" }, GLIBC_THREADS.lock().len());
             crate::sched::dump_states();
-            // Per-thread last syscall: reveals what each thread is doing in a livelock
-            // (which one holds the navigation and what it is blocked/spinning on).
-            let main_t = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
-            let (mn, ma, mr) = last_syscall(main_t);
-            crate::serial_println!("[stall]   MAIN task {main_t}: last-syscall {mn}(a1={ma:#x})->{:#x}", mr);
-            for &t in GLIBC_THREADS.lock().iter().take(24) {
-                let (n, a, r) = last_syscall(t);
-                crate::serial_println!("[stall]   thread {t}: last-syscall {n}(a1={a:#x})->{:#x}", r);
-            }
             prev_seq = seq; prev_futex = fx; prev_epoll = ep; prev_tick = tick;
             snaps += 1;
         }
