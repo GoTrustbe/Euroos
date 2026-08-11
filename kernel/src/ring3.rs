@@ -5441,6 +5441,15 @@ pub fn run_glibc_disk(
                 seq - prev_seq, fx - prev_futex, ep - prev_epoll, prev_tick, tick,
                 if tick == prev_tick { "TIMER DEAD" } else { "ticking" }, GLIBC_THREADS.lock().len());
             crate::sched::dump_states();
+            // Per-thread last syscall: reveals what each thread is doing in a livelock
+            // (which one holds the navigation and what it is blocked/spinning on).
+            let main_t = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+            let (mn, ma, mr) = last_syscall(main_t);
+            crate::serial_println!("[stall]   MAIN task {main_t}: last-syscall {mn}(a1={ma:#x})->{:#x}", mr);
+            for &t in GLIBC_THREADS.lock().iter().take(24) {
+                let (n, a, r) = last_syscall(t);
+                crate::serial_println!("[stall]   thread {t}: last-syscall {n}(a1={a:#x})->{:#x}", r);
+            }
             prev_seq = seq; prev_futex = fx; prev_epoll = ep; prev_tick = tick;
             snaps += 1;
         }
@@ -6938,19 +6947,25 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 let fd = match read_user::<i32>(ent) { Some(v) => v as i64 as u64, None => return EFAULT };
                 let events = read_user::<u16>(ent + 4).unwrap_or(0);
                 let mut re = 0u16;
-                if crate::net::is_eventfd(fd) {
-                    // eventfd: always writable; readable when the counter is nonzero.
+                // Use the SAME readiness logic as epoll (event fds/pipes/sockets report
+                // POLLIN only when they truly have data). The old code let a PIPE fall
+                // through to "regular -> always ready", so chrome's message-pump wakeup
+                // pipe looked perpetually readable and the pump SPUN forever (livelock,
+                // navigation never started). Regular open files + std streams never block,
+                // so they stay always-ready — but NOT pipes/sockets/eventfds.
+                if epoll_fd_ready(fd) {
+                    re |= events & POLLIN;
+                }
+                if epoll_fd_writable(fd) {
                     re |= events & POLLOUT;
-                    if crate::net::eventfd_readable(fd) {
-                        re |= events & POLLIN;
-                    }
-                } else if crate::net::is_unix_fd(fd) || crate::net::is_sock_fd(fd) {
-                    re |= events & POLLOUT;
-                    if crate::net::is_unix_fd(fd) && crate::net::unix_fd_readable(fd) {
-                        re |= events & POLLIN;
-                    }
-                } else {
-                    // Regular/stdin fds: report as ready (best-effort, non-blocking).
+                }
+                let is_evt = crate::net::is_eventfd(fd)
+                    || crate::net::is_unix_fd(fd)
+                    || crate::net::is_sock_fd(fd)
+                    || is_epoll_fd(fd)
+                    || ((fd as usize) < MAX_FD && is_pipe_fd(fd as usize));
+                if !is_evt && (fd < 3 || ((fd as usize) < MAX_FD && OPEN_FDS.lock()[fd as usize].is_some())) {
+                    // stdin/out/err + regular files never block.
                     re = events & (POLLIN | POLLOUT);
                 }
                 let _ = write_user(ent + 6, re);
