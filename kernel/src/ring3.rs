@@ -84,10 +84,47 @@ unsafe fn recover_mmap_offset() -> u64 {
     core::ptr::read_volatile((regs + 40) as *const u64)
 }
 
+/// mprotect(PROT_NONE) guard ranges: [start,end) marked inaccessible. glibc/Rust
+/// place PROT_NONE guard pages below thread stacks and around mappings; a program
+/// then PROBES them (e.g. prlimit64 with the address as its buffer) expecting EFAULT.
+/// Our mprotect used to be a no-op, so guards stayed writable and the probe succeeded
+/// -> the program CHECK-crashed (fontations/Rust stack-guard probe). We now record
+/// PROT_NONE ranges and treat them as NOT valid user memory (EFAULT on kernel touch,
+/// fault on ring-3 access). Atomic count gives a lock-free fast path (usually 0).
+static PROT_NONE_RANGES: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+static PROT_NONE_COUNT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+fn prot_none_set(start: u64, end: u64, none: bool) {
+    if end <= start {
+        return;
+    }
+    let mut r = PROT_NONE_RANGES.lock();
+    // Any prior range overlapping [start,end) is superseded by the new protection.
+    r.retain(|&(s, e)| e <= start || s >= end);
+    if none && r.len() < 8192 {
+        r.push((start, end));
+    }
+    PROT_NONE_COUNT.store(r.len(), Ordering::Relaxed);
+}
+
+/// Does [ptr,ptr+len) touch any PROT_NONE (inaccessible) range?
+fn in_prot_none(ptr: u64, len: usize) -> bool {
+    if PROT_NONE_COUNT.load(Ordering::Relaxed) == 0 {
+        return false; // fast path: no guards
+    }
+    let end = ptr.saturating_add(len as u64);
+    PROT_NONE_RANGES.lock().iter().any(|&(s, e)| ptr < e && end > s)
+}
+
 fn in_user_arena(ptr: u64, len: usize) -> bool {
     let base = ARENA_BASE.load(Ordering::Relaxed);
     if base == 0 {
         return true; // no ring-3 context active
+    }
+    // A PROT_NONE guard page is not valid user memory: a syscall handed such a pointer
+    // must EFAULT (a program probes guards expecting exactly that).
+    if in_prot_none(ptr, len) {
+        return false;
     }
     // A buffer in the demand-paged region is also legitimate user memory. It lies far
     // above the arena (own PML4 slot); accepting it lets copy_to/from_user validate
@@ -4884,6 +4921,12 @@ pub fn handle_demand_fault(addr: u64) -> bool {
     if !in_region {
         return false;
     }
+    // A PROT_NONE guard page must NOT be committed on access — let the fault fall
+    // through to the normal (terminate) path, so a real access to a guard (a stack
+    // overflow) faults as it should instead of silently getting a fresh page.
+    if in_prot_none(addr, 1) {
+        return false;
+    }
     // Gate: a demand-paged glibc process must be active at all.
     if GLIBC_PML4.load(Ordering::Relaxed) == 0 {
         if !DEMAND_DIAG.swap(true, Ordering::Relaxed) {
@@ -6363,6 +6406,12 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     return (-12i64) as u64; // -ENOMEM: out of demand virtual space
                 }
                 DEMAND_NEXT.store(new_next, Ordering::Relaxed);
+                // PROT_NONE mmap = an inaccessible reservation (glibc maps a thread
+                // stack PROT_NONE first, then mprotects the usable part RW; the low
+                // guard page stays PROT_NONE). Track it so a probe of the guard EFAULTs.
+                if a3 == 0 {
+                    prot_none_set(start, new_next, true);
+                }
                 if len >= (1 << 30) {
                     crate::serial_println!("[linux-abi] mmap anon RESERVE {} MiB align={:#x} -> {:#x} (lazy)", len >> 20, align, start);
                 }
@@ -7219,7 +7268,16 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         85 => vfs_open_create(&user_cstr(a1, 256), true), // creat(path, mode) = open O_CREAT|O_TRUNC
         217 => vfs_getdents64(a1 as usize, a2, a3 as usize), // getdents64(fd, dirp, count)
         16 => 0,  // ioctl — pretend success (isatty/TCGETS): stdout is a tty
-        10 => 0,  // mprotect — allow (musl makes its RELRO read-only); no-op
+        10 => {
+            // mprotect(addr, len, prot): honor PROT_NONE (prot==0) so guard pages become
+            // inaccessible (EFAULT on a syscall pointer, fault on ring-3 access) — a
+            // program probes them expecting EFAULT. Non-zero prot (R/W/X, RELRO) stays a
+            // no-op but clears any prior PROT_NONE over the range.
+            let addr = a1 & !0xFFF;
+            let end = addr.saturating_add((a2 + 0xFFF) & !0xFFF);
+            prot_none_set(addr, end, a3 == 0);
+            0
+        }
         13 => 0,  // rt_sigaction — no signals; pretend it succeeds
         14 => 0,  // rt_sigprocmask
         218 => 1, // set_tid_address -> tid
