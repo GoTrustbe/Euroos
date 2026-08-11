@@ -2097,7 +2097,10 @@ fn main() -> Status {
             // worker threads currently die to a not-yet-root-caused context-corruption
             // fault (rip=0 / GP in demand-region code) and the survivors then spin in
             // epoll_wait forever waiting on the dead threads — see docs/memory).
-            ring3::GLIBC_DEADLINE_TICKS.store(60000, core::sync::atomic::Ordering::Relaxed);
+            // Rasterizing a page and PNG-encoding it is heavy under TCG, and the
+            // screenshot is the last step of the DevTools conversation: give the run
+            // room to finish it rather than cutting it off mid-capture.
+            ring3::GLIBC_DEADLINE_TICKS.store(200_000, core::sync::atomic::Ordering::Relaxed);
             // Stall diagnostics: periodically dump syscall/futex/epoll rates + task
             // states while chrome runs, so a stall shows as spinning (runaway futex/
             // epoll, no new syscalls) vs a hard deadlock (all-Blocked) vs slow progress.
@@ -2105,7 +2108,10 @@ fn main() -> Status {
             ring3::CACHE_DIR_DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
             // Serve the test page from the VFS so we can navigate to a file:// URL
             // (rules out data:-URL parsing; exercises the real file-load path).
-            ring3::register_file("/tmp/euro.html", b"<html><body><h1>EuroOS</h1></body></html>".to_vec());
+            // A real page with layout, colours and text, so a screenshot shows Blink
+            // doing actual work rather than a bare heading.
+            const EURO_PAGE: &[u8] = include_bytes!("euro_page.html");
+            ring3::register_file("/tmp/euro.html", EURO_PAGE.to_vec());
             // /dev special files: chrome's fork+exec child setup opens /dev/null to
             // redirect fds; libc/nss read /dev/urandom for entropy. Without these the
             // child exec setup fails (exit 127).

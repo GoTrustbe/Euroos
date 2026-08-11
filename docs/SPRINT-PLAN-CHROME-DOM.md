@@ -306,3 +306,45 @@ via `--remote-debugging-pipe` (fd 3 in / fd 4 out, JSON messages NUL-separated):
 the kernel sends Page.navigate + Runtime.evaluate("document.documentElement
 .outerHTML") and reads the DOM back. That bypasses the WebUI page entirely and
 uses only the two things now proven to work: navigation and V8.
+
+## ★★★ MILESTONE 2026-08-11: CHROMIUM RENDERS A REAL PAGE ON EUROOS
+    [cdp] readyState=complete DOM (1119 B): <html><head><meta charset="utf-8">
+          <title>Chromium on EuroOS</title>... (the full styled page)
+    [cdp] ★★★ REAL DOM rendered by Chromium on EuroOS
+chrome-headless-shell loads file:///tmp/euro.html, Blink parses it, and the kernel
+reads the document back over DevTools. 0 IMMEDIATE_CRASH, chrome exits 0.
+
+### How it was found: EuroOS speaks DevTools itself
+--dump-dom never navigates by itself: it loads chrome://headless/headless_command
+.html (a WebUI page) and evaluates its executeCommands JS. That page came up EMPTY,
+so nothing observable happened. Instead of chasing the WebUI, the kernel now drives
+the protocol directly over --remote-debugging-pipe (fd 3 in, fd 4 out,
+NUL-separated JSON; ring3::cdp_install/cdp_pump): Target.getTargets ->
+Target.attachToTarget(flatten) -> Page.enable -> Page.navigate ->
+Runtime.evaluate("document.readyState+'|'+document.documentElement.outerHTML").
+The sequence was validated on native Linux first (/tmp/cdp_drive.py) so the guest
+was never debugged against a guessed protocol. Reading readyState ALONGSIDE the
+markup is what separated "read too early" from "the body never arrived".
+
+### The three bugs (each: an empty document, no error anywhere)
+1. **mmap's fd argument was read as 64 bits.** It is an INT. Chrome arrives with
+   0xffffffff_00000033 for fd 51, so a MAP_SHARED mapping of a real file looked
+   ANONYMOUS: its shared buffers became private zero pages and the page bytes never
+   reached the renderer. Found with a bounded syscall trace armed the moment chrome
+   sized a shared buffer (SYS_TRACE_LEFT) — the fix is one truncation.
+2. **unlink() shifted every FILES index** while open fds hold exactly such an index,
+   so "create, unlink, ftruncate, mmap" (anonymous shared memory, and how chrome
+   allocates Mojo buffers) handed descriptors someone else's data. Now tombstoned.
+3. **MAP_SHARED did not exist** (every mmap was a private copy). A first fix that
+   returned ONE address per file made chrome CHECK-fail — it registers mappings BY
+   ADDRESS. Shared mappings now each get their own address range and fault onto the
+   file's shared frames: one memory, distinct addresses.
+
+Tests: gshm (two MAP_SHARED mappings of one memfd are one memory; 16/16 pages
+mismatched before) and gunlink (unlinked fd alive, neighbours intact, anon shm
+shared). Both fail hard on the old kernel.
+
+### Next
+- Page.captureScreenshot over the same pipe: real Blink-rendered pixels (software
+  raster, no GL — SwiftShader needs AVX2 that qemu64 lacks). Heavy under TCG.
+- Re-test --dump-dom: the WebUI page may well load now that shared memory works.

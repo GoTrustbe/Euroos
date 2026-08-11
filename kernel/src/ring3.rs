@@ -686,7 +686,31 @@ pub fn cdp_pump() {
                 }
                 None => crate::serial_println!("[cdp] evaluate returned no value: {msg}"),
             }
-            CDP_STEP.store(6, Ordering::Relaxed);
+            // Now the PIXELS: ask Blink to rasterize the page it just parsed. The PNG
+            // comes back base64 in the answer, which we print in chunks — the serial
+            // log is the only way a picture leaves this machine.
+            let sid = CDP_SESSION.lock().clone();
+            cdp_send(&alloc::format!(
+                "{{\"id\":7,\"sessionId\":\"{sid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\"}}}}"));
+            CDP_STEP.store(7, Ordering::Relaxed);
+            CDP_MARK.store(now, Ordering::Relaxed);
+            continue;
+        } else if step == 7 && msg.contains("\"id\":7") {
+            match json_str(&msg, "data") {
+                Some(b64) => {
+                    crate::serial_println!("[png] BEGIN {} base64 chars", b64.len());
+                    let bytes = b64.as_bytes();
+                    let mut i = 0;
+                    while i < bytes.len() {
+                        let end = (i + 512).min(bytes.len());
+                        crate::serial_println!("[png] {}", &b64[i..end]);
+                        i = end;
+                    }
+                    crate::serial_println!("[png] END");
+                }
+                None => crate::serial_println!("[cdp] screenshot returned no data: {}", msg.chars().take(300).collect::<String>()),
+            }
+            CDP_STEP.store(8, Ordering::Relaxed);
             cdp_send("{\"id\":5,\"method\":\"Browser.close\"}"); // let chrome exit cleanly
             CDP_DRIVE.store(false, Ordering::Relaxed);
             return;
