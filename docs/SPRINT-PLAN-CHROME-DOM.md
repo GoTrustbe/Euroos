@@ -58,3 +58,27 @@ a successful disk-backed mmap; no crash, no fatal). Two threads to pull:
   cache) or just slow. Add progress instrumentation or a longer boot. Disk-cache
   "Unable to create cache" persists (our VFS cache-dir ops) — likely non-fatal but
   worth ruling out.
+
+## Iteration 3 result (2026-08-11): the stall is an EPOLL LIVELOCK on a forked child
+Enabled STALL_DIAG for the hshell run. Verdict: NOT a hang, NOT slow — a LIVELOCK.
+Snapshots (steady across 6 windows): ~5.5M syscalls + ~780K epoll_wait per window,
+~0 futex, task states frozen at "10 Ready, 12 Blocked, 4 Sleeping (of 45); current=0",
+threads=16, ticks advancing. So ~10 chrome threads spin in epoll_wait forever; our
+epoll_wait already yields (8 tries + sleep + yield) — the threads are waiting for an
+fd event that never arrives.
+
+ROOT: chrome forks a helper child but it FAILS ("[fork] arena alloc FAILED (96 MiB,
+pool has 55 MiB)"); chrome then blocks (epoll) on the child's IPC socket that never
+connects because the child was never created. This is the fundamental MULTI-PROCESS
+wall: even single-process chrome-headless-shell forks helper processes and waits on
+their IPC. Reaching the DOM from here needs the forks to SUCCEED (fix the procpool
+depletion: 640 MiB -> 55 MiB — investigate what holds it; the successful fork only
+took 96 MiB) AND the child to run its helper role (fork-only, or execve = M2).
+
+## Session verdict
+Cleared 4 deliberate-CHECK crash walls (thread-pool, Mojo, fcntl-accmode, getrandom-
+uniqueness) — chrome-headless-shell now runs its full startup into the event loop,
+far past any prior point. The remaining wall is structural (multi-process fork+IPC),
+the same rock flagged from the start. Next real work = M2 (make chrome's forks a
+first-class success, incl. per-process state) — a multi-day project, not a syscall
+patch. All 4 wall fixes are general Linux-ABI correctness wins independent of chrome.

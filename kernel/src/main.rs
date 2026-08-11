@@ -2074,6 +2074,10 @@ fn main() -> Status {
             // fault (rip=0 / GP in demand-region code) and the survivors then spin in
             // epoll_wait forever waiting on the dead threads — see docs/memory).
             ring3::GLIBC_DEADLINE_TICKS.store(60000, core::sync::atomic::Ordering::Relaxed);
+            // Stall diagnostics: periodically dump syscall/futex/epoll rates + task
+            // states while chrome runs, so a stall shows as spinning (runaway futex/
+            // epoll, no new syscalls) vs a hard deadlock (all-Blocked) vs slow progress.
+            ring3::STALL_DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
             // Serve the test page from the VFS so we can navigate to a file:// URL
             // (rules out data:-URL parsing; exercises the real file-load path).
             ring3::register_file("/tmp/euro.html", b"<html><body><h1>EuroOS</h1></body></html>".to_vec());
