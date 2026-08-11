@@ -127,3 +127,29 @@ patch. This is the single remaining --single-process blocker.
 7 walls cleared; the strategic picture flipped: the DOM no longer requires the
 multi-process refactor — --single-process is viable and chrome now runs 22 threads
 deep into font init. One subtle Fontations guard-probe crash remains before Blink.
+
+## Wall 9 CLEARED 2026-08-11: read-only mapping enforcement — chrome runs clean
+Diagnosed via a temp prlimit-buffer log: fontations' probe is getrlimit(6, ptr)
+expecting EFAULT where ptr is a file-backed (read-only) demand mapping (a font/lib
+segment). Our RW-everything model returned success -> crash. Fix (commit): honor
+PROT_NONE (mprotect/mmap prot==0 -> in_user_arena/handle_demand_fault reject) AND
+enforce read-only file-backed mappings (write_user/copy_to_user EFAULT inside a
+DEMAND_FILE_MAPS range). VERIFIED: IMMEDIATE_CRASH count 0 (was 1 every run);
+single-process chrome now runs 24 threads with ZERO crashes, fully initialized.
+
+## Milestone: single-process chrome runs crash-free into init; navigation not started
+9 walls cleared this session. chrome-headless-shell --single-process now:
+- 24 threads, no crashes, no forks.
+- Services init (inotify/netlink/dbus/udev fail gracefully; audio -> ALSA fallback).
+- Thread pool IDLE: ~14 workers Blocked on futex (normal idle pool), a few threads
+  Ready epoll-waiting.
+- Has NOT navigated to file:///tmp/euro.html -> no DOM yet.
+This is now a DIFFERENT class of wall: "navigation never starts" (a coordination/
+service dependency), not an IMMEDIATE_CRASH. Two threads to pull:
+1. Why no navigation? headless --dump-dom should auto-navigate. Something the active
+   threads epoll-wait on isn't completing (a service? the compositor? disk cache?).
+2. The boot selftest spinners (tasks 7-11: counter tasks + tlscount, infinite loops
+   in the selftest block) run Ready alongside chrome and STEAL CPU under the
+   cooperative scheduler — gate them off for the chrome test so chrome gets the core.
+NEXT: instrument which fd/event the active chrome threads wait on; consider disabling
+the disk cache / more services; give chrome the CPU (gate the spinners).
