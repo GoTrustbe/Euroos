@@ -171,3 +171,29 @@ This is a concurrency-correctness project, not a syscall patch.
 It RUNS — single-process, ~23 threads, zero crashes, deep into V8 init (9 CHECK-crash
 walls cleared this session). It does NOT yet render/emit a DOM: it deadlocks on a lost
 futex wake before navigation completes. Runs clean, no output yet.
+
+## MILESTONE 2026-08-11: the deadlock is BROKEN (deadlock -> livelock)
+Root cause of the wall-before-Blink: chrome does TIMED futex waits (FUTEX_WAIT_BITSET
+op9 + absolute timeout; confirmed via diag) and our futex_wait IGNORED the timeout ->
+blocked forever. Fixed (commits): honor futex timeouts (park as Sleeping(deadline),
+auto-wake, -ETIMEDOUT; futex_wake -> unblock_any) + tickless idle (run_glibc_disk
+fast-forwards TICKS to the soonest deadline instead of busy-spinning, so multi-second
+timed waits elapse in wall time under TCG). RESULT: deadlock GONE — guest time races
+(+4000 ticks/snap vs +1), futex/epoll activity high (+11000 syscalls/+8000 epoll vs
++0), all 24 threads active.
+
+NEW state: chrome no longer deadlocks but LIVELOCKS — busy-polls epoll steadily with
+no forward progress (identical ~13050 demand pages at 60000 AND 180000 ticks; no
+navigation). It inits subsystems (audio, vaapi GPU) then spins. This is "navigation
+never starts": the threads wait on an fd/event that never fires. Teardown side-note:
+3 clock_gettime EFAULT crashes AFTER the run times out (leftover threads run with
+DEMAND_ENABLED already cleared) — cosmetic, not the blocker.
+NEXT: identify the fd/event the busy threads epoll-wait on (instrument epoll_wait
+targets); reconsider flags (--run-all-compositor-stages / --in-process-gpu may make
+navigation wait on a compositor frame that never commits without GL).
+
+## Answer: does chrome work? (updated)
+RUNS actively, single-process, 24 threads, 10 walls cleared incl. the deadlock. Does
+NOT render/emit a DOM: it now LIVELOCKS at "navigation never starts" instead of
+deadlocking. Closer than ever; the remaining wall is chrome-init coordination, not a
+crash or a deadlock.
