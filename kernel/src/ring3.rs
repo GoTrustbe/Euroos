@@ -1758,7 +1758,7 @@ fn futex_wake(uaddr: u64, n: i32) -> u32 {
     while i < q.len() && woken < n {
         if q[i].0 == uaddr {
             let task = q[i].1;
-            crate::sched::unblock(task);
+            crate::sched::unblock_any(task); // wake Blocked OR (timed) Sleeping waiters
             q.swap_remove(i);
             woken += 1;
         } else {
@@ -1771,9 +1771,14 @@ fn futex_wake(uaddr: u64, n: i32) -> u32 {
 /// FUTEX_WAIT: if *uaddr == val, block the current task on uaddr and return 0
 /// (the waiter is switched out on the next tick until a wake
 /// unblocks it; musl re-checks after a spurious wakeup). Otherwise -EAGAIN.
-fn futex_wait(uaddr: u64, val: u32) -> u64 {
+fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     FUTEX_WAIT_COUNT.fetch_add(1, Ordering::Relaxed);
     let cur = crate::sched::current();
+    let now = crate::interrupts::ticks();
+    // A timed wait whose deadline already passed returns -ETIMEDOUT immediately.
+    if deadline != 0 && deadline <= now {
+        return (-110i64) as u64; // -ETIMEDOUT
+    }
     // Hold FUTEX_QUEUE across the value re-read + enqueue + block, so a concurrent
     // futex_wake (which also locks FUTEX_QUEUE) cannot slip in AFTER our value check
     // but BEFORE we are enqueued — the classic wake-before-wait race that loses the
@@ -1790,7 +1795,15 @@ fn futex_wait(uaddr: u64, val: u32) -> u64 {
     if !q.iter().any(|&(a, t)| a == uaddr && t == cur) {
         q.push((uaddr, cur));
     }
-    crate::sched::block_current(); // mark Blocked while still holding q
+    // TIMED wait: park as Sleeping(deadline) so the scheduler auto-wakes it at the
+    // timeout (chrome's message loop / WaitableEvent::TimedWait rely on this — an
+    // ignored timeout blocked every such thread forever = the all-Blocked deadlock).
+    // Indefinite wait: Blocked (only a FUTEX_WAKE resumes it).
+    if deadline != 0 {
+        crate::sched::sleep_ticks(deadline.saturating_sub(now).max(1));
+    } else {
+        crate::sched::block_current();
+    }
     drop(q);
     // Deschedule NOW (per-task syscall stack makes a mid-syscall yield safe) — BUT only
     // on the lock-free glibc path (linux_dispatch). The musl/DOOM path (bg_dispatch)
@@ -1799,6 +1812,15 @@ fn futex_wait(uaddr: u64, val: u32) -> u64 {
     // (fine at its low thread counts); chrome (glibc, ~30 threads) gets the real yield.
     if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
         crate::sched::yield_now();
+    }
+    // Resumed. If we are STILL enqueued, the scheduler woke us at the deadline (a
+    // FUTEX_WAKE would have removed us) -> report -ETIMEDOUT so the caller re-polls.
+    // Otherwise a wake removed us -> success (0).
+    let mut q = FUTEX_QUEUE.lock();
+    if let Some(pos) = q.iter().position(|&(a, t)| a == uaddr && t == cur) {
+        q.swap_remove(pos);
+        drop(q);
+        return if deadline != 0 { (-110i64) as u64 } else { 0 }; // ETIMEDOUT / spurious
     }
     0
 }
@@ -2418,7 +2440,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             // futex(uaddr, op, val, ...). FUTEX_WAIT=0, FUTEX_WAKE=1 (low 7 bits;
             // ignore PRIVATE/CLOCK flags). Real blocking + wake.
             match a2 & 0x7f {
-                0 => futex_wait(a1, a3 as u32),
+                0 => futex_wait(a1, a3 as u32, 0), // musl bg path: indefinite (low thread counts)
                 1 => futex_wake(a1, a3 as i32) as u64,
                 _ => 0,
             }
@@ -7313,8 +7335,22 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // mutexes/joins work. Low 7 bits select the op (ignore PRIVATE/CLOCK).
             // glibc's pthread_join uses FUTEX_WAIT_BITSET (9) / WAKE_BITSET (10),
             // not plain WAIT (0) / WAKE (1) — handle both (bitset ignored = any).
-            match a2 & 0x7f {
-                0 | 9 => futex_wait(a1, a3 as u32),         // WAIT / WAIT_BITSET (block; timer switches out)
+            let op = a2 & 0x7f;
+            match op {
+                0 | 9 => {
+                    // Compute the wake deadline (in 100 Hz ticks) from the timeout arg
+                    // (a4, a timespec). WAIT (0): RELATIVE; WAIT_BITSET (9): ABSOLUTE vs
+                    // CLOCK_MONOTONIC (== our ticks/100). 0 = no timeout = block forever.
+                    let deadline = if a4 != 0 {
+                        let sec: u64 = read_user(a4).unwrap_or(0);
+                        let nsec: u64 = read_user(a4 + 8).unwrap_or(0);
+                        let t = sec.wrapping_mul(100) + nsec / 10_000_000;
+                        if op == 9 { t } else { crate::interrupts::ticks() + t }
+                    } else {
+                        0
+                    };
+                    futex_wait(a1, a3 as u32, deadline)
+                }
                 1 | 10 => futex_wake(a1, a3 as i32) as u64, // WAKE / WAKE_BITSET
                 _ => 0,
             }

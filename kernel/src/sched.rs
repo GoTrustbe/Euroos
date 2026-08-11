@@ -140,6 +140,16 @@ pub fn unblock(idx: usize) {
     }
 }
 
+/// Wake task `idx` from EITHER Blocked or Sleeping -> Ready. A timed futex waiter is
+/// parked as Sleeping(deadline) so it auto-wakes on timeout; an explicit FUTEX_WAKE
+/// must be able to wake it EARLY too, which plain `unblock` (Blocked-only) cannot.
+pub fn unblock_any(idx: usize) {
+    let mut s = SCHED.lock();
+    if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(_) | State::Sleeping(_)) {
+        s.tasks[idx].state = State::Ready;
+    }
+}
+
 /// Wake up to `n` tasks blocked on wait channel `chan`. Returns the number of
 /// woken tasks.
 pub fn wake(chan: u64, n: usize) -> usize {
