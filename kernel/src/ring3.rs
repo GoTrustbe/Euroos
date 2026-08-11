@@ -5444,8 +5444,18 @@ pub fn run_glibc_disk(
             prev_seq = seq; prev_futex = fx; prev_epoll = ep; prev_tick = tick;
             snaps += 1;
         }
-        crate::sched::sleep_ticks(1);
         crate::sched::yield_now();
+        // Tickless idle: if every glibc thread is parked (Sleeping on a futex timeout)
+        // and nothing is runnable, jump the clock straight to the soonest deadline
+        // instead of busy-spinning through idle ticks — otherwise chrome's multi-second
+        // timed waits would take ~60x longer than real time under TCG (and never appear
+        // to progress). A genuine all-Blocked wait returns None -> we just sleep a tick.
+        match crate::sched::idle_next_deadline(crate::sched::current()) {
+            Some(d) if d > crate::interrupts::ticks() => {
+                crate::interrupts::TICKS.store(d, Ordering::Relaxed);
+            }
+            _ => crate::sched::sleep_ticks(1),
+        }
     }
     if !GLIBC_DONE.load(Ordering::Relaxed) {
         crate::serial_println!("[glibc-disk] TIMEOUT waiting for the process to exit (committed {} demand pages, {} from-file/disk)",
@@ -5635,8 +5645,18 @@ pub fn run_glibc(
         // instead of the launcher spinning this whole quantum. Without the yield the
         // launcher busy-loops (pump+sleep) hundreds of times per tick, which under
         // TCG crawls the whole guest — this keeps a live X client responsive.
-        crate::sched::sleep_ticks(1);
         crate::sched::yield_now();
+        // Tickless idle: if every glibc thread is parked (Sleeping on a futex timeout)
+        // and nothing is runnable, jump the clock straight to the soonest deadline
+        // instead of busy-spinning through idle ticks — otherwise chrome's multi-second
+        // timed waits would take ~60x longer than real time under TCG (and never appear
+        // to progress). A genuine all-Blocked wait returns None -> we just sleep a tick.
+        match crate::sched::idle_next_deadline(crate::sched::current()) {
+            Some(d) if d > crate::interrupts::ticks() => {
+                crate::interrupts::TICKS.store(d, Ordering::Relaxed);
+            }
+            _ => crate::sched::sleep_ticks(1),
+        }
     }
     if !GLIBC_DONE.load(Ordering::Relaxed) {
         crate::serial_println!("[glibc] TIMEOUT waiting for the process to exit");

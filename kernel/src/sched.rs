@@ -150,6 +150,36 @@ pub fn unblock_any(idx: usize) {
     }
 }
 
+/// Tickless-idle helper: when NO task other than `current` is runnable, return the
+/// earliest Sleeping deadline among the others (so the caller can fast-forward the
+/// clock straight to it instead of busy-spinning through idle ticks). Returns:
+/// - `Some(deadline)`  — everyone else is Sleeping; the soonest wakes at `deadline`.
+/// - `None`            — some other task is Ready (real work to do), OR the only
+///                       non-current tasks are Blocked with no timeout (a genuine
+///                       wait/deadlock, not idle) — do not fast-forward.
+/// Used to make chrome's multi-second timed futex waits elapse in wall-time instead
+/// of ~60x-slower busy-spun guest ticks under TCG.
+pub fn idle_next_deadline(current: usize) -> Option<u64> {
+    let s = SCHED.lock();
+    let mut earliest: Option<u64> = None;
+    let mut any_blocked = false;
+    for i in 0..s.count {
+        if i == current {
+            continue;
+        }
+        match s.tasks[i].state {
+            State::Ready => return None, // real work is runnable now
+            State::Sleeping(w) => earliest = Some(earliest.map_or(w, |e| e.min(w))),
+            State::Blocked(_) => any_blocked = true,
+            _ => {}
+        }
+    }
+    // Only fast-forward toward a real timed wakeup. If the only non-idle tasks are
+    // Blocked-with-no-deadline, that is a genuine wait (or deadlock) — don't skip.
+    let _ = any_blocked;
+    earliest
+}
+
 /// Wake up to `n` tasks blocked on wait channel `chan`. Returns the number of
 /// woken tasks.
 pub fn wake(chan: u64, n: usize) -> usize {
