@@ -115,6 +115,13 @@ fn demand_file_backed(ptr: u64, len: usize) -> bool {
         return false; // fast path: not a demand-region pointer
     }
     let end = ptr.saturating_add(len as u64);
+    // A MAP_SHARED region is writable by definition, even though it is filled from
+    // a file: excluding it here keeps shared memory shared.
+    if SHARED_MAPS.lock().iter().any(|&(_, b, l)| ptr < b + l as u64 && end > b)
+        || SHARED_ALIASES.lock().iter().any(|&(b, l, _)| ptr < b + l && end > b)
+    {
+        return false;
+    }
     DEMAND_FILE_MAPS
         .lock()
         .iter()
@@ -411,6 +418,281 @@ fn set_fd_accmode(fd: u64, flags: u64) {
 }
 /// Tasks blocked in a read on an empty pipe: (pipe-id, task). Woken by a write.
 static PIPE_WAITERS: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
+
+// ── CDP driver: EuroOS speaks DevTools to Chromium over a pipe ───────────────
+// `--remote-debugging-pipe` makes chrome read commands on fd 3 and write answers
+// on fd 4, as NUL-separated JSON. That is the whole protocol, and it needs only
+// the two things EuroOS is proven to do: navigate, and run JS. It bypasses
+// chrome://headless/headless_command.html — the WebUI page that --dump-dom relies
+// on, which comes up empty here — so WE ask for the DOM instead of chrome's own
+// injected script. Sequence (validated against native Linux first):
+//   Target.getTargets -> Target.attachToTarget(flatten) -> Page.navigate
+//   -> Runtime.evaluate("document.documentElement.outerHTML")
+static CDP_CMD_ID: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+static CDP_RES_ID: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+static CDP_STEP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static CDP_MARK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static CDP_TRIES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static CDP_RX: Mutex<alloc::vec::Vec<u8>> = Mutex::new(alloc::vec::Vec::new());
+static CDP_URL: Mutex<String> = Mutex::new(String::new());
+static CDP_SESSION: Mutex<String> = Mutex::new(String::new());
+/// The DOM chrome sent back (empty until it arrives).
+pub static CDP_DOM: Mutex<String> = Mutex::new(String::new());
+/// Drive the DevTools conversation from the process-run loop.
+pub static CDP_DRIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Put the two pipe ends where `--remote-debugging-pipe` expects them: fd 3 is
+/// chrome's READ end (we write commands into it), fd 4 its WRITE end (we read the
+/// answers). Call this right before launching chrome, so the fds exist from its
+/// first instruction — chrome checks them at startup and exits if they are absent.
+pub fn cdp_install(url: &str) {
+    CDP_STEP.store(0, Ordering::Relaxed);
+    CDP_MARK.store(0, Ordering::Relaxed);
+    CDP_TRIES.store(0, Ordering::Relaxed);
+    CDP_RX.lock().clear();
+    CDP_SESSION.lock().clear();
+    CDP_DOM.lock().clear();
+    *CDP_URL.lock() = String::from(url);
+    CDP_DRIVE.store(true, Ordering::Relaxed);
+}
+
+/// Create the pipes and put them on fd 3/4. Called from the process-run setup
+/// AFTER reset_fd_table(), which wipes PIPE_FDS/PIPES for the new process — an
+/// earlier install would be erased a moment before chrome looks at its fds.
+fn cdp_pipes_create() {
+    if !CDP_DRIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let cmd_id = {
+        let mut p = PIPES.lock();
+        p.push(alloc::vec::Vec::new());
+        PIPE_NONBLOCK.lock().push(false);
+        p.len() - 1
+    };
+    let res_id = {
+        let mut p = PIPES.lock();
+        p.push(alloc::vec::Vec::new());
+        PIPE_NONBLOCK.lock().push(false);
+        p.len() - 1
+    };
+    {
+        let mut pf = PIPE_FDS.lock();
+        pf[3] = Some((cmd_id, false)); // fd 3: chrome reads our commands
+        pf[4] = Some((res_id, true));  // fd 4: chrome writes its answers
+    }
+    FD_ACCMODE[3].store(0, Ordering::Relaxed); // O_RDONLY, as a real read end reports
+    FD_ACCMODE[4].store(1, Ordering::Relaxed); // O_WRONLY
+    CDP_CMD_ID.store(cmd_id, Ordering::Relaxed);
+    CDP_RES_ID.store(res_id, Ordering::Relaxed);
+    crate::serial_println!("[cdp] pipes ready: fd 3 = commands (pipe {cmd_id}), fd 4 = answers (pipe {res_id})");
+}
+
+/// Send one CDP message (NUL-terminated, as the pipe transport defines).
+fn cdp_send(msg: &str) {
+    let id = CDP_CMD_ID.load(Ordering::Relaxed);
+    if id == usize::MAX {
+        return;
+    }
+    {
+        let mut pipes = PIPES.lock();
+        pipes[id].extend_from_slice(msg.as_bytes());
+        pipes[id].push(0);
+    }
+    // Wake anything parked on that pipe (chrome's reader thread blocks on it).
+    let mut w = PIPE_WAITERS.lock();
+    let mut i = 0;
+    while i < w.len() {
+        if w[i].0 == id {
+            crate::sched::unblock(w[i].1);
+            w.swap_remove(i);
+        } else {
+            i += 1;
+        }
+    }
+    crate::serial_println!("[cdp] -> {msg}");
+}
+
+/// Pull the next complete answer, if chrome has written one.
+fn cdp_next_msg() -> Option<String> {
+    let id = CDP_RES_ID.load(Ordering::Relaxed);
+    if id == usize::MAX {
+        return None;
+    }
+    {
+        let mut pipes = PIPES.lock();
+        if !pipes[id].is_empty() {
+            let drained: alloc::vec::Vec<u8> = pipes[id].drain(..).collect();
+            CDP_RX.lock().extend_from_slice(&drained);
+        }
+    }
+    let mut rx = CDP_RX.lock();
+    let pos = rx.iter().position(|&b| b == 0)?;
+    let msg: alloc::vec::Vec<u8> = rx.drain(0..=pos).collect();
+    Some(String::from_utf8_lossy(&msg[..msg.len() - 1]).into_owned())
+}
+
+/// Value of a JSON string field, without a JSON parser: find `"key":"` and read to
+/// the next unescaped quote. Enough for ids and for one big HTML string.
+fn json_str<'a>(hay: &'a str, key: &str) -> Option<&'a str> {
+    let pat = alloc::format!("\"{key}\":\"");
+    let start = hay.find(&pat)? + pat.len();
+    let rest = &hay[start..];
+    let mut esc = false;
+    for (i, c) in rest.char_indices() {
+        if esc {
+            esc = false;
+        } else if c == '\\' {
+            esc = true;
+        } else if c == '"' {
+            return Some(&rest[..i]);
+        }
+    }
+    None
+}
+
+/// Undo the JSON escaping of the DOM string so the log shows real HTML.
+fn json_unescape(s: &str) -> String {
+    let mut out = String::new();
+    let b: alloc::vec::Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == '\\' && i + 1 < b.len() {
+            match b[i + 1] {
+                'n' => { out.push('\n'); i += 2; }
+                't' => { out.push('\t'); i += 2; }
+                '"' => { out.push('"'); i += 2; }
+                '\\' => { out.push('\\'); i += 2; }
+                'u' if i + 5 < b.len() => {
+                    let hex: String = b[i + 2..i + 6].iter().collect();
+                    match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                        Some(c) => out.push(c),
+                        None => out.push('?'),
+                    }
+                    i += 6;
+                }
+                other => { out.push(other); i += 2; }
+            }
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Ask the page for its readyState AND its markup in one evaluate: that single
+/// answer separates "read too early" (readyState loading/interactive) from "the
+/// body never arrived" (complete, yet empty).
+fn cdp_ask_dom() {
+    let sid = CDP_SESSION.lock().clone();
+    let n = CDP_TRIES.fetch_add(1, Ordering::Relaxed);
+    cdp_send(&alloc::format!(
+        "{{\"id\":4,\"sessionId\":\"{sid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"document.readyState+'|'+document.documentElement.outerHTML\",\"returnByValue\":true}}}}"));
+    let _ = n;
+    CDP_STEP.store(5, Ordering::Relaxed);
+    CDP_MARK.store(crate::interrupts::ticks(), Ordering::Relaxed);
+}
+
+/// One step of the DevTools conversation. Called from the process-run loop; each
+/// call sends at most one command and consumes whatever answers have arrived.
+pub fn cdp_pump() {
+    if !CDP_DRIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let now = crate::interrupts::ticks();
+    let step = CDP_STEP.load(Ordering::Relaxed);
+
+    // Step 0: give chrome a moment to open the pipe, then ask what targets exist.
+    if step == 0 {
+        if CDP_MARK.load(Ordering::Relaxed) == 0 {
+            CDP_MARK.store(now, Ordering::Relaxed);
+            return;
+        }
+        if now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) < 300 {
+            return; // ~3 s of guest time: the browser target must exist first
+        }
+        cdp_send("{\"id\":1,\"method\":\"Target.getTargets\"}");
+        CDP_STEP.store(1, Ordering::Relaxed);
+        CDP_MARK.store(now, Ordering::Relaxed);
+        return;
+    }
+
+    // Step 4 waits for Page.loadEventFired (handled below), with a bounded fallback
+    // so a page that never fires it still gets read — and reports why.
+    if step == 4 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 2000 {
+        crate::serial_println!("[cdp] no load event within 20 s of guest time — reading the DOM anyway");
+        cdp_ask_dom();
+    }
+
+    while let Some(msg) = cdp_next_msg() {
+        let head: String = msg.chars().take(160).collect();
+        crate::serial_println!("[cdp] <- {head}");
+        let step = CDP_STEP.load(Ordering::Relaxed);
+        if step == 1 && msg.contains("\"id\":1") {
+            // Attach to the page target. A target list without a page means chrome
+            // has not created it yet — ask again rather than giving up.
+            match json_str(&msg, "targetId") {
+                Some(t) => {
+                    let t = String::from(t);
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":2,\"method\":\"Target.attachToTarget\",\"params\":{{\"targetId\":\"{t}\",\"flatten\":true}}}}"));
+                    CDP_STEP.store(2, Ordering::Relaxed);
+                }
+                None => {
+                    CDP_STEP.store(0, Ordering::Relaxed);
+                    CDP_MARK.store(now, Ordering::Relaxed);
+                }
+            }
+        } else if step == 2 && msg.contains("\"id\":2") {
+            if let Some(s) = json_str(&msg, "sessionId") {
+                *CDP_SESSION.lock() = String::from(s);
+                let url = CDP_URL.lock().clone();
+                // Page.enable first: without it no Page.loadEventFired arrives, and
+                // reading the DOM before the load event returns the INITIAL EMPTY
+                // document — which looks exactly like a body that never loaded.
+                cdp_send(&alloc::format!(
+                    "{{\"id\":6,\"sessionId\":\"{s}\",\"method\":\"Page.enable\"}}"));
+                cdp_send(&alloc::format!(
+                    "{{\"id\":3,\"sessionId\":\"{s}\",\"method\":\"Page.navigate\",\"params\":{{\"url\":\"{url}\"}}}}"));
+                CDP_STEP.store(3, Ordering::Relaxed);
+            }
+        } else if step == 3 && msg.contains("\"id\":3") {
+            CDP_STEP.store(4, Ordering::Relaxed);
+            CDP_MARK.store(now, Ordering::Relaxed);
+        } else if step == 4 && msg.contains("Page.loadEventFired") {
+            crate::serial_println!("[cdp] load event fired — reading the DOM");
+            cdp_ask_dom();
+        } else if step == 5 && msg.contains("\"id\":4") {
+            match json_str(&msg, "value") {
+                Some(v) => {
+                    let val = json_unescape(v);
+                    let (state, dom) = match val.find('|') {
+                        Some(i) => (String::from(&val[..i]), String::from(&val[i + 1..])),
+                        None => (String::from("?"), val.clone()),
+                    };
+                    let empty = dom.contains("<body></body>");
+                    crate::serial_println!("[cdp] readyState={state} DOM ({} B): {dom}", dom.len());
+                    *CDP_DOM.lock() = dom;
+                    // An empty body while the document is still loading is simply too
+                    // early: give it a few more tries before calling it a failure.
+                    if empty && CDP_TRIES.load(Ordering::Relaxed) < 6 {
+                        CDP_STEP.store(4, Ordering::Relaxed);
+                        CDP_MARK.store(now.saturating_sub(1500), Ordering::Relaxed);
+                        continue;
+                    }
+                    if !empty {
+                        crate::serial_println!("[cdp] ★★★ REAL DOM rendered by Chromium on EuroOS");
+                    }
+                }
+                None => crate::serial_println!("[cdp] evaluate returned no value: {msg}"),
+            }
+            CDP_STEP.store(6, Ordering::Relaxed);
+            cdp_send("{\"id\":5,\"method\":\"Browser.close\"}"); // let chrome exit cleanly
+            CDP_DRIVE.store(false, Ordering::Relaxed);
+            return;
+        }
+    }
+}
 
 /// pipe2(fds, flags): create a pipe; assign a read fd and a write fd and write
 /// them to `fds[0]`/`fds[1]`. Returns 0 / -EMFILE.
@@ -1148,7 +1430,10 @@ fn sync_shared_region(fi: usize, to_file: bool) {
     };
     let flen = FILES.lock().get(fi).map(|(_, d)| d.len()).unwrap_or(0);
     let n = flen.min(rlen);
-    if n == 0 {
+    // Only small regions are reconciled: a multi-megabyte shared buffer is mapped
+    // lazily and is never read through its fd (chrome uses it purely as memory), so
+    // copying it on every read/write syscall would cost far more than it is worth.
+    if n == 0 || rlen > 256 * 1024 {
         return;
     }
     if to_file {
@@ -1165,6 +1450,18 @@ fn sync_shared_region(fi: usize, to_file: bool) {
     }
 }
 
+/// Log a read of the page under test, so "did the loader ever pull the body" is a
+/// fact in the log rather than an inference.
+fn diag_page_read(fi: usize, n: u64, how: &str) {
+    if !CACHE_DIR_DIAG.load(Ordering::Relaxed) {
+        return;
+    }
+    let is_page = FILES.lock().get(fi).map(|(p, _)| p.ends_with("euro.html")).unwrap_or(false);
+    if is_page {
+        crate::serial_println!("[page] {how} of the test page -> {n} bytes");
+    }
+}
+
 fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
     if fd >= MAX_FD {
         return u64::MAX;
@@ -1174,6 +1471,7 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
         None => return u64::MAX,
     };
     sync_shared_region(fi, true); // a shared mapping IS the file: pick up its writes
+    diag_page_read(fi, len as u64, "pread");
     if fi == PROC_MEM_FI {
         // pread(/proc/self/mem, buf, len, off) reads memory at virtual address `off`.
         return proc_mem_xfer(offset as u64, buf, len, false);
@@ -1243,6 +1541,11 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
     if SHARED_ANY.load(Ordering::Relaxed) {
         drop(fds); // sync_shared_region takes FILES/SHARED_MAPS: never nest the fd lock
         sync_shared_region(fi, true); // a shared mapping IS the file: pick up its writes
+        fds = OPEN_FDS.lock();
+    }
+    if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
+        drop(fds);
+        diag_page_read(fi, len as u64, "read");
         fds = OPEN_FDS.lock();
     }
     // /proc/self/mem: read the process's own memory at the current position (= the
@@ -1808,7 +2111,13 @@ fn diag_pack_path(what: &str, path: &[u8], ret: u64) {
     if !CACHE_DIR_DIAG.load(Ordering::Relaxed) {
         return;
     }
-    if path.windows(6).any(|w| w == b"/pack/") {
+    // /pack/ = the served resources; ".org.chromium" and /dev/shm = the temp file
+    // chrome mmaps MAP_SHARED as a Mojo shared-memory buffer (with
+    // --disable-dev-shm-usage it lands in /tmp). A page whose body never arrives
+    // makes "did chrome ever create that buffer, and what did we answer" the
+    // question — on native Linux it creates one per data pipe.
+    let has = |needle: &[u8]| path.windows(needle.len()).any(|w| w == needle);
+    if has(b"/pack/") || has(b".org.chromium") || has(b"/dev/shm") || has(b"euro.html") || path == b"/tmp" {
         crate::serial_println!("[packpath] {what}({:?}) -> {:#x}",
             core::str::from_utf8(path).unwrap_or("?"), ret);
     }
@@ -2860,7 +3169,17 @@ fn vfs_ftruncate(fd: usize, len: usize) -> u64 {
     }
     let mut files = FILES.lock();
     if let Some(f) = files.get_mut(fi) {
+        let path = f.0.clone();
         f.1.to_mut().resize(len, 0);
+        drop(files);
+        if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
+            crate::serial_println!("[ftrunc] fd={fd} {path:?} -> {len} B");
+            // A sized shared-memory buffer should be mmap'd next. Trace what chrome
+            // ACTUALLY does from here, once, for the first big buffer.
+            if len >= 1 << 20 && path.contains("org.chromium") && SYS_TRACE_ARMED.swap(true, Ordering::Relaxed) == false {
+                SYS_TRACE_LEFT.store(60, Ordering::Relaxed);
+            }
+        }
         return 0;
     }
     (-9i64) as u64
@@ -2923,7 +3242,19 @@ fn vfs_rename(oldp: &[u8], newp: &[u8]) -> u64 {
 /// tolerates that) — returns 0.
 fn vfs_unlink(path: &[u8]) -> u64 {
     let p = String::from_utf8_lossy(path).into_owned();
-    FILES.lock().retain(|(q, _)| *q != p);
+    // TOMBSTONE, never remove: an open fd holds an INDEX into FILES, so dropping the
+    // entry would shift every later file down one slot and hand every open
+    // descriptor someone else's data. Blanking the path unlinks it from the
+    // namespace (no lookup can match "", every path starts with '/') while the
+    // bytes stay alive for the descriptors still holding it — which is exactly what
+    // POSIX promises, and what "create, unlink, ftruncate, mmap(MAP_SHARED)"
+    // depends on: the standard way to get anonymous shared memory, and how chrome
+    // allocates the Mojo buffers that carry a page's bytes to its renderer.
+    for (q, _) in FILES.lock().iter_mut() {
+        if *q == p {
+            q.clear();
+        }
+    }
     SYMLINKS.lock().retain(|(q, _)| *q != p);
     MKDIRS.lock().retain(|q| *q != p);
     0
@@ -3351,6 +3682,10 @@ static GFMMAP_ELF: &[u8] = include_bytes!("../../userland/glibc/gfmmap");
 // memory. Mojo data pipes (chrome's resource bodies, even in one process) live in
 // such a buffer; a private-copy mmap delivers an empty document with no error.
 static GSHM_ELF: &[u8] = include_bytes!("../../userland/glibc/gshm");
+// UNLINKED-BUT-OPEN test: an unlinked file must keep serving its open fd and must
+// not disturb any other fd — the contract behind "create, unlink, mmap" anonymous
+// shared memory (how chrome carries a page's bytes to its renderer).
+static GUNLINK_ELF: &[u8] = include_bytes!("../../userland/glibc/gunlink");
 // CHROMIUM bring-up: two glibc stub libs (their real code lives in libc.so.6) that
 // chrome binaries declare as DT_NEEDED, + a REAL chrome component — the crashpad
 // crash handler (3.4 MB, dynamically linked, loaded via demand paging).
@@ -3461,6 +3796,8 @@ pub fn gsparse_bytes() -> &'static [u8] { GSPARSE_ELF }
 pub fn gfmmap_bytes() -> &'static [u8] { GFMMAP_ELF }
 /// A MAP_SHARED memfd test: two mappings of one memfd must be one memory.
 pub fn gshm_bytes() -> &'static [u8] { GSHM_ELF }
+/// An unlinked-but-open + anonymous-shared-memory test.
+pub fn gunlink_bytes() -> &'static [u8] { GUNLINK_ELF }
 /// glibc stub libs chrome declares as NEEDED (real code is in libc.so.6).
 pub fn glibc_libdl_bytes() -> &'static [u8] { GLIBC_LIBDL }
 pub fn glibc_libpthread_bytes() -> &'static [u8] { GLIBC_LIBPTHREAD }
@@ -4633,6 +4970,8 @@ pub fn run_dynamic(
     LINUX_ABI.store(linux_abi, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    SHARED_FRAMES.lock().clear();
+    SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
         EXITED = 0;
@@ -4744,6 +5083,8 @@ pub fn run_interp(
     LINUX_ABI.store(true, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    SHARED_FRAMES.lock().clear();
+    SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
         EXITED = 0;
@@ -5051,6 +5392,15 @@ static DEMAND_FILE_MAPS: Mutex<alloc::vec::Vec<(u64, u64, usize, usize, u64)>> =
 /// that file resolves to this one region, which is what "shared memory" means. Arena
 /// addresses are per-process, so this is cleared when a process starts.
 static SHARED_MAPS: Mutex<alloc::vec::Vec<(usize, u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
+/// Physical frames backing a shared file, one per page, allocated on first touch
+/// (0 = not yet). This is what makes sharing REAL: every mapping of the file gets
+/// its own address range, and each range faults onto THESE frames, so a write
+/// through one mapping is a write through all of them. Handing out one address for
+/// every mapping would be simpler, but chrome keeps its mappings in a registry
+/// keyed BY ADDRESS and CHECK-fails when two of them collide.
+static SHARED_FRAMES: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u64>)>> = Mutex::new(alloc::vec::Vec::new());
+/// Address ranges handed out for shared mappings: (base, length, file index).
+static SHARED_ALIASES: Mutex<alloc::vec::Vec<(u64, u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
 static DEMAND_FILE_FILLED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static DEMAND_POOL_OOM: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static DEMAND_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -5108,6 +5458,48 @@ pub fn handle_demand_fault(addr: u64) -> bool {
         return false;
     }
     let page = addr & !0xFFF;
+    // A SHARED mapping: every alias of the same file faults onto the same frame, so
+    // the mappings really are one memory.
+    let alias = SHARED_ALIASES.lock().iter().find(|&&(b, l, _)| page >= b && page < b + l).copied();
+    if let Some((abase, _alen, fi)) = alias {
+        let idx = ((page - abase) / 4096) as usize;
+        let mut frames = SHARED_FRAMES.lock();
+        if !frames.iter().any(|(f, _)| *f == fi) {
+            frames.push((fi, alloc::vec::Vec::new()));
+        }
+        let ent = frames.iter_mut().find(|(f, _)| *f == fi).unwrap();
+        if ent.1.len() <= idx {
+            ent.1.resize(idx + 1, 0);
+        }
+        let mut phys = ent.1[idx];
+        if phys == 0 {
+            phys = match crate::procpool::demand_alloc() {
+                Some(p) => p,
+                None => return false,
+            };
+            // A fresh page of shared memory reads as zeros, then takes the file's
+            // bytes if it has any (a freshly sized buffer has none).
+            unsafe { core::ptr::write_bytes(phys as *mut u8, 0, 4096); }
+            let foff = idx * 4096;
+            let files = FILES.lock();
+            if let Some(f) = files.get(fi) {
+                if foff < f.1.len() {
+                    let n = (f.1.len() - foff).min(4096);
+                    // SAFETY: `phys` is an identity-mapped, zeroed 4 KiB frame.
+                    unsafe { core::ptr::copy_nonoverlapping(f.1[foff..].as_ptr(), phys as *mut u8, n); }
+                }
+            }
+            ent.1[idx] = phys;
+            DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
+        }
+        drop(frames);
+        if !crate::paging::map_demand_4k(pml4, page, phys) {
+            return false;
+        }
+        unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
+        DEMAND_USED.store(true, Ordering::Relaxed);
+        return true;
+    }
     let phys = match crate::procpool::demand_alloc() {
         Some(p) => p,
         None => {
@@ -5215,6 +5607,8 @@ pub fn spawn_glibc_persistent(
     LINUX_ABI.store(true, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    SHARED_FRAMES.lock().clear();
+    SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
     OUTPUT.lock().clear();
     reset_fd_table();
@@ -5427,6 +5821,8 @@ pub fn run_glibc_disk(
     LINUX_ABI.store(true, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    SHARED_FRAMES.lock().clear();
+    SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
         EXITED = 0;
@@ -5434,6 +5830,7 @@ pub fn run_glibc_disk(
     }
     OUTPUT.lock().clear();
     reset_fd_table();
+    cdp_pipes_create(); // fd 3/4 for --remote-debugging-pipe, after the wipe above
 
     // The exe is placed at the START of the demand region; ld.so libs reserve above it.
     let exe_base = DEMAND_BASE;
@@ -5546,6 +5943,9 @@ pub fn run_glibc_disk(
         crate::xserver::pump_keyboard();
         crate::xserver::pump_mouse();
         iters += 1;
+        if iters % 64 == 0 {
+            cdp_pump(); // DevTools conversation with a --remote-debugging-pipe browser
+        }
         if STALL_DIAG.load(Ordering::Relaxed) && iters % 4000 == 0 && snaps < 8 {
             let seq = SYSCALL_SEQ.load(Ordering::Relaxed);
             let fx = FUTEX_WAIT_COUNT.load(Ordering::Relaxed);
@@ -5615,6 +6015,8 @@ pub fn run_glibc(
     LINUX_ABI.store(true, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    SHARED_FRAMES.lock().clear();
+    SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
         EXITED = 0;
@@ -6255,7 +6657,28 @@ fn linux_required_cap(num: u64, a1: u64) -> u64 {
     }
 }
 
+/// Trace the next N syscalls, verbatim with their return values. Armed at a chosen
+/// moment (e.g. right after chrome sizes a shared-memory buffer) so the log shows
+/// exactly what the program does next and what we answered — a few dozen lines
+/// instead of the millions a global trace would produce.
+static SYS_TRACE_LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static SYS_TRACE_ARMED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    if SYS_TRACE_LEFT.load(Ordering::Relaxed) == 0 {
+        return linux_dispatch_inner(num, a1, a2, a3, a4, a5);
+    }
+    let r = linux_dispatch_inner(num, a1, a2, a3, a4, a5);
+    let left = SYS_TRACE_LEFT.load(Ordering::Relaxed);
+    if left > 0 {
+        SYS_TRACE_LEFT.store(left - 1, Ordering::Relaxed);
+        crate::serial_println!("[systrace] t{} {num}({a1:#x},{a2:#x},{a3:#x},{a4:#x},{a5:#x}) = {r:#x}",
+            crate::sched::current());
+    }
+    r
+}
+
+fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let _ = a4; // not every syscall uses arg4/arg5 (r10/r8)
     SYSCALL_SEQ.fetch_add(1, Ordering::Relaxed); // progress heartbeat (stall detector)
     SYSCALL_YIELD_OK.store(true, Ordering::Relaxed); // lock-free path: futex/epoll may yield
@@ -6608,7 +7031,14 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             const MAP_STACK: u64 = 0x2_0000;
             const MAP_SHARED: u64 = 0x1;
             let len = (a2 + 0xFFF) & !0xFFF;
-            let file_backed = a4 & MAP_ANONYMOUS == 0 && (a5 as usize) < MAX_FD && a5 != u64::MAX;
+            // The fd argument is an INT: only its low 32 bits are meaningful, and the
+            // caller may leave anything in the upper half (chrome arrives here with
+            // 0xffffffff_00000033 for fd 51). Reading all 64 bits made a MAP_SHARED
+            // mapping of a real fd look like an anonymous one, so chrome's shared
+            // buffers became private zero pages: a page's bytes never reached its
+            // renderer and every document came up EMPTY, with no error anywhere.
+            let a5 = a5 as u32 as u64; // truncate exactly like the kernel ABI defines
+            let file_backed = a4 & MAP_ANONYMOUS == 0 && (a5 as usize) < MAX_FD && a5 != 0xFFFF_FFFF;
 
             // MAP_SHARED of an in-RAM file (memfd/tmpfs) = SHARED memory: every mapping
             // of that file must be ONE memory, so a write through one is visible through
@@ -6627,6 +7057,29 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 // read-only, so the existing copy path is already correct for it.
                 if fi < DISK_FI_BASE || fi == WAD_FI || fi == PROC_MEM_FI {
                     let off = unsafe { recover_mmap_offset() } as usize;
+                    if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
+                        crate::serial_println!("[shm] mmap MAP_SHARED attempt: {} off={off} len={len}", fi_path(fi));
+                    }
+                    // With demand paging available, hand out a FRESH address range per
+                    // mapping and let it fault onto the file's shared frames. Distinct
+                    // addresses are not cosmetic: chrome registers its mappings by
+                    // address and CHECK-fails on a collision.
+                    if DEMAND_ENABLED.load(Ordering::Relaxed) {
+                        let fsz = FILES.lock().get(fi).map(|(_, d)| d.len()).unwrap_or(0);
+                        let region = (((fsz.max(off + len as usize)) as u64 + 0xFFF) & !0xFFF).max(4096);
+                        let start = DEMAND_NEXT.fetch_add(region, Ordering::Relaxed);
+                        if start + region > DEMAND_BASE + DEMAND_SIZE {
+                            DEMAND_NEXT.fetch_sub(region, Ordering::Relaxed);
+                            return (-12i64) as u64; // -ENOMEM
+                        }
+                        SHARED_ALIASES.lock().push((start, region, fi));
+                        SHARED_ANY.store(true, Ordering::Relaxed);
+                        if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
+                            crate::serial_println!("[shm] {} mapped shared at {start:#x}..{:#x} (own address, shared frames)",
+                                fi_path(fi), start + region);
+                        }
+                        return start + off as u64;
+                    }
                     // Resolve the lookup into a plain value FIRST and drop the guard: an
                     // `if let ... = MUTEX.lock()....` holds it across the whole if/else,
                     // and the else arm locks SHARED_MAPS again — a spin mutex taken twice
@@ -6649,12 +7102,26 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                         // final size before mapping), fill it once, and record it.
                         let fsz = FILES.lock().get(fi).map(|(_, d)| d.len()).unwrap_or(0);
                         let region = (((fsz.max(off + len as usize)) as u64 + 0xFFF) & !0xFFF).max(4096);
-                        let b = (HEAP_BREAK.load(Ordering::Relaxed) + 0xFFF) & !0xFFF;
-                        if b + region > HEAP_END.load(Ordering::Relaxed) || !in_user_arena(b, region as usize) {
-                            return (-12i64) as u64; // -ENOMEM
-                        }
-                        HEAP_BREAK.store(b + region, Ordering::Relaxed);
-                        {
+                        // A BIG shared buffer belongs in the sparse demand region, not in
+                        // the ~30 MiB arena mmap window: chrome maps a 64 MiB shared pool
+                        // this way, which the arena cannot hold — the mmap then fails, its
+                        // shared memory is unavailable, and page bodies never reach the
+                        // renderer. Reserve the span and let it fill page by page from the
+                        // file (a freshly ftruncated file reads as the zeros it should).
+                        let b = if DEMAND_ENABLED.load(Ordering::Relaxed) && region > (1 << 20) {
+                            let start = DEMAND_NEXT.fetch_add(region, Ordering::Relaxed);
+                            if start + region > DEMAND_BASE + DEMAND_SIZE {
+                                DEMAND_NEXT.fetch_sub(region, Ordering::Relaxed);
+                                return (-12i64) as u64; // -ENOMEM
+                            }
+                            DEMAND_FILE_MAPS.lock().push((start, region, fi, 0, region));
+                            start
+                        } else {
+                            let b = (HEAP_BREAK.load(Ordering::Relaxed) + 0xFFF) & !0xFFF;
+                            if b + region > HEAP_END.load(Ordering::Relaxed) || !in_user_arena(b, region as usize) {
+                                return (-12i64) as u64; // -ENOMEM
+                            }
+                            HEAP_BREAK.store(b + region, Ordering::Relaxed);
                             let files = FILES.lock();
                             let data = &files[fi].1;
                             // SAFETY: b..b+region validated in-arena above.
@@ -6664,7 +7131,8 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                                     core::ptr::copy_nonoverlapping(data.as_ptr(), b as *mut u8, data.len().min(region as usize));
                                 }
                             }
-                        }
+                            b
+                        };
                         SHARED_MAPS.lock().push((fi, b, region as usize));
                         SHARED_ANY.store(true, Ordering::Relaxed);
                         crate::serial_println!("[shm] MAP_SHARED {} -> region {b:#x}..{:#x} (one memory for every mapping)",
@@ -8084,6 +8552,8 @@ pub fn run_args(
         .map(|a| String::from_utf8_lossy(a).into_owned())
         .unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    SHARED_FRAMES.lock().clear();
+    SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
         EXITED = 0;

@@ -1929,6 +1929,14 @@ fn main() -> Status {
         serial_println!("[glibc] gshm (MAP_SHARED memfd): exit={esh} (want 131)");
         for l in osh.lines() { serial_println!("[glibc]   {l}"); }
 
+        // gunlink: an unlinked file must keep serving its open fd, its neighbours must
+        // be undisturbed, and "create, unlink, ftruncate, mmap(MAP_SHARED)" — the
+        // standard anonymous-shared-memory recipe, and how chrome allocates the Mojo
+        // buffers that carry a page's bytes — must work.
+        let (oul, eul) = ring3::run_glibc(&mut allocator, ring3::gunlink_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gunlink"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gunlink (unlinked-but-open + anon shm): exit={eul} (want 137)");
+        for l in oul.lines() { serial_println!("[glibc]   {l}"); }
+
         // LEAN chrome-headless-shell run: skip the GUI/demo glibc tests (X11/gsparse/
         // gfmmap/crashpad/gdiskmap). They inflate guest memory and, on a memory-tight
         // host, OOM-kill qemu before hshell is reached. Jump straight to the disk-
@@ -2104,6 +2112,10 @@ fn main() -> Status {
             ring3::register_file("/dev/null", alloc::vec::Vec::new());
             ring3::register_file("/dev/zero", alloc::vec![0u8; 4096]);
             ring3::register_file("/dev/urandom", (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect());
+            // fd 3/4 must exist from chrome's first instruction: it checks them at
+            // startup and exits with "Remote debugging pipe file descriptors are not
+            // open" if they are missing.
+            ring3::cdp_install("file:///tmp/euro.html");
             let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
                 &[b"/pack/chrome-headless-shell", b"--no-sandbox",
                   b"--disable-gpu", b"--disable-dev-shm-usage", b"--user-data-dir=/tmp/hs",
@@ -2172,15 +2184,16 @@ fn main() -> Status {
                   // "FileURLLoader::Start" appears, navigation + resource loading work
                   // and only the WebUI/resource-bundle path is broken; if it does not,
                   // navigation itself never starts, which is the deeper wall.
-                  // VERIFIED 2026-08-11: with a BARE URL (no --dump-dom, no --timeout —
-                  // both put chrome in command-handler mode) chrome NAVIGATES on EuroOS:
-                  // "FileURLLoader::Start: file:///tmp/euro.html". So navigation and
-                  // resource loading work; only the chrome://headless handler page comes
-                  // up empty. Back to --dump-dom to chase that last gap.
-                  b"--dump-dom", b"file:///tmp/euro.html"],
+                  // EuroOS drives DevTools ITSELF: --remote-debugging-pipe makes chrome
+                  // read commands on fd 3 and answer on fd 4 (NUL-separated JSON), which
+                  // the kernel installs before launch and pumps from the run loop
+                  // (ring3::cdp_install / cdp_pump). This skips --dump-dom's
+                  // chrome://headless handler page — the one thing here that comes up
+                  // empty — and uses only what is proven to work: navigation and V8.
+                  b"--remote-debugging-pipe", b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
-            serial_println!("[hshell] BUILD=dump-dom + lossy-output (no chrome write is dropped any more)");
+            serial_println!("[hshell] BUILD=cdp-pipe (EuroOS drives DevTools: Target.attach -> Page.navigate -> Runtime.evaluate)");
             serial_println!("[hshell] chrome-headless-shell from DISK: exit={e3}");
             for l in o3.lines() { serial_println!("[hshell]   {l}"); }
         }
@@ -2188,8 +2201,9 @@ fn main() -> Status {
         // task table at index 31 with free_frames stable — see commit notes.)
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
-        let results: [(&str, u64, u64); 20] = [
+        let results: [(&str, u64, u64); 21] = [
             ("gshm(MAP_SHARED memfd)", esh, 131),
+            ("gunlink(unlinked-but-open + anon shm)", eul, 137),
             ("gtiny(dyn-link)", e1, 42), ("gtest(stdio/malloc/qsort)", e2, 55),
             ("gthread(pthreads)", e3, 88), ("gmath(libm+dlopen)", e4, 77),
             ("gcpp(C++/exceptions)", e5, 66), ("seq(argv)", e6, 0), ("factor(libgmp)", e7, 0),
