@@ -99,3 +99,31 @@ paged model; the child also shares the parent's singleton globals = M3). This is
 same structural rock flagged from the start, now reached with certainty AFTER
 clearing every deliberate-CHECK crash. Getting the DOM = the M2/M3 multi-process
 project (multi-day), not a syscall patch.
+
+## BREAKTHROUGH 2026-08-11: --single-process sidesteps the multi-process wall
+Switched chrome-headless-shell to --single-process --in-process-gpu. This is the
+strategically right path: it avoids fork+execve+cross-process-Mojo (the multi-day
+M2/M3 refactor) entirely — the renderer/GPU/utility all run in the browser process.
+It was "upstream-broken" before only because of the worker-thread CHECK crashes we'd
+been clearing. Results (iterations, each a real ABI fix that moved the crash forward):
+- forks: 0 (multi-process wall GONE), epoll rate collapsed 780K->8K/window.
+- prlimit64/getrlimit now fill the rlimit buffer (were returning success unfilled ->
+  garbage limits -> CHECK crash). Moved crash fontations -> pthread.
+- alloc_thread_kstack self-heals leaked slots (fault-killed threads never freed them).
+- glibc thread stacks (MAP_STACK ~8MiB) route to the 256GiB demand region, not the
+  ~31MiB arena mmap window that a few threads exhausted -> pthread_create EAGAIN gone.
+  Thread count 2 -> 22: single-process chrome now runs its full thread set.
+
+CURRENT WALL: Fontations (chrome's Rust font lib, variation_position) crashes at a
+getrlimit64(6, computed_ptr) probe that expects -1/EFAULT. This is an error-handler/
+guard-probe path (only sensible if reached after a prior fault — likely a stack-guard
+or bounds probe). Our getrlimit returns success because the probe pointer passes
+in_user_arena. Root not yet isolated: is fontations reaching this because of a REAL
+prior fault (e.g. a thread-stack guard-page issue from the demand-region stacks), or
+does getrlimit need to EFAULT here? Needs memory-model investigation, not a syscall
+patch. This is the single remaining --single-process blocker.
+
+## Session verdict (updated)
+7 walls cleared; the strategic picture flipped: the DOM no longer requires the
+multi-process refactor — --single-process is viable and chrome now runs 22 threads
+deep into font init. One subtle Fontations guard-probe crash remains before Blink.
