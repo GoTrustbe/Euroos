@@ -224,3 +224,28 @@ chrome-headless-shell --single-process now runs with NO deadlock and NO livelock
 deep into font/pango init — dramatically further than ever. DOM not yet emitted;
 next wall is a pango thread-creation EAGAIN. Deadlock + livelock were the two
 structural walls; both are broken.
+
+## Wall 12 (open) 2026-08-11: pango thread EAGAIN — arena-size-entangled
+After the livelock broke, chrome reaches pango/fontconfig init and GLib g_errors
+creating the '[pango] fontconfig' thread (pthread_create EAGAIN). Findings:
+- NOT the kstack pool (thread hw 31 << 224), NOT spawn_thread MAX, NOT a MAP_STACK
+  demand mmap ENOMEM (all instrumented, none fired). clone3 instrumentation didn't
+  fire for the failing thread (nondeterministic path).
+- A 384 MiB arena (vs 96) FIXES the EAGAIN — but has a SEPARATE startup bug: chrome
+  commits 0 demand pages and never runs, even with a 1.8 GiB pool (-m 5120M). So the
+  384 MiB arena breaks ld.so entry/layout, independent of pool size.
+- Routing ALL anon+file mmaps to the demand region (sparing the arena's ~30 MiB mmap
+  window) did NOT fix the EAGAIN -> it is NOT arena mmap-window exhaustion. The cause
+  is arena-size-dependent in another way (main-thread stack region? a glibc stack-size
+  computation?). Reverted mmap thresholds + arena to the working 96 MiB.
+NEXT (dedicated): (a) find WHY a 384 MiB arena yields 0 committed pages / no ld.so
+run (loader stack/entry layout vs arena size); fixing that makes the 384 MiB arena
+usable and clears pango. (b) OR instrument glibc's failing pthread path directly
+(log every mmap ENOMEM regardless of MAP_STACK, and clone (56) EAGAIN, and the
+requested stack size) to pin the EAGAIN source.
+
+## Session status: two structural walls broken, one resource wall open
+11 walls cleared incl. the deadlock and the navigation livelock (the two structural
+blockers). chrome-headless-shell --single-process runs crash-free, no deadlock, no
+livelock, deep into font/pango init. DOM not yet emitted; the open wall is the pango
+thread EAGAIN (arena-size-entangled, needs dedicated debugging, not resource tuning).
