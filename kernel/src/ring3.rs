@@ -107,6 +107,20 @@ fn prot_none_set(start: u64, end: u64, none: bool) {
     PROT_NONE_COUNT.store(r.len(), Ordering::Relaxed);
 }
 
+/// Is [ptr,ptr+len) inside a file-backed (hence read-only) demand mapping? Such an
+/// address is readable but a write to it must EFAULT. `fi == usize::MAX` entries are
+/// zero-fill .bss (anonymous, writable) — excluded.
+fn demand_file_backed(ptr: u64, len: usize) -> bool {
+    if !DEMAND_FILE_ENABLED.load(Ordering::Relaxed) || ptr < DEMAND_BASE {
+        return false; // fast path: not a demand-region pointer
+    }
+    let end = ptr.saturating_add(len as u64);
+    DEMAND_FILE_MAPS
+        .lock()
+        .iter()
+        .any(|&(b, l, fi, _, _)| fi != usize::MAX && ptr < b + l && end > b)
+}
+
 /// Does [ptr,ptr+len) touch any PROT_NONE (inaccessible) range?
 fn in_prot_none(ptr: u64, len: usize) -> bool {
     if PROT_NONE_COUNT.load(Ordering::Relaxed) == 0 {
@@ -158,8 +172,8 @@ const EFAULT: u64 = (-14i64) as u64;
 /// (the caller then returns `-EFAULT`); nothing is written.
 #[must_use]
 fn copy_to_user(dst: u64, src: &[u8]) -> bool {
-    if !in_user_arena(dst, src.len()) {
-        return false;
+    if !in_user_arena(dst, src.len()) || demand_file_backed(dst, src.len()) {
+        return false; // out of bounds, or a read-only file-backed mapping
     }
     // SAFETY: arena-validated; arena is identity-mapped and writable.
     unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst as *mut u8, src.len()) };
@@ -196,6 +210,13 @@ fn zero_user(dst: u64, len: usize) -> bool {
 #[must_use]
 fn write_user<T: Copy>(ptr: u64, val: T) -> bool {
     if !in_user_arena(ptr, core::mem::size_of::<T>()) {
+        return false;
+    }
+    // A file-backed (read-only) mapping is readable but NOT writable: a syscall told to
+    // write its result there must EFAULT, exactly as Linux does. Programs probe this
+    // (e.g. getrlimit with a read-only pointer, expecting EFAULT) — a false "success"
+    // made chrome/fontations CHECK-crash.
+    if demand_file_backed(ptr, core::mem::size_of::<T>()) {
         return false;
     }
     // SAFETY: arena-validated; `write_unaligned` requires no alignment.
