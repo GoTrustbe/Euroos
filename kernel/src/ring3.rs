@@ -4891,7 +4891,12 @@ const DEMAND_BASE: u64 = (DEMAND_PML4_IDX as u64) << 39; // 0x100_0000_0000
 // PartitionAlloc reserves several GigaCage pools (observed 4 + 32 + 16 GiB), each
 // aligned to its own size, so ~130 GiB with alignment padding — 64 GiB was too
 // small. Virtual-only: physical frames + page tables commit per touched page.
-const DEMAND_SIZE: u64 = 256 * (1 << 30);
+// 480 GiB reservable virtual space (within PML4 slot 2's 512 GiB). Single-process
+// chrome reserves >256 GiB of virtual address space (V8 GigaCage + PartitionAlloc
+// pools: observed a 135 GiB + a 69 GiB + several GiB-scale reservations), which
+// exhausted a 256 GiB region and returned ENOMEM mid-init. Virtual-only: physical
+// frames + page tables commit per touched page, so a bigger reservation is free.
+const DEMAND_SIZE: u64 = 480 * (1 << 30);
 const DEMAND_MIN_BYTES: u64 = 16 * (1 << 20); // route anon mmaps >= 16 MiB here
 pub static DEMAND_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
