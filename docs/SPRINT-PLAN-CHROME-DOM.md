@@ -197,3 +197,30 @@ RUNS actively, single-process, 24 threads, 10 walls cleared incl. the deadlock. 
 NOT render/emit a DOM: it now LIVELOCKS at "navigation never starts" instead of
 deadlocking. Closer than ever; the remaining wall is chrome-init coordination, not a
 crash or a deadlock.
+
+## MILESTONE 2 2026-08-11: navigation livelock BROKEN (poll pipe-readiness)
+After the deadlock fix, chrome livelocked: the MAIN thread spun in poll() returning
+1-ready forever (traced via per-thread last-syscall dump: MAIN task = poll, ->1). ROOT:
+poll() classified a PIPE as a 'regular' fd -> reported always-ready, so chrome's
+message-pump wakeup pipe looked perpetually readable and the pump spun (navigation
+never started). Fix (commit): poll() now uses the same readiness as epoll
+(epoll_fd_ready/epoll_fd_writable) — event fds/pipes/sockets report POLLIN only with
+real data; only std streams + regular files stay always-ready.
+
+RESULT: livelock GONE. chrome progresses far deeper — past the pump, through Shared
+Dictionary cache, into pango/fontconfig init; the 3 teardown crashes disappeared.
+NEW WALL: GLib g_error creating the '[pango] fontconfig' thread — pthread_create
+EAGAIN. NOT the kstack pool (thread high-water only 31 << 224) nor spawn_thread MAX;
+instrumentation of clone3 didn't fire for the failing thread (path varies run-to-run).
+Suspects: glibc thread-stack mmap of a huge/corrupt size (V8/GLib reserve >480 GiB;
+1.4 TB + 553 GiB anon RESERVE ENOMEM in the log), or a thread stack routed to the
+small ~96 MiB arena instead of the demand region. NEXT: log the stack mmap size/route
+for the failing thread; ensure ALL thread stacks (any size, MAP_STACK or not) go to
+the demand region; consider spanning the demand region across >1 PML4 slot for V8's
+>512 GiB reservations.
+
+## Session status (11 walls)
+chrome-headless-shell --single-process now runs with NO deadlock and NO livelock,
+deep into font/pango init — dramatically further than ever. DOM not yet emitted;
+next wall is a pango thread-creation EAGAIN. Deadlock + livelock were the two
+structural walls; both are broken.
