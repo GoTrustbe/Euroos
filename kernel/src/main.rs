@@ -1589,7 +1589,12 @@ fn main() -> Status {
     // The public download/VNC image (`--no-default-features`) then boots to a desktop
     // whose only runnable task is the compositor loop, which HLTs → the host idles.
     let (mut ucnt1, mut ucnt2) = (0u64, 0u64);
-    if cfg!(feature = "selftest") {
+    // When the chrome pack is attached (a heavy single-process browser run), SKIP the
+    // boot self-test demo processes: several are infinite spinners (counter tasks,
+    // tlscount) that stay Ready and steal the core from chrome under the cooperative
+    // scheduler. Chrome needs the whole CPU to make progress under TCG.
+    let chrome_run = ring3::europack_has("/pack/chrome-headless-shell") || ring3::europack_has("/pack/chrome");
+    if cfg!(feature = "selftest") && !chrome_run {
         ucnt1 = ring3::spawn_counter_task(&mut allocator);
         ucnt2 = ring3::spawn_counter_task(&mut allocator);
         // Background daemon: a loaded program that runs PREEMPTIVELY as a real task
@@ -2120,7 +2125,12 @@ fn main() -> Status {
                   // it -> FATAL channel_linux.cc:926. Disable -> fall back to the socket
                   // Mojo channel (works over our fork-inherited socketpair).
                   b"--disable-features=MojoUseEventFd",
-                  b"--enable-logging=stderr",
+                  // Force a deterministic navigation + completion: virtual time advances
+                  // fast and the page-load (which triggers --dump-dom) fires after the
+                  // budget, rather than waiting on real timers/services that never come
+                  // up here. run-all-compositor-stages commits a frame deterministically.
+                  b"--virtual-time-budget=15000", b"--run-all-compositor-stages-before-draw",
+                  b"--enable-logging=stderr", b"--v=1",
                   b"--dump-dom", b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
