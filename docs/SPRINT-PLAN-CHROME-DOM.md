@@ -153,3 +153,21 @@ service dependency), not an IMMEDIATE_CRASH. Two threads to pull:
    cooperative scheduler — gate them off for the chrome test so chrome gets the core.
 NEXT: instrument which fd/event the active chrome threads wait on; consider disabling
 the disk cache / more services; give chrome the CPU (gate the spinners).
+
+## THE WALL BEFORE BLINK 2026-08-11: multi-threaded futex deadlock
+With the CPU freed (spinners gated) + navigation forced (--virtual-time-budget) +
+demand region enlarged (256->480 GiB), single-process chrome now runs 4000+ log lines
+deep into V8 GigaCage/PartitionAlloc setup — the furthest ever — then DEADLOCKS:
+STALL_DIAG shows +0 syscalls / +0 futex / +0 epoll across snapshots and "TIMER DEAD";
+all ~23 threads Blocked, nothing runnable. Confirmed NOT memory (480 GiB still ENOMEMs
+but the deadlock is identical). This is a genuine lost futex wake / circular block
+under the cooperative scheduler — the "real wall before Blink" flagged from the start.
+NEXT (dedicated effort): instrument futex_wait(addr,task) + futex_wake(addr,count),
+find the wait with no matching wake (or the cycle); likely a wake issued before the
+wait registered (lost wakeup) or a wake that doesn't hash to the waiter's channel.
+This is a concurrency-correctness project, not a syscall patch.
+
+## Answer: does chrome "work"?
+It RUNS — single-process, ~23 threads, zero crashes, deep into V8 init (9 CHECK-crash
+walls cleared this session). It does NOT yet render/emit a DOM: it deadlocks on a lost
+futex wake before navigation completes. Runs clean, no output yet.
