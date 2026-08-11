@@ -237,6 +237,14 @@ pub fn mark_dead(idx: usize) {
     }
 }
 
+/// Is task `idx` Dead (terminated, awaiting reclaim)? Used to reclaim leaked
+/// per-thread resources (e.g. kernel-stack slots) whose owner faulted without
+/// running the clean exit path.
+pub fn is_dead(idx: usize) -> bool {
+    let s = SCHED.lock();
+    idx < s.count && s.tasks[idx].state == State::Dead
+}
+
 
 /// The shared boot PML4 (kernel address space). Set by main after `paging::init`.
 static BOOT_PML4: AtomicU64 = AtomicU64::new(0);

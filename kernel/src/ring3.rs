@@ -323,6 +323,19 @@ fn fill_random(buf: u64, len: u64) -> bool {
     true
 }
 
+/// (rlim_cur, rlim_max) for a Linux RLIMIT_* resource. Sane, self-consistent values
+/// so a program that reads a limit and sizes/checks against it behaves. NOFILE matches
+/// our fd table (MAX_FD); STACK is 8 MiB; most others are unlimited.
+fn rlimit_for(resource: u64) -> (u64, u64) {
+    const INF: u64 = u64::MAX; // RLIM_INFINITY
+    match resource {
+        3 => (8 * 1024 * 1024, INF),          // RLIMIT_STACK: 8 MiB soft
+        4 => (0, INF),                        // RLIMIT_CORE: no core dumps
+        7 => (MAX_FD as u64, MAX_FD as u64),  // RLIMIT_NOFILE: our fd table size
+        _ => (INF, INF),                      // CPU/DATA/AS/... unlimited
+    }
+}
+
 /// Copy a fd's access mode + O_NONBLOCK to another fd number (dup semantics), so a
 /// duplicated fd reports the same flags via fcntl(F_GETFL) as its source.
 fn copy_fd_flags(from: usize, to: usize) {
@@ -1761,6 +1774,36 @@ static THREAD_KSTACK_OWNER: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(
 /// id from spawn_*, then calls `register_thread_kstack(task, slot)` so the slot
 /// is freed when that task dies.
 fn alloc_thread_kstack() -> Option<(usize, u64)> {
+    for i in 0..MAX_THREADS {
+        if THREAD_KSTACK_USED[i]
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let kbase = unsafe { core::ptr::addr_of_mut!(THREAD_KSTACKS[i]) as u64 };
+            let top = (kbase + TKSTACK_SIZE as u64) & !0xF;
+            return Some((i, top));
+        }
+    }
+    // Pool looks full — but a thread killed by a FAULT (GP/isolation) or a timed-out
+    // process never ran the clean exit(60)/exit_group path that frees its slot, so the
+    // slot LEAKS. Self-heal: reclaim every slot whose owning task is now Dead, then
+    // retry once. Without this, chrome's thread-pool churn exhausts the pool and
+    // pthread_create returns EAGAIN -> chrome IMMEDIATE_CRASHes (it CHECKs thread
+    // creation succeeds). This is essential for single-process chrome (all threads in
+    // one process, heavy create/destroy during init).
+    {
+        let mut owners = THREAD_KSTACK_OWNER.lock();
+        let mut i = 0;
+        while i < owners.len() {
+            let (task, slot) = owners[i];
+            if crate::sched::is_dead(task) {
+                THREAD_KSTACK_USED[slot].store(false, Ordering::Release);
+                owners.swap_remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
     for i in 0..MAX_THREADS {
         if THREAD_KSTACK_USED[i]
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -6286,6 +6329,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             // SAVED_REGS+40 given the push order in the asm handler).
             const MAP_ANONYMOUS: u64 = 0x20;
             const MAP_FIXED: u64 = 0x10;
+            const MAP_STACK: u64 = 0x2_0000;
             let len = (a2 + 0xFFF) & !0xFFF;
             let file_backed = a4 & MAP_ANONYMOUS == 0 && (a5 as usize) < MAX_FD && a5 != u64::MAX;
 
@@ -6296,8 +6340,13 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             if DEMAND_ENABLED.load(Ordering::Relaxed)
                 && a4 & MAP_ANONYMOUS != 0
                 && a4 & MAP_FIXED == 0
-                && len >= DEMAND_MIN_BYTES
+                && (len >= DEMAND_MIN_BYTES || a4 & MAP_STACK != 0)
             {
+                // MAP_STACK (glibc thread stacks, ~8 MiB each) route here too regardless
+                // of size: they are far larger than the small identity-arena mmap window
+                // (~31 MiB), which a handful of threads would exhaust -> mmap fails ->
+                // pthread_create returns EAGAIN -> chrome IMMEDIATE_CRASHes. The sparse
+                // demand region (256 GiB, lazily backed) holds all of chrome's threads.
                 // Reserve VA. For a LARGE power-of-two reservation (>= 1 GiB) align the
                 // base to its own size: chrome's PartitionAlloc reserves its GigaCage
                 // pools this way and CHECK-fails on an unaligned base. Aligning here
@@ -7312,7 +7361,25 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 (-34i64) as u64 // -ERANGE
             }
         }
-        97 | 302 => 0, // getrlimit / prlimit64 — unlimited; success
+        97 => {
+            // getrlimit(resource, *rlim): WRITE {rlim_cur, rlim_max}. Returning success
+            // without filling the buffer left chrome reading uninitialized limits and
+            // CHECK-crashing (traced: last syscall before an IMMEDIATE_CRASH was this).
+            let (cur, max) = rlimit_for(a1);
+            if a2 != 0 && (!write_user(a2, cur) || !write_user(a2 + 8, max)) {
+                return EFAULT;
+            }
+            0
+        }
+        302 => {
+            // prlimit64(pid, resource, *new_limit, *old_limit): report the current limit
+            // into old_limit; accept (ignore) any new_limit. resource = a2.
+            let (cur, max) = rlimit_for(a2);
+            if a4 != 0 && (!write_user(a4, cur) || !write_user(a4 + 8, max)) {
+                return EFAULT;
+            }
+            0
+        }
         221 | 28 => 0, // fadvise64 / madvise — advisory only; safe no-op success
         334 => (-38i64) as u64, // rseq — not supported; glibc falls back gracefully
         21 | 269 => {

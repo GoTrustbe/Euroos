@@ -2105,6 +2105,16 @@ fn main() -> Status {
                   // of demand-paged procs, currently ENOSYS on the glibc path) or software-
                   // compositor bring-up. hshell running to exit 0 is the current landmark.
                   b"--disable-vulkan", b"--use-gl=disabled", b"--ozone-platform=headless",
+                  // ── SINGLE-PROCESS: run renderer/utility/GPU all IN the browser process
+                  // so chrome NEVER forks a helper child. The default (forking) path
+                  // livelocks: chrome forks helpers, they never execve into functional
+                  // --type= processes (the demand-paged execve/M2 wall), and the main
+                  // process spins in epoll_wait forever waiting on their Mojo IPC.
+                  // --single-process sidesteps the whole multi-process model. It was
+                  // tried before and crashed worker threads on failed CHECKs — but those
+                  // were the IMMEDIATE_CRASH walls we just cleared (FPU/SSE state,
+                  // fcntl access-mode, getrandom uniqueness, memfd flags). Retest now.
+                  b"--single-process", b"--in-process-gpu",
                   // MojoUseEventFd = chrome's eventfd shared-mem Mojo channel; its probe
                   // PCHECKs that eventfd2(invalid flags) FAILS, but our eventfd2 accepts
                   // it -> FATAL channel_linux.cc:926. Disable -> fall back to the socket
