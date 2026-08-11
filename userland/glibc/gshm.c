@@ -1,0 +1,66 @@
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+
+/* SHARED-MEMORY test: two MAP_SHARED mappings of ONE memfd must be the SAME
+   memory, not two private copies. This is the contract every shared-memory user
+   relies on: chrome's Mojo data pipes carry resource bodies (the HTML/JS of a
+   page) through a memfd ring buffer that the producer and the consumer each map
+   separately — even inside a single process. A kernel that answers mmap() with a
+   private copy makes the reader see zeros: the page "loads" but its document is
+   empty, with no error anywhere.
+
+   Checks, in order:
+     1. writes through mapping A are visible through mapping B,
+     2. writes through B are visible through A (sharing is symmetric),
+     3. a mapping made AFTER the write already sees the data,
+     4. writes through the mapping are visible to read() on the fd.
+   Exit 131 = all four hold. */
+int main(void) {
+    const size_t SZ = 65536;
+
+    int fd = memfd_create("euroshm", MFD_CLOEXEC);
+    if (fd < 0) { printf("GSHM: memfd_create FAILED\n"); fflush(stdout); return 1; }
+    if (ftruncate(fd, (off_t)SZ) != 0) { printf("GSHM: ftruncate FAILED\n"); fflush(stdout); return 2; }
+
+    unsigned char *a = mmap(NULL, SZ, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (a == MAP_FAILED) { printf("GSHM: mmap A FAILED\n"); fflush(stdout); return 3; }
+    unsigned char *b = mmap(NULL, SZ, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (b == MAP_FAILED) { printf("GSHM: mmap B FAILED\n"); fflush(stdout); return 4; }
+
+    /* 1. A -> B, spread across pages so a single-page alias can't fake it. */
+    for (size_t i = 0; i < SZ; i += 4096) a[i] = (unsigned char)(0x40 + (i / 4096));
+    size_t bad = 0;
+    for (size_t i = 0; i < SZ; i += 4096)
+        if (b[i] != (unsigned char)(0x40 + (i / 4096))) bad++;
+    printf("GSHM: A->B pages mismatched=%zu of %zu\n", bad, SZ / 4096);
+    if (bad) { fflush(stdout); return 5; }
+
+    /* 2. B -> A (symmetric). */
+    memcpy(b + 1024, "EuroOS shared memory", 20);
+    if (memcmp(a + 1024, "EuroOS shared memory", 20) != 0) {
+        printf("GSHM: B->A FAILED\n"); fflush(stdout); return 6;
+    }
+
+    /* 3. A mapping created after the writes must see them (not a stale copy). */
+    unsigned char *c = mmap(NULL, SZ, PROT_READ, MAP_SHARED, fd, 0);
+    if (c == MAP_FAILED) { printf("GSHM: mmap C FAILED\n"); fflush(stdout); return 7; }
+    if (memcmp(c + 1024, "EuroOS shared memory", 20) != 0) {
+        printf("GSHM: late mapping C sees stale data FAILED\n"); fflush(stdout); return 8;
+    }
+
+    /* 4. The fd itself must observe the writes (shared mapping == the file). */
+    char buf[24];
+    memset(buf, 0, sizeof buf);
+    if (pread(fd, buf, 20, 1024) != 20 || memcmp(buf, "EuroOS shared memory", 20) != 0) {
+        printf("GSHM: pread of the shared region FAILED (got '%.20s')\n", buf);
+        fflush(stdout); return 9;
+    }
+
+    printf("GSHM: MAP_SHARED memfd truly shared (A<->B, late map, fd read) -> PASS\n");
+    fflush(stdout);
+    return 131;
+}

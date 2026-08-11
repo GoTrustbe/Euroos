@@ -1128,6 +1128,43 @@ fn open_low_fd(fi: usize) -> u64 {
 /// Read from an open fd into a user buffer -> number of bytes (u64::MAX on error).
 /// pread(2): read `len` bytes from file `fd` at absolute `offset` into `buf`,
 /// WITHOUT changing the fd's position. Serves the embedded WAD and VFS files.
+/// Fast "is any file shared-mapped" flag, so the sync below costs one atomic load
+/// on the hot read/write path of the (overwhelmingly common) unshared case.
+static SHARED_ANY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Reconcile a MAP_SHARED file with its region, in the given direction. A shared
+/// mapping IS the file: bytes written through the mapping must be readable with
+/// read()/pread() (`to_file`), and bytes written with write() must be visible in
+/// the mapping (`!to_file`). The region is the live copy, the FILES entry the one
+/// the fd paths serve, so they are reconciled at the boundary between them.
+fn sync_shared_region(fi: usize, to_file: bool) {
+    if !SHARED_ANY.load(Ordering::Relaxed) {
+        return;
+    }
+    let hit = SHARED_MAPS.lock().iter().find(|(f, _, _)| *f == fi).map(|&(_, b, l)| (b, l));
+    let (base, rlen) = match hit {
+        Some(x) => x,
+        None => return,
+    };
+    let flen = FILES.lock().get(fi).map(|(_, d)| d.len()).unwrap_or(0);
+    let n = flen.min(rlen);
+    if n == 0 {
+        return;
+    }
+    if to_file {
+        if let Some(bytes) = copy_from_user(base, n) {
+            if let Some(e) = FILES.lock().get_mut(fi) {
+                e.1.to_mut()[..n].copy_from_slice(&bytes);
+            }
+        }
+    } else {
+        let data = FILES.lock().get(fi).map(|(_, d)| d[..n].to_vec());
+        if let Some(d) = data {
+            let _ = copy_to_user(base, &d);
+        }
+    }
+}
+
 fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
     if fd >= MAX_FD {
         return u64::MAX;
@@ -1136,6 +1173,7 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
         Some((fi, _)) => fi,
         None => return u64::MAX,
     };
+    sync_shared_region(fi, true); // a shared mapping IS the file: pick up its writes
     if fi == PROC_MEM_FI {
         // pread(/proc/self/mem, buf, len, off) reads memory at virtual address `off`.
         return proc_mem_xfer(offset as u64, buf, len, false);
@@ -1202,6 +1240,11 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
         Some(x) => x,
         None => return u64::MAX,
     };
+    if SHARED_ANY.load(Ordering::Relaxed) {
+        drop(fds); // sync_shared_region takes FILES/SHARED_MAPS: never nest the fd lock
+        sync_shared_region(fi, true); // a shared mapping IS the file: pick up its writes
+        fds = OPEN_FDS.lock();
+    }
     // /proc/self/mem: read the process's own memory at the current position (= the
     // virtual address set by a prior lseek), then advance past it.
     if fi == PROC_MEM_FI {
@@ -1321,6 +1364,9 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
         core::ptr::copy_nonoverlapping(buf as *const u8, data[off..].as_mut_ptr(), len);
     }
     fds[fd] = Some((fi, end));
+    drop(files);
+    drop(fds);
+    sync_shared_region(fi, false); // the other direction: a write() must show in the mapping
     len as u64
 }
 
@@ -1751,6 +1797,22 @@ static EPOLL_WAIT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::Ato
 pub static STALL_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// Log directory open/getdents results (chrome disk-cache init diagnostics).
 pub static CACHE_DIR_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Trace a path syscall that touches a served resource pack (`/pack/…`). chrome
+/// loads `headless_command_resources.pak` LAZILY, only when it serves
+/// `chrome://headless/headless_command.html` (the page that defines the
+/// `executeCommands` JS that --dump-dom evaluates), and it SKIPS the load
+/// silently if the file does not appear to exist. So "does chrome ever ask for
+/// this path, and what did we answer" is exactly the question a missing DOM asks.
+fn diag_pack_path(what: &str, path: &[u8], ret: u64) {
+    if !CACHE_DIR_DIAG.load(Ordering::Relaxed) {
+        return;
+    }
+    if path.windows(6).any(|w| w == b"/pack/") {
+        crate::serial_println!("[packpath] {what}({:?}) -> {:#x}",
+            core::str::from_utf8(path).unwrap_or("?"), ret);
+    }
+}
 
 /// futex-wake: unblock up to `n` tasks waiting on `uaddr`. Returns the number
 /// of woken tasks.
@@ -3285,6 +3347,10 @@ static GSPARSE_ELF: &[u8] = include_bytes!("../../userland/glibc/gsparse");
 // FILE-BACKED demand-paging test: mmap a large served lib, verify the lazily
 // faulted mmap view equals the read() view (the loader's LOAD-segment path).
 static GFMMAP_ELF: &[u8] = include_bytes!("../../userland/glibc/gfmmap");
+// SHARED-MEMORY test: two MAP_SHARED mappings of one memfd must be the same
+// memory. Mojo data pipes (chrome's resource bodies, even in one process) live in
+// such a buffer; a private-copy mmap delivers an empty document with no error.
+static GSHM_ELF: &[u8] = include_bytes!("../../userland/glibc/gshm");
 // CHROMIUM bring-up: two glibc stub libs (their real code lives in libc.so.6) that
 // chrome binaries declare as DT_NEEDED, + a REAL chrome component — the crashpad
 // crash handler (3.4 MB, dynamically linked, loaded via demand paging).
@@ -3393,6 +3459,8 @@ pub fn gfile_bytes() -> &'static [u8] { GFILE_ELF }
 pub fn gsparse_bytes() -> &'static [u8] { GSPARSE_ELF }
 /// A file-backed demand-paging test (mmap a large lib, verify vs read()).
 pub fn gfmmap_bytes() -> &'static [u8] { GFMMAP_ELF }
+/// A MAP_SHARED memfd test: two mappings of one memfd must be one memory.
+pub fn gshm_bytes() -> &'static [u8] { GSHM_ELF }
 /// glibc stub libs chrome declares as NEEDED (real code is in libc.so.6).
 pub fn glibc_libdl_bytes() -> &'static [u8] { GLIBC_LIBDL }
 pub fn glibc_libpthread_bytes() -> &'static [u8] { GLIBC_LIBPTHREAD }
@@ -4564,6 +4632,8 @@ pub fn run_dynamic(
     CURRENT_CAPS.store(caps, Ordering::Relaxed);
     LINUX_ABI.store(linux_abi, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
+    SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
         EXITED = 0;
         EXIT_CODE = 0;
@@ -4673,6 +4743,8 @@ pub fn run_interp(
     CURRENT_CAPS.store(caps, Ordering::Relaxed);
     LINUX_ABI.store(true, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
+    SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
         EXITED = 0;
         EXIT_CODE = 0;
@@ -4974,6 +5046,11 @@ const DEMAND_FILE_MIN_BYTES: u64 = 1 << 20; // route file-backed mmaps >= 1 MiB 
 //  lets one PT_LOAD segment map its filesz from the file and zero-fill the memsz
 //  tail (.bss) even when the boundary falls mid-page — the ELF loader's semantics.
 static DEMAND_FILE_MAPS: Mutex<alloc::vec::Vec<(u64, u64, usize, usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
+/// Live MAP_SHARED regions: (file index, arena base, region length). One entry per
+/// shared in-RAM file (memfd/tmpfs) for the duration of a process — every mapping of
+/// that file resolves to this one region, which is what "shared memory" means. Arena
+/// addresses are per-process, so this is cleared when a process starts.
+static SHARED_MAPS: Mutex<alloc::vec::Vec<(usize, u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
 static DEMAND_FILE_FILLED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static DEMAND_POOL_OOM: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static DEMAND_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -5137,6 +5214,8 @@ pub fn spawn_glibc_persistent(
     CURRENT_CAPS.store(caps, Ordering::Relaxed);
     LINUX_ABI.store(true, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
+    SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    SHARED_ANY.store(false, Ordering::Relaxed);
     OUTPUT.lock().clear();
     reset_fd_table();
 
@@ -5347,6 +5426,8 @@ pub fn run_glibc_disk(
     CURRENT_CAPS.store(caps, Ordering::Relaxed);
     LINUX_ABI.store(true, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
+    SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
         EXITED = 0;
         EXIT_CODE = 0;
@@ -5533,6 +5614,8 @@ pub fn run_glibc(
     CURRENT_CAPS.store(caps, Ordering::Relaxed);
     LINUX_ABI.store(true, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
+    SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
         EXITED = 0;
         EXIT_CODE = 0;
@@ -6281,9 +6364,13 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                         ((a2 + 48) as *mut u64).write(n as u64); // st_size
                         ((a2 + 56) as *mut u64).write(4096); // st_blksize
                     }
+                    diag_pack_path("stat", &path, 0);
                     0
                 }
-                None => (-2i64) as u64, // -ENOENT
+                None => {
+                    diag_pack_path("stat", &path, (-2i64) as u64);
+                    (-2i64) as u64 // -ENOENT
+                }
             }
         }
         83 => {
@@ -6345,6 +6432,37 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             if main != usize::MAX {
                 // A SCHEDULED glibc process exits: record the code, kill any leftover
                 // worker threads, signal the waiting launcher, mark this task dead.
+                if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
+                    // WHO exits, and from WHERE. A clean exit_group(0) while the browser
+                    // is still starting up (no navigation) is chrome deciding to quit —
+                    // the user-stack return addresses name the code path that decided it
+                    // (map with: objdump -d --start-address=<a - 0x100_0000_0000 + 0x1000>).
+                    let is_main = cur == main;
+                    crate::serial_println!("[exitgrp] task {cur} ({}) exit_group({a1}) rip={:#x} rsp={:#x}",
+                        if is_main { "MAIN" } else { "worker" },
+                        unsafe { USER_RIP }, unsafe { USER_RSP });
+                    let lo = DEMAND_BASE;
+                    let hi = DEMAND_BASE + 0x0C00_0000; // ~192 MiB: the exe image window
+                    let rsp = unsafe { USER_RSP };
+                    let mut shown = 0;
+                    for i in 0..256u64 {
+                        if shown >= 20 { break; }
+                        match read_user::<u64>(rsp + i * 8) {
+                            Some(v) if v >= lo && v < hi => {
+                                crate::serial_println!("  [stack+{:#x}] {v:#x} (exe+{:#x})", i * 8, v - lo);
+                                shown += 1;
+                            }
+                            _ => {}
+                        }
+                    }
+                    crate::serial_println!("[exitgrp] last-syscall of each thread:");
+                    let (mn, ma, mr) = last_syscall(cur);
+                    crate::serial_println!("  self t{cur}: last={mn}(a1={ma:#x})->{mr:#x}");
+                    for &t in GLIBC_THREADS.lock().iter() {
+                        let (n, a, r) = last_syscall(t);
+                        crate::serial_println!("  thread t{t}: last={n}(a1={a:#x})->{r:#x} dead={}", crate::sched::is_dead(t));
+                    }
+                }
                 GLIBC_EXIT_CODE.store(a1, Ordering::Relaxed);
                 for &t in GLIBC_THREADS.lock().iter() {
                     free_thread_kstack(t); // recycle any leftover worker kstacks
@@ -6482,8 +6600,73 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             const MAP_ANONYMOUS: u64 = 0x20;
             const MAP_FIXED: u64 = 0x10;
             const MAP_STACK: u64 = 0x2_0000;
+            const MAP_SHARED: u64 = 0x1;
             let len = (a2 + 0xFFF) & !0xFFF;
             let file_backed = a4 & MAP_ANONYMOUS == 0 && (a5 as usize) < MAX_FD && a5 != u64::MAX;
+
+            // MAP_SHARED of an in-RAM file (memfd/tmpfs) = SHARED memory: every mapping
+            // of that file must be ONE memory, so a write through one is visible through
+            // the others. A private copy per mmap looks harmless and is not: Mojo moves
+            // every resource body (the HTML and JS of a page — even in a single process)
+            // through a memfd ring buffer that producer and consumer map separately, so
+            // copies deliver an EMPTY document with no error. Since a glibc process is a
+            // single address space here, sharing IS handing out the same arena region:
+            // map the whole file once, then answer later mmaps with base + offset.
+            if file_backed && a4 & MAP_SHARED != 0 {
+                let fi = match OPEN_FDS.lock().get(a5 as usize).and_then(|s| *s) {
+                    Some((fi, _)) => fi,
+                    None => return (-9i64) as u64, // -EBADF
+                };
+                // Only in-RAM files are writable-shared; a disk-served (EuroPack) file is
+                // read-only, so the existing copy path is already correct for it.
+                if fi < DISK_FI_BASE || fi == WAD_FI || fi == PROC_MEM_FI {
+                    let off = unsafe { recover_mmap_offset() } as usize;
+                    // Resolve the lookup into a plain value FIRST and drop the guard: an
+                    // `if let ... = MUTEX.lock()....` holds it across the whole if/else,
+                    // and the else arm locks SHARED_MAPS again — a spin mutex taken twice
+                    // with interrupts off freezes the core (the same hazard as the
+                    // pthread-join self-deadlock).
+                    let existing = {
+                        let maps = SHARED_MAPS.lock();
+                        maps.iter().find(|(f, _, _)| *f == fi).map(|&(_, b, l)| (b, l))
+                    };
+                    if let Some((rbase, rlen)) = existing {
+                        if off + len as usize <= rlen {
+                            return rbase + off as u64; // the SAME memory, as shared memory means
+                        }
+                        // A window past the region we reserved: no way to grow a bump
+                        // region in place. Say so rather than silently un-sharing.
+                        crate::serial_println!(
+                            "[shm] mmap fi={fi} off={off}+{len} exceeds shared region ({rlen} B) — falling back to a private copy");
+                    } else {
+                        // First mapping: reserve the whole file (chrome ftruncates to the
+                        // final size before mapping), fill it once, and record it.
+                        let fsz = FILES.lock().get(fi).map(|(_, d)| d.len()).unwrap_or(0);
+                        let region = (((fsz.max(off + len as usize)) as u64 + 0xFFF) & !0xFFF).max(4096);
+                        let b = (HEAP_BREAK.load(Ordering::Relaxed) + 0xFFF) & !0xFFF;
+                        if b + region > HEAP_END.load(Ordering::Relaxed) || !in_user_arena(b, region as usize) {
+                            return (-12i64) as u64; // -ENOMEM
+                        }
+                        HEAP_BREAK.store(b + region, Ordering::Relaxed);
+                        {
+                            let files = FILES.lock();
+                            let data = &files[fi].1;
+                            // SAFETY: b..b+region validated in-arena above.
+                            unsafe {
+                                core::ptr::write_bytes(b as *mut u8, 0, region as usize);
+                                if !data.is_empty() {
+                                    core::ptr::copy_nonoverlapping(data.as_ptr(), b as *mut u8, data.len().min(region as usize));
+                                }
+                            }
+                        }
+                        SHARED_MAPS.lock().push((fi, b, region as usize));
+                        SHARED_ANY.store(true, Ordering::Relaxed);
+                        crate::serial_println!("[shm] MAP_SHARED {} -> region {b:#x}..{:#x} (one memory for every mapping)",
+                            fi_path(fi), b + region);
+                        return b + off as u64;
+                    }
+                }
+            }
 
             // DEMAND PAGING (opt-in): route a LARGE anonymous, non-fixed mmap into the
             // sparse demand region. We only RESERVE virtual address space here (bump the
@@ -7221,6 +7404,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                     }
                 }
             }
+            diag_pack_path("openat", &path, fd);
             fd
         }
         2 => {
@@ -7351,6 +7535,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                         ino = 0x5000_0000 + di as u64;
                     }
                 }
+                diag_pack_path("newfstatat", &path, if sz.is_some() { 0 } else { (-2i64) as u64 });
                 (sz, a3, ino)
             };
             let size = match fd_ok {
@@ -7638,7 +7823,9 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                 || DISK_FILES.lock().iter().any(|(p, _, _, _)| p.as_bytes() == path.as_slice())
                 || SYMLINKS.lock().iter().any(|(p, _)| p.as_bytes() == path.as_slice())
                 || is_vfs_dir(&path); // chrome access()es its disk-served locale paks + dirs
-            if exists { 0 } else { (-2i64) as u64 } // -ENOENT
+            let ret = if exists { 0 } else { (-2i64) as u64 }; // -ENOENT
+            diag_pack_path("access", &path, ret);
+            ret
         }
         99 => {
             // sysinfo(*info): fill uptime + ram so tools like `uptime`/`free` work.
@@ -7696,10 +7883,17 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
                         ((a5 + 0x1c) as *mut u16).write(0o100644); // stx_mode: S_IFREG|0644
                         ((a5 + 0x28) as *mut u64).write(size as u64); // stx_size
                     }
+                    diag_pack_path("statx", &path, 0);
                     0
                 }
-                Some(_) => 0,
-                None => (-2i64) as u64, // -ENOENT
+                Some(_) => {
+                    diag_pack_path("statx", &path, 0);
+                    0
+                }
+                None => {
+                    diag_pack_path("statx", &path, (-2i64) as u64);
+                    (-2i64) as u64 // -ENOENT
+                }
             }
         }
         318 => {
@@ -7882,6 +8076,8 @@ pub fn run_args(
         .first()
         .map(|a| String::from_utf8_lossy(a).into_owned())
         .unwrap_or_default();
+    SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
         EXITED = 0;
         EXIT_CODE = 0;

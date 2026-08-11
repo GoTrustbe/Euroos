@@ -1918,6 +1918,17 @@ fn main() -> Status {
         // Scorecard vars from the GUI/demo tests below; default to "not run" (fail)
         // so a lean chrome-headless-shell boot still compiles and reports honestly.
         let (mut e16, mut efm, mut ex) = (u64::MAX, u64::MAX, u64::MAX);
+
+        // gshm: SHARED memory. Two MAP_SHARED mappings of one memfd must be the SAME
+        // memory (and the fd must observe the writes through it). Mojo carries every
+        // resource body — the HTML and JS of a page, even inside a single process —
+        // through such a buffer, so a private-copy mmap hands the reader zeros: the
+        // page "loads" but its document is empty, with no error anywhere. Runs in the
+        // lean chrome boot too: it is cheap, and it is exactly what chrome depends on.
+        let (osh, esh) = ring3::run_glibc(&mut allocator, ring3::gshm_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gshm"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gshm (MAP_SHARED memfd): exit={esh} (want 131)");
+        for l in osh.lines() { serial_println!("[glibc]   {l}"); }
+
         // LEAN chrome-headless-shell run: skip the GUI/demo glibc tests (X11/gsparse/
         // gfmmap/crashpad/gdiskmap). They inflate guest memory and, on a memory-tight
         // host, OOM-kill qemu before hshell is reached. Jump straight to the disk-
@@ -2136,14 +2147,20 @@ fn main() -> Status {
                   // Virtual time advances Blink's clock fast so the load completes
                   // deterministically (triggers --dump-dom). No run-all-compositor-stages:
                   // a DOM dump needs the LOAD event, not a painted frame.
-                  b"--virtual-time-budget=15000",
+                  // NO --virtual-time-budget: with EuroOS's coarse clock (1 s realtime,
+                  // 10 ms monotonic) virtual time may consume its budget and quit the
+                  // browser before the initial navigation posts. The host dumps the DOM
+                  // fine without it (EXP-D), so drive the REAL message loop instead and
+                  // let the (tiny, instant) file:// load complete naturally.
                   b"--enable-logging=stderr", b"--v=1",
-                  // Trace the navigation/headless decision path so a boot log shows WHERE
-                  // navigation dies. Host oracle proves these exact flags dump a DOM on
-                  // Linux (even single-core, broken-cache, no-virtual-time) -> the blocker
-                  // is EuroOS-kernel-specific and lives between browser-start and
-                  // FileURLLoader::Start (which the host reaches, EuroOS does not).
-                  b"--vmodule=headless_shell=2,*headless*=1,navigation_request=1,navigation_controller_impl=1,web_contents_impl=1,render_frame_host_impl=1,render_process_host_impl=1,file_url_loader_factory=1,scheduler=1",
+                  // Trace the DevTools protocol client: the host oracle proves --dump-dom
+                  // is driven entirely over CDP (Target.exposeDevToolsProtocol ->
+                  // Inspector.enable -> Runtime.evaluate("executeCommands(...)"), whose
+                  // result IS the DOM). Only ~6 extra lines, and they pinpoint how far
+                  // EuroOS gets: no SEND = the browser quit before the command handler
+                  // ran; SEND without RECV = the in-process DevTools/Mojo session never
+                  // answers; RECV of id 2 = the DOM came back.
+                  b"--vmodule=simple_devtools_protocol_client=2,headless_command_handler=2",
                   b"--dump-dom", b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
@@ -2154,7 +2171,8 @@ fn main() -> Status {
         // task table at index 31 with free_frames stable — see commit notes.)
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
-        let results: [(&str, u64, u64); 19] = [
+        let results: [(&str, u64, u64); 20] = [
+            ("gshm(MAP_SHARED memfd)", esh, 131),
             ("gtiny(dyn-link)", e1, 42), ("gtest(stdio/malloc/qsort)", e2, 55),
             ("gthread(pthreads)", e3, 88), ("gmath(libm+dlopen)", e4, 77),
             ("gcpp(C++/exceptions)", e5, 66), ("seq(argv)", e6, 0), ("factor(libgmp)", e7, 0),
