@@ -348,3 +348,25 @@ shared). Both fail hard on the old kernel.
 - Page.captureScreenshot over the same pipe: real Blink-rendered pixels (software
   raster, no GL — SwiftShader needs AVX2 that qemu64 lacks). Heavy under TCG.
 - Re-test --dump-dom: the WebUI page may well load now that shared memory works.
+
+## ★★★ CONFIRMED: chrome's OWN --dump-dom works (no kernel driver involved)
+With the shared-memory bugs fixed, the chrome://headless handler page loads, its
+JS runs, and unmodified chrome-headless-shell prints the document itself:
+
+    [hshell]   <html><head><meta charset="utf-8"><title>Chromium on EuroOS</title>
+    ...
+    [hshell]   <div class="card">Shared memory carries the page bytes to the renderer</div>
+    [hshell]   </body></html>
+    [hshell] chrome-headless-shell from DISK: exit=0     (0 IMMEDIATE_CRASH)
+
+So the empty WebUI page had exactly the same root cause as the empty file:// body:
+mmap's fd argument read as 64 bits, unlink shifting FILES indices, and no
+MAP_SHARED. The kernel's own DevTools driver (--remote-debugging-pipe) remains a
+real capability and is what made the failure observable in the first place, but
+chrome's stock feature no longer needs it. NOTE: the two are mutually exclusive —
+chrome refuses "Headless commands ... with remote debugging" — so they are tested
+in separate runs.
+
+Pixels remain open: Page.captureScreenshot never answers (chrome spins on a
+compositor frame that never commits without GL; SwiftShader needs AVX2 the CPU
+lacks). That is software frame production in Viz, a different wall from the DOM.
