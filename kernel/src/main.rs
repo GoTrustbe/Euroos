@@ -1937,6 +1937,13 @@ fn main() -> Status {
         serial_println!("[glibc] gunlink (unlinked-but-open + anon shm): exit={eul} (want 137)");
         for l in oul.lines() { serial_println!("[glibc]   {l}"); }
 
+        // gpoll: poll() must WAIT for its timeout. Answering 0 straight away says the
+        // timeout expired, so every waiter becomes a spinner — which is what kept
+        // chrome's compositor from ever producing a frame.
+        let (opo, epo) = ring3::run_glibc(&mut allocator, ring3::gpoll_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gpoll"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gpoll (poll timeout): exit={epo} (want 143)");
+        for l in opo.lines() { serial_println!("[glibc]   {l}"); }
+
         // LEAN chrome-headless-shell run: skip the GUI/demo glibc tests (X11/gsparse/
         // gfmmap/crashpad/gdiskmap). They inflate guest memory and, on a memory-tight
         // host, OOM-kill qemu before hshell is reached. Jump straight to the disk-
@@ -2121,8 +2128,7 @@ fn main() -> Status {
             // fd 3/4 must exist from chrome's first instruction: it checks them at
             // startup and exits with "Remote debugging pipe file descriptors are not
             // open" if they are missing.
-            // (Driver idle in this run: chrome rejects a debugging pipe next to
-            // --dump-dom, so its own path gets the boot to itself.)
+            ring3::cdp_install("file:///tmp/euro.html");
             let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
                 &[b"/pack/chrome-headless-shell", b"--no-sandbox",
                   b"--disable-gpu", b"--disable-dev-shm-usage", b"--user-data-dir=/tmp/hs",
@@ -2199,13 +2205,13 @@ fn main() -> Status {
                   // empty — and uses only what is proven to work: navigation and V8.
                   // NOTE: chrome refuses "--dump-dom" together with a debugging pipe
                   // ("Headless commands are not compatible with remote debugging"), so
-                  // the two paths are tested in separate runs. This one is chrome's OWN
-                  // path: its chrome://headless handler page was what came up empty, and
-                  // the cause of that (shared memory) is fixed — so does it work now?
-                  b"--dump-dom", b"file:///tmp/euro.html"],
+                  // the two paths run separately. Chrome's own --dump-dom is VERIFIED
+                  // working; this run uses the pipe, because chasing the PIXELS needs
+                  // us to drive Page.captureScreenshot ourselves.
+                  b"--remote-debugging-pipe", b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
-            serial_println!("[hshell] BUILD=--dump-dom only (chrome's own path, no debugging pipe)");
+            serial_println!("[hshell] BUILD=cdp-pipe + screenshot diagnosis (what does chrome wait on?)");
             serial_println!("[hshell] chrome-headless-shell from DISK: exit={e3}");
             for l in o3.lines() { serial_println!("[hshell]   {l}"); }
         }
@@ -2213,7 +2219,8 @@ fn main() -> Status {
         // task table at index 31 with free_frames stable — see commit notes.)
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
-        let results: [(&str, u64, u64); 21] = [
+        let results: [(&str, u64, u64); 22] = [
+            ("gpoll(poll timeout)", epo, 143),
             ("gshm(MAP_SHARED memfd)", esh, 131),
             ("gunlink(unlinked-but-open + anon shm)", eul, 137),
             ("gtiny(dyn-link)", e1, 42), ("gtest(stdio/malloc/qsort)", e2, 55),

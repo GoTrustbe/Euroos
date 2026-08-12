@@ -619,8 +619,15 @@ pub fn cdp_pump() {
 
     // Step 7 (screenshot) gets a bounded wait: if no PNG comes back, say so and let
     // chrome exit instead of leaving it spinning on a frame that never arrives.
-    if step == 7 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 3000 {
-        crate::serial_println!("[cdp] no screenshot within 30 s of guest time — the compositor never produced a frame");
+    if step == 7 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 30_000 {
+        crate::serial_println!("[cdp] no screenshot within 300 s of guest time — what is each thread waiting on?");
+        let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+        let (mn, ma, mr) = last_syscall(main);
+        crate::serial_println!("  main t{main}: last={mn}(a1={ma:#x})->{mr:#x}");
+        for &t in GLIBC_THREADS.lock().iter() {
+            let (n, a, r) = last_syscall(t);
+            crate::serial_println!("  thread t{t}: last={n}(a1={a:#x})->{r:#x} dead={}", crate::sched::is_dead(t));
+        }
         CDP_STEP.store(8, Ordering::Relaxed);
         cdp_send("{\"id\":5,\"method\":\"Browser.close\"}");
         CDP_DRIVE.store(false, Ordering::Relaxed);
@@ -708,6 +715,9 @@ pub fn cdp_pump() {
                 "{{\"id\":7,\"sessionId\":\"{sid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\",\"fromSurface\":false,\"captureBeyondViewport\":false}}}}"));
             CDP_STEP.store(7, Ordering::Relaxed);
             CDP_MARK.store(now, Ordering::Relaxed);
+            // Chrome spins instead of answering: trace the next syscalls to see the
+            // shape of that spin, from the exact moment the request goes out.
+            SYS_TRACE_LEFT.store(80, Ordering::Relaxed);
             continue;
         } else if step == 7 && msg.contains("\"id\":7") {
             match json_str(&msg, "data") {
@@ -3724,6 +3734,9 @@ static GSHM_ELF: &[u8] = include_bytes!("../../userland/glibc/gshm");
 // not disturb any other fd — the contract behind "create, unlink, mmap" anonymous
 // shared memory (how chrome carries a page's bytes to its renderer).
 static GUNLINK_ELF: &[u8] = include_bytes!("../../userland/glibc/gunlink");
+// poll() TIMEOUT test: a poll that answers 0 immediately turns every wait into a
+// spin (chrome's compositor thread polled millions of times per second).
+static GPOLL_ELF: &[u8] = include_bytes!("../../userland/glibc/gpoll");
 // CHROMIUM bring-up: two glibc stub libs (their real code lives in libc.so.6) that
 // chrome binaries declare as DT_NEEDED, + a REAL chrome component — the crashpad
 // crash handler (3.4 MB, dynamically linked, loaded via demand paging).
@@ -3836,6 +3849,8 @@ pub fn gfmmap_bytes() -> &'static [u8] { GFMMAP_ELF }
 pub fn gshm_bytes() -> &'static [u8] { GSHM_ELF }
 /// An unlinked-but-open + anonymous-shared-memory test.
 pub fn gunlink_bytes() -> &'static [u8] { GUNLINK_ELF }
+/// A poll()-timeout test: a timeout is a duration, not an instant answer.
+pub fn gpoll_bytes() -> &'static [u8] { GPOLL_ELF }
 /// glibc stub libs chrome declares as NEEDED (real code is in libc.so.6).
 pub fn glibc_libdl_bytes() -> &'static [u8] { GLIBC_LIBDL }
 pub fn glibc_libpthread_bytes() -> &'static [u8] { GLIBC_LIBPTHREAD }
@@ -7669,7 +7684,23 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             const POLLIN: u16 = 0x001;
             const POLLOUT: u16 = 0x004;
             let nfds = (a2 as usize).min(64);
-            let mut ready = 0u64;
+            // HONOR THE TIMEOUT. poll(fds, n, -1) means "wait until something is
+            // ready" — returning 0 says "your timeout expired", which cannot happen
+            // with an infinite one, so the caller loops immediately and spins. That is
+            // exactly what chrome's compositor thread did while waiting for a frame:
+            // millions of poll() calls per second, no frame, no screenshot. Wait like
+            // epoll_wait does (give the CPU up between checks so whoever will make us
+            // ready can actually run), and only report 0 when a FINITE timeout ran out.
+            let timeout_ms = a3 as i32;
+            let deadline = if timeout_ms > 0 {
+                Some(crate::interrupts::ticks() + (timeout_ms as u64).div_ceil(10)) // 100 Hz
+            } else {
+                None
+            };
+            let mut tries = 0u32;
+            let mut ready;
+            loop {
+            ready = 0u64;
             for i in 0..nfds {
                 let ent = a1 + (i as u64) * 8;
                 let fd = match read_user::<i32>(ent) { Some(v) => v as i64 as u64, None => return EFAULT };
@@ -7699,7 +7730,25 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 let _ = write_user(ent + 6, re);
                 if re != 0 { ready += 1; }
             }
-            ready
+            if ready > 0 || timeout_ms == 0 {
+                break ready; // something is ready, or the caller asked not to wait
+            }
+            if let Some(d) = deadline {
+                if crate::interrupts::ticks() >= d {
+                    break 0; // a FINITE timeout really did expire
+                }
+            } else if tries >= 64 {
+                // Infinite wait: hand the CPU back regularly, but never claim a
+                // timeout. Returning after enough yields keeps the caller's own event
+                // loop turning (glibc retries) without burning the core.
+                break 0;
+            }
+            tries += 1;
+            crate::sched::sleep_ticks(1);
+            if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                crate::sched::yield_now();
+            }
+            }
         }
         48 => 0, // shutdown(fd, how): accept, no-op
         51 | 52 => {
