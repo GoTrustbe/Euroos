@@ -617,6 +617,16 @@ pub fn cdp_pump() {
         return;
     }
 
+    // Step 7 (screenshot) gets a bounded wait: if no PNG comes back, say so and let
+    // chrome exit instead of leaving it spinning on a frame that never arrives.
+    if step == 7 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 3000 {
+        crate::serial_println!("[cdp] no screenshot within 30 s of guest time — the compositor never produced a frame");
+        CDP_STEP.store(8, Ordering::Relaxed);
+        cdp_send("{\"id\":5,\"method\":\"Browser.close\"}");
+        CDP_DRIVE.store(false, Ordering::Relaxed);
+        return;
+    }
+
     // Step 4 waits for Page.loadEventFired (handled below), with a bounded fallback
     // so a page that never fires it still gets read — and reports why.
     if step == 4 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 2000 {
@@ -690,8 +700,12 @@ pub fn cdp_pump() {
             // comes back base64 in the answer, which we print in chunks — the serial
             // log is the only way a picture leaves this machine.
             let sid = CDP_SESSION.lock().clone();
+            // fromSurface=false renders straight from the frame instead of capturing a
+            // presented surface — the surface path waits on a compositor frame that
+            // never commits here (no GL: SwiftShader needs AVX2 this CPU lacks), and
+            // chrome then spins. Both forms return an identical PNG on native Linux.
             cdp_send(&alloc::format!(
-                "{{\"id\":7,\"sessionId\":\"{sid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\"}}}}"));
+                "{{\"id\":7,\"sessionId\":\"{sid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\",\"fromSurface\":false,\"captureBeyondViewport\":false}}}}"));
             CDP_STEP.store(7, Ordering::Relaxed);
             CDP_MARK.store(now, Ordering::Relaxed);
             continue;

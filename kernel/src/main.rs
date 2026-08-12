@@ -2196,10 +2196,13 @@ fn main() -> Status {
                   // (ring3::cdp_install / cdp_pump). This skips --dump-dom's
                   // chrome://headless handler page — the one thing here that comes up
                   // empty — and uses only what is proven to work: navigation and V8.
-                  b"--remote-debugging-pipe", b"file:///tmp/euro.html"],
+                  // --dump-dom alongside it: its chrome://headless handler page was the
+                  // thing that came up empty, and the cause of that (shared memory) is
+                  // fixed — so one boot now tests both chrome's own path and ours.
+                  b"--remote-debugging-pipe", b"--dump-dom", b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
-            serial_println!("[hshell] BUILD=cdp-pipe (EuroOS drives DevTools: Target.attach -> Page.navigate -> Runtime.evaluate)");
+            serial_println!("[hshell] BUILD=cdp-pipe + --dump-dom (does chrome's own path work now that shared memory does?)");
             serial_println!("[hshell] chrome-headless-shell from DISK: exit={e3}");
             for l in o3.lines() { serial_println!("[hshell]   {l}"); }
         }
