@@ -396,3 +396,19 @@ NEXT for pixels: find what the frame is waiting on. Ideas, cheapest first:
 - try --run-all-compositor-stages-before-draw (+ virtual time), the combination
   headless screenshots historically needed;
 - watch for a Mojo reply that never comes on the Viz interface.
+
+## Pixels: the same wall from both directions (2026-08-12)
+Tried chrome's OWN `--screenshot=/tmp/euroshot.png` instead of driving
+Page.captureScreenshot ourselves — the same command handler that makes --dump-dom
+work here. Result: chrome exits 0 and writes NO file, and the DOM is not printed
+either, because executeCommands awaits the capture that never completes. So the
+capture is the blocker, not the way it is requested.
+
+Two independent routes, one wall: no compositor frame is ever produced. Everything
+around it works (navigation, resource loading, V8, the DOM). Reverted to
+--dump-dom alone: the document should not wait on pixels.
+
+Note the compositor/viz modules emit no VLOG output even at --v=2 on the host, so
+log-diffing will not locate this; it needs a different probe (is a BeginFrame ever
+requested? does the synthetic BeginFrameSource tick? does a Viz Mojo reply come
+back?).

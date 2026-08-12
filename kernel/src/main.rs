@@ -2128,7 +2128,7 @@ fn main() -> Status {
             // fd 3/4 must exist from chrome's first instruction: it checks them at
             // startup and exits with "Remote debugging pipe file descriptors are not
             // open" if they are missing.
-            ring3::cdp_install("file:///tmp/euro.html");
+            // (No debugging pipe this run: chrome rejects it next to a headless command.)
             let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
                 &[b"/pack/chrome-headless-shell", b"--no-sandbox",
                   b"--disable-gpu", b"--disable-dev-shm-usage", b"--user-data-dir=/tmp/hs",
@@ -2203,16 +2203,36 @@ fn main() -> Status {
                   // (ring3::cdp_install / cdp_pump). This skips --dump-dom's
                   // chrome://headless handler page — the one thing here that comes up
                   // empty — and uses only what is proven to work: navigation and V8.
-                  // NOTE: chrome refuses "--dump-dom" together with a debugging pipe
-                  // ("Headless commands are not compatible with remote debugging"), so
-                  // the two paths run separately. Chrome's own --dump-dom is VERIFIED
-                  // working; this run uses the pipe, because chasing the PIXELS needs
-                  // us to drive Page.captureScreenshot ourselves.
-                  b"--remote-debugging-pipe", b"file:///tmp/euro.html"],
+                  // --dump-dom ALONE. Asking for a screenshot too (chrome's own
+                  // --screenshot=, or Page.captureScreenshot over the pipe) hits the
+                  // same wall from both directions: the capture never completes, and
+                  // because executeCommands awaits it, the DOM is not emitted either.
+                  // So the pixels stay out until frame production works; the document
+                  // does not have to wait for them.
+                  b"--dump-dom", b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
-            serial_println!("[hshell] BUILD=cdp-pipe + screenshot diagnosis (what does chrome wait on?)");
+            serial_println!("[hshell] BUILD=--dump-dom (chrome's own command handler)");
             serial_println!("[hshell] chrome-headless-shell from DISK: exit={e3}");
+            // Did chrome actually write a PNG? Ship it out as hex: the boot log is the
+            // only channel off this machine, and a picture is worth the bytes.
+            match ring3::vfs_file_bytes("/tmp/euroshot.png") {
+                Some(png) if !png.is_empty() => {
+                    serial_println!("[png] BEGIN {} bytes", png.len());
+                    let mut line = alloc::string::String::new();
+                    for (i, b) in png.iter().enumerate() {
+                        line.push_str(&alloc::format!("{b:02x}"));
+                        if (i + 1) % 512 == 0 {
+                            serial_println!("[png] {line}");
+                            line.clear();
+                        }
+                    }
+                    if !line.is_empty() { serial_println!("[png] {line}"); }
+                    serial_println!("[png] END");
+                }
+                Some(_) => serial_println!("[png] chrome created /tmp/euroshot.png but it is EMPTY"),
+                None => serial_println!("[png] chrome wrote no /tmp/euroshot.png"),
+            }
             for l in o3.lines() { serial_println!("[hshell]   {l}"); }
         }
         // (Reclamation validated out-of-band: 30 mixed runs incl. threaded kept the

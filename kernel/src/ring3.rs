@@ -1121,6 +1121,13 @@ fn reset_fd_table() {
 }
 
 /// Register a file (path + content) so userspace can read it via open/read.
+/// Read a VFS file back into the kernel. Used to fetch a file a PROGRAM produced —
+/// e.g. the PNG chrome writes for --screenshot, which then leaves this machine as
+/// hex in the boot log (the only channel out).
+pub fn vfs_file_bytes(path: &str) -> Option<alloc::vec::Vec<u8>> {
+    FILES.lock().iter().find(|(p, _)| p == path).map(|(_, d)| d.to_vec())
+}
+
 pub fn register_file(path: &str, bytes: alloc::vec::Vec<u8>) {
     FILES.lock().push((String::from(path), alloc::borrow::Cow::Owned(bytes)));
 }
