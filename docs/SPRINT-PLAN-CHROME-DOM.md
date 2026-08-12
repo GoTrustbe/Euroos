@@ -370,3 +370,29 @@ in separate runs.
 Pixels remain open: Page.captureScreenshot never answers (chrome spins on a
 compositor frame that never commits without GL; SwiftShader needs AVX2 the CPU
 lacks). That is software frame production in Viz, a different wall from the DOM.
+
+## Pixels, wall 14: poll() ignored its timeout (fixed) — frame production still open
+Chasing Page.captureScreenshot, a bounded syscall trace armed at the request showed
+one thread calling `poll(fds, 2, -1)` millions of times per second, always answered
+0. With an INFINITE timeout, 0 is a lie ("your timeout expired"), so the caller
+loops straight back in and starves the threads that would produce the frame. Our
+poll() ignored the timeout entirely. Fixed (commit 869c16c): poll now re-checks,
+gives the CPU up between checks, and reports 0 only when a finite timeout really
+elapsed. New test gpoll passes with identical numbers on EuroOS and native Linux.
+Effect: chrome's syscall storm halves; its threads WAIT (epoll/futex) instead of
+spinning in poll.
+
+STILL NO PNG, even with a 300 s guest-time budget. So this is no longer a spin:
+the compositor never commits a frame. IMPORTANT correction to the earlier note:
+the flags are NOT the cause — native Linux with this exact flag set
+(--use-gl=disabled --disable-gpu-compositing --ozone-platform=headless) returns a
+5138-byte PNG for both fromSurface=true and false. Software rasterizing works
+there without SwiftShader, so "SwiftShader needs AVX2" does not explain this.
+
+NEXT for pixels: find what the frame is waiting on. Ideas, cheapest first:
+- vmodule the compositor/viz side and compare against the host run line by line;
+- check whether a BeginFrame is ever requested (headless uses a synthetic
+  BeginFrameSource — if its timer never ticks for us, nothing draws);
+- try --run-all-compositor-stages-before-draw (+ virtual time), the combination
+  headless screenshots historically needed;
+- watch for a Mojo reply that never comes on the Viz interface.
