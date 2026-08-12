@@ -452,3 +452,17 @@ worth checking whether the display side ever sees what the renderer wrote there,
 e.g. by having a test map a >1 MiB shared file from two mappings and comparing
 (gshm only covers a 64 KiB region, which takes the ARENA path, not the aliasing
 one). If that gap is real it would explain a frame that is never "ready".
+
+## The shared-bitmap lead is CLOSED (2026-08-12)
+Extended gshm to the path a browser actually uses: demand paging on, a 4 MiB
+shared region, 1024 pages checked one way and the far end back. It passes on
+EuroOS exactly as on native Linux. On the way it found and fixed a real gap
+(read()/pread() did not see writes made through an ALIASED shared mapping; the
+reconciliation now goes through the shared frames via the identity map).
+
+So shared memory holds up at browser scale, and the missing compositor frame is
+NOT explained by it. Remaining ideas for whoever picks this up: is a BeginFrame
+ever requested at all, and does the synthetic BeginFrameSource tick here? Neither
+is visible in logs (viz/compositor emit no VLOG even at --v=2), so it needs a
+probe in the kernel (which timer/fd does the compositor thread wait on, and does
+that wait ever complete?).
