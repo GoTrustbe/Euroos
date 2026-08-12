@@ -3744,6 +3744,9 @@ static GUNLINK_ELF: &[u8] = include_bytes!("../../userland/glibc/gunlink");
 // poll() TIMEOUT test: a poll that answers 0 immediately turns every wait into a
 // spin (chrome's compositor thread polled millions of times per second).
 static GPOLL_ELF: &[u8] = include_bytes!("../../userland/glibc/gpoll");
+// SLEEP test: nanosleep/clock_nanosleep must actually let time pass, or every
+// paced loop becomes a spin and deadline-scheduled work never settles.
+static GSLEEP_ELF: &[u8] = include_bytes!("../../userland/glibc/gsleep");
 // CHROMIUM bring-up: two glibc stub libs (their real code lives in libc.so.6) that
 // chrome binaries declare as DT_NEEDED, + a REAL chrome component — the crashpad
 // crash handler (3.4 MB, dynamically linked, loaded via demand paging).
@@ -3858,6 +3861,8 @@ pub fn gshm_bytes() -> &'static [u8] { GSHM_ELF }
 pub fn gunlink_bytes() -> &'static [u8] { GUNLINK_ELF }
 /// A poll()-timeout test: a timeout is a duration, not an instant answer.
 pub fn gpoll_bytes() -> &'static [u8] { GPOLL_ELF }
+/// A sleep test: time must pass when a program asks for it.
+pub fn gsleep_bytes() -> &'static [u8] { GSLEEP_ELF }
 /// glibc stub libs chrome declares as NEEDED (real code is in libc.so.6).
 pub fn glibc_libdl_bytes() -> &'static [u8] { GLIBC_LIBDL }
 pub fn glibc_libpthread_bytes() -> &'static [u8] { GLIBC_LIBPTHREAD }
@@ -8476,7 +8481,36 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
             a2
         }
-        35 => 0,  // nanosleep
+        35 | 230 => {
+            // nanosleep(req, rem) / clock_nanosleep(clockid, flags, req, rem): SLEEP.
+            // Returning 0 straight away is the same lie poll() used to tell — the
+            // caller asked for time to pass and it did not, so every paced loop turns
+            // into a spin and anything scheduled on a deadline never settles.
+            const TIMER_ABSTIME: u64 = 1;
+            let (flags, req, rem) = if num == 35 { (0, a1, a2) } else { (a2, a3, a4) };
+            let secs = match read_user::<i64>(req) { Some(v) => v, None => return EFAULT };
+            let nsecs = match read_user::<i64>(req + 8) { Some(v) => v, None => return EFAULT };
+            if secs < 0 || !(0..1_000_000_000).contains(&nsecs) {
+                return (-22i64) as u64; // -EINVAL
+            }
+            // Our monotonic clock is the 100 Hz tick counter: round UP so a sleep is
+            // never shorter than asked (a short sleep is a bug; a long one is jitter).
+            let want_ticks = (secs as u64) * 100 + (nsecs as u64).div_ceil(10_000_000);
+            let now = crate::interrupts::ticks();
+            let deadline = if flags & TIMER_ABSTIME != 0 { want_ticks } else { now + want_ticks };
+            while crate::interrupts::ticks() < deadline {
+                crate::sched::sleep_ticks(1);
+                if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                    crate::sched::yield_now(); // let everyone else run while we wait
+                }
+            }
+            if rem != 0 {
+                // Never interrupted here (no signals): the remainder is zero.
+                let _ = write_user(rem, 0i64);
+                let _ = write_user(rem + 8, 0i64);
+            }
+            0
+        }
         234 => 0, // tgkill
         137 | 138 => {
             // statfs(path, buf) / fstatfs(fd, buf): report a normal LOCAL filesystem.

@@ -1944,6 +1944,12 @@ fn main() -> Status {
         serial_println!("[glibc] gpoll (poll timeout): exit={epo} (want 143)");
         for l in opo.lines() { serial_println!("[glibc]   {l}"); }
 
+        // gsleep: nanosleep/clock_nanosleep must really let time pass. Returning 0
+        // straight away is the same lie poll() told, and it wrecks anything paced.
+        let (osl, esl) = ring3::run_glibc(&mut allocator, ring3::gsleep_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsleep"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsleep (nanosleep + absolute deadline): exit={esl} (want 149)");
+        for l in osl.lines() { serial_println!("[glibc]   {l}"); }
+
         // LEAN chrome-headless-shell run: skip the GUI/demo glibc tests (X11/gsparse/
         // gfmmap/crashpad/gdiskmap). They inflate guest memory and, on a memory-tight
         // host, OOM-kill qemu before hshell is reached. Jump straight to the disk-
@@ -2241,8 +2247,9 @@ fn main() -> Status {
         // task table at index 31 with free_frames stable — see commit notes.)
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
-        let results: [(&str, u64, u64); 22] = [
+        let results: [(&str, u64, u64); 23] = [
             ("gpoll(poll timeout)", epo, 143),
+            ("gsleep(nanosleep + abs deadline)", esl, 149),
             ("gshm(MAP_SHARED memfd)", esh, 131),
             ("gunlink(unlinked-but-open + anon shm)", eul, 137),
             ("gtiny(dyn-link)", e1, 42), ("gtest(stdio/malloc/qsort)", e2, 55),
