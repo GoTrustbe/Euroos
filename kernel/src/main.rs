@@ -2217,6 +2217,12 @@ fn main() -> Status {
                   //   3. + --run-all-compositor-stages-before-draw + virtual time.
                   // So the blocker is frame production itself, not how it is requested.
                   // Until that is solved the document should not wait on it.
+                  // --dump-dom ALONE. FOUR ways of asking for pixels now end the same
+                  // way (our Page.captureScreenshot in both fromSurface modes; chrome's
+                  // own --screenshot=; those plus run-all-compositor-stages and virtual
+                  // time; and all of it again once sleeps were real). Each also costs
+                  // the DOM, because executeCommands awaits the capture. The blocker is
+                  // frame production; the document should not wait on it.
                   b"--dump-dom", b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);

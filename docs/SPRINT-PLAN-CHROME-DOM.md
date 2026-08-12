@@ -431,3 +431,24 @@ Config left at --dump-dom alone (the working result should not wait on the missi
 one). A real investigation needs a probe into whether a BeginFrame is ever
 requested and whether the synthetic BeginFrameSource ticks here — viz/compositor
 emit no VLOG even at --v=2, so logs will not show it.
+
+## Pixels: real sleeps did not unblock it either (2026-08-12)
+nanosleep was a no-op and clock_nanosleep unimplemented on the glibc path — the
+same class of bug as poll's ignored timeout, and a real reason to expect a
+different outcome, since a compositor paces frames on deadlines. Both are fixed
+(commit 229a538, test gsleep: 60 ms takes 60 ms, an absolute +80 ms deadline waits
+80 ms, matching native Linux exactly). Chrome still writes no PNG.
+
+Four ways of asking now end identically, so the request is not the problem:
+  1. Page.captureScreenshot over our pipe (fromSurface true AND false),
+  2. chrome's own --screenshot=,
+  3. + --run-all-compositor-stages-before-draw + --virtual-time-budget,
+  4. all of the above with working nanosleep/clock_nanosleep.
+
+LEAD for next time (untested): in headless software compositing the frame lands in
+a SoftwareOutputDevice backed by a SHARED BITMAP. Large shared mappings now go
+through the demand-region aliasing path (own address per mapping, shared frames) —
+worth checking whether the display side ever sees what the renderer wrote there,
+e.g. by having a test map a >1 MiB shared file from two mappings and comparing
+(gshm only covers a 64 KiB region, which takes the ARENA path, not the aliasing
+one). If that gap is real it would explain a frame that is never "ready".
