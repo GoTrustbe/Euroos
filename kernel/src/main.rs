@@ -2141,7 +2141,7 @@ fn main() -> Status {
             // fd 3/4 must exist from chrome's first instruction: it checks them at
             // startup and exits with "Remote debugging pipe file descriptors are not
             // open" if they are missing.
-            // (No debugging pipe this run: chrome rejects it next to a headless command.)
+            // (No debugging pipe: chrome rejects it next to a headless command.)
             let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
                 &[b"/pack/chrome-headless-shell", b"--no-sandbox",
                   b"--disable-gpu", b"--disable-dev-shm-usage", b"--user-data-dir=/tmp/hs",

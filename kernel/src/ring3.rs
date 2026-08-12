@@ -717,7 +717,7 @@ pub fn cdp_pump() {
             CDP_MARK.store(now, Ordering::Relaxed);
             // Chrome spins instead of answering: trace the next syscalls to see the
             // shape of that spin, from the exact moment the request goes out.
-            SYS_TRACE_LEFT.store(80, Ordering::Relaxed);
+            WAIT_DIAG.store(40, Ordering::Relaxed);
             continue;
         } else if step == 7 && msg.contains("\"id\":7") {
             match json_str(&msg, "data") {
@@ -986,6 +986,16 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
                 }
                 n += 1;
             }
+        }
+        if n == 0 && tries == 0 && WAIT_DIAG.load(Ordering::Relaxed) > 0 {
+            WAIT_DIAG.fetch_sub(1, Ordering::Relaxed);
+            let mut desc = String::new();
+            for (fd, evmask, _) in EPOLLS.lock()[idx].clone().unwrap_or_default() {
+                desc.push_str(&alloc::format!(" fd{fd}({},want={evmask:#x},in={},out={})",
+                    fd_kind(fd as u64), epoll_fd_ready(fd as u64), epoll_fd_writable(fd as u64)));
+            }
+            crate::serial_println!("[wait] t{} epoll_wait timeout={timeout} nothing ready:{desc}",
+                crate::sched::current());
         }
         if n > 0 || timeout == 0 || tries >= 8 {
             return n; // ready fds, non-blocking, or gave the CPU up enough — let the pump run
@@ -6765,6 +6775,11 @@ fn linux_required_cap(num: u64, a1: u64) -> u64 {
 /// instead of the millions a global trace would produce.
 static SYS_TRACE_LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static SYS_TRACE_ARMED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Bounded diagnosis of WAITS: how many more unsatisfied poll/epoll calls to
+/// describe (which fds, of what kind, and whether any is ready). Armed the moment
+/// we ask chrome for a screenshot, so the log answers "what is the compositor
+/// waiting for, and could it ever arrive" instead of "it is stuck".
+static WAIT_DIAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     if SYS_TRACE_LEFT.load(Ordering::Relaxed) == 0 {
@@ -7781,6 +7796,19 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
             if ready > 0 || timeout_ms == 0 {
                 break ready; // something is ready, or the caller asked not to wait
+            }
+            if tries == 0 && WAIT_DIAG.load(Ordering::Relaxed) > 0 {
+                WAIT_DIAG.fetch_sub(1, Ordering::Relaxed);
+                let mut desc = String::new();
+                for i in 0..nfds {
+                    let ent = a1 + (i as u64) * 8;
+                    let fd = read_user::<i32>(ent).unwrap_or(-1) as i64 as u64;
+                    let ev = read_user::<u16>(ent + 4).unwrap_or(0);
+                    desc.push_str(&alloc::format!(" fd{fd}({},ev={ev:#x},in={},out={})",
+                        fd_kind(fd), epoll_fd_ready(fd), epoll_fd_writable(fd)));
+                }
+                crate::serial_println!("[wait] t{} poll timeout={timeout_ms}ms nothing ready:{desc}",
+                    crate::sched::current());
             }
             if let Some(d) = deadline {
                 if crate::interrupts::ticks() >= d {

@@ -466,3 +466,28 @@ ever requested at all, and does the synthetic BeginFrameSource tick here? Neithe
 is visible in logs (viz/compositor emit no VLOG even at --v=2), so it needs a
 probe in the kernel (which timer/fd does the compositor thread wait on, and does
 that wait ever complete?).
+
+## Pixels: the threads are IDLE, no frame is ever REQUESTED (2026-08-12)
+A bounded wait-diagnosis (WAIT_DIAG, armed the moment we ask for a capture; it
+describes every unsatisfied poll/epoll: which fds, of what kind, and whether any
+is ready) changed the picture completely. After the poll and sleep fixes, chrome
+is not stuck on a frame — it is IDLE:
+
+    [wait] t10 epoll_wait timeout=53740 nothing ready: fd802(eventfd,in=false,out=true)
+    [wait] t22 epoll_wait timeout=73300 nothing ready: fd804(eventfd,in=false,out=true)
+    [wait] t7  poll timeout=2850ms nothing ready: fd12(pipe,...) fd800(eventfd,...)
+
+Timeouts of 53-74 SECONDS are idle housekeeping timers. A compositor with a frame
+to draw would be waiting ~16 ms. So the capture request never turns into scheduled
+work: nothing is requesting a frame at all.
+
+Also tried, and worth knowing:
+- `HeadlessExperimental.beginFrame` (the explicit "produce one frame" command) is
+  accepted by this build but returns `{}` with no screenshotData — a stub.
+- `--enable-begin-frame-control` switches chrome to a mode where NOTHING renders
+  unless frames are driven externally: on the HOST it then hangs our driver
+  entirely. It is a different rendering contract, not a fix.
+
+So the wall is upstream of the compositor: whatever normally asks for a frame in
+this configuration never does so here. Next probe would have to look at Viz/Display
+setup rather than at waits — e.g. whether the software Display is ever created.
