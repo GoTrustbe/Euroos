@@ -2203,12 +2203,14 @@ fn main() -> Status {
                   // (ring3::cdp_install / cdp_pump). This skips --dump-dom's
                   // chrome://headless handler page — the one thing here that comes up
                   // empty — and uses only what is proven to work: navigation and V8.
-                  // --dump-dom ALONE. Asking for a screenshot too (chrome's own
-                  // --screenshot=, or Page.captureScreenshot over the pipe) hits the
-                  // same wall from both directions: the capture never completes, and
-                  // because executeCommands awaits it, the DOM is not emitted either.
-                  // So the pixels stay out until frame production works; the document
-                  // does not have to wait for them.
+                  // --dump-dom ALONE, deliberately. THREE independent ways to ask for
+                  // pixels all end at the same wall, and each one also costs the DOM
+                  // (chrome's executeCommands awaits the capture that never completes):
+                  //   1. Page.captureScreenshot over our pipe (fromSurface true/false),
+                  //   2. chrome's own --screenshot=,
+                  //   3. + --run-all-compositor-stages-before-draw + virtual time.
+                  // So the blocker is frame production itself, not how it is requested.
+                  // Until that is solved the document should not wait on it.
                   b"--dump-dom", b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);

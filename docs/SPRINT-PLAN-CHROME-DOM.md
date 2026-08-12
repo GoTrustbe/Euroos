@@ -412,3 +412,22 @@ Note the compositor/viz modules emit no VLOG output even at --v=2 on the host, s
 log-diffing will not locate this; it needs a different probe (is a BeginFrame ever
 requested? does the synthetic BeginFrameSource tick? does a Viz Mojo reply come
 back?).
+
+## Pixels: third route also fails — it is frame production, full stop (2026-08-12)
+Tried the combination headless screenshots are documented to need, now that
+navigation works: `--run-all-compositor-stages-before-draw --virtual-time-budget=8000
+--screenshot=`. Same outcome: chrome exits 0, no PNG, and no DOM either (the
+capture blocks executeCommands).
+
+Three independent routes, one wall:
+  1. Page.captureScreenshot over our own pipe (fromSurface true AND false),
+  2. chrome's own --screenshot=,
+  3. the two flags above on top of it.
+Everything around a frame works — navigation, resource loading, V8, the DOM, and
+threads now WAIT properly (after the poll-timeout fix) instead of spinning. So this
+is not a flag or a request-shape problem: no compositor frame is ever produced.
+
+Config left at --dump-dom alone (the working result should not wait on the missing
+one). A real investigation needs a probe into whether a BeginFrame is ever
+requested and whether the synthetic BeginFrameSource ticks here — viz/compositor
+emit no VLOG even at --v=2, so logs will not show it.
