@@ -1478,6 +1478,43 @@ fn sync_shared_region(fi: usize, to_file: bool) {
     if !SHARED_ANY.load(Ordering::Relaxed) {
         return;
     }
+    // ALIASED mapping: the file's pages live in shared FRAMES, which the kernel can
+    // read directly through the identity map — no user address needed, and no risk
+    // of touching a page that has not been faulted in yet (an unallocated frame is
+    // simply zeros, exactly what an untouched page reads as).
+    let aliased = SHARED_ALIASES.lock().iter().any(|&(_, _, f)| f == fi);
+    if aliased {
+        let frames = SHARED_FRAMES.lock().iter().find(|(f, _)| *f == fi).map(|(_, v)| v.clone());
+        let frames = match frames {
+            Some(v) => v,
+            None => return, // nothing touched yet: the file already reads as zeros
+        };
+        let flen = FILES.lock().get(fi).map(|(_, d)| d.len()).unwrap_or(0);
+        if flen == 0 || flen > 4 * 1024 * 1024 {
+            return; // bounded: a huge buffer is used as memory, never read through its fd
+        }
+        let mut files = FILES.lock();
+        let data = match files.get_mut(fi) { Some(f) => f.1.to_mut(), None => return };
+        for (idx, &phys) in frames.iter().enumerate() {
+            let off = idx * 4096;
+            if off >= flen {
+                break;
+            }
+            let n = (flen - off).min(4096);
+            if to_file {
+                if phys != 0 {
+                    // SAFETY: `phys` is an identity-mapped frame we allocated ourselves.
+                    let src = unsafe { core::slice::from_raw_parts(phys as *const u8, n) };
+                    data[off..off + n].copy_from_slice(src);
+                }
+            } else if phys != 0 {
+                // SAFETY: same frame, written from the kernel side.
+                let dst = unsafe { core::slice::from_raw_parts_mut(phys as *mut u8, n) };
+                dst.copy_from_slice(&data[off..off + n]);
+            }
+        }
+        return;
+    }
     let hit = SHARED_MAPS.lock().iter().find(|(f, _, _)| *f == fi).map(|&(_, b, l)| (b, l));
     let (base, rlen) = match hit {
         Some(x) => x,

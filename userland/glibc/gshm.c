@@ -60,7 +60,32 @@ int main(void) {
         fflush(stdout); return 9;
     }
 
-    printf("GSHM: MAP_SHARED memfd truly shared (A<->B, late map, fd read) -> PASS\n");
+    /* 5. A BIG shared region. Anything over a megabyte takes a different path in
+          this kernel (its own address range per mapping, faulting onto the file's
+          shared frames) than the small one above, and that is the path a browser's
+          frame buffers and IPC buffers actually use. Two mappings must still be one
+          memory, across many pages, in both directions. */
+    const size_t BIG = 4u * 1024 * 1024;
+    int big = memfd_create("eurobig", MFD_CLOEXEC);
+    if (big < 0 || ftruncate(big, (off_t)BIG) != 0) {
+        printf("GSHM: big memfd setup FAILED\n"); fflush(stdout); return 10;
+    }
+    unsigned char *x = mmap(NULL, BIG, PROT_READ | PROT_WRITE, MAP_SHARED, big, 0);
+    unsigned char *y = mmap(NULL, BIG, PROT_READ | PROT_WRITE, MAP_SHARED, big, 0);
+    if (x == MAP_FAILED || y == MAP_FAILED) { printf("GSHM: big mmap FAILED\n"); fflush(stdout); return 11; }
+    size_t bad_big = 0;
+    for (size_t o = 0; o < BIG; o += 4096) x[o] = (unsigned char)(1 + (o / 4096) % 251);
+    for (size_t o = 0; o < BIG; o += 4096)
+        if (y[o] != (unsigned char)(1 + (o / 4096) % 251)) bad_big++;
+    printf("GSHM: big region %zu KiB, X->Y mismatched=%zu of %zu pages\n",
+           BIG / 1024, bad_big, BIG / 4096);
+    if (bad_big) { fflush(stdout); return 12; }
+    memcpy(y + BIG - 4096 + 64, "far end shared", 14);      /* and the other way, last page */
+    if (memcmp(x + BIG - 4096 + 64, "far end shared", 14) != 0) {
+        printf("GSHM: big region Y->X FAILED\n"); fflush(stdout); return 13;
+    }
+
+    printf("GSHM: MAP_SHARED memfd truly shared (small + 4 MiB, both directions) -> PASS\n");
     fflush(stdout);
     return 131;
 }

@@ -1925,7 +1925,14 @@ fn main() -> Status {
         // through such a buffer, so a private-copy mmap hands the reader zeros: the
         // page "loads" but its document is empty, with no error anywhere. Runs in the
         // lean chrome boot too: it is cheap, and it is exactly what chrome depends on.
+        // Demand paging ON for this one: a shared mapping over a megabyte takes the
+        // ALIASING path (its own address range per mapping, faulting onto the file's
+        // shared frames) instead of the arena copy, and that is the path a browser's
+        // frame and IPC buffers actually use. Without this the test would only ever
+        // exercise the small-region path.
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
         let (osh, esh) = ring3::run_glibc(&mut allocator, ring3::gshm_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gshm"], &[b"PATH=/bin"], caps);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
         serial_println!("[glibc] gshm (MAP_SHARED memfd): exit={esh} (want 131)");
         for l in osh.lines() { serial_println!("[glibc]   {l}"); }
 
