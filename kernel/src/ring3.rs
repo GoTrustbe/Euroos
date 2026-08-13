@@ -434,12 +434,53 @@ static CDP_STEP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::
 static CDP_MARK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CDP_TRIES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static CDP_RX: Mutex<alloc::vec::Vec<u8>> = Mutex::new(alloc::vec::Vec::new());
+/// Socketpair endpoints: (a, b). A descriptor sent with SCM_RIGHTS on one end has
+/// to arrive on the OTHER one, and only a pair knows who that is.
+static SOCK_PAIRS: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+/// Descriptors in flight: (receiving fd, descriptor). FIFO, delivered by recvmsg.
+static SCM_PENDING: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+
+/// The other end of a socketpair, if `fd` is one.
+fn sock_peer(fd: u64) -> Option<u64> {
+    SOCK_PAIRS.lock().iter().find_map(|&(a, b)| {
+        if a == fd { Some(b) } else if b == fd { Some(a) } else { None }
+    })
+}
+
+/// Take the descriptors sent to `fd` (in order).
+fn scm_take(fd: u64) -> alloc::vec::Vec<u64> {
+    let mut q = SCM_PENDING.lock();
+    let mut out = alloc::vec::Vec::new();
+    let mut i = 0;
+    while i < q.len() {
+        if q[i].0 == fd {
+            out.push(q.remove(i).1);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Thread names as the program set them with prctl(PR_SET_NAME).
+static THREAD_NAMES: Mutex<alloc::vec::Vec<(usize, String)>> = Mutex::new(alloc::vec::Vec::new());
+
+/// The name a task gave itself, or "?" if it never did.
+pub fn thread_name(t: usize) -> String {
+    THREAD_NAMES.lock().iter().find(|(x, _)| *x == t).map(|(_, n)| n.clone())
+        .unwrap_or_else(|| String::from("?"))
+}
 static CDP_URL: Mutex<String> = Mutex::new(String::new());
 static CDP_SESSION: Mutex<String> = Mutex::new(String::new());
 /// The DOM chrome sent back (empty until it arrives).
 pub static CDP_DOM: Mutex<String> = Mutex::new(String::new());
 /// Drive the DevTools conversation from the process-run loop.
 pub static CDP_DRIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Fast-forward the clock when every thread is parked. It breaks multi-second waits
+/// under TCG, but it also makes the guest's monotonic clock JUMP — and a scheduler
+/// that computes its next deadline from that clock can end up planning far into the
+/// future. Switchable so its effect can be measured rather than argued about.
+pub static TICKLESS_IDLE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
 
 /// Put the two pipe ends where `--remote-debugging-pipe` expects them: fd 3 is
 /// chrome's READ end (we write commands into it), fd 4 its WRITE end (we read the
@@ -593,6 +634,19 @@ fn cdp_ask_dom() {
     CDP_MARK.store(crate::interrupts::ticks(), Ordering::Relaxed);
 }
 
+/// Ask chrome for ONE frame, requesting the picture with it once rendering has had
+/// a few frames to settle. Returns through step 7 below.
+fn cdp_begin_frame() {
+    let sid = CDP_SESSION.lock().clone();
+    let n = CDP_TRIES.fetch_add(1, Ordering::Relaxed);
+    let params = if n >= 3 { "{\"screenshot\":{\"format\":\"png\"}}" } else { "{}" };
+    cdp_send(&alloc::format!(
+        "{{\"id\":7,\"sessionId\":\"{sid}\",\"method\":\"HeadlessExperimental.beginFrame\",\"params\":{params}}}"));
+    WAIT_DIAG.store(30, Ordering::Relaxed); // describe what the next waits are for
+    CDP_STEP.store(7, Ordering::Relaxed);
+    CDP_MARK.store(crate::interrupts::ticks(), Ordering::Relaxed);
+}
+
 /// One step of the DevTools conversation. Called from the process-run loop; each
 /// call sends at most one command and consumes whatever answers have arrived.
 pub fn cdp_pump() {
@@ -620,13 +674,14 @@ pub fn cdp_pump() {
     // Step 7 (screenshot) gets a bounded wait: if no PNG comes back, say so and let
     // chrome exit instead of leaving it spinning on a frame that never arrives.
     if step == 7 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 30_000 {
-        crate::serial_println!("[cdp] no screenshot within 300 s of guest time — what is each thread waiting on?");
+        crate::serial_println!("[cdp] a frame request went unanswered for 300 s — what is each thread waiting on?");
         let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
         let (mn, ma, mr) = last_syscall(main);
         crate::serial_println!("  main t{main}: last={mn}(a1={ma:#x})->{mr:#x}");
         for &t in GLIBC_THREADS.lock().iter() {
             let (n, a, r) = last_syscall(t);
-            crate::serial_println!("  thread t{t}: last={n}(a1={a:#x})->{r:#x} dead={}", crate::sched::is_dead(t));
+            crate::serial_println!("  thread t{t} {:?}: last={n}(a1={a:#x})->{r:#x} dead={}",
+                thread_name(t), crate::sched::is_dead(t));
         }
         CDP_STEP.store(8, Ordering::Relaxed);
         cdp_send("{\"id\":5,\"method\":\"Browser.close\"}");
@@ -634,11 +689,11 @@ pub fn cdp_pump() {
         return;
     }
 
-    // Step 4 waits for Page.loadEventFired (handled below), with a bounded fallback
-    // so a page that never fires it still gets read — and reports why.
-    if step == 4 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 2000 {
-        crate::serial_println!("[cdp] no load event within 20 s of guest time — reading the DOM anyway");
-        cdp_ask_dom();
+    // Step 4: give the load a moment, then DRIVE FRAMES. Each beginFrame advances
+    // rendering one step; the first few usually report no damage (layout/paint are
+    // still settling) and then one comes back with the picture.
+    if step == 4 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 300 {
+        cdp_begin_frame();
     }
 
     while let Some(msg) = cdp_next_msg() {
@@ -667,6 +722,12 @@ pub fn cdp_pump() {
                 // Page.enable first: without it no Page.loadEventFired arrives, and
                 // reading the DOM before the load event returns the INITIAL EMPTY
                 // document — which looks exactly like a body that never loaded.
+                // HeadlessExperimental is what lets US produce frames: with
+                // --enable-begin-frame-control + --run-all-compositor-stages-before-draw
+                // chrome renders ONLY when asked, which is exactly right for a system
+                // whose frame source never ticks by itself.
+                cdp_send(&alloc::format!(
+                    "{{\"id\":8,\"sessionId\":\"{s}\",\"method\":\"HeadlessExperimental.enable\"}}"));
                 cdp_send(&alloc::format!(
                     "{{\"id\":6,\"sessionId\":\"{s}\",\"method\":\"Page.enable\"}}"));
                 cdp_send(&alloc::format!(
@@ -720,7 +781,14 @@ pub fn cdp_pump() {
             WAIT_DIAG.store(40, Ordering::Relaxed);
             continue;
         } else if step == 7 && msg.contains("\"id\":7") {
-            match json_str(&msg, "data") {
+            if msg.contains("\"error\"") {
+                crate::serial_println!("[cdp] beginFrame refused: {}", msg.chars().take(200).collect::<String>());
+                CDP_STEP.store(8, Ordering::Relaxed);
+                cdp_send("{\"id\":5,\"method\":\"Browser.close\"}");
+                CDP_DRIVE.store(false, Ordering::Relaxed);
+                return;
+            }
+            match json_str(&msg, "screenshotData") {
                 Some(b64) => {
                     crate::serial_println!("[png] BEGIN {} base64 chars", b64.len());
                     let bytes = b64.as_bytes();
@@ -732,7 +800,17 @@ pub fn cdp_pump() {
                     }
                     crate::serial_println!("[png] END");
                 }
-                None => crate::serial_println!("[cdp] screenshot returned no data: {}", msg.chars().take(300).collect::<String>()),
+                None => {
+                    // No pixels yet: normal for the first frames (nothing has been
+                    // damaged). Keep driving; give up only after a fair number.
+                    let n = CDP_TRIES.load(Ordering::Relaxed);
+                    crate::serial_println!("[cdp] frame {n}: no pixels yet (hasDamage false)");
+                    if n < 14 {
+                        cdp_begin_frame();
+                        continue;
+                    }
+                    crate::serial_println!("[cdp] no damaged frame after {n} tries — nothing was drawn");
+                }
             }
             CDP_STEP.store(8, Ordering::Relaxed);
             cdp_send("{\"id\":5,\"method\":\"Browser.close\"}"); // let chrome exit cleanly
@@ -994,8 +1072,8 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
                 desc.push_str(&alloc::format!(" fd{fd}({},want={evmask:#x},in={},out={})",
                     fd_kind(fd as u64), epoll_fd_ready(fd as u64), epoll_fd_writable(fd as u64)));
             }
-            crate::serial_println!("[wait] t{} epoll_wait timeout={timeout} nothing ready:{desc}",
-                crate::sched::current());
+            crate::serial_println!("[wait] t{} {:?} epoll_wait timeout={timeout} nothing ready:{desc}",
+                crate::sched::current(), thread_name(crate::sched::current()));
         }
         if n > 0 || timeout == 0 || tries >= 8 {
             return n; // ready fds, non-blocking, or gave the CPU up enough — let the pump run
@@ -3794,6 +3872,9 @@ static GPOLL_ELF: &[u8] = include_bytes!("../../userland/glibc/gpoll");
 // SLEEP test: nanosleep/clock_nanosleep must actually let time pass, or every
 // paced loop becomes a spin and deadline-scheduled work never settles.
 static GSLEEP_ELF: &[u8] = include_bytes!("../../userland/glibc/gsleep");
+// SCM_RIGHTS test: a descriptor sent over a socketpair must arrive and be usable —
+// how Mojo passes handles, including while chrome produces a frame.
+static GSCM_ELF: &[u8] = include_bytes!("../../userland/glibc/gscm");
 // CHROMIUM bring-up: two glibc stub libs (their real code lives in libc.so.6) that
 // chrome binaries declare as DT_NEEDED, + a REAL chrome component — the crashpad
 // crash handler (3.4 MB, dynamically linked, loaded via demand paging).
@@ -3910,6 +3991,8 @@ pub fn gunlink_bytes() -> &'static [u8] { GUNLINK_ELF }
 pub fn gpoll_bytes() -> &'static [u8] { GPOLL_ELF }
 /// A sleep test: time must pass when a program asks for it.
 pub fn gsleep_bytes() -> &'static [u8] { GSLEEP_ELF }
+/// A descriptor-passing test (SCM_RIGHTS over a socketpair).
+pub fn gscm_bytes() -> &'static [u8] { GSCM_ELF }
 /// glibc stub libs chrome declares as NEEDED (real code is in libc.so.6).
 pub fn glibc_libdl_bytes() -> &'static [u8] { GLIBC_LIBDL }
 pub fn glibc_libpthread_bytes() -> &'static [u8] { GLIBC_LIBPTHREAD }
@@ -5082,6 +5165,7 @@ pub fn run_dynamic(
     LINUX_ABI.store(linux_abi, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    THREAD_NAMES.lock().clear();
     SHARED_FRAMES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
@@ -5195,6 +5279,7 @@ pub fn run_interp(
     LINUX_ABI.store(true, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    THREAD_NAMES.lock().clear();
     SHARED_FRAMES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
@@ -5719,6 +5804,7 @@ pub fn spawn_glibc_persistent(
     LINUX_ABI.store(true, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    THREAD_NAMES.lock().clear();
     SHARED_FRAMES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
@@ -5933,6 +6019,7 @@ pub fn run_glibc_disk(
     LINUX_ABI.store(true, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    THREAD_NAMES.lock().clear();
     SHARED_FRAMES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
@@ -6077,7 +6164,7 @@ pub fn run_glibc_disk(
         // timed waits would take ~60x longer than real time under TCG (and never appear
         // to progress). A genuine all-Blocked wait returns None -> we just sleep a tick.
         match crate::sched::idle_next_deadline(crate::sched::current()) {
-            Some(d) if d > crate::interrupts::ticks() => {
+            Some(d) if d > crate::interrupts::ticks() && TICKLESS_IDLE.load(Ordering::Relaxed) => {
                 crate::interrupts::TICKS.store(d, Ordering::Relaxed);
             }
             _ => crate::sched::sleep_ticks(1),
@@ -6127,6 +6214,7 @@ pub fn run_glibc(
     LINUX_ABI.store(true, Ordering::Relaxed);
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    THREAD_NAMES.lock().clear();
     SHARED_FRAMES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
@@ -6282,7 +6370,7 @@ pub fn run_glibc(
         // timed waits would take ~60x longer than real time under TCG (and never appear
         // to progress). A genuine all-Blocked wait returns None -> we just sleep a tick.
         match crate::sched::idle_next_deadline(crate::sched::current()) {
-            Some(d) if d > crate::interrupts::ticks() => {
+            Some(d) if d > crate::interrupts::ticks() && TICKLESS_IDLE.load(Ordering::Relaxed) => {
                 crate::interrupts::TICKS.store(d, Ordering::Relaxed);
             }
             _ => crate::sched::sleep_ticks(1),
@@ -6934,9 +7022,25 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             if cur == GLIBC_MAIN_TASK.load(Ordering::Relaxed) { 1 } else { cur as u64 }
         }
         157 => {
-            // prctl(option, ...): accept the common setters as no-ops (PR_SET_NAME,
-            // PR_SET_DUMPABLE, PR_SET_PDEATHSIG, PR_SET_VMA mapping-naming, …). chrome
-            // calls these during thread + allocator setup; success is the safe answer.
+            // prctl(option, ...): accept the common setters as no-ops (PR_SET_DUMPABLE,
+            // PR_SET_PDEATHSIG, PR_SET_VMA mapping-naming, …). chrome calls these
+            // during thread + allocator setup; success is the safe answer.
+            //
+            // PR_SET_NAME is worth KEEPING: a program names its own threads, and a
+            // thread dump that says "CompositorTileWorker" instead of "t19" turns a
+            // list of numbers into an answer. Free diagnosis, and it is what the name
+            // is for.
+            const PR_SET_NAME: u64 = 15;
+            if a1 == PR_SET_NAME && a2 != 0 {
+                let raw = user_cstr(a2, 16);
+                let name = String::from_utf8_lossy(&raw).into_owned();
+                let cur = crate::sched::current();
+                let mut names = THREAD_NAMES.lock();
+                match names.iter_mut().find(|(t, _)| *t == cur) {
+                    Some(e) => e.1 = name,
+                    None => names.push((cur, name)),
+                }
+            }
             0
         }
         60 | 231 => {
@@ -7807,8 +7911,8 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     desc.push_str(&alloc::format!(" fd{fd}({},ev={ev:#x},in={},out={})",
                         fd_kind(fd), epoll_fd_ready(fd), epoll_fd_writable(fd)));
                 }
-                crate::serial_println!("[wait] t{} poll timeout={timeout_ms}ms nothing ready:{desc}",
-                    crate::sched::current());
+                crate::serial_println!("[wait] t{} {:?} poll timeout={timeout_ms}ms nothing ready:{desc}",
+                    crate::sched::current(), thread_name(crate::sched::current()));
             }
             if let Some(d) = deadline {
                 if crate::interrupts::ticks() >= d {
@@ -7860,6 +7964,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     if !write_user(a4, a as i32) || !write_user(a4 + 4, b as i32) {
                         return EFAULT;
                     }
+                    SOCK_PAIRS.lock().push((a, b)); // so SCM_RIGHTS knows the other end
                     0
                 }
                 None => (-24i64) as u64, // -EMFILE
@@ -7963,6 +8068,48 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 if len == 0 { continue; }
                 match copy_from_user(base, len) { Some(v) => buf.extend_from_slice(&v), None => return EFAULT }
             }
+            // SCM_RIGHTS: a message may carry DESCRIPTORS, and dropping them silently
+            // is how a handoff dies without a word. Mojo passes handles this way, and
+            // chrome does it while producing a frame — the receiver waits forever for
+            // something that was thrown away in transit. Both ends live in one address
+            // space here, so delivering a descriptor is a dup on the other side.
+            let control = read_user::<u64>(a2 + 32).unwrap_or(0);
+            let controllen = read_user::<u64>(a2 + 40).unwrap_or(0) as usize;
+            if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
+                crate::serial_println!("[scm] sendmsg fd{a1}: control={control:#x} len={controllen} peer={:?}",
+                    sock_peer(a1));
+            }
+            if control != 0 && controllen >= 16 {
+                if let Some(peer) = sock_peer(a1) {
+                    let mut off = 0usize;
+                    while off + 16 <= controllen {
+                        let clen = read_user::<u64>(control + off as u64).unwrap_or(0) as usize;
+                        let level = read_user::<i32>(control + off as u64 + 8).unwrap_or(0);
+                        let ctype = read_user::<i32>(control + off as u64 + 12).unwrap_or(0);
+                        if clen < 16 || off + clen > controllen {
+                            break;
+                        }
+                        if level == 1 && ctype == 1 {
+                            // SOL_SOCKET / SCM_RIGHTS: an array of int descriptors.
+                            let n = (clen - 16) / 4;
+                            for i in 0..n {
+                                let fd = read_user::<i32>(control + off as u64 + 16 + (i * 4) as u64).unwrap_or(-1);
+                                if fd >= 0 {
+                                    let dup = dup_fd(fd as u64);
+                                    if (dup as i64) >= 0 {
+                                        SCM_PENDING.lock().push((peer, dup));
+                                        if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
+                                            crate::serial_println!("[scm] fd{fd} ({}) sent on fd{a1} -> arrives as fd{dup} on fd{peer}",
+                                                fd_kind(fd as u64));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        off += (clen + 7) & !7; // cmsg entries are 8-byte aligned
+                    }
+                }
+            }
             let total = buf.len() as u64;
             if crate::net::is_unix_fd(a1) { crate::net::unix_fd_send(a1, &buf); } else { crate::net::sock_send(a1, &buf); }
             total
@@ -7984,7 +8131,42 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             } else {
                 crate::net::sock_recv(a1, cap)
             };
-            if data.is_empty() && crate::net::is_unix_fd(a1) {
+            // Deliver any DESCRIPTORS sent to us with SCM_RIGHTS, in the control
+            // buffer where the caller expects them. Without this the bytes arrive and
+            // the handle they refer to does not, so the receiver waits for a resource
+            // it was never given.
+            let fds = scm_take(a1);
+            let control = read_user::<u64>(a2 + 32).unwrap_or(0);
+            let controllen = read_user::<u64>(a2 + 40).unwrap_or(0) as usize;
+            if !fds.is_empty() && control != 0 && controllen >= 16 + 4 * fds.len() {
+                let clen = 16 + 4 * fds.len();
+                let _ = write_user(control, clen as u64);   // cmsg_len
+                let _ = write_user(control + 8, 1i32);      // cmsg_level = SOL_SOCKET
+                let _ = write_user(control + 12, 1i32);     // cmsg_type  = SCM_RIGHTS
+                for (i, &fd) in fds.iter().enumerate() {
+                    let _ = write_user(control + 16 + (i * 4) as u64, fd as i32);
+                }
+                let _ = write_user(a2 + 40, clen as u64);   // msg_controllen
+                if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
+                    // Read the fields back: a write that silently did not land looks
+                    // exactly like a control message the receiver "dropped".
+                    let rb_len = read_user::<u64>(control).unwrap_or(0);
+                    let rb_lvl = read_user::<i32>(control + 8).unwrap_or(0);
+                    let rb_typ = read_user::<i32>(control + 12).unwrap_or(0);
+                    let rb_fd = read_user::<i32>(control + 16).unwrap_or(-1);
+                    let rb_ctl = read_user::<u64>(a2 + 40).unwrap_or(0);
+                    crate::serial_println!("[scm] fd{a1} received {} descriptor(s): {fds:?} | readback len={rb_len} level={rb_lvl} type={rb_typ} fd={rb_fd} controllen={rb_ctl}",
+                        fds.len());
+                }
+            } else {
+                if !fds.is_empty() {
+                    crate::serial_println!("[scm] fd{a1} had {} descriptor(s) but no room in the control buffer", fds.len());
+                }
+                if control != 0 {
+                    let _ = write_user(a2 + 40, 0u64); // msg_controllen = 0
+                }
+            }
+            if data.is_empty() && fds.is_empty() && crate::net::is_unix_fd(a1) {
                 return (-11i64) as u64; // -EAGAIN: non-blocking, no data (NOT EOF)
             }
             let mut off = 0usize;
@@ -8745,6 +8927,7 @@ pub fn run_args(
         .map(|a| String::from_utf8_lossy(a).into_owned())
         .unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
+    THREAD_NAMES.lock().clear();
     SHARED_FRAMES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);

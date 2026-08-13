@@ -1442,14 +1442,23 @@ pub fn unix_close(ep: UnixEndpoint) {
 // Linux socket syscalls (socketpair/read/write/close) can drive local IPC. This
 // is the transport a real X11 client (and dbus, etc.) uses to reach a server.
 pub const UNIX_FD_BASE: u64 = 600;
-const MAX_UNIX_FD: usize = 32;
+// Chrome opens far more of these than a small app: every Mojo channel is a
+// socketpair, and a compositor that loses its frame sink RETRIES, taking two more
+// each time. Running out is silent from the program's side (socketpair fails, a
+// channel is never established, a service never connects), so the ceiling has to be
+// generous — and exhaustion says so in the log.
+const MAX_UNIX_FD: usize = 192;
 
 // ── eventfd (Linux) ────────────────────────────────────────────────────────
 // A counter-backed fd used by GLib's GMainContext (GWakeup) to break a poll():
 // signal = write(+n), the loop polls it readable, acknowledge = read (drains).
 // Essential for any GLib/GTK main loop. Own fd range so read/write/poll/close route.
 pub const EVENTFD_BASE: u64 = 800;
-const MAX_EVENTFD: usize = 32;
+// NOTE: these fd spaces must not overlap. sockets 500.., unix 600.., eventfd
+// 800.., epoll 900.. — so eventfd may hold at most 100 slots, or an epoll fd would
+// answer to is_eventfd() and be read as a counter. (That overlap hung the boot
+// once: 128 eventfds reach 927, straight through the epoll base.)
+const MAX_EVENTFD: usize = 96;
 static EVENTFDS: Mutex<[Option<u64>; MAX_EVENTFD]> = Mutex::new([const { None }; MAX_EVENTFD]);
 
 pub fn is_eventfd(fd: u64) -> bool {
@@ -1563,6 +1572,7 @@ fn unix_alloc(sock: UnixSock) -> Option<u64> {
             return Some(UNIX_FD_BASE + i as u64);
         }
     }
+    crate::serial_println!("[unix] OUT OF SOCKET SLOTS ({MAX_UNIX_FD}) — a channel will fail to connect");
     None
 }
 

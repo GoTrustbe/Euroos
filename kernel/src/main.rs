@@ -1957,6 +1957,15 @@ fn main() -> Status {
         serial_println!("[glibc] gsleep (nanosleep + absolute deadline): exit={esl} (want 149)");
         for l in osl.lines() { serial_println!("[glibc]   {l}"); }
 
+        // gscm: a descriptor sent with SCM_RIGHTS must arrive and be usable. Mojo
+        // passes handles this way; a dropped control message loses the handle in
+        // silence and leaves the receiver waiting for a resource it never got.
+        ring3::CACHE_DIR_DIAG.store(true, core::sync::atomic::Ordering::Relaxed); // trace the handoff
+        let (osc, esc) = ring3::run_glibc(&mut allocator, ring3::gscm_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gscm"], &[b"PATH=/bin"], caps_net);
+        ring3::CACHE_DIR_DIAG.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gscm (SCM_RIGHTS descriptor passing): exit={esc} (want 151)");
+        for l in osc.lines() { serial_println!("[glibc]   {l}"); }
+
         // LEAN chrome-headless-shell run: skip the GUI/demo glibc tests (X11/gsparse/
         // gfmmap/crashpad/gdiskmap). They inflate guest memory and, on a memory-tight
         // host, OOM-kill qemu before hshell is reached. Jump straight to the disk-
@@ -2141,7 +2150,12 @@ fn main() -> Status {
             // fd 3/4 must exist from chrome's first instruction: it checks them at
             // startup and exits with "Remote debugging pipe file descriptors are not
             // open" if they are missing.
-            // (No debugging pipe: chrome rejects it next to a headless command.)
+            // Let the clock run at its real pace for this run: a jumping monotonic
+            // clock is a plausible reason for a display scheduler to plan its next
+            // frame deadline far into the future, and that is testable rather than
+            // arguable.
+            ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
+            ring3::cdp_install("file:///tmp/euro.html");
             let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
                 &[b"/pack/chrome-headless-shell", b"--no-sandbox",
                   b"--disable-gpu", b"--disable-dev-shm-usage", b"--user-data-dir=/tmp/hs",
@@ -2224,19 +2238,97 @@ fn main() -> Status {
                   //   3. + --run-all-compositor-stages-before-draw + virtual time.
                   // So the blocker is frame production itself, not how it is requested.
                   // Until that is solved the document should not wait on it.
+                  // FRAMES ON DEMAND. Chrome renders only when asked in this mode, and
+                  // it names these two flags itself if you try beginFrame without them.
+                  // Verified on the host: after three quiet frames the fourth comes back
+                  // with hasDamage and a PNG. This is the mechanism for a system whose
+                  // frame source never ticks by itself.
+                  b"--enable-begin-frame-control",
+                  b"--run-all-compositor-stages-before-draw",
+                  // TRACING: chrome's compositor keeps no VLOGs, but it does emit trace
+                  // events. Writing them to a file we can read back is the only window
+                  // into "which stage of frame production never happens".
+                  b"--trace-startup=cc,viz,benchmark,toplevel",
+                  b"--trace-startup-file=/tmp/euro-trace.json",
+                  b"--trace-startup-duration=0",
+                  b"--remote-debugging-pipe",
                   // --dump-dom ALONE. FOUR ways of asking for pixels now end the same
                   // way (our Page.captureScreenshot in both fromSurface modes; chrome's
                   // own --screenshot=; those plus run-all-compositor-stages and virtual
                   // time; and all of it again once sleeps were real). Each also costs
                   // the DOM, because executeCommands awaits the capture. The blocker is
                   // frame production; the document should not wait on it.
-                  b"--dump-dom", b"file:///tmp/euro.html"],
+                  b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
-            serial_println!("[hshell] BUILD=--dump-dom (chrome's own command handler)");
+            serial_println!("[hshell] BUILD=frames on demand, steady clock (no tickless fast-forward)");
             serial_println!("[hshell] chrome-headless-shell from DISK: exit={e3}");
             // Did chrome actually write a PNG? Ship it out as hex: the boot log is the
             // only channel off this machine, and a picture is worth the bytes.
+            // Summarize chrome's own trace: which frame-production stages happened?
+            match ring3::vfs_file_bytes("/tmp/euro-trace.json") {
+                Some(t) if !t.is_empty() => {
+                    let txt = alloc::string::String::from_utf8_lossy(&t);
+                    let count = |needle: &str| txt.matches(needle).count();
+                    // The SAME substrings counted on native Linux, so the two runs can
+                    // be compared stage by stage. Host, for this page: Raster=5 Tile=56
+                    // Activate=12 Draw=45 Swap=14 LayerTreeHostImpl=32 Scheduler=40
+                    // BeginImplFrame=32. Whichever of these is missing here is the
+                    // stage that never happens.
+                    serial_println!("[trace] {} bytes | BeginFrame={} BeginImplFrame={} BeginMainFrame={} Commit={} Activate={} Raster={} Draw={} Swap={} Scheduler={}",
+                        t.len(), count("BeginFrame"), count("BeginImplFrame"), count("BeginMainFrame"),
+                        count("Commit"), count("Activate"), count("Raster"),
+                        count("Draw"), count("Swap"), count("Scheduler"));
+                    // The frame SINK is the compositor's connection to Viz: without it
+                    // the scheduler can churn forever and never begin an impl frame,
+                    // which is exactly the shape seen here. Host, same page:
+                    // FrameSink=302 LayerTreeFrameSink=22 CompositorFrameSink=150
+                    // RequestNewLayerTreeFrameSink=2 SubmitCompositorFrame=4 Ack=3.
+                    serial_println!("[trace] sink | FrameSink={} LayerTreeFrameSink={} CompositorFrameSink={} RequestNew={} Submit={} Ack={} NeedsBeginFrames={}",
+                        count("FrameSink"), count("LayerTreeFrameSink"), count("CompositorFrameSink"),
+                        count("RequestNewLayerTreeFrameSink"), count("SubmitCompositorFrame"),
+                        count("DidReceiveCompositorFrameAck"), count("NeedsBeginFrames"));
+                    // Does a BeginFrame ever REACH the renderer's frame sink, and does
+                    // the GPU channel it waits for ever complete? Host, same page:
+                    // OnBeginFrame=3 DidNotProduceFrame=4 ExternalBeginFrameSource=2
+                    // EstablishRequest=1 Established=1.
+                    serial_println!("[trace] deliver | OnBeginFrame={} DidNotProduceFrame={} ExternalBeginFrameSource={} EstablishRequest={} Established={} MojoDisconnected={} LoseSink={}",
+                        count("OnBeginFrame"), count("DidNotProduceFrame"),
+                        count("ExternalBeginFrameSource"), count("SendEstablishGpuChannelRequest"),
+                        count("OnEstablishedGpuChannel"), count("MojoDisconnected"),
+                        count("DidLoseLayerTreeFrameSink"));
+                    // The trace carries its event names as plain strings. Printing the
+                    // rendering-related ones (deduplicated) gives the VOCABULARY of what
+                    // actually happened, instead of guessing one term at a time.
+                    let mut seen: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
+                    let mut run = alloc::string::String::new();
+                    for &b in t.iter() {
+                        let c = b as char;
+                        if c.is_ascii_alphanumeric() || c == '_' || c == ':' || c == '.' {
+                            run.push(c);
+                            continue;
+                        }
+                        if run.len() >= 8 {
+                            // Hunting the REASON a frame sink is lost: failure words,
+                            // not pipeline stages.
+                            let keep = ["Lost", "Lose", "Lost", "BadMessage", "Disconnect",
+                                        "Error", "Fail", "Invalid", "Shutdown", "Destroy",
+                                        "Context", "Bitmap", "SharedImage", "OutputDevice",
+                                        "GpuChannel", "Reject", "Abort", "Close"];
+                            if keep.iter().any(|k| run.contains(k)) && !seen.iter().any(|x| *x == run) {
+                                seen.push(run.clone());
+                            }
+                        }
+                        run.clear();
+                    }
+                    serial_println!("[trace] {} failure-related names:", seen.len());
+                    for name in seen.iter().take(140) {
+                        serial_println!("[trace]   {name}");
+                    }
+                }
+                Some(_) => serial_println!("[trace] chrome wrote an EMPTY trace file"),
+                None => serial_println!("[trace] chrome wrote no trace file"),
+            }
             match ring3::vfs_file_bytes("/tmp/euroshot.png") {
                 Some(png) if !png.is_empty() => {
                     serial_println!("[png] BEGIN {} bytes", png.len());
@@ -2260,8 +2352,9 @@ fn main() -> Status {
         // task table at index 31 with free_frames stable — see commit notes.)
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
-        let results: [(&str, u64, u64); 23] = [
+        let results: [(&str, u64, u64); 24] = [
             ("gpoll(poll timeout)", epo, 143),
+            ("gscm(SCM_RIGHTS fd passing)", esc, 151),
             ("gsleep(nanosleep + abs deadline)", esl, 149),
             ("gshm(MAP_SHARED memfd)", esh, 131),
             ("gunlink(unlinked-but-open + anon shm)", eul, 137),
