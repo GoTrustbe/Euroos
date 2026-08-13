@@ -22,6 +22,7 @@ static long ms_since(struct timespec *t0) {
 }
 
 int main(void) {
+    printf("GPOLL: start\n"); fflush(stdout);
     int fds[2];
     if (pipe(fds) != 0) { printf("GPOLL: pipe FAILED\n"); fflush(stdout); return 1; }
 

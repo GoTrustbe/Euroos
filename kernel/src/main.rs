@@ -1944,6 +1944,10 @@ fn main() -> Status {
         serial_println!("[glibc] gunlink (unlinked-but-open + anon shm): exit={eul} (want 137)");
         for l in oul.lines() { serial_println!("[glibc]   {l}"); }
 
+        // A SHORT deadline for these small tests: if one hangs, the timeout dump names
+        // the syscall within half a minute instead of holding the boot for ten.
+        let prev_deadline = ring3::GLIBC_DEADLINE_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        ring3::GLIBC_DEADLINE_TICKS.store(3_000, core::sync::atomic::Ordering::Relaxed);
         // gpoll: poll() must WAIT for its timeout. Answering 0 straight away says the
         // timeout expired, so every waiter becomes a spinner — which is what kept
         // chrome's compositor from ever producing a frame.
@@ -1977,6 +1981,7 @@ fn main() -> Status {
         ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
         serial_println!("[glibc] gcond (condvar broadcast): exit={eco} (want 157)");
         for l in oco.lines() { serial_println!("[glibc]   {l}"); }
+        ring3::GLIBC_DEADLINE_TICKS.store(prev_deadline, core::sync::atomic::Ordering::Relaxed);
 
         // LEAN chrome-headless-shell run: skip the GUI/demo glibc tests (X11/gsparse/
         // gfmmap/crashpad/gdiskmap). They inflate guest memory and, on a memory-tight

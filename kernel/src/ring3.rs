@@ -5210,6 +5210,15 @@ pub fn run_dynamic(
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
     THREAD_NAMES.lock().clear();
+    // GIVE THE FRAMES BACK. A shared mapping commits real frames from the demand
+    // pool (a 4 MiB region is 1024 of them); dropping the table without freeing them
+    // leaks a little more with every process, and the program that finally finds the
+    // pool empty is never the one that lost them.
+    for (_, frames) in SHARED_FRAMES.lock().iter() {
+        for &phys in frames.iter().filter(|&&p| p != 0) {
+            crate::procpool::demand_free(phys);
+        }
+    }
     SHARED_FRAMES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
@@ -5324,6 +5333,15 @@ pub fn run_interp(
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
     THREAD_NAMES.lock().clear();
+    // GIVE THE FRAMES BACK. A shared mapping commits real frames from the demand
+    // pool (a 4 MiB region is 1024 of them); dropping the table without freeing them
+    // leaks a little more with every process, and the program that finally finds the
+    // pool empty is never the one that lost them.
+    for (_, frames) in SHARED_FRAMES.lock().iter() {
+        for &phys in frames.iter().filter(|&&p| p != 0) {
+            crate::procpool::demand_free(phys);
+        }
+    }
     SHARED_FRAMES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
@@ -5849,6 +5867,15 @@ pub fn spawn_glibc_persistent(
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
     THREAD_NAMES.lock().clear();
+    // GIVE THE FRAMES BACK. A shared mapping commits real frames from the demand
+    // pool (a 4 MiB region is 1024 of them); dropping the table without freeing them
+    // leaks a little more with every process, and the program that finally finds the
+    // pool empty is never the one that lost them.
+    for (_, frames) in SHARED_FRAMES.lock().iter() {
+        for &phys in frames.iter().filter(|&&p| p != 0) {
+            crate::procpool::demand_free(phys);
+        }
+    }
     SHARED_FRAMES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
@@ -6064,6 +6091,15 @@ pub fn run_glibc_disk(
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
     THREAD_NAMES.lock().clear();
+    // GIVE THE FRAMES BACK. A shared mapping commits real frames from the demand
+    // pool (a 4 MiB region is 1024 of them); dropping the table without freeing them
+    // leaks a little more with every process, and the program that finally finds the
+    // pool empty is never the one that lost them.
+    for (_, frames) in SHARED_FRAMES.lock().iter() {
+        for &phys in frames.iter().filter(|&&p| p != 0) {
+            crate::procpool::demand_free(phys);
+        }
+    }
     SHARED_FRAMES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
@@ -6259,6 +6295,15 @@ pub fn run_glibc(
     *CURRENT_APP.lock() = argv.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
     THREAD_NAMES.lock().clear();
+    // GIVE THE FRAMES BACK. A shared mapping commits real frames from the demand
+    // pool (a 4 MiB region is 1024 of them); dropping the table without freeing them
+    // leaks a little more with every process, and the program that finally finds the
+    // pool empty is never the one that lost them.
+    for (_, frames) in SHARED_FRAMES.lock().iter() {
+        for &phys in frames.iter().filter(|&&p| p != 0) {
+            crate::procpool::demand_free(phys);
+        }
+    }
     SHARED_FRAMES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
@@ -6421,7 +6466,14 @@ pub fn run_glibc(
         }
     }
     if !GLIBC_DONE.load(Ordering::Relaxed) {
-        crate::serial_println!("[glibc] TIMEOUT waiting for the process to exit");
+        // Say WHERE it hung: the last syscall of the main task and of every thread.
+        // "TIMEOUT" on its own sends the next reader back to guessing.
+        let (n, a, r) = last_syscall(main_task);
+        crate::serial_println!("[glibc] TIMEOUT waiting for the process to exit | main t{main_task} last={n}(a1={a:#x})->{r:#x}");
+        for &t in GLIBC_THREADS.lock().iter() {
+            let (n2, a2, r2) = last_syscall(t);
+            crate::serial_println!("[glibc]   thread t{t} {:?}: last={n2}(a1={a2:#x})->{r2:#x}", thread_name(t));
+        }
         // Reclaim any kstacks still held by this run's tasks (idempotent on the
         // clean-exit path, which already freed them).
         free_thread_kstack(main_task);
@@ -7969,9 +8021,41 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 break 0;
             }
             tries += 1;
-            crate::sched::sleep_ticks(1);
-            if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-                crate::sched::yield_now();
+            // Sleep the REMAINING time in one go for a finite timeout. A loop of
+            // single-tick sleeps with a yield each time is a lot of scheduler
+            // churn, and next to busy tasks it can leave the sleeper starved (it
+            // hung a boot where self-test spinners were running).
+            // A syscall runs with interrupts off, so a wait loop in here can hold up
+            // the very timer it waits for when no other task is runnable: the clock
+            // freezes and the deadline never arrives (measured: ticks 1951 at try 1
+            // AND at try 40). So bound the wait by ITERATIONS too, and return 0 when
+            // it runs out. A poll that returns early is a spurious wakeup, which every
+            // caller must already handle; a poll that never returns is a hung machine.
+            if tries >= 200 {
+                break 0;
+            }
+            let before = crate::interrupts::ticks();
+            match deadline {
+                Some(d) => {
+                    if d > before {
+                        crate::sched::sleep_ticks(d - before);
+                    }
+                }
+                None => {
+                    crate::sched::sleep_ticks(1);
+                    if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                        crate::sched::yield_now();
+                    }
+                }
+            }
+            // Keep TIME MOVING while we wait. A syscall runs with interrupts off, so
+            // if nothing else is runnable the timer cannot tick and the deadline we
+            // are waiting for would never arrive (measured: the clock sat at 1951
+            // through the whole wait). The launcher loop already fast-forwards an idle
+            // clock; do the same here, one tick at a time, so a wait ends when it
+            // should instead of ending because it gave up.
+            if crate::interrupts::ticks() == before {
+                crate::interrupts::TICKS.store(before + 1, Ordering::Relaxed);
             }
             }
         }
@@ -8835,10 +8919,26 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             let want_ticks = (secs as u64) * 100 + (nsecs as u64).div_ceil(10_000_000);
             let now = crate::interrupts::ticks();
             let deadline = if flags & TIMER_ABSTIME != 0 { want_ticks } else { now + want_ticks };
+            let mut spins = 0u32;
+            let mut before_spin = crate::interrupts::ticks();
             while crate::interrupts::ticks() < deadline {
                 crate::sched::sleep_ticks(1);
                 if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
                     crate::sched::yield_now(); // let everyone else run while we wait
+                }
+                // Same guard as poll(): with interrupts off and nothing else runnable
+                // the clock cannot advance, and an unbounded wait here hangs the
+                // machine instead of the sleep simply ending early.
+                // Same as poll(): with interrupts off and nothing else runnable the
+                // timer cannot tick, so move the clock ourselves rather than sleep
+                // through a frozen one (or give up early and call it a sleep).
+                if crate::interrupts::ticks() == before_spin {
+                    crate::interrupts::TICKS.store(before_spin + 1, Ordering::Relaxed);
+                }
+                before_spin = crate::interrupts::ticks();
+                spins += 1;
+                if spins >= 2000 {
+                    break;
                 }
             }
             if rem != 0 {
@@ -9018,6 +9118,15 @@ pub fn run_args(
         .unwrap_or_default();
     SHARED_MAPS.lock().clear(); // arena addresses are per-process: never reuse a stale shared region
     THREAD_NAMES.lock().clear();
+    // GIVE THE FRAMES BACK. A shared mapping commits real frames from the demand
+    // pool (a 4 MiB region is 1024 of them); dropping the table without freeing them
+    // leaks a little more with every process, and the program that finally finds the
+    // pool empty is never the one that lost them.
+    for (_, frames) in SHARED_FRAMES.lock().iter() {
+        for &phys in frames.iter().filter(|&&p| p != 0) {
+            crate::procpool::demand_free(phys);
+        }
+    }
     SHARED_FRAMES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
