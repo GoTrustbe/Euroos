@@ -68,3 +68,42 @@ they are the only genuine unknown; the rest is work we know how to do.
 - Every kernel fix gets a test in the boot suite that fails on the old kernel.
 - No Claude trailers. Do not push. Under-claim: "renders offscreen and we show it"
   is the honest description, and it is worth plenty.
+
+## Phase A progress (2026-08-13): the rendering pipeline now RUNS
+Chrome's own trace (it emits no VLOGs, but it does trace) made the compositor
+legible. Measured against the same page on native Linux:
+
+    stage                  host   before   now
+    BeginFrame               ~     6       21
+    BeginImplFrame           32    0        5
+    Commit                   ~     6       14
+    Activate                 ~     3        7
+    Swap                     14    2        9
+    OnBeginFrame              3    0        3   <- delivery matches the host
+    ExternalBeginFrameSource  2    0        2   <- matches
+    EstablishGpuChannel     1/1  1/1      1/1   <- matches
+    DidLoseLayerTreeFrameSink 5   10        5   <- matches
+
+What moved it: the driver was navigating a SECOND time (the page already loads
+from argv), and every navigation swaps the frame — each swap cost the compositor
+its frame sink, so it never kept one long enough to begin an impl frame. Removing
+that one redundant command took sink losses from 10 to 5 and started frame
+production. Also fixed along the way: SCM_RIGHTS descriptor passing (chrome hands
+a descriptor over a socket while producing a frame), a 32-socket ceiling that ran
+out silently, and a wait-log that fired 12000 times and starved the very frame it
+was waiting for.
+
+## What is still missing
+The capture never answers. After `Page.captureScreenshot` (or
+`HeadlessExperimental.beginFrame`) the DevTools pipe goes COMPLETELY quiet — no
+reply, no unrelated events either — while the trace shows frames still being
+produced (swaps climb). So the browser side appears to block inside the capture
+itself, on a readback that never completes.
+
+Next probes for whoever continues:
+- Watch the DevToolsPipeHandler thread specifically while a capture is pending:
+  is it blocked, and on what? (thread names are recorded now, so a dump names it).
+- Count trace names around readback: CopyOutputRequest, ReadbackResult,
+  SkiaOutputSurface, SoftwareOutputDevice — the host's counts are the reference.
+- Raster is still 0 here against 5 on the host: a frame that swaps without raster
+  would be blank anyway, so the readback may be waiting on tiles that never raster.

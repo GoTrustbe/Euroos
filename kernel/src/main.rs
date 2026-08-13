@@ -2243,8 +2243,9 @@ fn main() -> Status {
                   // Verified on the host: after three quiet frames the fourth comes back
                   // with hasDamage and a PNG. This is the mechanism for a system whose
                   // frame source never ticks by itself.
-                  b"--enable-begin-frame-control",
-                  b"--run-all-compositor-stages-before-draw",
+                  // No begin-frame control: with the pipeline healthy, a plain
+                  // capture is the shorter path, and that flag pair changes the
+                  // rendering contract (nothing renders unless frames are driven).
                   // TRACING: chrome's compositor keeps no VLOGs, but it does emit trace
                   // events. Writing them to a file we can read back is the only window
                   // into "which stage of frame production never happens".
@@ -2261,7 +2262,7 @@ fn main() -> Status {
                   b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
-            serial_println!("[hshell] BUILD=frames on demand, steady clock (no tickless fast-forward)");
+            serial_println!("[hshell] BUILD=plain capture, healthy pipeline, no double navigation");
             serial_println!("[hshell] chrome-headless-shell from DISK: exit={e3}");
             // Did chrome actually write a PNG? Ship it out as hex: the boot log is the
             // only channel off this machine, and a picture is worth the bytes.

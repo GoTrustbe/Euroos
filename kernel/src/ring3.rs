@@ -433,6 +433,7 @@ static CDP_RES_ID: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicU
 static CDP_STEP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static CDP_MARK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CDP_TRIES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static CDP_WAIT_MARK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CDP_RX: Mutex<alloc::vec::Vec<u8>> = Mutex::new(alloc::vec::Vec::new());
 /// Socketpair endpoints: (a, b). A descriptor sent with SCM_RIGHTS on one end has
 /// to arrive on the OTHER one, and only a pair knows who that is.
@@ -490,6 +491,7 @@ pub fn cdp_install(url: &str) {
     CDP_STEP.store(0, Ordering::Relaxed);
     CDP_MARK.store(0, Ordering::Relaxed);
     CDP_TRIES.store(0, Ordering::Relaxed);
+    CDP_WAIT_MARK.store(0, Ordering::Relaxed);
     CDP_RX.lock().clear();
     CDP_SESSION.lock().clear();
     CDP_DOM.lock().clear();
@@ -639,9 +641,13 @@ fn cdp_ask_dom() {
 fn cdp_begin_frame() {
     let sid = CDP_SESSION.lock().clone();
     let n = CDP_TRIES.fetch_add(1, Ordering::Relaxed);
-    let params = if n >= 3 { "{\"screenshot\":{\"format\":\"png\"}}" } else { "{}" };
+    let _ = n;
+    // Plain capture now that the pipeline is healthy: frames ARE produced (impl
+    // frames, commits and swaps all climb, and BeginFrame delivery now matches
+    // native Linux exactly). The explicit begin-frame route answers only through
+    // capture plumbing of its own; this asks for the picture directly.
     cdp_send(&alloc::format!(
-        "{{\"id\":7,\"sessionId\":\"{sid}\",\"method\":\"HeadlessExperimental.beginFrame\",\"params\":{params}}}"));
+        "{{\"id\":7,\"sessionId\":\"{sid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\",\"fromSurface\":true}}}}"));
     WAIT_DIAG.store(30, Ordering::Relaxed); // describe what the next waits are for
     CDP_STEP.store(7, Ordering::Relaxed);
     CDP_MARK.store(crate::interrupts::ticks(), Ordering::Relaxed);
@@ -673,8 +679,22 @@ pub fn cdp_pump() {
 
     // Step 7 (screenshot) gets a bounded wait: if no PNG comes back, say so and let
     // chrome exit instead of leaving it spinning on a frame that never arrives.
+    // WAIT for the frame in flight. Chrome answers a second request with "Another
+    // frame is pending", which is it telling us the first one is still being drawn
+    // — rasterizing a page under TCG simply takes a while. So be patient and say so
+    // while waiting, instead of interrupting the work we asked for.
+    if step == 7 {
+        // One line per 10 s of guest time, and ONLY one: serial output is slow under
+        // emulation, and a chatty wait starves the very work it is waiting for (a
+        // modulo here fired ~12000 times and stalled the frame outright).
+        let waited = now.saturating_sub(CDP_MARK.load(Ordering::Relaxed));
+        let ticks_1000 = waited / 1000;
+        if ticks_1000 > 0 && CDP_WAIT_MARK.swap(ticks_1000, Ordering::Relaxed) != ticks_1000 {
+            crate::serial_println!("[cdp] still waiting for the frame ({} s of guest time)", waited / 100);
+        }
+    }
     if step == 7 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 30_000 {
-        crate::serial_println!("[cdp] a frame request went unanswered for 300 s — what is each thread waiting on?");
+        crate::serial_println!("[cdp] frames went unanswered — what is each thread waiting on?");
         let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
         let (mn, ma, mr) = last_syscall(main);
         crate::serial_println!("  main t{main}: last={mn}(a1={ma:#x})->{mr:#x}");
@@ -730,9 +750,13 @@ pub fn cdp_pump() {
                     "{{\"id\":8,\"sessionId\":\"{s}\",\"method\":\"HeadlessExperimental.enable\"}}"));
                 cdp_send(&alloc::format!(
                     "{{\"id\":6,\"sessionId\":\"{s}\",\"method\":\"Page.enable\"}}"));
-                cdp_send(&alloc::format!(
-                    "{{\"id\":3,\"sessionId\":\"{s}\",\"method\":\"Page.navigate\",\"params\":{{\"url\":\"{url}\"}}}}"));
-                CDP_STEP.store(3, Ordering::Relaxed);
+                // NO second navigation: the page is already loading from argv, and
+                // every extra navigation swaps the frame — each swap costs the
+                // compositor its frame sink, which is exactly the loop the trace shows
+                // (sink lost 10 times here against 5 on native Linux).
+                let _ = url;
+                CDP_STEP.store(4, Ordering::Relaxed);
+                CDP_MARK.store(crate::interrupts::ticks(), Ordering::Relaxed);
             }
         } else if step == 3 && msg.contains("\"id\":3") {
             CDP_STEP.store(4, Ordering::Relaxed);
@@ -781,6 +805,10 @@ pub fn cdp_pump() {
             WAIT_DIAG.store(40, Ordering::Relaxed);
             continue;
         } else if step == 7 && msg.contains("\"id\":7") {
+            if msg.contains("Another frame is pending") {
+                crate::serial_println!("[cdp] chrome says a frame is still pending — waiting for it");
+                continue;
+            }
             if msg.contains("\"error\"") {
                 crate::serial_println!("[cdp] beginFrame refused: {}", msg.chars().take(200).collect::<String>());
                 CDP_STEP.store(8, Ordering::Relaxed);
@@ -788,7 +816,7 @@ pub fn cdp_pump() {
                 CDP_DRIVE.store(false, Ordering::Relaxed);
                 return;
             }
-            match json_str(&msg, "screenshotData") {
+            match json_str(&msg, "screenshotData").or_else(|| json_str(&msg, "data")) {
                 Some(b64) => {
                     crate::serial_println!("[png] BEGIN {} base64 chars", b64.len());
                     let bytes = b64.as_bytes();
