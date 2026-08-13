@@ -1966,6 +1966,18 @@ fn main() -> Status {
         serial_println!("[glibc] gscm (SCM_RIGHTS descriptor passing): exit={esc} (want 151)");
         for l in osc.lines() { serial_println!("[glibc]   {l}"); }
 
+        // gcond: a condition-variable broadcast must reach EVERY waiter. glibc does
+        // that with futex REQUEUE/WAKE_OP; answering those with "nobody" drops the
+        // wakeup in silence, which is what left chrome's raster workers asleep.
+        // Demand paging on: six thread stacks (8 MiB each) do not fit the small arena
+        // mmap window, and pthread_create would fail for a reason that has nothing to
+        // do with what this test is about.
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (oco, eco) = ring3::run_glibc(&mut allocator, ring3::gcond_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gcond"], &[b"PATH=/bin"], caps);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gcond (condvar broadcast): exit={eco} (want 157)");
+        for l in oco.lines() { serial_println!("[glibc]   {l}"); }
+
         // LEAN chrome-headless-shell run: skip the GUI/demo glibc tests (X11/gsparse/
         // gfmmap/crashpad/gdiskmap). They inflate guest memory and, on a memory-tight
         // host, OOM-kill qemu before hshell is reached. Jump straight to the disk-
@@ -2298,6 +2310,12 @@ fn main() -> Status {
                         count("ExternalBeginFrameSource"), count("SendEstablishGpuChannelRequest"),
                         count("OnEstablishedGpuChannel"), count("MojoDisconnected"),
                         count("DidLoseLayerTreeFrameSink"));
+                    // The READBACK: a capture is a CopyOutputRequest whose result comes
+                    // back as a CopyOutputResult. Host, same page: CopyOutputRequest=2
+                    // CopyOutputResult=6 RasterTask=1 TileTask=14 PrepareTiles=9.
+                    serial_println!("[trace] readback | CopyOutputRequest={} CopyOutputResult={} RasterTask={} TileTask={} PrepareTiles={}",
+                        count("CopyOutputRequest"), count("CopyOutputResult"),
+                        count("RasterTask"), count("TileTask"), count("PrepareTiles"));
                     // The trace carries its event names as plain strings. Printing the
                     // rendering-related ones (deduplicated) gives the VOCABULARY of what
                     // actually happened, instead of guessing one term at a time.
@@ -2353,8 +2371,9 @@ fn main() -> Status {
         // task table at index 31 with free_frames stable — see commit notes.)
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
-        let results: [(&str, u64, u64); 24] = [
+        let results: [(&str, u64, u64); 25] = [
             ("gpoll(poll timeout)", epo, 143),
+            ("gcond(condvar broadcast)", eco, 157),
             ("gscm(SCM_RIGHTS fd passing)", esc, 151),
             ("gsleep(nanosleep + abs deadline)", esl, 149),
             ("gshm(MAP_SHARED memfd)", esh, 131),

@@ -648,7 +648,18 @@ fn cdp_begin_frame() {
     // capture plumbing of its own; this asks for the picture directly.
     cdp_send(&alloc::format!(
         "{{\"id\":7,\"sessionId\":\"{sid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\",\"fromSurface\":true}}}}"));
-    WAIT_DIAG.store(30, Ordering::Relaxed); // describe what the next waits are for
+    WAIT_DIAG.store(40, Ordering::Relaxed); // describe what the next waits are for
+    // Who should answer this? Dump every thread once, so a blocked DevTools pipe
+    // handler or a stuck compositor is visible at the moment of the request rather
+    // than 300 s later.
+    let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+    crate::serial_println!("[cdp] capture requested; threads now:");
+    let (mn, ma, mr) = last_syscall(main);
+    crate::serial_println!("  main t{main} {:?}: last={mn}(a1={ma:#x})->{mr:#x}", thread_name(main));
+    for &t in GLIBC_THREADS.lock().iter() {
+        let (n2, a2, r2) = last_syscall(t);
+        crate::serial_println!("  t{t} {:?}: last={n2}(a1={a2:#x})->{r2:#x}", thread_name(t));
+    }
     CDP_STEP.store(7, Ordering::Relaxed);
     CDP_MARK.store(crate::interrupts::ticks(), Ordering::Relaxed);
 }
@@ -3903,6 +3914,9 @@ static GSLEEP_ELF: &[u8] = include_bytes!("../../userland/glibc/gsleep");
 // SCM_RIGHTS test: a descriptor sent over a socketpair must arrive and be usable —
 // how Mojo passes handles, including while chrome produces a frame.
 static GSCM_ELF: &[u8] = include_bytes!("../../userland/glibc/gscm");
+// CONDITION-VARIABLE test: a broadcast must reach every waiter. glibc implements it
+// with futex REQUEUE/WAKE_OP, which a kernel can silently answer with "nobody".
+static GCOND_ELF: &[u8] = include_bytes!("../../userland/glibc/gcond");
 // CHROMIUM bring-up: two glibc stub libs (their real code lives in libc.so.6) that
 // chrome binaries declare as DT_NEEDED, + a REAL chrome component — the crashpad
 // crash handler (3.4 MB, dynamically linked, loaded via demand paging).
@@ -4021,6 +4035,8 @@ pub fn gpoll_bytes() -> &'static [u8] { GPOLL_ELF }
 pub fn gsleep_bytes() -> &'static [u8] { GSLEEP_ELF }
 /// A descriptor-passing test (SCM_RIGHTS over a socketpair).
 pub fn gscm_bytes() -> &'static [u8] { GSCM_ELF }
+/// A condition-variable broadcast test (futex REQUEUE).
+pub fn gcond_bytes() -> &'static [u8] { GCOND_ELF }
 /// glibc stub libs chrome declares as NEEDED (real code is in libc.so.6).
 pub fn glibc_libdl_bytes() -> &'static [u8] { GLIBC_LIBDL }
 pub fn glibc_libpthread_bytes() -> &'static [u8] { GLIBC_LIBPTHREAD }
@@ -8513,6 +8529,52 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     futex_wait(a1, a3 as u32, deadline)
                 }
                 1 | 10 => futex_wake(a1, a3 as i32) as u64, // WAKE / WAKE_BITSET
+                3 | 4 => {
+                    // REQUEUE / CMP_REQUEUE: wake `val` waiters on uaddr and move the
+                    // rest to uaddr2. This is how a condition-variable broadcast hands
+                    // its waiters to the mutex, and answering 0 (as we did) drops the
+                    // wakeup entirely: the waiters sleep on forever. Chrome's raster
+                    // workers wait on exactly such a variable, which is why tiles were
+                    // scheduled but never rasterized.
+                    //
+                    // Requeue is implemented as WAKE-ALL on both addresses. Waking more
+                    // waiters than strictly needed is allowed — a futex caller must
+                    // re-check its own predicate anyway (spurious wakeups are part of
+                    // the contract) — and it cannot lose one.
+                    if op == 4 {
+                        // CMP_REQUEUE first verifies the expected value, else -EAGAIN.
+                        let expected = a5 as u32; // val3
+                        if let Some(cur) = read_user::<u32>(a1) {
+                            if cur != expected {
+                                return (-11i64) as u64; // -EAGAIN
+                            }
+                        }
+                    }
+                    let woken = futex_wake(a1, a3 as i32);
+                    let moved = futex_wake(a4, i32::MAX); // a4 = uaddr2
+                    (woken + moved) as u64
+                }
+                5 => {
+                    // WAKE_OP: wake on uaddr, apply an operation to uaddr2, then wake
+                    // there if the comparison holds. The MEMORY OP is not optional —
+                    // glibc relies on it — so do it, then wake both sides rather than
+                    // reasoning about the comparison.
+                    let val3 = a5 as u32;
+                    let opcode = (val3 >> 28) & 0x7;
+                    let oparg = ((val3 >> 12) & 0xFFF) as u32;
+                    if let Some(old) = read_user::<u32>(a4) {
+                        let new = match opcode & 0x3 {
+                            0 => oparg,               // FUTEX_OP_SET
+                            1 => old.wrapping_add(oparg), // ADD
+                            2 => old | oparg,         // OR
+                            _ => old & !oparg,        // ANDN (3) — CMP-only ops fall here
+                        };
+                        let _ = write_user(a4, new);
+                    }
+                    let woken = futex_wake(a1, a3 as i32);
+                    let woken2 = futex_wake(a4, i32::MAX);
+                    (woken + woken2) as u64
+                }
                 _ => 0,
             }
         }
