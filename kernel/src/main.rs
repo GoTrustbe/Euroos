@@ -2321,6 +2321,15 @@ fn main() -> Status {
                     serial_println!("[trace] readback | CopyOutputRequest={} CopyOutputResult={} RasterTask={} TileTask={} PrepareTiles={}",
                         count("CopyOutputRequest"), count("CopyOutputResult"),
                         count("RasterTask"), count("TileTask"), count("PrepareTiles"));
+                    // DRAW and SUBMIT: a drawn frame has to be submitted to Viz, or no
+                    // surface exists to copy from and a capture waits forever. Host,
+                    // same page: DrawLayers=2 CompositorFrame=168 Submit=4
+                    // DidNotProduceFrame=4 CanDraw=4 NotifyReadyToDraw=1 TileTasksDone=2.
+                    serial_println!("[trace] draw | DrawLayers={} CompositorFrame={} Submit={} DidNotProduce={} CanDraw={} ReadyToDraw={} TileTasksDone={} SetVisible={}",
+                        count("DrawLayers"), count("CompositorFrame"),
+                        count("SubmitCompositorFrame"), count("DidNotProduceFrame"),
+                        count("CanDraw"), count("NotifyReadyToDraw"),
+                        count("DidFinishRunningAllTileTasks"), count("SetVisible"));
                     // The trace carries its event names as plain strings. Printing the
                     // rendering-related ones (deduplicated) gives the VOCABULARY of what
                     // actually happened, instead of guessing one term at a time.

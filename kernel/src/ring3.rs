@@ -646,8 +646,14 @@ fn cdp_begin_frame() {
     // frames, commits and swaps all climb, and BeginFrame delivery now matches
     // native Linux exactly). The explicit begin-frame route answers only through
     // capture plumbing of its own; this asks for the picture directly.
+    // Force a NEW frame first. A capture waits for a frame with damage, and a page
+    // that has finished painting produces none — this run shows 10 "did not produce
+    // a frame" against 4 on the host. Overriding the device metrics dirties the
+    // whole viewport, which is the standard way to make a headless page redraw.
     cdp_send(&alloc::format!(
-        "{{\"id\":7,\"sessionId\":\"{sid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\",\"fromSurface\":true}}}}"));
+        "{{\"id\":9,\"sessionId\":\"{sid}\",\"method\":\"Emulation.setDeviceMetricsOverride\",\"params\":{{\"width\":800,\"height\":600,\"deviceScaleFactor\":1,\"mobile\":false}}}}"));
+    cdp_send(&alloc::format!(
+        "{{\"id\":7,\"sessionId\":\"{sid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\",\"fromSurface\":true,\"captureBeyondViewport\":true}}}}"));
     WAIT_DIAG.store(40, Ordering::Relaxed); // describe what the next waits are for
     // Who should answer this? Dump every thread once, so a blocked DevTools pipe
     // handler or a stuck compositor is visible at the moment of the request rather

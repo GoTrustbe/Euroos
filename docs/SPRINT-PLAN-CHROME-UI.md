@@ -107,3 +107,42 @@ Next probes for whoever continues:
   SkiaOutputSurface, SoftwareOutputDevice — the host's counts are the reference.
 - Raster is still 0 here against 5 on the host: a frame that swaps without raster
   would be blank anyway, so the readback may be waiting on tiles that never raster.
+
+## Phase A, end state (2026-08-13): everything up to submit WORKS
+Measured from chrome's own trace, against the same page on native Linux:
+
+    stage                 host   EuroOS
+    DrawLayers              2      3
+    CompositorFrame       168    186
+    SubmitCompositorFrame   4      5     <- frames ARE submitted to Viz
+    CanDraw                 4      7
+    NotifyReadyToDraw       1      3
+    DidFinishRunningAllTileTasks 2  3
+    CopyOutputRequest       2      0     <- the capture never asks for pixels
+    CopyOutputResult        6      0
+
+So the renderer lays out, prepares tiles, draws, and SUBMITS compositor frames —
+the whole pipeline that was dead at the start of this sprint. What still does not
+happen is the capture: `Page.captureScreenshot` is accepted and never answers, and
+no CopyOutputRequest is ever issued.
+
+Tried and ruled out along the way (each measured, not argued):
+- the request shape (fromSurface true/false, chrome's own --screenshot=,
+  --run-all-compositor-stages-before-draw + virtual time, explicit beginFrame),
+- a jumping guest clock (steady clock: identical trace),
+- socket exhaustion (raised the ceiling; none occurred),
+- lost condvar wakeups (implemented futex REQUEUE/WAKE_OP; trace unchanged),
+- no damage to capture (forced a resize: chrome accepted it and emitted
+  Page.frameResized twice, so the page really redrew — the capture still hung).
+
+## Where a next session should start
+The browser side of the capture is the only unexplored piece. Concretely:
+- `Emulation.setDeviceMetricsOverride` is answered, `Page.captureScreenshot` is
+  not: the block is inside the browser's capture handler, after the compositor has
+  done its part.
+- The handler waits for the widget's surface to be available for copy. Frames ARE
+  submitted, so the next question is whether the surface the BROWSER embeds is the
+  one the renderer submits to (a LocalSurfaceId mismatch would look exactly like
+  this). The trace vocabulary already contains DelegatedFrameHost::EmbedSurface,
+  SetTargetLocalSurfaceId and FrameSinkId — counting and comparing those against
+  the host is the cheapest next probe.
