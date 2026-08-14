@@ -146,3 +146,25 @@ The browser side of the capture is the only unexplored piece. Concretely:
   this). The trace vocabulary already contains DelegatedFrameHost::EmbedSurface,
   SetTargetLocalSurfaceId and FrameSinkId — counting and comparing those against
   the host is the cheapest next probe.
+
+## The last measurement: surfaces are collected out from under the capture
+    term                    host   EuroOS
+    EmbedSurface              1       3
+    SetTargetLocalSurfaceId   1       1
+    LocalSurfaceId           78      41
+    SurfaceAggregator         1       3
+    GarbageCollectSurfaces    1       5     <- five times, against one
+    SurfaceManager            1       5
+
+Surfaces are garbage-collected five times here against once on the host, with
+three embeds instead of one and about half the LocalSurfaceId traffic. A surface
+is collected when nothing references it, so this is the shape of a browser
+embedding one surface while the renderer submits into another: everything
+upstream stays healthy (frames ARE submitted) and the capture waits forever for a
+surface that is thrown away.
+
+That makes the next step concrete rather than exploratory: follow the
+LocalSurfaceId on both sides. The allocation is split — the browser owns the
+parent sequence number, the renderer the child one — and they agree by message.
+If an allocation message is lost or arrives out of order here, the ids drift apart
+and this is exactly what it looks like.

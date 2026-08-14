@@ -2330,6 +2330,15 @@ fn main() -> Status {
                         count("SubmitCompositorFrame"), count("DidNotProduceFrame"),
                         count("CanDraw"), count("NotifyReadyToDraw"),
                         count("DidFinishRunningAllTileTasks"), count("SetVisible"));
+                    // SURFACES: the browser embeds a surface, the renderer submits into
+                    // one. If those are not the same surface, everything upstream looks
+                    // healthy and a capture still waits forever. Host, same page:
+                    // EmbedSurface=1 SetTargetLocalSurfaceId=1 LocalSurfaceId=78
+                    // SurfaceAggregator=1 GarbageCollectSurfaces=1 SurfaceManager=1.
+                    serial_println!("[trace] surface | EmbedSurface={} SetTarget={} LocalSurfaceId={} Aggregator={} GarbageCollect={} SurfaceManager={}",
+                        count("EmbedSurface"), count("SetTargetLocalSurfaceId"),
+                        count("LocalSurfaceId"), count("SurfaceAggregator"),
+                        count("GarbageCollectSurfaces"), count("SurfaceManager"));
                     // The trace carries its event names as plain strings. Printing the
                     // rendering-related ones (deduplicated) gives the VOCABULARY of what
                     // actually happened, instead of guessing one term at a time.
