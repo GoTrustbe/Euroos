@@ -1624,6 +1624,9 @@ pub fn eventfd_dup(fd: u64) -> u64 {
 pub fn unix_connect_fd(fd: u64, path: &str) -> u64 {
     let idx = (fd - UNIX_FD_BASE) as usize;
     let is_x = path.contains(".X11-unix/X") || path.ends_with("/X0");
+    if is_x {
+        crate::serial_println!("[x11] client connects to the X server ({path})");
+    }
     let new = if is_x {
         match crate::xserver::open() {
             Some(xfd) => UnixSock::X(xfd),

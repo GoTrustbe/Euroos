@@ -435,6 +435,9 @@ static CDP_MARK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::
 static CDP_TRIES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static CDP_WAIT_MARK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static HB_LAST_RTC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// mtime for the stat in progress (set path-side, consumed by the shared writer).
+static STAT_MTIME: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static STAT_MTIME_NSEC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CDP_RX: Mutex<alloc::vec::Vec<u8>> = Mutex::new(alloc::vec::Vec::new());
 /// Socketpair endpoints: (a, b). A descriptor sent with SCM_RIGHTS on one end has
 /// to arrive on the OTHER one, and only a pair knows who that is.
@@ -720,6 +723,17 @@ pub fn cdp_pump() {
             // it only learns the source size from a frame submitted while attached: a
             // one-shot nudge can land in the race window and be consumed before the
             // attach. A fresh mutation per wait-tick guarantees post-attach frames.
+            if ticks_1000 == 1 {
+                // One probe pair, once: bring the page to the front (a hidden or
+                // deprioritized page defers main-frame updates, and DidNotProduce
+                // climbs exactly as if commits never happen), and retry the one-shot
+                // capture now that the pipeline is healthy.
+                let dsid = CDP_SESSION.lock().clone();
+                cdp_send(&alloc::format!(
+                    "{{\"id\":13,\"sessionId\":\"{dsid}\",\"method\":\"Page.bringToFront\"}}"));
+                cdp_send(&alloc::format!(
+                    "{{\"id\":14,\"sessionId\":\"{dsid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\",\"fromSurface\":false}}}}"));
+            }
             if ticks_1000 % 3 == 0 {
                 // Every third wait-tick: constant damage keeps the renderer so busy
                 // under emulation that the capture pipeline itself starves.
@@ -875,6 +889,21 @@ pub fn cdp_pump() {
                     return;
                 }
                 None => crate::serial_println!("[cast] frame event without data: {}", msg.chars().take(200).collect::<String>()),
+            }
+        } else if step == 7 && msg.contains("\"id\":14") && msg.contains("\"data\"") {
+            if let Some(b64) = json_str(&msg, "data") {
+                crate::serial_println!("[cast] ★★★ ONE-SHOT CAPTURE ANSWERED: {} base64 chars", b64.len());
+                let mut i = 0;
+                while i < b64.len() {
+                    let end = (i + 512).min(b64.len());
+                    crate::serial_println!("[png] {}", &b64[i..end]);
+                    i = end;
+                }
+                crate::serial_println!("[png] END");
+                CDP_STEP.store(8, Ordering::Relaxed);
+                cdp_send("{\"id\":5,\"method\":\"Browser.close\"}");
+                CDP_DRIVE.store(false, Ordering::Relaxed);
+                return;
             }
         } else if step == 7 && msg.contains("\"id\":7") {
             if msg.contains("\"error\"") {
@@ -2403,6 +2432,30 @@ pub static CACHE_DIR_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::
 /// `executeCommands` JS that --dump-dom evaluates), and it SKIPS the load
 /// silently if the file does not appear to exist. So "does chrome ever ask for
 /// this path, and what did we answer" is exactly the question a missing DOM asks.
+/// The mtimes fontconfig's cache validation compares against. The cache embedded
+/// for the dejavu dir was built on the HOST from these exact files; serving the
+/// same mtimes makes the cache VALIDATE, so fontconfig never rescans — and never
+/// reaches its serialize/freeze path, which crashes chrome's bundled build here.
+/// (Values captured with `stat` next to the `fc-cache -f` that wrote the cache.)
+fn path_mtime(path: &[u8]) -> Option<(u64, u64)> {
+    const DEJAVU_DIR: &[u8] = b"/usr/share/fonts/truetype/dejavu";
+    if path == DEJAVU_DIR {
+        // The NANOSECONDS are part of the cache checksum from format 9 on: serving
+        // seconds alone still invalidates the cache and the fatal rescan runs anyway.
+        return Some((1770824909, 385410892));
+    }
+    if path.starts_with(DEJAVU_DIR) {
+        return Some((1691689145, 0));
+    }
+    // The cache file itself must be NEWER than the directory it describes, or
+    // fontconfig declares it stale and rescans regardless of every other match —
+    // and our default stat mtime of 0 made the cache "older" than everything.
+    if path.starts_with(b"/var/cache/fontconfig/") {
+        return Some((1770824910, 0));
+    }
+    None
+}
+
 fn diag_pack_path(what: &str, path: &[u8], ret: u64) {
     if !CACHE_DIR_DIAG.load(Ordering::Relaxed) {
         return;
@@ -2413,7 +2466,8 @@ fn diag_pack_path(what: &str, path: &[u8], ret: u64) {
     // makes "did chrome ever create that buffer, and what did we answer" the
     // question — on native Linux it creates one per data pipe.
     let has = |needle: &[u8]| path.windows(needle.len()).any(|w| w == needle);
-    if has(b"/pack/") || has(b".org.chromium") || has(b"/dev/shm") || has(b"euro.html") || path == b"/tmp" {
+    if has(b"/pack/") || has(b".org.chromium") || has(b"/dev/shm") || has(b"euro.html")
+        || has(b"fontconfig") || has(b"/etc/fonts") || has(b"dejavu") || path == b"/tmp" {
         crate::serial_println!("[packpath] {what}({:?}) -> {:#x}",
             core::str::from_utf8(path).unwrap_or("?"), ret);
     }
@@ -3994,6 +4048,9 @@ static GSCM_ELF: &[u8] = include_bytes!("../../userland/glibc/gscm");
 // CONDITION-VARIABLE test: a broadcast must reach every waiter. glibc implements it
 // with futex REQUEUE/WAKE_OP, which a kernel can silently answer with "nobody".
 static GCOND_ELF: &[u8] = include_bytes!("../../userland/glibc/gcond");
+// BRK test: memory gained through the program break must read as zeros — glibc's
+// calloc skips its memset for kernel-fresh chunks and inherits our garbage if not.
+static GBRK_ELF: &[u8] = include_bytes!("../../userland/glibc/gbrk");
 // CHROMIUM bring-up: two glibc stub libs (their real code lives in libc.so.6) that
 // chrome binaries declare as DT_NEEDED, + a REAL chrome component — the crashpad
 // crash handler (3.4 MB, dynamically linked, loaded via demand paging).
@@ -4114,6 +4171,8 @@ pub fn gsleep_bytes() -> &'static [u8] { GSLEEP_ELF }
 pub fn gscm_bytes() -> &'static [u8] { GSCM_ELF }
 /// A condition-variable broadcast test (futex REQUEUE).
 pub fn gcond_bytes() -> &'static [u8] { GCOND_ELF }
+/// A brk-zeroing test (grow, poison, shrink, regrow: zeros every time).
+pub fn gbrk_bytes() -> &'static [u8] { GBRK_ELF }
 /// glibc stub libs chrome declares as NEEDED (real code is in libc.so.6).
 pub fn glibc_libdl_bytes() -> &'static [u8] { GLIBC_LIBDL }
 pub fn glibc_libpthread_bytes() -> &'static [u8] { GLIBC_LIBPTHREAD }
@@ -4188,6 +4247,11 @@ static DEJAVUSANSMONO_TTF: &[u8] = include_bytes!("../../userland/glibc/DejaVuSa
 static DEJAVUSERIF_BOLD_TTF: &[u8] = include_bytes!("../../userland/glibc/DejaVuSerif-Bold.ttf");
 static DEJAVUSERIF_TTF: &[u8] = include_bytes!("../../userland/glibc/DejaVuSerif.ttf");
 static FC_DEJAVU_CACHE: &[u8] = include_bytes!("../../userland/glibc/fc-dejavu.cache-9");
+// The SAME cache in chrome's format: chrome bundles a newer fontconfig that reads
+// cache VERSION 11 and rejects version 9, then rescans — and its serialize path
+// (FcCharSetFreeze) crashes here. This file was written by chrome's own binary on
+// the host, for the same dejavu dir whose mtimes the stat family serves.
+static FC_DEJAVU_CACHE11: &[u8] = include_bytes!("../../userland/glibc/fc-dejavu.cache-11");
 
 /// All served DejaVu faces (path basename, bytes) — DejaVuSans is DEJAVU_TTF.
 pub fn dejavu_fonts() -> [(&'static str, &'static [u8]); 8] {
@@ -4204,6 +4268,8 @@ pub fn dejavu_fonts() -> [(&'static str, &'static [u8]); 8] {
 }
 /// The prebuilt fontconfig cache for /usr/share/fonts/truetype/dejavu (le64, v9).
 pub fn fc_dejavu_cache() -> &'static [u8] { FC_DEJAVU_CACHE }
+/// The dejavu cache in chrome's fontconfig format (version 11).
+pub fn fc_dejavu_cache11() -> &'static [u8] { FC_DEJAVU_CACHE11 }
 
 /// The Pango text-layout stack (HarfBuzz shaping + GObject/GIO) library bytes.
 pub fn pango_libs() -> [(&'static str, &'static [u8]); 15] {
@@ -7178,6 +7244,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     ((a2 + 16) as *mut u64).write(2); // st_nlink
                     (a2 as *mut u32).add(6).write(0o040700); // S_IFDIR|0700
                     ((a2 + 56) as *mut u64).write(4096); // st_blksize
+                    let (mts, mtn) = path_mtime(&path).unwrap_or((0, 0));
+                    ((a2 + 88) as *mut u64).write(mts); // st_mtime
+                    ((a2 + 96) as *mut u64).write(mtn); // st_mtime nsec
                 }
                 return 0;
             }
@@ -7194,6 +7263,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         (a2 as *mut u32).add(6).write(0o100644); // S_IFREG|0644
                         ((a2 + 48) as *mut u64).write(n as u64); // st_size
                         ((a2 + 56) as *mut u64).write(4096); // st_blksize
+                        let (mts, mtn) = path_mtime(&path).unwrap_or((0, 0));
+                    ((a2 + 88) as *mut u64).write(mts); // st_mtime
+                    ((a2 + 96) as *mut u64).write(mtn); // st_mtime nsec
                     }
                     diag_pack_path("stat", &path, 0);
                     0
@@ -7435,6 +7507,16 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             let cur = BRK_CUR.load(Ordering::Relaxed);
             if a1 == 0 || a1 > BRK_END.load(Ordering::Relaxed) {
                 return cur;
+            }
+            // ZERO what the break newly exposes. On Linux, memory gained through brk
+            // is fresh zero pages, and glibc's calloc RELIES on that: it skips its
+            // memset for chunks that came straight from the kernel. Our arena is
+            // reused frames full of whatever was there before, and fontconfig got a
+            // hash table with 0xFF… garbage in the buckets straight from calloc —
+            // FcCharSetFreeze then walked a poison pointer into the null page.
+            if a1 > cur && in_user_arena(cur, (a1 - cur) as usize) {
+                // SAFETY: [cur, a1) just validated inside the arena; identity-mapped.
+                unsafe { core::ptr::write_bytes(cur as *mut u8, 0, (a1 - cur) as usize); }
             }
             BRK_CUR.store(a1, Ordering::Relaxed);
             a1
@@ -8548,8 +8630,34 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             let (fd_ok, statbuf, ino) = if num == 5 {
                 if a1 == 0 {
                     (Some(stdin_len()), a2, 0u64)
+                } else if OPEN_DIRS.lock().get(a1 as usize).map(|d| d.is_some()).unwrap_or(false) {
+                    // fstat on a DIRECTORY fd: report the directory, never EBADF.
+                    // fontconfig checksums a font dir exactly this way (open + fstat),
+                    // and an error here left its stat buffer uninitialized — the
+                    // garbage propagated until FcCharSetFreeze walked a poison pointer.
+                    if !in_user_arena(a2, 144) {
+                        return EFAULT;
+                    }
+                    unsafe {
+                        core::ptr::write_bytes(a2 as *mut u8, 0, 144);
+                        (a2 as *mut u64).write(1); // st_dev
+                        ((a2 + 8) as *mut u64).write(0x6000 + a1); // st_ino: stable per fd
+                        ((a2 + 16) as *mut u64).write(2); // st_nlink
+                        (a2 as *mut u32).add(6).write(0o040755); // S_IFDIR|0755
+                        ((a2 + 48) as *mut u64).write(4096); // st_size
+                        ((a2 + 56) as *mut u64).write(4096); // st_blksize
+                        let dp = OPEN_DIRS.lock().get(a1 as usize).and_then(|d| d.clone()).map(|(p, _)| p);
+                        let (mts, mtn) = dp.and_then(|p| path_mtime(p.as_bytes())).unwrap_or((0, 0));
+                        ((a2 + 88) as *mut u64).write(mts); // st_mtime
+                        ((a2 + 96) as *mut u64).write(mtn); // st_mtime nsec
+                    }
+                    return 0;
                 } else {
                     let fi = OPEN_FDS.lock().get(a1 as usize).and_then(|s| *s).map(|(fi, _)| fi);
+                    if let Some(f) = fi {
+                        { let (mts, mtn) = path_mtime(fi_path(f).as_bytes()).unwrap_or((0, 0));
+                      STAT_MTIME.store(mts, Ordering::Relaxed); STAT_MTIME_NSEC.store(mtn, Ordering::Relaxed); }
+                    }
                     (vfs_size(a1 as usize), a2, fi.map(|f| f as u64 + 1).unwrap_or(0))
                 }
             } else {
@@ -8569,6 +8677,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         ((a3 + 16) as *mut u64).write(2); // st_nlink (dirs: >=2)
                         (a3 as *mut u32).add(6).write(0o040700); // st_mode: S_IFDIR|0700 (chrome wants profile/socket dirs user-only)
                         ((a3 + 56) as *mut u64).write(4096); // st_blksize
+                        let (mts, mtn) = path_mtime(&path).unwrap_or((0, 0));
+                        ((a3 + 88) as *mut u64).write(mts); // st_mtime
+                        ((a3 + 96) as *mut u64).write(mtn); // st_mtime nsec
                     }
                     return 0;
                 }
@@ -8586,6 +8697,8 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     }
                 }
                 diag_pack_path("newfstatat", &path, if sz.is_some() { 0 } else { (-2i64) as u64 });
+                { let (mts, mtn) = path_mtime(&path).unwrap_or((0, 0));
+                  STAT_MTIME.store(mts, Ordering::Relaxed); STAT_MTIME_NSEC.store(mtn, Ordering::Relaxed); }
                 (sz, a3, ino)
             };
             let size = match fd_ok {
@@ -8601,6 +8714,8 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // SAFETY: statbuf region (144 B) arena-validated; identity-mapped.
             unsafe {
                 core::ptr::write_bytes(statbuf as *mut u8, 0, 144);
+                ((statbuf + 88) as *mut u64).write(STAT_MTIME.swap(0, Ordering::Relaxed)); // st_mtime
+                ((statbuf + 96) as *mut u64).write(STAT_MTIME_NSEC.swap(0, Ordering::Relaxed)); // nsec
                 (statbuf as *mut u64).write(1); // st_dev (offset 0): nonzero device
                 ((statbuf + 8) as *mut u64).write(ino); // st_ino (offset 8): UNIQUE per file
                 ((statbuf + 16) as *mut u64).write(1); // st_nlink (offset 16)
@@ -8966,6 +9081,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     ((a5 + 0x04) as *mut u32).write(4096); // stx_blksize
                     ((a5 + 0x10) as *mut u32).write(2); // stx_nlink
                     ((a5 + 0x1c) as *mut u16).write(0o040700); // stx_mode: S_IFDIR|0700
+                    let (mts, mtn) = path_mtime(&path).unwrap_or((0, 0));
+                        ((a5 + 0x70) as *mut i64).write(mts as i64); // stx_mtime.sec
+                        ((a5 + 0x78) as *mut u32).write(mtn as u32); // stx_mtime.nsec
                 }
                 return 0;
             }
@@ -8987,6 +9105,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         ((a5 + 0x10) as *mut u32).write(1); // stx_nlink
                         ((a5 + 0x1c) as *mut u16).write(0o100644); // stx_mode: S_IFREG|0644
                         ((a5 + 0x28) as *mut u64).write(size as u64); // stx_size
+                        let (mts, mtn) = path_mtime(&path).unwrap_or((0, 0));
+                        ((a5 + 0x70) as *mut i64).write(mts as i64); // stx_mtime.sec
+                        ((a5 + 0x78) as *mut u32).write(mtn as u32); // stx_mtime.nsec
                     }
                     diag_pack_path("statx", &path, 0);
                     0

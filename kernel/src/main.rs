@@ -1987,6 +1987,11 @@ fn main() -> Status {
         ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
         serial_println!("[glibc] gcond (condvar broadcast): exit={eco} (want 157)");
         for l in oco.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gbrk: brk growth must expose ZEROS (Linux semantics; calloc depends on it).
+        let (obk, ebk) = ring3::run_glibc(&mut allocator, ring3::gbrk_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gbrk"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gbrk (zeroed break growth): exit={ebk} (want 163)");
+        for l in obk.lines() { serial_println!("[glibc]   {l}"); }
         ring3::GLIBC_DEADLINE_TICKS.store(prev_deadline, core::sync::atomic::Ordering::Relaxed);
 
         // LEAN chrome-headless-shell run: skip the GUI/demo glibc tests (X11/gsparse/
@@ -2086,10 +2091,6 @@ fn main() -> Status {
         }
         if ring3::europack_has("/pack/chrome") {
             ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
-            let (o, e) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome", ring3::ldlinux_bytes(),
-                &[b"/pack/chrome", b"--version"], &[b"PATH=/bin", b"LANG=C", b"DISPLAY=:0"], caps_net);
-            serial_println!("[chrome-disk] chrome --version from DISK (485 MB demand-paged exe): exit={e}");
-            for l in o.lines() { serial_println!("[chrome-disk]   {l}"); }
 
             // Fontconfig for chrome (its own setup runs LATER in boot): DejaVu fonts +
             // prebuilt cache + a fonts.conf, so Blink's text layout initializes (else
@@ -2097,7 +2098,21 @@ fn main() -> Status {
             for (name, bytes) in ring3::dejavu_fonts() {
                 ring3::register_file_static(&alloc::format!("/usr/share/fonts/truetype/dejavu/{name}"), bytes);
             }
+            // The cache, REBUILT on the host next to captured mtimes: the kernel's
+            // stat family now serves exactly the mtimes this cache records, so
+            // fontconfig VALIDATES it and never rescans — the serialize/freeze path
+            // that crashes chrome's bundled fontconfig (FcCharSetFreeze, addr 0x7)
+            // simply never runs. The old note below documents the failed detour.
             ring3::register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", ring3::fc_dejavu_cache());
+            // Chrome's fontconfig asks for cache VERSION 11 (the [packpath] trace
+            // showed the exact open failing): serve the cache its own binary wrote.
+            ring3::register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-11", ring3::fc_dejavu_cache11());
+            // NO prebuilt cache here. That cache was built by and for the SYSTEM
+            // fontconfig (the gpango work); full chrome bundles its OWN fontconfig,
+            // which mapped the file and walked garbage pointers out of it — a clean
+            // null-page crash in FcCharSetFreeze (rip 0x1000cae25c9, addr 0x7). A
+            // fresh scan of three font files is slow but correct, and the cache it
+            // writes to /var/cache/fontconfig is then ITS OWN format.
             ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n</fontconfig>\n".to_vec());
 
             // /dev special files: chrome's fork+exec child redirects its stdio to
@@ -2112,25 +2127,34 @@ fn main() -> Status {
             ring3::register_file("/dev/urandom", (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect());
             // Push past --version toward real rendering: headless, single-process, no
             // GPU, no sandbox — dump the DOM of a trivial inline page.
+            // THE PIVOT: chrome paints its OWN window through the in-kernel X server
+            // (--ozone-platform=x11, DISPLAY=:0 -> /tmp/.X11-unix/X0 -> xserver). The
+            // core-X PutImage path is proven here (Cairo, Pango, a full GTK3 app), and
+            // this route needs NO capture at all: the window on the desktop IS the UI,
+            // and input flows back through the same server. Every headless capture
+            // route was measured to die inside the browser's readback instead.
+            ring3::register_file("/tmp/euro.html", include_bytes!("euro_page.html").to_vec());
+            ring3::CACHE_DIR_DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
+            xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
             let (o2, e2) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome", ring3::ldlinux_bytes(),
-                &[b"/pack/chrome", b"--headless=new", b"--no-sandbox",
-                  b"--disable-gpu", b"--no-zygote", b"--disable-dev-shm-usage",
+                &[b"/pack/chrome", b"--ozone-platform=x11", b"--no-sandbox",
+                  b"--disable-gpu", b"--use-gl=disabled", b"--disable-vulkan",
+                  b"--no-zygote", b"--single-process", b"--disable-dev-shm-usage",
                   b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
-                  b"--disable-crashpad-for-testing", b"--disable-breakpad", b"--disable-in-process-stack-traces",
-                  b"--lang=en-US",
-                  // Software rendering only (QEMU has no Vulkan). Keep the CPU rasterizer
-                  // ON (do NOT --disable-software-rasterizer) so the page load can commit
-                  // a frame and complete — --dump-dom fires after the load event.
-                  b"--in-process-gpu", b"--disable-vulkan",
-                  b"--run-all-compositor-stages-before-draw",
-                  // Virtual-time budget so the (trivial) page load completes deterministically.
-                  b"--virtual-time-budget=10000",
-                  b"--dump-dom", b"data:text/html,<html><body><h1>EuroOS</h1></body></html>"],
+                  b"--disable-crashpad-for-testing", b"--disable-breakpad",
+                  b"--disable-in-process-stack-traces", b"--lang=en-US",
+                  b"--disable-gpu-compositing", b"--disable-features=MojoUseEventFd",
+                  b"--window-size=800,600", b"--window-position=40,40",
+                  b"--enable-logging=stderr", b"--v=1",
+                  b"--no-first-run", b"--no-default-browser-check",
+                  b"file:///tmp/euro.html"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
             ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
-            serial_println!("[chrome-disk] chrome --headless --dump-dom from DISK: exit={e2}");
-            for l in o2.lines() { serial_println!("[chrome-disk]   {l}"); }
+            xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[chrome-x11] chrome --ozone-platform=x11 against the in-kernel X server: exit={e2}");
+            for l in o2.lines().take(400) { serial_println!("[chrome-x11]   {l}"); }
+            serial_println!("[chrome-run] DONE — kill qemu now");
         }
         // chrome-headless-shell: the DEDICATED single-process headless binary. Unlike
         // full chrome (--headless=new expects a multi-process browser+renderer split
@@ -2475,9 +2499,10 @@ fn main() -> Status {
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
         if !chrome_run {
-        let results: [(&str, u64, u64); 25] = [
+        let results: [(&str, u64, u64); 26] = [
             ("gpoll(poll timeout)", epo, 143),
             ("gcond(condvar broadcast)", eco, 157),
+            ("gbrk(zeroed break growth)", ebk, 163),
             ("gscm(SCM_RIGHTS fd passing)", esc, 151),
             ("gsleep(nanosleep + abs deadline)", esl, 149),
             ("gshm(MAP_SHARED memfd)", esh, 131),

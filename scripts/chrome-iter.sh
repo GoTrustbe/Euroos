@@ -10,7 +10,7 @@ rm -f "$LOG"
 qemu-system-x86_64 -machine q35 -m 3584M -cpu qemu64,+smep,+smap \
   -bios /usr/share/ovmf/OVMF.fd \
   -drive format=raw,file="$PWD/eurokernel.img" \
-  -drive format=raw,file=/tmp/hs-pack.img,if=virtio \
+  -drive format=raw,file=${PACK:-/tmp/hs-pack.img},if=virtio \
   -display none -serial stdio -no-reboot > "$LOG" 2>&1 &
 Q=$!
 START=$(date +%s)

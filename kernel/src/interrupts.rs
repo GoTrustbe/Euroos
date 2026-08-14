@@ -446,12 +446,22 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
         serial_println!(
             "[isolation] ring-3 page fault addr={addr:#x} code={code:?} -> process pid {pid} (task {idx}) TERMINATED"
         );
+        // Always name WHERE: for an exe mapped at the demand base, rip - base is the
+        // objdump offset, which turns "it crashed" into a named function. Cheap, and
+        // reading the frame is safe (it is our own interrupt frame, not user memory).
+        serial_println!("[isolation]   rip={:#x} rsp={:#x}",
+            frame.instruction_pointer.as_u64(), frame.stack_pointer.as_u64());
         // Diagnostic: for an instruction-fetch fault (a bad jump/call target), dump
         // the faulting thread's RIP/RSP and the top of its stack so we can see which
         // library made the bad call. Reads are guarded by a manual CR3 page-walk so a
         // corrupt RSP can never double-fault us. Gated on INSTRUCTION_FETCH so the
         // intentional data-fault isolation selftests early in boot stay quiet.
-        if code.contains(PageFaultErrorCode::INSTRUCTION_FETCH) {
+        // Not only for bad jumps: a DATA fault's caller chain names the function
+        // that consumed a bad pointer, which three blind fixes in a row failed to
+        // guess for the fontconfig null-page crash. The reads stay page-walk-guarded.
+        if code.contains(PageFaultErrorCode::INSTRUCTION_FETCH)
+            || (code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) && addr < 0x1000)
+        {
             let rip = frame.instruction_pointer.as_u64();
             let rsp = frame.stack_pointer.as_u64();
             serial_println!("[pf-diag] task={idx} rip={rip:#x} rsp={rsp:#x}");
