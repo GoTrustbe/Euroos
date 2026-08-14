@@ -2152,7 +2152,11 @@ fn main() -> Status {
             // Rasterizing a page and PNG-encoding it is heavy under TCG, and the
             // screenshot is the last step of the DevTools conversation: give the run
             // room to finish it rather than cutting it off mid-capture.
-            ring3::GLIBC_DEADLINE_TICKS.store(200_000, core::sync::atomic::Ordering::Relaxed);
+            // Guest seconds are nearly free when the idle clock fast-forwards, so a
+            // guest-time deadline is the wrong budget for this run — the runner's
+            // wall-clock cap is the real bound. Set the guest deadline high enough
+            // that it never fires first.
+            ring3::GLIBC_DEADLINE_TICKS.store(5_000_000, core::sync::atomic::Ordering::Relaxed);
             // Stall diagnostics: periodically dump syscall/futex/epoll rates + task
             // states while chrome runs, so a stall shows as spinning (runaway futex/
             // epoll, no new syscalls) vs a hard deadlock (all-Blocked) vs slow progress.
@@ -2276,7 +2280,9 @@ fn main() -> Status {
                   // TRACING: chrome's compositor keeps no VLOGs, but it does emit trace
                   // events. Writing them to a file we can read back is the only window
                   // into "which stage of frame production never happens".
-                  b"--trace-startup=cc,viz,benchmark,toplevel",
+                  // gpu.capture is the capturer's own category: ChangeTarget, resolve,
+                  // refresh and per-frame capture all trace under it.
+                  b"--trace-startup=cc,viz,benchmark,toplevel,gpu.capture",
                   b"--trace-startup-file=/tmp/euro-trace.json",
                   b"--trace-startup-duration=0",
                   b"--remote-debugging-pipe",
@@ -2349,6 +2355,37 @@ fn main() -> Status {
                         count("EmbedSurface"), count("SetTargetLocalSurfaceId"),
                         count("LocalSurfaceId"), count("SurfaceAggregator"),
                         count("GarbageCollectSurfaces"), count("SurfaceManager"));
+                    // FrameSinkIds, verbatim: on the host a working screencast shows
+                    // FrameSinkId(0, 1) (the root) and FrameSinkId(3, 3) (the page
+                    // widget the capturer resolves to, SetResolvedTarget=1). Which ids
+                    // exist HERE, and does SetResolvedTarget appear at all?
+                    {
+                        let mut ids: alloc::vec::Vec<(alloc::string::String, u32)> = alloc::vec::Vec::new();
+                        let pat = b"FrameSinkId(";
+                        let bytes = txt.as_bytes();
+                        let mut i = 0;
+                        while i + pat.len() < bytes.len() {
+                            if &bytes[i..i + pat.len()] == pat && (i == 0 || bytes[i - 1] != b'l') {
+                                let rest = &txt[i..];
+                                if let Some(endp) = rest.find(')') {
+                                    if endp < 24 {
+                                        let id = alloc::string::String::from(&rest[..=endp]);
+                                        match ids.iter_mut().find(|(v, _)| *v == id) {
+                                            Some(e) => e.1 += 1,
+                                            None => ids.push((id, 1)),
+                                        }
+                                    }
+                                    i += endp;
+                                }
+                            }
+                            i += 1;
+                        }
+                        let resolved = txt.matches("SetResolvedTarget").count();
+                        serial_println!("[trace] SetResolvedTarget={resolved}; {} distinct FrameSinkIds:", ids.len());
+                        for (id, n) in ids.iter().take(10) {
+                            serial_println!("[trace]   {n:3}x {id}");
+                        }
+                    }
                     // S1: the ACTUAL surface ids. The trace carries them as
                     // "LocalSurfaceId(parent, child, token…)": the browser advances the
                     // parent number, the renderer the child one, and they must agree.
@@ -2392,17 +2429,17 @@ fn main() -> Status {
                         if run.len() >= 8 {
                             // Hunting the REASON a frame sink is lost: failure words,
                             // not pipeline stages.
-                            let keep = ["Lost", "Lose", "Lost", "BadMessage", "Disconnect",
-                                        "Error", "Fail", "Invalid", "Shutdown", "Destroy",
-                                        "Context", "Bitmap", "SharedImage", "OutputDevice",
-                                        "GpuChannel", "Reject", "Abort", "Close"];
+                            // The CAPTURER's own footprint: which capture-side functions
+                            // ever ran, verbatim from the trace.
+                            let keep = ["Captur", "VideoCapture", "CopyOutput", "Oracle",
+                                        "Consumer", "Readback", "VideoFrame", "InFlight"];
                             if keep.iter().any(|k| run.contains(k)) && !seen.iter().any(|x| *x == run) {
                                 seen.push(run.clone());
                             }
                         }
                         run.clear();
                     }
-                    serial_println!("[trace] {} failure-related names:", seen.len());
+                    serial_println!("[trace] {} capture-related names:", seen.len());
                     for name in seen.iter().take(140) {
                         serial_println!("[trace]   {name}");
                     }

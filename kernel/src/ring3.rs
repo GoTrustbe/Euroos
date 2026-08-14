@@ -434,6 +434,7 @@ static CDP_STEP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::
 static CDP_MARK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CDP_TRIES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static CDP_WAIT_MARK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static HB_LAST_RTC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CDP_RX: Mutex<alloc::vec::Vec<u8>> = Mutex::new(alloc::vec::Vec::new());
 /// Socketpair endpoints: (a, b). A descriptor sent with SCM_RIGHTS on one end has
 /// to arrive on the OTHER one, and only a pair knows who that is.
@@ -704,19 +705,32 @@ pub fn cdp_pump() {
         // emulation, and a chatty wait starves the very work it is waiting for (a
         // modulo here fired ~12000 times and stalled the frame outright).
         let waited = now.saturating_sub(CDP_MARK.load(Ordering::Relaxed));
-        let ticks_1000 = waited / 1000;
+        // Guest seconds race far ahead of real compute when threads sleep properly
+        // (tickless idle fast-forwards an idle clock), so both the progress line and
+        // the give-up must be generous in guest terms: the budget that matters is the
+        // runner's wall-clock cap, not this window.
+        // Every ~30 s of guest time: often enough that the runner's stall detector
+        // sees a live guest even when chrome computes hard (guest ticks crawl then),
+        // rare enough not to starve anything when the idle clock fast-forwards.
+        let ticks_1000 = waited / 3_000;
         if ticks_1000 > 0 && CDP_WAIT_MARK.swap(ticks_1000, Ordering::Relaxed) != ticks_1000 {
             crate::serial_println!("[cdp] still waiting for the frame ({} s of guest time)", waited / 100);
-            // A second, different mutation while waiting: if the first damage landed
-            // before the capturer's subscription completed, this one lands after.
-            if ticks_1000 == 2 {
+            // RECURRING damage while waiting. The capturer resolves its target a beat
+            // AFTER the screencast starts (and re-resolves when the sink is lost), and
+            // it only learns the source size from a frame submitted while attached: a
+            // one-shot nudge can land in the race window and be consumed before the
+            // attach. A fresh mutation per wait-tick guarantees post-attach frames.
+            if ticks_1000 % 3 == 0 {
+                // Every third wait-tick: constant damage keeps the renderer so busy
+                // under emulation that the capture pipeline itself starves.
                 let dsid = CDP_SESSION.lock().clone();
+                let color = 0x101010u32.wrapping_add((ticks_1000 as u32).wrapping_mul(0x203040)) & 0xFFFFFF;
                 cdp_send(&alloc::format!(
-                    "{{\"id\":12,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"document.body.style.background='#204080'\"}}}}"));
+                    "{{\"id\":12,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"document.body.style.background='#{color:06x}'\"}}}}"));
             }
         }
     }
-    if step == 7 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 30_000 {
+    if step == 7 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 600_000 {
         crate::serial_println!("[cdp] frames went unanswered — what is each thread waiting on?");
         let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
         let (mn, ma, mr) = last_syscall(main);
@@ -883,6 +897,10 @@ pub fn cdp_pump() {
             // fell flat). A DIFFERENT size forces layout, and a DOM mutation dirties
             // paint regardless.
             crate::serial_println!("[cdp] screencast running — forcing real damage (resize + DOM mutation)");
+            // What happens on the OTHER side of this ack? The capturer must resolve
+            // its target and schedule a refresh capture on the viz thread; trace the
+            // next syscalls to see whether that thread ever wakes and what it does.
+            SYS_TRACE_LEFT.store(140, Ordering::Relaxed);
             let dsid = CDP_SESSION.lock().clone();
             cdp_send(&alloc::format!(
                 "{{\"id\":9,\"sessionId\":\"{dsid}\",\"method\":\"Emulation.setDeviceMetricsOverride\",\"params\":{{\"width\":816,\"height\":616,\"deviceScaleFactor\":1,\"mobile\":false}}}}"));
@@ -1147,13 +1165,35 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
             crate::serial_println!("[wait] t{} {:?} epoll_wait timeout={timeout} nothing ready:{desc}",
                 crate::sched::current(), thread_name(crate::sched::current()));
         }
-        if n > 0 || timeout == 0 || tries >= 8 {
-            return n; // ready fds, non-blocking, or gave the CPU up enough — let the pump run
+        if n > 0 || timeout == 0 {
+            return n; // ready fds, or the caller asked not to wait
+        }
+        // HONOR THE TIMEOUT — the same lie poll() and the futex told, with the same
+        // price. Returning 0 after ~8 ticks says "your timeout expired" to a caller
+        // that asked for seconds: every message pump then re-arms immediately, and
+        // sixteen threads cycling through here turned the whole browser into syscall
+        // churn (thousands per second) that starved its real work under emulation.
+        // Wait like poll(): re-check, sleep the remaining time in bounded chunks,
+        // keep the clock moving if it froze (interrupts are off in a syscall), and
+        // report 0 only when a FINITE timeout really elapsed.
+        let timeout_ms = timeout as i32;
+        if tries == 0 && timeout_ms > 0 {
+            EPOLL_DEADLINE.store(crate::interrupts::ticks() + (timeout_ms as u64).div_ceil(10), Ordering::Relaxed);
+        }
+        if timeout_ms > 0 && crate::interrupts::ticks() >= EPOLL_DEADLINE.load(Ordering::Relaxed) {
+            return 0; // the finite timeout really expired
+        }
+        if tries >= 400 {
+            return 0; // backstop: a frozen clock must not hang the machine
         }
         tries += 1;
-        crate::sched::sleep_ticks(1); // sleep a tick...
+        let before = crate::interrupts::ticks();
+        crate::sched::sleep_ticks(2);
         if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-            crate::sched::yield_now(); // ...and deschedule (glibc lock-free path only)
+            crate::sched::yield_now(); // deschedule so whoever will wake us can run
+        }
+        if crate::interrupts::ticks() == before {
+            crate::interrupts::TICKS.store(before + 1, Ordering::Relaxed);
         }
     }
 }
@@ -2348,6 +2388,10 @@ static MEMFD_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64:
 /// deschedules under many-thread contention) shows up as a runaway count here.
 static FUTEX_WAIT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static EPOLL_WAIT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Deadline of the epoll wait in progress (single-waiter approximation: each call
+/// rearms it at try 0, and interleaved waiters only shorten each other's waits —
+/// an early 0 is a spurious wakeup, which epoll callers must tolerate anyway).
+static EPOLL_DEADLINE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Enable the periodic thread-state/syscall-rate snapshots (deadlock diagnostics).
 pub static STALL_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// Log directory open/getdents results (chrome disk-cache init diagnostics).
@@ -6258,6 +6302,21 @@ pub fn run_glibc_disk(
         if iters % 64 == 0 {
             cdp_pump(); // DevTools conversation with a --remote-debugging-pipe browser
         }
+        // Launcher heartbeat: proof of life for the OUTSIDE watchdog, on the REAL
+        // clock (RTC). Neither iterations nor guest ticks can pace this: under heavy
+        // chrome compute guest time crawls (a guest-time print goes quiet for over
+        // ten wall minutes), and when everything sleeps the launcher only iterates
+        // ~100/s (an iteration-count print goes quiet for hours). The RTC is the one
+        // clock here that matches the watchdog's.
+        if iters % 1024 == 0 {
+            let now_rtc = crate::rtc::epoch();
+            let last = HB_LAST_RTC.load(Ordering::Relaxed);
+            if now_rtc >= last + 45 {
+                HB_LAST_RTC.store(now_rtc, Ordering::Relaxed);
+                crate::serial_println!("[hb] alive: {} iters, {} ticks, {} syscalls",
+                    iters, crate::interrupts::ticks(), SYSCALL_SEQ.load(Ordering::Relaxed));
+            }
+        }
         if STALL_DIAG.load(Ordering::Relaxed) && iters % 4000 == 0 && snaps < 8 {
             let seq = SYSCALL_SEQ.load(Ordering::Relaxed);
             let fx = FUTEX_WAIT_COUNT.load(Ordering::Relaxed);
@@ -8647,7 +8706,16 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     let deadline = if a4 != 0 {
                         let sec: u64 = read_user(a4).unwrap_or(0);
                         let nsec: u64 = read_user(a4 + 8).unwrap_or(0);
-                        let t = sec.wrapping_mul(100) + nsec / 10_000_000;
+                        // Round UP to our 10 ms tick. Truncating rounded a deadline a few
+                        // milliseconds in the future DOWN to "already passed", so a timed
+                        // wait returned ETIMEDOUT instantly, the caller retried, and the
+                        // thread never actually slept — under a cooperative scheduler it
+                        // then monopolizes the core and the peer of its handshake never
+                        // runs. Chrome's viz thread spun exactly this way (wake + timed
+                        // wait, -ETIMEDOUT, thousands per second) while the capturer's
+                        // work never got a turn. A wait lasts AT LEAST as long as asked;
+                        // a truly-past absolute deadline still times out immediately.
+                        let t = sec.wrapping_mul(100) + nsec.div_ceil(10_000_000);
                         if op == 9 { t } else { crate::interrupts::ticks() + t }
                     } else {
                         0
