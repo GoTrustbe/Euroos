@@ -646,14 +646,13 @@ fn cdp_begin_frame() {
     // frames, commits and swaps all climb, and BeginFrame delivery now matches
     // native Linux exactly). The explicit begin-frame route answers only through
     // capture plumbing of its own; this asks for the picture directly.
-    // Force a NEW frame first. A capture waits for a frame with damage, and a page
-    // that has finished painting produces none — this run shows 10 "did not produce
-    // a frame" against 4 on the host. Overriding the device metrics dirties the
-    // whole viewport, which is the standard way to make a headless page redraw.
+    // SCREENCAST instead of a one-shot capture: frames arrive as events after each
+    // swap — the submission path, which demonstrably works here — and this is also
+    // the loop the final UI wants. (captureScreenshot does a CopyOutputRequest
+    // readback that never answers on EuroOS; validated on the host that screencast
+    // delivers an 800x600 PNG with these exact flags.)
     cdp_send(&alloc::format!(
-        "{{\"id\":9,\"sessionId\":\"{sid}\",\"method\":\"Emulation.setDeviceMetricsOverride\",\"params\":{{\"width\":800,\"height\":600,\"deviceScaleFactor\":1,\"mobile\":false}}}}"));
-    cdp_send(&alloc::format!(
-        "{{\"id\":7,\"sessionId\":\"{sid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\",\"fromSurface\":true,\"captureBeyondViewport\":true}}}}"));
+        "{{\"id\":7,\"sessionId\":\"{sid}\",\"method\":\"Page.startScreencast\",\"params\":{{\"format\":\"png\",\"everyNthFrame\":1}}}}"));
     WAIT_DIAG.store(40, Ordering::Relaxed); // describe what the next waits are for
     // Who should answer this? Dump every thread once, so a blocked DevTools pipe
     // handler or a stuck compositor is visible at the moment of the request rather
@@ -708,6 +707,13 @@ pub fn cdp_pump() {
         let ticks_1000 = waited / 1000;
         if ticks_1000 > 0 && CDP_WAIT_MARK.swap(ticks_1000, Ordering::Relaxed) != ticks_1000 {
             crate::serial_println!("[cdp] still waiting for the frame ({} s of guest time)", waited / 100);
+            // A second, different mutation while waiting: if the first damage landed
+            // before the capturer's subscription completed, this one lands after.
+            if ticks_1000 == 2 {
+                let dsid = CDP_SESSION.lock().clone();
+                cdp_send(&alloc::format!(
+                    "{{\"id\":12,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"document.body.style.background='#204080'\"}}}}"));
+            }
         }
     }
     if step == 7 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 30_000 {
@@ -821,46 +827,67 @@ pub fn cdp_pump() {
             // shape of that spin, from the exact moment the request goes out.
             WAIT_DIAG.store(40, Ordering::Relaxed);
             continue;
-        } else if step == 7 && msg.contains("\"id\":7") {
-            if msg.contains("Another frame is pending") {
-                crate::serial_println!("[cdp] chrome says a frame is still pending — waiting for it");
-                continue;
+        } else if msg.contains("Page.screencastFrame") && !msg.contains("Ack") {
+            // A frame arrived. Ack it (the protocol requires it before the next one),
+            // pull the PNG out, and ship it as hex — the log is the only way out.
+            if let Some(cast_sid) = json_str(&msg, "sessionId") {
+                // The FRAME session id (an integer in params) is separate from the
+                // DevTools session string; find the numeric one.
+                let ack = if let Some(pos) = msg.find("\"sessionId\":") {
+                    let tail = &msg[pos + 12..];
+                    let num: alloc::string::String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    num
+                } else { alloc::string::String::new() };
+                let dsid = CDP_SESSION.lock().clone();
+                let _ = cast_sid;
+                if !ack.is_empty() {
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":11,\"sessionId\":\"{dsid}\",\"method\":\"Page.screencastFrameAck\",\"params\":{{\"sessionId\":{ack}}}}}"));
+                }
             }
+            match json_str(&msg, "data") {
+                Some(b64) => {
+                    crate::serial_println!("[cast] ★★★ SCREENCAST FRAME: {} base64 chars", b64.len());
+                    let mut i = 0;
+                    while i < b64.len() {
+                        let end = (i + 512).min(b64.len());
+                        crate::serial_println!("[png] {}", &b64[i..end]);
+                        i = end;
+                    }
+                    crate::serial_println!("[png] END");
+                    CDP_STEP.store(8, Ordering::Relaxed);
+                    cdp_send("{\"id\":5,\"method\":\"Browser.close\"}");
+                    CDP_DRIVE.store(false, Ordering::Relaxed);
+                    return;
+                }
+                None => crate::serial_println!("[cast] frame event without data: {}", msg.chars().take(200).collect::<String>()),
+            }
+        } else if step == 7 && msg.contains("\"id\":7") {
             if msg.contains("\"error\"") {
-                crate::serial_println!("[cdp] beginFrame refused: {}", msg.chars().take(200).collect::<String>());
+                crate::serial_println!("[cdp] startScreencast refused: {}", msg.chars().take(200).collect::<String>());
                 CDP_STEP.store(8, Ordering::Relaxed);
                 cdp_send("{\"id\":5,\"method\":\"Browser.close\"}");
                 CDP_DRIVE.store(false, Ordering::Relaxed);
                 return;
             }
-            match json_str(&msg, "screenshotData").or_else(|| json_str(&msg, "data")) {
-                Some(b64) => {
-                    crate::serial_println!("[png] BEGIN {} base64 chars", b64.len());
-                    let bytes = b64.as_bytes();
-                    let mut i = 0;
-                    while i < bytes.len() {
-                        let end = (i + 512).min(bytes.len());
-                        crate::serial_println!("[png] {}", &b64[i..end]);
-                        i = end;
-                    }
-                    crate::serial_println!("[png] END");
-                }
-                None => {
-                    // No pixels yet: normal for the first frames (nothing has been
-                    // damaged). Keep driving; give up only after a fair number.
-                    let n = CDP_TRIES.load(Ordering::Relaxed);
-                    crate::serial_println!("[cdp] frame {n}: no pixels yet (hasDamage false)");
-                    if n < 14 {
-                        cdp_begin_frame();
-                        continue;
-                    }
-                    crate::serial_println!("[cdp] no damaged frame after {n} tries — nothing was drawn");
-                }
-            }
-            CDP_STEP.store(8, Ordering::Relaxed);
-            cdp_send("{\"id\":5,\"method\":\"Browser.close\"}"); // let chrome exit cleanly
-            CDP_DRIVE.store(false, Ordering::Relaxed);
-            return;
+            // The ack for startScreencast carries no data — the FRAME arrives later as
+            // a Page.screencastFrame event (handled above). Treating this ack as "no
+            // pixels" and retrying tore the session down before the frame could come.
+            //
+            // And give it something to film: a screencast frame is captured on a swap
+            // WITH DAMAGE, and a static page that finished painting produces none.
+            // The metrics override is proven here to trigger a real redraw (chrome
+            // answers it and emits Page.frameResized), so send it once as the damage.
+            // Damage that cannot be a no-op: the window is already 800x600, so an
+            // override to that size changes nothing (which is why the earlier nudge
+            // fell flat). A DIFFERENT size forces layout, and a DOM mutation dirties
+            // paint regardless.
+            crate::serial_println!("[cdp] screencast running — forcing real damage (resize + DOM mutation)");
+            let dsid = CDP_SESSION.lock().clone();
+            cdp_send(&alloc::format!(
+                "{{\"id\":9,\"sessionId\":\"{dsid}\",\"method\":\"Emulation.setDeviceMetricsOverride\",\"params\":{{\"width\":816,\"height\":616,\"deviceScaleFactor\":1,\"mobile\":false}}}}"));
+            cdp_send(&alloc::format!(
+                "{{\"id\":10,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"document.body.style.outline='4px solid red'\"}}}}"));
         }
     }
 }
@@ -6287,6 +6314,11 @@ pub fn run_glibc_disk(
     (out, code)
 }
 
+/// Skip every run_glibc self-test (each costs ~30-60 s of wall time under TCG).
+/// Set for a chrome-iteration boot: chrome IS the test there, and the suite in
+/// front of it turned a 5-minute cycle into a 40-minute one.
+pub static SKIP_GLIBC_TESTS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 pub fn run_glibc(
     falloc: &mut FrameAllocator,
     exe: &[u8],
@@ -6295,6 +6327,10 @@ pub fn run_glibc(
     envp: &[&[u8]],
     caps: u64,
 ) -> (String, u64) {
+    if SKIP_GLIBC_TESTS.load(Ordering::Relaxed) {
+        let _ = (falloc, exe, ldso, argv, envp, caps);
+        return (String::from("(skipped: chrome iteration boot)"), u64::MAX);
+    }
     init_syscall_msrs();
     CURRENT_CAPS.store(caps, Ordering::Relaxed);
     LINUX_ABI.store(true, Ordering::Relaxed);

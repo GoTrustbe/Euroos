@@ -1594,6 +1594,12 @@ fn main() -> Status {
     // tlscount) that stay Ready and steal the core from chrome under the cooperative
     // scheduler. Chrome needs the whole CPU to make progress under TCG.
     let chrome_run = ring3::europack_has("/pack/chrome-headless-shell") || ring3::europack_has("/pack/chrome");
+    if chrome_run {
+        // Iteration boot: chrome is the test. The glibc suite in front of it costs
+        // 25+ processes at 30-60 s each under TCG — skip it wholesale.
+        ring3::SKIP_GLIBC_TESTS.store(true, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[chrome-run] glibc self-tests SKIPPED for iteration speed");
+    }
     if cfg!(feature = "selftest") && !chrome_run {
         ucnt1 = ring3::spawn_counter_task(&mut allocator);
         ucnt2 = ring3::spawn_counter_task(&mut allocator);
@@ -2229,7 +2235,11 @@ fn main() -> Status {
                   // EuroOS gets: no SEND = the browser quit before the command handler
                   // ran; SEND without RECV = the in-process DevTools/Mojo session never
                   // answers; RECV of id 2 = the DOM came back.
-                  b"--vmodule=simple_devtools_protocol_client=2,headless_command_handler=2",
+                  // The video-capture oracle DOES vlog (unlike viz): on the host a
+                  // screencast prints "auto-throttling enabled" -> "proposing a capture
+                  // size" -> "Captured #1". Whichever of those three appears here says
+                  // exactly where the capturer stops.
+                  b"--vmodule=simple_devtools_protocol_client=2,video_capture_oracle=3,frame_sink_video_capturer_impl=3",
                   // EXPERIMENT (one boot): navigate the INITIAL page straight to the
                   // target instead of going through --dump-dom. --dump-dom never
                   // navigates itself: it loads chrome://headless/headless_command.html
@@ -2339,6 +2349,35 @@ fn main() -> Status {
                         count("EmbedSurface"), count("SetTargetLocalSurfaceId"),
                         count("LocalSurfaceId"), count("SurfaceAggregator"),
                         count("GarbageCollectSurfaces"), count("SurfaceManager"));
+                    // S1: the ACTUAL surface ids. The trace carries them as
+                    // "LocalSurfaceId(parent, child, token…)": the browser advances the
+                    // parent number, the renderer the child one, and they must agree.
+                    // Printing every distinct value with its count shows exactly who is
+                    // behind if they drift apart.
+                    {
+                        let bytes = txt.as_bytes();
+                        let pat = b"LocalSurfaceId(";
+                        let mut ids: alloc::vec::Vec<(alloc::string::String, u32)> = alloc::vec::Vec::new();
+                        let mut i = 0;
+                        while i + pat.len() < bytes.len() {
+                            if &bytes[i..i + pat.len()] == pat {
+                                let rest = &txt[i..];
+                                if let Some(endp) = rest.find(')') {
+                                    let id = alloc::string::String::from(&rest[..=endp]);
+                                    match ids.iter_mut().find(|(v, _)| *v == id) {
+                                        Some(e) => e.1 += 1,
+                                        None => ids.push((id, 1)),
+                                    }
+                                    i += endp;
+                                }
+                            }
+                            i += 1;
+                        }
+                        serial_println!("[trace] {} distinct LocalSurfaceIds:", ids.len());
+                        for (id, n) in ids.iter() {
+                            serial_println!("[trace]   {n:3}x {id}");
+                        }
+                    }
                     // The trace carries its event names as plain strings. Printing the
                     // rendering-related ones (deduplicated) gives the VOCABULARY of what
                     // actually happened, instead of guessing one term at a time.
@@ -2388,12 +2427,17 @@ fn main() -> Status {
                 Some(_) => serial_println!("[png] chrome created /tmp/euroshot.png but it is EMPTY"),
                 None => serial_println!("[png] chrome wrote no /tmp/euroshot.png"),
             }
+            // The last line of an iteration boot: everything of interest has printed,
+            // so the runner kills qemu on this marker instead of letting it hold the
+            // image lock for the rest of a 45-minute timeout.
+            serial_println!("[chrome-run] DONE — kill qemu now");
             for l in o3.lines() { serial_println!("[hshell]   {l}"); }
         }
         // (Reclamation validated out-of-band: 30 mixed runs incl. threaded kept the
         // task table at index 31 with free_frames stable — see commit notes.)
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
+        if !chrome_run {
         let results: [(&str, u64, u64); 25] = [
             ("gpoll(poll timeout)", epo, 143),
             ("gcond(condvar broadcast)", eco, 157),
@@ -2423,6 +2467,7 @@ fn main() -> Status {
         serial_println!(
             "[glibc]   9 real libs served: libc libm libstdc++ libgcc_s libgmp libcrypto libglib-2.0 libpcre2 libz | real bins: seq factor base64 wc sha256sum sort"
         );
+        }
 
         // gcairo: a REAL 2D vector-graphics library (Cairo — what GTK/Firefox render
         // with) draws a scene (filled circle, rectangle, stroked line, anti-aliased)
