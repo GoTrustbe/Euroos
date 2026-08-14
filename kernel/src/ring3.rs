@@ -8449,6 +8449,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             let fds = scm_take(a1);
             let control = read_user::<u64>(a2 + 32).unwrap_or(0);
             let controllen = read_user::<u64>(a2 + 40).unwrap_or(0) as usize;
+            if CACHE_DIR_DIAG.load(Ordering::Relaxed) && !fds.is_empty() {
+                crate::serial_println!("[scm] recvmsg fd{a1} ENTRY: msghdr@{a2:#x} control={control:#x} controllen={controllen} fds={fds:?}");
+            }
             if !fds.is_empty() && control != 0 && controllen >= 16 + 4 * fds.len() {
                 let clen = 16 + 4 * fds.len();
                 let _ = write_user(control, clen as u64);   // cmsg_len

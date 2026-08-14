@@ -43,6 +43,11 @@ int main(void) {
 
     struct cmsghdr *rc = CMSG_FIRSTHDR(&rmsg);
     if (!rc || rc->cmsg_level != SOL_SOCKET || rc->cmsg_type != SCM_RIGHTS) {
+        /* Say exactly what glibc sees, so a kernel-side write that "looks right"
+           can be compared byte for byte with the receiver's view. */
+        printf("GSCM: controllen=%zu flags=%d raw=[", rmsg.msg_controllen, rmsg.msg_flags);
+        for (unsigned i = 0; i < 20; i++) printf("%02x", (unsigned char)rcbuf[i]);
+        printf("]\n");
         printf("GSCM: no descriptor arrived (control message dropped) FAILED\n");
         fflush(stdout); return 5;
     }

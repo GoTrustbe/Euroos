@@ -2135,6 +2135,11 @@ fn main() -> Status {
             // route was measured to die inside the browser's readback instead.
             ring3::register_file("/tmp/euro.html", include_bytes!("euro_page.html").to_vec());
             ring3::CACHE_DIR_DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
+            // The browser is a UI: it must LIVE, not run to completion. With the
+            // tickless fast-forward on, the guest-time deadline raced by in wall
+            // seconds and tore the mapped window down mid-startup.
+            ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
+            ring3::GLIBC_DEADLINE_TICKS.store(500_000_000, core::sync::atomic::Ordering::Relaxed);
             xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
             let (o2, e2) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome", ring3::ldlinux_bytes(),
                 &[b"/pack/chrome", b"--ozone-platform=x11", b"--no-sandbox",
