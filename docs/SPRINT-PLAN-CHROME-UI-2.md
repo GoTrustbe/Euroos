@@ -64,3 +64,32 @@ glibc sees.
 Iteration hygiene learned the hard way: the precheck experiment (running gscm
 inside the fast chrome boot) hangs that boot in a way the suite never does —
 reverted; debug where it reproduces deterministically.
+
+## ★★★★★ 2026-08-15: THE CHROME UI RUNS ON EUROOS
+The framebuffer screendump shows the complete Chromium browser, painted by chrome
+itself through the in-kernel X server: tab strip ("Chromium on EuroOS"), toolbar
+with back/forward/reload, the address bar reading /tmp/euro.html, the
+--no-sandbox infobar, a real modal chrome dialog — and the Blink-rendered page
+with its styled cards and anti-aliased text. Capture:
+scripts/chrome-iter.sh boots with PACK=/tmp/chrome-pack2.img, waits for
+MapWindow, and screendumps via the qemu monitor.
+
+The last three walls (all named by evidence):
+1. recvmsg's legacy "controllen = 0" line stomped the just-written SCM_RIGHTS
+   control message (three-point bisect) → renderer channel bootstraps, watchdog
+   silent, gscm passes.
+2. per-connection resource-id-base in the X setup reply (id collisions between
+   chrome's connections clobbered the browser window with a 1x1 stub).
+3. server-global drawable lookups (chrome paints over a different connection
+   than the one that created the window): the processing connection steps out of
+   the table; put_image/present reach sibling connections.
+
+## What remains for a fully usable browser (next sprint)
+- INPUT: route desktop keyboard/mouse into the X server's event delivery for
+  chrome's window (the pump exists; chrome selects input events already).
+- The modal profile-error dialog ("...profile. Some features may be
+  unavailable.") sits behind the window — dismiss it (or preseed the profile)
+  so it does not eat the first click.
+- Live desktop integration: today the capture runs in the boot's chrome phase;
+  hosting chrome as the persistent desktop X app (spawn path exists for GTK) is
+  the last step to "open the browser from the dock".
