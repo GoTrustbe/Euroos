@@ -444,6 +444,8 @@ static CDP_RX: Mutex<alloc::vec::Vec<u8>> = Mutex::new(alloc::vec::Vec::new());
 static SOCK_PAIRS: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
 /// Descriptors in flight: (receiving fd, descriptor). FIFO, delivered by recvmsg.
 static SCM_PENDING: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+/// One-shot recheck address for the vanishing controllen write (see recvmsg).
+static SCM_CHECK_ADDR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// The other end of a socketpair, if `fd` is one.
 fn sock_peer(fd: u64) -> Option<u64> {
@@ -7133,8 +7135,19 @@ static SYS_TRACE_ARMED: core::sync::atomic::AtomicBool = core::sync::atomic::Ato
 static WAIT_DIAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    let chk = SCM_CHECK_ADDR.swap(0, Ordering::Relaxed);
+    if chk != 0 {
+        let v = read_user::<u64>(chk).unwrap_or(u64::MAX);
+        crate::serial_println!("[scm] NEXT syscall ({num}): controllen at {chk:#x} now reads {v}");
+    }
     if SYS_TRACE_LEFT.load(Ordering::Relaxed) == 0 {
-        return linux_dispatch_inner(num, a1, a2, a3, a4, a5);
+        let r = linux_dispatch_inner(num, a1, a2, a3, a4, a5);
+        let chk2 = SCM_CHECK_ADDR.load(Ordering::Relaxed);
+        if chk2 != 0 {
+            crate::serial_println!("[scm] post-dispatch ({num}): controllen at {chk2:#x} reads {}",
+                read_user::<u64>(chk2).unwrap_or(u64::MAX));
+        }
+        return r;
     }
     let r = linux_dispatch_inner(num, a1, a2, a3, a4, a5);
     let left = SYS_TRACE_LEFT.load(Ordering::Relaxed);
@@ -8449,7 +8462,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             let fds = scm_take(a1);
             let control = read_user::<u64>(a2 + 32).unwrap_or(0);
             let controllen = read_user::<u64>(a2 + 40).unwrap_or(0) as usize;
-            if CACHE_DIR_DIAG.load(Ordering::Relaxed) && !fds.is_empty() {
+            if CACHE_DIR_DIAG.load(Ordering::Relaxed) && crate::net::is_unix_fd(a1) {
                 crate::serial_println!("[scm] recvmsg fd{a1} ENTRY: msghdr@{a2:#x} control={control:#x} controllen={controllen} fds={fds:?}");
             }
             if !fds.is_empty() && control != 0 && controllen >= 16 + 4 * fds.len() {
@@ -8461,6 +8474,11 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     let _ = write_user(control + 16 + (i * 4) as u64, fd as i32);
                 }
                 let _ = write_user(a2 + 40, clen as u64);   // msg_controllen
+                // Bisect the vanishing write: this exact qword reads back correctly
+                // here, yet userspace sees 0. Recheck it at the task's NEXT syscall:
+                // still 20 there = userspace clobbers it; already 0 = our own return
+                // path does. One boot decides.
+                SCM_CHECK_ADDR.store(a2 + 40, Ordering::Relaxed);
                 if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
                     // Read the fields back: a write that silently did not land looks
                     // exactly like a control message the receiver "dropped".
@@ -8477,11 +8495,21 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     crate::serial_println!("[scm] fd{a1} had {} descriptor(s) but no room in the control buffer", fds.len());
                 }
                 if control != 0 {
+                    if CACHE_DIR_DIAG.load(Ordering::Relaxed) && crate::net::is_unix_fd(a1) {
+                        crate::serial_println!("[scm] recvmsg fd{a1}: ZEROING controllen (no descriptors this call)");
+                    }
                     let _ = write_user(a2 + 40, 0u64); // msg_controllen = 0
                 }
             }
             if data.is_empty() && fds.is_empty() && crate::net::is_unix_fd(a1) {
                 return (-11i64) as u64; // -EAGAIN: non-blocking, no data (NOT EOF)
+            }
+            let scm_chk = SCM_CHECK_ADDR.load(Ordering::Relaxed);
+            if CACHE_DIR_DIAG.load(Ordering::Relaxed) && crate::net::is_unix_fd(a1) {
+                crate::serial_println!("[scm] recvmsg fd{a1}: delivering {} data bytes", data.len());
+            }
+            if scm_chk != 0 {
+                crate::serial_println!("[scm] pre-scatter: controllen reads {}", read_user::<u64>(scm_chk).unwrap_or(u64::MAX));
             }
             let mut off = 0usize;
             for i in 0..iovlen {
@@ -8492,8 +8520,13 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 if n > 0 && !copy_to_user(base, &data[off..off + n]) { return EFAULT; }
                 off += n;
             }
-            // msg_controllen = 0 (no ancillary data).
-            let _ = write_user(a2 + 40, 0u64);
+            // msg_controllen is managed by the SCM_RIGHTS block above (the length of
+            // the delivered control message, or 0 when there was none). The old
+            // unconditional "no ancillary data" zero that used to sit here stomped a
+            // just-delivered control message on the way out — the receiver then saw a
+            // perfect cmsg buffer with controllen 0, chrome's in-process renderer
+            // never got its bootstrap descriptor, and its 15-second no-connection
+            // watchdog killed the browser.
             off as u64
         }
         8 => vfs_lseek(a1 as usize, a2 as i64, a3),  // lseek(fd, offset, whence)

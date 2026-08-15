@@ -63,6 +63,8 @@ struct XPixmap {
 }
 
 struct XConn {
+    /// This connection's resource-id-base (distinct per connection).
+    rid_base: u32,
     inbuf: Vec<u8>,   // accumulated request bytes not yet consumed
     outbuf: Vec<u8>,  // reply/event bytes waiting to be read()
     state: State,
@@ -87,7 +89,13 @@ pub fn open() -> Option<u64> {
     let mut t = XCONNS.lock();
     for (i, s) in t.iter_mut().enumerate() {
         if s.is_none() {
-            *s = Some(XConn { inbuf: Vec::new(), outbuf: Vec::new(), state: State::PreSetup, seq: 0, swap: false, windows: Vec::new(), gcs: Vec::new(), pixmaps: Vec::new() });
+            // A DISTINCT resource-id-base per connection: this is exactly what the
+            // field in the setup reply exists for. Handing every client the same
+            // base let chrome's second connection create "window 0x400003" while the
+            // first connection's browser window carried that id too — and the screen
+            // then presented the newcomer's 1x1 stub instead of the painted 800x600
+            // browser frame.
+            *s = Some(XConn { inbuf: Vec::new(), outbuf: Vec::new(), state: State::PreSetup, seq: 0, swap: false, windows: Vec::new(), gcs: Vec::new(), pixmaps: Vec::new(), rid_base: RID_BASE + (i as u32) * 0x0020_0000 });
             trace(format_args!("client connected -> xconn fd {}", XCONN_FD_BASE + i as u64));
             return Some(XCONN_FD_BASE + i as u64);
         }
@@ -103,13 +111,21 @@ pub fn close(fd: u64) {
 
 /// The client wrote `data` — feed the protocol state machine, producing replies.
 pub fn write(fd: u64, data: &[u8]) -> u64 {
-    let mut t = XCONNS.lock();
-    let c = match t.get_mut((fd - XCONN_FD_BASE) as usize).and_then(|s| s.as_mut()) {
+    // Take the connection OUT of the table while processing its requests, so the
+    // drawing ops can reach SIBLING connections: X resource ids are server-global
+    // (chrome's viz component paints, over its own connection, into the window the
+    // browser connection created), and holding the table lock across processing
+    // made that lookup impossible.
+    let idx = (fd - XCONN_FD_BASE) as usize;
+    let mut c = match XCONNS.lock().get_mut(idx).and_then(|s| s.take()) {
         Some(c) => c,
         None => return (-9i64) as u64, // -EBADF
     };
     c.inbuf.extend_from_slice(data);
-    process(c);
+    process(&mut c);
+    if let Some(slot) = XCONNS.lock().get_mut(idx) {
+        *slot = Some(c);
+    }
     data.len() as u64
 }
 
@@ -312,7 +328,7 @@ fn process(c: &mut XConn) {
             return; // wait for the rest
         }
         c.inbuf.drain(0..total);
-        let reply = setup_reply(c.swap);
+        let reply = setup_reply(c.swap, c.rid_base);
         c.outbuf.extend_from_slice(&reply);
         c.state = State::Connected;
         trace(format_args!("setup: swap={} -> {}-byte reply, CONNECTED", c.swap, reply.len()));
@@ -787,6 +803,22 @@ fn put_image(c: &mut XConn, draw: u32, dst_x: i32, dst_y: i32, w: usize, h: usiz
         blit_image(&mut win.buf, win.w as i32, win.h as i32, dst_x, dst_y, w, h, data);
     } else if let Some(pm) = c.pixmaps.iter_mut().find(|p| p.id == draw) {
         blit_image(&mut pm.buf, pm.w as i32, pm.h as i32, dst_x, dst_y, w, h, data);
+    } else {
+        // A drawable owned by ANOTHER connection: X ids are server-global, and
+        // chrome paints the browser window over a different connection than the
+        // one that created it. (The processing connection is outside the table,
+        // so this lock cannot alias `c`.)
+        let mut t = XCONNS.lock();
+        for conn in t.iter_mut().flatten() {
+            if let Some(win) = conn.windows.iter_mut().find(|win| win.id == draw) {
+                blit_image(&mut win.buf, win.w as i32, win.h as i32, dst_x, dst_y, w, h, data);
+                return;
+            }
+            if let Some(pm) = conn.pixmaps.iter_mut().find(|p| p.id == draw) {
+                blit_image(&mut pm.buf, pm.w as i32, pm.h as i32, dst_x, dst_y, w, h, data);
+                return;
+            }
+        }
     }
 }
 
@@ -988,7 +1020,23 @@ fn copy_area(c: &mut XConn, src: u32, dst: u32, sx: i32, sy: i32, dx: i32, dy: i
 /// Present the given (mapped) window to the real framebuffer + verify a sample
 /// pixel for the bring-up log. Reuses the app-graphics XRGB blit (as DOOM does).
 fn present(c: &XConn, id: u32) {
-    if let Some(win) = c.windows.iter().find(|w| w.id == id && w.mapped) {
+    if c.windows.iter().any(|w| w.id == id) {
+        present_win(c.windows.iter().find(|w| w.id == id && w.mapped), id);
+        return;
+    }
+    // Foreign drawable: find its owner (the processing connection is out of the
+    // table, so no aliasing) and present THAT window.
+    let t = XCONNS.lock();
+    for conn in t.iter().flatten() {
+        if conn.windows.iter().any(|w| w.id == id) {
+            present_win(conn.windows.iter().find(|w| w.id == id && w.mapped), id);
+            return;
+        }
+    }
+}
+
+fn present_win(win: Option<&XWindow>, id: u32) {
+    if let Some(win) = win {
         // Windowed mode: the desktop compositor draws the frame + pulls the pixels, so
         // skip the fullscreen blit (it would fight the compositor). RETAIN the pixels so
         // the app shows as a framed window and keeps showing after a boot-run client
@@ -1027,13 +1075,13 @@ fn reply_header(c: &XConn, extra_units: u32) -> Vec<u8> {
 fn pad_reply(_r: &mut [u8]) {}
 
 /// The connection-setup success reply. One screen, depth 24, one TrueColor visual.
-fn setup_reply(swap: bool) -> Vec<u8> {
+fn setup_reply(swap: bool, rid_base: u32) -> Vec<u8> {
     let vendor = b"EuroOS X";
     let vlen = vendor.len();
     // Additional data (after the 8-byte header):
     let mut a: Vec<u8> = Vec::new();
     p32(&mut a, swap, 11_000_000); // release-number
-    p32(&mut a, swap, RID_BASE); // resource-id-base
+    p32(&mut a, swap, rid_base); // resource-id-base (PER CONNECTION — see open())
     p32(&mut a, swap, RID_MASK); // resource-id-mask
     p32(&mut a, swap, 256); // motion-buffer-size
     p16(&mut a, swap, vlen as u16); // vendor length
