@@ -530,6 +530,8 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     // keeps the endpoint serviced + re-armed regardless of load. IRQ-safe: the
     // `POLLING` guard bails if a task-context poll is mid-flight.
     crate::xhci::poll();
+    // Refresh the vDSO clock page (userspace clock_gettime reads it, no syscall).
+    crate::ring3::vdso_tick();
     // Sample WHERE the preempted thread was executing, if it was in ring 3. The stub
     // pushed 15 registers on top of the CPU's interrupt frame, so the interrupted RIP
     // sits at rsp+120 and its CS at rsp+128. Costs two loads per tick and is the only

@@ -4876,6 +4876,115 @@ fn program_span_pages(program: &[u8]) -> usize {
     (((span + 0xFFF) / 4096).max(1)).min(MAX_PROG_PAGES)
 }
 
+// ── Minimal vDSO ────────────────────────────────────────────────────────────
+// The syscall histogram of a chrome run put clock_gettime at 67% of ALL syscalls
+// (123 192 of 182 138): without a vDSO, every TimeTicks::Now() is a full syscall
+// and an emulation round trip. This maps userland/glibc/vdso.so (built once on the
+// host, ~5 pages, versioned __vdso_* symbols) into every glibc process and points
+// AT_SYSINFO_EHDR at it; glibc then reads the clock from a shared data page the
+// timer tick refreshes. If glibc rejects the image it silently falls back to the
+// syscall — the failure mode is the status quo.
+static VDSO_SO: &[u8] = include_bytes!("../../userland/glibc/vdso.so");
+/// Where the vDSO lands in every glibc address space. Above the demand region's
+/// growth so DEMAND_NEXT can never collide with it.
+const VDSO_BASE: u64 = 0x1F0_0000_0000;
+/// VA-page offset of `__vdso_data` inside the image (nm: 0x4000) — the shared frame.
+const VDSO_DATA_VOFF: u64 = 0x4000;
+/// The one physical frame behind every process's vDSO data page (0 = not yet made).
+static VDSO_TIME_FRAME: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Frames backing the vDSO image pages, copied once and shared read-only after.
+static VDSO_IMAGE_FRAMES: Mutex<alloc::vec::Vec<u64>> = Mutex::new(alloc::vec::Vec::new());
+
+/// Refresh the vDSO clock page. Called from the timer tick: seq goes odd, the
+/// monotonic and real clocks are written, seq goes even — readers retry on odd.
+pub fn vdso_tick() {
+    let frame = VDSO_TIME_FRAME.load(Ordering::Relaxed);
+    if frame == 0 {
+        return;
+    }
+    let d = frame as *mut u64;
+    let ticks = crate::interrupts::ticks();
+    let epoch = crate::rtc::epoch();
+    unsafe {
+        let seq = d.read_volatile().wrapping_add(1);
+        d.write_volatile(seq); // odd: update in progress
+        d.add(1).write_volatile(ticks / 100); // mono sec
+        d.add(2).write_volatile((ticks % 100) * 10_000_000); // mono nsec (10 ms tick)
+        d.add(3).write_volatile(epoch); // real sec
+        d.add(4).write_volatile((ticks % 100) * 10_000_000); // real nsec
+        d.write_volatile(seq.wrapping_add(1)); // even: stable
+    }
+}
+
+/// Map the vDSO into `pml4` and return AT_SYSINFO_EHDR (the image base), or 0 when
+/// the frames cannot be had. The image pages are copied ONCE and shared by every
+/// process (read-only); the data page is the one live frame `vdso_tick` refreshes.
+/// Prepare the shared vDSO frames (image copy + time frame). Needs no address space,
+/// so the launch paths call it BEFORE the stack is built — the auxv can then promise
+/// AT_SYSINFO_EHDR only when the frames actually exist.
+fn vdso_prepare(falloc: &mut FrameAllocator) -> bool {
+    let npages = (VDSO_DATA_VOFF / 4096) as usize; // image pages below the data page
+    {
+        let mut imgs = VDSO_IMAGE_FRAMES.lock();
+        if imgs.is_empty() {
+            // Parse the phdrs once and lay the LOAD segments into fresh frames at
+            // their p_vaddr — offsets and vaddrs differ for the RW segment.
+            let mut frames = alloc::vec::Vec::new();
+            for _ in 0..npages {
+                match falloc.allocate() {
+                    Ok(f) => { unsafe { core::ptr::write_bytes(f as *mut u8, 0, 4096) }; frames.push(f); }
+                    Err(_) => return false,
+                }
+            }
+            let e_phoff = rd_u64(VDSO_SO, 32) as usize;
+            let e_phentsize = rd_u16(VDSO_SO, 54) as usize;
+            let e_phnum = rd_u16(VDSO_SO, 56) as usize;
+            for i in 0..e_phnum {
+                let ph = e_phoff + i * e_phentsize;
+                if ph + 56 > VDSO_SO.len() || rd_u32(VDSO_SO, ph) != 1 {
+                    continue; // PT_LOAD only
+                }
+                let p_offset = rd_u64(VDSO_SO, ph + 8) as usize;
+                let p_vaddr = rd_u64(VDSO_SO, ph + 16) as usize;
+                let p_filesz = rd_u64(VDSO_SO, ph + 32) as usize;
+                for b in 0..p_filesz {
+                    let va = p_vaddr + b;
+                    if va / 4096 >= frames.len() || p_offset + b >= VDSO_SO.len() {
+                        break;
+                    }
+                    unsafe {
+                        ((frames[va / 4096] + (va % 4096) as u64) as *mut u8)
+                            .write(VDSO_SO[p_offset + b]);
+                    }
+                }
+            }
+            *imgs = frames;
+        }
+    }
+    if VDSO_TIME_FRAME.load(Ordering::Relaxed) == 0 {
+        if let Ok(f) = falloc.allocate() {
+            unsafe { core::ptr::write_bytes(f as *mut u8, 0, 4096) };
+            VDSO_TIME_FRAME.store(f, Ordering::Relaxed);
+            vdso_tick(); // first fill, so an early reader never sees zeros
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+/// Map the prepared vDSO frames into `pml4`. Call after vdso_prepare succeeded.
+fn vdso_map_into(pml4: u64) -> bool {
+    let imgs = VDSO_IMAGE_FRAMES.lock();
+    for (i, &f) in imgs.iter().enumerate() {
+        if !crate::paging::map_demand_4k(pml4, VDSO_BASE + (i as u64) * 4096, f) {
+            return false;
+        }
+    }
+    crate::paging::map_demand_4k(pml4, VDSO_BASE + VDSO_DATA_VOFF,
+                                 VDSO_TIME_FRAME.load(Ordering::Relaxed))
+}
+
 /// Result of loading: entry + program-header info for the auxv.
 /// (musl's `_start` reads AT_PHDR/AT_PHENT/AT_PHNUM/AT_ENTRY/AT_BASE.)
 #[derive(Clone, Copy)]
@@ -6249,11 +6358,18 @@ pub fn spawn_glibc_persistent(
 
     let exe_info = load_elf64(exe, exe_base, program_span_pages(exe))?;
     let ld_info = load_elf64(ldso, ldso_base, program_span_pages(ldso))?;
+    let vdso_ok = vdso_prepare(falloc);
+    if vdso_ok {
+        VDSO_EHDR_NEXT.store(VDSO_BASE, Ordering::Relaxed);
+    }
     let rsp = unsafe { setup_user_stack_glibc(stack_top, argv, envp, &exe_info, ldso_base) };
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
     let pml4 = crate::paging::build_address_space_rwx_big(falloc, arena, nblocks);
+    if vdso_ok && !vdso_map_into(pml4) {
+        crate::serial_println!("[vdso] mapping FAILED — the auxv promised one; expect a crash");
+    }
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
     GLIBC_THREADS.lock().clear();
     GLIBC_CTIDS.lock().clear();
@@ -6650,12 +6766,19 @@ fn glibc_disk_launch(
         Some(i) => i,
         None => return Err("(bad ld.so ELF)"),
     };
+    let vdso_ok = vdso_prepare(falloc);
+    if vdso_ok {
+        VDSO_EHDR_NEXT.store(VDSO_BASE, Ordering::Relaxed);
+    }
     let rsp = unsafe { setup_user_stack_glibc(stack_top, argv, envp, &exe_info, ldso_base) };
 
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
     let pml4 = crate::paging::build_address_space_rwx_big(falloc, arena, nblocks);
+    if vdso_ok && !vdso_map_into(pml4) {
+        crate::serial_println!("[vdso] mapping FAILED — the auxv promised one; expect a crash");
+    }
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
     GLIBC_THREADS.lock().clear();
     GLIBC_CTIDS.lock().clear();
@@ -6946,12 +7069,19 @@ pub fn run_glibc(
         None => return (String::from("(bad ld.so ELF)"), u64::MAX),
     };
 
+    let vdso_ok = vdso_prepare(falloc);
+    if vdso_ok {
+        VDSO_EHDR_NEXT.store(VDSO_BASE, Ordering::Relaxed);
+    }
     let rsp = unsafe { setup_user_stack_glibc(stack_top, argv, envp, &exe_info, ldso_base) };
 
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
     let pml4 = crate::paging::build_address_space_rwx_big(falloc, arena, nblocks);
+    if vdso_ok && !vdso_map_into(pml4) {
+        crate::serial_println!("[vdso] mapping FAILED — the auxv promised one; expect a crash");
+    }
     // Threads this process clones share this address space.
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
     GLIBC_THREADS.lock().clear();
@@ -7088,6 +7218,10 @@ pub fn run_glibc(
 /// Build the SysV x86-64 initial stack for a real glibc program: argc, argv[],
 /// envp[], and a FULL auxv (AT_PHDR/PHENT/PHNUM/PAGESZ/BASE/FLAGS/ENTRY/UID/GID/
 /// PLATFORM/HWCAP/CLKTCK/SECURE/RANDOM/EXECFN) that glibc's ld.so requires.
+/// AT_SYSINFO_EHDR for the NEXT setup_user_stack_glibc call (0 = none). Set by the
+/// launch path right after it maps the vDSO into the new address space.
+static VDSO_EHDR_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 unsafe fn setup_user_stack_glibc(
     stack_top: u64,
     argv: &[&[u8]],
@@ -7134,7 +7268,9 @@ unsafe fn setup_user_stack_glibc(
     let execfn = *argptrs.first().unwrap_or(&0);
     p &= !0xF;
 
-    let aux: [(u64, u64); 18] = [
+    let vdso = VDSO_EHDR_NEXT.swap(0, Ordering::Relaxed);
+    let aux: [(u64, u64); 19] = [
+        (33, vdso),           // AT_SYSINFO_EHDR (0 = no vDSO: glibc uses the syscalls)
         (3, info.phdr),       // AT_PHDR
         (4, 56),              // AT_PHENT
         (5, info.phnum),      // AT_PHNUM
@@ -7812,6 +7948,25 @@ fn msc_complete(r: u64) {
     }
 }
 
+/// Per-number syscall counts: which calls the workload actually pays for. The late
+/// stall dumps showed clock_gettime after nearly every step (no vDSO: every clock
+/// read is a full syscall) — this table says what fraction of all syscalls that is.
+static SYSCALL_BY_NUM: [core::sync::atomic::AtomicU64; 512] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; 512];
+
+pub fn dump_syscall_histogram() {
+    let mut rows: alloc::vec::Vec<(usize, u64)> = (0..512)
+        .map(|n| (n, SYSCALL_BY_NUM[n].load(Ordering::Relaxed)))
+        .filter(|(_, c)| *c > 0)
+        .collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1));
+    let total: u64 = rows.iter().map(|(_, c)| *c).sum();
+    crate::serial_println!("[sysno] {total} syscalls; top:");
+    for (n, c) in rows.iter().take(10) {
+        crate::serial_println!("[sysno]   {:3}% {c:8}  sys {n}", c * 100 / total.max(1));
+    }
+}
+
 pub fn dump_main_syscalls() {
     let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
     crate::serial_println!("[msc] main thread t{main}: last {} syscalls (tick num(a1)=ret):", MSC_RING);
@@ -7829,6 +7984,9 @@ pub fn dump_main_syscalls() {
 fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let _ = a4; // not every syscall uses arg4/arg5 (r10/r8)
     SYSCALL_SEQ.fetch_add(1, Ordering::Relaxed); // progress heartbeat (stall detector)
+    if (num as usize) < 512 {
+        SYSCALL_BY_NUM[num as usize].fetch_add(1, Ordering::Relaxed);
+    }
     if crate::sched::current() == GLIBC_MAIN_TASK.load(Ordering::Relaxed) {
         let i = MSC_IDX.fetch_add(1, Ordering::Relaxed) % MSC_RING;
         MSC[i][0].store(crate::interrupts::ticks().max(1), Ordering::Relaxed);

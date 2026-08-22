@@ -1269,6 +1269,7 @@ fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, rx: i16, ry: i16
             crate::ring3::dump_threads_now("input events queued unread");
             crate::ring3::dump_main_syscalls();
             crate::ring3::dump_futex_state();
+            crate::ring3::dump_syscall_histogram();
             // From here the profile is about the STALL, not about startup.
             crate::ring3::reset_rip_profile();
         }
