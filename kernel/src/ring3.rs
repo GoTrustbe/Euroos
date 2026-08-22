@@ -6102,6 +6102,9 @@ fn demand_readahead(pml4: u64, page: u64, mbase: u64, mend: u64,
     drop(guard);
 }
 
+/// Empty non-blocking recvmsg calls (the poll storm the 1-in-4 yield throttles).
+static EMPTY_RECV_POLLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 /// Pages served by read-ahead instead of their own fault — the ledger's proof.
 pub static READAHEAD_PAGES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Identity-mapped arena size (MiB) for the next run_glibc. Default 96; bump for a
@@ -6687,6 +6690,7 @@ pub fn run_glibc_disk(
                 // The cost ledger: page faults + the cycles inside them, virtio kicks +
                 // the cycles waiting on the device, and what the X server moved. These
                 // are the sprint's before/after numbers, printed by every run.
+                dump_kernel_profile();
                 crate::serial_println!("[cost] faults={} ({} disk-filled, {} ra, {} Mcyc) | virtio kicks={} ({} Mcyc wait) | X: {} reqs, {} PutImage ({} MiB), {} Mcyc",
                     FAULT_COUNT.load(Ordering::Relaxed),
                     DEMAND_FILE_FILLED.load(Ordering::Relaxed),
@@ -6723,12 +6727,17 @@ pub fn run_glibc_disk(
             }
             _ => crate::sched::sleep_ticks(1),
         }
-        // YIELD LAST. sleep_ticks only MARKS this task Sleeping; it does not give up
-        // the CPU, so yielding before it meant the launcher came straight back and ran
-        // the whole loop body again until the next timer tick evicted it — millions of
-        // iterations a second, spent on nothing, in a guest where every cycle is
-        // emulated. Switching away AFTER the mark is what makes the sleep real.
-        crate::sched::yield_now();
+        // YIELD LAST — and only when someone else can actually use the CPU. With every
+        // glibc thread parked, the scheduler's no-Ready fallback resumes task 0 (this
+        // launcher) immediately, so sleep+yield still spun: the ring-0 profile put 83%
+        // of all ticks in the yield/switch path. When nothing is runnable, HLT instead:
+        // the next timer tick (100 Hz) resumes us, and under TCG a halted vCPU parks
+        // the host thread — an idle guest finally costs idle.
+        if crate::sched::any_other_ready() {
+            crate::sched::yield_now();
+        } else {
+            x86_64::instructions::hlt();
+        }
     }
     if !GLIBC_DONE.load(Ordering::Relaxed) {
         crate::serial_println!("[glibc-disk] TIMEOUT waiting for the process to exit (committed {} demand pages, {} from-file/disk)",
@@ -7496,6 +7505,48 @@ pub fn dump_task_cpu() {
 pub fn reset_task_cpu() {
     for t in 0..MAX_SAMPLED_TASKS {
         TASK_TICKS[t].store(0, Ordering::Relaxed);
+    }
+}
+
+/// Ring-0 side of the same question: which KERNEL code pages do the ticks land in.
+/// 79% of timer ticks catch the CPU in ring 0 while chrome starts; this histogram
+/// names the pages, and the boot log's anchor symbol turns a page into a function.
+const K_PAGES: usize = 96;
+static K_PAGE: [core::sync::atomic::AtomicU64; K_PAGES] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; K_PAGES];
+static K_HITS: [core::sync::atomic::AtomicU64; K_PAGES] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; K_PAGES];
+static K_TOTAL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+pub fn sample_kernel_rip(rip: u64) {
+    K_TOTAL.fetch_add(1, Ordering::Relaxed);
+    let page = rip & !0xFFF;
+    for i in 0..K_PAGES {
+        let cur = K_PAGE[i].load(Ordering::Relaxed);
+        if cur == page {
+            K_HITS[i].fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if cur == 0 && K_PAGE[i].compare_exchange(0, page, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            K_HITS[i].fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+    }
+}
+
+pub fn dump_kernel_profile() {
+    let total = K_TOTAL.load(Ordering::Relaxed);
+    let mut rows: alloc::vec::Vec<(u64, u64)> = (0..K_PAGES)
+        .map(|i| (K_PAGE[i].load(Ordering::Relaxed), K_HITS[i].load(Ordering::Relaxed)))
+        .filter(|(p, _)| *p != 0)
+        .collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1));
+    // The anchor the boot log prints gives the reader a fixed point to subtract.
+    crate::serial_println!("[krip] {} ring-0 samples over {} pages (anchor dump_registers_and_backtrace @ {:#x}):",
+        total, rows.len(), crate::klog::dump_registers_and_backtrace as usize as u64);
+    for (page, n) in rows.iter().take(12) {
+        let pct = if total > 0 { n * 100 / total } else { 0 };
+        crate::serial_println!("[krip]   {pct:3}% ({n:6}) {page:#x}");
     }
 }
 
@@ -9027,11 +9078,15 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // trying to establish the renderer channel. Returning EAGAIN straight
                 // back lets the poller keep the CPU, and after 15 seconds without a
                 // connection chrome shoots itself ("Terminating current process after
-                // 15 seconds with no connection"). It only ever worked because a debug
-                // print in this very path was slow enough to throttle the loop — remove
-                // the print and the browser dies. So yield here on purpose: the thread
-                // that has nothing to read gives way to the one that has work.
-                crate::sched::yield_now();
+                // 15 seconds with no connection"). So the thread that has nothing to
+                // read gives way — but not on EVERY call: a full context switch per
+                // empty poll turned the scheduler itself into the load (83% of ring-0
+                // ticks in the yield/switch path). One yield in four keeps the other
+                // threads running at a quarter of the poll rate, which is thousands of
+                // hand-overs a second — plenty — at a quarter of the switch cost.
+                if EMPTY_RECV_POLLS.fetch_add(1, Ordering::Relaxed) % 4 == 3 {
+                    crate::sched::yield_now();
+                }
                 return (-11i64) as u64; // -EAGAIN: non-blocking, no data (NOT EOF)
             }
             let scm_chk = SCM_CHECK_ADDR.load(Ordering::Relaxed);

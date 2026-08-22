@@ -483,6 +483,19 @@ pub fn yield_stub_addr() -> u64 {
 /// otherwise it just round-robins. Must hold NO locks (SCHED especially). Safe
 /// from a syscall (ring-0) context: the software interrupt saves this task's
 /// kernel context so it resumes exactly here when scheduled again.
+/// Is any OTHER task Ready to run right now? The launcher's wait loop asks this to
+/// choose between handing the CPU over (someone wants it) and a real `hlt` (nobody
+/// does — and under TCG a halted vCPU parks the host thread, which is the difference
+/// between an idle guest costing nothing and costing a full core).
+pub fn any_other_ready() -> bool {
+    let s = match SCHED.try_lock() {
+        Some(g) => g,
+        None => return true, // contended: assume someone is runnable
+    };
+    let cur = s.current;
+    (0..s.count).any(|i| i != cur && s.tasks[i].state == State::Ready)
+}
+
 pub fn yield_now() {
     // SAFETY: YIELD_VECTOR is wired to `yield_switch` in the IDT (interrupts::init).
     // No options: the software interrupt pushes a frame (uses the stack) and the
@@ -526,6 +539,8 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
         let cs = *((rsp + 128) as *const u64);
         if cs & 3 == 3 {
             crate::ring3::sample_user_rip(current(), rip);
+        } else {
+            crate::ring3::sample_kernel_rip(rip);
         }
     }
     // BUG-007: the timer must NEVER block on SCHED. Task-context code (the desktop loop,
