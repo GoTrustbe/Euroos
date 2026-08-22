@@ -36,8 +36,10 @@ mrel() {
 # Absolute: slam into the top-left corner (the driver clamps), then walk out to (x,y).
 mabs() { mrel -1200 -1200; mrel "$1" "$2"; }
 
-./scripts/build.sh ${BUILD_PROFILE:-chrome} >/dev/null 2>&1 || { echo "BUILD FAILED"; exit 1; }
+# Wait for any other VM to exit FIRST: the build REWRITES eurokernel.img, and
+# rewriting the disk image out from under a running guest corrupts what it sees.
 while pgrep -x qemu-system-x86 >/dev/null 2>&1 || ps -eo comm | grep -q '^qemu-system-x86$'; do sleep 10; done
+./scripts/build.sh ${BUILD_PROFILE:-chrome} >/dev/null 2>&1 || { echo "BUILD FAILED"; exit 1; }
 rm -f "$LOG" "$LOG.ppm" "$LOG-after.ppm"
 qemu-system-x86_64 -machine q35 -m 3584M -cpu qemu64,+smep,+smap \
   -bios /usr/share/ovmf/OVMF.fd \

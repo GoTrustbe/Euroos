@@ -8,8 +8,10 @@ cd "$(dirname "$0")/.."
 LOG="${1:?usage: chrome-desktop.sh /path/to/log}"
 PACK="${PACK:-/tmp/chrome-pack2.img}"
 mon() { printf '%s\n' "$@" | nc -U -q 1 "$LOG.mon" >/dev/null 2>&1; }
-./scripts/build.sh release >/dev/null 2>&1 || { echo "BUILD FAILED"; exit 1; }
+# Wait for any other VM to exit FIRST: the build REWRITES eurokernel.img, and
+# rewriting the disk image out from under a running guest corrupts what it sees.
 while ps -eo comm | grep -q '^qemu-system-x86$'; do sleep 10; done
+./scripts/build.sh release >/dev/null 2>&1 || { echo "BUILD FAILED"; exit 1; }
 rm -f "$LOG" "$LOG"*.ppm
 qemu-system-x86_64 -machine q35 -m 3584M -cpu qemu64,+smep,+smap \
   -bios /usr/share/ovmf/OVMF.fd \

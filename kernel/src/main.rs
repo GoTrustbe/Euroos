@@ -5294,6 +5294,14 @@ fn main() -> Status {
             }
         }
 
+        // A hosted app's own words, on the serial log. It never exits, so this is the
+        // only place its stdout/stderr can appear at all.
+        if ring3::persistent_running() && interrupts::ticks() % 200 == 0 {
+            for l in ring3::take_output().lines() {
+                serial_println!("[hosted] {l}");
+            }
+        }
+
         // Keyboard focus: when the hosted GTK window is the active window, route real
         // keystrokes to it (X KeyPress via the keymap) instead of the shell. Otherwise
         // the shell keeps the keyboard as normal.

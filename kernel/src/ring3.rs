@@ -6181,6 +6181,17 @@ pub const CHROME_ENVP: &[&[u8]] = &[
     b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null",
 ];
 
+/// Take everything a persistent app has written since the last call. A program that
+/// runs to completion has its output printed when it exits; a browser never exits, so
+/// without this its own account of what it is doing is invisible — which is exactly
+/// the situation you are in when its window stays blank and nothing says why.
+pub fn take_output() -> String {
+    let mut o = OUTPUT.lock();
+    let s = o.clone();
+    o.clear();
+    s
+}
+
 /// Is a persistent glibc app (GTK demo or chrome) running right now?
 pub fn persistent_running() -> bool {
     GLIBC_MAIN_TASK.load(Ordering::Relaxed) != usize::MAX && PERSIST_PML4.load(Ordering::Relaxed) != 0
