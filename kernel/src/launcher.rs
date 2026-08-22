@@ -23,6 +23,8 @@ const CATALOG: &[(&str, usize)] = &[
     ("EuroText editor", 8),
     ("EuroMonitor", 9),
     ("EuroLog", 10),
+    // No dock tile of its own: the hosted X-client window (see dock_targets[11]).
+    ("Chromium browser", 11),
 ];
 
 struct State {

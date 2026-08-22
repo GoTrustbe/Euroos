@@ -6089,6 +6089,14 @@ pub fn spawn_glibc_persistent(
 /// space + arena — the teardown that path lacks. Called by the desktop when the hosted
 /// window is closed. Safe from task 0: the app's tasks are other tasks (not current),
 /// marked Dead so the scheduler never runs them again, then reclaimed and freed.
+/// The demand pool + demand flags of a PERSISTENT disk-served app (chrome), so its
+/// kill path gives back exactly what its launch took. Zero when the persistent app
+/// came from RAM (spawn_glibc_persistent) and installed no pool.
+static PERSIST_DP_BASE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static PERSIST_DP_FRAMES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static PERSIST_PREV_DEMAND: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static PERSIST_PREV_FILE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
     let main = GLIBC_MAIN_TASK.swap(usize::MAX, Ordering::Relaxed);
     if main == usize::MAX {
@@ -6113,9 +6121,108 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
             let _ = falloc.free(arena + i * 4096);
         }
     }
+    // A disk-served app also holds the demand pool (most of RAM for chrome). Without
+    // this the desktop survives the close but the memory does not come back.
+    let dpb = PERSIST_DP_BASE.swap(0, Ordering::Relaxed);
+    let dpf = PERSIST_DP_FRAMES.swap(0, Ordering::Relaxed);
+    if dpf != 0 {
+        crate::procpool::demand_uninstall();
+        for i in 0..dpf {
+            let _ = falloc.free(dpb + i * 4096);
+        }
+        DEMAND_FILE_MAPS.lock().clear();
+        DEMAND_ENABLED.store(PERSIST_PREV_DEMAND.load(Ordering::Relaxed), Ordering::Relaxed);
+        DEMAND_FILE_ENABLED.store(PERSIST_PREV_FILE.load(Ordering::Relaxed), Ordering::Relaxed);
+    }
     crate::xserver::set_windowed(false);
     *crate::xserver::RETAINED_WINDOW.lock() = None;
     crate::serial_println!("[glibc] persistent app (task {main}) terminated + arena freed");
+}
+
+/// Stage everything chrome must find on disk before it starts: the DejaVu fonts, the
+/// fontconfig caches its OWN bundled fontconfig wrote (versions 9 AND 11 — it
+/// validates them against the mtimes the kernel serves and then never rescans, which
+/// is precisely what keeps it out of the FcCharSetFreeze crash), a fonts.conf naming
+/// that directory, the /dev nodes its forked child redirects stdio to before execve,
+/// and the local demo page. One place, so a desktop launch and a boot-phase run can
+/// never drift apart.
+pub fn chrome_stage_files() {
+    for (name, bytes) in dejavu_fonts() {
+        register_file_static(&alloc::format!("/usr/share/fonts/truetype/dejavu/{name}"), bytes);
+    }
+    register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", fc_dejavu_cache());
+    register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-11", fc_dejavu_cache11());
+    register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n</fontconfig>\n".to_vec());
+    register_file("/dev/null", alloc::vec::Vec::new());
+    register_file("/dev/zero", alloc::vec![0u8; 4096]);
+    register_file("/dev/urandom", (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect());
+    register_file("/tmp/euro.html", include_bytes!("euro_page.html").to_vec());
+}
+
+/// The argv chrome is launched with (headed, X11, no GPU, no sandbox) and the env it
+/// needs. Shared by the boot-phase run and the desktop launch for the same reason as
+/// `chrome_stage_files`: a flag that only one of them carries is a bug waiting to be
+/// debugged twice.
+pub const CHROME_ARGV: &[&[u8]] = &[
+    b"/pack/chrome", b"--ozone-platform=x11", b"--no-sandbox",
+    b"--disable-gpu", b"--use-gl=disabled", b"--disable-vulkan",
+    b"--no-zygote", b"--single-process", b"--disable-dev-shm-usage",
+    b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
+    b"--disable-crashpad-for-testing", b"--disable-breakpad",
+    b"--disable-in-process-stack-traces", b"--lang=en-US",
+    b"--disable-gpu-compositing", b"--disable-features=MojoUseEventFd",
+    b"--window-size=800,600", b"--window-position=40,40",
+    b"--enable-logging=stderr", b"--v=1",
+    b"--no-first-run", b"--no-default-browser-check",
+    b"file:///tmp/euro.html",
+];
+pub const CHROME_ENVP: &[&[u8]] = &[
+    b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
+    b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null",
+];
+
+/// Is a persistent glibc app (GTK demo or chrome) running right now?
+pub fn persistent_running() -> bool {
+    GLIBC_MAIN_TASK.load(Ordering::Relaxed) != usize::MAX && PERSIST_PML4.load(Ordering::Relaxed) != 0
+}
+
+/// Spawn a disk-served glibc program (a 485 MB chrome, demand-paged from a EuroPack)
+/// as a PERSISTENT process and return WITHOUT waiting: the desktop keeps running, the
+/// app's X window is composited as a framed desktop window, and the desktop loop pumps
+/// live keyboard/mouse into it. This is what makes chrome a desktop application here
+/// instead of a boot-phase experiment. Returns the main task index.
+///
+/// Its arena, address space AND demand pool are handed to `kill_persistent_glibc`,
+/// which frees them when the window is closed.
+pub fn spawn_glibc_disk_persistent(
+    falloc: &mut FrameAllocator,
+    exe_path: &str,
+    ldso: &[u8],
+    argv: &[&[u8]],
+    envp: &[&[u8]],
+    caps: u64,
+) -> Option<usize> {
+    let run = match glibc_disk_launch(falloc, exe_path, ldso, argv, envp, caps) {
+        Ok(r) => r,
+        Err(e) => {
+            crate::serial_println!("[glibc-disk] persistent spawn FAILED: {e}");
+            return None;
+        }
+    };
+    PERSIST_ARENA.store(run.arena, Ordering::Relaxed);
+    PERSIST_PML4.store(run.pml4, Ordering::Relaxed);
+    PERSIST_FRAMES.store(run.frames as u64, Ordering::Relaxed);
+    // The demand pool is this process's too: a run-to-completion launch gives it back
+    // in its teardown, so the persistent one has to remember it for the kill path.
+    PERSIST_DP_BASE.store(run.dp_base, Ordering::Relaxed);
+    PERSIST_DP_FRAMES.store(run.dp_frames as u64, Ordering::Relaxed);
+    PERSIST_PREV_DEMAND.store(run.prev_demand, Ordering::Relaxed);
+    PERSIST_PREV_FILE.store(run.prev_file, Ordering::Relaxed);
+    crate::serial_println!(
+        "[glibc-disk] persistent {exe_path}: scheduled task {} (runs alongside the desktop)",
+        run.main_task
+    );
+    Some(run.main_task)
 }
 
 /// Read a disk-served ELF's header + program headers and build its LoadInfo, placing
@@ -6207,18 +6314,32 @@ fn register_disk_exe_segments(diskidx: usize, dev: usize, doff: u64, exe_base: u
     true
 }
 
-/// Run a REAL glibc program whose executable is served from a EuroPack disk (too
-/// large to hold in RAM — a 485 MB chrome binary). The exe's LOAD segments fault in
-/// from disk page-by-page in the demand region; ld.so + libc + heap + stack live in
-/// the identity arena as usual. Mirrors `run_glibc`'s lifecycle.
-pub fn run_glibc_disk(
+/// The launched state of a disk-served glibc process: everything the two lifecycles
+/// (run-to-completion, and persistent-alongside-the-desktop) must eventually give back.
+struct DiskRun {
+    main_task: usize,
+    arena: u64,
+    frames: usize,
+    pml4: u64,
+    dp_base: u64,
+    dp_frames: usize,
+    prev_demand: bool,
+    prev_file: bool,
+}
+
+/// Everything up to and including "the process is scheduled and running": resolve the
+/// disk exe, reset the per-process tables, take an arena and a demand pool, load ld.so,
+/// build the address space, spawn the main thread. Shared by `run_glibc_disk` (which
+/// then waits for it to exit) and `spawn_glibc_disk_persistent` (which returns to the
+/// desktop and lets it live) — one setup, so the two can never drift apart.
+fn glibc_disk_launch(
     falloc: &mut FrameAllocator,
     exe_path: &str,
     ldso: &[u8],
     argv: &[&[u8]],
     envp: &[&[u8]],
     caps: u64,
-) -> (String, u64) {
+) -> Result<DiskRun, &'static str> {
     // Resolve the disk-served executable.
     let (diskidx, dev, doff, dsize) = {
         let reg = DISK_FILES.lock();
@@ -6227,7 +6348,7 @@ pub fn run_glibc_disk(
                 let (_, dev, off, size) = reg[i];
                 (i, dev, off, size)
             }
-            None => return (String::from("(disk exe not found)"), u64::MAX),
+            None => return Err("(disk exe not found)"),
         }
     };
     init_syscall_msrs();
@@ -6260,7 +6381,7 @@ pub fn run_glibc_disk(
     let exe_base = DEMAND_BASE;
     let exe_info = match read_disk_exe_info(dev, doff, exe_base) {
         Some(i) => i,
-        None => return (String::from("(bad disk exe ELF)"), u64::MAX),
+        None => return Err("(bad disk exe ELF)"),
     };
     crate::serial_println!(
         "[glibc-disk] {exe_path}: {} MiB on disk, entry@{:#x} phdr@{:#x} phnum={} (demand-paged from disk)",
@@ -6286,7 +6407,7 @@ pub fn run_glibc_disk(
         }
         match got {
             Some(v) => v,
-            None => return (String::from("(no arena for glibc)"), u64::MAX),
+            None => return Err("(no arena for glibc)"),
         }
     };
     let nblocks = arena_mib / 2;
@@ -6306,7 +6427,7 @@ pub fn run_glibc_disk(
 
     let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
         Some(i) => i,
-        None => return (String::from("(bad ld.so ELF)"), u64::MAX),
+        None => return Err("(bad ld.so ELF)"),
     };
     let rsp = unsafe { setup_user_stack_glibc(stack_top, argv, envp, &exe_info, ldso_base) };
 
@@ -6324,7 +6445,7 @@ pub fn run_glibc_disk(
     DEMAND_USED.store(false, Ordering::Relaxed);
     // Register the exe's disk-backed segments NOW (after the DEMAND_NEXT reset).
     if !register_disk_exe_segments(diskidx, dev, doff, exe_base) {
-        return (String::from("(disk exe segment map failed)"), u64::MAX);
+        return Err("(disk exe segment map failed)");
     }
 
     // Demand pool = (almost) all remaining RAM, for a chrome-scale working set.
@@ -6346,12 +6467,32 @@ pub fn run_glibc_disk(
 
     let (main_slot, main_kstack) = match alloc_thread_kstack() {
         Some(s) => s,
-        None => return (String::from("(no kernel stack)"), u64::MAX),
+        None => return Err("(no kernel stack)"),
     };
     let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
 
+    Ok(DiskRun { main_task, arena, frames, pml4, dp_base, dp_frames, prev_demand, prev_file })
+}
+
+/// Run a REAL glibc program whose executable is served from a EuroPack disk (too
+/// large to hold in RAM — a 485 MB chrome binary). The exe's LOAD segments fault in
+/// from disk page-by-page in the demand region; ld.so + libc + heap + stack live in
+/// the identity arena as usual. Mirrors `run_glibc`'s lifecycle.
+pub fn run_glibc_disk(
+    falloc: &mut FrameAllocator,
+    exe_path: &str,
+    ldso: &[u8],
+    argv: &[&[u8]],
+    envp: &[&[u8]],
+    caps: u64,
+) -> (String, u64) {
+    let DiskRun { main_task, arena, frames, pml4, dp_base, dp_frames, prev_demand, prev_file } =
+        match glibc_disk_launch(falloc, exe_path, ldso, argv, envp, caps) {
+            Ok(r) => r,
+            Err(e) => return (String::from(e), u64::MAX),
+        };
     let deadline = crate::interrupts::ticks() + GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
     // Periodic snapshot: every ~700 ticks while the run is active, dump syscall/futex/
     // epoll rates + task states — a busy-spin livelock shows as a runaway futex/epoll
@@ -6381,8 +6522,15 @@ pub fn run_glibc_disk(
             let last = HB_LAST_RTC.load(Ordering::Relaxed);
             if now_rtc >= last + 45 {
                 HB_LAST_RTC.store(now_rtc, Ordering::Relaxed);
-                crate::serial_println!("[hb] alive: {} iters, {} ticks, {} syscalls",
-                    iters, crate::interrupts::ticks(), SYSCALL_SEQ.load(Ordering::Relaxed));
+                let (mx, my) = crate::mouse::pos();
+                // Input counters in the heartbeat: whether real keyboard/mouse
+                // interrupts reach the guest AT ALL during a long app run is the first
+                // question to answer when a click seems to do nothing, and guessing at
+                // it costs a whole boot each time.
+                crate::serial_println!("[hb] alive: {} iters, {} ticks, {} syscalls | kbd-irq={} mouse-irq={} pointer=({mx},{my})",
+                    iters, crate::interrupts::ticks(), SYSCALL_SEQ.load(Ordering::Relaxed),
+                    crate::interrupts::KBD_IRQ_COUNT.load(Ordering::Relaxed),
+                    crate::interrupts::MOUSE_IRQ_COUNT.load(Ordering::Relaxed));
             }
         }
         if STALL_DIAG.load(Ordering::Relaxed) && iters % 4000 == 0 && snaps < 8 {
