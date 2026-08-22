@@ -30,12 +30,15 @@ echo "desktop up at $(( $(date +%s) - START ))s"
 sleep 20
 mon "screendump $LOG-desktop.ppm"
 # Type `chrome` + Enter into the Terminal window (it has focus at boot).
+# The qcodes are PHYSICAL keys and this system boots the installer's default layout,
+# be-azerty, where the key QEMU calls "m" types a comma and the one it calls
+# "semicolon" types the m. Typing the letters as if the guest were US gives `chro,e`.
 cat > "$LOG.keys" <<'K'
 key c
 key h
 key r
 key o
-key m
+key semicolon
 key e
 key ret
 K

@@ -6314,6 +6314,11 @@ fn register_disk_exe_segments(diskidx: usize, dev: usize, doff: u64, exe_base: u
     true
 }
 
+/// Frames left OUT of a disk-served app's demand pool, for everything else in the
+/// system. 8192 (32 MiB) suits a boot-phase run; the desktop raises it before it
+/// launches a browser that would otherwise take the memory the compositor needs.
+pub static DEMAND_MARGIN_FRAMES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(8192);
+
 /// The launched state of a disk-served glibc process: everything the two lifecycles
 /// (run-to-completion, and persistent-alongside-the-desktop) must eventually give back.
 struct DiskRun {
@@ -6448,9 +6453,11 @@ fn glibc_disk_launch(
         return Err("(disk exe segment map failed)");
     }
 
-    // Demand pool = (almost) all remaining RAM, for a chrome-scale working set.
-    const MARGIN: usize = 8192;
-    let mut want = falloc.free_frames().saturating_sub(MARGIN);
+    // Demand pool = (almost) all remaining RAM, for a chrome-scale working set. The
+    // margin is what the REST of the system still gets: 32 MiB is enough for a boot
+    // phase where nothing else runs, and far too little for a desktop that has to keep
+    // compositing while the browser lives.
+    let mut want = falloc.free_frames().saturating_sub(DEMAND_MARGIN_FRAMES.load(Ordering::Relaxed) as usize);
     let mut dp = (0u64, 0usize);
     while want >= 4096 {
         if let Ok(b) = falloc.allocate_contiguous(want) {

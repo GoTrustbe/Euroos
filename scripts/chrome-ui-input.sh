@@ -56,8 +56,12 @@ while kill -0 $Q 2>/dev/null; do
         MAP_AT=$(date +%s); STAGE=paint; echo "window mapped at $((MAP_AT-START))s"
       fi ;;
     paint)
-      if [ $(( $(date +%s) - MAP_AT )) -gt $PAINT_WAIT ]; then
-        mon "screendump $LOG.ppm"; echo "SHOT1 $LOG.ppm"; STAGE=wait; WAIT_AT=$(date +%s)
+      # Painted = the browser window has presented a few times. Waiting a fixed
+      # PAINT_WAIT was a guess that cost minutes on every run; the presents are the
+      # actual signal, and the timeout is only the fallback.
+      PRESENTS=$(grep -ac "present id=0x400003" "$LOG" 2>/dev/null || echo 0)
+      if [ "${PRESENTS:-0}" -ge "${PRESENTS_WANTED:-8}" ] || [ $(( $(date +%s) - MAP_AT )) -gt $PAINT_WAIT ]; then
+        mon "screendump $LOG.ppm"; echo "SHOT1 $LOG.ppm ($PRESENTS presents, $(( $(date +%s) - MAP_AT ))s after map)"; STAGE=wait; WAIT_AT=$(date +%s)
       fi ;;
     wait)
       if [ -s "$CLICKS" ]; then

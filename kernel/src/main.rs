@@ -364,8 +364,16 @@ fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
     if ring3::persistent_running() {
         return (false, String::from("chrome: already running (close its window to quit)"));
     }
+    // Start from an empty button queue: the clicks that opened this window were meant
+    // for the DESKTOP, and delivering them to the browser the moment it appears would
+    // be a handful of phantom clicks on whatever it happens to be showing.
+    while mouse::take_button_event().is_some() {}
     ring3::chrome_stage_files();
     ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
+    // Leave the desktop 128 MiB: it keeps compositing, allocating window buffers and
+    // serving files while the browser runs, and the boot-phase margin (32 MiB) was
+    // sized for a system where nothing else was running at all.
+    ring3::DEMAND_MARGIN_FRAMES.store(32768, core::sync::atomic::Ordering::Relaxed);
     // A browser is a UI: it must LIVE. The tickless fast-forward exists to make a
     // run-to-completion boot test finish, and would race a live window's deadlines.
     ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
@@ -5249,7 +5257,12 @@ fn main() -> Status {
         // One-shot self-test: after the live GTK window has been up a while, synthesize a
         // click on its Reset button (through the normal desktop click path) to prove
         // desktop->X input routing end-to-end (the on-screen counter visibly resets).
-        if windows[gtk_idx].visible && xserver::front_window_size().is_some() {
+        // The ggtk self-test below drives a demo: it types into the app, clicks its
+        // Reset button and then CLOSES it (killing the persistent process) to prove the
+        // teardown path. That is fine for a demo and fatal for a real application — it
+        // shot down a live Chromium 90 ticks after its first window. It runs only with
+        // the demo it belongs to.
+        if cfg!(feature = "live-demos") && windows[gtk_idx].visible && xserver::front_window_size().is_some() {
             gtk_dtick += 1;
             // Self-test 1a: focus the window + type "hi" into the entry (keyboard).
             if gtk_dtick == 30 {

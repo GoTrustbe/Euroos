@@ -308,6 +308,10 @@ pub fn pump_mouse() {
         t.iter().flatten().any(|c| c.windows.iter().any(|w| w.mapped && w.event_mask & 0x44 != 0))
     };
     if !wants {
+        // Nothing to deliver to — but the button queue still has to be emptied, or the
+        // clicks a person made on the DESKTOP would be waiting in it and all arrive at
+        // once the moment an X window opens.
+        while crate::mouse::take_button_event().is_some() {}
         return;
     }
     let (px, py) = crate::mouse::pos();

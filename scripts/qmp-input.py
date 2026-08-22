@@ -10,6 +10,10 @@ a relative mouse happens to have drifted.
 
 Usage: qmp-input.py QMP_SOCKET SCRIPT [screen_w screen_h [HMP_SOCKET]]
 Script lines: `move X Y` · `click` · `key NAME` · `wait SECONDS` · `shot PATH`
+
+`key NAME` names a PHYSICAL key (a QEMU qcode), not a letter: what it types depends on
+the guest's layout. EuroOS boots the installer default, be-azerty, so `key m` types a
+comma and `key semicolon` types the m.
 """
 import json, socket, sys, time
 
