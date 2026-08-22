@@ -98,10 +98,47 @@ teardown path. It shot down a live browser. It runs with its demo now, or not at
 - `scripts/qmp-input.py` — `move X Y` / `click` / `key NAME` / `wait S` / `shot PATH`.
 - `scripts/chrome-desktop.sh` — boot to the desktop, type `chrome`, sample the screen.
 
+## What the clicks finally revealed
+
+Clicks aimed at the tab strip changed nothing, and four runs of asking the right
+question turned that into a chain of separate facts:
+
+1. The X server now reports the queue an event lands in. It grew — 32, 64, 96, 128,
+   160 bytes — with no client read. The events were not being collected.
+2. So the server dumps every thread the moment that happens. The dump named the cause:
+   `ring-3 page fault addr=0x7 -> process pid 0 (task 7) TERMINATED`. Chrome's MAIN
+   THREAD had died BEFORE the click was ever delivered; the UI on screen was the last
+   frame it left behind. Every "the click does nothing" reading was really "there is
+   nobody left to click on".
+3. What the crash follows: hundreds of `ENOSYS Linux syscall 27` per second. That is
+   mincore, which chrome's memory-infra dump calls for every dump. Implemented (our
+   pages are mapped or faulted in on touch and nothing swaps, so a valid range is
+   resident) — and the main-thread crash is gone.
+4. With the main thread alive, the events STILL sit unread. The wait diagnostic says
+   why nobody collects them: the only thread polling an X connection is
+   `VizCompositorThread` on its own (empty) connection, while the browser's connection
+   is fd603 — and the main thread's last syscall is a `writev` to exactly that fd,
+   after which it makes no syscalls at all while staying Ready. It is spinning in user
+   space, not waiting.
+
+That spin is the next wall, and it is a different problem from input routing: the
+routing is now proven correct end to end, down to the coordinate and the queue.
+
+## A second accidental discovery
+
+Removing 55 000 lines of `[scm] recvmsg` log noise brought back a wall the previous
+sprint had already knocked down: "Terminating current process after 15 seconds with no
+connection". The print had been throttling chrome's empty-recvmsg poll loop, and
+without it the poller starved the thread that establishes the renderer channel. The
+loop now yields on purpose. The effect is not subtle: the browser paints its full UI
+21 presents into the run, 11 seconds after the window maps, where before it needed
+four minutes.
+
 ## Open
 - In WINDOWED mode the frame shows whichever window presented last, so a dialog and
   the browser take turns owning it.
 - The keyboard reaches the focused window; chrome's own keymap path (xkb) is not
   exercised yet, so typing into the address bar is unproven.
-- Chrome busy-loops on `recvmsg` after the dialog closes, which starves the launcher
-  loop; the click queue makes that survivable rather than solved.
+- The browser's main thread spins in user space after its last X request instead of
+  returning to its event loop. Nothing it does reaches a syscall, so the next step is
+  sampling its RIP while it spins and mapping that to a symbol.
