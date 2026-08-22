@@ -6570,6 +6570,10 @@ pub fn run_glibc_disk(
                 // interrupts reach the guest AT ALL during a long app run is the first
                 // question to answer when a click seems to do nothing, and guessing at
                 // it costs a whole boot each time.
+                if RIP_PROFILING.load(Ordering::Relaxed) {
+                    dump_rip_profile();
+                    dump_task_cpu();
+                }
                 crate::serial_println!("[hb] alive: {} iters, {} ticks, {} syscalls | kbd-irq={} mouse-irq={} pointer=({mx},{my})",
                     iters, crate::interrupts::ticks(), SYSCALL_SEQ.load(Ordering::Relaxed),
                     crate::interrupts::KBD_IRQ_COUNT.load(Ordering::Relaxed),
@@ -6588,7 +6592,6 @@ pub fn run_glibc_disk(
             prev_seq = seq; prev_futex = fx; prev_epoll = ep; prev_tick = tick;
             snaps += 1;
         }
-        crate::sched::yield_now();
         // Tickless idle: if every glibc thread is parked (Sleeping on a futex timeout)
         // and nothing is runnable, jump the clock straight to the soonest deadline
         // instead of busy-spinning through idle ticks — otherwise chrome's multi-second
@@ -6600,6 +6603,12 @@ pub fn run_glibc_disk(
             }
             _ => crate::sched::sleep_ticks(1),
         }
+        // YIELD LAST. sleep_ticks only MARKS this task Sleeping; it does not give up
+        // the CPU, so yielding before it meant the launcher came straight back and ran
+        // the whole loop body again until the next timer tick evicted it — millions of
+        // iterations a second, spent on nothing, in a guest where every cycle is
+        // emulated. Switching away AFTER the mark is what makes the sleep real.
+        crate::sched::yield_now();
     }
     if !GLIBC_DONE.load(Ordering::Relaxed) {
         crate::serial_println!("[glibc-disk] TIMEOUT waiting for the process to exit (committed {} demand pages, {} from-file/disk)",
@@ -7341,10 +7350,42 @@ static RIP_RING: [core::sync::atomic::AtomicU64; RIP_SAMPLES] =
     [const { core::sync::atomic::AtomicU64::new(0) }; RIP_SAMPLES];
 static RIP_IDX: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
+/// How many timer ticks caught each task in ring 3 — a CPU share per thread. The
+/// question "is this thread spinning or starved?" cannot be answered from its own
+/// samples alone: 291 samples at 100 Hz is three seconds of CPU, which is a lot for a
+/// spin and almost nothing for a browser that should be idle-waiting.
+const MAX_SAMPLED_TASKS: usize = 64;
+static TASK_TICKS: [core::sync::atomic::AtomicU64; MAX_SAMPLED_TASKS] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; MAX_SAMPLED_TASKS];
+
+/// Print the CPU share of every user thread that ran, busiest first.
+pub fn dump_task_cpu() {
+    let mut rows: alloc::vec::Vec<(usize, u64)> = (0..MAX_SAMPLED_TASKS)
+        .map(|t| (t, TASK_TICKS[t].load(Ordering::Relaxed)))
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    let total: u64 = rows.iter().map(|(_, n)| *n).sum();
+    rows.sort_by(|a, b| b.1.cmp(&a.1));
+    crate::serial_println!("[cpu] ring-3 ticks by thread ({total} total, 100 Hz):");
+    for (t, n) in rows.iter().take(12) {
+        let pct = if total > 0 { n * 100 / total } else { 0 };
+        crate::serial_println!("[cpu]   {pct:3}% ({n:6} ticks) t{t} {:?}", thread_name(*t));
+    }
+}
+
+pub fn reset_task_cpu() {
+    for t in 0..MAX_SAMPLED_TASKS {
+        TASK_TICKS[t].store(0, Ordering::Relaxed);
+    }
+}
+
 /// Called from the timer tick with the interrupted ring-3 instruction pointer.
 /// Lock-free on purpose: it runs in interrupt context, on the stack of the very
 /// thread whose locks it must never wait for.
 pub fn sample_user_rip(task: usize, rip: u64) {
+    if task < MAX_SAMPLED_TASKS {
+        TASK_TICKS[task].fetch_add(1, Ordering::Relaxed);
+    }
     if task != GLIBC_MAIN_TASK.load(Ordering::Relaxed) {
         return;
     }
@@ -7383,6 +7424,48 @@ fn count_rip_page(rip: u64) {
     RIP_MISSED.fetch_add(1, Ordering::Relaxed); // table full: the code is spread wider than this
 }
 
+/// Which file (and offset within it) backs a demand-paged address, as a printable
+/// string. "anon" when the page is not file-backed — JIT code, or heap.
+fn demand_addr_origin(addr: u64) -> String {
+    let maps = DEMAND_FILE_MAPS.lock();
+    for &(base, len, fidx, foff, _valid) in maps.iter() {
+        if addr >= base && addr < base + len {
+            let name = if fidx >= DISK_FI_BASE {
+                DISK_FILES.lock().get(fidx - DISK_FI_BASE).map(|f| f.0.clone())
+            } else {
+                FILES.lock().get(fidx).map(|f| f.0.clone())
+            };
+            return alloc::format!("{}+{:#x}",
+                name.unwrap_or_else(|| alloc::format!("file#{fidx}")),
+                addr - base + foff as u64);
+        }
+    }
+    if addr >= DEMAND_BASE {
+        alloc::format!("anon (demand+{:#x})", addr - DEMAND_BASE)
+    } else {
+        alloc::format!("arena+{:#x}", addr.wrapping_sub(ARENA_BASE.load(Ordering::Relaxed)))
+    }
+}
+
+/// Start the histogram over. The whole-run profile mixes startup with whatever the
+/// thread is doing now; resetting it at the moment the UI goes unresponsive turns the
+/// next dump into an answer about the stall alone.
+pub fn reset_rip_profile() {
+    for i in 0..RIP_PAGES {
+        RIP_PAGE[i].store(0, Ordering::Relaxed);
+        RIP_PAGE_HITS[i].store(0, Ordering::Relaxed);
+    }
+    RIP_TOTAL.store(0, Ordering::Relaxed);
+    RIP_MISSED.store(0, Ordering::Relaxed);
+    RIP_PROFILING.store(true, Ordering::Relaxed);
+    reset_task_cpu();
+}
+
+/// Set once the profile has been reset for a stall: the launcher then dumps it
+/// periodically, so the picture covers the stall rather than a single instant.
+pub static RIP_PROFILING: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 /// Print the sampled instruction pointers, most frequent first.
 pub fn dump_rip_profile() {
     let mut seen: alloc::vec::Vec<(u64, u32)> = alloc::vec::Vec::new();
@@ -7412,7 +7495,12 @@ pub fn dump_rip_profile() {
         pages.len(), RIP_MISSED.load(Ordering::Relaxed));
     for (page, n) in pages.iter().take(10) {
         let pct = if total > 0 { n * 100 / total } else { 0 };
-        crate::serial_println!("[rip]   {pct:3}% ({n:5} samples) exe+{:#x}", page.wrapping_sub(DEMAND_BASE));
+        // Say WHICH file that code came from. Everything demand-paged (the exe and
+        // every shared library) lives in one address range, so an offset from the exe
+        // base is meaningless past the end of the exe — and that is exactly where the
+        // interesting samples turned out to be.
+        crate::serial_println!("[rip]   {pct:3}% ({n:5} samples) {:#x} = {}",
+            page, demand_addr_origin(*page));
     }
 }
 

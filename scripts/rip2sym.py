@@ -11,8 +11,14 @@ Usage: rip2sym.py BINARY OFFSET [OFFSET...]      (offsets in hex, with or withou
 import subprocess, sys
 
 binary = sys.argv[1]
-out = subprocess.run(["nm", "-D", "--defined-only", "-C", binary],
+# Prefer the FULL symbol table when the binary still has one (a release chrome does,
+# and it names internal functions that the dynamic table never exports); fall back to
+# the dynamic symbols for a stripped binary.
+out = subprocess.run(["nm", "--defined-only", "-C", binary],
                      capture_output=True, text=True).stdout
+if len(out) < 100:
+    out = subprocess.run(["nm", "-D", "--defined-only", "-C", binary],
+                         capture_output=True, text=True).stdout
 syms = []
 for line in out.splitlines():
     parts = line.split(None, 2)
