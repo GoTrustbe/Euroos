@@ -8670,6 +8670,16 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 }
             }
             if data.is_empty() && fds.is_empty() && crate::net::is_unix_fd(a1) {
+                // An empty non-blocking recvmsg is chrome's hottest loop: it polls this
+                // socket thousands of times a second while another of its threads is
+                // trying to establish the renderer channel. Returning EAGAIN straight
+                // back lets the poller keep the CPU, and after 15 seconds without a
+                // connection chrome shoots itself ("Terminating current process after
+                // 15 seconds with no connection"). It only ever worked because a debug
+                // print in this very path was slow enough to throttle the loop — remove
+                // the print and the browser dies. So yield here on purpose: the thread
+                // that has nothing to read gives way to the one that has work.
+                crate::sched::yield_now();
                 return (-11i64) as u64; // -EAGAIN: non-blocking, no data (NOT EOF)
             }
             let scm_chk = SCM_CHECK_ADDR.load(Ordering::Relaxed);
