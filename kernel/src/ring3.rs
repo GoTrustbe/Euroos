@@ -1024,6 +1024,8 @@ pub fn fd_kind(fd: u64) -> &'static str {
         "epoll"
     } else if crate::net::is_eventfd(fd) {
         "eventfd"
+    } else if crate::net::x_fd_queued(fd).is_some() {
+        "X-conn"
     } else if crate::net::is_unix_fd(fd) {
         "unix-sock"
     } else if crate::net::is_sock_fd(fd) {
@@ -1186,12 +1188,22 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
                 n += 1;
             }
         }
-        if n == 0 && tries == 0 && WAIT_DIAG.load(Ordering::Relaxed) > 0 {
+        // Only describe waits that involve an X connection. The IO thread waits dozens
+        // of times a second on its own sockets and would eat the whole budget before the
+        // interesting wait ever printed; and if NO wait mentions the X fd, that silence
+        // is itself the answer.
+        let has_x = EPOLLS.lock()[idx].clone().unwrap_or_default().iter()
+            .any(|(fd, _, _)| crate::net::x_fd_queued(*fd as u64).is_some());
+        if n == 0 && tries == 0 && has_x && WAIT_DIAG.load(Ordering::Relaxed) > 0 {
             WAIT_DIAG.fetch_sub(1, Ordering::Relaxed);
             let mut desc = String::new();
             for (fd, evmask, _) in EPOLLS.lock()[idx].clone().unwrap_or_default() {
-                desc.push_str(&alloc::format!(" fd{fd}({},want={evmask:#x},in={},out={})",
-                    fd_kind(fd as u64), epoll_fd_ready(fd as u64), epoll_fd_writable(fd as u64)));
+                desc.push_str(&alloc::format!(" fd{fd}({},want={evmask:#x},in={},out={}{})",
+                    fd_kind(fd as u64), epoll_fd_ready(fd as u64), epoll_fd_writable(fd as u64),
+                    match crate::net::x_fd_queued(fd as u64) {
+                        Some(q) => alloc::format!(",queued={q}"),
+                        None => String::new(),
+                    }));
             }
             crate::serial_println!("[wait] t{} {:?} epoll_wait timeout={timeout} nothing ready:{desc}",
                 crate::sched::current(), thread_name(crate::sched::current()));
@@ -7300,6 +7312,30 @@ static SYS_TRACE_ARMED: core::sync::atomic::AtomicBool = core::sync::atomic::Ato
 /// waiting for, and could it ever arrive" instead of "it is stuck".
 static WAIT_DIAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
+/// Ask the next `n` fruitless poll/epoll waits to describe themselves: which fds the
+/// caller is waiting on, and what readiness WE report for each. Armed from the X server
+/// when input events pile up unread — the one moment where "which fd is chrome actually
+/// watching, and do we call it ready?" is the whole question.
+pub fn arm_wait_diag(n: u32) {
+    WAIT_DIAG.store(n, Ordering::Relaxed);
+}
+
+/// Every thread, right now: name, scheduler state, and the last syscall it made. When
+/// input events sit unread in a socket, this says whether the thread that should be
+/// collecting them is polling something else, parked on a futex, or gone.
+pub fn dump_threads_now(why: &str) {
+    let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+    crate::serial_println!("[threads] {why}");
+    let (mn, ma, mr) = last_syscall(main);
+    crate::serial_println!("[threads]   main t{main} {:?}: last={mn}(a1={ma:#x})->{mr:#x}",
+        thread_name(main));
+    for &t in GLIBC_THREADS.lock().iter() {
+        let (n, a, r) = last_syscall(t);
+        crate::serial_println!("[threads]   t{t} {:?}: last={n}(a1={a:#x})->{r:#x}", thread_name(t));
+    }
+    crate::sched::dump_states();
+}
+
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let chk = SCM_CHECK_ADDR.swap(0, Ordering::Relaxed);
     if chk != 0 {
@@ -8359,15 +8395,26 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             if ready > 0 || timeout_ms == 0 {
                 break ready; // something is ready, or the caller asked not to wait
             }
-            if tries == 0 && WAIT_DIAG.load(Ordering::Relaxed) > 0 {
+            let mut has_x = false;
+            for i in 0..nfds {
+                let fd = read_user::<i32>(a1 + (i as u64) * 8).unwrap_or(-1) as i64 as u64;
+                if crate::net::x_fd_queued(fd).is_some() {
+                    has_x = true;
+                }
+            }
+            if tries == 0 && has_x && WAIT_DIAG.load(Ordering::Relaxed) > 0 {
                 WAIT_DIAG.fetch_sub(1, Ordering::Relaxed);
                 let mut desc = String::new();
                 for i in 0..nfds {
                     let ent = a1 + (i as u64) * 8;
                     let fd = read_user::<i32>(ent).unwrap_or(-1) as i64 as u64;
                     let ev = read_user::<u16>(ent + 4).unwrap_or(0);
-                    desc.push_str(&alloc::format!(" fd{fd}({},ev={ev:#x},in={},out={})",
-                        fd_kind(fd), epoll_fd_ready(fd), epoll_fd_writable(fd)));
+                    desc.push_str(&alloc::format!(" fd{fd}({},ev={ev:#x},in={},out={}{})",
+                        fd_kind(fd), epoll_fd_ready(fd), epoll_fd_writable(fd),
+                        match crate::net::x_fd_queued(fd) {
+                            Some(q) => alloc::format!(",queued={q}"),
+                            None => String::new(),
+                        }));
                 }
                 crate::serial_println!("[wait] t{} {:?} poll timeout={timeout_ms}ms nothing ready:{desc}",
                     crate::sched::current(), thread_name(crate::sched::current()));
@@ -9413,6 +9460,24 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 ((a2 + 64) as *mut u64).write(255);  // f_namelen
                 ((a2 + 72) as *mut u64).write(4096); // f_frsize
             }
+            0
+        }
+        // mincore(addr, length, vec): which pages of a range are resident. Chrome's
+        // memory-infra dumps call this for every dump (CountResidentBytes) and logged
+        // an error storm on ENOSYS -- hundreds of lines a second, each one a syscall
+        // and a serial write, right where the browser needs the CPU. Our pages are
+        // either mapped or faulted in on touch, and nothing here swaps, so every page
+        // of a valid range is resident: report 1.
+        27 => {
+            let len = a2 as usize;
+            let pages = len.div_ceil(4096);
+            if a1 & 0xFFF != 0 {
+                return (-22i64) as u64; // -EINVAL: addr must be page-aligned
+            }
+            if !in_user_arena(a3, pages) {
+                return EFAULT;
+            }
+            unsafe { core::ptr::write_bytes(a3 as *mut u8, 1, pages) };
             0
         }
         _ => {

@@ -1629,7 +1629,10 @@ pub fn unix_connect_fd(fd: u64, path: &str) -> u64 {
     }
     let new = if is_x {
         match crate::xserver::open() {
-            Some(xfd) => UnixSock::X(xfd),
+            Some(xfd) => {
+                crate::serial_println!("[xserver] client connected: X connection {xfd} is fd {fd}");
+                UnixSock::X(xfd)
+            }
             None => return (-111i64) as u64, // -ECONNREFUSED
         }
     } else {
@@ -1698,6 +1701,19 @@ pub fn unix_fd_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
 }
 
 /// Is a UNIX-socket fd readable now (queued data)? For poll().
+/// If `fd` is an X-server connection, how many bytes are waiting for the client to
+/// collect. None if it is not one. The number answers the question a stalled UI raises:
+/// is the client watching the socket its events are sitting in?
+pub fn x_fd_queued(fd: u64) -> Option<usize> {
+    if !is_unix_fd(fd) {
+        return None;
+    }
+    match &UNIX_FDS.lock()[(fd - UNIX_FD_BASE) as usize] {
+        Some(UnixSock::X(x)) => Some(crate::xserver::queued_len(*x)),
+        _ => None,
+    }
+}
+
 pub fn unix_fd_readable(fd: u64) -> bool {
     let t = UNIX_FDS.lock();
     match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {

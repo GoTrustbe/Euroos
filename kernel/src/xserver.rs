@@ -137,7 +137,20 @@ pub fn read(fd: u64, max: usize) -> Vec<u8> {
         None => return Vec::new(),
     };
     let n = max.min(c.outbuf.len());
+    if n > 0 {
+        trace(format_args!("client read {n} B ({} left queued)", c.outbuf.len() - n));
+    }
     c.outbuf.drain(0..n).collect()
+}
+
+/// How many bytes are queued for this connection's client to collect.
+pub fn queued_len(fd: u64) -> usize {
+    XCONNS
+        .lock()
+        .get((fd - XCONN_FD_BASE) as usize)
+        .and_then(|s| s.as_ref())
+        .map(|c| c.outbuf.len())
+        .unwrap_or(0)
 }
 
 /// Any queued output to read? (For a future poll/select.)
@@ -248,6 +261,8 @@ pub fn pump_keyboard() {
 static LAST_MOUSE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
 static LAST_BTN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static POINTER_WIN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// Armed once when queued input goes unread (see send_input).
+static STALL_ARMED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// The window whose pixels the desktop currently shows in its frame (windowed mode).
 static RETAINED_ID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// The window that holds the keyboard focus (SetInputFocus), 0 = none yet.
@@ -1211,7 +1226,21 @@ fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, rx: i16, ry: i16
     e[28..30].copy_from_slice(&mod_state().to_le_bytes());
     e[30] = 1; // same-screen
     c.outbuf.extend_from_slice(&e);
-    trace(format_args!("-> input kind={kind} detail={detail} window={window:#x}"));
+    // The queue length answers the question a click that changes nothing raises: did
+    // the client ever COLLECT the event? A number that keeps growing means the events
+    // are piling up unread, and no amount of aiming at the right pixel would help.
+    trace(format_args!("-> input kind={kind} detail={detail} window={window:#x} at({ex},{ey}) queued={} B",
+        c.outbuf.len()));
+    // Events piling up unread: the client is not collecting them. Ask the next waits to
+    // say what they are waiting on and what we report as ready — the only way to tell
+    // "chrome never watches this fd" from "we tell it the fd is empty" from "we say
+    // ready and chrome ignores it".
+    if c.outbuf.len() >= 128 && !STALL_ARMED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        crate::serial_println!("[xserver] {} B of input queued unread on connection {} — who should be reading it?",
+            c.outbuf.len(), c.rid_base >> 21);
+        crate::ring3::arm_wait_diag(30);
+        crate::ring3::dump_threads_now("input events queued unread");
+    }
 }
 
 /// Extract the GCForeground value from a GC value-list, if the mask sets it. The
