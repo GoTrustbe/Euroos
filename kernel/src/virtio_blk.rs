@@ -186,10 +186,12 @@ fn setup_device(dev: &crate::pci::PciDevice, falloc: &mut FrameAllocator) -> Opt
         // Fixed buffer frames: header/status in frame 0, a full 4 KiB
         // data frame so we do up to 8 sectors (one EuroFS block) per request.
         let frame = falloc.allocate().expect("blk-buf");
-        let data_frame = falloc.allocate().expect("blk-data");
+        // A CONTIGUOUS data area of DATA_FRAMES frames: one descriptor covers the whole
+        // request, so a 64 KiB read is still a single device round-trip.
+        let data_frame = falloc.allocate_contiguous(DATA_FRAMES).expect("blk-data");
         let hdr = frame; // 16 B
         let status_buf = frame + 16; // 1 B
-        let data = data_frame; // 4096 B
+        let data = data_frame; // DATA_MAX B
 
         // J2: MSI-X on the storage controller. ADDITIVE — the used-ring poll remains the
         // completion confirmation; the IRQ proves interrupt-driven storage completion.
@@ -220,7 +222,12 @@ fn setup_device(dev: &crate::pci::PciDevice, falloc: &mut FrameAllocator) -> Opt
     }
 }
 
-const DATA_MAX: usize = 4096; // max bytes per request = 8 sectors = 1 EuroFS block
+// Max bytes per request. Was 4096 (one EuroFS block): serving a 495 MB chrome binary
+// page by page meant ~120 000 device round-trips, each a VM exit + busy-wait under
+// TCG, and the ledger showed that wait dominating kernel time. 64 KiB per request is
+// 16x fewer round-trips for sequential fills; the data area is 16 contiguous frames.
+const DATA_MAX: usize = 65536;
+const DATA_FRAMES: usize = DATA_MAX / 4096;
 
 /// One block request of `nbytes` (multiple of 512, ≤ 4096) starting at `sector`.
 /// On write the caller first copies into `blk.data`; on read the caller
@@ -253,7 +260,21 @@ unsafe fn submit(blk: &mut VirtioBlk, write: bool, sector: u64, nbytes: usize) -
 
 /// Place descriptor 0 in the avail-ring, notify the device and wait (busy) until the
 /// request appears in the used-ring; returns true on status 0 (OK).
+/// Device round-trips and the cycles spent busy-waiting on them — the number the
+/// demand-paging sprint stands or falls on.
+pub static KICK_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static KICK_CYCLES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 unsafe fn kick_and_wait(blk: &mut VirtioBlk) -> bool {
+    let t0 = core::arch::x86_64::_rdtsc();
+    let r = kick_and_wait_inner(blk);
+    KICK_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    KICK_CYCLES.fetch_add(core::arch::x86_64::_rdtsc().wrapping_sub(t0),
+        core::sync::atomic::Ordering::Relaxed);
+    r
+}
+
+unsafe fn kick_and_wait_inner(blk: &mut VirtioBlk) -> bool {
     let idx = blk.vq.avail_idx_ptr().read();
     blk.vq.avail_ring(idx % blk.vq.size).write(0);
     compiler_fence(Ordering::SeqCst);

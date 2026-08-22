@@ -503,7 +503,20 @@ fn trace(args: core::fmt::Arguments) {
 
 // ── Protocol ────────────────────────────────────────────────────────────────
 
+/// Request/PutImage counters + cycles inside process() — the X half of the ledger.
+pub static REQ_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static PUTIMAGE_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static PUTIMAGE_BYTES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static PROCESS_CYCLES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 fn process(c: &mut XConn) {
+    let t0 = unsafe { core::arch::x86_64::_rdtsc() };
+    process_inner(c);
+    PROCESS_CYCLES.fetch_add(unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(t0),
+        core::sync::atomic::Ordering::Relaxed);
+}
+
+fn process_inner(c: &mut XConn) {
     if c.state == State::PreSetup {
         // Setup request: 12-byte header + auth-name(pad4) + auth-data(pad4).
         if c.inbuf.len() < 12 {
@@ -532,6 +545,11 @@ fn process(c: &mut XConn) {
         }
         let opcode = c.inbuf[0];
         let detail = c.inbuf[1];
+        REQ_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if c.inbuf[0] == 72 {
+            PUTIMAGE_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            PUTIMAGE_BYTES.fetch_add(req_len as u64, core::sync::atomic::Ordering::Relaxed);
+        }
         let req: Vec<u8> = c.inbuf.drain(0..req_len).collect();
         c.seq = c.seq.wrapping_add(1);
         let out_before = c.outbuf.len();
@@ -1240,6 +1258,8 @@ fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, rx: i16, ry: i16
             c.outbuf.len(), c.rid_base >> 21);
         crate::ring3::arm_wait_diag(30);
         crate::ring3::dump_threads_now("input events queued unread");
+        // From here the profile is about the STALL, not about startup.
+        crate::ring3::reset_rip_profile();
     }
 }
 

@@ -499,6 +499,23 @@ pub fn table_frames(pml4: u64) -> (u64, u64, u64) {
 /// commit little physical). Returns false if the pool is exhausted. All table frames
 /// live in low RAM (identity-mapped in the process PML4[0]), so this is reachable
 /// with the process CR3 active (i.e. from the page-fault handler).
+/// Is `virt` already present in this address space? Read-ahead must skip mapped
+/// pages: `map_demand_4k` overwrites the PTE unconditionally, and replacing a page a
+/// thread has already written to would corrupt it silently.
+pub fn demand_page_mapped(pml4: u64, virt: u64) -> bool {
+    unsafe {
+        let mut table = pml4;
+        for shift in [39u64, 30, 21] {
+            let e = (table as *const u64).add(((virt >> shift) & 0x1FF) as usize).read_volatile();
+            if e & PRESENT == 0 {
+                return false;
+            }
+            table = e & ADDR_MASK;
+        }
+        (table as *const u64).add(((virt >> 12) & 0x1FF) as usize).read_volatile() & PRESENT != 0
+    }
+}
+
 pub fn map_demand_4k(pml4: u64, virt: u64, phys: u64) -> bool {
     // SAFETY: pml4 + all table frames are identity-mapped low RAM; page-aligned.
     unsafe {

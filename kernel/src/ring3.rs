@@ -1598,9 +1598,11 @@ fn disk_read_bytes(dev: usize, mut off: u64, mut dst: &mut [u8]) -> bool {
         off += n as u64;
         dst = &mut dst[n..];
     }
-    // Aligned middle in 4 KiB chunks (+ a final partial-sector tail via bounce).
+    // Aligned middle in up-to-64 KiB chunks (+ a final partial-sector tail via
+    // bounce). The chunk size rides on the virtio data area: one chunk = one device
+    // round-trip, and the round-trips are what a demand-paged binary pays in.
     while !dst.is_empty() {
-        let n = dst.len().min(4096);
+        let n = dst.len().min(65536);
         if n >= 512 && n % 512 == 0 {
             if !crate::virtio_blk::read_io_dev(dev, off / 512, &mut dst[..n]) {
                 return false;
@@ -5834,7 +5836,24 @@ pub fn demand_committed_pages() -> u64 { DEMAND_COMMITTED.load(Ordering::Relaxed
 /// Returns true if the fault was a demand page we just committed (resume), false to
 /// let the normal fault path run. A no-op unless DEMAND_ENABLED and `addr` is in the
 /// demand region of the running glibc process.
+/// Where kernel time goes while a demand-paged process runs: fault count, disk-filled
+/// pages, and cycles spent inside the fault handler. Printed by the launcher heartbeat,
+/// so every run carries its own before/after numbers.
+pub static FAULT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static FAULT_CYCLES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 pub fn handle_demand_fault(addr: u64) -> bool {
+    let t0 = unsafe { core::arch::x86_64::_rdtsc() };
+    let r = handle_demand_fault_inner(addr);
+    if r {
+        FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
+        FAULT_CYCLES.fetch_add(
+            unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(t0), Ordering::Relaxed);
+    }
+    r
+}
+
+fn handle_demand_fault_inner(addr: u64) -> bool {
     let in_region = addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE;
     if !DEMAND_ENABLED.load(Ordering::Relaxed) {
         if in_region && !DEMAND_DIAG.swap(true, Ordering::Relaxed) {
@@ -5934,6 +5953,10 @@ pub fn handle_demand_fault(addr: u64) -> bool {
     };
     // SAFETY: `phys` is an identity-mapped free frame; zero it (anon = zeroed).
     unsafe { core::ptr::write_bytes(phys as *mut u8, 0, 4096); }
+    // Set when the page was filled from DISK: (map base, map end, dev, disk base,
+    // file offset of the map, valid bytes, file size) — everything the read-ahead
+    // below needs to fill the neighbouring pages from the same read.
+    let mut readahead: Option<(u64, u64, usize, u64, u64, u64, u64)> = None;
     // If this page belongs to a lazy FILE-backed mapping, fill it from the file at
     // the right offset (bytes past EOF stay zero — matches mmap semantics). The
     // frame is already zeroed, so a partial-page copy leaves a correct zero tail.
@@ -5968,6 +5991,11 @@ pub fn handle_demand_fault(addr: u64) -> bool {
                         });
                         if !ok {
                             crate::serial_println!("[europack] fault-fill read FAILED @file_pos={file_pos:#x}");
+                        } else {
+                            // Read AHEAD: code and data runs are sequential, so the
+                            // next faults in this mapping were coming anyway — take
+                            // them now, in one disk read instead of fifteen.
+                            readahead = Some((base, base + _len, dev, dbase, foff as u64, valid, dsize));
                         }
                     }
                 }
@@ -5996,8 +6024,86 @@ pub fn handle_demand_fault(addr: u64) -> bool {
     unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
     DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
     DEMAND_USED.store(true, Ordering::Relaxed);
+    if let Some((mbase, mend, dev, dbase, foff, valid, dsize)) = readahead {
+        demand_readahead(pml4, page, mbase, mend, dev, dbase, foff, valid, dsize);
+    }
     true
 }
+
+/// Fill and map the next pages of a disk-backed mapping in ONE device read. The
+/// faulting page cost a full round-trip already; its sequential neighbours (the rest
+/// of the code or data run) are fetched on the same ticket. Pages already mapped,
+/// outside the mapping, or under PROT_NONE are skipped. Best-effort: any failure
+/// just leaves a page for a later fault to take the slow way.
+#[allow(clippy::too_many_arguments)]
+fn demand_readahead(pml4: u64, page: u64, mbase: u64, mend: u64,
+                    dev: usize, dbase: u64, foff: u64, valid: u64, dsize: u64) {
+    const RA_PAGES: usize = 15; // + the faulting page = one 64 KiB virtio request
+    static RA_BUF: spin::Mutex<()> = spin::Mutex::new(());
+    static mut BOUNCE: [u8; RA_PAGES * 4096] = [0; RA_PAGES * 4096];
+    // Reentrancy guard: two faults read-ahead concurrently -> one bounce buffer.
+    let guard = match RA_BUF.try_lock() {
+        Some(g) => g,
+        None => return,
+    };
+    let first = page + 4096;
+    let mut want = 0usize; // pages worth reading (clipped to mapping + file + data)
+    while want < RA_PAGES {
+        let p = first + (want as u64) * 4096;
+        let moff = match p.checked_sub(mbase) {
+            Some(o) if p < mend => o,
+            _ => break,
+        };
+        if p >= DEMAND_NEXT.load(Ordering::Relaxed)
+            || moff >= valid
+            || foff + moff >= dsize
+            || in_prot_none(p, 1)
+            || crate::paging::demand_page_mapped(pml4, p)
+        {
+            break; // stop at the first page we cannot take: keep the read contiguous
+        }
+        want += 1;
+    }
+    if want == 0 {
+        return;
+    }
+    let file_pos = foff + (first - mbase);
+    let bytes = ((want * 4096) as u64).min(dsize - file_pos) as usize;
+    // SAFETY: BOUNCE is only touched under RA_BUF.
+    let buf = unsafe { &mut BOUNCE[..bytes] };
+    let ok = x86_64::instructions::interrupts::without_interrupts(|| {
+        disk_read_bytes(dev, dbase + file_pos, buf)
+    });
+    if !ok {
+        return;
+    }
+    for i in 0..want {
+        let p = first + (i as u64) * 4096;
+        let phys = match crate::procpool::demand_alloc() {
+            Some(f) => f,
+            None => break,
+        };
+        let moff = p - mbase;
+        // Valid file bytes for THIS page; the tail past `valid` stays zero (.bss).
+        let n = (valid - moff).min(4096).min((bytes - i * 4096) as u64) as usize;
+        unsafe {
+            core::ptr::write_bytes(phys as *mut u8, 0, 4096);
+            core::ptr::copy_nonoverlapping(BOUNCE[i * 4096..].as_ptr(), phys as *mut u8, n);
+        }
+        if !crate::paging::map_demand_4k(pml4, p, phys) {
+            crate::procpool::demand_free(phys);
+            break;
+        }
+        unsafe { core::arch::asm!("invlpg [{}]", in(reg) p, options(nostack, preserves_flags)); }
+        DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
+        DEMAND_FILE_FILLED.fetch_add(1, Ordering::Relaxed);
+        READAHEAD_PAGES.fetch_add(1, Ordering::Relaxed);
+    }
+    drop(guard);
+}
+
+/// Pages served by read-ahead instead of their own fault — the ledger's proof.
+pub static READAHEAD_PAGES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Identity-mapped arena size (MiB) for the next run_glibc. Default 96; bump for a
 /// large program, restore after. The whole span is mapped upfront (no demand paging
 /// yet), so it needs that many contiguous physical frames from the allocator.
@@ -6578,6 +6684,20 @@ pub fn run_glibc_disk(
                     iters, crate::interrupts::ticks(), SYSCALL_SEQ.load(Ordering::Relaxed),
                     crate::interrupts::KBD_IRQ_COUNT.load(Ordering::Relaxed),
                     crate::interrupts::MOUSE_IRQ_COUNT.load(Ordering::Relaxed));
+                // The cost ledger: page faults + the cycles inside them, virtio kicks +
+                // the cycles waiting on the device, and what the X server moved. These
+                // are the sprint's before/after numbers, printed by every run.
+                crate::serial_println!("[cost] faults={} ({} disk-filled, {} ra, {} Mcyc) | virtio kicks={} ({} Mcyc wait) | X: {} reqs, {} PutImage ({} MiB), {} Mcyc",
+                    FAULT_COUNT.load(Ordering::Relaxed),
+                    DEMAND_FILE_FILLED.load(Ordering::Relaxed),
+                    READAHEAD_PAGES.load(Ordering::Relaxed),
+                    FAULT_CYCLES.load(Ordering::Relaxed) / 1_000_000,
+                    crate::virtio_blk::KICK_COUNT.load(Ordering::Relaxed),
+                    crate::virtio_blk::KICK_CYCLES.load(Ordering::Relaxed) / 1_000_000,
+                    crate::xserver::REQ_COUNT.load(core::sync::atomic::Ordering::Relaxed),
+                    crate::xserver::PUTIMAGE_COUNT.load(core::sync::atomic::Ordering::Relaxed),
+                    crate::xserver::PUTIMAGE_BYTES.load(core::sync::atomic::Ordering::Relaxed) >> 20,
+                    crate::xserver::PROCESS_CYCLES.load(core::sync::atomic::Ordering::Relaxed) / 1_000_000);
             }
         }
         if STALL_DIAG.load(Ordering::Relaxed) && iters % 4000 == 0 && snaps < 8 {
