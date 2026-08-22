@@ -197,9 +197,11 @@ pub static KBD_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// IRQ12: read a mouse byte and pass it to the mouse driver. The interrupt
 /// now comes via the IO-APIC -> Local APIC, so we EOI to the LAPIC.
+pub static MOUSE_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {
     let byte = unsafe { Port::<u8>::new(0x60).read() };
     crate::mouse::push_byte(byte);
+    MOUSE_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::apic::eoi();
 }
 

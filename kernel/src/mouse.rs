@@ -198,6 +198,15 @@ pub fn apply_usb_abs(x_abs: u16, y_abs: u16, buttons: u8) {
     update_buttons(buttons);
 }
 
+/// Put the cursor at an absolute screen position — X11 WarpPointer, and anything
+/// else that moves the pointer without a hardware packet. Clamped to the screen.
+pub fn set_pos(x: usize, y: usize) {
+    let w = SCREEN_W.load(Ordering::Relaxed) as i32;
+    let h = SCREEN_H.load(Ordering::Relaxed) as i32;
+    MOUSE_X.store((x as i32).clamp(0, (w - 1).max(0)), Ordering::Relaxed);
+    MOUSE_Y.store((y as i32).clamp(0, (h - 1).max(0)), Ordering::Relaxed);
+}
+
 pub fn pos() -> (usize, usize) {
     (
         MOUSE_X.load(Ordering::Relaxed) as usize,

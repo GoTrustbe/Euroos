@@ -150,6 +150,28 @@ pub fn readable(fd: u64) -> bool {
         .unwrap_or(false)
 }
 
+/// The window an input event goes to: the LARGEST mapped window that selected the
+/// wanted mask (a toplevel, never a 1x1 input-only child or an off-screen stub).
+/// Returns (id, x, y) so the caller can turn screen coordinates into window-local
+/// ones — chrome hit-tests its tab strip and toolbar on event-x/event-y, so a
+/// window at (40,40) fed screen coordinates misses every target by that offset.
+fn input_target(c: &XConn, want: u32) -> Option<(u32, i16, i16)> {
+    c.windows
+        .iter()
+        .filter(|w| w.mapped && w.w > 1 && w.h > 1 && (want == 0 || w.event_mask & want != 0))
+        .max_by_key(|w| w.w as u32 * w.h as u32)
+        .map(|w| (w.id, w.x, w.y))
+}
+
+/// The X modifier/button state (the `state` field of every input event): shift/ctrl/
+/// alt as the keyboard sees them, plus button 1 while it is held. Chrome reads this
+/// for shift-click, ctrl-click and drag; a hardcoded 0 makes every event a plain one.
+static MOD_STATE: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
+fn mod_state() -> u16 {
+    MOD_STATE.load(core::sync::atomic::Ordering::Relaxed)
+        | if crate::mouse::left_down() { 0x100 } else { 0 }
+}
+
 /// Pump REAL keyboard input into X key events. Pops PS/2 scancodes and delivers a
 /// KeyPress(2)/KeyRelease(3) to every connection whose mapped window selected that
 /// event (X keycode = scancode + 8). Called from the run_glibc wait loop while an X
@@ -168,31 +190,117 @@ pub fn pump_keyboard() {
         }
         while let Some(sc) = crate::ps2::poll_scancode() {
             let pressed = sc & 0x80 == 0;
-            let keycode = (sc & 0x7f) + 8; // X keycode = PS/2 scancode + 8
+            let code = sc & 0x7f;
+            // Track the modifiers ourselves: the state field of EVERY event carries
+            // them, and a key event only means "A" instead of "a" because of it.
+            let bit: u16 = match code {
+                0x2a | 0x36 => 0x1, // Shift_L / Shift_R
+                0x1d => 0x4,        // Control_L
+                0x38 => 0x8,        // Alt_L (mod1)
+                _ => 0,
+            };
+            if bit != 0 {
+                if pressed {
+                    MOD_STATE.fetch_or(bit, core::sync::atomic::Ordering::Relaxed);
+                } else {
+                    MOD_STATE.fetch_and(!bit, core::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            let keycode = code + 8; // X keycode = PS/2 scancode + 8
             let want: u32 = if pressed { 0x1 } else { 0x2 }; // KeyPress / KeyRelease mask
             let kind: u8 = if pressed { 2 } else { 3 };
+            let (mx, my) = crate::mouse::pos();
             let mut t = XCONNS.lock();
-            for conn in t.iter_mut().flatten() {
-                // Deliver to the LARGEST mapped window (the toplevel GTK listens on),
-                // not a small GDK input-only child that may also select keys.
-                let wid = conn
-                    .windows
-                    .iter()
-                    .filter(|w| w.mapped && w.w > 1 && w.h > 1 && w.event_mask & want != 0)
-                    .max_by_key(|w| w.w as u32 * w.h as u32)
-                    .map(|w| w.id);
-                if let Some(wid) = wid {
-                    send_input(conn, kind, keycode, wid, 0, 0);
+            // A key belongs to ONE window: the one holding the input focus, else the
+            // one on top of the screen. Broadcasting a keystroke to every window was
+            // survivable with a single demo client and is not, once a browser has a
+            // toolbar, a page and a dialog open at the same time.
+            let focus = FOCUS_WINDOW.load(core::sync::atomic::Ordering::Relaxed);
+            let chosen = if focus != 0 { Some(focus) } else { topmost_presented() };
+            if let Some(ci) = chosen.and_then(|w| conn_of_window(&t[..], w)) {
+                let wid = chosen.unwrap();
+                if let Some(conn) = t[ci].as_mut() {
+                    let (wx, wy) = conn.windows.iter().find(|w| w.id == wid)
+                        .map(|w| (w.x, w.y)).unwrap_or((0, 0));
+                    send_input(conn, kind, keycode, wid, mx as i16, my as i16,
+                               mx as i16 - wx, my as i16 - wy);
+                }
+            } else {
+                for conn in t.iter_mut().flatten() {
+                    if let Some((wid, wx, wy)) = input_target(conn, want) {
+                        send_input(conn, kind, keycode, wid, mx as i16, my as i16,
+                                   mx as i16 - wx, my as i16 - wy);
+                    }
                 }
             }
         }
     });
 }
 
-/// Pump REAL mouse input into X ButtonPress events. Consumes a left-button press
-/// latch from the mouse driver and delivers ButtonPress(button 1) to a window that
-/// selected it, with the click position. Called from the run_glibc wait loop.
+/// Pump REAL mouse input into X pointer events: button press AND release on the real
+/// button edges, motion while it moves, and an EnterNotify when the pointer crosses
+/// into another window. Called from the run_glibc wait loop.
+///
+/// The button used to arrive as a one-shot "press latch" with no release at all — a
+/// toolkit that never sees ButtonRelease believes the button is still held, so the
+/// next press reads as a drag and no click ever completes. Both edges are read from
+/// the driver's live button state instead.
 static LAST_MOUSE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
+static LAST_BTN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static POINTER_WIN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// The window whose pixels the desktop currently shows in its frame (windowed mode).
+static RETAINED_ID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// The window that holds the keyboard focus (SetInputFocus), 0 = none yet.
+static FOCUS_WINDOW: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// WHERE each window's pixels last landed on the screen: (window id, dx, dy, scale,
+/// width, height, present order). The server blits a window centred and integer-scaled
+/// (a small dialog is magnified 4x), so the pointer position on screen says nothing
+/// about the window coordinate until it is run back through that same transform. The
+/// newest entry that contains the pointer is the one on top — which is exactly what a
+/// person sees, and therefore what they mean to click.
+static PRESENTED: Mutex<Vec<(u32, i32, i32, i32, i32, i32, u64)>> = Mutex::new(Vec::new());
+static PRESENT_ORDER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Record a window's screen placement after a fullscreen present.
+fn note_presented(id: u32, w: u16, h: u16) {
+    let (dx, dy, sc) = match crate::screen_place(w as usize, h as usize) {
+        Some(p) => p,
+        None => return,
+    };
+    let n = PRESENT_ORDER.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
+    let mut t = PRESENTED.lock();
+    let e = (id, dx as i32, dy as i32, sc as i32, w as i32, h as i32, n);
+    match t.iter_mut().find(|r| r.0 == id) {
+        Some(r) => *r = e,
+        None => t.push(e),
+    }
+}
+
+/// The window under a screen position, and the transform back into it: (id, dx, dy,
+/// scale). Topmost (most recently presented) first. None if the pointer is over bare
+/// desktop.
+fn window_at(px: i32, py: i32) -> Option<(u32, i32, i32, i32)> {
+    let t = PRESENTED.lock();
+    t.iter()
+        .filter(|(_, dx, dy, sc, w, h, _)| {
+            px >= *dx && px < dx + w * sc && py >= *dy && py < dy + h * sc
+        })
+        .max_by_key(|r| r.6)
+        .map(|(id, dx, dy, sc, _, _, _)| (*id, *dx, *dy, *sc))
+}
+
+/// The window on top of the screen right now (the most recently presented one).
+fn topmost_presented() -> Option<u32> {
+    PRESENTED.lock().iter().max_by_key(|r| r.6).map(|r| r.0)
+}
+
+/// The connection index owning a window id, if it is mapped.
+fn conn_of_window(t: &[Option<XConn>], id: u32) -> Option<usize> {
+    t.iter().position(|c| {
+        c.as_ref().map_or(false, |c| c.windows.iter().any(|w| w.id == id && w.mapped))
+    })
+}
 pub fn pump_mouse() {
     // ButtonPressMask(0x4) or PointerMotionMask(0x40) selected by any mapped window?
     let wants = {
@@ -202,28 +310,71 @@ pub fn pump_mouse() {
     if !wants {
         return;
     }
-    // Left-button press -> ButtonPress(1).
-    if let Some((mx, my)) = crate::mouse::take_press() {
-        let mut t = XCONNS.lock();
-        for conn in t.iter_mut().flatten() {
-            let wid = conn.windows.iter().find(|w| w.mapped && w.event_mask & 0x4 != 0).map(|w| w.id);
-            if let Some(wid) = wid {
-                send_input(conn, 4, 1, wid, mx as i16, my as i16); // ButtonPress, button 1
-            }
+    let (px, py) = crate::mouse::pos();
+    // Button edges. The legacy press latch is drained too, so a staged/injected press
+    // (mouse::inject_press) still lands, and exactly once.
+    let latched = crate::mouse::take_press();
+    let down = crate::mouse::left_down() || latched.is_some();
+    let was = LAST_BTN.swap(down, core::sync::atomic::Ordering::Relaxed);
+    if down != was {
+        let (cx, cy) = latched.unwrap_or((px, py));
+        deliver_pointer(if down { 4 } else { 5 }, 1, cx, cy, 0);
+        // A latched press has no release edge of its own: give it one immediately, so
+        // the click completes instead of hanging as a held button.
+        if latched.is_some() && !crate::mouse::left_down() {
+            LAST_BTN.store(false, core::sync::atomic::Ordering::Relaxed);
+            deliver_pointer(5, 1, cx, cy, 0);
         }
     }
-    // Cursor moved -> MotionNotify(6) (button field 0).
-    let (px, py) = crate::mouse::pos();
+    // Cursor moved -> MotionNotify(6), preceded by an EnterNotify(7) when the pointer
+    // crosses into a different window (chrome starts hover tracking on the crossing).
     let packed = ((px as u32 & 0xffff) << 16) | (py as u32 & 0xffff);
     if LAST_MOUSE.swap(packed, core::sync::atomic::Ordering::Relaxed) != packed {
+        let now = window_at(px as i32, py as i32).map(|t| t.0).unwrap_or(0);
+        if POINTER_WIN.swap(now, core::sync::atomic::Ordering::Relaxed) != now && now != 0 {
+            deliver_pointer(7, 0, px, py, 0);
+        }
+        deliver_pointer(6, 0, px, py, 0x40);
+    }
+}
+
+/// Deliver one pointer event at a SCREEN position to the window that is actually under
+/// it — found through the presentation table, so the window a person sees at that spot
+/// is the window that gets the event, at the coordinate it sees. `require_mask` is a
+/// bit the target must have selected (0 = deliver regardless: a click is never worth
+/// dropping over a mask, a motion often is).
+///
+/// Fallback, when nothing has been presented yet (or the desktop composites the app in
+/// windowed mode): the largest mapped window, as before.
+fn deliver_pointer(kind: u8, detail: u8, px: usize, py: usize, require_mask: u32) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
         let mut t = XCONNS.lock();
-        for conn in t.iter_mut().flatten() {
-            let wid = conn.windows.iter().find(|w| w.mapped && w.event_mask & 0x40 != 0).map(|w| w.id);
-            if let Some(wid) = wid {
-                send_input(conn, 6, 0, wid, px as i16, py as i16); // MotionNotify
+        if let Some((wid, dx, dy, sc)) = window_at(px as i32, py as i32) {
+            if let Some(ci) = conn_of_window(&t[..], wid) {
+                let conn = match t[ci].as_mut() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let win = match conn.windows.iter().find(|w| w.id == wid) {
+                    Some(w) => (w.x, w.y, w.event_mask),
+                    None => return,
+                };
+                if require_mask != 0 && win.2 & require_mask == 0 {
+                    return;
+                }
+                let lx = ((px as i32 - dx) / sc.max(1)) as i16;
+                let ly = ((py as i32 - dy) / sc.max(1)) as i16;
+                send_input(conn, kind, detail, wid, win.0 + lx, win.1 + ly, lx, ly);
+                return;
             }
         }
-    }
+        for conn in t.iter_mut().flatten() {
+            if let Some((wid, wx, wy)) = input_target(conn, require_mask) {
+                send_input(conn, kind, detail, wid, px as i16, py as i16,
+                           px as i16 - wx, py as i16 - wy);
+            }
+        }
+    });
 }
 
 /// Deliver a click (ButtonPress + ButtonRelease, button 1) to the front mapped window
@@ -254,17 +405,42 @@ pub fn deliver_focus(focused: bool) {
 }
 
 pub fn deliver_button(lx: i16, ly: i16) {
+    // Move the pointer there FIRST: chrome (like GTK) tracks the pointer from motion
+    // events and hit-tests the press against what it believes is under the cursor.
+    deliver_to_shown(6, 0, lx, ly);
+    deliver_to_shown(4, 1, lx, ly);
+    deliver_to_shown(5, 1, lx, ly);
+    trace(format_args!("deliver_button local=({lx},{ly})"));
+}
+
+/// Pointer motion from the desktop into the hosted window (hover). Same routing as the
+/// click, so whatever highlights under the cursor is what a click would actually hit.
+pub fn deliver_motion(lx: i16, ly: i16) {
+    deliver_to_shown(6, 0, lx, ly);
+}
+
+/// Send one event, at window-local coordinates, to the window the desktop is SHOWING
+/// (the retained one) — falling back to the largest mapped window of each connection
+/// when nothing has been retained yet.
+fn deliver_to_shown(kind: u8, detail: u8, lx: i16, ly: i16) {
     x86_64::instructions::interrupts::without_interrupts(|| {
         let mut t = XCONNS.lock();
+        let shown = RETAINED_ID.load(core::sync::atomic::Ordering::Relaxed);
+        if shown != 0 {
+            if let Some(ci) = conn_of_window(&t[..], shown) {
+                if let Some(conn) = t[ci].as_mut() {
+                    let (wx, wy) = conn.windows.iter().find(|w| w.id == shown)
+                        .map(|w| (w.x, w.y)).unwrap_or((0, 0));
+                    send_input(conn, kind, detail, shown, lx + wx, ly + wy, lx, ly);
+                    return;
+                }
+            }
+        }
         for conn in t.iter_mut().flatten() {
-            // The GTK toplevel routes events to its client-side child widgets itself, so
-            // deliver to the largest mapped window (the toplevel) — no mask bit required.
-            if let Some(wid) = conn.windows.iter().filter(|w| w.mapped && w.w > 1 && w.h > 1)
-                .max_by_key(|w| w.w as u32 * w.h as u32).map(|w| w.id)
-            {
-                send_input(conn, 4, 1, wid, lx, ly); // ButtonPress, button 1
-                send_input(conn, 5, 1, wid, lx, ly); // ButtonRelease, button 1
-                trace(format_args!("deliver_button local=({lx},{ly}) -> win {wid:#x}"));
+            // The toolkit routes events to its client-side child widgets itself, so
+            // deliver to the largest mapped window (the toplevel) — no mask required.
+            if let Some((wid, wx, wy)) = input_target(conn, 0) {
+                send_input(conn, kind, detail, wid, lx + wx, ly + wy, lx, ly);
             }
         }
     });
@@ -382,7 +558,10 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
         // GetInputFocus (43): Xlib's sync/roundtrip. Reply: revert-to + focus window.
         43 => {
             let mut r = reply_header(c, 0);
-            wr32(c, &mut r, 8, ROOT_WINDOW); // focus = root
+            // The window SetInputFocus last named, not a blanket "the root has it" —
+            // chrome asks this to decide whether it is the active browser window.
+            let f = FOCUS_WINDOW.load(core::sync::atomic::Ordering::Relaxed);
+            wr32(c, &mut r, 8, if f != 0 { f } else { ROOT_WINDOW });
             pad_reply(&mut r);
             c.outbuf.extend_from_slice(&r);
         }
@@ -473,10 +652,10 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             }
             if INJECT_TEST_INPUT.load(core::sync::atomic::Ordering::Relaxed) {
                 if mask & KEY_PRESS != 0 {
-                    send_input(c, 2, 38, id, 100, 60); // KeyPress, keycode 38 ('a')
+                    send_input(c, 2, 38, id, 100, 60, 100, 60); // KeyPress, keycode 38 ('a')
                 }
                 if mask & BUTTON_PRESS != 0 {
-                    send_input(c, 4, 1, id, 100, 60); // ButtonPress, button 1
+                    send_input(c, 4, 1, id, 100, 60, 100, 60); // ButtonPress, button 1
                 }
             }
         }
@@ -776,6 +955,79 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
         // Bell(104)/ChangeKeyboardControl(102)/NoOperation(127): no reply.
         104 | 102 | 127 => {}
         // Everything else (no reply): acknowledged by consuming the request.
+        // UnmapWindow (10) / DestroyWindow (4): a dialog that is dismissed must stop
+        // being on screen AND stop being a click target. Neither was handled at all,
+        // so a closed dialog stayed forever in front of the browser as far as input
+        // routing was concerned, and swallowed every click aimed at the page behind it.
+        4 | 10 => {
+            let id = ru32(c, req, 4);
+            PRESENTED.lock().retain(|r| r.0 != id);
+            if FOCUS_WINDOW.load(core::sync::atomic::Ordering::Relaxed) == id {
+                FOCUS_WINDOW.store(0, core::sync::atomic::Ordering::Relaxed);
+            }
+            if POINTER_WIN.load(core::sync::atomic::Ordering::Relaxed) == id {
+                POINTER_WIN.store(0, core::sync::atomic::Ordering::Relaxed);
+            }
+            if opcode == 4 {
+                c.windows.retain(|w| w.id != id);
+            } else if let Some(win) = c.windows.iter_mut().find(|w| w.id == id) {
+                win.mapped = false;
+            }
+            trace(format_args!("{} id={id:#x}", if opcode == 4 { "DestroyWindow" } else { "UnmapWindow" }));
+        }
+        // GrabPointer (26) / GrabKeyboard (31): chrome grabs both — for menus, for
+        // drags, for its own modal dialogs. Both expect a REPLY, and the old default
+        // arm answered nothing at all, which parks the browser on a reply that never
+        // comes. There is one client and no window manager here, so nothing has to be
+        // arbitrated: the grab is granted, status = 0 (Success).
+        26 | 31 => {
+            let mut r = reply_header(c, 0);
+            r[1] = 0; // status: Success
+            pad_reply(&mut r);
+            c.outbuf.extend_from_slice(&r);
+            trace(format_args!("grab op={opcode} -> Success"));
+        }
+        // UngrabPointer(27) GrabButton(28) UngrabButton(29) ChangeActivePointerGrab(30)
+        // UngrabKeyboard(32) GrabKey(33) UngrabKey(34) AllowEvents(35): no reply is
+        // owed, and with a single client there is nothing to arbitrate. Acknowledged by
+        // doing nothing — but listed explicitly, so the silence is a decision.
+        27 | 28 | 29 | 30 | 32 | 33 | 34 | 35 => {}
+        // SetInputFocus (42): remember who holds the keyboard, and TELL that window.
+        // A toolkit only starts handling keys (and blinking a caret) once it has seen
+        // a FocusIn of its own; without one, keys arrive and are dropped.
+        42 => {
+            let win = ru32(c, req, 4);
+            if win > 1 {
+                // 0 = None, 1 = PointerRoot: neither names a real window.
+                FOCUS_WINDOW.store(win, core::sync::atomic::Ordering::Relaxed);
+                let mut e = [0u8; 32];
+                e[0] = 9; // FocusIn
+                e[1] = 0; // detail = NotifyAncestor
+                e[2..4].copy_from_slice(&c.seq.to_le_bytes());
+                e[4..8].copy_from_slice(&win.to_le_bytes());
+                c.outbuf.extend_from_slice(&e);
+                trace(format_args!("SetInputFocus -> win {win:#x} (+FocusIn)"));
+            }
+        }
+        // WarpPointer (41): the client moves the cursor itself. dst-window None(0)
+        // means "relative to where the pointer is now"; a real window means the
+        // coordinates are relative to that window's origin.
+        41 => {
+            let dst = ru32(c, req, 8);
+            let dx = ru16(c, req, 20) as i16 as i32;
+            let dy = ru16(c, req, 22) as i16 as i32;
+            let (px, py) = crate::mouse::pos();
+            let (nx, ny) = if dst == 0 {
+                (px as i32 + dx, py as i32 + dy)
+            } else {
+                match c.windows.iter().find(|w| w.id == dst) {
+                    Some(w) => (w.x as i32 + dx, w.y as i32 + dy),
+                    None => (dx, dy),
+                }
+            };
+            crate::mouse::set_pos(nx.max(0) as usize, ny.max(0) as usize);
+            trace(format_args!("WarpPointer -> ({nx},{ny})"));
+        }
         _ => {}
     }
 }
@@ -923,9 +1175,12 @@ fn send_configure_notify(c: &mut XConn, window: u32, x: i16, y: i16, w: u16, h: 
     trace(format_args!("-> ConfigureNotify window={window:#x} {w}x{h} @({x},{y})"));
 }
 
-/// Queue a 32-byte input event (KeyPress=2/ButtonPress=4). `detail` is the keycode
-/// or button number; (ex,ey) the event coordinates in the window.
-fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, ex: i16, ey: i16) {
+/// Queue a 32-byte input event (KeyPress=2/ButtonPress=4/MotionNotify=6/Enter=7).
+/// `detail` is the keycode or button number; (rx,ry) the ROOT (screen) coordinates
+/// and (ex,ey) the WINDOW-LOCAL ones. The two are not interchangeable: a toolkit
+/// hit-tests its widgets on the window-local pair and positions menus on the root
+/// pair, so a window drawn at an offset needs both to be right.
+fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, rx: i16, ry: i16, ex: i16, ey: i16) {
     let mut e = [0u8; 32];
     e[0] = kind;
     e[1] = detail;
@@ -938,10 +1193,12 @@ fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, ex: i16, ey: i16
     e[8..12].copy_from_slice(&ROOT_WINDOW.to_le_bytes());
     e[12..16].copy_from_slice(&window.to_le_bytes());
     // root-x@20, root-y@22 (screen), event-x@24, event-y@26 (window-local)
-    e[20..22].copy_from_slice(&ex.to_le_bytes());
-    e[22..24].copy_from_slice(&ey.to_le_bytes());
+    e[20..22].copy_from_slice(&rx.to_le_bytes());
+    e[22..24].copy_from_slice(&ry.to_le_bytes());
     e[24..26].copy_from_slice(&ex.to_le_bytes());
     e[26..28].copy_from_slice(&ey.to_le_bytes());
+    // state@28: the live modifier + button mask (shift/ctrl/alt, button 1 held).
+    e[28..30].copy_from_slice(&mod_state().to_le_bytes());
     e[30] = 1; // same-screen
     c.outbuf.extend_from_slice(&e);
     trace(format_args!("-> input kind={kind} detail={detail} window={window:#x}"));
@@ -1044,10 +1301,15 @@ fn present_win(win: Option<&XWindow>, id: u32) {
         if X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) {
             if win.w > 1 && win.h > 1 {
                 *RETAINED_WINDOW.lock() = Some((win.w as usize, win.h as usize, win.buf.clone()));
+                // Remember WHICH window those pixels belong to, so the desktop's click
+                // and motion routing reaches the window the user is looking at instead
+                // of whichever one happens to be biggest.
+                RETAINED_ID.store(id, core::sync::atomic::Ordering::Relaxed);
             }
             X_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
         } else {
             crate::screen_present_xrgb(&win.buf, win.w as usize, win.h as usize);
+            note_presented(id, win.w, win.h);
         }
         let ctr = (win.h as usize / 2) * win.w as usize + win.w as usize / 2;
         let sample = win.buf.get(ctr).copied().unwrap_or(0);

@@ -207,7 +207,7 @@ fn build_context_menu(
     ry: usize,
     windows: &[compositor::Window],
     order: &[usize],
-    dock_targets: &[Option<usize>; 11],
+    dock_targets: &[Option<usize>; 12],
     sw: usize,
     sh: usize,
 ) {
@@ -350,13 +350,46 @@ static FB_INFO: spin::Once<FbInfo> = spin::Once::new();
 /// a full-screen app (the DOOM port) paints at its own frame rate instead of
 /// depending on the desktop loop, which a heavyweight app can starve down to a
 /// couple of Hz. `src` is `sw*sh` pixels.
-pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
-    let fbi = match FB_INFO.get() {
-        Some(i) => i,
-        None => return,
-    };
-    if sw == 0 || sh == 0 || src.len() < sw * sh {
-        return;
+/// Launch Chromium as a DESKTOP APPLICATION: stage the files it must find, spawn it
+/// as a persistent process whose 485 MB binary is demand-paged from the EuroPack disk,
+/// and put the X server in windowed mode so the compositor frames its window instead
+/// of the server blitting it fullscreen. Returns the line to print for the user.
+///
+/// The boot-phase run proved chrome CAN paint here; this is what makes it an app you
+/// open, next to the other windows, with the desktop routing input into it.
+fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
+    if !ring3::europack_has("/pack/chrome") {
+        return (false, String::from("chrome: no /pack/chrome — attach the Chromium EuroPack disk"));
+    }
+    if ring3::persistent_running() {
+        return (false, String::from("chrome: already running (close its window to quit)"));
+    }
+    ring3::chrome_stage_files();
+    ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
+    // A browser is a UI: it must LIVE. The tickless fast-forward exists to make a
+    // run-to-completion boot test finish, and would race a live window's deadlines.
+    ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
+    xserver::set_windowed(true);
+    let caps = ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO | ring3::CAP_NET;
+    match ring3::spawn_glibc_disk_persistent(mem, "/pack/chrome", ring3::ldlinux_bytes(),
+                                             ring3::CHROME_ARGV, ring3::CHROME_ENVP, caps) {
+        Some(t) => (true, alloc::format!("chrome: launched (task {t}) — the window paints as it starts up")),
+        None => {
+            xserver::set_windowed(false);
+            (false, String::from("chrome: launch FAILED (not enough memory for the arena)"))
+        }
+    }
+}
+
+/// WHERE a source image of `sw`x`sh` lands on the screen: (dx, dy, scale), integer-
+/// scaled to fill and centred. The one place that decides this, because two things
+/// must agree on it exactly: the blit that paints the pixels, and the input routing
+/// that turns a pointer position back into a window coordinate. When they disagree,
+/// every click misses by the offset — and nothing on screen shows why.
+pub fn screen_place(sw: usize, sh: usize) -> Option<(usize, usize, usize)> {
+    let fbi = FB_INFO.get()?;
+    if sw == 0 || sh == 0 {
+        return None;
     }
     let scale = core::cmp::min(
         fbi.width.saturating_sub(40) / sw,
@@ -365,10 +398,23 @@ pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
     .clamp(1, 4);
     let (dw, dh) = (sw * scale, sh * scale);
     if dw > fbi.width || dh > fbi.height {
+        return None;
+    }
+    Some(((fbi.width - dw) / 2, (fbi.height - dh) / 2, scale))
+}
+
+pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
+    let fbi = match FB_INFO.get() {
+        Some(i) => i,
+        None => return,
+    };
+    if sw == 0 || sh == 0 || src.len() < sw * sh {
         return;
     }
-    let dx = (fbi.width - dw) / 2;
-    let dy = (fbi.height - dh) / 2;
+    let (dx, dy, scale) = match screen_place(sw, sh) {
+        Some(p) => p,
+        None => return,
+    };
     let dst = fbi.base as *mut u32;
     let rgb = matches!(fbi.pf, PixelFormat::Rgb);
     for sy in 0..sh {
@@ -3453,8 +3499,11 @@ fn main() -> Status {
     // Dock tile (see compositor::DOCK_APPS: files/notes/clock/browser/terminal/
     // settings/store/star) → window index. The desktop starts EMPTY (all windows
     // hidden); a dock click opens an app. (AG-1 added files/notes/clock.)
-    let mut dock_targets: [Option<usize>; 11] = [None; 11];
+    // 12 slots for 11 dock tiles: index 11 has no tile of its own — it is the hosted
+    // X-client window (Chromium), reachable from the app launcher and the shell.
+    let mut dock_targets: [Option<usize>; 12] = [None; 12];
     dock_targets[4] = Some(1); // terminal → Terminal (the real shell)
+    dock_targets[11] = Some(2); // launcher: "Chromium" → the hosted X window
 
     // ── H2: LIVE DISPLAY SERVER ── bind an AF_UNIX socket (H1), let an app
     // process connect and, via the eurodisplay protocol (Request/Event), open a
@@ -3903,6 +3952,7 @@ fn main() -> Status {
     // One-shot self-test: after the live GTK window is up a while, synthesize a click on
     // its Reset button to prove desktop->X input routing (the counter visibly resets).
     let mut gtk_dtick = 0u32;
+    let mut last_hover = (usize::MAX, usize::MAX); // last pointer position forwarded to a hosted X app
     let mut gtk_click_done = false;
     // 3F-7: the live permission-portal. `portal_buttons` holds the hit rects of
     // the currently-shown modal (Allow once / This session / Deny) when a request
@@ -4747,6 +4797,38 @@ fn main() -> Status {
                                 }
                             }
                         }
+                    } else if {
+                        let n = exec_cmd.split_whitespace().next().unwrap_or("");
+                        n == "chrome" || n == "chromium"
+                    } {
+                        // Chromium as a desktop app, from the shell: `chrome` starts it,
+                        // `chrome stop` ends it (so does the window's close button). It
+                        // does NOT run to completion — it is a browser, it stays.
+                        if exec_cmd.split_whitespace().nth(1) == Some("stop") {
+                            if ring3::persistent_running() {
+                                ring3::kill_persistent_glibc(ctx.mem);
+                                windows[gtk_idx].visible = false;
+                                order.retain(|&x| x != gtk_idx);
+                                need_full = true;
+                                out.push(String::from("chrome: stopped, memory reclaimed"));
+                            } else {
+                                out.push(String::from("chrome: not running"));
+                            }
+                        } else {
+                            let (ok, msg) = launch_chrome_app(ctx.mem);
+                            if ok {
+                                windows[gtk_idx].title = String::from("Chromium  -  chrome");
+                                windows[gtk_idx].visible = true;
+                                windows[gtk_idx].active = true;
+                                for (j, ww) in windows.iter_mut().enumerate() {
+                                    if j != gtk_idx { ww.active = false; }
+                                }
+                                order.retain(|&x| x != gtk_idx);
+                                order.push(gtk_idx);
+                                need_full = true;
+                            }
+                            out.push(msg);
+                        }
                     } else if !exec_cmd.is_empty() {
                         // Pipeline: split on '|' into stages; stdout of stage N -> stdin of N+1.
                         // Redirection (>) applies to the stdout of the LAST stage.
@@ -4880,6 +4962,16 @@ fn main() -> Status {
         // Open an app requested by the launcher or a menu (single place).
         if let Some(icon) = launch_icon {
             if let Some(w) = dock_targets.get(icon).copied().flatten().filter(|&w| w < windows.len()) {
+                // The hosted X window is only a frame: opening it has to start the app
+                // behind it, or it opens onto nothing.
+                if windows[w].app == suite_ui::SuiteApp::XClient && !ring3::persistent_running() {
+                    let (ok, msg) = launch_chrome_app(ctx.mem);
+                    serial_println!("[chrome-app] {msg}");
+                    notify::push(if ok { "Chromium starting" } else { "Chromium" }, &msg, interrupts::ticks());
+                    if ok {
+                        windows[w].title = String::from("Chromium  -  chrome");
+                    }
+                }
                 order.retain(|&x| x != w);
                 order.push(w);
                 for ww in windows.iter_mut() { ww.active = false; }
@@ -5163,6 +5255,22 @@ fn main() -> Status {
         // the shell keeps the keyboard as normal.
         if windows[gtk_idx].visible && windows[gtk_idx].active {
             xserver::pump_keyboard();
+            // Hover: forward pointer motion over the hosted window's body, so the app
+            // highlights what is under the cursor (a browser's tabs, buttons and links
+            // all react to hover long before anyone clicks). Only on a real move — a
+            // motion event per desktop frame would be a needless flood.
+            let (mpx, mpy) = mouse::pos();
+            if (mpx, mpy) != last_hover {
+                last_hover = (mpx, mpy);
+                let (bx, by, bw, bh) = compositor::window_body_rect(&windows[gtk_idx]);
+                if let Some((xw, xh)) = xserver::front_window_size() {
+                    let ox = bx + bw.saturating_sub(xw) / 2;
+                    let oy = by + bh.saturating_sub(xh) / 2;
+                    if mpx >= ox && mpy >= oy && mpx < ox + xw && mpy < oy + xh {
+                        xserver::deliver_motion((mpx - ox) as i16, (mpy - oy) as i16);
+                    }
+                }
+            }
         }
 
         // Cooperatively yield so a hosted persistent glibc app (the live GTK window)
