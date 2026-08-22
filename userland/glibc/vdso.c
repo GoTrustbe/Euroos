@@ -16,13 +16,13 @@ typedef long time_t;
 struct timespec { time_t tv_sec; long tv_nsec; };
 struct timeval  { time_t tv_sec; long tv_usec; };
 
-/* STATIC on purpose: an exported data symbol is addressed through the GOT, and a
- * vDSO is never relocated by ld.so -- the GOT entry stays 0 and the first clock
- * read dereferences null (measured: rip=vdso+0x1053, addr=0). A static symbol is
- * addressed rip-relative, which needs no relocation at all. The kernel finds the
- * page by its fixed alignment, not by name. */
-static __attribute__((aligned(4096)))
-volatile unsigned long __vdso_data[512];
+/* The data page lives OUTSIDE the image, one page past its end — the vvar idea.
+ * __ehdr_start is the linker's own "image base" symbol; hidden visibility forces a
+ * PC-relative reference, so this needs no relocation (an exported data symbol went
+ * through the GOT, which nobody relocates in a vDSO — that was a null deref), and
+ * the image itself can stay a single R+X load exactly like the real Linux vDSO. */
+extern char __ehdr_start[] __attribute__((visibility("hidden")));
+#define __vdso_data ((volatile unsigned long *)(__ehdr_start + 4096))
 
 static int read_clock(int clk, unsigned long *sec, unsigned long *nsec)
 {

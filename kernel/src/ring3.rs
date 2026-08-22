@@ -4892,8 +4892,10 @@ pub fn gvdso_bytes() -> &'static [u8] { GVDSO_ELF }
 /// Where the vDSO lands in every glibc address space. Above the demand region's
 /// growth so DEMAND_NEXT can never collide with it.
 const VDSO_BASE: u64 = 0x1F0_0000_0000;
-/// VA-page offset of `__vdso_data` inside the image (nm: 0x4000) — the shared frame.
-const VDSO_DATA_VOFF: u64 = 0x4000;
+/// VA-page offset of the clock data page: ONE page past the single-load image
+/// (vdso.lds keeps the whole image under a page; the code reads the page via
+/// `__ehdr_start + 4096`, PC-relative, no relocation).
+const VDSO_DATA_VOFF: u64 = 0x1000;
 /// The one physical frame behind every process's vDSO data page (0 = not yet made).
 static VDSO_TIME_FRAME: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Frames backing the vDSO image pages, copied once and shared read-only after.

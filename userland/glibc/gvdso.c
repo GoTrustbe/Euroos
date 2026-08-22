@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <sys/time.h>
 #include <sys/auxv.h>
 #include <elf.h>
 
@@ -57,7 +58,17 @@ int main(void)
         clock_gettime(CLOCK_MONOTONIC, &t);
     clock_gettime(CLOCK_MONOTONIC, &b);
     long ms = (b.tv_sec - a.tv_sec) * 1000 + (b.tv_nsec - a.tv_nsec) / 1000000;
-    printf("gvdso: 200000 glibc clock_gettime calls took %ld ms (vdso => ~0-30ms; syscalls => seconds)\n", ms);
+    printf("gvdso: 200000 glibc clock_gettime calls took %ld ms\n", ms);
+    /* Same loop through gettimeofday: glibc resolves that via a DIFFERENT vdso
+     * symbol (__vdso_gettimeofday). Fast gettimeofday + slow clock_gettime = a
+     * symbol-level problem; both slow = the whole image was rejected. */
+    struct timeval tv;
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    for (int i = 0; i < 200000; i++)
+        gettimeofday(&tv, 0);
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    ms = (b.tv_sec - a.tv_sec) * 1000 + (b.tv_nsec - a.tv_nsec) / 1000000;
+    printf("gvdso: 200000 glibc gettimeofday calls took %ld ms\n", ms);
     printf("gvdso: OK\n");
     return 0;
 }
