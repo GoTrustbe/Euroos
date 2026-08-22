@@ -74,6 +74,24 @@ stop` or the window's close button ends it, and the app launcher lists "Chromium
 browser". The boot-phase run is the iteration harness only now, behind the
 `chrome-boot` feature (`scripts/build.sh chrome`).
 
+## The desktop milestone
+
+`chrome` typed into the Terminal on the live desktop:
+
+```
+euroos:/ $ chrome
+chrome: launched (task 7) — the window paints as it starts up
+```
+
+and the screendump three minutes later shows a first-class EuroOS window titled
+"Chromium  -  chrome" — traffic lights, the Protected badge, the browser painting
+inside it — next to the Terminal that started it. Chromium is an application on this
+desktop, not a boot phase.
+
+One thing had to die for that: the ggtk demo's self-test closes the hosted X window
+(and kills the persistent process) 90 desktop ticks after it appears, to prove the
+teardown path. It shot down a live browser. It runs with its demo now, or not at all.
+
 ## Harness
 - `scripts/chrome-ui-input.sh` — boot, screendump the painted UI, inject a real input
   script, screendump again. "Chrome reacts" is a diff between two images.
