@@ -516,6 +516,36 @@ pub fn demand_page_mapped(pml4: u64, virt: u64) -> bool {
     }
 }
 
+/// Map one user page with table frames from the FRAME ALLOCATOR — for mappings made
+/// at process-build time (the vDSO), before any demand pool exists. `map_demand_4k`
+/// pulls its tables from the demand pool and silently cannot run that early: the
+/// auxv then promises a vDSO whose pages fault on first touch (ld.so died at
+/// VDSO_BASE+0x20 reading e_phoff).
+pub fn map_user_4k_falloc(falloc: &mut euromm::FrameAllocator, pml4: u64, virt: u64, phys: u64) -> bool {
+    unsafe {
+        let mut table = pml4;
+        for shift in [39u64, 30, 21] {
+            let slot = (table as *mut u64).add(((virt >> shift) & 0x1FF) as usize);
+            let e = slot.read_volatile();
+            table = if e & PRESENT != 0 {
+                e & ADDR_MASK
+            } else {
+                let frame = match falloc.allocate() {
+                    Ok(f) => f,
+                    Err(_) => return false,
+                };
+                core::ptr::write_bytes(frame as *mut u8, 0, 4096);
+                slot.write_volatile(frame | PRESENT | WRITABLE | USER);
+                frame
+            };
+        }
+        (table as *mut u64)
+            .add(((virt >> 12) & 0x1FF) as usize)
+            .write_volatile(phys | PRESENT | WRITABLE | USER);
+    }
+    true
+}
+
 pub fn map_demand_4k(pml4: u64, virt: u64, phys: u64) -> bool {
     // SAFETY: pml4 + all table frames are identity-mapped low RAM; page-aligned.
     unsafe {

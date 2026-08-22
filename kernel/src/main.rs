@@ -2163,6 +2163,17 @@ fn main() -> Status {
         // screendump), not how the system is meant to be used: with the pack attached
         // the desktop offers the browser as an app. Build --features chrome-boot for
         // the harness; without it, this boot walks on to the desktop.
+        // vDSO probe FIRST (a few seconds): with SKIP_GLIBC_TESTS the suite is
+        // gone, but whether the clock goes through the vDSO decides whether the
+        // chrome run below is even worth reading.
+        if cfg!(feature = "chrome-boot") {
+            // run_glibc self-skips during a chrome boot; this probe is the exception.
+            let skip = ring3::SKIP_GLIBC_TESTS.swap(false, core::sync::atomic::Ordering::Relaxed);
+            let (ov, ev) = ring3::run_glibc(&mut allocator, ring3::gvdso_bytes(), ring3::ldlinux_bytes(), &[b"gvdso"], &[b"PATH=/bin"], caps);
+            ring3::SKIP_GLIBC_TESTS.store(skip, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[gvdso] exit={ev}");
+            for l in ov.lines() { serial_println!("[gvdso]   {l}"); }
+        }
         if ring3::europack_has("/pack/chrome") && cfg!(feature = "chrome-boot") {
             ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
 

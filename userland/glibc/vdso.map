@@ -4,6 +4,5 @@ LINUX_2.6 {
     __vdso_gettimeofday;
     __vdso_time;
     __vdso_clock_getres;
-    __vdso_data;
   local: *;
 };

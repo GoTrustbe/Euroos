@@ -4885,6 +4885,10 @@ fn program_span_pages(program: &[u8]) -> usize {
 // timer tick refreshes. If glibc rejects the image it silently falls back to the
 // syscall — the failure mode is the status quo.
 static VDSO_SO: &[u8] = include_bytes!("../../userland/glibc/vdso.so");
+/// Probe: prints AT_SYSINFO_EHDR, calls the vDSO directly, and times 200k glibc
+/// clock_gettime calls — the one number that says whether glibc routes through it.
+static GVDSO_ELF: &[u8] = include_bytes!("../../userland/glibc/gvdso");
+pub fn gvdso_bytes() -> &'static [u8] { GVDSO_ELF }
 /// Where the vDSO lands in every glibc address space. Above the demand region's
 /// growth so DEMAND_NEXT can never collide with it.
 const VDSO_BASE: u64 = 0x1F0_0000_0000;
@@ -4991,30 +4995,17 @@ fn vdso_prepare(falloc: &mut FrameAllocator) -> bool {
     true
 }
 
-/// A pml4 waiting for its vDSO mapping (0 = none). Set at launch, consumed by
-/// `vdso_map_pending` once the demand pool exists (the mapping's table frames
-/// come from that pool).
-static VDSO_MAP_PENDING: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-
-/// Map the vDSO into the address space recorded at launch, now that the demand
-/// pool can supply page-table frames.
-fn vdso_map_pending() {
-    let pml4 = VDSO_MAP_PENDING.swap(0, Ordering::Relaxed);
-    if pml4 != 0 && !vdso_map_into(pml4) {
-        crate::serial_println!("[vdso] mapping FAILED — the auxv promised one; expect a crash");
-    }
-}
-
-/// Map the prepared vDSO frames into `pml4`. Call after vdso_prepare succeeded.
-fn vdso_map_into(pml4: u64) -> bool {
+/// Map the prepared vDSO frames into `pml4`. Table frames come from the FRAME
+/// ALLOCATOR, so this works at process-build time — before any demand pool exists.
+fn vdso_map_into(falloc: &mut FrameAllocator, pml4: u64) -> bool {
     let imgs = VDSO_IMAGE_FRAMES.lock();
     for (i, &f) in imgs.iter().enumerate() {
-        if !crate::paging::map_demand_4k(pml4, VDSO_BASE + (i as u64) * 4096, f) {
+        if !crate::paging::map_user_4k_falloc(falloc, pml4, VDSO_BASE + (i as u64) * 4096, f) {
             return false;
         }
     }
-    crate::paging::map_demand_4k(pml4, VDSO_BASE + VDSO_DATA_VOFF,
-                                 VDSO_TIME_FRAME.load(Ordering::Relaxed))
+    crate::paging::map_user_4k_falloc(falloc, pml4, VDSO_BASE + VDSO_DATA_VOFF,
+                                      VDSO_TIME_FRAME.load(Ordering::Relaxed))
 }
 
 /// Result of loading: entry + program-header info for the auxv.
@@ -6809,10 +6800,9 @@ fn glibc_disk_launch(
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
     let pml4 = crate::paging::build_address_space_rwx_big(falloc, arena, nblocks);
-    // Mapping happens LATER (after demand_install): map_demand_4k allocates its
-    // table frames from the demand pool, which does not exist yet at this point —
-    // the first attempt mapped nothing and the auxv promise nearly caused a crash.
-    VDSO_MAP_PENDING.store(if vdso_ok { pml4 } else { 0 }, Ordering::Relaxed);
+    if vdso_ok && !vdso_map_into(falloc, pml4) {
+        crate::serial_println!("[vdso] mapping FAILED — the auxv promised one; expect a crash");
+    }
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
     GLIBC_THREADS.lock().clear();
     GLIBC_CTIDS.lock().clear();
@@ -6843,7 +6833,6 @@ fn glibc_disk_launch(
         crate::procpool::demand_install(dp.0, dp.1);
         crate::serial_println!("[glibc-disk] demand pool: {} MiB @ {:#x}", dp.1 / 256, dp.0);
     }
-    vdso_map_pending();
     let (dp_base, dp_frames) = dp;
 
     let (main_slot, main_kstack) = match alloc_thread_kstack() {
@@ -7114,10 +7103,9 @@ pub fn run_glibc(
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
     let pml4 = crate::paging::build_address_space_rwx_big(falloc, arena, nblocks);
-    // Mapping happens LATER (after demand_install): map_demand_4k allocates its
-    // table frames from the demand pool, which does not exist yet at this point —
-    // the first attempt mapped nothing and the auxv promise nearly caused a crash.
-    VDSO_MAP_PENDING.store(if vdso_ok { pml4 } else { 0 }, Ordering::Relaxed);
+    if vdso_ok && !vdso_map_into(falloc, pml4) {
+        crate::serial_println!("[vdso] mapping FAILED — the auxv promised one; expect a crash");
+    }
     // Threads this process clones share this address space.
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
     GLIBC_THREADS.lock().clear();
@@ -7153,8 +7141,7 @@ pub fn run_glibc(
             crate::procpool::demand_install(got.0, got.1);
             crate::serial_println!("[glibc] demand pool: {} MiB @ {:#x} (this run, ~all free RAM)", got.1 / 256, got.0);
         }
-        vdso_map_pending();
-        got
+            got
     } else {
         (0, 0)
     };

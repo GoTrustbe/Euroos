@@ -16,7 +16,12 @@ typedef long time_t;
 struct timespec { time_t tv_sec; long tv_nsec; };
 struct timeval  { time_t tv_sec; long tv_usec; };
 
-__attribute__((visibility("default"), aligned(4096)))
+/* STATIC on purpose: an exported data symbol is addressed through the GOT, and a
+ * vDSO is never relocated by ld.so -- the GOT entry stays 0 and the first clock
+ * read dereferences null (measured: rip=vdso+0x1053, addr=0). A static symbol is
+ * addressed rip-relative, which needs no relocation at all. The kernel finds the
+ * page by its fixed alignment, not by name. */
+static __attribute__((aligned(4096)))
 volatile unsigned long __vdso_data[512];
 
 static int read_clock(int clk, unsigned long *sec, unsigned long *nsec)
