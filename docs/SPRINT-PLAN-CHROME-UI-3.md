@@ -139,6 +139,18 @@ four minutes.
   the browser take turns owning it.
 - The keyboard reaches the focused window; chrome's own keymap path (xkb) is not
   exercised yet, so typing into the address bar is unproven.
+- **Where the machine actually goes.** Per-thread ring-3 tick counting settled the
+  "spinning or starved?" question: neither. The main thread gets 33% of user-mode CPU,
+  the largest share of any thread — but all user code together gets only ~9.5 seconds
+  out of every 45 seconds of wall time. The rest is kernel: demand-paging a 495 MB
+  binary from disk, and moving 259 KB PutImages. Chrome is not stuck, it is running at
+  a fraction of the speed its startup work was written for, and the click waits in the
+  socket meanwhile. Two things were ruled out along the way, each by measurement: the
+  launcher's wait loop (it was spinning 89 M iterations a run because `sleep_ticks`
+  only marks a task Sleeping and the yield came before it — now 8 M, no change in the
+  outcome) and chrome's background subsystems (disabled by flag, no change either).
+  The lever that remains is the cost per page fault and per PutImage, not the browser.
+
 - **The open question.** The browser's main thread does not return to its X event loop
   after startup, so clicks sit unread in the socket. The RIP profiler settled what it
   is NOT: not a spin. 63 of 64 recent samples are distinct addresses, and over a run
