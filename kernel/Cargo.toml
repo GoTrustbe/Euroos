@@ -17,6 +17,11 @@ selftest = []
 # counter). OFF by default: they keep the guest permanently runnable, so under
 # pure emulation (no KVM) the host core sits at ~100% and input is starved.
 live-demos = []
+# Run chrome in the BOOT PHASE (the iteration harness: boot straight into a chrome
+# window and screendump it). OFF by default, because with the pack attached the
+# desktop is the right place to start a browser -- `chrome` in the terminal or
+# "Chromium browser" in the app launcher.
+chrome-boot = []
 
 [[bin]]
 name = "eurokernel"

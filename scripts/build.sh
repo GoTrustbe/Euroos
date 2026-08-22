@@ -16,6 +16,12 @@ if [ "$PROFILE" = "image" ]; then
   EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
   cargo kbuild-image
   cargo lbuild-release           # G4: two-stage loader
+elif [ "$PROFILE" = "chrome" ]; then
+  # Iteration image: chrome runs in the boot phase (see the chrome-boot feature).
+  PROFILE="release"
+  EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
+  cargo kbuild-chrome
+  cargo lbuild-release
 elif [ "$PROFILE" = "release" ]; then
   cargo kbuild-release
   cargo lbuild-release           # G4: two-stage loader

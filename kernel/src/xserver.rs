@@ -311,20 +311,14 @@ pub fn pump_mouse() {
         return;
     }
     let (px, py) = crate::mouse::pos();
-    // Button edges. The legacy press latch is drained too, so a staged/injected press
-    // (mouse::inject_press) still lands, and exactly once.
-    let latched = crate::mouse::take_press();
-    let down = crate::mouse::left_down() || latched.is_some();
-    let was = LAST_BTN.swap(down, core::sync::atomic::Ordering::Relaxed);
-    if down != was {
-        let (cx, cy) = latched.unwrap_or((px, py));
+    // Button EDGES, drained from the driver's queue. Sampling the button level here
+    // loses a whole click whenever this loop does not happen to run during the ~100 ms
+    // the button is down — and while a browser has the CPU, that is most clicks.
+    // The legacy press latch is drained too so it cannot fire a second copy.
+    let _ = crate::mouse::take_press();
+    while let Some((down, cx, cy)) = crate::mouse::take_button_event() {
+        LAST_BTN.store(down, core::sync::atomic::Ordering::Relaxed);
         deliver_pointer(if down { 4 } else { 5 }, 1, cx, cy, 0);
-        // A latched press has no release edge of its own: give it one immediately, so
-        // the click completes instead of hanging as a held button.
-        if latched.is_some() && !crate::mouse::left_down() {
-            LAST_BTN.store(false, core::sync::atomic::Ordering::Relaxed);
-            deliver_pointer(5, 1, cx, cy, 0);
-        }
     }
     // Cursor moved -> MotionNotify(6), preceded by an EnterNotify(7) when the pointer
     // crosses into a different window (chrome starts hover tracking on the crossing).
@@ -961,7 +955,19 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
         // routing was concerned, and swallowed every click aimed at the page behind it.
         4 | 10 => {
             let id = ru32(c, req, 4);
-            PRESENTED.lock().retain(|r| r.0 != id);
+            // Its pixels have to go too. The fullscreen blit only ever paints, so a
+            // dismissed dialog would otherwise stay on screen after it stopped
+            // existing — and the screen is what a person believes.
+            {
+                let mut t = PRESENTED.lock();
+                if let Some(r) = t.iter().find(|r| r.0 == id) {
+                    if !X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) {
+                        crate::screen_clear_rect(r.1.max(0) as usize, r.2.max(0) as usize,
+                                                 (r.4 * r.3).max(0) as usize, (r.5 * r.3).max(0) as usize);
+                    }
+                }
+                t.retain(|r| r.0 != id);
+            }
             if FOCUS_WINDOW.load(core::sync::atomic::Ordering::Relaxed) == id {
                 FOCUS_WINDOW.store(0, core::sync::atomic::Ordering::Relaxed);
             }

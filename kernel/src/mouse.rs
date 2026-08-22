@@ -7,6 +7,7 @@
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicUsize, Ordering};
 
 use spin::Mutex;
+use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::instructions::port::Port;
 
 static MOUSE_X: AtomicI32 = AtomicI32::new(0);
@@ -30,8 +31,46 @@ static RCLICK_Y: AtomicI32 = AtomicI32::new(0);
 /// Store the new button bitmap and latch a left-press edge (with cursor pos).
 /// Callers must update MOUSE_X/MOUSE_Y *before* calling this so the latched
 /// position is correct.
+/// Left-button EDGES, in order, with the position where each happened: (down, x, y).
+/// A reader that samples the button LEVEL misses a whole click whenever it is not
+/// running for the ~100 ms a real click lasts — which is exactly what happens while a
+/// browser has the CPU. Every transition is queued here instead, so a click can be
+/// late but never lost. Same principle as the scancode ring.
+const BTN_RING: usize = 32;
+static BTN_EVENTS: Mutex<([(bool, i32, i32); BTN_RING], usize, usize)> =
+    Mutex::new(([(false, 0, 0); BTN_RING], 0, 0));
+
+fn push_button_event(down: bool, x: i32, y: i32) {
+    without_interrupts(|| {
+        let mut r = BTN_EVENTS.lock();
+        let (head, tail) = (r.1, r.2);
+        let next = (tail + 1) % BTN_RING;
+        if next != head {
+            r.0[tail] = (down, x, y);
+            r.2 = next;
+        }
+    });
+}
+
+/// Take the oldest queued left-button edge: (pressed, x, y).
+pub fn take_button_event() -> Option<(bool, usize, usize)> {
+    without_interrupts(|| {
+        let mut r = BTN_EVENTS.lock();
+        if r.1 == r.2 {
+            return None;
+        }
+        let (down, x, y) = r.0[r.1];
+        r.1 = (r.1 + 1) % BTN_RING;
+        Some((down, x.max(0) as usize, y.max(0) as usize))
+    })
+}
+
 fn update_buttons(new: u8) {
     let old = BUTTONS.swap(new & 0x07, Ordering::Relaxed);
+    if old & 0x01 != new & 0x01 {
+        push_button_event(new & 0x01 != 0,
+                          MOUSE_X.load(Ordering::Relaxed), MOUSE_Y.load(Ordering::Relaxed));
+    }
     if old & 0x01 == 0 && new & 0x01 != 0 {
         CLICK_X.store(MOUSE_X.load(Ordering::Relaxed), Ordering::Relaxed);
         CLICK_Y.store(MOUSE_Y.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -53,6 +92,9 @@ pub fn inject_press(x: usize, y: usize) {
     CLICK_X.store(x as i32, Ordering::Relaxed);
     CLICK_Y.store(y as i32, Ordering::Relaxed);
     PRESS_PENDING.store(true, Ordering::Relaxed);
+    // A synthetic click is a full click: press AND release, queued like a real one.
+    push_button_event(true, x as i32, y as i32);
+    push_button_event(false, x as i32, y as i32);
 }
 
 /// Consume a pending left-button press → the screen position where it happened.

@@ -16,7 +16,7 @@ use crate::graphics::{Color, FrameBuffer};
 /// Left margin taken up by the floating dock (the dock itself is 62px @ x=14, + margin).
 /// Windows begin to the right of this.
 pub const SIDEBAR_W: usize = 90;
-const TITLEBAR_H: usize = 44;
+pub const TITLEBAR_H: usize = 44;
 // Floating dock geometry (EDS: left/top/bottom 14, width 62).
 const DOCK_X: usize = 14;
 const DOCK_W: usize = 62;

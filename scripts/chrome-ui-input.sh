@@ -36,7 +36,7 @@ mrel() {
 # Absolute: slam into the top-left corner (the driver clamps), then walk out to (x,y).
 mabs() { mrel -1200 -1200; mrel "$1" "$2"; }
 
-./scripts/build.sh release >/dev/null 2>&1 || { echo "BUILD FAILED"; exit 1; }
+./scripts/build.sh ${BUILD_PROFILE:-chrome} >/dev/null 2>&1 || { echo "BUILD FAILED"; exit 1; }
 while pgrep -x qemu-system-x86 >/dev/null 2>&1 || ps -eo comm | grep -q '^qemu-system-x86$'; do sleep 10; done
 rm -f "$LOG" "$LOG.ppm" "$LOG-after.ppm"
 qemu-system-x86_64 -machine q35 -m 3584M -cpu qemu64,+smep,+smap \

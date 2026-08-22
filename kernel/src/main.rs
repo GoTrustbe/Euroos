@@ -403,6 +403,22 @@ pub fn screen_place(sw: usize, sh: usize) -> Option<(usize, usize, usize)> {
     Some(((fbi.width - dw) / 2, (fbi.height - dh) / 2, scale))
 }
 
+/// Clear a rectangle of the screen (used when a window stops being on screen). The
+/// fullscreen X blit only ever paints; without this, a dismissed dialog leaves its
+/// pixels behind and the screen keeps showing something that no longer exists.
+pub fn screen_clear_rect(x: usize, y: usize, w: usize, h: usize) {
+    let fbi = match FB_INFO.get() {
+        Some(i) => i,
+        None => return,
+    };
+    let dst = fbi.base as *mut u32;
+    for ry in y..(y + h).min(fbi.height) {
+        for rx in x..(x + w).min(fbi.width) {
+            unsafe { dst.add(ry * fbi.stride + rx).write_volatile(0) };
+        }
+    }
+}
+
 pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
     let fbi = match FB_INFO.get() {
         Some(i) => i,
@@ -2135,7 +2151,11 @@ fn main() -> Status {
             serial_println!("[chrome-disk] crashpad from DISK (demand-paged exe): exit={e}");
             for l in o.lines() { serial_println!("[chrome-disk]   {l}"); }
         }
-        if ring3::europack_has("/pack/chrome") {
+        // The boot-phase chrome run is the ITERATION HARNESS (boot -> window ->
+        // screendump), not how the system is meant to be used: with the pack attached
+        // the desktop offers the browser as an app. Build --features chrome-boot for
+        // the harness; without it, this boot walks on to the desktop.
+        if ring3::europack_has("/pack/chrome") && cfg!(feature = "chrome-boot") {
             ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
 
             // Fontconfig for chrome (its own setup runs LATER in boot): DejaVu fonts +
@@ -4818,6 +4838,13 @@ fn main() -> Status {
                             let (ok, msg) = launch_chrome_app(ctx.mem);
                             if ok {
                                 windows[gtk_idx].title = String::from("Chromium  -  chrome");
+                                // Chrome's own window is 800x600 (--window-size): give
+                                // the frame exactly that much body, so the page is not
+                                // clipped into a 540x320 hole.
+                                windows[gtk_idx].w = 800;
+                                windows[gtk_idx].h = 600 + compositor::TITLEBAR_H;
+                                windows[gtk_idx].x = SIDEBAR_W + 60;
+                                windows[gtk_idx].y = 90;
                                 windows[gtk_idx].visible = true;
                                 windows[gtk_idx].active = true;
                                 for (j, ww) in windows.iter_mut().enumerate() {
@@ -4970,6 +4997,10 @@ fn main() -> Status {
                     notify::push(if ok { "Chromium starting" } else { "Chromium" }, &msg, interrupts::ticks());
                     if ok {
                         windows[w].title = String::from("Chromium  -  chrome");
+                        windows[w].w = 800;
+                        windows[w].h = 600 + compositor::TITLEBAR_H;
+                        windows[w].x = SIDEBAR_W + 60;
+                        windows[w].y = 90;
                     }
                 }
                 order.retain(|&x| x != w);

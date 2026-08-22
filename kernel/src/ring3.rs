@@ -8610,7 +8610,12 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             let fds = scm_take(a1);
             let control = read_user::<u64>(a2 + 32).unwrap_or(0);
             let controllen = read_user::<u64>(a2 + 40).unwrap_or(0) as usize;
-            if CACHE_DIR_DIAG.load(Ordering::Relaxed) && crate::net::is_unix_fd(a1) {
+            // Trace only calls that actually CARRY descriptors. The unconditional
+            // entry trace was written to catch a control message being stomped; that
+            // bug is fixed, and what it leaves behind is 55 000 lines per run of
+            // "no descriptors this call" — which under TCG is not just noise, it is
+            // minutes of serial output.
+            if CACHE_DIR_DIAG.load(Ordering::Relaxed) && !fds.is_empty() {
                 crate::serial_println!("[scm] recvmsg fd{a1} ENTRY: msghdr@{a2:#x} control={control:#x} controllen={controllen} fds={fds:?}");
             }
             if !fds.is_empty() && control != 0 && controllen >= 16 + 4 * fds.len() {
@@ -8643,9 +8648,6 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     crate::serial_println!("[scm] fd{a1} had {} descriptor(s) but no room in the control buffer", fds.len());
                 }
                 if control != 0 {
-                    if CACHE_DIR_DIAG.load(Ordering::Relaxed) && crate::net::is_unix_fd(a1) {
-                        crate::serial_println!("[scm] recvmsg fd{a1}: ZEROING controllen (no descriptors this call)");
-                    }
                     let _ = write_user(a2 + 40, 0u64); // msg_controllen = 0
                 }
             }
