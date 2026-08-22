@@ -51,3 +51,32 @@ prints itself. A change without a number gets reverted.
 - E2. The click: does the tab-strip click get COLLECTED (client reads after the
   event, queue drains) within the run.
 - E3. Host tests still green; a non-chrome boot still reaches the desktop.
+
+## Results (2026-08-22, all measured)
+
+| change | number |
+|---|---|
+| Phase A ledger (baseline) | 88% of fault time = virtio busy-wait (15 071 of 17 067 Mcyc, 33 705 kicks); X processing 1.5 Gcyc = noise |
+| Phase B (64 KiB reads) | kicks 3.2x down — wall-clock NEUTRAL: the wait is proportional to bytes under TCG |
+| Phase C (read-ahead) | 54% over-fetch; wall-clock neutral. Kept: right on real hardware, refuted as the bottleneck here |
+| Ring-0 profiler | the REAL bottleneck: 83% of ring-0 ticks in the yield/context-switch path |
+| Idle-hlt + 1-in-4 recvmsg yield | **first full paint 11 s → 6 s after map** (from 4 min at sprint start); yield path 83% → 66% (remainder includes the idle hlt itself, which shares the page) |
+| Phase E3 | 992 host tests pass, 0 failed |
+
+## The verdict that ends this sprint
+
+The long-patience run (4 clicks over 18 minutes, screenshots between) settles it:
+ZERO events collected, ZERO X requests after the first paint burst, ~20 syscalls/s,
+16–30% user CPU still burning, guest clock racing 4.3x during startup (the forced
+tick-advance in the epoll retry loop — a real smell, noted for later).
+
+Chrome's main thread is not starting up slowly. It is in a USER-SPACE loop that
+never completes and almost never syscalls — the stall profile puts 21% of its
+samples on one libc page, which at page granularity is consistent with glibc's
+adaptive mutex spin. The leading suspect is a lost futex wake (the same class as
+the thread-pool deadlock this project has beaten before): the holder of a lock is
+parked and the spinner never gets its wake.
+
+Sprint 4's job — make the machine cheap — is done and measured. The next sprint is
+correctness again: trace futex wait/wake pairs on the main thread, find the wake
+that never arrives.

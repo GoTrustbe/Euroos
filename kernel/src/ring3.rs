@@ -1543,6 +1543,19 @@ pub fn dump_suspect_addrs() {
     a!(crate::net::unix_fd_recv, "net::unix_fd_recv");
     a!(crate::sched::yield_now, "sched::yield_now");
     a!(crate::sched::block_current, "sched::block_current");
+    // Brackets for the ring-0 tick profiler ([krip]): the hot pages of the chrome
+    // sprint fell BETWEEN the entries above, so the map gets denser where it counted.
+    a!(demand_readahead, "demand_readahead");
+    a!(syscall_dispatch, "syscall_dispatch");
+    a!(copy_to_user as fn(u64, &[u8]) -> bool, "copy_to_user");
+    a!(copy_from_user as fn(u64, usize) -> Option<alloc::vec::Vec<u8>>, "copy_from_user");
+    a!(crate::sched::schedule_tick, "sched::schedule_tick");
+    a!(crate::sched::yield_tick, "sched::yield_tick");
+    a!(cdp_pump, "cdp_pump");
+    a!(crate::xserver::pump_keyboard, "xserver::pump_keyboard");
+    a!(crate::xserver::pump_mouse, "xserver::pump_mouse");
+    a!(crate::xhci::poll, "xhci::poll");
+    a!(crate::net::service, "net::service");
 }
 
 pub fn europack_scan() {
@@ -6946,11 +6959,6 @@ pub fn run_glibc(
         // (no-op unless one has an input-selecting window mapped).
         crate::xserver::pump_keyboard();
         crate::xserver::pump_mouse();
-        // Sleep a tick, then YIELD immediately so the glibc task gets the CPU now
-        // instead of the launcher spinning this whole quantum. Without the yield the
-        // launcher busy-loops (pump+sleep) hundreds of times per tick, which under
-        // TCG crawls the whole guest — this keeps a live X client responsive.
-        crate::sched::yield_now();
         // Tickless idle: if every glibc thread is parked (Sleeping on a futex timeout)
         // and nothing is runnable, jump the clock straight to the soonest deadline
         // instead of busy-spinning through idle ticks — otherwise chrome's multi-second
@@ -6961,6 +6969,14 @@ pub fn run_glibc(
                 crate::interrupts::TICKS.store(d, Ordering::Relaxed);
             }
             _ => crate::sched::sleep_ticks(1),
+        }
+        // YIELD LAST, and only to someone who can use the CPU; otherwise HLT (see the
+        // disk-variant loop: the no-Ready fallback resumes THIS task, so a bare yield
+        // spins, and a halted vCPU is the only thing TCG runs for free).
+        if crate::sched::any_other_ready() {
+            crate::sched::yield_now();
+        } else {
+            x86_64::instructions::hlt();
         }
     }
     if !GLIBC_DONE.load(Ordering::Relaxed) {
