@@ -2504,7 +2504,51 @@ fn diag_pack_path(what: &str, path: &[u8], ret: u64) {
 
 /// futex-wake: unblock up to `n` tasks waiting on `uaddr`. Returns the number
 /// of woken tasks.
+/// Futex forensics: per task the address it currently waits on (0 = none) and since
+/// which tick; per recent address, the last task that woke it and when. Dumped with
+/// the stall dump: "A waits on X since T; B last woke X at U" is a chain, not a vibe.
+static FUTEX_WAIT_ADDR: [core::sync::atomic::AtomicU64; 64] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; 64];
+static FUTEX_WAIT_SINCE: [core::sync::atomic::AtomicU64; 64] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; 64];
+static FUTEX_LAST_WAKE: Mutex<alloc::vec::Vec<(u64, usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
+
+pub fn dump_futex_state() {
+    crate::serial_println!("[futex] waiters right now (task: addr since-tick):");
+    let now = crate::interrupts::ticks();
+    for t in 0..64 {
+        let a = FUTEX_WAIT_ADDR[t].load(Ordering::Relaxed);
+        if a != 0 {
+            crate::serial_println!("[futex]   t{t} {:?}: {a:#x} for {} ticks",
+                thread_name(t), now - FUTEX_WAIT_SINCE[t].load(Ordering::Relaxed));
+        }
+    }
+    crate::serial_println!("[futex] last wakes (addr <- task @tick):");
+    for &(a, t, tick) in FUTEX_LAST_WAKE.lock().iter() {
+        crate::serial_println!("[futex]   {a:#x} <- t{t} @{tick}");
+    }
+}
+
 fn futex_wake(uaddr: u64, n: i32) -> u32 {
+    {
+        let mut lw = FUTEX_LAST_WAKE.lock();
+        let cur = crate::sched::current();
+        let now = crate::interrupts::ticks();
+        match lw.iter_mut().find(|(a, _, _)| *a == uaddr) {
+            Some(e) => { e.1 = cur; e.2 = now; }
+            None => {
+                if lw.len() >= 48 {
+                    // Evict the stalest entry, not the newest information.
+                    let (mut oldest, mut ot) = (0usize, u64::MAX);
+                    for (i, &(_, _, tk)) in lw.iter().enumerate() {
+                        if tk < ot { ot = tk; oldest = i; }
+                    }
+                    lw.swap_remove(oldest);
+                }
+                lw.push((uaddr, cur, now));
+            }
+        }
+    }
     let mut q = FUTEX_QUEUE.lock();
     let mut woken = 0i32;
     let mut i = 0;
@@ -2548,6 +2592,10 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     if !q.iter().any(|&(a, t)| a == uaddr && t == cur) {
         q.push((uaddr, cur));
     }
+    if cur < 64 {
+        FUTEX_WAIT_ADDR[cur].store(uaddr, Ordering::Relaxed);
+        FUTEX_WAIT_SINCE[cur].store(now, Ordering::Relaxed);
+    }
     // TIMED wait: park as Sleeping(deadline) so the scheduler auto-wakes it at the
     // timeout (chrome's message loop / WaitableEvent::TimedWait rely on this — an
     // ignored timeout blocked every such thread forever = the all-Blocked deadlock).
@@ -2570,6 +2618,9 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     // FUTEX_WAKE would have removed us) -> report -ETIMEDOUT so the caller re-polls.
     // Otherwise a wake removed us -> success (0).
     let mut q = FUTEX_QUEUE.lock();
+    if cur < 64 {
+        FUTEX_WAIT_ADDR[cur].store(0, Ordering::Relaxed);
+    }
     if let Some(pos) = q.iter().position(|&(a, t)| a == uaddr && t == cur) {
         q.swap_remove(pos);
         drop(q);
@@ -6320,7 +6371,14 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     b"--disable-domain-reliability", b"--disable-background-timer-throttling",
     b"--safebrowsing-disable-auto-update", b"--disable-suggestions-service",
     b"--metrics-recording-only", b"--no-pings", b"--disable-default-apps",
-    b"--disable-features=SafeBrowsing,OptimizationHints,SegmentationPlatform,MediaRouter,Translate,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,MojoUseEventFd",
+    // The stall's three exact hot addresses (RIP profiler + full-symtab rip2sym) all
+    // belong to ONE feature: the on-device AI page-content pipeline.
+    // PageEmbeddingsService::OnPageContentExtracted / protobuf ContentNode copies /
+    // mojo AIPageContentAttributes::Read — the main thread grinds the page through
+    // embeddings after first paint and never returns to its event loop under
+    // emulation. Unknown feature names are ignored harmlessly, so the list names
+    // every plausible spelling.
+    b"--disable-features=SafeBrowsing,OptimizationHints,SegmentationPlatform,MediaRouter,Translate,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,MojoUseEventFd,PageContentAnnotations,HistoryEmbeddings,PageEmbeddings,AnnotatedPageContentExtraction,AIPageContent,TextEmbedder,PageContentExtraction,OptimizationGuideModelDownloading,OptimizationTargetPrediction,PageVisibility,ModelExecution",
     b"file:///tmp/euro.html",
 ];
 pub const CHROME_ENVP: &[&[u8]] = &[
@@ -7716,6 +7774,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
     }
     if SYS_TRACE_LEFT.load(Ordering::Relaxed) == 0 {
         let r = linux_dispatch_inner(num, a1, a2, a3, a4, a5);
+        msc_complete(r); // the fast path is the common one — the ring must fill here too
         let chk2 = SCM_CHECK_ADDR.load(Ordering::Relaxed);
         if chk2 != 0 {
             crate::serial_println!("[scm] post-dispatch ({num}): controllen at {chk2:#x} reads {}",
@@ -7724,6 +7783,7 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         return r;
     }
     let r = linux_dispatch_inner(num, a1, a2, a3, a4, a5);
+    msc_complete(r);
     let left = SYS_TRACE_LEFT.load(Ordering::Relaxed);
     if left > 0 {
         SYS_TRACE_LEFT.store(left - 1, Ordering::Relaxed);
@@ -7733,9 +7793,49 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
     r
 }
 
+/// The main thread's last 32 syscalls, with entry tick and result: (tick, num, a1, ret).
+/// Dumped when input goes unread. Inference from samples kept pointing at libc syscall
+/// wrappers; this ring is the ground truth about what the thread actually asks for,
+/// how often, and what it gets back.
+const MSC_RING: usize = 32;
+static MSC: [[core::sync::atomic::AtomicU64; 4]; MSC_RING] =
+    [const { [const { core::sync::atomic::AtomicU64::new(0) }; 4] }; MSC_RING];
+static MSC_IDX: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Write the return value into the newest in-flight ring entry (main thread only).
+fn msc_complete(r: u64) {
+    if crate::sched::current() == GLIBC_MAIN_TASK.load(Ordering::Relaxed) {
+        let newest = (MSC_IDX.load(Ordering::Relaxed).wrapping_sub(1)) % MSC_RING;
+        if MSC[newest][3].load(Ordering::Relaxed) == u64::MAX {
+            MSC[newest][3].store(r, Ordering::Relaxed);
+        }
+    }
+}
+
+pub fn dump_main_syscalls() {
+    let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+    crate::serial_println!("[msc] main thread t{main}: last {} syscalls (tick num(a1)=ret):", MSC_RING);
+    let start = MSC_IDX.load(Ordering::Relaxed);
+    for k in 0..MSC_RING {
+        let e = &MSC[(start + k) % MSC_RING];
+        let (t, n, a, r) = (e[0].load(Ordering::Relaxed), e[1].load(Ordering::Relaxed),
+                            e[2].load(Ordering::Relaxed), e[3].load(Ordering::Relaxed));
+        if t != 0 {
+            crate::serial_println!("[msc]   @{t} {n}({a:#x}) = {r:#x}");
+        }
+    }
+}
+
 fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let _ = a4; // not every syscall uses arg4/arg5 (r10/r8)
     SYSCALL_SEQ.fetch_add(1, Ordering::Relaxed); // progress heartbeat (stall detector)
+    if crate::sched::current() == GLIBC_MAIN_TASK.load(Ordering::Relaxed) {
+        let i = MSC_IDX.fetch_add(1, Ordering::Relaxed) % MSC_RING;
+        MSC[i][0].store(crate::interrupts::ticks().max(1), Ordering::Relaxed);
+        MSC[i][1].store(num, Ordering::Relaxed);
+        MSC[i][2].store(a1, Ordering::Relaxed);
+        MSC[i][3].store(u64::MAX, Ordering::Relaxed); // in flight; overwritten on return
+    }
     SYSCALL_YIELD_OK.store(true, Ordering::Relaxed); // lock-free path: futex/epoll may yield
     if TRACE_SYS.load(Ordering::Relaxed) {
         crate::serial_println!("[sys t{}] {num}({a1:#x},{a2:#x},{a3:#x})", crate::sched::current());
