@@ -37,3 +37,45 @@ vibe. No fix without the chain.
   TICKS forward in the epoll/poll retry loops (`TICKS.store(before+1)`). Replace
   the per-thread forced advance with a single monotonic guard so a frozen clock
   still moves but a busy one is not stampeded.
+
+## Results so far (2026-08-22, all measured)
+
+**EuroOS has a working vDSO** (commits 3db3864..41c5294). clock_gettime was 67% of
+ALL syscalls in a chrome run. Three walls, each named by its own crash or number:
+1. The vDSO pages were promised in the auxv but unmapped — map_demand_4k needs the
+   demand pool for its table frames and that pool does not exist at process build.
+   ld.so faulted at VDSO_BASE+0x20. Fix: paging::map_user_4k_falloc.
+2. An exported data symbol goes through the GOT; nobody relocates a vDSO; the image
+   carried exactly one R_X86_64_GLOB_DAT — null deref at vdso+0x1053. Fix: hidden
+   `__ehdr_start + 4096`, PC-relative, data page outside the image.
+3. glibc rejected the 4-LOAD gcc-default image WHOLESALE (discriminator run:
+   gettimeofday and clock_gettime both syscall-bound). The real Linux vDSO is one
+   R+X PT_LOAD with FILEHDR+hashes+dynsym+text together; vdso.lds builds that shape
+   (0x4e0 bytes, zero relocations).
+
+Proof, guest-side (gvdso probe): 200k glibc clock_gettime calls 1470 ms -> 50 ms;
+gettimeofday 950 -> 90 ms. Chrome-scale: **52 684 total syscalls where the same
+boot made 182 138** — clock_gettime out of the top five entirely; startup's ~50k
+syscalls complete within the first heartbeat interval instead of minutes.
+
+Also learned at cost: the "kernel stack overflow, task 5" chased across three runs
+is the G1 self-test overflowing a guarded stack ON PURPOSE at every boot; doubling
+stacks made the intentional overflow cross its canary before its guard and panicked
+the scheduler. Reverted; read the boot log two lines earlier next time.
+
+## The wall, now with an address
+
+With the clock cheap, chrome races through startup and then PARKS: ring-3 ticks
+near zero. The forensics converge on one point: the main thread,
+ThreadPoolServiceThread and VizCompositorThread all block FOREVER (27k+ ticks) on
+the SAME futex, libc+0x204b50 — glibc's stderr stream lock — each immediately
+after writing a multi-KB message to stderr (write(2) returned 0x25ca / 0x24c6,
+completed). No chrome thread died holding it. No wait set anywhere contains an X
+connection fd, so no click can wake anything.
+
+## Next (phase B, sharpened)
+- Dump the LOCK WORD at the waited address in the stall dump (owner/waiters bits).
+- Trace every futex op touching that one address, unfiltered, from boot.
+- Suspects, in order: a wake swallowed by our futex when the word transitions
+  2->0 concurrently; stdio lock elision (_IO_lock) semantics we violate; a writer
+  parked inside OUR write(2) path while holding the lock.
