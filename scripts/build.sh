@@ -3,6 +3,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# One build at a time. Two builds share cargo's output path, so a second one
+# (a manual `cargo kbuild-*`, another harness) silently replaces the .efi this one
+# is about to pack — and the image then boots a kernel nobody asked for. That
+# cost two full test runs before it was noticed, each time looking like a code bug.
+exec 9>"${TMPDIR:-/tmp}/eurokernel-build.lock"
+flock 9
+
 PROFILE="${1:-release}"
 EFI="target/x86_64-unknown-uefi/${PROFILE}/eurokernel.efi"
 IMG="eurokernel.img"
@@ -33,6 +40,15 @@ fi
 LOADER="target/x86_64-unknown-uefi/${PROFILE}/loader.efi"
 [ -f "$LOADER" ] || { echo "ERROR: $LOADER not found"; exit 1; }
 echo "==> kernel: $(du -h "$EFI" | cut -f1) · loader: $(du -h "$LOADER" | cut -f1)"
+
+# Stage the binaries the moment they exist: the image assembly below takes a minute,
+# and until it is done these paths must not change underneath it.
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT
+cp "$EFI" "$STAGE/kernel.efi"
+cp "$LOADER" "$STAGE/loader.efi"
+EFI="$STAGE/kernel.efi"
+LOADER="$STAGE/loader.efi"
 
 echo "==> building FAT32 image ($IMG) via mtools (no root needed)"
 dd if=/dev/zero of="$IMG" bs=1M count=256 status=none
