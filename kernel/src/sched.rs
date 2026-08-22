@@ -517,6 +517,17 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     // keeps the endpoint serviced + re-armed regardless of load. IRQ-safe: the
     // `POLLING` guard bails if a task-context poll is mid-flight.
     crate::xhci::poll();
+    // Sample WHERE the preempted thread was executing, if it was in ring 3. The stub
+    // pushed 15 registers on top of the CPU's interrupt frame, so the interrupted RIP
+    // sits at rsp+120 and its CS at rsp+128. Costs two loads per tick and is the only
+    // way to see a thread that spins in user space without ever making a syscall.
+    unsafe {
+        let rip = *((rsp + 120) as *const u64);
+        let cs = *((rsp + 128) as *const u64);
+        if cs & 3 == 3 {
+            crate::ring3::sample_user_rip(current(), rip);
+        }
+    }
     // BUG-007: the timer must NEVER block on SCHED. Task-context code (the desktop loop,
     // syscalls, supervise/reap) holds SCHED.lock() with interrupts ENABLED; a blocking
     // acquire here would deadlock the core — this handler spins with interrupts off while

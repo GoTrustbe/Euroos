@@ -6182,10 +6182,23 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
     b"--disable-crashpad-for-testing", b"--disable-breakpad",
     b"--disable-in-process-stack-traces", b"--lang=en-US",
-    b"--disable-gpu-compositing", b"--disable-features=MojoUseEventFd",
+    b"--disable-gpu-compositing",
     b"--window-size=800,600", b"--window-position=40,40",
     b"--enable-logging=stderr", b"--v=1",
     b"--no-first-run", b"--no-default-browser-check",
+    // Everything the browser does BESIDES showing the page. The RIP histogram settled
+    // what the main thread is busy with: 838 samples spread over 96+ code pages with
+    // no hot spot -- not a livelock, just an enormous amount of startup work
+    // (safebrowsing fetches, the web-app registry, the extensions cache, segmentation
+    // models), each visible in its own log lines. Under emulation that work outlasts
+    // any patience, and until it ends the thread never returns to its X event loop, so
+    // clicks sit unread in the socket. None of it is needed to show a local page.
+    b"--disable-sync", b"--disable-extensions", b"--disable-background-networking",
+    b"--disable-component-update", b"--disable-client-side-phishing-detection",
+    b"--disable-domain-reliability", b"--disable-background-timer-throttling",
+    b"--safebrowsing-disable-auto-update", b"--disable-suggestions-service",
+    b"--metrics-recording-only", b"--no-pings", b"--disable-default-apps",
+    b"--disable-features=SafeBrowsing,OptimizationHints,SegmentationPlatform,MediaRouter,Translate,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,MojoUseEventFd",
     b"file:///tmp/euro.html",
 ];
 pub const CHROME_ENVP: &[&[u8]] = &[
@@ -7320,6 +7333,89 @@ pub fn arm_wait_diag(n: u32) {
     WAIT_DIAG.store(n, Ordering::Relaxed);
 }
 
+/// The last 64 places the main thread was executing when a timer tick caught it, and
+/// how often each. A thread that stays Ready and makes no syscalls is spinning inside
+/// its own code; its instruction pointer is the only thing that says where.
+const RIP_SAMPLES: usize = 64;
+static RIP_RING: [core::sync::atomic::AtomicU64; RIP_SAMPLES] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; RIP_SAMPLES];
+static RIP_IDX: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Called from the timer tick with the interrupted ring-3 instruction pointer.
+/// Lock-free on purpose: it runs in interrupt context, on the stack of the very
+/// thread whose locks it must never wait for.
+pub fn sample_user_rip(task: usize, rip: u64) {
+    if task != GLIBC_MAIN_TASK.load(Ordering::Relaxed) {
+        return;
+    }
+    let i = RIP_IDX.fetch_add(1, Ordering::Relaxed) % RIP_SAMPLES;
+    RIP_RING[i].store(rip, Ordering::Relaxed);
+    count_rip_page(rip);
+}
+
+/// A HISTOGRAM over the whole run, by 4 KiB code page: 64 recent addresses tell you a
+/// thread is not stuck on one instruction, and nothing more. Counting which pages it
+/// executes over minutes separates "grinding through a lot of code" (counts spread
+/// thin) from "going round the same handful of functions forever" (a few pages take
+/// nearly every sample).
+const RIP_PAGES: usize = 96;
+static RIP_PAGE: [core::sync::atomic::AtomicU64; RIP_PAGES] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; RIP_PAGES];
+static RIP_PAGE_HITS: [core::sync::atomic::AtomicU64; RIP_PAGES] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; RIP_PAGES];
+static RIP_TOTAL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static RIP_MISSED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+fn count_rip_page(rip: u64) {
+    RIP_TOTAL.fetch_add(1, Ordering::Relaxed);
+    let page = rip & !0xFFF;
+    for i in 0..RIP_PAGES {
+        let cur = RIP_PAGE[i].load(Ordering::Relaxed);
+        if cur == page {
+            RIP_PAGE_HITS[i].fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if cur == 0 && RIP_PAGE[i].compare_exchange(0, page, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            RIP_PAGE_HITS[i].fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+    }
+    RIP_MISSED.fetch_add(1, Ordering::Relaxed); // table full: the code is spread wider than this
+}
+
+/// Print the sampled instruction pointers, most frequent first.
+pub fn dump_rip_profile() {
+    let mut seen: alloc::vec::Vec<(u64, u32)> = alloc::vec::Vec::new();
+    for slot in RIP_RING.iter() {
+        let rip = slot.load(Ordering::Relaxed);
+        if rip == 0 {
+            continue;
+        }
+        match seen.iter_mut().find(|(r, _)| *r == rip) {
+            Some(e) => e.1 += 1,
+            None => seen.push((rip, 1)),
+        }
+    }
+    seen.sort_by(|a, b| b.1.cmp(&a.1));
+    crate::serial_println!("[rip] main thread: last {} samples at {} distinct addresses:",
+        RIP_SAMPLES, seen.len());
+    for (rip, n) in seen.iter().take(6) {
+        crate::serial_println!("[rip]   {n:3}x {rip:#x} (exe+{:#x})", rip.wrapping_sub(DEMAND_BASE));
+    }
+    let total = RIP_TOTAL.load(Ordering::Relaxed);
+    let mut pages: alloc::vec::Vec<(u64, u64)> = (0..RIP_PAGES)
+        .map(|i| (RIP_PAGE[i].load(Ordering::Relaxed), RIP_PAGE_HITS[i].load(Ordering::Relaxed)))
+        .filter(|(p, _)| *p != 0)
+        .collect();
+    pages.sort_by(|a, b| b.1.cmp(&a.1));
+    crate::serial_println!("[rip] whole run: {total} samples over {} code pages ({} beyond the table):",
+        pages.len(), RIP_MISSED.load(Ordering::Relaxed));
+    for (page, n) in pages.iter().take(10) {
+        let pct = if total > 0 { n * 100 / total } else { 0 };
+        crate::serial_println!("[rip]   {pct:3}% ({n:5} samples) exe+{:#x}", page.wrapping_sub(DEMAND_BASE));
+    }
+}
+
 /// Every thread, right now: name, scheduler state, and the last syscall it made. When
 /// input events sit unread in a socket, this says whether the thread that should be
 /// collecting them is polling something else, parked on a futex, or gone.
@@ -7334,6 +7430,7 @@ pub fn dump_threads_now(why: &str) {
         crate::serial_println!("[threads]   t{t} {:?}: last={n}(a1={a:#x})->{r:#x}", thread_name(t));
     }
     crate::sched::dump_states();
+    dump_rip_profile();
 }
 
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
