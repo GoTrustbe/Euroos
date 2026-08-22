@@ -3981,6 +3981,11 @@ fn main() -> Status {
     // its Reset button to prove desktop->X input routing (the counter visibly resets).
     let mut gtk_dtick = 0u32;
     let mut last_hover = (usize::MAX, usize::MAX); // last pointer position forwarded to a hosted X app
+    // Desktop cost accounting while a hosted app runs: (tick, loops, x-repaints, full repaints)
+    let mut hosted_last = (0u64, 0u64, 0u64, 0u64);
+    let mut loop_iters = 0u64;
+    let mut xrepaints = 0u64;
+    let mut full_repaints = 0u64;
     let mut gtk_click_done = false;
     // 3F-7: the live permission-portal. `portal_buttons` holds the hit rects of
     // the currently-shown modal (Allow once / This session / Deny) when a request
@@ -5125,6 +5130,7 @@ fn main() -> Status {
         {
             need_full = true;
         }
+        if need_full { full_repaints += 1; }
         if need_full {
             // Full redraw (drag or z-order changed).
             last_t = t / 200;
@@ -5214,6 +5220,7 @@ fn main() -> Status {
             // Live GTK app: if it repainted (X client presented a new frame), recomposite
             // its window body from the retained X buffer + blit only that rect.
             let gtk_vis = windows[gtk_idx].visible && xserver::take_dirty();
+            if gtk_vis { xrepaints += 1; }
             if gtk_vis {
                 compositor::draw_window_body(&fb, &windows[gtk_idx]);
             }
@@ -5295,11 +5302,19 @@ fn main() -> Status {
         }
 
         // A hosted app's own words, on the serial log. It never exits, so this is the
-        // only place its stdout/stderr can appear at all.
+        // only place its stdout/stderr can appear at all. Alongside it: how much of the
+        // machine the DESKTOP is using while the app runs. A browser that crawls when
+        // hosted but flies in the boot phase is either being starved or is stuck, and
+        // these two numbers are what tells them apart.
         if ring3::persistent_running() && interrupts::ticks() % 200 == 0 {
             for l in ring3::take_output().lines() {
                 serial_println!("[hosted] {l}");
             }
+            let t = interrupts::ticks();
+            serial_println!("[hosted] desktop: {} loops, {} window repaints, {} full repaints in {} ticks",
+                loop_iters - hosted_last.1, xrepaints - hosted_last.2, full_repaints - hosted_last.3,
+                t - hosted_last.0);
+            hosted_last = (t, loop_iters, xrepaints, full_repaints);
         }
 
         // Keyboard focus: when the hosted GTK window is the active window, route real
@@ -5336,6 +5351,7 @@ fn main() -> Status {
         // 100 Hz or keyboard/mouse/USB input) instead of spinning 100% — the CPU
         // sleeps energy-efficiently between frames; the timer tick guarantees ~10 ms
         // responsiveness and every input IRQ wakes the desktop immediately.
+        loop_iters += 1;
         x86_64::instructions::hlt();
     }
 }
