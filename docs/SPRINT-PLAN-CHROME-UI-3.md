@@ -139,6 +139,15 @@ four minutes.
   the browser take turns owning it.
 - The keyboard reaches the focused window; chrome's own keymap path (xkb) is not
   exercised yet, so typing into the address bar is unproven.
-- The browser's main thread spins in user space after its last X request instead of
-  returning to its event loop. Nothing it does reaches a syscall, so the next step is
-  sampling its RIP while it spins and mapping that to a symbol.
+- **The open question.** The browser's main thread does not return to its X event loop
+  after startup, so clicks sit unread in the socket. The RIP profiler settled what it
+  is NOT: not a spin. 63 of 64 recent samples are distinct addresses, and over a run
+  838 samples spread across 96+ code pages with no page above 5% — it is grinding
+  through an enormous amount of startup work, each part of it visible in its own log
+  lines. Turning that work off by flag (sync, extensions, background networking,
+  component updates, SafeBrowsing, OptimizationHints, SegmentationPlatform,
+  MediaRouter, Translate) did NOT make the click land, so the next question is what
+  the thread is waiting on once the work is gone: sample it again with those flags on
+  and map the top pages with `scripts/rip2sym.py`, and check whether an X request it
+  sent (its last syscall is always a `writev` to its own X connection) is waiting for
+  a reply the server never sent.
