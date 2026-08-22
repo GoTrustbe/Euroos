@@ -261,8 +261,8 @@ pub fn pump_keyboard() {
 static LAST_MOUSE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
 static LAST_BTN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static POINTER_WIN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-/// Armed once when queued input goes unread (see send_input).
-static STALL_ARMED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Tick of the last stall dump (see send_input); dumps re-fire after a cooldown.
+static STALL_LAST_DUMP: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// The window whose pixels the desktop currently shows in its frame (windowed mode).
 static RETAINED_ID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// The window that holds the keyboard focus (SetInputFocus), 0 = none yet.
@@ -1253,15 +1253,25 @@ fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, rx: i16, ry: i16
     // say what they are waiting on and what we report as ready — the only way to tell
     // "chrome never watches this fd" from "we tell it the fd is empty" from "we say
     // ready and chrome ignores it".
-    if c.outbuf.len() >= 128 && !STALL_ARMED.swap(true, core::sync::atomic::Ordering::Relaxed) {
-        crate::serial_println!("[xserver] {} B of input queued unread on connection {} — who should be reading it?",
-            c.outbuf.len(), c.rid_base >> 21);
-        crate::ring3::arm_wait_diag(30);
-        crate::ring3::dump_threads_now("input events queued unread");
-        crate::ring3::dump_main_syscalls();
-        crate::ring3::dump_futex_state();
-        // From here the profile is about the STALL, not about startup.
-        crate::ring3::reset_rip_profile();
+    // Re-arm with a cooldown instead of once-only: the first backlog often happens
+    // during hover (the thread is merely busy), and the dump that matters is the one
+    // taken while the click sits unread minutes later.
+    if c.outbuf.len() >= 128 {
+        let now = crate::interrupts::ticks();
+        let last = STALL_LAST_DUMP.load(core::sync::atomic::Ordering::Relaxed);
+        if now >= last + 3000
+            && STALL_LAST_DUMP.compare_exchange(last, now,
+                core::sync::atomic::Ordering::Relaxed, core::sync::atomic::Ordering::Relaxed).is_ok()
+        {
+            crate::serial_println!("[xserver] {} B of input queued unread on connection {} — who should be reading it?",
+                c.outbuf.len(), c.rid_base >> 21);
+            crate::ring3::arm_wait_diag(30);
+            crate::ring3::dump_threads_now("input events queued unread");
+            crate::ring3::dump_main_syscalls();
+            crate::ring3::dump_futex_state();
+            // From here the profile is about the STALL, not about startup.
+            crate::ring3::reset_rip_profile();
+        }
     }
 }
 

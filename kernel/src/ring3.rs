@@ -7728,7 +7728,7 @@ pub fn dump_rip_profile() {
     crate::serial_println!("[rip] main thread: last {} samples at {} distinct addresses:",
         RIP_SAMPLES, seen.len());
     for (rip, n) in seen.iter().take(6) {
-        crate::serial_println!("[rip]   {n:3}x {rip:#x} (exe+{:#x})", rip.wrapping_sub(DEMAND_BASE));
+        crate::serial_println!("[rip]   {n:3}x {rip:#x} = {}", demand_addr_origin(*rip));
     }
     let total = RIP_TOTAL.load(Ordering::Relaxed);
     let mut pages: alloc::vec::Vec<(u64, u64)> = (0..RIP_PAGES)
