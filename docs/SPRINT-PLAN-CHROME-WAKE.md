@@ -134,3 +134,33 @@ timestamp; tzset reads /etc/localtime through OUR VFS).
    or make the failing path return instead of block).
 3. Note: /etc/localtime is NOT in chrome_stage_files — staging a minimal TZif
    may fix the hang outright; test after identifying the holder.
+
+## 2026-08-23 late: SOLVED — the whole chain, in one line each
+
+1. Chrome's ThreadTicks: `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` — CHECKed.
+2. The vDSO answered -ENOSYS for unknown clocks; this glibc did not fall back.
+3. `FATAL: base/time/time_now_posix.cc:55` in a ThreadPool worker.
+4. glibc abort -> our silent tgkill -> glibc's hlt -> ring-3 GP -> thread dead —
+   HOLDING the stdio stream lock (_IO_lock_t owner = its TCB, matched by fs_base).
+5. main + viz + renderer park forever on a dead thread's lock: no frames, no
+   click collection, ~0% user CPU. Every earlier theory (values, resolution,
+   convoys, read cost) was measured and buried on the way to this.
+
+Fix: the vDSO serves every non-realtime clock as monotonic (cputime ~ walltime
+on one CPU; chrome only CHECKs success). Result, same run: 0 aborts, 0 lock
+waiters, **19 presents 6 s after map WITH the vDSO** — fast clock AND healthy
+browser, for the first time.
+
+Score: -70% syscalls (vDSO), REAL timed-waits 60 ms (were instant/forever),
+budgeted serial echo, FUTEX_CLOCK_REALTIME implemented, /etc/localtime staged,
+and a forensic toolkit (watched-lock ops, _IO_lock owner naming via fs_base,
+__abort_msg dereference, loud tgkill) that turned four opaque runs into a
+named root cause.
+
+## Open (next)
+- The CLICK: the browser is healthy now but still does not collect the button
+  events. Fresh problem, smaller: verify main's post-paint X loop (does it poll
+  fd603?), and audit our synthesized event fields (timestamps at ticks*10ms,
+  detail/state) against what a real X server sends.
+- tgkill should probably kill LOUDLY but completely (whole-process SIGABRT
+  semantics) so a future abort is a crash, not a mystery.
