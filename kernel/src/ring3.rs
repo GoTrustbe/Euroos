@@ -2561,6 +2561,14 @@ pub fn dump_futex_state() {
                 thread_name(t), now - FUTEX_WAIT_SINCE[t].load(Ordering::Relaxed), word);
         }
     }
+    // The watched lock as a STRUCT: if it is a pthread_mutex_t, +0 is __lock,
+    // +4 __count, +8 __owner (the holder's TID) — one dump names the holder.
+    {
+        let ws: alloc::vec::Vec<Option<u32>> =
+            (0..4).map(|i| read_glibc_u32(FUTEX_WATCH + i * 4)).collect();
+        crate::serial_println!("[futex] watched {FUTEX_WATCH:#x}: lock={:?} count={:?} owner={:?} kind={:?}",
+            ws[0], ws[1], ws[2], ws[3]);
+    }
     crate::serial_println!("[futex] last {} futex ops (tick t:op addr = result):", FOP_RING);
     let start = FOP_IDX.load(Ordering::Relaxed);
     for k in 0..FOP_RING {
@@ -2594,7 +2602,16 @@ fn lost_wake_check(uaddr: u64, woken: i32) {
     }
 }
 
+/// One watched futex address, every op on it logged with full context — for the
+/// stderr stream lock (stable at libc+0x204b50 across runs), whose wait chain
+/// stalls at word=2 with every toucher asleep. Low traffic: one op per message.
+const FUTEX_WATCH: u64 = 0x10014d2bb50;
+
 fn futex_wake(uaddr: u64, n: i32) -> u32 {
+    if uaddr == FUTEX_WATCH {
+        crate::serial_println!("[fw] @{} t{} WAKE n={n} word={:?}",
+            crate::interrupts::ticks(), crate::sched::current(), read_glibc_u32(uaddr));
+    }
     {
         let mut lw = FUTEX_LAST_WAKE.lock();
         let cur = crate::sched::current();
@@ -2628,6 +2645,10 @@ fn futex_wake(uaddr: u64, n: i32) -> u32 {
         }
     }
     lost_wake_check(uaddr, woken);
+    if uaddr == FUTEX_WATCH {
+        crate::serial_println!("[fw] @{} t{} WAKE done: woken={woken}",
+            crate::interrupts::ticks(), crate::sched::current());
+    }
     woken as u32
 }
 
@@ -2636,6 +2657,10 @@ fn futex_wake(uaddr: u64, n: i32) -> u32 {
 /// unblocks it; musl re-checks after a spurious wakeup). Otherwise -EAGAIN.
 fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     FUTEX_WAIT_COUNT.fetch_add(1, Ordering::Relaxed);
+    if uaddr == FUTEX_WATCH {
+        crate::serial_println!("[fw] @{} t{} WAIT val={val} deadline={deadline} word={:?}",
+            crate::interrupts::ticks(), crate::sched::current(), read_glibc_u32(uaddr));
+    }
     let cur = crate::sched::current();
     let now = crate::interrupts::ticks();
     // A timed wait whose deadline already passed returns -ETIMEDOUT immediately.
@@ -2690,7 +2715,15 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     if let Some(pos) = q.iter().position(|&(a, t)| a == uaddr && t == cur) {
         q.swap_remove(pos);
         drop(q);
+        if uaddr == FUTEX_WATCH {
+            crate::serial_println!("[fw] @{} t{cur} WAIT ret=TIMEOUT/spurious word={:?}",
+                crate::interrupts::ticks(), read_glibc_u32(uaddr));
+        }
         return if deadline != 0 { (-110i64) as u64 } else { 0 }; // ETIMEDOUT / spurious
+    }
+    if uaddr == FUTEX_WATCH {
+        crate::serial_println!("[fw] @{} t{cur} WAIT ret=WOKEN word={:?}",
+            crate::interrupts::ticks(), read_glibc_u32(uaddr));
     }
     0
 }
