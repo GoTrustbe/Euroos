@@ -223,6 +223,7 @@ pub fn pump_keyboard() {
             let want: u32 = if pressed { 0x1 } else { 0x2 }; // KeyPress / KeyRelease mask
             let kind: u8 = if pressed { 2 } else { 3 };
             let (mx, my) = crate::mouse::pos();
+            #[allow(unused_assignments)]
             let mut t = XCONNS.lock();
             // A key belongs to ONE window: the one holding the input focus, else the
             // one on top of the screen. Broadcasting a keystroke to every window was
@@ -230,6 +231,16 @@ pub fn pump_keyboard() {
             // toolbar, a page and a dialog open at the same time.
             let focus = FOCUS_WINDOW.load(core::sync::atomic::Ordering::Relaxed);
             let chosen = if focus != 0 { Some(focus) } else { topmost_presented() };
+            // Multicast to the selecting connections first (real X semantics: the
+            // event connection selected keys on a window another connection owns).
+            if let Some(wid) = chosen {
+                drop(t);
+                if deliver_selected(wid, want, kind, keycode, mx as i16, my as i16,
+                                    mx as i16, my as i16) > 0 {
+                    continue;
+                }
+                t = XCONNS.lock();
+            }
             if let Some(ci) = chosen.and_then(|w| conn_of_window(&t[..], w)) {
                 let wid = chosen.unwrap();
                 if let Some(conn) = t[ci].as_mut() {
@@ -263,6 +274,48 @@ static LAST_BTN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool
 static POINTER_WIN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// Tick of the last stall dump (see send_input); dumps re-fire after a cooldown.
 static STALL_LAST_DUMP: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// PER-CLIENT event selections: (window id, connection index, event mask). Real X
+/// keeps a mask per client per window — every client selects independently, and an
+/// event goes to EVERY selecting client on ITS OWN connection. Our single per-window
+/// mask meant "last writer wins": chrome's fourth connection cleared the mask the
+/// event connection had set, and input went to the window's OWNER (fd 604) while
+/// the thread that actually reads events sat on fd 603 forever.
+static SELECTIONS: Mutex<Vec<(u32, usize, u32)>> = Mutex::new(Vec::new());
+
+/// This connection's index in XCONNS, recoverable while it is OUT of the table
+/// (the processing dance): rid_base = (index+1)<<21.
+fn conn_index(c: &XConn) -> usize {
+    ((c.rid_base >> 21) as usize).saturating_sub(1)
+}
+
+fn select_events(win: u32, conn_idx: usize, mask: u32) {
+    let mut t = SELECTIONS.lock();
+    match t.iter_mut().find(|(w, c, _)| *w == win && *c == conn_idx) {
+        Some(e) => e.2 = mask,
+        None => t.push((win, conn_idx, mask)),
+    }
+}
+
+/// Deliver one input event to EVERY connection that selected `want` on `win`,
+/// each at window-local (lx,ly) with root (rx,ry). `want`==0 delivers to every
+/// selector of anything. The OWNING connection's fallback stays for clients that
+/// never registered a selection (our own demo apps).
+fn deliver_selected(win: u32, want: u32, kind: u8, detail: u8, rx: i16, ry: i16, lx: i16, ly: i16) -> u32 {
+    let sels: Vec<usize> = SELECTIONS.lock().iter()
+        .filter(|(w, _, m)| *w == win && (want == 0 || m & want != 0))
+        .map(|(_, c, _)| *c)
+        .collect();
+    let mut sent = 0;
+    let mut t = XCONNS.lock();
+    for ci in sels {
+        if let Some(Some(conn)) = t.get_mut(ci).map(|s| s.as_mut()) {
+            send_input(conn, kind, detail, win, rx, ry, lx, ly);
+            sent += 1;
+        }
+    }
+    sent
+}
 /// The window whose pixels the desktop currently shows in its frame (windowed mode).
 static RETAINED_ID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// The window that holds the keyboard focus (SetInputFocus), 0 = none yet.
@@ -363,26 +416,31 @@ pub fn pump_mouse() {
 /// windowed mode): the largest mapped window, as before.
 fn deliver_pointer(kind: u8, detail: u8, px: usize, py: usize, require_mask: u32) {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        let mut t = XCONNS.lock();
         if let Some((wid, dx, dy, sc)) = window_at(px as i32, py as i32) {
-            if let Some(ci) = conn_of_window(&t[..], wid) {
-                let conn = match t[ci].as_mut() {
-                    Some(c) => c,
-                    None => return,
-                };
-                let win = match conn.windows.iter().find(|w| w.id == wid) {
-                    Some(w) => (w.x, w.y, w.event_mask),
-                    None => return,
-                };
-                if require_mask != 0 && win.2 & require_mask == 0 {
-                    return;
-                }
-                let lx = ((px as i32 - dx) / sc.max(1)) as i16;
-                let ly = ((py as i32 - dy) / sc.max(1)) as i16;
-                send_input(conn, kind, detail, wid, win.0 + lx, win.1 + ly, lx, ly);
+            let lx = ((px as i32 - dx) / sc.max(1)) as i16;
+            let ly = ((py as i32 - dy) / sc.max(1)) as i16;
+            // Real X: the event goes to EVERY connection that selected it on this
+            // window — chrome selects on its event connection, not on the window's
+            // owner. Fall back to the owner only when nobody registered a selection.
+            let sent = deliver_selected(wid, require_mask, kind, detail,
+                                        px as i16, py as i16, lx, ly);
+            if sent > 0 {
                 return;
             }
+            let mut t = XCONNS.lock();
+            if let Some(ci) = conn_of_window(&t[..], wid) {
+                if let Some(conn) = t[ci].as_mut() {
+                    let ok = conn.windows.iter().find(|w| w.id == wid)
+                        .map(|w| require_mask == 0 || w.event_mask & require_mask != 0)
+                        .unwrap_or(false);
+                    if ok {
+                        send_input(conn, kind, detail, wid, px as i16, py as i16, lx, ly);
+                    }
+                }
+            }
+            return;
         }
+        let mut t = XCONNS.lock();
         for conn in t.iter_mut().flatten() {
             if let Some((wid, wx, wy)) = input_target(conn, require_mask) {
                 send_input(conn, kind, detail, wid, px as i16, py as i16,
@@ -630,6 +688,9 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             // CreateWindow can carry an event-mask too (value-mask @28, CWEventMask=0x800).
             let em = win_event_mask(c, req, 28, 32);
             c.windows.push(XWindow { id, x, y, w, h, mapped: false, event_mask: em, buf });
+            if em != 0 {
+                select_events(id, conn_index(c), em);
+            }
             trace(format_args!("CreateWindow id={id:#x} {w}x{h} @({x},{y}) mask={em:#x}"));
         }
         // CreateGC(55): cid@4, drawable@8, value-mask@12, values@16.
@@ -657,7 +718,14 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             if let Some(win) = c.windows.iter_mut().find(|w| w.id == id) {
                 win.event_mask |= em;
             }
-            trace(format_args!("ChangeWindowAttributes id={id:#x} event-mask={em:#x}"));
+            // PER-CLIENT selection — and on FOREIGN windows too. A client may select
+            // events on any window it knows the id of; chrome's event connection
+            // selects on the window another of its connections created, and dropping
+            // that here was exactly why clicks reached a connection nobody reads.
+            if em != 0 {
+                select_events(id, conn_index(c), em);
+            }
+            trace(format_args!("ChangeWindowAttributes id={id:#x} event-mask={em:#x} conn={}", conn_index(c)));
         }
         // MapWindow(8): window@4 -> visible; present it; then deliver the events the
         // window asked for (Expose always; test key/button when injection is enabled).
@@ -1015,6 +1083,7 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             }
             if opcode == 4 {
                 c.windows.retain(|w| w.id != id);
+                SELECTIONS.lock().retain(|(w, _, _)| *w != id);
             } else if let Some(win) = c.windows.iter_mut().find(|w| w.id == id) {
                 win.mapped = false;
             }
