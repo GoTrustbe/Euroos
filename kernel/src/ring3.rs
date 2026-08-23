@@ -5023,9 +5023,31 @@ pub fn vdso_tick() {
     }
 }
 
+/// Serial-echo budget for guest stdout/stderr: bytes echoed this second + the second.
+const ECHO_BUDGET: u64 = 2048;
+static ECHO_USED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static ECHO_SEC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 /// Paint watch: presents seen at the last check + when they last changed.
 static PAINT_WATCH: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static PAINT_WATCH_RTC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// THE wall clock, in nanoseconds: RTC epoch read once, advanced by ticks. Every
+/// consumer — the realtime syscalls, gettimeofday, the FUTEX_CLOCK_REALTIME
+/// conversion and the vDSO page — reads THIS, so an absolute deadline computed from
+/// any of them always lands where the comparison expects it. Consistency between
+/// sources matters more than absolute truth: the 918 ms error in a 50 ms realtime
+/// wait was pure granularity mismatch (second-grain CMOS in the futex vs
+/// nanosecond-grain gettimeofday in glibc).
+pub fn wall_ns() -> u64 {
+    let base = VDSO_EPOCH_BASE.load(Ordering::Relaxed);
+    if base == 0 {
+        return crate::rtc::epoch() * 1_000_000_000; // pre-vdso boot phase
+    }
+    base * 1_000_000_000
+        + crate::interrupts::ticks().saturating_sub(VDSO_EPOCH_TICKS.load(Ordering::Relaxed))
+            * 10_000_000
+}
 
 /// rdtsc calibration state: the last REAL tick's count + tsc, and the derived
 /// ns-per-tsc factor (<<20 fixed point) the vDSO interpolates with.
@@ -8199,7 +8221,26 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     // not depend on a program's encoding.
                     let t = alloc::string::String::from_utf8_lossy(&bytes);
                     OUTPUT.lock().push_str(&t);
-                    serial_print!("[linux-abi] {t}");
+                    // The serial echo is BUDGETED. Echoing synchronously inside the
+                    // syscall — with IF masked — costs a busy-waited UART write per
+                    // byte: a 10 KB chrome error message took SECONDS under TCG, the
+                    // writer held glibc's stderr stream lock the whole time, every
+                    // other logging thread queued behind it, and the frame loop
+                    // starved (main and the renderer were found parked on that lock
+                    // in run after run). The full text is ALWAYS captured in OUTPUT
+                    // (printed at run end / drained by the hosted-app path); the
+                    // echo is a live convenience, capped per real second.
+                    let sec = crate::rtc::epoch();
+                    if ECHO_SEC.swap(sec, Ordering::Relaxed) != sec {
+                        let dropped = ECHO_USED.swap(0, Ordering::Relaxed).saturating_sub(ECHO_BUDGET);
+                        if dropped > 0 {
+                            crate::serial_println!("[linux-abi] (echo capped: {dropped} B not echoed last second; full text in OUTPUT)");
+                        }
+                    }
+                    let used = ECHO_USED.fetch_add(t.len() as u64, Ordering::Relaxed);
+                    if used < ECHO_BUDGET {
+                        serial_print!("[linux-abi] {t}");
+                    }
                 }
                 a3
             } else if crate::net::is_eventfd(a1) {
@@ -9909,12 +9950,11 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         let sec: u64 = read_user(a4).unwrap_or(0);
                         let nsec: u64 = read_user(a4 + 8).unwrap_or(0);
                         if realtime && op == 9 {
-                            let now_sec = crate::rtc::epoch();
-                            let rel_ticks = sec.saturating_sub(now_sec).saturating_mul(100)
-                                + nsec.div_ceil(10_000_000);
+                            let dl_ns = sec.saturating_mul(1_000_000_000).saturating_add(nsec);
+                            let rel_ns = dl_ns.saturating_sub(wall_ns());
                             // An already-past wall deadline waits one tick, not zero:
                             // zero would re-create the instant-expiry spin.
-                            crate::interrupts::ticks() + rel_ticks.max(1)
+                            crate::interrupts::ticks() + (rel_ns.div_ceil(10_000_000)).max(1)
                         } else {
                         // Round UP to our 10 ms tick. Truncating rounded a deadline a few
                         // milliseconds in the future DOWN to "already passed", so a timed
@@ -9995,7 +10035,8 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // REAL wall clock (RTC epoch); CLOCK_MONOTONIC(1)/BOOTTIME(7) the uptime.
             if a2 != 0 {
                 let (sec, nsec) = if a1 == 0 || a1 == 11 {
-                    (crate::rtc::epoch(), 0)
+                    let w = wall_ns();
+                    (w / 1_000_000_000, w % 1_000_000_000)
                 } else {
                     let ticks = crate::interrupts::ticks();
                     (ticks / 100, (ticks % 100) * 10_000_000) // 100 Hz PIT
@@ -10039,9 +10080,13 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             0
         }
         96 => {
-            // gettimeofday(*timeval, tz): {tv_sec, tv_usec} from the real RTC wall clock.
+            // gettimeofday(*timeval, tz): {tv_sec, tv_usec} from the ONE wall clock
+            // (wall_ns) — the same source the realtime syscalls and the futex
+            // realtime conversion use, so a deadline computed here always lands
+            // where the futex comparison expects it.
             if a1 != 0 {
-                if !write_user(a1, crate::rtc::epoch()) || !write_user(a1 + 8, 0u64) {
+                let w = wall_ns();
+                if !write_user(a1, w / 1_000_000_000) || !write_user(a1 + 8, (w % 1_000_000_000) / 1000) {
                     return EFAULT;
                 }
             }

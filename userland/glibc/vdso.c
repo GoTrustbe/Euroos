@@ -44,18 +44,15 @@ static int read_clock(int clk, unsigned long *sec, unsigned long *nsec)
     unsigned long s1, base_ns, tsc0, per10ms, dt_ns, ns;
     int real;
     switch (clk) {
-    /* DELIBERATE: REALTIME punts to the syscall (-ENOSYS -> glibc falls back).
-     * The syscall reads the CMOS wall clock, and the kernel's FUTEX_CLOCK_REALTIME
-     * conversion measures against the SAME clock — one wall-time source, so an
-     * absolute realtime deadline glibc computes always lands where the kernel
-     * expects it. The vDSO's tick-derived wall time lags the CMOS under emulation
-     * and would reopen exactly the instant-expiry / 57-year-park split that killed
-     * the frame loop. Monotonic stays vDSO-served (fast + rdtsc-interpolated). */
-    case 0: case 5: case 11: return -38;
+    case 0: case 5: case 11: real = 1; break;      /* REALTIME / _COARSE / TAI */
     case 1: case 4: case 6: case 7: case 9: real = 0; break; /* MONOTONIC family / BOOTTIME */
-    default: return -38;
+    default: return -38;                            /* -ENOSYS: glibc falls back to the syscall */
     }
-    (void)real;
+    /* REALTIME is served from the page again: the kernel now derives its wall clock
+     * (syscalls, gettimeofday AND the FUTEX_CLOCK_REALTIME conversion) from the very
+     * same tick-anchored source that fills [3] here, so every reader agrees. The
+     * earlier instant-expiry/57-year split came from MIXED sources, not from serving
+     * realtime as such. */
     do {
         s1 = __vdso_data[0];
         base_ns = __vdso_data[real ? 3 : 1];
