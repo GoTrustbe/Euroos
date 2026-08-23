@@ -6606,7 +6606,13 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     b"--disable-in-process-stack-traces", b"--lang=en-US",
     b"--disable-gpu-compositing",
     b"--window-size=800,600", b"--window-position=40,40",
-    b"--enable-logging=stderr", b"--v=1",
+    // NO verbose logging. With the vDSO the clock got fast, chrome's startup got
+    // fast, and its --v=1 stderr firehose became the bottleneck: multi-KB writes
+    // serialised over an emulated serial port take seconds each, forty threads
+    // convoy on glibc's stderr stream lock (main AND VizCompositor were parked on
+    // it in the futex dumps), and no frame ever gets composited. The log was the
+    // deadlock. Re-enable locally when hunting a specific message.
+    b"--enable-logging=stderr",
     b"--no-first-run", b"--no-default-browser-check",
     // Everything the browser does BESIDES showing the page. The RIP histogram settled
     // what the main thread is busy with: 838 samples spread over 96+ code pages with
@@ -6996,7 +7002,10 @@ pub fn run_glibc_disk(
         // ten wall minutes), and when everything sleeps the launcher only iterates
         // ~100/s (an iteration-count print goes quiet for hours). The RTC is the one
         // clock here that matches the watchdog's.
-        if iters % 1024 == 0 {
+        if iters % 64 == 0 {
+            // %64, not %1024: with the idle-hlt launcher this loop iterates a few
+            // times per second, and the old gate silenced the heartbeat AND the
+            // paint watch for hundreds of seconds.
             // Pre-paint stall: the window is mapped but nothing has presented for
             // 30 real seconds — arm the profilers, so the 242 s mystery documents
             // itself instead of needing a click to trigger the dumps.
@@ -7006,7 +7015,10 @@ pub fn run_glibc_disk(
             if presents != lastp {
                 PAINT_WATCH.store(presents, Ordering::Relaxed);
                 PAINT_WATCH_RTC.store(now_rtc0, Ordering::Relaxed);
-            } else if crate::xserver::front_window_size().is_some()
+            } else if presents > 0
+                // presents>0 = a window HAS painted once; front_window_size() only
+                // works in windowed mode (it reads the retained buffer), so it kept
+                // this arm from ever firing in the fullscreen boot phase.
                 && now_rtc0 >= PAINT_WATCH_RTC.load(Ordering::Relaxed) + 30
                 && !RIP_PROFILING.load(Ordering::Relaxed)
             {

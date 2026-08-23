@@ -106,6 +106,12 @@ __attribute__((visibility("default")))
 int __vdso_clock_getres(int clk, struct timespec *ts)
 {
     (void)clk;
-    if (ts) { ts->tv_sec = 0; ts->tv_nsec = 10000000; } /* 10 ms — the tick */
+    /* 1 ns, NOT the 10 ms tick. The kernel's syscall clock_getres already learned
+     * this the hard way (its comment says so): chrome sizes its timers off the
+     * REPORTED resolution during time-subsystem init, and a coarse answer makes
+     * TimeTicks low-resolution and degrades frame scheduling. The vDSO shadowing
+     * that syscall with 10 ms silently undid the fix — one present, then no frame
+     * loop, ever. The rdtsc interpolation makes fine resolution honest anyway. */
+    if (ts) { ts->tv_sec = 0; ts->tv_nsec = 1; }
     return 0;
 }
