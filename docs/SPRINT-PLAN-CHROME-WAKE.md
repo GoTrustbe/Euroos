@@ -79,3 +79,30 @@ connection fd, so no click can wake anything.
 - Suspects, in order: a wake swallowed by our futex when the word transitions
   2->0 concurrently; stdio lock elision (_IO_lock) semantics we violate; a writer
   parked inside OUR write(2) path while holding the lock.
+
+## Session close (2026-08-23): what the traps established
+
+- **ab2's lock-word dump split the deadlock three ways in one screen**: two waiters
+  parked on words reading 0 (mutex FREE, waiter asleep — a wake demonstrably lost),
+  two on the stderr lock reading 2, one on 1. The word dump works and is the tool.
+- **The lost-wake trap** (futex_wake finding nobody in the queue while the per-task
+  table shows a parked waiter) armed and fired ZERO times in a full run — so the
+  queue and table never disagree at wake time. Whatever loses the wake does so on
+  the glibc side of the word, or the wake is never sent.
+- **Clock honesty has a price.** After unifying TICKS and the vDSO page, guest
+  ticks track wall time ~1:1 — and chrome's paint went from "sometimes 6 s" to
+  242 s to (trap1) no window in 45 minutes. Hypothesis for next session: with an
+  honest fast clock, chrome's own timeouts and backoffs now bind at true TCG
+  slowness; the crawling clock used to compress them. The A/B switch
+  (EUROOS_NOVDSO + SKIP_BUILD=1) reproduces both worlds on demand.
+
+## Next session, in order
+1. Reproduce the 242 s paint with the vDSO on and read the [krip]/[cpu]/[msc]
+   dumps DURING the pre-paint window (the periodic stall dumps only arm on unread
+   input; arm them on "no present for 30 s" too).
+2. The stderr-lock chain from ab2: who holds it (word=2) — dump ALL threads' last
+   syscalls at that moment and find the one inside a write path.
+3. Consider: vDSO mono clock at 10 ms granularity returning IDENTICAL values for
+   ~10 ms stretches — chrome's delay-until-deadline math with now()==deadline
+   rounding. A sub-tick component (rdtsc-scaled) in the vDSO page would give
+   monotonic microsecond progress between ticks.

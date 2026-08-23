@@ -521,6 +521,30 @@ pub fn demand_page_mapped(pml4: u64, virt: u64) -> bool {
 /// pulls its tables from the demand pool and silently cannot run that early: the
 /// auxv then promises a vDSO whose pages fault on first touch (ld.so died at
 /// VDSO_BASE+0x20 reading e_phoff).
+/// Translate a user VA through an arbitrary PML4 to its physical address (None if
+/// unmapped). For diagnostics that must read another process's memory — e.g. the
+/// futex lock WORD of a deadlocked glibc process, dumped from the launcher.
+pub fn translate_in(pml4: u64, virt: u64) -> Option<u64> {
+    unsafe {
+        let mut table = pml4;
+        for shift in [39u64, 30, 21] {
+            let e = (table as *const u64).add(((virt >> shift) & 0x1FF) as usize).read_volatile();
+            if e & PRESENT == 0 {
+                return None;
+            }
+            if shift == 21 && e & HUGE != 0 {
+                return Some((e & ADDR_MASK) + (virt & 0x1F_FFFF));
+            }
+            table = e & ADDR_MASK;
+        }
+        let e = (table as *const u64).add(((virt >> 12) & 0x1FF) as usize).read_volatile();
+        if e & PRESENT == 0 {
+            return None;
+        }
+        Some((e & ADDR_MASK) + (virt & 0xFFF))
+    }
+}
+
 pub fn map_user_4k_falloc(falloc: &mut euromm::FrameAllocator, pml4: u64, virt: u64, phys: u64) -> bool {
     unsafe {
         let mut table = pml4;
