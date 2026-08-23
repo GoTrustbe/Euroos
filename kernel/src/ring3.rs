@@ -2577,6 +2577,23 @@ pub fn dump_futex_state() {
     }
 }
 
+/// The lost-wake trap: a wake that finds NOBODY in the queue while the per-task
+/// table says somebody is parked on that address is the inconsistency itself,
+/// caught at the moment it happens — with both views printed.
+fn lost_wake_check(uaddr: u64, woken: i32) {
+    if woken > 0 {
+        return;
+    }
+    for t in 0..64 {
+        if FUTEX_WAIT_ADDR[t].load(Ordering::Relaxed) == uaddr {
+            crate::serial_println!(
+                "[futex] LOST-WAKE CAUGHT: wake({uaddr:#x}) found no queue entry, but t{t} {:?} is parked on it (since tick {}, state {:?})",
+                thread_name(t), FUTEX_WAIT_SINCE[t].load(Ordering::Relaxed),
+                crate::sched::state_of(t));
+        }
+    }
+}
+
 fn futex_wake(uaddr: u64, n: i32) -> u32 {
     {
         let mut lw = FUTEX_LAST_WAKE.lock();
@@ -2610,6 +2627,7 @@ fn futex_wake(uaddr: u64, n: i32) -> u32 {
             i += 1;
         }
     }
+    lost_wake_check(uaddr, woken);
     woken as u32
 }
 

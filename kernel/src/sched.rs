@@ -280,6 +280,21 @@ pub fn mark_dead(idx: usize) {
 /// Is task `idx` Dead (terminated, awaiting reclaim)? Used to reclaim leaked
 /// per-thread resources (e.g. kernel-stack slots) whose owner faulted without
 /// running the clean exit path.
+/// A task's scheduler state, printable — for the futex lost-wake trap.
+pub fn state_of(idx: usize) -> Option<&'static str> {
+    let s = SCHED.try_lock()?;
+    if idx >= s.count {
+        return None;
+    }
+    Some(match s.tasks[idx].state {
+        State::Ready => "Ready",
+        State::Blocked(_) => "Blocked",
+        State::Sleeping(_) => "Sleeping",
+        State::Zombie(_) => "Zombie",
+        State::Dead => "Dead",
+    })
+}
+
 pub fn is_dead(idx: usize) -> bool {
     let s = SCHED.lock();
     idx < s.count && s.tasks[idx].state == State::Dead
