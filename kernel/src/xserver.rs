@@ -669,6 +669,15 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
         // QueryExtension (98): report every extension as not-present so Xlib falls
         // back to core protocol. Reply: present=0.
         98 => {
+            // QueryExtension(name): the name is a length-prefixed string at req[4..].
+            // Trace it — whether chrome asks for XInputExtension (and thus wants XI2
+            // GenericEvents instead of core ButtonPress) is the whole question about
+            // why it reads our click and does nothing.
+            let nlen = ru16(c, req, 4) as usize;
+            if req.len() >= 8 + nlen {
+                let name = alloc::string::String::from_utf8_lossy(&req[8..8 + nlen]);
+                trace(format_args!("QueryExtension {:?} -> not present", name));
+            }
             let mut r = reply_header(c, 0);
             // 24 extra bytes already zero: present(1)=0, major(1), first-event(1),
             // first-error(1), then 20 unused. Nothing more to set.
