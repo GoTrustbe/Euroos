@@ -9896,9 +9896,26 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     // Compute the wake deadline (in 100 Hz ticks) from the timeout arg
                     // (a4, a timespec). WAIT (0): RELATIVE; WAIT_BITSET (9): ABSOLUTE vs
                     // CLOCK_MONOTONIC (== our ticks/100). 0 = no timeout = block forever.
+                    //
+                    // FUTEX_CLOCK_REALTIME (bit 8 of the op word): the abstime is WALL
+                    // time (epoch seconds ~1.79e9). Reading that as monotonic ticks
+                    // made every realtime wait park ~57 years out — and, in the vDSO
+                    // world, glibc's other path made the same waits expire INSTANTLY,
+                    // so chrome's realtime-waiting threads spun in futex syscalls
+                    // (sys-202 count exploded 6.5x) and the compositor never ran.
+                    // Convert against OUR wall clock into a monotonic deadline.
+                    let realtime = a2 & 0x100 != 0;
                     let deadline = if a4 != 0 {
                         let sec: u64 = read_user(a4).unwrap_or(0);
                         let nsec: u64 = read_user(a4 + 8).unwrap_or(0);
+                        if realtime && op == 9 {
+                            let now_sec = crate::rtc::epoch();
+                            let rel_ticks = sec.saturating_sub(now_sec).saturating_mul(100)
+                                + nsec.div_ceil(10_000_000);
+                            // An already-past wall deadline waits one tick, not zero:
+                            // zero would re-create the instant-expiry spin.
+                            crate::interrupts::ticks() + rel_ticks.max(1)
+                        } else {
                         // Round UP to our 10 ms tick. Truncating rounded a deadline a few
                         // milliseconds in the future DOWN to "already passed", so a timed
                         // wait returned ETIMEDOUT instantly, the caller retried, and the
@@ -9910,6 +9927,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         // a truly-past absolute deadline still times out immediately.
                         let t = sec.wrapping_mul(100) + nsec.div_ceil(10_000_000);
                         if op == 9 { t } else { crate::interrupts::ticks() + t }
+                        }
                     } else {
                         0
                     };

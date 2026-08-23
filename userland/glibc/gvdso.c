@@ -7,6 +7,9 @@
 #include <time.h>
 #include <sys/time.h>
 #include <sys/auxv.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <pthread.h>
 #include <elf.h>
 
 typedef int (*cg_t)(clockid_t, struct timespec *);
@@ -78,6 +81,55 @@ int main(void)
     long dns = (w.tv_sec - u.tv_sec) * 1000000000L + (w.tv_nsec - u.tv_nsec);
     printf("gvdso: sub-tick delta over a short spin = %ld ns (%s)\n", dns,
            dns > 0 && dns < 10000000 ? "INTERPOLATING" : dns == 0 ? "FLAT (no sub-tick)" : "coarse");
+    /* vDSO vs raw syscall, same instant: any offset or scale bug shows here. */
+    for (int i = 0; i < 3; i++) {
+        struct timespec sv, sy;
+        clock_gettime(CLOCK_MONOTONIC, &sv);            /* glibc -> vDSO */
+        syscall(228 /*SYS_clock_gettime*/, 1, &sy);     /* forced kernel path */
+        long d = (sv.tv_sec - sy.tv_sec) * 1000000000L + (sv.tv_nsec - sy.tv_nsec);
+        printf("gvdso: mono vdso=%ld.%09ld syscall=%ld.%09ld delta=%ld ns\n",
+               sv.tv_sec, sv.tv_nsec, sy.tv_sec, sy.tv_nsec, d);
+        for (volatile int j = 0; j < 200000; j++) ;
+    }
+    /* The primitive chrome's frame loop lives on: a timed condvar wait. If the
+     * vDSO's presence breaks glibc's absolute-deadline math, a 50 ms wait here
+     * takes seconds (or forever) and the whole browser mystery reproduces in a
+     * five-second probe. Measured with BOTH clock attrs. */
+    {
+        pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+        pthread_cond_t c1; pthread_condattr_t at;
+        pthread_condattr_init(&at);
+        pthread_condattr_setclock(&at, CLOCK_MONOTONIC);
+        pthread_cond_init(&c1, &at);
+        struct timespec dl, t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        dl = t0; dl.tv_nsec += 50000000; if (dl.tv_nsec >= 1000000000) { dl.tv_sec++; dl.tv_nsec -= 1000000000; }
+        pthread_mutex_lock(&m);
+        int r = pthread_cond_timedwait(&c1, &m, &dl);
+        pthread_mutex_unlock(&m);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+        printf("gvdso: cond_timedwait(MONO, 50ms) -> r=%d after %ld ms (%s)\n", r, ms,
+               ms < 200 ? "ok" : "BROKEN");
+        pthread_cond_t c2 = PTHREAD_COND_INITIALIZER; /* default clock = REALTIME */
+        struct timespec rt;
+        clock_gettime(CLOCK_REALTIME, &rt);
+        rt.tv_nsec += 50000000; if (rt.tv_nsec >= 1000000000) { rt.tv_sec++; rt.tv_nsec -= 1000000000; }
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        pthread_mutex_lock(&m);
+        r = pthread_cond_timedwait(&c2, &m, &rt);
+        pthread_mutex_unlock(&m);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+        printf("gvdso: cond_timedwait(REAL, 50ms) -> r=%d after %ld ms (%s)\n", r, ms,
+               ms < 200 ? "ok" : "BROKEN");
+        /* And a plain 30 ms usleep for the nanosleep path. */
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        usleep(30000);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+        printf("gvdso: usleep(30ms) took %ld ms (%s)\n", ms, ms < 200 ? "ok" : "BROKEN");
+    }
     printf("gvdso: OK\n");
     return 0;
 }
