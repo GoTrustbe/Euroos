@@ -130,6 +130,19 @@ pub fn write(fd: u64, data: &[u8]) -> u64 {
 }
 
 /// The client is reading — drain up to `max` bytes of queued replies/events.
+/// Connections that have DRAINED events (called read and got bytes) — the ones with
+/// a live event loop pumping this socket. A window event whose selector never reads
+/// (chrome's synchronous browser connection selects but does not poll) is ALSO
+/// delivered to these, because that is the thread chrome routes X input to.
+static READER_CONNS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+fn mark_reader(idx: usize) {
+    let mut r = READER_CONNS.lock();
+    if !r.contains(&idx) {
+        r.push(idx);
+    }
+}
+
 pub fn read(fd: u64, max: usize) -> Vec<u8> {
     let mut t = XCONNS.lock();
     let c = match t.get_mut((fd - XCONN_FD_BASE) as usize).and_then(|s| s.as_mut()) {
@@ -139,6 +152,7 @@ pub fn read(fd: u64, max: usize) -> Vec<u8> {
     let n = max.min(c.outbuf.len());
     if n > 0 {
         trace(format_args!("client read {n} B ({} left queued)", c.outbuf.len() - n));
+        mark_reader((fd - XCONN_FD_BASE) as usize);
     }
     c.outbuf.drain(0..n).collect()
 }
@@ -286,7 +300,11 @@ static SELECTIONS: Mutex<Vec<(u32, usize, u32)>> = Mutex::new(Vec::new());
 /// This connection's index in XCONNS, recoverable while it is OUT of the table
 /// (the processing dance): rid_base = (index+1)<<21.
 fn conn_index(c: &XConn) -> usize {
-    ((c.rid_base >> 21) as usize).saturating_sub(1)
+    // rid_base = RID_BASE + index * 0x200000 — subtract the BASE first. The naive
+    // (rid>>21)-1 pointed every selection one slot too high: the browser window
+    // (slot 0, the fd main actually reads) registered under slot 1, and the
+    // multicast delivered every click to the wrong neighbour.
+    ((c.rid_base.wrapping_sub(RID_BASE) >> 21) as usize).min(MAX_XCONN - 1)
 }
 
 fn select_events(win: u32, conn_idx: usize, mask: u32) {
@@ -302,13 +320,24 @@ fn select_events(win: u32, conn_idx: usize, mask: u32) {
 /// selector of anything. The OWNING connection's fallback stays for clients that
 /// never registered a selection (our own demo apps).
 fn deliver_selected(win: u32, want: u32, kind: u8, detail: u8, rx: i16, ry: i16, lx: i16, ly: i16) -> u32 {
-    let sels: Vec<usize> = SELECTIONS.lock().iter()
+    // Every connection that selected `want` on `win`...
+    let mut targets: Vec<usize> = SELECTIONS.lock().iter()
         .filter(|(w, _, m)| *w == win && (want == 0 || m & want != 0))
         .map(|(_, c, _)| *c)
         .collect();
+    // ...PLUS every connection with a live event loop (a reader). Chrome's browser
+    // connection selects input on its window but never polls that socket — its input
+    // thread pumps a DIFFERENT connection, and X input for the UI is routed to it.
+    // Without this the event sits unread on a connection nobody reads (measured:
+    // only fd606 was ever polled; the click queued forever on fd603).
+    for r in READER_CONNS.lock().iter() {
+        if !targets.contains(r) {
+            targets.push(*r);
+        }
+    }
     let mut sent = 0;
     let mut t = XCONNS.lock();
-    for ci in sels {
+    for ci in targets {
         if let Some(Some(conn)) = t.get_mut(ci).map(|s| s.as_mut()) {
             send_input(conn, kind, detail, win, rx, ry, lx, ly);
             sent += 1;
@@ -1335,7 +1364,7 @@ fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, rx: i16, ry: i16
                 core::sync::atomic::Ordering::Relaxed, core::sync::atomic::Ordering::Relaxed).is_ok()
         {
             crate::serial_println!("[xserver] {} B of input queued unread on connection {} — who should be reading it?",
-                c.outbuf.len(), c.rid_base >> 21);
+                c.outbuf.len(), conn_index(c));
             crate::ring3::arm_wait_diag(30);
             crate::ring3::dump_threads_now("input events queued unread");
             crate::ring3::dump_main_syscalls();
