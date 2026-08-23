@@ -192,3 +192,28 @@ to probe next, cheapest first:
    -> not present), so chrome SHOULD fall back to core — verify it actually
    selected core input and is not waiting for XI2 GenericEvents we never send.
    THIS is the strongest lead: check what chrome selected, not what we deliver.
+
+
+## The click, pinned to one fact (2026-08-23 night, close)
+
+Two measurements settle where the remaining work is:
+- XI2 RULED OUT: chrome queries XInputExtension (+XKEYBOARD, XTEST); we report
+  all absent; it uses CORE ButtonPress — what we send.
+- fd603 (the browser connection that OWNS window 0x400003 and SELECTS input on
+  it) is NEVER polled — 60/60 wait dumps poll only fd606, the Ozone/X11 input
+  connection. This is chrome's architecture: fd603 carries outgoing requests,
+  input arrives on fd606, whose event thread routes it internally.
+
+Our reader-delivery gets the event to fd606 and chrome READS it (queue drains,
+was growing forever) — then discards it. The reason is now specific: the event
+carries window=0x400003, a resource fd606 does not own. Chrome's per-connection
+X11 event source drops an event whose window it cannot resolve on THAT
+connection.
+
+THE NEXT CHANGE (one, targeted): when delivering to a reader connection that is
+not the window's owner, rewrite the event's window field to a toplevel THAT
+connection owns and selects ButtonPress on (fd606 created 0x600001 with mask
+0x43807c = ButtonPress set). Translate the coordinates into that window. If
+chrome then acts on the click, the sprint-3 goal is finally met. This is a
+fresh, bounded change — not attempted this session to avoid a speculative run
+at the end of a long chain.
