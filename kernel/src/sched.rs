@@ -295,6 +295,13 @@ pub fn state_of(idx: usize) -> Option<&'static str> {
     })
 }
 
+/// The task whose saved FS_BASE equals `tcb` — on x86_64 pthread_t IS the TCB
+/// address IS fs_base, so glibc's _IO_lock_t owner pointer names a task directly.
+pub fn task_by_fs_base(tcb: u64) -> Option<usize> {
+    let s = SCHED.try_lock()?;
+    (0..s.count).find(|&i| s.tasks[i].fs_base == tcb)
+}
+
 pub fn is_dead(idx: usize) -> bool {
     let s = SCHED.lock();
     idx < s.count && s.tasks[idx].state == State::Dead

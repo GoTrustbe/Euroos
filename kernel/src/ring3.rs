@@ -2568,6 +2568,41 @@ pub fn dump_futex_state() {
             (0..4).map(|i| read_glibc_u32(FUTEX_WATCH + i * 4)).collect();
         crate::serial_println!("[futex] watched {FUTEX_WATCH:#x}: lock={:?} count={:?} owner={:?} kind={:?}",
             ws[0], ws[1], ws[2], ws[3]);
+        // _IO_lock_t = {int lock; int cnt; void *owner}: the owner is a POINTER, the
+        // pthread descriptor — which on x86_64 IS the thread's FS_BASE. Name the task.
+        if let (Some(lo), Some(hi)) = (ws[2], ws[3]) {
+            let owner = (hi as u64) << 32 | lo as u64;
+            match crate::sched::task_by_fs_base(owner) {
+                Some(t) => {
+                    let (n, a, r) = last_syscall(t);
+                    crate::serial_println!(
+                        "[futex] HOLDER: owner tcb {owner:#x} = task {t} {:?} (state {:?}, last={n}(a1={a:#x})->{r:#x})",
+                        thread_name(t), crate::sched::state_of(t));
+                }
+                None => crate::serial_println!("[futex] HOLDER: owner tcb {owner:#x} matches NO live task (died holding it?)"),
+            }
+        }
+        // __abort_msg (16 bytes below the watched lock) holds the DYING WORDS of an
+        // aborted thread: glibc stores the assertion text there before tgkill. The
+        // holder of this lock died by abort — this is the actual bug's name.
+        let am_ptr = read_glibc_u32(FUTEX_WATCH - 0x10).map(|lo| lo as u64).zip(
+            read_glibc_u32(FUTEX_WATCH - 0x0c).map(|hi| (hi as u64) << 32))
+            .map(|(lo, hi)| lo | hi).unwrap_or(0);
+        if am_ptr != 0 {
+            // struct abort_msg_s { unsigned long size; char msg[]; }
+            let mut msg = alloc::string::String::new();
+            for i in 0..240u64 {
+                match read_glibc_u32(am_ptr + 8 + (i & !3)) {
+                    Some(w) => {
+                        let b = (w >> ((i % 4) * 8)) as u8;
+                        if b == 0 { break; }
+                        msg.push(if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' });
+                    }
+                    None => break,
+                }
+            }
+            crate::serial_println!("[abort] __abort_msg: {msg}");
+        }
     }
     crate::serial_println!("[futex] last {} futex ops (tick t:op addr = result):", FOP_RING);
     let start = FOP_IDX.load(Ordering::Relaxed);
@@ -6646,6 +6681,11 @@ pub fn chrome_stage_files() {
     register_file("/dev/zero", alloc::vec![0u8; 4096]);
     register_file("/dev/urandom", (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect());
     register_file("/tmp/euro.html", include_bytes!("euro_page.html").to_vec());
+    // /etc/localtime: every chrome log line formats a timestamp, localtime_r takes
+    // glibc's tz lock and reads this file on first use — and the lock at
+    // __abort_msg+0x10 is exactly where main/viz/renderer were found parked with
+    // zero wakes since boot. A real 114-byte UTC TZif ends the lookup instantly.
+    register_file_static("/etc/localtime", include_bytes!("../../userland/glibc/UTC.tzif"));
 }
 
 /// The argv chrome is launched with (headed, X11, no GPU, no sandbox) and the env it
@@ -10366,7 +10406,19 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
             0
         }
-        234 => 0, // tgkill
+        234 => {
+            // tgkill(tgid, tid, sig): glibc's abort() sends SIGABRT to the calling
+            // thread. Returning 0 and moving on let an ASSERTING thread continue —
+            // or die later holding whatever glibc lock it was inside (the stdio lock
+            // deadlock that parked main, viz and the renderer traced to exactly this:
+            // a ThreadPool worker aborted mid-fprintf and everyone queued on a dead
+            // thread's lock forever). On Linux SIGABRT is LOUD. Be loud: name the
+            // thread and the signal, so the underlying assertion is never silent.
+            crate::serial_println!(
+                "[abort] t{} {:?} tgkill(tgid={a1}, tid={a2}, sig={a3}) — a glibc abort/assert fired; see [abort] __abort_msg in the stall dump",
+                crate::sched::current(), thread_name(crate::sched::current()));
+            0
+        }
         137 | 138 => {
             // statfs(path, buf) / fstatfs(fd, buf): report a normal LOCAL filesystem.
             // fontconfig statfs()es its font + cache dirs to detect network mounts; an
