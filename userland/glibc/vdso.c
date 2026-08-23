@@ -45,8 +45,14 @@ static int read_clock(int clk, unsigned long *sec, unsigned long *nsec)
     int real;
     switch (clk) {
     case 0: case 5: case 11: real = 1; break;      /* REALTIME / _COARSE / TAI */
-    case 1: case 4: case 6: case 7: case 9: real = 0; break; /* MONOTONIC family / BOOTTIME */
-    default: return -38;                            /* -ENOSYS: glibc falls back to the syscall */
+    /* EVERYTHING else is served as monotonic — including CLOCK_PROCESS_CPUTIME (2),
+     * CLOCK_THREAD_CPUTIME (3) and the dynamic per-thread ids. Chrome's ThreadTicks
+     * CHECKs that clock_gettime returns 0, and this glibc did not turn the vDSO's
+     * -ENOSYS into a clean syscall fallback: the CHECK fired in a ThreadPool worker
+     * (FATAL: base/time/time_now_posix.cc:55), the worker aborted holding the stdio
+     * lock, and the whole browser deadlocked on its next log line. On one CPU,
+     * cputime ~ walltime is an honest answer; a failing clock is not. */
+    default: real = 0; break;
     }
     /* REALTIME is served from the page again: the kernel now derives its wall clock
      * (syscalls, gettimeofday AND the FUTEX_CLOCK_REALTIME conversion) from the very
