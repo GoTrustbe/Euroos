@@ -164,3 +164,31 @@ named root cause.
   detail/state) against what a real X server sends.
 - tgkill should probably kill LOUDLY but completely (whole-process SIGABRT
   semantics) so a future abort is a crash, not a mystery.
+
+
+## 2026-08-23 night: the click, honestly
+
+With the deadlock gone the click hunt resumed and made real, measured progress
+but is NOT finished:
+- Per-client event selections (real X keeps a mask per client per window) —
+  chrome's browser connection (fd603) selects input on window 0x400003.
+- conn_index off-by-one fixed (rid_base includes RID_BASE); selections now
+  register on the right connection.
+- Reader delivery: fd603 SELECTS but never polls its socket — chrome's input
+  thread pumps fd606 (the only X fd anyone ever polled). Delivering the event
+  to reader connections got fd606 to READ it (queue drains 32->0 now, where it
+  used to grow 128->192->... forever).
+
+But chrome still does nothing with the collected event: after reading it, ZERO
+X requests, no repaint. It is discarding the event silently. Remaining unknowns
+to probe next, cheapest first:
+1. The event's `window`/`child`/`same-screen` fields: fd606 does not own
+   0x400003 as a resource — chrome may drop an event whose window it cannot
+   resolve on the receiving connection. Try delivering with the event window
+   set to the RECEIVER's own toplevel, or synthesise per-connection.
+2. Grabs: no GrabButton/GrabPointer seen, so not that.
+3. XInput2 (XI2): modern chrome uses the XInput2 extension for pointer input,
+   NOT core ButtonPress. We report every extension as absent (QueryExtension
+   -> not present), so chrome SHOULD fall back to core — verify it actually
+   selected core input and is not waiting for XI2 GenericEvents we never send.
+   THIS is the strongest lead: check what chrome selected, not what we deliver.
