@@ -106,3 +106,31 @@ connection fd, so no click can wake anything.
    ~10 ms stretches — chrome's delay-until-deadline math with now()==deadline
    rounding. A sub-tick component (rdtsc-scaled) in the vDSO page would give
    monotonic microsecond progress between ticks.
+
+## 2026-08-23 evening: the hunt, condensed
+
+Fixed and regression-tested this stretch (gvdso probe runs every chrome-boot):
+- **FUTEX_CLOCK_REALTIME** (bit 8 of the op word): a realtime abstime was read as
+  monotonic ticks — waits parked ~57 years out (no-vDSO) or expired instantly
+  (vDSO), whose spin exploded sys-202 6.5x and starved the compositor.
+- **One wall clock** (wall_ns: RTC once + ticks): gettimeofday, the realtime
+  syscalls, the futex conversion and the vDSO page all read it. REAL 50 ms
+  timed-wait: instant -> forever -> 918 ms -> 60 ms. gettimeofday storm
+  (201k calls, 89%) ended by restoring the vDSO exports.
+- **Budgeted serial echo** in write(1/2): the old synchronous echo cost seconds
+  per 10 KB with IF masked while the writer held a glibc lock.
+
+The frame loop STILL stalls, and the watched-lock log has it cornered: three
+threads (main, viz, renderer) WAIT on libc+0x204b50 with word=2 — zero wakes,
+zero returns, since boot. The holder locked uncontended (no syscall = invisible)
+and never unlocked. The address is __abort_msg+0x10: a glibc-private mutex —
+tz/localtime lock is the prime suspect (every chrome log line formats a
+timestamp; tzset reads /etc/localtime through OUR VFS).
+
+## Next (one clean run each)
+1. Read the stall dump's new struct line: __owner at +8 names the holder TID.
+2. Map that TID to a task, read its last syscall: expected — parked inside our
+   VFS on /etc/localtime (or TZ lookup). Then fix THAT (serve /etc/localtime,
+   or make the failing path return instead of block).
+3. Note: /etc/localtime is NOT in chrome_stage_files — staging a minimal TZif
+   may fix the hang outright; test after identifying the holder.
