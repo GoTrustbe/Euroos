@@ -39,7 +39,11 @@ mabs() { mrel -1200 -1200; mrel "$1" "$2"; }
 # Wait for any other VM to exit FIRST: the build REWRITES eurokernel.img, and
 # rewriting the disk image out from under a running guest corrupts what it sees.
 while pgrep -x qemu-system-x86 >/dev/null 2>&1 || ps -eo comm | grep -q '^qemu-system-x86$'; do sleep 10; done
-./scripts/build.sh ${BUILD_PROFILE:-chrome} >/dev/null 2>&1 || { echo "BUILD FAILED"; exit 1; }
+# SKIP_BUILD=1 boots the image as it stands — for A/B runs whose kernel was built
+# with an env-dependent flag the harness's own rebuild would silently flip back.
+if [ "${SKIP_BUILD:-0}" != "1" ]; then
+  ./scripts/build.sh ${BUILD_PROFILE:-chrome} >/dev/null 2>&1 || { echo "BUILD FAILED"; exit 1; }
+fi
 rm -f "$LOG" "$LOG.ppm" "$LOG-after.ppm"
 qemu-system-x86_64 -machine q35 -m 3584M -cpu qemu64,+smep,+smap \
   -bios /usr/share/ovmf/OVMF.fd \

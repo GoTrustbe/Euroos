@@ -2167,6 +2167,14 @@ fn main() -> Status {
         // gone, but whether the clock goes through the vDSO decides whether the
         // chrome run below is even worth reading.
         if cfg!(feature = "chrome-boot") {
+            // A/B: "novdso" on the QEMU -append/cmdline is not plumbed; use the
+            // presence of a marker file on the pack instead? Simpler: an env-free
+            // compile-time default with a runtime flip left for the shell. For the
+            // causal test the flip is set here.
+            if option_env!("EUROOS_NOVDSO").is_some() {
+                ring3::VDSO_ENABLE.store(false, core::sync::atomic::Ordering::Relaxed);
+                serial_println!("[vdso] DISABLED for this build (EUROOS_NOVDSO)");
+            }
             // run_glibc self-skips during a chrome boot; this probe is the exception.
             let skip = ring3::SKIP_GLIBC_TESTS.swap(false, core::sync::atomic::Ordering::Relaxed);
             let (ov, ev) = ring3::run_glibc(&mut allocator, ring3::gvdso_bytes(), ring3::ldlinux_bytes(), &[b"gvdso"], &[b"PATH=/bin"], caps);

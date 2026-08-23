@@ -1237,6 +1237,12 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
         }
         if crate::interrupts::ticks() == before {
             crate::interrupts::TICKS.store(before + 1, Ordering::Relaxed);
+            // The vDSO page follows EVERY tick advance, forced ones included. Two
+            // clocks that drift — deadlines against TICKS, chrome reading the page —
+            // was the whole vDSO paint regression: the first paint took 242 s
+            // because chrome's timers measured "no time passed" while the kernel's
+            // deadlines raced ahead. One clock, one truth.
+            vdso_tick();
         }
     }
 }
@@ -2513,14 +2519,56 @@ static FUTEX_WAIT_SINCE: [core::sync::atomic::AtomicU64; 64] =
     [const { core::sync::atomic::AtomicU64::new(0) }; 64];
 static FUTEX_LAST_WAKE: Mutex<alloc::vec::Vec<(u64, usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
 
+/// The last 128 futex operations, any thread: (tick, op|task<<8, addr, result).
+/// The lost wake — if one exists — happened shortly before the waiters piled up,
+/// so a ring dumped at the stall usually still holds it.
+const FOP_RING: usize = 128;
+static FOP: [[core::sync::atomic::AtomicU64; 4]; FOP_RING] =
+    [const { [const { core::sync::atomic::AtomicU64::new(0) }; 4] }; FOP_RING];
+static FOP_IDX: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+fn fop_log(op: u64, addr: u64, result: u64) {
+    let i = FOP_IDX.fetch_add(1, Ordering::Relaxed) % FOP_RING;
+    FOP[i][0].store(crate::interrupts::ticks().max(1), Ordering::Relaxed);
+    FOP[i][1].store(op | ((crate::sched::current() as u64) << 8), Ordering::Relaxed);
+    FOP[i][2].store(addr, Ordering::Relaxed);
+    FOP[i][3].store(result, Ordering::Relaxed);
+}
+
+/// Read a u32 from a glibc-process address through ITS page tables — the launcher's
+/// own CR3 does not map the demand region, so a plain read cannot see a lock word.
+fn read_glibc_u32(addr: u64) -> Option<u32> {
+    let pml4 = GLIBC_PML4.load(Ordering::Relaxed);
+    if pml4 == 0 {
+        return None;
+    }
+    let phys = crate::paging::translate_in(pml4, addr)?;
+    // SAFETY: physical RAM is identity-mapped for the kernel; 4-byte read.
+    Some(unsafe { (phys as *const u32).read_volatile() })
+}
+
 pub fn dump_futex_state() {
     crate::serial_println!("[futex] waiters right now (task: addr since-tick):");
     let now = crate::interrupts::ticks();
     for t in 0..64 {
         let a = FUTEX_WAIT_ADDR[t].load(Ordering::Relaxed);
         if a != 0 {
-            crate::serial_println!("[futex]   t{t} {:?}: {a:#x} for {} ticks",
-                thread_name(t), now - FUTEX_WAIT_SINCE[t].load(Ordering::Relaxed));
+            // The lock WORD is the whole story of a mutex: 0 free, 1 held, 2 held
+            // with waiters. A waiter parked on a word that reads 0 is a LOST WAKE
+            // in one line.
+            let word = read_glibc_u32(a);
+            crate::serial_println!("[futex]   t{t} {:?}: {a:#x} for {} ticks | word={:?}",
+                thread_name(t), now - FUTEX_WAIT_SINCE[t].load(Ordering::Relaxed), word);
+        }
+    }
+    crate::serial_println!("[futex] last {} futex ops (tick t:op addr = result):", FOP_RING);
+    let start = FOP_IDX.load(Ordering::Relaxed);
+    for k in 0..FOP_RING {
+        let e = &FOP[(start + k) % FOP_RING];
+        let (tk, ot, a, r) = (e[0].load(Ordering::Relaxed), e[1].load(Ordering::Relaxed),
+                              e[2].load(Ordering::Relaxed), e[3].load(Ordering::Relaxed));
+        if tk != 0 {
+            crate::serial_println!("[futex]   @{tk} t{}:{} {a:#x} = {r:#x}", ot >> 8, ot & 0xff);
         }
     }
     crate::serial_println!("[futex] last wakes (addr <- task @tick):");
@@ -4943,7 +4991,14 @@ static VDSO_EPOCH_TICKS: core::sync::atomic::AtomicU64 = core::sync::atomic::Ato
 /// Prepare the shared vDSO frames (image copy + time frame). Needs no address space,
 /// so the launch paths call it BEFORE the stack is built — the auxv can then promise
 /// AT_SYSINFO_EHDR only when the frames actually exist.
+/// Kill switch for A/B runs: false = no vDSO promised anywhere, glibc uses the
+/// syscall clock — the pre-vDSO world, selectable without reverting code.
+pub static VDSO_ENABLE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
 fn vdso_prepare(falloc: &mut FrameAllocator) -> bool {
+    if !VDSO_ENABLE.load(Ordering::Relaxed) {
+        return false;
+    }
     let npages = (VDSO_DATA_VOFF / 4096) as usize; // image pages below the data page
     {
         let mut imgs = VDSO_IMAGE_FRAMES.lock();
@@ -6944,6 +6999,12 @@ pub fn run_glibc_disk(
         match crate::sched::idle_next_deadline(crate::sched::current()) {
             Some(d) if d > crate::interrupts::ticks() && TICKLESS_IDLE.load(Ordering::Relaxed) => {
                 crate::interrupts::TICKS.store(d, Ordering::Relaxed);
+            // The vDSO page follows EVERY tick advance, forced ones included. Two
+            // clocks that drift — deadlines against TICKS, chrome reading the page —
+            // was the whole vDSO paint regression: the first paint took 242 s
+            // because chrome's timers measured "no time passed" while the kernel's
+            // deadlines raced ahead. One clock, one truth.
+            vdso_tick();
             }
             _ => crate::sched::sleep_ticks(1),
         }
@@ -7181,6 +7242,12 @@ pub fn run_glibc(
         match crate::sched::idle_next_deadline(crate::sched::current()) {
             Some(d) if d > crate::interrupts::ticks() && TICKLESS_IDLE.load(Ordering::Relaxed) => {
                 crate::interrupts::TICKS.store(d, Ordering::Relaxed);
+            // The vDSO page follows EVERY tick advance, forced ones included. Two
+            // clocks that drift — deadlines against TICKS, chrome reading the page —
+            // was the whole vDSO paint regression: the first paint took 242 s
+            // because chrome's timers measured "no time passed" while the kernel's
+            // deadlines raced ahead. One clock, one truth.
+            vdso_tick();
             }
             _ => crate::sched::sleep_ticks(1),
         }
@@ -9121,6 +9188,12 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // should instead of ending because it gave up.
             if crate::interrupts::ticks() == before {
                 crate::interrupts::TICKS.store(before + 1, Ordering::Relaxed);
+            // The vDSO page follows EVERY tick advance, forced ones included. Two
+            // clocks that drift — deadlines against TICKS, chrome reading the page —
+            // was the whole vDSO paint regression: the first paint took 242 s
+            // because chrome's timers measured "no time passed" while the kernel's
+            // deadlines raced ahead. One clock, one truth.
+            vdso_tick();
             }
             }
         }
@@ -9756,9 +9829,15 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     } else {
                         0
                     };
-                    futex_wait(a1, a3 as u32, deadline)
+                    let r = futex_wait(a1, a3 as u32, deadline);
+                    fop_log(op, a1, r);
+                    r
                 }
-                1 | 10 => futex_wake(a1, a3 as i32) as u64, // WAKE / WAKE_BITSET
+                1 | 10 => {
+                    let r = futex_wake(a1, a3 as i32) as u64;
+                    fop_log(op, a1, r);
+                    r
+                }
                 3 | 4 => {
                     // REQUEUE / CMP_REQUEUE: wake `val` waiters on uaddr and move the
                     // rest to uaddr2. This is how a condition-variable broadcast hands
@@ -9782,6 +9861,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     }
                     let woken = futex_wake(a1, a3 as i32);
                     let moved = futex_wake(a4, i32::MAX); // a4 = uaddr2
+                    fop_log(op, a1, (woken + moved) as u64);
                     (woken + moved) as u64
                 }
                 5 => {
@@ -10086,6 +10166,12 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // through a frozen one (or give up early and call it a sleep).
                 if crate::interrupts::ticks() == before_spin {
                     crate::interrupts::TICKS.store(before_spin + 1, Ordering::Relaxed);
+            // The vDSO page follows EVERY tick advance, forced ones included. Two
+            // clocks that drift — deadlines against TICKS, chrome reading the page —
+            // was the whole vDSO paint regression: the first paint took 242 s
+            // because chrome's timers measured "no time passed" while the kernel's
+            // deadlines raced ahead. One clock, one truth.
+            vdso_tick();
                 }
                 before_spin = crate::interrupts::ticks();
                 spins += 1;
