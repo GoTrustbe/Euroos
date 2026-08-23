@@ -69,6 +69,15 @@ int main(void)
     clock_gettime(CLOCK_MONOTONIC, &b);
     ms = (b.tv_sec - a.tv_sec) * 1000 + (b.tv_nsec - a.tv_nsec) / 1000000;
     printf("gvdso: 200000 glibc gettimeofday calls took %ld ms\n", ms);
+    /* Sub-tick progress: two back-to-back reads must differ by MORE than zero and
+     * LESS than a full 10 ms tick — proof the rdtsc interpolation works. */
+    struct timespec u, w;
+    clock_gettime(CLOCK_MONOTONIC, &u);
+    for (volatile int i = 0; i < 50000; i++) ;
+    clock_gettime(CLOCK_MONOTONIC, &w);
+    long dns = (w.tv_sec - u.tv_sec) * 1000000000L + (w.tv_nsec - u.tv_nsec);
+    printf("gvdso: sub-tick delta over a short spin = %ld ns (%s)\n", dns,
+           dns > 0 && dns < 10000000 ? "INTERPOLATING" : dns == 0 ? "FLAT (no sub-tick)" : "coarse");
     printf("gvdso: OK\n");
     return 0;
 }

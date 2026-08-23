@@ -275,6 +275,7 @@ static FOCUS_WINDOW: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU
 /// newest entry that contains the pointer is the one on top — which is exactly what a
 /// person sees, and therefore what they mean to click.
 static PRESENTED: Mutex<Vec<(u32, i32, i32, i32, i32, i32, u64)>> = Mutex::new(Vec::new());
+pub static PRESENT_ORDER_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static PRESENT_ORDER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Record a window's screen placement after a fullscreen present.
@@ -284,6 +285,7 @@ fn note_presented(id: u32, w: u16, h: u16) {
         None => return,
     };
     let n = PRESENT_ORDER.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
+    PRESENT_ORDER_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let mut t = PRESENTED.lock();
     let e = (id, dx as i32, dy as i32, sc as i32, w as i32, h as i32, n);
     match t.iter_mut().find(|r| r.0 == id) {

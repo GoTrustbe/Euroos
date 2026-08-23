@@ -24,9 +24,23 @@ struct timeval  { time_t tv_sec; long tv_usec; };
 extern char __ehdr_start[] __attribute__((visibility("hidden")));
 #define __vdso_data ((volatile unsigned long *)(__ehdr_start + 4096))
 
+/* Data page layout (all unsigned long):
+ *   [0] seq (odd while the kernel updates)
+ *   [1] mono_ns at the anchor    [3] real_ns at the anchor
+ *   [5] tsc at the anchor        [6] ns per tsc, <<20 fixed point (kernel-calibrated)
+ * now = anchor + (rdtsc - anchor_tsc) scaled -- REAL sub-tick time, the way the
+ * Linux vDSO does it. A clock that is flat for 10 ms between ticks broke chrome's
+ * delay-until-deadline math; rdtsc interpolation gives monotonic microseconds. */
+static inline unsigned long rdtsc_(void)
+{
+    unsigned int lo, hi;
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((unsigned long)hi << 32) | lo;
+}
+
 static int read_clock(int clk, unsigned long *sec, unsigned long *nsec)
 {
-    unsigned long s1;
+    unsigned long s1, base_ns, tsc0, per10ms, dt_ns, ns;
     int real;
     switch (clk) {
     case 0: case 5: case 11: real = 1; break;      /* REALTIME / _COARSE / TAI */
@@ -35,9 +49,23 @@ static int read_clock(int clk, unsigned long *sec, unsigned long *nsec)
     }
     do {
         s1 = __vdso_data[0];
-        *sec  = __vdso_data[real ? 3 : 1];
-        *nsec = __vdso_data[real ? 4 : 2];
+        base_ns = __vdso_data[real ? 3 : 1];
+        tsc0    = __vdso_data[5];
+        per10ms = __vdso_data[6];
     } while (__vdso_data[0] != s1 || (s1 & 1));
+    dt_ns = 0;
+    if (per10ms) { /* [6]: ns-per-tsc in <<20 fixed point — mul+shift only, no
+                      128-bit division (that pulls __udivti3 into a vDSO that must
+                      not have relocations or libcalls) */
+        unsigned long dt = rdtsc_() - tsc0;
+        if (dt < (unsigned long)1 << 40) /* sane window; a stale anchor stays flat */
+            dt_ns = (unsigned long)(((unsigned __int128)dt * per10ms) >> 20);
+        if (dt_ns > 20000000ul)
+            dt_ns = 20000000ul; /* cap at 2 ticks: never run ahead of the kernel clock */
+    }
+    ns = base_ns + dt_ns;
+    *sec = ns / 1000000000ul;
+    *nsec = ns % 1000000000ul;
     return 0;
 }
 

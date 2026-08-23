@@ -4978,26 +4978,60 @@ pub fn vdso_tick() {
     // on every timer tick — on whatever kernel stack the tick interrupted — is both
     // slow and a stack burden the tick never had before (a task blew its stack guard
     // the first time this ran per-tick). The RTC is read once; after that real time
-    // is the cached base plus elapsed ticks, which is exactly what the clock_gettime
-    // SYSCALL was returning all along.
+    // is the cached base plus elapsed ticks.
     let ticks = crate::interrupts::ticks();
-    let mut base = VDSO_EPOCH_BASE.load(Ordering::Relaxed);
+    let base = VDSO_EPOCH_BASE.load(Ordering::Relaxed);
     if base == 0 {
         return; // base not set yet (vdso_prepare reads the RTC once)
     }
     let base_ticks = VDSO_EPOCH_TICKS.load(Ordering::Relaxed);
-    base += ticks.saturating_sub(base_ticks) / 100;
+    // v2 page: ANCHOR + rdtsc calibration, so the vDSO interpolates real sub-tick
+    // nanoseconds between updates (a clock flat for 10 ms between ticks broke
+    // chrome's delay-until-deadline math). [1]=mono_ns [3]=real_ns [5]=anchor tsc
+    // [6]=ns-per-tsc <<20. Calibration: measured tsc delta across REAL timer ticks
+    // (forced advances would poison the rate, so those pass ticks==last and skip).
+    let tsc = unsafe { core::arch::x86_64::_rdtsc() };
+    let last_tick = VDSO_CAL_TICK.load(Ordering::Relaxed);
+    if ticks > last_tick {
+        let last_tsc = VDSO_CAL_TSC.load(Ordering::Relaxed);
+        if last_tsc != 0 && ticks - last_tick <= 10 {
+            let dt = tsc.wrapping_sub(last_tsc) / (ticks - last_tick); // tsc per 10 ms
+            // Only a REAL 10 ms interval calibrates: a forced tick advance pairs a
+            // large tick delta with a tiny tsc delta and would poison the rate (the
+            // interpolation would then race ahead). Any genuine 10 ms is >1M tsc
+            // even under heavy emulation.
+            if dt > 1_000_000 {
+                // ns_per_tsc <<20 = (10_000_000 << 20) / tsc_per_tick
+                let factor = (10_000_000u64 << 20) / dt;
+                VDSO_NS_PER_TSC.store(factor, Ordering::Relaxed);
+            }
+        }
+        VDSO_CAL_TICK.store(ticks, Ordering::Relaxed);
+        VDSO_CAL_TSC.store(tsc, Ordering::Relaxed);
+    }
+    let mono_ns = ticks * 10_000_000;
+    let real_ns = base * 1_000_000_000 + ticks.saturating_sub(base_ticks) * 10_000_000;
     let d = frame as *mut u64;
     unsafe {
         let seq = d.read_volatile().wrapping_add(1);
         d.write_volatile(seq); // odd: update in progress
-        d.add(1).write_volatile(ticks / 100); // mono sec
-        d.add(2).write_volatile((ticks % 100) * 10_000_000); // mono nsec (10 ms tick)
-        d.add(3).write_volatile(base); // real sec
-        d.add(4).write_volatile((ticks % 100) * 10_000_000); // real nsec
+        d.add(1).write_volatile(mono_ns);
+        d.add(3).write_volatile(real_ns);
+        d.add(5).write_volatile(tsc);
+        d.add(6).write_volatile(VDSO_NS_PER_TSC.load(Ordering::Relaxed));
         d.write_volatile(seq.wrapping_add(1)); // even: stable
     }
 }
+
+/// Paint watch: presents seen at the last check + when they last changed.
+static PAINT_WATCH: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static PAINT_WATCH_RTC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// rdtsc calibration state: the last REAL tick's count + tsc, and the derived
+/// ns-per-tsc factor (<<20 fixed point) the vDSO interpolates with.
+static VDSO_CAL_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static VDSO_CAL_TSC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static VDSO_NS_PER_TSC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// RTC epoch captured ONCE (at vdso_prepare) + the tick count at that moment.
 static VDSO_EPOCH_BASE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -6963,7 +6997,27 @@ pub fn run_glibc_disk(
         // ~100/s (an iteration-count print goes quiet for hours). The RTC is the one
         // clock here that matches the watchdog's.
         if iters % 1024 == 0 {
-            let now_rtc = crate::rtc::epoch();
+            // Pre-paint stall: the window is mapped but nothing has presented for
+            // 30 real seconds — arm the profilers, so the 242 s mystery documents
+            // itself instead of needing a click to trigger the dumps.
+            let presents = crate::xserver::PRESENT_ORDER_COUNT.load(Ordering::Relaxed);
+            let now_rtc0 = crate::rtc::epoch();
+            let lastp = PAINT_WATCH.load(Ordering::Relaxed);
+            if presents != lastp {
+                PAINT_WATCH.store(presents, Ordering::Relaxed);
+                PAINT_WATCH_RTC.store(now_rtc0, Ordering::Relaxed);
+            } else if crate::xserver::front_window_size().is_some()
+                && now_rtc0 >= PAINT_WATCH_RTC.load(Ordering::Relaxed) + 30
+                && !RIP_PROFILING.load(Ordering::Relaxed)
+            {
+                crate::serial_println!("[stall] window mapped, no present for 30 s — profiling");
+                reset_rip_profile();
+                dump_threads_now("no present for 30 s");
+                dump_main_syscalls();
+                dump_futex_state();
+                dump_syscall_histogram();
+            }
+            let now_rtc = now_rtc0;
             let last = HB_LAST_RTC.load(Ordering::Relaxed);
             if now_rtc >= last + 45 {
                 HB_LAST_RTC.store(now_rtc, Ordering::Relaxed);
