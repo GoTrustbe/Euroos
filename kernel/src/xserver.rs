@@ -151,7 +151,8 @@ pub fn read(fd: u64, max: usize) -> Vec<u8> {
     };
     let n = max.min(c.outbuf.len());
     if n > 0 {
-        trace(format_args!("client read {n} B ({} left queued)", c.outbuf.len() - n));
+        trace(format_args!("client read {n} B ({} left queued) conn={}",
+            c.outbuf.len() - n, (fd - XCONN_FD_BASE) as usize));
         mark_reader((fd - XCONN_FD_BASE) as usize);
     }
     c.outbuf.drain(0..n).collect()
@@ -339,11 +340,42 @@ fn deliver_selected(win: u32, want: u32, kind: u8, detail: u8, rx: i16, ry: i16,
     let mut t = XCONNS.lock();
     for ci in targets {
         if let Some(Some(conn)) = t.get_mut(ci).map(|s| s.as_mut()) {
-            send_input(conn, kind, detail, win, rx, ry, lx, ly);
+            // If this connection does NOT own `win`, its xcb event demux has no
+            // handler for that id and drops the event (measured: fd606 read every
+            // click and did nothing). Deliver instead for a MAPPED toplevel THIS
+            // connection owns and selected pointer input on — chrome's Ozone input
+            // window. The click's window-local coords are kept; that window is the
+            // one chrome's event source is actually listening for.
+            let owns = conn.windows.iter().any(|w| w.id == win && w.mapped);
+            let ev_win = if owns {
+                win
+            } else {
+                match conn.windows.iter()
+                    .filter(|w| w.mapped && w.event_mask & (kind_mask(kind)) != 0)
+                    .map(|w| w.id).next()
+                {
+                    Some(w) => w,
+                    None => win, // no better target: send as-is
+                }
+            };
+            send_input(conn, kind, detail, ev_win, rx, ry, lx, ly);
             sent += 1;
         }
     }
     sent
+}
+
+/// The event-mask bit an input event of `kind` is selected by (for choosing a
+/// delivery window on a foreign connection).
+fn kind_mask(kind: u8) -> u32 {
+    match kind {
+        2 | 3 => 0x3,   // KeyPress/Release
+        4 => 0x4,       // ButtonPress
+        5 => 0x8,       // ButtonRelease
+        6 => 0x40,      // PointerMotion
+        7 | 8 => 0x10,  // Enter/Leave
+        _ => 0,
+    }
 }
 /// The window whose pixels the desktop currently shows in its frame (windowed mode).
 static RETAINED_ID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
@@ -729,7 +761,7 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             if em != 0 {
                 select_events(id, conn_index(c), em);
             }
-            trace(format_args!("CreateWindow id={id:#x} {w}x{h} @({x},{y}) mask={em:#x}"));
+            trace(format_args!("CreateWindow id={id:#x} {w}x{h} @({x},{y}) mask={em:#x} conn={}", conn_index(c)));
         }
         // CreateGC(55): cid@4, drawable@8, value-mask@12, values@16.
         55 => {
@@ -1379,6 +1411,7 @@ fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, rx: i16, ry: i16
             crate::ring3::dump_main_syscalls();
             crate::ring3::dump_futex_state();
             crate::ring3::dump_syscall_histogram();
+            crate::ring3::dump_epoll_sets();
             // From here the profile is about the STALL, not about startup.
             crate::ring3::reset_rip_profile();
         }

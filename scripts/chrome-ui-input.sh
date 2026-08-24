@@ -36,9 +36,11 @@ mrel() {
 # Absolute: slam into the top-left corner (the driver clamps), then walk out to (x,y).
 mabs() { mrel -1200 -1200; mrel "$1" "$2"; }
 
-# Wait for any other VM to exit FIRST: the build REWRITES eurokernel.img, and
-# rewriting the disk image out from under a running guest corrupts what it sees.
-while pgrep -x qemu-system-x86 >/dev/null 2>&1 || ps -eo comm | grep -q '^qemu-system-x86$'; do sleep 10; done
+# Wait only for MY OWN chrome VMs to exit (they read the image the build rewrites).
+# Match on the eurokernel.img drive so the persistent eurovnc demo VM — same qemu
+# name, its own image, never exits — does NOT block us forever. THIS loop matching
+# eurovnc is what made runs appear to hang for hours.
+while pgrep -af "qemu-system-x86_64.*eurokernel.img" >/dev/null 2>&1; do sleep 5; done
 # SKIP_BUILD=1 boots the image as it stands — for A/B runs whose kernel was built
 # with an env-dependent flag the harness's own rebuild would silently flip back.
 if [ "${SKIP_BUILD:-0}" != "1" ]; then

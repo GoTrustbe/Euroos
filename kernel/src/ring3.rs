@@ -8239,6 +8239,25 @@ pub fn dump_syscall_histogram() {
     }
 }
 
+/// Every epoll set in the system: which fds each watches. The one question this
+/// answers: is the browser's X connection (the window owner main should watch via
+/// WatchFileDescriptor) registered ANYWHERE — or did that registration never happen.
+pub fn dump_epoll_sets() {
+    let sets = EPOLLS.lock();
+    for (i, s) in sets.iter().enumerate() {
+        if let Some(list) = s {
+            if list.is_empty() {
+                continue;
+            }
+            let mut desc = String::new();
+            for (fd, ev, _) in list.iter() {
+                desc.push_str(&alloc::format!(" fd{fd}({},ev={ev:#x})", fd_kind(*fd as u64)));
+            }
+            crate::serial_println!("[epoll] set {i}:{desc}");
+        }
+    }
+}
+
 pub fn dump_main_syscalls() {
     let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
     crate::serial_println!("[msc] main thread t{main}: last {} syscalls (tick num(a1)=ret):", MSC_RING);
