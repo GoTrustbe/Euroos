@@ -439,6 +439,9 @@ static HB_LAST_RTC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU6
 static STAT_MTIME: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static STAT_MTIME_NSEC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CDP_RX: Mutex<alloc::vec::Vec<u8>> = Mutex::new(alloc::vec::Vec::new());
+static PING_SENT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static PING_ANS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static PING_DUMPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// Socketpair endpoints: (a, b). A descriptor sent with SCM_RIGHTS on one end has
 /// to arrive on the OTHER one, and only a pair knows who that is.
 static SOCK_PAIRS: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
@@ -754,7 +757,18 @@ pub fn cdp_pump() {
         let slot = now / 3_000;
         if slot != last {
             CDP_WAIT_MARK.store(slot, Ordering::Relaxed);
+            let sent = PING_SENT.fetch_add(1, Ordering::Relaxed) + 1;
+            let answered = PING_ANS.load(Ordering::Relaxed);
             cdp_send("{\"id\":50,\"method\":\"Target.getTargets\"}");
+            // Three unanswered pings = the channel died. Catch the reader thread
+            // in the act ONCE: its scheduler state + last syscall name the exact
+            // wait it is stuck in (the dt5 measurement: dead ~60 s after attach).
+            if sent.saturating_sub(answered) >= 3
+                && !PING_DUMPED.swap(true, Ordering::Relaxed)
+            {
+                crate::serial_println!("[cdp] channel dead: {sent} pings sent, {answered} answered — dumping threads");
+                dump_threads_now("cdp channel dead");
+            }
         }
     }
 
@@ -847,6 +861,9 @@ pub fn cdp_pump() {
         let head: String = msg.chars().take(160).collect();
         crate::serial_println!("[cdp] <- {head}");
         let step = CDP_STEP.load(Ordering::Relaxed);
+        if msg.contains("\"id\":50") {
+            PING_ANS.fetch_add(1, Ordering::Relaxed);
+        }
         if step == 1 && msg.contains("\"id\":1") {
             // Attach to the page target. A target list without a page means chrome
             // has not created it yet — ask again rather than giving up.
