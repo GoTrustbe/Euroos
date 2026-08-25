@@ -7097,6 +7097,14 @@ pub fn run_glibc_disk(
         // ten wall minutes), and when everything sleeps the launcher only iterates
         // ~100/s (an iteration-count print goes quiet for hours). The RTC is the one
         // clock here that matches the watchdog's.
+        // Interrupt-independent USB input: drain the xHCI event ring by polling.
+        // Enumeration always works (it polls), but whether the controller's MSI-X
+        // ever fires proved BUILD-DEPENDENT under QEMU: identical init, and one
+        // kernel build gets "MSI-X delivery confirmed" while the next gets silence
+        // and a dead tablet. Polling every loop iteration makes QMP clicks and keys
+        // arrive regardless of that lottery; the poll is cheap when the ring is
+        // empty, and the IRQ path (when it does work) just finds the ring drained.
+        crate::xhci::poll();
         if iters % 64 == 0 {
             // %64, not %1024: with the idle-hlt launcher this loop iterates a few
             // times per second, and the old gate silenced the heartbeat AND the
