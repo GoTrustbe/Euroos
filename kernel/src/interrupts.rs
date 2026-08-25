@@ -199,8 +199,21 @@ pub static KBD_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 /// now comes via the IO-APIC -> Local APIC, so we EOI to the LAPIC.
 pub static MOUSE_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {
-    let byte = unsafe { Port::<u8>::new(0x60).read() };
-    crate::mouse::push_byte(byte);
+    // Route by the STATUS register, not by which IRQ fired: keyboard and mouse
+    // share data port 0x60, and under a shared-buffer race the byte sitting there
+    // may belong to the other device. Bit 0 = output buffer full, bit 5 = the byte
+    // is AUX (mouse) data. Reading 0x60 blindly here stole keyboard scancodes into
+    // the mouse stream and vice versa (measured: usb-tablet moves surfaced as
+    // KeyPress 130/38 noise in the X event stream).
+    let status = unsafe { Port::<u8>::new(0x64).read() };
+    if status & 1 != 0 {
+        let byte = unsafe { Port::<u8>::new(0x60).read() };
+        if status & 0x20 != 0 {
+            crate::mouse::push_byte(byte);
+        } else {
+            crate::ps2::push_scancode(byte);
+        }
+    }
     MOUSE_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::apic::eoi();
 }
@@ -227,8 +240,17 @@ pub fn send_timer_eoi() {
 /// IRQ1: read the scancode and buffer it; the shell decodes it later. Via the IO-APIC
 /// -> Local APIC, so EOI to the LAPIC.
 extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
-    let sc = unsafe { Port::<u8>::new(0x60).read() };
-    crate::ps2::push_scancode(sc);
+    // Same status-based routing as the mouse handler (see there): bit 5 says the
+    // pending byte is AUX data even when IRQ1 fired.
+    let status = unsafe { Port::<u8>::new(0x64).read() };
+    if status & 1 != 0 {
+        let sc = unsafe { Port::<u8>::new(0x60).read() };
+        if status & 0x20 != 0 {
+            crate::mouse::push_byte(sc);
+        } else {
+            crate::ps2::push_scancode(sc);
+        }
+    }
     KBD_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::apic::eoi();
 }
