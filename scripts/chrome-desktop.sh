@@ -8,9 +8,9 @@ cd "$(dirname "$0")/.."
 LOG="${1:?usage: chrome-desktop.sh /path/to/log}"
 PACK="${PACK:-/tmp/chrome-pack2.img}"
 mon() { printf '%s\n' "$@" | nc -U -q 1 "$LOG.mon" >/dev/null 2>&1; }
-# Wait for any other VM to exit FIRST: the build REWRITES eurokernel.img, and
-# rewriting the disk image out from under a running guest corrupts what it sees.
-while ps -eo comm | grep -q '^qemu-system-x86$'; do sleep 10; done
+# Wait only for MY OWN VMs (the ones reading eurokernel.img, which the build
+# rewrites); the persistent eurovnc demo VM never exits and must not block us.
+while pgrep -af "qemu-system-x86_64.*eurokernel.img" >/dev/null 2>&1; do sleep 5; done
 ./scripts/build.sh release >/dev/null 2>&1 || { echo "BUILD FAILED"; exit 1; }
 rm -f "$LOG" "$LOG"*.ppm
 qemu-system-x86_64 -machine q35 -m 3584M -cpu qemu64,+smep,+smap \
@@ -46,6 +46,9 @@ key ret
 K
 python3 ./scripts/qmp-input.py "$LOG.qmp" "$LOG.keys" 1920 1080 "$LOG.mon"
 echo "typed chrome at $(( $(date +%s) - START ))s"
+# Optional interaction phase: DESKTOP_CLICKS names a qmp-input script that runs
+# AFTER the t300 sample (chrome has painted by then) — e.g. a click on the page
+# link inside the hosted window; the t480/t660 samples then show the outcome.
 # Chromium needs minutes under TCG before its first paint: sample the screen.
 for t in 120 300 480 660; do
   while [ $(( $(date +%s) - START )) -lt $((t + 60)) ]; do
@@ -54,6 +57,10 @@ for t in 120 300 480 660; do
   done
   mon "screendump $LOG-t$t.ppm"
   echo "SHOT $LOG-t$t.ppm at $(( $(date +%s) - START ))s"
+  if [ "$t" = 300 ] && [ -n "${DESKTOP_CLICKS:-}" ] && [ -f "$DESKTOP_CLICKS" ]; then
+    python3 ./scripts/qmp-input.py "$LOG.qmp" "$DESKTOP_CLICKS" 1920 1080 "$LOG.mon"
+    echo "desktop clicks sent at $(( $(date +%s) - START ))s"
+  fi
 done
 kill $Q 2>/dev/null; wait $Q 2>/dev/null
 echo "took $(( $(date +%s) - START ))s, log: $LOG"
