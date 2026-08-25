@@ -248,6 +248,21 @@ pub fn pump_keyboard() {
             let keycode = code + 8; // X keycode = PS/2 scancode + 8
             let want: u32 = if pressed { 0x1 } else { 0x2 }; // KeyPress / KeyRelease mask
             let kind: u8 = if pressed { 2 } else { 3 };
+            // Ferry typed characters to the page over the CDP bridge as well (the
+            // reliable route; see pump_mouse). Presses only; layout = our qwerty
+            // keysym table, shift honoured. Enter goes as a raw key event — an
+            // inserted "\r" does not submit forms or activate links.
+            if pressed {
+                let (lo, hi) = keysym_for(keycode);
+                let shifted = MOD_STATE.load(core::sync::atomic::Ordering::Relaxed) & 0x1 != 0;
+                let ks = if shifted { hi } else { lo };
+                if (0x20..0x7f).contains(&ks) {
+                    let mut b = [0u8; 4];
+                    crate::ring3::cdp_input_text(char::from_u32(ks).unwrap_or(' ').encode_utf8(&mut b));
+                } else if ks == 0xff0d {
+                    crate::ring3::cdp_input_enter();
+                }
+            }
             let (mx, my) = crate::mouse::pos();
             #[allow(unused_assignments)]
             let mut t = XCONNS.lock();

@@ -509,6 +509,22 @@ pub fn cdp_input_mouse(kind: u8, x: i32, y: i32) {
         "{{\"id\":40,\"sessionId\":\"{sid}\",\"method\":\"Input.dispatchMouseEvent\",\"params\":{{\"type\":\"{typ}\",\"x\":{x},\"y\":{y},\"button\":\"{btn}\",\"clickCount\":{clicks}}}}}"));
 }
 
+/// Press Enter on the page: a raw key event pair, which submits forms and
+/// follows focused links (an inserted carriage return does neither).
+pub fn cdp_input_enter() {
+    if !CDP_DRIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let sid = CDP_SESSION.lock().clone();
+    if sid.is_empty() {
+        return;
+    }
+    for (typ, text) in [("rawKeyDown", ""), ("char", "\r"), ("keyUp", "")] {
+        cdp_send(&alloc::format!(
+            "{{\"id\":42,\"sessionId\":\"{sid}\",\"method\":\"Input.dispatchKeyEvent\",\"params\":{{\"type\":\"{typ}\",\"key\":\"Enter\",\"code\":\"Enter\",\"text\":\"{text}\",\"windowsVirtualKeyCode\":13}}}}"));
+    }
+}
+
 pub fn cdp_input_text(text: &str) {
     if !CDP_DRIVE.load(Ordering::Relaxed) {
         return;

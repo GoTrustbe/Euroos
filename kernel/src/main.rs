@@ -2268,6 +2268,7 @@ fn main() -> Status {
             // and input flows back through the same server. Every headless capture
             // route was measured to die inside the browser's readback instead.
             ring3::register_file("/tmp/euro.html", include_bytes!("euro_page.html").to_vec());
+            ring3::register_file("/tmp/euro2.html", include_bytes!("euro_page2.html").to_vec());
             ring3::CACHE_DIR_DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
             // The browser is a UI: it must LIVE, not run to completion. With the
             // tickless fast-forward on, the guest-time deadline raced by in wall
