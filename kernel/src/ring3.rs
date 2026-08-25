@@ -439,6 +439,19 @@ static HB_LAST_RTC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU6
 static STAT_MTIME: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static STAT_MTIME_NSEC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CDP_RX: Mutex<alloc::vec::Vec<u8>> = Mutex::new(alloc::vec::Vec::new());
+
+/// Append to the captured program output, BOUNDED: beyond ~6 MiB the oldest
+/// half is dropped. A desktop chrome session logs stderr for hours; keeping all
+/// of it in the kernel heap ended in the dt6 OOM panic (256 KB alloc failed).
+fn output_push(text: &str) {
+    let mut o = OUTPUT.lock();
+    if o.len() + text.len() > 6 * 1024 * 1024 {
+        let keep = o.len() / 2;
+        let cut = o.char_indices().nth(keep).map(|(i, _)| i).unwrap_or(0);
+        o.drain(..cut);
+    }
+    o.push_str(text);
+}
 static PING_SENT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static PING_ANS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static PING_DUMPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -8018,7 +8031,7 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
             let bytes = user_cstr(a1, 4096);
             let len = bytes.len();
             if let Ok(text) = core::str::from_utf8(&bytes) {
-                OUTPUT.lock().push_str(text);
+                output_push(text);
                 serial_print!("[ring3->sys_write] {text}\n");
             }
             len as u64
@@ -8428,7 +8441,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     // the log looked like it simply stopped talking. Diagnostics must
                     // not depend on a program's encoding.
                     let t = alloc::string::String::from_utf8_lossy(&bytes);
-                    OUTPUT.lock().push_str(&t);
+                    output_push(&t);
                     // The serial echo is BUDGETED. Echoing synchronously inside the
                     // syscall — with IF masked — costs a busy-waited UART write per
                     // byte: a 10 KB chrome error message took SECONDS under TCG, the
@@ -9159,7 +9172,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         redirect_append(fi, &bytes); // shell redirection: stdout -> file
                     } else {
                         let t = alloc::string::String::from_utf8_lossy(&bytes); // never drop output (see write())
-                        OUTPUT.lock().push_str(&t);
+                        output_push(&t);
                         serial_print!("[linux-abi] {t}");
                     }
                     written += len as u64;

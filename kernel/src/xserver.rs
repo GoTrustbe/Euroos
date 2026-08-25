@@ -1589,7 +1589,20 @@ fn present_win(win: Option<&XWindow>, id: u32) {
         // exits, and flag a repaint.
         if X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) {
             if win.w > 1 && win.h > 1 {
-                *RETAINED_WINDOW.lock() = Some((win.w as usize, win.h as usize, win.buf.clone()));
+                // REUSE the retained buffer instead of cloning ~1.9 MB per present:
+                // 30 presents/s of alloc+free churn fragments the kernel heap until
+                // a 256 KB PutImage buffer cannot be placed (the dt6 OOM panic).
+                {
+                    let mut r = RETAINED_WINDOW.lock();
+                    match r.as_mut() {
+                        Some((w, h, buf)) if buf.len() == win.buf.len() => {
+                            *w = win.w as usize;
+                            *h = win.h as usize;
+                            buf.copy_from_slice(&win.buf);
+                        }
+                        _ => *r = Some((win.w as usize, win.h as usize, win.buf.clone())),
+                    }
+                }
                 // Remember WHICH window those pixels belong to, so the desktop's click
                 // and motion routing reaches the window the user is looking at instead
                 // of whichever one happens to be biggest.
