@@ -4100,6 +4100,11 @@ fn main() -> Status {
         // The DevTools input bridge for a desktop-launched chrome: attach + ferry
         // page input (see cdp_install_input at the `chrome` command's spawn).
         ring3::cdp_pump();
+        // Interrupt-independent USB input HERE TOO: the boot launcher polls the
+        // xHCI ring every iteration, but the desktop loop did not — so desktop
+        // clicks still depended on the per-boot MSI-X delivery lottery (dt7: the
+        // QMP click never arrived; dt3/dt4 simply got lucky).
+        xhci::poll();
         // One-shot liveness proof once the loop has petted a while.
         if !wd_reported && watchdog::pets() >= 20 {
             wd_reported = true;
