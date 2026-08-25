@@ -153,6 +153,7 @@ static mut XHCI: Option<Xhci> = None;
 static mut REPORTS_LOGGED: u32 = 0;
 /// Whether the MSI-X delivery confirmation has already been logged.
 static mut MSIX_LOGGED: bool = false;
+static mut RING_DIAGGED: bool = false;
 /// Re-entrancy guard: `poll()` may NOT run simultaneously from the desktop loop and the MSI-X
 /// IRQ handler (that would corrupt the event ring + scancode Mutex). Whoever
 /// sets it to true harvests; the other bails (the winner drains everything anyway).
@@ -976,6 +977,23 @@ fn poll_inner() {
                 MSIX_LOGGED = true;
                 crate::serial_println!("[xhci] MSI-X delivery confirmed: {c} interrupt(s) received ✓");
             }
+        }
+        // One-shot ring forensics (~15 s in): whether QEMU wrote ANY events (raw
+        // cycle bits of the first ring slots) tells transfers-never-complete apart
+        // from a desynchronized dequeue cycle — the two remaining explanations for
+        // zero HID reports with a live poll.
+        if !RING_DIAGGED && crate::interrupts::ticks() > 1500 {
+            RING_DIAGGED = true;
+            let c0 = r32(x.ev_seg + 12) & 1;
+            let c1 = r32(x.ev_seg + 16 + 12) & 1;
+            let c2 = r32(x.ev_seg + 32 + 12) & 1;
+            let t0 = (r32(x.ev_seg + 12) >> 10) & 0x3F;
+            let sts = r32(x.op + OP_USBSTS);
+            let iman = r32(x.rt + RT_IR0 + IR_IMAN);
+            crate::serial_println!(
+                "[xdiag] ev_deq={} ev_cycle={} ring c0={c0}/t{t0} c1={c1} c2={c2} usbsts={sts:#x} iman={iman:#x} msix={}",
+                x.ev_deq, x.ev_cycle,
+                crate::interrupts::XHCI_MSIX_COUNT.load(core::sync::atomic::Ordering::Relaxed));
         }
         // Drain ALL pending events this round (bounded) so that a burst of HID
         // reports doesn't fall behind one-per-frame.
