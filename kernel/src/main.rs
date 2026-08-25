@@ -2303,6 +2303,10 @@ fn main() -> Status {
                   // config service needs netlink we don't provide yet); the TCP,
                   // TLS and HTTP are fully real.
                   b"--host-resolver-rules=MAP euro-os.eu 151.240.77.50",
+                  // The HTTPS-First interstitial swallows synthetic clicks; treat
+                  // the test origin as secure so plain http renders directly.
+                  b"--unsafely-treat-insecure-origin-as-secure=http://151.240.77.50",
+                  b"--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable",
                   // ISOLATION STEP: the raw IP over plain HTTP takes name
                   // resolution AND TLS out of the equation — whether nginx's
                   // response renders proves the kernel TCP path end-to-end.
