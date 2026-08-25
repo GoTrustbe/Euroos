@@ -31,3 +31,16 @@ desktop (chrome als venster naast de EuroOS-apps).
 - Harness wacht niet meer op eurovnc (gefixt, 614631a).
 - ELKE run beantwoordt ALLE openstaande vragen van dat moment (traces aan).
 - Geen run zonder before/after-shots: alleen pixels bewijzen interactie.
+
+## UITSLAG (2026-08-26): interactie-trilogie compleet in boot-modus
+
+- [decisive] ✅ twee keer: X-route opende het ⋮-menu (mn1); CDP-brug maakt
+  kliks BETROUWBAAR (CLICKED-banner, elke run).
+- Navigatie ✅: klik op de linkbalk → Page.frameScheduledNavigation →
+  PAGE TWO geladen; tab-titel + adresbalk + inhoud bijgewerkt.
+- [type] ✅: klik → focus (cursor), q/b/c → "qbc" in het veld.
+- [motion] ✅ zijdelings: PS/2-statusrouting (90c96ed) + xhci-polling maakten
+  de ruis- en MSI-X-loterij-problemen af.
+- Root cause wispeligheid GEVONDEN: glib-context-acquire-race bepaalt of
+  chrome's UI-thread de X-fd ooit pollt; de CDP-brug is er immuun voor.
+- Open: [desktop] · anchor-blit her-activeren · host-tests.
