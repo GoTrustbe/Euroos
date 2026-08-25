@@ -44,3 +44,11 @@ desktop (chrome als venster naast de EuroOS-apps).
 - Root cause wispeligheid GEVONDEN: glib-context-acquire-race bepaalt of
   chrome's UI-thread de X-fd ooit pollt; de CDP-brug is er immuun voor.
 - Open: [desktop] · anchor-blit her-activeren · host-tests.
+
+## EINDSTAND (2026-08-26): [desktop] ✅ — sprint compleet
+
+`chrome` in de Terminal → Chromium in een EuroOS-venster (EuroGuard-badge),
+pagina geladen, input bridge attached, venster stabiel t120→t660. 992
+host-tests groen. EuroGuard blokkeert live chrome's trackers. Anchor-blit
+her-geactiveerd. Interactie: klik/typ/navigeer betrouwbaar (CDP-brug);
+browser-UI via X wanneer de glib-race goed valt (bekende beperking, gedocumenteerd).
