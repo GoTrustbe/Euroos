@@ -1606,11 +1606,21 @@ fn present_win(win: Option<&XWindow>, id: u32) {
                         s,
                     ))
             });
-            // BISECT: anchor path disabled — plain per-window centring like S2.
-            let _ = placed;
-            crate::screen_present_xrgb(&win.buf, win.w as usize, win.h as usize);
-            if let Some((dx, dy, s)) = crate::screen_place(win.w as usize, win.h as usize) {
-                note_presented(id, win.w, win.h, dx as i64, dy as i64, s);
+            // Anchor placement re-enabled: the bisect cleared it (the bt1/bt2
+            // regression was the present() self-deadlock, fixed separately by
+            // precomputing ANCHOR before the table lock). Popups now open AT
+            // their X position relative to the browser window.
+            match placed {
+                Some((dx, dy, sc)) => {
+                    crate::screen_present_xrgb_at(&win.buf, win.w as usize, win.h as usize, dx, dy, sc);
+                    note_presented(id, win.w, win.h, dx, dy, sc);
+                }
+                None => {
+                    crate::screen_present_xrgb(&win.buf, win.w as usize, win.h as usize);
+                    if let Some((dx, dy, sc)) = crate::screen_place(win.w as usize, win.h as usize) {
+                        note_presented(id, win.w, win.h, dx as i64, dy as i64, sc);
+                    }
+                }
             }
         }
         let ctr = (win.h as usize / 2) * win.w as usize + win.w as usize / 2;
