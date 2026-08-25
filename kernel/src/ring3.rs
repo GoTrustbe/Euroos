@@ -7126,6 +7126,10 @@ pub fn run_glibc_disk(
                 && !RIP_PROFILING.load(Ordering::Relaxed)
             {
                 crate::serial_println!("[stall] window mapped, no present for 30 s — profiling");
+                // Re-open the poll-set census in the DEAD phase: whether main still
+                // polls at all — and with which fds — separates "glib source never
+                // attached (startup race)" from "glib polls but our readiness lies".
+                POLL_SET_DIAG.store(30, Ordering::Relaxed);
                 reset_rip_profile();
                 dump_threads_now("no present for 30 s");
                 dump_main_syscalls();
