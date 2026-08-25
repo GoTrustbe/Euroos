@@ -332,6 +332,16 @@ fn select_events(win: u32, conn_idx: usize, mask: u32) {
 /// selector of anything. The OWNING connection's fallback stays for clients that
 /// never registered a selection (our own demo apps).
 fn deliver_selected(win: u32, want: u32, kind: u8, detail: u8, rx: i16, ry: i16, lx: i16, ly: i16) -> u32 {
+    // First ButtonPress: dump main's recent syscall ring. In the no-dialog runs
+    // main sits in a ~1.3 s nanosleep cycle and never polls its X connection; the
+    // ring names what else that loop does — the difference between "glib pump
+    // throttled" and "main stuck in some wait chain" in one boot.
+    if kind == 4 {
+        static ONCE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+        if !ONCE.swap(true, core::sync::atomic::Ordering::Relaxed) {
+            crate::ring3::dump_main_syscalls();
+        }
+    }
     // Every connection that selected `want` on `win`...
     let mut targets: Vec<usize> = SELECTIONS.lock().iter()
         .filter(|(w, _, m)| *w == win && (want == 0 || m & want != 0))
