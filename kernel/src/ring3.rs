@@ -7943,6 +7943,8 @@ static SYS_TRACE_ARMED: core::sync::atomic::AtomicBool = core::sync::atomic::Ato
 /// describe (which fds, of what kind, and whether any is ready). Armed the moment
 /// we ask chrome for a screenshot, so the log answers "what is the compositor
 /// waiting for, and could it ever arrive" instead of "it is stuck".
+/// Budget for unconditional poll-set dumps ([pollset]): every set, ready or not.
+static POLL_SET_DIAG: AtomicU64 = AtomicU64::new(40);
 static WAIT_DIAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Ask the next `n` fruitless poll/epoll waits to describe themselves: which fds the
@@ -9331,6 +9333,23 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 }
                 let _ = write_user(ent + 6, re);
                 if re != 0 { ready += 1; }
+            }
+            // Census: the FULL poll sets, ready or not. The [wait] trace below only
+            // fires when nothing is ready — a set that always finds a ready fd (a
+            // regular file reported always-ready) spins without ever printing, and
+            // that is exactly the case that would hide the X fd from the diagnosis.
+            if tries == 0 && nfds >= 2 && POLL_SET_DIAG.load(Ordering::Relaxed) > 0 {
+                POLL_SET_DIAG.fetch_sub(1, Ordering::Relaxed);
+                let mut desc = String::new();
+                for i in 0..nfds.min(12) {
+                    let ent = a1 + (i as u64) * 8;
+                    let fd = read_user::<i32>(ent).unwrap_or(-1) as i64 as u64;
+                    let ev = read_user::<u16>(ent + 4).unwrap_or(0);
+                    let re = read_user::<u16>(ent + 6).unwrap_or(0);
+                    desc.push_str(&alloc::format!(" fd{fd}({},ev={ev:#x},re={re:#x})", fd_kind(fd)));
+                }
+                crate::serial_println!("[pollset] t{} {:?} n={nfds} to={timeout_ms} ready={ready}:{desc}",
+                    crate::sched::current(), thread_name(crate::sched::current()));
             }
             if ready > 0 || timeout_ms == 0 {
                 break ready; // something is ready, or the caller asked not to wait
