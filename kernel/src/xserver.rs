@@ -1570,19 +1570,11 @@ fn present_win(win: Option<&XWindow>, id: u32) {
                         s,
                     ))
             });
-            match placed {
-                Some((dx, dy, s)) => {
-                    crate::screen_present_xrgb_at(&win.buf, win.w as usize, win.h as usize, dx, dy, s);
-                    // The click-routing table must hold the transform the pixels
-                    // ACTUALLY got, or a click on a popup maps into the wrong window.
-                    note_presented(id, win.w, win.h, dx, dy, s);
-                }
-                None => {
-                    crate::screen_present_xrgb(&win.buf, win.w as usize, win.h as usize);
-                    if let Some((dx, dy, s)) = crate::screen_place(win.w as usize, win.h as usize) {
-                        note_presented(id, win.w, win.h, dx as i64, dy as i64, s);
-                    }
-                }
+            // BISECT: anchor path disabled — plain per-window centring like S2.
+            let _ = placed;
+            crate::screen_present_xrgb(&win.buf, win.w as usize, win.h as usize);
+            if let Some((dx, dy, s)) = crate::screen_place(win.w as usize, win.h as usize) {
+                note_presented(id, win.w, win.h, dx as i64, dy as i64, s);
             }
         }
         let ctr = (win.h as usize / 2) * win.w as usize + win.w as usize / 2;

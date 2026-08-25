@@ -31,6 +31,7 @@ pub static TASK_COUNTERS: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) };
 /// flags with a full state machine — the basis for blocking I/O,
 /// nanosleep and (S3) fork/wait/zombie reaping.
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum State {
     /// Runnable (ready to get the CPU).
     Ready,
@@ -117,7 +118,13 @@ pub fn dump_states() {
                 blocked += 1;
                 crate::serial_println!("[stall]   task {i}: Blocked(chan={c:#x})");
             }
-            _ => {}
+            ref other => {
+                // Name the states the arms above skip (Running, Dead, ...): three
+                // tasks fell outside every counted state during the fp1 stall and
+                // the dump could not say WHAT they were — that unnamed state was
+                // the whole diagnosis.
+                crate::serial_println!("[stall]   task {i}: {other:?}");
+            }
         }
     }
     crate::serial_println!("[stall] summary: {ready} Ready, {blocked} Blocked, {sleeping} Sleeping (of {} tasks); current={}",
