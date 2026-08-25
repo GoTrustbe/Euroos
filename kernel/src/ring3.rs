@@ -9654,6 +9654,14 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // socket(domain, type, protocol): AF_INET (2) + SOCK_STREAM (1, TCP)
             // or SOCK_DGRAM (2, UDP).
             let typ = a2 & 0xff; // ignore SOCK_CLOEXEC/NONBLOCK flags
+            {
+                use core::sync::atomic::AtomicU32;
+                static SOCK_DIAG: AtomicU32 = AtomicU32::new(40);
+                if SOCK_DIAG.load(Ordering::Relaxed) > 0 {
+                    SOCK_DIAG.fetch_sub(1, Ordering::Relaxed);
+                    crate::serial_println!("[sockfam] socket(domain={}, type={typ})", a1);
+                }
+            }
             match (a1, typ) {
                 (2, 1) => crate::net::sock_open(false), // AF_INET TCP
                 (2, 2) => crate::net::sock_open(true),  // AF_INET UDP

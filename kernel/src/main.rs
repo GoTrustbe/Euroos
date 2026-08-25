@@ -2297,8 +2297,12 @@ fn main() -> Status {
                   b"--window-size=800,600", b"--window-position=40,40",
                   b"--enable-logging=stderr", b"--v=1",
                   b"--no-first-run", b"--no-default-browser-check",
-                  // THE REAL INTERNET: the sovereign kernel's own e1000/virtio-net +
-                  // TCP + (soon) DNS carry chrome to the project's public site.
+                  // THE REAL INTERNET: the sovereign kernel's own virtio-net + TCP
+                  // carry chrome to the project's public site. Name resolution is
+                  // pinned via chrome's own --host-resolver-rules for now (its DNS
+                  // config service needs netlink we don't provide yet); the TCP,
+                  // TLS and HTTP are fully real.
+                  b"--host-resolver-rules=MAP euro-os.eu 151.240.77.50",
                   b"https://euro-os.eu/"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
