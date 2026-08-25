@@ -1499,6 +1499,27 @@ fn copy_area(c: &mut XConn, src: u32, dst: u32, sx: i32, sy: i32, dx: i32, dy: i
 /// Present the given (mapped) window to the real framebuffer + verify a sample
 /// pixel for the bring-up log. Reuses the app-graphics XRGB blit (as DOOM does).
 fn present(c: &XConn, id: u32) {
+    // The anchor for the shared placement transform: the largest mapped window on
+    // the processing connection or in the table. Computed HERE — with the table
+    // lock taken and released before present_win — because present_win runs on the
+    // foreign path below while the table lock is held; taking XCONNS inside it
+    // again self-deadlocks the presenting task, pump_mouse (task 0) then spins on
+    // the lock forever and the mouse goes dead (the bt1/bt2 regression).
+    let mut best: Option<(i16, i16, u16, u16)> = c.windows.iter()
+        .filter(|w| w.mapped && w.w > 1 && w.h > 1)
+        .map(|w| (w.x, w.y, w.w, w.h))
+        .max_by_key(|(_, _, w, h)| *w as u32 * *h as u32);
+    {
+        let t = XCONNS.lock();
+        for conn in t.iter().flatten() {
+            for w in conn.windows.iter().filter(|w| w.mapped && w.w > 1 && w.h > 1) {
+                if best.map(|(_, _, bw, bh)| (w.w as u32 * w.h as u32) > (bw as u32 * bh as u32)).unwrap_or(true) {
+                    best = Some((w.x, w.y, w.w, w.h));
+                }
+            }
+        }
+    }
+    ANCHOR.lock().clone_from(&best);
     if c.windows.iter().any(|w| w.id == id) {
         present_win(c.windows.iter().find(|w| w.id == id && w.mapped), id);
         return;
@@ -1513,6 +1534,10 @@ fn present(c: &XConn, id: u32) {
         }
     }
 }
+
+/// The current placement anchor (x, y, w, h), refreshed by present() BEFORE the
+/// window table is locked for the blit.
+static ANCHOR: Mutex<Option<(i16, i16, u16, u16)>> = Mutex::new(None);
 
 fn present_win(win: Option<&XWindow>, id: u32) {
     if let Some(win) = win {
@@ -1536,18 +1561,7 @@ fn present_win(win: Option<&XWindow>, id: u32) {
             // SAME scale at its X-geometry position relative to the anchor. This is
             // what makes a menu popup open AT its button instead of floating in a
             // corner as an unrelated blob.
-            let anchor = {
-                let t = XCONNS.lock();
-                let mut best: Option<(i16, i16, u16, u16)> = None;
-                for conn in t.iter().flatten() {
-                    for w in conn.windows.iter().filter(|w| w.mapped && w.w > 1 && w.h > 1) {
-                        if best.map(|(_, _, bw, bh)| (w.w as u32 * w.h as u32) > (bw as u32 * bh as u32)).unwrap_or(true) {
-                            best = Some((w.x, w.y, w.w, w.h));
-                        }
-                    }
-                }
-                best
-            };
+            let anchor = *ANCHOR.lock();
             let placed = anchor.and_then(|(ax, ay, aw, ah)| {
                 crate::screen_place(aw as usize, ah as usize)
                     .map(|(adx, ady, s)| (
