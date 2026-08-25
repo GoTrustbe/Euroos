@@ -754,7 +754,7 @@ pub fn cdp_pump() {
         let slot = now / 3_000;
         if slot != last {
             CDP_WAIT_MARK.store(slot, Ordering::Relaxed);
-            cdp_send("{"id":50,"method":"Target.getTargets"}");
+            cdp_send("{\"id\":50,\"method\":\"Target.getTargets\"}");
         }
     }
 
