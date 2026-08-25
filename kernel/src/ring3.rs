@@ -9928,6 +9928,12 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // O_CREAT=0x40 creates; O_TRUNC=0x200 truncates; O_APPEND=0x400 -> at the end.
             let path = user_cstr(a2, 256);
             let flags = a3;
+            // DNS-config census: every open of the resolver's config files, loudly.
+            // Chrome reports DNS_PROBE_FINISHED_BAD_CONFIG without a single UDP
+            // packet; whether it ever READS resolv.conf decides where that dies.
+            if path.ends_with(b"resolv.conf") || path == b"/etc/hosts" || path.ends_with(b"nsswitch.conf") {
+                crate::serial_println!("[dnscfg] openat {:?}", core::str::from_utf8(&path).unwrap_or("?"));
+            }
             // /proc/self/mem: a live window into the process's own memory (chrome's
             // PartitionAlloc opens it). Not a static VFS file — a special live fd.
             if path == b"/proc/self/mem" || path == b"/proc/thread-self/mem" {
