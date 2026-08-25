@@ -18,6 +18,7 @@ qemu-system-x86_64 -machine q35 -m 3584M -cpu qemu64,+smep,+smap \
   -drive format=raw,file="$PWD/eurokernel.img" \
   -drive format=raw,file="$PACK",if=virtio \
   -device qemu-xhci,id=xhci -device usb-kbd -device usb-tablet \
+  -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
   -monitor unix:"$LOG.mon",server,nowait \
   -qmp unix:"$LOG.qmp",server,nowait \
   -display none -serial stdio -no-reboot > "$LOG" 2>&1 &

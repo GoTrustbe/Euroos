@@ -1058,6 +1058,19 @@ enum Sock {
 
 static SOCKETS: Mutex<[Option<Sock>; MAX_SOCK]> = Mutex::new([const { None }; MAX_SOCK]);
 
+/// Has this socket fd been connected (TCP established or UDP peer set)?
+/// A Reserved slot has not — sendto() with an explicit destination uses this
+/// to know it must set the UDP peer first (the DNS resolver's pattern).
+pub fn sock_is_connected(fd: u64) -> bool {
+    if !is_sock_fd(fd) {
+        return false;
+    }
+    matches!(
+        SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize],
+        Some(Sock::Conn(_)) | Some(Sock::Udp(_))
+    )
+}
+
 /// Is this fd number a socket (not a VFS file)?
 pub fn is_sock_fd(fd: u64) -> bool {
     fd >= SOCK_FD_BASE && (fd - SOCK_FD_BASE) < MAX_SOCK as u64

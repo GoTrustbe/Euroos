@@ -2297,7 +2297,9 @@ fn main() -> Status {
                   b"--window-size=800,600", b"--window-position=40,40",
                   b"--enable-logging=stderr", b"--v=1",
                   b"--no-first-run", b"--no-default-browser-check",
-                  b"file:///tmp/euro.html"],
+                  // THE REAL INTERNET: the sovereign kernel's own e1000/virtio-net +
+                  // TCP + (soon) DNS carry chrome to the project's public site.
+                  b"https://euro-os.eu/"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
             ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);

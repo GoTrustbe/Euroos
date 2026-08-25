@@ -6816,6 +6816,14 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
 /// and the local demo page. One place, so a desktop launch and a boot-phase run can
 /// never drift apart.
 pub fn chrome_stage_files() {
+    // Name resolution for a REAL page load: slirp's DNS proxy lives on 10.0.2.3;
+    // /etc/hosts pins euro-os.eu as a deterministic fallback while the UDP DNS
+    // path earns trust (chrome's resolver consults hosts first, like glibc).
+    register_file("/etc/resolv.conf", b"nameserver 10.0.2.3
+".to_vec());
+    register_file("/etc/hosts", b"127.0.0.1 localhost
+151.240.77.50 euro-os.eu www.euro-os.eu
+".to_vec());
     for (name, bytes) in dejavu_fonts() {
         register_file_static(&alloc::format!("/usr/share/fonts/truetype/dejavu/{name}"), bytes);
     }
@@ -9700,7 +9708,10 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         50 => 0, // listen(fd, backlog): bind already listens (Switchboard) -> success
         43 => crate::net::unix_accept_fd(a1), // accept(fd, addr, len)
         44 => {
-            // sendto(fd, buf, len, flags, dest, destlen): connected -> ignore dest.
+            // sendto(fd, buf, len, flags, dest, destlen). A DNS resolver sends on an
+            // UNCONNECTED UDP socket with an explicit destination — connect the
+            // socket to that destination first (our UDP connect just sets the peer),
+            // then send. A connected socket ignores dest, as before.
             let bytes = match copy_from_user(a2, a3 as usize) {
                 Some(v) => v,
                 None => return EFAULT,
@@ -9708,6 +9719,16 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             if crate::net::is_unix_fd(a1) {
                 crate::net::unix_fd_send(a1, &bytes)
             } else {
+                if a5 != 0 && !crate::net::sock_is_connected(a1) {
+                    if let Some(sa) = copy_from_user(a5, 8) {
+                        let family = (sa[0] as u16) | ((sa[1] as u16) << 8);
+                        if family == 2 {
+                            let port = ((sa[2] as u16) << 8) | sa[3] as u16;
+                            let _ = crate::net::sock_connect(
+                                a1, euronet::ipv4::Ipv4Addr([sa[4], sa[5], sa[6], sa[7]]), port);
+                        }
+                    }
+                }
                 crate::net::sock_send(a1, &bytes)
             }
         }
