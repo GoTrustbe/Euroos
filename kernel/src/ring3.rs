@@ -455,6 +455,9 @@ fn output_push(text: &str) {
 static PING_SENT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static PING_ANS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static PING_DUMPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// CSS viewport height and devicePixelRatio*1000, reported by the page (id 60).
+static CDP_VIEW_H: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static CDP_DPR_MILLI: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(1000);
 /// Socketpair endpoints: (a, b). A descriptor sent with SCM_RIGHTS on one end has
 /// to arrive on the OTHER one, and only a pair knows who that is.
 static SOCK_PAIRS: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
@@ -508,6 +511,18 @@ pub static CDP_INPUT_ONLY: core::sync::atomic::AtomicBool = core::sync::atomic::
 
 /// Forward one mouse event to the page via DevTools. kind: 4=press 5=release
 /// 6=move; (x, y) are CSS/viewport pixels inside the PAGE (caller translates).
+/// Translate window-local DEVICE pixels into CSS viewport pixels using the
+/// page-reported calibration: the viewport occupies the BOTTOM `view_h*dpr`
+/// device pixels of the 600-px window, everything above is browser chrome.
+pub fn cdp_window_to_view(wx: i32, wy: i32) -> (i32, i32) {
+    let dpr = CDP_DPR_MILLI.load(Ordering::Relaxed).max(1) as i64;
+    let vh = CDP_VIEW_H.load(Ordering::Relaxed) as i64;
+    let topbar_dev = if vh > 0 { (600 * 1000 - vh * dpr) / 1000 } else { 143 };
+    let x = (wx as i64 * 1000 / dpr) as i32;
+    let y = (((wy as i64 - topbar_dev).max(0)) * 1000 / dpr) as i32;
+    (x, y)
+}
+
 pub fn cdp_input_mouse(kind: u8, x: i32, y: i32) {
     if !CDP_DRIVE.load(Ordering::Relaxed) {
         return;
@@ -877,6 +892,20 @@ pub fn cdp_pump() {
         if msg.contains("\"id\":50") {
             PING_ANS.fetch_add(1, Ordering::Relaxed);
         }
+        if msg.contains("\"id\":60") {
+            if let Some(v) = json_str(&msg, "value") {
+                // "WxH@DPR" — store DPR ×1000 and the CSS viewport height.
+                crate::serial_println!("[cdp] viewport calibration: {v}");
+                if let Some((wh, dpr)) = v.split_once('@') {
+                    if let Some((_, h)) = wh.split_once('x') {
+                        if let (Ok(h), Ok(d)) = (h.parse::<u32>(), dpr.parse::<f32>()) {
+                            CDP_VIEW_H.store(h, Ordering::Relaxed);
+                            CDP_DPR_MILLI.store((d * 1000.0) as u32, Ordering::Relaxed);
+                        }
+                    }
+                }
+            }
+        }
         if step == 1 && msg.contains("\"id\":1") {
             // Attach to the page target. A target list without a page means chrome
             // has not created it yet — ask again rather than giving up.
@@ -916,6 +945,11 @@ pub fn cdp_pump() {
                     // Attached; the page loads from argv on its own. From here the
                     // pump only ferries input — park the state machine.
                     crate::serial_println!("[cdp] input bridge attached (session {s})");
+                    // Calibrate: the page reports its CSS viewport and device pixel
+                    // ratio; input coordinates are CSS pixels, so the ferry must
+                    // divide by the DPR and anchor at the real viewport top.
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":60,\"sessionId\":\"{s}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"window.innerWidth+'x'+window.innerHeight+'@'+window.devicePixelRatio\"}}}}"));
                     CDP_STEP.store(100, Ordering::Relaxed);
                 } else {
                     CDP_STEP.store(4, Ordering::Relaxed);

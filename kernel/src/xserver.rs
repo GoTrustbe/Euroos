@@ -495,7 +495,8 @@ pub fn pump_mouse() {
             if sc > 0 {
                 let wx = (cx as i32 - dx) / sc;
                 let wy = (cy as i32 - dy) / sc;
-                crate::ring3::cdp_input_mouse(if down { 4 } else { 5 }, wx.max(0), (wy - 143).max(0));
+                let (vx, vy) = crate::ring3::cdp_window_to_view(wx.max(0), wy);
+                crate::ring3::cdp_input_mouse(if down { 4 } else { 5 }, vx, vy);
             }
         }
     }
@@ -592,8 +593,9 @@ pub fn deliver_button(lx: i16, ly: i16) {
     // like pump_mouse does in the boot phase — the reliable route into the page.
     // Coordinates are already window-local here; only the browser chrome above the
     // viewport (~143 px) is subtracted.
-    crate::ring3::cdp_input_mouse(4, lx as i32, (ly as i32 - 143).max(0));
-    crate::ring3::cdp_input_mouse(5, lx as i32, (ly as i32 - 143).max(0));
+    let (vx, vy) = crate::ring3::cdp_window_to_view(lx as i32, ly as i32);
+    crate::ring3::cdp_input_mouse(4, vx, vy);
+    crate::ring3::cdp_input_mouse(5, vx, vy);
     trace(format_args!("deliver_button local=({lx},{ly})"));
 }
 
