@@ -1072,6 +1072,17 @@ fn poll_inner() {
 /// Translate a HID keyboard report into PS/2 set-1 scancodes (so that the
 /// existing [`crate::ps2`] decoder + shell process it transparently).
 fn inject_keyboard(hid: &mut HidDevice, report: &[u8]) {
+    // Raw-report census: the X layer saw usage 0x04 ('a') for qcode 'q' and never
+    // saw a release. Whether that corruption is in the wire report or in the diff
+    // below is decided here.
+    {
+        use core::sync::atomic::{AtomicU32, Ordering};
+        static KREP_DIAG: AtomicU32 = AtomicU32::new(24);
+        if KREP_DIAG.load(Ordering::Relaxed) > 0 {
+            KREP_DIAG.fetch_sub(1, Ordering::Relaxed);
+            crate::serial_println!("[krep] {:02x?}", &report[..report.len().min(8)]);
+        }
+    }
     let mods = report[0];
     // Shift transitions as 0x2A/0xAA (make/break) so that the ps2 SHIFT latch is correct.
     let shift_now = mods & 0x22 != 0; // LShift (bit1) or RShift (bit5)
