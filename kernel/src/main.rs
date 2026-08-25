@@ -378,6 +378,11 @@ fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
     // run-to-completion boot test finish, and would race a live window's deadlines.
     ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
     xserver::set_windowed(true);
+    // CHROME_ARGV carries --remote-debugging-pipe, so fd 3/4 MUST exist before
+    // chrome's first instruction — and the input bridge wants the session anyway:
+    // desktop clicks and typing ride the same reliable DevTools route as the
+    // boot-phase runs. The staged euro.html is the start page's target.
+    ring3::cdp_install_input("file:///tmp/euro.html");
     let caps = ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO | ring3::CAP_NET;
     match ring3::spawn_glibc_disk_persistent(mem, "/pack/chrome", ring3::ldlinux_bytes(),
                                              ring3::CHROME_ARGV, ring3::CHROME_ENVP, caps) {
@@ -4092,6 +4097,9 @@ fn main() -> Status {
         // the real HTTP/TLS/DNS fetch runs HERE, in the desktop-loop task context
         // (interrupts on, no bg lock), not inside the app's no-yield syscall.
         netbridge::service();
+        // The DevTools input bridge for a desktop-launched chrome: attach + ferry
+        // page input (see cdp_install_input at the `chrome` command's spawn).
+        ring3::cdp_pump();
         // One-shot liveness proof once the loop has petted a while.
         if !wd_reported && watchdog::pets() >= 20 {
             wd_reported = true;
