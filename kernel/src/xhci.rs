@@ -1112,6 +1112,14 @@ fn inject_mouse(report: &[u8]) {
 /// (layout + logical range straight from the device); otherwise fall back to
 /// the fixed usb-tablet layout.
 fn inject_pointer(hid: &HidDevice, report: &[u8]) {
+    {
+        use core::sync::atomic::{AtomicU32, Ordering};
+        static PTR_DIAG: AtomicU32 = AtomicU32::new(16);
+        if PTR_DIAG.load(Ordering::Relaxed) > 0 {
+            PTR_DIAG.fetch_sub(1, Ordering::Relaxed);
+            crate::serial_println!("[ptr] {:02x?}", &report[..report.len().min(8)]);
+        }
+    }
     if let Some(m) = &hid.map {
         if let Some((x, y, buttons, absolute)) = m.decode(report) {
             if absolute {
