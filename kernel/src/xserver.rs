@@ -217,6 +217,17 @@ pub fn pump_keyboard() {
             return;
         }
         while let Some(sc) = crate::ps2::poll_scancode() {
+            // Raw scancode census (budget): the X event stream showed doubled makes
+            // and NO breaks — decide whether the corruption is already in this ring
+            // (HID->set1 translation) or in the event building below.
+            {
+                use core::sync::atomic::{AtomicU32, Ordering};
+                static SC_DIAG: AtomicU32 = AtomicU32::new(64);
+                if SC_DIAG.load(Ordering::Relaxed) > 0 {
+                    SC_DIAG.fetch_sub(1, Ordering::Relaxed);
+                    crate::serial_println!("[sc] {sc:#04x}");
+                }
+            }
             let pressed = sc & 0x80 == 0;
             let code = sc & 0x7f;
             // Track the modifiers ourselves: the state field of EVERY event carries
@@ -393,11 +404,8 @@ pub static PRESENT_ORDER_COUNT: core::sync::atomic::AtomicU64 = core::sync::atom
 static PRESENT_ORDER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Record a window's screen placement after a fullscreen present.
-fn note_presented(id: u32, w: u16, h: u16) {
-    let (dx, dy, sc) = match crate::screen_place(w as usize, h as usize) {
-        Some(p) => p,
-        None => return,
-    };
+fn note_presented(id: u32, w: u16, h: u16, dx: i64, dy: i64, sc: usize) {
+    let (dx, dy, sc) = (dx, dy, sc as i64);
     let n = PRESENT_ORDER.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
     PRESENT_ORDER_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let mut t = PRESENTED.lock();
@@ -1522,8 +1530,46 @@ fn present_win(win: Option<&XWindow>, id: u32) {
             }
             X_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
         } else {
-            crate::screen_present_xrgb(&win.buf, win.w as usize, win.h as usize);
-            note_presented(id, win.w, win.h);
+            // ONE shared transform for every window: the ANCHOR (largest mapped
+            // window on any connection — chrome's browser toplevel) is centred and
+            // integer-scaled by screen_place; every other window is placed with the
+            // SAME scale at its X-geometry position relative to the anchor. This is
+            // what makes a menu popup open AT its button instead of floating in a
+            // corner as an unrelated blob.
+            let anchor = {
+                let t = XCONNS.lock();
+                let mut best: Option<(i16, i16, u16, u16)> = None;
+                for conn in t.iter().flatten() {
+                    for w in conn.windows.iter().filter(|w| w.mapped && w.w > 1 && w.h > 1) {
+                        if best.map(|(_, _, bw, bh)| (w.w as u32 * w.h as u32) > (bw as u32 * bh as u32)).unwrap_or(true) {
+                            best = Some((w.x, w.y, w.w, w.h));
+                        }
+                    }
+                }
+                best
+            };
+            let placed = anchor.and_then(|(ax, ay, aw, ah)| {
+                crate::screen_place(aw as usize, ah as usize)
+                    .map(|(adx, ady, s)| (
+                        adx as i64 + (win.x as i64 - ax as i64) * s as i64,
+                        ady as i64 + (win.y as i64 - ay as i64) * s as i64,
+                        s,
+                    ))
+            });
+            match placed {
+                Some((dx, dy, s)) => {
+                    crate::screen_present_xrgb_at(&win.buf, win.w as usize, win.h as usize, dx, dy, s);
+                    // The click-routing table must hold the transform the pixels
+                    // ACTUALLY got, or a click on a popup maps into the wrong window.
+                    note_presented(id, win.w, win.h, dx, dy, s);
+                }
+                None => {
+                    crate::screen_present_xrgb(&win.buf, win.w as usize, win.h as usize);
+                    if let Some((dx, dy, s)) = crate::screen_place(win.w as usize, win.h as usize) {
+                        note_presented(id, win.w, win.h, dx as i64, dy as i64, s);
+                    }
+                }
+            }
         }
         let ctr = (win.h as usize / 2) * win.w as usize + win.w as usize / 2;
         let sample = win.buf.get(ctr).copied().unwrap_or(0);

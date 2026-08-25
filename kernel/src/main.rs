@@ -427,6 +427,47 @@ pub fn screen_clear_rect(x: usize, y: usize, w: usize, h: usize) {
     }
 }
 
+/// Blit a window at an EXPLICIT screen position and scale — the caller computed a
+/// shared transform (anchor window centred; every other window placed relative to
+/// it) so popups land where X geometry says they are instead of floating centred.
+pub fn screen_present_xrgb_at(src: &[u32], sw: usize, sh: usize, dx: i64, dy: i64, scale: usize) {
+    let fbi = match FB_INFO.get() {
+        Some(i) => i,
+        None => return,
+    };
+    if sw == 0 || sh == 0 || scale == 0 || src.len() < sw * sh {
+        return;
+    }
+    let dst = fbi.base as *mut u32;
+    let rgb = matches!(fbi.pf, PixelFormat::Rgb);
+    for sy in 0..sh {
+        let row = &src[sy * sw..sy * sw + sw];
+        for k in 0..scale {
+            let ty = dy + (sy * scale + k) as i64;
+            if ty < 0 {
+                continue;
+            }
+            if ty as usize >= fbi.height {
+                return;
+            }
+            let dst_row = ty as usize * fbi.stride;
+            let mut dc = dx;
+            for &v in row {
+                let out = if rgb { ((v & 0xFF) << 16) | (v & 0x0000_FF00) | ((v >> 16) & 0xFF) } else { v };
+                for _ in 0..scale {
+                    if dc >= 0 {
+                        if dc as usize >= fbi.width {
+                            break;
+                        }
+                        unsafe { dst.add(dst_row + dc as usize).write_volatile(out) };
+                    }
+                    dc += 1;
+                }
+            }
+        }
+    }
+}
+
 pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
     let fbi = match FB_INFO.get() {
         Some(i) => i,
