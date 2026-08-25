@@ -745,6 +745,19 @@ pub fn cdp_pump() {
     let now = crate::interrupts::ticks();
     let step = CDP_STEP.load(Ordering::Relaxed);
 
+    // Input-only mode heartbeat: a cheap ping every ~30 s of guest time. Whether
+    // answers keep coming — and until WHEN — is the measurement that separates
+    // "pipe reader died", "UI thread stopped serving DevTools", and "input alone
+    // is ignored" (the desktop dt4 run: handshake fine, then silence).
+    if step == 100 {
+        let last = CDP_WAIT_MARK.load(Ordering::Relaxed);
+        let slot = now / 3_000;
+        if slot != last {
+            CDP_WAIT_MARK.store(slot, Ordering::Relaxed);
+            cdp_send("{"id":50,"method":"Target.getTargets"}");
+        }
+    }
+
     // Step 0: give chrome a moment to open the pipe, then ask what targets exist.
     if step == 0 {
         if CDP_MARK.load(Ordering::Relaxed) == 0 {
