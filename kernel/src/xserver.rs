@@ -472,6 +472,17 @@ pub fn pump_mouse() {
     while let Some((down, cx, cy)) = crate::mouse::take_button_event() {
         LAST_BTN.store(down, core::sync::atomic::Ordering::Relaxed);
         deliver_pointer(if down { 4 } else { 5 }, 1, cx, cy, 0);
+        // ALSO ferry the click to the page over the CDP bridge. Coordinates:
+        // screen -> window via the presented transform, then minus the browser
+        // chrome above the viewport (tab strip + omnibox + infobar ≈ 143 px in
+        // the current 800x600 layout).
+        if let Some((_, dx, dy, sc)) = window_at(cx as i32, cy as i32) {
+            if sc > 0 {
+                let wx = (cx as i32 - dx) / sc;
+                let wy = (cy as i32 - dy) / sc;
+                crate::ring3::cdp_input_mouse(if down { 4 } else { 5 }, wx.max(0), (wy - 143).max(0));
+            }
+        }
     }
     // Cursor moved -> MotionNotify(6), preceded by an EnterNotify(7) when the pointer
     // crosses into a different window (chrome starts hover tracking on the crossing).

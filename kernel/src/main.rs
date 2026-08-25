@@ -2275,8 +2275,13 @@ fn main() -> Status {
             ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
             ring3::GLIBC_DEADLINE_TICKS.store(500_000_000, core::sync::atomic::Ordering::Relaxed);
             xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+            // The CDP input bridge: page clicks/typing go through DevTools
+            // (Input.dispatchMouseEvent), which posts into chrome's task queues and
+            // therefore works in EVERY pump state; X events stay for browser chrome.
+            ring3::cdp_install_input("file:///tmp/euro.html");
             let (o2, e2) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome", ring3::ldlinux_bytes(),
                 &[b"/pack/chrome", b"--ozone-platform=x11", b"--no-sandbox",
+                  b"--remote-debugging-pipe",
                   b"--disable-gpu", b"--use-gl=disabled", b"--disable-vulkan",
                   b"--no-zygote", b"--single-process", b"--disable-dev-shm-usage",
                   b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",

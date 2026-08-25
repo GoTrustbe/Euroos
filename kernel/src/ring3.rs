@@ -483,6 +483,44 @@ static CDP_SESSION: Mutex<String> = Mutex::new(String::new());
 pub static CDP_DOM: Mutex<String> = Mutex::new(String::new());
 /// Drive the DevTools conversation from the process-run loop.
 pub static CDP_DRIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Input-only CDP mode: attach to the page session and then ONLY forward input —
+/// no navigation, no DOM reads, no screenshots. Used by the interactive UI runs,
+/// where Input.dispatchMouseEvent reaches the renderer through chrome's own task
+/// posting and therefore works in EVERY message-pump state (the X event route
+/// depends on a glib-context race chrome loses on some boots).
+pub static CDP_INPUT_ONLY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Forward one mouse event to the page via DevTools. kind: 4=press 5=release
+/// 6=move; (x, y) are CSS/viewport pixels inside the PAGE (caller translates).
+pub fn cdp_input_mouse(kind: u8, x: i32, y: i32) {
+    if !CDP_DRIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let sid = CDP_SESSION.lock().clone();
+    if sid.is_empty() {
+        return;
+    }
+    let (typ, btn, clicks) = match kind {
+        4 => ("mousePressed", "left", 1),
+        5 => ("mouseReleased", "left", 1),
+        _ => ("mouseMoved", "none", 0),
+    };
+    cdp_send(&alloc::format!(
+        "{{\"id\":40,\"sessionId\":\"{sid}\",\"method\":\"Input.dispatchMouseEvent\",\"params\":{{\"type\":\"{typ}\",\"x\":{x},\"y\":{y},\"button\":\"{btn}\",\"clickCount\":{clicks}}}}}"));
+}
+
+pub fn cdp_input_text(text: &str) {
+    if !CDP_DRIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let sid = CDP_SESSION.lock().clone();
+    if sid.is_empty() {
+        return;
+    }
+    let esc: String = text.chars().flat_map(|c| c.escape_default()).collect();
+    cdp_send(&alloc::format!(
+        "{{\"id\":41,\"sessionId\":\"{sid}\",\"method\":\"Input.insertText\",\"params\":{{\"text\":\"{esc}\"}}}}"));
+}
 /// Fast-forward the clock when every thread is parked. It breaks multi-second waits
 /// under TCG, but it also makes the guest's monotonic clock JUMP — and a scheduler
 /// that computes its next deadline from that clock can end up planning far into the
@@ -493,7 +531,14 @@ pub static TICKLESS_IDLE: core::sync::atomic::AtomicBool = core::sync::atomic::A
 /// chrome's READ end (we write commands into it), fd 4 its WRITE end (we read the
 /// answers). Call this right before launching chrome, so the fds exist from its
 /// first instruction — chrome checks them at startup and exits if they are absent.
+/// Install the input-only CDP bridge (attach + forward input, nothing else).
+pub fn cdp_install_input(url: &str) {
+    cdp_install(url);
+    CDP_INPUT_ONLY.store(true, Ordering::Relaxed);
+}
+
 pub fn cdp_install(url: &str) {
+    CDP_INPUT_ONLY.store(false, Ordering::Relaxed);
     CDP_STEP.store(0, Ordering::Relaxed);
     CDP_MARK.store(0, Ordering::Relaxed);
     CDP_TRIES.store(0, Ordering::Relaxed);
@@ -808,7 +853,14 @@ pub fn cdp_pump() {
                 // compositor its frame sink, which is exactly the loop the trace shows
                 // (sink lost 10 times here against 5 on native Linux).
                 let _ = url;
-                CDP_STEP.store(4, Ordering::Relaxed);
+                if CDP_INPUT_ONLY.load(Ordering::Relaxed) {
+                    // Attached; the page loads from argv on its own. From here the
+                    // pump only ferries input — park the state machine.
+                    crate::serial_println!("[cdp] input bridge attached (session {s})");
+                    CDP_STEP.store(100, Ordering::Relaxed);
+                } else {
+                    CDP_STEP.store(4, Ordering::Relaxed);
+                }
                 CDP_MARK.store(crate::interrupts::ticks(), Ordering::Relaxed);
             }
         } else if step == 3 && msg.contains("\"id\":3") {
@@ -6694,6 +6746,10 @@ pub fn chrome_stage_files() {
 /// debugged twice.
 pub const CHROME_ARGV: &[&[u8]] = &[
     b"/pack/chrome", b"--ozone-platform=x11", b"--no-sandbox",
+    // DevTools over fd 3/4: the kernel's input bridge (cdp_install_input) clicks
+    // and types into the PAGE through chrome's own task queues — the reliable
+    // route while the X event route depends on a glib-pump race.
+    b"--remote-debugging-pipe",
     b"--disable-gpu", b"--use-gl=disabled", b"--disable-vulkan",
     b"--no-zygote", b"--single-process", b"--disable-dev-shm-usage",
     b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
@@ -9418,7 +9474,16 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             match deadline {
                 Some(d) => {
                     if d > before {
-                        crate::sched::sleep_ticks(d - before);
+                        // Sleep in 1-tick steps, NOT the whole remaining timeout at
+                        // once: a poll(fds, 1300ms) that naps 130 ticks in one go is
+                        // blind to data arriving on tick 1 — chrome's glib pump then
+                        // notices a click only when its full timeout expires, which
+                        // under TCG's ~60x stretch feels like input never landing.
+                        // The loop re-checks readiness after every tick.
+                        crate::sched::sleep_ticks(1);
+                        if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                            crate::sched::yield_now();
+                        }
                     }
                 }
                 None => {
