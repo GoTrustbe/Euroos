@@ -588,6 +588,12 @@ pub fn deliver_button(lx: i16, ly: i16) {
     deliver_to_shown(6, 0, lx, ly);
     deliver_to_shown(4, 1, lx, ly);
     deliver_to_shown(5, 1, lx, ly);
+    // Desktop-hosted chrome: ferry the click over the CDP bridge as well, exactly
+    // like pump_mouse does in the boot phase — the reliable route into the page.
+    // Coordinates are already window-local here; only the browser chrome above the
+    // viewport (~143 px) is subtracted.
+    crate::ring3::cdp_input_mouse(4, lx as i32, (ly as i32 - 143).max(0));
+    crate::ring3::cdp_input_mouse(5, lx as i32, (ly as i32 - 143).max(0));
     trace(format_args!("deliver_button local=({lx},{ly})"));
 }
 
