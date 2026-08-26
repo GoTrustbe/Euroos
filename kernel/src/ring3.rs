@@ -1240,6 +1240,13 @@ fn epoll_ctl(epfd: u64, op: u64, fd: u64, ev: u64) -> u64 {
         None => return (-9i64) as u64,
     };
     let fdi = fd as i32;
+    // Census: how chrome wires its NETWORK sockets into epoll — whether the fd
+    // ever lands in the set its net thread polls is the question the systrace
+    // left open (epoll_wait keeps returning 0 after a successful connect).
+    if crate::net::is_sock_fd(fd) {
+        crate::serial_println!("[epctl] epfd{epfd} op={op} sock fd{fd} events={:#x}",
+            read_user::<u32>(ev).unwrap_or(0));
+    }
     match op {
         1 | 3 => {
             let events: u32 = read_user(ev).unwrap_or(0);
