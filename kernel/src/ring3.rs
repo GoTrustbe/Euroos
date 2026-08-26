@@ -8370,6 +8370,22 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
         let v = read_user::<u64>(chk).unwrap_or(u64::MAX);
         crate::serial_println!("[scm] NEXT syscall ({num}): controllen at {chk:#x} now reads {v}");
     }
+    // Whole-life log of the network sockets: every syscall whose first arg is a
+    // sock fd, with its result. The main-navigation socket goes silent after
+    // connect while background sockets chat away — this names what (if anything)
+    // ever touches it again.
+    if a1 >= 500 && a1 < 520 && crate::net::is_sock_fd(a1) {
+        use core::sync::atomic::AtomicU32;
+        static SOCKLIFE: AtomicU32 = AtomicU32::new(400);
+        if SOCKLIFE.load(Ordering::Relaxed) > 0 {
+            SOCKLIFE.fetch_sub(1, Ordering::Relaxed);
+            let r = linux_dispatch_inner(num, a1, a2, a3, a4, a5);
+            msc_complete(r);
+            crate::serial_println!("[slife] t{} {num}(fd{a1},{a2:#x},{a3:#x},{a4:#x}) = {r:#x}",
+                crate::sched::current());
+            return r;
+        }
+    }
     if SYS_TRACE_LEFT.load(Ordering::Relaxed) == 0 {
         let r = linux_dispatch_inner(num, a1, a2, a3, a4, a5);
         msc_complete(r); // the fast path is the common one — the ring must fill here too
