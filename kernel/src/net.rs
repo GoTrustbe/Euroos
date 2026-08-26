@@ -1432,6 +1432,21 @@ pub fn sock_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
     data
 }
 
+/// TRUE end-of-stream: the peer closed AND everything received was consumed.
+/// The difference between "no data yet" (-EAGAIN) and "closed" (0) is the
+/// difference between chrome keeping a healthy connection and it discarding
+/// every socket as dead (ERR_SOCKET_NOT_CONNECTED on each page load).
+pub fn sock_eof(fd: u64) -> bool {
+    if !is_sock_fd(fd) {
+        return false;
+    }
+    match &SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize] {
+        Some(Sock::Conn(c)) => c.rx.is_empty() && !c.open,
+        None => true,
+        _ => false, // UDP / LocalDns / Listen never signal EOF
+    }
+}
+
 /// Non-blocking readability for poll()/epoll: data queued (or EOF) right now.
 /// This also PUMPS a TCP socket once so in-flight segments land — chrome polls
 /// its sockets rather than blocking in recv, and a poll that never pumps would

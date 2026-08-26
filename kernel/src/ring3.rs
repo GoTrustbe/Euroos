@@ -9245,6 +9245,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 }
             } else if crate::net::is_sock_fd(a1) {
                 let data = crate::net::sock_recv(a1, a3 as usize);
+                if data.is_empty() && !crate::net::sock_eof(a1) {
+                    return (-11i64) as u64; // -EAGAIN, not EOF (see recvfrom)
+                }
                 if !copy_to_user(a2, &data) {
                     return EFAULT;
                 }
@@ -9756,6 +9759,12 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             if data.is_empty() && crate::net::is_unix_fd(a1) {
                 return (-11i64) as u64; // -EAGAIN: non-blocking, no data yet
             }
+            // TCP: 0 means EOF and ONLY EOF. An empty read on a live connection is
+            // -EAGAIN — returning 0 made chrome's IsConnectedAndIdle peek believe
+            // the peer closed, and every fresh connection was discarded as dead.
+            if data.is_empty() && crate::net::is_sock_fd(a1) && !crate::net::sock_eof(a1) {
+                return (-11i64) as u64;
+            }
             if !copy_to_user(a2, &data) {
                 return EFAULT;
             }
@@ -9885,6 +9894,11 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 if control != 0 {
                     let _ = write_user(a2 + 40, 0u64); // msg_controllen = 0
                 }
+            }
+            // TCP sockets: same EAGAIN-vs-EOF rule as recvfrom — empty on a live
+            // connection is -EAGAIN, 0 is reserved for a real EOF.
+            if data.is_empty() && crate::net::is_sock_fd(a1) && !crate::net::sock_eof(a1) {
+                return (-11i64) as u64;
             }
             if data.is_empty() && fds.is_empty() && crate::net::is_unix_fd(a1) {
                 // An empty non-blocking recvmsg is chrome's hottest loop: it polls this
