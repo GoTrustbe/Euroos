@@ -85,7 +85,9 @@ while kill -0 $Q 2>/dev/null; do
         # PS/2 interrupts at all under -display none (measured), while the xHCI HID
         # harvest runs from the timer tick and feeds the very same driver paths.
         python3 ./scripts/qmp-input.py "$LOG.qmp" "$CLICKS" 1920 1080 "$LOG.mon"
-        rm -f "$CLICKS"; INPUT_AT=$(date +%s); STAGE=after; echo "=== INPUT SENT ==="
+        # Do NOT delete the script: consumed CLICKS files silently turned rerun
+        # after rerun into "no input script within 600s" (hours lost, twice).
+        INPUT_AT=$(date +%s); STAGE=after; echo "=== INPUT SENT ==="
       elif [ $(( $(date +%s) - WAIT_AT )) -gt $CLICK_WAIT ]; then
         echo "no input script within ${CLICK_WAIT}s"; STAGE=done
       fi ;;
