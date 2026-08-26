@@ -2310,7 +2310,7 @@ fn main() -> Status {
                   // ISOLATION STEP: the raw IP over plain HTTP takes name
                   // resolution AND TLS out of the equation — whether nginx's
                   // response renders proves the kernel TCP path end-to-end.
-                  b"http://euro-os.eu/euroos-vm.html"],
+                  b"http://euro-os.eu/"],
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
             ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
