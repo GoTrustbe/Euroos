@@ -48,9 +48,88 @@ const SPINS: u64 = 4_000_000;
 /// Recycle pending RX buffers (otherwise the 16 buffers fill up with idle
 /// multicast traffic) AND announce our IP→MAC with a gratuitous ARP, so that
 /// slirp's ARP cache stays fresh and IPv4 replies arrive.
+// ── Central RX demux ─────────────────────────────────────────────────────────
+// One NIC, many readers: every reader used to call legacy_rx() directly and
+// DROP frames that were not its own — with two parallel sockets (exactly what a
+// TLS navigation opens) each connection ate the other's segments, and connect()
+// even drained the queue wholesale. Now a single router reads the NIC: TCP
+// segments to our IP land in a per-destination-port queue; everything else goes
+// to a legacy queue for the existing ARP/ICMP/UDP/DHCP readers.
+static PORTQ: spin::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, TcpSegment)>)>> =
+    spin::Mutex::new(alloc::vec::Vec::new());
+static NET_LEGACY: spin::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>> =
+    spin::Mutex::new(alloc::collections::VecDeque::new());
+
+fn rx_route() {
+    let my_ip = match get() {
+        Some(c) => c.my_ip,
+        None => return,
+    };
+    for _ in 0..32 {
+        let rx = match nic::poll_recv() {
+            Some(r) => r,
+            None => break,
+        };
+        let mut routed = false;
+        if let Ok((h, payload)) = EthernetHeader::parse(&rx) {
+            if h.ethertype == EtherType::Ipv4 {
+                if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
+                    if ih.protocol == Protocol::Tcp && ih.dst == my_ip {
+                        if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
+                            let mut t = PORTQ.lock();
+                            let q = match t.iter_mut().find(|(p, _)| *p == seg.dst_port) {
+                                Some((_, q)) => q,
+                                None => {
+                                    t.push((seg.dst_port, alloc::collections::VecDeque::new()));
+                                    &mut t.last_mut().unwrap().1
+                                }
+                            };
+                            if q.len() < 256 {
+                                q.push_back((ih.src, seg));
+                            }
+                            routed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !routed {
+            let mut l = NET_LEGACY.lock();
+            if l.len() < 256 {
+                l.push_back(rx);
+            }
+        }
+    }
+}
+
+/// The demux-aware replacement for nic::poll_recv() in every non-TCP reader.
+fn legacy_rx() -> Option<alloc::vec::Vec<u8>> {
+    rx_route();
+    NET_LEGACY.lock().pop_front()
+}
+
+/// Pop the next queued TCP segment for a local port (from `server` only).
+fn portq_pop(sport: u16, server: Ipv4Addr) -> Option<TcpSegment> {
+    rx_route();
+    let mut t = PORTQ.lock();
+    let (_, q) = t.iter_mut().find(|(p, _)| *p == sport)?;
+    while let Some((src, seg)) = q.pop_front() {
+        if src == server {
+            return Some(seg);
+        }
+        // A segment from an unexpected source on our port: discard (stale NAT).
+    }
+    None
+}
+
+/// Forget a port's queue when its socket closes.
+fn portq_remove(sport: u16) {
+    PORTQ.lock().retain(|(p, _)| *p != sport);
+}
+
 fn drain() {
     for _ in 0..64 {
-        if nic::poll_recv().is_none() {
+        if legacy_rx().is_none() {
             break;
         }
     }
@@ -108,7 +187,7 @@ pub fn late_bring_up() {
     };
     let poll_dhcp = |want: u8| -> Option<dhcp::DhcpInfo> {
         for _ in 0..6_000_000u64 {
-            if let Some(rx) = nic::poll_recv() {
+            if let Some(rx) = legacy_rx() {
                 if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                     if h.ethertype == EtherType::Ipv4 {
                         if let Ok((iph, ipl)) = Ipv4Header::parse(p) {
@@ -198,7 +277,7 @@ pub fn arp_resolve(my_mac: MacAddr, my_ip: Ipv4Addr, ip: Ipv4Addr) -> Option<Mac
     let frame = EthernetHeader { dst: MacAddr::BROADCAST, src: my_mac, ethertype: EtherType::Arp }.build(&req.build());
     nic::send(&frame);
     for _ in 0..SPINS {
-        if let Some(rx) = nic::poll_recv() {
+        if let Some(rx) = legacy_rx() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Arp {
                     if let Ok(a) = ArpPacket::parse(p) {
@@ -221,7 +300,7 @@ pub fn icmp_ping(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, dst: Ipv4Ad
     let frame = EthernetHeader { dst: nexthop, src: my_mac, ethertype: EtherType::Ipv4 }.build(&iph.build(&icmp.build()));
     nic::send(&frame);
     for _ in 0..SPINS * 2 {
-        if let Some(rx) = nic::poll_recv() {
+        if let Some(rx) = legacy_rx() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Ipv4 {
                     if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
@@ -263,7 +342,7 @@ pub fn dns_query(my_mac: MacAddr, my_ip: Ipv4Addr, dns_mac: MacAddr, dns_ip: Ipv
     let frame = EthernetHeader { dst: dns_mac, src: my_mac, ethertype: EtherType::Ipv4 }.build(&iph.build(&seg));
     nic::send(&frame);
     for _ in 0..SPINS * 2 {
-        if let Some(rx) = nic::poll_recv() {
+        if let Some(rx) = legacy_rx() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Ipv4 {
                     if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
@@ -295,7 +374,7 @@ pub fn icmp6_ping(my_mac: MacAddr, src_ll: Ipv6Addr, dst_mac: MacAddr, dst: Ipv6
     let frame = EthernetHeader { dst: dst_mac, src: my_mac, ethertype: EtherType::Ipv6 }.build(&eh.build(&echo));
     nic::send(&frame);
     for _ in 0..SPINS * 2 {
-        if let Some(rx) = nic::poll_recv() {
+        if let Some(rx) = legacy_rx() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Ipv6 {
                     if let Ok((ih, pl)) = Ipv6Header::parse(p) {
@@ -376,7 +455,7 @@ pub fn service() {
         None => return,
     };
     for _ in 0..8 {
-        let rx = match nic::poll_recv() {
+        let rx = match legacy_rx() {
             Some(r) => r,
             None => break,
         };
@@ -512,20 +591,8 @@ impl TcpConn {
     /// Wait for the next TCP segment from our peer for this port.
     fn poll_seg(&self) -> Option<TcpSegment> {
         for _ in 0..SPINS * 3 {
-            if let Some(rx) = nic::poll_recv() {
-                if let Ok((h, p)) = EthernetHeader::parse(&rx) {
-                    if h.ethertype == EtherType::Ipv4 {
-                        if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
-                            if ih.protocol == Protocol::Tcp && ih.src == self.server {
-                                if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
-                                    if seg.dst_port == self.sport {
-                                        return Some(seg);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            if let Some(seg) = portq_pop(self.sport, self.server) {
+                return Some(seg);
             }
         }
         None
@@ -533,7 +600,9 @@ impl TcpConn {
 
     /// 3-way handshake. Returns a connected socket, or None on timeout.
     pub fn connect(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, server: Ipv4Addr, dport: u16) -> Option<TcpConn> {
-        drain();
+        // NO drain() here: with the central demux, other sockets' frames are not
+        // ours to discard (the old drain threw away in-flight traffic of every
+        // live connection each time anyone dialed out).
         // Randomized ISN (RFC 6528) — a fixed ISN would let an off-path attacker
         // guess sequence numbers and inject RST/data into the connection.
         // (Server-side `accept_from` already does this; now the client too.)
@@ -1022,7 +1091,7 @@ impl UdpSock {
     /// Wait for one datagram from the destination, back on our source port.
     pub fn recv(&self) -> alloc::vec::Vec<u8> {
         for _ in 0..SPINS * 3 {
-            if let Some(rx) = nic::poll_recv() {
+            if let Some(rx) = legacy_rx() {
                 if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                     if h.ethertype == EtherType::Ipv4 {
                         if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
@@ -1548,6 +1617,10 @@ pub fn sock_close(fd: u64) -> u64 {
     let mut t = SOCKETS.lock();
     if let Some(Sock::Conn(c)) = &mut t[i] {
         c.close();
+        portq_remove(c.sport);
+    }
+    if let Some(Sock::Udp(u)) = &t[i] {
+        portq_remove(u.sport);
     }
     t[i] = None;
     0
@@ -2018,7 +2091,7 @@ pub fn tcp_serve_once(port: u16, response: &[u8], timeout_spins: u64) -> Option<
     // (source MAC for the return route, source IP, the segment itself).
     let poll = |spins: u64| -> Option<(MacAddr, Ipv4Addr, TcpSegment)> {
         for _ in 0..spins {
-            if let Some(rx) = nic::poll_recv() {
+            if let Some(rx) = legacy_rx() {
                 if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                     if h.ethertype == EtherType::Ipv4 {
                         if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
@@ -2140,7 +2213,7 @@ fn serve_connection(my_mac: MacAddr, my_ip: Ipv4Addr, peer_mac: MacAddr, peer_ip
     };
     let poll = || -> Option<TcpSegment> {
         for _ in 0..SPINS {
-            if let Some(rx) = nic::poll_recv() {
+            if let Some(rx) = legacy_rx() {
                 if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                     if h.ethertype == EtherType::Ipv4 {
                         if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
