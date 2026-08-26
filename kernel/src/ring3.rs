@@ -8113,6 +8113,11 @@ fn linux_required_cap(num: u64, a1: u64) -> u64 {
 /// exactly what the program does next and what we answered — a few dozen lines
 /// instead of the millions a global trace would produce.
 static SYS_TRACE_LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Arm the verbatim syscall trace for the next `n` syscalls (any caller).
+pub fn arm_sys_trace(n: u32) {
+    SYS_TRACE_LEFT.store(n, core::sync::atomic::Ordering::Relaxed);
+}
 static SYS_TRACE_ARMED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// Bounded diagnosis of WAITS: how many more unsatisfied poll/epoll calls to
 /// describe (which fds, of what kind, and whether any is ready). Armed the moment

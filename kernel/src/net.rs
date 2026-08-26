@@ -1163,6 +1163,12 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
             }
         };
         crate::serial_println!("[conn] TCP established to {dst}");
+        // Arm the verbatim syscall trace at the moment that matters: what chrome
+        // does RIGHT AFTER this connect (and what we answer) is the whole question
+        // of why its GET never leaves.
+        if server.0 == [151, 240, 77, 50] {
+            crate::ring3::arm_sys_trace(80);
+        }
         SOCKETS.lock()[i] = Some(Sock::Conn(conn));
         0
     }
