@@ -1462,6 +1462,27 @@ pub fn sock_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
     data
 }
 
+/// The four-tuple of a connected socket, for getsockname/getpeername:
+/// (local ip, local port, peer ip, peer port). LocalDns reports loopback.
+pub fn sock_names(fd: u64) -> Option<(Ipv4Addr, u16, Ipv4Addr, u16)> {
+    if !is_sock_fd(fd) {
+        return None;
+    }
+    match &SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize] {
+        Some(Sock::Conn(c)) => Some((c.my_ip, c.sport, c.server, c.dport)),
+        Some(Sock::Udp(u)) => Some((u.my_ip, u.sport, u.server, u.dport)),
+        Some(Sock::LocalDns { .. }) => {
+            let lo = Ipv4Addr([127, 0, 0, 1]);
+            Some((lo, 49999, lo, 53))
+        }
+        Some(Sock::Reserved { bind_port, .. }) => {
+            let ip = get().map(|c| c.my_ip).unwrap_or(Ipv4Addr([0, 0, 0, 0]));
+            Some((ip, *bind_port, Ipv4Addr([0, 0, 0, 0]), 0))
+        }
+        _ => None,
+    }
+}
+
 /// TRUE end-of-stream: the peer closed AND everything received was consumed.
 /// The difference between "no data yet" (-EAGAIN) and "closed" (0) is the
 /// difference between chrome keeping a healthy connection and it discarding

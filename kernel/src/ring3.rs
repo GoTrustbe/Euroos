@@ -9663,6 +9663,27 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         }
         54 => 0, // setsockopt(fd, level, optname, optval, optlen): accept as no-op
                  // (SO_PASSCRED/SO_REUSEADDR/… — chrome's crashpad + net stack set these).
+        51 | 52 => {
+            // getsockname(51) / getpeername(52): fill a sockaddr_in. Chrome's
+            // TCPClientSocket calls GetLocalAddress right after a successful
+            // connect and FAILS THE WHOLE STREAM if this errors — the direct
+            // cause of every main-navigation ERR_SOCKET_NOT_CONNECTED.
+            let (lip, lport, pip, pport) = match crate::net::sock_names(a1) {
+                Some(t) => t,
+                None => return (-88i64) as u64, // -ENOTSOCK
+            };
+            let (ip, port) = if num == 51 { (lip, lport) } else { (pip, pport) };
+            let mut sa = [0u8; 16];
+            sa[0] = 2; // AF_INET
+            sa[2] = (port >> 8) as u8;
+            sa[3] = (port & 0xff) as u8;
+            sa[4..8].copy_from_slice(&ip.0);
+            if !copy_to_user(a2, &sa) {
+                return EFAULT;
+            }
+            let _ = write_user(a3, 16u32);
+            0
+        }
         55 => {
             // getsockopt(fd, level, optname, optval, optlen). TCP_INFO (level
             // IPPROTO_TCP, opt 11) begins with tcpi_state, and 0 is NOT a valid
