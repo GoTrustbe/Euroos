@@ -1167,7 +1167,7 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
         // does RIGHT AFTER this connect (and what we answer) is the whole question
         // of why its GET never leaves.
         if server.0 == [151, 240, 77, 50] {
-            crate::ring3::arm_sys_trace(80);
+            crate::ring3::arm_sys_trace(400);
         }
         SOCKETS.lock()[i] = Some(Sock::Conn(conn));
         0
