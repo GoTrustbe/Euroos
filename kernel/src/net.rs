@@ -1051,6 +1051,11 @@ enum Sock {
     Conn(TcpConn),
     /// "Connected" UDP socket (destination remembered).
     Udp(UdpSock),
+    /// The kernel's own DNS service on 127.0.0.1:53: glibc's resolver falls back
+    /// to localhost when resolv.conf yields nothing, so EuroOS ANSWERS there —
+    /// /etc/hosts first, then a real query to the configured DNS server. Queued
+    /// responses wait in `rx`.
+    LocalDns { rx: alloc::collections::VecDeque<alloc::vec::Vec<u8>> },
     /// Listening TCP socket: passive open on `port`, with an accept queue
     /// (bounded by `backlog`) of already-completed connections.
     Listen { port: u16, backlog: usize, queue: alloc::collections::VecDeque<TcpConn> },
@@ -1067,7 +1072,7 @@ pub fn sock_is_connected(fd: u64) -> bool {
     }
     matches!(
         SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize],
-        Some(Sock::Conn(_)) | Some(Sock::Udp(_))
+        Some(Sock::Conn(_)) | Some(Sock::Udp(_)) | Some(Sock::LocalDns { .. })
     )
 }
 
@@ -1103,6 +1108,16 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     }
     if !is_sock_fd(fd) {
         return (-1i64) as u64;
+    }
+    // 127.0.0.1:53 → the kernel's own DNS responder (no packet leaves the
+    // machine; EuroGuard governs the FORWARDED query inside sock_send instead).
+    {
+        let i = (fd - SOCK_FD_BASE) as usize;
+        let is_dgram = matches!(SOCKETS.lock()[i], Some(Sock::Reserved { dgram: true, .. }));
+        if is_dgram && server.0 == [127, 0, 0, 1] && port == 53 {
+            SOCKETS.lock()[i] = Some(Sock::LocalDns { rx: alloc::collections::VecDeque::new() });
+            return 0;
+        }
     }
     // EuroGuard (Track 7, Phase 7.1): let the policy engine evaluate this
     // outgoing connection BEFORE a packet leaves. A blocked app
@@ -1306,12 +1321,86 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
                 u.send(data);
                 data.len() as u64
             }
+            Some(Sock::LocalDns { .. }) => {
+                // Answer OUTSIDE the table lock (the forwarded query blocks on
+                // the network); queue the response afterwards.
+                let query = data.to_vec();
+                drop(t);
+                // EuroGuard DNS filtering applies to the kernel resolver too.
+                if let Some(name) = dns::parse_query_name(&query) {
+                    if crate::euroguard::check_dns(&crate::ring3::current_app(), &name)
+                        == crate::euroguard::Decision::Block
+                    {
+                        return query.len() as u64; // swallowed, no reply
+                    }
+                }
+                let answer = local_dns_answer(&query);
+                let mut t = SOCKETS.lock();
+                if let Some(Sock::LocalDns { rx }) = &mut t[i] {
+                    if let Some(a) = answer {
+                        rx.push_back(a);
+                    }
+                }
+                return data.len() as u64;
+            }
             _ => return (-1i64) as u64,
         }
     };
     // EuroGuard statistic (Phase 7.4): bytes sent per app.
     crate::euroguard::record_bytes(&crate::ring3::current_app(), sent, 0);
     sent
+}
+
+/// Parse one DNS query and produce a response: /etc/hosts first, then a real
+/// query to the configured server. AAAA and other types get NOERROR with zero
+/// answers (clients fall back to A); unknown names get NXDOMAIN.
+fn local_dns_answer(q: &[u8]) -> Option<alloc::vec::Vec<u8>> {
+    if q.len() < 17 {
+        return None;
+    }
+    // Question name: labels from offset 12.
+    let mut name = String::new();
+    let mut o = 12usize;
+    while o < q.len() && q[o] != 0 {
+        let l = q[o] as usize;
+        if o + 1 + l > q.len() || l > 63 {
+            return None;
+        }
+        if !name.is_empty() {
+            name.push('.');
+        }
+        name.push_str(core::str::from_utf8(&q[o + 1..o + 1 + l]).unwrap_or("?"));
+        o += 1 + l;
+    }
+    if o + 5 > q.len() {
+        return None;
+    }
+    let qtype = ((q[o + 1] as u16) << 8) | q[o + 2] as u16;
+    let question = &q[12..o + 5];
+    let ip = if qtype == 1 {
+        hosts_lookup(&name).or_else(|| {
+            let cfg = get()?;
+            dns_query(cfg.my_mac, cfg.my_ip, cfg.dns_mac, cfg.dns_ip, &name)
+        })
+    } else {
+        None
+    };
+    let mut r = alloc::vec::Vec::with_capacity(q.len() + 16);
+    r.extend_from_slice(&q[0..2]); // id
+    // flags: response, recursion available; NXDOMAIN only for a failed A lookup.
+    let rcode: u8 = if qtype == 1 && ip.is_none() { 3 } else { 0 };
+    r.push(0x81);
+    r.push(0x80 | rcode);
+    r.extend_from_slice(&[0, 1, 0, if ip.is_some() { 1 } else { 0 }, 0, 0, 0, 0]);
+    r.extend_from_slice(question);
+    if let Some(ip) = ip {
+        r.extend_from_slice(&[0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4]);
+        r.extend_from_slice(&ip.0);
+        crate::serial_println!("[dns] local: {name} = {}.{}.{}.{}", ip.0[0], ip.0[1], ip.0[2], ip.0[3]);
+    } else {
+        crate::serial_println!("[dns] local: {name} type {qtype} -> {} answers (rcode {rcode})", 0, );
+    }
+    Some(r)
 }
 
 /// recv(fd, max): copy up to `max` received bytes into `out`; return the count
@@ -1330,12 +1419,44 @@ pub fn sock_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
                 d.truncate(max);
                 d
             }
+            Some(Sock::LocalDns { rx }) => {
+                let mut d = rx.pop_front().unwrap_or_default();
+                d.truncate(max);
+                d
+            }
             _ => alloc::vec::Vec::new(),
         }
     };
     // EuroGuard statistic (Phase 7.4): bytes received per app.
     crate::euroguard::record_bytes(&crate::ring3::current_app(), 0, data.len() as u64);
     data
+}
+
+/// Non-blocking readability for poll()/epoll: data queued (or EOF) right now.
+/// This also PUMPS a TCP socket once so in-flight segments land — chrome polls
+/// its sockets rather than blocking in recv, and a poll that never pumps would
+/// never see the response arrive.
+pub fn sock_readable(fd: u64) -> bool {
+    if !is_sock_fd(fd) {
+        return false;
+    }
+    service();
+    let mut t = SOCKETS.lock();
+    match &mut t[(fd - SOCK_FD_BASE) as usize] {
+        Some(Sock::Conn(c)) => {
+            if c.rx.is_empty() && c.open {
+                c.pump(1);
+            }
+            !c.rx.is_empty() || !c.open
+        }
+        // A plain UDP socket has no rx queue to peek (recv spins the NIC);
+        // report not-ready and let recv() collect. LocalDns (chrome's only UDP
+        // in practice) has a real queue below.
+        Some(Sock::Udp(_)) => false,
+        Some(Sock::LocalDns { rx }) => !rx.is_empty(),
+        Some(Sock::Listen { queue, .. }) => !queue.is_empty(),
+        _ => false,
+    }
 }
 
 /// close(fd): FIN + free the slot. 0.
@@ -1409,6 +1530,7 @@ pub fn sock_poll(fds: &[u64], deadline_ticks: u64) -> alloc::vec::Vec<(u64, bool
                         && match &t[(fd - SOCK_FD_BASE) as usize] {
                             Some(Sock::Conn(c)) => !c.rx.is_empty() || !c.open, // data or EOF
                             Some(Sock::Listen { queue, .. }) => !queue.is_empty(),
+                            Some(Sock::LocalDns { rx }) => !rx.is_empty(),
                             _ => false,
                         };
                     (fd, r)

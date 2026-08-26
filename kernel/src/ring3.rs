@@ -1263,6 +1263,12 @@ fn epoll_ctl(epfd: u64, op: u64, fd: u64, ev: u64) -> u64 {
 fn epoll_fd_ready(fd: u64) -> bool {
     if crate::net::is_eventfd(fd) {
         crate::net::eventfd_readable(fd)
+    } else if crate::net::is_sock_fd(fd) {
+        // AF_INET sockets: TCP data/EOF, a queued LocalDns answer, or a pending
+        // accept. Without this arm chrome's poll never saw network readiness at
+        // all — every response sat in the kernel until a blocking read happened
+        // to run.
+        crate::net::sock_readable(fd)
     } else if crate::net::is_unix_fd(fd) {
         crate::net::unix_fd_readable(fd)
     } else if (fd as usize) < MAX_FD && is_pipe_fd(fd as usize) {
