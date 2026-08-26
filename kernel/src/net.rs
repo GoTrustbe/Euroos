@@ -1092,6 +1092,15 @@ pub fn sock_open(dgram: bool) -> u64 {
 /// connect(fd, ip, port): for TCP a 3-way handshake, for UDP just
 /// remember the destination. 0 / -1.
 pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
+    {
+        use core::sync::atomic::{AtomicU32, Ordering};
+        static CONN_DIAG: AtomicU32 = AtomicU32::new(24);
+        if CONN_DIAG.load(Ordering::Relaxed) > 0 {
+            CONN_DIAG.fetch_sub(1, Ordering::Relaxed);
+            crate::serial_println!("[conn] sock_connect fd{fd} -> {}.{}.{}.{}:{port}",
+                server.0[0], server.0[1], server.0[2], server.0[3]);
+        }
+    }
     if !is_sock_fd(fd) {
         return (-1i64) as u64;
     }
@@ -1102,6 +1111,7 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     let dst = alloc::format!("{}.{}.{}.{}:{port}", server.0[0], server.0[1], server.0[2], server.0[3]);
     if crate::euroguard::check_connect(&app, server, port) == crate::euroguard::Decision::Block {
         // 3D-6: a blocked connection is a policy violation in the hash-chained log.
+        crate::serial_println!("[conn] BLOCKED by EuroGuard: {dst} (app {app:?})");
         crate::audit::record_connection(&dst, false);
         return (-1i64) as u64; // -EPERM: denied by EuroGuard
     }
@@ -1132,8 +1142,12 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     } else {
         let conn = match TcpConn::connect(cfg.my_mac, cfg.my_ip, nexthop, server, port) {
             Some(c) => c,
-            None => return (-1i64) as u64,
+            None => {
+                crate::serial_println!("[conn] TCP handshake FAILED to {dst}");
+                return (-1i64) as u64;
+            }
         };
+        crate::serial_println!("[conn] TCP established to {dst}");
         SOCKETS.lock()[i] = Some(Sock::Conn(conn));
         0
     }
