@@ -1453,6 +1453,20 @@ pub fn sock_eof(fd: u64) -> bool {
     }
 }
 
+/// Writability for poll()/epoll: an established TCP connection, a UDP peer or
+/// the LocalDns responder accepts writes immediately (in-RAM buffers). Chrome
+/// waits for EPOLLOUT after connect before it writes its request — without
+/// this the GET never leaves.
+pub fn sock_writable(fd: u64) -> bool {
+    if !is_sock_fd(fd) {
+        return false;
+    }
+    matches!(
+        &SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize],
+        Some(Sock::Conn(_)) | Some(Sock::Udp(_)) | Some(Sock::LocalDns { .. })
+    )
+}
+
 /// Non-blocking readability for poll()/epoll: data queued (or EOF) right now.
 /// This also PUMPS a TCP socket once so in-flight segments land — chrome polls
 /// its sockets rather than blocking in recv, and a poll that never pumps would

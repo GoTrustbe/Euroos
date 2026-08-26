@@ -1289,6 +1289,7 @@ fn epoll_fd_ready(fd: u64) -> bool {
 fn epoll_fd_writable(fd: u64) -> bool {
     crate::net::is_eventfd(fd)
         || crate::net::is_unix_fd(fd)
+        || crate::net::sock_writable(fd)
         || ((fd as usize) < MAX_FD && is_pipe_fd(fd as usize))
 }
 
