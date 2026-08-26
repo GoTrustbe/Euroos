@@ -47,7 +47,13 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
   ./scripts/build.sh ${BUILD_PROFILE:-chrome} >/dev/null 2>&1 || { echo "BUILD FAILED"; exit 1; }
 fi
 rm -f "$LOG" "$LOG.ppm" "$LOG-after.ppm"
+# -icount ties the guest clock to executed instructions: under TCG the guest
+# used to experience REAL seconds while chrome computed for minutes, so every
+# ~10s idle-socket lifetime expired before the request could use its socket
+# (the connect->peek->close treadmill). With icount, guest time crawls along
+# with the emulation speed and chrome's timeouts behave normally again.
 qemu-system-x86_64 -machine q35 -m 3584M -cpu qemu64,+smep,+smap \
+  -icount shift=auto,align=off -rtc clock=vm \
   -bios /usr/share/ovmf/OVMF.fd \
   -drive format=raw,file="$PWD/eurokernel.img" \
   -drive format=raw,file=${PACK:-/tmp/chrome-pack2.img},if=virtio \
