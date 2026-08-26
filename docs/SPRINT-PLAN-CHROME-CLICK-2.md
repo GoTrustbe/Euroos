@@ -52,3 +52,14 @@ pagina geladen, input bridge attached, venster stabiel t120→t660. 992
 host-tests groen. EuroGuard blokkeert live chrome's trackers. Anchor-blit
 her-geactiveerd. Interactie: klik/typ/navigeer betrouwbaar (CDP-brug);
 browser-UI via X wanneer de glib-race goed valt (bekende beperking, gedocumenteerd).
+
+## SLOTSTUK (2026-08-26 ~17:45): euro-os.eu/nl/ volledig gerenderd
+
+De eigenaar vroeg: geen lokale html — surfen via de OS-netstack, doel
+https://euro-os.eu/nl/. Bereikt (http voor nu; TLS wacht op emulatiesnelheid):
+de complete NL-homepage — CSS, afbeeldingen, twee fonts, werkende JS
+(cookiebanner) — opgehaald over kernel-DNS + kernel-TCP + virtio-net en
+gerenderd door Blink. De volledige waterval staat in het nginx-logboek van
+euro-os.eu; het bewijs-screenshot toont de opgemaakte pagina in chrome op de
+EuroOS-desktopresolutie. Zie het geheugen voor de tien kernel-fixes die de
+keten ontgrendelden en de resterende https/performance-punten.
