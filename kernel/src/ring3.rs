@@ -9648,10 +9648,17 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         54 => 0, // setsockopt(fd, level, optname, optval, optlen): accept as no-op
                  // (SO_PASSCRED/SO_REUSEADDR/… — chrome's crashpad + net stack set these).
         55 => {
-            // getsockopt(fd, level, optname, optval, optlen): return 0 in *optval.
+            // getsockopt(fd, level, optname, optval, optlen). TCP_INFO (level
+            // IPPROTO_TCP, opt 11) begins with tcpi_state, and 0 is NOT a valid
+            // TCP state — ESTABLISHED is 1. Everything else answers 0.
             if a4 != 0 && a5 != 0 {
-                let _ = write_user(a4, 0i32);
-                let _ = write_user(a5, 4i32); // *optlen = 4
+                if a2 == 6 && a3 == 11 && crate::net::sock_is_connected(a1) {
+                    let _ = write_user(a4, 1u8); // tcpi_state = TCP_ESTABLISHED
+                    let _ = write_user(a5, 4i32);
+                } else {
+                    let _ = write_user(a4, 0i32);
+                    let _ = write_user(a5, 4i32); // *optlen = 4
+                }
             }
             0
         }

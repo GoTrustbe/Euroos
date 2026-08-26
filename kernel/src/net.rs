@@ -1305,7 +1305,7 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
     }
     {
         use core::sync::atomic::{AtomicU32, Ordering};
-        static SEND_DIAG: AtomicU32 = AtomicU32::new(30);
+        static SEND_DIAG: AtomicU32 = AtomicU32::new(80);
         if SEND_DIAG.load(Ordering::Relaxed) > 0 {
             SEND_DIAG.fetch_sub(1, Ordering::Relaxed);
             let head = core::str::from_utf8(&data[..data.len().min(24)]).unwrap_or("?");
@@ -1446,7 +1446,7 @@ pub fn sock_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
     crate::euroguard::record_bytes(&crate::ring3::current_app(), 0, data.len() as u64);
     {
         use core::sync::atomic::{AtomicU32, Ordering};
-        static RECV_DIAG: AtomicU32 = AtomicU32::new(30);
+        static RECV_DIAG: AtomicU32 = AtomicU32::new(80);
         if !data.is_empty() && RECV_DIAG.load(Ordering::Relaxed) > 0 {
             RECV_DIAG.fetch_sub(1, Ordering::Relaxed);
             crate::serial_println!("[sio] recv fd{fd} {} B", data.len());
