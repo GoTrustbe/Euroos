@@ -655,7 +655,8 @@ impl TcpConn {
                 self.emit(tcp::ACK, &[]);
             }
             if seg.has(tcp::FIN) {
-                crate::serial_println!("[tcp] FIN from {}.{}.{}.{}:{} to sport {} — closing",
+                let t = crate::interrupts::ticks();
+                crate::serial_println!("[tcp] @{t} FIN from {}.{}.{}.{}:{} to sport {} — closing",
                     self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
                     self.dport, self.sport);
                 self.their_seq = self.their_seq.wrapping_add(1);
@@ -1168,7 +1169,7 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
                 return (-1i64) as u64;
             }
         };
-        crate::serial_println!("[conn] TCP established to {dst}");
+        crate::serial_println!("[conn] @{} TCP established to {dst}", crate::interrupts::ticks());
         // Arm the verbatim syscall trace at the moment that matters: what chrome
         // does RIGHT AFTER this connect (and what we answer) is the whole question
         // of why its GET never leaves.
