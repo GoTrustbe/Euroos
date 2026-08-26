@@ -636,6 +636,9 @@ impl TcpConn {
                 None => break,
             };
             if seg.has(tcp::RST) {
+                crate::serial_println!("[tcp] RST from {}.{}.{}.{}:{} to sport {} — closing",
+                    self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
+                    self.dport, self.sport);
                 self.open = false;
                 break;
             }
@@ -652,6 +655,9 @@ impl TcpConn {
                 self.emit(tcp::ACK, &[]);
             }
             if seg.has(tcp::FIN) {
+                crate::serial_println!("[tcp] FIN from {}.{}.{}.{}:{} to sport {} — closing",
+                    self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
+                    self.dport, self.sport);
                 self.their_seq = self.their_seq.wrapping_add(1);
                 self.emit(tcp::ACK, &[]);
                 self.open = false;
