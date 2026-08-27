@@ -33,7 +33,9 @@ pub fn write(mut dump: CrashDump) {
     dump.cr3 = read_cr3();
     dump.uptime_ms = crate::interrupts::ticks() * 10; // 100 Hz → ms
     let enc = dump.encode();
-    if crate::virtio_blk::present() {
+    // Never write over a foreign EuroPack data disk on virtio dev 0 (LBA 300 holds
+    // served file bytes there, not a crash block).
+    if crate::virtio_blk::present() && !crate::ring3::europack_on_vblk0() {
         crate::virtio_blk::write_sector(CRASH_LBA, &enc);
         crate::virtio_blk::flush();
     }

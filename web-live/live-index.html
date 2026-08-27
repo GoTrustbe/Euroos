@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>EuroOS: Try it live in your browser</title>
+<meta name="description" content="Boot a real EuroOS desktop in your browser, no install. Enter your e-mail and get a private, throw-away VNC session of the sovereign, from-scratch OS for 30 minutes." />
+<link rel="canonical" href="https://euro-os.eu/live/" />
+<meta name="theme-color" content="#2D6BE0" />
+<meta property="og:title" content="EuroOS: Try it live in your browser" />
+<meta property="og:description" content="A real EuroOS desktop in your browser for 30 minutes, no install." />
+<meta property="og:image" content="https://euro-os.eu/try/desktop.png" />
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="/assets/euro.css?v=20260614a" />
+<style>
+  html { scroll-behavior: smooth; }
+  body { background: var(--paper); color: var(--ink); }
+  a { color: var(--accent); text-decoration: none; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 24px; }
+  h1,h2,h3 { letter-spacing:-.02em; line-height:1.12; }
+  nav.top { position: sticky; top:0; z-index:50; background: color-mix(in srgb, var(--paper) 86%, transparent);
+            backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
+  nav.top .row { display:flex; align-items:center; gap:18px; height:62px; }
+  .brand { display:flex; align-items:center; gap:9px; font-weight:800; font-size:18px; }
+  nav .spacer { flex:1 }
+  nav a.navlink { font-size:14.5px; color:var(--ink-soft); font-weight:500 }
+  .hero { padding: 56px 0 28px; }
+  .eyebrow { font-family: var(--mono); font-size:12px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); }
+  .lead { font-size:18px; color:var(--ink-soft); line-height:1.6; max-width:64ch; }
+  .alpha { display:inline-flex; gap:7px; align-items:center; font-family:var(--mono); font-size:11px; font-weight:700;
+           text-transform:uppercase; letter-spacing:.05em; color:var(--gold); background:var(--gold-soft);
+           border:1px solid var(--gold); border-radius:999px; padding:4px 12px; }
+  .btn { display:inline-flex; align-items:center; gap:8px; font-weight:600; font-size:15px; padding:12px 20px;
+         border-radius:999px; background:var(--accent); color:#fff; border:1px solid var(--accent); cursor:pointer; }
+  .btn:hover { background:var(--accent-deep); }
+  .btn.ghost { background:var(--surface); color:var(--ink); border-color:var(--line); }
+  .btn[disabled] { opacity:.55; cursor:progress; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-l); padding:26px 26px 28px; max-width:520px; }
+  .field { display:flex; flex-direction:column; gap:8px; margin:18px 0 6px; }
+  .field label { font-weight:600; font-size:14px; }
+  .field input { font-size:16px; padding:12px 14px; border-radius:var(--r-m); border:1px solid var(--line);
+                 background:var(--surface-3); color:var(--ink); }
+  .field input:focus { outline:2px solid var(--accent); border-color:var(--accent); }
+  .msg { margin-top:14px; font-size:14px; border-radius:var(--r-m); padding:12px 14px; display:none; }
+  .msg.show { display:block; }
+  .msg.err  { background:#fdecec; border:1px solid #f3b9b9; color:#8a1c1c; }
+  .msg.ok   { background:#e9f4ec; border:1px solid #b6ddc2; color:#1c5b31; }
+  .msg.info { background:var(--surface-3); border:1px solid var(--line); color:var(--ink-faint); }
+  .fine { font-size:12.5px; color:var(--ink-faint); margin-top:14px; line-height:1.55; }
+  .feat { display:grid; gap:10px; margin:22px 0 0; padding:0; list-style:none; }
+  .feat li { display:flex; gap:10px; font-size:14px; color:var(--ink-soft); }
+  .feat li b { color:var(--ink); }
+  .dot { color:var(--accent); font-weight:700; }
+  footer { padding: 40px 0 64px; color: var(--ink-faint); font-size: 13px; border-top:1px solid var(--line); margin-top: 40px; }
+</style>
+  <script defer src="https://tracera.eu/t.js" data-pk="pk_HDUYPbQRB6jUjo49MuTZ2VWD" data-endpoint="https://tracera.eu"></script>
+</head>
+<body data-theme="light">
+<nav class="top"><div class="wrap row">
+  <a class="brand" href="/"><span>Euro<span style="color:var(--accent)">OS</span></span></a>
+  <span class="spacer"></span>
+  <a class="navlink" href="/try/">Download</a>
+  <a class="navlink" href="https://github.com/GoTrustbe/Euroos" target="_blank">GitHub</a>
+  <a class="navlink" href="/docs/">Docs</a>
+  <a class="navlink" href="/">Home</a>
+</div></nav>
+
+<header class="hero"><div class="wrap">
+  <span class="alpha">Alpha preview · x86-64 UEFI · runs on our server · build 2026.07.10</span>
+  <p class="eyebrow" style="margin:16px 0 8px">Try it live</p>
+  <h1 style="font-size:40px;max-width:18ch">A real EuroOS desktop, in your browser.</h1>
+  <p class="lead" style="margin-top:14px">No download, no install. Enter your e-mail and we boot you a private,
+  throw-away EuroOS virtual machine you drive straight from this page over a secure connection. It is the
+  <strong>same from-scratch, sovereign OS</strong> you can download, its own kernel, filesystem, network stack,
+  capability security and desktop, with no Linux or BSD underneath.</p>
+</div></header>
+
+<div class="wrap" style="padding-top:8px">
+  <div class="card">
+    <form id="launch">
+      <div class="field">
+        <label for="email">Your e-mail</label>
+        <input id="email" name="email" type="email" required autocomplete="email"
+               inputmode="email" placeholder="you@example.eu" />
+      </div>
+      <button class="btn" id="go" type="submit">▶ Launch my EuroOS session</button>
+      <div class="msg info show" id="msg">A session lasts <b>30&nbsp;minutes</b>, then it is wiped. One session at a time.</div>
+    </form>
+
+    <ul class="feat">
+      <li><span class="dot">●</span><span><b>Private &amp; throw-away.</b> Your own virtual machine; every change is discarded when the session ends.</span></li>
+      <li><span class="dot">●</span><span><b>No guest network.</b> The VM has no path to the internet, it is a sealed sandbox.</span></li>
+      <li><span class="dot">●</span><span><b>We store only your e-mail</b> so we can see who is trying EuroOS, nothing from inside the session.</span></li>
+    </ul>
+
+    <p class="fine">Runs on our own server, no third-party cloud. Because it runs under full software emulation
+    (no hardware acceleration on the host), the desktop is usable but not as snappy as a local install, for full
+    speed, <a href="/try/">download the image</a> and boot it with virtualization enabled. Capacity is limited; if all
+    slots are busy, try again in a few minutes.</p>
+  </div>
+</div>
+
+<div class="wrap">
+  <footer>EuroOS preview, alpha, x86-64 UEFI, provided as-is for evaluation. Live sessions run in QEMU with
+  EDK2/OVMF firmware (BSD-licensed) and the noVNC console (MPL-2.0). EuroOS · sovereign by design ·
+  capability-secured. <a href="/">euro-os.eu</a> · <a href="/try/">Download</a> · <a href="/docs/">Docs</a></footer>
+</div>
+
+<script>
+(function () {
+  var form = document.getElementById('launch');
+  var go   = document.getElementById('go');
+  var msg  = document.getElementById('msg');
+  function show(kind, html) {
+    msg.className = 'msg show ' + kind;
+    msg.innerHTML = html;
+  }
+  form.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var email = document.getElementById('email').value.trim();
+    if (!email) { show('err', 'Please enter your e-mail.'); return; }
+    go.disabled = true;
+    show('info', 'Booting your EuroOS session, this can take a few seconds…');
+    fetch('/api/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email })
+    }).then(function (r) {
+      return r.json().then(function (d) { return { status: r.status, data: d }; });
+    }).then(function (res) {
+      var d = res.data || {};
+      if (d.ok && d.url) {
+        show('ok', 'Session ready, opening your desktop…');
+        window.location.href = d.url;
+        return;
+      }
+      go.disabled = false;
+      if (d.error === 'at_capacity') {
+        show('err', 'All live sessions are busy right now. Please try again in a couple of minutes, or <a href="/try/">download the image</a>.');
+      } else if (d.error === 'one_per_ip' && d.url) {
+        show('ok', 'You already have a session running. <a href="' + d.url + '">Open it here.</a>');
+      } else if (d.error === 'cooldown') {
+        show('err', 'Please wait ' + (d.retry_after || 60) + ' seconds before starting another session.');
+      } else if (d.error === 'invalid_email') {
+        show('err', 'That does not look like a valid e-mail address.');
+      } else {
+        show('err', 'Could not start a session right now. Please try again shortly.');
+      }
+    }).catch(function () {
+      go.disabled = false;
+      show('err', 'Network error, please try again.');
+    });
+  });
+})();
+</script>
+</body>
+</html>

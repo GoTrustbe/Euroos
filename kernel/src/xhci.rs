@@ -153,6 +153,7 @@ static mut XHCI: Option<Xhci> = None;
 static mut REPORTS_LOGGED: u32 = 0;
 /// Whether the MSI-X delivery confirmation has already been logged.
 static mut MSIX_LOGGED: bool = false;
+static mut RING_DIAGGED: bool = false;
 /// Re-entrancy guard: `poll()` may NOT run simultaneously from the desktop loop and the MSI-X
 /// IRQ handler (that would corrupt the event ring + scancode Mutex). Whoever
 /// sets it to true harvests; the other bails (the winner drains everything anyway).
@@ -977,6 +978,23 @@ fn poll_inner() {
                 crate::serial_println!("[xhci] MSI-X delivery confirmed: {c} interrupt(s) received ✓");
             }
         }
+        // One-shot ring forensics (~15 s in): whether QEMU wrote ANY events (raw
+        // cycle bits of the first ring slots) tells transfers-never-complete apart
+        // from a desynchronized dequeue cycle — the two remaining explanations for
+        // zero HID reports with a live poll.
+        if !RING_DIAGGED && crate::interrupts::ticks() > 1500 {
+            RING_DIAGGED = true;
+            let c0 = r32(x.ev_seg + 12) & 1;
+            let c1 = r32(x.ev_seg + 16 + 12) & 1;
+            let c2 = r32(x.ev_seg + 32 + 12) & 1;
+            let t0 = (r32(x.ev_seg + 12) >> 10) & 0x3F;
+            let sts = r32(x.op + OP_USBSTS);
+            let iman = r32(x.rt + RT_IR0 + IR_IMAN);
+            crate::serial_println!(
+                "[xdiag] ev_deq={} ev_cycle={} ring c0={c0}/t{t0} c1={c1} c2={c2} usbsts={sts:#x} iman={iman:#x} msix={}",
+                x.ev_deq, x.ev_cycle,
+                crate::interrupts::XHCI_MSIX_COUNT.load(core::sync::atomic::Ordering::Relaxed));
+        }
         // Drain ALL pending events this round (bounded) so that a burst of HID
         // reports doesn't fall behind one-per-frame.
         for _ in 0..32 {
@@ -1072,6 +1090,17 @@ fn poll_inner() {
 /// Translate a HID keyboard report into PS/2 set-1 scancodes (so that the
 /// existing [`crate::ps2`] decoder + shell process it transparently).
 fn inject_keyboard(hid: &mut HidDevice, report: &[u8]) {
+    // Raw-report census: the X layer saw usage 0x04 ('a') for qcode 'q' and never
+    // saw a release. Whether that corruption is in the wire report or in the diff
+    // below is decided here.
+    {
+        use core::sync::atomic::{AtomicU32, Ordering};
+        static KREP_DIAG: AtomicU32 = AtomicU32::new(24);
+        if KREP_DIAG.load(Ordering::Relaxed) > 0 {
+            KREP_DIAG.fetch_sub(1, Ordering::Relaxed);
+            crate::serial_println!("[krep] {:02x?}", &report[..report.len().min(8)]);
+        }
+    }
     let mods = report[0];
     // Shift transitions as 0x2A/0xAA (make/break) so that the ps2 SHIFT latch is correct.
     let shift_now = mods & 0x22 != 0; // LShift (bit1) or RShift (bit5)
@@ -1101,6 +1130,14 @@ fn inject_mouse(report: &[u8]) {
 /// (layout + logical range straight from the device); otherwise fall back to
 /// the fixed usb-tablet layout.
 fn inject_pointer(hid: &HidDevice, report: &[u8]) {
+    {
+        use core::sync::atomic::{AtomicU32, Ordering};
+        static PTR_DIAG: AtomicU32 = AtomicU32::new(16);
+        if PTR_DIAG.load(Ordering::Relaxed) > 0 {
+            PTR_DIAG.fetch_sub(1, Ordering::Relaxed);
+            crate::serial_println!("[ptr] {:02x?}", &report[..report.len().min(8)]);
+        }
+    }
     if let Some(m) = &hid.map {
         if let Some((x, y, buttons, absolute)) = m.decode(report) {
             if absolute {

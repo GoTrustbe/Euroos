@@ -16,7 +16,7 @@ use crate::graphics::{Color, FrameBuffer};
 /// Left margin taken up by the floating dock (the dock itself is 62px @ x=14, + margin).
 /// Windows begin to the right of this.
 pub const SIDEBAR_W: usize = 90;
-const TITLEBAR_H: usize = 44;
+pub const TITLEBAR_H: usize = 44;
 // Floating dock geometry (EDS: left/top/bottom 14, width 62).
 const DOCK_X: usize = 14;
 const DOCK_W: usize = 62;
@@ -104,6 +104,12 @@ impl Window {
 
 /// Which dock tile index (see [`DOCK_APPS`]) is under (px,py)? None if the
 /// click does not fall on a tile.
+/// The EU brand mark at the top of the dock doubles as the "start button":
+/// clicking it opens the app launcher.
+pub fn brand_button_at(px: usize, py: usize) -> bool {
+    px >= DOCK_X && px < DOCK_X + DOCK_W && py >= DOCK_M && py < DOCK_M + 54
+}
+
 pub fn dock_icon_at(px: usize, py: usize) -> Option<usize> {
     if px < DOCK_X || px >= DOCK_X + DOCK_W {
         return None;
@@ -127,6 +133,44 @@ pub fn work_area(screen_w: usize, screen_h: usize) -> (usize, usize, usize, usiz
     let w = screen_w.saturating_sub(SIDEBAR_W + DOCK_M + PANEL_W + DOCK_M);
     let h = screen_h.saturating_sub(DOCK_M * 2);
     (x, y, w, h)
+}
+
+/// Window snapping: if the pointer is in an edge zone at drop time, return the
+/// geometry the window should snap to. Left edge → left half of the work area,
+/// right edge → right half, top edge → maximized. `None` means no snap.
+pub fn snap_target(px: usize, py: usize, screen_w: usize, screen_h: usize) -> Option<(usize, usize, usize, usize)> {
+    const ZONE: usize = 18;
+    let (wx, wy, ww, wh) = work_area(screen_w, screen_h);
+    if py <= ZONE {
+        Some((wx, wy, ww, wh)) // top → maximize to the work area
+    } else if px <= SIDEBAR_W + ZONE {
+        Some((wx, wy, ww / 2, wh)) // left half
+    } else if px + ZONE >= screen_w {
+        let half = ww / 2;
+        Some((wx + ww - half, wy, half, wh)) // right half
+    } else {
+        None
+    }
+}
+
+/// `[snap]` boot self-test: dropping in each edge zone yields the right target,
+/// the centre yields none, and left+right halves tile the work area exactly.
+pub fn snap_selftest() {
+    let (w, h) = (1920usize, 1080usize);
+    let (wx, _wy, ww, _wh) = work_area(w, h);
+    let left = snap_target(wx, 500, w, h);
+    let right = snap_target(w - 1, 500, w, h);
+    let top = snap_target(500, 3, w, h);
+    let center = snap_target(w / 2, h / 2, w, h);
+    let halves_tile = matches!((left, right), (Some((lx, _, lw, _)), Some((rx, _, rw, _)))
+        if lx == wx && lw == ww / 2 && rx == wx + ww - ww / 2 && rw == ww / 2 && rx == lx + lw);
+    let top_max = matches!(top, Some((_, _, tw, _)) if tw == ww);
+    let center_none = center.is_none();
+    let ok = halves_tile && top_max && center_none;
+    crate::serial_println!(
+        "[snap] Window snapping: left+right halves tile={halves_tile}, top→maximize={top_max}, centre→none={center_none} → {}",
+        if ok { "OK (drag to an edge to snap) ✓" } else { "FAILED ✗" }
+    );
 }
 
 pub fn draw_window(fb: &FrameBuffer, win: &Window) {
@@ -184,6 +228,27 @@ pub fn draw_window(fb: &FrameBuffer, win: &Window) {
 /// (e.g. the System window per clock tick) without redrawing the drop shadow
 /// (which would otherwise stack). First clears the old text and then draws the content.
 pub fn draw_window_body(fb: &FrameBuffer, win: &Window) {
+    // Hosted X11 client (real GTK app): blit the live X-server window buffer (0x00RRGGBB)
+    // into the window body, clipped/centred. This is how a glibc GUI app appears as a
+    // first-class framed window on the EuroOS desktop.
+    if win.app == crate::suite_ui::SuiteApp::XClient {
+        let (bx, by, bw, bh) = window_body_rect(win);
+        fb.fill_rect(bx, by, bw, bh, Color::SURFACE);
+        crate::xserver::with_front_window(|xw, xh, buf| {
+            // Centre the X window within the body if it is smaller; clip if larger.
+            let ox = bx + bw.saturating_sub(xw) / 2;
+            let oy = by + bh.saturating_sub(xh) / 2;
+            for sy in 0..xh.min(bh) {
+                let row = &buf[sy * xw..sy * xw + xw];
+                for (sx, &v) in row.iter().enumerate() {
+                    if sx >= bw { break; }
+                    let c = Color::rgb(((v >> 16) & 0xff) as u8, ((v >> 8) & 0xff) as u8, (v & 0xff) as u8);
+                    fb.put_pixel(ox + sx, oy + sy, c);
+                }
+            }
+        });
+        return;
+    }
     // EuroReken: REAL calculator — render the LIVE state from `win.content`.
     if win.app == crate::suite_ui::SuiteApp::Reken {
         crate::calc_ui::render(fb, win.x, win.y, win.w, win.h, &win.content);

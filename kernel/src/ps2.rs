@@ -14,8 +14,28 @@ use spin::Mutex;
 use x86_64::instructions::interrupts::without_interrupts;
 
 static SHIFT: AtomicBool = AtomicBool::new(false);
+/// Alt held? Drives the Alt-Tab app switcher and Alt-1..4 workspace switch.
+static ALT: AtomicBool = AtomicBool::new(false);
+/// Latched Alt+Tab presses (consumed by the desktop switcher).
+static ALT_TAB: AtomicBool = AtomicBool::new(false);
+/// Latched Alt+digit workspace request (0xFF = none, else 0-based workspace).
+static WS_SWITCH: AtomicU8 = AtomicU8::new(0xFF);
 /// The active layout, as `Layout::ALL` index. Default 0 = US QWERTY.
 static LAYOUT: AtomicU8 = AtomicU8::new(0);
+
+/// Is the Alt key currently held?
+pub fn alt_down() -> bool {
+    ALT.load(Ordering::Relaxed)
+}
+/// Consume a pending Alt+Tab press.
+pub fn take_alt_tab() -> bool {
+    ALT_TAB.swap(false, Ordering::Relaxed)
+}
+/// Consume a pending Alt+digit workspace switch (0-based index).
+pub fn take_ws_switch() -> Option<usize> {
+    let v = WS_SWITCH.swap(0xFF, Ordering::Relaxed);
+    if v == 0xFF { None } else { Some(v as usize) }
+}
 
 /// Set the active keyboard layout (installer keymap / `keymap` command).
 pub fn set_layout(layout: Layout) {
@@ -125,6 +145,13 @@ pub fn poll_key() -> Option<char> {
         match sc {
             0x2A | 0x36 => SHIFT.store(true, Ordering::Relaxed),
             0xAA | 0xB6 => SHIFT.store(false, Ordering::Relaxed),
+            0x38 => ALT.store(true, Ordering::Relaxed),
+            0xB8 => ALT.store(false, Ordering::Relaxed),
+            // Alt+Tab → app switcher; Alt+1..4 → workspace. Intercepted (no char).
+            0x0F if ALT.load(Ordering::Relaxed) => ALT_TAB.store(true, Ordering::Relaxed),
+            0x02..=0x05 if ALT.load(Ordering::Relaxed) => {
+                WS_SWITCH.store(sc - 0x02, Ordering::Relaxed);
+            }
             _ if sc & 0x80 != 0 => {} // ignore other break codes
             _ => {
                 // Decode under the active layout (host-tested in eurokeymap).

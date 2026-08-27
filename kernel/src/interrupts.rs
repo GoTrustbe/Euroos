@@ -42,6 +42,10 @@ pub static XHCI_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 pub const VIRTIO_BLK_MSIX_VECTOR: u8 = 0x47; // virtio-blk completion via MSI-X (J2)
 pub const NVME_MSIX_VECTOR: u8 = 0x48; // NVMe I/O completion via MSI-X (Metal M2-1)
 pub const SCI_VECTOR: u8 = 0x49; // ACPI SCI (power button etc.) — Metal M5-2
+/// Cooperative-yield software interrupt: a blocked/sleeping task triggers this
+/// (`int YIELD_VECTOR`) to switch away immediately (sched::yield_now). Not a
+/// hardware IRQ — its handler sends no EOI.
+pub const YIELD_VECTOR: u8 = 0x4A;
 /// Number of received virtio-blk completion MSI-X interrupts.
 pub static BLK_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Number of NVMe completion interrupts received via MSI-X (M2-1: proof of
@@ -91,12 +95,25 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
         idt.double_fault
             .set_handler_fn(double_fault_handler)
             .set_stack_index(DOUBLE_FAULT_IST_INDEX);
+        // NMI: fires even with IF=0 → a live probe of an IF=0 wedge. Injected via QMP
+        // when chrome --headless freezes; the handler prints the interrupted RIP.
+        idt.non_maskable_interrupt
+            .set_handler_fn(nmi_handler)
+            .set_stack_index(crate::gdt::NMI_IST_INDEX);
     }
     // The timer vector points to the context-switch stub (sched.rs), not to
     // an ordinary handler — that one must preserve the full register state.
     // SAFETY: stub_addr() is a valid, present interrupt handler in our CS.
     unsafe {
         idt[TIMER_VECTOR].set_handler_addr(x86_64::VirtAddr::new(crate::sched::stub_addr()));
+    }
+    // Cooperative-yield vector → the yield context-switch stub (sched.rs). Like
+    // the timer stub it must preserve the full register state, so it is set by
+    // raw address. DPL stays 0: only kernel code (a syscall that just blocked)
+    // triggers it, never ring 3.
+    // SAFETY: yield_stub_addr() is a valid, present interrupt handler in our CS.
+    unsafe {
+        idt[YIELD_VECTOR].set_handler_addr(x86_64::VirtAddr::new(crate::sched::yield_stub_addr()));
     }
     idt[KEYBOARD_VECTOR].set_handler_fn(keyboard_handler);
     idt[MOUSE_VECTOR].set_handler_fn(mouse_handler);
@@ -180,9 +197,24 @@ pub static KBD_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// IRQ12: read a mouse byte and pass it to the mouse driver. The interrupt
 /// now comes via the IO-APIC -> Local APIC, so we EOI to the LAPIC.
+pub static MOUSE_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {
-    let byte = unsafe { Port::<u8>::new(0x60).read() };
-    crate::mouse::push_byte(byte);
+    // Route by the STATUS register, not by which IRQ fired: keyboard and mouse
+    // share data port 0x60, and under a shared-buffer race the byte sitting there
+    // may belong to the other device. Bit 0 = output buffer full, bit 5 = the byte
+    // is AUX (mouse) data. Reading 0x60 blindly here stole keyboard scancodes into
+    // the mouse stream and vice versa (measured: usb-tablet moves surfaced as
+    // KeyPress 130/38 noise in the X event stream).
+    let status = unsafe { Port::<u8>::new(0x64).read() };
+    if status & 1 != 0 {
+        let byte = unsafe { Port::<u8>::new(0x60).read() };
+        if status & 0x20 != 0 {
+            crate::mouse::push_byte(byte);
+        } else {
+            crate::ps2::push_scancode(byte);
+        }
+    }
+    MOUSE_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::apic::eoi();
 }
 
@@ -208,8 +240,17 @@ pub fn send_timer_eoi() {
 /// IRQ1: read the scancode and buffer it; the shell decodes it later. Via the IO-APIC
 /// -> Local APIC, so EOI to the LAPIC.
 extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
-    let sc = unsafe { Port::<u8>::new(0x60).read() };
-    crate::ps2::push_scancode(sc);
+    // Same status-based routing as the mouse handler (see there): bit 5 says the
+    // pending byte is AUX data even when IRQ1 fired.
+    let status = unsafe { Port::<u8>::new(0x64).read() };
+    if status & 1 != 0 {
+        let sc = unsafe { Port::<u8>::new(0x60).read() };
+        if status & 0x20 != 0 {
+            crate::mouse::push_byte(sc);
+        } else {
+            crate::ps2::push_scancode(sc);
+        }
+    }
     KBD_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::apic::eoi();
 }
@@ -226,6 +267,11 @@ pub fn route_io_apic(madt: &crate::acpi::Madt) {
     unsafe {
         PICS.lock().write_masks(0xFF, 0xFF);
     }
+    // Virtual-wire ExtINT on LINT0 was only needed while the 8259 still delivered
+    // interrupts. Now that the PIC is masked and the IO-APIC routes kbd/mouse, mask
+    // LINT0 so a stray ExtINT can't make the CPU fetch a spurious vector from the
+    // inert PIC (harmless under TCG, wedges input under KVM). See apic::mask_lint0.
+    crate::apic::mask_lint0();
     let dest = crate::apic::lapic_id() as u8; // BSP
     let kbd_gsi = madt.gsi_for(1);
     let mouse_gsi = madt.gsi_for(12);
@@ -254,6 +300,35 @@ extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {
     BREAKPOINT_HIT.store(true, Ordering::SeqCst);
 }
 
+/// NMI probe: fires even under IF=0, so it captures where the CPU is spinning during
+/// an IF=0 wedge. Dumps the interrupted RIP + a raw scan of the interrupted stack for
+/// return addresses (symbolize offline against the kernel .efi). Then returns (iret)
+/// so the guest keeps running — this is a probe, not a fatal.
+extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
+    let rip = frame.instruction_pointer.as_u64();
+    let rsp = frame.stack_pointer.as_u64();
+    let cs = frame.code_segment.0;
+    let rflags = frame.cpu_flags;
+    serial_println!("========== NMI PROBE (wedge RIP capture) ==========");
+    serial_println!("[nmi] interrupted RIP={rip:#018x} CS={cs:#x} RSP={rsp:#018x} RFLAGS={:#x}", rflags.bits());
+    serial_println!("[nmi] anchor kernel_base ~ nmi_handler @ {:#018x}", nmi_handler as usize as u64);
+    // Scan the interrupted stack for plausible kernel code return addresses (RBP
+    // chains are unreliable in release). Kernel code lives high (>= 0x2000_0000).
+    serial_println!("[nmi] stack scan (return addresses):");
+    let mut printed = 0;
+    let mut p = rsp & !0x7;
+    let end = (rsp + 0x800) & !0x7; // scan 2 KiB of the interrupted stack
+    while p < end && printed < 24 {
+        let v = unsafe { (p as *const u64).read_volatile() };
+        if (0x2000_0000..0x8000_0000).contains(&v) {
+            serial_println!("[nmi]   {v:#018x}");
+            printed += 1;
+        }
+        p += 8;
+    }
+    serial_println!("========== END NMI PROBE ==========");
+}
+
 extern "x86-interrupt" fn invalid_opcode_handler(frame: InterruptStackFrame) {
     serial_println!("[idt] INVALID OPCODE @ {:#x}", frame.instruction_pointer.as_u64());
     halt();
@@ -266,7 +341,36 @@ extern "x86-interrupt" fn gp_handler(frame: InterruptStackFrame, code: u64) {
     // system (same policy as the page-fault handler).
     if cs & 3 == 3 {
         let cur = crate::sched::current();
-        serial_println!("[idt] ring-3 GP FAULT code={code:#x} @ {ip:#x} (task {cur}) -> process terminated");
+        // Dump the faulting instruction bytes when RIP is in a plausible, mapped user
+        // code range (the identity arena low, or the demand region), read through a
+        // brief SMAP AC window. This turns an opaque ring-3 #GP into a decodable
+        // instruction — e.g. it identified chrome's IMMEDIATE_CRASH (`cc 0f 0b` =
+        // int3;ud2), and a ring-3 int3 hitting the DPL-0 #BP gate is exactly a #GP with
+        // error code (3<<3)|2 = 0x1a. Guarded so a wild/unmapped RIP can't nest-fault
+        // the handler into a double fault.
+        let in_code = ip >= 0x1000
+            && (ip < 0x1_0000_0000 || (0x100_0000_0000..0x1_0100_0000_0000).contains(&ip));
+        if in_code {
+            let mut b = [0u8; 16];
+            unsafe {
+                core::arch::asm!("stac", options(nomem, nostack, preserves_flags));
+                for (i, bi) in b.iter_mut().enumerate() {
+                    *bi = ((ip + i as u64) as *const u8).read_volatile();
+                }
+                core::arch::asm!("clac", options(nomem, nostack, preserves_flags));
+            }
+            let imm_crash = b[0] == 0xcc && b[1] == 0x0f && b[2] == 0x0b; // int3;ud2
+            let (sn, sa1, sr) = crate::ring3::last_syscall(cur);
+            serial_println!(
+                "[idt] ring-3 GP FAULT code={code:#x} @ {ip:#x} (task {cur}) insn={b:02x?}{} | last-syscall={sn}(a1={sa1:#x}=fd:{})->{:#x} ({}) -> process terminated",
+                if imm_crash { " = IMMEDIATE_CRASH (deliberate CHECK abort)" } else { "" },
+                crate::ring3::fd_kind(sa1),
+                sr,
+                if (sr as i64) < 0 { "ERROR" } else { "ok" }
+            );
+        } else {
+            serial_println!("[idt] ring-3 GP FAULT code={code:#x} @ {ip:#x} (task {cur}) -> process terminated");
+        }
         if crate::ring3::fg_active() {
             crate::ring3::fg_force_exit(ip);
         }
@@ -292,8 +396,64 @@ extern "x86-interrupt" fn gp_handler(frame: InterruptStackFrame, code: u64) {
     halt();
 }
 
+/// Read a u64 from a user virtual address by manually walking the current CR3
+/// page tables. Returns None if any level is not present (so a corrupt pointer
+/// can never fault us). Only used for post-mortem fault diagnostics.
+fn read_user_qword(vaddr: u64) -> Option<u64> {
+    // The kernel identity-maps physical memory (virtual == physical), so a physical
+    // table/frame address can be dereferenced directly.
+    if vaddr & 7 != 0 {
+        return None;
+    }
+    let (cr3, _) = x86_64::registers::control::Cr3::read();
+    let mut table_phys = cr3.start_address().as_u64();
+    let idx = [
+        (vaddr >> 39) & 0x1ff,
+        (vaddr >> 30) & 0x1ff,
+        (vaddr >> 21) & 0x1ff,
+        (vaddr >> 12) & 0x1ff,
+    ];
+    for (level, &i) in idx.iter().enumerate() {
+        let entry_ptr = (table_phys + i * 8) as *const u64;
+        let entry = unsafe { core::ptr::read_volatile(entry_ptr) };
+        if entry & 1 == 0 {
+            return None; // not present
+        }
+        let next = entry & 0x000f_ffff_ffff_f000;
+        // A huge page (bit 7) at level 1 (2 MiB) or 2 (1 GiB) ends the walk.
+        if level >= 1 && entry & 0x80 != 0 {
+            let page_off = vaddr & ((1u64 << (12 + (3 - level as u32) * 9)) - 1);
+            return Some(read_phys_u64(next + page_off));
+        }
+        table_phys = next;
+    }
+    Some(read_phys_u64(table_phys + (vaddr & 0xfff)))
+}
+
+/// Read a u64 from an identity-mapped physical address, permitting supervisor
+/// access to a user-accessible page (SMAP) via STAC/CLAC around the load.
+#[inline(never)]
+fn read_phys_u64(pa: u64) -> u64 {
+    // No `nomem`: the asm must act as a compiler barrier so the volatile read is not
+    // hoisted before STAC (which is what re-enabled SMAP and re-faulted us).
+    unsafe {
+        core::arch::asm!("stac", options(nostack));
+        let v = core::ptr::read_volatile(pa as *const u64);
+        core::arch::asm!("clac", options(nostack));
+        v
+    }
+}
+
 extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: PageFaultErrorCode) {
     let addr = x86_64::registers::control::Cr2::read_raw();
+    // DEMAND PAGING (opt-in): a fault in the running glibc process's sparse mmap
+    // region is committed here (a fresh zeroed frame mapped on the spot) and the
+    // instruction retried. No-op unless enabled + in-range, so the normal fault
+    // handling below is untouched for every other case (incl. ring 0 kernel copies
+    // that touch a not-yet-committed demand page during a syscall).
+    if crate::ring3::handle_demand_fault(addr) {
+        return;
+    }
     // A fault from RING 3 = a process reaching outside its own address space
     // (memory isolation). Terminate ONLY that process and give the CPU back
     // to the scheduler — the rest of the system (desktop, other processes)
@@ -310,6 +470,42 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
         serial_println!(
             "[isolation] ring-3 page fault addr={addr:#x} code={code:?} -> process pid {pid} (task {idx}) TERMINATED"
         );
+        // Always name WHERE: for an exe mapped at the demand base, rip - base is the
+        // objdump offset, which turns "it crashed" into a named function. Cheap, and
+        // reading the frame is safe (it is our own interrupt frame, not user memory).
+        serial_println!("[isolation]   rip={:#x} rsp={:#x}",
+            frame.instruction_pointer.as_u64(), frame.stack_pointer.as_u64());
+        // Diagnostic: for an instruction-fetch fault (a bad jump/call target), dump
+        // the faulting thread's RIP/RSP and the top of its stack so we can see which
+        // library made the bad call. Reads are guarded by a manual CR3 page-walk so a
+        // corrupt RSP can never double-fault us. Gated on INSTRUCTION_FETCH so the
+        // intentional data-fault isolation selftests early in boot stay quiet.
+        // Not only for bad jumps: a DATA fault's caller chain names the function
+        // that consumed a bad pointer, which three blind fixes in a row failed to
+        // guess for the fontconfig null-page crash. The reads stay page-walk-guarded.
+        if code.contains(PageFaultErrorCode::INSTRUCTION_FETCH)
+            || (code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) && addr < 0x1000)
+        {
+            let rip = frame.instruction_pointer.as_u64();
+            let rsp = frame.stack_pointer.as_u64();
+            serial_println!("[pf-diag] task={idx} rip={rip:#x} rsp={rsp:#x}");
+            // Scan the stack upward for return addresses into user code (chrome's libs
+            // live in the demand region 0x100_0000_0000.. ; the arena is lower). These
+            // name the call chain that reached the null/wild jump — map each against the
+            // [mmaplib] ranges to identify the crashing library.
+            let mut printed = 0;
+            for i in 0..96u64 {
+                let a = rsp.wrapping_add(i * 8);
+                if let Some(v) = read_user_qword(a) {
+                    // Plausible code pointer: in the demand region (libs/code) or arena.
+                    if (v >= 0x1_0000_0000_00 && v < 0x1_4000_0000_00) || (v >= 0x0100_0000 && v < 0x1000_0000) {
+                        serial_println!("[pf-diag]   ret[{:#05x}] -> {v:#x}", i * 8);
+                        printed += 1;
+                        if printed >= 12 { break; }
+                    }
+                }
+            }
+        }
         x86_64::instructions::interrupts::enable();
         loop {
             x86_64::instructions::hlt(); // the timer switches to another task

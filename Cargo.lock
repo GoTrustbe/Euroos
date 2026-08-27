@@ -458,6 +458,10 @@ name = "eurogdb"
 version = "0.1.0"
 
 [[package]]
+name = "eurogeo"
+version = "0.1.0"
+
+[[package]]
 name = "eurogpu"
 version = "0.1.0"
 
@@ -840,6 +844,7 @@ dependencies = [
  "eurofsid",
  "eurofw",
  "eurogdb",
+ "eurogeo",
  "eurogpu",
  "eurohealth",
  "euroid",

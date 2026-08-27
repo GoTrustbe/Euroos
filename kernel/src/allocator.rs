@@ -40,7 +40,13 @@ static ALLOCATOR: IrqSafeHeap = IrqSafeHeap(LockedHeap::empty());
 /// captured media also resident, a 96 MiB heap had no contiguous 40 MiB block
 /// left for the NVMe/AHCI install path (Metal M2-3). Safe on the 256 MiB
 /// screenshot VM (no install there) and the 512 MiB matrix/DOOM VMs.
-const HEAP_SIZE: usize = 128 * 1024 * 1024;
+///
+/// Bumped to 256 MiB: the desktop-graphics stack (glibc + Cairo + FreeType +
+/// Pango/HarfBuzz + the X11 client libs) is served through the VFS, and
+/// register_file COPIES each library's bytes into a heap Vec. That library set
+/// is now ~30 MiB resident; combined with the EuroFS volume and a late 16 MiB
+/// selftest allocation, a 128 MiB heap had no contiguous block left and OOM'd.
+const HEAP_SIZE: usize = 256 * 1024 * 1024;
 static mut HEAP: [u8; HEAP_SIZE] = [0u8; HEAP_SIZE];
 
 /// Initialize the heap. Must be the VERY FIRST action in the kernel,

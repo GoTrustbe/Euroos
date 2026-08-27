@@ -111,6 +111,12 @@ pub fn save(fs: &mut dyn FileSystem) -> bool {
     ok
 }
 
+/// Save the current buffer to a chosen path (Save-As, from the file dialog).
+pub fn save_to(fs: &mut dyn FileSystem, path: &str) -> bool {
+    ED.lock().path = path.to_string();
+    save(fs)
+}
+
 /// Rectangle of the "Save" button in the toolbar (for the mouse hit test).
 fn save_button(x: usize, y: usize, w: usize) -> (usize, usize, usize, usize) {
     let bw = 96;
@@ -122,6 +128,19 @@ fn save_button(x: usize, y: usize, w: usize) -> (usize, usize, usize, usize) {
 /// Was the "Save" button clicked?
 pub fn save_button_at(x: usize, y: usize, w: usize, mx: usize, my: usize) -> bool {
     let (bx, by, bw, bh) = save_button(x, y, w);
+    mx >= bx && mx < bx + bw && my >= by && my < by + bh
+}
+
+/// Rectangle of the "Open" button, just left of Save.
+fn open_button(x: usize, y: usize, w: usize) -> (usize, usize, usize, usize) {
+    let bw = 96;
+    let (sx, by, _sw, bh) = save_button(x, y, w);
+    (sx.saturating_sub(bw + 8), by, bw, bh)
+}
+
+/// Was the "Open" button clicked?
+pub fn open_button_at(x: usize, y: usize, w: usize, mx: usize, my: usize) -> bool {
+    let (bx, by, bw, bh) = open_button(x, y, w);
     mx >= bx && mx < bx + bw && my >= by && my < by + bh
 }
 
@@ -138,6 +157,11 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     fb.fill_rect(bx, by, bw, TOOLBAR_H, Color::rgb(0xF1, 0xF3, 0xF7));
     let dot = if ed.dirty { "● " } else { "" };
     text::draw_px(fb, bx + PAD, by + 11, &alloc::format!("{dot}{}", ed.path), ink, 15.0);
+    // Open button (left of Save).
+    let (ox, oy, ow, oh) = open_button(x, y, w);
+    fb.fill_rounded_rect(ox, oy, ow, oh, 6, Color::rgb(0xE9, 0xED, 0xF3));
+    fb.draw_border(ox, oy, ow, oh, 1, Color::rgb(0xCF, 0xD6, 0xE0));
+    text::draw_px(fb, ox + 16, oy + 5, "Open", ink, 14.0);
     // Save button.
     let (sx, sy, sw, sh) = save_button(x, y, w);
     fb.fill_rounded_rect(sx, sy, sw, sh, 6, accent);
@@ -157,6 +181,14 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
             line.clone()
         };
         text::draw_px(fb, tx, ty, &shown, ink, 15.0);
+        // Basic spell-check: underline words not in the built-in dictionary.
+        for (s, l) in crate::spell::misspellings(line) {
+            if s + l <= line.len() {
+                let x0 = tx + text::width_px(&line[..s], 15.0);
+                let ww = text::width_px(&line[s..s + l], 15.0);
+                fb.fill_rect(x0, ty + LINE_H - 4, ww, 2, Color::rgb(0xD0, 0x3A, 0x3A));
+            }
+        }
         ty += LINE_H;
     }
 

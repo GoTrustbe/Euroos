@@ -7,6 +7,7 @@
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicUsize, Ordering};
 
 use spin::Mutex;
+use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::instructions::port::Port;
 
 static MOUSE_X: AtomicI32 = AtomicI32::new(0);
@@ -21,17 +22,79 @@ static SCREEN_H: AtomicUsize = AtomicUsize::new(0);
 static PRESS_PENDING: AtomicBool = AtomicBool::new(false);
 static CLICK_X: AtomicI32 = AtomicI32::new(0);
 static CLICK_Y: AtomicI32 = AtomicI32::new(0);
+// Right-button press LATCH (same rationale as the left latch): opens the
+// context menu at the exact spot the user right-clicked.
+static RPRESS_PENDING: AtomicBool = AtomicBool::new(false);
+static RCLICK_X: AtomicI32 = AtomicI32::new(0);
+static RCLICK_Y: AtomicI32 = AtomicI32::new(0);
 
 /// Store the new button bitmap and latch a left-press edge (with cursor pos).
 /// Callers must update MOUSE_X/MOUSE_Y *before* calling this so the latched
 /// position is correct.
+/// Left-button EDGES, in order, with the position where each happened: (down, x, y).
+/// A reader that samples the button LEVEL misses a whole click whenever it is not
+/// running for the ~100 ms a real click lasts — which is exactly what happens while a
+/// browser has the CPU. Every transition is queued here instead, so a click can be
+/// late but never lost. Same principle as the scancode ring.
+const BTN_RING: usize = 32;
+static BTN_EVENTS: Mutex<([(bool, i32, i32); BTN_RING], usize, usize)> =
+    Mutex::new(([(false, 0, 0); BTN_RING], 0, 0));
+
+fn push_button_event(down: bool, x: i32, y: i32) {
+    without_interrupts(|| {
+        let mut r = BTN_EVENTS.lock();
+        let (head, tail) = (r.1, r.2);
+        let next = (tail + 1) % BTN_RING;
+        if next != head {
+            r.0[tail] = (down, x, y);
+            r.2 = next;
+        }
+    });
+}
+
+/// Take the oldest queued left-button edge: (pressed, x, y).
+pub fn take_button_event() -> Option<(bool, usize, usize)> {
+    without_interrupts(|| {
+        let mut r = BTN_EVENTS.lock();
+        if r.1 == r.2 {
+            return None;
+        }
+        let (down, x, y) = r.0[r.1];
+        r.1 = (r.1 + 1) % BTN_RING;
+        Some((down, x.max(0) as usize, y.max(0) as usize))
+    })
+}
+
 fn update_buttons(new: u8) {
     let old = BUTTONS.swap(new & 0x07, Ordering::Relaxed);
+    if old & 0x01 != new & 0x01 {
+        push_button_event(new & 0x01 != 0,
+                          MOUSE_X.load(Ordering::Relaxed), MOUSE_Y.load(Ordering::Relaxed));
+    }
     if old & 0x01 == 0 && new & 0x01 != 0 {
         CLICK_X.store(MOUSE_X.load(Ordering::Relaxed), Ordering::Relaxed);
         CLICK_Y.store(MOUSE_Y.load(Ordering::Relaxed), Ordering::Relaxed);
         PRESS_PENDING.store(true, Ordering::Relaxed);
     }
+    // Right-button 0→1 edge (bit1): latch for the context menu.
+    if old & 0x02 == 0 && new & 0x02 != 0 {
+        RCLICK_X.store(MOUSE_X.load(Ordering::Relaxed), Ordering::Relaxed);
+        RCLICK_Y.store(MOUSE_Y.load(Ordering::Relaxed), Ordering::Relaxed);
+        RPRESS_PENDING.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Synthesize a left-press at (x,y) — a deterministic click for self-tests (routing a
+/// click into a hosted X app's window without relying on flaky QMP mouse injection).
+pub fn inject_press(x: usize, y: usize) {
+    MOUSE_X.store(x as i32, Ordering::Relaxed);
+    MOUSE_Y.store(y as i32, Ordering::Relaxed);
+    CLICK_X.store(x as i32, Ordering::Relaxed);
+    CLICK_Y.store(y as i32, Ordering::Relaxed);
+    PRESS_PENDING.store(true, Ordering::Relaxed);
+    // A synthetic click is a full click: press AND release, queued like a real one.
+    push_button_event(true, x as i32, y as i32);
+    push_button_event(false, x as i32, y as i32);
 }
 
 /// Consume a pending left-button press → the screen position where it happened.
@@ -177,6 +240,15 @@ pub fn apply_usb_abs(x_abs: u16, y_abs: u16, buttons: u8) {
     update_buttons(buttons);
 }
 
+/// Put the cursor at an absolute screen position — X11 WarpPointer, and anything
+/// else that moves the pointer without a hardware packet. Clamped to the screen.
+pub fn set_pos(x: usize, y: usize) {
+    let w = SCREEN_W.load(Ordering::Relaxed) as i32;
+    let h = SCREEN_H.load(Ordering::Relaxed) as i32;
+    MOUSE_X.store((x as i32).clamp(0, (w - 1).max(0)), Ordering::Relaxed);
+    MOUSE_Y.store((y as i32).clamp(0, (h - 1).max(0)), Ordering::Relaxed);
+}
+
 pub fn pos() -> (usize, usize) {
     (
         MOUSE_X.load(Ordering::Relaxed) as usize,
@@ -187,4 +259,23 @@ pub fn pos() -> (usize, usize) {
 /// True if the left button is pressed.
 pub fn left_down() -> bool {
     BUTTONS.load(Ordering::Relaxed) & 0x01 != 0
+}
+
+/// The raw button bitmap (bit0 left, bit1 right, bit2 middle) — for apps that
+/// read the pointer via the app-graphics bridge (e.g. the browser).
+pub fn buttons() -> u8 {
+    BUTTONS.load(Ordering::Relaxed)
+}
+
+/// Consume a pending right-button press → the screen position where it happened
+/// (drives the context menu).
+pub fn take_right_press() -> Option<(usize, usize)> {
+    if RPRESS_PENDING.swap(false, Ordering::Relaxed) {
+        Some((
+            RCLICK_X.load(Ordering::Relaxed).max(0) as usize,
+            RCLICK_Y.load(Ordering::Relaxed).max(0) as usize,
+        ))
+    } else {
+        None
+    }
 }

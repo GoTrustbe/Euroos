@@ -9,7 +9,7 @@
 //! increasing counters prove they really run in parallel (interleaved).
 
 use core::arch::global_asm;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use spin::Mutex;
 use x86_64::instructions::segmentation::{Segment, CS, SS};
@@ -17,7 +17,10 @@ use x86_64::registers::model_specific::Msr;
 
 const IA32_FS_BASE: u32 = 0xC000_0100;
 
-const MAX_TASKS: usize = 48;
+// Chrome (even --single-process headless) spawns dozens of threads (thread pool,
+// compositor, IO, message pumps). 48 was fine for the shell + a few glibc apps; a
+// browser needs far more scheduler slots. Each slot costs one 16 KiB kernel stack.
+const MAX_TASKS: usize = 256;
 const STACK_SIZE: usize = 16 * 1024;
 const CONTEXT_WORDS: usize = 20; // 15 GP registers + 5 (rip,cs,rflags,rsp,ss)
 
@@ -28,6 +31,7 @@ pub static TASK_COUNTERS: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) };
 /// flags with a full state machine — the basis for blocking I/O,
 /// nanosleep and (S3) fork/wait/zombie reaping.
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum State {
     /// Runnable (ready to get the CPU).
     Ready,
@@ -69,6 +73,13 @@ struct Task {
     /// stack overflow (the stack grows down past this point) overwrites the
     /// canary and is thus detected instead of silently corrupting neighboring memory (S6).
     stack_bottom: u64,
+    /// Per-task SYSCALL state. Because a thread can now be descheduled MID-SYSCALL
+    /// (futex/epoll yield), the syscall globals must travel with the task: saved on
+    /// switch-out, restored on switch-in, so a concurrent thread's syscall cannot
+    /// clobber this one's user-return state. (0 when the task is not in a syscall.)
+    sc_user_rsp: u64,
+    sc_user_rip: u64,
+    sc_saved_regs: u64,
 }
 
 /// Stack-guard canary (S6 memory hardening). Unlikely value at the bottom of each
@@ -86,6 +97,40 @@ pub fn block_current() {
     block_on(0);
 }
 
+/// Diagnostic: summarise every live task's state (Ready/Sleeping/Blocked/Zombie).
+/// Used by the glibc launcher's stall detector to see a many-thread deadlock.
+pub fn dump_states() {
+    let s = SCHED.lock();
+    let mut ready = 0usize;
+    let mut blocked = 0usize;
+    let mut sleeping = 0usize;
+    for i in 0..s.count {
+        match s.tasks[i].state {
+            State::Ready => {
+                ready += 1;
+                crate::serial_println!("[stall]   task {i}: Ready (cr3={:#x})", s.tasks[i].cr3);
+            }
+            State::Sleeping(w) => {
+                sleeping += 1;
+                crate::serial_println!("[stall]   task {i}: Sleeping(until {w})");
+            }
+            State::Blocked(c) => {
+                blocked += 1;
+                crate::serial_println!("[stall]   task {i}: Blocked(chan={c:#x})");
+            }
+            ref other => {
+                // Name the states the arms above skip (Running, Dead, ...): three
+                // tasks fell outside every counted state during the fp1 stall and
+                // the dump could not say WHAT they were — that unnamed state was
+                // the whole diagnosis.
+                crate::serial_println!("[stall]   task {i}: {other:?}");
+            }
+        }
+    }
+    crate::serial_println!("[stall] summary: {ready} Ready, {blocked} Blocked, {sleeping} Sleeping (of {} tasks); current={}",
+        s.count, s.current);
+}
+
 /// Block the CURRENT task on wait channel `chan` (an address/token). The scheduler
 /// skips it until [`wake`]`(chan, ..)`. Basis for futex, pipes, waitpid.
 pub fn block_on(chan: u64) {
@@ -100,6 +145,46 @@ pub fn unblock(idx: usize) {
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(_)) {
         s.tasks[idx].state = State::Ready;
     }
+}
+
+/// Wake task `idx` from EITHER Blocked or Sleeping -> Ready. A timed futex waiter is
+/// parked as Sleeping(deadline) so it auto-wakes on timeout; an explicit FUTEX_WAKE
+/// must be able to wake it EARLY too, which plain `unblock` (Blocked-only) cannot.
+pub fn unblock_any(idx: usize) {
+    let mut s = SCHED.lock();
+    if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(_) | State::Sleeping(_)) {
+        s.tasks[idx].state = State::Ready;
+    }
+}
+
+/// Tickless-idle helper: when NO task other than `current` is runnable, return the
+/// earliest Sleeping deadline among the others (so the caller can fast-forward the
+/// clock straight to it instead of busy-spinning through idle ticks). Returns:
+/// - `Some(deadline)`  — everyone else is Sleeping; the soonest wakes at `deadline`.
+/// - `None`            — some other task is Ready (real work to do), OR the only
+///                       non-current tasks are Blocked with no timeout (a genuine
+///                       wait/deadlock, not idle) — do not fast-forward.
+/// Used to make chrome's multi-second timed futex waits elapse in wall-time instead
+/// of ~60x-slower busy-spun guest ticks under TCG.
+pub fn idle_next_deadline(current: usize) -> Option<u64> {
+    let s = SCHED.lock();
+    let mut earliest: Option<u64> = None;
+    let mut any_blocked = false;
+    for i in 0..s.count {
+        if i == current {
+            continue;
+        }
+        match s.tasks[i].state {
+            State::Ready => return None, // real work is runnable now
+            State::Sleeping(w) => earliest = Some(earliest.map_or(w, |e| e.min(w))),
+            State::Blocked(_) => any_blocked = true,
+            _ => {}
+        }
+    }
+    // Only fast-forward toward a real timed wakeup. If the only non-idle tasks are
+    // Blocked-with-no-deadline, that is a genuine wait (or deadlock) — don't skip.
+    let _ = any_blocked;
+    earliest
 }
 
 /// Wake up to `n` tasks blocked on wait channel `chan`. Returns the number of
@@ -199,6 +284,37 @@ pub fn mark_dead(idx: usize) {
     }
 }
 
+/// Is task `idx` Dead (terminated, awaiting reclaim)? Used to reclaim leaked
+/// per-thread resources (e.g. kernel-stack slots) whose owner faulted without
+/// running the clean exit path.
+/// A task's scheduler state, printable — for the futex lost-wake trap.
+pub fn state_of(idx: usize) -> Option<&'static str> {
+    let s = SCHED.try_lock()?;
+    if idx >= s.count {
+        return None;
+    }
+    Some(match s.tasks[idx].state {
+        State::Ready => "Ready",
+        State::Blocked(_) => "Blocked",
+        State::Sleeping(_) => "Sleeping",
+        State::Zombie(_) => "Zombie",
+        State::Dead => "Dead",
+    })
+}
+
+/// The task whose saved FS_BASE equals `tcb` — on x86_64 pthread_t IS the TCB
+/// address IS fs_base, so glibc's _IO_lock_t owner pointer names a task directly.
+pub fn task_by_fs_base(tcb: u64) -> Option<usize> {
+    let s = SCHED.try_lock()?;
+    (0..s.count).find(|&i| s.tasks[i].fs_base == tcb)
+}
+
+pub fn is_dead(idx: usize) -> bool {
+    let s = SCHED.lock();
+    idx < s.count && s.tasks[idx].state == State::Dead
+}
+
+
 /// The shared boot PML4 (kernel address space). Set by main after `paging::init`.
 static BOOT_PML4: AtomicU64 = AtomicU64::new(0);
 
@@ -211,22 +327,126 @@ pub fn boot_pml4() -> u64 {
 }
 
 
+/// A pristine, unused task slot (used to reset a slot before it is recycled).
+const EMPTY_TASK: Task = Task { rsp: 0, kstack: 0, fs_base: 0, cr3: 0, state: State::Dead, nice: 0, vruntime: 0, pid: 0, ppid: 0, stack_bottom: 0, sc_user_rsp: 0, sc_user_rip: 0, sc_saved_regs: 0 };
+
 struct Scheduler {
     tasks: [Task; MAX_TASKS],
     count: usize,
     current: usize,
+    /// Slots of fully-finished tasks (resources freed, no BgProc) available for
+    /// reuse — so the OS can run unbounded programs without exhausting the table.
+    free_slots: alloc::vec::Vec<usize>,
 }
 
 static SCHED: Mutex<Scheduler> = Mutex::new(Scheduler {
     tasks: [const {
-        Task { rsp: 0, kstack: 0, fs_base: 0, cr3: 0, state: State::Ready, nice: 0, vruntime: 0, pid: 0, ppid: 0, stack_bottom: 0 }
+        Task { rsp: 0, kstack: 0, fs_base: 0, cr3: 0, state: State::Ready, nice: 0, vruntime: 0, pid: 0, ppid: 0, stack_bottom: 0, sc_user_rsp: 0, sc_user_rip: 0, sc_saved_regs: 0 }
     }; MAX_TASKS],
     count: 1,
     current: 0,
+    free_slots: alloc::vec::Vec::new(),
 });
 
 // Stacks for the background tasks (task 0 uses the existing kernel stack).
 static mut STACKS: [[u8; STACK_SIZE]; MAX_TASKS] = [[0; STACK_SIZE]; MAX_TASKS];
+
+// ── Per-task FPU / SSE (XMM) state ──────────────────────────────────────────
+// The context switch previously saved GP regs + FS_BASE + syscall state, but NOT
+// the x87/SSE register file. Real userland (glibc memcpy/strlen, chrome's Skia
+// rasterizer, any -msse code) keeps live data in XMM0-15/MXCSR; without saving it
+// on switch, two preemptively-scheduled threads silently clobber each other's XMM
+// state. That corruption manifests as wild pointers / rip=0 / GP faults — the
+// "worker threads die" wall on the chrome multi-process path. Fix: FXSAVE the
+// outgoing task's FPU/SSE state and FXRSTOR the incoming task's on every switch.
+// (FXSAVE = x87 + SSE, 512 bytes; sufficient because AVX/XCR0 is not enabled, so
+// there is no YMM/ZMM state to preserve. When AVX lands this must become XSAVE.)
+// 64-byte aligned + large enough for an XSAVE area with x87+SSE+AVX (legacy 512 +
+// header 64 + YMM_Hi 256 = 832 B); 1 KiB gives margin. 64-byte alignment satisfies
+// both XSAVE (needs 64) and FXSAVE (needs 16). When AVX is off only the first 512 B
+// (the FXSAVE image) are used.
+#[repr(C, align(64))]
+struct FpuArea([u8; 1024]);
+static mut FPU_AREAS: [FpuArea; MAX_TASKS] = [const { FpuArea([0; 1024]) }; MAX_TASKS];
+// A clean save image (FNINIT state) copied into a slot the first time a task is
+// switched to, so its first restore loads a valid, zeroed FPU rather than garbage.
+static mut FPU_TEMPLATE: FpuArea = FpuArea([0; 1024]);
+static FPU_VALID: [AtomicBool; MAX_TASKS] = [const { AtomicBool::new(false) }; MAX_TASKS];
+// True once AVX is enabled (CR4.OSXSAVE + XCR0[x87|SSE|AVX]) — the context switch
+// then uses XSAVE/XRSTOR (preserving YMM) instead of FXSAVE/FXRSTOR. Stays false on
+// CPUs without XSAVE/AVX (e.g. the default qemu64 the public image boots on), so
+// that path is byte-for-byte the verified SSE-only behavior.
+static AVX_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Whether AVX was enabled at boot (for the System panel / diagnostics).
+pub fn avx_enabled() -> bool {
+    AVX_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Enable AVX if the CPU supports it, then capture a clean FPU save template. Call
+/// once at boot before preemptive scheduling starts.
+///
+/// AVX matters for real userland: chrome's SwiftShader software GL (and much SIMD
+/// code) uses AVX2, which #UDs unless the OS sets CR4.OSXSAVE and enables the AVX
+/// state bit in XCR0. Gated on CPUID so the lean image on plain qemu64 (no AVX) is
+/// unaffected. Enabling AVX also means the switch must preserve YMM (XSAVE), which
+/// is why FpuArea is XSAVE-sized above.
+pub fn fpu_init() {
+    // CPUID.1:ECX bit 26 = XSAVE, bit 28 = AVX.
+    let c1 = unsafe { core::arch::x86_64::__cpuid(1) };
+    let has_xsave = c1.ecx & (1 << 26) != 0;
+    let has_avx = c1.ecx & (1 << 28) != 0;
+    if has_xsave && has_avx {
+        unsafe {
+            // CR4.OSXSAVE (bit 18): allow XSETBV/XGETBV and OS-managed extended state.
+            let mut cr4: u64;
+            core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack, preserves_flags));
+            cr4 |= 1 << 18;
+            core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nomem, nostack, preserves_flags));
+            // XCR0 |= x87(0) | SSE(1) | AVX(2) = 0x7. ECX=0 selects XCR0.
+            core::arch::asm!("xsetbv", in("ecx") 0u32, in("eax") 0x7u32, in("edx") 0u32,
+                options(nomem, nostack, preserves_flags));
+        }
+        AVX_ENABLED.store(true, Ordering::Relaxed);
+    }
+    // Capture the clean template in whichever format the switch will use.
+    unsafe {
+        let p = core::ptr::addr_of_mut!(FPU_TEMPLATE) as *mut u8;
+        if AVX_ENABLED.load(Ordering::Relaxed) {
+            core::arch::asm!("fninit", "xsave [{}]", in(reg) p, in("eax") 7u32, in("edx") 0u32,
+                options(nostack, preserves_flags));
+        } else {
+            core::arch::asm!("fninit", "fxsave [{}]", in(reg) p, options(nostack, preserves_flags));
+        }
+    }
+    crate::serial_println!("[fpu] context-switch FPU save: {} (AVX {})",
+        if AVX_ENABLED.load(Ordering::Relaxed) { "XSAVE (x87+SSE+AVX/YMM)" } else { "FXSAVE (x87+SSE)" },
+        if AVX_ENABLED.load(Ordering::Relaxed) { "ON" } else { "off" });
+}
+
+/// Save the outgoing task's FPU state and restore the incoming task's. Uses XSAVE
+/// (YMM-preserving) when AVX is enabled, else FXSAVE. Only the switch path calls
+/// this, with `out != inc`.
+#[inline]
+unsafe fn fpu_switch(out: usize, inc: usize) {
+    let areas = core::ptr::addr_of_mut!(FPU_AREAS) as *mut FpuArea;
+    let out_p = (*areas.add(out)).0.as_mut_ptr();
+    let valid = FPU_VALID[inc].load(Ordering::Relaxed);
+    let src = if valid {
+        (*areas.add(inc)).0.as_ptr()
+    } else {
+        core::ptr::addr_of!(FPU_TEMPLATE) as *const u8 // first run: clean template
+    };
+    if AVX_ENABLED.load(Ordering::Relaxed) {
+        core::arch::asm!("xsave [{}]", in(reg) out_p, in("eax") 7u32, in("edx") 0u32, options(nostack, preserves_flags));
+        core::arch::asm!("xrstor [{}]", in(reg) src, in("eax") 7u32, in("edx") 0u32, options(nostack, preserves_flags));
+    } else {
+        core::arch::asm!("fxsave [{}]", in(reg) out_p, options(nostack, preserves_flags));
+        core::arch::asm!("fxrstor [{}]", in(reg) src, options(nostack, preserves_flags));
+    }
+    FPU_VALID[out].store(true, Ordering::Relaxed);
+    FPU_VALID[inc].store(true, Ordering::Relaxed);
+}
 
 /// G1: a GUARDED kernel stack top per task slot (0 = not set → fall back on the
 /// BSS `STACKS`). main.rs fills these before `init()` from the guarded-stack pool, so
@@ -255,12 +475,62 @@ global_asm!(
     "iretq",
 );
 
+// Cooperative-yield stub: identical to `timer_switch`, but its Rust callee
+// (`yield_tick`) does NOT send an APIC EOI (this is a software interrupt, not a
+// hardware IRQ). Invoked via `int YIELD_VECTOR` from `yield_now` after a task
+// has blocked/slept itself, so the switch happens now instead of at the next tick.
+global_asm!(
+    ".global yield_switch",
+    "yield_switch:",
+    "push rax", "push rbx", "push rcx", "push rdx", "push rsi", "push rdi", "push rbp",
+    "push r8", "push r9", "push r10", "push r11", "push r12", "push r13", "push r14", "push r15",
+    "mov rdi, rsp",
+    "and rsp, -16",
+    "call yield_tick",
+    "mov rsp, rax",
+    "pop r15", "pop r14", "pop r13", "pop r12", "pop r11", "pop r10", "pop r9", "pop r8",
+    "pop rbp", "pop rdi", "pop rsi", "pop rdx", "pop rcx", "pop rbx", "pop rax",
+    "iretq",
+);
+
 extern "C" {
     fn timer_switch();
+    fn yield_switch();
 }
 
 pub fn stub_addr() -> u64 {
     timer_switch as usize as u64
+}
+
+/// Address of the cooperative-yield stub (registered on `YIELD_VECTOR` in the IDT).
+pub fn yield_stub_addr() -> u64 {
+    yield_switch as usize as u64
+}
+
+/// Cooperative yield: switch to another runnable task RIGHT NOW. The caller must
+/// already have moved the current task off Ready (block_current / sleep_ticks);
+/// otherwise it just round-robins. Must hold NO locks (SCHED especially). Safe
+/// from a syscall (ring-0) context: the software interrupt saves this task's
+/// kernel context so it resumes exactly here when scheduled again.
+/// Is any OTHER task Ready to run right now? The launcher's wait loop asks this to
+/// choose between handing the CPU over (someone wants it) and a real `hlt` (nobody
+/// does — and under TCG a halted vCPU parks the host thread, which is the difference
+/// between an idle guest costing nothing and costing a full core).
+pub fn any_other_ready() -> bool {
+    let s = match SCHED.try_lock() {
+        Some(g) => g,
+        None => return true, // contended: assume someone is runnable
+    };
+    let cur = s.current;
+    (0..s.count).any(|i| i != cur && s.tasks[i].state == State::Ready)
+}
+
+pub fn yield_now() {
+    // SAFETY: YIELD_VECTOR is wired to `yield_switch` in the IDT (interrupts::init).
+    // No options: the software interrupt pushes a frame (uses the stack) and the
+    // context switch reads/writes scheduler memory; the switch preserves all GP
+    // registers, so the compiler's default caller-saved assumptions are correct.
+    unsafe { core::arch::asm!("int {v}", v = const crate::interrupts::YIELD_VECTOR) };
 }
 
 /// Called by the assembly stub: save the current rsp, pick the next
@@ -271,6 +541,9 @@ pub fn stub_addr() -> u64 {
 /// BUG-007 diagnostic: timer ticks that found SCHED already held (in task context) and
 /// were safely skipped instead of deadlocking. Nonzero ⇒ the deadlock window was hit.
 pub static SCHED_SKIPS: AtomicU64 = AtomicU64::new(0);
+static SCHED_LOG_CTR: AtomicU64 = AtomicU64::new(0);
+
+pub static TRACE_SCHED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 #[no_mangle]
 pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
@@ -286,12 +559,44 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     // keeps the endpoint serviced + re-armed regardless of load. IRQ-safe: the
     // `POLLING` guard bails if a task-context poll is mid-flight.
     crate::xhci::poll();
+    // Refresh the vDSO clock page (userspace clock_gettime reads it, no syscall).
+    crate::ring3::vdso_tick();
+    // Sample WHERE the preempted thread was executing, if it was in ring 3. The stub
+    // pushed 15 registers on top of the CPU's interrupt frame, so the interrupted RIP
+    // sits at rsp+120 and its CS at rsp+128. Costs two loads per tick and is the only
+    // way to see a thread that spins in user space without ever making a syscall.
+    unsafe {
+        let rip = *((rsp + 120) as *const u64);
+        let cs = *((rsp + 128) as *const u64);
+        if cs & 3 == 3 {
+            crate::ring3::sample_user_rip(current(), rip);
+        } else {
+            crate::ring3::sample_kernel_rip(rip);
+        }
+    }
     // BUG-007: the timer must NEVER block on SCHED. Task-context code (the desktop loop,
     // syscalls, supervise/reap) holds SCHED.lock() with interrupts ENABLED; a blocking
     // acquire here would deadlock the core — this handler spins with interrupts off while
     // the lock holder, the very task we just preempted, can never run to release it
     // (total silence, no fault). So TRY the lock and, if it's held, skip this preemption
     // tick: the holder frees it within microseconds and the next tick schedules normally.
+    schedule_core(rsp, false)
+}
+
+/// Cooperative YIELD: a task that just blocked/slept itself calls this to switch
+/// away IMMEDIATELY instead of running (uselessly) until the next timer tick.
+/// Entered via a dedicated software-interrupt vector (see `yield_switch`), so it
+/// runs the SAME context switch as the timer, but WITHOUT the timer prelude
+/// (no TICKS bump, no EOI, no watchdog/USB poll). Called from `yield_now`.
+#[no_mangle]
+pub extern "sysv64" fn yield_tick(rsp: u64) -> u64 {
+    schedule_core(rsp, true)
+}
+
+/// The shared scheduling core: save the outgoing rsp, pick the next runnable task
+/// (mini-CFS) and return its rsp. Used by both the timer tick and a cooperative
+/// yield. Does NO EOI — the caller owns interrupt acknowledgement.
+fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     let mut s = match SCHED.try_lock() {
         Some(g) => g,
         None => {
@@ -305,6 +610,13 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     };
     let cur = s.current;
     s.tasks[cur].rsp = rsp;
+    // Save the OUTGOING task's in-flight syscall state (it may be mid-syscall, having
+    // yielded from futex/epoll) so a concurrent thread's syscall cannot clobber its
+    // user-return state; restored when this task is scheduled again.
+    let (u_rsp, u_rip, s_regs) = crate::ring3::get_syscall_globals();
+    s.tasks[cur].sc_user_rsp = u_rsp;
+    s.tasks[cur].sc_user_rip = u_rip;
+    s.tasks[cur].sc_saved_regs = s_regs;
     // S6 stack guard: is the canary of the just-run task still intact? If not,
     // its kernel stack overflowed -> stop with a clear diagnosis instead of
     // silently letting neighboring memory get corrupted.
@@ -348,6 +660,30 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     if !found {
         best = if s.tasks[cur].state == State::Ready { cur } else { 0 };
     }
+    // Wedge diagnostic (gated): rate-limited log of what the scheduler picks — fires
+    // from the scheduler itself, so it works even when the launcher task is starved.
+    if crate::ring3::STALL_DIAG.load(Ordering::Relaxed) {
+        let n = SCHED_LOG_CTR.fetch_add(1, Ordering::Relaxed);
+        if n % 30000 == 0 {
+            let mut rdy = 0usize;
+            let mut blk = 0usize;
+            for i in 0..s.count {
+                match s.tasks[i].state {
+                    State::Ready => rdy += 1,
+                    State::Blocked(_) => blk += 1,
+                    _ => {}
+                }
+            }
+            crate::serial_println!("[sched] #{n} cur={cur} -> next={best} found={found} | {rdy} Ready {blk} Blocked (via_yield={via_yield})");
+        }
+    }
+    let _ = via_yield;
+    // Save the outgoing task's x87/SSE (XMM) register file and restore the incoming
+    // task's, so preemptively-scheduled threads don't clobber each other's FP/XMM
+    // state (the multithreaded-corruption fix). Only when the task actually changes.
+    if best != cur {
+        unsafe { fpu_switch(cur, best) };
+    }
     s.current = best;
     let next = s.current;
     unsafe { fs.write(s.tasks[next].fs_base) };
@@ -367,6 +703,14 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     if ks != 0 {
         crate::gdt::set_rsp0(ks);
     }
+    // Restore the INCOMING task's syscall state + point the syscall stack at its own
+    // kstack, so its (possibly mid-syscall) execution resumes on its own stack.
+    crate::ring3::set_syscall_globals(
+        s.tasks[next].sc_user_rsp,
+        s.tasks[next].sc_user_rip,
+        s.tasks[next].sc_saved_regs,
+        ks,
+    );
     s.tasks[next].rsp
 }
 
@@ -418,24 +762,34 @@ fn task_stack_bottom(index: usize) -> u64 {
 /// Start the background tasks and activate round-robin scheduling.
 pub fn init() {
     let mut s = SCHED.lock();
-    s.tasks[1].rsp = init_stack(1, task_a);
-    s.tasks[2].rsp = init_stack(2, task_b);
-    s.tasks[3].rsp = init_stack(3, task_c);
-    s.tasks[4].rsp = init_stack(4, task_sleeper);
-    // G1 self-test: a task on a GUARDED stack that intentionally overflows its
-    // stack. The guard page catches it as a hardware #PF; the fault handler
-    // terminates ONLY this task and the kernel keeps running (proof of recovery).
-    s.tasks[5].rsp = init_stack(5, task_overflow);
-    // S6: register the stack bottom (canary location) for the overflow watchdog.
-    for i in 1..=5 {
-        s.tasks[i].stack_bottom = task_stack_bottom(i);
+    // The kernel demo tasks (S2 priority a/b/c, the S2 sleeper, the G1 guarded-stack
+    // overflow) are dev self-tests: they prove the mini-CFS priority ordering and
+    // kernel-stack-overflow recovery. task_a/b/c busy-spin (until they park ~2.5 s in)
+    // and task_overflow deliberately faults — neither belongs in a shipping image, so
+    // spawn them only under `selftest`. The public image starts with just the boot
+    // task (slot 0); real processes fill slots 1+ as they are spawned.
+    if cfg!(feature = "selftest") {
+        s.tasks[1].rsp = init_stack(1, task_a);
+        s.tasks[2].rsp = init_stack(2, task_b);
+        s.tasks[3].rsp = init_stack(3, task_c);
+        s.tasks[4].rsp = init_stack(4, task_sleeper);
+        // G1 self-test: a task on a GUARDED stack that intentionally overflows its
+        // stack. The guard page catches it as a hardware #PF; the fault handler
+        // terminates ONLY this task and the kernel keeps running (proof of recovery).
+        s.tasks[5].rsp = init_stack(5, task_overflow);
+        // S6: register the stack bottom (canary location) for the overflow watchdog.
+        for i in 1..=5 {
+            s.tasks[i].stack_bottom = task_stack_bottom(i);
+        }
+        // S2 priority demo: a/b/c do EQUAL workload but get different
+        // nice — their counters show that the mini-CFS schedules high priority more often.
+        s.tasks[1].nice = -10; // high priority  -> most turns
+        s.tasks[2].nice = 0; //   normal
+        s.tasks[3].nice = 10; //  low priority  -> fewest turns
+        s.count = 6;
+    } else {
+        s.count = 1;
     }
-    // S2 priority demo: a/b/c do EQUAL workload but get different
-    // nice — their counters show that the mini-CFS schedules high priority more often.
-    s.tasks[1].nice = -10; // high priority  -> most turns
-    s.tasks[2].nice = 0; //   normal
-    s.tasks[3].nice = 10; //  low priority  -> fewest turns
-    s.count = 6;
     s.current = 0;
 }
 
@@ -449,16 +803,41 @@ pub fn current() -> usize {
     SCHED.lock().current
 }
 
+/// The current task's recorded (cr3, kstack) — so a foreground excursion can save
+/// them, install its own, and restore them afterwards. Needed when the boot task
+/// runs a program that BLOCKS (a threaded glibc process joining its workers): the
+/// preemptive switch must resume the task with the right address space + rsp0.
+pub fn current_cr3_kstack() -> (u64, u64) {
+    let s = SCHED.lock();
+    let cur = s.current;
+    (s.tasks[cur].cr3, s.tasks[cur].kstack)
+}
+pub fn set_current_cr3_kstack(cr3: u64, kstack: u64) {
+    let mut s = SCHED.lock();
+    let cur = s.current;
+    s.tasks[cur].cr3 = cr3;
+    s.tasks[cur].kstack = kstack;
+}
+
 /// Number of scheduler tasks (for the live system panel).
 pub fn task_count() -> usize {
     SCHED.lock().count
 }
 
-/// Pick a free task slot (grows the table). Returns None if the table is full.
-/// NB: no reuse of DEAD slots yet — that requires the associated BgProc
-/// to already be reaped (otherwise a new process shares the slot with a zombie). With
-/// MAX_TASKS=48 there is plenty for the current workload; slot recycling = later.
+/// Pick a task slot: first reuse a RECLAIMED slot (a finished task whose resources
+/// were freed and which has no pending BgProc — see [`reclaim_task`]), otherwise
+/// grow the table. Returns None only if the table is full AND nothing is reclaimable.
+/// A reused slot is reset to a pristine [`EMPTY_TASK`] so no stale field (pid,
+/// stack_bottom, …) leaks from its previous occupant.
 fn alloc_slot(s: &mut Scheduler) -> Option<usize> {
+    while let Some(i) = s.free_slots.pop() {
+        // Defensive: only reuse a slot that is genuinely Dead and not the current
+        // task (should always hold, since reclaim_task enforces it).
+        if i < s.count && i != s.current && s.tasks[i].state == State::Dead {
+            s.tasks[i] = EMPTY_TASK;
+            return Some(i);
+        }
+    }
     if s.count < MAX_TASKS {
         let i = s.count;
         s.count += 1;
@@ -467,9 +846,28 @@ fn alloc_slot(s: &mut Scheduler) -> Option<usize> {
     None
 }
 
+/// Offer a finished task's slot for reuse. Safe ONLY for tasks whose resources are
+/// already released (kernel stack, address space) and which have NO associated
+/// BgProc/zombie awaiting waitpid — i.e. glibc run_glibc tasks. The task must be
+/// Dead and not current. Idempotent (won't double-list a slot).
+pub fn reclaim_task(idx: usize) {
+    let mut s = SCHED.lock();
+    if idx < s.count && idx != s.current && s.tasks[idx].state == State::Dead && !s.free_slots.contains(&idx) {
+        s.free_slots.push(idx);
+        // A reused slot must start with a clean FPU/SSE state, not the dead task's:
+        // invalidate so its first switch-in restores the FNINIT template.
+        FPU_VALID[idx].store(false, Ordering::Relaxed);
+    }
+}
+
 pub fn spawn_user(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u64) -> usize {
     let mut s = SCHED.lock();
-    let idx = alloc_slot(&mut s).expect("scheduler task table full");
+    // Return a sentinel instead of panicking when the table is full: a program that
+    // spawns too many threads (chrome) must get -EAGAIN, never crash the kernel.
+    let idx = match alloc_slot(&mut s) {
+        Some(i) => i,
+        None => return usize::MAX,
+    };
     let ctx = kstack_top - (CONTEXT_WORDS as u64) * 8;
     let words = ctx as *mut u64;
     // SAFETY: kstack_top is a valid, exclusive kernel stack for this task.
@@ -502,7 +900,11 @@ pub fn spawn_user(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u6
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_thread(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u64, fs_base: u64, saved_regs: u64) -> usize {
     let mut s = SCHED.lock();
-    let idx = alloc_slot(&mut s).expect("scheduler task table full");
+    // Sentinel (not panic) when full: the clone syscall turns this into -EAGAIN.
+    let idx = match alloc_slot(&mut s) {
+        Some(i) => i,
+        None => return usize::MAX,
+    };
     let ctx = kstack_top - (CONTEXT_WORDS as u64) * 8;
     let words = ctx as *mut u64;
     // SAFETY: kstack_top is an exclusive kernel stack for this thread.
@@ -562,22 +964,48 @@ fn busy() {
     }
 }
 
+/// Once the S2 priority self-test has reported its counters, the demo tasks
+/// task_a/b/c have served their purpose. They are infinite busy-loops, so left
+/// running they steal ~half the CPU from real work (the glibc/pthreads/Chromium
+/// path crawls behind them). PARK them: they then sleep instead of spinning,
+/// freeing the CPU for scheduled user processes. Flipped by task_sleeper.
+pub static DEMO_PARK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// A parked demo task: sleep in long stretches (yielding the CPU) forever, so the
+/// self-test tasks stop competing with real work after they've reported.
+fn demo_park_forever() -> ! {
+    loop {
+        sleep_ticks(1000); // ~10 s asleep per cycle
+        x86_64::instructions::hlt(); // yield now; the next tick keeps skipping us
+    }
+}
+
 // Equal workload (one `busy()`) — the difference in counters now comes PURELY from
-// the nice priority (S2), not from different loop durations.
+// the nice priority (S2), not from different loop durations. After the self-test
+// reports, the task parks (see DEMO_PARK) so it stops stealing CPU from real work.
 extern "C" fn task_a() -> ! {
     loop {
+        if DEMO_PARK.load(Ordering::Relaxed) {
+            demo_park_forever();
+        }
         TASK_COUNTERS[1].fetch_add(1, Ordering::Relaxed);
         busy();
     }
 }
 extern "C" fn task_b() -> ! {
     loop {
+        if DEMO_PARK.load(Ordering::Relaxed) {
+            demo_park_forever();
+        }
         TASK_COUNTERS[2].fetch_add(1, Ordering::Relaxed);
         busy();
     }
 }
 extern "C" fn task_c() -> ! {
     loop {
+        if DEMO_PARK.load(Ordering::Relaxed) {
+            demo_park_forever();
+        }
         TASK_COUNTERS[3].fetch_add(1, Ordering::Relaxed);
         busy();
     }
@@ -622,6 +1050,9 @@ extern "C" fn task_sleeper() -> ! {
             let b = TASK_COUNTERS[2].load(Ordering::Relaxed);
             let c = TASK_COUNTERS[3].load(Ordering::Relaxed);
             crate::kinfo!("S2 prio-selftest: counters nice(-10/0/+10) = {a}/{b}/{c}, sleeper={}", TASK_COUNTERS[4].load(Ordering::Relaxed));
+            // The priority demo has proven its point; stop the busy-loops from
+            // stealing CPU so real user processes (glibc/pthreads) get the core.
+            DEMO_PARK.store(true, Ordering::Relaxed);
         }
         sleep_ticks(50); // sleep ~0.5 s
         x86_64::instructions::hlt(); // yield CPU; the next tick switches away (Sleeping)

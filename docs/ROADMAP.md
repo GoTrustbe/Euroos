@@ -232,6 +232,13 @@ Replace the current 25-entry EU-oriented TLS trust store with a **EuroCA** infra
 - **Why:** today EuroOS trusts third-party CAs for TLS. A truly sovereign OS controls its own trust anchors, especially for the update and attestation paths.
 - **Verify:** a certificate signed by EuroCA is accepted by `eurotls`; a certificate signed by an unknown CA is rejected; the root key ceremony is documented and reproducible.
 
+### O4 — IOMMU / DMA isolation `N 🔒` (raised as GitHub #11, 2026-08-10)
+Confine every DMA-capable device (NVMe, AHCI, e1000, xHCI, virtio) to only its own buffers, so a buggy or **malicious peripheral cannot DMA over arbitrary physical memory** and bypass the capability model, signatures and audit log (the DMA / "Thunderclap" attack class). Without this, syscall-boundary capability checks are **incomplete** — the critical gap the issue names.
+- **Phase 1 — detection + boot policy `DONE 2026-08-10` (commit on `feature/app-control`):** parse the ACPI **DMAR** (Intel VT-d), read each remapping unit's capability registers, report the DMA-exposure state honestly, and enforce a boot policy (`Warn` default; `Required` = fail-closed when no usable IOMMU). New `kernel/src/iommu.rs` + `acpi::dmar()`. The System panel now shows the true DMA-isolation state. **Verified** under QEMU both ways: plain q35 → "no DMAR, DMA UNRESTRICTED"; `-device intel-iommu` → detects `unit0 @ 0xfed90000 ver 1.0 ... ir=true`.
+- **Phase 2 — active translation `N` (the real isolation):** program per-device root/context tables + second-level page tables so each device sees only an identity map of its legitimate DMA buffers and faults on anything else; queued invalidation + DMA-remapping fault handling; wire buffer (un)map into the driver DMA-alloc path. AMD-Vi (IVRS) as the parallel path. Then default the policy toward `Required` on installs.
+- **Why:** an OS that markets sovereign isolation must not let hardware bypass it. Phase 1 makes the gap visible and enforceable; Phase 2 closes it.
+- **Verify (Phase 2):** with translation on, a device DMA to an unmapped physical page raises a DMAR fault (logged) instead of succeeding; legitimate driver I/O (NVMe read, NIC RX/TX) still works; boot survives with `policy=Required`.
+
 ---
 
 ## 10. EU compliance & localisation (Sprint P)
@@ -240,6 +247,15 @@ Replace the current 25-entry EU-oriented TLS trust store with a **EuroCA** infra
 Full **CLDR**-based locale support for all 24 EU official languages: collation, date/time formatting (ISO 8601 default), number formatting (comma decimal separator), currency (€), and plural rules. A `eurolocale` library crate, host-testable.
 - **Why:** "European OS" with English-only locale support is a contradiction. Locale correctness is a compliance requirement for public-sector deployments.
 - **Verify:** date formatting, number formatting, and sort order are correct for NL, FR, DE, and PL locales under host tests.
+
+### P1a — Discoverable keyboard-layout switching `N 🧪` (added 2026-07-22, from hup.hu live-VNC feedback)
+Make choosing and switching the keyboard layout **simple and visible from the desktop**, not just a shell command. Today the engine is complete but under-exposed: `crates/eurokeymap` decodes US-QWERTY / BE-AZERTY / FR-AZERTY / DE-QWERTZ, `ps2::set_layout_tag` switches at runtime, and the shell has a `keymap <tag>` command, but there is **no GUI indicator or picker**, and **boot does not apply the persisted `/etc/keymap`** (it always starts on the US-QWERTY default). Sub-tasks:
+- **Panel indicator + picker:** a small layout badge in the desktop status panel / quick-settings that shows the active layout and opens a picker (the four current layouts + a path to add more EU/international ones).
+- **Persist + apply at boot:** read `/etc/keymap` on boot and call `ps2::set_layout_tag` so an installed choice survives reboot (the installer already writes it via `instexec.rs`; the boot path just never reads it back).
+- **More layouts:** extend `eurokeymap` beyond the initial four (UK, ES, IT, PL, Nordic, …).
+- **Live-VNC robustness:** a US-QWERTY tester on the try-in-browser VNC reported a single key ('m') not registering. The EuroOS decode chain is correct end to end (verified: VNC keysym 'm' → HID `0x10` → PS/2 `0x32` → 'm' under the US default), so this is a noVNC "QEMU Extended Key Event" client quirk, not an OS bug. Consider exposing a layout selector on the `/live/` page and/or pinning the noVNC keyboard mode for predictable behaviour.
+- **Why:** international users must not be stuck guessing which physical key produces which character, with no obvious way to fix it. Discoverable layout switching is table stakes for a desktop OS.
+- **Verify:** the panel shows the active layout; selecting a layout takes effect immediately and persists across a reboot; a fresh boot honours an installed `/etc/keymap`.
 
 ### P2 — Accessibility layer `N 🧪`
 An **AT-SPI2**-equivalent accessibility protocol for EuroDisplay: structured widget trees, focus events, text content exposure, and a screen reader hook. A minimal `euroread` screen reader as the reference consumer.

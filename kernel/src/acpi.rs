@@ -203,6 +203,65 @@ pub fn mcfg() -> Option<alloc::vec::Vec<EcamWindow>> {
     }
 }
 
+/// One DMA-Remapping Hardware Unit (a VT-d engine) from the DMAR table.
+#[derive(Clone, Copy)]
+pub struct Drhd {
+    pub base: u64,        // physical base of the remapping unit's registers (identity-mapped)
+    pub segment: u16,     // PCI segment group this unit covers
+    pub include_all: bool, // INCLUDE_PCI_ALL: this unit covers every PCI device in its segment
+}
+
+/// Parsed DMAR (DMA Remapping) ACPI table — the platform's declaration that an
+/// Intel VT-d IOMMU exists and where its remapping engines live. Presence of this
+/// table is how firmware advertises hardware DMA isolation to the OS.
+pub struct Dmar {
+    pub host_addr_width: u8,   // physical address width the IOMMU decodes (bits - 1)
+    pub intr_remap: bool,      // firmware supports interrupt remapping (flags bit0)
+    pub units: alloc::vec::Vec<Drhd>,
+}
+
+/// Parse the DMAR table (Intel VT-d). Returns `None` when the platform publishes no
+/// DMAR — i.e. there is NO hardware IOMMU and device DMA is unrestricted. The
+/// remapping-structure walk collects every DRHD (hardware unit) with its register
+/// base, so a driver can later read the unit's capability registers and program
+/// translation. AMD's equivalent is IVRS (a separate table, TODO).
+pub fn dmar() -> Option<Dmar> {
+    let t = find_table(b"DMAR")?;
+    unsafe {
+        let len: u32 = rd(t + 4);
+        if len < 48 {
+            return None; // header (36) + haw (1) + flags (1) + reserved (10)
+        }
+        let host_addr_width: u8 = rd(t + 36);
+        let flags: u8 = rd(t + 37);
+        let mut units = alloc::vec::Vec::new();
+        // Remapping structures start at offset 48; each is TLV (type/length).
+        let mut off = 48u64;
+        let end = len as u64;
+        // Bound the walk so a malformed table can never loop forever.
+        let mut guard = 0u32;
+        while off + 4 <= end && guard < 256 {
+            guard += 1;
+            let ty: u16 = rd(t + off);
+            let elen: u16 = rd(t + off + 2);
+            if elen < 4 {
+                break; // malformed: a zero/short length would not advance
+            }
+            if ty == 0 {
+                // DRHD: flags(u8)@+4, reserved(u8)@+5, segment(u16)@+6, base(u64)@+8.
+                let dflags: u8 = rd(t + off + 4);
+                let segment: u16 = rd(t + off + 6);
+                let base: u64 = rd(t + off + 8);
+                if base != 0 {
+                    units.push(Drhd { base, segment, include_all: dflags & 1 != 0 });
+                }
+            }
+            off += elen as u64;
+        }
+        Some(Dmar { host_addr_width, intr_remap: flags & 1 != 0, units })
+    }
+}
+
 /// Parse the ACPI tables and return the MADT contents (cores + IO-APIC).
 pub fn parse() -> Option<Madt> {
     let rsdp = RSDP.load(Ordering::Relaxed);

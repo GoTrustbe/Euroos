@@ -11,6 +11,10 @@ use euromm::{FrameAllocator, MemoryRegion};
 use spin::Mutex;
 
 static POOL: Mutex<Option<FrameAllocator>> = Mutex::new(None);
+/// A SECOND, independent pool dedicated to DEMAND PAGING (ring3::handle_demand_fault
+/// commits sparse-mmap pages from here). Kept separate from the fork pool so a large
+/// demand working set never starves fork()/exec() and vice-versa.
+static DEMAND_POOL: Mutex<Option<FrameAllocator>> = Mutex::new(None);
 
 /// Install the pool: the range `base .. base + frames*4096` (reserved by `main` from the
 /// main allocator and therefore marked there as 'in use') is from now on
@@ -23,6 +27,13 @@ pub fn install(base: u64, frames: usize) {
 /// Allocate `count` contiguous frames from the pool (None = pool full / not initialized).
 pub fn alloc_contiguous(count: usize) -> Option<u64> {
     POOL.lock().as_mut()?.allocate_contiguous(count).ok()
+}
+
+/// Allocate `count` contiguous frames aligned to `align_frames` (e.g. 512 = 2 MiB) —
+/// required for a fork child's arena, which is mapped with 2 MiB HUGE pages (the base
+/// must be 2 MiB-aligned or the CPU faults with a MALFORMED_TABLE reserved-bit error).
+pub fn alloc_aligned(count: usize, align_frames: usize) -> Option<u64> {
+    POOL.lock().as_mut()?.allocate_aligned(count, align_frames).ok()
 }
 
 /// Allocate one frame from the pool.
@@ -40,4 +51,29 @@ pub fn free(addr: u64) {
 /// Free frames in the pool (for diagnostics / `dmesg`).
 pub fn free_frames() -> usize {
     POOL.lock().as_ref().map(|p| p.free_frames()).unwrap_or(0)
+}
+
+// ── Dedicated DEMAND-PAGING pool (independent of the fork pool above) ─────────
+pub fn demand_install(base: u64, frames: usize) {
+    let region = MemoryRegion { start: base, len: (frames as u64) * 4096, usable: true };
+    *DEMAND_POOL.lock() = Some(FrameAllocator::from_regions(&[region], 0));
+}
+/// Allocate one frame from the demand pool (None = exhausted / not initialized).
+pub fn demand_alloc() -> Option<u64> {
+    DEMAND_POOL.lock().as_mut()?.allocate().ok()
+}
+/// Return a frame to the demand pool.
+pub fn demand_free(addr: u64) {
+    if let Some(p) = DEMAND_POOL.lock().as_mut() {
+        let _ = p.free(addr);
+    }
+}
+pub fn demand_free_frames() -> usize {
+    DEMAND_POOL.lock().as_ref().map(|p| p.free_frames()).unwrap_or(0)
+}
+/// Tear down the demand pool (its backing region is freed by the caller). Used with
+/// the PER-RUN pool model: a demand run reserves a large region, installs it here,
+/// then uninstalls + returns the whole region to the main allocator on exit.
+pub fn demand_uninstall() {
+    *DEMAND_POOL.lock() = None;
 }

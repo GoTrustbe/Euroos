@@ -3,6 +3,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# One build at a time. Two builds share cargo's output path, so a second one
+# (a manual `cargo kbuild-*`, another harness) silently replaces the .efi this one
+# is about to pack — and the image then boots a kernel nobody asked for. That
+# cost two full test runs before it was noticed, each time looking like a code bug.
+exec 9>"${TMPDIR:-/tmp}/eurokernel-build.lock"
+flock 9
+
 PROFILE="${1:-release}"
 EFI="target/x86_64-unknown-uefi/${PROFILE}/eurokernel.efi"
 IMG="eurokernel.img"
@@ -10,7 +17,19 @@ IMG="eurokernel.img"
 echo "==> rustc: $(rustc --version)"
 echo "==> EuroToolchain: compiling userspace programs (Track 6)"
 ./userland/build.sh >/dev/null
-if [ "$PROFILE" = "release" ]; then
+if [ "$PROFILE" = "image" ]; then
+  # Public download/VNC image: no self-test suite -> fast boot to an idle desktop.
+  PROFILE="release"
+  EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
+  cargo kbuild-image
+  cargo lbuild-release           # G4: two-stage loader
+elif [ "$PROFILE" = "chrome" ]; then
+  # Iteration image: chrome runs in the boot phase (see the chrome-boot feature).
+  PROFILE="release"
+  EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
+  cargo kbuild-chrome
+  cargo lbuild-release
+elif [ "$PROFILE" = "release" ]; then
   cargo kbuild-release
   cargo lbuild-release           # G4: two-stage loader
 else
@@ -22,8 +41,17 @@ LOADER="target/x86_64-unknown-uefi/${PROFILE}/loader.efi"
 [ -f "$LOADER" ] || { echo "ERROR: $LOADER not found"; exit 1; }
 echo "==> kernel: $(du -h "$EFI" | cut -f1) · loader: $(du -h "$LOADER" | cut -f1)"
 
+# Stage the binaries the moment they exist: the image assembly below takes a minute,
+# and until it is done these paths must not change underneath it.
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT
+cp "$EFI" "$STAGE/kernel.efi"
+cp "$LOADER" "$STAGE/loader.efi"
+EFI="$STAGE/kernel.efi"
+LOADER="$STAGE/loader.efi"
+
 echo "==> building FAT32 image ($IMG) via mtools (no root needed)"
-dd if=/dev/zero of="$IMG" bs=1M count=64 status=none
+dd if=/dev/zero of="$IMG" bs=1M count=256 status=none
 mkfs.fat -F 32 -n EUROKERNEL "$IMG" >/dev/null
 mmd -i "$IMG" ::/EFI ::/EFI/BOOT
 # G4 TWO-STAGE: BOOTX64.EFI = loader; the kernel sits as slot image A and B.

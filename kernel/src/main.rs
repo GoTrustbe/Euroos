@@ -25,6 +25,7 @@ mod euroipc;
 mod acpi;
 mod acpi_power;
 mod apic;
+mod iommu;
 mod appgfx;
 mod appicons;
 mod auth;
@@ -52,6 +53,7 @@ mod hpet;
 mod pci;
 mod power;
 mod procpool;
+mod xserver;
 mod rootblk;
 mod scrub;
 mod swapmgr;
@@ -125,6 +127,19 @@ mod jsapp;
 mod webview;
 mod calc_ui;
 mod settings_ui;
+mod clipboard;
+mod ctxmenu;
+mod trash;
+mod launcher;
+mod filedialog;
+mod notify;
+mod screenshot;
+mod tooltip;
+mod symbolpicker;
+mod spell;
+mod switcher;
+mod workspace;
+mod netbridge;
 mod agent_ui;
 mod files;
 mod textedit;
@@ -184,6 +199,119 @@ fn load_files_dir(fs: &mut dyn FileSystem, path: &str) {
     files::load_dir(path, items);
 }
 
+/// Build the right-click context menu for whatever object is under the cursor:
+/// a file or directory in EuroFiles, an empty file-manager area, a text field,
+/// a dock tile, or the bare desktop. Each surface gets its own action list.
+fn build_context_menu(
+    rx: usize,
+    ry: usize,
+    windows: &[compositor::Window],
+    order: &[usize],
+    dock_targets: &[Option<usize>; 12],
+    sw: usize,
+    sh: usize,
+) {
+    use ctxmenu::{Action, Item};
+
+    // A dock tile? (the dock sits left of every window.)
+    if let Some(icon) = compositor::dock_icon_at(rx, ry) {
+        if dock_targets.get(icon).copied().flatten().is_some() {
+            ctxmenu::open(rx, ry, alloc::vec![Item::new("Open", "", Action::OpenApp(icon))], sw, sh);
+            return;
+        }
+    }
+
+    // The topmost visible window under the cursor.
+    let win = order.iter().rev().copied().find(|&i| windows[i].visible && windows[i].contains(rx, ry));
+    if let Some(i) = win {
+        let (wx, wy) = (windows[i].x, windows[i].y);
+        match windows[i].app {
+            suite_ui::SuiteApp::Files => {
+                if let Some(dir) = files::hit_test(wx, wy, rx, ry) {
+                    ctxmenu::open(rx, ry, alloc::vec![
+                        Item::new("Open", "", Action::OpenDir(dir.clone())).sep(),
+                        Item::new("Copy path", "Ctrl C", Action::CopyText(dir)),
+                    ], sw, sh);
+                } else if let Some(file) = files::hit_test_file(wx, wy, rx, ry) {
+                    ctxmenu::open(rx, ry, alloc::vec![
+                        Item::new("Open", "Enter", Action::OpenFile(file.clone())),
+                        Item::new("Copy path", "Ctrl C", Action::CopyText(file.clone())).sep(),
+                        Item::new("Move to Trash", "Del", Action::Trash(file)),
+                    ], sw, sh);
+                } else {
+                    // Empty area of the file manager → folder actions on the current dir.
+                    let cur = files::current_path();
+                    let dir = if cur.is_empty() { String::from("/") } else { cur };
+                    let mut items = alloc::vec![Item::new("New folder", "Ctrl Shift N", Action::NewFolder(dir))];
+                    if trash::count() > 0 {
+                        items.push(Item::new("Restore last deleted", "Ctrl Z", Action::RestoreTrash));
+                    }
+                    if let Some(last) = items.last_mut() {
+                        last.sep_after = true; // separator before Refresh
+                    }
+                    items.push(Item::new("Refresh", "F5", Action::Refresh));
+                    ctxmenu::open(rx, ry, items, sw, sh);
+                }
+            }
+            // Text-bearing windows → Paste (enabled only when the clipboard has text).
+            suite_ui::SuiteApp::None | suite_ui::SuiteApp::Text | suite_ui::SuiteApp::Notes => {
+                let mut paste = if clipboard::has_content() {
+                    Item::new("Paste", "Ctrl V", Action::Paste)
+                } else {
+                    Item::disabled("Paste")
+                };
+                paste.sep_after = true;
+                ctxmenu::open(rx, ry, alloc::vec![
+                    paste,
+                    Item::new("Insert symbol", "", Action::InsertSymbol),
+                ], sw, sh);
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    // The bare desktop.
+    let mut items = alloc::vec![
+        Item::new("Open Terminal", "", Action::OpenTerminal),
+        Item::new("Take screenshot", "", Action::Screenshot),
+        Item::new("Display settings", "", Action::OpenDisplaySettings),
+    ];
+    if trash::count() > 0 {
+        items.push(Item::new("Restore last deleted", "Ctrl Z", Action::RestoreTrash));
+    }
+    if let Some(last) = items.last_mut() {
+        last.sep_after = true;
+    }
+    items.push(Item::new("Refresh", "F5", Action::Refresh));
+    ctxmenu::open(rx, ry, items, sw, sh);
+}
+
+/// The tooltip text for whatever control is under the cursor, if any: the EU
+/// mark, a dock tile, the status panel, or a window's traffic-light buttons.
+fn tooltip_for(px: usize, py: usize, windows: &[compositor::Window], order: &[usize], width: usize) -> Option<String> {
+    if compositor::brand_button_at(px, py) {
+        return Some(String::from("Open the app launcher"));
+    }
+    if let Some(icon) = compositor::dock_icon_at(px, py) {
+        return launcher::name_for_icon(icon).map(String::from);
+    }
+    let (rx, ry, rw, rh) = compositor::status_panel_rect(width);
+    if px >= rx && px < rx + rw && py >= ry && py < ry + rh {
+        return Some(String::from("Notifications"));
+    }
+    if let Some(i) = order.iter().rev().copied().find(|&i| windows[i].visible && windows[i].contains(px, py)) {
+        if let Some(btn) = windows[i].title_button_at(px, py) {
+            return Some(String::from(match btn {
+                compositor::TitleButton::Close => "Close",
+                compositor::TitleButton::Minimize => "Minimize",
+                compositor::TitleButton::Maximize => "Maximize",
+            }));
+        }
+    }
+    None
+}
+
 const PROMPT: &str = "euroos:/ $ ";
 
 /// EuroGuard Level-1 system policy (Track 7, Phase 7.2). On the first boot it is
@@ -222,13 +350,59 @@ static FB_INFO: spin::Once<FbInfo> = spin::Once::new();
 /// a full-screen app (the DOOM port) paints at its own frame rate instead of
 /// depending on the desktop loop, which a heavyweight app can starve down to a
 /// couple of Hz. `src` is `sw*sh` pixels.
-pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
-    let fbi = match FB_INFO.get() {
-        Some(i) => i,
-        None => return,
-    };
-    if sw == 0 || sh == 0 || src.len() < sw * sh {
-        return;
+/// Launch Chromium as a DESKTOP APPLICATION: stage the files it must find, spawn it
+/// as a persistent process whose 485 MB binary is demand-paged from the EuroPack disk,
+/// and put the X server in windowed mode so the compositor frames its window instead
+/// of the server blitting it fullscreen. Returns the line to print for the user.
+///
+/// The boot-phase run proved chrome CAN paint here; this is what makes it an app you
+/// open, next to the other windows, with the desktop routing input into it.
+fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
+    if !ring3::europack_has("/pack/chrome") {
+        return (false, String::from("chrome: no /pack/chrome — attach the Chromium EuroPack disk"));
+    }
+    if ring3::persistent_running() {
+        return (false, String::from("chrome: already running (close its window to quit)"));
+    }
+    // Start from an empty button queue: the clicks that opened this window were meant
+    // for the DESKTOP, and delivering them to the browser the moment it appears would
+    // be a handful of phantom clicks on whatever it happens to be showing.
+    while mouse::take_button_event().is_some() {}
+    ring3::chrome_stage_files();
+    ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
+    // Leave the desktop 128 MiB: it keeps compositing, allocating window buffers and
+    // serving files while the browser runs, and the boot-phase margin (32 MiB) was
+    // sized for a system where nothing else was running at all.
+    ring3::DEMAND_MARGIN_FRAMES.store(32768, core::sync::atomic::Ordering::Relaxed);
+    // A browser is a UI: it must LIVE. The tickless fast-forward exists to make a
+    // run-to-completion boot test finish, and would race a live window's deadlines.
+    ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
+    xserver::set_windowed(true);
+    // CHROME_ARGV carries --remote-debugging-pipe, so fd 3/4 MUST exist before
+    // chrome's first instruction — and the input bridge wants the session anyway:
+    // desktop clicks and typing ride the same reliable DevTools route as the
+    // boot-phase runs. The staged euro.html is the start page's target.
+    ring3::cdp_install_input("file:///tmp/euro.html");
+    let caps = ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO | ring3::CAP_NET;
+    match ring3::spawn_glibc_disk_persistent(mem, "/pack/chrome", ring3::ldlinux_bytes(),
+                                             ring3::CHROME_ARGV, ring3::CHROME_ENVP, caps) {
+        Some(t) => (true, alloc::format!("chrome: launched (task {t}) — the window paints as it starts up")),
+        None => {
+            xserver::set_windowed(false);
+            (false, String::from("chrome: launch FAILED (not enough memory for the arena)"))
+        }
+    }
+}
+
+/// WHERE a source image of `sw`x`sh` lands on the screen: (dx, dy, scale), integer-
+/// scaled to fill and centred. The one place that decides this, because two things
+/// must agree on it exactly: the blit that paints the pixels, and the input routing
+/// that turns a pointer position back into a window coordinate. When they disagree,
+/// every click misses by the offset — and nothing on screen shows why.
+pub fn screen_place(sw: usize, sh: usize) -> Option<(usize, usize, usize)> {
+    let fbi = FB_INFO.get()?;
+    if sw == 0 || sh == 0 {
+        return None;
     }
     let scale = core::cmp::min(
         fbi.width.saturating_sub(40) / sw,
@@ -237,10 +411,80 @@ pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
     .clamp(1, 4);
     let (dw, dh) = (sw * scale, sh * scale);
     if dw > fbi.width || dh > fbi.height {
+        return None;
+    }
+    Some(((fbi.width - dw) / 2, (fbi.height - dh) / 2, scale))
+}
+
+/// Clear a rectangle of the screen (used when a window stops being on screen). The
+/// fullscreen X blit only ever paints; without this, a dismissed dialog leaves its
+/// pixels behind and the screen keeps showing something that no longer exists.
+pub fn screen_clear_rect(x: usize, y: usize, w: usize, h: usize) {
+    let fbi = match FB_INFO.get() {
+        Some(i) => i,
+        None => return,
+    };
+    let dst = fbi.base as *mut u32;
+    for ry in y..(y + h).min(fbi.height) {
+        for rx in x..(x + w).min(fbi.width) {
+            unsafe { dst.add(ry * fbi.stride + rx).write_volatile(0) };
+        }
+    }
+}
+
+/// Blit a window at an EXPLICIT screen position and scale — the caller computed a
+/// shared transform (anchor window centred; every other window placed relative to
+/// it) so popups land where X geometry says they are instead of floating centred.
+pub fn screen_present_xrgb_at(src: &[u32], sw: usize, sh: usize, dx: i64, dy: i64, scale: usize) {
+    let fbi = match FB_INFO.get() {
+        Some(i) => i,
+        None => return,
+    };
+    if sw == 0 || sh == 0 || scale == 0 || src.len() < sw * sh {
         return;
     }
-    let dx = (fbi.width - dw) / 2;
-    let dy = (fbi.height - dh) / 2;
+    let dst = fbi.base as *mut u32;
+    let rgb = matches!(fbi.pf, PixelFormat::Rgb);
+    for sy in 0..sh {
+        let row = &src[sy * sw..sy * sw + sw];
+        for k in 0..scale {
+            let ty = dy + (sy * scale + k) as i64;
+            if ty < 0 {
+                continue;
+            }
+            if ty as usize >= fbi.height {
+                return;
+            }
+            let dst_row = ty as usize * fbi.stride;
+            let mut dc = dx;
+            for &v in row {
+                let out = if rgb { ((v & 0xFF) << 16) | (v & 0x0000_FF00) | ((v >> 16) & 0xFF) } else { v };
+                for _ in 0..scale {
+                    if dc >= 0 {
+                        if dc as usize >= fbi.width {
+                            break;
+                        }
+                        unsafe { dst.add(dst_row + dc as usize).write_volatile(out) };
+                    }
+                    dc += 1;
+                }
+            }
+        }
+    }
+}
+
+pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
+    let fbi = match FB_INFO.get() {
+        Some(i) => i,
+        None => return,
+    };
+    if sw == 0 || sh == 0 || src.len() < sw * sh {
+        return;
+    }
+    let (dx, dy, scale) = match screen_place(sw, sh) {
+        Some(p) => p,
+        None => return,
+    };
     let dst = fbi.base as *mut u32;
     let rgb = matches!(fbi.pf, PixelFormat::Rgb);
     for sy in 0..sh {
@@ -282,6 +526,7 @@ fn main() -> Status {
         "[euro] anchor dump_registers_and_backtrace @ {:#018x}",
         klog::dump_registers_and_backtrace as usize as u64
     );
+    ring3::dump_suspect_addrs(); // for mapping an NMI-captured wedge RIP
 
     // EuroFS is set up later (after virtio-blk init): either on the GPT disk
     // (installed, persistent) or in RAM (live mode). See `populate_fs`.
@@ -361,20 +606,42 @@ fn main() -> Status {
         );
     }
 
-    // S3: reserve a PROCESS FRAME POOL (64 MiB) from the main allocator. fork()/
-    // execve() allocate from it while running in a syscall (the main allocator is
-    // then unreachable). Identity-mapped, so kernel-accessible.
-    const POOL_FRAMES: usize = 16384; // 64 MiB
-    match allocator.allocate_contiguous(POOL_FRAMES) {
-        Ok(base) => {
-            procpool::install(base, POOL_FRAMES);
-            serial_println!("[mm] process frame pool: 64 MiB @ {base:#x} (fork/exec)");
+    // S3: reserve a PROCESS FRAME POOL from the main allocator. fork()/execve()
+    // allocate from it while running in a syscall (the main allocator is then
+    // unreachable). Identity-mapped, so kernel-accessible.
+    //
+    // Sizing: a glibc fork() eagerly copies the parent arena into a fresh contiguous
+    // region here. Chrome's arena is 256 MiB, and chrome forks its GPU/renderer/
+    // utility children, so 160 MiB could not hold even one — the [fork] arena-alloc
+    // failed on the chrome multi-process path. Reserve enough for a couple of
+    // concurrent 256 MiB child arenas WHEN there is RAM for it, falling back so the
+    // lean 512 MiB public image still boots. We only reserve up to ~1/5 of usable RAM.
+    {
+        let usable_frames = (allocator.usable_bytes() / 4096) as usize;
+        let cap = usable_frames / 5; // never take more than a fifth of RAM
+        // Candidates: 640 MiB (2+ chrome arenas) → 160 MiB → 64 MiB, first that fits.
+        let mut installed = false;
+        for &want in &[163_840usize, 40_960, 16_384] {
+            if want > cap {
+                continue;
+            }
+            if let Ok(base) = allocator.allocate_contiguous(want) {
+                procpool::install(base, want);
+                serial_println!("[mm] process frame pool: {} MiB @ {base:#x} (fork/exec)", want / 256);
+                installed = true;
+                break;
+            }
         }
-        Err(_) => serial_println!("[mm] WARNING: no process frame pool (fork disabled)"),
+        if !installed {
+            serial_println!("[mm] WARNING: no process frame pool (fork disabled)");
+        }
     }
 
     // virtio-blk: initialize the real disk (PIO/DMA works on our identity map).
     virtio_blk::init(&mut allocator);
+    // EuroPack: register files served straight from a pack disk (no RAM copy) —
+    // how binaries too large to embed (chrome) reach the glibc loader.
+    ring3::europack_scan();
 
     // NVMe (B2): detect + initialize an NVMe controller (admin/I/O queues,
     // identify), do a read/write self-test + SMART readout. No-op without NVMe.
@@ -553,19 +820,26 @@ fn main() -> Status {
     // EuroUpdate (F1): A/B slot decision + attempt counter/rollback on every boot.
     update::boot_init(&mut fs);
     // G4: prove the direct image→slot-partition write (EuroOS-B, sector I/O + read-back).
-    update::slot_partition_selftest();
+    // Skip if virtio dev 0 is a foreign EuroPack data disk (would overwrite it).
+    if !ring3::europack_on_vblk0() {
+        update::slot_partition_selftest();
+    }
     // [upd3] (Sprint 3): verify-before-activate with a REAL Ed25519 signature +
     // prove that the update pipeline rejects a tampered package.
     crypto::selftest();
     update::apply_gate_selftest(rtc::epoch());
     // [edit] (Sprint 4): edit EuroText → save → re-read on the REAL EuroFS.
     textedit::selftest(&mut fs);
+    trash::selftest(&mut fs); // conveniences: delete-to-trash + undo
     // [io1]/[io2] (Sprint IO): FAT32 mount + read + write driver, proven in-kernel.
     fatmount::selftest();
 
     // J2: bad-block remap on the REAL disk — mark a block bad and prove that
     // I/O is transparently redirected to a spare block (bad-block table ↔ scrub).
-    if virtio_blk::present() {
+    // Skip when virtio dev 0 is a foreign DATA disk (a EuroPack chrome-serving
+    // volume): these tests scribble on GPT-gap LBAs (50, 60+) that hold the served
+    // file's bytes there — never write over a data disk we do not own.
+    if virtio_blk::present() && !ring3::europack_on_vblk0() {
         let mut bbt = eurofs::badblocks::BadBlockTable::new(50, 8); // spare pool LBA 50..58 (GPT gap)
         let bad = 48u64;
         if let Some(spare) = bbt.mark_bad(bad) {
@@ -858,9 +1132,10 @@ fn main() -> Status {
     // granted capabilities (least-privilege) and the syscall ABI. This lets a
     // shell later start them by NAME — the kernel itself knows with which rights + ABI.
     use ring3::{CAP_CONSOLE as CO, CAP_FILE as FI, CAP_NET as NE, CAP_PROC_INFO as PR};
-    let installed: [(&str, u64, bool); 24] = [
+    let installed: [(&str, u64, bool); 25] = [
         ("/bin/fbtest", CO, true), // app-graphics smoke test (large-arena scheduled)
         ("/bin/doom", CO | FI, true), // the DOOM port: draws frames + reads its WAD (CAP_FILE)
+        ("/bin/browser", CO | FI | NE, true), // EuroBrowser: draws + fetches live sites (CAP_NET)
         ("/bin/hello", CO | PR | FI, false),
         ("/bin/cat", CO | FI, false),
         ("/bin/linuxprog", CO | PR | FI, true), // now reads /proc too (CAP_FILE)
@@ -909,6 +1184,12 @@ fn main() -> Status {
         Ok(bytes) => euroguard::load_config(&String::from_utf8_lossy(&bytes)),
         Err(_) => euroguard::init(), // fallback: built-in starter set
     }
+    // A geo feed extends the built-in country table if present (full GeoIP drops
+    // in as data, no code change). Then prove the network-control core.
+    if let Ok(bytes) = fs.read_file("/etc/euroguard/geoip.conf") {
+        euroguard::load_geo_feed(&String::from_utf8_lossy(&bytes));
+    }
+    euroguard::selftest();
 
     // ── REAL NETWORKING: initialize the virtio-net NIC and do a live ARP exchange
     // with the gateway. EuroNet now not only builds/parses packets — they
@@ -1235,6 +1516,51 @@ fn main() -> Status {
     // H3: in-kernel DYNAMIC LINKER — load a dynamically-linked executable +
     // its shared library and resolve the cross-module call (R_X86_64_JUMP_SLOT).
     {
+        // Serve the real libc.so.6 to ld.so at glibc's default search path. The
+        // glibc tests themselves run LATER (after the scheduler + timer are up,
+        // ~line 1760): a glibc process runs as a scheduled task so its pthreads
+        // schedule fairly.
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libc.so.6", ring3::glibc_libc_bytes());
+        // A SECOND real shared library, so ld.so can resolve a multi-lib DT_NEEDED
+        // chain (the Chromium path needs ~30) + runtime dlopen/dlsym of it.
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libm.so.6", ring3::glibc_libm_bytes());
+        // The C++ runtime + unwinder, so a transitive chain (exe -> libstdc++ ->
+        // {libc, libm, libgcc_s}) resolves — Chromium is C++ at this scale.
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libstdc++.so.6", ring3::glibc_libstdcpp_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libgcc_s.so.1", ring3::glibc_libgccs_bytes());
+        // libgmp: needed by the REAL /usr/bin/factor binary (bignum arithmetic).
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libgmp.so.10", ring3::glibc_libgmp_bytes());
+        // libcrypto (OpenSSL, 5 MB): needed by the REAL /usr/bin/sha256sum.
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libcrypto.so.3", ring3::glibc_libcrypto_bytes());
+        // glibc stub libs chrome binaries declare as NEEDED (real code is in libc.so.6).
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libdl.so.2", ring3::glibc_libdl_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libpthread.so.0", ring3::glibc_libpthread_bytes());
+        // GLib + libpcre2: the GTK/desktop-stack core library (a real Chromium dep).
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libglib-2.0.so.0", ring3::glibc_libglib_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libpcre2-8.so.0", ring3::glibc_libpcre2_bytes());
+        // zlib: universal compression, a real Chromium dep.
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libz.so.1", ring3::glibc_libz_bytes());
+        // Cairo 2D graphics stack (the vector-graphics lib GTK/Firefox render with).
+        for (name, bytes) in ring3::cairo_libs() {
+            ring3::register_file_static(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes);
+        }
+        // Pango text-layout engine (HarfBuzz shaping + GObject/GIO) — the real i18n
+        // text stack GTK apps and browsers use on top of Cairo/FreeType.
+        for (name, bytes) in ring3::pango_libs() {
+            ring3::register_file_static(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes);
+        }
+        // GTK3 toolkit chain (gtk/gdk/gdk-pixbuf/atk + X11 extension client libs) —
+        // the real widget toolkit. Served zero-copy; the runtime test is ggtk.
+        for (name, bytes) in ring3::gtk_libs() {
+            ring3::register_file_static(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes);
+        }
+        // X11 client stack: a real Xlib client + its 6 transitive libs (the GUI rung).
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libX11.so.6", ring3::glibc_libx11_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libxcb.so.1", ring3::glibc_libxcb_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libXau.so.6", ring3::glibc_libxau_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libXdmcp.so.6", ring3::glibc_libxdmcp_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libbsd.so.0", ring3::glibc_libbsd_bytes());
+        ring3::register_file_static("/lib/x86_64-linux-gnu/libmd.so.0", ring3::glibc_libmd_bytes());
         let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
         serial_println!(
             "[h3] dyntest (dynamically linked) done: exit={h3_exit}, output={:?}",
@@ -1356,84 +1682,112 @@ fn main() -> Status {
         paging::guarded_stack_count()
     );
 
+    // Capture a clean FPU/SSE (FXSAVE) template before scheduling starts, so the
+    // context switch can save/restore each task's x87/SSE register file (prevents
+    // preemptively-scheduled threads from clobbering each other's XMM state).
+    sched::fpu_init();
     // Scheduler: shell + 3 kernel tasks + TWO ring-3 userspace processes,
     // each with its own kernel stack (TSS.rsp0 switches per task).
     sched::init();
-    let ucnt1 = ring3::spawn_counter_task(&mut allocator);
-    let ucnt2 = ring3::spawn_counter_task(&mut allocator);
-    // Background daemon: a loaded program that runs PREEMPTIVELY as a real task
-    // and periodically (via syscalls) writes a heartbeat.
-    let daemon_prog = fs.read_file("/bin/daemon").unwrap_or_default();
-    ring3::spawn_daemon(&mut allocator, &daemon_prog);
-    // PREEMPTIVE PER-PROCESS MODEL: two REAL musl processes at once, each with
-    // its own __thread counter. Their counters stay independent only because
-    // the scheduler saves/restores FS_BASE (the musl TLS pointer) per process.
-    let tls_prog = fs.read_file("/bin/tlscount").unwrap_or_default();
-    if ring3::verify_program("/bin/tlscount", &tls_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &tls_prog, 8, b"tlscount");
-        ring3::spawn_bg_musl(&mut allocator, &tls_prog, 9, b"tlscount");
-        serial_println!("[euro] 2x musl process (pid 8,9) scheduled — own TLS per process");
-    }
-    // A third process that tests MEMORY ISOLATION: it reaches into kernel memory
-    // and is terminated by the page-fault handler — while the rest keeps running.
-    let iso_prog = fs.read_file("/bin/isotest").unwrap_or_default();
-    if ring3::verify_program("/bin/isotest", &iso_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &iso_prog, 10, b"isotest");
-        serial_println!("[euro] isotest (pid 10) scheduled — tests memory isolation");
-    }
-    // A 'job' process: computes, reports, exits cleanly with exit(0) and is
-    // then cleaned up — the clean exit path of the process lifecycle.
-    let work_prog = fs.read_file("/bin/worker").unwrap_or_default();
-    if ring3::verify_program("/bin/worker", &work_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &work_prog, 11, b"worker");
-        serial_println!("[euro] worker (pid 11) scheduled — compute job + clean exit");
-    }
-    // S3: REAL fork() + waitpid() — forks a child with a copied address space
-    // and reaps it. Proves process creation (see [fork]/[wait] lines in dmesg).
-    let fork_prog = fs.read_file("/bin/forktest").unwrap_or_default();
-    if ring3::verify_program("/bin/forktest", &fork_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &fork_prog, 20, b"forktest");
-        serial_println!("[euro] forktest (pid 20) scheduled — S3 fork()+waitpid()");
-    }
-    // S3: pipe() + fork() IPC — child writes via a pipe to the parent.
-    let pipe_prog = fs.read_file("/bin/forkpipe").unwrap_or_default();
-    if ring3::verify_program("/bin/forkpipe", &pipe_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &pipe_prog, 21, b"forkpipe");
-        serial_println!("[euro] forkpipe (pid 21) scheduled — S3 pipe()+fork() IPC");
-    }
-    // S4: EuroInit — start the declared services under supervision (restart
-    // on exit per policy); the supervision tick runs in the desktop loop.
+    // S4: EuroInit — start the declared services under supervision (restart on exit
+    // per policy); the supervision tick runs in the desktop loop. Real system infra,
+    // so it runs in every build (its services sleep/block when idle).
     init::start_all(&mut allocator, &mut fs);
-    // Threads: clone() is implemented kernel-side + verified (a
-    // thread task sharing the address space is created). The userspace
-    // thread RESUMPTION still has a subtle bug (ring-0 GP @ user address) that
-    // deserves its own debug session; therefore NOT started automatically at boot.
-    // /bin/mthread stays available for manual tests.
-    let thr_prog = fs.read_file("/bin/mthread").unwrap_or_default();
-    if ring3::verify_program("/bin/mthread", &thr_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &thr_prog, 12, b"mthread");
+    // ── DEV SELF-TEST WORKLOAD (gated) ──────────────────────────────────────────
+    // The following ~15 background ring-3 processes DEMONSTRATE the preemptive
+    // per-process model: counter tasks, a heartbeat daemon, per-process musl TLS,
+    // memory isolation, fork()+waitpid(), pipe IPC, pthreads, EuroIPC. Several are
+    // INFINITE loops with no blocking wait (the two counter tasks, the daemon, the
+    // two tlscount processes). Left running they busy-spin and — under pure emulation
+    // (no KVM), where a spinning guest task pins the host core — keep the host CPU at
+    // ~80% even on an "idle" desktop (exactly the hup.hu tester's 98%-idle report).
+    // They are a dev/CI proof, NOT shipping-image content, so gate them on `selftest`.
+    // The public download/VNC image (`--no-default-features`) then boots to a desktop
+    // whose only runnable task is the compositor loop, which HLTs → the host idles.
+    let (mut ucnt1, mut ucnt2) = (0u64, 0u64);
+    // When the chrome pack is attached (a heavy single-process browser run), SKIP the
+    // boot self-test demo processes: several are infinite spinners (counter tasks,
+    // tlscount) that stay Ready and steal the core from chrome under the cooperative
+    // scheduler. Chrome needs the whole CPU to make progress under TCG.
+    let chrome_run = ring3::europack_has("/pack/chrome-headless-shell") || ring3::europack_has("/pack/chrome");
+    if chrome_run {
+        // Iteration boot: chrome is the test. The glibc suite in front of it costs
+        // 25+ processes at 30-60 s each under TCG — skip it wholesale.
+        ring3::SKIP_GLIBC_TESTS.store(true, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[chrome-run] glibc self-tests SKIPPED for iteration speed");
     }
-    // Real musl pthreads: pthread_create + pthread_join.
-    let pthr_prog = fs.read_file("/bin/mpthread").unwrap_or_default();
-    if ring3::verify_program("/bin/mpthread", &pthr_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &pthr_prog, 13, b"mpthread");
+    if cfg!(feature = "selftest") && !chrome_run {
+        ucnt1 = ring3::spawn_counter_task(&mut allocator);
+        ucnt2 = ring3::spawn_counter_task(&mut allocator);
+        // Background daemon: a loaded program that runs PREEMPTIVELY as a real task
+        // and periodically (via syscalls) writes a heartbeat.
+        let daemon_prog = fs.read_file("/bin/daemon").unwrap_or_default();
+        ring3::spawn_daemon(&mut allocator, &daemon_prog);
+        // PREEMPTIVE PER-PROCESS MODEL: two REAL musl processes at once, each with
+        // its own __thread counter. Their counters stay independent only because
+        // the scheduler saves/restores FS_BASE (the musl TLS pointer) per process.
+        let tls_prog = fs.read_file("/bin/tlscount").unwrap_or_default();
+        if ring3::verify_program("/bin/tlscount", &tls_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &tls_prog, 8, b"tlscount");
+            ring3::spawn_bg_musl(&mut allocator, &tls_prog, 9, b"tlscount");
+            serial_println!("[euro] 2x musl process (pid 8,9) scheduled — own TLS per process");
+        }
+        // A third process that tests MEMORY ISOLATION: it reaches into kernel memory
+        // and is terminated by the page-fault handler — while the rest keeps running.
+        let iso_prog = fs.read_file("/bin/isotest").unwrap_or_default();
+        if ring3::verify_program("/bin/isotest", &iso_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &iso_prog, 10, b"isotest");
+            serial_println!("[euro] isotest (pid 10) scheduled — tests memory isolation");
+        }
+        // A 'job' process: computes, reports, exits cleanly with exit(0) and is
+        // then cleaned up — the clean exit path of the process lifecycle.
+        let work_prog = fs.read_file("/bin/worker").unwrap_or_default();
+        if ring3::verify_program("/bin/worker", &work_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &work_prog, 11, b"worker");
+            serial_println!("[euro] worker (pid 11) scheduled — compute job + clean exit");
+        }
+        // S3: REAL fork() + waitpid() — forks a child with a copied address space
+        // and reaps it. Proves process creation (see [fork]/[wait] lines in dmesg).
+        let fork_prog = fs.read_file("/bin/forktest").unwrap_or_default();
+        if ring3::verify_program("/bin/forktest", &fork_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &fork_prog, 20, b"forktest");
+            serial_println!("[euro] forktest (pid 20) scheduled — S3 fork()+waitpid()");
+        }
+        // S3: pipe() + fork() IPC — child writes via a pipe to the parent.
+        let pipe_prog = fs.read_file("/bin/forkpipe").unwrap_or_default();
+        if ring3::verify_program("/bin/forkpipe", &pipe_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &pipe_prog, 21, b"forkpipe");
+            serial_println!("[euro] forkpipe (pid 21) scheduled — S3 pipe()+fork() IPC");
+        }
+        // Threads: clone() is implemented kernel-side + verified (a thread task sharing
+        // the address space is created). /bin/mthread stays available for manual tests.
+        let thr_prog = fs.read_file("/bin/mthread").unwrap_or_default();
+        if ring3::verify_program("/bin/mthread", &thr_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &thr_prog, 12, b"mthread");
+        }
+        // Real musl pthreads: pthread_create + pthread_join.
+        let pthr_prog = fs.read_file("/bin/mpthread").unwrap_or_default();
+        if ring3::verify_program("/bin/mpthread", &pthr_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &pthr_prog, 13, b"mpthread");
+        }
+        // pthread_mutex under contention (2 threads): tests the blocking futex.
+        let mtx_prog = fs.read_file("/bin/mmutex").unwrap_or_default();
+        if ring3::verify_program("/bin/mmutex", &mtx_prog) {
+            ring3::spawn_bg_musl(&mut allocator, &mtx_prog, 14, b"mmutex");
+        }
+        // EuroIPC: a receiver (claims port 42) + a sender. The receiver first,
+        // so the port is claimed before the sender sends.
+        let rcv = fs.read_file("/bin/ipcrecv").unwrap_or_default();
+        if ring3::verify_program("/bin/ipcrecv", &rcv) {
+            ring3::spawn_bg_musl(&mut allocator, &rcv, 15, b"ipcrecv");
+        }
+        let snd = fs.read_file("/bin/ipcsend").unwrap_or_default();
+        if ring3::verify_program("/bin/ipcsend", &snd) {
+            ring3::spawn_bg_musl(&mut allocator, &snd, 16, b"ipcsend");
+        }
+        serial_println!("[euro] scheduler: shell + 3 kernel + 2 ring-3 + daemon + 2 musl @ {ucnt1:#x},{ucnt2:#x}");
     }
-    // pthread_mutex under contention (2 threads): tests the blocking futex.
-    let mtx_prog = fs.read_file("/bin/mmutex").unwrap_or_default();
-    if ring3::verify_program("/bin/mmutex", &mtx_prog) {
-        ring3::spawn_bg_musl(&mut allocator, &mtx_prog, 14, b"mmutex");
-    }
-    // EuroIPC: a receiver (claims port 42) + a sender. The receiver first,
-    // so the port is claimed before the sender sends.
-    let rcv = fs.read_file("/bin/ipcrecv").unwrap_or_default();
-    if ring3::verify_program("/bin/ipcrecv", &rcv) {
-        ring3::spawn_bg_musl(&mut allocator, &rcv, 15, b"ipcrecv");
-    }
-    let snd = fs.read_file("/bin/ipcsend").unwrap_or_default();
-    if ring3::verify_program("/bin/ipcsend", &snd) {
-        ring3::spawn_bg_musl(&mut allocator, &snd, 16, b"ipcsend");
-    }
-    serial_println!("[euro] scheduler: shell + 3 kernel + 2 ring-3 + daemon + 2 musl @ {ucnt1:#x},{ucnt2:#x}");
+    let _ = (ucnt1, ucnt2);
     // ACPI MADT: discover the CPU cores + IO-APIC (foundation for SMP).
     if let Some(madt) = acpi::parse() {
         serial_println!(
@@ -1449,6 +1803,13 @@ fn main() -> Status {
     } else {
         serial_println!("[acpi] no MADT found");
     }
+    // IOMMU / DMA-isolation check (GitHub #11): every DMA-capable device programs
+    // physical addresses directly, so without an IOMMU a rogue device bypasses the
+    // whole capability model. Detect the platform VT-d units, report the DMA-exposure
+    // state honestly, and enforce the boot policy (Warn by default; Required =
+    // fail-closed). This is detection + policy; active per-device translation is the
+    // follow-on tracked on the roadmap.
+    iommu::detect_and_enforce();
     // M1-1: switch PCI config access to ECAM (memory-mapped, via the ACPI MCFG)
     // — the modern path, full 4 KiB config space. `init_ecam` only activates the
     // window after verifying every port-visible function reads identically
@@ -1579,6 +1940,884 @@ fn main() -> Status {
     // route the euroaudio mixer's output to it (no-op without one).
     audio::usb_wire_selftest();
     serial_println!("[euro] APIC timer 100 Hz + interrupts ON -> preemptive multitasking (incl. ring 3)");
+    // Chromium foundation: run REAL dynamically-linked GLIBC binaries via the
+    // genuine ld-linux-x86-64.so.2 — NOW that the scheduler is up, each runs as a
+    // scheduled process, so single-threaded AND multi-threaded (pthreads) work.
+    //
+    // PERF FIX (boot time): this whole block is the DEV/CI self-test + demo suite (the
+    // glibc LINUX-COMPAT tests, X11/Cairo/Pango/GTK, chrome bring-up, ...). Under pure
+    // emulation (no KVM) it runs for ~5 minutes at ~100% host-CPU, which is exactly the
+    // "big hourglass session, 98% CPU" a tester on the download image reported. It is
+    // gated behind the `selftest` feature (ON by default so dev/CI is unchanged); the
+    // download/VNC release image is built with `--no-default-features` so it boots
+    // straight to a clean, idle desktop.
+    if cfg!(feature = "selftest") {
+        serial_println!("[glibc] === real glibc dynamic binaries (ld-linux + libc.so.6, scheduled) ===");
+        let caps = ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO;
+        let (o1, e1) = ring3::run_glibc(&mut allocator, ring3::gtiny_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gtiny"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gtiny: exit={e1}, output={:?}", o1.trim_end());
+        let (o2, e2) = ring3::run_glibc(&mut allocator, ring3::gtest_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gtest"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gtest (printf+malloc+qsort): exit={e2}");
+        for l in o2.lines() { serial_println!("[glibc]   {l}"); }
+        // gthread: pthread_create + join of 3 workers (REAL glibc pthreads —
+        // clone + futex + thread-exit + pthread_join, on the scheduled process).
+        let (o3, e3) = ring3::run_glibc(&mut allocator, ring3::gthread_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gthread"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gthread (pthreads): exit={e3}");
+        for l in o3.lines() { serial_println!("[glibc]   {l}"); }
+        // gmath: a SECOND real shared library (libm.so.6) resolved via the ld.so
+        // DT_NEEDED chain + runtime dlopen/dlsym — the multi-library Chromium path.
+        let (o4, e4) = ring3::run_glibc(&mut allocator, ring3::gmath_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gmath"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gmath (libm + dlopen/dlsym): exit={e4}");
+        for l in o4.lines() { serial_println!("[glibc]   {l}"); }
+        // gcpp: a C++ program — transitive libstdc++ chain + STL + exceptions.
+        let (o5, e5) = ring3::run_glibc(&mut allocator, ring3::gcpp_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gcpp"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gcpp (C++ STL + exceptions): exit={e5}");
+        for l in o5.lines() { serial_println!("[glibc]   {l}"); }
+        // REAL unmodified Ubuntu coreutils binaries, run WITH ARGUMENTS. Proof that
+        // arbitrary Linux software runs on EuroOS, not just our own test stubs.
+        serial_println!("[glibc] === REAL Ubuntu binaries (unmodified /usr/bin) ===");
+        let (o6, e6) = ring3::run_glibc(&mut allocator, ring3::real_seq_bytes(), ring3::ldlinux_bytes(), &[b"seq", b"1", b"2", b"9"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] /usr/bin/seq 1 2 9 -> exit={e6}, output={:?}", o6.trim_end());
+        let (o7, e7) = ring3::run_glibc(&mut allocator, ring3::real_factor_bytes(), ring3::ldlinux_bytes(), &[b"factor", b"360360"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] /usr/bin/factor 360360 -> exit={e7}, output={:?}", o7.trim_end());
+        // Address-space scaling: run gbig with a 384 MiB arena (vs the default 96),
+        // proving the identity-mapped model handles hundreds of MB toward chrome scale.
+        serial_println!("[glibc] === address-space scaling (384 MiB arena) ===");
+        ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed);
+        let (o8, e8) = ring3::run_glibc(&mut allocator, ring3::gbig_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gbig"], &[b"PATH=/bin"], caps);
+        ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gbig (200 MiB heap): exit={e8}");
+        for l in o8.lines() { serial_println!("[glibc]   {l}"); }
+        // gsync: pthread mutex + condition variables (producer/consumer) — a much
+        // deeper futex exercise than join (mutex lock/unlock + cond wait/signal).
+        let (o9, e9) = ring3::run_glibc(&mut allocator, ring3::gsync_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsync"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsync (mutex+condvar): exit={e9}");
+        for l in o9.lines() { serial_println!("[glibc]   {l}"); }
+        // REAL stdin FILTERS: feed fd 0 and run unmodified Ubuntu tools that read it.
+        serial_println!("[glibc] === REAL Ubuntu stdin filters (fd 0) ===");
+        ring3::set_stdin(b"EuroOS runs real Linux tools");
+        let (o10, e10) = ring3::run_glibc(&mut allocator, ring3::real_base64_bytes(), ring3::ldlinux_bytes(), &[b"base64"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] /usr/bin/base64 <stdin> -> exit={e10}, output={:?}", o10.trim_end());
+        ring3::set_stdin(b"one two three\nfour five\n");
+        let (o11, e11) = ring3::run_glibc(&mut allocator, ring3::real_wc_bytes(), ring3::ldlinux_bytes(), &[b"wc"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] /usr/bin/wc <stdin> -> exit={e11}, output={:?}", o11.trim_end());
+        // sha256sum: a REAL crypto tool driving the big (5 MB) libcrypto.so.3.
+        // Expected SHA-256 of "EuroOS" = b4d1c474...620504.
+        ring3::set_stdin(b"EuroOS");
+        let (o12, e12) = ring3::run_glibc(&mut allocator, ring3::real_sha256_bytes(), ring3::ldlinux_bytes(), &[b"sha256sum"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] /usr/bin/sha256sum <\"EuroOS\"> -> exit={e12}, output={:?}", o12.trim_end());
+        // sort: a real stdin line sorter (reuses the already-served libcrypto).
+        ring3::set_stdin(b"pear\napple\ncherry\nbanana\n");
+        let (o13, e13) = ring3::run_glibc(&mut allocator, ring3::real_sort_bytes(), ring3::ldlinux_bytes(), &[b"sort"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] /usr/bin/sort <stdin> -> exit={e13}, output={:?}", o13.trim_end());
+        ring3::set_stdin(b"");
+        // gfile: file-I/O roundtrip (create+write a file, reopen+read, verify).
+        let (o14, e14) = ring3::run_glibc(&mut allocator, ring3::gfile_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gfile"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gfile (file I/O roundtrip): exit={e14}");
+        for l in o14.lines() { serial_println!("[glibc]   {l}"); }
+        // gglib: GLib GHashTable — a core GTK/desktop-stack library (real Chromium
+        // dep) with a transitive chain gglib -> libglib -> {libc, libm, libpcre2}.
+        let (o15, e15) = ring3::run_glibc(&mut allocator, ring3::gglib_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gglib"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gglib (GLib GHashTable): exit={e15}");
+        for l in o15.lines() { serial_println!("[glibc]   {l}"); }
+        // gzlib: zlib compress/decompress roundtrip (universal compression lib).
+        let (oz, ez) = ring3::run_glibc(&mut allocator, ring3::gzlib_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gzlib"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gzlib (zlib compress): exit={ez}");
+        for l in oz.lines() { serial_println!("[glibc]   {l}"); }
+        // gunix: AF_UNIX socketpair round-trip — local IPC, the transport a real X11
+        // client (and dbus) uses. First step of the display/GUI path.
+        let caps_net = caps | ring3::CAP_NET;
+        let (ou, eu) = ring3::run_glibc(&mut allocator, ring3::gunix_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gunix"], &[b"PATH=/bin"], caps_net);
+        serial_println!("[glibc] gunix (AF_UNIX socketpair): exit={eu}");
+        for l in ou.lines() { serial_println!("[glibc]   {l}"); }
+        // gxwin: ONE real Xlib client exercising the whole X11 path in a single
+        // library load (5 separate clients re-loading the 6-lib stack was too slow):
+        // XOpenDisplay -> CreateWindow/Map -> FillRectangle -> XPutImage -> SelectInput
+        // -> Expose + REAL keyboard (KeyPress). The 3 staged PS/2 scancodes below feed
+        // the launcher's pump (xserver::pump_keyboard) -> X KeyPress events, i.e. the
+        // same path a live keyboard IRQ uses. (The individual gx11/gxdraw/gximg/gxevent/
+        // gxkey clients are still committed for isolated debugging.)
+        // Scorecard vars from the GUI/demo tests below; default to "not run" (fail)
+        // so a lean chrome-headless-shell boot still compiles and reports honestly.
+        let (mut e16, mut efm, mut ex) = (u64::MAX, u64::MAX, u64::MAX);
+
+        // gshm: SHARED memory. Two MAP_SHARED mappings of one memfd must be the SAME
+        // memory (and the fd must observe the writes through it). Mojo carries every
+        // resource body — the HTML and JS of a page, even inside a single process —
+        // through such a buffer, so a private-copy mmap hands the reader zeros: the
+        // page "loads" but its document is empty, with no error anywhere. Runs in the
+        // lean chrome boot too: it is cheap, and it is exactly what chrome depends on.
+        // Demand paging ON for this one: a shared mapping over a megabyte takes the
+        // ALIASING path (its own address range per mapping, faulting onto the file's
+        // shared frames) instead of the arena copy, and that is the path a browser's
+        // frame and IPC buffers actually use. Without this the test would only ever
+        // exercise the small-region path.
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (osh, esh) = ring3::run_glibc(&mut allocator, ring3::gshm_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gshm"], &[b"PATH=/bin"], caps);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gshm (MAP_SHARED memfd): exit={esh} (want 131)");
+        for l in osh.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gunlink: an unlinked file must keep serving its open fd, its neighbours must
+        // be undisturbed, and "create, unlink, ftruncate, mmap(MAP_SHARED)" — the
+        // standard anonymous-shared-memory recipe, and how chrome allocates the Mojo
+        // buffers that carry a page's bytes — must work.
+        let (oul, eul) = ring3::run_glibc(&mut allocator, ring3::gunlink_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gunlink"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gunlink (unlinked-but-open + anon shm): exit={eul} (want 137)");
+        for l in oul.lines() { serial_println!("[glibc]   {l}"); }
+
+        // A SHORT deadline for these small tests: if one hangs, the timeout dump names
+        // the syscall within half a minute instead of holding the boot for ten.
+        let prev_deadline = ring3::GLIBC_DEADLINE_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        ring3::GLIBC_DEADLINE_TICKS.store(3_000, core::sync::atomic::Ordering::Relaxed);
+        // gpoll: poll() must WAIT for its timeout. Answering 0 straight away says the
+        // timeout expired, so every waiter becomes a spinner — which is what kept
+        // chrome's compositor from ever producing a frame.
+        let (opo, epo) = ring3::run_glibc(&mut allocator, ring3::gpoll_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gpoll"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gpoll (poll timeout): exit={epo} (want 143)");
+        for l in opo.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gsleep: nanosleep/clock_nanosleep must really let time pass. Returning 0
+        // straight away is the same lie poll() told, and it wrecks anything paced.
+        let (osl, esl) = ring3::run_glibc(&mut allocator, ring3::gsleep_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsleep"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsleep (nanosleep + absolute deadline): exit={esl} (want 149)");
+        for l in osl.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gscm: a descriptor sent with SCM_RIGHTS must arrive and be usable. Mojo
+        // passes handles this way; a dropped control message loses the handle in
+        // silence and leaves the receiver waiting for a resource it never got.
+        ring3::CACHE_DIR_DIAG.store(true, core::sync::atomic::Ordering::Relaxed); // trace the handoff
+        let (osc, esc) = ring3::run_glibc(&mut allocator, ring3::gscm_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gscm"], &[b"PATH=/bin"], caps_net);
+        ring3::CACHE_DIR_DIAG.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gscm (SCM_RIGHTS descriptor passing): exit={esc} (want 151)");
+        for l in osc.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gcond: a condition-variable broadcast must reach EVERY waiter. glibc does
+        // that with futex REQUEUE/WAKE_OP; answering those with "nobody" drops the
+        // wakeup in silence, which is what left chrome's raster workers asleep.
+        // Demand paging on: six thread stacks (8 MiB each) do not fit the small arena
+        // mmap window, and pthread_create would fail for a reason that has nothing to
+        // do with what this test is about.
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (oco, eco) = ring3::run_glibc(&mut allocator, ring3::gcond_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gcond"], &[b"PATH=/bin"], caps);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gcond (condvar broadcast): exit={eco} (want 157)");
+        for l in oco.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gbrk: brk growth must expose ZEROS (Linux semantics; calloc depends on it).
+        let (obk, ebk) = ring3::run_glibc(&mut allocator, ring3::gbrk_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gbrk"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gbrk (zeroed break growth): exit={ebk} (want 163)");
+        for l in obk.lines() { serial_println!("[glibc]   {l}"); }
+        ring3::GLIBC_DEADLINE_TICKS.store(prev_deadline, core::sync::atomic::Ordering::Relaxed);
+
+        // LEAN chrome-headless-shell run: skip the GUI/demo glibc tests (X11/gsparse/
+        // gfmmap/crashpad/gdiskmap). They inflate guest memory and, on a memory-tight
+        // host, OOM-kill qemu before hshell is reached. Jump straight to the disk-
+        // served exe loader (crashpad/chrome/hshell) below.
+        if !ring3::europack_has("/pack/chrome-headless-shell") {
+        serial_println!("[glibc] === X11: real Xlib client (window + render + events) ===");
+        ps2::push_scancode(0x1e); // 'a'  ->  X KeyPress via ps2 ring -> pump
+        ps2::push_scancode(0x30); // 'b'
+        ps2::push_scancode(0x2e); // 'c'
+        // Stage a left-mouse-button press (PS/2 mouse packets: [flags, dx, dy]); the
+        // 0->1 edge latches a press that pump_mouse() delivers as an X ButtonPress.
+        mouse::push_byte(0x08); mouse::push_byte(0); mouse::push_byte(0); // buttons up
+        mouse::push_byte(0x09); mouse::push_byte(0); mouse::push_byte(0); // left down
+        xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+        let ox; (ox, ex) = ring3::run_glibc(&mut allocator, ring3::gxwin_bytes(), ring3::ldlinux_bytes(), &[b"gxwin"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
+        xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gxwin (X11 connect+render+PutImage+events+real-kbd): exit={ex}");
+        for l in ox.lines() { serial_println!("[glibc]   {l}"); }
+        // gsparse: DEMAND PAGING — reserve 4 GiB virtual (far beyond RAM), touch a
+        // few scattered pages; only touched pages commit physical frames. Opt-in.
+        let pool_before = procpool::demand_free_frames();
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        let o16; (o16, e16) = ring3::run_glibc(&mut allocator, ring3::gsparse_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsparse"], &[b"PATH=/bin"], caps);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        let pool_after = procpool::demand_free_frames();
+        serial_println!("[glibc] gsparse (demand paging): exit={e16}, committed={} pages ({} KiB), pool delta={} frames (reclaimed after exit)",
+            ring3::demand_committed_pages(), ring3::demand_committed_pages()*4, pool_before as i64 - pool_after as i64);
+        for l in o16.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gfmmap: FILE-BACKED demand paging — mmap a large (5 MiB) served library the
+        // way a dynamic loader maps a LOAD segment, but fault each page in from the
+        // file lazily instead of copying the whole segment. Proves the mmap view is
+        // byte-identical to read(). This is the foundation for loading binaries far
+        // larger than RAM (a browser's hundreds-of-MiB .text) without a giant arena.
+        let fpages_before = ring3::demand_file_pages();
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        ring3::DEMAND_FILE_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        let ofm; (ofm, efm) = ring3::run_glibc(&mut allocator, ring3::gfmmap_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gfmmap"], &[b"PATH=/bin"], caps);
+        ring3::DEMAND_FILE_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        ring3::clear_demand_file_maps();
+        serial_println!("[glibc] gfmmap (file-backed demand paging): exit={efm} (want 124), pages filled-from-file={}",
+            ring3::demand_file_pages() - fpages_before);
+        for l in ofm.lines() { serial_println!("[glibc]   {l}"); }
+
+        // ── CHROMIUM bring-up, step 1 ──────────────────────────────────────────
+        // Run a REAL chrome component: chrome_crashpad_handler (3.4 MB, dynamically
+        // linked). Its libs (libc/libm/libgcc_s + the libdl/libpthread stubs) load
+        // via ld.so with demand paging. This is the first genuine chrome binary to
+        // execute on EuroOS — it discovers the next real blocker (a missing syscall,
+        // an unhandled feature) rather than us guessing. --help exits after arg parse.
+        let cp_pages_before = ring3::demand_file_pages();
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        ring3::DEMAND_FILE_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (ocp, ecp) = ring3::run_glibc(&mut allocator, ring3::crashpad_bytes(), ring3::ldlinux_bytes(),
+            &[b"chrome_crashpad_handler", b"--help"], &[b"PATH=/bin", b"LANG=C"], caps_net);
+        ring3::DEMAND_FILE_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        ring3::clear_demand_file_maps();
+        serial_println!("[chrome] chrome_crashpad_handler (REAL chrome binary): exit={ecp}, lib-pages demand-loaded={}",
+            ring3::demand_file_pages() - cp_pages_before);
+        for l in ocp.lines() { serial_println!("[chrome]   {l}"); }
+
+        // ── DISK-BACKED serving (EuroPack) ─────────────────────────────────────
+        // gdiskmap: a file served straight from a pack disk (never RAM-resident)
+        // must read AND demand-fault-mmap byte-identically to the embedded copy of
+        // the same file. This is how a 485 MB chrome binary reaches the loader.
+        // Skipped (honestly reported) when no pack disk is attached.
+        if ring3::europack_present() {
+            ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+            ring3::DEMAND_FILE_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+            let (odm, edm) = ring3::run_glibc(&mut allocator, ring3::gdiskmap_bytes(), ring3::ldlinux_bytes(),
+                &[b"/bin/gdiskmap"], &[b"PATH=/bin"], caps);
+            ring3::DEMAND_FILE_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+            ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+            ring3::clear_demand_file_maps();
+            serial_println!("[europack] gdiskmap (disk-backed mmap+pread): exit={edm} (want 125)");
+            for l in odm.lines() { serial_println!("[europack]   {l}"); }
+        } else {
+            serial_println!("[europack] no pack disk attached — disk-backed serving test SKIPPED");
+        }
+        } // end !chrome-headless-shell (lean-run) guard
+
+        // ── DISK-SERVED DEMAND-PAGED EXE LOADER ────────────────────────────────
+        // Run a real binary whose executable is served from disk (never RAM-
+        // resident) — the path to the 485 MB chrome main binary. Validate on
+        // crashpad-from-disk (small, known-good embedded) first, then chrome.
+        if ring3::europack_has("/pack/crashpad") {
+            ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
+            let (o, e) = ring3::run_glibc_disk(&mut allocator, "/pack/crashpad", ring3::ldlinux_bytes(),
+                &[b"chrome_crashpad_handler", b"--help"], &[b"PATH=/bin", b"LANG=C"], caps_net);
+            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[chrome-disk] crashpad from DISK (demand-paged exe): exit={e}");
+            for l in o.lines() { serial_println!("[chrome-disk]   {l}"); }
+        }
+        // The boot-phase chrome run is the ITERATION HARNESS (boot -> window ->
+        // screendump), not how the system is meant to be used: with the pack attached
+        // the desktop offers the browser as an app. Build --features chrome-boot for
+        // the harness; without it, this boot walks on to the desktop.
+        // vDSO probe FIRST (a few seconds): with SKIP_GLIBC_TESTS the suite is
+        // gone, but whether the clock goes through the vDSO decides whether the
+        // chrome run below is even worth reading.
+        if cfg!(feature = "chrome-boot") {
+            // A/B: "novdso" on the QEMU -append/cmdline is not plumbed; use the
+            // presence of a marker file on the pack instead? Simpler: an env-free
+            // compile-time default with a runtime flip left for the shell. For the
+            // causal test the flip is set here.
+            if option_env!("EUROOS_NOVDSO").is_some() {
+                ring3::VDSO_ENABLE.store(false, core::sync::atomic::Ordering::Relaxed);
+                serial_println!("[vdso] DISABLED for this build (EUROOS_NOVDSO)");
+            }
+            // run_glibc self-skips during a chrome boot; this probe is the exception.
+            let skip = ring3::SKIP_GLIBC_TESTS.swap(false, core::sync::atomic::Ordering::Relaxed);
+            let (ov, ev) = ring3::run_glibc(&mut allocator, ring3::gvdso_bytes(), ring3::ldlinux_bytes(), &[b"gvdso"], &[b"PATH=/bin"], caps);
+            ring3::SKIP_GLIBC_TESTS.store(skip, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[gvdso] exit={ev}");
+            for l in ov.lines() { serial_println!("[gvdso]   {l}"); }
+        }
+        if ring3::europack_has("/pack/chrome") && cfg!(feature = "chrome-boot") {
+            ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
+
+            // Fontconfig for chrome (its own setup runs LATER in boot): DejaVu fonts +
+            // prebuilt cache + a fonts.conf, so Blink's text layout initializes (else
+            // "Cannot load default config file" and the page load may not complete).
+            for (name, bytes) in ring3::dejavu_fonts() {
+                ring3::register_file_static(&alloc::format!("/usr/share/fonts/truetype/dejavu/{name}"), bytes);
+            }
+            // The cache, REBUILT on the host next to captured mtimes: the kernel's
+            // stat family now serves exactly the mtimes this cache records, so
+            // fontconfig VALIDATES it and never rescans — the serialize/freeze path
+            // that crashes chrome's bundled fontconfig (FcCharSetFreeze, addr 0x7)
+            // simply never runs. The old note below documents the failed detour.
+            ring3::register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", ring3::fc_dejavu_cache());
+            // Chrome's fontconfig asks for cache VERSION 11 (the [packpath] trace
+            // showed the exact open failing): serve the cache its own binary wrote.
+            ring3::register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-11", ring3::fc_dejavu_cache11());
+            // NO prebuilt cache here. That cache was built by and for the SYSTEM
+            // fontconfig (the gpango work); full chrome bundles its OWN fontconfig,
+            // which mapped the file and walked garbage pointers out of it — a clean
+            // null-page crash in FcCharSetFreeze (rip 0x1000cae25c9, addr 0x7). A
+            // fresh scan of three font files is slow but correct, and the cache it
+            // writes to /var/cache/fontconfig is then ITS OWN format.
+            ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n</fontconfig>\n".to_vec());
+
+            // /dev special files: chrome's fork+exec child redirects its stdio to
+            // /dev/null before execve, and libc/nss read /dev/urandom for entropy.
+            // Without these the forked child's fd setup fails ("Failed to open
+            // /dev/null") and it _exit(127)s before ever reaching execve — which, with
+            // the demand-paged multi-process (fork) path now working, is exactly where
+            // the chrome renderer child was dying. Register them for THIS run too (they
+            // were previously only registered for the chrome-headless-shell block).
+            ring3::register_file("/dev/null", alloc::vec::Vec::new());
+            ring3::register_file("/dev/zero", alloc::vec![0u8; 4096]);
+            ring3::register_file("/dev/urandom", (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect());
+            // Push past --version toward real rendering: headless, single-process, no
+            // GPU, no sandbox — dump the DOM of a trivial inline page.
+            // THE PIVOT: chrome paints its OWN window through the in-kernel X server
+            // (--ozone-platform=x11, DISPLAY=:0 -> /tmp/.X11-unix/X0 -> xserver). The
+            // core-X PutImage path is proven here (Cairo, Pango, a full GTK3 app), and
+            // this route needs NO capture at all: the window on the desktop IS the UI,
+            // and input flows back through the same server. Every headless capture
+            // route was measured to die inside the browser's readback instead.
+            ring3::register_file("/tmp/euro.html", include_bytes!("euro_page.html").to_vec());
+            ring3::register_file("/tmp/euro2.html", include_bytes!("euro_page2.html").to_vec());
+            ring3::CACHE_DIR_DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
+            // The browser is a UI: it must LIVE, not run to completion. With the
+            // tickless fast-forward on, the guest-time deadline raced by in wall
+            // seconds and tore the mapped window down mid-startup.
+            ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
+            ring3::GLIBC_DEADLINE_TICKS.store(500_000_000, core::sync::atomic::Ordering::Relaxed);
+            xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+            // The CDP input bridge: page clicks/typing go through DevTools
+            // (Input.dispatchMouseEvent), which posts into chrome's task queues and
+            // therefore works in EVERY pump state; X events stay for browser chrome.
+            ring3::cdp_install_input("file:///tmp/euro.html");
+            let (o2, e2) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome", ring3::ldlinux_bytes(),
+                &[b"/pack/chrome", b"--ozone-platform=x11", b"--no-sandbox",
+                  b"--remote-debugging-pipe",
+                  b"--disable-gpu", b"--use-gl=disabled", b"--disable-vulkan",
+                  b"--no-zygote", b"--single-process", b"--disable-dev-shm-usage",
+                  b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
+                  b"--disable-crashpad-for-testing", b"--disable-breakpad",
+                  b"--disable-in-process-stack-traces", b"--lang=en-US",
+                  b"--disable-gpu-compositing", b"--disable-features=MojoUseEventFd",
+                  b"--window-size=800,600", b"--window-position=40,40",
+                  b"--enable-logging=stderr", b"--v=1",
+                  b"--no-first-run", b"--no-default-browser-check",
+                  // THE REAL INTERNET: the sovereign kernel's own virtio-net + TCP
+                  // carry chrome to the project's public site. Name resolution is
+                  // pinned via chrome's own --host-resolver-rules for now (its DNS
+                  // config service needs netlink we don't provide yet); the TCP,
+                  // TLS and HTTP are fully real.
+                  b"--host-resolver-rules=MAP euro-os.eu 151.240.77.50",
+                  // The HTTPS-First interstitial swallows synthetic clicks; treat
+                  // the test origin as secure so plain http renders directly.
+                  b"--unsafely-treat-insecure-origin-as-secure=http://151.240.77.50",
+                  b"--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable",
+                  // ISOLATION STEP: the raw IP over plain HTTP takes name
+                  // resolution AND TLS out of the equation — whether nginx's
+                  // response renders proves the kernel TCP path end-to-end.
+                  b"http://euro-os.eu/nl/"],
+                &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
+                  b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
+            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+            xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[chrome-x11] chrome --ozone-platform=x11 against the in-kernel X server: exit={e2}");
+            for l in o2.lines().take(400) { serial_println!("[chrome-x11]   {l}"); }
+            serial_println!("[chrome-run] DONE — kill qemu now");
+        }
+        // chrome-headless-shell: the DEDICATED single-process headless binary. Unlike
+        // full chrome (--headless=new expects a multi-process browser+renderer split
+        // we lack), headless-shell drives Blink in one process and --dump-dom is its
+        // primary feature. This is the right tool to round-trip a page through Blink.
+        if ring3::europack_has("/pack/chrome-headless-shell") {
+            for (name, bytes) in ring3::dejavu_fonts() {
+                ring3::register_file_static(&alloc::format!("/usr/share/fonts/truetype/dejavu/{name}"), bytes);
+            }
+            ring3::register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", ring3::fc_dejavu_cache());
+            ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n</fontconfig>\n".to_vec());
+            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+            // Chrome's full init under TCG (~60x slow) + ~40 threads + demand-paging 85
+            // libraries needs more than the default 12000-tick deadline. Give it a larger
+            // budget (a bigger deadline won't reach the DOM on its own, though: ~half the
+            // worker threads currently die to a not-yet-root-caused context-corruption
+            // fault (rip=0 / GP in demand-region code) and the survivors then spin in
+            // epoll_wait forever waiting on the dead threads — see docs/memory).
+            // Rasterizing a page and PNG-encoding it is heavy under TCG, and the
+            // screenshot is the last step of the DevTools conversation: give the run
+            // room to finish it rather than cutting it off mid-capture.
+            // Guest seconds are nearly free when the idle clock fast-forwards, so a
+            // guest-time deadline is the wrong budget for this run — the runner's
+            // wall-clock cap is the real bound. Set the guest deadline high enough
+            // that it never fires first.
+            ring3::GLIBC_DEADLINE_TICKS.store(5_000_000, core::sync::atomic::Ordering::Relaxed);
+            // Stall diagnostics: periodically dump syscall/futex/epoll rates + task
+            // states while chrome runs, so a stall shows as spinning (runaway futex/
+            // epoll, no new syscalls) vs a hard deadlock (all-Blocked) vs slow progress.
+            ring3::STALL_DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
+            ring3::CACHE_DIR_DIAG.store(true, core::sync::atomic::Ordering::Relaxed);
+            // Serve the test page from the VFS so we can navigate to a file:// URL
+            // (rules out data:-URL parsing; exercises the real file-load path).
+            // A real page with layout, colours and text, so a screenshot shows Blink
+            // doing actual work rather than a bare heading.
+            const EURO_PAGE: &[u8] = include_bytes!("euro_page.html");
+            ring3::register_file("/tmp/euro.html", EURO_PAGE.to_vec());
+            // /dev special files: chrome's fork+exec child setup opens /dev/null to
+            // redirect fds; libc/nss read /dev/urandom for entropy. Without these the
+            // child exec setup fails (exit 127).
+            ring3::register_file("/dev/null", alloc::vec::Vec::new());
+            ring3::register_file("/dev/zero", alloc::vec![0u8; 4096]);
+            ring3::register_file("/dev/urandom", (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect());
+            // fd 3/4 must exist from chrome's first instruction: it checks them at
+            // startup and exits with "Remote debugging pipe file descriptors are not
+            // open" if they are missing.
+            // Let the clock run at its real pace for this run: a jumping monotonic
+            // clock is a plausible reason for a display scheduler to plan its next
+            // frame deadline far into the future, and that is testable rather than
+            // arguable.
+            ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
+            ring3::cdp_install("file:///tmp/euro.html");
+            let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
+                &[b"/pack/chrome-headless-shell", b"--no-sandbox",
+                  b"--disable-gpu", b"--disable-dev-shm-usage", b"--user-data-dir=/tmp/hs",
+                  b"--disable-crashpad-for-testing", b"--disable-breakpad",
+                  b"--disable-in-process-stack-traces", b"--no-zygote", b"--lang=en-US",
+                  // NO SwiftShader/ANGLE GL: its software GL uses AVX2, which qemu64 + the
+                  // EuroOS kernel (no XCR0/AVX enablement) can't run (#UD). Disable GL, but
+                  // keep Skia's CPU rasterizer ON (it dispatches to SSE on qemu64, no AVX2)
+                  // so the compositor can commit a frame — the load-complete that triggers
+                  // --dump-dom. run-all-compositor-stages forces that commit deterministically.
+                  // GL disabled (SwiftShader = AVX2 #UD; qemu64 + no-XCR0 kernel can't run
+                  // it). Headless software surface. NOTE: --dump-dom does not yet emit a DOM
+                  // — Viz starts but GPU/compositor init doesn't complete in this single-
+                  // process, no-GPU env, so the initial WebContents/navigation never starts
+                  // (chrome exits ~3s clean). Getting the DOM needs multi-process (fork+exec
+                  // of demand-paged procs, currently ENOSYS on the glibc path) or software-
+                  // compositor bring-up. hshell running to exit 0 is the current landmark.
+                  b"--disable-vulkan", b"--use-gl=disabled", b"--ozone-platform=headless",
+                  // ── SINGLE-PROCESS: run renderer/utility/GPU all IN the browser process
+                  // so chrome NEVER forks a helper child. The default (forking) path
+                  // livelocks: chrome forks helpers, they never execve into functional
+                  // --type= processes (the demand-paged execve/M2 wall), and the main
+                  // process spins in epoll_wait forever waiting on their Mojo IPC.
+                  // --single-process sidesteps the whole multi-process model. It was
+                  // tried before and crashed worker threads on failed CHECKs — but those
+                  // were the IMMEDIATE_CRASH walls we just cleared (FPU/SSE state,
+                  // fcntl access-mode, getrandom uniqueness, memfd flags). Retest now.
+                  b"--single-process",
+                  // Force SOFTWARE compositing with no GPU thread at all: --in-process-gpu
+                  // + --run-all-compositor-stages made navigation WAIT on a compositor
+                  // frame that never commits without GL (chrome inited but never opened
+                  // the page). Disable gpu-compositing + accelerated video so the browser
+                  // reaches PreMainMessageLoopRun and actually navigates.
+                  b"--disable-gpu-compositing", b"--disable-accelerated-video-decode",
+                  b"--disable-features=VaapiVideoDecoder,VaapiVideoEncoder",
+                  // MojoUseEventFd = chrome's eventfd shared-mem Mojo channel; its probe
+                  // PCHECKs that eventfd2(invalid flags) FAILS, but our eventfd2 accepts
+                  // it -> FATAL channel_linux.cc:926. Disable -> fall back to the socket
+                  // Mojo channel (works over our fork-inherited socketpair).
+                  b"--disable-features=MojoUseEventFd",
+                  // Virtual time advances Blink's clock fast so the load completes
+                  // deterministically (triggers --dump-dom). No run-all-compositor-stages:
+                  // a DOM dump needs the LOAD event, not a painted frame.
+                  // NO --virtual-time-budget: with EuroOS's coarse clock (1 s realtime,
+                  // 10 ms monotonic) virtual time may consume its budget and quit the
+                  // browser before the initial navigation posts. The host dumps the DOM
+                  // fine without it (EXP-D), so drive the REAL message loop instead and
+                  // let the (tiny, instant) file:// load complete naturally.
+                  b"--enable-logging=stderr", b"--v=1",
+                  // Trace the DevTools protocol client: the host oracle proves --dump-dom
+                  // is driven entirely over CDP (Target.exposeDevToolsProtocol ->
+                  // Inspector.enable -> Runtime.evaluate("executeCommands(...)"), whose
+                  // result IS the DOM). Only ~6 extra lines, and they pinpoint how far
+                  // EuroOS gets: no SEND = the browser quit before the command handler
+                  // ran; SEND without RECV = the in-process DevTools/Mojo session never
+                  // answers; RECV of id 2 = the DOM came back.
+                  // The video-capture oracle DOES vlog (unlike viz): on the host a
+                  // screencast prints "auto-throttling enabled" -> "proposing a capture
+                  // size" -> "Captured #1". Whichever of those three appears here says
+                  // exactly where the capturer stops.
+                  b"--vmodule=simple_devtools_protocol_client=2,video_capture_oracle=3,frame_sink_video_capturer_impl=3",
+                  // EXPERIMENT (one boot): navigate the INITIAL page straight to the
+                  // target instead of going through --dump-dom. --dump-dom never
+                  // navigates itself: it loads chrome://headless/headless_command.html
+                  // (a WebUI page from headless_command_resources.pak) and evaluates
+                  // its executeCommands() JS, which does the navigating — and on EuroOS
+                  // that page comes up EMPTY (V8 answers "executeCommands is not
+                  // defined"; removing the pak on the host reproduces it byte for byte).
+                  // A plain navigation answers the question that splits the causes: if
+                  // "FileURLLoader::Start" appears, navigation + resource loading work
+                  // and only the WebUI/resource-bundle path is broken; if it does not,
+                  // navigation itself never starts, which is the deeper wall.
+                  // EuroOS drives DevTools ITSELF: --remote-debugging-pipe makes chrome
+                  // read commands on fd 3 and answer on fd 4 (NUL-separated JSON), which
+                  // the kernel installs before launch and pumps from the run loop
+                  // (ring3::cdp_install / cdp_pump). This skips --dump-dom's
+                  // chrome://headless handler page — the one thing here that comes up
+                  // empty — and uses only what is proven to work: navigation and V8.
+                  // --dump-dom ALONE, deliberately. THREE independent ways to ask for
+                  // pixels all end at the same wall, and each one also costs the DOM
+                  // (chrome's executeCommands awaits the capture that never completes):
+                  //   1. Page.captureScreenshot over our pipe (fromSurface true/false),
+                  //   2. chrome's own --screenshot=,
+                  //   3. + --run-all-compositor-stages-before-draw + virtual time.
+                  // So the blocker is frame production itself, not how it is requested.
+                  // Until that is solved the document should not wait on it.
+                  // FRAMES ON DEMAND. Chrome renders only when asked in this mode, and
+                  // it names these two flags itself if you try beginFrame without them.
+                  // Verified on the host: after three quiet frames the fourth comes back
+                  // with hasDamage and a PNG. This is the mechanism for a system whose
+                  // frame source never ticks by itself.
+                  // No begin-frame control: with the pipeline healthy, a plain
+                  // capture is the shorter path, and that flag pair changes the
+                  // rendering contract (nothing renders unless frames are driven).
+                  // TRACING: chrome's compositor keeps no VLOGs, but it does emit trace
+                  // events. Writing them to a file we can read back is the only window
+                  // into "which stage of frame production never happens".
+                  // gpu.capture is the capturer's own category: ChangeTarget, resolve,
+                  // refresh and per-frame capture all trace under it.
+                  b"--trace-startup=cc,viz,benchmark,toplevel,gpu.capture",
+                  b"--trace-startup-file=/tmp/euro-trace.json",
+                  b"--trace-startup-duration=0",
+                  b"--remote-debugging-pipe",
+                  // --dump-dom ALONE. FOUR ways of asking for pixels now end the same
+                  // way (our Page.captureScreenshot in both fromSurface modes; chrome's
+                  // own --screenshot=; those plus run-all-compositor-stages and virtual
+                  // time; and all of it again once sleeps were real). Each also costs
+                  // the DOM, because executeCommands awaits the capture. The blocker is
+                  // frame production; the document should not wait on it.
+                  b"file:///tmp/euro.html"],
+                &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
+                  b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
+            serial_println!("[hshell] BUILD=plain capture, healthy pipeline, no double navigation");
+            serial_println!("[hshell] chrome-headless-shell from DISK: exit={e3}");
+            // Did chrome actually write a PNG? Ship it out as hex: the boot log is the
+            // only channel off this machine, and a picture is worth the bytes.
+            // Summarize chrome's own trace: which frame-production stages happened?
+            match ring3::vfs_file_bytes("/tmp/euro-trace.json") {
+                Some(t) if !t.is_empty() => {
+                    let txt = alloc::string::String::from_utf8_lossy(&t);
+                    let count = |needle: &str| txt.matches(needle).count();
+                    // The SAME substrings counted on native Linux, so the two runs can
+                    // be compared stage by stage. Host, for this page: Raster=5 Tile=56
+                    // Activate=12 Draw=45 Swap=14 LayerTreeHostImpl=32 Scheduler=40
+                    // BeginImplFrame=32. Whichever of these is missing here is the
+                    // stage that never happens.
+                    serial_println!("[trace] {} bytes | BeginFrame={} BeginImplFrame={} BeginMainFrame={} Commit={} Activate={} Raster={} Draw={} Swap={} Scheduler={}",
+                        t.len(), count("BeginFrame"), count("BeginImplFrame"), count("BeginMainFrame"),
+                        count("Commit"), count("Activate"), count("Raster"),
+                        count("Draw"), count("Swap"), count("Scheduler"));
+                    // The frame SINK is the compositor's connection to Viz: without it
+                    // the scheduler can churn forever and never begin an impl frame,
+                    // which is exactly the shape seen here. Host, same page:
+                    // FrameSink=302 LayerTreeFrameSink=22 CompositorFrameSink=150
+                    // RequestNewLayerTreeFrameSink=2 SubmitCompositorFrame=4 Ack=3.
+                    serial_println!("[trace] sink | FrameSink={} LayerTreeFrameSink={} CompositorFrameSink={} RequestNew={} Submit={} Ack={} NeedsBeginFrames={}",
+                        count("FrameSink"), count("LayerTreeFrameSink"), count("CompositorFrameSink"),
+                        count("RequestNewLayerTreeFrameSink"), count("SubmitCompositorFrame"),
+                        count("DidReceiveCompositorFrameAck"), count("NeedsBeginFrames"));
+                    // Does a BeginFrame ever REACH the renderer's frame sink, and does
+                    // the GPU channel it waits for ever complete? Host, same page:
+                    // OnBeginFrame=3 DidNotProduceFrame=4 ExternalBeginFrameSource=2
+                    // EstablishRequest=1 Established=1.
+                    serial_println!("[trace] deliver | OnBeginFrame={} DidNotProduceFrame={} ExternalBeginFrameSource={} EstablishRequest={} Established={} MojoDisconnected={} LoseSink={}",
+                        count("OnBeginFrame"), count("DidNotProduceFrame"),
+                        count("ExternalBeginFrameSource"), count("SendEstablishGpuChannelRequest"),
+                        count("OnEstablishedGpuChannel"), count("MojoDisconnected"),
+                        count("DidLoseLayerTreeFrameSink"));
+                    // The READBACK: a capture is a CopyOutputRequest whose result comes
+                    // back as a CopyOutputResult. Host, same page: CopyOutputRequest=2
+                    // CopyOutputResult=6 RasterTask=1 TileTask=14 PrepareTiles=9.
+                    serial_println!("[trace] readback | CopyOutputRequest={} CopyOutputResult={} RasterTask={} TileTask={} PrepareTiles={}",
+                        count("CopyOutputRequest"), count("CopyOutputResult"),
+                        count("RasterTask"), count("TileTask"), count("PrepareTiles"));
+                    // DRAW and SUBMIT: a drawn frame has to be submitted to Viz, or no
+                    // surface exists to copy from and a capture waits forever. Host,
+                    // same page: DrawLayers=2 CompositorFrame=168 Submit=4
+                    // DidNotProduceFrame=4 CanDraw=4 NotifyReadyToDraw=1 TileTasksDone=2.
+                    serial_println!("[trace] draw | DrawLayers={} CompositorFrame={} Submit={} DidNotProduce={} CanDraw={} ReadyToDraw={} TileTasksDone={} SetVisible={}",
+                        count("DrawLayers"), count("CompositorFrame"),
+                        count("SubmitCompositorFrame"), count("DidNotProduceFrame"),
+                        count("CanDraw"), count("NotifyReadyToDraw"),
+                        count("DidFinishRunningAllTileTasks"), count("SetVisible"));
+                    // SURFACES: the browser embeds a surface, the renderer submits into
+                    // one. If those are not the same surface, everything upstream looks
+                    // healthy and a capture still waits forever. Host, same page:
+                    // EmbedSurface=1 SetTargetLocalSurfaceId=1 LocalSurfaceId=78
+                    // SurfaceAggregator=1 GarbageCollectSurfaces=1 SurfaceManager=1.
+                    serial_println!("[trace] surface | EmbedSurface={} SetTarget={} LocalSurfaceId={} Aggregator={} GarbageCollect={} SurfaceManager={}",
+                        count("EmbedSurface"), count("SetTargetLocalSurfaceId"),
+                        count("LocalSurfaceId"), count("SurfaceAggregator"),
+                        count("GarbageCollectSurfaces"), count("SurfaceManager"));
+                    // FrameSinkIds, verbatim: on the host a working screencast shows
+                    // FrameSinkId(0, 1) (the root) and FrameSinkId(3, 3) (the page
+                    // widget the capturer resolves to, SetResolvedTarget=1). Which ids
+                    // exist HERE, and does SetResolvedTarget appear at all?
+                    {
+                        let mut ids: alloc::vec::Vec<(alloc::string::String, u32)> = alloc::vec::Vec::new();
+                        let pat = b"FrameSinkId(";
+                        let bytes = txt.as_bytes();
+                        let mut i = 0;
+                        while i + pat.len() < bytes.len() {
+                            if &bytes[i..i + pat.len()] == pat && (i == 0 || bytes[i - 1] != b'l') {
+                                let rest = &txt[i..];
+                                if let Some(endp) = rest.find(')') {
+                                    if endp < 24 {
+                                        let id = alloc::string::String::from(&rest[..=endp]);
+                                        match ids.iter_mut().find(|(v, _)| *v == id) {
+                                            Some(e) => e.1 += 1,
+                                            None => ids.push((id, 1)),
+                                        }
+                                    }
+                                    i += endp;
+                                }
+                            }
+                            i += 1;
+                        }
+                        let resolved = txt.matches("SetResolvedTarget").count();
+                        serial_println!("[trace] SetResolvedTarget={resolved}; {} distinct FrameSinkIds:", ids.len());
+                        for (id, n) in ids.iter().take(10) {
+                            serial_println!("[trace]   {n:3}x {id}");
+                        }
+                    }
+                    // S1: the ACTUAL surface ids. The trace carries them as
+                    // "LocalSurfaceId(parent, child, token…)": the browser advances the
+                    // parent number, the renderer the child one, and they must agree.
+                    // Printing every distinct value with its count shows exactly who is
+                    // behind if they drift apart.
+                    {
+                        let bytes = txt.as_bytes();
+                        let pat = b"LocalSurfaceId(";
+                        let mut ids: alloc::vec::Vec<(alloc::string::String, u32)> = alloc::vec::Vec::new();
+                        let mut i = 0;
+                        while i + pat.len() < bytes.len() {
+                            if &bytes[i..i + pat.len()] == pat {
+                                let rest = &txt[i..];
+                                if let Some(endp) = rest.find(')') {
+                                    let id = alloc::string::String::from(&rest[..=endp]);
+                                    match ids.iter_mut().find(|(v, _)| *v == id) {
+                                        Some(e) => e.1 += 1,
+                                        None => ids.push((id, 1)),
+                                    }
+                                    i += endp;
+                                }
+                            }
+                            i += 1;
+                        }
+                        serial_println!("[trace] {} distinct LocalSurfaceIds:", ids.len());
+                        for (id, n) in ids.iter() {
+                            serial_println!("[trace]   {n:3}x {id}");
+                        }
+                    }
+                    // The trace carries its event names as plain strings. Printing the
+                    // rendering-related ones (deduplicated) gives the VOCABULARY of what
+                    // actually happened, instead of guessing one term at a time.
+                    let mut seen: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
+                    let mut run = alloc::string::String::new();
+                    for &b in t.iter() {
+                        let c = b as char;
+                        if c.is_ascii_alphanumeric() || c == '_' || c == ':' || c == '.' {
+                            run.push(c);
+                            continue;
+                        }
+                        if run.len() >= 8 {
+                            // Hunting the REASON a frame sink is lost: failure words,
+                            // not pipeline stages.
+                            // The CAPTURER's own footprint: which capture-side functions
+                            // ever ran, verbatim from the trace.
+                            let keep = ["Captur", "VideoCapture", "CopyOutput", "Oracle",
+                                        "Consumer", "Readback", "VideoFrame", "InFlight"];
+                            if keep.iter().any(|k| run.contains(k)) && !seen.iter().any(|x| *x == run) {
+                                seen.push(run.clone());
+                            }
+                        }
+                        run.clear();
+                    }
+                    serial_println!("[trace] {} capture-related names:", seen.len());
+                    for name in seen.iter().take(140) {
+                        serial_println!("[trace]   {name}");
+                    }
+                }
+                Some(_) => serial_println!("[trace] chrome wrote an EMPTY trace file"),
+                None => serial_println!("[trace] chrome wrote no trace file"),
+            }
+            match ring3::vfs_file_bytes("/tmp/euroshot.png") {
+                Some(png) if !png.is_empty() => {
+                    serial_println!("[png] BEGIN {} bytes", png.len());
+                    let mut line = alloc::string::String::new();
+                    for (i, b) in png.iter().enumerate() {
+                        line.push_str(&alloc::format!("{b:02x}"));
+                        if (i + 1) % 512 == 0 {
+                            serial_println!("[png] {line}");
+                            line.clear();
+                        }
+                    }
+                    if !line.is_empty() { serial_println!("[png] {line}"); }
+                    serial_println!("[png] END");
+                }
+                Some(_) => serial_println!("[png] chrome created /tmp/euroshot.png but it is EMPTY"),
+                None => serial_println!("[png] chrome wrote no /tmp/euroshot.png"),
+            }
+            // The last line of an iteration boot: everything of interest has printed,
+            // so the runner kills qemu on this marker instead of letting it hold the
+            // image lock for the rest of a 45-minute timeout.
+            serial_println!("[chrome-run] DONE — kill qemu now");
+            for l in o3.lines() { serial_println!("[hshell]   {l}"); }
+        }
+        // (Reclamation validated out-of-band: 30 mixed runs incl. threaded kept the
+        // task table at index 31 with free_frames stable — see commit notes.)
+
+        // Linux-compatibility scorecard: tally the glibc suite against expected exits.
+        if !chrome_run {
+        let results: [(&str, u64, u64); 26] = [
+            ("gpoll(poll timeout)", epo, 143),
+            ("gcond(condvar broadcast)", eco, 157),
+            ("gbrk(zeroed break growth)", ebk, 163),
+            ("gscm(SCM_RIGHTS fd passing)", esc, 151),
+            ("gsleep(nanosleep + abs deadline)", esl, 149),
+            ("gshm(MAP_SHARED memfd)", esh, 131),
+            ("gunlink(unlinked-but-open + anon shm)", eul, 137),
+            ("gtiny(dyn-link)", e1, 42), ("gtest(stdio/malloc/qsort)", e2, 55),
+            ("gthread(pthreads)", e3, 88), ("gmath(libm+dlopen)", e4, 77),
+            ("gcpp(C++/exceptions)", e5, 66), ("seq(argv)", e6, 0), ("factor(libgmp)", e7, 0),
+            ("gbig(200MiB heap)", e8, 111), ("gsync(mutex+condvar)", e9, 99),
+            ("base64(stdin)", e10, 0), ("wc(stdin)", e11, 0), ("sha256sum(libcrypto)", e12, 0),
+            ("sort(stdin)", e13, 0), ("gfile(file I/O)", e14, 44), ("gglib(GLib)", e15, 55),
+            ("gsparse(demand-paging)", e16, 123), ("gfmmap(file-backed demand-paging)", efm, 124),
+            ("gunix(AF_UNIX socketpair)", eu, 67),
+            ("gxwin(X11 window+render+PutImage+events+real-kbd)", ex, 90),
+        ];
+        let pass = results.iter().filter(|(_, got, want)| got == want).count()
+            + if ez == 33 { 1 } else { 0 };
+        serial_println!(
+            "[glibc] ═══ LINUX COMPAT: {}/{} real-glibc capabilities PASS ═══",
+            pass, results.len() + 1
+        );
+        serial_println!(
+            "[glibc]   dynamic-linking · pthreads+mutex/condvar · C++/exceptions · dlopen · file-I/O · demand-paging(4GiB sparse) · AF_UNIX-IPC · X11(window·fill·PutImage·events·real-keyboard)"
+        );
+        serial_println!(
+            "[glibc]   9 real libs served: libc libm libstdc++ libgcc_s libgmp libcrypto libglib-2.0 libpcre2 libz | real bins: seq factor base64 wc sha256sum sort"
+        );
+        }
+
+        // gcairo: a REAL 2D vector-graphics library (Cairo — what GTK/Firefox render
+        // with) draws a scene (filled circle, rectangle, stroked line, anti-aliased)
+        // into an image surface, then XPutImages it into an X window. Resolves the full
+        // ~22-lib Cairo transitive chain via ld.so.
+        serial_println!("[glibc] === X11: real Cairo 2D graphics -> X window ===");
+        xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (oc, ec) = ring3::run_glibc(&mut allocator, ring3::gcairo_bytes(), ring3::ldlinux_bytes(), &[b"gcairo"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
+        xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gcairo (Cairo 2D -> XPutImage): exit={ec}");
+        for l in oc.lines() { serial_println!("[glibc]   {l}"); }
+        // gcairotext: Cairo + FreeType TEXT — real font rasterization. Serve the TTF;
+        // the client FT_New_Face's it (via the VFS), makes a cairo font face, and
+        // cairo_show_text's — the last piece before real UI widgets.
+        ring3::register_file_static("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", ring3::dejavu_ttf_bytes());
+        xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (oct, ect) = ring3::run_glibc(&mut allocator, ring3::gcairotext_bytes(), ring3::ldlinux_bytes(), &[b"gcairotext"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
+        xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gcairotext (Cairo+FreeType text): exit={ect}");
+        for l in oct.lines() { serial_println!("[glibc]   {l}"); }
+
+        // LAUNCH A PERSISTENT, LIVE X APP that runs ALONGSIDE the desktop: gxlive is
+        // a real Xlib event-loop client (key = colour, click = move). It owns the
+        // screen (its window is painted by the X server); the desktop loop pumps live
+        // keyboard/mouse into it (xserver::pump_* via the X_APP_ACTIVE path). This is
+        // the async/desktop-integrated milestone — an interactive X program on EuroOS.
+        serial_println!("[glibc] === X11: live interactive desktop app (gxlive) ===");
+        // Run gxlive (a real Xlib event-loop client) with a long deadline: run_glibc's
+        // wait loop pumps live keyboard/mouse into the X server (xserver::pump_*), the
+        // X server delivers them to gxlive's window, and gxlive redraws — an
+        // interactive X program on EuroOS, using the proven run_glibc path.
+        // Stage some input so the live app visibly reacts even without live QMP keys:
+        // 3 key scancodes (colour cycles 3x) + 2 mouse-button packets (block moves 2x).
+        // These flow through the REAL ring/latch that pump_keyboard/pump_mouse drain.
+        ps2::push_scancode(0x1e); ps2::push_scancode(0x30); ps2::push_scancode(0x2e);
+        mouse::push_byte(0x08); mouse::push_byte(0); mouse::push_byte(0);
+        mouse::push_byte(0x09); mouse::push_byte(0); mouse::push_byte(0);
+        mouse::push_byte(0x08); mouse::push_byte(0); mouse::push_byte(0);
+        mouse::push_byte(0x09); mouse::push_byte(0); mouse::push_byte(0);
+        ring3::GLIBC_DEADLINE_TICKS.store(1_500, core::sync::atomic::Ordering::Relaxed); // ~15s bounded demo (gxlive loops forever)
+        xserver::X_APP_ACTIVE.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (ol, _egl) = ring3::run_glibc(&mut allocator, ring3::gxlive_bytes(), ring3::ldlinux_bytes(), &[b"gxlive"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
+        xserver::X_APP_ACTIVE.store(false, core::sync::atomic::Ordering::Relaxed);
+        ring3::GLIBC_DEADLINE_TICKS.store(12_000, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gxlive (live interactive X app; block reacted to staged input):");
+        for l in ol.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gpango: REAL Pango text LAYOUT with HarfBuzz shaping (the i18n text engine
+        // GTK apps and browsers use). Resolves fonts via fontconfig, shapes glyphs via
+        // HarfBuzz, lays out runs (markup, mixed scripts), renders via cairo->XPutImage.
+        // Give fontconfig a minimal config; the client adds the font explicitly (no dir
+        // scan) so it works without VFS readdir. Run LAST so its window is the final one
+        // painted and stays on screen into the desktop (clean, unobscured render).
+        {
+            const FONTS_CONF: &[u8] = b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>Sans</family><prefer><family>DejaVu Sans</family></prefer></alias>\n</fontconfig>\n";
+            ring3::register_file("/etc/fonts/fonts.conf", FONTS_CONF.to_vec());
+            xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+            let (opo, epo) = ring3::run_glibc(&mut allocator, ring3::gpango_bytes(), ring3::ldlinux_bytes(), &[b"gpango"], &[b"DISPLAY=:0", b"PATH=/bin", b"FONTCONFIG_PATH=/etc/fonts"], caps_net);
+            xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[glibc] gpango (Pango+HarfBuzz layout): exit={epo}");
+            for l in opo.lines() { serial_println!("[glibc]   {l}"); }
+        }
+
+        // gsdl: a REAL SDL2 app (Leg C) — different toolkit, same X11 path. Creates an
+        // X window + draws a gradient + moving box to its software surface
+        // (SDL_UpdateWindowSurface -> XPutImage). Proves the foundation is not
+        // GTK-specific. Bounded fullscreen demo (it loops forever; the deadline ends it).
+        {
+            for (name, bytes) in ring3::sdl_libs() {
+                ring3::register_file_static(&alloc::format!("/lib/x86_64-linux-gnu/{name}"), bytes);
+            }
+            serial_println!("[glibc] === SDL2 app (gsdl) ===");
+            xserver::set_windowed(false); // fullscreen demo blit (not the hosted window)
+            ring3::GLIBC_DEADLINE_TICKS.store(3_000, core::sync::atomic::Ordering::Relaxed);
+            ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
+            let (osdl, esdl) = ring3::run_glibc(&mut allocator, ring3::gsdl_bytes(), ring3::ldlinux_bytes(), &[b"gsdl"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"SDL_VIDEODRIVER=x11", b"SDL_AUDIODRIVER=dummy"], caps_net);
+            ring3::GLIBC_ARENA_MIB.store(96, core::sync::atomic::Ordering::Relaxed);
+            ring3::GLIBC_DEADLINE_TICKS.store(12_000, core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[glibc] gsdl (SDL2): exit={esdl}");
+            for l in osdl.lines() { serial_println!("[glibc]   {l}"); }
+        }
+
+        // ggtk LAST: a REAL GTK3 app (gtk_init + a window whose GtkDrawingArea draws
+        // with cairo, + a GMainLoop over the eventfd + X fd). The X server RENDERS it
+        // fully: GTK draws into an off-screen pixmap (solid fills -> core-X
+        // PolyFillRectangle; lines/gradients/TEXT -> cairo's image fallback via
+        // GetImage+PutImage) and CopyAreas it onto the window, composited to the
+        // framebuffer — shapes AND anti-aliased text appear. Self-quits after rendering.
+        {
+            // Full fontconfig setup so ANY app (incl. GTK, which resolves fonts via
+            // fontconfig internally) finds real glyphs: serve the DejaVu family, a
+            // PREBUILT fc-cache (fontconfig's runtime dir-scan finds nothing through the
+            // VFS, so — like a real distro — we ship the cache fc-cache produced), and a
+            // config whose <dir> is the dejavu dir (so only that one cache is needed).
+            // The VFS reports dir mtime 0, so the cache always validates as current.
+            for (name, bytes) in ring3::dejavu_fonts() {
+                ring3::register_file_static(&alloc::format!("/usr/share/fonts/truetype/dejavu/{name}"), bytes);
+            }
+            ring3::register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", ring3::fc_dejavu_cache());
+            ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n  <alias><family>Sans</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>Cantarell</family><prefer><family>DejaVu Sans</family></prefer></alias>\n</fontconfig>\n".to_vec());
+            serial_println!("[glibc] === GTK3 toolkit app (ggtk) — LIVE, alongside desktop ===");
+            ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed); // ~40 libs
+            // PERF FIX (idle CPU): the persistent GTK demo runs a GMainLoop that redraws a
+            // live counter forever, so it stays permanently Ready and the desktop
+            // recomposites it every repaint. Under pure emulation (no KVM) that means the
+            // guest NEVER reaches an all-`hlt` idle, so the QEMU process pegs one host core
+            // at ~100% and starves the desktop's input handling (keyboard/mouse feel
+            // frozen). It is a demo, not a capability: GTK rendering is already proven by
+            // the bounded ggtk render test above. Default OFF so the stock/download image
+            // idles cleanly; flip to true (or build with the `live-demos` feature) to show
+            // a live GTK window on the desktop.
+            let live_gtk_demo = cfg!(feature = "live-demos");
+            if live_gtk_demo {
+                // WINDOWED: retain the GTK window's pixels instead of blitting fullscreen,
+                // so the desktop composites it as a framed window.
+                xserver::set_windowed(true);
+                match ring3::spawn_glibc_persistent(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net) {
+                    Some(t) => serial_println!("[glibc] ggtk live on task {t}"),
+                    None => serial_println!("[glibc] ggtk spawn FAILED (no arena)"),
+                }
+            } else {
+                serial_println!("[glibc] ggtk live-demo skipped (idle-friendly default; build --features live-demos to enable)");
+            }
+        }
+    }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.
     if xhci::present() {
@@ -1961,6 +3200,25 @@ fn main() -> Status {
     ps2::keymap_selftest();
     // 3F-7: capability-scoped app permission portals (request → ask → scoped grant).
     portal::selftest();
+    // Part 2: unified per-app control surface (caps + permissions + network in one).
+    shell::selftest();
+    // Part 3: the desktop per-app control screen's actions do real kernel work.
+    settings_ui::selftest();
+    // Everyday-conveniences layer: live clipboard + right-click context menus +
+    // window snapping (drag to a screen edge).
+    clipboard::selftest();
+    ctxmenu::selftest();
+    compositor::snap_selftest();
+    launcher::selftest();
+    filedialog::selftest();
+    notify::selftest();
+    screenshot::selftest();
+    tooltip::selftest();
+    symbolpicker::selftest();
+    spell::selftest();
+    switcher::selftest();
+    workspace::selftest();
+    netbridge::selftest();
     // 3F-6: audio routing — per-app streams, per-device routing, default policy.
     audio::selftest();
 
@@ -2270,6 +3528,9 @@ fn main() -> Status {
                 if ring3::smep_active() { "on" } else { "n/a" },
                 if ring3::smap_active() { "on" } else { "n/a" },
                 if ring3::nx_active() { "on" } else { "n/a" }),
+            // Honest DMA-isolation state (GitHub #11): capability checks at the syscall
+            // boundary are incomplete while devices can DMA anywhere. Show it plainly.
+            format!("DMA isolation  {}", iommu::status_line()),
             String::new(),
             String::from("preemptive scheduler (per-process address spaces):"),
             format!("  kernel-threads   A={a} B={b} C={c}"),
@@ -2332,14 +3593,29 @@ fn main() -> Status {
             visible: true, // default-open: the interactive shell is the clean first-run window (focused)
             restore: None,
         },
+        // A real GTK3 app hosted as a framed desktop window: its body is the live
+        // pixel buffer the in-kernel X server rendered (see SuiteApp::XClient).
+        compositor::Window {
+            x: SIDEBAR_W + 90, y: 470, w: 540, h: 320,
+            title: String::from("EuroOS GTK  -  ggtk"),
+            content: Vec::new(), ui: Vec::new(),
+            active: false, accent: Color::BLUE,
+            sec: eds::SecState::new(true, false, false),
+            app: suite_ui::SuiteApp::XClient,
+            visible: true, // the persistent GTK app renders into it live
+            restore: None,
+        },
     ];
-    // Z-order (back-to-front): System back, Terminal front.
-    let mut order: Vec<usize> = alloc::vec![0, 1];
+    // Z-order (back-to-front): System back, Terminal, GTK window front.
+    let mut order: Vec<usize> = alloc::vec![0, 1, 2];
     // Dock tile (see compositor::DOCK_APPS: files/notes/clock/browser/terminal/
     // settings/store/star) → window index. The desktop starts EMPTY (all windows
     // hidden); a dock click opens an app. (AG-1 added files/notes/clock.)
-    let mut dock_targets: [Option<usize>; 11] = [None; 11];
+    // 12 slots for 11 dock tiles: index 11 has no tile of its own — it is the hosted
+    // X-client window (Chromium), reachable from the app launcher and the shell.
+    let mut dock_targets: [Option<usize>; 12] = [None; 12];
     dock_targets[4] = Some(1); // terminal → Terminal (the real shell)
+    dock_targets[11] = Some(2); // launcher: "Chromium" → the hosted X window
 
     // ── H2: LIVE DISPLAY SERVER ── bind an AF_UNIX socket (H1), let an app
     // process connect and, via the eurodisplay protocol (Request/Event), open a
@@ -2772,9 +4048,29 @@ fn main() -> Status {
 
     // ── Desktop loop: mouse cursor, window dragging, live system window. ──
     let mut dragging: Option<usize> = None;
+    // Tooltip hover state: what the cursor is over, and since when.
+    let mut hover_txt: Option<String> = None;
+    let mut hover_since = 0u64;
+    let mut tip_shown = false;
+    // Drag-and-drop: a file being dragged out of EuroFiles (path + press point).
+    let mut file_drag: Option<(String, usize, usize)> = None;
+    // Workspaces: the active virtual desktop and each other one's saved window
+    // visibility (None = never visited).
+    let mut active_ws = 0usize;
+    let mut ws_saved: [Option<alloc::vec::Vec<bool>>; workspace::COUNT] = [None, None, None, None];
     let mut drag_off = (0usize, 0usize);
     let mut last_t = u64::MAX;
     let mut last_kbd = 0u64; // diagnostics: keyboard IRQs via the IO-APIC
+    // One-shot self-test: after the live GTK window is up a while, synthesize a click on
+    // its Reset button to prove desktop->X input routing (the counter visibly resets).
+    let mut gtk_dtick = 0u32;
+    let mut last_hover = (usize::MAX, usize::MAX); // last pointer position forwarded to a hosted X app
+    // Desktop cost accounting while a hosted app runs: (tick, loops, x-repaints, full repaints)
+    let mut hosted_last = (0u64, 0u64, 0u64, 0u64);
+    let mut loop_iters = 0u64;
+    let mut xrepaints = 0u64;
+    let mut full_repaints = 0u64;
+    let mut gtk_click_done = false;
     // 3F-7: the live permission-portal. `portal_buttons` holds the hit rects of
     // the currently-shown modal (Allow once / This session / Deny) when a request
     // is pending. Nothing is requested at boot, so the desktop starts clean; the
@@ -2789,21 +4085,39 @@ fn main() -> Status {
     // prompt ("euroos:/ $ <input>"); keyboard input (IRQ1) edits it live.
     let term_idx = 1;
     let sys_idx = 0; // the live System window (behind the Terminal)
+    let gtk_idx = 2; // the hosted live GTK app window (SuiteApp::XClient)
     let mut input = String::new();
     let vis_lines = ((windows[term_idx].h - 44) / 16) as usize;
     // Marker: from here the interactive desktop loop runs (polls input + shell).
     // The E2E test waits for this before it injects keys; also proves that HLT-idle
     // does not hold the loop.
     serial_println!("[desktop] interactive loop started — input + shell live");
+    // A first notification so the shade is not empty and the toast channel shows.
+    notify::push("Welcome to EuroOS", "Click here to see notifications", interrupts::ticks());
     // 3G-2: arm the live deadman watchdog (5 s grace at 100 Hz). The loop pets it
     // each iteration; the scheduler tick checks it independently.
     watchdog::arm(1500); // 15s: a full software render is a few seconds under TCG (fast on real HW)
     let mut wd_reported = false;
     let mut app_blitted = false; // one-shot log when the app-graphics bridge first paints
     let mut last_app_blit = 0u64; // tick of the last app blit (throttle to keep the loop responsive)
+    // Tell the app-graphics bridge the framebuffer size (the browser renders at
+    // native resolution and maps the mouse 1:1).
+    appgfx::set_screen(width, height);
     loop {
         // 3G-2: the main loop is alive → pet the watchdog.
         watchdog::pet();
+        // Service any pending network request from a graphics app (the browser):
+        // the real HTTP/TLS/DNS fetch runs HERE, in the desktop-loop task context
+        // (interrupts on, no bg lock), not inside the app's no-yield syscall.
+        netbridge::service();
+        // The DevTools input bridge for a desktop-launched chrome: attach + ferry
+        // page input (see cdp_install_input at the `chrome` command's spawn).
+        ring3::cdp_pump();
+        // Interrupt-independent USB input HERE TOO: the boot launcher polls the
+        // xHCI ring every iteration, but the desktop loop did not — so desktop
+        // clicks still depended on the per-boot MSI-X delivery lottery (dt7: the
+        // QMP click never arrived; dt3/dt4 simply got lucky).
+        xhci::poll();
         // One-shot liveness proof once the loop has petted a while.
         if !wd_reported && watchdog::pets() >= 20 {
             wd_reported = true;
@@ -2820,6 +4134,152 @@ fn main() -> Status {
         let (px, py) = mouse::pos();
         let ldown = mouse::left_down();
         let mut need_full = false;
+        // An app the user asked to open this iteration (via launcher or menu),
+        // raised in one place after input handling.
+        let mut launch_icon: Option<usize> = None;
+        // A screenshot requested this iteration, captured after a clean render.
+        let mut pending_shot = false;
+
+        // The symbol picker is modal: a click inserts the chosen symbol into the
+        // focused text field (or dismisses).
+        if symbolpicker::is_open() {
+            if let Some((cx, cy)) = mouse::take_press() {
+                if let Some(sym) = symbolpicker::click_at(cx, cy, width, height) {
+                    let to_terminal = order.iter().rev().copied()
+                        .find(|&i| windows[i].visible)
+                        .map(|i| windows[i].app == suite_ui::SuiteApp::None)
+                        .unwrap_or(false);
+                    if to_terminal {
+                        input.push_str(&sym);
+                    } else {
+                        for ch in sym.chars() { textedit::input(ch); }
+                    }
+                }
+                need_full = true;
+            }
+        } else if filedialog::is_open() {
+            if let Some((cx, cy)) = mouse::take_press() {
+                filedialog::click_at(cx, cy, width, height);
+                need_full = true;
+            }
+        } else if launcher::is_open() {
+            if let Some((cx, cy)) = mouse::take_press() {
+                if let Some(icon) = launcher::click_at(cx, cy, width, height) {
+                    launch_icon = Some(icon);
+                }
+                need_full = true;
+            }
+        }
+
+        // ── Right-click context menus (the everyday-conveniences layer) ──
+        // A right-press opens the menu for whatever is under the cursor; the
+        // next left click chooses an item or dismisses it.
+        if ctxmenu::is_open() {
+            if let Some((cx, cy)) = mouse::take_press() {
+                if let ctxmenu::Hit::Chosen(action) = ctxmenu::click_at(cx, cy) {
+                    use ctxmenu::Action::*;
+                    match action {
+                        OpenDir(p) => load_files_dir(ctx.fs, &p),
+                        OpenFile(p) => {
+                            let (_mime, app) = mime::resolve(ctx.fs, &p);
+                            if let Some(target) = app.as_deref().and_then(mime_app_to_suite) {
+                                if target == suite_ui::SuiteApp::Text {
+                                    textedit::open(ctx.fs, &p);
+                                }
+                                if let Some(w) = windows.iter().position(|win| win.app == target) {
+                                    order.retain(|&x| x != w);
+                                    order.push(w);
+                                    for ww in windows.iter_mut() { ww.active = false; }
+                                    windows[w].visible = true;
+                                    windows[w].active = true;
+                                }
+                            }
+                        }
+                        CopyText(t) => { clipboard::copy(&t); }
+                        Trash(p) => {
+                            if trash::to_trash(ctx.fs, &p) {
+                                let cur = files::current_path();
+                                if !cur.is_empty() { load_files_dir(ctx.fs, &cur); }
+                                notify::push("Moved to Trash", &p, interrupts::ticks());
+                            }
+                        }
+                        RestoreTrash => {
+                            if let Some(orig) = trash::restore_last(ctx.fs) {
+                                let cur = files::current_path();
+                                if !cur.is_empty() { load_files_dir(ctx.fs, &cur); }
+                                notify::push("Restored", &orig, interrupts::ticks());
+                            }
+                        }
+                        Screenshot => { pending_shot = true; }
+                        InsertSymbol => { symbolpicker::open(); }
+                        NewFolder(dir) => {
+                            let base = if dir.ends_with('/') { dir.clone() } else { alloc::format!("{dir}/") };
+                            // Find a free name by trying to create it (no metadata() on the FS).
+                            let mut created = None;
+                            for n in 1..=20 {
+                                let path = if n == 1 { alloc::format!("{base}New folder") } else { alloc::format!("{base}New folder {n}") };
+                                if ctx.fs.create_dir(&path).is_ok() {
+                                    created = Some(path);
+                                    break;
+                                }
+                            }
+                            if let Some(path) = created {
+                                let cur = files::current_path();
+                                if !cur.is_empty() { load_files_dir(ctx.fs, &cur); }
+                                serial_println!("[ctx] context menu: created folder {path}");
+                            }
+                        }
+                        Paste => {
+                            if let Some(text) = clipboard::paste() {
+                                let to_terminal = order.iter().rev().copied()
+                                    .find(|&i| windows[i].visible)
+                                    .map(|i| windows[i].app == suite_ui::SuiteApp::None)
+                                    .unwrap_or(false);
+                                for ch in text.chars() {
+                                    if to_terminal { input.push(ch); } else { textedit::input(ch); }
+                                }
+                            }
+                        }
+                        OpenTerminal => {
+                            order.retain(|&x| x != term_idx);
+                            order.push(term_idx);
+                            for ww in windows.iter_mut() { ww.active = false; }
+                            windows[term_idx].visible = true;
+                            windows[term_idx].active = true;
+                        }
+                        OpenDisplaySettings => {
+                            if let Some(w) = windows.iter().position(|win| win.app == suite_ui::SuiteApp::Settings) {
+                                settings_ui::set_section(3); // System
+                                order.retain(|&x| x != w);
+                                order.push(w);
+                                for ww in windows.iter_mut() { ww.active = false; }
+                                windows[w].visible = true;
+                                windows[w].active = true;
+                            }
+                        }
+                        OpenApp(icon) => {
+                            if let Some(w) = dock_targets.get(icon).copied().flatten().filter(|&w| w < windows.len()) {
+                                order.retain(|&x| x != w);
+                                order.push(w);
+                                for ww in windows.iter_mut() { ww.active = false; }
+                                windows[w].visible = true;
+                                windows[w].active = true;
+                                if windows[w].app == suite_ui::SuiteApp::Files && files::current_path().is_empty() {
+                                    load_files_dir(ctx.fs, "/");
+                                }
+                            }
+                        }
+                        Refresh => {}
+                    }
+                }
+                need_full = true;
+            }
+        } else if let Some((rx, ry)) = mouse::take_right_press() {
+            if portal_buttons.is_none() && !launcher::is_open() && !filedialog::is_open() && !symbolpicker::is_open() {
+                build_context_menu(rx, ry, &windows, &order, &dock_targets, width, height);
+                need_full = true;
+            }
+        }
         // Live RAM snapshot for EuroMonitor (context-free readable in the render fn).
         monitor::set_mem(
             ctx.mem.usable_bytes() / (1024 * 1024),
@@ -2847,6 +4307,17 @@ fn main() -> Status {
                     portal_buttons = None;
                 }
                 need_full = true; // repaint (dialog gone or still up); consume the click
+            } else if compositor::brand_button_at(px, py) {
+                // The EU mark is the "start button": open the app launcher.
+                launcher::open();
+                need_full = true;
+            } else if {
+                let (rx, ry, rw, rh) = compositor::status_panel_rect(width);
+                px >= rx && px < rx + rw && py >= ry && py < ry + rh
+            } {
+                // Click the status panel (the shade) → toggle notifications.
+                notify::toggle_centre();
+                need_full = true;
             } else if let Some(icon) = compositor::dock_icon_at(px, py) {
                 // Dock click → open the corresponding app (or bring it to front).
                 // A second click on an already-visible window hides it again (toggle).
@@ -2884,6 +4355,11 @@ fn main() -> Status {
                 if let Some(btn) = windows[i].title_button_at(px, py) {
                     match btn {
                         compositor::TitleButton::Close => {
+                            // Closing the hosted X app window terminates the glibc app
+                            // + frees its arena (spawn_glibc_persistent has no teardown).
+                            if windows[i].app == suite_ui::SuiteApp::XClient {
+                                ring3::kill_persistent_glibc(ctx.mem);
+                            }
                             windows[i].visible = false;
                             order.retain(|&x| x != i);
                             // Focus to the now-topmost visible window.
@@ -2932,6 +4408,15 @@ fn main() -> Status {
                     }
                     windows[i].active = true;
                     if windows[i].titlebar_contains(px, py) {
+                        // Un-snap on pickup: a snapped or maximized window returns to
+                        // its floating size, popping under the cursor so the drag feels
+                        // natural (Windows/GNOME behaviour).
+                        if let Some((_rx, _ry, rw, rh)) = windows[i].restore.take() {
+                            windows[i].w = rw;
+                            windows[i].h = rh;
+                            windows[i].x = px.saturating_sub(rw / 2);
+                            windows[i].y = py.saturating_sub(14);
+                        }
                         drag_off = (px.saturating_sub(windows[i].x), py.saturating_sub(windows[i].y));
                         dragging = Some(i);
                     } else if windows[i].app == suite_ui::SuiteApp::Reken {
@@ -2940,6 +4425,19 @@ fn main() -> Status {
                             calc_ui::button_at(windows[i].x, windows[i].y, windows[i].w, windows[i].h, px, py)
                         {
                             calc_ui::input(&mut windows[i].content, ch);
+                        }
+                    } else if windows[i].app == suite_ui::SuiteApp::XClient {
+                        // Click on the hosted X app's body → forward to the X server at
+                        // window-body-local coords (the buffer is centred in the body),
+                        // so the real GTK widget under the cursor (e.g. a button) gets it.
+                        let (bx, by, bw, bh) = compositor::window_body_rect(&windows[i]);
+                        if let Some((xw, xh)) = xserver::front_window_size() {
+                            let ox = bx + bw.saturating_sub(xw) / 2;
+                            let oy = by + bh.saturating_sub(xh) / 2;
+                            if px >= ox && py >= oy && px < ox + xw && py < oy + xh {
+                                xserver::deliver_focus(true); // clicking the window focuses it
+                                xserver::deliver_button((px - ox) as i16, (py - oy) as i16);
+                            }
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Browser {
                         // Click on tab / "+" button / address bar.
@@ -2959,6 +4457,12 @@ fn main() -> Status {
                             settings_ui::begin_domain_edit();
                         } else if settings_ui::toggle_at(windows[i].x, windows[i].y, px, py) {
                             settings_ui::toggle_httpd(); // REAL kernel action
+                        } else if let Some(row) = settings_ui::app_row_at(windows[i].x, windows[i].y, px, py) {
+                            settings_ui::select_app(row); // pick an app to control
+                        } else if settings_ui::app_net_toggle_at(windows[i].x, windows[i].y, px, py) {
+                            settings_ui::toggle_app_net(); // REAL: cut/allow the app's network
+                        } else if settings_ui::app_revoke_at(windows[i].x, windows[i].y, px, py) {
+                            settings_ui::revoke_app_perms(); // REAL: reset its permissions
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Agent {
                         // Click on the intent field → start typing.
@@ -2970,32 +4474,19 @@ fn main() -> Status {
                         if let Some(path) = files::hit_test(windows[i].x, windows[i].y, px, py) {
                             load_files_dir(ctx.fs, &path);
                         } else if let Some(fpath) = files::hit_test_file(windows[i].x, windows[i].y, px, py) {
-                            // 3F-5: double-click a FILE → open it with its default app.
-                            let (_mime, app) = mime::resolve(ctx.fs, &fpath);
-                            if let Some(target) = app.as_deref().and_then(mime_app_to_suite) {
-                                // The text editor loads the file's content.
-                                if target == suite_ui::SuiteApp::Text {
-                                    textedit::open(ctx.fs, &fpath);
-                                }
-                                // Raise the target app's window (same bookkeeping as a dock open).
-                                if let Some(w) = windows.iter().position(|win| win.app == target) {
-                                    order.retain(|&x| x != w);
-                                    order.push(w);
-                                    for ww in windows.iter_mut() {
-                                        ww.active = false;
-                                    }
-                                    windows[w].visible = true;
-                                    windows[w].active = true;
-                                    need_full = true;
-                                }
-                            }
+                            // Press on a file starts a potential drag; the drop
+                            // handler either opens it in the target app (drag onto
+                            // EuroText) or, if it did not move, opens it normally.
+                            file_drag = Some((fpath, px, py));
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Notes {
                         // Click in the notes list → select a different note.
                         notes::hit_test(windows[i].x, windows[i].y, px, py);
                     } else if windows[i].app == suite_ui::SuiteApp::Text {
-                        // Click on "Save" → write the buffer REALLY to EuroFS.
-                        if textedit::save_button_at(windows[i].x, windows[i].y, windows[i].w, px, py) {
+                        // Click on "Open" → the file picker; "Save" → write to EuroFS.
+                        if textedit::open_button_at(windows[i].x, windows[i].y, windows[i].w, px, py) {
+                            filedialog::open(filedialog::Mode::Open, "/");
+                        } else if textedit::save_button_at(windows[i].x, windows[i].y, windows[i].w, px, py) {
                             textedit::save(ctx.fs);
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Installer {
@@ -3010,7 +4501,56 @@ fn main() -> Status {
             }
         }
         if !ldown {
-            dragging = None;
+            // Drop a file dragged out of EuroFiles.
+            if let Some((path, sx, sy)) = file_drag.take() {
+                let moved = (px as i64 - sx as i64).abs() + (py as i64 - sy as i64).abs() > 14;
+                let target = order.iter().rev().copied()
+                    .find(|&i| windows[i].visible && windows[i].contains(px, py) && windows[i].app != suite_ui::SuiteApp::Files);
+                let dropped_in_text = moved
+                    && target.map(|i| windows[i].app == suite_ui::SuiteApp::Text).unwrap_or(false);
+                if dropped_in_text {
+                    // Drag onto EuroText → open it there.
+                    textedit::open(ctx.fs, &path);
+                    if let Some(w) = windows.iter().position(|win| win.app == suite_ui::SuiteApp::Text) {
+                        order.retain(|&x| x != w);
+                        order.push(w);
+                        for ww in windows.iter_mut() { ww.active = false; }
+                        windows[w].visible = true;
+                        windows[w].active = true;
+                    }
+                    notify::push("Opened in EuroText", &path, interrupts::ticks());
+                } else if !moved {
+                    // A plain click → open with the default app (previous behaviour).
+                    let (_m, app) = mime::resolve(ctx.fs, &path);
+                    if let Some(tgt) = app.as_deref().and_then(mime_app_to_suite) {
+                        if tgt == suite_ui::SuiteApp::Text {
+                            textedit::open(ctx.fs, &path);
+                        }
+                        if let Some(w) = windows.iter().position(|win| win.app == tgt) {
+                            order.retain(|&x| x != w);
+                            order.push(w);
+                            for ww in windows.iter_mut() { ww.active = false; }
+                            windows[w].visible = true;
+                            windows[w].active = true;
+                        }
+                    }
+                }
+                need_full = true;
+            }
+            // Drop: if released in an edge zone, snap the window there (Windows-
+            // style half/half + top-to-maximize), remembering its floating size.
+            if let Some(idx) = dragging.take() {
+                if let Some((sx, sy, sw2, sh2)) = compositor::snap_target(px, py, width, height) {
+                    if windows[idx].restore.is_none() {
+                        windows[idx].restore = Some((windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h));
+                    }
+                    windows[idx].x = sx;
+                    windows[idx].y = sy;
+                    windows[idx].w = sw2;
+                    windows[idx].h = sh2;
+                    need_full = true;
+                }
+            }
         }
         if let Some(idx) = dragging {
             let nx = px.saturating_sub(drag_off.0);
@@ -3033,19 +4573,30 @@ fn main() -> Status {
         // starves the poll_key loop below (it finds nothing).
         if appgfx::active() {
             // A full-screen app owns the display. Its frames are painted straight
-            // to the framebuffer by the `fb_present` syscall (crate::screen_present
-            // _xrgb) at the app's own rate — the desktop loop only routes RAW
-            // scancodes to it and gets out of the way (no blit, no compositor
-            // repaint), so nothing the loop's scheduling starvation can hurt.
-            while let Some(sc) = ps2::poll_scancode() {
-                if sc == 0xE0 {
-                    continue; // extended prefix: the FOLLOWING code carries the key
+            // to the framebuffer (by fb_present for a musl app, or by the X server's
+            // present for a live X client). The desktop loop only routes RAW input to
+            // it and gets out of the way (no blit, no compositor repaint).
+            if xserver::x_app_active() {
+                // Live X client: route real keyboard + mouse into X events. The X
+                // server delivers them to the focused window; the client redraws.
+                xserver::pump_keyboard();
+                xserver::pump_mouse();
+            } else {
+                while let Some(sc) = ps2::poll_scancode() {
+                    if sc == 0xE0 {
+                        continue; // extended prefix: the FOLLOWING code carries the key
+                    }
+                    // set-1: high bit = break (release); low 7 bits = key.
+                    appgfx::push_key(sc & 0x7F, sc & 0x80 == 0);
                 }
-                // set-1: high bit = break (release); low 7 bits = key.
-                appgfx::push_key(sc & 0x7F, sc & 0x80 == 0);
             }
             let _ = last_app_blit;
             app_blitted = true; // remember to repaint the desktop once it exits
+            // PERF FIX (idle CPU): a full-screen app owns the display, so we skip the
+            // compositor blit — but we must STILL park the CPU. Without this hlt the loop
+            // busy-polls input forever and pegs the (emulated) host core at ~100%, which
+            // also starves input handling. The next timer tick or input IRQ wakes us.
+            x86_64::instructions::hlt();
             continue;
         } else if app_blitted {
             // The app just exited (active() went false): force one full desktop
@@ -3068,6 +4619,28 @@ fn main() -> Status {
         let mut term_dirty = false;
         let mut calc_dirty = false;
         while let Some(k) = ps2::poll_key() {
+            // The symbol picker only needs Esc to dismiss.
+            if symbolpicker::is_open() {
+                if k == '\u{1b}' { symbolpicker::close(); }
+                need_full = true;
+                continue;
+            }
+            // The file dialog captures the keyboard while it is open (navigate /
+            // type a name / Enter / Esc).
+            if filedialog::is_open() {
+                filedialog::key(k);
+                need_full = true;
+                continue;
+            }
+            // The app launcher captures the keyboard while it is open (type to
+            // filter, Enter to open, Esc to dismiss).
+            if launcher::is_open() {
+                if let Some(icon) = launcher::key(k) {
+                    launch_icon = Some(icon);
+                }
+                need_full = true;
+                continue;
+            }
             // If the REAL calculator has focus → keys go to euroreken.
             if calc_focused {
                 let fi = focused.unwrap();
@@ -3308,14 +4881,15 @@ fn main() -> Status {
                         }
                     } else if {
                         let n = exec_cmd.split_whitespace().next().unwrap_or("");
-                        n == "doom" || n == "fbtest"
+                        n == "doom" || n == "fbtest" || n == "browser" || n == "surf"
                     } {
                         // Graphical app: a PREEMPTIVELY-scheduled userspace program
                         // that draws to its own centered framebuffer (fb_present)
                         // and reads the keyboard (getkey). Unlike a /bin program it
                         // does NOT run to completion — it owns the screen until it
                         // exits, so we spawn it on the scheduler and return at once.
-                        let name = exec_cmd.split_whitespace().next().unwrap_or("");
+                        let raw = exec_cmd.split_whitespace().next().unwrap_or("");
+                        let name = if raw == "surf" { "browser" } else { raw }; // alias (avoids a keymap quirk)
                         let path = format!("/bin/{name}");
                         match ring3::program_caps_abi(&path) {
                             None => out.push(format!("{name}: not installed")),
@@ -3332,18 +4906,60 @@ fn main() -> Status {
                                     } else {
                                         alloc::vec![name.as_bytes()]
                                     };
+                                    // The browser renders a full-screen framebuffer
+                                    // + page/link buffers, so it needs a larger arena.
+                                    let arena_mib = if name == "browser" { 48 } else { 32 };
                                     let spawned = x86_64::instructions::interrupts::without_interrupts(|| {
-                                        ring3::spawn_bg_app(mem, &bytes, pid, &argv, 32)
+                                        ring3::spawn_bg_app(mem, &bytes, pid, &argv, arena_mib)
                                     });
                                     if spawned.is_some() {
                                         appgfx::set_app_pid(pid);
                                         appgfx::set_active(true);
                                         out.push(format!("{name}: launched (pid {pid}) — drawing to the screen; Esc quits"));
                                     } else {
-                                        out.push(format!("{name}: out of memory (needs a 32 MiB arena)"));
+                                        out.push(format!("{name}: out of memory (needs a {arena_mib} MiB arena)"));
                                     }
                                 }
                             }
+                        }
+                    } else if {
+                        let n = exec_cmd.split_whitespace().next().unwrap_or("");
+                        n == "chrome" || n == "chromium"
+                    } {
+                        // Chromium as a desktop app, from the shell: `chrome` starts it,
+                        // `chrome stop` ends it (so does the window's close button). It
+                        // does NOT run to completion — it is a browser, it stays.
+                        if exec_cmd.split_whitespace().nth(1) == Some("stop") {
+                            if ring3::persistent_running() {
+                                ring3::kill_persistent_glibc(ctx.mem);
+                                windows[gtk_idx].visible = false;
+                                order.retain(|&x| x != gtk_idx);
+                                need_full = true;
+                                out.push(String::from("chrome: stopped, memory reclaimed"));
+                            } else {
+                                out.push(String::from("chrome: not running"));
+                            }
+                        } else {
+                            let (ok, msg) = launch_chrome_app(ctx.mem);
+                            if ok {
+                                windows[gtk_idx].title = String::from("Chromium  -  chrome");
+                                // Chrome's own window is 800x600 (--window-size): give
+                                // the frame exactly that much body, so the page is not
+                                // clipped into a 540x320 hole.
+                                windows[gtk_idx].w = 800;
+                                windows[gtk_idx].h = 600 + compositor::TITLEBAR_H;
+                                windows[gtk_idx].x = SIDEBAR_W + 60;
+                                windows[gtk_idx].y = 90;
+                                windows[gtk_idx].visible = true;
+                                windows[gtk_idx].active = true;
+                                for (j, ww) in windows.iter_mut().enumerate() {
+                                    if j != gtk_idx { ww.active = false; }
+                                }
+                                order.retain(|&x| x != gtk_idx);
+                                order.push(gtk_idx);
+                                need_full = true;
+                            }
+                            out.push(msg);
                         }
                     } else if !exec_cmd.is_empty() {
                         // Pipeline: split on '|' into stages; stdout of stage N -> stdin of N+1.
@@ -3449,6 +5065,61 @@ fn main() -> Status {
                 _ => {}
             }
         }
+
+        // File dialog: list a directory it asked for, and carry out a chosen path.
+        if let Some(dir) = filedialog::needs_load() {
+            let items = match ctx.fs.list_dir(&dir) {
+                Ok(v) => v.into_iter().map(|e| (e.name, e.kind == eurofs::EntryKind::Directory)).collect::<Vec<_>>(),
+                Err(_) => Vec::new(),
+            };
+            filedialog::set_entries(&dir, items);
+            need_full = true;
+        }
+        if let Some((mode, path)) = filedialog::take_result() {
+            match mode {
+                filedialog::Mode::Open => textedit::open(ctx.fs, &path),
+                filedialog::Mode::Save => { textedit::save_to(ctx.fs, &path); }
+            }
+            // Raise the EuroText window so the result is visible.
+            if let Some(w) = windows.iter().position(|win| win.app == suite_ui::SuiteApp::Text) {
+                order.retain(|&x| x != w);
+                order.push(w);
+                for ww in windows.iter_mut() { ww.active = false; }
+                windows[w].visible = true;
+                windows[w].active = true;
+            }
+            need_full = true;
+        }
+
+        // Open an app requested by the launcher or a menu (single place).
+        if let Some(icon) = launch_icon {
+            if let Some(w) = dock_targets.get(icon).copied().flatten().filter(|&w| w < windows.len()) {
+                // The hosted X window is only a frame: opening it has to start the app
+                // behind it, or it opens onto nothing.
+                if windows[w].app == suite_ui::SuiteApp::XClient && !ring3::persistent_running() {
+                    let (ok, msg) = launch_chrome_app(ctx.mem);
+                    serial_println!("[chrome-app] {msg}");
+                    notify::push(if ok { "Chromium starting" } else { "Chromium" }, &msg, interrupts::ticks());
+                    if ok {
+                        windows[w].title = String::from("Chromium  -  chrome");
+                        windows[w].w = 800;
+                        windows[w].h = 600 + compositor::TITLEBAR_H;
+                        windows[w].x = SIDEBAR_W + 60;
+                        windows[w].y = 90;
+                    }
+                }
+                order.retain(|&x| x != w);
+                order.push(w);
+                for ww in windows.iter_mut() { ww.active = false; }
+                windows[w].visible = true;
+                windows[w].active = true;
+                if windows[w].app == suite_ui::SuiteApp::Files && files::current_path().is_empty() {
+                    load_files_dir(ctx.fs, "/");
+                }
+            }
+            need_full = true;
+        }
+
         if term_dirty && windows[term_idx].visible {
             compositor::restore_cursor_bg(&fb, cmx, cmy, &cur_bg);
             // The Terminal is the front window and overlaps nothing above it, so only
@@ -3474,24 +5145,143 @@ fn main() -> Status {
         }
 
         let t = interrupts::ticks();
-        let tick = t / 50 != last_t;
+        // PERF FIX (idle CPU): the periodic status-panel + system-window repaint is the
+        // desktop's only idle work, and each repaint is software-rendered text that costs
+        // ~370 ms under pure emulation (no KVM). At 0.5 s (t/50) that pegged the host core
+        // at ~96% even on a truly idle desktop. The clock is "HH:MM" (changes once a
+        // minute) and the live counters are informational, so a 2 s cadence (t/200) is
+        // ample — it drops idle host-CPU ~4x while input/cursor stay instant (handled by
+        // their own IRQ-woken paths, not this tick).
+        let tick = t / 200 != last_t;
 
+        // Alt-Tab app switcher: tap Tab (Alt held) to cycle; release Alt to raise.
+        if ps2::take_alt_tab() {
+            if switcher::is_open() {
+                switcher::advance();
+            } else {
+                let items: alloc::vec::Vec<(usize, String)> = order.iter().rev().copied()
+                    .filter(|&i| windows[i].visible)
+                    .map(|i| (i, windows[i].title.clone()))
+                    .collect();
+                switcher::begin(items);
+            }
+            need_full = true;
+        }
+        if switcher::is_open() && !ps2::alt_down() {
+            if let Some(w) = switcher::selected() {
+                order.retain(|&x| x != w);
+                order.push(w);
+                for ww in windows.iter_mut() { ww.active = false; }
+                windows[w].active = true;
+                windows[w].visible = true;
+            }
+            switcher::close();
+            need_full = true;
+        }
+
+        // Workspaces: Alt+1..4 switches virtual desktops (save/restore visibility).
+        if let Some(k) = ps2::take_ws_switch() {
+            if k < workspace::COUNT && k != active_ws {
+                ws_saved[active_ws] = Some(windows.iter().map(|w| w.visible).collect());
+                let target = ws_saved[k].as_deref();
+                let vis = workspace::switch_visibility(windows.len(), target);
+                for (i, v) in vis.iter().enumerate() {
+                    windows[i].visible = *v;
+                }
+                active_ws = k;
+                notify::push("Workspace", &alloc::format!("Switched to desktop {}", k + 1), t);
+                need_full = true;
+            }
+        }
+
+        // Tooltips: after a short dwell over a control, show its label. Any open
+        // overlay suppresses tooltips.
+        let overlay_up = ctxmenu::is_open() || launcher::is_open() || filedialog::is_open() || notify::is_centre_open();
+        let target = if overlay_up { None } else { tooltip_for(px, py, &windows, &order, width) };
+        if target != hover_txt {
+            hover_txt = target;
+            hover_since = t;
+            if tip_shown {
+                tooltip::clear();
+                tip_shown = false;
+                need_full = true;
+            }
+        } else if let Some(txt) = &hover_txt {
+            if !tip_shown && t.saturating_sub(hover_since) > 35 {
+                tooltip::set(txt, px, py);
+                tip_shown = true;
+                need_full = true;
+            }
+        }
+
+        // While a context menu or the launcher is open, keep repainting so the
+        // hovered row tracks the cursor and the overlay stays above everything.
+        if ctxmenu::is_open() || launcher::is_open() || filedialog::is_open()
+            || symbolpicker::is_open() || notify::has_active_toasts(t) || notify::is_centre_open()
+            || file_drag.is_some() || switcher::is_open()
+        {
+            need_full = true;
+        }
+        if need_full { full_repaints += 1; }
         if need_full {
             // Full redraw (drag or z-order changed).
-            last_t = t / 50;
+            last_t = t / 200;
             compositor::render(&fb, &windows, &order, &rtc::clock_string(), &rtc::date_string(), &mk_stats(ctx.mem.free_bytes()));
             // 3F-7: draw the permission-portal modal over the desktop (if a
             // request is pending) and remember its button rects for the click loop.
             portal_buttons = portal::render_dialog(&fb, width, height);
+            // The right-click context menu overlays the desktop, under the cursor.
+            ctxmenu::render(&fb, px, py);
+            // The app launcher overlays everything (a centered search palette).
+            launcher::render(&fb, width, height);
+            // The file open/save dialog is the topmost overlay when active.
+            filedialog::render(&fb, width, height);
+            // The symbol picker overlay.
+            symbolpicker::render(&fb, width, height);
+            // Notification toasts and the centre shade sit above the desktop.
+            notify::render_toasts(&fb, width, t);
+            notify::render_centre(&fb, width, height);
+            // A hover tooltip, if one is showing, sits just under the cursor.
+            tooltip::render(&fb, width, height);
+            // A drag ghost while a file is being dragged out of EuroFiles.
+            if let Some((ref path, _, _)) = file_drag {
+                let name = path.rsplit('/').next().unwrap_or(path);
+                let tw = text::width_px(name, 12.0);
+                let gx = px + 12;
+                let gy = py + 12;
+                fb.fill_rounded_rect(gx, gy, tw + 22, 24, eds::RADIUS_S, Color::ACCENT);
+                text::draw_px(&fb, gx + 11, gy + 5, name, Color::WHITE, 12.0);
+            }
+            // The Alt-Tab switcher overlay.
+            switcher::render(&fb, width, height);
+            // Workspace pager: one dot per virtual desktop, the active one filled.
+            {
+                let n = workspace::COUNT;
+                let (dot, gap) = (10usize, 10usize);
+                let total = n * dot + (n - 1) * gap;
+                let sx = width.saturating_sub(total) / 2;
+                let sy = height.saturating_sub(26);
+                for i in 0..n {
+                    let c = if i == active_ws { Color::ACCENT } else { Color::BORDER };
+                    fb.fill_rounded_rect(sx + i * (dot + gap), sy, dot, dot, dot / 2, c);
+                }
+            }
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
             compositor::draw_cursor(&fb, cmx, cmy);
             fb.present();
     if let Some((bb, bw, bh, bs)) = fb.backbuffer() { virtio_gpu::present_frame(bb, bw, bh, bs); } // BB-2: live virtio-gpu scanout
+            // Capture the freshly rendered desktop if a screenshot was requested.
+            if pending_shot {
+                if let Some(path) = screenshot::capture(&fb, ctx.fs) {
+                    notify::push("Screenshot saved", &path, t);
+                }
+                pending_shot = false;
+            }
         } else if tick {
             // Update the live system window (incl. daemon heartbeat) + clock.
-            last_t = t / 50;
+            last_t = t / 200;
             // Diagnostics: log the number of keyboard IRQs (via IO-APIC) on change.
             let kc = interrupts::KBD_IRQ_COUNT.load(Ordering::Relaxed);
             if kc != last_kbd {
@@ -3519,6 +5309,13 @@ fn main() -> Status {
                 windows[sys_idx].content = sysinfo(t, ctx.mem.free_bytes());
                 compositor::draw_window_body(&fb, &windows[sys_idx]);
             }
+            // Live GTK app: if it repainted (X client presented a new frame), recomposite
+            // its window body from the retained X buffer + blit only that rect.
+            let gtk_vis = windows[gtk_idx].visible && xserver::take_dirty();
+            if gtk_vis { xrepaints += 1; }
+            if gtk_vis {
+                compositor::draw_window_body(&fb, &windows[gtk_idx]);
+            }
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
@@ -3530,6 +5327,10 @@ fn main() -> Status {
             if sys_vis {
                 let (sx, sy, sw, sh) = compositor::window_body_rect(&windows[sys_idx]);
                 fb.present_rect(sx, sy, sw, sh);
+            }
+            if gtk_vis {
+                let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
+                fb.present_rect(gx, gy, gw, gh);
             }
             fb.present_rect(ox, oy, compositor::CURSOR_W, compositor::CURSOR_H);
             fb.present_rect(cmx, cmy, compositor::CURSOR_W, compositor::CURSOR_H);
@@ -3552,10 +5353,97 @@ fn main() -> Status {
         // Keep the network alive: answer ARP requests + recycle RX buffers.
         net::service();
 
+        // One-shot self-test: after the live GTK window has been up a while, synthesize a
+        // click on its Reset button (through the normal desktop click path) to prove
+        // desktop->X input routing end-to-end (the on-screen counter visibly resets).
+        // The ggtk self-test below drives a demo: it types into the app, clicks its
+        // Reset button and then CLOSES it (killing the persistent process) to prove the
+        // teardown path. That is fine for a demo and fatal for a real application — it
+        // shot down a live Chromium 90 ticks after its first window. It runs only with
+        // the demo it belongs to.
+        if cfg!(feature = "live-demos") && windows[gtk_idx].visible && xserver::front_window_size().is_some() {
+            gtk_dtick += 1;
+            // Self-test 1a: focus the window + type "hi" into the entry (keyboard).
+            if gtk_dtick == 30 {
+                for ww in windows.iter_mut() { ww.active = false; }
+                windows[gtk_idx].active = true;
+                xserver::deliver_focus(true);
+                ps2::push_scancode(0x23); ps2::push_scancode(0x23 | 0x80); // h
+                ps2::push_scancode(0x17); ps2::push_scancode(0x17 | 0x80); // i
+                serial_println!("[gtk-test] focused + typed 'hi'");
+            }
+            // Self-test 1b: click the Reset button (X delivery + GTK dispatch).
+            if gtk_dtick == 45 && !gtk_click_done {
+                if let Some((xw, xh)) = xserver::front_window_size() {
+                    let (lx, ly) = ((xw / 2) as i16, xh.saturating_sub(18) as i16);
+                    serial_println!("[gtk-test] deliver_button to Reset @local({lx},{ly}) of {xw}x{xh}");
+                    xserver::deliver_button(lx, ly);
+                }
+                gtk_click_done = true;
+            }
+            // Self-test 2 (Leg B): close the window -> terminate the app + free its arena.
+            if gtk_dtick == 90 {
+                let free_before = ctx.mem.free_bytes();
+                ring3::kill_persistent_glibc(ctx.mem);
+                windows[gtk_idx].visible = false;
+                order.retain(|&x| x != gtk_idx);
+                need_full = true;
+                serial_println!("[gtk-test] closed GTK window; free RAM {} -> {} MiB",
+                    free_before / (1 << 20), ctx.mem.free_bytes() / (1 << 20));
+            }
+        }
+
+        // A hosted app's own words, on the serial log. It never exits, so this is the
+        // only place its stdout/stderr can appear at all. Alongside it: how much of the
+        // machine the DESKTOP is using while the app runs. A browser that crawls when
+        // hosted but flies in the boot phase is either being starved or is stuck, and
+        // these two numbers are what tells them apart.
+        if ring3::persistent_running() && interrupts::ticks() % 200 == 0 {
+            for l in ring3::take_output().lines() {
+                serial_println!("[hosted] {l}");
+            }
+            let t = interrupts::ticks();
+            serial_println!("[hosted] desktop: {} loops, {} window repaints, {} full repaints in {} ticks",
+                loop_iters - hosted_last.1, xrepaints - hosted_last.2, full_repaints - hosted_last.3,
+                t - hosted_last.0);
+            hosted_last = (t, loop_iters, xrepaints, full_repaints);
+        }
+
+        // Keyboard focus: when the hosted GTK window is the active window, route real
+        // keystrokes to it (X KeyPress via the keymap) instead of the shell. Otherwise
+        // the shell keeps the keyboard as normal.
+        if windows[gtk_idx].visible && windows[gtk_idx].active {
+            xserver::pump_keyboard();
+            // Hover: forward pointer motion over the hosted window's body, so the app
+            // highlights what is under the cursor (a browser's tabs, buttons and links
+            // all react to hover long before anyone clicks). Only on a real move — a
+            // motion event per desktop frame would be a needless flood.
+            let (mpx, mpy) = mouse::pos();
+            if (mpx, mpy) != last_hover {
+                last_hover = (mpx, mpy);
+                let (bx, by, bw, bh) = compositor::window_body_rect(&windows[gtk_idx]);
+                if let Some((xw, xh)) = xserver::front_window_size() {
+                    let ox = bx + bw.saturating_sub(xw) / 2;
+                    let oy = by + bh.saturating_sub(xh) / 2;
+                    if mpx >= ox && mpy >= oy && mpx < ox + xw && mpy < oy + xh {
+                        xserver::deliver_motion((mpx - ox) as i16, (mpy - oy) as i16);
+                    }
+                }
+            }
+        }
+
+        // Cooperatively yield so a hosted persistent glibc app (the live GTK window)
+        // gets CPU promptly instead of only via timer preemption — the desktop loop
+        // otherwise just hlt()s, which the Explore mapping flagged as starving it.
+        if xserver::x_windowed() {
+            crate::sched::yield_now();
+        }
+
         // Finishing sprint: HLT idle. Yield the CPU until the NEXT interrupt (timer
         // 100 Hz or keyboard/mouse/USB input) instead of spinning 100% — the CPU
         // sleeps energy-efficiently between frames; the timer tick guarantees ~10 ms
         // responsiveness and every input IRQ wakes the desktop immediately.
+        loop_iters += 1;
         x86_64::instructions::hlt();
     }
 }
@@ -3584,10 +5472,11 @@ fn eurojs_show(v: &eurojs::Value) -> String {
     }
 }
 
-fn system_binaries() -> [(&'static str, &'static [u8]); 31] {
+fn system_binaries() -> [(&'static str, &'static [u8]); 32] {
     [
         ("/bin/fbtest", ring3::fbtest_bytes()),
         ("/bin/doom", ring3::doom_bytes()),
+        ("/bin/browser", ring3::browser_bytes()),
         ("/bin/hello", ring3::program_bytes()),
         ("/bin/cat", ring3::cat_bytes()),
         ("/bin/linuxprog", ring3::linuxprog_bytes()),

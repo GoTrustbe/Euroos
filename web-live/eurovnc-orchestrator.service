@@ -1,0 +1,43 @@
+[Unit]
+Description=EuroOS live-try orchestrator (spawns throw-away QEMU VNC sessions)
+After=network.target
+Wants=eurovnc-websockify.service
+
+[Service]
+Type=simple
+User=eurovnc
+Group=eurovnc
+Environment=EUROVNC_HOST=127.0.0.1
+Environment=EUROVNC_PORT=6070
+Environment=EUROVNC_MAX_SESSIONS=3
+# RAM per session. The preview kernel image grew (embedded fonts/icons/userland),
+# so 256M no longer loads the loader+kernel and OVMF drops to the UEFI shell.
+# 512M boots reliably and matches the download launcher; 3 x 512M fits the host.
+Environment=EUROVNC_VM_RAM=512M
+Environment=EUROVNC_TTL=1800
+Environment=EUROVNC_IP_COOLDOWN=120
+Environment=EUROVNC_DISPLAY_MIN=1
+Environment=EUROVNC_DISPLAY_MAX=9
+Environment=EUROVNC_BASE_IMAGE=/opt/eurovnc/base.img
+Environment=EUROVNC_TOKEN_DIR=/run/eurovnc/tokens
+Environment=EUROVNC_SESSION_DIR=/run/eurovnc/sessions
+Environment=EUROVNC_SIGNUP_LOG=/var/lib/eurovnc/signups.log
+ExecStart=/usr/bin/python3 /opt/eurovnc/orchestrator.py
+Restart=on-failure
+RestartSec=2
+KillMode=mixed
+TimeoutStopSec=20
+
+# Hardening (kept moderate: the service launches QEMU child VMs)
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run/eurovnc /var/lib/eurovnc
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
