@@ -8,7 +8,7 @@ use crate::graphics::{Color, FrameBuffer};
 use crate::serial_println;
 use crate::text;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use eurodoc::model::Block;
+use eurodoc::model::{Block, Run};
 use eurofs::fs as eurofs_api;
 
 /// Equal to `compositor::TITLEBAR_H`.
@@ -162,6 +162,91 @@ pub fn selected() -> usize {
     SELECTED.load(Ordering::Relaxed).min(live_notes().len().saturating_sub(1))
 }
 
+/// The formatting toolbar: (label, markdown-wrap). B/I wrap the word at the
+/// cursor; the block styles prefix the line.
+const TOOLBAR: [(&str, &str); 7] = [
+    ("B", "**"),
+    ("I", "*"),
+    ("H1", "# "),
+    ("H2", "## "),
+    ("\u{2022}", "- "),
+    ("<>", "`"),
+    ("\u{201C}", "> "),
+];
+
+/// A click on the canvas toolbar. `lx,ly` are window-local. Returns true if it
+/// handled a formatting action (so the caller repaints + persists).
+pub fn toolbar_click(win_x: usize, win_y: usize, mx: usize, my: usize, win_w: usize) -> bool {
+    let list_w = 210usize;
+    let px = win_x + list_w + 1;
+    let pw = win_w - list_w - 1;
+    let tb_y = win_y + TITLEBAR_H + 8;
+    if my < tb_y || my >= tb_y + 26 {
+        return false;
+    }
+    // Font toggle.
+    if mx >= px + pw - 90 && mx < px + pw - 12 {
+        cycle_font();
+        return true;
+    }
+    let idx = mx.checked_sub(px + 12).map(|d| d / 46);
+    let Some(i) = idx.filter(|&i| i < TOOLBAR.len()) else { return false };
+    let (label, mark) = TOOLBAR[i];
+    apply_format(label, mark);
+    true
+}
+
+/// Apply a formatting action to the selected note through the shared edit buffer.
+fn apply_format(label: &str, mark: &str) {
+    sync_buf();
+    let mut g = BUF.lock();
+    let Some(b) = g.as_mut() else { return };
+    match label {
+        "B" | "I" | "<>" => {
+            // Wrap the word around the cursor in the marker (e.g. **word**).
+            let row = b.row;
+            let line = b.lines[row].clone();
+            let chars: alloc::vec::Vec<char> = line.chars().collect();
+            // Skip a leading markdown marker so Bold/Italic never eats "# " / "- ".
+            let mut skip = 0usize;
+            for pre in ["### ", "## ", "# ", "- ", "> "] {
+                if line.starts_with(pre) { skip = pre.chars().count(); break; }
+            }
+            // Find word bounds around the cursor column (never before the marker).
+            let mut a = b.col.min(chars.len()).max(skip);
+            let mut z = a;
+            while a > skip && !chars[a - 1].is_whitespace() { a -= 1; }
+            while z < chars.len() && !chars[z].is_whitespace() { z += 1; }
+            let before: alloc::string::String = chars[..a].iter().collect();
+            let word: alloc::string::String = chars[a..z].iter().collect();
+            let after: alloc::string::String = chars[z..].iter().collect();
+            let word = if word.is_empty() { alloc::string::String::from("text") } else { word };
+            b.lines[row] = alloc::format!("{before}{mark}{word}{mark}{after}");
+            b.col = a + mark.chars().count() + word.chars().count() + mark.chars().count();
+        }
+        _ => {
+            // Block style: prefix the current line (strip an existing prefix first).
+            let row = b.row;
+            let mut line = alloc::string::String::from(b.lines[row].trim_start());
+            for pre in ["# ", "## ", "### ", "- ", "> "] {
+                if let Some(rest) = line.strip_prefix(pre) {
+                    line = alloc::string::String::from(rest);
+                }
+            }
+            b.lines[row] = alloc::format!("{mark}{line}");
+            b.col = b.lines[row].chars().count();
+        }
+    }
+    b.dirty = true;
+    // Write back to LIVE so it renders + persists.
+    let text = b.text();
+    let sel = selected();
+    if let Some(n) = LIVE.lock().get_mut(sel) {
+        *n = text;
+    }
+    DIRTY.store(true, Ordering::Relaxed);
+}
+
 /// Click in the note list? Set the selection and return `true` if it changed.
 pub fn hit_test(win_x: usize, win_y: usize, mx: usize, my: usize) -> bool {
     let lx = win_x;
@@ -245,12 +330,25 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let margin = 30usize;
     let tx = px + margin;
     let maxw = pw.saturating_sub(margin * 2);
-    let mut ty = by + 28;
 
-    text::draw_px(fb, tx, ty, &clip(&note.title, maxw, 26.0), Color::INK, 26.0);
-    ty += 38;
+    // Formatting toolbar: Bold, Italic, H1, H2, List, Code, Quote, Font.
+    let tb_y = by + 8;
+    for (i, (label, _)) in TOOLBAR.iter().enumerate() {
+        let bxp = px + 12 + i * 46;
+        fb.fill_rounded_rect(bxp, tb_y, 42, 26, 6, Color::rgb(0xEE, 0xF0, 0xF4));
+        let st = match *label { "B" => text::STYLE_BOLD, "I" => text::STYLE_ITALIC, _ => 0 };
+        text::draw_px_styled(fb, bxp + 14, tb_y + 6, label, Color::INK, 13.0, st, 0);
+    }
+    // Font toggle button on the right.
+    let fbtn_x = px + pw - 90;
+    fb.fill_rounded_rect(fbtn_x, tb_y, 78, 26, 6, Color::rgb(0xE4, 0xE8, 0xEE));
+    text::draw_px(fb, fbtn_x + 10, tb_y + 6, &alloc::format!("Aa {}", font_name()), Color::INK, 12.5);
+
+    // No separate title line: the first heading block below IS the title (rendered
+    // with real bold via runs, so markdown markers never show up literally).
+    let mut ty = by + 46;
     fb.fill_rect(tx, ty, 56, 3, accent);
-    ty += 18;
+    ty += 14;
 
     let ymax = by + bh - 44;
     for blk in &note.blocks {
@@ -260,8 +358,8 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         if let Block::Paragraph(p) = blk {
             let txt = p.plain_text();
             let (size, col, indent, bullet) = match p.props.style_id.as_deref() {
-                Some("Heading1") => (19.0f32, Color::INK, 0usize, false),
-                Some("Heading2") => (16.0, accent, 0, false),
+                Some("Heading1") => (25.0f32, Color::INK, 0usize, false),
+                Some("Heading2") => (18.0, accent, 0, false),
                 Some("Quote") => (13.5, Color::TEXT_SEC, 14, false),
                 _ => match p.props.list_level {
                     Some(lvl) => (13.5, Color::INK, 14 + lvl as usize * 18, true),
@@ -271,11 +369,14 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
             if txt.trim().is_empty() {
                 continue;
             }
+            let _ = txt;
+            let heading_bold = matches!(p.props.style_id.as_deref(), Some("Heading1") | Some("Heading2"));
+            let fam = FONT_FAMILY.load(Ordering::Relaxed) as u8;
             if bullet {
                 fb.fill_rounded_rect(tx + indent, ty + 7, 5, 5, 2, accent);
-                ty = draw_wrapped(fb, tx + indent + 12, ty, maxw.saturating_sub(indent + 12), &txt, col, size, 20, ymax);
+                ty = draw_runs(fb, tx + indent + 12, ty, maxw.saturating_sub(indent + 12), &p.runs, col, size, 20, ymax, heading_bold, fam);
             } else {
-                ty = draw_wrapped(fb, tx + indent, ty, maxw.saturating_sub(indent), &txt, col, size, (size as usize) + 8, ymax);
+                ty = draw_runs(fb, tx + indent, ty, maxw.saturating_sub(indent), &p.runs, col, size, (size as usize) + 8, ymax, heading_bold, fam);
             }
             ty += 6;
         }
@@ -299,6 +400,42 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
 }
 
 /// Draw `s` with simple word wrap; returns the new y.
+/// Font family for the note canvas: 0 = sans (Inter), 1 = monospace.
+static FONT_FAMILY: AtomicUsize = AtomicUsize::new(0);
+pub fn cycle_font() {
+    let n = (FONT_FAMILY.load(Ordering::Relaxed) + 1) % 2;
+    FONT_FAMILY.store(n, Ordering::Relaxed);
+    DIRTY.store(false, Ordering::Relaxed);
+}
+pub fn font_name() -> &'static str {
+    if FONT_FAMILY.load(Ordering::Relaxed) == 1 { "Mono" } else { "Sans" }
+}
+
+/// Draw a paragraph's runs with per-run bold/italic, wrapping on word boundaries.
+/// `force_bold` makes the whole line bold (headings). Returns the new y.
+fn draw_runs(fb: &FrameBuffer, x: usize, mut y: usize, maxw: usize, runs: &[Run],
+             col: Color, size: f32, lead: usize, ymax: usize, force_bold: bool, fam: u8) -> usize {
+    let mut cx = x;
+    let line_h = lead;
+    for run in runs {
+        let mut style = 0u8;
+        if run.props.bold || force_bold { style |= text::STYLE_BOLD; }
+        if run.props.italic { style |= text::STYLE_ITALIC; }
+        // Word-wrap this run.
+        for word in run.text.split_inclusive(' ') {
+            let ww = text::width_px_styled(word, size, style, fam);
+            if cx + ww > x + maxw && cx > x {
+                cx = x;
+                y += line_h;
+                if y + line_h > ymax { return y; }
+            }
+            text::draw_px_styled(fb, cx, y, word, col, size, style, fam);
+            cx += ww;
+        }
+    }
+    y + line_h
+}
+
 fn draw_wrapped(fb: &FrameBuffer, x: usize, mut y: usize, maxw: usize, s: &str, col: Color, size: f32, lead: usize, ymax: usize) -> usize {
     use alloc::string::String;
     let mut line = String::new();

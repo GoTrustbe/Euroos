@@ -4565,7 +4565,10 @@ fn main() -> Status {
                         painting = Some(i);
                     } else if windows[i].app == suite_ui::SuiteApp::Notes {
                         // Click in the notes list → select a different note.
-                        notes::hit_test(windows[i].x, windows[i].y, px, py);
+                        // The formatting toolbar first, then the note-list selection.
+                        if !notes::toolbar_click(windows[i].x, windows[i].y, px, py, windows[i].w) {
+                            notes::hit_test(windows[i].x, windows[i].y, px, py);
+                        }
                     } else if windows[i].app == suite_ui::SuiteApp::Text {
                         // Click on "Open" → the file picker; "Save" → write to EuroFS;
                         // a click in the text body positions the cursor there.
