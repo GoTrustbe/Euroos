@@ -51,12 +51,26 @@ pub struct DirItem {
 }
 
 fn u16le(b: &[u8], o: usize) -> u16 {
+    // Bounds-safe: a short buffer reads as zero. An SMB response from an
+    // arbitrary server is untrusted input; an out-of-range field must surface
+    // as a protocol error in the caller, never as a slice panic (this exact
+    // panic took down a public boot when a host answered port 445 with a
+    // shorter-than-expected CREATE response).
+    if o + 2 > b.len() {
+        return 0;
+    }
     u16::from_le_bytes([b[o], b[o + 1]])
 }
 fn u32le(b: &[u8], o: usize) -> u32 {
+    if o + 4 > b.len() {
+        return 0;
+    }
     u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
 }
 fn u64le(b: &[u8], o: usize) -> u64 {
+    if o + 8 > b.len() {
+        return 0;
+    }
     let mut a = [0u8; 8];
     a.copy_from_slice(&b[o..o + 8]);
     u64::from_le_bytes(a)
@@ -163,6 +177,9 @@ impl<T: Transport> SmbClient<T> {
         if off + len > resp.len() {
             return Err(SmbError::Protocol(status));
         }
+        if off + len > resp.len() {
+            return Err(SmbError::Auth);
+        }
         let chal = ntlm::parse_challenge(&resp[off..off + len]).ok_or(SmbError::Auth)?;
         // Round 2: NTLMSSP AUTHENTICATE.
         let auth = ntlm::authenticate(user, domain, password, &chal, client_chal, now_filetime);
@@ -223,6 +240,9 @@ impl<T: Transport> SmbClient<T> {
         if status != STATUS_SUCCESS {
             return Err(SmbError::Protocol(status));
         }
+        if resp.len() < 64 + 80 {
+            return Err(SmbError::Protocol(0xFFFF_FFFF)); // truncated CREATE response
+        }
         let mut fid = [0u8; 16];
         fid.copy_from_slice(&resp[64 + 64..64 + 80]); // FileId at body offset 64
         let eof = u64le(&resp, 64 + 48); // EndOfFile at body offset 48
@@ -260,10 +280,16 @@ impl<T: Transport> SmbClient<T> {
         if status != STATUS_SUCCESS {
             return Err(SmbError::Protocol(status));
         }
+        if resp.len() < 64 + 3 {
+            return Err(SmbError::Protocol(0xFFFF_FFFF));
+        }
         let data_off = resp[64 + 2] as usize; // DataOffset (from header start)
         let data_len = u32le(&resp, 64 + 4) as usize; // DataLength
         if data_off + data_len > resp.len() {
             return Err(SmbError::Transport);
+        }
+        if data_off + data_len > resp.len() {
+            return Err(SmbError::Protocol(0xFFFF_FFFF)); // data range outside response
         }
         Ok(resp[data_off..data_off + data_len].to_vec())
     }
@@ -351,7 +377,9 @@ impl<T: Transport> SmbClient<T> {
             if out_off + out_len > resp.len() {
                 break;
             }
-            parse_dir_info(&resp[out_off..out_off + out_len], &mut items);
+            if out_off + out_len <= resp.len() {
+                parse_dir_info(&resp[out_off..out_off + out_len], &mut items);
+            }
             if out_len == 0 {
                 break;
             }

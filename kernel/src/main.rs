@@ -1471,10 +1471,15 @@ fn main() -> Status {
     for l in &net_lines {
         serial_println!("[net] {l}");
     }
-    // [io5] (Sprint IO): mount an SMB share over the live NIC (SLIRP → host Samba).
-    smbfs::selftest();
-    // [io6] (Sprint IO): mount an NFSv3 export over the live NIC (SLIRP → host nfsd).
-    nfsmount::selftest();
+    // [io5]/[io6] (Sprint IO): SMB/NFS mounts over the live NIC. DEV BUILDS ONLY:
+    // these dial the SLIRP gateway 10.0.2.2, which on an end user's machine is
+    // their OWN host — a downloaded OS must never probe the user's machine on
+    // port 445/2049 uninvited (it also crashed the public boot when a host
+    // answered 445 with a short response the parser did not expect).
+    if cfg!(feature = "selftest") {
+        smbfs::selftest();
+        nfsmount::selftest();
+    }
 
     // Load /bin/hello from EuroFS and VERIFY a real ED25519 SIGNATURE over
     // the program bytes against the public key baked into the kernel. Only
