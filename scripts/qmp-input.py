@@ -59,6 +59,10 @@ for raw in open(script_path):
         time.sleep(0.15)
         send([{"type": "btn", "data": {"down": False, "button": "left"}}])
         print("click", flush=True)
+    elif op == "down":
+        send([{"type": "btn", "data": {"down": True, "button": "left"}}])
+    elif op == "up":
+        send([{"type": "btn", "data": {"down": False, "button": "left"}}])
     elif op == "key":
         send([{"type": "key", "data": {"down": True, "key": {"type": "qcode", "data": parts[1]}}}])
         time.sleep(0.1)
