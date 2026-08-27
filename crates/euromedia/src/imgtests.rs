@@ -16,4 +16,11 @@ mod imgtests {
         assert_eq!(i.get(0,0).unwrap(),[255,0,0,255]); assert_eq!(i.get(3,2).unwrap(),[1,2,3,255]); }
     #[test] fn png_roundtrip(){ let i=decode_png(PNG_RGBA).unwrap(); let enc=encode_png(&i); let d=decode_png(&enc).unwrap();
         assert_eq!(i.pixels,d.pixels); }
+    #[test] fn paint_canvas_roundtrip(){
+        let mut im=Image::new(40,30,[255,255,255,255]);
+        for x in 5..35 { im.set(x,15,[231,76,60,255]); }
+        let png=encode_png(&im); let d=decode_png(&png).unwrap();
+        assert_eq!(d.width,40); assert_eq!(d.get(20,15).unwrap(),[231,76,60,255]);
+        assert_eq!(d.get(0,0).unwrap(),[255,255,255,255]);
+    }
 }

@@ -149,6 +149,7 @@ mod fatmount;
 mod extmount;
 mod smbfs;
 mod imageview;
+mod paint;
 mod nfsmount;
 mod disktest;
 mod stresstest;
@@ -3951,6 +3952,18 @@ fn main() -> Status {
             restore: None,
         });
         order.push(i_view);
+        let i_paint = windows.len();
+        windows.push(compositor::Window {
+            x: SIDEBAR_W + 160, y: 90, w: 680, h: 560,
+            title: String::from("EuroPaint"),
+            content: Vec::new(), ui: Vec::new(),
+            active: false, accent: Color::rgb(0x8B, 0x5C, 0xF6),
+            sec: eds::SecState::new(true, true, false),
+            app: suite_ui::SuiteApp::Paint,
+            visible: false,
+            restore: None,
+        });
+        order.push(i_paint);
         // Seed a real sample image so EuroView has something to show out of the box.
         {
             let mut im = euromedia::Image::new(96, 64, [0x0F, 0x1B, 0x3A, 255]);
@@ -4082,6 +4095,7 @@ fn main() -> Status {
     // ── Desktop loop: mouse cursor, window dragging, live system window. ──
     let mut dragging: Option<usize> = None;
     let mut resizing: Option<usize> = None; // window being resized by the corner grip
+    let mut painting: Option<usize> = None; // EuroPaint canvas stroke in progress
     // Tooltip hover state: what the cursor is over, and since when.
     let mut hover_txt: Option<String> = None;
     let mut hover_since = 0u64;
@@ -4539,6 +4553,13 @@ fn main() -> Status {
                             // EuroText) or, if it did not move, opens it normally.
                             file_drag = Some((fpath, px, py));
                         }
+                    } else if windows[i].app == suite_ui::SuiteApp::Paint {
+                        // Press in EuroPaint: a toolbar action or the start of a
+                        // canvas stroke (continued in the drag phase while held).
+                        if paint::pointer(windows[i].x, windows[i].y, px, py, true) {
+                            need_full = true;
+                        }
+                        painting = Some(i);
                     } else if windows[i].app == suite_ui::SuiteApp::Notes {
                         // Click in the notes list → select a different note.
                         notes::hit_test(windows[i].x, windows[i].y, px, py);
@@ -4562,6 +4583,7 @@ fn main() -> Status {
         }
         if !ldown {
             resizing = None;
+            if painting.is_some() { paint::release(); painting = None; }
             // Drop a file dragged out of EuroFiles.
             if let Some((path, sx, sy)) = file_drag.take() {
                 let moved = (px as i64 - sx as i64).abs() + (py as i64 - sy as i64).abs() > 14;
@@ -4630,6 +4652,15 @@ fn main() -> Status {
                 windows[idx].x = nx;
                 windows[idx].y = ny;
                 need_full = true;
+            }
+        }
+        if let Some(idx) = painting {
+            if mouse::left_down() {
+                // Draw at the CURRENT pointer while the button is held (px,py here
+                // are the live cursor, which is exactly what a brush stroke wants).
+                if paint::pointer(windows[idx].x, windows[idx].y, px, py, true) {
+                    need_full = true;
+                }
             }
         }
         if let Some(idx) = resizing {
@@ -5159,6 +5190,7 @@ fn main() -> Status {
         if notes::take_dirty() {
             notes::save_all(ctx.fs);
         }
+        paint::flush_save(ctx.fs); // EuroPaint: write a pending Save to EuroFS
 
 
         // File dialog: list a directory it asked for, and carry out a chosen path.
