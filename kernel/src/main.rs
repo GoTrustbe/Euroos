@@ -4054,6 +4054,7 @@ fn main() -> Status {
 
     // ── Desktop loop: mouse cursor, window dragging, live system window. ──
     let mut dragging: Option<usize> = None;
+    let mut resizing: Option<usize> = None; // window being resized by the corner grip
     // Tooltip hover state: what the cursor is over, and since when.
     let mut hover_txt: Option<String> = None;
     let mut hover_since = 0u64;
@@ -4296,7 +4297,12 @@ fn main() -> Status {
         // Left click just pressed: dock launch, window focus/raise, or drag.
         // Uses the press LATCH (mouse::take_press) instead of sampling the button
         // this iteration, so a quick tap is never missed on the emulated poll.
-        if dragging.is_none() && mouse::take_press().is_some() {
+        if let Some((cx, cy)) = if dragging.is_none() { mouse::take_press() } else { None } {
+            // Hit-test at the LATCHED press position, not the current cursor. QMP
+            // (and any fast input) can move the pointer between the button-down and
+            // the loop iteration that handles it; using the live pos then dropped
+            // the click onto empty space or the wrong window. (UX audit 2026-08-27.)
+            let (px, py) = (cx, cy);
             // 3F-7: a pending permission dialog is MODAL — it intercepts the
             // click before any window/dock hit-test, and routes the answer to
             // the portal broker (scoped grant / auto-revoke).
@@ -4413,7 +4419,15 @@ fn main() -> Status {
                         ww.active = false;
                     }
                     windows[i].active = true;
-                    if windows[i].titlebar_contains(px, py) {
+                    if windows[i].resize_grip_contains(px, py) {
+                        // Bottom-right grip → free resize (was: move + maximize only,
+                        // no way to make a window smaller — UX audit 2026-08-27).
+                        if let Some((rx, ry, _rw, _rh)) = windows[i].restore.take() {
+                            windows[i].x = rx;
+                            windows[i].y = ry;
+                        }
+                        resizing = Some(i);
+                    } else if windows[i].titlebar_contains(px, py) {
                         // Un-snap on pickup: a snapped or maximized window returns to
                         // its floating size, popping under the cursor so the drag feels
                         // natural (Windows/GNOME behaviour).
@@ -4507,6 +4521,7 @@ fn main() -> Status {
             }
         }
         if !ldown {
+            resizing = None;
             // Drop a file dragged out of EuroFiles.
             if let Some((path, sx, sy)) = file_drag.take() {
                 let moved = (px as i64 - sx as i64).abs() + (py as i64 - sy as i64).abs() > 14;
@@ -4564,6 +4579,17 @@ fn main() -> Status {
             if nx != windows[idx].x || ny != windows[idx].y {
                 windows[idx].x = nx;
                 windows[idx].y = ny;
+                need_full = true;
+            }
+        }
+        if let Some(idx) = resizing {
+            const MIN_W: usize = 320;
+            const MIN_H: usize = 200;
+            let nw = px.saturating_sub(windows[idx].x).max(MIN_W).min(width.saturating_sub(windows[idx].x));
+            let nh = py.saturating_sub(windows[idx].y).max(MIN_H).min(height.saturating_sub(windows[idx].y));
+            if nw != windows[idx].w || nh != windows[idx].h {
+                windows[idx].w = nw;
+                windows[idx].h = nh;
                 need_full = true;
             }
         }
