@@ -3935,6 +3935,7 @@ fn main() -> Status {
         order.push(i_text);
         dock_targets[8] = Some(i_text); // dock: text icon → EuroText
         textedit::open(ctx.fs, ""); // load the default edit file from EuroFS
+        notes::load(ctx.fs); // EuroNotes: load (or seed) the editable notes
 
         let i_mon = windows.len();
         windows.push(compositor::Window {
@@ -4619,6 +4620,7 @@ fn main() -> Status {
         let text_focused = focused.map(|i| windows[i].app == suite_ui::SuiteApp::Text).unwrap_or(false);
         // Only the (app-less) terminal window may receive keys as shell input.
         let term_focused = focused.map(|i| windows[i].app == suite_ui::SuiteApp::None).unwrap_or(false);
+        let notes_focused = focused.map(|i| windows[i].app == suite_ui::SuiteApp::Notes).unwrap_or(false);
 
         // ── Interactive shell / calculator: read keys. ──
         let mut term_dirty = false;
@@ -4707,6 +4709,13 @@ fn main() -> Status {
             // EuroText focus → the key edits the editor buffer (type/backspace/enter).
             if text_focused {
                 textedit::input(k);
+                need_full = true;
+                continue;
+            }
+            // EuroNotes focus → the key edits the selected note (type/backspace/
+            // enter, insertion at the end like EuroText). Persisted after the burst.
+            if notes_focused {
+                notes::input(k);
                 need_full = true;
                 continue;
             }
@@ -5070,6 +5079,11 @@ fn main() -> Status {
                 _ => {}
             }
         }
+        // Persist EuroNotes edits after the key burst (cheap in-cache writes).
+        if notes::take_dirty() {
+            notes::save_all(ctx.fs);
+        }
+
 
         // File dialog: list a directory it asked for, and carry out a chosen path.
         if let Some(dir) = filedialog::needs_load() {

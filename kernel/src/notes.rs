@@ -9,6 +9,7 @@ use crate::serial_println;
 use crate::text;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use eurodoc::model::Block;
+use eurofs::fs as eurofs_api;
 
 /// Equal to `compositor::TITLEBAR_H`.
 const TITLEBAR_H: usize = 44;
@@ -39,9 +40,91 @@ const NOTES: &[&str] = &[
 
 static SELECTED: AtomicUsize = AtomicUsize::new(0);
 
+/// The LIVE notes (editable). Seeded from `NOTES` on first load, then persisted
+/// on EuroFS under /home/euro/notes/note-<i>.md — a notes app that cannot make
+/// or edit a note is a viewer wearing the wrong name (UX audit, 2026-08-27).
+static LIVE: spin::Mutex<alloc::vec::Vec<alloc::string::String>> =
+    spin::Mutex::new(alloc::vec::Vec::new());
+static LOADED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static DIRTY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+const NOTES_DIR: &str = "/home/euro/notes";
+
+/// Load the notes from EuroFS (or seed + persist the samples on first run).
+pub fn load(fs: &mut dyn eurofs_api::FileSystem) {
+    if LOADED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let mut v = alloc::vec::Vec::new();
+    for i in 0..64 {
+        let path = alloc::format!("{NOTES_DIR}/note-{i}.md");
+        match fs.read_file(&path) {
+            Ok(b) => v.push(alloc::string::String::from_utf8_lossy(&b).into_owned()),
+            Err(_) => break,
+        }
+    }
+    if v.is_empty() {
+        v = NOTES.iter().map(|n| alloc::string::String::from(*n)).collect();
+        let _ = fs.create_dir(NOTES_DIR);
+        for (i, n) in v.iter().enumerate() {
+            let _ = fs.write_file(&alloc::format!("{NOTES_DIR}/note-{i}.md"), n.as_bytes());
+        }
+    }
+    *LIVE.lock() = v;
+}
+
+/// Persist every note (called after edits; EuroFS writes are cheap in-cache).
+pub fn save_all(fs: &mut dyn eurofs_api::FileSystem) {
+    let v = LIVE.lock().clone();
+    let _ = fs.create_dir(NOTES_DIR);
+    for (i, n) in v.iter().enumerate() {
+        let _ = fs.write_file(&alloc::format!("{NOTES_DIR}/note-{i}.md"), n.as_bytes());
+    }
+    DIRTY.store(false, Ordering::Relaxed);
+}
+
+/// Was there an edit since the last save_all()?
+pub fn take_dirty() -> bool {
+    DIRTY.swap(false, Ordering::Relaxed)
+}
+
+/// Append a fresh note and select it.
+pub fn new_note() {
+    let mut v = LIVE.lock();
+    v.push(alloc::string::String::from("# New note\n\n"));
+    SELECTED.store(v.len() - 1, Ordering::Relaxed);
+    DIRTY.store(true, Ordering::Relaxed);
+}
+
+/// One key into the SELECTED note (insertion at the end, same as EuroText).
+pub fn input(ch: char) {
+    let mut v = LIVE.lock();
+    let i = SELECTED.load(Ordering::Relaxed).min(v.len().saturating_sub(1));
+    let Some(n) = v.get_mut(i) else { return };
+    match ch {
+        '\r' | '\n' => n.push('\n'),
+        '\u{8}' | '\u{7f}' => {
+            n.pop();
+        }
+        c if c >= ' ' => n.push(c),
+        _ => return,
+    }
+    DIRTY.store(true, Ordering::Relaxed);
+}
+
+/// The current notes as owned strings (render/selftest).
+fn live_notes() -> alloc::vec::Vec<alloc::string::String> {
+    let v = LIVE.lock();
+    if v.is_empty() {
+        NOTES.iter().map(|n| alloc::string::String::from(*n)).collect()
+    } else {
+        v.clone()
+    }
+}
+
 /// Which note is open.
 pub fn selected() -> usize {
-    SELECTED.load(Ordering::Relaxed).min(NOTES.len() - 1)
+    SELECTED.load(Ordering::Relaxed).min(live_notes().len().saturating_sub(1))
 }
 
 /// Click in the note list? Set the selection and return `true` if it changed.
@@ -57,9 +140,15 @@ pub fn hit_test(win_x: usize, win_y: usize, mx: usize, my: usize) -> bool {
         return false;
     }
     let i = (my - ly) / row_h;
-    if i < NOTES.len() {
+    let notes = live_notes();
+    if i < notes.len() {
         let prev = SELECTED.swap(i, Ordering::Relaxed);
         return prev != i;
+    }
+    // The row right below the last note is the "+ New note" target.
+    if i == notes.len() {
+        new_note();
+        return true;
     }
     false
 }
@@ -78,14 +167,15 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let list_w = 210usize;
     fb.fill_rect(bx, by, list_w, bh, Color::CARD);
     fb.fill_rect(bx + list_w, by, 1, bh, Color::BORDER);
-    text::draw_px(fb, bx + 16, by + 16, "Notes  \u{00B7}  sample (read-only)", Color::INK, 14.0);
-    let cnt = alloc::format!("{}", NOTES.len());
+    let live = live_notes();
+    text::draw_px(fb, bx + 16, by + 16, "Notes  \u{00B7}  yours, editable", Color::INK, 14.0);
+    let cnt = alloc::format!("{}", live.len());
     text::draw_px(fb, bx + list_w - text::width_px(&cnt, 12.0) - 16, by + 18, &cnt, Color::TEXT_DIM, 12.0);
 
     let sel = selected();
     let row_h = 50usize;
     let row_y0 = by + 44;
-    for (i, md) in NOTES.iter().enumerate() {
+    for (i, md) in live.iter().enumerate() {
         let ry = row_y0 + i * row_h;
         let note = euronotes::parse(md);
         if i == sel {
@@ -103,8 +193,18 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         text::draw_px(fb, bx + 18, ry + 28, &clip(&sub, list_w - 36, 11.0), Color::TEXT_DIM, 11.0);
     }
 
+    // "+ New note" target: the row right after the last note (hit_test matches).
+    {
+        let ry = row_y0 + live.len() * row_h;
+        if ry + 30 < by + bh {
+            fb.fill_rounded_rect(bx + 8, ry, list_w - 16, row_h - 12, 9, Color::SURFACE);
+            text::draw_px(fb, bx + 18, ry + 10, "+ New note", accent, 13.0);
+        }
+    }
+
     // ── Note canvas on the right ─────────────────────────────────────────────
-    let note = euronotes::parse(NOTES[sel]);
+    let src = &live[sel.min(live.len() - 1)];
+    let note = euronotes::parse(src);
     let px = bx + list_w + 1;
     let pw = bw - list_w - 1;
     let margin = 30usize;
