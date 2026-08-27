@@ -3954,7 +3954,7 @@ fn main() -> Status {
         order.push(i_view);
         let i_paint = windows.len();
         windows.push(compositor::Window {
-            x: SIDEBAR_W + 160, y: 90, w: 680, h: 560,
+            x: SIDEBAR_W + 60, y: 70, w: 912, h: 600,
             title: String::from("EuroPaint"),
             content: Vec::new(), ui: Vec::new(),
             active: false, accent: Color::rgb(0x8B, 0x5C, 0xF6),
