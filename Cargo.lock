@@ -524,6 +524,9 @@ dependencies = [
 [[package]]
 name = "euromedia"
 version = "0.1.0"
+dependencies = [
+ "euroflate",
+]
 
 [[package]]
 name = "euromime"
