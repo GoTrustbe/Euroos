@@ -51,3 +51,9 @@ selftests dev-only, downloads+live opnieuw uitgerold.
 3. Files: Enter/dubbelklik opent bestand in EuroText (via euromime).
 4. Venster-resize (greep rechtsonder).
 5. EuroWeb-startpagina: minimale welkomstpagina i.p.v. leeg wit.
+
+
+## Fase 2 voortgang
+1. EuroNotes bewerkbaar: ✅ (commit hierboven; bewijs ux5/ux6-shots: typen
+   rendert live, + New note maakt en selecteert; persistentie = EuroFS, dus
+   op een root-disk-install blijvend, in live/RAM-mode vluchtig zoals alles).
