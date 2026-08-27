@@ -209,7 +209,7 @@ fn build_context_menu(
     ry: usize,
     windows: &[compositor::Window],
     order: &[usize],
-    dock_targets: &[Option<usize>; 12],
+    dock_targets: &[Option<usize>; 14],
     sw: usize,
     sh: usize,
 ) {
@@ -3620,7 +3620,7 @@ fn main() -> Status {
     // hidden); a dock click opens an app. (AG-1 added files/notes/clock.)
     // 12 slots for 11 dock tiles: index 11 has no tile of its own — it is the hosted
     // X-client window (Chromium), reachable from the app launcher and the shell.
-    let mut dock_targets: [Option<usize>; 12] = [None; 12];
+    let mut dock_targets: [Option<usize>; 14] = [None; 14];
     dock_targets[4] = Some(1); // terminal → Terminal (the real shell)
     dock_targets[11] = Some(2); // launcher: "Chromium" → the hosted X window
 
@@ -3964,6 +3964,8 @@ fn main() -> Status {
             restore: None,
         });
         order.push(i_paint);
+        dock_targets[12] = Some(i_view);  // launcher: "EuroView" → the image viewer
+        dock_targets[13] = Some(i_paint); // launcher: "EuroPaint" → the editor
         // Seed a real sample image so EuroView has something to show out of the box.
         {
             let mut im = euromedia::Image::new(96, 64, [0x0F, 0x1B, 0x3A, 255]);
