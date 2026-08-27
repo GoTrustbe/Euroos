@@ -93,23 +93,58 @@ pub fn new_note() {
     let mut v = LIVE.lock();
     v.push(alloc::string::String::from("# New note\n\n"));
     SELECTED.store(v.len() - 1, Ordering::Relaxed);
+    BUF_FOR.store(usize::MAX, Ordering::Relaxed);
     DIRTY.store(true, Ordering::Relaxed);
 }
 
-/// One key into the SELECTED note (insertion at the end, same as EuroText).
-pub fn input(ch: char) {
-    let mut v = LIVE.lock();
-    let i = SELECTED.load(Ordering::Relaxed).min(v.len().saturating_sub(1));
-    let Some(n) = v.get_mut(i) else { return };
-    match ch {
-        '\r' | '\n' => n.push('\n'),
-        '\u{8}' | '\u{7f}' => {
-            n.pop();
-        }
-        c if c >= ' ' => n.push(c),
-        _ => return,
+/// The edit buffer for the SELECTED note (cursor, mid-text insert, navigation).
+static BUF: spin::Mutex<Option<crate::editcore::Buffer>> = spin::Mutex::new(None);
+static BUF_FOR: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Ensure the edit buffer holds the currently-selected note's text.
+fn sync_buf() {
+    let sel = selected();
+    if BUF_FOR.load(Ordering::Relaxed) != sel {
+        let text = live_notes().get(sel).cloned().unwrap_or_default();
+        let mut b = crate::editcore::Buffer::new();
+        b.set_text(&text);
+        *BUF.lock() = Some(b);
+        BUF_FOR.store(sel, Ordering::Relaxed);
     }
-    DIRTY.store(true, Ordering::Relaxed);
+}
+
+/// A rich key edits the selected note through the shared editcore buffer, then
+/// writes the result back into LIVE so it renders + persists.
+pub fn key(k: crate::ps2::Key) {
+    sync_buf();
+    let mut g = BUF.lock();
+    if let Some(b) = g.as_mut() {
+        if b.key(k) {
+            let text = b.text();
+            let sel = selected();
+            if let Some(n) = LIVE.lock().get_mut(sel) {
+                *n = text;
+            }
+            DIRTY.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+/// A raw character (paste / symbol picker) at the cursor.
+pub fn input(ch: char) {
+    let k = match ch {
+        '\r' | '\n' => crate::ps2::Key::Enter,
+        '\u{8}' | '\u{7f}' => crate::ps2::Key::Backspace,
+        '\t' => crate::ps2::Key::Tab,
+        c => crate::ps2::Key::Char(c),
+    };
+    key(k);
+}
+
+/// The cursor position in the current note (row, col) for the caret render.
+pub fn cursor() -> (usize, usize) {
+    sync_buf();
+    BUF.lock().as_ref().map(|b| (b.row, b.col)).unwrap_or((0, 0))
 }
 
 /// The current notes as owned strings (render/selftest).

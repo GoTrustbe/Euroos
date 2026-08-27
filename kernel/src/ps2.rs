@@ -140,6 +140,81 @@ pub fn poll_scancode() -> Option<u8> {
 
 /// Fetch the next decoded character from the buffer (or `None`).
 /// Returns `'\r'` (enter), `'\u{8}'` (backspace) or a printable character.
+/// A decoded key: a character, or a navigation/edit key a text cursor needs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Key {
+    Char(char),
+    Enter,
+    Backspace,
+    Tab,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Delete,
+    Esc,
+    /// Ctrl + a letter (lower-cased), e.g. Ctrl('s').
+    Ctrl(char),
+}
+
+static CTRL: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Rich key poll: like [`poll_key`] but also returns arrows, Home/End,
+/// Page keys, Delete and Ctrl combos. Draining this starves `poll_key`, so a
+/// consumer uses exactly one of the two.
+pub fn poll_key_ex() -> Option<Key> {
+    while let Some(sc) = pop_scancode() {
+        match sc {
+            0x2A | 0x36 => SHIFT.store(true, Ordering::Relaxed),
+            0xAA | 0xB6 => SHIFT.store(false, Ordering::Relaxed),
+            0x1D => CTRL.store(true, Ordering::Relaxed),
+            0x9D => CTRL.store(false, Ordering::Relaxed),
+            0x38 => ALT.store(true, Ordering::Relaxed),
+            0xB8 => ALT.store(false, Ordering::Relaxed),
+            0xE0 => {
+                // Extended: the NEXT byte is a navigation/edit key.
+                if let Some(code) = pop_scancode() {
+                    if code & 0x80 != 0 {
+                        continue; // break code of an extended key
+                    }
+                    let k = match code {
+                        0x4B => Key::Left,
+                        0x4D => Key::Right,
+                        0x48 => Key::Up,
+                        0x50 => Key::Down,
+                        0x47 => Key::Home,
+                        0x4F => Key::End,
+                        0x49 => Key::PageUp,
+                        0x51 => Key::PageDown,
+                        0x53 => Key::Delete,
+                        _ => continue,
+                    };
+                    return Some(k);
+                }
+            }
+            _ if sc & 0x80 != 0 => {} // ignore other break codes
+            _ => {
+                let ctrl = CTRL.load(Ordering::Relaxed);
+                if let Some(c) = eurokeymap::translate(layout(), sc, SHIFT.load(Ordering::Relaxed)) {
+                    return Some(match c {
+                        '\r' | '\n' => Key::Enter,
+                        '\u{8}' | '\u{7f}' => Key::Backspace,
+                        '\t' => Key::Tab,
+                        '\u{1b}' => Key::Esc,
+                        c if ctrl && c.is_ascii_alphabetic() => Key::Ctrl(c.to_ascii_lowercase()),
+                        c => Key::Char(c),
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn poll_key() -> Option<char> {
     while let Some(sc) = pop_scancode() {
         match sc {

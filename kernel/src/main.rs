@@ -150,6 +150,7 @@ mod extmount;
 mod smbfs;
 mod imageview;
 mod paint;
+mod editcore;
 mod nfsmount;
 mod disktest;
 mod stresstest;
@@ -4566,11 +4567,14 @@ fn main() -> Status {
                         // Click in the notes list → select a different note.
                         notes::hit_test(windows[i].x, windows[i].y, px, py);
                     } else if windows[i].app == suite_ui::SuiteApp::Text {
-                        // Click on "Open" → the file picker; "Save" → write to EuroFS.
+                        // Click on "Open" → the file picker; "Save" → write to EuroFS;
+                        // a click in the text body positions the cursor there.
                         if textedit::open_button_at(windows[i].x, windows[i].y, windows[i].w, px, py) {
                             filedialog::open(filedialog::Mode::Open, "/");
                         } else if textedit::save_button_at(windows[i].x, windows[i].y, windows[i].w, px, py) {
                             textedit::save(ctx.fs);
+                        } else {
+                            textedit::click(windows[i].x, windows[i].y, px, py);
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Installer {
                         // 3E-1: "Install EuroOS" button → REAL install to the first
@@ -4734,7 +4738,18 @@ fn main() -> Status {
         // ── Interactive shell / calculator: read keys. ──
         let mut term_dirty = false;
         let mut calc_dirty = false;
-        while let Some(k) = ps2::poll_key() {
+        // EuroText/EuroNotes focus (no modal overlay) → drain RICH keys so the
+        // cursor navigates and text inserts mid-line. Otherwise the classic
+        // char loop below handles the terminal, calculator, browser, etc.
+        let editor_focused = (text_focused || notes_focused)
+            && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open();
+        if editor_focused {
+            while let Some(k) = ps2::poll_key_ex() {
+                if text_focused { textedit::key(k); } else { notes::key(k); }
+                need_full = true;
+            }
+        }
+        while let Some(k) = if editor_focused { None } else { ps2::poll_key() } {
             // The symbol picker only needs Esc to dismiss.
             if symbolpicker::is_open() {
                 if k == '\u{1b}' { symbolpicker::close(); }
