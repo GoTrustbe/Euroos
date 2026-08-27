@@ -148,6 +148,7 @@ mod logview;
 mod fatmount;
 mod extmount;
 mod smbfs;
+mod imageview;
 mod nfsmount;
 mod disktest;
 mod stresstest;
@@ -3937,6 +3938,32 @@ fn main() -> Status {
         textedit::open(ctx.fs, ""); // load the default edit file from EuroFS
         notes::load(ctx.fs); // EuroNotes: load (or seed) the editable notes
 
+        // EuroView: the image viewer window (opened from EuroFiles or the dock).
+        let i_view = windows.len();
+        windows.push(compositor::Window {
+            x: SIDEBAR_W + 200, y: 120, w: 700, h: 540,
+            title: String::from("EuroView"),
+            content: Vec::new(), ui: Vec::new(),
+            active: false, accent: Color::rgb(0x8B, 0x5C, 0xF6),
+            sec: eds::SecState::new(true, true, false),
+            app: suite_ui::SuiteApp::ImageView,
+            visible: false,
+            restore: None,
+        });
+        order.push(i_view);
+        // Seed a real sample image so EuroView has something to show out of the box.
+        {
+            let mut im = euromedia::Image::new(96, 64, [0x0F, 0x1B, 0x3A, 255]);
+            for y in 0..64u32 { for x in 0..96u32 {
+                let on_star = ((x as i32 - 48).pow(2) + (y as i32 - 20).pow(2)) < 60;
+                if on_star { im.set(x, y, [0xFF, 0xCC, 0x00, 255]); }
+                if y >= 44 && ((x / 8) % 2 == 0) { im.set(x, y, [0x00, 0x33, 0x99, 255]); }
+            }}
+            let _ = ctx.fs.create_dir("/home/euro/pictures");
+            let _ = ctx.fs.write_file("/home/euro/pictures/euroos.png", &euromedia::encode_png(&im));
+            imageview::open(ctx.fs, "/home/euro/pictures/euroos.png");
+        }
+
         let i_mon = windows.len();
         windows.push(compositor::Window {
             x: SIDEBAR_W + 120, y: 110, w: 620, h: 560,
@@ -4188,6 +4215,19 @@ fn main() -> Status {
                     match action {
                         OpenDir(p) => load_files_dir(ctx.fs, &p),
                         OpenFile(p) => {
+                            if imageview::handles(&p) {
+                                imageview::open(ctx.fs, &p);
+                                if let Some(w) = windows.iter().position(|win| win.app == suite_ui::SuiteApp::ImageView) {
+                                    order.retain(|&x| x != w);
+                                    order.push(w);
+                                    for ww in windows.iter_mut() { ww.active = false; }
+                                    windows[w].visible = true;
+                                    windows[w].active = true;
+                                }
+                                need_full = true;
+                                ctxmenu::close();
+                                continue;
+                            }
                             let (_mime, app) = mime::resolve(ctx.fs, &p);
                             if let Some(target) = app.as_deref().and_then(mime_app_to_suite) {
                                 if target == suite_ui::SuiteApp::Text {
@@ -4540,6 +4580,16 @@ fn main() -> Status {
                         windows[w].active = true;
                     }
                     notify::push("Opened in EuroText", &path, interrupts::ticks());
+                } else if !moved && imageview::handles(&path) {
+                    // An image → EuroView (decode + show), our own viewer, no browser.
+                    imageview::open(ctx.fs, &path);
+                    if let Some(w) = windows.iter().position(|win| win.app == suite_ui::SuiteApp::ImageView) {
+                        order.retain(|&x| x != w);
+                        order.push(w);
+                        for ww in windows.iter_mut() { ww.active = false; }
+                        windows[w].visible = true;
+                        windows[w].active = true;
+                    }
                 } else if !moved {
                     // A plain click → open with the default app (previous behaviour).
                     let (_m, app) = mime::resolve(ctx.fs, &path);

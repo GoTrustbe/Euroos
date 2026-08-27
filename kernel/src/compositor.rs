@@ -313,6 +313,10 @@ pub fn draw_window_body(fb: &FrameBuffer, win: &Window) {
         crate::textedit::render(fb, win.x, win.y, win.w, win.h);
         return;
     }
+    if win.app == crate::suite_ui::SuiteApp::ImageView {
+        crate::imageview::render(fb, win.x, win.y, win.w, win.h);
+        return;
+    }
     if win.app == crate::suite_ui::SuiteApp::Monitor {
         crate::monitor::render(fb, win.x, win.y, win.w, win.h);
         return;
