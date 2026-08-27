@@ -57,3 +57,10 @@ selftests dev-only, downloads+live opnieuw uitgerold.
 1. EuroNotes bewerkbaar: ✅ (commit hierboven; bewijs ux5/ux6-shots: typen
    rendert live, + New note maakt en selecteert; persistentie = EuroFS, dus
    op een root-disk-install blijvend, in live/RAM-mode vluchtig zoals alles).
+
+2. Stille toets-inslik: read-only monitors negeren toetsen (correct gedrag,
+   geen fix nodig); Notes sloeg ze stil — nu bewerkbaar (fix #1). ✅
+3. Files open-met: bestaat al (klik → mime::resolve → default-app). ✅
+4. Venster-resize: ✅ corner-grip + latch-fix (bewezen: Terminal groeide).
+   De latch-fix was een echte bug: klikposities gingen verloren bij snelle input.
+5. EuroWeb-startpagina: open (klein, cosmetisch).
