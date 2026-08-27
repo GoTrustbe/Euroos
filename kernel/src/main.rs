@@ -4547,13 +4547,17 @@ fn main() -> Status {
                             agent_ui::begin_edit();
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Files {
-                        // Click on a directory/place/".." → navigate in the REAL FS.
-                        if let Some(path) = files::hit_test(windows[i].x, windows[i].y, px, py) {
+                        // Action toolbar first, then navigation / selection.
+                        if files::toolbar_click(windows[i].x, windows[i].y, px, py, windows[i].w) {
+                            // handled: New Folder / Rename / Delete / Copy / Cut / Paste
+                        } else if let Some(path) = files::hit_test(windows[i].x, windows[i].y, px, py) {
                             load_files_dir(ctx.fs, &path);
+                        } else if files::select_row(windows[i].x, windows[i].y, px, py) {
+                            // selected a row (highlight); a file can still be opened/dragged
+                            if let Some(fpath) = files::hit_test_file(windows[i].x, windows[i].y, px, py) {
+                                file_drag = Some((fpath, px, py));
+                            }
                         } else if let Some(fpath) = files::hit_test_file(windows[i].x, windows[i].y, px, py) {
-                            // Press on a file starts a potential drag; the drop
-                            // handler either opens it in the target app (drag onto
-                            // EuroText) or, if it did not move, opens it normally.
                             file_drag = Some((fpath, px, py));
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Paint {
@@ -4744,7 +4748,14 @@ fn main() -> Status {
         // EuroText/EuroNotes focus (no modal overlay) → drain RICH keys so the
         // cursor navigates and text inserts mid-line. Otherwise the classic
         // char loop below handles the terminal, calculator, browser, etc.
-        let editor_focused = (text_focused || notes_focused)
+        // A Files name-prompt (New Folder / Rename) captures the keyboard.
+        if files::prompt_open() {
+            while let Some(k) = ps2::poll_key_ex() {
+                files::key(k);
+                need_full = true;
+            }
+        }
+        let editor_focused = !files::prompt_open() && (text_focused || notes_focused)
             && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open();
         if editor_focused {
             while let Some(k) = ps2::poll_key_ex() {
@@ -4752,7 +4763,7 @@ fn main() -> Status {
                 need_full = true;
             }
         }
-        while let Some(k) = if editor_focused { None } else { ps2::poll_key() } {
+        while let Some(k) = if editor_focused || files::prompt_open() { None } else { ps2::poll_key() } {
             // The symbol picker only needs Esc to dismiss.
             if symbolpicker::is_open() {
                 if k == '\u{1b}' { symbolpicker::close(); }
@@ -5211,6 +5222,29 @@ fn main() -> Status {
             notes::save_all(ctx.fs);
         }
         paint::flush_save(ctx.fs); // EuroPaint: write a pending Save to EuroFS
+        // EuroFiles: run queued file operations (new dir / rename / delete /
+        // copy / move) with FS access, then reload the current directory.
+        let ops = files::take_ops();
+        if !ops.is_empty() {
+            for op in ops {
+                match op {
+                    files::FileOp::NewDir(p) => { let _ = ctx.fs.create_dir(&p); }
+                    files::FileOp::Rename(a, b) => { let _ = ctx.fs.rename(&a, &b); }
+                    files::FileOp::Delete(p, is_dir) => {
+                        let _ = if is_dir { ctx.fs.remove_dir(&p) } else { ctx.fs.remove_file(&p) };
+                    }
+                    files::FileOp::Copy(src, dst) => {
+                        if let Ok(bytes) = ctx.fs.read_file(&src) {
+                            let _ = ctx.fs.write_file(&dst, &bytes);
+                        }
+                    }
+                    files::FileOp::Move(src, dst) => { let _ = ctx.fs.rename(&src, &dst); }
+                }
+            }
+            let cur = files::current_path();
+            load_files_dir(ctx.fs, if cur.is_empty() { "/" } else { &cur });
+            need_full = true;
+        }
 
 
         // File dialog: list a directory it asked for, and carry out a chosen path.

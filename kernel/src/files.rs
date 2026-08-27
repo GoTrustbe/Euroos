@@ -7,7 +7,7 @@
 use crate::graphics::{Color, FrameBuffer};
 use crate::serial_println;
 use crate::{icons, text};
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use eurofiles::{human_size, join, normalize, parent, Badge, DirEntry, FileKind, Listing, SortKey, SortOrder};
 use spin::Mutex;
@@ -28,6 +28,159 @@ const PLACES: &[(&str, &str, &str)] = &[
 
 /// The LIVE directory list that the GUI shows (filled by the kernel from the real FS).
 static LISTING: Mutex<Option<Listing>> = Mutex::new(None);
+
+use core::sync::atomic::{AtomicUsize, Ordering};
+/// Selected row index in the listing (usize::MAX = nothing selected).
+static SELECTED: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Clipboard: (absolute path, is_cut). Copy leaves it; Cut removes on paste.
+static CLIPBOARD: Mutex<Option<(String, bool)>> = Mutex::new(None);
+
+/// A pending filesystem mutation the kernel loop flushes with FS access.
+pub enum FileOp {
+    NewDir(String),
+    Rename(String, String),
+    Delete(String, bool), // (path, is_dir)
+    Copy(String, String),
+    Move(String, String),
+}
+static PENDING: Mutex<Vec<FileOp>> = Mutex::new(Vec::new());
+
+/// A name-entry prompt (New Folder / Rename).
+struct Prompt {
+    mode: PromptMode,
+    buf: crate::editcore::Buffer,
+    orig: String, // for Rename: the original path
+}
+#[derive(PartialEq)]
+enum PromptMode {
+    NewDir,
+    Rename,
+}
+static PROMPT: Mutex<Option<Prompt>> = Mutex::new(None);
+
+/// The toolbar actions (label shown on the button).
+const ACTIONS: [&str; 6] = ["New Folder", "Rename", "Delete", "Copy", "Cut", "Paste"];
+
+fn selected_entry() -> Option<(String, bool)> {
+    let i = SELECTED.load(Ordering::Relaxed);
+    let g = LISTING.lock();
+    let l = g.as_ref()?;
+    let e = l.entries.get(i)?;
+    Some((join(&l.path, &e.name), e.kind == FileKind::Dir))
+}
+
+/// Take the queued operations (the kernel loop runs them with FS access).
+pub fn take_ops() -> Vec<FileOp> {
+    core::mem::take(&mut *PENDING.lock())
+}
+
+/// True while a name-entry prompt has the keyboard.
+pub fn prompt_open() -> bool {
+    PROMPT.lock().is_some()
+}
+
+/// Feed a key to the open prompt. Enter commits, Esc cancels.
+pub fn key(k: crate::ps2::Key) {
+    let mut g = PROMPT.lock();
+    let Some(p) = g.as_mut() else { return };
+    match k {
+        crate::ps2::Key::Enter => {
+            let name = p.buf.text();
+            let name = name.trim();
+            if !name.is_empty() {
+                let cur = current_path();
+                let cur = if cur.is_empty() { String::from("/") } else { cur };
+                match p.mode {
+                    PromptMode::NewDir => PENDING.lock().push(FileOp::NewDir(join(&cur, name))),
+                    PromptMode::Rename => PENDING.lock().push(FileOp::Rename(p.orig.clone(), join(&cur, name))),
+                }
+            }
+            *g = None;
+        }
+        crate::ps2::Key::Esc => *g = None,
+        other => {
+            p.buf.key(other);
+        }
+    }
+}
+
+/// A click on the action toolbar. Returns true if it handled an action.
+pub fn toolbar_click(win_x: usize, win_y: usize, mx: usize, my: usize, win_w: usize) -> bool {
+    let list_x = win_x + PLACES_W + 1;
+    let tb_y = win_y + TITLEBAR_H + 40; // below the path bar
+    if my < tb_y || my >= tb_y + 30 {
+        return false;
+    }
+    let i = mx.checked_sub(list_x + 8).map(|d| d / 92);
+    let Some(i) = i.filter(|&i| i < ACTIONS.len()) else { return false };
+    let _ = win_w;
+    match ACTIONS[i] {
+        "New Folder" => {
+            *PROMPT.lock() = Some(Prompt { mode: PromptMode::NewDir, buf: crate::editcore::Buffer::new(), orig: String::new() });
+        }
+        "Rename" => {
+            if let Some((path, _)) = selected_entry() {
+                let name = path.rsplit('/').next().map(String::from).unwrap_or_default();
+                let mut b = crate::editcore::Buffer::new();
+                b.set_text(&name);
+                b.col = name.chars().count();
+                *PROMPT.lock() = Some(Prompt { mode: PromptMode::Rename, buf: b, orig: path });
+            }
+        }
+        "Delete" => {
+            if let Some((path, is_dir)) = selected_entry() {
+                PENDING.lock().push(FileOp::Delete(path, is_dir));
+                SELECTED.store(usize::MAX, Ordering::Relaxed);
+            }
+        }
+        "Copy" => {
+            if let Some((path, _)) = selected_entry() {
+                *CLIPBOARD.lock() = Some((path, false));
+            }
+        }
+        "Cut" => {
+            if let Some((path, _)) = selected_entry() {
+                *CLIPBOARD.lock() = Some((path, true));
+            }
+        }
+        "Paste" => {
+            if let Some((src, is_cut)) = CLIPBOARD.lock().clone() {
+                let name = src.rsplit('/').next().map(String::from).unwrap_or_default();
+                let cur = current_path();
+                let cur = if cur.is_empty() { String::from("/") } else { cur };
+                let dst = join(&cur, &name);
+                if is_cut {
+                    PENDING.lock().push(FileOp::Move(src, dst));
+                    *CLIPBOARD.lock() = None;
+                } else {
+                    PENDING.lock().push(FileOp::Copy(src, dst));
+                }
+            }
+        }
+        _ => {}
+    }
+    true
+}
+
+/// Select the file/dir row at a click (highlight). Returns true if it hit a row.
+pub fn select_row(win_x: usize, win_y: usize, mx: usize, my: usize) -> bool {
+    let list_x = win_x + PLACES_W + 1;
+    let list_y0 = win_y + TITLEBAR_H + 40 + 30; // below path bar + toolbar
+    if mx < list_x {
+        return false;
+    }
+    let g = LISTING.lock();
+    let Some(l) = g.as_ref() else { return false };
+    if my < list_y0 + ROW_H {
+        return false; // the ".." row
+    }
+    let idx = (my - list_y0) / ROW_H;
+    if idx >= 1 && idx - 1 < l.entries.len() {
+        SELECTED.store(idx - 1, Ordering::Relaxed);
+        return true;
+    }
+    false
+}
 
 /// The path that is currently shown (empty = nothing loaded yet).
 pub fn current_path() -> String {
@@ -148,9 +301,30 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     icons::draw(fb, "path", list_x + 16, by + 12, 15, Color::TEXT_SEC);
     text::draw_px(fb, list_x + 40, by + 13, shown_path, Color::INK, 13.5);
 
+    // ── Action toolbar ───────────────────────────────────────────────────────
+    let tb_y = by + 40;
+    fb.fill_rect(list_x, tb_y, list_w, 30, Color::CARD);
+    fb.fill_rect(list_x, tb_y + 29, list_w, 1, Color::BORDER);
+    let has_sel = SELECTED.load(Ordering::Relaxed) != usize::MAX;
+    let has_clip = CLIPBOARD.lock().is_some();
+    for (i, label) in ACTIONS.iter().enumerate() {
+        let bxp = list_x + 8 + i * 92;
+        if bxp + 88 > list_x + list_w { break; }
+        // Grey out actions that need a selection / clipboard.
+        let enabled = match *label {
+            "Rename" | "Delete" | "Copy" | "Cut" => has_sel,
+            "Paste" => has_clip,
+            _ => true,
+        };
+        let bg = if enabled { Color::rgb(0xEA, 0xEE, 0xF4) } else { Color::rgb(0xF2, 0xF4, 0xF7) };
+        let fgc = if enabled { accent } else { Color::TEXT_DIM };
+        fb.fill_rounded_rect(bxp, tb_y + 4, 88, 22, 6, bg);
+        text::draw_px(fb, bxp + 10, tb_y + 8, label, fgc, 11.5);
+    }
+
     // ── File list ────────────────────────────────────────────────────────────
     let guard = LISTING.lock();
-    let list_y0 = by + 40;
+    let list_y0 = by + 70;
     let ymax = by + bh - 26;
     // ".." row to go up.
     text::draw_px(fb, list_x + 44, list_y0 + 8, "..", Color::TEXT_SEC, 13.0);
@@ -168,6 +342,9 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
                 break;
             }
             let is_dir = e.kind == FileKind::Dir;
+            if SELECTED.load(Ordering::Relaxed) == i {
+                fb.fill_rounded_rect(list_x + 6, ry + 1, list_w - 12, ROW_H - 4, 6, Color::ACCENT_SOFT);
+            }
             let (glyph, gcol) = if is_dir { ("folder", accent) } else { ("doc", Color::TEXT_SEC) };
             icons::draw(fb, glyph, list_x + 18, ry + 6, 16, gcol);
             text::draw_px(fb, list_x + 44, ry + 8, &e.name, Color::INK, 13.0);
@@ -197,9 +374,29 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let sy = by + bh - 26;
     fb.fill_rect(bx, sy, bw, 26, accent);
     text::draw_px(fb, bx + 14, sy + 6, "EuroFiles  ·  live EuroFS", Color::WHITE, 11.5);
-    let right = alloc::format!("{} directories · {} files · {}", ndirs, nfiles, human_size(total));
+    let right = alloc::format!("{} directories \u{00B7} {} files \u{00B7} {}", ndirs, nfiles, human_size(total));
     let rw = text::width_px(&right, 11.5);
     text::draw_px(fb, bx + bw - rw - 14, sy + 6, &right, Color::WHITE, 11.5);
+
+    // ── Name-entry prompt (New Folder / Rename) ──────────────────────────────
+    if let Some(p) = PROMPT.lock().as_ref() {
+        let pw = 360usize;
+        let ph = 96usize;
+        let ox = bx + (bw - pw) / 2;
+        let oy = by + (bh - ph) / 2;
+        fb.fill_rounded_rect(ox - 2, oy - 2, pw + 4, ph + 4, 12, Color::rgb(0, 0, 0));
+        fb.fill_rounded_rect(ox, oy, pw, ph, 10, Color::SURFACE);
+        let title = if p.mode == PromptMode::Rename { "Rename to:" } else { "New folder name:" };
+        text::draw_px(fb, ox + 18, oy + 14, title, Color::INK, 13.5);
+        // Text field with the buffer + a caret.
+        fb.fill_rounded_rect(ox + 16, oy + 40, pw - 32, 28, 6, Color::rgb(0xFF, 0xFF, 0xFF));
+        fb.draw_border(ox + 16, oy + 40, pw - 32, 28, 1, accent);
+        let field = p.buf.text();
+        text::draw_px(fb, ox + 24, oy + 46, &field, Color::INK, 13.5);
+        let cx = ox + 24 + text::width_px(&field.chars().take(p.buf.col).collect::<String>(), 13.5);
+        fb.fill_rect(cx, oy + 45, 2, 18, accent);
+        text::draw_px(fb, ox + 18, oy + 74, "Enter = OK  \u{00B7}  Esc = cancel", Color::TEXT_DIM, 11.0);
+    }
 }
 
 /// Boot self-test: build a directory list, sort/filter, check path operations.
