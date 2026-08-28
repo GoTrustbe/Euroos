@@ -195,7 +195,7 @@ fn load_files_dir(fs: &mut dyn FileSystem, path: &str) {
     let items = match fs.list_dir(path) {
         Ok(v) => v
             .into_iter()
-            .map(|e| (e.name, e.kind == eurofs::EntryKind::Directory, e.size))
+            .map(|e| (e.name, e.kind == eurofs::EntryKind::Directory, e.size, e.mtime, e.mode))
             .collect::<alloc::vec::Vec<_>>(),
         Err(_) => alloc::vec::Vec::new(),
     };

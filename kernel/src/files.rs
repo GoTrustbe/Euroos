@@ -61,6 +61,17 @@ static PROMPT: Mutex<Option<Prompt>> = Mutex::new(None);
 /// The toolbar actions (label shown on the button).
 const ACTIONS: [&str; 6] = ["New Folder", "Rename", "Delete", "Copy", "Cut", "Paste"];
 
+/// A Unix-style permission string like "drwxr-xr-x" from a mode + kind.
+fn perm_string(mode: u16, is_dir: bool) -> String {
+    let bit = |m: u16, b: char| if mode & m != 0 { b } else { '-' };
+    let mut s = String::new();
+    s.push(if is_dir { 'd' } else { '-' });
+    s.push(bit(0o400, 'r')); s.push(bit(0o200, 'w')); s.push(bit(0o100, 'x'));
+    s.push(bit(0o040, 'r')); s.push(bit(0o020, 'w')); s.push(bit(0o010, 'x'));
+    s.push(bit(0o004, 'r')); s.push(bit(0o002, 'w')); s.push(bit(0o001, 'x'));
+    s
+}
+
 fn selected_entry() -> Option<(String, bool)> {
     let i = SELECTED.load(Ordering::Relaxed);
     let g = LISTING.lock();
@@ -165,7 +176,7 @@ pub fn toolbar_click(win_x: usize, win_y: usize, mx: usize, my: usize, win_w: us
 /// Select the file/dir row at a click (highlight). Returns true if it hit a row.
 pub fn select_row(win_x: usize, win_y: usize, mx: usize, my: usize) -> bool {
     let list_x = win_x + PLACES_W + 1;
-    let list_y0 = win_y + TITLEBAR_H + 40 + 30; // below path bar + toolbar
+    let list_y0 = win_y + TITLEBAR_H + 90; // below path bar + toolbar + header
     if mx < list_x {
         return false;
     }
@@ -189,18 +200,13 @@ pub fn current_path() -> String {
 
 /// Fill the list with a real directory: `items` = (name, is_dir, size) from
 /// `fs.list_dir`. We sort directories-first via the `eurofiles` engine.
-pub fn load_dir(path: &str, items: Vec<(String, bool, u64)>) {
+pub fn load_dir(path: &str, items: Vec<(String, bool, u64, u64, u16)>) {
     let entries: Vec<DirEntry> = items
         .into_iter()
-        .map(|(name, is_dir, size)| {
-            if is_dir {
-                DirEntry::dir(&name)
-            } else {
-                // No "signed" badge here: the file manager does not verify a
-                // signature, so we must not imply one from the filename alone.
-                // (Boot images ARE Ed25519-verified — but by the loader, not here.)
-                DirEntry::file(&name, size)
-            }
+        .map(|(name, is_dir, size, mtime, mode)| {
+            let e = if is_dir { DirEntry::dir(&name) } else { DirEntry::file(&name, size) };
+            // Real metadata: modified time + permission mode from EuroFS.
+            e.modified_at(mtime).with_mode(mode)
         })
         .collect();
     let mut l = Listing::new(&normalize(path), entries);
@@ -322,9 +328,17 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         text::draw_px(fb, bxp + 10, tb_y + 8, label, fgc, 11.5);
     }
 
+    // Column headers (Name / Modified / Size).
+    let hdr_y = by + 70;
+    fb.fill_rect(list_x, hdr_y, list_w, 20, Color::rgb(0xF6, 0xF7, 0xFA));
+    text::draw_px(fb, list_x + 44, hdr_y + 3, "Name", Color::TEXT_SEC, 11.0);
+    text::draw_px(fb, list_x + list_w - 230, hdr_y + 3, "Modified", Color::TEXT_SEC, 11.0);
+    text::draw_px(fb, list_x + list_w - 60, hdr_y + 3, "Size", Color::TEXT_SEC, 11.0);
+    fb.fill_rect(list_x, hdr_y + 20, list_w, 1, Color::BORDER);
+
     // ── File list ────────────────────────────────────────────────────────────
     let guard = LISTING.lock();
-    let list_y0 = by + 70;
+    let list_y0 = by + 90;
     let ymax = by + bh - 26;
     // ".." row to go up.
     text::draw_px(fb, list_x + 44, list_y0 + 8, "..", Color::TEXT_SEC, 13.0);
@@ -348,13 +362,18 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
             let (glyph, gcol) = if is_dir { ("folder", accent) } else { ("doc", Color::TEXT_SEC) };
             icons::draw(fb, glyph, list_x + 18, ry + 6, 16, gcol);
             text::draw_px(fb, list_x + 44, ry + 8, &e.name, Color::INK, 13.0);
-            // Badges (only really known ones, e.g. signed).
+            // Modified date (middle column) + size (right column).
+            let date = crate::rtc::short_datetime(e.modified);
+            text::draw_px(fb, list_x + list_w - 230, ry + 9, &date, Color::TEXT_DIM, 11.5);
             let mut rx = list_x + list_w;
             if !is_dir {
                 let sz = human_size(e.size);
                 let sw = text::width_px(&sz, 11.5);
                 text::draw_px(fb, list_x + list_w - sw - 16, ry + 9, &sz, Color::TEXT_DIM, 11.5);
                 rx = list_x + list_w - sw - 28;
+            } else {
+                text::draw_px(fb, list_x + list_w - 44, ry + 9, "dir", Color::TEXT_DIM, 11.5);
+                rx = list_x + list_w - 56;
             }
             for b in &e.badges {
                 if b == &Badge::Signed {
@@ -367,13 +386,37 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
             }
         }
     } else {
-        text::draw_px(fb, list_x + 44, list_y0 + ROW_H + 8, "(directory loading…)", Color::TEXT_DIM, 12.5);
+        text::draw_px(fb, list_x + 44, list_y0 + ROW_H + 8, "(directory loading\u{2026})", Color::TEXT_DIM, 12.5);
     }
+    drop(guard); // release the list lock before any further LISTING access
 
     // ── Status bar ───────────────────────────────────────────────────────────
     let sy = by + bh - 26;
     fb.fill_rect(bx, sy, bw, 26, accent);
     text::draw_px(fb, bx + 14, sy + 6, "EuroFiles  ·  live EuroFS", Color::WHITE, 11.5);
+    // Properties strip for the selected entry, just above the status bar (single lock).
+    {
+        let g2 = LISTING.lock();
+        if let Some(l) = g2.as_ref() {
+            let i = SELECTED.load(Ordering::Relaxed);
+            if let Some(e) = l.entries.get(i) {
+                let is_dir = e.kind == FileKind::Dir;
+                let path = join(&l.path, &e.name);
+                let py = by + bh - 26 - 22;
+                fb.fill_rect(list_x, py, list_w, 22, Color::rgb(0xF0, 0xF2, 0xF6));
+                let perms = perm_string(e.mode, is_dir);
+                let info = if is_dir {
+                    alloc::format!("{}  \u{00B7}  folder  \u{00B7}  {}  \u{00B7}  modified {}",
+                        path, perms, crate::rtc::short_datetime(e.modified))
+                } else {
+                    alloc::format!("{}  \u{00B7}  {}  \u{00B7}  {}  \u{00B7}  modified {}",
+                        path, human_size(e.size), perms, crate::rtc::short_datetime(e.modified))
+                };
+                text::draw_px(fb, list_x + 12, py + 4, &info, Color::TEXT_SEC, 11.5);
+            }
+        }
+    }
+
     let right = alloc::format!("{} directories \u{00B7} {} files \u{00B7} {}", ndirs, nfiles, human_size(total));
     let rw = text::width_px(&right, 11.5);
     text::draw_px(fb, bx + bw - rw - 14, sy + 6, &right, Color::WHITE, 11.5);

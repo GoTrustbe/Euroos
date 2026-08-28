@@ -138,6 +138,47 @@ pub fn clock_string() -> alloc::string::String {
 }
 
 /// "Wed 2 June" — real date line for the status panel.
+fn leap_year(y: u16) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+const MDAYS: [u64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/// Convert seconds-since-epoch back into a DateTime (UTC).
+pub fn from_epoch(mut secs: u64) -> DateTime {
+    let sec = (secs % 60) as u8;
+    secs /= 60;
+    let min = (secs % 60) as u8;
+    secs /= 60;
+    let hour = (secs % 24) as u8;
+    let mut days = secs / 24;
+    let mut year = 1970u16;
+    loop {
+        let dy = if leap_year(year) { 366 } else { 365 };
+        if days < dy { break; }
+        days -= dy;
+        year += 1;
+    }
+    let mut month = 0usize;
+    loop {
+        let mut md = MDAYS[month];
+        if month == 1 && leap_year(year) { md += 1; }
+        if days < md { break; }
+        days -= md;
+        month += 1;
+    }
+    DateTime { year, month: (month + 1) as u8, day: (days + 1) as u8, hour, min, sec }
+}
+
+/// A compact "27 Aug 20:04" for a file's modified time (0 = unknown → "—").
+pub fn short_datetime(secs: u64) -> alloc::string::String {
+    if secs == 0 {
+        return alloc::string::String::from("\u{2014}");
+    }
+    let d = from_epoch(secs);
+    let m = MONTHS[(d.month.max(1) as usize - 1).min(11)];
+    alloc::format!("{} {} {:02}:{:02}", d.day, m, d.hour, d.min)
+}
+
 pub fn date_string() -> alloc::string::String {
     let d = now();
     let m = MONTHS[(d.month.max(1) as usize - 1).min(11)];
