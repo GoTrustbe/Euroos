@@ -610,6 +610,11 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         // 3E-5: GDB serial-stub attach instructions.
         "gdbstub" => crate::gdbstub::shell(),
         "euroimmutable" | "immutable" => crate::immutable::shell(fs, arg1, arg2),
+        // Phase-3 FS security: on-demand system-integrity sweep.
+        "integrity" => {
+            let bins = crate::system_binaries();
+            crate::integrity::shell(fs, &bins)
+        }
         // 3D-5 user immutability: protect/unprotect your OWN files, no cap needed.
         "euroattr" => {
             let user = crate::auth::session_name();

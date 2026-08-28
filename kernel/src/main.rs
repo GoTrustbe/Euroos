@@ -152,6 +152,7 @@ mod imageview;
 mod paint;
 mod editcore;
 mod sysctx;
+mod integrity;
 mod nfsmount;
 mod disktest;
 mod stresstest;
@@ -2974,6 +2975,11 @@ fn main() -> Status {
             "[l2] {} system file(s) marked IMMUTABLE — tamper-proof (changing requires CAP_IMMUTABLE_ADMIN; the boot updater clears the flag legitimately)",
             protected
         );
+        // Phase-3 FS security: the integrity sweep — /bin + /lib on disk must
+        // match the (loader-verified) kernel image, boot + periodically.
+        let bins = system_binaries();
+        integrity::selftest(&mut vfs, &bins, boot_caps);
+        integrity::check_and_report(&mut vfs, &bins, "at boot");
         audit::selftest(&mut vfs, boot_caps);
         // 3D-6 wiring: the live audit log is now hash-chained + tamper-evident,
         // fed by the real execve/connection call sites, and persisted as JSON.
@@ -5234,6 +5240,18 @@ fn main() -> Status {
             notes::save_all(ctx.fs);
         }
         paint::flush_save(ctx.fs); // EuroPaint: write a pending Save to EuroFS
+        // Periodic system-integrity sweep (~5 min of guest ticks). Detects
+        // on-disk tampering of /bin//lib while the desktop runs.
+        {
+            static NEXT_SWEEP: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+            let now_t = interrupts::ticks();
+            let due = NEXT_SWEEP.load(core::sync::atomic::Ordering::Relaxed);
+            if now_t >= due {
+                NEXT_SWEEP.store(now_t + 5 * 60 * 100, core::sync::atomic::Ordering::Relaxed); // 100 Hz ticks
+                let bins = system_binaries();
+                integrity::check_and_report(ctx.fs, &bins, "periodic");
+            }
+        }
         // EuroFiles: run queued file operations (new dir / rename / delete /
         // copy / move) with FS access, then reload the current directory.
         let ops = files::take_ops();
@@ -5680,7 +5698,7 @@ fn eurojs_show(v: &eurojs::Value) -> String {
     }
 }
 
-fn system_binaries() -> [(&'static str, &'static [u8]); 32] {
+pub fn system_binaries() -> [(&'static str, &'static [u8]); 32] {
     [
         ("/bin/fbtest", ring3::fbtest_bytes()),
         ("/bin/doom", ring3::doom_bytes()),
