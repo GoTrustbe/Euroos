@@ -173,6 +173,9 @@ pub fn selftest(fs: &mut dyn FileSystem) {
     let _ = fs.remove_file("/home/alice/.session-test");
 
     let _ = open(fs, 1000, 1000, "euro", 0, "auto");
+    // The selftest leaves no trace: restore the system uid-context, or every
+    // LATER boot selftest would run as uid 1000 under real rwx enforcement.
+    fs.set_uid_context(0);
     let alice_closed =
         TABLE.lock().iter().find(|s| s.id == alice_id).map(|s| s.closed_at != 0).unwrap_or(false);
 
@@ -190,8 +193,11 @@ pub fn quota_selftest(fs: &mut dyn FileSystem) {
     const QUID: u32 = 4242; // scratch uid — not a real account
     let set_ok = fs.quota_set(QUID, 2).is_ok();
     // rwx is enforced now: give the scratch uid a directory it may write in.
-    let _ = fs.create_dir("/.qtest");
-    let _ = fs.chown("/.qtest", QUID);
+    // The setup itself must run as system — this test also runs post-login.
+    crate::sysctx::as_system(fs, |fs| {
+        let _ = fs.create_dir("/.qtest");
+        let _ = fs.chown("/.qtest", QUID);
+    });
     fs.set_uid_context(QUID);
 
     let w1 = fs.write_file("/.qtest/1.bin", &alloc::vec![0xAB; 8192]).is_ok(); // 2 blocks
@@ -201,11 +207,13 @@ pub fn quota_selftest(fs: &mut dyn FileSystem) {
     let rm = fs.remove_file("/.qtest/1.bin").is_ok();
     let after_credit = fs.write_file("/.qtest/2.bin", &alloc::vec![0xCD; 8192]).is_ok();
 
-    // Cleanup: files away, limit away, context back to system.
+    // Cleanup: files away, limit away, context restored to the session uid.
+    let prev = crate::auth::session_uid();
     let _ = fs.remove_file("/.qtest/2.bin");
     fs.set_uid_context(0);
     let _ = fs.remove_dir("/.qtest");
     let _ = fs.quota_set(QUID, 0);
+    fs.set_uid_context(prev);
 
     let ok = set_ok && w1 && info == (2, 2) && refused && rm && after_credit;
     crate::serial_println!(

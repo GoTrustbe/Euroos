@@ -610,6 +610,12 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         // 3E-5: GDB serial-stub attach instructions.
         "gdbstub" => crate::gdbstub::shell(),
         "euroimmutable" | "immutable" => crate::immutable::shell(fs, arg1, arg2),
+        // 3D-5 user immutability: protect/unprotect your OWN files, no cap needed.
+        "euroattr" => {
+            let user = crate::auth::session_name();
+            let joined = if arg2.is_empty() { alloc::string::String::from(arg1) } else { alloc::format!("{arg1} {arg2}") };
+            crate::euroattr::shell(&joined, &user, fs)
+        }
         "lsblk" | "blkid" => crate::fatmount::lsblk(),
         "mount" => {
             if arg1.is_empty() {

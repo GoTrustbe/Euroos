@@ -39,6 +39,7 @@ static CLIPBOARD: Mutex<Option<(String, bool)>> = Mutex::new(None);
 pub enum FileOp {
     NewDir(String),
     Chmod(String, u16),
+    ToggleProtect(String),
     Rename(String, String),
     Delete(String, bool), // (path, is_dir)
     Copy(String, String),
@@ -61,7 +62,7 @@ enum PromptMode {
 static PROMPT: Mutex<Option<Prompt>> = Mutex::new(None);
 
 /// The toolbar actions (label shown on the button).
-const ACTIONS: [&str; 7] = ["New Folder", "Rename", "Delete", "Copy", "Cut", "Paste", "Perms"];
+const ACTIONS: [&str; 8] = ["New Folder", "Rename", "Delete", "Copy", "Cut", "Paste", "Perms", "Protect"];
 
 /// A Unix-style permission string like "drwxr-xr-x" from a mode + kind.
 fn perm_string(mode: u16, is_dir: bool) -> String {
@@ -176,6 +177,11 @@ pub fn toolbar_click(win_x: usize, win_y: usize, mx: usize, my: usize, win_w: us
                 *PROMPT.lock() = Some(Prompt { mode: PromptMode::Perms, buf: b, orig: path });
             }
         }
+        "Protect" => {
+            if let Some((path, _)) = selected_entry() {
+                PENDING.lock().push(FileOp::ToggleProtect(path));
+            }
+        }
         "Paste" => {
             if let Some((src, is_cut)) = CLIPBOARD.lock().clone() {
                 let name = src.rsplit('/').next().map(String::from).unwrap_or_default();
@@ -222,13 +228,14 @@ pub fn current_path() -> String {
 
 /// Fill the list with a real directory: `items` = (name, is_dir, size) from
 /// `fs.list_dir`. We sort directories-first via the `eurofiles` engine.
-pub fn load_dir(path: &str, items: Vec<(String, bool, u64, u64, u16)>) {
+pub fn load_dir(path: &str, items: Vec<(String, bool, u64, u64, u16, bool)>) {
     let entries: Vec<DirEntry> = items
         .into_iter()
-        .map(|(name, is_dir, size, mtime, mode)| {
+        .map(|(name, is_dir, size, mtime, mode, protected)| {
             let e = if is_dir { DirEntry::dir(&name) } else { DirEntry::file(&name, size) };
-            // Real metadata: modified time + permission mode from EuroFS.
-            e.modified_at(mtime).with_mode(mode)
+            // Real metadata: modified time + mode + the REAL immutable flag.
+            let e = e.modified_at(mtime).with_mode(mode);
+            if protected { e.with_badge(Badge::Immutable) } else { e }
         })
         .collect();
     let mut l = Listing::new(&normalize(path), entries);
@@ -250,7 +257,7 @@ pub fn hit_test(win_x: usize, win_y: usize, mx: usize, my: usize) -> Option<Stri
     }
     // Main list: row 0 = "..", row 1.. = entries.
     let list_x = win_x + PLACES_W;
-    let list_y = by + 40;
+    let list_y = by + 90; // path bar + action toolbar + column header
     if mx >= list_x && my >= list_y {
         let row = (my - list_y) / ROW_H;
         let cur = current_path();
@@ -276,7 +283,7 @@ pub fn hit_test(win_x: usize, win_y: usize, mx: usize, my: usize) -> Option<Stri
 pub fn hit_test_file(win_x: usize, win_y: usize, mx: usize, my: usize) -> Option<String> {
     let by = win_y + TITLEBAR_H;
     let list_x = win_x + PLACES_W;
-    let list_y = by + 40;
+    let list_y = by + 90; // path bar + action toolbar + column header
     if mx < list_x || my < list_y {
         return None;
     }
@@ -340,7 +347,7 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         if bxp + 88 > list_x + list_w { break; }
         // Grey out actions that need a selection / clipboard.
         let enabled = match *label {
-            "Rename" | "Delete" | "Copy" | "Cut" => has_sel,
+            "Rename" | "Delete" | "Copy" | "Cut" | "Perms" | "Protect" => has_sel,
             "Paste" => has_clip,
             _ => true,
         };
@@ -398,6 +405,13 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
                 rx = list_x + list_w - 56;
             }
             for b in &e.badges {
+                if b == &Badge::Immutable {
+                    let lbl = "protected";
+                    let cw = text::width_px(lbl, 10.5) + 16;
+                    fb.fill_rounded_rect(rx - cw, ry + 5, cw, 18, 9, Color::rgb(0xFB, 0xEC, 0xD9));
+                    text::draw_px(fb, rx - cw + 8, ry + 7, lbl, Color::rgb(0xB0, 0x62, 0x10), 10.5);
+                    rx -= cw + 6;
+                }
                 if b == &Badge::Signed {
                     let lbl = "signed";
                     let cw = text::width_px(lbl, 10.5) + 16;

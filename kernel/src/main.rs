@@ -196,7 +196,11 @@ fn load_files_dir(fs: &mut dyn FileSystem, path: &str) {
     let items = match fs.list_dir(path) {
         Ok(v) => v
             .into_iter()
-            .map(|e| (e.name, e.kind == eurofs::EntryKind::Directory, e.size, e.mtime, e.mode))
+            .map(|e| {
+                let full = if path == "/" { alloc::format!("/{}", e.name) } else { alloc::format!("{path}/{}", e.name) };
+                let prot = fs.get_flags(&full).map(|f| f & eurofs::FLAG_IMMUTABLE != 0).unwrap_or(false);
+                (e.name, e.kind == eurofs::EntryKind::Directory, e.size, e.mtime, e.mode, prot)
+            })
             .collect::<alloc::vec::Vec<_>>(),
         Err(_) => alloc::vec::Vec::new(),
     };
@@ -2962,6 +2966,10 @@ fn main() -> Status {
         let boot_caps = ring3::CAP_IMMUTABLE_ADMIN | ring3::CAP_FILE;
         immutable::selftest(&mut vfs);
         let protected = immutable::protect_system_files(&mut vfs, boot_caps);
+        // Sanity: the recursive sweep really covered /bin — spot-check a binary
+        // that is NOT in the explicit SYSTEM_FILES list.
+        let doom_prot = vfs.get_flags("/bin/doom").map(|f| f & eurofs::FLAG_IMMUTABLE != 0).unwrap_or(false);
+        serial_println!("[l2rec] /bin recursively protected: /bin/doom immutable={doom_prot}");
         serial_println!(
             "[l2] {} system file(s) marked IMMUTABLE — tamper-proof (changing requires CAP_IMMUTABLE_ADMIN; the boot updater clears the flag legitimately)",
             protected
@@ -3503,12 +3511,15 @@ fn main() -> Status {
     // REAL shell + filesystem demo: make a directory, write a file, read it
     // back — the output is real (no script), and /demo also appears in the
     // Files app. Proves the shell + EuroFS really work.
+    // The demo now also SHOWS the rwx protection: a user mkdir in / is
+    // refused, the same mkdir in the home directory works.
     for c in [
         "uname",
         "mkdir /demo",
-        "write /demo/welcome.txt Hello-from-EuroOS",
-        "ls /demo",
-        "cat /demo/welcome.txt",
+        "mkdir /home/euro/demo",
+        "write /home/euro/demo/welcome.txt Hello-from-EuroOS",
+        "cat /home/euro/demo/welcome.txt",
+        "ls /home/euro/demo",
         "ls /",
     ] {
         term.push(format!("euroos:/ $ {c}"));
@@ -5231,6 +5242,15 @@ fn main() -> Status {
                 let res: (&str, Result<(), eurofs::FsError>) = match op {
                     files::FileOp::NewDir(p) => ("new folder", ctx.fs.create_dir(&p)),
                     files::FileOp::Chmod(p, m) => ("chmod", ctx.fs.chmod(&p, m)),
+                    files::FileOp::ToggleProtect(p) => {
+                        // The user route (own /home files, no cap needed); the
+                        // euroattr layer refuses anything outside the session
+                        // user's home — system files need the admin capability.
+                        let user = auth::session_name();
+                        let cur = ctx.fs.get_flags(&p).unwrap_or(0);
+                        let newf = if cur & eurofs::FLAG_IMMUTABLE == 0 { eurofs::FLAG_IMMUTABLE } else { 0 };
+                        ("protect", euroattr::set_user(ctx.fs, &p, newf, &user))
+                    }
                     files::FileOp::Rename(a, b) => ("rename", ctx.fs.rename(&a, &b)),
                     files::FileOp::Delete(p, is_dir) => (
                         "delete",
