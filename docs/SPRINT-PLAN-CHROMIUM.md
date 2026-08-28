@@ -142,3 +142,13 @@ Work top-to-bottom. Commit after each green step. Each `[ ]` is a boot-verified 
 - One boot per verified step; let the binary name each blocker; knock it down; commit.
 - No Claude trailers. Do not push. Under-claim: "engine works" ≠ "app works".
 - Keep the pack disk (`/tmp/chrome-pack.img`) as the chrome source; grow it as needed.
+
+## 2026-08-28 — deadlock work (phase C1 approach)
+Baseline first: the known-good --single-process desktop run on the NEW kernel
+(rwx enforcement, immutability, integrity sweep landed since the last chrome
+run). Then remove --single-process and hunt the multi-process wall with the
+existing forensics: FOP ring (last 128 futex ops), FUTEX_WAIT_ADDR/SINCE per
+task, stall snapshots (STALL_DIAG), read_glibc_u32 lock-word peeks. Expected
+new ground in multi-process: fork/exec of the renderer (no zygote), Mojo IPC
+over socketpairs between REAL processes, cross-process shared memory
+(memfd + MAP_SHARED across address spaces).
