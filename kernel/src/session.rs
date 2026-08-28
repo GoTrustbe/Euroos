@@ -75,10 +75,12 @@ pub fn open(fs: &mut dyn FileSystem, uid: u32, gid: u32, name: &str, caps: u64, 
         t.push(SessionInfo { id, uid, name: name.to_string(), caps, opened_at: now(), closed_at: 0, how });
     }
     crate::auth::set_session(uid, gid, name);
-    fs.set_uid_context(uid);
+    // Prepare the home BEFORE dropping to the session uid: creating /home/<user>
+    // and migrating system-seeded files to the user needs system rights.
     if uid != 0 {
         ensure_home(fs, name, uid);
     }
+    fs.set_uid_context(uid);
     crate::audit::record(crate::audit::Event::Login, "session opened");
     id
 }
@@ -91,16 +93,48 @@ pub fn active() -> Option<SessionInfo> {
 /// `/home/<name>` exists and belongs to its user. Also heals pre-3E homes
 /// that were created with owner 0 (system).
 fn ensure_home(fs: &mut dyn FileSystem, name: &str, uid: u32) {
-    if !fs.exists("/home") {
-        let _ = fs.create_dir("/home");
+    crate::sysctx::as_system(fs, |fs| {
+        if !fs.exists("/home") {
+            let _ = fs.create_dir("/home");
+        }
+        let home = alloc::format!("/home/{name}");
+        if !fs.exists(&home) {
+            let _ = fs.create_dir(&home);
+        }
+        // Migrate: anything system-seeded (uid 0) under the user's home becomes
+        // the user's. Without this, rwx enforcement would lock users out of
+        // their own seeded notes/pictures the moment permissions became real.
+        chown_tree(fs, &home, uid);
+    });
+}
+
+/// Recursively chown uid-0 entries under `dir` to `uid` (bounded depth).
+fn chown_tree(fs: &mut dyn FileSystem, dir: &str, uid: u32) {
+    fn walk(fs: &mut dyn FileSystem, dir: &str, uid: u32, depth: u32) {
+        if depth > 16 {
+            return;
+        }
+        if fs.owner(dir).map(|u| u == 0).unwrap_or(false) {
+            let _ = fs.chown(dir, uid);
+        }
+        let entries = match fs.list_dir(dir) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        for e in entries {
+            let p = if dir == "/" {
+                alloc::format!("/{}", e.name)
+            } else {
+                alloc::format!("{dir}/{}", e.name)
+            };
+            if e.kind == eurofs::EntryKind::Directory {
+                walk(fs, &p, uid, depth + 1);
+            } else if fs.owner(&p).map(|u| u == 0).unwrap_or(false) {
+                let _ = fs.chown(&p, uid);
+            }
+        }
     }
-    let home = alloc::format!("/home/{name}");
-    if !fs.exists(&home) {
-        let _ = fs.create_dir(&home);
-    }
-    if fs.owner(&home).map(|u| u != uid).unwrap_or(false) {
-        let _ = fs.chown(&home, uid);
-    }
+    walk(fs, dir, uid, 0);
 }
 
 /// `sessions` shell command: the session table, newest first.
@@ -155,19 +189,23 @@ pub fn selftest(fs: &mut dyn FileSystem) {
 pub fn quota_selftest(fs: &mut dyn FileSystem) {
     const QUID: u32 = 4242; // scratch uid — not a real account
     let set_ok = fs.quota_set(QUID, 2).is_ok();
+    // rwx is enforced now: give the scratch uid a directory it may write in.
+    let _ = fs.create_dir("/.qtest");
+    let _ = fs.chown("/.qtest", QUID);
     fs.set_uid_context(QUID);
 
-    let w1 = fs.write_file("/.qtest-1.bin", &alloc::vec![0xAB; 8192]).is_ok(); // 2 blocks
+    let w1 = fs.write_file("/.qtest/1.bin", &alloc::vec![0xAB; 8192]).is_ok(); // 2 blocks
     let info = fs.quota_info(QUID).unwrap_or((0, 0));
-    let over = fs.write_file("/.qtest-2.bin", &alloc::vec![0xCD; 8192]); // would be 4 > 2
-    let refused = over == Err(FsError::QuotaExceeded) && !fs.exists("/.qtest-2.bin");
-    let rm = fs.remove_file("/.qtest-1.bin").is_ok();
-    let after_credit = fs.write_file("/.qtest-2.bin", &alloc::vec![0xCD; 8192]).is_ok();
+    let over = fs.write_file("/.qtest/2.bin", &alloc::vec![0xCD; 8192]); // would be 4 > 2
+    let refused = over == Err(FsError::QuotaExceeded) && !fs.exists("/.qtest/2.bin");
+    let rm = fs.remove_file("/.qtest/1.bin").is_ok();
+    let after_credit = fs.write_file("/.qtest/2.bin", &alloc::vec![0xCD; 8192]).is_ok();
 
     // Cleanup: files away, limit away, context back to system.
-    let _ = fs.remove_file("/.qtest-2.bin");
-    let _ = fs.quota_set(QUID, 0);
+    let _ = fs.remove_file("/.qtest/2.bin");
     fs.set_uid_context(0);
+    let _ = fs.remove_dir("/.qtest");
+    let _ = fs.quota_set(QUID, 0);
 
     let ok = set_ok && w1 && info == (2, 2) && refused && rm && after_credit;
     crate::serial_println!(

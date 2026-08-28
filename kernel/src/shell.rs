@@ -143,6 +143,18 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             vec!["logged out — back to the euro session".to_string()]
         }
         "sessions" => crate::session::list_lines(),
+        "chmod" => {
+            // chmod <octal> <path> — change permission bits. The FS gates it:
+            // only the owner or uid 0, and immutable objects stay frozen.
+            let mut it = arg2.split_whitespace();
+            match (u16::from_str_radix(arg1, 8), it.next()) {
+                (Ok(mode), Some(path)) => match fs.chmod(path, mode) {
+                    Ok(()) => vec![format!("mode of {path} -> {mode:o}")],
+                    Err(e) => vec![format!("chmod: {e:?}")],
+                },
+                _ => vec!["usage: chmod <octal-mode> <path>".to_string()],
+            }
+        }
         "chown" => {
             // chown <uid> <path> — 3E-3 ownership. Reserved for the admin seat
             // (root or the wheel desktop user), like the other admin commands.

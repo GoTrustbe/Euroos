@@ -38,6 +38,7 @@ static CLIPBOARD: Mutex<Option<(String, bool)>> = Mutex::new(None);
 /// A pending filesystem mutation the kernel loop flushes with FS access.
 pub enum FileOp {
     NewDir(String),
+    Chmod(String, u16),
     Rename(String, String),
     Delete(String, bool), // (path, is_dir)
     Copy(String, String),
@@ -55,11 +56,12 @@ struct Prompt {
 enum PromptMode {
     NewDir,
     Rename,
+    Perms,
 }
 static PROMPT: Mutex<Option<Prompt>> = Mutex::new(None);
 
 /// The toolbar actions (label shown on the button).
-const ACTIONS: [&str; 6] = ["New Folder", "Rename", "Delete", "Copy", "Cut", "Paste"];
+const ACTIONS: [&str; 7] = ["New Folder", "Rename", "Delete", "Copy", "Cut", "Paste", "Perms"];
 
 /// A Unix-style permission string like "drwxr-xr-x" from a mode + kind.
 fn perm_string(mode: u16, is_dir: bool) -> String {
@@ -104,6 +106,11 @@ pub fn key(k: crate::ps2::Key) {
                 match p.mode {
                     PromptMode::NewDir => PENDING.lock().push(FileOp::NewDir(join(&cur, name))),
                     PromptMode::Rename => PENDING.lock().push(FileOp::Rename(p.orig.clone(), join(&cur, name))),
+                    PromptMode::Perms => {
+                        if let Ok(m) = u16::from_str_radix(name, 8) {
+                            PENDING.lock().push(FileOp::Chmod(p.orig.clone(), m));
+                        }
+                    }
                 }
             }
             *g = None;
@@ -152,6 +159,21 @@ pub fn toolbar_click(win_x: usize, win_y: usize, mx: usize, my: usize, win_w: us
         "Cut" => {
             if let Some((path, _)) = selected_entry() {
                 *CLIPBOARD.lock() = Some((path, true));
+            }
+        }
+        "Perms" => {
+            if let Some((path, _)) = selected_entry() {
+                // Pre-fill with the current octal mode.
+                let cur = {
+                    let g = LISTING.lock();
+                    let i = SELECTED.load(Ordering::Relaxed);
+                    g.as_ref().and_then(|l| l.entries.get(i)).map(|e| e.mode).unwrap_or(0o644)
+                };
+                let mut b = crate::editcore::Buffer::new();
+                let txt = alloc::format!("{:o}", cur);
+                b.set_text(&txt);
+                b.col = txt.chars().count();
+                *PROMPT.lock() = Some(Prompt { mode: PromptMode::Perms, buf: b, orig: path });
             }
         }
         "Paste" => {
@@ -429,7 +451,11 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         let oy = by + (bh - ph) / 2;
         fb.fill_rounded_rect(ox - 2, oy - 2, pw + 4, ph + 4, 12, Color::rgb(0, 0, 0));
         fb.fill_rounded_rect(ox, oy, pw, ph, 10, Color::SURFACE);
-        let title = if p.mode == PromptMode::Rename { "Rename to:" } else { "New folder name:" };
+        let title = match p.mode {
+            PromptMode::Rename => "Rename to:",
+            PromptMode::Perms => "Permissions (octal, e.g. 644):",
+            PromptMode::NewDir => "New folder name:",
+        };
         text::draw_px(fb, ox + 18, oy + 14, title, Color::INK, 13.5);
         // Text field with the buffer + a caret.
         fb.fill_rounded_rect(ox + 16, oy + 40, pw - 32, 28, 6, Color::rgb(0xFF, 0xFF, 0xFF));

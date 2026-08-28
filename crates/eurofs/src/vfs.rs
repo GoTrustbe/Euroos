@@ -130,6 +130,15 @@ impl FileSystem for Vfs {
         let (idx, sub) = self.route(path);
         self.fs_ref(idx).owner(&sub)
     }
+    fn uid_context(&self) -> u32 {
+        self.root.uid_context()
+    }
+
+    fn chmod(&mut self, path: &str, mode: u16) -> FsResult<()> {
+        let (idx, sub) = self.route(path);
+        self.fs_mut(idx).chmod(&sub, mode)
+    }
+
     fn chown(&mut self, path: &str, uid: u32) -> FsResult<()> {
         let (idx, sub) = self.route(path);
         self.fs_mut(idx).chown(&sub, uid)

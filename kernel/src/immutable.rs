@@ -43,7 +43,23 @@ pub fn protect_system_files(fs: &mut dyn FileSystem, caps: u64) -> usize {
             n += 1;
         }
     }
+    harden_modes(fs);
     n
+}
+
+/// rwx hardening at boot: secrets become 0600 (they were world-readable!),
+/// shared scratch becomes 1777 so user sessions can use /tmp.
+fn harden_modes(fs: &mut dyn FileSystem) {
+    for p in ["/etc/shadow", "/etc/euroid/users.db"] {
+        if fs.exists(p) {
+            let _ = fs.chmod(p, 0o600);
+        }
+    }
+    for p in ["/tmp", "/var/tmp"] {
+        if fs.exists(p) {
+            let _ = fs.chmod(p, 0o1777);
+        }
+    }
 }
 
 /// The bundled, tamper-protected system files (mirrored in

@@ -449,6 +449,11 @@ pub fn change_own_password(user: &str, old: &str, new: &str) -> Result<(), Strin
 /// Write the live user store to `/etc/euroid/users.db`. Called after every
 /// mutating `eurousers` action so that changes are durable.
 pub fn persist_state(fs: &mut dyn eurofs::FileSystem) -> bool {
+    // Kernel service: the identity store is system state (0600, uid 0).
+    crate::sysctx::as_system(fs, |fs| persist_state_inner(fs))
+}
+
+fn persist_state_inner(fs: &mut dyn eurofs::FileSystem) -> bool {
     let guard = STATE.lock();
     let st = match guard.as_ref() {
         Some(s) => s,
@@ -464,7 +469,9 @@ pub fn persist_state(fs: &mut dyn eurofs::FileSystem) -> bool {
 /// users (0 = no file / empty → first boot). On corruption: 0
 /// (the caller then falls back to `build_state`).
 fn load_users_from_disk(fs: &mut dyn eurofs::FileSystem) -> Option<UserDb> {
-    let data = fs.read_file(USERS_DB).ok()?;
+    // Kernel service: the identity store is 0600/uid 0; unlock/login must read
+    // it even while a user session holds the uid-context.
+    let data = crate::sysctx::as_system(fs, |fs| fs.read_file(USERS_DB)).ok()?;
     let text = core::str::from_utf8(&data).ok()?;
     match deserialize_db(text) {
         Ok(db) if !db.all().is_empty() => Some(db),

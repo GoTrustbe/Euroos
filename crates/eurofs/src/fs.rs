@@ -137,6 +137,10 @@ pub trait FileSystem {
     fn set_uid_context(&mut self, uid: u32) {
         let _ = uid;
     }
+    /// The current session uid-context (0 = system). Default: system.
+    fn uid_context(&self) -> u32 {
+        0
+    }
     /// Owner uid of the file/dir at `path` (0 = system/legacy). Default: not supported.
     fn owner(&self, path: &str) -> FsResult<u32> {
         let _ = path;
@@ -144,6 +148,13 @@ pub trait FileSystem {
     }
     /// Change the owner of `path` to `uid` (like `chown(2)`; the capability check
     /// lives in the kernel layer above). Default: not supported.
+    /// Change the permission bits of `path` (like `chmod(2)`). Only the owner
+    /// or uid 0; an immutable object stays frozen. Default: not supported.
+    fn chmod(&mut self, path: &str, mode: u16) -> FsResult<()> {
+        let _ = (path, mode);
+        Err(FsError::Unsupported)
+    }
+
     fn chown(&mut self, path: &str, uid: u32) -> FsResult<()> {
         let _ = (path, uid);
         Err(FsError::Unsupported)

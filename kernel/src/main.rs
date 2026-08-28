@@ -151,6 +151,7 @@ mod smbfs;
 mod imageview;
 mod paint;
 mod editcore;
+mod sysctx;
 mod nfsmount;
 mod disktest;
 mod stresstest;
@@ -5227,18 +5228,24 @@ fn main() -> Status {
         let ops = files::take_ops();
         if !ops.is_empty() {
             for op in ops {
-                match op {
-                    files::FileOp::NewDir(p) => { let _ = ctx.fs.create_dir(&p); }
-                    files::FileOp::Rename(a, b) => { let _ = ctx.fs.rename(&a, &b); }
-                    files::FileOp::Delete(p, is_dir) => {
-                        let _ = if is_dir { ctx.fs.remove_dir(&p) } else { ctx.fs.remove_file(&p) };
-                    }
-                    files::FileOp::Copy(src, dst) => {
-                        if let Ok(bytes) = ctx.fs.read_file(&src) {
-                            let _ = ctx.fs.write_file(&dst, &bytes);
-                        }
-                    }
-                    files::FileOp::Move(src, dst) => { let _ = ctx.fs.rename(&src, &dst); }
+                let res: (&str, Result<(), eurofs::FsError>) = match op {
+                    files::FileOp::NewDir(p) => ("new folder", ctx.fs.create_dir(&p)),
+                    files::FileOp::Chmod(p, m) => ("chmod", ctx.fs.chmod(&p, m)),
+                    files::FileOp::Rename(a, b) => ("rename", ctx.fs.rename(&a, &b)),
+                    files::FileOp::Delete(p, is_dir) => (
+                        "delete",
+                        if is_dir { ctx.fs.remove_dir(&p) } else { ctx.fs.remove_file(&p) },
+                    ),
+                    files::FileOp::Copy(src, dst) => (
+                        "copy",
+                        ctx.fs.read_file(&src).and_then(|b| ctx.fs.write_file(&dst, &b)),
+                    ),
+                    files::FileOp::Move(src, dst) => ("move", ctx.fs.rename(&src, &dst)),
+                };
+                // No silent failures: a refused operation (permissions,
+                // immutability, quota) is shown to the user.
+                if let (what, Err(e)) = res {
+                    notify::push("EuroFiles", &format!("{what} refused: {e:?}"), interrupts::ticks());
                 }
             }
             let cur = files::current_path();
