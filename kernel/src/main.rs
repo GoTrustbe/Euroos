@@ -4020,6 +4020,12 @@ fn main() -> Status {
             }}
             let _ = ctx.fs.create_dir("/home/euro/pictures");
             let _ = ctx.fs.write_file("/home/euro/pictures/euroos.png", &euromedia::encode_png(&im));
+            // A second sample so Prev/Next has something to browse.
+            let mut im2 = euromedia::Image::new(96, 64, [0x2E, 0x7D, 0x32, 255]);
+            for y in 0..64u32 { for x in 0..96u32 {
+                if (x as i32 - 48).abs() + (y as i32 - 32).abs() < 20 { im2.set(x, y, [0xFF, 0xFF, 0xFF, 255]); }
+            }}
+            let _ = ctx.fs.write_file("/home/euro/pictures/diamond.png", &euromedia::encode_png(&im2));
             imageview::open(ctx.fs, "/home/euro/pictures/euroos.png");
         }
 
@@ -4612,6 +4618,14 @@ fn main() -> Status {
                             }
                         } else if let Some(fpath) = files::hit_test_file(windows[i].x, windows[i].y, px, py) {
                             file_drag = Some((fpath, px, py));
+                        }
+                    } else if windows[i].app == suite_ui::SuiteApp::ImageView {
+                        // Viewer toolbar: zoom/rotate in place; Prev/Next re-open.
+                        if let Some(target) = imageview::click(windows[i].x, windows[i].y, px, py) {
+                            if !target.is_empty() {
+                                imageview::open(ctx.fs, &target);
+                            }
+                            need_full = true;
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Paint {
                         // Press in EuroPaint: a toolbar action or the start of a
