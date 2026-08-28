@@ -630,10 +630,14 @@ fn main() -> Status {
     // lean 512 MiB public image still boots. We only reserve up to ~1/5 of usable RAM.
     {
         let usable_frames = (allocator.usable_bytes() / 4096) as usize;
-        let cap = usable_frames / 5; // never take more than a fifth of RAM
-        // Candidates: 640 MiB (2+ chrome arenas) → 160 MiB → 64 MiB, first that fits.
+        // Cap at a quarter of RAM: at -m 3584M the fifth-cap rejected the 640 MiB
+        // candidate and chrome multi-process fell to 160 MiB — not one 256 MiB
+        // child arena fit, and every GPU/renderer launch died on [fork] alloc.
+        let cap = usable_frames / 4;
+        // Candidates: 640 MiB (2+ chrome arenas) → 512 → 288 (one child + slack)
+        // → 160 → 64 MiB, first that fits.
         let mut installed = false;
-        for &want in &[163_840usize, 40_960, 16_384] {
+        for &want in &[163_840usize, 131_072, 73_728, 40_960, 16_384] {
             if want > cap {
                 continue;
             }

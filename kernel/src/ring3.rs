@@ -6866,6 +6866,13 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // route while the X event route depends on a glib-pump race.
     b"--remote-debugging-pipe",
     b"--disable-gpu", b"--use-gl=disabled", b"--disable-vulkan",
+    // --single-process stays the DEFAULT (the proven mode). The C1 multi-process
+    // experiment (2026-08-28, remove this flag to reproduce) got real forks
+    // working: two 256 MiB children (pid 1000/1001) live with their own PML4s
+    // once the process pool holds 640 MiB. Remaining wall: the child goes Ready
+    // but silent after its post-fork rt_sigaction sweep (Mojo handshake never
+    // completes), the network-service child crashes later, and child arenas are
+    // not recycled into the pool on exit. See docs/SPRINT-PLAN-CHROMIUM.md.
     b"--no-zygote", b"--single-process", b"--disable-dev-shm-usage",
     b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
     b"--disable-crashpad-for-testing", b"--disable-breakpad",

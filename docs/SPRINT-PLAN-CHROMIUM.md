@@ -152,3 +152,23 @@ task, stall snapshots (STALL_DIAG), read_glibc_u32 lock-word peeks. Expected
 new ground in multi-process: fork/exec of the renderer (no zygote), Mojo IPC
 over socketpairs between REAL processes, cross-process shared memory
 (memfd + MAP_SHARED across address spaces).
+
+### 2026-08-28 findings — the "deadlock" dissected
+The multi-process wall is NOT one deadlock; it is layers:
+1. FIXED: chrome-desktop.sh lacked the -icount guest clock — chrome sat in the
+   TCP_INFO socket treadmill and never reached the window (same fix as
+   chrome-ui-input.sh, now committed).
+2. FIXED: the process frame pool fell back to 160 MiB at -m 3584M (the 1/5-of-RAM
+   cap rejected 640 MiB), so not one 256 MiB fork arena fit and every GPU/
+   renderer/network child died at birth ("GPU process isn't usable. Goodbye").
+   Cap is now 1/4 with 512/288 MiB intermediate candidates: two real chrome
+   children forked successfully (own PML4 + arena).
+3. OPEN (next iteration): the forked child completes its post-fork rt_sigaction
+   sweep over all fds, then sits Ready but syscall-silent — the Mojo handshake
+   with the browser never completes (suspects: child-side thread creation after
+   fork, socketpair inheritance, or the child waiting on a poll the parent never
+   satisfies). The network-service child crashes minutes later; child arenas are
+   not recycled into the pool on exit (third fork fails at 127 MiB left).
+Baseline re-proven the same day: --single-process chrome renders the test page
+on the desktop under the full FS-security kernel, and opened a TLS connection
+to 142.251.142.206:443 through the EuroOS netstack.
