@@ -4237,6 +4237,7 @@ fn main() -> Status {
         // An app the user asked to open this iteration (via launcher or menu),
         // raised in one place after input handling.
         let mut launch_icon: Option<usize> = None;
+        let mut launch_path: Option<String> = None;
         // A screenshot requested this iteration, captured after a clean render.
         let mut pending_shot = false;
 
@@ -4264,8 +4265,10 @@ fn main() -> Status {
             }
         } else if launcher::is_open() {
             if let Some((cx, cy)) = mouse::take_press() {
-                if let Some(icon) = launcher::click_at(cx, cy, width, height) {
-                    launch_icon = Some(icon);
+                match launcher::click_at(cx, cy, width, height) {
+                    Some(launcher::Launch::App(icon)) => launch_icon = Some(icon),
+                    Some(launcher::Launch::Path(p)) => launch_path = Some(p),
+                    None => {}
                 }
                 need_full = true;
             }
@@ -4428,6 +4431,7 @@ fn main() -> Status {
             } else if compositor::brand_button_at(px, py) {
                 // The EU mark is the "start button": open the app launcher.
                 launcher::open();
+                launcher::refresh(ctx.fs); // fill the initial (all-apps) list
                 need_full = true;
             } else if {
                 let (rx, ry, rw, rh) = compositor::status_panel_rect(width);
@@ -4853,7 +4857,11 @@ fn main() -> Status {
             // The app launcher captures the keyboard while it is open (type to
             // filter, Enter to open, Esc to dismiss).
             if launcher::is_open() {
-                if let Some(icon) = launcher::key(k) {
+                let lr = launcher::key(k);
+                launcher::refresh(ctx.fs); // live results after every keystroke
+                if let Some(launcher::Launch::Path(p)) = lr {
+                    launch_path = Some(p);
+                } else if let Some(launcher::Launch::App(icon)) = lr {
                     launch_icon = Some(icon);
                 }
                 need_full = true;
@@ -5379,6 +5387,28 @@ fn main() -> Status {
         }
 
         // Open an app requested by the launcher or a menu (single place).
+        // A search result path opens in the right app (viewer/text/files).
+        if let Some(p) = launch_path.take() {
+            let is_dir = ctx.fs.metadata(&p).map(|m| m.kind == eurofs::EntryKind::Directory).unwrap_or(false);
+            let target = if is_dir {
+                load_files_dir(ctx.fs, &p);
+                suite_ui::SuiteApp::Files
+            } else if imageview::handles(&p) {
+                imageview::open(ctx.fs, &p);
+                suite_ui::SuiteApp::ImageView
+            } else {
+                textedit::open(ctx.fs, &p);
+                suite_ui::SuiteApp::Text
+            };
+            if let Some(w) = windows.iter().position(|win| win.app == target) {
+                order.retain(|&x| x != w);
+                order.push(w);
+                for ww in windows.iter_mut() { ww.active = false; }
+                windows[w].visible = true;
+                windows[w].active = true;
+            }
+            need_full = true;
+        }
         if let Some(icon) = launch_icon {
             if let Some(w) = dock_targets.get(icon).copied().flatten().filter(|&w| w < windows.len()) {
                 // The hosted X window is only a frame: opening it has to start the app
