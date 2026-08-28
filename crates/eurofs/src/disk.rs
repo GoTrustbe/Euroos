@@ -26,7 +26,7 @@ use alloc::vec::Vec;
 
 use crate::block::BlockDevice;
 use crate::checksum::xxh3_64;
-use crate::fs::{DirEntry, EntryKind, FileSystem, FsError, FsResult, SnapshotInfo, FLAG_APPEND_ONLY, FLAG_IMMUTABLE};
+use crate::fs::{FLAG_VERSIONED, DirEntry, EntryKind, FileSystem, FsError, FsResult, SnapshotInfo, FLAG_APPEND_ONLY, FLAG_IMMUTABLE};
 use crate::path::{filename, parent, split_path};
 use crate::superblock::{EuroFsSuperblock, RESERVED_BLOCKS};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -102,6 +102,19 @@ fn wr_u64(b: &mut [u8], o: usize, v: u64) {
 }
 
 /// In-memory representation of an inode (decoded from one block).
+/// 3H versioning: where old file versions live, and how many we keep per file.
+const VERSIONS_DIR: &str = "/.versions";
+const MAX_VERSIONS: usize = 8;
+
+/// A filesystem path as a flat version-store key ("/home/euro/a.md" → "home%euro%a.md").
+fn version_key(path: &str) -> String {
+    let mut k = String::new();
+    for c in path.trim_start_matches('/').chars() {
+        k.push(if c == '/' { '%' } else { c });
+    }
+    k
+}
+
 #[derive(Clone)]
 struct Inode {
     oid: u64,
@@ -882,6 +895,89 @@ impl<D: BlockDevice> EuroFs<D> {
         self.check_access(par, 0o2)
     }
 
+    /// list_dir without the rwx check — for the FS-internal version store.
+    fn list_dir_internal(&self, path: &str) -> FsResult<Vec<DirEntry>> {
+        let oid = self.resolve(path)?;
+        let entries = self.read_dir_entries(oid)?;
+        let mut out = Vec::with_capacity(entries.len());
+        for (name, child_oid, otype) in entries {
+            let inode = self.read_inode(child_oid).ok();
+            let (size, mtime) = match &inode {
+                Some(i) => (i.size, i.mtime),
+                None => (0, 0),
+            };
+            out.push(DirEntry {
+                name,
+                kind: if otype == TYPE_DIR { EntryKind::Directory } else { EntryKind::File },
+                size,
+                mode: 0o600,
+                mtime,
+            });
+        }
+        Ok(out)
+    }
+
+    /// True when `dir_oid` or any ancestor directory carries FLAG_VERSIONED.
+    fn dir_versioned(&self, mut dir_oid: u64) -> bool {
+        let mut hops = 0;
+        loop {
+            let Ok(inode) = self.read_inode(dir_oid) else { return false };
+            if inode.flags & FLAG_VERSIONED != 0 {
+                return true;
+            }
+            if dir_oid == ROOT_OID || hops > 16 {
+                return false;
+            }
+            dir_oid = inode.parent;
+            hops += 1;
+        }
+    }
+
+    /// Store `old_data` as the next version of `path` under /.versions/<key>/,
+    /// rotating out the oldest beyond MAX_VERSIONS. Runs with the system uid
+    /// internally: the version store is FS-internal bookkeeping, not a place
+    /// user permissions apply to (users reach it only via versions()/restore).
+    fn save_version(&mut self, path: &str, old_data: &[u8], old_mtime: u64) -> FsResult<()> {
+        let saved_uid = self.ctx_uid;
+        self.ctx_uid = 0;
+        let r = self.save_version_inner(path, old_data, old_mtime);
+        self.ctx_uid = saved_uid;
+        r
+    }
+
+    fn save_version_inner(&mut self, path: &str, old_data: &[u8], old_mtime: u64) -> FsResult<()> {
+        if !self.exists(VERSIONS_DIR) {
+            self.create_dir(VERSIONS_DIR)?;
+        }
+        let key_dir = alloc::format!("{VERSIONS_DIR}/{}", version_key(path));
+        if !self.exists(&key_dir) {
+            self.create_dir(&key_dir)?;
+        }
+        // Next version number = highest existing + 1.
+        let existing = self.list_dir(&key_dir)?;
+        let mut nums: Vec<u32> = existing
+            .iter()
+            .filter_map(|e| e.name.strip_prefix('v').and_then(|n| n.parse::<u32>().ok()))
+            .collect();
+        nums.sort_unstable();
+        let next = nums.last().map(|n| n + 1).unwrap_or(1);
+        // Preserve the version with the ORIGINAL mtime so history shows when
+        // that content was last written, not when it was rotated out.
+        let clock = self.now;
+        self.now = old_mtime;
+        let wr = self.write_file_impl(&alloc::format!("{key_dir}/v{next}"), old_data, 0);
+        self.now = clock;
+        wr?;
+        // Rotate: keep the newest MAX_VERSIONS.
+        if nums.len() + 1 > MAX_VERSIONS {
+            let drop_n = nums.len() + 1 - MAX_VERSIONS;
+            for n in nums.iter().take(drop_n) {
+                let _ = self.remove_file(&alloc::format!("{key_dir}/v{n}"));
+            }
+        }
+        Ok(())
+    }
+
     /// Resolve a path to an OID, following symlinks on every intermediate component
     /// and — when `follow_final` is true — on the final component too. An absolute
     /// symlink target restarts from root; a relative one resolves against the directory
@@ -1018,6 +1114,16 @@ impl<D: BlockDevice> EuroFs<D> {
             keep_flags = old.flags;
             keep_uid = old.uid; // overwrite keeps the existing owner (3E-3)
             keep_mode = Some(old.mode);
+            // 3H versioning: preserve the old content BEFORE it is replaced,
+            // when the file or an ancestor directory is FLAG_VERSIONED.
+            if !path.starts_with(VERSIONS_DIR)
+                && (old.flags & FLAG_VERSIONED != 0 || self.dir_versioned(parent_oid))
+            {
+                let old_data = self.read_data(&old)?;
+                if old_data != data {
+                    self.save_version(path, &old_data, old.mtime)?;
+                }
+            }
             if old.flags & FLAG_IMMUTABLE != 0 {
                 return Err(FsError::PermissionDenied); // immutable → no change
             }
@@ -1119,6 +1225,40 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         ni.mode = mode & 0o7777;
         self.write_object(ni, &data)?;
         self.commit()
+    }
+
+    fn versions(&self, path: &str) -> FsResult<Vec<(u32, u64, u64)>> {
+        // Reading the version list needs read access to the file itself
+        // (or uid 0) — the store is system-held, so check against `path`.
+        if self.exists(path) {
+            self.check_access(path, 0o4)?;
+        }
+        let key_dir = alloc::format!("{VERSIONS_DIR}/{}", version_key(path));
+        let entries = match self.list_dir_internal(&key_dir) {
+            Ok(v) => v,
+            Err(_) => return Ok(Vec::new()), // no history yet
+        };
+        let mut out: Vec<(u32, u64, u64)> = entries
+            .iter()
+            .filter_map(|e| {
+                e.name.strip_prefix('v').and_then(|n| n.parse::<u32>().ok()).map(|n| (n, e.size, e.mtime))
+            })
+            .collect();
+        out.sort_unstable_by(|a, b| b.0.cmp(&a.0)); // newest first
+        Ok(out)
+    }
+
+    fn restore_version(&mut self, path: &str, n: u32) -> FsResult<()> {
+        let key = alloc::format!("{VERSIONS_DIR}/{}/v{n}", version_key(path));
+        // Read the stored version with system rights (the store is internal)…
+        let saved = self.ctx_uid;
+        self.ctx_uid = 0;
+        let data = self.read_file(&key);
+        self.ctx_uid = saved;
+        let data = data?;
+        // …then write it back as a NORMAL write: permissions apply, and the
+        // replaced current content becomes a new version itself (nothing lost).
+        self.write_file_impl(path, &data, 0)
     }
 
     fn chown(&mut self, path: &str, uid: u32) -> FsResult<()> {
@@ -1248,7 +1388,10 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
     fn set_flags(&mut self, path: &str, flags: u32) -> FsResult<()> {
         let oid = self.resolve(path)?;
         let inode = self.read_inode(oid)?;
-        if inode.otype != TYPE_FILE {
+        // Files carry any flag; a DIRECTORY may carry FLAG_VERSIONED (3H:
+        // "everything under this dir is versioned") — immutability of a whole
+        // dir stays file-by-file (the recursive boot protection does that).
+        if inode.otype != TYPE_FILE && !(inode.otype == TYPE_DIR && flags & !FLAG_VERSIONED == 0) {
             return Err(FsError::NotAFile);
         }
         // Rewrite the inode + the same data with the new flags (CoW). The
@@ -2344,6 +2487,56 @@ mod tests {
         let mut fs3 = EuroFs::mount(&mut dev, 3).unwrap();
         fs3.set_flags("/h/f", FLAG_IMMUTABLE).unwrap();
         assert_eq!(fs3.chmod("/h/f", 0o777), Err(FsError::PermissionDenied));
+    }
+
+    #[test]
+    fn versioning_keeps_history_and_restores() {
+        let mut dev = dev(1024);
+        let mut fs = EuroFs::format(&mut dev, [70; 16], 1).unwrap();
+        mkhome(&mut fs, 1002, "/home");
+        fs.write_file("/home/doc.md", b"version one").unwrap();
+        fs.set_flags("/home/doc.md", FLAG_VERSIONED).unwrap();
+        fs.write_file("/home/doc.md", b"version two").unwrap();
+        fs.write_file("/home/doc.md", b"version three").unwrap();
+        // Two preserved versions, newest first.
+        let v = fs.versions("/home/doc.md").unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!((v[0].0, v[1].0), (2, 1));
+        // Restore v1 → the current content becomes "version one" AND the
+        // replaced "version three" is itself preserved (nothing lost).
+        fs.restore_version("/home/doc.md", 1).unwrap();
+        assert_eq!(fs.read_file("/home/doc.md").unwrap(), b"version one");
+        let v2 = fs.versions("/home/doc.md").unwrap();
+        assert_eq!(v2.len(), 3);
+        // History survives a remount.
+        drop(fs);
+        let fs2 = EuroFs::mount(&mut dev, 2).unwrap();
+        assert_eq!(fs2.versions("/home/doc.md").unwrap().len(), 3);
+    }
+
+    #[test]
+    fn versioning_inherits_from_directory_and_rotates() {
+        let mut dev = dev(2048);
+        let mut fs = EuroFs::format(&mut dev, [71; 16], 1).unwrap();
+        mkhome(&mut fs, 1002, "/home");
+        // Flag the DIRECTORY: every file under it is versioned.
+        fs.set_flags("/home", FLAG_VERSIONED).unwrap();
+        fs.create_dir("/home/deep").unwrap();
+        fs.write_file("/home/deep/n.txt", b"a").unwrap();
+        for i in 0..12u32 {
+            fs.write_file("/home/deep/n.txt", alloc::format!("content {i}").as_bytes()).unwrap();
+        }
+        let v = fs.versions("/home/deep/n.txt").unwrap();
+        // Rotation: at most MAX_VERSIONS (8) kept, newest first.
+        assert_eq!(v.len(), 8);
+        assert!(v[0].0 > v[7].0);
+        // An identical rewrite makes NO new version.
+        let before = fs.versions("/home/deep/n.txt").unwrap().len();
+        fs.write_file("/home/deep/n.txt", b"content 11").unwrap();
+        assert_eq!(fs.versions("/home/deep/n.txt").unwrap().len(), before);
+        // A file with no history reports an empty list, not an error.
+        fs.write_file("/home/once.txt", b"only").unwrap();
+        assert_eq!(fs.versions("/home/once.txt").unwrap(), alloc::vec![]);
     }
 
     /// rwx-era helper: a home directory the given uid can actually write in.

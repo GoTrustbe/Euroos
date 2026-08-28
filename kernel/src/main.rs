@@ -197,6 +197,9 @@ fn load_files_dir(fs: &mut dyn FileSystem, path: &str) {
     let items = match fs.list_dir(path) {
         Ok(v) => v
             .into_iter()
+            // The version store is FS-internal bookkeeping — reachable through
+            // History, not as a browsable folder.
+            .filter(|e| !(path == "/" && e.name == ".versions"))
             .map(|e| {
                 let full = if path == "/" { alloc::format!("/{}", e.name) } else { alloc::format!("{path}/{}", e.name) };
                 let prot = fs.get_flags(&full).map(|f| f & eurofs::FLAG_IMMUTABLE != 0).unwrap_or(false);
@@ -2980,6 +2983,28 @@ fn main() -> Status {
         let bins = system_binaries();
         integrity::selftest(&mut vfs, &bins, boot_caps);
         integrity::check_and_report(&mut vfs, &bins, "at boot");
+        // 3H: per-file versioning on the LIVE root FS — write 3 versions,
+        // list them, restore v1, and prove nothing was lost.
+        {
+            let p = "/home/euro/.vtest.md";
+            let _ = vfs.create_dir("/home");
+            let _ = vfs.create_dir("/home/euro");
+            let hcur = vfs.get_flags("/home/euro").unwrap_or(0);
+            let _ = vfs.set_flags("/home/euro", hcur | eurofs::FLAG_VERSIONED);
+            let _ = vfs.write_file(p, b"draft 1");
+            let _ = vfs.write_file(p, b"draft 2");
+            let _ = vfs.write_file(p, b"draft 3");
+            let hist = vfs.versions(p).map(|v| v.len()).unwrap_or(0);
+            let restored = vfs.restore_version(p, 1).is_ok()
+                && vfs.read_file(p).map(|d| d == b"draft 1").unwrap_or(false);
+            let kept = vfs.versions(p).map(|v| v.len()).unwrap_or(0);
+            let _ = vfs.remove_file(p);
+            let ok = hist == 2 && restored && kept == 3;
+            serial_println!(
+                "[3h] per-file versioning (live FS): 3-writes->{hist} stored, restore-v1={restored}, replaced-kept->{kept} -> {}",
+                if ok { "OK (history is real) \u{2713}" } else { "FAILED \u{2717}" }
+            );
+        }
         audit::selftest(&mut vfs, boot_caps);
         // 3D-6 wiring: the live audit log is now hash-chained + tamper-evident,
         // fed by the real execve/connection call sites, and persisted as JSON.
@@ -4565,8 +4590,18 @@ fn main() -> Status {
                             agent_ui::begin_edit();
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Files {
-                        // Action toolbar first, then navigation / selection.
-                        if files::toolbar_click(windows[i].x, windows[i].y, px, py, windows[i].w) {
+                        // An open History panel captures the click first.
+                        if files::history_open() {
+                            if let Some((path, n)) = files::history_click(windows[i].x, windows[i].y, px, py, windows[i].w, windows[i].h) {
+                                match ctx.fs.restore_version(&path, n) {
+                                    Ok(()) => notify::push("EuroFiles", &format!("restored v{n} (previous content kept as a new version)"), interrupts::ticks()),
+                                    Err(e) => notify::push("EuroFiles", &format!("restore refused: {e:?}"), interrupts::ticks()),
+                                }
+                                let cur = files::current_path();
+                                load_files_dir(ctx.fs, if cur.is_empty() { "/" } else { &cur });
+                            }
+                            need_full = true;
+                        } else if files::toolbar_click(windows[i].x, windows[i].y, px, py, windows[i].w) {
                             // handled: New Folder / Rename / Delete / Copy / Cut / Paste
                         } else if let Some(path) = files::hit_test(windows[i].x, windows[i].y, px, py) {
                             load_files_dir(ctx.fs, &path);
@@ -5260,6 +5295,12 @@ fn main() -> Status {
                 let res: (&str, Result<(), eurofs::FsError>) = match op {
                     files::FileOp::NewDir(p) => ("new folder", ctx.fs.create_dir(&p)),
                     files::FileOp::Chmod(p, m) => ("chmod", ctx.fs.chmod(&p, m)),
+                    files::FileOp::ShowHistory(p) => {
+                        let rows = ctx.fs.versions(&p).unwrap_or_default();
+                        files::show_history(&p, rows);
+                        ("history", Ok(()))
+                    }
+                    files::FileOp::RestoreVersion(p, n) => ("restore", ctx.fs.restore_version(&p, n)),
                     files::FileOp::ToggleProtect(p) => {
                         // The user route (own /home files, no cap needed); the
                         // euroattr layer refuses anything outside the session

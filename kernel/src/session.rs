@@ -105,6 +105,13 @@ fn ensure_home(fs: &mut dyn FileSystem, name: &str, uid: u32) {
         // the user's. Without this, rwx enforcement would lock users out of
         // their own seeded notes/pictures the moment permissions became real.
         chown_tree(fs, &home, uid);
+        // 3H: version history is ON by default for the user's home — every
+        // overwrite keeps the old content (8 deep). A user can turn it off
+        // per file/dir ("versions off <path>").
+        let cur = fs.get_flags(&home).unwrap_or(0);
+        if cur & eurofs::FLAG_VERSIONED == 0 {
+            let _ = fs.set_flags(&home, cur | eurofs::FLAG_VERSIONED);
+        }
     });
 }
 

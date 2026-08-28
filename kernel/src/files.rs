@@ -40,6 +40,8 @@ pub enum FileOp {
     NewDir(String),
     Chmod(String, u16),
     ToggleProtect(String),
+    ShowHistory(String),
+    RestoreVersion(String, u32),
     Rename(String, String),
     Delete(String, bool), // (path, is_dir)
     Copy(String, String),
@@ -61,8 +63,40 @@ enum PromptMode {
 }
 static PROMPT: Mutex<Option<Prompt>> = Mutex::new(None);
 
+/// The open History panel: (path, versions newest-first as (n, size, mtime)).
+static HISTORY: Mutex<Option<(String, Vec<(u32, u64, u64)>)>> = Mutex::new(None);
+
+/// The kernel answers a History request by filling the panel.
+pub fn show_history(path: &str, rows: Vec<(u32, u64, u64)>) {
+    *HISTORY.lock() = Some((String::from(path), rows));
+}
+pub fn history_open() -> bool {
+    HISTORY.lock().is_some()
+}
+
+/// A click while the History panel is open: a row restores that version,
+/// anywhere else closes the panel. Returns Some((path, n)) to restore.
+pub fn history_click(win_x: usize, win_y: usize, mx: usize, my: usize, win_w: usize, win_h: usize) -> Option<(String, u32)> {
+    let mut g = HISTORY.lock();
+    let Some((path, rows)) = g.as_ref() else { return None };
+    let pw = 420usize;
+    let ph = 90 + rows.len().min(8) * 28;
+    let ox = win_x + (win_w - pw) / 2;
+    let oy = win_y + TITLEBAR_H + (win_h - TITLEBAR_H - ph) / 2;
+    if mx >= ox && mx < ox + pw && my >= oy + 44 && my < oy + 44 + rows.len().min(8) * 28 {
+        let i = (my - (oy + 44)) / 28;
+        if let Some((n, _, _)) = rows.get(i).copied() {
+            let p = path.clone();
+            *g = None;
+            return Some((p, n));
+        }
+    }
+    *g = None; // click elsewhere dismisses
+    None
+}
+
 /// The toolbar actions (label shown on the button).
-const ACTIONS: [&str; 8] = ["New Folder", "Rename", "Delete", "Copy", "Cut", "Paste", "Perms", "Protect"];
+const ACTIONS: [&str; 9] = ["New Folder", "Rename", "Delete", "Copy", "Cut", "Paste", "Perms", "Protect", "History"];
 
 /// A Unix-style permission string like "drwxr-xr-x" from a mode + kind.
 fn perm_string(mode: u16, is_dir: bool) -> String {
@@ -180,6 +214,11 @@ pub fn toolbar_click(win_x: usize, win_y: usize, mx: usize, my: usize, win_w: us
         "Protect" => {
             if let Some((path, _)) = selected_entry() {
                 PENDING.lock().push(FileOp::ToggleProtect(path));
+            }
+        }
+        "History" => {
+            if let Some((path, false)) = selected_entry() {
+                PENDING.lock().push(FileOp::ShowHistory(path));
             }
         }
         "Paste" => {
@@ -347,7 +386,7 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         if bxp + 88 > list_x + list_w { break; }
         // Grey out actions that need a selection / clipboard.
         let enabled = match *label {
-            "Rename" | "Delete" | "Copy" | "Cut" | "Perms" | "Protect" => has_sel,
+            "Rename" | "Delete" | "Copy" | "Cut" | "Perms" | "Protect" | "History" => has_sel,
             "Paste" => has_clip,
             _ => true,
         };
@@ -456,6 +495,29 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let right = alloc::format!("{} directories \u{00B7} {} files \u{00B7} {}", ndirs, nfiles, human_size(total));
     let rw = text::width_px(&right, 11.5);
     text::draw_px(fb, bx + bw - rw - 14, sy + 6, &right, Color::WHITE, 11.5);
+
+    // ── History panel: stored versions of the selected file ─────────────────
+    if let Some((path, rows)) = HISTORY.lock().as_ref() {
+        let pw = 420usize;
+        let ph = 90 + rows.len().min(8) * 28;
+        let ox = bx + (bw - pw) / 2;
+        let oy = by + (bh - ph) / 2;
+        fb.fill_rounded_rect(ox - 2, oy - 2, pw + 4, ph + 4, 12, Color::rgb(0, 0, 0));
+        fb.fill_rounded_rect(ox, oy, pw, ph, 10, Color::SURFACE);
+        let name = path.rsplit('/').next().unwrap_or(path);
+        text::draw_px(fb, ox + 18, oy + 12, &alloc::format!("History of {name}"), Color::INK, 13.5);
+        if rows.is_empty() {
+            text::draw_px(fb, ox + 18, oy + 48, "no stored versions yet", Color::TEXT_DIM, 12.5);
+        }
+        for (i, (n, size, mtime)) in rows.iter().take(8).enumerate() {
+            let ry = oy + 44 + i * 28;
+            fb.fill_rounded_rect(ox + 12, ry, pw - 24, 24, 6, Color::rgb(0xEF, 0xF1, 0xF6));
+            let line = alloc::format!("v{n}  -  {}  -  {}", human_size(*size), crate::rtc::short_datetime(*mtime));
+            text::draw_px(fb, ox + 22, ry + 5, &line, Color::INK, 12.0);
+            text::draw_px(fb, ox + pw - 78, ry + 5, "restore", accent, 12.0);
+        }
+        text::draw_px(fb, ox + 18, oy + ph - 26, "click a version to restore it - click elsewhere to close", Color::TEXT_DIM, 10.5);
+    }
 
     // ── Name-entry prompt (New Folder / Rename) ──────────────────────────────
     if let Some(p) = PROMPT.lock().as_ref() {

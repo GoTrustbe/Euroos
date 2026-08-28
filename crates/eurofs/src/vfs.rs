@@ -139,6 +139,14 @@ impl FileSystem for Vfs {
         self.fs_mut(idx).chmod(&sub, mode)
     }
 
+    fn versions(&self, path: &str) -> FsResult<Vec<(u32, u64, u64)>> {
+        let (idx, sub) = self.route(path);
+        self.fs_ref(idx).versions(&sub)
+    }
+    fn restore_version(&mut self, path: &str, n: u32) -> FsResult<()> {
+        let (idx, sub) = self.route(path);
+        self.fs_mut(idx).restore_version(&sub, n)
+    }
     fn chown(&mut self, path: &str, uid: u32) -> FsResult<()> {
         let (idx, sub) = self.route(path);
         self.fs_mut(idx).chown(&sub, uid)
