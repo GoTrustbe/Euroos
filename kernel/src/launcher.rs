@@ -67,7 +67,7 @@ pub fn name_for_icon(icon: usize) -> Option<&'static str> {
 }
 
 pub fn open() {
-    *LAUNCHER.lock() = Some(State { query: String::new(), sel: 0, hits: Vec::new() });
+    *LAUNCHER.lock() = Some(State { query: String::new(), sel: 0, hits: matches("").into_iter().map(|(n, i)| Hit::App(n, i)).collect() });
 }
 
 pub fn close() {
@@ -210,6 +210,7 @@ pub fn key(ch: char) -> Option<Launch> {
         '\u{8}' | '\u{7f}' => {
             st.query.pop();
             st.sel = 0;
+            st.hits = matches(&st.query).into_iter().map(|(n, i)| Hit::App(n, i)).collect();
             None
         }
         // Down/Up arrows arrive as these control chars from the shell keymap.
@@ -226,6 +227,8 @@ pub fn key(ch: char) -> Option<Launch> {
         c if !c.is_control() => {
             st.query.push(c);
             st.sel = 0;
+            // Apps match instantly (no FS); refresh() adds files/content.
+            st.hits = matches(&st.query).into_iter().map(|(n, i)| Hit::App(n, i)).collect();
             None
         }
         _ => None,
