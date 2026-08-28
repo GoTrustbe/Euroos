@@ -80,6 +80,13 @@ pub fn save_all(fs: &mut dyn eurofs_api::FileSystem) {
     for (i, n) in v.iter().enumerate() {
         let _ = fs.write_file(&alloc::format!("{NOTES_DIR}/note-{i}.md"), n.as_bytes());
     }
+    // After a delete the tail files must go too, or the next load resurrects them.
+    for i in v.len()..v.len() + 8 {
+        let p = alloc::format!("{NOTES_DIR}/note-{i}.md");
+        if fs.exists(&p) {
+            let _ = fs.remove_file(&p);
+        }
+    }
     DIRTY.store(false, Ordering::Relaxed);
 }
 
@@ -247,27 +254,96 @@ fn apply_format(label: &str, mark: &str) {
     DIRTY.store(true, Ordering::Relaxed);
 }
 
+/// The live search filter over the note list + whether it has the keyboard.
+static SEARCH: spin::Mutex<alloc::string::String> = spin::Mutex::new(alloc::string::String::new());
+static SEARCH_FOCUS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Does the search field currently take the keys?
+pub fn search_focused() -> bool {
+    SEARCH_FOCUS.load(Ordering::Relaxed)
+}
+
+/// A key while the search field is focused. Esc clears + releases focus.
+pub fn search_key(k: crate::ps2::Key) {
+    let mut q = SEARCH.lock();
+    match k {
+        crate::ps2::Key::Esc => {
+            q.clear();
+            SEARCH_FOCUS.store(false, Ordering::Relaxed);
+        }
+        crate::ps2::Key::Enter => SEARCH_FOCUS.store(false, Ordering::Relaxed),
+        crate::ps2::Key::Backspace => {
+            q.pop();
+        }
+        crate::ps2::Key::Char(c) if !c.is_control() => q.push(c),
+        _ => {}
+    }
+}
+
+/// Indices of the notes that match the search filter (all, when empty).
+fn filtered() -> alloc::vec::Vec<usize> {
+    let q = SEARCH.lock().to_lowercase();
+    let notes = live_notes();
+    notes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| q.is_empty() || n.to_lowercase().contains(&q))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Delete note `i`: removed from LIVE, files rewritten (the tail file is
+/// cleaned up on the next save), selection clamped, edit buffer invalidated.
+pub fn delete_note(i: usize) {
+    let mut v = LIVE.lock();
+    if i >= v.len() || v.len() == 1 {
+        return; // keep at least one note (the app always shows something)
+    }
+    v.remove(i);
+    let sel = SELECTED.load(Ordering::Relaxed);
+    if sel >= v.len() {
+        SELECTED.store(v.len() - 1, Ordering::Relaxed);
+    }
+    BUF_FOR.store(usize::MAX, Ordering::Relaxed);
+    DIRTY.store(true, Ordering::Relaxed);
+}
+
 /// Click in the note list? Set the selection and return `true` if it changed.
 pub fn hit_test(win_x: usize, win_y: usize, mx: usize, my: usize) -> bool {
     let lx = win_x;
-    let ly = win_y + TITLEBAR_H + 44; // below the list header
     let list_w = 210usize;
     if mx < lx || mx >= lx + list_w {
+        SEARCH_FOCUS.store(false, Ordering::Relaxed);
         return false;
     }
+    // The search field sits under the header (y +40..+66).
+    let sf_y = win_y + TITLEBAR_H + 40;
+    if my >= sf_y && my < sf_y + 26 {
+        SEARCH_FOCUS.store(true, Ordering::Relaxed);
+        return true;
+    }
+    SEARCH_FOCUS.store(false, Ordering::Relaxed);
+    let ly = win_y + TITLEBAR_H + 72; // below header + search field
     let row_h = 50usize;
     if my < ly {
         return false;
     }
     let i = (my - ly) / row_h;
-    let notes = live_notes();
-    if i < notes.len() {
-        let prev = SELECTED.swap(i, Ordering::Relaxed);
-        return prev != i;
+    let shown = filtered();
+    if i < shown.len() {
+        let real = shown[i];
+        // The small x at the right edge of the row deletes the note.
+        if mx >= lx + list_w - 30 {
+            delete_note(real);
+            return true;
+        }
+        let prev = SELECTED.swap(real, Ordering::Relaxed);
+        return prev != real;
     }
-    // The row right below the last note is the "+ New note" target.
-    if i == notes.len() {
+    // The row right below the last shown note is the "+ New note" target.
+    if i == shown.len() {
         new_note();
+        SEARCH.lock().clear(); // a fresh note must be visible
         return true;
     }
     false
@@ -292,30 +368,56 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let cnt = alloc::format!("{}", live.len());
     text::draw_px(fb, bx + list_w - text::width_px(&cnt, 12.0) - 16, by + 18, &cnt, Color::TEXT_DIM, 12.0);
 
+    // Search field under the header (click to focus; Esc clears).
+    {
+        let sy = by + 40;
+        let focus = SEARCH_FOCUS.load(Ordering::Relaxed);
+        let q = SEARCH.lock().clone();
+        fb.fill_rounded_rect(bx + 10, sy, list_w - 20, 24, 7, Color::rgb(0xFF, 0xFF, 0xFF));
+        fb.draw_border(bx + 10, sy, list_w - 20, 24, 1, if focus { accent } else { Color::BORDER });
+        if q.is_empty() && !focus {
+            text::draw_px(fb, bx + 18, sy + 5, "Search notes\u{2026}", Color::TEXT_DIM, 12.0);
+        } else {
+            text::draw_px(fb, bx + 18, sy + 5, &q, Color::INK, 12.0);
+            if focus {
+                let cx = bx + 18 + text::width_px(&q, 12.0);
+                fb.fill_rect(cx, sy + 4, 2, 16, accent);
+            }
+        }
+    }
+
     let sel = selected();
     let row_h = 50usize;
-    let row_y0 = by + 44;
-    for (i, md) in live.iter().enumerate() {
-        let ry = row_y0 + i * row_h;
+    let row_y0 = by + 72;
+    let shown = filtered();
+    for (vis, &i) in shown.iter().enumerate() {
+        let md = &live[i];
+        let ry = row_y0 + vis * row_h;
+        if ry + row_h > by + bh {
+            break;
+        }
         let note = euronotes::parse(md);
         if i == sel {
             fb.fill_rounded_rect(bx + 8, ry, list_w - 16, row_h - 6, 9, Color::SURFACE);
             fb.fill_rounded_rect(bx + 8, ry, 3, row_h - 6, 2, accent);
         }
-        let title = clip(&note.title, list_w - 40, 13.0);
+        let title = clip(&note.title, list_w - 52, 13.0);
         text::draw_px(fb, bx + 18, ry + 8, &title, Color::INK, 13.0);
-        // First tag as chip text + block count.
         let sub = if let Some(t) = note.tags.first() {
-            alloc::format!("#{}  ·  {} blocks", t, note.blocks.len())
+            alloc::format!("#{}  \u{00B7}  {} blocks", t, note.blocks.len())
         } else {
             alloc::format!("{} blocks", note.blocks.len())
         };
-        text::draw_px(fb, bx + 18, ry + 28, &clip(&sub, list_w - 36, 11.0), Color::TEXT_DIM, 11.0);
+        text::draw_px(fb, bx + 18, ry + 28, &clip(&sub, list_w - 48, 11.0), Color::TEXT_DIM, 11.0);
+        // Delete x at the right edge (hit_test matches the same zone).
+        if live.len() > 1 {
+            text::draw_px(fb, bx + list_w - 24, ry + 8, "\u{00D7}", Color::TEXT_DIM, 14.0);
+        }
     }
 
-    // "+ New note" target: the row right after the last note (hit_test matches).
+    // "+ New note" target: the row right after the last shown note.
     {
-        let ry = row_y0 + live.len() * row_h;
+        let ry = row_y0 + shown.len() * row_h;
         if ry + 30 < by + bh {
             fb.fill_rounded_rect(bx + 8, ry, list_w - 16, row_h - 12, 9, Color::SURFACE);
             text::draw_px(fb, bx + 18, ry + 10, "+ New note", accent, 13.0);

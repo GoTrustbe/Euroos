@@ -4826,7 +4826,13 @@ fn main() -> Status {
             && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open();
         if editor_focused {
             while let Some(k) = ps2::poll_key_ex() {
-                if text_focused { textedit::key(k); } else { notes::key(k); }
+                if text_focused {
+                    textedit::key(k);
+                } else if notes::search_focused() {
+                    notes::search_key(k); // the search field has the keyboard
+                } else {
+                    notes::key(k);
+                }
                 need_full = true;
             }
         }
