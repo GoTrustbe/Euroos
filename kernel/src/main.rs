@@ -3807,10 +3807,10 @@ fn main() -> Status {
     {
         let i_calc = windows.len();
         windows.push(compositor::Window {
-            x: SIDEBAR_W + 240,
-            y: 150,
-            w: 360,
-            h: 520,
+            x: SIDEBAR_W + 160,
+            y: 120,
+            w: 660,
+            h: 560,
             title: String::from("EuroReken"),
             content: alloc::vec![String::new(), String::from("0")],
             ui: Vec::new(),
@@ -4541,10 +4541,10 @@ fn main() -> Status {
                         dragging = Some(i);
                     } else if windows[i].app == suite_ui::SuiteApp::Reken {
                         // Click on a calculator button → REAL input to euroreken.
-                        if let Some(ch) =
+                        if let Some(tok) =
                             calc_ui::button_at(windows[i].x, windows[i].y, windows[i].w, windows[i].h, px, py)
                         {
-                            calc_ui::input(&mut windows[i].content, ch);
+                            calc_ui::input_token(&mut windows[i].content, tok);
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::XClient {
                         // Click on the hosted X app's body → forward to the X server at
