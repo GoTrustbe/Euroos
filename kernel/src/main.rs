@@ -4026,6 +4026,8 @@ fn main() -> Status {
                 if (x as i32 - 48).abs() + (y as i32 - 32).abs() < 20 { im2.set(x, y, [0xFF, 0xFF, 0xFF, 255]); }
             }}
             let _ = ctx.fs.write_file("/home/euro/pictures/diamond.png", &euromedia::encode_png(&im2));
+            // A REAL JPEG (baseline 4:2:0) so the viewer proves the new decoder.
+            let _ = ctx.fs.write_file("/home/euro/pictures/gradient.jpg", include_bytes!("../assets/sample.jpg"));
             imageview::open(ctx.fs, "/home/euro/pictures/euroos.png");
         }
 

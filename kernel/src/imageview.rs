@@ -98,8 +98,13 @@ fn decode_any(b: &[u8]) -> (Option<euromedia::Image>, &'static str) {
     if b.len() >= 2 && b[0] == b'P' && (b'1'..=b'6').contains(&b[1]) {
         return (euromedia::decode_ppm(b).ok(), "PPM");
     }
-    if b.len() >= 3 && &b[0..3] == [0xFF, 0xD8, 0xFF] {
-        return (None, "JPEG"); // honestly not decoded yet
+    if b.len() >= 3 && b[0..2] == [0xFF, 0xD8] {
+        // Baseline JPEG decodes for real now; progressive still says so honestly.
+        return match euromedia::decode_jpeg(b) {
+            Ok(im) => (Some(im), "JPEG"),
+            Err(euromedia::JpegError::Unsupported) => (None, "JPEG (progressive)"),
+            Err(_) => (None, "JPEG (corrupt)"),
+        };
     }
     (None, "unknown format")
 }

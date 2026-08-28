@@ -13,6 +13,9 @@
 
 extern crate alloc;
 
+pub mod jpeg;
+pub use jpeg::{decode_jpeg, JpegError};
+
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -663,3 +666,6 @@ pub fn encode_png(img: &Image) -> Vec<u8> {
 
 #[cfg(test)]
 include!("imgtests.rs");
+
+#[cfg(test)]
+include!("jpegtests.rs");

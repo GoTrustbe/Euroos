@@ -272,6 +272,8 @@ pub fn open(fs: &mut dyn eurofs::fs::FileSystem, path: &str) {
             euromedia::decode_bmp(&bytes).ok()
         } else if bytes.len() >= 4 && &bytes[0..4] == b"qoif" {
             euromedia::decode(&bytes).ok()
+        } else if bytes.len() >= 2 && bytes[0..2] == [0xFF, 0xD8] {
+            euromedia::decode_jpeg(&bytes).ok()
         } else {
             None
         };
