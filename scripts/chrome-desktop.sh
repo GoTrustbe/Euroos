@@ -13,7 +13,11 @@ mon() { printf '%s\n' "$@" | nc -U -q 1 "$LOG.mon" >/dev/null 2>&1; }
 while pgrep -af "qemu-system-x86_64.*eurokernel.img" >/dev/null 2>&1; do sleep 5; done
 ./scripts/build.sh release >/dev/null 2>&1 || { echo "BUILD FAILED"; exit 1; }
 rm -f "$LOG" "$LOG"*.ppm
+# -icount ties the guest clock to executed instructions (same rationale as
+# chrome-ui-input.sh): without it chrome sees wall-clock "idle" sockets and
+# grinds in a TCP_INFO poll treadmill instead of making progress.
 qemu-system-x86_64 -machine q35 -m 3584M -cpu qemu64,+smep,+smap \
+  -icount shift=auto,align=off -rtc clock=vm \
   -bios /usr/share/ovmf/OVMF.fd \
   -drive format=raw,file="$PWD/eurokernel.img" \
   -drive format=raw,file="$PACK",if=virtio \
