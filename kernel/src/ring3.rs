@@ -6286,6 +6286,90 @@ fn fork_child_mark_closed(fd: u64) {
 static GLIBC_FORK_CHILDREN: Mutex<alloc::vec::Vec<(u64, usize, u64, u64, usize)>> =
     Mutex::new(alloc::vec::Vec::new());
 
+// ── Per-process address-space isolation for fork children (Mojo multi-process) ──
+// The demand-paging state (bump pointer, file maps, prot-none ranges, shared
+// aliases, arena + brk/heap) is process-global: fine for one glibc process, but
+// a fork child that later execve's a fresh image needs its OWN, while the parent
+// browser keeps running on the globals. Rather than thread a context through the
+// ~40 global-state sites, we SWAP: at the entry of a fork child's syscall/fault
+// the child's saved state is swapped into the globals, and swapped back out on
+// exit. The parent (the launched main process) and every ordinary program never
+// swap, so their behaviour is byte-for-byte unchanged. This mirrors the existing
+// bg-dispatch arena swap (see syscall_dispatch), extended to the whole set the
+// demand-lifecycle study named.
+struct ChildMem {
+    task: usize,
+    demand_next: u64,
+    arena_base: u64,
+    arena_span: u64,
+    brk_cur: u64,
+    brk_end: u64,
+    heap_break: u64,
+    heap_end: u64,
+    file_maps: alloc::vec::Vec<(u64, u64, usize, usize, u64)>,
+    prot_none: alloc::vec::Vec<(u64, u64)>,
+    shared_aliases: alloc::vec::Vec<(u64, u64, usize)>,
+    shared_maps: alloc::vec::Vec<(usize, u64, usize)>,
+}
+static CHILD_MEM: Mutex<alloc::vec::Vec<ChildMem>> = Mutex::new(alloc::vec::Vec::new());
+
+/// Snapshot the CURRENT globals into a fresh ChildMem for a just-forked task.
+/// The child inherits the parent's mappings, so it starts as a copy.
+fn child_mem_snapshot(task: usize) {
+    let cm = ChildMem {
+        task,
+        demand_next: DEMAND_NEXT.load(Ordering::Relaxed),
+        arena_base: ARENA_BASE.load(Ordering::Relaxed),
+        arena_span: ARENA_SPAN_DYN.load(Ordering::Relaxed),
+        brk_cur: BRK_CUR.load(Ordering::Relaxed),
+        brk_end: BRK_END.load(Ordering::Relaxed),
+        heap_break: HEAP_BREAK.load(Ordering::Relaxed),
+        heap_end: HEAP_END.load(Ordering::Relaxed),
+        file_maps: DEMAND_FILE_MAPS.lock().clone(),
+        prot_none: PROT_NONE_RANGES.lock().clone(),
+        shared_aliases: SHARED_ALIASES.lock().clone(),
+        shared_maps: SHARED_MAPS.lock().clone(),
+    };
+    let mut g = CHILD_MEM.lock();
+    if let Some(slot) = g.iter_mut().find(|c| c.task == task) {
+        *slot = cm;
+    } else {
+        g.push(cm);
+    }
+}
+
+/// Swap a fork child's saved state into the globals (call at child syscall/fault
+/// entry). Returns true if a swap happened (so the caller swaps back out).
+fn child_mem_swap(task: usize) -> bool {
+    let mut g = CHILD_MEM.lock();
+    let Some(cm) = g.iter_mut().find(|c| c.task == task) else { return false };
+    macro_rules! swp {
+        ($glob:expr, $field:expr) => {{
+            let tmp = $glob.load(Ordering::Relaxed);
+            $glob.store($field, Ordering::Relaxed);
+            $field = tmp;
+        }};
+    }
+    swp!(DEMAND_NEXT, cm.demand_next);
+    swp!(ARENA_BASE, cm.arena_base);
+    swp!(ARENA_SPAN_DYN, cm.arena_span);
+    swp!(BRK_CUR, cm.brk_cur);
+    swp!(BRK_END, cm.brk_end);
+    swp!(HEAP_BREAK, cm.heap_break);
+    swp!(HEAP_END, cm.heap_end);
+    core::mem::swap(&mut *DEMAND_FILE_MAPS.lock(), &mut cm.file_maps);
+    core::mem::swap(&mut *PROT_NONE_RANGES.lock(), &mut cm.prot_none);
+    core::mem::swap(&mut *SHARED_ALIASES.lock(), &mut cm.shared_aliases);
+    core::mem::swap(&mut *SHARED_MAPS.lock(), &mut cm.shared_maps);
+    true
+}
+
+/// A fork child exited: drop its saved memory state.
+fn child_mem_drop(task: usize) {
+    CHILD_MEM.lock().retain(|c| c.task != task);
+}
+
+
 /// fork() for the demand-paged glibc process (M1): the child gets its OWN address
 /// space — the multi-block arena remapped onto its own physical frames (copied) plus
 /// a copy of every committed demand page (the parent's runtime state) — and a task
@@ -6349,6 +6433,7 @@ fn do_glibc_fork() -> u64 {
     register_thread_kstack(child, slot);
     let pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     GLIBC_FORK_CHILDREN.lock().push((pid, child, pml4, child_arena, arena_frames));
+    child_mem_snapshot(child); // the child inherits the parent's demand-state
     crate::serial_println!(
         "[fork] pid {pid} -> child task {child} (own pml4={pml4:#x} arena={child_arena:#x} {} MiB)",
         span >> 20
@@ -6450,7 +6535,16 @@ pub static FAULT_CYCLES: core::sync::atomic::AtomicU64 = core::sync::atomic::Ato
 
 pub fn handle_demand_fault(addr: u64) -> bool {
     let t0 = unsafe { core::arch::x86_64::_rdtsc() };
+    // Per-process isolation: a fork child faults against its OWN demand-state.
+    let cur = crate::sched::current();
+    let is_child = current_is_fork_child();
+    if is_child {
+        child_mem_swap(cur);
+    }
     let r = handle_demand_fault_inner(addr);
+    if is_child {
+        child_mem_swap(cur);
+    }
     if r {
         FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
         FAULT_CYCLES.fetch_add(
@@ -8449,6 +8543,21 @@ pub fn dump_threads_now(why: &str) {
 }
 
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    // Per-process isolation: a fork child runs the whole syscall on its OWN
+    // demand-state (swapped into the globals for the duration). The parent and
+    // ordinary programs never enter here (is_child false) so they are unchanged.
+    let cur = crate::sched::current();
+    let is_child = current_is_fork_child();
+    if is_child {
+        child_mem_swap(cur);
+        let r = linux_dispatch_swapped(num, a1, a2, a3, a4, a5);
+        child_mem_swap(cur); // swap back: parent state restored, child mutations saved
+        return r;
+    }
+    linux_dispatch_swapped(num, a1, a2, a3, a4, a5)
+}
+
+fn linux_dispatch_swapped(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     // Resolve low-fd ALIASES (dup2 of a socket-class fd, see FD_ALIAS) before
     // dispatch, for every syscall whose fd argument the socket layers must see
     // as the real class-encoded fd. close() is intentionally excluded: closing
@@ -8824,6 +8933,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     crate::serial_println!("[fork] child pid {pid} (task {cur}) exit({a1}) — arena recycled ({} MiB back to pool)", frames / 256);
                     GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
                     FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != cur);
+                    child_mem_drop(cur);
                     crate::procpool::free_range(arena, frames);
                     crate::procpool::free(pml4);
                     free_thread_kstack(cur);
