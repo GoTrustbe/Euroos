@@ -55,7 +55,9 @@ echo "typed chrome at $(( $(date +%s) - START ))s"
 # AFTER the t300 sample (chrome has painted by then) — e.g. a click on the page
 # link inside the hosted window; the t480/t660 samples then show the outcome.
 # Chromium needs minutes under TCG before its first paint: sample the screen.
-for t in 120 300 480 660; do
+# SAMPLES env overrides the sample times (multi-process diagnosis needs longer:
+# the forks come after ~500s and the interesting trace after that).
+for t in ${SAMPLES:-120 300 480 660}; do
   while [ $(( $(date +%s) - START )) -lt $((t + 60)) ]; do
     kill -0 $Q 2>/dev/null || break 2
     sleep 5
