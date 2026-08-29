@@ -3833,6 +3833,23 @@ fn alloc_low_fd() -> Option<usize> {
 /// regular-fd case (stdio redirection); a same-number dup2 is a no-op. Cross-class
 /// dup2 (placing a 600+ socket at a low fd number) doesn't fit the range-encoded fd
 /// model and is refused.
+/// Low-fd aliases for class-encoded socket fds (unix >= 600, inet >= 500).
+/// Chrome's forked child dup2's its inherited Mojo socketpair end to a FIXED
+/// low fd (e.g. 5) and talks Mojo through that number; the socket layers
+/// address sockets by their high class fds, so the alias resolves on use.
+static FD_ALIAS: Mutex<[u64; MAX_FD]> = Mutex::new([0; MAX_FD]);
+
+/// Resolve a possibly-aliased fd to the real (class-encoded) fd.
+pub fn unalias_fd(fd: u64) -> u64 {
+    if (fd as usize) < MAX_FD {
+        let a = FD_ALIAS.lock()[fd as usize];
+        if a != 0 {
+            return a;
+        }
+    }
+    fd
+}
+
 fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
     if oldfd == newfd {
         return newfd;
@@ -3840,6 +3857,14 @@ fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
     let nfd = newfd as usize;
     if nfd >= MAX_FD {
         return (-9i64) as u64; // -EBADF: can't target a class-encoded high fd
+    }
+    // A socket-class source (unix socketpair / inet socket): register an alias.
+    if crate::net::is_unix_fd(oldfd) || crate::net::is_sock_fd(oldfd) || crate::net::is_eventfd(oldfd) {
+        FD_ALIAS.lock()[nfd] = oldfd;
+        OPEN_FDS.lock()[nfd] = None;
+        OPEN_DIRS.lock()[nfd] = None;
+        PIPE_FDS.lock()[nfd] = None;
+        return newfd;
     }
     if (oldfd as usize) < MAX_FD {
         // dup2 duplicates the fd: the new fd shares the source's access mode + nonblock,
@@ -8043,7 +8068,32 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
     // Linux-ABI compatibility: programs compiled for x86_64-linux
     // use Linux syscall numbers + semantics. Translate to our handlers.
     if LINUX_ABI.load(Ordering::Relaxed) {
+        // Mojo forensics: the FULL syscall stream of every fork child (the
+        // socket-only [slife] log hid exactly the moment the child goes
+        // silent). Bounded per child so the serial port survives.
+        let trace_child = current_is_fork_child();
         let r = linux_dispatch(num, a1, a2, a3, a4, a5);
+        if trace_child {
+            static CHILD_TRACE_LEFT: core::sync::atomic::AtomicU32 =
+                core::sync::atomic::AtomicU32::new(600);
+            static SIGSWEEP: core::sync::atomic::AtomicU32 =
+                core::sync::atomic::AtomicU32::new(0);
+            if num == 13 {
+                // The post-fork rt_sigaction sweep (signals 1..128, twice each)
+                // is known-good noise: count it instead of printing 512 lines.
+                SIGSWEEP.fetch_add(1, Ordering::Relaxed);
+            } else if CHILD_TRACE_LEFT.load(Ordering::Relaxed) > 0 {
+                CHILD_TRACE_LEFT.fetch_sub(1, Ordering::Relaxed);
+                let swept = SIGSWEEP.swap(0, Ordering::Relaxed);
+                if swept > 0 {
+                    crate::serial_println!("[cst] (…{swept}x rt_sigaction…)");
+                }
+                crate::serial_println!(
+                    "[cst] t{} {num}({a1:#x},{a2:#x},{a3:#x}) = {r:#x}",
+                    crate::sched::current()
+                );
+            }
+        }
         // Trace every EBADF return during chrome's disk-cache init: pin which syscall
         // (num) on which fd/path chrome sees as "Bad file descriptor" -> the op that
         // stalls storage init and blocks the first navigation.
@@ -8399,6 +8449,23 @@ pub fn dump_threads_now(why: &str) {
 }
 
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    // Resolve low-fd ALIASES (dup2 of a socket-class fd, see FD_ALIAS) before
+    // dispatch, for every syscall whose fd argument the socket layers must see
+    // as the real class-encoded fd. close() is intentionally excluded: closing
+    // the alias only clears the alias slot (the real fd stays open — POSIX dup
+    // semantics: the object lives until all descriptors are closed).
+    let a1 = match num {
+        0 | 1 | 44 | 45 | 46 | 47 | 48 | 51 | 52 | 54 | 55 | 72 | 16 => unalias_fd(a1),
+        _ => a1,
+    };
+    let a3 = if num == 233 { unalias_fd(a3) } else { a3 }; // epoll_ctl(epfd, op, FD, ev)
+    if num == 3 && (a1 as usize) < MAX_FD {
+        let mut al = FD_ALIAS.lock();
+        if al[a1 as usize] != 0 {
+            al[a1 as usize] = 0; // close(alias): drop the alias, keep the socket
+            return 0;
+        }
+    }
     let chk = SCM_CHECK_ADDR.swap(0, Ordering::Relaxed);
     if chk != 0 {
         let v = read_user::<u64>(chk).unwrap_or(u64::MAX);
@@ -9593,6 +9660,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             for i in 0..nfds {
                 let ent = a1 + (i as u64) * 8;
                 let fd = match read_user::<i32>(ent) { Some(v) => v as i64 as u64, None => return EFAULT };
+                let fd = unalias_fd(fd); // dup2'd socket alias (Mojo child channel)
                 let events = read_user::<u16>(ent + 4).unwrap_or(0);
                 let mut re = 0u16;
                 // Use the SAME readiness logic as epoll (event fds/pipes/sockets report
@@ -10393,7 +10461,22 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             prot_none_set(addr, end, a3 == 0);
             0
         }
-        13 => 0,  // rt_sigaction — no signals; pretend it succeeds
+        13 => {
+            // rt_sigaction — no signal delivery here, but the ERROR CONTRACT
+            // matters: Linux accepts signals 1..=64 and refuses changing
+            // SIGKILL(9)/SIGSTOP(19). Chrome's post-fork handler-reset loop
+            // walks signal numbers UNTIL the first error — always answering 0
+            // trapped both forked children in an endless rt_sigaction loop
+            // (4293 calls and counting), which WAS the "silent child".
+            let sig = a1;
+            if sig == 0 || sig > 64 {
+                (-22i64) as u64 // -EINVAL
+            } else if (sig == 9 || sig == 19) && a2 != 0 {
+                (-22i64) as u64 // can't change SIGKILL/SIGSTOP
+            } else {
+                0
+            }
+        }
         14 => 0,  // rt_sigprocmask
         218 => 1, // set_tid_address -> tid
         273 => 0, // set_robust_list

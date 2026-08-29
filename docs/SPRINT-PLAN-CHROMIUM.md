@@ -190,3 +190,30 @@ chrome times the launch out (3 tries) and aborts. NEXT ITERATION: a per-child
 FULL syscall trace (not just sockets) to see the exact last thing the child
 does — the [slife] socket-only log hides everything between the sweep and the
 silence. --single-process restored as the shipping default.
+
+### 2026-08-29 (2) — the wall is now ONE precise task
+Two more real bugs fixed with the full child trace:
+4. rt_sigaction answered success for EVERY signal number. Chrome's post-fork
+   handler-reset loop walks signal numbers UNTIL the first error — both
+   children spun forever in rt_sigaction (4293+ calls): the "silent child" was
+   never blocked, it was looping. Now 1..=64 with EINVAL beyond (and for
+   changing SIGKILL/SIGSTOP), like Linux. Sweep is 127 calls and terminates.
+5. dup2 of a socket-class fd (unix >= 600 / inet >= 500) returned EBADF — the
+   child could not pin its inherited Mojo socketpair end to the fixed low fd.
+   dup2 now registers a low-fd ALIAS resolved centrally in linux_dispatch
+   (read/write/sendmsg/recvmsg/poll/epoll_ctl/fcntl/...); close(alias) drops
+   only the alias.
+With those, the child's post-fork setup COMPLETES: dup2 channel + pipes,
+prlimit64, /proc scan, prctl — and then calls execve("/proc/self/exe",
+"--type=gpu-process") = ENOSYS. Chrome without a zygote re-execs itself for
+every child; there is no flag to skip it.
+
+REMAINING (the one real task): execve on the glibc path. The child needs a
+FRESH image of the same exe (its forked arena is the parent's dirty state).
+That requires the glibc launcher to stop being a singleton (GLIBC_PML4,
+ARENA_BASE, demand-region state are process-global today) — a bounded but
+substantial refactor: per-process launch state, then execve = tear down the
+child's arena, rebuild a fresh disk-backed demand image + SysV stack with the
+new argv, jump to ld.so. All other pieces (fork, threads-on-child-pml4,
+fd inheritance, channel aliasing, arena recycling) are DONE and proven by
+trace. Baseline --single-process remains the shipping default.
