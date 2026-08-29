@@ -6231,6 +6231,33 @@ static GLIBC_PML4: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64
 static GLIBC_THREADS: Mutex<alloc::vec::Vec<usize>> = Mutex::new(alloc::vec::Vec::new());
 /// M1 fork children of the glibc process: (pid, task, child_pml4, child_arena, frames).
 /// Tracked for wait4/teardown (M3). Chrome forks its renderer/gpu/utility processes.
+/// Is the currently-running task one of the glibc fork children?
+fn current_is_fork_child() -> bool {
+    let cur = crate::sched::current();
+    GLIBC_FORK_CHILDREN.lock().iter().any(|&(_, t, _, _, _)| t == cur)
+}
+
+/// fds a fork child has "closed" for itself. The fd table is process-global
+/// (that is what makes inheritance work), so a child's post-fork fd cleanup
+/// must NOT tear down the parent's descriptors — chrome's child closes every
+/// inherited fd except its Mojo channel, and with a shared table that killed
+/// the browser's own sockets (the "network service crashed" trail). A close by
+/// a fork child only marks the fd here; lookups by that child treat it as gone.
+static FORK_CHILD_CLOSED: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u64>)>> =
+    Mutex::new(alloc::vec::Vec::new());
+
+fn fork_child_mark_closed(fd: u64) {
+    let cur = crate::sched::current();
+    let mut g = FORK_CHILD_CLOSED.lock();
+    if let Some((_, set)) = g.iter_mut().find(|(t, _)| *t == cur) {
+        if !set.contains(&fd) {
+            set.push(fd);
+        }
+    } else {
+        g.push((cur, alloc::vec![fd]));
+    }
+}
+
 static GLIBC_FORK_CHILDREN: Mutex<alloc::vec::Vec<(u64, usize, u64, u64, usize)>> =
     Mutex::new(alloc::vec::Vec::new());
 
@@ -8716,6 +8743,28 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 crate::sched::yield_now();
                 return 0; // unreachable in practice (Dead task is never rescheduled)
             }
+            // A FORK CHILD exits: recycle its arena, page tables and kstack into
+            // the process pool, drop its bookkeeping, and die quietly. Without
+            // this the child fell into the main-process path below (ending the
+            // whole browser) and its 256 MiB arena was lost to the pool forever
+            // (the third fork failed at 127 MiB free).
+            {
+                let hit = {
+                    let g = GLIBC_FORK_CHILDREN.lock();
+                    g.iter().position(|&(_, t, _, _, _)| t == cur).map(|i| g[i])
+                };
+                if let Some((pid, _t, pml4, arena, frames)) = hit {
+                    crate::serial_println!("[fork] child pid {pid} (task {cur}) exit({a1}) — arena recycled ({} MiB back to pool)", frames / 256);
+                    GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
+                    FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != cur);
+                    crate::procpool::free_range(arena, frames);
+                    crate::procpool::free(pml4);
+                    free_thread_kstack(cur);
+                    crate::sched::mark_dead(cur);
+                    crate::sched::yield_now();
+                    return 0; // unreachable: a Dead task is never rescheduled
+                }
+            }
             if main != usize::MAX {
                 // A SCHEDULED glibc process exits: record the code, kill any leftover
                 // worker threads, signal the waiting launcher, mark this task dead.
@@ -8790,7 +8839,15 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             let user_ss = (sel.user_data.0 | 3) as u64;
             let fs = if flags & 0x0008_0000 != 0 { a5 } else { unsafe { Msr::new(0xC000_0100).read() } };
             let saved_regs = unsafe { SAVED_REGS };
-            let pml4 = GLIBC_PML4.load(Ordering::Relaxed);
+            // The CALLER's address space, not the global GLIBC_PML4: a thread
+            // created by a forked child must run on the child's page tables.
+            // With the global, the child's Mojo I/O thread ran on the PARENT's
+            // memory copy — child and thread never saw each other's mutexes,
+            // and the Mojo handshake sat silent forever.
+            let pml4 = {
+                use x86_64::registers::control::Cr3;
+                Cr3::read().0.start_address().as_u64()
+            };
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, pml4, fs, saved_regs);
             if child == usize::MAX {
                 free_thread_kstack_slot(slot); // scheduler table full -> -EAGAIN, no crash
@@ -8839,7 +8896,15 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             let user_ss = (sel.user_data.0 | 3) as u64;
             let fs = if flags & 0x0008_0000 != 0 { tls } else { unsafe { Msr::new(0xC000_0100).read() } };
             let saved_regs = unsafe { SAVED_REGS };
-            let pml4 = GLIBC_PML4.load(Ordering::Relaxed);
+            // The CALLER's address space, not the global GLIBC_PML4: a thread
+            // created by a forked child must run on the child's page tables.
+            // With the global, the child's Mojo I/O thread ran on the PARENT's
+            // memory copy — child and thread never saw each other's mutexes,
+            // and the Mojo handshake sat silent forever.
+            let pml4 = {
+                use x86_64::registers::control::Cr3;
+                Cr3::read().0.start_address().as_u64()
+            };
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, pml4, fs, saved_regs);
             if child == usize::MAX {
                 free_thread_kstack_slot(slot); // scheduler table full -> -EAGAIN, no crash
@@ -9392,6 +9457,12 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             total
         }
         3 => {
+            // close(fd) by a FORK CHILD: the fd table is shared with the parent,
+            // so only mark it closed for this child (see FORK_CHILD_CLOSED).
+            if current_is_fork_child() {
+                fork_child_mark_closed(a1);
+                return 0;
+            }
             // close(fd): epoll, eventfd, socket, AF_UNIX socket, or VFS file.
             if is_epoll_fd(a1) {
                 if let Some(slot) = EPOLLS.lock().get_mut((a1 - EPOLL_FD_BASE) as usize) {

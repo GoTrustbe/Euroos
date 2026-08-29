@@ -172,3 +172,21 @@ The multi-process wall is NOT one deadlock; it is layers:
 Baseline re-proven the same day: --single-process chrome renders the test page
 on the desktop under the full FS-security kernel, and opened a TLS connection
 to 142.251.142.206:443 through the EuroOS netstack.
+
+### 2026-08-29 — three real kernel bugs fixed under the Mojo wall
+1. clone/clone3 gave a NEW THREAD the global GLIBC_PML4 — a thread created by a
+   forked child ran on the PARENT's memory copy (child and its own thread never
+   saw each other's writes). Both arms now use the caller's Cr3.
+2. The fd table is process-global (that is what makes fork inheritance work),
+   so the child's post-fork fd cleanup CLOSED THE PARENT'S descriptors — the
+   "network service crashed" trail. A fork child's close() now only marks the
+   fd in a per-child closed set.
+3. A fork child's exit fell into the main-process path (ending the whole
+   browser) and leaked its 256 MiB arena. Children now recycle arena + page
+   tables + kstack into the pool and die quietly.
+Result: after the forks the run now spawns 8 further threads and lives longer,
+but the child STILL goes syscall-silent right after its first post-fork sweep,
+chrome times the launch out (3 tries) and aborts. NEXT ITERATION: a per-child
+FULL syscall trace (not just sockets) to see the exact last thing the child
+does — the [slife] socket-only log hides everything between the sweep and the
+silence. --single-process restored as the shipping default.
