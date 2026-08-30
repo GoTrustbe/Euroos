@@ -6376,6 +6376,120 @@ fn child_mem_drop(task: usize) {
 /// that resumes at the fork return with rax=0. Chrome launches renderer/gpu/utility
 /// children this way (`clone(SIGCHLD, no CLONE_VM)` then `execve`). Returns the child
 /// pid to the parent (child returns 0), or -errno.
+/// Read a NULL-terminated user pointer array (argv/envp) into owned byte strings.
+fn read_user_strvec(ptr: u64, max: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>> {
+    let mut out = alloc::vec::Vec::new();
+    if ptr == 0 {
+        return out;
+    }
+    for i in 0..max as u64 {
+        let sp: u64 = match read_user(ptr + i * 8) { Some(v) => v, None => break };
+        if sp == 0 {
+            break;
+        }
+        out.push(user_cstr(sp, 4096));
+    }
+    out
+}
+
+/// execve for a FORK CHILD: re-execute the persistent exe with new argv/envp in
+/// the child's OWN address space (the demand-state is already swapped in for
+/// this syscall, so resetting the globals resets the CHILD, not the parent).
+/// The child arena + PML4 are reused; only their CONTENTS are rebuilt. Returns
+/// only on error — on success it retargets the current task to the new entry.
+fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
+    let _path = user_cstr(path_ptr, 256); // usually "/proc/self/exe"
+    let exe_path = CHILD_EXE_PATH.lock().clone();
+    if exe_path.is_empty() {
+        return (-8i64) as u64; // -ENOEXEC: no persistent exe known
+    }
+    // Resolve the disk exe (same registry glibc_disk_launch uses).
+    let (diskidx, dev, doff, _dsize) = {
+        let reg = DISK_FILES.lock();
+        match reg.iter().position(|(pp, _, _, _)| *pp == exe_path) {
+            Some(k) => { let (_, d, o, sz) = reg[k]; (k, d, o, sz) }
+            None => return (-2i64) as u64, // -ENOENT
+        }
+    };
+    // Read the new argv/envp BEFORE we wipe the arena (they point into the old
+    // stack that lives in it).
+    let argv_owned = read_user_strvec(argv_ptr, 512);
+    let envp_owned = read_user_strvec(envp_ptr, 512);
+    let argv: alloc::vec::Vec<&[u8]> = argv_owned.iter().map(|v| v.as_slice()).collect();
+    let envp: alloc::vec::Vec<&[u8]> = envp_owned.iter().map(|v| v.as_slice()).collect();
+
+    // The child's arena (its VA is in the swapped-in globals; Cr3 is the child's,
+    // so this VA is mapped to the child's own frames).
+    let arena = ARENA_BASE.load(Ordering::Relaxed);
+    let span = ARENA_SPAN_DYN.load(Ordering::Relaxed);
+    if arena == 0 || span == 0 {
+        return (-8i64) as u64;
+    }
+    let nblocks = span >> 21;
+    let frames = (nblocks * 512) as usize;
+
+    // Fresh image: wipe the arena, reset the (child's) demand-state.
+    unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
+    DEMAND_NEXT.store(DEMAND_BASE, Ordering::Relaxed);
+    DEMAND_FILE_MAPS.lock().clear();
+    PROT_NONE_RANGES.lock().clear();
+    SHARED_ALIASES.lock().clear();
+    SHARED_MAPS.lock().clear();
+
+    let ldso_base = arena + 0x0080_0000;
+    let brk_start = arena + 0x0200_0000;
+    let mmap_start = arena + 0x0400_0000;
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000;
+    BRK_CUR.store(brk_start, Ordering::Relaxed);
+    BRK_END.store(mmap_start, Ordering::Relaxed);
+    HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
+    HEAP_END.store(mmap_start, Ordering::Relaxed);
+
+    // Re-register the exe's disk-backed segments (in the child's demand-state).
+    let exe_base = DEMAND_BASE;
+    let exe_info = match read_disk_exe_info(dev, doff, exe_base) {
+        Some(i) => i,
+        None => return (-8i64) as u64,
+    };
+    if !register_disk_exe_segments(diskidx, dev, doff, exe_base) {
+        return (-8i64) as u64;
+    }
+
+    // Load ld.so fresh into the arena and build a fresh SysV stack with the new
+    // argv/envp. Both write via arena VAs mapped in the child's Cr3.
+    let ldso = ldlinux_bytes();
+    let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
+        Some(i) => i,
+        None => return (-8i64) as u64,
+    };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, &argv, &envp, &exe_info, ldso_base) };
+
+    crate::serial_println!(
+        "[execve] child task {} re-exec {exe_path} argv0={:?} -> ld.so entry {:#x} rsp {:#x}",
+        crate::sched::current(),
+        argv_owned.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default(),
+        ld_info.entry, rsp
+    );
+
+    // Retarget THIS task so the syscall return sysret's to ld.so's entry with a
+    // FRESH register state (like spawn_user gives a new process), not back to
+    // chrome's LaunchProcess after execve. The return path pops the saved
+    // register block (SAVED_REGS) and the user-rip from it, and takes rsp from
+    // USER_RSP. Block layout (push order in syscall_entry, low->high):
+    // +0 r15 +8 r14 +16 r13 +24 r12 +32 r10 +40 r9 +48 r8 +56 rdx +64 rsi
+    // +72 rdi +80 rbp +88 rbx +96 r11(rflags) +104 rcx(user-rip).
+    unsafe {
+        let blk = SAVED_REGS as *mut u64;
+        for i in 0..13 {
+            blk.add(i).write(0); // r15..rbx = 0 (rdx=0 so glibc has no bogus atexit)
+        }
+        blk.add(12).write(0x202); // r11 = clean rflags (IF=1)
+        blk.add(13).write(ld_info.entry); // rcx = user-rip -> ld.so entry
+        USER_RSP = rsp;
+    }
+    0 // rax = 0; we sysret to the fresh image, not back here
+}
+
 fn do_glibc_fork() -> u64 {
     use x86_64::registers::control::Cr3;
     let parent_pml4 = Cr3::read().0.start_address().as_u64();
@@ -6875,7 +6989,7 @@ pub fn spawn_glibc_persistent(
     // mmap() never share a cursor (see BRK_CUR/BRK_END).
     let brk_start = arena + 0x0200_0000;
     let mmap_start = arena + 0x0400_0000;
-    let stack_top = arena + nblocks * MIB2 - 0x0010_0000;
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000;
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
@@ -7084,6 +7198,10 @@ pub fn persistent_running() -> bool {
 ///
 /// Its arena, address space AND demand pool are handed to `kill_persistent_glibc`,
 /// which frees them when the window is closed.
+/// The disk exe path of the running persistent glibc process, so a fork child's
+/// execve("/proc/self/exe", ...) knows what to re-load.
+static CHILD_EXE_PATH: Mutex<String> = Mutex::new(String::new());
+
 pub fn spawn_glibc_disk_persistent(
     falloc: &mut FrameAllocator,
     exe_path: &str,
@@ -7092,6 +7210,7 @@ pub fn spawn_glibc_disk_persistent(
     envp: &[&[u8]],
     caps: u64,
 ) -> Option<usize> {
+    *CHILD_EXE_PATH.lock() = String::from(exe_path);
     let run = match glibc_disk_launch(falloc, exe_path, ldso, argv, envp, caps) {
         Ok(r) => r,
         Err(e) => {
@@ -7312,7 +7431,7 @@ fn glibc_disk_launch(
     let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
     let brk_start = arena + 0x0200_0000;
     let mmap_start = arena + 0x0400_0000;
-    let stack_top = arena + nblocks * MIB2 - 0x0010_0000;
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000;
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
@@ -7651,7 +7770,7 @@ pub fn run_glibc(
     // brk heap [+32 MiB, +64 MiB); mmap bump area starts after it (disjoint cursors).
     let brk_start = arena + 0x0200_0000;
     let mmap_start = arena + 0x0400_0000; // runtime mmaps (libc, …) bump from +64 MiB
-    let stack_top = arena + nblocks * MIB2 - 0x0010_0000; // near the arena top
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000; // near the arena top
 
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
@@ -9664,13 +9783,18 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             do_glibc_fork()
         }
         59 => {
-            // execve(path, argv, envp): log the target so we can see chrome's child
-            // process types (--type=renderer/gpu/utility) before implementing spawn.
-            let path = user_cstr(a1, 256);
-            let arg1 = { let p: u64 = read_user(a2 + 8).unwrap_or(0); if p != 0 { user_cstr(p, 128) } else { alloc::vec::Vec::new() } };
-            crate::serial_println!("[spawndiag] execve({}) arg1={} -> ENOSYS",
-                String::from_utf8_lossy(&path), String::from_utf8_lossy(&arg1));
-            (-38i64) as u64
+            // execve(path, argv, envp). A FORK CHILD re-execs itself (chrome
+            // launches renderer/GPU/utility children this way, no zygote). The
+            // main process's execve stays unimplemented (would need a fresh
+            // launch); ordinary programs never reach here.
+            if current_is_fork_child() {
+                do_child_execve(a1, a2, a3)
+            } else {
+                let path = user_cstr(a1, 256);
+                crate::serial_println!("[spawndiag] execve({}) by non-child -> ENOSYS",
+                    String::from_utf8_lossy(&path));
+                (-38i64) as u64
+            }
         }
         285 => {
             // fallocate(fd, mode, offset, len): ensure the file spans [0, offset+len).

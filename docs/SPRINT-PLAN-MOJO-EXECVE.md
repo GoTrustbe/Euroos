@@ -40,3 +40,25 @@ Phase 1 is a real refactor (touches every demand-state access). Phases 2-3 are
 where multi-process either works or reveals the next wall (cross-process shared
 memory for the compositor). Runs are 15-20 min each under TCG. --single-process
 stays the shipping default until phase 4 proves a rendered page.
+
+### 2026-08-30 — BREAKTHROUGH: the fork child execve's and runs as a renderer
+Phase 1 (per-process state swap) + phase 2 (do_child_execve) landed and WORK:
+- "[execve] child task 31 re-exec /pack/chrome argv0=/proc/self/exe -> ld.so
+  entry 0x2a01f540" for BOTH children (pid 1000/1001). Where the log used to say
+  "LaunchProcess: failed to execvp", the child now jumps into a FRESH image.
+- After execve the child issues brk() = 0x2b800000 — glibc's malloc init in the
+  NEW process. The child is running its renderer image, on its own address space.
+- The register-retarget bug that a code review caught before wasting a run: the
+  syscall return sysret's to the SAVED_REGS-block's pushed rcx (+104) and takes
+  rsp from USER_RSP; setting USER_RIP had no effect. Fixed by writing ld.so's
+  entry into the block's rcx slot and zeroing the GP regs (a fresh _start state,
+  like spawn_user gives a new process).
+
+NEXT WALL (phase 3, separate + substantial): the renderer runs but the BROWSER
+aborts "GPU process isn't usable. Goodbye." — it never completes the Mojo
+handshake with the child. The children and the browser are two real processes
+each holding one end of the inherited socketpair; bytes written by the child to
+its fd5 (aliased channel) must reach the browser's end, and vice versa, plus the
+Mojo data pipes need cross-process shared memory. That is the socketpair data
+flow + memfd MAP_SHARED-across-address-spaces work. Shipping default stays
+--single-process (proven).
