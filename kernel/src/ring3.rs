@@ -4243,6 +4243,32 @@ fn user_cstr(ptr: u64, max: usize) -> alloc::vec::Vec<u8> {
         v.push(b);
         i += 1;
     }
+    // Normalize ABSOLUTE paths lexically: collapse "//" and "/./" and resolve "..".
+    // Real userland composes such paths all the time — ANGLE's Vulkan loader opens
+    // the SwiftShader ICD as "<module dir>/./vk_swiftshader_icd.json", which our
+    // byte-exact VFS lookup missed, so eglInitialize died with "extension not
+    // supported" long before GL. Every user_cstr caller is a path-taking syscall
+    // (open/stat/access/exec/unlink/rename/...), and the VFS is flat with no
+    // symlinks, so lexical resolution is exactly right here.
+    if v.first() == Some(&b'/') && (v.windows(2).any(|w| w == b"//" || w == b"/.")) {
+        let mut out: alloc::vec::Vec<&[u8]> = alloc::vec::Vec::new();
+        for comp in v.split(|&b| b == b'/') {
+            match comp {
+                b"" | b"." => {}
+                b".." => { out.pop(); }
+                c => out.push(c),
+            }
+        }
+        let mut n = alloc::vec::Vec::with_capacity(v.len());
+        for c in &out {
+            n.push(b'/');
+            n.extend_from_slice(c);
+        }
+        if n.is_empty() {
+            n.push(b'/');
+        }
+        return n;
+    }
     v
 }
 
