@@ -1113,6 +1113,7 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     let mut k = 0;
     for fd in 3..ceil {
         if pf[fd].is_none() && files[fd].is_none() && dirs[fd].is_none() && !fd_is_aliased(fd) {
+            // (a fork child's pipe fds are recorded below, after the guards drop)
             got[k] = fd;
             k += 1;
             if k == 2 {
@@ -1131,6 +1132,9 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     }
     pf[got[0]] = Some((id, false)); // read end
     pf[got[1]] = Some((id, true)); // write end
+    drop(pf);
+    child_note_open(got[0]); // a fork child's own pipes free on its close/exit
+    child_note_open(got[1]);
     // Access mode per pipe end, so fcntl(F_GETFL) reports the truth: chrome creates a
     // pipe and CHECKs each end's access mode (read end O_RDONLY, write end O_WRONLY);
     // a hardcoded O_RDWR for both was the mismatch that IMMEDIATE_CRASHed it.
@@ -1884,9 +1888,65 @@ fn open_low_fd(fi: usize) -> u64 {
     match alloc_low_fd() {
         Some(fd) => {
             OPEN_FDS.lock()[fd] = Some((fi, 0));
+            child_note_open(fd);
             fd as u64
         }
         None => u64::MAX,
+    }
+}
+
+/// Low fds OPENED BY a fork child, per owner. A child's close of one of ITS OWN
+/// fds really frees the slot (nobody else holds it), and a child's exit frees
+/// whatever it left open. Without this every child open pinned a global slot for
+/// ever (the child's close is mark-only, meant for INHERITED fds), and six
+/// re-exec'd children x ~85 ld.so lib opens marched the table into the 500
+/// ceiling: run 9's renderer died with "error while loading shared libraries:
+/// libnssutil3.so" at fd 498.
+static CHILD_OPENED: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u16>)>> =
+    Mutex::new(alloc::vec::Vec::new());
+
+fn child_note_open(fd: usize) {
+    let cur = crate::sched::current();
+    if let Some(owner) = fork_child_owner(cur) {
+        let mut g = CHILD_OPENED.lock();
+        if let Some((_, set)) = g.iter_mut().find(|(o, _)| *o == owner) {
+            if !set.contains(&(fd as u16)) {
+                set.push(fd as u16);
+            }
+        } else {
+            g.push((owner, alloc::vec![fd as u16]));
+        }
+    }
+}
+
+/// close() by a fork child: if the fd is one the CHILD itself opened, really
+/// free it and report true; else (an inherited fd) the caller mark-closes it.
+fn child_close_own(fd: u64) -> bool {
+    let cur = crate::sched::current();
+    let Some(owner) = fork_child_owner(cur) else { return false };
+    let mut g = CHILD_OPENED.lock();
+    if let Some((_, set)) = g.iter_mut().find(|(o, _)| *o == owner) {
+        if let Some(i) = set.iter().position(|&f| f as u64 == fd) {
+            set.swap_remove(i);
+            drop(g);
+            let _ = close_fd_now(fd);
+            return true;
+        }
+    }
+    false
+}
+
+/// A fork child is gone: free every low fd it opened and still had open.
+fn child_opened_release(owner: usize) {
+    let set = {
+        let mut g = CHILD_OPENED.lock();
+        match g.iter().position(|(o, _)| *o == owner) {
+            Some(i) => g.swap_remove(i).1,
+            None => return,
+        }
+    };
+    for fd in set {
+        let _ = close_fd_now(fd as u64);
     }
 }
 
@@ -4196,6 +4256,7 @@ fn diropen(path: &[u8]) -> u64 {
     match alloc_low_fd() {
         Some(fd) => {
             OPEN_DIRS.lock()[fd] = Some((norm, 0));
+            child_note_open(fd);
             fd as u64
         }
         None => u64::MAX,
@@ -9301,6 +9362,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     child_mem_drop(cur);
                     CHILD_THREADS.lock().retain(|&(_, m)| m != cur);
                     fork_child_release_fds(cur); // flush deferred parent closes
+                    child_opened_release(cur);   // free the fds the child opened
                     crate::procpool::free_range(arena, frames);
                     crate::procpool::free(pml4);
                     free_thread_kstack(cur);
@@ -10014,7 +10076,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // close(fd) by a FORK CHILD: the fd table is shared with the parent,
             // so only mark it closed for this child (see FORK_CHILD_CLOSED).
             if current_is_fork_child() {
-                fork_child_mark_closed(a1);
+                if !child_close_own(a1) {
+                    fork_child_mark_closed(a1); // inherited: mark-only
+                }
                 return 0;
             }
             // close(fd) by the PARENT of a fd a live fork child INHERITED: freeing
@@ -10114,6 +10178,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         child_mem_drop(ctask);
                         CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
                         fork_child_release_fds(ctask);
+                        child_opened_release(ctask);
                         crate::procpool::free_range(arena, frames);
                         crate::procpool::free(pml4);
                         free_thread_kstack(ctask);
