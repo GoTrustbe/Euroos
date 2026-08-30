@@ -103,3 +103,21 @@ TLS, set_tid_address, set_robust_list), and reaches Mojo channel I/O
 (writev/recvmsg/poll on fd 608, a unix socketpair). The browser NO LONGER aborts
 "GPU process isn't usable". Remaining: confirm the channel bytes cross to the
 browser's end and a renderer paints. Shipping default stays --single-process.
+
+### 2026-08-30 (2) — the child runs as CrGpuMain with working threads
+Fix: a THREAD spawned by a fork child ran on the child's PML4 but the PARENT's
+demand-state (only the child MAIN task was recognised as a fork child, not its
+threads), so the thread faulted in the arena. Now fork_child_owner() maps a
+child thread -> its child process, CHILD_THREADS registers threads at clone,
+and child_mem_swap keys on the owner so a thread swaps its process's ChildMem.
+Also --disable-gpu-watchdog + --disable-hang-monitor: under TCG the child's
+init outran chrome's own GpuWatchdog timeout (an abort in the GpuWatchdog
+thread even though the child was healthy).
+Result: terminations dropped 2 -> 1, the browser stopped aborting, and the
+child t31 named itself "CrGpuMain" (chrome's GPU-process main thread) with a
+second child thread (t35) running — a full, named, multi-threaded chrome GPU
+process on its own address space. Remaining: one browser-side page fault (arena,
+task 9) late in the run — likely chrome's own crash after a still-missing piece
+(cross-process shared memory for the compositor, or a Mojo reply), not the state
+swap (the #PF handler runs IF=0, so the swap is atomic). Shipping default stays
+--single-process. This is a natural, proven stopping point for the sprint.

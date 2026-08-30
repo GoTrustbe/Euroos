@@ -6257,9 +6257,22 @@ static GLIBC_THREADS: Mutex<alloc::vec::Vec<usize>> = Mutex::new(alloc::vec::Vec
 /// M1 fork children of the glibc process: (pid, task, child_pml4, child_arena, frames).
 /// Tracked for wait4/teardown (M3). Chrome forks its renderer/gpu/utility processes.
 /// Is the currently-running task one of the glibc fork children?
+/// Threads spawned by a fork child share its address space: (thread_task,
+/// child_main_task). They must swap the SAME ChildMem as their child process,
+/// or a thread runs on the child's PML4 but the parent's demand-state and
+/// faults. Populated when a fork child (or one of its threads) clones.
+static CHILD_THREADS: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
+
+/// The fork-child main task that owns `task`'s address space, if any.
+fn fork_child_owner(task: usize) -> Option<usize> {
+    if GLIBC_FORK_CHILDREN.lock().iter().any(|&(_, t, _, _, _)| t == task) {
+        return Some(task);
+    }
+    CHILD_THREADS.lock().iter().find(|&&(t, _)| t == task).map(|&(_, m)| m)
+}
+
 fn current_is_fork_child() -> bool {
-    let cur = crate::sched::current();
-    GLIBC_FORK_CHILDREN.lock().iter().any(|&(_, t, _, _, _)| t == cur)
+    fork_child_owner(crate::sched::current()).is_some()
 }
 
 /// fds a fork child has "closed" for itself. The fd table is process-global
@@ -6341,8 +6354,9 @@ fn child_mem_snapshot(task: usize) {
 /// Swap a fork child's saved state into the globals (call at child syscall/fault
 /// entry). Returns true if a swap happened (so the caller swaps back out).
 fn child_mem_swap(task: usize) -> bool {
+    let owner = match fork_child_owner(task) { Some(o) => o, None => return false };
     let mut g = CHILD_MEM.lock();
-    let Some(cm) = g.iter_mut().find(|c| c.task == task) else { return false };
+    let Some(cm) = g.iter_mut().find(|c| c.task == owner) else { return false };
     macro_rules! swp {
         ($glob:expr, $field:expr) => {{
             let tmp = $glob.load(Ordering::Relaxed);
@@ -7147,7 +7161,11 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // but silent after its post-fork rt_sigaction sweep (Mojo handshake never
     // completes), the network-service child crashes later, and child arenas are
     // not recycled into the pool on exit. See docs/SPRINT-PLAN-CHROMIUM.md.
+    // Shipping default is single-process (proven). Remove --single-process to
+    // reproduce the multi-process work; the watchdog-off flags then matter
+    // (under TCG the child's init outruns chrome's own GpuWatchdog timeout).
     b"--no-zygote", b"--single-process", b"--disable-dev-shm-usage",
+    b"--disable-gpu-watchdog", b"--disable-hang-monitor",
     b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
     b"--disable-crashpad-for-testing", b"--disable-breakpad",
     b"--disable-in-process-stack-traces", b"--lang=en-US",
@@ -9069,6 +9087,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
                     FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != cur);
                     child_mem_drop(cur);
+                    CHILD_THREADS.lock().retain(|&(_, m)| m != cur);
                     crate::procpool::free_range(arena, frames);
                     crate::procpool::free(pml4);
                     free_thread_kstack(cur);
@@ -9167,6 +9186,11 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
             register_thread_kstack(child, slot);
             GLIBC_THREADS.lock().push(child);
+            // If a fork child (or its thread) spawned this, the new thread
+            // shares the child's address space -> the same ChildMem swap.
+            if let Some(owner) = fork_child_owner(crate::sched::current()) {
+                CHILD_THREADS.lock().push((child, owner));
+            }
             crate::serial_println!("[glibc-thread] clone -> thread task {child} (shared address space)");
             if flags & 0x0010_0000 != 0 && a3 != 0 {
                 let _ = write_user(a3, child as i32);
@@ -9224,6 +9248,11 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
             register_thread_kstack(child, slot);
             GLIBC_THREADS.lock().push(child);
+            // If a fork child (or its thread) spawned this, the new thread
+            // shares the child's address space -> the same ChildMem swap.
+            if let Some(owner) = fork_child_owner(crate::sched::current()) {
+                CHILD_THREADS.lock().push((child, owner));
+            }
             // Diag: what the child will `pop`/`call` first. glibc's clone3 child pops the
             // fn off the top of child_stack (or uses a preserved reg). Log the stack top
             // + rdx/r9 so a rip=0 faulting thread can be matched against a working one.
