@@ -4045,6 +4045,16 @@ fn is_vfs_dir(path: &[u8]) -> bool {
     if path == b"/" {
         return true;
     }
+    // Synthetic /proc directories chrome opens + fstats (sandbox thread helper
+    // fstats /proc/self/task/<tid>). Serving them as directories makes the
+    // fstat report S_IFDIR and the CHECK pass, so the GPU child does not abort.
+    if path == b"/proc/self/task"
+        || path.starts_with(b"/proc/self/task/")
+        || path == b"/proc/thread-self"
+        || path.starts_with(b"/proc/thread-self/")
+    {
+        return true;
+    }
     let p = path.strip_suffix(b"/").unwrap_or(path);
     if MKDIRS.lock().iter().any(|d| d.as_bytes() == p) {
         return true;

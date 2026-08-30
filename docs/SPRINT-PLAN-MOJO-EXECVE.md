@@ -163,3 +163,19 @@ child runs as CrGpuMain. New wall (chrome's own CHECKs, not kernel crashes):
 - base/time/time_now_posix.cc:55 clock_gettime check in a child thread.
 Next: serve /proc/self/task/<tid> for a fork child + fix clock_gettime in the
 child (likely the swap or a missing vdso). Shipping default stays single-process.
+
+### 2026-08-30 phase 4 (2) — GPU child stops aborting on the sandbox fstat
+Fix: serve /proc/self/task[/<tid>] and /proc/thread-self as directories
+(is_vfs_dir), so chrome's sandbox thread helper fstat gets S_IFDIR and its
+"0 == fstat_ret" CHECK passes. Result: crgpu-abort = 0, term = 0, browser-abort
+= 0 — browser + GPU child both run, no aborts on fstat.
+Remaining, precisely located (next targeted step):
+- clock_gettime in a CHILD THREAD (task 39) writes garbage into the timespec:
+  the pointer (0x1140...., in the demand region) IS accepted by in_user_arena,
+  so the failure is deeper - the kernel-side write triggers a demand fault for a
+  child thread that does not resolve under the swap. Needs the demand-fault path
+  verified for a child thread's not-yet-committed stack page.
+- one arena write fault (rip in the exe/demand region) late in the run.
+Both are the fine tail of per-child address-space fidelity, not new walls.
+Shipping default stays --single-process. Two proven fixes this phase (FD_ALIAS
+per-process, /proc/self/task), each found by static analysis + one decisive run.
