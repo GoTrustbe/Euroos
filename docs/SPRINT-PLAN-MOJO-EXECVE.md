@@ -179,3 +179,21 @@ Remaining, precisely located (next targeted step):
 Both are the fine tail of per-child address-space fidelity, not new walls.
 Shipping default stays --single-process. Two proven fixes this phase (FD_ALIAS
 per-process, /proc/self/task), each found by static analysis + one decisive run.
+
+## Phase 5: the GL / frame-production campaign (2026-08-30, user-approved run budget)
+
+Wall (established in code, main.rs args block): "the blocker is frame production
+itself" - the compositor commits no frame without GL. Substrate now ready:
+AVX2 works under -cpu Haswell (TCG >= 7.2 emulates it; [fpu] AVX ON, XSAVE
+switch), ring-3 #UD terminates the task instead of freezing the VM, and the
+hs pack ships the full SwANGLE stack (libEGL/libGLESv2/libvk_swiftshader).
+
+Discipline: every run has ONE hypothesis and a decisive measure. No gamble runs.
+
+- RUN 1 (commit 765cc9d): avx_enabled() -> chrome gets --use-gl=angle
+  --use-angle=swiftshader --enable-unsafe-swiftshader --in-process-gpu.
+  Hypothesis: frame production starts once a GL surface exists.
+  Measure: [trace] stage counts (BeginImplFrame/Draw/Swap/Submit/
+  CopyOutputResult) go 0 -> >0; id-7 captureScreenshot answers with PNG.
+  Fallback signals: ANGLE/EGL init errors name the next blocker; a ring-3
+  #UD names the exact missing instruction.
