@@ -1107,7 +1107,7 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     let mut got = [usize::MAX; 2];
     let mut k = 0;
     for fd in 3..ceil {
-        if pf[fd].is_none() && files[fd].is_none() && dirs[fd].is_none() {
+        if pf[fd].is_none() && files[fd].is_none() && dirs[fd].is_none() && !fd_is_aliased(fd) {
             got[k] = fd;
             k += 1;
             if k == 2 {
@@ -3826,7 +3826,8 @@ fn alloc_low_fd() -> Option<usize> {
     let open = OPEN_FDS.lock();
     let pipes = PIPE_FDS.lock();
     let dirs = OPEN_DIRS.lock();
-    (3..ceil).find(|&fd| open[fd].is_none() && pipes[fd].is_none() && dirs[fd].is_none())
+    (3..ceil).find(|&fd| open[fd].is_none() && pipes[fd].is_none() && dirs[fd].is_none()
+        && !fd_is_aliased(fd))
 }
 
 /// dup2(oldfd, newfd)/dup3: point newfd at oldfd's object. Supports the common
@@ -3851,6 +3852,17 @@ pub fn unalias_fd(fd: u64) -> u64 {
         }
     }
     fd
+}
+
+/// Is this LOW fd number claimed as an alias in the CURRENT process? (During a
+/// fork child's syscall its aliases are swapped into the global FD_ALIAS, so a
+/// plain lookup is per-process-correct.) An aliased number is OWNED by the
+/// process — chrome registers ScopedFD ownership of e.g. its dup2'd Mojo
+/// channel at fd 5 — so the low-fd allocators must never hand that number out
+/// again. Handing it out is exactly chrome's "Crashing due to FD ownership
+/// violation" CHECK (seen in the multi-process network service, run 3).
+fn fd_is_aliased(fd: usize) -> bool {
+    FD_ALIAS.lock().iter().any(|&(f, _)| f as usize == fd)
 }
 
 fn fd_alias_set(nfd: usize, real: u64) {
