@@ -2400,9 +2400,21 @@ fn main() -> Status {
             // captureScreenshot answer). On a plain qemu64 boot (the public lean
             // image) avx_enabled() is false and the proven no-GL args are passed
             // byte for byte as before — zero regression risk.
+            // RUN 3 (GL campaign): multi-process WITH GL. With SwANGLE proven in
+            // single-process (run 2 captured a real 816x616 frame), the phase-4
+            // success criterion is a painted MULTI-process page: browser + GPU
+            // child + renderer, GL in the GPU child, raster over the (proven)
+            // cross-process shared frames. Toggle back to false to reproduce the
+            // single-process capture exactly.
+            const HS_MULTI_PROCESS: bool = true;
             let gl_args: &[&[u8]] = if sched::avx_enabled() {
-                &[b"--use-gl=angle", b"--use-angle=swiftshader",
-                  b"--enable-unsafe-swiftshader", b"--in-process-gpu"]
+                if HS_MULTI_PROCESS {
+                    &[b"--use-gl=angle", b"--use-angle=swiftshader",
+                      b"--enable-unsafe-swiftshader"]
+                } else {
+                    &[b"--use-gl=angle", b"--use-angle=swiftshader",
+                      b"--enable-unsafe-swiftshader", b"--in-process-gpu"]
+                }
             } else {
                 &[b"--disable-gpu", b"--disable-gpu-compositing", b"--use-gl=disabled"]
             };
@@ -2433,7 +2445,7 @@ fn main() -> Status {
                   // tried before and crashed worker threads on failed CHECKs — but those
                   // were the IMMEDIATE_CRASH walls we just cleared (FPU/SSE state,
                   // fcntl access-mode, getrandom uniqueness, memfd flags). Retest now.
-                  b"--single-process",
+                  // (--single-process is appended below unless HS_MULTI_PROCESS.)
                   // Force SOFTWARE compositing with no GPU thread at all: --in-process-gpu
                   // + --run-all-compositor-stages made navigation WAIT on a compositor
                   // frame that never commits without GL (chrome inited but never opened
@@ -2516,6 +2528,9 @@ fn main() -> Status {
                   // the DOM, because executeCommands awaits the capture. The blocker is
                   // frame production; the document should not wait on it.
                   ];
+            if !HS_MULTI_PROCESS {
+                hs_argv.push(b"--single-process");
+            }
             hs_argv.extend_from_slice(gl_args);
             hs_argv.push(b"file:///tmp/euro.html");
             let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
