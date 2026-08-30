@@ -857,8 +857,13 @@ pub fn cdp_pump() {
                 // under emulation that the capture pipeline itself starves.
                 let dsid = CDP_SESSION.lock().clone();
                 let color = 0x101010u32.wrapping_add((ticks_1000 as u32).wrapping_mul(0x203040)) & 0xFFFFFF;
+                // FRESH id per damage nudge: a repeated id 12 while the first
+                // evaluate is still pending gets "Duplicate `id` in protocol
+                // request" and the nudge is DROPPED (seen in the MP run 8) —
+                // exactly when the renderer is slow is when the nudges matter.
+                let nid = 1200 + ticks_1000;
                 cdp_send(&alloc::format!(
-                    "{{\"id\":12,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"document.body.style.background='#{color:06x}'\"}}}}"));
+                    "{{\"id\":{nid},\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"document.body.style.background='#{color:06x}'\"}}}}"));
             }
         }
     }
@@ -6773,8 +6778,15 @@ fn do_glibc_fork() -> u64 {
         let pipes = PIPE_FDS.lock();
         let dirs = OPEN_DIRS.lock();
         let ceil = (crate::net::SOCK_FD_BASE as usize).min(MAX_FD);
+        // A DEFERRED slot is parent-CLOSED: still occupied only for older
+        // children. A new child does NOT inherit it — including it here pinned
+        // every deferred fd forever under respawn churn (each new fork re-listed
+        // it), the table filled up, and dup() died with EMFILE -> chrome CHECK
+        // abort (run 8).
+        let deferred = DEFERRED_CLOSE.lock().clone();
         let set: alloc::vec::Vec<u16> = (3..ceil)
-            .filter(|&fd| open[fd].is_some() || pipes[fd].is_some() || dirs[fd].is_some())
+            .filter(|&fd| (open[fd].is_some() || pipes[fd].is_some() || dirs[fd].is_some())
+                && !deferred.contains(&(fd as u16)))
             .map(|fd| fd as u16)
             .collect();
         FORK_INHERITED.lock().push((child, set));
