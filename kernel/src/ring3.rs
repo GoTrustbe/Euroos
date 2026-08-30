@@ -8991,10 +8991,19 @@ fn linux_dispatch_swapped(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64)
     // the alias only clears the alias slot (the real fd stays open — POSIX dup
     // semantics: the object lives until all descriptors are closed).
     let a1 = match num {
-        0 | 1 | 44 | 45 | 46 | 47 | 48 | 51 | 52 | 54 | 55 | 72 | 16 => unalias_fd(a1),
+        // EVERY fd-taking syscall resolves aliases, not just the socket set: a
+        // fork child's dup2 is alias-only now, and chrome fstat'ed its dup2'd V8
+        // snapshot fd -> EBADF -> "Error mapping V8 startup snapshot file"
+        // FATAL (run 10), because fstat(5) was not in this list. read/write,
+        // stat/lseek/pread/readv, dup/dup2(old), sendfile, socket ops, fcntl/
+        // ioctl, sync/truncate ops, getdents, statfs, fadvise, fallocate.
+        0 | 1 | 5 | 8 | 16 | 17 | 18 | 19 | 20 | 32 | 33 | 40
+        | 44 | 45 | 46 | 47 | 48 | 51 | 52 | 54 | 55
+        | 72 | 73 | 74 | 75 | 77 | 91 | 93 | 138 | 187 | 217 | 221 | 285 => unalias_fd(a1),
         _ => a1,
     };
     let a3 = if num == 233 { unalias_fd(a3) } else { a3 }; // epoll_ctl(epfd, op, FD, ev)
+    let a5 = if num == 9 { unalias_fd(a5) } else { a5 }; // mmap(addr,len,prot,flags,FD,off)
     if num == 3 && (a1 as usize) < MAX_FD && fd_alias_clear(a1 as usize) {
         return 0; // close(alias): drop only the alias, keep the socket (POSIX dup)
     }
