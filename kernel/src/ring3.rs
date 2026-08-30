@@ -3937,6 +3937,19 @@ fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
     if nfd >= MAX_FD {
         return (-9i64) as u64; // -EBADF: can't target a class-encoded high fd
     }
+    // dup2 by a FORK CHILD: NEVER touch the global tables. The tables are shared
+    // with the parent, so clearing slot `newfd` here destroys the PARENT's open
+    // file at that number — run 6: the child dup2'd its Mojo socket 603 onto
+    // fd 5 and wiped the browser's open icudtl.dat at global slot 5; the freed
+    // number was then re-handed to the browser, whose ScopedFD tracker still
+    // owned 5 -> "FD ownership violation" CHECK. The child gets a per-process
+    // ALIAS (resolved at its syscall entry), and its inherited share of the old
+    // number is marked closed so the deferred-close accounting stays exact.
+    if current_is_fork_child() {
+        fork_child_mark_closed(newfd);
+        fd_alias_set(nfd, oldfd);
+        return newfd;
+    }
     // A socket-class source (unix socketpair / inet socket): register an alias.
     if crate::net::is_unix_fd(oldfd) || crate::net::is_sock_fd(oldfd) || crate::net::is_eventfd(oldfd) {
         fd_alias_set(nfd, oldfd);
