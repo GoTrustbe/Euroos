@@ -62,3 +62,26 @@ its fd5 (aliased channel) must reach the browser's end, and vice versa, plus the
 Mojo data pipes need cross-process shared memory. That is the socketpair data
 flow + memfd MAP_SHARED-across-address-spaces work. Shipping default stays
 --single-process (proven).
+
+## Phase 3 sprint (2026-08-30): the Mojo channel carries bytes cross-process
+
+Success criterion: the browser stops logging "GPU process launch failed" /
+"Network service crashed" — a child completes the Mojo handshake. Stretch: a
+renderer paints (multi-process screenshot).
+
+Steps, executed in order, each ending in a build + ONE isolated run:
+1. DIAGNOSE: reset the per-child syscall-trace budget at execve, so the trace
+   shows the renderer's post-exec life (ld.so loading libs from the child's
+   fresh demand state, then Mojo's first channel ops). Find the exact stall.
+2. Expected fix candidates, in likelihood order:
+   a. lib loading in the child's demand state (open/mmap of libc.so.6 etc. via
+      the swapped file-maps — the VFS paths must resolve under the swap);
+   b. sendmsg/recvmsg with SCM_RIGHTS over the socketpair (Mojo passes fds/
+      memfds across the channel at invite time);
+   c. memfd MAP_SHARED across the two address spaces (SHARED_FRAMES is global
+      = good; each process maps its own VA to the same file frames);
+   d. eventfd/epoll wakeups crossing processes.
+3. Iterate 1-2 until the handshake completes; keep --single-process the
+   shipping default until a renderer paints.
+Process discipline: pgrep qemu before every run; one isolated run at a time;
+review code before spending a run.
