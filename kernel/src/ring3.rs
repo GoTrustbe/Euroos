@@ -1392,7 +1392,7 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
         let before = crate::interrupts::ticks();
         crate::sched::sleep_ticks(2);
         if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-            crate::sched::yield_now(); // deschedule so whoever will wake us can run
+            { yield_reacquire(); } // deschedule so whoever will wake us can run
         }
         if crate::interrupts::ticks() == before {
             crate::interrupts::TICKS.store(before + 1, Ordering::Relaxed);
@@ -1475,7 +1475,7 @@ fn pipe_read_blocking(fd: usize, buf: u64, len: usize) -> Option<u64> {
         // RIP inside this function). On the musl bg path (SYSCALL_YIELD_OK=false) a
         // mid-syscall yield is unsafe (BG.lock), so fall back to a non-blocking return.
         if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-            crate::sched::yield_now();
+            yield_reacquire();
         } else {
             return Some((-11i64) as u64); // -EAGAIN (bg path: caller polls)
         }
@@ -2897,7 +2897,7 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     // task spin forever on BG.lock → total wedge. musl keeps the old timer-driven block
     // (fine at its low thread counts); chrome (glibc, ~30 threads) gets the real yield.
     if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-        crate::sched::yield_now();
+        yield_reacquire();
     }
     // Resumed. If we are STILL enqueued, the scheduler woke us at the deadline (a
     // FUTEX_WAKE would have removed us) -> report -ETIMEDOUT so the caller re-polls.
@@ -6488,6 +6488,58 @@ fn child_mem_snapshot(task: usize) {
     }
 }
 
+/// WHO owns the swapped globals right now: 0 = the parent (launched main
+/// process), else the child-main task whose ChildMem is currently loaded.
+///
+/// Why ownership instead of swap-in/swap-out around each syscall: a child's
+/// syscall can BLOCK mid-arm (futex, poll, pipe read) and yield with the child
+/// state still in the globals. Any parent thread that then runs sees CHILD
+/// state (its dispatch takes the is_child=false path and never swaps), and the
+/// parent's next demand-fault/allocation runs against the wrong address space —
+/// run 7 killed the browser main exactly this way (demand fault rejected:
+/// address was valid only in a child's DEMAND_NEXT window), and the phase-4
+/// "clock_gettime garbage in a child thread" was the same hole in the other
+/// direction. Now the state follows the RUNNING task: every dispatch/fault
+/// entry and every yield-return calls ensure_globals_for_current(), which swaps
+/// only when the owner actually changes. Nothing swaps back at exit.
+static GLOBALS_OWNER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Make the swapped globals belong to the CURRENT task's process. O(1) when the
+/// owner is unchanged (the overwhelmingly common case). Task context only (the
+/// ChildMem locks are taken); at every call site no spinlock is held.
+fn ensure_globals_for_current() {
+    let cur = crate::sched::current();
+    let need = fork_child_owner(cur).unwrap_or(0);
+    let have = GLOBALS_OWNER.load(Ordering::Relaxed);
+    if have == need {
+        return;
+    }
+    if have != 0 {
+        child_mem_swap(have); // out: globals -> old owner's ChildMem (parent restored)
+    }
+    if need != 0 {
+        child_mem_swap(need); // in: new owner's ChildMem -> globals
+    }
+    GLOBALS_OWNER.store(need, Ordering::Relaxed);
+}
+
+/// Force the globals back to the parent if `owner`'s state is loaded — called
+/// before a child's ChildMem is dropped (exit/kill), else the parent's state
+/// would be destroyed with it.
+fn globals_release_owner(owner: usize) {
+    if GLOBALS_OWNER.load(Ordering::Relaxed) == owner {
+        child_mem_swap(owner);
+        GLOBALS_OWNER.store(0, Ordering::Relaxed);
+    }
+}
+
+/// yield_now + re-establish the globals for whoever we are once we resume: while
+/// we slept another process' task may have loaded ITS state.
+fn yield_reacquire() {
+    crate::sched::yield_now();
+    ensure_globals_for_current();
+}
+
 /// Swap a fork child's saved state into the globals (call at child syscall/fault
 /// entry). Returns true if a swap happened (so the caller swaps back out).
 fn child_mem_swap(task: usize) -> bool {
@@ -6828,16 +6880,10 @@ pub static FAULT_CYCLES: core::sync::atomic::AtomicU64 = core::sync::atomic::Ato
 
 pub fn handle_demand_fault(addr: u64) -> bool {
     let t0 = unsafe { core::arch::x86_64::_rdtsc() };
-    // Per-process isolation: a fork child faults against its OWN demand-state.
-    let cur = crate::sched::current();
-    let is_child = current_is_fork_child();
-    if is_child {
-        child_mem_swap(cur);
-    }
+    // Per-process isolation: the fault runs against the faulting task's own
+    // demand-state (ownership model, see GLOBALS_OWNER).
+    ensure_globals_for_current();
     let r = handle_demand_fault_inner(addr);
-    if is_child {
-        child_mem_swap(cur);
-    }
     if r {
         FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
         FAULT_CYCLES.fetch_add(
@@ -7537,6 +7583,10 @@ fn glibc_disk_launch(
     envp: &[&[u8]],
     caps: u64,
 ) -> Result<DiskRun, &'static str> {
+    // A fresh launch: no fork child of a PREVIOUS run may leave its state loaded
+    // or its ChildMem around.
+    GLOBALS_OWNER.store(0, Ordering::Relaxed);
+    CHILD_MEM.lock().clear();
     // Every glibc-disk launch (persistent AND boot-test) records its exe path, so a
     // fork child's execve("/proc/self/exe") can re-load the right binary. It was
     // only set on the persistent path — the boot-test's chrome children then all
@@ -7838,7 +7888,7 @@ pub fn run_glibc_disk(
         // the next timer tick (100 Hz) resumes us, and under TCG a halted vCPU parks
         // the host thread — an idle guest finally costs idle.
         if crate::sched::any_other_ready() {
-            crate::sched::yield_now();
+            yield_reacquire();
         } else {
             x86_64::instructions::hlt();
         }
@@ -8078,7 +8128,7 @@ pub fn run_glibc(
         // disk-variant loop: the no-Ready fallback resumes THIS task, so a bare yield
         // spins, and a halted vCPU is the only thing TCG runs for free).
         if crate::sched::any_other_ready() {
-            crate::sched::yield_now();
+            yield_reacquire();
         } else {
             x86_64::instructions::hlt();
         }
@@ -8853,17 +8903,11 @@ pub fn dump_threads_now(why: &str) {
 }
 
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
-    // Per-process isolation: a fork child runs the whole syscall on its OWN
-    // demand-state (swapped into the globals for the duration). The parent and
-    // ordinary programs never enter here (is_child false) so they are unchanged.
-    let cur = crate::sched::current();
-    let is_child = current_is_fork_child();
-    if is_child {
-        child_mem_swap(cur);
-        let r = linux_dispatch_swapped(num, a1, a2, a3, a4, a5);
-        child_mem_swap(cur); // swap back: parent state restored, child mutations saved
-        return r;
-    }
+    // Per-process isolation: the swapped globals FOLLOW the running task (see
+    // GLOBALS_OWNER). One ensure at entry loads this process' state if another
+    // process' was in; nothing swaps back at exit, so a syscall that blocks
+    // mid-arm stays consistent and the next entrant fixes ownership itself.
+    ensure_globals_for_current();
     linux_dispatch_swapped(num, a1, a2, a3, a4, a5)
 }
 
@@ -9222,7 +9266,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // the usual "don't yield mid-syscall" hazard doesn't apply to a task
                 // that never resumes. Yielding here avoids running glibc's post-exit
                 // ring-3 garbage (which else spins, or GP-faults, until the timer skips it).
-                crate::sched::yield_now();
+                yield_reacquire();
                 return 0; // unreachable in practice (Dead task is never rescheduled)
             }
             // A FORK CHILD exits: recycle its arena, page tables and kstack into
@@ -9239,6 +9283,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     crate::serial_println!("[fork] child pid {pid} (task {cur}) exit({a1}) — arena recycled ({} MiB back to pool)", frames / 256);
                     // Record the exit for wait4: WEXITSTATUS lives in bits 8..16.
                     GLIBC_CHILD_EXITS.lock().push((pid, ((a1 as u32) & 0xff) << 8));
+                    globals_release_owner(cur); // parent state back BEFORE the drop
                     GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
                     FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != cur);
                     child_mem_drop(cur);
@@ -9248,7 +9293,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     crate::procpool::free(pml4);
                     free_thread_kstack(cur);
                     crate::sched::mark_dead(cur);
-                    crate::sched::yield_now();
+                    yield_reacquire();
                     return 0; // unreachable: a Dead task is never rescheduled
                 }
             }
@@ -9297,7 +9342,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // Switch away for good (same reasoning as the worker path): the Dead
                 // main must not run glibc's post-exit_group code (it GP-faults once
                 // libraries like libm are mapped). The launcher already has its result.
-                crate::sched::yield_now();
+                yield_reacquire();
                 return 0;
             }
             // Foreground run_args (musl) excursion: the synchronous EXITED model.
@@ -10051,6 +10096,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                             crate::sched::mark_dead(t);
                         }
                         GLIBC_CHILD_EXITS.lock().push((pid, (a2 as u32) & 0x7f));
+                        globals_release_owner(ctask); // never drop state that is loaded
                         GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
                         FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != ctask);
                         child_mem_drop(ctask);
@@ -10271,14 +10317,14 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         // The loop re-checks readiness after every tick.
                         crate::sched::sleep_ticks(1);
                         if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-                            crate::sched::yield_now();
+                            yield_reacquire();
                         }
                     }
                 }
                 None => {
                     crate::sched::sleep_ticks(1);
                     if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-                        crate::sched::yield_now();
+                        yield_reacquire();
                     }
                 }
             }
@@ -10620,7 +10666,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // threads running at a quarter of the poll rate, which is thousands of
                 // hand-overs a second — plenty — at a quarter of the switch cost.
                 if EMPTY_RECV_POLLS.fetch_add(1, Ordering::Relaxed) % 4 == 3 {
-                    crate::sched::yield_now();
+                    yield_reacquire();
                 }
                 return (-11i64) as u64; // -EAGAIN: non-blocking, no data (NOT EOF)
             }
@@ -11361,7 +11407,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             while crate::interrupts::ticks() < deadline {
                 crate::sched::sleep_ticks(1);
                 if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-                    crate::sched::yield_now(); // let everyone else run while we wait
+                    { yield_reacquire(); } // let everyone else run while we wait
                 }
                 // Same guard as poll(): with interrupts off and nothing else runnable
                 // the clock cannot advance, and an unbounded wait here hangs the
