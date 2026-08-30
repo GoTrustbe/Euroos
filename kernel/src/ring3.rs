@@ -3854,6 +3854,54 @@ pub fn unalias_fd(fd: u64) -> u64 {
     fd
 }
 
+/// Low fds that were OPEN at the moment a still-living fork child was created:
+/// (child main task, the fd numbers it inherited). A parent close of such an fd
+/// is DEFERRED (see close(3)) so the number cannot be reallocated while the
+/// child still owns it. Entries drop when the child exits; the exit path then
+/// really frees every deferred fd no remaining child inherited.
+static FORK_INHERITED: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u16>)>> =
+    Mutex::new(alloc::vec::Vec::new());
+/// Fds the parent has closed but whose slot is kept alive for inheriting children.
+static DEFERRED_CLOSE: Mutex<alloc::vec::Vec<u16>> = Mutex::new(alloc::vec::Vec::new());
+
+/// Actually release fd `a1`: epoll, eventfd, socket, AF_UNIX socket, or VFS file.
+/// (The class dispatch that close(3) used to do inline; also called by the
+/// child-exit path to flush deferred closes.)
+fn close_fd_now(a1: u64) -> u64 {
+    if is_epoll_fd(a1) {
+        if let Some(slot) = EPOLLS.lock().get_mut((a1 - EPOLL_FD_BASE) as usize) {
+            *slot = None;
+        }
+        0
+    } else if crate::net::is_eventfd(a1) {
+        crate::net::eventfd_close(a1);
+        0
+    } else if crate::net::is_sock_fd(a1) {
+        crate::net::sock_close(a1)
+    } else if crate::net::is_unix_fd(a1) {
+        crate::net::unix_fd_close(a1)
+    } else {
+        vfs_close(a1 as usize)
+    }
+}
+
+/// A fork child exited: drop its inherited-fd record and really free every
+/// deferred parent-close no remaining live child inherited.
+fn fork_child_release_fds(child_task: usize) {
+    FORK_INHERITED.lock().retain(|(t, _)| *t != child_task);
+    let flush: alloc::vec::Vec<u16> = {
+        let inh = FORK_INHERITED.lock();
+        let mut d = DEFERRED_CLOSE.lock();
+        let (keep, flush): (alloc::vec::Vec<u16>, alloc::vec::Vec<u16>) =
+            d.iter().partition(|fd| inh.iter().any(|(_, set)| set.contains(fd)));
+        *d = keep;
+        flush
+    };
+    for fd in flush {
+        let _ = close_fd_now(fd as u64);
+    }
+}
+
 /// Is this LOW fd number claimed as an alias in the CURRENT process? (During a
 /// fork child's syscall its aliases are swapped into the global FD_ALIAS, so a
 /// plain lookup is per-process-correct.) An aliased number is OWNED by the
@@ -6646,6 +6694,19 @@ fn do_glibc_fork() -> u64 {
     let pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     GLIBC_FORK_CHILDREN.lock().push((pid, child, pml4, child_arena, arena_frames));
     child_mem_snapshot(child); // the child inherits the parent's demand-state
+    // Snapshot which LOW fd numbers are open right now: the child inherits these,
+    // so a later parent close of one must not free the number (see close(3)).
+    {
+        let open = OPEN_FDS.lock();
+        let pipes = PIPE_FDS.lock();
+        let dirs = OPEN_DIRS.lock();
+        let ceil = (crate::net::SOCK_FD_BASE as usize).min(MAX_FD);
+        let set: alloc::vec::Vec<u16> = (3..ceil)
+            .filter(|&fd| open[fd].is_some() || pipes[fd].is_some() || dirs[fd].is_some())
+            .map(|fd| fd as u16)
+            .collect();
+        FORK_INHERITED.lock().push((child, set));
+    }
     crate::serial_println!(
         "[fork] pid {pid} -> child task {child} (own pml4={pml4:#x} arena={child_arena:#x} {} MiB)",
         span >> 20
@@ -9154,6 +9215,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != cur);
                     child_mem_drop(cur);
                     CHILD_THREADS.lock().retain(|&(_, m)| m != cur);
+                    fork_child_release_fds(cur); // flush deferred parent closes
                     crate::procpool::free_range(arena, frames);
                     crate::procpool::free(pml4);
                     free_thread_kstack(cur);
@@ -9870,22 +9932,26 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 fork_child_mark_closed(a1);
                 return 0;
             }
-            // close(fd): epoll, eventfd, socket, AF_UNIX socket, or VFS file.
-            if is_epoll_fd(a1) {
-                if let Some(slot) = EPOLLS.lock().get_mut((a1 - EPOLL_FD_BASE) as usize) {
-                    *slot = None;
+            // close(fd) by the PARENT of a fd a live fork child INHERITED: freeing
+            // the slot now lets the allocator hand that NUMBER out again while the
+            // child still owns it — chrome's per-process ScopedFD tracker then sees
+            // open() return an fd it owns and CHECK-crashes ("FD ownership
+            // violation", run 4: browser closed its fd 5, slot freed, the service
+            // child's next openat got 5 back). POSIX semantics: the description
+            // lives until EVERY holder closes it. Defer: keep the slot occupied,
+            // remember the fd, and really free it when the last inheriting child
+            // exits. The parent itself closed it and never touches it again, so
+            // the number staying resolvable costs nothing.
+            if a1 < crate::net::SOCK_FD_BASE
+                && FORK_INHERITED.lock().iter().any(|(_, set)| set.contains(&(a1 as u16)))
+            {
+                let mut d = DEFERRED_CLOSE.lock();
+                if !d.contains(&(a1 as u16)) {
+                    d.push(a1 as u16);
                 }
-                0
-            } else if crate::net::is_eventfd(a1) {
-                crate::net::eventfd_close(a1);
-                0
-            } else if crate::net::is_sock_fd(a1) {
-                crate::net::sock_close(a1)
-            } else if crate::net::is_unix_fd(a1) {
-                crate::net::unix_fd_close(a1)
-            } else {
-                vfs_close(a1 as usize)
+                return 0;
             }
+            close_fd_now(a1)
         }
         32 => dup_fd(a1),                 // dup(oldfd)
         33 | 292 => dup2_fd(a1, a2),       // dup2(old,new) / dup3(old,new,flags)
