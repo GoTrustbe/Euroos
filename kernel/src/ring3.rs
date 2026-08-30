@@ -6414,6 +6414,13 @@ fn fork_child_mark_closed(fd: u64) {
 static GLIBC_FORK_CHILDREN: Mutex<alloc::vec::Vec<(u64, usize, u64, u64, usize)>> =
     Mutex::new(alloc::vec::Vec::new());
 
+/// Exited glibc fork children waiting to be reaped: (child pid, wait status).
+/// The launched main process is the only waiter, so no parent key is needed.
+/// wait4(61) pops from here; kill(62) pushes a signal status. Without these the
+/// browser's child-management got ENOSYS (run 5) and crash-restart loops could
+/// never reap, leaking a zombie record per restart.
+static GLIBC_CHILD_EXITS: Mutex<alloc::vec::Vec<(u64, u32)>> = Mutex::new(alloc::vec::Vec::new());
+
 // ── Per-process address-space isolation for fork children (Mojo multi-process) ──
 // The demand-paging state (bump pointer, file maps, prot-none ranges, shared
 // aliases, arena + brk/heap) is process-global: fine for one glibc process, but
@@ -7517,6 +7524,12 @@ fn glibc_disk_launch(
     envp: &[&[u8]],
     caps: u64,
 ) -> Result<DiskRun, &'static str> {
+    // Every glibc-disk launch (persistent AND boot-test) records its exe path, so a
+    // fork child's execve("/proc/self/exe") can re-load the right binary. It was
+    // only set on the persistent path — the boot-test's chrome children then all
+    // died with exec-failure exit(127), which surfaced as "Network service crashed"
+    // (run 5).
+    *CHILD_EXE_PATH.lock() = String::from(exe_path);
     // Resolve the disk-served executable.
     let (diskidx, dev, doff, dsize) = {
         let reg = DISK_FILES.lock();
@@ -9211,6 +9224,8 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 };
                 if let Some((pid, _t, pml4, arena, frames)) = hit {
                     crate::serial_println!("[fork] child pid {pid} (task {cur}) exit({a1}) — arena recycled ({} MiB back to pool)", frames / 256);
+                    // Record the exit for wait4: WEXITSTATUS lives in bits 8..16.
+                    GLIBC_CHILD_EXITS.lock().push((pid, ((a1 as u32) & 0xff) << 8));
                     GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
                     FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != cur);
                     child_mem_drop(cur);
@@ -9971,6 +9986,71 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 crate::serial_println!("[spawndiag] execve({}) by non-child -> ENOSYS",
                     String::from_utf8_lossy(&path));
                 (-38i64) as u64
+            }
+        }
+        61 => {
+            // wait4(pid, *status, options, *rusage): NON-BLOCKING reap of a glibc
+            // fork child (chrome always passes WNOHANG from its child watcher).
+            // a1 = pid or -1 (any); returns 0 when nothing is reapable yet.
+            let want = a1 as i64;
+            let mut ce = GLIBC_CHILD_EXITS.lock();
+            let idx = ce.iter().position(|&(p, _)| want == -1 || p == want as u64);
+            match idx {
+                Some(i) => {
+                    let (cpid, status) = ce.remove(i);
+                    drop(ce);
+                    if a2 != 0 && !write_user(a2, status) {
+                        return EFAULT;
+                    }
+                    crate::serial_println!("[wait4] reaped glibc child pid {cpid} status={status:#x}");
+                    cpid
+                }
+                None => {
+                    // Nothing exited. ECHILD when the pid does not exist at all,
+                    // else 0 ("still running", chrome polls again).
+                    if want > 0
+                        && !GLIBC_FORK_CHILDREN.lock().iter().any(|&(p, _, _, _, _)| p == want as u64)
+                    {
+                        return (-10i64) as u64; // -ECHILD
+                    }
+                    0
+                }
+            }
+        }
+        62 => {
+            // kill(pid, sig): terminate a glibc fork child from the browser (chrome
+            // kills a hung/superseded helper before restarting it). Clean up exactly
+            // like the child's own exit path, but from the caller's context; the
+            // child is not running (single-core cooperative) so freeing is safe.
+            let hit = {
+                let g = GLIBC_FORK_CHILDREN.lock();
+                g.iter().position(|&(p, _, _, _, _)| p == a1).map(|i| g[i])
+            };
+            match hit {
+                Some((pid, ctask, pml4, arena, frames)) => {
+                    if a2 != 0 {
+                        crate::serial_println!("[kill] pid {pid} (task {ctask}) sig {a2} — terminated by parent");
+                        // Its threads die with it.
+                        let threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter()
+                            .filter(|&&(_, m)| m == ctask).map(|&(t, _)| t).collect();
+                        for t in threads {
+                            free_thread_kstack(t);
+                            crate::sched::mark_dead(t);
+                        }
+                        GLIBC_CHILD_EXITS.lock().push((pid, (a2 as u32) & 0x7f));
+                        GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
+                        FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != ctask);
+                        child_mem_drop(ctask);
+                        CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
+                        fork_child_release_fds(ctask);
+                        crate::procpool::free_range(arena, frames);
+                        crate::procpool::free(pml4);
+                        free_thread_kstack(ctask);
+                        crate::sched::mark_dead(ctask);
+                    }
+                    0 // sig 0 = existence probe: child exists -> 0
+                }
+                None => (-3i64) as u64, // -ESRCH
             }
         }
         285 => {
