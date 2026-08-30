@@ -121,3 +121,30 @@ task 9) late in the run — likely chrome's own crash after a still-missing piec
 (cross-process shared memory for the compositor, or a Mojo reply), not the state
 swap (the #PF handler runs IF=0, so the swap is atomic). Shipping default stays
 --single-process. This is a natural, proven stopping point for the sprint.
+
+## Phase 4 sprint (2026-08-30): cross-process shared memory -> a painted page
+
+Success criterion: no browser-side fault; stretch: a multi-process screenshot
+with a painted page.
+
+TIME DISCIPLINE (the owner's explicit requirement):
+- Static analysis FIRST: every hypothesis that can be tested by reading code or
+  the existing p3f log costs zero runs.
+- Each TCG run (15-20 min) must answer ONE decisive question, stated up front.
+- Before any run: pgrep qemu; one isolated run; never bind & to a chain.
+- If a run's watcher dies, poll the log directly - never restart the run blind.
+
+Step A (no run) - FD_ALIAS is process-global: the child's dup2 alias fd5->606
+  also applies to the BROWSER (it surely uses fd 5 for ordinary files!). Any
+  browser syscall on its own fd 5 gets silently redirected to the child's Mojo
+  socket. Prime suspect for the late browser fault. Fix: move FD_ALIAS into
+  ChildMem (per-process swap) so aliases only exist inside the child.
+Step B (no run) - dissect the p3f browser fault: addr 0x11401c35cea is in the
+  DEMAND region; find what the browser mapped/reserved there and which syscall
+  preceded the fault.
+Step C (one run) - decisive: with A landed, does the browser survive? Watch
+  terminations + how far the GPU child's Mojo conversation gets.
+Step D - depending on C: the memfd/SHARED_FRAMES cross-process path (browser
+  maps the child's shared buffer): verify SHARED_FRAMES lookups work from BOTH
+  processes' contexts (global table = good), and the browser-side mmap of a
+  child-created memfd maps the same physical frames.
