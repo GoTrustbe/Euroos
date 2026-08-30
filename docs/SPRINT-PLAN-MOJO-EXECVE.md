@@ -148,3 +148,18 @@ Step D - depending on C: the memfd/SHARED_FRAMES cross-process path (browser
   maps the child's shared buffer): verify SHARED_FRAMES lookups work from BOTH
   processes' contexts (global table = good), and the browser-side mmap of a
   child-created memfd maps the same physical frames.
+
+### 2026-08-30 phase 4 (1) — FD_ALIAS was process-global: browser now survives
+Static analysis found it (no run wasted): FD_ALIAS (dup2 socket->low-fd alias)
+was a global [u64;512], so the child's Mojo channel alias (fd5->606) applied to
+the BROWSER too - any browser syscall on its own fd 5 was redirected to the
+child's Mojo socket, corrupting the browser (the late arena fault). Fix: FD_ALIAS
+is now a sparse Vec in ChildMem, swapped per fork child; the browser's global
+table stays empty of child aliases.
+Result: ZERO terminations (browser + children all run), no browser abort. The
+child runs as CrGpuMain. New wall (chrome's own CHECKs, not kernel crashes):
+- sandbox/linux/services/thread_helpers.cc:41 "0 == fstat_ret" - chrome fstats
+  /proc/self/task/<tid> and our /proc emulation doesn't serve it for the child.
+- base/time/time_now_posix.cc:55 clock_gettime check in a child thread.
+Next: serve /proc/self/task/<tid> for a fork child + fix clock_gettime in the
+child (likely the swap or a missing vdso). Shipping default stays single-process.

@@ -3837,17 +3837,36 @@ fn alloc_low_fd() -> Option<usize> {
 /// Chrome's forked child dup2's its inherited Mojo socketpair end to a FIXED
 /// low fd (e.g. 5) and talks Mojo through that number; the socket layers
 /// address sockets by their high class fds, so the alias resolves on use.
-static FD_ALIAS: Mutex<[u64; MAX_FD]> = Mutex::new([0; MAX_FD]);
+/// Sparse (low_fd -> real class-fd) aliases. PER-PROCESS: it lives in ChildMem
+/// and is swapped in for a fork child's syscalls. The GLOBAL table is the
+/// browser's and stays empty of child aliases, so a browser syscall on its own
+/// fd 5 is NEVER redirected to a child's Mojo socket (the phase-4 browser fault).
+static FD_ALIAS: Mutex<alloc::vec::Vec<(u16, u64)>> = Mutex::new(alloc::vec::Vec::new());
 
 /// Resolve a possibly-aliased fd to the real (class-encoded) fd.
 pub fn unalias_fd(fd: u64) -> u64 {
-    if (fd as usize) < MAX_FD {
-        let a = FD_ALIAS.lock()[fd as usize];
-        if a != 0 {
-            return a;
+    if fd < MAX_FD as u64 {
+        if let Some(&(_, real)) = FD_ALIAS.lock().iter().find(|&&(f, _)| f as u64 == fd) {
+            return real;
         }
     }
     fd
+}
+
+fn fd_alias_set(nfd: usize, real: u64) {
+    let mut al = FD_ALIAS.lock();
+    if let Some(e) = al.iter_mut().find(|(f, _)| *f as usize == nfd) {
+        e.1 = real;
+    } else {
+        al.push((nfd as u16, real));
+    }
+}
+
+fn fd_alias_clear(fd: usize) -> bool {
+    let mut al = FD_ALIAS.lock();
+    let n = al.len();
+    al.retain(|&(f, _)| f as usize != fd);
+    al.len() != n
 }
 
 fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
@@ -3860,7 +3879,7 @@ fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
     }
     // A socket-class source (unix socketpair / inet socket): register an alias.
     if crate::net::is_unix_fd(oldfd) || crate::net::is_sock_fd(oldfd) || crate::net::is_eventfd(oldfd) {
-        FD_ALIAS.lock()[nfd] = oldfd;
+        fd_alias_set(nfd, oldfd);
         OPEN_FDS.lock()[nfd] = None;
         OPEN_DIRS.lock()[nfd] = None;
         PIPE_FDS.lock()[nfd] = None;
@@ -6323,6 +6342,7 @@ struct ChildMem {
     prot_none: alloc::vec::Vec<(u64, u64)>,
     shared_aliases: alloc::vec::Vec<(u64, u64, usize)>,
     shared_maps: alloc::vec::Vec<(usize, u64, usize)>,
+    fd_alias: alloc::vec::Vec<(u16, u64)>,
 }
 static CHILD_MEM: Mutex<alloc::vec::Vec<ChildMem>> = Mutex::new(alloc::vec::Vec::new());
 
@@ -6342,6 +6362,7 @@ fn child_mem_snapshot(task: usize) {
         prot_none: PROT_NONE_RANGES.lock().clone(),
         shared_aliases: SHARED_ALIASES.lock().clone(),
         shared_maps: SHARED_MAPS.lock().clone(),
+        fd_alias: FD_ALIAS.lock().clone(),
     };
     let mut g = CHILD_MEM.lock();
     if let Some(slot) = g.iter_mut().find(|c| c.task == task) {
@@ -6375,6 +6396,7 @@ fn child_mem_swap(task: usize) -> bool {
     core::mem::swap(&mut *PROT_NONE_RANGES.lock(), &mut cm.prot_none);
     core::mem::swap(&mut *SHARED_ALIASES.lock(), &mut cm.shared_aliases);
     core::mem::swap(&mut *SHARED_MAPS.lock(), &mut cm.shared_maps);
+    core::mem::swap(&mut *FD_ALIAS.lock(), &mut cm.fd_alias);
     true
 }
 
@@ -8721,12 +8743,8 @@ fn linux_dispatch_swapped(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64)
         _ => a1,
     };
     let a3 = if num == 233 { unalias_fd(a3) } else { a3 }; // epoll_ctl(epfd, op, FD, ev)
-    if num == 3 && (a1 as usize) < MAX_FD {
-        let mut al = FD_ALIAS.lock();
-        if al[a1 as usize] != 0 {
-            al[a1 as usize] = 0; // close(alias): drop the alias, keep the socket
-            return 0;
-        }
+    if num == 3 && (a1 as usize) < MAX_FD && fd_alias_clear(a1 as usize) {
+        return 0; // close(alias): drop only the alias, keep the socket (POSIX dup)
     }
     let chk = SCM_CHECK_ADDR.swap(0, Ordering::Relaxed);
     if chk != 0 {
