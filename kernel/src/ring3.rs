@@ -6428,8 +6428,19 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     let nblocks = span >> 21;
     let frames = (nblocks * 512) as usize;
 
-    // Fresh image: wipe the arena, reset the (child's) demand-state.
+    // Fresh image: wipe the arena, and DROP the child's inherited demand pages.
+    // The child forked a COPY of the parent's already-relocated exe/heap pages;
+    // ld.so must instead read the original, unrelocated image from disk, or it
+    // sees relocated phdr p_vaddrs (base + DEMAND_BASE = a slot-4 fault). Freeing
+    // the child's PML4 demand slot makes every exe page re-fault fresh.
     unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
+    {
+        use x86_64::registers::control::Cr3;
+        let child_pml4 = Cr3::read().0.start_address().as_u64();
+        crate::paging::free_demand_region(child_pml4, DEMAND_PML4_IDX);
+        // Flush the TLB so the now-unmapped VAs re-fault.
+        unsafe { Cr3::write(Cr3::read().0, Cr3::read().1); }
+    }
     DEMAND_NEXT.store(DEMAND_BASE, Ordering::Relaxed);
     DEMAND_FILE_MAPS.lock().clear();
     PROT_NONE_RANGES.lock().clear();
@@ -6443,7 +6454,10 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
-    HEAP_END.store(mmap_start, Ordering::Relaxed);
+    // The mmap arena runs from mmap_start up to just below the stack — same as
+    // glibc_disk_launch. Setting HEAP_END = HEAP_BREAK (the earlier bug) left
+    // zero bytes for small arena mmaps, so ld.so's libc.so.6 mmap got ENOMEM.
+    HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
 
     // Re-register the exe's disk-backed segments (in the child's demand-state).
     let exe_base = DEMAND_BASE;
@@ -8287,13 +8301,15 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
         let trace_child = current_is_fork_child();
         let r = linux_dispatch(num, a1, a2, a3, a4, a5);
         if trace_child {
+            // High budget: we want the renderer's WHOLE post-execve life
+            // (ld.so loading libs from the child's fresh demand state, then
+            // Mojo's first channel ops) to reach the serial log.
             static CHILD_TRACE_LEFT: core::sync::atomic::AtomicU32 =
-                core::sync::atomic::AtomicU32::new(600);
+                core::sync::atomic::AtomicU32::new(4000);
             static SIGSWEEP: core::sync::atomic::AtomicU32 =
                 core::sync::atomic::AtomicU32::new(0);
-            if num == 13 {
-                // The post-fork rt_sigaction sweep (signals 1..128, twice each)
-                // is known-good noise: count it instead of printing 512 lines.
+            if num == 13 || num == 10 {
+                // rt_sigaction sweep + mprotect flood: known noise, just count.
                 SIGSWEEP.fetch_add(1, Ordering::Relaxed);
             } else if CHILD_TRACE_LEFT.load(Ordering::Relaxed) > 0 {
                 CHILD_TRACE_LEFT.fetch_sub(1, Ordering::Relaxed);

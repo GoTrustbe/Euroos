@@ -85,3 +85,21 @@ Steps, executed in order, each ending in a build + ONE isolated run:
    shipping default until a renderer paints.
 Process discipline: pgrep qemu before every run; one isolated run at a time;
 review code before spending a run.
+
+### 2026-08-30 phase 3 progress — the renderer fully loads and reaches Mojo
+Two more real bugs found and fixed with the auxv dump + full child trace:
+1. The child ran the parent's DIRTY, already-relocated exe pages (forked copy):
+   ld.so read a phdr whose p_vaddr was DEMAND_BASE+0x360, computed base+p_vaddr
+   = a slot-4 address (0x200_0000_0360), and the isolation handler TERMINATED
+   the child. Fix: free_demand_region(child_pml4, 2) at execve drops the
+   inherited demand pages, so every exe page re-faults FRESH from disk (original,
+   unrelocated phdrs). No more termination.
+2. HEAP_END was set to HEAP_BREAK (zero mmap arena), so ld.so's libc.so.6 mmap
+   got ENOMEM. Fixed to stack_top-0x100000, same as glibc_disk_launch.
+Result (proven in the trace): the child now runs 613+ syscalls after execve
+with ZERO terminations — it opens and mmaps the WHOLE renderer dependency tree
+(lib after lib, real addresses), then __libc_start_main (arch_prctl ARCH_SET_FS
+TLS, set_tid_address, set_robust_list), and reaches Mojo channel I/O
+(writev/recvmsg/poll on fd 608, a unix socketpair). The browser NO LONGER aborts
+"GPU process isn't usable". Remaining: confirm the channel bytes cross to the
+browser's end and a renderer paints. Shipping default stays --single-process.
