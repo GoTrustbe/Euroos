@@ -2391,9 +2391,24 @@ fn main() -> Status {
             // arguable.
             ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
             ring3::cdp_install("file:///tmp/euro.html");
-            let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
-                &[b"/pack/chrome-headless-shell", b"--no-sandbox",
-                  b"--disable-gpu", b"--disable-dev-shm-usage", b"--user-data-dir=/tmp/hs",
+            // GL is a RUNTIME choice now: with AVX enabled (an AVX-capable -cpu,
+            // e.g. Haswell — TCG emulates AVX2 since QEMU 7.2) SwiftShader's AVX2
+            // paths can actually execute, so offer chrome a REAL software GL
+            // (SwANGLE: ANGLE over SwiftShader) instead of disabling GL. The
+            // hypothesis under test: frame production starts once a GL surface
+            // exists (measure: the [trace] stage counts below + the id-7
+            // captureScreenshot answer). On a plain qemu64 boot (the public lean
+            // image) avx_enabled() is false and the proven no-GL args are passed
+            // byte for byte as before — zero regression risk.
+            let gl_args: &[&[u8]] = if sched::avx_enabled() {
+                &[b"--use-gl=angle", b"--use-angle=swiftshader",
+                  b"--enable-unsafe-swiftshader", b"--in-process-gpu"]
+            } else {
+                &[b"--disable-gpu", b"--disable-gpu-compositing", b"--use-gl=disabled"]
+            };
+            let mut hs_argv: alloc::vec::Vec<&[u8]> = alloc::vec![
+                  b"/pack/chrome-headless-shell" as &[u8], b"--no-sandbox",
+                  b"--disable-dev-shm-usage", b"--user-data-dir=/tmp/hs",
                   b"--disable-crashpad-for-testing", b"--disable-breakpad",
                   b"--disable-in-process-stack-traces", b"--no-zygote", b"--lang=en-US",
                   // NO SwiftShader/ANGLE GL: its software GL uses AVX2, which qemu64 + the
@@ -2408,7 +2423,7 @@ fn main() -> Status {
                   // (chrome exits ~3s clean). Getting the DOM needs multi-process (fork+exec
                   // of demand-paged procs, currently ENOSYS on the glibc path) or software-
                   // compositor bring-up. hshell running to exit 0 is the current landmark.
-                  b"--disable-vulkan", b"--use-gl=disabled", b"--ozone-platform=headless",
+                  b"--disable-vulkan", b"--ozone-platform=headless",
                   // ── SINGLE-PROCESS: run renderer/utility/GPU all IN the browser process
                   // so chrome NEVER forks a helper child. The default (forking) path
                   // livelocks: chrome forks helpers, they never execve into functional
@@ -2424,7 +2439,7 @@ fn main() -> Status {
                   // frame that never commits without GL (chrome inited but never opened
                   // the page). Disable gpu-compositing + accelerated video so the browser
                   // reaches PreMainMessageLoopRun and actually navigates.
-                  b"--disable-gpu-compositing", b"--disable-accelerated-video-decode",
+                  b"--disable-accelerated-video-decode",
                   b"--disable-features=VaapiVideoDecoder,VaapiVideoEncoder",
                   // MojoUseEventFd = chrome's eventfd shared-mem Mojo channel; its probe
                   // PCHECKs that eventfd2(invalid flags) FAILS, but our eventfd2 accepts
@@ -2500,10 +2515,15 @@ fn main() -> Status {
                   // time; and all of it again once sleeps were real). Each also costs
                   // the DOM, because executeCommands awaits the capture. The blocker is
                   // frame production; the document should not wait on it.
-                  b"file:///tmp/euro.html"],
+                  ];
+            hs_argv.extend_from_slice(gl_args);
+            hs_argv.push(b"file:///tmp/euro.html");
+            let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
+                &hs_argv,
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
-            serial_println!("[hshell] BUILD=plain capture, healthy pipeline, no double navigation");
+            serial_println!("[hshell] BUILD=GL-{} (avx={})",
+                if sched::avx_enabled() { "swangle" } else { "disabled" }, sched::avx_enabled());
             serial_println!("[hshell] chrome-headless-shell from DISK: exit={e3}");
             // Did chrome actually write a PNG? Ship it out as hex: the boot log is the
             // only channel off this machine, and a picture is worth the bytes.
