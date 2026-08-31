@@ -1775,6 +1775,28 @@ pub fn dump_suspect_addrs() {
     a!(close_fd_now, "close_fd_now");
     a!(dup2_fd, "dup2_fd");
     a!(unalias_fd, "unalias_fd");
+    // Static addresses too: the NMI probe decodes the polled static's absolute
+    // address; these lines let it be matched to a name.
+    macro_rules! sa { ($st:expr, $n:expr) => { crate::serial_println!("[saddr] {:#018x}  {}", core::ptr::addr_of!($st) as usize as u64, $n); } }
+    sa!(FD_ALIAS, "FD_ALIAS");
+    sa!(SCM_PENDING, "SCM_PENDING");
+    sa!(CHILD_OPENED, "CHILD_OPENED");
+    sa!(FORK_INHERITED, "FORK_INHERITED");
+    sa!(DEFERRED_CLOSE, "DEFERRED_CLOSE");
+    sa!(GLIBC_FORK_CHILDREN, "GLIBC_FORK_CHILDREN");
+    sa!(CHILD_THREADS, "CHILD_THREADS");
+    sa!(CHILD_MEM, "CHILD_MEM");
+    sa!(DISK_PAGE_CACHE, "DISK_PAGE_CACHE");
+    sa!(GLIBC_CHILD_EXITS, "GLIBC_CHILD_EXITS");
+    sa!(FORK_CHILD_CLOSED, "FORK_CHILD_CLOSED");
+    sa!(SHARED_FRAMES, "SHARED_FRAMES");
+    sa!(SHARED_ALIASES, "SHARED_ALIASES");
+    sa!(DEMAND_FILE_MAPS, "DEMAND_FILE_MAPS");
+    sa!(OPEN_FDS, "OPEN_FDS");
+    sa!(PIPE_FDS, "PIPE_FDS");
+    sa!(PIPES, "PIPES");
+    sa!(FILES, "FILES");
+    sa!(crate::interrupts::TICKS, "interrupts::TICKS");
     a!(fd_alias_set, "fd_alias_set");
     a!(fd_alias_clear, "fd_alias_clear");
     a!(vfs_close, "vfs_close");
