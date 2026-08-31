@@ -1333,6 +1333,7 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
             None => return (-9i64) as u64,
         };
         let mut n = 0u64;
+        let mut first_fd = 0u64;
         for (fd, evmask, data) in list {
             if n >= maxevents {
                 break;
@@ -1360,6 +1361,9 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
                     (base as *mut u32).write(evs);
                     ((base + 4) as *mut u64).write(data);
                 }
+                if n == 0 {
+                    first_fd = fd as u64;
+                }
                 n += 1;
             }
         }
@@ -1384,6 +1388,20 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
                 crate::sched::current(), thread_name(crate::sched::current()));
         }
         if n > 0 || timeout == 0 {
+            // Livelock forensics: run 14's Chrome_IOThread called epoll_wait a
+            // MILLION times per stall-snap, always getting 1 "ready" event it
+            // evidently could not consume. Sample every 500k-th wait: which fd,
+            // which event bits, which cookie, on whose thread — one line names
+            // the spinning readiness source without flooding the log.
+            if n > 0 && EPOLL_WAIT_COUNT.load(Ordering::Relaxed) % 500_000 == 0 {
+                let (f_evs, f_data) = unsafe {
+                    ((events as *const u32).read(), ((events + 4) as *const u64).read())
+                };
+                let cur = crate::sched::current();
+                crate::serial_println!(
+                    "[epoll-hot] t{cur} {:?} epfd={epfd} n={n} first: fd={first_fd}({}) evs={f_evs:#x} data={f_data:#x}",
+                    thread_name(cur), fd_kind(first_fd));
+            }
             return n; // ready fds, or the caller asked not to wait
         }
         // HONOR THE TIMEOUT — the same lie poll() and the futex told, with the same
