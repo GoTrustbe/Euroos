@@ -11012,7 +11012,20 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
             let scm_chk = SCM_CHECK_ADDR.load(Ordering::Relaxed);
             if CACHE_DIR_DIAG.load(Ordering::Relaxed) && crate::net::is_unix_fd(a1) {
+                // + a 16-byte hex prefix, budgeted: run 23 settled into an endless
+                // 112-byte message ping-pong with zero forward progress for a full
+                // hour. Identical prefixes every time = a consume/resend bug ours;
+                // varying prefixes = real traffic that never completes (protocol
+                // desync, e.g. a partial read splitting a Mojo message).
+                static SCM_HEX_BUDGET: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(48);
+                if SCM_HEX_BUDGET.load(Ordering::Relaxed) > 0 {
+                    SCM_HEX_BUDGET.fetch_sub(1, Ordering::Relaxed);
+                    let n = data.len().min(16);
+                    crate::serial_println!("[scm] recvmsg fd{a1}: delivering {} data bytes | head={:02x?}",
+                        data.len(), &data[..n]);
+                } else {
                 crate::serial_println!("[scm] recvmsg fd{a1}: delivering {} data bytes", data.len());
+                }
             }
             if scm_chk != 0 {
                 crate::serial_println!("[scm] pre-scatter: controllen reads {}", read_user::<u64>(scm_chk).unwrap_or(u64::MAX));
