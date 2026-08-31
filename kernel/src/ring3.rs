@@ -1961,6 +1961,38 @@ fn child_close_own(fd: u64) -> bool {
     false
 }
 
+/// CROSS-PROCESS PAGE CACHE for disk-served (EuroPack) file pages. Every fork
+/// child re-execs the same 180 MB chrome binary + ~85 libs and used to re-read
+/// every page from virtio for itself — minutes per child under TCG, which is
+/// what overran chrome's GPU-launch timeout and made MP bring-up nondeterministic
+/// (runs 13-15). Pack content is immutable, so a full, page-aligned page of it
+/// is identical for every process: cache (file, page)->frame once, map it
+/// READ-ONLY everywhere, and give a writer a private copy on its write fault
+/// (CoW break in handle_demand_fault). Key = fidx<<40 | file_page. Sorted for
+/// binary search.
+static DISK_PAGE_CACHE: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+static DISK_CACHE_HITS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+fn disk_cache_get(key: u64) -> Option<u64> {
+    let c = DISK_PAGE_CACHE.lock();
+    c.binary_search_by_key(&key, |&(k, _)| k).ok().map(|i| c[i].1)
+}
+
+fn disk_cache_put(key: u64, phys: u64) {
+    let mut c = DISK_PAGE_CACHE.lock();
+    if let Err(i) = c.binary_search_by_key(&key, |&(k, _)| k) {
+        c.insert(i, (key, phys));
+    }
+}
+
+/// Free every cached frame and clear the cache (fresh run: the pack may differ).
+fn disk_cache_reset() {
+    let old = core::mem::take(&mut *DISK_PAGE_CACHE.lock());
+    for (_, phys) in old {
+        crate::procpool::demand_free(phys);
+    }
+}
+
 /// Sorted list of every physical frame currently backing a SHARED (memfd)
 /// mapping — these must SURVIVE a process teardown (other processes map them).
 fn shared_phys_sorted() -> alloc::vec::Vec<u64> {
@@ -1968,6 +2000,8 @@ fn shared_phys_sorted() -> alloc::vec::Vec<u64> {
         .flat_map(|(_, frames)| frames.iter().copied())
         .filter(|&p| p != 0)
         .collect();
+    // Disk-cache frames are shared between processes exactly the same way.
+    v.extend(DISK_PAGE_CACHE.lock().iter().map(|&(_, p)| p));
     v.sort_unstable();
     v
 }
@@ -7012,11 +7046,37 @@ pub fn demand_committed_pages() -> u64 { DEMAND_COMMITTED.load(Ordering::Relaxed
 pub static FAULT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 pub static FAULT_CYCLES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
-pub fn handle_demand_fault(addr: u64) -> bool {
+pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
     let t0 = unsafe { core::arch::x86_64::_rdtsc() };
     // Per-process isolation: the fault runs against the faulting task's own
     // demand-state (ownership model, see GLOBALS_OWNER).
     ensure_globals_for_current();
+    // CoW BREAK: a WRITE to a PRESENT page in the demand region can only mean a
+    // read-only mapping of a shared disk-cache frame — give the writer its own
+    // copy and retry. (Every other present+write fault is a real violation and
+    // falls through to the terminate path.)
+    if write && present && addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE {
+        let pml4 = {
+            use x86_64::registers::control::Cr3;
+            Cr3::read().0.start_address().as_u64()
+        };
+        let page = addr & !0xFFF;
+        if let Some((phys, writable)) = crate::paging::demand_pte(pml4, page) {
+            if !writable {
+                let fresh = match crate::procpool::demand_alloc() { Some(f) => f, None => return false };
+                // SAFETY: both frames identity-mapped, 4 KiB.
+                unsafe { core::ptr::copy_nonoverlapping(phys as *const u8, fresh as *mut u8, 4096); }
+                if !crate::paging::map_demand_4k(pml4, page, fresh) {
+                    crate::procpool::demand_free(fresh);
+                    return false;
+                }
+                unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
+                DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
+                return true;
+            }
+        }
+        return false; // present + writable yet faulted: not ours
+    }
     let r = handle_demand_fault_inner(addr);
     if r {
         FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -7129,7 +7189,9 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
     // Set when the page was filled from DISK: (map base, map end, dev, disk base,
     // file offset of the map, valid bytes, file size) — everything the read-ahead
     // below needs to fill the neighbouring pages from the same read.
-    let mut readahead: Option<(u64, u64, usize, u64, u64, u64, u64)> = None;
+    let mut readahead: Option<(u64, u64, usize, u64, u64, u64, u64, usize)> = None;
+    // Map this page read-only (shared disk-cache frame): a write CoW-breaks.
+    let mut map_ro = false;
     // If this page belongs to a lazy FILE-backed mapping, fill it from the file at
     // the right offset (bytes past EOF stay zero — matches mmap semantics). The
     // frame is already zeroed, so a partial-page copy leaves a correct zero tail.
@@ -7146,8 +7208,28 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
             if fidx == usize::MAX || fill == 0 {
                 // Zero-fill shadow (.bss / past filesz) — frame is already zeroed.
             } else if fidx >= DISK_FI_BASE {
-                // DISK-BACKED (EuroPack): fill from a polled virtio read at the file's
-                // disk offset. This serves a chrome-sized binary without RAM residency.
+                // DISK-BACKED (EuroPack): consult the cross-process page cache
+                // first — a full, page-aligned page of immutable pack content is
+                // identical for every process. On a hit: map the CACHED frame
+                // read-only (writes CoW), give the fresh frame back, done. Only
+                // full aligned pages are cacheable (a shifted foff would give
+                // per-mapping content).
+                let file_pos0 = foff as u64 + moff;
+                let cacheable = file_pos0 & 0xFFF == 0 && fill == 4096;
+                if cacheable {
+                    let key = ((fidx as u64) << 40) | (file_pos0 >> 12);
+                    if let Some(cphys) = disk_cache_get(key) {
+                        crate::procpool::demand_free(phys);
+                        if !crate::paging::map_demand_4k_ro(pml4, page, cphys) {
+                            return false;
+                        }
+                        unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
+                        DISK_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                        DEMAND_FILE_FILLED.fetch_add(1, Ordering::Relaxed);
+                        DEMAND_USED.store(true, Ordering::Relaxed);
+                        return true;
+                    }
+                }
                 let src = DISK_FILES.lock().get(fidx - DISK_FI_BASE).map(|&(_, dev, off, size)| (dev, off, size));
                 if let Some((dev, dbase, dsize)) = src {
                     let file_pos = foff as u64 + moff;
@@ -7164,11 +7246,18 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
                         });
                         if !ok {
                             crate::serial_println!("[europack] fault-fill read FAILED @file_pos={file_pos:#x}");
+                        } else if cacheable && n == 4096 {
+                            // Publish the freshly read page and map it READ-ONLY
+                            // below (map_ro flag): the first mapper CoWs on write
+                            // exactly like every later one.
+                            disk_cache_put(((fidx as u64) << 40) | (file_pos >> 12), phys);
+                            map_ro = true;
+                            readahead = Some((base, base + _len, dev, dbase, foff as u64, valid, dsize, fidx));
                         } else {
                             // Read AHEAD: code and data runs are sequential, so the
                             // next faults in this mapping were coming anyway — take
                             // them now, in one disk read instead of fifteen.
-                            readahead = Some((base, base + _len, dev, dbase, foff as u64, valid, dsize));
+                            readahead = Some((base, base + _len, dev, dbase, foff as u64, valid, dsize, fidx));
                         }
                     }
                 }
@@ -7189,16 +7278,23 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
             DEMAND_FILE_FILLED.fetch_add(1, Ordering::Relaxed);
         }
     }
-    if !crate::paging::map_demand_4k(pml4, page, phys) {
-        crate::procpool::demand_free(phys);
+    let mapped = if map_ro {
+        crate::paging::map_demand_4k_ro(pml4, page, phys)
+    } else {
+        crate::paging::map_demand_4k(pml4, page, phys)
+    };
+    if !mapped {
+        if !map_ro {
+            crate::procpool::demand_free(phys); // a cached (map_ro) frame is owned by the cache
+        }
         return false;
     }
     // Flush any stale not-present TLB entry for this page.
     unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
     DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
     DEMAND_USED.store(true, Ordering::Relaxed);
-    if let Some((mbase, mend, dev, dbase, foff, valid, dsize)) = readahead {
-        demand_readahead(pml4, page, mbase, mend, dev, dbase, foff, valid, dsize);
+    if let Some((mbase, mend, dev, dbase, foff, valid, dsize, fidx)) = readahead {
+        demand_readahead(pml4, page, mbase, mend, dev, dbase, foff, valid, dsize, fidx);
     }
     true
 }
@@ -7210,7 +7306,7 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
 /// just leaves a page for a later fault to take the slow way.
 #[allow(clippy::too_many_arguments)]
 fn demand_readahead(pml4: u64, page: u64, mbase: u64, mend: u64,
-                    dev: usize, dbase: u64, foff: u64, valid: u64, dsize: u64) {
+                    dev: usize, dbase: u64, foff: u64, valid: u64, dsize: u64, fidx: usize) {
     const RA_PAGES: usize = 15; // + the faulting page = one 64 KiB virtio request
     static RA_BUF: spin::Mutex<()> = spin::Mutex::new(());
     static mut BOUNCE: [u8; RA_PAGES * 4096] = [0; RA_PAGES * 4096];
@@ -7252,16 +7348,38 @@ fn demand_readahead(pml4: u64, page: u64, mbase: u64, mend: u64,
     }
     for i in 0..want {
         let p = first + (i as u64) * 4096;
+        let moff = p - mbase;
+        // Valid file bytes for THIS page; the tail past `valid` stays zero (.bss).
+        let n = (valid - moff).min(4096).min((bytes - i * 4096) as u64) as usize;
+        // Cross-process page cache, same rules as the primary fault: a FULL,
+        // file-page-aligned page of immutable pack content is shared read-only.
+        let fpos = foff + moff;
+        let cacheable = fpos & 0xFFF == 0 && n == 4096;
+        if cacheable {
+            let key = ((fidx as u64) << 40) | (fpos >> 12);
+            if let Some(cphys) = disk_cache_get(key) {
+                if crate::paging::map_demand_4k_ro(pml4, p, cphys) {
+                    DISK_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                break;
+            }
+        }
         let phys = match crate::procpool::demand_alloc() {
             Some(f) => f,
             None => break,
         };
-        let moff = p - mbase;
-        // Valid file bytes for THIS page; the tail past `valid` stays zero (.bss).
-        let n = (valid - moff).min(4096).min((bytes - i * 4096) as u64) as usize;
         unsafe {
             core::ptr::write_bytes(phys as *mut u8, 0, 4096);
             core::ptr::copy_nonoverlapping(BOUNCE[i * 4096..].as_ptr(), phys as *mut u8, n);
+        }
+        if cacheable {
+            disk_cache_put(((fidx as u64) << 40) | (fpos >> 12), phys);
+            if !crate::paging::map_demand_4k_ro(pml4, p, phys) {
+                break; // frame stays owned by the cache
+            }
+            DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
+            continue;
         }
         if !crate::paging::map_demand_4k(pml4, p, phys) {
             crate::procpool::demand_free(phys);
@@ -7721,6 +7839,7 @@ fn glibc_disk_launch(
     // or its ChildMem around.
     GLOBALS_OWNER.store(0, Ordering::Relaxed);
     CHILD_MEM.lock().clear();
+    disk_cache_reset();
     // Every glibc-disk launch (persistent AND boot-test) records its exe path, so a
     // fork child's execve("/proc/self/exe") can re-load the right binary. It was
     // only set on the persistent path — the boot-test's chrome children then all

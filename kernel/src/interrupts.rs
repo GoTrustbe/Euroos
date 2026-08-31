@@ -494,7 +494,11 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     // instruction retried. No-op unless enabled + in-range, so the normal fault
     // handling below is untouched for every other case (incl. ring 0 kernel copies
     // that touch a not-yet-committed demand page during a syscall).
-    if crate::ring3::handle_demand_fault(addr) {
+    if crate::ring3::handle_demand_fault(
+        addr,
+        code.contains(PageFaultErrorCode::CAUSED_BY_WRITE),
+        code.contains(PageFaultErrorCode::PROTECTION_VIOLATION),
+    ) {
         return;
     }
     // A fault from RING 3 = a process reaching outside its own address space

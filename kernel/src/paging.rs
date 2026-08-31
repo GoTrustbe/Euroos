@@ -570,6 +570,45 @@ pub fn map_user_4k_falloc(falloc: &mut euromm::FrameAllocator, pml4: u64, virt: 
     true
 }
 
+/// map_demand_4k, but READ-ONLY: used for pages backed by the shared disk page
+/// cache — a write then faults (protection violation) and the CoW breaker gives
+/// the writer a private copy.
+pub fn map_demand_4k_ro(pml4: u64, virt: u64, phys: u64) -> bool {
+    // SAFETY: identical to map_demand_4k minus the WRITABLE bit.
+    unsafe {
+        let i4 = ((virt >> 39) & 0x1FF) as usize;
+        let i3 = ((virt >> 30) & 0x1FF) as usize;
+        let i2 = ((virt >> 21) & 0x1FF) as usize;
+        let i1 = ((virt >> 12) & 0x1FF) as usize;
+        let pdpt = match ensure_table((pml4 as *mut u64).add(i4)) { Some(p) => p, None => return false };
+        let pd = match ensure_table((pdpt as *mut u64).add(i3)) { Some(p) => p, None => return false };
+        let pt = match ensure_table((pd as *mut u64).add(i2)) { Some(p) => p, None => return false };
+        (pt as *mut u64).add(i1).write_volatile(phys | PRESENT | USER);
+    }
+    true
+}
+
+/// Read the PTE for `virt` in `pml4`'s demand region: (physical frame, writable).
+/// None when any level is absent.
+pub fn demand_pte(pml4: u64, virt: u64) -> Option<(u64, bool)> {
+    // SAFETY: identity-mapped table chain, read-only walk.
+    unsafe {
+        let i4 = ((virt >> 39) & 0x1FF) as usize;
+        let i3 = ((virt >> 30) & 0x1FF) as usize;
+        let i2 = ((virt >> 21) & 0x1FF) as usize;
+        let i1 = ((virt >> 12) & 0x1FF) as usize;
+        let e4 = (pml4 as *const u64).add(i4).read_volatile();
+        if e4 & PRESENT == 0 { return None; }
+        let e3 = ((e4 & ADDR_MASK) as *const u64).add(i3).read_volatile();
+        if e3 & PRESENT == 0 { return None; }
+        let e2 = ((e3 & ADDR_MASK) as *const u64).add(i2).read_volatile();
+        if e2 & PRESENT == 0 { return None; }
+        let e1 = ((e2 & ADDR_MASK) as *const u64).add(i1).read_volatile();
+        if e1 & PRESENT == 0 { return None; }
+        Some((e1 & ADDR_MASK, e1 & WRITABLE != 0))
+    }
+}
+
 pub fn map_demand_4k(pml4: u64, virt: u64, phys: u64) -> bool {
     // SAFETY: pml4 + all table frames are identity-mapped low RAM; page-aligned.
     unsafe {
