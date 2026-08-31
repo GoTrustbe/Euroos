@@ -6754,8 +6754,18 @@ fn globals_release_owner(owner: usize) {
 /// yield_now + re-establish the globals for whoever we are once we resume: while
 /// we slept another process' task may have loaded ITS state.
 fn yield_reacquire() {
+    // Preserve the caller's interrupt state across the yield. A syscall arm
+    // runs with IF=0 (FMASK); yield_now re-enables to switch, and returning
+    // with IF=1 left the REST of the arm preemptible while it takes spinlocks —
+    // the timer then parked a lock HOLDER forever and every later IF=0 spinner
+    // froze the machine (run 28: fork_child_owner; run 29: fd_is_aliased —
+    // same disease, next lock). Restore IF=0 exactly when it was 0 before.
+    let if_was = x86_64::instructions::interrupts::are_enabled();
     crate::sched::yield_now();
     ensure_globals_for_current();
+    if !if_was {
+        x86_64::instructions::interrupts::disable();
+    }
 }
 
 /// Swap a fork child's saved state into the globals (call at child syscall/fault
