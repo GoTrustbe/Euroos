@@ -465,6 +465,13 @@ static SOCK_PAIRS: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::V
 static SCM_PENDING: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
 /// One-shot recheck address for the vanishing controllen write (see recvmsg).
 static SCM_CHECK_ADDR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Which process stored SCM_CHECK_ADDR (0 = parent, else child-main task). The
+/// "NEXT syscall" diagnostic reads that USER address on whatever syscall comes
+/// next — under the per-process ownership model that may be a DIFFERENT process
+/// whose address space does not map it: the demand handler rejects, the kernel
+/// read #PFs at ring 0 and the whole machine halts (run 11). Only read when the
+/// same process is current.
+static SCM_CHECK_OWNER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// The other end of a socketpair, if `fd` is one.
 fn sock_peer(fd: u64) -> Option<u64> {
@@ -9009,8 +9016,12 @@ fn linux_dispatch_swapped(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64)
     }
     let chk = SCM_CHECK_ADDR.swap(0, Ordering::Relaxed);
     if chk != 0 {
-        let v = read_user::<u64>(chk).unwrap_or(u64::MAX);
-        crate::serial_println!("[scm] NEXT syscall ({num}): controllen at {chk:#x} now reads {v}");
+        let owner = SCM_CHECK_OWNER.load(Ordering::Relaxed);
+        let cur_owner = fork_child_owner(crate::sched::current()).unwrap_or(0);
+        if owner == cur_owner {
+            let v = read_user::<u64>(chk).unwrap_or(u64::MAX);
+            crate::serial_println!("[scm] NEXT syscall ({num}): controllen at {chk:#x} now reads {v}");
+        } // else: another process is current — its space does not map the address
     }
     // Whole-life log of the network sockets: every syscall whose first arg is a
     // sock fd, with its result. The main-navigation socket goes silent after
@@ -10715,6 +10726,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // still 20 there = userspace clobbers it; already 0 = our own return
                 // path does. One boot decides.
                 SCM_CHECK_ADDR.store(a2 + 40, Ordering::Relaxed);
+                SCM_CHECK_OWNER.store(fork_child_owner(crate::sched::current()).unwrap_or(0), Ordering::Relaxed);
                 if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
                     // Read the fields back: a write that silently did not land looks
                     // exactly like a control message the receiver "dropped".
