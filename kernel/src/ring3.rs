@@ -7063,7 +7063,10 @@ pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
         let page = addr & !0xFFF;
         if let Some((phys, writable)) = crate::paging::demand_pte(pml4, page) {
             if !writable {
-                let fresh = match crate::procpool::demand_alloc() { Some(f) => f, None => return false };
+                let fresh = match crate::procpool::demand_alloc() {
+                    Some(f) => f,
+                    None => { crate::serial_println!("[pcache] CoW-break alloc FAILED at {page:#x}"); return false }
+                };
                 // SAFETY: both frames identity-mapped, 4 KiB.
                 unsafe { core::ptr::copy_nonoverlapping(phys as *const u8, fresh as *mut u8, 4096); }
                 if !crate::paging::map_demand_4k(pml4, page, fresh) {
@@ -7221,6 +7224,7 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
                     if let Some(cphys) = disk_cache_get(key) {
                         crate::procpool::demand_free(phys);
                         if !crate::paging::map_demand_4k_ro(pml4, page, cphys) {
+                            crate::serial_println!("[pcache] map_ro FAILED at {page:#x} (pool dry?)");
                             return false;
                         }
                         unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }

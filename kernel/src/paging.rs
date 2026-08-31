@@ -709,6 +709,18 @@ pub fn clone_demand_region(parent: u64, child: u64, idx: usize) -> bool {
                         | ((i3 as u64) << 30)
                         | ((i2 as u64) << 21)
                         | ((i1 as u64) << 12);
+                    // A READ-ONLY page is a shared disk-cache frame: the child
+                    // maps the SAME frame read-only (CoW on write) instead of
+                    // copying it. This is what makes fork affordable with the
+                    // page cache: copying the parent's whole RO-mapped text set
+                    // (hundreds of MB) exhausted the pool and later cache-hit
+                    // mappings failed silently (run 16 ifetch terminations).
+                    if e1 & WRITABLE == 0 {
+                        if !map_demand_4k_ro(child, va, src) {
+                            return false;
+                        }
+                        continue;
+                    }
                     let dst = match crate::procpool::demand_alloc() {
                         Some(f) => f,
                         None => return false,
