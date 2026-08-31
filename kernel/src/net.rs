@@ -1734,6 +1734,16 @@ pub fn unix_recv(ep: UnixEndpoint, max: usize) -> Result<alloc::vec::Vec<u8>, Un
 pub fn unix_readable(ep: UnixEndpoint) -> bool {
     UNIX_SWITCH.lock().readable(ep)
 }
+/// The unix fd NUMBERS currently open (UNIX_FD_BASE-relative slots occupied) —
+/// the fork snapshot needs them so a live child's inherited channel end is not
+/// endpoint-closed by the parent's routine post-fork close.
+pub fn unix_fds_open() -> alloc::vec::Vec<u64> {
+    UNIX_FDS.lock().iter().enumerate()
+        .filter(|(_, s)| s.is_some())
+        .map(|(i, _)| UNIX_FD_BASE + i as u64)
+        .collect()
+}
+
 /// POSIX EOF for a unix fd: stream drained AND peer closed — a read/recvmsg then
 /// returns 0, never EAGAIN (an EAGAIN here left epoll's level-triggered EOF
 /// readability unconsumable: chrome's IOThread livelocked on it, run 20).

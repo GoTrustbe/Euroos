@@ -4006,10 +4006,10 @@ pub fn unalias_fd(fd: u64) -> u64 {
 /// is DEFERRED (see close(3)) so the number cannot be reallocated while the
 /// child still owns it. Entries drop when the child exits; the exit path then
 /// really frees every deferred fd no remaining child inherited.
-static FORK_INHERITED: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u16>)>> =
+static FORK_INHERITED: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u32>)>> =
     Mutex::new(alloc::vec::Vec::new());
 /// Fds the parent has closed but whose slot is kept alive for inheriting children.
-static DEFERRED_CLOSE: Mutex<alloc::vec::Vec<u16>> = Mutex::new(alloc::vec::Vec::new());
+static DEFERRED_CLOSE: Mutex<alloc::vec::Vec<u32>> = Mutex::new(alloc::vec::Vec::new());
 
 /// Actually release fd `a1`: epoll, eventfd, socket, AF_UNIX socket, or VFS file.
 /// (The class dispatch that close(3) used to do inline; also called by the
@@ -4036,10 +4036,10 @@ fn close_fd_now(a1: u64) -> u64 {
 /// deferred parent-close no remaining live child inherited.
 fn fork_child_release_fds(child_task: usize) {
     FORK_INHERITED.lock().retain(|(t, _)| *t != child_task);
-    let flush: alloc::vec::Vec<u16> = {
+    let flush: alloc::vec::Vec<u32> = {
         let inh = FORK_INHERITED.lock();
         let mut d = DEFERRED_CLOSE.lock();
-        let (keep, flush): (alloc::vec::Vec<u16>, alloc::vec::Vec<u16>) =
+        let (keep, flush): (alloc::vec::Vec<u32>, alloc::vec::Vec<u32>) =
             d.iter().partition(|fd| inh.iter().any(|(_, set)| set.contains(fd)));
         *d = keep;
         flush
@@ -6952,11 +6952,20 @@ fn do_glibc_fork() -> u64 {
         // it), the table filled up, and dup() died with EMFILE -> chrome CHECK
         // abort (run 8).
         let deferred = DEFERRED_CLOSE.lock().clone();
-        let set: alloc::vec::Vec<u16> = (3..ceil)
+        let mut set: alloc::vec::Vec<u32> = (3..ceil)
             .filter(|&fd| (open[fd].is_some() || pipes[fd].is_some() || dirs[fd].is_some())
-                && !deferred.contains(&(fd as u16)))
-            .map(|fd| fd as u16)
+                && !deferred.contains(&(fd as u32)))
+            .map(|fd| fd as u32)
             .collect();
+        // UNIX socket fds (600+) are inherited exactly the same way: chrome's
+        // launcher closes ITS copy of the child's channel end right after fork,
+        // and endpoint-closing it then makes the live child's channel read EOF
+        // (run 21: every service child died on read()=0 the moment the browser
+        // did its routine post-fork close). Defer those too.
+        drop(open); drop(pipes); drop(dirs);
+        set.extend(crate::net::unix_fds_open().into_iter()
+            .filter(|fd| !deferred.contains(&(*fd as u32)))
+            .map(|fd| fd as u32));
         FORK_INHERITED.lock().push((child, set));
     }
     crate::serial_println!(
@@ -10332,12 +10341,10 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // remember the fd, and really free it when the last inheriting child
             // exits. The parent itself closed it and never touches it again, so
             // the number staying resolvable costs nothing.
-            if a1 < crate::net::SOCK_FD_BASE
-                && FORK_INHERITED.lock().iter().any(|(_, set)| set.contains(&(a1 as u16)))
-            {
+            if FORK_INHERITED.lock().iter().any(|(_, set)| set.contains(&(a1 as u32))) {
                 let mut d = DEFERRED_CLOSE.lock();
-                if !d.contains(&(a1 as u16)) {
-                    d.push(a1 as u16);
+                if !d.contains(&(a1 as u32)) {
+                    d.push(a1 as u32);
                 }
                 return 0;
             }
