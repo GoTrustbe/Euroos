@@ -312,6 +312,17 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     serial_println!("========== NMI PROBE (wedge RIP capture) ==========");
     serial_println!("[nmi] interrupted RIP={rip:#018x} CS={cs:#x} RSP={rsp:#018x} RFLAGS={:#x}", rflags.bits());
     serial_println!("[nmi] anchor kernel_base ~ nmi_handler @ {:#018x}", nmi_handler as usize as u64);
+    // The INSTRUCTIONS at the wedge: a lock spin (pause;jmp / cmpxchg) and a
+    // poll loop (cmp mem;jne) look identical from the outside; 32 bytes of code
+    // tell them apart at a glance.
+    {
+        let mut b = [0u8; 32];
+        for (i, bi) in b.iter_mut().enumerate() {
+            *bi = unsafe { ((rip + i as u64) as *const u8).read_volatile() };
+        }
+        serial_println!("[nmi] code at rip: {:02x?}", &b[..16]);
+        serial_println!("[nmi]              {:02x?}", &b[16..]);
+    }
     // WHO is wedged: the running task, its name, its last syscall, and whose
     // per-process state is loaded — the holder of whatever lock the spin waits
     // on is almost always identified by these four.
