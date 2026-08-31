@@ -316,12 +316,28 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     // poll loop (cmp mem;jne) look identical from the outside; 32 bytes of code
     // tell them apart at a glance.
     {
+        // The loop body usually lies BEFORE the sampled rip (a trailing
+        // `jmp -N` is where the NMI lands): dump rip-16..rip+16, and decode a
+        // `mov r64, [rip+disp32]` (48 8b /r with mod=00 rm=101) anywhere in the
+        // window - the absolute address of the polled static identifies WHICH
+        // flag/lock the wedge waits on.
+        let base = rip.wrapping_sub(16);
         let mut b = [0u8; 32];
         for (i, bi) in b.iter_mut().enumerate() {
-            *bi = unsafe { ((rip + i as u64) as *const u8).read_volatile() };
+            *bi = unsafe { ((base + i as u64) as *const u8).read_volatile() };
         }
-        serial_println!("[nmi] code at rip: {:02x?}", &b[..16]);
-        serial_println!("[nmi]              {:02x?}", &b[16..]);
+        serial_println!("[nmi] code rip-16..: {:02x?}", &b[..16]);
+        serial_println!("[nmi] code rip..   : {:02x?}", &b[16..]);
+        let mut i = 0usize;
+        while i + 7 <= 32 {
+            if b[i] == 0x48 && b[i + 1] == 0x8b && (b[i + 2] & 0xC7) == 0x05 {
+                let disp = i32::from_le_bytes([b[i + 3], b[i + 4], b[i + 5], b[i + 6]]);
+                let insn_end = base + i as u64 + 7;
+                let tgt = insn_end.wrapping_add(disp as i64 as u64);
+                serial_println!("[nmi] polled static @ {tgt:#018x} (rip-relative mov at rip{:+})", i as i64 - 16);
+            }
+            i += 1;
+        }
     }
     // WHO is wedged: the running task, its name, its last syscall, and whose
     // per-process state is loaded — the holder of whatever lock the spin waits
