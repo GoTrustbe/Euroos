@@ -480,6 +480,15 @@ fn sock_peer(fd: u64) -> Option<u64> {
     })
 }
 
+/// Are descriptors waiting for `fd`? A sendmsg can carry ONLY SCM_RIGHTS
+/// (0 data bytes — chrome's Mojo does this during the child handshake, seen as
+/// "delivering 0 data bytes"). Those never enter the unix byte stream, so
+/// byte-based readiness said "empty", epoll never fired, the browser never
+/// recvmsg'd, and the child hit its connect deadline. Readiness must count them.
+fn scm_pending_for(fd: u64) -> bool {
+    SCM_PENDING.lock().iter().any(|&(f, _)| f == fd)
+}
+
 /// Take the descriptors sent to `fd` (in order).
 fn scm_take(fd: u64) -> alloc::vec::Vec<u64> {
     let mut q = SCM_PENDING.lock();
@@ -1293,7 +1302,10 @@ fn epoll_fd_ready(fd: u64) -> bool {
         // to run.
         crate::net::sock_readable(fd)
     } else if crate::net::is_unix_fd(fd) {
-        crate::net::unix_fd_readable(fd)
+        // Readable when bytes OR in-flight SCM_RIGHTS descriptors are queued: a
+        // descriptors-only Mojo handshake message carries 0 data bytes and was
+        // invisible to byte-based readiness (the MP child-connect stall).
+        crate::net::unix_fd_readable(fd) || scm_pending_for(fd)
     } else if (fd as usize) < MAX_FD && is_pipe_fd(fd as usize) {
         match PIPE_FDS.lock()[fd as usize] {
             Some((id, false)) => !PIPES.lock()[id].is_empty(), // read end w/ data
