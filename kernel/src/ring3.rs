@@ -652,6 +652,11 @@ fn cdp_send(msg: &str) {
     if id == usize::MAX {
         return;
     }
+    // IF=0 while the pipe locks are held: this runs on TASK 0 (IF=1), and the
+    // timer parking us mid-lock left the DevTools reader spinning forever on
+    // PIPE_WAITERS (run 36's NMI: polled static = PIPE_WAITERS, holder = the
+    // preempted pump). Same freeze family as the fd locks - same cure.
+    let _g = crate::sched::IfOffGuard::new();
     {
         let mut pipes = PIPES.lock();
         pipes[id].extend_from_slice(msg.as_bytes());
@@ -1465,6 +1470,7 @@ fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
     if fd >= MAX_FD {
         return None;
     }
+    let _g = crate::sched::IfOffGuard::new();
     if let Some((id, true)) = PIPE_FDS.lock()[fd] {
         PIPES.lock()[id].extend_from_slice(bytes);
         // Wake any tasks blocked reading this pipe.
@@ -1516,6 +1522,7 @@ fn pipe_read_blocking(fd: usize, buf: u64, len: usize) -> Option<u64> {
         }
         let cur = crate::sched::current();
         {
+            let _g = crate::sched::IfOffGuard::new();
             let mut w = PIPE_WAITERS.lock();
             if !w.iter().any(|&(pid, t)| pid == id && t == cur) {
                 w.push((id, cur));
