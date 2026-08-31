@@ -2443,6 +2443,12 @@ fn main() -> Status {
                   // of demand-paged procs, currently ENOSYS on the glibc path) or software-
                   // compositor bring-up. hshell running to exit 0 is the current landmark.
                   b"--disable-vulkan", b"--ozone-platform=headless",
+                  // Children died "Terminating current process after 15 seconds
+                  // with no connection" (run 17): the Mojo handshake DOES run
+                  // (scm traffic both ways) but the browser services it slower
+                  // than chrome's 15 s child-connection deadline under TCG.
+                  // Give the handshake the time the emulation actually needs.
+                  b"--ipc-connection-timeout=120",
                   // ── SINGLE-PROCESS: run renderer/utility/GPU all IN the browser process
                   // so chrome NEVER forks a helper child. The default (forking) path
                   // livelocks: chrome forks helpers, they never execve into functional
