@@ -1748,6 +1748,31 @@ pub fn dump_suspect_addrs() {
     macro_rules! a { ($f:expr, $n:expr) => { crate::serial_println!("[addr] {:#018x}  {}", $f as usize as u64, $n); } }
     a!(handle_demand_fault, "handle_demand_fault");
     a!(disk_read_bytes, "disk_read_bytes");
+    // The MP-campaign additions, so an NMI wedge RIP brackets tightly (run 27:
+    // 4/4 samples at ONE rip between demand_readahead and pipe_read_blocking —
+    // a spinlock self-deadlock in this very neighbourhood).
+    a!(demand_readahead, "demand_readahead");
+    a!(alloc_low_fd, "alloc_low_fd");
+    a!(open_low_fd, "open_low_fd");
+    a!(pipe_create2, "pipe_create2");
+    a!(fd_is_aliased, "fd_is_aliased");
+    a!(child_note_open, "child_note_open");
+    a!(child_close_own, "child_close_own");
+    a!(child_opened_release, "child_opened_release");
+    a!(disk_cache_get, "disk_cache_get");
+    a!(disk_cache_put, "disk_cache_put");
+    a!(shared_phys_sorted, "shared_phys_sorted");
+    a!(ensure_globals_for_current, "ensure_globals_for_current");
+    a!(child_mem_swap, "child_mem_swap");
+    a!(fork_child_owner, "fork_child_owner");
+    a!(scm_pending_for, "scm_pending_for");
+    a!(scm_take, "scm_take");
+    a!(crate::net::unix_fd_at_eof, "net::unix_fd_at_eof");
+    a!(crate::net::unix_fds_open, "net::unix_fds_open");
+    a!(fork_child_release_fds, "fork_child_release_fds");
+    a!(close_fd_now, "close_fd_now");
+    a!(dup2_fd, "dup2_fd");
+    a!(unalias_fd, "unalias_fd");
     a!(futex_wait, "futex_wait");
     a!(futex_wake, "futex_wake");
     a!(vfs_read, "vfs_read");
