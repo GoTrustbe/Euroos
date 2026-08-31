@@ -9557,21 +9557,43 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // whole browser) and its 256 MiB arena was lost to the pool forever
             // (the third fork failed at 127 MiB free).
             {
+                // Resolve through fork_child_owner: exit_group by ANY task of a
+                // fork child (its main OR one of its worker THREADS) must end
+                // that CHILD process. A child worker's exit_group used to miss
+                // this branch (it only matched the child main) and fell through
+                // to the main-process path below - ending the WHOLE browser with
+                // exit 0, nondeterministically by whichever child finished first
+                // (the early clean exits of runs 9/16/18/19).
+                let owner = fork_child_owner(cur);
                 let hit = {
                     let g = GLIBC_FORK_CHILDREN.lock();
-                    g.iter().position(|&(_, t, _, _, _)| t == cur).map(|i| g[i])
+                    owner.and_then(|o| g.iter().position(|&(_, t, _, _, _)| t == o)).map(|i| g[i])
                 };
-                if let Some((pid, _t, pml4, arena, frames)) = hit {
+                if let Some((pid, ctask, pml4, arena, frames)) = hit {
+                    // The whole child dies: its OTHER threads too, exactly like kill().
+                    let threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter()
+                        .filter(|&&(_, m)| m == ctask).map(|&(t, _)| t).collect();
+                    for t in threads {
+                        if t != cur {
+                            free_thread_kstack(t);
+                            crate::sched::mark_dead(t);
+                        }
+                    }
+                    if cur != ctask {
+                        // The caller is a worker: the child MAIN dies with it.
+                        free_thread_kstack(ctask);
+                        crate::sched::mark_dead(ctask);
+                    }
                     crate::serial_println!("[fork] child pid {pid} (task {cur}) exit({a1}) — arena recycled ({} MiB back to pool)", frames / 256);
                     // Record the exit for wait4: WEXITSTATUS lives in bits 8..16.
                     GLIBC_CHILD_EXITS.lock().push((pid, ((a1 as u32) & 0xff) << 8));
-                    globals_release_owner(cur); // parent state back BEFORE the drop
+                    globals_release_owner(ctask); // parent state back BEFORE the drop
                     GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
-                    FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != cur);
-                    child_mem_drop(cur);
-                    CHILD_THREADS.lock().retain(|&(_, m)| m != cur);
-                    fork_child_release_fds(cur); // flush deferred parent closes
-                    child_opened_release(cur);   // free the fds the child opened
+                    FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != ctask);
+                    child_mem_drop(ctask);
+                    CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
+                    fork_child_release_fds(ctask); // flush deferred parent closes
+                    child_opened_release(ctask);   // free the fds the child opened
                     // Give the child's COMMITTED demand pages back: without this every
                     // dead child leaked its pages and the pool ran dry at ~524 MiB
                     // under MP relaunch churn (run 12 POOL EXHAUSTED).
