@@ -486,11 +486,13 @@ fn sock_peer(fd: u64) -> Option<u64> {
 /// byte-based readiness said "empty", epoll never fired, the browser never
 /// recvmsg'd, and the child hit its connect deadline. Readiness must count them.
 fn scm_pending_for(fd: u64) -> bool {
-    SCM_PENDING.lock().iter().any(|&(f, _)| f == fd)
+    x86_64::instructions::interrupts::without_interrupts(||
+        SCM_PENDING.lock().iter().any(|&(f, _)| f == fd))
 }
 
 /// Take the descriptors sent to `fd` (in order).
 fn scm_take(fd: u64) -> alloc::vec::Vec<u64> {
+    let _g = crate::sched::IfOffGuard::new();
     let mut q = SCM_PENDING.lock();
     let mut out = alloc::vec::Vec::new();
     let mut i = 0;
@@ -1980,6 +1982,7 @@ static CHILD_OPENED: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u16>)>> =
     Mutex::new(alloc::vec::Vec::new());
 
 fn child_note_open(fd: usize) {
+    let _g = crate::sched::IfOffGuard::new();
     let cur = crate::sched::current();
     if let Some(owner) = fork_child_owner(cur) {
         let mut g = CHILD_OPENED.lock();
@@ -1996,6 +1999,7 @@ fn child_note_open(fd: usize) {
 /// close() by a fork child: if the fd is one the CHILD itself opened, really
 /// free it and report true; else (an inherited fd) the caller mark-closes it.
 fn child_close_own(fd: u64) -> bool {
+    let _g = crate::sched::IfOffGuard::new();
     let cur = crate::sched::current();
     let Some(owner) = fork_child_owner(cur) else { return false };
     let mut g = CHILD_OPENED.lock();
@@ -2023,11 +2027,13 @@ static DISK_PAGE_CACHE: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::v
 static DISK_CACHE_HITS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 fn disk_cache_get(key: u64) -> Option<u64> {
+    let _g = crate::sched::IfOffGuard::new();
     let c = DISK_PAGE_CACHE.lock();
     c.binary_search_by_key(&key, |&(k, _)| k).ok().map(|i| c[i].1)
 }
 
 fn disk_cache_put(key: u64, phys: u64) {
+    let _g = crate::sched::IfOffGuard::new();
     let mut c = DISK_PAGE_CACHE.lock();
     if let Err(i) = c.binary_search_by_key(&key, |&(k, _)| k) {
         c.insert(i, (key, phys));
@@ -2057,6 +2063,7 @@ fn shared_phys_sorted() -> alloc::vec::Vec<u64> {
 
 /// A fork child is gone: free every low fd it opened and still had open.
 fn child_opened_release(owner: usize) {
+    let _g = crate::sched::IfOffGuard::new();
     let set = {
         let mut g = CHILD_OPENED.lock();
         match g.iter().position(|(o, _)| *o == owner) {
@@ -4030,12 +4037,18 @@ static FD_ALIAS: Mutex<alloc::vec::Vec<(u16, u64)>> = Mutex::new(alloc::vec::Vec
 
 /// Resolve a possibly-aliased fd to the real (class-encoded) fd.
 pub fn unalias_fd(fd: u64) -> u64 {
-    if fd < MAX_FD as u64 {
-        if let Some(&(_, real)) = FD_ALIAS.lock().iter().find(|&&(f, _)| f as u64 == fd) {
-            return real;
+    // IF=0 while the lock is held: blocking waits (pipe/futex/epoll sleeps)
+    // leave their arm at IF=1 afterwards, and ANY ring3 spinlock taken
+    // preemptibly can park its holder forever (the run 26-31 freeze family).
+    // Every helper in this lock family disables interrupts itself.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if fd < MAX_FD as u64 {
+            if let Some(&(_, real)) = FD_ALIAS.lock().iter().find(|&&(f, _)| f as u64 == fd) {
+                return real;
+            }
         }
-    }
-    fd
+        fd
+    })
 }
 
 /// Low fds that were OPEN at the moment a still-living fork child was created:
@@ -4072,6 +4085,7 @@ fn close_fd_now(a1: u64) -> u64 {
 /// A fork child exited: drop its inherited-fd record and really free every
 /// deferred parent-close no remaining live child inherited.
 fn fork_child_release_fds(child_task: usize) {
+    let _g = crate::sched::IfOffGuard::new();
     FORK_INHERITED.lock().retain(|(t, _)| *t != child_task);
     let flush: alloc::vec::Vec<u32> = {
         let inh = FORK_INHERITED.lock();
@@ -4094,10 +4108,12 @@ fn fork_child_release_fds(child_task: usize) {
 /// again. Handing it out is exactly chrome's "Crashing due to FD ownership
 /// violation" CHECK (seen in the multi-process network service, run 3).
 fn fd_is_aliased(fd: usize) -> bool {
-    FD_ALIAS.lock().iter().any(|&(f, _)| f as usize == fd)
+    x86_64::instructions::interrupts::without_interrupts(||
+        FD_ALIAS.lock().iter().any(|&(f, _)| f as usize == fd))
 }
 
 fn fd_alias_set(nfd: usize, real: u64) {
+    let _g = crate::sched::IfOffGuard::new();
     let mut al = FD_ALIAS.lock();
     if let Some(e) = al.iter_mut().find(|(f, _)| *f as usize == nfd) {
         e.1 = real;
@@ -4107,6 +4123,7 @@ fn fd_alias_set(nfd: usize, real: u64) {
 }
 
 fn fd_alias_clear(fd: usize) -> bool {
+    let _g = crate::sched::IfOffGuard::new();
     let mut al = FD_ALIAS.lock();
     let n = al.len();
     al.retain(|&(f, _)| f as usize != fd);
@@ -6631,6 +6648,7 @@ static FORK_CHILD_CLOSED: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u64>)>> 
     Mutex::new(alloc::vec::Vec::new());
 
 fn fork_child_mark_closed(fd: u64) {
+    let _g = crate::sched::IfOffGuard::new();
     let cur = crate::sched::current();
     let mut g = FORK_CHILD_CLOSED.lock();
     if let Some((_, set)) = g.iter_mut().find(|(t, _)| *t == cur) {

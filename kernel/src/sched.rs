@@ -378,6 +378,26 @@ static FPU_VALID: [AtomicBool; MAX_TASKS] = [const { AtomicBool::new(false) }; M
 // that path is byte-for-byte the verified SSE-only behavior.
 static AVX_ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// RAII interrupt-off guard: disables interrupts on creation and restores the
+/// PREVIOUS state on drop. For ring3's spinlock helpers: a lock held with IF=1
+/// can have its holder parked by the timer forever, freezing every later IF=0
+/// spinner (the chrome-MP freeze family).
+pub struct IfOffGuard(bool);
+impl IfOffGuard {
+    pub fn new() -> Self {
+        let was = x86_64::instructions::interrupts::are_enabled();
+        x86_64::instructions::interrupts::disable();
+        IfOffGuard(was)
+    }
+}
+impl Drop for IfOffGuard {
+    fn drop(&mut self) {
+        if self.0 {
+            x86_64::instructions::interrupts::enable();
+        }
+    }
+}
+
 /// Whether AVX was enabled at boot (for the System panel / diagnostics).
 pub fn avx_enabled() -> bool {
     AVX_ENABLED.load(Ordering::Relaxed)
