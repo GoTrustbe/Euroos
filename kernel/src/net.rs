@@ -1734,6 +1734,16 @@ pub fn unix_recv(ep: UnixEndpoint, max: usize) -> Result<alloc::vec::Vec<u8>, Un
 pub fn unix_readable(ep: UnixEndpoint) -> bool {
     UNIX_SWITCH.lock().readable(ep)
 }
+/// POSIX EOF for a unix fd: stream drained AND peer closed — a read/recvmsg then
+/// returns 0, never EAGAIN (an EAGAIN here left epoll's level-triggered EOF
+/// readability unconsumable: chrome's IOThread livelocked on it, run 20).
+pub fn unix_fd_at_eof(fd: u64) -> bool {
+    let t = UNIX_FDS.lock();
+    match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
+        Some(UnixSock::Stream(e)) => UNIX_SWITCH.lock().at_eof(*e),
+        _ => false,
+    }
+}
 /// Close an endpoint.
 pub fn unix_close(ep: UnixEndpoint) {
     UNIX_SWITCH.lock().close(ep)

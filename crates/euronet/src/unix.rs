@@ -198,6 +198,18 @@ impl Switchboard {
         }
     }
 
+    /// TRUE end-of-stream: nothing left to read AND the peer is closed. This is
+    /// the "readable" that must turn into a 0-byte read (POSIX EOF), never EAGAIN.
+    pub fn at_eof(&self, ep: Endpoint) -> bool {
+        let Ok(c) = self.conn_ref(ep) else {
+            return true;
+        };
+        match ep.side {
+            Side::A => c.b_to_a.is_empty() && !c.b_open,
+            Side::B => c.a_to_b.is_empty() && !c.a_open,
+        }
+    }
+
     /// Number of immediately readable bytes for `ep` (without EOF).
     pub fn available(&self, ep: Endpoint) -> usize {
         self.conn_ref(ep).map_or(0, |c| match ep.side {
