@@ -7819,7 +7819,10 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // emulation. Unknown feature names are ignored harmlessly, so the list names
     // every plausible spelling.
     b"--disable-features=SafeBrowsing,OptimizationHints,SegmentationPlatform,MediaRouter,Translate,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,MojoUseEventFd,PageContentAnnotations,HistoryEmbeddings,PageEmbeddings,AnnotatedPageContentExtraction,AIPageContent,TextEmbedder,PageContentExtraction,OptimizationGuideModelDownloading,OptimizationTargetPrediction,PageVisibility,ModelExecution",
-    b"file:///tmp/euro.html",
+    // THE REAL SITE over the kernel netstack (usernet + the euro-os.eu hosts
+    // entry): the 2026-08-26 run proved the site renders; retest on the
+    // post-campaign kernel where the whole fd/EOF/lock substrate is stable.
+    b"https://euro-os.eu/",
 ];
 pub const CHROME_ENVP: &[&[u8]] = &[
     b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
