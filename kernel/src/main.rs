@@ -2409,8 +2409,15 @@ fn main() -> Status {
             const HS_MULTI_PROCESS: bool = true;
             let gl_args: &[&[u8]] = if sched::avx_enabled() {
                 if HS_MULTI_PROCESS {
+                    // GPU stays IN-PROCESS even in MP: a GPU *child* must re-exec
+                    // + demand-page the whole 180 MB binary before it can answer,
+                    // which under TCG overruns chrome's GPU launch timeout — the
+                    // browser killed it 6x and gave up ("GPU process isn't
+                    // usable. Goodbye.", run 13). In-process GL is proven (run 2
+                    // frame); the RENDERER still runs out-of-process, which is
+                    // the multi-process win that matters.
                     &[b"--use-gl=angle", b"--use-angle=swiftshader",
-                      b"--enable-unsafe-swiftshader"]
+                      b"--enable-unsafe-swiftshader", b"--in-process-gpu"]
                 } else {
                     &[b"--use-gl=angle", b"--use-angle=swiftshader",
                       b"--enable-unsafe-swiftshader", b"--in-process-gpu"]
