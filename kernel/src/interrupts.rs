@@ -312,6 +312,15 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     serial_println!("========== NMI PROBE (wedge RIP capture) ==========");
     serial_println!("[nmi] interrupted RIP={rip:#018x} CS={cs:#x} RSP={rsp:#018x} RFLAGS={:#x}", rflags.bits());
     serial_println!("[nmi] anchor kernel_base ~ nmi_handler @ {:#018x}", nmi_handler as usize as u64);
+    // WHO is wedged: the running task, its name, its last syscall, and whose
+    // per-process state is loaded — the holder of whatever lock the spin waits
+    // on is almost always identified by these four.
+    {
+        let cur = crate::sched::current();
+        let (sn, sa, sr) = crate::ring3::last_syscall(cur);
+        serial_println!("[nmi] current task {cur} {:?} last-syscall={sn}(a1={sa:#x})->{sr:#x} globals-owner={}",
+            crate::ring3::thread_name_pub(cur), crate::ring3::globals_owner_now());
+    }
     // Scan the interrupted stack for plausible kernel code return addresses (RBP
     // chains are unreliable in release). Kernel code lives high (>= 0x2000_0000).
     serial_println!("[nmi] stack scan (return addresses):");

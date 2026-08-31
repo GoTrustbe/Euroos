@@ -1773,6 +1773,12 @@ pub fn dump_suspect_addrs() {
     a!(close_fd_now, "close_fd_now");
     a!(dup2_fd, "dup2_fd");
     a!(unalias_fd, "unalias_fd");
+    a!(fd_alias_set, "fd_alias_set");
+    a!(fd_alias_clear, "fd_alias_clear");
+    a!(vfs_close, "vfs_close");
+    a!(crate::net::unix_fd_close, "net::unix_fd_close");
+    a!(crate::net::eventfd_close, "net::eventfd_close");
+    a!(fork_child_mark_closed, "fork_child_mark_closed");
     a!(futex_wait, "futex_wait");
     a!(futex_wake, "futex_wake");
     a!(vfs_read, "vfs_read");
@@ -6753,6 +6759,10 @@ fn globals_release_owner(owner: usize) {
 
 /// yield_now + re-establish the globals for whoever we are once we resume: while
 /// we slept another process' task may have loaded ITS state.
+/// NMI-probe helpers (diagnostics only).
+pub fn thread_name_pub(t: usize) -> String { thread_name(t) }
+pub fn globals_owner_now() -> usize { GLOBALS_OWNER.load(Ordering::Relaxed) }
+
 fn yield_reacquire() {
     // Preserve the caller's interrupt state across the yield. A syscall arm
     // runs with IF=0 (FMASK); yield_now re-enables to switch, and returning
