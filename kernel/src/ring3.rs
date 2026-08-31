@@ -849,7 +849,13 @@ pub fn cdp_pump() {
         // Every ~30 s of guest time: often enough that the runner's stall detector
         // sees a live guest even when chrome computes hard (guest ticks crawl then),
         // rare enough not to starve anything when the idle clock fast-forwards.
-        let ticks_1000 = waited / 3_000;
+        // /300, not /3000: in MP mode the guest is never idle (constant Mojo
+        // traffic), the idle clock never fast-forwards, and guest time crawls at
+        // ~60:1 - a 30-guest-second nudge cadence meant ~50 wall-minutes before
+        // the FIRST damage nudge (run 25: zero nudges in 3 hours; a static page
+        // produces no damage, so no screencast frame can ever arrive without
+        // them). 3 guest-seconds ~= 3 wall-minutes under load.
+        let ticks_1000 = waited / 300;
         if ticks_1000 > 0 && CDP_WAIT_MARK.swap(ticks_1000, Ordering::Relaxed) != ticks_1000 {
             crate::serial_println!("[cdp] still waiting for the frame ({} s of guest time)", waited / 100);
             // RECURRING damage while waiting. The capturer resolves its target a beat
@@ -883,7 +889,7 @@ pub fn cdp_pump() {
             }
         }
     }
-    if step == 7 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 600_000 {
+    if step == 7 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 60_000 {
         crate::serial_println!("[cdp] frames went unanswered — what is each thread waiting on?");
         let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
         let (mn, ma, mr) = last_syscall(main);
