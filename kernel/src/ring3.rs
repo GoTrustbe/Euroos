@@ -1943,6 +1943,17 @@ fn child_close_own(fd: u64) -> bool {
     false
 }
 
+/// Sorted list of every physical frame currently backing a SHARED (memfd)
+/// mapping — these must SURVIVE a process teardown (other processes map them).
+fn shared_phys_sorted() -> alloc::vec::Vec<u64> {
+    let mut v: alloc::vec::Vec<u64> = SHARED_FRAMES.lock().iter()
+        .flat_map(|(_, frames)| frames.iter().copied())
+        .filter(|&p| p != 0)
+        .collect();
+    v.sort_unstable();
+    v
+}
+
 /// A fork child is gone: free every low fd it opened and still had open.
 fn child_opened_release(owner: usize) {
     let set = {
@@ -4255,6 +4266,31 @@ fn dir_children(path: &str) -> alloc::vec::Vec<(String, bool)> {
         }
     }
     out
+}
+
+/// Resolve an *at-style path against its dirfd: a RELATIVE path joins the open
+/// directory's own path. chrome's sandbox thread_helpers opens /proc once and
+/// then stats "self/task/" RELATIVE to that fd; ignoring the dirfd made that
+/// ENOENT and the renderer died on the CHECK (run 12). AT_FDCWD or an absolute
+/// path passes through unchanged.
+fn resolve_at(dirfd: u64, path: alloc::vec::Vec<u8>) -> alloc::vec::Vec<u8> {
+    if path.first() == Some(&b'/') || dirfd as i32 == -100 || path.is_empty() {
+        return path;
+    }
+    let dir = if (dirfd as usize) < MAX_FD {
+        OPEN_DIRS.lock()[dirfd as usize].as_ref().map(|(p, _)| p.clone())
+    } else { None };
+    match dir {
+        Some(d) => {
+            let mut joined = d.into_bytes();
+            if joined.last() != Some(&b'/') {
+                joined.push(b'/');
+            }
+            joined.extend_from_slice(&path);
+            joined
+        }
+        None => path,
+    }
 }
 
 /// Open a DIRECTORY -> dir fd (registered in OPEN_DIRS), or u64::MAX if full.
@@ -6714,7 +6750,7 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     {
         use x86_64::registers::control::Cr3;
         let child_pml4 = Cr3::read().0.start_address().as_u64();
-        crate::paging::free_demand_region(child_pml4, DEMAND_PML4_IDX);
+        crate::paging::free_demand_region_except(child_pml4, DEMAND_PML4_IDX, &shared_phys_sorted());
         // Flush the TLB so the now-unmapped VAs re-fault.
         unsafe { Cr3::write(Cr3::read().0, Cr3::read().1); }
     }
@@ -9383,6 +9419,10 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     CHILD_THREADS.lock().retain(|&(_, m)| m != cur);
                     fork_child_release_fds(cur); // flush deferred parent closes
                     child_opened_release(cur);   // free the fds the child opened
+                    // Give the child's COMMITTED demand pages back: without this every
+                    // dead child leaked its pages and the pool ran dry at ~524 MiB
+                    // under MP relaunch churn (run 12 POOL EXHAUSTED).
+                    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &shared_phys_sorted());
                     crate::procpool::free_range(arena, frames);
                     crate::procpool::free(pml4);
                     free_thread_kstack(cur);
@@ -10199,6 +10239,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
                         fork_child_release_fds(ctask);
                         child_opened_release(ctask);
+                        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &shared_phys_sorted());
                         crate::procpool::free_range(arena, frames);
                         crate::procpool::free(pml4);
                         free_thread_kstack(ctask);
@@ -10795,9 +10836,10 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         }
         8 => vfs_lseek(a1 as usize, a2 as i64, a3),  // lseek(fd, offset, whence)
         257 => {
-            // openat(dirfd, path, flags, mode): ignore dirfd (AT_FDCWD). flags in a3.
+            // openat(dirfd, path, flags, mode): a RELATIVE path resolves against
+            // the dirfd's directory (resolve_at). flags in a3.
             // O_CREAT=0x40 creates; O_TRUNC=0x200 truncates; O_APPEND=0x400 -> at the end.
-            let path = user_cstr(a2, 256);
+            let path = resolve_at(a1, user_cstr(a2, 256));
             let flags = a3;
             // DNS-config census: every open of the resolver's config files, loudly.
             // Chrome reports DNS_PROBE_FINISHED_BAD_CONFIG without a single UDP
@@ -10967,8 +11009,8 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     (vfs_size(a1 as usize), a2, fi.map(|f| f as u64 + 1).unwrap_or(0))
                 }
             } else {
-                // newfstatat: path in a2, statbuf in a3.
-                let path = user_cstr(a2, 256);
+                // newfstatat: path in a2 (relative resolves against dirfd a1), statbuf in a3.
+                let path = resolve_at(a1, user_cstr(a2, 256));
                 ensure_proc(&path); // synthesize /proc on demand
                 // A DIRECTORY path matches no exact file — report S_IFDIR so callers
                 // that stat a dir before scanning it (fontconfig scanning
