@@ -2409,14 +2409,14 @@ fn main() -> Status {
             const HS_MULTI_PROCESS: bool = true;
             let gl_args: &[&[u8]] = if sched::avx_enabled() {
                 if HS_MULTI_PROCESS {
-                    // RUN 34: retest the REAL GPU child. The run-13 launch-timeout
-                    // cause (each child demand-paging the whole 180 MB binary) is
-                    // gone — the cross-process page cache launches children in
-                    // seconds, and the MP frame is proven with in-process GL
-                    // (run 33). If the GPU child initializes SwANGLE in its own
-                    // process, the full browser/GPU/renderer split is real.
+                    // The PROVEN MP configuration: in-process GPU (SwANGLE in the
+                    // browser) + OUT-OF-PROCESS renderer — this painted the run-33
+                    // frame. A real GPU child (runs 34-37) launches fast now (page
+                    // cache) and no longer crashes or freezes anything, but its
+                    // own SwANGLE bring-up still overruns the browser's relaunch
+                    // patience under TCG; future work, not the default.
                     &[b"--use-gl=angle", b"--use-angle=swiftshader",
-                      b"--enable-unsafe-swiftshader"]
+                      b"--enable-unsafe-swiftshader", b"--in-process-gpu"]
                 } else {
                     &[b"--use-gl=angle", b"--use-angle=swiftshader",
                       b"--enable-unsafe-swiftshader", b"--in-process-gpu"]
