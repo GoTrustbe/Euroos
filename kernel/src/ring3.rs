@@ -6597,10 +6597,18 @@ static CHILD_THREADS: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc:
 
 /// The fork-child main task that owns `task`'s address space, if any.
 fn fork_child_owner(task: usize) -> Option<usize> {
-    if GLIBC_FORK_CHILDREN.lock().iter().any(|&(_, t, _, _, _)| t == task) {
-        return Some(task);
-    }
-    CHILD_THREADS.lock().iter().find(|&&(t, _)| t == task).map(|&(_, m)| m)
+    // IF=0 around the locks: run 28's NMI pinned a total freeze to this very
+    // spin — yield_reacquire's ensure_globals path took these locks with
+    // interrupts ENABLED, the timer preempted mid-critical-section, and the
+    // next task's syscall (IF=0) spun forever on a lock whose holder could
+    // never be scheduled again. Every lock in the ownership family must be
+    // held with interrupts off, exactly like the syscall/fault contexts do.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if GLIBC_FORK_CHILDREN.lock().iter().any(|&(_, t, _, _, _)| t == task) {
+            return Some(task);
+        }
+        CHILD_THREADS.lock().iter().find(|&&(t, _)| t == task).map(|&(_, m)| m)
+    })
 }
 
 fn current_is_fork_child() -> bool {
@@ -6712,6 +6720,10 @@ static GLOBALS_OWNER: core::sync::atomic::AtomicUsize = core::sync::atomic::Atom
 /// owner is unchanged (the overwhelmingly common case). Task context only (the
 /// ChildMem locks are taken); at every call site no spinlock is held.
 fn ensure_globals_for_current() {
+    x86_64::instructions::interrupts::without_interrupts(ensure_globals_inner)
+}
+
+fn ensure_globals_inner() {
     let cur = crate::sched::current();
     let need = fork_child_owner(cur).unwrap_or(0);
     let have = GLOBALS_OWNER.load(Ordering::Relaxed);
@@ -6731,10 +6743,12 @@ fn ensure_globals_for_current() {
 /// before a child's ChildMem is dropped (exit/kill), else the parent's state
 /// would be destroyed with it.
 fn globals_release_owner(owner: usize) {
-    if GLOBALS_OWNER.load(Ordering::Relaxed) == owner {
-        child_mem_swap(owner);
-        GLOBALS_OWNER.store(0, Ordering::Relaxed);
-    }
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if GLOBALS_OWNER.load(Ordering::Relaxed) == owner {
+            child_mem_swap(owner);
+            GLOBALS_OWNER.store(0, Ordering::Relaxed);
+        }
+    })
 }
 
 /// yield_now + re-establish the globals for whoever we are once we resume: while
