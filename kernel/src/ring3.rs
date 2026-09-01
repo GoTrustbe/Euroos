@@ -892,6 +892,23 @@ pub fn cdp_pump() {
             // like a frame scheduler should - and then froze the machine, because
             // the pump runs with interrupts enabled and the dump takes the futex
             // spinlocks. The invariant holds: no ring3 spinlock from this context.)
+            // REBIND THE CAPTURER, once, a few ticks in. The trace counters said
+            // it plainly: the compositor pipeline is healthy (BeginFrame 2493,
+            // Commit 44, Draw 97, Swap 38, Submit 8 with Ack 8) but
+            // CopyOutputRequest is ZERO, and the run holds TWO FrameSinkIds and
+            // surfaces under two different embed tokens. The capturer is bound to
+            // the surface that existed when the screencast started - before the
+            // navigation - while the renderer draws into the one navigation
+            // created. Stop and start it again now that the page is the current
+            // surface, so the capturer resolves onto what is actually being drawn.
+            if ticks_1000 == 4 {
+                let dsid = CDP_SESSION.lock().clone();
+                crate::serial_println!("[cdp] rebinding the capturer to the post-navigation surface");
+                cdp_send(&alloc::format!(
+                    "{{\"id\":21,\"sessionId\":\"{dsid}\",\"method\":\"Page.stopScreencast\"}}"));
+                cdp_send(&alloc::format!(
+                    "{{\"id\":22,\"sessionId\":\"{dsid}\",\"method\":\"Page.startScreencast\",\"params\":{{\"format\":\"png\",\"everyNthFrame\":1}}}}"));
+            }
             if ticks_1000 % 3 == 0 {
                 // Every third wait-tick: constant damage keeps the renderer so busy
                 // under emulation that the capture pipeline itself starves.
