@@ -2464,6 +2464,39 @@ fn main() -> Status {
                   // the page). Disable gpu-compositing + accelerated video so the browser
                   // reaches PreMainMessageLoopRun and actually navigates.
                   b"--disable-accelerated-video-decode",
+                  // KEEP THE RENDERER IN THE FOREGROUND. The trace counters show
+                  // the whole run composites about eight frames: JavaScript runs
+                  // and answers instantly, but no new frame follows a DOM change,
+                  // so the capturer never sees damage and never copies anything.
+                  // That is a backgrounded/occluded renderer, which stops
+                  // producing frames by design - reasonable on a desktop, fatal
+                  // for a headless machine whose whole output is the capture.
+                  // Chrome named its own requirement: beginFrame is refused with
+                  // "Command is only supported if BeginFrameControl is enabled."
+                  // This flag pair was avoided for years because it changes the
+                  // contract - nothing renders unless frames are driven - but the
+                  // trace proves nothing renders anyway once the first handful of
+                  // frames is done. Driving them is now the correct contract.
+                  // SOFTWARE RASTER. With begin-frame control the first driven
+                  // frame is accepted and then hangs forever ("Another frame is
+                  // pending" for every later one), and the trace says why:
+                  // RasterTask=0 and Raster=0 while tiles ARE prepared. Nothing
+                  // ever rasterizes, so the frame can never complete. GPU raster
+                  // needs a GL context per raster worker; Skia's CPU rasterizer is
+                  // the path this machine has always been able to run.
+                  b"--disable-gpu-rasterization",
+                  // BEGIN-FRAME CONTROL IS OFF AGAIN. It got the copy path running
+                  // for the first time (CopyOutputRequest 0 -> 2, CopyOutputResult
+                  // 0 -> 6), but the driven frame itself never completes: chrome
+                  // accepts the first beginFrame and never answers it, so every
+                  // later one is refused with "Another frame is pending". Without
+                  // it the screencast contract applies again, which HAS delivered a
+                  // frame before - now paired with the foreground forcing that was
+                  // missing then.
+                  b"--disable-renderer-backgrounding",
+                  b"--disable-backgrounding-occluded-windows",
+                  b"--disable-background-timer-throttling",
+                  b"--force-renderer-accessibility",
                   b"--disable-features=VaapiVideoDecoder,VaapiVideoEncoder",
                   // MojoUseEventFd = chrome's eventfd shared-mem Mojo channel; its probe
                   // PCHECKs that eventfd2(invalid flags) FAILS, but our eventfd2 accepts

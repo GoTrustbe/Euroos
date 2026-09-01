@@ -884,8 +884,11 @@ pub fn cdp_pump() {
                 let dsid = CDP_SESSION.lock().clone();
                 cdp_send(&alloc::format!(
                     "{{\"id\":13,\"sessionId\":\"{dsid}\",\"method\":\"Page.bringToFront\"}}"));
-                cdp_send(&alloc::format!(
-                    "{{\"id\":14,\"sessionId\":\"{dsid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\",\"fromSurface\":false}}}}"));
+                // NO one-shot captureScreenshot here. Under begin-frame control
+                // chrome allows ONE frame request at a time, and this capture never
+                // returns on a machine with no natural frame source - so it sat in
+                // that slot forever and every driven frame afterwards was refused
+                // with "Another frame is pending". beginFrame is the only driver now.
             }
             // (A futex dump used to run here. It answered its question - the
             // compositor is NOT stuck, it cycles on a timed wait every 1-2 ticks
@@ -903,11 +906,34 @@ pub fn cdp_pump() {
             // surface, so the capturer resolves onto what is actually being drawn.
             if ticks_1000 == 4 {
                 let dsid = CDP_SESSION.lock().clone();
-                crate::serial_println!("[cdp] rebinding the capturer to the post-navigation surface");
+                crate::serial_println!("[cdp] rebinding the capturer + forcing the page foreground");
+                // Tell the page it is active and focused. A renderer that thinks
+                // it is hidden stops producing frames, which is exactly what the
+                // trace shows (JS answers, no new compositor frames follow).
+                cdp_send(&alloc::format!(
+                    "{{\"id\":23,\"sessionId\":\"{dsid}\",\"method\":\"Emulation.setFocusEmulationEnabled\",\"params\":{{\"enabled\":true}}}}"));
+                cdp_send(&alloc::format!(
+                    "{{\"id\":24,\"sessionId\":\"{dsid}\",\"method\":\"Page.setWebLifecycleState\",\"params\":{{\"state\":\"active\"}}}}"));
                 cdp_send(&alloc::format!(
                     "{{\"id\":21,\"sessionId\":\"{dsid}\",\"method\":\"Page.stopScreencast\"}}"));
                 cdp_send(&alloc::format!(
                     "{{\"id\":22,\"sessionId\":\"{dsid}\",\"method\":\"Page.startScreencast\",\"params\":{{\"format\":\"png\",\"everyNthFrame\":1}}}}"));
+            }
+            // DRIVE THE FRAME EXPLICITLY. This machine has no natural frame
+            // source: the compositor produces its first handful of frames and
+            // then, correctly, stops - nothing on a headless box asks for more.
+            // HeadlessExperimental.beginFrame exists for exactly that: it makes
+            // ONE frame happen and hands the screenshot back in the reply, so
+            // there is nothing to wait for. The trace justifies it: frames
+            // submit and get acked, but CopyOutputRequest never fires because
+            // no new frame is ever scheduled.
+            if ticks_1000 % 6 == 0 && ticks_1000 >= 6 {
+                let dsid = CDP_SESSION.lock().clone();
+                let cid = 1400 + ticks_1000;
+                // Screencast contract: ask for the picture directly. (beginFrame
+                // needs BeginFrameControl, which is off - see main.rs.)
+                cdp_send(&alloc::format!(
+                    "{{\"id\":{cid},\"sessionId\":\"{dsid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\",\"fromSurface\":true}}}}"));
             }
             if ticks_1000 % 3 == 0 {
                 // Every third wait-tick: constant damage keeps the renderer so busy
@@ -1099,8 +1125,13 @@ pub fn cdp_pump() {
                 }
                 None => crate::serial_println!("[cast] frame event without data: {}", msg.chars().take(200).collect::<String>()),
             }
-        } else if step == 7 && msg.contains("\"id\":14") && msg.contains("\"data\"") {
-            if let Some(b64) = json_str(&msg, "data") {
+        // ANY capture answer that carries data is the picture we asked for: the
+        // one-shot uses id 14 and each periodic retry a fresh id, so match on the
+        // payload instead of on a number.
+        } else if step == 7 && msg.contains("\"result\"")
+            && (msg.contains("\"data\"") || msg.contains("\"screenshotData\"")) {
+            // beginFrame answers with screenshotData; captureScreenshot with data.
+            if let Some(b64) = json_str(&msg, "screenshotData").or_else(|| json_str(&msg, "data")) {
                 crate::serial_println!("[cast] ★★★ ONE-SHOT CAPTURE ANSWERED: {} base64 chars", b64.len());
                 let mut i = 0;
                 while i < b64.len() {
