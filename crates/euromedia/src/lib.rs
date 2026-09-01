@@ -540,7 +540,8 @@ pub fn decode_png(data: &[u8]) -> Result<Image, PngError> {
         return Err(PngError::NotPng);
     }
     let mut pos = 8;
-    let (mut width, mut height, mut colour, mut depth) = (0u32, 0u32, 0u8, 0u8);
+    let (mut width, mut height, mut colour) = (0u32, 0u32, 0u8);
+    let mut depth;
     let mut idat: Vec<u8> = Vec::new();
     while pos + 8 <= data.len() {
         let len = ((data[pos] as usize) << 24)

@@ -1244,7 +1244,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
                 e.name.strip_prefix('v').and_then(|n| n.parse::<u32>().ok()).map(|n| (n, e.size, e.mtime))
             })
             .collect();
-        out.sort_unstable_by(|a, b| b.0.cmp(&a.0)); // newest first
+        out.sort_unstable_by_key(|e| core::cmp::Reverse(e.0)); // newest first
         Ok(out)
     }
 

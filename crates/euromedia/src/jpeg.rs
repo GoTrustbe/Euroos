@@ -171,6 +171,10 @@ fn extend(v: u32, s: u32) -> i32 {
 // ── 8×8 inverse DCT (separable, f32 with fixed constants) ───────────────────
 fn idct8x8(block: &[i32; 64], out: &mut [i32; 64]) {
     // cos((2x+1) u pi / 16) table, u=0..7 — precomputed constants.
+    // Some entries equal 1/sqrt(2) by arithmetic, but they are cosine values at
+    // specific angles, not that constant: writing FRAC_1_SQRT_2 in a few cells of
+    // an otherwise numeric table would hide the pattern the table exists to show.
+    #[allow(clippy::approx_constant)]
     const C: [[f32; 8]; 8] = [
         [1.0, 0.980785, 0.923880, 0.831470, 0.707107, 0.555570, 0.382683, 0.195090],
         [1.0, 0.831470, 0.382683, -0.195090, -0.707107, -0.980785, -0.923880, -0.555570],
@@ -315,6 +319,10 @@ pub fn decode_jpeg(data: &[u8]) -> Result<Image, JpegError> {
                     let pq = data[p] >> 4;
                     let tq = (data[p] & 0xF) as usize;
                     p += 1;
+                    // Indexed on purpose: `p` advances by one or two bytes per
+                    // entry depending on the precision, so this walks the table
+                    // slot by slot rather than iterating a slice.
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..64 {
                         let v = if pq == 0 {
                             let v = data[p] as u16;
@@ -403,7 +411,7 @@ fn decode_scan(
     }
 
     let mut br = BitReader::new(scan);
-    let mut block = [0i32; 64];
+    let mut block;
     let mut pixels = [0i32; 64];
     let mut mcu_count = 0usize;
 
@@ -416,6 +424,7 @@ fn decode_scan(
                     c.dc_pred = 0;
                 }
             }
+            #[allow(clippy::needless_range_loop)]
             for ci in 0..comps.len() {
                 let (h, v, tq, td, ta) =
                     (comps[ci].h, comps[ci].v, comps[ci].tq, comps[ci].td, comps[ci].ta);
@@ -489,7 +498,7 @@ fn decode_scan(
             let fy = ((128 * c.v * y + 64 * c.v) as i32 - 64 * vmax as i32) / vmax as i32;
             let (fx, fy) = (fx.max(0), fy.max(0));
             let (x0, y0) = ((fx >> 7) as usize, (fy >> 7) as usize);
-            let (dx, dy) = (((fx & 127)), ((fy & 127)));
+            let (dx, dy) = (fx & 127, fy & 127);
             let x1 = (x0 + 1).min(c.plane_w - 1);
             let y1 = (y0 + 1).min(c.plane_h - 1);
             let p00 = c.plane[y0 * c.plane_w + x0] as i32;

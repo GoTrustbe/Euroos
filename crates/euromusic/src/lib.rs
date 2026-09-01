@@ -166,7 +166,7 @@ impl Player {
     }
 
     /// Next track according to the repeat mode. Returns the new current index.
-    pub fn next(&mut self) -> Option<usize> {
+    pub fn next_index(&mut self) -> Option<usize> {
         if self.order.is_empty() {
             return None;
         }
@@ -253,20 +253,20 @@ mod tests {
     fn player_sequential_and_repeat_off() {
         let mut p = Player::new(alloc::vec![0, 1, 2]);
         assert_eq!(p.current(), Some(0));
-        assert_eq!(p.next(), Some(1));
-        assert_eq!(p.next(), Some(2));
-        assert_eq!(p.next(), None); // past the end
+        assert_eq!(p.next_index(), Some(1));
+        assert_eq!(p.next_index(), Some(2));
+        assert_eq!(p.next_index(), None); // past the end
     }
 
     #[test]
     fn player_repeat_all_and_one() {
         let mut p = Player::new(alloc::vec![0, 1, 2]);
         p.set_repeat(Repeat::All);
-        p.next();
-        p.next();
-        assert_eq!(p.next(), Some(0)); // wraps around
+        p.next_index();
+        p.next_index();
+        assert_eq!(p.next_index(), Some(0)); // wraps around
         p.set_repeat(Repeat::One);
-        assert_eq!(p.next(), Some(0)); // stays put
+        assert_eq!(p.next_index(), Some(0)); // stays put
         assert_eq!(p.prev(), Some(0));
     }
 
@@ -275,11 +275,11 @@ mod tests {
         // Play to the end with Repeat::Off (pos lands on len = "stopped"), then switch
         // to All and continue → must wrap to track 0, not 1.
         let mut p = Player::new(alloc::vec![0, 1, 2]);
-        assert_eq!(p.next(), Some(1));
-        assert_eq!(p.next(), Some(2));
-        assert_eq!(p.next(), None); // stopped past the end
+        assert_eq!(p.next_index(), Some(1));
+        assert_eq!(p.next_index(), Some(2));
+        assert_eq!(p.next_index(), None); // stopped past the end
         p.set_repeat(Repeat::All);
-        assert_eq!(p.next(), Some(0));
+        assert_eq!(p.next_index(), Some(0));
     }
 
     #[test]
@@ -297,7 +297,7 @@ mod tests {
         seen.push(p.current().unwrap());
         while let Some(n) = {
             p.set_repeat(Repeat::Off);
-            p.next()
+            p.next_index()
         } {
             seen.push(n);
         }
@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn shuffle_keeps_current_first() {
         let mut p = Player::new(alloc::vec![0, 1, 2, 3, 4]);
-        p.next(); // current = 1
+        p.next_index(); // current = 1
         p.set_shuffle(true, 7);
         assert_eq!(p.current(), Some(1)); // current stays at the front
     }

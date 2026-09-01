@@ -270,7 +270,7 @@ fn fill_block(
     }
     if with_xor {
         for i in 0..ARGON2_BLOCK_WORDS {
-            out[i] = block[i] ^ r[i] ^ out[i];
+            out[i] ^= block[i] ^ r[i];
         }
     } else {
         for i in 0..ARGON2_BLOCK_WORDS {
@@ -435,7 +435,7 @@ fn fill_segment(
         }
 
         let curr = lane * lane_len + slice * seg_len + i;
-        let prev = if curr % lane_len == 0 { curr + lane_len - 1 } else { curr - 1 };
+        let prev = if curr.is_multiple_of(lane_len) { curr + lane_len - 1 } else { curr - 1 };
 
         let rand = if data_independent { rand_di } else { mem[prev][0] };
         let j1 = rand & 0xffff_ffff;

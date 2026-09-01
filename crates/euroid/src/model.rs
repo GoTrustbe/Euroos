@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use crate::cred::PasswordRecord;
 use crate::{
-    Caps, GroupId, Timestamp, UserId, ALLOW_ALL, CAP_ALL, CAP_AGENT_SPAWN, CAP_AUDIT_READ, CAP_NET,
+    Caps, GroupId, Timestamp, UserId, CAP_ALL, CAP_AGENT_SPAWN, CAP_AUDIT_READ, CAP_NET,
     CAP_VAULT, GROUP_AGENT, GROUP_AUDIT, GROUP_NET, GROUP_USERS, GROUP_VAULT, GROUP_WHEEL,
 };
 
