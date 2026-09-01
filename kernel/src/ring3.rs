@@ -10868,6 +10868,41 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 None => (-24i64) as u64, // -EMFILE
             }
         }
+        271 => {
+            // ppoll(fds, nfds, *timespec, *sigmask, sigsetsize): poll with a
+            // nanosecond timeout. Real chrome's message pump uses THIS, not
+            // poll: the reference run on native Linux calls it 251 times while
+            // this kernel never saw it, because ENOSYS made glibc fall back.
+            // Same readiness logic, so convert the timespec to milliseconds and
+            // hand it to poll. A null timespec means "wait indefinitely" (-1);
+            // signals are not delivered here, so the mask is irrelevant.
+            let ms: u64 = if a3 == 0 {
+                (-1i64) as u64
+            } else {
+                let sec: u64 = read_user(a3).unwrap_or(0);
+                let nsec: u64 = read_user(a3 + 8).unwrap_or(0);
+                sec.saturating_mul(1000).saturating_add(nsec / 1_000_000)
+            };
+            return linux_dispatch_inner(7, a1, a2, ms, 0, 0);
+        }
+        80 => {
+            // chdir(path): the process working directory. Every path this kernel
+            // resolves is absolute, so there is nothing to change - but a real
+            // kernel answers, and a program that checks the result should not be
+            // told the call does not exist.
+            0
+        }
+        140 => {
+            // getpriority(which, who): nothing here is renice'd, so report the
+            // default. Linux returns 20 - nice, i.e. 20 for nice 0.
+            20
+        }
+        203 => {
+            // sched_setaffinity(pid, len, *mask): accepted and ignored. Pinning a
+            // thread to a core is advisory, and refusing it with ENOSYS made
+            // chrome log a failure for something it does not depend on.
+            0
+        }
         7 => {
             // poll(fds, nfds, timeout): report readiness. Each pollfd is 8 bytes
             // {i32 fd, i16 events, i16 revents}. For a UNIX/X socket fd: always
