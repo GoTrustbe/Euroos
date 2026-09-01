@@ -1116,7 +1116,11 @@ pub fn cdp_pump() {
             // What happens on the OTHER side of this ack? The capturer must resolve
             // its target and schedule a refresh capture on the viz thread; trace the
             // next syscalls to see whether that thread ever wakes and what it does.
-            SYS_TRACE_LEFT.store(140, Ordering::Relaxed);
+            // Trace OFF here: it fires exactly when the screencast starts, which
+            // is also when a child tends to abort - and its per-syscall lines
+            // interleave INTO chrome's stderr, drowning the CHECK message that
+            // says why. The trace is a debugging aid; the message is evidence.
+            SYS_TRACE_LEFT.store(0, Ordering::Relaxed);
             let dsid = CDP_SESSION.lock().clone();
             cdp_send(&alloc::format!(
                 "{{\"id\":9,\"sessionId\":\"{dsid}\",\"method\":\"Emulation.setDeviceMetricsOverride\",\"params\":{{\"width\":816,\"height\":616,\"deviceScaleFactor\":1,\"mobile\":false}}}}"));
@@ -1170,6 +1174,10 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     drop(pf);
     child_note_open(got[0]); // a fork child's own pipes free on its close/exit
     child_note_open(got[1]);
+    if flags & 0x8_0000 != 0 { // O_CLOEXEC on both ends
+        fd_set_cloexec(got[0] as u64, true);
+        fd_set_cloexec(got[1] as u64, true);
+    }
     // Access mode per pipe end, so fcntl(F_GETFL) reports the truth: chrome creates a
     // pipe and CHECKs each end's access mode (read end O_RDONLY, write end O_WRONLY);
     // a hardcoded O_RDWR for both was the mismatch that IMMEDIATE_CRASHed it.
@@ -2037,6 +2045,69 @@ fn open_low_fd(fi: usize) -> u64 {
             fd as u64
         }
         None => u64::MAX,
+    }
+}
+
+/// CLOSE-ON-EXEC descriptors, per owning process (0 = the launched main
+/// process): (owner, fd). POSIX closes these at execve, and chrome LEANS on it:
+/// a re-exec'd child asserts at startup that its descriptor table holds only
+/// what the launcher deliberately passed. We parsed O_CLOEXEC/SOCK_CLOEXEC/
+/// MFD_CLOEXEC everywhere and enforced none of it, so every child inherited a
+/// pile of descriptors it believed were gone and aborted with "Crashing due to
+/// FD ownership violation" (found on real hardware, where a full MP run costs
+/// a minute instead of half an hour).
+static FD_CLOEXEC: Mutex<alloc::vec::Vec<(usize, u32)>> = Mutex::new(alloc::vec::Vec::new());
+
+fn cloexec_owner() -> usize {
+    fork_child_owner(crate::sched::current()).unwrap_or(0)
+}
+
+/// Mark/unmark `fd` close-on-exec for the CURRENT process.
+fn fd_set_cloexec(fd: u64, on: bool) {
+    if fd >= MAX_FD as u64 && !crate::net::is_sock_fd(fd)
+        && !crate::net::is_unix_fd(fd) && !crate::net::is_eventfd(fd) && !is_epoll_fd(fd) {
+        return;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    let o = cloexec_owner();
+    let mut c = FD_CLOEXEC.lock();
+    let hit = c.iter().position(|&(ow, f)| ow == o && f as u64 == fd);
+    match (on, hit) {
+        (true, None) => c.push((o, fd as u32)),
+        (false, Some(i)) => { c.swap_remove(i); }
+        _ => {}
+    }
+}
+
+fn fd_is_cloexec(fd: u64) -> bool {
+    let _g = crate::sched::IfOffGuard::new();
+    let o = cloexec_owner();
+    FD_CLOEXEC.lock().iter().any(|&(ow, f)| ow == o && f as u64 == fd)
+}
+
+/// execve: close every close-on-exec descriptor of this process, exactly as a
+/// real kernel does, before the new image starts.
+fn cloexec_do_exec(owner: usize) {
+    let fds: alloc::vec::Vec<u32> = {
+        let _g = crate::sched::IfOffGuard::new();
+        let mut c = FD_CLOEXEC.lock();
+        let mine: alloc::vec::Vec<u32> = c.iter().filter(|&&(o, _)| o == owner).map(|&(_, f)| f).collect();
+        c.retain(|&(o, _)| o != owner);
+        mine
+    };
+    let n = fds.len();
+    for fd in fds {
+        let fd = fd as u64;
+        // The child's own descriptors really close; an inherited one is only
+        // closed FOR THIS PROCESS (the parent keeps its share) - the same split
+        // the rest of the fd model uses.
+        if !child_close_own(fd) {
+            fd_alias_clear(fd as usize);
+            fork_child_mark_closed(fd);
+        }
+    }
+    if n > 0 {
+        crate::serial_println!("[execve] closed {n} close-on-exec descriptor(s)");
     }
 }
 
@@ -4203,6 +4274,10 @@ fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
     if oldfd == newfd {
         return newfd;
     }
+    // POSIX: the duplicate does NOT inherit close-on-exec. This is exactly how
+    // a launcher hands a descriptor to its child: open it CLOEXEC, then dup2 it
+    // onto the agreed number so it SURVIVES the exec.
+    fd_set_cloexec(newfd, false);
     let nfd = newfd as usize;
     if nfd >= MAX_FD {
         return (-9i64) as u64; // -EBADF: can't target a class-encoded high fd
@@ -6927,6 +7002,8 @@ fn read_user_strvec(ptr: u64, max: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>
 /// The child arena + PML4 are reused; only their CONTENTS are rebuilt. Returns
 /// only on error — on success it retargets the current task to the new entry.
 fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
+    // POSIX: close-on-exec descriptors are gone the moment the new image starts.
+    cloexec_do_exec(fork_child_owner(crate::sched::current()).unwrap_or(0));
     let _path = user_cstr(path_ptr, 256); // usually "/proc/self/exe"
     let exe_path = CHILD_EXE_PATH.lock().clone();
     if exe_path.is_empty() {
@@ -7091,6 +7168,21 @@ fn do_glibc_fork() -> u64 {
     let pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     GLIBC_FORK_CHILDREN.lock().push((pid, child, pml4, child_arena, arena_frames));
     child_mem_snapshot(child); // the child inherits the parent's demand-state
+    // The child inherits the fd table INCLUDING its close-on-exec flags, so it
+    // inherits the marks too. Without this the marks stayed on the parent and a
+    // child's execve closed nothing (its own opens happen after exec).
+    {
+        let _g = crate::sched::IfOffGuard::new();
+        let parent = fork_child_owner(crate::sched::current()).unwrap_or(0);
+        let mut c = FD_CLOEXEC.lock();
+        let inherited: alloc::vec::Vec<u32> =
+            c.iter().filter(|&&(o, _)| o == parent).map(|&(_, f)| f).collect();
+        for fd in inherited {
+            if !c.iter().any(|&(o, f)| o == child && f == fd) {
+                c.push((child, fd));
+            }
+        }
+    }
     // Snapshot which LOW fd numbers are open right now: the child inherits these,
     // so a later parent close of one must not free the number (see close(3)).
     {
@@ -9584,7 +9676,12 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         39 => 1,  // getpid()
         22 => pipe_create2(a1, 0),   // pipe(fds): always blocking
         293 => pipe_create2(a1, a2), // pipe2(fds, flags): honour O_NONBLOCK
-        213 | 291 => epoll_create(),          // epoll_create(size) / epoll_create1(flags)
+        213 | 291 => { // epoll_create(size) / epoll_create1(flags)
+            let fd = epoll_create();
+            // EPOLL_CLOEXEC (0x80000) on epoll_create1 only; epoll_create's arg is a size.
+            if num == 291 && (fd as i64) > 0 && a1 & 0x8_0000 != 0 { fd_set_cloexec(fd, true); }
+            fd
+        }
         233 => epoll_ctl(a1, a2, a3, a4),     // epoll_ctl(epfd, op, fd, *event)
         232 => epoll_wait(a1, a2, a3, a4),    // epoll_wait(epfd, *events, max, timeout)
         281 => epoll_wait(a1, a2, a3, a4),    // epoll_pwait(epfd, *events, max, timeout, sigmask)
@@ -10662,7 +10759,10 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 return (-22i64) as u64; // -EINVAL
             }
             match crate::net::eventfd_create(a1) {
-                Some(fd) => fd,
+                Some(fd) => {
+                    if a2 & 0x8_0000 != 0 { fd_set_cloexec(fd, true); } // EFD_CLOEXEC
+                    fd
+                }
                 None => (-24i64) as u64, // -EMFILE
             }
         }
@@ -10891,6 +10991,10 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         return EFAULT;
                     }
                     SOCK_PAIRS.lock().push((a, b)); // so SCM_RIGHTS knows the other end
+                    if a2 & 0x8_0000 != 0 { // SOCK_CLOEXEC on both ends
+                        fd_set_cloexec(a, true);
+                        fd_set_cloexec(b, true);
+                    }
                     0
                 }
                 None => (-24i64) as u64, // -EMFILE
@@ -10908,12 +11012,16 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     crate::serial_println!("[sockfam] socket(domain={}, type={typ})", a1);
                 }
             }
-            match (a1, typ) {
+            let fd = match (a1, typ) {
                 (2, 1) => crate::net::sock_open(false), // AF_INET TCP
                 (2, 2) => crate::net::sock_open(true),  // AF_INET UDP
                 (1, 1) => crate::net::unix_socket(),    // AF_UNIX stream (local IPC / X)
                 _ => (-1i64) as u64,
+            };
+            if (fd as i64) > 0 && a2 & 0x8_0000 != 0 {
+                fd_set_cloexec(fd, true); // SOCK_CLOEXEC
             }
+            fd
         }
         42 => {
             // connect(fd, *sockaddr, addrlen) — dispatch on the address family @0..2.
@@ -11091,7 +11199,20 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // buffer where the caller expects them. Without this the bytes arrive and
             // the handle they refer to does not, so the receiver waits for a resource
             // it was never given.
-            let fds = scm_take(a1);
+            // Re-home the arriving descriptors into numbers free in THE RECEIVER'S
+            // view. They were allocated when the SENDER dup'd them, and the
+            // allocator's alias check only ever sees the CURRENT process - so a
+            // number free for the sender could collide with an alias the receiver
+            // owns, and chrome's descriptor-ownership check aborts the child.
+            // A dup here runs in the receiver's context, which is the whole point.
+            let fds: alloc::vec::Vec<u64> = scm_take(a1).into_iter().map(|f| {
+                let re = dup_fd(f);
+                if (re as i64) > 0 && re != f {
+                    let _ = close_fd_now(f); // drop the sender-side placeholder
+                    child_note_open(re as usize);
+                    re
+                } else { f }
+            }).collect();
             let control = read_user::<u64>(a2 + 32).unwrap_or(0);
             let controllen = read_user::<u64>(a2 + 40).unwrap_or(0) as usize;
             // Trace only calls that actually CARRY descriptors. The unconditional
@@ -11237,6 +11358,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         core::str::from_utf8(&path).unwrap_or("?"), is_vfs_dir(&path));
                 }
                 set_fd_accmode(fd, flags);
+                if fd != u64::MAX && flags & 0x8_0000 != 0 {
+                    fd_set_cloexec(fd, true); // O_CLOEXEC on a directory fd
+                }
                 return fd;
             }
             let fd = if flags & 0x40 != 0 {
@@ -11245,6 +11369,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 vfs_open(&path)
             };
             set_fd_accmode(fd, flags); // report the real access mode in F_GETFL
+            if fd != u64::MAX && flags & 0x8_0000 != 0 {
+                fd_set_cloexec(fd, true); // O_CLOEXEC
+            }
             if fd != u64::MAX && flags & 0x400 != 0 {
                 // O_APPEND: set the write position to the end of the file.
                 if let Some(sz) = vfs_size(fd as usize) {
@@ -11501,7 +11628,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             let seq = MEMFD_SEQ.fetch_add(1, Ordering::Relaxed);
             let path = alloc::format!("/memfd:{}:{seq}", String::from_utf8_lossy(&name));
             register_file(&path, alloc::vec::Vec::new());
-            vfs_open(path.as_bytes())
+            let fd = vfs_open(path.as_bytes());
+            if fd != u64::MAX && a2 & 0x1 != 0 { fd_set_cloexec(fd, true); } // MFD_CLOEXEC
+            fd
         }
         77 => vfs_ftruncate(a1 as usize, a2 as usize), // ftruncate(fd, len)
         74 | 75 => 0, // fsync / fdatasync: VFS is in-RAM -> nothing to flush, succeed
@@ -11761,7 +11890,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     }
                     0
                 }
-                _ => 0, // F_SETFD/F_GETFD/F_DUPFD/… pretend success
+                1 => u64::from(fd_is_cloexec(a1)), // F_GETFD -> FD_CLOEXEC bit
+                2 => { fd_set_cloexec(a1, a3 & 1 != 0); 0 } // F_SETFD
+                _ => 0, // F_DUPFD/… pretend success
             }
         }
         79 => {
