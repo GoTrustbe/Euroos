@@ -184,13 +184,12 @@ impl Server {
                     }
                 }
             }
-            Obj::Surface => {
-                if opcode == 6 {
+            Obj::Surface
+                if opcode == 6 => {
                     // wl_surface.commit() → if the surface has a top-level with a
                     // title, the window is now ready to draw.
                     self.commit_surface(obj);
                 }
-            }
             _ => {}
         }
     }
@@ -271,7 +270,7 @@ fn write_msg(out: &mut Vec<u8>, obj: u32, opcode: u16, args: &[Arg]) {
                 out.extend_from_slice(&len.to_le_bytes());
                 out.extend_from_slice(s.as_bytes());
                 out.push(0);
-                while (out.len() - start) % 4 != 0 {
+                while !(out.len() - start).is_multiple_of(4) {
                     out.push(0);
                 }
             }

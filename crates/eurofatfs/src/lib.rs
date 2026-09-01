@@ -126,7 +126,7 @@ impl<D: BlockDevice> FatFs<D> {
         let mut cl = start;
         let mut guard = 0u32;
         let cb = self.bpb.cluster_bytes();
-        while cl >= 2 && cl < EOC && out.len() < size && guard < 1 << 24 {
+        while (2..EOC).contains(&cl) && out.len() < size && guard < 1 << 24 {
             guard += 1;
             let base = self.bpb.cluster_first_sector(cl);
             for s in 0..self.bpb.spc {
@@ -150,7 +150,7 @@ impl<D: BlockDevice> FatFs<D> {
         let mut out = Vec::new();
         let mut cl = start;
         let mut guard = 0u32;
-        'outer: while cl >= 2 && cl < EOC && guard < 1 << 20 {
+        'outer: while (2..EOC).contains(&cl) && guard < 1 << 20 {
             guard += 1;
             let base = self.bpb.cluster_first_sector(cl);
             for s in 0..self.bpb.spc {
@@ -287,7 +287,7 @@ impl<D: BlockDevice> FatFs<D> {
     fn free_chain(&mut self, start: u32) -> FsResult<()> {
         let mut cl = start;
         let mut guard = 0u32;
-        while cl >= 2 && cl < EOC && guard < 1 << 24 {
+        while (2..EOC).contains(&cl) && guard < 1 << 24 {
             guard += 1;
             let next = self.fat_next(cl);
             self.set_fat(cl, 0)?;
@@ -337,7 +337,7 @@ impl<D: BlockDevice> FatFs<D> {
         let mut out = Vec::new();
         let mut cl = dir_cluster;
         let mut guard = 0u32;
-        while cl >= 2 && cl < EOC && guard < 1 << 16 {
+        while (2..EOC).contains(&cl) && guard < 1 << 16 {
             guard += 1;
             let base = self.bpb.cluster_first_sector(cl);
             for s in 0..self.bpb.spc {

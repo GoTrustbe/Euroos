@@ -103,7 +103,7 @@ impl Lang {
     /// Parse a language tag such as `"nl"`, `"nl-BE"`, `"de_DE"` → the language (region ignored).
     pub fn parse(tag: &str) -> Option<Lang> {
         let lang = tag
-            .split(|c| c == '-' || c == '_')
+            .split(['-', '_'])
             .next()
             .unwrap_or("")
             .to_ascii_lowercase();

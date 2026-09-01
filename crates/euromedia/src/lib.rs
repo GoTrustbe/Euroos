@@ -497,7 +497,7 @@ pub fn decode_bmp(data: &[u8]) -> Result<Image, BmpError> {
     let height = height_raw.unsigned_abs();
     let width = width as u32;
     let bytes_pp = (bpp / 8) as usize;
-    let row_size = ((width as usize * bytes_pp + 3) / 4) * 4; // padded to 4 bytes
+    let row_size = (width as usize * bytes_pp).div_ceil(4) * 4; // padded to 4 bytes
     let mut img = Image::new(width, height, [0, 0, 0, 255]);
     for row in 0..height {
         let src_row = if top_down { row } else { height - 1 - row };

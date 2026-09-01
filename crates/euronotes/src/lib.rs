@@ -175,7 +175,7 @@ fn is_hr(s: &str) -> bool {
 
 fn heading(s: &str) -> Option<(u8, &str)> {
     let hashes = s.chars().take_while(|&c| c == '#').count();
-    if hashes >= 1 && hashes <= 6 {
+    if (1..=6).contains(&hashes) {
         let rest = &s[hashes..];
         if rest.starts_with(' ') {
             return Some((hashes as u8, rest.trim_start()));
@@ -192,7 +192,7 @@ fn list_item(s: &str) -> Option<(&str, bool)> {
     }
     // Numbered: "N. " or "N) ".
     let digits = s.chars().take_while(|c| c.is_ascii_digit()).count();
-    if digits >= 1 && digits <= 9 {
+    if (1..=9).contains(&digits) {
         let after = &s[digits..];
         if let Some(rest) = after.strip_prefix(". ").or_else(|| after.strip_prefix(") ")) {
             return Some((rest, true));

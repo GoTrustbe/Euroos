@@ -1,7 +1,7 @@
 //! EuroJS parser: tokens → AST (recursive descent, with precedence climbing).
 
 use alloc::boxed::Box;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::ast::{BinOp, Expr, Stmt};

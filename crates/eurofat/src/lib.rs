@@ -136,10 +136,10 @@ impl FatFs {
             if self.nodes[i].is_dir {
                 let entries = self.dir_entry_count(i, i == 0);
                 let bytes = entries * 32;
-                self.nodes[i].clusters = ((bytes + CLUSTER_BYTES - 1) / CLUSTER_BYTES).max(1) as u32;
+                self.nodes[i].clusters = bytes.div_ceil(CLUSTER_BYTES).max(1) as u32;
             } else {
                 let bytes = self.nodes[i].data.len();
-                self.nodes[i].clusters = ((bytes + CLUSTER_BYTES - 1) / CLUSTER_BYTES) as u32; // 0 for empty file
+                self.nodes[i].clusters = bytes.div_ceil(CLUSTER_BYTES) as u32; // 0 for empty file
             }
         }
     }
@@ -388,7 +388,7 @@ fn entries_for_name(name: &str) -> usize {
         1
     } else {
         let len = name.chars().count();
-        let lfn = (len + 12) / 13; // 13 UTF-16 characters per LFN entry
+        let lfn = len.div_ceil(13); // 13 UTF-16 characters per LFN entry
         lfn + 1
     }
 }
@@ -404,7 +404,7 @@ fn dir_entries_for(name: &str, short: [u8; 11], attr: u8, first_cluster: u32, si
         // LFN entries (reverse order), with the checksum of the short name.
         let chksum = lfn_checksum(&short);
         let utf16: Vec<u16> = name.encode_utf16().collect();
-        let groups = (utf16.len() + 12) / 13;
+        let groups = utf16.len().div_ceil(13);
         for g in (0..groups).rev() {
             let order = (g as u8 + 1) | if g + 1 == groups { 0x40 } else { 0 };
             out.extend_from_slice(&lfn_entry(order, chksum, &utf16, g * 13));
@@ -636,7 +636,7 @@ impl<'a> Reader<'a> {
     fn read_chain(&self, start: u32, size: usize) -> Vec<u8> {
         let mut out = Vec::new();
         let mut cl = start;
-        while cl >= 2 && cl < EOC && out.len() < size + CLUSTER_BYTES {
+        while (2..EOC).contains(&cl) && out.len() < size + CLUSTER_BYTES {
             let off = self.cluster_off(cl);
             if off + CLUSTER_BYTES <= self.img.len() {
                 out.extend_from_slice(&self.img[off..off + CLUSTER_BYTES]);
@@ -650,7 +650,7 @@ impl<'a> Reader<'a> {
     fn dir_bytes(&self, start: u32) -> Vec<u8> {
         let mut out = Vec::new();
         let mut cl = start;
-        while cl >= 2 && cl < EOC {
+        while (2..EOC).contains(&cl) {
             let off = self.cluster_off(cl);
             if off + CLUSTER_BYTES <= self.img.len() {
                 out.extend_from_slice(&self.img[off..off + CLUSTER_BYTES]);

@@ -1016,11 +1016,11 @@ fn exec_num(op: u8, st: &mut Vec<i64>) -> Result<(), WasmError> {
         }
         0xb2 => {
             let a = i32v(pop!());
-            st.push((a as f32).to_bits() as u32 as i64); // f32.convert_i32_s
+            st.push((a as f32).to_bits() as i64); // f32.convert_i32_s
         }
         0xb6 => {
             let a = f64::from_bits(pop!() as u64);
-            st.push((a as f32).to_bits() as u32 as i64); // f32.demote_f64
+            st.push((a as f32).to_bits() as i64); // f32.demote_f64
         }
         0xb7 => {
             let a = i32v(pop!());
@@ -1063,7 +1063,7 @@ fn fcmp_f64(st: &mut Vec<i64>, f: impl Fn(f64, f64) -> bool) -> Result<(), WasmE
 fn fbin_f32(st: &mut Vec<i64>, f: impl Fn(f32, f32) -> f32) -> Result<(), WasmError> {
     let b = f32::from_bits(st.pop().ok_or(WasmError::Trap("stack"))? as u32);
     let a = f32::from_bits(st.pop().ok_or(WasmError::Trap("stack"))? as u32);
-    st.push(f(a, b).to_bits() as u32 as i64);
+    st.push(f(a, b).to_bits() as i64);
     Ok(())
 }
 fn fcmp_f32(st: &mut Vec<i64>, f: impl Fn(f32, f32) -> bool) -> Result<(), WasmError> {

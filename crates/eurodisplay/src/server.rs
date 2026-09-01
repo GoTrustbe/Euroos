@@ -152,7 +152,7 @@ impl ServerView {
                     if let Request::Destroy { id } = r {
                         self.meta.remove(id);
                     }
-                    if self.disp.handle(r.clone()).is_some()
+                    if self.disp.handle(*r).is_some()
                         || matches!(r, Request::Move { .. } | Request::Destroy { .. })
                     {
                         changed = true;

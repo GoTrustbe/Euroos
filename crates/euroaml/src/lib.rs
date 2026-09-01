@@ -287,8 +287,8 @@ impl<'a> Parser<'a> {
             }
             Some(MULTI_NAME_PREFIX) => {
                 self.pos += 1;
-                let n = self.byte().unwrap_or(0) as usize;
-                n
+                
+                self.byte().unwrap_or(0) as usize
             }
             _ => 1,
         };

@@ -393,8 +393,8 @@ fn decode_scan(
     if hmax == 0 || vmax == 0 || hmax > 2 || vmax > 2 {
         return Err(JpegError::Unsupported);
     }
-    let mcus_x = (width + 8 * hmax - 1) / (8 * hmax);
-    let mcus_y = (height + 8 * vmax - 1) / (8 * vmax);
+    let mcus_x = width.div_ceil(8 * hmax);
+    let mcus_y = height.div_ceil(8 * vmax);
     for c in comps.iter_mut() {
         c.plane_w = mcus_x * c.h * 8;
         c.plane_h = mcus_y * c.v * 8;
@@ -409,7 +409,7 @@ fn decode_scan(
 
     for my in 0..mcus_y {
         for mx in 0..mcus_x {
-            if restart_interval > 0 && mcu_count > 0 && mcu_count % restart_interval == 0 {
+            if restart_interval > 0 && mcu_count > 0 && mcu_count.is_multiple_of(restart_interval) {
                 // Byte-align to the RSTn marker + reset the DC predictors.
                 br.restart();
                 for c in comps.iter_mut() {
@@ -489,7 +489,7 @@ fn decode_scan(
             let fy = ((128 * c.v * y + 64 * c.v) as i32 - 64 * vmax as i32) / vmax as i32;
             let (fx, fy) = (fx.max(0), fy.max(0));
             let (x0, y0) = ((fx >> 7) as usize, (fy >> 7) as usize);
-            let (dx, dy) = ((fx & 127) as i32, (fy & 127) as i32);
+            let (dx, dy) = (((fx & 127)), ((fy & 127)));
             let x1 = (x0 + 1).min(c.plane_w - 1);
             let y1 = (y0 + 1).min(c.plane_h - 1);
             let p00 = c.plane[y0 * c.plane_w + x0] as i32;
