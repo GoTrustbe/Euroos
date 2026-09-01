@@ -34,6 +34,11 @@ pub fn log(severity: Severity, facility: &str, message: &str) {
 
 /// Encode the ring + write it to `/var/log/journal.bin` on the root FS.
 pub fn persist(fs: &mut dyn FileSystem) -> bool {
+    // Kernel service: the journal belongs to the system, not the session user.
+    crate::sysctx::as_system(fs, |fs| persist_inner(fs))
+}
+
+fn persist_inner(fs: &mut dyn FileSystem) -> bool {
     let _ = fs.create_dir("/var");
     let _ = fs.create_dir("/var/log");
     let blob = with_journal(|j| j.encode());

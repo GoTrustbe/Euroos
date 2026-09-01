@@ -13,6 +13,9 @@
 
 extern crate alloc;
 
+pub mod jpeg;
+pub use jpeg::{decode_jpeg, JpegError};
+
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -454,3 +457,215 @@ mod tests {
         assert_eq!(decode_ppm(b"P6\n2 2\n255\n\0"), Err(PpmError::Truncated));
     }
 }
+
+// ── BMP decoder (Windows BITMAPINFOHEADER, 24/32-bit uncompressed) ───────────
+
+/// Errors from [`decode_bmp`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum BmpError {
+    NotBmp,
+    Unsupported,
+    Truncated,
+}
+
+fn u16le(b: &[u8], o: usize) -> u32 {
+    b[o] as u32 | ((b[o + 1] as u32) << 8)
+}
+fn u32le_(b: &[u8], o: usize) -> u32 {
+    b[o] as u32 | ((b[o + 1] as u32) << 8) | ((b[o + 2] as u32) << 16) | ((b[o + 3] as u32) << 24)
+}
+
+/// Decode a Windows BMP (24- or 32-bit, uncompressed BI_RGB). Rows are stored
+/// bottom-up and padded to 4 bytes; we flip and unpad into top-down RGBA.
+pub fn decode_bmp(data: &[u8]) -> Result<Image, BmpError> {
+    if data.len() < 54 || &data[0..2] != b"BM" {
+        return Err(BmpError::NotBmp);
+    }
+    let pix_off = u32le_(data, 10) as usize;
+    let header = u32le_(data, 14); // DIB header size
+    if header < 40 {
+        return Err(BmpError::Unsupported); // only BITMAPINFOHEADER+
+    }
+    let width = u32le_(data, 18) as i32;
+    let height_raw = u32le_(data, 22) as i32;
+    let bpp = u16le(data, 28);
+    let compression = u32le_(data, 30);
+    if compression != 0 || (bpp != 24 && bpp != 32) || width <= 0 {
+        return Err(BmpError::Unsupported);
+    }
+    let top_down = height_raw < 0;
+    let height = height_raw.unsigned_abs();
+    let width = width as u32;
+    let bytes_pp = (bpp / 8) as usize;
+    let row_size = ((width as usize * bytes_pp + 3) / 4) * 4; // padded to 4 bytes
+    let mut img = Image::new(width, height, [0, 0, 0, 255]);
+    for row in 0..height {
+        let src_row = if top_down { row } else { height - 1 - row };
+        let base = pix_off + src_row as usize * row_size;
+        if base + width as usize * bytes_pp > data.len() {
+            return Err(BmpError::Truncated);
+        }
+        for x in 0..width {
+            let o = base + x as usize * bytes_pp;
+            // BMP stores BGR(A).
+            let b = data[o];
+            let g = data[o + 1];
+            let r = data[o + 2];
+            let a = if bytes_pp == 4 { data[o + 3] } else { 255 };
+            img.set(x, row, [r, g, b, a]);
+        }
+    }
+    Ok(img)
+}
+
+// ── PNG decoder (baseline: 8-bit greyscale / RGB / RGBA, no interlace) ───────
+
+/// Errors from [`decode_png`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum PngError {
+    NotPng,
+    Unsupported,
+    Truncated,
+    BadFilter,
+    Inflate,
+}
+
+/// Decode a baseline PNG (bit depth 8; colour type 0 grey, 2 RGB, 6 RGBA;
+/// no interlace) into RGBA. This is the format the overwhelming majority of
+/// screenshots and simple graphics use; palette/16-bit/interlaced are honestly
+/// rejected as Unsupported rather than mis-decoded.
+pub fn decode_png(data: &[u8]) -> Result<Image, PngError> {
+    const SIG: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+    if data.len() < 8 || data[0..8] != SIG {
+        return Err(PngError::NotPng);
+    }
+    let mut pos = 8;
+    let (mut width, mut height, mut colour, mut depth) = (0u32, 0u32, 0u8, 0u8);
+    let mut idat: Vec<u8> = Vec::new();
+    while pos + 8 <= data.len() {
+        let len = ((data[pos] as usize) << 24)
+            | ((data[pos + 1] as usize) << 16)
+            | ((data[pos + 2] as usize) << 8)
+            | data[pos + 3] as usize;
+        let ctype = &data[pos + 4..pos + 8];
+        let body_start = pos + 8;
+        if body_start + len + 4 > data.len() {
+            return Err(PngError::Truncated);
+        }
+        let body = &data[body_start..body_start + len];
+        match ctype {
+            b"IHDR" => {
+                if len < 13 {
+                    return Err(PngError::Truncated);
+                }
+                width = u32::from_be_bytes([body[0], body[1], body[2], body[3]]);
+                height = u32::from_be_bytes([body[4], body[5], body[6], body[7]]);
+                depth = body[8];
+                colour = body[9];
+                let interlace = body[12];
+                if depth != 8 || interlace != 0 || !matches!(colour, 0 | 2 | 6) {
+                    return Err(PngError::Unsupported);
+                }
+            }
+            b"IDAT" => idat.extend_from_slice(body),
+            b"IEND" => break,
+            _ => {}
+        }
+        pos = body_start + len + 4; // skip body + CRC
+    }
+    if width == 0 || height == 0 {
+        return Err(PngError::Unsupported);
+    }
+    let channels = match colour {
+        0 => 1usize,
+        2 => 3,
+        6 => 4,
+        _ => return Err(PngError::Unsupported),
+    };
+    let raw = euroflate::zlib_decompress(&idat).map_err(|_| PngError::Inflate)?;
+    let bpp = channels; // bytes per pixel at depth 8
+    let stride = width as usize * bpp;
+    if raw.len() < (stride + 1) * height as usize {
+        return Err(PngError::Truncated);
+    }
+    // Reverse the PNG scanline filters into a flat RGB(A) buffer.
+    let mut prev: Vec<u8> = vec![0; stride];
+    let mut img = Image::new(width, height, [0, 0, 0, 255]);
+    let mut off = 0usize;
+    for y in 0..height as usize {
+        let filter = raw[off];
+        off += 1;
+        let mut line = raw[off..off + stride].to_vec();
+        off += stride;
+        for i in 0..stride {
+            let a = if i >= bpp { line[i - bpp] as i32 } else { 0 };
+            let b = prev[i] as i32;
+            let c = if i >= bpp { prev[i - bpp] as i32 } else { 0 };
+            let recon = match filter {
+                0 => line[i] as i32,
+                1 => line[i] as i32 + a,
+                2 => line[i] as i32 + b,
+                3 => line[i] as i32 + (a + b) / 2,
+                4 => {
+                    let p = a + b - c;
+                    let (pa, pb, pc) = ((p - a).abs(), (p - b).abs(), (p - c).abs());
+                    let pred = if pa <= pb && pa <= pc { a } else if pb <= pc { b } else { c };
+                    line[i] as i32 + pred
+                }
+                _ => return Err(PngError::BadFilter),
+            };
+            line[i] = (recon & 0xff) as u8;
+        }
+        for x in 0..width as usize {
+            let o = x * bpp;
+            let px = match colour {
+                0 => [line[o], line[o], line[o], 255],
+                2 => [line[o], line[o + 1], line[o + 2], 255],
+                6 => [line[o], line[o + 1], line[o + 2], line[o + 3]],
+                _ => unreachable!(),
+            };
+            img.set(x as u32, y as u32, px);
+        }
+        prev = line;
+    }
+    Ok(img)
+}
+
+/// Encode an image as a baseline PNG (8-bit RGBA, filter 0). Round-trips with
+/// [`decode_png`]; small and correct rather than maximally compressed.
+pub fn encode_png(img: &Image) -> Vec<u8> {
+    let mut raw = Vec::with_capacity((img.width as usize * 4 + 1) * img.height as usize);
+    for y in 0..img.height {
+        raw.push(0); // filter: none
+        for x in 0..img.width {
+            let p = img.get(x, y).unwrap_or([0, 0, 0, 255]);
+            raw.extend_from_slice(&p);
+        }
+    }
+    let idat = euroflate::zlib_compress(&raw);
+    let mut out = Vec::new();
+    out.extend_from_slice(&[137, 80, 78, 71, 13, 10, 26, 10]);
+    let chunk = |out: &mut Vec<u8>, name: &[u8; 4], body: &[u8]| {
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        out.extend_from_slice(name);
+        out.extend_from_slice(body);
+        let mut crc_in = Vec::with_capacity(4 + body.len());
+        crc_in.extend_from_slice(name);
+        crc_in.extend_from_slice(body);
+        out.extend_from_slice(&euroflate::crc32(&crc_in).to_be_bytes());
+    };
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&img.width.to_be_bytes());
+    ihdr.extend_from_slice(&img.height.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // depth 8, colour 6 (RGBA), no interlace
+    chunk(&mut out, b"IHDR", &ihdr);
+    chunk(&mut out, b"IDAT", &idat);
+    chunk(&mut out, b"IEND", &[]);
+    out
+}
+
+#[cfg(test)]
+include!("imgtests.rs");
+
+#[cfg(test)]
+include!("jpegtests.rs");

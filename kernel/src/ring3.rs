@@ -465,6 +465,13 @@ static SOCK_PAIRS: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::V
 static SCM_PENDING: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
 /// One-shot recheck address for the vanishing controllen write (see recvmsg).
 static SCM_CHECK_ADDR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Which process stored SCM_CHECK_ADDR (0 = parent, else child-main task). The
+/// "NEXT syscall" diagnostic reads that USER address on whatever syscall comes
+/// next — under the per-process ownership model that may be a DIFFERENT process
+/// whose address space does not map it: the demand handler rejects, the kernel
+/// read #PFs at ring 0 and the whole machine halts (run 11). Only read when the
+/// same process is current.
+static SCM_CHECK_OWNER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// The other end of a socketpair, if `fd` is one.
 fn sock_peer(fd: u64) -> Option<u64> {
@@ -473,8 +480,19 @@ fn sock_peer(fd: u64) -> Option<u64> {
     })
 }
 
+/// Are descriptors waiting for `fd`? A sendmsg can carry ONLY SCM_RIGHTS
+/// (0 data bytes — chrome's Mojo does this during the child handshake, seen as
+/// "delivering 0 data bytes"). Those never enter the unix byte stream, so
+/// byte-based readiness said "empty", epoll never fired, the browser never
+/// recvmsg'd, and the child hit its connect deadline. Readiness must count them.
+fn scm_pending_for(fd: u64) -> bool {
+    x86_64::instructions::interrupts::without_interrupts(||
+        SCM_PENDING.lock().iter().any(|&(f, _)| f == fd))
+}
+
 /// Take the descriptors sent to `fd` (in order).
 fn scm_take(fd: u64) -> alloc::vec::Vec<u64> {
+    let _g = crate::sched::IfOffGuard::new();
     let mut q = SCM_PENDING.lock();
     let mut out = alloc::vec::Vec::new();
     let mut i = 0;
@@ -634,6 +652,11 @@ fn cdp_send(msg: &str) {
     if id == usize::MAX {
         return;
     }
+    // IF=0 while the pipe locks are held: this runs on TASK 0 (IF=1), and the
+    // timer parking us mid-lock left the DevTools reader spinning forever on
+    // PIPE_WAITERS (run 36's NMI: polled static = PIPE_WAITERS, holder = the
+    // preempted pump). Same freeze family as the fd locks - same cure.
+    let _g = crate::sched::IfOffGuard::new();
     {
         let mut pipes = PIPES.lock();
         pipes[id].extend_from_slice(msg.as_bytes());
@@ -833,7 +856,13 @@ pub fn cdp_pump() {
         // Every ~30 s of guest time: often enough that the runner's stall detector
         // sees a live guest even when chrome computes hard (guest ticks crawl then),
         // rare enough not to starve anything when the idle clock fast-forwards.
-        let ticks_1000 = waited / 3_000;
+        // /300, not /3000: in MP mode the guest is never idle (constant Mojo
+        // traffic), the idle clock never fast-forwards, and guest time crawls at
+        // ~60:1 - a 30-guest-second nudge cadence meant ~50 wall-minutes before
+        // the FIRST damage nudge (run 25: zero nudges in 3 hours; a static page
+        // produces no damage, so no screencast frame can ever arrive without
+        // them). 3 guest-seconds ~= 3 wall-minutes under load.
+        let ticks_1000 = waited / 300;
         if ticks_1000 > 0 && CDP_WAIT_MARK.swap(ticks_1000, Ordering::Relaxed) != ticks_1000 {
             crate::serial_println!("[cdp] still waiting for the frame ({} s of guest time)", waited / 100);
             // RECURRING damage while waiting. The capturer resolves its target a beat
@@ -857,12 +886,17 @@ pub fn cdp_pump() {
                 // under emulation that the capture pipeline itself starves.
                 let dsid = CDP_SESSION.lock().clone();
                 let color = 0x101010u32.wrapping_add((ticks_1000 as u32).wrapping_mul(0x203040)) & 0xFFFFFF;
+                // FRESH id per damage nudge: a repeated id 12 while the first
+                // evaluate is still pending gets "Duplicate `id` in protocol
+                // request" and the nudge is DROPPED (seen in the MP run 8) —
+                // exactly when the renderer is slow is when the nudges matter.
+                let nid = 1200 + ticks_1000;
                 cdp_send(&alloc::format!(
-                    "{{\"id\":12,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"document.body.style.background='#{color:06x}'\"}}}}"));
+                    "{{\"id\":{nid},\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"document.body.style.background='#{color:06x}'\"}}}}"));
             }
         }
     }
-    if step == 7 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 600_000 {
+    if step == 7 && now.saturating_sub(CDP_MARK.load(Ordering::Relaxed)) >= 60_000 {
         crate::serial_println!("[cdp] frames went unanswered — what is each thread waiting on?");
         let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
         let (mn, ma, mr) = last_syscall(main);
@@ -1107,7 +1141,8 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     let mut got = [usize::MAX; 2];
     let mut k = 0;
     for fd in 3..ceil {
-        if pf[fd].is_none() && files[fd].is_none() && dirs[fd].is_none() {
+        if pf[fd].is_none() && files[fd].is_none() && dirs[fd].is_none() && !fd_is_aliased(fd) {
+            // (a fork child's pipe fds are recorded below, after the guards drop)
             got[k] = fd;
             k += 1;
             if k == 2 {
@@ -1126,6 +1161,9 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     }
     pf[got[0]] = Some((id, false)); // read end
     pf[got[1]] = Some((id, true)); // write end
+    drop(pf);
+    child_note_open(got[0]); // a fork child's own pipes free on its close/exit
+    child_note_open(got[1]);
     // Access mode per pipe end, so fcntl(F_GETFL) reports the truth: chrome creates a
     // pipe and CHECKs each end's access mode (read end O_RDONLY, write end O_WRONLY);
     // a hardcoded O_RDWR for both was the mismatch that IMMEDIATE_CRASHed it.
@@ -1277,7 +1315,10 @@ fn epoll_fd_ready(fd: u64) -> bool {
         // to run.
         crate::net::sock_readable(fd)
     } else if crate::net::is_unix_fd(fd) {
-        crate::net::unix_fd_readable(fd)
+        // Readable when bytes OR in-flight SCM_RIGHTS descriptors are queued: a
+        // descriptors-only Mojo handshake message carries 0 data bytes and was
+        // invisible to byte-based readiness (the MP child-connect stall).
+        crate::net::unix_fd_readable(fd) || scm_pending_for(fd)
     } else if (fd as usize) < MAX_FD && is_pipe_fd(fd as usize) {
         match PIPE_FDS.lock()[fd as usize] {
             Some((id, false)) => !PIPES.lock()[id].is_empty(), // read end w/ data
@@ -1317,6 +1358,7 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
             None => return (-9i64) as u64,
         };
         let mut n = 0u64;
+        let mut first_fd = 0u64;
         for (fd, evmask, data) in list {
             if n >= maxevents {
                 break;
@@ -1344,6 +1386,9 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
                     (base as *mut u32).write(evs);
                     ((base + 4) as *mut u64).write(data);
                 }
+                if n == 0 {
+                    first_fd = fd as u64;
+                }
                 n += 1;
             }
         }
@@ -1368,6 +1413,20 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
                 crate::sched::current(), thread_name(crate::sched::current()));
         }
         if n > 0 || timeout == 0 {
+            // Livelock forensics: run 14's Chrome_IOThread called epoll_wait a
+            // MILLION times per stall-snap, always getting 1 "ready" event it
+            // evidently could not consume. Sample every 500k-th wait: which fd,
+            // which event bits, which cookie, on whose thread — one line names
+            // the spinning readiness source without flooding the log.
+            if n > 0 && EPOLL_WAIT_COUNT.load(Ordering::Relaxed) % 500_000 == 0 {
+                let (f_evs, f_data) = unsafe {
+                    ((events as *const u32).read(), ((events + 4) as *const u64).read())
+                };
+                let cur = crate::sched::current();
+                crate::serial_println!(
+                    "[epoll-hot] t{cur} {:?} epfd={epfd} n={n} first: fd={first_fd}({}) evs={f_evs:#x} data={f_data:#x}",
+                    thread_name(cur), fd_kind(first_fd));
+            }
             return n; // ready fds, or the caller asked not to wait
         }
         // HONOR THE TIMEOUT — the same lie poll() and the futex told, with the same
@@ -1392,7 +1451,7 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
         let before = crate::interrupts::ticks();
         crate::sched::sleep_ticks(2);
         if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-            crate::sched::yield_now(); // deschedule so whoever will wake us can run
+            { yield_reacquire(); } // deschedule so whoever will wake us can run
         }
         if crate::interrupts::ticks() == before {
             crate::interrupts::TICKS.store(before + 1, Ordering::Relaxed);
@@ -1411,6 +1470,7 @@ fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
     if fd >= MAX_FD {
         return None;
     }
+    let _g = crate::sched::IfOffGuard::new();
     if let Some((id, true)) = PIPE_FDS.lock()[fd] {
         PIPES.lock()[id].extend_from_slice(bytes);
         // Wake any tasks blocked reading this pipe.
@@ -1462,6 +1522,7 @@ fn pipe_read_blocking(fd: usize, buf: u64, len: usize) -> Option<u64> {
         }
         let cur = crate::sched::current();
         {
+            let _g = crate::sched::IfOffGuard::new();
             let mut w = PIPE_WAITERS.lock();
             if !w.iter().any(|&(pid, t)| pid == id && t == cur) {
                 w.push((id, cur));
@@ -1475,7 +1536,7 @@ fn pipe_read_blocking(fd: usize, buf: u64, len: usize) -> Option<u64> {
         // RIP inside this function). On the musl bg path (SYSCALL_YIELD_OK=false) a
         // mid-syscall yield is unsafe (BG.lock), so fall back to a non-blocking return.
         if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-            crate::sched::yield_now();
+            yield_reacquire();
         } else {
             return Some((-11i64) as u64); // -EAGAIN (bg path: caller polls)
         }
@@ -1696,6 +1757,93 @@ pub fn dump_suspect_addrs() {
     macro_rules! a { ($f:expr, $n:expr) => { crate::serial_println!("[addr] {:#018x}  {}", $f as usize as u64, $n); } }
     a!(handle_demand_fault, "handle_demand_fault");
     a!(disk_read_bytes, "disk_read_bytes");
+    // The MP-campaign additions, so an NMI wedge RIP brackets tightly (run 27:
+    // 4/4 samples at ONE rip between demand_readahead and pipe_read_blocking —
+    // a spinlock self-deadlock in this very neighbourhood).
+    a!(demand_readahead, "demand_readahead");
+    a!(alloc_low_fd, "alloc_low_fd");
+    a!(open_low_fd, "open_low_fd");
+    a!(pipe_create2, "pipe_create2");
+    a!(fd_is_aliased, "fd_is_aliased");
+    a!(child_note_open, "child_note_open");
+    a!(child_close_own, "child_close_own");
+    a!(child_opened_release, "child_opened_release");
+    a!(disk_cache_get, "disk_cache_get");
+    a!(disk_cache_put, "disk_cache_put");
+    a!(shared_phys_sorted, "shared_phys_sorted");
+    a!(ensure_globals_for_current, "ensure_globals_for_current");
+    a!(child_mem_swap, "child_mem_swap");
+    a!(fork_child_owner, "fork_child_owner");
+    a!(scm_pending_for, "scm_pending_for");
+    a!(scm_take, "scm_take");
+    a!(crate::net::unix_fd_at_eof, "net::unix_fd_at_eof");
+    a!(crate::net::unix_fds_open, "net::unix_fds_open");
+    a!(fork_child_release_fds, "fork_child_release_fds");
+    a!(close_fd_now, "close_fd_now");
+    a!(dup2_fd, "dup2_fd");
+    a!(unalias_fd, "unalias_fd");
+    // Static addresses too: the NMI probe decodes the polled static's absolute
+    // address; these lines let it be matched to a name.
+    macro_rules! sa { ($st:expr, $n:expr) => { crate::serial_println!("[saddr] {:#018x}  {}", core::ptr::addr_of!($st) as usize as u64, $n); } }
+    sa!(BG, "BG");
+    sa!(CDP_DOM, "CDP_DOM");
+    sa!(CDP_RX, "CDP_RX");
+    sa!(CDP_SESSION, "CDP_SESSION");
+    sa!(CDP_URL, "CDP_URL");
+    sa!(CHILD_EXE_PATH, "CHILD_EXE_PATH");
+    sa!(CHILD_EXITS, "CHILD_EXITS");
+    sa!(CHILD_MEM, "CHILD_MEM");
+    sa!(CHILD_OPENED, "CHILD_OPENED");
+    sa!(CHILD_THREADS, "CHILD_THREADS");
+    sa!(CURRENT_APP, "CURRENT_APP");
+    sa!(DAEMON_OUTPUT, "DAEMON_OUTPUT");
+    sa!(DAEMON_PARTIAL, "DAEMON_PARTIAL");
+    sa!(DEFERRED_CLOSE, "DEFERRED_CLOSE");
+    sa!(DEMAND_FILE_MAPS, "DEMAND_FILE_MAPS");
+    sa!(DIRTY, "DIRTY");
+    sa!(DISK_FILES, "DISK_FILES");
+    sa!(DISK_PAGE_CACHE, "DISK_PAGE_CACHE");
+    sa!(ENV, "ENV");
+    sa!(EPOLLS, "EPOLLS");
+    sa!(FD_ALIAS, "FD_ALIAS");
+    sa!(FILES, "FILES");
+    sa!(FORK_CHILD_CLOSED, "FORK_CHILD_CLOSED");
+    sa!(FORK_INHERITED, "FORK_INHERITED");
+    sa!(FUTEX_LAST_WAKE, "FUTEX_LAST_WAKE");
+    sa!(FUTEX_QUEUE, "FUTEX_QUEUE");
+    sa!(GLIBC_CHILD_EXITS, "GLIBC_CHILD_EXITS");
+    sa!(GLIBC_CTIDS, "GLIBC_CTIDS");
+    sa!(GLIBC_FORK_CHILDREN, "GLIBC_FORK_CHILDREN");
+    sa!(GLIBC_THREADS, "GLIBC_THREADS");
+    sa!(MKDIRS, "MKDIRS");
+    sa!(OPEN_DIRS, "OPEN_DIRS");
+    sa!(OPEN_FDS, "OPEN_FDS");
+    sa!(OUTPUT, "OUTPUT");
+    sa!(PIPES, "PIPES");
+    sa!(PIPE_FDS, "PIPE_FDS");
+    sa!(PIPE_NONBLOCK, "PIPE_NONBLOCK");
+    sa!(PIPE_WAITERS, "PIPE_WAITERS");
+    sa!(PROGRAMS, "PROGRAMS");
+    sa!(PROT_NONE_RANGES, "PROT_NONE_RANGES");
+    sa!(REAPED, "REAPED");
+    sa!(SCM_PENDING, "SCM_PENDING");
+    sa!(SHARED_ALIASES, "SHARED_ALIASES");
+    sa!(SHARED_FRAMES, "SHARED_FRAMES");
+    sa!(SHARED_MAPS, "SHARED_MAPS");
+    sa!(SOCK_PAIRS, "SOCK_PAIRS");
+    sa!(STDIN, "STDIN");
+    sa!(STDOUT_REDIRECT, "STDOUT_REDIRECT");
+    sa!(SYMLINKS, "SYMLINKS");
+    sa!(THREAD_KSTACK_OWNER, "THREAD_KSTACK_OWNER");
+    sa!(THREAD_NAMES, "THREAD_NAMES");
+    sa!(VDSO_IMAGE_FRAMES, "VDSO_IMAGE_FRAMES");
+    sa!(crate::interrupts::TICKS, "interrupts::TICKS");
+    a!(fd_alias_set, "fd_alias_set");
+    a!(fd_alias_clear, "fd_alias_clear");
+    a!(vfs_close, "vfs_close");
+    a!(crate::net::unix_fd_close, "net::unix_fd_close");
+    a!(crate::net::eventfd_close, "net::eventfd_close");
+    a!(fork_child_mark_closed, "fork_child_mark_closed");
     a!(futex_wait, "futex_wait");
     a!(futex_wake, "futex_wake");
     a!(vfs_read, "vfs_read");
@@ -1879,9 +2027,115 @@ fn open_low_fd(fi: usize) -> u64 {
     match alloc_low_fd() {
         Some(fd) => {
             OPEN_FDS.lock()[fd] = Some((fi, 0));
+            child_note_open(fd);
             fd as u64
         }
         None => u64::MAX,
+    }
+}
+
+/// Low fds OPENED BY a fork child, per owner. A child's close of one of ITS OWN
+/// fds really frees the slot (nobody else holds it), and a child's exit frees
+/// whatever it left open. Without this every child open pinned a global slot for
+/// ever (the child's close is mark-only, meant for INHERITED fds), and six
+/// re-exec'd children x ~85 ld.so lib opens marched the table into the 500
+/// ceiling: run 9's renderer died with "error while loading shared libraries:
+/// libnssutil3.so" at fd 498.
+static CHILD_OPENED: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u16>)>> =
+    Mutex::new(alloc::vec::Vec::new());
+
+fn child_note_open(fd: usize) {
+    let _g = crate::sched::IfOffGuard::new();
+    let cur = crate::sched::current();
+    if let Some(owner) = fork_child_owner(cur) {
+        let mut g = CHILD_OPENED.lock();
+        if let Some((_, set)) = g.iter_mut().find(|(o, _)| *o == owner) {
+            if !set.contains(&(fd as u16)) {
+                set.push(fd as u16);
+            }
+        } else {
+            g.push((owner, alloc::vec![fd as u16]));
+        }
+    }
+}
+
+/// close() by a fork child: if the fd is one the CHILD itself opened, really
+/// free it and report true; else (an inherited fd) the caller mark-closes it.
+fn child_close_own(fd: u64) -> bool {
+    let _g = crate::sched::IfOffGuard::new();
+    let cur = crate::sched::current();
+    let Some(owner) = fork_child_owner(cur) else { return false };
+    let mut g = CHILD_OPENED.lock();
+    if let Some((_, set)) = g.iter_mut().find(|(o, _)| *o == owner) {
+        if let Some(i) = set.iter().position(|&f| f as u64 == fd) {
+            set.swap_remove(i);
+            drop(g);
+            let _ = close_fd_now(fd);
+            return true;
+        }
+    }
+    false
+}
+
+/// CROSS-PROCESS PAGE CACHE for disk-served (EuroPack) file pages. Every fork
+/// child re-execs the same 180 MB chrome binary + ~85 libs and used to re-read
+/// every page from virtio for itself — minutes per child under TCG, which is
+/// what overran chrome's GPU-launch timeout and made MP bring-up nondeterministic
+/// (runs 13-15). Pack content is immutable, so a full, page-aligned page of it
+/// is identical for every process: cache (file, page)->frame once, map it
+/// READ-ONLY everywhere, and give a writer a private copy on its write fault
+/// (CoW break in handle_demand_fault). Key = fidx<<40 | file_page. Sorted for
+/// binary search.
+static DISK_PAGE_CACHE: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+static DISK_CACHE_HITS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+fn disk_cache_get(key: u64) -> Option<u64> {
+    let _g = crate::sched::IfOffGuard::new();
+    let c = DISK_PAGE_CACHE.lock();
+    c.binary_search_by_key(&key, |&(k, _)| k).ok().map(|i| c[i].1)
+}
+
+fn disk_cache_put(key: u64, phys: u64) {
+    let _g = crate::sched::IfOffGuard::new();
+    let mut c = DISK_PAGE_CACHE.lock();
+    if let Err(i) = c.binary_search_by_key(&key, |&(k, _)| k) {
+        c.insert(i, (key, phys));
+    }
+}
+
+/// Free every cached frame and clear the cache (fresh run: the pack may differ).
+fn disk_cache_reset() {
+    let old = core::mem::take(&mut *DISK_PAGE_CACHE.lock());
+    for (_, phys) in old {
+        crate::procpool::demand_free(phys);
+    }
+}
+
+/// Sorted list of every physical frame currently backing a SHARED (memfd)
+/// mapping — these must SURVIVE a process teardown (other processes map them).
+fn shared_phys_sorted() -> alloc::vec::Vec<u64> {
+    let mut v: alloc::vec::Vec<u64> = SHARED_FRAMES.lock().iter()
+        .flat_map(|(_, frames)| frames.iter().copied())
+        .filter(|&p| p != 0)
+        .collect();
+    // Disk-cache frames are shared between processes exactly the same way.
+    v.extend(DISK_PAGE_CACHE.lock().iter().map(|&(_, p)| p));
+    v.sort_unstable();
+    v
+}
+
+/// A fork child is gone: free every low fd it opened and still had open.
+fn child_opened_release(owner: usize) {
+    let _g = crate::sched::IfOffGuard::new();
+    let set = {
+        let mut g = CHILD_OPENED.lock();
+        match g.iter().position(|(o, _)| *o == owner) {
+            Some(i) => g.swap_remove(i).1,
+            None => return,
+        }
+    };
+    for fd in set {
+        let _ = close_fd_now(fd as u64);
     }
 }
 
@@ -2897,7 +3151,7 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     // task spin forever on BG.lock → total wedge. musl keeps the old timer-driven block
     // (fine at its low thread counts); chrome (glibc, ~30 threads) gets the real yield.
     if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-        crate::sched::yield_now();
+        yield_reacquire();
     }
     // Resumed. If we are STILL enqueued, the scheduler woke us at the deadline (a
     // FUTEX_WAKE would have removed us) -> report -ETIMEDOUT so the caller re-polls.
@@ -3826,13 +4080,119 @@ fn alloc_low_fd() -> Option<usize> {
     let open = OPEN_FDS.lock();
     let pipes = PIPE_FDS.lock();
     let dirs = OPEN_DIRS.lock();
-    (3..ceil).find(|&fd| open[fd].is_none() && pipes[fd].is_none() && dirs[fd].is_none())
+    (3..ceil).find(|&fd| open[fd].is_none() && pipes[fd].is_none() && dirs[fd].is_none()
+        && !fd_is_aliased(fd))
 }
 
 /// dup2(oldfd, newfd)/dup3: point newfd at oldfd's object. Supports the common
 /// regular-fd case (stdio redirection); a same-number dup2 is a no-op. Cross-class
 /// dup2 (placing a 600+ socket at a low fd number) doesn't fit the range-encoded fd
 /// model and is refused.
+/// Low-fd aliases for class-encoded socket fds (unix >= 600, inet >= 500).
+/// Chrome's forked child dup2's its inherited Mojo socketpair end to a FIXED
+/// low fd (e.g. 5) and talks Mojo through that number; the socket layers
+/// address sockets by their high class fds, so the alias resolves on use.
+/// Sparse (low_fd -> real class-fd) aliases. PER-PROCESS: it lives in ChildMem
+/// and is swapped in for a fork child's syscalls. The GLOBAL table is the
+/// browser's and stays empty of child aliases, so a browser syscall on its own
+/// fd 5 is NEVER redirected to a child's Mojo socket (the phase-4 browser fault).
+static FD_ALIAS: Mutex<alloc::vec::Vec<(u16, u64)>> = Mutex::new(alloc::vec::Vec::new());
+
+/// Resolve a possibly-aliased fd to the real (class-encoded) fd.
+pub fn unalias_fd(fd: u64) -> u64 {
+    // IF=0 while the lock is held: blocking waits (pipe/futex/epoll sleeps)
+    // leave their arm at IF=1 afterwards, and ANY ring3 spinlock taken
+    // preemptibly can park its holder forever (the run 26-31 freeze family).
+    // Every helper in this lock family disables interrupts itself.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if fd < MAX_FD as u64 {
+            if let Some(&(_, real)) = FD_ALIAS.lock().iter().find(|&&(f, _)| f as u64 == fd) {
+                return real;
+            }
+        }
+        fd
+    })
+}
+
+/// Low fds that were OPEN at the moment a still-living fork child was created:
+/// (child main task, the fd numbers it inherited). A parent close of such an fd
+/// is DEFERRED (see close(3)) so the number cannot be reallocated while the
+/// child still owns it. Entries drop when the child exits; the exit path then
+/// really frees every deferred fd no remaining child inherited.
+static FORK_INHERITED: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u32>)>> =
+    Mutex::new(alloc::vec::Vec::new());
+/// Fds the parent has closed but whose slot is kept alive for inheriting children.
+static DEFERRED_CLOSE: Mutex<alloc::vec::Vec<u32>> = Mutex::new(alloc::vec::Vec::new());
+
+/// Actually release fd `a1`: epoll, eventfd, socket, AF_UNIX socket, or VFS file.
+/// (The class dispatch that close(3) used to do inline; also called by the
+/// child-exit path to flush deferred closes.)
+fn close_fd_now(a1: u64) -> u64 {
+    if is_epoll_fd(a1) {
+        if let Some(slot) = EPOLLS.lock().get_mut((a1 - EPOLL_FD_BASE) as usize) {
+            *slot = None;
+        }
+        0
+    } else if crate::net::is_eventfd(a1) {
+        crate::net::eventfd_close(a1);
+        0
+    } else if crate::net::is_sock_fd(a1) {
+        crate::net::sock_close(a1)
+    } else if crate::net::is_unix_fd(a1) {
+        crate::net::unix_fd_close(a1)
+    } else {
+        vfs_close(a1 as usize)
+    }
+}
+
+/// A fork child exited: drop its inherited-fd record and really free every
+/// deferred parent-close no remaining live child inherited.
+fn fork_child_release_fds(child_task: usize) {
+    let _g = crate::sched::IfOffGuard::new();
+    FORK_INHERITED.lock().retain(|(t, _)| *t != child_task);
+    let flush: alloc::vec::Vec<u32> = {
+        let inh = FORK_INHERITED.lock();
+        let mut d = DEFERRED_CLOSE.lock();
+        let (keep, flush): (alloc::vec::Vec<u32>, alloc::vec::Vec<u32>) =
+            d.iter().partition(|fd| inh.iter().any(|(_, set)| set.contains(fd)));
+        *d = keep;
+        flush
+    };
+    for fd in flush {
+        let _ = close_fd_now(fd as u64);
+    }
+}
+
+/// Is this LOW fd number claimed as an alias in the CURRENT process? (During a
+/// fork child's syscall its aliases are swapped into the global FD_ALIAS, so a
+/// plain lookup is per-process-correct.) An aliased number is OWNED by the
+/// process — chrome registers ScopedFD ownership of e.g. its dup2'd Mojo
+/// channel at fd 5 — so the low-fd allocators must never hand that number out
+/// again. Handing it out is exactly chrome's "Crashing due to FD ownership
+/// violation" CHECK (seen in the multi-process network service, run 3).
+fn fd_is_aliased(fd: usize) -> bool {
+    x86_64::instructions::interrupts::without_interrupts(||
+        FD_ALIAS.lock().iter().any(|&(f, _)| f as usize == fd))
+}
+
+fn fd_alias_set(nfd: usize, real: u64) {
+    let _g = crate::sched::IfOffGuard::new();
+    let mut al = FD_ALIAS.lock();
+    if let Some(e) = al.iter_mut().find(|(f, _)| *f as usize == nfd) {
+        e.1 = real;
+    } else {
+        al.push((nfd as u16, real));
+    }
+}
+
+fn fd_alias_clear(fd: usize) -> bool {
+    let _g = crate::sched::IfOffGuard::new();
+    let mut al = FD_ALIAS.lock();
+    let n = al.len();
+    al.retain(|&(f, _)| f as usize != fd);
+    al.len() != n
+}
+
 fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
     if oldfd == newfd {
         return newfd;
@@ -3840,6 +4200,27 @@ fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
     let nfd = newfd as usize;
     if nfd >= MAX_FD {
         return (-9i64) as u64; // -EBADF: can't target a class-encoded high fd
+    }
+    // dup2 by a FORK CHILD: NEVER touch the global tables. The tables are shared
+    // with the parent, so clearing slot `newfd` here destroys the PARENT's open
+    // file at that number — run 6: the child dup2'd its Mojo socket 603 onto
+    // fd 5 and wiped the browser's open icudtl.dat at global slot 5; the freed
+    // number was then re-handed to the browser, whose ScopedFD tracker still
+    // owned 5 -> "FD ownership violation" CHECK. The child gets a per-process
+    // ALIAS (resolved at its syscall entry), and its inherited share of the old
+    // number is marked closed so the deferred-close accounting stays exact.
+    if current_is_fork_child() {
+        fork_child_mark_closed(newfd);
+        fd_alias_set(nfd, oldfd);
+        return newfd;
+    }
+    // A socket-class source (unix socketpair / inet socket): register an alias.
+    if crate::net::is_unix_fd(oldfd) || crate::net::is_sock_fd(oldfd) || crate::net::is_eventfd(oldfd) {
+        fd_alias_set(nfd, oldfd);
+        OPEN_FDS.lock()[nfd] = None;
+        OPEN_DIRS.lock()[nfd] = None;
+        PIPE_FDS.lock()[nfd] = None;
+        return newfd;
     }
     if (oldfd as usize) < MAX_FD {
         // dup2 duplicates the fd: the new fd shares the source's access mode + nonblock,
@@ -4001,6 +4382,16 @@ fn is_vfs_dir(path: &[u8]) -> bool {
     if path == b"/" {
         return true;
     }
+    // Synthetic /proc directories chrome opens + fstats (sandbox thread helper
+    // fstats /proc/self/task/<tid>). Serving them as directories makes the
+    // fstat report S_IFDIR and the CHECK pass, so the GPU child does not abort.
+    if path == b"/proc/self/task"
+        || path.starts_with(b"/proc/self/task/")
+        || path == b"/proc/thread-self"
+        || path.starts_with(b"/proc/thread-self/")
+    {
+        return true;
+    }
     let p = path.strip_suffix(b"/").unwrap_or(path);
     if MKDIRS.lock().iter().any(|d| d.as_bytes() == p) {
         return true;
@@ -4058,12 +4449,38 @@ fn dir_children(path: &str) -> alloc::vec::Vec<(String, bool)> {
     out
 }
 
+/// Resolve an *at-style path against its dirfd: a RELATIVE path joins the open
+/// directory's own path. chrome's sandbox thread_helpers opens /proc once and
+/// then stats "self/task/" RELATIVE to that fd; ignoring the dirfd made that
+/// ENOENT and the renderer died on the CHECK (run 12). AT_FDCWD or an absolute
+/// path passes through unchanged.
+fn resolve_at(dirfd: u64, path: alloc::vec::Vec<u8>) -> alloc::vec::Vec<u8> {
+    if path.first() == Some(&b'/') || dirfd as i32 == -100 || path.is_empty() {
+        return path;
+    }
+    let dir = if (dirfd as usize) < MAX_FD {
+        OPEN_DIRS.lock()[dirfd as usize].as_ref().map(|(p, _)| p.clone())
+    } else { None };
+    match dir {
+        Some(d) => {
+            let mut joined = d.into_bytes();
+            if joined.last() != Some(&b'/') {
+                joined.push(b'/');
+            }
+            joined.extend_from_slice(&path);
+            joined
+        }
+        None => path,
+    }
+}
+
 /// Open a DIRECTORY -> dir fd (registered in OPEN_DIRS), or u64::MAX if full.
 fn diropen(path: &[u8]) -> u64 {
     let norm = String::from_utf8_lossy(path).into_owned();
     match alloc_low_fd() {
         Some(fd) => {
             OPEN_DIRS.lock()[fd] = Some((norm, 0));
+            child_note_open(fd);
             fd as u64
         }
         None => u64::MAX,
@@ -4188,6 +4605,32 @@ fn user_cstr(ptr: u64, max: usize) -> alloc::vec::Vec<u8> {
         }
         v.push(b);
         i += 1;
+    }
+    // Normalize ABSOLUTE paths lexically: collapse "//" and "/./" and resolve "..".
+    // Real userland composes such paths all the time — ANGLE's Vulkan loader opens
+    // the SwiftShader ICD as "<module dir>/./vk_swiftshader_icd.json", which our
+    // byte-exact VFS lookup missed, so eglInitialize died with "extension not
+    // supported" long before GL. Every user_cstr caller is a path-taking syscall
+    // (open/stat/access/exec/unlink/rename/...), and the VFS is flat with no
+    // symlinks, so lexical resolution is exactly right here.
+    if v.first() == Some(&b'/') && (v.windows(2).any(|w| w == b"//" || w == b"/.")) {
+        let mut out: alloc::vec::Vec<&[u8]> = alloc::vec::Vec::new();
+        for comp in v.split(|&b| b == b'/') {
+            match comp {
+                b"" | b"." => {}
+                b".." => { out.pop(); }
+                c => out.push(c),
+            }
+        }
+        let mut n = alloc::vec::Vec::with_capacity(v.len());
+        for c in &out {
+            n.push(b'/');
+            n.extend_from_slice(c);
+        }
+        if n.is_empty() {
+            n.push(b'/');
+        }
+        return n;
     }
     v
 }
@@ -6231,8 +6674,224 @@ static GLIBC_PML4: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64
 static GLIBC_THREADS: Mutex<alloc::vec::Vec<usize>> = Mutex::new(alloc::vec::Vec::new());
 /// M1 fork children of the glibc process: (pid, task, child_pml4, child_arena, frames).
 /// Tracked for wait4/teardown (M3). Chrome forks its renderer/gpu/utility processes.
+/// Is the currently-running task one of the glibc fork children?
+/// Threads spawned by a fork child share its address space: (thread_task,
+/// child_main_task). They must swap the SAME ChildMem as their child process,
+/// or a thread runs on the child's PML4 but the parent's demand-state and
+/// faults. Populated when a fork child (or one of its threads) clones.
+static CHILD_THREADS: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
+
+/// The fork-child main task that owns `task`'s address space, if any.
+fn fork_child_owner(task: usize) -> Option<usize> {
+    // IF=0 around the locks: run 28's NMI pinned a total freeze to this very
+    // spin — yield_reacquire's ensure_globals path took these locks with
+    // interrupts ENABLED, the timer preempted mid-critical-section, and the
+    // next task's syscall (IF=0) spun forever on a lock whose holder could
+    // never be scheduled again. Every lock in the ownership family must be
+    // held with interrupts off, exactly like the syscall/fault contexts do.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if GLIBC_FORK_CHILDREN.lock().iter().any(|&(_, t, _, _, _)| t == task) {
+            return Some(task);
+        }
+        CHILD_THREADS.lock().iter().find(|&&(t, _)| t == task).map(|&(_, m)| m)
+    })
+}
+
+fn current_is_fork_child() -> bool {
+    fork_child_owner(crate::sched::current()).is_some()
+}
+
+/// fds a fork child has "closed" for itself. The fd table is process-global
+/// (that is what makes inheritance work), so a child's post-fork fd cleanup
+/// must NOT tear down the parent's descriptors — chrome's child closes every
+/// inherited fd except its Mojo channel, and with a shared table that killed
+/// the browser's own sockets (the "network service crashed" trail). A close by
+/// a fork child only marks the fd here; lookups by that child treat it as gone.
+static FORK_CHILD_CLOSED: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u64>)>> =
+    Mutex::new(alloc::vec::Vec::new());
+
+fn fork_child_mark_closed(fd: u64) {
+    let _g = crate::sched::IfOffGuard::new();
+    let cur = crate::sched::current();
+    let mut g = FORK_CHILD_CLOSED.lock();
+    if let Some((_, set)) = g.iter_mut().find(|(t, _)| *t == cur) {
+        if !set.contains(&fd) {
+            set.push(fd);
+        }
+    } else {
+        g.push((cur, alloc::vec![fd]));
+    }
+}
+
 static GLIBC_FORK_CHILDREN: Mutex<alloc::vec::Vec<(u64, usize, u64, u64, usize)>> =
     Mutex::new(alloc::vec::Vec::new());
+
+/// Exited glibc fork children waiting to be reaped: (child pid, wait status).
+/// The launched main process is the only waiter, so no parent key is needed.
+/// wait4(61) pops from here; kill(62) pushes a signal status. Without these the
+/// browser's child-management got ENOSYS (run 5) and crash-restart loops could
+/// never reap, leaking a zombie record per restart.
+static GLIBC_CHILD_EXITS: Mutex<alloc::vec::Vec<(u64, u32)>> = Mutex::new(alloc::vec::Vec::new());
+
+// ── Per-process address-space isolation for fork children (Mojo multi-process) ──
+// The demand-paging state (bump pointer, file maps, prot-none ranges, shared
+// aliases, arena + brk/heap) is process-global: fine for one glibc process, but
+// a fork child that later execve's a fresh image needs its OWN, while the parent
+// browser keeps running on the globals. Rather than thread a context through the
+// ~40 global-state sites, we SWAP: at the entry of a fork child's syscall/fault
+// the child's saved state is swapped into the globals, and swapped back out on
+// exit. The parent (the launched main process) and every ordinary program never
+// swap, so their behaviour is byte-for-byte unchanged. This mirrors the existing
+// bg-dispatch arena swap (see syscall_dispatch), extended to the whole set the
+// demand-lifecycle study named.
+struct ChildMem {
+    task: usize,
+    demand_next: u64,
+    arena_base: u64,
+    arena_span: u64,
+    brk_cur: u64,
+    brk_end: u64,
+    heap_break: u64,
+    heap_end: u64,
+    file_maps: alloc::vec::Vec<(u64, u64, usize, usize, u64)>,
+    prot_none: alloc::vec::Vec<(u64, u64)>,
+    shared_aliases: alloc::vec::Vec<(u64, u64, usize)>,
+    shared_maps: alloc::vec::Vec<(usize, u64, usize)>,
+    fd_alias: alloc::vec::Vec<(u16, u64)>,
+}
+static CHILD_MEM: Mutex<alloc::vec::Vec<ChildMem>> = Mutex::new(alloc::vec::Vec::new());
+
+/// Snapshot the CURRENT globals into a fresh ChildMem for a just-forked task.
+/// The child inherits the parent's mappings, so it starts as a copy.
+fn child_mem_snapshot(task: usize) {
+    let cm = ChildMem {
+        task,
+        demand_next: DEMAND_NEXT.load(Ordering::Relaxed),
+        arena_base: ARENA_BASE.load(Ordering::Relaxed),
+        arena_span: ARENA_SPAN_DYN.load(Ordering::Relaxed),
+        brk_cur: BRK_CUR.load(Ordering::Relaxed),
+        brk_end: BRK_END.load(Ordering::Relaxed),
+        heap_break: HEAP_BREAK.load(Ordering::Relaxed),
+        heap_end: HEAP_END.load(Ordering::Relaxed),
+        file_maps: DEMAND_FILE_MAPS.lock().clone(),
+        prot_none: PROT_NONE_RANGES.lock().clone(),
+        shared_aliases: SHARED_ALIASES.lock().clone(),
+        shared_maps: SHARED_MAPS.lock().clone(),
+        fd_alias: FD_ALIAS.lock().clone(),
+    };
+    let mut g = CHILD_MEM.lock();
+    if let Some(slot) = g.iter_mut().find(|c| c.task == task) {
+        *slot = cm;
+    } else {
+        g.push(cm);
+    }
+}
+
+/// WHO owns the swapped globals right now: 0 = the parent (launched main
+/// process), else the child-main task whose ChildMem is currently loaded.
+///
+/// Why ownership instead of swap-in/swap-out around each syscall: a child's
+/// syscall can BLOCK mid-arm (futex, poll, pipe read) and yield with the child
+/// state still in the globals. Any parent thread that then runs sees CHILD
+/// state (its dispatch takes the is_child=false path and never swaps), and the
+/// parent's next demand-fault/allocation runs against the wrong address space —
+/// run 7 killed the browser main exactly this way (demand fault rejected:
+/// address was valid only in a child's DEMAND_NEXT window), and the phase-4
+/// "clock_gettime garbage in a child thread" was the same hole in the other
+/// direction. Now the state follows the RUNNING task: every dispatch/fault
+/// entry and every yield-return calls ensure_globals_for_current(), which swaps
+/// only when the owner actually changes. Nothing swaps back at exit.
+static GLOBALS_OWNER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Make the swapped globals belong to the CURRENT task's process. O(1) when the
+/// owner is unchanged (the overwhelmingly common case). Task context only (the
+/// ChildMem locks are taken); at every call site no spinlock is held.
+fn ensure_globals_for_current() {
+    x86_64::instructions::interrupts::without_interrupts(ensure_globals_inner)
+}
+
+fn ensure_globals_inner() {
+    let cur = crate::sched::current();
+    let need = fork_child_owner(cur).unwrap_or(0);
+    let have = GLOBALS_OWNER.load(Ordering::Relaxed);
+    if have == need {
+        return;
+    }
+    if have != 0 {
+        child_mem_swap(have); // out: globals -> old owner's ChildMem (parent restored)
+    }
+    if need != 0 {
+        child_mem_swap(need); // in: new owner's ChildMem -> globals
+    }
+    GLOBALS_OWNER.store(need, Ordering::Relaxed);
+}
+
+/// Force the globals back to the parent if `owner`'s state is loaded — called
+/// before a child's ChildMem is dropped (exit/kill), else the parent's state
+/// would be destroyed with it.
+fn globals_release_owner(owner: usize) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if GLOBALS_OWNER.load(Ordering::Relaxed) == owner {
+            child_mem_swap(owner);
+            GLOBALS_OWNER.store(0, Ordering::Relaxed);
+        }
+    })
+}
+
+/// yield_now + re-establish the globals for whoever we are once we resume: while
+/// we slept another process' task may have loaded ITS state.
+/// NMI-probe helpers (diagnostics only).
+pub fn thread_name_pub(t: usize) -> String { thread_name(t) }
+pub fn globals_owner_now() -> usize { GLOBALS_OWNER.load(Ordering::Relaxed) }
+
+fn yield_reacquire() {
+    // Preserve the caller's interrupt state across the yield. A syscall arm
+    // runs with IF=0 (FMASK); yield_now re-enables to switch, and returning
+    // with IF=1 left the REST of the arm preemptible while it takes spinlocks —
+    // the timer then parked a lock HOLDER forever and every later IF=0 spinner
+    // froze the machine (run 28: fork_child_owner; run 29: fd_is_aliased —
+    // same disease, next lock). Restore IF=0 exactly when it was 0 before.
+    let if_was = x86_64::instructions::interrupts::are_enabled();
+    crate::sched::yield_now();
+    ensure_globals_for_current();
+    if !if_was {
+        x86_64::instructions::interrupts::disable();
+    }
+}
+
+/// Swap a fork child's saved state into the globals (call at child syscall/fault
+/// entry). Returns true if a swap happened (so the caller swaps back out).
+fn child_mem_swap(task: usize) -> bool {
+    let owner = match fork_child_owner(task) { Some(o) => o, None => return false };
+    let mut g = CHILD_MEM.lock();
+    let Some(cm) = g.iter_mut().find(|c| c.task == owner) else { return false };
+    macro_rules! swp {
+        ($glob:expr, $field:expr) => {{
+            let tmp = $glob.load(Ordering::Relaxed);
+            $glob.store($field, Ordering::Relaxed);
+            $field = tmp;
+        }};
+    }
+    swp!(DEMAND_NEXT, cm.demand_next);
+    swp!(ARENA_BASE, cm.arena_base);
+    swp!(ARENA_SPAN_DYN, cm.arena_span);
+    swp!(BRK_CUR, cm.brk_cur);
+    swp!(BRK_END, cm.brk_end);
+    swp!(HEAP_BREAK, cm.heap_break);
+    swp!(HEAP_END, cm.heap_end);
+    core::mem::swap(&mut *DEMAND_FILE_MAPS.lock(), &mut cm.file_maps);
+    core::mem::swap(&mut *PROT_NONE_RANGES.lock(), &mut cm.prot_none);
+    core::mem::swap(&mut *SHARED_ALIASES.lock(), &mut cm.shared_aliases);
+    core::mem::swap(&mut *SHARED_MAPS.lock(), &mut cm.shared_maps);
+    core::mem::swap(&mut *FD_ALIAS.lock(), &mut cm.fd_alias);
+    true
+}
+
+/// A fork child exited: drop its saved memory state.
+fn child_mem_drop(task: usize) {
+    CHILD_MEM.lock().retain(|c| c.task != task);
+}
+
 
 /// fork() for the demand-paged glibc process (M1): the child gets its OWN address
 /// space — the multi-block arena remapped onto its own physical frames (copied) plus
@@ -6240,6 +6899,134 @@ static GLIBC_FORK_CHILDREN: Mutex<alloc::vec::Vec<(u64, usize, u64, u64, usize)>
 /// that resumes at the fork return with rax=0. Chrome launches renderer/gpu/utility
 /// children this way (`clone(SIGCHLD, no CLONE_VM)` then `execve`). Returns the child
 /// pid to the parent (child returns 0), or -errno.
+/// Read a NULL-terminated user pointer array (argv/envp) into owned byte strings.
+fn read_user_strvec(ptr: u64, max: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>> {
+    let mut out = alloc::vec::Vec::new();
+    if ptr == 0 {
+        return out;
+    }
+    for i in 0..max as u64 {
+        let sp: u64 = match read_user(ptr + i * 8) { Some(v) => v, None => break };
+        if sp == 0 {
+            break;
+        }
+        out.push(user_cstr(sp, 4096));
+    }
+    out
+}
+
+/// execve for a FORK CHILD: re-execute the persistent exe with new argv/envp in
+/// the child's OWN address space (the demand-state is already swapped in for
+/// this syscall, so resetting the globals resets the CHILD, not the parent).
+/// The child arena + PML4 are reused; only their CONTENTS are rebuilt. Returns
+/// only on error — on success it retargets the current task to the new entry.
+fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
+    let _path = user_cstr(path_ptr, 256); // usually "/proc/self/exe"
+    let exe_path = CHILD_EXE_PATH.lock().clone();
+    if exe_path.is_empty() {
+        return (-8i64) as u64; // -ENOEXEC: no persistent exe known
+    }
+    // Resolve the disk exe (same registry glibc_disk_launch uses).
+    let (diskidx, dev, doff, _dsize) = {
+        let reg = DISK_FILES.lock();
+        match reg.iter().position(|(pp, _, _, _)| *pp == exe_path) {
+            Some(k) => { let (_, d, o, sz) = reg[k]; (k, d, o, sz) }
+            None => return (-2i64) as u64, // -ENOENT
+        }
+    };
+    // Read the new argv/envp BEFORE we wipe the arena (they point into the old
+    // stack that lives in it).
+    let argv_owned = read_user_strvec(argv_ptr, 512);
+    let envp_owned = read_user_strvec(envp_ptr, 512);
+    let argv: alloc::vec::Vec<&[u8]> = argv_owned.iter().map(|v| v.as_slice()).collect();
+    let envp: alloc::vec::Vec<&[u8]> = envp_owned.iter().map(|v| v.as_slice()).collect();
+
+    // The child's arena (its VA is in the swapped-in globals; Cr3 is the child's,
+    // so this VA is mapped to the child's own frames).
+    let arena = ARENA_BASE.load(Ordering::Relaxed);
+    let span = ARENA_SPAN_DYN.load(Ordering::Relaxed);
+    if arena == 0 || span == 0 {
+        return (-8i64) as u64;
+    }
+    let nblocks = span >> 21;
+    let frames = (nblocks * 512) as usize;
+
+    // Fresh image: wipe the arena, and DROP the child's inherited demand pages.
+    // The child forked a COPY of the parent's already-relocated exe/heap pages;
+    // ld.so must instead read the original, unrelocated image from disk, or it
+    // sees relocated phdr p_vaddrs (base + DEMAND_BASE = a slot-4 fault). Freeing
+    // the child's PML4 demand slot makes every exe page re-fault fresh.
+    unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
+    {
+        use x86_64::registers::control::Cr3;
+        let child_pml4 = Cr3::read().0.start_address().as_u64();
+        crate::paging::free_demand_region_except(child_pml4, DEMAND_PML4_IDX, &shared_phys_sorted());
+        // Flush the TLB so the now-unmapped VAs re-fault.
+        unsafe { Cr3::write(Cr3::read().0, Cr3::read().1); }
+    }
+    DEMAND_NEXT.store(DEMAND_BASE, Ordering::Relaxed);
+    DEMAND_FILE_MAPS.lock().clear();
+    PROT_NONE_RANGES.lock().clear();
+    SHARED_ALIASES.lock().clear();
+    SHARED_MAPS.lock().clear();
+
+    let ldso_base = arena + 0x0080_0000;
+    let brk_start = arena + 0x0200_0000;
+    let mmap_start = arena + 0x0400_0000;
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000;
+    BRK_CUR.store(brk_start, Ordering::Relaxed);
+    BRK_END.store(mmap_start, Ordering::Relaxed);
+    HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
+    // The mmap arena runs from mmap_start up to just below the stack — same as
+    // glibc_disk_launch. Setting HEAP_END = HEAP_BREAK (the earlier bug) left
+    // zero bytes for small arena mmaps, so ld.so's libc.so.6 mmap got ENOMEM.
+    HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
+
+    // Re-register the exe's disk-backed segments (in the child's demand-state).
+    let exe_base = DEMAND_BASE;
+    let exe_info = match read_disk_exe_info(dev, doff, exe_base) {
+        Some(i) => i,
+        None => return (-8i64) as u64,
+    };
+    if !register_disk_exe_segments(diskidx, dev, doff, exe_base) {
+        return (-8i64) as u64;
+    }
+
+    // Load ld.so fresh into the arena and build a fresh SysV stack with the new
+    // argv/envp. Both write via arena VAs mapped in the child's Cr3.
+    let ldso = ldlinux_bytes();
+    let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
+        Some(i) => i,
+        None => return (-8i64) as u64,
+    };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, &argv, &envp, &exe_info, ldso_base) };
+
+    crate::serial_println!(
+        "[execve] child task {} re-exec {exe_path} argv0={:?} -> ld.so entry {:#x} rsp {:#x}",
+        crate::sched::current(),
+        argv_owned.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default(),
+        ld_info.entry, rsp
+    );
+
+    // Retarget THIS task so the syscall return sysret's to ld.so's entry with a
+    // FRESH register state (like spawn_user gives a new process), not back to
+    // chrome's LaunchProcess after execve. The return path pops the saved
+    // register block (SAVED_REGS) and the user-rip from it, and takes rsp from
+    // USER_RSP. Block layout (push order in syscall_entry, low->high):
+    // +0 r15 +8 r14 +16 r13 +24 r12 +32 r10 +40 r9 +48 r8 +56 rdx +64 rsi
+    // +72 rdi +80 rbp +88 rbx +96 r11(rflags) +104 rcx(user-rip).
+    unsafe {
+        let blk = SAVED_REGS as *mut u64;
+        for i in 0..13 {
+            blk.add(i).write(0); // r15..rbx = 0 (rdx=0 so glibc has no bogus atexit)
+        }
+        blk.add(12).write(0x202); // r11 = clean rflags (IF=1)
+        blk.add(13).write(ld_info.entry); // rcx = user-rip -> ld.so entry
+        USER_RSP = rsp;
+    }
+    0 // rax = 0; we sysret to the fresh image, not back here
+}
+
 fn do_glibc_fork() -> u64 {
     use x86_64::registers::control::Cr3;
     let parent_pml4 = Cr3::read().0.start_address().as_u64();
@@ -6297,6 +7084,36 @@ fn do_glibc_fork() -> u64 {
     register_thread_kstack(child, slot);
     let pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     GLIBC_FORK_CHILDREN.lock().push((pid, child, pml4, child_arena, arena_frames));
+    child_mem_snapshot(child); // the child inherits the parent's demand-state
+    // Snapshot which LOW fd numbers are open right now: the child inherits these,
+    // so a later parent close of one must not free the number (see close(3)).
+    {
+        let open = OPEN_FDS.lock();
+        let pipes = PIPE_FDS.lock();
+        let dirs = OPEN_DIRS.lock();
+        let ceil = (crate::net::SOCK_FD_BASE as usize).min(MAX_FD);
+        // A DEFERRED slot is parent-CLOSED: still occupied only for older
+        // children. A new child does NOT inherit it — including it here pinned
+        // every deferred fd forever under respawn churn (each new fork re-listed
+        // it), the table filled up, and dup() died with EMFILE -> chrome CHECK
+        // abort (run 8).
+        let deferred = DEFERRED_CLOSE.lock().clone();
+        let mut set: alloc::vec::Vec<u32> = (3..ceil)
+            .filter(|&fd| (open[fd].is_some() || pipes[fd].is_some() || dirs[fd].is_some())
+                && !deferred.contains(&(fd as u32)))
+            .map(|fd| fd as u32)
+            .collect();
+        // UNIX socket fds (600+) are inherited exactly the same way: chrome's
+        // launcher closes ITS copy of the child's channel end right after fork,
+        // and endpoint-closing it then makes the live child's channel read EOF
+        // (run 21: every service child died on read()=0 the moment the browser
+        // did its routine post-fork close). Defer those too.
+        drop(open); drop(pipes); drop(dirs);
+        set.extend(crate::net::unix_fds_open().into_iter()
+            .filter(|fd| !deferred.contains(&(*fd as u32)))
+            .map(|fd| fd as u32));
+        FORK_INHERITED.lock().push((child, set));
+    }
     crate::serial_println!(
         "[fork] pid {pid} -> child task {child} (own pml4={pml4:#x} arena={child_arena:#x} {} MiB)",
         span >> 20
@@ -6396,8 +7213,40 @@ pub fn demand_committed_pages() -> u64 { DEMAND_COMMITTED.load(Ordering::Relaxed
 pub static FAULT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 pub static FAULT_CYCLES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
-pub fn handle_demand_fault(addr: u64) -> bool {
+pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
     let t0 = unsafe { core::arch::x86_64::_rdtsc() };
+    // Per-process isolation: the fault runs against the faulting task's own
+    // demand-state (ownership model, see GLOBALS_OWNER).
+    ensure_globals_for_current();
+    // CoW BREAK: a WRITE to a PRESENT page in the demand region can only mean a
+    // read-only mapping of a shared disk-cache frame — give the writer its own
+    // copy and retry. (Every other present+write fault is a real violation and
+    // falls through to the terminate path.)
+    if write && present && addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE {
+        let pml4 = {
+            use x86_64::registers::control::Cr3;
+            Cr3::read().0.start_address().as_u64()
+        };
+        let page = addr & !0xFFF;
+        if let Some((phys, writable)) = crate::paging::demand_pte(pml4, page) {
+            if !writable {
+                let fresh = match crate::procpool::demand_alloc() {
+                    Some(f) => f,
+                    None => { crate::serial_println!("[pcache] CoW-break alloc FAILED at {page:#x}"); return false }
+                };
+                // SAFETY: both frames identity-mapped, 4 KiB.
+                unsafe { core::ptr::copy_nonoverlapping(phys as *const u8, fresh as *mut u8, 4096); }
+                if !crate::paging::map_demand_4k(pml4, page, fresh) {
+                    crate::procpool::demand_free(fresh);
+                    return false;
+                }
+                unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
+                DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
+                return true;
+            }
+        }
+        return false; // present + writable yet faulted: not ours
+    }
     let r = handle_demand_fault_inner(addr);
     if r {
         FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -6510,7 +7359,9 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
     // Set when the page was filled from DISK: (map base, map end, dev, disk base,
     // file offset of the map, valid bytes, file size) — everything the read-ahead
     // below needs to fill the neighbouring pages from the same read.
-    let mut readahead: Option<(u64, u64, usize, u64, u64, u64, u64)> = None;
+    let mut readahead: Option<(u64, u64, usize, u64, u64, u64, u64, usize)> = None;
+    // Map this page read-only (shared disk-cache frame): a write CoW-breaks.
+    let mut map_ro = false;
     // If this page belongs to a lazy FILE-backed mapping, fill it from the file at
     // the right offset (bytes past EOF stay zero — matches mmap semantics). The
     // frame is already zeroed, so a partial-page copy leaves a correct zero tail.
@@ -6527,8 +7378,29 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
             if fidx == usize::MAX || fill == 0 {
                 // Zero-fill shadow (.bss / past filesz) — frame is already zeroed.
             } else if fidx >= DISK_FI_BASE {
-                // DISK-BACKED (EuroPack): fill from a polled virtio read at the file's
-                // disk offset. This serves a chrome-sized binary without RAM residency.
+                // DISK-BACKED (EuroPack): consult the cross-process page cache
+                // first — a full, page-aligned page of immutable pack content is
+                // identical for every process. On a hit: map the CACHED frame
+                // read-only (writes CoW), give the fresh frame back, done. Only
+                // full aligned pages are cacheable (a shifted foff would give
+                // per-mapping content).
+                let file_pos0 = foff as u64 + moff;
+                let cacheable = file_pos0 & 0xFFF == 0 && fill == 4096;
+                if cacheable {
+                    let key = ((fidx as u64) << 40) | (file_pos0 >> 12);
+                    if let Some(cphys) = disk_cache_get(key) {
+                        crate::procpool::demand_free(phys);
+                        if !crate::paging::map_demand_4k_ro(pml4, page, cphys) {
+                            crate::serial_println!("[pcache] map_ro FAILED at {page:#x} (pool dry?)");
+                            return false;
+                        }
+                        unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
+                        DISK_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                        DEMAND_FILE_FILLED.fetch_add(1, Ordering::Relaxed);
+                        DEMAND_USED.store(true, Ordering::Relaxed);
+                        return true;
+                    }
+                }
                 let src = DISK_FILES.lock().get(fidx - DISK_FI_BASE).map(|&(_, dev, off, size)| (dev, off, size));
                 if let Some((dev, dbase, dsize)) = src {
                     let file_pos = foff as u64 + moff;
@@ -6545,11 +7417,18 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
                         });
                         if !ok {
                             crate::serial_println!("[europack] fault-fill read FAILED @file_pos={file_pos:#x}");
+                        } else if cacheable && n == 4096 {
+                            // Publish the freshly read page and map it READ-ONLY
+                            // below (map_ro flag): the first mapper CoWs on write
+                            // exactly like every later one.
+                            disk_cache_put(((fidx as u64) << 40) | (file_pos >> 12), phys);
+                            map_ro = true;
+                            readahead = Some((base, base + _len, dev, dbase, foff as u64, valid, dsize, fidx));
                         } else {
                             // Read AHEAD: code and data runs are sequential, so the
                             // next faults in this mapping were coming anyway — take
                             // them now, in one disk read instead of fifteen.
-                            readahead = Some((base, base + _len, dev, dbase, foff as u64, valid, dsize));
+                            readahead = Some((base, base + _len, dev, dbase, foff as u64, valid, dsize, fidx));
                         }
                     }
                 }
@@ -6570,16 +7449,23 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
             DEMAND_FILE_FILLED.fetch_add(1, Ordering::Relaxed);
         }
     }
-    if !crate::paging::map_demand_4k(pml4, page, phys) {
-        crate::procpool::demand_free(phys);
+    let mapped = if map_ro {
+        crate::paging::map_demand_4k_ro(pml4, page, phys)
+    } else {
+        crate::paging::map_demand_4k(pml4, page, phys)
+    };
+    if !mapped {
+        if !map_ro {
+            crate::procpool::demand_free(phys); // a cached (map_ro) frame is owned by the cache
+        }
         return false;
     }
     // Flush any stale not-present TLB entry for this page.
     unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
     DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
     DEMAND_USED.store(true, Ordering::Relaxed);
-    if let Some((mbase, mend, dev, dbase, foff, valid, dsize)) = readahead {
-        demand_readahead(pml4, page, mbase, mend, dev, dbase, foff, valid, dsize);
+    if let Some((mbase, mend, dev, dbase, foff, valid, dsize, fidx)) = readahead {
+        demand_readahead(pml4, page, mbase, mend, dev, dbase, foff, valid, dsize, fidx);
     }
     true
 }
@@ -6591,7 +7477,7 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
 /// just leaves a page for a later fault to take the slow way.
 #[allow(clippy::too_many_arguments)]
 fn demand_readahead(pml4: u64, page: u64, mbase: u64, mend: u64,
-                    dev: usize, dbase: u64, foff: u64, valid: u64, dsize: u64) {
+                    dev: usize, dbase: u64, foff: u64, valid: u64, dsize: u64, fidx: usize) {
     const RA_PAGES: usize = 15; // + the faulting page = one 64 KiB virtio request
     static RA_BUF: spin::Mutex<()> = spin::Mutex::new(());
     static mut BOUNCE: [u8; RA_PAGES * 4096] = [0; RA_PAGES * 4096];
@@ -6633,16 +7519,38 @@ fn demand_readahead(pml4: u64, page: u64, mbase: u64, mend: u64,
     }
     for i in 0..want {
         let p = first + (i as u64) * 4096;
+        let moff = p - mbase;
+        // Valid file bytes for THIS page; the tail past `valid` stays zero (.bss).
+        let n = (valid - moff).min(4096).min((bytes - i * 4096) as u64) as usize;
+        // Cross-process page cache, same rules as the primary fault: a FULL,
+        // file-page-aligned page of immutable pack content is shared read-only.
+        let fpos = foff + moff;
+        let cacheable = fpos & 0xFFF == 0 && n == 4096;
+        if cacheable {
+            let key = ((fidx as u64) << 40) | (fpos >> 12);
+            if let Some(cphys) = disk_cache_get(key) {
+                if crate::paging::map_demand_4k_ro(pml4, p, cphys) {
+                    DISK_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                break;
+            }
+        }
         let phys = match crate::procpool::demand_alloc() {
             Some(f) => f,
             None => break,
         };
-        let moff = p - mbase;
-        // Valid file bytes for THIS page; the tail past `valid` stays zero (.bss).
-        let n = (valid - moff).min(4096).min((bytes - i * 4096) as u64) as usize;
         unsafe {
             core::ptr::write_bytes(phys as *mut u8, 0, 4096);
             core::ptr::copy_nonoverlapping(BOUNCE[i * 4096..].as_ptr(), phys as *mut u8, n);
+        }
+        if cacheable {
+            disk_cache_put(((fidx as u64) << 40) | (fpos >> 12), phys);
+            if !crate::paging::map_demand_4k_ro(pml4, p, phys) {
+                break; // frame stays owned by the cache
+            }
+            DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
+            continue;
         }
         if !crate::paging::map_demand_4k(pml4, p, phys) {
             crate::procpool::demand_free(phys);
@@ -6729,7 +7637,7 @@ pub fn spawn_glibc_persistent(
     // mmap() never share a cursor (see BRK_CUR/BRK_END).
     let brk_start = arena + 0x0200_0000;
     let mmap_start = arena + 0x0400_0000;
-    let stack_top = arena + nblocks * MIB2 - 0x0010_0000;
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000;
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
@@ -6866,7 +7774,18 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // route while the X event route depends on a glib-pump race.
     b"--remote-debugging-pipe",
     b"--disable-gpu", b"--use-gl=disabled", b"--disable-vulkan",
+    // --single-process stays the DEFAULT (the proven mode). The C1 multi-process
+    // experiment (2026-08-28, remove this flag to reproduce) got real forks
+    // working: two 256 MiB children (pid 1000/1001) live with their own PML4s
+    // once the process pool holds 640 MiB. Remaining wall: the child goes Ready
+    // but silent after its post-fork rt_sigaction sweep (Mojo handshake never
+    // completes), the network-service child crashes later, and child arenas are
+    // not recycled into the pool on exit. See docs/SPRINT-PLAN-CHROMIUM.md.
+    // Shipping default is single-process (proven). Remove --single-process to
+    // reproduce the multi-process work; the watchdog-off flags then matter
+    // (under TCG the child's init outruns chrome's own GpuWatchdog timeout).
     b"--no-zygote", b"--single-process", b"--disable-dev-shm-usage",
+    b"--disable-gpu-watchdog", b"--disable-hang-monitor",
     b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
     b"--disable-crashpad-for-testing", b"--disable-breakpad",
     b"--disable-in-process-stack-traces", b"--lang=en-US",
@@ -6900,6 +7819,11 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // emulation. Unknown feature names are ignored harmlessly, so the list names
     // every plausible spelling.
     b"--disable-features=SafeBrowsing,OptimizationHints,SegmentationPlatform,MediaRouter,Translate,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,MojoUseEventFd,PageContentAnnotations,HistoryEmbeddings,PageEmbeddings,AnnotatedPageContentExtraction,AIPageContent,TextEmbedder,PageContentExtraction,OptimizationGuideModelDownloading,OptimizationTargetPrediction,PageVisibility,ModelExecution",
+    // The fast, reproducible demo page. The REAL site works down the whole
+    // stack on the post-campaign kernel (desk4, 2026-08-31: DNS via usernet,
+    // TCP+TLS established to euro-os.eu:443, first composited paint quad at
+    // ~23 min) but a full render needs a longer interactive session than the
+    // scripted 25-minute window - swap in https://euro-os.eu/ to reproduce.
     b"file:///tmp/euro.html",
 ];
 pub const CHROME_ENVP: &[&[u8]] = &[
@@ -6931,6 +7855,10 @@ pub fn persistent_running() -> bool {
 ///
 /// Its arena, address space AND demand pool are handed to `kill_persistent_glibc`,
 /// which frees them when the window is closed.
+/// The disk exe path of the running persistent glibc process, so a fork child's
+/// execve("/proc/self/exe", ...) knows what to re-load.
+static CHILD_EXE_PATH: Mutex<String> = Mutex::new(String::new());
+
 pub fn spawn_glibc_disk_persistent(
     falloc: &mut FrameAllocator,
     exe_path: &str,
@@ -6939,6 +7867,7 @@ pub fn spawn_glibc_disk_persistent(
     envp: &[&[u8]],
     caps: u64,
 ) -> Option<usize> {
+    *CHILD_EXE_PATH.lock() = String::from(exe_path);
     let run = match glibc_disk_launch(falloc, exe_path, ldso, argv, envp, caps) {
         Ok(r) => r,
         Err(e) => {
@@ -7082,6 +8011,17 @@ fn glibc_disk_launch(
     envp: &[&[u8]],
     caps: u64,
 ) -> Result<DiskRun, &'static str> {
+    // A fresh launch: no fork child of a PREVIOUS run may leave its state loaded
+    // or its ChildMem around.
+    GLOBALS_OWNER.store(0, Ordering::Relaxed);
+    CHILD_MEM.lock().clear();
+    disk_cache_reset();
+    // Every glibc-disk launch (persistent AND boot-test) records its exe path, so a
+    // fork child's execve("/proc/self/exe") can re-load the right binary. It was
+    // only set on the persistent path — the boot-test's chrome children then all
+    // died with exec-failure exit(127), which surfaced as "Network service crashed"
+    // (run 5).
+    *CHILD_EXE_PATH.lock() = String::from(exe_path);
     // Resolve the disk-served executable.
     let (diskidx, dev, doff, dsize) = {
         let reg = DISK_FILES.lock();
@@ -7159,7 +8099,7 @@ fn glibc_disk_launch(
     let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
     let brk_start = arena + 0x0200_0000;
     let mmap_start = arena + 0x0400_0000;
-    let stack_top = arena + nblocks * MIB2 - 0x0010_0000;
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000;
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
@@ -7377,7 +8317,7 @@ pub fn run_glibc_disk(
         // the next timer tick (100 Hz) resumes us, and under TCG a halted vCPU parks
         // the host thread — an idle guest finally costs idle.
         if crate::sched::any_other_ready() {
-            crate::sched::yield_now();
+            yield_reacquire();
         } else {
             x86_64::instructions::hlt();
         }
@@ -7498,7 +8438,7 @@ pub fn run_glibc(
     // brk heap [+32 MiB, +64 MiB); mmap bump area starts after it (disjoint cursors).
     let brk_start = arena + 0x0200_0000;
     let mmap_start = arena + 0x0400_0000; // runtime mmaps (libc, …) bump from +64 MiB
-    let stack_top = arena + nblocks * MIB2 - 0x0010_0000; // near the arena top
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000; // near the arena top
 
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
@@ -7617,7 +8557,7 @@ pub fn run_glibc(
         // disk-variant loop: the no-Ready fallback resumes THIS task, so a bare yield
         // spins, and a halted vCPU is the only thing TCG runs for free).
         if crate::sched::any_other_ready() {
-            crate::sched::yield_now();
+            yield_reacquire();
         } else {
             x86_64::instructions::hlt();
         }
@@ -8009,7 +8949,34 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
     // Linux-ABI compatibility: programs compiled for x86_64-linux
     // use Linux syscall numbers + semantics. Translate to our handlers.
     if LINUX_ABI.load(Ordering::Relaxed) {
+        // Mojo forensics: the FULL syscall stream of every fork child (the
+        // socket-only [slife] log hid exactly the moment the child goes
+        // silent). Bounded per child so the serial port survives.
+        let trace_child = current_is_fork_child();
         let r = linux_dispatch(num, a1, a2, a3, a4, a5);
+        if trace_child {
+            // High budget: we want the renderer's WHOLE post-execve life
+            // (ld.so loading libs from the child's fresh demand state, then
+            // Mojo's first channel ops) to reach the serial log.
+            static CHILD_TRACE_LEFT: core::sync::atomic::AtomicU32 =
+                core::sync::atomic::AtomicU32::new(4000);
+            static SIGSWEEP: core::sync::atomic::AtomicU32 =
+                core::sync::atomic::AtomicU32::new(0);
+            if num == 13 || num == 10 {
+                // rt_sigaction sweep + mprotect flood: known noise, just count.
+                SIGSWEEP.fetch_add(1, Ordering::Relaxed);
+            } else if CHILD_TRACE_LEFT.load(Ordering::Relaxed) > 0 {
+                CHILD_TRACE_LEFT.fetch_sub(1, Ordering::Relaxed);
+                let swept = SIGSWEEP.swap(0, Ordering::Relaxed);
+                if swept > 0 {
+                    crate::serial_println!("[cst] (…{swept}x rt_sigaction…)");
+                }
+                crate::serial_println!(
+                    "[cst] t{} {num}({a1:#x},{a2:#x},{a3:#x}) = {r:#x}",
+                    crate::sched::current()
+                );
+            }
+        }
         // Trace every EBADF return during chrome's disk-cache init: pin which syscall
         // (num) on which fd/path chrome sees as "Bad file descriptor" -> the op that
         // stalls storage init and blocks the first navigation.
@@ -8365,10 +9332,45 @@ pub fn dump_threads_now(why: &str) {
 }
 
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    // Per-process isolation: the swapped globals FOLLOW the running task (see
+    // GLOBALS_OWNER). One ensure at entry loads this process' state if another
+    // process' was in; nothing swaps back at exit, so a syscall that blocks
+    // mid-arm stays consistent and the next entrant fixes ownership itself.
+    ensure_globals_for_current();
+    linux_dispatch_swapped(num, a1, a2, a3, a4, a5)
+}
+
+fn linux_dispatch_swapped(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    // Resolve low-fd ALIASES (dup2 of a socket-class fd, see FD_ALIAS) before
+    // dispatch, for every syscall whose fd argument the socket layers must see
+    // as the real class-encoded fd. close() is intentionally excluded: closing
+    // the alias only clears the alias slot (the real fd stays open — POSIX dup
+    // semantics: the object lives until all descriptors are closed).
+    let a1 = match num {
+        // EVERY fd-taking syscall resolves aliases, not just the socket set: a
+        // fork child's dup2 is alias-only now, and chrome fstat'ed its dup2'd V8
+        // snapshot fd -> EBADF -> "Error mapping V8 startup snapshot file"
+        // FATAL (run 10), because fstat(5) was not in this list. read/write,
+        // stat/lseek/pread/readv, dup/dup2(old), sendfile, socket ops, fcntl/
+        // ioctl, sync/truncate ops, getdents, statfs, fadvise, fallocate.
+        0 | 1 | 5 | 8 | 16 | 17 | 18 | 19 | 20 | 32 | 33 | 40
+        | 44 | 45 | 46 | 47 | 48 | 51 | 52 | 54 | 55
+        | 72 | 73 | 74 | 75 | 77 | 91 | 93 | 138 | 187 | 217 | 221 | 285 => unalias_fd(a1),
+        _ => a1,
+    };
+    let a3 = if num == 233 { unalias_fd(a3) } else { a3 }; // epoll_ctl(epfd, op, FD, ev)
+    let a5 = if num == 9 { unalias_fd(a5) } else { a5 }; // mmap(addr,len,prot,flags,FD,off)
+    if num == 3 && (a1 as usize) < MAX_FD && fd_alias_clear(a1 as usize) {
+        return 0; // close(alias): drop only the alias, keep the socket (POSIX dup)
+    }
     let chk = SCM_CHECK_ADDR.swap(0, Ordering::Relaxed);
     if chk != 0 {
-        let v = read_user::<u64>(chk).unwrap_or(u64::MAX);
-        crate::serial_println!("[scm] NEXT syscall ({num}): controllen at {chk:#x} now reads {v}");
+        let owner = SCM_CHECK_OWNER.load(Ordering::Relaxed);
+        let cur_owner = fork_child_owner(crate::sched::current()).unwrap_or(0);
+        if owner == cur_owner {
+            let v = read_user::<u64>(chk).unwrap_or(u64::MAX);
+            crate::serial_println!("[scm] NEXT syscall ({num}): controllen at {chk:#x} now reads {v}");
+        } // else: another process is current — its space does not map the address
     }
     // Whole-life log of the network sockets: every syscall whose first arg is a
     // sock fd, with its result. The main-navigation socket goes silent after
@@ -8706,8 +9708,63 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // the usual "don't yield mid-syscall" hazard doesn't apply to a task
                 // that never resumes. Yielding here avoids running glibc's post-exit
                 // ring-3 garbage (which else spins, or GP-faults, until the timer skips it).
-                crate::sched::yield_now();
+                yield_reacquire();
                 return 0; // unreachable in practice (Dead task is never rescheduled)
+            }
+            // A FORK CHILD exits: recycle its arena, page tables and kstack into
+            // the process pool, drop its bookkeeping, and die quietly. Without
+            // this the child fell into the main-process path below (ending the
+            // whole browser) and its 256 MiB arena was lost to the pool forever
+            // (the third fork failed at 127 MiB free).
+            {
+                // Resolve through fork_child_owner: exit_group by ANY task of a
+                // fork child (its main OR one of its worker THREADS) must end
+                // that CHILD process. A child worker's exit_group used to miss
+                // this branch (it only matched the child main) and fell through
+                // to the main-process path below - ending the WHOLE browser with
+                // exit 0, nondeterministically by whichever child finished first
+                // (the early clean exits of runs 9/16/18/19).
+                let owner = fork_child_owner(cur);
+                let hit = {
+                    let g = GLIBC_FORK_CHILDREN.lock();
+                    owner.and_then(|o| g.iter().position(|&(_, t, _, _, _)| t == o)).map(|i| g[i])
+                };
+                if let Some((pid, ctask, pml4, arena, frames)) = hit {
+                    // The whole child dies: its OTHER threads too, exactly like kill().
+                    let threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter()
+                        .filter(|&&(_, m)| m == ctask).map(|&(t, _)| t).collect();
+                    for t in threads {
+                        if t != cur {
+                            free_thread_kstack(t);
+                            crate::sched::mark_dead(t);
+                        }
+                    }
+                    if cur != ctask {
+                        // The caller is a worker: the child MAIN dies with it.
+                        free_thread_kstack(ctask);
+                        crate::sched::mark_dead(ctask);
+                    }
+                    crate::serial_println!("[fork] child pid {pid} (task {cur}) exit({a1}) — arena recycled ({} MiB back to pool)", frames / 256);
+                    // Record the exit for wait4: WEXITSTATUS lives in bits 8..16.
+                    GLIBC_CHILD_EXITS.lock().push((pid, ((a1 as u32) & 0xff) << 8));
+                    globals_release_owner(ctask); // parent state back BEFORE the drop
+                    GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
+                    FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != ctask);
+                    child_mem_drop(ctask);
+                    CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
+                    fork_child_release_fds(ctask); // flush deferred parent closes
+                    child_opened_release(ctask);   // free the fds the child opened
+                    // Give the child's COMMITTED demand pages back: without this every
+                    // dead child leaked its pages and the pool ran dry at ~524 MiB
+                    // under MP relaunch churn (run 12 POOL EXHAUSTED).
+                    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &shared_phys_sorted());
+                    crate::procpool::free_range(arena, frames);
+                    crate::procpool::free(pml4);
+                    free_thread_kstack(cur);
+                    crate::sched::mark_dead(cur);
+                    yield_reacquire();
+                    return 0; // unreachable: a Dead task is never rescheduled
+                }
             }
             if main != usize::MAX {
                 // A SCHEDULED glibc process exits: record the code, kill any leftover
@@ -8754,7 +9811,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // Switch away for good (same reasoning as the worker path): the Dead
                 // main must not run glibc's post-exit_group code (it GP-faults once
                 // libraries like libm are mapped). The launcher already has its result.
-                crate::sched::yield_now();
+                yield_reacquire();
                 return 0;
             }
             // Foreground run_args (musl) excursion: the synchronous EXITED model.
@@ -8783,7 +9840,15 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             let user_ss = (sel.user_data.0 | 3) as u64;
             let fs = if flags & 0x0008_0000 != 0 { a5 } else { unsafe { Msr::new(0xC000_0100).read() } };
             let saved_regs = unsafe { SAVED_REGS };
-            let pml4 = GLIBC_PML4.load(Ordering::Relaxed);
+            // The CALLER's address space, not the global GLIBC_PML4: a thread
+            // created by a forked child must run on the child's page tables.
+            // With the global, the child's Mojo I/O thread ran on the PARENT's
+            // memory copy — child and thread never saw each other's mutexes,
+            // and the Mojo handshake sat silent forever.
+            let pml4 = {
+                use x86_64::registers::control::Cr3;
+                Cr3::read().0.start_address().as_u64()
+            };
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, pml4, fs, saved_regs);
             if child == usize::MAX {
                 free_thread_kstack_slot(slot); // scheduler table full -> -EAGAIN, no crash
@@ -8791,6 +9856,11 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
             register_thread_kstack(child, slot);
             GLIBC_THREADS.lock().push(child);
+            // If a fork child (or its thread) spawned this, the new thread
+            // shares the child's address space -> the same ChildMem swap.
+            if let Some(owner) = fork_child_owner(crate::sched::current()) {
+                CHILD_THREADS.lock().push((child, owner));
+            }
             crate::serial_println!("[glibc-thread] clone -> thread task {child} (shared address space)");
             if flags & 0x0010_0000 != 0 && a3 != 0 {
                 let _ = write_user(a3, child as i32);
@@ -8832,7 +9902,15 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             let user_ss = (sel.user_data.0 | 3) as u64;
             let fs = if flags & 0x0008_0000 != 0 { tls } else { unsafe { Msr::new(0xC000_0100).read() } };
             let saved_regs = unsafe { SAVED_REGS };
-            let pml4 = GLIBC_PML4.load(Ordering::Relaxed);
+            // The CALLER's address space, not the global GLIBC_PML4: a thread
+            // created by a forked child must run on the child's page tables.
+            // With the global, the child's Mojo I/O thread ran on the PARENT's
+            // memory copy — child and thread never saw each other's mutexes,
+            // and the Mojo handshake sat silent forever.
+            let pml4 = {
+                use x86_64::registers::control::Cr3;
+                Cr3::read().0.start_address().as_u64()
+            };
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, pml4, fs, saved_regs);
             if child == usize::MAX {
                 free_thread_kstack_slot(slot); // scheduler table full -> -EAGAIN, no crash
@@ -8840,6 +9918,11 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
             register_thread_kstack(child, slot);
             GLIBC_THREADS.lock().push(child);
+            // If a fork child (or its thread) spawned this, the new thread
+            // shares the child's address space -> the same ChildMem swap.
+            if let Some(owner) = fork_child_owner(crate::sched::current()) {
+                CHILD_THREADS.lock().push((child, owner));
+            }
             // Diag: what the child will `pop`/`call` first. glibc's clone3 child pops the
             // fn off the top of child_stack (or uses a preserved reg). Log the stack top
             // + rdx/r9 so a rip=0 faulting thread can be matched against a working one.
@@ -9284,6 +10367,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             } else if crate::net::is_unix_fd(a1) {
                 let data = crate::net::unix_fd_recv(a1, a3 as usize);
                 if data.is_empty() {
+                    if crate::net::unix_fd_at_eof(a1) {
+                        return 0; // peer closed + drained: POSIX EOF
+                    }
                     return (-11i64) as u64; // -EAGAIN: non-blocking, no data (NOT EOF)
                 }
                 if !copy_to_user(a2, &data) {
@@ -9344,6 +10430,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     crate::net::sock_recv(a1, cap)
                 };
                 if data.is_empty() && crate::net::is_unix_fd(a1) {
+                    if crate::net::unix_fd_at_eof(a1) {
+                        return 0; // peer closed + drained: POSIX EOF
+                    }
                     return (-11i64) as u64; // -EAGAIN
                 }
                 let mut off = 0usize;
@@ -9385,22 +10474,32 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             total
         }
         3 => {
-            // close(fd): epoll, eventfd, socket, AF_UNIX socket, or VFS file.
-            if is_epoll_fd(a1) {
-                if let Some(slot) = EPOLLS.lock().get_mut((a1 - EPOLL_FD_BASE) as usize) {
-                    *slot = None;
+            // close(fd) by a FORK CHILD: the fd table is shared with the parent,
+            // so only mark it closed for this child (see FORK_CHILD_CLOSED).
+            if current_is_fork_child() {
+                if !child_close_own(a1) {
+                    fork_child_mark_closed(a1); // inherited: mark-only
                 }
-                0
-            } else if crate::net::is_eventfd(a1) {
-                crate::net::eventfd_close(a1);
-                0
-            } else if crate::net::is_sock_fd(a1) {
-                crate::net::sock_close(a1)
-            } else if crate::net::is_unix_fd(a1) {
-                crate::net::unix_fd_close(a1)
-            } else {
-                vfs_close(a1 as usize)
+                return 0;
             }
+            // close(fd) by the PARENT of a fd a live fork child INHERITED: freeing
+            // the slot now lets the allocator hand that NUMBER out again while the
+            // child still owns it — chrome's per-process ScopedFD tracker then sees
+            // open() return an fd it owns and CHECK-crashes ("FD ownership
+            // violation", run 4: browser closed its fd 5, slot freed, the service
+            // child's next openat got 5 back). POSIX semantics: the description
+            // lives until EVERY holder closes it. Defer: keep the slot occupied,
+            // remember the fd, and really free it when the last inheriting child
+            // exits. The parent itself closed it and never touches it again, so
+            // the number staying resolvable costs nothing.
+            if FORK_INHERITED.lock().iter().any(|(_, set)| set.contains(&(a1 as u32))) {
+                let mut d = DEFERRED_CLOSE.lock();
+                if !d.contains(&(a1 as u32)) {
+                    d.push(a1 as u32);
+                }
+                return 0;
+            }
+            close_fd_now(a1)
         }
         32 => dup_fd(a1),                 // dup(oldfd)
         33 | 292 => dup2_fd(a1, a2),       // dup2(old,new) / dup3(old,new,flags)
@@ -9409,13 +10508,86 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             do_glibc_fork()
         }
         59 => {
-            // execve(path, argv, envp): log the target so we can see chrome's child
-            // process types (--type=renderer/gpu/utility) before implementing spawn.
-            let path = user_cstr(a1, 256);
-            let arg1 = { let p: u64 = read_user(a2 + 8).unwrap_or(0); if p != 0 { user_cstr(p, 128) } else { alloc::vec::Vec::new() } };
-            crate::serial_println!("[spawndiag] execve({}) arg1={} -> ENOSYS",
-                String::from_utf8_lossy(&path), String::from_utf8_lossy(&arg1));
-            (-38i64) as u64
+            // execve(path, argv, envp). A FORK CHILD re-execs itself (chrome
+            // launches renderer/GPU/utility children this way, no zygote). The
+            // main process's execve stays unimplemented (would need a fresh
+            // launch); ordinary programs never reach here.
+            if current_is_fork_child() {
+                do_child_execve(a1, a2, a3)
+            } else {
+                let path = user_cstr(a1, 256);
+                crate::serial_println!("[spawndiag] execve({}) by non-child -> ENOSYS",
+                    String::from_utf8_lossy(&path));
+                (-38i64) as u64
+            }
+        }
+        61 => {
+            // wait4(pid, *status, options, *rusage): NON-BLOCKING reap of a glibc
+            // fork child (chrome always passes WNOHANG from its child watcher).
+            // a1 = pid or -1 (any); returns 0 when nothing is reapable yet.
+            let want = a1 as i64;
+            let mut ce = GLIBC_CHILD_EXITS.lock();
+            let idx = ce.iter().position(|&(p, _)| want == -1 || p == want as u64);
+            match idx {
+                Some(i) => {
+                    let (cpid, status) = ce.remove(i);
+                    drop(ce);
+                    if a2 != 0 && !write_user(a2, status) {
+                        return EFAULT;
+                    }
+                    crate::serial_println!("[wait4] reaped glibc child pid {cpid} status={status:#x}");
+                    cpid
+                }
+                None => {
+                    // Nothing exited. ECHILD when the pid does not exist at all,
+                    // else 0 ("still running", chrome polls again).
+                    if want > 0
+                        && !GLIBC_FORK_CHILDREN.lock().iter().any(|&(p, _, _, _, _)| p == want as u64)
+                    {
+                        return (-10i64) as u64; // -ECHILD
+                    }
+                    0
+                }
+            }
+        }
+        62 => {
+            // kill(pid, sig): terminate a glibc fork child from the browser (chrome
+            // kills a hung/superseded helper before restarting it). Clean up exactly
+            // like the child's own exit path, but from the caller's context; the
+            // child is not running (single-core cooperative) so freeing is safe.
+            let hit = {
+                let g = GLIBC_FORK_CHILDREN.lock();
+                g.iter().position(|&(p, _, _, _, _)| p == a1).map(|i| g[i])
+            };
+            match hit {
+                Some((pid, ctask, pml4, arena, frames)) => {
+                    if a2 != 0 {
+                        crate::serial_println!("[kill] pid {pid} (task {ctask}) sig {a2} — terminated by parent");
+                        // Its threads die with it.
+                        let threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter()
+                            .filter(|&&(_, m)| m == ctask).map(|&(t, _)| t).collect();
+                        for t in threads {
+                            free_thread_kstack(t);
+                            crate::sched::mark_dead(t);
+                        }
+                        GLIBC_CHILD_EXITS.lock().push((pid, (a2 as u32) & 0x7f));
+                        globals_release_owner(ctask); // never drop state that is loaded
+                        GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
+                        FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != ctask);
+                        child_mem_drop(ctask);
+                        CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
+                        fork_child_release_fds(ctask);
+                        child_opened_release(ctask);
+                        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &shared_phys_sorted());
+                        crate::procpool::free_range(arena, frames);
+                        crate::procpool::free(pml4);
+                        free_thread_kstack(ctask);
+                        crate::sched::mark_dead(ctask);
+                    }
+                    0 // sig 0 = existence probe: child exists -> 0
+                }
+                None => (-3i64) as u64, // -ESRCH
+            }
         }
         285 => {
             // fallocate(fd, mode, offset, len): ensure the file spans [0, offset+len).
@@ -9515,6 +10687,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             for i in 0..nfds {
                 let ent = a1 + (i as u64) * 8;
                 let fd = match read_user::<i32>(ent) { Some(v) => v as i64 as u64, None => return EFAULT };
+                let fd = unalias_fd(fd); // dup2'd socket alias (Mojo child channel)
                 let events = read_user::<u16>(ent + 4).unwrap_or(0);
                 let mut re = 0u16;
                 // Use the SAME readiness logic as epoll (event fds/pipes/sockets report
@@ -9621,14 +10794,14 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         // The loop re-checks readiness after every tick.
                         crate::sched::sleep_ticks(1);
                         if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-                            crate::sched::yield_now();
+                            yield_reacquire();
                         }
                     }
                 }
                 None => {
                     crate::sched::sleep_ticks(1);
                     if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-                        crate::sched::yield_now();
+                        yield_reacquire();
                     }
                 }
             }
@@ -9814,6 +10987,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 crate::net::sock_recv(a1, a3 as usize)
             };
             if data.is_empty() && crate::net::is_unix_fd(a1) {
+                if crate::net::unix_fd_at_eof(a1) {
+                    return 0; // peer closed + drained: POSIX EOF
+                }
                 return (-11i64) as u64; // -EAGAIN: non-blocking, no data yet
             }
             // TCP: 0 means EOF and ONLY EOF. An empty read on a live connection is
@@ -9933,6 +11109,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // still 20 there = userspace clobbers it; already 0 = our own return
                 // path does. One boot decides.
                 SCM_CHECK_ADDR.store(a2 + 40, Ordering::Relaxed);
+                SCM_CHECK_OWNER.store(fork_child_owner(crate::sched::current()).unwrap_or(0), Ordering::Relaxed);
                 if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
                     // Read the fields back: a write that silently did not land looks
                     // exactly like a control message the receiver "dropped".
@@ -9957,6 +11134,16 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             if data.is_empty() && crate::net::is_sock_fd(a1) && !crate::net::sock_eof(a1) {
                 return (-11i64) as u64;
             }
+            // PEER CLOSED and drained: POSIX EOF (0), NOT EAGAIN. A dead child's
+            // socketpair otherwise stays level-triggered-readable forever with an
+            // EOF chrome can never consume - the Chrome_IOThread livelock (run 20:
+            // fd 602 EPOLLIN a million times after the browser's deferred close of
+            // 603 flushed on the child's death).
+            if data.is_empty() && fds.is_empty() && crate::net::is_unix_fd(a1)
+                && crate::net::unix_fd_at_eof(a1)
+            {
+                return 0;
+            }
             if data.is_empty() && fds.is_empty() && crate::net::is_unix_fd(a1) {
                 // An empty non-blocking recvmsg is chrome's hottest loop: it polls this
                 // socket thousands of times a second while another of its threads is
@@ -9970,13 +11157,26 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // threads running at a quarter of the poll rate, which is thousands of
                 // hand-overs a second — plenty — at a quarter of the switch cost.
                 if EMPTY_RECV_POLLS.fetch_add(1, Ordering::Relaxed) % 4 == 3 {
-                    crate::sched::yield_now();
+                    yield_reacquire();
                 }
                 return (-11i64) as u64; // -EAGAIN: non-blocking, no data (NOT EOF)
             }
             let scm_chk = SCM_CHECK_ADDR.load(Ordering::Relaxed);
             if CACHE_DIR_DIAG.load(Ordering::Relaxed) && crate::net::is_unix_fd(a1) {
+                // + a 16-byte hex prefix, budgeted: run 23 settled into an endless
+                // 112-byte message ping-pong with zero forward progress for a full
+                // hour. Identical prefixes every time = a consume/resend bug ours;
+                // varying prefixes = real traffic that never completes (protocol
+                // desync, e.g. a partial read splitting a Mojo message).
+                static SCM_HEX_BUDGET: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(48);
+                if SCM_HEX_BUDGET.load(Ordering::Relaxed) > 0 {
+                    SCM_HEX_BUDGET.fetch_sub(1, Ordering::Relaxed);
+                    let n = data.len().min(16);
+                    crate::serial_println!("[scm] recvmsg fd{a1}: delivering {} data bytes | head={:02x?}",
+                        data.len(), &data[..n]);
+                } else {
                 crate::serial_println!("[scm] recvmsg fd{a1}: delivering {} data bytes", data.len());
+                }
             }
             if scm_chk != 0 {
                 crate::serial_println!("[scm] pre-scatter: controllen reads {}", read_user::<u64>(scm_chk).unwrap_or(u64::MAX));
@@ -10001,9 +11201,10 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         }
         8 => vfs_lseek(a1 as usize, a2 as i64, a3),  // lseek(fd, offset, whence)
         257 => {
-            // openat(dirfd, path, flags, mode): ignore dirfd (AT_FDCWD). flags in a3.
+            // openat(dirfd, path, flags, mode): a RELATIVE path resolves against
+            // the dirfd's directory (resolve_at). flags in a3.
             // O_CREAT=0x40 creates; O_TRUNC=0x200 truncates; O_APPEND=0x400 -> at the end.
-            let path = user_cstr(a2, 256);
+            let path = resolve_at(a1, user_cstr(a2, 256));
             let flags = a3;
             // DNS-config census: every open of the resolver's config files, loudly.
             // Chrome reports DNS_PROBE_FINISHED_BAD_CONFIG without a single UDP
@@ -10173,8 +11374,8 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     (vfs_size(a1 as usize), a2, fi.map(|f| f as u64 + 1).unwrap_or(0))
                 }
             } else {
-                // newfstatat: path in a2, statbuf in a3.
-                let path = user_cstr(a2, 256);
+                // newfstatat: path in a2 (relative resolves against dirfd a1), statbuf in a3.
+                let path = resolve_at(a1, user_cstr(a2, 256));
                 ensure_proc(&path); // synthesize /proc on demand
                 // A DIRECTORY path matches no exact file — report S_IFDIR so callers
                 // that stat a dir before scanning it (fontconfig scanning
@@ -10315,7 +11516,22 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             prot_none_set(addr, end, a3 == 0);
             0
         }
-        13 => 0,  // rt_sigaction — no signals; pretend it succeeds
+        13 => {
+            // rt_sigaction — no signal delivery here, but the ERROR CONTRACT
+            // matters: Linux accepts signals 1..=64 and refuses changing
+            // SIGKILL(9)/SIGSTOP(19). Chrome's post-fork handler-reset loop
+            // walks signal numbers UNTIL the first error — always answering 0
+            // trapped both forked children in an endless rt_sigaction loop
+            // (4293 calls and counting), which WAS the "silent child".
+            let sig = a1;
+            if sig == 0 || sig > 64 {
+                (-22i64) as u64 // -EINVAL
+            } else if (sig == 9 || sig == 19) && a2 != 0 {
+                (-22i64) as u64 // can't change SIGKILL/SIGSTOP
+            } else {
+                0
+            }
+        }
         14 => 0,  // rt_sigprocmask
         218 => 1, // set_tid_address -> tid
         273 => 0, // set_robust_list
@@ -10696,7 +11912,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             while crate::interrupts::ticks() < deadline {
                 crate::sched::sleep_ticks(1);
                 if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
-                    crate::sched::yield_now(); // let everyone else run while we wait
+                    { yield_reacquire(); } // let everyone else run while we wait
                 }
                 // Same guard as poll(): with interrupts off and nothing else runnable
                 // the clock cannot advance, and an unbounded wait here hangs the

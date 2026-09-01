@@ -570,6 +570,45 @@ pub fn map_user_4k_falloc(falloc: &mut euromm::FrameAllocator, pml4: u64, virt: 
     true
 }
 
+/// map_demand_4k, but READ-ONLY: used for pages backed by the shared disk page
+/// cache — a write then faults (protection violation) and the CoW breaker gives
+/// the writer a private copy.
+pub fn map_demand_4k_ro(pml4: u64, virt: u64, phys: u64) -> bool {
+    // SAFETY: identical to map_demand_4k minus the WRITABLE bit.
+    unsafe {
+        let i4 = ((virt >> 39) & 0x1FF) as usize;
+        let i3 = ((virt >> 30) & 0x1FF) as usize;
+        let i2 = ((virt >> 21) & 0x1FF) as usize;
+        let i1 = ((virt >> 12) & 0x1FF) as usize;
+        let pdpt = match ensure_table((pml4 as *mut u64).add(i4)) { Some(p) => p, None => return false };
+        let pd = match ensure_table((pdpt as *mut u64).add(i3)) { Some(p) => p, None => return false };
+        let pt = match ensure_table((pd as *mut u64).add(i2)) { Some(p) => p, None => return false };
+        (pt as *mut u64).add(i1).write_volatile(phys | PRESENT | USER);
+    }
+    true
+}
+
+/// Read the PTE for `virt` in `pml4`'s demand region: (physical frame, writable).
+/// None when any level is absent.
+pub fn demand_pte(pml4: u64, virt: u64) -> Option<(u64, bool)> {
+    // SAFETY: identity-mapped table chain, read-only walk.
+    unsafe {
+        let i4 = ((virt >> 39) & 0x1FF) as usize;
+        let i3 = ((virt >> 30) & 0x1FF) as usize;
+        let i2 = ((virt >> 21) & 0x1FF) as usize;
+        let i1 = ((virt >> 12) & 0x1FF) as usize;
+        let e4 = (pml4 as *const u64).add(i4).read_volatile();
+        if e4 & PRESENT == 0 { return None; }
+        let e3 = ((e4 & ADDR_MASK) as *const u64).add(i3).read_volatile();
+        if e3 & PRESENT == 0 { return None; }
+        let e2 = ((e3 & ADDR_MASK) as *const u64).add(i2).read_volatile();
+        if e2 & PRESENT == 0 { return None; }
+        let e1 = ((e2 & ADDR_MASK) as *const u64).add(i1).read_volatile();
+        if e1 & PRESENT == 0 { return None; }
+        Some((e1 & ADDR_MASK, e1 & WRITABLE != 0))
+    }
+}
+
 pub fn map_demand_4k(pml4: u64, virt: u64, phys: u64) -> bool {
     // SAFETY: pml4 + all table frames are identity-mapped low RAM; page-aligned.
     unsafe {
@@ -670,6 +709,18 @@ pub fn clone_demand_region(parent: u64, child: u64, idx: usize) -> bool {
                         | ((i3 as u64) << 30)
                         | ((i2 as u64) << 21)
                         | ((i1 as u64) << 12);
+                    // A READ-ONLY page is a shared disk-cache frame: the child
+                    // maps the SAME frame read-only (CoW on write) instead of
+                    // copying it. This is what makes fork affordable with the
+                    // page cache: copying the parent's whole RO-mapped text set
+                    // (hundreds of MB) exhausted the pool and later cache-hit
+                    // mappings failed silently (run 16 ifetch terminations).
+                    if e1 & WRITABLE == 0 {
+                        if !map_demand_4k_ro(child, va, src) {
+                            return false;
+                        }
+                        continue;
+                    }
                     let dst = match crate::procpool::demand_alloc() {
                         Some(f) => f,
                         None => return false,
@@ -689,6 +740,47 @@ pub fn clone_demand_region(parent: u64, child: u64, idx: usize) -> bool {
 /// Free a demand-paged region: walk PML4[`idx`] and return every committed data page
 /// AND every page-table frame to the process pool, then clear the PML4 entry. Mirrors
 /// [`map_demand_4k`]. Called when a process that used demand paging exits.
+/// free_demand_region, but frames present in `keep` (sorted) survive — they are
+/// SHARED (memfd) frames other processes still map; freeing them with the dead
+/// process is a use-after-free for every other mapper.
+pub fn free_demand_region_except(pml4: u64, idx: usize, keep: &[u64]) {
+    // SAFETY: identity-mapped table chain; called single-threaded at teardown.
+    unsafe {
+        let e4 = (pml4 as *const u64).add(idx).read_volatile();
+        if e4 & PRESENT == 0 {
+            return;
+        }
+        let pdpt = e4 & ADDR_MASK;
+        for i3 in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i3).read_volatile();
+            if e3 & PRESENT == 0 {
+                continue;
+            }
+            let pd = e3 & ADDR_MASK;
+            for i2 in 0..512usize {
+                let e2 = (pd as *const u64).add(i2).read_volatile();
+                if e2 & PRESENT == 0 {
+                    continue;
+                }
+                let pt = e2 & ADDR_MASK;
+                for i1 in 0..512usize {
+                    let e1 = (pt as *const u64).add(i1).read_volatile();
+                    if e1 & PRESENT != 0 {
+                        let phys = e1 & ADDR_MASK;
+                        if keep.binary_search(&phys).is_err() {
+                            crate::procpool::demand_free(phys); // committed data page
+                        }
+                    }
+                }
+                crate::procpool::demand_free(pt);
+            }
+            crate::procpool::demand_free(pd);
+        }
+        crate::procpool::demand_free(pdpt);
+        (pml4 as *mut u64).add(idx).write_volatile(0);
+    }
+}
+
 pub fn free_demand_region(pml4: u64, idx: usize) {
     // SAFETY: identity-mapped table chain; called single-threaded at process teardown.
     unsafe {

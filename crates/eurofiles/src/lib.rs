@@ -63,20 +63,25 @@ pub struct DirEntry {
     pub kind: FileKind,
     pub size: u64,
     pub modified: u64,
+    pub mode: u16,
     pub badges: Vec<Badge>,
 }
 
 impl DirEntry {
     pub fn file(name: &str, size: u64) -> Self {
-        DirEntry { name: name.to_string(), kind: FileKind::File, size, modified: 0, badges: Vec::new() }
+        DirEntry { name: name.to_string(), kind: FileKind::File, size, modified: 0, mode: 0, badges: Vec::new() }
     }
     pub fn dir(name: &str) -> Self {
-        DirEntry { name: name.to_string(), kind: FileKind::Dir, size: 0, modified: 0, badges: Vec::new() }
+        DirEntry { name: name.to_string(), kind: FileKind::Dir, size: 0, modified: 0, mode: 0, badges: Vec::new() }
     }
     pub fn with_badge(mut self, b: Badge) -> Self {
         if !self.badges.contains(&b) {
             self.badges.push(b);
         }
+        self
+    }
+    pub fn with_mode(mut self, m: u16) -> Self {
+        self.mode = m;
         self
     }
     pub fn modified_at(mut self, t: u64) -> Self {

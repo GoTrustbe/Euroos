@@ -142,3 +142,78 @@ Work top-to-bottom. Commit after each green step. Each `[ ]` is a boot-verified 
 - One boot per verified step; let the binary name each blocker; knock it down; commit.
 - No Claude trailers. Do not push. Under-claim: "engine works" ≠ "app works".
 - Keep the pack disk (`/tmp/chrome-pack.img`) as the chrome source; grow it as needed.
+
+## 2026-08-28 — deadlock work (phase C1 approach)
+Baseline first: the known-good --single-process desktop run on the NEW kernel
+(rwx enforcement, immutability, integrity sweep landed since the last chrome
+run). Then remove --single-process and hunt the multi-process wall with the
+existing forensics: FOP ring (last 128 futex ops), FUTEX_WAIT_ADDR/SINCE per
+task, stall snapshots (STALL_DIAG), read_glibc_u32 lock-word peeks. Expected
+new ground in multi-process: fork/exec of the renderer (no zygote), Mojo IPC
+over socketpairs between REAL processes, cross-process shared memory
+(memfd + MAP_SHARED across address spaces).
+
+### 2026-08-28 findings — the "deadlock" dissected
+The multi-process wall is NOT one deadlock; it is layers:
+1. FIXED: chrome-desktop.sh lacked the -icount guest clock — chrome sat in the
+   TCP_INFO socket treadmill and never reached the window (same fix as
+   chrome-ui-input.sh, now committed).
+2. FIXED: the process frame pool fell back to 160 MiB at -m 3584M (the 1/5-of-RAM
+   cap rejected 640 MiB), so not one 256 MiB fork arena fit and every GPU/
+   renderer/network child died at birth ("GPU process isn't usable. Goodbye").
+   Cap is now 1/4 with 512/288 MiB intermediate candidates: two real chrome
+   children forked successfully (own PML4 + arena).
+3. OPEN (next iteration): the forked child completes its post-fork rt_sigaction
+   sweep over all fds, then sits Ready but syscall-silent — the Mojo handshake
+   with the browser never completes (suspects: child-side thread creation after
+   fork, socketpair inheritance, or the child waiting on a poll the parent never
+   satisfies). The network-service child crashes minutes later; child arenas are
+   not recycled into the pool on exit (third fork fails at 127 MiB left).
+Baseline re-proven the same day: --single-process chrome renders the test page
+on the desktop under the full FS-security kernel, and opened a TLS connection
+to 142.251.142.206:443 through the EuroOS netstack.
+
+### 2026-08-29 — three real kernel bugs fixed under the Mojo wall
+1. clone/clone3 gave a NEW THREAD the global GLIBC_PML4 — a thread created by a
+   forked child ran on the PARENT's memory copy (child and its own thread never
+   saw each other's writes). Both arms now use the caller's Cr3.
+2. The fd table is process-global (that is what makes fork inheritance work),
+   so the child's post-fork fd cleanup CLOSED THE PARENT'S descriptors — the
+   "network service crashed" trail. A fork child's close() now only marks the
+   fd in a per-child closed set.
+3. A fork child's exit fell into the main-process path (ending the whole
+   browser) and leaked its 256 MiB arena. Children now recycle arena + page
+   tables + kstack into the pool and die quietly.
+Result: after the forks the run now spawns 8 further threads and lives longer,
+but the child STILL goes syscall-silent right after its first post-fork sweep,
+chrome times the launch out (3 tries) and aborts. NEXT ITERATION: a per-child
+FULL syscall trace (not just sockets) to see the exact last thing the child
+does — the [slife] socket-only log hides everything between the sweep and the
+silence. --single-process restored as the shipping default.
+
+### 2026-08-29 (2) — the wall is now ONE precise task
+Two more real bugs fixed with the full child trace:
+4. rt_sigaction answered success for EVERY signal number. Chrome's post-fork
+   handler-reset loop walks signal numbers UNTIL the first error — both
+   children spun forever in rt_sigaction (4293+ calls): the "silent child" was
+   never blocked, it was looping. Now 1..=64 with EINVAL beyond (and for
+   changing SIGKILL/SIGSTOP), like Linux. Sweep is 127 calls and terminates.
+5. dup2 of a socket-class fd (unix >= 600 / inet >= 500) returned EBADF — the
+   child could not pin its inherited Mojo socketpair end to the fixed low fd.
+   dup2 now registers a low-fd ALIAS resolved centrally in linux_dispatch
+   (read/write/sendmsg/recvmsg/poll/epoll_ctl/fcntl/...); close(alias) drops
+   only the alias.
+With those, the child's post-fork setup COMPLETES: dup2 channel + pipes,
+prlimit64, /proc scan, prctl — and then calls execve("/proc/self/exe",
+"--type=gpu-process") = ENOSYS. Chrome without a zygote re-execs itself for
+every child; there is no flag to skip it.
+
+REMAINING (the one real task): execve on the glibc path. The child needs a
+FRESH image of the same exe (its forked arena is the parent's dirty state).
+That requires the glibc launcher to stop being a singleton (GLIBC_PML4,
+ARENA_BASE, demand-region state are process-global today) — a bounded but
+substantial refactor: per-process launch state, then execve = tear down the
+child's arena, rebuild a fresh disk-backed demand image + SysV stack with the
+new argv, jump to ld.so. All other pieces (fork, threads-on-child-pml4,
+fd inheritance, channel aliasing, arena recycling) are DONE and proven by
+trace. Baseline --single-process remains the shipping default.

@@ -146,6 +146,11 @@ pub fn recent(n: usize) -> Vec<String> {
 /// append-only FS check) and the trail grows monotonically. Set the
 /// `FLAG_APPEND_ONLY` flag once (cap-gated via L2). Returns true on success.
 pub fn persist(fs: &mut dyn FileSystem, caps: u64) -> bool {
+    // Kernel service: the audit chain is system state, not user files.
+    crate::sysctx::as_system(fs, |fs| persist_inner(fs, caps))
+}
+
+fn persist_inner(fs: &mut dyn FileSystem, caps: u64) -> bool {
     use core::sync::atomic::Ordering;
     let _ = fs.create_dir("/var");
     let _ = fs.create_dir("/var/log");

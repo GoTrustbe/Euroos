@@ -38,6 +38,12 @@ pub fn set_default(mime: &str, app: &str) {
 /// beats extension, a real `.docx` resolves to Writer, an image to the viewer, a
 /// text file to the editor, and a user override changes the default.
 pub fn selftest(fs: &mut dyn FileSystem) {
+    // A system selftest: it seeds under / and may run post-login, so its FS
+    // access runs in system context (rwx is enforced for real now).
+    crate::sysctx::as_system(fs, selftest_inner)
+}
+
+fn selftest_inner(fs: &mut dyn FileSystem) {
     let _ = fs.create_dir("/mimetest");
     // A PNG mislabelled .txt → magic wins.
     let png = [0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];

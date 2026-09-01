@@ -78,6 +78,14 @@ impl Window {
     pub fn contains(&self, mx: usize, my: usize) -> bool {
         mx >= self.x && mx < self.x + self.w && my >= self.y && my < self.y + self.h
     }
+    /// Is (mx,my) in the bottom-right resize grip (an 18px corner)?
+    pub fn resize_grip_contains(&self, mx: usize, my: usize) -> bool {
+        const GRIP: usize = 18;
+        mx + GRIP >= self.x + self.w
+            && mx < self.x + self.w
+            && my + GRIP >= self.y + self.h
+            && my < self.y + self.h
+    }
     /// Which traffic-light button is under (mx,my)? The three dots sit at
     /// x+14/34/54, vertically centered in the title bar, 13px — with a slightly
     /// more generous hit zone so they are easy to reach.
@@ -222,6 +230,18 @@ pub fn draw_window(fb: &FrameBuffer, win: &Window) {
 
     // Content (body) — separate so it can cheaply redraw only itself.
     draw_window_body(fb, win);
+
+    // Resize grip: three short diagonal ticks in the bottom-right corner, the
+    // universal "drag me to resize" affordance (UX audit 2026-08-27).
+    let gx = win.x + win.w;
+    let gy = win.y + win.h;
+    for (o, len) in [(4usize, 4usize), (8, 8), (12, 12)] {
+        for t in 0..len {
+            if gx >= o + t + 1 && gy >= t + 3 {
+                fb.blend(gx - o - t - 1, gy - t - 3, Color::TEXT_DIM, 150);
+            }
+        }
+    }
 }
 
 /// Redraw ONLY the body (content) of a window — for cheap live updates
@@ -291,6 +311,14 @@ pub fn draw_window_body(fb: &FrameBuffer, win: &Window) {
     }
     if win.app == crate::suite_ui::SuiteApp::Text {
         crate::textedit::render(fb, win.x, win.y, win.w, win.h);
+        return;
+    }
+    if win.app == crate::suite_ui::SuiteApp::ImageView {
+        crate::imageview::render(fb, win.x, win.y, win.w, win.h);
+        return;
+    }
+    if win.app == crate::suite_ui::SuiteApp::Paint {
+        crate::paint::render(fb, win.x, win.y, win.w, win.h);
         return;
     }
     if win.app == crate::suite_ui::SuiteApp::Monitor {

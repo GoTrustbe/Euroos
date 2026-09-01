@@ -30,7 +30,7 @@ pub mod vfs;
 pub use block::{BlockDevice, BlockError, BlockResult, MemoryBlockDevice};
 pub use disk::EuroFs;
 pub use fs::{
-    DirEntry, EntryKind, FileSystem, FsError, FsResult, ScrubReport, SnapshotInfo, FLAG_APPEND_ONLY,
+    DirEntry, EntryKind, FileSystem, FsError, FsResult, ScrubReport, SnapshotInfo, FLAG_APPEND_ONLY, FLAG_VERSIONED,
     FLAG_IMMUTABLE, SNAP_AUTO_ROLLBACK, SNAP_READONLY,
 };
 pub use ramdisk::RamDisk;

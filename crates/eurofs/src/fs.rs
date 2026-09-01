@@ -33,6 +33,10 @@ pub const FLAG_IMMUTABLE: u32 = 1 << 0;
 /// must begin with the old); no overwriting, truncating or removing. Basis
 /// for the tamper-evident audit log (P3).
 pub const FLAG_APPEND_ONLY: u32 = 1 << 1;
+/// 3H: keep version history — before an overwrite the old content is preserved
+/// as a version. Set it on a FILE (that file is versioned) or on a DIRECTORY
+/// (every file directly or indirectly under it is versioned).
+pub const FLAG_VERSIONED: u32 = 1 << 2;
 
 // ── EuroSnap (Sprint S): CoW snapshots ──────────────────────────────────────
 /// Snapshot flags.
@@ -137,6 +141,10 @@ pub trait FileSystem {
     fn set_uid_context(&mut self, uid: u32) {
         let _ = uid;
     }
+    /// The current session uid-context (0 = system). Default: system.
+    fn uid_context(&self) -> u32 {
+        0
+    }
     /// Owner uid of the file/dir at `path` (0 = system/legacy). Default: not supported.
     fn owner(&self, path: &str) -> FsResult<u32> {
         let _ = path;
@@ -144,6 +152,27 @@ pub trait FileSystem {
     }
     /// Change the owner of `path` to `uid` (like `chown(2)`; the capability check
     /// lives in the kernel layer above). Default: not supported.
+    /// Change the permission bits of `path` (like `chmod(2)`). Only the owner
+    /// or uid 0; an immutable object stays frozen. Default: not supported.
+    fn chmod(&mut self, path: &str, mode: u16) -> FsResult<()> {
+        let _ = (path, mode);
+        Err(FsError::Unsupported)
+    }
+
+    /// 3H: the stored versions of `path`, newest first: (version-number, size,
+    /// mtime of the version). Default: not supported.
+    fn versions(&self, path: &str) -> FsResult<Vec<(u32, u64, u64)>> {
+        let _ = path;
+        Err(FsError::Unsupported)
+    }
+
+    /// 3H: restore version `n` of `path` as its current content. The replaced
+    /// content is itself preserved as a new version first (nothing is lost).
+    fn restore_version(&mut self, path: &str, n: u32) -> FsResult<()> {
+        let _ = (path, n);
+        Err(FsError::Unsupported)
+    }
+
     fn chown(&mut self, path: &str, uid: u32) -> FsResult<()> {
         let _ = (path, uid);
         Err(FsError::Unsupported)

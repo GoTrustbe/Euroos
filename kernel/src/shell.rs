@@ -143,6 +143,18 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             vec!["logged out — back to the euro session".to_string()]
         }
         "sessions" => crate::session::list_lines(),
+        "chmod" => {
+            // chmod <octal> <path> — change permission bits. The FS gates it:
+            // only the owner or uid 0, and immutable objects stay frozen.
+            let mut it = arg2.split_whitespace();
+            match (u16::from_str_radix(arg1, 8), it.next()) {
+                (Ok(mode), Some(path)) => match fs.chmod(path, mode) {
+                    Ok(()) => vec![format!("mode of {path} -> {mode:o}")],
+                    Err(e) => vec![format!("chmod: {e:?}")],
+                },
+                _ => vec!["usage: chmod <octal-mode> <path>".to_string()],
+            }
+        }
         "chown" => {
             // chown <uid> <path> — 3E-3 ownership. Reserved for the admin seat
             // (root or the wheel desktop user), like the other admin commands.
@@ -598,6 +610,57 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         // 3E-5: GDB serial-stub attach instructions.
         "gdbstub" => crate::gdbstub::shell(),
         "euroimmutable" | "immutable" => crate::immutable::shell(fs, arg1, arg2),
+        // Phase-3 FS security: on-demand system-integrity sweep.
+        // 3H per-file/dir version history.
+        "versions" => {
+            let mut it = arg2.split_whitespace();
+            let path = it.next().unwrap_or("");
+            match (arg1, path) {
+                ("on", p) if !p.is_empty() => {
+                    let cur = fs.get_flags(p).unwrap_or(0);
+                    match fs.set_flags(p, cur | eurofs::FLAG_VERSIONED) {
+                        Ok(()) => vec![format!("version history ON for {p}")],
+                        Err(e) => vec![format!("versions: {e:?}")],
+                    }
+                }
+                ("off", p) if !p.is_empty() => {
+                    let cur = fs.get_flags(p).unwrap_or(0);
+                    match fs.set_flags(p, cur & !eurofs::FLAG_VERSIONED) {
+                        Ok(()) => vec![format!("version history OFF for {p}")],
+                        Err(e) => vec![format!("versions: {e:?}")],
+                    }
+                }
+                ("list", p) if !p.is_empty() => match fs.versions(p) {
+                    Ok(v) if v.is_empty() => vec![format!("{p}: no stored versions")],
+                    Ok(v) => {
+                        let mut out = vec![format!("{p}: {} version(s), newest first:", v.len())];
+                        for (n, size, mtime) in v {
+                            out.push(format!("  v{n}  {size} B  {}", crate::rtc::short_datetime(mtime)));
+                        }
+                        out
+                    }
+                    Err(e) => vec![format!("versions: {e:?}")],
+                },
+                ("restore", p) if !p.is_empty() => match it.next().and_then(|n| n.parse::<u32>().ok()) {
+                    Some(n) => match fs.restore_version(p, n) {
+                        Ok(()) => vec![format!("{p} restored to v{n} (the replaced content was preserved as a new version)")],
+                        Err(e) => vec![format!("versions: {e:?}")],
+                    },
+                    None => vec!["usage: versions restore <path> <n>".to_string()],
+                },
+                _ => vec!["usage: versions on|off|list|restore <path> [n]".to_string()],
+            }
+        }
+        "integrity" => {
+            let bins = crate::system_binaries();
+            crate::integrity::shell(fs, &bins)
+        }
+        // 3D-5 user immutability: protect/unprotect your OWN files, no cap needed.
+        "euroattr" => {
+            let user = crate::auth::session_name();
+            let joined = if arg2.is_empty() { alloc::string::String::from(arg1) } else { alloc::format!("{arg1} {arg2}") };
+            crate::euroattr::shell(&joined, &user, fs)
+        }
         "lsblk" | "blkid" => crate::fatmount::lsblk(),
         "mount" => {
             if arg1.is_empty() {

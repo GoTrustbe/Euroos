@@ -172,6 +172,7 @@ struct HidDevice {
     is_abs_pointer: bool, // usb-tablet / touchscreen: absolute X/Y report
     kb: eurousb::BootKeyboard,
     prev_mods: u8,
+    prev_ctrl: bool,
     armed: bool,
     last_arm: u64, // tick of the last endpoint (re-)arm — for idle re-arming
     // M4-2: layout parsed from the device's HID report descriptor (report-
@@ -705,6 +706,7 @@ unsafe fn enumerate_device(
         is_abs_pointer: is_abs,
         kb: eurousb::BootKeyboard::new(),
         prev_mods: 0,
+        prev_ctrl: false,
         armed: false,
         last_arm: 0,
         map: input_map,
@@ -1111,11 +1113,43 @@ fn inject_keyboard(hid: &mut HidDevice, report: &[u8]) {
         crate::ps2::push_scancode(0xAA);
     }
     hid.prev_mods = mods;
+    // Track Ctrl so editors can see Ctrl+key combos (copy/paste/save/select-all).
+    let ctrl_now = mods & 0x11 != 0; // LCtrl (bit0) or RCtrl (bit4)
+    let ctrl_prev = hid.prev_ctrl;
+    if ctrl_now && !ctrl_prev {
+        crate::ps2::push_scancode(0x1D); // Ctrl make
+    } else if !ctrl_now && ctrl_prev {
+        crate::ps2::push_scancode(0x9D); // Ctrl break
+    }
+    hid.prev_ctrl = ctrl_now;
     for ev in hid.kb.feed(report) {
-        if let Some(sc) = hid_to_set1(ev.keycode) {
+        // Navigation/edit keys are set-1 EXTENDED scancodes (0xE0 prefix): arrows,
+        // Home/End, PageUp/Down, Insert, Delete. A real text cursor needs them.
+        if let Some(ext) = hid_extended(ev.keycode) {
+            crate::ps2::push_scancode(0xE0);
+            crate::ps2::push_scancode(if ev.pressed { ext } else { ext | 0x80 });
+        } else if let Some(sc) = hid_to_set1(ev.keycode) {
             crate::ps2::push_scancode(if ev.pressed { sc } else { sc | 0x80 });
         }
     }
+}
+
+/// HID usage → set-1 EXTENDED scancode (without the 0xE0 prefix) for the
+/// navigation/edit keys the boot table skips.
+fn hid_extended(usage: u8) -> Option<u8> {
+    Some(match usage {
+        0x4A => 0x47, // Home
+        0x4D => 0x4F, // End
+        0x4B => 0x49, // PageUp
+        0x4E => 0x51, // PageDown
+        0x49 => 0x52, // Insert
+        0x4C => 0x53, // Delete
+        0x50 => 0x4B, // Left
+        0x4F => 0x4D, // Right
+        0x52 => 0x48, // Up
+        0x51 => 0x50, // Down
+        _ => return None,
+    })
 }
 
 /// Translate a HID mouse report into relative cursor movement + buttons.

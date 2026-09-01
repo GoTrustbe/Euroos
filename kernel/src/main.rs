@@ -148,6 +148,11 @@ mod logview;
 mod fatmount;
 mod extmount;
 mod smbfs;
+mod imageview;
+mod paint;
+mod editcore;
+mod sysctx;
+mod integrity;
 mod nfsmount;
 mod disktest;
 mod stresstest;
@@ -192,7 +197,14 @@ fn load_files_dir(fs: &mut dyn FileSystem, path: &str) {
     let items = match fs.list_dir(path) {
         Ok(v) => v
             .into_iter()
-            .map(|e| (e.name, e.kind == eurofs::EntryKind::Directory, e.size))
+            // The version store is FS-internal bookkeeping — reachable through
+            // History, not as a browsable folder.
+            .filter(|e| !(path == "/" && e.name == ".versions"))
+            .map(|e| {
+                let full = if path == "/" { alloc::format!("/{}", e.name) } else { alloc::format!("{path}/{}", e.name) };
+                let prot = fs.get_flags(&full).map(|f| f & eurofs::FLAG_IMMUTABLE != 0).unwrap_or(false);
+                (e.name, e.kind == eurofs::EntryKind::Directory, e.size, e.mtime, e.mode, prot)
+            })
             .collect::<alloc::vec::Vec<_>>(),
         Err(_) => alloc::vec::Vec::new(),
     };
@@ -207,7 +219,7 @@ fn build_context_menu(
     ry: usize,
     windows: &[compositor::Window],
     order: &[usize],
-    dock_targets: &[Option<usize>; 12],
+    dock_targets: &[Option<usize>; 14],
     sw: usize,
     sh: usize,
 ) {
@@ -618,10 +630,14 @@ fn main() -> Status {
     // lean 512 MiB public image still boots. We only reserve up to ~1/5 of usable RAM.
     {
         let usable_frames = (allocator.usable_bytes() / 4096) as usize;
-        let cap = usable_frames / 5; // never take more than a fifth of RAM
-        // Candidates: 640 MiB (2+ chrome arenas) → 160 MiB → 64 MiB, first that fits.
+        // Cap at a quarter of RAM: at -m 3584M the fifth-cap rejected the 640 MiB
+        // candidate and chrome multi-process fell to 160 MiB — not one 256 MiB
+        // child arena fit, and every GPU/renderer launch died on [fork] alloc.
+        let cap = usable_frames / 4;
+        // Candidates: 640 MiB (2+ chrome arenas) → 512 → 288 (one child + slack)
+        // → 160 → 64 MiB, first that fits.
         let mut installed = false;
-        for &want in &[163_840usize, 40_960, 16_384] {
+        for &want in &[163_840usize, 131_072, 73_728, 40_960, 16_384] {
             if want > cap {
                 continue;
             }
@@ -1471,10 +1487,15 @@ fn main() -> Status {
     for l in &net_lines {
         serial_println!("[net] {l}");
     }
-    // [io5] (Sprint IO): mount an SMB share over the live NIC (SLIRP → host Samba).
-    smbfs::selftest();
-    // [io6] (Sprint IO): mount an NFSv3 export over the live NIC (SLIRP → host nfsd).
-    nfsmount::selftest();
+    // [io5]/[io6] (Sprint IO): SMB/NFS mounts over the live NIC. DEV BUILDS ONLY:
+    // these dial the SLIRP gateway 10.0.2.2, which on an end user's machine is
+    // their OWN host — a downloaded OS must never probe the user's machine on
+    // port 445/2049 uninvited (it also crashed the public boot when a host
+    // answered 445 with a short response the parser did not expect).
+    if cfg!(feature = "selftest") {
+        smbfs::selftest();
+        nfsmount::selftest();
+    }
 
     // Load /bin/hello from EuroFS and VERIFY a real ED25519 SIGNATURE over
     // the program bytes against the public key baked into the kernel. Only
@@ -2370,9 +2391,42 @@ fn main() -> Status {
             // arguable.
             ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
             ring3::cdp_install("file:///tmp/euro.html");
-            let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
-                &[b"/pack/chrome-headless-shell", b"--no-sandbox",
-                  b"--disable-gpu", b"--disable-dev-shm-usage", b"--user-data-dir=/tmp/hs",
+            // GL is a RUNTIME choice now: with AVX enabled (an AVX-capable -cpu,
+            // e.g. Haswell — TCG emulates AVX2 since QEMU 7.2) SwiftShader's AVX2
+            // paths can actually execute, so offer chrome a REAL software GL
+            // (SwANGLE: ANGLE over SwiftShader) instead of disabling GL. The
+            // hypothesis under test: frame production starts once a GL surface
+            // exists (measure: the [trace] stage counts below + the id-7
+            // captureScreenshot answer). On a plain qemu64 boot (the public lean
+            // image) avx_enabled() is false and the proven no-GL args are passed
+            // byte for byte as before — zero regression risk.
+            // RUN 3 (GL campaign): multi-process WITH GL. With SwANGLE proven in
+            // single-process (run 2 captured a real 816x616 frame), the phase-4
+            // success criterion is a painted MULTI-process page: browser + GPU
+            // child + renderer, GL in the GPU child, raster over the (proven)
+            // cross-process shared frames. Toggle back to false to reproduce the
+            // single-process capture exactly.
+            const HS_MULTI_PROCESS: bool = true;
+            let gl_args: &[&[u8]] = if sched::avx_enabled() {
+                if HS_MULTI_PROCESS {
+                    // The PROVEN MP configuration: in-process GPU (SwANGLE in the
+                    // browser) + OUT-OF-PROCESS renderer — this painted the run-33
+                    // frame. A real GPU child (runs 34-37) launches fast now (page
+                    // cache) and no longer crashes or freezes anything, but its
+                    // own SwANGLE bring-up still overruns the browser's relaunch
+                    // patience under TCG; future work, not the default.
+                    &[b"--use-gl=angle", b"--use-angle=swiftshader",
+                      b"--enable-unsafe-swiftshader", b"--in-process-gpu"]
+                } else {
+                    &[b"--use-gl=angle", b"--use-angle=swiftshader",
+                      b"--enable-unsafe-swiftshader", b"--in-process-gpu"]
+                }
+            } else {
+                &[b"--disable-gpu", b"--disable-gpu-compositing", b"--use-gl=disabled"]
+            };
+            let mut hs_argv: alloc::vec::Vec<&[u8]> = alloc::vec![
+                  b"/pack/chrome-headless-shell" as &[u8], b"--no-sandbox",
+                  b"--disable-dev-shm-usage", b"--user-data-dir=/tmp/hs",
                   b"--disable-crashpad-for-testing", b"--disable-breakpad",
                   b"--disable-in-process-stack-traces", b"--no-zygote", b"--lang=en-US",
                   // NO SwiftShader/ANGLE GL: its software GL uses AVX2, which qemu64 + the
@@ -2387,7 +2441,13 @@ fn main() -> Status {
                   // (chrome exits ~3s clean). Getting the DOM needs multi-process (fork+exec
                   // of demand-paged procs, currently ENOSYS on the glibc path) or software-
                   // compositor bring-up. hshell running to exit 0 is the current landmark.
-                  b"--disable-vulkan", b"--use-gl=disabled", b"--ozone-platform=headless",
+                  b"--disable-vulkan", b"--ozone-platform=headless",
+                  // Children died "Terminating current process after 15 seconds
+                  // with no connection" (run 17): the Mojo handshake DOES run
+                  // (scm traffic both ways) but the browser services it slower
+                  // than chrome's 15 s child-connection deadline under TCG.
+                  // Give the handshake the time the emulation actually needs.
+                  b"--ipc-connection-timeout=120",
                   // ── SINGLE-PROCESS: run renderer/utility/GPU all IN the browser process
                   // so chrome NEVER forks a helper child. The default (forking) path
                   // livelocks: chrome forks helpers, they never execve into functional
@@ -2397,13 +2457,13 @@ fn main() -> Status {
                   // tried before and crashed worker threads on failed CHECKs — but those
                   // were the IMMEDIATE_CRASH walls we just cleared (FPU/SSE state,
                   // fcntl access-mode, getrandom uniqueness, memfd flags). Retest now.
-                  b"--single-process",
+                  // (--single-process is appended below unless HS_MULTI_PROCESS.)
                   // Force SOFTWARE compositing with no GPU thread at all: --in-process-gpu
                   // + --run-all-compositor-stages made navigation WAIT on a compositor
                   // frame that never commits without GL (chrome inited but never opened
                   // the page). Disable gpu-compositing + accelerated video so the browser
                   // reaches PreMainMessageLoopRun and actually navigates.
-                  b"--disable-gpu-compositing", b"--disable-accelerated-video-decode",
+                  b"--disable-accelerated-video-decode",
                   b"--disable-features=VaapiVideoDecoder,VaapiVideoEncoder",
                   // MojoUseEventFd = chrome's eventfd shared-mem Mojo channel; its probe
                   // PCHECKs that eventfd2(invalid flags) FAILS, but our eventfd2 accepts
@@ -2479,10 +2539,18 @@ fn main() -> Status {
                   // time; and all of it again once sleeps were real). Each also costs
                   // the DOM, because executeCommands awaits the capture. The blocker is
                   // frame production; the document should not wait on it.
-                  b"file:///tmp/euro.html"],
+                  ];
+            if !HS_MULTI_PROCESS {
+                hs_argv.push(b"--single-process");
+            }
+            hs_argv.extend_from_slice(gl_args);
+            hs_argv.push(b"file:///tmp/euro.html");
+            let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
+                &hs_argv,
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
                   b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null"], caps_net);
-            serial_println!("[hshell] BUILD=plain capture, healthy pipeline, no double navigation");
+            serial_println!("[hshell] BUILD=GL-{} (avx={})",
+                if sched::avx_enabled() { "swangle" } else { "disabled" }, sched::avx_enabled());
             serial_println!("[hshell] chrome-headless-shell from DISK: exit={e3}");
             // Did chrome actually write a PNG? Ship it out as hex: the boot log is the
             // only channel off this machine, and a picture is worth the bytes.
@@ -2953,10 +3021,41 @@ fn main() -> Status {
         let boot_caps = ring3::CAP_IMMUTABLE_ADMIN | ring3::CAP_FILE;
         immutable::selftest(&mut vfs);
         let protected = immutable::protect_system_files(&mut vfs, boot_caps);
+        // Sanity: the recursive sweep really covered /bin — spot-check a binary
+        // that is NOT in the explicit SYSTEM_FILES list.
+        let doom_prot = vfs.get_flags("/bin/doom").map(|f| f & eurofs::FLAG_IMMUTABLE != 0).unwrap_or(false);
+        serial_println!("[l2rec] /bin recursively protected: /bin/doom immutable={doom_prot}");
         serial_println!(
             "[l2] {} system file(s) marked IMMUTABLE — tamper-proof (changing requires CAP_IMMUTABLE_ADMIN; the boot updater clears the flag legitimately)",
             protected
         );
+        // Phase-3 FS security: the integrity sweep — /bin + /lib on disk must
+        // match the (loader-verified) kernel image, boot + periodically.
+        let bins = system_binaries();
+        integrity::selftest(&mut vfs, &bins, boot_caps);
+        integrity::check_and_report(&mut vfs, &bins, "at boot");
+        // 3H: per-file versioning on the LIVE root FS — write 3 versions,
+        // list them, restore v1, and prove nothing was lost.
+        {
+            let p = "/home/euro/.vtest.md";
+            let _ = vfs.create_dir("/home");
+            let _ = vfs.create_dir("/home/euro");
+            let hcur = vfs.get_flags("/home/euro").unwrap_or(0);
+            let _ = vfs.set_flags("/home/euro", hcur | eurofs::FLAG_VERSIONED);
+            let _ = vfs.write_file(p, b"draft 1");
+            let _ = vfs.write_file(p, b"draft 2");
+            let _ = vfs.write_file(p, b"draft 3");
+            let hist = vfs.versions(p).map(|v| v.len()).unwrap_or(0);
+            let restored = vfs.restore_version(p, 1).is_ok()
+                && vfs.read_file(p).map(|d| d == b"draft 1").unwrap_or(false);
+            let kept = vfs.versions(p).map(|v| v.len()).unwrap_or(0);
+            let _ = vfs.remove_file(p);
+            let ok = hist == 2 && restored && kept == 3;
+            serial_println!(
+                "[3h] per-file versioning (live FS): 3-writes->{hist} stored, restore-v1={restored}, replaced-kept->{kept} -> {}",
+                if ok { "OK (history is real) \u{2713}" } else { "FAILED \u{2717}" }
+            );
+        }
         audit::selftest(&mut vfs, boot_caps);
         // 3D-6 wiring: the live audit log is now hash-chained + tamper-evident,
         // fed by the real execve/connection call sites, and persisted as JSON.
@@ -3494,12 +3593,15 @@ fn main() -> Status {
     // REAL shell + filesystem demo: make a directory, write a file, read it
     // back — the output is real (no script), and /demo also appears in the
     // Files app. Proves the shell + EuroFS really work.
+    // The demo now also SHOWS the rwx protection: a user mkdir in / is
+    // refused, the same mkdir in the home directory works.
     for c in [
         "uname",
         "mkdir /demo",
-        "write /demo/welcome.txt Hello-from-EuroOS",
-        "ls /demo",
-        "cat /demo/welcome.txt",
+        "mkdir /home/euro/demo",
+        "write /home/euro/demo/welcome.txt Hello-from-EuroOS",
+        "cat /home/euro/demo/welcome.txt",
+        "ls /home/euro/demo",
         "ls /",
     ] {
         term.push(format!("euroos:/ $ {c}"));
@@ -3613,7 +3715,7 @@ fn main() -> Status {
     // hidden); a dock click opens an app. (AG-1 added files/notes/clock.)
     // 12 slots for 11 dock tiles: index 11 has no tile of its own — it is the hosted
     // X-client window (Chromium), reachable from the app launcher and the shell.
-    let mut dock_targets: [Option<usize>; 12] = [None; 12];
+    let mut dock_targets: [Option<usize>; 14] = [None; 14];
     dock_targets[4] = Some(1); // terminal → Terminal (the real shell)
     dock_targets[11] = Some(2); // launcher: "Chromium" → the hosted X window
 
@@ -3756,10 +3858,10 @@ fn main() -> Status {
     {
         let i_calc = windows.len();
         windows.push(compositor::Window {
-            x: SIDEBAR_W + 240,
-            y: 150,
-            w: 360,
-            h: 520,
+            x: SIDEBAR_W + 160,
+            y: 120,
+            w: 660,
+            h: 560,
             title: String::from("EuroReken"),
             content: alloc::vec![String::new(), String::from("0")],
             ui: Vec::new(),
@@ -3930,6 +4032,55 @@ fn main() -> Status {
         order.push(i_text);
         dock_targets[8] = Some(i_text); // dock: text icon → EuroText
         textedit::open(ctx.fs, ""); // load the default edit file from EuroFS
+        notes::load(ctx.fs); // EuroNotes: load (or seed) the editable notes
+
+        // EuroView: the image viewer window (opened from EuroFiles or the dock).
+        let i_view = windows.len();
+        windows.push(compositor::Window {
+            x: SIDEBAR_W + 200, y: 120, w: 700, h: 540,
+            title: String::from("EuroView"),
+            content: Vec::new(), ui: Vec::new(),
+            active: false, accent: Color::rgb(0x8B, 0x5C, 0xF6),
+            sec: eds::SecState::new(true, true, false),
+            app: suite_ui::SuiteApp::ImageView,
+            visible: false,
+            restore: None,
+        });
+        order.push(i_view);
+        let i_paint = windows.len();
+        windows.push(compositor::Window {
+            x: SIDEBAR_W + 60, y: 70, w: 912, h: 600,
+            title: String::from("EuroPaint"),
+            content: Vec::new(), ui: Vec::new(),
+            active: false, accent: Color::rgb(0x8B, 0x5C, 0xF6),
+            sec: eds::SecState::new(true, true, false),
+            app: suite_ui::SuiteApp::Paint,
+            visible: false,
+            restore: None,
+        });
+        order.push(i_paint);
+        dock_targets[12] = Some(i_view);  // launcher: "EuroView" → the image viewer
+        dock_targets[13] = Some(i_paint); // launcher: "EuroPaint" → the editor
+        // Seed a real sample image so EuroView has something to show out of the box.
+        {
+            let mut im = euromedia::Image::new(96, 64, [0x0F, 0x1B, 0x3A, 255]);
+            for y in 0..64u32 { for x in 0..96u32 {
+                let on_star = ((x as i32 - 48).pow(2) + (y as i32 - 20).pow(2)) < 60;
+                if on_star { im.set(x, y, [0xFF, 0xCC, 0x00, 255]); }
+                if y >= 44 && ((x / 8) % 2 == 0) { im.set(x, y, [0x00, 0x33, 0x99, 255]); }
+            }}
+            let _ = ctx.fs.create_dir("/home/euro/pictures");
+            let _ = ctx.fs.write_file("/home/euro/pictures/euroos.png", &euromedia::encode_png(&im));
+            // A second sample so Prev/Next has something to browse.
+            let mut im2 = euromedia::Image::new(96, 64, [0x2E, 0x7D, 0x32, 255]);
+            for y in 0..64u32 { for x in 0..96u32 {
+                if (x as i32 - 48).abs() + (y as i32 - 32).abs() < 20 { im2.set(x, y, [0xFF, 0xFF, 0xFF, 255]); }
+            }}
+            let _ = ctx.fs.write_file("/home/euro/pictures/diamond.png", &euromedia::encode_png(&im2));
+            // A REAL JPEG (baseline 4:2:0) so the viewer proves the new decoder.
+            let _ = ctx.fs.write_file("/home/euro/pictures/gradient.jpg", include_bytes!("../assets/sample.jpg"));
+            imageview::open(ctx.fs, "/home/euro/pictures/euroos.png");
+        }
 
         let i_mon = windows.len();
         windows.push(compositor::Window {
@@ -4048,6 +4199,8 @@ fn main() -> Status {
 
     // ── Desktop loop: mouse cursor, window dragging, live system window. ──
     let mut dragging: Option<usize> = None;
+    let mut resizing: Option<usize> = None; // window being resized by the corner grip
+    let mut painting: Option<usize> = None; // EuroPaint canvas stroke in progress
     // Tooltip hover state: what the cursor is over, and since when.
     let mut hover_txt: Option<String> = None;
     let mut hover_since = 0u64;
@@ -4137,6 +4290,7 @@ fn main() -> Status {
         // An app the user asked to open this iteration (via launcher or menu),
         // raised in one place after input handling.
         let mut launch_icon: Option<usize> = None;
+        let mut launch_path: Option<String> = None;
         // A screenshot requested this iteration, captured after a clean render.
         let mut pending_shot = false;
 
@@ -4164,8 +4318,10 @@ fn main() -> Status {
             }
         } else if launcher::is_open() {
             if let Some((cx, cy)) = mouse::take_press() {
-                if let Some(icon) = launcher::click_at(cx, cy, width, height) {
-                    launch_icon = Some(icon);
+                match launcher::click_at(cx, cy, width, height) {
+                    Some(launcher::Launch::App(icon)) => launch_icon = Some(icon),
+                    Some(launcher::Launch::Path(p)) => launch_path = Some(p),
+                    None => {}
                 }
                 need_full = true;
             }
@@ -4181,6 +4337,19 @@ fn main() -> Status {
                     match action {
                         OpenDir(p) => load_files_dir(ctx.fs, &p),
                         OpenFile(p) => {
+                            if imageview::handles(&p) {
+                                imageview::open(ctx.fs, &p);
+                                if let Some(w) = windows.iter().position(|win| win.app == suite_ui::SuiteApp::ImageView) {
+                                    order.retain(|&x| x != w);
+                                    order.push(w);
+                                    for ww in windows.iter_mut() { ww.active = false; }
+                                    windows[w].visible = true;
+                                    windows[w].active = true;
+                                }
+                                need_full = true;
+                                ctxmenu::close();
+                                continue;
+                            }
                             let (_mime, app) = mime::resolve(ctx.fs, &p);
                             if let Some(target) = app.as_deref().and_then(mime_app_to_suite) {
                                 if target == suite_ui::SuiteApp::Text {
@@ -4290,7 +4459,12 @@ fn main() -> Status {
         // Left click just pressed: dock launch, window focus/raise, or drag.
         // Uses the press LATCH (mouse::take_press) instead of sampling the button
         // this iteration, so a quick tap is never missed on the emulated poll.
-        if dragging.is_none() && mouse::take_press().is_some() {
+        if let Some((cx, cy)) = if dragging.is_none() { mouse::take_press() } else { None } {
+            // Hit-test at the LATCHED press position, not the current cursor. QMP
+            // (and any fast input) can move the pointer between the button-down and
+            // the loop iteration that handles it; using the live pos then dropped
+            // the click onto empty space or the wrong window. (UX audit 2026-08-27.)
+            let (px, py) = (cx, cy);
             // 3F-7: a pending permission dialog is MODAL — it intercepts the
             // click before any window/dock hit-test, and routes the answer to
             // the portal broker (scoped grant / auto-revoke).
@@ -4310,6 +4484,7 @@ fn main() -> Status {
             } else if compositor::brand_button_at(px, py) {
                 // The EU mark is the "start button": open the app launcher.
                 launcher::open();
+                launcher::refresh(ctx.fs); // fill the initial (all-apps) list
                 need_full = true;
             } else if {
                 let (rx, ry, rw, rh) = compositor::status_panel_rect(width);
@@ -4407,7 +4582,15 @@ fn main() -> Status {
                         ww.active = false;
                     }
                     windows[i].active = true;
-                    if windows[i].titlebar_contains(px, py) {
+                    if windows[i].resize_grip_contains(px, py) {
+                        // Bottom-right grip → free resize (was: move + maximize only,
+                        // no way to make a window smaller — UX audit 2026-08-27).
+                        if let Some((rx, ry, _rw, _rh)) = windows[i].restore.take() {
+                            windows[i].x = rx;
+                            windows[i].y = ry;
+                        }
+                        resizing = Some(i);
+                    } else if windows[i].titlebar_contains(px, py) {
                         // Un-snap on pickup: a snapped or maximized window returns to
                         // its floating size, popping under the cursor so the drag feels
                         // natural (Windows/GNOME behaviour).
@@ -4421,10 +4604,10 @@ fn main() -> Status {
                         dragging = Some(i);
                     } else if windows[i].app == suite_ui::SuiteApp::Reken {
                         // Click on a calculator button → REAL input to euroreken.
-                        if let Some(ch) =
+                        if let Some(tok) =
                             calc_ui::button_at(windows[i].x, windows[i].y, windows[i].w, windows[i].h, px, py)
                         {
-                            calc_ui::input(&mut windows[i].content, ch);
+                            calc_ui::input_token(&mut windows[i].content, tok);
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::XClient {
                         // Click on the hosted X app's body → forward to the X server at
@@ -4470,24 +4653,59 @@ fn main() -> Status {
                             agent_ui::begin_edit();
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Files {
-                        // Click on a directory/place/".." → navigate in the REAL FS.
-                        if let Some(path) = files::hit_test(windows[i].x, windows[i].y, px, py) {
+                        // An open History panel captures the click first.
+                        if files::history_open() {
+                            if let Some((path, n)) = files::history_click(windows[i].x, windows[i].y, px, py, windows[i].w, windows[i].h) {
+                                match ctx.fs.restore_version(&path, n) {
+                                    Ok(()) => notify::push("EuroFiles", &format!("restored v{n} (previous content kept as a new version)"), interrupts::ticks()),
+                                    Err(e) => notify::push("EuroFiles", &format!("restore refused: {e:?}"), interrupts::ticks()),
+                                }
+                                let cur = files::current_path();
+                                load_files_dir(ctx.fs, if cur.is_empty() { "/" } else { &cur });
+                            }
+                            need_full = true;
+                        } else if files::toolbar_click(windows[i].x, windows[i].y, px, py, windows[i].w) {
+                            // handled: New Folder / Rename / Delete / Copy / Cut / Paste
+                        } else if let Some(path) = files::hit_test(windows[i].x, windows[i].y, px, py) {
                             load_files_dir(ctx.fs, &path);
+                        } else if files::select_row(windows[i].x, windows[i].y, px, py) {
+                            // selected a row (highlight); a file can still be opened/dragged
+                            if let Some(fpath) = files::hit_test_file(windows[i].x, windows[i].y, px, py) {
+                                file_drag = Some((fpath, px, py));
+                            }
                         } else if let Some(fpath) = files::hit_test_file(windows[i].x, windows[i].y, px, py) {
-                            // Press on a file starts a potential drag; the drop
-                            // handler either opens it in the target app (drag onto
-                            // EuroText) or, if it did not move, opens it normally.
                             file_drag = Some((fpath, px, py));
                         }
+                    } else if windows[i].app == suite_ui::SuiteApp::ImageView {
+                        // Viewer toolbar: zoom/rotate in place; Prev/Next re-open.
+                        if let Some(target) = imageview::click(windows[i].x, windows[i].y, px, py) {
+                            if !target.is_empty() {
+                                imageview::open(ctx.fs, &target);
+                            }
+                            need_full = true;
+                        }
+                    } else if windows[i].app == suite_ui::SuiteApp::Paint {
+                        // Press in EuroPaint: a toolbar action or the start of a
+                        // canvas stroke (continued in the drag phase while held).
+                        if paint::pointer(windows[i].x, windows[i].y, px, py, true) {
+                            need_full = true;
+                        }
+                        painting = Some(i);
                     } else if windows[i].app == suite_ui::SuiteApp::Notes {
                         // Click in the notes list → select a different note.
-                        notes::hit_test(windows[i].x, windows[i].y, px, py);
+                        // The formatting toolbar first, then the note-list selection.
+                        if !notes::toolbar_click(windows[i].x, windows[i].y, px, py, windows[i].w) {
+                            notes::hit_test(windows[i].x, windows[i].y, px, py);
+                        }
                     } else if windows[i].app == suite_ui::SuiteApp::Text {
-                        // Click on "Open" → the file picker; "Save" → write to EuroFS.
+                        // Click on "Open" → the file picker; "Save" → write to EuroFS;
+                        // a click in the text body positions the cursor there.
                         if textedit::open_button_at(windows[i].x, windows[i].y, windows[i].w, px, py) {
                             filedialog::open(filedialog::Mode::Open, "/");
                         } else if textedit::save_button_at(windows[i].x, windows[i].y, windows[i].w, px, py) {
                             textedit::save(ctx.fs);
+                        } else {
+                            textedit::click(windows[i].x, windows[i].y, px, py);
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Installer {
                         // 3E-1: "Install EuroOS" button → REAL install to the first
@@ -4501,6 +4719,8 @@ fn main() -> Status {
             }
         }
         if !ldown {
+            resizing = None;
+            if painting.is_some() { paint::release(); painting = None; }
             // Drop a file dragged out of EuroFiles.
             if let Some((path, sx, sy)) = file_drag.take() {
                 let moved = (px as i64 - sx as i64).abs() + (py as i64 - sy as i64).abs() > 14;
@@ -4519,6 +4739,16 @@ fn main() -> Status {
                         windows[w].active = true;
                     }
                     notify::push("Opened in EuroText", &path, interrupts::ticks());
+                } else if !moved && imageview::handles(&path) {
+                    // An image → EuroView (decode + show), our own viewer, no browser.
+                    imageview::open(ctx.fs, &path);
+                    if let Some(w) = windows.iter().position(|win| win.app == suite_ui::SuiteApp::ImageView) {
+                        order.retain(|&x| x != w);
+                        order.push(w);
+                        for ww in windows.iter_mut() { ww.active = false; }
+                        windows[w].visible = true;
+                        windows[w].active = true;
+                    }
                 } else if !moved {
                     // A plain click → open with the default app (previous behaviour).
                     let (_m, app) = mime::resolve(ctx.fs, &path);
@@ -4558,6 +4788,26 @@ fn main() -> Status {
             if nx != windows[idx].x || ny != windows[idx].y {
                 windows[idx].x = nx;
                 windows[idx].y = ny;
+                need_full = true;
+            }
+        }
+        if let Some(idx) = painting {
+            if mouse::left_down() {
+                // Draw at the CURRENT pointer while the button is held (px,py here
+                // are the live cursor, which is exactly what a brush stroke wants).
+                if paint::pointer(windows[idx].x, windows[idx].y, px, py, true) {
+                    need_full = true;
+                }
+            }
+        }
+        if let Some(idx) = resizing {
+            const MIN_W: usize = 320;
+            const MIN_H: usize = 200;
+            let nw = px.saturating_sub(windows[idx].x).max(MIN_W).min(width.saturating_sub(windows[idx].x));
+            let nh = py.saturating_sub(windows[idx].y).max(MIN_H).min(height.saturating_sub(windows[idx].y));
+            if nw != windows[idx].w || nh != windows[idx].h {
+                windows[idx].w = nw;
+                windows[idx].h = nh;
                 need_full = true;
             }
         }
@@ -4614,11 +4864,36 @@ fn main() -> Status {
         let text_focused = focused.map(|i| windows[i].app == suite_ui::SuiteApp::Text).unwrap_or(false);
         // Only the (app-less) terminal window may receive keys as shell input.
         let term_focused = focused.map(|i| windows[i].app == suite_ui::SuiteApp::None).unwrap_or(false);
+        let notes_focused = focused.map(|i| windows[i].app == suite_ui::SuiteApp::Notes).unwrap_or(false);
 
         // ── Interactive shell / calculator: read keys. ──
         let mut term_dirty = false;
         let mut calc_dirty = false;
-        while let Some(k) = ps2::poll_key() {
+        // EuroText/EuroNotes focus (no modal overlay) → drain RICH keys so the
+        // cursor navigates and text inserts mid-line. Otherwise the classic
+        // char loop below handles the terminal, calculator, browser, etc.
+        // A Files name-prompt (New Folder / Rename) captures the keyboard.
+        if files::prompt_open() {
+            while let Some(k) = ps2::poll_key_ex() {
+                files::key(k);
+                need_full = true;
+            }
+        }
+        let editor_focused = !files::prompt_open() && (text_focused || notes_focused)
+            && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open();
+        if editor_focused {
+            while let Some(k) = ps2::poll_key_ex() {
+                if text_focused {
+                    textedit::key(k);
+                } else if notes::search_focused() {
+                    notes::search_key(k); // the search field has the keyboard
+                } else {
+                    notes::key(k);
+                }
+                need_full = true;
+            }
+        }
+        while let Some(k) = if editor_focused || files::prompt_open() { None } else { ps2::poll_key() } {
             // The symbol picker only needs Esc to dismiss.
             if symbolpicker::is_open() {
                 if k == '\u{1b}' { symbolpicker::close(); }
@@ -4635,7 +4910,11 @@ fn main() -> Status {
             // The app launcher captures the keyboard while it is open (type to
             // filter, Enter to open, Esc to dismiss).
             if launcher::is_open() {
-                if let Some(icon) = launcher::key(k) {
+                let lr = launcher::key(k);
+                launcher::refresh(ctx.fs); // live results after every keystroke
+                if let Some(launcher::Launch::Path(p)) = lr {
+                    launch_path = Some(p);
+                } else if let Some(launcher::Launch::App(icon)) = lr {
                     launch_icon = Some(icon);
                 }
                 need_full = true;
@@ -4702,6 +4981,13 @@ fn main() -> Status {
             // EuroText focus → the key edits the editor buffer (type/backspace/enter).
             if text_focused {
                 textedit::input(k);
+                need_full = true;
+                continue;
+            }
+            // EuroNotes focus → the key edits the selected note (type/backspace/
+            // enter, insertion at the end like EuroText). Persisted after the burst.
+            if notes_focused {
+                notes::input(k);
                 need_full = true;
                 continue;
             }
@@ -5065,6 +5351,68 @@ fn main() -> Status {
                 _ => {}
             }
         }
+        // Persist EuroNotes edits after the key burst (cheap in-cache writes).
+        if notes::take_dirty() {
+            notes::save_all(ctx.fs);
+        }
+        paint::flush_save(ctx.fs); // EuroPaint: write a pending Save to EuroFS
+        // Periodic system-integrity sweep (~5 min of guest ticks). Detects
+        // on-disk tampering of /bin//lib while the desktop runs.
+        {
+            static NEXT_SWEEP: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+            let now_t = interrupts::ticks();
+            let due = NEXT_SWEEP.load(core::sync::atomic::Ordering::Relaxed);
+            if now_t >= due {
+                NEXT_SWEEP.store(now_t + 5 * 60 * 100, core::sync::atomic::Ordering::Relaxed); // 100 Hz ticks
+                let bins = system_binaries();
+                integrity::check_and_report(ctx.fs, &bins, "periodic");
+            }
+        }
+        // EuroFiles: run queued file operations (new dir / rename / delete /
+        // copy / move) with FS access, then reload the current directory.
+        let ops = files::take_ops();
+        if !ops.is_empty() {
+            for op in ops {
+                let res: (&str, Result<(), eurofs::FsError>) = match op {
+                    files::FileOp::NewDir(p) => ("new folder", ctx.fs.create_dir(&p)),
+                    files::FileOp::Chmod(p, m) => ("chmod", ctx.fs.chmod(&p, m)),
+                    files::FileOp::ShowHistory(p) => {
+                        let rows = ctx.fs.versions(&p).unwrap_or_default();
+                        files::show_history(&p, rows);
+                        ("history", Ok(()))
+                    }
+                    files::FileOp::RestoreVersion(p, n) => ("restore", ctx.fs.restore_version(&p, n)),
+                    files::FileOp::ToggleProtect(p) => {
+                        // The user route (own /home files, no cap needed); the
+                        // euroattr layer refuses anything outside the session
+                        // user's home — system files need the admin capability.
+                        let user = auth::session_name();
+                        let cur = ctx.fs.get_flags(&p).unwrap_or(0);
+                        let newf = if cur & eurofs::FLAG_IMMUTABLE == 0 { eurofs::FLAG_IMMUTABLE } else { 0 };
+                        ("protect", euroattr::set_user(ctx.fs, &p, newf, &user))
+                    }
+                    files::FileOp::Rename(a, b) => ("rename", ctx.fs.rename(&a, &b)),
+                    files::FileOp::Delete(p, is_dir) => (
+                        "delete",
+                        if is_dir { ctx.fs.remove_dir(&p) } else { ctx.fs.remove_file(&p) },
+                    ),
+                    files::FileOp::Copy(src, dst) => (
+                        "copy",
+                        ctx.fs.read_file(&src).and_then(|b| ctx.fs.write_file(&dst, &b)),
+                    ),
+                    files::FileOp::Move(src, dst) => ("move", ctx.fs.rename(&src, &dst)),
+                };
+                // No silent failures: a refused operation (permissions,
+                // immutability, quota) is shown to the user.
+                if let (what, Err(e)) = res {
+                    notify::push("EuroFiles", &format!("{what} refused: {e:?}"), interrupts::ticks());
+                }
+            }
+            let cur = files::current_path();
+            load_files_dir(ctx.fs, if cur.is_empty() { "/" } else { &cur });
+            need_full = true;
+        }
+
 
         // File dialog: list a directory it asked for, and carry out a chosen path.
         if let Some(dir) = filedialog::needs_load() {
@@ -5092,6 +5440,28 @@ fn main() -> Status {
         }
 
         // Open an app requested by the launcher or a menu (single place).
+        // A search result path opens in the right app (viewer/text/files).
+        if let Some(p) = launch_path.take() {
+            let is_dir = ctx.fs.metadata(&p).map(|m| m.kind == eurofs::EntryKind::Directory).unwrap_or(false);
+            let target = if is_dir {
+                load_files_dir(ctx.fs, &p);
+                suite_ui::SuiteApp::Files
+            } else if imageview::handles(&p) {
+                imageview::open(ctx.fs, &p);
+                suite_ui::SuiteApp::ImageView
+            } else {
+                textedit::open(ctx.fs, &p);
+                suite_ui::SuiteApp::Text
+            };
+            if let Some(w) = windows.iter().position(|win| win.app == target) {
+                order.retain(|&x| x != w);
+                order.push(w);
+                for ww in windows.iter_mut() { ww.active = false; }
+                windows[w].visible = true;
+                windows[w].active = true;
+            }
+            need_full = true;
+        }
         if let Some(icon) = launch_icon {
             if let Some(w) = dock_targets.get(icon).copied().flatten().filter(|&w| w < windows.len()) {
                 // The hosted X window is only a frame: opening it has to start the app
@@ -5472,7 +5842,7 @@ fn eurojs_show(v: &eurojs::Value) -> String {
     }
 }
 
-fn system_binaries() -> [(&'static str, &'static [u8]); 32] {
+pub fn system_binaries() -> [(&'static str, &'static [u8]); 32] {
     [
         ("/bin/fbtest", ring3::fbtest_bytes()),
         ("/bin/doom", ring3::doom_bytes()),

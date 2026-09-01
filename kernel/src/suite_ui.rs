@@ -35,6 +35,10 @@ pub enum SuiteApp {
     Clock,
     /// EuroText: plain-text editor — edits + REALLY saves to EuroFS.
     Text,
+    /// EuroView: image viewer — decodes PNG/BMP/QOI/PPM and shows the picture.
+    ImageView,
+    /// EuroPaint: raster editor — draw on a canvas and save PNG/QOI.
+    Paint,
     /// EuroMonitor: live system monitor (RAM/tasks/disk/audit — real measurements).
     Monitor,
     /// EuroLog: live view of the hash-chained audit log.
@@ -73,6 +77,8 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize, app: Sui
         // EuroText/EuroMonitor/EuroLog read their own state and are handled before this
         // dispatch (see compositor::draw_window_body).
         SuiteApp::Text => {}
+        SuiteApp::ImageView => {}
+        SuiteApp::Paint => {}
         SuiteApp::Monitor => {}
         SuiteApp::Log => {}
         // XClient body is the hosted X-server pixel buffer, drawn before this dispatch.

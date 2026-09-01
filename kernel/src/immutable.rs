@@ -43,7 +43,58 @@ pub fn protect_system_files(fs: &mut dyn FileSystem, caps: u64) -> usize {
             n += 1;
         }
     }
+    // Recursive: EVERY file under /bin and /lib is system code — all immutable.
+    // (/etc is NOT recursive: runtime state lives there — /etc/euroid,
+    // /etc/euroca, /etc/fde must stay writable for the services that own it.)
+    for root in ["/bin", "/lib"] {
+        n += protect_tree(fs, root, caps, 0);
+    }
+    harden_modes(fs);
     n
+}
+
+/// Recursively immutable-flag every file under `dir` (bounded depth).
+fn protect_tree(fs: &mut dyn FileSystem, dir: &str, caps: u64, depth: u32) -> usize {
+    if depth > 8 {
+        return 0;
+    }
+    let mut n = 0;
+    let entries = match fs.list_dir(dir) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    for e in entries {
+        let p = if dir == "/" {
+            alloc::format!("/{}", e.name)
+        } else {
+            alloc::format!("{dir}/{}", e.name)
+        };
+        match e.kind {
+            eurofs::EntryKind::Directory => n += protect_tree(fs, &p, caps, depth + 1),
+            _ => {
+                let already = fs.get_flags(&p).map(|f| f & FLAG_IMMUTABLE != 0).unwrap_or(false);
+                if !already && set_protected(fs, &p, FLAG_IMMUTABLE, caps).is_ok() {
+                    n += 1;
+                }
+            }
+        }
+    }
+    n
+}
+
+/// rwx hardening at boot: secrets become 0600 (they were world-readable!),
+/// shared scratch becomes 1777 so user sessions can use /tmp.
+fn harden_modes(fs: &mut dyn FileSystem) {
+    for p in ["/etc/shadow", "/etc/euroid/users.db"] {
+        if fs.exists(p) {
+            let _ = fs.chmod(p, 0o600);
+        }
+    }
+    for p in ["/tmp", "/var/tmp"] {
+        if fs.exists(p) {
+            let _ = fs.chmod(p, 0o1777);
+        }
+    }
 }
 
 /// The bundled, tamper-protected system files (mirrored in

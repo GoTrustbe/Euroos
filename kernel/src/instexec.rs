@@ -36,6 +36,34 @@ pub fn capture_media() {
     use uefi::fs::FileSystem;
     use uefi::proto::media::fs::SimpleFileSystem;
 
+    // Reading the ~107 MB of A/B kernels through the UEFI FAT driver takes
+    // MINUTES on slow virtual disks. Only pay that when installation is even
+    // possible: a second physical disk (the install target) must exist. A
+    // plain single-disk boot (the normal end-user case) skips the preload.
+    {
+        use uefi::proto::media::block::BlockIO;
+        let disks = boot::find_handles::<BlockIO>()
+            .map(|hs| {
+                hs.iter()
+                    .filter(|&&h| {
+                        boot::open_protocol_exclusive::<BlockIO>(h)
+                            .map(|b| {
+                                let m = b.media();
+                                m.is_media_present() && !m.is_logical_partition()
+                            })
+                            .unwrap_or(false)
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        if disks < 2 {
+            crate::serial_println!(
+                "[inst] single-disk boot ({disks} disk(s)) — no install target, media preload skipped"
+            );
+            return;
+        }
+    }
+
     let handles = match boot::find_handles::<SimpleFileSystem>() {
         Ok(h) => h,
         Err(_) => {

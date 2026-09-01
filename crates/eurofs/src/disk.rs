@@ -26,7 +26,7 @@ use alloc::vec::Vec;
 
 use crate::block::BlockDevice;
 use crate::checksum::xxh3_64;
-use crate::fs::{DirEntry, EntryKind, FileSystem, FsError, FsResult, SnapshotInfo, FLAG_APPEND_ONLY, FLAG_IMMUTABLE};
+use crate::fs::{FLAG_VERSIONED, DirEntry, EntryKind, FileSystem, FsError, FsResult, SnapshotInfo, FLAG_APPEND_ONLY, FLAG_IMMUTABLE};
 use crate::path::{filename, parent, split_path};
 use crate::superblock::{EuroFsSuperblock, RESERVED_BLOCKS};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -102,6 +102,19 @@ fn wr_u64(b: &mut [u8], o: usize, v: u64) {
 }
 
 /// In-memory representation of an inode (decoded from one block).
+/// 3H versioning: where old file versions live, and how many we keep per file.
+const VERSIONS_DIR: &str = "/.versions";
+const MAX_VERSIONS: usize = 8;
+
+/// A filesystem path as a flat version-store key ("/home/euro/a.md" → "home%euro%a.md").
+fn version_key(path: &str) -> String {
+    let mut k = String::new();
+    for c in path.trim_start_matches('/').chars() {
+        k.push(if c == '/' { '%' } else { c });
+    }
+    k
+}
+
 #[derive(Clone)]
 struct Inode {
     oid: u64,
@@ -847,6 +860,123 @@ impl<D: BlockDevice> EuroFs<D> {
     fn resolve(&self, path: &str) -> FsResult<u64> {
         self.resolve_follow(path, true)
     }
+    /// POSIX-style access check against the session uid-context. uid 0 (system/
+    /// admin) bypasses, the owner is judged by the owner triple, everyone else
+    /// by the "other" triple. The group triple is STORED but not enforced:
+    /// EuroOS has no group system (documented, honest).
+    fn allowed(&self, inode: &Inode, want: u16) -> bool {
+        if self.ctx_uid == 0 {
+            return true;
+        }
+        let triple = if inode.uid == self.ctx_uid {
+            (inode.mode >> 6) & 0o7
+        } else {
+            inode.mode & 0o7
+        };
+        triple & want == want
+    }
+
+    /// Check `want` (0o4 read / 0o2 write / 0o1 exec) on the object at `path`.
+    fn check_access(&self, path: &str, want: u16) -> FsResult<()> {
+        let oid = self.resolve(path)?;
+        let inode = self.read_inode(oid)?;
+        if self.allowed(&inode, want) {
+            Ok(())
+        } else {
+            Err(FsError::PermissionDenied)
+        }
+    }
+
+    /// Creating/removing/renaming an entry needs WRITE on the parent directory
+    /// (POSIX semantics: the directory holds the name, not the file).
+    fn check_parent_write(&self, path: &str) -> FsResult<()> {
+        let par = parent(path);
+        let par = if par.is_empty() { "/" } else { par };
+        self.check_access(par, 0o2)
+    }
+
+    /// list_dir without the rwx check — for the FS-internal version store.
+    fn list_dir_internal(&self, path: &str) -> FsResult<Vec<DirEntry>> {
+        let oid = self.resolve(path)?;
+        let entries = self.read_dir_entries(oid)?;
+        let mut out = Vec::with_capacity(entries.len());
+        for (name, child_oid, otype) in entries {
+            let inode = self.read_inode(child_oid).ok();
+            let (size, mtime) = match &inode {
+                Some(i) => (i.size, i.mtime),
+                None => (0, 0),
+            };
+            out.push(DirEntry {
+                name,
+                kind: if otype == TYPE_DIR { EntryKind::Directory } else { EntryKind::File },
+                size,
+                mode: 0o600,
+                mtime,
+            });
+        }
+        Ok(out)
+    }
+
+    /// True when `dir_oid` or any ancestor directory carries FLAG_VERSIONED.
+    fn dir_versioned(&self, mut dir_oid: u64) -> bool {
+        let mut hops = 0;
+        loop {
+            let Ok(inode) = self.read_inode(dir_oid) else { return false };
+            if inode.flags & FLAG_VERSIONED != 0 {
+                return true;
+            }
+            if dir_oid == ROOT_OID || hops > 16 {
+                return false;
+            }
+            dir_oid = inode.parent;
+            hops += 1;
+        }
+    }
+
+    /// Store `old_data` as the next version of `path` under /.versions/<key>/,
+    /// rotating out the oldest beyond MAX_VERSIONS. Runs with the system uid
+    /// internally: the version store is FS-internal bookkeeping, not a place
+    /// user permissions apply to (users reach it only via versions()/restore).
+    fn save_version(&mut self, path: &str, old_data: &[u8], old_mtime: u64) -> FsResult<()> {
+        let saved_uid = self.ctx_uid;
+        self.ctx_uid = 0;
+        let r = self.save_version_inner(path, old_data, old_mtime);
+        self.ctx_uid = saved_uid;
+        r
+    }
+
+    fn save_version_inner(&mut self, path: &str, old_data: &[u8], old_mtime: u64) -> FsResult<()> {
+        if !self.exists(VERSIONS_DIR) {
+            self.create_dir(VERSIONS_DIR)?;
+        }
+        let key_dir = alloc::format!("{VERSIONS_DIR}/{}", version_key(path));
+        if !self.exists(&key_dir) {
+            self.create_dir(&key_dir)?;
+        }
+        // Next version number = highest existing + 1.
+        let existing = self.list_dir(&key_dir)?;
+        let mut nums: Vec<u32> = existing
+            .iter()
+            .filter_map(|e| e.name.strip_prefix('v').and_then(|n| n.parse::<u32>().ok()))
+            .collect();
+        nums.sort_unstable();
+        let next = nums.last().map(|n| n + 1).unwrap_or(1);
+        // Preserve the version with the ORIGINAL mtime so history shows when
+        // that content was last written, not when it was rotated out.
+        let clock = self.now;
+        self.now = old_mtime;
+        let wr = self.write_file_impl(&alloc::format!("{key_dir}/v{next}"), old_data, 0);
+        self.now = clock;
+        wr?;
+        // Rotate: keep the newest MAX_VERSIONS.
+        if nums.len() + 1 > MAX_VERSIONS {
+            let drop_n = nums.len() + 1 - MAX_VERSIONS;
+            for n in nums.iter().take(drop_n) {
+                let _ = self.remove_file(&alloc::format!("{key_dir}/v{n}"));
+            }
+        }
+        Ok(())
+    }
 
     /// Resolve a path to an OID, following symlinks on every intermediate component
     /// and — when `follow_final` is true — on the final component too. An absolute
@@ -959,6 +1089,11 @@ impl<D: BlockDevice> EuroFs<D> {
             }
             Some((o, _)) => o,
             None => {
+                // rwx: creating a new entry needs write on the parent directory.
+                let pdir = self.read_inode(parent_oid)?;
+                if !self.allowed(&pdir, 0o2) {
+                    return Err(FsError::PermissionDenied);
+                }
                 let o = self.next_oid;
                 self.next_oid += 1;
                 entries.push((name.to_string(), o, TYPE_FILE));
@@ -970,10 +1105,25 @@ impl<D: BlockDevice> EuroFs<D> {
         // across a (permitted) overwrite.
         let mut keep_flags = 0u32;
         let mut keep_uid = self.ctx_uid; // new file → owned by the session identity
+        let mut keep_mode: Option<u16> = None; // overwrite keeps a chmod-ed mode
         if existing.is_some() {
             let old = self.read_inode(oid)?;
+            if !self.allowed(&old, 0o2) {
+                return Err(FsError::PermissionDenied); // rwx: write bit required
+            }
             keep_flags = old.flags;
             keep_uid = old.uid; // overwrite keeps the existing owner (3E-3)
+            keep_mode = Some(old.mode);
+            // 3H versioning: preserve the old content BEFORE it is replaced,
+            // when the file or an ancestor directory is FLAG_VERSIONED.
+            if !path.starts_with(VERSIONS_DIR)
+                && (old.flags & FLAG_VERSIONED != 0 || self.dir_versioned(parent_oid))
+            {
+                let old_data = self.read_data(&old)?;
+                if old_data != data {
+                    self.save_version(path, &old_data, old.mtime)?;
+                }
+            }
             if old.flags & FLAG_IMMUTABLE != 0 {
                 return Err(FsError::PermissionDenied); // immutable → no change
             }
@@ -989,6 +1139,9 @@ impl<D: BlockDevice> EuroFs<D> {
         let mut inode = Inode::new(oid, parent_oid, TYPE_FILE, self.now);
         inode.flags = keep_flags;
         inode.uid = keep_uid;
+        if let Some(m) = keep_mode {
+            inode.mode = m;
+        }
         self.write_object(inode, data)?;
         if existing.is_none() {
             self.rewrite_dir(parent_oid, &entries)?;
@@ -1004,6 +1157,9 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         if inode.otype != TYPE_FILE {
             return Err(FsError::NotAFile);
         }
+        if !self.allowed(&inode, 0o4) {
+            return Err(FsError::PermissionDenied); // rwx: read bit required
+        }
         self.read_data(&inode)
     }
 
@@ -1012,6 +1168,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
     }
 
     fn remove_file(&mut self, path: &str) -> FsResult<()> {
+        self.check_parent_write(path)?; // rwx: removal = write on the directory
         let parent_oid = self.resolve(parent(path))?;
         let name = filename(path);
         let mut entries = self.read_dir_entries(parent_oid)?;
@@ -1041,9 +1198,67 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         self.ctx_uid = uid;
     }
 
+    fn uid_context(&self) -> u32 {
+        self.ctx_uid
+    }
+
     fn owner(&self, path: &str) -> FsResult<u32> {
         let oid = self.resolve(path)?;
         Ok(self.read_inode(oid)?.uid)
+    }
+
+
+    fn chmod(&mut self, path: &str, mode: u16) -> FsResult<()> {
+        let oid = self.resolve(path)?;
+        let mut inode = self.read_inode(oid)?;
+        // Only the owner or uid 0 may change permissions; immutable stays frozen.
+        if self.ctx_uid != 0 && self.ctx_uid != inode.uid {
+            return Err(FsError::PermissionDenied);
+        }
+        if inode.flags & FLAG_IMMUTABLE != 0 {
+            return Err(FsError::PermissionDenied);
+        }
+        // CoW-rewrite with the new mode (same pattern as chown; works for
+        // files and directories alike — a dir's entries are its data).
+        let data = self.read_data(&inode)?;
+        let mut ni = inode;
+        ni.mode = mode & 0o7777;
+        self.write_object(ni, &data)?;
+        self.commit()
+    }
+
+    fn versions(&self, path: &str) -> FsResult<Vec<(u32, u64, u64)>> {
+        // Reading the version list needs read access to the file itself
+        // (or uid 0) — the store is system-held, so check against `path`.
+        if self.exists(path) {
+            self.check_access(path, 0o4)?;
+        }
+        let key_dir = alloc::format!("{VERSIONS_DIR}/{}", version_key(path));
+        let entries = match self.list_dir_internal(&key_dir) {
+            Ok(v) => v,
+            Err(_) => return Ok(Vec::new()), // no history yet
+        };
+        let mut out: Vec<(u32, u64, u64)> = entries
+            .iter()
+            .filter_map(|e| {
+                e.name.strip_prefix('v').and_then(|n| n.parse::<u32>().ok()).map(|n| (n, e.size, e.mtime))
+            })
+            .collect();
+        out.sort_unstable_by(|a, b| b.0.cmp(&a.0)); // newest first
+        Ok(out)
+    }
+
+    fn restore_version(&mut self, path: &str, n: u32) -> FsResult<()> {
+        let key = alloc::format!("{VERSIONS_DIR}/{}/v{n}", version_key(path));
+        // Read the stored version with system rights (the store is internal)…
+        let saved = self.ctx_uid;
+        self.ctx_uid = 0;
+        let data = self.read_file(&key);
+        self.ctx_uid = saved;
+        let data = data?;
+        // …then write it back as a NORMAL write: permissions apply, and the
+        // replaced current content becomes a new version itself (nothing lost).
+        self.write_file_impl(path, &data, 0)
     }
 
     fn chown(&mut self, path: &str, uid: u32) -> FsResult<()> {
@@ -1173,7 +1388,10 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
     fn set_flags(&mut self, path: &str, flags: u32) -> FsResult<()> {
         let oid = self.resolve(path)?;
         let inode = self.read_inode(oid)?;
-        if inode.otype != TYPE_FILE {
+        // Files carry any flag; a DIRECTORY may carry FLAG_VERSIONED (3H:
+        // "everything under this dir is versioned") — immutability of a whole
+        // dir stays file-by-file (the recursive boot protection does that).
+        if inode.otype != TYPE_FILE && !(inode.otype == TYPE_DIR && flags & !FLAG_VERSIONED == 0) {
             return Err(FsError::NotAFile);
         }
         // Rewrite the inode + the same data with the new flags (CoW). The
@@ -1186,6 +1404,10 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
     }
 
     fn create_dir(&mut self, path: &str) -> FsResult<()> {
+        // rwx: creating a directory needs write on its parent (uid 0 bypasses).
+        if self.ctx_uid != 0 {
+            self.check_parent_write(path)?;
+        }
         let parent_oid = self.resolve(parent(path))?;
         let name = filename(path);
         if name.is_empty() {
@@ -1240,6 +1462,8 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
     }
 
     fn rename(&mut self, old: &str, new: &str) -> FsResult<()> {
+        self.check_parent_write(old)?; // rwx: rename = write on both directories
+        self.check_parent_write(new)?;
         let old_parent = self.resolve(parent(old))?;
         let old_name = filename(old);
         let new_parent = self.resolve(parent(new))?;
@@ -1328,6 +1552,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
     }
 
     fn remove_dir(&mut self, path: &str) -> FsResult<()> {
+        self.check_parent_write(path)?; // rwx: removal = write on the directory
         let oid = self.resolve(path)?;
         if oid == ROOT_OID {
             return Err(FsError::InvalidPath); // you do not remove the root
@@ -1356,6 +1581,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
     }
 
     fn list_dir(&self, path: &str) -> FsResult<Vec<DirEntry>> {
+        self.check_access(path, 0o4)?; // rwx: listing needs read on the directory
         let oid = self.resolve(path)?;
         let entries = self.read_dir_entries(oid)?;
         let mut out = Vec::with_capacity(entries.len());
@@ -2199,22 +2425,145 @@ mod tests {
     // ── 3E-3/3E-9: ownership + per-user disk quota ────────────────────────
 
     #[test]
+    fn rwx_enforcement_matrix() {
+        let mut dev = dev(512);
+        let mut fs = EuroFs::format(&mut dev, [60; 16], 1).unwrap();
+        mkhome(&mut fs, 1002, "/home");
+        fs.write_file("/home/private.txt", b"secret").unwrap();
+        fs.chmod("/home/private.txt", 0o600).unwrap(); // owner rw, others nothing
+
+        // Owner (1002) can read + write.
+        assert!(fs.read_file("/home/private.txt").is_ok());
+        assert!(fs.write_file("/home/private.txt", b"update").is_ok());
+
+        // Bob (1003): read AND write refused on 0600.
+        fs.set_uid_context(1003);
+        assert_eq!(fs.read_file("/home/private.txt"), Err(FsError::PermissionDenied));
+        assert_eq!(fs.write_file("/home/private.txt", b"x"), Err(FsError::PermissionDenied));
+        // Bob cannot delete or rename it either (no write on /home).
+        assert_eq!(fs.remove_file("/home/private.txt"), Err(FsError::PermissionDenied));
+        assert_eq!(fs.rename("/home/private.txt", "/home/stolen"), Err(FsError::PermissionDenied));
+        // Bob cannot create in alice's home, nor list a 0700 dir.
+        assert_eq!(fs.write_file("/home/bobfile", b"x"), Err(FsError::PermissionDenied));
+        fs.set_uid_context(0);
+        fs.chmod("/home", 0o700).unwrap();
+        fs.set_uid_context(1003);
+        assert_eq!(fs.list_dir("/home"), Err(FsError::PermissionDenied));
+
+        // 0644: others can read but not write.
+        fs.set_uid_context(0);
+        fs.chmod("/home", 0o755).unwrap();
+        fs.set_uid_context(1002);
+        fs.chmod("/home/private.txt", 0o644).unwrap();
+        fs.set_uid_context(1003);
+        assert!(fs.read_file("/home/private.txt").is_ok());
+        assert_eq!(fs.write_file("/home/private.txt", b"x"), Err(FsError::PermissionDenied));
+
+        // uid 0 bypasses everything.
+        fs.set_uid_context(0);
+        assert!(fs.write_file("/home/private.txt", b"root can").is_ok());
+    }
+
+    #[test]
+    fn chmod_gating_and_persistence() {
+        let mut dev = dev(512);
+        let mut fs = EuroFs::format(&mut dev, [61; 16], 1).unwrap();
+        mkhome(&mut fs, 1002, "/h");
+        fs.write_file("/h/f", b"data").unwrap();
+        // Only the owner (or uid 0) may chmod.
+        fs.set_uid_context(1003);
+        assert_eq!(fs.chmod("/h/f", 0o777), Err(FsError::PermissionDenied));
+        fs.set_uid_context(1002);
+        fs.chmod("/h/f", 0o640).unwrap();
+        assert_eq!(fs.metadata("/h/f").unwrap().mode, 0o640);
+        // Mode survives an overwrite AND a remount.
+        fs.write_file("/h/f", b"new data").unwrap();
+        assert_eq!(fs.metadata("/h/f").unwrap().mode, 0o640);
+        drop(fs);
+        let fs2 = EuroFs::mount(&mut dev, 2).unwrap();
+        assert_eq!(fs2.metadata("/h/f").unwrap().mode, 0o640);
+        // Immutable freezes chmod too.
+        drop(fs2);
+        let mut fs3 = EuroFs::mount(&mut dev, 3).unwrap();
+        fs3.set_flags("/h/f", FLAG_IMMUTABLE).unwrap();
+        assert_eq!(fs3.chmod("/h/f", 0o777), Err(FsError::PermissionDenied));
+    }
+
+    #[test]
+    fn versioning_keeps_history_and_restores() {
+        let mut dev = dev(1024);
+        let mut fs = EuroFs::format(&mut dev, [70; 16], 1).unwrap();
+        mkhome(&mut fs, 1002, "/home");
+        fs.write_file("/home/doc.md", b"version one").unwrap();
+        fs.set_flags("/home/doc.md", FLAG_VERSIONED).unwrap();
+        fs.write_file("/home/doc.md", b"version two").unwrap();
+        fs.write_file("/home/doc.md", b"version three").unwrap();
+        // Two preserved versions, newest first.
+        let v = fs.versions("/home/doc.md").unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!((v[0].0, v[1].0), (2, 1));
+        // Restore v1 → the current content becomes "version one" AND the
+        // replaced "version three" is itself preserved (nothing lost).
+        fs.restore_version("/home/doc.md", 1).unwrap();
+        assert_eq!(fs.read_file("/home/doc.md").unwrap(), b"version one");
+        let v2 = fs.versions("/home/doc.md").unwrap();
+        assert_eq!(v2.len(), 3);
+        // History survives a remount.
+        drop(fs);
+        let fs2 = EuroFs::mount(&mut dev, 2).unwrap();
+        assert_eq!(fs2.versions("/home/doc.md").unwrap().len(), 3);
+    }
+
+    #[test]
+    fn versioning_inherits_from_directory_and_rotates() {
+        let mut dev = dev(2048);
+        let mut fs = EuroFs::format(&mut dev, [71; 16], 1).unwrap();
+        mkhome(&mut fs, 1002, "/home");
+        // Flag the DIRECTORY: every file under it is versioned.
+        fs.set_flags("/home", FLAG_VERSIONED).unwrap();
+        fs.create_dir("/home/deep").unwrap();
+        fs.write_file("/home/deep/n.txt", b"a").unwrap();
+        for i in 0..12u32 {
+            fs.write_file("/home/deep/n.txt", alloc::format!("content {i}").as_bytes()).unwrap();
+        }
+        let v = fs.versions("/home/deep/n.txt").unwrap();
+        // Rotation: at most MAX_VERSIONS (8) kept, newest first.
+        assert_eq!(v.len(), 8);
+        assert!(v[0].0 > v[7].0);
+        // An identical rewrite makes NO new version.
+        let before = fs.versions("/home/deep/n.txt").unwrap().len();
+        fs.write_file("/home/deep/n.txt", b"content 11").unwrap();
+        assert_eq!(fs.versions("/home/deep/n.txt").unwrap().len(), before);
+        // A file with no history reports an empty list, not an error.
+        fs.write_file("/home/once.txt", b"only").unwrap();
+        assert_eq!(fs.versions("/home/once.txt").unwrap(), alloc::vec![]);
+    }
+
+    /// rwx-era helper: a home directory the given uid can actually write in.
+    fn mkhome<D: BlockDevice>(fs: &mut EuroFs<D>, uid: u32, path: &str) {
+        fs.set_uid_context(0);
+        fs.create_dir(path).unwrap();
+        fs.chown(path, uid).unwrap();
+        fs.set_uid_context(uid);
+    }
+
+    #[test]
     fn uid_owner_persists_across_remount() {
         let mut dev = dev(256);
         {
             let mut fs = EuroFs::format(&mut dev, [50; 16], 1).unwrap();
-            fs.set_uid_context(1002); // alice
-            fs.write_file("/a.txt", b"alice's file").unwrap();
-            fs.create_dir("/adir").unwrap();
+            mkhome(&mut fs, 1002, "/home"); // alice's writable area
+            fs.write_file("/home/a.txt", b"alice's file").unwrap();
+            fs.create_dir("/home/adir").unwrap();
             fs.set_uid_context(0);
             fs.write_file("/sys.txt", b"system file").unwrap();
-            assert_eq!(fs.owner("/a.txt").unwrap(), 1002);
-            assert_eq!(fs.owner("/adir").unwrap(), 1002);
+            assert_eq!(fs.owner("/home/a.txt").unwrap(), 1002);
+            assert_eq!(fs.owner("/home/adir").unwrap(), 1002);
             assert_eq!(fs.owner("/sys.txt").unwrap(), 0);
         }
         let fs = EuroFs::mount(&mut dev, 2).unwrap();
-        assert_eq!(fs.owner("/a.txt").unwrap(), 1002);
-        assert_eq!(fs.owner("/adir").unwrap(), 1002);
+        assert_eq!(fs.owner("/home/a.txt").unwrap(), 1002);
+        assert_eq!(fs.owner("/home/adir").unwrap(), 1002);
         assert_eq!(fs.owner("/sys.txt").unwrap(), 0);
     }
 
@@ -2222,11 +2571,13 @@ mod tests {
     fn overwrite_keeps_owner() {
         let mut dev = dev(256);
         let mut fs = EuroFs::format(&mut dev, [51; 16], 1).unwrap();
-        fs.set_uid_context(1002);
-        fs.write_file("/f", b"v1").unwrap();
-        fs.set_uid_context(1003); // bob overwrites alice's file → owner stays alice
-        fs.write_file("/f", b"v2 by bob").unwrap();
-        assert_eq!(fs.owner("/f").unwrap(), 1002);
+        mkhome(&mut fs, 1002, "/shared");
+        fs.chmod("/shared", 0o777).unwrap(); // world-writable dir (like /tmp)
+        fs.write_file("/shared/f", b"v1").unwrap();
+        fs.chmod("/shared/f", 0o666).unwrap(); // alice opens her file up
+        fs.set_uid_context(1003); // bob overwrites alice's (world-writable) file
+        fs.write_file("/shared/f", b"v2 by bob").unwrap();
+        assert_eq!(fs.owner("/shared/f").unwrap(), 1002); // owner stays alice
     }
 
     #[test]
@@ -2234,20 +2585,20 @@ mod tests {
         let mut dev = dev(4096);
         let mut fs = EuroFs::format(&mut dev, [52; 16], 1).unwrap();
         fs.quota_set(1002, 4).unwrap(); // 4 blocks = 16 KiB of extent data
-        fs.set_uid_context(1002);
+        mkhome(&mut fs, 1002, "/h");
         // Inline files (≤ INLINE_CAP) cost 0 data blocks → always fine.
-        fs.write_file("/small", b"tiny").unwrap();
+        fs.write_file("/h/small", b"tiny").unwrap();
         // 3 blocks: within quota.
-        fs.write_file("/big1", &vec![0xAA; 3 * 4096]).unwrap();
+        fs.write_file("/h/big1", &vec![0xAA; 3 * 4096]).unwrap();
         let (used, limit) = fs.quota_info(1002).unwrap();
         assert_eq!((used, limit), (3, 4));
         // 2 more blocks would make 5 > 4 → refused, and the file does NOT appear.
-        assert_eq!(fs.write_file("/big2", &vec![0xBB; 2 * 4096]), Err(FsError::QuotaExceeded));
-        assert!(!fs.exists("/big2"));
+        assert_eq!(fs.write_file("/h/big2", &vec![0xBB; 2 * 4096]), Err(FsError::QuotaExceeded));
+        assert!(!fs.exists("/h/big2"));
         // Delete the big file → blocks are credited back → the write now succeeds.
-        fs.remove_file("/big1").unwrap();
+        fs.remove_file("/h/big1").unwrap();
         assert_eq!(fs.quota_info(1002).unwrap().0, 0);
-        fs.write_file("/big2", &vec![0xBB; 2 * 4096]).unwrap();
+        fs.write_file("/h/big2", &vec![0xBB; 2 * 4096]).unwrap();
         // uid 0 (system) is always exempt.
         fs.set_uid_context(0);
         fs.write_file("/sysbig", &vec![0xCC; 8 * 4096]).unwrap();
@@ -2259,8 +2610,8 @@ mod tests {
         {
             let mut fs = EuroFs::format(&mut dev, [53; 16], 1).unwrap();
             fs.quota_set(1002, 10).unwrap();
-            fs.set_uid_context(1002);
-            fs.write_file("/data", &vec![0x11; 5 * 4096]).unwrap();
+            mkhome(&mut fs, 1002, "/h");
+            fs.write_file("/h/data", &vec![0x11; 5 * 4096]).unwrap();
         }
         let fs = EuroFs::mount(&mut dev, 2).unwrap();
         // Limit came from the quota block, usage from the live-tree scan.
@@ -2272,18 +2623,19 @@ mod tests {
     fn chown_transfers_usage_and_enforces_target_quota() {
         let mut dev = dev(4096);
         let mut fs = EuroFs::format(&mut dev, [54; 16], 1).unwrap();
-        fs.set_uid_context(1002);
-        fs.write_file("/f", &vec![0x22; 3 * 4096]).unwrap();
+        mkhome(&mut fs, 1002, "/h");
+        fs.write_file("/h/f", &vec![0x22; 3 * 4096]).unwrap();
         assert_eq!(fs.quota_info(1002).unwrap().0, 3);
-        // Transfer to bob → alice credited, bob charged.
-        fs.chown("/f", 1003).unwrap();
-        assert_eq!(fs.owner("/f").unwrap(), 1003);
+        // Transfer to bob (admin action) → alice credited, bob charged.
+        fs.set_uid_context(0);
+        fs.chown("/h/f", 1003).unwrap();
+        assert_eq!(fs.owner("/h/f").unwrap(), 1003);
         assert_eq!(fs.quota_info(1002).unwrap().0, 0);
         assert_eq!(fs.quota_info(1003).unwrap().0, 3);
         // A chown INTO a too-small quota is refused (the write_object gate).
         fs.quota_set(1004, 2).unwrap();
-        assert_eq!(fs.chown("/f", 1004), Err(FsError::QuotaExceeded));
-        assert_eq!(fs.owner("/f").unwrap(), 1003); // unchanged
+        assert_eq!(fs.chown("/h/f", 1004), Err(FsError::QuotaExceeded));
+        assert_eq!(fs.owner("/h/f").unwrap(), 1003); // unchanged
     }
 
     #[test]

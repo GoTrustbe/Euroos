@@ -13,7 +13,11 @@ mon() { printf '%s\n' "$@" | nc -U -q 1 "$LOG.mon" >/dev/null 2>&1; }
 while pgrep -af "qemu-system-x86_64.*eurokernel.img" >/dev/null 2>&1; do sleep 5; done
 ./scripts/build.sh release >/dev/null 2>&1 || { echo "BUILD FAILED"; exit 1; }
 rm -f "$LOG" "$LOG"*.ppm
+# -icount ties the guest clock to executed instructions (same rationale as
+# chrome-ui-input.sh): without it chrome sees wall-clock "idle" sockets and
+# grinds in a TCP_INFO poll treadmill instead of making progress.
 qemu-system-x86_64 -machine q35 -m 3584M -cpu qemu64,+smep,+smap \
+  -icount shift=auto,align=off -rtc clock=vm \
   -bios /usr/share/ovmf/OVMF.fd \
   -drive format=raw,file="$PWD/eurokernel.img" \
   -drive format=raw,file="$PACK",if=virtio \
@@ -51,7 +55,9 @@ echo "typed chrome at $(( $(date +%s) - START ))s"
 # AFTER the t300 sample (chrome has painted by then) — e.g. a click on the page
 # link inside the hosted window; the t480/t660 samples then show the outcome.
 # Chromium needs minutes under TCG before its first paint: sample the screen.
-for t in 120 300 480 660; do
+# SAMPLES env overrides the sample times (multi-process diagnosis needs longer:
+# the forks come after ~500s and the interesting trace after that).
+for t in ${SAMPLES:-120 300 480 660}; do
   while [ $(( $(date +%s) - START )) -lt $((t + 60)) ]; do
     kill -0 $Q 2>/dev/null || break 2
     sleep 5

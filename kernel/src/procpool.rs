@@ -48,6 +48,16 @@ pub fn free(addr: u64) {
     }
 }
 
+/// Return a contiguous run of `frames` frames (e.g. a fork child's arena) to
+/// the pool, so the next fork can reuse the space.
+pub fn free_range(base: u64, frames: usize) {
+    if let Some(p) = POOL.lock().as_mut() {
+        for i in 0..frames as u64 {
+            let _ = p.free(base + i * 4096);
+        }
+    }
+}
+
 /// Free frames in the pool (for diagnostics / `dmesg`).
 pub fn free_frames() -> usize {
     POOL.lock().as_ref().map(|p| p.free_frames()).unwrap_or(0)

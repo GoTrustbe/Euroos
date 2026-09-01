@@ -23,7 +23,7 @@ qemu = subprocess.Popen([
     "-cpu", "qemu64,+smep,+smap",
     # Cores: default 1 (fast on TCG). Set EK_SMP=N for multi-core (ACPI/MADT test).
     "-smp", os.environ.get("EK_SMP", "1"),
-    "-m", "256M",
+    "-m", "1024M",
     "-bios", OVMF,
     "-drive", f"format=raw,file={IMG}",
     "-display", "none",

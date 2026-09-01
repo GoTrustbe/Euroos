@@ -7,6 +7,7 @@ authors.workspace = true
 description = "EuroMedia — de afbeeldingsviewer-kern van EuroOS (AC-1). Soevereine QOI-codec (decode+encode, geen foreign image-lib) + Image-model met basisbewerkingen. no_std, host-testbaar."
 
 [dependencies]
+euroflate = { path = "../euroflate" }
 
 [features]
 default = []

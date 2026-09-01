@@ -8,7 +8,8 @@ use crate::graphics::{Color, FrameBuffer};
 use crate::serial_println;
 use crate::text;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use eurodoc::model::Block;
+use eurodoc::model::{Block, Run};
+use eurofs::fs as eurofs_api;
 
 /// Equal to `compositor::TITLEBAR_H`.
 const TITLEBAR_H: usize = 44;
@@ -39,27 +40,311 @@ const NOTES: &[&str] = &[
 
 static SELECTED: AtomicUsize = AtomicUsize::new(0);
 
+/// The LIVE notes (editable). Seeded from `NOTES` on first load, then persisted
+/// on EuroFS under /home/euro/notes/note-<i>.md — a notes app that cannot make
+/// or edit a note is a viewer wearing the wrong name (UX audit, 2026-08-27).
+static LIVE: spin::Mutex<alloc::vec::Vec<alloc::string::String>> =
+    spin::Mutex::new(alloc::vec::Vec::new());
+static LOADED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static DIRTY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+const NOTES_DIR: &str = "/home/euro/notes";
+
+/// Load the notes from EuroFS (or seed + persist the samples on first run).
+pub fn load(fs: &mut dyn eurofs_api::FileSystem) {
+    if LOADED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let mut v = alloc::vec::Vec::new();
+    for i in 0..64 {
+        let path = alloc::format!("{NOTES_DIR}/note-{i}.md");
+        match fs.read_file(&path) {
+            Ok(b) => v.push(alloc::string::String::from_utf8_lossy(&b).into_owned()),
+            Err(_) => break,
+        }
+    }
+    if v.is_empty() {
+        v = NOTES.iter().map(|n| alloc::string::String::from(*n)).collect();
+        let _ = fs.create_dir(NOTES_DIR);
+        for (i, n) in v.iter().enumerate() {
+            let _ = fs.write_file(&alloc::format!("{NOTES_DIR}/note-{i}.md"), n.as_bytes());
+        }
+    }
+    *LIVE.lock() = v;
+}
+
+/// Persist every note (called after edits; EuroFS writes are cheap in-cache).
+pub fn save_all(fs: &mut dyn eurofs_api::FileSystem) {
+    let v = LIVE.lock().clone();
+    let _ = fs.create_dir(NOTES_DIR);
+    for (i, n) in v.iter().enumerate() {
+        let _ = fs.write_file(&alloc::format!("{NOTES_DIR}/note-{i}.md"), n.as_bytes());
+    }
+    // After a delete the tail files must go too, or the next load resurrects them.
+    for i in v.len()..v.len() + 8 {
+        let p = alloc::format!("{NOTES_DIR}/note-{i}.md");
+        if fs.exists(&p) {
+            let _ = fs.remove_file(&p);
+        }
+    }
+    DIRTY.store(false, Ordering::Relaxed);
+}
+
+/// Was there an edit since the last save_all()?
+pub fn take_dirty() -> bool {
+    DIRTY.swap(false, Ordering::Relaxed)
+}
+
+/// Append a fresh note and select it.
+pub fn new_note() {
+    let mut v = LIVE.lock();
+    v.push(alloc::string::String::from("# New note\n\n"));
+    SELECTED.store(v.len() - 1, Ordering::Relaxed);
+    BUF_FOR.store(usize::MAX, Ordering::Relaxed);
+    DIRTY.store(true, Ordering::Relaxed);
+}
+
+/// The edit buffer for the SELECTED note (cursor, mid-text insert, navigation).
+static BUF: spin::Mutex<Option<crate::editcore::Buffer>> = spin::Mutex::new(None);
+static BUF_FOR: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Ensure the edit buffer holds the currently-selected note's text.
+fn sync_buf() {
+    let sel = selected();
+    if BUF_FOR.load(Ordering::Relaxed) != sel {
+        let text = live_notes().get(sel).cloned().unwrap_or_default();
+        let mut b = crate::editcore::Buffer::new();
+        b.set_text(&text);
+        *BUF.lock() = Some(b);
+        BUF_FOR.store(sel, Ordering::Relaxed);
+    }
+}
+
+/// A rich key edits the selected note through the shared editcore buffer, then
+/// writes the result back into LIVE so it renders + persists.
+pub fn key(k: crate::ps2::Key) {
+    sync_buf();
+    let mut g = BUF.lock();
+    if let Some(b) = g.as_mut() {
+        if b.key(k) {
+            let text = b.text();
+            let sel = selected();
+            if let Some(n) = LIVE.lock().get_mut(sel) {
+                *n = text;
+            }
+            DIRTY.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+/// A raw character (paste / symbol picker) at the cursor.
+pub fn input(ch: char) {
+    let k = match ch {
+        '\r' | '\n' => crate::ps2::Key::Enter,
+        '\u{8}' | '\u{7f}' => crate::ps2::Key::Backspace,
+        '\t' => crate::ps2::Key::Tab,
+        c => crate::ps2::Key::Char(c),
+    };
+    key(k);
+}
+
+/// The cursor position in the current note (row, col) for the caret render.
+pub fn cursor() -> (usize, usize) {
+    sync_buf();
+    BUF.lock().as_ref().map(|b| (b.row, b.col)).unwrap_or((0, 0))
+}
+
+/// The current notes as owned strings (render/selftest).
+fn live_notes() -> alloc::vec::Vec<alloc::string::String> {
+    let v = LIVE.lock();
+    if v.is_empty() {
+        NOTES.iter().map(|n| alloc::string::String::from(*n)).collect()
+    } else {
+        v.clone()
+    }
+}
+
 /// Which note is open.
 pub fn selected() -> usize {
-    SELECTED.load(Ordering::Relaxed).min(NOTES.len() - 1)
+    SELECTED.load(Ordering::Relaxed).min(live_notes().len().saturating_sub(1))
+}
+
+/// The formatting toolbar: (label, markdown-wrap). B/I wrap the word at the
+/// cursor; the block styles prefix the line.
+const TOOLBAR: [(&str, &str); 7] = [
+    ("B", "**"),
+    ("I", "*"),
+    ("H1", "# "),
+    ("H2", "## "),
+    ("\u{2022}", "- "),
+    ("<>", "`"),
+    ("\u{201C}", "> "),
+];
+
+/// A click on the canvas toolbar. `lx,ly` are window-local. Returns true if it
+/// handled a formatting action (so the caller repaints + persists).
+pub fn toolbar_click(win_x: usize, win_y: usize, mx: usize, my: usize, win_w: usize) -> bool {
+    let list_w = 210usize;
+    let px = win_x + list_w + 1;
+    let pw = win_w - list_w - 1;
+    let tb_y = win_y + TITLEBAR_H + 8;
+    if my < tb_y || my >= tb_y + 26 {
+        return false;
+    }
+    // Font toggle.
+    if mx >= px + pw - 90 && mx < px + pw - 12 {
+        cycle_font();
+        return true;
+    }
+    let idx = mx.checked_sub(px + 12).map(|d| d / 46);
+    let Some(i) = idx.filter(|&i| i < TOOLBAR.len()) else { return false };
+    let (label, mark) = TOOLBAR[i];
+    apply_format(label, mark);
+    true
+}
+
+/// Apply a formatting action to the selected note through the shared edit buffer.
+fn apply_format(label: &str, mark: &str) {
+    sync_buf();
+    let mut g = BUF.lock();
+    let Some(b) = g.as_mut() else { return };
+    match label {
+        "B" | "I" | "<>" => {
+            // Wrap the word around the cursor in the marker (e.g. **word**).
+            let row = b.row;
+            let line = b.lines[row].clone();
+            let chars: alloc::vec::Vec<char> = line.chars().collect();
+            // Skip a leading markdown marker so Bold/Italic never eats "# " / "- ".
+            let mut skip = 0usize;
+            for pre in ["### ", "## ", "# ", "- ", "> "] {
+                if line.starts_with(pre) { skip = pre.chars().count(); break; }
+            }
+            // Find word bounds around the cursor column (never before the marker).
+            let mut a = b.col.min(chars.len()).max(skip);
+            let mut z = a;
+            while a > skip && !chars[a - 1].is_whitespace() { a -= 1; }
+            while z < chars.len() && !chars[z].is_whitespace() { z += 1; }
+            let before: alloc::string::String = chars[..a].iter().collect();
+            let word: alloc::string::String = chars[a..z].iter().collect();
+            let after: alloc::string::String = chars[z..].iter().collect();
+            let word = if word.is_empty() { alloc::string::String::from("text") } else { word };
+            b.lines[row] = alloc::format!("{before}{mark}{word}{mark}{after}");
+            b.col = a + mark.chars().count() + word.chars().count() + mark.chars().count();
+        }
+        _ => {
+            // Block style: prefix the current line (strip an existing prefix first).
+            let row = b.row;
+            let mut line = alloc::string::String::from(b.lines[row].trim_start());
+            for pre in ["# ", "## ", "### ", "- ", "> "] {
+                if let Some(rest) = line.strip_prefix(pre) {
+                    line = alloc::string::String::from(rest);
+                }
+            }
+            b.lines[row] = alloc::format!("{mark}{line}");
+            b.col = b.lines[row].chars().count();
+        }
+    }
+    b.dirty = true;
+    // Write back to LIVE so it renders + persists.
+    let text = b.text();
+    let sel = selected();
+    if let Some(n) = LIVE.lock().get_mut(sel) {
+        *n = text;
+    }
+    DIRTY.store(true, Ordering::Relaxed);
+}
+
+/// The live search filter over the note list + whether it has the keyboard.
+static SEARCH: spin::Mutex<alloc::string::String> = spin::Mutex::new(alloc::string::String::new());
+static SEARCH_FOCUS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Does the search field currently take the keys?
+pub fn search_focused() -> bool {
+    SEARCH_FOCUS.load(Ordering::Relaxed)
+}
+
+/// A key while the search field is focused. Esc clears + releases focus.
+pub fn search_key(k: crate::ps2::Key) {
+    let mut q = SEARCH.lock();
+    match k {
+        crate::ps2::Key::Esc => {
+            q.clear();
+            SEARCH_FOCUS.store(false, Ordering::Relaxed);
+        }
+        crate::ps2::Key::Enter => SEARCH_FOCUS.store(false, Ordering::Relaxed),
+        crate::ps2::Key::Backspace => {
+            q.pop();
+        }
+        crate::ps2::Key::Char(c) if !c.is_control() => q.push(c),
+        _ => {}
+    }
+}
+
+/// Indices of the notes that match the search filter (all, when empty).
+fn filtered() -> alloc::vec::Vec<usize> {
+    let q = SEARCH.lock().to_lowercase();
+    let notes = live_notes();
+    notes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| q.is_empty() || n.to_lowercase().contains(&q))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Delete note `i`: removed from LIVE, files rewritten (the tail file is
+/// cleaned up on the next save), selection clamped, edit buffer invalidated.
+pub fn delete_note(i: usize) {
+    let mut v = LIVE.lock();
+    if i >= v.len() || v.len() == 1 {
+        return; // keep at least one note (the app always shows something)
+    }
+    v.remove(i);
+    let sel = SELECTED.load(Ordering::Relaxed);
+    if sel >= v.len() {
+        SELECTED.store(v.len() - 1, Ordering::Relaxed);
+    }
+    BUF_FOR.store(usize::MAX, Ordering::Relaxed);
+    DIRTY.store(true, Ordering::Relaxed);
 }
 
 /// Click in the note list? Set the selection and return `true` if it changed.
 pub fn hit_test(win_x: usize, win_y: usize, mx: usize, my: usize) -> bool {
     let lx = win_x;
-    let ly = win_y + TITLEBAR_H + 44; // below the list header
     let list_w = 210usize;
     if mx < lx || mx >= lx + list_w {
+        SEARCH_FOCUS.store(false, Ordering::Relaxed);
         return false;
     }
+    // The search field sits under the header (y +40..+66).
+    let sf_y = win_y + TITLEBAR_H + 40;
+    if my >= sf_y && my < sf_y + 26 {
+        SEARCH_FOCUS.store(true, Ordering::Relaxed);
+        return true;
+    }
+    SEARCH_FOCUS.store(false, Ordering::Relaxed);
+    let ly = win_y + TITLEBAR_H + 72; // below header + search field
     let row_h = 50usize;
     if my < ly {
         return false;
     }
     let i = (my - ly) / row_h;
-    if i < NOTES.len() {
-        let prev = SELECTED.swap(i, Ordering::Relaxed);
-        return prev != i;
+    let shown = filtered();
+    if i < shown.len() {
+        let real = shown[i];
+        // The small x at the right edge of the row deletes the note.
+        if mx >= lx + list_w - 30 {
+            delete_note(real);
+            return true;
+        }
+        let prev = SELECTED.swap(real, Ordering::Relaxed);
+        return prev != real;
+    }
+    // The row right below the last shown note is the "+ New note" target.
+    if i == shown.len() {
+        new_note();
+        SEARCH.lock().clear(); // a fresh note must be visible
+        return true;
     }
     false
 }
@@ -78,44 +363,94 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let list_w = 210usize;
     fb.fill_rect(bx, by, list_w, bh, Color::CARD);
     fb.fill_rect(bx + list_w, by, 1, bh, Color::BORDER);
-    text::draw_px(fb, bx + 16, by + 16, "Notes  \u{00B7}  sample (read-only)", Color::INK, 14.0);
-    let cnt = alloc::format!("{}", NOTES.len());
+    let live = live_notes();
+    text::draw_px(fb, bx + 16, by + 16, "Notes  \u{00B7}  yours, editable", Color::INK, 14.0);
+    let cnt = alloc::format!("{}", live.len());
     text::draw_px(fb, bx + list_w - text::width_px(&cnt, 12.0) - 16, by + 18, &cnt, Color::TEXT_DIM, 12.0);
+
+    // Search field under the header (click to focus; Esc clears).
+    {
+        let sy = by + 40;
+        let focus = SEARCH_FOCUS.load(Ordering::Relaxed);
+        let q = SEARCH.lock().clone();
+        fb.fill_rounded_rect(bx + 10, sy, list_w - 20, 24, 7, Color::rgb(0xFF, 0xFF, 0xFF));
+        fb.draw_border(bx + 10, sy, list_w - 20, 24, 1, if focus { accent } else { Color::BORDER });
+        if q.is_empty() && !focus {
+            text::draw_px(fb, bx + 18, sy + 5, "Search notes\u{2026}", Color::TEXT_DIM, 12.0);
+        } else {
+            text::draw_px(fb, bx + 18, sy + 5, &q, Color::INK, 12.0);
+            if focus {
+                let cx = bx + 18 + text::width_px(&q, 12.0);
+                fb.fill_rect(cx, sy + 4, 2, 16, accent);
+            }
+        }
+    }
 
     let sel = selected();
     let row_h = 50usize;
-    let row_y0 = by + 44;
-    for (i, md) in NOTES.iter().enumerate() {
-        let ry = row_y0 + i * row_h;
+    let row_y0 = by + 72;
+    let shown = filtered();
+    for (vis, &i) in shown.iter().enumerate() {
+        let md = &live[i];
+        let ry = row_y0 + vis * row_h;
+        if ry + row_h > by + bh {
+            break;
+        }
         let note = euronotes::parse(md);
         if i == sel {
             fb.fill_rounded_rect(bx + 8, ry, list_w - 16, row_h - 6, 9, Color::SURFACE);
             fb.fill_rounded_rect(bx + 8, ry, 3, row_h - 6, 2, accent);
         }
-        let title = clip(&note.title, list_w - 40, 13.0);
+        let title = clip(&note.title, list_w - 52, 13.0);
         text::draw_px(fb, bx + 18, ry + 8, &title, Color::INK, 13.0);
-        // First tag as chip text + block count.
         let sub = if let Some(t) = note.tags.first() {
-            alloc::format!("#{}  ·  {} blocks", t, note.blocks.len())
+            alloc::format!("#{}  \u{00B7}  {} blocks", t, note.blocks.len())
         } else {
             alloc::format!("{} blocks", note.blocks.len())
         };
-        text::draw_px(fb, bx + 18, ry + 28, &clip(&sub, list_w - 36, 11.0), Color::TEXT_DIM, 11.0);
+        text::draw_px(fb, bx + 18, ry + 28, &clip(&sub, list_w - 48, 11.0), Color::TEXT_DIM, 11.0);
+        // Delete x at the right edge (hit_test matches the same zone).
+        if live.len() > 1 {
+            text::draw_px(fb, bx + list_w - 24, ry + 8, "\u{00D7}", Color::TEXT_DIM, 14.0);
+        }
+    }
+
+    // "+ New note" target: the row right after the last shown note.
+    {
+        let ry = row_y0 + shown.len() * row_h;
+        if ry + 30 < by + bh {
+            fb.fill_rounded_rect(bx + 8, ry, list_w - 16, row_h - 12, 9, Color::SURFACE);
+            text::draw_px(fb, bx + 18, ry + 10, "+ New note", accent, 13.0);
+        }
     }
 
     // ── Note canvas on the right ─────────────────────────────────────────────
-    let note = euronotes::parse(NOTES[sel]);
+    let src = &live[sel.min(live.len() - 1)];
+    let note = euronotes::parse(src);
     let px = bx + list_w + 1;
     let pw = bw - list_w - 1;
     let margin = 30usize;
     let tx = px + margin;
     let maxw = pw.saturating_sub(margin * 2);
-    let mut ty = by + 28;
 
-    text::draw_px(fb, tx, ty, &clip(&note.title, maxw, 26.0), Color::INK, 26.0);
-    ty += 38;
+    // Formatting toolbar: Bold, Italic, H1, H2, List, Code, Quote, Font.
+    let tb_y = by + 8;
+    for (i, (label, _)) in TOOLBAR.iter().enumerate() {
+        let bxp = px + 12 + i * 46;
+        fb.fill_rounded_rect(bxp, tb_y, 42, 26, 6, Color::rgb(0xEE, 0xF0, 0xF4));
+        let st = match *label { "B" => text::STYLE_BOLD, "I" => text::STYLE_ITALIC, _ => 0 };
+        text::draw_px_styled(fb, bxp + 14, tb_y + 6, label, Color::INK, 13.0, st, 0);
+    }
+    // Font toggle button on the right.
+    let fbtn_x = px + pw - 90;
+    fb.fill_rounded_rect(fbtn_x, tb_y, 78, 26, 6, Color::rgb(0xE4, 0xE8, 0xEE));
+    text::draw_px(fb, fbtn_x + 10, tb_y + 6, &alloc::format!("Aa {}", font_name()), Color::INK, 12.5);
+
+    // No separate title line: the first heading block below IS the title (rendered
+    // with real bold via runs, so markdown markers never show up literally).
+    let mut ty = by + 46;
     fb.fill_rect(tx, ty, 56, 3, accent);
-    ty += 18;
+    ty += 14;
 
     let ymax = by + bh - 44;
     for blk in &note.blocks {
@@ -125,8 +460,8 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         if let Block::Paragraph(p) = blk {
             let txt = p.plain_text();
             let (size, col, indent, bullet) = match p.props.style_id.as_deref() {
-                Some("Heading1") => (19.0f32, Color::INK, 0usize, false),
-                Some("Heading2") => (16.0, accent, 0, false),
+                Some("Heading1") => (25.0f32, Color::INK, 0usize, false),
+                Some("Heading2") => (18.0, accent, 0, false),
                 Some("Quote") => (13.5, Color::TEXT_SEC, 14, false),
                 _ => match p.props.list_level {
                     Some(lvl) => (13.5, Color::INK, 14 + lvl as usize * 18, true),
@@ -136,11 +471,14 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
             if txt.trim().is_empty() {
                 continue;
             }
+            let _ = txt;
+            let heading_bold = matches!(p.props.style_id.as_deref(), Some("Heading1") | Some("Heading2"));
+            let fam = FONT_FAMILY.load(Ordering::Relaxed) as u8;
             if bullet {
                 fb.fill_rounded_rect(tx + indent, ty + 7, 5, 5, 2, accent);
-                ty = draw_wrapped(fb, tx + indent + 12, ty, maxw.saturating_sub(indent + 12), &txt, col, size, 20, ymax);
+                ty = draw_runs(fb, tx + indent + 12, ty, maxw.saturating_sub(indent + 12), &p.runs, col, size, 20, ymax, heading_bold, fam);
             } else {
-                ty = draw_wrapped(fb, tx + indent, ty, maxw.saturating_sub(indent), &txt, col, size, (size as usize) + 8, ymax);
+                ty = draw_runs(fb, tx + indent, ty, maxw.saturating_sub(indent), &p.runs, col, size, (size as usize) + 8, ymax, heading_bold, fam);
             }
             ty += 6;
         }
@@ -164,6 +502,42 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
 }
 
 /// Draw `s` with simple word wrap; returns the new y.
+/// Font family for the note canvas: 0 = sans (Inter), 1 = monospace.
+static FONT_FAMILY: AtomicUsize = AtomicUsize::new(0);
+pub fn cycle_font() {
+    let n = (FONT_FAMILY.load(Ordering::Relaxed) + 1) % 2;
+    FONT_FAMILY.store(n, Ordering::Relaxed);
+    DIRTY.store(false, Ordering::Relaxed);
+}
+pub fn font_name() -> &'static str {
+    if FONT_FAMILY.load(Ordering::Relaxed) == 1 { "Mono" } else { "Sans" }
+}
+
+/// Draw a paragraph's runs with per-run bold/italic, wrapping on word boundaries.
+/// `force_bold` makes the whole line bold (headings). Returns the new y.
+fn draw_runs(fb: &FrameBuffer, x: usize, mut y: usize, maxw: usize, runs: &[Run],
+             col: Color, size: f32, lead: usize, ymax: usize, force_bold: bool, fam: u8) -> usize {
+    let mut cx = x;
+    let line_h = lead;
+    for run in runs {
+        let mut style = 0u8;
+        if run.props.bold || force_bold { style |= text::STYLE_BOLD; }
+        if run.props.italic { style |= text::STYLE_ITALIC; }
+        // Word-wrap this run.
+        for word in run.text.split_inclusive(' ') {
+            let ww = text::width_px_styled(word, size, style, fam);
+            if cx + ww > x + maxw && cx > x {
+                cx = x;
+                y += line_h;
+                if y + line_h > ymax { return y; }
+            }
+            text::draw_px_styled(fb, cx, y, word, col, size, style, fam);
+            cx += ww;
+        }
+    }
+    y + line_h
+}
+
 fn draw_wrapped(fb: &FrameBuffer, x: usize, mut y: usize, maxw: usize, s: &str, col: Color, size: f32, lead: usize, ymax: usize) -> usize {
     use alloc::string::String;
     let mut line = String::new();

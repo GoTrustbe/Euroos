@@ -312,6 +312,42 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     serial_println!("========== NMI PROBE (wedge RIP capture) ==========");
     serial_println!("[nmi] interrupted RIP={rip:#018x} CS={cs:#x} RSP={rsp:#018x} RFLAGS={:#x}", rflags.bits());
     serial_println!("[nmi] anchor kernel_base ~ nmi_handler @ {:#018x}", nmi_handler as usize as u64);
+    // The INSTRUCTIONS at the wedge: a lock spin (pause;jmp / cmpxchg) and a
+    // poll loop (cmp mem;jne) look identical from the outside; 32 bytes of code
+    // tell them apart at a glance.
+    {
+        // The loop body usually lies BEFORE the sampled rip (a trailing
+        // `jmp -N` is where the NMI lands): dump rip-16..rip+16, and decode a
+        // `mov r64, [rip+disp32]` (48 8b /r with mod=00 rm=101) anywhere in the
+        // window - the absolute address of the polled static identifies WHICH
+        // flag/lock the wedge waits on.
+        let base = rip.wrapping_sub(16);
+        let mut b = [0u8; 32];
+        for (i, bi) in b.iter_mut().enumerate() {
+            *bi = unsafe { ((base + i as u64) as *const u8).read_volatile() };
+        }
+        serial_println!("[nmi] code rip-16..: {:02x?}", &b[..16]);
+        serial_println!("[nmi] code rip..   : {:02x?}", &b[16..]);
+        let mut i = 0usize;
+        while i + 7 <= 32 {
+            if b[i] == 0x48 && b[i + 1] == 0x8b && (b[i + 2] & 0xC7) == 0x05 {
+                let disp = i32::from_le_bytes([b[i + 3], b[i + 4], b[i + 5], b[i + 6]]);
+                let insn_end = base + i as u64 + 7;
+                let tgt = insn_end.wrapping_add(disp as i64 as u64);
+                serial_println!("[nmi] polled static @ {tgt:#018x} (rip-relative mov at rip{:+})", i as i64 - 16);
+            }
+            i += 1;
+        }
+    }
+    // WHO is wedged: the running task, its name, its last syscall, and whose
+    // per-process state is loaded — the holder of whatever lock the spin waits
+    // on is almost always identified by these four.
+    {
+        let cur = crate::sched::current();
+        let (sn, sa, sr) = crate::ring3::last_syscall(cur);
+        serial_println!("[nmi] current task {cur} {:?} last-syscall={sn}(a1={sa:#x})->{sr:#x} globals-owner={}",
+            crate::ring3::thread_name_pub(cur), crate::ring3::globals_owner_now());
+    }
     // Scan the interrupted stack for plausible kernel code return addresses (RBP
     // chains are unreliable in release). Kernel code lives high (>= 0x2000_0000).
     serial_println!("[nmi] stack scan (return addresses):");
@@ -330,7 +366,50 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn invalid_opcode_handler(frame: InterruptStackFrame) {
-    serial_println!("[idt] INVALID OPCODE @ {:#x}", frame.instruction_pointer.as_u64());
+    let ip = frame.instruction_pointer.as_u64();
+    let cs = frame.code_segment.0;
+    // From RING 3 (CS.RPL=3): terminate ONLY that task, never halt the whole system
+    // (same policy as the #GP and #PF handlers). A ring-3 #UD is almost always a
+    // userland binary hitting an instruction this CPU/OS config does not provide —
+    // classically SwiftShader's AVX2 (VEX-encoded, c4/c5 prefix) on a qemu64/non-AVX
+    // boot. Before this, ANY such #UD froze the entire VM: a single chrome worker
+    // executing one VEX op hung the machine, which is exactly the kind of dead wait
+    // that wastes hours. Now it fails fast and readable, and the desktop lives on.
+    if cs & 3 == 3 {
+        let cur = crate::sched::current();
+        let in_code = ip >= 0x1000
+            && (ip < 0x1_0000_0000 || (0x100_0000_0000..0x1_0100_0000_0000).contains(&ip));
+        let mut b = [0u8; 16];
+        if in_code {
+            unsafe {
+                core::arch::asm!("stac", options(nomem, nostack, preserves_flags));
+                for (i, bi) in b.iter_mut().enumerate() {
+                    *bi = ((ip + i as u64) as *const u8).read_volatile();
+                }
+                core::arch::asm!("clac", options(nomem, nostack, preserves_flags));
+            }
+        }
+        // A VEX prefix (0xC4 = 3-byte, 0xC5 = 2-byte) means an AVX/AVX2 instruction the
+        // running config can't execute — the one #UD we expect from real userland here.
+        let is_vex = in_code && (b[0] == 0xC4 || b[0] == 0xC5);
+        let (sn, sa1, sr) = crate::ring3::last_syscall(cur);
+        serial_println!(
+            "[idt] ring-3 INVALID OPCODE @ {ip:#x} (task {cur}) insn={b:02x?}{} | last-syscall={sn}(a1={sa1:#x})->{:#x} -> process terminated",
+            if is_vex { " = VEX/AVX (unsupported on this CPU/boot: enable AVX via an AVX-capable -cpu, e.g. Haswell)" } else { "" },
+            sr
+        );
+        if crate::ring3::fg_active() {
+            crate::ring3::fg_force_exit(ip);
+        }
+        let idx = crate::sched::mark_current_dead();
+        crate::ring3::note_isolation_kill(idx, ip);
+        x86_64::instructions::interrupts::enable();
+        loop {
+            x86_64::instructions::hlt();
+        }
+    }
+    // Ring-0 #UD is a genuine kernel bug: halt as before.
+    serial_println!("[idt] INVALID OPCODE @ {ip:#x} (ring 0) -> halt");
     halt();
 }
 
@@ -451,7 +530,11 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     // instruction retried. No-op unless enabled + in-range, so the normal fault
     // handling below is untouched for every other case (incl. ring 0 kernel copies
     // that touch a not-yet-committed demand page during a syscall).
-    if crate::ring3::handle_demand_fault(addr) {
+    if crate::ring3::handle_demand_fault(
+        addr,
+        code.contains(PageFaultErrorCode::CAUSED_BY_WRITE),
+        code.contains(PageFaultErrorCode::PROTECTION_VIOLATION),
+    ) {
         return;
     }
     // A fault from RING 3 = a process reaching outside its own address space

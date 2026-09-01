@@ -65,7 +65,16 @@ pub fn mono_px(scale: usize) -> f32 {
 
 /// Core renderer: draw `s` with `font` at px size `px`. `y` is the top
 /// of the text line (baseline = y + ascent), like the old bitmap API.
+/// Style flags for styled text: bit0 = bold (synthetic embolden), bit1 = italic
+/// (synthetic shear). Works on any glyph without a separate bold/italic font.
+pub const STYLE_BOLD: u8 = 1;
+pub const STYLE_ITALIC: u8 = 2;
+
 fn render(fb: &FrameBuffer, font: &FontRef, font_id: u8, x: usize, y: usize, s: &str, c: Color, px: f32) {
+    render_styled(fb, font, font_id, x, y, s, c, px, 0)
+}
+
+fn render_styled(fb: &FrameBuffer, font: &FontRef, font_id: u8, x: usize, y: usize, s: &str, c: Color, px: f32, style: u8) {
     let scale = PxScale::from(px);
     let sf = font.as_scaled(scale);
     let baseline = (y as f32 + sf.ascent() + 0.5) as i32;
@@ -109,12 +118,22 @@ fn render(fb: &FrameBuffer, font: &FontRef, font_id: u8, x: usize, y: usize, s: 
                     continue;
                 }
                 let row = gy * g.w;
+                // Italic: shear x by the height above the baseline (~0.22 slant).
+                let shear = if style & STYLE_ITALIC != 0 {
+                    ((g.h as i32 - gy as i32) * 22) / 100
+                } else {
+                    0
+                };
                 for gx in 0..g.w {
                     let a = g.cov[row + gx];
                     if a > 0 {
-                        let sx = base_x + gx as i32;
+                        let sx = base_x + gx as i32 + shear;
                         if sx >= 0 {
                             fb.blend(sx as usize, sy as usize, c, a);
+                            // Bold: a second pass one pixel right thickens the stem.
+                            if style & STYLE_BOLD != 0 {
+                                fb.blend(sx as usize + 1, sy as usize, c, a);
+                            }
                         }
                     }
                 }
@@ -166,6 +185,24 @@ pub fn draw_string_centered(
 // ── Exact px sizes (for design-faithful cards: clock 44px etc.) ─────────────
 pub fn draw_px(fb: &FrameBuffer, x: usize, y: usize, s: &str, c: Color, px: f32) {
     render(fb, ui(), 0, x, y, s, c, px);
+}
+
+/// Draw with bold/italic style flags (see STYLE_BOLD / STYLE_ITALIC) and a font
+/// family: 0 = UI sans (Inter), 1 = monospace (DejaVu). Bold adds ~1px per glyph.
+pub fn draw_px_styled(fb: &FrameBuffer, x: usize, y: usize, s: &str, c: Color, px: f32, style: u8, family: u8) {
+    let f = if family == 1 { mono() } else { ui() };
+    render_styled(fb, f, family, x, y, s, c, px, style);
+}
+
+/// Width of styled text (bold widens each glyph by ~1px; family selects the font).
+pub fn width_px_styled(s: &str, px: f32, style: u8, family: u8) -> usize {
+    let f = if family == 1 { mono() } else { ui() };
+    let base = measure(f, s, px);
+    if style & STYLE_BOLD != 0 {
+        base + s.chars().count()
+    } else {
+        base
+    }
 }
 
 pub fn width_px(s: &str, px: f32) -> usize {
