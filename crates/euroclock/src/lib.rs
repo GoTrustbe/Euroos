@@ -194,7 +194,7 @@ impl Alarm {
         if span >= DAY {
             return true; // more than a day → certainly passed
         }
-        let prev_tod = ((prev as i64 + offset_min as i64 * 60).rem_euclid(DAY as i64));
+        let prev_tod = (prev as i64 + offset_min as i64 * 60).rem_euclid(DAY as i64);
         let now_tod = prev_tod + span as i64; // may be > DAY (wraps around midnight)
         // Target in [prev_tod, now_tod) or, on wrap-around, in the next day.
         (prev_tod..now_tod).contains(&target) || (prev_tod..now_tod).contains(&(target + DAY as i64))

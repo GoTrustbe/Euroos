@@ -225,11 +225,11 @@ impl FatFs {
             let dir_bytes = self.build_dir_data(i, i == 0);
             let mut off = cluster_off(self.nodes[i].first_cluster);
             let end = off + self.nodes[i].clusters as usize * CLUSTER_BYTES;
-            for chunk in dir_bytes.chunks(1) {
+            for &b in dir_bytes.iter() {
                 if off >= end || off >= img.len() {
                     break;
                 }
-                img[off] = chunk[0];
+                img[off] = b;
                 off += 1;
             }
         }
