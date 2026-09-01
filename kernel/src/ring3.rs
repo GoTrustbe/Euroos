@@ -919,21 +919,16 @@ pub fn cdp_pump() {
                 cdp_send(&alloc::format!(
                     "{{\"id\":22,\"sessionId\":\"{dsid}\",\"method\":\"Page.startScreencast\",\"params\":{{\"format\":\"png\",\"everyNthFrame\":1}}}}"));
             }
-            // DRIVE THE FRAME EXPLICITLY. This machine has no natural frame
-            // source: the compositor produces its first handful of frames and
-            // then, correctly, stops - nothing on a headless box asks for more.
-            // HeadlessExperimental.beginFrame exists for exactly that: it makes
-            // ONE frame happen and hands the screenshot back in the reply, so
-            // there is nothing to wait for. The trace justifies it: frames
-            // submit and get acked, but CopyOutputRequest never fires because
-            // no new frame is ever scheduled.
+            // Drive the frame, and ask chrome NOT to wait for a display update.
+            // The driven frame is accepted and never reports completion, and the
+            // completion it waits for is precisely the display update a machine
+            // with no display can never deliver. noDisplayUpdates skips it: the
+            // frame is composited and screenshotted without a present.
             if ticks_1000 % 6 == 0 && ticks_1000 >= 6 {
                 let dsid = CDP_SESSION.lock().clone();
                 let cid = 1400 + ticks_1000;
-                // Screencast contract: ask for the picture directly. (beginFrame
-                // needs BeginFrameControl, which is off - see main.rs.)
                 cdp_send(&alloc::format!(
-                    "{{\"id\":{cid},\"sessionId\":\"{dsid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\",\"fromSurface\":true}}}}"));
+                    "{{\"id\":{cid},\"sessionId\":\"{dsid}\",\"method\":\"HeadlessExperimental.beginFrame\",\"params\":{{\"interval\":16,\"noDisplayUpdates\":true,\"screenshot\":{{\"format\":\"png\"}}}}}}"));
             }
             if ticks_1000 % 3 == 0 {
                 // Every third wait-tick: constant damage keeps the renderer so busy
