@@ -152,8 +152,14 @@ fn in_user_arena(ptr: u64, len: usize) -> bool {
     // demand-region pointers. Un-committed pages fault in on kernel touch (ring-0
     // demand fault), so it is safe to hand the kernel these addresses.
     if DEMAND_ENABLED.load(Ordering::Relaxed) && ptr >= DEMAND_BASE {
+        // Bound by THIS process's bump pointer, not just by the region: an
+        // address beyond it was never handed out here (it belongs to another
+        // process). The demand fault handler rejects exactly that, so a kernel
+        // dereference would page-fault at ring 0 and halt the machine instead
+        // of returning EFAULT to the caller. Found on real hardware under KVM.
         return match ptr.checked_add(len as u64) {
-            Some(end) => end <= DEMAND_BASE + DEMAND_SIZE,
+            Some(end) => end <= DEMAND_BASE + DEMAND_SIZE
+                && end <= DEMAND_NEXT.load(Ordering::Relaxed),
             None => false,
         };
     }
@@ -9391,11 +9397,12 @@ fn linux_dispatch_swapped(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64)
     if SYS_TRACE_LEFT.load(Ordering::Relaxed) == 0 {
         let r = linux_dispatch_inner(num, a1, a2, a3, a4, a5);
         msc_complete(r); // the fast path is the common one — the ring must fill here too
-        let chk2 = SCM_CHECK_ADDR.load(Ordering::Relaxed);
-        if chk2 != 0 {
-            crate::serial_println!("[scm] post-dispatch ({num}): controllen at {chk2:#x} reads {}",
-                read_user::<u64>(chk2).unwrap_or(u64::MAX));
-        }
+        // (The post-dispatch controllen probe lived here. It read a STORED user
+        // address on whatever syscall came next, which under the per-process
+        // model can belong to a different process: the demand handler rejects
+        // it, the kernel dereference faults at ring 0 and the machine halts.
+        // KVM on real hardware reproduced that in minutes. The vanishing-
+        // controllen bug it was built for is long fixed, so it is gone.)
         return r;
     }
     let r = linux_dispatch_inner(num, a1, a2, a3, a4, a5);
@@ -11178,9 +11185,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 crate::serial_println!("[scm] recvmsg fd{a1}: delivering {} data bytes", data.len());
                 }
             }
-            if scm_chk != 0 {
-                crate::serial_println!("[scm] pre-scatter: controllen reads {}", read_user::<u64>(scm_chk).unwrap_or(u64::MAX));
-            }
+            let _ = scm_chk; // (pre-scatter probe removed: same ring-0 fault hazard)
             let mut off = 0usize;
             for i in 0..iovlen {
                 if off >= data.len() { break; }
