@@ -887,6 +887,11 @@ pub fn cdp_pump() {
                 cdp_send(&alloc::format!(
                     "{{\"id\":14,\"sessionId\":\"{dsid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\",\"fromSurface\":false}}}}"));
             }
+            // (A futex dump used to run here. It answered its question - the
+            // compositor is NOT stuck, it cycles on a timed wait every 1-2 ticks
+            // like a frame scheduler should - and then froze the machine, because
+            // the pump runs with interrupts enabled and the dump takes the futex
+            // spinlocks. The invariant holds: no ring3 spinlock from this context.)
             if ticks_1000 % 3 == 0 {
                 // Every third wait-tick: constant damage keeps the renderer so busy
                 // under emulation that the capture pipeline itself starves.
