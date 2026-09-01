@@ -174,7 +174,7 @@ use uefi::prelude::*;
 use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
 
 use compositor::SIDEBAR_W;
-use font::{draw_string, text_width};
+use font::draw_string;
 use graphics::{Color, FrameBuffer};
 
 /// AG-1: read a REAL directory from the FS and hand it to the EuroFiles GUI. No mock —
@@ -1210,7 +1210,6 @@ fn main() -> Status {
     // ── REAL NETWORKING: initialize the virtio-net NIC and do a live ARP exchange
     // with the gateway. EuroNet now not only builds/parses packets — they
     // go REALLY over the wire (QEMU user-net: gw 10.0.2.2, us 10.0.2.15). ──
-    use euronet::arp::{ArpOp, ArpPacket};
     use euronet::dhcp;
     use euronet::ethernet::{EtherType, EthernetHeader, MacAddr};
     use euronet::ipv4::{Ipv4Addr, Ipv4Header, Protocol};
@@ -3166,7 +3165,7 @@ fn main() -> Status {
     // do not reformat the real root). The 256-bit key comes from the TPM (O1);
     // proves that the whole FS lands transparently encrypted on the disk.
     {
-        use eurofs::{BlockDevice, EuroFs, FileSystem};
+        use eurofs::{EuroFs, FileSystem};
         let (key_bytes, from_tpm) = match tpm::get_random(32) {
             Some(b) => (b, true),
             None => (alloc::vec![0x5Au8; 32], false), // fallback without TPM

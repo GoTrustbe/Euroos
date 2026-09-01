@@ -469,7 +469,9 @@ fn decode_body(c: &mut Reader) -> Result<Vec<Op>, WasmError> {
             }
             // Numeric ops: i32/i64 (arithmetic/comparisons) + f32/f64 (arithmetic/
             // comparisons) + all conversions/reinterpretations.
-            0x45..=0x78 | 0x50..=0x5a | 0x5b..=0x66 | 0x7c..=0x8a | 0x8b..=0xa6 | 0xa7..=0xc4 => {
+            // One contiguous span: the sub-ranges written out separately here
+            // all fall inside it, so listing them again was dead.
+            0x45..=0xc4 => {
                 ops.push(Op::Num(op))
             }
             _ => return Err(WasmError::Unsupported("opcode")),

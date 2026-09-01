@@ -35,6 +35,9 @@ struct Bpb {
     total_sectors: u32,
 }
 
+/// Where a directory entry lives: (cluster, offset, the long-name slots).
+type EntrySlots = (u32, usize, Vec<(u32, usize)>);
+
 impl Bpb {
     fn parse(s0: &[u8]) -> FsResult<Bpb> {
         if s0.len() < SECTOR || s0[510] != 0x55 || s0[511] != 0xAA {
@@ -430,7 +433,7 @@ impl<D: BlockDevice> FatFs<D> {
 
     /// Find the SFN entry of `name` in `dir_cluster` and the LFN slots before it:
     /// returns (sfn_lba, sfn_off, Vec<(lfn_lba, lfn_off)>).
-    fn find_entry_slots(&self, dir_cluster: u32, name: &str) -> FsResult<(u32, usize, Vec<(u32, usize)>)> {
+    fn find_entry_slots(&self, dir_cluster: u32, name: &str) -> FsResult<EntrySlots> {
         let slots = self.dir_slots(dir_cluster)?;
         let mut lfn = String::new();
         let mut lfn_pos: Vec<(u32, usize)> = Vec::new();

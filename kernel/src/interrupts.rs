@@ -581,7 +581,7 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
                 let a = rsp.wrapping_add(i * 8);
                 if let Some(v) = read_user_qword(a) {
                     // Plausible code pointer: in the demand region (libs/code) or arena.
-                    if (v >= 0x1_0000_0000_00 && v < 0x1_4000_0000_00) || (v >= 0x0100_0000 && v < 0x1000_0000) {
+                    if (v >= 0x100_0000_0000 && v < 0x140_0000_0000) || (v >= 0x0100_0000 && v < 0x1000_0000) {
                         serial_println!("[pf-diag]   ret[{:#05x}] -> {v:#x}", i * 8);
                         printed += 1;
                         if printed >= 12 { break; }
