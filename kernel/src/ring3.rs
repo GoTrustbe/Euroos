@@ -945,6 +945,11 @@ pub fn cdp_pump() {
             if ticks_1000 % 6 == 2 && ticks_1000 >= 8 {
                 let dsid = CDP_SESSION.lock().clone();
                 let cid = 1400 + ticks_1000;
+                // Arm a bounded syscall trace on the FIRST driven frame so the
+                // window can be diffed against the oracle's, which completes.
+                if ticks_1000 == 8 {
+                    SYS_TRACE_LEFT.store(500, Ordering::Relaxed);
+                }
                 // Trace the syscalls that follow the FIRST driven frame. The
                 // oracle on native Linux shows the tail exactly: mprotect on the
                 // allocator regions, a write to the completion eventfd, then
