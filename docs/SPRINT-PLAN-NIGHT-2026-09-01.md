@@ -53,3 +53,37 @@ trip returns, no lost futex wakes).
 - Every finding committed with its measurement in the message.
 - Host tests green (1008) at each commit point.
 - Memory updated so the next session starts where this one ends.
+
+## Results (worked through the same night)
+
+### Track A: the gap is now a named divergence, not a symptom
+Differential syscall trace against the oracle in the same threaded configuration.
+Both runs match step for step: the compositor finishes, wakes the main thread over
+its self-pipe, the futex wakes land, the Mojo round trip returns, and both run the
+same mprotect block. There they part. The oracle's main thread writes eight bytes
+to the completion eventfd and the DevTools thread answers; ours runs the same
+mprotects and returns to polling, and the DevTools writer is never woken once.
+So every syscall-level mechanism is healthy and what is missing is chrome's own
+decision that the frame is finished. A syscall diff cannot see further; the next
+attempt starts there rather than at a symptom.
+
+Also established on the way: driven frames DO complete here with
+--disable-threaded-compositing (and answer hasDamage=true once the page is dirtied
+by a resize rather than a style change), but that mode cannot produce a picture on
+ANY kernel - the oracle behaves identically in it. So the threaded compositor is
+the only real target.
+
+### Track B: banked
+- B1. The red Clippy CI check is green: 'cargo clippy -p eurofs -p euronet --
+  -D warnings' passes clean. Workspace warnings 43 to 13, two answered with a
+  justification rather than a change (the JPEG cosine table keeps its literals,
+  BLAKE2b keeps its indices).
+- B2. Syscall audit against the oracle: ppoll, chdir, getpriority and
+  sched_setaffinity implemented; pkeys, landlock and inotify correctly still
+  refused. Honest finding: ppoll was a glibc-version artefact, not a gap.
+- B3. Re-validated on hardware: 161 boot self-tests green under KVM, zero
+  failures, zero panics.
+- B4. Published: lean image sanity clean, download page and live-VNC base
+  refreshed (2026.09.01).
+
+1008 host tests green at every commit point.
