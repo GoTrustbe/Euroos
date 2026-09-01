@@ -919,16 +919,23 @@ pub fn cdp_pump() {
                 cdp_send(&alloc::format!(
                     "{{\"id\":22,\"sessionId\":\"{dsid}\",\"method\":\"Page.startScreencast\",\"params\":{{\"format\":\"png\",\"everyNthFrame\":1}}}}"));
             }
-            // Drive the frame, and ask chrome NOT to wait for a display update.
-            // The driven frame is accepted and never reports completion, and the
-            // completion it waits for is precisely the display update a machine
-            // with no display can never deliver. noDisplayUpdates skips it: the
-            // frame is composited and screenshotted without a present.
+            // noDisplayUpdates stays FALSE: measured, true suppresses the whole
+            // pipeline (Commit 0, Submit 0, BeginImplFrame 0), while false lets
+            // the driven frame commit, submit, get acked AND produce copy
+            // results. It is the only setting where anything happens at all.
             if ticks_1000 % 6 == 0 && ticks_1000 >= 6 {
                 let dsid = CDP_SESSION.lock().clone();
                 let cid = 1400 + ticks_1000;
+                // Trace the syscalls that follow the FIRST driven frame. The
+                // oracle on native Linux shows the tail exactly: mprotect on the
+                // allocator regions, a write to the completion eventfd, then
+                // munmap of the ~1.9 MB screenshot bitmap. Whichever of those
+                // this kernel never reaches is the answer.
+                if ticks_1000 == 6 {
+                    SYS_TRACE_LEFT.store(400, Ordering::Relaxed);
+                }
                 cdp_send(&alloc::format!(
-                    "{{\"id\":{cid},\"sessionId\":\"{dsid}\",\"method\":\"HeadlessExperimental.beginFrame\",\"params\":{{\"interval\":16,\"noDisplayUpdates\":true,\"screenshot\":{{\"format\":\"png\"}}}}}}"));
+                    "{{\"id\":{cid},\"sessionId\":\"{dsid}\",\"method\":\"HeadlessExperimental.beginFrame\",\"params\":{{\"interval\":16,\"noDisplayUpdates\":false,\"screenshot\":{{\"format\":\"png\"}}}}}}"));
             }
             if ticks_1000 % 3 == 0 {
                 // Every third wait-tick: constant damage keeps the renderer so busy
@@ -1367,9 +1374,22 @@ fn epoll_ctl(epfd: u64, op: u64, fd: u64, ev: u64) -> u64 {
 /// when it has data — an UNKNOWN fd defaults to NOT-ready. (Reporting unknown/regular
 /// fds as always-ready made epoll_wait return a fake-ready fd every call, spinning
 /// chrome's message pump so worker threads never got the CPU — the livelock.)
+/// How often an eventfd was reported READY by epoll, and how often one was
+/// WRITTEN. The oracle strace on native Linux shows the frame-completion signal
+/// travelling over exactly this path: the compositor writes 8 bytes to an
+/// eventfd, the DevTools thread's epoll_wait wakes on it, drains it and writes
+/// the reply. If writes climb while ready-reports stay flat, the wake is lost
+/// here - which would explain a driven frame that completes everywhere except
+/// in the answer.
+pub static EVFD_READY_HITS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static EVFD_IN_EPOLLSET: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 fn epoll_fd_ready(fd: u64) -> bool {
     if crate::net::is_eventfd(fd) {
-        crate::net::eventfd_readable(fd)
+        EVFD_IN_EPOLLSET.fetch_add(1, Ordering::Relaxed);
+        let r = crate::net::eventfd_readable(fd);
+        if r { EVFD_READY_HITS.fetch_add(1, Ordering::Relaxed); }
+        r
     } else if crate::net::is_sock_fd(fd) {
         // AF_INET sockets: TCP data/EOF, a queued LocalDns answer, or a pending
         // accept. Without this arm chrome's poll never saw network readiness at
@@ -1531,6 +1551,14 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
 fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
     if fd >= MAX_FD {
         return None;
+    }
+    // Big writes on the DevTools answer pipe are the frame replies: on native
+    // Linux the beginFrame answer arrives as one 6 KB write followed by a lone
+    // NUL. Seeing (or not seeing) it here separates "chrome never produced the
+    // reply" from "we lost it on the way in".
+    if bytes.len() > 2000 {
+        crate::serial_println!("[cdp-in] fd{fd} large write: {} bytes, head={:?}",
+            bytes.len(), core::str::from_utf8(&bytes[..bytes.len().min(60)]).unwrap_or("?"));
     }
     let _g = crate::sched::IfOffGuard::new();
     if let Some((id, true)) = PIPE_FDS.lock()[fd] {
@@ -8435,6 +8463,10 @@ pub fn run_glibc_disk(
             crate::serial_println!("[stall] snap {snaps} ({iters} iters): +{} syscalls +{} futex +{} epoll, ticks {}->{} ({}) | threads={}",
                 seq - prev_seq, fx - prev_futex, ep - prev_epoll, prev_tick, tick,
                 if tick == prev_tick { "TIMER DEAD" } else { "ticking" }, GLIBC_THREADS.lock().len());
+            crate::serial_println!("[evfd] writes={} epoll-checks={} epoll-ready={}",
+                crate::net::EVENTFD_WRITES.load(Ordering::Relaxed),
+                EVFD_IN_EPOLLSET.load(Ordering::Relaxed),
+                EVFD_READY_HITS.load(Ordering::Relaxed));
             crate::sched::dump_states();
             prev_seq = seq; prev_futex = fx; prev_epoll = ep; prev_tick = tick;
             snaps += 1;

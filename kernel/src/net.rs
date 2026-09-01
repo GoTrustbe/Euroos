@@ -1817,7 +1817,11 @@ pub fn eventfd_read(fd: u64) -> Option<u64> {
     }
 }
 /// write(): add to the counter. Returns false if not a live eventfd.
+/// Count of successful eventfd writes (see EVFD_READY_HITS in ring3).
+pub static EVENTFD_WRITES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 pub fn eventfd_write(fd: u64, add: u64) -> bool {
+    EVENTFD_WRITES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     if !is_eventfd(fd) {
         return false;
     }

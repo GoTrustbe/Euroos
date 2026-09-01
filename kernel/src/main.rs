@@ -2475,6 +2475,15 @@ fn main() -> Status {
                   b"--run-all-compositor-stages-before-draw",
                   b"--disable-renderer-backgrounding",
                   b"--disable-backgrounding-occluded-windows",
+                  // SOFTWARE OUTPUT SURFACE. The trace named the missing link:
+                  // every stage up to and including submit works (Commit 11,
+                  // Activate 6, Draw 27, Swap 9, Submit 2 with Ack 2, and 6 copy
+                  // results) while DidPresent, PresentationFeedback and
+                  // FrameTokenAck are all ZERO. beginFrame answers off that
+                  // presentation signal, so it never answers. Through GL the
+                  // signal rides on a swap callback that never fires here; a
+                  // software output surface reports presentation immediately.
+                  b"--disable-gpu-compositing",
                   b"--disable-features=VaapiVideoDecoder,VaapiVideoEncoder",
                   // MojoUseEventFd = chrome's eventfd shared-mem Mojo channel; its probe
                   // PCHECKs that eventfd2(invalid flags) FAILS, but our eventfd2 accepts
@@ -2501,7 +2510,12 @@ fn main() -> Status {
                   // screencast prints "auto-throttling enabled" -> "proposing a capture
                   // size" -> "Captured #1". Whichever of those three appears here says
                   // exactly where the capturer stops.
-                  b"--vmodule=simple_devtools_protocol_client=2,video_capture_oracle=3,frame_sink_video_capturer_impl=3",
+                  b"--vmodule=headless_*=2,begin_frame*=2,*frame_control*=2,compositor_frame_sink*=1,simple_devtools_protocol_client=2",
+                  // Ask the headless frame controller itself what it does with our
+                  // beginFrame: every stage up to submit and copy is measured and
+                  // present, the reply never comes, and the trace categories we
+                  // enable may simply not carry the presentation events. Chrome's
+                  // own logging settles it without another guess.
                   // EXPERIMENT (one boot): navigate the INITIAL page straight to the
                   // target instead of going through --dump-dom. --dump-dom never
                   // navigates itself: it loads chrome://headless/headless_command.html
@@ -2600,6 +2614,17 @@ fn main() -> Status {
                     // The READBACK: a capture is a CopyOutputRequest whose result comes
                     // back as a CopyOutputResult. Host, same page: CopyOutputRequest=2
                     // CopyOutputResult=6 RasterTask=1 TileTask=14 PrepareTiles=9.
+                    // COMPLETION EVIDENCE. A driven frame finishes when the display
+                    // reports it presented; chrome answers beginFrame off that
+                    // signal. Ours is accepted and never answered, so count the
+                    // events on that exact path: if presentation feedback is zero
+                    // while frames submit and get acked, the missing link is named
+                    // rather than guessed at with more flags.
+                    serial_println!("[trace] present | DidPresent={} PresentationFeedback={} FrameTokenAck={} BeginFrameControl={} SendBeginMainFrame={} ReadyToActivate={} ActivateSyncTree={}",
+                        count("DidPresentCompositorFrame"), count("PresentationFeedback"),
+                        count("FrameTokenAck"), count("BeginFrameControl"),
+                        count("SendBeginMainFrame"), count("NotifyReadyToActivate"),
+                        count("ActivateSyncTree"));
                     serial_println!("[trace] readback | CopyOutputRequest={} CopyOutputResult={} RasterTask={} TileTask={} PrepareTiles={}",
                         count("CopyOutputRequest"), count("CopyOutputResult"),
                         count("RasterTask"), count("TileTask"), count("PrepareTiles"));
