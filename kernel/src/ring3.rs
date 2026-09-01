@@ -923,7 +923,26 @@ pub fn cdp_pump() {
             // pipeline (Commit 0, Submit 0, BeginImplFrame 0), while false lets
             // the driven frame commit, submit, get acked AND produce copy
             // results. It is the only setting where anything happens at all.
+            // Dirty the page on one tick and drive the frame two ticks later:
+            // Runtime.evaluate runs asynchronously on the renderer main thread,
+            // so a mutation sent in the same breath as the frame has not landed
+            // yet and the frame honestly answers hasDamage=false.
             if ticks_1000 % 6 == 0 && ticks_1000 >= 6 {
+                let dsid = CDP_SESSION.lock().clone();
+                let did = 1300 + ticks_1000;
+                let colr = 0x204060u32.wrapping_add((ticks_1000 as u32).wrapping_mul(0x3070a0)) & 0xFFFFFF;
+                cdp_send(&alloc::format!(
+                    "{{\"id\":{did},\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"document.body.style.background='#{colr:06x}';document.body.offsetHeight\"}}}}"));
+                // A RESIZE cannot be a no-op: it forces layout and a full repaint,
+                // where a style change alone leaves the compositor with nothing to
+                // report (every driven frame answered hasDamage=false). Alternate
+                // the width so consecutive frames always differ.
+                let w = if (ticks_1000 / 6) % 2 == 0 { 800 } else { 799 };
+                cdp_send(&alloc::format!(
+                    "{{\"id\":{},\"sessionId\":\"{dsid}\",\"method\":\"Emulation.setDeviceMetricsOverride\",\"params\":{{\"width\":{w},\"height\":600,\"deviceScaleFactor\":1,\"mobile\":false}}}}",
+                    1500 + ticks_1000));
+            }
+            if ticks_1000 % 6 == 2 && ticks_1000 >= 8 {
                 let dsid = CDP_SESSION.lock().clone();
                 let cid = 1400 + ticks_1000;
                 // Trace the syscalls that follow the FIRST driven frame. The
@@ -931,9 +950,7 @@ pub fn cdp_pump() {
                 // allocator regions, a write to the completion eventfd, then
                 // munmap of the ~1.9 MB screenshot bitmap. Whichever of those
                 // this kernel never reaches is the answer.
-                if ticks_1000 == 6 {
-                    SYS_TRACE_LEFT.store(400, Ordering::Relaxed);
-                }
+
                 cdp_send(&alloc::format!(
                     "{{\"id\":{cid},\"sessionId\":\"{dsid}\",\"method\":\"HeadlessExperimental.beginFrame\",\"params\":{{\"interval\":16,\"noDisplayUpdates\":false,\"screenshot\":{{\"format\":\"png\"}}}}}}"));
             }

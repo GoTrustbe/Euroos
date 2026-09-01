@@ -2471,6 +2471,16 @@ fn main() -> Status {
                   // the real one does not. So drive frames explicitly instead of
                   // hoping for a capture: begin-frame control is the only contract
                   // where the readback path runs at all here.
+                  // NOT --disable-threaded-compositing. It DOES make driven frames
+                  // complete here (they answer, and with a forced resize they even
+                  // answer hasDamage=true) - but the reference oracle on native
+                  // Linux behaves identically in that mode: no screenshot, and
+                  // Page.captureScreenshot never answers either. Single-threaded
+                  // compositing simply cannot produce a picture on any kernel, so
+                  // the threaded compositor is the only real target. In that mode
+                  // native completes the frame and we do not; that gap is the
+                  // remaining work, and it is now the ONLY measured difference
+                  // between this kernel and the reference.
                   b"--enable-begin-frame-control",
                   b"--run-all-compositor-stages-before-draw",
                   b"--disable-renderer-backgrounding",
