@@ -5208,6 +5208,7 @@ static GFMMAP_ELF: &[u8] = include_bytes!("../../userland/glibc/gfmmap");
 // such a buffer; a private-copy mmap delivers an empty document with no error.
 static GSHM_ELF: &[u8] = include_bytes!("../../userland/glibc/gshm");
 static GSHM2_ELF: &[u8] = include_bytes!("../../userland/glibc/gshm2");
+static GSCM3_ELF: &[u8] = include_bytes!("../../userland/glibc/gscm3");
 // UNLINKED-BUT-OPEN test: an unlinked file must keep serving its open fd and must
 // not disturb any other fd — the contract behind "create, unlink, mmap" anonymous
 // shared memory (how chrome carries a page's bytes to its renderer).
@@ -5338,6 +5339,7 @@ pub fn gfmmap_bytes() -> &'static [u8] { GFMMAP_ELF }
 /// A MAP_SHARED memfd test: two mappings of one memfd must be one memory.
 pub fn gshm_bytes() -> &'static [u8] { GSHM_ELF }
 pub fn gshm2_bytes() -> &'static [u8] { GSHM2_ELF }
+pub fn gscm3_bytes() -> &'static [u8] { GSCM3_ELF }
 /// An unlinked-but-open + anonymous-shared-memory test.
 pub fn gunlink_bytes() -> &'static [u8] { GUNLINK_ELF }
 /// A poll()-timeout test: a timeout is a duration, not an instant answer.

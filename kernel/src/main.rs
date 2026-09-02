@@ -2092,6 +2092,15 @@ fn main() -> Status {
         serial_println!("[glibc] gshm2 (SCM_RIGHTS memfd, cross-process): exit={esh2} (want 141)");
         for l in osh2.lines() { serial_println!("[glibc]   {l}"); }
 
+        // gscm3: CHILD-TO-CHILD, the way Mojo introduces two peers. A broker hands
+        // each of two children one end of a socket neither of them created, and they
+        // then talk directly. Chrome's tracing service lives in a utility process, so
+        // a renderer acking BeginTracing must reach a SIBLING - and two of chrome's
+        // three children here never ack.
+        let (os3, es3) = ring3::run_glibc(&mut allocator, ring3::gscm3_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gscm3"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gscm3 (sibling socket via broker): exit={es3} (want 147)");
+        for l in os3.lines() { serial_println!("[glibc]   {l}"); }
+
         // gunlink: an unlinked file must keep serving its open fd, its neighbours must
         // be undisturbed, and "create, unlink, ftruncate, mmap(MAP_SHARED)" — the
         // standard anonymous-shared-memory recipe, and how chrome allocates the Mojo
@@ -2403,7 +2412,10 @@ fn main() -> Status {
             // frame deadline far into the future, and that is testable rather than
             // arguable.
             ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
-            ring3::cdp_install("file:///tmp/euro.html");
+            // A REAL SITE, over TLS, now that a local page paints and is delivered
+            // on this hardware. The staged file:// page proves the pipeline; a live
+            // https:// page proves the browser.
+            ring3::cdp_install("https://euro-os.eu/");
             // GL is a RUNTIME choice now: with AVX enabled (an AVX-capable -cpu,
             // e.g. Haswell — TCG emulates AVX2 since QEMU 7.2) SwiftShader's AVX2
             // paths can actually execute, so offer chrome a REAL software GL
@@ -2466,6 +2478,8 @@ fn main() -> Status {
                   // than chrome's 15 s child-connection deadline under TCG.
                   // Give the handshake the time the emulation actually needs.
                   b"--ipc-connection-timeout=120",
+                  // Resolve the site without depending on the guest resolver path.
+                  b"--host-resolver-rules=MAP euro-os.eu 151.240.77.50",
                   // ── SINGLE-PROCESS: run renderer/utility/GPU all IN the browser process
                   // so chrome NEVER forks a helper child. The default (forking) path
                   // livelocks: chrome forks helpers, they never execve into functional
@@ -2627,7 +2641,9 @@ fn main() -> Status {
                 hs_argv.push(b"--single-process");
             }
             hs_argv.extend_from_slice(gl_args);
-            hs_argv.push(b"file:///tmp/euro.html");
+            // The page comes from ARGV: the CDP pump deliberately never navigates
+            // (every navigation swaps the frame and costs the compositor its sink).
+            hs_argv.push(b"https://euro-os.eu/");
             let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
                 &hs_argv,
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
@@ -2873,7 +2889,7 @@ fn main() -> Status {
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
         if !chrome_run {
-        let results: [(&str, u64, u64); 27] = [
+        let results: [(&str, u64, u64); 28] = [
             ("gpoll(poll timeout)", epo, 143),
             ("gcond(condvar broadcast)", eco, 157),
             ("gbrk(zeroed break growth)", ebk, 163),
@@ -2881,6 +2897,7 @@ fn main() -> Status {
             ("gsleep(nanosleep + abs deadline)", esl, 149),
             ("gshm(MAP_SHARED memfd)", esh, 131),
             ("gshm2(cross-process SCM_RIGHTS memfd)", esh2, 141),
+            ("gscm3(sibling socket via broker)", es3, 147),
             ("gunlink(unlinked-but-open + anon shm)", eul, 137),
             ("gtiny(dyn-link)", e1, 42), ("gtest(stdio/malloc/qsort)", e2, 55),
             ("gthread(pthreads)", e3, 88), ("gmath(libm+dlopen)", e4, 77),

@@ -2054,7 +2054,23 @@ pub fn unix_fd_close(fd: u64) -> u64 {
     let idx = (fd - UNIX_FD_BASE) as usize;
     let taken = UNIX_FDS.lock().get_mut(idx).and_then(|s| s.take());
     match taken {
-        Some(UnixSock::Stream(e)) => { unix_close(e); 0 }
+        Some(UnixSock::Stream(e)) => {
+            // Close the fd, but tear the CONNECTION down only when this was the
+            // last fd naming that endpoint. A dup shares the endpoint (that is what
+            // a dup is), and closing one of them used to close the stream for all:
+            // passing a socket over SCM_RIGHTS re-homes it with dup + close of the
+            // original, so the receiver was handed a descriptor whose connection
+            // had just been destroyed. Two chrome children each got their end of a
+            // sibling channel and neither could hear the other (gscm3).
+            let still_referenced = UNIX_FDS
+                .lock()
+                .iter()
+                .any(|s| matches!(s, Some(UnixSock::Stream(o)) if *o == e));
+            if !still_referenced {
+                unix_close(e);
+            }
+            0
+        }
         Some(UnixSock::X(x)) => { crate::xserver::close(x); 0 }
         Some(UnixSock::Pending) => 0,
         None => (-9i64) as u64,
