@@ -945,10 +945,16 @@ pub fn cdp_pump() {
             if ticks_1000 % 6 == 2 && ticks_1000 >= 8 {
                 let dsid = CDP_SESSION.lock().clone();
                 let cid = 1400 + ticks_1000;
-                // Arm a bounded syscall trace on the FIRST driven frame so the
-                // window can be diffed against the oracle's, which completes.
+                // WHAT DOES THE RENDERER THINK IT IS DRAWING? The trace comparison
+                // says raster never executes here: no RasterSource, no raster
+                // buffer, no playback, while the reference has all three. A
+                // recorded display list only exists if there is something laid
+                // out to paint, so ask the page for its viewport, its body size
+                // and whether it considers itself visible. An empty viewport
+                // explains the whole chain at once.
                 if ticks_1000 == 8 {
-                    SYS_TRACE_LEFT.store(500, Ordering::Relaxed);
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":61,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"window.innerWidth+'x'+window.innerHeight+' dpr'+window.devicePixelRatio+' body'+document.body.offsetWidth+'x'+document.body.offsetHeight+' vis'+document.visibilityState+' hidden'+document.hidden\",\"returnByValue\":true}}}}"));
                 }
                 // Trace the syscalls that follow the FIRST driven frame. The
                 // oracle on native Linux shows the tail exactly: mprotect on the

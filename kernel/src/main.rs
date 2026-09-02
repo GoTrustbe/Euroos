@@ -2563,7 +2563,11 @@ fn main() -> Status {
                   // into "which stage of frame production never happens".
                   // gpu.capture is the capturer's own category: ChangeTarget, resolve,
                   // refresh and per-frame capture all trace under it.
-                  b"--trace-startup=cc,viz,benchmark,toplevel,gpu.capture",
+                  // devtools.timeline carries the raster events (RasterTask,
+                  // ZeroCopyRasterBuffer::Playback, RasterSource). Comparing a
+                  // trace that lacks the category against a reference that has
+                  // it would prove nothing, so enable it here too.
+                  b"--trace-startup=cc,viz,benchmark,toplevel,gpu.capture,disabled-by-default-devtools.timeline",
                   b"--trace-startup-file=/tmp/euro-trace.json",
                   b"--trace-startup-duration=0",
                   b"--remote-debugging-pipe",
