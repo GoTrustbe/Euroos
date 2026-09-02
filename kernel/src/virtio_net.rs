@@ -226,6 +226,27 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         // TX buffer (one, reused synchronously).
         let tx_buf = falloc.allocate().expect("tx-buf");
 
+        // 7b. MSI-X on the RECEIVE queue. Without an interrupt the ring is only
+        // emptied when a task gets around to it, and a page load arrives faster
+        // than that. Set the vector BEFORE DRIVER_OK so the very first frames
+        // are covered. (Once MSI-X is on, 0x14/0x16 are the vector registers.)
+        let msix_n = match crate::pci::enumerate().into_iter()
+            .find(|d| d.bus == 0 && d.dev == slot && d.func == 0)
+        {
+            Some(d) => crate::msix::enable(&d, 0, crate::interrupts::VIRTIO_NET_MSIX_VECTOR,
+                                           crate::apic::lapic_id() as u8),
+            None => 0,
+        };
+        if msix_n > 0 {
+            Port::<u16>::new(io + 0x0E).write(0); // queue select 0 = receive
+            Port::<u16>::new(io + 0x16).write(0); // queue_msix_vector = entry 0
+            let rb: u16 = Port::<u16>::new(io + 0x16).read(); // 0xFFFF = NO_VECTOR
+            Port::<u16>::new(io + 0x14).write(0xFFFF); // config_msix_vector = none
+            crate::serial_println!(
+                "[net] virtio-net MSI-X on ({msix_n} entries) -> vector {:#x}, queue readback={rb:#06x}",
+                crate::interrupts::VIRTIO_NET_MSIX_VECTOR);
+        }
+
         // 8. DRIVER_OK — device is now live.
         status.write(STATUS_ACK | STATUS_DRIVER | STATUS_DRIVER_OK);
         // Notify the RX queue so the device picks up the buffers.
@@ -283,6 +304,10 @@ pub fn send(frame: &[u8]) -> bool {
 
 /// Poll one received frame (without the virtio_net_hdr). Returns None if there is nothing.
 pub fn poll_recv() -> Option<alloc::vec::Vec<u8>> {
+    // IF=0 for the ring manipulation. The card's MSI-X handler calls this too,
+    // and an interrupt landing between reading the used ring and republishing the
+    // buffer would corrupt both views of the queue.
+    let _g = crate::sched::IfOffGuard::new();
     unsafe {
         let nic = (*core::ptr::addr_of_mut!(NIC)).as_mut()?;
         let used = nic.rx.used_idx();

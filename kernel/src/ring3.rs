@@ -439,7 +439,8 @@ fn note_inet_rx(fd: u64, n: usize) {
     let after = before + n as u64;
     if before / 65536 != after / 65536 {
         let (segs, qd, ooo, old, bad) = crate::net::tcp_drop_report();
-        crate::serial_println!("[tcp] {segs} in, {qd} queue-full, {ooo} ahead, {old} behind, {bad} unparsable");
+        crate::serial_println!("[tcp] {segs} in, {qd} queue-full, {ooo} held (ahead of a gap), {old} behind, {bad} unparsable, {} card interrupts",
+            crate::interrupts::NET_MSIX_COUNT.load(Ordering::Relaxed));
     }
     if calls < 20 || before / 65536 != after / 65536 {
         crate::serial_println!("[inet] fd{fd} <- {} read {n} B (total {after} B in {} calls)",

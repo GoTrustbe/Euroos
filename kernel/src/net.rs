@@ -65,6 +65,7 @@ static NET_LEGACY: spin::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>
 /// concurrent downloads here, one subresource failing with ERR_SSL_PROTOCOL_ERROR
 /// and four requests that never get a response.
 pub static TCP_Q_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Segments held ahead of a gap (they used to be dropped).
 pub static TCP_OOO_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 pub static TCP_OLD_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 pub static TCP_PARSE_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -113,6 +114,65 @@ pub fn tcp_drop_report() -> (u64, u64, u64, u64, u64) {
         TCP_OLD_DROPS.load(core::sync::atomic::Ordering::Relaxed),
         TCP_PARSE_DROPS.load(core::sync::atomic::Ordering::Relaxed),
     )
+}
+
+/// Drain the NIC from the CARD'S OWN INTERRUPT.
+///
+/// The receive ring was only emptied when some task got around to it, and a
+/// page load arrives faster than that: 89 segments per load never reached this
+/// stack at all, each one costing a retransmission that the strictly in-order
+/// receive path then waits for. Deeper and more frequent draining from the
+/// supervising loop changed nothing measurable, because the problem is not how
+/// much is drained per call but WHEN the call happens.
+///
+/// Every lock here is a TRY-lock, and they are taken BEFORE the first frame is
+/// pulled: a frame is never removed from the ring without somewhere to put it.
+/// If a task holds the queues, this returns and the frames wait for the next
+/// interrupt.
+pub fn rx_route_irq() {
+    let my_ip = {
+        let Some(cfg) = CFG.try_lock() else { return };
+        match *cfg {
+            Some(c) => c.my_ip,
+            None => return,
+        }
+    };
+    let Some(mut portq) = PORTQ.try_lock() else { return };
+    let Some(mut legacy) = NET_LEGACY.try_lock() else { return };
+    for _ in 0..256 {
+        let rx = match nic::poll_recv() {
+            Some(r) => r,
+            None => break,
+        };
+        let mut routed = false;
+        if let Ok((h, payload)) = EthernetHeader::parse(&rx) {
+            if h.ethertype == EtherType::Ipv4 {
+                if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
+                    if ih.protocol == Protocol::Tcp && ih.dst == my_ip {
+                        if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
+                            let q = match portq.iter_mut().find(|(p, _)| *p == seg.dst_port) {
+                                Some((_, q)) => q,
+                                None => {
+                                    portq.push((seg.dst_port, alloc::collections::VecDeque::new()));
+                                    &mut portq.last_mut().unwrap().1
+                                }
+                            };
+                            TCP_SEGS_IN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                            if q.len() < 256 {
+                                q.push_back((ih.src, seg));
+                            } else {
+                                TCP_Q_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                            }
+                            routed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !routed && legacy.len() < 256 {
+            legacy.push_back(rx);
+        }
+    }
 }
 
 fn rx_route() {
@@ -637,6 +697,14 @@ pub struct TcpConn {
     /// Sent-but-not-yet-ACK'd data segments (seq, bytes) for
     /// retransmission on packet loss.
     retx: alloc::vec::Vec<(u32, alloc::vec::Vec<u8>)>,
+    /// Segments that arrived AHEAD of the gap, kept until it is filled.
+    ///
+    /// Without this, one lost segment cost the whole stream: a single 272-byte
+    /// segment went missing on a page load and every one of the ~90 segments
+    /// behind it was thrown away, each waiting on a retransmission that had to
+    /// arrive before anything could move again. Bounded, because a peer that
+    /// never fills the gap must not be able to grow this without limit.
+    ooo: alloc::vec::Vec<(u32, alloc::vec::Vec<u8>)>,
 }
 
 impl TcpConn {
@@ -688,6 +756,7 @@ impl TcpConn {
             open: false,
             rx: alloc::collections::VecDeque::new(),
             retx: alloc::vec::Vec::new(),
+            ooo: alloc::vec::Vec::new(),
         };
         // SYN with retransmission: a lost SYN or SYN-ACK would otherwise make the
         // handshake fail immediately. At most 4 attempts (poll_seg timeout per round).
@@ -736,6 +805,7 @@ impl TcpConn {
             open: false,
             rx: alloc::collections::VecDeque::new(),
             retx: alloc::vec::Vec::new(),
+            ooo: alloc::vec::Vec::new(),
         };
         c.emit(tcp::SYN | tcp::ACK, &[]);
         c.my_seq = isn.wrapping_add(1);
@@ -788,6 +858,21 @@ impl TcpConn {
                 if seg.seq == self.their_seq {
                     self.their_seq = self.their_seq.wrapping_add(seg.payload.len() as u32);
                     self.rx.extend(seg.payload.iter().copied());
+                    // The gap is closed: splice in everything that was waiting
+                    // behind it, in sequence, as far as it reaches.
+                    loop {
+                        let Some(i) = self.ooo.iter().position(|(q, _)| *q == self.their_seq) else {
+                            break;
+                        };
+                        let (_, data) = self.ooo.remove(i);
+                        self.their_seq = self.their_seq.wrapping_add(data.len() as u32);
+                        self.rx.extend(data.iter().copied());
+                    }
+                    // Anything now behind the window is data we already have.
+                    let upto = self.their_seq;
+                    self.ooo.retain(|(q, d)| {
+                        upto.wrapping_sub(*q) > 0x8000_0000 || q.wrapping_add(d.len() as u32) != upto
+                    });
                 } else {
                     // Out of order, and WHICH way matters. Behind what we expect is
                     // data we already have (a retransmission, or the same segment
@@ -796,7 +881,24 @@ impl TcpConn {
                     if seg.seq.wrapping_sub(self.their_seq) > 0x8000_0000 {
                         TCP_OLD_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                     } else {
+                        // HOW BIG is the gap? One segment means a single loss; a
+                        // large jump means a burst went missing, and the two have
+                        // different causes.
+                        static LEFT: core::sync::atomic::AtomicU32 =
+                            core::sync::atomic::AtomicU32::new(10);
+                        if LEFT.fetch_sub(1, core::sync::atomic::Ordering::Relaxed) > 0 {
+                            crate::serial_println!(
+                                "[tcp] gap on sport {}: expected {}, got {} ({} bytes missing, this segment {} B)",
+                                self.sport, self.their_seq, seg.seq,
+                                seg.seq.wrapping_sub(self.their_seq), seg.payload.len());
+                        }
                         TCP_OOO_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                        // KEEP it. The duplicate ACK below still asks for the gap,
+                        // and when the retransmission arrives this segment - and
+                        // every one behind it - is already here.
+                        if self.ooo.len() < 128 && !self.ooo.iter().any(|(q, _)| *q == seg.seq) {
+                            self.ooo.push((seg.seq, seg.payload.clone()));
+                        }
                     }
                 }
                 self.emit(tcp::ACK, &[]);
