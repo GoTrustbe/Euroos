@@ -60,12 +60,70 @@ static PORTQ: spin::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ip
 static NET_LEGACY: spin::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>> =
     spin::Mutex::new(alloc::collections::VecDeque::new());
 
+/// Segments this stack THREW AWAY, and why. A TCP that silently drops recovers
+/// by retransmission, so the loss is invisible until a page half-loads: three
+/// concurrent downloads here, one subresource failing with ERR_SSL_PROTOCOL_ERROR
+/// and four requests that never get a response.
+pub static TCP_Q_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static TCP_OOO_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static TCP_OLD_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static TCP_PARSE_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static TCP_SEGS_IN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Drain the NIC's receive ring into the per-port queues. Cheaper than
+/// [`pump_all`] - it never touches the socket table - so it can run often, which
+/// is what keeps a burst from overrunning the ring.
+pub fn drain_rx() {
+    let _g = crate::sched::IfOffGuard::new();
+    rx_route();
+}
+
+/// Drive EVERY open TCP connection: process what arrived and acknowledge it.
+///
+/// This stack only moved when the application asked it to, so acknowledgements
+/// waited for the next poll. The peer then treats them as lost and retransmits,
+/// and because the receive path takes segments strictly in order, everything
+/// after the gap is discarded until the retransmission catches up: 191 of 526
+/// segments in one page load, and subresources that never finish. Called from
+/// the supervising loop, which holds no socket locks.
+pub fn pump_all() {
+    // IF=0 for the whole critical section. This runs from a task with interrupts
+    // ENABLED, and a ring3 spinlock held that way is the freeze family this
+    // kernel already paid for: preempt the holder, let another task spin on the
+    // same lock, and on one core neither ever runs again. It wedged the guest
+    // for twenty minutes the first time this function existed without the guard.
+    let _g = crate::sched::IfOffGuard::new();
+    rx_route();
+    let mut t = SOCKETS.lock();
+    for slot in t.iter_mut() {
+        if let Some(Sock::Conn(c)) = slot {
+            if c.open {
+                c.pump(4);
+            }
+        }
+    }
+}
+
+/// One line with the drop counters, for a caller that wants them in the log.
+pub fn tcp_drop_report() -> (u64, u64, u64, u64, u64) {
+    (
+        TCP_SEGS_IN.load(core::sync::atomic::Ordering::Relaxed),
+        TCP_Q_DROPS.load(core::sync::atomic::Ordering::Relaxed),
+        TCP_OOO_DROPS.load(core::sync::atomic::Ordering::Relaxed),
+        TCP_OLD_DROPS.load(core::sync::atomic::Ordering::Relaxed),
+        TCP_PARSE_DROPS.load(core::sync::atomic::Ordering::Relaxed),
+    )
+}
+
 fn rx_route() {
     let my_ip = match get() {
         Some(c) => c.my_ip,
         None => return,
     };
-    for _ in 0..32 {
+    // 32 was too few. A page load arrives in bursts, and whatever is still in the
+    // NIC ring when it wraps is lost: 89 real gaps in one load, each one costing a
+    // retransmission that the strictly-in-order receive path then waits for.
+    for _ in 0..256 {
         let rx = match nic::poll_recv() {
             Some(r) => r,
             None => break,
@@ -75,6 +133,13 @@ fn rx_route() {
             if h.ethertype == EtherType::Ipv4 {
                 if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
                     if ih.protocol == Protocol::Tcp && ih.dst == my_ip {
+                        if TcpSegment::parse_checked(ipl, ih.src, ih.dst).is_err() {
+                            // A TCP packet this stack could not accept. It falls
+                            // through to the legacy queue below, so the connection
+                            // never sees it - which looks exactly like a gap in the
+                            // sequence, and costs a retransmission.
+                            TCP_PARSE_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                        }
                         if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
                             let mut t = PORTQ.lock();
                             let q = match t.iter_mut().find(|(p, _)| *p == seg.dst_port) {
@@ -84,8 +149,11 @@ fn rx_route() {
                                     &mut t.last_mut().unwrap().1
                                 }
                             };
+                            TCP_SEGS_IN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                             if q.len() < 256 {
                                 q.push_back((ih.src, seg));
+                            } else {
+                                TCP_Q_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                             }
                             routed = true;
                         }
@@ -720,6 +788,16 @@ impl TcpConn {
                 if seg.seq == self.their_seq {
                     self.their_seq = self.their_seq.wrapping_add(seg.payload.len() as u32);
                     self.rx.extend(seg.payload.iter().copied());
+                } else {
+                    // Out of order, and WHICH way matters. Behind what we expect is
+                    // data we already have (a retransmission, or the same segment
+                    // delivered twice by the driver); ahead of it is a real gap.
+                    // The two have completely different causes.
+                    if seg.seq.wrapping_sub(self.their_seq) > 0x8000_0000 {
+                        TCP_OLD_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    } else {
+                        TCP_OOO_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    }
                 }
                 self.emit(tcp::ACK, &[]);
             }

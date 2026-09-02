@@ -437,6 +437,10 @@ fn note_inet_rx(fd: u64, n: usize) {
     let calls = INET_RX_CALLS.fetch_add(1, Ordering::Relaxed);
     let before = INET_RX.fetch_add(n as u64, Ordering::Relaxed);
     let after = before + n as u64;
+    if before / 65536 != after / 65536 {
+        let (segs, qd, ooo, old, bad) = crate::net::tcp_drop_report();
+        crate::serial_println!("[tcp] {segs} in, {qd} queue-full, {ooo} ahead, {old} behind, {bad} unparsable");
+    }
     if calls < 20 || before / 65536 != after / 65536 {
         crate::serial_println!("[inet] fd{fd} <- {} read {n} B (total {after} B in {} calls)",
             crate::net::sock_peer_desc(fd), calls + 1);
@@ -992,7 +996,7 @@ pub fn cdp_pump() {
                 {
                     let dsid = CDP_SESSION.lock().clone();
                     cdp_send(&alloc::format!(
-                        "{{\"id\":{},\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"'paint='+performance.getEntriesByType('paint').map(e=>e.name+'@'+Math.round(e.startTime)).join(',')+' timeline='+Math.round(document.timeline.currentTime||-1)+' vis='+document.visibilityState+' ready='+document.readyState+' text='+((document.body&&document.body.innerText)||'').length+' css='+document.styleSheets.length+' imgs='+document.images.length\"}}}}", 660 + ticks_1000));
+                        "{{\"id\":{},\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"'paint='+performance.getEntriesByType('paint').map(e=>e.name+'@'+Math.round(e.startTime)).join(',')+' timeline='+Math.round(document.timeline.currentTime||-1)+' vis='+document.visibilityState+' ready='+document.readyState+' text='+((document.body&&document.body.innerText)||'').length+' css='+document.styleSheets.length+' imgs='+document.images.length+' res='+performance.getEntriesByType('resource').filter(e=>e.responseEnd>0).length+'/'+performance.getEntriesByType('resource').length\"}}}}", 660 + ticks_1000));
                 }
                 // A ONE-SHOT CAPTURE, now that frames are presented again.
                 // captureScreenshot is a CopyOutputRequest readback; it never
@@ -1278,6 +1282,14 @@ pub fn cdp_pump() {
                     "{{\"id\":8,\"sessionId\":\"{s}\",\"method\":\"HeadlessExperimental.enable\"}}"));
                 cdp_send(&alloc::format!(
                     "{{\"id\":6,\"sessionId\":\"{s}\",\"method\":\"Page.enable\"}}"));
+                // What does the NETWORK say about the page's subresources? In the
+                // out-of-process configuration the document arrives (8901 chars of
+                // text) but not one resource ever completes (res=0/0), the load
+                // never finishes and blink will not paint while a render-blocking
+                // stylesheet is pending. These events say whether the responses are
+                // finished, failed, or simply never reported.
+                cdp_send(&alloc::format!(
+                    "{{\"id\":80,\"sessionId\":\"{s}\",\"method\":\"Network.enable\"}}"));
                 // NO second navigation: the page is already loading from argv, and
                 // every extra navigation swaps the frame — each swap costs the
                 // compositor its frame sink, which is exactly the loop the trace shows
@@ -8718,6 +8730,16 @@ pub fn run_glibc_disk(
         iters += 1;
         if iters % 64 == 0 {
             cdp_pump(); // DevTools conversation with a --remote-debugging-pipe browser
+        }
+        // Keep the NETWORK moving while a program runs. Without this the stack
+        // only advances when the program itself polls a socket, so acknowledgements
+        // are late, the peer retransmits, and an in-order receive path throws away
+        // everything after the gap.
+        if iters % 8 == 0 {
+            crate::net::drain_rx(); // cheap: keeps the NIC ring from overrunning
+        }
+        if iters % 64 == 0 {
+            crate::net::pump_all();
         }
         // Launcher heartbeat: proof of life for the OUTSIDE watchdog, on the REAL
         // clock (RTC). Neither iterations nor guest ticks can pace this: under heavy
