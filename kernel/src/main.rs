@@ -2441,6 +2441,11 @@ fn main() -> Status {
                   // of demand-paged procs, currently ENOSYS on the glibc path) or software-
                   // compositor bring-up. hshell running to exit 0 is the current landmark.
                   b"--disable-vulkan", b"--ozone-platform=headless",
+                  // An explicit window, as the reference oracle passes. Measured:
+                  // NOT the cause of the missing frame (the renderer reports a
+                  // healthy 799x600 viewport with and without it), kept so the
+                  // two runs differ in as little as possible.
+                  b"--window-size=800,600",
                   // Children died "Terminating current process after 15 seconds
                   // with no connection" (run 17): the Mojo handshake DOES run
                   // (scm traffic both ways) but the browser services it slower

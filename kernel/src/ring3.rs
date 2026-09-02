@@ -10194,6 +10194,12 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // buffers became private zero pages: a page's bytes never reached its
             // renderer and every document came up EMPTY, with no error anywhere.
             let a5 = a5 as u32 as u64; // truncate exactly like the kernel ABI defines
+            // Re-resolve the per-process alias HERE too. mmap's fd argument arrives in
+            // r8 and is truncated to 32 bits only at this point, so an alias resolved on
+            // the untruncated value at dispatch entry can miss: a child that dup2'd its
+            // shared-memory segment onto fd 6 then mapped pack-file bytes as shared
+            // memory ("Corruption detected in shared-memory segment").
+            let a5 = unalias_fd(a5);
             let file_backed = a4 & MAP_ANONYMOUS == 0 && (a5 as usize) < MAX_FD && a5 != 0xFFFF_FFFF;
 
             // MAP_SHARED of an in-RAM file (memfd/tmpfs) = SHARED memory: every mapping
