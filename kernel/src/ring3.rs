@@ -2717,6 +2717,41 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
     chunk.len() as u64
 }
 
+/// FILES indices of the character devices whose contents are GENERATED, not
+/// stored. They were registered as ordinary 4 KiB files, so a reader ran into
+/// end-of-file after 4096 bytes - and a character device never ends. NSS's
+/// software token seeds its RNG from /dev/urandom and refuses to initialise
+/// when that read comes up short, which is where every TLS handshake stopped.
+static URANDOM_FI: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(usize::MAX);
+static ZERO_FI: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(usize::MAX);
+/// /dev/random, which on Linux is the same generator as /dev/urandom.
+static URANDOM_ALIAS_FI: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(usize::MAX);
+
+/// Serve a generated character device: endless random bytes or endless zeros.
+/// Returns None when `fi` is an ordinary file.
+fn char_device_read(fi: usize, buf: u64, len: usize) -> Option<u64> {
+    if len == 0 {
+        return None;
+    }
+    if fi == URANDOM_FI.load(Ordering::Relaxed) || fi == URANDOM_ALIAS_FI.load(Ordering::Relaxed) {
+        if !in_user_arena(buf, len) || !fill_random(buf, len as u64) {
+            return Some(EFAULT);
+        }
+        return Some(len as u64);
+    }
+    if fi == ZERO_FI.load(Ordering::Relaxed) {
+        let zeros = alloc::vec![0u8; len.min(64 * 1024)];
+        if !copy_to_user(buf, &zeros) {
+            return Some(EFAULT);
+        }
+        return Some(zeros.len() as u64);
+    }
+    None
+}
+
 fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
     if fd >= MAX_FD {
         return u64::MAX;
@@ -2726,6 +2761,10 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
         Some(x) => x,
         None => return u64::MAX,
     };
+    if let Some(n) = char_device_read(fi, buf, len) {
+        drop(fds);
+        return n;
+    }
     if SHARED_ANY.load(Ordering::Relaxed) {
         drop(fds); // sync_shared_region takes FILES/SHARED_MAPS: never nest the fd lock
         sync_shared_region(fi, true); // a shared mapping IS the file: pick up its writes
@@ -5276,6 +5315,8 @@ static GSHM_ELF: &[u8] = include_bytes!("../../userland/glibc/gshm");
 static GSHM2_ELF: &[u8] = include_bytes!("../../userland/glibc/gshm2");
 static GSCM3_ELF: &[u8] = include_bytes!("../../userland/glibc/gscm3");
 static GEVFD_ELF: &[u8] = include_bytes!("../../userland/glibc/gevfd");
+static GVEC_ELF: &[u8] = include_bytes!("../../userland/glibc/gvec");
+static GNSS_ELF: &[u8] = include_bytes!("../../userland/glibc/gnss");
 // UNLINKED-BUT-OPEN test: an unlinked file must keep serving its open fd and must
 // not disturb any other fd — the contract behind "create, unlink, mmap" anonymous
 // shared memory (how chrome carries a page's bytes to its renderer).
@@ -5408,6 +5449,8 @@ pub fn gshm_bytes() -> &'static [u8] { GSHM_ELF }
 pub fn gshm2_bytes() -> &'static [u8] { GSHM2_ELF }
 pub fn gscm3_bytes() -> &'static [u8] { GSCM3_ELF }
 pub fn gevfd_bytes() -> &'static [u8] { GEVFD_ELF }
+pub fn gvec_bytes() -> &'static [u8] { GVEC_ELF }
+pub fn gnss_bytes() -> &'static [u8] { GNSS_ELF }
 /// An unlinked-but-open + anonymous-shared-memory test.
 pub fn gunlink_bytes() -> &'static [u8] { GUNLINK_ELF }
 /// A poll()-timeout test: a timeout is a duration, not an instant answer.
@@ -8192,6 +8235,27 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
 /// that directory, the /dev nodes its forked child redirects stdio to before execve,
 /// and the local demo page. One place, so a desktop launch and a boot-phase run can
 /// never drift apart.
+/// The character devices every POSIX program expects. They used to be staged
+/// only when chrome was launched from the desktop, so a program run any other
+/// way found no /dev/urandom at all - and a crypto library that cannot open it
+/// reports a generic "device error" and nothing more.
+pub fn register_device_files() {
+    if URANDOM_FI.load(Ordering::Relaxed) != usize::MAX {
+        return; // already registered
+    }
+    register_file("/dev/null", alloc::vec::Vec::new());
+    // /dev/zero and /dev/urandom are GENERATED on read (see char_device_read); the
+    // bytes registered here only give them an entry and a plausible size.
+    register_file("/dev/zero", alloc::vec![0u8; 4096]);
+    ZERO_FI.store(FILES.lock().len() - 1, Ordering::Relaxed);
+    register_file("/dev/urandom", (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect());
+    URANDOM_FI.store(FILES.lock().len() - 1, Ordering::Relaxed);
+    register_file("/dev/random", alloc::vec::Vec::new());
+    let random_fi = FILES.lock().len() - 1;
+    let _ = random_fi; // /dev/random shares urandom's generator below
+    URANDOM_ALIAS_FI.store(random_fi, Ordering::Relaxed);
+}
+
 pub fn chrome_stage_files() {
     // Name resolution for a REAL page load: slirp's DNS proxy lives on 10.0.2.3;
     // /etc/hosts pins euro-os.eu as a deterministic fallback while the UDP DNS
@@ -8207,9 +8271,7 @@ pub fn chrome_stage_files() {
     register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", fc_dejavu_cache());
     register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-11", fc_dejavu_cache11());
     register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n</fontconfig>\n".to_vec());
-    register_file("/dev/null", alloc::vec::Vec::new());
-    register_file("/dev/zero", alloc::vec![0u8; 4096]);
-    register_file("/dev/urandom", (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect());
+    register_device_files();
     register_file("/tmp/euro.html", include_bytes!("euro_page.html").to_vec());
     // /etc/localtime: every chrome log line formats a timestamp, localtime_r takes
     // glibc's tz lock and reads this file on first use — and the lock at
@@ -9805,6 +9867,20 @@ pub static SYSCALLS_PER_TASK: [core::sync::atomic::AtomicU64; 128] = {
     [Z; 128]
 };
 
+/// Log every syscall that FAILS while set. A library that reports a generic
+/// "device error" and nothing else (NSS: CKR_DEVICE_ERROR) is best asked what it
+/// tried and was refused. Bounded, and off unless a test turns it on.
+pub static TRACE_FAILS: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+static TRACE_FAILS_LEFT: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
+/// Start logging failing syscalls, for at most `budget` of them.
+pub fn trace_failures(budget: u32) {
+    TRACE_FAILS_LEFT.store(budget, Ordering::Relaxed);
+    TRACE_FAILS.store(budget > 0, Ordering::Relaxed);
+}
+
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     {
         let t = crate::sched::current();
@@ -9812,11 +9888,35 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
             SYSCALLS_PER_TASK[t].fetch_add(1, Ordering::Relaxed);
         }
     }
+    if TRACE_FAILS.load(Ordering::Relaxed) {
+        let r = linux_dispatch_inner_traced(num, a1, a2, a3, a4, a5);
+        let sr = r as i64;
+        if (-4096..0).contains(&sr) && TRACE_FAILS_LEFT.fetch_sub(1, Ordering::Relaxed) > 0 {
+            // Name the FILE for path-taking calls: "openat failed" says nothing,
+            // "openat /dev/urandom failed" says everything.
+            let raw = match num {
+                2 | 4 | 6 | 21 | 87 | 89 => user_cstr(a1, 128),
+                257 | 262 | 268 | 316 | 332 => user_cstr(a2, 128),
+                _ => alloc::vec::Vec::new(),
+            };
+            let path = alloc::string::String::from_utf8_lossy(&raw);
+            if path.is_empty() {
+                crate::serial_println!("[fail] syscall {num}({a1:#x}, {a2:#x}, {a3:#x}) = {sr}");
+            } else {
+                crate::serial_println!("[fail] syscall {num} {path:?} = {sr}");
+            }
+        }
+        return r;
+    }
     // Per-process isolation: the swapped globals FOLLOW the running task (see
     // GLOBALS_OWNER). One ensure at entry loads this process' state if another
     // process' was in; nothing swaps back at exit, so a syscall that blocks
     // mid-arm stays consistent and the next entrant fixes ownership itself.
     ensure_globals_for_current();
+    linux_dispatch_swapped(num, a1, a2, a3, a4, a5)
+}
+
+fn linux_dispatch_inner_traced(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     linux_dispatch_swapped(num, a1, a2, a3, a4, a5)
 }
 

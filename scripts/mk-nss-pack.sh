@@ -24,4 +24,9 @@ python3 scripts/mkeuropack.py "$OUT" \
   "$L/libsmime3.so:/lib/x86_64-linux-gnu/libsmime3.so" \
   "$L/libssl3.so:/lib/x86_64-linux-gnu/libssl3.so" \
   "$L/libnssdbm3.so:/lib/x86_64-linux-gnu/libnssdbm3.so" \
-  "$SQLITE:/lib/x86_64-linux-gnu/libsqlite3.so.0"
+  "$SQLITE:/lib/x86_64-linux-gnu/libsqlite3.so.0" \
+  "$L/libnss3.so:/lib/x86_64-linux-gnu/libnss3.so" \
+  "$L/libnssutil3.so:/lib/x86_64-linux-gnu/libnssutil3.so" \
+  "$L/libnspr4.so:/lib/x86_64-linux-gnu/libnspr4.so" \
+  "$L/libplc4.so:/lib/x86_64-linux-gnu/libplc4.so" \
+  "$L/libplds4.so:/lib/x86_64-linux-gnu/libplds4.so"

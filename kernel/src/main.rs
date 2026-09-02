@@ -2049,6 +2049,8 @@ fn main() -> Status {
         let caps_net = caps | ring3::CAP_NET;
         let (ou, eu) = ring3::run_glibc(&mut allocator, ring3::gunix_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gunix"], &[b"PATH=/bin"], caps_net);
         serial_println!("[glibc] gunix (AF_UNIX socketpair): exit={eu}");
+        // The character devices every program expects, before ANY program runs.
+        ring3::register_device_files();
         for l in ou.lines() { serial_println!("[glibc]   {l}"); }
         // gxwin: ONE real Xlib client exercising the whole X11 path in a single
         // library load (5 separate clients re-loading the 6-lib stack was too slow):
@@ -2115,6 +2117,33 @@ fn main() -> Status {
         let (oev, eev) = ring3::run_glibc(&mut allocator, ring3::gevfd_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gevfd"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] gevfd (eventfd shared across processes): exit={eev} (want 153)");
         for l in oev.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gvec: do VECTOR REGISTERS survive a task switch? Every crypto library
+        // computes in xmm/ymm, and a kernel that loses that state across a switch
+        // returns wrong answers with no fault anywhere - which is what a failed
+        // self-test inside a crypto token looks like from outside. NSS's software
+        // token refuses to initialise here with CKR_DEVICE_ERROR.
+        // Demand paging ON: four thread stacks do not fit the small arena window.
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (ovc, evc) = ring3::run_glibc(&mut allocator, ring3::gvec_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gvec"], &[b"PATH=/bin"], caps);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gvec (vector state across switches): exit={evc} (want 159)");
+        for l in ovc.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gnss: can NSS initialise at all? Chrome verifies every server
+        // certificate through it, and when it cannot start, the TLS handshake
+        // stops right after the server's first flight - the page loads to
+        // ready=complete with an empty document and nothing says why. This runs
+        // the same initialisation in one small program, so the answer costs a
+        // boot instead of a browser run. Needs the NSS pack disk
+        // (scripts/mk-nss-pack.sh); without it the run reports what is missing.
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        ring3::trace_failures(80); // what does NSS try that this kernel refuses?
+        let (ons, ens) = ring3::run_glibc(&mut allocator, ring3::gnss_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gnss"], &[b"PATH=/bin"], caps);
+        ring3::trace_failures(0);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gnss (NSS initialises): exit={ens} (want 167)");
+        for l in ons.lines() { serial_println!("[glibc]   {l}"); }
 
         // gunlink: an unlinked file must keep serving its open fd, its neighbours must
         // be undisturbed, and "create, unlink, ftruncate, mmap(MAP_SHARED)" — the
@@ -2673,7 +2702,7 @@ fn main() -> Status {
             // server's first flight and then goes silent: chrome writes nothing
             // more and never polls the socket again, which is where certificate
             // verification would wait. Without TLS that stage does not exist.
-            hs_argv.push(b"file:///tmp/euro.html");
+            hs_argv.push(b"https://euro-os.eu/");
             let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
                 &hs_argv,
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
@@ -2919,7 +2948,7 @@ fn main() -> Status {
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
         if !chrome_run {
-        let results: [(&str, u64, u64); 29] = [
+        let results: [(&str, u64, u64); 31] = [
             ("gpoll(poll timeout)", epo, 143),
             ("gcond(condvar broadcast)", eco, 157),
             ("gbrk(zeroed break growth)", ebk, 163),
@@ -2929,6 +2958,8 @@ fn main() -> Status {
             ("gshm2(cross-process SCM_RIGHTS memfd)", esh2, 141),
             ("gscm3(sibling socket via broker)", es3, 147),
             ("gevfd(eventfd shared across processes)", eev, 153),
+            ("gvec(vector state across switches)", evc, 159),
+            ("gnss(NSS initialises)", ens, 167),
             ("gunlink(unlinked-but-open + anon shm)", eul, 137),
             ("gtiny(dyn-link)", e1, 42), ("gtest(stdio/malloc/qsort)", e2, 55),
             ("gthread(pthreads)", e3, 88), ("gmath(libm+dlopen)", e4, 77),
