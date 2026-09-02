@@ -65,6 +65,9 @@ static NET_LEGACY: spin::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>
 /// concurrent downloads here, one subresource failing with ERR_SSL_PROTOCOL_ERROR
 /// and four requests that never get a response.
 pub static TCP_Q_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Segments spliced back in once their gap closed: proof the reassembly does
+/// something, rather than an assumption that it does.
+pub static TCP_RECOVERED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Segments held ahead of a gap (they used to be dropped).
 pub static TCP_OOO_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 pub static TCP_OLD_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -103,6 +106,21 @@ pub fn pump_all() {
             }
         }
     }
+}
+
+/// Bytes sitting in socket receive buffers that the program has not read.
+/// Large and growing means the data arrived and the READER never came back for
+/// it - a readiness problem, not a network one. Near zero means the stall is
+/// above this layer.
+pub fn rx_queued_bytes() -> usize {
+    let _g = crate::sched::IfOffGuard::new();
+    let t = SOCKETS.lock();
+    t.iter()
+        .filter_map(|s| match s {
+            Some(Sock::Conn(c)) => Some(c.rx.len()),
+            _ => None,
+        })
+        .sum()
 }
 
 /// One line with the drop counters, for a caller that wants them in the log.
@@ -855,51 +873,61 @@ impl TcpConn {
                 self.ack_upto(seg.ack);
             }
             if !seg.payload.is_empty() {
-                if seg.seq == self.their_seq {
-                    self.their_seq = self.their_seq.wrapping_add(seg.payload.len() as u32);
-                    self.rx.extend(seg.payload.iter().copied());
-                    // The gap is closed: splice in everything that was waiting
-                    // behind it, in sequence, as far as it reaches.
+                // Where does this segment sit relative to what we still need?
+                // Three cases, and the middle one used to be thrown away whole.
+                let delta = seg.seq.wrapping_sub(self.their_seq);
+                let accepted = if delta == 0 {
+                    // Exactly what we asked for.
+                    Some(0usize)
+                } else if delta > 0x8000_0000 {
+                    // STARTS BEFORE what we need - a retransmission. It usually
+                    // carries the bytes we are missing plus some we already have,
+                    // and dropping it whole meant the gap NEVER closed: 89 segments
+                    // held, 96 retransmissions discarded, 0 recovered, and the
+                    // connection stuck at the pace of timeouts. Trim the part we
+                    // already have and take the rest.
+                    let off = self.their_seq.wrapping_sub(seg.seq) as usize;
+                    if off < seg.payload.len() {
+                        Some(off)
+                    } else {
+                        TCP_OLD_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                        None // entirely old: nothing new in it
+                    }
+                } else {
+                    // Ahead of a gap: keep it until the gap closes.
+                    TCP_OOO_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    if self.ooo.len() < 128 && !self.ooo.iter().any(|(q, _)| *q == seg.seq) {
+                        self.ooo.push((seg.seq, seg.payload.clone()));
+                    }
+                    None
+                };
+                if let Some(off) = accepted {
+                    let fresh = &seg.payload[off..];
+                    self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
+                    self.rx.extend(fresh.iter().copied());
+                    // The gap is closed: splice in what was waiting behind it, in
+                    // sequence, trimming any overlap the same way.
                     loop {
-                        let Some(i) = self.ooo.iter().position(|(q, _)| *q == self.their_seq) else {
+                        let want = self.their_seq;
+                        let Some(i) = self.ooo.iter().position(|(q, d)| {
+                            let dl = want.wrapping_sub(*q);
+                            dl == 0 || (dl < 0x8000_0000 && (dl as usize) < d.len())
+                        }) else {
                             break;
                         };
-                        let (_, data) = self.ooo.remove(i);
-                        self.their_seq = self.their_seq.wrapping_add(data.len() as u32);
-                        self.rx.extend(data.iter().copied());
+                        let (q, data) = self.ooo.remove(i);
+                        let skip = want.wrapping_sub(q) as usize;
+                        let fresh = &data[skip..];
+                        self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
+                        self.rx.extend(fresh.iter().copied());
+                        TCP_RECOVERED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                     }
-                    // Anything now behind the window is data we already have.
+                    // Drop anything now entirely behind the window.
                     let upto = self.their_seq;
                     self.ooo.retain(|(q, d)| {
-                        upto.wrapping_sub(*q) > 0x8000_0000 || q.wrapping_add(d.len() as u32) != upto
+                        let dl = upto.wrapping_sub(*q);
+                        !(dl < 0x8000_0000 && (dl as usize) >= d.len())
                     });
-                } else {
-                    // Out of order, and WHICH way matters. Behind what we expect is
-                    // data we already have (a retransmission, or the same segment
-                    // delivered twice by the driver); ahead of it is a real gap.
-                    // The two have completely different causes.
-                    if seg.seq.wrapping_sub(self.their_seq) > 0x8000_0000 {
-                        TCP_OLD_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                    } else {
-                        // HOW BIG is the gap? One segment means a single loss; a
-                        // large jump means a burst went missing, and the two have
-                        // different causes.
-                        static LEFT: core::sync::atomic::AtomicU32 =
-                            core::sync::atomic::AtomicU32::new(10);
-                        if LEFT.fetch_sub(1, core::sync::atomic::Ordering::Relaxed) > 0 {
-                            crate::serial_println!(
-                                "[tcp] gap on sport {}: expected {}, got {} ({} bytes missing, this segment {} B)",
-                                self.sport, self.their_seq, seg.seq,
-                                seg.seq.wrapping_sub(self.their_seq), seg.payload.len());
-                        }
-                        TCP_OOO_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                        // KEEP it. The duplicate ACK below still asks for the gap,
-                        // and when the retransmission arrives this segment - and
-                        // every one behind it - is already here.
-                        if self.ooo.len() < 128 && !self.ooo.iter().any(|(q, _)| *q == seg.seq) {
-                            self.ooo.push((seg.seq, seg.payload.clone()));
-                        }
-                    }
                 }
                 self.emit(tcp::ACK, &[]);
             }

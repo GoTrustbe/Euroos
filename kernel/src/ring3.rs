@@ -421,12 +421,15 @@ static INET_RX_CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomic
 
 fn note_inet_tx(fd: u64, n: usize) {
     static CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    static TOTAL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     if n == 0 {
         return;
     }
     let c = CALLS.fetch_add(1, Ordering::Relaxed);
-    if c < 12 {
-        crate::serial_println!("[inet] fd{fd} -> {} wrote {n} B", crate::net::sock_peer_desc(fd));
+    let t = TOTAL.fetch_add(n as u64, Ordering::Relaxed) + n as u64;
+    if c < 40 {
+        crate::serial_println!("[inet] fd{fd} -> {} wrote {n} B (sent {t} B in {} writes)",
+            crate::net::sock_peer_desc(fd), c + 1);
     }
 }
 
@@ -439,8 +442,10 @@ fn note_inet_rx(fd: u64, n: usize) {
     let after = before + n as u64;
     if before / 65536 != after / 65536 {
         let (segs, qd, ooo, old, bad) = crate::net::tcp_drop_report();
-        crate::serial_println!("[tcp] {segs} in, {qd} queue-full, {ooo} held (ahead of a gap), {old} behind, {bad} unparsable, {} card interrupts",
-            crate::interrupts::NET_MSIX_COUNT.load(Ordering::Relaxed));
+        crate::serial_println!("[tcp] {segs} in, {qd} queue-full, {ooo} held (ahead of a gap), {old} behind, {bad} unparsable, {} recovered, {} card interrupts, {} B queued unread",
+            crate::net::TCP_RECOVERED.load(Ordering::Relaxed),
+            crate::interrupts::NET_MSIX_COUNT.load(Ordering::Relaxed),
+            crate::net::rx_queued_bytes());
     }
     if calls < 20 || before / 65536 != after / 65536 {
         crate::serial_println!("[inet] fd{fd} <- {} read {n} B (total {after} B in {} calls)",
@@ -997,7 +1002,7 @@ pub fn cdp_pump() {
                 {
                     let dsid = CDP_SESSION.lock().clone();
                     cdp_send(&alloc::format!(
-                        "{{\"id\":{},\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"'paint='+performance.getEntriesByType('paint').map(e=>e.name+'@'+Math.round(e.startTime)).join(',')+' timeline='+Math.round(document.timeline.currentTime||-1)+' vis='+document.visibilityState+' ready='+document.readyState+' text='+((document.body&&document.body.innerText)||'').length+' css='+document.styleSheets.length+' imgs='+document.images.length+' res='+performance.getEntriesByType('resource').filter(e=>e.responseEnd>0).length+'/'+performance.getEntriesByType('resource').length\"}}}}", 660 + ticks_1000));
+                        "{{\"id\":{},\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"'paint='+performance.getEntriesByType('paint').map(e=>e.name+'@'+Math.round(e.startTime)).join(',')+' timeline='+Math.round(document.timeline.currentTime||-1)+' vis='+document.visibilityState+' ready='+document.readyState+' text='+((document.body&&document.body.innerText)||'').length+' css='+document.styleSheets.length+' imgs='+document.images.length+' res='+performance.getEntriesByType('resource').filter(e=>e.responseEnd>0).length+'/'+performance.getEntriesByType('resource').length+' waiting='+Array.from(document.querySelectorAll('link[rel=stylesheet],script[src],img[src]')).map(n=>(n.href||n.src||'').split('/').slice(-1)[0]).slice(0,4).join(',')\"}}}}", 660 + ticks_1000));
                 }
                 // A ONE-SHOT CAPTURE, now that frames are presented again.
                 // captureScreenshot is a CopyOutputRequest readback; it never
