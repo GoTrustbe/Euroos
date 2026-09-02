@@ -2634,6 +2634,22 @@ fn main() -> Status {
                         count("FrameTokenAck"), count("BeginFrameControl"),
                         count("SendBeginMainFrame"), count("NotifyReadyToActivate"),
                         count("ActivateSyncTree"));
+                    // Raster is where a page becomes pixels, and it is the one
+                    // categorical difference with the reference: the same flags
+                    // give the oracle RasterTask=1 and this kernel 0, with the
+                    // tile worker thread parked on an empty queue. Count the
+                    // scheduling side too, so "never scheduled" and "scheduled
+                    // but never run" stop looking alike.
+                    // Did raster actually EXECUTE? In the reference these three
+                    // appear together next to the RasterTask event: the tile
+                    // manager hands out work, ZeroCopyRasterBuffer::Playback runs
+                    // it, and the RasterSource is the recorded page it draws from.
+                    serial_println!("[trace] raster-exec | ZeroCopyRasterBuffer={} Playback={} RasterSource={} TileTaskManager={}",
+                        count("ZeroCopyRasterBuffer"), count("Playback"),
+                        count("RasterSource"), count("TileTaskManager"));
+                    serial_println!("[trace] raster | TileManager={} ScheduleTasks={} RasterTask={} TileTask={} PrepareTiles={} RasterBuffer={}",
+                        count("TileManager"), count("ScheduleTasks"), count("RasterTask"),
+                        count("TileTask"), count("PrepareTiles"), count("RasterBufferProvider"));
                     serial_println!("[trace] readback | CopyOutputRequest={} CopyOutputResult={} RasterTask={} TileTask={} PrepareTiles={}",
                         count("CopyOutputRequest"), count("CopyOutputResult"),
                         count("RasterTask"), count("TileTask"), count("PrepareTiles"));
