@@ -2078,6 +2078,20 @@ fn main() -> Status {
         serial_println!("[glibc] gshm (MAP_SHARED memfd): exit={esh} (want 131)");
         for l in osh.lines() { serial_println!("[glibc]   {l}"); }
 
+        // gshm2: the same memory, but ACROSS a process boundary. One process
+        // creates the memfd and hands the DESCRIPTOR to another over a socket
+        // with SCM_RIGHTS; both map it MAP_SHARED. That is how chrome shares
+        // everything between processes, and it is a strictly harder case than
+        // gshm: the descriptor changes tables on the way, and this kernel has
+        // one global descriptor table underneath the per-process aliases.
+        // Perfetto hands every child its trace ring buffer exactly this way,
+        // and chrome's children here never ack BeginTracing.
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
+        let (osh2, esh2) = ring3::run_glibc(&mut allocator, ring3::gshm2_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gshm2"], &[b"PATH=/bin"], caps);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
+        serial_println!("[glibc] gshm2 (SCM_RIGHTS memfd, cross-process): exit={esh2} (want 141)");
+        for l in osh2.lines() { serial_println!("[glibc]   {l}"); }
+
         // gunlink: an unlinked file must keep serving its open fd, its neighbours must
         // be undisturbed, and "create, unlink, ftruncate, mmap(MAP_SHARED)" — the
         // standard anonymous-shared-memory recipe, and how chrome allocates the Mojo
@@ -2852,13 +2866,14 @@ fn main() -> Status {
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
         if !chrome_run {
-        let results: [(&str, u64, u64); 26] = [
+        let results: [(&str, u64, u64); 27] = [
             ("gpoll(poll timeout)", epo, 143),
             ("gcond(condvar broadcast)", eco, 157),
             ("gbrk(zeroed break growth)", ebk, 163),
             ("gscm(SCM_RIGHTS fd passing)", esc, 151),
             ("gsleep(nanosleep + abs deadline)", esl, 149),
             ("gshm(MAP_SHARED memfd)", esh, 131),
+            ("gshm2(cross-process SCM_RIGHTS memfd)", esh2, 141),
             ("gunlink(unlinked-but-open + anon shm)", eul, 137),
             ("gtiny(dyn-link)", e1, 42), ("gtest(stdio/malloc/qsort)", e2, 55),
             ("gthread(pthreads)", e3, 88), ("gmath(libm+dlopen)", e4, 77),

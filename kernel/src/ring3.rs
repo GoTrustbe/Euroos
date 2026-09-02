@@ -351,6 +351,67 @@ static PIPE_NONBLOCK: Mutex<alloc::vec::Vec<bool>> = Mutex::new(alloc::vec::Vec:
 /// fcntl(F_SETFL) and reported via fcntl(F_GETFL). Previously only pipe fds tracked
 /// it, so chrome setting a Mojo SOCKET non-blocking then verifying with F_GETFL saw
 /// its flag missing -> invariant violation -> IMMEDIATE_CRASH. Cleared on close.
+/// O_NONBLOCK for SOCKET fds. Socket numbers are class-encoded ABOVE MAX_FD, so
+/// they never fit FD_NONBLOCK's array: F_SETFL(O_NONBLOCK) on a socket was dropped
+/// and F_GETFL always answered "blocking". Both matter now that a blocking recv
+/// actually waits - answering EAGAIN to a blocking reader is wrong, and blocking a
+/// reader that asked for O_NONBLOCK is worse.
+static SOCK_NONBLOCK: Mutex<alloc::vec::Vec<(u64, bool)>> = Mutex::new(alloc::vec::Vec::new());
+
+/// Is this fd non-blocking? Works for both fd classes.
+fn fd_is_nonblock(fd: u64) -> bool {
+    if (fd as usize) < MAX_FD {
+        let f = fd as usize;
+        return FD_NONBLOCK[f].load(Ordering::Relaxed) || (is_pipe_fd(f) && pipe_is_nonblock(f));
+    }
+    x86_64::instructions::interrupts::without_interrupts(||
+        SOCK_NONBLOCK.lock().iter().any(|&(f, nb)| f == fd && nb))
+}
+
+fn fd_set_nonblock(fd: u64, nb: bool) {
+    if (fd as usize) < MAX_FD {
+        FD_NONBLOCK[fd as usize].store(nb, Ordering::Relaxed);
+        if is_pipe_fd(fd as usize) {
+            pipe_set_nonblock(fd as usize, nb);
+        }
+        return;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    let mut t = SOCK_NONBLOCK.lock();
+    match t.iter_mut().find(|(f, _)| *f == fd) {
+        Some(e) => e.1 = nb,
+        None => t.push((fd, nb)),
+    }
+}
+
+/// Receive from an AF_UNIX socket with POSIX blocking semantics. Without this a
+/// reader with nothing to read got an empty buffer, and an empty recvmsg means
+/// END OF STREAM to every POSIX program: a fork child waiting for a descriptor
+/// over SCM_RIGHTS concluded the socket was closed and gave up before the sender
+/// had written a byte (the gshm2 self-test reproduces it in one page of C).
+///
+/// None = the caller should answer -EAGAIN. The wait is bounded, not because
+/// POSIX says so but because an unbounded one turns a stuck peer into a boot that
+/// hangs with nothing to show; the bound is generous enough that no correct
+/// program reaches it, and it says so on the serial line when it does.
+fn unix_recv_blocking(fd: u64, cap: usize) -> Option<alloc::vec::Vec<u8>> {
+    let deadline = crate::interrupts::ticks() + 3000; // ~30 s of guest time
+    loop {
+        let d = crate::net::unix_fd_recv(fd, cap);
+        if !d.is_empty() || crate::net::unix_fd_at_eof(fd) || scm_pending_for(fd) {
+            return Some(d);
+        }
+        if fd_is_nonblock(fd) || !SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+            return None;
+        }
+        if crate::interrupts::ticks() > deadline {
+            crate::serial_println!("[unix] blocking recv on fd{fd} gave up after 30 s");
+            return None;
+        }
+        yield_reacquire();
+    }
+}
+
 static FD_NONBLOCK: [core::sync::atomic::AtomicBool; MAX_FD] =
     [const { core::sync::atomic::AtomicBool::new(false) }; MAX_FD];
 /// Per-fd access mode (O_RDONLY=0 / O_WRONLY=1 / O_RDWR=2), captured from the open
@@ -481,9 +542,21 @@ static SCM_CHECK_OWNER: core::sync::atomic::AtomicUsize = core::sync::atomic::At
 
 /// The other end of a socketpair, if `fd` is one.
 fn sock_peer(fd: u64) -> Option<u64> {
-    SOCK_PAIRS.lock().iter().find_map(|&(a, b)| {
+    // NEWEST pairing first. Socket numbers are reused after close, so an old
+    // entry naming the same number would otherwise answer for the live pair -
+    // and a descriptor sent over the new socket would be queued for a number
+    // nobody is reading. The close path drops the entry too; searching
+    // backwards means a single missed close cannot resurrect a stale peer.
+    SOCK_PAIRS.lock().iter().rev().find_map(|&(a, b)| {
         if a == fd { Some(b) } else if b == fd { Some(a) } else { None }
     })
+}
+
+/// Forget a socket pairing when either end closes, so the number can be reused
+/// without inheriting the old partner.
+fn sock_pair_forget(fd: u64) {
+    let _g = crate::sched::IfOffGuard::new();
+    SOCK_PAIRS.lock().retain(|&(a, b)| a != fd && b != fd);
 }
 
 /// Are descriptors waiting for `fd`? A sendmsg can carry ONLY SCM_RIGHTS
@@ -4407,8 +4480,10 @@ fn close_fd_now(a1: u64) -> u64 {
         crate::net::eventfd_close(a1);
         0
     } else if crate::net::is_sock_fd(a1) {
+        sock_pair_forget(a1);
         crate::net::sock_close(a1)
     } else if crate::net::is_unix_fd(a1) {
+        sock_pair_forget(a1);
         crate::net::unix_fd_close(a1)
     } else {
         vfs_close(a1 as usize)
@@ -5122,6 +5197,7 @@ static GFMMAP_ELF: &[u8] = include_bytes!("../../userland/glibc/gfmmap");
 // memory. Mojo data pipes (chrome's resource bodies, even in one process) live in
 // such a buffer; a private-copy mmap delivers an empty document with no error.
 static GSHM_ELF: &[u8] = include_bytes!("../../userland/glibc/gshm");
+static GSHM2_ELF: &[u8] = include_bytes!("../../userland/glibc/gshm2");
 // UNLINKED-BUT-OPEN test: an unlinked file must keep serving its open fd and must
 // not disturb any other fd — the contract behind "create, unlink, mmap" anonymous
 // shared memory (how chrome carries a page's bytes to its renderer).
@@ -5251,6 +5327,7 @@ pub fn gsparse_bytes() -> &'static [u8] { GSPARSE_ELF }
 pub fn gfmmap_bytes() -> &'static [u8] { GFMMAP_ELF }
 /// A MAP_SHARED memfd test: two mappings of one memfd must be one memory.
 pub fn gshm_bytes() -> &'static [u8] { GSHM_ELF }
+pub fn gshm2_bytes() -> &'static [u8] { GSHM2_ELF }
 /// An unlinked-but-open + anonymous-shared-memory test.
 pub fn gunlink_bytes() -> &'static [u8] { GUNLINK_ELF }
 /// A poll()-timeout test: a timeout is a duration, not an instant answer.
@@ -10694,12 +10771,20 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 }
                 data.len() as u64
             } else if crate::net::is_unix_fd(a1) {
-                let data = crate::net::unix_fd_recv(a1, a3 as usize);
+                // A blocking fd WAITS; only a fd that asked for O_NONBLOCK gets
+                // -EAGAIN. That distinction only became possible once O_NONBLOCK was
+                // tracked for socket fd numbers at all (they sit above MAX_FD and
+                // fell outside the flag table, so every socket read back "blocking"
+                // and was served as if it were not).
+                let data = match unix_recv_blocking(a1, a3 as usize) {
+                    Some(d) => d,
+                    None => return (-11i64) as u64, // -EAGAIN: caller asked not to wait
+                };
                 if data.is_empty() {
                     if crate::net::unix_fd_at_eof(a1) {
                         return 0; // peer closed + drained: POSIX EOF
                     }
-                    return (-11i64) as u64; // -EAGAIN: non-blocking, no data (NOT EOF)
+                    return (-11i64) as u64;
                 }
                 if !copy_to_user(a2, &data) {
                     return EFAULT;
@@ -10851,32 +10936,41 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
         }
         61 => {
-            // wait4(pid, *status, options, *rusage): NON-BLOCKING reap of a glibc
-            // fork child (chrome always passes WNOHANG from its child watcher).
-            // a1 = pid or -1 (any); returns 0 when nothing is reapable yet.
+            // wait4(pid, *status, options, *rusage): reap a glibc fork child.
+            // WNOHANG (chrome's child watcher always passes it) returns 0 when
+            // nothing is reapable; WITHOUT it POSIX says wait, and a caller that
+            // waits for its child's exit code got 0 back and read it as failure.
+            // Bounded like the blocking recv, for the same reason: a stuck child
+            // should leave a line on the serial port, not a boot that never ends.
             let want = a1 as i64;
-            let mut ce = GLIBC_CHILD_EXITS.lock();
-            let idx = ce.iter().position(|&(p, _)| want == -1 || p == want as u64);
-            match idx {
-                Some(i) => {
+            let wnohang = a3 & 1 != 0;
+            let deadline = crate::interrupts::ticks() + 6000; // ~60 s of guest time
+            loop {
+                let mut ce = GLIBC_CHILD_EXITS.lock();
+                if let Some(i) = ce.iter().position(|&(p, _)| want == -1 || p == want as u64) {
                     let (cpid, status) = ce.remove(i);
                     drop(ce);
                     if a2 != 0 && !write_user(a2, status) {
                         return EFAULT;
                     }
                     crate::serial_println!("[wait4] reaped glibc child pid {cpid} status={status:#x}");
-                    cpid
+                    return cpid;
                 }
-                None => {
-                    // Nothing exited. ECHILD when the pid does not exist at all,
-                    // else 0 ("still running", chrome polls again).
-                    if want > 0
-                        && !GLIBC_FORK_CHILDREN.lock().iter().any(|&(p, _, _, _, _)| p == want as u64)
-                    {
-                        return (-10i64) as u64; // -ECHILD
-                    }
-                    0
+                drop(ce);
+                // Nothing exited. ECHILD when the pid does not exist at all.
+                if want > 0
+                    && !GLIBC_FORK_CHILDREN.lock().iter().any(|&(p, _, _, _, _)| p == want as u64)
+                {
+                    return (-10i64) as u64; // -ECHILD
                 }
+                if wnohang || !SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                    return 0; // "still running", the caller polls again
+                }
+                if crate::interrupts::ticks() > deadline {
+                    crate::serial_println!("[wait4] blocking wait for pid {want} gave up after 60 s");
+                    return 0;
+                }
+                yield_reacquire();
             }
         }
         62 => {
@@ -11251,6 +11345,10 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         return EFAULT;
                     }
                     SOCK_PAIRS.lock().push((a, b)); // so SCM_RIGHTS knows the other end
+                    if a2 & 0x800 != 0 { // SOCK_NONBLOCK on both ends
+                        fd_set_nonblock(a, true);
+                        fd_set_nonblock(b, true);
+                    }
                     if a2 & 0x8_0000 != 0 { // SOCK_CLOEXEC on both ends
                         fd_set_cloexec(a, true);
                         fd_set_cloexec(b, true);
@@ -11357,7 +11455,12 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         45 => {
             // recvfrom(fd, buf, len, flags, src, srclen). xcb reads the X reply here.
             let data = if crate::net::is_unix_fd(a1) {
-                crate::net::unix_fd_recv(a1, a3 as usize)
+                // Blocking semantics, as in recvmsg: a reader that did not ask for
+                // O_NONBLOCK waits for its bytes instead of being told EOF.
+                match unix_recv_blocking(a1, a3 as usize) {
+                    Some(d) => d,
+                    None => return (-11i64) as u64,
+                }
             } else {
                 crate::net::sock_recv(a1, a3 as usize)
             };
@@ -11451,7 +11554,10 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 cap += read_user::<u64>(iov + i * 16 + 8).unwrap_or(0) as usize;
             }
             let data = if crate::net::is_unix_fd(a1) {
-                crate::net::unix_fd_recv(a1, cap)
+                match unix_recv_blocking(a1, cap) {
+                    Some(d) => d,
+                    None => return (-11i64) as u64, // -EAGAIN: asked not to wait
+                }
             } else {
                 crate::net::sock_recv(a1, cap)
             };
@@ -12135,19 +12241,10 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 3 => { // F_GETFL: the fd's real access mode + tracked O_NONBLOCK.
                     let fd = a1 as usize;
                     let acc = if fd < MAX_FD { FD_ACCMODE[fd].load(Ordering::Relaxed) as u64 } else { 2 };
-                    let nb = fd < MAX_FD
-                        && (FD_NONBLOCK[fd].load(Ordering::Relaxed)
-                            || (is_pipe_fd(fd) && pipe_is_nonblock(fd)));
-                    acc | if nb { 0x800 } else { 0 }
+                    acc | if fd_is_nonblock(a1) { 0x800 } else { 0 }
                 }
-                4 => { // F_SETFL: remember O_NONBLOCK for ANY fd (pipe + general table).
-                    let fd = a1 as usize;
-                    if fd < MAX_FD {
-                        FD_NONBLOCK[fd].store(a3 & 0x800 != 0, Ordering::Relaxed);
-                        if is_pipe_fd(fd) {
-                            pipe_set_nonblock(fd, a3 & 0x800 != 0);
-                        }
-                    }
+                4 => { // F_SETFL: remember O_NONBLOCK for ANY fd (pipe, file, SOCKET).
+                    fd_set_nonblock(a1, a3 & 0x800 != 0);
                     0
                 }
                 1 => u64::from(fd_is_cloexec(a1)), // F_GETFD -> FD_CLOEXEC bit
