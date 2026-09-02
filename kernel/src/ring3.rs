@@ -953,6 +953,16 @@ pub fn cdp_pump() {
             // in interrupt context on purpose - this pump must not take a single
             // ring3 lock (a dump from here once froze the guest).
             if ticks_1000 == 6 {
+                // DID BLINK EVER PAINT? Straight from the renderer, over the
+                // protocol: blink records paint timings in the Performance API and
+                // document.timeline only advances on an animation frame. Both are
+                // renderer-side facts that need no trace file - and the trace file
+                // has no renderer half here (the children never ack BeginTracing).
+                {
+                    let dsid = CDP_SESSION.lock().clone();
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":66,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"'paint='+performance.getEntriesByType('paint').map(e=>e.name+'@'+Math.round(e.startTime)).join(',')+' timeline='+Math.round(document.timeline.currentTime||-1)+' vis='+document.visibilityState\"}}}}"));
+                }
                 // A ONE-SHOT CAPTURE, now that frames are presented again.
                 // captureScreenshot is a CopyOutputRequest readback; it never
                 // answered while begin-frame-control muzzled frame production,
@@ -9571,6 +9581,12 @@ pub fn dump_kernel_profile() {
 /// Called from the timer tick with the interrupted ring-3 instruction pointer.
 /// Lock-free on purpose: it runs in interrupt context, on the stack of the very
 /// thread whose locks it must never wait for.
+/// Timer ticks sampled with this task in ring 3: its share of the CPU. A census
+/// that shows only states cannot tell an idle thread from a starved one.
+pub fn task_ticks(task: usize) -> u64 {
+    if task < MAX_SAMPLED_TASKS { TASK_TICKS[task].load(Ordering::Relaxed) } else { 0 }
+}
+
 pub fn sample_user_rip(task: usize, rip: u64) {
     if task < MAX_SAMPLED_TASKS {
         TASK_TICKS[task].fetch_add(1, Ordering::Relaxed);
@@ -10510,7 +10526,18 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // base to its own size: chrome's PartitionAlloc reserves its GigaCage
                 // pools this way and CHECK-fails on an unaligned base. Aligning here
                 // lets its first attempt succeed instead of over-allocating 2x to trim.
-                let align: u64 = if len >= (1 << 30) && len.is_power_of_two() { len as u64 } else { 4096 };
+                // A large power-of-two reservation gets at least 4 GiB alignment, not
+                // just its own size. V8's pointer compression addresses its heap by
+                // the low 32 bits of a pointer, so the cage BASE must be 4 GiB
+                // aligned - and it checks. Given 1 GiB-aligned answers, the renderer
+                // main thread sat in a visible loop: mmap 1 GiB at a 4 GiB-aligned
+                // hint, name it with prctl(PR_SET_VMA), unmap it, try another hint.
+                // It never ran a main frame or acked BeginTracing while doing that.
+                let align: u64 = if len >= (1 << 30) && len.is_power_of_two() {
+                    core::cmp::max(len as u64, 1u64 << 32)
+                } else {
+                    4096
+                };
                 let mut start = DEMAND_NEXT.load(Ordering::Relaxed);
                 start = (start + (align - 1)) & !(align - 1);
                 let new_next = start + len;

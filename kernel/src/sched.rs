@@ -114,6 +114,10 @@ fn sysn(t: usize) -> u64 {
     if t < 128 { crate::ring3::SYSCALLS_PER_TASK[t].load(Ordering::Relaxed) } else { 0 }
 }
 
+fn cpun(t: usize) -> u64 {
+    crate::ring3::task_ticks(t)
+}
+
 pub fn census_trylock() {
     let Some(s) = SCHED.try_lock() else {
         crate::serial_println!("[census] scheduler lock busy, skipped this tick");
@@ -123,14 +127,14 @@ pub fn census_trylock() {
     for i in 0..s.count {
         let t = &s.tasks[i];
         match t.state {
-            State::Ready => crate::serial_println!("[census] t{i} cr3={:#x} sys={} Ready", t.cr3, sysn(i)),
+            State::Ready => crate::serial_println!("[census] t{i} cr3={:#x} sys={} cpu={} Ready", t.cr3, sysn(i), cpun(i)),
             State::Sleeping(w) => {
-                crate::serial_println!("[census] t{i} cr3={:#x} sys={} Sleeping(until {w})", t.cr3, sysn(i))
+                crate::serial_println!("[census] t{i} cr3={:#x} sys={} cpu={} Sleeping(until {w})", t.cr3, sysn(i), cpun(i))
             }
             State::Blocked(c) => {
-                crate::serial_println!("[census] t{i} cr3={:#x} sys={} Blocked(chan={c:#x})", t.cr3, sysn(i))
+                crate::serial_println!("[census] t{i} cr3={:#x} sys={} cpu={} Blocked(chan={c:#x})", t.cr3, sysn(i), cpun(i))
             }
-            ref other => crate::serial_println!("[census] t{i} cr3={:#x} sys={} {other:?}", t.cr3, sysn(i)),
+            ref other => crate::serial_println!("[census] t{i} cr3={:#x} sys={} cpu={} {other:?}", t.cr3, sysn(i), cpun(i)),
         }
     }
 }

@@ -2419,7 +2419,7 @@ fn main() -> Status {
             // child + renderer, GL in the GPU child, raster over the (proven)
             // cross-process shared frames. Toggle back to false to reproduce the
             // single-process capture exactly.
-            const HS_MULTI_PROCESS: bool = true;
+            const HS_MULTI_PROCESS: bool = false;
             let gl_args: &[&[u8]] = if sched::avx_enabled() {
                 if HS_MULTI_PROCESS {
                     // The PROVEN MP configuration: in-process GPU (SwANGLE in the
@@ -2521,11 +2521,18 @@ fn main() -> Status {
                   // presentation signal, so it never answers. Through GL the
                   // signal rides on a swap callback that never fires here; a
                   // software output surface reports presentation immediately.
-                  // NOT --disable-gpu-compositing. Run 33 composited through
-                  // in-process SwANGLE and delivered a full painted page; this flag
-                  // switches the whole pipeline to SOFTWARE compositing, a different
-                  // raster path with its own shared-memory bitmaps, and was added
-                  // after that success. Frames stopped and never came back.
+                  // SOFTWARE compositing. Measured: blink here has never painted and
+                  // never run an animation frame (paint= empty, document.timeline
+                  // = -1) while the page is loaded and visible, so its compositor
+                  // never receives BeginFrames. With GPU compositing the renderer
+                  // must first get a GPU channel from the browser, handed over as a
+                  // descriptor; software compositing needs no such channel. If the
+                  // page paints this way, that handover is the wall.
+                  // (Run 33 painted WITH gpu compositing under emulation. This flag
+                  // was then added together with begin-frame-control, which muzzled
+                  // frame production entirely, so software compositing has never
+                  // actually been tested on its own.)
+                  b"--disable-gpu-compositing",
                   b"--disable-features=VaapiVideoDecoder,VaapiVideoEncoder",
                   // MojoUseEventFd = chrome's eventfd shared-mem Mojo channel; its probe
                   // PCHECKs that eventfd2(invalid flags) FAILS, but our eventfd2 accepts
