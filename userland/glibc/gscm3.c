@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <sys/mman.h>
 
 /* CHILD-TO-CHILD, the way Mojo introduces two peers. A broker (the parent)
    makes a socketpair and hands ONE end to each of two children, which then
@@ -15,7 +16,13 @@
    so a renderer that must ack BeginTracing has to reach a sibling, not its
    parent. On this kernel two of chrome's three children never ack.
 
-   Exit 147 = the siblings exchanged bytes in both directions. */
+   Then the harder half, and the one chrome's IPC actually needs: child A
+   CREATES shared memory and the broker RELAYS that descriptor to child B,
+   which maps it and reads what A wrote. Neither the creator nor the reader
+   is the process the descriptor travelled through.
+
+   Exit 147 = the siblings exchanged bytes in both directions AND the relayed
+   shared memory carried A's bytes to B. */
 
 static int send_fd(int sock, int fd) {
     char c = 'F';
@@ -61,6 +68,13 @@ int main(void) {
         char c = 0;
         if (read(s, &c, 1) != 1 || c != 'B') { printf("GSCM3: A did not hear B (c=%d)\n", c); fflush(stdout); _exit(13); }
         printf("GSCM3: A heard its sibling\n"); fflush(stdout);
+        /* A makes shared memory and hands it up to the broker to relay to B. */
+        int mfd = memfd_create("euro-relay", 0);
+        if (mfd < 0 || ftruncate(mfd, 65536) != 0) { printf("GSCM3: A memfd FAILED\n"); fflush(stdout); _exit(14); }
+        unsigned char *p = mmap(NULL, 65536, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
+        if (p == MAP_FAILED) { printf("GSCM3: A map FAILED\n"); fflush(stdout); _exit(15); }
+        for (int i = 0; i < 16; i++) p[i * 4096] = (unsigned char)(0xC0 + i);
+        if (send_fd(toA[1], mfd) != 0) { printf("GSCM3: A relay-send FAILED\n"); fflush(stdout); _exit(16); }
         _exit(0);
     }
 
@@ -73,12 +87,25 @@ int main(void) {
         if (read(s, &c, 1) != 1 || c != 'A') { printf("GSCM3: B did not hear A (c=%d)\n", c); fflush(stdout); _exit(22); }
         if (write(s, "B", 1) != 1) { printf("GSCM3: B write FAILED\n"); fflush(stdout); _exit(23); }
         printf("GSCM3: B heard its sibling\n"); fflush(stdout);
-        _exit(0);
+        int mfd = recv_fd(toB[1]);
+        if (mfd < 0) { printf("GSCM3: B got no relayed memfd\n"); fflush(stdout); _exit(24); }
+        unsigned char *p = mmap(NULL, 65536, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
+        if (p == MAP_FAILED) { printf("GSCM3: B map FAILED\n"); fflush(stdout); _exit(25); }
+        int bad = 0;
+        for (int i = 0; i < 16; i++) if (p[i * 4096] != (unsigned char)(0xC0 + i)) bad++;
+        printf("GSCM3: B read relayed shared memory, mismatched=%d of 16\n", bad);
+        fflush(stdout);
+        _exit(bad ? 26 : 0);
     }
 
     /* The broker hands each child one end of a socket neither of them made. */
     if (send_fd(toA[0], peer[0]) != 0) { printf("GSCM3: hand to A FAILED\n"); fflush(stdout); return 4; }
     if (send_fd(toB[0], peer[1]) != 0) { printf("GSCM3: hand to B FAILED\n"); fflush(stdout); return 5; }
+
+    /* Relay A's shared memory to B: the broker never made it and never maps it. */
+    int relayed = recv_fd(toA[0]);
+    if (relayed < 0) { printf("GSCM3: broker got no memfd from A\n"); fflush(stdout); return 8; }
+    if (send_fd(toB[0], relayed) != 0) { printf("GSCM3: relay to B FAILED\n"); fflush(stdout); return 9; }
 
     int sa = 0, sb = 0;
     if (waitpid(a, &sa, 0) != a || waitpid(b, &sb, 0) != b) {

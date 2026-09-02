@@ -2097,7 +2097,14 @@ fn main() -> Status {
         // then talk directly. Chrome's tracing service lives in a utility process, so
         // a renderer acking BeginTracing must reach a SIBLING - and two of chrome's
         // three children here never ack.
+        // Demand paging ON, as for gshm2: a MAP_SHARED in-RAM file only gets its
+        // own address range faulting onto the FILE's frames when the demand region
+        // is available. Without it the mapping is copied into the caller's arena,
+        // which is one memory only within one address space - so the relayed
+        // segment would fail for a reason that has nothing to do with the relay.
+        ring3::DEMAND_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
         let (os3, es3) = ring3::run_glibc(&mut allocator, ring3::gscm3_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gscm3"], &[b"PATH=/bin"], caps);
+        ring3::DEMAND_ENABLED.store(false, core::sync::atomic::Ordering::Relaxed);
         serial_println!("[glibc] gscm3 (sibling socket via broker): exit={es3} (want 147)");
         for l in os3.lines() { serial_println!("[glibc]   {l}"); }
 
