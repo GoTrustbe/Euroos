@@ -520,6 +520,8 @@ pub fn thread_name(t: usize) -> String {
     THREAD_NAMES.lock().iter().find(|(x, _)| *x == t).map(|(_, n)| n.clone())
         .unwrap_or_else(|| String::from("?"))
 }
+/// Set once the frame wait has been abandoned (see the give-up in the pump).
+static CDP_GAVE_UP: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static CDP_URL: Mutex<String> = Mutex::new(String::new());
 static CDP_SESSION: Mutex<String> = Mutex::new(String::new());
 /// The DOM chrome sent back (empty until it arrives).
@@ -871,6 +873,38 @@ pub fn cdp_pump() {
         let ticks_1000 = waited / 300;
         if ticks_1000 > 0 && CDP_WAIT_MARK.swap(ticks_1000, Ordering::Relaxed) != ticks_1000 {
             crate::serial_println!("[cdp] still waiting for the frame ({} s of guest time)", waited / 100);
+            // Ask the TIMER for a task census on the first few waits. beginFrame
+            // is answered only after every compositor stage completes, so a
+            // renderer whose raster workers never run stalls it silently; the
+            // census names those threads and what they are blocked on. It runs
+            // in interrupt context on purpose - this pump must not take a single
+            // ring3 lock (a dump from here once froze the guest).
+            if ticks_1000 <= 3 {
+                crate::sched::CENSUS_REQUEST.store(true, Ordering::Relaxed);
+            }
+            // GIVE UP, on purpose. Waiting forever produces nothing: chrome writes
+            // its trace file on shutdown, so a run that never ends never reports
+            // which frame stage stopped. Close the browser after a generous budget
+            // and let the [trace] summary be the result of the run.
+            if waited >= 20_000 && !CDP_GAVE_UP.swap(true, Ordering::Relaxed) {
+                crate::serial_println!(
+                    "[cdp] no frame after {} s of guest time; closing so the trace is written",
+                    waited / 100);
+                cdp_send("{\"id\":5,\"method\":\"Browser.close\"}");
+                CDP_DRIVE.store(false, Ordering::Relaxed);
+                return;
+            }
+            // The census names address spaces; this names the THREADS inside
+            // them. Together they answer whether the renderer even HAS the
+            // raster workers that a frame waits on. (thread_name/last_syscall
+            // from this context is the same pair the capture dump above uses.)
+            if ticks_1000 == 2 {
+                for t in 0..crate::sched::task_count() {
+                    let (n, a, r) = last_syscall(t);
+                    crate::serial_println!("[names] t{t} {:?} last={n}(a1={a:#x})->{r:#x}",
+                        thread_name(t));
+                }
+            }
             // RECURRING damage while waiting. The capturer resolves its target a beat
             // AFTER the screencast starts (and re-resolves when the sink is lost), and
             // it only learns the source size from a frame submitted while attached: a
@@ -953,6 +987,14 @@ pub fn cdp_pump() {
                 // and whether it considers itself visible. An empty viewport
                 // explains the whole chain at once.
                 if ticks_1000 == 8 {
+                    // ASK THE COMPOSITOR ITSELF. The tile manager runs here
+                    // (PrepareTiles and ScheduleTasks climb) but schedules an
+                    // EMPTY task set: no tile ever needs raster. Tiles only exist
+                    // for a picture layer with non-empty bounds that draws
+                    // content, so have the layer tree describe itself. The
+                    // reference rasters exactly one tile for this page.
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":62,\"sessionId\":\"{dsid}\",\"method\":\"LayerTree.enable\"}}"));
                     cdp_send(&alloc::format!(
                         "{{\"id\":61,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"window.innerWidth+'x'+window.innerHeight+' dpr'+window.devicePixelRatio+' body'+document.body.offsetWidth+'x'+document.body.offsetHeight+' vis'+document.visibilityState+' hidden'+document.hidden\",\"returnByValue\":true}}}}"));
                 }
@@ -962,8 +1004,19 @@ pub fn cdp_pump() {
                 // munmap of the ~1.9 MB screenshot bitmap. Whichever of those
                 // this kernel never reaches is the answer.
 
+                // THE DISCRIMINATOR. Chrome answers every beginFrame after the
+                // first with "Another frame is pending", so ONE frame stays
+                // outstanding forever. A frame WITH a screenshot completes only
+                // once the readback (a CopyOutputRequest) delivers; a frame
+                // without one completes as soon as the display draws. Ask for the
+                // plain frame first: if that answers, the wall is the readback.
+                let params = if ticks_1000 >= 20 {
+                    "\"interval\":16,\"noDisplayUpdates\":false,\"screenshot\":{\"format\":\"png\"}"
+                } else {
+                    "\"interval\":16,\"noDisplayUpdates\":false"
+                };
                 cdp_send(&alloc::format!(
-                    "{{\"id\":{cid},\"sessionId\":\"{dsid}\",\"method\":\"HeadlessExperimental.beginFrame\",\"params\":{{\"interval\":16,\"noDisplayUpdates\":false,\"screenshot\":{{\"format\":\"png\"}}}}}}"));
+                    "{{\"id\":{cid},\"sessionId\":\"{dsid}\",\"method\":\"HeadlessExperimental.beginFrame\",\"params\":{{{params}}}}}"));
             }
             if ticks_1000 % 3 == 0 {
                 // Every third wait-tick: constant damage keeps the renderer so busy

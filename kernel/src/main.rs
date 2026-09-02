@@ -2524,7 +2524,7 @@ fn main() -> Status {
                   // screencast prints "auto-throttling enabled" -> "proposing a capture
                   // size" -> "Captured #1". Whichever of those three appears here says
                   // exactly where the capturer stops.
-                  b"--vmodule=headless_*=2,begin_frame*=2,*frame_control*=2,compositor_frame_sink*=1,simple_devtools_protocol_client=2",
+                  b"--vmodule=headless_*=2,begin_frame*=2,*frame_control*=2,compositor_frame_sink*=1,tile_manager=2,layer_tree_host_impl=1,scheduler=1,proxy_impl=1,display=1,display_scheduler=1",
                   // Ask the headless frame controller itself what it does with our
                   // beginFrame: every stage up to submit and copy is measured and
                   // present, the reply never comes, and the trace categories we
@@ -2656,6 +2656,15 @@ fn main() -> Status {
                     serial_println!("[trace] raster-exec | ZeroCopyRasterBuffer={} Playback={} RasterSource={} TileTaskManager={}",
                         count("ZeroCopyRasterBuffer"), count("Playback"),
                         count("RasterSource"), count("TileTaskManager"));
+                    // BLINK's own lifecycle. cc schedules an EMPTY raster set here,
+                    // which only happens when the renderer handed it nothing to
+                    // raster - so the question moves up the chain, into paint.
+                    // Reference for this page: Paint=178 PrePaint=1 Layout=5
+                    // LocalFrameView=12 DoUpdateLayers=2 SetNeedsCommit=8.
+                    serial_println!("[trace] blink | Paint={} PrePaint={} Layout={} LocalFrameView={} DoUpdateLayers={} SetNeedsCommit={} SetNeedsUpdateLayers={} BeginMainFrame={}",
+                        count("Paint"), count("PrePaint"), count("Layout"), count("LocalFrameView"),
+                        count("LayerTreeHost::DoUpdateLayers"), count("SetNeedsCommit"),
+                        count("SetNeedsUpdateLayers"), count("ProxyMain::BeginMainFrame"));
                     serial_println!("[trace] raster | TileManager={} ScheduleTasks={} RasterTask={} TileTask={} PrepareTiles={} RasterBuffer={}",
                         count("TileManager"), count("ScheduleTasks"), count("RasterTask"),
                         count("TileTask"), count("PrepareTiles"), count("RasterBufferProvider"));

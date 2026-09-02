@@ -97,6 +97,40 @@ pub fn block_current() {
     block_on(0);
 }
 
+/// Set to ask the timer tick for a full task census (see `census_trylock`).
+pub static CENSUS_REQUEST: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// A census of EVERY task, taken from INTERRUPT context: index, state and cr3.
+/// cr3 is what makes it useful - it names the address space, so the threads of
+/// one chrome process group together and a renderer whose raster workers never
+/// run is visible as such.
+///
+/// Every lock here is a TRY-lock and nothing allocates. A diagnostic must never
+/// be able to wedge the machine it is diagnosing: the futex dump that once ran
+/// from the CDP pump took ring3 spinlocks with interrupts enabled and froze the
+/// guest it was meant to explain.
+pub fn census_trylock() {
+    let Some(s) = SCHED.try_lock() else {
+        crate::serial_println!("[census] scheduler lock busy, skipped this tick");
+        return;
+    };
+    crate::serial_println!("[census] {} tasks, current={}", s.count, s.current);
+    for i in 0..s.count {
+        let t = &s.tasks[i];
+        match t.state {
+            State::Ready => crate::serial_println!("[census] t{i} cr3={:#x} Ready", t.cr3),
+            State::Sleeping(w) => {
+                crate::serial_println!("[census] t{i} cr3={:#x} Sleeping(until {w})", t.cr3)
+            }
+            State::Blocked(c) => {
+                crate::serial_println!("[census] t{i} cr3={:#x} Blocked(chan={c:#x})", t.cr3)
+            }
+            ref other => crate::serial_println!("[census] t{i} cr3={:#x} {other:?}", t.cr3),
+        }
+    }
+}
+
 /// Diagnostic: summarise every live task's state (Ready/Sleeping/Blocked/Zombie).
 /// Used by the glibc launcher's stall detector to see a many-thread deadlock.
 pub fn dump_states() {
@@ -569,6 +603,9 @@ pub static TRACE_SCHED: core::sync::atomic::AtomicBool = core::sync::atomic::Ato
 pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     crate::interrupts::TICKS.fetch_add(1, Ordering::Relaxed);
     crate::interrupts::send_timer_eoi();
+    if CENSUS_REQUEST.swap(false, Ordering::Relaxed) {
+        census_trylock();
+    }
     // 3G-2: the independent deadman check — runs even while the main loop is busy;
     // trips if the loop stopped petting the watchdog (a hang).
     crate::watchdog::tick_check();
