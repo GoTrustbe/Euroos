@@ -879,6 +879,16 @@ pub fn cdp_pump() {
             // census names those threads and what they are blocked on. It runs
             // in interrupt context on purpose - this pump must not take a single
             // ring3 lock (a dump from here once froze the guest).
+            if ticks_1000 == 6 {
+                // A ONE-SHOT CAPTURE, now that frames are presented again.
+                // captureScreenshot is a CopyOutputRequest readback; it never
+                // answered while begin-frame-control muzzled frame production,
+                // which is no longer the case (DidPresent climbs). Cheapest
+                // possible way to a picture if the screencast path stays quiet.
+                let dsid = CDP_SESSION.lock().clone();
+                cdp_send(&alloc::format!(
+                    "{{\"id\":65,\"sessionId\":\"{dsid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\"}}}}"));
+            }
             // A census straddling the driven frame: tick 7 is just before the
             // first beginFrame, ticks 9 and 11 just after. The syscall counter in
             // each line turns "alive" into "working": if the renderer's tasks do

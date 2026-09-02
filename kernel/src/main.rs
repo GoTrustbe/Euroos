@@ -2517,7 +2517,12 @@ fn main() -> Status {
                   // PCHECKs that eventfd2(invalid flags) FAILS, but our eventfd2 accepts
                   // it -> FATAL channel_linux.cc:926. Disable -> fall back to the socket
                   // Mojo channel (works over our fork-inherited socketpair).
-                  b"--disable-features=MojoUseEventFd",
+                  // MojoUseEventFd is left ON. It was disabled because chrome's
+                  // probe PCHECKs that eventfd2 REJECTS an invalid flag and our
+                  // eventfd2 accepted anything, which was FATAL. The kernel now
+                  // validates those flags (syscall 290), so the workaround costs
+                  // more than it saves: it forced Mojo onto the socket channel
+                  // instead of the eventfd one chrome ships and tests by default.
                   // Virtual time advances Blink's clock fast so the load completes
                   // deterministically (triggers --dump-dom). No run-all-compositor-stages:
                   // a DOM dump needs the LOAD event, not a painted frame.
