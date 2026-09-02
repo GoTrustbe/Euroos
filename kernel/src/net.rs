@@ -1556,6 +1556,22 @@ pub fn sock_names(fd: u64) -> Option<(Ipv4Addr, u16, Ipv4Addr, u16)> {
 /// The difference between "no data yet" (-EAGAIN) and "closed" (0) is the
 /// difference between chrome keeping a healthy connection and it discarding
 /// every socket as dead (ERR_SOCKET_NOT_CONNECTED on each page load).
+/// "ip:port" of the peer a socket is connected to, for diagnostics. Socket fd
+/// NUMBERS are reused across connections, so a byte count without the peer
+/// cannot be attributed to a connection at all.
+pub fn sock_peer_desc(fd: u64) -> alloc::string::String {
+    if !is_sock_fd(fd) {
+        return alloc::string::String::from("?");
+    }
+    match &SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize] {
+        Some(Sock::Conn(c)) => alloc::format!(
+            "{}.{}.{}.{}:{}", c.server.0[0], c.server.0[1], c.server.0[2], c.server.0[3], c.dport),
+        Some(Sock::Udp(_)) => alloc::string::String::from("udp"),
+        Some(_) => alloc::string::String::from("other"),
+        None => alloc::string::String::from("closed"),
+    }
+}
+
 pub fn sock_eof(fd: u64) -> bool {
     if !is_sock_fd(fd) {
         return false;

@@ -2361,6 +2361,13 @@ fn main() -> Status {
                   // config service needs netlink we don't provide yet); the TCP,
                   // TLS and HTTP are fully real.
                   b"--host-resolver-rules=MAP euro-os.eu 151.240.77.50",
+                  // DEV HARNESS ONLY. The navigation to the live site ends on
+                  // chrome-error:// with an empty document, one connection to :443
+                  // and nothing after it - the signature of a certificate that
+                  // cannot be verified because this image ships no CA store. This
+                  // flag says whether that is the whole story; it has no business
+                  // in anything a user runs.
+                  b"--ignore-certificate-errors",
                   // The HTTPS-First interstitial swallows synthetic clicks; treat
                   // the test origin as secure so plain http renders directly.
                   b"--unsafely-treat-insecure-origin-as-secure=http://151.240.77.50",
@@ -2446,7 +2453,7 @@ fn main() -> Status {
             // child + renderer, GL in the GPU child, raster over the (proven)
             // cross-process shared frames. Toggle back to false to reproduce the
             // single-process capture exactly.
-            const HS_MULTI_PROCESS: bool = true;
+            const HS_MULTI_PROCESS: bool = false;
             let gl_args: &[&[u8]] = if sched::avx_enabled() {
                 if HS_MULTI_PROCESS {
                     // The PROVEN MP configuration: in-process GPU (SwANGLE in the
@@ -2493,6 +2500,10 @@ fn main() -> Status {
                   // than chrome's 15 s child-connection deadline under TCG.
                   // Give the handshake the time the emulation actually needs.
                   b"--ipc-connection-timeout=120",
+                  // Exposes chrome.gpuBenchmarking in the page: a renderer-side
+                  // window onto the compositor. The renderer's own trace never
+                  // reaches us, so a lever INSIDE the renderer is worth a flag.
+                  b"--enable-gpu-benchmarking",
                   // Resolve the site without depending on the guest resolver path.
                   b"--host-resolver-rules=MAP euro-os.eu 151.240.77.50",
                   // ── SINGLE-PROCESS: run renderer/utility/GPU all IN the browser process
@@ -2658,6 +2669,10 @@ fn main() -> Status {
             hs_argv.extend_from_slice(gl_args);
             // The page comes from ARGV: the CDP pump deliberately never navigates
             // (every navigation swaps the frame and costs the compositor its sink).
+            // PLAIN HTTP, as a discriminator. Over TLS the connection reads the
+            // server's first flight and then goes silent: chrome writes nothing
+            // more and never polls the socket again, which is where certificate
+            // verification would wait. Without TLS that stage does not exist.
             hs_argv.push(b"file:///tmp/euro.html");
             let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
                 &hs_argv,

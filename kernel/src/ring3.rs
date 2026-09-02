@@ -412,6 +412,37 @@ fn unix_recv_blocking(fd: u64, cap: usize) -> Option<alloc::vec::Vec<u8>> {
     }
 }
 
+/// Bytes a program has read from INET sockets. The live site loads to
+/// ready=complete with an empty document, so the question is whether its body
+/// ever crossed the socket at all: a few KB means it did not, a few hundred
+/// means it did and was lost above this layer.
+static INET_RX: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static INET_RX_CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+fn note_inet_tx(fd: u64, n: usize) {
+    static CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    if n == 0 {
+        return;
+    }
+    let c = CALLS.fetch_add(1, Ordering::Relaxed);
+    if c < 12 {
+        crate::serial_println!("[inet] fd{fd} -> {} wrote {n} B", crate::net::sock_peer_desc(fd));
+    }
+}
+
+fn note_inet_rx(fd: u64, n: usize) {
+    if n == 0 {
+        return;
+    }
+    let calls = INET_RX_CALLS.fetch_add(1, Ordering::Relaxed);
+    let before = INET_RX.fetch_add(n as u64, Ordering::Relaxed);
+    let after = before + n as u64;
+    if calls < 20 || before / 65536 != after / 65536 {
+        crate::serial_println!("[inet] fd{fd} <- {} read {n} B (total {after} B in {} calls)",
+            crate::net::sock_peer_desc(fd), calls + 1);
+    }
+}
+
 static FD_NONBLOCK: [core::sync::atomic::AtomicBool; MAX_FD] =
     [const { core::sync::atomic::AtomicBool::new(false) }; MAX_FD];
 /// Per-fd access mode (O_RDONLY=0 / O_WRONLY=1 / O_RDWR=2), captured from the open
@@ -952,7 +983,7 @@ pub fn cdp_pump() {
             // census names those threads and what they are blocked on. It runs
             // in interrupt context on purpose - this pump must not take a single
             // ring3 lock (a dump from here once froze the guest).
-            if ticks_1000 == 6 {
+            if matches!(ticks_1000, 6 | 14 | 24 | 40 | 60) {
                 // DID BLINK EVER PAINT? Straight from the renderer, over the
                 // protocol: blink records paint timings in the Performance API and
                 // document.timeline only advances on an animation frame. Both are
@@ -961,7 +992,7 @@ pub fn cdp_pump() {
                 {
                     let dsid = CDP_SESSION.lock().clone();
                     cdp_send(&alloc::format!(
-                        "{{\"id\":66,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"'paint='+performance.getEntriesByType('paint').map(e=>e.name+'@'+Math.round(e.startTime)).join(',')+' timeline='+Math.round(document.timeline.currentTime||-1)+' vis='+document.visibilityState\"}}}}"));
+                        "{{\"id\":{},\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"'paint='+performance.getEntriesByType('paint').map(e=>e.name+'@'+Math.round(e.startTime)).join(',')+' timeline='+Math.round(document.timeline.currentTime||-1)+' vis='+document.visibilityState+' ready='+document.readyState+' text='+((document.body&&document.body.innerText)||'').length+' css='+document.styleSheets.length+' imgs='+document.images.length\"}}}}", 660 + ticks_1000));
                 }
                 // A ONE-SHOT CAPTURE, now that frames are presented again.
                 // captureScreenshot is a CopyOutputRequest readback; it never
@@ -1084,6 +1115,11 @@ pub fn cdp_pump() {
                 // and whether it considers itself visible. An empty viewport
                 // explains the whole chain at once.
                 if ticks_1000 == 14 {
+                    // Did forcing a redraw change anything? Same question as id 66,
+                    // asked after the renderer was told every layer needs display.
+                    let dsid2 = CDP_SESSION.lock().clone();
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":69,\"sessionId\":\"{dsid2}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"'after paint='+performance.getEntriesByType('paint').length+' timeline='+Math.round(document.timeline.currentTime||-1)\"}}}}"));
                     // DOES THE RENDERER GET MAIN FRAMES AT ALL? requestAnimationFrame
                     // callbacks run inside BeginMainFrame, so this asks the renderer
                     // itself, over the protocol, with no dependence on the trace file
@@ -1094,6 +1130,22 @@ pub fn cdp_pump() {
                     let dsid = CDP_SESSION.lock().clone();
                     cdp_send(&alloc::format!(
                         "{{\"id\":63,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"new Promise(r=>requestAnimationFrame(t=>r('raf@'+Math.round(t))))\",\"awaitPromise\":true}}}}"));
+                    // What does the RENDERER say about its own compositor? With
+                    // --enable-gpu-benchmarking the page can ask directly, which is
+                    // the only renderer-side view left: its trace never reaches us.
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":67,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"(function(){{var g=window.chrome&&window.chrome.gpuBenchmarking;if(!g)return 'no-gpuBenchmarking';var o=[];for(var k in g)o.push(k);return 'keys='+o.join(' ')}})()\"}}}}"));
+                    // Which of the benchmarking levers touch frames at all? The
+                    // full key list does not fit one serial line, so ask for the
+                    // ones whose names concern frames, swaps or rasterisation.
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":70,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"(function(){{var g=window.chrome.gpuBenchmarking,o=[];for(var k in g)if(/frame|swap|commit|raster|draw|composit|display/i.test(k))o.push(k);return o.join(' ')}})()\"}}}}"));
+                    // Ask it the two things that matter, and then FORCE a repaint
+                    // of every layer from inside the renderer. If the compositor is
+                    // there but idle, this is damage it cannot ignore; if there is no
+                    // frame sink, it changes nothing and says so.
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":68,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"(function(){{var g=window.chrome.gpuBenchmarking,r=[];try{{r.push('chan='+g.hasGpuChannel())}}catch(e){{r.push('chan:err')}}try{{r.push('proc='+g.hasGpuProcess())}}catch(e){{r.push('proc:err')}}try{{g.setNeedsDisplayOnAllLayers();r.push('redraw=ok')}}catch(e){{r.push('redraw:'+e)}}return r.join(' ')}})()\"}}}}"));
                     // What does the page think it has to paint?
                     cdp_send(&alloc::format!(
                         "{{\"id\":64,\"sessionId\":\"{dsid}\",\"method\":\"Page.getLayoutMetrics\"}}"));
@@ -1481,6 +1533,20 @@ pub fn fd_kind(fd: u64) -> &'static str {
     } else if crate::net::is_unix_fd(fd) {
         "unix-sock"
     } else if crate::net::is_sock_fd(fd) {
+        {
+            // Is readiness ever ASKED for this socket, and what does it answer?
+            // A response that never arrives and a response nobody waits for look
+            // identical from the byte counters alone.
+            static LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(24);
+            if LEFT.load(Ordering::Relaxed) > 0 {
+                let d = crate::net::sock_peer_desc(fd);
+                if d.ends_with(":443") {
+                    LEFT.fetch_sub(1, Ordering::Relaxed);
+                    crate::serial_println!("[inet] readiness asked for {d}: {}",
+                        crate::net::sock_readable(fd));
+                }
+            }
+        }
         "inet-sock"
     } else if u < MAX_FD && OPEN_DIRS.lock()[u].is_some() {
         "dir"
@@ -9968,7 +10034,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     Some(v) => v,
                     None => return EFAULT,
                 };
-                crate::net::sock_send(a1, &bytes)
+                { note_inet_tx(a1, bytes.len()); crate::net::sock_send(a1, &bytes) }
             } else if crate::net::is_unix_fd(a1) {
                 // write() to an AF_UNIX socket.
                 let bytes = match copy_from_user(a2, a3 as usize) {
@@ -9998,8 +10064,36 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             if num == 291 && (fd as i64) > 0 && a1 & 0x8_0000 != 0 { fd_set_cloexec(fd, true); }
             fd
         }
-        233 => epoll_ctl(a1, a2, a3, a4),     // epoll_ctl(epfd, op, fd, *event)
-        232 => epoll_wait(a1, a2, a3, a4),    // epoll_wait(epfd, *events, max, timeout)
+        233 => {
+            // Which NETWORK sockets does the program actually watch? The TLS
+            // connection here reads the server's first flight and then goes silent,
+            // and readiness for it is never even asked - so the question is whether
+            // it was ever registered for polling at all.
+            if crate::net::is_sock_fd(a3) {
+                static LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(16);
+                if LEFT.fetch_sub(1, Ordering::Relaxed) > 0 {
+                    crate::serial_println!("[inet] epoll_ctl op={a2} fd{a3} ({})",
+                        crate::net::sock_peer_desc(a3));
+                }
+            }
+            epoll_ctl(a1, a2, a3, a4)
+        }
+        232 => {
+            // WHAT IS THE COMPOSITOR WAITING FOR? In the out-of-process renderer
+            // that thread wakes about twice per measurement and never produces a
+            // frame, even after the page forces every layer to need display. Its
+            // epoll timeout and result say whether it is parked on an infinite
+            // wait (a lost wakeup) or cycling on a timeout with nothing to do.
+            let r = epoll_wait(a1, a2, a3, a4);
+            if thread_name(crate::sched::current()) == "Compositor" {
+                static LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(40);
+                if LEFT.fetch_sub(1, Ordering::Relaxed) > 0 {
+                    crate::serial_println!("[compo] epoll_wait(ep={a1}, max={a3}, timeout={}) = {}",
+                        a4 as i64, r as i64);
+                }
+            }
+            r
+        }
         281 => epoll_wait(a1, a2, a3, a4),    // epoll_pwait(epfd, *events, max, timeout, sigmask)
         4 | 6 => {
             // stat(path, statbuf) / lstat(path, statbuf): a path-based stat (chrome
@@ -10736,7 +10830,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 }
                 let total = buf.len() as u64;
                 if crate::net::is_unix_fd(a1) { crate::net::unix_fd_send(a1, &buf); }
-                else { crate::net::sock_send(a1, &buf); }
+                else { note_inet_tx(a1, buf.len()); crate::net::sock_send(a1, &buf); }
                 return total;
             }
             let to_file = a1 != 1 && a1 != 2;
@@ -10797,6 +10891,17 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 if data.is_empty() && !crate::net::sock_eof(a1) {
                     return (-11i64) as u64; // -EAGAIN, not EOF (see recvfrom)
                 }
+                if data.is_empty() {
+                    // END OF STREAM on a network socket. A page that loads to
+                    // ready=complete with an EMPTY document is what a premature EOF
+                    // looks like from blink's side: the response simply ended.
+                    static EOFS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(8);
+                    if EOFS.fetch_sub(1, Ordering::Relaxed) > 0 {
+                        crate::serial_println!("[inet] fd{a1} <- {} EOF (run total {} B)",
+                            crate::net::sock_peer_desc(a1), INET_RX.load(Ordering::Relaxed));
+                    }
+                }
+                note_inet_rx(a1, data.len());
                 if !copy_to_user(a2, &data) {
                     return EFAULT;
                 }
@@ -11480,7 +11585,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         }
                     }
                 }
-                crate::net::sock_send(a1, &bytes)
+                { note_inet_tx(a1, bytes.len()); crate::net::sock_send(a1, &bytes) }
             }
         }
         45 => {
@@ -11506,6 +11611,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // the peer closed, and every fresh connection was discarded as dead.
             if data.is_empty() && crate::net::is_sock_fd(a1) && !crate::net::sock_eof(a1) {
                 return (-11i64) as u64;
+            }
+            if crate::net::is_sock_fd(a1) {
+                note_inet_rx(a1, data.len());
             }
             if !copy_to_user(a2, &data) {
                 return EFAULT;
