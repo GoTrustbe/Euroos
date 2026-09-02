@@ -1787,6 +1787,19 @@ pub fn is_eventfd(fd: u64) -> bool {
     fd >= EVENTFD_BASE && (fd - EVENTFD_BASE) < MAX_EVENTFD as u64
 }
 /// eventfd2(initval, flags) — allocate a counter fd. Returns None if the table is full.
+/// Which slot an eventfd fd actually names. A DUP of an eventfd must share the
+/// counter: chrome hands children an eventfd over SCM_RIGHTS and signals them
+/// through it, and a duplicate with a counter of its own turns every one of those
+/// wakeups into a signal nobody receives. Some(o) = "this fd is a duplicate of
+/// slot o"; None = the fd owns its slot.
+static EVENTFD_ALIAS: Mutex<[Option<usize>; MAX_EVENTFD]> = Mutex::new([const { None }; MAX_EVENTFD]);
+
+/// Resolve an eventfd fd to the slot holding the shared counter.
+fn eventfd_slot(fd: u64) -> usize {
+    let idx = (fd - EVENTFD_BASE) as usize;
+    EVENTFD_ALIAS.lock()[idx].unwrap_or(idx)
+}
+
 pub fn eventfd_create(initval: u64) -> Option<u64> {
     let mut t = EVENTFDS.lock();
     for (i, s) in t.iter_mut().enumerate() {
@@ -1798,7 +1811,7 @@ pub fn eventfd_create(initval: u64) -> Option<u64> {
     None
 }
 pub fn eventfd_readable(fd: u64) -> bool {
-    is_eventfd(fd) && EVENTFDS.lock()[(fd - EVENTFD_BASE) as usize].map_or(false, |c| c > 0)
+    is_eventfd(fd) && EVENTFDS.lock()[eventfd_slot(fd)].map_or(false, |c| c > 0)
 }
 /// read(): return the current counter and reset to 0. Some(0) => the caller should
 /// return -EAGAIN (nothing to read). None => not a live eventfd.
@@ -1806,8 +1819,9 @@ pub fn eventfd_read(fd: u64) -> Option<u64> {
     if !is_eventfd(fd) {
         return None;
     }
+    let slot = eventfd_slot(fd);
     let mut t = EVENTFDS.lock();
-    match t[(fd - EVENTFD_BASE) as usize].as_mut() {
+    match t[slot].as_mut() {
         Some(c) => {
             let v = *c;
             *c = 0;
@@ -1825,8 +1839,9 @@ pub fn eventfd_write(fd: u64, add: u64) -> bool {
     if !is_eventfd(fd) {
         return false;
     }
+    let slot = eventfd_slot(fd);
     let mut t = EVENTFDS.lock();
-    match t[(fd - EVENTFD_BASE) as usize].as_mut() {
+    match t[slot].as_mut() {
         Some(c) => {
             *c = c.saturating_add(add);
             true
@@ -1835,9 +1850,20 @@ pub fn eventfd_write(fd: u64, add: u64) -> bool {
     }
 }
 pub fn eventfd_close(fd: u64) {
-    if is_eventfd(fd) {
-        EVENTFDS.lock()[(fd - EVENTFD_BASE) as usize] = None;
+    if !is_eventfd(fd) {
+        return;
     }
+    let idx = (fd - EVENTFD_BASE) as usize;
+    let slot = eventfd_slot(fd);
+    EVENTFD_ALIAS.lock()[idx] = None;
+    if idx != slot {
+        return; // a duplicate closed: the shared counter belongs to `slot`
+    }
+    // The owner closed. Keep the counter alive while any duplicate still names it.
+    if EVENTFD_ALIAS.lock().iter().any(|a| *a == Some(slot)) {
+        return;
+    }
+    EVENTFDS.lock()[slot] = None;
 }
 
 /// What an AF_UNIX fd is backed by. socket() makes a Pending fd; connect()/socketpair
@@ -1928,20 +1954,25 @@ pub fn eventfd_dup(fd: u64) -> u64 {
     if !is_eventfd(fd) {
         return (-9i64) as u64;
     }
-    let val = EVENTFDS.lock()[(fd - EVENTFD_BASE) as usize];
-    match val {
-        Some(v) => {
-            let mut t = EVENTFDS.lock();
-            for (i, s) in t.iter_mut().enumerate() {
-                if s.is_none() {
-                    *s = Some(v);
-                    return EVENTFD_BASE + i as u64;
-                }
-            }
-            (-24i64) as u64 // -EMFILE
-        }
-        None => (-9i64) as u64,
+    let owner = eventfd_slot(fd);
+    if EVENTFDS.lock()[owner].is_none() {
+        return (-9i64) as u64;
     }
+    // A duplicate SHARES the counter. It used to get a copy of the value and its
+    // own counter, so a write through one fd was invisible through the other -
+    // and an eventfd exists to be written by one party and read by another.
+    // Chrome passes eventfds to its children over SCM_RIGHTS (that path dups),
+    // and every wakeup sent through them went nowhere.
+    let mut t = EVENTFDS.lock();
+    for (i, slot) in t.iter_mut().enumerate() {
+        if slot.is_none() && i != owner {
+            *slot = Some(0); // marks the fd live; the counter that counts is `owner`
+            drop(t);
+            EVENTFD_ALIAS.lock()[i] = Some(owner);
+            return EVENTFD_BASE + i as u64;
+        }
+    }
+    (-24i64) as u64 // -EMFILE
 }
 
 /// connect(fd, sockaddr_un path): resolve a Pending AF_UNIX fd. The X display socket

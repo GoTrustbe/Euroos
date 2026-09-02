@@ -2101,6 +2101,14 @@ fn main() -> Status {
         serial_println!("[glibc] gscm3 (sibling socket via broker): exit={es3} (want 147)");
         for l in os3.lines() { serial_println!("[glibc]   {l}"); }
 
+        // gevfd: an eventfd exists so one party can WAKE another, so a duplicate
+        // must share the counter. Chrome hands children an eventfd over SCM_RIGHTS
+        // and signals them through it; a duplicate with a counter of its own loses
+        // every one of those wakeups, silently.
+        let (oev, eev) = ring3::run_glibc(&mut allocator, ring3::gevfd_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gevfd"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gevfd (eventfd shared across processes): exit={eev} (want 153)");
+        for l in oev.lines() { serial_println!("[glibc]   {l}"); }
+
         // gunlink: an unlinked file must keep serving its open fd, its neighbours must
         // be undisturbed, and "create, unlink, ftruncate, mmap(MAP_SHARED)" — the
         // standard anonymous-shared-memory recipe, and how chrome allocates the Mojo
@@ -2431,7 +2439,7 @@ fn main() -> Status {
             // child + renderer, GL in the GPU child, raster over the (proven)
             // cross-process shared frames. Toggle back to false to reproduce the
             // single-process capture exactly.
-            const HS_MULTI_PROCESS: bool = false;
+            const HS_MULTI_PROCESS: bool = true;
             let gl_args: &[&[u8]] = if sched::avx_enabled() {
                 if HS_MULTI_PROCESS {
                     // The PROVEN MP configuration: in-process GPU (SwANGLE in the
@@ -2643,7 +2651,7 @@ fn main() -> Status {
             hs_argv.extend_from_slice(gl_args);
             // The page comes from ARGV: the CDP pump deliberately never navigates
             // (every navigation swaps the frame and costs the compositor its sink).
-            hs_argv.push(b"https://euro-os.eu/");
+            hs_argv.push(b"file:///tmp/euro.html");
             let (o3, e3) = ring3::run_glibc_disk(&mut allocator, "/pack/chrome-headless-shell", ring3::ldlinux_bytes(),
                 &hs_argv,
                 &[b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
@@ -2889,7 +2897,7 @@ fn main() -> Status {
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
         if !chrome_run {
-        let results: [(&str, u64, u64); 28] = [
+        let results: [(&str, u64, u64); 29] = [
             ("gpoll(poll timeout)", epo, 143),
             ("gcond(condvar broadcast)", eco, 157),
             ("gbrk(zeroed break growth)", ebk, 163),
@@ -2898,6 +2906,7 @@ fn main() -> Status {
             ("gshm(MAP_SHARED memfd)", esh, 131),
             ("gshm2(cross-process SCM_RIGHTS memfd)", esh2, 141),
             ("gscm3(sibling socket via broker)", es3, 147),
+            ("gevfd(eventfd shared across processes)", eev, 153),
             ("gunlink(unlinked-but-open + anon shm)", eul, 137),
             ("gtiny(dyn-link)", e1, 42), ("gtest(stdio/malloc/qsort)", e2, 55),
             ("gthread(pthreads)", e3, 88), ("gmath(libm+dlopen)", e4, 77),
