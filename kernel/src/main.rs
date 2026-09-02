@@ -2485,8 +2485,18 @@ fn main() -> Status {
                   // native completes the frame and we do not; that gap is the
                   // remaining work, and it is now the ONLY measured difference
                   // between this kernel and the reference.
-                  b"--enable-begin-frame-control",
-                  b"--run-all-compositor-stages-before-draw",
+                  // NOT --enable-begin-frame-control. That flag replaces the
+                  // display's begin-frame source with an external one: chrome then
+                  // produces NO frame of its own, and every frame must be driven by
+                  // HeadlessExperimental.beginFrame. Run 33 - the first painted
+                  // multi-process frame, docs/proof/2026-08-31-first-multiprocess-frame.png
+                  // - ran WITHOUT it and delivered a full page over a screencast.
+                  // It was added afterwards, and from then on the driven frame never
+                  // completed and no natural frame could take its place. Natural
+                  // frame production is what demonstrably works here.
+                  // NOT --run-all-compositor-stages-before-draw either: it makes
+                  // the display hold every frame until all stages report done, so a
+                  // single stage that never reports hides all frame production.
                   b"--disable-renderer-backgrounding",
                   b"--disable-backgrounding-occluded-windows",
                   // SOFTWARE OUTPUT SURFACE. The trace named the missing link:
@@ -2497,7 +2507,11 @@ fn main() -> Status {
                   // presentation signal, so it never answers. Through GL the
                   // signal rides on a swap callback that never fires here; a
                   // software output surface reports presentation immediately.
-                  b"--disable-gpu-compositing",
+                  // NOT --disable-gpu-compositing. Run 33 composited through
+                  // in-process SwANGLE and delivered a full painted page; this flag
+                  // switches the whole pipeline to SOFTWARE compositing, a different
+                  // raster path with its own shared-memory bitmaps, and was added
+                  // after that success. Frames stopped and never came back.
                   b"--disable-features=VaapiVideoDecoder,VaapiVideoEncoder",
                   // MojoUseEventFd = chrome's eventfd shared-mem Mojo channel; its probe
                   // PCHECKs that eventfd2(invalid flags) FAILS, but our eventfd2 accepts
@@ -2524,7 +2538,7 @@ fn main() -> Status {
                   // screencast prints "auto-throttling enabled" -> "proposing a capture
                   // size" -> "Captured #1". Whichever of those three appears here says
                   // exactly where the capturer stops.
-                  b"--vmodule=headless_*=2,begin_frame*=2,*frame_control*=2,compositor_frame_sink*=1,tile_manager=2,layer_tree_host_impl=1,scheduler=1,proxy_impl=1,display=1,display_scheduler=1",
+                  b"--vmodule=headless_*=2,begin_frame*=2,*frame_control*=2,compositor_frame_sink*=1,simple_devtools_protocol_client=2,video_capture_oracle=3,frame_sink_video_capturer_impl=3,interprocess_frame_pool=3,capturable_frame_sink=3,video_capture_target=3,shared_memory_mapping=2,platform_shared_memory_region_posix=2",
                   // Ask the headless frame controller itself what it does with our
                   // beginFrame: every stage up to submit and copy is measured and
                   // present, the reply never comes, and the trace categories we
@@ -2656,6 +2670,30 @@ fn main() -> Status {
                     serial_println!("[trace] raster-exec | ZeroCopyRasterBuffer={} Playback={} RasterSource={} TileTaskManager={}",
                         count("ZeroCopyRasterBuffer"), count("Playback"),
                         count("RasterSource"), count("TileTaskManager"));
+                    // WHERE does the renderer's frame connection stop? Its
+                    // requestAnimationFrame never fires here (asked over the
+                    // protocol, so this does not depend on the trace), which means
+                    // it never runs a main frame. These names are handled in the
+                    // BROWSER, so they are in this file for both runs and can be
+                    // compared. Reference: RequestNewLayerTreeFrameSink=3
+                    // CreateCompositorFrameSink=1 EstablishGpuChannel=3
+                    // LayerTreeFrameSink=30 SubmitCompositorFrame=2
+                    // DidReceiveCompositorFrameAck=3 ScheduledActionSendBeginMainFrame=4.
+                    serial_println!("[trace] sinkpath | RequestNew={} CreateSink={} SinkSupport={} EstablishGpuChannel={} LayerTreeFrameSink={} FrameSinkManager={} SubmitCompositorFrame={} Ack={} SendBeginMainFrame={}",
+                        count("RequestNewLayerTreeFrameSink"), count("CreateCompositorFrameSink"),
+                        count("CompositorFrameSinkSupport"), count("EstablishGpuChannel"),
+                        count("LayerTreeFrameSink"), count("FrameSinkManager"),
+                        count("SubmitCompositorFrame"), count("DidReceiveCompositorFrameAck"),
+                        count("ScheduledActionSendBeginMainFrame"));
+                    // WHOSE events are even IN this file? The trace is written by
+                    // the browser; a child's events only appear if its tracing
+                    // session reaches the service. Without this line a renderer
+                    // that never reported is indistinguishable from a renderer
+                    // that never painted. Reference: CrRendererMain=12
+                    // CrBrowserMain=13 CrUtilityMain=15 blink=163 v8=175.
+                    serial_println!("[trace] procs | CrRendererMain={} CrBrowserMain={} CrUtilityMain={} Compositor={} VizCompositorThread={} blink={} v8={}",
+                        count("CrRendererMain"), count("CrBrowserMain"), count("CrUtilityMain"),
+                        count("Compositor"), count("VizCompositorThread"), count("blink"), count("v8"));
                     // BLINK's own lifecycle. cc schedules an EMPTY raster set here,
                     // which only happens when the renderer handed it nothing to
                     // raster - so the question moves up the chain, into paint.

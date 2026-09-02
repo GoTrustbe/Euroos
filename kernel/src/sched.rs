@@ -110,6 +110,10 @@ pub static CENSUS_REQUEST: core::sync::atomic::AtomicBool =
 /// be able to wedge the machine it is diagnosing: the futex dump that once ran
 /// from the CDP pump took ring3 spinlocks with interrupts enabled and froze the
 /// guest it was meant to explain.
+fn sysn(t: usize) -> u64 {
+    if t < 128 { crate::ring3::SYSCALLS_PER_TASK[t].load(Ordering::Relaxed) } else { 0 }
+}
+
 pub fn census_trylock() {
     let Some(s) = SCHED.try_lock() else {
         crate::serial_println!("[census] scheduler lock busy, skipped this tick");
@@ -119,14 +123,14 @@ pub fn census_trylock() {
     for i in 0..s.count {
         let t = &s.tasks[i];
         match t.state {
-            State::Ready => crate::serial_println!("[census] t{i} cr3={:#x} Ready", t.cr3),
+            State::Ready => crate::serial_println!("[census] t{i} cr3={:#x} sys={} Ready", t.cr3, sysn(i)),
             State::Sleeping(w) => {
-                crate::serial_println!("[census] t{i} cr3={:#x} Sleeping(until {w})", t.cr3)
+                crate::serial_println!("[census] t{i} cr3={:#x} sys={} Sleeping(until {w})", t.cr3, sysn(i))
             }
             State::Blocked(c) => {
-                crate::serial_println!("[census] t{i} cr3={:#x} Blocked(chan={c:#x})", t.cr3)
+                crate::serial_println!("[census] t{i} cr3={:#x} sys={} Blocked(chan={c:#x})", t.cr3, sysn(i))
             }
-            ref other => crate::serial_println!("[census] t{i} cr3={:#x} {other:?}", t.cr3),
+            ref other => crate::serial_println!("[census] t{i} cr3={:#x} sys={} {other:?}", t.cr3, sysn(i)),
         }
     }
 }

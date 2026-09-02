@@ -879,7 +879,11 @@ pub fn cdp_pump() {
             // census names those threads and what they are blocked on. It runs
             // in interrupt context on purpose - this pump must not take a single
             // ring3 lock (a dump from here once froze the guest).
-            if ticks_1000 <= 3 {
+            // A census straddling the driven frame: tick 7 is just before the
+            // first beginFrame, ticks 9 and 11 just after. The syscall counter in
+            // each line turns "alive" into "working": if the renderer's tasks do
+            // not advance across the frame request, the request never reached it.
+            if ticks_1000 <= 3 || ticks_1000 == 7 || ticks_1000 == 9 || ticks_1000 == 11 {
                 crate::sched::CENSUS_REQUEST.store(true, Ordering::Relaxed);
             }
             // GIVE UP, on purpose. Waiting forever produces nothing: chrome writes
@@ -986,6 +990,21 @@ pub fn cdp_pump() {
                 // out to paint, so ask the page for its viewport, its body size
                 // and whether it considers itself visible. An empty viewport
                 // explains the whole chain at once.
+                if ticks_1000 == 14 {
+                    // DOES THE RENDERER GET MAIN FRAMES AT ALL? requestAnimationFrame
+                    // callbacks run inside BeginMainFrame, so this asks the renderer
+                    // itself, over the protocol, with no dependence on the trace file
+                    // (whose renderer half never arrives: CrRendererMain=0, v8=0 here
+                    // against 12 and 175 in the reference, while JS demonstrably runs).
+                    // An answer means main frames happen and the wall is later; no
+                    // answer means the renderer never begins a frame.
+                    let dsid = CDP_SESSION.lock().clone();
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":63,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"new Promise(r=>requestAnimationFrame(t=>r('raf@'+Math.round(t))))\",\"awaitPromise\":true}}}}"));
+                    // What does the page think it has to paint?
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":64,\"sessionId\":\"{dsid}\",\"method\":\"Page.getLayoutMetrics\"}}"));
+                }
                 if ticks_1000 == 8 {
                     // ASK THE COMPOSITOR ITSELF. The tile manager runs here
                     // (PrepareTiles and ScheduleTasks climb) but schedules an
@@ -1004,6 +1023,12 @@ pub fn cdp_pump() {
                 // munmap of the ~1.9 MB screenshot bitmap. Whichever of those
                 // this kernel never reaches is the answer.
 
+                // NO DRIVEN FRAMES. Without --enable-begin-frame-control chrome
+                // produces frames itself, and HeadlessExperimental.beginFrame is
+                // refused; the screencast is the delivery path that worked in run
+                // 33. Kept here, disabled, because the drive path is what a
+                // deterministic frame test will want once frames arrive again.
+                if false {
                 // THE DISCRIMINATOR. Chrome answers every beginFrame after the
                 // first with "Another frame is pending", so ONE frame stays
                 // outstanding forever. A frame WITH a screenshot completes only
@@ -1017,6 +1042,7 @@ pub fn cdp_pump() {
                 };
                 cdp_send(&alloc::format!(
                     "{{\"id\":{cid},\"sessionId\":\"{dsid}\",\"method\":\"HeadlessExperimental.beginFrame\",\"params\":{{{params}}}}}"));
+                }
             }
             if ticks_1000 % 3 == 0 {
                 // Every third wait-tick: constant damage keeps the renderer so busy
@@ -7180,6 +7206,13 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     let envp_owned = read_user_strvec(envp_ptr, 512);
     let argv: alloc::vec::Vec<&[u8]> = argv_owned.iter().map(|v| v.as_slice()).collect();
     let envp: alloc::vec::Vec<&[u8]> = envp_owned.iter().map(|v| v.as_slice()).collect();
+    // WHICH child is this? Every chrome child is the same binary re-executed, so
+    // argv0 says nothing; --type= is the only thing that names it. Without this,
+    // a per-process measurement cannot tell the renderer from a utility.
+    if let Some(t) = argv.iter().find(|a| a.starts_with(b"--type=")) {
+        crate::serial_println!("[execve] task {} is {}", crate::sched::current(),
+            alloc::string::String::from_utf8_lossy(t));
+    }
 
     // The child's arena (its VA is in the swapped-in globals; Cr3 is the child's,
     // so this VA is mapped to the child's own frames).
@@ -9590,7 +9623,22 @@ pub fn dump_threads_now(why: &str) {
     dump_rip_profile();
 }
 
+/// Syscalls executed per task, so a census can tell a process that is WORKING
+/// from one that is merely alive. A plain relaxed add per syscall: no lock, so
+/// it is safe to read from the timer tick that prints the census.
+pub static SYSCALLS_PER_TASK: [core::sync::atomic::AtomicU64; 128] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const Z: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    [Z; 128]
+};
+
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    {
+        let t = crate::sched::current();
+        if t < 128 {
+            SYSCALLS_PER_TASK[t].fetch_add(1, Ordering::Relaxed);
+        }
+    }
     // Per-process isolation: the swapped globals FOLLOW the running task (see
     // GLOBALS_OWNER). One ensure at entry loads this process' state if another
     // process' was in; nothing swaps back at exit, so a syscall that blocks
