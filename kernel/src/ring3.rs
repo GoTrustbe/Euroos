@@ -773,6 +773,8 @@ pub fn thread_name(t: usize) -> String {
 }
 /// Set once the frame wait has been abandoned (see the give-up in the pump).
 static CDP_GAVE_UP: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Screencast frames seen so far (the first ones show a page mid-load).
+static CAST_FRAMES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static CDP_URL: Mutex<String> = Mutex::new(String::new());
 static CDP_SESSION: Mutex<String> = Mutex::new(String::new());
 /// The DOM chrome sent back (empty until it arrives).
@@ -1519,7 +1521,19 @@ pub fn cdp_pump() {
             }
             match json_str(&msg, "data") {
                 Some(b64) => {
-                    crate::serial_println!("[cast] ★★★ SCREENCAST FRAME: {} base64 chars", b64.len());
+                    // NOT the first frame: a LATER one. The first frame arrives while
+                    // the page is still loading - stylesheets and webfonts land after
+                    // it - so shipping it immediately captures a half-dressed page and
+                    // closes the browser before the rest arrives. Keep the newest and
+                    // ship after a few, which costs seconds and shows the real page.
+                    const WANT_FRAMES: u32 = 6;
+                    let n = CAST_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+                    if n < WANT_FRAMES {
+                        crate::serial_println!("[cast] frame {n}/{WANT_FRAMES} ({} base64 chars), waiting for a later one",
+                            b64.len());
+                        return;
+                    }
+                    crate::serial_println!("[cast] ★★★ SCREENCAST FRAME {n}: {} base64 chars", b64.len());
                     let mut i = 0;
                     while i < b64.len() {
                         let end = (i + 512).min(b64.len());
