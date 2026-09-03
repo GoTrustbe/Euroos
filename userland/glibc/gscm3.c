@@ -84,6 +84,17 @@ int main(void) {
         if (p == MAP_FAILED) { printf("GSCM3: A map FAILED\n"); fflush(stdout); _exit(15); }
         for (int i = 0; i < 16; i++) p[i * 4096] = (unsigned char)(0xC0 + i);
         if (send_fd(toA[1], mfd) != 0) { printf("GSCM3: A relay-send FAILED\n"); fflush(stdout); _exit(16); }
+        /* Round 2b: a descriptor sent over the RELAYED socket itself, which is
+           what Mojo does once two peers are introduced: the broker hands each a
+           socket end, and from then on they pass handles to each other DIRECTLY.
+           Nothing before this tested that. */
+        int dfd = memfd_create("euro-direct", 0);
+        if (dfd < 0 || ftruncate(dfd, 4096) != 0) { printf("GSCM3: A direct-memfd FAILED\n"); fflush(stdout); _exit(40); }
+        unsigned char *dp = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, dfd, 0);
+        if (dp == MAP_FAILED) { printf("GSCM3: A direct-map FAILED\n"); fflush(stdout); _exit(41); }
+        dp[0] = 0x5A; dp[4095] = 0xA5;
+        if (send_fd(s, dfd) != 0) { printf("GSCM3: A direct-send FAILED\n"); fflush(stdout); _exit(42); }
+
         /* Round three: an eventfd of A's, relayed to B, signalled by A. */
         int ev = eventfd(0, 0);
         if (ev < 0) { printf("GSCM3: A eventfd FAILED\n"); fflush(stdout); _exit(17); }
@@ -113,6 +124,17 @@ int main(void) {
         printf("GSCM3: B read relayed shared memory, mismatched=%d of 16\n", bad);
         fflush(stdout);
         if (bad) _exit(26);
+        /* Round 2b: the descriptor A sent over the socket we were handed. */
+        int dfd = recv_fd(s);
+        if (dfd < 0) { printf("GSCM3: B got nothing over the sibling socket\n"); fflush(stdout); _exit(43); }
+        unsigned char *dp = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, dfd, 0);
+        if (dp == MAP_FAILED) { printf("GSCM3: B direct-map FAILED\n"); fflush(stdout); _exit(44); }
+        if (dp[0] != 0x5A || dp[4095] != 0xA5) {
+            printf("GSCM3: B direct-share WRONG (%02x %02x)\n", dp[0], dp[4095]);
+            fflush(stdout); _exit(45);
+        }
+        printf("GSCM3: B got a descriptor straight from its sibling\n"); fflush(stdout);
+
         int ev = recv_fd(toB[1]);
         if (ev < 0) { printf("GSCM3: B got no relayed eventfd\n"); fflush(stdout); _exit(27); }
         int ep = epoll_create1(0);

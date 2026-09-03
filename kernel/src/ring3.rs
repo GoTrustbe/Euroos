@@ -641,7 +641,67 @@ static SOCK_PAIRS: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::V
 /// Two descriptors sent back to back is not an edge case: it is how Mojo hands a
 /// peer a channel and then a buffer.
 static SCM_PENDING: Mutex<alloc::vec::Vec<(u64, u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+
+/// The KEY a descriptor is queued under: the receiving connection side, encoded
+/// as one number. An fd number is the wrong key - duplicate the socket or pass
+/// it to another process and the same connection has several of them, so a
+/// descriptor queued under one is invisible to a reader holding another. That
+/// is exactly what Mojo does once two peers are introduced: the broker hands
+/// each a socket end and from then on they pass handles DIRECTLY, and every one
+/// of those handles was disappearing.
+fn scm_key(fd: u64) -> u64 {
+    match crate::net::unix_key(fd) {
+        Some((conn, side)) => ((conn as u64) << 1 | side as u64) | (1 << 40),
+        None => fd, // inet sockets keep the old key
+    }
+}
+
+/// Where a descriptor sent on `fd` should be queued.
+fn scm_peer_key(fd: u64) -> Option<u64> {
+    if let Some((conn, side)) = crate::net::unix_peer_key(fd) {
+        return Some(((conn as u64) << 1 | side as u64) | (1 << 40));
+    }
+    sock_peer(fd)
+}
 static SCM_MSG_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+
+/// Bytes still unread from the message a descriptor came with:
+/// (receiving fd, message id, bytes left).
+///
+/// POSIX does not let a read cross the boundary of a message that carries
+/// ancillary data: the descriptor belongs to THOSE bytes. Our byte stream had
+/// no boundaries, so a reader could take several messages in one go and be
+/// handed a descriptor that belongs to a message it has not reached yet. A
+/// receiver that checks "this message should carry a handle" then sees a
+/// malformed one - which is what Mojo does with an introduction.
+static SCM_MSG_BYTES: Mutex<alloc::vec::Vec<(u64, u64, usize)>> =
+    Mutex::new(alloc::vec::Vec::new());
+
+/// How many bytes the OLDEST descriptor-carrying message for `fd` still has.
+/// None when no descriptor is pending, so the read is unbounded as usual.
+fn scm_msg_cap(fd: u64) -> Option<usize> {
+    let _g = crate::sched::IfOffGuard::new();
+    let key = scm_key(fd);
+    let q = SCM_PENDING.lock();
+    let msg = q.iter().find(|&&(f, _, _)| f == key).map(|&(_, _, m)| m)?;
+    drop(q);
+    SCM_MSG_BYTES
+        .lock()
+        .iter()
+        .find(|&&(f, m, _)| f == key && m == msg)
+        .map(|&(_, _, n)| n)
+}
+
+/// Account for bytes taken out of a descriptor-carrying message.
+fn scm_msg_consume(fd: u64, n: usize) {
+    let _g = crate::sched::IfOffGuard::new();
+    let mut t = SCM_MSG_BYTES.lock();
+    let key = scm_key(fd);
+    if let Some(e) = t.iter_mut().find(|(f, _, left)| *f == key && *left > 0) {
+        e.2 = e.2.saturating_sub(n);
+    }
+    t.retain(|&(_, _, left)| left > 0);
+}
 /// One-shot recheck address for the vanishing controllen write (see recvmsg).
 static SCM_CHECK_ADDR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Which process stored SCM_CHECK_ADDR (0 = parent, else child-main task). The
@@ -678,7 +738,7 @@ fn sock_pair_forget(fd: u64) {
 /// recvmsg'd, and the child hit its connect deadline. Readiness must count them.
 fn scm_pending_for(fd: u64) -> bool {
     x86_64::instructions::interrupts::without_interrupts(||
-        SCM_PENDING.lock().iter().any(|&(f, _, _)| f == fd))
+        SCM_PENDING.lock().iter().any(|&(f, _, _)| f == scm_key(fd)))
 }
 
 /// Take the descriptors sent to `fd` (in order).
@@ -687,13 +747,14 @@ fn scm_take(fd: u64) -> alloc::vec::Vec<u64> {
     let mut q = SCM_PENDING.lock();
     // ONE message: the oldest still queued for this fd, and only the descriptors
     // that travelled with it.
-    let Some(msg) = q.iter().find(|&&(f, _, _)| f == fd).map(|&(_, _, m)| m) else {
+    let key = scm_key(fd);
+    let Some(msg) = q.iter().find(|&&(f, _, _)| f == key).map(|&(_, _, m)| m) else {
         return alloc::vec::Vec::new();
     };
     let mut out = alloc::vec::Vec::new();
     let mut i = 0;
     while i < q.len() {
-        if q[i].0 == fd && q[i].2 == msg {
+        if q[i].0 == key && q[i].2 == msg {
             out.push(q.remove(i).1);
         } else {
             i += 1;
@@ -11117,10 +11178,20 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // tracked for socket fd numbers at all (they sit above MAX_FD and
                 // fell outside the flag table, so every socket read back "blocking"
                 // and was served as if it were not).
-                let data = match unix_recv_blocking(a1, a3 as usize) {
+                // Same boundary as recvmsg: a read must not swallow the bytes a
+                // pending descriptor belongs to, or the next recvmsg gets the
+                // handle without its message.
+                let want = match scm_msg_cap(a1) {
+                    Some(n) if n > 0 => (a3 as usize).min(n),
+                    _ => a3 as usize,
+                };
+                let data = match unix_recv_blocking(a1, want) {
                     Some(d) => d,
                     None => return (-11i64) as u64, // -EAGAIN: caller asked not to wait
                 };
+                if !data.is_empty() {
+                    scm_msg_consume(a1, data.len());
+                }
                 if data.is_empty() {
                     if crate::net::unix_fd_at_eof(a1) {
                         return 0; // peer closed + drained: POSIX EOF
@@ -11855,7 +11926,13 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // belongs to the same message, and the receiver gets them together
                 // and separately from the next message's.
                 let msg_id = SCM_MSG_SEQ.fetch_add(1, Ordering::Relaxed);
-                if let Some(peer) = sock_peer(a1) {
+                if let Some(peer) = scm_peer_key(a1) {
+                    {
+                        // The bytes this message carries: a reader must not take
+                        // more than these before it has taken the descriptor.
+                        let _g = crate::sched::IfOffGuard::new();
+                        SCM_MSG_BYTES.lock().push((peer, msg_id, buf.len()));
+                    }
                     let mut off = 0usize;
                     while off + 16 <= controllen {
                         let clen = read_user::<u64>(control + off as u64).unwrap_or(0) as usize;
@@ -11901,6 +11978,12 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             for i in 0..iovlen {
                 cap += read_user::<u64>(iov + i * 16 + 8).unwrap_or(0) as usize;
             }
+            // A descriptor belongs to the bytes it was sent with: never read past
+            // that message's end, or the handle lands on the wrong message.
+            let cap = match scm_msg_cap(a1) {
+                Some(n) if n > 0 => cap.min(n),
+                _ => cap,
+            };
             let data = if crate::net::is_unix_fd(a1) {
                 match unix_recv_blocking(a1, cap) {
                     Some(d) => d,
@@ -11909,6 +11992,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             } else {
                 crate::net::sock_recv(a1, cap)
             };
+            if crate::net::is_unix_fd(a1) && !data.is_empty() {
+                scm_msg_consume(a1, data.len());
+            }
             // Deliver any DESCRIPTORS sent to us with SCM_RIGHTS, in the control
             // buffer where the caller expects them. Without this the bytes arrive and
             // the handle they refer to does not, so the receiver waits for a resource

@@ -2160,6 +2160,29 @@ pub fn unix_socket() -> u64 {
 /// dup(AF_UNIX fd): a NEW fd aliasing the SAME endpoint (UnixSock is Copy, so both
 /// fds share the endpoint's buffers). close() of either just clears its slot; the
 /// endpoint outlives both. Chrome's Mojo dups channel socket handles.
+/// Which CONNECTION SIDE an AF_UNIX fd names, if any. Stable across dup and
+/// across passing the descriptor to another process, unlike the fd number.
+pub fn unix_key(fd: u64) -> Option<(u32, u8)> {
+    if !is_unix_fd(fd) {
+        return None;
+    }
+    match UNIX_FDS.lock()[(fd - UNIX_FD_BASE) as usize] {
+        Some(UnixSock::Stream(e)) => Some(e.key()),
+        _ => None,
+    }
+}
+
+/// Where a message sent on `fd` arrives: the other side of its connection.
+pub fn unix_peer_key(fd: u64) -> Option<(u32, u8)> {
+    if !is_unix_fd(fd) {
+        return None;
+    }
+    match UNIX_FDS.lock()[(fd - UNIX_FD_BASE) as usize] {
+        Some(UnixSock::Stream(e)) => Some(e.peer_key()),
+        _ => None,
+    }
+}
+
 pub fn unix_fd_dup(fd: u64) -> u64 {
     if !is_unix_fd(fd) {
         return (-9i64) as u64; // -EBADF
