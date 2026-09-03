@@ -6,6 +6,9 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <sys/mman.h>
+#include <sys/eventfd.h>
+#include <sys/epoll.h>
+#include <stdint.h>
 
 /* CHILD-TO-CHILD, the way Mojo introduces two peers. A broker (the parent)
    makes a socketpair and hands ONE end to each of two children, which then
@@ -21,8 +24,14 @@
    which maps it and reads what A wrote. Neither the creator nor the reader
    is the process the descriptor travelled through.
 
-   Exit 147 = the siblings exchanged bytes in both directions AND the relayed
-   shared memory carried A's bytes to B. */
+   And a third round, because chrome needs that too: A makes an EVENTFD, the
+   broker relays it to B, A signals through it and B waits for it with epoll.
+   A renderer here receives nothing from a sibling process - not its trace
+   buffer, not a resource body - while everything with the browser works, so
+   the sibling primitives are worth testing one by one.
+
+   Exit 147 = siblings exchanged bytes both ways, the relayed shared memory
+   carried A's bytes to B, and B was woken through A's eventfd. */
 
 static int send_fd(int sock, int fd) {
     char c = 'F';
@@ -75,6 +84,14 @@ int main(void) {
         if (p == MAP_FAILED) { printf("GSCM3: A map FAILED\n"); fflush(stdout); _exit(15); }
         for (int i = 0; i < 16; i++) p[i * 4096] = (unsigned char)(0xC0 + i);
         if (send_fd(toA[1], mfd) != 0) { printf("GSCM3: A relay-send FAILED\n"); fflush(stdout); _exit(16); }
+        /* Round three: an eventfd of A's, relayed to B, signalled by A. */
+        int ev = eventfd(0, 0);
+        if (ev < 0) { printf("GSCM3: A eventfd FAILED\n"); fflush(stdout); _exit(17); }
+        if (send_fd(toA[1], ev) != 0) { printf("GSCM3: A eventfd-relay FAILED\n"); fflush(stdout); _exit(18); }
+        char go = 0;
+        if (read(toA[1], &go, 1) != 1) _exit(19);   /* B is watching */
+        uint64_t one = 1;
+        if (write(ev, &one, 8) != 8) { printf("GSCM3: A signal FAILED\n"); fflush(stdout); _exit(20); }
         _exit(0);
     }
 
@@ -95,7 +112,24 @@ int main(void) {
         for (int i = 0; i < 16; i++) if (p[i * 4096] != (unsigned char)(0xC0 + i)) bad++;
         printf("GSCM3: B read relayed shared memory, mismatched=%d of 16\n", bad);
         fflush(stdout);
-        _exit(bad ? 26 : 0);
+        if (bad) _exit(26);
+        int ev = recv_fd(toB[1]);
+        if (ev < 0) { printf("GSCM3: B got no relayed eventfd\n"); fflush(stdout); _exit(27); }
+        int ep = epoll_create1(0);
+        struct epoll_event want = { .events = EPOLLIN, .data = { .fd = ev } };
+        if (ep < 0 || epoll_ctl(ep, EPOLL_CTL_ADD, ev, &want) != 0) {
+            printf("GSCM3: B epoll setup FAILED\n"); fflush(stdout); _exit(28);
+        }
+        char ready = 'R';
+        if (write(toB[1], &ready, 1) != 1) _exit(29);  /* tell the broker: watching */
+        struct epoll_event got;
+        int n = epoll_wait(ep, &got, 1, 20000);
+        if (n != 1) { printf("GSCM3: B never woken by its sibling (epoll=%d)\n", n); fflush(stdout); _exit(30); }
+        uint64_t v = 0;
+        if (read(ev, &v, 8) != 8 || v != 1) { printf("GSCM3: B read %llu\n", (unsigned long long)v); fflush(stdout); _exit(31); }
+        printf("GSCM3: B was woken through its sibling eventfd\n");
+        fflush(stdout);
+        _exit(0);
     }
 
     /* The broker hands each child one end of a socket neither of them made. */
@@ -106,6 +140,14 @@ int main(void) {
     int relayed = recv_fd(toA[0]);
     if (relayed < 0) { printf("GSCM3: broker got no memfd from A\n"); fflush(stdout); return 8; }
     if (send_fd(toB[0], relayed) != 0) { printf("GSCM3: relay to B FAILED\n"); fflush(stdout); return 9; }
+
+    /* Relay A's eventfd to B, then pass B's "watching" signal back to A. */
+    int evfd = recv_fd(toA[0]);
+    if (evfd < 0) { printf("GSCM3: broker got no eventfd from A\n"); fflush(stdout); return 11; }
+    if (send_fd(toB[0], evfd) != 0) { printf("GSCM3: eventfd relay to B FAILED\n"); fflush(stdout); return 12; }
+    char ready = 0;
+    if (read(toB[0], &ready, 1) != 1) { printf("GSCM3: B never reported watching\n"); fflush(stdout); return 13; }
+    if (write(toA[0], &ready, 1) != 1) return 14;
 
     int sa = 0, sb = 0;
     if (waitpid(a, &sa, 0) != a || waitpid(b, &sb, 0) != b) {

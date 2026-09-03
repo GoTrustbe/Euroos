@@ -2482,7 +2482,7 @@ fn main() -> Status {
             // child + renderer, GL in the GPU child, raster over the (proven)
             // cross-process shared frames. Toggle back to false to reproduce the
             // single-process capture exactly.
-            const HS_MULTI_PROCESS: bool = false;
+            const HS_MULTI_PROCESS: bool = true;
             let gl_args: &[&[u8]] = if sched::avx_enabled() {
                 if HS_MULTI_PROCESS {
                     // The PROVEN MP configuration: in-process GPU (SwANGLE in the
@@ -2533,6 +2533,13 @@ fn main() -> Status {
                   // window onto the compositor. The renderer's own trace never
                   // reaches us, so a lever INSIDE the renderer is worth a flag.
                   b"--enable-gpu-benchmarking",
+                  // DISCRIMINATOR. The renderer gets its document and then waits
+                  // forever on euro.css: the request goes out, the bytes come back,
+                  // the response never completes. Everything measurable in the
+                  // socket layer is healthy, so the suspicion is the hand-off from
+                  // the network service - a SIBLING process - to the renderer. Run
+                  // that service inside the browser and the sibling step is gone.
+                  b"--enable-features=NetworkServiceInProcess",
                   // Resolve the site without depending on the guest resolver path.
                   b"--host-resolver-rules=MAP euro-os.eu 151.240.77.50",
                   // ── SINGLE-PROCESS: run renderer/utility/GPU all IN the browser process

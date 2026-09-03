@@ -453,6 +453,67 @@ fn note_inet_rx(fd: u64, n: usize) {
     }
 }
 
+/// memfd SEALS, per file (a seal belongs to the object, not to a descriptor).
+/// (file index, sealable, seal mask).
+///
+/// Unknown fcntl commands used to answer "success", so F_ADD_SEALS silently did
+/// nothing and F_GET_SEALS always reported NO seals. Chrome seals a shared
+/// memory region to prove it can no longer grow, shrink or be made writable,
+/// and CHECKS those seals when it receives one; a region that reports no seals
+/// is refused. That is invisible from outside: the descriptor passes, the
+/// mapping works, and the transfer simply never happens.
+static MEMFD_SEALS: Mutex<alloc::vec::Vec<(usize, bool, u32)>> =
+    Mutex::new(alloc::vec::Vec::new());
+
+const F_SEAL_SEAL: u32 = 0x0001;
+
+/// Mark a memfd as sealable (MFD_ALLOW_SEALING).
+fn seals_register(fi: usize, sealable: bool) {
+    let _g = crate::sched::IfOffGuard::new();
+    let mut t = MEMFD_SEALS.lock();
+    match t.iter_mut().find(|(f, _, _)| *f == fi) {
+        Some(e) => {
+            e.1 = sealable;
+            e.2 = 0;
+        }
+        None => t.push((fi, sealable, 0)),
+    }
+}
+
+/// F_GET_SEALS: the seals currently on the file behind `fd`.
+fn seals_get(fd: u64) -> u64 {
+    let Some(fi) = OPEN_FDS.lock().get(fd as usize).and_then(|s| *s).map(|(fi, _)| fi) else {
+        return (-9i64) as u64; // -EBADF
+    };
+    let _g = crate::sched::IfOffGuard::new();
+    MEMFD_SEALS
+        .lock()
+        .iter()
+        .find(|(f, _, _)| *f == fi)
+        .map(|(_, _, m)| *m as u64)
+        .unwrap_or(0)
+}
+
+/// F_ADD_SEALS: add seals, refusing what a real kernel refuses.
+fn seals_add(fd: u64, add: u32) -> u64 {
+    let Some(fi) = OPEN_FDS.lock().get(fd as usize).and_then(|s| *s).map(|(fi, _)| fi) else {
+        return (-9i64) as u64; // -EBADF
+    };
+    let _g = crate::sched::IfOffGuard::new();
+    let mut t = MEMFD_SEALS.lock();
+    match t.iter_mut().find(|(f, _, _)| *f == fi) {
+        Some(e) => {
+            if !e.1 || e.2 & F_SEAL_SEAL != 0 {
+                return (-1i64) as u64; // -EPERM: not sealable, or already sealed shut
+            }
+            e.2 |= add;
+            0
+        }
+        // A file that was never a memfd cannot be sealed.
+        None => (-22i64) as u64, // -EINVAL
+    }
+}
+
 static FD_NONBLOCK: [core::sync::atomic::AtomicBool; MAX_FD] =
     [const { core::sync::atomic::AtomicBool::new(false) }; MAX_FD];
 /// Per-fd access mode (O_RDONLY=0 / O_WRONLY=1 / O_RDWR=2), captured from the open
@@ -12263,6 +12324,12 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             register_file(&path, alloc::vec::Vec::new());
             let fd = vfs_open(path.as_bytes());
             if fd != u64::MAX && a2 & 0x1 != 0 { fd_set_cloexec(fd, true); } // MFD_CLOEXEC
+            // MFD_ALLOW_SEALING decides whether this file can ever be sealed.
+            if fd != u64::MAX {
+                if let Some(fi) = OPEN_FDS.lock().get(fd as usize).and_then(|s| *s).map(|(fi, _)| fi) {
+                    seals_register(fi, a2 & 0x2 != 0);
+                }
+            }
             fd
         }
         77 => vfs_ftruncate(a1 as usize, a2 as usize), // ftruncate(fd, len)
@@ -12514,6 +12581,8 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     fd_set_nonblock(a1, a3 & 0x800 != 0);
                     0
                 }
+                1033 => seals_add(a1, a3 as u32), // F_ADD_SEALS
+                1034 => seals_get(a1),             // F_GET_SEALS
                 1 => u64::from(fd_is_cloexec(a1)), // F_GETFD -> FD_CLOEXEC bit
                 2 => { fd_set_cloexec(a1, a3 & 1 != 0); 0 } // F_SETFD
                 _ => 0, // F_DUPFD/… pretend success
