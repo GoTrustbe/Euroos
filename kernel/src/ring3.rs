@@ -10726,7 +10726,8 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 if fi < DISK_FI_BASE || fi == WAD_FI || fi == PROC_MEM_FI {
                     let off = unsafe { recover_mmap_offset() } as usize;
                     if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
-                        crate::serial_println!("[shm] mmap MAP_SHARED attempt: {} off={off} len={len}", fi_path(fi));
+                        crate::serial_println!("[shm] MAP_SHARED fi={fi} len={len} own={} {}",
+                            fork_child_owner(crate::sched::current()).unwrap_or(0), fi_path(fi));
                     }
                     // With demand paging available, hand out a FRESH address range per
                     // mapping and let it fault onto the file's shared frames. Distinct

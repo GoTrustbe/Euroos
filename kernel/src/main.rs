@@ -2482,7 +2482,7 @@ fn main() -> Status {
             // child + renderer, GL in the GPU child, raster over the (proven)
             // cross-process shared frames. Toggle back to false to reproduce the
             // single-process capture exactly.
-            const HS_MULTI_PROCESS: bool = false;
+            const HS_MULTI_PROCESS: bool = true;
             let gl_args: &[&[u8]] = if sched::avx_enabled() {
                 if HS_MULTI_PROCESS {
                     // The PROVEN MP configuration: in-process GPU (SwANGLE in the
