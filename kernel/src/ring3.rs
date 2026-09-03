@@ -631,7 +631,17 @@ static CDP_DPR_MILLI: core::sync::atomic::AtomicU32 = core::sync::atomic::Atomic
 /// to arrive on the OTHER one, and only a pair knows who that is.
 static SOCK_PAIRS: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
 /// Descriptors in flight: (receiving fd, descriptor). FIFO, delivered by recvmsg.
-static SCM_PENDING: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+/// Descriptors in flight to a socket: (receiving fd, descriptor, MESSAGE id).
+///
+/// The message id is what keeps sendmsg boundaries. Every sendmsg carries its
+/// own ancillary data and a recvmsg returns ONE message, so a receiver with room
+/// for one descriptor gets one - and the next recvmsg gets the next. Without the
+/// id this queue handed over everything pending at once, the receiver's control
+/// buffer held the first, and every descriptor behind it was silently dropped.
+/// Two descriptors sent back to back is not an edge case: it is how Mojo hands a
+/// peer a channel and then a buffer.
+static SCM_PENDING: Mutex<alloc::vec::Vec<(u64, u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+static SCM_MSG_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
 /// One-shot recheck address for the vanishing controllen write (see recvmsg).
 static SCM_CHECK_ADDR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Which process stored SCM_CHECK_ADDR (0 = parent, else child-main task). The
@@ -668,17 +678,22 @@ fn sock_pair_forget(fd: u64) {
 /// recvmsg'd, and the child hit its connect deadline. Readiness must count them.
 fn scm_pending_for(fd: u64) -> bool {
     x86_64::instructions::interrupts::without_interrupts(||
-        SCM_PENDING.lock().iter().any(|&(f, _)| f == fd))
+        SCM_PENDING.lock().iter().any(|&(f, _, _)| f == fd))
 }
 
 /// Take the descriptors sent to `fd` (in order).
 fn scm_take(fd: u64) -> alloc::vec::Vec<u64> {
     let _g = crate::sched::IfOffGuard::new();
     let mut q = SCM_PENDING.lock();
+    // ONE message: the oldest still queued for this fd, and only the descriptors
+    // that travelled with it.
+    let Some(msg) = q.iter().find(|&&(f, _, _)| f == fd).map(|&(_, _, m)| m) else {
+        return alloc::vec::Vec::new();
+    };
     let mut out = alloc::vec::Vec::new();
     let mut i = 0;
     while i < q.len() {
-        if q[i].0 == fd {
+        if q[i].0 == fd && q[i].2 == msg {
             out.push(q.remove(i).1);
         } else {
             i += 1;
@@ -11835,6 +11850,10 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     sock_peer(a1));
             }
             if control != 0 && controllen >= 16 {
+                // One id for THIS sendmsg: every descriptor in its control data
+                // belongs to the same message, and the receiver gets them together
+                // and separately from the next message's.
+                let msg_id = SCM_MSG_SEQ.fetch_add(1, Ordering::Relaxed);
                 if let Some(peer) = sock_peer(a1) {
                     let mut off = 0usize;
                     while off + 16 <= controllen {
@@ -11852,7 +11871,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                                 if fd >= 0 {
                                     let dup = dup_fd(fd as u64);
                                     if (dup as i64) >= 0 {
-                                        SCM_PENDING.lock().push((peer, dup));
+                                        SCM_PENDING.lock().push((peer, dup, msg_id));
                                         if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
                                             crate::serial_println!("[scm] fd{fd} ({}) sent on fd{a1} -> arrives as fd{dup} on fd{peer}",
                                                 fd_kind(fd as u64));
