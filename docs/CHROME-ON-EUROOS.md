@@ -1,6 +1,6 @@
 # Chromium op EuroOS: van eerste pixel tot echt surfen
 
-*Status per 2026-09-03. Alle claims in dit document zijn gemeten; de
+*Status per 2026-09-04. Alle claims in dit document zijn gemeten; de
 bewijs-screenshots staan in `docs/proof/`, de logbestanden en methodiek in de
 sprintdocumenten (`SPRINT-PLAN-CHROME-*.md`).*
 
@@ -70,7 +70,40 @@ Twee oorzaken, beide gerepareerd:
 Zelftest `gnss` reproduceert de hele storing in een klein programma, zodat een
 antwoord een boot kost in plaats van een browserrun.
 
-### Multiproces: waar het nu vastloopt
+### Multiproces: opgelost (2026-09-03)
+
+De blokkade is gevonden en zat in een sleutel. Descriptors die onderweg
+waren, stonden opgeslagen onder het fd-nummer van de ontvanger. Dat breekt
+zodra een socket-uiteinde wordt gedupliceerd of aan een ander proces wordt
+doorgegeven: dezelfde verbinding heeft dan meerdere nummers. En de verzender
+zocht zijn tegenpartij in de tabel van nummers van het oorspronkelijke
+socketpaar, dus een socket die zelf via SCM_RIGHTS was binnengekomen had geen
+tegenpartij en de descriptor verdween geruisloos.
+
+Dat is precies wat mojo doet zodra twee processen aan elkaar zijn
+voorgesteld: de makelaar geeft elk kind een uiteinde van een socket, en vanaf
+dan geven ze elkaar handles rechtstreeks door. Al die handles verdwenen,
+waardoor geen dataring (gedeeld geheugen dat beide kanten moeten mappen) ooit
+tot stand kwam: aanvragen bereikten de netwerkdienst wel (die lopen via de
+makelaar), antwoordlichamen bereikten de renderer nooit.
+
+Descriptors zijn nu gesleuteld op de verbindingszijde waarvoor ze bestemd
+zijn (`euronet::unix::Endpoint::key`), wat dup en doorgifte overleeft.
+Zelftest `gscm3` dekt het af: A stuurt een memfd over de socket die de
+makelaar hem gaf, B mapt hem en leest A's bytes.
+
+Resultaat, zelfde pagina, zelfde hardware:
+`proof/2026-09-03-out-of-process-renderer-paints-live-site.png`: euro-os.eu
+volledig getekend door een out-of-process renderer, over TLS, met webfonts,
+stylesheet en cookiebanner. Voor en na, per teller: responses 2 naar 5,
+blink Paint 0 naar 9, Layout 0 naar 18, BeginMainFrame 0 naar 5, RasterTask
+0 naar 3, tracing-acks: geen time-out meer.
+
+Nog een les uit de opname zelf: het eerste screencast-frame komt binnen
+terwijl de pagina nog laadt. De pomp bewaart nu het nieuwste frame en
+verstuurt het zesde; het verschil was 251 tegen 4201 kleuren.
+
+### De uitsluitingslijst die ernaartoe leidde
 
 Single-process rendert de live site van begin tot eind. Met een
 out-of-process renderer krijgt die zijn document wel (8901 tekens, 2
@@ -125,8 +158,9 @@ renderer-trace, en die bereikt ons om vermoedelijk dezelfde reden niet
 - **https**: opgelost, zie hierboven. Vereist wel de NSS-schijf
   (`scripts/mk-nss-pack.sh`) naast de chrome-pack. Onder emulatie zonder KVM
   blijft de handshake traag; op echte hardware niet.
-- **Multiproces**: de out-of-process renderer rondt geen subbronnen af en
-  schildert daarom niet, zie hierboven. Single-process werkt volledig.
+- **Multiproces**: opgelost, zie hierboven. De boottest staat nog op
+  single-process; multiproces als standaard vergt een stabiliteitscampagne
+  (meerdere runs, geheugendruk, navigatie) voordat die wissel verantwoord is.
 - **Snelheid**: ~20 min per HTTP-resource onder icount-TCG. Puur emulatie;
   geen stack-eigenschap.
 - **Browser-UI-input** (omnibox, menu) via X werkt alleen wanneer chrome's
