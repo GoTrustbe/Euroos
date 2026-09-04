@@ -2482,6 +2482,11 @@ fn main() -> Status {
             // child + renderer, GL in the GPU child, raster over the (proven)
             // cross-process shared frames. Toggle back to false to reproduce the
             // single-process capture exactly.
+            // Multi-process is the DEFAULT since 2026-09-04: it is what desktop
+            // chrome runs, and after the descriptor-keying fix it is measured
+            // stable (three consecutive NUC runs, each delivering a full frame,
+            // zero tracing timeouts). Single-process remains the fallback for
+            // bisecting: flip this constant.
             const HS_MULTI_PROCESS: bool = true;
             let gl_args: &[&[u8]] = if sched::avx_enabled() {
                 if HS_MULTI_PROCESS {

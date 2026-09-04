@@ -158,9 +158,9 @@ renderer-trace, en die bereikt ons om vermoedelijk dezelfde reden niet
 - **https**: opgelost, zie hierboven. Vereist wel de NSS-schijf
   (`scripts/mk-nss-pack.sh`) naast de chrome-pack. Onder emulatie zonder KVM
   blijft de handshake traag; op echte hardware niet.
-- **Multiproces**: opgelost, zie hierboven. De boottest staat nog op
-  single-process; multiproces als standaard vergt een stabiliteitscampagne
-  (meerdere runs, geheugendruk, navigatie) voordat die wissel verantwoord is.
+- **Multiproces**: opgelost en herhaalbaar: drie opeenvolgende runs op de
+  NUC leverden elk zes screencast-frames en een volledig afgeleverde PNG,
+  zonder tracing-time-outs. De boottest draait sindsdien multiproces.
 - **Snelheid**: ~20 min per HTTP-resource onder icount-TCG. Puur emulatie;
   geen stack-eigenschap.
 - **Browser-UI-input** (omnibox, menu) via X werkt alleen wanneer chrome's
