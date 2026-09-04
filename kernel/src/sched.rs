@@ -750,6 +750,7 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
         unsafe { fpu_switch(cur, best) };
     }
     s.current = best;
+    CURRENT_MIRROR.store(best as u64, Ordering::Relaxed);
     let next = s.current;
     unsafe { fs.write(s.tasks[next].fs_base) };
     // Switch address space (CR3) if the incoming task has its own PML4.
@@ -856,6 +857,7 @@ pub fn init() {
         s.count = 1;
     }
     s.current = 0;
+    CURRENT_MIRROR.store(0, Ordering::Relaxed);
 }
 
 /// Add a **ring-3** task to the round-robin. `kstack_top` is the kernel
@@ -864,6 +866,18 @@ pub fn init() {
 /// there via `iretq`.
 /// The index of the currently running task (used by the syscall layer to
 /// distinguish a scheduled background task from a synchronous foreground exec).
+/// Lock-free mirror of `SCHED.current`, updated at every switch. Readers that
+/// may run with the scheduler lock held (capability checks happen on nearly
+/// every syscall path) MUST use this: `current()` takes SCHED.lock(), and one
+/// caller holding it wedged the whole machine on boot - serial dead, NMI
+/// blocked on the same lock, 100% CPU.
+static CURRENT_MIRROR: AtomicU64 = AtomicU64::new(0);
+
+/// The running task, without taking any lock.
+pub fn current_lockfree() -> usize {
+    CURRENT_MIRROR.load(Ordering::Relaxed) as usize
+}
+
 pub fn current() -> usize {
     SCHED.lock().current
 }
@@ -1203,6 +1217,7 @@ pub extern "sysv64" fn ap_schedule_tick(rsp: u64) -> u64 {
     s.tasks[cur].rsp = rsp;
     let n = (cur + 1) % s.count;
     s.current = n;
+    CURRENT_MIRROR.store(n as u64, Ordering::Relaxed);
     s.tasks[n].rsp
 }
 
@@ -1236,6 +1251,7 @@ pub fn ap_setup(cpu: usize) {
     s.tasks[2].rsp = ap_init_stack(cpu, 2, ap_worker_b);
     s.count = 3;
     s.current = 0;
+    CURRENT_MIRROR.store(0, Ordering::Relaxed);
 }
 
 extern "C" fn ap_worker_a() -> ! {

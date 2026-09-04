@@ -27,6 +27,31 @@ pub const CAP_NET: u64 = 1 << 3; // network access
 pub const CAP_IMMUTABLE_ADMIN: u64 = 1 << 4; // L2: set/clear immutability flags
 
 static CURRENT_CAPS: AtomicU64 = AtomicU64::new(0);
+/// Capabilities PER TASK. CURRENT_CAPS is one global, and the desktop runs many
+/// processes: the service ticker restarting a background helper stored ITS caps
+/// and from that moment the browser and all its children ran with the ticker's
+/// rights - the network service died on socket() = EPERM, minutes into a healthy
+/// session. 0 = unset (fall back to the global, which spawn paths still set).
+static TASK_CAPS: [AtomicU64; 128] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const Z: AtomicU64 = AtomicU64::new(0);
+    [Z; 128]
+};
+
+/// Record the capabilities of task `t` (spawn) - children/threads inherit them.
+pub fn set_task_caps(t: usize, caps: u64) {
+    if t < 128 {
+        TASK_CAPS[t].store(caps, Ordering::Relaxed);
+    }
+}
+
+fn effective_caps() -> u64 {
+    // Lock-free on purpose: this runs inside nearly every syscall arm, including
+    // ones that already hold the scheduler lock.
+    let t = crate::sched::current_lockfree();
+    let tc = if t < 128 { TASK_CAPS[t].load(Ordering::Relaxed) } else { 0 };
+    if tc != 0 { tc } else { CURRENT_CAPS.load(Ordering::Relaxed) }
+}
 // If true: the current process uses the LINUX syscall ABI (different numbers +
 // semantics). The kernel then translates to its own handlers (Track 6 phase 6.6).
 static LINUX_ABI: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -248,7 +273,7 @@ fn read_user<T: Copy>(ptr: u64) -> Option<T> {
 }
 
 fn has_cap(c: u64) -> bool {
-    CURRENT_CAPS.load(Ordering::Relaxed) & c == c
+    effective_caps() & c == c
 }
 
 /// The capability a syscall requires (0 = always allowed).
@@ -774,6 +799,7 @@ pub fn thread_name(t: usize) -> String {
 /// Set once the frame wait has been abandoned (see the give-up in the pump).
 static CDP_GAVE_UP: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// Screencast frames seen so far (the first ones show a page mid-load).
+static HEAP_STEP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static CAST_FRAMES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// Tick at which Page.loadEventFired arrived (0 = not yet).
 static LOAD_FIRED_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -3969,6 +3995,7 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
     let user_ss = (sel.user_data.0 | 3) as u64;
     let child_pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     let task = crate::sched::spawn_thread(user_rip, user_rsp, user_cs, user_ss, kstack_top, pml4, fs, saved);
+    set_task_caps(task, effective_caps()); // lock-free read; thread shares its process' rights
     crate::sched::set_ident(task, child_pid as u32, parent_pid as u32);
 
     bg.push(BgProc {
@@ -4410,6 +4437,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             };
             let saved_regs = unsafe { SAVED_REGS };
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, p.pml4, fs, saved_regs);
+            set_task_caps(child, effective_caps()); // thread: same rights
             register_thread_kstack(child, slot);
             p.threads.push(child);
             crate::serial_println!("[thread] clone: pid {} -> thread task {child} (shared address space, own stack/TLS)", p.pid);
@@ -7744,6 +7772,7 @@ fn do_glibc_fork() -> u64 {
     let cs = (sel.user_code.0 | 3) as u64;
     let ss = (sel.user_data.0 | 3) as u64;
     let child = crate::sched::spawn_thread(urip, ursp, cs, ss, kstack_top, pml4, fs, sregs);
+    set_task_caps(child, effective_caps()); // fork child: inherits the parent's rights
     if child == usize::MAX {
         free_thread_kstack_slot(slot);
         return (-11i64) as u64;
@@ -8349,6 +8378,7 @@ pub fn spawn_glibc_persistent(
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
     let (main_slot, main_kstack) = alloc_thread_kstack()?;
     let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
+    set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
     PERSIST_ARENA.store(arena, Ordering::Relaxed);
@@ -8475,6 +8505,14 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // route while the X event route depends on a glib-pump race.
     b"--remote-debugging-pipe",
     b"--disable-gpu", b"--use-gl=disabled", b"--disable-vulkan",
+    // GPU IN PROCESS, exactly like the measured-stable headless configuration:
+    // the renderer and utilities stay out of process (that is where site
+    // isolation lives), while viz runs in the browser. A separate gpu-process
+    // child dies reproducibly ~1685 syscalls in (census: t30 Dead, twice), and
+    // without viz no frame sink is ever handed out - the window froze on its
+    // first composite and the renderer never even forked. Hunting that crash is
+    // its own thread; this is the configuration that demonstrably works.
+    b"--in-process-gpu",
     // MULTI-PROCESS is the default since 2026-09-04, matching the boot test.
     // What stood in its way is fixed and measured: descriptors between two
     // CHILDREN were keyed by fd number and silently vanished, so no data-pipe
@@ -8861,6 +8899,7 @@ fn glibc_disk_launch(
         None => return Err("(no kernel stack)"),
     };
     let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
+    set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
 
@@ -8901,6 +8940,23 @@ pub fn run_glibc_disk(
         iters += 1;
         if iters % 64 == 0 {
             cdp_pump(); // DevTools conversation with a --remote-debugging-pipe browser
+        }
+        // HEAP WATCH. Full desktop chrome in multi-process mode OOM-panicked the
+        // kernel heap twice (a 512 KiB allocation failed), and 128 MiB more heap
+        // changed nothing - so something grows with the WORK, not with the boot.
+        // Report usage each ~64 MiB step plus the biggest heap consumers we own,
+        // so the panic names its cause beforehand instead of afterwards.
+        {
+            let (used, _free) = crate::allocator::stats();
+            let step = (used >> 26) as u32; // 64 MiB steps
+            let prev = HEAP_STEP.swap(step, Ordering::Relaxed);
+            if step > prev {
+                let files: usize = FILES.lock().iter().map(|(p, d)| p.len() + d.len()).sum();
+                let pipes: usize = PIPES.lock().iter().map(|p| p.len()).sum();
+                crate::serial_println!(
+                    "[heap] {} MiB used | FILES {} MiB | pipes {} KiB",
+                    used >> 20, files >> 20, pipes >> 10);
+            }
         }
         // Keep the NETWORK moving while a program runs. Without this the stack
         // only advances when the program itself polls a socket, so acknowledgements
@@ -9236,6 +9292,7 @@ pub fn run_glibc(
     // pthread workers are scheduler siblings, so blocking + preemption + waking
     // all work — unlike a boot-task excursion, which starved.
     let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
+    set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
     crate::serial_println!(

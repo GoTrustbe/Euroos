@@ -633,11 +633,17 @@ fn main() -> Status {
         // Cap at a quarter of RAM: at -m 3584M the fifth-cap rejected the 640 MiB
         // candidate and chrome multi-process fell to 160 MiB — not one 256 MiB
         // child arena fit, and every GPU/renderer launch died on [fork] alloc.
-        let cap = usable_frames / 4;
+        let cap = usable_frames / 3;
         // Candidates: 640 MiB (2+ chrome arenas) → 512 → 288 (one child + slack)
         // → 160 → 64 MiB, first that fits.
         let mut installed = false;
-        for &want in &[163_840usize, 131_072, 73_728, 40_960, 16_384] {
+        // 896 MiB first: full desktop chrome in multi-process mode forks a GPU
+        // process, a utility AND a renderer, each with a 256 MiB arena - the
+        // 640 MiB pool held two and the RENDERER died on [fork] arena alloc
+        // (127 MiB left). Three children plus slack needs ~900. The demand pool
+        // takes whatever remains after this, so the budget shifts rather than
+        // grows; the cap below keeps lean images booting.
+        for &want in &[229_376usize, 163_840, 131_072, 73_728, 40_960, 16_384] {
             if want > cap {
                 continue;
             }
