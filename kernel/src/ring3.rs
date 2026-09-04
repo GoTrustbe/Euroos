@@ -775,6 +775,8 @@ pub fn thread_name(t: usize) -> String {
 static CDP_GAVE_UP: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// Screencast frames seen so far (the first ones show a page mid-load).
 static CAST_FRAMES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// Tick at which Page.loadEventFired arrived (0 = not yet).
+static LOAD_FIRED_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CDP_URL: Mutex<String> = Mutex::new(String::new());
 static CDP_SESSION: Mutex<String> = Mutex::new(String::new());
 /// The DOM chrome sent back (empty until it arrives).
@@ -869,6 +871,8 @@ pub fn cdp_install(url: &str) {
     CDP_MARK.store(0, Ordering::Relaxed);
     CDP_TRIES.store(0, Ordering::Relaxed);
     CDP_WAIT_MARK.store(0, Ordering::Relaxed);
+    CAST_FRAMES.store(0, Ordering::Relaxed);
+    LOAD_FIRED_AT.store(0, Ordering::Relaxed);
     CDP_RX.lock().clear();
     CDP_SESSION.lock().clear();
     CDP_DOM.lock().clear();
@@ -1458,6 +1462,15 @@ pub fn cdp_pump() {
         } else if step == 3 && msg.contains("\"id\":3") {
             CDP_STEP.store(4, Ordering::Relaxed);
             CDP_MARK.store(now, Ordering::Relaxed);
+        } else if msg.contains("Page.loadEventFired") && LOAD_FIRED_AT.load(Ordering::Relaxed) == 0 {
+            // Remember WHEN the page finished loading, whatever step we are in:
+            // the screencast handler ships the first frame that comes a beat
+            // after this, instead of counting frames blindly.
+            LOAD_FIRED_AT.store(crate::interrupts::ticks().max(1), Ordering::Relaxed);
+            if step == 4 {
+                crate::serial_println!("[cdp] load event fired — reading the DOM");
+                cdp_ask_dom();
+            }
         } else if step == 4 && msg.contains("Page.loadEventFired") {
             crate::serial_println!("[cdp] load event fired — reading the DOM");
             cdp_ask_dom();
@@ -1521,19 +1534,21 @@ pub fn cdp_pump() {
             }
             match json_str(&msg, "data") {
                 Some(b64) => {
-                    // NOT the first frame: a LATER one. The first frame arrives while
-                    // the page is still loading - stylesheets and webfonts land after
-                    // it - so shipping it immediately captures a half-dressed page and
-                    // closes the browser before the rest arrives. Keep the newest and
-                    // ship after a few, which costs seconds and shows the real page.
-                    const WANT_FRAMES: u32 = 6;
+                    // NOT the first frame: the first arrives while the page is still
+                    // loading (stylesheets and webfonts land after it). Ship the first
+                    // frame that comes a settle-beat AFTER Page.loadEventFired - that
+                    // is a statement about the page, not a guessed count. A frame cap
+                    // stays as the backstop for a page whose load event never fires.
                     let n = CAST_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
-                    if n < WANT_FRAMES {
-                        crate::serial_println!("[cast] frame {n}/{WANT_FRAMES} ({} base64 chars), waiting for a later one",
-                            b64.len());
+                    let loaded_at = LOAD_FIRED_AT.load(Ordering::Relaxed);
+                    let settled = loaded_at != 0
+                        && crate::interrupts::ticks().saturating_sub(loaded_at) >= 200; // ~2 s guest
+                    if !settled && n < 12 {
+                        crate::serial_println!("[cast] frame {n} ({} chars) before the page settled (loaded={}), waiting",
+                            b64.len(), loaded_at != 0);
                         return;
                     }
-                    crate::serial_println!("[cast] ★★★ SCREENCAST FRAME {n}: {} base64 chars", b64.len());
+                    crate::serial_println!("[cast] ★★★ SCREENCAST FRAME {n} (settled={settled}): {} base64 chars", b64.len());
                     let mut i = 0;
                     while i < b64.len() {
                         let end = (i + 512).min(b64.len());
@@ -8460,17 +8475,16 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // route while the X event route depends on a glib-pump race.
     b"--remote-debugging-pipe",
     b"--disable-gpu", b"--use-gl=disabled", b"--disable-vulkan",
-    // --single-process stays the DEFAULT (the proven mode). The C1 multi-process
-    // experiment (2026-08-28, remove this flag to reproduce) got real forks
-    // working: two 256 MiB children (pid 1000/1001) live with their own PML4s
-    // once the process pool holds 640 MiB. Remaining wall: the child goes Ready
-    // but silent after its post-fork rt_sigaction sweep (Mojo handshake never
-    // completes), the network-service child crashes later, and child arenas are
-    // not recycled into the pool on exit. See docs/SPRINT-PLAN-CHROMIUM.md.
-    // Shipping default is single-process (proven). Remove --single-process to
-    // reproduce the multi-process work; the watchdog-off flags then matter
-    // (under TCG the child's init outruns chrome's own GpuWatchdog timeout).
-    b"--no-zygote", b"--single-process", b"--disable-dev-shm-usage",
+    // MULTI-PROCESS is the default since 2026-09-04, matching the boot test.
+    // What stood in its way is fixed and measured: descriptors between two
+    // CHILDREN were keyed by fd number and silently vanished, so no data-pipe
+    // ring was ever shared between siblings (commit 370b748); the boot test now
+    // delivers a full render of the live site three runs out of three. The C1
+    // walls from 2026-08-28 (silent child, crashing network service) fell with
+    // the same family of fixes: blocking recv, wait4, endpoint refcounts,
+    // eventfd sharing, SCM message boundaries. Add --single-process back here
+    // to bisect against the old mode.
+    b"--no-zygote", b"--disable-dev-shm-usage",
     b"--disable-gpu-watchdog", b"--disable-hang-monitor",
     b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
     b"--disable-crashpad-for-testing", b"--disable-breakpad",
