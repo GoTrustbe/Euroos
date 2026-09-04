@@ -27,6 +27,31 @@ pub const CAP_NET: u64 = 1 << 3; // network access
 pub const CAP_IMMUTABLE_ADMIN: u64 = 1 << 4; // L2: set/clear immutability flags
 
 static CURRENT_CAPS: AtomicU64 = AtomicU64::new(0);
+/// Capabilities PER TASK. CURRENT_CAPS is one global, and the desktop runs many
+/// processes: the service ticker restarting a background helper stored ITS caps
+/// and from that moment the browser and all its children ran with the ticker's
+/// rights - the network service died on socket() = EPERM, minutes into a healthy
+/// session. 0 = unset (fall back to the global, which spawn paths still set).
+static TASK_CAPS: [AtomicU64; 128] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const Z: AtomicU64 = AtomicU64::new(0);
+    [Z; 128]
+};
+
+/// Record the capabilities of task `t` (spawn) - children/threads inherit them.
+pub fn set_task_caps(t: usize, caps: u64) {
+    if t < 128 {
+        TASK_CAPS[t].store(caps, Ordering::Relaxed);
+    }
+}
+
+fn effective_caps() -> u64 {
+    // Lock-free on purpose: this runs inside nearly every syscall arm, including
+    // ones that already hold the scheduler lock.
+    let t = crate::sched::current_lockfree();
+    let tc = if t < 128 { TASK_CAPS[t].load(Ordering::Relaxed) } else { 0 };
+    if tc != 0 { tc } else { CURRENT_CAPS.load(Ordering::Relaxed) }
+}
 // If true: the current process uses the LINUX syscall ABI (different numbers +
 // semantics). The kernel then translates to its own handlers (Track 6 phase 6.6).
 static LINUX_ABI: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -152,8 +177,14 @@ fn in_user_arena(ptr: u64, len: usize) -> bool {
     // demand-region pointers. Un-committed pages fault in on kernel touch (ring-0
     // demand fault), so it is safe to hand the kernel these addresses.
     if DEMAND_ENABLED.load(Ordering::Relaxed) && ptr >= DEMAND_BASE {
+        // Bound by THIS process's bump pointer, not just by the region: an
+        // address beyond it was never handed out here (it belongs to another
+        // process). The demand fault handler rejects exactly that, so a kernel
+        // dereference would page-fault at ring 0 and halt the machine instead
+        // of returning EFAULT to the caller. Found on real hardware under KVM.
         return match ptr.checked_add(len as u64) {
-            Some(end) => end <= DEMAND_BASE + DEMAND_SIZE,
+            Some(end) => end <= DEMAND_BASE + DEMAND_SIZE
+                && end <= DEMAND_NEXT.load(Ordering::Relaxed),
             None => false,
         };
     }
@@ -242,7 +273,7 @@ fn read_user<T: Copy>(ptr: u64) -> Option<T> {
 }
 
 fn has_cap(c: u64) -> bool {
-    CURRENT_CAPS.load(Ordering::Relaxed) & c == c
+    effective_caps() & c == c
 }
 
 /// The capability a syscall requires (0 = always allowed).
@@ -345,6 +376,169 @@ static PIPE_NONBLOCK: Mutex<alloc::vec::Vec<bool>> = Mutex::new(alloc::vec::Vec:
 /// fcntl(F_SETFL) and reported via fcntl(F_GETFL). Previously only pipe fds tracked
 /// it, so chrome setting a Mojo SOCKET non-blocking then verifying with F_GETFL saw
 /// its flag missing -> invariant violation -> IMMEDIATE_CRASH. Cleared on close.
+/// O_NONBLOCK for SOCKET fds. Socket numbers are class-encoded ABOVE MAX_FD, so
+/// they never fit FD_NONBLOCK's array: F_SETFL(O_NONBLOCK) on a socket was dropped
+/// and F_GETFL always answered "blocking". Both matter now that a blocking recv
+/// actually waits - answering EAGAIN to a blocking reader is wrong, and blocking a
+/// reader that asked for O_NONBLOCK is worse.
+static SOCK_NONBLOCK: Mutex<alloc::vec::Vec<(u64, bool)>> = Mutex::new(alloc::vec::Vec::new());
+
+/// Is this fd non-blocking? Works for both fd classes.
+fn fd_is_nonblock(fd: u64) -> bool {
+    if (fd as usize) < MAX_FD {
+        let f = fd as usize;
+        return FD_NONBLOCK[f].load(Ordering::Relaxed) || (is_pipe_fd(f) && pipe_is_nonblock(f));
+    }
+    x86_64::instructions::interrupts::without_interrupts(||
+        SOCK_NONBLOCK.lock().iter().any(|&(f, nb)| f == fd && nb))
+}
+
+fn fd_set_nonblock(fd: u64, nb: bool) {
+    if (fd as usize) < MAX_FD {
+        FD_NONBLOCK[fd as usize].store(nb, Ordering::Relaxed);
+        if is_pipe_fd(fd as usize) {
+            pipe_set_nonblock(fd as usize, nb);
+        }
+        return;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    let mut t = SOCK_NONBLOCK.lock();
+    match t.iter_mut().find(|(f, _)| *f == fd) {
+        Some(e) => e.1 = nb,
+        None => t.push((fd, nb)),
+    }
+}
+
+/// Receive from an AF_UNIX socket with POSIX blocking semantics. Without this a
+/// reader with nothing to read got an empty buffer, and an empty recvmsg means
+/// END OF STREAM to every POSIX program: a fork child waiting for a descriptor
+/// over SCM_RIGHTS concluded the socket was closed and gave up before the sender
+/// had written a byte (the gshm2 self-test reproduces it in one page of C).
+///
+/// None = the caller should answer -EAGAIN. The wait is bounded, not because
+/// POSIX says so but because an unbounded one turns a stuck peer into a boot that
+/// hangs with nothing to show; the bound is generous enough that no correct
+/// program reaches it, and it says so on the serial line when it does.
+fn unix_recv_blocking(fd: u64, cap: usize) -> Option<alloc::vec::Vec<u8>> {
+    let deadline = crate::interrupts::ticks() + 3000; // ~30 s of guest time
+    loop {
+        let d = crate::net::unix_fd_recv(fd, cap);
+        if !d.is_empty() || crate::net::unix_fd_at_eof(fd) || scm_pending_for(fd) {
+            return Some(d);
+        }
+        if fd_is_nonblock(fd) || !SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+            return None;
+        }
+        if crate::interrupts::ticks() > deadline {
+            crate::serial_println!("[unix] blocking recv on fd{fd} gave up after 30 s");
+            return None;
+        }
+        yield_reacquire();
+    }
+}
+
+/// Bytes a program has read from INET sockets. The live site loads to
+/// ready=complete with an empty document, so the question is whether its body
+/// ever crossed the socket at all: a few KB means it did not, a few hundred
+/// means it did and was lost above this layer.
+static INET_RX: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static INET_RX_CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+fn note_inet_tx(fd: u64, n: usize) {
+    static CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    static TOTAL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    if n == 0 {
+        return;
+    }
+    let c = CALLS.fetch_add(1, Ordering::Relaxed);
+    let t = TOTAL.fetch_add(n as u64, Ordering::Relaxed) + n as u64;
+    if c < 40 {
+        crate::serial_println!("[inet] fd{fd} -> {} wrote {n} B (sent {t} B in {} writes)",
+            crate::net::sock_peer_desc(fd), c + 1);
+    }
+}
+
+fn note_inet_rx(fd: u64, n: usize) {
+    if n == 0 {
+        return;
+    }
+    let calls = INET_RX_CALLS.fetch_add(1, Ordering::Relaxed);
+    let before = INET_RX.fetch_add(n as u64, Ordering::Relaxed);
+    let after = before + n as u64;
+    if before / 65536 != after / 65536 {
+        let (segs, qd, ooo, old, bad) = crate::net::tcp_drop_report();
+        crate::serial_println!("[tcp] {segs} in, {qd} queue-full, {ooo} held (ahead of a gap), {old} behind, {bad} unparsable, {} recovered, {} card interrupts, {} B queued unread",
+            crate::net::TCP_RECOVERED.load(Ordering::Relaxed),
+            crate::interrupts::NET_MSIX_COUNT.load(Ordering::Relaxed),
+            crate::net::rx_queued_bytes());
+    }
+    if calls < 20 || before / 65536 != after / 65536 {
+        crate::serial_println!("[inet] fd{fd} <- {} read {n} B (total {after} B in {} calls)",
+            crate::net::sock_peer_desc(fd), calls + 1);
+    }
+}
+
+/// memfd SEALS, per file (a seal belongs to the object, not to a descriptor).
+/// (file index, sealable, seal mask).
+///
+/// Unknown fcntl commands used to answer "success", so F_ADD_SEALS silently did
+/// nothing and F_GET_SEALS always reported NO seals. Chrome seals a shared
+/// memory region to prove it can no longer grow, shrink or be made writable,
+/// and CHECKS those seals when it receives one; a region that reports no seals
+/// is refused. That is invisible from outside: the descriptor passes, the
+/// mapping works, and the transfer simply never happens.
+static MEMFD_SEALS: Mutex<alloc::vec::Vec<(usize, bool, u32)>> =
+    Mutex::new(alloc::vec::Vec::new());
+
+const F_SEAL_SEAL: u32 = 0x0001;
+
+/// Mark a memfd as sealable (MFD_ALLOW_SEALING).
+fn seals_register(fi: usize, sealable: bool) {
+    let _g = crate::sched::IfOffGuard::new();
+    let mut t = MEMFD_SEALS.lock();
+    match t.iter_mut().find(|(f, _, _)| *f == fi) {
+        Some(e) => {
+            e.1 = sealable;
+            e.2 = 0;
+        }
+        None => t.push((fi, sealable, 0)),
+    }
+}
+
+/// F_GET_SEALS: the seals currently on the file behind `fd`.
+fn seals_get(fd: u64) -> u64 {
+    let Some(fi) = OPEN_FDS.lock().get(fd as usize).and_then(|s| *s).map(|(fi, _)| fi) else {
+        return (-9i64) as u64; // -EBADF
+    };
+    let _g = crate::sched::IfOffGuard::new();
+    MEMFD_SEALS
+        .lock()
+        .iter()
+        .find(|(f, _, _)| *f == fi)
+        .map(|(_, _, m)| *m as u64)
+        .unwrap_or(0)
+}
+
+/// F_ADD_SEALS: add seals, refusing what a real kernel refuses.
+fn seals_add(fd: u64, add: u32) -> u64 {
+    let Some(fi) = OPEN_FDS.lock().get(fd as usize).and_then(|s| *s).map(|(fi, _)| fi) else {
+        return (-9i64) as u64; // -EBADF
+    };
+    let _g = crate::sched::IfOffGuard::new();
+    let mut t = MEMFD_SEALS.lock();
+    match t.iter_mut().find(|(f, _, _)| *f == fi) {
+        Some(e) => {
+            if !e.1 || e.2 & F_SEAL_SEAL != 0 {
+                return (-1i64) as u64; // -EPERM: not sealable, or already sealed shut
+            }
+            e.2 |= add;
+            0
+        }
+        // A file that was never a memfd cannot be sealed.
+        None => (-22i64) as u64, // -EINVAL
+    }
+}
+
 static FD_NONBLOCK: [core::sync::atomic::AtomicBool; MAX_FD] =
     [const { core::sync::atomic::AtomicBool::new(false) }; MAX_FD];
 /// Per-fd access mode (O_RDONLY=0 / O_WRONLY=1 / O_RDWR=2), captured from the open
@@ -462,7 +656,77 @@ static CDP_DPR_MILLI: core::sync::atomic::AtomicU32 = core::sync::atomic::Atomic
 /// to arrive on the OTHER one, and only a pair knows who that is.
 static SOCK_PAIRS: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
 /// Descriptors in flight: (receiving fd, descriptor). FIFO, delivered by recvmsg.
-static SCM_PENDING: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+/// Descriptors in flight to a socket: (receiving fd, descriptor, MESSAGE id).
+///
+/// The message id is what keeps sendmsg boundaries. Every sendmsg carries its
+/// own ancillary data and a recvmsg returns ONE message, so a receiver with room
+/// for one descriptor gets one - and the next recvmsg gets the next. Without the
+/// id this queue handed over everything pending at once, the receiver's control
+/// buffer held the first, and every descriptor behind it was silently dropped.
+/// Two descriptors sent back to back is not an edge case: it is how Mojo hands a
+/// peer a channel and then a buffer.
+static SCM_PENDING: Mutex<alloc::vec::Vec<(u64, u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+
+/// The KEY a descriptor is queued under: the receiving connection side, encoded
+/// as one number. An fd number is the wrong key - duplicate the socket or pass
+/// it to another process and the same connection has several of them, so a
+/// descriptor queued under one is invisible to a reader holding another. That
+/// is exactly what Mojo does once two peers are introduced: the broker hands
+/// each a socket end and from then on they pass handles DIRECTLY, and every one
+/// of those handles was disappearing.
+fn scm_key(fd: u64) -> u64 {
+    match crate::net::unix_key(fd) {
+        Some((conn, side)) => ((conn as u64) << 1 | side as u64) | (1 << 40),
+        None => fd, // inet sockets keep the old key
+    }
+}
+
+/// Where a descriptor sent on `fd` should be queued.
+fn scm_peer_key(fd: u64) -> Option<u64> {
+    if let Some((conn, side)) = crate::net::unix_peer_key(fd) {
+        return Some(((conn as u64) << 1 | side as u64) | (1 << 40));
+    }
+    sock_peer(fd)
+}
+static SCM_MSG_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+
+/// Bytes still unread from the message a descriptor came with:
+/// (receiving fd, message id, bytes left).
+///
+/// POSIX does not let a read cross the boundary of a message that carries
+/// ancillary data: the descriptor belongs to THOSE bytes. Our byte stream had
+/// no boundaries, so a reader could take several messages in one go and be
+/// handed a descriptor that belongs to a message it has not reached yet. A
+/// receiver that checks "this message should carry a handle" then sees a
+/// malformed one - which is what Mojo does with an introduction.
+static SCM_MSG_BYTES: Mutex<alloc::vec::Vec<(u64, u64, usize)>> =
+    Mutex::new(alloc::vec::Vec::new());
+
+/// How many bytes the OLDEST descriptor-carrying message for `fd` still has.
+/// None when no descriptor is pending, so the read is unbounded as usual.
+fn scm_msg_cap(fd: u64) -> Option<usize> {
+    let _g = crate::sched::IfOffGuard::new();
+    let key = scm_key(fd);
+    let q = SCM_PENDING.lock();
+    let msg = q.iter().find(|&&(f, _, _)| f == key).map(|&(_, _, m)| m)?;
+    drop(q);
+    SCM_MSG_BYTES
+        .lock()
+        .iter()
+        .find(|&&(f, m, _)| f == key && m == msg)
+        .map(|&(_, _, n)| n)
+}
+
+/// Account for bytes taken out of a descriptor-carrying message.
+fn scm_msg_consume(fd: u64, n: usize) {
+    let _g = crate::sched::IfOffGuard::new();
+    let mut t = SCM_MSG_BYTES.lock();
+    let key = scm_key(fd);
+    if let Some(e) = t.iter_mut().find(|(f, _, left)| *f == key && *left > 0) {
+        e.2 = e.2.saturating_sub(n);
+    }
+    t.retain(|&(_, _, left)| left > 0);
+}
 /// One-shot recheck address for the vanishing controllen write (see recvmsg).
 static SCM_CHECK_ADDR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Which process stored SCM_CHECK_ADDR (0 = parent, else child-main task). The
@@ -475,9 +739,21 @@ static SCM_CHECK_OWNER: core::sync::atomic::AtomicUsize = core::sync::atomic::At
 
 /// The other end of a socketpair, if `fd` is one.
 fn sock_peer(fd: u64) -> Option<u64> {
-    SOCK_PAIRS.lock().iter().find_map(|&(a, b)| {
+    // NEWEST pairing first. Socket numbers are reused after close, so an old
+    // entry naming the same number would otherwise answer for the live pair -
+    // and a descriptor sent over the new socket would be queued for a number
+    // nobody is reading. The close path drops the entry too; searching
+    // backwards means a single missed close cannot resurrect a stale peer.
+    SOCK_PAIRS.lock().iter().rev().find_map(|&(a, b)| {
         if a == fd { Some(b) } else if b == fd { Some(a) } else { None }
     })
+}
+
+/// Forget a socket pairing when either end closes, so the number can be reused
+/// without inheriting the old partner.
+fn sock_pair_forget(fd: u64) {
+    let _g = crate::sched::IfOffGuard::new();
+    SOCK_PAIRS.lock().retain(|&(a, b)| a != fd && b != fd);
 }
 
 /// Are descriptors waiting for `fd`? A sendmsg can carry ONLY SCM_RIGHTS
@@ -487,17 +763,23 @@ fn sock_peer(fd: u64) -> Option<u64> {
 /// recvmsg'd, and the child hit its connect deadline. Readiness must count them.
 fn scm_pending_for(fd: u64) -> bool {
     x86_64::instructions::interrupts::without_interrupts(||
-        SCM_PENDING.lock().iter().any(|&(f, _)| f == fd))
+        SCM_PENDING.lock().iter().any(|&(f, _, _)| f == scm_key(fd)))
 }
 
 /// Take the descriptors sent to `fd` (in order).
 fn scm_take(fd: u64) -> alloc::vec::Vec<u64> {
     let _g = crate::sched::IfOffGuard::new();
     let mut q = SCM_PENDING.lock();
+    // ONE message: the oldest still queued for this fd, and only the descriptors
+    // that travelled with it.
+    let key = scm_key(fd);
+    let Some(msg) = q.iter().find(|&&(f, _, _)| f == key).map(|&(_, _, m)| m) else {
+        return alloc::vec::Vec::new();
+    };
     let mut out = alloc::vec::Vec::new();
     let mut i = 0;
     while i < q.len() {
-        if q[i].0 == fd {
+        if q[i].0 == key && q[i].2 == msg {
             out.push(q.remove(i).1);
         } else {
             i += 1;
@@ -514,6 +796,13 @@ pub fn thread_name(t: usize) -> String {
     THREAD_NAMES.lock().iter().find(|(x, _)| *x == t).map(|(_, n)| n.clone())
         .unwrap_or_else(|| String::from("?"))
 }
+/// Set once the frame wait has been abandoned (see the give-up in the pump).
+static CDP_GAVE_UP: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Screencast frames seen so far (the first ones show a page mid-load).
+static HEAP_STEP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static CAST_FRAMES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// Tick at which Page.loadEventFired arrived (0 = not yet).
+static LOAD_FIRED_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CDP_URL: Mutex<String> = Mutex::new(String::new());
 static CDP_SESSION: Mutex<String> = Mutex::new(String::new());
 /// The DOM chrome sent back (empty until it arrives).
@@ -608,6 +897,8 @@ pub fn cdp_install(url: &str) {
     CDP_MARK.store(0, Ordering::Relaxed);
     CDP_TRIES.store(0, Ordering::Relaxed);
     CDP_WAIT_MARK.store(0, Ordering::Relaxed);
+    CAST_FRAMES.store(0, Ordering::Relaxed);
+    LOAD_FIRED_AT.store(0, Ordering::Relaxed);
     CDP_RX.lock().clear();
     CDP_SESSION.lock().clear();
     CDP_DOM.lock().clear();
@@ -865,6 +1156,62 @@ pub fn cdp_pump() {
         let ticks_1000 = waited / 300;
         if ticks_1000 > 0 && CDP_WAIT_MARK.swap(ticks_1000, Ordering::Relaxed) != ticks_1000 {
             crate::serial_println!("[cdp] still waiting for the frame ({} s of guest time)", waited / 100);
+            // Ask the TIMER for a task census on the first few waits. beginFrame
+            // is answered only after every compositor stage completes, so a
+            // renderer whose raster workers never run stalls it silently; the
+            // census names those threads and what they are blocked on. It runs
+            // in interrupt context on purpose - this pump must not take a single
+            // ring3 lock (a dump from here once froze the guest).
+            if matches!(ticks_1000, 6 | 14 | 24 | 40 | 60) {
+                // DID BLINK EVER PAINT? Straight from the renderer, over the
+                // protocol: blink records paint timings in the Performance API and
+                // document.timeline only advances on an animation frame. Both are
+                // renderer-side facts that need no trace file - and the trace file
+                // has no renderer half here (the children never ack BeginTracing).
+                {
+                    let dsid = CDP_SESSION.lock().clone();
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":{},\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"'paint='+performance.getEntriesByType('paint').map(e=>e.name+'@'+Math.round(e.startTime)).join(',')+' timeline='+Math.round(document.timeline.currentTime||-1)+' vis='+document.visibilityState+' ready='+document.readyState+' text='+((document.body&&document.body.innerText)||'').length+' css='+document.styleSheets.length+' imgs='+document.images.length+' res='+performance.getEntriesByType('resource').filter(e=>e.responseEnd>0).length+'/'+performance.getEntriesByType('resource').length+' waiting='+Array.from(document.querySelectorAll('link[rel=stylesheet],script[src],img[src]')).map(n=>(n.href||n.src||'').split('/').slice(-1)[0]).slice(0,4).join(',')\"}}}}", 660 + ticks_1000));
+                }
+                // A ONE-SHOT CAPTURE, now that frames are presented again.
+                // captureScreenshot is a CopyOutputRequest readback; it never
+                // answered while begin-frame-control muzzled frame production,
+                // which is no longer the case (DidPresent climbs). Cheapest
+                // possible way to a picture if the screencast path stays quiet.
+                let dsid = CDP_SESSION.lock().clone();
+                cdp_send(&alloc::format!(
+                    "{{\"id\":65,\"sessionId\":\"{dsid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\"}}}}"));
+            }
+            // A census straddling the driven frame: tick 7 is just before the
+            // first beginFrame, ticks 9 and 11 just after. The syscall counter in
+            // each line turns "alive" into "working": if the renderer's tasks do
+            // not advance across the frame request, the request never reached it.
+            if ticks_1000 <= 3 || ticks_1000 == 7 || ticks_1000 == 9 || ticks_1000 == 11 {
+                crate::sched::CENSUS_REQUEST.store(true, Ordering::Relaxed);
+            }
+            // GIVE UP, on purpose. Waiting forever produces nothing: chrome writes
+            // its trace file on shutdown, so a run that never ends never reports
+            // which frame stage stopped. Close the browser after a generous budget
+            // and let the [trace] summary be the result of the run.
+            if waited >= 20_000 && !CDP_GAVE_UP.swap(true, Ordering::Relaxed) {
+                crate::serial_println!(
+                    "[cdp] no frame after {} s of guest time; closing so the trace is written",
+                    waited / 100);
+                cdp_send("{\"id\":5,\"method\":\"Browser.close\"}");
+                CDP_DRIVE.store(false, Ordering::Relaxed);
+                return;
+            }
+            // The census names address spaces; this names the THREADS inside
+            // them. Together they answer whether the renderer even HAS the
+            // raster workers that a frame waits on. (thread_name/last_syscall
+            // from this context is the same pair the capture dump above uses.)
+            if ticks_1000 == 2 {
+                for t in 0..crate::sched::task_count() {
+                    let (n, a, r) = last_syscall(t);
+                    crate::serial_println!("[names] t{t} {:?} last={n}(a1={a:#x})->{r:#x}",
+                        thread_name(t));
+                }
+            }
             // RECURRING damage while waiting. The capturer resolves its target a beat
             // AFTER the screencast starts (and re-resolves when the sink is lost), and
             // it only learns the source size from a frame submitted while attached: a
@@ -878,8 +1225,148 @@ pub fn cdp_pump() {
                 let dsid = CDP_SESSION.lock().clone();
                 cdp_send(&alloc::format!(
                     "{{\"id\":13,\"sessionId\":\"{dsid}\",\"method\":\"Page.bringToFront\"}}"));
+                // NO one-shot captureScreenshot here. Under begin-frame control
+                // chrome allows ONE frame request at a time, and this capture never
+                // returns on a machine with no natural frame source - so it sat in
+                // that slot forever and every driven frame afterwards was refused
+                // with "Another frame is pending". beginFrame is the only driver now.
+            }
+            // (A futex dump used to run here. It answered its question - the
+            // compositor is NOT stuck, it cycles on a timed wait every 1-2 ticks
+            // like a frame scheduler should - and then froze the machine, because
+            // the pump runs with interrupts enabled and the dump takes the futex
+            // spinlocks. The invariant holds: no ring3 spinlock from this context.)
+            // REBIND THE CAPTURER, once, a few ticks in. The trace counters said
+            // it plainly: the compositor pipeline is healthy (BeginFrame 2493,
+            // Commit 44, Draw 97, Swap 38, Submit 8 with Ack 8) but
+            // CopyOutputRequest is ZERO, and the run holds TWO FrameSinkIds and
+            // surfaces under two different embed tokens. The capturer is bound to
+            // the surface that existed when the screencast started - before the
+            // navigation - while the renderer draws into the one navigation
+            // created. Stop and start it again now that the page is the current
+            // surface, so the capturer resolves onto what is actually being drawn.
+            if ticks_1000 == 4 {
+                let dsid = CDP_SESSION.lock().clone();
+                crate::serial_println!("[cdp] rebinding the capturer + forcing the page foreground");
+                // Tell the page it is active and focused. A renderer that thinks
+                // it is hidden stops producing frames, which is exactly what the
+                // trace shows (JS answers, no new compositor frames follow).
                 cdp_send(&alloc::format!(
-                    "{{\"id\":14,\"sessionId\":\"{dsid}\",\"method\":\"Page.captureScreenshot\",\"params\":{{\"format\":\"png\",\"fromSurface\":false}}}}"));
+                    "{{\"id\":23,\"sessionId\":\"{dsid}\",\"method\":\"Emulation.setFocusEmulationEnabled\",\"params\":{{\"enabled\":true}}}}"));
+                cdp_send(&alloc::format!(
+                    "{{\"id\":24,\"sessionId\":\"{dsid}\",\"method\":\"Page.setWebLifecycleState\",\"params\":{{\"state\":\"active\"}}}}"));
+                cdp_send(&alloc::format!(
+                    "{{\"id\":21,\"sessionId\":\"{dsid}\",\"method\":\"Page.stopScreencast\"}}"));
+                cdp_send(&alloc::format!(
+                    "{{\"id\":22,\"sessionId\":\"{dsid}\",\"method\":\"Page.startScreencast\",\"params\":{{\"format\":\"png\",\"everyNthFrame\":1}}}}"));
+            }
+            // noDisplayUpdates stays FALSE: measured, true suppresses the whole
+            // pipeline (Commit 0, Submit 0, BeginImplFrame 0), while false lets
+            // the driven frame commit, submit, get acked AND produce copy
+            // results. It is the only setting where anything happens at all.
+            // Dirty the page on one tick and drive the frame two ticks later:
+            // Runtime.evaluate runs asynchronously on the renderer main thread,
+            // so a mutation sent in the same breath as the frame has not landed
+            // yet and the frame honestly answers hasDamage=false.
+            if ticks_1000 % 6 == 0 && ticks_1000 >= 6 {
+                let dsid = CDP_SESSION.lock().clone();
+                let did = 1300 + ticks_1000;
+                let colr = 0x204060u32.wrapping_add((ticks_1000 as u32).wrapping_mul(0x3070a0)) & 0xFFFFFF;
+                cdp_send(&alloc::format!(
+                    "{{\"id\":{did},\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"document.body.style.background='#{colr:06x}';document.body.offsetHeight\"}}}}"));
+                // A RESIZE cannot be a no-op: it forces layout and a full repaint,
+                // where a style change alone leaves the compositor with nothing to
+                // report (every driven frame answered hasDamage=false). Alternate
+                // the width so consecutive frames always differ.
+                let w = if (ticks_1000 / 6) % 2 == 0 { 800 } else { 799 };
+                cdp_send(&alloc::format!(
+                    "{{\"id\":{},\"sessionId\":\"{dsid}\",\"method\":\"Emulation.setDeviceMetricsOverride\",\"params\":{{\"width\":{w},\"height\":600,\"deviceScaleFactor\":1,\"mobile\":false}}}}",
+                    1500 + ticks_1000));
+            }
+            if ticks_1000 % 6 == 2 && ticks_1000 >= 8 {
+                let dsid = CDP_SESSION.lock().clone();
+                let cid = 1400 + ticks_1000;
+                // WHAT DOES THE RENDERER THINK IT IS DRAWING? The trace comparison
+                // says raster never executes here: no RasterSource, no raster
+                // buffer, no playback, while the reference has all three. A
+                // recorded display list only exists if there is something laid
+                // out to paint, so ask the page for its viewport, its body size
+                // and whether it considers itself visible. An empty viewport
+                // explains the whole chain at once.
+                if ticks_1000 == 14 {
+                    // Did forcing a redraw change anything? Same question as id 66,
+                    // asked after the renderer was told every layer needs display.
+                    let dsid2 = CDP_SESSION.lock().clone();
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":69,\"sessionId\":\"{dsid2}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"'after paint='+performance.getEntriesByType('paint').length+' timeline='+Math.round(document.timeline.currentTime||-1)\"}}}}"));
+                    // DOES THE RENDERER GET MAIN FRAMES AT ALL? requestAnimationFrame
+                    // callbacks run inside BeginMainFrame, so this asks the renderer
+                    // itself, over the protocol, with no dependence on the trace file
+                    // (whose renderer half never arrives: CrRendererMain=0, v8=0 here
+                    // against 12 and 175 in the reference, while JS demonstrably runs).
+                    // An answer means main frames happen and the wall is later; no
+                    // answer means the renderer never begins a frame.
+                    let dsid = CDP_SESSION.lock().clone();
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":63,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"new Promise(r=>requestAnimationFrame(t=>r('raf@'+Math.round(t))))\",\"awaitPromise\":true}}}}"));
+                    // What does the RENDERER say about its own compositor? With
+                    // --enable-gpu-benchmarking the page can ask directly, which is
+                    // the only renderer-side view left: its trace never reaches us.
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":67,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"(function(){{var g=window.chrome&&window.chrome.gpuBenchmarking;if(!g)return 'no-gpuBenchmarking';var o=[];for(var k in g)o.push(k);return 'keys='+o.join(' ')}})()\"}}}}"));
+                    // Which of the benchmarking levers touch frames at all? The
+                    // full key list does not fit one serial line, so ask for the
+                    // ones whose names concern frames, swaps or rasterisation.
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":70,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"(function(){{var g=window.chrome.gpuBenchmarking,o=[];for(var k in g)if(/frame|swap|commit|raster|draw|composit|display/i.test(k))o.push(k);return o.join(' ')}})()\"}}}}"));
+                    // Ask it the two things that matter, and then FORCE a repaint
+                    // of every layer from inside the renderer. If the compositor is
+                    // there but idle, this is damage it cannot ignore; if there is no
+                    // frame sink, it changes nothing and says so.
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":68,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"(function(){{var g=window.chrome.gpuBenchmarking,r=[];try{{r.push('chan='+g.hasGpuChannel())}}catch(e){{r.push('chan:err')}}try{{r.push('proc='+g.hasGpuProcess())}}catch(e){{r.push('proc:err')}}try{{g.setNeedsDisplayOnAllLayers();r.push('redraw=ok')}}catch(e){{r.push('redraw:'+e)}}return r.join(' ')}})()\"}}}}"));
+                    // What does the page think it has to paint?
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":64,\"sessionId\":\"{dsid}\",\"method\":\"Page.getLayoutMetrics\"}}"));
+                }
+                if ticks_1000 == 8 {
+                    // ASK THE COMPOSITOR ITSELF. The tile manager runs here
+                    // (PrepareTiles and ScheduleTasks climb) but schedules an
+                    // EMPTY task set: no tile ever needs raster. Tiles only exist
+                    // for a picture layer with non-empty bounds that draws
+                    // content, so have the layer tree describe itself. The
+                    // reference rasters exactly one tile for this page.
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":62,\"sessionId\":\"{dsid}\",\"method\":\"LayerTree.enable\"}}"));
+                    cdp_send(&alloc::format!(
+                        "{{\"id\":61,\"sessionId\":\"{dsid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"window.innerWidth+'x'+window.innerHeight+' dpr'+window.devicePixelRatio+' body'+document.body.offsetWidth+'x'+document.body.offsetHeight+' vis'+document.visibilityState+' hidden'+document.hidden\",\"returnByValue\":true}}}}"));
+                }
+                // Trace the syscalls that follow the FIRST driven frame. The
+                // oracle on native Linux shows the tail exactly: mprotect on the
+                // allocator regions, a write to the completion eventfd, then
+                // munmap of the ~1.9 MB screenshot bitmap. Whichever of those
+                // this kernel never reaches is the answer.
+
+                // NO DRIVEN FRAMES. Without --enable-begin-frame-control chrome
+                // produces frames itself, and HeadlessExperimental.beginFrame is
+                // refused; the screencast is the delivery path that worked in run
+                // 33. Kept here, disabled, because the drive path is what a
+                // deterministic frame test will want once frames arrive again.
+                if false {
+                // THE DISCRIMINATOR. Chrome answers every beginFrame after the
+                // first with "Another frame is pending", so ONE frame stays
+                // outstanding forever. A frame WITH a screenshot completes only
+                // once the readback (a CopyOutputRequest) delivers; a frame
+                // without one completes as soon as the display draws. Ask for the
+                // plain frame first: if that answers, the wall is the readback.
+                let params = if ticks_1000 >= 20 {
+                    "\"interval\":16,\"noDisplayUpdates\":false,\"screenshot\":{\"format\":\"png\"}"
+                } else {
+                    "\"interval\":16,\"noDisplayUpdates\":false"
+                };
+                cdp_send(&alloc::format!(
+                    "{{\"id\":{cid},\"sessionId\":\"{dsid}\",\"method\":\"HeadlessExperimental.beginFrame\",\"params\":{{{params}}}}}"));
+                }
             }
             if ticks_1000 % 3 == 0 {
                 // Every third wait-tick: constant damage keeps the renderer so busy
@@ -970,6 +1457,14 @@ pub fn cdp_pump() {
                     "{{\"id\":8,\"sessionId\":\"{s}\",\"method\":\"HeadlessExperimental.enable\"}}"));
                 cdp_send(&alloc::format!(
                     "{{\"id\":6,\"sessionId\":\"{s}\",\"method\":\"Page.enable\"}}"));
+                // What does the NETWORK say about the page's subresources? In the
+                // out-of-process configuration the document arrives (8901 chars of
+                // text) but not one resource ever completes (res=0/0), the load
+                // never finishes and blink will not paint while a render-blocking
+                // stylesheet is pending. These events say whether the responses are
+                // finished, failed, or simply never reported.
+                cdp_send(&alloc::format!(
+                    "{{\"id\":80,\"sessionId\":\"{s}\",\"method\":\"Network.enable\"}}"));
                 // NO second navigation: the page is already loading from argv, and
                 // every extra navigation swaps the frame — each swap costs the
                 // compositor its frame sink, which is exactly the loop the trace shows
@@ -993,6 +1488,15 @@ pub fn cdp_pump() {
         } else if step == 3 && msg.contains("\"id\":3") {
             CDP_STEP.store(4, Ordering::Relaxed);
             CDP_MARK.store(now, Ordering::Relaxed);
+        } else if msg.contains("Page.loadEventFired") && LOAD_FIRED_AT.load(Ordering::Relaxed) == 0 {
+            // Remember WHEN the page finished loading, whatever step we are in:
+            // the screencast handler ships the first frame that comes a beat
+            // after this, instead of counting frames blindly.
+            LOAD_FIRED_AT.store(crate::interrupts::ticks().max(1), Ordering::Relaxed);
+            if step == 4 {
+                crate::serial_println!("[cdp] load event fired — reading the DOM");
+                cdp_ask_dom();
+            }
         } else if step == 4 && msg.contains("Page.loadEventFired") {
             crate::serial_println!("[cdp] load event fired — reading the DOM");
             cdp_ask_dom();
@@ -1056,7 +1560,21 @@ pub fn cdp_pump() {
             }
             match json_str(&msg, "data") {
                 Some(b64) => {
-                    crate::serial_println!("[cast] ★★★ SCREENCAST FRAME: {} base64 chars", b64.len());
+                    // NOT the first frame: the first arrives while the page is still
+                    // loading (stylesheets and webfonts land after it). Ship the first
+                    // frame that comes a settle-beat AFTER Page.loadEventFired - that
+                    // is a statement about the page, not a guessed count. A frame cap
+                    // stays as the backstop for a page whose load event never fires.
+                    let n = CAST_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+                    let loaded_at = LOAD_FIRED_AT.load(Ordering::Relaxed);
+                    let settled = loaded_at != 0
+                        && crate::interrupts::ticks().saturating_sub(loaded_at) >= 200; // ~2 s guest
+                    if !settled && n < 12 {
+                        crate::serial_println!("[cast] frame {n} ({} chars) before the page settled (loaded={}), waiting",
+                            b64.len(), loaded_at != 0);
+                        return;
+                    }
+                    crate::serial_println!("[cast] ★★★ SCREENCAST FRAME {n} (settled={settled}): {} base64 chars", b64.len());
                     let mut i = 0;
                     while i < b64.len() {
                         let end = (i + 512).min(b64.len());
@@ -1071,8 +1589,13 @@ pub fn cdp_pump() {
                 }
                 None => crate::serial_println!("[cast] frame event without data: {}", msg.chars().take(200).collect::<String>()),
             }
-        } else if step == 7 && msg.contains("\"id\":14") && msg.contains("\"data\"") {
-            if let Some(b64) = json_str(&msg, "data") {
+        // ANY capture answer that carries data is the picture we asked for: the
+        // one-shot uses id 14 and each periodic retry a fresh id, so match on the
+        // payload instead of on a number.
+        } else if step == 7 && msg.contains("\"result\"")
+            && (msg.contains("\"data\"") || msg.contains("\"screenshotData\"")) {
+            // beginFrame answers with screenshotData; captureScreenshot with data.
+            if let Some(b64) = json_str(&msg, "screenshotData").or_else(|| json_str(&msg, "data")) {
                 crate::serial_println!("[cast] ★★★ ONE-SHOT CAPTURE ANSWERED: {} base64 chars", b64.len());
                 let mut i = 0;
                 while i < b64.len() {
@@ -1110,7 +1633,11 @@ pub fn cdp_pump() {
             // What happens on the OTHER side of this ack? The capturer must resolve
             // its target and schedule a refresh capture on the viz thread; trace the
             // next syscalls to see whether that thread ever wakes and what it does.
-            SYS_TRACE_LEFT.store(140, Ordering::Relaxed);
+            // Trace OFF here: it fires exactly when the screencast starts, which
+            // is also when a child tends to abort - and its per-syscall lines
+            // interleave INTO chrome's stderr, drowning the CHECK message that
+            // says why. The trace is a debugging aid; the message is evidence.
+            SYS_TRACE_LEFT.store(0, Ordering::Relaxed);
             let dsid = CDP_SESSION.lock().clone();
             cdp_send(&alloc::format!(
                 "{{\"id\":9,\"sessionId\":\"{dsid}\",\"method\":\"Emulation.setDeviceMetricsOverride\",\"params\":{{\"width\":816,\"height\":616,\"deviceScaleFactor\":1,\"mobile\":false}}}}"));
@@ -1164,6 +1691,10 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     drop(pf);
     child_note_open(got[0]); // a fork child's own pipes free on its close/exit
     child_note_open(got[1]);
+    if flags & 0x8_0000 != 0 { // O_CLOEXEC on both ends
+        fd_set_cloexec(got[0] as u64, true);
+        fd_set_cloexec(got[1] as u64, true);
+    }
     // Access mode per pipe end, so fcntl(F_GETFL) reports the truth: chrome creates a
     // pipe and CHECKs each end's access mode (read end O_RDONLY, write end O_WRONLY);
     // a hardcoded O_RDWR for both was the mismatch that IMMEDIATE_CRASHed it.
@@ -1212,6 +1743,20 @@ pub fn fd_kind(fd: u64) -> &'static str {
     } else if crate::net::is_unix_fd(fd) {
         "unix-sock"
     } else if crate::net::is_sock_fd(fd) {
+        {
+            // Is readiness ever ASKED for this socket, and what does it answer?
+            // A response that never arrives and a response nobody waits for look
+            // identical from the byte counters alone.
+            static LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(24);
+            if LEFT.load(Ordering::Relaxed) > 0 {
+                let d = crate::net::sock_peer_desc(fd);
+                if d.ends_with(":443") {
+                    LEFT.fetch_sub(1, Ordering::Relaxed);
+                    crate::serial_println!("[inet] readiness asked for {d}: {}",
+                        crate::net::sock_readable(fd));
+                }
+            }
+        }
         "inet-sock"
     } else if u < MAX_FD && OPEN_DIRS.lock()[u].is_some() {
         "dir"
@@ -1305,9 +1850,22 @@ fn epoll_ctl(epfd: u64, op: u64, fd: u64, ev: u64) -> u64 {
 /// when it has data — an UNKNOWN fd defaults to NOT-ready. (Reporting unknown/regular
 /// fds as always-ready made epoll_wait return a fake-ready fd every call, spinning
 /// chrome's message pump so worker threads never got the CPU — the livelock.)
+/// How often an eventfd was reported READY by epoll, and how often one was
+/// WRITTEN. The oracle strace on native Linux shows the frame-completion signal
+/// travelling over exactly this path: the compositor writes 8 bytes to an
+/// eventfd, the DevTools thread's epoll_wait wakes on it, drains it and writes
+/// the reply. If writes climb while ready-reports stay flat, the wake is lost
+/// here - which would explain a driven frame that completes everywhere except
+/// in the answer.
+pub static EVFD_READY_HITS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static EVFD_IN_EPOLLSET: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 fn epoll_fd_ready(fd: u64) -> bool {
     if crate::net::is_eventfd(fd) {
-        crate::net::eventfd_readable(fd)
+        EVFD_IN_EPOLLSET.fetch_add(1, Ordering::Relaxed);
+        let r = crate::net::eventfd_readable(fd);
+        if r { EVFD_READY_HITS.fetch_add(1, Ordering::Relaxed); }
+        r
     } else if crate::net::is_sock_fd(fd) {
         // AF_INET sockets: TCP data/EOF, a queued LocalDns answer, or a pending
         // accept. Without this arm chrome's poll never saw network readiness at
@@ -1469,6 +2027,14 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
 fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
     if fd >= MAX_FD {
         return None;
+    }
+    // Big writes on the DevTools answer pipe are the frame replies: on native
+    // Linux the beginFrame answer arrives as one 6 KB write followed by a lone
+    // NUL. Seeing (or not seeing) it here separates "chrome never produced the
+    // reply" from "we lost it on the way in".
+    if bytes.len() > 2000 {
+        crate::serial_println!("[cdp-in] fd{fd} large write: {} bytes, head={:?}",
+            bytes.len(), core::str::from_utf8(&bytes[..bytes.len().min(60)]).unwrap_or("?"));
     }
     let _g = crate::sched::IfOffGuard::new();
     if let Some((id, true)) = PIPE_FDS.lock()[fd] {
@@ -2034,6 +2600,69 @@ fn open_low_fd(fi: usize) -> u64 {
     }
 }
 
+/// CLOSE-ON-EXEC descriptors, per owning process (0 = the launched main
+/// process): (owner, fd). POSIX closes these at execve, and chrome LEANS on it:
+/// a re-exec'd child asserts at startup that its descriptor table holds only
+/// what the launcher deliberately passed. We parsed O_CLOEXEC/SOCK_CLOEXEC/
+/// MFD_CLOEXEC everywhere and enforced none of it, so every child inherited a
+/// pile of descriptors it believed were gone and aborted with "Crashing due to
+/// FD ownership violation" (found on real hardware, where a full MP run costs
+/// a minute instead of half an hour).
+static FD_CLOEXEC: Mutex<alloc::vec::Vec<(usize, u32)>> = Mutex::new(alloc::vec::Vec::new());
+
+fn cloexec_owner() -> usize {
+    fork_child_owner(crate::sched::current()).unwrap_or(0)
+}
+
+/// Mark/unmark `fd` close-on-exec for the CURRENT process.
+fn fd_set_cloexec(fd: u64, on: bool) {
+    if fd >= MAX_FD as u64 && !crate::net::is_sock_fd(fd)
+        && !crate::net::is_unix_fd(fd) && !crate::net::is_eventfd(fd) && !is_epoll_fd(fd) {
+        return;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    let o = cloexec_owner();
+    let mut c = FD_CLOEXEC.lock();
+    let hit = c.iter().position(|&(ow, f)| ow == o && f as u64 == fd);
+    match (on, hit) {
+        (true, None) => c.push((o, fd as u32)),
+        (false, Some(i)) => { c.swap_remove(i); }
+        _ => {}
+    }
+}
+
+fn fd_is_cloexec(fd: u64) -> bool {
+    let _g = crate::sched::IfOffGuard::new();
+    let o = cloexec_owner();
+    FD_CLOEXEC.lock().iter().any(|&(ow, f)| ow == o && f as u64 == fd)
+}
+
+/// execve: close every close-on-exec descriptor of this process, exactly as a
+/// real kernel does, before the new image starts.
+fn cloexec_do_exec(owner: usize) {
+    let fds: alloc::vec::Vec<u32> = {
+        let _g = crate::sched::IfOffGuard::new();
+        let mut c = FD_CLOEXEC.lock();
+        let mine: alloc::vec::Vec<u32> = c.iter().filter(|&&(o, _)| o == owner).map(|&(_, f)| f).collect();
+        c.retain(|&(o, _)| o != owner);
+        mine
+    };
+    let n = fds.len();
+    for fd in fds {
+        let fd = fd as u64;
+        // The child's own descriptors really close; an inherited one is only
+        // closed FOR THIS PROCESS (the parent keeps its share) - the same split
+        // the rest of the fd model uses.
+        if !child_close_own(fd) {
+            fd_alias_clear(fd as usize);
+            fork_child_mark_closed(fd);
+        }
+    }
+    if n > 0 {
+        crate::serial_println!("[execve] closed {n} close-on-exec descriptor(s)");
+    }
+}
+
 /// Low fds OPENED BY a fork child, per owner. A child's close of one of ITS OWN
 /// fds really frees the slot (nobody else holds it), and a child's exit frees
 /// whatever it left open. Without this every child open pinned a global slot for
@@ -2298,6 +2927,41 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
     chunk.len() as u64
 }
 
+/// FILES indices of the character devices whose contents are GENERATED, not
+/// stored. They were registered as ordinary 4 KiB files, so a reader ran into
+/// end-of-file after 4096 bytes - and a character device never ends. NSS's
+/// software token seeds its RNG from /dev/urandom and refuses to initialise
+/// when that read comes up short, which is where every TLS handshake stopped.
+static URANDOM_FI: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(usize::MAX);
+static ZERO_FI: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(usize::MAX);
+/// /dev/random, which on Linux is the same generator as /dev/urandom.
+static URANDOM_ALIAS_FI: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(usize::MAX);
+
+/// Serve a generated character device: endless random bytes or endless zeros.
+/// Returns None when `fi` is an ordinary file.
+fn char_device_read(fi: usize, buf: u64, len: usize) -> Option<u64> {
+    if len == 0 {
+        return None;
+    }
+    if fi == URANDOM_FI.load(Ordering::Relaxed) || fi == URANDOM_ALIAS_FI.load(Ordering::Relaxed) {
+        if !in_user_arena(buf, len) || !fill_random(buf, len as u64) {
+            return Some(EFAULT);
+        }
+        return Some(len as u64);
+    }
+    if fi == ZERO_FI.load(Ordering::Relaxed) {
+        let zeros = alloc::vec![0u8; len.min(64 * 1024)];
+        if !copy_to_user(buf, &zeros) {
+            return Some(EFAULT);
+        }
+        return Some(zeros.len() as u64);
+    }
+    None
+}
+
 fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
     if fd >= MAX_FD {
         return u64::MAX;
@@ -2307,6 +2971,10 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
         Some(x) => x,
         None => return u64::MAX,
     };
+    if let Some(n) = char_device_read(fi, buf, len) {
+        drop(fds);
+        return n;
+    }
     if SHARED_ANY.load(Ordering::Relaxed) {
         drop(fds); // sync_shared_region takes FILES/SHARED_MAPS: never nest the fd lock
         sync_shared_region(fi, true); // a shared mapping IS the file: pick up its writes
@@ -3327,6 +3995,7 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
     let user_ss = (sel.user_data.0 | 3) as u64;
     let child_pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     let task = crate::sched::spawn_thread(user_rip, user_rsp, user_cs, user_ss, kstack_top, pml4, fs, saved);
+    set_task_caps(task, effective_caps()); // lock-free read; thread shares its process' rights
     crate::sched::set_ident(task, child_pid as u32, parent_pid as u32);
 
     bg.push(BgProc {
@@ -3768,6 +4437,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             };
             let saved_regs = unsafe { SAVED_REGS };
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, p.pml4, fs, saved_regs);
+            set_task_caps(child, effective_caps()); // thread: same rights
             register_thread_kstack(child, slot);
             p.threads.push(child);
             crate::serial_println!("[thread] clone: pid {} -> thread task {child} (shared address space, own stack/TLS)", p.pid);
@@ -4137,8 +4807,10 @@ fn close_fd_now(a1: u64) -> u64 {
         crate::net::eventfd_close(a1);
         0
     } else if crate::net::is_sock_fd(a1) {
+        sock_pair_forget(a1);
         crate::net::sock_close(a1)
     } else if crate::net::is_unix_fd(a1) {
+        sock_pair_forget(a1);
         crate::net::unix_fd_close(a1)
     } else {
         vfs_close(a1 as usize)
@@ -4197,6 +4869,10 @@ fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
     if oldfd == newfd {
         return newfd;
     }
+    // POSIX: the duplicate does NOT inherit close-on-exec. This is exactly how
+    // a launcher hands a descriptor to its child: open it CLOEXEC, then dup2 it
+    // onto the agreed number so it SURVIVES the exec.
+    fd_set_cloexec(newfd, false);
     let nfd = newfd as usize;
     if nfd >= MAX_FD {
         return (-9i64) as u64; // -EBADF: can't target a class-encoded high fd
@@ -4848,6 +5524,11 @@ static GFMMAP_ELF: &[u8] = include_bytes!("../../userland/glibc/gfmmap");
 // memory. Mojo data pipes (chrome's resource bodies, even in one process) live in
 // such a buffer; a private-copy mmap delivers an empty document with no error.
 static GSHM_ELF: &[u8] = include_bytes!("../../userland/glibc/gshm");
+static GSHM2_ELF: &[u8] = include_bytes!("../../userland/glibc/gshm2");
+static GSCM3_ELF: &[u8] = include_bytes!("../../userland/glibc/gscm3");
+static GEVFD_ELF: &[u8] = include_bytes!("../../userland/glibc/gevfd");
+static GVEC_ELF: &[u8] = include_bytes!("../../userland/glibc/gvec");
+static GNSS_ELF: &[u8] = include_bytes!("../../userland/glibc/gnss");
 // UNLINKED-BUT-OPEN test: an unlinked file must keep serving its open fd and must
 // not disturb any other fd — the contract behind "create, unlink, mmap" anonymous
 // shared memory (how chrome carries a page's bytes to its renderer).
@@ -4977,6 +5658,11 @@ pub fn gsparse_bytes() -> &'static [u8] { GSPARSE_ELF }
 pub fn gfmmap_bytes() -> &'static [u8] { GFMMAP_ELF }
 /// A MAP_SHARED memfd test: two mappings of one memfd must be one memory.
 pub fn gshm_bytes() -> &'static [u8] { GSHM_ELF }
+pub fn gshm2_bytes() -> &'static [u8] { GSHM2_ELF }
+pub fn gscm3_bytes() -> &'static [u8] { GSCM3_ELF }
+pub fn gevfd_bytes() -> &'static [u8] { GEVFD_ELF }
+pub fn gvec_bytes() -> &'static [u8] { GVEC_ELF }
+pub fn gnss_bytes() -> &'static [u8] { GNSS_ELF }
 /// An unlinked-but-open + anonymous-shared-memory test.
 pub fn gunlink_bytes() -> &'static [u8] { GUNLINK_ELF }
 /// A poll()-timeout test: a timeout is a duration, not an instant answer.
@@ -6921,6 +7607,8 @@ fn read_user_strvec(ptr: u64, max: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>
 /// The child arena + PML4 are reused; only their CONTENTS are rebuilt. Returns
 /// only on error — on success it retargets the current task to the new entry.
 fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
+    // POSIX: close-on-exec descriptors are gone the moment the new image starts.
+    cloexec_do_exec(fork_child_owner(crate::sched::current()).unwrap_or(0));
     let _path = user_cstr(path_ptr, 256); // usually "/proc/self/exe"
     let exe_path = CHILD_EXE_PATH.lock().clone();
     if exe_path.is_empty() {
@@ -6940,6 +7628,13 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     let envp_owned = read_user_strvec(envp_ptr, 512);
     let argv: alloc::vec::Vec<&[u8]> = argv_owned.iter().map(|v| v.as_slice()).collect();
     let envp: alloc::vec::Vec<&[u8]> = envp_owned.iter().map(|v| v.as_slice()).collect();
+    // WHICH child is this? Every chrome child is the same binary re-executed, so
+    // argv0 says nothing; --type= is the only thing that names it. Without this,
+    // a per-process measurement cannot tell the renderer from a utility.
+    if let Some(t) = argv.iter().find(|a| a.starts_with(b"--type=")) {
+        crate::serial_println!("[execve] task {} is {}", crate::sched::current(),
+            alloc::string::String::from_utf8_lossy(t));
+    }
 
     // The child's arena (its VA is in the swapped-in globals; Cr3 is the child's,
     // so this VA is mapped to the child's own frames).
@@ -7077,6 +7772,7 @@ fn do_glibc_fork() -> u64 {
     let cs = (sel.user_code.0 | 3) as u64;
     let ss = (sel.user_data.0 | 3) as u64;
     let child = crate::sched::spawn_thread(urip, ursp, cs, ss, kstack_top, pml4, fs, sregs);
+    set_task_caps(child, effective_caps()); // fork child: inherits the parent's rights
     if child == usize::MAX {
         free_thread_kstack_slot(slot);
         return (-11i64) as u64;
@@ -7085,6 +7781,21 @@ fn do_glibc_fork() -> u64 {
     let pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     GLIBC_FORK_CHILDREN.lock().push((pid, child, pml4, child_arena, arena_frames));
     child_mem_snapshot(child); // the child inherits the parent's demand-state
+    // The child inherits the fd table INCLUDING its close-on-exec flags, so it
+    // inherits the marks too. Without this the marks stayed on the parent and a
+    // child's execve closed nothing (its own opens happen after exec).
+    {
+        let _g = crate::sched::IfOffGuard::new();
+        let parent = fork_child_owner(crate::sched::current()).unwrap_or(0);
+        let mut c = FD_CLOEXEC.lock();
+        let inherited: alloc::vec::Vec<u32> =
+            c.iter().filter(|&&(o, _)| o == parent).map(|&(_, f)| f).collect();
+        for fd in inherited {
+            if !c.iter().any(|&(o, f)| o == child && f == fd) {
+                c.push((child, fd));
+            }
+        }
+    }
     // Snapshot which LOW fd numbers are open right now: the child inherits these,
     // so a later parent close of one must not free the number (see close(3)).
     {
@@ -7667,6 +8378,7 @@ pub fn spawn_glibc_persistent(
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
     let (main_slot, main_kstack) = alloc_thread_kstack()?;
     let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
+    set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
     PERSIST_ARENA.store(arena, Ordering::Relaxed);
@@ -7737,6 +8449,27 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
 /// that directory, the /dev nodes its forked child redirects stdio to before execve,
 /// and the local demo page. One place, so a desktop launch and a boot-phase run can
 /// never drift apart.
+/// The character devices every POSIX program expects. They used to be staged
+/// only when chrome was launched from the desktop, so a program run any other
+/// way found no /dev/urandom at all - and a crypto library that cannot open it
+/// reports a generic "device error" and nothing more.
+pub fn register_device_files() {
+    if URANDOM_FI.load(Ordering::Relaxed) != usize::MAX {
+        return; // already registered
+    }
+    register_file("/dev/null", alloc::vec::Vec::new());
+    // /dev/zero and /dev/urandom are GENERATED on read (see char_device_read); the
+    // bytes registered here only give them an entry and a plausible size.
+    register_file("/dev/zero", alloc::vec![0u8; 4096]);
+    ZERO_FI.store(FILES.lock().len() - 1, Ordering::Relaxed);
+    register_file("/dev/urandom", (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect());
+    URANDOM_FI.store(FILES.lock().len() - 1, Ordering::Relaxed);
+    register_file("/dev/random", alloc::vec::Vec::new());
+    let random_fi = FILES.lock().len() - 1;
+    let _ = random_fi; // /dev/random shares urandom's generator below
+    URANDOM_ALIAS_FI.store(random_fi, Ordering::Relaxed);
+}
+
 pub fn chrome_stage_files() {
     // Name resolution for a REAL page load: slirp's DNS proxy lives on 10.0.2.3;
     // /etc/hosts pins euro-os.eu as a deterministic fallback while the UDP DNS
@@ -7752,9 +8485,7 @@ pub fn chrome_stage_files() {
     register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", fc_dejavu_cache());
     register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-11", fc_dejavu_cache11());
     register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n</fontconfig>\n".to_vec());
-    register_file("/dev/null", alloc::vec::Vec::new());
-    register_file("/dev/zero", alloc::vec![0u8; 4096]);
-    register_file("/dev/urandom", (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect());
+    register_device_files();
     register_file("/tmp/euro.html", include_bytes!("euro_page.html").to_vec());
     // /etc/localtime: every chrome log line formats a timestamp, localtime_r takes
     // glibc's tz lock and reads this file on first use — and the lock at
@@ -7774,17 +8505,24 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // route while the X event route depends on a glib-pump race.
     b"--remote-debugging-pipe",
     b"--disable-gpu", b"--use-gl=disabled", b"--disable-vulkan",
-    // --single-process stays the DEFAULT (the proven mode). The C1 multi-process
-    // experiment (2026-08-28, remove this flag to reproduce) got real forks
-    // working: two 256 MiB children (pid 1000/1001) live with their own PML4s
-    // once the process pool holds 640 MiB. Remaining wall: the child goes Ready
-    // but silent after its post-fork rt_sigaction sweep (Mojo handshake never
-    // completes), the network-service child crashes later, and child arenas are
-    // not recycled into the pool on exit. See docs/SPRINT-PLAN-CHROMIUM.md.
-    // Shipping default is single-process (proven). Remove --single-process to
-    // reproduce the multi-process work; the watchdog-off flags then matter
-    // (under TCG the child's init outruns chrome's own GpuWatchdog timeout).
-    b"--no-zygote", b"--single-process", b"--disable-dev-shm-usage",
+    // GPU IN PROCESS, exactly like the measured-stable headless configuration:
+    // the renderer and utilities stay out of process (that is where site
+    // isolation lives), while viz runs in the browser. A separate gpu-process
+    // child dies reproducibly ~1685 syscalls in (census: t30 Dead, twice), and
+    // without viz no frame sink is ever handed out - the window froze on its
+    // first composite and the renderer never even forked. Hunting that crash is
+    // its own thread; this is the configuration that demonstrably works.
+    b"--in-process-gpu",
+    // MULTI-PROCESS is the default since 2026-09-04, matching the boot test.
+    // What stood in its way is fixed and measured: descriptors between two
+    // CHILDREN were keyed by fd number and silently vanished, so no data-pipe
+    // ring was ever shared between siblings (commit 370b748); the boot test now
+    // delivers a full render of the live site three runs out of three. The C1
+    // walls from 2026-08-28 (silent child, crashing network service) fell with
+    // the same family of fixes: blocking recv, wait4, endpoint refcounts,
+    // eventfd sharing, SCM message boundaries. Add --single-process back here
+    // to bisect against the old mode.
+    b"--no-zygote", b"--disable-dev-shm-usage",
     b"--disable-gpu-watchdog", b"--disable-hang-monitor",
     b"--user-data-dir=/tmp/cr", b"--disable-crash-reporter",
     b"--disable-crashpad-for-testing", b"--disable-breakpad",
@@ -8161,6 +8899,7 @@ fn glibc_disk_launch(
         None => return Err("(no kernel stack)"),
     };
     let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
+    set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
 
@@ -8201,6 +8940,33 @@ pub fn run_glibc_disk(
         iters += 1;
         if iters % 64 == 0 {
             cdp_pump(); // DevTools conversation with a --remote-debugging-pipe browser
+        }
+        // HEAP WATCH. Full desktop chrome in multi-process mode OOM-panicked the
+        // kernel heap twice (a 512 KiB allocation failed), and 128 MiB more heap
+        // changed nothing - so something grows with the WORK, not with the boot.
+        // Report usage each ~64 MiB step plus the biggest heap consumers we own,
+        // so the panic names its cause beforehand instead of afterwards.
+        {
+            let (used, _free) = crate::allocator::stats();
+            let step = (used >> 26) as u32; // 64 MiB steps
+            let prev = HEAP_STEP.swap(step, Ordering::Relaxed);
+            if step > prev {
+                let files: usize = FILES.lock().iter().map(|(p, d)| p.len() + d.len()).sum();
+                let pipes: usize = PIPES.lock().iter().map(|p| p.len()).sum();
+                crate::serial_println!(
+                    "[heap] {} MiB used | FILES {} MiB | pipes {} KiB",
+                    used >> 20, files >> 20, pipes >> 10);
+            }
+        }
+        // Keep the NETWORK moving while a program runs. Without this the stack
+        // only advances when the program itself polls a socket, so acknowledgements
+        // are late, the peer retransmits, and an in-order receive path throws away
+        // everything after the gap.
+        if iters % 8 == 0 {
+            crate::net::drain_rx(); // cheap: keeps the NIC ring from overrunning
+        }
+        if iters % 64 == 0 {
+            crate::net::pump_all();
         }
         // Launcher heartbeat: proof of life for the OUTSIDE watchdog, on the REAL
         // clock (RTC). Neither iterations nor guest ticks can pace this: under heavy
@@ -8289,6 +9055,10 @@ pub fn run_glibc_disk(
             crate::serial_println!("[stall] snap {snaps} ({iters} iters): +{} syscalls +{} futex +{} epoll, ticks {}->{} ({}) | threads={}",
                 seq - prev_seq, fx - prev_futex, ep - prev_epoll, prev_tick, tick,
                 if tick == prev_tick { "TIMER DEAD" } else { "ticking" }, GLIBC_THREADS.lock().len());
+            crate::serial_println!("[evfd] writes={} epoll-checks={} epoll-ready={}",
+                crate::net::EVENTFD_WRITES.load(Ordering::Relaxed),
+                EVFD_IN_EPOLLSET.load(Ordering::Relaxed),
+                EVFD_READY_HITS.load(Ordering::Relaxed));
             crate::sched::dump_states();
             prev_seq = seq; prev_futex = fx; prev_epoll = ep; prev_tick = tick;
             snaps += 1;
@@ -8522,6 +9292,7 @@ pub fn run_glibc(
     // pthread workers are scheduler siblings, so blocking + preemption + waking
     // all work — unlike a boot-task excursion, which starved.
     let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
+    set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
     crate::serial_println!(
@@ -9192,6 +9963,12 @@ pub fn dump_kernel_profile() {
 /// Called from the timer tick with the interrupted ring-3 instruction pointer.
 /// Lock-free on purpose: it runs in interrupt context, on the stack of the very
 /// thread whose locks it must never wait for.
+/// Timer ticks sampled with this task in ring 3: its share of the CPU. A census
+/// that shows only states cannot tell an idle thread from a starved one.
+pub fn task_ticks(task: usize) -> u64 {
+    if task < MAX_SAMPLED_TASKS { TASK_TICKS[task].load(Ordering::Relaxed) } else { 0 }
+}
+
 pub fn sample_user_rip(task: usize, rip: u64) {
     if task < MAX_SAMPLED_TASKS {
         TASK_TICKS[task].fetch_add(1, Ordering::Relaxed);
@@ -9331,12 +10108,65 @@ pub fn dump_threads_now(why: &str) {
     dump_rip_profile();
 }
 
+/// Syscalls executed per task, so a census can tell a process that is WORKING
+/// from one that is merely alive. A plain relaxed add per syscall: no lock, so
+/// it is safe to read from the timer tick that prints the census.
+pub static SYSCALLS_PER_TASK: [core::sync::atomic::AtomicU64; 128] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const Z: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    [Z; 128]
+};
+
+/// Log every syscall that FAILS while set. A library that reports a generic
+/// "device error" and nothing else (NSS: CKR_DEVICE_ERROR) is best asked what it
+/// tried and was refused. Bounded, and off unless a test turns it on.
+pub static TRACE_FAILS: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+static TRACE_FAILS_LEFT: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
+/// Start logging failing syscalls, for at most `budget` of them.
+pub fn trace_failures(budget: u32) {
+    TRACE_FAILS_LEFT.store(budget, Ordering::Relaxed);
+    TRACE_FAILS.store(budget > 0, Ordering::Relaxed);
+}
+
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    {
+        let t = crate::sched::current();
+        if t < 128 {
+            SYSCALLS_PER_TASK[t].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    if TRACE_FAILS.load(Ordering::Relaxed) {
+        let r = linux_dispatch_inner_traced(num, a1, a2, a3, a4, a5);
+        let sr = r as i64;
+        if (-4096..0).contains(&sr) && TRACE_FAILS_LEFT.fetch_sub(1, Ordering::Relaxed) > 0 {
+            // Name the FILE for path-taking calls: "openat failed" says nothing,
+            // "openat /dev/urandom failed" says everything.
+            let raw = match num {
+                2 | 4 | 6 | 21 | 87 | 89 => user_cstr(a1, 128),
+                257 | 262 | 268 | 316 | 332 => user_cstr(a2, 128),
+                _ => alloc::vec::Vec::new(),
+            };
+            let path = alloc::string::String::from_utf8_lossy(&raw);
+            if path.is_empty() {
+                crate::serial_println!("[fail] syscall {num}({a1:#x}, {a2:#x}, {a3:#x}) = {sr}");
+            } else {
+                crate::serial_println!("[fail] syscall {num} {path:?} = {sr}");
+            }
+        }
+        return r;
+    }
     // Per-process isolation: the swapped globals FOLLOW the running task (see
     // GLOBALS_OWNER). One ensure at entry loads this process' state if another
     // process' was in; nothing swaps back at exit, so a syscall that blocks
     // mid-arm stays consistent and the next entrant fixes ownership itself.
     ensure_globals_for_current();
+    linux_dispatch_swapped(num, a1, a2, a3, a4, a5)
+}
+
+fn linux_dispatch_inner_traced(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     linux_dispatch_swapped(num, a1, a2, a3, a4, a5)
 }
 
@@ -9391,11 +10221,12 @@ fn linux_dispatch_swapped(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64)
     if SYS_TRACE_LEFT.load(Ordering::Relaxed) == 0 {
         let r = linux_dispatch_inner(num, a1, a2, a3, a4, a5);
         msc_complete(r); // the fast path is the common one — the ring must fill here too
-        let chk2 = SCM_CHECK_ADDR.load(Ordering::Relaxed);
-        if chk2 != 0 {
-            crate::serial_println!("[scm] post-dispatch ({num}): controllen at {chk2:#x} reads {}",
-                read_user::<u64>(chk2).unwrap_or(u64::MAX));
-        }
+        // (The post-dispatch controllen probe lived here. It read a STORED user
+        // address on whatever syscall came next, which under the per-process
+        // model can belong to a different process: the demand handler rejects
+        // it, the kernel dereference faults at ring 0 and the machine halts.
+        // KVM on real hardware reproduced that in minutes. The vanishing-
+        // controllen bug it was built for is long fixed, so it is gone.)
         return r;
     }
     let r = linux_dispatch_inner(num, a1, a2, a3, a4, a5);
@@ -9553,7 +10384,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     Some(v) => v,
                     None => return EFAULT,
                 };
-                crate::net::sock_send(a1, &bytes)
+                { note_inet_tx(a1, bytes.len()); crate::net::sock_send(a1, &bytes) }
             } else if crate::net::is_unix_fd(a1) {
                 // write() to an AF_UNIX socket.
                 let bytes = match copy_from_user(a2, a3 as usize) {
@@ -9577,9 +10408,42 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         39 => 1,  // getpid()
         22 => pipe_create2(a1, 0),   // pipe(fds): always blocking
         293 => pipe_create2(a1, a2), // pipe2(fds, flags): honour O_NONBLOCK
-        213 | 291 => epoll_create(),          // epoll_create(size) / epoll_create1(flags)
-        233 => epoll_ctl(a1, a2, a3, a4),     // epoll_ctl(epfd, op, fd, *event)
-        232 => epoll_wait(a1, a2, a3, a4),    // epoll_wait(epfd, *events, max, timeout)
+        213 | 291 => { // epoll_create(size) / epoll_create1(flags)
+            let fd = epoll_create();
+            // EPOLL_CLOEXEC (0x80000) on epoll_create1 only; epoll_create's arg is a size.
+            if num == 291 && (fd as i64) > 0 && a1 & 0x8_0000 != 0 { fd_set_cloexec(fd, true); }
+            fd
+        }
+        233 => {
+            // Which NETWORK sockets does the program actually watch? The TLS
+            // connection here reads the server's first flight and then goes silent,
+            // and readiness for it is never even asked - so the question is whether
+            // it was ever registered for polling at all.
+            if crate::net::is_sock_fd(a3) {
+                static LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(16);
+                if LEFT.fetch_sub(1, Ordering::Relaxed) > 0 {
+                    crate::serial_println!("[inet] epoll_ctl op={a2} fd{a3} ({})",
+                        crate::net::sock_peer_desc(a3));
+                }
+            }
+            epoll_ctl(a1, a2, a3, a4)
+        }
+        232 => {
+            // WHAT IS THE COMPOSITOR WAITING FOR? In the out-of-process renderer
+            // that thread wakes about twice per measurement and never produces a
+            // frame, even after the page forces every layer to need display. Its
+            // epoll timeout and result say whether it is parked on an infinite
+            // wait (a lost wakeup) or cycling on a timeout with nothing to do.
+            let r = epoll_wait(a1, a2, a3, a4);
+            if thread_name(crate::sched::current()) == "Compositor" {
+                static LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(40);
+                if LEFT.fetch_sub(1, Ordering::Relaxed) > 0 {
+                    crate::serial_println!("[compo] epoll_wait(ep={a1}, max={a3}, timeout={}) = {}",
+                        a4 as i64, r as i64);
+                }
+            }
+            r
+        }
         281 => epoll_wait(a1, a2, a3, a4),    // epoll_pwait(epfd, *events, max, timeout, sigmask)
         4 | 6 => {
             // stat(path, statbuf) / lstat(path, statbuf): a path-based stat (chrome
@@ -9982,6 +10846,12 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // buffers became private zero pages: a page's bytes never reached its
             // renderer and every document came up EMPTY, with no error anywhere.
             let a5 = a5 as u32 as u64; // truncate exactly like the kernel ABI defines
+            // Re-resolve the per-process alias HERE too. mmap's fd argument arrives in
+            // r8 and is truncated to 32 bits only at this point, so an alias resolved on
+            // the untruncated value at dispatch entry can miss: a child that dup2'd its
+            // shared-memory segment onto fd 6 then mapped pack-file bytes as shared
+            // memory ("Corruption detected in shared-memory segment").
+            let a5 = unalias_fd(a5);
             let file_backed = a4 & MAP_ANONYMOUS == 0 && (a5 as usize) < MAX_FD && a5 != 0xFFFF_FFFF;
 
             // MAP_SHARED of an in-RAM file (memfd/tmpfs) = SHARED memory: every mapping
@@ -10002,7 +10872,8 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 if fi < DISK_FI_BASE || fi == WAD_FI || fi == PROC_MEM_FI {
                     let off = unsafe { recover_mmap_offset() } as usize;
                     if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
-                        crate::serial_println!("[shm] mmap MAP_SHARED attempt: {} off={off} len={len}", fi_path(fi));
+                        crate::serial_println!("[shm] MAP_SHARED fi={fi} len={len} own={} {}",
+                            fork_child_owner(crate::sched::current()).unwrap_or(0), fi_path(fi));
                     }
                     // With demand paging available, hand out a FRESH address range per
                     // mapping and let it fault onto the file's shared frames. Distinct
@@ -10104,7 +10975,18 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // base to its own size: chrome's PartitionAlloc reserves its GigaCage
                 // pools this way and CHECK-fails on an unaligned base. Aligning here
                 // lets its first attempt succeed instead of over-allocating 2x to trim.
-                let align: u64 = if len >= (1 << 30) && len.is_power_of_two() { len as u64 } else { 4096 };
+                // A large power-of-two reservation gets at least 4 GiB alignment, not
+                // just its own size. V8's pointer compression addresses its heap by
+                // the low 32 bits of a pointer, so the cage BASE must be 4 GiB
+                // aligned - and it checks. Given 1 GiB-aligned answers, the renderer
+                // main thread sat in a visible loop: mmap 1 GiB at a 4 GiB-aligned
+                // hint, name it with prctl(PR_SET_VMA), unmap it, try another hint.
+                // It never ran a main frame or acked BeginTracing while doing that.
+                let align: u64 = if len >= (1 << 30) && len.is_power_of_two() {
+                    core::cmp::max(len as u64, 1u64 << 32)
+                } else {
+                    4096
+                };
                 let mut start = DEMAND_NEXT.load(Ordering::Relaxed);
                 start = (start + (align - 1)) & !(align - 1);
                 let new_next = start + len;
@@ -10299,7 +11181,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 }
                 let total = buf.len() as u64;
                 if crate::net::is_unix_fd(a1) { crate::net::unix_fd_send(a1, &buf); }
-                else { crate::net::sock_send(a1, &buf); }
+                else { note_inet_tx(a1, buf.len()); crate::net::sock_send(a1, &buf); }
                 return total;
             }
             let to_file = a1 != 1 && a1 != 2;
@@ -10360,17 +11242,46 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 if data.is_empty() && !crate::net::sock_eof(a1) {
                     return (-11i64) as u64; // -EAGAIN, not EOF (see recvfrom)
                 }
+                if data.is_empty() {
+                    // END OF STREAM on a network socket. A page that loads to
+                    // ready=complete with an EMPTY document is what a premature EOF
+                    // looks like from blink's side: the response simply ended.
+                    static EOFS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(8);
+                    if EOFS.fetch_sub(1, Ordering::Relaxed) > 0 {
+                        crate::serial_println!("[inet] fd{a1} <- {} EOF (run total {} B)",
+                            crate::net::sock_peer_desc(a1), INET_RX.load(Ordering::Relaxed));
+                    }
+                }
+                note_inet_rx(a1, data.len());
                 if !copy_to_user(a2, &data) {
                     return EFAULT;
                 }
                 data.len() as u64
             } else if crate::net::is_unix_fd(a1) {
-                let data = crate::net::unix_fd_recv(a1, a3 as usize);
+                // A blocking fd WAITS; only a fd that asked for O_NONBLOCK gets
+                // -EAGAIN. That distinction only became possible once O_NONBLOCK was
+                // tracked for socket fd numbers at all (they sit above MAX_FD and
+                // fell outside the flag table, so every socket read back "blocking"
+                // and was served as if it were not).
+                // Same boundary as recvmsg: a read must not swallow the bytes a
+                // pending descriptor belongs to, or the next recvmsg gets the
+                // handle without its message.
+                let want = match scm_msg_cap(a1) {
+                    Some(n) if n > 0 => (a3 as usize).min(n),
+                    _ => a3 as usize,
+                };
+                let data = match unix_recv_blocking(a1, want) {
+                    Some(d) => d,
+                    None => return (-11i64) as u64, // -EAGAIN: caller asked not to wait
+                };
+                if !data.is_empty() {
+                    scm_msg_consume(a1, data.len());
+                }
                 if data.is_empty() {
                     if crate::net::unix_fd_at_eof(a1) {
                         return 0; // peer closed + drained: POSIX EOF
                     }
-                    return (-11i64) as u64; // -EAGAIN: non-blocking, no data (NOT EOF)
+                    return (-11i64) as u64;
                 }
                 if !copy_to_user(a2, &data) {
                     return EFAULT;
@@ -10522,32 +11433,41 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
         }
         61 => {
-            // wait4(pid, *status, options, *rusage): NON-BLOCKING reap of a glibc
-            // fork child (chrome always passes WNOHANG from its child watcher).
-            // a1 = pid or -1 (any); returns 0 when nothing is reapable yet.
+            // wait4(pid, *status, options, *rusage): reap a glibc fork child.
+            // WNOHANG (chrome's child watcher always passes it) returns 0 when
+            // nothing is reapable; WITHOUT it POSIX says wait, and a caller that
+            // waits for its child's exit code got 0 back and read it as failure.
+            // Bounded like the blocking recv, for the same reason: a stuck child
+            // should leave a line on the serial port, not a boot that never ends.
             let want = a1 as i64;
-            let mut ce = GLIBC_CHILD_EXITS.lock();
-            let idx = ce.iter().position(|&(p, _)| want == -1 || p == want as u64);
-            match idx {
-                Some(i) => {
+            let wnohang = a3 & 1 != 0;
+            let deadline = crate::interrupts::ticks() + 6000; // ~60 s of guest time
+            loop {
+                let mut ce = GLIBC_CHILD_EXITS.lock();
+                if let Some(i) = ce.iter().position(|&(p, _)| want == -1 || p == want as u64) {
                     let (cpid, status) = ce.remove(i);
                     drop(ce);
                     if a2 != 0 && !write_user(a2, status) {
                         return EFAULT;
                     }
                     crate::serial_println!("[wait4] reaped glibc child pid {cpid} status={status:#x}");
-                    cpid
+                    return cpid;
                 }
-                None => {
-                    // Nothing exited. ECHILD when the pid does not exist at all,
-                    // else 0 ("still running", chrome polls again).
-                    if want > 0
-                        && !GLIBC_FORK_CHILDREN.lock().iter().any(|&(p, _, _, _, _)| p == want as u64)
-                    {
-                        return (-10i64) as u64; // -ECHILD
-                    }
-                    0
+                drop(ce);
+                // Nothing exited. ECHILD when the pid does not exist at all.
+                if want > 0
+                    && !GLIBC_FORK_CHILDREN.lock().iter().any(|&(p, _, _, _, _)| p == want as u64)
+                {
+                    return (-10i64) as u64; // -ECHILD
                 }
+                if wnohang || !SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                    return 0; // "still running", the caller polls again
+                }
+                if crate::interrupts::ticks() > deadline {
+                    crate::serial_println!("[wait4] blocking wait for pid {want} gave up after 60 s");
+                    return 0;
+                }
+                yield_reacquire();
             }
         }
         62 => {
@@ -10655,9 +11575,47 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 return (-22i64) as u64; // -EINVAL
             }
             match crate::net::eventfd_create(a1) {
-                Some(fd) => fd,
+                Some(fd) => {
+                    if a2 & 0x8_0000 != 0 { fd_set_cloexec(fd, true); } // EFD_CLOEXEC
+                    fd
+                }
                 None => (-24i64) as u64, // -EMFILE
             }
+        }
+        271 => {
+            // ppoll(fds, nfds, *timespec, *sigmask, sigsetsize): poll with a
+            // nanosecond timeout. Real chrome's message pump uses THIS, not
+            // poll: the reference run on native Linux calls it 251 times while
+            // this kernel never saw it, because ENOSYS made glibc fall back.
+            // Same readiness logic, so convert the timespec to milliseconds and
+            // hand it to poll. A null timespec means "wait indefinitely" (-1);
+            // signals are not delivered here, so the mask is irrelevant.
+            let ms: u64 = if a3 == 0 {
+                (-1i64) as u64
+            } else {
+                let sec: u64 = read_user(a3).unwrap_or(0);
+                let nsec: u64 = read_user(a3 + 8).unwrap_or(0);
+                sec.saturating_mul(1000).saturating_add(nsec / 1_000_000)
+            };
+            return linux_dispatch_inner(7, a1, a2, ms, 0, 0);
+        }
+        80 => {
+            // chdir(path): the process working directory. Every path this kernel
+            // resolves is absolute, so there is nothing to change - but a real
+            // kernel answers, and a program that checks the result should not be
+            // told the call does not exist.
+            0
+        }
+        140 => {
+            // getpriority(which, who): nothing here is renice'd, so report the
+            // default. Linux returns 20 - nice, i.e. 20 for nice 0.
+            20
+        }
+        203 => {
+            // sched_setaffinity(pid, len, *mask): accepted and ignored. Pinning a
+            // thread to a core is advisory, and refusing it with ENOSYS made
+            // chrome log a failure for something it does not depend on.
+            0
         }
         7 => {
             // poll(fds, nfds, timeout): report readiness. Each pollfd is 8 bytes
@@ -10884,6 +11842,14 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         return EFAULT;
                     }
                     SOCK_PAIRS.lock().push((a, b)); // so SCM_RIGHTS knows the other end
+                    if a2 & 0x800 != 0 { // SOCK_NONBLOCK on both ends
+                        fd_set_nonblock(a, true);
+                        fd_set_nonblock(b, true);
+                    }
+                    if a2 & 0x8_0000 != 0 { // SOCK_CLOEXEC on both ends
+                        fd_set_cloexec(a, true);
+                        fd_set_cloexec(b, true);
+                    }
                     0
                 }
                 None => (-24i64) as u64, // -EMFILE
@@ -10901,12 +11867,16 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     crate::serial_println!("[sockfam] socket(domain={}, type={typ})", a1);
                 }
             }
-            match (a1, typ) {
+            let fd = match (a1, typ) {
                 (2, 1) => crate::net::sock_open(false), // AF_INET TCP
                 (2, 2) => crate::net::sock_open(true),  // AF_INET UDP
                 (1, 1) => crate::net::unix_socket(),    // AF_UNIX stream (local IPC / X)
                 _ => (-1i64) as u64,
+            };
+            if (fd as i64) > 0 && a2 & 0x8_0000 != 0 {
+                fd_set_cloexec(fd, true); // SOCK_CLOEXEC
             }
+            fd
         }
         42 => {
             // connect(fd, *sockaddr, addrlen) — dispatch on the address family @0..2.
@@ -10976,13 +11946,18 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         }
                     }
                 }
-                crate::net::sock_send(a1, &bytes)
+                { note_inet_tx(a1, bytes.len()); crate::net::sock_send(a1, &bytes) }
             }
         }
         45 => {
             // recvfrom(fd, buf, len, flags, src, srclen). xcb reads the X reply here.
             let data = if crate::net::is_unix_fd(a1) {
-                crate::net::unix_fd_recv(a1, a3 as usize)
+                // Blocking semantics, as in recvmsg: a reader that did not ask for
+                // O_NONBLOCK waits for its bytes instead of being told EOF.
+                match unix_recv_blocking(a1, a3 as usize) {
+                    Some(d) => d,
+                    None => return (-11i64) as u64,
+                }
             } else {
                 crate::net::sock_recv(a1, a3 as usize)
             };
@@ -10997,6 +11972,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // the peer closed, and every fresh connection was discarded as dead.
             if data.is_empty() && crate::net::is_sock_fd(a1) && !crate::net::sock_eof(a1) {
                 return (-11i64) as u64;
+            }
+            if crate::net::is_sock_fd(a1) {
+                note_inet_rx(a1, data.len());
             }
             if !copy_to_user(a2, &data) {
                 return EFAULT;
@@ -11029,7 +12007,17 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     sock_peer(a1));
             }
             if control != 0 && controllen >= 16 {
-                if let Some(peer) = sock_peer(a1) {
+                // One id for THIS sendmsg: every descriptor in its control data
+                // belongs to the same message, and the receiver gets them together
+                // and separately from the next message's.
+                let msg_id = SCM_MSG_SEQ.fetch_add(1, Ordering::Relaxed);
+                if let Some(peer) = scm_peer_key(a1) {
+                    {
+                        // The bytes this message carries: a reader must not take
+                        // more than these before it has taken the descriptor.
+                        let _g = crate::sched::IfOffGuard::new();
+                        SCM_MSG_BYTES.lock().push((peer, msg_id, buf.len()));
+                    }
                     let mut off = 0usize;
                     while off + 16 <= controllen {
                         let clen = read_user::<u64>(control + off as u64).unwrap_or(0) as usize;
@@ -11046,7 +12034,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                                 if fd >= 0 {
                                     let dup = dup_fd(fd as u64);
                                     if (dup as i64) >= 0 {
-                                        SCM_PENDING.lock().push((peer, dup));
+                                        SCM_PENDING.lock().push((peer, dup, msg_id));
                                         if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
                                             crate::serial_println!("[scm] fd{fd} ({}) sent on fd{a1} -> arrives as fd{dup} on fd{peer}",
                                                 fd_kind(fd as u64));
@@ -11075,16 +12063,41 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             for i in 0..iovlen {
                 cap += read_user::<u64>(iov + i * 16 + 8).unwrap_or(0) as usize;
             }
+            // A descriptor belongs to the bytes it was sent with: never read past
+            // that message's end, or the handle lands on the wrong message.
+            let cap = match scm_msg_cap(a1) {
+                Some(n) if n > 0 => cap.min(n),
+                _ => cap,
+            };
             let data = if crate::net::is_unix_fd(a1) {
-                crate::net::unix_fd_recv(a1, cap)
+                match unix_recv_blocking(a1, cap) {
+                    Some(d) => d,
+                    None => return (-11i64) as u64, // -EAGAIN: asked not to wait
+                }
             } else {
                 crate::net::sock_recv(a1, cap)
             };
+            if crate::net::is_unix_fd(a1) && !data.is_empty() {
+                scm_msg_consume(a1, data.len());
+            }
             // Deliver any DESCRIPTORS sent to us with SCM_RIGHTS, in the control
             // buffer where the caller expects them. Without this the bytes arrive and
             // the handle they refer to does not, so the receiver waits for a resource
             // it was never given.
-            let fds = scm_take(a1);
+            // Re-home the arriving descriptors into numbers free in THE RECEIVER'S
+            // view. They were allocated when the SENDER dup'd them, and the
+            // allocator's alias check only ever sees the CURRENT process - so a
+            // number free for the sender could collide with an alias the receiver
+            // owns, and chrome's descriptor-ownership check aborts the child.
+            // A dup here runs in the receiver's context, which is the whole point.
+            let fds: alloc::vec::Vec<u64> = scm_take(a1).into_iter().map(|f| {
+                let re = dup_fd(f);
+                if (re as i64) > 0 && re != f {
+                    let _ = close_fd_now(f); // drop the sender-side placeholder
+                    child_note_open(re as usize);
+                    re
+                } else { f }
+            }).collect();
             let control = read_user::<u64>(a2 + 32).unwrap_or(0);
             let controllen = read_user::<u64>(a2 + 40).unwrap_or(0) as usize;
             // Trace only calls that actually CARRY descriptors. The unconditional
@@ -11178,9 +12191,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 crate::serial_println!("[scm] recvmsg fd{a1}: delivering {} data bytes", data.len());
                 }
             }
-            if scm_chk != 0 {
-                crate::serial_println!("[scm] pre-scatter: controllen reads {}", read_user::<u64>(scm_chk).unwrap_or(u64::MAX));
-            }
+            let _ = scm_chk; // (pre-scatter probe removed: same ring-0 fault hazard)
             let mut off = 0usize;
             for i in 0..iovlen {
                 if off >= data.len() { break; }
@@ -11232,6 +12243,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         core::str::from_utf8(&path).unwrap_or("?"), is_vfs_dir(&path));
                 }
                 set_fd_accmode(fd, flags);
+                if fd != u64::MAX && flags & 0x8_0000 != 0 {
+                    fd_set_cloexec(fd, true); // O_CLOEXEC on a directory fd
+                }
                 return fd;
             }
             let fd = if flags & 0x40 != 0 {
@@ -11240,6 +12254,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 vfs_open(&path)
             };
             set_fd_accmode(fd, flags); // report the real access mode in F_GETFL
+            if fd != u64::MAX && flags & 0x8_0000 != 0 {
+                fd_set_cloexec(fd, true); // O_CLOEXEC
+            }
             if fd != u64::MAX && flags & 0x400 != 0 {
                 // O_APPEND: set the write position to the end of the file.
                 if let Some(sz) = vfs_size(fd as usize) {
@@ -11496,7 +12513,15 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             let seq = MEMFD_SEQ.fetch_add(1, Ordering::Relaxed);
             let path = alloc::format!("/memfd:{}:{seq}", String::from_utf8_lossy(&name));
             register_file(&path, alloc::vec::Vec::new());
-            vfs_open(path.as_bytes())
+            let fd = vfs_open(path.as_bytes());
+            if fd != u64::MAX && a2 & 0x1 != 0 { fd_set_cloexec(fd, true); } // MFD_CLOEXEC
+            // MFD_ALLOW_SEALING decides whether this file can ever be sealed.
+            if fd != u64::MAX {
+                if let Some(fi) = OPEN_FDS.lock().get(fd as usize).and_then(|s| *s).map(|(fi, _)| fi) {
+                    seals_register(fi, a2 & 0x2 != 0);
+                }
+            }
+            fd
         }
         77 => vfs_ftruncate(a1 as usize, a2 as usize), // ftruncate(fd, len)
         74 | 75 => 0, // fsync / fdatasync: VFS is in-RAM -> nothing to flush, succeed
@@ -11741,22 +12766,17 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 3 => { // F_GETFL: the fd's real access mode + tracked O_NONBLOCK.
                     let fd = a1 as usize;
                     let acc = if fd < MAX_FD { FD_ACCMODE[fd].load(Ordering::Relaxed) as u64 } else { 2 };
-                    let nb = fd < MAX_FD
-                        && (FD_NONBLOCK[fd].load(Ordering::Relaxed)
-                            || (is_pipe_fd(fd) && pipe_is_nonblock(fd)));
-                    acc | if nb { 0x800 } else { 0 }
+                    acc | if fd_is_nonblock(a1) { 0x800 } else { 0 }
                 }
-                4 => { // F_SETFL: remember O_NONBLOCK for ANY fd (pipe + general table).
-                    let fd = a1 as usize;
-                    if fd < MAX_FD {
-                        FD_NONBLOCK[fd].store(a3 & 0x800 != 0, Ordering::Relaxed);
-                        if is_pipe_fd(fd) {
-                            pipe_set_nonblock(fd, a3 & 0x800 != 0);
-                        }
-                    }
+                4 => { // F_SETFL: remember O_NONBLOCK for ANY fd (pipe, file, SOCKET).
+                    fd_set_nonblock(a1, a3 & 0x800 != 0);
                     0
                 }
-                _ => 0, // F_SETFD/F_GETFD/F_DUPFD/… pretend success
+                1033 => seals_add(a1, a3 as u32), // F_ADD_SEALS
+                1034 => seals_get(a1),             // F_GET_SEALS
+                1 => u64::from(fd_is_cloexec(a1)), // F_GETFD -> FD_CLOEXEC bit
+                2 => { fd_set_cloexec(a1, a3 & 1 != 0); 0 } // F_SETFD
+                _ => 0, // F_DUPFD/… pretend success
             }
         }
         79 => {

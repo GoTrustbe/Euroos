@@ -69,6 +69,9 @@ impl Blake2b {
 
     fn compress(&mut self, last: bool) {
         let mut m = [0u64; 16];
+        // Indexed on purpose: this is BLAKE2b's message schedule, where the
+        // index IS the specification's word number.
+        #[allow(clippy::needless_range_loop)]
         for i in 0..16 {
             let mut w = [0u8; 8];
             w.copy_from_slice(&self.buf[i * 8..i * 8 + 8]);
@@ -82,6 +85,9 @@ impl Blake2b {
         if last {
             v[14] = !v[14];
         }
+        // The round number indexes SIGMA, the permutation table BLAKE2b defines
+        // per round - iterating SIGMA directly would lose that correspondence.
+        #[allow(clippy::needless_range_loop)]
         for r in 0..12 {
             let s = &SIGMA[r];
             Self::mix(&mut v, 0, 4, 8, 12, m[s[0]], m[s[1]]);
@@ -270,7 +276,7 @@ fn fill_block(
     }
     if with_xor {
         for i in 0..ARGON2_BLOCK_WORDS {
-            out[i] = block[i] ^ r[i] ^ out[i];
+            out[i] ^= block[i] ^ r[i];
         }
     } else {
         for i in 0..ARGON2_BLOCK_WORDS {
@@ -435,7 +441,7 @@ fn fill_segment(
         }
 
         let curr = lane * lane_len + slice * seg_len + i;
-        let prev = if curr % lane_len == 0 { curr + lane_len - 1 } else { curr - 1 };
+        let prev = if curr.is_multiple_of(lane_len) { curr + lane_len - 1 } else { curr - 1 };
 
         let rand = if data_independent { rand_di } else { mem[prev][0] };
         let j1 = rand & 0xffff_ffff;

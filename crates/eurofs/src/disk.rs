@@ -1210,7 +1210,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
 
     fn chmod(&mut self, path: &str, mode: u16) -> FsResult<()> {
         let oid = self.resolve(path)?;
-        let mut inode = self.read_inode(oid)?;
+        let inode = self.read_inode(oid)?;
         // Only the owner or uid 0 may change permissions; immutable stays frozen.
         if self.ctx_uid != 0 && self.ctx_uid != inode.uid {
             return Err(FsError::PermissionDenied);
@@ -1244,7 +1244,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
                 e.name.strip_prefix('v').and_then(|n| n.parse::<u32>().ok()).map(|n| (n, e.size, e.mtime))
             })
             .collect();
-        out.sort_unstable_by(|a, b| b.0.cmp(&a.0)); // newest first
+        out.sort_unstable_by_key(|e| core::cmp::Reverse(e.0)); // newest first
         Ok(out)
     }
 

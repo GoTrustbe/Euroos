@@ -33,6 +33,24 @@ pub struct Endpoint {
     side: Side,
 }
 
+impl Endpoint {
+    /// Identity of THIS side of the connection: (connection, side).
+    ///
+    /// Descriptors in flight used to be keyed by the receiver's fd NUMBER, which
+    /// breaks the moment a socket end is duplicated or passed to another process:
+    /// the same connection then has several numbers, and a descriptor queued for
+    /// one of them is invisible to a reader holding another. The connection
+    /// itself is the thing that does not change.
+    pub fn key(&self) -> (u32, u8) {
+        (self.conn, matches!(self.side, Side::B) as u8)
+    }
+
+    /// Identity of the OTHER side: where something sent from here arrives.
+    pub fn peer_key(&self) -> (u32, u8) {
+        (self.conn, matches!(self.side, Side::A) as u8)
+    }
+}
+
 /// One bidirectional connection: two byte FIFOs + an open flag per side.
 struct Conn {
     a_to_b: VecDeque<u8>,

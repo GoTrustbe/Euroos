@@ -35,6 +35,9 @@ struct Bpb {
     total_sectors: u32,
 }
 
+/// Where a directory entry lives: (cluster, offset, the long-name slots).
+type EntrySlots = (u32, usize, Vec<(u32, usize)>);
+
 impl Bpb {
     fn parse(s0: &[u8]) -> FsResult<Bpb> {
         if s0.len() < SECTOR || s0[510] != 0x55 || s0[511] != 0xAA {
@@ -126,7 +129,7 @@ impl<D: BlockDevice> FatFs<D> {
         let mut cl = start;
         let mut guard = 0u32;
         let cb = self.bpb.cluster_bytes();
-        while cl >= 2 && cl < EOC && out.len() < size && guard < 1 << 24 {
+        while (2..EOC).contains(&cl) && out.len() < size && guard < 1 << 24 {
             guard += 1;
             let base = self.bpb.cluster_first_sector(cl);
             for s in 0..self.bpb.spc {
@@ -150,7 +153,7 @@ impl<D: BlockDevice> FatFs<D> {
         let mut out = Vec::new();
         let mut cl = start;
         let mut guard = 0u32;
-        'outer: while cl >= 2 && cl < EOC && guard < 1 << 20 {
+        'outer: while (2..EOC).contains(&cl) && guard < 1 << 20 {
             guard += 1;
             let base = self.bpb.cluster_first_sector(cl);
             for s in 0..self.bpb.spc {
@@ -287,7 +290,7 @@ impl<D: BlockDevice> FatFs<D> {
     fn free_chain(&mut self, start: u32) -> FsResult<()> {
         let mut cl = start;
         let mut guard = 0u32;
-        while cl >= 2 && cl < EOC && guard < 1 << 24 {
+        while (2..EOC).contains(&cl) && guard < 1 << 24 {
             guard += 1;
             let next = self.fat_next(cl);
             self.set_fat(cl, 0)?;
@@ -337,7 +340,7 @@ impl<D: BlockDevice> FatFs<D> {
         let mut out = Vec::new();
         let mut cl = dir_cluster;
         let mut guard = 0u32;
-        while cl >= 2 && cl < EOC && guard < 1 << 16 {
+        while (2..EOC).contains(&cl) && guard < 1 << 16 {
             guard += 1;
             let base = self.bpb.cluster_first_sector(cl);
             for s in 0..self.bpb.spc {
@@ -430,7 +433,7 @@ impl<D: BlockDevice> FatFs<D> {
 
     /// Find the SFN entry of `name` in `dir_cluster` and the LFN slots before it:
     /// returns (sfn_lba, sfn_off, Vec<(lfn_lba, lfn_off)>).
-    fn find_entry_slots(&self, dir_cluster: u32, name: &str) -> FsResult<(u32, usize, Vec<(u32, usize)>)> {
+    fn find_entry_slots(&self, dir_cluster: u32, name: &str) -> FsResult<EntrySlots> {
         let slots = self.dir_slots(dir_cluster)?;
         let mut lfn = String::new();
         let mut lfn_pos: Vec<(u32, usize)> = Vec::new();

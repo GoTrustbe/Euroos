@@ -145,7 +145,7 @@ pub fn authenticate(
     // then the payload (LM, NT, domain, user, workstation, session key) appended.
     let header_len = 8 + 4 + 8 * 6 + 4; // = 72
     let mut payload = Vec::new();
-    let mut field = |buf: &mut Vec<u8>, data: &[u8], payload: &mut Vec<u8>| {
+    let field = |buf: &mut Vec<u8>, data: &[u8], payload: &mut Vec<u8>| {
         let off = header_len + payload.len();
         buf.extend_from_slice(&(data.len() as u16).to_le_bytes());
         buf.extend_from_slice(&(data.len() as u16).to_le_bytes());

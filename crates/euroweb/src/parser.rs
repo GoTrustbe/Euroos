@@ -105,11 +105,10 @@ impl Builder {
                     }
                 }
             }
-            _ if closes_p(tag) => {
-                if self.in_scope("p") && self.dom.tag(self.current()) == Some("p") {
+            _ if closes_p(tag)
+                && self.in_scope("p") && self.dom.tag(self.current()) == Some("p") => {
                     self.close_to("p");
                 }
-            }
             _ => {}
         }
     }

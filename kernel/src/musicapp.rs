@@ -16,15 +16,15 @@ pub fn selftest() {
 
     // Queue: sequential + repeat-all + shuffle permutation.
     let mut p = Player::new(alloc::vec![0, 1, 2]);
-    let seq_ok = p.current() == Some(0) && p.next() == Some(1) && p.next() == Some(2) && p.next().is_none();
+    let seq_ok = p.current() == Some(0) && p.next_index() == Some(1) && p.next_index() == Some(2) && p.next_index().is_none();
     p.set_repeat(Repeat::All);
-    let wrap_ok = p.next() == Some(0); // past the end, all wraps back to 0
+    let wrap_ok = p.next_index() == Some(0); // past the end, all wraps back to 0
 
     let mut s = Player::new(alloc::vec![0, 1, 2, 3, 4]);
     s.set_shuffle(true, 42);
     let mut seen = alloc::vec![s.current().unwrap()];
     s.set_repeat(Repeat::Off);
-    while let Some(n) = s.next() {
+    while let Some(n) = s.next_index() {
         seen.push(n);
     }
     seen.sort();

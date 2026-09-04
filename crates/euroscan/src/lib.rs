@@ -122,15 +122,17 @@ impl Capabilities {
     /// Parse a `ScannerCapabilities` XML document (tolerant, tag-scanning; not a
     /// full XML parser — eSCL documents are simple and flat enough).
     pub fn parse(xml: &str) -> Capabilities {
-        let mut c = Capabilities::default();
-        c.make_and_model = inner(xml, "MakeAndModel").map(String::from);
+        let mut c = Capabilities {
+            make_and_model: inner(xml, "MakeAndModel").map(String::from),
+            ..Default::default()
+        };
         c.has_platen = xml.contains("<scan:Platen") || xml.contains("<Platen");
         c.has_adf = xml.contains(":Adf") || xml.contains("<Adf") || xml.contains("Feeder");
         // Every DocumentFormat / DocumentFormatExt element.
         for tag in ["pwg:DocumentFormat", "scan:DocumentFormatExt", "DocumentFormat"] {
             let mut rest = xml;
             while let Some(v) = inner(rest, strip_ns(tag)) {
-                if !v.is_empty() && !c.formats.iter().any(|f| f == &v) {
+                if !v.is_empty() && !c.formats.iter().any(|f| *f == v) {
                     c.formats.push(String::from(v));
                 }
                 // advance past this occurrence
@@ -170,7 +172,7 @@ fn inner<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
     let start_tag = xml.find(&open_pat)?;
     let start = start_tag + open_pat.len();
     // Closing tag: `</...name>`.
-    let close_pat = format!("</");
+    let close_pat = "</";
     let rest = &xml[start..];
     // Find the next `</...name>`.
     let mut idx = 0;

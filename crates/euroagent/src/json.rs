@@ -47,7 +47,10 @@ impl Json {
     }
 
     /// Serialize to compact JSON text.
-    pub fn to_string(&self) -> String {
+    /// Render as JSON text. Exposed through `Display` below, so `to_string()`
+    /// comes from the standard blanket implementation rather than an inherent
+    /// method that shadows it.
+    pub fn render(&self) -> String {
         let mut s = String::new();
         self.write(&mut s);
         s
@@ -306,5 +309,11 @@ mod tests {
         assert!(Json::parse("{bad}").is_err());
         assert!(Json::parse("[1,2").is_err());
         assert!(Json::parse("nul").is_err());
+    }
+}
+
+impl core::fmt::Display for Json {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.render())
     }
 }

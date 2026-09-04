@@ -181,23 +181,69 @@ pub fn build_address_space_rwx(falloc: &mut FrameAllocator, arena_phys: u64) -> 
 /// be separated into fixed W^X regions. Every arena block is PRESENT|WRITABLE|
 /// USER|HUGE with NO NX — W^X is deliberately relaxed for this compatibility
 /// sandbox (the arena is still isolated: only its blocks carry the USER bit).
+/// Map a user arena of `nblocks` 2 MiB huge blocks at `virt_arena` -> `phys_arena`
+/// into an address space whose PDPT is at `pdpt`, WHEREVER the range lies.
+///
+/// Every filler used to assume the arena fits the first 1 GiB window: one PD,
+/// indices 0..512, blocks past the boundary silently skipped. The tail of an
+/// arena that crossed 1 GiB then stayed on the identity SUPERVISOR mapping,
+/// and the process died on its first stack write with a protection violation -
+/// which is exactly what happened the day the fork pool grew to 896 MiB and
+/// pushed the browser arena across the boundary. `get_pd` supplies a fresh
+/// frame when a 1 GiB window needs its huge entry split into a PD; windows the
+/// arena does not touch keep their 1 GiB identity entries.
+///
+/// Returns false when a needed table frame could not be allocated.
+pub fn map_user_arena(
+    pdpt: u64,
+    virt_arena: u64,
+    phys_arena: u64,
+    nblocks: u64,
+    get_pd: &mut dyn FnMut() -> Option<u64>,
+) -> bool {
+    // SAFETY: identity-mapped tables; single-threaded during address-space build.
+    unsafe {
+        let pdptp = pdpt as *mut u64;
+        for b in 0..nblocks {
+            let virt = virt_arena + b * MIB2;
+            let i3 = ((virt >> 30) & 0x1FF) as usize;
+            let i2 = ((virt >> 21) & 0x1FF) as usize;
+            let e3 = pdptp.add(i3).read_volatile();
+            let pd = if e3 & PRESENT != 0 && e3 & HUGE == 0 {
+                e3 & 0x000f_ffff_ffff_f000
+            } else {
+                // A 1 GiB huge entry (or an empty slot): split into a PD of 2 MiB
+                // identity supervisor entries, then hang it USER-reachable - the
+                // USER bit on intermediate tables gates nothing by itself, the
+                // leaf entries decide.
+                let Some(pd) = get_pd() else { return false };
+                let pdp = pd as *mut u64;
+                for i in 0..512u64 {
+                    pdp.add(i as usize)
+                        .write_volatile(((i3 as u64) * GIB + i * MIB2) | PRESENT | WRITABLE | HUGE);
+                }
+                pdptp.add(i3).write_volatile(pd | PRESENT | WRITABLE | USER);
+                pd
+            };
+            (pd as *mut u64)
+                .add(i2)
+                .write_volatile((phys_arena + b * MIB2) | PRESENT | WRITABLE | HUGE | USER);
+        }
+    }
+    true
+}
+
 pub fn build_address_space_rwx_big(falloc: &mut FrameAllocator, arena_phys: u64, nblocks: u64) -> u64 {
     let pml4 = build_address_space_rwx(falloc, arena_phys);
     if nblocks <= 1 {
         return pml4;
     }
-    let arena_idx = (arena_phys / MIB2) as usize;
     // SAFETY: identity-mapped tables we just built; single-threaded here.
     unsafe {
         let pdpt = (*(pml4 as *const u64)) & 0x000f_ffff_ffff_f000;
-        let pd = (*(pdpt as *const u64)) & 0x000f_ffff_ffff_f000;
-        let pdp = pd as *mut u64;
-        for b in 1..nblocks as usize {
-            let i = arena_idx + b;
-            if i >= 512 {
-                break;
-            }
-            pdp.add(i).write_volatile((i as u64 * MIB2) | PRESENT | WRITABLE | USER | HUGE);
+        let mut get_pd = || falloc.allocate().ok();
+        if !map_user_arena(pdpt, arena_phys, arena_phys, nblocks, &mut get_pd) {
+            crate::serial_println!("[paging] map_user_arena: table frame allocation failed");
         }
     }
     pml4
@@ -590,6 +636,30 @@ pub fn map_demand_4k_ro(pml4: u64, virt: u64, phys: u64) -> bool {
 
 /// Read the PTE for `virt` in `pml4`'s demand region: (physical frame, writable).
 /// None when any level is absent.
+/// Print the RAW page-table chain for `virt` in `pml4`, huge pages included.
+/// Diagnostic for a protection fault: the entry flags say which level denies
+/// the access, which no amount of reasoning from the allocator layout does.
+pub fn dump_walk(pml4: u64, virt: u64) {
+    // SAFETY: identity-mapped table chain, read-only walk.
+    unsafe {
+        let i4 = ((virt >> 39) & 0x1FF) as usize;
+        let i3 = ((virt >> 30) & 0x1FF) as usize;
+        let i2 = ((virt >> 21) & 0x1FF) as usize;
+        let i1 = ((virt >> 12) & 0x1FF) as usize;
+        let e4 = (pml4 as *const u64).add(i4).read_volatile();
+        crate::serial_println!("[walk] pml4[{i4}]={e4:#x}");
+        if e4 & PRESENT == 0 { return; }
+        let e3 = ((e4 & ADDR_MASK) as *const u64).add(i3).read_volatile();
+        crate::serial_println!("[walk] pdpt[{i3}]={e3:#x}");
+        if e3 & PRESENT == 0 || e3 & (1 << 7) != 0 { return; }
+        let e2 = ((e3 & ADDR_MASK) as *const u64).add(i2).read_volatile();
+        crate::serial_println!("[walk] pd[{i2}]={e2:#x}{}", if e2 & (1 << 7) != 0 { " (2 MiB huge)" } else { "" });
+        if e2 & PRESENT == 0 || e2 & (1 << 7) != 0 { return; }
+        let e1 = ((e2 & ADDR_MASK) as *const u64).add(i1).read_volatile();
+        crate::serial_println!("[walk] pt[{i1}]={e1:#x}");
+    }
+}
+
 pub fn demand_pte(pml4: u64, virt: u64) -> Option<(u64, bool)> {
     // SAFETY: identity-mapped table chain, read-only walk.
     unsafe {
@@ -658,16 +728,21 @@ pub fn fill_remap_tables_multiblock(pml4: u64, pdpt: u64, pd: u64,
         for i in 1..512u64 {
             pdptp.add(i as usize).write_volatile((i * GIB) | PRESENT | WRITABLE | HUGE);
         }
-        let virt_idx = (virt_arena / MIB2) as usize;
+        // PD[0..512] identity supervisor for the first GiB; the arena blocks are
+        // written by map_user_arena below, in WHICHEVER 1 GiB windows they fall.
         for i in 0..512usize {
-            // The child's arena blocks (USER, RWX-huge) point at its OWN frames; every
-            // other 2 MiB block stays identity supervisor (kernel/low RAM shared).
-            let entry = if i >= virt_idx && (i as u64) < virt_idx as u64 + nblocks {
-                (phys_arena + (i as u64 - virt_idx as u64) * MIB2) | PRESENT | WRITABLE | HUGE | USER
-            } else {
-                (i as u64 * MIB2) | PRESENT | WRITABLE | HUGE
-            };
-            pdp.add(i).write_volatile(entry);
+            pdp.add(i).write_volatile((i as u64 * MIB2) | PRESENT | WRITABLE | HUGE);
+        }
+        let mut get_pd = || {
+            // fork runs in syscall context: extra table frames come from the pool.
+            let f = crate::procpool::alloc();
+            if let Some(fr) = f {
+                core::ptr::write_bytes(fr as *mut u8, 0, 4096);
+            }
+            f
+        };
+        if !map_user_arena(pdpt, virt_arena, phys_arena, nblocks, &mut get_pd) {
+            crate::serial_println!("[paging] multiblock map_user_arena: pool frame failed");
         }
     }
 }

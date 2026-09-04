@@ -60,12 +60,104 @@ static PORTQ: spin::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ip
 static NET_LEGACY: spin::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>> =
     spin::Mutex::new(alloc::collections::VecDeque::new());
 
-fn rx_route() {
-    let my_ip = match get() {
-        Some(c) => c.my_ip,
-        None => return,
+/// Segments this stack THREW AWAY, and why. A TCP that silently drops recovers
+/// by retransmission, so the loss is invisible until a page half-loads: three
+/// concurrent downloads here, one subresource failing with ERR_SSL_PROTOCOL_ERROR
+/// and four requests that never get a response.
+pub static TCP_Q_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Segments spliced back in once their gap closed: proof the reassembly does
+/// something, rather than an assumption that it does.
+pub static TCP_RECOVERED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Segments held ahead of a gap (they used to be dropped).
+pub static TCP_OOO_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static TCP_OLD_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static TCP_PARSE_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static TCP_SEGS_IN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Drain the NIC's receive ring into the per-port queues. Cheaper than
+/// [`pump_all`] - it never touches the socket table - so it can run often, which
+/// is what keeps a burst from overrunning the ring.
+pub fn drain_rx() {
+    let _g = crate::sched::IfOffGuard::new();
+    rx_route();
+}
+
+/// Drive EVERY open TCP connection: process what arrived and acknowledge it.
+///
+/// This stack only moved when the application asked it to, so acknowledgements
+/// waited for the next poll. The peer then treats them as lost and retransmits,
+/// and because the receive path takes segments strictly in order, everything
+/// after the gap is discarded until the retransmission catches up: 191 of 526
+/// segments in one page load, and subresources that never finish. Called from
+/// the supervising loop, which holds no socket locks.
+pub fn pump_all() {
+    // IF=0 for the whole critical section. This runs from a task with interrupts
+    // ENABLED, and a ring3 spinlock held that way is the freeze family this
+    // kernel already paid for: preempt the holder, let another task spin on the
+    // same lock, and on one core neither ever runs again. It wedged the guest
+    // for twenty minutes the first time this function existed without the guard.
+    let _g = crate::sched::IfOffGuard::new();
+    rx_route();
+    let mut t = SOCKETS.lock();
+    for slot in t.iter_mut() {
+        if let Some(Sock::Conn(c)) = slot {
+            if c.open {
+                c.pump(4);
+            }
+        }
+    }
+}
+
+/// Bytes sitting in socket receive buffers that the program has not read.
+/// Large and growing means the data arrived and the READER never came back for
+/// it - a readiness problem, not a network one. Near zero means the stall is
+/// above this layer.
+pub fn rx_queued_bytes() -> usize {
+    let _g = crate::sched::IfOffGuard::new();
+    let t = SOCKETS.lock();
+    t.iter()
+        .filter_map(|s| match s {
+            Some(Sock::Conn(c)) => Some(c.rx.len()),
+            _ => None,
+        })
+        .sum()
+}
+
+/// One line with the drop counters, for a caller that wants them in the log.
+pub fn tcp_drop_report() -> (u64, u64, u64, u64, u64) {
+    (
+        TCP_SEGS_IN.load(core::sync::atomic::Ordering::Relaxed),
+        TCP_Q_DROPS.load(core::sync::atomic::Ordering::Relaxed),
+        TCP_OOO_DROPS.load(core::sync::atomic::Ordering::Relaxed),
+        TCP_OLD_DROPS.load(core::sync::atomic::Ordering::Relaxed),
+        TCP_PARSE_DROPS.load(core::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// Drain the NIC from the CARD'S OWN INTERRUPT.
+///
+/// The receive ring was only emptied when some task got around to it, and a
+/// page load arrives faster than that: 89 segments per load never reached this
+/// stack at all, each one costing a retransmission that the strictly in-order
+/// receive path then waits for. Deeper and more frequent draining from the
+/// supervising loop changed nothing measurable, because the problem is not how
+/// much is drained per call but WHEN the call happens.
+///
+/// Every lock here is a TRY-lock, and they are taken BEFORE the first frame is
+/// pulled: a frame is never removed from the ring without somewhere to put it.
+/// If a task holds the queues, this returns and the frames wait for the next
+/// interrupt.
+pub fn rx_route_irq() {
+    let my_ip = {
+        let Some(cfg) = CFG.try_lock() else { return };
+        match *cfg {
+            Some(c) => c.my_ip,
+            None => return,
+        }
     };
-    for _ in 0..32 {
+    let Some(mut portq) = PORTQ.try_lock() else { return };
+    let Some(mut legacy) = NET_LEGACY.try_lock() else { return };
+    for _ in 0..256 {
         let rx = match nic::poll_recv() {
             Some(r) => r,
             None => break,
@@ -76,6 +168,57 @@ fn rx_route() {
                 if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
                     if ih.protocol == Protocol::Tcp && ih.dst == my_ip {
                         if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
+                            let q = match portq.iter_mut().find(|(p, _)| *p == seg.dst_port) {
+                                Some((_, q)) => q,
+                                None => {
+                                    portq.push((seg.dst_port, alloc::collections::VecDeque::new()));
+                                    &mut portq.last_mut().unwrap().1
+                                }
+                            };
+                            TCP_SEGS_IN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                            if q.len() < 256 {
+                                q.push_back((ih.src, seg));
+                            } else {
+                                TCP_Q_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                            }
+                            routed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !routed && legacy.len() < 256 {
+            legacy.push_back(rx);
+        }
+    }
+}
+
+fn rx_route() {
+    let my_ip = match get() {
+        Some(c) => c.my_ip,
+        None => return,
+    };
+    // 32 was too few. A page load arrives in bursts, and whatever is still in the
+    // NIC ring when it wraps is lost: 89 real gaps in one load, each one costing a
+    // retransmission that the strictly-in-order receive path then waits for.
+    for _ in 0..256 {
+        let rx = match nic::poll_recv() {
+            Some(r) => r,
+            None => break,
+        };
+        let mut routed = false;
+        if let Ok((h, payload)) = EthernetHeader::parse(&rx) {
+            if h.ethertype == EtherType::Ipv4 {
+                if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
+                    if ih.protocol == Protocol::Tcp && ih.dst == my_ip {
+                        if TcpSegment::parse_checked(ipl, ih.src, ih.dst).is_err() {
+                            // A TCP packet this stack could not accept. It falls
+                            // through to the legacy queue below, so the connection
+                            // never sees it - which looks exactly like a gap in the
+                            // sequence, and costs a retransmission.
+                            TCP_PARSE_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                        }
+                        if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
                             let mut t = PORTQ.lock();
                             let q = match t.iter_mut().find(|(p, _)| *p == seg.dst_port) {
                                 Some((_, q)) => q,
@@ -84,8 +227,11 @@ fn rx_route() {
                                     &mut t.last_mut().unwrap().1
                                 }
                             };
+                            TCP_SEGS_IN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                             if q.len() < 256 {
                                 q.push_back((ih.src, seg));
+                            } else {
+                                TCP_Q_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                             }
                             routed = true;
                         }
@@ -569,6 +715,14 @@ pub struct TcpConn {
     /// Sent-but-not-yet-ACK'd data segments (seq, bytes) for
     /// retransmission on packet loss.
     retx: alloc::vec::Vec<(u32, alloc::vec::Vec<u8>)>,
+    /// Segments that arrived AHEAD of the gap, kept until it is filled.
+    ///
+    /// Without this, one lost segment cost the whole stream: a single 272-byte
+    /// segment went missing on a page load and every one of the ~90 segments
+    /// behind it was thrown away, each waiting on a retransmission that had to
+    /// arrive before anything could move again. Bounded, because a peer that
+    /// never fills the gap must not be able to grow this without limit.
+    ooo: alloc::vec::Vec<(u32, alloc::vec::Vec<u8>)>,
 }
 
 impl TcpConn {
@@ -620,6 +774,7 @@ impl TcpConn {
             open: false,
             rx: alloc::collections::VecDeque::new(),
             retx: alloc::vec::Vec::new(),
+            ooo: alloc::vec::Vec::new(),
         };
         // SYN with retransmission: a lost SYN or SYN-ACK would otherwise make the
         // handshake fail immediately. At most 4 attempts (poll_seg timeout per round).
@@ -668,6 +823,7 @@ impl TcpConn {
             open: false,
             rx: alloc::collections::VecDeque::new(),
             retx: alloc::vec::Vec::new(),
+            ooo: alloc::vec::Vec::new(),
         };
         c.emit(tcp::SYN | tcp::ACK, &[]);
         c.my_seq = isn.wrapping_add(1);
@@ -717,9 +873,61 @@ impl TcpConn {
                 self.ack_upto(seg.ack);
             }
             if !seg.payload.is_empty() {
-                if seg.seq == self.their_seq {
-                    self.their_seq = self.their_seq.wrapping_add(seg.payload.len() as u32);
-                    self.rx.extend(seg.payload.iter().copied());
+                // Where does this segment sit relative to what we still need?
+                // Three cases, and the middle one used to be thrown away whole.
+                let delta = seg.seq.wrapping_sub(self.their_seq);
+                let accepted = if delta == 0 {
+                    // Exactly what we asked for.
+                    Some(0usize)
+                } else if delta > 0x8000_0000 {
+                    // STARTS BEFORE what we need - a retransmission. It usually
+                    // carries the bytes we are missing plus some we already have,
+                    // and dropping it whole meant the gap NEVER closed: 89 segments
+                    // held, 96 retransmissions discarded, 0 recovered, and the
+                    // connection stuck at the pace of timeouts. Trim the part we
+                    // already have and take the rest.
+                    let off = self.their_seq.wrapping_sub(seg.seq) as usize;
+                    if off < seg.payload.len() {
+                        Some(off)
+                    } else {
+                        TCP_OLD_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                        None // entirely old: nothing new in it
+                    }
+                } else {
+                    // Ahead of a gap: keep it until the gap closes.
+                    TCP_OOO_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    if self.ooo.len() < 128 && !self.ooo.iter().any(|(q, _)| *q == seg.seq) {
+                        self.ooo.push((seg.seq, seg.payload.clone()));
+                    }
+                    None
+                };
+                if let Some(off) = accepted {
+                    let fresh = &seg.payload[off..];
+                    self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
+                    self.rx.extend(fresh.iter().copied());
+                    // The gap is closed: splice in what was waiting behind it, in
+                    // sequence, trimming any overlap the same way.
+                    loop {
+                        let want = self.their_seq;
+                        let Some(i) = self.ooo.iter().position(|(q, d)| {
+                            let dl = want.wrapping_sub(*q);
+                            dl == 0 || (dl < 0x8000_0000 && (dl as usize) < d.len())
+                        }) else {
+                            break;
+                        };
+                        let (q, data) = self.ooo.remove(i);
+                        let skip = want.wrapping_sub(q) as usize;
+                        let fresh = &data[skip..];
+                        self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
+                        self.rx.extend(fresh.iter().copied());
+                        TCP_RECOVERED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    }
+                    // Drop anything now entirely behind the window.
+                    let upto = self.their_seq;
+                    self.ooo.retain(|(q, d)| {
+                        let dl = upto.wrapping_sub(*q);
+                        !(dl < 0x8000_0000 && (dl as usize) >= d.len())
+                    });
                 }
                 self.emit(tcp::ACK, &[]);
             }
@@ -1556,6 +1764,22 @@ pub fn sock_names(fd: u64) -> Option<(Ipv4Addr, u16, Ipv4Addr, u16)> {
 /// The difference between "no data yet" (-EAGAIN) and "closed" (0) is the
 /// difference between chrome keeping a healthy connection and it discarding
 /// every socket as dead (ERR_SOCKET_NOT_CONNECTED on each page load).
+/// "ip:port" of the peer a socket is connected to, for diagnostics. Socket fd
+/// NUMBERS are reused across connections, so a byte count without the peer
+/// cannot be attributed to a connection at all.
+pub fn sock_peer_desc(fd: u64) -> alloc::string::String {
+    if !is_sock_fd(fd) {
+        return alloc::string::String::from("?");
+    }
+    match &SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize] {
+        Some(Sock::Conn(c)) => alloc::format!(
+            "{}.{}.{}.{}:{}", c.server.0[0], c.server.0[1], c.server.0[2], c.server.0[3], c.dport),
+        Some(Sock::Udp(_)) => alloc::string::String::from("udp"),
+        Some(_) => alloc::string::String::from("other"),
+        None => alloc::string::String::from("closed"),
+    }
+}
+
 pub fn sock_eof(fd: u64) -> bool {
     if !is_sock_fd(fd) {
         return false;
@@ -1787,6 +2011,19 @@ pub fn is_eventfd(fd: u64) -> bool {
     fd >= EVENTFD_BASE && (fd - EVENTFD_BASE) < MAX_EVENTFD as u64
 }
 /// eventfd2(initval, flags) — allocate a counter fd. Returns None if the table is full.
+/// Which slot an eventfd fd actually names. A DUP of an eventfd must share the
+/// counter: chrome hands children an eventfd over SCM_RIGHTS and signals them
+/// through it, and a duplicate with a counter of its own turns every one of those
+/// wakeups into a signal nobody receives. Some(o) = "this fd is a duplicate of
+/// slot o"; None = the fd owns its slot.
+static EVENTFD_ALIAS: Mutex<[Option<usize>; MAX_EVENTFD]> = Mutex::new([const { None }; MAX_EVENTFD]);
+
+/// Resolve an eventfd fd to the slot holding the shared counter.
+fn eventfd_slot(fd: u64) -> usize {
+    let idx = (fd - EVENTFD_BASE) as usize;
+    EVENTFD_ALIAS.lock()[idx].unwrap_or(idx)
+}
+
 pub fn eventfd_create(initval: u64) -> Option<u64> {
     let mut t = EVENTFDS.lock();
     for (i, s) in t.iter_mut().enumerate() {
@@ -1798,7 +2035,7 @@ pub fn eventfd_create(initval: u64) -> Option<u64> {
     None
 }
 pub fn eventfd_readable(fd: u64) -> bool {
-    is_eventfd(fd) && EVENTFDS.lock()[(fd - EVENTFD_BASE) as usize].map_or(false, |c| c > 0)
+    is_eventfd(fd) && EVENTFDS.lock()[eventfd_slot(fd)].map_or(false, |c| c > 0)
 }
 /// read(): return the current counter and reset to 0. Some(0) => the caller should
 /// return -EAGAIN (nothing to read). None => not a live eventfd.
@@ -1806,8 +2043,9 @@ pub fn eventfd_read(fd: u64) -> Option<u64> {
     if !is_eventfd(fd) {
         return None;
     }
+    let slot = eventfd_slot(fd);
     let mut t = EVENTFDS.lock();
-    match t[(fd - EVENTFD_BASE) as usize].as_mut() {
+    match t[slot].as_mut() {
         Some(c) => {
             let v = *c;
             *c = 0;
@@ -1817,12 +2055,17 @@ pub fn eventfd_read(fd: u64) -> Option<u64> {
     }
 }
 /// write(): add to the counter. Returns false if not a live eventfd.
+/// Count of successful eventfd writes (see EVFD_READY_HITS in ring3).
+pub static EVENTFD_WRITES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 pub fn eventfd_write(fd: u64, add: u64) -> bool {
+    EVENTFD_WRITES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     if !is_eventfd(fd) {
         return false;
     }
+    let slot = eventfd_slot(fd);
     let mut t = EVENTFDS.lock();
-    match t[(fd - EVENTFD_BASE) as usize].as_mut() {
+    match t[slot].as_mut() {
         Some(c) => {
             *c = c.saturating_add(add);
             true
@@ -1831,9 +2074,20 @@ pub fn eventfd_write(fd: u64, add: u64) -> bool {
     }
 }
 pub fn eventfd_close(fd: u64) {
-    if is_eventfd(fd) {
-        EVENTFDS.lock()[(fd - EVENTFD_BASE) as usize] = None;
+    if !is_eventfd(fd) {
+        return;
     }
+    let idx = (fd - EVENTFD_BASE) as usize;
+    let slot = eventfd_slot(fd);
+    EVENTFD_ALIAS.lock()[idx] = None;
+    if idx != slot {
+        return; // a duplicate closed: the shared counter belongs to `slot`
+    }
+    // The owner closed. Keep the counter alive while any duplicate still names it.
+    if EVENTFD_ALIAS.lock().iter().any(|a| *a == Some(slot)) {
+        return;
+    }
+    EVENTFDS.lock()[slot] = None;
 }
 
 /// What an AF_UNIX fd is backed by. socket() makes a Pending fd; connect()/socketpair
@@ -1906,6 +2160,29 @@ pub fn unix_socket() -> u64 {
 /// dup(AF_UNIX fd): a NEW fd aliasing the SAME endpoint (UnixSock is Copy, so both
 /// fds share the endpoint's buffers). close() of either just clears its slot; the
 /// endpoint outlives both. Chrome's Mojo dups channel socket handles.
+/// Which CONNECTION SIDE an AF_UNIX fd names, if any. Stable across dup and
+/// across passing the descriptor to another process, unlike the fd number.
+pub fn unix_key(fd: u64) -> Option<(u32, u8)> {
+    if !is_unix_fd(fd) {
+        return None;
+    }
+    match UNIX_FDS.lock()[(fd - UNIX_FD_BASE) as usize] {
+        Some(UnixSock::Stream(e)) => Some(e.key()),
+        _ => None,
+    }
+}
+
+/// Where a message sent on `fd` arrives: the other side of its connection.
+pub fn unix_peer_key(fd: u64) -> Option<(u32, u8)> {
+    if !is_unix_fd(fd) {
+        return None;
+    }
+    match UNIX_FDS.lock()[(fd - UNIX_FD_BASE) as usize] {
+        Some(UnixSock::Stream(e)) => Some(e.peer_key()),
+        _ => None,
+    }
+}
+
 pub fn unix_fd_dup(fd: u64) -> u64 {
     if !is_unix_fd(fd) {
         return (-9i64) as u64; // -EBADF
@@ -1924,20 +2201,25 @@ pub fn eventfd_dup(fd: u64) -> u64 {
     if !is_eventfd(fd) {
         return (-9i64) as u64;
     }
-    let val = EVENTFDS.lock()[(fd - EVENTFD_BASE) as usize];
-    match val {
-        Some(v) => {
-            let mut t = EVENTFDS.lock();
-            for (i, s) in t.iter_mut().enumerate() {
-                if s.is_none() {
-                    *s = Some(v);
-                    return EVENTFD_BASE + i as u64;
-                }
-            }
-            (-24i64) as u64 // -EMFILE
-        }
-        None => (-9i64) as u64,
+    let owner = eventfd_slot(fd);
+    if EVENTFDS.lock()[owner].is_none() {
+        return (-9i64) as u64;
     }
+    // A duplicate SHARES the counter. It used to get a copy of the value and its
+    // own counter, so a write through one fd was invisible through the other -
+    // and an eventfd exists to be written by one party and read by another.
+    // Chrome passes eventfds to its children over SCM_RIGHTS (that path dups),
+    // and every wakeup sent through them went nowhere.
+    let mut t = EVENTFDS.lock();
+    for (i, slot) in t.iter_mut().enumerate() {
+        if slot.is_none() && i != owner {
+            *slot = Some(0); // marks the fd live; the counter that counts is `owner`
+            drop(t);
+            EVENTFD_ALIAS.lock()[i] = Some(owner);
+            return EVENTFD_BASE + i as u64;
+        }
+    }
+    (-24i64) as u64 // -EMFILE
 }
 
 /// connect(fd, sockaddr_un path): resolve a Pending AF_UNIX fd. The X display socket
@@ -2050,7 +2332,23 @@ pub fn unix_fd_close(fd: u64) -> u64 {
     let idx = (fd - UNIX_FD_BASE) as usize;
     let taken = UNIX_FDS.lock().get_mut(idx).and_then(|s| s.take());
     match taken {
-        Some(UnixSock::Stream(e)) => { unix_close(e); 0 }
+        Some(UnixSock::Stream(e)) => {
+            // Close the fd, but tear the CONNECTION down only when this was the
+            // last fd naming that endpoint. A dup shares the endpoint (that is what
+            // a dup is), and closing one of them used to close the stream for all:
+            // passing a socket over SCM_RIGHTS re-homes it with dup + close of the
+            // original, so the receiver was handed a descriptor whose connection
+            // had just been destroyed. Two chrome children each got their end of a
+            // sibling channel and neither could hear the other (gscm3).
+            let still_referenced = UNIX_FDS
+                .lock()
+                .iter()
+                .any(|s| matches!(s, Some(UnixSock::Stream(o)) if *o == e));
+            if !still_referenced {
+                unix_close(e);
+            }
+            0
+        }
         Some(UnixSock::X(x)) => { crate::xserver::close(x); 0 }
         Some(UnixSock::Pending) => 0,
         None => (-9i64) as u64,

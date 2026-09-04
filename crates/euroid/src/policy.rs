@@ -103,8 +103,8 @@ pub fn validate_username(name: &str) -> Result<(), String> {
     for &b in name.as_bytes() {
         let ok = b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-';
         if !ok {
-            return Err(alloc::format!(
-                "invalid character in username: only [a-z0-9_-] allowed"
+            return Err(alloc::string::String::from(
+                "invalid character in username: only [a-z0-9_-] allowed",
             ));
         }
     }

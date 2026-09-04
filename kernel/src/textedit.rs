@@ -10,7 +10,6 @@
 use crate::graphics::{Color, FrameBuffer};
 use crate::{serial_println, text};
 use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
 use eurofs::FileSystem;
 use spin::Mutex;
