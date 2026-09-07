@@ -43,7 +43,7 @@ fn put_u64(b: &mut Vec<u8>, v: u64) {
 fn put_opaque(b: &mut Vec<u8>, data: &[u8]) {
     put_u32(b, data.len() as u32);
     b.extend_from_slice(data);
-    while b.len() % 4 != 0 {
+    while !b.len().is_multiple_of(4) {
         b.push(0);
     }
 }
@@ -76,7 +76,7 @@ impl<'a> Xdr<'a> {
         }
         let v = self.b[self.p..self.p + n].to_vec();
         self.p += n;
-        while self.p % 4 != 0 && self.p < self.b.len() {
+        while !self.p.is_multiple_of(4) && self.p < self.b.len() {
             self.p += 1;
         }
         Some(v)

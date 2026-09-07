@@ -81,7 +81,7 @@ fn derive(dh1: [u8; 32], dh2: [u8; 32], dh3: [u8; 32], dh4: [u8; 32], initiator:
 /// **Initiator side** of the handshake. `our` = our static identity,
 /// `peer_static` = the responder's public static key, `eph_seed` = seed
 /// for our ephemeral key. Returns (our ephemeral pubkey to send, continuation).
-pub fn initiate(our: &Identity, peer_static: [u8; 32], eph_seed: [u8; 32]) -> (([u8; 32]), PendingInitiator) {
+pub fn initiate(our: &Identity, peer_static: [u8; 32], eph_seed: [u8; 32]) -> ([u8; 32], PendingInitiator) {
     let eph = Identity::from_seed(eph_seed);
     let our_eph_pub = eph.public;
     (

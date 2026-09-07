@@ -231,7 +231,7 @@ fn parse_size(s: &str) -> usize {
     };
     // checked_mul: a huge `-b 999999999999g` must not overflow (panic in debug / wrap in
     // release) — saturate to usize::MAX instead (one giant chunk, no UB).
-    num.parse::<usize>().unwrap_or(0).checked_mul(mult).unwrap_or(usize::MAX)
+    num.parse::<usize>().unwrap_or(0).saturating_mul(mult)
 }
 
 #[cfg(test)]

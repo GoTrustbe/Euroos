@@ -152,7 +152,7 @@ impl FrameAllocator {
         }
         let mut f = 0usize;
         while f + count <= self.total_frames {
-            if f % align != 0 {
+            if !f.is_multiple_of(align) {
                 f += align - (f % align); // jump to the next aligned boundary
                 continue;
             }

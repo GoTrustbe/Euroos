@@ -7,7 +7,7 @@
 use crate::graphics::{Color, FrameBuffer};
 use crate::serial_println;
 use crate::{icons, text};
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use eurofiles::{human_size, join, normalize, parent, Badge, DirEntry, FileKind, Listing, SortKey, SortOrder};
 use spin::Mutex;

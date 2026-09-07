@@ -469,7 +469,9 @@ fn decode_body(c: &mut Reader) -> Result<Vec<Op>, WasmError> {
             }
             // Numeric ops: i32/i64 (arithmetic/comparisons) + f32/f64 (arithmetic/
             // comparisons) + all conversions/reinterpretations.
-            0x45..=0x78 | 0x50..=0x5a | 0x5b..=0x66 | 0x7c..=0x8a | 0x8b..=0xa6 | 0xa7..=0xc4 => {
+            // One contiguous span: the sub-ranges written out separately here
+            // all fall inside it, so listing them again was dead.
+            0x45..=0xc4 => {
                 ops.push(Op::Num(op))
             }
             _ => return Err(WasmError::Unsupported("opcode")),
@@ -1016,11 +1018,11 @@ fn exec_num(op: u8, st: &mut Vec<i64>) -> Result<(), WasmError> {
         }
         0xb2 => {
             let a = i32v(pop!());
-            st.push((a as f32).to_bits() as u32 as i64); // f32.convert_i32_s
+            st.push((a as f32).to_bits() as i64); // f32.convert_i32_s
         }
         0xb6 => {
             let a = f64::from_bits(pop!() as u64);
-            st.push((a as f32).to_bits() as u32 as i64); // f32.demote_f64
+            st.push((a as f32).to_bits() as i64); // f32.demote_f64
         }
         0xb7 => {
             let a = i32v(pop!());
@@ -1063,7 +1065,7 @@ fn fcmp_f64(st: &mut Vec<i64>, f: impl Fn(f64, f64) -> bool) -> Result<(), WasmE
 fn fbin_f32(st: &mut Vec<i64>, f: impl Fn(f32, f32) -> f32) -> Result<(), WasmError> {
     let b = f32::from_bits(st.pop().ok_or(WasmError::Trap("stack"))? as u32);
     let a = f32::from_bits(st.pop().ok_or(WasmError::Trap("stack"))? as u32);
-    st.push(f(a, b).to_bits() as u32 as i64);
+    st.push(f(a, b).to_bits() as i64);
     Ok(())
 }
 fn fcmp_f32(st: &mut Vec<i64>, f: impl Fn(f32, f32) -> bool) -> Result<(), WasmError> {

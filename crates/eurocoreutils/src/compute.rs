@@ -118,9 +118,9 @@ fn pad(s: &str, width: usize, left: bool, zero: bool, out: &mut Vec<u8>) {
     let fill = if zero { b'0' } else { b' ' };
     if left {
         out.extend_from_slice(s.as_bytes());
-        out.extend(core::iter::repeat(b' ').take(width - len));
+        out.extend(core::iter::repeat_n(b' ', width - len));
     } else {
-        out.extend(core::iter::repeat(fill).take(width - len));
+        out.extend(core::iter::repeat_n(fill, width - len));
         out.extend_from_slice(s.as_bytes());
     }
 }
@@ -342,7 +342,7 @@ pub fn factor(args: &[&str]) -> Vec<u8> {
         let mut m = n;
         let mut d = 2u64;
         while d * d <= m {
-            while m % d == 0 {
+            while m.is_multiple_of(d) {
                 out.push(b' ');
                 out.extend_from_slice(d.to_string().as_bytes());
                 m /= d;

@@ -46,7 +46,13 @@ static ALLOCATOR: IrqSafeHeap = IrqSafeHeap(LockedHeap::empty());
 /// register_file COPIES each library's bytes into a heap Vec. That library set
 /// is now ~30 MiB resident; combined with the EuroFS volume and a late 16 MiB
 /// selftest allocation, a 128 MiB heap had no contiguous block left and OOM'd.
-const HEAP_SIZE: usize = 256 * 1024 * 1024;
+/// 384 MiB since 2026-09-04: full desktop Chromium in MULTI-PROCESS mode ran
+/// the 256 MiB heap dry (a 512 KiB allocation failed while a child spawned its
+/// thread pool). The browser writes its profile - GPU cache, cookie DBs, code
+/// cache - into the in-RAM VFS, every child adds its own tracking state, and
+/// the X stack holds window buffers; all of that lives here. The guest runs
+/// with 3.5 GiB, so the extra 128 MiB is the cheap end of that budget.
+const HEAP_SIZE: usize = 384 * 1024 * 1024;
 static mut HEAP: [u8; HEAP_SIZE] = [0u8; HEAP_SIZE];
 
 /// Initialize the heap. Must be the VERY FIRST action in the kernel,

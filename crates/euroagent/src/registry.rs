@@ -6,7 +6,6 @@
 
 use crate::bundle::AgentBundle;
 use crate::caps::AgentCaps;
-use crate::manifest::AgentManifest;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 

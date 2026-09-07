@@ -146,7 +146,7 @@ impl<D: BlockDevice> ExFat<D> {
         let mut out = Vec::new();
         let mut cl = first;
         let mut guard = 0u32;
-        while cl >= 2 && cl < BAD && guard < 1 << 24 {
+        while (2..BAD).contains(&cl) && guard < 1 << 24 {
             guard += 1;
             let base = self.boot.cluster_first_sector(cl);
             for s in 0..self.boot.sectors_per_cluster {
@@ -274,7 +274,7 @@ impl<D: BlockDevice> ExFat<D> {
         let mut step = 0u64;
         while step < cluster_index {
             cl = self.fat_next(cl);
-            if cl < 2 || cl >= BAD {
+            if !(2..BAD).contains(&cl) {
                 return Err(FsError::Corruption);
             }
             step += 1;
@@ -351,7 +351,7 @@ impl<D: BlockDevice> ExFat<D> {
     fn free_chain(&mut self, first: u32) -> FsResult<()> {
         let mut cl = first;
         let mut guard = 0u32;
-        while cl >= 2 && cl < BAD && guard < 1 << 24 {
+        while (2..BAD).contains(&cl) && guard < 1 << 24 {
             guard += 1;
             let next = self.fat_next(cl);
             self.bitmap_set(cl, false)?;
@@ -368,7 +368,7 @@ impl<D: BlockDevice> ExFat<D> {
         let mut cl = first;
         let mut pos = 0usize;
         let mut guard = 0u32;
-        while pos < data.len() && cl >= 2 && cl < BAD && guard < 1 << 24 {
+        while pos < data.len() && (2..BAD).contains(&cl) && guard < 1 << 24 {
             guard += 1;
             let base = self.boot.cluster_first_sector(cl);
             for s in 0..self.boot.sectors_per_cluster {
@@ -411,7 +411,7 @@ impl<D: BlockDevice> ExFat<D> {
             let up = Self::upcase_unit(u);
             let bytes = up.to_le_bytes();
             for &b in &bytes {
-                hash = ((hash << 15) | (hash >> 1)).wrapping_add(b as u16);
+                hash = hash.rotate_right(1).wrapping_add(b as u16);
             }
         }
         hash
@@ -426,7 +426,7 @@ impl<D: BlockDevice> ExFat<D> {
             if idx == 2 || idx == 3 {
                 continue;
             }
-            sum = ((sum << 15) | (sum >> 1)).wrapping_add(b as u16);
+            sum = sum.rotate_right(1).wrapping_add(b as u16);
         }
         sum
     }
@@ -434,7 +434,7 @@ impl<D: BlockDevice> ExFat<D> {
     /// Number of secondary entries (0xC0 + 0xC1×ceil(len/15)) for a name of
     /// `name_len` UTF-16 units.
     fn name_entries(name_len: usize) -> usize {
-        (name_len + 14) / 15
+        name_len.div_ceil(15)
     }
 
     /// Locate the parent directory of `path` (its first cluster) and the final
@@ -483,7 +483,7 @@ impl<D: BlockDevice> ExFat<D> {
         let mut clusters = Vec::new();
         let mut cl = first_cluster;
         let mut guard = 0u32;
-        while cl >= 2 && cl < BAD && guard < 1 << 24 {
+        while (2..BAD).contains(&cl) && guard < 1 << 24 {
             guard += 1;
             clusters.push(cl);
             let base = self.boot.cluster_first_sector(cl);
@@ -806,7 +806,7 @@ impl<D: BlockDevice> FileSystem for ExFat<D> {
             (0u32, 0u64)
         } else {
             let cb = self.boot.cluster_bytes();
-            let n = (data.len() + cb - 1) / cb;
+            let n = data.len().div_ceil(cb);
             let first = self.alloc_chain(n)?;
             self.write_chain(first, data)?;
             (first, data.len() as u64)

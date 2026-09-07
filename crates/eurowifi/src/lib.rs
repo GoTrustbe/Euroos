@@ -137,10 +137,9 @@ pub fn parse_beacon(frame: &[u8]) -> Option<ScanResult> {
             0 => ssid = String::from_utf8_lossy(body).into_owned(),
             3 if !body.is_empty() => channel = body[0],
             48 => security = Security::Wpa2, // RSN present
-            221 => {
+            221
                 // Vendor-specific; WPA3-SAE advertises AKM 8 in the RSN, simplified here.
-                if body.windows(1).any(|_| false) {}
-            }
+                if body.windows(1).any(|_| false) => {}
             _ => {}
         }
         i = body_start + len;

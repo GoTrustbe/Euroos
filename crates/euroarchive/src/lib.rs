@@ -154,7 +154,7 @@ pub fn write_tar(entries: &[Entry]) -> Vec<u8> {
         if e.kind == Kind::File {
             out.extend_from_slice(&e.data);
             let pad = (BLOCK - e.data.len() % BLOCK) % BLOCK;
-            out.extend(core::iter::repeat(0u8).take(pad));
+            out.extend(core::iter::repeat_n(0u8, pad));
         }
     }
     // Two empty blocks as the end marker.

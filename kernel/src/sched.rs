@@ -97,6 +97,48 @@ pub fn block_current() {
     block_on(0);
 }
 
+/// Set to ask the timer tick for a full task census (see `census_trylock`).
+pub static CENSUS_REQUEST: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// A census of EVERY task, taken from INTERRUPT context: index, state and cr3.
+/// cr3 is what makes it useful - it names the address space, so the threads of
+/// one chrome process group together and a renderer whose raster workers never
+/// run is visible as such.
+///
+/// Every lock here is a TRY-lock and nothing allocates. A diagnostic must never
+/// be able to wedge the machine it is diagnosing: the futex dump that once ran
+/// from the CDP pump took ring3 spinlocks with interrupts enabled and froze the
+/// guest it was meant to explain.
+fn sysn(t: usize) -> u64 {
+    if t < 128 { crate::ring3::SYSCALLS_PER_TASK[t].load(Ordering::Relaxed) } else { 0 }
+}
+
+fn cpun(t: usize) -> u64 {
+    crate::ring3::task_ticks(t)
+}
+
+pub fn census_trylock() {
+    let Some(s) = SCHED.try_lock() else {
+        crate::serial_println!("[census] scheduler lock busy, skipped this tick");
+        return;
+    };
+    crate::serial_println!("[census] {} tasks, current={}", s.count, s.current);
+    for i in 0..s.count {
+        let t = &s.tasks[i];
+        match t.state {
+            State::Ready => crate::serial_println!("[census] t{i} cr3={:#x} sys={} cpu={} Ready", t.cr3, sysn(i), cpun(i)),
+            State::Sleeping(w) => {
+                crate::serial_println!("[census] t{i} cr3={:#x} sys={} cpu={} Sleeping(until {w})", t.cr3, sysn(i), cpun(i))
+            }
+            State::Blocked(c) => {
+                crate::serial_println!("[census] t{i} cr3={:#x} sys={} cpu={} Blocked(chan={c:#x})", t.cr3, sysn(i), cpun(i))
+            }
+            ref other => crate::serial_println!("[census] t{i} cr3={:#x} sys={} cpu={} {other:?}", t.cr3, sysn(i), cpun(i)),
+        }
+    }
+}
+
 /// Diagnostic: summarise every live task's state (Ready/Sleeping/Blocked/Zombie).
 /// Used by the glibc launcher's stall detector to see a many-thread deadlock.
 pub fn dump_states() {
@@ -569,6 +611,9 @@ pub static TRACE_SCHED: core::sync::atomic::AtomicBool = core::sync::atomic::Ato
 pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     crate::interrupts::TICKS.fetch_add(1, Ordering::Relaxed);
     crate::interrupts::send_timer_eoi();
+    if CENSUS_REQUEST.swap(false, Ordering::Relaxed) {
+        census_trylock();
+    }
     // 3G-2: the independent deadman check — runs even while the main loop is busy;
     // trips if the loop stopped petting the watchdog (a hang).
     crate::watchdog::tick_check();
@@ -705,6 +750,7 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
         unsafe { fpu_switch(cur, best) };
     }
     s.current = best;
+    CURRENT_MIRROR.store(best as u64, Ordering::Relaxed);
     let next = s.current;
     unsafe { fs.write(s.tasks[next].fs_base) };
     // Switch address space (CR3) if the incoming task has its own PML4.
@@ -811,6 +857,7 @@ pub fn init() {
         s.count = 1;
     }
     s.current = 0;
+    CURRENT_MIRROR.store(0, Ordering::Relaxed);
 }
 
 /// Add a **ring-3** task to the round-robin. `kstack_top` is the kernel
@@ -819,6 +866,18 @@ pub fn init() {
 /// there via `iretq`.
 /// The index of the currently running task (used by the syscall layer to
 /// distinguish a scheduled background task from a synchronous foreground exec).
+/// Lock-free mirror of `SCHED.current`, updated at every switch. Readers that
+/// may run with the scheduler lock held (capability checks happen on nearly
+/// every syscall path) MUST use this: `current()` takes SCHED.lock(), and one
+/// caller holding it wedged the whole machine on boot - serial dead, NMI
+/// blocked on the same lock, 100% CPU.
+static CURRENT_MIRROR: AtomicU64 = AtomicU64::new(0);
+
+/// The running task, without taking any lock.
+pub fn current_lockfree() -> usize {
+    CURRENT_MIRROR.load(Ordering::Relaxed) as usize
+}
+
 pub fn current() -> usize {
     SCHED.lock().current
 }
@@ -1158,6 +1217,7 @@ pub extern "sysv64" fn ap_schedule_tick(rsp: u64) -> u64 {
     s.tasks[cur].rsp = rsp;
     let n = (cur + 1) % s.count;
     s.current = n;
+    CURRENT_MIRROR.store(n as u64, Ordering::Relaxed);
     s.tasks[n].rsp
 }
 
@@ -1191,6 +1251,7 @@ pub fn ap_setup(cpu: usize) {
     s.tasks[2].rsp = ap_init_stack(cpu, 2, ap_worker_b);
     s.count = 3;
     s.current = 0;
+    CURRENT_MIRROR.store(0, Ordering::Relaxed);
 }
 
 extern "C" fn ap_worker_a() -> ! {

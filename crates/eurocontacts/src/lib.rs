@@ -215,7 +215,7 @@ impl AddressBook {
     }
     /// Sort by family name (then given name/full name).
     pub fn sort(&mut self) {
-        self.contacts.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
+        self.contacts.sort_by_key(|a| a.sort_key());
     }
     /// Search by name/email/organization (substring, case-insensitive).
     pub fn search(&self, query: &str) -> Vec<&Contact> {

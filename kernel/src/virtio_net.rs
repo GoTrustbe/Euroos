@@ -56,7 +56,13 @@ const VIRTIO_NET_F_MAC: u32 = 1 << 5;
 const DESC_NEXT: u16 = 1;
 const DESC_WRITE: u16 = 2;
 
-const RX_BUFS: usize = 16;
+// 16 buffers of 2 KiB is 32 KiB of receive capacity, and this ring is only
+// recycled when a program drives the stack (a syscall path calls service()).
+// A TLS handshake flight followed by an HTTP response overruns that easily,
+// and an overrun means dropped segments and a stalled connection. 128 buffers
+// is 256 KiB and still well inside the 256-descriptor queue QEMU offers; the
+// setup below refuses to overfill a smaller queue.
+const RX_BUFS: usize = 128;
 const BUF_SIZE: usize = 2048;
 const NET_HDR_LEN: usize = 10; // legacy virtio_net_hdr (no mergeable rx)
 
@@ -201,8 +207,10 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         };
 
         // 7. Allocate RX buffers and put them in the avail ring (device writes into them).
+        // Never publish more buffers than the queue has descriptors.
+        let nrx = RX_BUFS.min(rx.size as usize);
         let mut rx_bufs = [0u64; RX_BUFS];
-        for i in 0..RX_BUFS {
+        for i in 0..nrx {
             let buf = falloc.allocate().expect("rx-buf");
             rx_bufs[i] = buf;
             let d = rx.desc(i as u16);
@@ -213,10 +221,31 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
             rx.avail_ring(i as u16).write(i as u16);
         }
         compiler_fence(Ordering::SeqCst);
-        rx.avail_idx_ptr().write(RX_BUFS as u16);
+        rx.avail_idx_ptr().write(nrx as u16);
 
         // TX buffer (one, reused synchronously).
         let tx_buf = falloc.allocate().expect("tx-buf");
+
+        // 7b. MSI-X on the RECEIVE queue. Without an interrupt the ring is only
+        // emptied when a task gets around to it, and a page load arrives faster
+        // than that. Set the vector BEFORE DRIVER_OK so the very first frames
+        // are covered. (Once MSI-X is on, 0x14/0x16 are the vector registers.)
+        let msix_n = match crate::pci::enumerate().into_iter()
+            .find(|d| d.bus == 0 && d.dev == slot && d.func == 0)
+        {
+            Some(d) => crate::msix::enable(&d, 0, crate::interrupts::VIRTIO_NET_MSIX_VECTOR,
+                                           crate::apic::lapic_id() as u8),
+            None => 0,
+        };
+        if msix_n > 0 {
+            Port::<u16>::new(io + 0x0E).write(0); // queue select 0 = receive
+            Port::<u16>::new(io + 0x16).write(0); // queue_msix_vector = entry 0
+            let rb: u16 = Port::<u16>::new(io + 0x16).read(); // 0xFFFF = NO_VECTOR
+            Port::<u16>::new(io + 0x14).write(0xFFFF); // config_msix_vector = none
+            crate::serial_println!(
+                "[net] virtio-net MSI-X on ({msix_n} entries) -> vector {:#x}, queue readback={rb:#06x}",
+                crate::interrupts::VIRTIO_NET_MSIX_VECTOR);
+        }
 
         // 8. DRIVER_OK — device is now live.
         status.write(STATUS_ACK | STATUS_DRIVER | STATUS_DRIVER_OK);
@@ -226,7 +255,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         NIC = Some(VirtioNet { io, mac, rx, tx, rx_bufs, tx_buf });
         crate::serial_println!(
             "[net] virtio-net OK — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (RX {} bufs)",
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], RX_BUFS
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], nrx
         );
     }
     true
@@ -275,6 +304,10 @@ pub fn send(frame: &[u8]) -> bool {
 
 /// Poll one received frame (without the virtio_net_hdr). Returns None if there is nothing.
 pub fn poll_recv() -> Option<alloc::vec::Vec<u8>> {
+    // IF=0 for the ring manipulation. The card's MSI-X handler calls this too,
+    // and an interrupt landing between reading the used ring and republishing the
+    // buffer would corrupt both views of the queue.
+    let _g = crate::sched::IfOffGuard::new();
     unsafe {
         let nic = (*core::ptr::addr_of_mut!(NIC)).as_mut()?;
         let used = nic.rx.used_idx();

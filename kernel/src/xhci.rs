@@ -175,6 +175,12 @@ struct HidDevice {
     prev_ctrl: bool,
     armed: bool,
     last_arm: u64, // tick of the last endpoint (re-)arm — for idle re-arming
+    /// Armed TRBs without a seen completion. The event-driven re-arm only fires
+    /// on a TransferEvent, so ONE missed event left the endpoint dead forever:
+    /// three keys arrived and every later one was never polled for (the
+    /// "per-boot lottery"). The idle re-arm below uses this to avoid flooding
+    /// the ring when completions genuinely stop coming.
+    outstanding: u8,
     // M4-2: layout parsed from the device's HID report descriptor (report-
     // protocol pointers). None = boot-protocol/fallback fixed layout.
     map: Option<eurousb::InputMap>,
@@ -709,6 +715,7 @@ unsafe fn enumerate_device(
         prev_ctrl: false,
         armed: false,
         last_arm: 0,
+        outstanding: 0,
         map: input_map,
     };
     arm_interrupt(x, &mut hid);
@@ -936,6 +943,7 @@ unsafe fn arm_interrupt(x: &Xhci, hid: &mut HidDevice) {
     hid.ring.push(hid.buf as u32, (hid.buf >> 32) as u32, 8, (TRB_NORMAL << 10) | (1 << 5)); // IOC
     doorbell(x, hid.slot, hid.ep_dci as u32);
     hid.armed = true;
+    hid.outstanding = hid.outstanding.saturating_add(1);
     hid.last_arm = crate::interrupts::ticks();
 }
 
@@ -972,6 +980,21 @@ fn poll_inner() {
             Some(x) => x,
             None => return,
         };
+        // IDLE RE-ARM: an endpoint whose completion event was missed has no armed
+        // TRB and is never polled again - dead input, with the device's queued
+        // reports (QEMU buffers them) waiting for exactly one fresh arm. If an
+        // endpoint has been quiet for ~2 s, arm it again. `outstanding` bounds
+        // the growth when completions genuinely stop: at most a handful of
+        // extra TRBs on a 500-entry ring, and any completion resets the count.
+        {
+            let now = crate::interrupts::ticks();
+            let hids = core::ptr::addr_of_mut!(HIDS);
+            for hid in (*hids).iter_mut().flatten() {
+                if hid.armed && hid.outstanding < 4 && now.saturating_sub(hid.last_arm) > 200 {
+                    arm_interrupt(x, hid);
+                }
+            }
+        }
         // Once: confirm that MSI-X interrupts actually arrive (J2).
         if !MSIX_LOGGED {
             let c = crate::interrupts::XHCI_MSIX_COUNT.load(core::sync::atomic::Ordering::Relaxed);
@@ -1075,6 +1098,7 @@ fn poll_inner() {
                                 inject_mouse(report);
                             }
                         }
+                        hid.outstanding = hid.outstanding.saturating_sub(1);
                         arm_interrupt(x, hid);
                         break; // this event is handled; move on to the next
                     }

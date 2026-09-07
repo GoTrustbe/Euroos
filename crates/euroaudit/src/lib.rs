@@ -164,6 +164,24 @@ impl AuditLog {
     }
 
     /// Export the log as a JSON array (for GDPR data-subject export / SIEM).
+    /// One JSON object per line (JSON Lines). This is the PERSISTED form: a new
+    /// session's entries are appended by extending the file, which is exactly
+    /// what an append-only (tamper-evident) audit file permits. The wrapped
+    /// array form below cannot be extended without rewriting the closing
+    /// bracket, so it could only ever be written once — after which every later
+    /// boot silently stopped persisting its audit trail (found on real hardware
+    /// with a persistent disk: the second boot's persist was refused).
+    pub fn to_jsonl(&self) -> String {
+        let mut s = String::new();
+        for e in self.entries.iter() {
+            s.push_str(&alloc::format!(
+                "{{\"seq\":{},\"ts\":{},\"kind\":\"{}\",\"subject\":\"{}\",\"hash\":\"{}\"}}\n",
+                e.seq, e.ts, e.kind.name(), json_escape(&e.subject), hex(&e.hash),
+            ));
+        }
+        s
+    }
+
     pub fn to_json(&self) -> String {
         let mut s = String::from("[");
         for (i, e) in self.entries.iter().enumerate() {

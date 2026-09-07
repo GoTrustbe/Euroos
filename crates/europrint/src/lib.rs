@@ -4,8 +4,8 @@
 //! (the modern, driverless standard — IPP Everywhere). This module builds valid
 //! IPP **requests** (`Print-Job`, `Get-Printer-Attributes`) and parses the **status**
 //! + attributes of an IPP response. The HTTP transport layer (POST to the printer)
-//! runs on top of it via EuroNet/EuroTLS. Pure `no_std` logic → the error-prone
-//! binary encoding is fully tested on the host.
+//!   runs on top of it via EuroNet/EuroTLS. Pure `no_std` logic → the
+//!   error-prone binary encoding is fully tested on the host.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -243,11 +243,7 @@ pub mod http {
     /// on a 0-chunk.
     fn dechunk(mut data: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
-        loop {
-            let nl = match find_subsequence(data, b"\r\n") {
-                Some(i) => i,
-                None => break,
-            };
+        while let Some(nl) = find_subsequence(data, b"\r\n") {
             let len_str = match core::str::from_utf8(&data[..nl]) {
                 Ok(s) => s.trim(),
                 Err(_) => break,

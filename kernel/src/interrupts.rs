@@ -41,6 +41,7 @@ pub const XHCI_MSIX_VECTOR: u8 = 0x46; // xHCI event ring via MSI-X (J2)
 pub static XHCI_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 pub const VIRTIO_BLK_MSIX_VECTOR: u8 = 0x47; // virtio-blk completion via MSI-X (J2)
 pub const NVME_MSIX_VECTOR: u8 = 0x48; // NVMe I/O completion via MSI-X (Metal M2-1)
+pub const VIRTIO_NET_MSIX_VECTOR: u8 = 0x4B; // virtio-net receive via MSI-X
 pub const SCI_VECTOR: u8 = 0x49; // ACPI SCI (power button etc.) — Metal M5-2
 /// Cooperative-yield software interrupt: a blocked/sleeping task triggers this
 /// (`int YIELD_VECTOR`) to switch away immediately (sched::yield_now). Not a
@@ -130,6 +131,7 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     idt[XHCI_MSIX_VECTOR].set_handler_fn(xhci_msix_handler);
     idt[VIRTIO_BLK_MSIX_VECTOR].set_handler_fn(blk_msix_handler);
     idt[NVME_MSIX_VECTOR].set_handler_fn(nvme_msix_handler);
+    idt[VIRTIO_NET_MSIX_VECTOR].set_handler_fn(net_msix_handler);
     // Harmless spurious handler (LAPIC vector 0xFF).
     idt[0xFF].set_handler_fn(spurious_handler);
     idt
@@ -189,6 +191,19 @@ extern "x86-interrupt" fn blk_msix_handler(_frame: InterruptStackFrame) {
 /// polling `wait()` consumes the actual completion entries.
 extern "x86-interrupt" fn nvme_msix_handler(_frame: InterruptStackFrame) {
     NVME_MSIX_COUNT.fetch_add(1, Ordering::Relaxed);
+    crate::apic::eoi();
+}
+
+/// Receive interrupts taken from the network card.
+pub static NET_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// The card has frames for us: drain the ring NOW, rather than when a task next
+/// happens to ask. Unlike the storage handlers this one does real work, because
+/// the driver has no poll loop of its own that runs often enough - a page load
+/// lost 89 segments per load waiting for one.
+extern "x86-interrupt" fn net_msix_handler(_frame: InterruptStackFrame) {
+    NET_MSIX_COUNT.fetch_add(1, Ordering::Relaxed);
+    crate::net::rx_route_irq();
     crate::apic::eoi();
 }
 
@@ -362,6 +377,11 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
         }
         p += 8;
     }
+    // The FULL task census from the same interrupt context. The wedge RIP only
+    // describes the task the NMI happened to interrupt - usually the idle loop -
+    // while the question is nearly always "what is task N doing". census_trylock
+    // is built for interrupt context (try-locks, no allocation).
+    crate::sched::census_trylock();
     serial_println!("========== END NMI PROBE ==========");
 }
 
@@ -550,6 +570,10 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
         // A PREEMPTIVE background process: terminate that task; the rest keeps running.
         let idx = crate::sched::mark_current_dead();
         let pid = crate::ring3::note_isolation_kill(idx, addr);
+        {
+            let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+            crate::paging::dump_walk(cr3, addr);
+        }
         serial_println!(
             "[isolation] ring-3 page fault addr={addr:#x} code={code:?} -> process pid {pid} (task {idx}) TERMINATED"
         );
@@ -581,7 +605,7 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
                 let a = rsp.wrapping_add(i * 8);
                 if let Some(v) = read_user_qword(a) {
                     // Plausible code pointer: in the demand region (libs/code) or arena.
-                    if (v >= 0x1_0000_0000_00 && v < 0x1_4000_0000_00) || (v >= 0x0100_0000 && v < 0x1000_0000) {
+                    if (v >= 0x100_0000_0000 && v < 0x140_0000_0000) || (v >= 0x0100_0000 && v < 0x1000_0000) {
                         serial_println!("[pf-diag]   ret[{:#05x}] -> {v:#x}", i * 8);
                         printed += 1;
                         if printed >= 12 { break; }

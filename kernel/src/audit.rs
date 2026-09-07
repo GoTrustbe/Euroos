@@ -216,8 +216,13 @@ const CHAIN_JSON: &str = "/var/log/audit.json";
 pub fn persist_chain(fs: &mut dyn FileSystem, caps: u64) -> bool {
     let _ = fs.create_dir("/var");
     let _ = fs.create_dir("/var/log");
-    let json = with_chain(|c| c.to_json());
-    if fs.write_file(CHAIN_JSON, json.as_bytes()).is_err() {
+    // APPEND, never rewrite: the file carries the flag that forbids rewriting
+    // (that is the point of an audit trail), so this boot's entries are added
+    // to what earlier boots wrote. Rewriting worked exactly once, on a virgin
+    // disk; every later boot was refused and the trail silently stopped.
+    let mut out = fs.read_file(CHAIN_JSON).unwrap_or_default();
+    out.extend_from_slice(with_chain(|c| c.to_jsonl()).as_bytes());
+    if fs.write_file(CHAIN_JSON, &out).is_err() {
         return false;
     }
     if fs.get_flags(CHAIN_JSON).unwrap_or(0) & FLAG_APPEND_ONLY == 0 {

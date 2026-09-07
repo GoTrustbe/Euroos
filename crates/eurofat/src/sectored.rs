@@ -78,7 +78,7 @@ fn locate_in_root<R: FnMut(u64, &mut [u8]) -> bool>(
     let mut entries: Vec<(u64, usize, [u8; 32])> = Vec::new();
     let mut cl = bpb.root_cluster;
     let mut guard = 0;
-    'outer: while cl >= 2 && cl < EOC && guard < 4096 {
+    'outer: while (2..EOC).contains(&cl) && guard < 4096 {
         guard += 1;
         let base_sec = esp_first + bpb.cluster_sector(cl) as u64;
         for s in 0..bpb.spc as u64 {
