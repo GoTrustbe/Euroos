@@ -1,0 +1,25 @@
+[2J[001;001H[=3h[2J[001;001H[2J[001;001H[8;042;160t[2J[001;001H[2J[001;001H[8;056;240t[2J[001;001HBdsDxe: loading Boot0002 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
+BdsDxe: starting Boot0002 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
+
+[loader] EuroOS two-stage A/B loader (G4)
+[loader] on_boot: A tries 0 → 0
+[loader] slot_config → boot slot A
+[loader] slot partition has no image header (fresh install) → ESP file
+[loader] slot image unusable — trying the other slot partition
+[loader] slot partition has no image header (fresh install) → ESP file
+[loader] ESP kernel file SIGNATURE invalid — refused
+[loader] ESP kernel file SIGNATURE invalid — refused
+[loader] FATAL: no verified kernel image (slots and ESP files all missing or unsigned)
+BdsDxe: failed to start Boot0002 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0): Load Error
+
+[loader] EuroOS two-stage A/B loader (G4)
+[loader] on_boot: A tries 0 → 0
+[loader] slot_config → boot slot A
+[loader] slot partition has no image header (fresh install) → ESP file
+[loader] slot image unusable — trying the other slot partition
+[loader] slot partition has no image header (fresh install) → ESP file
+[loader] ESP kernel file SIGNATURE invalid — refused
+[loader] ESP kernel file SIGNATURE invalid — refused
+[loader] FATAL: no verified kernel image (slots and ESP files all missing or unsigned)
+BdsDxe: No bootable option or device was found.
+BdsDxe: Press any key to enter the Boot Manager Menu.
