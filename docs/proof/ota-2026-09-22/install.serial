@@ -1,0 +1,162 @@
+[2J[001;001H[=3h[2J[001;001H[2J[001;001H[8;042;160t[2J[001;001H[2J[001;001H[8;056;240t[2J[001;001HBdsDxe: failed to load Boot0002 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0): Not Found
+BdsDxe: loading Boot0003 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+BdsDxe: starting Boot0003 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+
+[loader] EuroOS two-stage A/B loader (G4)
+[loader] slot_config → boot slot A
+[loader] slot image unusable — trying the other slot partition
+[loader] kernel image from the ESP file (Ed25519 verified)
+[loader] kernel image loaded — LoadImage + StartImage...
+
+[euro] EuroKernel bring-up — heap (384 MiB) + COM1 active
+[euro] anchor dump_registers_and_backtrace @ 0x000000001c2c9c0d
+[addr] 0x000000001c2ec95a  handle_demand_fault
+[addr] 0x000000001c2e7e86  disk_read_bytes
+[addr] 0x000000001c2e92ef  demand_readahead
+[addr] 0x000000001c2e43e6  alloc_low_fd
+[addr] 0x000000001c2e236f  open_low_fd
+[addr] 0x000000001c2e4e4d  pipe_create2
+[addr] 0x000000001c2e5e80  fd_is_aliased
+[addr] 0x000000001c2e7cc6  child_note_open
+[addr] 0x000000001c2e7bbb  child_close_own
+[addr] 0x000000001c2ed48d  child_opened_release
+[addr] 0x000000001c2e6a99  disk_cache_get
+[addr] 0x000000001c2e6b38  disk_cache_put
+[addr] 0x000000001c2ebd57  shared_phys_sorted
+[addr] 0x000000001c2f64ed  ensure_globals_for_current
+[addr] 0x000000001c2e672e  child_mem_swap
+[addr] 0x000000001c2e9f9f  fork_child_owner
+[addr] 0x000000001c2e8fa8  scm_pending_for
+[addr] 0x000000001c2fc030  scm_take
+[addr] 0x000000001c2badca  net::unix_fd_at_eof
+[addr] 0x000000001c2ba7b6  net::unix_fds_open
+[addr] 0x000000001c2f5d00  fork_child_release_fds
+[addr] 0x000000001c2e44e7  close_fd_now
+[addr] 0x000000001c2f6ef3  dup2_fd
+[addr] 0x000000001c2e09f6  unalias_fd
+[saddr] 0x000000001f53b808  BG
+[saddr] 0x000000001f53bf58  CDP_DOM
+[saddr] 0x000000001f53b8d0  CDP_RX
+[saddr] 0x000000001f53b3b8  CDP_SESSION
+[saddr] 0x000000001f53bf78  CDP_URL
+[saddr] 0x000000001f53b628  CHILD_EXE_PATH
+[saddr] 0x000000001f53b3d8  CHILD_EXITS
+[saddr] 0x000000001f53e008  CHILD_MEM
+[saddr] 0x000000001f53b4c8  CHILD_OPENED
+[saddr] 0x000000001f53b530  CHILD_THREADS
+[saddr] 0x000000001f53b3f8  CURRENT_APP
+[saddr] 0x000000001f53b550  DAEMON_OUTPUT
+[saddr] 0x000000001f53b648  DAEMON_PARTIAL
+[saddr] 0x000000001f53b668  DEFERRED_CLOSE
+[saddr] 0x000000001f53b718  DEMAND_FILE_MAPS
+[saddr] 0x000000001f53b848  DIRTY
+[saddr] 0x000000001f53b150  DISK_FILES
+[saddr] 0x000000001f53b6c8  DISK_PAGE_CACHE
+[saddr] 0x000000001f53b828  ENV
+[saddr] 0x000000001f53b8f0  EPOLLS
+[saddr] 0x000000001f53bfa0  FD_ALIAS
+[saddr] 0x000000001f53b868  FILES
+[saddr] 0x000000001f53b760  FORK_CHILD_CLOSED
+[saddr] 0x000000001f53b688  FORK_INHERITED
+[saddr] 0x000000001f53b6e8  FUTEX_LAST_WAKE
+[saddr] 0x000000001f53b420  FUTEX_QUEUE
+[saddr] 0x000000001f53b780  GLIBC_CHILD_EXITS
+[saddr] 0x000000001f53b440  GLIBC_CTIDS
+[saddr] 0x000000001f53b7c0  GLIBC_FORK_CHILDREN
+[saddr] 0x000000001f53b570  GLIBC_THREADS
+[saddr] 0x000000001f53bef8  MKDIRS
+[saddr] 0x000000001f53e028  OPEN_DIRS
+[saddr] 0x00000000383a9a30  OPEN_FDS
+[saddr] 0x000000001f53bf18  OUTPUT
+[saddr] 0x000000001f53b888  PIPES
+[saddr] 0x000000001f53bfc0  PIPE_FDS
+[saddr] 0x000000001f53b598  PIPE_NONBLOCK
+[saddr] 0x000000001f53b4e8  PIPE_WAITERS
+[saddr] 0x000000001f53dfc8  PROGRAMS
+[saddr] 0x000000001f53b738  PROT_NONE_RANGES
+[saddr] 0x000000001f53bf38  REAPED
+[saddr] 0x000000001f53b488  SCM_PENDING
+[saddr] 0x000000001f53b6a8  SHARED_ALIASES
+[saddr] 0x000000001f53b5e0  SHARED_FRAMES
+[saddr] 0x000000001f53b4a8  SHARED_MAPS
+[saddr] 0x000000001f53b390  SOCK_PAIRS
+[saddr] 0x000000001f53b8a8  STDIN
+[saddr] 0x00000000383a6258  STDOUT_REDIRECT
+[saddr] 0x000000001f53dfe8  SYMLINKS
+[saddr] 0x000000001f53b7e0  THREAD_KSTACK_OWNER
+[saddr] 0x000000001f53b508  THREAD_NAMES
+[saddr] 0x000000001f53b7a0  VDSO_IMAGE_FRAMES
+[saddr] 0x0000000037570cf0  interrupts::TICKS
+[addr] 0x000000001c2e4723  fd_alias_set
+[addr] 0x000000001c2e6eac  fd_alias_clear
+[addr] 0x000000001c2fdd14  vfs_close
+[addr] 0x000000001c2ba662  net::unix_fd_close
+[addr] 0x000000001c2b9b9f  net::eventfd_close
+[addr] 0x000000001c2f5b44  fork_child_mark_closed
+[addr] 0x000000001c2df55f  futex_wait
+[addr] 0x000000001c2df943  futex_wake
+[addr] 0x000000001c2fc33e  vfs_read
+[addr] 0x000000001c2fdff6  vfs_pread
+[addr] 0x000000001c2fe386  vfs_write
+[addr] 0x000000001c2eb71d  pipe_read_blocking
+[addr] 0x000000001c2deb40  epoll_wait
+[addr] 0x000000001c2e631a  proc_mem_xfer
+[addr] 0x000000001c2b49cd  virtio_blk::read_io_dev
+[addr] 0x000000001c2b8d98  net::unix_fd_recv
+[addr] 0x000000001c2ff482  sched::yield_now
+[addr] 0x000000001c2feae3  sched::block_current
+[addr] 0x000000001c2e92ef  demand_readahead
+[addr] 0x000000001c3c531d  syscall_dispatch
+[addr] 0x000000001c2e45cc  copy_to_user
+[addr] 0x000000001c2e69fa  copy_from_user
+[addr] 0x000000001c3c515e  sched::schedule_tick
+[addr] 0x000000001c3c84f2  sched::yield_tick
+[addr] 0x000000001c2f7774  cdp_pump
+[addr] 0x000000001c3297c9  xserver::pump_keyboard
+[addr] 0x000000001c328214  xserver::pump_mouse
+[addr] 0x000000001c2d3535  xhci::poll
+[addr] 0x000000001c2bdb00  net::service
+[euro] frame allocator: 469 MiB usable RAM
+[euro] GOP 1920x1080 stride=1920 Bgr
+[acpi] RSDP @ 0x3f77e014
+[inst] install media read from own ESP: loader 66560 B · kernel-A 53438976 B · kernel-B 53438976 B · signatures present
+[euro] ExitBootServices...
+[euro] >>> UEFI left — kernel mode <<<
+[euro] GDT+TSS loaded
+[euro] IDT loaded
+[euro] framebuffer @ 0x80000000 — loading our own page tables...
+[euro] CR3 loaded (PML4 @ 0x100000) — our own paging active
+[a2] guarded kernel stack: top 0x8000005000, guard 0x8000000000 — stack writable=true, guard not-present=true
+[mm] process frame pool: 64 MiB @ 0x1780000 (fork/exec)
+[j2-blk] virtio-blk MSI-X on (2 entries) → vector 0x47, queue_msix_vector readback=0x0000
+[blk] virtio-blk OK — 2097152 sectors (1024 MiB) @ BAR0 I/O=0x6000 · FLUSH on (real durability)
+[blk] 1 virtio-blk disk(s) initialized
+[ahci] disk 0 (port 0): 'QEMU HARDDISK', 524288 sectors = 256 MiB, partitioned (boot signature)
+[ahci] disk 0 read-only self-test (boot sector via DMA): OK ✓
+[3e1] EnrollFde: no TPM — skipped (fail-closed: no plaintext fallback)
+[q1x3] EuroInstall → virtio disk 0 (1024 MiB): GPT=true ESP-FAT32=true; EuroFS root formatted + 5 steps provisioned, after remount hostname='euro-pc'=true user='anke'=true → OK (bootable + provisioned installation from own media; boots standalone)
+[euro] live root = the on-disk EuroFS (installed/updated this boot)
+[euro] EuroFS mounted from DISK via 1 MiB block cache (existing, checkpoint 9)
+[euroupdate] boot from slot A (gen 1, 0 attempt(s) left, A=Good B=Empty), running version 20260921
+[g4] slot_config on raw block LBA 40 (outside EuroFS) — fresh disk → initial, round-trip verified, gen 1 ✓
+[g4] slot-image-write: 76 bytes written to EuroOS-B partition + read-back verified ✓
+[upd3] Ed25519 verify-before-activate (dev.pub ed852b80…): genuine=true · image-tamper-refused=true · sig-tamper-refused=true · short-sig-refused=true → OK ✓
+[upd3] update pipeline: real package staged=true · tampered package refused=true → OK ✓
+[edit] save /tmp/edit-selftest.txt → OK
+[edit] EuroText edit+save+reread: write-OK=true, reread="Hello\nEuroOS 4" (expected "Hello\nEuroOS 4") → OK ✓
+[trash] Trash + undo: delete-to-trash=false, original-gone=true, restore-brings-it-back=false → FAILED ✗
+[io1] FAT32 mount + read (kernel, no_std): readme=true seed-6000B=true ls-root=true → OK ✓
+[io2] FAT32 write (kernel): create=true mkdir=true nested=true grow+readback=true nested-read=true remove=true/gone=true → OK ✓
+[io3] FAT32 format (kernel): blank volume formatted → mount + write + read back → OK ✓
+[j2] bad-block: LBA 48 → spare 50 remapped, read-after-remap=true (1 bad, 7 spares left) ✓
+[j3] swap cycle: page → CLOCK victim → swap slot 0 (LBA 60) → read back into new frame, data-intact=true (8 swap slots free) ✓
+[j3-fault] transparent swap: swapped-out=true, after page-fault data-intact=true (swap-ins=1, swap-outs=1) ✓
+[j3-evict] CLOCK auto-evict under pressure: frame-reclaimed-to-allocator=true (free 103701→103702), swap-in-on-access-intact=true → OK ✓
+[y] EuroCrash: minidump write→disk(LBA 300)→read, round-trip-intact=true → OK (crash dumps + recovery boot work) ✓
+[j1-cache] block-cache (no_std): block 5 written+read 2x (hits) + 1 miss → data-intact=true, hits=2 misses=1 → OK (read-lock hits, write-through) ✓
+[container] 'demo' root=/containers/demo eff_caps=0b0111 (CAP_NET removed=true) | escape '../../../etc/passwd' → /containers/demo/etc/passwd (within=true)
+[3f1] EuroContainer runtime: signed-image-verify=true (constrained-caps=true), tampered-manifest-REFUSED=true, mem-limit-enforced(3K-ok,+2K-refused)=true, overlay-CoW(copy-up=true,whiteout=true) → OK (signed images + ResourceLimits + EuroFS overlay, on EuroGuard caps) ✓
+[e2] display-protocol: scene=1 surface(s), focus=Some(1), key-route=Some(Key { id: 1, code: 30, pressed: true }) — wire 12B/req
+[h1] AF_UNIX round-trip: server got 'ping', client got 'pong', EOF-after-close=true ✓
+[    0.00 INF] observability active — kmsg ring 512 lines, leveled logging + dmesg
+[    0.00 INF] [hpet] HPET @ 100 MHz active — 1M spin iterations = 201864 us (high-resolution HAL time source)
