@@ -688,9 +688,12 @@ pub fn service() {
 /// connections don't collide.
 static NEXT_PORT: Mutex<u16> = Mutex::new(49152);
 fn alloc_port() -> u16 {
+    // Random ephemeral port (RFC 6056): a sequential allocator let an off-path
+    // attacker predict the port of the next connection and reset it.
     let mut p = NEXT_PORT.lock();
-    let port = *p;
-    *p = if port >= 65000 { 49152 } else { port + 1 };
+    let span = 65000u32 - 49152;
+    let port = 49152 + (rand_u64() as u32 % span) as u16;
+    *p = port;
     port
 }
 
@@ -723,6 +726,25 @@ pub struct TcpConn {
     /// arrive before anything could move again. Bounded, because a peer that
     /// never fills the gap must not be able to grow this without limit.
     ooo: alloc::vec::Vec<(u32, alloc::vec::Vec<u8>)>,
+    /// Non-blocking connect in progress (`connect_nowait`): SYN sent, no SYN-ACK yet.
+    syn_sent: bool,
+    /// SYN (re)transmissions so far in a non-blocking connect.
+    syn_tries: u8,
+    /// Retransmission rounds without progress (`tick`): the link is dead past a bound.
+    stale_rounds: u8,
+}
+
+impl Drop for TcpConn {
+    /// An abandoned connection (a dropped fetch, a timed-out job) still tells the
+    /// peer and frees its port queue; otherwise the queue and the server-side
+    /// socket lingered until the port came round again.
+    fn drop(&mut self) {
+        if self.open {
+            self.emit(tcp::FIN | tcp::ACK, &[]);
+            self.open = false;
+        }
+        portq_remove(self.sport);
+    }
 }
 
 impl TcpConn {
@@ -752,6 +774,106 @@ impl TcpConn {
         None
     }
 
+    /// Non-blocking active open: sends the SYN and returns at once. Drive it
+    /// with `poll_connect()`; the caller owns the timing (`resend_syn()`).
+    pub fn connect_nowait(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, server: Ipv4Addr, dport: u16) -> TcpConn {
+        let isn = (rand_u64() as u32) | 1;
+        let mut c = TcpConn {
+            my_mac,
+            my_ip,
+            nexthop,
+            server,
+            dport,
+            sport: alloc_port(),
+            my_seq: isn,
+            their_seq: 0,
+            snd_una: isn,
+            open: false,
+            rx: alloc::collections::VecDeque::new(),
+            retx: alloc::vec::Vec::new(),
+            ooo: alloc::vec::Vec::new(),
+            syn_sent: true,
+            syn_tries: 1,
+            stale_rounds: 0,
+        };
+        c.emit(tcp::SYN, &[]);
+        c
+    }
+    /// One non-blocking look for the SYN-ACK: `Some(true)` connected, `Some(false)`
+    /// refused (RST) or given up, `None` still waiting.
+    pub fn poll_connect(&mut self) -> Option<bool> {
+        if self.open {
+            return Some(true);
+        }
+        if !self.syn_sent {
+            return Some(false);
+        }
+        while let Some(s) = portq_pop(self.sport, self.server) {
+            if s.has(tcp::RST) {
+                self.syn_sent = false;
+                return Some(false);
+            }
+            if s.has(tcp::SYN) && s.has(tcp::ACK) {
+                self.my_seq = self.my_seq.wrapping_add(1);
+                self.snd_una = self.my_seq;
+                self.their_seq = s.seq.wrapping_add(1);
+                self.emit(tcp::ACK, &[]);
+                self.open = true;
+                self.syn_sent = false;
+                return Some(true);
+            }
+        }
+        None
+    }
+    /// Retransmit the SYN (caller-timed); false once the attempts are exhausted.
+    pub fn resend_syn(&mut self) -> bool {
+        if !self.syn_sent || self.syn_tries >= 4 {
+            self.syn_sent = false;
+            return false;
+        }
+        self.syn_tries += 1;
+        self.emit(tcp::SYN, &[]);
+        true
+    }
+    /// Queue application data without waiting for the ACK (the retransmission
+    /// buffer keeps it; `tick()` retransmits). For cooperative callers.
+    pub fn send_nowait(&mut self, data: &[u8]) {
+        for chunk in data.chunks(1024) {
+            self.emit(tcp::PSH | tcp::ACK, chunk);
+            self.retx.push((self.my_seq, chunk.to_vec()));
+            self.my_seq = self.my_seq.wrapping_add(chunk.len() as u32);
+        }
+    }
+    /// Caller-timed retransmission of everything still unacknowledged (call about
+    /// once a second while idle). After 8 rounds without an ACK the peer is gone.
+    pub fn tick(&mut self) {
+        self.pump_nowait();
+        if self.retx.is_empty() || !self.open {
+            self.stale_rounds = 0;
+            return;
+        }
+        self.stale_rounds += 1;
+        if self.stale_rounds > 8 {
+            self.open = false;
+            return;
+        }
+        for (seq, chunk) in self.retx.clone() {
+            let saved = self.my_seq;
+            self.my_seq = seq;
+            self.emit(tcp::PSH | tcp::ACK, &chunk);
+            self.my_seq = saved;
+        }
+    }
+    /// FIN without waiting for the peer's answer (cooperative callers; `Drop`
+    /// covers the rest).
+    pub fn close_nowait(&mut self) {
+        if self.open {
+            self.emit(tcp::FIN | tcp::ACK, &[]);
+            self.my_seq = self.my_seq.wrapping_add(1);
+            self.open = false;
+        }
+    }
+
     /// 3-way handshake. Returns a connected socket, or None on timeout.
     pub fn connect(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, server: Ipv4Addr, dport: u16) -> Option<TcpConn> {
         // NO drain() here: with the central demux, other sockets' frames are not
@@ -775,6 +897,9 @@ impl TcpConn {
             rx: alloc::collections::VecDeque::new(),
             retx: alloc::vec::Vec::new(),
             ooo: alloc::vec::Vec::new(),
+            syn_sent: false,
+            syn_tries: 0,
+            stale_rounds: 0,
         };
         // SYN with retransmission: a lost SYN or SYN-ACK would otherwise make the
         // handshake fail immediately. At most 4 attempts (poll_seg timeout per round).
@@ -824,6 +949,9 @@ impl TcpConn {
             rx: alloc::collections::VecDeque::new(),
             retx: alloc::vec::Vec::new(),
             ooo: alloc::vec::Vec::new(),
+            syn_sent: false,
+            syn_tries: 0,
+            stale_rounds: 0,
         };
         c.emit(tcp::SYN | tcp::ACK, &[]);
         c.my_seq = isn.wrapping_add(1);
@@ -860,85 +988,7 @@ impl TcpConn {
                 Some(s) => s,
                 None => break,
             };
-            if seg.has(tcp::RST) {
-                crate::serial_println!("[tcp] RST from {}.{}.{}.{}:{} to sport {} — closing",
-                    self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
-                    self.dport, self.sport);
-                self.open = false;
-                break;
-            }
-            // Cumulative ACK from the peer: advance snd.una and drop
-            // acknowledged segments from the retransmission buffer.
-            if seg.has(tcp::ACK) {
-                self.ack_upto(seg.ack);
-            }
-            if !seg.payload.is_empty() {
-                // Where does this segment sit relative to what we still need?
-                // Three cases, and the middle one used to be thrown away whole.
-                let delta = seg.seq.wrapping_sub(self.their_seq);
-                let accepted = if delta == 0 {
-                    // Exactly what we asked for.
-                    Some(0usize)
-                } else if delta > 0x8000_0000 {
-                    // STARTS BEFORE what we need - a retransmission. It usually
-                    // carries the bytes we are missing plus some we already have,
-                    // and dropping it whole meant the gap NEVER closed: 89 segments
-                    // held, 96 retransmissions discarded, 0 recovered, and the
-                    // connection stuck at the pace of timeouts. Trim the part we
-                    // already have and take the rest.
-                    let off = self.their_seq.wrapping_sub(seg.seq) as usize;
-                    if off < seg.payload.len() {
-                        Some(off)
-                    } else {
-                        TCP_OLD_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                        None // entirely old: nothing new in it
-                    }
-                } else {
-                    // Ahead of a gap: keep it until the gap closes.
-                    TCP_OOO_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                    if self.ooo.len() < 128 && !self.ooo.iter().any(|(q, _)| *q == seg.seq) {
-                        self.ooo.push((seg.seq, seg.payload.clone()));
-                    }
-                    None
-                };
-                if let Some(off) = accepted {
-                    let fresh = &seg.payload[off..];
-                    self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
-                    self.rx.extend(fresh.iter().copied());
-                    // The gap is closed: splice in what was waiting behind it, in
-                    // sequence, trimming any overlap the same way.
-                    loop {
-                        let want = self.their_seq;
-                        let Some(i) = self.ooo.iter().position(|(q, d)| {
-                            let dl = want.wrapping_sub(*q);
-                            dl == 0 || (dl < 0x8000_0000 && (dl as usize) < d.len())
-                        }) else {
-                            break;
-                        };
-                        let (q, data) = self.ooo.remove(i);
-                        let skip = want.wrapping_sub(q) as usize;
-                        let fresh = &data[skip..];
-                        self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
-                        self.rx.extend(fresh.iter().copied());
-                        TCP_RECOVERED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                    }
-                    // Drop anything now entirely behind the window.
-                    let upto = self.their_seq;
-                    self.ooo.retain(|(q, d)| {
-                        let dl = upto.wrapping_sub(*q);
-                        !(dl < 0x8000_0000 && (dl as usize) >= d.len())
-                    });
-                }
-                self.emit(tcp::ACK, &[]);
-            }
-            if seg.has(tcp::FIN) {
-                let t = crate::interrupts::ticks();
-                crate::serial_println!("[tcp] @{t} FIN from {}.{}.{}.{}:{} to sport {} — closing",
-                    self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
-                    self.dport, self.sport);
-                self.their_seq = self.their_seq.wrapping_add(1);
-                self.emit(tcp::ACK, &[]);
-                self.open = false;
+            if !self.handle_seg(seg) {
                 break;
             }
             if self.rx.len() > 256 * 1024 {
@@ -946,7 +996,116 @@ impl TcpConn {
             }
         }
     }
-
+    /// Process every segment that is ALREADY queued for this socket, without
+    /// waiting for more. The cooperative fetch (`HttpsFetch::step`) uses this so a
+    /// step never spins: `net::service()` in the desktop loop keeps the NIC drained.
+    fn pump_nowait(&mut self) {
+        while let Some(seg) = portq_pop(self.sport, self.server) {
+            if !self.handle_seg(seg) {
+                break;
+            }
+            if self.rx.len() > 256 * 1024 {
+                break;
+            }
+        }
+    }
+    /// Non-blocking read: whatever is buffered (after a no-wait pump), up to `max`.
+    pub fn recv_nowait(&mut self, max: usize) -> alloc::vec::Vec<u8> {
+        self.pump_nowait();
+        let n = max.min(self.rx.len());
+        self.rx.drain(..n).collect()
+    }
+    /// One received segment: ACK handling, in-order/out-of-order payload, FIN/RST.
+    /// Returns false when the connection is finished (RST/FIN).
+    fn handle_seg(&mut self, seg: TcpSegment) -> bool {
+        if seg.has(tcp::RST) {
+            // RFC 5961: a reset is only honoured at the exact next sequence
+            // number; anything else is a blind off-path reset attempt.
+            if seg.seq != self.their_seq {
+                return true;
+            }
+            crate::serial_println!("[tcp] RST from {}.{}.{}.{}:{} to sport {} — closing",
+                self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
+                self.dport, self.sport);
+            self.open = false;
+            return false;
+        }
+        // Cumulative ACK from the peer: advance snd.una and drop
+        // acknowledged segments from the retransmission buffer.
+        if seg.has(tcp::ACK) {
+            self.ack_upto(seg.ack);
+        }
+        if !seg.payload.is_empty() {
+            // Where does this segment sit relative to what we still need?
+            // Three cases, and the middle one used to be thrown away whole.
+            let delta = seg.seq.wrapping_sub(self.their_seq);
+            let accepted = if delta == 0 {
+                // Exactly what we asked for.
+                Some(0usize)
+            } else if delta > 0x8000_0000 {
+                // STARTS BEFORE what we need - a retransmission. It usually
+                // carries the bytes we are missing plus some we already have,
+                // and dropping it whole meant the gap NEVER closed: 89 segments
+                // held, 96 retransmissions discarded, 0 recovered, and the
+                // connection stuck at the pace of timeouts. Trim the part we
+                // already have and take the rest.
+                let off = self.their_seq.wrapping_sub(seg.seq) as usize;
+                if off < seg.payload.len() {
+                    Some(off)
+                } else {
+                    TCP_OLD_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    None // entirely old: nothing new in it
+                }
+            } else {
+                // Ahead of a gap: keep it until the gap closes.
+                TCP_OOO_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                if self.ooo.len() < 128 && !self.ooo.iter().any(|(q, _)| *q == seg.seq) {
+                    self.ooo.push((seg.seq, seg.payload.clone()));
+                }
+                None
+            };
+            if let Some(off) = accepted {
+                let fresh = &seg.payload[off..];
+                self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
+                self.rx.extend(fresh.iter().copied());
+                // The gap is closed: splice in what was waiting behind it, in
+                // sequence, trimming any overlap the same way.
+                loop {
+                    let want = self.their_seq;
+                    let Some(i) = self.ooo.iter().position(|(q, d)| {
+                        let dl = want.wrapping_sub(*q);
+                        dl == 0 || (dl < 0x8000_0000 && (dl as usize) < d.len())
+                    }) else {
+                        break;
+                    };
+                    let (q, data) = self.ooo.remove(i);
+                    let skip = want.wrapping_sub(q) as usize;
+                    let fresh = &data[skip..];
+                    self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
+                    self.rx.extend(fresh.iter().copied());
+                    TCP_RECOVERED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                }
+                // Drop anything now entirely behind the window.
+                let upto = self.their_seq;
+                self.ooo.retain(|(q, d)| {
+                    let dl = upto.wrapping_sub(*q);
+                    !(dl < 0x8000_0000 && (dl as usize) >= d.len())
+                });
+            }
+            self.emit(tcp::ACK, &[]);
+        }
+        if seg.has(tcp::FIN) {
+            let t = crate::interrupts::ticks();
+            crate::serial_println!("[tcp] @{t} FIN from {}.{}.{}.{}:{} to sport {} — closing",
+                self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
+                self.dport, self.sport);
+            self.their_seq = self.their_seq.wrapping_add(1);
+            self.emit(tcp::ACK, &[]);
+            self.open = false;
+            return false;
+        }
+        true
+    }
     /// Advance snd.una to `ack` (wrapping-aware) and remove fully
     /// acknowledged segments from the retransmission buffer.
     fn ack_upto(&mut self, ack: u32) {
@@ -1146,6 +1305,20 @@ fn https_exchange(
     host: &str,
     request: &[u8],
 ) -> Option<(alloc::vec::Vec<u8>, Option<alloc::vec::Vec<u8>>)> {
+    https_exchange_max(my_mac, my_ip, nexthop, server, host, request, 200_000)
+}
+/// `https_exchange` with a caller-chosen response cap. EuroUpdate fetches a whole
+/// kernel image (~50 MB) over this path; the 200 KB default protects every other
+/// caller from an unbounded response.
+fn https_exchange_max(
+    my_mac: MacAddr,
+    my_ip: Ipv4Addr,
+    nexthop: MacAddr,
+    server: Ipv4Addr,
+    host: &str,
+    request: &[u8],
+    max: usize,
+) -> Option<(alloc::vec::Vec<u8>, Option<alloc::vec::Vec<u8>>)> {
     let mut tcp = TcpConn::connect(my_mac, my_ip, nexthop, server, 443)?;
     let random = gather_entropy(0);
     let secret = gather_entropy(1);
@@ -1213,7 +1386,7 @@ fn https_exchange(
             Err(_) => break,
         }
         body.extend_from_slice(&tls.take_app_data());
-        if body.len() > 200_000 {
+        if body.len() > max {
             break;
         }
     }
@@ -2799,6 +2972,50 @@ pub fn fetch_full(host: &str, port: u16, path: &str, tls: bool) -> Option<(u16, 
     Some(parse_http_response(&raw))
 }
 
+/// `fetch_full` with a caller-chosen size cap (EuroUpdate: a ~50 MB kernel image).
+/// Same stacks (EuroTLS 1.3 for https, raw TCP for http); reads until the peer
+/// closes or `max` bytes arrived.
+pub fn fetch_bytes(host: &str, port: u16, path: &str, tls: bool, max: usize) -> Option<(u16, Option<String>, alloc::vec::Vec<u8>)> {
+    let cfg = get()?;
+    let server = match parse_ipv4(host) {
+        Some(ip) => ip,
+        None => hosts_lookup(host)
+            .or_else(|| dns_query(cfg.my_mac, cfg.my_ip, cfg.dns_mac, cfg.dns_ip, host))?,
+    };
+    let nexthop = if same_subnet(server, cfg.my_ip) {
+        arp_resolve(cfg.my_mac, cfg.my_ip, server).unwrap_or(cfg.gw_mac)
+    } else {
+        cfg.gw_mac
+    };
+    let req = alloc::format!("GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    let raw: alloc::vec::Vec<u8> = if tls {
+        let (raw, _cert) = https_exchange_max(cfg.my_mac, cfg.my_ip, nexthop, server, host, req.as_bytes(), max)?;
+        raw
+    } else {
+        let mut c = TcpConn::connect(cfg.my_mac, cfg.my_ip, nexthop, server, port)?;
+        c.send(req.as_bytes());
+        let mut data: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        let mut idle = 0;
+        loop {
+            let chunk = c.recv(16384);
+            if chunk.is_empty() {
+                idle += 1;
+                if idle > 12 {
+                    break;
+                }
+                continue;
+            }
+            idle = 0;
+            data.extend_from_slice(&chunk);
+            if data.len() > max {
+                break;
+            }
+        }
+        c.close();
+        data
+    };
+    Some(parse_http_response(&raw))
+}
 /// Parse a raw HTTP response (status line + headers + body) → (status code,
 /// Location header, body). Shared by `fetch_full` (GET) and `post_full` (POST).
 fn parse_http_response(raw: &[u8]) -> (u16, Option<String>, alloc::vec::Vec<u8>) {
@@ -3039,4 +3256,170 @@ pub fn cmd_net() -> alloc::vec::Vec<String> {
         None => out.push("net: no network configured".into()),
     }
     out
+}
+
+// ── Cooperative HTTPS GET: one non-blocking step per desktop-loop iteration ──
+//
+// The blocking `https_exchange` spins inside `recv()`; that is fine for a shell
+// command and fatal for the desktop, which must keep drawing while a 50 MB
+// update comes in. `HttpsFetch` keeps the TLS state between calls: `start()`
+// resolves, connects and sends ClientHello (short, bounded), then every `step()`
+// takes what the NIC already delivered, feeds it to EuroTLS and returns.
+pub enum FetchStep {
+    Pending,
+    Done,
+    Failed(&'static str),
+}
+pub struct HttpsFetch {
+    /// Raw response so far (headers + body).
+    body: alloc::vec::Vec<u8>,
+    tcp: TcpConn,
+    tls: Option<eurotls::Tls13Client>,
+    host: alloc::string::String,
+    request: alloc::vec::Vec<u8>,
+    sent: bool,
+    max: usize,
+    idle: u32,
+    finished: bool,
+}
+impl HttpsFetch {
+    /// Steps without any incoming byte before the fetch gives up (~10 ms per
+    /// desktop-loop step → about 60 s of silence).
+    const IDLE_LIMIT: u32 = 6000;
+    pub fn start(host: &str, path: &str, max: usize) -> Option<HttpsFetch> {
+        let cfg = get()?;
+        let server = match parse_ipv4(host) {
+            Some(ip) => ip,
+            None => match hosts_lookup(host).or_else(|| dns_query(cfg.my_mac, cfg.my_ip, cfg.dns_mac, cfg.dns_ip, host)) {
+                Some(ip) => ip,
+                None => {
+                    crate::serial_println!("[net] https fetch: DNS lookup of {host} failed");
+                    return None;
+                }
+            },
+        };
+        let nexthop = if same_subnet(server, cfg.my_ip) {
+            arp_resolve(cfg.my_mac, cfg.my_ip, server).unwrap_or(cfg.gw_mac)
+        } else {
+            cfg.gw_mac
+        };
+        // Everything from here on is non-blocking: the SYN goes out now, the
+        // handshake and ClientHello happen inside `step()`. (DNS above is the one
+        // bounded blocking call left: a UDP query with its own short timeout.)
+        let tcp = TcpConn::connect_nowait(cfg.my_mac, cfg.my_ip, nexthop, server, 443);
+        let request = alloc::format!("GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n").into_bytes();
+        Some(HttpsFetch { tcp, tls: None, host: alloc::string::String::from(host), request, sent: false, body: alloc::vec::Vec::new(), max, idle: 0, finished: false })
+    }
+    /// HTTP status of the response so far (0 until the status line is in).
+    pub fn status(&self) -> u16 {
+        let line_end = self.body.iter().position(|&b| b == b'\n').unwrap_or(self.body.len().min(64));
+        core::str::from_utf8(&self.body[..line_end]).ok()
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|c| c.parse::<u16>().ok())
+            .unwrap_or(0)
+    }
+    /// Steps between SYN retransmissions (~3 s) and between data retransmission
+    /// rounds (~1 s) at ~10 ms per desktop-loop step.
+    const SYN_STEPS: u32 = 300;
+    const TICK_STEPS: u32 = 100;
+    fn fail(&mut self, why: &'static str) -> FetchStep {
+        self.tcp.close_nowait();
+        self.finished = true;
+        FetchStep::Failed(why)
+    }
+    pub fn step(&mut self) -> FetchStep {
+        if self.finished {
+            return FetchStep::Done;
+        }
+        // Phase 1: the TCP handshake, one look per step.
+        if self.tls.is_none() {
+            match self.tcp.poll_connect() {
+                Some(true) => {
+                    let random = gather_entropy(0);
+                    let secret = gather_entropy(1);
+                    let (mut tls, hello) = eurotls::Tls13Client::new(&self.host, random, secret);
+                    tls.set_trust_anchor(crate::rtc::epoch() as i64, crate::tls_roots::ROOTS);
+                    self.tcp.send_nowait(&hello);
+                    self.tls = Some(tls);
+                    self.idle = 0;
+                }
+                Some(false) => return self.fail("TCP connection refused"),
+                None => {
+                    self.idle += 1;
+                    if self.idle.is_multiple_of(Self::SYN_STEPS) && !self.tcp.resend_syn() {
+                        return self.fail("TCP connect timeout");
+                    }
+                    return FetchStep::Pending;
+                }
+            }
+        }
+        let data = self.tcp.recv_nowait(16384);
+        if data.is_empty() {
+            if !self.tcp.open {
+                // Peer closed: after the handshake that is EOF (valid end of a
+                // HTTP/1.0 response); during it, a failure.
+                self.finished = true;
+                return if self.tls.as_ref().is_some_and(|t| t.is_connected()) { FetchStep::Done } else { FetchStep::Failed("connection closed during TLS handshake") };
+            }
+            self.idle += 1;
+            if self.idle.is_multiple_of(Self::TICK_STEPS) {
+                // Caller-timed retransmission of anything still unacknowledged
+                // (ClientHello, Finished, the request); never waits.
+                self.tcp.tick();
+                if !self.tcp.open {
+                    return self.fail("peer stopped acknowledging");
+                }
+            }
+            if self.idle > Self::IDLE_LIMIT {
+                return self.fail("no data for 60 s");
+            }
+            return FetchStep::Pending;
+        }
+        self.idle = 0;
+        let tls = self.tls.as_mut().expect("tls set after connect");
+        tls.feed(&data);
+        let closed = match tls.process() {
+            Ok(out) => {
+                // Handshake flight from our side (client Finished, key update):
+                // without this the server never sees us complete the handshake.
+                if !out.is_empty() {
+                    self.tcp.send_nowait(&out);
+                }
+                false
+            }
+            Err(eurotls::TlsError::Alert(_)) => true, // close_notify = clean EOF
+            Err(eurotls::TlsError::Protocol(why)) => {
+                crate::kwarn!("[tls] fetch aborted: {why}");
+                return self.fail("TLS protocol error (certificate or handshake)");
+            }
+            Err(_) => return self.fail("TLS error"),
+        };
+        if tls.is_connected() && !self.sent {
+            if let Ok(rec) = tls.encrypt_app(&self.request) {
+                self.tcp.send_nowait(&rec);
+            }
+            self.sent = true;
+        }
+        self.body.extend_from_slice(&tls.take_app_data());
+        if self.body.len() > self.max {
+            return self.fail("response larger than allowed");
+        }
+        if closed {
+            self.tcp.close_nowait();
+            self.finished = true;
+            return FetchStep::Done;
+        }
+        FetchStep::Pending
+    }
+    /// The response once `step()` returned `Done`: status + body, the body moved
+    /// out of the buffer without a copy (a 96 MiB image must not exist twice).
+    pub fn finish(mut self) -> (u16, alloc::vec::Vec<u8>) {
+        let status = self.status();
+        let head_end = self.body.windows(4).position(|w| w == b"\r\n\r\n");
+        let body = match head_end {
+            Some(h) => self.body.split_off(h + 4),
+            None => alloc::vec::Vec::new(),
+        };
+        (status, body)
+    }
 }

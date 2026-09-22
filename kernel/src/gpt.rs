@@ -17,6 +17,27 @@ const ENTRY_SIZE: u32 = 128;
 const EUROFS_TYPE: [u8; 16] =
     [0x45, 0x55, 0x52, 0x4f, 0x46, 0x53, 0x00, 0x01, 0x80, 0x00, 0x00, 0x45, 0x55, 0x52, 0x4f, 0x53];
 
+/// EFI System Partition type GUID (C12A7328-F81F-11D2-BA4B-00A0C93EC93B).
+const ESP_TYPE: [u8; 16] =
+    [0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B];
+/// The ESP of the boot disk: (first_sector, sector_count) from the partition table
+/// itself, not from an assumed layout.
+pub fn find_esp() -> Option<(u64, u64)> {
+    let (arr, esz, num) = read_part_array()?;
+    for i in 0..num {
+        let e = &arr[i * esz..i * esz + 128];
+        if e[..16] == ESP_TYPE {
+            let (first, last) = (rd_u64(e, 32), rd_u64(e, 40));
+            if last >= first {
+                return Some((first, last - first + 1));
+            }
+        }
+    }
+    None
+}
+/// GPT type of the A/B slot partitions (`eurofat::disk::EUROSLOT_TYPE`).
+const EUROSLOT_TYPE: [u8; 16] =
+    [0x45, 0x55, 0x52, 0x4f, 0x53, 0x4c, 0x00, 0x01, 0x80, 0x00, 0x00, 0x45, 0x55, 0x52, 0x4f, 0x53];
 fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &b in data {
@@ -42,7 +63,7 @@ fn rd_u32(b: &[u8], o: usize) -> u32 {
 /// Read in the GPT partition array from disk 0. Returns (array_bytes, entry_size, num).
 fn read_part_array() -> Option<(alloc::vec::Vec<u8>, usize, usize)> {
     let mut hdr = [0u8; 512];
-    if !crate::virtio_blk::read_sector(1, &mut hdr) || &hdr[..8] != b"EFI PART" {
+    if !crate::rootblk::boot_read(1, &mut hdr) || &hdr[..8] != b"EFI PART" {
         return None;
     }
     // Verify the GPT header CRC (audit H10): the CRC covers the first `hdr_size`
@@ -59,14 +80,16 @@ fn read_part_array() -> Option<(alloc::vec::Vec<u8>, usize, usize)> {
     let ent_lba = rd_u64(&hdr, 72);
     let num = rd_u32(&hdr, 80).min(NUM_ENTRIES) as usize;
     let esz = rd_u32(&hdr, 84) as usize;
-    if esz < 128 || ent_lba == 0 {
+    // Entry size is 128 in practice; bound it before sizing the allocation (a
+    // corrupt header must not ask for gigabytes).
+    if !(128..=4096).contains(&esz) || !esz.is_power_of_two() || ent_lba == 0 {
         return None;
     }
     let sectors = (num * esz).div_ceil(512);
     let mut arr = vec![0u8; sectors * 512];
     for s in 0..sectors {
         let mut tmp = [0u8; 512];
-        if !crate::virtio_blk::read_sector(ent_lba + s as u64, &mut tmp) {
+        if !crate::rootblk::boot_read(ent_lba + s as u64, &mut tmp) {
             return None;
         }
         arr[s * 512..s * 512 + 512].copy_from_slice(&tmp);
@@ -131,7 +154,7 @@ pub fn find_partition_by_name(name: &str) -> Option<(u64, u64)> {
     let (arr, esz, num) = read_part_array()?;
     for i in 0..num {
         let e = &arr[i * esz..i * esz + 128];
-        if e[..16] == EUROFS_TYPE && entry_name_eq(e, name) {
+        if (e[..16] == EUROFS_TYPE || e[..16] == EUROSLOT_TYPE) && entry_name_eq(e, name) {
             let (first, last) = (rd_u64(e, 32), rd_u64(e, 40));
             if last >= first {
                 return Some((first, (last - first + 1) / 8));
@@ -175,7 +198,9 @@ fn read_part_array_with(read: impl Fn(u64, &mut [u8]) -> bool) -> Option<(alloc:
     let ent_lba = rd_u64(&hdr, 72);
     let num = rd_u32(&hdr, 80).min(NUM_ENTRIES) as usize;
     let esz = rd_u32(&hdr, 84) as usize;
-    if esz < 128 || ent_lba == 0 {
+    // Entry size is 128 in practice; bound it before sizing the allocation (a
+    // corrupt header must not ask for gigabytes).
+    if !(128..=4096).contains(&esz) || !esz.is_power_of_two() || ent_lba == 0 {
         return None;
     }
     let sectors = (num * esz).div_ceil(512);

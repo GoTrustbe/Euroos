@@ -705,9 +705,11 @@ fn main() -> Status {
         if instexec::disk_is_blank(0) {
             // Fresh target disk → install a bootable, provisioned EuroOS (slot A).
             instexec::install_to_disk(0, &instexec::default_config())
-        } else if gpt::find_eurofs_partition().is_some() {
+        } else if gpt::find_eurofs_partition().is_some() && cfg!(feature = "selftest") {
             // Our own installed disk → demonstrate the A/B SELF-UPDATE: stage slot B
             // + flip slot_config. After a standalone reboot the loader picks slot B.
+            // Self-test builds only: a release medium booted next to an installed
+            // disk must leave that installation exactly as it is.
             instexec::stage_update_b(0);
             instexec::rollback_selftest(0); // [upd4]: prove the two-stage rollback on the real ESP
             true // we keep running live; the disk is the boot/update target
@@ -813,6 +815,7 @@ fn main() -> Status {
     // The install media (~6 MiB) stays available so the user can install LATER
     // from the running desktop too (`euroinstall --to N`).
     let on_disk = rootdev.is_disk();
+    rootdev.register_as_boot_disk(); // the A/B update path addresses this disk, on any bus
     // J1/3C-1: the live root FS runs THROUGH a write-through block cache (concurrent
     // read-lock hits, CLOCK eviction, dirty write-back). 256 × 4 KiB = 1 MiB.
     const ROOT_CACHE_BLOCKS: usize = 256;
@@ -5928,6 +5931,9 @@ fn main() -> Status {
             init::flush_log(ctx.fs);
             // G5: periodic background scrub (rate-limited ~60 s) → /var/log/fsck.log.
             scrub::maybe_run(ctx.fs, t);
+            // Automatic updates: signed channel check 90 s after boot, then every 6 h
+            // (policy in /etc/euroupdate.conf; never on the plain preview image).
+            update::maybe_check(ctx.fs, t);
             let (ox, oy) = (cmx, cmy);
             compositor::restore_cursor_bg(&fb, cmx, cmy, &cur_bg);
             // Refresh the status panel (large clock) — without shadow so it does not stack.
@@ -5983,6 +5989,8 @@ fn main() -> Status {
 
         // Keep the network alive: answer ARP requests + recycle RX buffers.
         net::service();
+        // Automatic updates: one non-blocking slice of the background check per iteration.
+        update::step(ctx.fs, t);
 
         // One-shot self-test: after the live GTK window has been up a while, synthesize a
         // click on its Reset button (through the normal desktop click path) to prove

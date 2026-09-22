@@ -11,20 +11,27 @@ use ed25519_dalek::{Signature, VerifyingKey};
 /// The baked-in EuroOS public key (Ed25519, 32 bytes) — the same key
 /// that the eupkg toolchain on the host signs with (toolchain/eupkg/keys/dev.pub).
 pub static EUROOS_PUBKEY: [u8; 32] = *include_bytes!("../../toolchain/eupkg/keys/dev.pub");
+/// The OFFLINE rotation key (`toolchain/eupkg/gen-offline-key.py`). It signs
+/// nothing day to day; it exists so that a leaked daily key can be replaced by
+/// shipping one update signed with this one. A placeholder file (not a valid
+/// curve point) is simply skipped, so a build without a rotation key still works.
+pub static EUROOS_ROTATION_PUBKEY: [u8; 32] = *include_bytes!("../../toolchain/eupkg/keys/rotation.pub");
+/// Every key a signature may verify against, daily key first.
+pub fn trusted_keys() -> [&'static [u8; 32]; 2] {
+    [&EUROOS_PUBKEY, &EUROOS_ROTATION_PUBKEY]
+}
 
 /// Verify an Ed25519 signature (64 bytes) over `msg` with the baked-in
 /// public key. Returns `true` only if the signature is valid.
 pub fn verify(msg: &[u8], sig: &[u8]) -> bool {
-    let vk = match VerifyingKey::from_bytes(&EUROOS_PUBKEY) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
     let bytes: [u8; 64] = match sig.try_into() {
         Ok(b) => b,
         Err(_) => return false,
     };
-    // `verify_strict` also rejects weak/non-canonical signatures.
-    vk.verify_strict(msg, &Signature::from_bytes(&bytes)).is_ok()
+    let signature = Signature::from_bytes(&bytes);
+    // Daily key, then the rotation key. `verify_strict` also rejects weak or
+    // non-canonical signatures; an invalid key file (the placeholder) never verifies.
+    trusted_keys().iter().any(|k| VerifyingKey::from_bytes(k).map(|vk| vk.verify_strict(msg, &signature).is_ok()).unwrap_or(false))
 }
 
 /// Short hex rendering (first 8 bytes) of the public key, for logging.

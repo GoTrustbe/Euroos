@@ -35,6 +35,9 @@ struct Node {
     name: String,
     is_dir: bool,
     data: Vec<u8>,
+    /// `Some((index, len))`: the file's bytes live in the caller's `ext[index]`
+    /// slice (see `build_streaming`), not in `data` — no copy of a 50 MB kernel.
+    ext: Option<(usize, usize)>,
     children: Vec<usize>,
     first_cluster: u32,
     clusters: u32,
@@ -64,6 +67,7 @@ impl FatFs {
                 name: String::new(),
                 is_dir: true,
                 data: Vec::new(),
+                ext: None,
                 children: Vec::new(),
                 first_cluster: 0,
                 clusters: 0,
@@ -88,6 +92,7 @@ impl FatFs {
                     name: String::from(*part),
                     is_dir: false,
                     data: data.to_vec(),
+                    ext: None,
                     children: Vec::new(),
                     first_cluster: 0,
                     clusters: 0,
@@ -108,6 +113,7 @@ impl FatFs {
                             name: String::from(*part),
                             is_dir: true,
                             data: Vec::new(),
+                            ext: None,
                             children: Vec::new(),
                             first_cluster: 0,
                             clusters: 0,
@@ -120,6 +126,23 @@ impl FatFs {
         }
     }
 
+    /// Add a file whose bytes are NOT copied: `len` bytes that `build_streaming`
+    /// reads from its `ext[index]` argument. For the two ~50 MB kernel images on
+    /// an ESP this is the difference between fitting in the kernel heap or not.
+    pub fn add_file_ext(&mut self, path: &str, index: usize, len: usize) {
+        self.add_file(path, &[]);
+        if let Some(n) = self.nodes.last_mut() {
+            if !n.is_dir {
+                n.ext = Some((index, len));
+            }
+        }
+    }
+    fn file_len(&self, i: usize) -> usize {
+        match self.nodes[i].ext {
+            Some((_, len)) => len,
+            None => self.nodes[i].data.len(),
+        }
+    }
     /// How many 32-byte directory entries does a directory have (incl. LFN + ./.. + end marker)?
     fn dir_entry_count(&self, node: usize, is_root: bool) -> usize {
         let mut n = if is_root { 1 } else { 2 }; // root: volume label · subdir: "." + ".."
@@ -138,7 +161,7 @@ impl FatFs {
                 let bytes = entries * 32;
                 self.nodes[i].clusters = bytes.div_ceil(CLUSTER_BYTES).max(1) as u32;
             } else {
-                let bytes = self.nodes[i].data.len();
+                let bytes = self.file_len(i);
                 self.nodes[i].clusters = bytes.div_ceil(CLUSTER_BYTES) as u32; // 0 for empty file
             }
         }
@@ -247,6 +270,110 @@ impl FatFs {
         img
     }
 
+    /// Same image as `build()`, but delivered sector-aligned through `write(sector, bytes)`
+    /// (≤ 4 KiB per call) instead of materializing the whole volume: a 256 MiB ESP no
+    /// longer needs 256 MiB of heap. Files added with `add_file_ext` are read from
+    /// `ext[index]`. Sectors not written (free clusters) are left as they are on the
+    /// medium; the full FAT tables ARE written, so free space is really free.
+    /// Returns false (and writes NOTHING) when the files do not fit the volume:
+    /// silently spilling past the partition end once cost a slot partition.
+    pub fn build_streaming<W: FnMut(u64, &[u8])>(&mut self, ext: &[&[u8]], mut write: W) -> bool {
+        const CHUNK: usize = 4096;
+        self.compute_cluster_counts();
+        let highest = self.allocate();
+        let cluster_count = highest.saturating_sub(2).max(1);
+        let tmp1 = self.total_sectors.saturating_sub(RESERVED);
+        let tmp2 = (256 * SPC + NUM_FATS) / 2;
+        let spf = (tmp1 + tmp2 - 1) / tmp2.max(1);
+        let data_start = RESERVED + NUM_FATS * spf;
+        // Reserved area: boot sector (0, backup 6) + FSInfo (1, backup 7); the rest zero.
+        let mut reserved = vec![0u8; RESERVED as usize * SECTOR];
+        self.write_boot_sector(&mut reserved, spf);
+        let bs = reserved[0..SECTOR].to_vec();
+        reserved[6 * SECTOR..7 * SECTOR].copy_from_slice(&bs);
+        let total_clusters = self.total_sectors.saturating_sub(data_start) / SPC;
+        if highest.saturating_sub(2) > total_clusters {
+            return false;
+        }
+        let used: u32 = self.nodes.iter().map(|n| n.clusters).sum();
+        let free = total_clusters.saturating_sub(used);
+        write_fsinfo(&mut reserved[SECTOR..2 * SECTOR], free, highest);
+        let fsi = reserved[SECTOR..2 * SECTOR].to_vec();
+        reserved[7 * SECTOR..8 * SECTOR].copy_from_slice(&fsi);
+        for (k, c) in reserved.chunks(CHUNK).enumerate() {
+            write((k * CHUNK / SECTOR) as u64, c);
+        }
+        // FAT tables (both copies), streamed in 4 KiB pieces; entries past the last
+        // used cluster are zero (free), and the tail of each table is written as zeros.
+        let mut fat = vec![0u32; (data_start as usize) + cluster_count as usize + 8];
+        fat[0] = 0x0FFF_FFF8;
+        fat[1] = EOC;
+        for i in 0..self.nodes.len() {
+            let (start, cnt) = (self.nodes[i].first_cluster, self.nodes[i].clusters);
+            for k in 0..cnt {
+                let cl = start + k;
+                fat[cl as usize] = if k + 1 == cnt { EOC } else { cl + 1 };
+            }
+        }
+        let fat_bytes = spf as usize * SECTOR;
+        for f in 0..NUM_FATS {
+            let base_sector = (RESERVED + f * spf) as u64;
+            let mut buf = vec![0u8; CHUNK];
+            for off in (0..fat_bytes).step_by(CHUNK) {
+                let n = CHUNK.min(fat_bytes - off);
+                buf.iter_mut().for_each(|b| *b = 0);
+                for j in 0..n / 4 {
+                    let idx = off / 4 + j;
+                    if idx < fat.len() {
+                        buf[j * 4..j * 4 + 4].copy_from_slice(&(fat[idx] & 0x0FFF_FFFF).to_le_bytes());
+                    }
+                }
+                write(base_sector + (off / SECTOR) as u64, &buf[..n]);
+            }
+        }
+        let cluster_sector = |cl: u32| data_start as u64 + (cl as u64 - 2) * SPC as u64;
+        // Directories: their cluster(s), zero-padded to whole sectors.
+        for i in 0..self.nodes.len() {
+            if !self.nodes[i].is_dir {
+                continue;
+            }
+            let mut d = self.build_dir_data(i, i == 0);
+            let cap = self.nodes[i].clusters as usize * CLUSTER_BYTES;
+            d.truncate(cap);
+            d.resize(cap, 0);
+            let mut sec = cluster_sector(self.nodes[i].first_cluster);
+            for c in d.chunks(CHUNK) {
+                write(sec, c);
+                sec += (c.len() / SECTOR) as u64;
+            }
+        }
+        // Files: data straight from `ext[..]` or the node, last chunk zero-padded.
+        for i in 0..self.nodes.len() {
+            if self.nodes[i].is_dir || self.nodes[i].clusters == 0 {
+                continue;
+            }
+            let data: &[u8] = match self.nodes[i].ext {
+                Some((idx, len)) => &ext[idx][..len.min(ext[idx].len())],
+                None => &self.nodes[i].data,
+            };
+            let mut sec = cluster_sector(self.nodes[i].first_cluster);
+            let mut pad = [0u8; CHUNK];
+            for c in data.chunks(CHUNK) {
+                if c.len() % SECTOR == 0 {
+                    write(sec, c);
+                } else {
+                    let n = c.len().div_ceil(SECTOR) * SECTOR;
+                    pad[..c.len()].copy_from_slice(c);
+                    for b in pad[c.len()..n].iter_mut() {
+                        *b = 0;
+                    }
+                    write(sec, &pad[..n]);
+                }
+                sec += (c.len().div_ceil(SECTOR)) as u64;
+            }
+        }
+        true
+    }
     fn write_boot_sector(&self, img: &mut [u8], spf: u32) {
         let b = &mut img[0..SECTOR];
         b[0] = 0xEB;
@@ -298,7 +425,7 @@ impl FatFs {
         for &c in &self.nodes[node].children {
             let child = &self.nodes[c];
             let attr = if child.is_dir { ATTR_DIR } else { 0 };
-            let size = if child.is_dir { 0 } else { child.data.len() as u32 };
+            let size = if child.is_dir { 0 } else { self.file_len(c) as u32 };
             // Pick a UNIQUE 8.3 name in this directory (BASE~N on collision/LFN).
             let short = match short83(&child.name) {
                 Some(s) if !used.contains(&s) => s,
