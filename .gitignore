@@ -22,7 +22,8 @@ boot.ppm
 # ── SECRET: private Ed25519 signing seed — NEVER publish ─────────────────────
 # The kernel embeds ONLY the matching public key (toolchain/eupkg/keys/dev.pub).
 # Contributors generate their own dev keypair to build signed userland — see
-# CONTRIBUTING.md. The project's release-signing key is held offline, not in git.
+# CONTRIBUTING.md. The daily release key lives root-only on the build server; the
+# rotation key is age-encrypted with its passphrase off-server (docs/UPDATES.md).
 toolchain/eupkg/keys/dev.key
 
 # ── Local web staging (site content, not part of the OS source) ──────────────

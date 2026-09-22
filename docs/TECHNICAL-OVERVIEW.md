@@ -182,6 +182,7 @@ An anti-brick A/B slot state machine (host-tested, 5 tests): slots A/B with stat
 - **G4 durability:** the `slot_config` now lives on a **raw GPT-reserved block** (LBA 40, in the alignment gap before the first partition at LBA 2048 — *outside any EuroFS partition*). It is read/written via direct `virtio_blk` sector I/O with flush, so the A/B state **survives filesystem corruption and torn writes** (the top reliability risk). The FS file `/boot/slot_config` is kept only as a human-readable mirror.
 - **Verified across a real reboot:** boot 1 on a fresh disk reports *"fresh disk → initial"*; boot 2 on the same disk reports *"recovered from previous boot"* — proving FS-independent persistence.
 - **Signed updates:** `euroupdate apply` verifies an **Ed25519 signature** over the image before staging it to the inactive slot.
+- **Over-the-air (8 Sep 2026):** an installed system checks the signed channel on euro-os.eu in the background (non-blocking, 90 s after boot then every 6 h), stages the verified kernel to the inactive slot partition on virtio, AHCI or NVMe, and boots it through the verifying loader. Two trusted keys with server-side rotation. Operator guide: [`UPDATES.md`](UPDATES.md).
 
 ---
 
