@@ -1111,6 +1111,49 @@ pub fn cdp_pump() {
             // web content" apart from "the first navigation was simply dropped".
             {
                 static NAV_ONCE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+                // Second navigation, to the live site, at the tenth heartbeat (~5 min):
+                // exit criterion 2 of the desktop sprint, and the measurement for the
+                // ten "handshake failed ... net_error -100" lines seen per run. Off
+                // unless LIVE_SITE_AT_HEARTBEAT is set (a kernel constant for now).
+                const LIVE_SITE_AT_HEARTBEAT: u64 = 10;
+                static NAV_LIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+                static NAV_LIVE_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+                static NAV_LIVE_ANS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+                static NAV_LIVE_DUMPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+                // After the live navigate, run 14 got NO reply of any kind for the rest
+                // of the run (no heartbeat answers either) and the guest sat idle: the
+                // browser's main thread parked on something in that navigation. The
+                // once-only "channel dead" dump had already spent itself. This one is
+                // armed by the navigate: 60 s later with no answer since, name the wait.
+                {
+                    let at = NAV_LIVE_AT.load(Ordering::Relaxed);
+                    if at != 0 && now.saturating_sub(at) > 6000
+                        && PING_ANS.load(Ordering::Relaxed) == NAV_LIVE_ANS.load(Ordering::Relaxed)
+                        && !NAV_LIVE_DUMPED.swap(true, Ordering::Relaxed)
+                    {
+                        crate::serial_println!("[cdp] no DevTools answer 60 s after the live navigate: where is the browser?");
+                        // ONLY the lock-free ring. The first version of this dump also
+                        // printed the thread states and the epoll sets from here, on
+                        // TASK 0 with IF=1: it held EPOLLS.lock() across a Debug print,
+                        // was preempted, and a chrome thread then spun forever in
+                        // epoll_wait with IF=0 on that lock (run 21's NMI probe: RIP in
+                        // linux_dispatch_inner, cdp_pump+0xae8 and Debug::fmt on the
+                        // stack). The rule above cdp_send stands: no ring3 spinlocks
+                        // from the supervising loop. The syscall ring is a plain array.
+                        dump_main_syscalls();
+                    }
+                }
+                if LIVE_SITE_AT_HEARTBEAT > 0 && sent >= LIVE_SITE_AT_HEARTBEAT && !NAV_LIVE.load(Ordering::Relaxed) {
+                    let sid = CDP_SESSION.lock().clone();
+                    if !sid.is_empty() {
+                        NAV_LIVE.store(true, Ordering::Relaxed);
+                        NAV_LIVE_AT.store(now, Ordering::Relaxed);
+                        NAV_LIVE_ANS.store(PING_ANS.load(Ordering::Relaxed), Ordering::Relaxed);
+                        crate::serial_println!("[cdp] navigating the attached target to https://euro-os.eu/ (heartbeat {sent})");
+                        cdp_send(&alloc::format!(
+                            "{{\"id\":61,\"sessionId\":\"{sid}\",\"method\":\"Page.navigate\",\"params\":{{\"url\":\"https://euro-os.eu/\"}}}}"));
+                    }
+                }
                 if sent >= 4 && !NAV_ONCE.load(Ordering::Relaxed) {
                     let sid = CDP_SESSION.lock().clone();
                     if !sid.is_empty() {
@@ -8531,8 +8574,14 @@ pub fn chrome_stage_files() {
     // path earns trust (chrome's resolver consults hosts first, like glibc).
     register_file("/etc/resolv.conf", b"nameserver 10.0.2.3
 ".to_vec());
+    // euro-os.eu is pinned so the live-site run does not depend on the usernet
+    // resolver. The pin MUST follow the server: it still named 151.240.77.50, the
+    // machine the site left on 2026-09-04, and every navigation to the live site
+    // from the desktop ended in net::ERR_NAME_NOT_RESOLVED without a single DNS
+    // packet leaving (chrome served the name from this file and got nowhere).
+    // br-prod is 82.192.72.16 (docs: the server migration in the memory notes).
     register_file("/etc/hosts", b"127.0.0.1 localhost
-151.240.77.50 euro-os.eu www.euro-os.eu
+82.192.72.16 euro-os.eu www.euro-os.eu
 ".to_vec());
     for (name, bytes) in dejavu_fonts() {
         register_file_static(&alloc::format!("/usr/share/fonts/truetype/dejavu/{name}"), bytes);
@@ -8601,6 +8650,16 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // this makes it say so itself, the same way it named mremap.
     b"--vmodule=web_data_service_wrapper=2,profile_impl=2,profile_manager=2,database=2,statement=2,json_pref_store=2,profile_error_dialog=2,simple_backend_impl=2,simple_index_file=2",
     b"--no-first-run", b"--no-default-browser-check",
+    // The live site's name, pinned the way the boot-test path pins it. On the
+    // desktop a navigation to https://euro-os.eu/ ends in ERR_NAME_NOT_RESOLVED
+    // the instant it starts: chrome reads /etc/hosts twice and never sends a
+    // query (no socket, no packet), while lookups for its own background hosts
+    // went out to 10.0.2.3:53 minutes earlier in the same run. Its DNS config
+    // service wants netlink, which this kernel does not provide, and a pinned
+    // /etc/hosts did not change the outcome. The rule takes name resolution out
+    // of the picture so the TCP, TLS and HTTP underneath can be measured; the
+    // resolver itself stays an open item (sprint plan W5b).
+    b"--host-resolver-rules=MAP euro-os.eu 82.192.72.16,MAP www.euro-os.eu 82.192.72.16",
     // Everything the browser does BESIDES showing the page. The RIP histogram settled
     // what the main thread is busy with: 838 samples spread over 96+ code pages with
     // no hot spot -- not a livelock, just an enormous amount of startup work
@@ -10270,7 +10329,7 @@ fn linux_dispatch_swapped(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64)
     // sock fd, with its result. The main-navigation socket goes silent after
     // connect while background sockets chat away — this names what (if anything)
     // ever touches it again.
-    if a1 >= 500 && a1 < 520 && crate::net::is_sock_fd(a1) {
+    if crate::net::is_sock_fd(a1) {
         use core::sync::atomic::AtomicU32;
         static SOCKLIFE: AtomicU32 = AtomicU32::new(400);
         if SOCKLIFE.load(Ordering::Relaxed) > 0 {

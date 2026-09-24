@@ -1446,7 +1446,16 @@ pub fn cmd_https(host: &str) -> alloc::vec::Vec<String> {
 
 /// First fd number that represents a socket (well above the VFS fd's).
 pub const SOCK_FD_BASE: u64 = 500;
-const MAX_SOCK: usize = 16;
+/// 16 was the whole table, and a desktop browser is past it in minutes: its
+/// background lookups and connections took fd 500..515, and the sixteen-th was
+/// the last. From then on every socket() returned -1, which chrome reads as
+/// EPERM: net::ERR_ACCESS_DENIED on a connect, and net::ERR_NAME_NOT_RESOLVED
+/// on the resolver's UDP socket, both the instant a navigation started and
+/// without a packet leaving. Both were chased as resolver problems first.
+/// 96, not more: descriptor bands are 100 wide (sockets at 500, AF_UNIX at
+/// 600, X connections at 700, eventfds at 800, epoll at 900) and is_sock_fd is
+/// a range test, so a bigger table would make fd 600 a socket AND a unix fd.
+const MAX_SOCK: usize = 96;
 
 /// A connectionless UDP socket: after connect() we remember the destination and
 /// send/receive datagrams on our ephemeral source port.
@@ -1546,6 +1555,16 @@ pub fn sock_open(dgram: bool) -> u64 {
         if slot.is_none() {
             *slot = Some(Sock::Reserved { dgram, bind_port: 0 });
             return SOCK_FD_BASE + i as u64;
+        }
+    }
+    // Say so. A full table used to be silent and the caller's EPERM was read as
+    // a permission or resolver problem for three runs.
+    {
+        use core::sync::atomic::{AtomicU32, Ordering};
+        static LEFT: AtomicU32 = AtomicU32::new(8);
+        if LEFT.load(Ordering::Relaxed) > 0 {
+            LEFT.fetch_sub(1, Ordering::Relaxed);
+            crate::serial_println!("[net] socket table FULL ({MAX_SOCK} slots): socket() refused");
         }
     }
     (-1i64) as u64
