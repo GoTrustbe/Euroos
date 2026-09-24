@@ -277,9 +277,23 @@ were clean. It is the first crashing run in which fork children had exited
 before the crash (four on-device-model utilities). Commit 55b1e58 adds the exit
 guard: a dead child's keep list also holds every frame the browser main still
 maps, and `[exit-guard]` prints how many of the child's frames that concerned
-outside the shared lists. Zero in run 37 means the ownership model is sound and
-the crash is a use-after-free in GTK or chromium's GTK layer that Linux's
-zeroed pages mask; the fallback then is to run without the GTK LinuxUi.
+outside the shared lists. Run 37 reported zero for both exits, and run 38 crashed the
+same way once more. Reading the value again: PartitionAlloc encodes a freelist
+word as ~byteswap(next), so a freed slot's first word is -1 when it is the last
+entry and non-canonical otherwise, which is exactly what r13 read in every
+crash. GTK read the first word of a freed object as a GtkCssValue pointer: a
+use-after-free in GTK or chromium's GTK layer, not a kernel memory bug. Commit
+6bb4a3b: chrome's desktop argv carries `--ui-toolkit=qt`; the Qt shim finds no
+Qt in the pack and the browser runs without a toolkit integration, as it does
+on any system without GTK. Documented as a workaround, not a fix.
+
+### W6 continued: the lock is forced open and the holder named
+
+Run 38 wedged in `serial::_print` again, on the boot CR3: the holder was gone,
+a task that died or slept while printing, so the same-cpu bypass did not apply.
+Commit 6bb4a3b: `_print` waits at most 200 million spins, forces the lock open,
+writes the holder's task and cpu (recorded at lock time) through a second port
+handle, and goes on. Run 39 names the path that leaves the lock behind.
 
 ### W6. the flaky wedge, named: a print nested on the cpu that holds the UART lock
 
@@ -312,5 +326,5 @@ the demand pages is sound. Run 38 verifies.
    `file:///tmp/euro.html` painted in the window (screendump shows the page).
 2. Same run against `https://euro-os.eu/` renders the site. MET, run 34.
 3. Three consecutive runs pass (the repeatability bar used for multi-process).
-   Run 35 failed on lost ticks (W8), run 36 on the GTK crash (W9), run 37 on
-   the serial wedge (W6); the series restarts on the e6c326e build (run 38).
+   Runs 35 to 38 failed on W8, W9, W6 and W6+W9 in turn; the series restarts on
+   the 6bb4a3b build (run 39).
