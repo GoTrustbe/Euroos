@@ -189,11 +189,13 @@ kill $Q 2>/dev/null; wait $Q 2>/dev/null
 # The verdict, read from the log the way the sprint plan's exit criteria are
 # worded, so a run says PASS or FAIL by itself (criterion 3 wants three in a row):
 # the browser main thread (task 9) must not fault, the live navigate must commit
-# (Page.frameNavigated with the site's URL), no fork may be refused an arena,
+# (Page.frameNavigated with the site's URL; the kernel cuts [cdp] lines at ~200
+# characters, right inside the URL, so the match stops at the host name), no fork
+# may be refused an arena,
 # and the guest must not have wedged. Each failing check is named.
 V=""
 grep -aqE "(GP FAULT|page fault addr).*task 9\)" "$LOG" && V="$V main-thread-fault"
-grep -aqE "Page\.frameNavigated.*https://euro-os\.eu" "$LOG" || V="$V no-live-navigation"
+grep -aqE "Page\.frameNavigated.*https://euro-os" "$LOG" || V="$V no-live-navigation"
 grep -aq "arena alloc FAILED" "$LOG" && V="$V fork-refused"
 grep -aq "POOL EXHAUSTED" "$LOG" && V="$V demand-pool-exhausted"
 [ -f "$LOG.wedge" ] && V="$V wedge"
