@@ -11144,6 +11144,154 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
         }
         11 => 0, // munmap — the bump allocator does not give back, but silently succeeds
+        25 => {
+            // mremap(old=a1, old_len=a2, new_len=a3, flags=a4, new_addr=a5).
+            //
+            // Chrome names this one twelve times in a single desktop run. Without it
+            // the Simple Cache backend reports "wrong file structure on disk",
+            // profile initialisation fails, and the browser stops on a modal
+            // ("Something went wrong when opening your profile") before it ever paints
+            // a page. It is the blocker the binary itself pointed at.
+            //
+            // This allocator never gives memory back (munmap above is a no-op), which
+            // decides the shapes honestly available here:
+            //   shrink            -> keep the address, the mapping just covers less
+            //   grow at a bump top-> extend the bump, no copy
+            //   grow elsewhere    -> allocate and copy, if the caller allows a move
+            // A region whose bytes are shared with another mapping is REFUSED rather
+            // than moved: copying it would hand the caller a private snapshot and
+            // silently break the other side, which is the bug class that made pages
+            // come up empty before (see the MAP_SHARED notes in mmap above).
+            const MREMAP_MAYMOVE: u64 = 1;
+            const MREMAP_FIXED: u64 = 2;
+            const MREMAP_DONTUNMAP: u64 = 4;
+            let old = a1;
+            let old_len = (a2 + 0xFFF) & !0xFFF;
+            let new_len = (a3 + 0xFFF) & !0xFFF;
+            if old & 0xFFF != 0 || new_len == 0 {
+                return (-22i64) as u64; // -EINVAL
+            }
+            // Honouring these exactly needs a real VMA list (place at a chosen address,
+            // or keep the old mapping alive alongside the new one). Say EINVAL instead
+            // of pretending: a caller that gets a wrong answer here corrupts memory.
+            if a4 & (MREMAP_FIXED | MREMAP_DONTUNMAP) != 0 {
+                return (-22i64) as u64; // -EINVAL
+            }
+            if !in_user_arena(old, old_len.max(4096) as usize) {
+                return EFAULT;
+            }
+            if new_len <= old_len {
+                return old; // nothing to free, so the address stands
+            }
+            let grow = new_len - old_len;
+
+            // In-place growth when this mapping is the last thing handed out from its
+            // bump. That is the ordinary realloc pattern and costs no copy at all.
+            if old >= DEMAND_BASE {
+                let next = DEMAND_NEXT.load(Ordering::Relaxed);
+                if old + old_len == next
+                    && next + grow <= DEMAND_BASE + DEMAND_SIZE
+                    && DEMAND_NEXT
+                        .compare_exchange(next, next + grow, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_ok()
+                {
+                    return old; // the new tail faults in as the zeroes it must read
+                }
+            } else {
+                let brk = HEAP_BREAK.load(Ordering::Relaxed);
+                if old + old_len == brk && brk + grow <= HEAP_END.load(Ordering::Relaxed) {
+                    HEAP_BREAK.store(brk + grow, Ordering::Relaxed);
+                    if !zero_user(old + old_len, grow as usize) {
+                        return EFAULT;
+                    }
+                    return old;
+                }
+            }
+
+            if a4 & MREMAP_MAYMOVE == 0 {
+                return (-12i64) as u64; // -ENOMEM: no room here and no move allowed
+            }
+
+            // Each lock is taken and dropped in its own statement: an `||` chain would
+            // hold the first guard across the second lock, the hazard that froze a core
+            // once already (see the SHARED_MAPS note in mmap).
+            // Each lookup is its own statement so no guard is held across the next
+            // lock, and each says WHICH kind of mapping this is: "shared or
+            // file-backed" was too vague to act on, and the three cases want three
+            // different answers.
+            let end = old + old_len;
+            let alias = {
+                let a = SHARED_ALIASES.lock();
+                a.iter().find(|&&(b, l, _)| old >= b && old < b + l).copied()
+            };
+            // A MAP_SHARED window onto an in-RAM file. Growing it must NOT copy: the
+            // point of the mapping is that its frames belong to the file. Hand out a
+            // bigger window onto the SAME file instead, exactly as mmap does for every
+            // shared mapping (fresh address, shared frames). The file itself grew
+            // (chrome ftruncates before it remaps), so the extra pages fault in from it.
+            if let Some((abase, _alen, fi)) = alias {
+                let off = old - abase;
+                let region = ((off + new_len + 0xFFF) & !0xFFF).max(4096);
+                let start = DEMAND_NEXT.fetch_add(region, Ordering::Relaxed);
+                if start + region > DEMAND_BASE + DEMAND_SIZE {
+                    DEMAND_NEXT.fetch_sub(region, Ordering::Relaxed);
+                    return (-12i64) as u64; // -ENOMEM
+                }
+                SHARED_ALIASES.lock().push((start, region, fi));
+                SHARED_ANY.store(true, Ordering::Relaxed);
+                crate::serial_println!(
+                    "[linux-abi] mremap {old:#x} {old_len} -> {new_len}: shared window on {} re-aliased at {:#x} (same frames, no copy)",
+                    fi_path(fi), start + off);
+                return start + off;
+            }
+            let in_maps = SHARED_MAPS.lock().iter().any(|&(_, b, l)| old < b + l as u64 && end > b);
+            if in_maps {
+                crate::serial_println!(
+                    "[linux-abi] mremap {old:#x} {old_len} -> {new_len}: bump-allocated shared region, cannot grow in place");
+                return (-22i64) as u64; // -EINVAL
+            }
+            // A PRIVATE file-backed demand mapping. Moving it would copy only the pages
+            // already faulted in and silently drop anything written to the rest, so
+            // refuse instead of handing back a half-populated region.
+            if demand_file_backed(old, old_len as usize) {
+                crate::serial_println!(
+                    "[linux-abi] mremap {old:#x} {old_len} -> {new_len}: private file-backed mapping, refusing to move");
+                return (-22i64) as u64; // -EINVAL
+            }
+
+            // Same placement policy as an anonymous mmap: a big span goes to the sparse
+            // demand region, a small one to the arena window.
+            let dst = if DEMAND_ENABLED.load(Ordering::Relaxed) && new_len >= DEMAND_MIN_BYTES {
+                let start = DEMAND_NEXT.fetch_add(new_len, Ordering::Relaxed);
+                if start + new_len > DEMAND_BASE + DEMAND_SIZE {
+                    DEMAND_NEXT.fetch_sub(new_len, Ordering::Relaxed);
+                    return (-12i64) as u64; // -ENOMEM
+                }
+                start
+            } else {
+                let b = (HEAP_BREAK.load(Ordering::Relaxed) + 0xFFF) & !0xFFF;
+                if b + new_len > HEAP_END.load(Ordering::Relaxed) {
+                    return (-12i64) as u64; // -ENOMEM
+                }
+                HEAP_BREAK.store(b + new_len, Ordering::Relaxed);
+                b
+            };
+            if !in_user_arena(dst, new_len as usize) {
+                return (-12i64) as u64; // -ENOMEM
+            }
+            // SAFETY: both spans passed in_user_arena above. A demand-region page the
+            // copy touches is committed by the ring-0 demand fault handler, which is
+            // exactly why in_user_arena accepts those addresses for kernel access.
+            unsafe {
+                core::ptr::copy_nonoverlapping(old as *const u8, dst as *mut u8, old_len as usize);
+                core::ptr::write_bytes((dst + old_len) as *mut u8, 0, grow as usize);
+            }
+            crate::serial_println!("[linux-abi] mremap {old:#x} {old_len} -> {dst:#x} {new_len} (moved + copied)");
+            dst
+        }
+        26 => 0, // msync — every mapping here is already the one memory its file is
+                 // (MAP_SHARED hands out the same frames), so there is nothing to flush
+                 // and reporting success is the truthful answer, not a stub.
         158 => {
             // arch_prctl(code, addr): ARCH_SET_FS=0x1002 sets FS_BASE (musl TLS).
             match a1 {
