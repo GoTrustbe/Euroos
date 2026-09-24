@@ -29,20 +29,36 @@ the gap between that and the desktop.
 
 ## Walls, in the order the evidence points
 
-### W1. next: X input is queued for chrome and never read
+### W1. done, in two parts: the click reaches chrome; Enter dismisses the dialog
 
-Evidence (run 8): after the fixed click,
-`[xserver] 128 B of input queued unread on connection 0`, and chrome's main
-thread `t9` sits at syscall 47 (recvmsg) returning -11 EAGAIN. The X server has
-the ButtonPress/Release; chrome polls; nothing marks that AF_UNIX connection
-readable. Motion reaches chrome (the OK button paints its hover state), so this
-is about readiness on the X connection, not about input.
+What the instrument in `send_input` settled (run 11, commit c6ed9ff): there is
+NO dialog window. The browser connection owns one mapped window, 0x400003,
+800x600 at (40,40), all input masks set; the profile dialog is painted inside
+it. ButtonPress and ButtonRelease reach it at the right window-local point and
+chrome drains them (`[xin] <- conn=0 client DRAINED kind=4/5`). Readiness was
+never the problem; the "128 B queued unread" of run 8 was a transient.
 
-Plan: find where the X server appends to a connection's outbound queue and
-where poll/epoll compute readiness for AF_UNIX fds; the append must raise the
-readable state and wake a waiter. Same family as the earlier "socket readiness
-in poll/epoll" and "EAGAIN-vs-EOF" fixes. Verify: the dialog closes on the
-scripted click (`CLICK_AT="697 456"`), then the page paints.
+**Enter dismisses the dialog** (KEYS_AFTER="ret"), and Chromium's own tab
+strip, toolbar and omnibox are then on the EuroOS desktop:
+`docs/proof/2026-09-24-desktop-chromium-ui-after-enter.png`.
+
+### W1b. next: the mouse press does not fire the button (hover does)
+
+The delivered bytes show `state=0` on BOTH press and release. X defines
+`state` as the button/modifier mask BEFORE the event, so a ButtonRelease must
+carry Button1Mask (0x100); chrome derives a release's flags from that word and
+a Views button only fires when the release carries the left-button flag. Fix
+in the tree (send_input sets the button bit on release, clears it on press);
+verify: the scripted click alone dismisses the dialog, no Enter needed.
+
+### W1c. next: the first navigation is dropped; the tab sits at about:blank
+
+After Enter, `Target.getTargets` reports the page target with `url:""` and no
+title, and the omnibox shows about:blank, while at startup the same target was
+at `file:///tmp/euro.html` (which has a title). The startup navigation was
+lost while the dialog interrupted startup. In the tree: the input-only bridge
+re-navigates the attached target once, at the fourth heartbeat. Verify: the
+page paints in the desktop window (screendump), title "Chromium on EuroOS".
 
 ### W2. open: the profile modal itself
 
@@ -70,14 +86,13 @@ Plan: measure which child is refused (log the argv `--type=` of the failing
 fork), then either grow the pool (RAM permits: 7 GiB on the NUC, guest gets
 3584M) or give arenas a size class by child type.
 
-### W4. open: the rest of the ENOSYS census
+### W4. mostly done: the rest of the ENOSYS census
 
-Cheap ones first, each verified by the census shrinking: `getrusage` (zeros are
-honest for what chrome does with it), `inotify_init` (a valid fd that never
-fires is truthful: nothing on this VFS changes behind chrome's back),
-`name_to_handle_at` and `landlock` (EOPNOTSUPP is the honest answer, chrome
-handles it). `sigaltstack` stays ENOSYS until signals on alternate stacks are
-real; crashpad is disabled anyway.
+Done (559f064): `link`/`linkat` (a copy in the flat VFS; the caller was
+fontconfig's atomic cache publish, not the disk cache), `inotify_init`/`_init1`
+as a never-firing eventfd plus add/rm_watch, `getrusage` as zeros. Left, all
+benign probes: `recvmmsg` x3, `sigaltstack` x3 (crashpad, disabled),
+`name_to_handle_at` x2, `landlock` x1.
 
 ### W5. open: TLS handshakes fail on the desktop path
 
@@ -86,19 +101,23 @@ run. The September multi-process runs rendered the live site over https, so
 this is new to the desktop path or to this build. Not in scope until a page
 renders at all; noted so it is not rediscovered.
 
-### W6. instrument: the flaky wedge
+### W6. instrument: the flaky wedge, now caught automatically
 
-One run in eight went silent after the keystrokes with IRQs still firing.
-`/root/wedge-probe.sh` starts a run and injects an NMI if the guest goes quiet.
-Keep it in the loop; when it catches one, the probe names the RIP.
+Two runs in twelve (3 and 12) went silent right after the first keystrokes with
+IRQs still firing; the same build ran fine the next time. The runbook now
+watches the serial log after typing and, at 60 s of silence, injects an NMI
+twice through the monitor and prints the probe (RIP + task census), then keeps
+sampling. The next wedge names its own RIP.
 
 ## Done this sprint (all on `feature/app-control`, not pushed)
 
 - b875f70 mremap + msync. Shared windows re-aliased, not copied.
 - 6f8568c HID report log counted per kind; CLICK_AT in the runbook; narrow vmodule.
-- 850546c one shared buffer for four in-flight HID TRBs: clicks now carry the
-  button, cursor lands on the dialog's OK, hover state paints.
-- scripts/nuc-desktop-run.sh: the KVM runbook, in the repo this time.
+- 850546c one shared buffer for four in-flight HID TRBs: clicks carry the button.
+- 559f064 link, inotify_init, getrusage.
+- c6ed9ff the browser UI on the desktop; Enter dismisses the dialog; the
+  send_input census; KEYS_AFTER; 1152 MiB fork-pool candidate (inert at 3584M).
+- scripts/nuc-desktop-run.sh: KVM runbook, one-VM guard, NMI wedge watchdog.
 
 ## Exit criteria
 

@@ -84,10 +84,28 @@ echo "typed chrome at $(( $(date +%s) - START ))s"
 # dialog); a click on its button is how you find out whether that dialog is the
 # wall or just noise in front of it. The tablet is absolute, so a point read off a
 # screendump lands where the screendump said.
+# Wedge watchdog. One run in six goes silent right after the keystrokes with the
+# IRQs still firing (runs 3 and 12). When the serial log has not grown for 60 s,
+# inject an NMI: it fires under IF=0 and the kernel's probe prints the RIP and a
+# task census, which no ordinary log line can reach. Twice, 4 s apart, then the
+# run continues so the screendumps still say what the screen looked like.
+LASTLINES=0; QUIET=0; NMI_DONE=0
+watchdog() {
+  local n; n=$(wc -l < "$LOG")
+  if [ "$n" = "$LASTLINES" ]; then QUIET=$((QUIET + 5)); else QUIET=0; fi
+  LASTLINES=$n
+  if [ $QUIET -ge 60 ] && [ $NMI_DONE = 0 ]; then
+    NMI_DONE=1
+    echo "WEDGE: no serial output for ${QUIET}s at $(( $(date +%s) - START ))s, injecting NMI"
+    mon "nmi"; sleep 4; mon "nmi"; sleep 4
+    grep -a -A 40 "NMI PROBE" "$LOG" | head -60
+  fi
+}
 for t in ${SAMPLES:-120 300 480 660}; do
   while [ $(( $(date +%s) - START )) -lt $t ]; do
     kill -0 $Q 2>/dev/null || break 2
     sleep 5
+    watchdog
   done
   mon "screendump $LOG-t$t.ppm"
   echo "SHOT $LOG-t$t.ppm at $(( $(date +%s) - START ))s"
