@@ -12803,6 +12803,17 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 }
             }
             diag_pack_path("openat", &path, fd);
+            if fd == u64::MAX {
+                // Say WHICH failure: a missing file is ENOENT, a full descriptor table
+                // EMFILE. The blanket -1 (EPERM) told chrome's Simple Cache that its
+                // fake index existed but could not be opened ("wrong file structure on
+                // disk: 2" = kBadFakeIndexFile), so it never created one and the whole
+                // disk cache stayed off; base::File maps ENOENT to the not-found case
+                // that WRITES the index.
+                let exists = FILES.lock().iter().any(|(p, _)| p.as_bytes() == &path[..])
+                    || DISK_FILES.lock().iter().any(|(p, _, _, _)| p.as_bytes() == &path[..]);
+                return if exists || flags & 0x40 != 0 { (-24i64) as u64 } else { (-2i64) as u64 };
+            }
             fd
         }
         2 => {
@@ -13382,6 +13393,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
             done
         }
+        // chmod / fchmod / fchmodat: the flat VFS keeps no modes (stat reports the
+        // 0700 chrome expects on its profile); 17 ENOSYS per run for nothing.
+        90 | 91 | 268 => 0,
+        // sigaltstack: no signal delivery here, so the alternate stack is moot;
+        // success keeps chrome's crash-handler setup quiet (8 ENOSYS per run).
+        131 => 0,
         334 => (-38i64) as u64, // rseq — not supported; glibc falls back gracefully
         21 | 269 => {
             // access(path, mode) / faccessat(dirfd, path, mode): 0 if it exists.
