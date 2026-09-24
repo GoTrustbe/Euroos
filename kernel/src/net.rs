@@ -60,6 +60,56 @@ static PORTQ: spin::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ip
 static NET_LEGACY: spin::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>> =
     spin::Mutex::new(alloc::collections::VecDeque::new());
 
+/// Per-port queues for UDP datagrams to a REGISTERED local port (one per UdpSock),
+/// the way PORTQ holds TCP segments per port. Before this every UDP reader pulled
+/// frames off the one legacy queue and dropped what was not its own: chrome runs
+/// its DNS lookups on several UDP sockets at once, so socket A's poll threw away
+/// the answers for B and C, and 31 queries got 2 answers in a run (the rest
+/// ended in ERR_NAME_NOT_RESOLVED). Entries: (source ip, payload).
+static UDPQ: spin::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, alloc::vec::Vec<u8>)>)>> =
+    spin::Mutex::new(alloc::vec::Vec::new());
+static UDP_ROUTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// A UDP socket opened on `sport`: its datagrams go to its own queue from now on.
+fn udpq_register(sport: u16) {
+    let mut t = UDPQ.lock();
+    if !t.iter().any(|(p, _)| *p == sport) {
+        t.push((sport, alloc::collections::VecDeque::new()));
+    }
+}
+fn udpq_remove(sport: u16) {
+    UDPQ.lock().retain(|(p, _)| *p != sport);
+}
+/// Route one received IPv4/UDP packet to its port's queue; false = not ours.
+fn udpq_route(udpq: &mut alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, alloc::vec::Vec<u8>)>)>,
+              ih: &Ipv4Header, ipl: &[u8]) -> bool {
+    let Ok(dg) = UdpDatagram::parse(ipl, ih.src, ih.dst) else { return false };
+    let Some((_, q)) = udpq.iter_mut().find(|(p, _)| *p == dg.dst_port) else { return false };
+    if q.len() < 64 {
+        q.push_back((ih.src, dg.payload));
+    }
+    let n = UDP_ROUTED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    if n < 4 || (n + 1) % 64 == 0 {
+        crate::serial_println!("[udpq] #{} datagram to port {} queued ({} B)", n + 1, dg.dst_port, q.back().map(|d| d.1.len()).unwrap_or(0));
+    }
+    true
+}
+/// Pop the next queued datagram for `sport` from `server` (others are dropped, as
+/// a connected UDP socket does).
+fn udpq_pop(sport: u16, server: Ipv4Addr) -> Option<alloc::vec::Vec<u8>> {
+    let mut t = UDPQ.lock();
+    let (_, q) = t.iter_mut().find(|(p, _)| *p == sport)?;
+    while let Some((src, d)) = q.pop_front() {
+        if src == server {
+            return Some(d);
+        }
+    }
+    None
+}
+fn udpq_has(sport: u16, server: Ipv4Addr) -> bool {
+    UDPQ.lock().iter().any(|(p, q)| *p == sport && q.iter().any(|(src, _)| *src == server))
+}
+
 /// Segments this stack THREW AWAY, and why. A TCP that silently drops recovers
 /// by retransmission, so the loss is invisible until a page half-loads: three
 /// concurrent downloads here, one subresource failing with ERR_SSL_PROTOCOL_ERROR
@@ -157,6 +207,7 @@ pub fn rx_route_irq() {
     };
     let Some(mut portq) = PORTQ.try_lock() else { return };
     let Some(mut legacy) = NET_LEGACY.try_lock() else { return };
+    let Some(mut udpq) = UDPQ.try_lock() else { return };
     for _ in 0..256 {
         let rx = match nic::poll_recv() {
             Some(r) => r,
@@ -183,6 +234,8 @@ pub fn rx_route_irq() {
                             }
                             routed = true;
                         }
+                    } else if ih.protocol == Protocol::Udp && ih.dst == my_ip {
+                        routed = udpq_route(&mut udpq, &ih, ipl);
                     }
                 }
             }
@@ -235,6 +288,8 @@ fn rx_route() {
                             }
                             routed = true;
                         }
+                    } else if ih.protocol == Protocol::Udp && ih.dst == my_ip {
+                        routed = udpq_route(&mut UDPQ.lock(), &ih, ipl);
                     }
                 }
             }
@@ -1485,6 +1540,10 @@ impl UdpSock {
     /// other destinations are dropped here exactly as the blocking `recv` drops
     /// them; the difference is only that this one never spins.
     pub fn recv_nowait(&self) -> alloc::vec::Vec<u8> {
+        rx_route();
+        if let Some(d) = udpq_pop(self.sport, self.server) {
+            return d;
+        }
         for _ in 0..64 {
             let Some(rx) = legacy_rx() else { break };
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
@@ -1505,6 +1564,10 @@ impl UdpSock {
     }
     pub fn recv(&self) -> alloc::vec::Vec<u8> {
         for _ in 0..SPINS * 3 {
+            rx_route();
+            if let Some(d) = udpq_pop(self.sport, self.server) {
+                return d;
+            }
             if let Some(rx) = legacy_rx() {
                 if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                     if h.ethertype == EtherType::Ipv4 {
@@ -1652,6 +1715,7 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     };
     if dgram {
         let s = UdpSock { my_mac: cfg.my_mac, my_ip: cfg.my_ip, nexthop, server, dport: port, sport: alloc_port() };
+        udpq_register(s.sport);
         SOCKETS.lock()[i] = Some(Sock::Udp(s));
         0
     } else {
@@ -2108,10 +2172,13 @@ pub fn sock_readable(fd: u64) -> bool {
             }
             !c.rx.is_empty() || !c.open
         }
-        // A plain UDP socket has no rx queue to peek (recv spins the NIC);
-        // report not-ready and let recv() collect. LocalDns (chrome's only UDP
-        // in practice) has a real queue below.
-        Some(Sock::Udp(_)) => false,
+        // A UDP socket is readable when its port queue holds a datagram from its
+        // peer (rx_route sorts the NIC ring into the port queues first). It used to
+        // answer "never ready", which left chrome's resolver polling blind.
+        Some(Sock::Udp(u)) => {
+            rx_route();
+            udpq_has(u.sport, u.server)
+        }
         Some(Sock::LocalDns { rx }) => !rx.is_empty(),
         Some(Sock::Listen { queue, .. }) => !queue.is_empty(),
         _ => false,
@@ -2131,6 +2198,7 @@ pub fn sock_close(fd: u64) -> u64 {
     }
     if let Some(Sock::Udp(u)) = &t[i] {
         portq_remove(u.sport);
+        udpq_remove(u.sport);
     }
     t[i] = None;
     0

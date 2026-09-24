@@ -8020,12 +8020,20 @@ fn madvise(addr: u64, len: u64, advice: u64) -> u64 {
         use x86_64::registers::control::Cr3;
         Cr3::read().0.start_address().as_u64()
     };
-    let keep = shared_phys_sorted();
+    // Which pages to leave alone: read-only mappings (disk-cache frames are mapped
+    // read-only, and PTE.W says so without a lookup), MAP_SHARED windows (a range
+    // test, no sorted frame list: shared_phys_sorted() collects and sorts the whole
+    // disk page cache, and a reclaim issues madvise a thousand times with
+    // interrupts off), and file-backed private pages.
+    let in_shared = |page: u64| {
+        SHARED_MAPS.lock().iter().any(|&(_, b, l)| page >= b && page < b + l as u64)
+            || SHARED_ALIASES.lock().iter().any(|&(b, l, _)| page >= b && page < b + l)
+    };
     let mut zeroed = 0u64;
     let mut page = start;
     while page < end {
         if let Some((phys, writable)) = crate::paging::demand_pte(pml4, page) {
-            if writable && keep.binary_search(&phys).is_err() && !demand_file_backed(page, 4096) {
+            if writable && !in_shared(page) && !demand_file_backed(page, 4096) {
                 // SAFETY: `phys` is an identity-mapped 4 KiB frame owned by this process alone.
                 unsafe { core::ptr::write_bytes(phys as *mut u8, 0, 4096); }
                 zeroed += 1;
@@ -8097,6 +8105,11 @@ pub fn demand_committed_pages() -> u64 { DEMAND_COMMITTED.load(Ordering::Relaxed
 /// so every run carries its own before/after numbers.
 pub static FAULT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 pub static FAULT_CYCLES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Demand faults served so far and the TSC cycles they took (for the late-tick log).
+pub fn fault_counters() -> (u64, u64) {
+    (FAULT_COUNT.load(Ordering::Relaxed), FAULT_CYCLES.load(Ordering::Relaxed))
+}
 
 pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
     let t0 = unsafe { core::arch::x86_64::_rdtsc() };

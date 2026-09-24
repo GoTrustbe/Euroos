@@ -607,9 +607,45 @@ static SCHED_LOG_CTR: AtomicU64 = AtomicU64::new(0);
 
 pub static TRACE_SCHED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
+/// TSC at the previous timer interrupt, ticks the clock had to add to stay on real
+/// time, and how many late ticks have been logged.
+static LAST_TICK_TSC: AtomicU64 = AtomicU64::new(0);
+pub static LOST_TICKS: AtomicU64 = AtomicU64::new(0);
+static LATE_TICKS_LOGGED: AtomicU64 = AtomicU64::new(0);
+
 #[no_mangle]
 pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
-    crate::interrupts::TICKS.fetch_add(1, Ordering::Relaxed);
+    // A late tick: the periodic LAPIC timer has one pending bit, so a window with
+    // interrupts off longer than a period swallows every period but one. The clock
+    // is kept on real time from the TSC, and the first late ticks say WHERE the
+    // window ended (the interrupted rip, the task and its last syscall, the demand
+    // faults served meanwhile): run 35 on the NUC lost two thirds of its ticks with
+    // the vCPU idle whenever anyone looked, and the desktop clock fell behind by
+    // minutes while the timer itself was fine.
+    let now_tsc = unsafe { core::arch::x86_64::_rdtsc() };
+    let prev_tsc = LAST_TICK_TSC.swap(now_tsc, Ordering::Relaxed);
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed);
+    let mut add = 1u64;
+    if prev_tsc != 0 && per != 0 {
+        let gap = now_tsc.wrapping_sub(prev_tsc);
+        if gap > per * 2 {
+            let lost = (gap / per - 1).min(10_000);
+            add += lost;
+            LOST_TICKS.fetch_add(lost, Ordering::Relaxed);
+            let n = LATE_TICKS_LOGGED.fetch_add(1, Ordering::Relaxed);
+            if n < 24 || (n + 1) % 128 == 0 {
+                let (rip, cs) = unsafe { (*((rsp + 120) as *const u64), *((rsp + 128) as *const u64)) };
+                let cur = current();
+                let (sn, sa1, _) = crate::ring3::last_syscall(cur);
+                let (fc, fcyc) = crate::ring3::fault_counters();
+                crate::serial_println!(
+                    "[tick-late] #{} +{lost} ticks ({} Mcycles) rip={rip:#x} cs={cs:#x} task {cur} last-syscall={sn}(a1={sa1:#x}) faults-total={fc} ({} Mcycles) lost-total={}",
+                    n + 1, gap / 1_000_000, fcyc / 1_000_000, LOST_TICKS.load(Ordering::Relaxed)
+                );
+            }
+        }
+    }
+    crate::interrupts::TICKS.fetch_add(add, Ordering::Relaxed);
     crate::interrupts::send_timer_eoi();
     if CENSUS_REQUEST.swap(false, Ordering::Relaxed) {
         census_trylock();
