@@ -38,7 +38,15 @@ mon() { printf '%s\n' "$@" | nc -U -q 1 "$LOG.mon" >/dev/null 2>&1; }
 # run to finish rather than fail. pkill -x, never -f: -f matches the ssh command
 # line that started us.
 while pgrep -x qemu-system-x86 >/dev/null 2>&1; do sleep 5; done
-rm -f "$LOG" "$LOG"*.ppm "$LOG.mon" "$LOG.qmp"
+# The NUC's root is a 1.9 GiB tmpfs. Twenty-four runs of six 6 MB screendumps
+# filled it to the last 3 MB, and a full tmpfs is a broken instrument: the serial
+# log and the screendumps of the next run cannot be written, and a chardev that
+# hits ENOSPC can stall the VM. Every run starts by dropping every earlier run's
+# screendumps and images (the previous run's have been fetched by then), and
+# says how much room is left.
+rm -f "$(dirname "$LOG")"/*.ppm "$(dirname "$LOG")"/*.png
+rm -f "$LOG" "$LOG"*.ppm "$LOG.mon" "$LOG.qmp" "$LOG.host"
+echo "tmpfs free: $(df -m "$(dirname "$LOG")" | awk 'NR==2 {print $4}') MB"
 # Both packs are attached: the kernel scans every disk for a EuroPack volume, and
 # https needs the NSS one (chrome loads its software token and trust roots as
 # separate .so files, outside the library closure a linker reports).
@@ -54,6 +62,22 @@ qemu-system-x86_64 -machine q35 -enable-kvm -cpu host -m "$MEM" \
   -display none -serial stdio -no-reboot > "$LOG" 2>&1 &
 Q=$!
 START=$(date +%s)
+# Host-side sampler, every 5 s into $LOG.host: memory, memory pressure (PSI), the
+# vCPU thread's state and its scheduler wait time. The guest's own probe shows the
+# vCPU not running for seconds at a time with a timer interrupt pending and IF=1,
+# which from inside the guest is indistinguishable from the host taking the CPU
+# away; this says which it is, and whether memory pressure is behind it.
+(
+  while kill -0 $Q 2>/dev/null; do
+    T=$(( $(date +%s) - START ))
+    M=$(free -m | awk '/^Mem:/ {printf "used=%s free=%s avail=%s shared=%s", $3, $4, $7, $5}')
+    P=$(awk '/^full/ {print "psi-full:" $2 "/" $3}' /proc/pressure/memory 2>/dev/null | tr '\n' ' ')
+    C=$(awk '/^full/ {print "cpu-full:" $2}' /proc/pressure/cpu 2>/dev/null | tr '\n' ' ')
+    V=""; for t in /proc/$Q/task/*; do n=$(cat $t/comm 2>/dev/null); case "$n" in CPU*) V="$V $n:$(awk '{print $3}' $t/stat 2>/dev/null):wait=$(awk '{print int($2/1e6)}' $t/schedstat 2>/dev/null)ms";; esac; done
+    echo "t=${T}s $M $P $C vcpu:$V" >> "$LOG.host"
+    sleep 5
+  done
+) &
 until grep -aq "interactive loop started" "$LOG" 2>/dev/null; do
   kill -0 $Q 2>/dev/null || { echo "qemu exited before the desktop"; tail -20 "$LOG"; exit 1; }
   [ $(( $(date +%s) - START )) -gt 600 ] && { echo "NO DESKTOP within 10 min"; kill $Q; exit 1; }
@@ -97,7 +121,26 @@ watchdog() {
   if [ $QUIET -ge 60 ] && [ $NMI_DONE = 0 ]; then
     NMI_DONE=1
     echo "WEDGE: no serial output for ${QUIET}s at $(( $(date +%s) - START ))s, injecting NMI"
-    mon "nmi"; sleep 4; mon "nmi"; sleep 4
+    echo "last lines before the silence:"; tail -4 "$LOG" | cut -c1-140
+    # QMP inject-nmi, not the HMP text command: run 20 wedged, the HMP "nmi" went
+    # into the monitor socket and no probe ever printed. QMP answers each command,
+    # so the reply says whether the injection happened at all.
+    for i in 1 2; do
+      python3 - "$LOG.qmp" <<'PY'
+import json, socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect(sys.argv[1]); f = s.makefile("rw")
+f.readline()
+for cmd in ({"execute": "qmp_capabilities"}, {"execute": "inject-nmi"}):
+    f.write(json.dumps(cmd) + "\n"); f.flush()
+    while True:
+        line = f.readline()
+        if not line: break
+        m = json.loads(line)
+        if "return" in m or "error" in m:
+            print("qmp", cmd["execute"], "->", m); break
+PY
+      sleep 4
+    done
     grep -a -A 40 "NMI PROBE" "$LOG" | head -60
   fi
 }
