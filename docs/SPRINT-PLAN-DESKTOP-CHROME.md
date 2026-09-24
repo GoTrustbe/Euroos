@@ -385,8 +385,13 @@ PASS verdicts in a row since run 41.
 
 The third-party script on the live page (tracera.eu, served by Caddy on
 127.0.0.1:9443 behind the SNI router) failed with ERR_SSL_PROTOCOL_ERROR in
-runs 42 and 44 and loaded in 41, 43 and 46: intermittent, TCP drop counters
-all zero in run 46. Still open.
+runs 42 and 44 and loaded in 41, 43, 46, 47, 48 and 49: intermittent, TCP
+drop counters all zero in run 46. Run 49 was captured server-side on the
+Caddy port (`/root/tracera-run49-baseline.pcap` on br-prod, 190 handshakes,
+the NUC's among them, all successful): a baseline for the next failing run,
+which needs the same capture running. Still open.
+
+Run 49 (13a7aa6): PASS. Nine PASS verdicts in a row, runs 41 to 49.
 
 ## Done this sprint (all on `feature/app-control`, not pushed)
 
