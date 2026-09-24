@@ -10,12 +10,37 @@
 #
 # Attach the result as an extra virtio disk; the kernel scans every disk for a
 # EuroPack volume, so it needs no other wiring.
+#
+# VERSION RULE. The chrome pack already ships libnss3, libnssutil3, libnspr4,
+# libplc4, libplds4 and libsmime3, and for a path that both packs serve the
+# chrome pack wins. So the software token and its friends in THIS pack must
+# come from the same NSS generation as the chrome pack's libnssutil3, or the
+# certificate verifier aborts the moment a TLS handshake reaches the server's
+# certificate: "libnssutil3.so: version `NSSUTIL_3.108' not found (required by
+# libsoftokn3.so)", nss_error -5925 (a pack rebuilt from this build server's
+# NSS 3.120 against a chrome pack from Ubuntu noble's NSS 3.98). Build from the
+# matching Ubuntu package, not from /usr/lib:
+#
+#   NSS_DEB=/path/to/libnss3_3.98-1build1_amd64.deb scripts/mk-nss-pack.sh out.img
+#
+# The .deb is extracted to a temp dir and its libraries are packed. Without
+# NSS_DEB the script falls back to /usr/lib and says so; that is only right on a
+# machine whose NSS matches the chrome pack.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 OUT="${1:-nss-pack.img}"
-L=/usr/lib/x86_64-linux-gnu
-SQLITE=$(find "$L" -maxdepth 1 -name 'libsqlite3.so.0*' | head -1)
+if [ -n "${NSS_DEB:-}" ]; then
+  T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+  dpkg-deb -x "$NSS_DEB" "$T"
+  L="$T/usr/lib/x86_64-linux-gnu"
+  echo "==> NSS libraries from $(basename "$NSS_DEB")"
+else
+  L=/usr/lib/x86_64-linux-gnu
+  echo "==> WARNING: packing this machine's NSS ($L); it must match the chrome pack's NSS generation"
+fi
+SQLITE=$(find /usr/lib/x86_64-linux-gnu -maxdepth 1 -name 'libsqlite3.so.0*' | head -1)
 [ -n "$SQLITE" ] || { echo "libsqlite3 not found"; exit 1; }
+echo "==> softokn requires: $(objdump -T "$L/libsoftokn3.so" | grep -oE 'NSSUTIL_[0-9.]+' | sort -V | uniq | tail -1)"
 python3 scripts/mkeuropack.py "$OUT" \
   "$L/libsoftokn3.so:/lib/x86_64-linux-gnu/libsoftokn3.so" \
   "$L/libfreebl3.so:/lib/x86_64-linux-gnu/libfreebl3.so" \
@@ -26,7 +51,4 @@ python3 scripts/mkeuropack.py "$OUT" \
   "$L/libnssdbm3.so:/lib/x86_64-linux-gnu/libnssdbm3.so" \
   "$SQLITE:/lib/x86_64-linux-gnu/libsqlite3.so.0" \
   "$L/libnss3.so:/lib/x86_64-linux-gnu/libnss3.so" \
-  "$L/libnssutil3.so:/lib/x86_64-linux-gnu/libnssutil3.so" \
-  "$L/libnspr4.so:/lib/x86_64-linux-gnu/libnspr4.so" \
-  "$L/libplc4.so:/lib/x86_64-linux-gnu/libplc4.so" \
-  "$L/libplds4.so:/lib/x86_64-linux-gnu/libplds4.so"
+  "$L/libnssutil3.so:/lib/x86_64-linux-gnu/libnssutil3.so"
