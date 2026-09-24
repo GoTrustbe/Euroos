@@ -355,6 +355,28 @@ now fails with net::ERR_SSL_PROTOCOL_ERROR (its name resolves since W5b; the
 handshake with that host does not complete). The next network item after the
 series: capture that handshake server-side or against a local TLS server.
 
+### After the sprint: W2, the profile dialog, chased with fsdiag
+
+Run 45 (6feec9d, fsdiag + sendmmsg/recvmmsg): PASS; no file operation on
+/tmp/cr failed at all, which pointed at the open itself: a missing file came
+back as -1 (EPERM). The Simple Cache only writes a new fake index on ENOENT, so
+every run since the first had "wrong file structure on disk: 2"
+(kBadFakeIndexFile) and no disk cache. Commit 1837891: openat answers ENOENT
+or EMFILE; chmod/fchmod/fchmodat and sigaltstack answer 0.
+
+Run 46 (1837891): PASS; the cache creates `Cache/Cache_Data/index` and the
+Shared Dictionary index and runs; ENOSYS left: name_to_handle_at, landlock.
+The dialog is still up at 120 s, with "Could not open the quota database" and
+"Failed to load tokens (invalid SQL statement)" (Web Data's token table).
+Both are SQLite, and fcntl answered every lock command with 0 without writing
+the struct: unixCheckReservedLock reads its own F_WRLCK back and takes the
+database as locked. Commit (F_GETLK writes F_UNLCK): run 47 verifies.
+
+The third-party script on the live page (tracera.eu, served by Caddy on
+127.0.0.1:9443 behind the SNI router) failed with ERR_SSL_PROTOCOL_ERROR in
+runs 42 and 44 and loaded in 41, 43 and 46: intermittent, TCP drop counters
+all zero in run 46. Still open.
+
 ## Done this sprint (all on `feature/app-control`, not pushed)
 
 - b875f70 mremap + msync. Shared windows re-aliased, not copied.
