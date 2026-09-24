@@ -316,6 +316,21 @@ writes past the lock through a second port handle and skips the kmsg tee. The
 exit guard of run 37 reported 0 for both child exits: the ownership model of
 the demand pages is sound. Run 38 verifies.
 
+### FIRST PASS (run 41, build 0098985) and W6 closed
+
+Run 41: VERDICT PASS. GTK refused at openat and never mapped, no fault on the
+browser main thread, the live site committed and loaded in 4.6 s (run 34 took
+27 s; the resolver's answers now reach their sockets), no name unresolved, exit
+guard 0, 461 ticks lost over the run. The serial watchdog fired twice, both
+during the typed keystrokes, and its message closed W6 for good: "UART lock
+held by task 0, no printer recorded". `serial::read_byte`, polled by the
+desktop loop with interrupts enabled, held the lock through try_lock while the
+xHCI interrupt handler printed a keyboard report; that print spun with
+interrupts off and the interrupted task could never release. Every wedge
+"right after the first keystrokes" (runs 3, 12, 20, 28, 29) was this. Commit
+ff31b85: read_byte and write_raw hold the lock under without_interrupts. The
+three-run series for exit criterion 3 runs on that build: 42, 43, 44.
+
 ## Done this sprint (all on `feature/app-control`, not pushed)
 
 - b875f70 mremap + msync. Shared windows re-aliased, not copied.
@@ -333,4 +348,4 @@ the demand pages is sound. Run 38 verifies.
 2. Same run against `https://euro-os.eu/` renders the site. MET, run 34.
 3. Three consecutive runs pass (the repeatability bar used for multi-process).
    Runs 35 to 39 failed on W8, W9, W6, W6+W9 and W6 (own instrument) in turn;
-   the series restarts on the 0098985 build (run 41).
+   run 41 is the first PASS; the series is runs 42 to 44 on build ff31b85.
