@@ -42,23 +42,26 @@ never the problem; the "128 B queued unread" of run 8 was a transient.
 strip, toolbar and omnibox are then on the EuroOS desktop:
 `docs/proof/2026-09-24-desktop-chromium-ui-after-enter.png`.
 
-### W1b. next: the mouse press does not fire the button (hover does)
+### W1b. done: the mouse press fires the button
 
-The delivered bytes show `state=0` on BOTH press and release. X defines
-`state` as the button/modifier mask BEFORE the event, so a ButtonRelease must
-carry Button1Mask (0x100); chrome derives a release's flags from that word and
-a Views button only fires when the release carries the left-button flag. Fix
-in the tree (send_input sets the button bit on release, clears it on press);
-verify: the scripted click alone dismisses the dialog, no Enter needed.
+The delivered bytes showed `state=0` on both press and release. X defines
+`state` as the mask BEFORE the event, so a release must carry Button1Mask;
+chrome derives a release's flags from it and a Views button fires only when
+the release carries the left-button flag. Fixed in send_input (33d9a1c). The
+screendump at 200 s of run 13, before any Enter, shows the dialog gone:
+`docs/proof/2026-09-24-desktop-dialog-gone-after-click-alone.png`.
 
-### W1c. next: the first navigation is dropped; the tab sits at about:blank
+### W1c. done: the tab navigates again after the dialog
 
-After Enter, `Target.getTargets` reports the page target with `url:""` and no
-title, and the omnibox shows about:blank, while at startup the same target was
-at `file:///tmp/euro.html` (which has a title). The startup navigation was
-lost while the dialog interrupted startup. In the tree: the input-only bridge
-re-navigates the attached target once, at the fourth heartbeat. Verify: the
-page paints in the desktop window (screendump), title "Chromium on EuroOS".
+The startup navigation is lost while the dialog interrupts startup (target
+url "" and no title). The input-only bridge re-issues Page.navigate once at
+its fourth heartbeat; Page.loadEventFired follows, title "Chromium on EuroOS".
+
+### EXIT CRITERION 1 MET (run 13, 33d9a1c)
+
+`docs/proof/2026-09-24-desktop-chromium-renders-euro-html.png`: typed
+`chrome`, dialog dismissed by the scripted click, euro.html painted in full in
+the desktop window at 660 s, no one at the keyboard, on the NUC.
 
 ### W2. open: the profile modal itself
 
@@ -78,13 +81,17 @@ for both the cache structure check and a pref-store failure. Implement, rerun,
 read the census. (c) If still present, instrument the VFS side: log every
 open/rename/link/mkdir under `/tmp/cr/Default` with its result for one run.
 
-### W3. open: the fork arena pool is exactly full
+### W3. done for four children; a fifth still fails
 
-`[fork] arena alloc FAILED (256 MiB, pool has 127 MiB)` three times per run. The
-896 MiB pool holds exactly three 256 MiB arenas; chrome wants a fourth child.
-Plan: measure which child is refused (log the argv `--type=` of the failing
-fork), then either grow the pool (RAM permits: 7 GiB on the NUC, guest gets
-3584M) or give arenas a size class by child type.
+Measured cause and effect (run 12b): the fourth fork fails at "pool has 127
+MiB" and eleven lines later chrome reports "Target crashed" for every pending
+command; after the dialog, chrome navigates in a NEW renderer, and without a
+fourth arena the tab is dead. With the guest at 4608M (runbook default now)
+the 1152 MiB candidate is taken and the fourth child forks (a second
+renderer). A fifth fork still fails late in the run. Arenas ARE recycled on
+child exit and on kill(); the superseded first renderer never exits, so its
+arena is never returned. Next: find out what the fifth child is, and whether
+the superseded renderer should be reaped (chrome sends no kill for it).
 
 ### W4. mostly done: the rest of the ENOSYS census
 
