@@ -157,6 +157,45 @@ watches the serial log after typing and, at 60 s of silence, injects an NMI
 twice through the monitor and prints the probe (RIP + task census), then keeps
 sampling. The next wedge names its own RIP.
 
+### W5c. runs 28-32: the TLS path is clean; the NSS pack and a self-test were not
+
+Run 28's server capture answered W5's open question: chrome's second flight
+never left the guest because a utility process died first with
+`libnssutil3.so: version 'NSSUTIL_3.108' not found (required by libsoftokn3.so)`.
+Two causes, both outside the kernel's network code: (1) the NSS pack rebuilt on
+br-prod took softokn/freebl from the server's NSS 3.120 while chrome-pack2 ships
+libnss3 3.98 from noble; `scripts/mk-nss-pack.sh` now builds from the noble
+.deb (NSS_DEB=...). (2) The boot self-test "SECOND DISK B3" FORMATTED disk 1
+when it found no EuroFS there, and disk 1 on the NUC is the NSS pack: every
+first boot with a fresh pack overwrote it past 1 MiB, and the 5 MB noble pack
+made the format fail into a kernel panic (run 30). The probe now leaves any
+non-blank disk alone and never panics. Runs 31/32: no NSS FATAL, the handshake
+completes, and the live navigate at heartbeat 10 gets no answer because the
+browser main thread is already dead.
+
+### W7. root cause of the main-thread death: madvise was a no-op
+
+The main thread died at the same instruction in runs 14, 21 and 32
+(`addl $1,0x8(%r13)` in `_gtk_css_value_ref`, libgtk-3 + 0x1594ca) with r13 = -1
+(page fault at 0x7) or a non-canonical value (#GP), and in run 31 it blocked
+forever on a futex; every time at tick ~6779, about 68 s after boot, right after
+a burst of mprotect and madvise calls from the same thread in the syscall ring.
+
+That burst is PartitionAlloc's first memory reclaim (a minute after start-up):
+it decommits every empty slot span with mprotect + madvise(MADV_DONTNEED). Linux
+guarantees such pages read as zeros afterwards, and PartitionAlloc, which is the
+malloc of the whole browser process including GTK, relies on it: a zero-fill
+allocation (calloc, g_malloc0) served from a recommitted span skips its memset.
+The kernel answered madvise with 0 and did nothing, so the recommitted pages
+still held the old freelist words. PartitionAlloc encodes freelist pointers as
+~ptr, so an encoded NULL is exactly -1 and any other entry is non-canonical:
+both shapes of the crash, and the hang is the same garbage in a mutex word.
+
+Fix: madvise(MADV_DONTNEED/MADV_FREE) zeroes every private anonymous demand
+page in the range in place (`madvise()` in ring3.rs). Frames stay committed, so
+no TLB shootdown is needed; shared frames and file-backed pages keep their
+bytes. `[madvise]` lines in the log count the zeroed pages. Run 33 verifies.
+
 ## Done this sprint (all on `feature/app-control`, not pushed)
 
 - b875f70 mremap + msync. Shared windows re-aliased, not copied.

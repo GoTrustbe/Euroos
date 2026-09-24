@@ -1151,6 +1151,13 @@ pub fn cdp_pump() {
                         // stack). The rule above cdp_send stands: no ring3 spinlocks
                         // from the supervising loop. The syscall ring is a plain array.
                         dump_main_syscalls();
+                        // And the thread census, the way the "channel dead" dump above has
+                        // taken it safely for weeks: scheduler states plus each thread's
+                        // last syscall. Run 31's ring ended at tick 6779 with a futex that
+                        // returned -1, and no syscall of the main thread for four minutes
+                        // after: a thread parked inside a syscall never reaches the ring,
+                        // and only the census says whether it is Blocked, and on what.
+                        dump_threads_now("silent after live navigate");
                     }
                 }
                 if LIVE_SITE_AT_HEARTBEAT > 0 && sent >= LIVE_SITE_AT_HEARTBEAT && !NAV_LIVE.load(Ordering::Relaxed) {
@@ -7977,6 +7984,65 @@ const DEMAND_MIN_BYTES: u64 = 16 * (1 << 20); // route anon mmaps >= 16 MiB here
 pub static DEMAND_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
 static DEMAND_COMMITTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Pages zeroed by madvise(MADV_DONTNEED/MADV_FREE) so far, and how many calls did it.
+static MADVISE_ZEROED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static MADVISE_CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// madvise(addr, len, advice). MADV_DONTNEED (4) and MADV_FREE (8) over private
+/// anonymous demand pages must make those pages read as ZEROS afterwards. Linux
+/// guarantees that, and Chromium's PartitionAlloc (the malloc of the whole browser
+/// process, GTK included) relies on it: its first memory reclaim, about a minute
+/// after start-up, decommits every empty slot span this way, and a later zero-fill
+/// allocation (calloc, g_malloc0) served from such a span SKIPS its memset because
+/// "decommitted memory is always zeroed". While this was a no-op the recommitted
+/// pages still carried the old freelist words (encoded ~ptr, so an encoded NULL is
+/// -1): GTK's g_malloc0'd CSS values then held -1 or a non-canonical ~ptr where a
+/// pointer should be, and the browser main thread died in _gtk_css_value_ref
+/// (`addl $1,0x8(%r13)`, runs 14/21/32) or blocked forever on a garbage mutex word
+/// (run 31), always at tick ~6779 = the first reclaim.
+///
+/// The frames stay committed (nothing goes back to the pool): the contract is the
+/// zero contents, and leaving the PTEs alone needs no TLB shootdown. Shared frames
+/// (MAP_SHARED, disk cache) and file-backed private pages keep their bytes, as on
+/// Linux where DONTNEED re-reads them from the file.
+fn madvise(addr: u64, len: u64, advice: u64) -> u64 {
+    if advice != 4 && advice != 8 {
+        return 0; // every other advice is a hint we may ignore
+    }
+    let start = addr & !0xFFF;
+    let end = addr.saturating_add(len).saturating_add(0xFFF) & !0xFFF;
+    if end <= start || start < DEMAND_BASE || end > DEMAND_BASE + DEMAND_SIZE {
+        return 0;
+    }
+    ensure_globals_for_current();
+    let pml4 = {
+        use x86_64::registers::control::Cr3;
+        Cr3::read().0.start_address().as_u64()
+    };
+    let keep = shared_phys_sorted();
+    let mut zeroed = 0u64;
+    let mut page = start;
+    while page < end {
+        if let Some((phys, writable)) = crate::paging::demand_pte(pml4, page) {
+            if writable && keep.binary_search(&phys).is_err() && !demand_file_backed(page, 4096) {
+                // SAFETY: `phys` is an identity-mapped 4 KiB frame owned by this process alone.
+                unsafe { core::ptr::write_bytes(phys as *mut u8, 0, 4096); }
+                zeroed += 1;
+            }
+        }
+        page += 4096;
+    }
+    let calls = MADVISE_CALLS.fetch_add(1, Ordering::Relaxed);
+    let total = MADVISE_ZEROED.fetch_add(zeroed, Ordering::Relaxed) + zeroed;
+    if calls < 4 || (calls + 1) % 256 == 0 {
+        crate::serial_println!(
+            "[madvise] #{} advice={advice} [{start:#x},{end:#x}) zeroed {zeroed} of {} pages (total {total})",
+            calls + 1, (end - start) / 4096
+        );
+    }
+    0
+}
 static DEMAND_USED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 // ── FILE-BACKED demand paging (opt-in, separate flag) ───────────────────────
@@ -13151,7 +13217,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
             0
         }
-        221 | 28 => 0, // fadvise64 / madvise — advisory only; safe no-op success
+        221 => 0, // fadvise64 — advisory only; safe no-op success
+        28 => madvise(a1, a2, a3),
         334 => (-38i64) as u64, // rseq — not supported; glibc falls back gracefully
         21 | 269 => {
             // access(path, mode) / faccessat(dirfd, path, mode): 0 if it exists.
