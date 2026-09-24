@@ -638,7 +638,12 @@ fn main() -> Status {
         // live site forks (two utilities, the file:// renderer, the https renderer,
         // and one more), and the fifth fork failed at "pool has 127 MiB" twice per
         // run. Below 3 GiB the third stays: the lean images must keep booting.
-        let cap = if usable_frames >= 3 * 256 * 1024 { usable_frames / 2 } else { usable_frames / 3 };
+        // Two fifths, not half, once the pool can grow past 1408 MiB: at 4023 MiB usable
+        // (the 4608M guest) half would admit the 1920 MiB candidate and leave the
+        // demand pool 600 MiB, so that guest keeps its 1408 MiB pool; the 5632M guest
+        // (5047 MiB usable) takes 1920 MiB and still has a bigger demand pool than the
+        // 4608M one had (1115 MiB).
+        let cap = if usable_frames >= 3 * 256 * 1024 { usable_frames * 2 / 5 } else { usable_frames / 3 };
         // Candidates: 640 MiB (2+ chrome arenas) → 512 → 288 (one child + slack)
         // → 160 → 64 MiB, first that fits.
         let mut installed = false;
@@ -653,7 +658,12 @@ fn main() -> Status {
         // asks for a FOURTH child, refused three times per run at "pool has 127 MiB".
         // At -m 3584M the cap (a third of RAM) rejects this candidate and the 896 MiB
         // pool below is used unchanged, so the lean images are not affected.
-        for &want in &[360_448usize, 294_912, 229_376, 163_840, 131_072, 73_728, 40_960, 16_384] {
+        // 1920 MiB (seven arenas + slack) first: run 33 on the NUC reached the live
+        // site's HTML over https and then lost the navigation because the sixth and
+        // seventh fork found "pool has 127 MiB" (five children alive: two utilities,
+        // two renderers, one more utility; the https renderer needs its own). Needs
+        // the 5632M guest; at 4608M the cap keeps the 1408 MiB pool.
+        for &want in &[491_520usize, 425_984, 360_448, 294_912, 229_376, 163_840, 131_072, 73_728, 40_960, 16_384] {
             if want > cap {
                 continue;
             }

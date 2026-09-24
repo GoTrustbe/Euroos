@@ -17,7 +17,7 @@
 #     PACK     chromium EuroPack       (default /root/euroos/chrome-pack2.img)
 #     NSSPACK  NSS EuroPack, for https (default /root/euroos/nss-pack.img)
 #     SAMPLES  screendump times in seconds after boot (default "120 300 480 660")
-#     MEM      guest memory            (default 3584M)
+#     MEM      guest memory            (default 5632M: seven 256 MiB fork arenas)
 # ============================================================================
 set -u
 LOG="${1:?usage: nuc-desktop-run.sh /path/to/log}"
@@ -26,7 +26,7 @@ IMG="${IMG:-/root/euroos/eurokernel.img}"
 PACK="${PACK:-/root/euroos/chrome-pack2.img}"
 NSSPACK="${NSSPACK:-/root/euroos/nss-pack.img}"
 OVMF="${OVMF:-/usr/share/edk2/x64/OVMF.4m.fd}"
-MEM="${MEM:-4608M}"
+MEM="${MEM:-5632M}"
 for f in "$IMG" "$PACK" "$NSSPACK" "$OVMF"; do
   [ -f "$f" ] || { echo "missing: $f"; exit 1; }
 done
