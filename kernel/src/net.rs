@@ -2098,8 +2098,13 @@ pub fn sock_readable(fd: u64) -> bool {
     let mut t = SOCKETS.lock();
     match &mut t[(fd - SOCK_FD_BASE) as usize] {
         Some(Sock::Conn(c)) => {
+            // pump_nowait, never pump(1): pump(1) calls poll_seg, which is
+            // SPINS*3 = 12 million busy iterations when nothing is queued, and
+            // this runs inside poll/epoll for every idle socket chrome watches.
+            // It was the freeze that survived the non-blocking recv/send work
+            // (run 28: 13 ticks per second on average over the run).
             if c.rx.is_empty() && c.open {
-                c.pump(1);
+                c.pump_nowait();
             }
             !c.rx.is_empty() || !c.open
         }

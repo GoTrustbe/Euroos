@@ -10455,8 +10455,12 @@ pub fn dump_main_syscalls() {
 /// after the dispatch covers every creating syscall on every trace path.
 fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let r = linux_dispatch_inner_raw(num, a1, a2, a3, a4, a5);
+    // NOT dup/dup2/dup3: those alias an object that other holders share, and a
+    // child's close on the alias must stay a mark, as the fd-ownership work
+    // decided. Registering them (run 28) freed objects out from under NSS's
+    // initialisation in a utility process, which then aborted (nss_error -5925).
     let creates_fd = matches!(num,
-        41 | 43 | 288 | 290 | 284 | 291 | 213 | 319 | 32 | 33 | 292 | 253 | 294 | 283 | 282 | 289);
+        41 | 43 | 288 | 290 | 284 | 291 | 213 | 319 | 253 | 294 | 283 | 282 | 289);
     if creates_fd && (r as i64) >= 0 && r < 1000 {
         child_note_open(r as usize);
     }

@@ -1049,24 +1049,42 @@ fn main() -> Status {
     // ── SECOND DISK (B3 multi-disk) ── if there is a second virtio-blk disk,
     // mount a separate EuroFS on it (mountpoint /mnt). Proves multiple real
     // disks, each with its own working filesystem, + `df` per mount.
+    // NEVER format a disk that carries something. This mounted-or-formatted disk 1
+    // unconditionally, and on the lab NUC disk 1 is the NSS EuroPack: every first
+    // boot with a fresh pack wrote an EuroFS over everything past its first MiB,
+    // so the certificate verifier loaded corrupt libraries for weeks of runs, and
+    // a smaller pack made the format fail and the `expect` take the kernel down.
+    // A disk is only formatted when its first sector is blank; a EuroPack (or any
+    // other content) is left alone and said so, and a failed format is a log line.
     let mut fs2: Option<EuroFs<rootblk::RootBlk>> = None;
     if virtio_blk::device_count() > 1 {
         let sectors2 = virtio_blk::capacity_sectors_dev(1);
         let part2 = 2048u64; // skip the first 1 MiB (like a GPT alignment)
         let blocks2 = sectors2.saturating_sub(part2) / 8; // 8 sectors per 4 KiB block
         let dev2 = rootblk::RootBlk::disk_on(1, part2, blocks2);
-        let f2 = match EuroFs::mount(dev2.clone(), rtc::epoch()) {
+        let mut first = [0u8; 512];
+        let probe_ok = virtio_blk::read_io_dev(1, 0, &mut first);
+        let is_pack = probe_ok && &first[..8] == b"EUROPCK1";
+        let is_blank = probe_ok && first.iter().all(|&b| b == 0);
+        match EuroFs::mount(dev2.clone(), rtc::epoch()) {
             Ok(f) => {
                 serial_println!("[euro] EuroFS /mnt mounted from DISK 1 (existing)");
-                f
+                fs2 = Some(f);
             }
-            Err(_) => {
-                let f = EuroFs::format(dev2, [0xB2; 16], rtc::epoch()).expect("EuroFS format disk 1");
-                serial_println!("[euro] EuroFS /mnt formatted on DISK 1 (extra mount)");
-                f
+            Err(_) if is_pack => {
+                serial_println!("[euro] DISK 1 is a EuroPack volume: left untouched (no /mnt)");
             }
-        };
-        fs2 = Some(f2);
+            Err(_) if !is_blank => {
+                serial_println!("[euro] DISK 1 carries unknown content: left untouched (no /mnt)");
+            }
+            Err(_) => match EuroFs::format(dev2, [0xB2; 16], rtc::epoch()) {
+                Ok(f) => {
+                    serial_println!("[euro] EuroFS /mnt formatted on blank DISK 1 (extra mount)");
+                    fs2 = Some(f);
+                }
+                Err(e) => serial_println!("[euro] DISK 1 format failed ({e:?}): no /mnt"),
+            },
+        }
     }
     if let Some(ref mut f2) = fs2 {
         // B3 self-test: write+read on the second disk, then `df` for both mounts.
