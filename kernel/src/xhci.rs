@@ -167,13 +167,30 @@ static POLLING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool:
 /// Up to 2 HID devices (keyboard + mouse): we poll their interrupt-IN endpoint.
 const MAX_HID: usize = 4;
 static mut HIDS: [Option<HidDevice>; MAX_HID] = [None, None, None, None];
+/// One report slot per in-flight transfer. Must be >= the `outstanding` ceiling
+/// the idle re-arm allows, or two live TRBs share a slot again.
+const HID_BUF_SLOTS: u8 = 4;
+/// Slots are spread across the device's 4 KiB report page; only 8 bytes of each
+/// are used, the spacing just keeps two transfers from touching the same line.
+const HID_BUF_STRIDE: u64 = 64;
 
 /// An enumerated HID boot device that we poll live.
 struct HidDevice {
     slot: u8,
     ep_dci: u8, // doorbell target (device-context-index) of the interrupt-IN endpoint
     ring: Ring,
-    buf: u64, // 8-byte report buffer (interrupt transfers land here)
+    /// Base of this device's report page. Each ARMED transfer gets its OWN slot
+    /// inside it (`HID_BUF_SLOTS` x `HID_BUF_STRIDE`), because up to four TRBs can
+    /// be in flight at once and a single shared buffer means they all write the
+    /// same eight bytes. That is not theoretical: after the tablet had been quiet
+    /// for a while the idle re-arm had filled the ring, and a move + button-down +
+    /// button-up arriving together came back as the SAME report twice and then a
+    /// zeroed one, so the click was delivered as a move and the button was never
+    /// seen. Transfers on one endpoint ring complete in order, so the enqueue and
+    /// dequeue indices below stay paired.
+    buf: u64,
+    buf_enq: u8,
+    buf_deq: u8,
     is_keyboard: bool,
     is_abs_pointer: bool, // usb-tablet / touchscreen: absolute X/Y report
     kb: eurousb::BootKeyboard,
@@ -714,6 +731,8 @@ unsafe fn enumerate_device(
         ep_dci,
         ring: ep_ring,
         buf: report_buf,
+        buf_enq: 0,
+        buf_deq: 0,
         is_keyboard: is_kbd,
         is_abs_pointer: is_abs,
         kb: eurousb::BootKeyboard::new(),
@@ -945,8 +964,12 @@ unsafe fn control_out(
 
 /// Place a Normal-TRB on the interrupt-IN ring (8-byte report) + ring the doorbell.
 unsafe fn arm_interrupt(x: &Xhci, hid: &mut HidDevice) {
-    core::ptr::write_bytes(hid.buf as *mut u8, 0, 8);
-    hid.ring.push(hid.buf as u32, (hid.buf >> 32) as u32, 8, (TRB_NORMAL << 10) | (1 << 5)); // IOC
+    // Claim the next slot for THIS transfer, so a TRB already in flight keeps its
+    // own landing area and this zeroing cannot wipe a report about to be read.
+    let addr = hid.buf + (hid.buf_enq % HID_BUF_SLOTS) as u64 * HID_BUF_STRIDE;
+    hid.buf_enq = hid.buf_enq.wrapping_add(1);
+    core::ptr::write_bytes(addr as *mut u8, 0, 8);
+    hid.ring.push(addr as u32, (addr >> 32) as u32, 8, (TRB_NORMAL << 10) | (1 << 5)); // IOC
     doorbell(x, hid.slot, hid.ep_dci as u32);
     hid.armed = true;
     hid.outstanding = hid.outstanding.saturating_add(1);
@@ -1082,9 +1105,14 @@ fn poll_inner() {
             for s in (*hids).iter_mut() {
                 if let Some(hid) = s {
                     if hid.slot == slot && hid.ep_dci as u32 == ep_id {
+                        // Consume this transfer's slot whatever the completion code
+                        // says: an errored TRB still used one, and letting the two
+                        // indices drift would read the wrong report from then on.
+                        let done = hid.buf + (hid.buf_deq % HID_BUF_SLOTS) as u64 * HID_BUF_STRIDE;
+                        hid.buf_deq = hid.buf_deq.wrapping_add(1);
                         if cc == CC_SUCCESS || cc == 13 {
                             // 13 = Short-Packet (also valid). Read the 8-byte report.
-                            let report = core::slice::from_raw_parts(hid.buf as *const u8, 8);
+                            let report = core::slice::from_raw_parts(done as *const u8, 8);
                             // Diagnostics: log the first few reports so that the
                             // interrupt-IN path (and QMP-sendkey injection) is verifiable.
                             let kind_ix = if hid.is_keyboard { 0 } else if hid.is_abs_pointer { 1 } else { 2 };
