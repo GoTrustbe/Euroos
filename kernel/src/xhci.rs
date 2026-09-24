@@ -150,7 +150,13 @@ struct Xhci {
 
 static mut XHCI: Option<Xhci> = None;
 /// Number of HID reports logged to serial (diagnostics; capped against spam).
-static mut REPORTS_LOGGED: u32 = 0;
+/// First few HID reports logged, counted PER KIND (keyboard / tablet / mouse).
+/// It used to be one counter for all of them, and that made the instrument lie:
+/// typing a seven-letter command spends the whole budget on key reports, so a
+/// pointer report can never appear in the log and the tablet looks dead. A run
+/// was read that way ("zero tablet reports") when the device was merely unlogged.
+static mut REPORTS_LOGGED: [u32; 3] = [0; 3];
+const REPORTS_LOG_MAX: u32 = 12;
 /// Whether the MSI-X delivery confirmation has already been logged.
 static mut MSIX_LOGGED: bool = false;
 static mut RING_DIAGGED: bool = false;
@@ -1081,8 +1087,9 @@ fn poll_inner() {
                             let report = core::slice::from_raw_parts(hid.buf as *const u8, 8);
                             // Diagnostics: log the first few reports so that the
                             // interrupt-IN path (and QMP-sendkey injection) is verifiable.
-                            if REPORTS_LOGGED < 12 {
-                                REPORTS_LOGGED += 1;
+                            let kind_ix = if hid.is_keyboard { 0 } else if hid.is_abs_pointer { 1 } else { 2 };
+                            if REPORTS_LOGGED[kind_ix] < REPORTS_LOG_MAX {
+                                REPORTS_LOGGED[kind_ix] += 1;
                                 crate::serial_println!(
                                     "[xhci-rpt] slot {} {}: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
                                     slot, if hid.is_keyboard { "kbd" } else if hid.is_abs_pointer { "tablet" } else { "mouse" },

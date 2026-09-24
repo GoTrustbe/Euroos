@@ -74,6 +74,11 @@ K
 python3 "$DIR/qmp-input.py" "$LOG.qmp" "$LOG.keys" 1920 1080 "$LOG.mon"
 echo "typed chrome at $(( $(date +%s) - START ))s"
 
+# CLICK_AT="X Y [X2 Y2 ...]" clicks those absolute screen points after the first
+# sample. Chrome can come up on a modal it will sit on forever (the profile-error
+# dialog); a click on its button is how you find out whether that dialog is the
+# wall or just noise in front of it. The tablet is absolute, so a point read off a
+# screendump lands where the screendump said.
 for t in ${SAMPLES:-120 300 480 660}; do
   while [ $(( $(date +%s) - START )) -lt $t ]; do
     kill -0 $Q 2>/dev/null || break 2
@@ -81,6 +86,16 @@ for t in ${SAMPLES:-120 300 480 660}; do
   done
   mon "screendump $LOG-t$t.ppm"
   echo "SHOT $LOG-t$t.ppm at $(( $(date +%s) - START ))s"
+  if [ -n "${CLICK_AT:-}" ] && [ "$t" = "${CLICK_AFTER:-120}" ]; then
+    : > "$LOG.clicks"
+    set -- ${CLICK_AT}
+    while [ $# -ge 2 ]; do
+      printf 'move %s %s\nwait 1\nclick\nwait 1\n' "$1" "$2" >> "$LOG.clicks"
+      shift 2
+    done
+    python3 "$DIR/qmp-input.py" "$LOG.qmp" "$LOG.clicks" 1920 1080 "$LOG.mon"
+    echo "clicked $CLICK_AT at $(( $(date +%s) - START ))s"
+  fi
 done
 kill $Q 2>/dev/null; wait $Q 2>/dev/null
 echo "took $(( $(date +%s) - START ))s, log: $LOG"

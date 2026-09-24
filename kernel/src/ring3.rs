@@ -8536,6 +8536,15 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // it in the futex dumps), and no frame ever gets composited. The log was the
     // deadlock. Re-enable locally when hunting a specific message.
     b"--enable-logging=stderr",
+    // NARROW verbosity, for the profile hunt only. `--v=1` is explicitly NOT the
+    // tool here (see the paragraph above: its firehose was itself the deadlock).
+    // These nine files are the ones that decide whether a profile opens: the Web
+    // Data wrapper and the sql layer under it, the pref store, the profile
+    // objects, the dialog that reports the failure, and the cache structure check
+    // that is failing in the same run. Chrome stops on "Something went wrong when
+    // opening your profile" and nothing in the default log says which store broke;
+    // this makes it say so itself, the same way it named mremap.
+    b"--vmodule=web_data_service_wrapper=2,profile_impl=2,profile_manager=2,database=2,statement=2,json_pref_store=2,profile_error_dialog=2,simple_backend_impl=2,simple_index_file=2",
     b"--no-first-run", b"--no-default-browser-check",
     // Everything the browser does BESIDES showing the page. The RIP histogram settled
     // what the main thread is busy with: 838 samples spread over 96+ code pages with
