@@ -62,6 +62,29 @@ static LINUX_ABI: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBoo
 static CURRENT_APP: Mutex<String> = Mutex::new(String::new());
 
 /// The app identity of the current ring-3 process (for EuroGuard).
+/// File-operation diagnostics for chrome's profile directory (/tmp/cr): which
+/// descriptors point there (a bitmap over the flat fd space), how many lines
+/// have been printed. A failed or short read/write/seek/truncate on such a
+/// descriptor is logged as [fsdiag]: the Simple Cache's "wrong file structure
+/// on disk: 2" is kBadFakeIndexFile (its 24-byte index did not read back), and
+/// the profile-error dialog is a database that would not open, and neither
+/// names the syscall that misbehaved.
+static FSDIAG_BITS: [core::sync::atomic::AtomicU64; 16] = [const { core::sync::atomic::AtomicU64::new(0) }; 16];
+static FSDIAG_LINES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+const FSDIAG_CAP: u64 = 300;
+fn fsdiag_mark(fd: u64, on: bool) {
+    if fd < 1024 {
+        let (w, b) = ((fd / 64) as usize, fd % 64);
+        if on { FSDIAG_BITS[w].fetch_or(1 << b, Ordering::Relaxed); } else { FSDIAG_BITS[w].fetch_and(!(1 << b), Ordering::Relaxed); }
+    }
+}
+fn fsdiag_is(fd: u64) -> bool {
+    fd < 1024 && FSDIAG_BITS[(fd / 64) as usize].load(Ordering::Relaxed) & (1 << (fd % 64)) != 0
+}
+fn fsdiag_budget() -> bool {
+    FSDIAG_LINES.fetch_add(1, Ordering::Relaxed) < FSDIAG_CAP
+}
+
 /// Logged once: the first refused GTK open for chrome.
 static GTK_DENIED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
@@ -10610,6 +10633,18 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
     if creates_fd && (r as i64) >= 0 && r < 1000 {
         child_note_open(r as usize);
     }
+    // Profile-directory file ops that failed or came up short (see FSDIAG_BITS).
+    if a1 < 1024 && matches!(num, 0 | 1 | 17 | 18 | 8 | 77 | 5 | 74 | 75 | 3) && fsdiag_is(a1) {
+        let err = (r as i64) < 0;
+        let short = !err && matches!(num, 0 | 1 | 17 | 18) && r < a3 && a3 <= 64;
+        if (err || short) && fsdiag_budget() {
+            crate::serial_println!("[fsdiag] t{} {num}(fd {a1}, len {a3:#x}, off {a4:#x}) = {r:#x}{}",
+                crate::sched::current_lockfree(), if short { " SHORT" } else { "" });
+        }
+        if num == 3 {
+            fsdiag_mark(a1, false);
+        }
+    }
     if num == 53 && r == 0 {
         // socketpair writes its two descriptors into the caller's sv[2].
         if let (Some(a), Some(b)) = (read_user::<i32>(a4), read_user::<i32>(a4 + 4)) {
@@ -12748,6 +12783,13 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 vfs_open(&path)
             };
             set_fd_accmode(fd, flags); // report the real access mode in F_GETFL
+            if fd != u64::MAX && fd < 1024 && path.starts_with(b"/tmp/cr") {
+                fsdiag_mark(fd, true);
+                if flags & 0x40 != 0 && fsdiag_budget() {
+                    crate::serial_println!("[fsdiag] t{} openat({:?}, flags {flags:#x}) = fd {fd}",
+                        crate::sched::current_lockfree(), core::str::from_utf8(&path).unwrap_or("?"));
+                }
+            }
             if fd != u64::MAX && flags & 0x8_0000 != 0 {
                 fd_set_cloexec(fd, true); // O_CLOEXEC
             }
@@ -13316,6 +13358,30 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
         }
         221 => 0, // fadvise64 — advisory only; safe no-op success
         28 => madvise(a1, a2, a3),
+        307 | 299 => {
+            // sendmmsg / recvmmsg(fd, msgvec, vlen, flags[, timeout]): one sendmsg /
+            // recvmsg per entry. An entry is a msghdr (56 B) followed by msg_len (u32)
+            // and padding, 64 B in all; the count of completed entries comes back, or
+            // the first error when nothing completed. recvmmsg stops at the first
+            // EAGAIN, which is what a non-blocking caller (chrome's UDP/QUIC sockets,
+            // 307 was the last ENOSYS in a run) expects.
+            let inner = if num == 307 { 46 } else { 47 };
+            let vlen = (a3 as usize).min(64);
+            let mut done = 0u64;
+            for i in 0..vlen {
+                let hdr = a2 + (i as u64) * 64;
+                let r = linux_dispatch_inner_raw(inner, a1, hdr, a4, 0, 0);
+                if (r as i64) < 0 {
+                    if done == 0 {
+                        return r;
+                    }
+                    break;
+                }
+                let _ = write_user::<u32>(hdr + 56, r as u32);
+                done += 1;
+            }
+            done
+        }
         334 => (-38i64) as u64, // rseq — not supported; glibc falls back gracefully
         21 | 269 => {
             // access(path, mode) / faccessat(dirfd, path, mode): 0 if it exists.
