@@ -331,6 +331,12 @@ interrupts off and the interrupted task could never release. Every wedge
 ff31b85: read_byte and write_raw hold the lock under without_interrupts. The
 three-run series for exit criterion 3 runs on that build: 42, 43, 44.
 
+Run 42 (ff31b85): PASS, serial watchdog silent, 58 ticks lost over the run.
+Open, not blocking: the page's one third-party script, `https://tracera.eu/t.js`,
+now fails with net::ERR_SSL_PROTOCOL_ERROR (its name resolves since W5b; the
+handshake with that host does not complete). The next network item after the
+series: capture that handshake server-side or against a local TLS server.
+
 ## Done this sprint (all on `feature/app-control`, not pushed)
 
 - b875f70 mremap + msync. Shared windows re-aliased, not copied.
