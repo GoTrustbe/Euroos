@@ -194,7 +194,32 @@ both shapes of the crash, and the hang is the same garbage in a mutex word.
 Fix: madvise(MADV_DONTNEED/MADV_FREE) zeroes every private anonymous demand
 page in the range in place (`madvise()` in ring3.rs). Frames stay committed, so
 no TLB shootdown is needed; shared frames and file-backed pages keep their
-bytes. `[madvise]` lines in the log count the zeroed pages. Run 33 verifies.
+bytes. `[madvise]` lines in the log count the zeroed pages.
+
+Run 33 (commit 233bd9a) verified it: 1984 pages zeroed by tick 4842, not one
+fault in 662 s, the main thread answered the live navigate at heartbeat 10, and
+the server's access log holds the first fetch of the live site by the desktop
+browser on EuroOS:
+
+    euro-os.eu 213.118.185.65 [24/Sep/2026:19:05:04] "GET / HTTP/1.1" 302
+    euro-os.eu 213.118.185.65 [24/Sep/2026:19:05:04] "GET /en/ HTTP/1.1" 200 15248
+
+CDP saw responseReceived for the document and then loadingFailed with
+net::ERR_ABORTED: the https site needs its own renderer, and the sixth and
+seventh fork found "pool has 127 MiB" (W3). The screendump at 480 s still shows
+euro.html, with the browser alive.
+
+### W3 continued: seven arenas
+
+Five children hold the 1408 MiB pool's five arenas (utilities 34, 36 and 93,
+renderers 49 and 50; none exits, chrome keeps the superseded renderer). Commit
+65f3575 puts 1920 and 1664 MiB candidates first and caps the pool at two fifths
+of usable RAM: the 4608M guest keeps 1408 MiB and its demand pool, the 5632M
+guest (5047 MiB usable) takes 1920 MiB, seven arenas, and still has a larger
+demand pool than the 4608M guest had (1115 MiB). The NUC host has 7.6 GB and
+the 4608M guest touched 2.8 GB, so the runbook now boots 5632M. Run 34
+verifies: the https renderer forks, and the page either renders or names the
+next wall.
 
 ## Done this sprint (all on `feature/app-control`, not pushed)
 
