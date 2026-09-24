@@ -333,6 +333,23 @@ three-run series for exit criterion 3 runs on that build: 42, 43, 44.
 
 Run 42 (ff31b85): PASS, serial watchdog silent, 58 ticks lost over the run.
 Run 43 (ff31b85): PASS, 55 ticks lost, live page loaded at 304.7 s.
+Run 44 (ff31b85): PASS, 51 ticks lost, live page loaded at 304.4 s.
+
+### EXIT CRITERION 3 MET (runs 42, 43, 44 on ff31b85)
+
+Three consecutive PASS verdicts on one build: no fault on the browser main
+thread, the live site committed and loaded within five seconds of the
+navigate, every name resolved, no arena refused, no wedge, about 55 ticks lost
+per 660 s run (all at the forks and execs). Proof of the third:
+`docs/proof/2026-09-24-desktop-chromium-criterion3-run44.png`. The sprint's
+three exit criteria are met.
+
+Open after the sprint, in order: the Simple Cache's kBadFakeIndexFile and the
+profile-error dialog (W2; `[fsdiag]` in 6feec9d names the syscall), the
+handshake with the second host on the same server (tracera.eu,
+ERR_SSL_PROTOCOL_ERROR), the GTK use-after-free (W9, worked around), the fork's
+256 MiB arena copy with interrupts off (+4 ticks per fork), and the cosmetic
+"unsupported command-line flag" bar.
 Open, not blocking: the page's one third-party script, `https://tracera.eu/t.js`,
 now fails with net::ERR_SSL_PROTOCOL_ERROR (its name resolves since W5b; the
 handshake with that host does not complete). The next network item after the
@@ -354,5 +371,4 @@ series: capture that handshake server-side or against a local TLS server.
    `file:///tmp/euro.html` painted in the window (screendump shows the page).
 2. Same run against `https://euro-os.eu/` renders the site. MET, run 34.
 3. Three consecutive runs pass (the repeatability bar used for multi-process).
-   Runs 35 to 39 failed on W8, W9, W6, W6+W9 and W6 (own instrument) in turn;
-   run 41 is the first PASS; the series is runs 42 to 44 on build ff31b85.
+   MET: runs 42, 43, 44 on build ff31b85 (run 41 was the first PASS).
