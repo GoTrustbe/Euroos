@@ -377,7 +377,11 @@ the first time since the desktop browser exists (proof
 closed. Left over, secondary: "Could not open the quota database, resetting"
 (2 per run, recovers) and "Failed to load tokens (invalid SQL statement)" in
 Web Data (1 per run); SQLite maps these files (MAP_SHARED, see mremap), so
-the coherence of pwrite with a shared mapping is the next candidate.
+the coherence of pwrite with a shared mapping was the first candidate, but
+pwrite goes through vfs_write (file to mapping) and pread through vfs_pread
+(mapping to file), and SQLite maps read-only, so that path is covered for
+files under 4 MiB. Run 48 (13a7aa6): PASS, no dialog at 120 s again; eight
+PASS verdicts in a row since run 41.
 
 The third-party script on the live page (tracera.eu, served by Caddy on
 127.0.0.1:9443 behind the SNI router) failed with ERR_SSL_PROTOCOL_ERROR in
