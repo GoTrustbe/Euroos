@@ -10638,8 +10638,8 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         let err = (r as i64) < 0;
         let short = !err && matches!(num, 0 | 1 | 17 | 18) && r < a3 && a3 <= 64;
         if (err || short) && fsdiag_budget() {
-            crate::serial_println!("[fsdiag] t{} {num}(fd {a1}, len {a3:#x}, off {a4:#x}) = {r:#x}{}",
-                crate::sched::current_lockfree(), if short { " SHORT" } else { "" });
+            crate::serial_println!("[fsdiag] t{} {num}(fd {a1}, len {a3:#x}, off {a4:#x}) = {r:#x}{} size={:?}",
+                crate::sched::current_lockfree(), if short { " SHORT" } else { "" }, vfs_size(a1 as usize));
         }
         if num == 3 {
             fsdiag_mark(a1, false);
@@ -13334,7 +13334,21 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 1034 => seals_get(a1),             // F_GET_SEALS
                 1 => u64::from(fd_is_cloexec(a1)), // F_GETFD -> FD_CLOEXEC bit
                 2 => { fd_set_cloexec(a1, a3 & 1 != 0); 0 } // F_SETFD
-                _ => 0, // F_DUPFD/… pretend success
+                5 | 36 => {
+                    // F_GETLK / F_OFD_GETLK: no other process holds record locks here,
+                    // so the answer is "unlocked": l_type (i16 at offset 0 of struct
+                    // flock) = F_UNLCK. Answering 0 WITHOUT writing it left SQLite's
+                    // own F_WRLCK in the struct, which unixCheckReservedLock reads as
+                    // "reserved lock held": SQLITE_BUSY on chrome's profile databases,
+                    // "Could not open the quota database", "Failed to load tokens
+                    // (invalid SQL statement)" in Web Data, and the profile-error
+                    // dialog at every start (W2).
+                    if a3 != 0 {
+                        let _ = write_user::<i16>(a3, 2);
+                    }
+                    0
+                }
+                _ => 0, // F_DUPFD/F_SETLK/F_SETLKW/… pretend success
             }
         }
         79 => {
