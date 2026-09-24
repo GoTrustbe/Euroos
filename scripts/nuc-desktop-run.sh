@@ -100,6 +100,16 @@ for t in ${SAMPLES:-120 300 480 660}; do
     done
     python3 "$DIR/qmp-input.py" "$LOG.qmp" "$LOG.clicks" 1920 1080 "$LOG.mon"
     echo "clicked $CLICK_AT at $(( $(date +%s) - START ))s"
+    # KEYS_AFTER="ret esc ..." types physical keys (qcodes) right after the clicks:
+    # a dialog's default button answers Enter, which tells a click that is not
+    # arriving apart from a dialog that is not listening.
+    if [ -n "${KEYS_AFTER:-}" ]; then
+      sleep 3
+      : > "$LOG.keys2"
+      for k in $KEYS_AFTER; do printf 'key %s\nwait 1\n' "$k" >> "$LOG.keys2"; done
+      python3 "$DIR/qmp-input.py" "$LOG.qmp" "$LOG.keys2" 1920 1080 "$LOG.mon"
+      echo "keys $KEYS_AFTER at $(( $(date +%s) - START ))s"
+    fi
   fi
 done
 kill $Q 2>/dev/null; wait $Q 2>/dev/null

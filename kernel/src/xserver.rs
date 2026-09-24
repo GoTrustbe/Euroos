@@ -155,7 +155,19 @@ pub fn read(fd: u64, max: usize) -> Vec<u8> {
             c.outbuf.len() - n, (fd - XCONN_FD_BASE) as usize));
         mark_reader((fd - XCONN_FD_BASE) as usize);
     }
-    c.outbuf.drain(0..n).collect()
+    let out: Vec<u8> = c.outbuf.drain(0..n).collect();
+    // Did this read carry a ButtonPress/Release out to the client? Events are
+    // 32-byte records and replies are 32-byte-multiples, so the opcode of every
+    // 32-byte chunk is at a known place; 4/5 in the low 7 bits is press/release.
+    // Unconditional and rare: it fires once per clicked button, not per request.
+    for chunk in out.chunks(32) {
+        let op = chunk[0] & 0x7f;
+        if op == 4 || op == 5 {
+            crate::serial_println!("[xin] <- conn={} client DRAINED kind={op} ({n} B read, {} B left)",
+                (fd - XCONN_FD_BASE) as usize, c.outbuf.len());
+        }
+    }
+    out
 }
 
 /// How many bytes are queued for this connection's client to collect.
@@ -355,6 +367,25 @@ fn deliver_selected(win: u32, want: u32, kind: u8, detail: u8, rx: i16, ry: i16,
         static ONCE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
         if !ONCE.swap(true, core::sync::atomic::Ordering::Relaxed) {
             crate::ring3::dump_main_syscalls();
+            // The window world at the first click, once. This is the path the
+            // desktop's hosted-frame click takes (deliver_button), so the census
+            // lives here and not only in deliver_pointer. Each lock in its own
+            // statement; the delivery below takes them again.
+            let presented: Vec<_> = PRESENTED.lock().clone();
+            crate::serial_println!("[xin] census at ButtonPress win={win:#x} local({lx},{ly}) root({rx},{ry}): retained={:#x} presented(id,dx,dy,sc,w,h,ord)={presented:?}",
+                RETAINED_ID.load(core::sync::atomic::Ordering::Relaxed));
+            let sel: Vec<_> = SELECTIONS.lock().clone();
+            crate::serial_println!("[xin]   selections(win,conn,mask)={sel:?}");
+            let readers: Vec<_> = READER_CONNS.lock().clone();
+            crate::serial_println!("[xin]   readers={readers:?} focus={:#x}", FOCUS_WINDOW.load(core::sync::atomic::Ordering::Relaxed));
+            let t = XCONNS.lock();
+            for (ci, c) in t.iter().enumerate() {
+                if let Some(c) = c {
+                    let wins: Vec<_> = c.windows.iter()
+                        .map(|w| (w.id, w.x, w.y, w.w, w.h, w.mapped, w.event_mask)).collect();
+                    crate::serial_println!("[xin]   conn {ci}: queued={} B windows(id,x,y,w,h,mapped,mask)={wins:?}", c.outbuf.len());
+                }
+            }
         }
     }
     // Every connection that selected `want` on `win`...
@@ -522,6 +553,32 @@ pub fn pump_mouse() {
 /// windowed mode): the largest mapped window, as before.
 fn deliver_pointer(kind: u8, detail: u8, px: usize, py: usize, require_mask: u32) {
     x86_64::instructions::interrupts::without_interrupts(|| {
+        // First ButtonPress: a census of the X window world, once. Which windows
+        // have presented pixels and where, which window the hit test picks, who
+        // selected what on it, and which connections are readers. Each lock is
+        // taken and dropped in its own statement (deliver_selected takes them
+        // again below).
+        if kind == 4 {
+            static ONCE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+            if !ONCE.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                let presented: Vec<_> = PRESENTED.lock().clone();
+                crate::serial_println!("[xin] census at ButtonPress ({px},{py}): presented(id,dx,dy,sc,w,h,ord)={presented:?}");
+                let hit = window_at(px as i32, py as i32);
+                crate::serial_println!("[xin]   window_at -> {hit:?}");
+                let sel: Vec<_> = SELECTIONS.lock().clone();
+                crate::serial_println!("[xin]   selections(win,conn,mask)={sel:?}");
+                let readers: Vec<_> = READER_CONNS.lock().clone();
+                crate::serial_println!("[xin]   readers={readers:?}");
+                let t = XCONNS.lock();
+                for (ci, c) in t.iter().enumerate() {
+                    if let Some(c) = c {
+                        let wins: Vec<_> = c.windows.iter().filter(|w| w.mapped)
+                            .map(|w| (w.id, w.x, w.y, w.w, w.h, w.event_mask)).collect();
+                        crate::serial_println!("[xin]   conn {ci}: queued={} B mapped(id,x,y,w,h,mask)={wins:?}", c.outbuf.len(), );
+                    }
+                }
+            }
+        }
         if let Some((wid, dx, dy, sc)) = window_at(px as i32, py as i32) {
             let lx = ((px as i32 - dx) / sc.max(1)) as i16;
             let ly = ((py as i32 - dy) / sc.max(1)) as i16;
@@ -1437,6 +1494,53 @@ fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, rx: i16, ry: i16
     e[28..30].copy_from_slice(&mod_state().to_le_bytes());
     e[30] = 1; // same-screen
     c.outbuf.extend_from_slice(&e);
+    // Unconditional (TRACE is off on the desktop path): a press or release always
+    // says which connection and window it went to and how much sits queued behind
+    // it; motion only the first few times. This is the instrument for "the click
+    // was queued, the dialog stayed": it separates delivered-to-the-wrong-window
+    // from delivered-and-never-read.
+    {
+        static MOTION_LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(6);
+        let say = kind == 4 || kind == 5
+            || (kind == 6 && MOTION_LEFT.fetch_update(core::sync::atomic::Ordering::Relaxed,
+                core::sync::atomic::Ordering::Relaxed, |v| if v > 0 { Some(v - 1) } else { None }).is_ok());
+        if say {
+            crate::serial_println!("[xin] -> kind={kind} detail={detail} conn={} win={window:#x} local({ex},{ey}) root({rx},{ry}) queued={} B",
+                conn_index(c), c.outbuf.len());
+            if kind == 4 || kind == 5 {
+                crate::serial_println!("[xin]    bytes={:02x?}", &e[..]);
+            }
+            // The window world at the first press, once, from the one function every
+            // input route ends in (the desktop's hosted-frame click never passes
+            // deliver_pointer or deliver_selected). `c` is this connection, already
+            // borrowed; the others come from the table, locked per statement.
+            if kind == 4 {
+                static ONCE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+                if !ONCE.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                    let presented: Vec<_> = PRESENTED.lock().clone();
+                    crate::serial_println!("[xin] census: retained={:#x} focus={:#x} presented(id,dx,dy,sc,w,h,ord)={presented:?}",
+                        RETAINED_ID.load(core::sync::atomic::Ordering::Relaxed),
+                        FOCUS_WINDOW.load(core::sync::atomic::Ordering::Relaxed));
+                    let sel: Vec<_> = SELECTIONS.lock().clone();
+                    crate::serial_println!("[xin]   selections(win,conn,mask)={sel:?} readers={:?}", READER_CONNS.lock().clone());
+                    let wins: Vec<_> = c.windows.iter().map(|w| (w.id, w.x, w.y, w.w, w.h, w.mapped, w.event_mask)).collect();
+                    crate::serial_println!("[xin]   this conn {}: windows(id,x,y,w,h,mapped,mask)={wins:?}", conn_index(c));
+                    // The other connections' windows. XCONNS may be locked by our
+                    // caller (deliver_to_shown holds it); try_lock, never block.
+                    if let Some(t) = XCONNS.try_lock() {
+                        for (ci, oc) in t.iter().enumerate() {
+                            if let Some(oc) = oc {
+                                let w: Vec<_> = oc.windows.iter().map(|w| (w.id, w.x, w.y, w.w, w.h, w.mapped, w.event_mask)).collect();
+                                crate::serial_println!("[xin]   conn {ci}: windows={w:?}");
+                            }
+                        }
+                    } else {
+                        crate::serial_println!("[xin]   (XCONNS held by the caller; other connections not listed)");
+                    }
+                }
+            }
+        }
+    }
     // The queue length answers the question a click that changes nothing raises: did
     // the client ever COLLECT the event? A number that keeps growing means the events
     // are piling up unread, and no amount of aiming at the right pixel would help.

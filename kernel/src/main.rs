@@ -643,7 +643,12 @@ fn main() -> Status {
         // (127 MiB left). Three children plus slack needs ~900. The demand pool
         // takes whatever remains after this, so the budget shifts rather than
         // grows; the cap below keeps lean images booting.
-        for &want in &[229_376usize, 163_840, 131_072, 73_728, 40_960, 16_384] {
+        // 1152 MiB first, when the cap allows it (a guest of ~4.5 GiB or more): the
+        // desktop browser forks two utilities and a renderer (3 x 256 MiB) and then
+        // asks for a FOURTH child, refused three times per run at "pool has 127 MiB".
+        // At -m 3584M the cap (a third of RAM) rejects this candidate and the 896 MiB
+        // pool below is used unchanged, so the lean images are not affected.
+        for &want in &[294_912usize, 229_376, 163_840, 131_072, 73_728, 40_960, 16_384] {
             if want > cap {
                 continue;
             }
