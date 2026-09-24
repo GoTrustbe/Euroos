@@ -261,7 +261,25 @@ interrupts off beyond the first is lost, and syscalls run with IF=0 (FMASK).
 Commit 6065f77: the calibration measures TSC cycles per period, schedule_tick
 adds the missed periods to TICKS (the clock stays on real time) and logs the
 first late ticks with the interrupted rip, task, last syscall and the
-demand-fault counters: `[tick-late]`. Run 36 says which window it is.
+demand-fault counters: `[tick-late]`. Run 36 said which window it is:
+`net::pump_all+0x84` in task 0, 0.2 to 1.2 s per window, 54150 ticks (540 s)
+lost over the run. pump_all, added with the run-26 freeze fix, called pump(4)
+on every open connection under the IfOffGuard, and pump's poll_seg spins 12
+million iterations per idle connection. Commit 55b1e58: pump_nowait per pass,
+the retransmit pass (tick) once a second. The remaining late ticks are a fork
+(+4 ticks, the 256 MiB arena copy with interrupts off) and an execve (+2).
+
+### W9. the GTK crash is not fully gone
+
+Run 36 died again at `_gtk_css_value_ref` (non-canonical pointer, tick 23796,
+after a madvise + mprotect burst) with madvise zeroing in place; runs 33 to 35
+were clean. It is the first crashing run in which fork children had exited
+before the crash (four on-device-model utilities). Commit 55b1e58 adds the exit
+guard: a dead child's keep list also holds every frame the browser main still
+maps, and `[exit-guard]` prints how many of the child's frames that concerned
+outside the shared lists. Zero in run 37 means the ownership model is sound and
+the crash is a use-after-free in GTK or chromium's GTK layer that Linux's
+zeroed pages mask; the fallback then is to run without the GTK LinuxUi.
 
 ## Done this sprint (all on `feature/app-control`, not pushed)
 
@@ -279,4 +297,5 @@ demand-fault counters: `[tick-late]`. Run 36 says which window it is.
    `file:///tmp/euro.html` painted in the window (screendump shows the page).
 2. Same run against `https://euro-os.eu/` renders the site. MET, run 34.
 3. Three consecutive runs pass (the repeatability bar used for multi-process).
-   Run 35 failed on lost ticks (W8); the series restarts on the 6065f77 build.
+   Run 35 failed on lost ticks (W8), run 36 on the GTK crash (W9); the series
+   restarts on the 55b1e58 build (run 37).
