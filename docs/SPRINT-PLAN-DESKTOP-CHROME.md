@@ -101,12 +101,20 @@ as a never-firing eventfd plus add/rm_watch, `getrusage` as zeros. Left, all
 benign probes: `recvmmsg` x3, `sigaltstack` x3 (crashpad, disabled),
 `name_to_handle_at` x2, `landlock` x1.
 
-### W5. open: TLS handshakes fail on the desktop path
+### W5. next: the live site. Page.navigate(https://euro-os.eu/) silences the browser
 
-`ssl_client_socket_impl.cc:956 handshake failed ... net_error -100` x10 per
-run. The September multi-process runs rendered the live site over https, so
-this is new to the desktop path or to this build. Not in scope until a page
-renders at all; noted so it is not rediscovered.
+Run 14: the desktop click reaches the page's own JavaScript
+(`docs/proof/2026-09-24-desktop-page-js-sees-the-click.png`, the page draws
+"CLICKED 2x at 546,234"), so page interaction is closed too. Then a one-shot
+Page.navigate to https://euro-os.eu/ at the tenth heartbeat gets NO reply of
+any kind: no heartbeat answers after it, no DNS query, no :443 connect to
+82.192.72.16, no fork, and the guest idles in epoll_wait for the remaining
+five minutes. The browser's main thread parked on something inside that
+navigation (a cross-site navigation from file:// to https:// wants a new
+renderer and a DNS answer from the network service first). In the tree: a
+dump armed by the navigate, 60 s later without an answer (threads, main
+syscalls, futex, epoll sets). Earlier per-run noise: handshake failures
+net_error -100 to Google addresses are chrome's own background traffic.
 
 ### W6. instrument: the flaky wedge, now caught automatically
 
