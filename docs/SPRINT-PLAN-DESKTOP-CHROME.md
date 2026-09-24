@@ -281,6 +281,21 @@ outside the shared lists. Zero in run 37 means the ownership model is sound and
 the crash is a use-after-free in GTK or chromium's GTK layer that Linux's
 zeroed pages mask; the fallback then is to run without the GTK LinuxUi.
 
+### W6. the flaky wedge, named: a print nested on the cpu that holds the UART lock
+
+Run 37 went silent at 310 s, ten seconds after the live navigate. The runbook's
+QMP dump (added for this) showed the vCPU running, not halted, CPL 0, IF=0, at
+`serial::_print+0x2a` (the UART lock acquire) on the https renderer's CR3, and
+the NMI probe printed nothing: it needs the same lock. The lock is taken with
+interrupts off, which rules out preemption but not re-entrancy on the same cpu:
+a page fault while a line is being formatted (an argument that reads user
+memory; CR2 pointed into the demand region), or the NMI itself, runs a handler
+that prints, and that print spins on a lock its own cpu holds. Commit e6c326e:
+`_print` records the holder's lapic id; a print that finds its own cpu recorded
+writes past the lock through a second port handle and skips the kmsg tee. The
+exit guard of run 37 reported 0 for both child exits: the ownership model of
+the demand pages is sound. Run 38 verifies.
+
 ## Done this sprint (all on `feature/app-control`, not pushed)
 
 - b875f70 mremap + msync. Shared windows re-aliased, not copied.
@@ -297,5 +312,5 @@ zeroed pages mask; the fallback then is to run without the GTK LinuxUi.
    `file:///tmp/euro.html` painted in the window (screendump shows the page).
 2. Same run against `https://euro-os.eu/` renders the site. MET, run 34.
 3. Three consecutive runs pass (the repeatability bar used for multi-process).
-   Run 35 failed on lost ticks (W8), run 36 on the GTK crash (W9); the series
-   restarts on the 55b1e58 build (run 37).
+   Run 35 failed on lost ticks (W8), run 36 on the GTK crash (W9), run 37 on
+   the serial wedge (W6); the series restarts on the e6c326e build (run 38).
