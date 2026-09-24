@@ -65,8 +65,34 @@ pub fn free_frames() -> usize {
 
 // ── Dedicated DEMAND-PAGING pool (independent of the fork pool above) ─────────
 pub fn demand_install(base: u64, frames: usize) {
-    let region = MemoryRegion { start: base, len: (frames as u64) * 4096, usable: true };
-    *DEMAND_POOL.lock() = Some(FrameAllocator::from_regions(&[region], 0));
+    demand_install_regions(&[(base, frames)]);
+}
+/// The demand pool's backing regions beyond the first: free RAM is seldom one
+/// contiguous run once the fork pool has taken the largest, and a pool built from
+/// one run only was 685 MiB on a 5632M guest that had 1.6 GiB free. The first
+/// region stays the run's dp_base/dp_frames; these are handed back at teardown
+/// through `demand_take_extra`.
+const DEMAND_MAX_REGIONS: usize = 8;
+static DEMAND_EXTRA: Mutex<[(u64, usize); DEMAND_MAX_REGIONS]> = Mutex::new([(0, 0); DEMAND_MAX_REGIONS]);
+/// Install the demand pool over several (base, frames) runs of RAM at once.
+pub fn demand_install_regions(regions: &[(u64, usize)]) {
+    let mut regs: [MemoryRegion; DEMAND_MAX_REGIONS] =
+        [MemoryRegion { start: 0, len: 0, usable: true }; DEMAND_MAX_REGIONS];
+    let n = regions.len().min(DEMAND_MAX_REGIONS);
+    for (i, &(b, f)) in regions.iter().take(n).enumerate() {
+        regs[i] = MemoryRegion { start: b, len: (f as u64) * 4096, usable: true };
+    }
+    *DEMAND_POOL.lock() = Some(FrameAllocator::from_regions(&regs[..n], 0));
+    let mut extra = DEMAND_EXTRA.lock();
+    *extra = [(0, 0); DEMAND_MAX_REGIONS];
+    for (i, &r) in regions.iter().take(n).enumerate().skip(1) {
+        extra[i] = r;
+    }
+}
+/// Take the extra backing regions (everything but the first) so the caller can
+/// return them to the main allocator; the list is cleared.
+pub fn demand_take_extra() -> [(u64, usize); DEMAND_MAX_REGIONS] {
+    core::mem::replace(&mut *DEMAND_EXTRA.lock(), [(0, 0); DEMAND_MAX_REGIONS])
 }
 /// Allocate one frame from the demand pool (None = exhausted / not initialized).
 pub fn demand_alloc() -> Option<u64> {

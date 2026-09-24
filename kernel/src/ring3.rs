@@ -8607,6 +8607,7 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
         for i in 0..dpf {
             let _ = falloc.free(dpb + i * 4096);
         }
+        free_demand_extra(falloc);
         DEMAND_FILE_MAPS.lock().clear();
         DEMAND_ENABLED.store(PERSIST_PREV_DEMAND.load(Ordering::Relaxed), Ordering::Relaxed);
         DEMAND_FILE_ENABLED.store(PERSIST_PREV_FILE.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -8922,6 +8923,16 @@ fn register_disk_exe_segments(diskidx: usize, dev: usize, doff: u64, exe_base: u
 /// launches a browser that would otherwise take the memory the compositor needs.
 pub static DEMAND_MARGIN_FRAMES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(8192);
 
+/// Hand the demand pool's extra backing regions (procpool::demand_install_regions)
+/// back to the main allocator; the first region is freed by the caller as before.
+fn free_demand_extra(falloc: &mut euromm::FrameAllocator) {
+    for (b, f) in crate::procpool::demand_take_extra() {
+        for i in 0..f as u64 {
+            let _ = falloc.free(b + i * 4096);
+        }
+    }
+}
+
 /// The launched state of a disk-served glibc process: everything the two lifecycles
 /// (run-to-completion, and persistent-alongside-the-desktop) must eventually give back.
 struct DiskRun {
@@ -9078,18 +9089,33 @@ fn glibc_disk_launch(
     // margin is what the REST of the system still gets: 32 MiB is enough for a boot
     // phase where nothing else runs, and far too little for a desktop that has to keep
     // compositing while the browser lives.
-    let mut want = falloc.free_frames().saturating_sub(DEMAND_MARGIN_FRAMES.load(Ordering::Relaxed) as usize);
-    let mut dp = (0u64, 0usize);
-    while want >= 4096 {
-        if let Ok(b) = falloc.allocate_contiguous(want) {
-            dp = (b, want);
-            break;
+    //
+    // Free RAM is taken run by run, largest first, until the budget is spent or no
+    // run of 64 MiB is left: once the fork pool holds the biggest contiguous run,
+    // "one run, halved until it fits" gave a 5632M guest a 685 MiB pool out of
+    // 1.6 GiB free, less than the 4608M guest had. The first run found is the
+    // largest (the ask only shrinks) and is the one recorded as dp_base/dp_frames.
+    let mut budget = falloc.free_frames().saturating_sub(DEMAND_MARGIN_FRAMES.load(Ordering::Relaxed) as usize);
+    let mut regions: [(u64, usize); 8] = [(0, 0); 8];
+    let mut nreg = 0usize;
+    let mut want = budget;
+    while nreg < regions.len() && budget >= 16384 && want >= 16384 {
+        let ask = want.min(budget);
+        match falloc.allocate_contiguous(ask) {
+            Ok(b) => {
+                regions[nreg] = (b, ask);
+                nreg += 1;
+                budget -= ask;
+            }
+            Err(_) => want /= 2,
         }
-        want /= 2;
     }
+    let dp = if nreg > 0 { regions[0] } else { (0u64, 0usize) };
     if dp.1 != 0 {
-        crate::procpool::demand_install(dp.0, dp.1);
-        crate::serial_println!("[glibc-disk] demand pool: {} MiB @ {:#x}", dp.1 / 256, dp.0);
+        crate::procpool::demand_install_regions(&regions[..nreg]);
+        let total: usize = regions[..nreg].iter().map(|r| r.1).sum();
+        crate::serial_println!("[glibc-disk] demand pool: {} MiB in {} region(s), largest {} MiB @ {:#x}",
+            total / 256, nreg, dp.1 / 256, dp.0);
     }
     let (dp_base, dp_frames) = dp;
 
@@ -9311,6 +9337,7 @@ pub fn run_glibc_disk(
         for i in 0..dp_frames as u64 {
             let _ = falloc.free(dp_base + i * 4096);
         }
+        free_demand_extra(falloc);
     }
     crate::paging::free_address_space(falloc, pml4);
     for i in 0..frames as u64 {
@@ -9567,6 +9594,7 @@ pub fn run_glibc(
         for i in 0..dp_frames as u64 {
             let _ = falloc.free(dp_base + i * 4096);
         }
+        free_demand_extra(falloc);
     }
     // Reclaim this run's address space: free the page tables (pml4/pdpt/pd) AND the
     // big contiguous arena back to the frame allocator. All this run's tasks are Dead
