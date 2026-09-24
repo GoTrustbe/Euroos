@@ -2833,6 +2833,42 @@ fn shared_phys_sorted() -> alloc::vec::Vec<u64> {
     v
 }
 
+/// The keep list for a dead fork child's demand pages: the shared frames, plus
+/// EVERY frame the browser main process still maps. The second part is a guard
+/// and a measurement at once: the main thread's heap held stale allocator words
+/// again in run 36, the first crashing run in which children had exited before
+/// (four utilities), and a child's frame that the parent still maps would be
+/// exactly that, whatever the shared lists say. If the count is ever non-zero,
+/// the line below names the leak in the ownership model.
+fn child_keep_list(child_pml4: u64) -> alloc::vec::Vec<u64> {
+    let mut keep = shared_phys_sorted();
+    let parent = GLIBC_PML4.load(Ordering::Relaxed);
+    if parent == 0 || parent == child_pml4 {
+        return keep;
+    }
+    let pv = crate::paging::demand_phys_sorted(parent, DEMAND_PML4_IDX);
+    let cv = crate::paging::demand_phys_sorted(child_pml4, DEMAND_PML4_IDX);
+    let mut n = 0usize;
+    let mut first = [0u64; 4];
+    for &f in &cv {
+        if pv.binary_search(&f).is_ok() && keep.binary_search(&f).is_err() {
+            if n < 4 {
+                first[n] = f;
+            }
+            n += 1;
+        }
+    }
+    crate::serial_println!(
+        "[exit-guard] child pml4 {child_pml4:#x}: {} frames mapped, {} of them also mapped by the browser main outside the shared lists{}",
+        cv.len(), n,
+        if n > 0 { alloc::format!(" (first {:#x?}); kept", &first[..n.min(4)]) } else { alloc::string::String::new() }
+    );
+    keep.extend(pv);
+    keep.sort_unstable();
+    keep.dedup();
+    keep
+}
+
 /// A fork child is gone: free every low fd it opened and still had open.
 fn child_opened_release(owner: usize) {
     let _g = crate::sched::IfOffGuard::new();
@@ -10891,7 +10927,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     // Give the child's COMMITTED demand pages back: without this every
                     // dead child leaked its pages and the pool ran dry at ~524 MiB
                     // under MP relaunch churn (run 12 POOL EXHAUSTED).
-                    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &shared_phys_sorted());
+                    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
                     crate::procpool::free_range(arena, frames);
                     crate::procpool::free(pml4);
                     free_thread_kstack(cur);
@@ -11916,7 +11952,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
                         fork_child_release_fds(ctask);
                         child_opened_release(ctask);
-                        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &shared_phys_sorted());
+                        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
                         crate::procpool::free_range(arena, frames);
                         crate::procpool::free(pml4);
                         free_thread_kstack(ctask);

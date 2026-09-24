@@ -146,17 +146,37 @@ pub fn pump_all() {
     // kernel already paid for: preempt the holder, let another task spin on the
     // same lock, and on one core neither ever runs again. It wedged the guest
     // for twenty minutes the first time this function existed without the guard.
+    //
+    // No waiting in here: pump(4) called poll_seg, which spins SPINS*3 = 12 million
+    // iterations for each idle connection, so with a dozen sockets open this
+    // section ran 0.2 to 1.2 s with interrupts off, every 16 desktop iterations.
+    // The tick clock lost 540 s in run 36 (the [tick-late] log named
+    // net::pump_all+0x84 in task 0 every time). pump_nowait takes what is queued;
+    // the retransmit pass (tick, which gives up on a peer after 8 silent rounds)
+    // runs once a second.
     let _g = crate::sched::IfOffGuard::new();
     rx_route();
+    let now = crate::interrupts::ticks();
+    let last = PUMP_ALL_TICK.load(core::sync::atomic::Ordering::Relaxed);
+    let retransmit = now.wrapping_sub(last) >= 100;
+    if retransmit {
+        PUMP_ALL_TICK.store(now, core::sync::atomic::Ordering::Relaxed);
+    }
     let mut t = SOCKETS.lock();
     for slot in t.iter_mut() {
         if let Some(Sock::Conn(c)) = slot {
             if c.open {
-                c.pump(4);
+                if retransmit {
+                    c.tick();
+                } else {
+                    c.pump_nowait();
+                }
             }
         }
     }
 }
+/// Tick of the last retransmit pass of `pump_all`.
+static PUMP_ALL_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Bytes sitting in socket receive buffers that the program has not read.
 /// Large and growing means the data arrived and the READER never came back for

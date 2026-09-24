@@ -818,6 +818,43 @@ pub fn clone_demand_region(parent: u64, child: u64, idx: usize) -> bool {
 /// free_demand_region, but frames present in `keep` (sorted) survive — they are
 /// SHARED (memfd) frames other processes still map; freeing them with the dead
 /// process is a use-after-free for every other mapper.
+/// Every physical frame a PML4's demand region (slot `idx`) maps right now, sorted.
+/// For the exit guard: a dead child must not free a frame the browser main still
+/// maps, whatever list says it is private.
+pub fn demand_phys_sorted(pml4: u64, idx: usize) -> alloc::vec::Vec<u64> {
+    let mut v = alloc::vec::Vec::new();
+    // SAFETY: identity-mapped table chain, read-only walk.
+    unsafe {
+        let e4 = (pml4 as *const u64).add(idx).read_volatile();
+        if e4 & PRESENT == 0 {
+            return v;
+        }
+        let pdpt = e4 & ADDR_MASK;
+        for i3 in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i3).read_volatile();
+            if e3 & PRESENT == 0 {
+                continue;
+            }
+            let pd = e3 & ADDR_MASK;
+            for i2 in 0..512usize {
+                let e2 = (pd as *const u64).add(i2).read_volatile();
+                if e2 & PRESENT == 0 {
+                    continue;
+                }
+                let pt = e2 & ADDR_MASK;
+                for i1 in 0..512usize {
+                    let e1 = (pt as *const u64).add(i1).read_volatile();
+                    if e1 & PRESENT != 0 {
+                        v.push(e1 & ADDR_MASK);
+                    }
+                }
+            }
+        }
+    }
+    v.sort_unstable();
+    v
+}
+
 pub fn free_demand_region_except(pml4: u64, idx: usize, keep: &[u64]) {
     // SAFETY: identity-mapped table chain; called single-threaded at teardown.
     unsafe {
