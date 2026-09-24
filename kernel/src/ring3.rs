@@ -8743,6 +8743,14 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // first composite and the renderer never even forked. Hunting that crash is
     // its own thread; this is the configuration that demonstrably works.
     b"--in-process-gpu",
+    // No GTK LinuxUi: with "qt" chrome loads its Qt shim, which finds no Qt here and
+    // leaves the browser without a toolkit integration (theme, fonts, native dialogs
+    // come from chrome's own defaults). The GTK path dies in _gtk_css_value_ref on
+    // a freed slot (the value pointer reads as PartitionAlloc's encoded freelist
+    // word: -1 for the last entry, non-canonical otherwise) in about half the runs
+    // since the madvise fix (runs 36, 38), a use-after-free in GTK or chromium's
+    // GTK layer that this kernel cannot repair. W9 in the sprint plan.
+    b"--ui-toolkit=qt",
     // MULTI-PROCESS is the default since 2026-09-04, matching the boot test.
     // What stood in its way is fixed and measured: descriptors between two
     // CHILDREN were keyed by fd number and silently vanished, so no data-pipe

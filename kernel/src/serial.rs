@@ -111,8 +111,32 @@ pub fn _print(args: fmt::Arguments) {
             let _ = uart.write_fmt(args);
             return;
         }
-        let mut uart = UART.lock();
+        // A bounded wait: the holder is one task on this core with interrupts off,
+        // so a lock still taken after 200 million spins belongs to a task that died
+        // or slept while printing (runs 37 and 38 sat here forever, on a fork
+        // child's CR3 and on the boot CR3). Force it open, say whose it was, and
+        // go on: the next run names the path that leaves the lock behind.
+        let mut spins = 0u64;
+        let mut uart = loop {
+            if let Some(g) = UART.try_lock() {
+                break g;
+            }
+            core::hint::spin_loop();
+            spins += 1;
+            if spins == 200_000_000 {
+                let holder = PRINTING_TASK.load(Ordering::Relaxed);
+                let cpu = PRINTING_CPU.load(Ordering::Relaxed);
+                // SAFETY: the holder cannot be running (single core, IF=0 here) and
+                // will never release; the port is idle.
+                unsafe { UART.force_unlock() };
+                let mut u = Uart::new();
+                let _ = u.write_fmt(format_args!(
+                    "\n[serial] UART lock held by task {holder} (cpu {cpu}) through 200M spins: forced open, the holder died or slept while printing\n"
+                ));
+            }
+        };
         PRINTING_CPU.store(me, Ordering::Release);
+        PRINTING_TASK.store(crate::sched::current(), Ordering::Relaxed);
         struct Tee<'a>(&'a mut Uart);
         impl Write for Tee<'_> {
             fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -130,6 +154,8 @@ pub fn _print(args: fmt::Arguments) {
 /// so a print nested on the same cpu can tell "held by me, suspended" from "held
 /// by another core, about to be released".
 static PRINTING_CPU: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// Scheduler task index of that holder, for the forced-open message.
+static PRINTING_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// Non-blocking read of one input byte from COM1 (`None` if nothing pending).
 /// Used by the host-driven serial console to stream shell commands in.
