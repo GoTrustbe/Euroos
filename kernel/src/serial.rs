@@ -162,20 +162,30 @@ static PRINTING_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::Atom
 /// Non-blocking read of one input byte from COM1 (`None` if nothing pending).
 /// Used by the host-driven serial console to stream shell commands in.
 pub fn read_byte() -> Option<u8> {
-    UART.try_lock().and_then(|mut u| u.read_byte())
+    // Interrupts off while the lock is held, like _print: the desktop loop polls
+    // this with interrupts enabled, and an interrupt handler that prints (the
+    // xHCI harvest logs every keyboard report) found the lock taken by the very
+    // task it interrupted and spun on it with interrupts off. That was the wedge
+    // "right after the first keystrokes" of runs 3, 12, 20, 28, 29 and 41 (named
+    // by the forced-open message: holder task 0, no printer recorded).
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        UART.try_lock().and_then(|mut u| u.read_byte())
+    })
 }
 
 /// Write raw bytes DIRECTLY to the UART (panic-safe: `try_lock`, and no
 /// tee back to the ring — prevents re-locking RING during a panic dump).
 pub fn write_raw(bytes: &[u8]) {
-    if let Some(mut uart) = UART.try_lock() {
-        for &b in bytes {
-            if b == b'\n' {
-                uart.write_byte(b'\r');
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if let Some(mut uart) = UART.try_lock() {
+            for &b in bytes {
+                if b == b'\n' {
+                    uart.write_byte(b'\r');
+                }
+                uart.write_byte(b);
             }
-            uart.write_byte(b);
         }
-    }
+    });
 }
 
 #[macro_export]
