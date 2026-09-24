@@ -332,6 +332,7 @@ ff31b85: read_byte and write_raw hold the lock under without_interrupts. The
 three-run series for exit criterion 3 runs on that build: 42, 43, 44.
 
 Run 42 (ff31b85): PASS, serial watchdog silent, 58 ticks lost over the run.
+Run 43 (ff31b85): PASS, 55 ticks lost, live page loaded at 304.7 s.
 Open, not blocking: the page's one third-party script, `https://tracera.eu/t.js`,
 now fails with net::ERR_SSL_PROTOCOL_ERROR (its name resolves since W5b; the
 handshake with that host does not complete). The next network item after the
