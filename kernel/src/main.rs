@@ -633,7 +633,12 @@ fn main() -> Status {
         // Cap at a quarter of RAM: at -m 3584M the fifth-cap rejected the 640 MiB
         // candidate and chrome multi-process fell to 160 MiB — not one 256 MiB
         // child arena fit, and every GPU/renderer launch died on [fork] alloc.
-        let cap = usable_frames / 3;
+        // A large guest can spare half: at 4023 MiB usable, a third caps the pool at
+        // 1341 MiB, one arena short of the five children a desktop browser on a
+        // live site forks (two utilities, the file:// renderer, the https renderer,
+        // and one more), and the fifth fork failed at "pool has 127 MiB" twice per
+        // run. Below 3 GiB the third stays: the lean images must keep booting.
+        let cap = if usable_frames >= 3 * 256 * 1024 { usable_frames / 2 } else { usable_frames / 3 };
         // Candidates: 640 MiB (2+ chrome arenas) → 512 → 288 (one child + slack)
         // → 160 → 64 MiB, first that fits.
         let mut installed = false;
@@ -648,7 +653,7 @@ fn main() -> Status {
         // asks for a FOURTH child, refused three times per run at "pool has 127 MiB".
         // At -m 3584M the cap (a third of RAM) rejects this candidate and the 896 MiB
         // pool below is used unchanged, so the lean images are not affected.
-        for &want in &[294_912usize, 229_376, 163_840, 131_072, 73_728, 40_960, 16_384] {
+        for &want in &[360_448usize, 294_912, 229_376, 163_840, 131_072, 73_728, 40_960, 16_384] {
             if want > cap {
                 continue;
             }
