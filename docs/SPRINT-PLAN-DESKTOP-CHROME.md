@@ -128,6 +128,20 @@ pump_all so tick() does ACKs and retransmits for the no-wait sends. The
 blocking paths stay for blocking descriptors; they still spin and should
 yield instead (noted, not needed for chrome).
 
+### W5 progress after the freeze fix (runs 26, 27)
+
+Run 26: zero freezes, ClientHello 33 ms after the SYN, but the navigation
+failed with ERR_ACCESS_DENIED again: the 96-slot socket table was full before
+the navigate. Cause: a fork child's close() only marks unless the descriptor
+is on the child's own list, and socket() never registered its result there;
+the network service opens a UDP socket per lookup. Fixed centrally in the
+dispatcher (every creating syscall). Run 27: the table never fills, and the
+TLS handshake now reaches the server's first flight (4873 B read: ServerHello
+and the certificate chain), then nothing for 21 s until the server's FIN and
+net::ERR_TIMED_OUT. Chrome sets its epoll interest on the socket to 0 after
+the read. Next measurement (run 28): the server-side capture says whether
+chrome's second flight ever left the guest.
+
 ### W5b. open: the resolver path itself
 
 Why the system-resolver path returns NAME_NOT_RESOLVED without querying, and
