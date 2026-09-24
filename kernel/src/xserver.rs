@@ -1490,8 +1490,22 @@ fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, rx: i16, ry: i16
     e[22..24].copy_from_slice(&ry.to_le_bytes());
     e[24..26].copy_from_slice(&ex.to_le_bytes());
     e[26..28].copy_from_slice(&ey.to_le_bytes());
-    // state@28: the live modifier + button mask (shift/ctrl/alt, button 1 held).
-    e[28..30].copy_from_slice(&mod_state().to_le_bytes());
+    // state@28: the modifier + button mask AS IT WAS BEFORE THIS EVENT (the X
+    // protocol's definition). For a ButtonRelease that means the released button
+    // is still set; for a ButtonPress it is not yet. The live mouse state cannot
+    // supply that for a synthesized desktop click (press and release are queued
+    // together, the physical button is already up), and the difference decides
+    // whether the click counts: chrome derives a release's flags from this word,
+    // and a button only fires when the release carries the left-button flag. The
+    // delivered bytes had state=0 on both; the button painted hover and never
+    // fired. Measured, not guessed: [xin] bytes=[05, 01, .., 00, 00, 01, 00].
+    let button_bit: u16 = match detail { 1 => 0x100, 2 => 0x200, 3 => 0x400, 4 => 0x800, 5 => 0x1000, _ => 0 };
+    let state = match kind {
+        4 => mod_state() & !button_bit,
+        5 => mod_state() | button_bit,
+        _ => mod_state(),
+    };
+    e[28..30].copy_from_slice(&state.to_le_bytes());
     e[30] = 1; // same-screen
     c.outbuf.extend_from_slice(&e);
     // Unconditional (TRACE is off on the desktop path): a press or release always

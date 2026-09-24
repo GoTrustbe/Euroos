@@ -1102,6 +1102,26 @@ pub fn cdp_pump() {
             let sent = PING_SENT.fetch_add(1, Ordering::Relaxed) + 1;
             let answered = PING_ANS.load(Ordering::Relaxed);
             cdp_send("{\"id\":50,\"method\":\"Target.getTargets\"}");
+            // One re-navigation, after the fourth heartbeat (~2 min of guest time).
+            // The startup tab's navigation to the argv URL is lost when the profile
+            // dialog interrupts startup: after Enter dismisses it, Target.getTargets
+            // reports the page target with url "" and no title, and the omnibox
+            // shows about:blank. Navigating the attached target again, once the
+            // dialog is gone, is the measurement that tells "the UI cannot show
+            // web content" apart from "the first navigation was simply dropped".
+            {
+                static NAV_ONCE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+                if sent >= 4 && !NAV_ONCE.load(Ordering::Relaxed) {
+                    let sid = CDP_SESSION.lock().clone();
+                    if !sid.is_empty() {
+                        NAV_ONCE.store(true, Ordering::Relaxed);
+                        let url = CDP_URL.lock().clone();
+                        crate::serial_println!("[cdp] re-navigating the attached target to {url} (heartbeat {sent})");
+                        cdp_send(&alloc::format!(
+                            "{{\"id\":60,\"sessionId\":\"{sid}\",\"method\":\"Page.navigate\",\"params\":{{\"url\":\"{url}\"}}}}"));
+                    }
+                }
+            }
             // Three unanswered pings = the channel died. Catch the reader thread
             // in the act ONCE: its scheduler state + last syscall name the exact
             // wait it is stuck in (the dt5 measurement: dead ~60 s after attach).
