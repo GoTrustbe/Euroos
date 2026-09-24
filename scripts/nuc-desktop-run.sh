@@ -33,6 +33,11 @@ done
 [ -e /dev/kvm ] || { echo "no /dev/kvm - this script is for the NUC; use chrome-desktop.sh under TCG"; exit 1; }
 mon() { printf '%s\n' "$@" | nc -U -q 1 "$LOG.mon" >/dev/null 2>&1; }
 
+# One VM at a time on this image: a second qemu cannot take the write lock and
+# dies before the desktop ("Failed to get \"write\" lock"). Wait for the previous
+# run to finish rather than fail. pkill -x, never -f: -f matches the ssh command
+# line that started us.
+while pgrep -x qemu-system-x86 >/dev/null 2>&1; do sleep 5; done
 rm -f "$LOG" "$LOG"*.ppm "$LOG.mon" "$LOG.qmp"
 # Both packs are attached: the kernel scans every disk for a EuroPack volume, and
 # https needs the NSS one (chrome loads its software token and trust roots as

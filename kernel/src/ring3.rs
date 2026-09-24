@@ -4967,6 +4967,41 @@ fn vfs_ftruncate(fd: usize, len: usize) -> u64 {
 
 /// rename(old, new): move a flat-VFS file/symlink to a new path (replacing any file
 /// already there). chrome writes files atomically (write temp, then rename).
+/// link(old, new): a second name for a file. This VFS is a flat table of
+/// (path, bytes), so two names cannot share one content the way inodes do; the
+/// new name gets a COPY of the bytes. That is exact for the way link is used
+/// here (create-then-link-then-unlink as an atomic publish, and the disk cache's
+/// on-disk structure check) and differs only for a program that writes through
+/// one name and expects the other to change, which nothing on this system does.
+/// Says so in the log the first few times, so the census can tell what asked.
+fn vfs_link(oldp: &[u8], newp: &[u8]) -> u64 {
+    let o = String::from_utf8_lossy(oldp).into_owned();
+    let n = String::from_utf8_lossy(newp).into_owned();
+    if o.is_empty() || n.is_empty() {
+        return (-2i64) as u64; // -ENOENT
+    }
+    {
+        static LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(8);
+        if LEFT.load(Ordering::Relaxed) > 0 {
+            LEFT.fetch_sub(1, Ordering::Relaxed);
+            crate::serial_println!("[linux-abi] link {o:?} -> {n:?}");
+        }
+    }
+    if MKDIRS.lock().iter().any(|d| *d == o) {
+        return (-1i64) as u64; // -EPERM: no hard links to directories
+    }
+    let mut files = FILES.lock();
+    if files.iter().any(|(p, _)| *p == n) {
+        return (-17i64) as u64; // -EEXIST
+    }
+    let data = match files.iter().find(|(p, _)| *p == o) {
+        Some((_, d)) => d.clone(),
+        None => return (-2i64) as u64, // -ENOENT
+    };
+    files.push((n, data));
+    0
+}
+
 fn vfs_rename(oldp: &[u8], newp: &[u8]) -> u64 {
     let o = String::from_utf8_lossy(oldp).into_owned();
     let n = String::from_utf8_lossy(newp).into_owned();
@@ -11720,6 +11755,26 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
             8
         }
+        253 | 294 => {
+            // inotify_init / inotify_init1: an eventfd that starts at 0 and is never
+            // written. Nothing on this VFS changes a file behind a program's back
+            // (there is no other writer to watch for), so "a watch that never
+            // fires" is the truthful instance, not a stub: readiness stays false,
+            // read blocks or EAGAINs, epoll accepts it. Chrome's FilePathWatcher
+            // took ENOSYS as an error at every profile-directory watch.
+            if num == 294 && a1 & !(0x800 | 0x8_0000) != 0 {
+                return (-22i64) as u64; // -EINVAL: only IN_NONBLOCK / IN_CLOEXEC
+            }
+            match crate::net::eventfd_create(0) {
+                Some(fd) => {
+                    if num == 294 && a1 & 0x8_0000 != 0 { fd_set_cloexec(fd, true); }
+                    fd
+                }
+                None => (-24i64) as u64, // -EMFILE
+            }
+        }
+        254 => 1, // inotify_add_watch -> watch descriptor 1 (it will never report)
+        255 => 0, // inotify_rm_watch
         290 => {
             // eventfd2(initval, flags): GLib's GMainContext wakeup fd (GWakeup). Only
             // EFD_SEMAPHORE(1)/EFD_NONBLOCK(0x800)/EFD_CLOEXEC(0x80000) are valid; any
@@ -12683,6 +12738,17 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         77 => vfs_ftruncate(a1 as usize, a2 as usize), // ftruncate(fd, len)
         74 | 75 => 0, // fsync / fdatasync: VFS is in-RAM -> nothing to flush, succeed
         82 => vfs_rename(&user_cstr(a1, 256), &user_cstr(a2, 256)), // rename(old, new)
+        86 => vfs_link(&user_cstr(a1, 256), &user_cstr(a2, 256)),   // link(old, new)
+        265 => vfs_link(&user_cstr(a2, 256), &user_cstr(a4, 256)),  // linkat(ofd,old,nfd,new,flags)
+        98 => {
+            // getrusage(who, *rusage): 144 bytes of zeros. Nothing here accounts
+            // CPU time or faults per process yet, and zero is what an honest
+            // "unmeasured" reads as; chrome only feeds it into metrics.
+            if !zero_user(a2, 144) {
+                return EFAULT;
+            }
+            0
+        }
         264 => vfs_rename(&user_cstr(a2, 256), &user_cstr(a4, 256)), // renameat(ofd,old,nfd,new)
         316 => vfs_rename(&user_cstr(a2, 256), &user_cstr(a4, 256)), // renameat2(ofd,old,nfd,new,flags)
         85 => vfs_open_create(&user_cstr(a1, 256), true), // creat(path, mode) = open O_CREAT|O_TRUNC
