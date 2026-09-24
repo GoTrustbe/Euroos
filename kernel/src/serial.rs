@@ -4,6 +4,7 @@
 //! there is no longer a UEFI console. QEMU captures it with `-serial file:serial.log`.
 //! That way, on a black screen we can see exactly how far the kernel got.
 
+use core::sync::atomic::Ordering;
 use core::fmt::{self, Write};
 
 use spin::Mutex;
@@ -90,8 +91,28 @@ pub fn _print(args: fmt::Arguments) {
     // preempts a task mid-print, it spins forever on this lock with interrupts
     // disabled — a silent boot hang. With the lock only ever held under IF=0,
     // an IRQ-context print can never see it taken on this CPU.
+    //
+    // Re-entrancy on the SAME cpu is the case IF=0 cannot cover: a page fault
+    // while the line is being formatted (an argument that reads user memory), or
+    // an NMI, runs a handler that prints too, and that print would spin forever
+    // on a lock its own cpu holds. Run 37 on the NUC wedged exactly there
+    // (serial::_print+0x2a, IF=0, on a fork child's CR3), and the NMI probe
+    // printed nothing for the same reason. A nested print writes past the lock:
+    // the holder is suspended underneath, so the port is free in practice, and a
+    // garbled line beats a dead machine. It skips the kmsg tee (the ring lock
+    // may be held by the same suspended frame).
     x86_64::instructions::interrupts::without_interrupts(|| {
+        let me = crate::apic::lapic_id().wrapping_add(1);
+        if PRINTING_CPU.load(Ordering::Acquire) == me {
+            // A second handle on the same port: the Uart is only the two port
+            // numbers, the outer frame holding the lock cannot run until we return,
+            // and the UART registers tolerate the interleaving.
+            let mut uart = Uart::new();
+            let _ = uart.write_fmt(args);
+            return;
+        }
         let mut uart = UART.lock();
+        PRINTING_CPU.store(me, Ordering::Release);
         struct Tee<'a>(&'a mut Uart);
         impl Write for Tee<'_> {
             fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -101,8 +122,14 @@ pub fn _print(args: fmt::Arguments) {
             }
         }
         let _ = Tee(&mut uart).write_fmt(args);
+        PRINTING_CPU.store(0, Ordering::Release);
     });
 }
+
+/// LAPIC id + 1 of the cpu that holds the UART lock inside `_print` (0 = none),
+/// so a print nested on the same cpu can tell "held by me, suspended" from "held
+/// by another core, about to be released".
+static PRINTING_CPU: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Non-blocking read of one input byte from COM1 (`None` if nothing pending).
 /// Used by the host-driven serial console to stream shell commands in.
