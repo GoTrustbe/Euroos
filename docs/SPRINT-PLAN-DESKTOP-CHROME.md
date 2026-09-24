@@ -101,30 +101,32 @@ as a never-firing eventfd plus add/rm_watch, `getrusage` as zeros. Left, all
 benign probes: `recvmmsg` x3, `sigaltstack` x3 (crashpad, disabled),
 `name_to_handle_at` x2, `landlock` x1.
 
-### W5. next: the live site. The guest's clock stops after the connect
+### W5. root cause found: blocking socket paths spin with interrupts off
 
-Peeled in five runs, each layer named by a measurement:
-1. `MAX_SOCK = 16` (net.rs): the browser's background traffic used all 16 AF_INET
-   slots in minutes, and every later socket() returned -1, read by chrome as
-   EPERM: ERR_NAME_NOT_RESOLVED on the resolver's UDP socket, ERR_ACCESS_DENIED
-   on a connect. Raised to 96 (fd bands are 100 wide). Two stale pins of the
-   old server (151.240.77.50, VFS /etc/hosts and two chrome flags) fixed on the
-   way; not the cause.
-2. With sockets, TCP to 82.192.72.16:443 establishes and the server FINs within
-   50 ms of guest time, no data (run 19).
-3. Server-side tcpdump (run 22): the SYN, SYN-ACK and the guest's ACK complete
-   in 20 ms; then NOTHING from the guest for 30 s; nginx's stream router
-   (ssl_preread, preread_timeout 30 s) sends FIN; 20 ms later the guest's
-   ClientHello (1836 B, a correct TLS record) arrives and gets RST.
-4. The guest's own clocks agree: between "TCP established" and the FIN the tick
-   counter advanced 2 and chrome's wall clock 0.1 s, over 30 real seconds.
-   Before the navigate the tick rate was 99.8/s for 300 s. So after the
-   connect the guest is halted and only NIC interrupts wake it; the periodic
-   LAPIC timer (vector 0x20, class 2) no longer fires while MSI-X 0x4B still
-   does, which is the signature of an interrupt of class 2..3 left in service.
-5. In the tree (run 23): a probe in the NIC interrupt handler prints the LAPIC
-   in-service bits 0x20..0x3f, the timer LVT and its current count whenever
-   fewer than 5 ticks passed since the previous NIC interrupt.
+The freeze is the guest's own doing. Probe v2 in the NIC interrupt handler
+(trigger: >1.5 G cycles between NIC interrupts with <20 ticks) caught it twelve
+times: a timer interrupt pending in IRR, nothing in service, TPR 0, IF=1, and
+the interrupted rip at a syscall's RETURN address in libc. The host-side
+sampler (run 25) rules the host out: memory pressure 0.00, four gigabytes
+free, the vCPU thread waited 72 ms for a CPU over the whole 843-second run.
+So the machine spent those seconds inside a syscall with IF=0, and on sysret
+KVM delivered the queued NIC interrupt first and one coalesced timer tick.
+
+The syscalls: `TcpConn::recv` spins up to 80 x pump(8) x poll_seg, and
+poll_seg is SPINS*3 = 12 million busy iterations; `UdpSock::recv` (the
+resolver) the same 12 million; `TcpConn::send` waits five rounds for an ACK.
+Chrome marks every socket O_NONBLOCK and polls them constantly, so every
+recv on an idle socket froze the whole guest for seconds: timer, desktop,
+the IO thread that wanted to write the ClientHello, everything. The 30-second
+gap the server saw before the ClientHello, the "5 ticks" between established
+and FIN, the stalls during startup DNS bursts, all the same thing.
+
+Fix (run 26): O_NONBLOCK descriptors take no-wait paths (sock_recv_nowait /
+sock_send_nowait: TCP via recv_nowait/send_nowait, UDP a bounded look through
+what the NIC already delivered, LocalDns its queue), the desktop loop drives
+pump_all so tick() does ACKs and retransmits for the no-wait sends. The
+blocking paths stay for blocking descriptors; they still spin and should
+yield instead (noted, not needed for chrome).
 
 ### W5b. open: the resolver path itself
 
