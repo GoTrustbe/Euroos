@@ -203,6 +203,35 @@ pub static NET_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 /// lost 89 segments per load waiting for one.
 extern "x86-interrupt" fn net_msix_handler(_frame: InterruptStackFrame) {
     NET_MSIX_COUNT.fetch_add(1, Ordering::Relaxed);
+    // Timer-freeze probe. After a live-site navigation the guest's tick clock
+    // stood still for ninety wall seconds while these NIC interrupts kept
+    // arriving (runs 19 and 22: chrome's own wall clock and TICKS both advanced
+    // 0.1 s). This handler is the only code that still runs then, so it is the
+    // place to look at the LAPIC: if fewer than 5 ticks passed since the previous
+    // NIC interrupt, print the timer's in-service bits, LVT and current count.
+    {
+        // Trigger on the REAL signature, not on interrupt bursts: more than a second
+        // of TSC between two NIC interrupts with fewer than 20 ticks in between
+        // (the first version fired twelve times during startup bursts and had no
+        // budget left for the freeze).
+        static LAST_TICKS: AtomicU64 = AtomicU64::new(0);
+        static LAST_TSC: AtomicU64 = AtomicU64::new(0);
+        static LEFT: AtomicU64 = AtomicU64::new(12);
+        let now = TICKS.load(Ordering::Relaxed);
+        let tsc = unsafe { core::arch::x86_64::_rdtsc() };
+        let last = LAST_TICKS.swap(now, Ordering::Relaxed);
+        let last_tsc = LAST_TSC.swap(tsc, Ordering::Relaxed);
+        if last_tsc != 0 && tsc.saturating_sub(last_tsc) > 1_500_000_000
+            && now.saturating_sub(last) < 20 && LEFT.load(Ordering::Relaxed) > 0
+        {
+            LEFT.fetch_sub(1, Ordering::Relaxed);
+            let (isr1, lvt, cur) = crate::apic::timer_probe();
+            let (tpr, ppr, irr1) = crate::apic::priority_probe();
+            serial_println!("[timer-probe] FROZEN: {} Mcycles since the previous NIC irq but only {} ticks (now {now}): ISR[20..3f]={isr1:#010x} IRR[20..3f]={irr1:#010x} TPR={tpr:#x} PPR={ppr:#x} LVT_TIMER={lvt:#010x} CUR={cur} halted-at rip={:#x} IF={}",
+                tsc.saturating_sub(last_tsc) / 1_000_000, now.saturating_sub(last),
+                _frame.instruction_pointer.as_u64(), _frame.cpu_flags.bits() & 0x200 != 0);
+        }
+    }
     crate::net::rx_route_irq();
     crate::apic::eoi();
 }
@@ -582,6 +611,30 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
         // reading the frame is safe (it is our own interrupt frame, not user memory).
         serial_println!("[isolation]   rip={:#x} rsp={:#x}",
             frame.instruction_pointer.as_u64(), frame.stack_pointer.as_u64());
+        // The instruction that faulted, as bytes, the way the NMI probe shows its
+        // RIP. A write to address 7 at a fixed rip (runs 14 and 21, the browser's
+        // main thread, minutes into every run that reached it) is named by the
+        // instruction and its operand registers, not by the address alone. Read
+        // through the page-walk-guarded helper: user memory, never a raw deref.
+        {
+            let rip = frame.instruction_pointer.as_u64();
+            let mut bytes = [0u8; 16];
+            let mut n = 0;
+            for k in 0..2u64 {
+                if let Some(q) = read_user_qword(rip & !7 + k * 8) {
+                    bytes[(k * 8) as usize..(k * 8 + 8) as usize].copy_from_slice(&q.to_le_bytes());
+                    n += 8;
+                }
+            }
+            let off = (rip & 7) as usize;
+            serial_println!("[isolation]   code at rip (aligned {:#x}, {n} B): {:02x?} | from rip: {:02x?}",
+                rip & !7, &bytes[..n], &bytes[off.min(n)..n]);
+        }
+        // The dying task's recent syscalls, from the lock-free ring: the GTK crash
+        // is a refcount bump on a value that is (gpointer)-1, which is what an
+        // unchecked mmap failure looks like, and the ring says whether an mmap
+        // returned -1 just before. The ring is a plain array: safe from here.
+        crate::ring3::dump_main_syscalls();
         // Diagnostic: for an instruction-fetch fault (a bad jump/call target), dump
         // the faulting thread's RIP/RSP and the top of its stack so we can see which
         // library made the bad call. Reads are guarded by a manual CR3 page-walk so a

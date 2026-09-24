@@ -1479,6 +1479,30 @@ impl UdpSock {
     }
 
     /// Wait for one datagram from the destination, back on our source port.
+    /// Non-blocking receive: look through what the NIC already delivered (the
+    /// legacy queue, which holds every non-TCP frame) for a datagram to this
+    /// socket, and return empty without waiting when there is none. Frames for
+    /// other destinations are dropped here exactly as the blocking `recv` drops
+    /// them; the difference is only that this one never spins.
+    pub fn recv_nowait(&self) -> alloc::vec::Vec<u8> {
+        for _ in 0..64 {
+            let Some(rx) = legacy_rx() else { break };
+            if let Ok((h, p)) = EthernetHeader::parse(&rx) {
+                if h.ethertype == EtherType::Ipv4 {
+                    if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
+                        if ih.protocol == Protocol::Udp && ih.src == self.server {
+                            if let Ok(dg) = UdpDatagram::parse(ipl, ih.src, ih.dst) {
+                                if dg.dst_port == self.sport {
+                                    return dg.payload;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        alloc::vec::Vec::new()
+    }
     pub fn recv(&self) -> alloc::vec::Vec<u8> {
         for _ in 0..SPINS * 3 {
             if let Some(rx) = legacy_rx() {
@@ -1929,6 +1953,71 @@ pub fn sock_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
         }
     }
     data
+}
+
+/// recv for an O_NONBLOCK descriptor: whatever is there now, never a wait.
+///
+/// The blocking `sock_recv` is what every chrome socket went through, and chrome
+/// marks every socket O_NONBLOCK and polls. On an idle connection `TcpConn::recv`
+/// spins up to 80 x pump(8) x poll_seg, and poll_seg is 12 million busy
+/// iterations, all inside the syscall with interrupts off: seconds during which
+/// the timer cannot fire, the desktop cannot draw, and a TLS server times out
+/// waiting for a ClientHello the browser has not been allowed to write yet.
+/// Measured on the NUC: 2.7 s gaps between NIC interrupts with one tick and a
+/// pending timer, the interrupted rip at a syscall's return address, and no host
+/// pressure at all. UDP the same way for the resolver. POSIX says a non-blocking
+/// read that has nothing returns EAGAIN, and the callers already turn an empty
+/// result on a live socket into exactly that.
+pub fn sock_recv_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
+    if !is_sock_fd(fd) {
+        return alloc::vec::Vec::new();
+    }
+    let i = (fd - SOCK_FD_BASE) as usize;
+    let data = {
+        let mut t = SOCKETS.lock();
+        match &mut t[i] {
+            Some(Sock::Conn(c)) => c.recv_nowait(max),
+            Some(Sock::Udp(u)) => {
+                let mut d = u.recv_nowait();
+                d.truncate(max);
+                d
+            }
+            Some(Sock::LocalDns { rx }) => {
+                let mut d = rx.pop_front().unwrap_or_default();
+                d.truncate(max);
+                d
+            }
+            _ => alloc::vec::Vec::new(),
+        }
+    };
+    crate::euroguard::record_bytes(&crate::ring3::current_app(), 0, data.len() as u64);
+    data
+}
+
+/// send for an O_NONBLOCK descriptor: TCP puts the segments on the wire and in
+/// the retransmit list and returns; acknowledgements and retransmits are handled
+/// by `tick()` from `pump_all`, which the desktop loop drives. The blocking
+/// `TcpConn::send` waited up to five rounds for the ACK with interrupts off.
+/// UDP and the loopback resolver never waited, so they keep their path.
+pub fn sock_send_nowait(fd: u64, data: &[u8]) -> u64 {
+    if !is_sock_fd(fd) {
+        return (-1i64) as u64;
+    }
+    let i = (fd - SOCK_FD_BASE) as usize;
+    let is_conn = matches!(SOCKETS.lock()[i], Some(Sock::Conn(_)));
+    if !is_conn {
+        return sock_send(fd, data);
+    }
+    let mut t = SOCKETS.lock();
+    if let Some(Sock::Conn(c)) = &mut t[i] {
+        if !c.open {
+            return (-32i64) as u64; // -EPIPE
+        }
+        c.send_nowait(data);
+    }
+    drop(t);
+    crate::euroguard::record_bytes(&crate::ring3::current_app(), data.len() as u64, 0);
+    data.len() as u64
 }
 
 /// The four-tuple of a connected socket, for getsockname/getpeername:

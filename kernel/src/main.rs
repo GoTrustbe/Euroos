@@ -5999,6 +5999,14 @@ fn main() -> Status {
 
         // Keep the network alive: answer ARP requests + recycle RX buffers.
         net::service();
+        // And keep every TCP connection's clock running: non-blocking sends leave
+        // their segments in the retransmit list and rely on tick() for the ACK
+        // bookkeeping and retransmits, and tick() runs from pump_all. The launcher
+        // loop does this while a boot-phase program runs; the desktop loop has to
+        // do it for the hosted browser. Every 16th iteration is plenty at 100 Hz.
+        if t % 16 == 0 {
+            net::pump_all();
+        }
         // Automatic updates: one non-blocking slice of the background check per iteration.
         update::step(ctx.fs, t);
 

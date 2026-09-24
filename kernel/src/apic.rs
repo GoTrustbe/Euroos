@@ -89,6 +89,22 @@ pub fn eoi() {
     unsafe { wr(REG_EOI, 0) };
 }
 
+/// A snapshot for the timer-freeze probe: the in-service bits of vectors
+/// 0x20..0x3f (a set bit there means an interrupt of the timer's own priority
+/// class was never EOI'd, which silences the timer while higher vectors still
+/// arrive), the timer's LVT (masked?) and its current count (0 = stopped).
+pub fn timer_probe() -> (u32, u32, u32) {
+    unsafe { (rd(0x110), rd(REG_LVT_TIMER), rd(REG_TIMER_CUR)) }
+}
+
+/// The priority side of the same probe: TPR (0x80) and PPR (0xa0) mask every
+/// vector at or below their class, which would silence the timer (0x20) while a
+/// class-4 MSI-X still arrives; IRR bits 0x20..0x3f say whether a timer interrupt
+/// is pending undelivered right now.
+pub fn priority_probe() -> (u32, u32, u32) {
+    unsafe { (rd(0x80), rd(0xa0), rd(0x210)) }
+}
+
 /// Mask LINT0. During early boot we run virtual-wire mode (LINT0 = ExtINT) so the
 /// legacy 8259 can deliver the keyboard/mouse before the IO-APIC exists. Once the
 /// IO-APIC takes over and the 8259 is fully masked, ExtINT on LINT0 is not just

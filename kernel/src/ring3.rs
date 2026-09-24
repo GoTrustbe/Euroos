@@ -384,6 +384,16 @@ static PIPE_NONBLOCK: Mutex<alloc::vec::Vec<bool>> = Mutex::new(alloc::vec::Vec:
 static SOCK_NONBLOCK: Mutex<alloc::vec::Vec<(u64, bool)>> = Mutex::new(alloc::vec::Vec::new());
 
 /// Is this fd non-blocking? Works for both fd classes.
+/// AF_INET receive/send with the descriptor's blocking mode honoured. Every
+/// chrome socket is O_NONBLOCK; the blocking paths spin with interrupts off (see
+/// net::sock_recv_nowait for the measurement) and must never be entered for one.
+fn inet_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
+    if fd_is_nonblock(fd) { crate::net::sock_recv_nowait(fd, max) } else { crate::net::sock_recv(fd, max) }
+}
+fn inet_send(fd: u64, data: &[u8]) -> u64 {
+    if fd_is_nonblock(fd) { crate::net::sock_send_nowait(fd, data) } else { crate::net::sock_send(fd, data) }
+}
+
 fn fd_is_nonblock(fd: u64) -> bool {
     if (fd as usize) < MAX_FD {
         let f = fd as usize;
@@ -10507,7 +10517,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     Some(v) => v,
                     None => return EFAULT,
                 };
-                { note_inet_tx(a1, bytes.len()); crate::net::sock_send(a1, &bytes) }
+                { note_inet_tx(a1, bytes.len()); inet_send(a1, &bytes) }
             } else if crate::net::is_unix_fd(a1) {
                 // write() to an AF_UNIX socket.
                 let bytes = match copy_from_user(a2, a3 as usize) {
@@ -11452,7 +11462,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 }
                 let total = buf.len() as u64;
                 if crate::net::is_unix_fd(a1) { crate::net::unix_fd_send(a1, &buf); }
-                else { note_inet_tx(a1, buf.len()); crate::net::sock_send(a1, &buf); }
+                else { note_inet_tx(a1, buf.len()); inet_send(a1, &buf); }
                 return total;
             }
             let to_file = a1 != 1 && a1 != 2;
@@ -11509,7 +11519,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     }
                 }
             } else if crate::net::is_sock_fd(a1) {
-                let data = crate::net::sock_recv(a1, a3 as usize);
+                let data = inet_recv(a1, a3 as usize);
                 if data.is_empty() && !crate::net::sock_eof(a1) {
                     return (-11i64) as u64; // -EAGAIN, not EOF (see recvfrom)
                 }
@@ -11609,7 +11619,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 let data = if crate::net::is_unix_fd(a1) {
                     crate::net::unix_fd_recv(a1, cap)
                 } else {
-                    crate::net::sock_recv(a1, cap)
+                    inet_recv(a1, cap)
                 };
                 if data.is_empty() && crate::net::is_unix_fd(a1) {
                     if crate::net::unix_fd_at_eof(a1) {
@@ -12237,7 +12247,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         }
                     }
                 }
-                { note_inet_tx(a1, bytes.len()); crate::net::sock_send(a1, &bytes) }
+                { note_inet_tx(a1, bytes.len()); inet_send(a1, &bytes) }
             }
         }
         45 => {
@@ -12250,7 +12260,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     None => return (-11i64) as u64,
                 }
             } else {
-                crate::net::sock_recv(a1, a3 as usize)
+                inet_recv(a1, a3 as usize)
             };
             if data.is_empty() && crate::net::is_unix_fd(a1) {
                 if crate::net::unix_fd_at_eof(a1) {
@@ -12339,7 +12349,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 }
             }
             let total = buf.len() as u64;
-            if crate::net::is_unix_fd(a1) { crate::net::unix_fd_send(a1, &buf); } else { crate::net::sock_send(a1, &buf); }
+            if crate::net::is_unix_fd(a1) { crate::net::unix_fd_send(a1, &buf); } else { inet_send(a1, &buf); }
             total
         }
         47 => {
@@ -12366,7 +12376,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     None => return (-11i64) as u64, // -EAGAIN: asked not to wait
                 }
             } else {
-                crate::net::sock_recv(a1, cap)
+                inet_recv(a1, cap)
             };
             if crate::net::is_unix_fd(a1) && !data.is_empty() {
                 scm_msg_consume(a1, data.len());
