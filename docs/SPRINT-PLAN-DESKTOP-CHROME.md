@@ -217,9 +217,23 @@ renderers 49 and 50; none exits, chrome keeps the superseded renderer). Commit
 of usable RAM: the 4608M guest keeps 1408 MiB and its demand pool, the 5632M
 guest (5047 MiB usable) takes 1920 MiB, seven arenas, and still has a larger
 demand pool than the 4608M guest had (1115 MiB). The NUC host has 7.6 GB and
-the 4608M guest touched 2.8 GB, so the runbook now boots 5632M. Run 34
-verifies: the https renderer forks, and the page either renders or names the
-next wall.
+the 4608M guest touched 2.8 GB, so the runbook now boots 5632M.
+
+### EXIT CRITERION 2 MET (run 34, 65f3575)
+
+Run 34: the pool is 1920 MiB, the https renderer forks as task 102 right after
+the navigate at heartbeat 10, Page.frameNavigated reports https://euro-os.eu/
+and the subresources (stylesheet, script, fonts, images, manifest) come in over
+three TLS connections (343 KB read by 41 calls at the 480 s mark). The
+screendump at 480 s shows the live site in the Chromium window on the EuroOS
+desktop: tab title "EuroOS: A sovereign oper...", omnibox euro-os.eu/en/, the
+header with GitHub and Download, the hero "An operating system that belongs to
+Europe." and the cookie notice. Proof:
+`docs/proof/2026-09-24-desktop-chromium-renders-live-site.png` (and
+`...-alive-after-reclaim.png`, run 33 at 480 s, the browser alive past the
+first reclaim with euro.html still up). The page was still loading at 480 s
+(reload button shows the stop cross); loadEventFired is the next thing to read
+in the log.
 
 ## Done this sprint (all on `feature/app-control`, not pushed)
 
@@ -235,5 +249,6 @@ next wall.
 
 1. Scripted run: `chrome` typed, dialog dismissed by a scripted click or absent,
    `file:///tmp/euro.html` painted in the window (screendump shows the page).
-2. Same run against `https://euro-os.eu/` renders the site.
+2. Same run against `https://euro-os.eu/` renders the site. MET, run 34.
 3. Three consecutive runs pass (the repeatability bar used for multi-process).
+   Runs 35 and 36 on the same build decide it.
