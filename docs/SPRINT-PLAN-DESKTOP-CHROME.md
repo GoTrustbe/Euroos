@@ -293,7 +293,13 @@ Run 38 wedged in `serial::_print` again, on the boot CR3: the holder was gone,
 a task that died or slept while printing, so the same-cpu bypass did not apply.
 Commit 6bb4a3b: `_print` waits at most 200 million spins, forces the lock open,
 writes the holder's task and cpu (recorded at lock time) through a second port
-handle, and goes on. Run 39 names the path that leaves the lock behind.
+handle, and goes on. Run 39 then wedged in a print nested inside the thread
+census: the census prints with SCHED held, and the new holder record called
+sched::current(), which takes SCHED (sched.rs warns about exactly this). The
+record is lock-free now (c6e3fa8). Run 39 also mapped libgtk-3 despite
+`--ui-toolkit=qt` and died the same way, so openat refuses libgtk-3.so.0 and
+libgtk-4.so.1 to the chrome process (argv[0] `/pack/chrome`, 0098985); run 41
+is the first with GTK really out.
 
 ### W6. the flaky wedge, named: a print nested on the cpu that holds the UART lock
 
@@ -326,5 +332,5 @@ the demand pages is sound. Run 38 verifies.
    `file:///tmp/euro.html` painted in the window (screendump shows the page).
 2. Same run against `https://euro-os.eu/` renders the site. MET, run 34.
 3. Three consecutive runs pass (the repeatability bar used for multi-process).
-   Runs 35 to 38 failed on W8, W9, W6 and W6+W9 in turn; the series restarts on
-   the 6bb4a3b build (run 39).
+   Runs 35 to 39 failed on W8, W9, W6, W6+W9 and W6 (own instrument) in turn;
+   the series restarts on the 0098985 build (run 41).
