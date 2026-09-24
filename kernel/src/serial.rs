@@ -136,7 +136,9 @@ pub fn _print(args: fmt::Arguments) {
             }
         };
         PRINTING_CPU.store(me, Ordering::Release);
-        PRINTING_TASK.store(crate::sched::current(), Ordering::Relaxed);
+        // Lock-free on purpose: the census prints with SCHED held, and current()
+        // takes SCHED (run 39 wedged in exactly that nested print).
+        PRINTING_TASK.store(crate::sched::current_lockfree(), Ordering::Relaxed);
         struct Tee<'a>(&'a mut Uart);
         impl Write for Tee<'_> {
             fn write_str(&mut self, s: &str) -> fmt::Result {

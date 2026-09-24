@@ -62,6 +62,9 @@ static LINUX_ABI: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBoo
 static CURRENT_APP: Mutex<String> = Mutex::new(String::new());
 
 /// The app identity of the current ring-3 process (for EuroGuard).
+/// Logged once: the first refused GTK open for chrome.
+static GTK_DENIED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 pub fn current_app() -> String {
     CURRENT_APP.lock().clone()
 }
@@ -8743,14 +8746,6 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // first composite and the renderer never even forked. Hunting that crash is
     // its own thread; this is the configuration that demonstrably works.
     b"--in-process-gpu",
-    // No GTK LinuxUi: with "qt" chrome loads its Qt shim, which finds no Qt here and
-    // leaves the browser without a toolkit integration (theme, fonts, native dialogs
-    // come from chrome's own defaults). The GTK path dies in _gtk_css_value_ref on
-    // a freed slot (the value pointer reads as PartitionAlloc's encoded freelist
-    // word: -1 for the last entry, non-canonical otherwise) in about half the runs
-    // since the madvise fix (runs 36, 38), a use-after-free in GTK or chromium's
-    // GTK layer that this kernel cannot repair. W9 in the sprint plan.
-    b"--ui-toolkit=qt",
     // MULTI-PROCESS is the default since 2026-09-04, matching the boot test.
     // What stood in its way is fixed and measured: descriptors between two
     // CHILDREN were keyed by fd number and silently vanished, so no data-pipe
@@ -12699,6 +12694,23 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // O_CREAT=0x40 creates; O_TRUNC=0x200 truncates; O_APPEND=0x400 -> at the end.
             let path = resolve_at(a1, user_cstr(a2, 256));
             let flags = a3;
+            // No GTK for the browser (W9): chrome dlopens libgtk-3.so.0 for its Linux
+            // toolkit integration (theme, fonts, native dialogs) and dies in
+            // _gtk_css_value_ref on a freed slot in about half the runs (the value
+            // pointer reads as PartitionAlloc's encoded freelist word: -1 for the last
+            // entry, non-canonical otherwise), a use-after-free in GTK or chromium's
+            // GTK layer this kernel cannot repair. --ui-toolkit=qt did not keep GTK
+            // out (run 39 still mapped it). With the open refused, chrome runs the way
+            // it does on any system without GTK. The boot-time GTK demo is unaffected.
+            if (path.ends_with(b"/libgtk-3.so.0") || path.ends_with(b"/libgtk-4.so.1"))
+                && current_app() == "chrome"
+            {
+                if !GTK_DENIED.swap(true, Ordering::Relaxed) {
+                    crate::serial_println!("[gtk] open of {:?} refused for chrome (W9: GTK use-after-free)",
+                        core::str::from_utf8(&path).unwrap_or("?"));
+                }
+                return (-2i64) as u64; // ENOENT
+            }
             // DNS-config census: every open of the resolver's config files, loudly.
             // Chrome reports DNS_PROBE_FINISHED_BAD_CONFIG without a single UDP
             // packet; whether it ever READS resolv.conf decides where that dies.
