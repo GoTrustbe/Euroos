@@ -101,22 +101,30 @@ as a never-firing eventfd plus add/rm_watch, `getrusage` as zeros. Left, all
 benign probes: `recvmmsg` x3, `sigaltstack` x3 (crashpad, disabled),
 `name_to_handle_at` x2, `landlock` x1.
 
-### W5. next: the live site. ERR_NAME_NOT_RESOLVED before any packet leaves
+### W5. next: the live site. The guest's clock stops after the connect
 
-Page.navigate(https://euro-os.eu/) from the desktop fails the instant it
-starts: chrome reads /etc/hosts twice and reports net::ERR_NAME_NOT_RESOLVED
-with no UDP socket created and no query sent, while lookups for its own
-background hosts went out to 10.0.2.3:53 minutes earlier in the same run
-(runs 15, 16, 17; run 14 went fully silent instead, once). Two stale pins
-were found on the way and fixed, and were NOT the cause: the VFS /etc/hosts
-and two --host-resolver-rules on other chrome paths still named
-151.240.77.50, the server the site left on 2026-09-04 (br-prod is
-82.192.72.16). Chrome's own comment names the underlying gap: its DNS
-config service wants netlink, which this kernel does not provide.
-
-In the tree (run 18): --host-resolver-rules=MAP euro-os.eu 82.192.72.16 on
-the desktop argv, the way the boot-test path pins the name, so TCP, TLS and
-HTTP underneath can be measured now.
+Peeled in five runs, each layer named by a measurement:
+1. `MAX_SOCK = 16` (net.rs): the browser's background traffic used all 16 AF_INET
+   slots in minutes, and every later socket() returned -1, read by chrome as
+   EPERM: ERR_NAME_NOT_RESOLVED on the resolver's UDP socket, ERR_ACCESS_DENIED
+   on a connect. Raised to 96 (fd bands are 100 wide). Two stale pins of the
+   old server (151.240.77.50, VFS /etc/hosts and two chrome flags) fixed on the
+   way; not the cause.
+2. With sockets, TCP to 82.192.72.16:443 establishes and the server FINs within
+   50 ms of guest time, no data (run 19).
+3. Server-side tcpdump (run 22): the SYN, SYN-ACK and the guest's ACK complete
+   in 20 ms; then NOTHING from the guest for 30 s; nginx's stream router
+   (ssl_preread, preread_timeout 30 s) sends FIN; 20 ms later the guest's
+   ClientHello (1836 B, a correct TLS record) arrives and gets RST.
+4. The guest's own clocks agree: between "TCP established" and the FIN the tick
+   counter advanced 2 and chrome's wall clock 0.1 s, over 30 real seconds.
+   Before the navigate the tick rate was 99.8/s for 300 s. So after the
+   connect the guest is halted and only NIC interrupts wake it; the periodic
+   LAPIC timer (vector 0x20, class 2) no longer fires while MSI-X 0x4B still
+   does, which is the signature of an interrupt of class 2..3 left in service.
+5. In the tree (run 23): a probe in the NIC interrupt handler prints the LAPIC
+   in-service bits 0x20..0x3f, the timer LVT and its current count whenever
+   fewer than 5 ticks passed since the previous NIC interrupt.
 
 ### W5b. open: the resolver path itself
 
