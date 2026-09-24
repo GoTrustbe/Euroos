@@ -10444,7 +10444,33 @@ pub fn dump_main_syscalls() {
     }
 }
 
+/// Every descriptor a FORK CHILD creates must be on its own list, or its close()
+/// only marks the descriptor closed for that child and the underlying object is
+/// never freed. open/openat/creat and pipes were on the list; sockets, accepts,
+/// eventfds, epoll sets, memfds, dups, inotify and timerfds were not. The network
+/// service is a fork child that opens a UDP socket per lookup and closes it, so
+/// the AF_INET table filled up regardless of its size (16 slots in five minutes,
+/// 96 slots in under five minutes, run 26), and from then on every socket() was
+/// EPERM to chrome: net::ERR_ACCESS_DENIED on the live-site navigation. One hook
+/// after the dispatch covers every creating syscall on every trace path.
 fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    let r = linux_dispatch_inner_raw(num, a1, a2, a3, a4, a5);
+    let creates_fd = matches!(num,
+        41 | 43 | 288 | 290 | 284 | 291 | 213 | 319 | 32 | 33 | 292 | 253 | 294 | 283 | 282 | 289);
+    if creates_fd && (r as i64) >= 0 && r < 1000 {
+        child_note_open(r as usize);
+    }
+    if num == 53 && r == 0 {
+        // socketpair writes its two descriptors into the caller's sv[2].
+        if let (Some(a), Some(b)) = (read_user::<i32>(a4), read_user::<i32>(a4 + 4)) {
+            if a >= 0 { child_note_open(a as usize); }
+            if b >= 0 { child_note_open(b as usize); }
+        }
+    }
+    r
+}
+
+fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let _ = a4; // not every syscall uses arg4/arg5 (r10/r8)
     SYSCALL_SEQ.fetch_add(1, Ordering::Relaxed); // progress heartbeat (stall detector)
     if (num as usize) < 512 {
