@@ -12703,7 +12703,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // out (run 39 still mapped it). With the open refused, chrome runs the way
             // it does on any system without GTK. The boot-time GTK demo is unaffected.
             if (path.ends_with(b"/libgtk-3.so.0") || path.ends_with(b"/libgtk-4.so.1"))
-                && current_app() == "chrome"
+                && current_app().ends_with("chrome")
             {
                 if !GTK_DENIED.swap(true, Ordering::Relaxed) {
                     crate::serial_println!("[gtk] open of {:?} refused for chrome (W9: GTK use-after-free)",
