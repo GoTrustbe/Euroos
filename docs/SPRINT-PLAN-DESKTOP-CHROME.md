@@ -63,7 +63,7 @@ its fourth heartbeat; Page.loadEventFired follows, title "Chromium on EuroOS".
 `chrome`, dialog dismissed by the scripted click, euro.html painted in full in
 the desktop window at 660 s, no one at the keyboard, on the NUC.
 
-### W2. open: the profile modal itself
+### W2. closed in run 47: the profile modal was SQLite's F_GETLK
 
 "Something went wrong when opening your profile." mremap (b875f70) let SQLite
 grow its mmap of `Default/Web Data` (108K -> 148K -> 152K, re-aliased, no copy)
@@ -370,7 +370,14 @@ The dialog is still up at 120 s, with "Could not open the quota database" and
 "Failed to load tokens (invalid SQL statement)" (Web Data's token table).
 Both are SQLite, and fcntl answered every lock command with 0 without writing
 the struct: unixCheckReservedLock reads its own F_WRLCK back and takes the
-database as locked. Commit (F_GETLK writes F_UNLCK): run 47 verifies.
+database as locked. Commit 13a7aa6 (F_GETLK writes F_UNLCK). Run 47: PASS,
+and the screendump at 120 s shows euro.html with NO profile-error dialog, for
+the first time since the desktop browser exists (proof
+`docs/proof/2026-09-24-desktop-chromium-no-profile-dialog-run47.png`). W2 is
+closed. Left over, secondary: "Could not open the quota database, resetting"
+(2 per run, recovers) and "Failed to load tokens (invalid SQL statement)" in
+Web Data (1 per run); SQLite maps these files (MAP_SHARED, see mremap), so
+the coherence of pwrite with a shared mapping is the next candidate.
 
 The third-party script on the live page (tracera.eu, served by Caddy on
 127.0.0.1:9443 behind the SNI router) failed with ERR_SSL_PROTOCOL_ERROR in
