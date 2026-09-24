@@ -101,20 +101,29 @@ as a never-firing eventfd plus add/rm_watch, `getrusage` as zeros. Left, all
 benign probes: `recvmmsg` x3, `sigaltstack` x3 (crashpad, disabled),
 `name_to_handle_at` x2, `landlock` x1.
 
-### W5. next: the live site. Page.navigate(https://euro-os.eu/) silences the browser
+### W5. next: the live site. ERR_NAME_NOT_RESOLVED before any packet leaves
 
-Run 14: the desktop click reaches the page's own JavaScript
-(`docs/proof/2026-09-24-desktop-page-js-sees-the-click.png`, the page draws
-"CLICKED 2x at 546,234"), so page interaction is closed too. Then a one-shot
-Page.navigate to https://euro-os.eu/ at the tenth heartbeat gets NO reply of
-any kind: no heartbeat answers after it, no DNS query, no :443 connect to
-82.192.72.16, no fork, and the guest idles in epoll_wait for the remaining
-five minutes. The browser's main thread parked on something inside that
-navigation (a cross-site navigation from file:// to https:// wants a new
-renderer and a DNS answer from the network service first). In the tree: a
-dump armed by the navigate, 60 s later without an answer (threads, main
-syscalls, futex, epoll sets). Earlier per-run noise: handshake failures
-net_error -100 to Google addresses are chrome's own background traffic.
+Page.navigate(https://euro-os.eu/) from the desktop fails the instant it
+starts: chrome reads /etc/hosts twice and reports net::ERR_NAME_NOT_RESOLVED
+with no UDP socket created and no query sent, while lookups for its own
+background hosts went out to 10.0.2.3:53 minutes earlier in the same run
+(runs 15, 16, 17; run 14 went fully silent instead, once). Two stale pins
+were found on the way and fixed, and were NOT the cause: the VFS /etc/hosts
+and two --host-resolver-rules on other chrome paths still named
+151.240.77.50, the server the site left on 2026-09-04 (br-prod is
+82.192.72.16). Chrome's own comment names the underlying gap: its DNS
+config service wants netlink, which this kernel does not provide.
+
+In the tree (run 18): --host-resolver-rules=MAP euro-os.eu 82.192.72.16 on
+the desktop argv, the way the boot-test path pins the name, so TCP, TLS and
+HTTP underneath can be measured now.
+
+### W5b. open: the resolver path itself
+
+Why the system-resolver path returns NAME_NOT_RESOLVED without querying, and
+what the DNS config service needs (netlink route socket, or a DnsConfig it
+accepts without one). The CreatePlatformSocket EPERM lines (24 in run 16,
+all from one thread) belong in this investigation too.
 
 ### W6. instrument: the flaky wedge, now caught automatically
 

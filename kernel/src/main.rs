@@ -2408,7 +2408,7 @@ fn main() -> Status {
                   // pinned via chrome's own --host-resolver-rules for now (its DNS
                   // config service needs netlink we don't provide yet); the TCP,
                   // TLS and HTTP are fully real.
-                  b"--host-resolver-rules=MAP euro-os.eu 151.240.77.50",
+                  b"--host-resolver-rules=MAP euro-os.eu 82.192.72.16",
                   // DEV HARNESS ONLY. The navigation to the live site ends on
                   // chrome-error:// with an empty document, one connection to :443
                   // and nothing after it - the signature of a certificate that
@@ -2418,7 +2418,7 @@ fn main() -> Status {
                   b"--ignore-certificate-errors",
                   // The HTTPS-First interstitial swallows synthetic clicks; treat
                   // the test origin as secure so plain http renders directly.
-                  b"--unsafely-treat-insecure-origin-as-secure=http://151.240.77.50",
+                  b"--unsafely-treat-insecure-origin-as-secure=http://82.192.72.16",
                   b"--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable",
                   // ISOLATION STEP: the raw IP over plain HTTP takes name
                   // resolution AND TLS out of the equation — whether nginx's
@@ -2558,7 +2558,7 @@ fn main() -> Status {
                   // reaches us, so a lever INSIDE the renderer is worth a flag.
                   b"--enable-gpu-benchmarking",
                   // Resolve the site without depending on the guest resolver path.
-                  b"--host-resolver-rules=MAP euro-os.eu 151.240.77.50",
+                  b"--host-resolver-rules=MAP euro-os.eu 82.192.72.16",
                   // ── SINGLE-PROCESS: run renderer/utility/GPU all IN the browser process
                   // so chrome NEVER forks a helper child. The default (forking) path
                   // livelocks: chrome forks helpers, they never execve into functional
