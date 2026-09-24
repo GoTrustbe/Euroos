@@ -45,7 +45,7 @@ while pgrep -x qemu-system-x86 >/dev/null 2>&1; do sleep 5; done
 # screendumps and images (the previous run's have been fetched by then), and
 # says how much room is left.
 rm -f "$(dirname "$LOG")"/*.ppm "$(dirname "$LOG")"/*.png
-rm -f "$LOG" "$LOG"*.ppm "$LOG.mon" "$LOG.qmp" "$LOG.host"
+rm -f "$LOG" "$LOG"*.ppm "$LOG.mon" "$LOG.qmp" "$LOG.host" "$LOG.wedge"
 echo "tmpfs free: $(df -m "$(dirname "$LOG")" | awk 'NR==2 {print $4}') MB"
 # Both packs are attached: the kernel scans every disk for a EuroPack volume, and
 # https needs the NSS one (chrome loads its software token and trust roots as
@@ -121,6 +121,7 @@ watchdog() {
   if [ $QUIET -ge 60 ] && [ $NMI_DONE = 0 ]; then
     NMI_DONE=1
     echo "WEDGE: no serial output for ${QUIET}s at $(( $(date +%s) - START ))s, injecting NMI"
+    : > "$LOG.wedge"
     echo "last lines before the silence:"; tail -4 "$LOG" | cut -c1-140
     # QMP inject-nmi, not the HMP text command: run 20 wedged, the HMP "nmi" went
     # into the monitor socket and no probe ever printed. QMP answers each command,
@@ -185,4 +186,16 @@ for t in ${SAMPLES:-120 300 480 660}; do
   fi
 done
 kill $Q 2>/dev/null; wait $Q 2>/dev/null
+# The verdict, read from the log the way the sprint plan's exit criteria are
+# worded, so a run says PASS or FAIL by itself (criterion 3 wants three in a row):
+# the browser main thread (task 9) must not fault, the live navigate must commit
+# (Page.frameNavigated with the site's URL), no fork may be refused an arena,
+# and the guest must not have wedged. Each failing check is named.
+V=""
+grep -aqE "(GP FAULT|page fault addr).*task 9\)" "$LOG" && V="$V main-thread-fault"
+grep -aqE "Page\.frameNavigated.*https://euro-os\.eu" "$LOG" || V="$V no-live-navigation"
+grep -aq "arena alloc FAILED" "$LOG" && V="$V fork-refused"
+grep -aq "POOL EXHAUSTED" "$LOG" && V="$V demand-pool-exhausted"
+[ -f "$LOG.wedge" ] && V="$V wedge"
+if [ -z "$V" ]; then echo "VERDICT PASS"; else echo "VERDICT FAIL:$V"; fi
 echo "took $(( $(date +%s) - START ))s, log: $LOG"
