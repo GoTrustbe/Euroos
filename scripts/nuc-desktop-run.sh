@@ -125,22 +125,31 @@ watchdog() {
     # QMP inject-nmi, not the HMP text command: run 20 wedged, the HMP "nmi" went
     # into the monitor socket and no probe ever printed. QMP answers each command,
     # so the reply says whether the injection happened at all.
-    for i in 1 2; do
-      python3 - "$LOG.qmp" <<'PY'
+    # First the VM's own view, which no guest instrument can give: is the vCPU
+    # still running at all (a triple fault leaves it in "shutdown", and then an
+    # NMI changes nothing and the probe cannot print), and what were RIP, CR2
+    # and the flags at the moment it stopped. Then the NMI, twice.
+    python3 - "$LOG.qmp" <<'PY'
 import json, socket, sys
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect(sys.argv[1]); f = s.makefile("rw")
 f.readline()
-for cmd in ({"execute": "qmp_capabilities"}, {"execute": "inject-nmi"}):
-    f.write(json.dumps(cmd) + "\n"); f.flush()
+def cmd(c):
+    f.write(json.dumps(c) + "\n"); f.flush()
     while True:
         line = f.readline()
-        if not line: break
+        if not line: return None
         m = json.loads(line)
-        if "return" in m or "error" in m:
-            print("qmp", cmd["execute"], "->", m); break
+        if "return" in m or "error" in m: return m
+cmd({"execute": "qmp_capabilities"})
+print("qmp query-status ->", cmd({"execute": "query-status"}))
+r = cmd({"execute": "human-monitor-command", "arguments": {"command-line": "info registers"}})
+txt = r.get("return", "") if isinstance(r, dict) else str(r)
+keep = [l for l in txt.split("\n") if any(k in l for k in ("RIP", "RSP", "CR2", "CR3", "EFL", "CS ="))]
+print("info registers:"); print("\n".join(keep[:8]))
+for i in range(2):
+    print("qmp inject-nmi ->", cmd({"execute": "inject-nmi"}))
 PY
-      sleep 4
-    done
+    sleep 8
     grep -a -A 40 "NMI PROBE" "$LOG" | head -60
   fi
 }
