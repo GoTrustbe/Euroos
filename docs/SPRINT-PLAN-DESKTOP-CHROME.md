@@ -235,6 +235,34 @@ first reclaim with euro.html still up). The page was still loading at 480 s
 (reload button shows the stop cross); loadEventFired is the next thing to read
 in the log.
 
+### W5b. root cause: UDP replies were dropped by the wrong socket
+
+Run 34's live page lost one resource, `https://tracera.eu/t.js`, to
+ERR_NAME_NOT_RESOLVED, and the log shows why: 31 DNS queries written to
+10.0.2.3:53, 2 answers read, 43 recvmsg calls answered EAGAIN. Every UDP
+reader took frames off the single legacy queue and dropped what was not its
+own; chrome runs its lookups on several UDP sockets at once, so socket A's poll
+threw away the answers for B and C. Commit 6065f77: the RX demux sorts UDP
+datagrams for a registered local port into that port's queue (as PORTQ does for
+TCP), recv/recv_nowait read their own queue first, and sock_readable reports a
+queued datagram instead of "never ready". `[udpq]` lines count the routed
+datagrams. Run 36 verifies (udp read count, no NAME_NOT_RESOLVED on the page).
+
+### W8. lost timer ticks: the guest clock ran at a third of real time
+
+Run 35, same build as run 34, failed on timing alone: at 325 s the desktop
+clock read 1m44s and the profile dialog was still up (the click and Enter had
+gone in at 120 s and 200 s real, too early in guest time); the live navigate
+came at heartbeat 10 = tick 30000 = 660 s real. Three NMI samples all found the
+vCPU halted in the desktop loop's idle (rip after `yield_now`'s int 0x4a and
+the hlt), the host sampler idle, the timer calibrated normally. The periodic
+LAPIC timer keeps one pending bit per vector: every period spent with
+interrupts off beyond the first is lost, and syscalls run with IF=0 (FMASK).
+Commit 6065f77: the calibration measures TSC cycles per period, schedule_tick
+adds the missed periods to TICKS (the clock stays on real time) and logs the
+first late ticks with the interrupted rip, task, last syscall and the
+demand-fault counters: `[tick-late]`. Run 36 says which window it is.
+
 ## Done this sprint (all on `feature/app-control`, not pushed)
 
 - b875f70 mremap + msync. Shared windows re-aliased, not copied.
@@ -251,4 +279,4 @@ in the log.
    `file:///tmp/euro.html` painted in the window (screendump shows the page).
 2. Same run against `https://euro-os.eu/` renders the site. MET, run 34.
 3. Three consecutive runs pass (the repeatability bar used for multi-process).
-   Runs 35 and 36 on the same build decide it.
+   Run 35 failed on lost ticks (W8); the series restarts on the 6065f77 build.
