@@ -1333,6 +1333,21 @@ pub fn cdp_pump() {
                     crate::serial_println!("{pl}");
                 }
                 let busiest = deltas.iter().find(|&&(_, t)| t != 0).map(|&(_, t)| t).unwrap_or(usize::MAX);
+                // Once, at the twelfth heartbeat (six minutes; the page has had four
+                // to load): every thread's state and last syscall, and every AF_UNIX
+                // queue with unread bytes. The three youtube requests of run 64 whose
+                // headers arrived and whose bodies never did are a message nobody
+                // reads or a reader nobody woke; this shows which.
+                static CENSUS_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+                if sent >= 12 && !CENSUS_DONE.swap(true, Ordering::Relaxed) {
+                    let q = { let _g = crate::sched::IfOffGuard::new(); crate::net::unix_queued_report() };
+                    let mut line = alloc::format!("[unixq] {} fds with unread bytes:", q.len());
+                    for &(fd, n) in q.iter().take(24) {
+                        line.push_str(&alloc::format!(" fd{fd}:{n}"));
+                    }
+                    crate::serial_println!("{line}");
+                    dump_threads_now("census at heartbeat 12");
+                }
                 for i in 0..RIP_PAGES {
                     RIP_PAGE[i].store(0, Ordering::Relaxed);
                     RIP_PAGE_HITS[i].store(0, Ordering::Relaxed);

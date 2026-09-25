@@ -2793,6 +2793,25 @@ pub fn x_fd_queued(fd: u64) -> Option<usize> {
     }
 }
 
+/// Every AF_UNIX fd with unread bytes queued for it: (fd, bytes). A body that
+/// never reaches the renderer while its headers did (run 64: three requests
+/// pending for eight minutes) is a message sitting in a queue nobody reads, or a
+/// reader nobody woke; this names the queues, the census names the readers.
+pub fn unix_queued_report() -> alloc::vec::Vec<(u64, usize)> {
+    let mut out = alloc::vec::Vec::new();
+    let t = UNIX_FDS.lock();
+    let sw = UNIX_SWITCH.lock();
+    for (i, s) in t.iter().enumerate() {
+        if let Some(UnixSock::Stream(e)) = s {
+            let n = sw.available(*e);
+            if n > 0 {
+                out.push((UNIX_FD_BASE + i as u64, n));
+            }
+        }
+    }
+    out
+}
+
 pub fn unix_fd_readable(fd: u64) -> bool {
     let t = UNIX_FDS.lock();
     match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
