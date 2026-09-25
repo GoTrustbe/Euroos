@@ -46,6 +46,12 @@ while pgrep -x qemu-system-x86 >/dev/null 2>&1; do sleep 5; done
 # says how much room is left.
 rm -f "$(dirname "$LOG")"/*.ppm "$(dirname "$LOG")"/*.png
 rm -f "$LOG" "$LOG"*.ppm "$LOG.mon" "$LOG.qmp" "$LOG.host" "$LOG.wedge"
+# A full-run WAV is ~150 MB and the SystemRescue root is a ~1.9 GB tmpfs; a
+# dozen of them filled it and the next run died on ENOSPC (run 81). Keep only
+# the newest previous WAV, and drop logs older than the last three runs.
+ls -t "$(dirname "$LOG")"/*.wav 2>/dev/null | tail -n +2 | xargs -r rm -f
+ls -t "$(dirname "$LOG")"/run*.log 2>/dev/null | tail -n +4 | xargs -r rm -f
+find "$(dirname "$LOG")" -name '*.keep' -mmin +120 -delete 2>/dev/null
 echo "tmpfs free: $(df -m "$(dirname "$LOG")" | awk 'NR==2 {print $4}') MB"
 # An HD-Audio codec is attached and its output captured to $LOG.wav on the host:
 # what the guest plays (the kernel's boot tone, later chrome's audio through
