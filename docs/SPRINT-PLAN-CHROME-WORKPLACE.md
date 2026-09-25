@@ -322,6 +322,26 @@ keeps munmap and madvise off them); status and control pages stay unmapped,
 so the pointers keep travelling through SYNC_PTR. Every refine request is
 logged with its masks and intervals. Run 80 measures.
 
+### W19. CDP Runtime.evaluate is not routed to the youtube renderer
+
+Runs 77 and 79: js:tone (a Runtime.evaluate) on file:///tmp/euro.html returns
+its value; every evaluate sent after the cross-process navigation to
+https://www.youtube.com (ids 63-65: play, video, state) gets no reply, while
+the browser keeps answering the heartbeat Target.getTargets. The youtube main
+renderer is not stalled: task 131 ran 73027 syscalls and painted the player
+(run 77 screendump). So the browser is not forwarding the page session's
+renderer-level command to the swapped-in renderer process (the DevTools mojo
+channel to a cross-process navigated renderer is not carried), or the reply is
+not routed back. Real Chrome forwards it over --remote-debugging-pipe; the gap
+is ours. The proper fix is Target.setAutoAttach{flatten:true} with per-frame
+sessions, or wiring the devtools channel through the process swap; both are
+their own work.
+
+Playback does not need it: commit 1bdacb4 adds
+--autoplay-policy=no-user-gesture-required, so the page starts the video
+itself, with sound. js:video stays as a best-effort read. Run 81 measures
+picture (screendump progress) and sound (the WAV) with autoplay.
+
 ### W18. the watch page stops loading with nothing pending (run 72)
 
 Run 72 (0b69065, the ALSA gaps closed, consent cookie set at heartbeat 4,
