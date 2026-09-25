@@ -307,6 +307,21 @@ last syscall), census at heartbeats 12 and 20, js:state without innerText,
 the VFS files total on the [cpu] line, big pool 512 MiB. Run 79 sends play
 before state to separate the step from the silence.
 
+### W12 continued: the device opens (run 78), the plug layer wants MMAP
+
+Run 78 (de57e86, alsa.conf on the desktop path): PASS; chrome's audio manager
+opened /dev/snd/pcmC0D0p twice ([alsa] open at the tone and at the watch
+page) and libasound closed it at once with "Rate 48000Hz not available for
+playback: Invalid argument" from snd_pcm_set_params, before a single refine
+reached the kernel. alsa-lib's pcm_plug.c maps the client's RW_INTERLEAVED
+access to MMAP_INTERLEAVED on its slave (line 658), so a slave that offers RW
+alone fails in software. Commit 32aabbc: the device offers MMAP_INTERLEAVED
+and RW_INTERLEAVED, reports MMAP|MMAP_VALID, and an mmap of the PCM fd at
+offset 0 maps the HDA ring's eight frames into the process (an alias entry
+keeps munmap and madvise off them); status and control pages stay unmapped,
+so the pointers keep travelling through SYNC_PTR. Every refine request is
+logged with its masks and intervals. Run 80 measures.
+
 ### W18. the watch page stops loading with nothing pending (run 72)
 
 Run 72 (0b69065, the ALSA gaps closed, consent cookie set at heartbeat 4,
