@@ -11643,8 +11643,42 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     None => return (-9i64) as u64, // -EBADF
                 };
                 if fi == SND_PCM_FI || fi == SND_CTL_FI {
-                    // No mmap of the PCM status/control pages: libasound then falls
-                    // back to the SYNC_PTR ioctl, which kernel::alsa answers.
+                    // The PCM data buffer (offset 0) maps the HDA ring itself into
+                    // the process: libasound's plug layer (rate/format conversion, what
+                    // chrome opens as plughw:0,0) drives its slave in MMAP_INTERLEAVED
+                    // access only, and refused the device that offered RW alone (run
+                    // 78: "Rate 48000Hz not available" before any refine reached the
+                    // kernel). Samples then land in the ring directly; appl_ptr and
+                    // hw_ptr travel through SYNC_PTR, since the status and control
+                    // pages (offsets 0x80000000 and 0x81000000) stay unmapped.
+                    let off = unsafe { recover_mmap_offset() };
+                    if fi == SND_PCM_FI && off == 0 {
+                        if let Some((phys, bytes)) = crate::alsa::ring_phys() {
+                            let pages = ((len.min(bytes as u64) + 0xFFF) / 4096).max(1);
+                            ensure_globals_for_current();
+                            let pml4 = {
+                                use x86_64::registers::control::Cr3;
+                                Cr3::read().0.start_address().as_u64()
+                            };
+                            let start = DEMAND_NEXT.fetch_add(pages * 4096, Ordering::Relaxed);
+                            if start + pages * 4096 > DEMAND_BASE + DEMAND_SIZE {
+                                return (-12i64) as u64; // -ENOMEM
+                            }
+                            for i in 0..pages {
+                                let va = start + i * 4096;
+                                if !crate::paging::map_demand_4k(pml4, va, phys + i * 4096) {
+                                    return (-12i64) as u64;
+                                }
+                                unsafe { core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags)); }
+                            }
+                            // An alias entry keeps munmap and madvise from freeing or
+                            // zeroing the ring's frames: they belong to the device.
+                            SHARED_ALIASES.lock().push((start, pages * 4096, SND_PCM_FI));
+                            SHARED_ANY.store(true, Ordering::Relaxed);
+                            crate::serial_println!("[alsa] mmap ring {} KiB at {start:#x} (phys {phys:#x})", pages * 4);
+                            return start;
+                        }
+                    }
                     return (-19i64) as u64; // -ENODEV
                 }
                 // Only in-RAM files are writable-shared; a disk-served (EuroPack) file is

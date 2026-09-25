@@ -49,6 +49,11 @@ fn log(what: &str) {
 
 const FRAME_BYTES: u64 = 4; // 16-bit stereo
 
+/// The ring's physical address and size, for the data mmap.
+pub fn ring_phys() -> Option<(u64, usize)> {
+    crate::hda::pcm_ring()
+}
+
 /// The device exists when the HDA stream runs.
 pub fn present() -> bool {
     crate::hda::pcm_ring().is_some()
@@ -156,12 +161,28 @@ fn choose(req: (u32, u32), want: u32, lo: u32, hi: u32) -> Option<u32> {
 /// does: RW_INTERLEAVED, S16_LE, standard subformat, 2 channels, 48 kHz.
 fn hw_params(arg: u64, commit: bool) -> u64 {
     let Some(mut buf) = crate::ring3::copy_from_user(arg, 608) else { return EFAULT };
-    // Masks: ACCESS bit 3 (RW_INTERLEAVED), FORMAT bit 2 (S16_LE), SUBFORMAT bit 0.
-    if !mask_allows(&buf, 0, 3) || !mask_allows(&buf, 1, 2) || !mask_allows(&buf, 2, 0) {
+    // What the client asks, every call (bounded by the line budget): run 78's
+    // set_params failed "Rate 48000Hz not available" with no refusal logged here.
+    {
+        let w = |o: usize| u32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]]);
+        log(&alloc::format!(
+            "{} rmask={:#x} access={:#x} format={:#x}/{:#x} ch=[{},{}] rate=[{},{}] period=[{},{}] buffer=[{},{}] info={:#x}",
+            if commit { "hw_params" } else { "hw_refine" }, w(512), w(4), w(36), w(40),
+            get_interval(&buf, 2).0, get_interval(&buf, 2).1, get_interval(&buf, 3).0, get_interval(&buf, 3).1,
+            get_interval(&buf, 5).0, get_interval(&buf, 5).1, get_interval(&buf, 9).0, get_interval(&buf, 9).1, w(520)));
+    }
+    // Masks: ACCESS bit 0 (MMAP_INTERLEAVED) and/or bit 3 (RW_INTERLEAVED), FORMAT
+    // bit 2 (S16_LE), SUBFORMAT bit 0. The plug layer wants MMAP on its slave.
+    let mmap_ok = mask_allows(&buf, 0, 0);
+    let rw_ok = mask_allows(&buf, 0, 3);
+    if !(mmap_ok || rw_ok) || !mask_allows(&buf, 1, 2) || !mask_allows(&buf, 2, 0) {
         log("hw_params: access/format not offered by the client");
         return EINVAL;
     }
-    put_mask(&mut buf, 0, 3);
+    put_mask(&mut buf, 0, if mmap_ok { 0 } else { 3 });
+    if mmap_ok && rw_ok {
+        buf[4..8].copy_from_slice(&((1u32 << 0) | (1u32 << 3)).to_le_bytes());
+    }
     put_mask(&mut buf, 1, 2);
     put_mask(&mut buf, 2, 0);
     let ring = PCM.lock().ring_frames.max(2048) as u32;
@@ -177,8 +198,8 @@ fn hw_params(arg: u64, commit: bool) -> u64 {
         }
         put_interval(&mut buf, i, v, v);
     }
-    let Some(period) = choose(get_interval(&buf, 5), 1024, 240, ring / 2) else { return EINVAL };
-    let Some(buffer) = choose(get_interval(&buf, 9), ring, period * 2, ring) else { return EINVAL };
+    let Some(period) = choose(get_interval(&buf, 5), 1024, 240, ring / 2) else { log("hw_params: period interval cannot meet the ring"); return EINVAL };
+    let Some(buffer) = choose(get_interval(&buf, 9), ring, period * 2, ring) else { log("hw_params: buffer interval cannot meet the ring"); return EINVAL };
     let buffer = buffer - buffer % period;
     let periods = buffer / period;
     put_interval(&mut buf, 5, period, period);
@@ -191,7 +212,8 @@ fn hw_params(arg: u64, commit: bool) -> u64 {
     put_interval(&mut buf, 11, 0, 0);
     // rmask stays; cmask = everything changed; info: INTERLEAVED | BLOCK_TRANSFER.
     buf[516..520].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
-    buf[520..524].copy_from_slice(&(0x0000_0100u32 | 0x0000_0010).to_le_bytes());
+    // info: MMAP | MMAP_VALID | INTERLEAVED | BLOCK_TRANSFER.
+    buf[520..524].copy_from_slice(&(0x1u32 | 0x2 | 0x0000_0100 | 0x0000_0010).to_le_bytes());
     buf[524..528].copy_from_slice(&16u32.to_le_bytes()); // msbits
     buf[528..532].copy_from_slice(&48000u32.to_le_bytes()); // rate_num
     buf[532..536].copy_from_slice(&1u32.to_le_bytes()); // rate_den
