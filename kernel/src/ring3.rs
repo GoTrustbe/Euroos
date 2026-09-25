@@ -1576,7 +1576,10 @@ pub fn cdp_pump() {
         let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
         let (mn, ma, mr) = last_syscall(main);
         crate::serial_println!("  main t{main}: last={mn}(a1={ma:#x})->{mr:#x}");
-        for &t in GLIBC_THREADS.lock().iter() {
+        // Snapshot under IF=0, print without the lock: clone/exit take GLIBC_THREADS
+        // in syscalls with interrupts off, and this runs on task 0 with them on.
+        let threads: alloc::vec::Vec<usize> = { let _g = crate::sched::IfOffGuard::new(); GLIBC_THREADS.lock().clone() };
+        for &t in threads.iter() {
             let (n, a, r) = last_syscall(t);
             crate::serial_println!("  thread t{t} {:?}: last={n}(a1={a:#x})->{r:#x} dead={}",
                 thread_name(t), crate::sched::is_dead(t));
@@ -10502,7 +10505,8 @@ pub fn dump_threads_now(why: &str) {
     let (mn, ma, mr) = last_syscall(main);
     crate::serial_println!("[threads]   main t{main} {:?}: last={mn}(a1={ma:#x})->{mr:#x}",
         thread_name(main));
-    for &t in GLIBC_THREADS.lock().iter() {
+    let threads: alloc::vec::Vec<usize> = { let _g = crate::sched::IfOffGuard::new(); GLIBC_THREADS.lock().clone() };
+    for &t in threads.iter() {
         let (n, a, r) = last_syscall(t);
         crate::serial_println!("[threads]   t{t} {:?}: last={n}(a1={a:#x})->{r:#x}", thread_name(t));
     }
