@@ -609,7 +609,8 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
         // Always name WHERE: for an exe mapped at the demand base, rip - base is the
         // objdump offset, which turns "it crashed" into a named function. Cheap, and
         // reading the frame is safe (it is our own interrupt frame, not user memory).
-        serial_println!("[isolation]   rip={:#x} rsp={:#x}",
+        let (sn, sa1, sr) = crate::ring3::last_syscall(idx);
+        serial_println!("[isolation]   rip={:#x} rsp={:#x} last-syscall={sn}(a1={sa1:#x})->{sr:#x}",
             frame.instruction_pointer.as_u64(), frame.stack_pointer.as_u64());
         // The instruction that faulted, as bytes, the way the NMI probe shows its
         // RIP. A write to address 7 at a fixed rip (runs 14 and 21, the browser's
