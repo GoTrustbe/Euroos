@@ -1542,6 +1542,12 @@ pub fn cdp_pump() {
                             crate::serial_println!("[cdp] evaluating in the attached target: {js} (heartbeat {sent}, {}/{})", i + 1, list.len());
                             cdp_send(&alloc::format!(
                                 "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"{esc}\",\"returnByValue\":true,\"userGesture\":true}}}}", 60 + i));
+                        } else if *url == chrome_init_url() {
+                            // The initial page is already loaded (it is chrome's argv
+                            // start URL), and every navigation swaps the renderer and
+                            // strands the session (W19). Skip re-navigating to it so the
+                            // js: steps that follow run on the working initial session.
+                            crate::serial_println!("[cdp] already on {url} (initial page); skipping the navigate (heartbeat {sent}, {}/{})", i + 1, list.len());
                         } else {
                             crate::serial_println!("[cdp] navigating the attached target to {url} (heartbeat {sent}, {}/{})", i + 1, list.len());
                             cdp_send(&alloc::format!(
