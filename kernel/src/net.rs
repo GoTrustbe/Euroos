@@ -70,6 +70,16 @@ static UDPQ: spin::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv
     spin::Mutex::new(alloc::vec::Vec::new());
 static UDP_ROUTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
+/// The DNS ledger: every query name on its way out and every answer on its way
+/// in, with the tick, up to 200 lines per run. Run 64's page waited forever on
+/// three resources whose names may never have been resolved, and the capped
+/// [inet]/[sio] lines could not say.
+static DNS_LINES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+fn dns_ledger(what: &str, sport: u16) {
+    if DNS_LINES.fetch_add(1, core::sync::atomic::Ordering::Relaxed) < 200 {
+        crate::serial_println!("[dns] @{} sport {sport}: {what}", crate::interrupts::ticks());
+    }
+}
 /// A UDP socket opened on `sport`: its datagrams go to its own queue from now on.
 fn udpq_register(sport: u16) {
     let mut t = UDPQ.lock();
@@ -85,6 +95,12 @@ fn udpq_route(udpq: &mut alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv
               ih: &Ipv4Header, ipl: &[u8]) -> bool {
     let Ok(dg) = UdpDatagram::parse(ipl, ih.src, ih.dst) else { return false };
     let Some((_, q)) = udpq.iter_mut().find(|(p, _)| *p == dg.dst_port) else { return false };
+    if dg.src_port == 53 && dg.payload.len() >= 12 {
+        let rcode = dg.payload[3] & 0x0f;
+        let ancount = u16::from_be_bytes([dg.payload[6], dg.payload[7]]);
+        let name = dns::parse_query_name(&dg.payload).unwrap_or_default();
+        dns_ledger(&alloc::format!("answer {name}: rcode {rcode}, {ancount} records, {} B", dg.payload.len()), dg.dst_port);
+    }
     if q.len() < 64 {
         q.push_back((ih.src, dg.payload));
     }
@@ -1702,11 +1718,11 @@ pub fn sock_open(dgram: bool) -> u64 {
 pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     {
         use core::sync::atomic::{AtomicU32, Ordering};
-        static CONN_DIAG: AtomicU32 = AtomicU32::new(24);
+        static CONN_DIAG: AtomicU32 = AtomicU32::new(200);
         if CONN_DIAG.load(Ordering::Relaxed) > 0 {
             CONN_DIAG.fetch_sub(1, Ordering::Relaxed);
-            crate::serial_println!("[conn] sock_connect fd{fd} -> {}.{}.{}.{}:{port}",
-                server.0[0], server.0[1], server.0[2], server.0[3]);
+            crate::serial_println!("[conn] @{} sock_connect fd{fd} -> {}.{}.{}.{}:{port}",
+                crate::interrupts::ticks(), server.0[0], server.0[1], server.0[2], server.0[3]);
         }
     }
     if !is_sock_fd(fd) {
@@ -1929,10 +1945,24 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
                 // and block trackers/ads before the query goes onto the network.
                 if u.dport == 53 {
                     if let Some(name) = dns::parse_query_name(data) {
-                        if crate::euroguard::check_dns(&crate::ring3::current_app(), &name)
-                            == crate::euroguard::Decision::Block
-                        {
-                            // Blocked: send nothing; the app gets no reply.
+                        let blocked = crate::euroguard::check_dns(&crate::ring3::current_app(), &name)
+                            == crate::euroguard::Decision::Block;
+                        dns_ledger(&alloc::format!("query {name}{}", if blocked { " BLOCKED" } else { "" }), u.sport);
+                        if blocked {
+                            // Blocked: the app gets NXDOMAIN at once, not silence. A query
+                            // that is never answered is a resource that never fails, and a
+                            // page waits for it forever (youtube's sign-in check and a
+                            // Google font in run 64: no load event, three requests pending
+                            // for eight minutes).
+                            if data.len() >= 12 {
+                                let mut ans = data.to_vec();
+                                ans[2] = 0x81; // QR=1, RD=1
+                                ans[3] = 0x83; // RA=1, RCODE=3 NXDOMAIN
+                                ans[6] = 0; ans[7] = 0; // ANCOUNT 0
+                                ans[8] = 0; ans[9] = 0; ans[10] = 0; ans[11] = 0;
+                                udpq_register(u.sport);
+                                udpq_unread(u.sport, u.server, &ans);
+                            }
                             return data.len() as u64;
                         }
                     }
