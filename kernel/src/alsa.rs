@@ -15,12 +15,16 @@
 //! pages cannot be mapped, and chromium writes with snd_pcm_writei).
 use spin::Mutex;
 
-const STATE_OPEN: u32 = 1;
-const STATE_SETUP: u32 = 2;
-const STATE_PREPARED: u32 = 3;
-const STATE_RUNNING: u32 = 4;
-const STATE_XRUN: u32 = 5;
-const STATE_PAUSED: u32 = 7;
+// EXACTLY the kernel's SNDRV_PCM_STATE_* values. They were each one too high
+// (PREPARED was 3), so chrome read our PREPARED as RUNNING and our RUNNING as
+// XRUN: after PREPARE it saw a running-but-unfed stream, recovered with
+// XRUN+PREPARE, and looped 77 times without ever writing a frame (runs 86-89).
+const STATE_OPEN: u32 = 0;
+const STATE_SETUP: u32 = 1;
+const STATE_PREPARED: u32 = 2;
+const STATE_RUNNING: u32 = 3;
+const STATE_XRUN: u32 = 4;
+const STATE_PAUSED: u32 = 6;
 
 struct Pcm {
     state: u32,
@@ -339,15 +343,18 @@ fn writei(arg: u64) -> u64 {
     let frames = u64::from_le_bytes([x[16], x[17], x[18], x[19], x[20], x[21], x[22], x[23]]);
     let mut p = PCM.lock();
     if p.state == STATE_OPEN || p.state == STATE_SETUP {
+        log(&alloc::format!("writei EBADFD (state {} appl {})", p.state, p.appl_ptr));
         return EBADFD;
     }
     sync(&mut p);
     if p.state == STATE_XRUN {
+        log("writei EPIPE (xrun)");
         return EPIPE; // the client recovers with PREPARE
     }
     let room = avail(&p);
     let n = frames.min(room);
     if n == 0 {
+        log(&alloc::format!("writei EAGAIN (avail 0, appl {} hw {})", p.appl_ptr, p.hw_ptr));
         return EAGAIN;
     }
     let Some(data) = crate::ring3::copy_from_user(src, (n * FRAME_BYTES) as usize) else { return EFAULT };
