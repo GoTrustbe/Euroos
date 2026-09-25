@@ -1444,6 +1444,8 @@ pub fn cdp_pump() {
                                 "consent" => "(function(){var b=[...document.querySelectorAll('button')].find(b=>/^(Accept|Alles accepteren|Tout accepter|Alle akzeptieren)/i.test(b.getAttribute('aria-label')||b.textContent));if(b){b.click();return 'clicked '+b.textContent.trim().slice(0,40)}return 'no consent button'})()",
                                 "play" => "(function(){var v=document.querySelector('video');if(!v)return 'no video';v.muted=false;v.play();return 'play '+v.currentSrc.slice(0,60)})()",
                                 "state" => "(function(){var p=performance.getEntriesByType('resource');var pend=p.filter(e=>!e.responseEnd).map(e=>e.name.split('/').slice(-1)[0].slice(0,24));return document.readyState+' scripts '+document.scripts.length+' res '+p.length+' pending '+pend.length+' '+pend.slice(0,6).join(',')+' body '+(document.body?document.body.innerText.slice(0,80):'none')})()",
+                                "tone" => "(function(){var c=new AudioContext();var o=c.createOscillator();o.frequency.value=440;var g=c.createGain();g.gain.value=0.3;o.connect(g);g.connect(c.destination);o.start();setTimeout(function(){o.stop();c.close()},8000);window.__tone=c;return 'tone '+c.state+' '+c.sampleRate+' latency '+c.baseLatency})()",
+                                "tonestate" => "(function(){var c=window.__tone;if(!c)return 'no tone';return 'tone '+c.state+' t='+c.currentTime.toFixed(2)})()",
                                 "video" => "(function(){var v=document.querySelector('video');if(!v)return 'no video';return 'time '+v.currentTime.toFixed(1)+' paused '+v.paused+' ready '+v.readyState+' '+v.videoWidth+'x'+v.videoHeight+' err '+(v.error?v.error.code:0)})()",
                                 other => other,
                             };
@@ -1454,7 +1456,7 @@ pub fn cdp_pump() {
                             }).collect();
                             crate::serial_println!("[cdp] evaluating in the attached target: {js} (heartbeat {sent}, {}/{})", i + 1, list.len());
                             cdp_send(&alloc::format!(
-                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"{esc}\",\"returnByValue\":true}}}}", 60 + i));
+                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"{esc}\",\"returnByValue\":true,\"userGesture\":true}}}}", 60 + i));
                         } else {
                             crate::serial_println!("[cdp] navigating the attached target to {url} (heartbeat {sent}, {}/{})", i + 1, list.len());
                             cdp_send(&alloc::format!(
