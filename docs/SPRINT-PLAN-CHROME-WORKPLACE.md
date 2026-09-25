@@ -291,6 +291,22 @@ only sees small blocks, and the [cpu] line reports both pools and the demand
 pool. The fork cap goes to half of usable RAM so the extra 258 MiB runs fit
 (run 76 showed the eighth run 1.4 MiB over the old cap). Run 77 measures.
 
+### THE WATCH PAGE RENDERS WITH ITS PLAYER (run 77, e067bab)
+
+PASS, no panic, no refused fork (ten arenas), 25 heartbeats. The screendump at
+660 s shows youtube.com/watch?v=jNQXAC9IVRw with the title "Me at the zoo",
+the player with its poster frame, the play button and the controls at
+0:00 / 0:19; a videoplayback request went out. The video did not start: the
+js:state, js:play and js:video evaluations after the navigation were never
+answered, and from the moment js:state was sent the page session emitted no
+event for 400 s while the browser answered every heartbeat (the renderer for
+youtube was a fresh process, task 132, above the old 128-slot tables). The
+big-block pool filled its 256 MiB at the load and fell back to the list heap.
+Commit 0a0666d: [rmain] line per heartbeat (each CrRendererMain's state and
+last syscall), census at heartbeats 12 and 20, js:state without innerText,
+the VFS files total on the [cpu] line, big pool 512 MiB. Run 79 sends play
+before state to separate the step from the silence.
+
 ### W18. the watch page stops loading with nothing pending (run 72)
 
 Run 72 (0b69065, the ALSA gaps closed, consent cookie set at heartbeat 4,
