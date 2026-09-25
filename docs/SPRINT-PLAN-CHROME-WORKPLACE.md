@@ -359,6 +359,22 @@ device". The SystemRescue root is a ~1.9 GB tmpfs and a dozen ~150 MB run WAVs
 had filled it. The runbook now keeps only the newest previous WAV and the last
 three logs (0cda5dc). Run 82 carries the ALSA fix and autoplay together.
 
+### W12 continued: plughw will not settle, so open hw:0,0 (run 83)
+
+Run 83 (tone only, refine output logged): the kernel's refine converges. The
+client asks with everything wide, the kernel returns access 0x9 (MMAP|RW),
+S16, rate [48000,48000], period [1024,1024], buffer [8192,8192], cmask 0xfff07
+on the first call and 0x0 (nothing changed) on every call after. So the device
+correctly advertises exactly one config. Yet libasound's plug plugin
+(plughw:0,0) still fails set_rate_near with "Rate 48000Hz not available"
+before any commit: its rate/format convergence over a single-config slave does
+not settle. Rather than keep fighting the plug, commit d28f64f points chrome
+at hw:0,0 (no plug, no resample): chrome writes with snd_pcm_writei straight
+into the ring, which the kernel already serves, and the AudioContext runs at
+48 kHz so nothing needs resampling. The info field also advertised
+BLOCK_TRANSFER with bit 0x10 (that is BATCH); the real bit is 0x10000. Run 84
+tests the tone through hw:0,0 and reads the WAV.
+
 ### W18. the watch page stops loading with nothing pending (run 72)
 
 Run 72 (0b69065, the ALSA gaps closed, consent cookie set at heartbeat 4,
