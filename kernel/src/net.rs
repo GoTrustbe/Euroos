@@ -788,6 +788,10 @@ pub struct TcpConn {
     snd_una: u32,
     /// Connection still usable (no FIN/RST seen from the peer)?
     pub open: bool,
+    /// Payload bytes accepted in order from the peer / sent to it, for the
+    /// one-line summary at close (what a connection did, uncapped).
+    rx_bytes: u64,
+    tx_bytes: u64,
     /// In-order received bytes not yet fetched by recv().
     rx: alloc::collections::VecDeque<u8>,
     /// Sent-but-not-yet-ACK'd data segments (seq, bytes) for
@@ -864,6 +868,8 @@ impl TcpConn {
             their_seq: 0,
             snd_una: isn,
             open: false,
+            rx_bytes: 0,
+            tx_bytes: 0,
             rx: alloc::collections::VecDeque::new(),
             retx: alloc::vec::Vec::new(),
             ooo: alloc::vec::Vec::new(),
@@ -917,6 +923,7 @@ impl TcpConn {
             self.emit(tcp::PSH | tcp::ACK, chunk);
             self.retx.push((self.my_seq, chunk.to_vec()));
             self.my_seq = self.my_seq.wrapping_add(chunk.len() as u32);
+            self.tx_bytes += chunk.len() as u64;
         }
     }
     /// Caller-timed retransmission of everything still unacknowledged (call about
@@ -969,6 +976,8 @@ impl TcpConn {
             their_seq: 0,
             snd_una: isn,
             open: false,
+            rx_bytes: 0,
+            tx_bytes: 0,
             rx: alloc::collections::VecDeque::new(),
             retx: alloc::vec::Vec::new(),
             ooo: alloc::vec::Vec::new(),
@@ -1021,6 +1030,8 @@ impl TcpConn {
             their_seq: syn.seq.wrapping_add(1),
             snd_una: isn,
             open: false,
+            rx_bytes: 0,
+            tx_bytes: 0,
             rx: alloc::collections::VecDeque::new(),
             retx: alloc::vec::Vec::new(),
             ooo: alloc::vec::Vec::new(),
@@ -1143,6 +1154,7 @@ impl TcpConn {
                 let fresh = &seg.payload[off..];
                 self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
                 self.rx.extend(fresh.iter().copied());
+                self.rx_bytes += fresh.len() as u64;
                 // The gap is closed: splice in what was waiting behind it, in
                 // sequence, trimming any overlap the same way.
                 loop {
@@ -1158,6 +1170,7 @@ impl TcpConn {
                     let fresh = &data[skip..];
                     self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
                     self.rx.extend(fresh.iter().copied());
+                self.rx_bytes += fresh.len() as u64;
                     TCP_RECOVERED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                 }
                 // Drop anything now entirely behind the window.
@@ -1208,6 +1221,7 @@ impl TcpConn {
             self.emit(tcp::PSH | tcp::ACK, chunk);
             self.retx.push((self.my_seq, chunk.to_vec()));
             self.my_seq = self.my_seq.wrapping_add(chunk.len() as u32);
+            self.tx_bytes += chunk.len() as u64;
         }
         // Wait for acknowledgement; retransmit unacknowledged segments (max 5 rounds).
         for _ in 0..5 {
@@ -2223,6 +2237,12 @@ pub fn sock_close(fd: u64) -> u64 {
     let i = (fd - SOCK_FD_BASE) as usize;
     let mut t = SOCKETS.lock();
     if let Some(Sock::Conn(c)) = &mut t[i] {
+        // One line per connection, uncapped: what it did before chrome let go of
+        // it. The [conn] connect log is capped at 24 per run and hid every event
+        // around run 52's burst of ERR_SSL_PROTOCOL_ERROR.
+        crate::serial_println!("[conn] fd{fd} closed {}.{}.{}.{}:{} sport {}: rx {} B, tx {} B, open={}, unacked={}",
+            c.server.0[0], c.server.0[1], c.server.0[2], c.server.0[3], c.dport, c.sport,
+            c.rx_bytes, c.tx_bytes, c.open, c.retx.len());
         c.close();
         portq_remove(c.sport);
     }

@@ -8872,6 +8872,11 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // first composite and the renderer never even forked. Hunting that crash is
     // its own thread; this is the configuration that demonstrably works.
     b"--in-process-gpu",
+    // TCP only for now: youtube over QUIC (UDP) stalled in its loading skeleton
+    // (run 54) and over TLS/TCP failed subresources with ERR_SSL_PROTOCOL_ERROR
+    // (run 52); one transport at a time, and the TLS record walker judges TCP.
+    // QUIC returns once TCP/TLS is clean (workplace sprint, W13).
+    b"--disable-quic",
     // MULTI-PROCESS is the default since 2026-09-04, matching the boot test.
     // What stood in its way is fixed and measured: descriptors between two
     // CHILDREN were keyed by fd number and silently vanished, so no data-pipe
