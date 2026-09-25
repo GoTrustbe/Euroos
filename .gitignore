@@ -106,3 +106,4 @@ id_ed25519*
 *.tsbuildinfo
 # --- end standard ---
 /crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
