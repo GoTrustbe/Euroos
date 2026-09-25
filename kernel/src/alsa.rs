@@ -34,6 +34,7 @@ struct Pcm {
     appl_ptr: u64,
     hw_ptr: u64,
     last_lpib: u32,
+    run_tick: u64,
     avail_min: u64,
     start_threshold: u64,
     zeroed_upto: u64,
@@ -42,7 +43,7 @@ struct Pcm {
 
 static PCM: Mutex<Pcm> = Mutex::new(Pcm {
     state: STATE_OPEN, ring_frames: 0, period_size: 1024, buffer_size: 0,
-    appl_ptr: 0, hw_ptr: 0, last_lpib: 0, avail_min: 1, start_threshold: 1, zeroed_upto: 0, opens: 0,
+    appl_ptr: 0, hw_ptr: 0, last_lpib: 0, run_tick: 0, avail_min: 1, start_threshold: 1, zeroed_upto: 0, opens: 0,
 });
 static LINES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 fn log(what: &str) {
@@ -52,6 +53,7 @@ fn log(what: &str) {
 }
 
 const FRAME_BYTES: u64 = 4; // 16-bit stereo
+static PEAK_ACC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// The ring's physical address and size, for the data mmap.
 pub fn ring_phys() -> Option<(u64, usize)> {
@@ -99,15 +101,21 @@ pub fn pcm_close() {
 /// ring is zeroed once at open and again at drop, so no stale buffer loops; while
 /// the stream runs the client keeps it full.
 fn sync(p: &mut Pcm) {
-    if p.ring_frames == 0 {
+    if p.ring_frames == 0 || p.state != STATE_RUNNING {
         return;
     }
-    let lpib = crate::hda::pcm_lpib();
-    let ring_bytes = p.ring_frames * FRAME_BYTES;
-    let delta = (lpib as u64 + ring_bytes - p.last_lpib as u64) % ring_bytes;
-    p.last_lpib = lpib;
-    if p.state == STATE_RUNNING {
-        p.hw_ptr += delta / FRAME_BYTES;
+    // hw_ptr from a GUEST-time clock (100 Hz ticks -> 480 frames each = 48 kHz of
+    // guest time), NOT the HDA DMA's LPIB. The DMA free-runs at real 48 kHz, but
+    // the guest produces audio on its own (slower) clock; pacing hw_ptr to the real
+    // DMA made the buffer read "full" and the client stopped after one buffer
+    // (run 92: 3 writes, 0.18 s, then silence). On the guest clock the client keeps
+    // the ring full of real samples at the rate it can produce them, and qemu's
+    // DMA captures whatever is in the ring. hw_ptr never passes appl_ptr (the
+    // client cannot have played more than it wrote).
+    let now = crate::interrupts::ticks();
+    let target = now.saturating_sub(p.run_tick) * 480;
+    if target > p.hw_ptr {
+        p.hw_ptr = target.min(p.appl_ptr);
     }
 }
 
@@ -312,6 +320,8 @@ fn sync_ptr(arg: u64) -> u64 {
     sync(&mut p);
     if p.state == STATE_PREPARED && p.appl_ptr >= p.start_threshold {
         p.state = STATE_RUNNING;
+        p.run_tick = crate::interrupts::ticks();
+        p.hw_ptr = 0;
     }
     buf[8..12].copy_from_slice(&p.state.to_le_bytes());
     buf[16..24].copy_from_slice(&p.hw_ptr.to_le_bytes());
@@ -346,17 +356,33 @@ fn writei(arg: u64) -> u64 {
         return EAGAIN;
     }
     let Some(data) = crate::ring3::copy_from_user(src, (n * FRAME_BYTES) as usize) else { return EFAULT };
+    // Peak absolute sample of what the client just handed us: distinguishes a
+    // client writing real audio from one writing silence (the WAV went silent
+    // even though writei ran; is the tone silent at the source?).
+    {
+        let mut peak: u16 = 0;
+        for c in data.chunks_exact(2) {
+            let v = i16::from_le_bytes([c[0], c[1]]).unsigned_abs();
+            if v > peak { peak = v; }
+        }
+        PEAK_ACC.fetch_max(peak as u64, core::sync::atomic::Ordering::Relaxed);
+    }
     let start = ((p.appl_ptr % p.ring_frames) * FRAME_BYTES) as usize;
     crate::hda::pcm_write(start, &data);
     p.appl_ptr += n;
     if p.state == STATE_PREPARED && p.appl_ptr >= p.start_threshold {
         p.state = STATE_RUNNING;
+        // The guest-time origin for hw_ptr: playback started now, appl_ptr frames
+        // already queued. hw_ptr counts guest time from here (see sync).
+        p.run_tick = crate::interrupts::ticks();
+        p.hw_ptr = 0;
         log(&alloc::format!("running (start threshold {} frames)", p.start_threshold));
     }
     static WRITES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     let w = WRITES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    if w < 3 || w % 500 == 0 {
-        log(&alloc::format!("writei #{} {n} of {frames} frames; appl {} hw {} state {}", w + 1, p.appl_ptr, p.hw_ptr, p.state));
+    if w < 3 || w % 200 == 0 {
+        let peak = PEAK_ACC.swap(0, core::sync::atomic::Ordering::Relaxed);
+        log(&alloc::format!("writei #{} {n}/{frames} fr; appl {} hw {} st {} peak {peak}", w + 1, p.appl_ptr, p.hw_ptr, p.state));
     }
     drop(p);
     let res = (n as i64).to_le_bytes();
@@ -401,7 +427,7 @@ pub fn pcm_ioctl(cmd: u64, arg: u64) -> u64 {
             log("prepared");
             0
         }
-        0x4142 => { let mut p = PCM.lock(); if p.state == STATE_PREPARED { p.state = STATE_RUNNING; log("start"); 0 } else { EBADFD } }
+        0x4142 => { let mut p = PCM.lock(); if p.state == STATE_PREPARED { p.state = STATE_RUNNING; p.run_tick = crate::interrupts::ticks(); p.hw_ptr = 0; log("start"); 0 } else { EBADFD } }
         0x4143 | 0x4144 => { // DROP, DRAIN
             let mut p = PCM.lock(); p.state = STATE_SETUP;
             let bytes = crate::hda::pcm_ring().map(|(_, b)| b).unwrap_or(0);
