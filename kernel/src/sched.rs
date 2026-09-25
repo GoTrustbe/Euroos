@@ -186,6 +186,8 @@ pub fn unblock(idx: usize) {
     let mut s = SCHED.lock();
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(_)) {
         s.tasks[idx].state = State::Ready;
+        let floor = s.min_vr.saturating_sub(64);
+        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
     }
 }
 
@@ -196,6 +198,8 @@ pub fn unblock_any(idx: usize) {
     let mut s = SCHED.lock();
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(_) | State::Sleeping(_)) {
         s.tasks[idx].state = State::Ready;
+        let floor = s.min_vr.saturating_sub(64);
+        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
     }
 }
 
@@ -379,6 +383,10 @@ struct Scheduler {
     /// Slots of fully-finished tasks (resources freed, no BgProc) available for
     /// reuse — so the OS can run unbounded programs without exhausting the table.
     free_slots: alloc::vec::Vec<usize>,
+    /// The smallest vruntime among runnable tasks at the last pick: where a new
+    /// or woken task is placed, so nobody arrives far behind the pack and holds
+    /// the CPU until it catches up (CFS's min_vruntime).
+    min_vr: u64,
 }
 
 static SCHED: Mutex<Scheduler> = Mutex::new(Scheduler {
@@ -387,6 +395,7 @@ static SCHED: Mutex<Scheduler> = Mutex::new(Scheduler {
     }; MAX_TASKS],
     count: 1,
     current: 0,
+    min_vr: 0,
     free_slots: alloc::vec::Vec::new(),
 });
 
@@ -751,12 +760,24 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
         if let State::Sleeping(w) = s.tasks[i].state {
             if now >= w {
                 s.tasks[i].state = State::Ready;
+                let floor = s.min_vr.saturating_sub(64);
+                if s.tasks[i].vruntime < floor { s.tasks[i].vruntime = floor; }
             }
         }
     }
     // 2. Let the outgoing task (if it's still runnable) climb its vruntime,
     //    weighted on nice. Higher nice -> larger step -> chosen less often.
-    if s.tasks[cur].state == State::Ready {
+    //    Not for a tick that found task 0 halted: idle time is not work, and
+    //    charging it made the desktop loop the most expensive task on the
+    //    machine after ten idle minutes. A renderer thread created then, at its
+    //    creator's low vruntime, won every tick for 380 s (run 71: 38090 of
+    //    39664 ticks) while the desktop loop, the heartbeats and every other
+    //    thread waited for it to catch up.
+    let idle_tick = cur == 0 && !via_yield && unsafe {
+        let rip = *((rsp + 120) as *const u64);
+        rip > 0x1000 && *((rip - 1) as *const u8) == 0xf4 // the tick landed after hlt
+    };
+    if s.tasks[cur].state == State::Ready && !idle_tick {
         let step = vstep(s.tasks[cur].nice);
         s.tasks[cur].vruntime = s.tasks[cur].vruntime.wrapping_add(step);
     }
@@ -773,6 +794,9 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
             best = i;
             found = true;
         }
+    }
+    if found {
+        s.min_vr = bestv;
     }
     if !found {
         best = if s.tasks[cur].state == State::Ready { cur } else { 0 };
@@ -1020,7 +1044,7 @@ pub fn spawn_user(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u6
     // PML4, where the user arena is supervisor-only -> fault/hang. Mirrors spawn_thread.
     s.tasks[idx].cr3 = cr3;
     s.tasks[idx].state = State::Ready;
-    s.tasks[idx].vruntime = s.tasks[s.current].vruntime; // start fairly at equal level
+    s.tasks[idx].vruntime = s.tasks[s.current].vruntime.max(s.min_vr); // at the pack, never behind it
     s.tasks[idx].nice = 0;
     idx
 }
@@ -1074,7 +1098,7 @@ pub fn spawn_thread(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: 
     s.tasks[idx].cr3 = cr3; // SHARED address space with the process
     s.tasks[idx].fs_base = fs_base; // own TLS
     s.tasks[idx].state = State::Ready;
-    s.tasks[idx].vruntime = s.tasks[s.current].vruntime;
+    s.tasks[idx].vruntime = s.tasks[s.current].vruntime.max(s.min_vr);
     s.tasks[idx].nice = 0;
     idx
 }
