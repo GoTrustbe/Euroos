@@ -610,6 +610,13 @@ pub static TRACE_SCHED: core::sync::atomic::AtomicBool = core::sync::atomic::Ato
 /// TSC at the previous timer interrupt, ticks the clock had to add to stay on real
 /// time, and how many late ticks have been logged.
 static LAST_TICK_TSC: AtomicU64 = AtomicU64::new(0);
+/// Timer ticks that landed while each task was current (lock-free; read by the
+/// DevTools heartbeat for the [cpu] line).
+pub static TICKS_PER_TASK: [AtomicU64; 128] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const Z: AtomicU64 = AtomicU64::new(0);
+    [Z; 128]
+};
 pub static LOST_TICKS: AtomicU64 = AtomicU64::new(0);
 static LATE_TICKS_LOGGED: AtomicU64 = AtomicU64::new(0);
 
@@ -646,6 +653,15 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
         }
     }
     crate::interrupts::TICKS.fetch_add(add, Ordering::Relaxed);
+    // Who was running when this tick landed: the CPU ledger the [cpu] heartbeat
+    // line reads (the browser's download crawled at 8 KB/s in run 61 with the
+    // data queued unread: was the reader starved, and by whom?).
+    {
+        let c = current_lockfree();
+        if c < TICKS_PER_TASK.len() {
+            TICKS_PER_TASK[c].fetch_add(add, Ordering::Relaxed);
+        }
+    }
     crate::interrupts::send_timer_eoi();
     if CENSUS_REQUEST.swap(false, Ordering::Relaxed) {
         census_trylock();

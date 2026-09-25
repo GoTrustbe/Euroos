@@ -644,7 +644,8 @@ fn note_inet_rx(fd: u64, n: usize) {
             crate::net::rx_queued_bytes());
     }
     if calls < 20 || before / 65536 != after / 65536 {
-        crate::serial_println!("[inet] fd{fd} <- {} read {n} B (total {after} B in {} calls)",
+        crate::serial_println!("[inet] @{} fd{fd} <- {} read {n} B (total {after} B in {} calls)",
+            crate::interrupts::ticks(),
             crate::net::sock_peer_desc(fd), calls + 1);
     }
 }
@@ -1280,6 +1281,29 @@ pub fn cdp_pump() {
             let sent = PING_SENT.fetch_add(1, Ordering::Relaxed) + 1;
             let answered = PING_ANS.load(Ordering::Relaxed);
             cdp_send("{\"id\":50,\"method\":\"Target.getTargets\"}");
+            // The CPU ledger since the previous heartbeat: the six busiest tasks by
+            // name, plus what task 0 (desktop loop, which halts when idle) took.
+            {
+                static LAST: [core::sync::atomic::AtomicU64; 128] = {
+                    #[allow(clippy::declare_interior_mutable_const)]
+                    const Z: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+                    [Z; 128]
+                };
+                let mut deltas: alloc::vec::Vec<(u64, usize)> = alloc::vec::Vec::new();
+                let mut total = 0u64;
+                for t in 0..128 {
+                    let v = crate::sched::TICKS_PER_TASK[t].load(Ordering::Relaxed);
+                    let d = v - LAST[t].swap(v, Ordering::Relaxed);
+                    total += d;
+                    if d > 0 { deltas.push((d, t)); }
+                }
+                deltas.sort_unstable_by(|a, b| b.cmp(a));
+                let mut line = alloc::format!("[cpu] {total} ticks since last heartbeat:");
+                for &(d, t) in deltas.iter().take(6) {
+                    line.push_str(&alloc::format!(" t{t} {:?} {d}", if t == 0 { String::from("desktop/idle") } else { thread_name(t) }));
+                }
+                crate::serial_println!("{line}");
+            }
             // One re-navigation, after the fourth heartbeat (~2 min of guest time).
             // The startup tab's navigation to the argv URL is lost when the profile
             // dialog interrupts startup: after Enter dismisses it, Target.getTargets
@@ -1672,6 +1696,24 @@ pub fn cdp_pump() {
         if msg.contains("\"method\":\"Page.frameNavigated\"") {
             if let Some(u) = json_str(&msg, "url") {
                 crate::serial_println!("[cdp] frame navigated: {u}");
+            }
+        }
+        // The request ledger: id and URL when a request goes out, id when it ends,
+        // with the tick, so a page's loading can be read as a timeline (which
+        // request never finished, how long the big ones took) instead of from
+        // 160-character heads that cut every URL.
+        if msg.contains("\"method\":\"Network.requestWillBeSent\"") {
+            if let (Some(id), Some(u)) = (json_str(&msg, "requestId"), json_str(&msg, "url")) {
+                let short: String = u.chars().take(120).collect();
+                crate::serial_println!("[req] @{} sent {id} {short}", now);
+            }
+        } else if msg.contains("\"method\":\"Network.loadingFinished\"") {
+            if let Some(id) = json_str(&msg, "requestId") {
+                crate::serial_println!("[req] @{} done {id}", now);
+            }
+        } else if msg.contains("\"method\":\"Network.loadingFailed\"") {
+            if let (Some(id), Some(e)) = (json_str(&msg, "requestId"), json_str(&msg, "errorText")) {
+                crate::serial_println!("[req] @{} failed {id} {e}", now);
             }
         }
         let step = CDP_STEP.load(Ordering::Relaxed);
