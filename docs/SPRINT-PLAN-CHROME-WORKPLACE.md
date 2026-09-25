@@ -417,6 +417,21 @@ and Input.dispatchKeyEvent, which chrome routes to the current renderer at the
 browser level. Run 95 clicks the player and presses m to unmute, and measures
 whether the audio stream is then fetched and the WAV carries sound.
 
+### W19 narrowed: the session works on the initial renderer, a navigate breaks it
+
+Run 99 loaded youtube as chrome's initial page (chrome_init_url puts the first
+http URL of the visit list into the argv). The viewport evaluate (id 60) sent
+right after the attach got its reply from youtube's renderer, so a CDP command
+DOES reach it. The js:play and js:video evaluates that followed did not,
+because between them the visit list navigated (a reload of the same youtube
+URL) and every navigation, even same-site, swaps the renderer process here and
+strands the session on the old one. So W19 is precisely: the DevTools session
+does not follow a navigation to a new renderer process, and neither a
+re-attach (run 98) nor the browser-level Input path reaches the swapped-in
+renderer. Getting past youtube's consent needs a navigation (the SOCS cookie
+is set after the first load), which is the same navigation that breaks the
+session, a catch-22. Run 100 tries a re-attach after the same-site reload.
+
 ### W18. the watch page stops loading with nothing pending (run 72)
 
 Run 72 (0b69065, the ALSA gaps closed, consent cookie set at heartbeat 4,
