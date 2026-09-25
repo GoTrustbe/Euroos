@@ -9160,6 +9160,15 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // (run 52); one transport at a time, and the TLS record walker judges TCP.
     // QUIC returns once TCP/TLS is clean (workplace sprint, W13).
     b"--disable-quic",
+    // Autoplay without a user gesture: the CDP Runtime.evaluate that would call
+    // video.play() does not reach the youtube renderer after the cross-process
+    // navigation (the page session's command is not forwarded to the swapped-in
+    // renderer process; runs 77 and 79: the renderer ran 73k syscalls and painted
+    // the player, but ids 63-65 never replied). This flag makes the page start the
+    // video itself, with sound, so playback no longer depends on driving it over
+    // DevTools. The muted-autoplay policy would start it silent; this one keeps
+    // the audio.
+    b"--autoplay-policy=no-user-gesture-required",
     // Sound through the ALSA hw plugin straight onto /dev/snd/pcmC0D0p (plug
     // resamples to the ring's 48 kHz); no dmix, no PulseAudio (W12).
     b"--alsa-output-device=plughw:0,0",
