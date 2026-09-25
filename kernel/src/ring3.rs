@@ -392,6 +392,30 @@ static OPEN_DIRS: Mutex<[Option<(String, usize)>; MAX_FD]> =
 // `pipe2` syscall returns two fds; after fork() parent and child share them (the
 // fd tables are global), so they can communicate over the pipe.
 static PIPES: Mutex<alloc::vec::Vec<alloc::vec::Vec<u8>>> = Mutex::new(alloc::vec::Vec::new());
+
+/// PIPES is taken from the desktop loop too (cdp_send / cdp_next_msg drive the
+/// DevTools pipes from task 0 with interrupts enabled), and a task-context holder
+/// that is preempted leaves every syscall that touches a pipe spinning with
+/// interrupts off: run 53's wedge was chrome's sandbox_ipc_thread in
+/// epoll_fd_ready on exactly this lock. Every acquisition goes through here:
+/// interrupts off first, lock second, unlock before interrupts return (field
+/// order is drop order).
+struct PipesGuard {
+    g: spin::MutexGuard<'static, alloc::vec::Vec<alloc::vec::Vec<u8>>>,
+    _if: crate::sched::IfOffGuard,
+}
+impl core::ops::Deref for PipesGuard {
+    type Target = alloc::vec::Vec<alloc::vec::Vec<u8>>;
+    fn deref(&self) -> &Self::Target { &self.g }
+}
+impl core::ops::DerefMut for PipesGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.g }
+}
+fn pipes_lock() -> PipesGuard {
+    let _if = crate::sched::IfOffGuard::new();
+    let g = PIPES.lock();
+    PipesGuard { g, _if }
+}
 /// Pipe fds: per fd (pipe-id, is_write_end). Separate table alongside file/dir fds.
 static PIPE_FDS: Mutex<[Option<(usize, bool)>; MAX_FD]> = Mutex::new([None; MAX_FD]);
 /// Per pipe-id: is the pipe non-blocking (O_NONBLOCK)? A BLOCKING read on an empty
@@ -1027,13 +1051,13 @@ fn cdp_pipes_create() {
         return;
     }
     let cmd_id = {
-        let mut p = PIPES.lock();
+        let mut p = pipes_lock();
         p.push(alloc::vec::Vec::new());
         PIPE_NONBLOCK.lock().push(false);
         p.len() - 1
     };
     let res_id = {
-        let mut p = PIPES.lock();
+        let mut p = pipes_lock();
         p.push(alloc::vec::Vec::new());
         PIPE_NONBLOCK.lock().push(false);
         p.len() - 1
@@ -1062,7 +1086,7 @@ fn cdp_send(msg: &str) {
     // preempted pump). Same freeze family as the fd locks - same cure.
     let _g = crate::sched::IfOffGuard::new();
     {
-        let mut pipes = PIPES.lock();
+        let mut pipes = pipes_lock();
         pipes[id].extend_from_slice(msg.as_bytes());
         pipes[id].push(0);
     }
@@ -1087,7 +1111,7 @@ fn cdp_next_msg() -> Option<String> {
         return None;
     }
     {
-        let mut pipes = PIPES.lock();
+        let mut pipes = pipes_lock();
         if !pipes[id].is_empty() {
             let drained: alloc::vec::Vec<u8> = pipes[id].drain(..).collect();
             CDP_RX.lock().extend_from_slice(&drained);
@@ -1826,7 +1850,7 @@ fn pipe_create(user_fds: u64) -> u64 {
 /// pipe2 with flags (O_NONBLOCK = 0x800). Records the pipe's blocking mode.
 fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     let id = {
-        let mut p = PIPES.lock();
+        let mut p = pipes_lock();
         p.push(alloc::vec::Vec::new());
         PIPE_NONBLOCK.lock().push(flags & 0x800 != 0);
         p.len() - 1
@@ -2049,7 +2073,7 @@ fn epoll_fd_ready(fd: u64) -> bool {
         crate::net::unix_fd_readable(fd) || scm_pending_for(fd)
     } else if (fd as usize) < MAX_FD && is_pipe_fd(fd as usize) {
         match PIPE_FDS.lock()[fd as usize] {
-            Some((id, false)) => !PIPES.lock()[id].is_empty(), // read end w/ data
+            Some((id, false)) => !pipes_lock()[id].is_empty(), // read end w/ data
             _ => false,                                        // write end: not "readable"
         }
     } else {
@@ -2208,7 +2232,7 @@ fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
     }
     let _g = crate::sched::IfOffGuard::new();
     if let Some((id, true)) = PIPE_FDS.lock()[fd] {
-        PIPES.lock()[id].extend_from_slice(bytes);
+        pipes_lock()[id].extend_from_slice(bytes);
         // Wake any tasks blocked reading this pipe.
         let mut w = PIPE_WAITERS.lock();
         let mut i = 0;
@@ -2239,7 +2263,7 @@ fn pipe_read_blocking(fd: usize, buf: u64, len: usize) -> Option<u64> {
     loop {
         // Data available? copy + return.
         {
-            let mut pipes = PIPES.lock();
+            let mut pipes = pipes_lock();
             let p = &mut pipes[id];
             if !p.is_empty() {
                 let n = len.min(p.len());
@@ -2286,7 +2310,7 @@ fn pipe_read_fd(fd: usize, buf: u64, len: usize) -> Option<u64> {
         return None;
     }
     if let Some((id, false)) = PIPE_FDS.lock()[fd] {
-        let mut pipes = PIPES.lock();
+        let mut pipes = pipes_lock();
         let p = &mut pipes[id];
         if p.is_empty() {
             return Some((-11i64) as u64); // -EAGAIN
@@ -2320,7 +2344,7 @@ fn reset_fd_table() {
     // stale pipe marker on fd 3 would otherwise hijack this program's libc reads on
     // that fd number (EAGAIN "cannot read file data"). See the bg_read_fd note.
     *PIPE_FDS.lock() = [None; MAX_FD];
-    PIPES.lock().clear();
+    pipes_lock().clear();
     PIPE_NONBLOCK.lock().clear();
     PIPE_WAITERS.lock().clear();
 }
@@ -9328,7 +9352,7 @@ pub fn run_glibc_disk(
             let prev = HEAP_STEP.swap(step, Ordering::Relaxed);
             if step > prev {
                 let files: usize = FILES.lock().iter().map(|(p, d)| p.len() + d.len()).sum();
-                let pipes: usize = PIPES.lock().iter().map(|p| p.len()).sum();
+                let pipes: usize = pipes_lock().iter().map(|p| p.len()).sum();
                 crate::serial_println!(
                     "[heap] {} MiB used | FILES {} MiB | pipes {} KiB",
                     used >> 20, files >> 20, pipes >> 10);
