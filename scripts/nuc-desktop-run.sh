@@ -183,6 +183,11 @@ for t in ${SAMPLES:-120 300 480 660}; do
   fi
 done
 kill $Q 2>/dev/null; wait $Q 2>/dev/null
+# Keep the two late screendumps under a name the next run's cleanup does not
+# match (it drops *.ppm and *.png): a run's picture must survive the run that
+# follows it, which a chained harness starts at once. Pruned after two hours.
+for t in 480 660; do [ -f "$LOG-t$t.ppm" ] && cp "$LOG-t$t.ppm" "$LOG.t$t.keep"; done
+find "$(dirname "$LOG")" -name '*.keep' -mmin +120 -delete 2>/dev/null
 # The verdict, read from the log the way the sprint plan's exit criteria are
 # worded, so a run says PASS or FAIL by itself (criterion 3 wants three in a row):
 # the browser main thread (task 9) must not fault, the live navigate must commit
