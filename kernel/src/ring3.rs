@@ -525,14 +525,22 @@ fn tls_walk(fd: u64, tx: bool, data: &[u8]) {
             let t = st.hdr[0];
             let v = u16::from_be_bytes([st.hdr[1], st.hdr[2]]);
             let l = u16::from_be_bytes([st.hdr[3], st.hdr[4]]);
-            let ok = matches!(t, 20..=23) && (0x0301..=0x0304).contains(&v) && l as usize <= 16384 + 256;
+            // BoringSSL's rule (tls_record.cc): the first record of a direction only
+            // needs major version 3; every later one must carry exactly 0x0303. Run 59's
+            // NetLog said WRONG_VERSION_NUMBER after a completed handshake while the
+            // looser check here (0x0301..0x0304) saw nothing: so the header is printed
+            // with the sixteen bytes around it.
+            let ok = matches!(t, 20..=23) && l as usize <= 16384 + 256
+                && if st.records == 0 { (v >> 8) == 3 } else { v == 0x0303 };
             if !ok {
                 st.bad = true;
                 if TLS_WALK_LINES.fetch_add(1, Ordering::Relaxed) < 40 {
+                    let lo = i.saturating_sub(21);
+                    let hi = (i + 11).min(data.len());
                     crate::serial_println!(
-                        "[tls-{}] fd{fd} {}.{}.{}.{}:443 sport {sport}: BAD record header {:02x?} at stream byte {} after {} good records",
+                        "[tls-{}] fd{fd} {}.{}.{}.{}:443 sport {sport}: BAD record header {:02x?} at stream byte {} after {} good records; around: {:02x?}",
                         if tx { "tx" } else { "rx" }, server.0[0], server.0[1], server.0[2], server.0[3],
-                        st.hdr, st.bytes + i as u64 - 5, st.records);
+                        st.hdr, st.bytes + i as u64 - 5, st.records, &data[lo..hi]);
                 }
                 return;
             }
@@ -8938,12 +8946,12 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // (run 52); one transport at a time, and the TLS record walker judges TCP.
     // QUIC returns once TCP/TLS is clean (workplace sprint, W13).
     b"--disable-quic",
-    // BoringSSL's reason for a failed handshake lives only in the NetLog (chrome
-    // logs nothing else for it): the kernel prints that file's "error_reason"
-    // lines at heartbeat 14 as [netlog]; error_lib 16 = SSL, reasons per
-    // BoringSSL's ssl.h (W13).
-    b"--log-net-log=/tmp/cr/netlog.json",
-    b"--net-log-capture-mode=Default",
+    // The NetLog (--log-net-log=/tmp/cr/netlog.json, printed by the kernel at
+    // heartbeat 14 as [netlog]) named run 59's failure: BoringSSL
+    // WRONG_VERSION_NUMBER on a record after the handshake, then
+    // PROTOCOL_IS_SHUTDOWN. It also silenced the DevTools channel for the whole
+    // run (21 heartbeats, one answer), so it is off again; the record walker
+    // now applies BoringSSL's version rule itself.
     // MULTI-PROCESS is the default since 2026-09-04, matching the boot test.
     // What stood in its way is fixed and measured: descriptors between two
     // CHILDREN were keyed by fd number and silently vanished, so no data-pipe
