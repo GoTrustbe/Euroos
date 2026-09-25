@@ -697,7 +697,9 @@ fn main() -> Status {
                 installed = true;
                 // The kernel heap's big-block pool (allocator::BIG_MIN and up): 256 MiB
                 // of frames on a guest with at least 4 GiB, a quarter of that below.
-                let big_pages = if usable_frames >= 4 * 256 * 1024 { 65_536 } else if usable_frames >= 2 * 256 * 1024 { 16_384 } else { 0 };
+                // 512 MiB on a guest of 4 GiB or more: run 77 filled 256 MiB at the
+                // youtube load and fell back to the list heap.
+                let big_pages = if usable_frames >= 4 * 256 * 1024 { 131_072 } else if usable_frames >= 2 * 256 * 1024 { 16_384 } else { 0 };
                 if big_pages > 0 {
                     match allocator.allocate_contiguous(big_pages) {
                         Ok(b) => {

@@ -1300,7 +1300,8 @@ pub fn cdp_pump() {
                 deltas.sort_unstable_by(|a, b| b.cmp(a));
                 let (hu, hf) = crate::allocator::stats();
                 let (bu, bf, bp) = crate::allocator::big_stats();
-                let mut line = alloc::format!("[cpu] {total} ticks since last heartbeat; heap {} MiB used, {} MiB free; big {bu}/{bf} MiB (peak {bp}); demand {} MiB free;",
+                let files_mib = { let _g = crate::sched::IfOffGuard::new(); FILES.lock().iter().map(|(_, d)| d.len()).sum::<usize>() / (1024 * 1024) };
+                let mut line = alloc::format!("[cpu] {total} ticks since last heartbeat; heap {} MiB used, {} MiB free; big {bu}/{bf} MiB (peak {bp}); files {files_mib} MiB; demand {} MiB free;",
                     hu / (1024 * 1024), hf / (1024 * 1024), crate::procpool::demand_free_frames() / 256);
                 for &(d, t) in deltas.iter().take(6) {
                     line.push_str(&alloc::format!(" t{t} {:?} {d}", if t == 0 { String::from("desktop/idle") } else { thread_name(t) }));
@@ -1340,15 +1341,32 @@ pub fn cdp_pump() {
                 // queue with unread bytes. The three youtube requests of run 64 whose
                 // headers arrived and whose bodies never did are a message nobody
                 // reads or a reader nobody woke; this shows which.
-                static CENSUS_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-                if sent >= 12 && !CENSUS_DONE.swap(true, Ordering::Relaxed) {
+                // The renderer main threads every heartbeat: state and last syscall.
+                // Run 77's watch page went silent at the js:state evaluate (no answer,
+                // no event from the page session for 400 s while the browser answered
+                // every heartbeat), and the census had run at heartbeat 12, before it.
+                {
+                    let snap = crate::sched::snapshot_tasks();
+                    let names: alloc::vec::Vec<(usize, String)> = { let _g = crate::sched::IfOffGuard::new(); THREAD_NAMES.lock().clone() };
+                    let mut rl = String::from("[rmain]");
+                    for &(t, cr3, state) in snap.iter() {
+                        if state == crate::sched::State::Dead { continue; }
+                        let Some((_, nm)) = names.iter().find(|(x, _)| *x == t) else { continue };
+                        if nm != "CrRendererMain" { continue; }
+                        let (n, a, r) = last_syscall(t);
+                        rl.push_str(&alloc::format!(" t{t} cr3={cr3:#x} {:?} last={n}(a1={a:#x})->{r:#x};", state));
+                    }
+                    crate::serial_println!("{rl}");
+                }
+                static CENSUS_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+                if (sent == 12 || sent == 20) && CENSUS_AT.swap(sent, Ordering::Relaxed) != sent {
                     let q = { let _g = crate::sched::IfOffGuard::new(); crate::net::unix_queued_report() };
                     let mut line = alloc::format!("[unixq] {} fds with unread bytes:", q.len());
                     for &(fd, n) in q.iter().take(24) {
                         line.push_str(&alloc::format!(" fd{fd}:{n}"));
                     }
                     crate::serial_println!("{line}");
-                    dump_threads_now("census at heartbeat 12");
+                    dump_threads_now(&alloc::format!("census at heartbeat {sent}"));
                 }
                 for i in 0..RIP_PAGES {
                     RIP_PAGE[i].store(0, Ordering::Relaxed);
@@ -1445,7 +1463,7 @@ pub fn cdp_pump() {
                             let js: &str = match js {
                                 "consent" => "(function(){var b=[...document.querySelectorAll('button')].find(b=>/^(Accept|Alles accepteren|Tout accepter|Alle akzeptieren)/i.test(b.getAttribute('aria-label')||b.textContent));if(b){b.click();return 'clicked '+b.textContent.trim().slice(0,40)}return 'no consent button'})()",
                                 "play" => "(function(){var v=document.querySelector('video');if(!v)return 'no video';v.muted=false;v.play();return 'play '+v.currentSrc.slice(0,60)})()",
-                                "state" => "(function(){var p=performance.getEntriesByType('resource');var pend=p.filter(e=>!e.responseEnd).map(e=>e.name.split('/').slice(-1)[0].slice(0,24));return document.readyState+' scripts '+document.scripts.length+' res '+p.length+' pending '+pend.length+' '+pend.slice(0,6).join(',')+' body '+(document.body?document.body.innerText.slice(0,80):'none')})()",
+                                "state" => "(function(){var p=performance.getEntriesByType('resource');var pend=p.filter(e=>!e.responseEnd).map(e=>e.name.split('/').slice(-1)[0].slice(0,24));return document.readyState+' scripts '+document.scripts.length+' res '+p.length+' pending '+pend.length+' '+pend.slice(0,6).join(',')+' body '+(document.body?document.body.textContent.slice(0,80):'none')})()",
                                 "tone" => "(function(){var c=new AudioContext();var o=c.createOscillator();o.frequency.value=440;var g=c.createGain();g.gain.value=0.3;o.connect(g);g.connect(c.destination);o.start();setTimeout(function(){o.stop();c.close()},8000);window.__tone=c;return 'tone '+c.state+' '+c.sampleRate+' latency '+c.baseLatency})()",
                                 "tonestate" => "(function(){var c=window.__tone;if(!c)return 'no tone';return 'tone '+c.state+' t='+c.currentTime.toFixed(2)})()",
                                 "video" => "(function(){var v=document.querySelector('video');if(!v)return 'no video';return 'time '+v.currentTime.toFixed(1)+' paused '+v.paused+' ready '+v.readyState+' '+v.videoWidth+'x'+v.videoHeight+' err '+(v.error?v.error.code:0)})()",
