@@ -7774,10 +7774,22 @@ fn read_user_strvec(ptr: u64, max: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>
 fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     // POSIX: close-on-exec descriptors are gone the moment the new image starts.
     cloexec_do_exec(fork_child_owner(crate::sched::current()).unwrap_or(0));
-    let _path = user_cstr(path_ptr, 256); // usually "/proc/self/exe"
+    let path = user_cstr(path_ptr, 256); // usually "/proc/self/exe"
     let exe_path = CHILD_EXE_PATH.lock().clone();
     if exe_path.is_empty() {
         return (-8i64) as u64; // -ENOEXEC: no persistent exe known
+    }
+    // Only the persistent exe re-executes. Chrome also forks to run helpers that
+    // are not here (`xdg-settings` for the default-browser check, run 50): those
+    // used to come back as chrome under the helper's name, hit setsid ENOSYS,
+    // abort, and die on glibc's hlt. A program that is not here is ENOENT, and
+    // chrome copes exactly as on a system without it.
+    if path != b"/proc/self/exe" && path.as_slice() != exe_path.as_bytes()
+        && !path.ends_with(b"/chrome") && path.as_slice() != b"chrome"
+    {
+        crate::serial_println!("[execve] task {} asked for {:?}: not here, ENOENT",
+            crate::sched::current(), String::from_utf8_lossy(&path));
+        return (-2i64) as u64;
     }
     // Resolve the disk exe (same registry glibc_disk_launch uses).
     let (diskidx, dev, doff, _dsize) = {
@@ -13564,8 +13576,16 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             crate::serial_println!(
                 "[abort] t{} {:?} tgkill(tgid={a1}, tid={a2}, sig={a3}) — a glibc abort/assert fired; see [abort] __abort_msg in the stall dump",
                 crate::sched::current(), thread_name(crate::sched::current()));
+            // A fatal signal to the calling thread ends the PROCESS, as on Linux
+            // (SIGABRT/SIGKILL/SIGSEGV/SIGTERM default to termination). Returning 0
+            // let glibc's abort() fall through to its hlt, a #GP in ring 3 with the
+            // process's threads left holding their locks (run 50, twice).
+            if matches!(a3, 6 | 9 | 11 | 15) && (a2 == 0 || a2 == crate::sched::current() as u64 || a1 == 1) {
+                return linux_dispatch_inner_raw(231, 128 + a3, 0, 0, 0, 0);
+            }
             0
         }
+        112 => 1, // setsid: the new session's id is the caller's pid, which is 1 here
         137 | 138 => {
             // statfs(path, buf) / fstatfs(fd, buf): report a normal LOCAL filesystem.
             // fontconfig statfs()es its font + cache dirs to detect network mounts; an
