@@ -20,7 +20,7 @@ const IA32_FS_BASE: u32 = 0xC000_0100;
 // Chrome (even --single-process headless) spawns dozens of threads (thread pool,
 // compositor, IO, message pumps). 48 was fine for the shell + a few glibc apps; a
 // browser needs far more scheduler slots. Each slot costs one 16 KiB kernel stack.
-const MAX_TASKS: usize = 256;
+pub const MAX_TASKS: usize = 256;
 const STACK_SIZE: usize = 16 * 1024;
 const CONTEXT_WORDS: usize = 20; // 15 GP registers + 5 (rip,cs,rflags,rsp,ss)
 
@@ -111,7 +111,7 @@ pub static CENSUS_REQUEST: core::sync::atomic::AtomicBool =
 /// from the CDP pump took ring3 spinlocks with interrupts enabled and froze the
 /// guest it was meant to explain.
 fn sysn(t: usize) -> u64 {
-    if t < 128 { crate::ring3::SYSCALLS_PER_TASK[t].load(Ordering::Relaxed) } else { 0 }
+    if t < MAX_TASKS { crate::ring3::SYSCALLS_PER_TASK[t].load(Ordering::Relaxed) } else { 0 }
 }
 
 fn cpun(t: usize) -> u64 {
@@ -629,10 +629,10 @@ pub static TRACE_SCHED: core::sync::atomic::AtomicBool = core::sync::atomic::Ato
 static LAST_TICK_TSC: AtomicU64 = AtomicU64::new(0);
 /// Timer ticks that landed while each task was current (lock-free; read by the
 /// DevTools heartbeat for the [cpu] line).
-pub static TICKS_PER_TASK: [AtomicU64; 128] = {
+pub static TICKS_PER_TASK: [AtomicU64; MAX_TASKS] = {
     #[allow(clippy::declare_interior_mutable_const)]
     const Z: AtomicU64 = AtomicU64::new(0);
-    [Z; 128]
+    [Z; MAX_TASKS]
 };
 pub static LOST_TICKS: AtomicU64 = AtomicU64::new(0);
 static LATE_TICKS_LOGGED: AtomicU64 = AtomicU64::new(0);

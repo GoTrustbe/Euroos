@@ -673,8 +673,25 @@ fn main() -> Status {
                 continue;
             }
             if let Ok(base) = allocator.allocate_contiguous(want) {
-                procpool::install(base, want);
-                serial_println!("[mm] process frame pool: {} MiB @ {base:#x} (fork/exec)", want / 256);
+                // Top the pool up with further 258 MiB runs (one 2 MiB-aligned
+                // arena each) up to the cap: the largest run alone held seven
+                // arenas on the 6144M NUC guest and youtube's browser wants nine
+                // children alive (run 74: two forks refused at "pool has 127 MiB").
+                let mut regions: alloc::vec::Vec<(u64, usize)> = alloc::vec![(base, want)];
+                let mut total = want;
+                const CHUNK: usize = 66_048; // 258 MiB
+                while regions.len() < 6 && total + CHUNK <= cap {
+                    match allocator.allocate_contiguous(CHUNK) {
+                        Ok(b) => { regions.push((b, CHUNK)); total += CHUNK; }
+                        Err(_) => break,
+                    }
+                }
+                procpool::install_regions(&regions);
+                let mut line = alloc::format!("[mm] process frame pool: {} MiB @ {base:#x} (fork/exec)", want / 256);
+                for &(b, f) in regions.iter().skip(1) {
+                    line.push_str(&alloc::format!(" + {} MiB @ {b:#x}", f / 256));
+                }
+                serial_println!("{line}");
                 installed = true;
                 break;
             }
@@ -2398,6 +2415,14 @@ fn main() -> Status {
             // fresh scan of three font files is slow but correct, and the cache it
             // writes to /var/cache/fontconfig is then ITS OWN format.
             ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n</fontconfig>\n".to_vec());
+            // libasound reads /usr/share/alsa/alsa.conf before it opens any PCM;
+            // without it every name is "Unknown PCM" (run 74: chrome's audio
+            // manager fell back to ALSA, asked for plughw:0,0, and got nothing, so
+            // the kernel's /dev/snd device was never opened). The distribution
+            // file is 700 lines of hooks and card includes; this defines the two
+            // PCM types chrome uses (hw and plug over hw), the hw control, and the
+            // defaults, all on card 0 device 0 = the HDA output kernel::alsa serves.
+            ring3::register_file_static("/usr/share/alsa/alsa.conf", ALSA_CONF);
 
             // /dev special files: chrome's fork+exec child redirects its stdio to
             // /dev/null before execve, and libc/nss read /dev/urandom for entropy.
@@ -6475,3 +6500,51 @@ fn panic(info: &PanicInfo) -> ! {
         x86_64::instructions::hlt();
     }
 }
+
+/// A minimal alsa.conf for libasound (see the registration in the chrome setup).
+const ALSA_CONF: &[u8] = b"defaults.pcm.card 0
+defaults.pcm.device 0
+defaults.pcm.subdevice -1
+defaults.ctl.card 0
+pcm.hw {
+	@args [ CARD DEV SUBDEV ]
+	@args.CARD { type string default 0 }
+	@args.DEV { type integer default 0 }
+	@args.SUBDEV { type integer default -1 }
+	type hw
+	card $CARD
+	device $DEV
+	subdevice $SUBDEV
+}
+pcm.plughw {
+	@args [ CARD DEV SUBDEV ]
+	@args.CARD { type string default 0 }
+	@args.DEV { type integer default 0 }
+	@args.SUBDEV { type integer default -1 }
+	type plug
+	slave.pcm {
+		type hw
+		card $CARD
+		device $DEV
+		subdevice $SUBDEV
+	}
+}
+pcm.default {
+	type plug
+	slave.pcm {
+		type hw
+		card 0
+		device 0
+	}
+}
+ctl.hw {
+	@args [ CARD ]
+	@args.CARD { type string default 0 }
+	type hw
+	card $CARD
+}
+ctl.default {
+	type hw
+	card 0
+}
+";

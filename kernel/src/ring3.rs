@@ -32,15 +32,15 @@ static CURRENT_CAPS: AtomicU64 = AtomicU64::new(0);
 /// and from that moment the browser and all its children ran with the ticker's
 /// rights - the network service died on socket() = EPERM, minutes into a healthy
 /// session. 0 = unset (fall back to the global, which spawn paths still set).
-static TASK_CAPS: [AtomicU64; 128] = {
+static TASK_CAPS: [AtomicU64; crate::sched::MAX_TASKS] = {
     #[allow(clippy::declare_interior_mutable_const)]
     const Z: AtomicU64 = AtomicU64::new(0);
-    [Z; 128]
+    [Z; crate::sched::MAX_TASKS]
 };
 
 /// Record the capabilities of task `t` (spawn) - children/threads inherit them.
 pub fn set_task_caps(t: usize, caps: u64) {
-    if t < 128 {
+    if t < crate::sched::MAX_TASKS {
         TASK_CAPS[t].store(caps, Ordering::Relaxed);
     }
 }
@@ -49,7 +49,7 @@ fn effective_caps() -> u64 {
     // Lock-free on purpose: this runs inside nearly every syscall arm, including
     // ones that already hold the scheduler lock.
     let t = crate::sched::current_lockfree();
-    let tc = if t < 128 { TASK_CAPS[t].load(Ordering::Relaxed) } else { 0 };
+    let tc = if t < crate::sched::MAX_TASKS { TASK_CAPS[t].load(Ordering::Relaxed) } else { 0 };
     if tc != 0 { tc } else { CURRENT_CAPS.load(Ordering::Relaxed) }
 }
 // If true: the current process uses the LINUX syscall ABI (different numbers +
@@ -1284,14 +1284,14 @@ pub fn cdp_pump() {
             // The CPU ledger since the previous heartbeat: the six busiest tasks by
             // name, plus what task 0 (desktop loop, which halts when idle) took.
             {
-                static LAST: [core::sync::atomic::AtomicU64; 128] = {
+                static LAST: [core::sync::atomic::AtomicU64; crate::sched::MAX_TASKS] = {
                     #[allow(clippy::declare_interior_mutable_const)]
                     const Z: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-                    [Z; 128]
+                    [Z; crate::sched::MAX_TASKS]
                 };
                 let mut deltas: alloc::vec::Vec<(u64, usize)> = alloc::vec::Vec::new();
                 let mut total = 0u64;
-                for t in 0..128 {
+                for t in 0..crate::sched::MAX_TASKS {
                     let v = crate::sched::TICKS_PER_TASK[t].load(Ordering::Relaxed);
                     let d = v - LAST[t].swap(v, Ordering::Relaxed);
                     total += d;
@@ -1319,7 +1319,7 @@ pub fn cdp_pump() {
                     pages.sort_unstable_by(|a, b| b.cmp(a));
                     let total_s = RIP_TOTAL.load(Ordering::Relaxed);
                     let (sn, sa1, sr) = last_syscall(prof);
-                    let sc = if prof < 128 { SYSCALLS_PER_TASK[prof].load(Ordering::Relaxed) } else { 0 };
+                    let sc = if prof < crate::sched::MAX_TASKS { SYSCALLS_PER_TASK[prof].load(Ordering::Relaxed) } else { 0 };
                     static LAST_SC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
                     let scd = sc.wrapping_sub(LAST_SC.swap(sc, Ordering::Relaxed));
                     let mut pl = alloc::format!("[prof] t{prof} {:?}: {total_s} samples, {scd} syscalls, last={sn}(a1={sa1:#x})->{sr:#x};", thread_name(prof));
@@ -3965,11 +3965,11 @@ static SYSCALL_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU6
 /// scheduler task: a chrome with two renderers runs past task 100 (run 72), and the
 /// census read zeros for every thread above the old 64.
 type SysRec = (core::sync::atomic::AtomicU64, core::sync::atomic::AtomicU64, core::sync::atomic::AtomicU64);
-static LAST_SYS: [SysRec; 128] = [const { (
+static LAST_SYS: [SysRec; crate::sched::MAX_TASKS] = [const { (
     core::sync::atomic::AtomicU64::new(0),
     core::sync::atomic::AtomicU64::new(0),
     core::sync::atomic::AtomicU64::new(0),
-) }; 128];
+) }; crate::sched::MAX_TASKS];
 /// (num, arg1, return) of the last Linux syscall made by task `t`.
 pub fn last_syscall(t: usize) -> (u64, u64, u64) {
     if t >= LAST_SYS.len() {
@@ -10816,10 +10816,10 @@ pub fn dump_threads_now(why: &str) {
 /// Syscalls executed per task, so a census can tell a process that is WORKING
 /// from one that is merely alive. A plain relaxed add per syscall: no lock, so
 /// it is safe to read from the timer tick that prints the census.
-pub static SYSCALLS_PER_TASK: [core::sync::atomic::AtomicU64; 128] = {
+pub static SYSCALLS_PER_TASK: [core::sync::atomic::AtomicU64; crate::sched::MAX_TASKS] = {
     #[allow(clippy::declare_interior_mutable_const)]
     const Z: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-    [Z; 128]
+    [Z; crate::sched::MAX_TASKS]
 };
 
 /// Log every syscall that FAILS while set. A library that reports a generic
@@ -10839,7 +10839,7 @@ pub fn trace_failures(budget: u32) {
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     {
         let t = crate::sched::current();
-        if t < 128 {
+        if t < crate::sched::MAX_TASKS {
             SYSCALLS_PER_TASK[t].fetch_add(1, Ordering::Relaxed);
         }
     }

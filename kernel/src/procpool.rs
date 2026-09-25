@@ -9,6 +9,7 @@
 
 use euromm::{FrameAllocator, MemoryRegion};
 use spin::Mutex;
+extern crate alloc;
 
 static POOL: Mutex<Option<FrameAllocator>> = Mutex::new(None);
 /// A SECOND, independent pool dedicated to DEMAND PAGING (ring3::handle_demand_fault
@@ -22,6 +23,18 @@ static DEMAND_POOL: Mutex<Option<FrameAllocator>> = Mutex::new(None);
 pub fn install(base: u64, frames: usize) {
     let region = MemoryRegion { start: base, len: (frames as u64) * 4096, usable: true };
     *POOL.lock() = Some(FrameAllocator::from_regions(&[region], 0));
+}
+
+/// Install the pool over several (base, frames) runs of RAM: the allocator's bitmap
+/// spans physical addresses, so a contiguous, aligned arena is still carved from
+/// one run. RAM under a UEFI map is seldom one big run once the kernel heap and
+/// the boot image sit in it: the 6144M NUC guest gave one 1920 MiB run and the
+/// eight-arena candidate failed, while 781 MiB lay free elsewhere.
+pub fn install_regions(regions: &[(u64, usize)]) {
+    let regs: alloc::vec::Vec<MemoryRegion> = regions.iter()
+        .map(|&(b, f)| MemoryRegion { start: b, len: (f as u64) * 4096, usable: true })
+        .collect();
+    *POOL.lock() = Some(FrameAllocator::from_regions(&regs, 0));
 }
 
 /// Allocate `count` contiguous frames from the pool (None = pool full / not initialized).
