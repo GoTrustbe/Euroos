@@ -192,13 +192,12 @@ kill $Q 2>/dev/null; wait $Q 2>/dev/null
 # and the guest must not have wedged. Each failing check is named.
 V=""
 grep -aqE "(GP FAULT|page fault addr).*task 9\)" "$LOG" && V="$V main-thread-fault"
-# Every navigation the bridge issued must have committed: a Page.frameNavigated
-# whose url starts with the same scheme and host (the log cuts long lines inside
-# the URL, so the host is what can be matched).
+# Every navigation the bridge issued must have committed: the kernel prints
+# '[cdp] frame navigated: URL' for each Page.frameNavigated (the raw [cdp] <-
+# line is cut inside the URL), and the scheme+host must appear in one.
 for u in $(grep -aoE "navigating the attached target to [^ ]+" "$LOG" | awk '{print $NF}'); do
   h=$(printf '%s' "$u" | sed -E 's|^([a-z]+://[^/]*).*|\1|')
-  grep -aqF "Page.frameNavigated\",\"params\":{\"frame\":{\"id\":" "$LOG" || true
-  grep -aE "Page\.frameNavigated" "$LOG" | grep -aqF "\"url\":\"$h" || V="$V no-navigation:$h"
+  grep -aqF "[cdp] frame navigated: $h" "$LOG" || V="$V no-navigation:$h"
 done
 grep -aq "arena alloc FAILED" "$LOG" && V="$V fork-refused"
 grep -aq "POOL EXHAUSTED" "$LOG" && V="$V demand-pool-exhausted"

@@ -1573,6 +1573,12 @@ pub fn cdp_pump() {
     while let Some(msg) = cdp_next_msg() {
         let head: String = msg.chars().take(160).collect();
         crate::serial_println!("[cdp] <- {head}");
+        // The head cuts a frameNavigated inside its URL; the verdict needs the host.
+        if msg.contains("\"method\":\"Page.frameNavigated\"") {
+            if let Some(u) = json_str(&msg, "url") {
+                crate::serial_println!("[cdp] frame navigated: {u}");
+            }
+        }
         let step = CDP_STEP.load(Ordering::Relaxed);
         if msg.contains("\"id\":50") {
             PING_ANS.fetch_add(1, Ordering::Relaxed);
