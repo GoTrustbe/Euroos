@@ -8908,7 +8908,13 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // that is failing in the same run. Chrome stops on "Something went wrong when
     // opening your profile" and nothing in the default log says which store broke;
     // this makes it say so itself, the same way it named mremap.
-    b"--vmodule=web_data_service_wrapper=2,profile_impl=2,profile_manager=2,database=2,statement=2,json_pref_store=2,profile_error_dialog=2,simple_backend_impl=2,simple_index_file=2",
+    // The profile path is quiet since W2; now the TLS path speaks: chrome logs the
+    // BoringSSL reason of a failed handshake at VLOG(1) in ssl_client_socket_impl
+    // ("handshake failed; returned -1, SSL error code 1, net_error -107" plus the
+    // error string), which tells ECH_REJECTED from DECODE_ERROR from a bad
+    // certificate: run 56 lost eleven youtube subresources to
+    // ERR_SSL_PROTOCOL_ERROR with the record walker seeing nothing wrong.
+    b"--vmodule=ssl_client_socket_impl=2,ssl_connect_job=1,transport_connect_job=1,http_stream_factory_job=1,ech_config_list=1,dns_transaction=1",
     b"--no-first-run", b"--no-default-browser-check",
     // The live site's name, pinned the way the boot-test path pins it. On the
     // desktop a navigation to https://euro-os.eu/ ends in ERR_NAME_NOT_RESOLVED
