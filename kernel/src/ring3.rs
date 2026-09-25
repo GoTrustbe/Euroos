@@ -1443,6 +1443,7 @@ pub fn cdp_pump() {
                             let js: &str = match js {
                                 "consent" => "(function(){var b=[...document.querySelectorAll('button')].find(b=>/^(Accept|Alles accepteren|Tout accepter|Alle akzeptieren)/i.test(b.getAttribute('aria-label')||b.textContent));if(b){b.click();return 'clicked '+b.textContent.trim().slice(0,40)}return 'no consent button'})()",
                                 "play" => "(function(){var v=document.querySelector('video');if(!v)return 'no video';v.muted=false;v.play();return 'play '+v.currentSrc.slice(0,60)})()",
+                                "state" => "(function(){var p=performance.getEntriesByType('resource');var pend=p.filter(e=>!e.responseEnd).map(e=>e.name.split('/').slice(-1)[0].slice(0,24));return document.readyState+' scripts '+document.scripts.length+' res '+p.length+' pending '+pend.length+' '+pend.slice(0,6).join(',')+' body '+(document.body?document.body.innerText.slice(0,80):'none')})()",
                                 "video" => "(function(){var v=document.querySelector('video');if(!v)return 'no video';return 'time '+v.currentTime.toFixed(1)+' paused '+v.paused+' ready '+v.readyState+' '+v.videoWidth+'x'+v.videoHeight+' err '+(v.error?v.error.code:0)})()",
                                 other => other,
                             };
@@ -3958,14 +3959,15 @@ static FUTEX_QUEUE: Mutex<alloc::vec::Vec<(u64, usize)>> = Mutex::new(alloc::vec
 /// stall detector watches to catch a many-thread deadlock (no syscall = frozen).
 static SYSCALL_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Per-task last Linux syscall (num, arg1, return) — for the #GP handler to report
-/// what a CHECK-crashing program (chrome IMMEDIATE_CRASH) last did. 64 slots is
-/// enough to index by task id (chrome uses tasks < 64 in these boots).
+/// what a CHECK-crashing program (chrome IMMEDIATE_CRASH) last did. One slot per
+/// scheduler task: a chrome with two renderers runs past task 100 (run 72), and the
+/// census read zeros for every thread above the old 64.
 type SysRec = (core::sync::atomic::AtomicU64, core::sync::atomic::AtomicU64, core::sync::atomic::AtomicU64);
-static LAST_SYS: [SysRec; 64] = [const { (
+static LAST_SYS: [SysRec; 128] = [const { (
     core::sync::atomic::AtomicU64::new(0),
     core::sync::atomic::AtomicU64::new(0),
     core::sync::atomic::AtomicU64::new(0),
-) }; 64];
+) }; 128];
 /// (num, arg1, return) of the last Linux syscall made by task `t`.
 pub fn last_syscall(t: usize) -> (u64, u64, u64) {
     if t >= LAST_SYS.len() {
@@ -10760,12 +10762,24 @@ pub fn dump_threads_now(why: &str) {
     let (mn, ma, mr) = last_syscall(main);
     crate::serial_println!("[threads]   main t{main} {:?}: last={mn}(a1={ma:#x})->{mr:#x}",
         thread_name(main));
-    let threads: alloc::vec::Vec<usize> = { let _g = crate::sched::IfOffGuard::new(); GLIBC_THREADS.lock().clone() };
-    for &t in threads.iter() {
+    // Every task, not only the main process's threads: the child processes (the
+    // renderers, the network service) are where a page stalls. Snapshot the
+    // scheduler under IF=0, print without any lock held.
+    let snap = crate::sched::snapshot_tasks();
+    let names: alloc::vec::Vec<(usize, String)> = { let _g = crate::sched::IfOffGuard::new(); THREAD_NAMES.lock().clone() };
+    for &(t, cr3, state) in snap.iter() {
+        if state == crate::sched::State::Dead { continue; }
         let (n, a, r) = last_syscall(t);
-        crate::serial_println!("[threads]   t{t} {:?}: last={n}(a1={a:#x})->{r:#x}", thread_name(t));
+        let name = names.iter().find(|(x, _)| *x == t).map(|(_, n)| n.as_str()).unwrap_or("?");
+        let st = match state {
+            crate::sched::State::Ready => alloc::format!("Ready"),
+            crate::sched::State::Sleeping(w) => alloc::format!("Sleeping(until {w})"),
+            crate::sched::State::Blocked(c) => alloc::format!("Blocked({c:#x})"),
+            other => alloc::format!("{other:?}"),
+        };
+        crate::serial_println!("[threads]   t{t} cr3={cr3:#x} {name:?}: {st} last={n}(a1={a:#x})->{r:#x}");
     }
-    crate::sched::dump_states();
+    crate::serial_println!("[threads] {} tasks, tick {}", snap.len(), crate::interrupts::ticks());
     dump_rip_profile();
 }
 

@@ -139,6 +139,14 @@ pub fn census_trylock() {
     }
 }
 
+/// Every task as (index, cr3, state), copied out under the lock so a census can
+/// print it without holding the scheduler.
+pub fn snapshot_tasks() -> alloc::vec::Vec<(usize, u64, State)> {
+    let _g = IfOffGuard::new();
+    let s = SCHED.lock();
+    (0..s.count).map(|i| (i, s.tasks[i].cr3, s.tasks[i].state)).collect()
+}
+
 /// Diagnostic: summarise every live task's state (Ready/Sleeping/Blocked/Zombie).
 /// Used by the glibc launcher's stall detector to see a many-thread deadlock.
 pub fn dump_states() {
