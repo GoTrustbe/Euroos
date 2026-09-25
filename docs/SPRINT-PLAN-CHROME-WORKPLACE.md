@@ -342,6 +342,23 @@ Playback does not need it: commit 1bdacb4 adds
 itself, with sound. js:video stays as a best-effort read. Run 81 measures
 picture (screendump progress) and sound (the WAV) with autoplay.
 
+### W12 continued: the refine loop (run 80), then the tmpfs (run 81)
+
+Run 80 (32aabbc): the device opened and refine ran at last, with the client
+offering exactly the ring's config (access 0x9 = MMAP|RW, S16_LE, 2 ch, 48000
+Hz, period 1024, buffer 8192). It then refined the same params ~100 times and
+set_params failed "Rate 48000Hz not available", a wedge. Two faults, both in
+hw_params (f33ba12): the access mask was forced to MMAP alone, so chrome's
+set_access(RW_INTERLEAVED) left an empty space the rate refine read as
+unavailable; and cmask was hardcoded to everything-changed, so libasound never
+converged. Now the access mask is the client's request intersected with
+{MMAP, RW} (both kept), and cmask names only the params this call narrowed.
+
+Run 81 (1bdacb4, autoplay): FAIL after four heartbeats, "No space left on
+device". The SystemRescue root is a ~1.9 GB tmpfs and a dozen ~150 MB run WAVs
+had filled it. The runbook now keeps only the newest previous WAV and the last
+three logs (0cda5dc). Run 82 carries the ALSA fix and autoplay together.
+
 ### W18. the watch page stops loading with nothing pending (run 72)
 
 Run 72 (0b69065, the ALSA gaps closed, consent cookie set at heartbeat 4,
