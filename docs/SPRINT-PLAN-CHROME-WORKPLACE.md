@@ -92,7 +92,25 @@ ServerHello) do. Commit 84ebcd1: a TLS record walker on every port-443 TCP
 socket, both directions, prints the first bad record header per fd with the
 stream offset: a stream corrupted by this stack versus one the peer rejects.
 Run 53's first walker lines were QUIC long headers on UDP 443 (chrome speaks
-QUIC to Google); 6844617 restricts the walker to TCP. Run 54/55 measure.
+QUIC to Google); 6844617 restricts the walker to TCP.
+
+Runs 54 and 55 (QUIC): the page sits in its loading skeleton after ~19
+requests. Run 56, 57 (`--disable-quic`, 18a83ca): eleven and twelve
+subresources fail with ERR_SSL_PROTOCOL_ERROR after a complete server flight,
+walker clean both ways. Run 58: chrome writes no log line for it. Run 59 with
+`--log-net-log`: BoringSSL WRONG_VERSION_NUMBER in tls_record.cc after a
+completed handshake, then PROTOCOL_IS_SHUTDOWN (the NetLog also silenced the
+DevTools channel: one heartbeat answered of 21). Run 60, walker with
+BoringSSL's own rule (0x0303 after the first record): still clean, 12
+failures: the kernel's stream was intact and chrome's was not.
+
+ROOT CAUSE (1fb5901): recvfrom and recvmsg ignored MSG_PEEK. Chrome's
+IsConnectedAndIdle peeks one byte on a pooled connection before reusing it;
+the peek consumed the byte, the next record began one byte late (type 0x03,
+version 0x03LL), WRONG_VERSION_NUMBER on exactly the reused connections
+(youtube's scripts and stylesheets, tracera.eu now and then), never a fresh
+connection's first request. The walker never saw it because it is fed at
+consumption. Run 61 verifies; QUIC returns after that.
 
 ### W6b. run 53's wedge: PIPES taken from the desktop loop
 
