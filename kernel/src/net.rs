@@ -2104,6 +2104,16 @@ pub fn sock_send_nowait(fd: u64, data: &[u8]) -> u64 {
     data.len() as u64
 }
 
+/// Is this descriptor a TCP connection (not UDP, not a listener)? The TLS record
+/// walker needs it: chrome speaks QUIC over UDP to port 443, and a QUIC long
+/// header (c0..cf, version 1) is not a TLS record.
+pub fn sock_is_tcp(fd: u64) -> bool {
+    if !is_sock_fd(fd) {
+        return false;
+    }
+    matches!(&SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize], Some(Sock::Conn(_)))
+}
+
 /// The four-tuple of a connected socket, for getsockname/getpeername:
 /// (local ip, local port, peer ip, peer port). LocalDns reports loopback.
 pub fn sock_names(fd: u64) -> Option<(Ipv4Addr, u16, Ipv4Addr, u16)> {

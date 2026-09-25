@@ -443,8 +443,8 @@ static TLS_WALK: Mutex<[[TlsWalk; 96]; 2]> = Mutex::new([[TLS_WALK_NONE; 96]; 2]
 static TLS_WALK_LINES: AtomicU64 = AtomicU64::new(0);
 fn tls_walk(fd: u64, tx: bool, data: &[u8]) {
     let Some((_, sport, server, dport)) = crate::net::sock_names(fd) else { return };
-    if dport != 443 || fd < 500 || fd >= 596 {
-        return;
+    if dport != 443 || fd < 500 || fd >= 596 || !crate::net::sock_is_tcp(fd) {
+        return; // UDP 443 is QUIC (run 53 flagged its long headers as bad TLS)
     }
     let _g = crate::sched::IfOffGuard::new();
     let mut all = TLS_WALK.lock();
