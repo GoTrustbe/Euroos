@@ -432,6 +432,28 @@ renderer. Getting past youtube's consent needs a navigation (the SOCS cookie
 is set after the first load), which is the same navigation that breaks the
 session, a catch-22. Run 100 tries a re-attach after the same-site reload.
 
+### W19 CONCLUSION: the DevTools session cannot follow a renderer process swap
+
+Run 101 skipped the navigate to the initial page, so the js:play evaluate ran
+on the session that had just answered the viewport evaluate (id 60) on
+youtube's own renderer. It still got no reply, and the audio stayed silent.
+So the reload was never the cause: youtube's own page lifecycle swaps renderer
+processes (its SPA navigations and the consent handling), and our chrome's
+DevTools mojo channel does not carry a command to a renderer that arrived
+through a process swap. A command reaches only the renderer present at the
+moment the session attached; once youtube swaps, every evaluate and every
+Input event is dropped.
+
+This is the wall under the youtube sound. The video PLAYS with picture, the
+ALSA path carries 25 s of audio buffers continuously, and the one missing
+piece is the user gesture that unmutes youtube's autoplay, which cannot be
+delivered because it needs a CDP command on the post-swap renderer. Resolving
+it means fixing chrome's cross-process DevTools IPC (the browser process
+forwarding a renderer-targeted command over the new renderer's mojo channel),
+which is its own deep piece of work, or driving real hardware input (PS/2 or
+USB-HID) that the browser routes internally rather than over DevTools. Both
+are separate efforts; the picture, the sites and the ALSA device all work.
+
 ### W18. the watch page stops loading with nothing pending (run 72)
 
 Run 72 (0b69065, the ALSA gaps closed, consent cookie set at heartbeat 4,
