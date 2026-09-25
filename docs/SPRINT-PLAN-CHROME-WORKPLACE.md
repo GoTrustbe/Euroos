@@ -60,7 +60,16 @@ Belgian keyboard could not type '.', '/' or '-' in the guest: shift+';' was
 ':', ':' had no shifted form, the keys right of the digits were '-' and '='.
 Commit dfcf3c2: , ; : = shift to ? . / + on the bottom row, ) - right of the
 digits with ° _ shifted (French: ) = and ! §). A real-user bug, not only a
-harness one. Run 51 verifies through the same typed command.
+harness one. Run 51 typed `chrome httpswww.youtube.com httpseuro-os.eu`: dot
+and hyphen right, colon and slash still missing, because QEMU names the key
+after comma "dot" and the harness asked for "period" (8201b79). Run 52 is the
+first with both fixes.
+
+Run 50 also showed two fork children dying on glibc's abort() hlt: chrome
+runs `xdg-settings` for its default-browser check, the child re-executed
+/pack/chrome under that name, setsid was ENOSYS, and tgkill returned. Commit
+69e9c84: execve of a program that is not here is ENOENT, a fatal tgkill ends
+the process, setsid answers.
 
 ### W12. sound: chrome's audio path needs /dev/snd
 
