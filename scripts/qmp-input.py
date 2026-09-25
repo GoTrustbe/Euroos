@@ -62,7 +62,7 @@ AZERTY.update({"a": ("q", False), "A": ("q", True), "q": ("a", False), "Q": ("a"
                "m": ("semicolon", False), "M": ("semicolon", True)})
 for i, c in enumerate("1234567890"):
     AZERTY[c] = (c, True)
-AZERTY.update({" ": ("spc", False), ":": ("period", False), "/": ("period", True),
+AZERTY.update({" ": ("spc", False), ":": ("dot", False), "/": ("dot", True),
                ".": ("comma", True), ";": ("comma", False), ",": ("m", False), "?": ("m", True),
                "-": ("equal", False), "_": ("equal", True), "=": ("slash", False), "+": ("slash", True),
                "&": ("1", False), "!": ("8", False), "(": ("5", False), ")": ("minus", False)})
