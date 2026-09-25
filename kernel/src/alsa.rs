@@ -191,11 +191,16 @@ fn hw_params(arg: u64, commit: bool) -> u64 {
         log("hw_params: access/format not offered by the client");
         return EINVAL;
     }
-    // ACCESS: intersect the client's request with {MMAP_INTERLEAVED, RW_INTERLEAVED}.
+    // ACCESS: RW_INTERLEAVED only. chrome writes with snd_pcm_writei, and
+    // advertising MMAP sent libasound down its mmap path, where snd_pcm_avail_update
+    // calls the XRUN ioctl (0x4148) we do not serve -> "Failed querying available
+    // frames" and no audio (run 85). RW keeps it on writei + SYNC_PTR/STATUS, which
+    // the kernel serves. (mmap_ok is still required above so a client that offers
+    // only MMAP is not rejected outright, but we do not select it.)
+    let _ = mmap_ok;
     {
-        let keep = ((mmap_ok as u32) << 0) | ((rw_ok as u32) << 3);
         for b in &mut buf[4..4 + 32] { *b = 0; }
-        buf[4..8].copy_from_slice(&keep.to_le_bytes());
+        buf[4..8].copy_from_slice(&(1u32 << 3).to_le_bytes());
     }
     put_mask(&mut buf, 1, 2);
     put_mask(&mut buf, 2, 0);
@@ -234,9 +239,8 @@ fn hw_params(arg: u64, commit: bool) -> u64 {
         if get_interval(&buf, i) != in_ivals[i] { cmask |= 1 << (i + 8); }
     }
     buf[516..520].copy_from_slice(&cmask.to_le_bytes());
-    // info: MMAP | MMAP_VALID | INTERLEAVED | BLOCK_TRANSFER (0x10000, not 0x10
-    // which is BATCH).
-    buf[520..524].copy_from_slice(&(0x1u32 | 0x2 | 0x0000_0100 | 0x0001_0000).to_le_bytes());
+    // info: INTERLEAVED | BLOCK_TRANSFER (0x10000). NOT MMAP: see the access note.
+    buf[520..524].copy_from_slice(&(0x0000_0100u32 | 0x0001_0000).to_le_bytes());
     buf[524..528].copy_from_slice(&16u32.to_le_bytes()); // msbits
     buf[528..532].copy_from_slice(&48000u32.to_le_bytes()); // rate_num
     buf[532..536].copy_from_slice(&1u32.to_le_bytes()); // rate_den
@@ -424,6 +428,8 @@ pub fn pcm_ioctl(cmd: u64, arg: u64) -> u64 {
             b[20..24].copy_from_slice(&32u32.to_le_bytes());
             if crate::ring3::copy_to_user(arg, &b) { 0 } else { EFAULT }
         }
+        0x4148 => 0, // XRUN: acknowledge; the RW path recovers by writing again
+        0x4149 | 0x4146 => 0, // FORWARD, REWIND: no partial rewind, accept as no-op
         other => { log(&alloc::format!("pcm ioctl {other:#x} unsupported")); ENOTTY }
     }
 }
