@@ -1298,7 +1298,8 @@ pub fn cdp_pump() {
                     if d > 0 { deltas.push((d, t)); }
                 }
                 deltas.sort_unstable_by(|a, b| b.cmp(a));
-                let mut line = alloc::format!("[cpu] {total} ticks since last heartbeat:");
+                let (hu, hf) = crate::allocator::stats();
+                let mut line = alloc::format!("[cpu] {total} ticks since last heartbeat; heap {} MiB used, {} MiB free;", hu / (1024 * 1024), hf / (1024 * 1024));
                 for &(d, t) in deltas.iter().take(6) {
                     line.push_str(&alloc::format!(" t{t} {:?} {d}", if t == 0 { String::from("desktop/idle") } else { thread_name(t) }));
                 }
@@ -9019,6 +9020,12 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // (run 52); one transport at a time, and the TLS record walker judges TCP.
     // QUIC returns once TCP/TLS is clean (workplace sprint, W13).
     b"--disable-quic",
+    // The "disk" behind /tmp/cr is the kernel heap (384 MiB), and the Simple Cache
+    // works since the ENOENT fix: run 63 panicked on a 2 MiB allocation with
+    // youtube's resources filling it. A session cache of 16 MiB each is plenty
+    // for a RAM-backed profile.
+    b"--disk-cache-size=16777216",
+    b"--media-cache-size=16777216",
     // The NetLog (--log-net-log=/tmp/cr/netlog.json, printed by the kernel at
     // heartbeat 14 as [netlog]) named run 59's failure: BoringSSL
     // WRONG_VERSION_NUMBER on a record after the handshake, then
