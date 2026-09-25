@@ -12660,6 +12660,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     Some(d) => d,
                     None => return (-11i64) as u64,
                 }
+            } else if a4 & 2 != 0 {
+                crate::net::sock_peek_nowait(a1, a3 as usize) // MSG_PEEK: nothing consumed
             } else {
                 inet_recv(a1, a3 as usize)
             };
@@ -12776,6 +12778,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     Some(d) => d,
                     None => return (-11i64) as u64, // -EAGAIN: asked not to wait
                 }
+            } else if a3 & 2 != 0 {
+                crate::net::sock_peek_nowait(a1, cap) // MSG_PEEK: nothing consumed
             } else {
                 inet_recv(a1, cap)
             };

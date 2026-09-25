@@ -1095,6 +1095,12 @@ impl TcpConn {
             }
         }
     }
+    /// MSG_PEEK: the same bytes recv_nowait would return, left in place.
+    pub fn peek_nowait(&mut self, max: usize) -> alloc::vec::Vec<u8> {
+        self.pump_nowait();
+        let n = max.min(self.rx.len());
+        self.rx.iter().take(n).copied().collect()
+    }
     /// Non-blocking read: whatever is buffered (after a no-wait pump), up to `max`.
     pub fn recv_nowait(&mut self, max: usize) -> alloc::vec::Vec<u8> {
         self.pump_nowait();
@@ -2066,6 +2072,41 @@ pub fn sock_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
 /// pressure at all. UDP the same way for the resolver. POSIX says a non-blocking
 /// read that has nothing returns EAGAIN, and the callers already turn an empty
 /// result on a live socket into exactly that.
+/// recv with MSG_PEEK: look at the bytes without taking them. Chrome's
+/// IsConnectedAndIdle peeks one byte on a pooled connection before reusing it;
+/// served as a plain read, that byte was gone and the next TLS record started
+/// one byte late (type 0x03, version 0x03LL): BoringSSL's WRONG_VERSION_NUMBER on
+/// exactly the reused connections (youtube's subresources, tracera now and then),
+/// while a fresh connection's first request worked. Run 59's NetLog named it.
+pub fn sock_peek_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
+    if !is_sock_fd(fd) {
+        return alloc::vec::Vec::new();
+    }
+    let i = (fd - SOCK_FD_BASE) as usize;
+    let mut t = SOCKETS.lock();
+    match &mut t[i] {
+        Some(Sock::Conn(c)) => c.peek_nowait(max),
+        Some(Sock::Udp(u)) => {
+            // A datagram cannot be put back: take it, then keep it for the read.
+            let d = u.recv_nowait();
+            if !d.is_empty() {
+                udpq_unread(u.sport, u.server, &d);
+            }
+            let mut d = d;
+            d.truncate(max);
+            d
+        }
+        Some(Sock::LocalDns { rx }) => rx.front().map(|d| d.iter().take(max).copied().collect()).unwrap_or_default(),
+        _ => alloc::vec::Vec::new(),
+    }
+}
+/// Put a datagram back at the head of its port's queue (a peek).
+fn udpq_unread(sport: u16, server: Ipv4Addr, d: &[u8]) {
+    let mut t = UDPQ.lock();
+    if let Some((_, q)) = t.iter_mut().find(|(p, _)| *p == sport) {
+        q.push_front((server, d.to_vec()));
+    }
+}
 pub fn sock_recv_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
     if !is_sock_fd(fd) {
         return alloc::vec::Vec::new();
