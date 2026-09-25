@@ -981,6 +981,27 @@ static CDP_SESSION: Mutex<String> = Mutex::new(String::new());
 /// Terminal). Empty = the defaults: the argv page again at the fourth heartbeat, the
 /// live site at the tenth. Written and read by the desktop task only.
 static CHROME_URLS: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new());
+/// The targetId of the first "type":"page" target in a Target.getTargets result.
+fn json_first_page_target(msg: &str) -> Option<String> {
+    // targetInfos is a flat list of {targetId, type, ...}; find the object whose
+    // "type" is "page" and return its targetId. A simple scan avoids a JSON parser.
+    let mut rest = msg;
+    while let Some(i) = rest.find("\"targetId\":\"") {
+        let after = &rest[i + 12..];
+        let end = after.find('"')?;
+        let tid = &after[..end];
+        // Look ahead in this object for the type field before the next targetId.
+        let tail = &after[end..];
+        let next = tail.find("\"targetId\"").unwrap_or(tail.len());
+        let window = &tail[..next];
+        if window.contains("\"type\":\"page\"") {
+            return Some(String::from(tid));
+        }
+        rest = tail;
+    }
+    None
+}
+
 pub fn set_chrome_urls(urls: &[String]) {
     *CHROME_URLS.lock() = urls.to_vec();
 }
@@ -1454,6 +1475,9 @@ pub fn cdp_pump() {
                             crate::serial_println!("[cdp] setting the SOCS consent cookie (heartbeat {sent}, {}/{})", i + 1, list.len());
                             cdp_send(&alloc::format!(
                                 "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Network.setCookie\",\"params\":{{\"name\":\"SOCS\",\"value\":\"CAI\",\"domain\":\".youtube.com\",\"path\":\"/\",\"secure\":true,\"sameSite\":\"Lax\"}}}}", 60 + i));
+                        } else if url == "reattach" {
+                            crate::serial_println!("[cdp] re-attaching the session to the current renderer (heartbeat {sent}, {}/{})", i + 1, list.len());
+                            cdp_send("{\"id\":70,\"method\":\"Target.getTargets\"}");
                         } else if let Some(pt) = url.strip_prefix("click:") {
                             // A real click, via Input.dispatchMouseEvent (a BROWSER-level
                             // command that chrome routes to whatever renderer currently
@@ -1824,6 +1848,23 @@ pub fn cdp_pump() {
     while let Some(msg) = cdp_next_msg() {
         let head: String = msg.chars().take(160).collect();
         crate::serial_println!("[cdp] <- {head}");
+        // Re-attach flow (W19): after a cross-process navigation the page session
+        // bound to the previous renderer stops carrying commands to the swapped-in
+        // renderer, so a `reattach` step asks for the targets again (id 70) and
+        // attaches afresh (id 71) to get a session bound to the CURRENT renderer.
+        if msg.contains("\"id\":70") {
+            // First page-type target in the list.
+            if let Some(t) = json_first_page_target(&msg) {
+                cdp_send(&alloc::format!(
+                    "{{\"id\":71,\"method\":\"Target.attachToTarget\",\"params\":{{\"targetId\":\"{t}\",\"flatten\":true}}}}"));
+            }
+        } else if msg.contains("\"id\":71") {
+            if let Some(sid) = json_str(&msg, "sessionId") {
+                *CDP_SESSION.lock() = String::from(sid);
+                cdp_send(&alloc::format!("{{\"id\":6,\"sessionId\":\"{sid}\",\"method\":\"Page.enable\"}}"));
+                crate::serial_println!("[cdp] re-attached: session now {sid}");
+            }
+        }
         // The head cuts a frameNavigated inside its URL; the verdict needs the host.
         if msg.contains("\"method\":\"Page.frameNavigated\"") {
             if let Some(u) = json_str(&msg, "url") {
