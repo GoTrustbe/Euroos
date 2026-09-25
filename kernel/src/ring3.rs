@@ -3641,7 +3641,9 @@ pub fn set_stdout_redirect(path: Option<&str>, append: bool) {
 
 /// Append bytes to the stdout redirection file (internal, for write/writev).
 fn redirect_append(fi: usize, bytes: &[u8]) {
-    FILES.lock()[fi].1.to_mut().extend_from_slice(bytes);
+    if let Some(f) = FILES.lock().get_mut(fi) {
+        f.1.to_mut().extend_from_slice(bytes);
+    }
 }
 
 /// Standard input (fd 0): content + read position. The shell fills this with the
@@ -5743,7 +5745,9 @@ fn vfs_size(fd: usize) -> Option<usize> {
     if fi >= DISK_FI_BASE {
         return DISK_FILES.lock().get(fi - DISK_FI_BASE).map(|&(_, _, _, size)| size as usize);
     }
-    Some(FILES.lock()[fi].1.len())
+    // .get, not [fi]: a stale or out-of-range file index (fi == FILES.len() panicked
+    // vfs_size in run 84, wedging the boot) reads as "no size" instead of a crash.
+    FILES.lock().get(fi).map(|(_, d)| d.len())
 }
 
 /// lseek(fd, offset, whence) -> new offset (u64::MAX on error).
