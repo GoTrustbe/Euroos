@@ -81,6 +81,30 @@ until the runbook adds `-device intel-hda -device hda-duplex`). Sound on
 EuroOS therefore means an ALSA-compatible /dev/snd on top of that driver:
 a bounded protocol, done after the video path renders (W10).
 
+### W13. youtube.com: the document loads, its scripts and stylesheets fail TLS
+
+Run 52 (URLs intact): Page.frameNavigated to youtube.com, loadEventFired at
+124 s, and twelve subresources (scripts, a stylesheet) with
+net::ERR_SSL_PROTOCOL_ERROR; the screendump is YouTube's skeleton (menu icon,
+three grey circles). The same error tracera.eu showed now and then. euro-os.eu
+(nginx, no MLKEM) never fails; Google's CDNs and Caddy (X25519MLKEM768, bigger
+ServerHello) do. Commit 84ebcd1: a TLS record walker on every port-443 TCP
+socket, both directions, prints the first bad record header per fd with the
+stream offset: a stream corrupted by this stack versus one the peer rejects.
+Run 53's first walker lines were QUIC long headers on UDP 443 (chrome speaks
+QUIC to Google); 6844617 restricts the walker to TCP. Run 54/55 measure.
+
+### W6b. run 53's wedge: PIPES taken from the desktop loop
+
+The NMI probe, symbolized against the exact build (a worktree link of
+84ebcd1 with the main tree's userland artifacts): chrome's sandbox_ipc_thread
+in ring3::epoll_fd_ready+0x215 spinning on ring3::PIPES with interrupts off.
+The DevTools pipes are driven from task 0 with interrupts enabled (cdp_send,
+cdp_next_msg), and a preempted holder blocks every pipe syscall forever.
+Commit 09b59c1: all acquisitions go through pipes_lock() (interrupts off
+first). Rule, now enforced for PIPES as it was for SOCKETS: a ring3 lock that
+the supervising loop touches is taken under IfOffGuard everywhere.
+
 ## Exit criteria
 
 1. Every site of the matrix loads and renders (screendump), three runs in a
