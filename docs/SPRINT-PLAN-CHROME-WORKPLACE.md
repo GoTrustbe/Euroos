@@ -81,6 +81,24 @@ until the runbook adds `-device intel-hda -device hda-duplex`). Sound on
 EuroOS therefore means an ALSA-compatible /dev/snd on top of that driver:
 a bounded protocol, done after the video path renders (W10).
 
+Built (455b38e): kernel/src/alsa.rs answers the hw plugin's ioctls on
+/dev/snd/pcmC0D0p (PVERSION, INFO, HW_REFINE/HW_PARAMS, SW_PARAMS, PREPARE,
+START, DROP, DRAIN, PAUSE, WRITEI_FRAMES, STATUS, DELAY, HWSYNC, SYNC_PTR,
+CHANNEL_INFO) and a control node (card info, one playback device, no mixer)
+over the HDA ring at 48 kHz/16-bit/stereo: hw_ptr from the link position,
+appl_ptr from the client, consumed frames zeroed behind the cursor.
+RW_INTERLEAVED only; libasound falls back to SYNC_PTR without mmap. Chrome
+gets --alsa-output-device=plughw:0,0. The runbook attaches intel-hda with
+hda-duplex and captures the codec's output to $LOG.wav on the NUC (56f8bd3).
+Run 70 plays a video with it; the WAV is the proof of sound.
+
+### Run 68: the never-delivered bodies were not stuck
+
+The census at heartbeat 12 (86d93b2): zero AF_UNIX queues with unread bytes,
+every IO thread parked in epoll_wait, load event fired, 38 requests with 35
+done, no fault. The three long-lived requests are long-lived by design (the
+sign-in check, a preload); nothing waits in the kernel. Closed.
+
 ### W13. youtube.com: the document loads, its scripts and stylesheets fail TLS
 
 Run 52 (URLs intact): Page.frameNavigated to youtube.com, loadEventFired at
