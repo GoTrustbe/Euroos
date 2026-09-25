@@ -131,8 +131,15 @@ fn base(layout: Layout, sc: u8) -> Option<char> {
             BeAzerty | FrAzerty => 'à',
             _ => '0',
         },
-        0x0C => '-',
-        0x0D => '=',
+        // Right of the digits: QWERTY - = ; Belgian AZERTY ) - ; French AZERTY ) = .
+        0x0C => match layout {
+            BeAzerty | FrAzerty => ')',
+            _ => '-',
+        },
+        0x0D => match layout {
+            BeAzerty => '-',
+            _ => '=',
+        },
 
         // Top letter row: QWERTY→ q w e r t y u i o p ; AZERTY→ a z e r t y u i o p ;
         // QWERTZ swaps y↔z.
@@ -203,7 +210,8 @@ fn base(layout: Layout, sc: u8) -> Option<char> {
             _ => '.',
         },
         0x35 => match layout {
-            BeAzerty | FrAzerty => '=',
+            BeAzerty => '=',
+            FrAzerty => '!',
             _ => '/',
         },
         _ => return None,
@@ -221,6 +229,24 @@ fn shifted(layout: Layout, sc: u8, base_ch: char) -> char {
     if matches!(layout, BeAzerty | FrAzerty) {
         if let Some(d) = azerty_shift_digit(sc) {
             return d;
+        }
+        // The AZERTY punctuation keys have their own shifted forms: on the bottom
+        // row , ; : = (BE) become ? . / + and right of the digits ) - become ° _.
+        // These are what a Belgian keyboard types for a URL's dot and slash; the
+        // US table below gave ':' for shift+';' and nothing usable for '.' or '/'.
+        let be = match (layout, sc) {
+            (_, 0x32) => Some('?'),
+            (_, 0x33) => Some('.'),
+            (_, 0x34) => Some('/'),
+            (BeAzerty, 0x35) => Some('+'),
+            (FrAzerty, 0x35) => Some('§'),
+            (_, 0x0C) => Some('°'),
+            (BeAzerty, 0x0D) => Some('_'),
+            (FrAzerty, 0x0D) => Some('+'),
+            _ => None,
+        };
+        if let Some(c) = be {
+            return c;
         }
     }
     // Common US-ish shifted punctuation (also fine for QWERTZ letters).
@@ -305,6 +331,21 @@ mod tests {
         assert_eq!(translate(Layout::UsQwerty, 0x10, true), Some('Q'));
         assert_eq!(translate(Layout::UsQwerty, 0x02, false), Some('1'));
         assert_eq!(translate(Layout::UsQwerty, 0x02, true), Some('!'));
+    }
+
+    #[test]
+    fn belgian_azerty_punctuation() {
+        // What a Belgian keyboard types for the characters of a URL.
+        assert_eq!(translate(Layout::BeAzerty, 0x33, true), Some('.'));
+        assert_eq!(translate(Layout::BeAzerty, 0x34, false), Some(':'));
+        assert_eq!(translate(Layout::BeAzerty, 0x34, true), Some('/'));
+        assert_eq!(translate(Layout::BeAzerty, 0x0D, false), Some('-'));
+        assert_eq!(translate(Layout::BeAzerty, 0x0D, true), Some('_'));
+        assert_eq!(translate(Layout::BeAzerty, 0x32, true), Some('?'));
+        assert_eq!(translate(Layout::BeAzerty, 0x35, false), Some('='));
+        assert_eq!(translate(Layout::BeAzerty, 0x0C, false), Some(')'));
+        assert_eq!(translate(Layout::UsQwerty, 0x34, false), Some('.'));
+        assert_eq!(translate(Layout::UsQwerty, 0x0C, false), Some('-'));
     }
 
     #[test]
