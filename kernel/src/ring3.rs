@@ -1303,6 +1303,37 @@ pub fn cdp_pump() {
                     line.push_str(&alloc::format!(" t{t} {:?} {d}", if t == 0 { String::from("desktop/idle") } else { thread_name(t) }));
                 }
                 crate::serial_println!("{line}");
+                // The profiled task of the interval that just ended: where its samples
+                // landed (code pages, named by what backs them: the exe or a library
+                // with the offset, or anon = JIT), its last syscall and how many it
+                // made. Then aim the sampler at this interval's busiest non-desktop
+                // task for the next one. Run 62: CrRendererMain took 65% of the CPU
+                // for the whole run after loading youtube, which is a spin or a JIT
+                // that is not there; this names it.
+                let prof = PROFILE_TASK.load(Ordering::Relaxed);
+                if prof != usize::MAX {
+                    let mut pages: alloc::vec::Vec<(u64, u64)> = (0..RIP_PAGES)
+                        .map(|i| (RIP_PAGE_HITS[i].load(Ordering::Relaxed), RIP_PAGE[i].load(Ordering::Relaxed)))
+                        .filter(|&(h, p)| h > 0 && p != 0).collect();
+                    pages.sort_unstable_by(|a, b| b.cmp(a));
+                    let total_s = RIP_TOTAL.load(Ordering::Relaxed);
+                    let (sn, sa1, sr) = last_syscall(prof);
+                    let sc = if prof < 128 { SYSCALLS_PER_TASK[prof].load(Ordering::Relaxed) } else { 0 };
+                    static LAST_SC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+                    let scd = sc.wrapping_sub(LAST_SC.swap(sc, Ordering::Relaxed));
+                    let mut pl = alloc::format!("[prof] t{prof} {:?}: {total_s} samples, {scd} syscalls, last={sn}(a1={sa1:#x})->{sr:#x};", thread_name(prof));
+                    for &(h, pg) in pages.iter().take(5) {
+                        pl.push_str(&alloc::format!(" {h}x {}", demand_addr_origin(pg)));
+                    }
+                    crate::serial_println!("{pl}");
+                }
+                let busiest = deltas.iter().find(|&&(_, t)| t != 0).map(|&(_, t)| t).unwrap_or(usize::MAX);
+                for i in 0..RIP_PAGES {
+                    RIP_PAGE[i].store(0, Ordering::Relaxed);
+                    RIP_PAGE_HITS[i].store(0, Ordering::Relaxed);
+                }
+                RIP_TOTAL.store(0, Ordering::Relaxed);
+                PROFILE_TASK.store(busiest, Ordering::Relaxed);
             }
             // One re-navigation, after the fourth heartbeat (~2 min of guest time).
             // The startup tab's navigation to the argv URL is lost when the profile
@@ -10502,11 +10533,17 @@ pub fn task_ticks(task: usize) -> u64 {
     if task < MAX_SAMPLED_TASKS { TASK_TICKS[task].load(Ordering::Relaxed) } else { 0 }
 }
 
+/// The task the tick sampler profiles: the busiest task of the previous
+/// heartbeat interval (set by the [cpu] ledger), the browser main when unset.
+pub static PROFILE_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+
 pub fn sample_user_rip(task: usize, rip: u64) {
     if task < MAX_SAMPLED_TASKS {
         TASK_TICKS[task].fetch_add(1, Ordering::Relaxed);
     }
-    if task != GLIBC_MAIN_TASK.load(Ordering::Relaxed) {
+    let target = PROFILE_TASK.load(Ordering::Relaxed);
+    let want = if target == usize::MAX { GLIBC_MAIN_TASK.load(Ordering::Relaxed) } else { target };
+    if task != want {
         return;
     }
     let i = RIP_IDX.fetch_add(1, Ordering::Relaxed) % RIP_SAMPLES;
