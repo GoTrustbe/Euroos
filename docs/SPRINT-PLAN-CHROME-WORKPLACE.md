@@ -51,6 +51,26 @@ refused fork, no exhausted pool, no wedge.
 ### W10. site matrix: youtube.com (run 50 onwards)
 
 Run 50 is the first: `chrome https://www.youtube.com/ https://euro-os.eu/`.
+The guest read `chrome httpswww:youtube:com httpseuro=os:eu`: see W11.
+
+### W11. found by typing a URL: the Belgian AZERTY table was wrong
+
+eurokeymap gave the AZERTY punctuation keys their US shifted forms, so a
+Belgian keyboard could not type '.', '/' or '-' in the guest: shift+';' was
+':', ':' had no shifted form, the keys right of the digits were '-' and '='.
+Commit dfcf3c2: , ; : = shift to ? . / + on the bottom row, ) - right of the
+digits with ° _ shifted (French: ) = and ! §). A real-user bug, not only a
+harness one. Run 51 verifies through the same typed command.
+
+### W12. sound: chrome's audio path needs /dev/snd
+
+The pack carries libasound.so.2 (and libpulse, libpipewire); chrome dlopens
+libasound and opens /dev/snd/pcmC0D0p through the ALSA hw plugin's ioctls
+(HW_PARAMS, PREPARE, WRITEI/mmap, STATUS). EuroOS has an HDA driver
+(kernel/src/hda.rs, "[hda] no HD-Audio controller found" on the NUC guest
+until the runbook adds `-device intel-hda -device hda-duplex`). Sound on
+EuroOS therefore means an ALSA-compatible /dev/snd on top of that driver:
+a bounded protocol, done after the video path renders (W10).
 
 ## Exit criteria
 
