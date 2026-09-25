@@ -1427,7 +1427,14 @@ pub fn cdp_pump() {
                         NAV_ANS.store(PING_ANS.load(Ordering::Relaxed), Ordering::Relaxed);
                         NAV_DUMPED.store(false, Ordering::Relaxed);
                         let url = &list[i];
-                        if let Some(js) = url.strip_prefix("js:") {
+                        if url == "cdp:socs" {
+                            // YouTube's consent, given as the SOCS cookie (what yt-dlp sends):
+                            // accepting the dialog by click reloads into the dialog again here,
+                            // and a video behind it never plays. Set before the watch page.
+                            crate::serial_println!("[cdp] setting the SOCS consent cookie (heartbeat {sent}, {}/{})", i + 1, list.len());
+                            cdp_send(&alloc::format!(
+                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Network.setCookie\",\"params\":{{\"name\":\"SOCS\",\"value\":\"CAI\",\"domain\":\".youtube.com\",\"path\":\"/\",\"secure\":true,\"sameSite\":\"Lax\"}}}}", 60 + i));
+                        } else if let Some(js) = url.strip_prefix("js:") {
                             // A `js:NAME` step runs in the page instead of navigating. The
                             // names stand for expressions that the Terminal cannot carry (the
                             // runbook types the command through a be-azerty keyboard map with
