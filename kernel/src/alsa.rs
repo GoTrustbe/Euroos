@@ -423,3 +423,51 @@ pub fn pcm_writable() -> bool {
     sync(&mut p);
     p.state == STATE_OPEN || p.state == STATE_SETUP || avail(&p) >= p.avail_min || p.state == STATE_XRUN
 }
+
+/// A minimal alsa.conf for libasound (see the registration in the chrome setup).
+pub const ALSA_CONF: &[u8] = b"defaults.pcm.card 0
+defaults.pcm.device 0
+defaults.pcm.subdevice -1
+defaults.ctl.card 0
+pcm.hw {
+	@args [ CARD DEV SUBDEV ]
+	@args.CARD { type string default 0 }
+	@args.DEV { type integer default 0 }
+	@args.SUBDEV { type integer default -1 }
+	type hw
+	card $CARD
+	device $DEV
+	subdevice $SUBDEV
+}
+pcm.plughw {
+	@args [ CARD DEV SUBDEV ]
+	@args.CARD { type string default 0 }
+	@args.DEV { type integer default 0 }
+	@args.SUBDEV { type integer default -1 }
+	type plug
+	slave.pcm {
+		type hw
+		card $CARD
+		device $DEV
+		subdevice $SUBDEV
+	}
+}
+pcm.default {
+	type plug
+	slave.pcm {
+		type hw
+		card 0
+		device 0
+	}
+}
+ctl.hw {
+	@args [ CARD ]
+	@args.CARD { type string default 0 }
+	type hw
+	card $CARD
+}
+ctl.default {
+	type hw
+	card 0
+}
+";

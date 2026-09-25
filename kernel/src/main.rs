@@ -2429,14 +2429,6 @@ fn main() -> Status {
             // fresh scan of three font files is slow but correct, and the cache it
             // writes to /var/cache/fontconfig is then ITS OWN format.
             ring3::register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n</fontconfig>\n".to_vec());
-            // libasound reads /usr/share/alsa/alsa.conf before it opens any PCM;
-            // without it every name is "Unknown PCM" (run 74: chrome's audio
-            // manager fell back to ALSA, asked for plughw:0,0, and got nothing, so
-            // the kernel's /dev/snd device was never opened). The distribution
-            // file is 700 lines of hooks and card includes; this defines the two
-            // PCM types chrome uses (hw and plug over hw), the hw control, and the
-            // defaults, all on card 0 device 0 = the HDA output kernel::alsa serves.
-            ring3::register_file_static("/usr/share/alsa/alsa.conf", ALSA_CONF);
 
             // /dev special files: chrome's fork+exec child redirects its stdio to
             // /dev/null before execve, and libc/nss read /dev/urandom for entropy.
@@ -6515,50 +6507,3 @@ fn panic(info: &PanicInfo) -> ! {
     }
 }
 
-/// A minimal alsa.conf for libasound (see the registration in the chrome setup).
-const ALSA_CONF: &[u8] = b"defaults.pcm.card 0
-defaults.pcm.device 0
-defaults.pcm.subdevice -1
-defaults.ctl.card 0
-pcm.hw {
-	@args [ CARD DEV SUBDEV ]
-	@args.CARD { type string default 0 }
-	@args.DEV { type integer default 0 }
-	@args.SUBDEV { type integer default -1 }
-	type hw
-	card $CARD
-	device $DEV
-	subdevice $SUBDEV
-}
-pcm.plughw {
-	@args [ CARD DEV SUBDEV ]
-	@args.CARD { type string default 0 }
-	@args.DEV { type integer default 0 }
-	@args.SUBDEV { type integer default -1 }
-	type plug
-	slave.pcm {
-		type hw
-		card $CARD
-		device $DEV
-		subdevice $SUBDEV
-	}
-}
-pcm.default {
-	type plug
-	slave.pcm {
-		type hw
-		card 0
-		device 0
-	}
-}
-ctl.hw {
-	@args [ CARD ]
-	@args.CARD { type string default 0 }
-	type hw
-	card $CARD
-}
-ctl.default {
-	type hw
-	card 0
-}
-";

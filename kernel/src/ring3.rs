@@ -9100,6 +9100,14 @@ pub fn chrome_stage_files() {
     }
     register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", fc_dejavu_cache());
     register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-11", fc_dejavu_cache11());
+    // libasound reads /usr/share/alsa/alsa.conf before it opens any PCM; without
+    // it every name is "Unknown PCM" (runs 74 and 76: chrome's audio manager fell
+    // back to ALSA, asked for plughw:0,0, got ENOENT, and the kernel's /dev/snd
+    // device was never opened). The distribution file is 700 lines of hooks and
+    // card includes; this defines the two PCM types chrome uses (hw and plug over
+    // hw), the hw control and the defaults, all on card 0 device 0 = the HDA
+    // output kernel::alsa serves.
+    register_file_static("/usr/share/alsa/alsa.conf", crate::alsa::ALSA_CONF);
     register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n</fontconfig>\n".to_vec());
     register_device_files();
     register_file("/tmp/euro.html", include_bytes!("euro_page.html").to_vec());
