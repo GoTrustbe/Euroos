@@ -92,6 +92,17 @@ gets --alsa-output-device=plughw:0,0. The runbook attaches intel-hda with
 hda-duplex and captures the codec's output to $LOG.wav on the NUC (56f8bd3).
 Run 70 plays a video with it; the WAV is the proof of sound.
 
+Run 70 (455b38e, audio codec attached): the HDA controller and codec come
+up, the stream runs, chrome logs "Falling back to ALSA for audio output", and
+the captured WAV (116 MB for the run) carries the kernel's boot self-test
+tone at the same level at 0 s and at 300 s: the capture path is proven end
+to end, and the tone loops in the ring until something overwrites it (zeroed
+after the test since 8ae0f25). No [alsa] line: chrome opened no output
+stream, since the video never played (the consent sequence of run 69). The
+run also refused a fork: eleven forks, three recycled, eight children alive
+against seven arenas; 8ae0f25 puts a 2176 MiB pool first on a 6144M guest.
+Runs 71 to 73 carry the cookie-based consent (cdp:socs) and the watch page.
+
 ### Run 68: the never-delivered bodies were not stuck
 
 The census at heartbeat 12 (86d93b2): zero AF_UNIX queues with unread bytes,
