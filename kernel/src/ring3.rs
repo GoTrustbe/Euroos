@@ -9169,9 +9169,14 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // DevTools. The muted-autoplay policy would start it silent; this one keeps
     // the audio.
     b"--autoplay-policy=no-user-gesture-required",
-    // Sound through the ALSA hw plugin straight onto /dev/snd/pcmC0D0p (plug
-    // resamples to the ring's 48 kHz); no dmix, no PulseAudio (W12).
-    b"--alsa-output-device=plughw:0,0",
+    // Sound straight onto /dev/snd/pcmC0D0p as hw:0,0, NOT plughw. The plug
+    // plugin refuses the device ("Rate 48000Hz not available") even though our
+    // refine returns exactly 48 kHz S16 stereo: its rate/format convergence over
+    // a single-config slave does not settle (runs 78-83). hw talks to the device
+    // directly, and chrome's writei path lands in the ring, which we serve. The
+    // AudioContext already runs at 48 kHz, so no resampling is needed. No dmix,
+    // no PulseAudio (W12).
+    b"--alsa-output-device=hw:0,0",
     // The "disk" behind /tmp/cr is the kernel heap (384 MiB), and the Simple Cache
     // works since the ENOENT fix: run 63 panicked on a 2 MiB allocation with
     // youtube's resources filling it. A session cache of 16 MiB each is plenty

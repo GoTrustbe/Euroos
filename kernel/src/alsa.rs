@@ -234,8 +234,9 @@ fn hw_params(arg: u64, commit: bool) -> u64 {
         if get_interval(&buf, i) != in_ivals[i] { cmask |= 1 << (i + 8); }
     }
     buf[516..520].copy_from_slice(&cmask.to_le_bytes());
-    // info: MMAP | MMAP_VALID | INTERLEAVED | BLOCK_TRANSFER.
-    buf[520..524].copy_from_slice(&(0x1u32 | 0x2 | 0x0000_0100 | 0x0000_0010).to_le_bytes());
+    // info: MMAP | MMAP_VALID | INTERLEAVED | BLOCK_TRANSFER (0x10000, not 0x10
+    // which is BATCH).
+    buf[520..524].copy_from_slice(&(0x1u32 | 0x2 | 0x0000_0100 | 0x0001_0000).to_le_bytes());
     buf[524..528].copy_from_slice(&16u32.to_le_bytes()); // msbits
     buf[528..532].copy_from_slice(&48000u32.to_le_bytes()); // rate_num
     buf[532..536].copy_from_slice(&1u32.to_le_bytes()); // rate_den
