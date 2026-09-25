@@ -322,7 +322,8 @@ const ENOTTY: u64 = (-25i64) as u64;
 pub fn pcm_ioctl(cmd: u64, arg: u64) -> u64 {
     match cmd as u32 {
         0x8004_4100 => { if crate::ring3::write_user::<i32>(arg, 0x20012) { 0 } else { EFAULT } } // PVERSION 2.0.18
-        0x4004_4104 | 0x4004_4103 => 0, // USER_PVERSION, TTSTAMP
+        0x4004_4104 | 0x4004_4103 | 0x4004_4102 => 0, // USER_PVERSION, TTSTAMP, TSTAMP
+        0x4112 => { let mut p = PCM.lock(); p.state = STATE_OPEN; 0 } // HW_FREE
         0x8120_4101 => pcm_info(arg),
         0xc260_4110 => hw_params(arg, false),
         0xc260_4111 => hw_params(arg, true),

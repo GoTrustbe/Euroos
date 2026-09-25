@@ -11570,6 +11570,11 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     Some((fi, _)) => fi,
                     None => return (-9i64) as u64, // -EBADF
                 };
+                if fi == SND_PCM_FI || fi == SND_CTL_FI {
+                    // No mmap of the PCM status/control pages: libasound then falls
+                    // back to the SYNC_PTR ioctl, which kernel::alsa answers.
+                    return (-19i64) as u64; // -ENODEV
+                }
                 // Only in-RAM files are writable-shared; a disk-served (EuroPack) file is
                 // read-only, so the existing copy path is already correct for it.
                 if fi < DISK_FI_BASE || fi == WAD_FI || fi == PROC_MEM_FI {
