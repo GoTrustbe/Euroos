@@ -236,6 +236,30 @@ allocated once at its exact size, the heap is 512 MiB. The structural answer
 is a buddy or slab heap, or keeping the big buffers (VFS files, the page
 cache index) out of the general heap; after the site matrix.
 
+### W18. the watch page stops loading with nothing pending (run 72)
+
+Run 72 (0b69065, the ALSA gaps closed, consent cookie set at heartbeat 4,
+watch page at 8): PASS on the desktop checks, but the page stayed blank with
+the toolbar spinner on until the end. The network side finished: 21 requests
+sent and 21 done (the document, base.js, the kevlar bundle, the css, two
+generate_204 probes), 3.4 MB received from www.youtube.com, no request failed,
+no connection left with unacked data, no unix socket with unread bytes at the
+census. The renderer answered every js:video evaluation ("no video"), so its
+main thread was alive and idle; no load event fired for the watch page; the
+CPU ledger shows the machine 85% idle and the renderer absent from the top
+six. So the HTML parser waited for bytes the network service had already
+delivered, or a mojo data pipe signal was lost between the two, and neither
+side ever moved again. Run 71 on the build before got past this point (the
+renderer hogged the CPU and requested videoplayback), so it is a race.
+
+The census printed nothing useful for the renderer: it listed the main
+process's threads only, and the last-syscall table had 64 slots while the
+run used 103 tasks. Commit c4abe4f: the census walks every task with cr3,
+name, state and last syscall; js:state reports readyState, script and
+resource counts, the pending resources and the start of the body text. Run
+74 (scheduler fix plus this) runs js:state at the twelfth heartbeat, with
+the census.
+
 ## Exit criteria
 
 1. Every site of the matrix loads and renders (screendump), three runs in a
