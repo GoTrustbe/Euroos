@@ -110,7 +110,22 @@ the peek consumed the byte, the next record began one byte late (type 0x03,
 version 0x03LL), WRONG_VERSION_NUMBER on exactly the reused connections
 (youtube's scripts and stylesheets, tracera.eu now and then), never a fresh
 connection's first request. The walker never saw it because it is fed at
-consumption. Run 61 verifies; QUIC returns after that.
+consumption. Run 61: 0 SSL failures (from 12). Run 62: the 2.7 MB document
+downloads in 5 s, the load event fires, 38 requests. QUIC returns after the
+matrix passes on TCP.
+
+### W16. the renderer's main thread never stops running
+
+Run 62's [cpu] ledger (ticks per task per heartbeat, c1f1fb6): after the
+youtube load, CrRendererMain takes about 1950 of every 3000 ticks for the
+rest of the run, and during the load it held the CPU for 165 s while the
+desktop loop got 1.3 s (one heartbeat slipped by 148 s). Either the thread
+spins (a lock or a yield loop) or JavaScript runs without a JIT at a hundred
+times the cost. The tick sampler now profiles the busiest task of each
+interval (9c95636): [prof] names its code pages (exe or library offset, or
+anon = JIT), its last syscall and its syscall count. Run 63 measures. The
+scheduler's fairness towards the desktop loop is a separate question raised
+by the same numbers.
 
 ### W6b. run 53's wedge: PIPES taken from the desktop loop
 
