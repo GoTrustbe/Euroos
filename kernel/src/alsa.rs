@@ -171,17 +171,31 @@ fn hw_params(arg: u64, commit: bool) -> u64 {
             get_interval(&buf, 2).0, get_interval(&buf, 2).1, get_interval(&buf, 3).0, get_interval(&buf, 3).1,
             get_interval(&buf, 5).0, get_interval(&buf, 5).1, get_interval(&buf, 9).0, get_interval(&buf, 9).1, w(520)));
     }
+    // The first 32-bit word of each mask (params fit in it), snapshotted so cmask
+    // can name only what this refine actually narrowed. A mask that comes back
+    // different from the client's makes libasound re-refine; a mask reported as
+    // "changed" when it did not change makes it re-refine forever (run 80: the
+    // same refine 100 times, then set_params failed). So cmask must be exact.
+    let mask_word = |b: &[u8], idx: usize| u32::from_le_bytes([b[4 + idx * 32], b[5 + idx * 32], b[6 + idx * 32], b[7 + idx * 32]]);
+    let in_masks = [mask_word(&buf, 0), mask_word(&buf, 1), mask_word(&buf, 2)];
+    let in_ivals: [(u32, u32); 12] = core::array::from_fn(|i| get_interval(&buf, i));
     // Masks: ACCESS bit 0 (MMAP_INTERLEAVED) and/or bit 3 (RW_INTERLEAVED), FORMAT
-    // bit 2 (S16_LE), SUBFORMAT bit 0. The plug layer wants MMAP on its slave.
+    // bit 2 (S16_LE), SUBFORMAT bit 0. Keep BOTH access kinds the client offered
+    // and we support: chrome's set_params picks RW_INTERLEAVED for writei, the plug
+    // layer drives its slave via MMAP, and either must stay available or set_params
+    // fails "Rate not available" three steps later (run 80: access forced to
+    // MMAP-only, so the RW set_access left an empty space that the rate refine saw).
     let mmap_ok = mask_allows(&buf, 0, 0);
     let rw_ok = mask_allows(&buf, 0, 3);
     if !(mmap_ok || rw_ok) || !mask_allows(&buf, 1, 2) || !mask_allows(&buf, 2, 0) {
         log("hw_params: access/format not offered by the client");
         return EINVAL;
     }
-    put_mask(&mut buf, 0, if mmap_ok { 0 } else { 3 });
-    if mmap_ok && rw_ok {
-        buf[4..8].copy_from_slice(&((1u32 << 0) | (1u32 << 3)).to_le_bytes());
+    // ACCESS: intersect the client's request with {MMAP_INTERLEAVED, RW_INTERLEAVED}.
+    {
+        let keep = ((mmap_ok as u32) << 0) | ((rw_ok as u32) << 3);
+        for b in &mut buf[4..4 + 32] { *b = 0; }
+        buf[4..8].copy_from_slice(&keep.to_le_bytes());
     }
     put_mask(&mut buf, 1, 2);
     put_mask(&mut buf, 2, 0);
@@ -210,8 +224,16 @@ fn hw_params(arg: u64, commit: bool) -> u64 {
     put_interval(&mut buf, 10, buffer * 4, buffer * 4);
     put_interval(&mut buf, 8, buffer * 1000000 / 48000, buffer * 1000000 / 48000);
     put_interval(&mut buf, 11, 0, 0);
-    // rmask stays; cmask = everything changed; info: INTERLEAVED | BLOCK_TRANSFER.
-    buf[516..520].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+    // cmask: exactly the params this refine narrowed (mask params 0..2, interval
+    // params 8..19 = interval index + 8). rmask is left as the client set it.
+    let mut cmask = 0u32;
+    for idx in 0..3 {
+        if mask_word(&buf, idx) != in_masks[idx] { cmask |= 1 << idx; }
+    }
+    for i in 0..12 {
+        if get_interval(&buf, i) != in_ivals[i] { cmask |= 1 << (i + 8); }
+    }
+    buf[516..520].copy_from_slice(&cmask.to_le_bytes());
     // info: MMAP | MMAP_VALID | INTERLEAVED | BLOCK_TRANSFER.
     buf[520..524].copy_from_slice(&(0x1u32 | 0x2 | 0x0000_0100 | 0x0000_0010).to_le_bytes());
     buf[524..528].copy_from_slice(&16u32.to_le_bytes()); // msbits
