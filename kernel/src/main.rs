@@ -644,7 +644,9 @@ fn main() -> Status {
         // demand pool 600 MiB, so that guest keeps its 1408 MiB pool; the 5632M guest
         // (5047 MiB usable) takes 1920 MiB and still has a bigger demand pool than the
         // 4608M one had (1115 MiB).
-        let cap = if usable_frames >= 3 * 256 * 1024 { usable_frames * 2 / 5 } else { usable_frames / 3 };
+        // Half of usable RAM on a big guest (two fifths kept the 6144M NUC guest at
+        // seven arenas: the eighth run fell just over the line, run 76).
+        let cap = if usable_frames >= 3 * 256 * 1024 { usable_frames / 2 } else { usable_frames / 3 };
         // Candidates: 640 MiB (2+ chrome arenas) → 512 → 288 (one child + slack)
         // → 160 → 64 MiB, first that fits.
         let mut installed = false;
@@ -693,6 +695,18 @@ fn main() -> Status {
                 }
                 serial_println!("{line}");
                 installed = true;
+                // The kernel heap's big-block pool (allocator::BIG_MIN and up): 256 MiB
+                // of frames on a guest with at least 4 GiB, a quarter of that below.
+                let big_pages = if usable_frames >= 4 * 256 * 1024 { 65_536 } else if usable_frames >= 2 * 256 * 1024 { 16_384 } else { 0 };
+                if big_pages > 0 {
+                    match allocator.allocate_contiguous(big_pages) {
+                        Ok(b) => {
+                            crate::allocator::install_big_pool(b, big_pages);
+                            serial_println!("[mm] big-block heap pool: {} MiB @ {b:#x}", big_pages / 256);
+                        }
+                        Err(_) => serial_println!("[mm] WARNING: no big-block heap pool (no {} MiB run free)", big_pages / 256),
+                    }
+                }
                 break;
             }
         }

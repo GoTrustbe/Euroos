@@ -23,11 +23,120 @@ struct IrqSafeHeap(LockedHeap);
 
 unsafe impl GlobalAlloc for IrqSafeHeap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if layout.size() >= BIG_MIN && layout.align() <= 4096 {
+            if let Some(p) = big_alloc(layout.size()) {
+                return p;
+            }
+        }
         without_interrupts(|| unsafe { self.0.alloc(layout) })
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        if big_owns(ptr) {
+            big_free(ptr, layout.size());
+            return;
+        }
         without_interrupts(|| unsafe { self.0.dealloc(ptr, layout) })
     }
+}
+
+// ── Big-block pool ──────────────────────────────────────────────────────────
+// Allocations of BIG_MIN and up (file buffers, socket receive queues, window
+// bitmaps, growing Vecs of every kind) come from a page-granular pool of their
+// own instead of the first-fit list heap. Runs 63, 65 and 75 on the NUC died on
+// "memory allocation of 2 or 4 MiB failed" with 170 to 220 MiB of the list heap
+// nominally free: the heap had no hole that size left between thousands of
+// small long-lived allocations. A bitmap over whole pages has no such holes,
+// and the list heap only ever sees small blocks now. The pool is a run of RAM
+// handed over at boot (identity-mapped, like every frame the kernel touches);
+// until it is installed, or when it is full, the list heap serves as before.
+pub const BIG_MIN: usize = 128 * 1024;
+const BIG_MAX_PAGES: usize = 131_072; // 512 MiB at most
+static BIG: spin::Mutex<BigPool> = spin::Mutex::new(BigPool { base: 0, pages: 0, bits: [0; BIG_MAX_PAGES / 64], used: 0, peak: 0 });
+
+struct BigPool {
+    base: u64,
+    pages: usize,
+    bits: [u64; BIG_MAX_PAGES / 64],
+    used: usize,
+    peak: usize,
+}
+
+/// Hand the pool `pages` frames starting at `base` (a contiguous run from the
+/// main frame allocator). Call once at boot after the frame allocator exists.
+pub fn install_big_pool(base: u64, pages: usize) {
+    without_interrupts(|| {
+        let mut b = BIG.lock();
+        b.base = base;
+        b.pages = pages.min(BIG_MAX_PAGES);
+        b.bits = [0; BIG_MAX_PAGES / 64];
+        b.used = 0;
+        b.peak = 0;
+    });
+}
+
+fn big_owns(ptr: *mut u8) -> bool {
+    without_interrupts(|| {
+        let b = BIG.lock();
+        b.pages > 0 && (ptr as u64) >= b.base && (ptr as u64) < b.base + (b.pages as u64) * 4096
+    })
+}
+
+fn big_alloc(size: usize) -> Option<*mut u8> {
+    let need = size.div_ceil(4096);
+    without_interrupts(|| {
+        let mut b = BIG.lock();
+        if b.pages == 0 || need > b.pages {
+            return None;
+        }
+        // First fit over the bitmap, skipping whole full words.
+        let mut i = 0usize;
+        while i + need <= b.pages {
+            if i % 64 == 0 && b.bits[i / 64] == u64::MAX {
+                i += 64;
+                continue;
+            }
+            if b.bits[i / 64] & (1u64 << (i % 64)) != 0 {
+                i += 1;
+                continue;
+            }
+            let mut run = 1;
+            while run < need && b.bits[(i + run) / 64] & (1u64 << ((i + run) % 64)) == 0 {
+                run += 1;
+            }
+            if run == need {
+                for j in i..i + need {
+                    b.bits[j / 64] |= 1u64 << (j % 64);
+                }
+                b.used += need;
+                if b.used > b.peak {
+                    b.peak = b.used;
+                }
+                return Some((b.base + (i as u64) * 4096) as *mut u8);
+            }
+            i += run + 1;
+        }
+        None
+    })
+}
+
+fn big_free(ptr: *mut u8, size: usize) {
+    let need = size.div_ceil(4096);
+    without_interrupts(|| {
+        let mut b = BIG.lock();
+        let first = ((ptr as u64 - b.base) / 4096) as usize;
+        for j in first..(first + need).min(b.pages) {
+            b.bits[j / 64] &= !(1u64 << (j % 64));
+        }
+        b.used = b.used.saturating_sub(need);
+    });
+}
+
+/// (used MiB, free MiB, peak MiB) of the big-block pool, for the [cpu] ledger.
+pub fn big_stats() -> (usize, usize, usize) {
+    without_interrupts(|| {
+        let b = BIG.lock();
+        (b.used / 256, (b.pages - b.used) / 256, b.peak / 256)
+    })
 }
 
 #[global_allocator]

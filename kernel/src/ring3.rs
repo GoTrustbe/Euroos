@@ -1299,7 +1299,9 @@ pub fn cdp_pump() {
                 }
                 deltas.sort_unstable_by(|a, b| b.cmp(a));
                 let (hu, hf) = crate::allocator::stats();
-                let mut line = alloc::format!("[cpu] {total} ticks since last heartbeat; heap {} MiB used, {} MiB free;", hu / (1024 * 1024), hf / (1024 * 1024));
+                let (bu, bf, bp) = crate::allocator::big_stats();
+                let mut line = alloc::format!("[cpu] {total} ticks since last heartbeat; heap {} MiB used, {} MiB free; big {bu}/{bf} MiB (peak {bp}); demand {} MiB free;",
+                    hu / (1024 * 1024), hf / (1024 * 1024), crate::procpool::demand_free_frames() / 256);
                 for &(d, t) in deltas.iter().take(6) {
                     line.push_str(&alloc::format!(" t{t} {:?} {d}", if t == 0 { String::from("desktop/idle") } else { thread_name(t) }));
                 }
