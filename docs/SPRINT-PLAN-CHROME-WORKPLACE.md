@@ -170,6 +170,19 @@ workplace bar ("chrome works") will need real delivery of at least SIGSEGV to
 a registered handler, with siginfo and ucontext, before the rest of the
 matrix can be trusted. Planned after W13.
 
+### YOUTUBE RENDERS (run 67, build 35b973c)
+
+Run 67: PASS, no panic (512 MiB heap, 384 MiB used and steady), youtube's
+load event fires, 43 requests including the `youtubei` API and a
+`videoplayback` preload from googlevideo.com; the screendump at 480 s shows
+YouTube's page (sidebar, header) under the EU consent dialog "Before you
+continue to YouTube". Proof:
+`docs/proof/2026-09-25-desktop-chromium-youtube-consent-run67.png`. One
+renderer (task 117, the sign-in iframe's) died at exe offset 0x6f132e2 on
+0x1116111c4, the same offset and address shape as run 54 (W14); the page
+survived it. Next: accept the consent (a `js:` step in the visit list) and
+open a video: picture first, sound after W12.
+
 ### W17. the kernel heap fragments under the browser's profile
 
 Run 65 panicked like run 63, this time on a 64 KiB allocation with 169 MiB
