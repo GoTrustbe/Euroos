@@ -3405,12 +3405,14 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
     // is the chrome-scale wedge. (Disk-backed reads already clone-then-copy.)
     let chunk: alloc::vec::Vec<u8> = {
         let files = FILES.lock();
-        let data = &files[fi].1;
-        let n = len.min(data.len().saturating_sub(offset));
-        if n == 0 {
-            alloc::vec::Vec::new()
-        } else {
-            data[offset..offset + n].to_vec()
+        // .get, not [fi]: a stale file index (fi == FILES.len() after an unlink
+        // shifted the table) read as EOF instead of panicking the boot (runs 84, 95).
+        match files.get(fi) {
+            Some((_, data)) => {
+                let n = len.min(data.len().saturating_sub(offset));
+                if n == 0 { alloc::vec::Vec::new() } else { data[offset..offset + n].to_vec() }
+            }
+            None => alloc::vec::Vec::new(),
         }
     };
     if !in_user_arena(buf, chunk.len()) {
@@ -3520,9 +3522,13 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
     // safe to keep held: the fault handler does not take it.
     let (chunk, n) = {
         let files = FILES.lock();
-        let data = &files[fi].1;
-        let n = len.min(data.len().saturating_sub(off));
-        (if n > 0 { data[off..off + n].to_vec() } else { alloc::vec::Vec::new() }, n)
+        match files.get(fi) {
+            Some((_, data)) => {
+                let n = len.min(data.len().saturating_sub(off));
+                (if n > 0 { data[off..off + n].to_vec() } else { alloc::vec::Vec::new() }, n)
+            }
+            None => (alloc::vec::Vec::new(), 0),
+        }
     };
     if !in_user_arena(buf, n) {
         return u64::MAX;
@@ -3596,7 +3602,8 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
         None => return u64::MAX,
     };
     let mut files = FILES.lock();
-    let data = files[fi].1.to_mut(); // clone-on-write if this were a borrowed lib (never)
+    let Some(entry) = files.get_mut(fi) else { return u64::MAX };
+    let data = entry.1.to_mut(); // clone-on-write if this were a borrowed lib (never)
     if end > data.len() {
         data.resize(end, 0);
     }
@@ -11799,7 +11806,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                             }
                             HEAP_BREAK.store(b + region, Ordering::Relaxed);
                             let files = FILES.lock();
-                            let data = &files[fi].1;
+                            let data: &[u8] = files.get(fi).map(|f| &f.1[..]).unwrap_or(&[]);
                             // SAFETY: b..b+region validated in-arena above.
                             unsafe {
                                 core::ptr::write_bytes(b as *mut u8, 0, region as usize);
@@ -12007,7 +12014,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     return base;
                 }
                 let files = FILES.lock();
-                let data = &files[fi].1;
+                let data: &[u8] = files.get(fi).map(|f| &f.1[..]).unwrap_or(&[]);
                 let copy = if off < data.len() { (data.len() - off).min(len as usize) } else { 0 };
                 unsafe {
                     if copy > 0 {
