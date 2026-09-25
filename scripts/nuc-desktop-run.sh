@@ -47,6 +47,9 @@ while pgrep -x qemu-system-x86 >/dev/null 2>&1; do sleep 5; done
 rm -f "$(dirname "$LOG")"/*.ppm "$(dirname "$LOG")"/*.png
 rm -f "$LOG" "$LOG"*.ppm "$LOG.mon" "$LOG.qmp" "$LOG.host" "$LOG.wedge"
 echo "tmpfs free: $(df -m "$(dirname "$LOG")" | awk 'NR==2 {print $4}') MB"
+# An HD-Audio codec is attached and its output captured to $LOG.wav on the host:
+# what the guest plays (the kernel's boot tone, later chrome's audio through
+# /dev/snd) is a file that can be listened to or measured. Workplace sprint W12.
 # Both packs are attached: the kernel scans every disk for a EuroPack volume, and
 # https needs the NSS one (chrome loads its software token and trust roots as
 # separate .so files, outside the library closure a linker reports).
@@ -56,6 +59,7 @@ qemu-system-x86_64 -machine q35 -enable-kvm -cpu host -m "$MEM" \
   -drive format=raw,file="$PACK",if=virtio \
   -drive format=raw,file="$NSSPACK",if=virtio \
   -device qemu-xhci,id=xhci -device usb-kbd -device usb-tablet \
+  -audiodev wav,id=a0,path="$LOG.wav" -device intel-hda -device hda-duplex,audiodev=a0 \
   -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
   -monitor unix:"$LOG.mon",server,nowait \
   -qmp unix:"$LOG.qmp",server,nowait \
