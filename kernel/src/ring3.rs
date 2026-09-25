@@ -1454,6 +1454,35 @@ pub fn cdp_pump() {
                             crate::serial_println!("[cdp] setting the SOCS consent cookie (heartbeat {sent}, {}/{})", i + 1, list.len());
                             cdp_send(&alloc::format!(
                                 "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Network.setCookie\",\"params\":{{\"name\":\"SOCS\",\"value\":\"CAI\",\"domain\":\".youtube.com\",\"path\":\"/\",\"secure\":true,\"sameSite\":\"Lax\"}}}}", 60 + i));
+                        } else if let Some(pt) = url.strip_prefix("click:") {
+                            // A real click, via Input.dispatchMouseEvent (a BROWSER-level
+                            // command that chrome routes to whatever renderer currently
+                            // owns the frame, unlike Runtime.evaluate which is not
+                            // forwarded to a cross-process-navigated renderer, W19). This
+                            // is a genuine user gesture: youtube mutes an autoplay and
+                            // skips the audio stream, and a click on the player unmutes it.
+                            let (xs, ys) = pt.split_once(',').unwrap_or(("265", "430"));
+                            let x: i32 = xs.parse().unwrap_or(265);
+                            let y: i32 = ys.parse().unwrap_or(430);
+                            crate::serial_println!("[cdp] click at ({x},{y}) via Input.dispatchMouseEvent (heartbeat {sent}, {}/{})", i + 1, list.len());
+                            cdp_send(&alloc::format!(
+                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Input.dispatchMouseEvent\",\"params\":{{\"type\":\"mouseMoved\",\"x\":{x},\"y\":{y}}}}}", 60 + i));
+                            cdp_send(&alloc::format!(
+                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Input.dispatchMouseEvent\",\"params\":{{\"type\":\"mousePressed\",\"x\":{x},\"y\":{y},\"button\":\"left\",\"buttons\":1,\"clickCount\":1}}}}", 60 + i));
+                            cdp_send(&alloc::format!(
+                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Input.dispatchMouseEvent\",\"params\":{{\"type\":\"mouseReleased\",\"x\":{x},\"y\":{y},\"button\":\"left\",\"buttons\":0,\"clickCount\":1}}}}", 60 + i));
+                        } else if let Some(k) = url.strip_prefix("key:") {
+                            // A real keypress, browser-routed like click. youtube's player
+                            // takes single-key shortcuts (k play/pause, m mute toggle, f
+                            // fullscreen) when it has focus.
+                            let key = k.chars().next().unwrap_or('k');
+                            let code = alloc::format!("Key{}", key.to_ascii_uppercase());
+                            let vk = key.to_ascii_uppercase() as u32;
+                            crate::serial_println!("[cdp] key '{key}' via Input.dispatchKeyEvent (heartbeat {sent}, {}/{})", sent, list.len());
+                            for typ in ["keyDown", "keyUp"] {
+                                cdp_send(&alloc::format!(
+                                    "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Input.dispatchKeyEvent\",\"params\":{{\"type\":\"{typ}\",\"key\":\"{key}\",\"code\":\"{code}\",\"text\":\"{key}\",\"windowsVirtualKeyCode\":{vk}}}}}", 60 + i));
+                            }
                         } else if let Some(js) = url.strip_prefix("js:") {
                             // A `js:NAME` step runs in the page instead of navigating. The
                             // names stand for expressions that the Terminal cannot carry (the
