@@ -240,6 +240,14 @@ fn hw_params(arg: u64, commit: bool) -> u64 {
     buf[528..532].copy_from_slice(&48000u32.to_le_bytes()); // rate_num
     buf[532..536].copy_from_slice(&1u32.to_le_bytes()); // rate_den
     buf[536..544].copy_from_slice(&0u64.to_le_bytes()); // fifo_size
+    {
+        let mw = |b: &[u8], idx: usize| u32::from_le_bytes([b[4 + idx * 32], b[5 + idx * 32], b[6 + idx * 32], b[7 + idx * 32]]);
+        log(&alloc::format!(
+            "-> access={:#x} fmt={:#x} rate=[{},{}] period=[{},{}] buffer=[{},{}] cmask={:#x} info={:#x}",
+            mw(&buf, 0), mw(&buf, 1), get_interval(&buf, 3).0, get_interval(&buf, 3).1,
+            get_interval(&buf, 5).0, get_interval(&buf, 5).1, get_interval(&buf, 9).0, get_interval(&buf, 9).1,
+            cmask, u32::from_le_bytes([buf[520], buf[521], buf[522], buf[523]])));
+    }
     if !crate::ring3::copy_to_user(arg, &buf) { return EFAULT; }
     if commit {
         let mut p = PCM.lock();
