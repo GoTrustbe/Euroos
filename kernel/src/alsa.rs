@@ -89,8 +89,15 @@ pub fn pcm_close() {
     log("close");
 }
 
-/// Advance hw_ptr from the DMA position; zero what the hardware has consumed
-/// (up to appl_ptr: bytes the client has not written yet are already silent).
+/// Advance hw_ptr to the DMA's real position, so the client paces its writes to
+/// real time (avail = space ahead of the hardware). The client's samples in the
+/// ring ahead of hw_ptr are what the DMA plays next; we do NOT zero or clamp
+/// anything here. An earlier version clamped hw_ptr to appl_ptr and zeroed the
+/// consumed span, but the real DMA reads at LPIB, not at the clamped pointer, so
+/// the zeroing erased the samples chrome had just written and the output went
+/// silent (run 90: the tone's clock reached 7.77 s but the WAV was silent). The
+/// ring is zeroed once at open and again at drop, so no stale buffer loops; while
+/// the stream runs the client keeps it full.
 fn sync(p: &mut Pcm) {
     if p.ring_frames == 0 {
         return;
@@ -100,26 +107,7 @@ fn sync(p: &mut Pcm) {
     let delta = (lpib as u64 + ring_bytes - p.last_lpib as u64) % ring_bytes;
     p.last_lpib = lpib;
     if p.state == STATE_RUNNING {
-        // The HDA DMA free-runs at a real 48 kHz (it loops the boot tone from
-        // boot and never stops), so its position always advances. A player in a
-        // guest that cannot always produce 48 kHz of audio in real time would then
-        // see hw_ptr shoot past appl_ptr and read a genuine but relentless XRUN:
-        // chrome recovered with PREPARE and underran again, 77 times, and 0.09 s of
-        // sound played (run 87). So hw_ptr is CLAMPED to appl_ptr. When the client
-        // is ahead it advances at the real rate (real-time pacing: avail shrinks and
-        // the client waits); when the client falls behind, hw_ptr simply waits at
-        // appl_ptr instead of declaring an underrun, and the client keeps writing.
-        p.hw_ptr = (p.hw_ptr + delta / FRAME_BYTES).min(p.appl_ptr);
-        // Zero the span the hardware has consumed [zeroed_upto, hw_ptr), so a lap of
-        // the ring the client has not refilled plays silence, not the last buffer.
-        if p.hw_ptr > p.zeroed_upto {
-            let from = p.zeroed_upto;
-            let n = (p.hw_ptr - from).min(p.ring_frames);
-            let start = (from % p.ring_frames) * FRAME_BYTES;
-            let len = n * FRAME_BYTES;
-            crate::hda::pcm_zero(start as usize, (start + len) as usize);
-            p.zeroed_upto = p.hw_ptr;
-        }
+        p.hw_ptr += delta / FRAME_BYTES;
     }
 }
 
