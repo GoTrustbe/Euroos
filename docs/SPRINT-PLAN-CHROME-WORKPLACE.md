@@ -105,6 +105,26 @@ Commit 09b59c1: all acquisitions go through pipes_lock() (interrupts off
 first). Rule, now enforced for PIPES as it was for SOCKETS: a ring3 lock that
 the supervising loop touches is taken under IfOffGuard everywhere.
 
+### W14. the YouTube renderer dies on a wild pointer
+
+Run 54 (youtube over QUIC): the page sat in its loading skeleton and the
+renderer (task 112) was terminated on a read at 0x111d1131c, an address in the
+kernel's identity map (4.5 GiB, protection violation), `movzwl -4(%rdx)` at
+exe offset 0x6f132e2; no syscall in the run ever handed out an address near
+it. Whether this is chrome's own bug, a consequence of a kernel answer, or a
+missing signal (V8 relies on SIGSEGV for some traps) is open. The isolation
+line now carries the task's last syscall; the [fsdiag]/[tls] instruments say
+nothing about it yet.
+
+### W15. signal delivery
+
+Chrome's renderers and V8 use signals: SIGSEGV handlers for WebAssembly bounds
+traps and crash reporting, SIGCHLD, SIGPIPE, SIGALRM, SIGTERM to children. The
+kernel delivers none (a fault terminates the process; tgkill ends it). The
+workplace bar ("chrome works") will need real delivery of at least SIGSEGV to
+a registered handler, with siginfo and ucontext, before the rest of the
+matrix can be trusted. Planned after W13.
+
 ## Exit criteria
 
 1. Every site of the matrix loads and renders (screendump), three runs in a
