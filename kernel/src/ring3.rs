@@ -8443,6 +8443,34 @@ fn madvise(addr: u64, len: u64, advice: u64) -> u64 {
     }
     0
 }
+/// Drop every page of [`start`, `end`) from the current process's demand region:
+/// unmap all, free the frames the process owns (writable, not a MAP_SHARED window
+/// or alias: those frames belong to the file), leave shared and page-cache frames
+/// to their owners. A later touch faults in zeros (or the file's bytes again).
+fn demand_drop_range(start: u64, end: u64) -> (usize, usize) {
+    if end <= start || start < DEMAND_BASE || end > DEMAND_BASE + DEMAND_SIZE {
+        return (0, 0);
+    }
+    ensure_globals_for_current();
+    let pml4 = {
+        use x86_64::registers::control::Cr3;
+        Cr3::read().0.start_address().as_u64()
+    };
+    let shared: alloc::vec::Vec<(u64, u64)> = {
+        let mut v: alloc::vec::Vec<(u64, u64)> =
+            SHARED_MAPS.lock().iter().map(|&(_, b, l)| (b, b + l as u64)).collect();
+        v.extend(SHARED_ALIASES.lock().iter().map(|&(b, l, _)| (b, b + l)));
+        v
+    };
+    let mut free_if = |va: u64, writable: bool| -> bool {
+        writable && !shared.iter().any(|&(b, e)| va >= b && va < e)
+    };
+    crate::paging::unmap_demand_range(pml4, start, end, &mut free_if)
+}
+static MUNMAP_CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static MUNMAP_FREED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static FIXED_CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static FIXED_FREED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static DEMAND_USED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 // ── FILE-BACKED demand paging (opt-in, separate flag) ───────────────────────
@@ -11747,6 +11775,24 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 // loader placing a segment (file-backed) or .bss (anon) at base+vaddr.
                 if a4 & MAP_FIXED != 0 && a1 != 0 && in_demand(a1 & !0xFFF) {
                     let base = a1 & !0xFFF;
+                    // MAP_FIXED REPLACES what was mapped there: the old pages go, a
+                    // later touch reads zeros (or the new file's bytes). V8's
+                    // DecommitPages and PartitionAlloc's DecommitAndZeroSystemPages
+                    // are exactly this call with PROT_NONE over live heap pages, and
+                    // both count on fresh zero pages when they recommit. Keeping the
+                    // old frames gave the renderer its stale heap back: a hash map
+                    // whose every slot read "occupied" (a parser thread probing it
+                    // forever, run 73) and an Oilpan header behind a garbage pointer
+                    // (the marking visitor's fault of runs 54, 67 and 73).
+                    let (unmapped, freed) = demand_drop_range(base, base + len);
+                    prot_none_set(base, base + len, a3 == 0);
+                    let calls = FIXED_CALLS.fetch_add(1, Ordering::Relaxed);
+                    let total = FIXED_FREED.fetch_add(freed as u64, Ordering::Relaxed) + freed as u64;
+                    if unmapped > 0 && (calls < 8 || (calls + 1) % 512 == 0) {
+                        crate::serial_println!(
+                            "[mmap-fixed] #{} [{base:#x},{:#x}) prot={a3:#x} {}: unmapped {unmapped} freed {freed} (total freed {total})",
+                            calls + 1, base + len, if file_backed { "file" } else { "anon" });
+                    }
                     if file_backed {
                         let off = unsafe { recover_mmap_offset() } as usize;
                         let fds = OPEN_FDS.lock();
@@ -11759,7 +11805,16 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     } else {
                         // Anon overlay (.bss): a zero-fill shadow (fidx == !0) that hides
                         // any flat file descriptor beneath it, so bss reads back zero.
-                        DEMAND_FILE_MAPS.lock().push((base, len, usize::MAX, 0, 0));
+                        // Only where a file mapping lies beneath: over a plain anonymous
+                        // reservation a fault already gives zeros, and V8 issues this
+                        // call for every decommit, which would grow the map list
+                        // without bound (each fault searches it).
+                        let mut maps = DEMAND_FILE_MAPS.lock();
+                        let over_file = maps.iter().any(|&(b, l, fidx, _, _)|
+                            fidx != usize::MAX && b < base + len && base < b + l);
+                        if over_file {
+                            maps.push((base, len, usize::MAX, 0, 0));
+                        }
                     }
                     return base;
                 }
@@ -11867,7 +11922,27 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 base
             }
         }
-        11 => 0, // munmap — the bump allocator does not give back, but silently succeeds
+        11 => {
+            // munmap(addr, len). The arena window is a bump allocator that never gives
+            // back; the demand region does: its pages are unmapped and the process's
+            // own frames freed (a shared window's frames stay with the file). A
+            // renderer's heap churn (V8 FreePages, thread stacks, transfer buffers)
+            // otherwise leaks its way through the demand pool over a long session.
+            let start = a1 & !0xFFF;
+            let end = start.saturating_add((a2 + 0xFFF) & !0xFFF);
+            if start >= DEMAND_BASE && end <= DEMAND_BASE + DEMAND_SIZE && end > start {
+                let (unmapped, freed) = demand_drop_range(start, end);
+                prot_none_set(start, end, false);
+                let calls = MUNMAP_CALLS.fetch_add(1, Ordering::Relaxed);
+                let total = MUNMAP_FREED.fetch_add(freed as u64, Ordering::Relaxed) + freed as u64;
+                if unmapped > 0 && (calls < 8 || (calls + 1) % 512 == 0) {
+                    crate::serial_println!(
+                        "[munmap] #{} [{start:#x},{end:#x}): unmapped {unmapped} freed {freed} (total freed {total})",
+                        calls + 1);
+                }
+            }
+            0
+        }
         25 => {
             // mremap(old=a1, old_len=a2, new_len=a3, flags=a4, new_addr=a5).
             //
@@ -11877,8 +11952,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // ("Something went wrong when opening your profile") before it ever paints
             // a page. It is the blocker the binary itself pointed at.
             //
-            // This allocator never gives memory back (munmap above is a no-op), which
-            // decides the shapes honestly available here:
+            // The arena allocator never gives memory back (munmap frees demand-region
+            // pages only), which decides the shapes honestly available here:
             //   shrink            -> keep the address, the mapping just covers less
             //   grow at a bump top-> extend the bump, no copy
             //   grow elsewhere    -> allocate and copy, if the caller allows a move
