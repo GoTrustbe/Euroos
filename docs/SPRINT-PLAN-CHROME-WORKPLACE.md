@@ -170,6 +170,19 @@ workplace bar ("chrome works") will need real delivery of at least SIGSEGV to
 a registered handler, with siginfo and ucontext, before the rest of the
 matrix can be trusted. Planned after W13.
 
+### W17. the kernel heap fragments under the browser's profile
+
+Run 65 panicked like run 63, this time on a 64 KiB allocation with 169 MiB
+nominally free: the first-fit list heap (linked_list_allocator, blocking lock
+under interrupts-off, so never a null on contention) had no hole of that size.
+Both panics sat in the child exit/exec path, where the exit guard walked the
+parent's demand region into two 1.3 MiB lists and shared_phys_sorted collected
+the whole disk page cache, all grown by doubling. Commit 35b973c: the guard is
+off by default (it measured zero in every run since 37), the shared list is
+allocated once at its exact size, the heap is 512 MiB. The structural answer
+is a buddy or slab heap, or keeping the big buffers (VFS files, the page
+cache index) out of the general heap; after the site matrix.
+
 ## Exit criteria
 
 1. Every site of the matrix loads and renders (screendump), three runs in a
