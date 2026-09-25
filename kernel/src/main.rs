@@ -664,7 +664,11 @@ fn main() -> Status {
         // seventh fork found "pool has 127 MiB" (five children alive: two utilities,
         // two renderers, one more utility; the https renderer needs its own). Needs
         // the 5632M guest; at 4608M the cap keeps the 1408 MiB pool.
-        for &want in &[491_520usize, 425_984, 360_448, 294_912, 229_376, 163_840, 131_072, 73_728, 40_960, 16_384] {
+        // 2176 MiB (eight arenas + slack) first: run 70 on youtube had eight children
+        // alive (four renderers, utilities coming and going) against seven arenas
+        // and refused one fork. Needs the 6144M guest (the two-fifths cap keeps
+        // 1920 MiB at 5632M).
+        for &want in &[557_056usize, 491_520, 425_984, 360_448, 294_912, 229_376, 163_840, 131_072, 73_728, 40_960, 16_384] {
             if want > cap {
                 continue;
             }
@@ -1996,6 +2000,12 @@ fn main() -> Status {
     // tone. Proves the mixer→hardware chain (LPIB running = DMA playing).
     if hda::init(&mut allocator) {
         serial_println!("[euro] HD-Audio initialized — stream playing (LPIB={})", hda::stream_pos());
+        // The self-test tone loops in the ring until something overwrites it: a
+        // desktop that hums for ten minutes (run 70's WAV). Silence it now; the
+        // ALSA device (W12) writes what is meant to play.
+        if let Some((_, bytes)) = hda::pcm_ring() {
+            hda::pcm_zero(0, bytes);
+        }
     }
     x86_64::instructions::interrupts::enable();
     // M2-1: NVMe MSI-X delivery proof — must run with interrupts ON (the boot
