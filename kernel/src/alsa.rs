@@ -95,25 +95,26 @@ fn sync(p: &mut Pcm) {
     let ring_bytes = p.ring_frames * FRAME_BYTES;
     let delta = (lpib as u64 + ring_bytes - p.last_lpib as u64) % ring_bytes;
     p.last_lpib = lpib;
-    if p.state == STATE_RUNNING || p.state == STATE_XRUN {
-        p.hw_ptr += delta / FRAME_BYTES;
-        // Zero the consumed span [zeroed_upto, min(hw_ptr, appl_ptr)).
-        let upto = p.hw_ptr.min(p.appl_ptr);
-        if upto > p.zeroed_upto {
+    if p.state == STATE_RUNNING {
+        // The HDA DMA free-runs at a real 48 kHz (it loops the boot tone from
+        // boot and never stops), so its position always advances. A player in a
+        // guest that cannot always produce 48 kHz of audio in real time would then
+        // see hw_ptr shoot past appl_ptr and read a genuine but relentless XRUN:
+        // chrome recovered with PREPARE and underran again, 77 times, and 0.09 s of
+        // sound played (run 87). So hw_ptr is CLAMPED to appl_ptr. When the client
+        // is ahead it advances at the real rate (real-time pacing: avail shrinks and
+        // the client waits); when the client falls behind, hw_ptr simply waits at
+        // appl_ptr instead of declaring an underrun, and the client keeps writing.
+        p.hw_ptr = (p.hw_ptr + delta / FRAME_BYTES).min(p.appl_ptr);
+        // Zero the span the hardware has consumed [zeroed_upto, hw_ptr), so a lap of
+        // the ring the client has not refilled plays silence, not the last buffer.
+        if p.hw_ptr > p.zeroed_upto {
             let from = p.zeroed_upto;
-            let n = (upto - from).min(p.ring_frames);
+            let n = (p.hw_ptr - from).min(p.ring_frames);
             let start = (from % p.ring_frames) * FRAME_BYTES;
             let len = n * FRAME_BYTES;
             crate::hda::pcm_zero(start as usize, (start + len) as usize);
-            p.zeroed_upto = upto;
-        }
-        if p.hw_ptr > p.appl_ptr {
-            // Underrun: the hardware ran past the client's data. Keep going (the
-            // ring is silent there); report XRUN so the client resets its clock.
-            if p.state == STATE_RUNNING {
-                log(&alloc::format!("underrun: hw {} appl {}", p.hw_ptr, p.appl_ptr));
-            }
-            p.state = STATE_XRUN;
+            p.zeroed_upto = p.hw_ptr;
         }
     }
 }
