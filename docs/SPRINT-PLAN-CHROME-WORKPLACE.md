@@ -201,6 +201,29 @@ missing signal (V8 relies on SIGSEGV for some traps) is open. The isolation
 line now carries the task's last syscall; the [fsdiag]/[tls] instruments say
 nothing about it yet.
 
+ROOT CAUSE FOUND (run 73, e31a251). Run 73's fault was the same instruction
+at the same offset: chrome+0x6f132e2 is
+v8::internal::UnifiedHeapMarkingVisitorBase::Visit (the pack's chrome binary
+carries symbols; extracted from /opt/euroos/packs/chrome-pack2.img at pack
+offset 20480), reading the HeapObjectHeader four bytes before a traced Oilpan
+pointer, and the pointer was garbage (0x389ca3a2c, which lands in the kernel's
+identity map: pdpt[14] = a 1 GiB kernel page, hence the protection fault).
+The same run had a ThreadPoolForegr thread spinning at 0 syscalls in
+v8::base::TemplateHashMapImpl<AstRawString>::InsertNew (chrome+0x6d743a0),
+the linear probe that ends only at an empty slot: a table whose every slot
+reads occupied. Both are stale memory. The kernel's MAP_FIXED overlay inside
+the demand region only recorded a zero-fill shadow and kept the old frames
+mapped, while V8's OS::DecommitPages and PartitionAlloc's
+DecommitAndZeroSystemPages are exactly mmap(addr, len, PROT_NONE,
+MAP_FIXED|MAP_ANONYMOUS|MAP_PRIVATE) over live heap pages, and both count on
+fresh zero pages when they recommit (the madvise zeroing contract of W9, one
+call further). Commit e31a251: paging::unmap_demand_range unmaps the range
+(invlpg per page) and frees the frames the process owns (writable, not in a
+MAP_SHARED window or alias); the overlay tracks PROT_NONE like mprotect; the
+zero shadow is recorded only over a file mapping (V8's decommits were growing
+the map list, searched on every fault); munmap, a no-op since the bump
+allocator days, now frees demand-region pages the same way. Run 75 measures.
+
 ### W15. signal delivery
 
 Chrome's renderers and V8 use signals: SIGSEGV handlers for WebAssembly bounds
@@ -235,6 +258,24 @@ off by default (it measured zero in every run since 37), the shared list is
 allocated once at its exact size, the heap is 512 MiB. The structural answer
 is a buddy or slab heap, or keeping the big buffers (VFS files, the page
 cache index) out of the general heap; after the site matrix.
+
+### Run 74 (a2aa8bc: scheduler fix, full census, tone and state steps)
+
+FAIL on fork-refused: nine children alive against seven arenas, two forks
+refused at "pool has 127 MiB"; the 6144M guest yields one 1920 MiB run and
+the eight-arena candidate found none. js:tone answered "tone running 48000
+latency 0.0427": the Web Audio context runs, but no [alsa] line: chrome's
+audio manager fell back to ALSA, asked for plughw:0,0, and libasound said
+"Unknown PCM" because /usr/share/alsa/alsa.conf did not exist. The heartbeat
+ledger accounted 1530 of 3000 ticks after the youtube navigation: the run
+forked task 132 and every per-task table (caps, ticks, last syscall, syscall
+count) stopped at 128 slots, so a task above that ran on the global
+capabilities and its CPU time vanished from the line; the state, play and
+video evaluations were never answered, which fits a renderer above slot 128
+spinning as in run 73. Commit caef3f6: a minimal alsa.conf (hw, plughw,
+defaults on card 0), tables sized by sched::MAX_TASKS (256), and the fork
+pool assembled from the largest run plus further 258 MiB runs up to the cap.
+Run 76 measures all three with the W14 fix.
 
 ### W18. the watch page stops loading with nothing pending (run 72)
 
