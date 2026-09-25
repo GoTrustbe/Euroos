@@ -168,6 +168,17 @@ NXDOMAIN synthesized for a blocked name, connect log 200 lines with ticks.
 Run 66 measures. The renderer's 165 s of CPU in run 62 did not recur in 64;
 kept as W16 until the profile names it.
 
+ROOT CAUSE (run 71, a5c447b): the pick is by smallest vruntime, task 0 was
+charged a step on every tick since boot, halted or not, and a thread created
+later starts at its creator's vruntime, which for chrome's mostly sleeping
+threads is far below task 0's. The watch page's renderer main took 38090 of
+39664 ticks in one heartbeat interval; the desktop loop, the heartbeats, the
+visit list and every other thread waited for it to catch up. Now: a tick that
+finds task 0 halted charges nothing, the pick records the minimum runnable
+vruntime, and new or woken tasks are placed at that minimum less a small
+grace. Run 74 measures; runs 72 and 73 (before the fix) show the hog once
+more with the consent cookie and eight arenas.
+
 ### W6b. run 53's wedge: PIPES taken from the desktop loop
 
 The NMI probe, symbolized against the exact build (a worktree link of
