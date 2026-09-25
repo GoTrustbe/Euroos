@@ -841,6 +841,13 @@ static CAST_FRAMES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU3
 static LOAD_FIRED_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CDP_URL: Mutex<String> = Mutex::new(String::new());
 static CDP_SESSION: Mutex<String> = Mutex::new(String::new());
+/// URLs the DevTools bridge visits in turn after start-up (`chrome URL...` from the
+/// Terminal). Empty = the defaults: the argv page again at the fourth heartbeat, the
+/// live site at the tenth. Written and read by the desktop task only.
+static CHROME_URLS: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new());
+pub fn set_chrome_urls(urls: &[String]) {
+    *CHROME_URLS.lock() = urls.to_vec();
+}
 /// The DOM chrome sent back (empty until it arrives).
 pub static CDP_DOM: Mutex<String> = Mutex::new(String::new());
 /// Drive the DevTools conversation from the process-run loop.
@@ -1146,65 +1153,46 @@ pub fn cdp_pump() {
             // dialog is gone, is the measurement that tells "the UI cannot show
             // web content" apart from "the first navigation was simply dropped".
             {
-                static NAV_ONCE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-                // Second navigation, to the live site, at the tenth heartbeat (~5 min):
-                // exit criterion 2 of the desktop sprint, and the measurement for the
-                // ten "handshake failed ... net_error -100" lines seen per run. Off
-                // unless LIVE_SITE_AT_HEARTBEAT is set (a kernel constant for now).
-                const LIVE_SITE_AT_HEARTBEAT: u64 = 10;
-                static NAV_LIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-                static NAV_LIVE_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-                static NAV_LIVE_ANS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-                static NAV_LIVE_DUMPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-                // After the live navigate, run 14 got NO reply of any kind for the rest
-                // of the run (no heartbeat answers either) and the guest sat idle: the
-                // browser's main thread parked on something in that navigation. The
-                // once-only "channel dead" dump had already spent itself. This one is
-                // armed by the navigate: 60 s later with no answer since, name the wait.
+                // The visit list: the URLs typed after `chrome`, or the defaults (the
+                // argv page again at the fourth heartbeat, which restores the start-up
+                // navigation the profile dialog used to swallow, and the live site at
+                // the tenth). A custom list goes one URL every four heartbeats from the
+                // fourth. Each navigate arms the 60-second "silent after navigate" dump.
+                static NAV_NEXT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+                static NAV_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+                static NAV_ANS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+                static NAV_DUMPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
                 {
-                    let at = NAV_LIVE_AT.load(Ordering::Relaxed);
+                    let at = NAV_AT.load(Ordering::Relaxed);
                     if at != 0 && now.saturating_sub(at) > 6000
-                        && PING_ANS.load(Ordering::Relaxed) == NAV_LIVE_ANS.load(Ordering::Relaxed)
-                        && !NAV_LIVE_DUMPED.swap(true, Ordering::Relaxed)
+                        && PING_ANS.load(Ordering::Relaxed) == NAV_ANS.load(Ordering::Relaxed)
+                        && !NAV_DUMPED.swap(true, Ordering::Relaxed)
                     {
-                        crate::serial_println!("[cdp] no DevTools answer 60 s after the live navigate: where is the browser?");
-                        // ONLY the lock-free ring. The first version of this dump also
-                        // printed the thread states and the epoll sets from here, on
-                        // TASK 0 with IF=1: it held EPOLLS.lock() across a Debug print,
-                        // was preempted, and a chrome thread then spun forever in
-                        // epoll_wait with IF=0 on that lock (run 21's NMI probe: RIP in
-                        // linux_dispatch_inner, cdp_pump+0xae8 and Debug::fmt on the
-                        // stack). The rule above cdp_send stands: no ring3 spinlocks
-                        // from the supervising loop. The syscall ring is a plain array.
+                        crate::serial_println!("[cdp] no DevTools answer 60 s after the navigate: where is the browser?");
+                        // ONLY the lock-free ring and the census that takes no ring3 lock
+                        // from this task (run 21: an EPOLLS.lock() here wedged the guest).
                         dump_main_syscalls();
-                        // And the thread census, the way the "channel dead" dump above has
-                        // taken it safely for weeks: scheduler states plus each thread's
-                        // last syscall. Run 31's ring ended at tick 6779 with a futex that
-                        // returned -1, and no syscall of the main thread for four minutes
-                        // after: a thread parked inside a syscall never reaches the ring,
-                        // and only the census says whether it is Blocked, and on what.
-                        dump_threads_now("silent after live navigate");
+                        dump_threads_now("silent after navigate");
                     }
                 }
-                if LIVE_SITE_AT_HEARTBEAT > 0 && sent >= LIVE_SITE_AT_HEARTBEAT && !NAV_LIVE.load(Ordering::Relaxed) {
+                let custom: alloc::vec::Vec<String> = CHROME_URLS.lock().clone();
+                let (list, step): (alloc::vec::Vec<String>, u64) = if custom.is_empty() {
+                    (alloc::vec![CDP_URL.lock().clone(), String::from("https://euro-os.eu/")], 6)
+                } else {
+                    (custom, 4)
+                };
+                let i = NAV_NEXT.load(Ordering::Relaxed);
+                if i < list.len() && sent >= 4 + (i as u64) * step {
                     let sid = CDP_SESSION.lock().clone();
                     if !sid.is_empty() {
-                        NAV_LIVE.store(true, Ordering::Relaxed);
-                        NAV_LIVE_AT.store(now, Ordering::Relaxed);
-                        NAV_LIVE_ANS.store(PING_ANS.load(Ordering::Relaxed), Ordering::Relaxed);
-                        crate::serial_println!("[cdp] navigating the attached target to https://euro-os.eu/ (heartbeat {sent})");
+                        NAV_NEXT.store(i + 1, Ordering::Relaxed);
+                        NAV_AT.store(now, Ordering::Relaxed);
+                        NAV_ANS.store(PING_ANS.load(Ordering::Relaxed), Ordering::Relaxed);
+                        NAV_DUMPED.store(false, Ordering::Relaxed);
+                        let url = &list[i];
+                        crate::serial_println!("[cdp] navigating the attached target to {url} (heartbeat {sent}, {}/{})", i + 1, list.len());
                         cdp_send(&alloc::format!(
-                            "{{\"id\":61,\"sessionId\":\"{sid}\",\"method\":\"Page.navigate\",\"params\":{{\"url\":\"https://euro-os.eu/\"}}}}"));
-                    }
-                }
-                if sent >= 4 && !NAV_ONCE.load(Ordering::Relaxed) {
-                    let sid = CDP_SESSION.lock().clone();
-                    if !sid.is_empty() {
-                        NAV_ONCE.store(true, Ordering::Relaxed);
-                        let url = CDP_URL.lock().clone();
-                        crate::serial_println!("[cdp] re-navigating the attached target to {url} (heartbeat {sent})");
-                        cdp_send(&alloc::format!(
-                            "{{\"id\":60,\"sessionId\":\"{sid}\",\"method\":\"Page.navigate\",\"params\":{{\"url\":\"{url}\"}}}}"));
+                            "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Page.navigate\",\"params\":{{\"url\":\"{url}\"}}}}", 60 + i));
                     }
                 }
             }

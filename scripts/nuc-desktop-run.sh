@@ -17,7 +17,7 @@
 #     PACK     chromium EuroPack       (default /root/euroos/chrome-pack2.img)
 #     NSSPACK  NSS EuroPack, for https (default /root/euroos/nss-pack.img)
 #     SAMPLES  screendump times in seconds after boot (default "120 300 480 660")
-#     MEM      guest memory            (default 5632M: seven 256 MiB fork arenas)
+#     MEM      guest memory            (default 5632M: seven 256 MiB fork arenas)\n#     CHROME_CMD command typed in the Terminal (default "chrome"; add URLs to visit)
 # ============================================================================
 set -u
 LOG="${1:?usage: nuc-desktop-run.sh /path/to/log}"
@@ -91,17 +91,14 @@ mon "screendump $LOG-desktop.ppm"
 # The qcodes are PHYSICAL keys and this system boots be-azerty, where the key
 # QEMU calls "semicolon" types an m. Sending the letters as if the guest were
 # US-layout gives `chro,e`.
-cat > "$LOG.keys" <<'K'
-key c
-key h
-key r
-key o
-key semicolon
-key e
-key ret
-K
+# CHROME_CMD (default `chrome`) may carry URLs: `chrome https://www.youtube.com/
+# https://euro-os.eu/` makes the kernel's DevTools bridge navigate to them in
+# turn, one every four heartbeats (two minutes of guest time) from the fourth.
+# `type` in qmp-input.py maps the characters through the be-azerty layout.
+CHROME_CMD="${CHROME_CMD:-chrome}"
+{ printf 'type %s\nkey ret\n' "$CHROME_CMD"; } > "$LOG.keys"
 python3 "$DIR/qmp-input.py" "$LOG.qmp" "$LOG.keys" 1920 1080 "$LOG.mon"
-echo "typed chrome at $(( $(date +%s) - START ))s"
+echo "typed '$CHROME_CMD' at $(( $(date +%s) - START ))s"
 
 # CLICK_AT="X Y [X2 Y2 ...]" clicks those absolute screen points after the first
 # sample. Chrome can come up on a modal it will sit on forever (the profile-error
@@ -195,7 +192,14 @@ kill $Q 2>/dev/null; wait $Q 2>/dev/null
 # and the guest must not have wedged. Each failing check is named.
 V=""
 grep -aqE "(GP FAULT|page fault addr).*task 9\)" "$LOG" && V="$V main-thread-fault"
-grep -aqE "Page\.frameNavigated.*https://euro-os" "$LOG" || V="$V no-live-navigation"
+# Every navigation the bridge issued must have committed: a Page.frameNavigated
+# whose url starts with the same scheme and host (the log cuts long lines inside
+# the URL, so the host is what can be matched).
+for u in $(grep -aoE "navigating the attached target to [^ ]+" "$LOG" | awk '{print $NF}'); do
+  h=$(printf '%s' "$u" | sed -E 's|^([a-z]+://[^/]*).*|\1|')
+  grep -aqF "Page.frameNavigated\",\"params\":{\"frame\":{\"id\":" "$LOG" || true
+  grep -aE "Page\.frameNavigated" "$LOG" | grep -aqF "\"url\":\"$h" || V="$V no-navigation:$h"
+done
 grep -aq "arena alloc FAILED" "$LOG" && V="$V fork-refused"
 grep -aq "POOL EXHAUSTED" "$LOG" && V="$V demand-pool-exhausted"
 [ -f "$LOG.wedge" ] && V="$V wedge"

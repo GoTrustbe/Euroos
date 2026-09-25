@@ -5528,6 +5528,13 @@ fn main() -> Status {
                                 out.push(String::from("chrome: not running"));
                             }
                         } else {
+                            // `chrome URL...`: the DevTools bridge visits these in turn,
+                            // one every four heartbeats from the fourth (the test matrix
+                            // of the workplace sprint: youtube, nextcloud, ...).
+                            let urls: Vec<String> = exec_cmd.split_whitespace().skip(1)
+                                .filter(|a| a.starts_with("http") || a.starts_with("file:"))
+                                .map(String::from).collect();
+                            ring3::set_chrome_urls(&urls);
                             let (ok, msg) = launch_chrome_app(ctx.mem);
                             if ok {
                                 windows[gtk_idx].title = String::from("Chromium  -  chrome");
