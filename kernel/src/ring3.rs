@@ -1005,6 +1005,18 @@ fn json_first_page_target(msg: &str) -> Option<String> {
 pub fn set_chrome_urls(urls: &[String]) {
     *CHROME_URLS.lock() = urls.to_vec();
 }
+
+/// The page chrome should load FIRST (its argv URL). The first http(s) URL in the
+/// visit list, if any, so a site opens in the initially-attached renderer and the
+/// DevTools session reaches it: a cross-process navigation from file:// to a site
+/// leaves the session bound to the old renderer, and no command (evaluate or input)
+/// reaches the new one (W19). Same-site navigations after this keep the session.
+/// Falls back to the staged local page.
+pub fn chrome_init_url() -> String {
+    CHROME_URLS.lock().iter().find(|u| u.starts_with("http"))
+        .cloned()
+        .unwrap_or_else(|| String::from("file:///tmp/euro.html"))
+}
 /// The DOM chrome sent back (empty until it arrives).
 pub static CDP_DOM: Mutex<String> = Mutex::new(String::new());
 /// Drive the DevTools conversation from the process-run loop.

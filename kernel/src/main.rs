@@ -395,10 +395,17 @@ fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
     // chrome's first instruction — and the input bridge wants the session anyway:
     // desktop clicks and typing ride the same reliable DevTools route as the
     // boot-phase runs. The staged euro.html is the start page's target.
-    ring3::cdp_install_input("file:///tmp/euro.html");
+    // The first site in the visit list becomes chrome's initial page, so its
+    // renderer is the one the DevTools session attaches to (W19: a file://->site
+    // navigation strands the session on the old renderer). The argv's last element
+    // is the start URL; swap it.
+    let init_url = ring3::chrome_init_url();
+    ring3::cdp_install_input(&init_url);
+    let mut argv: alloc::vec::Vec<&[u8]> = ring3::CHROME_ARGV.to_vec();
+    if let Some(last) = argv.last_mut() { *last = init_url.as_bytes(); }
     let caps = ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO | ring3::CAP_NET;
     match ring3::spawn_glibc_disk_persistent(mem, "/pack/chrome", ring3::ldlinux_bytes(),
-                                             ring3::CHROME_ARGV, ring3::CHROME_ENVP, caps) {
+                                             &argv, ring3::CHROME_ENVP, caps) {
         Some(t) => (true, alloc::format!("chrome: launched (task {t}) — the window paints as it starts up")),
         None => {
             xserver::set_windowed(false);
