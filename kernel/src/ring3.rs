@@ -1427,9 +1427,23 @@ pub fn cdp_pump() {
                         NAV_ANS.store(PING_ANS.load(Ordering::Relaxed), Ordering::Relaxed);
                         NAV_DUMPED.store(false, Ordering::Relaxed);
                         let url = &list[i];
-                        crate::serial_println!("[cdp] navigating the attached target to {url} (heartbeat {sent}, {}/{})", i + 1, list.len());
-                        cdp_send(&alloc::format!(
-                            "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Page.navigate\",\"params\":{{\"url\":\"{url}\"}}}}", 60 + i));
+                        if let Some(js) = url.strip_prefix("js:") {
+                            // A `js:EXPRESSION` step runs in the page instead of navigating:
+                            // accepting youtube's consent dialog, clicking play. Quotes are
+                            // escaped for the JSON; keep the expression simple.
+                            let esc: String = js.chars().flat_map(|c| match c {
+                                '"' => alloc::vec!['\\', '"'],
+                                '\\' => alloc::vec!['\\', '\\'],
+                                c => alloc::vec![c],
+                            }).collect();
+                            crate::serial_println!("[cdp] evaluating in the attached target: {js} (heartbeat {sent}, {}/{})", i + 1, list.len());
+                            cdp_send(&alloc::format!(
+                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"{esc}\",\"returnByValue\":true}}}}", 60 + i));
+                        } else {
+                            crate::serial_println!("[cdp] navigating the attached target to {url} (heartbeat {sent}, {}/{})", i + 1, list.len());
+                            cdp_send(&alloc::format!(
+                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Page.navigate\",\"params\":{{\"url\":\"{url}\"}}}}", 60 + i));
+                        }
                     }
                 }
             }

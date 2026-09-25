@@ -5532,7 +5532,7 @@ fn main() -> Status {
                             // one every four heartbeats from the fourth (the test matrix
                             // of the workplace sprint: youtube, nextcloud, ...).
                             let urls: Vec<String> = exec_cmd.split_whitespace().skip(1)
-                                .filter(|a| a.starts_with("http") || a.starts_with("file:"))
+                                .filter(|a| a.starts_with("http") || a.starts_with("file:") || a.starts_with("js:"))
                                 .map(String::from).collect();
                             ring3::set_chrome_urls(&urls);
                             let (ok, msg) = launch_chrome_app(ctx.mem);
