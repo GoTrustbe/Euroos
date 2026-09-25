@@ -1324,7 +1324,11 @@ pub fn cdp_pump() {
                     let scd = sc.wrapping_sub(LAST_SC.swap(sc, Ordering::Relaxed));
                     let mut pl = alloc::format!("[prof] t{prof} {:?}: {total_s} samples, {scd} syscalls, last={sn}(a1={sa1:#x})->{sr:#x};", thread_name(prof));
                     for &(h, pg) in pages.iter().take(5) {
-                        pl.push_str(&alloc::format!(" {h}x {}", demand_addr_origin(pg)));
+                        // demand_addr_origin takes DEMAND_FILE_MAPS, DISK_FILES and FILES,
+                        // which syscalls and the fault handler take with interrupts off:
+                        // never hold them from task 0 with interrupts on (runs 21, 53).
+                        let origin = { let _g = crate::sched::IfOffGuard::new(); demand_addr_origin(pg) };
+                        pl.push_str(&alloc::format!(" {h}x {origin}"));
                     }
                     crate::serial_println!("{pl}");
                 }
