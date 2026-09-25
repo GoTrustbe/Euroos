@@ -461,10 +461,40 @@ fn inet_send(fd: u64, data: &[u8]) -> u64 {
 /// whether OUR stack delivered the server's bytes intact is the question this
 /// answers, per fd, once, with the offending header and the stream offset.
 #[derive(Clone, Copy)]
-struct TlsWalk { sport: u16, remaining: u32, hdr: [u8; 5], hdr_len: u8, bytes: u64, records: u32, bad: bool }
-const TLS_WALK_NONE: TlsWalk = TlsWalk { sport: 0, remaining: 0, hdr: [0; 5], hdr_len: 0, bytes: 0, records: 0, bad: false };
+struct TlsWalk { sport: u16, remaining: u32, hdr: [u8; 5], hdr_len: u8, bytes: u64, records: u32, bad: bool, trace: [(u8, u16); 10] }
+const TLS_WALK_NONE: TlsWalk = TlsWalk { sport: 0, remaining: 0, hdr: [0; 5], hdr_len: 0, bytes: 0, records: 0, bad: false, trace: [(0, 0); 10] };
 static TLS_WALK: Mutex<[[TlsWalk; 96]; 2]> = Mutex::new([[TLS_WALK_NONE; 96]; 2]);
 static TLS_WALK_LINES: AtomicU64 = AtomicU64::new(0);
+/// At close of a port-443 connection: the first records each way as (type:len),
+/// once for every connection that exchanged little (a failed handshake is a few
+/// KB). ServerHello is 22, ChangeCipherSpec 20, everything encrypted 23; the last
+/// record chrome sent says whether it reached its Finished (a ~60-byte 23) or
+/// gave up with an alert (a ~24-byte 23) after the server's flight.
+fn tls_walk_close(fd: u64) {
+    if fd < 500 || fd >= 596 {
+        return;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    let all = TLS_WALK.lock();
+    let rx = all[0][(fd - 500) as usize];
+    let tx = all[1][(fd - 500) as usize];
+    if rx.sport == 0 && tx.sport == 0 {
+        return;
+    }
+    if rx.bytes + tx.bytes > 32 * 1024 || TLS_WALK_LINES.fetch_add(1, Ordering::Relaxed) >= 80 {
+        return;
+    }
+    let fmt = |w: &TlsWalk| {
+        let mut out = String::new();
+        for i in 0..(w.records as usize).min(w.trace.len()) {
+            let (t, l) = w.trace[i];
+            out.push_str(&alloc::format!("{t}:{l} "));
+        }
+        out
+    };
+    crate::serial_println!("[tls] fd{fd} sport {} closed: rx {} B in {} records [{}] tx {} B in {} records [{}]",
+        rx.sport, rx.bytes, rx.records, fmt(&rx), tx.bytes, tx.records, fmt(&tx));
+}
 fn tls_walk(fd: u64, tx: bool, data: &[u8]) {
     let Some((_, sport, server, dport)) = crate::net::sock_names(fd) else { return };
     if dport != 443 || fd < 500 || fd >= 596 || !crate::net::sock_is_tcp(fd) {
@@ -505,6 +535,9 @@ fn tls_walk(fd: u64, tx: bool, data: &[u8]) {
                         st.hdr, st.bytes + i as u64 - 5, st.records);
                 }
                 return;
+            }
+            if (st.records as usize) < st.trace.len() {
+                st.trace[st.records as usize] = (t, l);
             }
             st.remaining = l as u32;
             st.hdr_len = 0;
@@ -1275,6 +1308,33 @@ pub fn cdp_pump() {
                 } else {
                     (custom, 4)
                 };
+                // The NetLog's SSL errors, once, at heartbeat 14 (420 s): every line
+                // of /tmp/cr/netlog.json that carries an "error_reason" (BoringSSL's
+                // reason code, with error_lib and the net_error), capped at 24.
+                static NETLOG_DUMPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+                if sent >= 14 && !NETLOG_DUMPED.swap(true, Ordering::Relaxed) {
+                    let data: Option<alloc::vec::Vec<u8>> = {
+                        let _g = crate::sched::IfOffGuard::new();
+                        let files = FILES.lock();
+                        files.iter().find(|(p, _)| p == "/tmp/cr/netlog.json").map(|(_, d)| d.to_vec())
+                    };
+                    match data {
+                        None => crate::serial_println!("[netlog] no /tmp/cr/netlog.json"),
+                        Some(d) => {
+                            let mut n = 0;
+                            for line in d.split(|&b| b == b'\n') {
+                                if line.windows(14).any(|w| w == b"\"error_reason\"") {
+                                    n += 1;
+                                    if n <= 24 {
+                                        let l: String = String::from_utf8_lossy(line).chars().take(300).collect();
+                                        crate::serial_println!("[netlog] {l}");
+                                    }
+                                }
+                            }
+                            crate::serial_println!("[netlog] {} B, {n} lines with error_reason", d.len());
+                        }
+                    }
+                }
                 let i = NAV_NEXT.load(Ordering::Relaxed);
                 if i < list.len() && sent >= 4 + (i as u64) * step {
                     let sid = CDP_SESSION.lock().clone();
@@ -5041,6 +5101,7 @@ fn close_fd_now(a1: u64) -> u64 {
         0
     } else if crate::net::is_sock_fd(a1) {
         sock_pair_forget(a1);
+        tls_walk_close(a1);
         crate::net::sock_close(a1)
     } else if crate::net::is_unix_fd(a1) {
         sock_pair_forget(a1);
@@ -8877,6 +8938,12 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // (run 52); one transport at a time, and the TLS record walker judges TCP.
     // QUIC returns once TCP/TLS is clean (workplace sprint, W13).
     b"--disable-quic",
+    // BoringSSL's reason for a failed handshake lives only in the NetLog (chrome
+    // logs nothing else for it): the kernel prints that file's "error_reason"
+    // lines at heartbeat 14 as [netlog]; error_lib 16 = SSL, reasons per
+    // BoringSSL's ssl.h (W13).
+    b"--log-net-log=/tmp/cr/netlog.json",
+    b"--net-log-capture-mode=Default",
     // MULTI-PROCESS is the default since 2026-09-04, matching the boot test.
     // What stood in its way is fixed and measured: descriptors between two
     // CHILDREN were keyed by fd number and silently vanished, so no data-pipe
