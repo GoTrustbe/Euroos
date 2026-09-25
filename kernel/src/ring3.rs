@@ -9261,7 +9261,7 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // embeddings after first paint and never returns to its event loop under
     // emulation. Unknown feature names are ignored harmlessly, so the list names
     // every plausible spelling.
-    b"--disable-features=SafeBrowsing,OptimizationHints,SegmentationPlatform,MediaRouter,Translate,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,MojoUseEventFd,PageContentAnnotations,HistoryEmbeddings,PageEmbeddings,AnnotatedPageContentExtraction,AIPageContent,TextEmbedder,PageContentExtraction,OptimizationGuideModelDownloading,OptimizationTargetPrediction,PageVisibility,ModelExecution",
+    b"--disable-features=SafeBrowsing,OptimizationHints,SegmentationPlatform,MediaRouter,Translate,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,MojoUseEventFd,AudioServiceOutOfProcess,AudioServiceSandbox,PageContentAnnotations,HistoryEmbeddings,PageEmbeddings,AnnotatedPageContentExtraction,AIPageContent,TextEmbedder,PageContentExtraction,OptimizationGuideModelDownloading,OptimizationTargetPrediction,PageVisibility,ModelExecution",
     // The fast, reproducible demo page. The REAL site works down the whole
     // stack on the post-campaign kernel (desk4, 2026-08-31: DNS via usernet,
     // TCP+TLS established to euro-os.eu:443, first composited paint quad at

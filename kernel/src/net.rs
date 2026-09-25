@@ -2757,6 +2757,12 @@ pub fn unix_fd_send(fd: u64, data: &[u8]) -> u64 {
     if let Some(e) = ep {
         return match unix_send(e, data) {
             Ok(n) => n as u64,
+            // A closed peer is EPIPE (-32), not EPERM (-1): a program handles a
+            // broken pipe (retry, reopen, graceful stop), but reads EPERM as a
+            // permission fault it cannot recover from. Chrome's audio SyncWriter
+            // logged the send as "No room in socket buffer: Operation not
+            // permitted" and gave up (run 86).
+            Err(UnixError::BrokenPipe) => (-32i64) as u64,
             Err(_) => (-1i64) as u64,
         };
     }
