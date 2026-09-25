@@ -414,10 +414,80 @@ static SOCK_NONBLOCK: Mutex<alloc::vec::Vec<(u64, bool)>> = Mutex::new(alloc::ve
 /// chrome socket is O_NONBLOCK; the blocking paths spin with interrupts off (see
 /// net::sock_recv_nowait for the measurement) and must never be entered for one.
 fn inet_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
-    if fd_is_nonblock(fd) { crate::net::sock_recv_nowait(fd, max) } else { crate::net::sock_recv(fd, max) }
+    let d = if fd_is_nonblock(fd) { crate::net::sock_recv_nowait(fd, max) } else { crate::net::sock_recv(fd, max) };
+    if !d.is_empty() {
+        tls_walk(fd, false, &d);
+    }
+    d
 }
 fn inet_send(fd: u64, data: &[u8]) -> u64 {
-    if fd_is_nonblock(fd) { crate::net::sock_send_nowait(fd, data) } else { crate::net::sock_send(fd, data) }
+    let r = if fd_is_nonblock(fd) { crate::net::sock_send_nowait(fd, data) } else { crate::net::sock_send(fd, data) };
+    if (r as i64) > 0 {
+        tls_walk(fd, true, &data[..(r as usize).min(data.len())]);
+    }
+    r
+}
+
+/// TLS record walker on every port-443 socket, both directions: the byte stream
+/// a TLS peer sees is a sequence of 5-byte record headers (type 20..23, version
+/// 0x0301..0x0304, length <= 16640) each followed by that many bytes, so the
+/// walker can tell a corrupted stream (a header that is none of that) from one
+/// the peer merely dislikes. YouTube's scripts and stylesheets fail with
+/// net::ERR_SSL_PROTOCOL_ERROR on the guest (run 52) while the document loads;
+/// whether OUR stack delivered the server's bytes intact is the question this
+/// answers, per fd, once, with the offending header and the stream offset.
+#[derive(Clone, Copy)]
+struct TlsWalk { sport: u16, remaining: u32, hdr: [u8; 5], hdr_len: u8, bytes: u64, records: u32, bad: bool }
+const TLS_WALK_NONE: TlsWalk = TlsWalk { sport: 0, remaining: 0, hdr: [0; 5], hdr_len: 0, bytes: 0, records: 0, bad: false };
+static TLS_WALK: Mutex<[[TlsWalk; 96]; 2]> = Mutex::new([[TLS_WALK_NONE; 96]; 2]);
+static TLS_WALK_LINES: AtomicU64 = AtomicU64::new(0);
+fn tls_walk(fd: u64, tx: bool, data: &[u8]) {
+    let Some((_, sport, server, dport)) = crate::net::sock_names(fd) else { return };
+    if dport != 443 || fd < 500 || fd >= 596 {
+        return;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    let mut all = TLS_WALK.lock();
+    let st = &mut all[tx as usize][(fd - 500) as usize];
+    if st.sport != sport {
+        *st = TLS_WALK_NONE;
+        st.sport = sport;
+    }
+    if st.bad {
+        return;
+    }
+    let mut i = 0usize;
+    while i < data.len() {
+        if st.remaining > 0 {
+            let n = (st.remaining as usize).min(data.len() - i);
+            st.remaining -= n as u32;
+            i += n;
+            continue;
+        }
+        st.hdr[st.hdr_len as usize] = data[i];
+        st.hdr_len += 1;
+        i += 1;
+        if st.hdr_len == 5 {
+            let t = st.hdr[0];
+            let v = u16::from_be_bytes([st.hdr[1], st.hdr[2]]);
+            let l = u16::from_be_bytes([st.hdr[3], st.hdr[4]]);
+            let ok = matches!(t, 20..=23) && (0x0301..=0x0304).contains(&v) && l as usize <= 16384 + 256;
+            if !ok {
+                st.bad = true;
+                if TLS_WALK_LINES.fetch_add(1, Ordering::Relaxed) < 40 {
+                    crate::serial_println!(
+                        "[tls-{}] fd{fd} {}.{}.{}.{}:443 sport {sport}: BAD record header {:02x?} at stream byte {} after {} good records",
+                        if tx { "tx" } else { "rx" }, server.0[0], server.0[1], server.0[2], server.0[3],
+                        st.hdr, st.bytes + i as u64 - 5, st.records);
+                }
+                return;
+            }
+            st.remaining = l as u32;
+            st.hdr_len = 0;
+            st.records += 1;
+        }
+    }
+    st.bytes += data.len() as u64;
 }
 
 fn fd_is_nonblock(fd: u64) -> bool {
