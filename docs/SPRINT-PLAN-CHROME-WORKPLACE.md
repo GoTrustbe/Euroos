@@ -123,9 +123,21 @@ desktop loop got 1.3 s (one heartbeat slipped by 148 s). Either the thread
 spins (a lock or a yield loop) or JavaScript runs without a JIT at a hundred
 times the cost. The tick sampler now profiles the busiest task of each
 interval (9c95636): [prof] names its code pages (exe or library offset, or
-anon = JIT), its last syscall and its syscall count. Run 63 measures. The
-scheduler's fairness towards the desktop loop is a separate question raised
-by the same numbers.
+anon = JIT), its last syscall and its syscall count.
+
+Run 63 ended in a kernel panic: "memory allocation of 2097152 bytes failed"
+in a read syscall, the 384 MiB kernel heap full. Since the ENOENT fix chrome's
+Simple Cache really writes, and /tmp/cr lives in FILES, in that heap.
+Commit 72c6bc8: caches capped at 16 MiB each, heap used/free on every [cpu]
+line. Run 64: no panic, heap 219 MiB before youtube, 308 MiB after and steady;
+the renderer this time idle (CPU 95% idle) and the page still without a load
+event: 19 requests, 3 pending for eight minutes (the sign-in check at
+accounts.google.com, a Google font, the web manifest), no connection ever made
+for them. EuroGuard answers a blocked name with silence, a resource that
+never fails. Commit 0a31615: a DNS ledger (every query and answer with tick),
+NXDOMAIN synthesized for a blocked name, connect log 200 lines with ticks.
+Run 66 measures. The renderer's 165 s of CPU in run 62 did not recur in 64;
+kept as W16 until the profile names it.
 
 ### W6b. run 53's wedge: PIPES taken from the desktop loop
 
