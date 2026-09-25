@@ -1428,9 +1428,17 @@ pub fn cdp_pump() {
                         NAV_DUMPED.store(false, Ordering::Relaxed);
                         let url = &list[i];
                         if let Some(js) = url.strip_prefix("js:") {
-                            // A `js:EXPRESSION` step runs in the page instead of navigating:
-                            // accepting youtube's consent dialog, clicking play. Quotes are
-                            // escaped for the JSON; keep the expression simple.
+                            // A `js:NAME` step runs in the page instead of navigating. The
+                            // names stand for expressions that the Terminal cannot carry (the
+                            // runbook types the command through a be-azerty keyboard map with
+                            // no quotes or brackets): consent = accept a cookie dialog, play =
+                            // start the first video, else the text itself.
+                            let js: &str = match js {
+                                "consent" => "(function(){var b=[...document.querySelectorAll('button')].find(b=>/^(Accept|Alles accepteren|Tout accepter|Alle akzeptieren)/i.test(b.getAttribute('aria-label')||b.textContent));if(b){b.click();return 'clicked '+b.textContent.trim().slice(0,40)}return 'no consent button'})()",
+                                "play" => "(function(){var v=document.querySelector('video');if(!v)return 'no video';v.muted=false;v.play();return 'play '+v.currentSrc.slice(0,60)})()",
+                                "video" => "(function(){var v=document.querySelector('video');if(!v)return 'no video';return 'time '+v.currentTime.toFixed(1)+' paused '+v.paused+' ready '+v.readyState+' '+v.videoWidth+'x'+v.videoHeight+' err '+(v.error?v.error.code:0)})()",
+                                other => other,
+                            };
                             let esc: String = js.chars().flat_map(|c| match c {
                                 '"' => alloc::vec!['\\', '"'],
                                 '\\' => alloc::vec!['\\', '\\'],
