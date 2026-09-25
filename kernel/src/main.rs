@@ -69,6 +69,7 @@ mod gdbstub;
 mod session;
 mod shell;
 mod smp;
+mod alsa;
 mod nvme;
 mod tls_roots;
 mod update;

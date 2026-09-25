@@ -457,3 +457,47 @@ pub fn earcon(freq_hz: u32) -> bool {
         true
     }
 }
+
+/// The cyclic DMA buffer behind /dev/snd/pcmC0D0p (address, bytes), if the
+/// stream runs.
+pub fn pcm_ring() -> Option<(u64, usize)> {
+    unsafe {
+        (*core::ptr::addr_of!(HDA)).as_ref()
+            .filter(|h| h.audio != 0 && h.audio_bytes != 0)
+            .map(|h| (h.audio, h.audio_bytes))
+    }
+}
+/// Link position in bytes within the cyclic buffer.
+pub fn pcm_lpib() -> u32 {
+    stream_pos()
+}
+/// Copy PCM bytes into the ring at `off`, wrapping at the end.
+pub fn pcm_write(off: usize, data: &[u8]) {
+    let Some((base, bytes)) = pcm_ring() else { return };
+    let mut o = off % bytes;
+    for chunk in data.chunks(bytes) {
+        let first = (bytes - o).min(chunk.len());
+        // SAFETY: the ring is our own identity-mapped DMA buffer.
+        unsafe {
+            core::ptr::copy_nonoverlapping(chunk.as_ptr(), (base + o as u64) as *mut u8, first);
+            if first < chunk.len() {
+                core::ptr::copy_nonoverlapping(chunk.as_ptr().add(first), base as *mut u8, chunk.len() - first);
+            }
+        }
+        o = (o + chunk.len()) % bytes;
+    }
+}
+/// Zero the ring between two byte offsets (wrapping; `to` may exceed the size).
+pub fn pcm_zero(from: usize, to: usize) {
+    let Some((base, bytes)) = pcm_ring() else { return };
+    let n = to.saturating_sub(from).min(bytes);
+    let o = from % bytes;
+    let first = (bytes - o).min(n);
+    // SAFETY: as above.
+    unsafe {
+        core::ptr::write_bytes((base + o as u64) as *mut u8, 0, first);
+        if first < n {
+            core::ptr::write_bytes(base as *mut u8, 0, n - first);
+        }
+    }
+}

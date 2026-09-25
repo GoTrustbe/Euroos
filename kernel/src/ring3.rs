@@ -188,7 +188,7 @@ fn in_prot_none(ptr: u64, len: usize) -> bool {
     PROT_NONE_RANGES.lock().iter().any(|&(s, e)| ptr < e && end > s)
 }
 
-fn in_user_arena(ptr: u64, len: usize) -> bool {
+pub(crate) fn in_user_arena(ptr: u64, len: usize) -> bool {
     let base = ARENA_BASE.load(Ordering::Relaxed);
     if base == 0 {
         return true; // no ring-3 context active
@@ -235,7 +235,7 @@ const EFAULT: u64 = (-14i64) as u64;
 /// Copy `src` to user address `dst`. `false` = pointer fails the arena check
 /// (the caller then returns `-EFAULT`); nothing is written.
 #[must_use]
-fn copy_to_user(dst: u64, src: &[u8]) -> bool {
+pub(crate) fn copy_to_user(dst: u64, src: &[u8]) -> bool {
     if !in_user_arena(dst, src.len()) || demand_file_backed(dst, src.len()) {
         return false; // out of bounds, or a read-only file-backed mapping
     }
@@ -246,7 +246,7 @@ fn copy_to_user(dst: u64, src: &[u8]) -> bool {
 
 /// Read `len` bytes from user address `src`. `None` = pointer fails the arena check.
 #[must_use]
-fn copy_from_user(src: u64, len: usize) -> Option<alloc::vec::Vec<u8>> {
+pub(crate) fn copy_from_user(src: u64, len: usize) -> Option<alloc::vec::Vec<u8>> {
     if !in_user_arena(src, len) {
         return None;
     }
@@ -272,7 +272,7 @@ fn zero_user(dst: u64, len: usize) -> bool {
 
 /// Write a scalar (`u32`/`u64`/…) at user address `ptr`. `false` = arena check fails.
 #[must_use]
-fn write_user<T: Copy>(ptr: u64, val: T) -> bool {
+pub(crate) fn write_user<T: Copy>(ptr: u64, val: T) -> bool {
     if !in_user_arena(ptr, core::mem::size_of::<T>()) {
         return false;
     }
@@ -290,7 +290,7 @@ fn write_user<T: Copy>(ptr: u64, val: T) -> bool {
 
 /// Read a scalar from user address `ptr`. `None` = arena check fails.
 #[must_use]
-fn read_user<T: Copy>(ptr: u64) -> Option<T> {
+pub(crate) fn read_user<T: Copy>(ptr: u64) -> Option<T> {
     if !in_user_arena(ptr, core::mem::size_of::<T>()) {
         return None;
     }
@@ -2909,6 +2909,13 @@ fn disk_read_bytes(dev: usize, mut off: u64, mut dst: &mut [u8]) -> bool {
 // mapping — our arena is RWX so a plain store works). chrome's PartitionAlloc opens
 // it during startup. The fd's stored "position" IS the current virtual address.
 const PROC_MEM_FI: usize = usize::MAX - 1;
+/// /dev/snd/pcmC0D0p and /dev/snd/controlC0 (workplace sprint W12): live fds
+/// answered by kernel::alsa over the HDA ring, not files.
+const SND_PCM_FI: usize = usize::MAX - 2;
+const SND_CTL_FI: usize = usize::MAX - 3;
+fn fd_fi(fd: u64) -> Option<usize> {
+    OPEN_FDS.lock().get(fd as usize).and_then(|s| *s).map(|(fi, _)| fi)
+}
 
 /// open("/proc/self/mem"): reserve an fd slot tagged as the live-memory window.
 fn proc_mem_open() -> u64 {
@@ -3300,6 +3307,9 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
         // pread(/proc/self/mem, buf, len, off) reads memory at virtual address `off`.
         return proc_mem_xfer(offset as u64, buf, len, false);
     }
+    if fi == SND_PCM_FI || fi == SND_CTL_FI {
+        return (-22i64) as u64; // the sound devices speak ioctl, not read
+    }
     if fi >= DISK_FI_BASE && fi != WAD_FI {
         // Disk-backed (EuroPack): polled virtio read at the file's disk offset.
         let (dev, dbase, dsize) = match DISK_FILES.lock().get(fi - DISK_FI_BASE) {
@@ -3413,6 +3423,9 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
     }
     // /proc/self/mem: read the process's own memory at the current position (= the
     // virtual address set by a prior lseek), then advance past it.
+    if fi == SND_PCM_FI || fi == SND_CTL_FI {
+        return (-22i64) as u64; // ioctl only
+    }
     if fi == PROC_MEM_FI {
         let n = proc_mem_xfer(off as u64, buf, len, false);
         if n != u64::MAX {
@@ -3501,6 +3514,9 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
     };
     // /proc/self/mem: write into the process's own memory at the current position
     // (= virtual address set by lseek), then advance past it.
+    if fi == SND_PCM_FI || fi == SND_CTL_FI {
+        return (-22i64) as u64; // ioctl only
+    }
     if fi == PROC_MEM_FI {
         let n = proc_mem_xfer(off as u64, buf, len, true);
         if n != u64::MAX {
@@ -5224,6 +5240,9 @@ static DEFERRED_CLOSE: Mutex<alloc::vec::Vec<u32>> = Mutex::new(alloc::vec::Vec:
 /// (The class dispatch that close(3) used to do inline; also called by the
 /// child-exit path to flush deferred closes.)
 fn close_fd_now(a1: u64) -> u64 {
+    if fd_fi(a1) == Some(SND_PCM_FI) {
+        crate::alsa::pcm_close();
+    }
     if is_epoll_fd(a1) {
         if let Some(slot) = EPOLLS.lock().get_mut((a1 - EPOLL_FD_BASE) as usize) {
             *slot = None;
@@ -5686,6 +5705,9 @@ fn vfs_size(fd: usize) -> Option<usize> {
     }
     if fi == PROC_MEM_FI {
         return Some(1usize << 46); // /proc/self/mem: large, canonical, non-overflowing
+    }
+    if fi == SND_PCM_FI || fi == SND_CTL_FI {
+        return Some(0); // character devices
     }
     if fi >= DISK_FI_BASE {
         return DISK_FILES.lock().get(fi - DISK_FI_BASE).map(|&(_, _, _, size)| size as usize);
@@ -9071,6 +9093,9 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // (run 52); one transport at a time, and the TLS record walker judges TCP.
     // QUIC returns once TCP/TLS is clean (workplace sprint, W13).
     b"--disable-quic",
+    // Sound through the ALSA hw plugin straight onto /dev/snd/pcmC0D0p (plug
+    // resamples to the ring's 48 kHz); no dmix, no PulseAudio (W12).
+    b"--alsa-output-device=plughw:0,0",
     // The "disk" behind /tmp/cr is the kernel heap (384 MiB), and the Simple Cache
     // works since the ENOENT fix: run 63 panicked on a 2 MiB allocation with
     // youtube's resources filling it. A session cache of 16 MiB each is plenty
@@ -13088,6 +13113,25 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             if path == b"/proc/self/mem" || path == b"/proc/thread-self/mem" {
                 return proc_mem_open();
             }
+            // The ALSA playback device and its control node (W12).
+            if path.as_slice() == b"/dev/snd/pcmC0D0p" {
+                if !crate::alsa::present() {
+                    return (-19i64) as u64; // -ENODEV: no HD-Audio stream
+                }
+                crate::alsa::pcm_open();
+                let fd = open_low_fd(SND_PCM_FI);
+                set_fd_accmode(fd, flags);
+                if fd != u64::MAX && flags & 0x800 != 0 { fd_set_nonblock(fd, true); }
+                return fd;
+            }
+            if path.as_slice() == b"/dev/snd/controlC0" {
+                if !crate::alsa::present() {
+                    return (-19i64) as u64;
+                }
+                let fd = open_low_fd(SND_CTL_FI);
+                set_fd_accmode(fd, flags);
+                return fd;
+            }
             // Opening a directory (no O_CREAT) -> dir fd for getdents64. O_DIRECTORY
             // (0x10000): chrome's disk-cache backend opens each cache dir this way to
             // enumerate it. Treat ANY O_DIRECTORY open as a directory even if the flat
@@ -13328,6 +13372,19 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 ((statbuf + 8) as *mut u64).write(ino); // st_ino (offset 8): UNIQUE per file
                 ((statbuf + 16) as *mut u64).write(1); // st_nlink (offset 16)
                 (statbuf as *mut u32).add(6).write(0o100644); // st_mode (offset 24): S_IFREG|0644
+                if num == 5 {
+                    match fd_fi(a1) {
+                        Some(SND_PCM_FI) => {
+                            (statbuf as *mut u32).add(6).write(0o020666); // S_IFCHR|0666
+                            ((statbuf + 40) as *mut u64).write((116 << 8) | 16); // st_rdev: snd, pcmC0D0p
+                        }
+                        Some(SND_CTL_FI) => {
+                            (statbuf as *mut u32).add(6).write(0o020666);
+                            ((statbuf + 40) as *mut u64).write(116 << 8); // controlC0
+                        }
+                        _ => {}
+                    }
+                }
                 ((statbuf + 48) as *mut u64).write(size as u64); // st_size (offset 48)
                 ((statbuf + 56) as *mut u64).write(4096); // st_blksize (offset 56)
             }
@@ -13419,7 +13476,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
         316 => vfs_rename(&user_cstr(a2, 256), &user_cstr(a4, 256)), // renameat2(ofd,old,nfd,new,flags)
         85 => vfs_open_create(&user_cstr(a1, 256), true), // creat(path, mode) = open O_CREAT|O_TRUNC
         217 => vfs_getdents64(a1 as usize, a2, a3 as usize), // getdents64(fd, dirp, count)
-        16 => 0,  // ioctl — pretend success (isatty/TCGETS): stdout is a tty
+        16 => match fd_fi(a1) {
+            // The sound devices are the only fds with a real ioctl surface here.
+            Some(SND_PCM_FI) => crate::alsa::pcm_ioctl(a2, a3),
+            Some(SND_CTL_FI) => crate::alsa::ctl_ioctl(a2, a3),
+            _ => 0, // pretend success (isatty/TCGETS): stdout is a tty
+        },
         10 => {
             // mprotect(addr, len, prot): honor PROT_NONE (prot==0) so guard pages become
             // inaccessible (EFAULT on a syscall pointer, fault on ring-3 access) — a
