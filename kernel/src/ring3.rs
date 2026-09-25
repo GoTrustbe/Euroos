@@ -3086,10 +3086,14 @@ fn disk_cache_reset() {
 /// Sorted list of every physical frame currently backing a SHARED (memfd)
 /// mapping — these must SURVIVE a process teardown (other processes map them).
 fn shared_phys_sorted() -> alloc::vec::Vec<u64> {
-    let mut v: alloc::vec::Vec<u64> = SHARED_FRAMES.lock().iter()
+    // One allocation at the exact size: this list is over a hundred thousand
+    // entries with the chrome pack cached, and growing it by doubling asked a
+    // fragmented heap for 2 MiB blocks it could not give (runs 63 and 65).
+    let n = SHARED_FRAMES.lock().iter().map(|(_, f)| f.len()).sum::<usize>() + DISK_PAGE_CACHE.lock().len();
+    let mut v: alloc::vec::Vec<u64> = alloc::vec::Vec::with_capacity(n + 16);
+    v.extend(SHARED_FRAMES.lock().iter()
         .flat_map(|(_, frames)| frames.iter().copied())
-        .filter(|&p| p != 0)
-        .collect();
+        .filter(|&p| p != 0));
     // Disk-cache frames are shared between processes exactly the same way.
     v.extend(DISK_PAGE_CACHE.lock().iter().map(|&(_, p)| p));
     v.sort_unstable();
@@ -3103,10 +3107,16 @@ fn shared_phys_sorted() -> alloc::vec::Vec<u64> {
 /// (four utilities), and a child's frame that the parent still maps would be
 /// exactly that, whatever the shared lists say. If the count is ever non-zero,
 /// the line below names the leak in the ownership model.
+/// The parent-frame guard in child_keep_list (a measurement; see there).
+pub static EXIT_GUARD: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 fn child_keep_list(child_pml4: u64) -> alloc::vec::Vec<u64> {
     let mut keep = shared_phys_sorted();
     let parent = GLIBC_PML4.load(Ordering::Relaxed);
-    if parent == 0 || parent == child_pml4 {
+    // The parent walk is a measurement, not a need: it reported zero frames in
+    // every run (37 to 65), and its two 1.3 MiB lists per child exit were the
+    // allocations that found no hole in a fragmented heap (runs 63 and 65:
+    // "allocation of 65536 bytes failed" with 169 MiB free). Off unless asked.
+    if parent == 0 || parent == child_pml4 || !EXIT_GUARD.load(Ordering::Relaxed) {
         return keep;
     }
     let pv = crate::paging::demand_phys_sorted(parent, DEMAND_PML4_IDX);

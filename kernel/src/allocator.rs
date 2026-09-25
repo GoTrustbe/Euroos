@@ -52,7 +52,12 @@ static ALLOCATOR: IrqSafeHeap = IrqSafeHeap(LockedHeap::empty());
 /// cache - into the in-RAM VFS, every child adds its own tracking state, and
 /// the X stack holds window buffers; all of that lives here. The guest runs
 /// with 3.5 GiB, so the extra 128 MiB is the cheap end of that budget.
-const HEAP_SIZE: usize = 384 * 1024 * 1024;
+/// 512 MiB since 2026-09-25: the desktop browser's profile (a working Simple
+/// Cache since the ENOENT fix), its session files and a first-fit list heap
+/// that fragments under hundreds of growing file buffers; runs 63 and 65
+/// failed 64 KiB and 2 MiB allocations with 169 MiB nominally free. The extra
+/// 128 MiB comes out of the demand pool (2.5 GiB on the 5632M guest).
+const HEAP_SIZE: usize = 512 * 1024 * 1024;
 static mut HEAP: [u8; HEAP_SIZE] = [0u8; HEAP_SIZE];
 
 /// Initialize the heap. Must be the VERY FIRST action in the kernel,
