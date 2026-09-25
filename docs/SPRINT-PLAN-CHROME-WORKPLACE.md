@@ -277,6 +277,20 @@ defaults on card 0), tables sized by sched::MAX_TASKS (256), and the fork
 pool assembled from the largest run plus further 258 MiB runs up to the cap.
 Run 76 measures all three with the W14 fix.
 
+### Run 75 (e31a251: MAP_FIXED/munmap fix): kernel panic, W17 again
+
+The unmap path ran (512 MAP_FIXED overlays, 6012 frames freed by the time
+the log stopped; munmaps of thread stacks and transfer buffers) and the run
+reached the watch page, then the kernel panicked on "memory allocation of
+4195744 bytes failed": a socket receive queue doubling under youtube's 4.7 MB
+document, with 223 MiB of the list heap free but no hole that size. Same
+failure as runs 63 and 65, so W17 gets its structural answer now (e067bab):
+allocations of 128 KiB and up come from a page-granular bitmap pool of 256
+MiB of frames handed over at boot (allocator::install_big_pool), the list heap
+only sees small blocks, and the [cpu] line reports both pools and the demand
+pool. The fork cap goes to half of usable RAM so the extra 258 MiB runs fit
+(run 76 showed the eighth run 1.4 MiB over the old cap). Run 77 measures.
+
 ### W18. the watch page stops loading with nothing pending (run 72)
 
 Run 72 (0b69065, the ALSA gaps closed, consent cookie set at heartbeat 4,
