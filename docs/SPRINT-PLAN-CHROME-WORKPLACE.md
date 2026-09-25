@@ -398,6 +398,25 @@ WebAudio; a video uses the separate media-audio path. Run 94 plays a YouTube
 video with autoplay and measures whether media audio flows (writei count and
 the WAV) and the picture advances.
 
+### THE YOUTUBE VIDEO PLAYS WITH PICTURE (run 94, autoplay)
+
+Run 94 (autoplay, a2de9d9): PASS, and the screendump at 600 s shows the video
+mid-playback, the "Me at the zoo" frame with no play button and no controls
+overlay, unlike run 77's paused poster. So --autoplay-policy started the video
+and the picture advances. Proof
+docs/proof/2026-09-25-desktop-chromium-youtube-playing-run94.png.
+
+Sound is still silent, and run 94 says why: youtube fetched ONE stream (one
+videoplayback, 3.58 MB of video), no separate audio stream, and chrome wrote
+25 s of audio buffers that were all silence (the writei peak is 0). A muted
+autoplay is exactly this: youtube mutes the video and does not fetch the audio
+track. Unmuting needs a real user gesture, and Runtime.evaluate (the js:play
+that sets v.muted=false) does not reach the youtube renderer (W19). Commit
+021c7e2 adds click: and key: walker steps that dispatch Input.dispatchMouseEvent
+and Input.dispatchKeyEvent, which chrome routes to the current renderer at the
+browser level. Run 95 clicks the player and presses m to unmute, and measures
+whether the audio stream is then fetched and the WAV carries sound.
+
 ### W18. the watch page stops loading with nothing pending (run 72)
 
 Run 72 (0b69065, the ALSA gaps closed, consent cookie set at heartbeat 4,
