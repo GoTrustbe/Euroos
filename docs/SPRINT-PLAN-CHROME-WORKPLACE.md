@@ -375,6 +375,29 @@ into the ring, which the kernel already serves, and the AudioContext runs at
 BLOCK_TRANSFER with bit 0x10 (that is BATCH); the real bit is 0x10000. Run 84
 tests the tone through hw:0,0 and reads the WAV.
 
+### W12 RESOLVED (mostly): the ALSA path works end to end (runs 84-93)
+
+The device now opens as hw:0,0, refines, sets params, prepares and takes
+snd_pcm_writei, and the state machine is correct. The bugs cleared in order:
+alsa.conf registered on the desktop path; hw:0,0 instead of plughw (the plug
+would not settle over a single-config slave); RW-only access, no MMAP in info
+(MMAP sent libasound to the XRUN-ioctl avail path); audio moved in-process so
+the SyncWriter socketpair send does not cross a process boundary (it returned
+EPERM as "No room in socket buffer"); unix send returns EPIPE not EPERM; and
+the decisive one, the PCM state constants were each one too high, so chrome
+read PREPARED as RUNNING and looped XRUN/PREPARE 77 times without writing.
+With that fixed chrome writes audio and the WebAudio tone's clock reaches
+7.77 s.
+
+One gap remains on the WebAudio tone: chrome writes three buffers (about
+0.18 s), all silence (peak 0, the pre-roll), then its audio output thread
+stops reposting, so no tone reaches the ring. hw_ptr was first paced to the
+real HDA LPIB and then to a guest-time clock; neither changed it, so the stall
+is inside chrome's audio scheduling, not ALSA availability. The tone is
+WebAudio; a video uses the separate media-audio path. Run 94 plays a YouTube
+video with autoplay and measures whether media audio flows (writei count and
+the WAV) and the picture advances.
+
 ### W18. the watch page stops loading with nothing pending (run 72)
 
 Run 72 (0b69065, the ALSA gaps closed, consent cookie set at heartbeat 4,
