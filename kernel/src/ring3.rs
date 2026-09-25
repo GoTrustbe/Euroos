@@ -13683,6 +13683,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
         // chmod / fchmod / fchmodat: the flat VFS keeps no modes (stat reports the
         // 0700 chrome expects on its profile); 17 ENOSYS per run for nothing.
         90 | 91 | 268 => 0,
+        // sched_setparam / sched_getparam / sched_getscheduler: every thread is
+        // SCHED_OTHER at priority 0 here (48 ENOSYS each per run from the
+        // renderer's thread-priority code).
+        142 => { if a2 != 0 { let _ = write_user::<i32>(a2, 0); } 0 }
+        143 => 0,
+        145 => 0,
         // sigaltstack: no signal delivery here, so the alternate stack is moot;
         // success keeps chrome's crash-handler setup quiet (8 ENOSYS per run).
         131 => 0,
