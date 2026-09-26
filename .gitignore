@@ -107,3 +107,4 @@ id_ed25519*
 # --- end standard ---
 /crates/eurontfs/tests/ntfs.img
 /crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
