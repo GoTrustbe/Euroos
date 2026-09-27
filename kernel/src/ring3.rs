@@ -13775,6 +13775,26 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
         316 => vfs_rename(&user_cstr(a2, 256), &user_cstr(a4, 256)), // renameat2(ofd,old,nfd,new,flags)
         85 => vfs_open_create(&user_cstr(a1, 256), true), // creat(path, mode) = open O_CREAT|O_TRUNC
         217 => vfs_getdents64(a1 as usize, a2, a3 as usize), // getdents64(fd, dirp, count)
+        16 if a2 == 0x541b => {
+            // FIONREAD: bytes readable now, written to *arg (int). Chrome's
+            // SyncSocket::Peek asks this after poll() says readable, and the audio
+            // service's SyncReader trusts the answer: an ioctl that returned 0 without
+            // filling it read as "0 bytes", so every audio buffer "timed out", the
+            // output was silence, and the renderer's replies piled up unread on the
+            // socket (22,308 bytes on fd 633 in run 106). Unix sockets and pipes here;
+            // an AF_INET socket answers 0 (not needed by anything so far).
+            let n: usize = if crate::net::is_unix_fd(a1) {
+                crate::net::unix_fd_available(a1)
+            } else if (a1 as usize) < MAX_FD && is_pipe_fd(a1 as usize) {
+                match PIPE_FDS.lock()[a1 as usize] {
+                    Some((id, false)) => pipes_lock()[id].len(),
+                    _ => 0,
+                }
+            } else {
+                0
+            };
+            if write_user::<i32>(a3, n.min(i32::MAX as usize) as i32) { 0 } else { EFAULT }
+        }
         16 => match fd_fi(a1) {
             // The sound devices are the only fds with a real ioctl surface here.
             Some(SND_PCM_FI) => crate::alsa::pcm_ioctl(a2, a3),

@@ -2785,6 +2785,16 @@ pub fn unix_fd_send(fd: u64, data: &[u8]) -> u64 {
     crate::xserver::write(xfd, data)
 }
 
+/// Bytes readable right now on a UNIX-socket fd (ioctl FIONREAD).
+pub fn unix_fd_available(fd: u64) -> usize {
+    let t = UNIX_FDS.lock();
+    match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
+        Some(UnixSock::Stream(e)) => UNIX_SWITCH.lock().available(*e),
+        Some(UnixSock::X(x)) => crate::xserver::queued_len(*x),
+        _ => 0,
+    }
+}
+
 /// read() from a UNIX-socket fd.
 pub fn unix_fd_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
     if fd >= UNIX_FD_BASE && ((fd - UNIX_FD_BASE) as usize) < MAX_UNIX_FD {
