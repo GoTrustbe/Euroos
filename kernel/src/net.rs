@@ -2745,7 +2745,23 @@ pub fn unix_socketpair() -> Option<(u64, u64)> {
 }
 
 /// write() to a UNIX-socket fd (Switchboard stream or X-server connection).
+/// Last task that wrote / read each unix fd (diagnostics: who owns which end of a
+/// socketpair after an SCM_RIGHTS handoff, and whether the reader ever came).
+pub static UNIX_LAST_WR: [core::sync::atomic::AtomicUsize; MAX_UNIX_FD] = [const { core::sync::atomic::AtomicUsize::new(usize::MAX) }; MAX_UNIX_FD];
+pub static UNIX_LAST_RD: [core::sync::atomic::AtomicUsize; MAX_UNIX_FD] = [const { core::sync::atomic::AtomicUsize::new(usize::MAX) }; MAX_UNIX_FD];
+/// (connection id, side) of a unix fd, for the census.
+pub fn unix_fd_endpoint(fd: u64) -> Option<(u32, char)> {
+    let t = UNIX_FDS.lock();
+    match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
+        Some(UnixSock::Stream(e)) => { let (c, a) = e.ident(); Some((c as u32, if a { 'A' } else { 'B' })) }
+        _ => None,
+    }
+}
+
 pub fn unix_fd_send(fd: u64, data: &[u8]) -> u64 {
+    if fd >= UNIX_FD_BASE && ((fd - UNIX_FD_BASE) as usize) < MAX_UNIX_FD {
+        UNIX_LAST_WR[(fd - UNIX_FD_BASE) as usize].store(crate::sched::current_lockfree(), core::sync::atomic::Ordering::Relaxed);
+    }
     let (ep, xfd) = {
         let t = UNIX_FDS.lock();
         match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
@@ -2771,6 +2787,9 @@ pub fn unix_fd_send(fd: u64, data: &[u8]) -> u64 {
 
 /// read() from a UNIX-socket fd.
 pub fn unix_fd_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
+    if fd >= UNIX_FD_BASE && ((fd - UNIX_FD_BASE) as usize) < MAX_UNIX_FD {
+        UNIX_LAST_RD[(fd - UNIX_FD_BASE) as usize].store(crate::sched::current_lockfree(), core::sync::atomic::Ordering::Relaxed);
+    }
     let (ep, xfd) = {
         let t = UNIX_FDS.lock();
         match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {

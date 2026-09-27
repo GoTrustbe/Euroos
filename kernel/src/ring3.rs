@@ -143,6 +143,12 @@ unsafe fn recover_mmap_offset() -> u64 {
 /// PROT_NONE ranges and treat them as NOT valid user memory (EFAULT on kernel touch,
 /// fault on ring-3 access). Atomic count gives a lock-free fast path (usually 0).
 static PROT_NONE_RANGES: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+/// Audio diagnostics: the renderer's AudioOutputDevice thread and the browser's
+/// AudioThread (resolved by name at each heartbeat); their next syscalls are logged
+/// as [audio-sys] so the two ends of the audio sync socketpair become visible.
+static AUDEV_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+static AUDTH_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+static AUDIO_SYS_LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(160);
 static PROT_NONE_COUNT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 fn prot_none_set(start: u64, end: u64, none: bool) {
@@ -1385,6 +1391,8 @@ pub fn cdp_pump() {
                     for &(t, cr3, state) in snap.iter() {
                         if state == crate::sched::State::Dead { continue; }
                         let Some((_, nm)) = names.iter().find(|(x, _)| *x == t) else { continue };
+                        if nm.starts_with("AudioOutputDevic") { AUDEV_TASK.store(t, Ordering::Relaxed); }
+                        if nm == "AudioThread" { AUDTH_TASK.store(t, Ordering::Relaxed); }
                         if nm != "CrRendererMain" { continue; }
                         let (n, a, r) = last_syscall(t);
                         rl.push_str(&alloc::format!(" t{t} cr3={cr3:#x} {:?} last={n}(a1={a:#x})->{r:#x};", state));
@@ -1396,7 +1404,14 @@ pub fn cdp_pump() {
                     let q = { let _g = crate::sched::IfOffGuard::new(); crate::net::unix_queued_report() };
                     let mut line = alloc::format!("[unixq] {} fds with unread bytes:", q.len());
                     for &(fd, n) in q.iter().take(24) {
-                        line.push_str(&alloc::format!(" fd{fd}:{n}"));
+                        let ep = crate::net::unix_fd_endpoint(fd).map(|(c, sd)| alloc::format!("ep{c}{sd}")).unwrap_or_else(|| String::from("ep?"));
+                        let peer = { let _g = crate::sched::IfOffGuard::new(); SOCK_PAIRS.lock().iter().find_map(|&(a, b)| if a == fd { Some(b) } else if b == fd { Some(a) } else { None }) };
+                        let i = (fd - crate::net::UNIX_FD_BASE) as usize;
+                        let wr = crate::net::UNIX_LAST_WR[i].load(Ordering::Relaxed);
+                        let rd = crate::net::UNIX_LAST_RD[i].load(Ordering::Relaxed);
+                        line.push_str(&alloc::format!(" fd{fd}:{n}[{ep} peer={} wr=t{} rd={}]",
+                            peer.map(|p| alloc::format!("fd{p}")).unwrap_or_else(|| String::from("?")),
+                            wr, if rd == usize::MAX { String::from("never") } else { alloc::format!("t{rd}") }));
                     }
                     crate::serial_println!("{line}");
                     dump_threads_now(&alloc::format!("census at heartbeat {sent}"));
@@ -10590,6 +10605,12 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
         LAST_SYS[t].0.store(num, Ordering::Relaxed);
         LAST_SYS[t].1.store(a1, Ordering::Relaxed);
         LAST_SYS[t].2.store(r, Ordering::Relaxed);
+        if (t == AUDEV_TASK.load(Ordering::Relaxed) || t == AUDTH_TASK.load(Ordering::Relaxed))
+            && AUDIO_SYS_LEFT.load(Ordering::Relaxed) > 0
+        {
+            AUDIO_SYS_LEFT.fetch_sub(1, Ordering::Relaxed);
+            crate::serial_println!("[audio-sys] @{} t{t} {num}(a1={a1:#x}, a2={a2:#x}, a3={a3:#x}) = {r:#x}", crate::interrupts::ticks());
+        }
         return r;
     }
     // Capability enforcement: deny syscalls the process has no right to.
