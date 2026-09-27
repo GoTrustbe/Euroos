@@ -398,7 +398,20 @@ WebAudio; a video uses the separate media-audio path. Run 94 plays a YouTube
 video with autoplay and measures whether media audio flows (writei count and
 the WAV) and the picture advances.
 
-### THE YOUTUBE VIDEO PLAYS WITH PICTURE (run 94, autoplay)
+### CORRECTION (2026-09-27): the youtube picture does NOT advance
+
+Run 104's screendumps at 100, 200 and 300 s (before any input) hash byte-for-
+byte identical over the video area, and run 103's post-click frames likewise
+from 400 to 700 s. The frame is the video's first frame with youtube's
+muted-autoplay controls hidden; the CPU ledger after the load sits 97% idle,
+so nothing decodes. The section below, written on 2026-09-25, read "no play
+button, no controls" as playback; that was wrong. Exit criterion 3 is met on
+neither half. The media pipeline advances an (all-silence) audio clock
+through ALSA but presents no video frames; whether that is youtube's DASH/MSE
+path stalling or <video> frame presentation on this platform is separated by
+the local-WebM test below (a file:// page, same renderer, so js:video answers).
+
+### THE YOUTUBE VIDEO SHOWS A FRAME (run 94, autoplay), corrected above
 
 Run 94 (autoplay, a2de9d9): PASS, and the screendump at 600 s shows the video
 mid-playback, the "Me at the zoo" frame with no play button and no controls
