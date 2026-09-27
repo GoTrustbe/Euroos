@@ -398,6 +398,29 @@ WebAudio; a video uses the separate media-audio path. Run 94 plays a YouTube
 video with autoplay and measures whether media audio flows (writei count and
 the WAV) and the picture advances.
 
+### A VIDEO PLAYS WITH PICTURE AND SOUND (run 107, 2026-09-27)
+
+A local WebM (ffmpeg test pattern, 440 Hz tone, VP8/Vorbis, 20 s looped) on a
+file:// page served from the pack: the video-region hashes differ at every
+sample, js:video answers with the clock advancing (320x240, ready 4, no
+error), the page reports muted=false, the tab shows the speaker icon, the ALSA
+writes carry a steady peak of 2977, and the captured output holds the 440 Hz
+tone continuously from 113 s to the end of the recording at 440 s. Proof:
+docs/proof/2026-09-27-desktop-chromium-video-with-sound-run107.png; the page
+is docs/proof/vid-test-page.html. The chain that got here, in order of
+finding: the ALSA device (W12), the PCM state constants, audio in-process,
+and last the FIONREAD ioctl (run 106's syscall trace of the browser's
+AudioThread: poll(sync fd)=1 then FIONREAD, which returned no count, so
+chrome's SyncSocket::Peek saw 0 bytes and the audio service wrote silence
+while the renderer's replies piled up unread).
+
+What remains for exit criterion 3 as written (YOUTUBE with picture and sound):
+youtube's own page still shows a frozen first frame and a muted autoplay.
+Playback and sound are now proven platform capabilities, so that is a
+youtube-path problem (its DASH/MSE pipeline and the consent/mute gesture),
+to be taken next with the same tools: frame hashes, js:video where the
+session reaches the renderer, and real HID input.
+
 ### CORRECTION (2026-09-27): the youtube picture does NOT advance
 
 Run 104's screendumps at 100, 200 and 300 s (before any input) hash byte-for-
