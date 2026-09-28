@@ -2827,6 +2827,12 @@ const WAD_FI: usize = usize::MAX;
 // PROC_MEM_FI/WAD_FI sentinels, far above any real FILES index).
 const DISK_FI_BASE: usize = usize::MAX / 2;
 static DISK_FILES: Mutex<alloc::vec::Vec<(String, usize, u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+/// Per DISK_FILES entry (same index): the file's page leaves and the pack salt, from
+/// a manifest whose Ed25519 signature and Merkle roots were checked at scan. Every
+/// page read from the pack is checked against its leaf (`pack_read`). A file
+/// without an entry here cannot be read at all.
+static DISK_VERITY: Mutex<alloc::vec::Vec<(alloc::vec::Vec<[u8; 32]>, [u8; 32])>> = Mutex::new(alloc::vec::Vec::new());
+static PACK_INTEGRITY_LINES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Scan all virtio disks for a EuroPack volume ("EUROPCK1" at sector 0) and
 /// register every contained file as disk-backed. Called once at boot.
@@ -2950,42 +2956,142 @@ pub fn dump_suspect_addrs() {
     a!(crate::net::service, "net::service");
 }
 
+/// Is this 4 KiB (or larger) buffer the first sector of a EuroPack volume of ANY
+/// version? v1 is not served (unsigned), but it is still a pack disk, and every
+/// boot self-test that writes to a virtio disk must keep its hands off it.
+pub fn is_europack_header(buf: &[u8]) -> bool {
+    buf.len() >= 8 && (&buf[..8] == europack::MAGIC_V1 || &buf[..8] == europack::MAGIC_V2)
+}
+
 pub fn europack_scan() {
+    // EuroPack v2 only (crates/europack): the manifest must carry a valid Ed25519
+    // signature by a trusted key, and every file's Merkle root must equal the root
+    // recomputed from its leaf table. An unsigned v1 pack, a bad signature or a
+    // root mismatch is REFUSED and says so; nothing from it is served.
     for dev in 0..crate::virtio_blk::device_count() {
         if !crate::virtio_blk::present_dev(dev) {
             continue;
         }
         let mut hdr = [0u8; 4096];
-        if !crate::virtio_blk::read_io_dev(dev, 0, &mut hdr) || &hdr[0..8] != b"EUROPCK1" {
+        if !crate::virtio_blk::read_io_dev(dev, 0, &mut hdr) {
             continue;
         }
-        let count = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]) as usize;
-        let mut reg = DISK_FILES.lock();
-        for i in 0..count.min(4096) {
-            const ENTRY: usize = 208;
-            let ent_off = 16 + i * ENTRY;
-            // Entries can spill past the first 4 KiB for large manifests: read the
-            // sector(s) each entry lives in on demand. A 208 B entry straddles at most
-            // two 512 B sectors, so 1024 B of buffer + `need` (<= 1024) always fit.
-            let mut ent = [0u8; 1024];
-            let sec = (ent_off / 512) as u64;
-            let within = ent_off % 512;
-            let need = (((within + ENTRY + 511) / 512) * 512).min(ent.len());
-            if !crate::virtio_blk::read_io_dev(dev, sec, &mut ent[..need]) {
-                break;
-            }
-            let e = &ent[within..within + ENTRY];
-            let path_len = e[..192].iter().position(|&b| b == 0).unwrap_or(192);
-            let path = String::from_utf8_lossy(&e[..path_len]).into_owned();
-            let off = u64::from_le_bytes(e[192..200].try_into().unwrap());
-            let size = u64::from_le_bytes(e[200..208].try_into().unwrap());
-            if path.is_empty() {
+        let h = match europack::parse_header(&hdr) {
+            Ok(h) => h,
+            Err(europack::Error::UnsignedV1) => {
+                crate::serial_println!("[europack] vblk{dev}: UNSIGNED v1 pack REFUSED (rebuild it with scripts/mkeuropack.py)");
                 continue;
             }
-            crate::serial_println!("[europack] vblk{dev}: {path} ({} KiB) served disk-backed", size / 1024);
-            reg.push((path, dev, off, size));
+            Err(_) => continue, // not a pack
+        };
+        let mlen = europack::manifest_len(h.count);
+        let mut man = alloc::vec![0u8; (mlen + 511) / 512 * 512];
+        if !disk_read_bytes(dev, 0, &mut man) {
+            crate::serial_println!("[europack] vblk{dev}: manifest unreadable, pack REFUSED");
+            continue;
+        }
+        let tbs = match europack::tbs(&man, h.count) { Ok(t) => t, Err(_) => continue };
+        if !crate::crypto::verify(&tbs, &h.sig) {
+            crate::serial_println!("[europack] vblk{dev}: manifest Ed25519 signature INVALID, pack REFUSED");
+            continue;
+        }
+        let (mut ok, mut bad) = (0usize, 0usize);
+        for i in 0..h.count {
+            let Ok(e) = europack::parse_entry(&man, i) else { bad += 1; continue };
+            let path = String::from_utf8_lossy(&e.path).into_owned();
+            if path.is_empty() { continue; }
+            let n = europack::page_count(e.size);
+            let mut raw = alloc::vec![0u8; n * 32];
+            if n > 0 && !disk_read_bytes(dev, e.leaves_off, &mut raw) {
+                crate::serial_println!("[europack] vblk{dev}: {path}: leaf table unreadable, file REFUSED");
+                bad += 1;
+                continue;
+            }
+            let Ok(leaves) = europack::parse_leaves(&raw, e.size) else { bad += 1; continue };
+            if europack::root_of_leaves(&h.salt, &leaves) != e.root {
+                crate::serial_println!("[europack] vblk{dev}: {path}: Merkle root MISMATCH, file REFUSED");
+                bad += 1;
+                continue;
+            }
+            crate::serial_println!("[europack] vblk{dev}: {path} ({} KiB, {n} pages) verified, served disk-backed", e.size / 1024);
+            DISK_FILES.lock().push((path, dev, e.data_off, e.size));
+            DISK_VERITY.lock().push((leaves, h.salt));
+            ok += 1;
+        }
+        crate::serial_println!("[europack] vblk{dev}: manifest Ed25519 OK; {ok} files verified, {bad} refused");
+    }
+}
+
+/// Read `dst.len()` bytes at `file_off` of pack file `idx`, verifying EVERY page the
+/// span touches against the file's leaf table before a byte reaches the caller.
+/// Reads past the file's end return zeros (mmap semantics). A page that does not
+/// hash to its leaf fails the whole read and is named in the log.
+fn pack_read(idx: usize, file_off: u64, dst: &mut [u8]) -> bool {
+    if dst.is_empty() {
+        return true;
+    }
+    let Some((path, dev, dbase, size)) = DISK_FILES.lock().get(idx).cloned() else { return false };
+    let want_end = file_off.saturating_add(dst.len() as u64);
+    let end = want_end.min(size);
+    if end <= file_off {
+        dst.fill(0);
+        return true;
+    }
+    const PAGE: u64 = 4096;
+    let first = file_off / PAGE;
+    let last = (end - 1) / PAGE;
+    let span_start = first * PAGE;
+    let span_end = ((last + 1) * PAGE).min(size);
+    let mut buf = alloc::vec![0u8; (span_end - span_start) as usize];
+    if !disk_read_bytes(dev, dbase + span_start, &mut buf) {
+        return false;
+    }
+    {
+        let v = DISK_VERITY.lock();
+        let Some((leaves, salt)) = v.get(idx) else {
+            crate::serial_println!("[europack] {path}: no verity entry, read REFUSED");
+            return false;
+        };
+        for p in first..=last {
+            let ps = ((p - first) * PAGE) as usize;
+            let pe = (ps + PAGE as usize).min(buf.len());
+            if !europack::page_ok(salt, leaves, p as usize, &buf[ps..pe]) {
+                if PACK_INTEGRITY_LINES.fetch_add(1, Ordering::Relaxed) < 20 {
+                    crate::serial_println!("[europack] INTEGRITY FAILURE: {path} page {p} (file offset {:#x}) does not match its signed leaf; read REFUSED", p * PAGE);
+                }
+                return false;
+            }
         }
     }
+    let o = (file_off - span_start) as usize;
+    let n = (end - file_off) as usize;
+    dst[..n].copy_from_slice(&buf[o..o + n]);
+    dst[n..].fill(0);
+    true
+}
+
+/// Self-test: read and verify EVERY page of every registered pack file through
+/// `pack_read`. Prints one `[epk]` line per pack file set; a tampered page fails.
+pub fn europack_sweep() {
+    let files: alloc::vec::Vec<(usize, String, u64)> = DISK_FILES.lock().iter().enumerate().map(|(i, f)| (i, f.0.clone(), f.3)).collect();
+    if files.is_empty() {
+        crate::serial_println!("[epk] no pack files registered (nothing to sweep)");
+        return;
+    }
+    let (mut pages, mut bad_pages, mut bad_files) = (0u64, 0u64, 0u64);
+    let mut page = alloc::vec![0u8; 4096];
+    for (i, path, size) in files.iter() {
+        let mut off = 0u64;
+        let mut file_bad = false;
+        while off < *size {
+            let n = (*size - off).min(4096) as usize;
+            if pack_read(*i, off, &mut page[..n]) { pages += 1; } else { bad_pages += 1; file_bad = true; }
+            off += 4096;
+        }
+        if file_bad { bad_files += 1; crate::serial_println!("[epk]   {path}: FAILED page verification"); }
+    }
+    crate::serial_println!("[epk] EuroPack integrity sweep: {} files, {pages} pages verified, {bad_pages} bad pages in {bad_files} files → {}",
+        files.len(), if bad_pages == 0 { "OK ✓" } else { "FAIL" });
 }
 
 /// Read `dst.len()` bytes from virtio disk `dev` at BYTE offset `off` (handles
@@ -3457,7 +3563,8 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
             return u64::MAX;
         }
         let mut tmp = alloc::vec![0u8; n];
-        if !disk_read_bytes(dev, dbase + offset as u64, &mut tmp) {
+        let _ = (dev, dbase);
+        if !pack_read(fi - DISK_FI_BASE, offset as u64, &mut tmp) {
             return u64::MAX;
         }
         // SAFETY: buf validated as user memory of at least n bytes.
@@ -3834,6 +3941,12 @@ fn daemon_dispatch(num: u64, a1: u64, _a2: u64, _a3: u64) -> u64 {
 
 /// Load `program` (native ABI) as a PREEMPTIVELY scheduled background daemon.
 pub fn spawn_daemon(falloc: &mut FrameAllocator, program: &[u8]) {
+    // Verify before execute, like every other launcher: the daemon's bytes come
+    // from the root file system and must carry the signature the table knows.
+    if !verify_program("/bin/daemon", program) {
+        crate::serial_println!("[verify] /bin/daemon: signature INVALID or unknown, daemon NOT started");
+        return;
+    }
     init_syscall_msrs();
     const MIB2: u64 = 1 << 21;
     // Own isolated 2 MiB arena + PML4 (just like bg-musl) instead of loose frames on
@@ -6826,6 +6939,53 @@ pub fn installable(name: &str) -> Option<(&'static [u8], u64, bool)> {
 pub fn program_sig(path: &str) -> Option<&'static [u8]> {
     Some(match path {
         "/bin/hello" => include_bytes!("../../userland/hello.elf.sig"),
+        "/bin/base64" => include_bytes!("../../userland/glibc/base64.sig"),
+        "/bin/chrome_crashpad_handler" => include_bytes!("../../userland/glibc/chrome_crashpad_handler.sig"),
+        "/bin/factor" => include_bytes!("../../userland/glibc/factor.sig"),
+        "/bin/gbig" => include_bytes!("../../userland/glibc/gbig.sig"),
+        "/bin/gbrk" => include_bytes!("../../userland/glibc/gbrk.sig"),
+        "/bin/gcairo" => include_bytes!("../../userland/glibc/gcairo.sig"),
+        "/bin/gcairotext" => include_bytes!("../../userland/glibc/gcairotext.sig"),
+        "/bin/gcond" => include_bytes!("../../userland/glibc/gcond.sig"),
+        "/bin/gcpp" => include_bytes!("../../userland/glibc/gcpp.sig"),
+        "/bin/gdiskmap" => include_bytes!("../../userland/glibc/gdiskmap.sig"),
+        "/bin/gevfd" => include_bytes!("../../userland/glibc/gevfd.sig"),
+        "/bin/gfile" => include_bytes!("../../userland/glibc/gfile.sig"),
+        "/bin/gfmmap" => include_bytes!("../../userland/glibc/gfmmap.sig"),
+        "/bin/gglib" => include_bytes!("../../userland/glibc/gglib.sig"),
+        "/bin/ggtk" => include_bytes!("../../userland/glibc/ggtk.sig"),
+        "/bin/gmath" => include_bytes!("../../userland/glibc/gmath.sig"),
+        "/bin/gnss" => include_bytes!("../../userland/glibc/gnss.sig"),
+        "/bin/gpango" => include_bytes!("../../userland/glibc/gpango.sig"),
+        "/bin/gpoll" => include_bytes!("../../userland/glibc/gpoll.sig"),
+        "/bin/gscm" => include_bytes!("../../userland/glibc/gscm.sig"),
+        "/bin/gscm3" => include_bytes!("../../userland/glibc/gscm3.sig"),
+        "/bin/gsdl" => include_bytes!("../../userland/glibc/gsdl.sig"),
+        "/bin/gshm" => include_bytes!("../../userland/glibc/gshm.sig"),
+        "/bin/gshm2" => include_bytes!("../../userland/glibc/gshm2.sig"),
+        "/bin/gsleep" => include_bytes!("../../userland/glibc/gsleep.sig"),
+        "/bin/gsparse" => include_bytes!("../../userland/glibc/gsparse.sig"),
+        "/bin/gsync" => include_bytes!("../../userland/glibc/gsync.sig"),
+        "/bin/gtest" => include_bytes!("../../userland/glibc/gtest.sig"),
+        "/bin/gthread" => include_bytes!("../../userland/glibc/gthread.sig"),
+        "/bin/gtiny" => include_bytes!("../../userland/glibc/gtiny.sig"),
+        "/bin/gunix" => include_bytes!("../../userland/glibc/gunix.sig"),
+        "/bin/gunlink" => include_bytes!("../../userland/glibc/gunlink.sig"),
+        "/bin/gvdso" => include_bytes!("../../userland/glibc/gvdso.sig"),
+        "/bin/gvec" => include_bytes!("../../userland/glibc/gvec.sig"),
+        "/bin/gx11" => include_bytes!("../../userland/glibc/gx11.sig"),
+        "/bin/gxdraw" => include_bytes!("../../userland/glibc/gxdraw.sig"),
+        "/bin/gxevent" => include_bytes!("../../userland/glibc/gxevent.sig"),
+        "/bin/gximg" => include_bytes!("../../userland/glibc/gximg.sig"),
+        "/bin/gxkey" => include_bytes!("../../userland/glibc/gxkey.sig"),
+        "/bin/gxlive" => include_bytes!("../../userland/glibc/gxlive.sig"),
+        "/bin/gxwin" => include_bytes!("../../userland/glibc/gxwin.sig"),
+        "/bin/gzlib" => include_bytes!("../../userland/glibc/gzlib.sig"),
+        "/lib/ld-linux-x86-64.so.2" => include_bytes!("../../userland/glibc/ld-linux-x86-64.so.2.sig"),
+        "/bin/seq" => include_bytes!("../../userland/glibc/seq.sig"),
+        "/bin/sha256sum" => include_bytes!("../../userland/glibc/sha256sum.sig"),
+        "/bin/sort" => include_bytes!("../../userland/glibc/sort.sig"),
+        "/bin/wc" => include_bytes!("../../userland/glibc/wc.sig"),
         "/bin/msum" => include_bytes!("../../userland/msum.elf.sig"),
         "/bin/menv" => include_bytes!("../../userland/menv.elf.sig"),
         "/bin/msock" => include_bytes!("../../userland/msock.elf.sig"),
@@ -8320,7 +8480,7 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
 
     // Re-register the exe's disk-backed segments (in the child's demand-state).
     let exe_base = DEMAND_BASE;
-    let exe_info = match read_disk_exe_info(dev, doff, exe_base) {
+    let exe_info = match read_disk_exe_info(diskidx, dev, doff, exe_base) {
         Some(i) => i,
         None => return (-8i64) as u64,
     };
@@ -8865,7 +9025,8 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
                         // task clobber the device's single request slot (BUG-010 class).
                         // Syscall-context reads are already IF=0 via FMASK.
                         let ok = x86_64::instructions::interrupts::without_interrupts(|| {
-                            disk_read_bytes(dev, dbase + file_pos, dst)
+                            let _ = (dev, dbase);
+                            pack_read(fidx - DISK_FI_BASE, file_pos, dst)
                         });
                         if !ok {
                             crate::serial_println!("[europack] fault-fill read FAILED @file_pos={file_pos:#x}");
@@ -8964,7 +9125,8 @@ fn demand_readahead(pml4: u64, page: u64, mbase: u64, mend: u64,
     // SAFETY: BOUNCE is only touched under RA_BUF.
     let buf = unsafe { &mut BOUNCE[..bytes] };
     let ok = x86_64::instructions::interrupts::without_interrupts(|| {
-        disk_read_bytes(dev, dbase + file_pos, buf)
+        let _ = (dev, dbase);
+        pack_read(fidx - DISK_FI_BASE, file_pos, buf)
     });
     if !ok {
         return;
@@ -9448,9 +9610,10 @@ pub fn spawn_glibc_disk_persistent(
 /// it at `exe_base` in the demand region. Reads only the first 8 KiB from disk (the
 /// ELF header + phdrs live there) — the LOAD segments themselves are NOT read; they
 /// fault in from disk page-by-page. `register_disk_exe_segments` must run afterwards.
-fn read_disk_exe_info(dev: usize, doff: u64, exe_base: u64) -> Option<LoadInfo> {
+fn read_disk_exe_info(diskidx: usize, dev: usize, doff: u64, exe_base: u64) -> Option<LoadInfo> {
     let mut hdr = alloc::vec![0u8; 8192];
-    if !disk_read_bytes(dev, doff, &mut hdr) {
+    let _ = (dev, doff);
+    if !pack_read(diskidx, 0, &mut hdr) {
         return None;
     }
     if hdr.len() < 64 || &hdr[0..4] != b"\x7fELF" || hdr[4] != 2 || hdr[5] != 1 || rd_u16(&hdr, 18) != 0x3E {
@@ -9495,7 +9658,8 @@ fn read_disk_exe_info(dev: usize, doff: u64, exe_base: u64) -> Option<LoadInfo> 
 /// Returns false on a bad/oversized header.
 fn register_disk_exe_segments(diskidx: usize, dev: usize, doff: u64, exe_base: u64) -> bool {
     let mut hdr = alloc::vec![0u8; 8192];
-    if !disk_read_bytes(dev, doff, &mut hdr) {
+    let _ = (dev, doff);
+    if !pack_read(diskidx, 0, &mut hdr) {
         return false;
     }
     let e_phoff = rd_u64(&hdr, 32) as usize;
@@ -9574,6 +9738,19 @@ fn glibc_disk_launch(
     envp: &[&[u8]],
     caps: u64,
 ) -> Result<DiskRun, &'static str> {
+    // Verify before execute. The executable is served page by page from a pack
+    // whose manifest signature and Merkle roots were checked at scan and whose
+    // every page is checked as it is read (pack_read); the loader is verified here.
+    if !verify_program("/lib/ld-linux-x86-64.so.2", ldso) {
+        return Err("verify: /lib/ld-linux-x86-64.so.2 signature INVALID");
+    }
+    {
+        let idx = DISK_FILES.lock().iter().position(|f| f.0 == exe_path);
+        match idx {
+            Some(i) if DISK_VERITY.lock().get(i).is_some() => {}
+            _ => return Err("verify: executable is not from a verified EuroPack"),
+        }
+    }
     // A fresh launch: no fork child of a PREVIOUS run may leave its state loaded
     // or its ChildMem around.
     GLOBALS_OWNER.store(0, Ordering::Relaxed);
@@ -9624,7 +9801,7 @@ fn glibc_disk_launch(
 
     // The exe is placed at the START of the demand region; ld.so libs reserve above it.
     let exe_base = DEMAND_BASE;
-    let exe_info = match read_disk_exe_info(dev, doff, exe_base) {
+    let exe_info = match read_disk_exe_info(diskidx, dev, doff, exe_base) {
         Some(i) => i,
         None => return Err("(bad disk exe ELF)"),
     };
@@ -9977,6 +10154,21 @@ pub fn run_glibc(
     envp: &[&[u8]],
     caps: u64,
 ) -> (String, u64) {
+    // Verify before execute. The program is named by argv[0] (a bare name means
+    // /bin/<name>); the dynamic loader is verified under its own path. A program
+    // without a known, valid signature does not run.
+    {
+        let name = argv.first().map(|a| core::str::from_utf8(a).unwrap_or("?")).unwrap_or("?");
+        let path = if name.starts_with('/') { String::from(name) } else { alloc::format!("/bin/{name}") };
+        if !verify_program(&path, exe) {
+            crate::serial_println!("[verify] {path}: signature INVALID or unknown, program NOT run");
+            return (String::from("verify: refused"), u64::MAX);
+        }
+        if !verify_program("/lib/ld-linux-x86-64.so.2", ldso) {
+            crate::serial_println!("[verify] /lib/ld-linux-x86-64.so.2: signature INVALID, program NOT run");
+            return (String::from("verify: refused"), u64::MAX);
+        }
+    }
     if SKIP_GLIBC_TESTS.load(Ordering::Relaxed) {
         let _ = (falloc, exe, ldso, argv, envp, caps);
         return (String::from("(skipped: chrome iteration boot)"), u64::MAX);
@@ -12086,7 +12278,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     if copy > 0 {
                         // SAFETY: base..base+copy validated in-arena above.
                         let dst = unsafe { core::slice::from_raw_parts_mut(base as *mut u8, copy) };
-                        if !disk_read_bytes(dev, dbase + off as u64, dst) {
+                        let _ = (dev, dbase);
+                        if !pack_read(fi - DISK_FI_BASE, off as u64, dst) {
                             return (-5i64) as u64; // -EIO
                         }
                     }

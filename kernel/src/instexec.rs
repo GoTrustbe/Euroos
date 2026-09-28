@@ -127,7 +127,7 @@ pub fn disk_is_blank(dev: usize) -> bool {
     // such a disk as blank: doing so would overwrite a user's data disk. Only a
     // disk with no boot signature at all is blank. A EuroPack data disk (chrome
     // serving) carries no boot signature either — but it IS data, never a target.
-    if &s0[0..8] == b"EUROPCK1" {
+    if crate::ring3::is_europack_header(&s0) {
         return false;
     }
     !(s0[510] == 0x55 && s0[511] == 0xAA)
@@ -140,7 +140,7 @@ pub fn nvme_is_blank() -> bool {
         return false;
     }
     let mut s0 = [0u8; 512];
-    if !crate::nvme::read_sectors(0, &mut s0) || &s0[0..8] == b"EUROPCK1" {
+    if !crate::nvme::read_sectors(0, &mut s0) || crate::ring3::is_europack_header(&s0) {
         return false; // unreadable, or a EuroPack data disk (never a target)
     }
     !(s0[510] == 0x55 && s0[511] == 0xAA)
@@ -160,7 +160,7 @@ pub fn ahci_is_blank(idx: usize) -> bool {
         return false;
     }
     let mut s0 = [0u8; 512];
-    if !crate::ahci::read_sectors(idx, 0, &mut s0) || &s0[0..8] == b"EUROPCK1" {
+    if !crate::ahci::read_sectors(idx, 0, &mut s0) || crate::ring3::is_europack_header(&s0) {
         return false; // unreadable, or a EuroPack data disk (never a target)
     }
     !(s0[510] == 0x55 && s0[511] == 0xAA)

@@ -729,6 +729,12 @@ fn main() -> Status {
     // EuroPack: register files served straight from a pack disk (no RAM copy) —
     // how binaries too large to embed (chrome) reach the glibc loader.
     ring3::europack_scan();
+    if cfg!(feature = "selftest") {
+        // Self-test of the scan: read every page of every registered pack file
+        // through the verified reader, right here, so a tampered page is named
+        // early in the boot log.
+        ring3::europack_sweep();
+    }
 
     // NVMe (B2): detect + initialize an NVMe controller (admin/I/O queues,
     // identify), do a read/write self-test + SMART readout. No-op without NVMe.
@@ -1119,7 +1125,7 @@ fn main() -> Status {
         let dev2 = rootblk::RootBlk::disk_on(1, part2, blocks2);
         let mut first = [0u8; 512];
         let probe_ok = virtio_blk::read_io_dev(1, 0, &mut first);
-        let is_pack = probe_ok && &first[..8] == b"EUROPCK1";
+        let is_pack = probe_ok && crate::ring3::is_europack_header(&first);
         let is_blank = probe_ok && first.iter().all(|&b| b == 0);
         match EuroFs::mount(dev2.clone(), rtc::epoch()) {
             Ok(f) => {

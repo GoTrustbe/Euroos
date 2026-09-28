@@ -57,7 +57,7 @@ fn dry() -> bool {
 /// must NEVER read a "slot config" from it or (worse) write one over it.
 fn virtio0_is_foreign() -> bool {
     let mut s0 = [0u8; 512];
-    crate::rootblk::boot_read(0, &mut s0) && &s0[0..8] == b"EUROPCK1"
+    crate::rootblk::boot_read(0, &mut s0) && crate::ring3::is_europack_header(&s0)
 }
 
 /// Read the slot config from the raw reserved block (independent of EuroFS).

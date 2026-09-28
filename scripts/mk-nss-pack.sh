@@ -21,7 +21,9 @@
 # NSS 3.120 against a chrome pack from Ubuntu noble's NSS 3.98). Build from the
 # matching Ubuntu package, not from /usr/lib:
 #
-#   NSS_DEB=/path/to/libnss3_3.98-1build1_amd64.deb scripts/mk-nss-pack.sh out.img
+#   sudo NSS_DEB=/path/to/libnss3_3.98-1build1_amd64.deb scripts/mk-nss-pack.sh out.img
+#
+# (sudo: the pack is Ed25519-signed with toolchain/eupkg/keys/dev.key, mode 0600.)
 #
 # The .deb is extracted to a temp dir and its libraries are packed. Without
 # NSS_DEB the script falls back to /usr/lib and says so; that is only right on a

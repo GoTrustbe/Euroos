@@ -577,6 +577,14 @@ name = "euroobserve"
 version = "0.1.0"
 
 [[package]]
+name = "europack"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "sha2",
+]
+
+[[package]]
 name = "europkg"
 version = "0.1.0"
 dependencies = [
@@ -868,6 +876,7 @@ dependencies = [
  "euronotes",
  "euronts",
  "euroobserve",
+ "europack",
  "europkg",
  "europol",
  "europortal",
