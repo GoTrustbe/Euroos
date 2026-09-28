@@ -76,7 +76,7 @@ boots in ~1–2 seconds.
 - Per-file **immutability** + an append-only audit log; **fail-closed TLS 1.3**
   (a missing trust anchor refuses the connection); from-scratch, constant-time crypto.
 
-Native ring-3 programs are **Ed25519-signed and verified in `execve` before they run**. Not yet verified: binaries started through the Linux-ABI compatibility launcher (the glibc/Chromium path), binaries served from a EuroPack disk (checked by volume magic only), and the kernel-spawned daemon. See
+Every binary is **Ed25519-signed and verified before it runs**: native ring-3 programs in `execve`; the glibc/Chromium launcher checks the program and the dynamic loader; and files served from a EuroPack disk are covered by a **signed manifest with a per-file SHA-256 Merkle tree**, so **every 4 KiB page is verified against its signed leaf as it is read** (a tampered page fails the read). The kernel-spawned daemon is verified too. See
 [`STATUS.md`](STATUS.md) for the full per-subsystem status and the roadmap.
 
 ## Try / build / test
