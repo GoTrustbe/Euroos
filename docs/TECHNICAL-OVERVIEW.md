@@ -138,7 +138,7 @@ Capabilities, not ambient authority. EuroGuard is the native authorization surfa
 
 - **Capability-scoped syscalls:** sensitive syscalls require a capability (e.g. `CAP_NET` for network access, `CAP_FILE` for filesystem, `CAP_CONSOLE`). Capabilities can be **dropped but never regained** within a process.
 - **Memory isolation:** per-process address spaces; an out-of-bounds access kills only the offending process (the desktop and other processes keep running) — demonstrated by the isolation page-fault path.
-- **Code authenticity:** binaries carry an **Ed25519 signature** over their bytes, verified against the in-kernel public key before they are allowed to run.
+- **Code authenticity:** native ring-3 binaries carry an **Ed25519 signature** over their bytes, verified against the in-kernel public key in `execve` before they are allowed to run. The Linux-ABI compatibility launcher, EuroPack disk binaries and the kernel daemon are not yet covered.
 - **W^X, SMEP, SMAP** enforced in hardware.
 - **Auditing:** EuroIPC and capability decisions are logged.
 

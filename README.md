@@ -9,7 +9,7 @@ every binary signature check, and every network call. Zero telemetry. Licensed
 under the **European Union Public Licence (EUPL) v1.2**.
 
 > ⚠️ **Alpha preview.** EuroOS boots to a working desktop with real networking and
-> on-disk persistence, installs to and boots from an NVMe/SATA disk, and **987 host
+> on-disk persistence, installs to and boots from an NVMe/SATA disk, and **1,011 host
 > tests** pass. It is something to study, build on, and experiment with — not yet a
 > daily-driver OS.
 
@@ -76,7 +76,7 @@ boots in ~1–2 seconds.
 - Per-file **immutability** + an append-only audit log; **fail-closed TLS 1.3**
   (a missing trust anchor refuses the connection); from-scratch, constant-time crypto.
 
-Every binary is **Ed25519-signed and verified before it runs**. See
+Native ring-3 programs are **Ed25519-signed and verified in `execve` before they run**. Not yet verified: binaries started through the Linux-ABI compatibility launcher (the glibc/Chromium path), binaries served from a EuroPack disk (checked by volume magic only), and the kernel-spawned daemon. See
 [`STATUS.md`](STATUS.md) for the full per-subsystem status and the roadmap.
 
 ## Try / build / test

@@ -47,7 +47,7 @@ machine-readable SBOM (below).
 | Minimise attack surface | Microkernel-style design; a **capability** model (no ambient authority); Linux ABI is a bridge, not the base. | 🟢 |
 | Secure by default | Fail-closed TLS 1.3 (no trust anchor ⇒ refuse); least-privilege agent caps; signed-binary execution. | 🟢 |
 | Protect confidentiality (encryption) | **ChaCha20 full-disk encryption**; a **TPM-sealed** disk/vault key that unseals only on an untampered measured boot (3D-1); an encrypted secrets vault. | 🟢 |
-| Protect integrity | Ed25519 **verify-before-execute** for every binary; measured boot (PCR extend); tamper-evident hash-chain audit log; EuroFS data checksums + A/B superblocks. | 🟢 |
+| Protect integrity | Ed25519 **verify-before-execute** for native ring-3 programs (not yet for the Linux-ABI compatibility launcher, disk-served EuroPack binaries, or the kernel daemon; see README); measured boot (PCR extend); tamper-evident hash-chain audit log; EuroFS data checksums + A/B superblocks. | 🟢 |
 | Memory-safety / resilience | Kernel + libraries in **Rust** (`no_std`), removing whole classes of memory-safety bugs; centrally-validated user pointers at the syscall boundary. | 🟢 |
 | Strong authentication | **EuroID** with memory-hard **Argon2id** (RFC 9106), lockout, persistent tamper-evident audit. | 🟢 |
 | Access control (least privilege) | EuroGuard capabilities + a declarative policy engine; JIT capability elevation with auto-revoke. | 🟢 |
