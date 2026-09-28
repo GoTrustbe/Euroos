@@ -9,7 +9,7 @@ every binary signature check, and every network call. Zero telemetry. Licensed
 under the **European Union Public Licence (EUPL) v1.2**.
 
 > ⚠️ **Alpha preview.** EuroOS boots to a working desktop with real networking and
-> on-disk persistence, installs to and boots from an NVMe/SATA disk, and **1,011 host
+> on-disk persistence, installs to and boots from an NVMe/SATA disk, and **1,018 host
 > tests** pass. It is something to study, build on, and experiment with — not yet a
 > daily-driver OS.
 
