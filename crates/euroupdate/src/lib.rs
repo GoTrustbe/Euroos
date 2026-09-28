@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! EuroUpdate — atomic A/B system slots with automatic rollback (plan F1).
 //!
 //! Two root slots (A/B). An update is written to the INACTIVE slot; the
