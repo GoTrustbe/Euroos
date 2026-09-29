@@ -70,6 +70,7 @@ eurowallet = { path = "../crates/eurowallet" }
 euroentropy = { path = "../crates/euroentropy" }
 euronts = { path = "../crates/euronts" }
 euroverity = { path = "../crates/euroverity" }
+europack = { path = "../crates/europack" }
 euroaudit = { path = "../crates/euroaudit" }
 eurodns = { path = "../crates/eurodns" }
 euromdns = { path = "../crates/euromdns" }

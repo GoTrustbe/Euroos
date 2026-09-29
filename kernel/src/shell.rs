@@ -575,8 +575,14 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             }
             _ => vec!["container: list | create <name> | run <name> <path>".to_string()],
         },
+        // Everything except `status` changes the boot configuration of the machine:
+        // owner (uid 0) only, like the other privileged commands.
+        "euroupdate" | "eup" if !matches!(arg1, "" | "status") && crate::auth::session_uid() != 0 => {
+            vec!["euroupdate: only the owner (uid 0) may check, stage, apply or change the update policy".to_string()]
+        }
         "euroupdate" | "eup" => match arg1 {
-            "" | "status" => crate::update::status(fs),
+            "" | "status" => crate::update::status_full(fs),
+            "policy" => crate::update::set_policy(fs, arg2),
             "rollback" => crate::update::rollback(fs),
             "apply" => {
                 if arg2.is_empty() {
@@ -594,16 +600,26 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             }
             // 3E-2: check a release channel on the update server (default = the
             // SLIRP host gateway; override: euroupdate check <channel> <host:port>).
+            // `euroupdate check [channel] [http(s)://host[:port][/base]]` — default: the
+            // public server over HTTPS, staging according to the policy.
             "check" => {
                 let mut it = arg2.split_whitespace();
                 let channel = it.next().unwrap_or("stable");
-                let (host, port) = match it.next().and_then(|hp| hp.rsplit_once(':')) {
-                    Some((h, p)) => (String::from(h), p.parse().unwrap_or(8722)),
-                    None => (String::from("10.0.2.2"), 8722),
-                };
-                crate::update::check_channel(fs, &host, port, channel)
+                match it.next() {
+                    None if channel == "stable" => crate::update::auto_check(fs, crate::interrupts::ticks()),
+                    None => crate::update::check_channel(fs, crate::update::UPDATE_HOST, crate::update::UPDATE_PORT, crate::update::UPDATE_TLS, crate::update::UPDATE_BASE, channel),
+                    Some(url) => {
+                        let (tls, rest) = if let Some(r) = url.strip_prefix("https://") { (true, r) } else { (false, url.strip_prefix("http://").unwrap_or(url)) };
+                        let (authority, base) = match rest.find('/') { Some(i) => (&rest[..i], rest[i..].trim_end_matches('/')), None => (rest, "") };
+                        let (host, port) = match authority.rsplit_once(':') {
+                            Some((h, p)) => (String::from(h), p.parse().unwrap_or(if tls { 443 } else { 80 })),
+                            None => (String::from(authority), if tls { 443 } else { 80 }),
+                        };
+                        crate::update::check_channel(fs, &host, port, tls, base, channel)
+                    }
+                }
             }
-            _ => vec!["euroupdate: status | check [stable|beta] | apply <image> | fetch <url> | rollback".to_string()],
+            _ => vec!["euroupdate: status | check [stable|beta] [url] | policy <auto|ask|manual> | apply <image> | fetch <url> | rollback".to_string()],
         },
         // 3E-6: the package-manager EXECUTOR (signed index + content-addressed store).
         "eupkg" => crate::pkg::eupkg_shell(fs, arg1, arg2),

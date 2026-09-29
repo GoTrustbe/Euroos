@@ -518,6 +518,23 @@ pub fn self_test() {
     if !present() {
         return;
     }
+    // Never write a test pattern onto a disk that carries data: LBA 2000 + 64 KiB
+    // runs straight into an ESP that starts at LBA 2048 (it took an installed
+    // NVMe root out for exactly that reason). A boot signature, a GPT header or
+    // any non-zero byte in the first two sectors makes the test read-only.
+    let mut s0 = [0u8; 1024];
+    let carries_data = !read_sectors(0, &mut s0)
+        || (s0[510] == 0x55 && s0[511] == 0xAA)
+        || &s0[512..520] == b"EFI PART"
+        || s0.iter().any(|&b| b != 0);
+    if carries_data {
+        let ok = read_sectors(0, &mut s0[..512]);
+        crate::serial_println!("[nvme] disk carries data: read-only self-test (sector 0 via PRP): {}", if ok { "OK ✓" } else { "FAILED ✗" });
+        if let Some((temp, used)) = smart() {
+            crate::serial_println!("[nvme] SMART: temperature {} K ({} °C), {}% used", temp, temp.saturating_sub(273), used);
+        }
+        return;
+    }
     let mut wbuf = [0u8; 512];
     for (i, b) in wbuf.iter_mut().enumerate() {
         *b = (i as u8) ^ 0xA5;

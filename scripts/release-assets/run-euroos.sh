@@ -38,7 +38,7 @@ fi
 
 echo "Starting EuroOS…  (close the QEMU window to stop; delete $DISK to reset)"
 exec qemu-system-x86_64 \
-  -machine q35 -m 512M $ACCEL \
+  -machine q35 -m 2048M $ACCEL \
   -bios "$OVMF" \
   -drive format=raw,file="$IMG" \
   -drive format=qcow2,file="$DISK",if=none,id=hd0 \

@@ -22,7 +22,8 @@ boot.ppm
 # ── SECRET: private Ed25519 signing seed — NEVER publish ─────────────────────
 # The kernel embeds ONLY the matching public key (toolchain/eupkg/keys/dev.pub).
 # Contributors generate their own dev keypair to build signed userland — see
-# CONTRIBUTING.md. The project's release-signing key is held offline, not in git.
+# CONTRIBUTING.md. The daily release key lives root-only on the build server; the
+# rotation key is age-encrypted with its passphrase off-server (docs/UPDATES.md).
 toolchain/eupkg/keys/dev.key
 
 # ── Local web staging (site content, not part of the OS source) ──────────────
@@ -51,3 +52,61 @@ web-backup-*.tgz
 # Generated SBOM (CycloneDX) — produced deterministically in CI per release
 sbom.cdx.json
 toolchain/update-server/repo/
+# --- standard (added by gitea onboarding 2026-09-25) ---
+node_modules/
+.next/
+.next-*/
+.next.*/
+dist/
+build/
+out/
+target/
+target-*/
+.turbo/
+.cache/
+__pycache__/
+*.pyc
+venv/
+.venv/
+pgdata/
+mysql-data/
+backups/
+backup/
+*.bak
+*.bak.*
+*.bak-*
+*.tgz
+*.tar.gz
+*.zip
+*.sql
+*.sql.gz
+*.log
+*.img
+*.apk
+*.aab
+*.ipa
+.env
+.env.*
+!.env.example
+envbackup
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+keystore.properties
+*credential*
+*credentials*
+.credentials.json
+id_rsa*
+id_ed25519*
+.DS_Store
+.claude/
+*.tsbuildinfo
+# --- end standard ---
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img

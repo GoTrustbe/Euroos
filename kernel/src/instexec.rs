@@ -22,6 +22,9 @@ pub struct InstallMedia {
     pub loader: Vec<u8>,
     pub kernel_a: Vec<u8>,
     pub kernel_b: Vec<u8>,
+    /// Ed25519 signatures of the two kernels (64 bytes each; empty on an unsigned medium).
+    pub sig_a: Vec<u8>,
+    pub sig_b: Vec<u8>,
 }
 
 static MEDIA: Mutex<Option<InstallMedia>> = Mutex::new(None);
@@ -46,7 +49,11 @@ pub fn capture_media() {
             .map(|hs| {
                 hs.iter()
                     .filter(|&&h| {
-                        boot::open_protocol_exclusive::<BlockIO>(h)
+                        // GET_PROTOCOL, never exclusive: an exclusive open disconnects the
+                        // firmware's FAT driver from the boot disk, after which no
+                        // SimpleFileSystem volume is left to read the media from.
+                        let params = boot::OpenProtocolParams { handle: h, agent: boot::image_handle(), controller: None };
+                        unsafe { boot::open_protocol::<BlockIO>(params, boot::OpenProtocolAttributes::GetProtocol) }
                             .map(|b| {
                                 let m = b.media();
                                 m.is_media_present() && !m.is_logical_partition()
@@ -86,12 +93,16 @@ pub fn capture_media() {
             Ok(d) => d,
             Err(_) => continue,
         };
-        let kernel_b = fs.read(cstr16!("\\EFI\\BOOT\\eurokernel-B.efi")).unwrap_or_else(|_| kernel_a.clone());
+        let sig_a = fs.read(cstr16!("\\EFI\\BOOT\\eurokernel-A.efi.sig")).unwrap_or_default();
+        let (kernel_b, sig_b) = match fs.read(cstr16!("\\EFI\\BOOT\\eurokernel-B.efi")) {
+            Ok(d) => (d, fs.read(cstr16!("\\EFI\\BOOT\\eurokernel-B.efi.sig")).unwrap_or_default()),
+            Err(_) => (kernel_a.clone(), sig_a.clone()),
+        };
         crate::serial_println!(
-            "[inst] install media read from own ESP: loader {} B · kernel-A {} B · kernel-B {} B",
-            loader.len(), kernel_a.len(), kernel_b.len()
+            "[inst] install media read from own ESP: loader {} B · kernel-A {} B · kernel-B {} B · signatures {}",
+            loader.len(), kernel_a.len(), kernel_b.len(), if sig_a.len() == 64 && sig_b.len() == 64 { "present" } else { "MISSING (loader will refuse the ESP fallback)" }
         );
-        *MEDIA.lock() = Some(InstallMedia { loader, kernel_a, kernel_b });
+        *MEDIA.lock() = Some(InstallMedia { loader, kernel_a, kernel_b, sig_a, sig_b });
         return;
     }
     crate::serial_println!("[inst] ESP files not found on any SFS volume — install media not available");
@@ -116,7 +127,7 @@ pub fn disk_is_blank(dev: usize) -> bool {
     // such a disk as blank: doing so would overwrite a user's data disk. Only a
     // disk with no boot signature at all is blank. A EuroPack data disk (chrome
     // serving) carries no boot signature either — but it IS data, never a target.
-    if &s0[0..8] == b"EUROPCK1" {
+    if crate::ring3::is_europack_header(&s0) {
         return false;
     }
     !(s0[510] == 0x55 && s0[511] == 0xAA)
@@ -129,8 +140,8 @@ pub fn nvme_is_blank() -> bool {
         return false;
     }
     let mut s0 = [0u8; 512];
-    if !crate::nvme::read_sectors(0, &mut s0) {
-        return false;
+    if !crate::nvme::read_sectors(0, &mut s0) || crate::ring3::is_europack_header(&s0) {
+        return false; // unreadable, or a EuroPack data disk (never a target)
     }
     !(s0[510] == 0x55 && s0[511] == 0xAA)
 }
@@ -149,8 +160,8 @@ pub fn ahci_is_blank(idx: usize) -> bool {
         return false;
     }
     let mut s0 = [0u8; 512];
-    if !crate::ahci::read_sectors(idx, 0, &mut s0) {
-        return false;
+    if !crate::ahci::read_sectors(idx, 0, &mut s0) || crate::ring3::is_europack_header(&s0) {
+        return false; // unreadable, or a EuroPack data disk (never a target)
     }
     !(s0[510] == 0x55 && s0[511] == 0xAA)
 }
@@ -192,6 +203,9 @@ pub fn install_to_disk(dev: usize, cfg: &Config) -> bool {
         return false;
     }
     let total = crate::virtio_blk::capacity_sectors_dev(dev);
+    if total == 0 {
+        return false; // no medium / unreadable capacity
+    }
     install_to_target(
         cfg,
         total,
@@ -216,6 +230,9 @@ pub fn install_to_nvme(cfg: &Config) -> bool {
         return false;
     }
     let total = crate::nvme::capacity_sectors();
+    if total == 0 {
+        return false; // no medium / unreadable capacity
+    }
     install_to_target(
         cfg,
         total,
@@ -242,23 +259,39 @@ fn install_to_target(
     flush: impl Fn(),
     make_root: impl Fn(u64, u64) -> crate::rootblk::RootBlk,
 ) -> bool {
-    let (loader, kernel_a, kernel_b) = {
-        let guard = MEDIA.lock();
-        match guard.as_ref() {
-            Some(m) => (m.loader.clone(), m.kernel_a.clone(), m.kernel_b.clone()),
-            None => return false,
+    // Take the media OUT of the global (no clones, no lock held during the install)
+    // and put it back on every exit path, so `media_available()` keeps its meaning.
+    struct Restore(Option<InstallMedia>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(m) = self.0.take() {
+                *MEDIA.lock() = Some(m);
+            }
         }
-    };
-    if total < 128 * 1024 * 1024 / 512 {
-        crate::serial_println!("[q1x3] target {label} too small ({} MiB) for installation", total * 512 / 1024 / 1024);
+    }
+    let restore = Restore(MEDIA.lock().take());
+    let Some(m) = restore.0.as_ref() else { return false };
+    let (loader, kernel_a, kernel_b) = (&m.loader[..], &m.kernel_a[..], &m.kernel_b[..]);
+    let (sig_a, sig_b) = (&m.sig_a[..], &m.sig_b[..]);
+    // ESP (256 MiB) + two 96 MiB slot partitions + at least 64 MiB of root.
+    let need = eurofat::layout_for(total).eurofs_first + 64 * 1024 * 1024 / 512;
+    if total < need {
+        crate::serial_println!("[q1x3] target {label} too small ({} MiB, need {} MiB) for installation", total * 512 / 1024 / 1024, need * 512 / 1024 / 1024);
         return false;
     }
     let vid = (crate::rtc::epoch() as u32) ^ 0xE040_5053;
     // Fresh install: slot_config → boot slot A (the loader honors this file).
     let slot_a = euroupdate::SlotConfig::initial().serialize();
-    let layout = eurofat::write_boot_disk(total, vid, &loader, &kernel_a, &kernel_b, &slot_a, |lba, bytes| {
+    // With a signed kernel the install also fills the EuroSlot-A partition
+    // (header: magic + length + sha256 + signature), so the loader boots through
+    // its verified partition path from the very first boot.
+    let slot_a_header = if sig_a.len() == 64 { crate::update::slot_header(kernel_a, sig_a).to_vec() } else { Vec::new() };
+    let Some(layout) = eurofat::write_boot_disk(total, vid, loader, kernel_a, kernel_b, sig_a, sig_b, &slot_a_header, &slot_a, |lba, bytes| {
         write(lba, bytes);
-    });
+    }) else {
+        crate::serial_println!("[q1x3] target {label}: boot files do not fit the ESP — installation ABORTED");
+        return false;
+    };
 
     // ── Format + provision the EuroFS root partition (real installation) ──
     let now = crate::rtc::epoch();
@@ -300,13 +333,8 @@ fn install_to_target(
 /// Rebuilds the ESP (slot A unchanged, slot B = new image) and rewrites the
 /// ESP region. After a reboot the loader picks slot B; if B's image fails → back to A.
 pub fn stage_update_b(dev: usize) -> bool {
-    let (loader, kernel_a, kernel_b) = {
-        let guard = MEDIA.lock();
-        match guard.as_ref() {
-            Some(m) => (m.loader.clone(), m.kernel_a.clone(), m.kernel_b.clone()),
-            None => return false,
-        }
-    };
+    let guard = MEDIA.lock();
+    let Some(m) = guard.as_ref() else { return false };
     if !crate::virtio_blk::present_dev(dev) || disk_is_blank(dev) {
         return false; // only on an already-installed disk
     }
@@ -319,19 +347,32 @@ pub fn stage_update_b(dev: usize) -> bool {
     cfg.stage_update();
     let sc = cfg.serialize();
 
-    // Rebuild the ESP: slot A = current kernel, slot B = the "new" image (here
-    // the same version, staged in B), + the slot_config file → B.
-    let esp = eurofat::build_esp_cfg(layout.esp_sectors, vid, &loader, &kernel_a, &kernel_b, &sc);
-    let mut lba = layout.esp_first;
-    for chunk in esp.chunks(4096) {
-        let _ = crate::virtio_blk::write_io_dev(dev, lba, chunk);
-        lba += (chunk.len().div_ceil(512)) as u64;
+    // Rebuild the ESP, STREAMED straight from the media buffers (no clones, no
+    // 256 MiB image in the heap): slot A = current kernel, slot B = the "new"
+    // image (here the same version, staged in B), + the slot_config file → B.
+    let mut esp = eurofat::FatFs::new(layout.esp_sectors as u32, vid, "EUROKERNEL");
+    esp.add_file_ext("/EFI/BOOT/BOOTX64.EFI", 0, m.loader.len());
+    esp.add_file_ext("/EFI/BOOT/eurokernel-A.efi", 1, m.kernel_a.len());
+    esp.add_file_ext("/EFI/BOOT/eurokernel-B.efi", 2, m.kernel_b.len());
+    if m.sig_a.len() == 64 {
+        esp.add_file("/EFI/BOOT/eurokernel-A.efi.sig", &m.sig_a);
     }
+    if m.sig_b.len() == 64 {
+        esp.add_file("/EFI/BOOT/eurokernel-B.efi.sig", &m.sig_b);
+    }
+    esp.add_file("/slot_config", &sc);
+    let base = layout.esp_first;
+    let ok = esp.build_streaming(&[&m.loader, &m.kernel_a, &m.kernel_b], |sector, bytes| {
+        let _ = crate::virtio_blk::write_io_dev(dev, base + sector, bytes);
+    });
     crate::virtio_blk::flush_dev(dev);
-
+    if !ok {
+        crate::serial_println!("[upd2] A/B self-update NOT staged on disk {dev}: boot files do not fit the ESP");
+        return false;
+    }
     crate::serial_println!(
         "[upd2] A/B self-update staged on disk {dev}: ESP rebuilt, slot_config → boot slot B (Trying, {} attempts), B image {} B → after reboot the loader picks slot B (loader falls back to A if B's image fails) ✓",
-        cfg.tries, kernel_b.len()
+        cfg.tries, m.kernel_b.len()
     );
     true
 }

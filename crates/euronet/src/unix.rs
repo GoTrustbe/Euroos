@@ -34,6 +34,14 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    /// (connection id, true if side A): what a kernel census prints about a unix
+    /// fd, so two ends of a socketpair can be told apart after an SCM_RIGHTS handoff.
+    pub fn ident(&self) -> (usize, bool) {
+        (self.conn as usize, matches!(self.side, Side::A))
+    }
+}
+
+impl Endpoint {
     /// Identity of THIS side of the connection: (connection, side).
     ///
     /// Descriptors in flight used to be keyed by the receiver's fd NUMBER, which

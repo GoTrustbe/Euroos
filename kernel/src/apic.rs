@@ -89,6 +89,22 @@ pub fn eoi() {
     unsafe { wr(REG_EOI, 0) };
 }
 
+/// A snapshot for the timer-freeze probe: the in-service bits of vectors
+/// 0x20..0x3f (a set bit there means an interrupt of the timer's own priority
+/// class was never EOI'd, which silences the timer while higher vectors still
+/// arrive), the timer's LVT (masked?) and its current count (0 = stopped).
+pub fn timer_probe() -> (u32, u32, u32) {
+    unsafe { (rd(0x110), rd(REG_LVT_TIMER), rd(REG_TIMER_CUR)) }
+}
+
+/// The priority side of the same probe: TPR (0x80) and PPR (0xa0) mask every
+/// vector at or below their class, which would silence the timer (0x20) while a
+/// class-4 MSI-X still arrives; IRR bits 0x20..0x3f say whether a timer interrupt
+/// is pending undelivered right now.
+pub fn priority_probe() -> (u32, u32, u32) {
+    unsafe { (rd(0x80), rd(0xa0), rd(0x210)) }
+}
+
 /// Mask LINT0. During early boot we run virtual-wire mode (LINT0 = ExtINT) so the
 /// legacy 8259 can deliver the keyboard/mouse before the IO-APIC exists. Once the
 /// IO-APIC takes over and the 8259 is fully masked, ExtINT on LINT0 is not just
@@ -103,6 +119,12 @@ pub fn mask_lint0() {
 
 /// Number of LAPIC timer ticks per `hz` period (result of the calibration).
 static mut CAL_COUNT: u32 = 0;
+/// TSC cycles per timer period, measured over the same PIT window as the LAPIC
+/// count. The tick handler uses it to notice a timer interrupt that arrived late
+/// (a coalesced tick: the periodic LAPIC timer keeps one pending bit per vector,
+/// so every period spent with interrupts off beyond the first is lost) and to
+/// keep the tick clock on real time anyway.
+pub static TSC_PER_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Enable the LAPIC and start the periodic timer at `hz` Hz, interrupt `vector`.
 /// Returns the calibrated initial count value (diagnostics).
@@ -239,6 +261,7 @@ unsafe fn calibrate(hz: u32) -> u32 {
     wr(REG_TIMER_INIT, 0xFFFF_FFFF);
 
     // Wait until PIT-ch2 reaches its terminal count (OUT2 = 0x61 bit5 goes high).
+    let tsc0 = core::arch::x86_64::_rdtsc();
     let mut guard = 0u32;
     while (p61.read() & 0x20) == 0 {
         guard += 1;
@@ -249,6 +272,10 @@ unsafe fn calibrate(hz: u32) -> u32 {
 
     wr(REG_LVT_TIMER, LVT_MASKED);
     let elapsed = 0xFFFF_FFFFu32 - rd(REG_TIMER_CUR);
+    let tsc = core::arch::x86_64::_rdtsc().wrapping_sub(tsc0);
+    if elapsed >= 1000 && guard <= 50_000_000 {
+        TSC_PER_TICK.store(tsc, core::sync::atomic::Ordering::Relaxed);
+    }
     if elapsed < 1000 {
         1_000_000 // fallback on a failed calibration
     } else {

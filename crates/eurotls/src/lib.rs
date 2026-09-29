@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! EuroTLS — a custom TLS 1.3 client (RFC 8446) for EuroOS.
 //!
 //! Sans-IO: this crate knows no sockets. The caller (the kernel, on top of a

@@ -13,3 +13,5 @@ path = "src/main.rs"
 [dependencies]
 uefi = { version = "0.33", features = ["alloc", "global_allocator", "panic_handler"] }
 euroupdate = { path = "../crates/euroupdate" }
+sha2 = { version = "0.10", default-features = false }
+ed25519-dalek = { version = "2", default-features = false }

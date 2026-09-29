@@ -69,6 +69,7 @@ mod gdbstub;
 mod session;
 mod shell;
 mod smp;
+mod alsa;
 mod nvme;
 mod tls_roots;
 mod update;
@@ -394,10 +395,17 @@ fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
     // chrome's first instruction — and the input bridge wants the session anyway:
     // desktop clicks and typing ride the same reliable DevTools route as the
     // boot-phase runs. The staged euro.html is the start page's target.
-    ring3::cdp_install_input("file:///tmp/euro.html");
+    // The first site in the visit list becomes chrome's initial page, so its
+    // renderer is the one the DevTools session attaches to (W19: a file://->site
+    // navigation strands the session on the old renderer). The argv's last element
+    // is the start URL; swap it.
+    let init_url = ring3::chrome_init_url();
+    ring3::cdp_install_input(&init_url);
+    let mut argv: alloc::vec::Vec<&[u8]> = ring3::CHROME_ARGV.to_vec();
+    if let Some(last) = argv.last_mut() { *last = init_url.as_bytes(); }
     let caps = ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO | ring3::CAP_NET;
     match ring3::spawn_glibc_disk_persistent(mem, "/pack/chrome", ring3::ldlinux_bytes(),
-                                             ring3::CHROME_ARGV, ring3::CHROME_ENVP, caps) {
+                                             &argv, ring3::CHROME_ENVP, caps) {
         Some(t) => (true, alloc::format!("chrome: launched (task {t}) — the window paints as it starts up")),
         None => {
             xserver::set_windowed(false);
@@ -633,7 +641,19 @@ fn main() -> Status {
         // Cap at a quarter of RAM: at -m 3584M the fifth-cap rejected the 640 MiB
         // candidate and chrome multi-process fell to 160 MiB — not one 256 MiB
         // child arena fit, and every GPU/renderer launch died on [fork] alloc.
-        let cap = usable_frames / 3;
+        // A large guest can spare half: at 4023 MiB usable, a third caps the pool at
+        // 1341 MiB, one arena short of the five children a desktop browser on a
+        // live site forks (two utilities, the file:// renderer, the https renderer,
+        // and one more), and the fifth fork failed at "pool has 127 MiB" twice per
+        // run. Below 3 GiB the third stays: the lean images must keep booting.
+        // Two fifths, not half, once the pool can grow past 1408 MiB: at 4023 MiB usable
+        // (the 4608M guest) half would admit the 1920 MiB candidate and leave the
+        // demand pool 600 MiB, so that guest keeps its 1408 MiB pool; the 5632M guest
+        // (5047 MiB usable) takes 1920 MiB and still has a bigger demand pool than the
+        // 4608M one had (1115 MiB).
+        // Half of usable RAM on a big guest (two fifths kept the 6144M NUC guest at
+        // seven arenas: the eighth run fell just over the line, run 76).
+        let cap = if usable_frames >= 3 * 256 * 1024 { usable_frames / 2 } else { usable_frames / 3 };
         // Candidates: 640 MiB (2+ chrome arenas) → 512 → 288 (one child + slack)
         // → 160 → 64 MiB, first that fits.
         let mut installed = false;
@@ -643,14 +663,59 @@ fn main() -> Status {
         // (127 MiB left). Three children plus slack needs ~900. The demand pool
         // takes whatever remains after this, so the budget shifts rather than
         // grows; the cap below keeps lean images booting.
-        for &want in &[229_376usize, 163_840, 131_072, 73_728, 40_960, 16_384] {
+        // 1152 MiB first, when the cap allows it (a guest of ~4.5 GiB or more): the
+        // desktop browser forks two utilities and a renderer (3 x 256 MiB) and then
+        // asks for a FOURTH child, refused three times per run at "pool has 127 MiB".
+        // At -m 3584M the cap (a third of RAM) rejects this candidate and the 896 MiB
+        // pool below is used unchanged, so the lean images are not affected.
+        // 1920 MiB (seven arenas + slack) first: run 33 on the NUC reached the live
+        // site's HTML over https and then lost the navigation because the sixth and
+        // seventh fork found "pool has 127 MiB" (five children alive: two utilities,
+        // two renderers, one more utility; the https renderer needs its own). Needs
+        // the 5632M guest; at 4608M the cap keeps the 1408 MiB pool.
+        // 2176 MiB (eight arenas + slack) first: run 70 on youtube had eight children
+        // alive (four renderers, utilities coming and going) against seven arenas
+        // and refused one fork. Needs the 6144M guest (the two-fifths cap keeps
+        // 1920 MiB at 5632M).
+        for &want in &[557_056usize, 491_520, 425_984, 360_448, 294_912, 229_376, 163_840, 131_072, 73_728, 40_960, 16_384] {
             if want > cap {
                 continue;
             }
             if let Ok(base) = allocator.allocate_contiguous(want) {
-                procpool::install(base, want);
-                serial_println!("[mm] process frame pool: {} MiB @ {base:#x} (fork/exec)", want / 256);
+                // Top the pool up with further 258 MiB runs (one 2 MiB-aligned
+                // arena each) up to the cap: the largest run alone held seven
+                // arenas on the 6144M NUC guest and youtube's browser wants nine
+                // children alive (run 74: two forks refused at "pool has 127 MiB").
+                let mut regions: alloc::vec::Vec<(u64, usize)> = alloc::vec![(base, want)];
+                let mut total = want;
+                const CHUNK: usize = 66_048; // 258 MiB
+                while regions.len() < 6 && total + CHUNK <= cap {
+                    match allocator.allocate_contiguous(CHUNK) {
+                        Ok(b) => { regions.push((b, CHUNK)); total += CHUNK; }
+                        Err(_) => break,
+                    }
+                }
+                procpool::install_regions(&regions);
+                let mut line = alloc::format!("[mm] process frame pool: {} MiB @ {base:#x} (fork/exec)", want / 256);
+                for &(b, f) in regions.iter().skip(1) {
+                    line.push_str(&alloc::format!(" + {} MiB @ {b:#x}", f / 256));
+                }
+                serial_println!("{line}");
                 installed = true;
+                // The kernel heap's big-block pool (allocator::BIG_MIN and up): 256 MiB
+                // of frames on a guest with at least 4 GiB, a quarter of that below.
+                // 512 MiB on a guest of 4 GiB or more: run 77 filled 256 MiB at the
+                // youtube load and fell back to the list heap.
+                let big_pages = if usable_frames >= 4 * 256 * 1024 { 131_072 } else if usable_frames >= 2 * 256 * 1024 { 16_384 } else { 0 };
+                if big_pages > 0 {
+                    match allocator.allocate_contiguous(big_pages) {
+                        Ok(b) => {
+                            crate::allocator::install_big_pool(b, big_pages);
+                            serial_println!("[mm] big-block heap pool: {} MiB @ {b:#x}", big_pages / 256);
+                        }
+                        Err(_) => serial_println!("[mm] WARNING: no big-block heap pool (no {} MiB run free)", big_pages / 256),
+                    }
+                }
                 break;
             }
         }
@@ -664,6 +729,12 @@ fn main() -> Status {
     // EuroPack: register files served straight from a pack disk (no RAM copy) —
     // how binaries too large to embed (chrome) reach the glibc loader.
     ring3::europack_scan();
+    if cfg!(feature = "selftest") {
+        // Self-test of the scan: read every page of every registered pack file
+        // through the verified reader, right here, so a tampered page is named
+        // early in the boot log.
+        ring3::europack_sweep();
+    }
 
     // NVMe (B2): detect + initialize an NVMe controller (admin/I/O queues,
     // identify), do a read/write self-test + SMART readout. No-op without NVMe.
@@ -705,9 +776,11 @@ fn main() -> Status {
         if instexec::disk_is_blank(0) {
             // Fresh target disk → install a bootable, provisioned EuroOS (slot A).
             instexec::install_to_disk(0, &instexec::default_config())
-        } else if gpt::find_eurofs_partition().is_some() {
+        } else if gpt::find_eurofs_partition().is_some() && cfg!(feature = "selftest") {
             // Our own installed disk → demonstrate the A/B SELF-UPDATE: stage slot B
             // + flip slot_config. After a standalone reboot the loader picks slot B.
+            // Self-test builds only: a release medium booted next to an installed
+            // disk must leave that installation exactly as it is.
             instexec::stage_update_b(0);
             instexec::rollback_selftest(0); // [upd4]: prove the two-stage rollback on the real ESP
             true // we keep running live; the disk is the boot/update target
@@ -813,6 +886,7 @@ fn main() -> Status {
     // The install media (~6 MiB) stays available so the user can install LATER
     // from the running desktop too (`euroinstall --to N`).
     let on_disk = rootdev.is_disk();
+    rootdev.register_as_boot_disk(); // the A/B update path addresses this disk, on any bus
     // J1/3C-1: the live root FS runs THROUGH a write-through block cache (concurrent
     // read-lock hits, CLOCK eviction, dirty write-back). 256 × 4 KiB = 1 MiB.
     const ROOT_CACHE_BLOCKS: usize = 256;
@@ -1036,24 +1110,42 @@ fn main() -> Status {
     // ── SECOND DISK (B3 multi-disk) ── if there is a second virtio-blk disk,
     // mount a separate EuroFS on it (mountpoint /mnt). Proves multiple real
     // disks, each with its own working filesystem, + `df` per mount.
+    // NEVER format a disk that carries something. This mounted-or-formatted disk 1
+    // unconditionally, and on the lab NUC disk 1 is the NSS EuroPack: every first
+    // boot with a fresh pack wrote an EuroFS over everything past its first MiB,
+    // so the certificate verifier loaded corrupt libraries for weeks of runs, and
+    // a smaller pack made the format fail and the `expect` take the kernel down.
+    // A disk is only formatted when its first sector is blank; a EuroPack (or any
+    // other content) is left alone and said so, and a failed format is a log line.
     let mut fs2: Option<EuroFs<rootblk::RootBlk>> = None;
     if virtio_blk::device_count() > 1 {
         let sectors2 = virtio_blk::capacity_sectors_dev(1);
         let part2 = 2048u64; // skip the first 1 MiB (like a GPT alignment)
         let blocks2 = sectors2.saturating_sub(part2) / 8; // 8 sectors per 4 KiB block
         let dev2 = rootblk::RootBlk::disk_on(1, part2, blocks2);
-        let f2 = match EuroFs::mount(dev2.clone(), rtc::epoch()) {
+        let mut first = [0u8; 512];
+        let probe_ok = virtio_blk::read_io_dev(1, 0, &mut first);
+        let is_pack = probe_ok && crate::ring3::is_europack_header(&first);
+        let is_blank = probe_ok && first.iter().all(|&b| b == 0);
+        match EuroFs::mount(dev2.clone(), rtc::epoch()) {
             Ok(f) => {
                 serial_println!("[euro] EuroFS /mnt mounted from DISK 1 (existing)");
-                f
+                fs2 = Some(f);
             }
-            Err(_) => {
-                let f = EuroFs::format(dev2, [0xB2; 16], rtc::epoch()).expect("EuroFS format disk 1");
-                serial_println!("[euro] EuroFS /mnt formatted on DISK 1 (extra mount)");
-                f
+            Err(_) if is_pack => {
+                serial_println!("[euro] DISK 1 is a EuroPack volume: left untouched (no /mnt)");
             }
-        };
-        fs2 = Some(f2);
+            Err(_) if !is_blank => {
+                serial_println!("[euro] DISK 1 carries unknown content: left untouched (no /mnt)");
+            }
+            Err(_) => match EuroFs::format(dev2, [0xB2; 16], rtc::epoch()) {
+                Ok(f) => {
+                    serial_println!("[euro] EuroFS /mnt formatted on blank DISK 1 (extra mount)");
+                    fs2 = Some(f);
+                }
+                Err(e) => serial_println!("[euro] DISK 1 format failed ({e:?}): no /mnt"),
+            },
+        }
     }
     if let Some(ref mut f2) = fs2 {
         // B3 self-test: write+read on the second disk, then `df` for both mounts.
@@ -1954,6 +2046,12 @@ fn main() -> Status {
     // tone. Proves the mixer→hardware chain (LPIB running = DMA playing).
     if hda::init(&mut allocator) {
         serial_println!("[euro] HD-Audio initialized — stream playing (LPIB={})", hda::stream_pos());
+        // The self-test tone loops in the ring until something overwrites it: a
+        // desktop that hums for ten minutes (run 70's WAV). Silence it now; the
+        // ALSA device (W12) writes what is meant to play.
+        if let Some((_, bytes)) = hda::pcm_ring() {
+            hda::pcm_zero(0, bytes);
+        }
     }
     x86_64::instructions::interrupts::enable();
     // M2-1: NVMe MSI-X delivery proof — must run with interrupts ON (the boot
@@ -2395,7 +2493,7 @@ fn main() -> Status {
                   // pinned via chrome's own --host-resolver-rules for now (its DNS
                   // config service needs netlink we don't provide yet); the TCP,
                   // TLS and HTTP are fully real.
-                  b"--host-resolver-rules=MAP euro-os.eu 151.240.77.50",
+                  b"--host-resolver-rules=MAP euro-os.eu 82.192.72.16",
                   // DEV HARNESS ONLY. The navigation to the live site ends on
                   // chrome-error:// with an empty document, one connection to :443
                   // and nothing after it - the signature of a certificate that
@@ -2405,7 +2503,7 @@ fn main() -> Status {
                   b"--ignore-certificate-errors",
                   // The HTTPS-First interstitial swallows synthetic clicks; treat
                   // the test origin as secure so plain http renders directly.
-                  b"--unsafely-treat-insecure-origin-as-secure=http://151.240.77.50",
+                  b"--unsafely-treat-insecure-origin-as-secure=http://82.192.72.16",
                   b"--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable",
                   // ISOLATION STEP: the raw IP over plain HTTP takes name
                   // resolution AND TLS out of the equation — whether nginx's
@@ -2545,7 +2643,7 @@ fn main() -> Status {
                   // reaches us, so a lever INSIDE the renderer is worth a flag.
                   b"--enable-gpu-benchmarking",
                   // Resolve the site without depending on the guest resolver path.
-                  b"--host-resolver-rules=MAP euro-os.eu 151.240.77.50",
+                  b"--host-resolver-rules=MAP euro-os.eu 82.192.72.16",
                   // ── SINGLE-PROCESS: run renderer/utility/GPU all IN the browser process
                   // so chrome NEVER forks a helper child. The default (forking) path
                   // livelocks: chrome forks helpers, they never execve into functional
@@ -5487,6 +5585,13 @@ fn main() -> Status {
                                 out.push(String::from("chrome: not running"));
                             }
                         } else {
+                            // `chrome URL...`: the DevTools bridge visits these in turn,
+                            // one every four heartbeats from the fourth (the test matrix
+                            // of the workplace sprint: youtube, nextcloud, ...).
+                            let urls: Vec<String> = exec_cmd.split_whitespace().skip(1)
+                                .filter(|a| a.starts_with("http") || a.starts_with("file:") || a.starts_with("js:") || a.starts_with("cdp:") || a.starts_with("click:") || a.starts_with("key:") || *a == "reattach")
+                                .map(String::from).collect();
+                            ring3::set_chrome_urls(&urls);
                             let (ok, msg) = launch_chrome_app(ctx.mem);
                             if ok {
                                 windows[gtk_idx].title = String::from("Chromium  -  chrome");
@@ -5928,6 +6033,9 @@ fn main() -> Status {
             init::flush_log(ctx.fs);
             // G5: periodic background scrub (rate-limited ~60 s) → /var/log/fsck.log.
             scrub::maybe_run(ctx.fs, t);
+            // Automatic updates: signed channel check 90 s after boot, then every 6 h
+            // (policy in /etc/euroupdate.conf; never on the plain preview image).
+            update::maybe_check(ctx.fs, t);
             let (ox, oy) = (cmx, cmy);
             compositor::restore_cursor_bg(&fb, cmx, cmy, &cur_bg);
             // Refresh the status panel (large clock) — without shadow so it does not stack.
@@ -5983,6 +6091,16 @@ fn main() -> Status {
 
         // Keep the network alive: answer ARP requests + recycle RX buffers.
         net::service();
+        // And keep every TCP connection's clock running: non-blocking sends leave
+        // their segments in the retransmit list and rely on tick() for the ACK
+        // bookkeeping and retransmits, and tick() runs from pump_all. The launcher
+        // loop does this while a boot-phase program runs; the desktop loop has to
+        // do it for the hosted browser. Every 16th iteration is plenty at 100 Hz.
+        if t % 16 == 0 {
+            net::pump_all();
+        }
+        // Automatic updates: one non-blocking slice of the background check per iteration.
+        update::step(ctx.fs, t);
 
         // One-shot self-test: after the live GTK window has been up a while, synthesize a
         // click on its Reset button (through the normal desktop click path) to prove
@@ -6403,3 +6521,4 @@ fn panic(info: &PanicInfo) -> ! {
         x86_64::instructions::hlt();
     }
 }
+

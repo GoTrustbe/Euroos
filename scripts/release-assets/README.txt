@@ -92,7 +92,7 @@ REQUIREMENTS
 ------------
   • An x86-64 host (Intel/AMD). ARM (e.g. Apple Silicon) runs it under emulation,
     which is slower but works.
-  • ~1 GB free RAM for the VM.
+  • ~2.5 GB free RAM for the VM (it is started with 2 GB).
 
 This preview is provided as-is, for evaluation. EuroOS · sovereign by design.
 https://euro-os.eu

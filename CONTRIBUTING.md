@@ -47,7 +47,8 @@ python3 toolchain/eupkg/gen-dev-key.py    # writes a fresh dev.key + dev.pub
 ```
 
 This overwrites your local `dev.pub` (and the kernel embeds yours); that is fine
-for development. Official release builds are signed with a key held offline.
+for development. Official releases are signed with the daily key on the build server; a
+rotation key (age-encrypted, passphrase off-server) can replace it (docs/UPDATES.md).
 
 ## Standards — how we work
 

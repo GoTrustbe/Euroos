@@ -23,7 +23,9 @@ VERSION="${VERSION:-$(date -u +%Y.%m.%d)}"
 [ -f "$OVMF" ]    || { echo "OVMF not found: $OVMF (install 'ovmf')"; exit 1; }
 
 echo "==> EuroOS web release $VERSION from $(basename "$SRC_IMG") ($(du -h "$SRC_IMG" | cut -f1))"
-rm -rf "$OUT"; mkdir -p "$OUT"
+# No `mkdir -p`: if someone re-created $OUT between the rm and the mkdir (a
+# predictable path under /tmp, running as root) we must fail, not write into it.
+rm -rf "$OUT"; mkdir -m 700 "$OUT"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cp "$SRC_IMG" "$WORK/euroos.img"
 
@@ -71,6 +73,19 @@ arch:    x86-64 UEFI
 raw image size (decompressed): $RAW_SIZE
 built:   $(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
+
+# 6. EuroUpdate channel: the same kernel, signed, as an over-the-air update. The
+#    kernel's EUROOS_BUILD_VERSION must equal this number (build.sh sets both from
+#    the date; pass EUROOS_BUILD_VERSION=… + VERSION=… together to override).
+UPD_VERSION="${EUROOS_BUILD_VERSION:-$(echo "$VERSION" | tr -d .)}"
+KERNEL_EFI="$ROOT/target/x86_64-unknown-uefi/release/eurokernel.efi"
+if [ -f "$KERNEL_EFI" ]; then
+  echo "  -> update/ (channel stable, version $UPD_VERSION)"
+  #    EUROOS_SIGN_KEY overrides the daily key (the rotation procedure signs with
+  #    the rotation key, see scripts/server/rotate-signing-key.sh).
+  python3 "$ROOT/toolchain/update-server/make-channel.py" --kernel "$KERNEL_EFI" --version "$UPD_VERSION" --channel stable --out "$OUT/update" \
+    ${EUROOS_SIGN_KEY:+--key "$EUROOS_SIGN_KEY"}
+fi
 
 echo "==> done in $OUT:"
 ls -lh "$OUT"

@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! EuroSandbox — containers via the EuroGuard capability model (plan F2), NOT
 //! Linux namespaces. A container = a process with:
 //!   - a chrooted file root (all paths stay within `/containers/<name>`),

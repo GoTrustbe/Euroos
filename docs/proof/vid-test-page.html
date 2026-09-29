@@ -1,0 +1,5 @@
+<!doctype html><html><body style="margin:0;background:#202020;color:#eee;font:16px sans-serif">
+<p id=s style="padding:8px">local webm test</p>
+<video id=v autoplay loop controls width=320 height=240 src="/tmp/test.webm" style="display:block;margin:8px"></video>
+<script>var v=document.getElementById('v'),s=document.getElementById('s');setInterval(function(){s.textContent='t='+v.currentTime.toFixed(1)+' paused='+v.paused+' muted='+v.muted+' ready='+v.readyState+' '+v.videoWidth+'x'+v.videoHeight+' err='+(v.error?v.error.code:0)},500);</script>
+</body></html>

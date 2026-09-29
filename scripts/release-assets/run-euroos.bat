@@ -21,7 +21,7 @@ echo Starting EuroOS...  (close the QEMU window to stop; delete euroos-disk.qcow
 REM -accel whpx uses Windows Hypervisor Platform (enable it in Windows Features
 REM "Windows Hypervisor Platform"). Remove "-accel whpx -cpu max" to use software emulation.
 qemu-system-x86_64 ^
-  -machine q35 -m 512M -accel whpx -cpu max ^
+  -machine q35 -m 2048M -accel whpx -cpu max ^
   -bios OVMF.fd ^
   -drive format=raw,file=euroos.img ^
   -drive format=qcow2,file=euroos-disk.qcow2,if=none,id=hd0 ^

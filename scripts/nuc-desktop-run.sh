@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  nuc-desktop-run.sh — run the DESKTOP chrome scenario on the lab NUC (KVM).
+#
+#  The TCG version of this (chrome-desktop.sh) builds locally and ties the guest
+#  clock to executed instructions. On the NUC there is real virtualisation, so
+#  this one takes a prebuilt image, enables KVM and drops -icount: under KVM the
+#  guest keeps real time by itself, and icount is not compatible with it anyway.
+#
+#  Lives in the repo ON PURPOSE. Its predecessor existed only in /root on a
+#  SystemRescue live system, which is a tmpfs, so a power cut erased it.
+#
+#  Usage (on the NUC, as root):
+#     scripts/nuc-desktop-run.sh /root/euroos/run1.log
+#  Env:
+#     IMG      kernel image            (default /root/euroos/eurokernel.img)
+#     PACK     chromium EuroPack       (default /root/euroos/chrome-pack2.img)
+#     NSSPACK  NSS EuroPack, for https (default /root/euroos/nss-pack.img)
+#     SAMPLES  screendump times in seconds after boot (default "120 300 480 660")
+#     MEM      guest memory            (default 6144M: eight 256 MiB fork arenas)\n#     CHROME_CMD command typed in the Terminal (default "chrome"; add URLs to visit)
+# ============================================================================
+set -u
+LOG="${1:?usage: nuc-desktop-run.sh /path/to/log}"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+IMG="${IMG:-/root/euroos/eurokernel.img}"
+PACK="${PACK:-/root/euroos/chrome-pack2.img}"
+NSSPACK="${NSSPACK:-/root/euroos/nss-pack.img}"
+OVMF="${OVMF:-/usr/share/edk2/x64/OVMF.4m.fd}"
+MEM="${MEM:-6144M}"
+for f in "$IMG" "$PACK" "$NSSPACK" "$OVMF"; do
+  [ -f "$f" ] || { echo "missing: $f"; exit 1; }
+done
+[ -e /dev/kvm ] || { echo "no /dev/kvm - this script is for the NUC; use chrome-desktop.sh under TCG"; exit 1; }
+mon() { printf '%s\n' "$@" | nc -U -q 1 "$LOG.mon" >/dev/null 2>&1; }
+
+# One VM at a time on this image: a second qemu cannot take the write lock and
+# dies before the desktop ("Failed to get \"write\" lock"). Wait for the previous
+# run to finish rather than fail. pkill -x, never -f: -f matches the ssh command
+# line that started us.
+while pgrep -x qemu-system-x86 >/dev/null 2>&1; do sleep 5; done
+# The NUC's root is a 1.9 GiB tmpfs. Twenty-four runs of six 6 MB screendumps
+# filled it to the last 3 MB, and a full tmpfs is a broken instrument: the serial
+# log and the screendumps of the next run cannot be written, and a chardev that
+# hits ENOSPC can stall the VM. Every run starts by dropping every earlier run's
+# screendumps and images (the previous run's have been fetched by then), and
+# says how much room is left.
+rm -f "$(dirname "$LOG")"/*.ppm "$(dirname "$LOG")"/*.png
+rm -f "$LOG" "$LOG"*.ppm "$LOG.mon" "$LOG.qmp" "$LOG.host" "$LOG.wedge"
+# A full-run WAV is ~150 MB and the SystemRescue root is a ~1.9 GB tmpfs; a
+# dozen of them filled it and the next run died on ENOSPC (run 81). Keep only
+# the newest previous WAV, and drop logs older than the last three runs.
+ls -t "$(dirname "$LOG")"/*.wav 2>/dev/null | tail -n +2 | xargs -r rm -f
+ls -t "$(dirname "$LOG")"/run*.log 2>/dev/null | tail -n +4 | xargs -r rm -f
+find "$(dirname "$LOG")" -name '*.keep' -mmin +120 -delete 2>/dev/null
+echo "tmpfs free: $(df -m "$(dirname "$LOG")" | awk 'NR==2 {print $4}') MB"
+# An HD-Audio codec is attached and its output captured to $LOG.wav on the host:
+# what the guest plays (the kernel's boot tone, later chrome's audio through
+# /dev/snd) is a file that can be listened to or measured. Workplace sprint W12.
+# Both packs are attached: the kernel scans every disk for a EuroPack volume, and
+# https needs the NSS one (chrome loads its software token and trust roots as
+# separate .so files, outside the library closure a linker reports).
+qemu-system-x86_64 -machine q35 -enable-kvm -cpu host -m "$MEM" \
+  -bios "$OVMF" \
+  -drive format=raw,file="$IMG" \
+  -drive format=raw,file="$PACK",if=virtio \
+  -drive format=raw,file="$NSSPACK",if=virtio \
+  -device qemu-xhci,id=xhci -device usb-kbd -device usb-tablet \
+  -audiodev wav,id=a0,path="$LOG.wav" -device intel-hda -device hda-duplex,audiodev=a0 \
+  -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+  -monitor unix:"$LOG.mon",server,nowait \
+  -qmp unix:"$LOG.qmp",server,nowait \
+  -display none -serial stdio -no-reboot > "$LOG" 2>&1 &
+Q=$!
+START=$(date +%s)
+# Host-side sampler, every 5 s into $LOG.host: memory, memory pressure (PSI), the
+# vCPU thread's state and its scheduler wait time. The guest's own probe shows the
+# vCPU not running for seconds at a time with a timer interrupt pending and IF=1,
+# which from inside the guest is indistinguishable from the host taking the CPU
+# away; this says which it is, and whether memory pressure is behind it.
+(
+  while kill -0 $Q 2>/dev/null; do
+    T=$(( $(date +%s) - START ))
+    M=$(free -m | awk '/^Mem:/ {printf "used=%s free=%s avail=%s shared=%s", $3, $4, $7, $5}')
+    P=$(awk '/^full/ {print "psi-full:" $2 "/" $3}' /proc/pressure/memory 2>/dev/null | tr '\n' ' ')
+    C=$(awk '/^full/ {print "cpu-full:" $2}' /proc/pressure/cpu 2>/dev/null | tr '\n' ' ')
+    V=""; for t in /proc/$Q/task/*; do n=$(cat $t/comm 2>/dev/null); case "$n" in CPU*) V="$V $n:$(awk '{print $3}' $t/stat 2>/dev/null):wait=$(awk '{print int($2/1e6)}' $t/schedstat 2>/dev/null)ms";; esac; done
+    echo "t=${T}s $M $P $C vcpu:$V" >> "$LOG.host"
+    sleep 5
+  done
+) &
+until grep -aq "interactive loop started" "$LOG" 2>/dev/null; do
+  kill -0 $Q 2>/dev/null || { echo "qemu exited before the desktop"; tail -20 "$LOG"; exit 1; }
+  [ $(( $(date +%s) - START )) -gt 600 ] && { echo "NO DESKTOP within 10 min"; kill $Q; exit 1; }
+  sleep 2
+done
+echo "desktop up at $(( $(date +%s) - START ))s"
+sleep 15
+mon "screendump $LOG-desktop.ppm"
+
+# Type `chrome` + Enter into the Terminal window (it has focus at boot).
+# The qcodes are PHYSICAL keys and this system boots be-azerty, where the key
+# QEMU calls "semicolon" types an m. Sending the letters as if the guest were
+# US-layout gives `chro,e`.
+# CHROME_CMD (default `chrome`) may carry URLs: `chrome https://www.youtube.com/
+# https://euro-os.eu/` makes the kernel's DevTools bridge navigate to them in
+# turn, one every four heartbeats (two minutes of guest time) from the fourth.
+# `type` in qmp-input.py maps the characters through the be-azerty layout.
+CHROME_CMD="${CHROME_CMD:-chrome}"
+{ printf 'type %s\nkey ret\n' "$CHROME_CMD"; } > "$LOG.keys"
+python3 "$DIR/qmp-input.py" "$LOG.qmp" "$LOG.keys" 1920 1080 "$LOG.mon"
+echo "typed '$CHROME_CMD' at $(( $(date +%s) - START ))s"
+
+# CLICK_AT="X Y [X2 Y2 ...]" clicks those absolute screen points after the first
+# sample. Chrome can come up on a modal it will sit on forever (the profile-error
+# dialog); a click on its button is how you find out whether that dialog is the
+# wall or just noise in front of it. The tablet is absolute, so a point read off a
+# screendump lands where the screendump said.
+# Wedge watchdog. One run in six goes silent right after the keystrokes with the
+# IRQs still firing (runs 3 and 12). When the serial log has not grown for 60 s,
+# inject an NMI: it fires under IF=0 and the kernel's probe prints the RIP and a
+# task census, which no ordinary log line can reach. Twice, 4 s apart, then the
+# run continues so the screendumps still say what the screen looked like.
+LASTLINES=0; QUIET=0; NMI_DONE=0
+watchdog() {
+  local n; n=$(wc -l < "$LOG")
+  if [ "$n" = "$LASTLINES" ]; then QUIET=$((QUIET + 5)); else QUIET=0; fi
+  LASTLINES=$n
+  if [ $QUIET -ge 60 ] && [ $NMI_DONE = 0 ]; then
+    NMI_DONE=1
+    echo "WEDGE: no serial output for ${QUIET}s at $(( $(date +%s) - START ))s, injecting NMI"
+    : > "$LOG.wedge"
+    echo "last lines before the silence:"; tail -4 "$LOG" | cut -c1-140
+    # QMP inject-nmi, not the HMP text command: run 20 wedged, the HMP "nmi" went
+    # into the monitor socket and no probe ever printed. QMP answers each command,
+    # so the reply says whether the injection happened at all.
+    # First the VM's own view, which no guest instrument can give: is the vCPU
+    # still running at all (a triple fault leaves it in "shutdown", and then an
+    # NMI changes nothing and the probe cannot print), and what were RIP, CR2
+    # and the flags at the moment it stopped. Then the NMI, twice.
+    python3 - "$LOG.qmp" <<'PY'
+import json, socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect(sys.argv[1]); f = s.makefile("rw")
+f.readline()
+def cmd(c):
+    f.write(json.dumps(c) + "\n"); f.flush()
+    while True:
+        line = f.readline()
+        if not line: return None
+        m = json.loads(line)
+        if "return" in m or "error" in m: return m
+cmd({"execute": "qmp_capabilities"})
+print("qmp query-status ->", cmd({"execute": "query-status"}))
+r = cmd({"execute": "human-monitor-command", "arguments": {"command-line": "info registers"}})
+txt = r.get("return", "") if isinstance(r, dict) else str(r)
+keep = [l for l in txt.split("\n") if any(k in l for k in ("RIP", "RSP", "CR2", "CR3", "EFL", "CS ="))]
+print("info registers:"); print("\n".join(keep[:8]))
+for i in range(2):
+    print("qmp inject-nmi ->", cmd({"execute": "inject-nmi"}))
+PY
+    sleep 8
+    grep -a -A 40 "NMI PROBE" "$LOG" | head -60
+  fi
+}
+for t in ${SAMPLES:-120 300 480 660}; do
+  while [ $(( $(date +%s) - START )) -lt $t ]; do
+    kill -0 $Q 2>/dev/null || break 2
+    sleep 5
+    watchdog
+  done
+  mon "screendump $LOG-t$t.ppm"
+  echo "SHOT $LOG-t$t.ppm at $(( $(date +%s) - START ))s"
+  if [ -n "${CLICK_AT:-}" ] && [ "$t" = "${CLICK_AFTER:-120}" ]; then
+    : > "$LOG.clicks"
+    set -- ${CLICK_AT}
+    while [ $# -ge 2 ]; do
+      printf 'move %s %s\nwait 1\nclick\nwait 1\n' "$1" "$2" >> "$LOG.clicks"
+      shift 2
+    done
+    python3 "$DIR/qmp-input.py" "$LOG.qmp" "$LOG.clicks" 1920 1080 "$LOG.mon"
+    echo "clicked $CLICK_AT at $(( $(date +%s) - START ))s"
+  fi
+  # KEYS_AFTER="ret esc ..." types physical keys (qcodes) at the sample KEYS_AT
+  # (default: the click's sample, right after the clicks). A dialog's default
+  # button answers Enter, which tells a click that is not arriving apart from a
+  # dialog that is not listening; with KEYS_AT one sample later, the screendump
+  # in between says whether the click alone was enough.
+  if [ -n "${KEYS_AFTER:-}" ] && [ "$t" = "${KEYS_AT:-${CLICK_AFTER:-120}}" ]; then
+    sleep 3
+    : > "$LOG.keys2"
+    for k in $KEYS_AFTER; do printf 'key %s\nwait 1\n' "$k" >> "$LOG.keys2"; done
+    python3 "$DIR/qmp-input.py" "$LOG.qmp" "$LOG.keys2" 1920 1080 "$LOG.mon"
+    echo "keys $KEYS_AFTER at $(( $(date +%s) - START ))s"
+  fi
+done
+kill $Q 2>/dev/null; wait $Q 2>/dev/null
+# Keep the two late screendumps under a name the next run's cleanup does not
+# match (it drops *.ppm and *.png): a run's picture must survive the run that
+# follows it, which a chained harness starts at once. Pruned after two hours.
+for t in 480 660; do [ -f "$LOG-t$t.ppm" ] && cp "$LOG-t$t.ppm" "$LOG.t$t.keep"; done
+find "$(dirname "$LOG")" -name '*.keep' -mmin +120 -delete 2>/dev/null
+# The verdict, read from the log the way the sprint plan's exit criteria are
+# worded, so a run says PASS or FAIL by itself (criterion 3 wants three in a row):
+# the browser main thread (task 9) must not fault, the live navigate must commit
+# (Page.frameNavigated with the site's URL; the kernel cuts [cdp] lines at ~200
+# characters, right inside the URL, so the match stops at the host name), no fork
+# may be refused an arena,
+# and the guest must not have wedged. Each failing check is named.
+V=""
+grep -aqE "(GP FAULT|page fault addr).*task 9\)" "$LOG" && V="$V main-thread-fault"
+# Every navigation the bridge issued must have committed: the kernel prints
+# '[cdp] frame navigated: URL' for each Page.frameNavigated (the raw [cdp] <-
+# line is cut inside the URL), and the scheme+host must appear in one.
+for u in $(grep -aoE "navigating the attached target to [^ ]+" "$LOG" | awk '{print $NF}'); do
+  h=$(printf '%s' "$u" | sed -E 's|^([a-z]+://[^/]*).*|\1|')
+  grep -aqF "[cdp] frame navigated: $h" "$LOG" || V="$V no-navigation:$h"
+done
+grep -aq "arena alloc FAILED" "$LOG" && V="$V fork-refused"
+grep -aq "POOL EXHAUSTED" "$LOG" && V="$V demand-pool-exhausted"
+[ -f "$LOG.wedge" ] && V="$V wedge"
+if [ -z "$V" ]; then echo "VERDICT PASS"; else echo "VERDICT FAIL:$V"; fi
+echo "took $(( $(date +%s) - START ))s, log: $LOG"

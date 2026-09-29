@@ -138,7 +138,7 @@ Capabilities, not ambient authority. EuroGuard is the native authorization surfa
 
 - **Capability-scoped syscalls:** sensitive syscalls require a capability (e.g. `CAP_NET` for network access, `CAP_FILE` for filesystem, `CAP_CONSOLE`). Capabilities can be **dropped but never regained** within a process.
 - **Memory isolation:** per-process address spaces; an out-of-bounds access kills only the offending process (the desktop and other processes keep running) — demonstrated by the isolation page-fault path.
-- **Code authenticity:** binaries carry an **Ed25519 signature** over their bytes, verified against the in-kernel public key before they are allowed to run.
+- **Code authenticity:** native ring-3 binaries carry an **Ed25519 signature** over their bytes, verified against the in-kernel public key in `execve` before they are allowed to run. The glibc/Chromium launcher and the kernel daemon are verified the same way; EuroPack disk files (large binaries and libraries) are covered by a **signed manifest with a per-file SHA-256 Merkle tree** (crate `europack`), so every 4 KiB page is verified against its signed leaf as it is faulted in.
 - **W^X, SMEP, SMAP** enforced in hardware.
 - **Auditing:** EuroIPC and capability decisions are logged.
 
@@ -182,6 +182,7 @@ An anti-brick A/B slot state machine (host-tested, 5 tests): slots A/B with stat
 - **G4 durability:** the `slot_config` now lives on a **raw GPT-reserved block** (LBA 40, in the alignment gap before the first partition at LBA 2048 — *outside any EuroFS partition*). It is read/written via direct `virtio_blk` sector I/O with flush, so the A/B state **survives filesystem corruption and torn writes** (the top reliability risk). The FS file `/boot/slot_config` is kept only as a human-readable mirror.
 - **Verified across a real reboot:** boot 1 on a fresh disk reports *"fresh disk → initial"*; boot 2 on the same disk reports *"recovered from previous boot"* — proving FS-independent persistence.
 - **Signed updates:** `euroupdate apply` verifies an **Ed25519 signature** over the image before staging it to the inactive slot.
+- **Over-the-air (8 Sep 2026):** an installed system checks the signed channel on euro-os.eu in the background (non-blocking, 90 s after boot then every 6 h), stages the verified kernel to the inactive slot partition on virtio, AHCI or NVMe, and boots it through the verifying loader. Two trusted keys with server-side rotation. Operator guide: [`UPDATES.md`](UPDATES.md).
 
 ---
 

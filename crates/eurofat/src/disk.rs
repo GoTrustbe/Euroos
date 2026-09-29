@@ -17,7 +17,18 @@ const ESP_FIRST_LBA: u64 = 2048; // 1 MiB alignment
 const ENTRY_LBA: u64 = 2;
 const NUM_ENTRIES: u32 = 128;
 const ENTRY_SIZE: u32 = 128;
-const ESP_MIN_BYTES: u64 = 40 * 1024 * 1024; // comfortably ≥ FAT32 minimum (≈34 MiB)
+// The ESP carries the loader + BOTH kernel slot files (~53 MB each today); 40 MiB
+// silently overflowed once the kernel grew past 20 MB. 256 MiB leaves room for growth.
+const ESP_MIN_BYTES: u64 = 256 * 1024 * 1024;
+/// A/B slot partitions: an over-the-air update writes the new kernel here
+/// (header sector + image, see `kernel/src/update.rs`), the loader boots it from
+/// here. Sized for the updater's 96 MiB image cap.
+pub const SLOT_BYTES: u64 = 96 * 1024 * 1024;
+/// GPT partition type of the two slot partitions (distinct from EuroFS, so
+/// root-filesystem detection never mistakes a slot for the root).
+pub const EUROSLOT_TYPE: [u8; 16] = [
+    0x45, 0x55, 0x52, 0x4f, 0x53, 0x4c, 0x00, 0x01, 0x80, 0x00, 0x00, 0x45, 0x55, 0x52, 0x4f, 0x53,
+];
 const CHUNK: usize = 4096; // virtio-blk DATA_MAX (8 sectors)
 
 /// Type GUID of an EFI System Partition (C12A7328-F81F-11D2-BA4B-00A0C93EC93B),
@@ -52,6 +63,9 @@ fn align8(x: u64) -> u64 {
 pub struct Layout {
     pub esp_first: u64,
     pub esp_sectors: u64,
+    pub slot_a_first: u64,
+    pub slot_b_first: u64,
+    pub slot_sectors: u64,
     pub eurofs_first: u64,
     pub eurofs_sectors: u64,
     pub backup_lba: u64,
@@ -63,13 +77,21 @@ pub fn layout_for(total_sectors: u64) -> Layout {
     let esp_sectors = align8(ESP_MIN_BYTES / SECTOR as u64);
     let esp_first = ESP_FIRST_LBA;
     let esp_last = esp_first + esp_sectors - 1;
-    let fs_first = align8(esp_last + 1);
-    let fs_last = last_usable - 1;
+    let slot_sectors = align8(SLOT_BYTES / SECTOR as u64);
+    let slot_a_first = align8(esp_last + 1);
+    let slot_b_first = slot_a_first + slot_sectors;
+    let fs_first = slot_b_first + slot_sectors;
+    // A disk too small for the slots gets an empty root range instead of an
+    // arithmetic underflow; the installer refuses such a disk up front.
+    let fs_last = last_usable.saturating_sub(1).max(fs_first);
     Layout {
         esp_first,
         esp_sectors,
+        slot_a_first,
+        slot_b_first,
+        slot_sectors,
         eurofs_first: fs_first,
-        eurofs_sectors: fs_last + 1 - fs_first,
+        eurofs_sectors: (fs_last + 1).saturating_sub(fs_first),
         backup_lba: total_sectors - 1,
     }
 }
@@ -78,6 +100,8 @@ fn part_array(l: &Layout) -> Vec<u8> {
     let mut arr = vec![0u8; (NUM_ENTRIES * ENTRY_SIZE) as usize];
     fill_entry(&mut arr, 0, &ESP_TYPE, l.esp_first, l.esp_first + l.esp_sectors - 1, "EFI System Partition", 0x10);
     fill_entry(&mut arr, 1, &EUROFS_TYPE, l.eurofs_first, l.eurofs_first + l.eurofs_sectors - 1, "EuroOS-A", 0x30);
+    fill_entry(&mut arr, 2, &EUROSLOT_TYPE, l.slot_a_first, l.slot_a_first + l.slot_sectors - 1, "EuroSlot-A", 0x50);
+    fill_entry(&mut arr, 3, &EUROSLOT_TYPE, l.slot_b_first, l.slot_b_first + l.slot_sectors - 1, "EuroSlot-B", 0x70);
     arr
 }
 
@@ -145,15 +169,25 @@ pub fn build_esp_cfg(esp_sectors: u64, volume_id: u32, loader: &[u8], kernel_a: 
 /// (≤ 4 KiB, LBA-aligned) to `write(lba, bytes)`. The kernel connects this to
 /// `virtio_blk::write_io_dev`. NEVER materializes the whole disk — only the ESP.
 /// The EuroFS partition stays unwritten (blank → the kernel formats it at boot).
+/// `sig_a`/`sig_b` (64-byte Ed25519 signatures, may be empty) land next to the
+/// kernels on the ESP so the loader can verify the file fallback. `slot_a_header`
+/// (512 bytes, may be empty) + `kernel_a` are also written into the EuroSlot-A
+/// partition: a fresh install then boots through the verified slot path from the
+/// first boot on. Returns `None` (with the disk only partially written) when the
+/// ESP files do not fit; the caller must refuse the install.
+#[allow(clippy::too_many_arguments)]
 pub fn write_boot_disk<W: FnMut(u64, &[u8])>(
     total_sectors: u64,
     volume_id: u32,
     loader: &[u8],
     kernel_a: &[u8],
     kernel_b: &[u8],
+    sig_a: &[u8],
+    sig_b: &[u8],
+    slot_a_header: &[u8],
     slot_config: &[u8],
     mut write: W,
-) -> Layout {
+) -> Option<Layout> {
     let layout = layout_for(total_sectors);
     let last_usable = total_sectors.saturating_sub(34);
     let arr = part_array(&layout);
@@ -172,22 +206,62 @@ pub fn write_boot_disk<W: FnMut(u64, &[u8])>(
     write(1, &gpt_header(true, total_sectors, last_usable, arr_crc));
     write_blob(ENTRY_LBA, &arr, &mut write);
 
-    // ── ESP (FAT32, incl. optional slot_config) streamed to its LBA ──
-    let esp = build_esp_cfg(layout.esp_sectors, volume_id, loader, kernel_a, kernel_b, slot_config);
-    write_blob(layout.esp_first, &esp, &mut write);
-    drop(esp);
+    // ── ESP (FAT32, incl. optional slot_config) streamed to its LBA, never
+    //    materialized: the two kernel images are referenced, not copied. ──
+    {
+        let mut esp = FatFs::new(layout.esp_sectors as u32, volume_id, "EUROKERNEL");
+        esp.add_file_ext("/EFI/BOOT/BOOTX64.EFI", 0, loader.len());
+        esp.add_file_ext("/EFI/BOOT/eurokernel-A.efi", 1, kernel_a.len());
+        esp.add_file_ext("/EFI/BOOT/eurokernel-B.efi", 2, kernel_b.len());
+        if !sig_a.is_empty() {
+            esp.add_file("/EFI/BOOT/eurokernel-A.efi.sig", sig_a);
+        }
+        if !sig_b.is_empty() {
+            esp.add_file("/EFI/BOOT/eurokernel-B.efi.sig", sig_b);
+        }
+        if !slot_config.is_empty() {
+            esp.add_file("/slot_config", slot_config);
+        }
+        let base = layout.esp_first;
+        if !esp.build_streaming(&[loader, kernel_a, kernel_b], |sector, bytes| write(base + sector, bytes)) {
+            return None;
+        }
+    }
+
+    // ── Slot A: header + kernel image (the loader's primary, verified path) ──
+    if slot_a_header.len() == SECTOR {
+        let nsec = kernel_a.len().div_ceil(SECTOR) as u64;
+        if nsec + 1 <= layout.slot_sectors {
+            let mut lba = layout.slot_a_first + 1;
+            let mut pad = [0u8; CHUNK];
+            for c in kernel_a.chunks(CHUNK) {
+                let n = c.len().div_ceil(SECTOR) * SECTOR;
+                pad[..c.len()].copy_from_slice(c);
+                pad[c.len()..n].iter_mut().for_each(|b| *b = 0);
+                write(lba, &pad[..n]);
+                lba += (n / SECTOR) as u64;
+            }
+            write(layout.slot_a_first, slot_a_header); // header last
+        }
+    }
 
     // ── Zero the first sectors of the EuroFS partition (force a fresh format) ──
     let zeros = [0u8; CHUNK];
     for s in 0..16u64 {
         write(layout.eurofs_first + s * 8, &zeros);
     }
+    // ── Empty slot headers: no stale image may boot from a reused disk. Slot A
+    //    keeps the header written above when the install is signed. ──
+    if slot_a_header.len() != SECTOR {
+        write(layout.slot_a_first, &zeros);
+    }
+    write(layout.slot_b_first, &zeros);
 
     // ── Backup GPT: array at last_usable+1.., header at the last sector ──
     write_blob(last_usable + 1, &arr, &mut write);
     write(layout.backup_lba, &gpt_header(false, total_sectors, last_usable, arr_crc));
 
-    layout
+    Some(layout)
 }
 
 /// Write `data` starting at `start_lba` in chunks of ≤ 4 KiB (8 sectors).
@@ -208,11 +282,11 @@ pub fn build_boot_disk(
     kernel_b: &[u8],
 ) -> (Vec<u8>, Layout) {
     let mut img = vec![0u8; total_sectors as usize * SECTOR];
-    let layout = write_boot_disk(total_sectors, volume_id, loader, kernel_a, kernel_b, &[], |lba, bytes| {
+    let layout = write_boot_disk(total_sectors, volume_id, loader, kernel_a, kernel_b, &[], &[], &[], &[], |lba, bytes| {
         let o = lba as usize * SECTOR;
         img[o..o + bytes.len()].copy_from_slice(bytes);
     });
-    (img, layout)
+    (img, layout.expect("the test files fit the ESP"))
 }
 
 #[cfg(test)]
@@ -244,13 +318,57 @@ mod tests {
     #[test]
     fn streaming_matches_inmemory() {
         // The streaming writer and the in-memory build must be identical.
-        let total = 256 * 1024 * 1024 / SECTOR as u64;
+        // ESP 256 MiB + two 96 MiB slots + root: the smallest disk the layout accepts.
+        let total = 640 * 1024 * 1024 / SECTOR as u64;
         let (img, _l) = build_boot_disk(total, 7, &[1, 2, 3], &[4; 1000], &[5; 1000]);
         let mut streamed = vec![0u8; total as usize * SECTOR];
-        write_boot_disk(total, 7, &[1, 2, 3], &[4; 1000], &[5; 1000], &[], |lba, b| {
+        write_boot_disk(total, 7, &[1, 2, 3], &[4; 1000], &[5; 1000], &[], &[], &[], &[], |lba, b| {
             let o = lba as usize * SECTOR;
             streamed[o..o + b.len()].copy_from_slice(b);
         });
         assert_eq!(img, streamed);
+    }
+
+    #[test]
+    fn signatures_and_slot_a_land_on_disk() {
+        // Signed install: the .sig files sit next to the kernels on the ESP and
+        // slot A holds header + image (header last, image sectors zero-padded).
+        let total = 640 * 1024 * 1024 / SECTOR as u64;
+        let (ka, kb) = (vec![4u8; 1000], vec![5u8; 777]);
+        let (sa, sb) = (vec![0xAAu8; 64], vec![0xBBu8; 64]);
+        let mut hdr = vec![0u8; SECTOR];
+        hdr[..8].copy_from_slice(b"EUROSLT2");
+        hdr[8..16].copy_from_slice(&(ka.len() as u64).to_le_bytes());
+        let mut img = vec![0u8; total as usize * SECTOR];
+        let layout = write_boot_disk(total, 7, &[1, 2, 3], &ka, &kb, &sa, &sb, &hdr, &[9, 9], |lba, b| {
+            let o = lba as usize * SECTOR;
+            img[o..o + b.len()].copy_from_slice(b);
+        })
+        .expect("fits");
+        let esp_off = layout.esp_first as usize * SECTOR;
+        let esp = &img[esp_off..esp_off + layout.esp_sectors as usize * SECTOR];
+        assert_eq!(crate::read_file(esp, "/EFI/BOOT/eurokernel-A.efi.sig"), Some(sa));
+        assert_eq!(crate::read_file(esp, "/EFI/BOOT/eurokernel-B.efi.sig"), Some(sb));
+        assert_eq!(crate::read_file(esp, "/slot_config"), Some(vec![9, 9]));
+        let a = layout.slot_a_first as usize * SECTOR;
+        assert_eq!(&img[a..a + SECTOR], &hdr[..]);
+        assert_eq!(&img[a + SECTOR..a + SECTOR + ka.len()], &ka[..]);
+        assert!(img[a + SECTOR + ka.len()..a + 3 * SECTOR].iter().all(|&b| b == 0));
+        // Slot B untouched.
+        let b = layout.slot_b_first as usize * SECTOR;
+        assert!(img[b..b + 2 * SECTOR].iter().all(|&x| x == 0));
+    }
+
+    #[test]
+    fn oversized_esp_content_is_refused() {
+        // 3 x 100 MiB does not fit a 256 MiB ESP: the writer must say so and
+        // write no file data at all (it once spilled into the slot partitions).
+        let total = 640 * 1024 * 1024 / SECTOR as u64;
+        let big = vec![7u8; 100 * 1024 * 1024];
+        let mut touched = 0usize;
+        let r = write_boot_disk(total, 7, &big, &big, &big, &[], &[], &[], &[], |_lba, b| touched += b.len());
+        assert!(r.is_none());
+        // Only MBR + GPT header + partition array before the refusal.
+        assert!(touched < 64 * 1024, "wrote {touched} bytes");
     }
 }

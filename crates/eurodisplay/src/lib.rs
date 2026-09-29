@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! EuroDisplay — a Wayland-shaped display protocol + the compositor side of the
 //! surface model (plan E2). Apps send render commands (`Request`), the compositor
 //! manages surfaces (z-order, damage) and sends `Event`s back (configure/input/frame).

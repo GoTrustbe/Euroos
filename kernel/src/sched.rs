@@ -20,7 +20,7 @@ const IA32_FS_BASE: u32 = 0xC000_0100;
 // Chrome (even --single-process headless) spawns dozens of threads (thread pool,
 // compositor, IO, message pumps). 48 was fine for the shell + a few glibc apps; a
 // browser needs far more scheduler slots. Each slot costs one 16 KiB kernel stack.
-const MAX_TASKS: usize = 256;
+pub const MAX_TASKS: usize = 256;
 const STACK_SIZE: usize = 16 * 1024;
 const CONTEXT_WORDS: usize = 20; // 15 GP registers + 5 (rip,cs,rflags,rsp,ss)
 
@@ -111,7 +111,7 @@ pub static CENSUS_REQUEST: core::sync::atomic::AtomicBool =
 /// from the CDP pump took ring3 spinlocks with interrupts enabled and froze the
 /// guest it was meant to explain.
 fn sysn(t: usize) -> u64 {
-    if t < 128 { crate::ring3::SYSCALLS_PER_TASK[t].load(Ordering::Relaxed) } else { 0 }
+    if t < MAX_TASKS { crate::ring3::SYSCALLS_PER_TASK[t].load(Ordering::Relaxed) } else { 0 }
 }
 
 fn cpun(t: usize) -> u64 {
@@ -137,6 +137,14 @@ pub fn census_trylock() {
             ref other => crate::serial_println!("[census] t{i} cr3={:#x} sys={} cpu={} {other:?}", t.cr3, sysn(i), cpun(i)),
         }
     }
+}
+
+/// Every task as (index, cr3, state), copied out under the lock so a census can
+/// print it without holding the scheduler.
+pub fn snapshot_tasks() -> alloc::vec::Vec<(usize, u64, State)> {
+    let _g = IfOffGuard::new();
+    let s = SCHED.lock();
+    (0..s.count).map(|i| (i, s.tasks[i].cr3, s.tasks[i].state)).collect()
 }
 
 /// Diagnostic: summarise every live task's state (Ready/Sleeping/Blocked/Zombie).
@@ -186,6 +194,8 @@ pub fn unblock(idx: usize) {
     let mut s = SCHED.lock();
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(_)) {
         s.tasks[idx].state = State::Ready;
+        let floor = s.min_vr.saturating_sub(64);
+        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
     }
 }
 
@@ -196,6 +206,8 @@ pub fn unblock_any(idx: usize) {
     let mut s = SCHED.lock();
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(_) | State::Sleeping(_)) {
         s.tasks[idx].state = State::Ready;
+        let floor = s.min_vr.saturating_sub(64);
+        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
     }
 }
 
@@ -379,6 +391,10 @@ struct Scheduler {
     /// Slots of fully-finished tasks (resources freed, no BgProc) available for
     /// reuse — so the OS can run unbounded programs without exhausting the table.
     free_slots: alloc::vec::Vec<usize>,
+    /// The smallest vruntime among runnable tasks at the last pick: where a new
+    /// or woken task is placed, so nobody arrives far behind the pack and holds
+    /// the CPU until it catches up (CFS's min_vruntime).
+    min_vr: u64,
 }
 
 static SCHED: Mutex<Scheduler> = Mutex::new(Scheduler {
@@ -387,6 +403,7 @@ static SCHED: Mutex<Scheduler> = Mutex::new(Scheduler {
     }; MAX_TASKS],
     count: 1,
     current: 0,
+    min_vr: 0,
     free_slots: alloc::vec::Vec::new(),
 });
 
@@ -607,9 +624,61 @@ static SCHED_LOG_CTR: AtomicU64 = AtomicU64::new(0);
 
 pub static TRACE_SCHED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
+/// TSC at the previous timer interrupt, ticks the clock had to add to stay on real
+/// time, and how many late ticks have been logged.
+static LAST_TICK_TSC: AtomicU64 = AtomicU64::new(0);
+/// Timer ticks that landed while each task was current (lock-free; read by the
+/// DevTools heartbeat for the [cpu] line).
+pub static TICKS_PER_TASK: [AtomicU64; MAX_TASKS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const Z: AtomicU64 = AtomicU64::new(0);
+    [Z; MAX_TASKS]
+};
+pub static LOST_TICKS: AtomicU64 = AtomicU64::new(0);
+static LATE_TICKS_LOGGED: AtomicU64 = AtomicU64::new(0);
+
 #[no_mangle]
 pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
-    crate::interrupts::TICKS.fetch_add(1, Ordering::Relaxed);
+    // A late tick: the periodic LAPIC timer has one pending bit, so a window with
+    // interrupts off longer than a period swallows every period but one. The clock
+    // is kept on real time from the TSC, and the first late ticks say WHERE the
+    // window ended (the interrupted rip, the task and its last syscall, the demand
+    // faults served meanwhile): run 35 on the NUC lost two thirds of its ticks with
+    // the vCPU idle whenever anyone looked, and the desktop clock fell behind by
+    // minutes while the timer itself was fine.
+    let now_tsc = unsafe { core::arch::x86_64::_rdtsc() };
+    let prev_tsc = LAST_TICK_TSC.swap(now_tsc, Ordering::Relaxed);
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed);
+    let mut add = 1u64;
+    if prev_tsc != 0 && per != 0 {
+        let gap = now_tsc.wrapping_sub(prev_tsc);
+        if gap > per * 2 {
+            let lost = (gap / per - 1).min(10_000);
+            add += lost;
+            LOST_TICKS.fetch_add(lost, Ordering::Relaxed);
+            let n = LATE_TICKS_LOGGED.fetch_add(1, Ordering::Relaxed);
+            if n < 24 || (n + 1) % 128 == 0 {
+                let (rip, cs) = unsafe { (*((rsp + 120) as *const u64), *((rsp + 128) as *const u64)) };
+                let cur = current();
+                let (sn, sa1, _) = crate::ring3::last_syscall(cur);
+                let (fc, fcyc) = crate::ring3::fault_counters();
+                crate::serial_println!(
+                    "[tick-late] #{} +{lost} ticks ({} Mcycles) rip={rip:#x} cs={cs:#x} task {cur} last-syscall={sn}(a1={sa1:#x}) faults-total={fc} ({} Mcycles) lost-total={}",
+                    n + 1, gap / 1_000_000, fcyc / 1_000_000, LOST_TICKS.load(Ordering::Relaxed)
+                );
+            }
+        }
+    }
+    crate::interrupts::TICKS.fetch_add(add, Ordering::Relaxed);
+    // Who was running when this tick landed: the CPU ledger the [cpu] heartbeat
+    // line reads (the browser's download crawled at 8 KB/s in run 61 with the
+    // data queued unread: was the reader starved, and by whom?).
+    {
+        let c = current_lockfree();
+        if c < TICKS_PER_TASK.len() {
+            TICKS_PER_TASK[c].fetch_add(add, Ordering::Relaxed);
+        }
+    }
     crate::interrupts::send_timer_eoi();
     if CENSUS_REQUEST.swap(false, Ordering::Relaxed) {
         census_trylock();
@@ -699,12 +768,24 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
         if let State::Sleeping(w) = s.tasks[i].state {
             if now >= w {
                 s.tasks[i].state = State::Ready;
+                let floor = s.min_vr.saturating_sub(64);
+                if s.tasks[i].vruntime < floor { s.tasks[i].vruntime = floor; }
             }
         }
     }
     // 2. Let the outgoing task (if it's still runnable) climb its vruntime,
     //    weighted on nice. Higher nice -> larger step -> chosen less often.
-    if s.tasks[cur].state == State::Ready {
+    //    Not for a tick that found task 0 halted: idle time is not work, and
+    //    charging it made the desktop loop the most expensive task on the
+    //    machine after ten idle minutes. A renderer thread created then, at its
+    //    creator's low vruntime, won every tick for 380 s (run 71: 38090 of
+    //    39664 ticks) while the desktop loop, the heartbeats and every other
+    //    thread waited for it to catch up.
+    let idle_tick = cur == 0 && !via_yield && unsafe {
+        let rip = *((rsp + 120) as *const u64);
+        rip > 0x1000 && *((rip - 1) as *const u8) == 0xf4 // the tick landed after hlt
+    };
+    if s.tasks[cur].state == State::Ready && !idle_tick {
         let step = vstep(s.tasks[cur].nice);
         s.tasks[cur].vruntime = s.tasks[cur].vruntime.wrapping_add(step);
     }
@@ -721,6 +802,9 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
             best = i;
             found = true;
         }
+    }
+    if found {
+        s.min_vr = bestv;
     }
     if !found {
         best = if s.tasks[cur].state == State::Ready { cur } else { 0 };
@@ -968,7 +1052,7 @@ pub fn spawn_user(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u6
     // PML4, where the user arena is supervisor-only -> fault/hang. Mirrors spawn_thread.
     s.tasks[idx].cr3 = cr3;
     s.tasks[idx].state = State::Ready;
-    s.tasks[idx].vruntime = s.tasks[s.current].vruntime; // start fairly at equal level
+    s.tasks[idx].vruntime = s.tasks[s.current].vruntime.max(s.min_vr); // at the pack, never behind it
     s.tasks[idx].nice = 0;
     idx
 }
@@ -1022,7 +1106,7 @@ pub fn spawn_thread(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: 
     s.tasks[idx].cr3 = cr3; // SHARED address space with the process
     s.tasks[idx].fs_base = fs_base; // own TLS
     s.tasks[idx].state = State::Ready;
-    s.tasks[idx].vruntime = s.tasks[s.current].vruntime;
+    s.tasks[idx].vruntime = s.tasks[s.current].vruntime.max(s.min_vr);
     s.tasks[idx].nice = 0;
     idx
 }

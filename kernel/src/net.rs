@@ -60,6 +60,72 @@ static PORTQ: spin::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ip
 static NET_LEGACY: spin::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>> =
     spin::Mutex::new(alloc::collections::VecDeque::new());
 
+/// Per-port queues for UDP datagrams to a REGISTERED local port (one per UdpSock),
+/// the way PORTQ holds TCP segments per port. Before this every UDP reader pulled
+/// frames off the one legacy queue and dropped what was not its own: chrome runs
+/// its DNS lookups on several UDP sockets at once, so socket A's poll threw away
+/// the answers for B and C, and 31 queries got 2 answers in a run (the rest
+/// ended in ERR_NAME_NOT_RESOLVED). Entries: (source ip, payload).
+static UDPQ: spin::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, alloc::vec::Vec<u8>)>)>> =
+    spin::Mutex::new(alloc::vec::Vec::new());
+static UDP_ROUTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// The DNS ledger: every query name on its way out and every answer on its way
+/// in, with the tick, up to 200 lines per run. Run 64's page waited forever on
+/// three resources whose names may never have been resolved, and the capped
+/// [inet]/[sio] lines could not say.
+static DNS_LINES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+fn dns_ledger(what: &str, sport: u16) {
+    if DNS_LINES.fetch_add(1, core::sync::atomic::Ordering::Relaxed) < 200 {
+        crate::serial_println!("[dns] @{} sport {sport}: {what}", crate::interrupts::ticks());
+    }
+}
+/// A UDP socket opened on `sport`: its datagrams go to its own queue from now on.
+fn udpq_register(sport: u16) {
+    let mut t = UDPQ.lock();
+    if !t.iter().any(|(p, _)| *p == sport) {
+        t.push((sport, alloc::collections::VecDeque::new()));
+    }
+}
+fn udpq_remove(sport: u16) {
+    UDPQ.lock().retain(|(p, _)| *p != sport);
+}
+/// Route one received IPv4/UDP packet to its port's queue; false = not ours.
+fn udpq_route(udpq: &mut alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, alloc::vec::Vec<u8>)>)>,
+              ih: &Ipv4Header, ipl: &[u8]) -> bool {
+    let Ok(dg) = UdpDatagram::parse(ipl, ih.src, ih.dst) else { return false };
+    let Some((_, q)) = udpq.iter_mut().find(|(p, _)| *p == dg.dst_port) else { return false };
+    if dg.src_port == 53 && dg.payload.len() >= 12 {
+        let rcode = dg.payload[3] & 0x0f;
+        let ancount = u16::from_be_bytes([dg.payload[6], dg.payload[7]]);
+        let name = dns::parse_query_name(&dg.payload).unwrap_or_default();
+        dns_ledger(&alloc::format!("answer {name}: rcode {rcode}, {ancount} records, {} B", dg.payload.len()), dg.dst_port);
+    }
+    if q.len() < 64 {
+        q.push_back((ih.src, dg.payload));
+    }
+    let n = UDP_ROUTED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    if n < 4 || (n + 1) % 64 == 0 {
+        crate::serial_println!("[udpq] #{} datagram to port {} queued ({} B)", n + 1, dg.dst_port, q.back().map(|d| d.1.len()).unwrap_or(0));
+    }
+    true
+}
+/// Pop the next queued datagram for `sport` from `server` (others are dropped, as
+/// a connected UDP socket does).
+fn udpq_pop(sport: u16, server: Ipv4Addr) -> Option<alloc::vec::Vec<u8>> {
+    let mut t = UDPQ.lock();
+    let (_, q) = t.iter_mut().find(|(p, _)| *p == sport)?;
+    while let Some((src, d)) = q.pop_front() {
+        if src == server {
+            return Some(d);
+        }
+    }
+    None
+}
+fn udpq_has(sport: u16, server: Ipv4Addr) -> bool {
+    UDPQ.lock().iter().any(|(p, q)| *p == sport && q.iter().any(|(src, _)| *src == server))
+}
+
 /// Segments this stack THREW AWAY, and why. A TCP that silently drops recovers
 /// by retransmission, so the loss is invisible until a page half-loads: three
 /// concurrent downloads here, one subresource failing with ERR_SSL_PROTOCOL_ERROR
@@ -96,17 +162,37 @@ pub fn pump_all() {
     // kernel already paid for: preempt the holder, let another task spin on the
     // same lock, and on one core neither ever runs again. It wedged the guest
     // for twenty minutes the first time this function existed without the guard.
+    //
+    // No waiting in here: pump(4) called poll_seg, which spins SPINS*3 = 12 million
+    // iterations for each idle connection, so with a dozen sockets open this
+    // section ran 0.2 to 1.2 s with interrupts off, every 16 desktop iterations.
+    // The tick clock lost 540 s in run 36 (the [tick-late] log named
+    // net::pump_all+0x84 in task 0 every time). pump_nowait takes what is queued;
+    // the retransmit pass (tick, which gives up on a peer after 8 silent rounds)
+    // runs once a second.
     let _g = crate::sched::IfOffGuard::new();
     rx_route();
+    let now = crate::interrupts::ticks();
+    let last = PUMP_ALL_TICK.load(core::sync::atomic::Ordering::Relaxed);
+    let retransmit = now.wrapping_sub(last) >= 100;
+    if retransmit {
+        PUMP_ALL_TICK.store(now, core::sync::atomic::Ordering::Relaxed);
+    }
     let mut t = SOCKETS.lock();
     for slot in t.iter_mut() {
         if let Some(Sock::Conn(c)) = slot {
             if c.open {
-                c.pump(4);
+                if retransmit {
+                    c.tick();
+                } else {
+                    c.pump_nowait();
+                }
             }
         }
     }
 }
+/// Tick of the last retransmit pass of `pump_all`.
+static PUMP_ALL_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Bytes sitting in socket receive buffers that the program has not read.
 /// Large and growing means the data arrived and the READER never came back for
@@ -157,6 +243,7 @@ pub fn rx_route_irq() {
     };
     let Some(mut portq) = PORTQ.try_lock() else { return };
     let Some(mut legacy) = NET_LEGACY.try_lock() else { return };
+    let Some(mut udpq) = UDPQ.try_lock() else { return };
     for _ in 0..256 {
         let rx = match nic::poll_recv() {
             Some(r) => r,
@@ -183,6 +270,8 @@ pub fn rx_route_irq() {
                             }
                             routed = true;
                         }
+                    } else if ih.protocol == Protocol::Udp && ih.dst == my_ip {
+                        routed = udpq_route(&mut udpq, &ih, ipl);
                     }
                 }
             }
@@ -235,6 +324,8 @@ fn rx_route() {
                             }
                             routed = true;
                         }
+                    } else if ih.protocol == Protocol::Udp && ih.dst == my_ip {
+                        routed = udpq_route(&mut UDPQ.lock(), &ih, ipl);
                     }
                 }
             }
@@ -688,9 +779,12 @@ pub fn service() {
 /// connections don't collide.
 static NEXT_PORT: Mutex<u16> = Mutex::new(49152);
 fn alloc_port() -> u16 {
+    // Random ephemeral port (RFC 6056): a sequential allocator let an off-path
+    // attacker predict the port of the next connection and reset it.
     let mut p = NEXT_PORT.lock();
-    let port = *p;
-    *p = if port >= 65000 { 49152 } else { port + 1 };
+    let span = 65000u32 - 49152;
+    let port = 49152 + (rand_u64() as u32 % span) as u16;
+    *p = port;
     port
 }
 
@@ -710,6 +804,10 @@ pub struct TcpConn {
     snd_una: u32,
     /// Connection still usable (no FIN/RST seen from the peer)?
     pub open: bool,
+    /// Payload bytes accepted in order from the peer / sent to it, for the
+    /// one-line summary at close (what a connection did, uncapped).
+    rx_bytes: u64,
+    tx_bytes: u64,
     /// In-order received bytes not yet fetched by recv().
     rx: alloc::collections::VecDeque<u8>,
     /// Sent-but-not-yet-ACK'd data segments (seq, bytes) for
@@ -723,6 +821,25 @@ pub struct TcpConn {
     /// arrive before anything could move again. Bounded, because a peer that
     /// never fills the gap must not be able to grow this without limit.
     ooo: alloc::vec::Vec<(u32, alloc::vec::Vec<u8>)>,
+    /// Non-blocking connect in progress (`connect_nowait`): SYN sent, no SYN-ACK yet.
+    syn_sent: bool,
+    /// SYN (re)transmissions so far in a non-blocking connect.
+    syn_tries: u8,
+    /// Retransmission rounds without progress (`tick`): the link is dead past a bound.
+    stale_rounds: u8,
+}
+
+impl Drop for TcpConn {
+    /// An abandoned connection (a dropped fetch, a timed-out job) still tells the
+    /// peer and frees its port queue; otherwise the queue and the server-side
+    /// socket lingered until the port came round again.
+    fn drop(&mut self) {
+        if self.open {
+            self.emit(tcp::FIN | tcp::ACK, &[]);
+            self.open = false;
+        }
+        portq_remove(self.sport);
+    }
 }
 
 impl TcpConn {
@@ -752,6 +869,109 @@ impl TcpConn {
         None
     }
 
+    /// Non-blocking active open: sends the SYN and returns at once. Drive it
+    /// with `poll_connect()`; the caller owns the timing (`resend_syn()`).
+    pub fn connect_nowait(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, server: Ipv4Addr, dport: u16) -> TcpConn {
+        let isn = (rand_u64() as u32) | 1;
+        let mut c = TcpConn {
+            my_mac,
+            my_ip,
+            nexthop,
+            server,
+            dport,
+            sport: alloc_port(),
+            my_seq: isn,
+            their_seq: 0,
+            snd_una: isn,
+            open: false,
+            rx_bytes: 0,
+            tx_bytes: 0,
+            rx: alloc::collections::VecDeque::new(),
+            retx: alloc::vec::Vec::new(),
+            ooo: alloc::vec::Vec::new(),
+            syn_sent: true,
+            syn_tries: 1,
+            stale_rounds: 0,
+        };
+        c.emit(tcp::SYN, &[]);
+        c
+    }
+    /// One non-blocking look for the SYN-ACK: `Some(true)` connected, `Some(false)`
+    /// refused (RST) or given up, `None` still waiting.
+    pub fn poll_connect(&mut self) -> Option<bool> {
+        if self.open {
+            return Some(true);
+        }
+        if !self.syn_sent {
+            return Some(false);
+        }
+        while let Some(s) = portq_pop(self.sport, self.server) {
+            if s.has(tcp::RST) {
+                self.syn_sent = false;
+                return Some(false);
+            }
+            if s.has(tcp::SYN) && s.has(tcp::ACK) {
+                self.my_seq = self.my_seq.wrapping_add(1);
+                self.snd_una = self.my_seq;
+                self.their_seq = s.seq.wrapping_add(1);
+                self.emit(tcp::ACK, &[]);
+                self.open = true;
+                self.syn_sent = false;
+                return Some(true);
+            }
+        }
+        None
+    }
+    /// Retransmit the SYN (caller-timed); false once the attempts are exhausted.
+    pub fn resend_syn(&mut self) -> bool {
+        if !self.syn_sent || self.syn_tries >= 4 {
+            self.syn_sent = false;
+            return false;
+        }
+        self.syn_tries += 1;
+        self.emit(tcp::SYN, &[]);
+        true
+    }
+    /// Queue application data without waiting for the ACK (the retransmission
+    /// buffer keeps it; `tick()` retransmits). For cooperative callers.
+    pub fn send_nowait(&mut self, data: &[u8]) {
+        for chunk in data.chunks(1024) {
+            self.emit(tcp::PSH | tcp::ACK, chunk);
+            self.retx.push((self.my_seq, chunk.to_vec()));
+            self.my_seq = self.my_seq.wrapping_add(chunk.len() as u32);
+            self.tx_bytes += chunk.len() as u64;
+        }
+    }
+    /// Caller-timed retransmission of everything still unacknowledged (call about
+    /// once a second while idle). After 8 rounds without an ACK the peer is gone.
+    pub fn tick(&mut self) {
+        self.pump_nowait();
+        if self.retx.is_empty() || !self.open {
+            self.stale_rounds = 0;
+            return;
+        }
+        self.stale_rounds += 1;
+        if self.stale_rounds > 8 {
+            self.open = false;
+            return;
+        }
+        for (seq, chunk) in self.retx.clone() {
+            let saved = self.my_seq;
+            self.my_seq = seq;
+            self.emit(tcp::PSH | tcp::ACK, &chunk);
+            self.my_seq = saved;
+        }
+    }
+    /// FIN without waiting for the peer's answer (cooperative callers; `Drop`
+    /// covers the rest).
+    pub fn close_nowait(&mut self) {
+        if self.open {
+            self.emit(tcp::FIN | tcp::ACK, &[]);
+            self.my_seq = self.my_seq.wrapping_add(1);
+            self.open = false;
+        }
+    }
+
     /// 3-way handshake. Returns a connected socket, or None on timeout.
     pub fn connect(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, server: Ipv4Addr, dport: u16) -> Option<TcpConn> {
         // NO drain() here: with the central demux, other sockets' frames are not
@@ -772,9 +992,14 @@ impl TcpConn {
             their_seq: 0,
             snd_una: isn,
             open: false,
+            rx_bytes: 0,
+            tx_bytes: 0,
             rx: alloc::collections::VecDeque::new(),
             retx: alloc::vec::Vec::new(),
             ooo: alloc::vec::Vec::new(),
+            syn_sent: false,
+            syn_tries: 0,
+            stale_rounds: 0,
         };
         // SYN with retransmission: a lost SYN or SYN-ACK would otherwise make the
         // handshake fail immediately. At most 4 attempts (poll_seg timeout per round).
@@ -821,9 +1046,14 @@ impl TcpConn {
             their_seq: syn.seq.wrapping_add(1),
             snd_una: isn,
             open: false,
+            rx_bytes: 0,
+            tx_bytes: 0,
             rx: alloc::collections::VecDeque::new(),
             retx: alloc::vec::Vec::new(),
             ooo: alloc::vec::Vec::new(),
+            syn_sent: false,
+            syn_tries: 0,
+            stale_rounds: 0,
         };
         c.emit(tcp::SYN | tcp::ACK, &[]);
         c.my_seq = isn.wrapping_add(1);
@@ -860,85 +1090,7 @@ impl TcpConn {
                 Some(s) => s,
                 None => break,
             };
-            if seg.has(tcp::RST) {
-                crate::serial_println!("[tcp] RST from {}.{}.{}.{}:{} to sport {} — closing",
-                    self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
-                    self.dport, self.sport);
-                self.open = false;
-                break;
-            }
-            // Cumulative ACK from the peer: advance snd.una and drop
-            // acknowledged segments from the retransmission buffer.
-            if seg.has(tcp::ACK) {
-                self.ack_upto(seg.ack);
-            }
-            if !seg.payload.is_empty() {
-                // Where does this segment sit relative to what we still need?
-                // Three cases, and the middle one used to be thrown away whole.
-                let delta = seg.seq.wrapping_sub(self.their_seq);
-                let accepted = if delta == 0 {
-                    // Exactly what we asked for.
-                    Some(0usize)
-                } else if delta > 0x8000_0000 {
-                    // STARTS BEFORE what we need - a retransmission. It usually
-                    // carries the bytes we are missing plus some we already have,
-                    // and dropping it whole meant the gap NEVER closed: 89 segments
-                    // held, 96 retransmissions discarded, 0 recovered, and the
-                    // connection stuck at the pace of timeouts. Trim the part we
-                    // already have and take the rest.
-                    let off = self.their_seq.wrapping_sub(seg.seq) as usize;
-                    if off < seg.payload.len() {
-                        Some(off)
-                    } else {
-                        TCP_OLD_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                        None // entirely old: nothing new in it
-                    }
-                } else {
-                    // Ahead of a gap: keep it until the gap closes.
-                    TCP_OOO_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                    if self.ooo.len() < 128 && !self.ooo.iter().any(|(q, _)| *q == seg.seq) {
-                        self.ooo.push((seg.seq, seg.payload.clone()));
-                    }
-                    None
-                };
-                if let Some(off) = accepted {
-                    let fresh = &seg.payload[off..];
-                    self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
-                    self.rx.extend(fresh.iter().copied());
-                    // The gap is closed: splice in what was waiting behind it, in
-                    // sequence, trimming any overlap the same way.
-                    loop {
-                        let want = self.their_seq;
-                        let Some(i) = self.ooo.iter().position(|(q, d)| {
-                            let dl = want.wrapping_sub(*q);
-                            dl == 0 || (dl < 0x8000_0000 && (dl as usize) < d.len())
-                        }) else {
-                            break;
-                        };
-                        let (q, data) = self.ooo.remove(i);
-                        let skip = want.wrapping_sub(q) as usize;
-                        let fresh = &data[skip..];
-                        self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
-                        self.rx.extend(fresh.iter().copied());
-                        TCP_RECOVERED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                    }
-                    // Drop anything now entirely behind the window.
-                    let upto = self.their_seq;
-                    self.ooo.retain(|(q, d)| {
-                        let dl = upto.wrapping_sub(*q);
-                        !(dl < 0x8000_0000 && (dl as usize) >= d.len())
-                    });
-                }
-                self.emit(tcp::ACK, &[]);
-            }
-            if seg.has(tcp::FIN) {
-                let t = crate::interrupts::ticks();
-                crate::serial_println!("[tcp] @{t} FIN from {}.{}.{}.{}:{} to sport {} — closing",
-                    self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
-                    self.dport, self.sport);
-                self.their_seq = self.their_seq.wrapping_add(1);
-                self.emit(tcp::ACK, &[]);
-                self.open = false;
+            if !self.handle_seg(seg) {
                 break;
             }
             if self.rx.len() > 256 * 1024 {
@@ -946,7 +1098,124 @@ impl TcpConn {
             }
         }
     }
-
+    /// Process every segment that is ALREADY queued for this socket, without
+    /// waiting for more. The cooperative fetch (`HttpsFetch::step`) uses this so a
+    /// step never spins: `net::service()` in the desktop loop keeps the NIC drained.
+    fn pump_nowait(&mut self) {
+        while let Some(seg) = portq_pop(self.sport, self.server) {
+            if !self.handle_seg(seg) {
+                break;
+            }
+            if self.rx.len() > 256 * 1024 {
+                break;
+            }
+        }
+    }
+    /// MSG_PEEK: the same bytes recv_nowait would return, left in place.
+    pub fn peek_nowait(&mut self, max: usize) -> alloc::vec::Vec<u8> {
+        self.pump_nowait();
+        let n = max.min(self.rx.len());
+        self.rx.iter().take(n).copied().collect()
+    }
+    /// Non-blocking read: whatever is buffered (after a no-wait pump), up to `max`.
+    pub fn recv_nowait(&mut self, max: usize) -> alloc::vec::Vec<u8> {
+        self.pump_nowait();
+        let n = max.min(self.rx.len());
+        self.rx.drain(..n).collect()
+    }
+    /// One received segment: ACK handling, in-order/out-of-order payload, FIN/RST.
+    /// Returns false when the connection is finished (RST/FIN).
+    fn handle_seg(&mut self, seg: TcpSegment) -> bool {
+        if seg.has(tcp::RST) {
+            // RFC 5961: a reset is only honoured at the exact next sequence
+            // number; anything else is a blind off-path reset attempt.
+            if seg.seq != self.their_seq {
+                return true;
+            }
+            crate::serial_println!("[tcp] RST from {}.{}.{}.{}:{} to sport {} — closing",
+                self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
+                self.dport, self.sport);
+            self.open = false;
+            return false;
+        }
+        // Cumulative ACK from the peer: advance snd.una and drop
+        // acknowledged segments from the retransmission buffer.
+        if seg.has(tcp::ACK) {
+            self.ack_upto(seg.ack);
+        }
+        if !seg.payload.is_empty() {
+            // Where does this segment sit relative to what we still need?
+            // Three cases, and the middle one used to be thrown away whole.
+            let delta = seg.seq.wrapping_sub(self.their_seq);
+            let accepted = if delta == 0 {
+                // Exactly what we asked for.
+                Some(0usize)
+            } else if delta > 0x8000_0000 {
+                // STARTS BEFORE what we need - a retransmission. It usually
+                // carries the bytes we are missing plus some we already have,
+                // and dropping it whole meant the gap NEVER closed: 89 segments
+                // held, 96 retransmissions discarded, 0 recovered, and the
+                // connection stuck at the pace of timeouts. Trim the part we
+                // already have and take the rest.
+                let off = self.their_seq.wrapping_sub(seg.seq) as usize;
+                if off < seg.payload.len() {
+                    Some(off)
+                } else {
+                    TCP_OLD_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    None // entirely old: nothing new in it
+                }
+            } else {
+                // Ahead of a gap: keep it until the gap closes.
+                TCP_OOO_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                if self.ooo.len() < 128 && !self.ooo.iter().any(|(q, _)| *q == seg.seq) {
+                    self.ooo.push((seg.seq, seg.payload.clone()));
+                }
+                None
+            };
+            if let Some(off) = accepted {
+                let fresh = &seg.payload[off..];
+                self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
+                self.rx.extend(fresh.iter().copied());
+                self.rx_bytes += fresh.len() as u64;
+                // The gap is closed: splice in what was waiting behind it, in
+                // sequence, trimming any overlap the same way.
+                loop {
+                    let want = self.their_seq;
+                    let Some(i) = self.ooo.iter().position(|(q, d)| {
+                        let dl = want.wrapping_sub(*q);
+                        dl == 0 || (dl < 0x8000_0000 && (dl as usize) < d.len())
+                    }) else {
+                        break;
+                    };
+                    let (q, data) = self.ooo.remove(i);
+                    let skip = want.wrapping_sub(q) as usize;
+                    let fresh = &data[skip..];
+                    self.their_seq = self.their_seq.wrapping_add(fresh.len() as u32);
+                    self.rx.extend(fresh.iter().copied());
+                self.rx_bytes += fresh.len() as u64;
+                    TCP_RECOVERED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                }
+                // Drop anything now entirely behind the window.
+                let upto = self.their_seq;
+                self.ooo.retain(|(q, d)| {
+                    let dl = upto.wrapping_sub(*q);
+                    !(dl < 0x8000_0000 && (dl as usize) >= d.len())
+                });
+            }
+            self.emit(tcp::ACK, &[]);
+        }
+        if seg.has(tcp::FIN) {
+            let t = crate::interrupts::ticks();
+            crate::serial_println!("[tcp] @{t} FIN from {}.{}.{}.{}:{} to sport {} — closing",
+                self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
+                self.dport, self.sport);
+            self.their_seq = self.their_seq.wrapping_add(1);
+            self.emit(tcp::ACK, &[]);
+            self.open = false;
+            return false;
+        }
+        true
+    }
     /// Advance snd.una to `ack` (wrapping-aware) and remove fully
     /// acknowledged segments from the retransmission buffer.
     fn ack_upto(&mut self, ack: u32) {
@@ -974,6 +1243,7 @@ impl TcpConn {
             self.emit(tcp::PSH | tcp::ACK, chunk);
             self.retx.push((self.my_seq, chunk.to_vec()));
             self.my_seq = self.my_seq.wrapping_add(chunk.len() as u32);
+            self.tx_bytes += chunk.len() as u64;
         }
         // Wait for acknowledgement; retransmit unacknowledged segments (max 5 rounds).
         for _ in 0..5 {
@@ -1146,6 +1416,20 @@ fn https_exchange(
     host: &str,
     request: &[u8],
 ) -> Option<(alloc::vec::Vec<u8>, Option<alloc::vec::Vec<u8>>)> {
+    https_exchange_max(my_mac, my_ip, nexthop, server, host, request, 200_000)
+}
+/// `https_exchange` with a caller-chosen response cap. EuroUpdate fetches a whole
+/// kernel image (~50 MB) over this path; the 200 KB default protects every other
+/// caller from an unbounded response.
+fn https_exchange_max(
+    my_mac: MacAddr,
+    my_ip: Ipv4Addr,
+    nexthop: MacAddr,
+    server: Ipv4Addr,
+    host: &str,
+    request: &[u8],
+    max: usize,
+) -> Option<(alloc::vec::Vec<u8>, Option<alloc::vec::Vec<u8>>)> {
     let mut tcp = TcpConn::connect(my_mac, my_ip, nexthop, server, 443)?;
     let random = gather_entropy(0);
     let secret = gather_entropy(1);
@@ -1213,7 +1497,7 @@ fn https_exchange(
             Err(_) => break,
         }
         body.extend_from_slice(&tls.take_app_data());
-        if body.len() > 200_000 {
+        if body.len() > max {
             break;
         }
     }
@@ -1273,7 +1557,16 @@ pub fn cmd_https(host: &str) -> alloc::vec::Vec<String> {
 
 /// First fd number that represents a socket (well above the VFS fd's).
 pub const SOCK_FD_BASE: u64 = 500;
-const MAX_SOCK: usize = 16;
+/// 16 was the whole table, and a desktop browser is past it in minutes: its
+/// background lookups and connections took fd 500..515, and the sixteen-th was
+/// the last. From then on every socket() returned -1, which chrome reads as
+/// EPERM: net::ERR_ACCESS_DENIED on a connect, and net::ERR_NAME_NOT_RESOLVED
+/// on the resolver's UDP socket, both the instant a navigation started and
+/// without a packet leaving. Both were chased as resolver problems first.
+/// 96, not more: descriptor bands are 100 wide (sockets at 500, AF_UNIX at
+/// 600, X connections at 700, eventfds at 800, epoll at 900) and is_sock_fd is
+/// a range test, so a bigger table would make fd 600 a socket AND a unix fd.
+const MAX_SOCK: usize = 96;
 
 /// A connectionless UDP socket: after connect() we remember the destination and
 /// send/receive datagrams on our ephemeral source port.
@@ -1297,8 +1590,40 @@ impl UdpSock {
     }
 
     /// Wait for one datagram from the destination, back on our source port.
+    /// Non-blocking receive: look through what the NIC already delivered (the
+    /// legacy queue, which holds every non-TCP frame) for a datagram to this
+    /// socket, and return empty without waiting when there is none. Frames for
+    /// other destinations are dropped here exactly as the blocking `recv` drops
+    /// them; the difference is only that this one never spins.
+    pub fn recv_nowait(&self) -> alloc::vec::Vec<u8> {
+        rx_route();
+        if let Some(d) = udpq_pop(self.sport, self.server) {
+            return d;
+        }
+        for _ in 0..64 {
+            let Some(rx) = legacy_rx() else { break };
+            if let Ok((h, p)) = EthernetHeader::parse(&rx) {
+                if h.ethertype == EtherType::Ipv4 {
+                    if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
+                        if ih.protocol == Protocol::Udp && ih.src == self.server {
+                            if let Ok(dg) = UdpDatagram::parse(ipl, ih.src, ih.dst) {
+                                if dg.dst_port == self.sport {
+                                    return dg.payload;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        alloc::vec::Vec::new()
+    }
     pub fn recv(&self) -> alloc::vec::Vec<u8> {
         for _ in 0..SPINS * 3 {
+            rx_route();
+            if let Some(d) = udpq_pop(self.sport, self.server) {
+                return d;
+            }
             if let Some(rx) = legacy_rx() {
                 if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                     if h.ethertype == EtherType::Ipv4 {
@@ -1375,6 +1700,16 @@ pub fn sock_open(dgram: bool) -> u64 {
             return SOCK_FD_BASE + i as u64;
         }
     }
+    // Say so. A full table used to be silent and the caller's EPERM was read as
+    // a permission or resolver problem for three runs.
+    {
+        use core::sync::atomic::{AtomicU32, Ordering};
+        static LEFT: AtomicU32 = AtomicU32::new(8);
+        if LEFT.load(Ordering::Relaxed) > 0 {
+            LEFT.fetch_sub(1, Ordering::Relaxed);
+            crate::serial_println!("[net] socket table FULL ({MAX_SOCK} slots): socket() refused");
+        }
+    }
     (-1i64) as u64
 }
 
@@ -1383,11 +1718,11 @@ pub fn sock_open(dgram: bool) -> u64 {
 pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     {
         use core::sync::atomic::{AtomicU32, Ordering};
-        static CONN_DIAG: AtomicU32 = AtomicU32::new(24);
+        static CONN_DIAG: AtomicU32 = AtomicU32::new(200);
         if CONN_DIAG.load(Ordering::Relaxed) > 0 {
             CONN_DIAG.fetch_sub(1, Ordering::Relaxed);
-            crate::serial_println!("[conn] sock_connect fd{fd} -> {}.{}.{}.{}:{port}",
-                server.0[0], server.0[1], server.0[2], server.0[3]);
+            crate::serial_println!("[conn] @{} sock_connect fd{fd} -> {}.{}.{}.{}:{port}",
+                crate::interrupts::ticks(), server.0[0], server.0[1], server.0[2], server.0[3]);
         }
     }
     if !is_sock_fd(fd) {
@@ -1436,6 +1771,7 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     };
     if dgram {
         let s = UdpSock { my_mac: cfg.my_mac, my_ip: cfg.my_ip, nexthop, server, dport: port, sport: alloc_port() };
+        udpq_register(s.sport);
         SOCKETS.lock()[i] = Some(Sock::Udp(s));
         0
     } else {
@@ -1609,10 +1945,24 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
                 // and block trackers/ads before the query goes onto the network.
                 if u.dport == 53 {
                     if let Some(name) = dns::parse_query_name(data) {
-                        if crate::euroguard::check_dns(&crate::ring3::current_app(), &name)
-                            == crate::euroguard::Decision::Block
-                        {
-                            // Blocked: send nothing; the app gets no reply.
+                        let blocked = crate::euroguard::check_dns(&crate::ring3::current_app(), &name)
+                            == crate::euroguard::Decision::Block;
+                        dns_ledger(&alloc::format!("query {name}{}", if blocked { " BLOCKED" } else { "" }), u.sport);
+                        if blocked {
+                            // Blocked: the app gets NXDOMAIN at once, not silence. A query
+                            // that is never answered is a resource that never fails, and a
+                            // page waits for it forever (youtube's sign-in check and a
+                            // Google font in run 64: no load event, three requests pending
+                            // for eight minutes).
+                            if data.len() >= 12 {
+                                let mut ans = data.to_vec();
+                                ans[2] = 0x81; // QR=1, RD=1
+                                ans[3] = 0x83; // RA=1, RCODE=3 NXDOMAIN
+                                ans[6] = 0; ans[7] = 0; // ANCOUNT 0
+                                ans[8] = 0; ans[9] = 0; ans[10] = 0; ans[11] = 0;
+                                udpq_register(u.sport);
+                                udpq_unread(u.sport, u.server, &ans);
+                            }
                             return data.len() as u64;
                         }
                     }
@@ -1739,6 +2089,116 @@ pub fn sock_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
     data
 }
 
+/// recv for an O_NONBLOCK descriptor: whatever is there now, never a wait.
+///
+/// The blocking `sock_recv` is what every chrome socket went through, and chrome
+/// marks every socket O_NONBLOCK and polls. On an idle connection `TcpConn::recv`
+/// spins up to 80 x pump(8) x poll_seg, and poll_seg is 12 million busy
+/// iterations, all inside the syscall with interrupts off: seconds during which
+/// the timer cannot fire, the desktop cannot draw, and a TLS server times out
+/// waiting for a ClientHello the browser has not been allowed to write yet.
+/// Measured on the NUC: 2.7 s gaps between NIC interrupts with one tick and a
+/// pending timer, the interrupted rip at a syscall's return address, and no host
+/// pressure at all. UDP the same way for the resolver. POSIX says a non-blocking
+/// read that has nothing returns EAGAIN, and the callers already turn an empty
+/// result on a live socket into exactly that.
+/// recv with MSG_PEEK: look at the bytes without taking them. Chrome's
+/// IsConnectedAndIdle peeks one byte on a pooled connection before reusing it;
+/// served as a plain read, that byte was gone and the next TLS record started
+/// one byte late (type 0x03, version 0x03LL): BoringSSL's WRONG_VERSION_NUMBER on
+/// exactly the reused connections (youtube's subresources, tracera now and then),
+/// while a fresh connection's first request worked. Run 59's NetLog named it.
+pub fn sock_peek_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
+    if !is_sock_fd(fd) {
+        return alloc::vec::Vec::new();
+    }
+    let i = (fd - SOCK_FD_BASE) as usize;
+    let mut t = SOCKETS.lock();
+    match &mut t[i] {
+        Some(Sock::Conn(c)) => c.peek_nowait(max),
+        Some(Sock::Udp(u)) => {
+            // A datagram cannot be put back: take it, then keep it for the read.
+            let d = u.recv_nowait();
+            if !d.is_empty() {
+                udpq_unread(u.sport, u.server, &d);
+            }
+            let mut d = d;
+            d.truncate(max);
+            d
+        }
+        Some(Sock::LocalDns { rx }) => rx.front().map(|d| d.iter().take(max).copied().collect()).unwrap_or_default(),
+        _ => alloc::vec::Vec::new(),
+    }
+}
+/// Put a datagram back at the head of its port's queue (a peek).
+fn udpq_unread(sport: u16, server: Ipv4Addr, d: &[u8]) {
+    let mut t = UDPQ.lock();
+    if let Some((_, q)) = t.iter_mut().find(|(p, _)| *p == sport) {
+        q.push_front((server, d.to_vec()));
+    }
+}
+pub fn sock_recv_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
+    if !is_sock_fd(fd) {
+        return alloc::vec::Vec::new();
+    }
+    let i = (fd - SOCK_FD_BASE) as usize;
+    let data = {
+        let mut t = SOCKETS.lock();
+        match &mut t[i] {
+            Some(Sock::Conn(c)) => c.recv_nowait(max),
+            Some(Sock::Udp(u)) => {
+                let mut d = u.recv_nowait();
+                d.truncate(max);
+                d
+            }
+            Some(Sock::LocalDns { rx }) => {
+                let mut d = rx.pop_front().unwrap_or_default();
+                d.truncate(max);
+                d
+            }
+            _ => alloc::vec::Vec::new(),
+        }
+    };
+    crate::euroguard::record_bytes(&crate::ring3::current_app(), 0, data.len() as u64);
+    data
+}
+
+/// send for an O_NONBLOCK descriptor: TCP puts the segments on the wire and in
+/// the retransmit list and returns; acknowledgements and retransmits are handled
+/// by `tick()` from `pump_all`, which the desktop loop drives. The blocking
+/// `TcpConn::send` waited up to five rounds for the ACK with interrupts off.
+/// UDP and the loopback resolver never waited, so they keep their path.
+pub fn sock_send_nowait(fd: u64, data: &[u8]) -> u64 {
+    if !is_sock_fd(fd) {
+        return (-1i64) as u64;
+    }
+    let i = (fd - SOCK_FD_BASE) as usize;
+    let is_conn = matches!(SOCKETS.lock()[i], Some(Sock::Conn(_)));
+    if !is_conn {
+        return sock_send(fd, data);
+    }
+    let mut t = SOCKETS.lock();
+    if let Some(Sock::Conn(c)) = &mut t[i] {
+        if !c.open {
+            return (-32i64) as u64; // -EPIPE
+        }
+        c.send_nowait(data);
+    }
+    drop(t);
+    crate::euroguard::record_bytes(&crate::ring3::current_app(), data.len() as u64, 0);
+    data.len() as u64
+}
+
+/// Is this descriptor a TCP connection (not UDP, not a listener)? The TLS record
+/// walker needs it: chrome speaks QUIC over UDP to port 443, and a QUIC long
+/// header (c0..cf, version 1) is not a TLS record.
+pub fn sock_is_tcp(fd: u64) -> bool {
+    if !is_sock_fd(fd) {
+        return false;
+    }
+    matches!(&SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize], Some(Sock::Conn(_)))
+}
+
 /// The four-tuple of a connected socket, for getsockname/getpeername:
 /// (local ip, local port, peer ip, peer port). LocalDns reports loopback.
 pub fn sock_names(fd: u64) -> Option<(Ipv4Addr, u16, Ipv4Addr, u16)> {
@@ -1817,15 +2277,23 @@ pub fn sock_readable(fd: u64) -> bool {
     let mut t = SOCKETS.lock();
     match &mut t[(fd - SOCK_FD_BASE) as usize] {
         Some(Sock::Conn(c)) => {
+            // pump_nowait, never pump(1): pump(1) calls poll_seg, which is
+            // SPINS*3 = 12 million busy iterations when nothing is queued, and
+            // this runs inside poll/epoll for every idle socket chrome watches.
+            // It was the freeze that survived the non-blocking recv/send work
+            // (run 28: 13 ticks per second on average over the run).
             if c.rx.is_empty() && c.open {
-                c.pump(1);
+                c.pump_nowait();
             }
             !c.rx.is_empty() || !c.open
         }
-        // A plain UDP socket has no rx queue to peek (recv spins the NIC);
-        // report not-ready and let recv() collect. LocalDns (chrome's only UDP
-        // in practice) has a real queue below.
-        Some(Sock::Udp(_)) => false,
+        // A UDP socket is readable when its port queue holds a datagram from its
+        // peer (rx_route sorts the NIC ring into the port queues first). It used to
+        // answer "never ready", which left chrome's resolver polling blind.
+        Some(Sock::Udp(u)) => {
+            rx_route();
+            udpq_has(u.sport, u.server)
+        }
         Some(Sock::LocalDns { rx }) => !rx.is_empty(),
         Some(Sock::Listen { queue, .. }) => !queue.is_empty(),
         _ => false,
@@ -1840,11 +2308,18 @@ pub fn sock_close(fd: u64) -> u64 {
     let i = (fd - SOCK_FD_BASE) as usize;
     let mut t = SOCKETS.lock();
     if let Some(Sock::Conn(c)) = &mut t[i] {
+        // One line per connection, uncapped: what it did before chrome let go of
+        // it. The [conn] connect log is capped at 24 per run and hid every event
+        // around run 52's burst of ERR_SSL_PROTOCOL_ERROR.
+        crate::serial_println!("[conn] fd{fd} closed {}.{}.{}.{}:{} sport {}: rx {} B, tx {} B, open={}, unacked={}",
+            c.server.0[0], c.server.0[1], c.server.0[2], c.server.0[3], c.dport, c.sport,
+            c.rx_bytes, c.tx_bytes, c.open, c.retx.len());
         c.close();
         portq_remove(c.sport);
     }
     if let Some(Sock::Udp(u)) = &t[i] {
         portq_remove(u.sport);
+        udpq_remove(u.sport);
     }
     t[i] = None;
     0
@@ -2270,7 +2745,23 @@ pub fn unix_socketpair() -> Option<(u64, u64)> {
 }
 
 /// write() to a UNIX-socket fd (Switchboard stream or X-server connection).
+/// Last task that wrote / read each unix fd (diagnostics: who owns which end of a
+/// socketpair after an SCM_RIGHTS handoff, and whether the reader ever came).
+pub static UNIX_LAST_WR: [core::sync::atomic::AtomicUsize; MAX_UNIX_FD] = [const { core::sync::atomic::AtomicUsize::new(usize::MAX) }; MAX_UNIX_FD];
+pub static UNIX_LAST_RD: [core::sync::atomic::AtomicUsize; MAX_UNIX_FD] = [const { core::sync::atomic::AtomicUsize::new(usize::MAX) }; MAX_UNIX_FD];
+/// (connection id, side) of a unix fd, for the census.
+pub fn unix_fd_endpoint(fd: u64) -> Option<(u32, char)> {
+    let t = UNIX_FDS.lock();
+    match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
+        Some(UnixSock::Stream(e)) => { let (c, a) = e.ident(); Some((c as u32, if a { 'A' } else { 'B' })) }
+        _ => None,
+    }
+}
+
 pub fn unix_fd_send(fd: u64, data: &[u8]) -> u64 {
+    if fd >= UNIX_FD_BASE && ((fd - UNIX_FD_BASE) as usize) < MAX_UNIX_FD {
+        UNIX_LAST_WR[(fd - UNIX_FD_BASE) as usize].store(crate::sched::current_lockfree(), core::sync::atomic::Ordering::Relaxed);
+    }
     let (ep, xfd) = {
         let t = UNIX_FDS.lock();
         match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
@@ -2282,14 +2773,33 @@ pub fn unix_fd_send(fd: u64, data: &[u8]) -> u64 {
     if let Some(e) = ep {
         return match unix_send(e, data) {
             Ok(n) => n as u64,
+            // A closed peer is EPIPE (-32), not EPERM (-1): a program handles a
+            // broken pipe (retry, reopen, graceful stop), but reads EPERM as a
+            // permission fault it cannot recover from. Chrome's audio SyncWriter
+            // logged the send as "No room in socket buffer: Operation not
+            // permitted" and gave up (run 86).
+            Err(UnixError::BrokenPipe) => (-32i64) as u64,
             Err(_) => (-1i64) as u64,
         };
     }
     crate::xserver::write(xfd, data)
 }
 
+/// Bytes readable right now on a UNIX-socket fd (ioctl FIONREAD).
+pub fn unix_fd_available(fd: u64) -> usize {
+    let t = UNIX_FDS.lock();
+    match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
+        Some(UnixSock::Stream(e)) => UNIX_SWITCH.lock().available(*e),
+        Some(UnixSock::X(x)) => crate::xserver::queued_len(*x),
+        _ => 0,
+    }
+}
+
 /// read() from a UNIX-socket fd.
 pub fn unix_fd_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
+    if fd >= UNIX_FD_BASE && ((fd - UNIX_FD_BASE) as usize) < MAX_UNIX_FD {
+        UNIX_LAST_RD[(fd - UNIX_FD_BASE) as usize].store(crate::sched::current_lockfree(), core::sync::atomic::Ordering::Relaxed);
+    }
     let (ep, xfd) = {
         let t = UNIX_FDS.lock();
         match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
@@ -2316,6 +2826,25 @@ pub fn x_fd_queued(fd: u64) -> Option<usize> {
         Some(UnixSock::X(x)) => Some(crate::xserver::queued_len(*x)),
         _ => None,
     }
+}
+
+/// Every AF_UNIX fd with unread bytes queued for it: (fd, bytes). A body that
+/// never reaches the renderer while its headers did (run 64: three requests
+/// pending for eight minutes) is a message sitting in a queue nobody reads, or a
+/// reader nobody woke; this names the queues, the census names the readers.
+pub fn unix_queued_report() -> alloc::vec::Vec<(u64, usize)> {
+    let mut out = alloc::vec::Vec::new();
+    let t = UNIX_FDS.lock();
+    let sw = UNIX_SWITCH.lock();
+    for (i, s) in t.iter().enumerate() {
+        if let Some(UnixSock::Stream(e)) = s {
+            let n = sw.available(*e);
+            if n > 0 {
+                out.push((UNIX_FD_BASE + i as u64, n));
+            }
+        }
+    }
+    out
 }
 
 pub fn unix_fd_readable(fd: u64) -> bool {
@@ -2799,6 +3328,50 @@ pub fn fetch_full(host: &str, port: u16, path: &str, tls: bool) -> Option<(u16, 
     Some(parse_http_response(&raw))
 }
 
+/// `fetch_full` with a caller-chosen size cap (EuroUpdate: a ~50 MB kernel image).
+/// Same stacks (EuroTLS 1.3 for https, raw TCP for http); reads until the peer
+/// closes or `max` bytes arrived.
+pub fn fetch_bytes(host: &str, port: u16, path: &str, tls: bool, max: usize) -> Option<(u16, Option<String>, alloc::vec::Vec<u8>)> {
+    let cfg = get()?;
+    let server = match parse_ipv4(host) {
+        Some(ip) => ip,
+        None => hosts_lookup(host)
+            .or_else(|| dns_query(cfg.my_mac, cfg.my_ip, cfg.dns_mac, cfg.dns_ip, host))?,
+    };
+    let nexthop = if same_subnet(server, cfg.my_ip) {
+        arp_resolve(cfg.my_mac, cfg.my_ip, server).unwrap_or(cfg.gw_mac)
+    } else {
+        cfg.gw_mac
+    };
+    let req = alloc::format!("GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    let raw: alloc::vec::Vec<u8> = if tls {
+        let (raw, _cert) = https_exchange_max(cfg.my_mac, cfg.my_ip, nexthop, server, host, req.as_bytes(), max)?;
+        raw
+    } else {
+        let mut c = TcpConn::connect(cfg.my_mac, cfg.my_ip, nexthop, server, port)?;
+        c.send(req.as_bytes());
+        let mut data: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        let mut idle = 0;
+        loop {
+            let chunk = c.recv(16384);
+            if chunk.is_empty() {
+                idle += 1;
+                if idle > 12 {
+                    break;
+                }
+                continue;
+            }
+            idle = 0;
+            data.extend_from_slice(&chunk);
+            if data.len() > max {
+                break;
+            }
+        }
+        c.close();
+        data
+    };
+    Some(parse_http_response(&raw))
+}
 /// Parse a raw HTTP response (status line + headers + body) → (status code,
 /// Location header, body). Shared by `fetch_full` (GET) and `post_full` (POST).
 fn parse_http_response(raw: &[u8]) -> (u16, Option<String>, alloc::vec::Vec<u8>) {
@@ -3039,4 +3612,170 @@ pub fn cmd_net() -> alloc::vec::Vec<String> {
         None => out.push("net: no network configured".into()),
     }
     out
+}
+
+// ── Cooperative HTTPS GET: one non-blocking step per desktop-loop iteration ──
+//
+// The blocking `https_exchange` spins inside `recv()`; that is fine for a shell
+// command and fatal for the desktop, which must keep drawing while a 50 MB
+// update comes in. `HttpsFetch` keeps the TLS state between calls: `start()`
+// resolves, connects and sends ClientHello (short, bounded), then every `step()`
+// takes what the NIC already delivered, feeds it to EuroTLS and returns.
+pub enum FetchStep {
+    Pending,
+    Done,
+    Failed(&'static str),
+}
+pub struct HttpsFetch {
+    /// Raw response so far (headers + body).
+    body: alloc::vec::Vec<u8>,
+    tcp: TcpConn,
+    tls: Option<eurotls::Tls13Client>,
+    host: alloc::string::String,
+    request: alloc::vec::Vec<u8>,
+    sent: bool,
+    max: usize,
+    idle: u32,
+    finished: bool,
+}
+impl HttpsFetch {
+    /// Steps without any incoming byte before the fetch gives up (~10 ms per
+    /// desktop-loop step → about 60 s of silence).
+    const IDLE_LIMIT: u32 = 6000;
+    pub fn start(host: &str, path: &str, max: usize) -> Option<HttpsFetch> {
+        let cfg = get()?;
+        let server = match parse_ipv4(host) {
+            Some(ip) => ip,
+            None => match hosts_lookup(host).or_else(|| dns_query(cfg.my_mac, cfg.my_ip, cfg.dns_mac, cfg.dns_ip, host)) {
+                Some(ip) => ip,
+                None => {
+                    crate::serial_println!("[net] https fetch: DNS lookup of {host} failed");
+                    return None;
+                }
+            },
+        };
+        let nexthop = if same_subnet(server, cfg.my_ip) {
+            arp_resolve(cfg.my_mac, cfg.my_ip, server).unwrap_or(cfg.gw_mac)
+        } else {
+            cfg.gw_mac
+        };
+        // Everything from here on is non-blocking: the SYN goes out now, the
+        // handshake and ClientHello happen inside `step()`. (DNS above is the one
+        // bounded blocking call left: a UDP query with its own short timeout.)
+        let tcp = TcpConn::connect_nowait(cfg.my_mac, cfg.my_ip, nexthop, server, 443);
+        let request = alloc::format!("GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n").into_bytes();
+        Some(HttpsFetch { tcp, tls: None, host: alloc::string::String::from(host), request, sent: false, body: alloc::vec::Vec::new(), max, idle: 0, finished: false })
+    }
+    /// HTTP status of the response so far (0 until the status line is in).
+    pub fn status(&self) -> u16 {
+        let line_end = self.body.iter().position(|&b| b == b'\n').unwrap_or(self.body.len().min(64));
+        core::str::from_utf8(&self.body[..line_end]).ok()
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|c| c.parse::<u16>().ok())
+            .unwrap_or(0)
+    }
+    /// Steps between SYN retransmissions (~3 s) and between data retransmission
+    /// rounds (~1 s) at ~10 ms per desktop-loop step.
+    const SYN_STEPS: u32 = 300;
+    const TICK_STEPS: u32 = 100;
+    fn fail(&mut self, why: &'static str) -> FetchStep {
+        self.tcp.close_nowait();
+        self.finished = true;
+        FetchStep::Failed(why)
+    }
+    pub fn step(&mut self) -> FetchStep {
+        if self.finished {
+            return FetchStep::Done;
+        }
+        // Phase 1: the TCP handshake, one look per step.
+        if self.tls.is_none() {
+            match self.tcp.poll_connect() {
+                Some(true) => {
+                    let random = gather_entropy(0);
+                    let secret = gather_entropy(1);
+                    let (mut tls, hello) = eurotls::Tls13Client::new(&self.host, random, secret);
+                    tls.set_trust_anchor(crate::rtc::epoch() as i64, crate::tls_roots::ROOTS);
+                    self.tcp.send_nowait(&hello);
+                    self.tls = Some(tls);
+                    self.idle = 0;
+                }
+                Some(false) => return self.fail("TCP connection refused"),
+                None => {
+                    self.idle += 1;
+                    if self.idle.is_multiple_of(Self::SYN_STEPS) && !self.tcp.resend_syn() {
+                        return self.fail("TCP connect timeout");
+                    }
+                    return FetchStep::Pending;
+                }
+            }
+        }
+        let data = self.tcp.recv_nowait(16384);
+        if data.is_empty() {
+            if !self.tcp.open {
+                // Peer closed: after the handshake that is EOF (valid end of a
+                // HTTP/1.0 response); during it, a failure.
+                self.finished = true;
+                return if self.tls.as_ref().is_some_and(|t| t.is_connected()) { FetchStep::Done } else { FetchStep::Failed("connection closed during TLS handshake") };
+            }
+            self.idle += 1;
+            if self.idle.is_multiple_of(Self::TICK_STEPS) {
+                // Caller-timed retransmission of anything still unacknowledged
+                // (ClientHello, Finished, the request); never waits.
+                self.tcp.tick();
+                if !self.tcp.open {
+                    return self.fail("peer stopped acknowledging");
+                }
+            }
+            if self.idle > Self::IDLE_LIMIT {
+                return self.fail("no data for 60 s");
+            }
+            return FetchStep::Pending;
+        }
+        self.idle = 0;
+        let tls = self.tls.as_mut().expect("tls set after connect");
+        tls.feed(&data);
+        let closed = match tls.process() {
+            Ok(out) => {
+                // Handshake flight from our side (client Finished, key update):
+                // without this the server never sees us complete the handshake.
+                if !out.is_empty() {
+                    self.tcp.send_nowait(&out);
+                }
+                false
+            }
+            Err(eurotls::TlsError::Alert(_)) => true, // close_notify = clean EOF
+            Err(eurotls::TlsError::Protocol(why)) => {
+                crate::kwarn!("[tls] fetch aborted: {why}");
+                return self.fail("TLS protocol error (certificate or handshake)");
+            }
+            Err(_) => return self.fail("TLS error"),
+        };
+        if tls.is_connected() && !self.sent {
+            if let Ok(rec) = tls.encrypt_app(&self.request) {
+                self.tcp.send_nowait(&rec);
+            }
+            self.sent = true;
+        }
+        self.body.extend_from_slice(&tls.take_app_data());
+        if self.body.len() > self.max {
+            return self.fail("response larger than allowed");
+        }
+        if closed {
+            self.tcp.close_nowait();
+            self.finished = true;
+            return FetchStep::Done;
+        }
+        FetchStep::Pending
+    }
+    /// The response once `step()` returned `Done`: status + body, the body moved
+    /// out of the buffer without a copy (a 96 MiB image must not exist twice).
+    pub fn finish(mut self) -> (u16, alloc::vec::Vec<u8>) {
+        let status = self.status();
+        let head_end = self.body.windows(4).position(|w| w == b"\r\n\r\n");
+        let body = match head_end {
+            Some(h) => self.body.split_off(h + 4),
+            None => alloc::vec::Vec::new(),
+        };
+        (status, body)
+    }
 }

@@ -32,15 +32,15 @@ static CURRENT_CAPS: AtomicU64 = AtomicU64::new(0);
 /// and from that moment the browser and all its children ran with the ticker's
 /// rights - the network service died on socket() = EPERM, minutes into a healthy
 /// session. 0 = unset (fall back to the global, which spawn paths still set).
-static TASK_CAPS: [AtomicU64; 128] = {
+static TASK_CAPS: [AtomicU64; crate::sched::MAX_TASKS] = {
     #[allow(clippy::declare_interior_mutable_const)]
     const Z: AtomicU64 = AtomicU64::new(0);
-    [Z; 128]
+    [Z; crate::sched::MAX_TASKS]
 };
 
 /// Record the capabilities of task `t` (spawn) - children/threads inherit them.
 pub fn set_task_caps(t: usize, caps: u64) {
-    if t < 128 {
+    if t < crate::sched::MAX_TASKS {
         TASK_CAPS[t].store(caps, Ordering::Relaxed);
     }
 }
@@ -49,7 +49,7 @@ fn effective_caps() -> u64 {
     // Lock-free on purpose: this runs inside nearly every syscall arm, including
     // ones that already hold the scheduler lock.
     let t = crate::sched::current_lockfree();
-    let tc = if t < 128 { TASK_CAPS[t].load(Ordering::Relaxed) } else { 0 };
+    let tc = if t < crate::sched::MAX_TASKS { TASK_CAPS[t].load(Ordering::Relaxed) } else { 0 };
     if tc != 0 { tc } else { CURRENT_CAPS.load(Ordering::Relaxed) }
 }
 // If true: the current process uses the LINUX syscall ABI (different numbers +
@@ -62,6 +62,32 @@ static LINUX_ABI: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBoo
 static CURRENT_APP: Mutex<String> = Mutex::new(String::new());
 
 /// The app identity of the current ring-3 process (for EuroGuard).
+/// File-operation diagnostics for chrome's profile directory (/tmp/cr): which
+/// descriptors point there (a bitmap over the flat fd space), how many lines
+/// have been printed. A failed or short read/write/seek/truncate on such a
+/// descriptor is logged as [fsdiag]: the Simple Cache's "wrong file structure
+/// on disk: 2" is kBadFakeIndexFile (its 24-byte index did not read back), and
+/// the profile-error dialog is a database that would not open, and neither
+/// names the syscall that misbehaved.
+static FSDIAG_BITS: [core::sync::atomic::AtomicU64; 16] = [const { core::sync::atomic::AtomicU64::new(0) }; 16];
+static FSDIAG_LINES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+const FSDIAG_CAP: u64 = 300;
+fn fsdiag_mark(fd: u64, on: bool) {
+    if fd < 1024 {
+        let (w, b) = ((fd / 64) as usize, fd % 64);
+        if on { FSDIAG_BITS[w].fetch_or(1 << b, Ordering::Relaxed); } else { FSDIAG_BITS[w].fetch_and(!(1 << b), Ordering::Relaxed); }
+    }
+}
+fn fsdiag_is(fd: u64) -> bool {
+    fd < 1024 && FSDIAG_BITS[(fd / 64) as usize].load(Ordering::Relaxed) & (1 << (fd % 64)) != 0
+}
+fn fsdiag_budget() -> bool {
+    FSDIAG_LINES.fetch_add(1, Ordering::Relaxed) < FSDIAG_CAP
+}
+
+/// Logged once: the first refused GTK open for chrome.
+static GTK_DENIED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 pub fn current_app() -> String {
     CURRENT_APP.lock().clone()
 }
@@ -117,6 +143,12 @@ unsafe fn recover_mmap_offset() -> u64 {
 /// PROT_NONE ranges and treat them as NOT valid user memory (EFAULT on kernel touch,
 /// fault on ring-3 access). Atomic count gives a lock-free fast path (usually 0).
 static PROT_NONE_RANGES: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+/// Audio diagnostics: the renderer's AudioOutputDevice thread and the browser's
+/// AudioThread (resolved by name at each heartbeat); their next syscalls are logged
+/// as [audio-sys] so the two ends of the audio sync socketpair become visible.
+static AUDEV_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+static AUDTH_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+static AUDIO_SYS_LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(160);
 static PROT_NONE_COUNT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 fn prot_none_set(start: u64, end: u64, none: bool) {
@@ -162,7 +194,7 @@ fn in_prot_none(ptr: u64, len: usize) -> bool {
     PROT_NONE_RANGES.lock().iter().any(|&(s, e)| ptr < e && end > s)
 }
 
-fn in_user_arena(ptr: u64, len: usize) -> bool {
+pub(crate) fn in_user_arena(ptr: u64, len: usize) -> bool {
     let base = ARENA_BASE.load(Ordering::Relaxed);
     if base == 0 {
         return true; // no ring-3 context active
@@ -209,7 +241,7 @@ const EFAULT: u64 = (-14i64) as u64;
 /// Copy `src` to user address `dst`. `false` = pointer fails the arena check
 /// (the caller then returns `-EFAULT`); nothing is written.
 #[must_use]
-fn copy_to_user(dst: u64, src: &[u8]) -> bool {
+pub(crate) fn copy_to_user(dst: u64, src: &[u8]) -> bool {
     if !in_user_arena(dst, src.len()) || demand_file_backed(dst, src.len()) {
         return false; // out of bounds, or a read-only file-backed mapping
     }
@@ -220,7 +252,7 @@ fn copy_to_user(dst: u64, src: &[u8]) -> bool {
 
 /// Read `len` bytes from user address `src`. `None` = pointer fails the arena check.
 #[must_use]
-fn copy_from_user(src: u64, len: usize) -> Option<alloc::vec::Vec<u8>> {
+pub(crate) fn copy_from_user(src: u64, len: usize) -> Option<alloc::vec::Vec<u8>> {
     if !in_user_arena(src, len) {
         return None;
     }
@@ -246,7 +278,7 @@ fn zero_user(dst: u64, len: usize) -> bool {
 
 /// Write a scalar (`u32`/`u64`/…) at user address `ptr`. `false` = arena check fails.
 #[must_use]
-fn write_user<T: Copy>(ptr: u64, val: T) -> bool {
+pub(crate) fn write_user<T: Copy>(ptr: u64, val: T) -> bool {
     if !in_user_arena(ptr, core::mem::size_of::<T>()) {
         return false;
     }
@@ -264,7 +296,7 @@ fn write_user<T: Copy>(ptr: u64, val: T) -> bool {
 
 /// Read a scalar from user address `ptr`. `None` = arena check fails.
 #[must_use]
-fn read_user<T: Copy>(ptr: u64) -> Option<T> {
+pub(crate) fn read_user<T: Copy>(ptr: u64) -> Option<T> {
     if !in_user_arena(ptr, core::mem::size_of::<T>()) {
         return None;
     }
@@ -366,6 +398,30 @@ static OPEN_DIRS: Mutex<[Option<(String, usize)>; MAX_FD]> =
 // `pipe2` syscall returns two fds; after fork() parent and child share them (the
 // fd tables are global), so they can communicate over the pipe.
 static PIPES: Mutex<alloc::vec::Vec<alloc::vec::Vec<u8>>> = Mutex::new(alloc::vec::Vec::new());
+
+/// PIPES is taken from the desktop loop too (cdp_send / cdp_next_msg drive the
+/// DevTools pipes from task 0 with interrupts enabled), and a task-context holder
+/// that is preempted leaves every syscall that touches a pipe spinning with
+/// interrupts off: run 53's wedge was chrome's sandbox_ipc_thread in
+/// epoll_fd_ready on exactly this lock. Every acquisition goes through here:
+/// interrupts off first, lock second, unlock before interrupts return (field
+/// order is drop order).
+struct PipesGuard {
+    g: spin::MutexGuard<'static, alloc::vec::Vec<alloc::vec::Vec<u8>>>,
+    _if: crate::sched::IfOffGuard,
+}
+impl core::ops::Deref for PipesGuard {
+    type Target = alloc::vec::Vec<alloc::vec::Vec<u8>>;
+    fn deref(&self) -> &Self::Target { &self.g }
+}
+impl core::ops::DerefMut for PipesGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.g }
+}
+fn pipes_lock() -> PipesGuard {
+    let _if = crate::sched::IfOffGuard::new();
+    let g = PIPES.lock();
+    PipesGuard { g, _if }
+}
 /// Pipe fds: per fd (pipe-id, is_write_end). Separate table alongside file/dir fds.
 static PIPE_FDS: Mutex<[Option<(usize, bool)>; MAX_FD]> = Mutex::new([None; MAX_FD]);
 /// Per pipe-id: is the pipe non-blocking (O_NONBLOCK)? A BLOCKING read on an empty
@@ -384,6 +440,127 @@ static PIPE_NONBLOCK: Mutex<alloc::vec::Vec<bool>> = Mutex::new(alloc::vec::Vec:
 static SOCK_NONBLOCK: Mutex<alloc::vec::Vec<(u64, bool)>> = Mutex::new(alloc::vec::Vec::new());
 
 /// Is this fd non-blocking? Works for both fd classes.
+/// AF_INET receive/send with the descriptor's blocking mode honoured. Every
+/// chrome socket is O_NONBLOCK; the blocking paths spin with interrupts off (see
+/// net::sock_recv_nowait for the measurement) and must never be entered for one.
+fn inet_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
+    let d = if fd_is_nonblock(fd) { crate::net::sock_recv_nowait(fd, max) } else { crate::net::sock_recv(fd, max) };
+    if !d.is_empty() {
+        tls_walk(fd, false, &d);
+    }
+    d
+}
+fn inet_send(fd: u64, data: &[u8]) -> u64 {
+    let r = if fd_is_nonblock(fd) { crate::net::sock_send_nowait(fd, data) } else { crate::net::sock_send(fd, data) };
+    if (r as i64) > 0 {
+        tls_walk(fd, true, &data[..(r as usize).min(data.len())]);
+    }
+    r
+}
+
+/// TLS record walker on every port-443 socket, both directions: the byte stream
+/// a TLS peer sees is a sequence of 5-byte record headers (type 20..23, version
+/// 0x0301..0x0304, length <= 16640) each followed by that many bytes, so the
+/// walker can tell a corrupted stream (a header that is none of that) from one
+/// the peer merely dislikes. YouTube's scripts and stylesheets fail with
+/// net::ERR_SSL_PROTOCOL_ERROR on the guest (run 52) while the document loads;
+/// whether OUR stack delivered the server's bytes intact is the question this
+/// answers, per fd, once, with the offending header and the stream offset.
+#[derive(Clone, Copy)]
+struct TlsWalk { sport: u16, remaining: u32, hdr: [u8; 5], hdr_len: u8, bytes: u64, records: u32, bad: bool, trace: [(u8, u16); 10] }
+const TLS_WALK_NONE: TlsWalk = TlsWalk { sport: 0, remaining: 0, hdr: [0; 5], hdr_len: 0, bytes: 0, records: 0, bad: false, trace: [(0, 0); 10] };
+static TLS_WALK: Mutex<[[TlsWalk; 96]; 2]> = Mutex::new([[TLS_WALK_NONE; 96]; 2]);
+static TLS_WALK_LINES: AtomicU64 = AtomicU64::new(0);
+/// At close of a port-443 connection: the first records each way as (type:len),
+/// once for every connection that exchanged little (a failed handshake is a few
+/// KB). ServerHello is 22, ChangeCipherSpec 20, everything encrypted 23; the last
+/// record chrome sent says whether it reached its Finished (a ~60-byte 23) or
+/// gave up with an alert (a ~24-byte 23) after the server's flight.
+fn tls_walk_close(fd: u64) {
+    if fd < 500 || fd >= 596 {
+        return;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    let all = TLS_WALK.lock();
+    let rx = all[0][(fd - 500) as usize];
+    let tx = all[1][(fd - 500) as usize];
+    if rx.sport == 0 && tx.sport == 0 {
+        return;
+    }
+    if rx.bytes + tx.bytes > 32 * 1024 || TLS_WALK_LINES.fetch_add(1, Ordering::Relaxed) >= 80 {
+        return;
+    }
+    let fmt = |w: &TlsWalk| {
+        let mut out = String::new();
+        for i in 0..(w.records as usize).min(w.trace.len()) {
+            let (t, l) = w.trace[i];
+            out.push_str(&alloc::format!("{t}:{l} "));
+        }
+        out
+    };
+    crate::serial_println!("[tls] fd{fd} sport {} closed: rx {} B in {} records [{}] tx {} B in {} records [{}]",
+        rx.sport, rx.bytes, rx.records, fmt(&rx), tx.bytes, tx.records, fmt(&tx));
+}
+fn tls_walk(fd: u64, tx: bool, data: &[u8]) {
+    let Some((_, sport, server, dport)) = crate::net::sock_names(fd) else { return };
+    if dport != 443 || fd < 500 || fd >= 596 || !crate::net::sock_is_tcp(fd) {
+        return; // UDP 443 is QUIC (run 53 flagged its long headers as bad TLS)
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    let mut all = TLS_WALK.lock();
+    let st = &mut all[tx as usize][(fd - 500) as usize];
+    if st.sport != sport {
+        *st = TLS_WALK_NONE;
+        st.sport = sport;
+    }
+    if st.bad {
+        return;
+    }
+    let mut i = 0usize;
+    while i < data.len() {
+        if st.remaining > 0 {
+            let n = (st.remaining as usize).min(data.len() - i);
+            st.remaining -= n as u32;
+            i += n;
+            continue;
+        }
+        st.hdr[st.hdr_len as usize] = data[i];
+        st.hdr_len += 1;
+        i += 1;
+        if st.hdr_len == 5 {
+            let t = st.hdr[0];
+            let v = u16::from_be_bytes([st.hdr[1], st.hdr[2]]);
+            let l = u16::from_be_bytes([st.hdr[3], st.hdr[4]]);
+            // BoringSSL's rule (tls_record.cc): the first record of a direction only
+            // needs major version 3; every later one must carry exactly 0x0303. Run 59's
+            // NetLog said WRONG_VERSION_NUMBER after a completed handshake while the
+            // looser check here (0x0301..0x0304) saw nothing: so the header is printed
+            // with the sixteen bytes around it.
+            let ok = matches!(t, 20..=23) && l as usize <= 16384 + 256
+                && if st.records == 0 { (v >> 8) == 3 } else { v == 0x0303 };
+            if !ok {
+                st.bad = true;
+                if TLS_WALK_LINES.fetch_add(1, Ordering::Relaxed) < 40 {
+                    let lo = i.saturating_sub(21);
+                    let hi = (i + 11).min(data.len());
+                    crate::serial_println!(
+                        "[tls-{}] fd{fd} {}.{}.{}.{}:443 sport {sport}: BAD record header {:02x?} at stream byte {} after {} good records; around: {:02x?}",
+                        if tx { "tx" } else { "rx" }, server.0[0], server.0[1], server.0[2], server.0[3],
+                        st.hdr, st.bytes + i as u64 - 5, st.records, &data[lo..hi]);
+                }
+                return;
+            }
+            if (st.records as usize) < st.trace.len() {
+                st.trace[st.records as usize] = (t, l);
+            }
+            st.remaining = l as u32;
+            st.hdr_len = 0;
+            st.records += 1;
+        }
+    }
+    st.bytes += data.len() as u64;
+}
+
 fn fd_is_nonblock(fd: u64) -> bool {
     if (fd as usize) < MAX_FD {
         let f = fd as usize;
@@ -473,7 +650,8 @@ fn note_inet_rx(fd: u64, n: usize) {
             crate::net::rx_queued_bytes());
     }
     if calls < 20 || before / 65536 != after / 65536 {
-        crate::serial_println!("[inet] fd{fd} <- {} read {n} B (total {after} B in {} calls)",
+        crate::serial_println!("[inet] @{} fd{fd} <- {} read {n} B (total {after} B in {} calls)",
+            crate::interrupts::ticks(),
             crate::net::sock_peer_desc(fd), calls + 1);
     }
 }
@@ -805,6 +983,46 @@ static CAST_FRAMES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU3
 static LOAD_FIRED_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CDP_URL: Mutex<String> = Mutex::new(String::new());
 static CDP_SESSION: Mutex<String> = Mutex::new(String::new());
+/// URLs the DevTools bridge visits in turn after start-up (`chrome URL...` from the
+/// Terminal). Empty = the defaults: the argv page again at the fourth heartbeat, the
+/// live site at the tenth. Written and read by the desktop task only.
+static CHROME_URLS: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new());
+/// The targetId of the first "type":"page" target in a Target.getTargets result.
+fn json_first_page_target(msg: &str) -> Option<String> {
+    // targetInfos is a flat list of {targetId, type, ...}; find the object whose
+    // "type" is "page" and return its targetId. A simple scan avoids a JSON parser.
+    let mut rest = msg;
+    while let Some(i) = rest.find("\"targetId\":\"") {
+        let after = &rest[i + 12..];
+        let end = after.find('"')?;
+        let tid = &after[..end];
+        // Look ahead in this object for the type field before the next targetId.
+        let tail = &after[end..];
+        let next = tail.find("\"targetId\"").unwrap_or(tail.len());
+        let window = &tail[..next];
+        if window.contains("\"type\":\"page\"") {
+            return Some(String::from(tid));
+        }
+        rest = tail;
+    }
+    None
+}
+
+pub fn set_chrome_urls(urls: &[String]) {
+    *CHROME_URLS.lock() = urls.to_vec();
+}
+
+/// The page chrome should load FIRST (its argv URL). The first http(s) URL in the
+/// visit list, if any, so a site opens in the initially-attached renderer and the
+/// DevTools session reaches it: a cross-process navigation from file:// to a site
+/// leaves the session bound to the old renderer, and no command (evaluate or input)
+/// reaches the new one (W19). Same-site navigations after this keep the session.
+/// Falls back to the staged local page.
+pub fn chrome_init_url() -> String {
+    CHROME_URLS.lock().iter().find(|u| u.starts_with("http"))
+        .cloned()
+        .unwrap_or_else(|| String::from("file:///tmp/euro.html"))
+}
 /// The DOM chrome sent back (empty until it arrives).
 pub static CDP_DOM: Mutex<String> = Mutex::new(String::new());
 /// Drive the DevTools conversation from the process-run loop.
@@ -914,13 +1132,13 @@ fn cdp_pipes_create() {
         return;
     }
     let cmd_id = {
-        let mut p = PIPES.lock();
+        let mut p = pipes_lock();
         p.push(alloc::vec::Vec::new());
         PIPE_NONBLOCK.lock().push(false);
         p.len() - 1
     };
     let res_id = {
-        let mut p = PIPES.lock();
+        let mut p = pipes_lock();
         p.push(alloc::vec::Vec::new());
         PIPE_NONBLOCK.lock().push(false);
         p.len() - 1
@@ -949,7 +1167,7 @@ fn cdp_send(msg: &str) {
     // preempted pump). Same freeze family as the fd locks - same cure.
     let _g = crate::sched::IfOffGuard::new();
     {
-        let mut pipes = PIPES.lock();
+        let mut pipes = pipes_lock();
         pipes[id].extend_from_slice(msg.as_bytes());
         pipes[id].push(0);
     }
@@ -974,7 +1192,7 @@ fn cdp_next_msg() -> Option<String> {
         return None;
     }
     {
-        let mut pipes = PIPES.lock();
+        let mut pipes = pipes_lock();
         if !pipes[id].is_empty() {
             let drained: alloc::vec::Vec<u8> = pipes[id].drain(..).collect();
             CDP_RX.lock().extend_from_slice(&drained);
@@ -1102,6 +1320,257 @@ pub fn cdp_pump() {
             let sent = PING_SENT.fetch_add(1, Ordering::Relaxed) + 1;
             let answered = PING_ANS.load(Ordering::Relaxed);
             cdp_send("{\"id\":50,\"method\":\"Target.getTargets\"}");
+            // The CPU ledger since the previous heartbeat: the six busiest tasks by
+            // name, plus what task 0 (desktop loop, which halts when idle) took.
+            {
+                static LAST: [core::sync::atomic::AtomicU64; crate::sched::MAX_TASKS] = {
+                    #[allow(clippy::declare_interior_mutable_const)]
+                    const Z: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+                    [Z; crate::sched::MAX_TASKS]
+                };
+                let mut deltas: alloc::vec::Vec<(u64, usize)> = alloc::vec::Vec::new();
+                let mut total = 0u64;
+                for t in 0..crate::sched::MAX_TASKS {
+                    let v = crate::sched::TICKS_PER_TASK[t].load(Ordering::Relaxed);
+                    let d = v - LAST[t].swap(v, Ordering::Relaxed);
+                    total += d;
+                    if d > 0 { deltas.push((d, t)); }
+                }
+                deltas.sort_unstable_by(|a, b| b.cmp(a));
+                let (hu, hf) = crate::allocator::stats();
+                let (bu, bf, bp) = crate::allocator::big_stats();
+                let files_mib = { let _g = crate::sched::IfOffGuard::new(); FILES.lock().iter().map(|(_, d)| d.len()).sum::<usize>() / (1024 * 1024) };
+                let mut line = alloc::format!("[cpu] {total} ticks since last heartbeat; heap {} MiB used, {} MiB free; big {bu}/{bf} MiB (peak {bp}); files {files_mib} MiB; demand {} MiB free;",
+                    hu / (1024 * 1024), hf / (1024 * 1024), crate::procpool::demand_free_frames() / 256);
+                for &(d, t) in deltas.iter().take(6) {
+                    line.push_str(&alloc::format!(" t{t} {:?} {d}", if t == 0 { String::from("desktop/idle") } else { thread_name(t) }));
+                }
+                crate::serial_println!("{line}");
+                // The profiled task of the interval that just ended: where its samples
+                // landed (code pages, named by what backs them: the exe or a library
+                // with the offset, or anon = JIT), its last syscall and how many it
+                // made. Then aim the sampler at this interval's busiest non-desktop
+                // task for the next one. Run 62: CrRendererMain took 65% of the CPU
+                // for the whole run after loading youtube, which is a spin or a JIT
+                // that is not there; this names it.
+                let prof = PROFILE_TASK.load(Ordering::Relaxed);
+                if prof != usize::MAX {
+                    let mut pages: alloc::vec::Vec<(u64, u64)> = (0..RIP_PAGES)
+                        .map(|i| (RIP_PAGE_HITS[i].load(Ordering::Relaxed), RIP_PAGE[i].load(Ordering::Relaxed)))
+                        .filter(|&(h, p)| h > 0 && p != 0).collect();
+                    pages.sort_unstable_by(|a, b| b.cmp(a));
+                    let total_s = RIP_TOTAL.load(Ordering::Relaxed);
+                    let (sn, sa1, sr) = last_syscall(prof);
+                    let sc = if prof < crate::sched::MAX_TASKS { SYSCALLS_PER_TASK[prof].load(Ordering::Relaxed) } else { 0 };
+                    static LAST_SC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+                    let scd = sc.wrapping_sub(LAST_SC.swap(sc, Ordering::Relaxed));
+                    let mut pl = alloc::format!("[prof] t{prof} {:?}: {total_s} samples, {scd} syscalls, last={sn}(a1={sa1:#x})->{sr:#x};", thread_name(prof));
+                    for &(h, pg) in pages.iter().take(5) {
+                        // demand_addr_origin takes DEMAND_FILE_MAPS, DISK_FILES and FILES,
+                        // which syscalls and the fault handler take with interrupts off:
+                        // never hold them from task 0 with interrupts on (runs 21, 53).
+                        let origin = { let _g = crate::sched::IfOffGuard::new(); demand_addr_origin(pg) };
+                        pl.push_str(&alloc::format!(" {h}x {origin}"));
+                    }
+                    crate::serial_println!("{pl}");
+                }
+                let busiest = deltas.iter().find(|&&(_, t)| t != 0).map(|&(_, t)| t).unwrap_or(usize::MAX);
+                // Once, at the twelfth heartbeat (six minutes; the page has had four
+                // to load): every thread's state and last syscall, and every AF_UNIX
+                // queue with unread bytes. The three youtube requests of run 64 whose
+                // headers arrived and whose bodies never did are a message nobody
+                // reads or a reader nobody woke; this shows which.
+                // The renderer main threads every heartbeat: state and last syscall.
+                // Run 77's watch page went silent at the js:state evaluate (no answer,
+                // no event from the page session for 400 s while the browser answered
+                // every heartbeat), and the census had run at heartbeat 12, before it.
+                {
+                    let snap = crate::sched::snapshot_tasks();
+                    let names: alloc::vec::Vec<(usize, String)> = { let _g = crate::sched::IfOffGuard::new(); THREAD_NAMES.lock().clone() };
+                    let mut rl = String::from("[rmain]");
+                    for &(t, cr3, state) in snap.iter() {
+                        if state == crate::sched::State::Dead { continue; }
+                        let Some((_, nm)) = names.iter().find(|(x, _)| *x == t) else { continue };
+                        if nm.starts_with("AudioOutputDevic") { AUDEV_TASK.store(t, Ordering::Relaxed); }
+                        if nm == "AudioThread" { AUDTH_TASK.store(t, Ordering::Relaxed); }
+                        if nm != "CrRendererMain" { continue; }
+                        let (n, a, r) = last_syscall(t);
+                        rl.push_str(&alloc::format!(" t{t} cr3={cr3:#x} {:?} last={n}(a1={a:#x})->{r:#x};", state));
+                    }
+                    crate::serial_println!("{rl}");
+                }
+                static CENSUS_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+                if (sent == 12 || sent == 20) && CENSUS_AT.swap(sent, Ordering::Relaxed) != sent {
+                    let q = { let _g = crate::sched::IfOffGuard::new(); crate::net::unix_queued_report() };
+                    let mut line = alloc::format!("[unixq] {} fds with unread bytes:", q.len());
+                    for &(fd, n) in q.iter().take(24) {
+                        let ep = crate::net::unix_fd_endpoint(fd).map(|(c, sd)| alloc::format!("ep{c}{sd}")).unwrap_or_else(|| String::from("ep?"));
+                        let peer = { let _g = crate::sched::IfOffGuard::new(); SOCK_PAIRS.lock().iter().find_map(|&(a, b)| if a == fd { Some(b) } else if b == fd { Some(a) } else { None }) };
+                        let i = (fd - crate::net::UNIX_FD_BASE) as usize;
+                        let wr = crate::net::UNIX_LAST_WR[i].load(Ordering::Relaxed);
+                        let rd = crate::net::UNIX_LAST_RD[i].load(Ordering::Relaxed);
+                        line.push_str(&alloc::format!(" fd{fd}:{n}[{ep} peer={} wr=t{} rd={}]",
+                            peer.map(|p| alloc::format!("fd{p}")).unwrap_or_else(|| String::from("?")),
+                            wr, if rd == usize::MAX { String::from("never") } else { alloc::format!("t{rd}") }));
+                    }
+                    crate::serial_println!("{line}");
+                    dump_threads_now(&alloc::format!("census at heartbeat {sent}"));
+                }
+                for i in 0..RIP_PAGES {
+                    RIP_PAGE[i].store(0, Ordering::Relaxed);
+                    RIP_PAGE_HITS[i].store(0, Ordering::Relaxed);
+                }
+                RIP_TOTAL.store(0, Ordering::Relaxed);
+                PROFILE_TASK.store(busiest, Ordering::Relaxed);
+            }
+            // One re-navigation, after the fourth heartbeat (~2 min of guest time).
+            // The startup tab's navigation to the argv URL is lost when the profile
+            // dialog interrupts startup: after Enter dismisses it, Target.getTargets
+            // reports the page target with url "" and no title, and the omnibox
+            // shows about:blank. Navigating the attached target again, once the
+            // dialog is gone, is the measurement that tells "the UI cannot show
+            // web content" apart from "the first navigation was simply dropped".
+            {
+                // The visit list: the URLs typed after `chrome`, or the defaults (the
+                // argv page again at the fourth heartbeat, which restores the start-up
+                // navigation the profile dialog used to swallow, and the live site at
+                // the tenth). A custom list goes one URL every four heartbeats from the
+                // fourth. Each navigate arms the 60-second "silent after navigate" dump.
+                static NAV_NEXT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+                static NAV_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+                static NAV_ANS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+                static NAV_DUMPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+                {
+                    let at = NAV_AT.load(Ordering::Relaxed);
+                    if at != 0 && now.saturating_sub(at) > 6000
+                        && PING_ANS.load(Ordering::Relaxed) == NAV_ANS.load(Ordering::Relaxed)
+                        && !NAV_DUMPED.swap(true, Ordering::Relaxed)
+                    {
+                        crate::serial_println!("[cdp] no DevTools answer 60 s after the navigate: where is the browser?");
+                        // ONLY the lock-free ring and the census that takes no ring3 lock
+                        // from this task (run 21: an EPOLLS.lock() here wedged the guest).
+                        dump_main_syscalls();
+                        dump_threads_now("silent after navigate");
+                    }
+                }
+                let custom: alloc::vec::Vec<String> = CHROME_URLS.lock().clone();
+                let (list, step): (alloc::vec::Vec<String>, u64) = if custom.is_empty() {
+                    (alloc::vec![CDP_URL.lock().clone(), String::from("https://euro-os.eu/")], 6)
+                } else {
+                    (custom, 4)
+                };
+                // The NetLog's SSL errors, once, at heartbeat 14 (420 s): every line
+                // of /tmp/cr/netlog.json that carries an "error_reason" (BoringSSL's
+                // reason code, with error_lib and the net_error), capped at 24.
+                static NETLOG_DUMPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+                if sent >= 14 && !NETLOG_DUMPED.swap(true, Ordering::Relaxed) {
+                    let data: Option<alloc::vec::Vec<u8>> = {
+                        let _g = crate::sched::IfOffGuard::new();
+                        let files = FILES.lock();
+                        files.iter().find(|(p, _)| p == "/tmp/cr/netlog.json").map(|(_, d)| d.to_vec())
+                    };
+                    match data {
+                        None => crate::serial_println!("[netlog] no /tmp/cr/netlog.json"),
+                        Some(d) => {
+                            let mut n = 0;
+                            for line in d.split(|&b| b == b'\n') {
+                                if line.windows(14).any(|w| w == b"\"error_reason\"") {
+                                    n += 1;
+                                    if n <= 24 {
+                                        let l: String = String::from_utf8_lossy(line).chars().take(300).collect();
+                                        crate::serial_println!("[netlog] {l}");
+                                    }
+                                }
+                            }
+                            crate::serial_println!("[netlog] {} B, {n} lines with error_reason", d.len());
+                        }
+                    }
+                }
+                let i = NAV_NEXT.load(Ordering::Relaxed);
+                if i < list.len() && sent >= 4 + (i as u64) * step {
+                    let sid = CDP_SESSION.lock().clone();
+                    if !sid.is_empty() {
+                        NAV_NEXT.store(i + 1, Ordering::Relaxed);
+                        NAV_AT.store(now, Ordering::Relaxed);
+                        NAV_ANS.store(PING_ANS.load(Ordering::Relaxed), Ordering::Relaxed);
+                        NAV_DUMPED.store(false, Ordering::Relaxed);
+                        let url = &list[i];
+                        if url == "cdp:socs" {
+                            // YouTube's consent, given as the SOCS cookie (what yt-dlp sends):
+                            // accepting the dialog by click reloads into the dialog again here,
+                            // and a video behind it never plays. Set before the watch page.
+                            crate::serial_println!("[cdp] setting the SOCS consent cookie (heartbeat {sent}, {}/{})", i + 1, list.len());
+                            cdp_send(&alloc::format!(
+                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Network.setCookie\",\"params\":{{\"name\":\"SOCS\",\"value\":\"CAI\",\"domain\":\".youtube.com\",\"path\":\"/\",\"secure\":true,\"sameSite\":\"Lax\"}}}}", 60 + i));
+                        } else if url == "reattach" {
+                            crate::serial_println!("[cdp] re-attaching the session to the current renderer (heartbeat {sent}, {}/{})", i + 1, list.len());
+                            cdp_send("{\"id\":70,\"method\":\"Target.getTargets\"}");
+                        } else if let Some(pt) = url.strip_prefix("click:") {
+                            // A real click, via Input.dispatchMouseEvent (a BROWSER-level
+                            // command that chrome routes to whatever renderer currently
+                            // owns the frame, unlike Runtime.evaluate which is not
+                            // forwarded to a cross-process-navigated renderer, W19). This
+                            // is a genuine user gesture: youtube mutes an autoplay and
+                            // skips the audio stream, and a click on the player unmutes it.
+                            let (xs, ys) = pt.split_once(',').unwrap_or(("265", "430"));
+                            let x: i32 = xs.parse().unwrap_or(265);
+                            let y: i32 = ys.parse().unwrap_or(430);
+                            crate::serial_println!("[cdp] click at ({x},{y}) via Input.dispatchMouseEvent (heartbeat {sent}, {}/{})", i + 1, list.len());
+                            cdp_send(&alloc::format!(
+                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Input.dispatchMouseEvent\",\"params\":{{\"type\":\"mouseMoved\",\"x\":{x},\"y\":{y}}}}}", 60 + i));
+                            cdp_send(&alloc::format!(
+                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Input.dispatchMouseEvent\",\"params\":{{\"type\":\"mousePressed\",\"x\":{x},\"y\":{y},\"button\":\"left\",\"buttons\":1,\"clickCount\":1}}}}", 60 + i));
+                            cdp_send(&alloc::format!(
+                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Input.dispatchMouseEvent\",\"params\":{{\"type\":\"mouseReleased\",\"x\":{x},\"y\":{y},\"button\":\"left\",\"buttons\":0,\"clickCount\":1}}}}", 60 + i));
+                        } else if let Some(k) = url.strip_prefix("key:") {
+                            // A real keypress, browser-routed like click. youtube's player
+                            // takes single-key shortcuts (k play/pause, m mute toggle, f
+                            // fullscreen) when it has focus.
+                            let key = k.chars().next().unwrap_or('k');
+                            let code = alloc::format!("Key{}", key.to_ascii_uppercase());
+                            let vk = key.to_ascii_uppercase() as u32;
+                            crate::serial_println!("[cdp] key '{key}' via Input.dispatchKeyEvent (heartbeat {sent}, {}/{})", sent, list.len());
+                            for typ in ["keyDown", "keyUp"] {
+                                cdp_send(&alloc::format!(
+                                    "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Input.dispatchKeyEvent\",\"params\":{{\"type\":\"{typ}\",\"key\":\"{key}\",\"code\":\"{code}\",\"text\":\"{key}\",\"windowsVirtualKeyCode\":{vk}}}}}", 60 + i));
+                            }
+                        } else if let Some(js) = url.strip_prefix("js:") {
+                            // A `js:NAME` step runs in the page instead of navigating. The
+                            // names stand for expressions that the Terminal cannot carry (the
+                            // runbook types the command through a be-azerty keyboard map with
+                            // no quotes or brackets): consent = accept a cookie dialog, play =
+                            // start the first video, else the text itself.
+                            let js: &str = match js {
+                                "consent" => "(function(){var b=[...document.querySelectorAll('button')].find(b=>/^(Accept|Alles accepteren|Tout accepter|Alle akzeptieren)/i.test(b.getAttribute('aria-label')||b.textContent));if(b){b.click();return 'clicked '+b.textContent.trim().slice(0,40)}return 'no consent button'})()",
+                                "play" => "(function(){var v=document.querySelector('video');if(!v)return 'no video';v.muted=false;v.play();return 'play '+v.currentSrc.slice(0,60)})()",
+                                "state" => "(function(){var p=performance.getEntriesByType('resource');var pend=p.filter(e=>!e.responseEnd).map(e=>e.name.split('/').slice(-1)[0].slice(0,24));return document.readyState+' scripts '+document.scripts.length+' res '+p.length+' pending '+pend.length+' '+pend.slice(0,6).join(',')+' body '+(document.body?document.body.textContent.slice(0,80):'none')})()",
+                                "tone" => "(function(){var c=new AudioContext();var o=c.createOscillator();o.frequency.value=440;var g=c.createGain();g.gain.value=0.3;o.connect(g);g.connect(c.destination);o.start();setTimeout(function(){o.stop();c.close()},8000);window.__tone=c;return 'tone '+c.state+' '+c.sampleRate+' latency '+c.baseLatency})()",
+                                "tonestate" => "(function(){var c=window.__tone;if(!c)return 'no tone';return 'tone '+c.state+' t='+c.currentTime.toFixed(2)})()",
+                                "video" => "(function(){var v=document.querySelector('video');if(!v)return 'no video';return 'time '+v.currentTime.toFixed(1)+' paused '+v.paused+' ready '+v.readyState+' '+v.videoWidth+'x'+v.videoHeight+' err '+(v.error?v.error.code:0)})()",
+                                other => other,
+                            };
+                            let esc: String = js.chars().flat_map(|c| match c {
+                                '"' => alloc::vec!['\\', '"'],
+                                '\\' => alloc::vec!['\\', '\\'],
+                                c => alloc::vec![c],
+                            }).collect();
+                            crate::serial_println!("[cdp] evaluating in the attached target: {js} (heartbeat {sent}, {}/{})", i + 1, list.len());
+                            cdp_send(&alloc::format!(
+                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Runtime.evaluate\",\"params\":{{\"expression\":\"{esc}\",\"returnByValue\":true,\"userGesture\":true}}}}", 60 + i));
+                        } else if *url == chrome_init_url() {
+                            // The initial page is already loaded (it is chrome's argv
+                            // start URL), and every navigation swaps the renderer and
+                            // strands the session (W19). Skip re-navigating to it so the
+                            // js: steps that follow run on the working initial session.
+                            crate::serial_println!("[cdp] already on {url} (initial page); skipping the navigate (heartbeat {sent}, {}/{})", i + 1, list.len());
+                        } else {
+                            crate::serial_println!("[cdp] navigating the attached target to {url} (heartbeat {sent}, {}/{})", i + 1, list.len());
+                            cdp_send(&alloc::format!(
+                                "{{\"id\":{},\"sessionId\":\"{sid}\",\"method\":\"Page.navigate\",\"params\":{{\"url\":\"{url}\"}}}}", 60 + i));
+                        }
+                    }
+                }
+            }
             // Three unanswered pings = the channel died. Catch the reader thread
             // in the act ONCE: its scheduler state + last syscall name the exact
             // wait it is stuck in (the dt5 measurement: dead ~60 s after attach).
@@ -1388,7 +1857,10 @@ pub fn cdp_pump() {
         let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
         let (mn, ma, mr) = last_syscall(main);
         crate::serial_println!("  main t{main}: last={mn}(a1={ma:#x})->{mr:#x}");
-        for &t in GLIBC_THREADS.lock().iter() {
+        // Snapshot under IF=0, print without the lock: clone/exit take GLIBC_THREADS
+        // in syscalls with interrupts off, and this runs on task 0 with them on.
+        let threads: alloc::vec::Vec<usize> = { let _g = crate::sched::IfOffGuard::new(); GLIBC_THREADS.lock().clone() };
+        for &t in threads.iter() {
             let (n, a, r) = last_syscall(t);
             crate::serial_println!("  thread t{t} {:?}: last={n}(a1={a:#x})->{r:#x} dead={}",
                 thread_name(t), crate::sched::is_dead(t));
@@ -1409,6 +1881,47 @@ pub fn cdp_pump() {
     while let Some(msg) = cdp_next_msg() {
         let head: String = msg.chars().take(160).collect();
         crate::serial_println!("[cdp] <- {head}");
+        // Re-attach flow (W19): after a cross-process navigation the page session
+        // bound to the previous renderer stops carrying commands to the swapped-in
+        // renderer, so a `reattach` step asks for the targets again (id 70) and
+        // attaches afresh (id 71) to get a session bound to the CURRENT renderer.
+        if msg.contains("\"id\":70") {
+            // First page-type target in the list.
+            if let Some(t) = json_first_page_target(&msg) {
+                cdp_send(&alloc::format!(
+                    "{{\"id\":71,\"method\":\"Target.attachToTarget\",\"params\":{{\"targetId\":\"{t}\",\"flatten\":true}}}}"));
+            }
+        } else if msg.contains("\"id\":71") {
+            if let Some(sid) = json_str(&msg, "sessionId") {
+                *CDP_SESSION.lock() = String::from(sid);
+                cdp_send(&alloc::format!("{{\"id\":6,\"sessionId\":\"{sid}\",\"method\":\"Page.enable\"}}"));
+                crate::serial_println!("[cdp] re-attached: session now {sid}");
+            }
+        }
+        // The head cuts a frameNavigated inside its URL; the verdict needs the host.
+        if msg.contains("\"method\":\"Page.frameNavigated\"") {
+            if let Some(u) = json_str(&msg, "url") {
+                crate::serial_println!("[cdp] frame navigated: {u}");
+            }
+        }
+        // The request ledger: id and URL when a request goes out, id when it ends,
+        // with the tick, so a page's loading can be read as a timeline (which
+        // request never finished, how long the big ones took) instead of from
+        // 160-character heads that cut every URL.
+        if msg.contains("\"method\":\"Network.requestWillBeSent\"") {
+            if let (Some(id), Some(u)) = (json_str(&msg, "requestId"), json_str(&msg, "url")) {
+                let short: String = u.chars().take(120).collect();
+                crate::serial_println!("[req] @{} sent {id} {short}", now);
+            }
+        } else if msg.contains("\"method\":\"Network.loadingFinished\"") {
+            if let Some(id) = json_str(&msg, "requestId") {
+                crate::serial_println!("[req] @{} done {id}", now);
+            }
+        } else if msg.contains("\"method\":\"Network.loadingFailed\"") {
+            if let (Some(id), Some(e)) = (json_str(&msg, "requestId"), json_str(&msg, "errorText")) {
+                crate::serial_println!("[req] @{} failed {id} {e}", now);
+            }
+        }
         let step = CDP_STEP.load(Ordering::Relaxed);
         if msg.contains("\"id\":50") {
             PING_ANS.fetch_add(1, Ordering::Relaxed);
@@ -1656,7 +2169,7 @@ fn pipe_create(user_fds: u64) -> u64 {
 /// pipe2 with flags (O_NONBLOCK = 0x800). Records the pipe's blocking mode.
 fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     let id = {
-        let mut p = PIPES.lock();
+        let mut p = pipes_lock();
         p.push(alloc::vec::Vec::new());
         PIPE_NONBLOCK.lock().push(flags & 0x800 != 0);
         p.len() - 1
@@ -1879,7 +2392,7 @@ fn epoll_fd_ready(fd: u64) -> bool {
         crate::net::unix_fd_readable(fd) || scm_pending_for(fd)
     } else if (fd as usize) < MAX_FD && is_pipe_fd(fd as usize) {
         match PIPE_FDS.lock()[fd as usize] {
-            Some((id, false)) => !PIPES.lock()[id].is_empty(), // read end w/ data
+            Some((id, false)) => !pipes_lock()[id].is_empty(), // read end w/ data
             _ => false,                                        // write end: not "readable"
         }
     } else {
@@ -2038,7 +2551,7 @@ fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
     }
     let _g = crate::sched::IfOffGuard::new();
     if let Some((id, true)) = PIPE_FDS.lock()[fd] {
-        PIPES.lock()[id].extend_from_slice(bytes);
+        pipes_lock()[id].extend_from_slice(bytes);
         // Wake any tasks blocked reading this pipe.
         let mut w = PIPE_WAITERS.lock();
         let mut i = 0;
@@ -2069,7 +2582,7 @@ fn pipe_read_blocking(fd: usize, buf: u64, len: usize) -> Option<u64> {
     loop {
         // Data available? copy + return.
         {
-            let mut pipes = PIPES.lock();
+            let mut pipes = pipes_lock();
             let p = &mut pipes[id];
             if !p.is_empty() {
                 let n = len.min(p.len());
@@ -2116,7 +2629,7 @@ fn pipe_read_fd(fd: usize, buf: u64, len: usize) -> Option<u64> {
         return None;
     }
     if let Some((id, false)) = PIPE_FDS.lock()[fd] {
-        let mut pipes = PIPES.lock();
+        let mut pipes = pipes_lock();
         let p = &mut pipes[id];
         if p.is_empty() {
             return Some((-11i64) as u64); // -EAGAIN
@@ -2150,7 +2663,7 @@ fn reset_fd_table() {
     // stale pipe marker on fd 3 would otherwise hijack this program's libc reads on
     // that fd number (EAGAIN "cannot read file data"). See the bg_read_fd note.
     *PIPE_FDS.lock() = [None; MAX_FD];
-    PIPES.lock().clear();
+    pipes_lock().clear();
     PIPE_NONBLOCK.lock().clear();
     PIPE_WAITERS.lock().clear();
 }
@@ -2314,6 +2827,12 @@ const WAD_FI: usize = usize::MAX;
 // PROC_MEM_FI/WAD_FI sentinels, far above any real FILES index).
 const DISK_FI_BASE: usize = usize::MAX / 2;
 static DISK_FILES: Mutex<alloc::vec::Vec<(String, usize, u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+/// Per DISK_FILES entry (same index): the file's page leaves and the pack salt, from
+/// a manifest whose Ed25519 signature and Merkle roots were checked at scan. Every
+/// page read from the pack is checked against its leaf (`pack_read`). A file
+/// without an entry here cannot be read at all.
+static DISK_VERITY: Mutex<alloc::vec::Vec<(alloc::vec::Vec<[u8; 32]>, [u8; 32])>> = Mutex::new(alloc::vec::Vec::new());
+static PACK_INTEGRITY_LINES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Scan all virtio disks for a EuroPack volume ("EUROPCK1" at sector 0) and
 /// register every contained file as disk-backed. Called once at boot.
@@ -2437,42 +2956,142 @@ pub fn dump_suspect_addrs() {
     a!(crate::net::service, "net::service");
 }
 
+/// Is this 4 KiB (or larger) buffer the first sector of a EuroPack volume of ANY
+/// version? v1 is not served (unsigned), but it is still a pack disk, and every
+/// boot self-test that writes to a virtio disk must keep its hands off it.
+pub fn is_europack_header(buf: &[u8]) -> bool {
+    buf.len() >= 8 && (&buf[..8] == europack::MAGIC_V1 || &buf[..8] == europack::MAGIC_V2)
+}
+
 pub fn europack_scan() {
+    // EuroPack v2 only (crates/europack): the manifest must carry a valid Ed25519
+    // signature by a trusted key, and every file's Merkle root must equal the root
+    // recomputed from its leaf table. An unsigned v1 pack, a bad signature or a
+    // root mismatch is REFUSED and says so; nothing from it is served.
     for dev in 0..crate::virtio_blk::device_count() {
         if !crate::virtio_blk::present_dev(dev) {
             continue;
         }
         let mut hdr = [0u8; 4096];
-        if !crate::virtio_blk::read_io_dev(dev, 0, &mut hdr) || &hdr[0..8] != b"EUROPCK1" {
+        if !crate::virtio_blk::read_io_dev(dev, 0, &mut hdr) {
             continue;
         }
-        let count = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]) as usize;
-        let mut reg = DISK_FILES.lock();
-        for i in 0..count.min(4096) {
-            const ENTRY: usize = 208;
-            let ent_off = 16 + i * ENTRY;
-            // Entries can spill past the first 4 KiB for large manifests: read the
-            // sector(s) each entry lives in on demand. A 208 B entry straddles at most
-            // two 512 B sectors, so 1024 B of buffer + `need` (<= 1024) always fit.
-            let mut ent = [0u8; 1024];
-            let sec = (ent_off / 512) as u64;
-            let within = ent_off % 512;
-            let need = (((within + ENTRY + 511) / 512) * 512).min(ent.len());
-            if !crate::virtio_blk::read_io_dev(dev, sec, &mut ent[..need]) {
-                break;
-            }
-            let e = &ent[within..within + ENTRY];
-            let path_len = e[..192].iter().position(|&b| b == 0).unwrap_or(192);
-            let path = String::from_utf8_lossy(&e[..path_len]).into_owned();
-            let off = u64::from_le_bytes(e[192..200].try_into().unwrap());
-            let size = u64::from_le_bytes(e[200..208].try_into().unwrap());
-            if path.is_empty() {
+        let h = match europack::parse_header(&hdr) {
+            Ok(h) => h,
+            Err(europack::Error::UnsignedV1) => {
+                crate::serial_println!("[europack] vblk{dev}: UNSIGNED v1 pack REFUSED (rebuild it with scripts/mkeuropack.py)");
                 continue;
             }
-            crate::serial_println!("[europack] vblk{dev}: {path} ({} KiB) served disk-backed", size / 1024);
-            reg.push((path, dev, off, size));
+            Err(_) => continue, // not a pack
+        };
+        let mlen = europack::manifest_len(h.count);
+        let mut man = alloc::vec![0u8; (mlen + 511) / 512 * 512];
+        if !disk_read_bytes(dev, 0, &mut man) {
+            crate::serial_println!("[europack] vblk{dev}: manifest unreadable, pack REFUSED");
+            continue;
+        }
+        let tbs = match europack::tbs(&man, h.count) { Ok(t) => t, Err(_) => continue };
+        if !crate::crypto::verify(&tbs, &h.sig) {
+            crate::serial_println!("[europack] vblk{dev}: manifest Ed25519 signature INVALID, pack REFUSED");
+            continue;
+        }
+        let (mut ok, mut bad) = (0usize, 0usize);
+        for i in 0..h.count {
+            let Ok(e) = europack::parse_entry(&man, i) else { bad += 1; continue };
+            let path = String::from_utf8_lossy(&e.path).into_owned();
+            if path.is_empty() { continue; }
+            let n = europack::page_count(e.size);
+            let mut raw = alloc::vec![0u8; n * 32];
+            if n > 0 && !disk_read_bytes(dev, e.leaves_off, &mut raw) {
+                crate::serial_println!("[europack] vblk{dev}: {path}: leaf table unreadable, file REFUSED");
+                bad += 1;
+                continue;
+            }
+            let Ok(leaves) = europack::parse_leaves(&raw, e.size) else { bad += 1; continue };
+            if europack::root_of_leaves(&h.salt, &leaves) != e.root {
+                crate::serial_println!("[europack] vblk{dev}: {path}: Merkle root MISMATCH, file REFUSED");
+                bad += 1;
+                continue;
+            }
+            crate::serial_println!("[europack] vblk{dev}: {path} ({} KiB, {n} pages) verified, served disk-backed", e.size / 1024);
+            DISK_FILES.lock().push((path, dev, e.data_off, e.size));
+            DISK_VERITY.lock().push((leaves, h.salt));
+            ok += 1;
+        }
+        crate::serial_println!("[europack] vblk{dev}: manifest Ed25519 OK; {ok} files verified, {bad} refused");
+    }
+}
+
+/// Read `dst.len()` bytes at `file_off` of pack file `idx`, verifying EVERY page the
+/// span touches against the file's leaf table before a byte reaches the caller.
+/// Reads past the file's end return zeros (mmap semantics). A page that does not
+/// hash to its leaf fails the whole read and is named in the log.
+fn pack_read(idx: usize, file_off: u64, dst: &mut [u8]) -> bool {
+    if dst.is_empty() {
+        return true;
+    }
+    let Some((path, dev, dbase, size)) = DISK_FILES.lock().get(idx).cloned() else { return false };
+    let want_end = file_off.saturating_add(dst.len() as u64);
+    let end = want_end.min(size);
+    if end <= file_off {
+        dst.fill(0);
+        return true;
+    }
+    const PAGE: u64 = 4096;
+    let first = file_off / PAGE;
+    let last = (end - 1) / PAGE;
+    let span_start = first * PAGE;
+    let span_end = ((last + 1) * PAGE).min(size);
+    let mut buf = alloc::vec![0u8; (span_end - span_start) as usize];
+    if !disk_read_bytes(dev, dbase + span_start, &mut buf) {
+        return false;
+    }
+    {
+        let v = DISK_VERITY.lock();
+        let Some((leaves, salt)) = v.get(idx) else {
+            crate::serial_println!("[europack] {path}: no verity entry, read REFUSED");
+            return false;
+        };
+        for p in first..=last {
+            let ps = ((p - first) * PAGE) as usize;
+            let pe = (ps + PAGE as usize).min(buf.len());
+            if !europack::page_ok(salt, leaves, p as usize, &buf[ps..pe]) {
+                if PACK_INTEGRITY_LINES.fetch_add(1, Ordering::Relaxed) < 20 {
+                    crate::serial_println!("[europack] INTEGRITY FAILURE: {path} page {p} (file offset {:#x}) does not match its signed leaf; read REFUSED", p * PAGE);
+                }
+                return false;
+            }
         }
     }
+    let o = (file_off - span_start) as usize;
+    let n = (end - file_off) as usize;
+    dst[..n].copy_from_slice(&buf[o..o + n]);
+    dst[n..].fill(0);
+    true
+}
+
+/// Self-test: read and verify EVERY page of every registered pack file through
+/// `pack_read`. Prints one `[epk]` line per pack file set; a tampered page fails.
+pub fn europack_sweep() {
+    let files: alloc::vec::Vec<(usize, String, u64)> = DISK_FILES.lock().iter().enumerate().map(|(i, f)| (i, f.0.clone(), f.3)).collect();
+    if files.is_empty() {
+        crate::serial_println!("[epk] no pack files registered (nothing to sweep)");
+        return;
+    }
+    let (mut pages, mut bad_pages, mut bad_files) = (0u64, 0u64, 0u64);
+    let mut page = alloc::vec![0u8; 4096];
+    for (i, path, size) in files.iter() {
+        let mut off = 0u64;
+        let mut file_bad = false;
+        while off < *size {
+            let n = (*size - off).min(4096) as usize;
+            if pack_read(*i, off, &mut page[..n]) { pages += 1; } else { bad_pages += 1; file_bad = true; }
+            off += 4096;
+        }
+        if file_bad { bad_files += 1; crate::serial_println!("[epk]   {path}: FAILED page verification"); }
+    }
+    crate::serial_println!("[epk] EuroPack integrity sweep: {} files, {pages} pages verified, {bad_pages} bad pages in {bad_files} files → {}",
+        files.len(), if bad_pages == 0 { "OK ✓" } else { "FAIL" });
 }
 
 /// Read `dst.len()` bytes from virtio disk `dev` at BYTE offset `off` (handles
@@ -2529,6 +3148,13 @@ fn disk_read_bytes(dev: usize, mut off: u64, mut dst: &mut [u8]) -> bool {
 // mapping — our arena is RWX so a plain store works). chrome's PartitionAlloc opens
 // it during startup. The fd's stored "position" IS the current virtual address.
 const PROC_MEM_FI: usize = usize::MAX - 1;
+/// /dev/snd/pcmC0D0p and /dev/snd/controlC0 (workplace sprint W12): live fds
+/// answered by kernel::alsa over the HDA ring, not files.
+const SND_PCM_FI: usize = usize::MAX - 2;
+const SND_CTL_FI: usize = usize::MAX - 3;
+fn fd_fi(fd: u64) -> Option<usize> {
+    OPEN_FDS.lock().get(fd as usize).and_then(|s| *s).map(|(fi, _)| fi)
+}
 
 /// open("/proc/self/mem"): reserve an fd slot tagged as the live-memory window.
 fn proc_mem_open() -> u64 {
@@ -2743,14 +3369,60 @@ fn disk_cache_reset() {
 /// Sorted list of every physical frame currently backing a SHARED (memfd)
 /// mapping — these must SURVIVE a process teardown (other processes map them).
 fn shared_phys_sorted() -> alloc::vec::Vec<u64> {
-    let mut v: alloc::vec::Vec<u64> = SHARED_FRAMES.lock().iter()
+    // One allocation at the exact size: this list is over a hundred thousand
+    // entries with the chrome pack cached, and growing it by doubling asked a
+    // fragmented heap for 2 MiB blocks it could not give (runs 63 and 65).
+    let n = SHARED_FRAMES.lock().iter().map(|(_, f)| f.len()).sum::<usize>() + DISK_PAGE_CACHE.lock().len();
+    let mut v: alloc::vec::Vec<u64> = alloc::vec::Vec::with_capacity(n + 16);
+    v.extend(SHARED_FRAMES.lock().iter()
         .flat_map(|(_, frames)| frames.iter().copied())
-        .filter(|&p| p != 0)
-        .collect();
+        .filter(|&p| p != 0));
     // Disk-cache frames are shared between processes exactly the same way.
     v.extend(DISK_PAGE_CACHE.lock().iter().map(|&(_, p)| p));
     v.sort_unstable();
     v
+}
+
+/// The keep list for a dead fork child's demand pages: the shared frames, plus
+/// EVERY frame the browser main process still maps. The second part is a guard
+/// and a measurement at once: the main thread's heap held stale allocator words
+/// again in run 36, the first crashing run in which children had exited before
+/// (four utilities), and a child's frame that the parent still maps would be
+/// exactly that, whatever the shared lists say. If the count is ever non-zero,
+/// the line below names the leak in the ownership model.
+/// The parent-frame guard in child_keep_list (a measurement; see there).
+pub static EXIT_GUARD: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+fn child_keep_list(child_pml4: u64) -> alloc::vec::Vec<u64> {
+    let mut keep = shared_phys_sorted();
+    let parent = GLIBC_PML4.load(Ordering::Relaxed);
+    // The parent walk is a measurement, not a need: it reported zero frames in
+    // every run (37 to 65), and its two 1.3 MiB lists per child exit were the
+    // allocations that found no hole in a fragmented heap (runs 63 and 65:
+    // "allocation of 65536 bytes failed" with 169 MiB free). Off unless asked.
+    if parent == 0 || parent == child_pml4 || !EXIT_GUARD.load(Ordering::Relaxed) {
+        return keep;
+    }
+    let pv = crate::paging::demand_phys_sorted(parent, DEMAND_PML4_IDX);
+    let cv = crate::paging::demand_phys_sorted(child_pml4, DEMAND_PML4_IDX);
+    let mut n = 0usize;
+    let mut first = [0u64; 4];
+    for &f in &cv {
+        if pv.binary_search(&f).is_ok() && keep.binary_search(&f).is_err() {
+            if n < 4 {
+                first[n] = f;
+            }
+            n += 1;
+        }
+    }
+    crate::serial_println!(
+        "[exit-guard] child pml4 {child_pml4:#x}: {} frames mapped, {} of them also mapped by the browser main outside the shared lists{}",
+        cv.len(), n,
+        if n > 0 { alloc::format!(" (first {:#x?}); kept", &first[..n.min(4)]) } else { alloc::string::String::new() }
+    );
+    keep.extend(pv);
+    keep.sort_unstable();
+    keep.dedup();
+    keep
 }
 
 /// A fork child is gone: free every low fd it opened and still had open.
@@ -2874,6 +3546,9 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
         // pread(/proc/self/mem, buf, len, off) reads memory at virtual address `off`.
         return proc_mem_xfer(offset as u64, buf, len, false);
     }
+    if fi == SND_PCM_FI || fi == SND_CTL_FI {
+        return (-22i64) as u64; // the sound devices speak ioctl, not read
+    }
     if fi >= DISK_FI_BASE && fi != WAD_FI {
         // Disk-backed (EuroPack): polled virtio read at the file's disk offset.
         let (dev, dbase, dsize) = match DISK_FILES.lock().get(fi - DISK_FI_BASE) {
@@ -2888,7 +3563,8 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
             return u64::MAX;
         }
         let mut tmp = alloc::vec![0u8; n];
-        if !disk_read_bytes(dev, dbase + offset as u64, &mut tmp) {
+        let _ = (dev, dbase);
+        if !pack_read(fi - DISK_FI_BASE, offset as u64, &mut tmp) {
             return u64::MAX;
         }
         // SAFETY: buf validated as user memory of at least n bytes.
@@ -2910,12 +3586,14 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
     // is the chrome-scale wedge. (Disk-backed reads already clone-then-copy.)
     let chunk: alloc::vec::Vec<u8> = {
         let files = FILES.lock();
-        let data = &files[fi].1;
-        let n = len.min(data.len().saturating_sub(offset));
-        if n == 0 {
-            alloc::vec::Vec::new()
-        } else {
-            data[offset..offset + n].to_vec()
+        // .get, not [fi]: a stale file index (fi == FILES.len() after an unlink
+        // shifted the table) read as EOF instead of panicking the boot (runs 84, 95).
+        match files.get(fi) {
+            Some((_, data)) => {
+                let n = len.min(data.len().saturating_sub(offset));
+                if n == 0 { alloc::vec::Vec::new() } else { data[offset..offset + n].to_vec() }
+            }
+            None => alloc::vec::Vec::new(),
         }
     };
     if !in_user_arena(buf, chunk.len()) {
@@ -2987,6 +3665,9 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
     }
     // /proc/self/mem: read the process's own memory at the current position (= the
     // virtual address set by a prior lseek), then advance past it.
+    if fi == SND_PCM_FI || fi == SND_CTL_FI {
+        return (-22i64) as u64; // ioctl only
+    }
     if fi == PROC_MEM_FI {
         let n = proc_mem_xfer(off as u64, buf, len, false);
         if n != u64::MAX {
@@ -3022,9 +3703,13 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
     // safe to keep held: the fault handler does not take it.
     let (chunk, n) = {
         let files = FILES.lock();
-        let data = &files[fi].1;
-        let n = len.min(data.len().saturating_sub(off));
-        (if n > 0 { data[off..off + n].to_vec() } else { alloc::vec::Vec::new() }, n)
+        match files.get(fi) {
+            Some((_, data)) => {
+                let n = len.min(data.len().saturating_sub(off));
+                (if n > 0 { data[off..off + n].to_vec() } else { alloc::vec::Vec::new() }, n)
+            }
+            None => (alloc::vec::Vec::new(), 0),
+        }
     };
     if !in_user_arena(buf, n) {
         return u64::MAX;
@@ -3075,6 +3760,9 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
     };
     // /proc/self/mem: write into the process's own memory at the current position
     // (= virtual address set by lseek), then advance past it.
+    if fi == SND_PCM_FI || fi == SND_CTL_FI {
+        return (-22i64) as u64; // ioctl only
+    }
     if fi == PROC_MEM_FI {
         let n = proc_mem_xfer(off as u64, buf, len, true);
         if n != u64::MAX {
@@ -3095,7 +3783,8 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
         None => return u64::MAX,
     };
     let mut files = FILES.lock();
-    let data = files[fi].1.to_mut(); // clone-on-write if this were a borrowed lib (never)
+    let Some(entry) = files.get_mut(fi) else { return u64::MAX };
+    let data = entry.1.to_mut(); // clone-on-write if this were a borrowed lib (never)
     if end > data.len() {
         data.resize(end, 0);
     }
@@ -3169,7 +3858,9 @@ pub fn set_stdout_redirect(path: Option<&str>, append: bool) {
 
 /// Append bytes to the stdout redirection file (internal, for write/writev).
 fn redirect_append(fi: usize, bytes: &[u8]) {
-    FILES.lock()[fi].1.to_mut().extend_from_slice(bytes);
+    if let Some(f) = FILES.lock().get_mut(fi) {
+        f.1.to_mut().extend_from_slice(bytes);
+    }
 }
 
 /// Standard input (fd 0): content + read position. The shell fills this with the
@@ -3250,6 +3941,12 @@ fn daemon_dispatch(num: u64, a1: u64, _a2: u64, _a3: u64) -> u64 {
 
 /// Load `program` (native ABI) as a PREEMPTIVELY scheduled background daemon.
 pub fn spawn_daemon(falloc: &mut FrameAllocator, program: &[u8]) {
+    // Verify before execute, like every other launcher: the daemon's bytes come
+    // from the root file system and must carry the signature the table knows.
+    if !verify_program("/bin/daemon", program) {
+        crate::serial_println!("[verify] /bin/daemon: signature INVALID or unknown, daemon NOT started");
+        return;
+    }
     init_syscall_msrs();
     const MIB2: u64 = 1 << 21;
     // Own isolated 2 MiB arena + PML4 (just like bg-musl) instead of loose frames on
@@ -3509,14 +4206,15 @@ static FUTEX_QUEUE: Mutex<alloc::vec::Vec<(u64, usize)>> = Mutex::new(alloc::vec
 /// stall detector watches to catch a many-thread deadlock (no syscall = frozen).
 static SYSCALL_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Per-task last Linux syscall (num, arg1, return) — for the #GP handler to report
-/// what a CHECK-crashing program (chrome IMMEDIATE_CRASH) last did. 64 slots is
-/// enough to index by task id (chrome uses tasks < 64 in these boots).
+/// what a CHECK-crashing program (chrome IMMEDIATE_CRASH) last did. One slot per
+/// scheduler task: a chrome with two renderers runs past task 100 (run 72), and the
+/// census read zeros for every thread above the old 64.
 type SysRec = (core::sync::atomic::AtomicU64, core::sync::atomic::AtomicU64, core::sync::atomic::AtomicU64);
-static LAST_SYS: [SysRec; 64] = [const { (
+static LAST_SYS: [SysRec; crate::sched::MAX_TASKS] = [const { (
     core::sync::atomic::AtomicU64::new(0),
     core::sync::atomic::AtomicU64::new(0),
     core::sync::atomic::AtomicU64::new(0),
-) }; 64];
+) }; crate::sched::MAX_TASKS];
 /// (num, arg1, return) of the last Linux syscall made by task `t`.
 pub fn last_syscall(t: usize) -> (u64, u64, u64) {
     if t >= LAST_SYS.len() {
@@ -4798,6 +5496,9 @@ static DEFERRED_CLOSE: Mutex<alloc::vec::Vec<u32>> = Mutex::new(alloc::vec::Vec:
 /// (The class dispatch that close(3) used to do inline; also called by the
 /// child-exit path to flush deferred closes.)
 fn close_fd_now(a1: u64) -> u64 {
+    if fd_fi(a1) == Some(SND_PCM_FI) {
+        crate::alsa::pcm_close();
+    }
     if is_epoll_fd(a1) {
         if let Some(slot) = EPOLLS.lock().get_mut((a1 - EPOLL_FD_BASE) as usize) {
             *slot = None;
@@ -4808,6 +5509,7 @@ fn close_fd_now(a1: u64) -> u64 {
         0
     } else if crate::net::is_sock_fd(a1) {
         sock_pair_forget(a1);
+        tls_walk_close(a1);
         crate::net::sock_close(a1)
     } else if crate::net::is_unix_fd(a1) {
         sock_pair_forget(a1);
@@ -4967,6 +5669,41 @@ fn vfs_ftruncate(fd: usize, len: usize) -> u64 {
 
 /// rename(old, new): move a flat-VFS file/symlink to a new path (replacing any file
 /// already there). chrome writes files atomically (write temp, then rename).
+/// link(old, new): a second name for a file. This VFS is a flat table of
+/// (path, bytes), so two names cannot share one content the way inodes do; the
+/// new name gets a COPY of the bytes. That is exact for the way link is used
+/// here (create-then-link-then-unlink as an atomic publish, and the disk cache's
+/// on-disk structure check) and differs only for a program that writes through
+/// one name and expects the other to change, which nothing on this system does.
+/// Says so in the log the first few times, so the census can tell what asked.
+fn vfs_link(oldp: &[u8], newp: &[u8]) -> u64 {
+    let o = String::from_utf8_lossy(oldp).into_owned();
+    let n = String::from_utf8_lossy(newp).into_owned();
+    if o.is_empty() || n.is_empty() {
+        return (-2i64) as u64; // -ENOENT
+    }
+    {
+        static LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(8);
+        if LEFT.load(Ordering::Relaxed) > 0 {
+            LEFT.fetch_sub(1, Ordering::Relaxed);
+            crate::serial_println!("[linux-abi] link {o:?} -> {n:?}");
+        }
+    }
+    if MKDIRS.lock().iter().any(|d| *d == o) {
+        return (-1i64) as u64; // -EPERM: no hard links to directories
+    }
+    let mut files = FILES.lock();
+    if files.iter().any(|(p, _)| *p == n) {
+        return (-17i64) as u64; // -EEXIST
+    }
+    let data = match files.iter().find(|(p, _)| *p == o) {
+        Some((_, d)) => d.clone(),
+        None => return (-2i64) as u64, // -ENOENT
+    };
+    files.push((n, data));
+    0
+}
+
 fn vfs_rename(oldp: &[u8], newp: &[u8]) -> u64 {
     let o = String::from_utf8_lossy(oldp).into_owned();
     let n = String::from_utf8_lossy(newp).into_owned();
@@ -5225,10 +5962,15 @@ fn vfs_size(fd: usize) -> Option<usize> {
     if fi == PROC_MEM_FI {
         return Some(1usize << 46); // /proc/self/mem: large, canonical, non-overflowing
     }
+    if fi == SND_PCM_FI || fi == SND_CTL_FI {
+        return Some(0); // character devices
+    }
     if fi >= DISK_FI_BASE {
         return DISK_FILES.lock().get(fi - DISK_FI_BASE).map(|&(_, _, _, size)| size as usize);
     }
-    Some(FILES.lock()[fi].1.len())
+    // .get, not [fi]: a stale or out-of-range file index (fi == FILES.len() panicked
+    // vfs_size in run 84, wedging the boot) reads as "no size" instead of a crash.
+    FILES.lock().get(fi).map(|(_, d)| d.len())
 }
 
 /// lseek(fd, offset, whence) -> new offset (u64::MAX on error).
@@ -6197,6 +6939,53 @@ pub fn installable(name: &str) -> Option<(&'static [u8], u64, bool)> {
 pub fn program_sig(path: &str) -> Option<&'static [u8]> {
     Some(match path {
         "/bin/hello" => include_bytes!("../../userland/hello.elf.sig"),
+        "/bin/base64" => include_bytes!("../../userland/glibc/base64.sig"),
+        "/bin/chrome_crashpad_handler" => include_bytes!("../../userland/glibc/chrome_crashpad_handler.sig"),
+        "/bin/factor" => include_bytes!("../../userland/glibc/factor.sig"),
+        "/bin/gbig" => include_bytes!("../../userland/glibc/gbig.sig"),
+        "/bin/gbrk" => include_bytes!("../../userland/glibc/gbrk.sig"),
+        "/bin/gcairo" => include_bytes!("../../userland/glibc/gcairo.sig"),
+        "/bin/gcairotext" => include_bytes!("../../userland/glibc/gcairotext.sig"),
+        "/bin/gcond" => include_bytes!("../../userland/glibc/gcond.sig"),
+        "/bin/gcpp" => include_bytes!("../../userland/glibc/gcpp.sig"),
+        "/bin/gdiskmap" => include_bytes!("../../userland/glibc/gdiskmap.sig"),
+        "/bin/gevfd" => include_bytes!("../../userland/glibc/gevfd.sig"),
+        "/bin/gfile" => include_bytes!("../../userland/glibc/gfile.sig"),
+        "/bin/gfmmap" => include_bytes!("../../userland/glibc/gfmmap.sig"),
+        "/bin/gglib" => include_bytes!("../../userland/glibc/gglib.sig"),
+        "/bin/ggtk" => include_bytes!("../../userland/glibc/ggtk.sig"),
+        "/bin/gmath" => include_bytes!("../../userland/glibc/gmath.sig"),
+        "/bin/gnss" => include_bytes!("../../userland/glibc/gnss.sig"),
+        "/bin/gpango" => include_bytes!("../../userland/glibc/gpango.sig"),
+        "/bin/gpoll" => include_bytes!("../../userland/glibc/gpoll.sig"),
+        "/bin/gscm" => include_bytes!("../../userland/glibc/gscm.sig"),
+        "/bin/gscm3" => include_bytes!("../../userland/glibc/gscm3.sig"),
+        "/bin/gsdl" => include_bytes!("../../userland/glibc/gsdl.sig"),
+        "/bin/gshm" => include_bytes!("../../userland/glibc/gshm.sig"),
+        "/bin/gshm2" => include_bytes!("../../userland/glibc/gshm2.sig"),
+        "/bin/gsleep" => include_bytes!("../../userland/glibc/gsleep.sig"),
+        "/bin/gsparse" => include_bytes!("../../userland/glibc/gsparse.sig"),
+        "/bin/gsync" => include_bytes!("../../userland/glibc/gsync.sig"),
+        "/bin/gtest" => include_bytes!("../../userland/glibc/gtest.sig"),
+        "/bin/gthread" => include_bytes!("../../userland/glibc/gthread.sig"),
+        "/bin/gtiny" => include_bytes!("../../userland/glibc/gtiny.sig"),
+        "/bin/gunix" => include_bytes!("../../userland/glibc/gunix.sig"),
+        "/bin/gunlink" => include_bytes!("../../userland/glibc/gunlink.sig"),
+        "/bin/gvdso" => include_bytes!("../../userland/glibc/gvdso.sig"),
+        "/bin/gvec" => include_bytes!("../../userland/glibc/gvec.sig"),
+        "/bin/gx11" => include_bytes!("../../userland/glibc/gx11.sig"),
+        "/bin/gxdraw" => include_bytes!("../../userland/glibc/gxdraw.sig"),
+        "/bin/gxevent" => include_bytes!("../../userland/glibc/gxevent.sig"),
+        "/bin/gximg" => include_bytes!("../../userland/glibc/gximg.sig"),
+        "/bin/gxkey" => include_bytes!("../../userland/glibc/gxkey.sig"),
+        "/bin/gxlive" => include_bytes!("../../userland/glibc/gxlive.sig"),
+        "/bin/gxwin" => include_bytes!("../../userland/glibc/gxwin.sig"),
+        "/bin/gzlib" => include_bytes!("../../userland/glibc/gzlib.sig"),
+        "/lib/ld-linux-x86-64.so.2" => include_bytes!("../../userland/glibc/ld-linux-x86-64.so.2.sig"),
+        "/bin/seq" => include_bytes!("../../userland/glibc/seq.sig"),
+        "/bin/sha256sum" => include_bytes!("../../userland/glibc/sha256sum.sig"),
+        "/bin/sort" => include_bytes!("../../userland/glibc/sort.sig"),
+        "/bin/wc" => include_bytes!("../../userland/glibc/wc.sig"),
         "/bin/msum" => include_bytes!("../../userland/msum.elf.sig"),
         "/bin/menv" => include_bytes!("../../userland/menv.elf.sig"),
         "/bin/msock" => include_bytes!("../../userland/msock.elf.sig"),
@@ -7609,10 +8398,22 @@ fn read_user_strvec(ptr: u64, max: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>
 fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     // POSIX: close-on-exec descriptors are gone the moment the new image starts.
     cloexec_do_exec(fork_child_owner(crate::sched::current()).unwrap_or(0));
-    let _path = user_cstr(path_ptr, 256); // usually "/proc/self/exe"
+    let path = user_cstr(path_ptr, 256); // usually "/proc/self/exe"
     let exe_path = CHILD_EXE_PATH.lock().clone();
     if exe_path.is_empty() {
         return (-8i64) as u64; // -ENOEXEC: no persistent exe known
+    }
+    // Only the persistent exe re-executes. Chrome also forks to run helpers that
+    // are not here (`xdg-settings` for the default-browser check, run 50): those
+    // used to come back as chrome under the helper's name, hit setsid ENOSYS,
+    // abort, and die on glibc's hlt. A program that is not here is ENOENT, and
+    // chrome copes exactly as on a system without it.
+    if path != b"/proc/self/exe" && path.as_slice() != exe_path.as_bytes()
+        && !path.ends_with(b"/chrome") && path.as_slice() != b"chrome"
+    {
+        crate::serial_println!("[execve] task {} asked for {:?}: not here, ENOENT",
+            crate::sched::current(), String::from_utf8_lossy(&path));
+        return (-2i64) as u64;
     }
     // Resolve the disk exe (same registry glibc_disk_launch uses).
     let (diskidx, dev, doff, _dsize) = {
@@ -7679,7 +8480,7 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
 
     // Re-register the exe's disk-backed segments (in the child's demand-state).
     let exe_base = DEMAND_BASE;
-    let exe_info = match read_disk_exe_info(dev, doff, exe_base) {
+    let exe_info = match read_disk_exe_info(diskidx, dev, doff, exe_base) {
         Some(i) => i,
         None => return (-8i64) as u64,
     };
@@ -7869,6 +8670,101 @@ const DEMAND_MIN_BYTES: u64 = 16 * (1 << 20); // route anon mmaps >= 16 MiB here
 pub static DEMAND_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
 static DEMAND_COMMITTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Pages zeroed by madvise(MADV_DONTNEED/MADV_FREE) so far, and how many calls did it.
+static MADVISE_ZEROED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static MADVISE_CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// madvise(addr, len, advice). MADV_DONTNEED (4) and MADV_FREE (8) over private
+/// anonymous demand pages must make those pages read as ZEROS afterwards. Linux
+/// guarantees that, and Chromium's PartitionAlloc (the malloc of the whole browser
+/// process, GTK included) relies on it: its first memory reclaim, about a minute
+/// after start-up, decommits every empty slot span this way, and a later zero-fill
+/// allocation (calloc, g_malloc0) served from such a span SKIPS its memset because
+/// "decommitted memory is always zeroed". While this was a no-op the recommitted
+/// pages still carried the old freelist words (encoded ~ptr, so an encoded NULL is
+/// -1): GTK's g_malloc0'd CSS values then held -1 or a non-canonical ~ptr where a
+/// pointer should be, and the browser main thread died in _gtk_css_value_ref
+/// (`addl $1,0x8(%r13)`, runs 14/21/32) or blocked forever on a garbage mutex word
+/// (run 31), always at tick ~6779 = the first reclaim.
+///
+/// The frames stay committed (nothing goes back to the pool): the contract is the
+/// zero contents, and leaving the PTEs alone needs no TLB shootdown. Shared frames
+/// (MAP_SHARED, disk cache) and file-backed private pages keep their bytes, as on
+/// Linux where DONTNEED re-reads them from the file.
+fn madvise(addr: u64, len: u64, advice: u64) -> u64 {
+    if advice != 4 && advice != 8 {
+        return 0; // every other advice is a hint we may ignore
+    }
+    let start = addr & !0xFFF;
+    let end = addr.saturating_add(len).saturating_add(0xFFF) & !0xFFF;
+    if end <= start || start < DEMAND_BASE || end > DEMAND_BASE + DEMAND_SIZE {
+        return 0;
+    }
+    ensure_globals_for_current();
+    let pml4 = {
+        use x86_64::registers::control::Cr3;
+        Cr3::read().0.start_address().as_u64()
+    };
+    // Which pages to leave alone: read-only mappings (disk-cache frames are mapped
+    // read-only, and PTE.W says so without a lookup), MAP_SHARED windows (a range
+    // test, no sorted frame list: shared_phys_sorted() collects and sorts the whole
+    // disk page cache, and a reclaim issues madvise a thousand times with
+    // interrupts off), and file-backed private pages.
+    let in_shared = |page: u64| {
+        SHARED_MAPS.lock().iter().any(|&(_, b, l)| page >= b && page < b + l as u64)
+            || SHARED_ALIASES.lock().iter().any(|&(b, l, _)| page >= b && page < b + l)
+    };
+    let mut zeroed = 0u64;
+    let mut page = start;
+    while page < end {
+        if let Some((phys, writable)) = crate::paging::demand_pte(pml4, page) {
+            if writable && !in_shared(page) && !demand_file_backed(page, 4096) {
+                // SAFETY: `phys` is an identity-mapped 4 KiB frame owned by this process alone.
+                unsafe { core::ptr::write_bytes(phys as *mut u8, 0, 4096); }
+                zeroed += 1;
+            }
+        }
+        page += 4096;
+    }
+    let calls = MADVISE_CALLS.fetch_add(1, Ordering::Relaxed);
+    let total = MADVISE_ZEROED.fetch_add(zeroed, Ordering::Relaxed) + zeroed;
+    if calls < 4 || (calls + 1) % 256 == 0 {
+        crate::serial_println!(
+            "[madvise] #{} advice={advice} [{start:#x},{end:#x}) zeroed {zeroed} of {} pages (total {total})",
+            calls + 1, (end - start) / 4096
+        );
+    }
+    0
+}
+/// Drop every page of [`start`, `end`) from the current process's demand region:
+/// unmap all, free the frames the process owns (writable, not a MAP_SHARED window
+/// or alias: those frames belong to the file), leave shared and page-cache frames
+/// to their owners. A later touch faults in zeros (or the file's bytes again).
+fn demand_drop_range(start: u64, end: u64) -> (usize, usize) {
+    if end <= start || start < DEMAND_BASE || end > DEMAND_BASE + DEMAND_SIZE {
+        return (0, 0);
+    }
+    ensure_globals_for_current();
+    let pml4 = {
+        use x86_64::registers::control::Cr3;
+        Cr3::read().0.start_address().as_u64()
+    };
+    let shared: alloc::vec::Vec<(u64, u64)> = {
+        let mut v: alloc::vec::Vec<(u64, u64)> =
+            SHARED_MAPS.lock().iter().map(|&(_, b, l)| (b, b + l as u64)).collect();
+        v.extend(SHARED_ALIASES.lock().iter().map(|&(b, l, _)| (b, b + l)));
+        v
+    };
+    let mut free_if = |va: u64, writable: bool| -> bool {
+        writable && !shared.iter().any(|&(b, e)| va >= b && va < e)
+    };
+    crate::paging::unmap_demand_range(pml4, start, end, &mut free_if)
+}
+static MUNMAP_CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static MUNMAP_FREED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static FIXED_CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static FIXED_FREED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static DEMAND_USED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 // ── FILE-BACKED demand paging (opt-in, separate flag) ───────────────────────
@@ -7923,6 +8819,11 @@ pub fn demand_committed_pages() -> u64 { DEMAND_COMMITTED.load(Ordering::Relaxed
 /// so every run carries its own before/after numbers.
 pub static FAULT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 pub static FAULT_CYCLES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Demand faults served so far and the TSC cycles they took (for the late-tick log).
+pub fn fault_counters() -> (u64, u64) {
+    (FAULT_COUNT.load(Ordering::Relaxed), FAULT_CYCLES.load(Ordering::Relaxed))
+}
 
 pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
     let t0 = unsafe { core::arch::x86_64::_rdtsc() };
@@ -8124,7 +9025,8 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
                         // task clobber the device's single request slot (BUG-010 class).
                         // Syscall-context reads are already IF=0 via FMASK.
                         let ok = x86_64::instructions::interrupts::without_interrupts(|| {
-                            disk_read_bytes(dev, dbase + file_pos, dst)
+                            let _ = (dev, dbase);
+                            pack_read(fidx - DISK_FI_BASE, file_pos, dst)
                         });
                         if !ok {
                             crate::serial_println!("[europack] fault-fill read FAILED @file_pos={file_pos:#x}");
@@ -8223,7 +9125,8 @@ fn demand_readahead(pml4: u64, page: u64, mbase: u64, mend: u64,
     // SAFETY: BOUNCE is only touched under RA_BUF.
     let buf = unsafe { &mut BOUNCE[..bytes] };
     let ok = x86_64::instructions::interrupts::without_interrupts(|| {
-        disk_read_bytes(dev, dbase + file_pos, buf)
+        let _ = (dev, dbase);
+        pack_read(fidx - DISK_FI_BASE, file_pos, buf)
     });
     if !ok {
         return;
@@ -8433,6 +9336,7 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
         for i in 0..dpf {
             let _ = falloc.free(dpb + i * 4096);
         }
+        free_demand_extra(falloc);
         DEMAND_FILE_MAPS.lock().clear();
         DEMAND_ENABLED.store(PERSIST_PREV_DEMAND.load(Ordering::Relaxed), Ordering::Relaxed);
         DEMAND_FILE_ENABLED.store(PERSIST_PREV_FILE.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -8476,14 +9380,28 @@ pub fn chrome_stage_files() {
     // path earns trust (chrome's resolver consults hosts first, like glibc).
     register_file("/etc/resolv.conf", b"nameserver 10.0.2.3
 ".to_vec());
+    // euro-os.eu is pinned so the live-site run does not depend on the usernet
+    // resolver. The pin MUST follow the server: it still named 151.240.77.50, the
+    // machine the site left on 2026-09-04, and every navigation to the live site
+    // from the desktop ended in net::ERR_NAME_NOT_RESOLVED without a single DNS
+    // packet leaving (chrome served the name from this file and got nowhere).
+    // br-prod is 82.192.72.16 (docs: the server migration in the memory notes).
     register_file("/etc/hosts", b"127.0.0.1 localhost
-151.240.77.50 euro-os.eu www.euro-os.eu
+82.192.72.16 euro-os.eu www.euro-os.eu
 ".to_vec());
     for (name, bytes) in dejavu_fonts() {
         register_file_static(&alloc::format!("/usr/share/fonts/truetype/dejavu/{name}"), bytes);
     }
     register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-9", fc_dejavu_cache());
     register_file_static("/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-11", fc_dejavu_cache11());
+    // libasound reads /usr/share/alsa/alsa.conf before it opens any PCM; without
+    // it every name is "Unknown PCM" (runs 74 and 76: chrome's audio manager fell
+    // back to ALSA, asked for plughw:0,0, got ENOENT, and the kernel's /dev/snd
+    // device was never opened). The distribution file is 700 lines of hooks and
+    // card includes; this defines the two PCM types chrome uses (hw and plug over
+    // hw), the hw control and the defaults, all on card 0 device 0 = the HDA
+    // output kernel::alsa serves.
+    register_file_static("/usr/share/alsa/alsa.conf", crate::alsa::ALSA_CONF);
     register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n</fontconfig>\n".to_vec());
     register_device_files();
     register_file("/tmp/euro.html", include_bytes!("euro_page.html").to_vec());
@@ -8513,6 +9431,40 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // first composite and the renderer never even forked. Hunting that crash is
     // its own thread; this is the configuration that demonstrably works.
     b"--in-process-gpu",
+    // TCP only for now: youtube over QUIC (UDP) stalled in its loading skeleton
+    // (run 54) and over TLS/TCP failed subresources with ERR_SSL_PROTOCOL_ERROR
+    // (run 52); one transport at a time, and the TLS record walker judges TCP.
+    // QUIC returns once TCP/TLS is clean (workplace sprint, W13).
+    b"--disable-quic",
+    // Autoplay without a user gesture: the CDP Runtime.evaluate that would call
+    // video.play() does not reach the youtube renderer after the cross-process
+    // navigation (the page session's command is not forwarded to the swapped-in
+    // renderer process; runs 77 and 79: the renderer ran 73k syscalls and painted
+    // the player, but ids 63-65 never replied). This flag makes the page start the
+    // video itself, with sound, so playback no longer depends on driving it over
+    // DevTools. The muted-autoplay policy would start it silent; this one keeps
+    // the audio.
+    b"--autoplay-policy=no-user-gesture-required",
+    // Sound straight onto /dev/snd/pcmC0D0p as hw:0,0, NOT plughw. The plug
+    // plugin refuses the device ("Rate 48000Hz not available") even though our
+    // refine returns exactly 48 kHz S16 stereo: its rate/format convergence over
+    // a single-config slave does not settle (runs 78-83). hw talks to the device
+    // directly, and chrome's writei path lands in the ring, which we serve. The
+    // AudioContext already runs at 48 kHz, so no resampling is needed. No dmix,
+    // no PulseAudio (W12).
+    b"--alsa-output-device=hw:0,0",
+    // The "disk" behind /tmp/cr is the kernel heap (384 MiB), and the Simple Cache
+    // works since the ENOENT fix: run 63 panicked on a 2 MiB allocation with
+    // youtube's resources filling it. A session cache of 16 MiB each is plenty
+    // for a RAM-backed profile.
+    b"--disk-cache-size=16777216",
+    b"--media-cache-size=16777216",
+    // The NetLog (--log-net-log=/tmp/cr/netlog.json, printed by the kernel at
+    // heartbeat 14 as [netlog]) named run 59's failure: BoringSSL
+    // WRONG_VERSION_NUMBER on a record after the handshake, then
+    // PROTOCOL_IS_SHUTDOWN. It also silenced the DevTools channel for the whole
+    // run (21 heartbeats, one answer), so it is off again; the record walker
+    // now applies BoringSSL's version rule itself.
     // MULTI-PROCESS is the default since 2026-09-04, matching the boot test.
     // What stood in its way is fixed and measured: descriptors between two
     // CHILDREN were keyed by fd number and silently vanished, so no data-pipe
@@ -8536,7 +9488,32 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // it in the futex dumps), and no frame ever gets composited. The log was the
     // deadlock. Re-enable locally when hunting a specific message.
     b"--enable-logging=stderr",
+    // NARROW verbosity, for the profile hunt only. `--v=1` is explicitly NOT the
+    // tool here (see the paragraph above: its firehose was itself the deadlock).
+    // These nine files are the ones that decide whether a profile opens: the Web
+    // Data wrapper and the sql layer under it, the pref store, the profile
+    // objects, the dialog that reports the failure, and the cache structure check
+    // that is failing in the same run. Chrome stops on "Something went wrong when
+    // opening your profile" and nothing in the default log says which store broke;
+    // this makes it say so itself, the same way it named mremap.
+    // The profile path is quiet since W2; now the TLS path speaks: chrome logs the
+    // BoringSSL reason of a failed handshake at VLOG(1) in ssl_client_socket_impl
+    // ("handshake failed; returned -1, SSL error code 1, net_error -107" plus the
+    // error string), which tells ECH_REJECTED from DECODE_ERROR from a bad
+    // certificate: run 56 lost eleven youtube subresources to
+    // ERR_SSL_PROTOCOL_ERROR with the record walker seeing nothing wrong.
+    b"--vmodule=ssl_client_socket_impl=2,ssl_connect_job=1,transport_connect_job=1,http_stream_factory_job=1,ech_config_list=1,dns_transaction=1",
     b"--no-first-run", b"--no-default-browser-check",
+    // The live site's name, pinned the way the boot-test path pins it. On the
+    // desktop a navigation to https://euro-os.eu/ ends in ERR_NAME_NOT_RESOLVED
+    // the instant it starts: chrome reads /etc/hosts twice and never sends a
+    // query (no socket, no packet), while lookups for its own background hosts
+    // went out to 10.0.2.3:53 minutes earlier in the same run. Its DNS config
+    // service wants netlink, which this kernel does not provide, and a pinned
+    // /etc/hosts did not change the outcome. The rule takes name resolution out
+    // of the picture so the TCP, TLS and HTTP underneath can be measured; the
+    // resolver itself stays an open item (sprint plan W5b).
+    b"--host-resolver-rules=MAP euro-os.eu 82.192.72.16,MAP www.euro-os.eu 82.192.72.16",
     // Everything the browser does BESIDES showing the page. The RIP histogram settled
     // what the main thread is busy with: 838 samples spread over 96+ code pages with
     // no hot spot -- not a livelock, just an enormous amount of startup work
@@ -8556,7 +9533,7 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // embeddings after first paint and never returns to its event loop under
     // emulation. Unknown feature names are ignored harmlessly, so the list names
     // every plausible spelling.
-    b"--disable-features=SafeBrowsing,OptimizationHints,SegmentationPlatform,MediaRouter,Translate,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,MojoUseEventFd,PageContentAnnotations,HistoryEmbeddings,PageEmbeddings,AnnotatedPageContentExtraction,AIPageContent,TextEmbedder,PageContentExtraction,OptimizationGuideModelDownloading,OptimizationTargetPrediction,PageVisibility,ModelExecution",
+    b"--disable-features=SafeBrowsing,OptimizationHints,SegmentationPlatform,MediaRouter,Translate,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,MojoUseEventFd,AudioServiceOutOfProcess,AudioServiceSandbox,PageContentAnnotations,HistoryEmbeddings,PageEmbeddings,AnnotatedPageContentExtraction,AIPageContent,TextEmbedder,PageContentExtraction,OptimizationGuideModelDownloading,OptimizationTargetPrediction,PageVisibility,ModelExecution",
     // The fast, reproducible demo page. The REAL site works down the whole
     // stack on the post-campaign kernel (desk4, 2026-08-31: DNS via usernet,
     // TCP+TLS established to euro-os.eu:443, first composited paint quad at
@@ -8633,9 +9610,10 @@ pub fn spawn_glibc_disk_persistent(
 /// it at `exe_base` in the demand region. Reads only the first 8 KiB from disk (the
 /// ELF header + phdrs live there) — the LOAD segments themselves are NOT read; they
 /// fault in from disk page-by-page. `register_disk_exe_segments` must run afterwards.
-fn read_disk_exe_info(dev: usize, doff: u64, exe_base: u64) -> Option<LoadInfo> {
+fn read_disk_exe_info(diskidx: usize, dev: usize, doff: u64, exe_base: u64) -> Option<LoadInfo> {
     let mut hdr = alloc::vec![0u8; 8192];
-    if !disk_read_bytes(dev, doff, &mut hdr) {
+    let _ = (dev, doff);
+    if !pack_read(diskidx, 0, &mut hdr) {
         return None;
     }
     if hdr.len() < 64 || &hdr[0..4] != b"\x7fELF" || hdr[4] != 2 || hdr[5] != 1 || rd_u16(&hdr, 18) != 0x3E {
@@ -8680,7 +9658,8 @@ fn read_disk_exe_info(dev: usize, doff: u64, exe_base: u64) -> Option<LoadInfo> 
 /// Returns false on a bad/oversized header.
 fn register_disk_exe_segments(diskidx: usize, dev: usize, doff: u64, exe_base: u64) -> bool {
     let mut hdr = alloc::vec![0u8; 8192];
-    if !disk_read_bytes(dev, doff, &mut hdr) {
+    let _ = (dev, doff);
+    if !pack_read(diskidx, 0, &mut hdr) {
         return false;
     }
     let e_phoff = rd_u64(&hdr, 32) as usize;
@@ -8723,6 +9702,16 @@ fn register_disk_exe_segments(diskidx: usize, dev: usize, doff: u64, exe_base: u
 /// launches a browser that would otherwise take the memory the compositor needs.
 pub static DEMAND_MARGIN_FRAMES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(8192);
 
+/// Hand the demand pool's extra backing regions (procpool::demand_install_regions)
+/// back to the main allocator; the first region is freed by the caller as before.
+fn free_demand_extra(falloc: &mut euromm::FrameAllocator) {
+    for (b, f) in crate::procpool::demand_take_extra() {
+        for i in 0..f as u64 {
+            let _ = falloc.free(b + i * 4096);
+        }
+    }
+}
+
 /// The launched state of a disk-served glibc process: everything the two lifecycles
 /// (run-to-completion, and persistent-alongside-the-desktop) must eventually give back.
 struct DiskRun {
@@ -8749,6 +9738,19 @@ fn glibc_disk_launch(
     envp: &[&[u8]],
     caps: u64,
 ) -> Result<DiskRun, &'static str> {
+    // Verify before execute. The executable is served page by page from a pack
+    // whose manifest signature and Merkle roots were checked at scan and whose
+    // every page is checked as it is read (pack_read); the loader is verified here.
+    if !verify_program("/lib/ld-linux-x86-64.so.2", ldso) {
+        return Err("verify: /lib/ld-linux-x86-64.so.2 signature INVALID");
+    }
+    {
+        let idx = DISK_FILES.lock().iter().position(|f| f.0 == exe_path);
+        match idx {
+            Some(i) if DISK_VERITY.lock().get(i).is_some() => {}
+            _ => return Err("verify: executable is not from a verified EuroPack"),
+        }
+    }
     // A fresh launch: no fork child of a PREVIOUS run may leave its state loaded
     // or its ChildMem around.
     GLOBALS_OWNER.store(0, Ordering::Relaxed);
@@ -8799,7 +9801,7 @@ fn glibc_disk_launch(
 
     // The exe is placed at the START of the demand region; ld.so libs reserve above it.
     let exe_base = DEMAND_BASE;
-    let exe_info = match read_disk_exe_info(dev, doff, exe_base) {
+    let exe_info = match read_disk_exe_info(diskidx, dev, doff, exe_base) {
         Some(i) => i,
         None => return Err("(bad disk exe ELF)"),
     };
@@ -8879,18 +9881,33 @@ fn glibc_disk_launch(
     // margin is what the REST of the system still gets: 32 MiB is enough for a boot
     // phase where nothing else runs, and far too little for a desktop that has to keep
     // compositing while the browser lives.
-    let mut want = falloc.free_frames().saturating_sub(DEMAND_MARGIN_FRAMES.load(Ordering::Relaxed) as usize);
-    let mut dp = (0u64, 0usize);
-    while want >= 4096 {
-        if let Ok(b) = falloc.allocate_contiguous(want) {
-            dp = (b, want);
-            break;
+    //
+    // Free RAM is taken run by run, largest first, until the budget is spent or no
+    // run of 64 MiB is left: once the fork pool holds the biggest contiguous run,
+    // "one run, halved until it fits" gave a 5632M guest a 685 MiB pool out of
+    // 1.6 GiB free, less than the 4608M guest had. The first run found is the
+    // largest (the ask only shrinks) and is the one recorded as dp_base/dp_frames.
+    let mut budget = falloc.free_frames().saturating_sub(DEMAND_MARGIN_FRAMES.load(Ordering::Relaxed) as usize);
+    let mut regions: [(u64, usize); 8] = [(0, 0); 8];
+    let mut nreg = 0usize;
+    let mut want = budget;
+    while nreg < regions.len() && budget >= 16384 && want >= 16384 {
+        let ask = want.min(budget);
+        match falloc.allocate_contiguous(ask) {
+            Ok(b) => {
+                regions[nreg] = (b, ask);
+                nreg += 1;
+                budget -= ask;
+            }
+            Err(_) => want /= 2,
         }
-        want /= 2;
     }
+    let dp = if nreg > 0 { regions[0] } else { (0u64, 0usize) };
     if dp.1 != 0 {
-        crate::procpool::demand_install(dp.0, dp.1);
-        crate::serial_println!("[glibc-disk] demand pool: {} MiB @ {:#x}", dp.1 / 256, dp.0);
+        crate::procpool::demand_install_regions(&regions[..nreg]);
+        let total: usize = regions[..nreg].iter().map(|r| r.1).sum();
+        crate::serial_println!("[glibc-disk] demand pool: {} MiB in {} region(s), largest {} MiB @ {:#x}",
+            total / 256, nreg, dp.1 / 256, dp.0);
     }
     let (dp_base, dp_frames) = dp;
 
@@ -8952,7 +9969,7 @@ pub fn run_glibc_disk(
             let prev = HEAP_STEP.swap(step, Ordering::Relaxed);
             if step > prev {
                 let files: usize = FILES.lock().iter().map(|(p, d)| p.len() + d.len()).sum();
-                let pipes: usize = PIPES.lock().iter().map(|p| p.len()).sum();
+                let pipes: usize = pipes_lock().iter().map(|p| p.len()).sum();
                 crate::serial_println!(
                     "[heap] {} MiB used | FILES {} MiB | pipes {} KiB",
                     used >> 20, files >> 20, pipes >> 10);
@@ -9112,6 +10129,7 @@ pub fn run_glibc_disk(
         for i in 0..dp_frames as u64 {
             let _ = falloc.free(dp_base + i * 4096);
         }
+        free_demand_extra(falloc);
     }
     crate::paging::free_address_space(falloc, pml4);
     for i in 0..frames as u64 {
@@ -9136,6 +10154,21 @@ pub fn run_glibc(
     envp: &[&[u8]],
     caps: u64,
 ) -> (String, u64) {
+    // Verify before execute. The program is named by argv[0] (a bare name means
+    // /bin/<name>); the dynamic loader is verified under its own path. A program
+    // without a known, valid signature does not run.
+    {
+        let name = argv.first().map(|a| core::str::from_utf8(a).unwrap_or("?")).unwrap_or("?");
+        let path = if name.starts_with('/') { String::from(name) } else { alloc::format!("/bin/{name}") };
+        if !verify_program(&path, exe) {
+            crate::serial_println!("[verify] {path}: signature INVALID or unknown, program NOT run");
+            return (String::from("verify: refused"), u64::MAX);
+        }
+        if !verify_program("/lib/ld-linux-x86-64.so.2", ldso) {
+            crate::serial_println!("[verify] /lib/ld-linux-x86-64.so.2: signature INVALID, program NOT run");
+            return (String::from("verify: refused"), u64::MAX);
+        }
+    }
     if SKIP_GLIBC_TESTS.load(Ordering::Relaxed) {
         let _ = (falloc, exe, ldso, argv, envp, caps);
         return (String::from("(skipped: chrome iteration boot)"), u64::MAX);
@@ -9368,6 +10401,7 @@ pub fn run_glibc(
         for i in 0..dp_frames as u64 {
             let _ = falloc.free(dp_base + i * 4096);
         }
+        free_demand_extra(falloc);
     }
     // Reclaim this run's address space: free the page tables (pml4/pdpt/pd) AND the
     // big contiguous arena back to the frame allocator. All this run's tasks are Dead
@@ -9763,6 +10797,12 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
         LAST_SYS[t].0.store(num, Ordering::Relaxed);
         LAST_SYS[t].1.store(a1, Ordering::Relaxed);
         LAST_SYS[t].2.store(r, Ordering::Relaxed);
+        if (t == AUDEV_TASK.load(Ordering::Relaxed) || t == AUDTH_TASK.load(Ordering::Relaxed))
+            && AUDIO_SYS_LEFT.load(Ordering::Relaxed) > 0
+        {
+            AUDIO_SYS_LEFT.fetch_sub(1, Ordering::Relaxed);
+            crate::serial_println!("[audio-sys] @{} t{t} {num}(a1={a1:#x}, a2={a2:#x}, a3={a3:#x}) = {r:#x}", crate::interrupts::ticks());
+        }
         return r;
     }
     // Capability enforcement: deny syscalls the process has no right to.
@@ -9969,11 +11009,17 @@ pub fn task_ticks(task: usize) -> u64 {
     if task < MAX_SAMPLED_TASKS { TASK_TICKS[task].load(Ordering::Relaxed) } else { 0 }
 }
 
+/// The task the tick sampler profiles: the busiest task of the previous
+/// heartbeat interval (set by the [cpu] ledger), the browser main when unset.
+pub static PROFILE_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+
 pub fn sample_user_rip(task: usize, rip: u64) {
     if task < MAX_SAMPLED_TASKS {
         TASK_TICKS[task].fetch_add(1, Ordering::Relaxed);
     }
-    if task != GLIBC_MAIN_TASK.load(Ordering::Relaxed) {
+    let target = PROFILE_TASK.load(Ordering::Relaxed);
+    let want = if target == usize::MAX { GLIBC_MAIN_TASK.load(Ordering::Relaxed) } else { target };
+    if task != want {
         return;
     }
     let i = RIP_IDX.fetch_add(1, Ordering::Relaxed) % RIP_SAMPLES;
@@ -10100,21 +11146,34 @@ pub fn dump_threads_now(why: &str) {
     let (mn, ma, mr) = last_syscall(main);
     crate::serial_println!("[threads]   main t{main} {:?}: last={mn}(a1={ma:#x})->{mr:#x}",
         thread_name(main));
-    for &t in GLIBC_THREADS.lock().iter() {
+    // Every task, not only the main process's threads: the child processes (the
+    // renderers, the network service) are where a page stalls. Snapshot the
+    // scheduler under IF=0, print without any lock held.
+    let snap = crate::sched::snapshot_tasks();
+    let names: alloc::vec::Vec<(usize, String)> = { let _g = crate::sched::IfOffGuard::new(); THREAD_NAMES.lock().clone() };
+    for &(t, cr3, state) in snap.iter() {
+        if state == crate::sched::State::Dead { continue; }
         let (n, a, r) = last_syscall(t);
-        crate::serial_println!("[threads]   t{t} {:?}: last={n}(a1={a:#x})->{r:#x}", thread_name(t));
+        let name = names.iter().find(|(x, _)| *x == t).map(|(_, n)| n.as_str()).unwrap_or("?");
+        let st = match state {
+            crate::sched::State::Ready => alloc::format!("Ready"),
+            crate::sched::State::Sleeping(w) => alloc::format!("Sleeping(until {w})"),
+            crate::sched::State::Blocked(c) => alloc::format!("Blocked({c:#x})"),
+            other => alloc::format!("{other:?}"),
+        };
+        crate::serial_println!("[threads]   t{t} cr3={cr3:#x} {name:?}: {st} last={n}(a1={a:#x})->{r:#x}");
     }
-    crate::sched::dump_states();
+    crate::serial_println!("[threads] {} tasks, tick {}", snap.len(), crate::interrupts::ticks());
     dump_rip_profile();
 }
 
 /// Syscalls executed per task, so a census can tell a process that is WORKING
 /// from one that is merely alive. A plain relaxed add per syscall: no lock, so
 /// it is safe to read from the timer tick that prints the census.
-pub static SYSCALLS_PER_TASK: [core::sync::atomic::AtomicU64; 128] = {
+pub static SYSCALLS_PER_TASK: [core::sync::atomic::AtomicU64; crate::sched::MAX_TASKS] = {
     #[allow(clippy::declare_interior_mutable_const)]
     const Z: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-    [Z; 128]
+    [Z; crate::sched::MAX_TASKS]
 };
 
 /// Log every syscall that FAILS while set. A library that reports a generic
@@ -10134,7 +11193,7 @@ pub fn trace_failures(budget: u32) {
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     {
         let t = crate::sched::current();
-        if t < 128 {
+        if t < crate::sched::MAX_TASKS {
             SYSCALLS_PER_TASK[t].fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -10206,7 +11265,7 @@ fn linux_dispatch_swapped(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64)
     // sock fd, with its result. The main-navigation socket goes silent after
     // connect while background sockets chat away — this names what (if anything)
     // ever touches it again.
-    if a1 >= 500 && a1 < 520 && crate::net::is_sock_fd(a1) {
+    if crate::net::is_sock_fd(a1) {
         use core::sync::atomic::AtomicU32;
         static SOCKLIFE: AtomicU32 = AtomicU32::new(400);
         if SOCKLIFE.load(Ordering::Relaxed) > 0 {
@@ -10311,7 +11370,49 @@ pub fn dump_main_syscalls() {
     }
 }
 
+/// Every descriptor a FORK CHILD creates must be on its own list, or its close()
+/// only marks the descriptor closed for that child and the underlying object is
+/// never freed. open/openat/creat and pipes were on the list; sockets, accepts,
+/// eventfds, epoll sets, memfds, dups, inotify and timerfds were not. The network
+/// service is a fork child that opens a UDP socket per lookup and closes it, so
+/// the AF_INET table filled up regardless of its size (16 slots in five minutes,
+/// 96 slots in under five minutes, run 26), and from then on every socket() was
+/// EPERM to chrome: net::ERR_ACCESS_DENIED on the live-site navigation. One hook
+/// after the dispatch covers every creating syscall on every trace path.
 fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    let r = linux_dispatch_inner_raw(num, a1, a2, a3, a4, a5);
+    // NOT dup/dup2/dup3: those alias an object that other holders share, and a
+    // child's close on the alias must stay a mark, as the fd-ownership work
+    // decided. Registering them (run 28) freed objects out from under NSS's
+    // initialisation in a utility process, which then aborted (nss_error -5925).
+    let creates_fd = matches!(num,
+        41 | 43 | 288 | 290 | 284 | 291 | 213 | 319 | 253 | 294 | 283 | 282 | 289);
+    if creates_fd && (r as i64) >= 0 && r < 1000 {
+        child_note_open(r as usize);
+    }
+    // Profile-directory file ops that failed or came up short (see FSDIAG_BITS).
+    if a1 < 1024 && matches!(num, 0 | 1 | 17 | 18 | 8 | 77 | 5 | 74 | 75 | 3) && fsdiag_is(a1) {
+        let err = (r as i64) < 0;
+        let short = !err && matches!(num, 0 | 1 | 17 | 18) && r < a3 && a3 <= 64;
+        if (err || short) && fsdiag_budget() {
+            crate::serial_println!("[fsdiag] t{} {num}(fd {a1}, len {a3:#x}, off {a4:#x}) = {r:#x}{} size={:?}",
+                crate::sched::current_lockfree(), if short { " SHORT" } else { "" }, vfs_size(a1 as usize));
+        }
+        if num == 3 {
+            fsdiag_mark(a1, false);
+        }
+    }
+    if num == 53 && r == 0 {
+        // socketpair writes its two descriptors into the caller's sv[2].
+        if let (Some(a), Some(b)) = (read_user::<i32>(a4), read_user::<i32>(a4 + 4)) {
+            if a >= 0 { child_note_open(a as usize); }
+            if b >= 0 { child_note_open(b as usize); }
+        }
+    }
+    r
+}
+
+fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let _ = a4; // not every syscall uses arg4/arg5 (r10/r8)
     SYSCALL_SEQ.fetch_add(1, Ordering::Relaxed); // progress heartbeat (stall detector)
     if (num as usize) < 512 {
@@ -10384,7 +11485,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     Some(v) => v,
                     None => return EFAULT,
                 };
-                { note_inet_tx(a1, bytes.len()); crate::net::sock_send(a1, &bytes) }
+                { note_inet_tx(a1, bytes.len()); inet_send(a1, &bytes) }
             } else if crate::net::is_unix_fd(a1) {
                 // write() to an AF_UNIX socket.
                 let bytes = match copy_from_user(a2, a3 as usize) {
@@ -10621,7 +11722,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     // Give the child's COMMITTED demand pages back: without this every
                     // dead child leaked its pages and the pool ran dry at ~524 MiB
                     // under MP relaunch churn (run 12 POOL EXHAUSTED).
-                    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &shared_phys_sorted());
+                    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
                     crate::procpool::free_range(arena, frames);
                     crate::procpool::free(pml4);
                     free_thread_kstack(cur);
@@ -10867,6 +11968,45 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     Some((fi, _)) => fi,
                     None => return (-9i64) as u64, // -EBADF
                 };
+                if fi == SND_PCM_FI || fi == SND_CTL_FI {
+                    // The PCM data buffer (offset 0) maps the HDA ring itself into
+                    // the process: libasound's plug layer (rate/format conversion, what
+                    // chrome opens as plughw:0,0) drives its slave in MMAP_INTERLEAVED
+                    // access only, and refused the device that offered RW alone (run
+                    // 78: "Rate 48000Hz not available" before any refine reached the
+                    // kernel). Samples then land in the ring directly; appl_ptr and
+                    // hw_ptr travel through SYNC_PTR, since the status and control
+                    // pages (offsets 0x80000000 and 0x81000000) stay unmapped.
+                    let off = unsafe { recover_mmap_offset() };
+                    if fi == SND_PCM_FI && off == 0 {
+                        if let Some((phys, bytes)) = crate::alsa::ring_phys() {
+                            let pages = ((len.min(bytes as u64) + 0xFFF) / 4096).max(1);
+                            ensure_globals_for_current();
+                            let pml4 = {
+                                use x86_64::registers::control::Cr3;
+                                Cr3::read().0.start_address().as_u64()
+                            };
+                            let start = DEMAND_NEXT.fetch_add(pages * 4096, Ordering::Relaxed);
+                            if start + pages * 4096 > DEMAND_BASE + DEMAND_SIZE {
+                                return (-12i64) as u64; // -ENOMEM
+                            }
+                            for i in 0..pages {
+                                let va = start + i * 4096;
+                                if !crate::paging::map_demand_4k(pml4, va, phys + i * 4096) {
+                                    return (-12i64) as u64;
+                                }
+                                unsafe { core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags)); }
+                            }
+                            // An alias entry keeps munmap and madvise from freeing or
+                            // zeroing the ring's frames: they belong to the device.
+                            SHARED_ALIASES.lock().push((start, pages * 4096, SND_PCM_FI));
+                            SHARED_ANY.store(true, Ordering::Relaxed);
+                            crate::serial_println!("[alsa] mmap ring {} KiB at {start:#x} (phys {phys:#x})", pages * 4);
+                            return start;
+                        }
+                    }
+                    return (-19i64) as u64; // -ENODEV
+                }
                 // Only in-RAM files are writable-shared; a disk-served (EuroPack) file is
                 // read-only, so the existing copy path is already correct for it.
                 if fi < DISK_FI_BASE || fi == WAD_FI || fi == PROC_MEM_FI {
@@ -10938,7 +12078,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                             }
                             HEAP_BREAK.store(b + region, Ordering::Relaxed);
                             let files = FILES.lock();
-                            let data = &files[fi].1;
+                            let data: &[u8] = files.get(fi).map(|f| &f.1[..]).unwrap_or(&[]);
                             // SAFETY: b..b+region validated in-arena above.
                             unsafe {
                                 core::ptr::write_bytes(b as *mut u8, 0, region as usize);
@@ -11023,6 +12163,24 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 // loader placing a segment (file-backed) or .bss (anon) at base+vaddr.
                 if a4 & MAP_FIXED != 0 && a1 != 0 && in_demand(a1 & !0xFFF) {
                     let base = a1 & !0xFFF;
+                    // MAP_FIXED REPLACES what was mapped there: the old pages go, a
+                    // later touch reads zeros (or the new file's bytes). V8's
+                    // DecommitPages and PartitionAlloc's DecommitAndZeroSystemPages
+                    // are exactly this call with PROT_NONE over live heap pages, and
+                    // both count on fresh zero pages when they recommit. Keeping the
+                    // old frames gave the renderer its stale heap back: a hash map
+                    // whose every slot read "occupied" (a parser thread probing it
+                    // forever, run 73) and an Oilpan header behind a garbage pointer
+                    // (the marking visitor's fault of runs 54, 67 and 73).
+                    let (unmapped, freed) = demand_drop_range(base, base + len);
+                    prot_none_set(base, base + len, a3 == 0);
+                    let calls = FIXED_CALLS.fetch_add(1, Ordering::Relaxed);
+                    let total = FIXED_FREED.fetch_add(freed as u64, Ordering::Relaxed) + freed as u64;
+                    if unmapped > 0 && (calls < 8 || (calls + 1) % 512 == 0) {
+                        crate::serial_println!(
+                            "[mmap-fixed] #{} [{base:#x},{:#x}) prot={a3:#x} {}: unmapped {unmapped} freed {freed} (total freed {total})",
+                            calls + 1, base + len, if file_backed { "file" } else { "anon" });
+                    }
                     if file_backed {
                         let off = unsafe { recover_mmap_offset() } as usize;
                         let fds = OPEN_FDS.lock();
@@ -11035,7 +12193,16 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     } else {
                         // Anon overlay (.bss): a zero-fill shadow (fidx == !0) that hides
                         // any flat file descriptor beneath it, so bss reads back zero.
-                        DEMAND_FILE_MAPS.lock().push((base, len, usize::MAX, 0, 0));
+                        // Only where a file mapping lies beneath: over a plain anonymous
+                        // reservation a fault already gives zeros, and V8 issues this
+                        // call for every decommit, which would grow the map list
+                        // without bound (each fault searches it).
+                        let mut maps = DEMAND_FILE_MAPS.lock();
+                        let over_file = maps.iter().any(|&(b, l, fidx, _, _)|
+                            fidx != usize::MAX && b < base + len && base < b + l);
+                        if over_file {
+                            maps.push((base, len, usize::MAX, 0, 0));
+                        }
                     }
                     return base;
                 }
@@ -11111,7 +12278,8 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     if copy > 0 {
                         // SAFETY: base..base+copy validated in-arena above.
                         let dst = unsafe { core::slice::from_raw_parts_mut(base as *mut u8, copy) };
-                        if !disk_read_bytes(dev, dbase + off as u64, dst) {
+                        let _ = (dev, dbase);
+                        if !pack_read(fi - DISK_FI_BASE, off as u64, dst) {
                             return (-5i64) as u64; // -EIO
                         }
                     }
@@ -11119,7 +12287,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     return base;
                 }
                 let files = FILES.lock();
-                let data = &files[fi].1;
+                let data: &[u8] = files.get(fi).map(|f| &f.1[..]).unwrap_or(&[]);
                 let copy = if off < data.len() { (data.len() - off).min(len as usize) } else { 0 };
                 unsafe {
                     if copy > 0 {
@@ -11143,7 +12311,175 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 base
             }
         }
-        11 => 0, // munmap — the bump allocator does not give back, but silently succeeds
+        11 => {
+            // munmap(addr, len). The arena window is a bump allocator that never gives
+            // back; the demand region does: its pages are unmapped and the process's
+            // own frames freed (a shared window's frames stay with the file). A
+            // renderer's heap churn (V8 FreePages, thread stacks, transfer buffers)
+            // otherwise leaks its way through the demand pool over a long session.
+            let start = a1 & !0xFFF;
+            let end = start.saturating_add((a2 + 0xFFF) & !0xFFF);
+            if start >= DEMAND_BASE && end <= DEMAND_BASE + DEMAND_SIZE && end > start {
+                let (unmapped, freed) = demand_drop_range(start, end);
+                prot_none_set(start, end, false);
+                let calls = MUNMAP_CALLS.fetch_add(1, Ordering::Relaxed);
+                let total = MUNMAP_FREED.fetch_add(freed as u64, Ordering::Relaxed) + freed as u64;
+                if unmapped > 0 && (calls < 8 || (calls + 1) % 512 == 0) {
+                    crate::serial_println!(
+                        "[munmap] #{} [{start:#x},{end:#x}): unmapped {unmapped} freed {freed} (total freed {total})",
+                        calls + 1);
+                }
+            }
+            0
+        }
+        25 => {
+            // mremap(old=a1, old_len=a2, new_len=a3, flags=a4, new_addr=a5).
+            //
+            // Chrome names this one twelve times in a single desktop run. Without it
+            // the Simple Cache backend reports "wrong file structure on disk",
+            // profile initialisation fails, and the browser stops on a modal
+            // ("Something went wrong when opening your profile") before it ever paints
+            // a page. It is the blocker the binary itself pointed at.
+            //
+            // The arena allocator never gives memory back (munmap frees demand-region
+            // pages only), which decides the shapes honestly available here:
+            //   shrink            -> keep the address, the mapping just covers less
+            //   grow at a bump top-> extend the bump, no copy
+            //   grow elsewhere    -> allocate and copy, if the caller allows a move
+            // A region whose bytes are shared with another mapping is REFUSED rather
+            // than moved: copying it would hand the caller a private snapshot and
+            // silently break the other side, which is the bug class that made pages
+            // come up empty before (see the MAP_SHARED notes in mmap above).
+            const MREMAP_MAYMOVE: u64 = 1;
+            const MREMAP_FIXED: u64 = 2;
+            const MREMAP_DONTUNMAP: u64 = 4;
+            let old = a1;
+            let old_len = (a2 + 0xFFF) & !0xFFF;
+            let new_len = (a3 + 0xFFF) & !0xFFF;
+            if old & 0xFFF != 0 || new_len == 0 {
+                return (-22i64) as u64; // -EINVAL
+            }
+            // Honouring these exactly needs a real VMA list (place at a chosen address,
+            // or keep the old mapping alive alongside the new one). Say EINVAL instead
+            // of pretending: a caller that gets a wrong answer here corrupts memory.
+            if a4 & (MREMAP_FIXED | MREMAP_DONTUNMAP) != 0 {
+                return (-22i64) as u64; // -EINVAL
+            }
+            if !in_user_arena(old, old_len.max(4096) as usize) {
+                return EFAULT;
+            }
+            if new_len <= old_len {
+                return old; // nothing to free, so the address stands
+            }
+            let grow = new_len - old_len;
+
+            // In-place growth when this mapping is the last thing handed out from its
+            // bump. That is the ordinary realloc pattern and costs no copy at all.
+            if old >= DEMAND_BASE {
+                let next = DEMAND_NEXT.load(Ordering::Relaxed);
+                if old + old_len == next
+                    && next + grow <= DEMAND_BASE + DEMAND_SIZE
+                    && DEMAND_NEXT
+                        .compare_exchange(next, next + grow, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_ok()
+                {
+                    return old; // the new tail faults in as the zeroes it must read
+                }
+            } else {
+                let brk = HEAP_BREAK.load(Ordering::Relaxed);
+                if old + old_len == brk && brk + grow <= HEAP_END.load(Ordering::Relaxed) {
+                    HEAP_BREAK.store(brk + grow, Ordering::Relaxed);
+                    if !zero_user(old + old_len, grow as usize) {
+                        return EFAULT;
+                    }
+                    return old;
+                }
+            }
+
+            if a4 & MREMAP_MAYMOVE == 0 {
+                return (-12i64) as u64; // -ENOMEM: no room here and no move allowed
+            }
+
+            // Each lock is taken and dropped in its own statement: an `||` chain would
+            // hold the first guard across the second lock, the hazard that froze a core
+            // once already (see the SHARED_MAPS note in mmap).
+            // Each lookup is its own statement so no guard is held across the next
+            // lock, and each says WHICH kind of mapping this is: "shared or
+            // file-backed" was too vague to act on, and the three cases want three
+            // different answers.
+            let end = old + old_len;
+            let alias = {
+                let a = SHARED_ALIASES.lock();
+                a.iter().find(|&&(b, l, _)| old >= b && old < b + l).copied()
+            };
+            // A MAP_SHARED window onto an in-RAM file. Growing it must NOT copy: the
+            // point of the mapping is that its frames belong to the file. Hand out a
+            // bigger window onto the SAME file instead, exactly as mmap does for every
+            // shared mapping (fresh address, shared frames). The file itself grew
+            // (chrome ftruncates before it remaps), so the extra pages fault in from it.
+            if let Some((abase, _alen, fi)) = alias {
+                let off = old - abase;
+                let region = ((off + new_len + 0xFFF) & !0xFFF).max(4096);
+                let start = DEMAND_NEXT.fetch_add(region, Ordering::Relaxed);
+                if start + region > DEMAND_BASE + DEMAND_SIZE {
+                    DEMAND_NEXT.fetch_sub(region, Ordering::Relaxed);
+                    return (-12i64) as u64; // -ENOMEM
+                }
+                SHARED_ALIASES.lock().push((start, region, fi));
+                SHARED_ANY.store(true, Ordering::Relaxed);
+                crate::serial_println!(
+                    "[linux-abi] mremap {old:#x} {old_len} -> {new_len}: shared window on {} re-aliased at {:#x} (same frames, no copy)",
+                    fi_path(fi), start + off);
+                return start + off;
+            }
+            let in_maps = SHARED_MAPS.lock().iter().any(|&(_, b, l)| old < b + l as u64 && end > b);
+            if in_maps {
+                crate::serial_println!(
+                    "[linux-abi] mremap {old:#x} {old_len} -> {new_len}: bump-allocated shared region, cannot grow in place");
+                return (-22i64) as u64; // -EINVAL
+            }
+            // A PRIVATE file-backed demand mapping. Moving it would copy only the pages
+            // already faulted in and silently drop anything written to the rest, so
+            // refuse instead of handing back a half-populated region.
+            if demand_file_backed(old, old_len as usize) {
+                crate::serial_println!(
+                    "[linux-abi] mremap {old:#x} {old_len} -> {new_len}: private file-backed mapping, refusing to move");
+                return (-22i64) as u64; // -EINVAL
+            }
+
+            // Same placement policy as an anonymous mmap: a big span goes to the sparse
+            // demand region, a small one to the arena window.
+            let dst = if DEMAND_ENABLED.load(Ordering::Relaxed) && new_len >= DEMAND_MIN_BYTES {
+                let start = DEMAND_NEXT.fetch_add(new_len, Ordering::Relaxed);
+                if start + new_len > DEMAND_BASE + DEMAND_SIZE {
+                    DEMAND_NEXT.fetch_sub(new_len, Ordering::Relaxed);
+                    return (-12i64) as u64; // -ENOMEM
+                }
+                start
+            } else {
+                let b = (HEAP_BREAK.load(Ordering::Relaxed) + 0xFFF) & !0xFFF;
+                if b + new_len > HEAP_END.load(Ordering::Relaxed) {
+                    return (-12i64) as u64; // -ENOMEM
+                }
+                HEAP_BREAK.store(b + new_len, Ordering::Relaxed);
+                b
+            };
+            if !in_user_arena(dst, new_len as usize) {
+                return (-12i64) as u64; // -ENOMEM
+            }
+            // SAFETY: both spans passed in_user_arena above. A demand-region page the
+            // copy touches is committed by the ring-0 demand fault handler, which is
+            // exactly why in_user_arena accepts those addresses for kernel access.
+            unsafe {
+                core::ptr::copy_nonoverlapping(old as *const u8, dst as *mut u8, old_len as usize);
+                core::ptr::write_bytes((dst + old_len) as *mut u8, 0, grow as usize);
+            }
+            crate::serial_println!("[linux-abi] mremap {old:#x} {old_len} -> {dst:#x} {new_len} (moved + copied)");
+            dst
+        }
+        26 => 0, // msync — every mapping here is already the one memory its file is
+                 // (MAP_SHARED hands out the same frames), so there is nothing to flush
+                 // and reporting success is the truthful answer, not a stub.
         158 => {
             // arch_prctl(code, addr): ARCH_SET_FS=0x1002 sets FS_BASE (musl TLS).
             match a1 {
@@ -11181,7 +12517,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 }
                 let total = buf.len() as u64;
                 if crate::net::is_unix_fd(a1) { crate::net::unix_fd_send(a1, &buf); }
-                else { note_inet_tx(a1, buf.len()); crate::net::sock_send(a1, &buf); }
+                else { note_inet_tx(a1, buf.len()); inet_send(a1, &buf); }
                 return total;
             }
             let to_file = a1 != 1 && a1 != 2;
@@ -11238,7 +12574,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     }
                 }
             } else if crate::net::is_sock_fd(a1) {
-                let data = crate::net::sock_recv(a1, a3 as usize);
+                let data = inet_recv(a1, a3 as usize);
                 if data.is_empty() && !crate::net::sock_eof(a1) {
                     return (-11i64) as u64; // -EAGAIN, not EOF (see recvfrom)
                 }
@@ -11338,7 +12674,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 let data = if crate::net::is_unix_fd(a1) {
                     crate::net::unix_fd_recv(a1, cap)
                 } else {
-                    crate::net::sock_recv(a1, cap)
+                    inet_recv(a1, cap)
                 };
                 if data.is_empty() && crate::net::is_unix_fd(a1) {
                     if crate::net::unix_fd_at_eof(a1) {
@@ -11498,7 +12834,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
                         fork_child_release_fds(ctask);
                         child_opened_release(ctask);
-                        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &shared_phys_sorted());
+                        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
                         crate::procpool::free_range(arena, frames);
                         crate::procpool::free(pml4);
                         free_thread_kstack(ctask);
@@ -11563,6 +12899,26 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
             8
         }
+        253 | 294 => {
+            // inotify_init / inotify_init1: an eventfd that starts at 0 and is never
+            // written. Nothing on this VFS changes a file behind a program's back
+            // (there is no other writer to watch for), so "a watch that never
+            // fires" is the truthful instance, not a stub: readiness stays false,
+            // read blocks or EAGAINs, epoll accepts it. Chrome's FilePathWatcher
+            // took ENOSYS as an error at every profile-directory watch.
+            if num == 294 && a1 & !(0x800 | 0x8_0000) != 0 {
+                return (-22i64) as u64; // -EINVAL: only IN_NONBLOCK / IN_CLOEXEC
+            }
+            match crate::net::eventfd_create(0) {
+                Some(fd) => {
+                    if num == 294 && a1 & 0x8_0000 != 0 { fd_set_cloexec(fd, true); }
+                    fd
+                }
+                None => (-24i64) as u64, // -EMFILE
+            }
+        }
+        254 => 1, // inotify_add_watch -> watch descriptor 1 (it will never report)
+        255 => 0, // inotify_rm_watch
         290 => {
             // eventfd2(initval, flags): GLib's GMainContext wakeup fd (GWakeup). Only
             // EFD_SEMAPHORE(1)/EFD_NONBLOCK(0x800)/EFD_CLOEXEC(0x80000) are valid; any
@@ -11946,7 +13302,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                         }
                     }
                 }
-                { note_inet_tx(a1, bytes.len()); crate::net::sock_send(a1, &bytes) }
+                { note_inet_tx(a1, bytes.len()); inet_send(a1, &bytes) }
             }
         }
         45 => {
@@ -11958,8 +13314,10 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     Some(d) => d,
                     None => return (-11i64) as u64,
                 }
+            } else if a4 & 2 != 0 {
+                crate::net::sock_peek_nowait(a1, a3 as usize) // MSG_PEEK: nothing consumed
             } else {
-                crate::net::sock_recv(a1, a3 as usize)
+                inet_recv(a1, a3 as usize)
             };
             if data.is_empty() && crate::net::is_unix_fd(a1) {
                 if crate::net::unix_fd_at_eof(a1) {
@@ -12048,7 +13406,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 }
             }
             let total = buf.len() as u64;
-            if crate::net::is_unix_fd(a1) { crate::net::unix_fd_send(a1, &buf); } else { crate::net::sock_send(a1, &buf); }
+            if crate::net::is_unix_fd(a1) { crate::net::unix_fd_send(a1, &buf); } else { inet_send(a1, &buf); }
             total
         }
         47 => {
@@ -12074,8 +13432,10 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                     Some(d) => d,
                     None => return (-11i64) as u64, // -EAGAIN: asked not to wait
                 }
+            } else if a3 & 2 != 0 {
+                crate::net::sock_peek_nowait(a1, cap) // MSG_PEEK: nothing consumed
             } else {
-                crate::net::sock_recv(a1, cap)
+                inet_recv(a1, cap)
             };
             if crate::net::is_unix_fd(a1) && !data.is_empty() {
                 scm_msg_consume(a1, data.len());
@@ -12217,6 +13577,23 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // O_CREAT=0x40 creates; O_TRUNC=0x200 truncates; O_APPEND=0x400 -> at the end.
             let path = resolve_at(a1, user_cstr(a2, 256));
             let flags = a3;
+            // No GTK for the browser (W9): chrome dlopens libgtk-3.so.0 for its Linux
+            // toolkit integration (theme, fonts, native dialogs) and dies in
+            // _gtk_css_value_ref on a freed slot in about half the runs (the value
+            // pointer reads as PartitionAlloc's encoded freelist word: -1 for the last
+            // entry, non-canonical otherwise), a use-after-free in GTK or chromium's
+            // GTK layer this kernel cannot repair. --ui-toolkit=qt did not keep GTK
+            // out (run 39 still mapped it). With the open refused, chrome runs the way
+            // it does on any system without GTK. The boot-time GTK demo is unaffected.
+            if (path.ends_with(b"/libgtk-3.so.0") || path.ends_with(b"/libgtk-4.so.1"))
+                && current_app().ends_with("chrome")
+            {
+                if !GTK_DENIED.swap(true, Ordering::Relaxed) {
+                    crate::serial_println!("[gtk] open of {:?} refused for chrome (W9: GTK use-after-free)",
+                        core::str::from_utf8(&path).unwrap_or("?"));
+                }
+                return (-2i64) as u64; // ENOENT
+            }
             // DNS-config census: every open of the resolver's config files, loudly.
             // Chrome reports DNS_PROBE_FINISHED_BAD_CONFIG without a single UDP
             // packet; whether it ever READS resolv.conf decides where that dies.
@@ -12227,6 +13604,25 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             // PartitionAlloc opens it). Not a static VFS file — a special live fd.
             if path == b"/proc/self/mem" || path == b"/proc/thread-self/mem" {
                 return proc_mem_open();
+            }
+            // The ALSA playback device and its control node (W12).
+            if path.as_slice() == b"/dev/snd/pcmC0D0p" {
+                if !crate::alsa::present() {
+                    return (-19i64) as u64; // -ENODEV: no HD-Audio stream
+                }
+                crate::alsa::pcm_open();
+                let fd = open_low_fd(SND_PCM_FI);
+                set_fd_accmode(fd, flags);
+                if fd != u64::MAX && flags & 0x800 != 0 { fd_set_nonblock(fd, true); }
+                return fd;
+            }
+            if path.as_slice() == b"/dev/snd/controlC0" {
+                if !crate::alsa::present() {
+                    return (-19i64) as u64;
+                }
+                let fd = open_low_fd(SND_CTL_FI);
+                set_fd_accmode(fd, flags);
+                return fd;
             }
             // Opening a directory (no O_CREAT) -> dir fd for getdents64. O_DIRECTORY
             // (0x10000): chrome's disk-cache backend opens each cache dir this way to
@@ -12254,6 +13650,13 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 vfs_open(&path)
             };
             set_fd_accmode(fd, flags); // report the real access mode in F_GETFL
+            if fd != u64::MAX && fd < 1024 && path.starts_with(b"/tmp/cr") {
+                fsdiag_mark(fd, true);
+                if flags & 0x40 != 0 && fsdiag_budget() {
+                    crate::serial_println!("[fsdiag] t{} openat({:?}, flags {flags:#x}) = fd {fd}",
+                        crate::sched::current_lockfree(), core::str::from_utf8(&path).unwrap_or("?"));
+                }
+            }
             if fd != u64::MAX && flags & 0x8_0000 != 0 {
                 fd_set_cloexec(fd, true); // O_CLOEXEC
             }
@@ -12267,6 +13670,17 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 }
             }
             diag_pack_path("openat", &path, fd);
+            if fd == u64::MAX {
+                // Say WHICH failure: a missing file is ENOENT, a full descriptor table
+                // EMFILE. The blanket -1 (EPERM) told chrome's Simple Cache that its
+                // fake index existed but could not be opened ("wrong file structure on
+                // disk: 2" = kBadFakeIndexFile), so it never created one and the whole
+                // disk cache stayed off; base::File maps ENOENT to the not-found case
+                // that WRITES the index.
+                let exists = FILES.lock().iter().any(|(p, _)| p.as_bytes() == &path[..])
+                    || DISK_FILES.lock().iter().any(|(p, _, _, _)| p.as_bytes() == &path[..]);
+                return if exists || flags & 0x40 != 0 { (-24i64) as u64 } else { (-2i64) as u64 };
+            }
             fd
         }
         2 => {
@@ -12450,6 +13864,19 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 ((statbuf + 8) as *mut u64).write(ino); // st_ino (offset 8): UNIQUE per file
                 ((statbuf + 16) as *mut u64).write(1); // st_nlink (offset 16)
                 (statbuf as *mut u32).add(6).write(0o100644); // st_mode (offset 24): S_IFREG|0644
+                if num == 5 {
+                    match fd_fi(a1) {
+                        Some(SND_PCM_FI) => {
+                            (statbuf as *mut u32).add(6).write(0o020666); // S_IFCHR|0666
+                            ((statbuf + 40) as *mut u64).write((116 << 8) | 16); // st_rdev: snd, pcmC0D0p
+                        }
+                        Some(SND_CTL_FI) => {
+                            (statbuf as *mut u32).add(6).write(0o020666);
+                            ((statbuf + 40) as *mut u64).write(116 << 8); // controlC0
+                        }
+                        _ => {}
+                    }
+                }
                 ((statbuf + 48) as *mut u64).write(size as u64); // st_size (offset 48)
                 ((statbuf + 56) as *mut u64).write(4096); // st_blksize (offset 56)
             }
@@ -12526,11 +13953,47 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         77 => vfs_ftruncate(a1 as usize, a2 as usize), // ftruncate(fd, len)
         74 | 75 => 0, // fsync / fdatasync: VFS is in-RAM -> nothing to flush, succeed
         82 => vfs_rename(&user_cstr(a1, 256), &user_cstr(a2, 256)), // rename(old, new)
+        86 => vfs_link(&user_cstr(a1, 256), &user_cstr(a2, 256)),   // link(old, new)
+        265 => vfs_link(&user_cstr(a2, 256), &user_cstr(a4, 256)),  // linkat(ofd,old,nfd,new,flags)
+        98 => {
+            // getrusage(who, *rusage): 144 bytes of zeros. Nothing here accounts
+            // CPU time or faults per process yet, and zero is what an honest
+            // "unmeasured" reads as; chrome only feeds it into metrics.
+            if !zero_user(a2, 144) {
+                return EFAULT;
+            }
+            0
+        }
         264 => vfs_rename(&user_cstr(a2, 256), &user_cstr(a4, 256)), // renameat(ofd,old,nfd,new)
         316 => vfs_rename(&user_cstr(a2, 256), &user_cstr(a4, 256)), // renameat2(ofd,old,nfd,new,flags)
         85 => vfs_open_create(&user_cstr(a1, 256), true), // creat(path, mode) = open O_CREAT|O_TRUNC
         217 => vfs_getdents64(a1 as usize, a2, a3 as usize), // getdents64(fd, dirp, count)
-        16 => 0,  // ioctl — pretend success (isatty/TCGETS): stdout is a tty
+        16 if a2 == 0x541b => {
+            // FIONREAD: bytes readable now, written to *arg (int). Chrome's
+            // SyncSocket::Peek asks this after poll() says readable, and the audio
+            // service's SyncReader trusts the answer: an ioctl that returned 0 without
+            // filling it read as "0 bytes", so every audio buffer "timed out", the
+            // output was silence, and the renderer's replies piled up unread on the
+            // socket (22,308 bytes on fd 633 in run 106). Unix sockets and pipes here;
+            // an AF_INET socket answers 0 (not needed by anything so far).
+            let n: usize = if crate::net::is_unix_fd(a1) {
+                crate::net::unix_fd_available(a1)
+            } else if (a1 as usize) < MAX_FD && is_pipe_fd(a1 as usize) {
+                match PIPE_FDS.lock()[a1 as usize] {
+                    Some((id, false)) => pipes_lock()[id].len(),
+                    _ => 0,
+                }
+            } else {
+                0
+            };
+            if write_user::<i32>(a3, n.min(i32::MAX as usize) as i32) { 0 } else { EFAULT }
+        }
+        16 => match fd_fi(a1) {
+            // The sound devices are the only fds with a real ioctl surface here.
+            Some(SND_PCM_FI) => crate::alsa::pcm_ioctl(a2, a3),
+            Some(SND_CTL_FI) => crate::alsa::ctl_ioctl(a2, a3),
+            _ => 0, // pretend success (isatty/TCGETS): stdout is a tty
+        },
         10 => {
             // mprotect(addr, len, prot): honor PROT_NONE (prot==0) so guard pages become
             // inaccessible (EFAULT on a syscall pointer, fault on ring-3 access) — a
@@ -12776,7 +14239,21 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
                 1034 => seals_get(a1),             // F_GET_SEALS
                 1 => u64::from(fd_is_cloexec(a1)), // F_GETFD -> FD_CLOEXEC bit
                 2 => { fd_set_cloexec(a1, a3 & 1 != 0); 0 } // F_SETFD
-                _ => 0, // F_DUPFD/… pretend success
+                5 | 36 => {
+                    // F_GETLK / F_OFD_GETLK: no other process holds record locks here,
+                    // so the answer is "unlocked": l_type (i16 at offset 0 of struct
+                    // flock) = F_UNLCK. Answering 0 WITHOUT writing it left SQLite's
+                    // own F_WRLCK in the struct, which unixCheckReservedLock reads as
+                    // "reserved lock held": SQLITE_BUSY on chrome's profile databases,
+                    // "Could not open the quota database", "Failed to load tokens
+                    // (invalid SQL statement)" in Web Data, and the profile-error
+                    // dialog at every start (W2).
+                    if a3 != 0 {
+                        let _ = write_user::<i16>(a3, 2);
+                    }
+                    0
+                }
+                _ => 0, // F_DUPFD/F_SETLK/F_SETLKW/… pretend success
             }
         }
         79 => {
@@ -12809,7 +14286,44 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             }
             0
         }
-        221 | 28 => 0, // fadvise64 / madvise — advisory only; safe no-op success
+        221 => 0, // fadvise64 — advisory only; safe no-op success
+        28 => madvise(a1, a2, a3),
+        307 | 299 => {
+            // sendmmsg / recvmmsg(fd, msgvec, vlen, flags[, timeout]): one sendmsg /
+            // recvmsg per entry. An entry is a msghdr (56 B) followed by msg_len (u32)
+            // and padding, 64 B in all; the count of completed entries comes back, or
+            // the first error when nothing completed. recvmmsg stops at the first
+            // EAGAIN, which is what a non-blocking caller (chrome's UDP/QUIC sockets,
+            // 307 was the last ENOSYS in a run) expects.
+            let inner = if num == 307 { 46 } else { 47 };
+            let vlen = (a3 as usize).min(64);
+            let mut done = 0u64;
+            for i in 0..vlen {
+                let hdr = a2 + (i as u64) * 64;
+                let r = linux_dispatch_inner_raw(inner, a1, hdr, a4, 0, 0);
+                if (r as i64) < 0 {
+                    if done == 0 {
+                        return r;
+                    }
+                    break;
+                }
+                let _ = write_user::<u32>(hdr + 56, r as u32);
+                done += 1;
+            }
+            done
+        }
+        // chmod / fchmod / fchmodat: the flat VFS keeps no modes (stat reports the
+        // 0700 chrome expects on its profile); 17 ENOSYS per run for nothing.
+        90 | 91 | 268 => 0,
+        // sched_setparam / sched_getparam / sched_getscheduler: every thread is
+        // SCHED_OTHER at priority 0 here (48 ENOSYS each per run from the
+        // renderer's thread-priority code).
+        142 => { if a2 != 0 { let _ = write_user::<i32>(a2, 0); } 0 }
+        143 => 0,
+        145 => 0,
+        // sigaltstack: no signal delivery here, so the alternate stack is moot;
+        // success keeps chrome's crash-handler setup quiet (8 ENOSYS per run).
+        131 => 0,
         334 => (-38i64) as u64, // rseq — not supported; glibc falls back gracefully
         21 | 269 => {
             // access(path, mode) / faccessat(dirfd, path, mode): 0 if it exists.
@@ -12973,8 +14487,16 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             crate::serial_println!(
                 "[abort] t{} {:?} tgkill(tgid={a1}, tid={a2}, sig={a3}) — a glibc abort/assert fired; see [abort] __abort_msg in the stall dump",
                 crate::sched::current(), thread_name(crate::sched::current()));
+            // A fatal signal to the calling thread ends the PROCESS, as on Linux
+            // (SIGABRT/SIGKILL/SIGSEGV/SIGTERM default to termination). Returning 0
+            // let glibc's abort() fall through to its hlt, a #GP in ring 3 with the
+            // process's threads left holding their locks (run 50, twice).
+            if matches!(a3, 6 | 9 | 11 | 15) && (a2 == 0 || a2 == crate::sched::current() as u64 || a1 == 1) {
+                return linux_dispatch_inner_raw(231, 128 + a3, 0, 0, 0, 0);
+            }
             0
         }
+        112 => 1, // setsid: the new session's id is the caller's pid, which is 1 here
         137 | 138 => {
             // statfs(path, buf) / fstatfs(fd, buf): report a normal LOCAL filesystem.
             // fontconfig statfs()es its font + cache dirs to detect network mounts; an

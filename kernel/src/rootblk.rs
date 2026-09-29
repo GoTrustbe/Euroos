@@ -108,7 +108,7 @@ pub fn cache_flush() {
 /// to virtio-blk). Virtio keeps its `dev` index (device 0 uses the write-back
 /// cache above); NVMe/AHCI do uncached direct I/O like the extra virtio disks.
 #[derive(Clone, Copy)]
-enum Backend {
+pub(crate) enum Backend {
     Virtio(usize),
     Nvme,
     Ahci(usize),
@@ -145,6 +145,12 @@ impl RootBlk {
     }
     pub fn is_disk(&self) -> bool {
         self.on_disk
+    }
+    /// Remember which physical disk carries the root filesystem. The A/B update
+    /// path (GPT lookup, slot_config, slot partitions) addresses THAT disk, whatever
+    /// its bus: virtio-blk, NVMe or AHCI. Called once, after the root is chosen.
+    pub fn register_as_boot_disk(&self) {
+        *BOOT.lock() = Some(if self.on_disk { Some(self.backend) } else { None });
     }
 
     /// Read one 4 KiB block starting at 512-byte sector `base` from the backend.
@@ -249,5 +255,54 @@ impl BlockDevice for RootBlk {
             }
         }
         Ok(())
+    }
+}
+
+// ── The boot disk, bus-agnostic, for everything outside the root filesystem ──
+// (GPT, the ESP `slot_config`, the A/B slot partitions, the raw slot block).
+// Reads and writes go STRAIGHT to the device, never through the root cache: those
+// sectors are outside the root partition, so there is nothing to keep coherent,
+// and a read-back after a write must see the medium, not a cache line.
+/// `None` = root not chosen yet; `Some(None)` = RAM root, there is NO boot disk
+/// (a foreign data disk on virtio 0 must never receive slot_config writes);
+/// `Some(Some(b))` = the disk the root lives on.
+static BOOT: spin::Mutex<Option<Option<Backend>>> = spin::Mutex::new(None);
+fn boot_backend() -> Option<Backend> {
+    match *BOOT.lock() {
+        Some(chosen) => chosen,
+        // Before the root is chosen (the GPT lookup that chooses it runs first) the
+        // candidate is virtio-blk 0 when there is one: read-only use in practice.
+        None => if crate::virtio_blk::present() { Some(Backend::Virtio(0)) } else { None },
+    }
+}
+/// Is there a disk-backed root at all (an installed system)?
+pub fn boot_present() -> bool {
+    boot_backend().is_some()
+}
+/// Read whole 512-byte sectors from the boot disk (`buf.len()` multiple of 512, ≤ 4 KiB).
+pub fn boot_read(sector: u64, buf: &mut [u8]) -> bool {
+    match boot_backend() {
+        Some(Backend::Virtio(dev)) => crate::virtio_blk::read_io_dev(dev, sector, buf),
+        Some(Backend::Nvme) => crate::nvme::read_sectors(sector, buf),
+        Some(Backend::Ahci(idx)) => crate::ahci::read_sectors(idx, sector, buf),
+        None => false,
+    }
+}
+/// Write whole 512-byte sectors to the boot disk.
+pub fn boot_write(sector: u64, buf: &[u8]) -> bool {
+    match boot_backend() {
+        Some(Backend::Virtio(dev)) => crate::virtio_blk::write_io_dev(dev, sector, buf),
+        Some(Backend::Nvme) => crate::nvme::write_sectors(sector, buf),
+        Some(Backend::Ahci(idx)) => crate::ahci::write_sectors(idx, sector, buf),
+        None => false,
+    }
+}
+/// Force the boot disk's volatile write cache to the medium (virtio FLUSH; the
+/// NVMe and AHCI drivers complete writes synchronously).
+pub fn boot_flush() -> bool {
+    match boot_backend() {
+        Some(Backend::Virtio(dev)) => crate::virtio_blk::flush_dev(dev),
+        Some(_) => true,
+        None => false,
     }
 }
