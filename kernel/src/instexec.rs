@@ -174,7 +174,7 @@ pub fn ahci_eurofs_partition(idx: usize) -> Option<(u64, u64)> {
 /// Install a bootable EuroOS to AHCI/SATA disk `idx` (Metal M2-3). Same GPT +
 /// ESP + EuroFS root over the AHCI driver. Only ever called on a blank disk, so
 /// the boot medium (partitioned) is never touched.
-pub fn install_to_ahci(idx: usize, cfg: &Config) -> bool {
+pub fn install_to_ahci(idx: usize, cfg: &Config, progress: &dyn Fn(&str)) -> bool {
     let total = crate::ahci::disk_sectors(idx);
     if total == 0 {
         return false;
@@ -183,6 +183,7 @@ pub fn install_to_ahci(idx: usize, cfg: &Config) -> bool {
         cfg,
         total,
         &alloc::format!("AHCI disk {idx}"),
+        progress,
         |lba, bytes| {
             crate::ahci::write_sectors(idx, lba, bytes);
         },
@@ -198,7 +199,7 @@ pub fn install_to_ahci(idx: usize, cfg: &Config) -> bool {
 /// + the EuroFS root partition is formatted and PROVISIONED with `cfg`
 /// (locale/keymap/hostname/user/EuroCA). Returns `true` if everything was written
 /// and verified (incl. provisioning after a remount of the partition).
-pub fn install_to_disk(dev: usize, cfg: &Config) -> bool {
+pub fn install_to_disk(dev: usize, cfg: &Config, progress: &dyn Fn(&str)) -> bool {
     if !crate::virtio_blk::present_dev(dev) {
         return false;
     }
@@ -210,6 +211,7 @@ pub fn install_to_disk(dev: usize, cfg: &Config) -> bool {
         cfg,
         total,
         &alloc::format!("virtio disk {dev}"),
+        progress,
         |lba, bytes| {
             crate::virtio_blk::write_io_dev(dev, lba, bytes);
         },
@@ -225,7 +227,7 @@ pub fn install_to_disk(dev: usize, cfg: &Config) -> bool {
 /// EuroFS-root writer, over the NVMe block driver instead of virtio-blk. After
 /// this, UEFI firmware can boot the NVMe ESP and the kernel mounts its root on
 /// the NVMe EuroFS partition — a modern (NVMe-only) laptop boots standalone.
-pub fn install_to_nvme(cfg: &Config) -> bool {
+pub fn install_to_nvme(cfg: &Config, progress: &dyn Fn(&str)) -> bool {
     if !crate::nvme::present() {
         return false;
     }
@@ -237,6 +239,7 @@ pub fn install_to_nvme(cfg: &Config) -> bool {
         cfg,
         total,
         "NVMe disk",
+        progress,
         |lba, bytes| {
             crate::nvme::write_sectors(lba, bytes);
         },
@@ -254,6 +257,7 @@ fn install_to_target(
     cfg: &Config,
     total: u64,
     label: &str,
+    progress: &dyn Fn(&str),
     write: impl Fn(u64, &[u8]),
     read: impl Fn(u64, &mut [u8]) -> bool,
     flush: impl Fn(),
@@ -269,6 +273,16 @@ fn install_to_target(
             }
         }
     }
+    // The first user's EuroID record (Argon2id) is built BEFORE anything is
+    // written: a policy violation aborts the install with the disk untouched.
+    let users_db = match crate::euroid::install_db(&cfg.username, &cfg.username, &cfg.password) {
+        Ok(t) => t,
+        Err(e) => {
+            crate::serial_println!("[q1x3] target {label}: account rejected ({e}) — installation ABORTED, disk untouched");
+            progress(&alloc::format!("Account rejected: {e}"));
+            return false;
+        }
+    };
     let restore = Restore(MEDIA.lock().take());
     let Some(m) = restore.0.as_ref() else { return false };
     let (loader, kernel_a, kernel_b) = (&m.loader[..], &m.kernel_a[..], &m.kernel_b[..]);
@@ -286,6 +300,7 @@ fn install_to_target(
     // (header: magic + length + sha256 + signature), so the loader boots through
     // its verified partition path from the very first boot.
     let slot_a_header = if sig_a.len() == 64 { crate::update::slot_header(kernel_a, sig_a).to_vec() } else { Vec::new() };
+    progress("Writing the partition table and the boot files (ESP, A/B kernel slots)");
     let Some(layout) = eurofat::write_boot_disk(total, vid, loader, kernel_a, kernel_b, sig_a, sig_b, &slot_a_header, &slot_a, |lba, bytes| {
         write(lba, bytes);
     }) else {
@@ -294,15 +309,17 @@ fn install_to_target(
     };
 
     // ── Format + provision the EuroFS root partition (real installation) ──
+    progress("Creating the EuroFS root and the first account");
     let now = crate::rtc::epoch();
     let blocks = layout.eurofs_sectors / 8; // 8 sectors per 4 KiB block
     let pdev = make_root(layout.eurofs_first, blocks);
     let steps = plan(cfg).unwrap_or_default();
     let provisioned = match EuroFs::format(pdev.clone(), [vid as u8; 16], now) {
-        Ok(mut fs) => provision(&mut fs, &steps),
+        Ok(mut fs) => provision(&mut fs, &steps, &users_db),
         Err(_) => 0,
     };
     flush();
+    progress("Verifying the installation (re-reading GPT, ESP and the root)");
 
     // ── Verification: re-read GPT + ESP boot sector + remount the EuroFS partition ──
     let mut hdr = [0u8; 512];
@@ -312,19 +329,21 @@ fn install_to_target(
         && esp0[510] == 0x55 && esp0[511] == 0xAA && &esp0[82..87] == b"FAT32";
     // Provisioning must survive a remount (≈ reboot after installation).
     let want_host = alloc::format!("{}\n", cfg.hostname);
-    let (host_ok, user_ok) = match EuroFs::mount(pdev, now) {
+    let (host_ok, user_ok, id_ok) = match EuroFs::mount(pdev, now) {
         Ok(fs) => (
             fs.read_file("/etc/hostname").map(|d| d == want_host.as_bytes()).unwrap_or(false),
             fs.read_file("/etc/passwd").map(|d| String::from_utf8_lossy(&d).contains(&cfg.username)).unwrap_or(false),
+            fs.read_file(USERS_DB).map(|d| d == users_db.as_bytes()).unwrap_or(false),
         ),
-        Err(_) => (false, false),
+        Err(_) => (false, false, false),
     };
-    let ok = gpt_ok && esp_ok && provisioned >= 4 && host_ok && user_ok;
+    let ok = gpt_ok && esp_ok && provisioned >= 4 && host_ok && user_ok && id_ok;
     crate::serial_println!(
-        "[q1x3] EuroInstall → {label} ({} MiB): GPT={gpt_ok} ESP-FAT32={esp_ok}; EuroFS root formatted + {provisioned} steps provisioned, after remount hostname='{}'={host_ok} user='{}'={user_ok} → {}",
+        "[q1x3] EuroInstall → {label} ({} MiB): GPT={gpt_ok} ESP-FAT32={esp_ok}; EuroFS root formatted + {provisioned} steps provisioned, after remount hostname='{}'={host_ok} user='{}'={user_ok} euroid-store={id_ok} → {}",
         total * 512 / 1024 / 1024, cfg.hostname, cfg.username,
         if ok { "OK (bootable + provisioned installation from own media; boots standalone)" } else { "FAILED" }
     );
+    progress(if ok { "Installation complete" } else { "Installation FAILED (see the serial log)" });
     ok
 }
 
@@ -469,6 +488,13 @@ pub fn rollback_selftest(dev: usize) {
     );
 }
 
+/// Password of the account that the self-test/CLI install path creates (dev
+/// builds, `euroinstall --to N`). The wizard asks the user for a real one.
+pub const DEV_INSTALL_PASSWORD: &str = "Euro-Dev-Install-2026!";
+
+/// Path of the EuroID store on the installed root.
+const USERS_DB: &str = "/etc/euroid/users.db";
+
 /// Default install config (overridable via `euroinstall --hostname/--user`).
 pub fn default_config() -> Config {
     Config {
@@ -477,6 +503,7 @@ pub fn default_config() -> Config {
         keymap: String::from("be-azerty"),
         hostname: String::from("euro-pc"),
         username: String::from("anke"),
+        password: String::from(DEV_INSTALL_PASSWORD),
         fde: true,
         live: false,
     }
@@ -594,7 +621,7 @@ fn unseal_fde_at_boot_from(fs: &mut dyn FileSystem, path: &str) -> Option<usize>
 
 /// Execute the configuration steps of the plan on a mounted EuroFS:
 /// write the provisioning files. Returns the number of executed steps.
-fn provision(fs: &mut dyn FileSystem, steps: &[Step]) -> usize {
+fn provision(fs: &mut dyn FileSystem, steps: &[Step], users_db: &str) -> usize {
     let _ = fs.create_dir("/etc");
     let _ = fs.create_dir("/etc/euroca");
     let mut done = 0;
@@ -605,9 +632,9 @@ fn provision(fs: &mut dyn FileSystem, steps: &[Step]) -> usize {
                 done += 1;
             }
             Step::ConfigureKeymap(k) => {
-                // 3F-4: actually apply the layout to the live PS/2 driver as well
-                // as persisting it (the installer runs on the target machine).
-                crate::ps2::set_layout_tag(k);
+                // Persisted only: the wizard applies the chosen layout live, and the
+                // installed system applies /etc/keymap at boot. (Switching the live
+                // keyboard here made the [q1x] self-test flip the lockscreen to AZERTY.)
                 let _ = fs.write_file("/etc/keymap", format!("{k}\n").as_bytes());
                 done += 1;
             }
@@ -617,6 +644,12 @@ fn provision(fs: &mut dyn FileSystem, steps: &[Step]) -> usize {
             }
             Step::CreateUser(u) => {
                 let _ = fs.write_file("/etc/passwd", format!("{u}:x:1000:1000::/home/{u}:/bin/eurosh\n").as_bytes());
+                // The EuroID record (Argon2id hash, wheel) — what the lockscreen
+                // authenticates against on the installed system.
+                let _ = fs.create_dir("/etc/euroid");
+                let _ = fs.write_file(USERS_DB, users_db.as_bytes());
+                let _ = fs.create_dir("/home");
+                let _ = fs.create_dir(&format!("/home/{u}"));
                 done += 1;
             }
             Step::ProvisionEuroCa => {
@@ -649,6 +682,13 @@ pub fn selftest(now: u64) {
         }
     };
 
+    let users_db = match crate::euroid::install_db(&cfg.username, &cfg.username, &cfg.password) {
+        Ok(t) => t,
+        Err(e) => {
+            crate::serial_println!("[q1x] installer account rejected: {e}");
+            return;
+        }
+    };
     // A 4 MiB RAM disk as the target (1024 × 4 KiB blocks).
     let mut dev = MemoryBlockDevice::new(1024, 4096);
 
@@ -657,7 +697,7 @@ pub fn selftest(now: u64) {
     let format_ok = {
         match EuroFs::format(&mut dev, [0x2a; 16], now) {
             Ok(mut fs) => {
-                provisioned = provision(&mut fs, &steps);
+                provisioned = provision(&mut fs, &steps, &users_db);
                 true
             }
             Err(_) => {

@@ -27,6 +27,7 @@ const CATALOG: &[(&str, usize)] = &[
     ("Chromium browser", 11),
     ("EuroView (images)", 12),
     ("EuroPaint", 13),
+    ("Install EuroOS", 14),
 ];
 
 /// One search result: an app, a file matched by name, or a file matched by

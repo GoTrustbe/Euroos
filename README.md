@@ -90,6 +90,25 @@ sudo apt install qemu-system-x86 ovmf dosfstools mtools   # Debian/Ubuntu
 ./scripts/run-qemu.sh      # boot it (GUI, or headless without $DISPLAY)
 ```
 
+### Install on a clean machine
+
+The image is a live medium: it boots the desktop from the stick and leaves every
+disk alone. The desktop opens **EuroInstall**, a guided installer (also in the
+launcher as "Install EuroOS"): language, keyboard, a blank target disk, your
+account (a real EuroID record, Argon2id, administrator), full-disk encryption when
+a TPM is present, summary, install. Nothing is written until you confirm. The
+installed system boots on its own and asks for the password you chose.
+
+```bash
+./scripts/build.sh image                    # the public image profile (no self-test suite)
+sudo dd if=eurokernel.img of=/dev/sdX bs=4M # write it to a USB stick (check lsblk first)
+python3 scripts/wizard-install-test.py      # the same flow end to end in QEMU, keyboard-driven
+```
+
+Verified in QEMU (OVMF, 1.5 GiB): wizard → install → standalone boot → login with
+the typed password; a wrong password is rejected and the installed system never
+auto-logs in. Real-hardware runs are listed in `docs/HARDWARE-COMPAT.md`.
+
 The security-critical logic lives in pure, host-tested `crates/euro*` libraries
 (`cargo test`, no VM); the kernel module is thin glue that wires it onto hardware
 and prints a `[xx]` boot self-test. That is why there are 750+ host tests **and** a

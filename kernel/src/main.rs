@@ -220,7 +220,7 @@ fn build_context_menu(
     ry: usize,
     windows: &[compositor::Window],
     order: &[usize],
-    dock_targets: &[Option<usize>; 14],
+    dock_targets: &[Option<usize>; 15],
     sw: usize,
     sh: usize,
 ) {
@@ -773,9 +773,11 @@ fn main() -> Status {
         extmount::selftest();
         false
     } else if instexec::media_available() && virtio_blk::present() {
-        if instexec::disk_is_blank(0) {
+        if instexec::disk_is_blank(0) && cfg!(feature = "selftest") {
             // Fresh target disk → install a bootable, provisioned EuroOS (slot A).
-            instexec::install_to_disk(0, &instexec::default_config())
+            // Self-test builds only: a release medium never writes a disk on its
+            // own; the guided installer (wizard) is the only install path there.
+            instexec::install_to_disk(0, &instexec::default_config(), &|_| {})
         } else if gpt::find_eurofs_partition().is_some() && cfg!(feature = "selftest") {
             // Our own installed disk → demonstrate the A/B SELF-UPDATE: stage slot B
             // + flip slot_config. After a standalone reboot the loader picks slot B.
@@ -809,8 +811,9 @@ fn main() -> Status {
                 }
                 rootblk::RootBlk::disk(start, blocks)
             }
-            None if instexec::disk_is_blank(0) => {
-                // Blank disk → lay down our GPT + EuroFS root.
+            None if instexec::disk_is_blank(0) && cfg!(feature = "selftest") => {
+                // Blank disk → lay down our GPT + EuroFS root (self-test builds; a
+                // release medium leaves a blank disk alone until the wizard installs).
                 let (start, blocks) = gpt::install(total);
                 rootblk::RootBlk::disk(start, blocks)
             }
@@ -818,7 +821,7 @@ fn main() -> Status {
                 // Disk 0 carries a NON-EuroFS filesystem (exFAT/FAT/ext/NTFS/…).
                 // Never format/clobber it as our root — boot a RAM root instead;
                 // the disk stays intact and can be mounted (mount vblkN /mnt).
-                serial_println!("[euro] disk 0 is not EuroFS and not blank — booting a RAM root; the disk is left intact + mountable");
+                serial_println!("[euro] disk 0 is not an EuroOS installation — booting a RAM root (live); the disk is left intact (blank: install it via the wizard; foreign FS: mountable)");
                 rootblk::RootBlk::ram(2048)
             }
         }
@@ -833,8 +836,8 @@ fn main() -> Status {
                 nvme_root = true;
                 rootblk::RootBlk::nvme(start, blocks)
             }
-            None if instexec::media_available() && instexec::nvme_is_blank() => {
-                if instexec::install_to_nvme(&instexec::default_config()) {
+            None if instexec::media_available() && instexec::nvme_is_blank() && cfg!(feature = "selftest") => {
+                if instexec::install_to_nvme(&instexec::default_config(), &|_| {}) {
                     match instexec::nvme_eurofs_partition() {
                         Some((start, blocks)) => {
                             serial_println!("[euro] live root = the freshly-installed EuroFS on NVMe");
@@ -865,9 +868,9 @@ fn main() -> Status {
                 break;
             }
         }
-        if chosen.is_none() && instexec::media_available() {
+        if chosen.is_none() && instexec::media_available() && cfg!(feature = "selftest") {
             for idx in 0..ahci::disk_count() {
-                if instexec::ahci_is_blank(idx) && instexec::install_to_ahci(idx, &instexec::default_config()) {
+                if instexec::ahci_is_blank(idx) && instexec::install_to_ahci(idx, &instexec::default_config(), &|_| {}) {
                     if let Some((start, blocks)) = instexec::ahci_eurofs_partition(idx) {
                         serial_println!("[euro] live root = the freshly-installed EuroFS on AHCI disk {idx}");
                         chosen = Some(rootblk::RootBlk::ahci(idx, start, blocks));
@@ -1186,6 +1189,17 @@ fn main() -> Status {
     // Mini-EuroUpdate: an installed (disk) system that boots with a NEWER kernel
     // automatically gets its /bin synced with the bundled binaries — otherwise
     // the new Ed25519 signature would reject the old binary on disk.
+    // EuroID: an installed root carries /etc/euroid/users.db; that store (not the
+    // demo accounts) is the identity of this system from here on.
+    euroid::init_from_disk(&mut fs);
+    // The keyboard layout chosen at install time (/etc/keymap) applies from the
+    // lockscreen on; a medium without the file keeps the US default.
+    if let Ok(k) = fs.read_file("/etc/keymap") {
+        let tag = String::from(String::from_utf8_lossy(&k).trim());
+        if ps2::set_layout_tag(&tag) {
+            serial_println!("[ps2] keyboard layout from /etc/keymap: {tag}");
+        }
+    }
     if on_disk && sync_system_files(&mut fs) {
         serial_println!("[update] /bin synced with kernel build {:016x}", system_digest());
     }
@@ -3520,7 +3534,10 @@ fn main() -> Status {
     // 3E-1 wiring: the FDE unseal-at-boot cycle — enrol (seal + persist), then
     // re-read the sealed blob and unseal it via the TPM (PCR16) as a normal boot
     // would, auto-recovering the disk key on an untampered system.
-    instexec::fde_unseal_selftest(&mut vfs);
+    if !rootblk::booted_from_disk() {
+        // Writes /etc/fde/root.seal on the live root: never on an installed system.
+        instexec::fde_unseal_selftest(&mut vfs);
+    }
 
     // Z: EuroHealth — SMART (if NVMe) + FS scrub + memory → health score.
     {
@@ -3853,7 +3870,10 @@ fn main() -> Status {
 
     // Sprint AE-e2e: EuroID storage (users + Argon2id hashes + state) persistent
     // on EuroFS — survives a restart instead of being rebuilt every boot.
-    euroid::persist_selftest(&mut vfs);
+    if !euroid::store_from_disk() {
+        // Writes /etc/euroid/users.db on the live root: never over an installed store.
+        euroid::persist_selftest(&mut vfs);
+    }
     // 3E-3/3E-9: session lifecycle (owned homes, uid-context) + per-user disk
     // quota — both on the LIVE root FS.
     session::selftest(&mut vfs);
@@ -4074,7 +4094,7 @@ fn main() -> Status {
     // hidden); a dock click opens an app. (AG-1 added files/notes/clock.)
     // 12 slots for 11 dock tiles: index 11 has no tile of its own — it is the hosted
     // X-client window (Chromium), reachable from the app launcher and the shell.
-    let mut dock_targets: [Option<usize>; 14] = [None; 14];
+    let mut dock_targets: [Option<usize>; 15] = [None; 15];
     dock_targets[4] = Some(1); // terminal → Terminal (the real shell)
     dock_targets[11] = Some(2); // launcher: "Chromium" → the hosted X window
 
@@ -4311,11 +4331,14 @@ fn main() -> Status {
         // steps + live FDE enrol. Opens in the live/installation boot mode; visible
         // here for the verification screenshot.
         let i_inst = windows.len();
+        // Sized to the screen: QEMU/OVMF boots at 800x600, laptops at 1920x1080.
+        let inst_w = 820usize.min(width.saturating_sub(SIDEBAR_W + 32));
+        let inst_h = 600usize.min(height.saturating_sub(70));
         windows.push(compositor::Window {
-            x: SIDEBAR_W + 180,
-            y: 70,
-            w: 820,
-            h: 600,
+            x: SIDEBAR_W + 16,
+            y: 56,
+            w: inst_w,
+            h: inst_h,
             title: String::from("EuroInstall  -  Install EuroOS"),
             content: Vec::new(),
             ui: Vec::new(),
@@ -4323,10 +4346,17 @@ fn main() -> Status {
             accent: Color::ACCENT,
             sec: eds::SecState::new(true, true, false),
             app: suite_ui::SuiteApp::Installer,
-            visible: false,
+            // Open on a live boot of an install medium; hidden on an installed system.
+            visible: installer::open_on_live_boot(),
             restore: None,
         });
         order.push(i_inst);
+        dock_targets[14] = Some(i_inst); // launcher: "Install EuroOS"
+        if windows[i_inst].visible {
+            for (j, w) in windows.iter_mut().enumerate() {
+                w.active = j == i_inst;
+            }
+        }
         serial_println!("[bb7] EuroInstall: guided graphical installer ready (plan + live FDE enrol; execution = instexec) ✓");
 
         // ── AG-1: EuroFiles / EuroNotes / EuroClock — real desktop apps ────────
@@ -4513,7 +4543,7 @@ fn main() -> Status {
     // authenticate the desktop session via EuroID (Argon2id) before the desktop starts.
     // Unattended/CI boots log in automatically after a short grace period (honestly logged).
     lockscreen::selftest(&fb);
-    let session_user = lockscreen::gate(&fb, "euro");
+    let session_user = lockscreen::gate(&fb, &euroid::default_login_user());
     // 3E-3: register the authenticated desktop session in the session table —
     // this closes the boot self-test session, ensures the user's OWNED home and
     // sets the FS uid-context (files created on the desktop belong to the user).
@@ -5067,11 +5097,9 @@ fn main() -> Status {
                             textedit::click(windows[i].x, windows[i].y, px, py);
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Installer {
-                        // 3E-1: "Install EuroOS" button → REAL install to the first
-                        // BLANK virtio disk (in-use disks are never touched).
-                        if installer::button_at(windows[i].x, windows[i].y, windows[i].w, windows[i].h, px, py) {
-                            installer::gui_install();
-                        }
+                        // The wizard: buttons, list rows, fields, the encryption toggle.
+                        let (wx, wy, ww, wh) = (windows[i].x, windows[i].y, windows[i].w, windows[i].h);
+                        installer::click(&fb, wx, wy, ww, wh, px, py);
                     }
                     need_full = true;
                 }
@@ -5240,6 +5268,18 @@ fn main() -> Status {
         }
         let editor_focused = !files::prompt_open() && (text_focused || notes_focused)
             && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open();
+        // The install wizard takes rich keys (Tab, arrows, Esc) while it is on top.
+        let installer_focused = !files::prompt_open()
+            && focused.map(|i| windows[i].app == suite_ui::SuiteApp::Installer).unwrap_or(false)
+            && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open();
+        if installer_focused {
+            let fi = focused.unwrap();
+            let (wx, wy, ww, wh) = (windows[fi].x, windows[fi].y, windows[fi].w, windows[fi].h);
+            while let Some(k) = ps2::poll_key_ex() {
+                installer::key(&fb, wx, wy, ww, wh, k);
+                need_full = true;
+            }
+        }
         if editor_focused {
             while let Some(k) = ps2::poll_key_ex() {
                 if text_focused {
@@ -5252,7 +5292,7 @@ fn main() -> Status {
                 need_full = true;
             }
         }
-        while let Some(k) = if editor_focused || files::prompt_open() { None } else { ps2::poll_key() } {
+        while let Some(k) = if editor_focused || installer_focused || files::prompt_open() { None } else { ps2::poll_key() } {
             // The symbol picker only needs Esc to dismiss.
             if symbolpicker::is_open() {
                 if k == '\u{1b}' { symbolpicker::close(); }

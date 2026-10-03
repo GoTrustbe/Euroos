@@ -256,6 +256,38 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_verifies_installer_style_record() {
+        // The installer hashes with a 32-byte random salt and a policy-grade
+        // password with symbols; the installed system must verify it after reload.
+        let salt: Vec<u8> = (0u8..32).map(|i| i.wrapping_mul(37) ^ 0xA5).collect();
+        let pw = b"Sovereign-Pass-2026!";
+        let mut db = UserDb::new();
+        let mut u = User {
+            uid: UserId(1000),
+            username: "tester".to_string(),
+            display_name: "tester".to_string(),
+            primary_gid: crate::GROUP_USERS,
+            groups: alloc::vec![crate::GROUP_WHEEL, crate::GROUP_NET],
+            home: "/home/tester".to_string(),
+            shell: "/bin/eurosh".to_string(),
+            state: UserState::Active,
+            caps: 0,
+            created_at: Timestamp(1),
+            created_by: UserId(0),
+            password: PasswordRecord::hash_password(pw, &salt, &P, Timestamp(2)),
+            tpm_enrolled: false,
+            failed_logins: 0,
+        };
+        u.password.must_change = false;
+        db.insert(u).unwrap();
+        let text = serialize_db(&db);
+        let back = deserialize_db(&text).unwrap();
+        let t = back.get_by_name("tester").unwrap();
+        assert!(t.password.verify(pw), "installer-style record must verify after reload: {text}");
+        assert!(!t.password.verify(b"Sovereign-Pass-2026"));
+    }
+
+    #[test]
     fn roundtrip_preserves_all_fields_and_verifies_password() {
         let db = sample_db();
         let text = serialize_db(&db);

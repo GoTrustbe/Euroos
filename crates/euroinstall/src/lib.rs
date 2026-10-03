@@ -42,6 +42,9 @@ pub struct Config {
     pub keymap: String,
     pub hostname: String,
     pub username: String,
+    /// Password of the first user. Only ever hashed (Argon2id, EuroID); never
+    /// logged and never written to disk in clear.
+    pub password: String,
     /// Enable full-disk encryption (EuroFDE, key via TPM).
     pub fde: bool,
     /// Live mode: write nothing to disk, everything in RAM.
@@ -100,6 +103,8 @@ pub enum PlanError {
     BadLocale,
     /// Empty keymap.
     BadKeymap,
+    /// Empty password for a disk installation.
+    BadPassword,
 }
 
 /// The minimum number of bytes required for an installation to disk.
@@ -128,8 +133,11 @@ pub fn validate(cfg: &Config) -> Result<(), PlanError> {
     if !valid_username(&cfg.username) {
         return Err(PlanError::BadUsername);
     }
-    // Live mode imposes no disk requirements.
+    // Live mode imposes no disk requirements and creates no account.
     if !cfg.live {
+        if cfg.password.is_empty() {
+            return Err(PlanError::BadPassword);
+        }
         let need = minimum_disk_bytes();
         if cfg.disk.total_bytes < need {
             return Err(PlanError::DiskTooSmall { need_bytes: need, have_bytes: cfg.disk.total_bytes });
@@ -228,9 +236,20 @@ mod tests {
             keymap: "be-azerty".to_string(),
             hostname: "euro-pc".to_string(),
             username: "anke".to_string(),
+            password: "Correct-Horse-9!".to_string(),
             fde,
             live,
         }
+    }
+
+    #[test]
+    fn rejects_empty_password_for_disk_install() {
+        let mut c = cfg(8, false, true);
+        c.password.clear();
+        assert_eq!(validate(&c), Err(PlanError::BadPassword));
+        // A live boot creates no account, so no password is needed.
+        c.live = true;
+        assert_eq!(validate(&c), Ok(()));
     }
 
     #[test]
