@@ -97,6 +97,18 @@ the same say over Linux-ABI processes, without Linux namespaces.
   was needed: setuid under the renderer profile was in the deny list, but a
   drop to nobody must be allowed there. LINUX COMPAT 32/38.
 
+- 2026-10-05, third Chromium measurement, now with the file scope: the first
+  run showed the utility process (Chromium's network service lives there and
+  owns cookies, cache and sockets) probing `/root/.config/chromium`, `/etc`,
+  `/tmp`, `/` and being refused. So utility and GPU children now get a
+  separate `Utility` profile (no processes/images, tracing, mounts, modules,
+  group changes, SysV IPC; network and files allowed) and only renderers carry
+  the file scope; a bare directory name such as `/etc` counts as in scope.
+  Re-run: 2 utility + 2 renderer children, 0 kills, 0 scope refusals, 2 W^X
+  logs, same 21-minute budget. A first NOFILE version counted the kernel's
+  socket/eventfd numbers (500 and up) as descriptors and broke gevfd/gxwin;
+  the limit now bounds the low descriptor table only.
+
 ## Exit criteria
 
 1. Host tests green for `eurosandbox`.

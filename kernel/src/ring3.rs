@@ -603,7 +603,7 @@ fn unix_recv_blocking(fd: u64, cap: usize) -> Option<alloc::vec::Vec<u8>> {
         if !d.is_empty() || crate::net::unix_fd_at_eof(fd) || scm_pending_for(fd) {
             return Some(d);
         }
-        if fd_is_nonblock(fd) || !SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+        if fd_is_nonblock(fd) || !syscall_yield_ok() {
             return None;
         }
         if crate::interrupts::ticks() > deadline {
@@ -2521,7 +2521,7 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
         tries += 1;
         let before = crate::interrupts::ticks();
         crate::sched::sleep_ticks(2);
-        if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+        if syscall_yield_ok() {
             { yield_reacquire(); } // deschedule so whoever will wake us can run
         }
         if crate::interrupts::ticks() == before {
@@ -2614,7 +2614,7 @@ fn pipe_read_blocking(fd: usize, buf: u64, len: usize) -> Option<u64> {
         // the whole system wedges (the chrome --headless task-39 hang; NMI-confirmed
         // RIP inside this function). On the musl bg path (SYSCALL_YIELD_OK=false) a
         // mid-syscall yield is unsafe (BG.lock), so fall back to a non-blocking return.
-        if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+        if syscall_yield_ok() {
             yield_reacquire();
         } else {
             return Some((-11i64) as u64); // -EAGAIN (bg path: caller polls)
@@ -4800,7 +4800,7 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     // runs the whole syscall UNDER BG.lock, so yielding there would let the next bg
     // task spin forever on BG.lock → total wedge. musl keeps the old timer-driven block
     // (fine at its low thread counts); chrome (glibc, ~30 threads) gets the real yield.
-    if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+    if syscall_yield_ok() {
         yield_reacquire();
     }
     // Resumed. If we are STILL enqueued, the scheduler woke us at the deadline (a
@@ -4827,7 +4827,23 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
 }
 /// True only while a lock-free glibc syscall (linux_dispatch) is executing — set on
 /// its entry, cleared by the musl bg path — so futex/epoll only yield when it's safe.
-pub static SYSCALL_YIELD_OK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Per task: may a blocking syscall of the CURRENT task deschedule mid-call?
+/// True on the lock-free glibc path, false on the musl bg path (which runs the
+/// whole syscall under BG.lock). It used to be one global flag, so a musl task
+/// taking a syscall flipped it to false under a glibc task parked in wait4 or
+/// futex, which then returned "still running" early (the gevfd waitpid failure).
+static SYSCALL_YIELD_OK_T: [core::sync::atomic::AtomicBool; crate::sched::MAX_TASKS] =
+    [const { core::sync::atomic::AtomicBool::new(false) }; crate::sched::MAX_TASKS];
+pub fn syscall_yield_ok() -> bool {
+    let t = crate::sched::current();
+    t < crate::sched::MAX_TASKS && SYSCALL_YIELD_OK_T[t].load(Ordering::Relaxed)
+}
+fn set_syscall_yield_ok(v: bool) {
+    let t = crate::sched::current();
+    if t < crate::sched::MAX_TASKS {
+        SYSCALL_YIELD_OK_T[t].store(v, Ordering::Relaxed);
+    }
+}
 
 
 // Static pool of kernel stacks for THREADS (clone) and scheduled glibc mains.
@@ -5123,7 +5139,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
     unsafe { EXITED = 0 };
     // This path runs the whole syscall UNDER BG.lock -> a mid-syscall yield would
     // deadlock the next bg task on BG.lock. Forbid futex/epoll yields here.
-    SYSCALL_YIELD_OK.store(false, Ordering::Relaxed);
+    set_syscall_yield_ok(false);
     match num {
         1 | 20 => {
             // write(fd,buf,len) / writev(fd,iov,cnt) -> own line buffer.
@@ -8725,9 +8741,14 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         // A renderer, GPU or utility child computes for the browser; it never needs
         // to start processes, reach the network or change the file system. The
         // kernel applies that profile here, the child cannot opt out.
-        if matches!(&t[..], b"--type=renderer" | b"--type=gpu-process" | b"--type=utility") {
-            set_task_profile(crate::sched::current(), eurosandbox::Profile::Renderer);
-            crate::serial_println!("[sbx] renderer syscall profile applied to task {}", crate::sched::current());
+        let prof = match &t[..] {
+            b"--type=renderer" => Some(eurosandbox::Profile::Renderer),
+            b"--type=gpu-process" | b"--type=utility" => Some(eurosandbox::Profile::Utility),
+            _ => None,
+        };
+        if let Some(p) = prof {
+            set_task_profile(crate::sched::current(), p);
+            crate::serial_println!("[sbx] {} syscall profile applied to task {}", p.name(), crate::sched::current());
         }
     }
 
@@ -9584,9 +9605,13 @@ pub fn spawn_glibc_persistent(
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
     TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
     proc_state_drop(MAIN_KEY);
-    if argv.iter().any(|a| matches!(&a[..], b"--type=renderer" | b"--type=gpu-process" | b"--type=utility")) {
-        set_task_profile(main_task, eurosandbox::Profile::Renderer);
-        crate::serial_println!("[sbx] renderer syscall profile applied to task {main_task} (from argv)");
+    if let Some(p) = argv.iter().find_map(|a| match &a[..] {
+        b"--type=renderer" => Some(eurosandbox::Profile::Renderer),
+        b"--type=gpu-process" | b"--type=utility" => Some(eurosandbox::Profile::Utility),
+        _ => None,
+    }) {
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from argv)", p.name());
     }
     PERSIST_ARENA.store(arena, Ordering::Relaxed);
     PERSIST_PML4.store(pml4, Ordering::Relaxed);
@@ -10226,9 +10251,13 @@ fn glibc_disk_launch(
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
     TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
     proc_state_drop(MAIN_KEY);
-    if argv.iter().any(|a| matches!(&a[..], b"--type=renderer" | b"--type=gpu-process" | b"--type=utility")) {
-        set_task_profile(main_task, eurosandbox::Profile::Renderer);
-        crate::serial_println!("[sbx] renderer syscall profile applied to task {main_task} (from argv)");
+    if let Some(p) = argv.iter().find_map(|a| match &a[..] {
+        b"--type=renderer" => Some(eurosandbox::Profile::Renderer),
+        b"--type=gpu-process" | b"--type=utility" => Some(eurosandbox::Profile::Utility),
+        _ => None,
+    }) {
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from argv)", p.name());
     }
 
     Ok(DiskRun { main_task, arena, frames, pml4, dp_base, dp_frames, prev_demand, prev_file })
@@ -10662,9 +10691,13 @@ pub fn run_glibc(
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
     TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
     proc_state_drop(MAIN_KEY);
-    if argv.iter().any(|a| matches!(&a[..], b"--type=renderer" | b"--type=gpu-process" | b"--type=utility")) {
-        set_task_profile(main_task, eurosandbox::Profile::Renderer);
-        crate::serial_println!("[sbx] renderer syscall profile applied to task {main_task} (from argv)");
+    if let Some(p) = argv.iter().find_map(|a| match &a[..] {
+        b"--type=renderer" => Some(eurosandbox::Profile::Renderer),
+        b"--type=gpu-process" | b"--type=utility" => Some(eurosandbox::Profile::Utility),
+        _ => None,
+    }) {
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from argv)", p.name());
     }
     crate::serial_println!(
         "[glibc] spawned scheduled task {main_task}: ld-entry@{:#x} rsp@{rsp:#x} phdr@{:#x} phnum={}",
@@ -11726,7 +11759,9 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
     // again and the call fails with EMFILE, exactly as Linux reports it.
     let returns_fd = matches!(num,
         2 | 257 | 85 | 32 | 33 | 292 | 41 | 43 | 288 | 290 | 284 | 291 | 213 | 319 | 253 | 294 | 283 | 282 | 289);
-    if returns_fd && (r as i64) >= 0 && r < 1024 {
+    // Only the low descriptor table counts: sockets, eventfds and epoll instances
+    // carry kernel-internal numbers from 500 up and are not what NOFILE bounds.
+    if returns_fd && (r as i64) >= 0 && r < MAX_FD as u64 {
         let key = proc_key(crate::sched::current());
         if proc_limits(key).fd_exceeds(r) {
             let _ = linux_dispatch_inner_raw(3, r, 0, 0, 0, 0);
@@ -11832,7 +11867,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
         MSC[i][2].store(a1, Ordering::Relaxed);
         MSC[i][3].store(u64::MAX, Ordering::Relaxed); // in flight; overwritten on return
     }
-    SYSCALL_YIELD_OK.store(true, Ordering::Relaxed); // lock-free path: futex/epoll may yield
+    set_syscall_yield_ok(true); // lock-free path: futex/epoll may yield
     if TRACE_SYS.load(Ordering::Relaxed) {
         crate::serial_println!("[sys t{}] {num}({a1:#x},{a2:#x},{a3:#x})", crate::sched::current());
     }
@@ -13252,7 +13287,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 {
                     return (-10i64) as u64; // -ECHILD
                 }
-                if wnohang || !SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                if wnohang || !syscall_yield_ok() {
                     return 0; // "still running", the caller polls again
                 }
                 if crate::interrupts::ticks() > deadline {
@@ -13564,14 +13599,14 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         // under TCG's ~60x stretch feels like input never landing.
                         // The loop re-checks readiness after every tick.
                         crate::sched::sleep_ticks(1);
-                        if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                        if syscall_yield_ok() {
                             yield_reacquire();
                         }
                     }
                 }
                 None => {
                     crate::sched::sleep_ticks(1);
-                    if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                    if syscall_yield_ok() {
                         yield_reacquire();
                     }
                 }
@@ -14948,7 +14983,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             let mut before_spin = crate::interrupts::ticks();
             while crate::interrupts::ticks() < deadline {
                 crate::sched::sleep_ticks(1);
-                if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                if syscall_yield_ok() {
                     { yield_reacquire(); } // let everyone else run while we wait
                 }
                 // Same guard as poll(): with interrupts off and nothing else runnable

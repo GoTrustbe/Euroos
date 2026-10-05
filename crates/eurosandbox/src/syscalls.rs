@@ -18,6 +18,11 @@ pub enum Profile {
     /// sigreturn only. A process asks for this itself (`prctl(PR_SET_SECCOMP,
     /// SECCOMP_MODE_STRICT)` or `seccomp(SECCOMP_SET_MODE_STRICT)`).
     Strict,
+    /// A Chromium utility or GPU child (the network service lives here and
+    /// owns cookies, cache and sockets): may use the network and the file
+    /// system, but may not start processes or images, trace, mount, load
+    /// modules, change group identity or use System V IPC.
+    Utility,
 }
 
 impl Profile {
@@ -25,6 +30,7 @@ impl Profile {
         match v {
             1 => Profile::Renderer,
             2 => Profile::Strict,
+            3 => Profile::Utility,
             _ => Profile::Full,
         }
     }
@@ -33,6 +39,7 @@ impl Profile {
             Profile::Full => 0,
             Profile::Renderer => 1,
             Profile::Strict => 2,
+            Profile::Utility => 3,
         }
     }
     pub fn name(self) -> &'static str {
@@ -40,6 +47,7 @@ impl Profile {
             Profile::Full => "full",
             Profile::Renderer => "renderer",
             Profile::Strict => "strict",
+            Profile::Utility => "utility",
         }
     }
 }
@@ -78,31 +86,46 @@ pub fn check(profile: Profile, num: u64, a1: u64, a3: u64) -> Verdict {
             }
         }
         Profile::Renderer => renderer(num, a1, a3),
+        Profile::Utility => utility(num, a1),
+    }
+}
+
+/// What every browser child loses: new processes and images, tracing,
+/// mounts, modules, reboot, host name, group identity, System V IPC, keyrings
+/// and the clock.
+fn common_denied(num: u64) -> bool {
+    matches!(
+        num,
+        57 | 58 | 59 | 322
+        | 101 | 175 | 176 | 165 | 166 | 161 | 155 | 169 | 170 | 171
+        | 106 | 114 | 119 | 116 | 122 | 123
+        | 29 | 30 | 31 | 64 | 65 | 66
+        | 248 | 249 | 250 | 164 | 227 | 229
+    )
+}
+
+fn utility(num: u64, a1: u64) -> Verdict {
+    if common_denied(num) {
+        return Verdict::Kill(SIGSYS);
+    }
+    match num {
+        56 if a1 & CLONE_THREAD == 0 => Verdict::Kill(SIGSYS),
+        _ => Verdict::Allow,
     }
 }
 
 fn renderer(num: u64, a1: u64, a3: u64) -> Verdict {
-    let denied = matches!(
-        num,
-        // new processes and program images
-        57 | 58 | 59 | 322
-        // tracing, modules, mounts, reboot, host name
-        | 101 | 175 | 176 | 165 | 166 | 161 | 155 | 169 | 170 | 171
-        // identity changes. setuid/setreuid/setresuid (105/113/117) stay allowed:
-        // the kernel only ever lets them DROP to the sandbox uid, which a renderer
-        // may do; group and supplementary-group changes are refused outright.
-        | 106 | 114 | 119 | 116 | 122 | 123
-        // inbound network and raw sockets
-        | 49 | 50 | 43 | 288
-        // file-system modification. unlink/unlinkat/rmdir stay allowed: a renderer
-        // deletes its own unlinked-but-open shared-memory files (measured on
-        // Chromium 152, 2026-10-05); what it may delete is the VFS's uid check.
-        | 85 | 76 | 82 | 316 | 83 | 258 | 86 | 265 | 88 | 266 | 90 | 268 | 92 | 260 | 133
-        // System V shared memory and semaphores
-        | 29 | 30 | 31 | 64 | 65 | 66
-        // keyrings and the clock
-        | 248 | 249 | 250 | 164 | 227 | 229
-    );
+    // On top of the common set: inbound network and file-system modification.
+    // setuid/setreuid/setresuid (105/113/117) stay allowed: the kernel only ever
+    // lets them DROP to the sandbox uid. unlink/unlinkat/rmdir stay allowed: a
+    // renderer deletes its own unlinked-but-open shared-memory files (measured
+    // on Chromium 152, 2026-10-05); what it may delete is the file scope.
+    let denied = common_denied(num)
+        || matches!(
+            num,
+            49 | 50 | 43 | 288
+            | 85 | 76 | 82 | 316 | 83 | 258 | 86 | 265 | 88 | 266 | 90 | 268 | 92 | 260 | 133
+        );
     if denied {
         return Verdict::Kill(SIGSYS);
     }
@@ -136,7 +159,8 @@ pub fn path_allowed(profile: Profile, path: &[u8]) -> bool {
     if !path.starts_with(b"/") {
         return true;
     }
-    ALLOW.iter().any(|a| path.starts_with(a))
+    // "/etc" names the allowed directory itself (readlink/stat probe it).
+    ALLOW.iter().any(|a| path.starts_with(a) || (a.ends_with(b"/") && path == &a[..a.len() - 1]))
 }
 
 #[cfg(test)]
@@ -151,6 +175,10 @@ mod tests {
         for p in [&b"/home/euro/demo/welcome.txt"[..], b"/etc/euroid/users.db", b"/etc/shadow", b"/var/log/x", b"/data/x", b"/boot/version"] {
             assert!(!path_allowed(Profile::Renderer, p), "{}", core::str::from_utf8(p).unwrap());
         }
+        assert!(path_allowed(Profile::Renderer, b"/etc"));
+        assert!(path_allowed(Profile::Renderer, b"/tmp"));
+        assert!(!path_allowed(Profile::Renderer, b"/etcetera"));
+        assert!(path_allowed(Profile::Utility, b"/root/.config/chromium"));
         assert!(path_allowed(Profile::Full, b"/home/euro/anything"));
         assert!(path_allowed(Profile::Strict, b"/home/euro/anything")); // strict never gets to open at all
     }
@@ -202,8 +230,20 @@ mod tests {
     }
 
     #[test]
+    fn utility_keeps_network_and_files_but_not_processes() {
+        for n in [41u64, 42, 49, 50, 257, 82, 83, 87, 90] {
+            assert_eq!(check(Profile::Utility, n, 2, 0), Verdict::Allow, "syscall {n}");
+        }
+        for n in [57u64, 59, 101, 165, 106, 29] {
+            assert_eq!(check(Profile::Utility, n, 0, 0), Verdict::Kill(SIGSYS), "syscall {n}");
+        }
+        assert_eq!(check(Profile::Utility, 56, 0x1200011, 0), Verdict::Kill(SIGSYS));
+        assert_eq!(check(Profile::Utility, 56, CLONE_THREAD, 0), Verdict::Allow);
+    }
+
+    #[test]
     fn profile_round_trips_through_a_byte() {
-        for p in [Profile::Full, Profile::Renderer, Profile::Strict] {
+        for p in [Profile::Full, Profile::Renderer, Profile::Strict, Profile::Utility] {
             assert_eq!(Profile::from_u8(p.as_u8()), p);
         }
     }
