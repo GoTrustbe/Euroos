@@ -2,7 +2,7 @@
 
 *What is next to build, why it matters, how it will be done, and in what order.*
 
-**Status as of 2026-06-05.** This roadmap is the forward-looking companion to **`TECHNICAL-OVERVIEW.md`** (what exists today) and **`NEXT-SPRINTS.md`** (the live per-task board). Every item below is scoped to ship the EuroOS way: **host tests where possible + a QEMU boot-verify + docs**, with no MVP shortcuts.
+**Status as of 2026-10-05** (sections 0b and 14 are the current plan; the June sections below are kept as the long list). This roadmap is the forward-looking companion to **`TECHNICAL-OVERVIEW.md`** (what exists today) and **`NEXT-SPRINTS.md`** (the live per-task board). Every item below is scoped to ship the EuroOS way: **host tests where possible + a QEMU boot-verify + docs**, with no MVP shortcuts.
 
 ---
 
@@ -19,6 +19,41 @@
 **Phase 1 (foundations) and the high-value Phase-2 items are complete.** Done and verified: the security foundation (X.509 chain validation, signed code, guarded-stack mechanism, W^X/SMEP/SMAP), storage depth (EuroFS CoW + A/B superblock + scrub, NVMe, multi-disk VFS), network depth (TCP/IP + IPv6 + TLS 1.3 + DHCP/DNS, ICMP, select/poll), the process model (fork/exec/wait/signals/SMP), the app layer (AF_UNIX, a live display server), and update durability (A/B slot config on a raw block).
 
 **The remaining work splits into five themes**, ordered below by value × safety. The honest truth about what's left: the *easy, fully-verifiable wins are largely banked*. What remains is either **deeper kernel surgery** (a page-fault IST, a two-stage loader, per-subsystem locking) or **large new subsystems** (a dynamic linker, a WASM runtime, a USB stack, audio, FDE). Each deserves its own focused, attended session.
+
+---
+
+## 0b. Where we are on 2026-10-05, and what comes next
+
+Done and verified since June (details in `TECHNICAL-OVERVIEW.md` and the sprint
+plans in `docs/`): guarded stacks and the two-stage A/B loader (G1, G4); the glibc
+Linux-ABI bridge up to a multi-process Chromium that renders the live site over
+HTTPS on real hardware and plays a local video with sound (`SPRINT-PLAN-CHROME-WORKPLACE.md`);
+USB, NVMe/AHCI, audio, TPM, printing (Sprint I, `SPRINT-PLAN-METAL.md`); EuroID users
+and sessions (K1); signed OTA updates with rollback (K2); signed, page-verified
+EuroPack disks (`crates/europack`); the sovereign-trust and immutability layers
+(Sprints L, O, P); and the guided installer (Q1, `SPRINT-PLAN-INSTALLER.md`).
+
+Two outside signals shape the next sprints: the Dutch DAWO workplace programme and
+a school pilot that moved from Fedora Silverblue to NixOS. Both say the same thing:
+an immutable, admin-controlled workplace is wanted, and adoption breaks on RAM
+footprint, one legacy Windows application, stability, and blame-the-new-OS.
+
+**Next, in order** (each is a sprint with QEMU-measurable exit criteria, see §14):
+
+1. **WP1 Process isolation for the Linux layer** — the browser runs with
+   `--no-sandbox` and every compat process shares the session uid; no syscall
+   filter, no W^X on user mappings, no address randomisation, no real rlimits.
+2. **WP2 IOMMU / DMA isolation** — the only open public issue (#11); QEMU `intel-iommu`.
+3. **WP3 Swap and memory footprint** — Chromium needs > 5 GiB today; 8 GiB laptops
+   are the norm in the field.
+4. **WP4 Stability gate** — a syscall fuzzer on the Linux ABI, an hours-long soak
+   run, and the dev build's full self-test suite green in QEMU on every commit.
+5. **WP5 RDP client** — removes the "one legacy Windows app" blocker.
+6. **Chromium workplace sprint, remainder** — YouTube (DASH/MSE + cross-process
+   DevTools), real input, hours-stable sessions.
+
+Hardware-only items (Wi-Fi, Bluetooth, suspend, hibernate, multi-monitor, battery)
+wait for a lab machine.
 
 ---
 
@@ -271,10 +306,10 @@ A structured, tamper-evident system audit log: every capability grant/revoke, ev
 
 ## 11. Distribution & governance (Sprint Q)
 
-### Q1 — Installer / live image `N 🧪`
-A guided installer: partition layout selection, locale + keyboard setup, user account creation (K1), FDE key enrollment (K3), and EuroCA certificate provisioning. A live-boot mode (RAM-only, no install) for evaluation. The installer itself runs as a signed EuroOS userspace process.
+### Q1 — Installer / live image `N 🧪` ✅ BUILT 2026-10-03 (QEMU-verified; real hardware pending)
+A guided installer (EuroInstall wizard on the live desktop): language, keyboard, a blank target disk, a real EuroID account (Argon2id, administrator), FDE key enrolment when a TPM is present, summary, install, restart. The live medium writes nothing until the user confirms; the installed system loads its own identity store, applies `/etc/keymap`, and never auto-logs in. Plan and log: `SPRINT-PLAN-INSTALLER.md`.
 - **Why:** `dd if=eurokernel.img of=/dev/sdX` is not a user-facing installation path. Without an installer, EuroOS cannot be adopted by anyone who is not a kernel developer.
-- **Verify:** a fresh x86-64 machine boots the live image, runs the installer, reboots, and reaches the desktop with the configured locale, user, and FDE enabled.
+- **Verify:** `scripts/wizard-install-test.py` drives the wizard over QMP on the public image profile, boots the target alone, rejects a wrong password and signs in with the typed one (14/14, proof in `docs/proof/2026-10-03-installer-wizard-*.png`). Still open: a real-hardware run, an unattended answer file for fleets, a recovery passphrase without TPM, dual boot.
 
 ### Q2 — Reproducible builds & release pipeline `N 🧪`
 Deterministic build pipeline (fixed timestamps, content-addressed artifacts) and a `eurorepro verify <image>` tool. Integrated with the CI harness (already Woodpecker-compatible by design). Every release tag produces a signed manifest linking source commit → binary hash → Ed25519 signature.
@@ -306,6 +341,31 @@ The fastest, safest path to the biggest outcomes:
 
 ### Dependency notes
 - H5 depends on H3/H4. K2 depends on G4 + A1 (✅). L3 (verity) depends on G4 (multi-partition GPT) + K3 (FDE key model). O1 (TPM) depends on I3 (ACPI, for TPM MMIO discovery) or direct MMIO. N1 (WiFi) depends on I1 (USB). O2 (attestation) depends on O1 (TPM). L3 (partition verity) depends on L1 (inode flags) for the build-time flag pass. P3 (audit log) depends on L1 (APPEND_ONLY). M3 (repro builds) depends on Q2 (release pipeline).
+
+---
+
+## 14. Workplace readiness (added 2026-10-05)
+
+### WP1 — Process isolation for the Linux layer `N 🔒 🏗️`
+A per-app policy from the EuroGuard manifest, enforced by the kernel on the Linux ABI: a syscall allow-list, no writable-and-executable user mappings, randomised mmap/stack/brk bases, real rlimits, and a per-process uid for compat processes. Compensates the missing Chromium sandbox the EuroOS way (kernel-enforced policy, not namespaces).
+- **Why:** a browser compromise is a session compromise today; EuroGuard protects native apps but not glibc processes.
+- **Verify:** a self-test program that attempts each forbidden action is killed with the right signal; the Chromium QEMU run still renders euro-os.eu; the boot self-test suite stays green.
+
+### WP2 — IOMMU / DMA isolation `N 🔒` (= O4, GitHub #11)
+VT-d: a DMAR parser, context tables, and device-to-domain mapping so a device can only reach the buffers the kernel handed it.
+- **Verify:** QEMU `-device intel-iommu`; a deliberate DMA to a foreign page is faulted and logged; NVMe, e1000 and xHCI keep working.
+
+### WP3 — Swap and memory footprint `N 🔒` (= J3 plus a footprint pass)
+Anonymous-page swap to the EuroVar partition under pressure, plus measurement and reduction of the kernel's static image (610 MB today) and of Chromium's pool sizing.
+- **Verify:** Chromium renders euro-os.eu in a 4 GiB QEMU guest; the installed system boots in 2 GiB.
+
+### WP4 — Stability gate `R 🔒`
+A syscall fuzzer on the Linux ABI (extending `eurofuzz` to the kernel boundary), an hours-long soak run of the desktop plus Chromium, Linux thread-group semantics on faults (a crashing thread ends its process; landed 2026-10-05), and the dev build's full self-test suite as a required QEMU gate.
+- **Verify:** fuzzer finds no panic in 1 hour; a 2-hour soak ends with the desktop responsive; the gate is green on main.
+
+### WP5 — RDP client `N 🧪`
+A native remote-desktop client (RDP 10 core, TLS, keyboard, mouse, clipboard) so one legacy Windows application does not block a whole deployment.
+- **Verify:** a session to a Windows host in QEMU shows the remote desktop and types into it.
 
 ---
 

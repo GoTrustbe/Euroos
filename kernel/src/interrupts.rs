@@ -452,6 +452,7 @@ extern "x86-interrupt" fn invalid_opcode_handler(frame: InterruptStackFrame) {
         }
         let idx = crate::sched::mark_current_dead();
         crate::ring3::note_isolation_kill(idx, ip);
+        crate::ring3::fault_kill_group(idx, 4); // SIGILL: the whole thread group, as on Linux
         x86_64::instructions::interrupts::enable();
         loop {
             x86_64::instructions::hlt();
@@ -504,6 +505,7 @@ extern "x86-interrupt" fn gp_handler(frame: InterruptStackFrame, code: u64) {
         }
         let idx = crate::sched::mark_current_dead();
         crate::ring3::note_isolation_kill(idx, ip);
+        crate::ring3::fault_kill_group(idx, 11); // SIGSEGV: the whole thread group, as on Linux
         x86_64::instructions::interrupts::enable();
         loop {
             x86_64::instructions::hlt();
@@ -599,6 +601,7 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
         // A PREEMPTIVE background process: terminate that task; the rest keeps running.
         let idx = crate::sched::mark_current_dead();
         let pid = crate::ring3::note_isolation_kill(idx, addr);
+        crate::ring3::fault_kill_group(idx, 11); // SIGSEGV: the whole thread group, as on Linux
         {
             let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
             crate::paging::dump_walk(cr3, addr);

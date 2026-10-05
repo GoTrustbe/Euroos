@@ -4162,6 +4162,51 @@ pub fn note_isolation_kill(task: usize, addr: u64) -> u64 {
     0
 }
 
+/// Drop every futex wait-queue entry of task `t`. A task that dies while parked
+/// on a futex must not be woken later by a wake on the same address from an
+/// unrelated program (every run_glibc program maps at the same base).
+fn futex_purge_task(t: usize) {
+    FUTEX_QUEUE.lock().retain(|&(_, task)| task != t);
+    if t < 64 {
+        FUTEX_WAIT_ADDR[t].store(0, Ordering::Relaxed);
+    }
+}
+
+/// A fault in one thread of a run_glibc program kills the whole thread group, as
+/// on Linux (SIGILL/SIGSEGV are delivered to the process). Without this the main
+/// thread waits forever in pthread_join for a worker that died, the launcher gives
+/// up on a timeout, and its teardown freed the still-live task's kernel stack and
+/// address space under it: the next wake ran that task on another thread's stack
+/// (the ring-3 INVALID OPCODE at a stack address followed by a kernel #GP in the
+/// gcond self-test). The persistent app (chrome) keeps the per-thread kill so a
+/// renderer-thread crash does not take the whole browser down. Returns true if a
+/// group was terminated.
+pub fn fault_kill_group(cur: usize, signal: u8) -> bool {
+    let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+    if main == usize::MAX || PERSIST_PML4.load(Ordering::Relaxed) != 0 {
+        return false;
+    }
+    let threads: alloc::vec::Vec<usize> = GLIBC_THREADS.lock().clone();
+    if cur != main && !threads.contains(&cur) {
+        return false;
+    }
+    let mut killed = 0usize;
+    for &t in core::iter::once(&main).chain(threads.iter()) {
+        futex_purge_task(t);
+        if t != cur && !crate::sched::is_dead(t) {
+            crate::sched::mark_dead(t);
+            killed += 1;
+        }
+    }
+    GLIBC_EXIT_CODE.store(128 + signal as u64, Ordering::Relaxed);
+    GLIBC_DONE.store(true, Ordering::Relaxed);
+    crate::serial_println!(
+        "[glibc] fault in task {cur}: thread group terminated (main t{main}, {} other task(s) killed) -> exit {}",
+        killed, 128 + signal as u64
+    );
+    true
+}
+
 /// Process overview (`ps`): the background musl processes + the fixed system tasks.
 pub fn ps_lines() -> alloc::vec::Vec<String> {
     let mut out = alloc::vec::Vec::new();
@@ -10112,10 +10157,14 @@ pub fn run_glibc_disk(
     if !GLIBC_DONE.load(Ordering::Relaxed) {
         crate::serial_println!("[glibc-disk] TIMEOUT waiting for the process to exit (committed {} demand pages, {} from-file/disk)",
             DEMAND_COMMITTED.load(Ordering::Relaxed), DEMAND_FILE_FILLED.load(Ordering::Relaxed));
-        free_thread_kstack(main_task);
-        for &t in GLIBC_THREADS.lock().iter() {
-            free_thread_kstack(t);
-        }
+        // The tasks are still alive in the scheduler: kill them BEFORE their kernel
+        // stacks and address space go away, or a later wake runs them on freed memory.
+        kill_glibc_group(main_task);
+    }
+    // Idempotent: the clean exit path already freed these.
+    free_thread_kstack(main_task);
+    for &t in GLIBC_THREADS.lock().iter() {
+        free_thread_kstack(t);
     }
     GLIBC_MAIN_TASK.store(usize::MAX, Ordering::Relaxed);
     crate::sched::reclaim_task(main_task);
@@ -10144,6 +10193,22 @@ pub fn run_glibc_disk(
 /// Skip every run_glibc self-test (each costs ~30-60 s of wall time under TCG).
 /// Set for a chrome-iteration boot: chrome IS the test there, and the suite in
 /// front of it turned a 5-minute cycle into a 40-minute one.
+/// Terminate a run_glibc program that never exited (launcher timeout): mark its
+/// main and worker tasks Dead and drop their futex waits, so nothing can wake them
+/// after their stacks and address space are freed. Caller is task 0, never one of them.
+fn kill_glibc_group(main_task: usize) {
+    let threads: alloc::vec::Vec<usize> = GLIBC_THREADS.lock().clone();
+    let mut killed = 0usize;
+    for &t in core::iter::once(&main_task).chain(threads.iter()) {
+        futex_purge_task(t);
+        if !crate::sched::is_dead(t) {
+            crate::sched::mark_dead(t);
+            killed += 1;
+        }
+    }
+    crate::serial_println!("[glibc] timed-out program killed: main t{main_task} + {} thread(s) ({killed} were still alive)", threads.len());
+}
+
 pub static SKIP_GLIBC_TESTS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 pub fn run_glibc(
@@ -10375,12 +10440,15 @@ pub fn run_glibc(
             let (n2, a2, r2) = last_syscall(t);
             crate::serial_println!("[glibc]   thread t{t} {:?}: last={n2}(a1={a2:#x})->{r2:#x}", thread_name(t));
         }
-        // Reclaim any kstacks still held by this run's tasks (idempotent on the
-        // clean-exit path, which already freed them).
-        free_thread_kstack(main_task);
-        for &t in GLIBC_THREADS.lock().iter() {
-            free_thread_kstack(t);
-        }
+        // The tasks are still alive in the scheduler: kill them BEFORE their kernel
+        // stacks and address space go away, or a later wake runs them on freed memory.
+        kill_glibc_group(main_task);
+    }
+    // Reclaim any kstacks still held by this run's tasks (idempotent on the
+    // clean-exit path, which already freed them).
+    free_thread_kstack(main_task);
+    for &t in GLIBC_THREADS.lock().iter() {
+        free_thread_kstack(t);
     }
     GLIBC_MAIN_TASK.store(usize::MAX, Ordering::Relaxed);
     // Recycle this run's scheduler slots (main + any workers). They are Dead, their

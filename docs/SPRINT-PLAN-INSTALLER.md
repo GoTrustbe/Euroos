@@ -100,6 +100,12 @@ stick, answer a few questions, create your own account, reboot into it.
   a separate worktree, with and without a target disk, so it predates this
   sprint and is tracked separately. The markers this sprint touches pass
   before that point: `[install]`, `[q1x]`, `[q1x3]`, `[euroid]`, `[ps2]`.
+- 2026-10-05: that fault is fixed (kernel: a faulting thread now ends its whole
+  thread group as on Linux, and a timed-out program is killed before its stacks
+  and address space are freed). The dev build's full self-test suite now runs
+  to the desktop in QEMU: exit criterion 5 met. Side effect made visible: the
+  gpango self-test dies with SIGSEGV (a worker thread writes to address 0x10);
+  the old per-thread kill hid that, it is a pre-existing bug to fix separately.
 
 ## Out of scope (next)
 
