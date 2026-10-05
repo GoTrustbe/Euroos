@@ -33,6 +33,11 @@ pub fn claim(bus: u8, dev: u8, func: u8, driver: &'static str) {
     }
 }
 
+/// Every (bus, dev, func, driver) claim so far, in claim order.
+pub fn claims() -> Vec<(u8, u8, u8, &'static str)> {
+    CLAIMS.lock().clone()
+}
+
 fn claimed_by(bus: u8, dev: u8, func: u8) -> Option<&'static str> {
     CLAIMS.lock().iter().find(|&&(b, d, f, _)| (b, d, f) == (bus, dev, func)).map(|&(_, _, _, n)| n)
 }

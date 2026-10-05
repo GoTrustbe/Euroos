@@ -76,7 +76,9 @@ unsafe fn w64(a: u64, v: u64) {
 fn dma_zeroed(size: usize, align: usize) -> u64 {
     use alloc::alloc::{alloc_zeroed, Layout};
     let layout = Layout::from_size_align(size.max(1), align).unwrap();
-    unsafe { alloc_zeroed(layout) as u64 }
+    let pa = unsafe { alloc_zeroed(layout) as u64 };
+    crate::iommu::dma_add("virtio-snd", pa, size.max(1)); // heap-backed DMA buffer: into the device's domain
+    pa
 }
 
 struct Vq {

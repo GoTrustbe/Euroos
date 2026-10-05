@@ -55,6 +55,7 @@ fn dma_zeroed(size: usize, align: usize) -> u64 {
     use alloc::alloc::{alloc_zeroed, Layout};
     let layout = Layout::from_size_align(size.max(1), align).unwrap();
     let p = unsafe { alloc_zeroed(layout) };
+    crate::iommu::dma_add("virtio-gpu", p as u64, size.max(1)); // heap-backed DMA buffer: into the device's domain
     p as u64
 }
 

@@ -30,6 +30,9 @@ pub struct FrameAllocator {
     hint: usize,
     /// Number of detected double-frees (memory-hardening diagnostics, S6).
     double_frees: usize,
+    /// Allocation trace `(base, frames)` while `trace_start` is active: how the
+    /// kernel learns which frames a device driver took for DMA (IOMMU domains).
+    trace: Option<Vec<(u64, usize)>>,
     /// Peak usage (highest number of simultaneously allocated frames) — for diagnostics
     /// + capacity planning.
     high_water: usize,
@@ -46,6 +49,7 @@ impl FrameAllocator {
             usable_total: 0,
             hint: 0,
             double_frees: 0,
+            trace: None,
             high_water: 0,
         }
     }
@@ -101,7 +105,31 @@ impl FrameAllocator {
     }
 
     /// Allocate one frame; returns the physical start address.
+    /// Start recording every allocation (base, frame count) until `trace_take`.
+    pub fn trace_start(&mut self) {
+        self.trace = Some(Vec::new());
+    }
+
+    /// Stop recording and return the allocations made since `trace_start`.
+    pub fn trace_take(&mut self) -> Vec<(u64, usize)> {
+        self.trace.take().unwrap_or_default()
+    }
+
+    fn note_alloc(&mut self, base: u64, count: usize) {
+        if let Some(t) = self.trace.as_mut() {
+            t.push((base, count));
+        }
+    }
+
     pub fn allocate(&mut self) -> Result<u64, FrameError> {
+        let r = self.allocate_inner();
+        if let Ok(b) = r {
+            self.note_alloc(b, 1);
+        }
+        r
+    }
+
+    fn allocate_inner(&mut self) -> Result<u64, FrameError> {
         for w in (self.hint..self.bitmap.len()).chain(0..self.hint) {
             if self.bitmap[w] != u64::MAX {
                 let b = self.bitmap[w].trailing_ones() as usize;
@@ -137,6 +165,7 @@ impl FrameAllocator {
             }
             self.free_frames -= count;
             self.note_high_water();
+            self.note_alloc(f as u64 * PAGE_SIZE, count);
             return Ok(f as u64 * PAGE_SIZE);
         }
         Err(FrameError::OutOfMemory)
@@ -169,6 +198,7 @@ impl FrameAllocator {
                 }
                 self.free_frames -= count;
                 self.note_high_water();
+                self.note_alloc(f as u64 * PAGE_SIZE, count);
                 return Ok(f as u64 * PAGE_SIZE);
             }
             f += align; // next aligned boundary
@@ -320,5 +350,25 @@ mod tests {
         }
         assert_eq!(a.allocate(), Err(FrameError::OutOfMemory));
         assert_eq!(a.free_frames(), 0);
+    }
+}
+
+#[cfg(test)]
+mod trace_tests {
+    use super::*;
+
+    #[test]
+    fn trace_records_every_allocation_between_start_and_take() {
+        let regions = [MemoryRegion { start: 0, len: 64 * 4096, usable: true }];
+        let mut fa = FrameAllocator::from_regions(&regions, 0);
+        let _ = fa.allocate().unwrap(); // not traced
+        fa.trace_start();
+        let a = fa.allocate().unwrap();
+        let b = fa.allocate_contiguous(3).unwrap();
+        let c = fa.allocate_aligned(2, 2).unwrap();
+        let t = fa.trace_take();
+        assert_eq!(t, vec![(a, 1), (b, 3), (c, 2)]);
+        let _ = fa.allocate().unwrap();
+        assert!(fa.trace_take().is_empty()); // tracing stopped
     }
 }

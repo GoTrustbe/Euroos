@@ -26,6 +26,9 @@ mod acpi;
 mod acpi_power;
 mod apic;
 mod iommu;
+/// The boot frame allocator, reachable by `iommu::dma_add` for live mappings after
+/// `iommu::program` (the desktop's scanout and hot-plugged USB buffers).
+pub static mut DMA_FALLOC: Option<*mut euromm::FrameAllocator> = None;
 mod appgfx;
 mod appicons;
 mod auth;
@@ -725,7 +728,7 @@ fn main() -> Status {
     }
 
     // virtio-blk: initialize the real disk (PIO/DMA works on our identity map).
-    virtio_blk::init(&mut allocator);
+    iommu::dma_scope(&mut allocator, "virtio-blk", |f| virtio_blk::init(f));
     // EuroPack: register files served straight from a pack disk (no RAM copy) —
     // how binaries too large to embed (chrome) reach the glibc loader.
     ring3::europack_scan();
@@ -738,7 +741,7 @@ fn main() -> Status {
 
     // NVMe (B2): detect + initialize an NVMe controller (admin/I/O queues,
     // identify), do a read/write self-test + SMART readout. No-op without NVMe.
-    if nvme::init(&mut allocator) {
+    if iommu::dma_scope(&mut allocator, "nvme", |f| nvme::init(f)) {
         nvme::self_test();
     }
 
@@ -746,7 +749,7 @@ fn main() -> Status {
     // controller (q35's built-in ICH9 carries the boot medium; the metal
     // matrix attaches scratch disks). Read-only self-test on partitioned
     // disks, full write/read/verify on blank ones. No-op without AHCI.
-    if ahci::init(&mut allocator) > 0 {
+    if iommu::dma_scope(&mut allocator, "ahci", |f| ahci::init(f)) > 0 {
         ahci::self_test();
     }
 
@@ -1328,7 +1331,7 @@ fn main() -> Status {
     use euronet::udp::UdpDatagram;
     let ipfmt = |ip: Ipv4Addr| format!("{}.{}.{}.{}", ip.0[0], ip.0[1], ip.0[2], ip.0[3]);
     let mut net_lines: Vec<String> = Vec::new();
-    if nic::init(&mut allocator) {
+    if iommu::dma_scope(&mut allocator, "nic", |f| nic::init(f)) {
         let my_mac = MacAddr(nic::mac().unwrap_or([0; 6]));
         let gw_ip = Ipv4Addr::new(10, 0, 2, 2);
         net_lines.push(format!(
@@ -2053,18 +2056,48 @@ fn main() -> Status {
     // I1: xHCI USB stack — real USB-HID input (keyboard/mouse) on modern
     // machines without PS/2. Enumerates every root-port device and polls the
     // interrupt-IN endpoint; the reports flow into the same input paths as PS/2.
-    if xhci::init(&mut allocator) {
+    if iommu::dma_scope(&mut allocator, "xhci", |f| xhci::init(f)) {
         serial_println!("[euro] xHCI USB initialized — {} HID device(s) live", xhci::hid_count());
     }
     // I2: Intel HD-Audio — codec enumeration + stream DMA that plays a (euroaudio-mixed)
     // tone. Proves the mixer→hardware chain (LPIB running = DMA playing).
-    if hda::init(&mut allocator) {
+    if iommu::dma_scope(&mut allocator, "hda", |f| hda::init(f)) {
         serial_println!("[euro] HD-Audio initialized — stream playing (LPIB={})", hda::stream_pos());
         // The self-test tone loops in the ring until something overwrites it: a
         // desktop that hums for ten minutes (run 70's WAV). Silence it now; the
         // ALSA device (W12) writes what is meant to play.
         if let Some((_, bytes)) = hda::pcm_ring() {
             hda::pcm_zero(0, bytes);
+        }
+    }
+    // GitHub #11, second step: every DMA driver has initialised, so confine each
+    // one to its own buffers and switch the VT-d units to EuroOS's translation.
+    unsafe { DMA_FALLOC = Some(&mut allocator as *mut _) };
+    let confined = iommu::program(&mut allocator);
+    if confined > 0 {
+        // Proof, not a claim: a deliberate DMA into a frame that belongs to no
+        // device must be refused by the hardware and show up as a fault record,
+        // while the driver's own reads keep working.
+        if nvme::present() {
+            match allocator.allocate() {
+                Ok(scratch) => {
+                    unsafe { core::ptr::write_bytes(scratch as *mut u8, 0xA5, 4096) };
+                    let completed = nvme::dma_probe(scratch);
+                    let changed = unsafe { core::slice::from_raw_parts(scratch as *const u8, 512) }.iter().any(|&b| b != 0xA5);
+                    let faults = iommu::poll_faults();
+                    let mut sector = [0u8; 512];
+                    let own = nvme::read_sectors(0, &mut sector);
+                    let ok = !changed && faults >= 1 && own;
+                    serial_println!(
+                        "[iommu-dma] foreign DMA (NVMe read into unmapped frame {scratch:#x}): completed={completed:?} memory-changed={changed} fault-records={faults} · NVMe's own read still works={own} → {}",
+                        if ok { "OK (device DMA confined by VT-d second-level translation; GitHub #11) ✓" } else { "FAILED" }
+                    );
+                    let _ = allocator.free(scratch);
+                }
+                Err(_) => serial_println!("[iommu-dma] no scratch frame — probe skipped"),
+            }
+        } else {
+            serial_println!("[iommu-dma] translation on, but no NVMe controller to run the foreign-DMA probe against (attach -device nvme)");
         }
     }
     x86_64::instructions::interrupts::enable();

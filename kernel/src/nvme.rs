@@ -334,6 +334,25 @@ impl Nvme {
 /// 512-byte LBAs via a PRP list. Larger requests are chunked transparently.
 const DATA_MAX: usize = 64 * 1024;
 
+/// IOMMU proof: ask the controller to DMA one block (LBA 0) into `target_pa`,
+/// a frame that is deliberately NOT in the NVMe domain. With translation on the
+/// device must be refused: the memory stays untouched and the unit records a
+/// fault. Returns `Some(status == 0)` once the command completes, `None` without
+/// a controller. Never used for real I/O.
+pub fn dma_probe(target_pa: u64) -> Option<bool> {
+    unsafe {
+        let nv = (*core::ptr::addr_of_mut!(NVME)).as_mut()?;
+        let mut cmd = [0u32; 16];
+        cmd[0] = 0x02 | ((nv.cid() as u32) << 16); // read
+        cmd[1] = 1;
+        cmd[6] = (target_pa & 0xFFFF_FFFF) as u32;
+        cmd[7] = (target_pa >> 32) as u32;
+        cmd[12] = 0; // one LBA
+        nv.io.submit(&cmd);
+        Some(matches!(nv.io.wait(), Some(0)))
+    }
+}
+
 /// Read `buf.len()` bytes from byte-LBA `lba` (512-byte sectors). Requests
 /// larger than the DMA window are split into 64 KiB commands.
 pub fn read_sectors(lba: u64, buf: &mut [u8]) -> bool {
