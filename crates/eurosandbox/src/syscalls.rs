@@ -92,8 +92,10 @@ fn renderer(num: u64, a1: u64, a3: u64) -> Verdict {
         | 105 | 106 | 113 | 114 | 117 | 119 | 122 | 123
         // inbound network and raw sockets
         | 49 | 50 | 43 | 288
-        // file-system modification
-        | 85 | 76 | 82 | 316 | 83 | 258 | 84 | 86 | 265 | 87 | 263 | 88 | 266 | 90 | 268 | 92 | 260 | 133
+        // file-system modification. unlink/unlinkat/rmdir stay allowed: a renderer
+        // deletes its own unlinked-but-open shared-memory files (measured on
+        // Chromium 152, 2026-10-05); what it may delete is the VFS's uid check.
+        | 85 | 76 | 82 | 316 | 83 | 258 | 86 | 265 | 88 | 266 | 90 | 268 | 92 | 260 | 133
         // System V shared memory and semaphores
         | 29 | 30 | 31 | 64 | 65 | 66
         // keyrings and the clock
@@ -136,7 +138,7 @@ mod tests {
 
     #[test]
     fn renderer_denies_process_network_and_fs_changes() {
-        for n in [57u64, 58, 59, 101, 165, 105, 49, 50, 87, 83, 90, 92, 29] {
+        for n in [57u64, 58, 59, 101, 165, 105, 49, 50, 82, 83, 90, 92, 29] {
             assert_eq!(check(Profile::Renderer, n, 0, 0), Verdict::Kill(SIGSYS), "syscall {n}");
         }
         // fork via clone (no CLONE_THREAD) is a new process; a thread is fine.
@@ -150,7 +152,7 @@ mod tests {
     #[test]
     fn renderer_keeps_what_rendering_needs() {
         // read/write/mmap/munmap/futex/openat/close/epoll/sendmsg/recvmsg/memfd/clock_gettime
-        for n in [0u64, 1, 9, 11, 202, 257, 3, 232, 233, 46, 47, 319, 228, 14, 13, 157] {
+        for n in [0u64, 1, 9, 11, 202, 257, 3, 232, 233, 46, 47, 319, 228, 14, 13, 157, 87, 263] {
             assert_eq!(check(Profile::Renderer, n, 0, 3), Verdict::Allow, "syscall {n}");
         }
     }

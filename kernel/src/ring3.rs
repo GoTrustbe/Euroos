@@ -11569,9 +11569,17 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 }
                 eurosandbox::Verdict::Kill(sig) => {
                     PROFILE_KILLS.fetch_add(1, Ordering::Relaxed);
+                    // Name the path for the path-taking syscalls, so a too-strict
+                    // profile can be read straight off the log.
+                    let path_ptr = match num {
+                        2 | 4 | 6 | 21 | 59 | 76 | 83 | 84 | 85 | 87 | 88 | 89 | 90 | 92 | 133 | 161 => a1,
+                        257 | 258 | 260 | 263 | 265 | 266 | 268 | 322 => a2,
+                        _ => 0,
+                    };
+                    let path = if path_ptr != 0 { String::from_utf8_lossy(&user_cstr(path_ptr, 96)).into_owned() } else { String::new() };
                     crate::serial_println!(
-                        "[sbx] task {cur} ({}): syscall {num}({a1:#x}, {a2:#x}, {a3:#x}) outside its profile -> process killed (signal {sig}, exit {})",
-                        prof.name(), 128 + sig as u64
+                        "[sbx] task {cur} ({}): syscall {num}({a1:#x}, {a2:#x}, {a3:#x}){} outside its profile -> process killed (signal {sig}, exit {})",
+                        prof.name(), if path.is_empty() { String::new() } else { alloc::format!(" path={path:?}") }, 128 + sig as u64
                     );
                     // The same path as exit_group(): frees the process, never returns.
                     return linux_dispatch_inner_raw(231, 128 + sig as u64, 0, 0, 0, 0);

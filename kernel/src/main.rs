@@ -2332,7 +2332,7 @@ fn main() -> Status {
         serial_println!(
             "[sbx] syscall profiles: full-profile-runs={} · strict-mode-write-allowed={} · strict-mode-open-kills-process={} (exit {esb2}) · never-returned-into-program={} → {}",
             esb1 == 161, osb2.contains("write still allowed"), esb2 == 137, !osb2.contains("NOT enforced"),
-            if sbx_ok { "OK (kernel-enforced per-process syscall policy, Linux seccomp strict semantics) ✓" } else { "FAILED" }
+            if sbx_ok { "OK (kernel-enforced per-process syscall policy, Linux seccomp strict semantics) ✓" } else if esb1 == u64::MAX { "skipped (glibc self-tests off in this boot)" } else { "FAILED" }
         );
         ring3::GLIBC_DEADLINE_TICKS.store(prev_deadline, core::sync::atomic::Ordering::Relaxed);
 
@@ -3917,6 +3917,14 @@ fn main() -> Status {
     // EuroInstall execution (Q1 capstone): really format + provision a
     // RAM disk and prove the installation survives a remount.
     instexec::selftest(rtc::epoch());
+    // Lab default for self-test builds: the QEMU/NUC harnesses (qmp-input.py,
+    // chrome-desktop.sh, nuc-desktop-run.sh) inject keys as if the guest keyboard
+    // were Belgian AZERTY. That used to be a side effect of the [q1x] provisioning
+    // self-test; it is now explicit, and only here. Release media stay on the US
+    // default until the installer's /etc/keymap applies.
+    if cfg!(feature = "selftest") && ps2::set_layout_tag("be-azerty") {
+        serial_println!("[ps2] lab default keyboard layout: be-azerty (self-test builds; the harnesses type AZERTY)");
+    }
 
     if has_mnt {
         use eurofs::FileSystem;
@@ -4369,8 +4377,10 @@ fn main() -> Status {
             accent: Color::ACCENT,
             sec: eds::SecState::new(true, true, false),
             app: suite_ui::SuiteApp::Installer,
-            // Open on a live boot of an install medium; hidden on an installed system.
-            visible: installer::open_on_live_boot(),
+            // Open on a live boot of an install medium (the public image); hidden on an
+            // installed system and in self-test builds, whose harnesses type into the
+            // terminal and must keep it focused (a pack disk makes install media appear).
+            visible: installer::open_on_live_boot() && !cfg!(feature = "selftest"),
             restore: None,
         });
         order.push(i_inst);

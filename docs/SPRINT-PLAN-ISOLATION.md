@@ -44,6 +44,34 @@ the same say over Linux-ABI processes, without Linux namespaces.
   run its own layer-2 sandbox (its layer-1 namespace sandbox stays replaced by
   the kernel profile).
 
+## Log
+
+- 2026-10-05: W1+W2 landed (commit d6c5c63). Host tests: eurosandbox 23 green.
+  Dev build in QEMU: `[sbx] syscall profiles: ... OK`, the strict-mode open()
+  kills the process with 137 (`[sbx] task 38 (strict): syscall 257(...) outside
+  its profile -> process killed (signal 9, exit 137)`) and never returns into
+  the program; LINUX COMPAT 30/34 (was 28/32); the suite reaches the desktop.
+
+- 2026-10-05, W3 first measurement (QEMU TCG, `scripts/chrome-desktop.sh`,
+  Chromium 152 from the signed chrome-pack2): the browser spawned 3 utility and
+  2 renderer children, each got the renderer profile at execve. Findings:
+  (1) both renderers call `mprotect(prot=RWX)` (V8's JIT), so W^X cannot be
+  enforced for renderers without V8 flags (`--jitless` or PKU write-protect):
+  stays log-only; (2) one renderer was killed on `unlink` of its own
+  unlinked-but-open shared-memory file: unlink/unlinkat/rmdir are now allowed
+  under the renderer profile (what may be deleted is the VFS uid check);
+  (3) the kill log now names the path. Harness note: the dev/self-test boot
+  used to be in Belgian AZERTY by accident (the `[q1x]` provisioning side
+  effect); it is now set explicitly for self-test builds because every harness
+  types AZERTY. The wizard window no longer auto-opens in self-test builds (a
+  pack disk counts as install media and the window stole the terminal's focus).
+
+- 2026-10-05, W3 second measurement with the relaxed profile: 2 utility + 2
+  renderer children under the profile, 0 kills, 2 W^X logs, same 21-minute
+  budget. Under TCG the browser window does not map within that budget, so
+  "page renders with every child under the profile" (criterion 3) still needs
+  the KVM/NUC run; the launch path is clean.
+
 ## Exit criteria
 
 1. Host tests green for `eurosandbox`.
