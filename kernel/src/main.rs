@@ -2334,6 +2334,44 @@ fn main() -> Status {
             esb1 == 161, osb2.contains("write still allowed"), esb2 == 137, !osb2.contains("NOT enforced"),
             if sbx_ok { "OK (kernel-enforced per-process syscall policy, Linux seccomp strict semantics) ✓" } else if esb1 == u64::MAX { "skipped (glibc self-tests off in this boot)" } else { "FAILED" }
         );
+
+        // WP1 second half: cBPF seccomp filters, resource limits, ASLR, renderer scope.
+        let (osf, esf) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox", b"filter"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsandbox filter (cBPF seccomp): exit={esf} (want 159)");
+        for l in osf.lines() { serial_println!("[glibc]   {l}"); }
+        let (orl, erl) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox", b"rlimit"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsandbox rlimit (RLIMIT_NOFILE): exit={erl} (want 165)");
+        for l in orl.lines() { serial_println!("[glibc]   {l}"); }
+        let (oa1, ea1) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox", b"aslr"], &[b"PATH=/bin"], caps);
+        let (oa2, ea2) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox", b"aslr"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsandbox aslr x2: exit={ea1}/{ea2} (want 167)");
+        for l in oa1.lines().chain(oa2.lines()) { serial_println!("[glibc]   {l}"); }
+        let addrs = |o: &str| -> [u64; 3] {
+            let mut out = [0u64; 3];
+            if let Some(l) = o.lines().find(|l| l.starts_with("GSBX-ASLR")) {
+                for (i, key) in ["stack=", "heap=", "mmap="].iter().enumerate() {
+                    if let Some(p) = l.find(key) {
+                        let v = &l[p + key.len()..];
+                        let hex = v.trim_start_matches("0x");
+                        let end = hex.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(hex.len());
+                        out[i] = u64::from_str_radix(&hex[..end], 16).unwrap_or(0);
+                    }
+                }
+            }
+            out
+        };
+        let (p1, p2) = (addrs(&oa1), addrs(&oa2));
+        let differing = (0..3).filter(|&i| p1[i] != 0 && p2[i] != 0 && p1[i] != p2[i]).count();
+        let (osr, esr) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox", b"--type=renderer"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsandbox renderer scope (path scope + uid drop): exit={esr} (want 169)");
+        for l in osr.lines() { serial_println!("[glibc]   {l}"); }
+        let sbx2_ok = esf == 159 && osf.contains("getpid -> EPERM") && !osf.contains("NOT enforced")
+            && erl == 165 && ea1 == 167 && ea2 == 167 && differing >= 2 && esr == 169;
+        serial_println!(
+            "[sbx2] cBPF-filter(getpid-EPERM + socket-kills)={} · rlimits(NOFILE=8 -> EMFILE, hard-limit-raise-EPERM)={} · ASLR(stack/heap/mmap differ across runs: {differing}/3)={} · renderer-scope(/etc ok, /home EACCES, uid drop to 65534, no raise)={} → {}",
+            esf == 159 && osf.contains("getpid -> EPERM"), erl == 165, differing >= 2, esr == 169,
+            if sbx2_ok { "OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓" } else if esf == u64::MAX { "skipped (glibc self-tests off in this boot)" } else { "FAILED" }
+        );
         ring3::GLIBC_DEADLINE_TICKS.store(prev_deadline, core::sync::atomic::Ordering::Relaxed);
 
         // LEAN chrome-headless-shell run: skip the GUI/demo glibc tests (X11/gsparse/
@@ -3092,10 +3130,14 @@ fn main() -> Status {
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
         if !chrome_run {
-        let results: [(&str, u64, u64); 33] = [
+        let results: [(&str, u64, u64); 37] = [
             ("gpoll(poll timeout)", epo, 143),
             ("gsandbox(full profile)", esb1, 161),
             ("gsandbox(seccomp strict kills)", esb2, 137),
+            ("gsandbox(cBPF filter)", esf, 159),
+            ("gsandbox(rlimits)", erl, 165),
+            ("gsandbox(aslr)", if ea1 == 167 && ea2 == 167 && differing >= 2 { 167 } else { 0 }, 167),
+            ("gsandbox(renderer scope)", esr, 169),
             ("gcond(condvar broadcast)", eco, 157),
             ("gbrk(zeroed break growth)", ebk, 163),
             ("gscm(SCM_RIGHTS fd passing)", esc, 151),

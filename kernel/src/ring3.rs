@@ -4184,22 +4184,203 @@ pub static PROFILE_KILLS: core::sync::atomic::AtomicU64 = core::sync::atomic::At
 /// W^X mappings seen under the renderer profile (log-only until measured).
 pub static WX_SEEN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
+/// Bit 7 of a TASK_PROFILE byte: this task's process has seccomp filters
+/// installed (consult PROC_FILTERS); the low bits are the profile.
+const PROFILE_FILTERED: u8 = 0x80;
+
 pub fn task_profile(t: usize) -> eurosandbox::Profile {
     if t < crate::sched::MAX_TASKS {
-        eurosandbox::Profile::from_u8(TASK_PROFILE[t].load(Ordering::Relaxed))
+        eurosandbox::Profile::from_u8(TASK_PROFILE[t].load(Ordering::Relaxed) & !PROFILE_FILTERED)
     } else {
         eurosandbox::Profile::Full
     }
 }
 
+fn task_has_filters(t: usize) -> bool {
+    t < crate::sched::MAX_TASKS && TASK_PROFILE[t].load(Ordering::Relaxed) & PROFILE_FILTERED != 0
+}
+
 fn set_task_profile(t: usize, p: eurosandbox::Profile) {
     if t < crate::sched::MAX_TASKS {
-        TASK_PROFILE[t].store(p.as_u8(), Ordering::Relaxed);
+        let keep = TASK_PROFILE[t].load(Ordering::Relaxed) & PROFILE_FILTERED;
+        TASK_PROFILE[t].store(p.as_u8() | keep, Ordering::Relaxed);
+    }
+}
+
+fn set_task_filtered(t: usize) {
+    if t < crate::sched::MAX_TASKS {
+        TASK_PROFILE[t].fetch_or(PROFILE_FILTERED, Ordering::Relaxed);
     }
 }
 
 fn inherit_profile(parent: usize, child: usize) {
-    set_task_profile(child, task_profile(parent));
+    if parent < crate::sched::MAX_TASKS && child < crate::sched::MAX_TASKS {
+        TASK_PROFILE[child].store(TASK_PROFILE[parent].load(Ordering::Relaxed), Ordering::Relaxed);
+    }
+}
+
+/// The key of a process's state tables: a fork child's main task, or MAIN_KEY
+/// for the run_glibc main group (which has one process per run).
+const MAIN_KEY: usize = usize::MAX - 1;
+fn proc_key(task: usize) -> usize {
+    fork_child_owner(task).unwrap_or(MAIN_KEY)
+}
+
+/// Every task of the process of `cur` (main + its threads).
+fn proc_tasks(cur: usize) -> alloc::vec::Vec<usize> {
+    let mut v = alloc::vec::Vec::new();
+    match fork_child_owner(cur) {
+        Some(owner) => {
+            v.push(owner);
+            for &(t, m) in CHILD_THREADS.lock().iter() {
+                if m == owner { v.push(t); }
+            }
+        }
+        None => {
+            let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+            if main != usize::MAX { v.push(main); }
+            let child_threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter().map(|&(t, _)| t).collect();
+            for &t in GLIBC_THREADS.lock().iter() {
+                if !child_threads.contains(&t) { v.push(t); }
+            }
+        }
+    }
+    if !v.contains(&cur) { v.push(cur); }
+    v
+}
+
+/// seccomp filters per process (newest last), resource limits, and the
+/// process uid. Keyed by `proc_key`.
+static PROC_FILTERS: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<eurosandbox::bpf::Filter>)>> = Mutex::new(alloc::vec::Vec::new());
+static PROC_LIMITS: Mutex<alloc::vec::Vec<(usize, eurosandbox::Limits)>> = Mutex::new(alloc::vec::Vec::new());
+static PROC_UID: Mutex<alloc::vec::Vec<(usize, u32)>> = Mutex::new(alloc::vec::Vec::new());
+/// The unprivileged identity a process may drop to (`nobody`).
+pub const SANDBOX_UID: u32 = 65534;
+/// Renderer-scope path refusals (diagnostics).
+pub static PATH_DENIES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+fn proc_limits(key: usize) -> eurosandbox::Limits {
+    PROC_LIMITS.lock().iter().find(|(k, _)| *k == key).map(|(_, l)| *l)
+        .unwrap_or_else(|| eurosandbox::Limits::defaults(MAX_FD as u64))
+}
+
+fn proc_limits_set(key: usize, l: eurosandbox::Limits) {
+    let mut t = PROC_LIMITS.lock();
+    match t.iter_mut().find(|(k, _)| *k == key) {
+        Some(e) => e.1 = l,
+        None => t.push((key, l)),
+    }
+}
+
+fn proc_uid(key: usize) -> u32 {
+    PROC_UID.lock().iter().find(|(k, _)| *k == key).map(|(_, u)| *u)
+        .unwrap_or(crate::auth::session_uid() as u32)
+}
+
+fn proc_uid_set(key: usize, uid: u32) {
+    let mut t = PROC_UID.lock();
+    match t.iter_mut().find(|(k, _)| *k == key) {
+        Some(e) => e.1 = uid,
+        None => t.push((key, uid)),
+    }
+}
+
+/// A fork child starts with a copy of its parent's filters, limits and uid.
+fn proc_state_inherit(parent_task: usize, child_key: usize) {
+    let pk = proc_key(parent_task);
+    let filters = PROC_FILTERS.lock().iter().find(|(k, _)| *k == pk).map(|(_, f)| f.clone());
+    if let Some(f) = filters {
+        PROC_FILTERS.lock().push((child_key, f));
+    }
+    let lim = PROC_LIMITS.lock().iter().find(|(k, _)| *k == pk).map(|(_, l)| *l);
+    if let Some(l) = lim { proc_limits_set(child_key, l); }
+    let uid = PROC_UID.lock().iter().find(|(k, _)| *k == pk).map(|(_, u)| *u);
+    if let Some(u) = uid { proc_uid_set(child_key, u); }
+}
+
+fn proc_state_drop(key: usize) {
+    PROC_FILTERS.lock().retain(|(k, _)| *k != key);
+    PROC_LIMITS.lock().retain(|(k, _)| *k != key);
+    PROC_UID.lock().retain(|(k, _)| *k != key);
+}
+
+/// Install a seccomp filter from a user `struct sock_fprog` (len u16 @0, ptr @8)
+/// for the whole process of `cur`. Linux semantics: validated at load, newest
+/// filter evaluated first, the most restrictive action wins.
+fn seccomp_install_filter(cur: usize, fprog: u64) -> u64 {
+    let len = match read_user::<u16>(fprog) { Some(l) => l as usize, None => return EFAULT };
+    let ptr = match read_user::<u64>(fprog + 8) { Some(p) => p, None => return EFAULT };
+    if len == 0 || len > eurosandbox::bpf::MAX_INSNS {
+        return (-22i64) as u64; // -EINVAL
+    }
+    let bytes = match copy_from_user(ptr, len * 8) { Some(b) => b, None => return EFAULT };
+    let filter = match eurosandbox::bpf::Filter::from_bytes(&bytes) {
+        Ok(f) => f,
+        Err(e) => {
+            crate::serial_println!("[sbx] task {cur}: seccomp filter refused at load: {e:?}");
+            return (-22i64) as u64;
+        }
+    };
+    let key = proc_key(cur);
+    {
+        let mut t = PROC_FILTERS.lock();
+        match t.iter_mut().find(|(k, _)| *k == key) {
+            Some(e) => e.1.push(filter),
+            None => t.push((key, alloc::vec![filter])),
+        }
+    }
+    let n = PROC_FILTERS.lock().iter().find(|(k, _)| *k == key).map(|(_, f)| f.len()).unwrap_or(0);
+    for t in proc_tasks(cur) {
+        set_task_filtered(t);
+    }
+    crate::serial_println!("[sbx] task {cur}: seccomp filter #{n} installed ({len} insns) for its process");
+    0
+}
+
+/// Run the process's filters over this syscall. `None` = allowed; `Some(ret)` =
+/// the value to return (an errno) or the kill path already taken.
+fn seccomp_evaluate(cur: usize, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> Option<u64> {
+    let key = proc_key(cur);
+    let ret = {
+        let t = PROC_FILTERS.lock();
+        let filters = match t.iter().find(|(k, _)| *k == key) { Some((_, f)) => f, None => return None };
+        let data = eurosandbox::bpf::SeccompData {
+            nr: num as i32,
+            arch: eurosandbox::bpf::AUDIT_ARCH_X86_64,
+            instruction_pointer: unsafe { USER_RIP },
+            args: [a1, a2, a3, a4, a5, 0],
+        };
+        eurosandbox::bpf::evaluate(filters, &data)
+    };
+    use eurosandbox::bpf::Action;
+    match eurosandbox::bpf::action_of(ret) {
+        Action::Allow => None,
+        Action::Log => {
+            crate::serial_println!("[sbx] task {cur}: seccomp LOG syscall {num}");
+            None
+        }
+        Action::Errno(e) => Some((-(e as i64)) as u64),
+        Action::Enosys => Some((-38i64) as u64),
+        Action::Trap | Action::KillThread | Action::KillProcess => {
+            PROFILE_KILLS.fetch_add(1, Ordering::Relaxed);
+            crate::serial_println!("[sbx] task {cur}: seccomp filter -> syscall {num}({a1:#x}, {a2:#x}, {a3:#x}) killed the process (SIGSYS, exit 159)");
+            Some(linux_dispatch_inner_raw(231, 128 + 31, 0, 0, 0, 0))
+        }
+    }
+}
+
+/// Address-space layout randomisation for a fresh image: page-granular slides
+/// for the brk base, the mmap bump base and the stack top inside the arena, and
+/// a 2 MiB-granular slide of the demand pool. Entropy from the kernel CSPRNG.
+struct Slides { brk: u64, mmap: u64, stack: u64, demand: u64 }
+fn aslr_slides() -> Slides {
+    let r = crate::net::rand_u64();
+    Slides {
+        brk: (r & 0xF) << 16,              // 0..1 MiB in 64 KiB steps
+        mmap: ((r >> 4) & 0x1F) << 16,     // 0..2 MiB in 64 KiB steps
+        stack: ((r >> 9) & 0xFF) << 12,    // 0..1 MiB in 4 KiB steps
+        demand: ((r >> 17) & 0x3FF) << 21, // 0..2 GiB in 2 MiB steps
+    }
 }
 
 /// Apply `p` to the whole process of task `cur`: its main task and every thread
@@ -8573,16 +8754,17 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         // Flush the TLB so the now-unmapped VAs re-fault.
         unsafe { Cr3::write(Cr3::read().0, Cr3::read().1); }
     }
-    DEMAND_NEXT.store(DEMAND_BASE, Ordering::Relaxed);
+    DEMAND_NEXT.store(DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand, Ordering::Relaxed); // past the exe window, randomised
     DEMAND_FILE_MAPS.lock().clear();
     PROT_NONE_RANGES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_MAPS.lock().clear();
 
     let ldso_base = arena + 0x0080_0000;
-    let brk_start = arena + 0x0200_0000;
-    let mmap_start = arena + 0x0400_0000;
-    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000;
+    let sl = aslr_slides();
+    let brk_start = arena + 0x0200_0000 + sl.brk;
+    let mmap_start = arena + 0x0400_0000 + sl.mmap;
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000 - sl.stack;
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
@@ -8695,6 +8877,7 @@ fn do_glibc_fork() -> u64 {
     let pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     GLIBC_FORK_CHILDREN.lock().push((pid, child, pml4, child_arena, arena_frames));
     inherit_profile(crate::sched::current(), child);
+    proc_state_inherit(crate::sched::current(), child);
     child_mem_snapshot(child); // the child inherits the parent's demand-state
     // The child inherits the fd table INCLUDING its close-on-exec flags, so it
     // inherits the marks too. Without this the marks stayed on the parent and a
@@ -9363,9 +9546,10 @@ pub fn spawn_glibc_persistent(
     let ldso_base = arena + 0x0080_0000;
     // brk heap: [arena+32MiB, arena+64MiB); mmap bump area starts AFTER it so brk() and
     // mmap() never share a cursor (see BRK_CUR/BRK_END).
-    let brk_start = arena + 0x0200_0000;
-    let mmap_start = arena + 0x0400_0000;
-    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000;
+    let sl = aslr_slides();
+    let brk_start = arena + 0x0200_0000 + sl.brk;
+    let mmap_start = arena + 0x0400_0000 + sl.mmap;
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000 - sl.stack;
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
@@ -9398,7 +9582,12 @@ pub fn spawn_glibc_persistent(
     set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
-    set_task_profile(main_task, eurosandbox::Profile::Full);
+    TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
+    proc_state_drop(MAIN_KEY);
+    if argv.iter().any(|a| matches!(&a[..], b"--type=renderer" | b"--type=gpu-process" | b"--type=utility")) {
+        set_task_profile(main_task, eurosandbox::Profile::Renderer);
+        crate::serial_println!("[sbx] renderer syscall profile applied to task {main_task} (from argv)");
+    }
     PERSIST_ARENA.store(arena, Ordering::Relaxed);
     PERSIST_PML4.store(pml4, Ordering::Relaxed);
     PERSIST_FRAMES.store(frames as u64, Ordering::Relaxed);
@@ -9952,9 +10141,10 @@ fn glibc_disk_launch(
     unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
 
     let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
-    let brk_start = arena + 0x0200_0000;
-    let mmap_start = arena + 0x0400_0000;
-    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000;
+    let sl = aslr_slides();
+    let brk_start = arena + 0x0200_0000 + sl.brk;
+    let mmap_start = arena + 0x0400_0000 + sl.mmap;
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000 - sl.stack;
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
@@ -9984,7 +10174,7 @@ fn glibc_disk_launch(
     GLIBC_CTIDS.lock().clear();
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
-    DEMAND_NEXT.store(DEMAND_BASE, Ordering::Relaxed);
+    DEMAND_NEXT.store(DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand, Ordering::Relaxed); // past the exe window, randomised
     DEMAND_COMMITTED.store(0, Ordering::Relaxed);
     DEMAND_USED.store(false, Ordering::Relaxed);
     // Register the exe's disk-backed segments NOW (after the DEMAND_NEXT reset).
@@ -10034,7 +10224,12 @@ fn glibc_disk_launch(
     set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
-    set_task_profile(main_task, eurosandbox::Profile::Full);
+    TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
+    proc_state_drop(MAIN_KEY);
+    if argv.iter().any(|a| matches!(&a[..], b"--type=renderer" | b"--type=gpu-process" | b"--type=utility")) {
+        set_task_profile(main_task, eurosandbox::Profile::Renderer);
+        crate::serial_println!("[sbx] renderer syscall profile applied to task {main_task} (from argv)");
+    }
 
     Ok(DiskRun { main_task, arena, frames, pml4, dp_base, dp_frames, prev_demand, prev_file })
 }
@@ -10375,9 +10570,10 @@ pub fn run_glibc(
     let exe_base = arena; // PIE exe: first PT_LOAD has p_vaddr 0
     let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
     // brk heap [+32 MiB, +64 MiB); mmap bump area starts after it (disjoint cursors).
-    let brk_start = arena + 0x0200_0000;
-    let mmap_start = arena + 0x0400_0000; // runtime mmaps (libc, …) bump from +64 MiB
-    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000; // near the arena top
+    let sl = aslr_slides();
+    let brk_start = arena + 0x0200_0000 + sl.brk;
+    let mmap_start = arena + 0x0400_0000 + sl.mmap; // runtime mmaps (libc, …) bump from +64 MiB (+ slide)
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000 - sl.stack; // near the arena top (- slide)
 
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
@@ -10417,7 +10613,7 @@ pub fn run_glibc(
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
     // Fresh demand-paging state for this run (bump pointer, counters, used flag).
-    DEMAND_NEXT.store(DEMAND_BASE, Ordering::Relaxed);
+    DEMAND_NEXT.store(DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand, Ordering::Relaxed); // past the exe window, randomised
     DEMAND_COMMITTED.store(0, Ordering::Relaxed);
     DEMAND_USED.store(false, Ordering::Relaxed);
     // If this run uses demand paging, reserve a LARGE contiguous region from the main
@@ -10464,7 +10660,12 @@ pub fn run_glibc(
     set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
-    set_task_profile(main_task, eurosandbox::Profile::Full);
+    TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
+    proc_state_drop(MAIN_KEY);
+    if argv.iter().any(|a| matches!(&a[..], b"--type=renderer" | b"--type=gpu-process" | b"--type=utility")) {
+        set_task_profile(main_task, eurosandbox::Profile::Renderer);
+        crate::serial_println!("[sbx] renderer syscall profile applied to task {main_task} (from argv)");
+    }
     crate::serial_println!(
         "[glibc] spawned scheduled task {main_task}: ld-entry@{:#x} rsp@{rsp:#x} phdr@{:#x} phnum={}",
         ld_info.entry, exe_info.phdr, exe_info.phnum
@@ -11521,6 +11722,17 @@ pub fn dump_main_syscalls() {
 /// after the dispatch covers every creating syscall on every trace path.
 fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let r = linux_dispatch_inner_raw(num, a1, a2, a3, a4, a5);
+    // RLIMIT_NOFILE: a new descriptor number at or above the soft limit is closed
+    // again and the call fails with EMFILE, exactly as Linux reports it.
+    let returns_fd = matches!(num,
+        2 | 257 | 85 | 32 | 33 | 292 | 41 | 43 | 288 | 290 | 284 | 291 | 213 | 319 | 253 | 294 | 283 | 282 | 289);
+    if returns_fd && (r as i64) >= 0 && r < 1024 {
+        let key = proc_key(crate::sched::current());
+        if proc_limits(key).fd_exceeds(r) {
+            let _ = linux_dispatch_inner_raw(3, r, 0, 0, 0, 0);
+            return (-24i64) as u64; // -EMFILE
+        }
+    }
     // NOT dup/dup2/dup3: those alias an object that other holders share, and a
     // child's close on the alias must stay a mark, as the fd-ownership work
     // decided. Registering them (run 28) freed objects out from under NSS's
@@ -11558,6 +11770,29 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
     {
         let cur = crate::sched::current();
         let prof = task_profile(cur);
+        if prof == eurosandbox::Profile::Renderer {
+            // The renderer's file-system scope: refuse (EACCES) a path outside it.
+            let path_ptr = match num {
+                2 | 4 | 6 | 21 | 59 | 89 => a1,
+                257 | 262 | 269 | 267 | 322 => a2,
+                _ => 0,
+            };
+            if path_ptr != 0 {
+                let raw = user_cstr(path_ptr, 160);
+                if !eurosandbox::syscalls::path_allowed(prof, &raw) {
+                    let n = PATH_DENIES.fetch_add(1, Ordering::Relaxed);
+                    if n < 24 {
+                        crate::serial_println!("[sbx] task {cur} (renderer): syscall {num} path {:?} outside the renderer scope -> EACCES", String::from_utf8_lossy(&raw));
+                    }
+                    return (-13i64) as u64;
+                }
+            }
+        }
+        if task_has_filters(cur) {
+            if let Some(r) = seccomp_evaluate(cur, num, a1, a2, a3, a4, a5) {
+                return r;
+            }
+        }
         if prof != eurosandbox::Profile::Full {
             match eurosandbox::syscalls::check(prof, num, a1, a3) {
                 eurosandbox::Verdict::Allow => {}
@@ -11797,17 +12032,22 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 const PR_SET_NO_NEW_PRIVS: u64 = 38;
                 const PR_GET_NO_NEW_PRIVS: u64 = 39;
                 const SECCOMP_MODE_STRICT: u64 = 1;
+                const SECCOMP_MODE_FILTER: u64 = 2;
                 if a1 == PR_SET_SECCOMP {
+                    let cur = crate::sched::current();
                     if a2 == SECCOMP_MODE_STRICT {
-                        let cur = crate::sched::current();
                         set_process_profile(cur, eurosandbox::Profile::Strict);
                         crate::serial_println!("[sbx] task {cur}: seccomp strict mode (read/write/exit only) from here on");
                         return 0;
                     }
-                    return (-22i64) as u64; // -EINVAL: filter mode (cBPF) is not offered yet
+                    if a2 == SECCOMP_MODE_FILTER {
+                        return seccomp_install_filter(cur, a3);
+                    }
+                    return (-22i64) as u64;
                 }
                 if a1 == PR_GET_SECCOMP {
-                    return if task_profile(crate::sched::current()) == eurosandbox::Profile::Strict { 1 } else { 0 };
+                    let cur = crate::sched::current();
+                    return if task_profile(cur) == eurosandbox::Profile::Strict { 1 } else if task_has_filters(cur) { 2 } else { 0 };
                 }
                 if a1 == PR_SET_NO_NEW_PRIVS {
                     return 0; // always in effect: EuroOS has no setuid transitions
@@ -11916,6 +12156,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
                     fork_child_release_fds(ctask); // flush deferred parent closes
                     child_opened_release(ctask);   // free the fds the child opened
+                    proc_state_drop(ctask);
                     // Give the child's COMMITTED demand pages back: without this every
                     // dead child leaked its pages and the pool ran dry at ~524 MiB
                     // under MP relaunch churn (run 12 POOL EXHAUSTED).
@@ -11986,6 +12227,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
         56 => {
             // clone(flags, child_stack, ptid, ctid, tls): a THREAD sharing this
             // glibc process's address space (pthread_create). Mirrors the bg path.
+            {
+                let cur = crate::sched::current();
+                if proc_limits(proc_key(cur)).tasks_exceed(proc_tasks(cur).len() as u64) {
+                    return (-11i64) as u64; // -EAGAIN: RLIMIT_NPROC
+                }
+            }
             let (flags, child_stack) = (a1, a2);
             if child_stack == 0 || flags & 0x0000_0100 == 0 {
                 // No CLONE_VM (or no stack) = a real fork (new address space). M1.
@@ -12037,6 +12284,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             child as u64
         }
         435 => {
+            {
+                let cur = crate::sched::current();
+                if proc_limits(proc_key(cur)).tasks_exceed(proc_tasks(cur).len() as u64) {
+                    return (-11i64) as u64; // -EAGAIN: RLIMIT_NPROC
+                }
+            }
             // clone3(cl_args, size): modern glibc's PRIMARY pthread_create path. We
             // implement it natively (rather than ENOSYS-forcing the fragile clone3->
             // clone fallback, which sets up the child stack for the wrong ABI and made
@@ -12951,6 +13204,10 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
         33 | 292 => dup2_fd(a1, a2),       // dup2(old,new) / dup3(old,new,flags)
         57 | 58 => {
             crate::serial_println!("[fork] {} syscall -> do_glibc_fork", if num == 57 { "fork" } else { "vfork" });
+            let cur = crate::sched::current();
+            if proc_limits(proc_key(cur)).tasks_exceed(proc_tasks(cur).len() as u64) {
+                return (-11i64) as u64; // -EAGAIN: RLIMIT_NPROC
+            }
             do_glibc_fork()
         }
         59 => {
@@ -13033,6 +13290,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
                         fork_child_release_fds(ctask);
                         child_opened_release(ctask);
+                        proc_state_drop(ctask);
                         crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
                         crate::procpool::free_range(arena, frames);
                         crate::procpool::free(pml4);
@@ -14353,11 +14611,32 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
             0
         }
+        105 | 113 | 117 => {
+            // setuid / setreuid / setresuid: a process may DROP to the sandbox identity
+            // (nobody, 65534) and nothing else; -1 arguments mean "unchanged".
+            let cur = crate::sched::current();
+            let key = proc_key(cur);
+            let have = proc_uid(key);
+            let wanted: alloc::vec::Vec<u32> = match num {
+                105 => alloc::vec![a1 as u32],
+                113 => alloc::vec![a1 as u32, a2 as u32],
+                _ => alloc::vec![a1 as u32, a2 as u32, a3 as u32],
+            };
+            let target = wanted.iter().copied().filter(|&u| u != u32::MAX).find(|&u| u != have);
+            match target {
+                None => 0,
+                Some(SANDBOX_UID) => {
+                    proc_uid_set(key, SANDBOX_UID);
+                    crate::serial_println!("[sbx] task {cur}: process dropped to uid {SANDBOX_UID} (nobody)");
+                    0
+                }
+                Some(_) => (-1i64) as u64, // -EPERM
+            }
+        }
         118 => {
-            // getresuid(*ruid, *euid, *suid): real/effective/saved uid — all the session
-            // uid here (no set-uid transitions). chrome reads these during sandbox/privilege
-            // checks. Args are 32-bit uid_t pointers.
-            let uid = crate::auth::session_uid() as u32;
+            // getresuid(*ruid, *euid, *suid): real/effective/saved uid of this process.
+            // chrome reads these during sandbox/privilege checks. Args are 32-bit uid_t pointers.
+            let uid = proc_uid(proc_key(crate::sched::current()));
             for p in [a1, a2, a3] {
                 if p != 0 && !write_user(p, uid) {
                     return EFAULT;
@@ -14409,7 +14688,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
             0
         }
-        102 | 107 => crate::auth::session_uid() as u64, // getuid/geteuid -> session uid
+        102 | 107 => proc_uid(proc_key(crate::sched::current())) as u64, // getuid/geteuid -> the process uid
         104 | 108 => crate::auth::session_gid() as u64, // getgid/getegid -> session gid
         24 => 0,                    // sched_yield — single-thread foreground: no-op
         72 => {
@@ -14470,18 +14749,43 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // getrlimit(resource, *rlim): WRITE {rlim_cur, rlim_max}. Returning success
             // without filling the buffer left chrome reading uninitialized limits and
             // CHECK-crashing (traced: last syscall before an IMMEDIATE_CRASH was this).
-            let (cur, max) = rlimit_for(a1);
+            // The process's own limits (eurosandbox::Limits); rlimit_for keeps the
+            // defaults table documented.
+            let _ = rlimit_for(a1);
+            let key = proc_key(crate::sched::current());
+            let (cur, max) = match proc_limits(key).get(a1 as u32) { Ok(v) => v, Err(_) => return (-22i64) as u64 };
             if a2 != 0 && (!write_user(a2, cur) || !write_user(a2 + 8, max)) {
                 return EFAULT;
             }
             0
         }
+        160 => {
+            // setrlimit(resource, *rlim): lower freely, never raise the hard limit.
+            let key = proc_key(crate::sched::current());
+            let (cur, max) = match (read_user::<u64>(a2), read_user::<u64>(a2 + 8)) { (Some(c), Some(m)) => (c, m), _ => return EFAULT };
+            let mut l = proc_limits(key);
+            match l.set(a1 as u32, cur, max) {
+                Ok(()) => { proc_limits_set(key, l); 0 }
+                Err(eurosandbox::rlimits::LimitError::Invalid) => (-22i64) as u64,
+                Err(eurosandbox::rlimits::LimitError::Perm) => (-1i64) as u64,
+            }
+        }
         302 => {
-            // prlimit64(pid, resource, *new_limit, *old_limit): report the current limit
-            // into old_limit; accept (ignore) any new_limit. resource = a2.
-            let (cur, max) = rlimit_for(a2);
+            // prlimit64(pid, resource, *new_limit, *old_limit): own process only
+            // (pid 0 / self); report the old limit, apply a new one the setrlimit way.
+            let key = proc_key(crate::sched::current());
+            let mut l = proc_limits(key);
+            let (cur, max) = match l.get(a2 as u32) { Ok(v) => v, Err(_) => return (-22i64) as u64 };
             if a4 != 0 && (!write_user(a4, cur) || !write_user(a4 + 8, max)) {
                 return EFAULT;
+            }
+            if a3 != 0 {
+                let (nc, nm) = match (read_user::<u64>(a3), read_user::<u64>(a3 + 8)) { (Some(c), Some(m)) => (c, m), _ => return EFAULT };
+                match l.set(a2 as u32, nc, nm) {
+                    Ok(()) => proc_limits_set(key, l),
+                    Err(eurosandbox::rlimits::LimitError::Invalid) => return (-22i64) as u64,
+                    Err(eurosandbox::rlimits::LimitError::Perm) => return (-1i64) as u64,
+                }
             }
             0
         }
@@ -14740,13 +15044,23 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // (SECCOMP_SET_MODE_FILTER) is refused with EINVAL until the kernel
             // interprets filters, so a caller falls back cleanly.
             const SECCOMP_SET_MODE_STRICT: u64 = 0;
-            if a1 == SECCOMP_SET_MODE_STRICT {
-                let cur = crate::sched::current();
-                set_process_profile(cur, eurosandbox::Profile::Strict);
-                crate::serial_println!("[sbx] task {cur}: seccomp strict mode (read/write/exit only) from here on");
-                0
-            } else {
-                (-22i64) as u64
+            const SECCOMP_SET_MODE_FILTER: u64 = 1;
+            const SECCOMP_GET_ACTION_AVAIL: u64 = 2;
+            let cur = crate::sched::current();
+            match a1 {
+                SECCOMP_SET_MODE_STRICT => {
+                    set_process_profile(cur, eurosandbox::Profile::Strict);
+                    crate::serial_println!("[sbx] task {cur}: seccomp strict mode (read/write/exit only) from here on");
+                    0
+                }
+                // flags: TSYNC (1) is implied (filters are per process here); LOG (2)
+                // and SPEC_ALLOW (4) are accepted; NEW_LISTENER (8) is not offered.
+                SECCOMP_SET_MODE_FILTER if a2 & !7 == 0 => seccomp_install_filter(cur, a3),
+                SECCOMP_GET_ACTION_AVAIL => {
+                    let act = read_user::<u32>(a3).unwrap_or(u32::MAX);
+                    if matches!(eurosandbox::bpf::action_of(act), eurosandbox::bpf::Action::Enosys) { (-95i64) as u64 } else { 0 }
+                }
+                _ => (-22i64) as u64,
             }
         }
         _ => {

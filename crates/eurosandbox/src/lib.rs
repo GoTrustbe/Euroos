@@ -14,11 +14,14 @@ extern crate alloc;
 
 pub mod image;
 pub mod limits;
+pub mod bpf;
 pub mod overlay;
+pub mod rlimits;
 pub mod syscalls;
 
 pub use image::{verify_image, ImageError, ImageManifest, SignedImage};
 pub use limits::{LimitBreach, ResourceLimits, Usage};
+pub use rlimits::Limits;
 pub use syscalls::{Profile, Verdict};
 pub use overlay::{Layer, Overlay};
 

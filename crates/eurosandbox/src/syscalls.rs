@@ -88,8 +88,10 @@ fn renderer(num: u64, a1: u64, a3: u64) -> Verdict {
         57 | 58 | 59 | 322
         // tracing, modules, mounts, reboot, host name
         | 101 | 175 | 176 | 165 | 166 | 161 | 155 | 169 | 170 | 171
-        // identity changes
-        | 105 | 106 | 113 | 114 | 117 | 119 | 122 | 123
+        // identity changes. setuid/setreuid/setresuid (105/113/117) stay allowed:
+        // the kernel only ever lets them DROP to the sandbox uid, which a renderer
+        // may do; group and supplementary-group changes are refused outright.
+        | 106 | 114 | 119 | 116 | 122 | 123
         // inbound network and raw sockets
         | 49 | 50 | 43 | 288
         // file-system modification. unlink/unlinkat/rmdir stay allowed: a renderer
@@ -115,9 +117,43 @@ fn renderer(num: u64, a1: u64, a3: u64) -> Verdict {
     }
 }
 
+/// May a process under `profile` name `path` in open/stat/access/readlink/execve?
+/// The compat VFS has no ownership model, so this is the renderer's file-system
+/// scope: program images, libraries, fonts, configuration, scratch and device
+/// files; never the user's data, the identity store or system state.
+pub fn path_allowed(profile: Profile, path: &[u8]) -> bool {
+    if profile != Profile::Renderer {
+        return true;
+    }
+    const DENY: &[&[u8]] = &[b"/etc/euroid", b"/etc/shadow", b"/etc/fde", b"/etc/euroguard", b"/etc/vault"];
+    const ALLOW: &[&[u8]] = &[
+        b"/pack/", b"/lib", b"/usr/", b"/etc/", b"/bin/", b"/tmp/", b"/dev/", b"/proc/", b"/sys/", b"/run/",
+    ];
+    if DENY.iter().any(|d| path.starts_with(d)) {
+        return false;
+    }
+    // A relative path resolves inside the process's cwd (the pack root).
+    if !path.starts_with(b"/") {
+        return true;
+    }
+    ALLOW.iter().any(|a| path.starts_with(a))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renderer_file_scope() {
+        for p in [&b"/pack/chrome/chrome_100_percent.pak"[..], b"/etc/fonts/fonts.conf", b"/dev/urandom", b"/proc/self/maps", b"/tmp/.org.chromium.x", b"chrome.pak"] {
+            assert!(path_allowed(Profile::Renderer, p), "{}", core::str::from_utf8(p).unwrap());
+        }
+        for p in [&b"/home/euro/demo/welcome.txt"[..], b"/etc/euroid/users.db", b"/etc/shadow", b"/var/log/x", b"/data/x", b"/boot/version"] {
+            assert!(!path_allowed(Profile::Renderer, p), "{}", core::str::from_utf8(p).unwrap());
+        }
+        assert!(path_allowed(Profile::Full, b"/home/euro/anything"));
+        assert!(path_allowed(Profile::Strict, b"/home/euro/anything")); // strict never gets to open at all
+    }
 
     #[test]
     fn full_allows_everything() {
@@ -138,7 +174,7 @@ mod tests {
 
     #[test]
     fn renderer_denies_process_network_and_fs_changes() {
-        for n in [57u64, 58, 59, 101, 165, 105, 49, 50, 82, 83, 90, 92, 29] {
+        for n in [57u64, 58, 59, 101, 165, 106, 49, 50, 82, 83, 90, 92, 29] {
             assert_eq!(check(Profile::Renderer, n, 0, 0), Verdict::Kill(SIGSYS), "syscall {n}");
         }
         // fork via clone (no CLONE_THREAD) is a new process; a thread is fine.
@@ -152,7 +188,7 @@ mod tests {
     #[test]
     fn renderer_keeps_what_rendering_needs() {
         // read/write/mmap/munmap/futex/openat/close/epoll/sendmsg/recvmsg/memfd/clock_gettime
-        for n in [0u64, 1, 9, 11, 202, 257, 3, 232, 233, 46, 47, 319, 228, 14, 13, 157, 87, 263] {
+        for n in [0u64, 1, 9, 11, 202, 257, 3, 232, 233, 46, 47, 319, 228, 14, 13, 157, 87, 263, 105, 117] {
             assert_eq!(check(Profile::Renderer, n, 0, 3), Verdict::Allow, "syscall {n}");
         }
     }

@@ -36,13 +36,31 @@ the same say over Linux-ABI processes, without Linux namespaces.
   strict, renderer profile at execve, `[sbx]` self-test with `userland/glibc/gsandbox`.
 - W3 ⬜ Measure the renderer profile on a real Chromium run (QEMU chrome-boot
   profile, then NUC): no `[sbx] ... killed` for a page load; count W^X mappings.
-- W4 ⬜ W^X enforcement where the measurement allows; `mprotect` audit.
-- W5 ⬜ Address randomisation for the demand pool (mmap/stack/brk bases).
-- W6 ⬜ Real rlimits (NOFILE, NPROC, AS) and a per-process uid for compat
-  processes, so file ownership and EuroGuard decisions apply per process.
-- W7 ⬜ Classic-BPF interpreter for `SECCOMP_SET_MODE_FILTER`, so Chromium can
-  run its own layer-2 sandbox (its layer-1 namespace sandbox stays replaced by
-  the kernel profile).
+- W4 🟡 W^X: measured on Chromium, renderers mprotect their JIT pages RWX, so
+  enforcement stays log-only (`WX_SEEN`) until V8 is run with write-protected
+  code; the strict profile never reaches mmap/mprotect at all.
+- W5 ✅ Address randomisation: per image a CSPRNG slide of the brk base
+  (64 KiB steps, 1 MiB), the mmap bump base (64 KiB steps, 2 MiB), the stack
+  top (4 KiB steps, 1 MiB) and the demand pool (2 MiB steps, 2 GiB). The exe
+  image itself still loads at a fixed base (next: slide the PIE base).
+- W6 ✅ Resource limits (`eurosandbox::rlimits`, Linux semantics: soft never above
+  hard, hard never raised): get/set/prlimit64 per process, `RLIMIT_NOFILE`
+  enforced on every descriptor-returning syscall (EMFILE), `RLIMIT_NPROC` on
+  clone/clone3/fork (EAGAIN). Per-process uid: `getuid`/`getresuid` report it,
+  `setuid`/`setreuid`/`setresuid` may only drop to 65534 (nobody); fork
+  children inherit, execve keeps. Because the compat VFS has no ownership
+  model, the renderer's isolation is a **file-system scope** instead:
+  open/stat/access/readlink/execve of a path outside `/pack /lib /usr /etc
+  /bin /tmp /dev /proc /sys /run` (and never `/etc/euroid`, `/etc/shadow`,
+  `/etc/fde`, `/etc/euroguard`, `/etc/vault`) fails with EACCES and is logged.
+- W7 ✅ Classic BPF for `seccomp(SECCOMP_SET_MODE_FILTER)` and
+  `prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER)` (`eurosandbox::bpf`): validated
+  at load like Linux (forward jumps only, aligned 32-bit loads inside
+  `seccomp_data`, 4096 instructions max), newest filter first, most restrictive
+  action wins (KILL_PROCESS > KILL_THREAD > TRAP > ERRNO > ... > ALLOW).
+  ERRNO returns the errno, LOG logs, TRAP/KILL end the process (SIGSYS, 159),
+  TRACE/USER_NOTIF become ENOSYS (no tracer). Filters are per process,
+  inherited on fork, kept across execve; `SECCOMP_GET_ACTION_AVAIL` answers.
 
 ## Log
 
@@ -71,6 +89,13 @@ the same say over Linux-ABI processes, without Linux namespaces.
   budget. Under TCG the browser window does not map within that budget, so
   "page renders with every child under the profile" (criterion 3) still needs
   the KVM/NUC run; the launch path is clean.
+
+- 2026-10-05, second half: `[sbx2]` self-test in QEMU: cBPF filter (getpid ->
+  EPERM, socket -> killed 159), RLIMIT_NOFILE=8 -> 5 opens then EMFILE and a
+  hard-limit raise -> EPERM, ASLR 3/3 addresses differ across two runs,
+  renderer scope (/etc ok, /home EACCES) and uid drop to 65534. One iteration
+  was needed: setuid under the renderer profile was in the deny list, but a
+  drop to nobody must be allowed there. LINUX COMPAT 32/38.
 
 ## Exit criteria
 
