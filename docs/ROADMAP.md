@@ -40,10 +40,10 @@ footprint, one legacy Windows application, stability, and blame-the-new-OS.
 
 **Next, in order** (each is a sprint with QEMU-measurable exit criteria, see §14):
 
-1. **WP1 Process isolation for the Linux layer** — the browser runs with
-   `--no-sandbox` and every compat process shares the session uid; no syscall
-   filter, no W^X on user mappings, no address randomisation, no real rlimits.
-2. **WP2 IOMMU / DMA isolation** — the only open public issue (#11); QEMU `intel-iommu`.
+1. **WP1 Process isolation for the Linux layer** — ✅ built 2026-10-05: syscall
+   profiles (renderer/utility/strict), seccomp cBPF filters, rlimits, ASLR,
+   renderer file scope; W^X stays log-only (V8 JIT), PIE base still fixed.
+2. **WP2 IOMMU / DMA isolation** — ✅ built 2026-10-05 (QEMU); hardware run pending.
 3. **WP3 Swap and memory footprint** — Chromium needs > 5 GiB today; 8 GiB laptops
    are the norm in the field.
 4. **WP4 Stability gate** — a syscall fuzzer on the Linux ABI, an hours-long soak
@@ -351,9 +351,9 @@ A per-app policy from the EuroGuard manifest, enforced by the kernel on the Linu
 - **Why:** a browser compromise is a session compromise today; EuroGuard protects native apps but not glibc processes.
 - **Verify:** a self-test program that attempts each forbidden action is killed with the right signal; the Chromium QEMU run still renders euro-os.eu; the boot self-test suite stays green.
 
-### WP2 — IOMMU / DMA isolation `N 🔒` (= O4, GitHub #11)
-VT-d: a DMAR parser, context tables, and device-to-domain mapping so a device can only reach the buffers the kernel handed it.
-- **Verify:** QEMU `-device intel-iommu`; a deliberate DMA to a foreign page is faulted and logged; NVMe, e1000 and xHCI keep working.
+### WP2 — IOMMU / DMA isolation `N 🔒` (= O4, GitHub #11) ✅ BUILT 2026-10-05 (QEMU-verified)
+VT-d translation programmed: one DMA domain per driver (the frames it allocated for DMA, traced at init), second-level page tables, unclaimed functions get no DMA, faults read and logged. Plan and log: `SPRINT-PLAN-IOMMU.md`.
+- **Verify:** QEMU `-device intel-iommu`: `[iommu-dma]` makes the NVMe controller DMA into a foreign frame; the hardware refuses it (fault recorded), the memory stays untouched, the driver's own read works; the self-test suite reaches the desktop. Open: legacy virtio bypasses the IOMMU in QEMU (needs modern virtio), interrupt remapping, a real-hardware run.
 
 ### WP3 — Swap and memory footprint `N 🔒` (= J3 plus a footprint pass)
 Anonymous-page swap to the EuroVar partition under pressure, plus measurement and reduction of the kernel's static image (610 MB today) and of Chromium's pool sizing.
