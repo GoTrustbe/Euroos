@@ -4172,6 +4172,64 @@ fn futex_purge_task(t: usize) {
     }
 }
 
+// ── Syscall profiles (sprint WP1): kernel-enforced per-process syscall policy ──
+// One byte per scheduler task (eurosandbox::Profile::as_u8). Lock-free: read on
+// every Linux-ABI syscall. Threads inherit from the task that created them, a
+// fork child from its parent, an execve'd chrome child gets the renderer profile
+// from its --type=, and a process may lower itself with seccomp strict mode.
+static TASK_PROFILE: [core::sync::atomic::AtomicU8; crate::sched::MAX_TASKS] =
+    [const { core::sync::atomic::AtomicU8::new(0) }; crate::sched::MAX_TASKS];
+/// Processes ended for a syscall outside their profile (diagnostics / `[sbx]`).
+pub static PROFILE_KILLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// W^X mappings seen under the renderer profile (log-only until measured).
+pub static WX_SEEN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+pub fn task_profile(t: usize) -> eurosandbox::Profile {
+    if t < crate::sched::MAX_TASKS {
+        eurosandbox::Profile::from_u8(TASK_PROFILE[t].load(Ordering::Relaxed))
+    } else {
+        eurosandbox::Profile::Full
+    }
+}
+
+fn set_task_profile(t: usize, p: eurosandbox::Profile) {
+    if t < crate::sched::MAX_TASKS {
+        TASK_PROFILE[t].store(p.as_u8(), Ordering::Relaxed);
+    }
+}
+
+fn inherit_profile(parent: usize, child: usize) {
+    set_task_profile(child, task_profile(parent));
+}
+
+/// Apply `p` to the whole process of task `cur`: its main task and every thread
+/// that shares its address space (the main group, or one fork child's group).
+fn set_process_profile(cur: usize, p: eurosandbox::Profile) {
+    set_task_profile(cur, p);
+    match fork_child_owner(cur) {
+        Some(owner) => {
+            set_task_profile(owner, p);
+            for &(t, m) in CHILD_THREADS.lock().iter() {
+                if m == owner {
+                    set_task_profile(t, p);
+                }
+            }
+        }
+        None => {
+            let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+            if main != usize::MAX {
+                set_task_profile(main, p);
+            }
+            let child_threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter().map(|&(t, _)| t).collect();
+            for &t in GLIBC_THREADS.lock().iter() {
+                if !child_threads.contains(&t) {
+                    set_task_profile(t, p);
+                }
+            }
+        }
+    }
+}
+
 /// A fault in one thread of a run_glibc program kills the whole thread group, as
 /// on Linux (SIGILL/SIGSEGV are delivered to the process). Without this the main
 /// thread waits forever in pthread_join for a worker that died, the launcher gives
@@ -6332,6 +6390,7 @@ static GSCM_ELF: &[u8] = include_bytes!("../../userland/glibc/gscm");
 // CONDITION-VARIABLE test: a broadcast must reach every waiter. glibc implements it
 // with futex REQUEUE/WAKE_OP, which a kernel can silently answer with "nobody".
 static GCOND_ELF: &[u8] = include_bytes!("../../userland/glibc/gcond");
+static GSANDBOX_ELF: &[u8] = include_bytes!("../../userland/glibc/gsandbox");
 // BRK test: memory gained through the program break must read as zeros — glibc's
 // calloc skips its memset for kernel-fresh chunks and inherits our garbage if not.
 static GBRK_ELF: &[u8] = include_bytes!("../../userland/glibc/gbrk");
@@ -6460,6 +6519,7 @@ pub fn gsleep_bytes() -> &'static [u8] { GSLEEP_ELF }
 pub fn gscm_bytes() -> &'static [u8] { GSCM_ELF }
 /// A condition-variable broadcast test (futex REQUEUE).
 pub fn gcond_bytes() -> &'static [u8] { GCOND_ELF }
+pub fn gsandbox_bytes() -> &'static [u8] { GSANDBOX_ELF }
 /// A brk-zeroing test (grow, poison, shrink, regrow: zeros every time).
 pub fn gbrk_bytes() -> &'static [u8] { GBRK_ELF }
 /// glibc stub libs chrome declares as NEEDED (real code is in libc.so.6).
@@ -6992,6 +7052,7 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gcairo" => include_bytes!("../../userland/glibc/gcairo.sig"),
         "/bin/gcairotext" => include_bytes!("../../userland/glibc/gcairotext.sig"),
         "/bin/gcond" => include_bytes!("../../userland/glibc/gcond.sig"),
+        "/bin/gsandbox" => include_bytes!("../../userland/glibc/gsandbox.sig"),
         "/bin/gcpp" => include_bytes!("../../userland/glibc/gcpp.sig"),
         "/bin/gdiskmap" => include_bytes!("../../userland/glibc/gdiskmap.sig"),
         "/bin/gevfd" => include_bytes!("../../userland/glibc/gevfd.sig"),
@@ -8480,6 +8541,13 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     if let Some(t) = argv.iter().find(|a| a.starts_with(b"--type=")) {
         crate::serial_println!("[execve] task {} is {}", crate::sched::current(),
             alloc::string::String::from_utf8_lossy(t));
+        // A renderer, GPU or utility child computes for the browser; it never needs
+        // to start processes, reach the network or change the file system. The
+        // kernel applies that profile here, the child cannot opt out.
+        if matches!(&t[..], b"--type=renderer" | b"--type=gpu-process" | b"--type=utility") {
+            set_task_profile(crate::sched::current(), eurosandbox::Profile::Renderer);
+            crate::serial_println!("[sbx] renderer syscall profile applied to task {}", crate::sched::current());
+        }
     }
 
     // The child's arena (its VA is in the swapped-in globals; Cr3 is the child's,
@@ -8626,6 +8694,7 @@ fn do_glibc_fork() -> u64 {
     register_thread_kstack(child, slot);
     let pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     GLIBC_FORK_CHILDREN.lock().push((pid, child, pml4, child_arena, arena_frames));
+    inherit_profile(crate::sched::current(), child);
     child_mem_snapshot(child); // the child inherits the parent's demand-state
     // The child inherits the fd table INCLUDING its close-on-exec flags, so it
     // inherits the marks too. Without this the marks stayed on the parent and a
@@ -9329,6 +9398,7 @@ pub fn spawn_glibc_persistent(
     set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
+    set_task_profile(main_task, eurosandbox::Profile::Full);
     PERSIST_ARENA.store(arena, Ordering::Relaxed);
     PERSIST_PML4.store(pml4, Ordering::Relaxed);
     PERSIST_FRAMES.store(frames as u64, Ordering::Relaxed);
@@ -9964,6 +10034,7 @@ fn glibc_disk_launch(
     set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
+    set_task_profile(main_task, eurosandbox::Profile::Full);
 
     Ok(DiskRun { main_task, arena, frames, pml4, dp_base, dp_frames, prev_demand, prev_file })
 }
@@ -10393,6 +10464,7 @@ pub fn run_glibc(
     set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
+    set_task_profile(main_task, eurosandbox::Profile::Full);
     crate::serial_println!(
         "[glibc] spawned scheduled task {main_task}: ld-entry@{:#x} rsp@{rsp:#x} phdr@{:#x} phnum={}",
         ld_info.entry, exe_info.phdr, exe_info.phnum
@@ -11483,6 +11555,30 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
 fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let _ = a4; // not every syscall uses arg4/arg5 (r10/r8)
     SYSCALL_SEQ.fetch_add(1, Ordering::Relaxed); // progress heartbeat (stall detector)
+    {
+        let cur = crate::sched::current();
+        let prof = task_profile(cur);
+        if prof != eurosandbox::Profile::Full {
+            match eurosandbox::syscalls::check(prof, num, a1, a3) {
+                eurosandbox::Verdict::Allow => {}
+                eurosandbox::Verdict::LogOnly(why) => {
+                    let n = WX_SEEN.fetch_add(1, Ordering::Relaxed);
+                    if n < 8 {
+                        crate::serial_println!("[sbx] task {cur} ({}): syscall {num} prot={a3:#x}: {why} (allowed, logged)", prof.name());
+                    }
+                }
+                eurosandbox::Verdict::Kill(sig) => {
+                    PROFILE_KILLS.fetch_add(1, Ordering::Relaxed);
+                    crate::serial_println!(
+                        "[sbx] task {cur} ({}): syscall {num}({a1:#x}, {a2:#x}, {a3:#x}) outside its profile -> process killed (signal {sig}, exit {})",
+                        prof.name(), 128 + sig as u64
+                    );
+                    // The same path as exit_group(): frees the process, never returns.
+                    return linux_dispatch_inner_raw(231, 128 + sig as u64, 0, 0, 0, 0);
+                }
+            }
+        }
+    }
     if (num as usize) < 512 {
         SYSCALL_BY_NUM[num as usize].fetch_add(1, Ordering::Relaxed);
     }
@@ -11687,6 +11783,31 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             if cur == GLIBC_MAIN_TASK.load(Ordering::Relaxed) { 1 } else { cur as u64 }
         }
         157 => {
+            {
+                const PR_GET_SECCOMP: u64 = 21;
+                const PR_SET_SECCOMP: u64 = 22;
+                const PR_SET_NO_NEW_PRIVS: u64 = 38;
+                const PR_GET_NO_NEW_PRIVS: u64 = 39;
+                const SECCOMP_MODE_STRICT: u64 = 1;
+                if a1 == PR_SET_SECCOMP {
+                    if a2 == SECCOMP_MODE_STRICT {
+                        let cur = crate::sched::current();
+                        set_process_profile(cur, eurosandbox::Profile::Strict);
+                        crate::serial_println!("[sbx] task {cur}: seccomp strict mode (read/write/exit only) from here on");
+                        return 0;
+                    }
+                    return (-22i64) as u64; // -EINVAL: filter mode (cBPF) is not offered yet
+                }
+                if a1 == PR_GET_SECCOMP {
+                    return if task_profile(crate::sched::current()) == eurosandbox::Profile::Strict { 1 } else { 0 };
+                }
+                if a1 == PR_SET_NO_NEW_PRIVS {
+                    return 0; // always in effect: EuroOS has no setuid transitions
+                }
+                if a1 == PR_GET_NO_NEW_PRIVS {
+                    return 1;
+                }
+            }
             // prctl(option, ...): accept the common setters as no-ops (PR_SET_DUMPABLE,
             // PR_SET_PDEATHSIG, PR_SET_VMA mapping-naming, …). chrome calls these
             // during thread + allocator setup; success is the safe answer.
@@ -11889,6 +12010,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
             register_thread_kstack(child, slot);
             GLIBC_THREADS.lock().push(child);
+            inherit_profile(crate::sched::current(), child);
             // If a fork child (or its thread) spawned this, the new thread
             // shares the child's address space -> the same ChildMem swap.
             if let Some(owner) = fork_child_owner(crate::sched::current()) {
@@ -11951,6 +12073,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
             register_thread_kstack(child, slot);
             GLIBC_THREADS.lock().push(child);
+            inherit_profile(crate::sched::current(), child);
             // If a fork child (or its thread) spawned this, the new thread
             // shares the child's address space -> the same ChildMem swap.
             if let Some(owner) = fork_child_owner(crate::sched::current()) {
@@ -14603,6 +14726,20 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
             unsafe { core::ptr::write_bytes(a3 as *mut u8, 1, pages) };
             0
+        }
+        317 => {
+            // seccomp(op, flags, args): strict mode is honoured; a cBPF filter
+            // (SECCOMP_SET_MODE_FILTER) is refused with EINVAL until the kernel
+            // interprets filters, so a caller falls back cleanly.
+            const SECCOMP_SET_MODE_STRICT: u64 = 0;
+            if a1 == SECCOMP_SET_MODE_STRICT {
+                let cur = crate::sched::current();
+                set_process_profile(cur, eurosandbox::Profile::Strict);
+                crate::serial_println!("[sbx] task {cur}: seccomp strict mode (read/write/exit only) from here on");
+                0
+            } else {
+                (-22i64) as u64
+            }
         }
         _ => {
             crate::serial_println!("[linux-abi] ENOSYS Linux syscall {num}");

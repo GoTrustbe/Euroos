@@ -2313,6 +2313,27 @@ fn main() -> Status {
         let (obk, ebk) = ring3::run_glibc(&mut allocator, ring3::gbrk_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gbrk"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] gbrk (zeroed break growth): exit={ebk} (want 163)");
         for l in obk.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gsandbox (WP1): a process keeps its full syscall set until it asks for
+        // less; after seccomp strict mode its first open() must END the process
+        // (SIGKILL, status 137) and never return into the program.
+        let (osb1, esb1) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsandbox (full profile): exit={esb1} (want 161)");
+        for l in osb1.lines() { serial_println!("[glibc]   {l}"); }
+        let kills_before = ring3::PROFILE_KILLS.load(core::sync::atomic::Ordering::Relaxed);
+        let (osb2, esb2) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox", b"strict"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsandbox strict (seccomp strict mode): exit={esb2} (want 137)");
+        for l in osb2.lines() { serial_println!("[glibc]   {l}"); }
+        let sbx_ok = esb1 == 161
+            && esb2 == 137
+            && osb2.contains("write still allowed")
+            && !osb2.contains("NOT enforced")
+            && ring3::PROFILE_KILLS.load(core::sync::atomic::Ordering::Relaxed) == kills_before + 1;
+        serial_println!(
+            "[sbx] syscall profiles: full-profile-runs={} · strict-mode-write-allowed={} · strict-mode-open-kills-process={} (exit {esb2}) · never-returned-into-program={} → {}",
+            esb1 == 161, osb2.contains("write still allowed"), esb2 == 137, !osb2.contains("NOT enforced"),
+            if sbx_ok { "OK (kernel-enforced per-process syscall policy, Linux seccomp strict semantics) ✓" } else { "FAILED" }
+        );
         ring3::GLIBC_DEADLINE_TICKS.store(prev_deadline, core::sync::atomic::Ordering::Relaxed);
 
         // LEAN chrome-headless-shell run: skip the GUI/demo glibc tests (X11/gsparse/
@@ -3071,8 +3092,10 @@ fn main() -> Status {
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
         if !chrome_run {
-        let results: [(&str, u64, u64); 31] = [
+        let results: [(&str, u64, u64); 33] = [
             ("gpoll(poll timeout)", epo, 143),
+            ("gsandbox(full profile)", esb1, 161),
+            ("gsandbox(seccomp strict kills)", esb2, 137),
             ("gcond(condvar broadcast)", eco, 157),
             ("gbrk(zeroed break growth)", ebk, 163),
             ("gscm(SCM_RIGHTS fd passing)", esc, 151),
