@@ -246,3 +246,235 @@ pub fn exec_selftest(now: u64) {
         if ok { "OK (install/remove/upgrade for real, dev.key-signed fixtures) ✓" } else { "FAILED ✗" }
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EuroApps SDK (night sprint N1): third-party app packages.
+//
+// A developer signs a package with their own Ed25519 key; the owner enrols that
+// key once (`app trust <file.pub>`); `app install <file.eupkg>` verifies the
+// signature against the developer key or any enrolled key, checks the binary's
+// SHA-256, stores it content-addressed and records the app's title, capabilities,
+// syscall profile and display kind in the registry. The launcher lists installed
+// apps; the kernel applies the manifest's caps and profile at spawn.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const TRUST_FILE: &str = "/etc/euroapps/trusted.keys";
+const HELLO_CLI_EUPKG: &[u8] = include_bytes!("../../toolchain/eupkg/hello-cli-1.0.0.eupkg");
+/// The windowed example (an Xlib window): installed by the self-test so the
+/// launcher of a dev boot carries a third-party x11 app to launch by hand.
+const HELLO_X11_EUPKG: &[u8] = include_bytes!("../../toolchain/eupkg/hello-x11-1.0.0.eupkg");
+const EXAMPLE_DEV_PUB: &[u8] = include_bytes!("../../toolchain/eupkg/example-dev.pub");
+
+/// Enrolled developer keys: `name\thex64` per line.
+fn trusted_keys(fs: &mut dyn FileSystem) -> Vec<(String, [u8; 32])> {
+    let data = match fs.read_file(TRUST_FILE) { Ok(d) => d, Err(_) => return Vec::new() };
+    let mut out = Vec::new();
+    for line in String::from_utf8_lossy(&data).lines() {
+        if let Some((name, hex)) = line.split_once('\t') {
+            if hex.len() == 64 {
+                let mut k = [0u8; 32];
+                let ok = (0..32).all(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).map(|b| { k[i] = b; true }).unwrap_or(false));
+                if ok {
+                    out.push((String::from(name), k));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn verify_with_any(keys: &[(String, [u8; 32])], msg: &[u8], sig: &[u8]) -> bool {
+    if crate::crypto::verify(msg, sig) {
+        return true; // the EuroOS developer key
+    }
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    let Ok(sig) = Signature::from_slice(sig) else { return false };
+    keys.iter().any(|(_, k)| VerifyingKey::from_bytes(k).map(|vk| vk.verify(msg, &sig).is_ok()).unwrap_or(false))
+}
+
+fn with_app_engine<R>(fs: &mut dyn FileSystem, f: impl FnOnce(&mut PkgEngine) -> R) -> R {
+    let keys = trusted_keys(fs);
+    let verify = move |m: &[u8], s: &[u8]| verify_with_any(&keys, m, s);
+    let mut ad = FsAdapter(fs);
+    let mut eng = PkgEngine { fs: &mut ad, verify: &verify, sha256: &sha256, root: "/pkg", bin_dir: "/bin" };
+    f(&mut eng)
+}
+
+fn is_owner() -> bool {
+    if crate::auth::session_uid() == 0 {
+        return true;
+    }
+    crate::euroid::user_caps(&crate::auth::session_name()).map(|(_, c)| c & euroid::CAP_USER_ADMIN != 0).unwrap_or(false)
+}
+
+fn hex32(b: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for x in b { s.push_str(&alloc::format!("{x:02x}")); }
+    s
+}
+
+/// Enrol a developer public key (32 raw bytes) under `name`. Owner only.
+pub fn trust(fs: &mut dyn FileSystem, pub_path: &str, name: &str) -> Vec<String> {
+    trust_as(fs, pub_path, name, is_owner())
+}
+
+/// `trust` with the owner decision made by the caller (the boot self-test runs
+/// before any session exists and acts as the system).
+pub fn trust_as(fs: &mut dyn FileSystem, pub_path: &str, name: &str, owner: bool) -> Vec<String> {
+    if !owner {
+        return alloc::vec![String::from("app trust: only the owner (wheel) may enrol a developer key")];
+    }
+    let key = match fs.read_file(pub_path) { Ok(d) if d.len() == 32 => d, _ => return alloc::vec![alloc::format!("app trust: {pub_path} is not a 32-byte Ed25519 public key")] };
+    let mut k = [0u8; 32];
+    k.copy_from_slice(&key);
+    let mut keys = trusted_keys(fs);
+    keys.retain(|(n, _)| n != name);
+    keys.push((String::from(name), k));
+    let text: String = keys.iter().map(|(n, k)| alloc::format!("{n}\t{}\n", hex32(k))).collect();
+    let _ = fs.create_dir("/etc/euroapps");
+    let wrote = crate::sysctx::as_system(fs, |fs| fs.write_file(TRUST_FILE, text.as_bytes()).is_ok());
+    if wrote {
+        crate::serial_println!("[app] developer key '{name}' enrolled ({}…)", &hex32(&k)[..16]);
+        alloc::vec![alloc::format!("app trust: key '{name}' enrolled ({} key(s) trusted); packages signed with it may be installed", keys.len())]
+    } else {
+        alloc::vec![String::from("app trust: could not write the trust store")]
+    }
+}
+
+pub fn trusted(fs: &mut dyn FileSystem) -> Vec<String> {
+    let keys = trusted_keys(fs);
+    let mut out = alloc::vec![alloc::format!("trusted developer keys ({}; plus the EuroOS developer key):", keys.len())];
+    for (n, k) in keys {
+        out.push(alloc::format!("  {n:<20} {}…", &hex32(&k)[..24]));
+    }
+    out
+}
+
+/// Install a package file from the VFS: signature (developer or enrolled key),
+/// binary hash, content-addressed store, registry with the app fields.
+pub fn install_file(fs: &mut dyn FileSystem, path: &str) -> Vec<String> {
+    let bytes = match fs.read_file(path) { Ok(d) => d, Err(_) => return alloc::vec![alloc::format!("app install: cannot read {path}")] };
+    with_app_engine(fs, |e| match e.install_package(&bytes, &[]) {
+        Ok(m) => {
+            crate::serial_println!("[app] installed {} v{} ({}, caps '{}', profile {}, display {})", m.name, m.version, m.kind, m.caps, m.profile, m.display);
+            alloc::vec![alloc::format!(
+                "app install: {} v{} installed ({}; caps '{}'; profile {}; display {}) — verified: Ed25519 + sha256",
+                m.name, m.version, if m.is_app() { "app" } else { "library" }, m.caps, m.profile, m.display
+            )]
+        }
+        Err(err) => {
+            crate::serial_println!("[app] REFUSED {path}: {err:?}");
+            alloc::vec![alloc::format!("app install: REFUSED {path}: {err:?}{}", if matches!(err, europkg::store::PkgError::BadSignature) { " (signature does not match the EuroOS key or any enrolled developer key: `app trust <file.pub>` first)" } else { "" })]
+        }
+    })
+}
+
+pub fn remove(fs: &mut dyn FileSystem, name: &str) -> Vec<String> {
+    with_app_engine(fs, |e| match e.remove(name) {
+        Ok(()) => alloc::vec![alloc::format!("app remove: {name} removed")],
+        Err(err) => alloc::vec![alloc::format!("app remove: not removed: {err:?}")],
+    })
+}
+
+/// Installed app packages (kind = app), registry order.
+pub fn installed_apps(fs: &mut dyn FileSystem) -> Vec<europkg::store::Installed> {
+    with_app_engine(fs, |e| e.registry()).into_iter().filter(|r| r.kind == "app").collect()
+}
+
+/// EuroGuard capability mask for a manifest `caps` list.
+pub fn app_caps(caps: &str) -> u64 {
+    caps.split(',').fold(0u64, |m, c| m | match c.trim() {
+        "console" => crate::ring3::CAP_CONSOLE,
+        "file" => crate::ring3::CAP_FILE,
+        "net" => crate::ring3::CAP_NET,
+        "proc" => crate::ring3::CAP_PROC_INFO,
+        _ => 0,
+    })
+}
+
+pub fn app_profile(profile: &str) -> eurosandbox::Profile {
+    match profile {
+        "utility" => eurosandbox::Profile::Utility,
+        "renderer" => eurosandbox::Profile::Renderer,
+        "strict" => eurosandbox::Profile::Strict,
+        _ => eurosandbox::Profile::Full,
+    }
+}
+
+/// The verified binary of an installed app: bytes + the store hash it must
+/// match (re-hashed here, so a tampered store blob is refused at launch).
+pub fn app_binary(fs: &mut dyn FileSystem, name: &str) -> Result<(Vec<u8>, [u8; 32], europkg::store::Installed), String> {
+    let app = installed_apps(fs).into_iter().find(|a| a.name == name).ok_or_else(|| alloc::format!("app {name}: not installed"))?;
+    let path = if app.hash.len() > 32 { alloc::format!("/pkg/store/{}/{}", &app.hash[..32], &app.hash[32..]) } else { alloc::format!("/pkg/store/{}", app.hash) };
+    let bytes = fs.read_file(&path).map_err(|_| alloc::format!("app {name}: store blob missing"))?;
+    let h = sha256(&bytes);
+    if hex32(&h) != app.hash {
+        return Err(alloc::format!("app {name}: store blob does not match its recorded hash — refused"));
+    }
+    Ok((bytes, h, app))
+}
+
+/// `app installed | install <file> | trust <file.pub> [name] | trusted | remove <name>`.
+pub fn app_shell(fs: &mut dyn FileSystem, args: &str) -> Vec<String> {
+    let mut t = args.split_whitespace();
+    match (t.next(), t.next(), t.next()) {
+        (Some("installed"), _, _) => {
+            let apps = installed_apps(fs);
+            let mut out = alloc::vec![alloc::format!("installed apps ({}): `app run <name>` or the launcher", apps.len())];
+            for a in apps {
+                out.push(alloc::format!("  {:<16} {:<8} {:<20} caps '{}' profile {} display {}", a.name, a.version, a.title, a.caps, a.profile, a.display));
+            }
+            out
+        }
+        (Some("install"), Some(p), _) => install_file(fs, p),
+        (Some("trust"), Some(p), name) => {
+            let n = name.map(String::from).unwrap_or_else(|| String::from(p.rsplit('/').next().unwrap_or(p).trim_end_matches(".pub")));
+            trust(fs, p, &n)
+        }
+        (Some("trusted"), _, _) => trusted(fs),
+        (Some("remove"), Some(n), _) => remove(fs, n),
+        _ => alloc::vec![String::from("app: installed | install <file.eupkg> | trust <file.pub> [name] | trusted | remove <name> | run <name>")],
+    }
+}
+
+/// `[app]` boot self-test: the example package signed with the EXAMPLE developer
+/// key is refused before that key is enrolled, installed after, a tampered copy
+/// is refused, and the installed app runs with the exit code it was built with.
+pub fn app_selftest(falloc: &mut euromm::FrameAllocator, fs: &mut dyn FileSystem) {
+    let _ = fs.create_dir("/tmp");
+    let _ = fs.write_file("/tmp/hello-cli.eupkg", HELLO_CLI_EUPKG);
+    let _ = fs.write_file("/tmp/example-dev.pub", EXAMPLE_DEV_PUB);
+    let _ = fs.remove_file(TRUST_FILE);
+    let refused_untrusted = install_file(fs, "/tmp/hello-cli.eupkg").iter().any(|l| l.contains("REFUSED"));
+    let enrolled = trust_as(fs, "/tmp/example-dev.pub", "example-dev", true).iter().any(|l| l.contains("enrolled"));
+    let installed = install_file(fs, "/tmp/hello-cli.eupkg").iter().any(|l| l.contains("installed"));
+    let _ = fs.write_file("/tmp/hello-x11.eupkg", HELLO_X11_EUPKG);
+    for l in install_file(fs, "/tmp/hello-x11.eupkg") { crate::serial_println!("[app] {l}"); }
+    // Tamper: flip a byte inside the ELF member of a copy (the signature still
+    // verifies, the hash no longer matches).
+    let mut bad = HELLO_CLI_EUPKG.to_vec();
+    let elf = bad.windows(4).position(|w| w == b"\x7fELF").unwrap_or(0) + 200;
+    if elf < bad.len() { bad[elf] ^= 0xFF; }
+    let _ = fs.write_file("/tmp/hello-cli-tampered.eupkg", &bad);
+    // A flipped byte fails the member CRC (BadZip) or, past it, the hash check:
+    // either way the package is refused before anything is written.
+    let refused_tampered = install_file(fs, "/tmp/hello-cli-tampered.eupkg").iter().any(|l| l.contains("REFUSED"));
+    let listed = installed_apps(fs).iter().any(|a| a.name == "hello-cli" && a.kind == "app" && a.profile == "utility");
+    let (exit, output) = match app_binary(fs, "hello-cli") {
+        Ok((bytes, hash, app)) => {
+            crate::ring3::app_trust_hash(Some(hash));
+            crate::ring3::NEXT_SPAWN_PROFILE.store(app_profile(&app.profile).as_u8(), core::sync::atomic::Ordering::Relaxed);
+            let r = crate::ring3::run_glibc(falloc, &bytes, crate::ring3::ldlinux_bytes(), &[b"/pkg/bin/hello-cli"], &[b"PATH=/bin"], app_caps(&app.caps));
+            crate::ring3::app_trust_hash(None);
+            (r.1, r.0)
+        }
+        Err(e) => (u64::MAX, e),
+    };
+    for l in output.lines() { crate::serial_println!("[app]   {l}"); }
+    let ran = exit == 7 && output.contains("HELLO from an installed EuroApp");
+    let ok = refused_untrusted && enrolled && installed && refused_tampered && listed && ran;
+    crate::serial_println!(
+        "[app] EuroApps SDK: unknown-key-refused={refused_untrusted} · key-enrolled={enrolled} · signed-package-installed={installed} · tampered-refused={refused_tampered} · listed-as-app={listed} · runs-with-manifest-caps+profile(exit {exit})={ran} → {}",
+        if ok { "OK (third-party app: own key, signed package, installed and run under kernel policy) ✓" } else { "FAILED" }
+    );
+}

@@ -117,3 +117,7 @@ id_ed25519*
 /crates/eurontfs/tests/ntfs.img
 /crates/eurontfs/tests/ntfs.img
 /crates/eurontfs/tests/ntfs.img
+
+# EuroApps SDK examples: build outputs (the signed packages the kernel embeds live in toolchain/eupkg/)
+sdk/examples/*/hello
+sdk/examples/*/*.eupkg

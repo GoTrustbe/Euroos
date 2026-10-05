@@ -74,6 +74,10 @@ pub fn empty(fs: &mut dyn FileSystem) -> usize {
 /// live filesystem (leaves nothing behind).
 pub fn selftest(fs: &mut dyn FileSystem) {
     let orig = "/var/trash-selftest.txt";
+    // A freshly installed disk root has no /var yet (the gate boots with a blank
+    // target disk, [q1x3] installs it, the live root moves there): make the
+    // scratch directory first, as a delete from the desktop would.
+    ensure_dir(fs);
     let _ = fs.write_file(orig, b"bye");
     let moved = to_trash(fs, orig);
     let gone = fs.read_file(orig).is_err();

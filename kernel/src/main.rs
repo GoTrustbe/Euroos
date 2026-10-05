@@ -422,6 +422,43 @@ fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
 /// must agree on it exactly: the blit that paints the pixels, and the input routing
 /// that turns a pointer position back into a window coordinate. When they disagree,
 /// every click misses by the offset — and nothing on screen shows why.
+/// Launch an installed app package (EuroApps SDK). The binary is re-hashed
+/// against the registry, the manifest's capabilities and syscall profile apply.
+/// `x11` apps run persistently in the hosted X window; `none` apps run to
+/// completion and their output is kept in `ring3::last_app_output`.
+fn launch_installed_app(ctx: &mut shell::ShellCtx, name: &str) -> (bool, String) {
+    let (bytes, hash, app) = match pkg::app_binary(ctx.fs, name) {
+        Ok(v) => v,
+        Err(e) => return (false, e),
+    };
+    let caps = pkg::app_caps(&app.caps);
+    let profile = pkg::app_profile(&app.profile);
+    let argv0 = format!("/pkg/bin/{}", app.name);
+    let mut argv: Vec<&[u8]> = alloc::vec![argv0.as_bytes()];
+    for a in app.args.split_whitespace() { argv.push(a.as_bytes()); }
+    let envp: &[&[u8]] = &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts"];
+    ring3::NEXT_SPAWN_PROFILE.store(profile.as_u8(), core::sync::atomic::Ordering::Relaxed);
+    ring3::app_trust_hash(Some(hash));
+    let r = if app.display == "x11" {
+        if ring3::persistent_running() {
+            ring3::app_trust_hash(None);
+            ring3::NEXT_SPAWN_PROFILE.store(0, core::sync::atomic::Ordering::Relaxed);
+            return (false, String::from("a hosted app is already running (close its window first)"));
+        }
+        xserver::set_windowed(true);
+        match ring3::spawn_glibc_persistent(ctx.mem, &bytes, ring3::ldlinux_bytes(), &argv, envp, caps) {
+            Some(t) => (true, format!("{}: launched in a window (task {t}; caps '{}', profile {})", app.title, app.caps, app.profile)),
+            None => { xserver::set_windowed(false); (false, format!("{}: launch failed (memory)", app.title)) }
+        }
+    } else {
+        let (output, exit) = ring3::run_glibc(ctx.mem, &bytes, ring3::ldlinux_bytes(), &argv, envp, caps);
+        ring3::set_last_app_output(&output);
+        (exit != u64::MAX, format!("{}: exit {} (caps '{}', profile {})", app.title, exit as i64, app.caps, app.profile))
+    };
+    ring3::app_trust_hash(None);
+    r
+}
+
 pub fn screen_place(sw: usize, sh: usize) -> Option<(usize, usize, usize)> {
     let fbi = FB_INFO.get()?;
     if sw == 0 || sh == 0 {
@@ -539,7 +576,30 @@ pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
 #[entry]
 fn main() -> Status {
     // ── First of all: our own heap + serial (work even after ExitBootServices). ──
-    allocator::init();
+    // The heap is a UEFI-allocated region sized from installed RAM (a quarter,
+    // 64 MiB to 512 MiB), below 4 GiB so it is inside the identity map, and of
+    // type LoaderData so the frame allocator never hands it out. Halve on
+    // failure; fall back to the small static heap only if nothing fits.
+    {
+        let total: u64 = boot::memory_map(MemoryType::LOADER_DATA)
+            .map(|m| m.entries().filter(|d| d.ty == MemoryType::CONVENTIONAL).map(|d| d.page_count * 4096).sum())
+            .unwrap_or(0);
+        let mut size = allocator::wanted_size(total);
+        let mut done = false;
+        while size >= 64 * 1024 * 1024 {
+            match boot::allocate_pages(boot::AllocateType::MaxAddress(0xFFFF_FFFF), MemoryType::LOADER_DATA, size / 4096) {
+                Ok(p) => {
+                    allocator::init_at(p.as_ptr(), size);
+                    done = true;
+                    break;
+                }
+                Err(_) => size /= 2,
+            }
+        }
+        if !done {
+            allocator::init();
+        }
+    }
     serial::init();
     serial_println!("\n[euro] EuroKernel bring-up — heap ({} MiB) + COM1 active", allocator::size() / (1024 * 1024));
     // Symbolization anchor at BOOT (not only on panic): a hung boot leaves no
@@ -2368,6 +2428,17 @@ fn main() -> Status {
             if sbx_ok { "OK (kernel-enforced per-process syscall policy, Linux seccomp strict semantics) ✓" } else if esb1 == u64::MAX { "skipped (glibc self-tests off in this boot)" } else { "FAILED" }
         );
 
+        // N3.2 syscall fuzzer: 20000 random syscalls with random arguments at the
+        // Linux-ABI layer; the kernel must answer every one and keep running.
+        let (ofz, efz) = ring3::run_glibc(&mut allocator, ring3::gfuzz_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gfuzz", b"20000"], &[b"PATH=/bin"], caps_net);
+        serial_println!("[glibc] gfuzz (syscall fuzzer): exit={efz} (want 171)");
+        for l in ofz.lines() { serial_println!("[glibc]   {l}"); }
+        let fuzz_ok = efz == 171 && ofz.contains("kernel still answering");
+        serial_println!(
+            "[fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived={fuzz_ok} (exit {efz}) → {}",
+            if fuzz_ok { "OK (no panic, no ring-0 fault, every answer an errno or a result) ✓" } else if efz == u64::MAX { "skipped" } else { "FAILED" }
+        );
+
         // WP1 second half: cBPF seccomp filters, resource limits, ASLR, renderer scope.
         let (osf, esf) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox", b"filter"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] gsandbox filter (cBPF seccomp): exit={esf} (want 159)");
@@ -3743,6 +3814,8 @@ fn main() -> Status {
     // 3E-6: the package-manager EXECUTOR — signed index → resolver → verify →
     // content-addressed store → /bin link; tamper/forgery refused; remove+GC.
     pkg::exec_selftest(rtc::epoch());
+    // EuroApps SDK: a third-party package under its own key, end to end.
+    pkg::app_selftest(&mut allocator, &mut vfs);
 
     // 3E-5: GDB Remote Serial Protocol stub over COM2 — prove the wire protocol
     // against live kernel register/memory state (a real gdb attaches via COM2→tcp).
@@ -3983,11 +4056,14 @@ fn main() -> Status {
     euroid::must_change_selftest();
 
     // EuroAgent MCP daemon (AA-3 capstone): the gateway served over AF_UNIX.
-    mcpd::selftest(&mut vfs);
+    // Both agent self-tests write under /agents (created by [aa] as system): they
+    // run as system too, because the session self-tests before them leave the
+    // uid-context on the logged-in user and rwx is enforced on the live root.
+    sysctx::as_system(&mut vfs, |fs| mcpd::selftest(fs));
 
     // WASM agent host (AA-5 capstone): agent code runs in WASM → host import →
     // MCP gateway → EuroFS, capability-gated.
-    wagent::selftest(&mut vfs);
+    sysctx::as_system(&mut vfs, |fs| wagent::selftest(fs));
 
     // EuroInstall execution (Q1 capstone): really format + provision a
     // RAM disk and prove the installation survives a remount.
@@ -4980,6 +5056,7 @@ fn main() -> Status {
                 need_full = true; // repaint (dialog gone or still up); consume the click
             } else if compositor::brand_button_at(px, py) {
                 // The EU mark is the "start button": open the app launcher.
+                launcher::sync_apps(ctx.fs); // installed app packages join the catalog
                 launcher::open();
                 launcher::refresh(ctx.fs); // fill the initial (all-apps) list
                 need_full = true;
@@ -5716,6 +5793,37 @@ fn main() -> Status {
                             }
                         }
                     } else if {
+                        let mut t = exec_cmd.split_whitespace();
+                        t.next() == Some("app") && matches!(t.next(), Some("installed" | "install" | "trust" | "trusted" | "remove" | "run"))
+                    } {
+                        // EuroApps SDK: package install / trust / run from the shell.
+                        let rest = exec_cmd.trim_start_matches("app").trim();
+                        if let Some(name) = rest.strip_prefix("run ").map(str::trim) {
+                            let (ok, msg) = launch_installed_app(&mut ctx, name);
+                            out.push(msg);
+                            if ok {
+                                for l in ring3::last_app_output().lines() { out.push(format!("  {l}")); }
+                                // A windowed app gets the hosted window under its own title
+                                // (the same framing the launcher path gives it).
+                                if let Some(app) = pkg::installed_apps(ctx.fs).into_iter().find(|a| a.name == name && a.display == "x11") {
+                                    let w = gtk_idx;
+                                    windows[w].title = alloc::format!("{}  -  {}", app.title, app.name);
+                                    windows[w].w = 800;
+                                    windows[w].h = 600 + compositor::TITLEBAR_H;
+                                    windows[w].x = SIDEBAR_W + 60;
+                                    windows[w].y = 90;
+                                    order.retain(|&i| i != w);
+                                    order.push(w);
+                                    for ww in windows.iter_mut() { ww.active = false; }
+                                    windows[w].visible = true;
+                                    windows[w].active = true;
+                                    need_full = true;
+                                }
+                            }
+                        } else {
+                            for l in pkg::app_shell(ctx.fs, rest) { out.push(l); }
+                        }
+                    } else if {
                         let n = exec_cmd.split_whitespace().next().unwrap_or("");
                         n == "chrome" || n == "chromium"
                     } {
@@ -5976,7 +6084,29 @@ fn main() -> Status {
             }
             need_full = true;
         }
-        if let Some(icon) = launch_icon {
+        if let Some(icon) = launch_icon.filter(|&i| i >= launcher::APP_ICON_BASE) {
+            // An installed app package from the launcher (EuroApps SDK).
+            let apps = pkg::installed_apps(ctx.fs);
+            if let Some(app) = apps.get(icon - launcher::APP_ICON_BASE) {
+                let (ok, msg) = launch_installed_app(&mut ctx, &app.name);
+                serial_println!("[app] {msg}");
+                notify::push(&app.title, &msg, interrupts::ticks());
+                if ok && app.display == "x11" {
+                    let w = gtk_idx;
+                    windows[w].title = alloc::format!("{}  -  {}", app.title, app.name);
+                    windows[w].w = 800;
+                    windows[w].h = 600 + compositor::TITLEBAR_H;
+                    windows[w].x = SIDEBAR_W + 60;
+                    windows[w].y = 90;
+                    order.retain(|&x| x != w);
+                    order.push(w);
+                    for ww in windows.iter_mut() { ww.active = false; }
+                    windows[w].visible = true;
+                    windows[w].active = true;
+                }
+            }
+            need_full = true;
+        } else if let Some(icon) = launch_icon {
             if let Some(w) = dock_targets.get(icon).copied().flatten().filter(|&w| w < windows.len()) {
                 // The hosted X window is only a frame: opening it has to start the app
                 // behind it, or it opens onto nothing.

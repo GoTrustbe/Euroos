@@ -30,6 +30,33 @@ const CATALOG: &[(&str, usize)] = &[
     ("Install EuroOS", 14),
 ];
 
+/// Installed app packages (EuroApps SDK): shown after the built-in catalog,
+/// icon index 100 + registry position. Names are leaked once per distinct
+/// string so the catalog can stay `&'static str`.
+static APPS: Mutex<Vec<(&'static str, usize)>> = Mutex::new(Vec::new());
+static LEAKED: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+pub const APP_ICON_BASE: usize = 100;
+
+fn leak_name(name: &str) -> &'static str {
+    let mut l = LEAKED.lock();
+    if let Some(&s) = l.iter().find(|s| **s == name) {
+        return s;
+    }
+    let s: &'static str = alloc::boxed::Box::leak(String::from(name).into_boxed_str());
+    l.push(s);
+    s
+}
+
+/// Refresh the installed-app entries from the package registry.
+pub fn sync_apps(fs: &mut dyn eurofs::fs::FileSystem) {
+    let apps = crate::pkg::installed_apps(fs);
+    let mut v = Vec::new();
+    for (i, a) in apps.iter().enumerate() {
+        v.push((leak_name(&a.title), APP_ICON_BASE + i));
+    }
+    *APPS.lock() = v;
+}
+
 /// One search result: an app, a file matched by name, or a file matched by
 /// its content (with a snippet of the matching line).
 #[derive(Clone)]
@@ -65,6 +92,7 @@ pub fn is_open() -> bool {
 /// The display name for a dock tile index (for tooltips). None if unmapped.
 pub fn name_for_icon(icon: usize) -> Option<&'static str> {
     CATALOG.iter().find(|(_, i)| *i == icon).map(|(n, _)| *n)
+        .or_else(|| APPS.lock().iter().find(|(_, i)| *i == icon).map(|(n, _)| *n))
 }
 
 pub fn open() {
@@ -77,11 +105,12 @@ pub fn close() {
 
 /// Filtered matches for a query (case-insensitive substring). Empty query = all.
 fn matches(query: &str) -> Vec<(&'static str, usize)> {
+    let all: Vec<(&'static str, usize)> = CATALOG.iter().copied().chain(APPS.lock().iter().copied()).collect();
     if query.is_empty() {
-        return CATALOG.to_vec();
+        return all;
     }
     let q = to_lower(query);
-    CATALOG.iter().filter(|(name, _)| to_lower(name).contains(&q)).copied().collect()
+    all.into_iter().filter(|(name, _)| to_lower(name).contains(&q)).collect()
 }
 
 fn to_lower(s: &str) -> String {

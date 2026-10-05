@@ -75,6 +75,24 @@ pub struct PkgMeta {
     pub version: String,
     pub binary: String,
     pub binary_sha256: String,
+    /// `"app"` for a launchable program, `"lib"` (default) for anything else.
+    pub kind: String,
+    /// Launcher title (defaults to the name).
+    pub title: String,
+    /// Comma-separated EuroGuard capabilities: console,file,net,proc.
+    pub caps: String,
+    /// Syscall profile: full (default), utility, renderer, strict.
+    pub profile: String,
+    /// `x11` (hosted window) or `none` (command line).
+    pub display: String,
+    /// Extra argv after argv[0], space separated.
+    pub args: String,
+}
+
+impl PkgMeta {
+    pub fn is_app(&self) -> bool {
+        self.kind == "app"
+    }
 }
 
 fn toml_value<'a>(s: &'a str, key: &str) -> Option<&'a str> {
@@ -93,8 +111,28 @@ fn toml_value<'a>(s: &'a str, key: &str) -> Option<&'a str> {
 /// Parse the (already signature-verified) manifest. Deliberately minimal — the
 /// format is produced by our own `eupkg build`.
 pub fn parse_manifest(toml: &str) -> Option<PkgMeta> {
+    let name = toml_value(toml, "name")?.to_string();
+    if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return None; // the name becomes a path component
+    }
+    let opt = |k: &str, d: &str| toml_value(toml, k).unwrap_or(d).to_string();
+    let kind = opt("kind", "lib");
+    let profile = opt("profile", "full");
+    let display = opt("display", "none");
+    if !matches!(kind.as_str(), "lib" | "app")
+        || !matches!(profile.as_str(), "full" | "utility" | "renderer" | "strict")
+        || !matches!(display.as_str(), "none" | "x11")
+    {
+        return None;
+    }
     Some(PkgMeta {
-        name: toml_value(toml, "name")?.to_string(),
+        title: opt("title", &name),
+        caps: opt("caps", ""),
+        args: opt("args", ""),
+        kind,
+        profile,
+        display,
+        name,
         version: toml_value(toml, "version")?.to_string(),
         binary: toml_value(toml, "binary")?.to_string(),
         binary_sha256: toml_value(toml, "binary_sha256")?.to_string(),
@@ -136,6 +174,12 @@ pub struct Installed {
     pub hash: String,
     pub bin: String,
     pub deps: Vec<String>,
+    pub kind: String,
+    pub title: String,
+    pub caps: String,
+    pub profile: String,
+    pub display: String,
+    pub args: String,
 }
 
 /// The package engine over an abstract FS + injected crypto.
@@ -182,12 +226,19 @@ impl<'a> PkgEngine<'a> {
         for line in text.lines() {
             let f: Vec<&str> = line.split('\t').collect();
             if f.len() >= 5 {
+                let g = |i: usize, d: &str| f.get(i).copied().unwrap_or(d).to_string();
                 out.push(Installed {
                     name: f[0].to_string(),
                     version: f[1].to_string(),
                     hash: f[2].to_string(),
                     bin: f[3].to_string(),
                     deps: if f[4].is_empty() { Vec::new() } else { f[4].split(',').map(String::from).collect() },
+                    kind: g(5, "lib"),
+                    title: g(6, f[0]),
+                    caps: g(7, ""),
+                    profile: g(8, "full"),
+                    display: g(9, "none"),
+                    args: g(10, ""),
                 });
             }
         }
@@ -197,7 +248,10 @@ impl<'a> PkgEngine<'a> {
     fn save_registry(&mut self, rows: &[Installed]) -> Result<(), PkgError> {
         let mut text = String::new();
         for r in rows {
-            text.push_str(&format!("{}\t{}\t{}\t{}\t{}\n", r.name, r.version, r.hash, r.bin, r.deps.join(",")));
+            text.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                r.name, r.version, r.hash, r.bin, r.deps.join(","), r.kind, r.title, r.caps, r.profile, r.display, r.args
+            ));
         }
         if self.fs.write(&self.registry_path(), text.as_bytes()) {
             Ok(())
@@ -241,6 +295,12 @@ impl<'a> PkgEngine<'a> {
             hash: meta.binary_sha256.clone(),
             bin: link,
             deps: deps.to_vec(),
+            kind: meta.kind.clone(),
+            title: meta.title.clone(),
+            caps: meta.caps.clone(),
+            profile: meta.profile.clone(),
+            display: meta.display.clone(),
+            args: meta.args.clone(),
         });
         self.save_registry(&rows)?;
         Ok(meta)
@@ -412,4 +472,23 @@ fn field(obj: &str, key: &str) -> Option<String> {
     let i = obj.find(&pat)? + pat.len();
     let rest = &obj[i..];
     Some(rest[..rest.find('"')?].to_string())
+}
+
+#[cfg(test)]
+mod app_meta_tests {
+    use super::*;
+
+    #[test]
+    fn app_manifest_fields_parse_with_defaults_and_validation() {
+        let m = parse_manifest("name = \"hello\"\nversion = \"1.0.0\"\nbinary = \"hello\"\nbinary_sha256 = \"ab\"\n").unwrap();
+        assert_eq!((m.kind.as_str(), m.title.as_str(), m.profile.as_str(), m.display.as_str()), ("lib", "hello", "full", "none"));
+        assert!(!m.is_app());
+        let a = parse_manifest("name = \"hello-x11\"\nversion = \"1.0.0\"\nbinary = \"hello\"\nbinary_sha256 = \"ab\"\nkind = \"app\"\ntitle = \"Hello\"\ncaps = \"console,file\"\nprofile = \"utility\"\ndisplay = \"x11\"\nargs = \"--fast\"\n").unwrap();
+        assert!(a.is_app());
+        assert_eq!((a.title.as_str(), a.caps.as_str(), a.profile.as_str(), a.display.as_str(), a.args.as_str()), ("Hello", "console,file", "utility", "x11", "--fast"));
+        // unknown profile / display / kind, or a name with a path in it, is refused
+        assert!(parse_manifest("name = \"x\"\nversion = \"1\"\nbinary = \"x\"\nbinary_sha256 = \"a\"\nprofile = \"root\"\n").is_none());
+        assert!(parse_manifest("name = \"x\"\nversion = \"1\"\nbinary = \"x\"\nbinary_sha256 = \"a\"\ndisplay = \"wayland\"\n").is_none());
+        assert!(parse_manifest("name = \"../x\"\nversion = \"1\"\nbinary = \"x\"\nbinary_sha256 = \"a\"\n").is_none());
+    }
 }

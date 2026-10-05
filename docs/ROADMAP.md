@@ -2,7 +2,7 @@
 
 *What is next to build, why it matters, how it will be done, and in what order.*
 
-**Status as of 2026-10-05** (sections 0b and 14 are the current plan; the June sections below are kept as the long list). This roadmap is the forward-looking companion to **`TECHNICAL-OVERVIEW.md`** (what exists today) and **`NEXT-SPRINTS.md`** (the live per-task board). Every item below is scoped to ship the EuroOS way: **host tests where possible + a QEMU boot-verify + docs**, with no MVP shortcuts.
+**Status as of 2026-10-06** (sections 0b and 14 are the current plan; the June sections below are kept as the long list). This roadmap is the forward-looking companion to **`TECHNICAL-OVERVIEW.md`** (what exists today) and **`NEXT-SPRINTS.md`** (the live per-task board). Every item below is scoped to ship the EuroOS way: **host tests where possible + a QEMU boot-verify + docs**, with no MVP shortcuts.
 
 ---
 
@@ -44,10 +44,21 @@ footprint, one legacy Windows application, stability, and blame-the-new-OS.
    profiles (renderer/utility/strict), seccomp cBPF filters, rlimits, ASLR,
    renderer file scope; W^X stays log-only (V8 JIT), PIE base still fixed.
 2. **WP2 IOMMU / DMA isolation** — ✅ built 2026-10-05 (QEMU); hardware run pending.
-3. **WP3 Swap and memory footprint** — Chromium needs > 5 GiB today; 8 GiB laptops
-   are the norm in the field.
-4. **WP4 Stability gate** — a syscall fuzzer on the Linux ABI, an hours-long soak
-   run, and the dev build's full self-test suite green in QEMU on every commit.
+3. **WP3 Swap and memory footprint** — 🏗️ 2026-10-06: the kernel heap is sized
+   from RAM at boot instead of a 512 MiB static (the public image now boots to the
+   desktop in a 512 MiB guest; before it failed below about 1 GiB). Swap and the
+   Chromium footprint (> 5 GiB today; 8 GiB laptops are the norm) remain.
+4. **WP4 Stability gate** — 🏗️ 2026-10-06: `scripts/gate.sh` (host tests, dev
+   build, QEMU self-test markers, public image, installer harness: one verdict)
+   and the `gfuzz` Linux-ABI syscall fuzzer (20000 random calls, deterministic,
+   host-replayable; its first run found and fixed a fallocate heap exhaustion).
+   The hours-long soak run remains.
+4b. **EuroApps SDK** — ✅ built 2026-10-06: third parties package, sign (own
+   Ed25519 key) and ship apps (`.eupkg`); the owner enrols developer keys; the
+   kernel re-verifies the binary at every launch and applies the manifest's
+   capabilities and syscall profile; windowed apps open from the launcher or
+   `app run`. Proof: `docs/proof/2026-10-06-third-party-x11-app.png`,
+   guide `docs/APP-DEVELOPER-GUIDE.md`, plan `SPRINT-PLAN-NIGHT-2026-10-06.md`.
 5. **WP5 RDP client** — removes the "one legacy Windows app" blocker.
 6. **Chromium workplace sprint, remainder** — YouTube (DASH/MSE + cross-process
    DevTools), real input, hours-stable sessions.

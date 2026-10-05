@@ -166,18 +166,39 @@ static ALLOCATOR: IrqSafeHeap = IrqSafeHeap(LockedHeap::empty());
 /// that fragments under hundreds of growing file buffers; runs 63 and 65
 /// failed 64 KiB and 2 MiB allocations with 169 MiB nominally free. The extra
 /// 128 MiB comes out of the demand pool (2.5 GiB on the 5632M guest).
-const HEAP_SIZE: usize = 512 * 1024 * 1024;
-static mut HEAP: [u8; HEAP_SIZE] = [0u8; HEAP_SIZE];
+/// The heap used to be a 512 MiB static array: 512 MiB of .bss that made the
+/// kernel's load image 610 MB, so UEFI LoadImage needed that much contiguous
+/// RAM and the public image could not boot below 1 GiB (night plan N2.2).
+/// It is now UEFI-allocated at boot, sized from installed RAM (`init_at`); this
+/// small static heap is only the fallback when that allocation fails.
+const HEAP_MAX: usize = 512 * 1024 * 1024;
+const FALLBACK_SIZE: usize = 32 * 1024 * 1024;
+static mut FALLBACK: [u8; FALLBACK_SIZE] = [0u8; FALLBACK_SIZE];
+static HEAP_SIZE_DYN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
-/// Initialize the heap. Must be the VERY FIRST action in the kernel,
-/// before any `alloc` use (Vec/String/format!).
+/// The heap size to ask UEFI for: a quarter of installed RAM, 64 MiB to 512 MiB.
+pub fn wanted_size(total_ram: u64) -> usize {
+    ((total_ram / 4) as usize).clamp(64 * 1024 * 1024, HEAP_MAX)
+}
+
+/// Initialize the heap on a UEFI-allocated region. Must be the VERY FIRST action
+/// in the kernel, before any `alloc` use (Vec/String/format!).
+pub fn init_at(base: *mut u8, size: usize) {
+    unsafe {
+        ALLOCATOR.0.lock().init(base, size);
+    }
+    HEAP_SIZE_DYN.store(size, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Fallback: the small static heap (when UEFI could not hand out a region).
 pub fn init() {
     unsafe {
         ALLOCATOR
             .0
             .lock()
-            .init(core::ptr::addr_of_mut!(HEAP) as *mut u8, HEAP_SIZE);
+            .init(core::ptr::addr_of_mut!(FALLBACK) as *mut u8, FALLBACK_SIZE);
     }
+    HEAP_SIZE_DYN.store(FALLBACK_SIZE, core::sync::atomic::Ordering::Relaxed);
 }
 
 pub fn stats() -> (usize, usize) {
@@ -188,5 +209,5 @@ pub fn stats() -> (usize, usize) {
 }
 
 pub fn size() -> usize {
-    HEAP_SIZE
+    HEAP_SIZE_DYN.load(core::sync::atomic::Ordering::Relaxed)
 }

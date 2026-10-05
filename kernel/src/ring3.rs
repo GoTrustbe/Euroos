@@ -3785,8 +3785,8 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
     let mut files = FILES.lock();
     let Some(entry) = files.get_mut(fi) else { return u64::MAX };
     let data = entry.1.to_mut(); // clone-on-write if this were a borrowed lib (never)
-    if end > data.len() {
-        data.resize(end, 0);
+    if end > data.len() && !grow_ram_file(data, end) {
+        return u64::MAX; // ENOSPC-class: the RAM file cannot grow that far
     }
     // SAFETY: buf now provably lies within the arena of the running process.
     unsafe {
@@ -5782,6 +5782,27 @@ pub fn unalias_fd(fd: u64) -> u64 {
     })
 }
 
+/// Grow a RAM-backed VFS file to `need` bytes, FALLIBLY. Every grow path
+/// (write past EOF, ftruncate, fallocate) funnels through here so a user-chosen
+/// size can never take the kernel heap down: the gfuzz campaign found
+/// fallocate(fd, mode, 2, 0x100000000) panicking in the allocator with
+/// "memory allocation of 4294967298 bytes failed". A grow is refused when it
+/// exceeds half the kernel heap or when the allocator cannot reserve it.
+pub fn grow_ram_file(v: &mut alloc::vec::Vec<u8>, need: usize) -> bool {
+    if need <= v.len() {
+        return true;
+    }
+    let cap = crate::allocator::size() / 2;
+    if need > cap {
+        return false;
+    }
+    if v.try_reserve(need - v.len()).is_err() {
+        return false;
+    }
+    v.resize(need, 0);
+    true
+}
+
 /// Low fds that were OPEN at the moment a still-living fork child was created:
 /// (child main task, the fd numbers it inherited). A parent close of such an fd
 /// is DEFERRED (see close(3)) so the number cannot be reallocated while the
@@ -5952,7 +5973,11 @@ fn vfs_ftruncate(fd: usize, len: usize) -> u64 {
     let mut files = FILES.lock();
     if let Some(f) = files.get_mut(fi) {
         let path = f.0.clone();
-        f.1.to_mut().resize(len, 0);
+        if len < f.1.len() {
+            f.1.to_mut().truncate(len);
+        } else if !grow_ram_file(f.1.to_mut(), len) {
+            return (-28i64) as u64; // -ENOSPC: refused rather than exhausting the heap
+        }
         drop(files);
         if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
             crate::serial_println!("[ftrunc] fd={fd} {path:?} -> {len} B");
@@ -6588,6 +6613,7 @@ static GSCM_ELF: &[u8] = include_bytes!("../../userland/glibc/gscm");
 // with futex REQUEUE/WAKE_OP, which a kernel can silently answer with "nobody".
 static GCOND_ELF: &[u8] = include_bytes!("../../userland/glibc/gcond");
 static GSANDBOX_ELF: &[u8] = include_bytes!("../../userland/glibc/gsandbox");
+static GFUZZ_ELF: &[u8] = include_bytes!("../../userland/glibc/gfuzz");
 // BRK test: memory gained through the program break must read as zeros — glibc's
 // calloc skips its memset for kernel-fresh chunks and inherits our garbage if not.
 static GBRK_ELF: &[u8] = include_bytes!("../../userland/glibc/gbrk");
@@ -6717,6 +6743,7 @@ pub fn gscm_bytes() -> &'static [u8] { GSCM_ELF }
 /// A condition-variable broadcast test (futex REQUEUE).
 pub fn gcond_bytes() -> &'static [u8] { GCOND_ELF }
 pub fn gsandbox_bytes() -> &'static [u8] { GSANDBOX_ELF }
+pub fn gfuzz_bytes() -> &'static [u8] { GFUZZ_ELF }
 /// A brk-zeroing test (grow, poison, shrink, regrow: zeros every time).
 pub fn gbrk_bytes() -> &'static [u8] { GBRK_ELF }
 /// glibc stub libs chrome declares as NEEDED (real code is in libc.so.6).
@@ -7250,6 +7277,7 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gcairotext" => include_bytes!("../../userland/glibc/gcairotext.sig"),
         "/bin/gcond" => include_bytes!("../../userland/glibc/gcond.sig"),
         "/bin/gsandbox" => include_bytes!("../../userland/glibc/gsandbox.sig"),
+        "/bin/gfuzz" => include_bytes!("../../userland/glibc/gfuzz.sig"),
         "/bin/gcpp" => include_bytes!("../../userland/glibc/gcpp.sig"),
         "/bin/gdiskmap" => include_bytes!("../../userland/glibc/gdiskmap.sig"),
         "/bin/gevfd" => include_bytes!("../../userland/glibc/gevfd.sig"),
@@ -7328,10 +7356,39 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
 /// Verify the Ed25519 signature of a program (by name) over the
 /// actually-loaded bytes. `true` = authentic + unchanged -> may run.
 pub fn verify_program(path: &str, bytes: &[u8]) -> bool {
+    if app_hash_matches(bytes) {
+        return true; // an installed app: trusted through its verified package hash
+    }
     match program_sig(path) {
         Some(sig) => crate::crypto::verify(bytes, sig),
         None => false, // no signature known -> not trusted
     }
+}
+
+/// The SHA-256 of an installed app's binary, set by the launcher right before
+/// the spawn: the package store already verified the signature over that hash
+/// (`eupkg`), so a binary with exactly this hash is trusted for one spawn.
+static APP_TRUSTED_HASH: Mutex<Option<[u8; 32]>> = Mutex::new(None);
+/// The syscall profile the next spawned main task gets (eurosandbox byte), or
+/// 0 for the default. Set by the app launcher from the package manifest.
+pub static NEXT_SPAWN_PROFILE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// Output of the last `app run` (command-line app package), for the terminal.
+static LAST_APP_OUTPUT: Mutex<String> = Mutex::new(String::new());
+pub fn set_last_app_output(o: &str) {
+    *LAST_APP_OUTPUT.lock() = String::from(o);
+}
+pub fn last_app_output() -> String {
+    LAST_APP_OUTPUT.lock().clone()
+}
+
+pub fn app_trust_hash(h: Option<[u8; 32]>) {
+    *APP_TRUSTED_HASH.lock() = h;
+}
+
+fn app_hash_matches(bytes: &[u8]) -> bool {
+    let want = match *APP_TRUSTED_HASH.lock() { Some(h) => h, None => return false };
+    eurotls::keyschedule::sha256(bytes) == want
 }
 
 // ── Minimal ELF64 loader ─────────────────────────────────────────────────
@@ -9613,6 +9670,12 @@ pub fn spawn_glibc_persistent(
         set_task_profile(main_task, p);
         crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from argv)", p.name());
     }
+    let next = NEXT_SPAWN_PROFILE.swap(0, Ordering::Relaxed);
+    if next != 0 {
+        let p = eurosandbox::Profile::from_u8(next);
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from the app manifest)", p.name());
+    }
     PERSIST_ARENA.store(arena, Ordering::Relaxed);
     PERSIST_PML4.store(pml4, Ordering::Relaxed);
     PERSIST_FRAMES.store(frames as u64, Ordering::Relaxed);
@@ -10259,6 +10322,12 @@ fn glibc_disk_launch(
         set_task_profile(main_task, p);
         crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from argv)", p.name());
     }
+    let next = NEXT_SPAWN_PROFILE.swap(0, Ordering::Relaxed);
+    if next != 0 {
+        let p = eurosandbox::Profile::from_u8(next);
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from the app manifest)", p.name());
+    }
 
     Ok(DiskRun { main_task, arena, frames, pml4, dp_base, dp_frames, prev_demand, prev_file })
 }
@@ -10698,6 +10767,12 @@ pub fn run_glibc(
     }) {
         set_task_profile(main_task, p);
         crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from argv)", p.name());
+    }
+    let next = NEXT_SPAWN_PROFILE.swap(0, Ordering::Relaxed);
+    if next != 0 {
+        let p = eurosandbox::Profile::from_u8(next);
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from the app manifest)", p.name());
     }
     crate::serial_println!(
         "[glibc] spawned scheduled task {main_task}: ld-entry@{:#x} rsp@{rsp:#x} phdr@{:#x} phnum={}",
@@ -11259,12 +11334,57 @@ fn linux_required_cap(num: u64, a1: u64) -> u64 {
     if crate::net::is_sock_fd(a1) && matches!(num, 0 | 1 | 3) {
         return CAP_NET;
     }
+    // AF_UNIX as a CLIENT is local IPC, not network: an x11 app reaches the
+    // in-kernel X server over /tmp/.X11-unix/X0 without the `net` capability
+    // (the hello-x11 example, caps console,file,proc, failed with "cannot open
+    // DISPLAY" until this). Serving a socket (bind/listen/accept) stays `net`.
+    if num == 41 && a1 == 1 {
+        return 0; // socket(AF_UNIX, ...)
+    }
+    if crate::net::is_unix_fd(a1) && matches!(num, 0 | 1 | 3 | 42 | 44 | 45) {
+        return 0; // read/write/close/connect/sendto/recvfrom on a unix socket
+    }
     match num {
         1 | 16 | 20 => CAP_CONSOLE,            // write/ioctl/writev (tty)
         0 | 2 | 3 | 5 | 8 | 17 | 19 | 89 | 217 | 257 | 262 | 267 => CAP_FILE, // read/open/close/(f)stat/lseek/pread64/readv/readlink/getdents64/openat
         41 | 42 | 43 | 44 | 45 | 49 | 50 => CAP_NET, // socket/connect/accept/sendto/recvfrom/bind/listen
         39 => CAP_PROC_INFO,                    // getpid
         _ => 0, // memory/process management (mmap, brk, arch_prctl, exit, …) free
+    }
+}
+
+/// Read-only access to the SYSTEM LIBRARIES is not "file access": CAP_FILE guards
+/// the user's data, and every dynamically linked program must still be able to
+/// let ld.so map libc. An installed EuroApp whose manifest grants no `file`
+/// capability therefore still starts (the [app] self-test proved the opposite
+/// first: "libc.so.6: cannot open shared object file: Operation not permitted").
+/// Exempt: open/stat/access/readlink of these prefixes WITHOUT a write flag, and
+/// read/close/fstat/lseek/pread/readv on an fd that names such a file.
+const SYSTEM_LIB_PREFIXES: &[&[u8]] = &[
+    b"/lib", b"/usr/lib", b"/usr/share", b"/etc/ld.so.cache", b"/etc/ld.so.preload", b"/proc/self/",
+];
+fn system_lib_path(p: &[u8]) -> bool {
+    SYSTEM_LIB_PREFIXES.iter().any(|x| p.starts_with(x))
+}
+fn system_lib_exempt(num: u64, a1: u64, a2: u64, a3: u64) -> bool {
+    match num {
+        // openat(dirfd, path, flags) / open(path, flags): read-only opens only.
+        257 => (a3 & 0x43) == 0 && system_lib_path(&user_cstr(a2, 256)), // O_WRONLY|O_RDWR|O_CREAT
+        2 => (a2 & 0x43) == 0 && system_lib_path(&user_cstr(a1, 256)),
+        262 | 89 => system_lib_path(&user_cstr(a2, 256)), // newfstatat / readlink(at)
+        4 | 21 => system_lib_path(&user_cstr(a1, 256)),  // stat / access
+        0 | 3 | 5 | 8 | 17 | 19 | 217 => {
+            let fd = a1 as usize;
+            if fd >= MAX_FD {
+                return false;
+            }
+            let fi = match OPEN_FDS.lock()[fd] {
+                Some((fi, _)) => fi,
+                None => return false,
+            };
+            system_lib_path(fi_path(fi).as_bytes())
+        }
+        _ => false,
     }
 }
 
@@ -11873,7 +11993,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
     }
     // Capability enforcement also in the Linux ABI: deny without the proper right.
     let need = linux_required_cap(num, a1);
-    if need != 0 && !has_cap(need) {
+    if need != 0 && !has_cap(need) && !(need == CAP_FILE && system_lib_exempt(num, a1, a2, a3)) {
         crate::serial_println!("[cap] Linux syscall {num} DENIED — missing capability");
         return (-1i64) as u64; // -EPERM
     }
@@ -13357,8 +13477,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             let mut files = FILES.lock();
             match files.get_mut(fi) {
                 Some(f) => {
-                    if f.1.len() < need {
-                        f.1.to_mut().resize(need, 0);
+                    if f.1.len() < need && !grow_ram_file(f.1.to_mut(), need) {
+                        return (-28i64) as u64; // -ENOSPC
                     }
                     0
                 }
@@ -13570,9 +13690,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 }
             } else if tries >= 64 {
                 // Infinite wait: hand the CPU back regularly, but never claim a
-                // timeout. Returning after enough yields keeps the caller's own event
-                // loop turning (glibc retries) without burning the core.
-                break 0;
+                // timeout. The early return is -EINTR, the one spurious result POSIX
+                // allows for poll(-1): glib, libevent and xcb all retry on it. A 0
+                // here was fatal for every xcb client: xcb_wait_for_event treats a
+                // 0 from an infinite poll as "connection gone" (hello-x11 died with
+                // "X connection to :0 broken" after exactly 64 tries).
+                break (-4i64) as u64;
             }
             tries += 1;
             // Sleep the REMAINING time in one go for a finite timeout. A loop of
@@ -13586,7 +13709,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // it runs out. A poll that returns early is a spurious wakeup, which every
             // caller must already handle; a poll that never returns is a hung machine.
             if tries >= 200 {
-                break 0;
+                break if deadline.is_none() { (-4i64) as u64 } else { 0 };
             }
             let before = crate::interrupts::ticks();
             match deadline {
