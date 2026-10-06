@@ -22,8 +22,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from cryptography.exceptions import InvalidSignature
 
-VALID_CAPS = {"console", "file", "net", "proc"}
-VALID_PROFILES = {"full", "utility", "renderer", "strict"}
+VALID_CAPS = {"console", "file", "net", "proc", "window"}
+VALID_PROFILES = {"full", "utility", "renderer", "strict", "euro"}
 VALID_DISPLAY = {"none", "x11"}
 
 
@@ -48,7 +48,11 @@ def manifest_text(a, sha):
     if bad:
         sys.exit(f"unknown capability {bad}; choose from {sorted(VALID_CAPS)}")
     if a.profile not in VALID_PROFILES or a.display not in VALID_DISPLAY:
-        sys.exit("profile must be full|utility|renderer|strict, display none|x11")
+        sys.exit("profile must be full|utility|renderer|strict|euro, display none|x11")
+    if a.abi not in ("linux", "euro", "wasm"):
+        sys.exit("abi must be linux (glibc program), euro (native static PIE) or wasm")
+    if a.abi == "euro" and a.profile != "euro":
+        a.profile = "euro"  # a native app always runs under the euro profile
     bin_name = os.path.basename(a.binary)
     lines = [
         "[package]",
@@ -63,6 +67,7 @@ def manifest_text(a, sha):
         f'profile = "{a.profile}"',
         f'display = "{a.display}"',
         f'args = "{a.args}"',
+        f'abi = "{a.abi}"',
         "",
         "[build]",
         f'binary_sha256 = "{sha}"',
@@ -117,7 +122,7 @@ def verify(a):
 def info(a):
     text, _, fields, data, names = read_pkg(a.pkg)
     print(f"{a.pkg}: members {names}")
-    for k in ("name", "version", "title", "kind", "caps", "profile", "display", "args", "binary", "binary_sha256"):
+    for k in ("name", "version", "title", "kind", "caps", "profile", "display", "abi", "args", "binary", "binary_sha256"):
         print(f"  {k:14} {fields.get(k, '')}")
     print(f"  binary bytes   {len(data)}")
 
@@ -132,6 +137,7 @@ def main():
     b.add_argument("--out"); b.add_argument("--title", default="")
     b.add_argument("--caps", default="console,file"); b.add_argument("--profile", default="utility")
     b.add_argument("--display", default="none"); b.add_argument("--args", default="")
+    b.add_argument("--abi", default="linux", help="linux (default), euro (native, no Linux library) or wasm")
     b.add_argument("--description", default=""); b.add_argument("--license", default="EUPL-1.2")
     v = sub.add_parser("verify"); v.add_argument("pkg"); v.add_argument("--pub", required=True)
     i = sub.add_parser("info"); i.add_argument("pkg")

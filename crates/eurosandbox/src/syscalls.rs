@@ -23,6 +23,10 @@ pub enum Profile {
     /// system, but may not start processes or images, trace, mount, load
     /// modules, change group identity or use System V IPC.
     Utility,
+    /// A native EuroOS app (sprint WP6): exactly the Euro API (`0x6100..`),
+    /// exit, memory, sleep and the clock. No Linux syscall at all: no open,
+    /// no socket, no fork. Anything else ends the process with SIGSYS.
+    Euro,
 }
 
 impl Profile {
@@ -31,6 +35,7 @@ impl Profile {
             1 => Profile::Renderer,
             2 => Profile::Strict,
             3 => Profile::Utility,
+            4 => Profile::Euro,
             _ => Profile::Full,
         }
     }
@@ -40,6 +45,7 @@ impl Profile {
             Profile::Renderer => 1,
             Profile::Strict => 2,
             Profile::Utility => 3,
+            Profile::Euro => 4,
         }
     }
     pub fn name(self) -> &'static str {
@@ -48,6 +54,7 @@ impl Profile {
             Profile::Renderer => "renderer",
             Profile::Strict => "strict",
             Profile::Utility => "utility",
+            Profile::Euro => "euro",
         }
     }
 }
@@ -87,6 +94,25 @@ pub fn check(profile: Profile, num: u64, a1: u64, a3: u64) -> Verdict {
         }
         Profile::Renderer => renderer(num, a1, a3),
         Profile::Utility => utility(num, a1),
+        Profile::Euro => euro(num, a3),
+    }
+}
+
+/// The Euro API numbers a native app may call (`0x6100..=0x610C`).
+pub const EURO_FIRST: u64 = 0x6100;
+pub const EURO_LAST: u64 = 0x610C;
+
+fn euro(num: u64, a3: u64) -> Verdict {
+    match num {
+        n if (EURO_FIRST..=EURO_LAST).contains(&n) => Verdict::Allow,
+        // exit, exit_group, brk, munmap, nanosleep, clock_gettime, clock_nanosleep
+        60 | 231 | 12 | 11 | 35 | 228 | 230 => Verdict::Allow,
+        // write: only the console (stdout/stderr): checked by the capability model
+        1 => Verdict::Allow,
+        // mmap / mprotect: never executable, never shared files (a3 = prot)
+        9 | 10 if a3 & PROT_EXEC != 0 => Verdict::Kill(SIGSYS),
+        9 | 10 => Verdict::Allow,
+        _ => Verdict::Kill(SIGSYS),
     }
 }
 
@@ -166,6 +192,24 @@ pub fn path_allowed(profile: Profile, path: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn euro_profile_is_an_allow_list() {
+        for n in EURO_FIRST..=EURO_LAST {
+            assert_eq!(check(Profile::Euro, n, 0, 0), Verdict::Allow, "euro call {n:#x}");
+        }
+        for n in [60, 231, 12, 11, 35, 228, 230, 1] {
+            assert_eq!(check(Profile::Euro, n, 0, 0), Verdict::Allow, "allowed {n}");
+        }
+        assert_eq!(check(Profile::Euro, 9, 0, 3), Verdict::Allow);
+        assert_eq!(check(Profile::Euro, 9, 0, 7), Verdict::Kill(31));
+        assert_eq!(check(Profile::Euro, 10, 0, 4), Verdict::Kill(31));
+        for n in [0, 2, 257, 41, 42, 49, 56, 57, 58, 59, 101, 165, 16, 72, 0x6000, 0x6001, 0x6002, 0x610D, 0x6200, 500] {
+            assert_eq!(check(Profile::Euro, n, 0, 0), Verdict::Kill(31), "denied {n:#x}");
+        }
+        assert_eq!(Profile::from_u8(Profile::Euro.as_u8()), Profile::Euro);
+        assert_eq!(Profile::Euro.name(), "euro");
+    }
 
     #[test]
     fn renderer_file_scope() {

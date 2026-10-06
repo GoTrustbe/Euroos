@@ -263,6 +263,14 @@ const HELLO_CLI_EUPKG: &[u8] = include_bytes!("../../toolchain/eupkg/hello-cli-1
 /// The windowed example (an Xlib window): installed by the self-test so the
 /// launcher of a dev boot carries a third-party x11 app to launch by hand.
 const HELLO_X11_EUPKG: &[u8] = include_bytes!("../../toolchain/eupkg/hello-x11-1.0.0.eupkg");
+/// Sprint WP6: the NATIVE example (Rust, no_std, Euro API only) and a probe
+/// that makes one Linux syscall, which the euro profile must kill.
+const HELLO_EURO_EUPKG: &[u8] = include_bytes!("../../toolchain/eupkg/hello-euro-1.0.0.eupkg");
+const EURO_FORBIDDEN_EUPKG: &[u8] = include_bytes!("../../toolchain/eupkg/euro-forbidden-1.0.0.eupkg");
+/// The same example as a WASM module (`--features wasm`, wasm32-unknown-unknown).
+const HELLO_EURO_WASM_EUPKG: &[u8] = include_bytes!("../../toolchain/eupkg/hello-euro-wasm-1.0.0.eupkg");
+/// The Euro API fuzzer (20000 random Euro calls with hostile arguments, exit 171).
+const EFUZZ_EUPKG: &[u8] = include_bytes!("../../toolchain/eupkg/efuzz-1.0.0.eupkg");
 const EXAMPLE_DEV_PUB: &[u8] = include_bytes!("../../toolchain/eupkg/example-dev.pub");
 
 /// Enrolled developer keys: `name\thex64` per line.
@@ -388,6 +396,7 @@ pub fn app_caps(caps: &str) -> u64 {
         "file" => crate::ring3::CAP_FILE,
         "net" => crate::ring3::CAP_NET,
         "proc" => crate::ring3::CAP_PROC_INFO,
+        "window" => crate::ring3::CAP_WINDOW,
         _ => 0,
     })
 }
@@ -397,6 +406,7 @@ pub fn app_profile(profile: &str) -> eurosandbox::Profile {
         "utility" => eurosandbox::Profile::Utility,
         "renderer" => eurosandbox::Profile::Renderer,
         "strict" => eurosandbox::Profile::Strict,
+        "euro" => eurosandbox::Profile::Euro,
         _ => eurosandbox::Profile::Full,
     }
 }
@@ -422,10 +432,11 @@ pub fn app_shell(fs: &mut dyn FileSystem, args: &str) -> Vec<String> {
             let apps = installed_apps(fs);
             let mut out = alloc::vec![alloc::format!("installed apps ({}): `app run <name>` or the launcher", apps.len())];
             for a in apps {
-                out.push(alloc::format!("  {:<16} {:<8} {:<20} caps '{}' profile {} display {}", a.name, a.version, a.title, a.caps, a.profile, a.display));
+                out.push(alloc::format!("  {:<16} {:<8} {:<20} abi {:<5} caps '{}' profile {} display {}", a.name, a.version, a.title, a.abi, a.caps, a.profile, a.display));
             }
             out
         }
+        (Some("surfaces"), _, _) => crate::euroapi::status_lines(),
         (Some("install"), Some(p), _) => install_file(fs, p),
         (Some("trust"), Some(p), name) => {
             let n = name.map(String::from).unwrap_or_else(|| String::from(p.rsplit('/').next().unwrap_or(p).trim_end_matches(".pub")));
@@ -435,6 +446,166 @@ pub fn app_shell(fs: &mut dyn FileSystem, args: &str) -> Vec<String> {
         (Some("remove"), Some(n), _) => remove(fs, n),
         _ => alloc::vec![String::from("app: installed | install <file.eupkg> | trust <file.pub> [name] | trusted | remove <name> | run <name>")],
     }
+}
+
+/// Wait until `pred` holds, up to `max_ticks` scheduler ticks (the app runs meanwhile).
+fn wait_ticks(max_ticks: u32, mut pred: impl FnMut() -> bool) -> bool {
+    // sleep_ticks only marks this task sleeping; the switch happens on a yield
+    // or the next timer tick. Yield explicitly so the app actually runs, and
+    // bound the wait by the clock, not by iterations.
+    let deadline = crate::interrupts::ticks() + max_ticks as u64;
+    while crate::interrupts::ticks() < deadline {
+        if pred() {
+            return true;
+        }
+        crate::sched::sleep_ticks(1);
+        crate::sched::yield_now();
+    }
+    pred()
+}
+
+/// `[euroapp]` boot self-test (sprint WP6): a NATIVE app, no Linux library,
+/// under the euro profile and its manifest capabilities.
+/// 1. hello-euro (caps console,window) presents a frame: header blue, body
+///    white, text rendered by the kernel's font engine; a key event reaches it
+///    and it redraws; Escape ends it with exit 0.
+/// 2. the same binary without `window` cannot create a surface (exit 2).
+/// 3. euro-forbidden makes one Linux syscall (open) and is killed (SIGSYS).
+/// 4. the file scope refuses paths outside the home and /tmp.
+pub fn euroapp_selftest(falloc: &mut euromm::FrameAllocator, fs: &mut dyn FileSystem) {
+    let _ = fs.write_file("/tmp/hello-euro.eupkg", HELLO_EURO_EUPKG);
+    let _ = fs.write_file("/tmp/euro-forbidden.eupkg", EURO_FORBIDDEN_EUPKG);
+    let installed = install_file(fs, "/tmp/hello-euro.eupkg").iter().any(|l| l.contains("installed"))
+        && install_file(fs, "/tmp/euro-forbidden.eupkg").iter().any(|l| l.contains("installed"));
+    let native = installed_apps(fs).iter().any(|a| a.name == "hello-euro" && a.abi == "euro");
+    let argv: &[&[u8]] = &[b"/pkg/bin/hello-euro"];
+    const BLUE: u32 = 0x2d6be0;
+
+    // 1. with its manifest capabilities
+    let (presented, header, body, text, key_redraw, exit0) = match app_binary(fs, "hello-euro") {
+        Ok((bytes, _hash, app)) => {
+            let pid = 300;
+            let caps = app_caps(&app.caps);
+            let spawned = crate::ring3::spawn_euro_app(falloc, &bytes, pid, argv, 16, caps, eurosandbox::Profile::Euro).is_some();
+            let presented = spawned && wait_ticks(1500, || crate::euroapi::frames(pid) >= 1);
+            let header = crate::euroapi::pixel(pid, 10, 10) == Some(BLUE);
+            let body = crate::euroapi::pixel(pid, 10, 100) == Some(0xff_ffff);
+            let text = (20..300).any(|x| matches!(crate::euroapi::pixel(pid, x, 30), Some(c) if c != BLUE));
+            crate::euroapi::inject_key_to(pid, 0x1E, true); // 'a'
+            let key_redraw = wait_ticks(600, || crate::euroapi::frames(pid) >= 2);
+            crate::euroapi::inject_key_to(pid, 0x01, true); // Escape
+            let ended = wait_ticks(600, || !crate::ring3::bg_alive(pid));
+            let reason = crate::ring3::bg_end_reason(pid).unwrap_or_default();
+            crate::euroapi::remove(pid);
+            (presented, header, body, text, key_redraw, ended && reason.contains("exit 0"))
+        }
+        Err(e) => {
+            crate::serial_println!("[euroapp] hello-euro: {e}");
+            (false, false, false, false, false, false)
+        }
+    };
+    // 2. without the window capability
+    let no_window = match app_binary(fs, "hello-euro") {
+        Ok((bytes, _, _)) => {
+            let pid = 301;
+            let ok = crate::ring3::spawn_euro_app(falloc, &bytes, pid, argv, 16, crate::ring3::CAP_CONSOLE, eurosandbox::Profile::Euro).is_some()
+                && wait_ticks(600, || !crate::ring3::bg_alive(pid));
+            let reason = crate::ring3::bg_end_reason(pid).unwrap_or_default();
+            ok && reason.contains("exit 2") && !crate::euroapi::has_surface(pid)
+        }
+        Err(_) => false,
+    };
+    // 3. a Linux syscall under the euro profile
+    let forbidden_killed = match app_binary(fs, "euro-forbidden") {
+        Ok((bytes, _, app)) => {
+            let pid = 302;
+            let before = crate::ring3::PROFILE_KILLS.load(core::sync::atomic::Ordering::Relaxed);
+            let ok = crate::ring3::spawn_euro_app(falloc, &bytes, pid, &[b"/pkg/bin/euro-forbidden"], 16, app_caps(&app.caps), eurosandbox::Profile::Euro).is_some()
+                && wait_ticks(600, || !crate::ring3::bg_alive(pid));
+            let reason = crate::ring3::bg_end_reason(pid).unwrap_or_default();
+            ok && crate::ring3::PROFILE_KILLS.load(core::sync::atomic::Ordering::Relaxed) > before && reason.contains("159")
+        }
+        Err(_) => false,
+    };
+    // 4. file scope
+    let scope = crate::euroapi::file_path_ok("/etc/euroid/users.db").is_none()
+        && crate::euroapi::file_path_ok("../../etc/shadow").is_none()
+        && crate::euroapi::file_path_ok("/home/euro/../../etc/shadow").is_none()
+        && crate::euroapi::file_path_ok("notes.txt").map(|p| p.starts_with("/home/")).unwrap_or(false)
+        && crate::euroapi::file_path_ok("/tmp/x").is_some();
+    let ok = installed && native && presented && header && body && text && key_redraw && exit0 && no_window && forbidden_killed && scope;
+    crate::serial_println!(
+        "[euroapp] native app (Euro API, no Linux library): installed={installed} · abi=euro={native} · frame-presented={presented} · header-blue={header} · body-white={body} · kernel-text-drawn={text} · key-event-redraw={key_redraw} · escape-exit-0={exit0} · without-window-cap-refused={no_window} · linux-syscall-killed={forbidden_killed} · file-scope={scope} → {}",
+        if ok { "OK (a native EuroOS app runs under the euro profile with its manifest capabilities) ✓" } else { "FAILED" }
+    );
+}
+
+/// `[eurofuzz]` boot self-test (sprint WP6, security requirement 1): the Euro
+/// API survives 20000 random calls with hostile arguments from a native app
+/// that holds every capability the API gates (console, window, file). The
+/// kernel must answer each with a value or an error: no fault, no panic, and
+/// the fuzzer reaches its exit code 171.
+pub fn eurofuzz_selftest(falloc: &mut euromm::FrameAllocator, fs: &mut dyn FileSystem) {
+    let _ = fs.write_file("/tmp/efuzz.eupkg", EFUZZ_EUPKG);
+    let installed = install_file(fs, "/tmp/efuzz.eupkg").iter().any(|l| l.contains("installed"));
+    let pid = 320;
+    let (ran, reason) = match app_binary(fs, "efuzz") {
+        Ok((bytes, _, app)) => {
+            let spawned = crate::ring3::spawn_euro_app(falloc, &bytes, pid, &[b"/pkg/bin/efuzz"], 16, app_caps(&app.caps), eurosandbox::Profile::Euro).is_some();
+            let ended = spawned && wait_ticks(6000, || !crate::ring3::bg_alive(pid));
+            (ended, crate::ring3::bg_end_reason(pid).unwrap_or_default())
+        }
+        Err(e) => (false, e),
+    };
+    crate::euroapi::remove(pid);
+    let ok = installed && ran && reason.contains("exit 171");
+    crate::serial_println!(
+        "[eurofuzz] Euro API fuzzer: 20000 random Euro calls with hostile arguments (caps console,window,file): installed={installed} · ran-to-completion={ran} · exit=\"{reason}\" → {}",
+        if ok { "OK (every call answered with a value or an error; no fault, no panic) ✓" } else { "FAILED" }
+    );
+}
+
+/// `[euroapp-wasm]` boot self-test (sprint WP6, binding B): the hello example
+/// built for wasm32 runs in the kernel's eurowasm interpreter, frame-driven,
+/// under a fuel budget, with the Euro API as its only import: it presents a
+/// frame (header, text), redraws on a key, exits on Escape; a spinning module
+/// is ended by the fuel bound.
+pub fn euroapp_wasm_selftest(fs: &mut dyn FileSystem) {
+    let _ = fs.write_file("/tmp/hello-euro-wasm.eupkg", HELLO_EURO_WASM_EUPKG);
+    let installed = install_file(fs, "/tmp/hello-euro-wasm.eupkg").iter().any(|l| l.contains("installed"));
+    let is_wasm = installed_apps(fs).iter().any(|a| a.name == "hello-euro-wasm" && a.abi == "wasm");
+    const BLUE: u32 = 0x2d6be0;
+    let pid = 310;
+    let (started, header, body, text, key_redraw, exit0) = match app_binary(fs, "hello-euro-wasm") {
+        Ok((bytes, _hash, app)) => {
+            let started = match crate::wasm::start_app(&bytes, pid, app_caps(&app.caps), fs) {
+                Ok(()) => true,
+                Err(why) => { crate::serial_println!("[euroapp-wasm] start: {why}"); false }
+            };
+            let header = crate::euroapi::pixel(pid, 10, 10) == Some(BLUE);
+            let body = crate::euroapi::pixel(pid, 10, 100) == Some(0xff_ffff);
+            let text = (20..300).any(|x| matches!(crate::euroapi::pixel(pid, x, 30), Some(c) if c != BLUE));
+            crate::euroapi::inject_key_to(pid, 0x1E, true);
+            let f0 = crate::euroapi::frames(pid);
+            let still = crate::wasm::pump(fs).is_none();
+            let key_redraw = still && crate::euroapi::frames(pid) > f0;
+            crate::euroapi::inject_key_to(pid, 0x01, true);
+            let exit0 = matches!(crate::wasm::pump(fs), Some(Ok(0))) && !crate::wasm::app_alive(pid);
+            (started, header, body, text, key_redraw, exit0)
+        }
+        Err(e) => { crate::serial_println!("[euroapp-wasm] {e}"); (false, false, false, false, false, false) }
+    };
+    // without the window capability: init returns 2, nothing is hosted
+    let no_window = match app_binary(fs, "hello-euro-wasm") {
+        Ok((bytes, _, _)) => matches!(crate::wasm::start_app(&bytes, 311, crate::ring3::CAP_CONSOLE, fs), Err(ref w) if w.contains("init returned 2")) && !crate::wasm::app_alive(311),
+        Err(_) => false,
+    };
+    let fuel = crate::wasm::fuel_bounded();
+    let ok = installed && is_wasm && started && header && body && text && key_redraw && exit0 && no_window && fuel;
+    crate::serial_println!(
+        "[euroapp-wasm] WASM app (eurowasm, frame-driven, Euro API import): installed={installed} · abi=wasm={is_wasm} · init-presented={started} · header-blue={header} · body-white={body} · kernel-text-drawn={text} · key-event-redraw={key_redraw} · escape-exit-0={exit0} · without-window-cap-refused={no_window} · spinning-module-ended-by-fuel={fuel} → {}",
+        if ok { "OK (one app source, native and WASM, same policy) ✓" } else { "FAILED" }
+    );
 }
 
 /// `[app]` boot self-test: the example package signed with the EXAMPLE developer

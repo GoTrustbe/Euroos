@@ -30,6 +30,7 @@ mod iommu;
 /// `iommu::program` (the desktop's scanout and hot-plugged USB buffers).
 pub static mut DMA_FALLOC: Option<*mut euromm::FrameAllocator> = None;
 mod appgfx;
+mod euroapi;
 mod appicons;
 mod auth;
 mod euroui;
@@ -437,6 +438,43 @@ fn launch_installed_app(ctx: &mut shell::ShellCtx, name: &str) -> (bool, String)
     let mut argv: Vec<&[u8]> = alloc::vec![argv0.as_bytes()];
     for a in app.args.split_whitespace() { argv.push(a.as_bytes()); }
     let envp: &[&[u8]] = &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts"];
+    if app.abi == "wasm" {
+        // A WASM app: the eurowasm interpreter in the kernel, frame-driven under a
+        // fuel budget, the Euro API as its only import, its manifest capabilities.
+        static WASM_PID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(600);
+        let pid = WASM_PID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if app.display == "x11" {
+            if let Some(p) = euroapi::focus() {
+                if ring3::bg_alive(p) || wasm::app_alive(p) {
+                    return (false, String::from("a hosted app is already running (close its window first)"));
+                }
+                euroapi::remove(p);
+            }
+            return match wasm::start_app(&bytes, pid, caps, ctx.fs) {
+                Ok(()) => (true, format!("{}: launched in the WASM sandbox (pid {pid}; caps '{}', fuel {} steps/frame)", app.title, app.caps, wasm::FRAME_FUEL)),
+                Err(why) => (false, format!("{}: {why}", app.title)),
+            };
+        }
+        let (out, code) = wasm::run_cli(&bytes, pid, caps, ctx.fs);
+        ring3::set_last_app_output(&out.join("\n"));
+        return (code >= 0, format!("{}: exit {code} (WASM sandbox; caps '{}')", app.title, app.caps));
+    }
+    if app.abi == "euro" {
+        // A NATIVE app: no loader, no libc, no X. It runs under Profile::Euro with
+        // exactly its manifest capabilities; its window is the EuroSurface frame.
+        if let Some(pid) = euroapi::focus() {
+            if ring3::bg_alive(pid) {
+                return (false, String::from("a native app is already running (close its window first)"));
+            }
+            euroapi::remove(pid);
+        }
+        static EURO_PID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(400);
+        let pid = EURO_PID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        return match ring3::spawn_euro_app(ctx.mem, &bytes, pid, &argv, 16, caps | ring3::CAP_PROC_INFO, eurosandbox::Profile::Euro) {
+            Some(t) => (true, format!("{}: launched natively (pid {pid}, task {t}; caps '{}', profile euro; no Linux library)", app.title, app.caps)),
+            None => (false, format!("{}: launch failed (memory)", app.title)),
+        };
+    }
     ring3::NEXT_SPAWN_PROFILE.store(profile.as_u8(), core::sync::atomic::Ordering::Relaxed);
     ring3::app_trust_hash(Some(hash));
     let r = if app.display == "x11" {
@@ -3816,6 +3854,9 @@ fn main() -> Status {
     pkg::exec_selftest(rtc::epoch());
     // EuroApps SDK: a third-party package under its own key, end to end.
     pkg::app_selftest(&mut allocator, &mut vfs);
+    pkg::euroapp_selftest(&mut allocator, &mut vfs);
+    pkg::euroapp_wasm_selftest(&mut vfs);
+    pkg::eurofuzz_selftest(&mut allocator, &mut vfs);
 
     // 3E-5: GDB Remote Serial Protocol stub over COM2 — prove the wire protocol
     // against live kernel register/memory state (a real gdb attaches via COM2→tcp).
@@ -4268,9 +4309,21 @@ fn main() -> Status {
             visible: true, // the persistent GTK app renders into it live
             restore: None,
         },
+        // Sprint WP6: a NATIVE EuroOS app hosted as a framed window; its body is
+        // the last frame the app presented through the Euro API. Opens on launch.
+        compositor::Window {
+            x: SIDEBAR_W + 60, y: 90, w: 800, h: 600 + compositor::TITLEBAR_H,
+            title: String::from("EuroApp"),
+            content: Vec::new(), ui: Vec::new(),
+            active: false, accent: Color::BLUE,
+            sec: eds::SecState::new(true, false, false),
+            app: suite_ui::SuiteApp::EuroSurface,
+            visible: false,
+            restore: None,
+        },
     ];
     // Z-order (back-to-front): System back, Terminal, GTK window front.
-    let mut order: Vec<usize> = alloc::vec![0, 1, 2];
+    let mut order: Vec<usize> = alloc::vec![0, 1, 2, 3];
     // Dock tile (see compositor::DOCK_APPS: files/notes/clock/browser/terminal/
     // settings/store/star) → window index. The desktop starts EMPTY (all windows
     // hidden); a dock click opens an app. (AG-1 added files/notes/clock.)
@@ -4812,6 +4865,7 @@ fn main() -> Status {
     let term_idx = 1;
     let sys_idx = 0; // the live System window (behind the Terminal)
     let gtk_idx = 2; // the hosted live GTK app window (SuiteApp::XClient)
+    let euro_idx = 3; // the hosted native app window (SuiteApp::EuroSurface, sprint WP6)
     let mut input = String::new();
     let vis_lines = ((windows[term_idx].h - 44) / 16) as usize;
     // Marker: from here the interactive desktop loop runs (polls input + shell).
@@ -5109,6 +5163,29 @@ fn main() -> Status {
                             if windows[i].app == suite_ui::SuiteApp::XClient {
                                 ring3::kill_persistent_glibc(ctx.mem);
                             }
+                            if windows[i].app == suite_ui::SuiteApp::EuroSurface {
+                                // Ask first (Close event); a native app that is still
+                                // alive a moment later is terminated by the kernel.
+                                if let Some(pid) = euroapi::focus() {
+                                    euroapi::push_close();
+                                    for _ in 0..20 {
+                                        if !ring3::bg_alive(pid) { break; }
+                                        sched::sleep_ticks(1);
+                                    }
+                                    if ring3::bg_alive(pid) {
+                                        serial_println!("[euroapp] pid {pid} ignored Close: terminated");
+                                        ring3::kill_pid(pid);
+                                    }
+                                    if wasm::app_alive(pid) {
+                                        let _ = wasm::pump(ctx.fs); // one frame to see the Close event
+                                        if wasm::app_alive(pid) {
+                                            serial_println!("[euroapp] wasm pid {pid} ignored Close: terminated");
+                                            wasm::kill(pid);
+                                        }
+                                    }
+                                    euroapi::remove(pid);
+                                }
+                            }
                             windows[i].visible = false;
                             order.retain(|&x| x != i);
                             // Focus to the now-topmost visible window.
@@ -5194,6 +5271,17 @@ fn main() -> Status {
                             if px >= ox && py >= oy && px < ox + xw && py < oy + xh {
                                 xserver::deliver_focus(true); // clicking the window focuses it
                                 xserver::deliver_button((px - ox) as i16, (py - oy) as i16);
+                            }
+                        }
+                    } else if windows[i].app == suite_ui::SuiteApp::EuroSurface {
+                        // Click on the native app's body -> a Button event at surface
+                        // coordinates (the surface is centred in the body).
+                        let (bx, by, bw, bh) = compositor::window_body_rect(&windows[i]);
+                        if let Some((sw, sh)) = euroapi::front_size() {
+                            let ox = bx + bw.saturating_sub(sw) / 2;
+                            let oy = by + bh.saturating_sub(sh) / 2;
+                            if px >= ox && py >= oy && px < ox + sw && py < oy + sh {
+                                euroapi::push_button(1, true, (px - ox) as i32, (py - oy) as i32);
                             }
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Browser {
@@ -5794,7 +5882,7 @@ fn main() -> Status {
                         }
                     } else if {
                         let mut t = exec_cmd.split_whitespace();
-                        t.next() == Some("app") && matches!(t.next(), Some("installed" | "install" | "trust" | "trusted" | "remove" | "run"))
+                        t.next() == Some("app") && matches!(t.next(), Some("installed" | "install" | "trust" | "trusted" | "remove" | "run" | "surfaces"))
                     } {
                         // EuroApps SDK: package install / trust / run from the shell.
                         let rest = exec_cmd.trim_start_matches("app").trim();
@@ -5805,8 +5893,9 @@ fn main() -> Status {
                                 for l in ring3::last_app_output().lines() { out.push(format!("  {l}")); }
                                 // A windowed app gets the hosted window under its own title
                                 // (the same framing the launcher path gives it).
-                                if let Some(app) = pkg::installed_apps(ctx.fs).into_iter().find(|a| a.name == name && a.display == "x11") {
-                                    let w = gtk_idx;
+                                if let Some((app, w)) = pkg::installed_apps(ctx.fs).into_iter().find(|a| a.name == name)
+                                    .and_then(|a| if a.abi == "euro" || (a.abi == "wasm" && a.display == "x11") { Some((a, euro_idx)) } else if a.display == "x11" { Some((a, gtk_idx)) } else { None })
+                                {
                                     windows[w].title = alloc::format!("{}  -  {}", app.title, app.name);
                                     windows[w].w = 800;
                                     windows[w].h = 600 + compositor::TITLEBAR_H;
@@ -6091,8 +6180,8 @@ fn main() -> Status {
                 let (ok, msg) = launch_installed_app(&mut ctx, &app.name);
                 serial_println!("[app] {msg}");
                 notify::push(&app.title, &msg, interrupts::ticks());
-                if ok && app.display == "x11" {
-                    let w = gtk_idx;
+                if ok && (app.display == "x11" || app.abi == "euro") {
+                    let w = if app.abi == "euro" || app.abi == "wasm" { euro_idx } else { gtk_idx };
                     windows[w].title = alloc::format!("{}  -  {}", app.title, app.name);
                     windows[w].w = 800;
                     windows[w].h = 600 + compositor::TITLEBAR_H;
@@ -6333,6 +6422,12 @@ fn main() -> Status {
             if gtk_vis {
                 compositor::draw_window_body(&fb, &windows[gtk_idx]);
             }
+            // Native app window (Euro API surface): repaint on a new frame; the
+            // frame takes the surface's size the first time it is known.
+            let euro_vis = windows[euro_idx].visible && euroapi::take_dirty();
+            if euro_vis {
+                compositor::draw_window_body(&fb, &windows[euro_idx]);
+            }
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
@@ -6348,6 +6443,10 @@ fn main() -> Status {
             if gtk_vis {
                 let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
                 fb.present_rect(gx, gy, gw, gh);
+            }
+            if euro_vis {
+                let (ex, ey, ew, eh) = compositor::window_body_rect(&windows[euro_idx]);
+                fb.present_rect(ex, ey, ew, eh);
             }
             fb.present_rect(ox, oy, compositor::CURSOR_W, compositor::CURSOR_H);
             fb.present_rect(cmx, cmy, compositor::CURSOR_W, compositor::CURSOR_H);
@@ -6439,6 +6538,64 @@ fn main() -> Status {
         // Keyboard focus: when the hosted GTK window is the active window, route real
         // keystrokes to it (X KeyPress via the keymap) instead of the shell. Otherwise
         // the shell keeps the keyboard as normal.
+        // Native app window focused: raw scancodes become Key events for it (with
+        // the layout's character), pointer motion over its body becomes Move events.
+        if windows[euro_idx].visible && windows[euro_idx].active {
+            while let Some(sc) = ps2::poll_scancode() {
+                if sc == 0xE0 {
+                    continue;
+                }
+                euroapi::push_key(sc & 0x7F, sc & 0x80 == 0);
+            }
+            let (mpx, mpy) = mouse::pos();
+            if (mpx, mpy) != last_hover {
+                last_hover = (mpx, mpy);
+                let (bx, by, bw, bh) = compositor::window_body_rect(&windows[euro_idx]);
+                if let Some((sw, sh)) = euroapi::front_size() {
+                    let ox = bx + bw.saturating_sub(sw) / 2;
+                    let oy = by + bh.saturating_sub(sh) / 2;
+                    if mpx >= ox && mpy >= oy && mpx < ox + sw && mpy < oy + sh {
+                        euroapi::push_move((mpx - ox) as i32, (mpy - oy) as i32);
+                    }
+                }
+            }
+        }
+        // A WASM app runs one frame per desktop tick under its fuel budget.
+        if let Some(done) = wasm::pump(ctx.fs) {
+            match done {
+                Ok(code) => serial_println!("[euroapp] wasm app ended: exit {code}"),
+                Err(why) => serial_println!("[euroapp] wasm app ended: {why}"),
+            }
+        }
+        // The native app's frame takes the size of its surface once that is known
+        // (the launch framed it at 800x600 before the first present).
+        if windows[euro_idx].visible {
+            if let Some((sw, sh)) = euroapi::front_size() {
+                let (fw, fh) = (sw.max(200).min(width), (sh + compositor::TITLEBAR_H).min(height));
+                if windows[euro_idx].w != fw || windows[euro_idx].h != fh {
+                    windows[euro_idx].w = fw;
+                    windows[euro_idx].h = fh;
+                    need_full = true;
+                }
+            }
+        }
+        // A native or WASM app that exited (or was killed) takes its window with it.
+        if windows[euro_idx].visible {
+            if let Some(pid) = euroapi::focus() {
+                if !ring3::bg_alive(pid) && !wasm::app_alive(pid) {
+                    let why = ring3::bg_end_reason(pid).unwrap_or_default();
+                    serial_println!("[euroapp] pid {pid} ended ({why}): closing its window");
+                    euroapi::remove(pid);
+                    windows[euro_idx].visible = false;
+                    order.retain(|&x| x != euro_idx);
+                    if let Some(&top) = order.iter().rev().find(|&&j| windows[j].visible) {
+                        for ww in windows.iter_mut() { ww.active = false; }
+                        windows[top].active = true;
+                    }
+                    need_full = true;
+                }
+            }
+        }
         if windows[gtk_idx].visible && windows[gtk_idx].active {
             xserver::pump_keyboard();
             // Hover: forward pointer motion over the hosted window's body, so the app

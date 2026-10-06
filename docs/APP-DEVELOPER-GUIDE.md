@@ -98,3 +98,65 @@ is public: do not sign real software with it.
 - Only the system's own library set; no package may ship libraries.
 - `app run` blocks the desktop until the program exits; use it for short tools.
 - Signed indexes (an app store) are the next step (night plan N7).
+
+## 6. Native apps: no Linux library at all (sprint WP6)
+
+Everything above runs a glibc program through the compatibility bridge. A
+**native** EuroOS app speaks only the Euro API, the interface the kernel
+defines for applications: a window surface you draw into, an event queue,
+the system text engine, whole-file reads and writes inside your home, a log
+line and a clock. No libc, no X11, no Linux syscall. The binary is a
+freestanding static PIE; it runs under the kernel's `euro` syscall profile,
+an allow-list of exactly these calls plus exit, memory and sleep. Anything
+else ends the process with SIGSYS before any handler sees the arguments.
+
+| call | what | capability |
+|------|------|------------|
+| `info` | ABI version, screen size, your capabilities | none |
+| `surface_create(w, h)` | one window surface per process, up to 1920x1200 | `window` |
+| `surface_present(buf, w, h)` | show your XRGB8888 pixels | `window` |
+| `event_poll` / `event_wait(ms)` | keys (scancode + character under the active layout), pointer, buttons, resize, close | `window` |
+| `text_draw(...)` / `text_measure` | the system font (DM Sans, anti-aliased) rendered by the kernel into your buffer | `window` / none |
+| `log(s)` | one line to the system log and your console output | `console` |
+| `file_read` / `file_write` | whole files in your home or `/tmp`; nothing else | `file` |
+| `time_ms` / `sleep_ms` / `exit` | clock, sleep, end | none |
+
+### Rust (recommended)
+
+```bash
+cd sdk/rust
+cargo build --release                        # target x86_64-unknown-none, static PIE
+python3 ../euroapp.py build --abi euro --name hello-euro --version 1.0.0 \
+    --binary target/x86_64-unknown-none/release/hello-euro --key mykeys/me.key \
+    --title "Hello (native)" --caps console,window --display x11 --out hello-euro-1.0.0.eupkg
+```
+
+`sdk/rust/eurosdk` is a `#![no_std]` crate: `Surface` (your pixel buffer,
+`present()`, `rect`, `text`), `Event`, `event_wait`, `log`, `file_read`,
+`file_write`. `sdk/rust/examples/hello-euro` is the complete example (a window,
+the kernel's text, a key and click counter, Escape to quit) in about a hundred
+lines; `efuzz` is the fuzzer the kernel's self-test runs.
+
+### C
+
+`sdk/c/euro.h` has the same calls as inline functions for freestanding C:
+`gcc -O2 -ffreestanding -nostdlib -fpie -static-pie -fno-stack-protector -o app app.c`.
+`sdk/c/hello-euro-c.c` is the C version of the example.
+
+### WASM
+
+Build the same Rust source with `--features wasm` for `wasm32-unknown-unknown`
+and package it with `--abi wasm`. The kernel runs it in `eurowasm`, its own
+interpreter, with the Euro API as the only import. A WASM app is
+**frame-driven**: it exports `init()` (return 0 when ready) and `frame()`
+(return 0 to keep running); the desktop calls `frame` once per tick under a
+step budget, so a module can never hold the desktop, and `event_wait`
+returns at once. The interpreter is a no-JIT interpreter: fine for a tool or a
+form, slow for heavy graphics. Same capabilities, same signature checks.
+
+### What a native app gets, stated plainly
+
+One surface per process; events only while its window has focus; files only
+inside the session user's home and `/tmp` (`..` and other paths are refused);
+strings up to 4 KiB, files up to 16 MiB; no network, no IPC, no clipboard yet
+(planned). The kernel re-verifies the binary at every launch, as for any app.

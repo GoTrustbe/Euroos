@@ -1,0 +1,8 @@
+# Native EuroOS apps: a freestanding static PIE for x86_64, no libc, no Linux.
+# `cargo build --release` here produces the ELF that `euroapp.py build` packages.
+[build]
+target = "x86_64-unknown-none"
+
+[target.x86_64-unknown-none]
+rustflags = ["-C", "relocation-model=pie", "-C", "link-arg=-pie", "-C", "link-arg=--no-dynamic-linker", "-C", "link-arg=-z", "-C", "link-arg=max-page-size=4096", "-C", "link-arg=-z", "-C", "link-arg=noexecstack"]
+

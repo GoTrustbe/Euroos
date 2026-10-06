@@ -53,6 +53,14 @@ footprint, one legacy Windows application, stability, and blame-the-new-OS.
    and the `gfuzz` Linux-ABI syscall fuzzer (20000 random calls, deterministic,
    host-replayable; its first run found and fixed a fallocate heap exhaustion).
    The hours-long soak run remains.
+4c. **WP6 Native apps, no Linux library** — 🏗️ 2026-10-06: the Euro API
+   (kernel/src/euroapi.rs, syscalls 0x6100..: surface, events, system text,
+   home-scoped files, log, clock), the `euro` syscall profile (an allow-list:
+   a native app has no Linux surface), `CAP_WINDOW`, a `no_std` Rust SDK
+   (`sdk/rust/eurosdk`) producing static PIEs for `x86_64-unknown-none`, a C
+   header (`sdk/c/euro.h`), and the same API as the one import of eurowasm
+   (frame-driven, fuel-bounded) for `abi = "wasm"` packages. Proof markers
+   `[euroapp]`, `[euroapp-wasm]`, `[eurofuzz]`; plan `SPRINT-PLAN-NATIVE-APPS.md`.
 4b. **EuroApps SDK** — ✅ built 2026-10-06: third parties package, sign (own
    Ed25519 key) and ship apps (`.eupkg`); the owner enrols developer keys; the
    kernel re-verifies the binary at every launch and applies the manifest's

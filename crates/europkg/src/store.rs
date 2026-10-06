@@ -87,6 +87,9 @@ pub struct PkgMeta {
     pub display: String,
     /// Extra argv after argv[0], space separated.
     pub args: String,
+    /// `linux` (glibc through the compat bridge, the default), `euro` (a native
+    /// static PIE speaking the Euro API) or `wasm` (eurowasm, frame-driven).
+    pub abi: String,
 }
 
 impl PkgMeta {
@@ -119,9 +122,11 @@ pub fn parse_manifest(toml: &str) -> Option<PkgMeta> {
     let kind = opt("kind", "lib");
     let profile = opt("profile", "full");
     let display = opt("display", "none");
+    let abi = opt("abi", "linux");
     if !matches!(kind.as_str(), "lib" | "app")
-        || !matches!(profile.as_str(), "full" | "utility" | "renderer" | "strict")
+        || !matches!(profile.as_str(), "full" | "utility" | "renderer" | "strict" | "euro")
         || !matches!(display.as_str(), "none" | "x11")
+        || !matches!(abi.as_str(), "linux" | "euro" | "wasm")
     {
         return None;
     }
@@ -132,6 +137,7 @@ pub fn parse_manifest(toml: &str) -> Option<PkgMeta> {
         kind,
         profile,
         display,
+        abi,
         name,
         version: toml_value(toml, "version")?.to_string(),
         binary: toml_value(toml, "binary")?.to_string(),
@@ -180,6 +186,7 @@ pub struct Installed {
     pub profile: String,
     pub display: String,
     pub args: String,
+    pub abi: String,
 }
 
 /// The package engine over an abstract FS + injected crypto.
@@ -239,6 +246,7 @@ impl<'a> PkgEngine<'a> {
                     profile: g(8, "full"),
                     display: g(9, "none"),
                     args: g(10, ""),
+                    abi: g(11, "linux"),
                 });
             }
         }
@@ -249,8 +257,8 @@ impl<'a> PkgEngine<'a> {
         let mut text = String::new();
         for r in rows {
             text.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                r.name, r.version, r.hash, r.bin, r.deps.join(","), r.kind, r.title, r.caps, r.profile, r.display, r.args
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                r.name, r.version, r.hash, r.bin, r.deps.join(","), r.kind, r.title, r.caps, r.profile, r.display, r.args, r.abi
             ));
         }
         if self.fs.write(&self.registry_path(), text.as_bytes()) {
@@ -301,6 +309,7 @@ impl<'a> PkgEngine<'a> {
             profile: meta.profile.clone(),
             display: meta.display.clone(),
             args: meta.args.clone(),
+            abi: meta.abi.clone(),
         });
         self.save_registry(&rows)?;
         Ok(meta)
@@ -490,5 +499,14 @@ mod app_meta_tests {
         assert!(parse_manifest("name = \"x\"\nversion = \"1\"\nbinary = \"x\"\nbinary_sha256 = \"a\"\nprofile = \"root\"\n").is_none());
         assert!(parse_manifest("name = \"x\"\nversion = \"1\"\nbinary = \"x\"\nbinary_sha256 = \"a\"\ndisplay = \"wayland\"\n").is_none());
         assert!(parse_manifest("name = \"../x\"\nversion = \"1\"\nbinary = \"x\"\nbinary_sha256 = \"a\"\n").is_none());
+    }
+
+    #[test]
+    fn abi_field_parses_and_validates() {
+        let base = "name = \"n\"\nversion = \"1\"\nbinary = \"b\"\nbinary_sha256 = \"ab\"\nkind = \"app\"\n";
+        assert_eq!(parse_manifest(base).unwrap().abi, "linux");
+        assert_eq!(parse_manifest(&format!("{base}abi = \"euro\"\nprofile = \"euro\"\n")).unwrap().abi, "euro");
+        assert_eq!(parse_manifest(&format!("{base}abi = \"wasm\"\n")).unwrap().abi, "wasm");
+        assert!(parse_manifest(&format!("{base}abi = \"java\"\n")).is_none());
     }
 }

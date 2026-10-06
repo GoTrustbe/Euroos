@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["eurosdk", "examples/hello-euro", "examples/euro-forbidden", "examples/efuzz"]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = false
+strip = true
+
+[profile.dev]
+panic = "abort"

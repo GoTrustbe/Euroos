@@ -1,0 +1,12 @@
+[package]
+name = "eurosdk"
+version = "0.1.0"
+edition = "2021"
+license = "EUPL-1.2"
+description = "The EuroOS native app SDK: the Euro API (surfaces, events, text, files) without any Linux library"
+
+[features]
+default = []
+# Build for eurowasm instead of a native ELF: the same calls become imports of
+# the `euro` module and the app is frame-driven (init/frame exports).
+wasm = []

@@ -537,3 +537,302 @@ pub fn wasi_selftest() {
         if ok { "OK (runs real wasm32-wasi fd_write, not a custom shim; proc_exit/random_get/clock/env/args also implemented) ✓" } else { "FAILED ✗" }
     );
 }
+
+// ── Sprint WP6: windowed WASM apps on the Euro API ──────────────────────────
+//
+// The second binding of the Euro API: the same calls as the native syscalls,
+// as ONE import `euro.call(nr, a1..a5) -> i64` of the module. A WASM app is
+// frame-driven: it exports `init() -> i32` (0 = ready, else an exit code) and
+// `frame() -> i32` (0 = keep running, else done); the desktop loop calls
+// `frame` once per tick with a step budget (fuel), so a module can never hold
+// the desktop, and `event_wait`/`sleep_ms` return at once. Every pointer and
+// length an import receives is checked against the module's linear memory;
+// the surface, events and text go through `euroapi` under a pid of their own,
+// so the hosted window, focus and input work exactly as for a native app.
+
+/// Steps one `frame()`/`init()` call may execute before it traps (fuel).
+pub const FRAME_FUEL: u64 = 4_000_000;
+
+pub struct EuroHost<'a> {
+    pub pid: u64,
+    pub caps: u64,
+    pub fs: Option<&'a mut dyn FileSystem>,
+    /// Set by `exit(code)`; the trap that follows ends the call cleanly.
+    pub exit: Option<i32>,
+    pub output: Vec<String>,
+}
+
+fn span(mem: &[u8], ptr: u64, len: u64) -> Option<(usize, usize)> {
+    let (p, n) = (ptr as usize, len as usize);
+    if ptr > u32::MAX as u64 || len > u32::MAX as u64 || p.checked_add(n)? > mem.len() {
+        None
+    } else {
+        Some((p, n))
+    }
+}
+
+impl EuroHost<'_> {
+    fn has(&self, cap: u64) -> bool {
+        self.caps & cap == cap
+    }
+
+    fn dispatch(&mut self, nr: u64, a: [u64; 5], mem: &mut [u8]) -> i64 {
+        use crate::ring3::{CAP_CONSOLE, CAP_FILE, CAP_WINDOW};
+        const EPERM: i64 = -1;
+        const EFAULT: i64 = -14;
+        const EINVAL: i64 = -22;
+        match nr {
+            0x6100 => {
+                let Some((p, n)) = span(mem, a[0], a[1].min(16)) else { return EFAULT };
+                let (sw, sh) = crate::appgfx::screen();
+                let mut b = [0u8; 16];
+                for (i, v) in [crate::euroapi::ABI_VERSION, sw as u32, sh as u32, (self.caps & 0xffff_ffff) as u32].iter().enumerate() {
+                    b[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+                }
+                mem[p..p + n].copy_from_slice(&b[..n]);
+                0
+            }
+            0x6101 => {
+                if !self.has(CAP_WINDOW) { return EPERM; }
+                crate::euroapi::create(self.pid, a[0] as usize, a[1] as usize)
+            }
+            0x6102 => {
+                if !self.has(CAP_WINDOW) { return EPERM; }
+                let (w, h) = (a[1] as usize, a[2] as usize);
+                if w == 0 || h == 0 || w > crate::euroapi::MAX_W || h > crate::euroapi::MAX_H { return EINVAL; }
+                let Some((p, n)) = span(mem, a[0], (w * h * 4) as u64) else { return EFAULT };
+                let px: Vec<u32> = mem[p..p + n].chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+                crate::euroapi::present(self.pid, &px, w, h)
+            }
+            0x6103 => {
+                if !self.has(CAP_WINDOW) { return EPERM; }
+                match crate::euroapi::poll(self.pid) {
+                    Some(ev) => {
+                        let Some((p, n)) = span(mem, a[0], a[1].min(16)) else { return EFAULT };
+                        mem[p..p + n].copy_from_slice(&ev.to_bytes()[..n]);
+                        1
+                    }
+                    None => 0,
+                }
+            }
+            0x6104 => {
+                // Frame-driven: never block; the host calls frame() again next tick.
+                if !self.has(CAP_WINDOW) { return EPERM; }
+                crate::euroapi::pending(self.pid) as i64
+            }
+            0x6105 => {
+                if !self.has(CAP_WINDOW) { return EPERM; }
+                let (w, h) = ((a[1] >> 32) as usize, (a[1] & 0xffff_ffff) as usize);
+                let (x, y) = ((a[2] >> 32) as u32 as i32, (a[2] & 0xffff_ffff) as u32 as i32);
+                let len = a[4] >> 40;
+                let size = ((a[4] >> 32) & 0xff) as u32;
+                let argb = (a[4] & 0xff_ffff) as u32;
+                if w == 0 || h == 0 || w > crate::euroapi::MAX_W || h > crate::euroapi::MAX_H || len > crate::euroapi::MAX_STR as u64 { return EINVAL; }
+                let Some((p, n)) = span(mem, a[0], (w * h * 4) as u64) else { return EFAULT };
+                let Some((sp, sn)) = span(mem, a[3], len) else { return EFAULT };
+                let s = String::from_utf8_lossy(&mem[sp..sp + sn]).into_owned();
+                let mut px: Vec<u32> = mem[p..p + n].chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+                let r = crate::euroapi::text_draw(&mut px, w, h, x, y, &s, argb, size);
+                for (i, v) in px.iter().enumerate() {
+                    mem[p + i * 4..p + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+                }
+                r
+            }
+            0x6106 => {
+                if a[1] > crate::euroapi::MAX_STR as u64 { return EINVAL; }
+                let Some((sp, sn)) = span(mem, a[0], a[1]) else { return EFAULT };
+                crate::euroapi::text_measure(&String::from_utf8_lossy(&mem[sp..sp + sn]), a[2] as u32) as i64
+            }
+            0x6107 => {
+                if !self.has(CAP_CONSOLE) { return EPERM; }
+                if a[1] > crate::euroapi::MAX_STR as u64 { return EINVAL; }
+                let Some((sp, sn)) = span(mem, a[0], a[1]) else { return EFAULT };
+                let line = String::from_utf8_lossy(&mem[sp..sp + sn]).into_owned();
+                crate::serial_println!("[euroapp wasm pid {}] {}", self.pid, line.trim_end());
+                if self.output.len() < 512 { self.output.push(line); }
+                0
+            }
+            0x6108 => (crate::interrupts::ticks() * 10) as i64,
+            0x6109 => 0, // sleep_ms: frame-driven, returns at once
+            0x610A | 0x610B => {
+                if !self.has(CAP_FILE) { return EPERM; }
+                if a[1] > 512 { return EINVAL; }
+                let Some((pp, pn)) = span(mem, a[0], a[1]) else { return EFAULT };
+                let Some(path) = crate::euroapi::file_path_ok(&String::from_utf8_lossy(&mem[pp..pp + pn])) else { return -13 };
+                let n = a[3].min(crate::euroapi::MAX_FILE as u64);
+                let Some((bp, bn)) = span(mem, a[2], n) else { return EFAULT };
+                let Some(fs) = self.fs.as_deref_mut() else { return -5 };
+                if nr == 0x610A {
+                    match fs.read_file(&path) {
+                        Ok(data) => { let k = data.len().min(bn); mem[bp..bp + k].copy_from_slice(&data[..k]); k as i64 }
+                        Err(_) => -2,
+                    }
+                } else {
+                    let data = mem[bp..bp + bn].to_vec();
+                    if fs.write_file(&path, &data).is_ok() { bn as i64 } else { -13 }
+                }
+            }
+            0x610C => { self.exit = Some(a[0] as i32); 0 }
+            _ => -38, // ENOSYS: not a Euro call
+        }
+    }
+}
+
+impl HostImports for EuroHost<'_> {
+    fn call(&mut self, m: &str, n: &str, args: &[Val], mem: &mut [u8]) -> Result<Vec<Val>, WasmError> {
+        if m != "euro" || n != "call" || args.len() != 6 {
+            return Err(WasmError::Unsupported("import (only euro.call)"));
+        }
+        let a = [args[1] as u64, args[2] as u64, args[3] as u64, args[4] as u64, args[5] as u64];
+        let r = self.dispatch(args[0] as u64, a, mem);
+        if self.exit.is_some() {
+            return Err(WasmError::Trap("exit"));
+        }
+        Ok(vec![r])
+    }
+}
+
+/// The one windowed WASM app the desktop hosts (like the one native surface).
+struct WasmApp {
+    pid: u64,
+    caps: u64,
+    module: &'static Module,
+    inst: Instance<'static>,
+    frames: u64,
+}
+
+static APP: spin::Mutex<Option<WasmApp>> = spin::Mutex::new(None);
+
+fn free_module(m: &'static Module) {
+    // SAFETY: `m` came from Box::leak in start_app and no Instance refers to it
+    // any more (the WasmApp holding the Instance was dropped first).
+    unsafe { drop(alloc::boxed::Box::from_raw(m as *const Module as *mut Module)) };
+}
+
+/// Start a windowed WASM app: parse, instantiate, run `init()` (first frame).
+/// Ok(()) = running (its surface exists); Err(text) = refused or ended in init.
+pub fn start_app(bytes: &[u8], pid: u64, caps: u64, fs: &mut dyn FileSystem) -> Result<(), String> {
+    if APP.lock().is_some() {
+        return Err(String::from("a WASM app is already running (close its window first)"));
+    }
+    let module = Module::parse(bytes).map_err(|e| format!("not a runnable module: {e:?}"))?;
+    if !module.has_export("init") || !module.has_export("frame") {
+        return Err(String::from("a windowed WASM app must export init() and frame()"));
+    }
+    let module: &'static Module = alloc::boxed::Box::leak(alloc::boxed::Box::new(module));
+    let mut inst = Instance::new(module);
+    inst.set_fuel(FRAME_FUEL);
+    let mut host = EuroHost { pid, caps, fs: Some(fs), exit: None, output: Vec::new() };
+    let r = inst.invoke("init", &[], &mut host);
+    let ended = match (&r, host.exit) {
+        (_, Some(code)) => Some(format!("exit {code}")),
+        (Ok(v), None) if v.first().copied().unwrap_or(0) != 0 => Some(format!("init returned {}", v[0])),
+        (Err(e), None) => Some(format!("trap in init: {e:?}")),
+        _ => None,
+    };
+    if let Some(why) = ended {
+        drop(inst);
+        crate::euroapi::remove(pid);
+        free_module(module);
+        return Err(why);
+    }
+    *APP.lock() = Some(WasmApp { pid, caps, module, inst, frames: 1 });
+    Ok(())
+}
+
+/// One desktop tick: run `frame()` under the fuel budget. `None` = still
+/// running; `Some(Ok(code))` = ended by itself; `Some(Err(why))` = trapped.
+pub fn pump(fs: &mut dyn FileSystem) -> Option<Result<i32, String>> {
+    let mut g = APP.lock();
+    let app = g.as_mut()?;
+    let mut host = EuroHost { pid: app.pid, caps: app.caps, fs: Some(fs), exit: None, output: Vec::new() };
+    let r = app.inst.invoke("frame", &[], &mut host);
+    app.frames += 1;
+    let done = match (r, host.exit) {
+        (_, Some(code)) => Some(Ok(code)),
+        (Ok(v), None) => if v.first().copied().unwrap_or(0) != 0 { Some(Ok(0)) } else { None },
+        (Err(e), None) => Some(Err(format!("{e:?}"))),
+    };
+    if done.is_some() {
+        let app = g.take().unwrap();
+        let (pid, module) = (app.pid, app.module);
+        drop(app);
+        crate::euroapi::remove(pid);
+        free_module(module);
+    }
+    done
+}
+
+pub fn app_alive(pid: u64) -> bool {
+    APP.lock().as_ref().map(|a| a.pid == pid).unwrap_or(false)
+}
+
+/// Terminate the hosted WASM app (window closed and it did not exit on Close).
+pub fn kill(pid: u64) {
+    let mut g = APP.lock();
+    if g.as_ref().map(|a| a.pid == pid).unwrap_or(false) {
+        let app = g.take().unwrap();
+        let module = app.module;
+        drop(app);
+        crate::euroapi::remove(pid);
+        free_module(module);
+    }
+}
+
+/// A console WASM app (`display = none`): `init()` does the work; `frame()` is
+/// pumped up to 10000 times for an app that needs it. Returns (output, exit).
+pub fn run_cli(bytes: &[u8], pid: u64, caps: u64, fs: &mut dyn FileSystem) -> (Vec<String>, i32) {
+    let module = match Module::parse(bytes) {
+        Ok(m) => m,
+        Err(e) => return (vec![format!("wasm: not a runnable module: {e:?}")], -1),
+    };
+    let mut inst = Instance::new(&module);
+    inst.set_fuel(FRAME_FUEL * 25);
+    let mut host = EuroHost { pid, caps, fs: Some(fs), exit: None, output: Vec::new() };
+    let mut code = match inst.invoke("init", &[], &mut host) {
+        Ok(v) => v.first().copied().unwrap_or(0) as i32,
+        Err(e) if host.exit.is_none() => { host.output.push(format!("wasm: trap: {e:?}")); -1 }
+        Err(_) => 0,
+    };
+    if let Some(c) = host.exit { code = c; }
+    if host.exit.is_none() && code == 0 && module.has_export("frame") {
+        for _ in 0..10_000 {
+            match inst.invoke("frame", &[], &mut host) {
+                Ok(v) if v.first().copied().unwrap_or(0) == 0 && host.exit.is_none() => continue,
+                Ok(_) => break,
+                Err(e) if host.exit.is_none() => { host.output.push(format!("wasm: trap: {e:?}")); code = -1; break; }
+                Err(_) => break,
+            }
+        }
+        if let Some(c) = host.exit { code = c; }
+    }
+    crate::euroapi::remove(pid);
+    (host.output, code)
+}
+
+/// A module whose `run` loops forever: the fuel bound must end it (self-test).
+pub fn build_spin_module() -> Vec<u8> {
+    let mut w = vec![0u8, 0x61, 0x73, 0x6d, 1, 0, 0, 0];
+    w.extend(section(1, vec![1, 0x60, 0, 1, 0x7f])); // type 0: () -> i32
+    w.extend(section(3, vec![1, 0])); // 1 function of type 0
+    let mut ex = vec![1u8, 3];
+    ex.extend_from_slice(b"run");
+    ex.extend_from_slice(&[0x00, 0]);
+    w.extend(section(7, ex));
+    let body = vec![0u8, 0x03, 0x40, 0x0c, 0x00, 0x0b, 0x41, 0x07, 0x0b]; // loop { br 0 } ; 7
+    let mut code = vec![1u8];
+    code.extend(uleb(body.len() as u32));
+    code.extend(body);
+    w.extend(section(10, code));
+    w
+}
+
+/// Does the fuel bound end a spinning module, and does a small budget end
+/// it fast? (Host-tested too; here against the kernel build of eurowasm.)
+pub fn fuel_bounded() -> bool {
+    let bytes = build_spin_module();
+    let Ok(m) = Module::parse(&bytes) else { return false };
+    let mut inst = Instance::new(&m);
+    inst.set_fuel(10_000);
+    matches!(inst.invoke("run", &[], &mut eurowasm::NoImports), Err(WasmError::Trap(_)))
+}

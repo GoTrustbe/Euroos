@@ -1,0 +1,15 @@
+[package]
+name = "efuzz"
+version = "1.0.0"
+edition = "2021"
+license = "EUPL-1.2"
+description = "Euro API fuzzer: random Euro syscalls with hostile arguments; the kernel must survive"
+
+[dependencies]
+eurosdk = { path = "../../eurosdk" }
+
+[[bin]]
+name = "efuzz"
+path = "src/main.rs"
+test = false
+bench = false

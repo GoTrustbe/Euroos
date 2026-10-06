@@ -46,6 +46,9 @@ pub enum SuiteApp {
     /// A hosted X11 client (e.g. a real GTK app): its window body is the live pixel
     /// buffer from the in-kernel X server, composited as a framed desktop window.
     XClient,
+    /// Sprint WP6: a NATIVE EuroOS app (no Linux library) hosted as a framed
+    /// window: its body is the last frame the app presented through the Euro API.
+    EuroSurface,
 }
 
 const TITLEBAR_H: usize = 44; // must equal compositor::TITLEBAR_H
@@ -83,6 +86,7 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize, app: Sui
         SuiteApp::Log => {}
         // XClient body is the hosted X-server pixel buffer, drawn before this dispatch.
         SuiteApp::XClient => {}
+        SuiteApp::EuroSurface => {} // painted by compositor::draw_window_body (Euro API surface)
         SuiteApp::None => {}
     }
 }

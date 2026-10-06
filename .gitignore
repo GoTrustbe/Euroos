@@ -122,3 +122,6 @@ id_ed25519*
 sdk/examples/*/hello
 sdk/examples/*/*.eupkg
 /crates/eurontfs/tests/ntfs.img
+sdk/rust/target/
+sdk/c/hello-euro-c
+sdk/c/*.eupkg

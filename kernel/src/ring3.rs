@@ -25,6 +25,12 @@ pub const CAP_PROC_INFO: u64 = 1 << 1; // getpid/uname
 pub const CAP_FILE: u64 = 1 << 2; // open/read/close
 pub const CAP_NET: u64 = 1 << 3; // network access
 pub const CAP_IMMUTABLE_ADMIN: u64 = 1 << 4; // L2: set/clear immutability flags
+/// Sprint WP6: a window surface + its input (the Euro API's surface/event calls).
+pub const CAP_WINDOW: u64 = 1 << 5;
+/// Marks a per-task capability set as SET even when it grants nothing: without
+/// it a zero TASK_CAPS entry falls back to the global CURRENT_CAPS, and a
+/// native app declaring no capabilities would inherit the desktop's rights.
+const CAP_TASK_SET: u64 = 1 << 62;
 
 static CURRENT_CAPS: AtomicU64 = AtomicU64::new(0);
 /// Capabilities PER TASK. CURRENT_CAPS is one global, and the desktop runs many
@@ -4200,7 +4206,7 @@ fn task_has_filters(t: usize) -> bool {
     t < crate::sched::MAX_TASKS && TASK_PROFILE[t].load(Ordering::Relaxed) & PROFILE_FILTERED != 0
 }
 
-fn set_task_profile(t: usize, p: eurosandbox::Profile) {
+pub fn set_task_profile(t: usize, p: eurosandbox::Profile) {
     if t < crate::sched::MAX_TASKS {
         let keep = TASK_PROFILE[t].load(Ordering::Relaxed) & PROFILE_FILTERED;
         TASK_PROFILE[t].store(p.as_u8() | keep, Ordering::Relaxed);
@@ -5464,6 +5470,151 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
                 _ => 0,
             }
         }
+        // ── Euro API v1 (sprint WP6): the native app interface. Every pointer is
+        // checked against THIS process's arena (the route swapped ARENA_BASE to
+        // it), every size is bounded, every call is capability-gated. The two
+        // sleeping calls (event_wait, sleep_ms) are handled in the route, where
+        // the BG lock can be dropped first.
+        0x6100 => {
+            // info(out, cap): abi, screen w, screen h, this process's capabilities.
+            let (sw, sh) = crate::appgfx::screen();
+            let caps = (effective_caps() & 0xffff_ffff) as u32;
+            let mut b = [0u8; 16];
+            for (i, v) in [crate::euroapi::ABI_VERSION, sw as u32, sh as u32, caps].iter().enumerate() {
+                b[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+            }
+            let n = (a2 as usize).min(16);
+            if n > 0 && !copy_to_user(a1, &b[..n]) {
+                return EFAULT;
+            }
+            0
+        }
+        0x6101 => {
+            if !has_cap(CAP_WINDOW) {
+                return (-1i64) as u64;
+            }
+            crate::euroapi::create(p.pid, a1 as usize, a2 as usize) as u64
+        }
+        0x6102 => {
+            // surface_present(buf, w, h)
+            if !has_cap(CAP_WINDOW) {
+                return (-1i64) as u64;
+            }
+            let (w, h) = (a2 as usize, a3 as usize);
+            if w == 0 || h == 0 || w > crate::euroapi::MAX_W || h > crate::euroapi::MAX_H || a1 & 3 != 0 {
+                return (-22i64) as u64;
+            }
+            if !in_user_arena(a1, w * h * 4) {
+                return EFAULT;
+            }
+            // SAFETY: bounds-checked against this process's arena, under its CR3.
+            let px = unsafe { core::slice::from_raw_parts(a1 as *const u32, w * h) };
+            crate::euroapi::present(p.pid, px, w, h) as u64
+        }
+        0x6103 => {
+            // event_poll(out, cap) -> 1 with a 16-byte event written, 0 when none.
+            if !has_cap(CAP_WINDOW) {
+                return (-1i64) as u64;
+            }
+            match crate::euroapi::poll(p.pid) {
+                Some(ev) => {
+                    let n = (a2 as usize).min(16);
+                    if !copy_to_user(a1, &ev.to_bytes()[..n]) { EFAULT } else { 1 }
+                }
+                None => 0,
+            }
+        }
+        0x6105 => {
+            // text_draw(buf, w<<32|h, x<<32|y, str, len<<40 | px<<32 | argb)
+            if !has_cap(CAP_WINDOW) {
+                return (-1i64) as u64;
+            }
+            let (w, h) = ((a2 >> 32) as usize, (a2 & 0xffff_ffff) as usize);
+            let (x, y) = ((a3 >> 32) as u32 as i32, (a3 & 0xffff_ffff) as u32 as i32);
+            let len = (a5 >> 40) as usize;
+            let size = ((a5 >> 32) & 0xff) as u32;
+            let argb = (a5 & 0xff_ffff) as u32;
+            if w == 0 || h == 0 || w > crate::euroapi::MAX_W || h > crate::euroapi::MAX_H || len > crate::euroapi::MAX_STR {
+                return (-22i64) as u64;
+            }
+            if a1 & 3 != 0 || !in_user_arena(a1, w * h * 4) {
+                return EFAULT;
+            }
+            let bytes = match copy_from_user(a4, len) { Some(v) => v, None => return EFAULT };
+            let s = String::from_utf8_lossy(&bytes);
+            // SAFETY: bounds-checked against this process's arena, under its CR3.
+            let px = unsafe { core::slice::from_raw_parts_mut(a1 as *mut u32, w * h) };
+            crate::euroapi::text_draw(px, w, h, x, y, &s, argb, size) as u64
+        }
+        0x6106 => {
+            let len = a2 as usize;
+            if len > crate::euroapi::MAX_STR {
+                return (-22i64) as u64;
+            }
+            let bytes = match copy_from_user(a1, len) { Some(v) => v, None => return EFAULT };
+            crate::euroapi::text_measure(&String::from_utf8_lossy(&bytes), a3 as u32)
+        }
+        0x6107 => {
+            // log(str, len): one line to the serial log and the app's output.
+            if !has_cap(CAP_CONSOLE) {
+                return (-1i64) as u64;
+            }
+            let len = a2 as usize;
+            if len > crate::euroapi::MAX_STR {
+                return (-22i64) as u64;
+            }
+            let bytes = match copy_from_user(a1, len) { Some(v) => v, None => return EFAULT };
+            let line = String::from_utf8_lossy(&bytes).into_owned();
+            crate::serial_println!("[euroapp pid {}] {}", p.pid, line.trim_end());
+            if p.output.len() < 512 {
+                p.output.push(line);
+            }
+            0
+        }
+        0x6108 => crate::interrupts::ticks() * 10, // time_ms (100 Hz ticks)
+        0x610A | 0x610B => {
+            // file_read(path, len, buf, cap) / file_write(path, len, buf, n): whole
+            // files inside the user's home or /tmp; the kernel VFS does the I/O
+            // with the same user-pointer checks as read(2)/write(2).
+            if !has_cap(CAP_FILE) {
+                return (-1i64) as u64;
+            }
+            if a2 as usize > 512 {
+                return (-22i64) as u64;
+            }
+            let pb = match copy_from_user(a1, a2 as usize) { Some(v) => v, None => return EFAULT };
+            let path = match crate::euroapi::file_path_ok(&String::from_utf8_lossy(&pb)) {
+                Some(p) => p,
+                None => return (-13i64) as u64, // -EACCES: outside the app's file scope
+            };
+            let n = (a4 as usize).min(crate::euroapi::MAX_FILE);
+            if n > 0 && !in_user_arena(a3, n) {
+                return EFAULT;
+            }
+            if num == 0x610A {
+                let fd = vfs_open(path.as_bytes());
+                if (fd as i64) < 0 {
+                    return (-2i64) as u64;
+                }
+                let mut done = 0usize;
+                while done < n {
+                    let r = vfs_read(fd as usize, a3 + done as u64, n - done);
+                    if (r as i64) <= 0 { break; }
+                    done += r as usize;
+                }
+                vfs_close(fd as usize);
+                done as u64
+            } else {
+                let fd = vfs_open_create(path.as_bytes(), true);
+                if (fd as i64) < 0 {
+                    return (-13i64) as u64;
+                }
+                let r = if n > 0 { vfs_write(fd as usize, a3, n) } else { 0 };
+                vfs_close(fd as usize);
+                r
+            }
+        }
+        0x610C => return bg_dispatch(p, 231, a1 & 0xff, 0, 0, 0, 0), // exit(code)
         // EuroIPC — own message-bus syscalls (own number space 500-502).
         500 => crate::euroipc::register(p.pid, a1 as u32) as u64,
         501 => {
@@ -5667,6 +5818,42 @@ pub fn spawn_bg_app(
 }
 
 /// Close an fd.
+/// Is the background process `pid` still running (spawned, not yet exited/killed)?
+pub fn bg_alive(pid: u64) -> bool {
+    x86_64::instructions::interrupts::without_interrupts(|| BG.lock().iter().any(|p| p.pid == pid && !p.zombie))
+}
+
+/// Why a background process ended, while it has not been reaped yet.
+pub fn bg_end_reason(pid: u64) -> Option<String> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        BG.lock().iter().find(|p| p.pid == pid && p.zombie).and_then(|p| p.kill_reason.clone())
+    })
+}
+
+/// Sprint WP6: start a NATIVE EuroOS app. The program is a freestanding static
+/// PIE that speaks the Euro API; it runs with exactly `caps` (a zero set is a
+/// zero set, not the desktop's rights) under `profile` (normally
+/// `Profile::Euro`, the allow-list of the Euro API). Caps and profile are in
+/// place before the task can run: interrupts stay off from spawn to the end of
+/// the bookkeeping, so the first syscall already meets the policy.
+pub fn spawn_euro_app(
+    falloc: &mut FrameAllocator,
+    program: &[u8],
+    pid: u64,
+    argv: &[&[u8]],
+    arena_mib: u64,
+    caps: u64,
+    profile: eurosandbox::Profile,
+) -> Option<usize> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let idx = spawn_bg_app(falloc, program, pid, argv, arena_mib)?;
+        set_task_caps(idx, caps | CAP_TASK_SET);
+        set_task_profile(idx, profile);
+        crate::serial_println!("[euroapp] pid {pid} -> task {idx}: caps {caps:#x}, profile {}", profile.name());
+        Some(idx)
+    })
+}
+
 fn vfs_close(fd: usize) -> u64 {
     if fd < MAX_FD {
         FD_NONBLOCK[fd].store(false, Ordering::Relaxed); // reset status flags for reuse
@@ -11174,6 +11361,54 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
                 drop(bg);
                 crate::sched::sleep_ticks(2);
                 return 0;
+            }
+            // Sprint WP6: a NATIVE app runs under Profile::Euro, an allow-list.
+            // Anything outside it ends the process here, before any handler
+            // sees the arguments. The two calls that sleep run outside the lock.
+            if task_profile(cur) == eurosandbox::Profile::Euro {
+                if let eurosandbox::Verdict::Kill(sig) = eurosandbox::syscalls::check(eurosandbox::Profile::Euro, num, a1, a3) {
+                    PROFILE_KILLS.fetch_add(1, Ordering::Relaxed);
+                    crate::serial_println!(
+                        "[sbx] native app pid {} (task {cur}): syscall {num:#x}({a1:#x}, {a2:#x}, {a3:#x}) outside the euro profile -> process killed (signal {sig}, exit {})",
+                        bg[pos].pid, 128 + sig as u64);
+                    let p = &mut bg[pos];
+                    let r = bg_dispatch(p, 231, 128 + sig as u64, 0, 0, 0, 0);
+                    // The task is dead now; do not let it run one more instruction
+                    // (the exit path otherwise returns to user space until the
+                    // next timer tick, long enough for a log line or a syscall).
+                    drop(bg);
+                    crate::sched::yield_now();
+                    return r;
+                }
+                if num == 1 && !has_cap(CAP_CONSOLE) {
+                    return (-1i64) as u64; // write(): the console is a capability
+                }
+                if num == 0x6104 {
+                    // event_wait(timeout_ms): sleep in 1-tick steps until an event is
+                    // pending or the timeout passes. 1 = ready, 0 = timeout.
+                    if !has_cap(CAP_WINDOW) {
+                        return (-1i64) as u64;
+                    }
+                    // A syscall runs with interrupts off: a wait LOOP in here would
+                    // freeze the clock and the machine (measured: the [euroapp] boot
+                    // hung after the first frame). Like nanosleep: mark this task
+                    // sleeping for one tick and return; a 0 is "not yet", and the
+                    // SDK's loop calls again. An early return is allowed by the API.
+                    let pid = bg[pos].pid;
+                    drop(bg);
+                    if crate::euroapi::pending(pid) {
+                        return 1;
+                    }
+                    if a1 > 0 {
+                        crate::sched::sleep_ticks(1);
+                    }
+                    return 0;
+                }
+                if num == 0x6109 {
+                    drop(bg);
+                    crate::sched::sleep_ticks(((a1.min(600_000) + 9) / 10).max(1));
+                    return 0;
+                }
             }
             // Validate THIS process's user pointers against ITS OWN arena for the
             // duration of the syscall (the global default span is only 2 MiB; a

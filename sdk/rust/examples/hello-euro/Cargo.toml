@@ -1,0 +1,18 @@
+[package]
+name = "hello-euro"
+version = "1.0.0"
+edition = "2021"
+license = "EUPL-1.2"
+description = "A native EuroOS window: no libc, no X11, only the Euro API"
+
+[dependencies]
+eurosdk = { path = "../../eurosdk" }
+
+[features]
+wasm = ["eurosdk/wasm"]
+
+[[bin]]
+name = "hello-euro"
+path = "src/main.rs"
+test = false
+bench = false

@@ -1,0 +1,15 @@
+[package]
+name = "euro-forbidden"
+version = "1.0.0"
+edition = "2021"
+license = "EUPL-1.2"
+description = "Self-test probe: a native app that makes one Linux syscall, which the euro profile must kill"
+
+[dependencies]
+eurosdk = { path = "../../eurosdk" }
+
+[[bin]]
+name = "euro-forbidden"
+path = "src/main.rs"
+test = false
+bench = false
