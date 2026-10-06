@@ -118,7 +118,7 @@ else ends the process with SIGSYS before any handler sees the arguments.
 | `event_poll` / `event_wait(ms)` | keys (scancode + character under the active layout), pointer, buttons, resize, close | `window` |
 | `text_draw(...)` / `text_measure` | the system font (DM Sans, anti-aliased) rendered by the kernel into your buffer | `window` / none |
 | `log(s)` | one line to the system log and your console output | `console` |
-| `file_read` / `file_write` | whole files in your home or `/tmp`; nothing else | `file` |
+| `file_read` / `file_write` | whole files in your home; nothing else (not `/tmp`) | `file` |
 | `time_ms` / `sleep_ms` / `exit` | clock, sleep, end | none |
 
 ### Rust (recommended)
@@ -157,6 +157,10 @@ form, slow for heavy graphics. Same capabilities, same signature checks.
 ### What a native app gets, stated plainly
 
 One surface per process; events only while its window has focus; files only
-inside the session user's home and `/tmp` (`..` and other paths are refused);
-strings up to 4 KiB, files up to 16 MiB; no network, no IPC, no clipboard yet
-(planned). The kernel re-verifies the binary at every launch, as for any app.
+inside the session user's home (`..`, `/tmp` and other paths are refused);
+text calls up to 512 bytes at up to 96 px, log lines up to 4 KiB, file reads
+up to 16 MiB, file writes up to 4 MiB per call and 64 MiB per process; the
+program's code, data and bss must fit in 2 MiB (W^X page table); no network,
+no IPC, no clipboard yet (planned). The kernel re-verifies the binary at
+every launch, as for any app, and checks every pointer you pass against your
+own writable memory (a pointer into your code pages is refused, not faulted).

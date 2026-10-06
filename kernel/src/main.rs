@@ -441,7 +441,8 @@ fn launch_installed_app(ctx: &mut shell::ShellCtx, name: &str) -> (bool, String)
     if app.abi == "wasm" {
         // A WASM app: the eurowasm interpreter in the kernel, frame-driven under a
         // fuel budget, the Euro API as its only import, its manifest capabilities.
-        static WASM_PID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(600);
+        // Own range, clear of the fork pids (1000+) and the system apps.
+        static WASM_PID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0x2_0000);
         let pid = WASM_PID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         if app.display == "x11" {
             if let Some(p) = euroapi::focus() {
@@ -468,7 +469,7 @@ fn launch_installed_app(ctx: &mut shell::ShellCtx, name: &str) -> (bool, String)
             }
             euroapi::remove(pid);
         }
-        static EURO_PID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(400);
+        static EURO_PID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0x1_0000);
         let pid = EURO_PID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         return match ring3::spawn_euro_app(ctx.mem, &bytes, pid, &argv, 16, caps | ring3::CAP_PROC_INFO, eurosandbox::Profile::Euro) {
             Some(t) => (true, format!("{}: launched natively (pid {pid}, task {t}; caps '{}', profile euro; no Linux library)", app.title, app.caps)),
@@ -5171,6 +5172,7 @@ fn main() -> Status {
                                     for _ in 0..20 {
                                         if !ring3::bg_alive(pid) { break; }
                                         sched::sleep_ticks(1);
+                                        sched::yield_now(); // let the app see the event
                                     }
                                     if ring3::bg_alive(pid) {
                                         serial_println!("[euroapp] pid {pid} ignored Close: terminated");
@@ -6325,6 +6327,19 @@ fn main() -> Status {
         {
             need_full = true;
         }
+        // The native app's frame takes the size of its surface once that is known
+        // (the launch framed it at 800x600 before the first present). Before the
+        // repaint decision of this iteration: need_full is per iteration.
+        if windows[euro_idx].visible {
+            if let Some((sw, sh)) = euroapi::front_size() {
+                let (fw, fh) = (sw.max(200).min(width), (sh + compositor::TITLEBAR_H).min(height));
+                if windows[euro_idx].w != fw || windows[euro_idx].h != fh {
+                    windows[euro_idx].w = fw;
+                    windows[euro_idx].h = fh;
+                    need_full = true;
+                }
+            }
+        }
         if need_full { full_repaints += 1; }
         if need_full {
             // Full redraw (drag or z-order changed).
@@ -6565,18 +6580,6 @@ fn main() -> Status {
             match done {
                 Ok(code) => serial_println!("[euroapp] wasm app ended: exit {code}"),
                 Err(why) => serial_println!("[euroapp] wasm app ended: {why}"),
-            }
-        }
-        // The native app's frame takes the size of its surface once that is known
-        // (the launch framed it at 800x600 before the first present).
-        if windows[euro_idx].visible {
-            if let Some((sw, sh)) = euroapi::front_size() {
-                let (fw, fh) = (sw.max(200).min(width), (sh + compositor::TITLEBAR_H).min(height));
-                if windows[euro_idx].w != fw || windows[euro_idx].h != fh {
-                    windows[euro_idx].w = fw;
-                    windows[euro_idx].h = fh;
-                    need_full = true;
-                }
             }
         }
         // A native or WASM app that exited (or was killed) takes its window with it.

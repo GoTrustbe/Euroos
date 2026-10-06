@@ -191,3 +191,74 @@ commit.
   sleeps one tick and returns, the SDK loops); the first frame's size did not
   reach the window frame until the fit moved out of the tick-gated repaint
   block.
+
+## Security review of the Euro API (2026-10-06, after the first commit)
+
+Question asked: can an app with this API compromise the OS or reach data it
+may not? Method: read every path an app can drive (the syscall route, the
+Euro arms, euroapi, the WASM host, the desktop routing, the package launch)
+as an attacker, then prove each fix in QEMU.
+
+**Findings, fixed in the same day (all in the tree, re-measured):**
+
+1. **Kernel fault through an app pointer (DoS of the whole machine).**
+   `copy_to_user` and the in-place writers (text_draw, file_read) checked
+   that a pointer lies inside the process arena, not that the page is
+   writable. A native app's code pages are mapped R-X; a kernel write there
+   under CR0.WP is a ring-0 page fault, which this kernel treats as fatal.
+   Any native app could halt EuroOS with `event_poll(out = its own code)`.
+   Fix: a page-table walk (`paging::user_range_writable_in`) before every
+   kernel write into app memory under the euro profile; the answer is
+   -EFAULT. Proof: `efuzz` now puts its own code page and stack in the
+   argument pool; `[eurofuzz]` still ends at exit 171.
+2. **Lock discipline (machine hang).** The surface table was taken with
+   interrupts enabled in the desktop loop and with interrupts off inside
+   syscalls; a timer tick while the desktop held it, followed by an app
+   spinning on it in a syscall, hangs the machine (this kernel's IF=0 rule).
+   Fix: every access runs with interrupts off (`with_surfaces`).
+3. **File scope too wide.** `/tmp` was in the scope: shared by every user
+   and process, so a native app could read another app's or user's temp
+   files. Fix: the home of the session user only. The self-test proves
+   `/tmp/x`, `/home/euroX/f`, `/home/euro` (the directory itself),
+   `/etc/euroid/users.db` and `..` are refused.
+4. **Kernel heap exhaustion through file_write.** The RAM VFS lives on the
+   kernel heap; an app could write files until the allocator aborted. Fix:
+   4 MiB per call, 64 MiB per process lifetime (ENOSPC beyond), bounded
+   accounting table.
+5. **CPU time inside a syscall.** `text_draw` accepted 4 KiB of text at 200
+   px; rasterising that with interrupts off is long enough to trip the
+   deadman watchdog. Fix: 512 bytes at up to 96 px per call.
+6. **A dead process ran on.** After `exit` (and after a profile kill) the
+   task returned to user mode until the next timer tick. Fix: the route
+   yields at once after marking the task dead, for exit, exit_group and the
+   Euro exit alike.
+7. **W^X bypass by size.** A program whose code+data+bss exceeds the first
+   2 MiB block would get RWX pages (the loader warns and continues). Fix:
+   `spawn_euro_app` refuses it.
+8. **Pid collision.** Native and WASM pids started at 400 and 600; fork pids
+   start at 1000. Fix: own ranges (0x10000, 0x20000).
+9. **WASM console apps could hold the shell.** `run_cli` pumped up to 10000
+   frames of 4 M steps. Fix: 50 frames.
+10. **Close was never graceful.** The desktop's wait loop after the Close
+    event did not yield, so the app was always terminated. Fix: yield.
+
+**Checked and found sound:** capability gating of every call (the self-test
+runs the binary without `window` and the surface is refused); the euro
+profile as an allow-list (host test: every Linux syscall in the probe list
+is killed, including the EuroIPC numbers and the legacy app-graphics
+bridge); caps and profile set before the first instruction (interrupts off
+from spawn to bookkeeping); signature and hash re-verified at every launch;
+surfaces bounded (1920x1200, one per process), events bounded (256), log
+lines bounded; events only to the focused surface and only while its
+window is active; WASM pointers checked against linear memory, memory
+bounded to 16 MiB, fuel per frame; `mmap`/`brk` of a native app stay inside
+its own arena.
+
+**Residual, stated:** a native app with keyboard focus receives every key
+(the desktop's own shortcuts included) until its window is closed with the
+mouse; a WASM app's `file_read` goes through EuroFS, which follows
+symlinks: a link the user placed in their own home can reach a
+world-readable file outside it (EuroFS permissions still apply; an lstat
+in the FileSystem trait would close this); the manifest title is free text
+(an app may call itself anything, as on every OS); `brk` below the heap
+start stays inside the process's own arena (process-local only).

@@ -29,7 +29,15 @@ pub const ABI_VERSION: u32 = 1;
 pub const MAX_W: usize = 1920;
 pub const MAX_H: usize = 1200;
 pub const MAX_STR: usize = 4096;
+/// One text call: at most this many bytes at <= MAX_TEXT_PX pixels, so the
+/// rasteriser's work inside a syscall (interrupts off) stays in the millisecond range.
+pub const MAX_TEXT: usize = 512;
+pub const MAX_TEXT_PX: u32 = 96;
 pub const MAX_FILE: usize = 16 << 20;
+/// One file_write call at most 4 MiB, and a process may write at most 64 MiB
+/// in its lifetime: the RAM VFS lives on the kernel heap.
+pub const MAX_FILE_WRITE: usize = 4 << 20;
+pub const WRITE_BUDGET: usize = 64 << 20;
 const MAX_EVENTS: usize = 256;
 
 pub const EV_KEY: u32 = 1;
@@ -72,6 +80,17 @@ struct Surface {
 }
 
 static SURFACES: Mutex<Vec<Surface>> = Mutex::new(Vec::new());
+/// Bytes written through file_write per process: (pid, bytes).
+static WRITES: Mutex<Vec<(u64, usize)>> = Mutex::new(Vec::new());
+
+/// Every access to the surface table runs with interrupts off: the table is
+/// shared between syscall context (interrupts already off) and the desktop
+/// loop (interrupts on). A desktop-side holder preempted by the timer while an
+/// app spins on the lock inside a syscall would hang the machine (the IF=0
+/// lock rule of this kernel).
+fn with_surfaces<R>(f: impl FnOnce(&mut Vec<Surface>) -> R) -> R {
+    x86_64::instructions::interrupts::without_interrupts(|| f(&mut SURFACES.lock()))
+}
 /// The process whose surface has keyboard focus and is shown in the hosted window (0 = none).
 static FOCUS: AtomicU64 = AtomicU64::new(0);
 /// Set when a surface was created or presented; the desktop takes it to repaint.
@@ -90,7 +109,7 @@ pub fn create(pid: u64, w: usize, h: usize) -> i64 {
     if w == 0 || h == 0 || w > MAX_W || h > MAX_H {
         return EINVAL;
     }
-    let mut s = SURFACES.lock();
+    with_surfaces(|s| {
     if s.iter().any(|x| x.pid == pid) {
         return EEXIST;
     }
@@ -99,6 +118,7 @@ pub fn create(pid: u64, w: usize, h: usize) -> i64 {
     DIRTY.store(true, Ordering::Relaxed);
     crate::serial_println!("[euroapi] pid {pid}: surface {w}x{h} created");
     1
+    })
 }
 
 /// surface_present: copy the app's frame (XRGB8888, `w*h` pixels, already
@@ -108,7 +128,7 @@ pub fn present(pid: u64, src: &[u32], w: usize, h: usize) -> i64 {
     if w == 0 || h == 0 || w > MAX_W || h > MAX_H || src.len() < w * h {
         return EINVAL;
     }
-    let mut s = SURFACES.lock();
+    with_surfaces(|s| {
     let Some(sf) = s.iter_mut().find(|x| x.pid == pid) else { return ENOENT };
     if sf.w != w || sf.h != h {
         sf.w = w;
@@ -120,36 +140,56 @@ pub fn present(pid: u64, src: &[u32], w: usize, h: usize) -> i64 {
     sf.dirty = true;
     DIRTY.store(true, Ordering::Relaxed);
     0
+    })
 }
 
 /// event_poll: the oldest pending event of this process's surface.
 pub fn poll(pid: u64) -> Option<Event> {
-    let mut s = SURFACES.lock();
-    let sf = s.iter_mut().find(|x| x.pid == pid)?;
-    sf.events.pop_front()
+    with_surfaces(|s| s.iter_mut().find(|x| x.pid == pid).and_then(|sf| sf.events.pop_front()))
 }
 
 /// Is an event pending (for event_wait, which sleeps outside the lock)?
 pub fn pending(pid: u64) -> bool {
-    SURFACES.lock().iter().find(|x| x.pid == pid).map(|x| !x.events.is_empty()).unwrap_or(false)
+    with_surfaces(|s| s.iter().find(|x| x.pid == pid).map(|x| !x.events.is_empty()).unwrap_or(false))
 }
 
 pub fn has_surface(pid: u64) -> bool {
-    SURFACES.lock().iter().any(|x| x.pid == pid)
+    with_surfaces(|s| s.iter().any(|x| x.pid == pid))
 }
 
 pub fn frames(pid: u64) -> u64 {
-    SURFACES.lock().iter().find(|x| x.pid == pid).map(|x| x.frames).unwrap_or(0)
+    with_surfaces(|s| s.iter().find(|x| x.pid == pid).map(|x| x.frames).unwrap_or(0))
 }
 
 /// Drop the surface of an exited process; focus moves to the newest remaining one.
 pub fn remove(pid: u64) {
-    let mut s = SURFACES.lock();
-    s.retain(|x| x.pid != pid);
-    if FOCUS.load(Ordering::Relaxed) == pid {
-        FOCUS.store(s.last().map(|x| x.pid).unwrap_or(0), Ordering::Relaxed);
-        DIRTY.store(true, Ordering::Relaxed);
-    }
+    with_surfaces(|s| {
+        s.retain(|x| x.pid != pid);
+        if FOCUS.load(Ordering::Relaxed) == pid {
+            FOCUS.store(s.last().map(|x| x.pid).unwrap_or(0), Ordering::Relaxed);
+            DIRTY.store(true, Ordering::Relaxed);
+        }
+    });
+    x86_64::instructions::interrupts::without_interrupts(|| WRITES.lock().retain(|w| w.0 != pid));
+}
+
+/// Account `n` bytes of file_write for `pid`; false when the budget is spent.
+pub fn write_budget(pid: u64, n: usize) -> bool {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut w = WRITES.lock();
+        if !w.iter().any(|e| e.0 == pid) {
+            if w.len() >= 256 {
+                w.remove(0); // bounded table: oldest process first
+            }
+            w.push((pid, 0));
+        }
+        let used = &mut w.iter_mut().find(|e| e.0 == pid).unwrap().1;
+        if used.saturating_add(n) > WRITE_BUDGET {
+            return false;
+        }
+        *used += n;
+        true
+    })
 }
 
 pub fn focus() -> Option<u64> {
@@ -172,28 +212,30 @@ pub fn take_dirty() -> bool {
 /// The focused surface's size, for the compositor's hit testing.
 pub fn front_size() -> Option<(usize, usize)> {
     let f = FOCUS.load(Ordering::Relaxed);
-    SURFACES.lock().iter().find(|x| x.pid == f).map(|x| (x.w, x.h))
+    with_surfaces(|s| s.iter().find(|x| x.pid == f).map(|x| (x.w, x.h)))
 }
 
 /// Run `f` over the focused surface's pixels (what the hosted window shows).
 pub fn with_front<R>(f: impl FnOnce(usize, usize, &[u32]) -> R) -> Option<R> {
     let focus = FOCUS.load(Ordering::Relaxed);
-    let mut s = SURFACES.lock();
-    let sf = s.iter_mut().find(|x| x.pid == focus)?;
-    sf.dirty = false;
-    Some(f(sf.w, sf.h, &sf.px))
+    with_surfaces(|s| {
+        let sf = s.iter_mut().find(|x| x.pid == focus)?;
+        sf.dirty = false;
+        Some(f(sf.w, sf.h, &sf.px))
+    })
 }
 
 fn push(pid: u64, ev: Event) {
-    let mut s = SURFACES.lock();
-    if let Some(sf) = s.iter_mut().find(|x| x.pid == pid) {
-        if sf.events.len() >= MAX_EVENTS {
-            sf.events.pop_front();
-            sf.dropped += 1;
+    with_surfaces(|s| {
+        if let Some(sf) = s.iter_mut().find(|x| x.pid == pid) {
+            if sf.events.len() >= MAX_EVENTS {
+                sf.events.pop_front();
+                sf.dropped += 1;
+            }
+            sf.events.push_back(ev);
+            EVENTS_DELIVERED.fetch_add(1, Ordering::Relaxed);
         }
-        sf.events.push_back(ev);
-        EVENTS_DELIVERED.fetch_add(1, Ordering::Relaxed);
-    }
+    })
 }
 
 /// A raw PC scancode (set 1, bit 7 = release) for the FOCUSED surface only. The
@@ -201,14 +243,13 @@ fn push(pid: u64, ev: Event) {
 pub fn push_key(sc: u8, pressed: bool) {
     let Some(pid) = focus() else { return };
     let code = sc & 0x7f;
-    let shift = {
-        let mut s = SURFACES.lock();
-        let Some(sf) = s.iter_mut().find(|x| x.pid == pid) else { return };
+    let Some(shift) = with_surfaces(|s| {
+        let sf = s.iter_mut().find(|x| x.pid == pid)?;
         if code == 0x2a || code == 0x36 {
             sf.shift = pressed;
         }
-        sf.shift
-    };
+        Some(sf.shift)
+    }) else { return };
     let ch = if pressed { eurokeymap::translate(crate::ps2::layout(), code, shift) } else { None };
     push(pid, Event { kind: EV_KEY, a: code as u32, b: pressed as u32, c: ch.map(|c| c as u32).unwrap_or(0) });
 }
@@ -248,13 +289,13 @@ pub fn inject_key_to(pid: u64, sc: u8, pressed: bool) {
 /// buffer (`px`, `w*h`, validated by the caller) at (x, y) = top-left of the
 /// text line, `size` pixels tall, colour `argb`. Clipped to the buffer.
 pub fn text_draw(px: &mut [u32], w: usize, h: usize, x: i32, y: i32, s: &str, argb: u32, size: u32) -> i64 {
-    if w == 0 || h == 0 || w > MAX_W || h > MAX_H || px.len() < w * h || s.len() > MAX_STR {
+    if w == 0 || h == 0 || w > MAX_W || h > MAX_H || px.len() < w * h || s.len() > MAX_TEXT {
         return EINVAL;
     }
     if x < 0 || y < 0 || x as usize >= w || y as usize >= h {
         return 0; // entirely outside: nothing to draw, not an error
     }
-    let size = size.clamp(6, 200) as f32;
+    let size = size.clamp(6, MAX_TEXT_PX) as f32;
     let fb = crate::graphics::FrameBuffer::over_pixels(px.as_mut_ptr(), w, h);
     crate::text::draw_px_styled(&fb, x as usize, y as usize, s, crate::graphics::Color::from_u32(argb), size, 0, 0);
     0
@@ -262,14 +303,18 @@ pub fn text_draw(px: &mut [u32], w: usize, h: usize, x: i32, y: i32, s: &str, ar
 
 /// text_measure: (width, height) of `s` at `size` pixels, packed `w << 32 | h`.
 pub fn text_measure(s: &str, size: u32) -> u64 {
-    let size = size.clamp(6, 200) as f32;
+    if s.len() > MAX_TEXT {
+        return 0;
+    }
+    let size = size.clamp(6, MAX_TEXT_PX) as f32;
     let w = crate::text::width_px_styled(s, size, 0, 0) as u64;
     let h = (size * 1.25) as u64;
     (w << 32) | h
 }
 
-/// The file scope of a native app: inside the session user's home or /tmp.
-/// Returns the absolute path, or None when the path leaves the scope.
+/// The file scope of a native app: inside the session user's home, nothing
+/// else (not /tmp: it is shared by every process and user). Returns the
+/// absolute path, or None when the path leaves the scope.
 pub fn file_path_ok(path: &str) -> Option<String> {
     if path.is_empty() || path.len() > 512 || path.bytes().any(|b| b == 0) {
         return None;
@@ -284,7 +329,7 @@ pub fn file_path_ok(path: &str) -> Option<String> {
     } else {
         alloc::format!("{home}/{path}")
     };
-    if abs.starts_with(&alloc::format!("{home}/")) || abs.starts_with("/tmp/") {
+    if abs.starts_with(&alloc::format!("{home}/")) {
         Some(abs)
     } else {
         None
@@ -293,21 +338,23 @@ pub fn file_path_ok(path: &str) -> Option<String> {
 
 /// Lines the `euro` shell diagnostic shows.
 pub fn status_lines() -> Vec<String> {
-    let s = SURFACES.lock();
-    let mut out = Vec::new();
-    out.push(alloc::format!("Euro API v{ABI_VERSION}: {} surface(s), focus pid {}, events delivered {}",
-        s.len(), FOCUS.load(Ordering::Relaxed), EVENTS_DELIVERED.load(Ordering::Relaxed)));
-    for sf in s.iter() {
-        out.push(alloc::format!("  pid {}: {}x{}, {} frame(s), {} pending event(s), {} dropped", sf.pid, sf.w, sf.h, sf.frames, sf.events.len(), sf.dropped));
-    }
-    out
+    with_surfaces(|s| {
+        let mut out = Vec::new();
+        out.push(alloc::format!("Euro API v{ABI_VERSION}: {} surface(s), focus pid {}, events delivered {}",
+            s.len(), FOCUS.load(Ordering::Relaxed), EVENTS_DELIVERED.load(Ordering::Relaxed)));
+        for sf in s.iter() {
+            out.push(alloc::format!("  pid {}: {}x{}, {} frame(s), {} pending event(s), {} dropped", sf.pid, sf.w, sf.h, sf.frames, sf.events.len(), sf.dropped));
+        }
+        out
+    })
 }
 
 /// The colour of one pixel of a process's surface (self-test).
 pub fn pixel(pid: u64, x: usize, y: usize) -> Option<u32> {
-    let s = SURFACES.lock();
-    let sf = s.iter().find(|p| p.pid == pid)?;
-    if x < sf.w && y < sf.h { Some(sf.px[y * sf.w + x] & 0xff_ffff) } else { None }
+    with_surfaces(|s| {
+        let sf = s.iter().find(|p| p.pid == pid)?;
+        if x < sf.w && y < sf.h { Some(sf.px[y * sf.w + x] & 0xff_ffff) } else { None }
+    })
 }
 
 #[cfg(test)]

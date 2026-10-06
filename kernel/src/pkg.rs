@@ -532,7 +532,9 @@ pub fn euroapp_selftest(falloc: &mut euromm::FrameAllocator, fs: &mut dyn FileSy
         && crate::euroapi::file_path_ok("../../etc/shadow").is_none()
         && crate::euroapi::file_path_ok("/home/euro/../../etc/shadow").is_none()
         && crate::euroapi::file_path_ok("notes.txt").map(|p| p.starts_with("/home/")).unwrap_or(false)
-        && crate::euroapi::file_path_ok("/tmp/x").is_some();
+        && crate::euroapi::file_path_ok("/tmp/x").is_none()
+        && crate::euroapi::file_path_ok("/home/euroX/f").is_none()
+        && crate::euroapi::file_path_ok("/home/euro").is_none();
     let ok = installed && native && presented && header && body && text && key_redraw && exit0 && no_window && forbidden_killed && scope;
     crate::serial_println!(
         "[euroapp] native app (Euro API, no Linux library): installed={installed} · abi=euro={native} · frame-presented={presented} · header-blue={header} · body-white={body} · kernel-text-drawn={text} · key-event-redraw={key_redraw} · escape-exit-0={exit0} · without-window-cap-refused={no_window} · linux-syscall-killed={forbidden_killed} · file-scope={scope} → {}",

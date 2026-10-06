@@ -251,6 +251,15 @@ pub(crate) fn copy_to_user(dst: u64, src: &[u8]) -> bool {
     if !in_user_arena(dst, src.len()) || demand_file_backed(dst, src.len()) {
         return false; // out of bounds, or a read-only file-backed mapping
     }
+    // A native app (euro profile) may hand us any address in its arena,
+    // including its own read-only code pages: a kernel write there is a
+    // ring-0 page fault. Walk the tables first; a refused write is -EFAULT.
+    if task_profile(crate::sched::current_lockfree()) == eurosandbox::Profile::Euro {
+        let (frame, _) = x86_64::registers::control::Cr3::read();
+        if !crate::paging::user_range_writable_in(frame.start_address().as_u64(), dst, src.len()) {
+            return false;
+        }
+    }
     // SAFETY: arena-validated; arena is identity-mapped and writable.
     unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst as *mut u8, src.len()) };
     true
@@ -5534,10 +5543,10 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             let len = (a5 >> 40) as usize;
             let size = ((a5 >> 32) & 0xff) as u32;
             let argb = (a5 & 0xff_ffff) as u32;
-            if w == 0 || h == 0 || w > crate::euroapi::MAX_W || h > crate::euroapi::MAX_H || len > crate::euroapi::MAX_STR {
+            if w == 0 || h == 0 || w > crate::euroapi::MAX_W || h > crate::euroapi::MAX_H || len > crate::euroapi::MAX_TEXT {
                 return (-22i64) as u64;
             }
-            if a1 & 3 != 0 || !in_user_arena(a1, w * h * 4) {
+            if a1 & 3 != 0 || !euro_user_writable(p, a1, w * h * 4) {
                 return EFAULT;
             }
             let bytes = match copy_from_user(a4, len) { Some(v) => v, None => return EFAULT };
@@ -5548,7 +5557,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
         }
         0x6106 => {
             let len = a2 as usize;
-            if len > crate::euroapi::MAX_STR {
+            if len > crate::euroapi::MAX_TEXT {
                 return (-22i64) as u64;
             }
             let bytes = match copy_from_user(a1, len) { Some(v) => v, None => return EFAULT };
@@ -5588,10 +5597,10 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
                 None => return (-13i64) as u64, // -EACCES: outside the app's file scope
             };
             let n = (a4 as usize).min(crate::euroapi::MAX_FILE);
-            if n > 0 && !in_user_arena(a3, n) {
-                return EFAULT;
-            }
             if num == 0x610A {
+                if n > 0 && !euro_user_writable(p, a3, n) {
+                    return EFAULT;
+                }
                 let fd = vfs_open(path.as_bytes());
                 if (fd as i64) < 0 {
                     return (-2i64) as u64;
@@ -5605,6 +5614,12 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
                 vfs_close(fd as usize);
                 done as u64
             } else {
+                if n > 0 && !in_user_arena(a3, n) {
+                    return EFAULT;
+                }
+                if n > crate::euroapi::MAX_FILE_WRITE || !crate::euroapi::write_budget(p.pid, n) {
+                    return (-28i64) as u64; // -ENOSPC: per-call size or per-process budget
+                }
                 let fd = vfs_open_create(path.as_bytes(), true);
                 if (fd as i64) < 0 {
                     return (-13i64) as u64;
@@ -5818,6 +5833,12 @@ pub fn spawn_bg_app(
 }
 
 /// Close an fd.
+/// For the Euro arms that write into app memory in place (text_draw, file_read):
+/// inside the arena AND mapped writable for the process (never its R-X code).
+fn euro_user_writable(p: &BgProc, ptr: u64, len: usize) -> bool {
+    in_user_arena(ptr, len) && crate::paging::user_range_writable_in(p.pml4, ptr, len)
+}
+
 /// Is the background process `pid` still running (spawned, not yet exited/killed)?
 pub fn bg_alive(pid: u64) -> bool {
     x86_64::instructions::interrupts::without_interrupts(|| BG.lock().iter().any(|p| p.pid == pid && !p.zombie))
@@ -5845,6 +5866,12 @@ pub fn spawn_euro_app(
     caps: u64,
     profile: eurosandbox::Profile,
 ) -> Option<usize> {
+    // The fine-grained W^X page table covers the first 2 MiB block only; a
+    // program whose code+data+bss span more would get RWX pages. Refuse it.
+    if program_span_pages(program) > 512 {
+        crate::serial_println!("[euroapp] pid {pid}: program spans more than 2 MiB (code+data+bss): refused (W^X)");
+        return None;
+    }
     x86_64::instructions::interrupts::without_interrupts(|| {
         let idx = spawn_bg_app(falloc, program, pid, argv, arena_mib)?;
         set_task_caps(idx, caps | CAP_TASK_SET);
@@ -11382,6 +11409,15 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
                 }
                 if num == 1 && !has_cap(CAP_CONSOLE) {
                     return (-1i64) as u64; // write(): the console is a capability
+                }
+                if num == 60 || num == 231 || num == 0x610C {
+                    // exit: mark dead and leave the CPU at once (no instruction of
+                    // the dead process runs on until the next tick).
+                    let p = &mut bg[pos];
+                    let r = bg_dispatch(p, 231, a1 & 0xff, 0, 0, 0, 0);
+                    drop(bg);
+                    crate::sched::yield_now();
+                    return r;
                 }
                 if num == 0x6104 {
                     // event_wait(timeout_ms): sleep in 1-tick steps until an event is

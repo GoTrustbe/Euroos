@@ -627,7 +627,7 @@ impl EuroHost<'_> {
                 let len = a[4] >> 40;
                 let size = ((a[4] >> 32) & 0xff) as u32;
                 let argb = (a[4] & 0xff_ffff) as u32;
-                if w == 0 || h == 0 || w > crate::euroapi::MAX_W || h > crate::euroapi::MAX_H || len > crate::euroapi::MAX_STR as u64 { return EINVAL; }
+                if w == 0 || h == 0 || w > crate::euroapi::MAX_W || h > crate::euroapi::MAX_H || len > crate::euroapi::MAX_TEXT as u64 { return EINVAL; }
                 let Some((p, n)) = span(mem, a[0], (w * h * 4) as u64) else { return EFAULT };
                 let Some((sp, sn)) = span(mem, a[3], len) else { return EFAULT };
                 let s = String::from_utf8_lossy(&mem[sp..sp + sn]).into_owned();
@@ -639,7 +639,7 @@ impl EuroHost<'_> {
                 r
             }
             0x6106 => {
-                if a[1] > crate::euroapi::MAX_STR as u64 { return EINVAL; }
+                if a[1] > crate::euroapi::MAX_TEXT as u64 { return EINVAL; }
                 let Some((sp, sn)) = span(mem, a[0], a[1]) else { return EFAULT };
                 crate::euroapi::text_measure(&String::from_utf8_lossy(&mem[sp..sp + sn]), a[2] as u32) as i64
             }
@@ -668,6 +668,7 @@ impl EuroHost<'_> {
                         Err(_) => -2,
                     }
                 } else {
+                    if bn > crate::euroapi::MAX_FILE_WRITE || !crate::euroapi::write_budget(self.pid, bn) { return -28; }
                     let data = mem[bp..bp + bn].to_vec();
                     if fs.write_file(&path, &data).is_ok() { bn as i64 } else { -13 }
                 }
@@ -780,7 +781,8 @@ pub fn kill(pid: u64) {
 }
 
 /// A console WASM app (`display = none`): `init()` does the work; `frame()` is
-/// pumped up to 10000 times for an app that needs it. Returns (output, exit).
+/// pumped up to 50 times for an app that needs it (a bounded total budget: the
+/// shell waits for this call). Returns (output, exit).
 pub fn run_cli(bytes: &[u8], pid: u64, caps: u64, fs: &mut dyn FileSystem) -> (Vec<String>, i32) {
     let module = match Module::parse(bytes) {
         Ok(m) => m,
@@ -796,7 +798,7 @@ pub fn run_cli(bytes: &[u8], pid: u64, caps: u64, fs: &mut dyn FileSystem) -> (V
     };
     if let Some(c) = host.exit { code = c; }
     if host.exit.is_none() && code == 0 && module.has_export("frame") {
-        for _ in 0..10_000 {
+        for _ in 0..50 {
             match inst.invoke("frame", &[], &mut host) {
                 Ok(v) if v.first().copied().unwrap_or(0) == 0 && host.exit.is_none() => continue,
                 Ok(_) => break,

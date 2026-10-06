@@ -202,8 +202,9 @@ pub fn exit(code: i32) -> ! {
     core::arch::wasm32::unreachable()
 }
 
-/// Read a whole file from your home (or /tmp) into `buf`; returns the byte count.
-/// Needs `file`. Paths are relative to the home directory or absolute inside it.
+/// Read a whole file from your home into `buf`; returns the byte count. Needs
+/// `file`. Paths are relative to the home directory or absolute inside it;
+/// nothing outside it (not /tmp) is reachable.
 pub fn file_read(path: &str, buf: &mut [u8]) -> Result<usize, Error> {
     err(unsafe {
         sys::call(nr::FILE_READ, path.as_ptr() as u64, path.len() as u64, buf.as_mut_ptr() as u64, buf.len() as u64, 0)
@@ -211,7 +212,8 @@ pub fn file_read(path: &str, buf: &mut [u8]) -> Result<usize, Error> {
     .map(|n| n as usize)
 }
 
-/// Write a whole file in your home (or /tmp). Needs `file`.
+/// Write a whole file in your home. Needs `file`. At most 4 MiB per call and
+/// 64 MiB per process lifetime (the files live in kernel memory until synced).
 pub fn file_write(path: &str, data: &[u8]) -> Result<usize, Error> {
     err(unsafe {
         sys::call(nr::FILE_WRITE, path.as_ptr() as u64, path.len() as u64, data.as_ptr() as u64, data.len() as u64, 0)
@@ -263,8 +265,9 @@ impl<'a> Surface<'a> {
             }
         }
     }
-    /// Draw `s` with the system font (anti-aliased, `px` pixels tall) at (x, y) =
-    /// the top-left of the text box. Rendered by the kernel into your buffer.
+    /// Draw `s` with the system font (anti-aliased, `px` pixels tall, 6..=96) at
+    /// (x, y) = the top-left of the text box. Rendered by the kernel into your
+    /// buffer. At most 512 bytes per call (draw longer text in pieces).
     pub fn text(&mut self, x: i32, y: i32, s: &str, argb: u32, px: u32) -> Result<(), Error> {
         let geom = ((x as u32 as u64) << 32) | (y as u32 as u64);
         let dims = ((self.w as u64) << 32) | self.h as u64;

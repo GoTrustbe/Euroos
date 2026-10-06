@@ -6,7 +6,8 @@
 //! the `[eurofuzz]` self-test checks that this program reaches exit 171.
 //! It runs with `console,window,file`, so every arm is exercised, including
 //! surface_present and text_draw with absurd sizes, and the file calls with
-//! paths outside the scope.
+//! paths outside the scope. The pool also holds the app's own code page: a
+//! write there through the kernel must be refused (-EFAULT), never faulted.
 #![no_std]
 #![no_main]
 
@@ -15,9 +16,14 @@ static mut BUF: [u8; 65536] = [0; 65536];
 fn main() -> i32 {
     let _ = eurosdk::log("efuzz: 20000 random Euro calls starting");
     let buf = unsafe { core::ptr::addr_of_mut!(BUF) as u64 };
-    let pool: [u64; 20] = [
+    // This app's own CODE page (mapped R-X) and its stack: a kernel that wrote
+    // through such a pointer would fault in ring 0; the answer must be -EFAULT.
+    let code = main as *const () as u64;
+    let stack = &buf as *const u64 as u64;
+    let pool: [u64; 24] = [
         0, 1, 2, 7, 0xff, 0x1000, 0xffff, u64::MAX, u64::MAX - 1, 0x7fff_ffff, 0xffff_ffff, 0x1_0000_0000,
         0x8000_0000_0000_0000, 0xffff_8000_0000_0000, buf, buf + 100, buf + 65535, buf + 65536, 0x2f00_0000, 1 << 40,
+        code, code & !0xfff, stack, stack - 4096,
     ];
     let nrs: [u64; 17] = [
         0x6100, 0x6101, 0x6102, 0x6103, 0x6104, 0x6105, 0x6106, 0x6107, 0x6108, 0x6109, 0x610A, 0x610B,

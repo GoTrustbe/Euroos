@@ -570,6 +570,45 @@ pub fn demand_page_mapped(pml4: u64, virt: u64) -> bool {
 /// Translate a user VA through an arbitrary PML4 to its physical address (None if
 /// unmapped). For diagnostics that must read another process's memory — e.g. the
 /// futex lock WORD of a deadlocked glibc process, dumped from the launcher.
+/// Is `virt` mapped WRITABLE for user mode in the address space `pml4`? Every
+/// level must carry PRESENT|USER|WRITABLE (x86 ANDs the permissions down the
+/// walk). A kernel write to a page that is mapped read-only for the process
+/// (its R-X code) would fault in ring 0 with CR0.WP set, so every kernel write
+/// into app memory is checked here first (security review of the Euro API).
+pub fn user_writable_in(pml4: u64, virt: u64) -> bool {
+    unsafe {
+        let mut table = pml4;
+        for shift in [39u64, 30, 21] {
+            let e = (table as *const u64).add(((virt >> shift) & 0x1FF) as usize).read_volatile();
+            if e & (PRESENT | USER | WRITABLE) != (PRESENT | USER | WRITABLE) {
+                return false;
+            }
+            if shift == 21 && e & HUGE != 0 {
+                return true;
+            }
+            table = e & ADDR_MASK;
+        }
+        let e = (table as *const u64).add(((virt >> 12) & 0x1FF) as usize).read_volatile();
+        e & (PRESENT | USER | WRITABLE) == (PRESENT | USER | WRITABLE)
+    }
+}
+
+/// Is the whole range `[ptr, ptr+len)` user-writable in `pml4`? (Page by page.)
+pub fn user_range_writable_in(pml4: u64, ptr: u64, len: usize) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let Some(end) = ptr.checked_add(len as u64) else { return false };
+    let mut page = ptr & !0xFFF;
+    while page < end {
+        if !user_writable_in(pml4, page) {
+            return false;
+        }
+        page += 4096;
+    }
+    true
+}
+
 pub fn translate_in(pml4: u64, virt: u64) -> Option<u64> {
     unsafe {
         let mut table = pml4;
