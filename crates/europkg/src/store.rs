@@ -466,7 +466,8 @@ pub fn parse_index(s: &str) -> Option<Vec<PkgIndexEntry>> {
             }
             None => Vec::new(),
         };
-        out.push(PkgIndexEntry { name, version, file, deps });
+        let opt = |k: &str| field(obj, k).unwrap_or_default();
+        out.push(PkgIndexEntry { title: opt("title"), abi: opt("abi"), summary: opt("summary"), key: opt("key"), name, version, file, deps });
         rest = &rest[i + 9..];
     }
     if out.is_empty() {

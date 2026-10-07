@@ -162,3 +162,71 @@ key policy (who signs what, revocation through the index).
 
 N1 complete with proof, then N3.1 (the gate script) and N3.2 (fuzzer), then
 N2.1 and N2.2 (measure and reduce), then whatever N6 item fits.
+
+## Progress 2026-10-07: audit remainders, app store (N7), swap (N2)
+
+- **Audit remainders closed.** WASM `file_read`/`file_write` refuse any path
+  with a symlink component (`euroapi::path_has_symlink` over
+  `FileSystem::read_link`); `[euro-fscope]` proves a link in the home to
+  `/etc/euroguard/system.conf` is refused and a plain file round-trips.
+  Ctrl+Alt+Esc always belongs to the desktop: it sends Close to the focused
+  native or WASM app and terminates it if it ignores that.
+- **N7 app store built.** `kernel/src/appstore.rs`: the index at
+  `https://euro-os.eu/apps/index.json` is signed by the EuroOS key; every
+  entry names the developer key that signed its package, so the signed index
+  vouches for it (a package signed by any other key is refused even when
+  listed); packages are verified as always and re-hashed at launch. Shell
+  `app store [refresh|install <name>]`; the launcher lists store apps with an
+  "install" tag and installs on selection; the verified index is cached under
+  `/pkg` (system data, written as the system from the owner's shell).
+  Published: `scripts/publish-apps.sh` builds the index with
+  `toolchain/eupkg/make-app-index.py` and serves 5 packages live.
+  `[appstore]` self-test: forged signature refused before any fetch, wrong
+  developer key refused, vouched package installs without enrolment. Live
+  proof: `app store refresh` over EuroTLS from a QEMU desktop ("index from
+  https://euro-os.eu/apps/ verified (EuroOS key): 5 app(s), cached").
+  Found on the way: the desktop shell runs with the session user's
+  uid-context, so `/pkg` writes (store cache, installs) failed as the user;
+  store and `app install`/`remove` now run as the system for the owner.
+- **N2 swap on the demand pool.** New `EuroSwap` GPT partition (8% of the
+  disk, at least 64 MiB) on every new install; `swapmgr` gained
+  explicit-page-table variants, CLOCK eviction over a process's demand region
+  (`evict_demand`, Accessed bit as the reference bit), USER-marked swapped
+  PTEs so swap-in restores a user page from the demand pool, and slot
+  release when a demand region is torn down. The demand-fault handler evicts
+  from the faulting process when the pool is dry instead of ending it.
+  `free` shows the swap line. `[j3-demand]` (gate boot with a disk): a glibc
+  process allocates more than the pool holds and verifies its pattern twice.
+  Limits: virtio-blk only (the swap I/O busy-polls that driver), eviction
+  from the faulting process's own region only, no swap on disks installed
+  before this layout.
+- **N4 RDP client, first rung.** `crates/eurordp` (no_std, forbid(unsafe),
+  14 host tests): TPKT/X.224 with the RDP negotiation (TLS requested), MCS
+  Connect-Initial/Response (BER + GCC in PER: client core/security/network
+  data, server data blocks), erect domain, attach user, channel joins, send
+  data; Client Info with credentials, licensing (STATUS_VALID_CLIENT accepted,
+  a licensing exchange is refused), Demand Active parsing, Confirm Active with
+  16 capability sets (no drawing orders, so the server sends bitmaps;
+  uncompressed at 16 bpp), synchronize/control/font list, slow-path bitmap
+  updates to XRGB (15/16/24/32 bpp, bottom-up), input events (scancode,
+  unicode, pointer, buttons, wheel). `Session` is a state machine over bytes
+  in/out. `kernel/src/rdpclient.rs`: TCP through the kernel stack, EuroTLS 1.3
+  after X.224, frame in a Euro API surface shown in the hosted window, input
+  from that window; `rdp <host>[:port] <user> [password]` in the Terminal.
+  Test target: xrdp in docker on the build server (`docker run --name
+  xrdp-test -p 127.0.0.1:3389:3389 -e USER=euro -e PASSWORD=euro-test-1
+  danielguerra/ubuntu-xrdp`), reached from QEMU user-net as 10.0.2.2.
+  Limits stated: TLS 1.3 only (older Windows servers offer 1.2: the EuroTLS
+  1.2 client is the next rung), no NLA/CredSSP, the server certificate is
+  not validated in v1 (self-signed RDP certificates; TOFU with the settings
+  UI next), no RLE bitmaps, no clipboard/drive redirection, no licensing
+  exchange (Windows Server asks for one; xrdp does not).
+
+### N2 swap, status correction (2026-10-07, later)
+Swap-OUT under demand-pool pressure is proven: [j3-demand] shows thousands of
+anonymous pages written to the EuroSwap partition with no kernel fault and the
+desktop still up. Transparent swap-IN (and sustained eviction) is still WIP:
+eviction stops at a deterministic point, so demand-pool eviction is now OFF by
+default (SWAP_DEMAND_EVICT, flipped on only by the test). Production keeps the
+prior clean-OOM behaviour. The EuroSwap partition and the [j3] basic swap-cycle
+(victim selection + disk round-trip) stand.

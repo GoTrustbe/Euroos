@@ -44,7 +44,11 @@ footprint, one legacy Windows application, stability, and blame-the-new-OS.
    profiles (renderer/utility/strict), seccomp cBPF filters, rlimits, ASLR,
    renderer file scope; W^X stays log-only (V8 JIT), PIE base still fixed.
 2. **WP2 IOMMU / DMA isolation** — ✅ built 2026-10-05 (QEMU); hardware run pending.
-3. **WP3 Swap and memory footprint** — 🏗️ 2026-10-06: the kernel heap is sized
+3. **WP3 Swap and memory footprint** — 🏗️: EuroSwap partition in the installed
+   layout + swapmgr (CLOCK eviction, swap-out to disk) proven under pressure
+   ([j3-demand]); transparent swap-IN is still WIP, so demand-pool eviction is
+   OFF by default (a program that outgrows the pool gets a clean OOM, not a
+   kernel fault). Earlier, 2026-10-06: the kernel heap is sized
    from RAM at boot instead of a 512 MiB static (the public image now boots to the
    desktop in a 512 MiB guest; before it failed below about 1 GiB). Swap and the
    Chromium footprint (> 5 GiB today; 8 GiB laptops are the norm) remain.
@@ -61,6 +65,11 @@ footprint, one legacy Windows application, stability, and blame-the-new-OS.
    header (`sdk/c/euro.h`), and the same API as the one import of eurowasm
    (frame-driven, fuel-bounded) for `abi = "wasm"` packages. Proof markers
    `[euroapp]`, `[euroapp-wasm]`, `[eurofuzz]`; plan `SPRINT-PLAN-NATIVE-APPS.md`.
+4d. **N7 App store** — 🏗️ 2026-10-07: a signed index at euro-os.eu/apps (EuroOS
+   key) that vouches for developer keys; `app store refresh|install <name>`
+   over EuroTLS; store entries in the launcher; `[appstore]` self-test
+   (forged index refused, wrong developer key refused, vouched package
+   installs without enrolment). Live index published with 5 packages.
 4b. **EuroApps SDK** — ✅ built 2026-10-06: third parties package, sign (own
    Ed25519 key) and ship apps (`.eupkg`); the owner enrols developer keys; the
    kernel re-verifies the binary at every launch and applies the manifest's

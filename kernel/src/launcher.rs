@@ -34,6 +34,8 @@ const CATALOG: &[(&str, usize)] = &[
 /// icon index 100 + registry position. Names are leaked once per distinct
 /// string so the catalog can stay `&'static str`.
 static APPS: Mutex<Vec<(&'static str, usize)>> = Mutex::new(Vec::new());
+/// Store apps not yet installed: (title, name), from the cached signed index.
+static STORE: Mutex<Vec<(&'static str, &'static str)>> = Mutex::new(Vec::new());
 static LEAKED: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 pub const APP_ICON_BASE: usize = 100;
 
@@ -48,6 +50,27 @@ fn leak_name(name: &str) -> &'static str {
 }
 
 /// Refresh the installed-app entries from the package registry.
+/// Refresh the store entries (cached, verified index minus what is installed).
+pub fn sync_store(fs: &mut dyn eurofs::fs::FileSystem) {
+    let installed = crate::pkg::installed_apps(fs);
+    let mut v = Vec::new();
+    for e in crate::appstore::cached_entries(fs) {
+        if !installed.iter().any(|a| a.name == e.name) {
+            v.push((leak_name(&e.title), leak_name(&e.name)));
+        }
+    }
+    *STORE.lock() = v;
+}
+
+fn store_matches(query: &str) -> Vec<(&'static str, &'static str)> {
+    let all: Vec<(&'static str, &'static str)> = STORE.lock().clone();
+    if query.is_empty() {
+        return all;
+    }
+    let q = to_lower(query);
+    all.into_iter().filter(|(t, n)| to_lower(t).contains(&q) || to_lower(n).contains(&q)).collect()
+}
+
 pub fn sync_apps(fs: &mut dyn eurofs::fs::FileSystem) {
     let apps = crate::pkg::installed_apps(fs);
     let mut v = Vec::new();
@@ -62,6 +85,8 @@ pub fn sync_apps(fs: &mut dyn eurofs::fs::FileSystem) {
 #[derive(Clone)]
 pub enum Hit {
     App(&'static str, usize),
+    /// An app in the signed store index that is not installed: (title, name).
+    Store(&'static str, &'static str),
     File(String),
     Content(String, String),
 }
@@ -70,6 +95,8 @@ pub enum Hit {
 pub enum Launch {
     App(usize),
     Path(String),
+    /// Install this store app (by name), then it appears as an App.
+    StoreInstall(String),
 }
 
 struct State {
@@ -132,9 +159,12 @@ pub fn refresh(fs: &mut dyn eurofs::fs::FileSystem) {
     };
     let q = to_lower(&query);
     let mut hits: Vec<Hit> = Vec::new();
-    // Apps first.
+    // Apps first, then what the store offers.
     for (name, icon) in matches(&query) {
         hits.push(Hit::App(name, icon));
+    }
+    for (title, name) in store_matches(&query) {
+        hits.push(Hit::Store(title, name));
     }
     if !q.is_empty() {
         // File names: bounded walk over the interesting roots.
@@ -234,6 +264,7 @@ pub fn key(ch: char) -> Option<Launch> {
             *g = None;
             pick.map(|h| match h {
                 Hit::App(_, i) => Launch::App(i),
+                Hit::Store(_, n) => Launch::StoreInstall(String::from(n)),
                 Hit::File(p) | Hit::Content(p, _) => Launch::Path(p),
             })
         }
@@ -286,6 +317,7 @@ pub fn click_at(mx: usize, my: usize, screen_w: usize, screen_h: usize) -> Optio
             if my >= ry && my < ry + ROW_H {
                 return Some(match st.hits[r].clone() {
                     Hit::App(_, i) => Launch::App(i),
+                    Hit::Store(_, n) => Launch::StoreInstall(String::from(n)),
                     Hit::File(p) | Hit::Content(p, _) => Launch::Path(p),
                 });
             }
@@ -331,6 +363,10 @@ pub fn render(fb: &FrameBuffer, screen_w: usize, screen_h: usize) {
             Hit::App(name, _) => {
                 crate::text::draw_px(fb, x + 22, ry + 11, name, c, 14.0);
                 crate::text::draw_px(fb, x + W - 60, ry + 13, "app", Color::TEXT_DIM, 11.0);
+            }
+            Hit::Store(title, _) => {
+                crate::text::draw_px(fb, x + 22, ry + 11, title, c, 14.0);
+                crate::text::draw_px(fb, x + W - 60, ry + 13, "install", Color::ACCENT, 11.0);
             }
             Hit::File(p) => {
                 let name = p.rsplit('/').next().unwrap_or(p);

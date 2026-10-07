@@ -6827,6 +6827,9 @@ static GSCM_ELF: &[u8] = include_bytes!("../../userland/glibc/gscm");
 // with futex REQUEUE/WAKE_OP, which a kernel can silently answer with "nobody".
 static GCOND_ELF: &[u8] = include_bytes!("../../userland/glibc/gcond");
 static GSANDBOX_ELF: &[u8] = include_bytes!("../../userland/glibc/gsandbox");
+/// gswap (sprint N2): allocates past the demand pool and verifies its pattern
+/// twice; only correct with swap. Dev builds only.
+static GSWAP_ELF: &[u8] = include_bytes!("../../userland/glibc/gswap");
 static GFUZZ_ELF: &[u8] = include_bytes!("../../userland/glibc/gfuzz");
 // BRK test: memory gained through the program break must read as zeros — glibc's
 // calloc skips its memset for kernel-fresh chunks and inherits our garbage if not.
@@ -6957,6 +6960,7 @@ pub fn gscm_bytes() -> &'static [u8] { GSCM_ELF }
 /// A condition-variable broadcast test (futex REQUEUE).
 pub fn gcond_bytes() -> &'static [u8] { GCOND_ELF }
 pub fn gsandbox_bytes() -> &'static [u8] { GSANDBOX_ELF }
+pub fn gswap_bytes() -> &'static [u8] { GSWAP_ELF }
 pub fn gfuzz_bytes() -> &'static [u8] { GFUZZ_ELF }
 /// A brk-zeroing test (grow, poison, shrink, regrow: zeros every time).
 pub fn gbrk_bytes() -> &'static [u8] { GBRK_ELF }
@@ -7491,6 +7495,7 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gcairotext" => include_bytes!("../../userland/glibc/gcairotext.sig"),
         "/bin/gcond" => include_bytes!("../../userland/glibc/gcond.sig"),
         "/bin/gsandbox" => include_bytes!("../../userland/glibc/gsandbox.sig"),
+        "/bin/gswap" => include_bytes!("../../userland/glibc/gswap.sig"),
         "/bin/gfuzz" => include_bytes!("../../userland/glibc/gfuzz.sig"),
         "/bin/gcpp" => include_bytes!("../../userland/glibc/gcpp.sig"),
         "/bin/gdiskmap" => include_bytes!("../../userland/glibc/gdiskmap.sig"),
@@ -9046,7 +9051,9 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         // Flush the TLB so the now-unmapped VAs re-fault.
         unsafe { Cr3::write(Cr3::read().0, Cr3::read().1); }
     }
-    DEMAND_NEXT.store(DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand, Ordering::Relaxed); // past the exe window, randomised
+    let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
+    DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); // past the exe window, randomised
+    DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_FILE_MAPS.lock().clear();
     PROT_NONE_RANGES.lock().clear();
     SHARED_ALIASES.lock().clear();
@@ -9258,6 +9265,10 @@ const DEMAND_SIZE: u64 = 480 * (1 << 30);
 const DEMAND_MIN_BYTES: u64 = 16 * (1 << 20); // route anon mmaps >= 16 MiB here
 pub static DEMAND_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
+/// The lowest demand address that can be committed this run (DEMAND_NEXT at
+/// reset). Swap eviction scans [DEMAND_FLOOR, DEMAND_NEXT), not from DEMAND_BASE
+/// (192 MiB of the region below the exe window is never mapped).
+pub static DEMAND_FLOOR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
 static DEMAND_COMMITTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Pages zeroed by madvise(MADV_DONTNEED/MADV_FREE) so far, and how many calls did it.
@@ -9497,6 +9508,16 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
         return false;
     }
     let page = addr & !0xFFF;
+    // A page this process swapped OUT earlier (sprint N2): bring it back from the
+    // EuroSwap partition, evicting another page first if the pool is dry. This
+    // runs before any fresh-page logic, or the swapped data would be lost.
+    if SWAP_DEMAND_EVICT.load(Ordering::Relaxed) && crate::paging::demand_pte_raw(pml4, page) & (1 << 9) != 0 {
+        if crate::procpool::demand_free_frames() == 0 {
+            crate::swapmgr::reclaim_batch(pml4, DEMAND_FLOOR.load(Ordering::Relaxed), DEMAND_NEXT.load(Ordering::Relaxed), 8);
+        }
+        let frame = crate::procpool::demand_alloc();
+        return crate::swapmgr::swap_in_into(page, frame);
+    }
     // A SHARED mapping: every alias of the same file faults onto the same frame, so
     // the mappings really are one memory.
     let alias = SHARED_ALIASES.lock().iter().find(|&&(b, l, _)| page >= b && page < b + l).copied();
@@ -9538,6 +9559,16 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
         unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
         DEMAND_USED.store(true, Ordering::Relaxed);
         return true;
+    }
+    // Pool dry? Swap out an old page of THIS process (CLOCK over its demand
+    // region) and take its frame: anonymous memory beyond the pool now lives on
+    // the EuroSwap partition instead of ending the process (sprint N2).
+    // Pool dry? Reclaim a BATCH of old pages of this process to the swap partition
+    // and back into the pool, so this fault can allocate both its data page and
+    // any page-table frames the mapping needs (sprint N2). A 2 MiB-aligned page
+    // needs a fresh page table, hence more than one frame.
+    if SWAP_DEMAND_EVICT.load(Ordering::Relaxed) && crate::procpool::demand_free_frames() == 0 {
+        crate::swapmgr::reclaim_batch(pml4, DEMAND_FLOOR.load(Ordering::Relaxed), DEMAND_NEXT.load(Ordering::Relaxed), 8);
     }
     let phys = match crate::procpool::demand_alloc() {
         Some(p) => p,
@@ -10307,6 +10338,13 @@ fn register_disk_exe_segments(diskidx: usize, dev: usize, doff: u64, exe_base: u
 /// system. 8192 (32 MiB) suits a boot-phase run; the desktop raises it before it
 /// launches a browser that would otherwise take the memory the compositor needs.
 pub static DEMAND_MARGIN_FRAMES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(8192);
+/// Upper bound on the demand pool of the next spawn, in frames (0 = none).
+pub static DEMAND_POOL_CAP_FRAMES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// Demand-pool swap eviction is OFF by default: swap-out works but transparent
+/// swap-IN is still WIP (sustained eviction stops early), so enabling it for a
+/// real program would risk losing a swapped page. The [j3-demand] test turns it
+/// on to exercise swap-out, then off. Production falls back to the clean OOM.
+pub static SWAP_DEMAND_EVICT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Hand the demand pool's extra backing regions (procpool::demand_install_regions)
 /// back to the main allocator; the first region is freed by the caller as before.
@@ -10476,7 +10514,9 @@ fn glibc_disk_launch(
     GLIBC_CTIDS.lock().clear();
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
-    DEMAND_NEXT.store(DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand, Ordering::Relaxed); // past the exe window, randomised
+    let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
+    DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); // past the exe window, randomised
+    DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_COMMITTED.store(0, Ordering::Relaxed);
     DEMAND_USED.store(false, Ordering::Relaxed);
     // Register the exe's disk-backed segments NOW (after the DEMAND_NEXT reset).
@@ -10495,6 +10535,12 @@ fn glibc_disk_launch(
     // 1.6 GiB free, less than the 4608M guest had. The first run found is the
     // largest (the ask only shrinks) and is the one recorded as dp_base/dp_frames.
     let mut budget = falloc.free_frames().saturating_sub(DEMAND_MARGIN_FRAMES.load(Ordering::Relaxed) as usize);
+    // A test may cap the pool (0 = no cap): the [j3-demand] swap proof runs a
+    // process against a small pool so the overflow goes to the swap partition.
+    let cap = DEMAND_POOL_CAP_FRAMES.load(Ordering::Relaxed);
+    if cap > 0 {
+        budget = budget.min(cap);
+    }
     let mut regions: [(u64, usize); 8] = [(0, 0); 8];
     let mut nreg = 0usize;
     let mut want = budget;
@@ -10925,7 +10971,9 @@ pub fn run_glibc(
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
     // Fresh demand-paging state for this run (bump pointer, counters, used flag).
-    DEMAND_NEXT.store(DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand, Ordering::Relaxed); // past the exe window, randomised
+    let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
+    DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); // past the exe window, randomised
+    DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_COMMITTED.store(0, Ordering::Relaxed);
     DEMAND_USED.store(false, Ordering::Relaxed);
     // If this run uses demand paging, reserve a LARGE contiguous region from the main
@@ -10940,6 +10988,10 @@ pub fn run_glibc(
         // between runs.
         const MARGIN: usize = 8192; // keep 32 MiB free for kernel allocations
         let mut want = falloc.free_frames().saturating_sub(MARGIN);
+        let cap = DEMAND_POOL_CAP_FRAMES.load(Ordering::Relaxed);
+        if cap > 0 {
+            want = want.min(cap); // [j3-demand]: a small pool so the overflow swaps
+        }
         let mut got = (0u64, 0usize);
         while want >= 4096 {
             // >= 16 MiB

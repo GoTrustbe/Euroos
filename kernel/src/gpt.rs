@@ -38,6 +38,8 @@ pub fn find_esp() -> Option<(u64, u64)> {
 /// GPT type of the A/B slot partitions (`eurofat::disk::EUROSLOT_TYPE`).
 const EUROSLOT_TYPE: [u8; 16] =
     [0x45, 0x55, 0x52, 0x4f, 0x53, 0x4c, 0x00, 0x01, 0x80, 0x00, 0x00, 0x45, 0x55, 0x52, 0x4f, 0x53];
+/// EuroSwap partition (sprint N2): raw swap slots; MUST equal eurofat::disk::EUROSWAP_TYPE.
+pub const EUROSWAP_TYPE: [u8; 16] = [0x45, 0x75, 0x72, 0x6F, 0x53, 0x77, 0x61, 0x70, 0x20, 0x32, 0x30, 0x32, 0x36, 0x2D, 0x31, 0x30];
 fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &b in data {
@@ -154,7 +156,7 @@ pub fn find_partition_by_name(name: &str) -> Option<(u64, u64)> {
     let (arr, esz, num) = read_part_array()?;
     for i in 0..num {
         let e = &arr[i * esz..i * esz + 128];
-        if (e[..16] == EUROFS_TYPE || e[..16] == EUROSLOT_TYPE) && entry_name_eq(e, name) {
+        if (e[..16] == EUROFS_TYPE || e[..16] == EUROSLOT_TYPE || e[..16] == EUROSWAP_TYPE) && entry_name_eq(e, name) {
             let (first, last) = (rd_u64(e, 32), rd_u64(e, 40));
             if last >= first {
                 return Some((first, (last - first + 1) / 8));
@@ -269,7 +271,11 @@ pub fn install(total_sectors: u64) -> (u64, u64) {
     let b_last = b_first + slot - 1;
     let v_first = b_last + 1;
     let v_last = v_first + varsz - 1;
-    let bt_first = v_last + 1;
+    // EuroSwap (N2/J3): raw swap slots, 8% of the disk and at least 64 MiB.
+    let swapsz = align8(usable * 8 / 100).max(131_072);
+    let s_first = v_last + 1;
+    let s_last = s_first + swapsz - 1;
+    let bt_first = s_last + 1;
     let bt_last = last_usable - 1;
 
     // Partition array: 4 entries.
@@ -278,6 +284,7 @@ pub fn install(total_sectors: u64) -> (u64, u64) {
     fill_entry(&mut arr[128..256], b_first, b_last, "EuroOS-B", 0x31);
     fill_entry(&mut arr[256..384], v_first, v_last, "EuroVar", 0x51);
     fill_entry(&mut arr[384..512], bt_first, bt_last, "EuroBoot", 0x71);
+    fill_entry(&mut arr[512..640], s_first, s_last, "EuroSwap", 0x91);
     let arr_crc = crc32(&arr);
 
     // GPT header.
@@ -314,10 +321,11 @@ pub fn install(total_sectors: u64) -> (u64, u64) {
     }
     let mib = |first: u64, last: u64| (last - first + 1) * 512 / (1024 * 1024);
     crate::serial_println!(
-        "[gpt] A/B GPT written — EuroOS-A @ LBA {} ({} MiB) · EuroOS-B @ {} ({} MiB) · EuroVar @ {} ({} MiB) · EuroBoot @ {} ({} MiB)",
+        "[gpt] A/B GPT written — EuroOS-A @ LBA {} ({} MiB) · EuroOS-B @ {} ({} MiB) · EuroVar @ {} ({} MiB) · EuroSwap @ {} ({} MiB) · EuroBoot @ {} ({} MiB)",
         a_first, mib(a_first, a_last),
         b_first, mib(b_first, b_last),
         v_first, mib(v_first, v_last),
+        s_first, mib(s_first, s_last),
         bt_first, mib(bt_first, bt_last)
     );
     // Slot A = root (the first EuroFS partition); the root-mount path stays unchanged.

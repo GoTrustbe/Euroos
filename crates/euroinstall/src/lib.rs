@@ -146,8 +146,8 @@ pub fn validate(cfg: &Config) -> Result<(), PlanError> {
     Ok(())
 }
 
-/// Compute the GPT partition layout: ESP · EuroOS-A · EuroOS-B · EuroVar.
-/// The two system slots are equal; EuroVar gets the rest.
+/// Compute the GPT partition layout: ESP · EuroOS-A · EuroOS-B · EuroSwap · EuroVar.
+/// The two system slots are equal; EuroSwap is 8% (at least 64 MiB); EuroVar gets the rest.
 fn partition_layout(disk: Disk) -> Vec<PartitionPlan> {
     let align = MIB / SECTOR; // 1 MiB alignment
     let total_sectors = disk.total_bytes / SECTOR;
@@ -167,6 +167,10 @@ fn partition_layout(disk: Disk) -> Vec<PartitionPlan> {
     cur += slot;
     p.push(PartitionPlan { label: "EuroOS-B", start_lba: cur, sectors: slot });
     cur += slot;
+    // EuroSwap (sprint N2): raw swap slots for the demand pool, 8% of the disk, at least 64 MiB.
+    let swap = (((remaining * 8 / 100).max(64 * MIB / SECTOR)) / align) * align;
+    p.push(PartitionPlan { label: "EuroSwap", start_lba: cur, sectors: swap });
+    cur += swap;
     let var = ((last_usable - cur) / align) * align;
     p.push(PartitionPlan { label: "EuroVar", start_lba: cur, sectors: var });
     p
@@ -281,14 +285,16 @@ mod tests {
     fn partition_layout_fits_disk() {
         let disk = Disk { total_bytes: 8 * 1024 * MIB };
         let parts = partition_layout(disk);
-        assert_eq!(parts.len(), 4);
+        assert_eq!(parts.len(), 5);
         assert_eq!(parts[0].label, "EuroESP");
-        assert_eq!(parts[3].label, "EuroVar");
+        assert_eq!(parts[3].label, "EuroSwap");
+        assert_eq!(parts[4].label, "EuroVar");
+        assert!(parts[3].sectors * SECTOR >= 64 * MIB);
         // Partitions do not overlap and stay within the disk.
         for w in parts.windows(2) {
             assert!(w[0].start_lba + w[0].sectors <= w[1].start_lba);
         }
-        let last = &parts[3];
+        let last = &parts[4];
         assert!((last.start_lba + last.sectors) * SECTOR <= disk.total_bytes);
         // The two slots are equal in size.
         assert_eq!(parts[1].sectors, parts[2].sectors);

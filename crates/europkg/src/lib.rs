@@ -29,6 +29,12 @@ pub struct PkgIndexEntry {
     /// Repository path of the `.eupkg` file (fetched via FS/HTTP).
     pub file: String,
     pub deps: Vec<String>,
+    /// App store fields (sprint N7); empty for a plain library index.
+    pub title: String,
+    pub abi: String,
+    pub summary: String,
+    /// Hex of the developer public key the (EuroOS-signed) index vouches for.
+    pub key: String,
 }
 
 /// A semantic version `major.minor.patch`.

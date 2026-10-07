@@ -18,6 +18,8 @@ const NX: u64 = 1 << 63; // No-Execute (requires EFER.NXE) — W^X
 const GIB: u64 = 1 << 30;
 const MIB2: u64 = 1 << 21; // 2 MiB page in a PD entry
 const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
+/// A non-present PTE that holds a swap slot (see swapmgr): bit 9, slot in bits 12+.
+const SWAPPED_PTE: u64 = 1 << 9;
 
 /// The shared high PDPT (PML4[1] → 512 GiB..1 TiB), set up at boot. Every
 /// process PML4 shares the same PDPT so that guarded kernel stacks (A2) + high
@@ -699,6 +701,20 @@ pub fn dump_walk(pml4: u64, virt: u64) {
     }
 }
 
+/// The raw PTE of `virt` in `pml4` (0 when no table covers it): the swap code
+/// reads the SWAPPED marker of a non-present entry through this.
+pub fn demand_pte_raw(pml4: u64, virt: u64) -> u64 {
+    unsafe {
+        let mut table = pml4;
+        for shift in [39u64, 30, 21] {
+            let e = (table as *const u64).add(((virt >> shift) & 0x1FF) as usize).read_volatile();
+            if e & PRESENT == 0 { return 0; }
+            table = e & ADDR_MASK;
+        }
+        (table as *const u64).add(((virt >> 12) & 0x1FF) as usize).read_volatile()
+    }
+}
+
 pub fn demand_pte(pml4: u64, virt: u64) -> Option<(u64, bool)> {
     // SAFETY: identity-mapped table chain, read-only walk.
     unsafe {
@@ -963,6 +979,9 @@ pub fn free_demand_region_except(pml4: u64, idx: usize, keep: &[u64]) {
                 let pt = e2 & ADDR_MASK;
                 for i1 in 0..512usize {
                     let e1 = (pt as *const u64).add(i1).read_volatile();
+                    if e1 & PRESENT == 0 && e1 & SWAPPED_PTE != 0 {
+                        crate::swapmgr::free_slot(((e1 >> 12) & 0xFFFFF) as usize);
+                    }
                     if e1 & PRESENT != 0 {
                         let phys = e1 & ADDR_MASK;
                         if keep.binary_search(&phys).is_err() {
@@ -1003,6 +1022,8 @@ pub fn free_demand_region(pml4: u64, idx: usize) {
                     let e1 = (pt as *const u64).add(i1).read_volatile();
                     if e1 & PRESENT != 0 {
                         crate::procpool::demand_free(e1 & ADDR_MASK); // committed data page
+                    } else if e1 & SWAPPED_PTE != 0 {
+                        crate::swapmgr::free_slot(((e1 >> 12) & 0xFFFFF) as usize); // its swap slot
                     }
                 }
                 crate::procpool::demand_free(pt);

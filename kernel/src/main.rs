@@ -30,7 +30,9 @@ mod iommu;
 /// `iommu::program` (the desktop's scanout and hot-plugged USB buffers).
 pub static mut DMA_FALLOC: Option<*mut euromm::FrameAllocator> = None;
 mod appgfx;
+mod appstore;
 mod euroapi;
+mod rdpclient;
 mod appicons;
 mod auth;
 mod euroui;
@@ -3489,6 +3491,19 @@ fn main() -> Status {
     // — future read-only — system slot). Proves the multi-partition A/B GPT layout:
     // /var lives on disk 0 next to slot A, with absolute-sector-correct block cache.
     if virtio_blk::present() {
+        // Sprint N2 (J3 on the demand pool): the EuroSwap partition backs the
+        // anonymous pages of Linux-ABI processes once the demand pool is dry.
+        if let Some((sfirst, sblocks)) = gpt::find_partition_by_name("EuroSwap") {
+            let mut reserve = Vec::new();
+            for _ in 0..32 {
+                if let Ok(f) = allocator.allocate() { reserve.push(f); }
+            }
+            let slots = sblocks as usize; // the lookup reports 4 KiB blocks: one slot each
+            swapmgr::init(sfirst, slots, reserve);
+            serial_println!("[j3] swap: EuroSwap partition @ LBA {sfirst}: {} MiB = {slots} slots (+32 reserve frames)", slots * 4 / 1024);
+        } else {
+            serial_println!("[j3] swap: no EuroSwap partition on this disk (layout before 2026-10-07): swap stays off");
+        }
         if let Some((vfirst, vblocks)) = gpt::find_partition_by_name("EuroVar") {
             let vdev = rootblk::RootBlk::disk_on(0, vfirst, vblocks);
             let var_fs = match EuroFs::mount(vdev.clone(), rtc::epoch()) {
@@ -3508,6 +3523,41 @@ fn main() -> Status {
                 Ok(d) => serial_println!("[g4] VFS routes /var → {} bytes on the EuroVar partition ✓", d.len()),
                 Err(_) => serial_println!("[g4] /var routing FAILED"),
             }
+        }
+        // [j3-demand]: a glibc process allocates MORE than the demand pool holds
+        // and verifies its pattern twice. With swap the kernel pages its oldest
+        // pages out to EuroSwap and back on access; without swap it would die at
+        // the first page past the pool.
+        #[cfg(feature = "selftest")]
+        if swapmgr::active() {
+            // A 16 MiB pool for this one process; it asks for 16 + 48 MiB.
+            let pool_mib = 16usize;
+            ring3::DEMAND_POOL_CAP_FRAMES.store(pool_mib * 256, core::sync::atomic::Ordering::Relaxed);
+            ring3::SWAP_DEMAND_EVICT.store(true, core::sync::atomic::Ordering::Relaxed);
+            let (_, cap_pages) = swapmgr::usage();
+            let over = 48usize.min(cap_pages * 4 / 1024 / 2).max(8);
+            let want = pool_mib + over;
+            let free_mib = pool_mib;
+            let arg = alloc::format!("{want}");
+            let (ins0, outs0) = swapmgr::stats();
+            // Demand paging is opt-in per run (the Chromium path); the swap works on
+            // the demand pool, so this run opts in.
+            let prev_demand = ring3::DEMAND_ENABLED.swap(true, core::sync::atomic::Ordering::Relaxed);
+            let (o, e) = ring3::run_glibc(&mut allocator, ring3::gswap_bytes(), ring3::ldlinux_bytes(),
+                &[b"/bin/gswap", arg.as_bytes()], &[b"PATH=/bin"], ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO);
+            ring3::DEMAND_ENABLED.store(prev_demand, core::sync::atomic::Ordering::Relaxed);
+            ring3::DEMAND_POOL_CAP_FRAMES.store(0, core::sync::atomic::Ordering::Relaxed);
+            ring3::SWAP_DEMAND_EVICT.store(false, core::sync::atomic::Ordering::Relaxed);
+            let (ins, outs) = swapmgr::stats();
+            for l in o.lines() { serial_println!("[j3-demand]   {l}"); }
+            let swapped_out = outs > outs0;
+            serial_println!(
+                "[j3-demand] demand-pool swap under pressure: process asked {want} MiB against a {pool_mib} MiB pool · pages-swapped-OUT-to-EuroSwap={} · swap-ins={} · exit={e} · WIP: swap-out proven, transparent swap-in still under development (eviction is OFF by default; a real program falls back to a clean OOM, not a kernel fault) {}",
+                outs - outs0, ins - ins0,
+                if swapped_out { "- swap-out OK" } else { "- NO swap-out" }
+            );
+        } else {
+            serial_println!("[j3-demand] no swap partition on this boot: skipped");
         }
     }
 
@@ -3857,7 +3907,9 @@ fn main() -> Status {
     pkg::app_selftest(&mut allocator, &mut vfs);
     pkg::euroapp_selftest(&mut allocator, &mut vfs);
     pkg::euroapp_wasm_selftest(&mut vfs);
+    wasm::fscope_selftest(&mut vfs);
     pkg::eurofuzz_selftest(&mut allocator, &mut vfs);
+    appstore::selftest(&mut vfs);
 
     // 3E-5: GDB Remote Serial Protocol stub over COM2 — prove the wire protocol
     // against live kernel register/memory state (a real gdb attaches via COM2→tcp).
@@ -4919,6 +4971,7 @@ fn main() -> Status {
         // raised in one place after input handling.
         let mut launch_icon: Option<usize> = None;
         let mut launch_path: Option<String> = None;
+        let mut launch_store: Option<String> = None;
         // A screenshot requested this iteration, captured after a clean render.
         let mut pending_shot = false;
 
@@ -4949,6 +5002,7 @@ fn main() -> Status {
                 match launcher::click_at(cx, cy, width, height) {
                     Some(launcher::Launch::App(icon)) => launch_icon = Some(icon),
                     Some(launcher::Launch::Path(p)) => launch_path = Some(p),
+                    Some(launcher::Launch::StoreInstall(n)) => launch_store = Some(n),
                     None => {}
                 }
                 need_full = true;
@@ -5111,7 +5165,8 @@ fn main() -> Status {
                 need_full = true; // repaint (dialog gone or still up); consume the click
             } else if compositor::brand_button_at(px, py) {
                 // The EU mark is the "start button": open the app launcher.
-                launcher::sync_apps(ctx.fs); // installed app packages join the catalog
+                launcher::sync_apps(ctx.fs);
+                launcher::sync_store(ctx.fs); // installed app packages join the catalog
                 launcher::open();
                 launcher::refresh(ctx.fs); // fill the initial (all-apps) list
                 need_full = true;
@@ -5184,6 +5239,9 @@ fn main() -> Status {
                                             serial_println!("[euroapp] wasm pid {pid} ignored Close: terminated");
                                             wasm::kill(pid);
                                         }
+                                    }
+                                    if pid == rdpclient::RDP_PID {
+                                        rdpclient::stop();
                                     }
                                     euroapi::remove(pid);
                                 }
@@ -5590,6 +5648,8 @@ fn main() -> Status {
                     launch_path = Some(p);
                 } else if let Some(launcher::Launch::App(icon)) = lr {
                     launch_icon = Some(icon);
+                } else if let Some(launcher::Launch::StoreInstall(n)) = lr {
+                    launch_store = Some(n);
                 }
                 need_full = true;
                 continue;
@@ -5882,9 +5942,54 @@ fn main() -> Status {
                                 }
                             }
                         }
+                    } else if exec_cmd.split_whitespace().next() == Some("rdp") {
+                        // Sprint N4: the RDP client. `rdp <host>[:port] <user> [password]`.
+                        let mut t = exec_cmd.split_whitespace().skip(1);
+                        // Dev convenience (selftest builds only): `rdp test` connects to the
+                        // QEMU-host RDP server at 10.0.2.2 so the live proof needs no digits
+                        // typed (the AZERTY test keyboard mangles an IP).
+                        let (a1, a2) = if cfg!(feature = "selftest") && exec_cmd.split_whitespace().nth(1) == Some("test") {
+                            (Some("10.0.2.2:3389"), Some("euro"))
+                        } else {
+                            let mut t2 = exec_cmd.split_whitespace().skip(1);
+                            (t2.next(), t2.next())
+                        };
+                        let fixed_pw = cfg!(feature = "selftest") && exec_cmd.split_whitespace().nth(1) == Some("test");
+                        match (a1, a2) {
+                            (Some(hp), Some(user)) => {
+                                let (host, port) = match hp.rsplit_once(':') {
+                                    Some((h, p)) => (h, p.parse::<u16>().unwrap_or(3389)),
+                                    None => (hp, 3389),
+                                };
+                                let pw = if fixed_pw { "euro-test-1" } else { t.next().unwrap_or("") };
+                                if euroapi::focus().map(|p| ring3::bg_alive(p) || wasm::app_alive(p) || rdpclient::active()).unwrap_or(false) {
+                                    out.push(String::from("rdp: a hosted app is already running (close its window first)"));
+                                } else {
+                                    match rdpclient::start(host, port, user, pw, 1024, 768) {
+                                        Ok(msg) => {
+                                            out.push(msg);
+                                            let w = euro_idx;
+                                            windows[w].title = alloc::format!("Remote desktop  -  {host}");
+                                            windows[w].w = 1024;
+                                            windows[w].h = 768 + compositor::TITLEBAR_H;
+                                            windows[w].x = SIDEBAR_W + 40;
+                                            windows[w].y = 60;
+                                            order.retain(|&i| i != w);
+                                            order.push(w);
+                                            for ww in windows.iter_mut() { ww.active = false; }
+                                            windows[w].visible = true;
+                                            windows[w].active = true;
+                                            need_full = true;
+                                        }
+                                        Err(e) => out.push(e),
+                                    }
+                                }
+                            }
+                            _ => out.extend(rdpclient::status_lines()),
+                        }
                     } else if {
                         let mut t = exec_cmd.split_whitespace();
-                        t.next() == Some("app") && matches!(t.next(), Some("installed" | "install" | "trust" | "trusted" | "remove" | "run" | "surfaces"))
+                        t.next() == Some("app") && matches!(t.next(), Some("installed" | "install" | "trust" | "trusted" | "remove" | "run" | "surfaces" | "store"))
                     } {
                         // EuroApps SDK: package install / trust / run from the shell.
                         let rest = exec_cmd.trim_start_matches("app").trim();
@@ -6173,6 +6278,16 @@ fn main() -> Status {
                 windows[w].visible = true;
                 windows[w].active = true;
             }
+            need_full = true;
+        }
+        if let Some(name) = launch_store.take() {
+            // The store: fetch over HTTPS, verify against the key the signed index
+            // vouches for, install; the launcher then lists it as an app.
+            let lines = appstore::install(ctx.fs, &name);
+            for l in &lines { serial_println!("[appstore] {l}"); }
+            let last = lines.last().cloned().unwrap_or_default();
+            notify::push("App store", &last, interrupts::ticks());
+            launcher::sync_store(ctx.fs);
             need_full = true;
         }
         if let Some(icon) = launch_icon.filter(|&i| i >= launcher::APP_ICON_BASE) {
@@ -6556,8 +6671,37 @@ fn main() -> Status {
         // Native app window focused: raw scancodes become Key events for it (with
         // the layout's character), pointer motion over its body becomes Move events.
         if windows[euro_idx].visible && windows[euro_idx].active {
+            // Ctrl+Alt+Esc always belongs to the desktop: it closes the native app
+            // (Close event, then termination), so a focused app can never keep the
+            // keyboard for good. Modifier state is tracked from the raw stream.
+            static NATIVE_CTRL: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+            static NATIVE_ALT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
             while let Some(sc) = ps2::poll_scancode() {
                 if sc == 0xE0 {
+                    continue;
+                }
+                match sc {
+                    0x1D => NATIVE_CTRL.store(true, core::sync::atomic::Ordering::Relaxed),
+                    0x9D => NATIVE_CTRL.store(false, core::sync::atomic::Ordering::Relaxed),
+                    0x38 => NATIVE_ALT.store(true, core::sync::atomic::Ordering::Relaxed),
+                    0xB8 => NATIVE_ALT.store(false, core::sync::atomic::Ordering::Relaxed),
+                    _ => {}
+                }
+                if sc == 0x01 && NATIVE_CTRL.load(core::sync::atomic::Ordering::Relaxed) && NATIVE_ALT.load(core::sync::atomic::Ordering::Relaxed) {
+                    if let Some(pid) = euroapi::focus() {
+                        serial_println!("[euroapp] Ctrl+Alt+Esc: closing the native app pid {pid}");
+                        euroapi::push_close();
+                        for _ in 0..20 {
+                            if !ring3::bg_alive(pid) && !wasm::app_alive(pid) && !(pid == rdpclient::RDP_PID && rdpclient::active()) { break; }
+                            sched::sleep_ticks(1);
+                            sched::yield_now();
+                        }
+                        if ring3::bg_alive(pid) { ring3::kill_pid(pid); }
+                        if wasm::app_alive(pid) { wasm::kill(pid); }
+                        if pid == rdpclient::RDP_PID { rdpclient::stop(); }
+                    }
+                    NATIVE_CTRL.store(false, core::sync::atomic::Ordering::Relaxed);
+                    NATIVE_ALT.store(false, core::sync::atomic::Ordering::Relaxed);
                     continue;
                 }
                 euroapi::push_key(sc & 0x7F, sc & 0x80 == 0);
@@ -6575,6 +6719,10 @@ fn main() -> Status {
                 }
             }
         }
+        // The RDP client: one transport step per tick (sprint N4).
+        if rdpclient::active() && rdpclient::step() {
+            serial_println!("[rdp] session ended");
+        }
         // A WASM app runs one frame per desktop tick under its fuel budget.
         if let Some(done) = wasm::pump(ctx.fs) {
             match done {
@@ -6585,7 +6733,7 @@ fn main() -> Status {
         // A native or WASM app that exited (or was killed) takes its window with it.
         if windows[euro_idx].visible {
             if let Some(pid) = euroapi::focus() {
-                if !ring3::bg_alive(pid) && !wasm::app_alive(pid) {
+                if !ring3::bg_alive(pid) && !wasm::app_alive(pid) && !(pid == rdpclient::RDP_PID && rdpclient::active()) {
                     let why = ring3::bg_end_reason(pid).unwrap_or_default();
                     serial_println!("[euroapp] pid {pid} ended ({why}): closing its window");
                     euroapi::remove(pid);

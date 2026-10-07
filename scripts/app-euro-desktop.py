@@ -15,6 +15,10 @@ os.makedirs(OUT, exist_ok=True)
 LOG = os.path.join(OUT, "serial.log"); QMP = os.path.join(OUT, "qmp.sock")
 WAIT = int(os.environ.get("WAIT", "60"))
 APP = os.environ.get("APP", "hello-euro")  # hello-euro (native) or hello-euro-wasm
+NET = os.environ.get("NET", "") == "1"      # attach user-mode networking (the app store needs it)
+# CMDS: extra Terminal commands typed before `app run`, separated by ';' (e.g. the store flow)
+CMDS = [c.strip() for c in os.environ.get("CMDS", "").split(";") if c.strip()]
+RAW_CMD = os.environ.get("RAW_CMD", "")   # typed instead of `app run APP` (e.g. an rdp command)
 
 # be-azerty: letters a/q, z/w swapped, m on the qwerty semicolon key, digits shifted,
 # '-' on the qwerty equal key (same table as scripts/qmp-input.py).
@@ -29,7 +33,8 @@ except FileNotFoundError: pass
 p = subprocess.Popen(["qemu-system-x86_64", "-machine", "q35", "-cpu", "qemu64,+smep,+smap", "-m", "3072M",
     "-bios", "/usr/share/ovmf/OVMF.fd", "-display", "none", "-serial", f"file:{LOG}",
     "-qmp", f"unix:{QMP},server,nowait", "-no-reboot", "-drive", "format=raw,file=eurokernel.img",
-    "-device", "qemu-xhci,id=xhci", "-device", "usb-kbd", "-device", "usb-tablet"],
+    "-device", "qemu-xhci,id=xhci", "-device", "usb-kbd", "-device", "usb-tablet"]
+    + (["-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"] if NET else []),
     stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 for _ in range(100):
     if os.path.exists(QMP): break
@@ -68,7 +73,12 @@ if ok:
     shot("desktop.png")
     click(1100, 171)  # the Terminal's title bar: give it keyboard focus
     time.sleep(1)
-    for ch in f"app run {APP}\n":
+    for c in CMDS:
+        for ch in c + "\n":
+            key(AZ[ch])
+        print(f"typed {c!r}", flush=True)
+        time.sleep(int(os.environ.get("CMD_WAIT", "25")))
+    for ch in (RAW_CMD + "\n") if RAW_CMD else f"app run {APP}\n":
         key(AZ[ch])
     print(f"typed at {int(time.time()-t0)}s", flush=True)
     time.sleep(WAIT)
@@ -77,9 +87,9 @@ try: cmd({"execute": "quit"})
 except Exception: pass
 p.wait(timeout=30)
 txt = log()
-launched = "launched natively" in txt or "launched in the WASM sandbox" in txt
+launched = "launched natively" in txt or "launched in the WASM sandbox" in txt or "[rdp] session ACTIVE" in txt
 print("launched-in-window:", launched)
 for l in txt.splitlines():
-    if APP in l or "[euroapp" in l or "launch failed" in l or "[euroapi]" in l:
+    if APP in l or "[euroapp" in l or "launch failed" in l or "[euroapi]" in l or "[rdp]" in l:
         print("   ", l[:160])
 sys.exit(0 if ok and launched else 1)

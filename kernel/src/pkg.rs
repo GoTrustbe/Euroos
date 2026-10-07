@@ -274,7 +274,10 @@ const EFUZZ_EUPKG: &[u8] = include_bytes!("../../toolchain/eupkg/efuzz-1.0.0.eup
 const EXAMPLE_DEV_PUB: &[u8] = include_bytes!("../../toolchain/eupkg/example-dev.pub");
 
 /// Enrolled developer keys: `name\thex64` per line.
-fn trusted_keys(fs: &mut dyn FileSystem) -> Vec<(String, [u8; 32])> {
+pub(crate) fn hello_euro_eupkg() -> &'static [u8] { HELLO_EURO_EUPKG }
+pub(crate) fn hello_cli_eupkg() -> &'static [u8] { HELLO_CLI_EUPKG }
+
+pub(crate) fn trusted_keys(fs: &mut dyn FileSystem) -> Vec<(String, [u8; 32])> {
     let data = match fs.read_file(TRUST_FILE) { Ok(d) => d, Err(_) => return Vec::new() };
     let mut out = Vec::new();
     for line in String::from_utf8_lossy(&data).lines() {
@@ -298,6 +301,15 @@ fn verify_with_any(keys: &[(String, [u8; 32])], msg: &[u8], sig: &[u8]) -> bool 
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
     let Ok(sig) = Signature::from_slice(sig) else { return false };
     keys.iter().any(|(_, k)| VerifyingKey::from_bytes(k).map(|vk| vk.verify(msg, &sig).is_ok()).unwrap_or(false))
+}
+
+/// An engine whose verifier accepts the EuroOS key or any of `keys` (the app
+/// store passes the key its signed index vouches for).
+pub(crate) fn with_engine_keys<R>(fs: &mut dyn FileSystem, keys: Vec<(String, [u8; 32])>, f: impl FnOnce(&mut PkgEngine) -> R) -> R {
+    let verify = move |m: &[u8], s: &[u8]| verify_with_any(&keys, m, s);
+    let mut ad = FsAdapter(fs);
+    let mut eng = PkgEngine { fs: &mut ad, verify: &verify, sha256: &sha256, root: "/pkg", bin_dir: "/bin" };
+    f(&mut eng)
 }
 
 fn with_app_engine<R>(fs: &mut dyn FileSystem, f: impl FnOnce(&mut PkgEngine) -> R) -> R {
@@ -437,14 +449,19 @@ pub fn app_shell(fs: &mut dyn FileSystem, args: &str) -> Vec<String> {
             out
         }
         (Some("surfaces"), _, _) => crate::euroapi::status_lines(),
-        (Some("install"), Some(p), _) => install_file(fs, p),
+        (Some("install"), Some(p), _) => {
+            // The package store is system data; the owner's shell runs with the
+            // session uid-context, so the install itself runs as the system.
+            if is_owner() { crate::sysctx::as_system(fs, |fs| install_file(fs, p)) } else { alloc::vec![String::from("app install: only the owner (uid 0 or wheel) may install")] }
+        }
         (Some("trust"), Some(p), name) => {
             let n = name.map(String::from).unwrap_or_else(|| String::from(p.rsplit('/').next().unwrap_or(p).trim_end_matches(".pub")));
             trust(fs, p, &n)
         }
         (Some("trusted"), _, _) => trusted(fs),
-        (Some("remove"), Some(n), _) => remove(fs, n),
-        _ => alloc::vec![String::from("app: installed | install <file.eupkg> | trust <file.pub> [name] | trusted | remove <name> | run <name>")],
+        (Some("remove"), Some(n), _) => if is_owner() { crate::sysctx::as_system(fs, |fs| remove(fs, n)) } else { alloc::vec![String::from("app remove: only the owner may remove")] },
+        (Some("store"), sub, arg) => crate::appstore::shell(fs, sub, arg),
+        _ => alloc::vec![String::from("app: installed | install <file.eupkg> | trust <file.pub> [name] | trusted | remove <name> | run <name> | store [refresh|install <name>]")],
     }
 }
 

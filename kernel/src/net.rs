@@ -3638,6 +3638,28 @@ pub struct HttpsFetch {
     idle: u32,
     finished: bool,
 }
+/// A non-blocking TCP connection to `host:port` (name or dotted IPv4) through
+/// the configured interface: the same resolution HttpsFetch does (sprint N4,
+/// the RDP client). None = no network or the name does not resolve.
+pub fn tcp_connect_nowait_to(host: &str, port: u16) -> Option<TcpConn> {
+    let cfg = get()?;
+    let server = match parse_ipv4(host) {
+        Some(ip) => ip,
+        None => hosts_lookup(host).or_else(|| dns_query(cfg.my_mac, cfg.my_ip, cfg.dns_mac, cfg.dns_ip, host))?,
+    };
+    let nexthop = if same_subnet(server, cfg.my_ip) {
+        arp_resolve(cfg.my_mac, cfg.my_ip, server).unwrap_or(cfg.gw_mac)
+    } else {
+        cfg.gw_mac
+    };
+    Some(TcpConn::connect_nowait(cfg.my_mac, cfg.my_ip, nexthop, server, port))
+}
+
+/// 32 bytes of entropy for a TLS client (random / key share scalar).
+pub fn entropy(i: u8) -> [u8; 32] {
+    gather_entropy(i)
+}
+
 impl HttpsFetch {
     /// Steps without any incoming byte before the fetch gives up (~10 ms per
     /// desktop-loop step → about 60 s of silence).

@@ -42,7 +42,7 @@ class Vm:
         except FileNotFoundError: pass
         self.p = subprocess.Popen([
             "qemu-system-x86_64", "-machine", "q35", "-cpu", "qemu64,+smep,+smap",
-            "-m", "1536M", "-bios", OVMF, "-display", "none",
+            "-m", "2048M", "-bios", OVMF, "-display", "none",
             "-serial", f"file:{serial}", "-qmp", f"unix:{QMP},server,nowait", "-no-reboot",
         ] + drives, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
         for _ in range(100):

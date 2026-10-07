@@ -630,7 +630,7 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
                 .collect();
             draw_list(fb, &g, &items, wz.disk);
             let min = size_label(euroinstall::minimum_disk_bytes() / MIB);
-            text::draw_px(fb, g.cx, g.y + g.h - 92, &alloc::format!("GPT: ESP + EuroOS-A + EuroOS-B + EuroVar. Minimum {min}."), Color::TEXT_DIM, 11.5);
+            text::draw_px(fb, g.cx, g.y + g.h - 92, &alloc::format!("GPT: ESP + EuroOS-A + EuroOS-B + EuroSwap + EuroVar. Minimum {min}."), Color::TEXT_DIM, 11.5);
         }
         Page::Account => {
             text::draw_px(fb, g.cx, title_y, "Your account", Color::INK, 22.0);
@@ -906,7 +906,7 @@ pub fn selftest() {
                 && matches!(steps.first(), Some(Step::Partition(_)))
                 && steps.last() == Some(&Step::FinalizeBoot);
             let parts_ok = if let Some(Step::Partition(p)) = steps.first() {
-                p.len() == 4 && p.windows(2).all(|w| w[0].start_lba + w[0].sectors <= w[1].start_lba)
+                p.len() == 5 && p.windows(2).all(|w| w[0].start_lba + w[0].sectors <= w[1].start_lba)
             } else {
                 false
             };
@@ -927,7 +927,7 @@ pub fn selftest() {
     let ok = steps_ok && parts_ok && live_ok && langs_ok && keymaps_ok;
     let nsteps = install.as_ref().map(|s| s.len()).unwrap_or(0);
     crate::serial_println!(
-        "[install] EuroInstall planner: {nsteps}-step A/B install (FDE before format={steps_ok}, 4 non-overlapping partitions={parts_ok}), live mode leaves disk alone={live_ok}, wizard lists valid (langs={langs_ok}, keymaps={keymaps_ok}) → {}",
+        "[install] EuroInstall planner: {nsteps}-step A/B install (FDE before format={steps_ok}, 5 non-overlapping partitions={parts_ok}), live mode leaves disk alone={live_ok}, wizard lists valid (langs={langs_ok}, keymaps={keymaps_ok}) → {}",
         if ok { "OK (guided install + live image, host-tested planner) ✓" } else { "FAILED" }
     );
 }

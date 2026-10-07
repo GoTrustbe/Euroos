@@ -37,6 +37,7 @@ euroupdate = { path = "../crates/euroupdate" }
 eurosandbox = { path = "../crates/eurosandbox" }
 eurodisplay = { path = "../crates/eurodisplay" }
 eurowasm = { path = "../crates/eurowasm" }
+eurordp = { path = "../crates/eurordp" }
 eurowl = { path = "../crates/eurowl" }
 eurousb = { path = "../crates/eurousb" }
 euroaudio = { path = "../crates/euroaudio" }

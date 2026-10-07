@@ -336,6 +336,21 @@ pub fn file_path_ok(path: &str) -> Option<String> {
     }
 }
 
+/// Does any component of the absolute path `abs` (inside the home) resolve
+/// through a symlink? EuroFS follows symlinks on every read, so a link the user
+/// placed in their home could point outside the scope; refuse those paths.
+pub fn path_has_symlink(fs: &dyn eurofs::FileSystem, abs: &str) -> bool {
+    let mut prefix = String::new();
+    for comp in abs.split('/').filter(|c| !c.is_empty()) {
+        prefix.push('/');
+        prefix.push_str(comp);
+        if fs.read_link(&prefix).is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Lines the `euro` shell diagnostic shows.
 pub fn status_lines() -> Vec<String> {
     with_surfaces(|s| {

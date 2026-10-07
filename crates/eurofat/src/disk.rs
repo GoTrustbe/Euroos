@@ -39,6 +39,8 @@ const ESP_TYPE: [u8; 16] = [
 
 /// Own EuroFS partition type — MUST equal `kernel::gpt::EUROFS_TYPE`,
 /// otherwise the kernel will not find the root partition (`find_eurofs_partition`).
+/// EuroSwap partition type (sprint N2): raw swap slots for the demand pool.
+const EUROSWAP_TYPE: [u8; 16] = [0x45, 0x75, 0x72, 0x6F, 0x53, 0x77, 0x61, 0x70, 0x20, 0x32, 0x30, 0x32, 0x36, 0x2D, 0x31, 0x30];
 const EUROFS_TYPE: [u8; 16] = [
     0x45, 0x55, 0x52, 0x4f, 0x46, 0x53, 0x00, 0x01, 0x80, 0x00, 0x00, 0x45, 0x55, 0x52, 0x4f, 0x53,
 ];
@@ -68,6 +70,9 @@ pub struct Layout {
     pub slot_sectors: u64,
     pub eurofs_first: u64,
     pub eurofs_sectors: u64,
+    /// EuroSwap partition (raw swap slots) after the EuroFS root (sprint N2).
+    pub swap_first: u64,
+    pub swap_sectors: u64,
     pub backup_lba: u64,
 }
 
@@ -81,9 +86,12 @@ pub fn layout_for(total_sectors: u64) -> Layout {
     let slot_a_first = align8(esp_last + 1);
     let slot_b_first = slot_a_first + slot_sectors;
     let fs_first = slot_b_first + slot_sectors;
-    // A disk too small for the slots gets an empty root range instead of an
-    // arithmetic underflow; the installer refuses such a disk up front.
-    let fs_last = last_usable.saturating_sub(1).max(fs_first);
+    // EuroSwap (sprint N2): raw swap slots for the demand pool at the END of the
+    // disk, 8% of it and at least 64 MiB; the EuroFS root takes what is left.
+    let swap_sectors = align8((total_sectors * 8 / 100).max(64 * 1024 * 1024 / SECTOR as u64));
+    let swap_last = last_usable.saturating_sub(1);
+    let swap_first = swap_last.saturating_sub(swap_sectors - 1).max(fs_first + 8);
+    let fs_last = swap_first.saturating_sub(1).max(fs_first);
     Layout {
         esp_first,
         esp_sectors,
@@ -92,6 +100,8 @@ pub fn layout_for(total_sectors: u64) -> Layout {
         slot_sectors,
         eurofs_first: fs_first,
         eurofs_sectors: (fs_last + 1).saturating_sub(fs_first),
+        swap_first,
+        swap_sectors: (swap_last + 1).saturating_sub(swap_first),
         backup_lba: total_sectors - 1,
     }
 }
@@ -102,6 +112,9 @@ fn part_array(l: &Layout) -> Vec<u8> {
     fill_entry(&mut arr, 1, &EUROFS_TYPE, l.eurofs_first, l.eurofs_first + l.eurofs_sectors - 1, "EuroOS-A", 0x30);
     fill_entry(&mut arr, 2, &EUROSLOT_TYPE, l.slot_a_first, l.slot_a_first + l.slot_sectors - 1, "EuroSlot-A", 0x50);
     fill_entry(&mut arr, 3, &EUROSLOT_TYPE, l.slot_b_first, l.slot_b_first + l.slot_sectors - 1, "EuroSlot-B", 0x70);
+    if l.swap_sectors > 0 {
+        fill_entry(&mut arr, 4, &EUROSWAP_TYPE, l.swap_first, l.swap_first + l.swap_sectors - 1, "EuroSwap", 0x90);
+    }
     arr
 }
 

@@ -1,0 +1,8 @@
+[package]
+name = "eurordp"
+version = "0.1.0"
+edition = "2021"
+license = "EUPL-1.2"
+description = "RDP client core (X.224, MCS/GCC, capabilities, bitmap updates, input) from scratch, no_std"
+
+[dependencies]

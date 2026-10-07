@@ -29,6 +29,12 @@ const HUGE: u64 = 1 << 7;
 /// Marker bit in a NON-present PTE: "this page is swapped out". Because present=0
 /// the CPU ignores all the other bits, so we may freely encode the swap slot in them.
 const SWAPPED: u64 = 1 << 9;
+/// Sprint N2: a swapped-out PTE remembers that the page was a USER page (the
+/// demand pool of a Linux-ABI process), so swap-in restores the USER bit and
+/// takes its frame from the demand pool instead of the reserve.
+const USER_MARK: u64 = 1 << 10;
+const USER: u64 = 1 << 2;
+const ACCESSED: u64 = 1 << 5;
 const PHYS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 const SECTORS_PER_PAGE: u64 = 8; // 4096 / 512
 
@@ -56,11 +62,17 @@ fn active_pml4() -> *mut u64 {
 /// Walk the 4 levels down to the PTE (4 KiB) of `virt`. Returns None for a huge page
 /// or a missing intermediate level (then it is not a swappable 4 KiB page).
 unsafe fn walk_pte(virt: u64) -> Option<*mut u64> {
+    walk_pte_in(active_pml4(), virt)
+}
+
+/// The PTE of `virt` in the address space `pml4` (any process: the tables are
+/// identity-mapped, so a walk needs no CR3 switch).
+unsafe fn walk_pte_in(pml4: *mut u64, virt: u64) -> Option<*mut u64> {
     let i4 = ((virt >> 39) & 0x1FF) as isize;
     let i3 = ((virt >> 30) & 0x1FF) as isize;
     let i2 = ((virt >> 21) & 0x1FF) as isize;
     let i1 = ((virt >> 12) & 0x1FF) as isize;
-    let e4 = *active_pml4().offset(i4);
+    let e4 = *pml4.offset(i4);
     if e4 & PRESENT == 0 {
         return None;
     }
@@ -182,44 +194,169 @@ pub fn auto_evict(falloc: &mut FrameAllocator) -> Option<u64> {
 /// present (with the slot encoded), and return the frame to the pool. Returns true
 /// on success. After this, every access to `virt` faults → [`try_swap_in`].
 pub fn swap_out(virt: u64) -> bool {
+    let pml4 = active_pml4() as u64;
+    match swap_out_in(pml4, virt) {
+        Some(frame) => {
+            if let Some(mgr) = MGR.lock().as_mut() {
+                mgr.pool.push(frame);
+            }
+            true
+        }
+        None => false,
+    }
+}
+
+/// Write the page at `virt` of address space `pml4` to a swap slot, mark the
+/// PTE non-present with the slot (and the USER mark), and return its frame to
+/// the caller (who owns it from here on).
+pub fn swap_out_in(pml4: u64, virt: u64) -> Option<u64> {
     let mut guard = MGR.lock();
-    let mgr = match guard.as_mut() {
-        Some(m) => m,
-        None => return false,
-    };
+    let mgr = guard.as_mut()?;
     unsafe {
-        let pte = match walk_pte(virt) {
-            Some(p) => p,
-            None => return false,
-        };
+        let pte = walk_pte_in(pml4 as *mut u64, virt)?;
         let e = *pte;
         if e & PRESENT == 0 {
-            return false; // not (any longer) present → nothing to swap out
+            return None;
         }
         let frame = e & PHYS_MASK;
-        let slot = match mgr.area.alloc() {
-            Some(s) => s,
-            None => return false, // swap full
-        };
-        // Write 4 KiB (8 sectors) of the frame to the swap slot.
+        let slot = mgr.area.alloc()?; // None = swap full
         for s in 0..SECTORS_PER_PAGE {
             let mut sec = [0u8; 512];
             core::ptr::copy_nonoverlapping((frame + s * 512) as *const u8, sec.as_mut_ptr(), 512);
             crate::virtio_blk::write_sector(mgr.base_lba + slot as u64 * SECTORS_PER_PAGE + s, &sec);
         }
         crate::virtio_blk::flush();
-        // PTE non-present + slot encoded in the upper bits + SWAPPED marker.
-        *pte = ((slot as u64) << 12) | SWAPPED;
-        tlb::flush(VirtAddr::new(virt));
-        mgr.pool.push(frame);
+        *pte = ((slot as u64) << 12) | SWAPPED | if e & USER != 0 { USER_MARK } else { 0 };
+        if pml4 == active_pml4() as u64 {
+            tlb::flush(VirtAddr::new(virt));
+        }
         mgr.swap_outs += 1;
+        Some(frame)
+    }
+}
+
+/// CLOCK hands per address space: where the last sweep stopped.
+static HANDS: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+
+/// Under demand-pool pressure: pick a victim page of address space `pml4`
+/// inside `[base, end)` (second chance on the Accessed bit), swap it out and
+/// return its frame. Called from the demand-fault handler of the faulting
+/// process (interrupts off; the virtio I/O busy-polls). None = nothing to
+/// evict or the swap area is full.
+pub fn evict_demand(pml4: u64, base: u64, end: u64) -> Option<u64> {
+    if MGR.lock().is_none() || end <= base {
+        return None;
+    }
+    let start = {
+        let mut h = HANDS.lock();
+        match h.iter().find(|(p, _)| *p == pml4) {
+            Some((_, v)) => *v,
+            None => { h.push((pml4, base)); base }
+        }
+    };
+    let mut virt = start.max(base) & !0xFFF;
+    let pages = ((end - base) / 4096) as u64;
+    // Up to ~three full passes: the first clears Accessed bits, a later one finds
+    // a victim. The budget counts EVERY step, including the cheap crawl over the
+    // process's already-swapped (non-present, still-tabled) pages, so it must be
+    // comfortably more than the region size or a fragmented region starves it.
+    let budget = pages.saturating_mul(3).max(100_000);
+    for _ in 0..budget {
+        if virt >= end {
+            virt = base;
+        }
+        let pte = unsafe { walk_pte_in(pml4 as *mut u64, virt) };
+        let Some(pte) = pte else {
+            // No table here: skip the whole 2 MiB region.
+            virt = (virt + (1 << 21)) & !((1 << 21) - 1);
+            continue;
+        };
+        let e = unsafe { *pte };
+        if e & PRESENT != 0 && e & USER != 0 {
+            if e & ACCESSED != 0 {
+                unsafe { *pte = e & !ACCESSED };
+            } else if let Some(frame) = swap_out_in(pml4, virt) {
+                HANDS.lock().iter_mut().find(|(p, _)| *p == pml4).map(|h| h.1 = virt + 4096);
+                return Some(frame);
+            }
+        } else if e & PRESENT != 0 {
+            // present but not USER (a page table): skip it, never evict it.
+        }
+        virt += 4096;
+    }
+    None
+}
+
+/// Evict up to `n` pages of `pml4` in `[base, end)` to the swap partition and
+/// return their frames to the demand pool. Used when the pool is dry so the
+/// normal fault path can allocate both the data page AND any page-table frames
+/// it needs. Returns how many were reclaimed.
+pub fn reclaim_batch(pml4: u64, base: u64, end: u64, n: usize) -> usize {
+    let mut got = 0;
+    for _ in 0..n {
+        match evict_demand(pml4, base, end) {
+            Some(f) => { crate::procpool::demand_free(f); got += 1; }
+            None => break,
+        }
+    }
+    got
+}
+
+/// Forget the CLOCK hand of an address space that is gone.
+pub fn forget_space(pml4: u64) {
+    HANDS.lock().retain(|(p, _)| *p != pml4);
+}
+
+/// Release a swap slot whose page is being torn down with its process.
+pub fn free_slot(slot: usize) {
+    if let Some(mgr) = MGR.lock().as_mut() {
+        mgr.area.free(slot);
+    }
+}
+
+pub fn active() -> bool {
+    MGR.lock().is_some()
+}
+
+/// (used slots, capacity) in pages.
+pub fn usage() -> (usize, usize) {
+    match MGR.lock().as_ref() {
+        Some(m) => (m.area.used(), m.area.capacity()),
+        None => (0, 0),
+    }
+}
+
+/// Swap `virt` (active address space) back in using `frame` when given (the
+/// demand-fault handler took it from the pool, evicting first if it had to),
+/// else a reserve frame. false = not a swapped page or no frame.
+pub fn swap_in_into(virt: u64, frame: Option<u64>) -> bool {
+    let mut guard = MGR.lock();
+    let Some(mgr) = guard.as_mut() else { return false };
+    unsafe {
+        let Some(pte) = walk_pte(virt) else { return false };
+        let e = *pte;
+        if e & PRESENT != 0 || e & SWAPPED == 0 {
+            return false;
+        }
+        let slot = ((e >> 12) & 0xFFFFF) as usize;
+        let user = e & USER_MARK != 0;
+        let frame = match frame.or_else(|| mgr.pool.pop()) {
+            Some(f) => f,
+            None => return false,
+        };
+        for s in 0..SECTORS_PER_PAGE {
+            let mut sec = [0u8; 512];
+            crate::virtio_blk::read_sector(mgr.base_lba + slot as u64 * SECTORS_PER_PAGE + s, &mut sec);
+            core::ptr::copy_nonoverlapping(sec.as_ptr(), (frame + s * 512) as *mut u8, 512);
+        }
+        *pte = (frame & PHYS_MASK) | PRESENT | WRITABLE | if user { USER } else { 0 };
+        tlb::flush(VirtAddr::new(virt));
+        mgr.area.free(slot);
+        mgr.swap_ins += 1;
     }
     true
 }
 
-/// Called by the page-fault handler: if `virt` is a swapped-out page,
-/// read it back into a fresh frame, make the PTE present again and return true (the
-/// instruction is resumed). False = not a swap page → a real fault.
 pub fn try_swap_in(virt: u64) -> bool {
     // The fault handler runs on the PF IST stack; a plain try_lock prevents a
     // deadlock should a nested fault ever occur while we already hold the lock.
@@ -241,16 +378,23 @@ pub fn try_swap_in(virt: u64) -> bool {
             return false; // present or not-our-marker → real fault
         }
         let slot = ((e >> 12) & 0xFFFFF) as usize;
-        let frame = match mgr.pool.pop() {
+        let user = e & USER_MARK != 0;
+        // A demand-pool page comes back into the demand pool (the reserve is for
+        // the kernel's own swappable pages); if the pool is dry, evict another
+        // page of this process first, then fall back to the reserve.
+        let frame = match if user { crate::procpool::demand_alloc() } else { None } {
             Some(f) => f,
-            None => return false, // no free frame → cannot swap in
+            None => match mgr.pool.pop() {
+                Some(f) => f,
+                None => return false, // no free frame → cannot swap in
+            },
         };
         for s in 0..SECTORS_PER_PAGE {
             let mut sec = [0u8; 512];
             crate::virtio_blk::read_sector(mgr.base_lba + slot as u64 * SECTORS_PER_PAGE + s, &mut sec);
             core::ptr::copy_nonoverlapping(sec.as_ptr(), (frame + s * 512) as *mut u8, 512);
         }
-        *pte = (frame & PHYS_MASK) | PRESENT | WRITABLE;
+        *pte = (frame & PHYS_MASK) | PRESENT | WRITABLE | if user { USER } else { 0 };
         tlb::flush(VirtAddr::new(virt));
         mgr.area.free(slot);
         mgr.swap_ins += 1;

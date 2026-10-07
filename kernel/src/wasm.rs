@@ -662,6 +662,9 @@ impl EuroHost<'_> {
                 let n = a[3].min(crate::euroapi::MAX_FILE as u64);
                 let Some((bp, bn)) = span(mem, a[2], n) else { return EFAULT };
                 let Some(fs) = self.fs.as_deref_mut() else { return -5 };
+                if crate::euroapi::path_has_symlink(&*fs, &path) {
+                    return -13; // a symlink could leave the scope: refused
+                }
                 if nr == 0x610A {
                     match fs.read_file(&path) {
                         Ok(data) => { let k = data.len().min(bn); mem[bp..bp + k].copy_from_slice(&data[..k]); k as i64 }
@@ -810,6 +813,38 @@ pub fn run_cli(bytes: &[u8], pid: u64, caps: u64, fs: &mut dyn FileSystem) -> (V
     }
     crate::euroapi::remove(pid);
     (host.output, code)
+}
+
+/// `[euro-fscope]` self-test: the WASM host's file scope. A symlink the user
+/// placed in their home pointing outside it is refused; a plain file in the
+/// home round-trips.
+pub fn fscope_selftest(fs: &mut dyn FileSystem) {
+    use eurofs::FileSystem as _;
+    let _ = fs.create_dir("/home");
+    let _ = fs.create_dir("/home/euro");
+    let _ = fs.remove_file("/home/euro/escape-link");
+    let link_made = fs.create_symlink("/home/euro/escape-link", "/etc/euroguard/system.conf").is_ok();
+    let mut host = EuroHost { pid: 777, caps: crate::ring3::CAP_FILE, fs: Some(fs), exit: None, output: Vec::new() };
+    let mut mem = vec![0u8; 65536];
+    let p = b"escape-link";
+    mem[..p.len()].copy_from_slice(p);
+    let via_link = host.dispatch(0x610A, [0, p.len() as u64, 4096, 1024, 0], &mut mem);
+    let q = b"scope-test.txt";
+    mem[..q.len()].copy_from_slice(q);
+    mem[8192..8192 + 5].copy_from_slice(b"hello");
+    let wrote = host.dispatch(0x610B, [0, q.len() as u64, 8192, 5, 0], &mut mem);
+    let read = host.dispatch(0x610A, [0, q.len() as u64, 4096, 1024, 0], &mut mem);
+    let roundtrip = wrote == 5 && read == 5 && &mem[4096..4101] == b"hello";
+    let outside = host.dispatch(0x610A, [0, 0, 4096, 1024, 0], &mut mem); // empty path
+    drop(host);
+    let _ = fs.remove_file("/home/euro/escape-link");
+    let _ = fs.remove_file("/home/euro/scope-test.txt");
+    let ok = link_made && via_link == -13 && roundtrip && outside == -13;
+    crate::serial_println!(
+        "[euro-fscope] WASM file scope: symlink-in-home-refused={} · plain-file-roundtrip={roundtrip} · empty-path-refused={} → {}",
+        via_link == -13, outside == -13,
+        if ok { "OK (home only, no symlink escape) ✓" } else { "FAILED" }
+    );
 }
 
 /// A module whose `run` loops forever: the fuel bound must end it (self-test).

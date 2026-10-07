@@ -216,7 +216,10 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             vec![
                 "               total        used        free".to_string(),
                 format!("Mem:    {total:>12} {used:>11} {free:>11}"),
-                "Swap:              0           0           0".to_string(),
+                {
+                    let (used, cap) = crate::swapmgr::usage();
+                    format!("Swap:   {:>12} {:>11} {:>11}", cap * 4, used * 4, (cap - used) * 4)
+                },
             ]
         }
         "date" => {

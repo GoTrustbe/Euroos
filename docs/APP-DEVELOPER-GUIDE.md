@@ -164,3 +164,31 @@ program's code, data and bss must fit in 2 MiB (W^X page table); no network,
 no IPC, no clipboard yet (planned). The kernel re-verifies the binary at
 every launch, as for any app, and checks every pointer you pass against your
 own writable memory (a pointer into your code pages is refused, not faulted).
+
+## 7. The app store: install without a USB stick
+
+EuroOS keeps a signed package index at `https://euro-os.eu/apps/index.json`.
+The index is signed by the EuroOS key (the one baked into the kernel); every
+entry names the developer key that signed its package, so the signed index
+vouches for that key and the package verifies without the user enrolling the
+developer first. A package signed by any other key is refused even when the
+index lists it. Packages are verified as always (Ed25519 over the manifest,
+SHA-256 of the binary) and re-hashed at every launch.
+
+In the Terminal:
+
+```
+app store refresh            # fetch + verify the index over HTTPS (EuroTLS), cache it
+app store                    # list the store with the installed state
+app store install hello-euro # fetch the package, verify, install
+app run hello-euro
+```
+
+The launcher (EU button or the search field) lists store apps that are not
+installed with an "install" tag; choosing one installs it and it then appears
+as an app. The cached index lets the launcher list the store offline.
+
+Getting your app listed: send the `.eupkg` and your public key; the index is
+built with `toolchain/eupkg/make-app-index.py` and published with
+`scripts/publish-apps.sh` by the EuroOS maintainers (the index key is theirs:
+listing is a curation decision, revocation is removing the entry).
