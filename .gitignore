@@ -125,3 +125,4 @@ sdk/examples/*/*.eupkg
 sdk/rust/target/
 sdk/c/hello-euro-c
 sdk/c/*.eupkg
+/crates/eurontfs/tests/ntfs.img
