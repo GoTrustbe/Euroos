@@ -615,6 +615,10 @@ version = "0.1.0"
 [[package]]
 name = "eurordp"
 version = "0.1.0"
+dependencies = [
+ "crypto-bigint",
+ "eurotls",
+]
 
 [[package]]
 name = "euroreken"

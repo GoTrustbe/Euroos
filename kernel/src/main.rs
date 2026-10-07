@@ -31,6 +31,7 @@ mod iommu;
 pub static mut DMA_FALLOC: Option<*mut euromm::FrameAllocator> = None;
 mod appgfx;
 mod appstore;
+mod churn;
 mod euroapi;
 mod rdpclient;
 mod appicons;
@@ -3374,8 +3375,13 @@ fn main() -> Status {
             const FONTS_CONF: &[u8] = b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>Sans</family><prefer><family>DejaVu Sans</family></prefer></alias>\n</fontconfig>\n";
             ring3::register_file("/etc/fonts/fonts.conf", FONTS_CONF.to_vec());
             xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+            // Demand paging on: glibc reserves a 64 MiB (first try 128 MiB) heap for
+            // a thread's malloc arena; a real allocation of that size overflows the
+            // identity arena's mmap window (ENOMEM -> NULL -> the 0x18 write).
+            let prev_demand = ring3::DEMAND_ENABLED.swap(true, core::sync::atomic::Ordering::Relaxed);
             let (opo, epo) = ring3::run_glibc(&mut allocator, ring3::gpango_bytes(), ring3::ldlinux_bytes(), &[b"gpango"], &[b"DISPLAY=:0", b"PATH=/bin", b"FONTCONFIG_PATH=/etc/fonts"], caps_net);
             xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
+            ring3::DEMAND_ENABLED.store(prev_demand, core::sync::atomic::Ordering::Relaxed);
             serial_println!("[glibc] gpango (Pango+HarfBuzz layout): exit={epo}");
             for l in opo.lines() { serial_println!("[glibc]   {l}"); }
         }
@@ -3533,7 +3539,6 @@ fn main() -> Status {
             // A 16 MiB pool for this one process; it asks for 16 + 48 MiB.
             let pool_mib = 16usize;
             ring3::DEMAND_POOL_CAP_FRAMES.store(pool_mib * 256, core::sync::atomic::Ordering::Relaxed);
-            ring3::SWAP_DEMAND_EVICT.store(true, core::sync::atomic::Ordering::Relaxed);
             let (_, cap_pages) = swapmgr::usage();
             let over = 48usize.min(cap_pages * 4 / 1024 / 2).max(8);
             let want = pool_mib + over;
@@ -3547,14 +3552,15 @@ fn main() -> Status {
                 &[b"/bin/gswap", arg.as_bytes()], &[b"PATH=/bin"], ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO);
             ring3::DEMAND_ENABLED.store(prev_demand, core::sync::atomic::Ordering::Relaxed);
             ring3::DEMAND_POOL_CAP_FRAMES.store(0, core::sync::atomic::Ordering::Relaxed);
-            ring3::SWAP_DEMAND_EVICT.store(false, core::sync::atomic::Ordering::Relaxed);
             let (ins, outs) = swapmgr::stats();
             for l in o.lines() { serial_println!("[j3-demand]   {l}"); }
-            let swapped_out = outs > outs0;
+            // gswap exits 0 only after both verification passes (3 on a mismatch); the
+            // console capture of a slow, swapping run can drop lines, so exit is the proof.
+            let ok = e == 0 && outs > outs0 && ins > ins0;
             serial_println!(
-                "[j3-demand] demand-pool swap under pressure: process asked {want} MiB against a {pool_mib} MiB pool · pages-swapped-OUT-to-EuroSwap={} · swap-ins={} · exit={e} · WIP: swap-out proven, transparent swap-in still under development (eviction is OFF by default; a real program falls back to a clean OOM, not a kernel fault) {}",
-                outs - outs0, ins - ins0,
-                if swapped_out { "- swap-out OK" } else { "- NO swap-out" }
+                "[j3-demand] transparent swap on the demand pool: process asked {want} MiB against a {pool_mib} MiB pool · pages-swapped-OUT={} · pages-swapped-IN={} · exit={e} · pattern-verified-twice={} → {}",
+                outs - outs0, ins - ins0, o.contains("verified twice"),
+                if ok { "OK ✓ (anonymous memory beyond the pool lives on EuroSwap and comes back intact)" } else { "FAILED" }
             );
         } else {
             serial_println!("[j3-demand] no swap partition on this boot: skipped");
@@ -3910,6 +3916,15 @@ fn main() -> Status {
     wasm::fscope_selftest(&mut vfs);
     pkg::eurofuzz_selftest(&mut allocator, &mut vfs);
     appstore::selftest(&mut vfs);
+    // Churn: short, sharp lifecycle stress that must leave every counter where it started.
+    churn::proc_churn(&mut allocator);
+    churn::thread_churn(&mut allocator);
+    churn::fork_churn(&mut allocator);
+    churn::fs_churn(&mut vfs);
+    churn::net_churn();
+    churn::surface_churn();
+    churn::pkg_churn(&mut vfs);
+    churn::io_storm(&mut vfs);
 
     // 3E-5: GDB Remote Serial Protocol stub over COM2 — prove the wire protocol
     // against live kernel register/memory state (a real gdb attaches via COM2→tcp).

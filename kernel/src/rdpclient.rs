@@ -10,9 +10,9 @@
 //! process (`RDP_PID`) in the hosted native-app window; keys and pointer
 //! events the desktop routes to that window go back as RDP input events.
 //!
-//! Limits (v1): TLS 1.3 only (EuroTLS), no CredSSP/NLA, no licensing
-//! exchange (xrdp and servers that answer STATUS_VALID_CLIENT), uncompressed
-//! bitmaps, no clipboard or drive redirection.
+//! Limits (v1): TLS 1.3 only (EuroTLS), no CredSSP/NLA, licensing with a
+//! proprietary server certificate only (xrdp; an X.509 chain is next),
+//! uncompressed bitmaps, no clipboard or drive redirection.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -48,7 +48,15 @@ pub fn start(host: &str, port: u16, user: &str, password: &str, w: u32, h: u32) 
         return Err(String::from("rdp: a session is already open (close its window first)"));
     }
     let tcp = crate::net::tcp_connect_nowait_to(host, port).ok_or_else(|| alloc::format!("rdp: cannot resolve or reach {host}"))?;
-    let sess = Session::connect(w as u16, h as u16, "", user, password);
+    let mut sess = Session::connect(w as u16, h as u16, "", user, password);
+    {
+        // Licensing randomness (client random, pre-master secret, hardware id).
+        let mut e = [0u8; 96];
+        e[0..32].copy_from_slice(&crate::net::entropy(2u8));
+        e[32..64].copy_from_slice(&crate::net::entropy(3u8));
+        e[64..96].copy_from_slice(&crate::net::entropy(4u8));
+        sess.set_entropy(&e);
+    }
     if crate::euroapi::create(RDP_PID, w as usize, h as usize) < 0 {
         return Err(String::from("rdp: surface refused"));
     }
@@ -171,6 +179,7 @@ pub fn step() -> bool {
                 }
                 c.bitmaps += 1;
             }
+            Event::Trace(line) => crate::serial_println!("[rdp] {line}"),
             Event::Ended(why) => { let _ = end(c, &why); *g = None; return true; }
         }
     }

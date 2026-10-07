@@ -1692,6 +1692,11 @@ pub fn is_sock_fd(fd: u64) -> bool {
 
 /// socket(AF_INET, SOCK_STREAM): reserve a slot, return the fd number.
 /// -1 if the table is full.
+/// Socket-table slots in use (the [churn-net] leak counter).
+pub fn sockets_in_use() -> usize {
+    SOCKETS.lock().iter().filter(|s| s.is_some()).count()
+}
+
 pub fn sock_open(dgram: bool) -> u64 {
     let mut t = SOCKETS.lock();
     for (i, slot) in t.iter_mut().enumerate() {

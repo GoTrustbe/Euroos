@@ -105,6 +105,11 @@ const EINVAL: i64 = -22;
 const EFBIG: i64 = -27;
 
 /// surface_create: one surface per process, bounded size. Takes focus.
+/// Number of live surfaces (the [churn-surface] leak counter).
+pub fn surface_count() -> usize {
+    with_surfaces(|s| s.len())
+}
+
 pub fn create(pid: u64, w: usize, h: usize) -> i64 {
     if w == 0 || h == 0 || w > MAX_W || h > MAX_H {
         return EINVAL;

@@ -4048,6 +4048,16 @@ pub fn reaped_lines() -> alloc::vec::Vec<String> {
 /// Free the frames of all terminated (zombie) processes and remove them
 /// from the table. Called from the desktop loop (task 0, boot PML4), where it is
 /// safe: a dead process never runs again and its frames are not in use.
+/// Thread kernel stacks currently marked in use (the [churn-proc] leak counter).
+pub fn thread_kstacks_used() -> usize {
+    THREAD_KSTACK_USED.iter().filter(|b| b.load(Ordering::Relaxed)).count()
+}
+
+/// Entries in the global file table (the [churn-proc] leak counter).
+pub fn files_count() -> usize {
+    FILES.lock().len()
+}
+
 pub fn reap_dead(falloc: &mut FrameAllocator) {
     // BUG-007: do NOT hold BG.lock() across the (preemptible) frame-freeing below. If the
     // timer preempts task 0 mid-free, the scheduler may switch to a bg-musl process whose
@@ -6764,6 +6774,8 @@ static BROWSER_ELF: &[u8] = include_bytes!("../../userland/browser.elf");
 static LDLINUX_ELF: &[u8] = include_bytes!("../../userland/glibc/ld-linux-x86-64.so.2");
 static GLIBC_LIBC: &[u8] = include_bytes!("../../userland/glibc/libc.so.6");
 static GTINY_ELF: &[u8] = include_bytes!("../../userland/glibc/gtiny");
+static GTHREADCHURN_ELF: &[u8] = include_bytes!("../../userland/glibc/gthreadchurn");
+static GFORKCHURN_ELF: &[u8] = include_bytes!("../../userland/glibc/gforkchurn");
 static GTEST_ELF: &[u8] = include_bytes!("../../userland/glibc/gtest");
 static GTHREAD_ELF: &[u8] = include_bytes!("../../userland/glibc/gthread");
 // Multi-library test: needs libm.so.6 (a SECOND real shared lib) + dlopen/dlsym.
@@ -6904,6 +6916,8 @@ pub fn ldlinux_bytes() -> &'static [u8] { LDLINUX_ELF }
 pub fn glibc_libc_bytes() -> &'static [u8] { GLIBC_LIBC }
 /// The tiny dynamic glibc test binary.
 pub fn gtiny_bytes() -> &'static [u8] { GTINY_ELF }
+pub fn gthreadchurn_bytes() -> &'static [u8] { GTHREADCHURN_ELF }
+pub fn gforkchurn_bytes() -> &'static [u8] { GFORKCHURN_ELF }
 /// A richer glibc test: printf + malloc + pthreads.
 pub fn gtest_bytes() -> &'static [u8] { GTEST_ELF }
 /// A threaded glibc test: pthread_create + join of 3 workers.
@@ -7519,6 +7533,8 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gtest" => include_bytes!("../../userland/glibc/gtest.sig"),
         "/bin/gthread" => include_bytes!("../../userland/glibc/gthread.sig"),
         "/bin/gtiny" => include_bytes!("../../userland/glibc/gtiny.sig"),
+        "/bin/gthreadchurn" => include_bytes!("../../userland/glibc/gthreadchurn.sig"),
+        "/bin/gforkchurn" => include_bytes!("../../userland/glibc/gforkchurn.sig"),
         "/bin/gunix" => include_bytes!("../../userland/glibc/gunix.sig"),
         "/bin/gunlink" => include_bytes!("../../userland/glibc/gunlink.sig"),
         "/bin/gvdso" => include_bytes!("../../userland/glibc/gvdso.sig"),
@@ -7852,6 +7868,19 @@ fn vdso_prepare(falloc: &mut FrameAllocator) -> bool {
 
 /// Map the prepared vDSO frames into `pml4`. Table frames come from the FRAME
 /// ALLOCATOR, so this works at process-build time — before any demand pool exists.
+/// Tear down a process address space completely: the vDSO's own table chain
+/// (its PML4 slot, tables from falloc; a no-op when no vDSO was mapped) and then
+/// the arena chain + pml4. Every teardown path uses this; freeing only the
+/// arena chain leaked 4 frames per glibc run ([churn-proc], 2026-10-07).
+fn free_process_space(falloc: &mut FrameAllocator, pml4: u64) {
+    let n = crate::paging::free_user_table_chain(falloc, pml4, (VDSO_BASE >> 39) as usize);
+    static DIAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    if DIAG.fetch_add(1, Ordering::Relaxed) < 3 {
+        crate::serial_println!("[glibc] teardown: vDSO table chain freed ({n} frames), then the arena chain");
+    }
+    crate::paging::free_address_space(falloc, pml4);
+}
+
 fn vdso_map_into(falloc: &mut FrameAllocator, pml4: u64) -> bool {
     let imgs = VDSO_IMAGE_FRAMES.lock();
     for (i, &f) in imgs.iter().enumerate() {
@@ -8512,7 +8541,7 @@ pub fn run_dynamic(
     for f in 0..512u64 {
         let _ = falloc.free(arena + f * 4096);
     }
-    crate::paging::free_address_space(falloc, pml4);
+    crate::paging::free_address_space(falloc, pml4); // (vDSO chain: only the run_glibc paths free it, see free_process_space)
     let exit_code = unsafe { EXIT_CODE };
     let out = OUTPUT.lock().clone();
     (out, exit_code)
@@ -8608,7 +8637,7 @@ pub fn run_interp(
     for f in 0..512u64 {
         let _ = falloc.free(arena + f * 4096);
     }
-    crate::paging::free_address_space(falloc, pml4);
+    crate::paging::free_address_space(falloc, pml4); // (vDSO chain: only the run_glibc paths free it, see free_process_space)
     let exit_code = unsafe { EXIT_CODE };
     let out = OUTPUT.lock().clone();
     (out, exit_code)
@@ -9118,6 +9147,11 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
 }
 
 fn do_glibc_fork() -> u64 {
+    static FORKLOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    let fork_log = FORKLOG.fetch_add(1, Ordering::Relaxed) < 4;
+    if fork_log {
+        crate::serial_println!("[fork-acct] fork START: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
+    }
     use x86_64::registers::control::Cr3;
     let parent_pml4 = Cr3::read().0.start_address().as_u64();
     let arena = ARENA_BASE.load(Ordering::Relaxed);
@@ -9512,7 +9546,7 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
     // EuroSwap partition, evicting another page first if the pool is dry. This
     // runs before any fresh-page logic, or the swapped data would be lost.
     if SWAP_DEMAND_EVICT.load(Ordering::Relaxed) && crate::paging::demand_pte_raw(pml4, page) & (1 << 9) != 0 {
-        if crate::procpool::demand_free_frames() == 0 {
+        if crate::procpool::demand_free_frames() < 4 {
             crate::swapmgr::reclaim_batch(pml4, DEMAND_FLOOR.load(Ordering::Relaxed), DEMAND_NEXT.load(Ordering::Relaxed), 8);
         }
         let frame = crate::procpool::demand_alloc();
@@ -9554,6 +9588,10 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
         }
         drop(frames);
         if !crate::paging::map_demand_4k(pml4, page, phys) {
+        static MAPFAIL: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+        if MAPFAIL.fetch_add(1, Ordering::Relaxed) < 4 {
+            crate::serial_println!("[demand] map FAILED at {page:#x} (pool {} free frames; a 2 MiB boundary needs a page-table frame)", crate::procpool::demand_free_frames());
+        }
             return false;
         }
         unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
@@ -9567,7 +9605,9 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
     // and back into the pool, so this fault can allocate both its data page and
     // any page-table frames the mapping needs (sprint N2). A 2 MiB-aligned page
     // needs a fresh page table, hence more than one frame.
-    if SWAP_DEMAND_EVICT.load(Ordering::Relaxed) && crate::procpool::demand_free_frames() == 0 {
+    // A page at a 2 MiB boundary also needs a fresh page table (and at a 1 GiB
+    // boundary a page directory): keep a few frames in hand, not just one.
+    if SWAP_DEMAND_EVICT.load(Ordering::Relaxed) && crate::procpool::demand_free_frames() < 4 {
         crate::swapmgr::reclaim_batch(pml4, DEMAND_FLOOR.load(Ordering::Relaxed), DEMAND_NEXT.load(Ordering::Relaxed), 8);
     }
     let phys = match crate::procpool::demand_alloc() {
@@ -9957,7 +9997,7 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
     let arena = PERSIST_ARENA.swap(0, Ordering::Relaxed);
     let frames = PERSIST_FRAMES.swap(0, Ordering::Relaxed);
     if pml4 != 0 {
-        crate::paging::free_address_space(falloc, pml4);
+        crate::paging::free_address_space(falloc, pml4); // (vDSO chain: only the run_glibc paths free it, see free_process_space)
     }
     if arena != 0 && frames != 0 {
         for i in 0..frames {
@@ -10340,11 +10380,13 @@ fn register_disk_exe_segments(diskidx: usize, dev: usize, doff: u64, exe_base: u
 pub static DEMAND_MARGIN_FRAMES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(8192);
 /// Upper bound on the demand pool of the next spawn, in frames (0 = none).
 pub static DEMAND_POOL_CAP_FRAMES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-/// Demand-pool swap eviction is OFF by default: swap-out works but transparent
-/// swap-IN is still WIP (sustained eviction stops early), so enabling it for a
-/// real program would risk losing a swapped page. The [j3-demand] test turns it
-/// on to exercise swap-out, then off. Production falls back to the clean OOM.
-pub static SWAP_DEMAND_EVICT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Demand-pool swap eviction (sprint N2): when a demand-paged process outgrows
+/// its pool, cold pages of that process go to the EuroSwap partition and come
+/// back on access, instead of the process being ended. ON by default since
+/// 2026-10-07 ([j3-demand]: 64 MiB through a 16 MiB pool, 20856 out / 8524 in,
+/// pattern verified twice). It only ever acts where the alternative was an OOM
+/// kill, and only when a swap partition is present (swapmgr::active).
+pub static SWAP_DEMAND_EVICT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
 
 /// Hand the demand pool's extra backing regions (procpool::demand_install_regions)
 /// back to the main allocator; the first region is freed by the caller as before.
@@ -10804,7 +10846,7 @@ pub fn run_glibc_disk(
         }
         free_demand_extra(falloc);
     }
-    crate::paging::free_address_space(falloc, pml4);
+    free_process_space(falloc, pml4);
     for i in 0..frames as u64 {
         let _ = falloc.free(arena + i * 4096);
     }
@@ -10843,6 +10885,10 @@ pub fn run_glibc(
     envp: &[&[u8]],
     caps: u64,
 ) -> (String, u64) {
+    // [churn-proc] frame accounting (bounded): where does the last frame per run go?
+    static FRAMELOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    let frame_log = FRAMELOG.fetch_add(1, Ordering::Relaxed) < 20;
+    let frames_at_start = falloc.free_frames();
     // Verify before execute. The program is named by argv[0] (a bare name means
     // /bin/<name>); the dynamic loader is verified under its own path. A program
     // without a known, valid signature does not run.
@@ -11123,7 +11169,10 @@ pub fn run_glibc(
     // (never rescheduled) and the launcher runs on the boot PML4, so nothing
     // references this address space. Without this, every run leaked its arena (96 MiB
     // each) and ~8 runs exhausted RAM — and a large arena could never be allocated.
-    crate::paging::free_address_space(falloc, pml4);
+    free_process_space(falloc, pml4);
+    if frame_log {
+        crate::serial_println!("[glibc] frames: start={frames_at_start} end={} (delta {})", falloc.free_frames(), frames_at_start as i64 - falloc.free_frames() as i64);
+    }
     for i in 0..frames as u64 {
         let _ = falloc.free(arena + i * 4096);
     }
@@ -12583,6 +12632,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 }
                 free_thread_kstack(cur); // recycle its kernel stack back to the pool
                 crate::sched::mark_dead(cur);
+                // Drop this thread from the run's registries NOW, so a later reuse
+                // of its slot can never be mistaken for it (teardown iterates the
+                // list and frees kernel stacks), then offer the slot for lazy reuse.
+                GLIBC_THREADS.lock().retain(|&t| t != cur);
+                CHILD_THREADS.lock().retain(|&(t, _)| t != cur);
+                crate::sched::RECLAIMABLE[cur].store(true, Ordering::Relaxed);
                 // Switch away NOW and never come back: this thread is Dead, so it does
                 // not need its (shared, IF=0) syscall stack or user-context preserved —
                 // the usual "don't yield mid-syscall" hazard doesn't apply to a task
@@ -12638,9 +12693,20 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     // Give the child's COMMITTED demand pages back: without this every
                     // dead child leaked its pages and the pool ran dry at ~524 MiB
                     // under MP relaunch churn (run 12 POOL EXHAUSTED).
+                    static EXITLOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+                    let exit_log = EXITLOG.fetch_add(1, Ordering::Relaxed) < 4;
+                    if exit_log {
+                        crate::serial_println!("[fork-acct] child exit BEFORE frees: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
+                    }
                     crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+                    // ... and the child's own page tables under PML4[0] (pdpt, pd,
+                    // 4 KiB PTs: procpool frames), which only the pml4 free used to cover.
+                    crate::paging::free_fork_tables(pml4);
                     crate::procpool::free_range(arena, frames);
                     crate::procpool::free(pml4);
+                    if exit_log {
+                        crate::serial_println!("[fork-acct] child exit AFTER frees: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
+                    }
                     free_thread_kstack(cur);
                     crate::sched::mark_dead(cur);
                     yield_reacquire();
@@ -13176,6 +13242,14 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             } else {
                 let b = (HEAP_BREAK.load(Ordering::Relaxed) + 0xFFF) & !0xFFF;
                 if b + len > HEAP_END.load(Ordering::Relaxed) {
+                    // An ENOMEM here is what a C library then dereferences as NULL
+                    // (gpango's write to 0x18): always worth one line, a few per boot.
+                    static DIAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+                    if DIAG.fetch_add(1, Ordering::Relaxed) < 6 {
+                        crate::serial_println!("[linux-abi] mmap anon {} KiB -> ENOMEM: arena mmap window full (break {b:#x}, end {:#x}, {} KiB left; demand paging {})",
+                            len / 1024, HEAP_END.load(Ordering::Relaxed), HEAP_END.load(Ordering::Relaxed).saturating_sub(b) / 1024,
+                            if DEMAND_ENABLED.load(Ordering::Relaxed) { "on" } else { "off" });
+                    }
                     return (-12i64) as u64; // -ENOMEM
                 }
                 HEAP_BREAK.store(b + len, Ordering::Relaxed);
@@ -13769,7 +13843,15 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         fork_child_release_fds(ctask);
                         child_opened_release(ctask);
                         proc_state_drop(ctask);
-                        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+                        static EXITLOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+                    let exit_log = EXITLOG.fetch_add(1, Ordering::Relaxed) < 4;
+                    if exit_log {
+                        crate::serial_println!("[fork-acct] child exit BEFORE frees: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
+                    }
+                    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+                    // ... and the child's own page tables under PML4[0] (pdpt, pd,
+                    // 4 KiB PTs: procpool frames), which only the pml4 free used to cover.
+                    crate::paging::free_fork_tables(pml4);
                         crate::procpool::free_range(arena, frames);
                         crate::procpool::free(pml4);
                         free_thread_kstack(ctask);
@@ -15758,7 +15840,7 @@ pub fn run_args(
     for f in 0..512u64 {
         let _ = falloc.free(arena_raw + f * 4096);
     }
-    crate::paging::free_address_space(falloc, pml4);
+    crate::paging::free_address_space(falloc, pml4); // (vDSO chain: only the run_glibc paths free it, see free_process_space)
 
     let out = OUTPUT.lock().clone();
     unsafe { (core::ptr::read(core::ptr::addr_of!(EXIT_CODE)), out) }

@@ -26,6 +26,12 @@ const CONTEXT_WORDS: usize = 20; // 15 GP registers + 5 (rip,cs,rflags,rsp,ss)
 
 /// Per-task counter (index 1..3 for the kernel background tasks).
 pub static TASK_COUNTERS: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+/// A Dead task whose slot may be reused by the NEXT spawn, set by the owner
+/// after it released the task's resources and dropped it from its registries
+/// (a glibc worker thread at exit). `alloc_slot` sweeps these lazily before
+/// growing the table, so a process that creates and joins threads in a loop
+/// no longer exhausts the 256 slots ([churn-thread], 2026-10-07).
+pub static RECLAIMABLE: [core::sync::atomic::AtomicBool; MAX_TASKS] = [const { core::sync::atomic::AtomicBool::new(false) }; MAX_TASKS];
 
 /// Task state (S2 scheduler maturity). Replaces the separate `dead`/`blocked`
 /// flags with a full state machine — the basis for blocking I/O,
@@ -998,6 +1004,18 @@ fn alloc_slot(s: &mut Scheduler) -> Option<usize> {
         // task (should always hold, since reclaim_task enforces it).
         if i < s.count && i != s.current && s.tasks[i].state == State::Dead {
             s.tasks[i] = EMPTY_TASK;
+            return Some(i);
+        }
+    }
+    // Lazy reclaim: a finished worker thread flagged RECLAIMABLE (resources
+    // released, registries cleaned) whose slot nobody pushed to free_slots yet,
+    // because a task cannot reclaim itself while current.
+    for i in 0..s.count {
+        if i != s.current && s.tasks[i].state == State::Dead
+            && RECLAIMABLE[i].swap(false, Ordering::Relaxed)
+        {
+            s.tasks[i] = EMPTY_TASK;
+            FPU_VALID[i].store(false, Ordering::Relaxed);
             return Some(i);
         }
     }

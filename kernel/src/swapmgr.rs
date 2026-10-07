@@ -261,6 +261,7 @@ pub fn evict_demand(pml4: u64, base: u64, end: u64) -> Option<u64> {
     // process's already-swapped (non-present, still-tabled) pages, so it must be
     // comfortably more than the region size or a fragmented region starves it.
     let budget = pages.saturating_mul(3).max(100_000);
+    let (mut seen_present, mut cleared, mut out_failed) = (0u64, 0u64, 0u64);
     for _ in 0..budget {
         if virt >= end {
             virt = base;
@@ -273,16 +274,27 @@ pub fn evict_demand(pml4: u64, base: u64, end: u64) -> Option<u64> {
         };
         let e = unsafe { *pte };
         if e & PRESENT != 0 && e & USER != 0 {
+            seen_present += 1;
             if e & ACCESSED != 0 {
+                cleared += 1;
                 unsafe { *pte = e & !ACCESSED };
             } else if let Some(frame) = swap_out_in(pml4, virt) {
                 HANDS.lock().iter_mut().find(|(p, _)| *p == pml4).map(|h| h.1 = virt + 4096);
                 return Some(frame);
+            } else {
+                out_failed += 1;
             }
-        } else if e & PRESENT != 0 {
-            // present but not USER (a page table): skip it, never evict it.
         }
         virt += 4096;
+    }
+    // No victim: say why (bounded). This is the line that explains an OOM under swap.
+    {
+        use core::sync::atomic::{AtomicU32, Ordering};
+        static DIAG: AtomicU32 = AtomicU32::new(0);
+        if DIAG.fetch_add(1, Ordering::Relaxed) < 4 {
+            let (slots_used, slots_cap) = MGR.lock().as_ref().map(|m| (m.area.used(), m.area.capacity())).unwrap_or((0, 0));
+            crate::serial_println!("[swap] evict_demand: NO victim in [{base:#x},{end:#x}) after {budget} steps from hand {start:#x}: present-user-pages-seen={seen_present} accessed-cleared={cleared} swap-out-failed={out_failed} slots {slots_used}/{slots_cap}");
+        }
     }
     None
 }

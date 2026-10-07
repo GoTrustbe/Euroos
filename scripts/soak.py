@@ -69,7 +69,10 @@ if up:
     time.sleep(15)
     click(1100, 171)  # the Terminal title bar: keyboard focus
     time.sleep(1)
-    cmds = ["free", "ls /", "app run hello-euro", "eupkg list", "app run hello-euro-wasm", "app store", "mem", "ls /home/euro"]
+    # Console-only commands: no windowed app (those steal keyboard focus from the
+    # Terminal and break the echo check). This soak measures kernel stability and
+    # memory drift under steady shell load, not the window manager.
+    cmds = ["free", "ls /", "eupkg list", "app store", "mem", "ls /home/euro", "app installed", "ls /bin", "free", "cat /etc/hostname"]
     start = time.time(); last_shot = start; i = 0
     while time.time() - start < DURATION:
         c = cmds[i % len(cmds)]
@@ -83,11 +86,6 @@ if up:
         if not echoed:
             result["missed_echo"].append({"round": i, "cmd": c, "t": int(time.time() - start)})
             print(f"round {i}: NO ECHO for {c!r}", flush=True)
-        if c.startswith("app run"):
-            time.sleep(12)
-            key("esc")  # the example apps quit on Escape (the Terminal regains focus)
-            time.sleep(3)
-            click(1100, 171)
         if c == "free":
             txt = log()[before:]
             for line in txt.splitlines():

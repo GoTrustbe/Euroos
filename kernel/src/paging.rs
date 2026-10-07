@@ -1041,20 +1041,131 @@ pub fn free_address_space(falloc: &mut FrameAllocator, pml4: u64) {
     // SAFETY: pml4 is identity-mapped; we walk the table chain.
     unsafe {
         let pdpt = (pml4 as *const u64).read_volatile() & ADDR_MASK;
-        let pd = (pdpt as *const u64).read_volatile() & ADDR_MASK;
-        // The arena PD entry is the only PRESENT-without-HUGE: it points to the 4 KiB PT.
-        let pdp = pd as *const u64;
-        for i in 0..512usize {
-            let e = pdp.add(i).read_volatile();
-            if e & PRESENT != 0 && e & HUGE == 0 {
-                let _ = falloc.free(e & ADDR_MASK); // the arena PT
-                break;
+        // Under PML4[0] a PDPT entry is either an identity 1 GiB HUGE page (not a
+        // frame of ours) or a page DIRECTORY of this process: the one
+        // build_address_space_rwx made at index 0, and the one(s) map_user_arena
+        // added at the index where the big arena physically lies (get_pd). Free
+        // every such PD and, under it, every PRESENT-without-HUGE entry (a 4 KiB
+        // page table). Freeing only pdpt[0] leaked exactly one PD frame per
+        // glibc run ([churn-proc], 2026-10-07).
+        let pdptp = pdpt as *const u64;
+        for i3 in 0..512usize {
+            let e3 = pdptp.add(i3).read_volatile();
+            if e3 & PRESENT == 0 || e3 & HUGE != 0 {
+                continue;
             }
+            let pd = e3 & ADDR_MASK;
+            let pdp = pd as *const u64;
+            for i in 0..512usize {
+                let e = pdp.add(i).read_volatile();
+                if e & PRESENT != 0 && e & HUGE == 0 {
+                    let _ = falloc.free(e & ADDR_MASK);
+                }
+            }
+            let _ = falloc.free(pd);
         }
-        let _ = falloc.free(pd);
         let _ = falloc.free(pdpt);
         let _ = falloc.free(pml4);
     }
+}
+
+/// Free a fork child's own page tables under PML4[0] (pdpt, pd and every 4 KiB
+/// page table, all from `procpool::alloc` in fill_remap_tables_multiblock) back
+/// to the process pool. The leaf frames (the child's arena) are freed by the
+/// caller as a range; the identity 1 GiB / 2 MiB HUGE entries are not frames
+/// of ours. 3 table frames per fork child leaked without this ([churn-fork]).
+///
+/// CALLED FROM THE CHILD'S OWN EXIT PATH, i.e. while the CPU still runs on
+/// these very tables (CR3 = this pml4, and PML4[0] maps the kernel itself).
+/// So this only marks the frames free in the pool, exactly like the pml4
+/// frame free next to it; it must NOT clear or zero any entry (doing so hung
+/// the boot in a fault loop, churn6). Nothing reuses the frames before the
+/// exit path switches away: single core, no allocation in between.
+pub fn free_fork_tables(pml4: u64) -> usize {
+    let mut freed = 0;
+    // SAFETY: identity-mapped tables; read-only walk, frames only marked free.
+    unsafe {
+        let e4 = (pml4 as *const u64).read_volatile();
+        if e4 & PRESENT == 0 { return 0; }
+        let pdpt = e4 & ADDR_MASK;
+        for i in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i).read_volatile();
+            if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
+            let pd = e3 & ADDR_MASK;
+            for j in 0..512usize {
+                let e2 = (pd as *const u64).add(j).read_volatile();
+                if e2 & PRESENT != 0 && e2 & HUGE == 0 {
+                    crate::procpool::free(e2 & ADDR_MASK); freed += 1;
+                }
+            }
+            crate::procpool::free(pd); freed += 1;
+        }
+        crate::procpool::free(pdpt); freed += 1;
+        // no write_volatile(0): see above, we are running on this table
+    }
+    freed
+}
+
+/// Free the page-TABLE frames under one PML4 slot back to the DEMAND POOL (the
+/// tables of the demand region come from `demand_alloc`, see `map_demand_4k`),
+/// and clear the slot. Leaf frames are not touched: the caller frees those
+/// (free_demand_region_except) before. Returns the number of table frames.
+pub fn free_demand_table_chain(pml4: u64, slot: usize) -> usize {
+    let mut freed = 0;
+    // SAFETY: identity-mapped tables of a process no task runs on anymore.
+    unsafe {
+        let pml4p = (pml4 as *mut u64).add(slot & 0x1FF);
+        let e4 = pml4p.read_volatile();
+        if e4 & PRESENT == 0 { return 0; }
+        let pdpt = e4 & ADDR_MASK;
+        for i in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i).read_volatile();
+            if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
+            let pd = e3 & ADDR_MASK;
+            for j in 0..512usize {
+                let e2 = (pd as *const u64).add(j).read_volatile();
+                if e2 & PRESENT != 0 && e2 & HUGE == 0 {
+                    crate::procpool::demand_free(e2 & ADDR_MASK); freed += 1;
+                }
+            }
+            crate::procpool::demand_free(pd); freed += 1;
+        }
+        crate::procpool::demand_free(pdpt); freed += 1;
+        pml4p.write_volatile(0);
+    }
+    freed
+}
+
+/// Free the page-TABLE frames (pdpt, pd, pt: never the leaf data frames) under
+/// one PML4 slot of a process address space, and clear the slot. For the
+/// per-process chains built with `map_user_4k_falloc` (the vDSO at its own
+/// slot): those tables come from the frame allocator and `free_address_space`
+/// does not reach them, which leaked 3 frames per glibc run ([churn-proc]).
+/// Must be called BEFORE `free_address_space` (which frees the pml4 frame).
+pub fn free_user_table_chain(falloc: &mut FrameAllocator, pml4: u64, slot: usize) -> usize {
+    let mut freed = 0;
+    // SAFETY: identity-mapped tables of a process no task runs on anymore.
+    unsafe {
+        let pml4p = (pml4 as *mut u64).add(slot & 0x1FF);
+        let e4 = pml4p.read_volatile();
+        if e4 & PRESENT == 0 { return 0; }
+        let pdpt = e4 & ADDR_MASK;
+        for i in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i).read_volatile();
+            if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
+            let pd = e3 & ADDR_MASK;
+            for j in 0..512usize {
+                let e2 = (pd as *const u64).add(j).read_volatile();
+                if e2 & PRESENT != 0 && e2 & HUGE == 0 {
+                    let _ = falloc.free(e2 & ADDR_MASK); freed += 1;
+                }
+            }
+            let _ = falloc.free(pd); freed += 1;
+        }
+        let _ = falloc.free(pdpt); freed += 1;
+        pml4p.write_volatile(0);
+    }
+    freed
 }
 
 /// Build the page tables and load CR3. Returns the physical PML4 address.

@@ -18,6 +18,8 @@
 
 extern crate alloc;
 
+pub mod license;
+pub mod rle;
 pub mod mcs;
 pub mod rdp;
 pub mod x224;
@@ -51,6 +53,8 @@ pub enum Phase {
 /// What the caller must act on.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Event {
+    /// Bounded diagnostic line for the transport to log.
+    Trace(String),
     /// Start TLS on the connection (the server selected PROTOCOL_SSL).
     StartTls,
     /// The session is active: `width` x `height` at `bpp`.
@@ -79,6 +83,12 @@ pub struct Session {
     bpp: u16,
     final_seen: u8,
     time_ms: u32,
+    pdu_trace: u8,
+    /// 96 bytes from the kernel's entropy: client random (32), pre-master
+    /// secret (48), hardware id (16). Zero until `set_entropy`; a licensing
+    /// exchange with zero entropy is refused (the session ends, never fakes).
+    entropy: [u8; 96],
+    lic_keys: Option<license::Keys>,
 }
 
 impl Session {
@@ -103,6 +113,9 @@ impl Session {
             height,
             bpp: 16,
             final_seen: 0,
+            pdu_trace: 0,
+            entropy: [0u8; 96],
+            lic_keys: None,
             time_ms: 0,
         };
         s.out = x224::connection_request(x224::PROTOCOL_SSL, Some("euroos"));
@@ -158,6 +171,65 @@ impl Session {
             self.phase = Phase::Ended;
             self.events.push(Event::Ended(String::from(why)));
         }
+    }
+
+    /// Randomness for the licensing exchange (client random, pre-master secret,
+    /// hardware id). Must come from the kernel's CSPRNG before the Client Info.
+    pub fn set_entropy(&mut self, e: &[u8; 96]) {
+        self.entropy = *e;
+    }
+
+    /// One step of the licensing exchange (MS-RDPELE), driven by the server's
+    /// message type. Wraps every client message in the SEC_LICENSE_PKT header.
+    fn licensing(&mut self, msg_type: u8, lic: &[u8]) {
+        use license::*;
+        if self.entropy.iter().all(|&b| b == 0) {
+            self.end("licensing: no entropy (set_entropy first)");
+            return;
+        }
+        let Some((_, body)) = split(lic) else { self.end("licensing: malformed message"); return };
+        match msg_type {
+            MSG_LICENSE_REQUEST => {
+                let Some(req) = parse_license_request(body) else { self.end("licensing: bad LICENSE_REQUEST"); return };
+                let Some(key) = req.key else {
+                    self.end("licensing: server certificate unusable (neither a proprietary RSA key nor an X.509 chain with an RSA key)");
+                    return;
+                };
+                let mut cr = [0u8; 32]; cr.copy_from_slice(&self.entropy[0..32]);
+                let mut pm = [0u8; 48]; pm.copy_from_slice(&self.entropy[32..80]);
+                let Some(msg) = new_license_request(&key, &cr, &pm, &self.user, "euroos") else {
+                    self.end("licensing: server RSA key unusable"); return;
+                };
+                self.lic_keys = Some(derive_keys(&pm, &cr, &req.server_random));
+                self.send_license(&msg);
+            }
+            MSG_PLATFORM_CHALLENGE => {
+                let Some(keys) = self.lic_keys.as_ref() else { self.end("licensing: challenge before request"); return };
+                let Some(chal) = parse_platform_challenge(body, keys) else { self.end("licensing: bad PLATFORM_CHALLENGE"); return };
+                let mut hw = [0u8; 16]; hw.copy_from_slice(&self.entropy[80..96]);
+                let msg = platform_challenge_response(&chal, keys, &hw);
+                self.send_license(&msg);
+            }
+            MSG_NEW_LICENSE | MSG_UPGRADE_LICENSE => {
+                self.phase = Phase::Capabilities;
+            }
+            MSG_ERROR_ALERT => {
+                // STATUS_VALID_CLIENT is handled as License::Done upstream; any
+                // other error alert here means the server rejected the exchange.
+                let code = body.get(0..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(0);
+                if code == 0x0000_0007 { self.phase = Phase::Capabilities; }
+                else { self.end("licensing: server error alert"); }
+            }
+            _ => self.end("licensing: unexpected message"),
+        }
+    }
+
+    fn send_license(&mut self, msg: &[u8]) {
+        let mut v = Vec::with_capacity(4 + msg.len());
+        v.extend_from_slice(&rdp::SEC_LICENSE_PKT.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(msg);
+        self.send_mcs(&v);
     }
 
     fn send_mcs(&mut self, data: &[u8]) {
@@ -248,8 +320,9 @@ impl Session {
                     return;
                 }
                 Some(rdp::License::Request(t)) => {
-                    let _ = t;
-                    self.end("server requires a licensing exchange (not supported in v1)");
+                    // The licensing message follows the 4-byte security header.
+                    let lic: Vec<u8> = d.get(4..).map(|x| x.to_vec()).unwrap_or_default();
+                    self.licensing(t, &lic);
                     return;
                 }
                 None => {
@@ -259,6 +332,21 @@ impl Session {
             }
         }
         let Some((_, typ, body)) = rdp::share_control(d) else { return };
+        // Bounded trace of what the server sends after the connection sequence:
+        // which share-control / data PDU types arrive (diagnosing a blank window).
+        if self.pdu_trace < 24 {
+            self.pdu_trace += 1;
+            let t2 = if typ == 7 { body.get(8).copied().unwrap_or(0xFF) } else { 0xFF };
+            // share-data header: shareId(4) pad(1) streamId(1) uncompLen(2) pduType2(1)
+            // compType(1) compLen(2) → the update data (updateType u16) starts at 12.
+            let upd = if typ == 7 && t2 == 2 { body.get(12..14).map(|b| u16::from_le_bytes([b[0], b[1]])).unwrap_or(0xFFFF) } else { 0xFFFF };
+            let mut hex = String::new();
+            if typ == 7 && t2 == 2 {
+                use core::fmt::Write;
+                for b in body.iter().skip(8).take(44) { let _ = write!(hex, "{b:02x}"); }
+            }
+            self.events.push(Event::Trace(alloc::format!("pdu type={typ} pduType2={t2:#x} updateType={upd:#x} len={} data[8..52]={hex}", d.len())));
+        }
         match typ {
             rdp::PDUTYPE_DEMANDACTIVE => {
                 let Some(da) = rdp::parse_demand_active(body) else { self.end("bad Demand Active"); return };
@@ -288,9 +376,6 @@ impl Session {
                 Some(rdp::ServerData::Bitmaps(rects)) => {
                     let mut evs = Vec::new();
                     for r in rects {
-                        if r.compressed {
-                            continue; // v1 negotiates uncompressed bitmaps; ignore others
-                        }
                         if let Some(px) = bitmap_to_xrgb(&r) {
                             evs.push(Event::Bitmap { x: r.left, y: r.top, w: r.width, h: r.height, pixels: px });
                         }
@@ -337,13 +422,20 @@ pub fn bitmap_to_xrgb(r: &rdp::BitmapRect) -> Option<Vec<u32>> {
         return None;
     }
     let bytes_pp = match r.bpp { 15 | 16 => 2, 24 => 3, 32 => 4, _ => return None };
-    let stride = (w * bytes_pp + 3) & !3; // rows padded to 4 bytes
-    if r.data.len() < stride * h {
+    // A compressed rect is interleaved RLE: decompress to raw bottom-up bytes
+    // with no row padding; an uncompressed rect's rows are padded to 4 bytes.
+    let (data, stride): (alloc::borrow::Cow<[u8]>, usize) = if r.compressed {
+        let raw = rle::decompress(r.data, w, h, bytes_pp)?;
+        (alloc::borrow::Cow::Owned(raw), w * bytes_pp)
+    } else {
+        ((alloc::borrow::Cow::Borrowed(r.data)), (w * bytes_pp + 3) & !3)
+    };
+    if data.len() < stride * h {
         return None;
     }
     let mut out = Vec::with_capacity(w * h);
     for row in 0..h {
-        let src = &r.data[(h - 1 - row) * stride..];
+        let src = &data[(h - 1 - row) * stride..];
         for x in 0..w {
             let px = match r.bpp {
                 16 => {
@@ -454,7 +546,7 @@ mod tests {
         fmp.extend_from_slice(&fm);
         s.receive(&x224::data(&sdi(1003, &fmp)));
         assert_eq!(s.phase(), Phase::Active);
-        assert_eq!(s.take_events(), alloc::vec![Event::Active { width: 1024, height: 768, bpp: 16 }]);
+        assert_eq!(s.take_events().into_iter().filter(|e| !matches!(e, Event::Trace(_))).collect::<Vec<_>>(), alloc::vec![Event::Active { width: 1024, height: 768, bpp: 16 }]);
         s.input(&[rdp::Input::Move { x: 1, y: 2 }]);
         assert!(!s.take_output().is_empty());
     }

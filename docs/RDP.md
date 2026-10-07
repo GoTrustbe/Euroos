@@ -24,9 +24,11 @@ or the window's close button ends the session.
   same connection, then MCS/GCC (one I/O channel, no virtual channels), the
   Client Info PDU with the credentials, Demand/Confirm Active with 16
   capability sets, the finalization PDUs, and then the session.
-- No drawing orders are announced, so the server sends bitmap updates;
-  bitmaps are negotiated uncompressed at 16 bpp and converted to the
-  window's pixels. Input: scancodes, unicode, pointer motion, buttons, wheel.
+- No drawing orders are announced, so the server sends bitmap updates. The
+  bitmaps come back interleaved-RLE compressed (xrdp compresses by default and
+  a client cannot turn that off); EuroOS decompresses them (crates/eurordp
+  rle.rs, 15/16/24/32 bpp) and converts to the window's pixels. Input:
+  scancodes, unicode, pointer motion, buttons, wheel.
 **Live result (2026-10-07):** against a real xrdp server (docker
 `danielguerra/ubuntu-xrdp`, reached from the QEMU guest as `10.0.2.2` over
 user-mode networking), `rdp test` establishes the TCP connection, negotiates
@@ -48,10 +50,18 @@ bitmap updates, input) against synthesized server PDUs.
   Windows default) refuses the connection with "hybrid required". Disable
   NLA on the host for v1 ("Allow connections from computers running any
   version of Remote Desktop"); CredSSP (NTLM/Kerberos over TLS) is planned.
-- No licensing exchange: a server that sends a licence REQUEST (this xrdp
-  build, and Windows Server) is declined; the next rung implements the RDP
-  licensing protocol (client new-license / platform-challenge, RSA + MD5 +
-  RC4). A server configured to answer STATUS_VALID_CLIENT proceeds today.
+- Licensing (MS-RDPELE) is implemented: new-license request (RSA-encrypted
+  pre-master secret), platform challenge / response (RC4, MD5/SHA-1 MAC),
+  new-license or STATUS_VALID_CLIENT. The server key is taken from either a
+  PROPRIETARY certificate (xrdp) or an X.509 chain (Windows: the leaf's RSA
+  key via eurotls x509). The chain's signatures are not verified (the
+  session is already inside TLS). The licence is not stored; every session
+  asks for a new one, which servers grant for the grace period. Host-tested
+  (27 tests, incl. an openssl-made RSA certificate round trip and the RLE
+  decoder). **Live proof (2026-10-07): the real XFCE desktop of an Ubuntu
+  xrdp server renders in an EuroOS window** over TCP + X.224 + EuroTLS 1.3 +
+  MCS + licensing + RLE bitmaps (docs/proof/2026-10-07-rdp-remote-desktop-paints.png).
 - The server certificate is not validated (RDP servers are self-signed);
   trust-on-first-use with a fingerprint prompt comes with the settings UI.
-- No RLE-compressed bitmaps, no clipboard, no drive or audio redirection.
+- No clipboard, no drive or audio redirection; no fast-path input/output
+  (slow-path only); no drawing orders (bitmap updates only).

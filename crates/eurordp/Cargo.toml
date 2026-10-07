@@ -6,3 +6,6 @@ license = "EUPL-1.2"
 description = "RDP client core (X.224, MCS/GCC, capabilities, bitmap updates, input) from scratch, no_std"
 
 [dependencies]
+crypto-bigint = { version = "0.5", default-features = false }
+# X.509 certificate chains in the licence request (Windows servers): the SPKI RSA key.
+eurotls = { path = "../eurotls" }
