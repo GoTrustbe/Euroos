@@ -30,6 +30,7 @@ mod iommu;
 /// `iommu::program` (the desktop's scanout and hot-plugged USB buffers).
 pub static mut DMA_FALLOC: Option<*mut euromm::FrameAllocator> = None;
 mod appgfx;
+mod apppolicy;
 mod appstore;
 mod churn;
 mod euroapi;
@@ -481,6 +482,10 @@ fn launch_installed_app(ctx: &mut shell::ShellCtx, name: &str) -> (bool, String)
     }
     ring3::NEXT_SPAWN_PROFILE.store(profile.as_u8(), core::sync::atomic::Ordering::Relaxed);
     ring3::app_trust_hash(Some(hash));
+    // A per-app policy from the outside, if the owner installed one (or learning is armed).
+    if let Some(p) = apppolicy::activate(ctx.fs, &format!("/pkg/bin/{}", app.name)) {
+        let _ = p;
+    }
     let r = if app.display == "x11" {
         if ring3::persistent_running() {
             ring3::app_trust_hash(None);
@@ -4148,6 +4153,7 @@ fn main() -> Status {
     // behavior (probing, drift, rate spikes) is made visible deterministically.
     agent::anomaly_selftest();
     agent::learn_selftest(&mut vfs);
+    apppolicy::selftest(&mut allocator, &mut vfs);
 
     // Sprint AE-e2e: EuroID storage (users + Argon2id hashes + state) persistent
     // on EuroFS — survives a restart instead of being rebuilt every boot.

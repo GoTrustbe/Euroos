@@ -6774,6 +6774,7 @@ static BROWSER_ELF: &[u8] = include_bytes!("../../userland/browser.elf");
 static LDLINUX_ELF: &[u8] = include_bytes!("../../userland/glibc/ld-linux-x86-64.so.2");
 static GLIBC_LIBC: &[u8] = include_bytes!("../../userland/glibc/libc.so.6");
 static GTINY_ELF: &[u8] = include_bytes!("../../userland/glibc/gtiny");
+static GPOLICY_ELF: &[u8] = include_bytes!("../../userland/glibc/gpolicy");
 static GTHREADCHURN_ELF: &[u8] = include_bytes!("../../userland/glibc/gthreadchurn");
 static GFORKCHURN_ELF: &[u8] = include_bytes!("../../userland/glibc/gforkchurn");
 static GTEST_ELF: &[u8] = include_bytes!("../../userland/glibc/gtest");
@@ -6916,6 +6917,7 @@ pub fn ldlinux_bytes() -> &'static [u8] { LDLINUX_ELF }
 pub fn glibc_libc_bytes() -> &'static [u8] { GLIBC_LIBC }
 /// The tiny dynamic glibc test binary.
 pub fn gtiny_bytes() -> &'static [u8] { GTINY_ELF }
+pub fn gpolicy_bytes() -> &'static [u8] { GPOLICY_ELF }
 pub fn gthreadchurn_bytes() -> &'static [u8] { GTHREADCHURN_ELF }
 pub fn gforkchurn_bytes() -> &'static [u8] { GFORKCHURN_ELF }
 /// A richer glibc test: printf + malloc + pthreads.
@@ -7533,6 +7535,7 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gtest" => include_bytes!("../../userland/glibc/gtest.sig"),
         "/bin/gthread" => include_bytes!("../../userland/glibc/gthread.sig"),
         "/bin/gtiny" => include_bytes!("../../userland/glibc/gtiny.sig"),
+        "/bin/gpolicy" => include_bytes!("../../userland/glibc/gpolicy.sig"),
         "/bin/gthreadchurn" => include_bytes!("../../userland/glibc/gthreadchurn.sig"),
         "/bin/gforkchurn" => include_bytes!("../../userland/glibc/gforkchurn.sig"),
         "/bin/gunix" => include_bytes!("../../userland/glibc/gunix.sig"),
@@ -12310,6 +12313,30 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     let n = PATH_DENIES.fetch_add(1, Ordering::Relaxed);
                     if n < 24 {
                         crate::serial_println!("[sbx] task {cur} (renderer): syscall {num} path {:?} outside the renderer scope -> EACCES", String::from_utf8_lossy(&raw));
+                    }
+                    return (-13i64) as u64;
+                }
+            }
+        }
+        // A per-app policy from the outside (apppolicy): path syscalls of the
+        // running app are checked against its read/write/deny lists; a refusal
+        // is EACCES (and a recorded want while learning), never a kill.
+        if crate::apppolicy::active() {
+            let (path_ptr, write) = match num {
+                2 => (a1, a2 & 0x3 != 0 || a2 & 0x40 != 0 || a2 & 0x200 != 0), // open: O_WRONLY/O_RDWR/O_CREAT/O_TRUNC
+                257 => (a2, a3 & 0x3 != 0 || a3 & 0x40 != 0 || a3 & 0x200 != 0), // openat
+                85 | 87 | 83 | 82 | 76 | 90 | 92 | 133 => (a1, true), // creat unlink mkdir rename truncate chmod chown mknod
+                263 | 258 | 264 | 268 => (a2, true), // unlinkat mkdirat renameat fchmodat
+                4 | 6 | 21 | 89 | 262 | 267 | 269 => (if matches!(num, 262 | 267 | 269) { a2 } else { a1 }, false), // stat lstat access readlink newfstatat readlinkat faccessat
+                _ => (0, false),
+            };
+            if path_ptr != 0 {
+                let raw = user_cstr(path_ptr, 160);
+                let p = String::from_utf8_lossy(&raw).into_owned();
+                if crate::apppolicy::check_path(&current_app(), &p, write) == Some(false) {
+                    let n = PATH_DENIES.fetch_add(1, Ordering::Relaxed);
+                    if n < 24 {
+                        crate::serial_println!("[policy] app {} : syscall {num} {} {p:?} outside its policy -> EACCES", crate::apppolicy::key(&current_app()), if write { "write" } else { "read" });
                     }
                     return (-13i64) as u64;
                 }

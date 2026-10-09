@@ -340,3 +340,28 @@ Next (in order; each one is a gate test when it lands)
   froze NET=1 boots for minutes on a 96 / 384 MiB arena request once the NIC
   buffers fragmented the bitmap; rewritten as a linear word-skipping scan
   (euromm, 15 host tests).
+
+## Policy from the outside (2026-10-09, after the MXC comparison)
+
+Microsoft Execution Containers (GA 2026-10-07) ship a learning mode and an
+exportable policy schema; EuroOS had the boundary in the kernel but no way to
+learn or move it. Built, both with enforcement ON while learning:
+
+1. Agents: `euroagent learn [<agent>] <intent>` records what the MCP gateway
+   denied; `euroagent propose` shows the manifest that would allow it (an
+   elevated capability only ever as optional, an explicit denial never undone,
+   nothing removed); `euroagent approve` installs it at
+   /etc/euroagent/<name>.toml (owner, as the system, audited POLICY_APPROVED).
+   Manifests carry `schema = 1`, serialise exactly (to_toml), a newer schema is
+   refused; `euroagent export|import`. [policy-learn] green, 54 host tests.
+2. Programs and apps: a per-app policy file /etc/euroapps/<app>.policy.toml
+   (paths read/write/deny, net domains), enforced in the Linux-ABI syscall path
+   (EACCES, never a kill) and in the DNS path, for any profile. No file = the
+   profile's rules only. `app policy learn <app>` arms a session: the program
+   runs under an empty policy, every refusal is a want; `app policy propose`
+   (hard-denied system paths such as /etc/euroid are never proposed),
+   `app policy approve` (owner), `show|export|import`. [app-policy] self-test:
+   gpolicy (a plain glibc program) reads /etc/hostname, writes a home file and
+   tries the identity store: without a policy 3 (system refuses the store), in
+   learning 0 with both wants recorded, after approval 3 again with the store
+   still refused.

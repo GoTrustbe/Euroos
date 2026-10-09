@@ -1950,8 +1950,9 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
                 // and block trackers/ads before the query goes onto the network.
                 if u.dport == 53 {
                     if let Some(name) = dns::parse_query_name(data) {
-                        let blocked = crate::euroguard::check_dns(&crate::ring3::current_app(), &name)
-                            == crate::euroguard::Decision::Block;
+                        let app = crate::ring3::current_app();
+                        let blocked = crate::euroguard::check_dns(&app, &name) == crate::euroguard::Decision::Block
+                            || crate::apppolicy::check_dns(&app, &name) == Some(false);
                         dns_ledger(&alloc::format!("query {name}{}", if blocked { " BLOCKED" } else { "" }), u.sport);
                         if blocked {
                             // Blocked: the app gets NXDOMAIN at once, not silence. A query

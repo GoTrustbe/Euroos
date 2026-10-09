@@ -424,7 +424,15 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         // The unified per-app control surface (Part 2): capabilities +
         // permission grants + network policy + traffic, all in one place, with
         // actions to restrict an app or an AI agent.
-        "app" | "apps" => app_cmd(line),
+        "app" | "apps" => {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            if words.get(1) == Some(&"policy") {
+                let owner = current_user(fs).1 == 1000;
+                crate::apppolicy::shell(fs, &words[2..], owner)
+            } else {
+                app_cmd(line)
+            }
+        }
         // Notifications history (click the status panel to open the centre).
         "notify" | "notifications" => {
             let mut out = vec![format!("Notifications ({}):", crate::notify::count())];
