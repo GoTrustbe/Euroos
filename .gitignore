@@ -128,3 +128,4 @@ sdk/c/*.eupkg
 /crates/eurontfs/tests/ntfs.img
 wizard-test/
 /crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
