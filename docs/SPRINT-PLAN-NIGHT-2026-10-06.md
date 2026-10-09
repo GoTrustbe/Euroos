@@ -365,3 +365,15 @@ learn or move it. Built, both with enforcement ON while learning:
    tries the identity store: without a policy 3 (system refuses the store), in
    learning 0 with both wants recorded, after approval 3 again with the store
    still refused.
+
+### On-device inference (2026-10-09): [llm-local] OK
+- llama.cpp `llama-simple` (no AVX, no OpenMP, built against glibc 2.39 in an
+  Ubuntu 24.04 container: scripts/build-llm-pack.sh) + SmolLM2-135M Q8 in a
+  signed EuroPack; `llm <prompt>`; docs/LLM-LOCAL.md states the limits.
+- Found on the way: the AHCI "blank disk" write self-test (LBA 1000 + a 64 KiB
+  window at LBA 2000) wrote into any disk without a boot signature, including
+  a EuroPack attached as AHCI; it now refuses a disk that holds data.
+  europack got an `--ignored` host test that re-verifies a real image.
+- Three isolation levels EuroOS names honestly: process (syscall profile,
+  seccomp, per-app policy), session (separate uid), container (EuroContainer).
+  No hypervisor level; stated as such.

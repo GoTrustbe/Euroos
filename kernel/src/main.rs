@@ -31,6 +31,7 @@ mod iommu;
 pub static mut DMA_FALLOC: Option<*mut euromm::FrameAllocator> = None;
 mod appgfx;
 mod apppolicy;
+mod llm;
 mod appstore;
 mod churn;
 mod euroapi;
@@ -4154,6 +4155,7 @@ fn main() -> Status {
     agent::anomaly_selftest();
     agent::learn_selftest(&mut vfs);
     apppolicy::selftest(&mut allocator, &mut vfs);
+    llm::selftest(&mut allocator);
 
     // Sprint AE-e2e: EuroID storage (users + Argon2id hashes + state) persistent
     // on EuroFS — survives a restart instead of being rebuilt every boot.

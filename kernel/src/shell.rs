@@ -280,6 +280,8 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "firewall" | "eurofw" => crate::firewall::shell(),
         // N2: EuroVPN — sovereign VPN tunnel.
         "vpn" | "eurovpn" => crate::vpn::shell(),
+        // On-device language model (llama.cpp from a signed EuroPack, sandboxed, no network).
+        "llm" => crate::llm::shell(ctx.mem, line),
         // AA: EuroAgent — sovereign agent-first runtime.
         "agent" | "euroagent" => {
             // learn / propose / approve / export / import need the file system (and the owner for approve)

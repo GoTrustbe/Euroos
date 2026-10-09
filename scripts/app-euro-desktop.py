@@ -32,7 +32,7 @@ try: os.unlink(QMP)
 except FileNotFoundError: pass
 p = subprocess.Popen(["qemu-system-x86_64", "-machine", "q35", "-cpu", "qemu64,+smep,+smap", "-m", "3072M",
     "-bios", "/usr/share/ovmf/OVMF.fd", "-display", "none", "-serial", f"file:{LOG}",
-    "-qmp", f"unix:{QMP},server,nowait", "-monitor", f"unix:{QMP}.mon,server,nowait", "-no-reboot", "-drive", "format=raw,file=eurokernel.img",
+    "-qmp", f"unix:{QMP},server,nowait", "-monitor", f"unix:{QMP}.mon,server,nowait", "-no-reboot", "-drive", "format=raw,file=eurokernel.img"] + (["-drive", f"id=pk,if=none,format=raw,file={os.environ['PACK']}", "-device", "virtio-blk-pci,drive=pk"] if os.environ.get("PACK") else []) + [
     "-device", "qemu-xhci,id=xhci", "-device", "usb-kbd", "-device", "usb-tablet"]
     + (["-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"] if NET else []),
     stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
