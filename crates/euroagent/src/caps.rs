@@ -33,6 +33,8 @@ pub const AGENT_SPAWN: u64 = 1 << 27; // spawn other agents
 pub const IPC_SEND: u64 = 1 << 28; // messages to other agents
 
 /// The caps that count as "elevated" — granting one of them requires user confirmation.
+/// Every defined capability bit, for iteration (diffs, listings).
+pub const ALL_BITS: [u64; 15] = [FS_READ, FS_WRITE, FS_READ_GLOBAL, VAULT_READ, VAULT_WRITE, NET_GET, NET_POST, NET_LISTEN, MIC, CAMERA, SPEAKER, DISPLAY, CALENDAR, EXEC, AGENT_SPAWN];
 pub const ELEVATED: u64 = EXEC | VAULT_WRITE | FS_READ_GLOBAL | AGENT_SPAWN | NET_LISTEN;
 
 /// All known caps (for validation of unknown names).

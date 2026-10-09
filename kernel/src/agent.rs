@@ -905,3 +905,186 @@ pub fn shell(args: &str) -> Vec<String> {
         ],
     }
 }
+
+// ── Policy learning + exportable manifests (2026-10-09) ─────────────────────
+//
+// A manifest lives on EuroFS at /etc/euroagent/<name>.toml (system-owned);
+// without one the embedded demo manifest is used. `learn` runs the agent with
+// enforcement ON and records what the gateway denied; `propose` shows the
+// manifest that would allow it (elevated caps only as optional, explicit
+// denials never undone); `approve` installs it (owner, as the system);
+// `export`/`import` move a versioned manifest between machines.
+
+use euroagent::learn;
+
+/// Where an installed agent's manifest lives.
+pub fn manifest_path(name: &str) -> String {
+    alloc::format!("/etc/euroagent/{name}.toml")
+}
+
+/// The manifest in force for `name`: the installed file, else the embedded demo.
+pub fn load_manifest(fs: &mut dyn eurofs::FileSystem, name: &str) -> Option<AgentManifest> {
+    if let Ok(bytes) = fs.read_file(&manifest_path(name)) {
+        if let Ok(txt) = core::str::from_utf8(&bytes) {
+            if let Ok(m) = AgentManifest::from_toml(txt) {
+                return Some(m);
+            }
+        }
+    }
+    AgentManifest::from_toml(DEMO_MANIFEST).ok().filter(|m| m.name == name)
+}
+
+/// The last learning run's outcome, for `propose` / `approve`.
+static PROPOSAL: Mutex<Option<(AgentManifest, AgentManifest, alloc::vec::Vec<learn::Want>)>> = Mutex::new(None);
+
+/// Run `intent` through the agent under its CURRENT manifest (enforcement on)
+/// and record the wants. Returns (denied calls, wants, diff lines).
+pub fn learn_run(fs: &mut dyn eurofs::FileSystem, name: &str, intent: &str) -> Option<(usize, alloc::vec::Vec<learn::Want>, alloc::vec::Vec<String>)> {
+    let m = load_manifest(fs, name)?;
+    let user_caps = AgentCaps(caps::ALL & !caps::EXEC);
+    let granted = AgentCaps(0);
+    let policy_denied = AgentCaps(caps::NET_GET | caps::NET_POST);
+    let dec = policy::derive(&m, granted, user_caps, policy_denied);
+    let mut llm = ScriptedLlm { step: 0 };
+    let mut gw = McpGateway::new();
+    let mut be = KernelBackend;
+    let run = agentloop::run(
+        &m.name,
+        dec.effective,
+        &mut llm,
+        &mut gw,
+        &mut be,
+        alloc::vec![Message::system("You are a sovereign assistant. Use tools where useful."), Message::user(intent)],
+        8,
+    );
+    let wants = learn::wants_from_audit(&gw.audit);
+    let proposed = learn::propose(&m, &wants);
+    let d = learn::diff(&m, &proposed);
+    for w in &wants {
+        if let learn::Want::Tool { tool, cap, elevated } = w {
+            crate::audit::record(crate::audit::Event::AgentTool, &alloc::format!("learn {name}: wants {tool} ({}{})", caps::to_name(*cap), if *elevated { ", elevated" } else { "" }));
+        }
+    }
+    *PROPOSAL.lock() = Some((m, proposed, wants.clone()));
+    Some((run.denied, wants, d))
+}
+
+/// Install `m` as the manifest of its agent (owner only; written as the system).
+pub fn approve(fs: &mut dyn eurofs::FileSystem, m: &AgentManifest, is_owner: bool) -> Result<String, String> {
+    if !is_owner {
+        return Err(String::from("euroagent approve: only the owner can change an agent's boundary"));
+    }
+    let path = manifest_path(&m.name);
+    let toml = m.to_toml();
+    let ok = crate::sysctx::as_system(fs, |sys| {
+        let _ = sys.create_dir("/etc/euroagent");
+        sys.write_file(&path, toml.as_bytes()).is_ok()
+    });
+    if !ok {
+        return Err(alloc::format!("euroagent approve: cannot write {path}"));
+    }
+    crate::audit::record(crate::audit::Event::PolicyApproved, &alloc::format!("{} v{} schema {}", m.name, m.version, m.schema));
+    Ok(alloc::format!("euroagent: boundary of '{}' updated ({})", m.name, path))
+}
+
+/// Shell subcommands that need the file system. None = not one of ours.
+pub fn shell_fs(fs: &mut dyn eurofs::FileSystem, line: &str, is_owner: bool) -> Option<alloc::vec::Vec<String>> {
+    let rest = line.trim().split_whitespace().skip(1).collect::<alloc::vec::Vec<_>>();
+    let sub = rest.first().copied()?;
+    let name = "facilitator"; // the installed demo agent; `learn <agent> ...` selects another
+    Some(match sub {
+        "learn" => {
+            let (agent, intent) = match rest.get(1) {
+                Some(a) if INSTALLED.lock().iter().any(|(n, _, _)| n == a) => (a.to_string(), rest[2..].join(" ")),
+                _ => (name.to_string(), rest[1..].join(" ")),
+            };
+            let intent = if intent.is_empty() { String::from("record the meeting") } else { intent };
+            match learn_run(fs, &agent, &intent) {
+                None => alloc::vec![alloc::format!("euroagent learn: no manifest for '{agent}'")],
+                Some((denied, wants, diff)) => {
+                    let mut out = alloc::vec![alloc::format!("euroagent learn '{agent}' (enforcement on): {} call(s) denied, {} want(s)", denied, wants.len())];
+                    out.extend(diff.into_iter().map(|l| alloc::format!("  {l}")));
+                    out.push(String::from("  → 'euroagent propose' shows the manifest, 'euroagent approve' installs it"));
+                    out
+                }
+            }
+        }
+        "propose" => match PROPOSAL.lock().as_ref() {
+            None => alloc::vec![String::from("euroagent propose: run 'euroagent learn' first")],
+            Some((base, proposed, _)) => {
+                let mut out = learn::diff(base, proposed).into_iter().map(|l| alloc::format!("  {l}")).collect::<alloc::vec::Vec<_>>();
+                out.insert(0, alloc::format!("proposed manifest for '{}':", proposed.name));
+                out.extend(proposed.to_toml().lines().map(|l| alloc::format!("    {l}")));
+                out
+            }
+        },
+        "approve" => {
+            let p = PROPOSAL.lock().as_ref().map(|(_, p, _)| p.clone());
+            match p {
+                None => alloc::vec![String::from("euroagent approve: nothing proposed")],
+                Some(p) => match approve(fs, &p, is_owner) {
+                    Ok(s) => { *PROPOSAL.lock() = None; alloc::vec![s] }
+                    Err(e) => alloc::vec![e],
+                },
+            }
+        }
+        "export" => {
+            let agent = rest.get(1).copied().unwrap_or(name);
+            let path = rest.get(2).copied().unwrap_or("/home/euro/agent-manifest.toml");
+            match load_manifest(fs, agent) {
+                None => alloc::vec![alloc::format!("euroagent export: no manifest for '{agent}'")],
+                Some(m) => match fs.write_file(path, m.to_toml().as_bytes()) {
+                    Ok(_) => alloc::vec![alloc::format!("euroagent: '{agent}' exported to {path} (schema {})", m.schema)],
+                    Err(_) => alloc::vec![alloc::format!("euroagent export: cannot write {path}")],
+                },
+            }
+        }
+        "import" => {
+            let Some(path) = rest.get(1).copied() else { return Some(alloc::vec![String::from("usage: euroagent import <path>")]) };
+            let Ok(bytes) = fs.read_file(path) else { return Some(alloc::vec![alloc::format!("euroagent import: cannot read {path}")]) };
+            let Ok(txt) = core::str::from_utf8(&bytes) else { return Some(alloc::vec![String::from("euroagent import: not UTF-8")]) };
+            match AgentManifest::from_toml(txt) {
+                Err(e) => alloc::vec![alloc::format!("euroagent import: refused: {}", e.describe())],
+                Ok(m) => match approve(fs, &m, is_owner) { Ok(s) => alloc::vec![s], Err(e) => alloc::vec![e] },
+            }
+        }
+        _ => return None,
+    })
+}
+
+/// Boot self-test `[policy-learn]`: learning proposes exactly what was denied,
+/// elevated only as optional, export/import round-trips, a newer schema is
+/// refused, approve installs, and the approved manifest changes the outcome.
+pub fn learn_selftest(fs: &mut dyn eurofs::FileSystem) {
+    use euroagent::manifest::ManifestError;
+    // Start from the demo manifest WITHOUT fs_write: the scripted agent will want it.
+    let base_txt = DEMO_MANIFEST.replace("\"CAP_AGENT_FS_WRITE\",", "");
+    let Ok(base) = AgentManifest::from_toml(&base_txt) else {
+        crate::serial_println!("[policy-learn] manifest parse FAILED");
+        return;
+    };
+    let _ = crate::sysctx::as_system(fs, |sys| { let _ = sys.create_dir("/etc/euroagent"); sys.write_file(&manifest_path(&base.name), base.to_toml().as_bytes()).is_ok() });
+    let (denied_before, wants, _diff) = learn_run(fs, &base.name, "record the meeting").unwrap_or((0, alloc::vec::Vec::new(), alloc::vec::Vec::new()));
+    let wants_fs_write = wants.iter().any(|w| matches!(w, learn::Want::Tool { tool, .. } if tool == "fs_write"));
+    let proposed = PROPOSAL.lock().as_ref().map(|(_, p, _)| p.clone());
+    let p = proposed.clone().unwrap_or_else(|| base.clone());
+    let proposes_fs_write = p.required.0 & caps::FS_WRITE != 0 && p.tools_allowed.iter().any(|t| t == "fs_write");
+    let exec_not_required = p.required.0 & caps::EXEC == 0; // exec is explicitly denied in the manifest
+    // export / import round trip + newer schema refused
+    let exported = p.to_toml();
+    let round = AgentManifest::from_toml(&exported).ok() == Some(p.clone());
+    let newer = AgentManifest::from_toml(&exported.replace("schema = 1", "schema = 2"));
+    let newer_refused = matches!(newer, Err(ManifestError::UnsupportedSchema(2)));
+    // approve (as owner) and re-run: fs_write is now allowed, only the denied exec remains
+    let approved = approve(fs, &p, true).is_ok();
+    let on_disk = load_manifest(fs, &p.name).map(|m| m == p).unwrap_or(false);
+    let (denied_after, _, _) = learn_run(fs, &p.name, "record the meeting").unwrap_or((99, alloc::vec::Vec::new(), alloc::vec::Vec::new()));
+    let not_owner_refused = approve(fs, &p, false).is_err();
+    let ok = denied_before >= 2 && wants_fs_write && proposes_fs_write && exec_not_required && round && newer_refused && approved && on_disk && denied_after == 1 && not_owner_refused;
+    crate::serial_println!(
+        "[policy-learn] manifest learning: denied-before={denied_before} · wants-fs_write={wants_fs_write} · proposal(required+fs_write={proposes_fs_write}, exec-stays-out={exec_not_required}) · export→import-equal={round} · newer-schema-refused={newer_refused} · approve-as-owner={approved} · on-disk-equal={on_disk} · denied-after={denied_after} (only the denied exec) · non-owner-approve-refused={not_owner_refused} → {}",
+        if ok { "OK ✓ (enforcement on while learning; the person approves the boundary)" } else { "FAILED" }
+    );
+    // leave the demo agent as it was for the rest of the boot
+    let _ = crate::sysctx::as_system(fs, |sys| sys.remove_file(&manifest_path(&p.name)).is_ok());
+}

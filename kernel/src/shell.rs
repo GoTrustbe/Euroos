@@ -281,7 +281,14 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         // N2: EuroVPN — sovereign VPN tunnel.
         "vpn" | "eurovpn" => crate::vpn::shell(),
         // AA: EuroAgent — sovereign agent-first runtime.
-        "agent" | "euroagent" => crate::agent::shell(&format!("{arg1} {arg2}")),
+        "agent" | "euroagent" => {
+            // learn / propose / approve / export / import need the file system (and the owner for approve)
+            let owner = current_user(fs).1 == 1000;
+            match crate::agent::shell_fs(fs, line, owner) {
+                Some(out) => out,
+                None => crate::agent::shell(&format!("{arg1} {arg2}")),
+            }
+        }
         // CU-5: find — walk the VFS tree and filter on -name/-type/-maxdepth.
         "find" => find_walk(fs, line),
         // AH-3: run a real `.wasm` from the VFS in the no-JIT sandbox (cap-gated WASI).

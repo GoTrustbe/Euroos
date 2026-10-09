@@ -4147,6 +4147,7 @@ fn main() -> Status {
     // AF / Zero-Trust P2.3: behavior detection on the agent audit stream — anomalous
     // behavior (probing, drift, rate spikes) is made visible deterministically.
     agent::anomaly_selftest();
+    agent::learn_selftest(&mut vfs);
 
     // Sprint AE-e2e: EuroID storage (users + Argon2id hashes + state) persistent
     // on EuroFS — survives a restart instead of being rebuilt every boot.

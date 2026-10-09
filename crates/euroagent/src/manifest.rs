@@ -14,6 +14,9 @@ use alloc::vec::Vec;
 /// A parsed, validated agent manifest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentManifest {
+    /// Manifest schema version (`[agent] schema`, default 1). A manifest newer
+    /// than this kernel understands is refused, never guessed at.
+    pub schema: u32,
     pub name: String,
     pub version: String,
     pub description: String,
@@ -35,9 +38,103 @@ pub struct AgentManifest {
     pub log_inputs: bool,
 }
 
+/// The reference manifest of the demo agent (tests, learning self-test).
+pub const FACILITATOR_TOML: &str = r#"
+[agent]
+name        = "facilitator"
+version     = "1.0.0"
+description = "Record, transcribe and summarize meetings"
+author      = "GoTrust BV <agent@gotrust.eu>"
+wasm        = "facilitator.wasm"
+lang        = "nl-BE"
+
+[capabilities]
+required = [
+    "CAP_AGENT_MIC",          # Microphone
+    "CAP_AGENT_FS_WRITE",     # Save transcripts
+    "CAP_AGENT_DISPLAY",
+]
+optional = ["CAP_AGENT_NET", "CAP_AGENT_CALENDAR"]
+
+[triggers]
+on_event  = ["calendar.meeting_start", "user.mic_hotkey"]
+on_intent = ["record meeting", "start recording"]
+
+[tools]
+allowed = ["mic_record", "fs_write", "display_notify"]
+denied  = ["exec", "vault_read"]
+
+[sandbox]
+max_memory_mb   = 64
+max_runtime_ms  = 0
+network_domains = []
+
+[audit]
+log_tool_calls = true
+log_inputs     = false
+"#;
+
+/// The manifest schema this kernel writes and the newest it accepts.
+pub const SCHEMA_VERSION: u32 = 1;
+
+impl AgentManifest {
+    /// Serialise to the same TOML dialect `from_toml` reads, deterministically
+    /// (export, proposals). `from_toml(&m.to_toml()) == m` for every manifest.
+    pub fn to_toml(&self) -> String {
+        fn q(s: &str) -> String {
+            let mut o = String::from("\"");
+            for c in s.chars() {
+                match c { '"' => o.push_str("\\\""), '\\' => o.push_str("\\\\"), '\n' => o.push_str("\\n"), _ => o.push(c) }
+            }
+            o.push('"');
+            o
+        }
+        fn arr(items: &[String]) -> String {
+            let mut o = String::from("[");
+            for (i, it) in items.iter().enumerate() {
+                if i > 0 { o.push_str(", "); }
+                o.push_str(&q(it));
+            }
+            o.push(']');
+            o
+        }
+        let caps_list = |c: AgentCaps| -> Vec<String> {
+            crate::caps::ALL_BITS.iter().filter(|&&b| c.0 & b != 0).map(|&b| crate::caps::to_name(b).to_string()).collect()
+        };
+        let mut o = String::new();
+        o.push_str("[agent]\n");
+        o.push_str(&alloc::format!("schema = {}\n", self.schema));
+        o.push_str(&alloc::format!("name = {}\n", q(&self.name)));
+        o.push_str(&alloc::format!("version = {}\n", q(&self.version)));
+        o.push_str(&alloc::format!("description = {}\n", q(&self.description)));
+        o.push_str(&alloc::format!("author = {}\n", q(&self.author)));
+        o.push_str(&alloc::format!("wasm = {}\n", q(&self.wasm)));
+        o.push_str(&alloc::format!("lang = {}\n\n", q(&self.lang)));
+        o.push_str("[capabilities]\n");
+        o.push_str(&alloc::format!("required = {}\n", arr(&caps_list(self.required))));
+        o.push_str(&alloc::format!("optional = {}\n\n", arr(&caps_list(self.optional))));
+        o.push_str("[triggers]\n");
+        o.push_str(&alloc::format!("on_event = {}\n", arr(&self.triggers_event)));
+        o.push_str(&alloc::format!("on_intent = {}\n\n", arr(&self.triggers_intent)));
+        o.push_str("[tools]\n");
+        o.push_str(&alloc::format!("allowed = {}\n", arr(&self.tools_allowed)));
+        o.push_str(&alloc::format!("denied = {}\n\n", arr(&self.tools_denied)));
+        o.push_str("[sandbox]\n");
+        o.push_str(&alloc::format!("max_memory_mb = {}\n", self.max_memory_mb));
+        o.push_str(&alloc::format!("max_runtime_ms = {}\n", self.max_runtime_ms));
+        o.push_str(&alloc::format!("network_domains = {}\n\n", arr(&self.network_domains)));
+        o.push_str("[audit]\n");
+        o.push_str(&alloc::format!("log_tool_calls = {}\n", self.log_tool_calls));
+        o.push_str(&alloc::format!("log_inputs = {}\n", self.log_inputs));
+        o
+    }
+}
+
 /// An error while parsing or validating a manifest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ManifestError {
+    /// `[agent] schema` is newer than this kernel supports.
+    UnsupportedSchema(u32),
     /// A required field is missing.
     MissingField(&'static str),
     /// A declared capability does not exist.
@@ -49,6 +146,7 @@ pub enum ManifestError {
 impl ManifestError {
     pub fn describe(&self) -> String {
         match self {
+            ManifestError::UnsupportedSchema(v) => alloc::format!("manifest schema {v} is newer than this kernel supports (max {SCHEMA_VERSION})"),
             ManifestError::MissingField(f) => {
                 let mut s = String::from("required field missing: ");
                 s.push_str(f);
@@ -224,6 +322,10 @@ impl AgentManifest {
     pub fn from_toml(input: &str) -> Result<AgentManifest, ManifestError> {
         let doc = parse_doc(input)?;
 
+        let schema = doc.int("agent.schema").unwrap_or(1);
+        if !(1..=SCHEMA_VERSION as i64).contains(&schema) {
+            return Err(ManifestError::UnsupportedSchema(schema as u32));
+        }
         let name = doc.str("agent.name").ok_or(ManifestError::MissingField("agent.name"))?;
         let version = doc.str("agent.version").ok_or(ManifestError::MissingField("agent.version"))?;
         let wasm = doc.str("agent.wasm").ok_or(ManifestError::MissingField("agent.wasm"))?;
@@ -232,6 +334,7 @@ impl AgentManifest {
         let optional = caps_from(&doc.arr("capabilities.optional"))?;
 
         Ok(AgentManifest {
+            schema: schema as u32,
             name,
             version,
             description: doc.str("agent.description").unwrap_or_default(),
@@ -257,7 +360,11 @@ impl AgentManifest {
 mod tests {
     use super::*;
 
-    const FACILITATOR: &str = r#"
+    const FACILITATOR: &str = crate::manifest::FACILITATOR_TOML;
+
+    #[allow(dead_code)]
+
+    const _FACILITATOR_SRC: &str = r#"
 [agent]
 name        = "facilitator"
 version     = "1.0.0"
@@ -291,6 +398,16 @@ network_domains = []
 log_tool_calls = true
 log_inputs     = false
 "#;
+
+    #[test]
+    fn to_toml_round_trips_and_newer_schema_is_refused() {
+        let m = AgentManifest::from_toml(FACILITATOR).unwrap();
+        let back = AgentManifest::from_toml(&m.to_toml()).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(m.schema, 1);
+        let newer = m.to_toml().replace("schema = 1", "schema = 2");
+        assert_eq!(AgentManifest::from_toml(&newer), Err(ManifestError::UnsupportedSchema(2)));
+    }
 
     #[test]
     fn parse_valid() {
