@@ -19,13 +19,9 @@ serial log (below) tells us exactly what happened.
 
 3. New VM: type "Other", version "Other/Unknown (64-bit)", 1024 MB memory
    (512 MB works, 2048 MB is comfortable), 1 CPU is fine.
-4. System: tick **Enable EFI (special OSes only)**; chipset **PIIX3**.
-   Not ICH9 when Windows' hypervisor is active: VirtualBox then runs in its
-   NEM mode, ICH9 adds a 64-bit PCI window at 896 GiB, the firmware programs
-   a ninth variable MTRR (MSR 0x210) for it, that MSR is not virtualized and
-   VirtualBox's own `CpuDxe.efi` dies with a #GP before EuroOS loads (seen
-   2026-10-11). Pointing device: PS/2 mouse (USB input needs xHCI, which
-   VirtualBox only has with the Extension Pack).
+4. System: tick **Enable EFI (special OSes only)**; chipset PIIX3 or ICH9.
+   Pointing device: PS/2 mouse (USB input needs xHCI, which VirtualBox only
+   has with the Extension Pack).
 5. Storage: a **SATA** controller (AHCI) with `euroos.vdi` attached. Not IDE.
 6. Network: adapter type **Intel PRO/1000 MT Desktop (82540EM)** or
    **Paravirtualized Network (virtio-net)**, attached to NAT.
@@ -78,3 +74,27 @@ Pack only). Fix it from the command line with the VM powered off:
 hypervisor (Hyper-V, WSL2, Windows Sandbox) is active and VirtualBox runs in
 its slow "snail" mode; Hyper-V Generation 2 or QEMU with `-accel whpx` then
 use that hypervisor directly instead.
+
+## VirtualBox cannot boot EFI at all while Windows' hypervisor is active
+
+Seen 2026-10-11 on a Windows 11 laptop (VirtualBox 7.2.20, Hyper-V active):
+VirtualBox falls back to its NEM mode ("HM: VT-x is not available, fall back
+to NEM" in VBox.log) and its own EFI firmware dies before any loader runs:
+
+    !!!! X64 Exception Type - 0D(#GP) ... RCX - 0000000000000210 ...
+    Find image based on IP ... UefiCpuPkg\CpuDxe\CpuDxe.pdb
+
+`CpuDxe.efi` writes the ninth variable MTRR (MSR 0x210, for the 64-bit PCI
+window at 0xE000000000) and the Windows Hypervisor Platform does not
+virtualize it. Same crash with PIIX3 and ICH9, same for any EFI guest, not
+an EuroOS matter. Two ways out:
+
+- Give VirtualBox VT-x back: `bcdedit /set hypervisorlaunchtype off` as an
+  administrator, reboot (WSL2, Windows Sandbox and Hyper-V are off until
+  `bcdedit /set hypervisorlaunchtype auto`).
+- Keep Hyper-V and use QEMU for Windows with `-accel whpx` (the command in
+  the alternative above); that is the setup every EuroOS boot is measured on.
+
+Hyper-V itself is not an option today: it only offers synthetic storage and
+network (storvsc, netvsc) or, on Generation 1, IDE and a DEC 21140 NIC, and
+EuroOS has no drivers for those.
