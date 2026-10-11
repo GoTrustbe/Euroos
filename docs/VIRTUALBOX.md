@@ -19,9 +19,13 @@ serial log (below) tells us exactly what happened.
 
 3. New VM: type "Other", version "Other/Unknown (64-bit)", 1024 MB memory
    (512 MB works, 2048 MB is comfortable), 1 CPU is fine.
-4. System: tick **Enable EFI (special OSes only)**; chipset ICH9 or PIIX3
-   (both tested in the QEMU equivalent); pointing device: USB tablet or
-   PS/2 mouse (both supported).
+4. System: tick **Enable EFI (special OSes only)**; chipset **PIIX3**.
+   Not ICH9 when Windows' hypervisor is active: VirtualBox then runs in its
+   NEM mode, ICH9 adds a 64-bit PCI window at 896 GiB, the firmware programs
+   a ninth variable MTRR (MSR 0x210) for it, that MSR is not virtualized and
+   VirtualBox's own `CpuDxe.efi` dies with a #GP before EuroOS loads (seen
+   2026-10-11). Pointing device: PS/2 mouse (USB input needs xHCI, which
+   VirtualBox only has with the Extension Pack).
 5. Storage: a **SATA** controller (AHCI) with `euroos.vdi` attached. Not IDE.
 6. Network: adapter type **Intel PRO/1000 MT Desktop (82540EM)** or
    **Paravirtualized Network (virtio-net)**, attached to NAT.
@@ -62,7 +66,7 @@ no disk for the installer, no network, and USB input needs xHCI (Extension
 Pack only). Fix it from the command line with the VM powered off:
 
     cd "C:\Program Files\Oracle\VirtualBox"
-    .\VBoxManage modifyvm "Euro-OS" --firmware efi --chipset ich9 --mouse ps2 --keyboard ps2 --audio-controller hda
+    .\VBoxManage modifyvm "Euro-OS" --firmware efi --chipset piix3 --mouse ps2 --keyboard ps2 --audio-controller hda
     .\VBoxManage storagectl "Euro-OS" --name "IDE" --remove
     .\VBoxManage storagectl "Euro-OS" --name "SATA" --add sata --controller IntelAhci --portcount 2 --bootable on
     .\VBoxManage storageattach "Euro-OS" --storagectl "SATA" --port 0 --device 0 --type hdd --medium "C:\path\to\euroos.vmdk"
