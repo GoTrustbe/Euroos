@@ -48,7 +48,9 @@ This reference is organised into six **Parts**, each covering one cluster of sub
    Hardware              │ x86-64 · UEFI · PCI · virtio · NVMe · xHCI · HDA · TPM    │
                          └──────────────────────────────────────────────────────────┘
    Identity-mapped lower 512 GiB (1 GiB huge pages) → BAR-MMIO + heap are phys=virt,
-   enabling DMA without an IOMMU. Per-process 2 MiB arenas carry the USER + W^X mappings.
+   so drivers can DMA without an IOMMU; where VT-d is present each DMA driver gets its own
+   domain (see SPRINT-PLAN-IOMMU.md and "Userspace drivers"). Per-process 2 MiB arenas
+   carry the USER + W^X mappings.
 ```
 
 The recurring design themes you will see throughout:
@@ -221,7 +223,26 @@ A separate global `FrameAllocator` behind a `Mutex` over a 64 MiB contiguous reg
 
 A simple in-kernel message bus. A `Port { port: u32, owner_pid: u64, queue: Vec<(sender_pid, Vec<u8>)> }` (`euroipc.rs:14-18`); a global `PORTS` and a 6-line audit ring (`euroipc.rs:20-30`). API: `register(pid, port)` (claim, returns 1/0), `send(sender_pid, port, data)` (tags with sender pid + audits, returns bytes or `-ESRCH`), `recv(pid, buf, max)` (copies one message into the receiving process's user arena, returns bytes / `-EAGAIN` / `-ESRCH`), `audit_lines()` (`euroipc.rs:33-84`). Every message carries the sender's **app identity** and is audited.
 
-**Status: partial.** The permission check is an open hook ("nu: toegestaan" — all allowed), with EuroGuard-policy coupling marked as a future step (`euroipc.rs:6-7`, `52-53`). Exercised at boot via the `ipcsend`/`ipcrecv` musl programs (`main.rs:1121-1124`).
+Since the userspace-driver sprint: `register_restricted(pid, port, only_from)` claims a port that accepts exactly one sender pid (others get `-EPERM`, counted and audited), queues are bounded (`MAX_QUEUE` = 256, overflow refused with `-EAGAIN` and counted), every lock is taken with interrupts off (driver syscalls run with interrupts off on the same CPU as task 0), `take(port, ..)` gives kernel-side receivers a message with its sender, and notification slots (`bind_notify`, `notify_from_irq`) let an interrupt handler post an event that the next receive delivers as a message. `send_with(.., audit=false)` keeps the network data path out of the 6-line audit ring.
+
+**Status: partial.** Ordinary ports keep the open hook (all allowed), with EuroGuard-policy coupling still a future step; the restricted ports used by the userspace driver are the first ports with a real sender check. Exercised at boot via the `ipcsend`/`ipcrecv` musl programs and by the `[udrv-*]` self-tests.
+
+### Userspace drivers (`kernel/src/udrv.rs`, `crates/eurodrv`, `crates/euroe1000`, `userland/e1000d`)
+
+The first driver that runs outside the kernel: the Intel e1000/e1000e NIC, as the ring-3 process `e1000d`, selected with the boot option `net.driver=user` in `\EFI\BOOT\euroos-boot.conf` (`kernel/src/bootopt.rs`). The in-kernel `e1000.rs` stays the default and the fallback. Plan and proof: `docs/SPRINT-PLAN-USERSPACE-DRIVERS.md`.
+
+- **Cores.** `crates/eurodrv` (`no_std`, no alloc, `forbid(unsafe_code)`): the device grant (`grant.rs`: one BAR window and one DMA window, refused when unaligned, empty, too large, above 512 GiB, wrapping, overlapping each other or a forbidden range such as RAM), the netstack<->driver wire format (`proto.rs`: `Hello`/`Tx`/`Rx`/`Irq`/`Report` plus the self-test commands, strict decoding), the driver syscall ABI (`abi.rs`, `0x6200` info, `0x6201` receive, `0x6202` send) and the restart policy (`restart.rs`: doubling backoff, give up after N deaths in a window). `crates/euroe1000`: the legacy-descriptor e1000 logic against a `Hal` trait, host-tested against a simulated device (`sim.rs`).
+- **Profile.** The driver runs under `eurosandbox::Profile::Driver`: the three driver calls plus log, clock, sleep and exit. Anything else ends it with SIGSYS.
+- **MMIO grant.** The supervisor maps exactly the pages of BAR 0 into the driver at virtual == physical, `USER|RW|NX|PCD|PWT` (`paging::map_user_identity_4k` splits the identity huge page that covers each page and keeps the kernel's supervisor mapping for everything else). The MSI-X table (BAR 3) is not granted. `[udrv-grant]` checks the first and last BAR page are reachable for ring 3 and the pages before and after the BAR, the LAPIC and kernel code are not.
+- **DMA.** A zeroed 32-page window, mapped into the driver at virtual == physical. Under VT-d the device's context entry is pointed at a fresh second-level table that maps exactly that window (`iommu::attach_runtime`; IOVA == PA, so the driver writes its own pointers into descriptors). Without an IOMMU the driver runs and the log says `DMA NOT confined`.
+- **Interrupts.** MSI-X vector `0x4C` on the BSP. The handler (`udrv::irq_handler`) bumps a EuroIPC notification slot (two atomics, no lock, no allocation) and sends EOI; the driver's next receive returns it as an `Irq` message, ahead of queued data.
+- **Netstack.** EuroNet stays in the kernel. `nic.rs` has a fourth backend: `send` becomes a `Tx` message to the driver's port, `poll_recv` takes `Rx` messages from the netstack port. Both ports are sender-restricted (driver port: kernel only; netstack port: the pid that holds the grant) and bounded. The driver syscalls are served before ring3 takes the BG lock, so task 0 can hand the CPU to the driver while it waits.
+- **Crash and restart.** `udrv::supervise` (desktop loop, boot self-test) notices the dead process, then quiesces the device before anything is freed: bus mastering off, the context entry back to the empty table with context-cache and IOTLB invalidation, the driver's port dropped, the process reaped, then the DMA window freed. A new instance resets the device (`CTRL.RST`) and reports `Hello`.
+
+**Boot proof** (QEMU TCG, `-device intel-iommu,intremap=off -nic user,model=e1000e`, `net.driver=user`): `[udrv-grant]`, `[udrv-iommu]` (own domain, 32 pages), `[udrv-e1000]` (82574L up from ring 3), `[udrv-net]` (DHCP lease, ARP, DNS, `HTTP/1.1 200 OK` from example.com through the driver), `[udrv-irq]` (MSI-X interrupts delivered as EuroIPC messages), `[udrv-dma]` (the driver aims an RX descriptor at a kernel canary and a TX descriptor at a kernel page: `DMA FAULT blocked ... read physical 0x1fa000` and `... write physical 0x1f9000`, canary unchanged, driver still works), `[udrv-crash]` (a real ring-3 fault kills the driver, sends are refused while it is dead, a new instance comes up, DHCP + HTTP work again). Without `-device intel-iommu` the same run passes with `[udrv-iommu]`/`[udrv-dma]` reported as not confined (⬜). Without the option file the boot is unchanged (in-kernel e1000).
+
+**Status: 🟡 one driver.** Honest limits: only the e1000 has moved (AHCI, NVMe, HDA, xHCI, virtio, the compositor and the apps are still in the kernel); EuroNet stays in the kernel; network syscalls of processes do not reach the userspace driver yet (they run with interrupts off under the BG lock and cannot hand the CPU to the driver, so they time out; the boot self-test suite's early network tests therefore do not run in `user` mode, which is why `kernel` stays the default); wake-up latency is bounded by the 10 ms tick; no interrupt remapping (`intremap=off`); the 82540EM has no MSI-X here and is polled; the option file is unsigned (it only chooses between two signed code paths); QEMU/TCG only.
+
 
 ### Power / init / logging
 
@@ -278,7 +299,8 @@ The kernel side (`kernel/src/eurodevice.rs`) builds the tree from `pci::enumerat
 **Implemented & boot-verified** (with markers): loader A/B (`[loader]`), heap + serial, frame allocator (+8 host tests), 4-level paging incl. per-process W^X isolation + guarded stacks (`[a2]`/`[g1]`), GDT/TSS, IDT + fault handlers (`int3`, `[isolatie]`, `[g1]`), LAPIC/IO-APIC + calibrated timer (`[apic]`), HPET (`[hpet]`), RTC (real time in EuroFS), MSI-X (`[j2]`), SMP AP bring-up + per-CPU schedulers + IPIs/TLB-shootdown/load-balance (`[smp]`), mini-CFS scheduler with full state machine, process frame pool (`[mm]`), ring-3 processes with SMEP/SMAP/NX + ELF/dynamic loading + native and Linux syscall ABIs + capabilities (`[sec]`/`[cap]`/`[ring3→…]`/`[exec]`/`[h3]`), EuroInit supervisor (`[init]`), lock-free klog (`[j1]`), crash dump (`[y]`), PCI enumeration (`[pci]`), ACPI/MADT/FADT parsing (`[acpi]`), EuroDevice model (`[r]`), AML DSDT interpretation (`[i3-aml]`), xHCI USB (`[xhci]`).
 
 **Partial / stub:**
-- **EuroIPC** (`euroipc.rs`): functional message bus + audit, but the permission check is an open "allow-all" hook pending EuroGuard-policy coupling.
+- **EuroIPC** (`euroipc.rs`): functional message bus + audit; ordinary ports keep an open "allow-all" hook pending EuroGuard-policy coupling (sender-restricted, bounded ports exist since the userspace-driver sprint).
+- **Userspace drivers** (`udrv.rs`): one driver (e1000) runs in ring 3 behind `net.driver=user`; the default is still the in-kernel driver. See "Userspace drivers" above.
 - **EuroAML** (`euroaml`): intentional subset — no OperationRegion/Field side-effects, no control flow; enough for read-out methods and `\_S5`.
 - **Kernel heap**: the linked-list allocator, not yet the planned EuroMM slab allocator.
 - **AP TSS**: APs load no TSS (timer-only/parked; no AP ring-3 or IST yet).
@@ -1526,7 +1548,8 @@ The core kernel (paging/W^X, scheduler, SMP, IDT/APIC, drivers); EuroFS (CoW, A/
 - **FDE**: the key is TPM-*sourced* (hardware RNG) but not yet PCR-*sealed*; the sealed-key superblock slots are reserved/zeroed.
 - **EuroGuard**: `CURRENT_CAPS` is a single live cap-set (userspace runs largely pre-scheduler), not yet a per-task capability field; W^X falls back to RWX for binaries with a mixed RWE segment.
 - **EuroID**: the kernel boot self-test uses *reduced* Argon2id parameters for TCG speed (the full 64 MiB / t=3 / p=4 params + the RFC vector are proven in host tests); the store is in-memory and rebuilt each boot (EuroFS persistence of `/etc/euro/*.db` with IMMUTABLE flags is the next mile); the desktop login still uses the legacy SHA-256 `auth.rs` path, to be rewired onto `euroid::authenticate`.
-- **EuroIPC**: functional message bus + audit, but the permission check is an open allow-all hook pending EuroGuard-policy coupling.
+- **EuroIPC**: functional message bus + audit; ordinary ports keep an open allow-all hook pending EuroGuard-policy coupling. Sender-restricted, bounded ports and IRQ notifications exist (used by the userspace driver).
+- **Userspace drivers**: ✅ in QEMU for one driver: e1000 in ring 3 with a one-BAR MMIO grant, MSI-X as EuroIPC messages, its own VT-d domain (a deliberate out-of-window DMA faults, memory unchanged), DHCP + HTTP through it, crash + restart. 🟡 opt-in (`net.driver=user`), the in-kernel driver stays default; process network syscalls do not reach it yet; every other driver is still in the kernel. ⬜ real hardware, interrupt remapping.
 - **EuroAML**: a deliberate subset — no OperationRegion/Field side-effects, no control flow.
 - **Kernel heap**: the linked-list allocator, not yet the planned EuroMM slab allocator. APs load no TSS (timer-only).
 - **GPU**: 2D scanout only — no 3D/Virgl acceleration.

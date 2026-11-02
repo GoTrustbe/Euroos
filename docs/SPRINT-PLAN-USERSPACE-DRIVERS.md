@@ -210,6 +210,47 @@ QEMU line for the proofs (TCG, one instance, `-smp` at most 4):
 - Wake-up latency is bounded by the 10 ms tick.
 - QEMU/TCG only until the lab hardware is back.
 
+## Status per step
+
+| Step | Status | Proof |
+|---|---|---|
+| 1. Primitives: grant + MMIO mapping, IRQ->IPC, IOMMU domain per driver | ✅ QEMU | `[udrv-grant]`, `[udrv-irq]`, `[udrv-iommu]` |
+| 2. Userspace e1000 driver | ✅ QEMU (82574L, MSI-X) · ⬜ 82540EM interrupts (polled) | `[udrv-e1000]` |
+| 3. Netstack via the driver: DHCP + HTTP | ✅ QEMU for kernel-side users (boot self-test, desktop loop) · 🟡 process network syscalls do not reach the driver yet | `[udrv-net]` |
+| 4. Crash test | ✅ QEMU | `[udrv-crash]` |
+| 5. IOMMU really confines | ✅ QEMU with `intel-iommu` · ⬜ real VT-d hardware | `[udrv-dma]` |
+| 6. Docs | ✅ | STATUS, deep reference, ISOLATION-LEVELS |
+| Make `user` the default | ⬜ | needs process network syscalls through the driver |
+
 ## Log
 
 - 2026-11-02: plan written; Redox `base` and `kernel` studied.
+- 2026-11-02: built and verified in QEMU (TCG, `-m 512M`, `-device intel-iommu,intremap=off`,
+  `-nic user,model=e1000e`, `net.driver=user`). Boot log, abridged:
+
+  ```
+  [iommu] runtime domain e1000d (id 8): 00:02.0 -> 32 page(s) at 0x1cb000, nothing else
+  [e1000d pid 131072] up: 8086:10d3 MAC 52:54:00:12:34:56, MSI-X, DMA confined by the IOMMU
+  [udrv-grant] ... page before=false, page after=false; ... LAPIC=false, kernel code=false → OK (exactly the granted ranges) ✓
+  [udrv-iommu] device 00:02.0 has its own VT-d domain 'e1000d' with 32 page(s) = the DMA window, nothing else → OK ✓
+  [udrv-net]   HTTP GET http://example.com/ -> 888 bytes, HTTP/1.1 200 OK
+  [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HTTP ... → OK (the kernel e1000 driver was not used) ✓
+  [udrv-irq] MSI-X vector 0x4c: 16 interrupt(s) raised, 16 delivered to e1000d as EuroIPC Irq messages → OK ✓
+  [iommu] DMA FAULT blocked: device 00:02.0 tried to read physical 0x1fa000 (reason 0x6) — outside its domain
+  [iommu] DMA FAULT blocked: device 00:02.0 tried to write physical 0x1f9000 (reason 0x5) — outside its domain
+  [udrv-dma] malicious e1000d: ... IOMMU fault records: TX read 1, RX write 1 (total 2) · canary changed=false · driver still works=true → OK ✓
+  [isolation] ring-3 page fault addr=0x1000 ... -> process pid 131072 (task 27) TERMINATED
+  [udrv] e1000d pid 131072 died (...) -> device quiesced: bus-master off, IOMMU domain revoked, 32 DMA pages freed; restart at tick 515 (death #1)
+  [udrv-crash] ... sends refused while dead=true; restarted as pid 131073 ..., DHCP + HTTP again → OK ✓
+  ```
+
+  Also run: the same image without `-device intel-iommu` (everything passes, the
+  IOMMU and DMA steps report "not confined" ⬜), and the same kernel without the
+  option file (in-kernel e1000 binds, same self-test results as before the
+  sprint). In `user` mode the early network self-tests of the dev suite do not
+  run (they come before the scheduler); the rest of the suite is unchanged.
+- Lessons: the netstack waits in spin loops with iteration-count timeouts,
+  which crawl when the dev suite's busy processes share the CPU (the first DMA
+  probe built on `net::arp_resolve` stalled for minutes); the self-test waits in
+  ticks instead, and the NIC backend yields at most once per tick. QEMU's VT-d has one fault-recording
+  register: the self-test reads and clears it between the TX and RX probes.

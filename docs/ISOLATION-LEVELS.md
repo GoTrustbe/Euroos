@@ -22,7 +22,20 @@ feeding anomaly detection. The person approves the boundary: learning mode
 proposes it, `approve` installs it, and only the owner can ([policy-learn],
 [aa], [af-jit], [af-anom]).
 
-What EuroOS does not claim: hardware-enforced isolation below the kernel, fleet
+Drivers get a boundary of their own, so far for one driver. With
+`net.driver=user` the e1000 NIC driver is a ring-3 process under the `driver`
+syscall profile. It holds a device grant and nothing else: the pages of one
+BAR, a DMA window, and its own EuroIPC ports. Under VT-d the device itself is
+confined too: its IOMMU domain holds exactly the DMA window, so a driver that
+points the device at kernel memory gets a fault record, not a corrupted
+kernel. A driver crash is a process exit; the kernel quiesces the device and
+restarts the driver ([udrv-grant], [udrv-iommu], [udrv-dma], [udrv-crash];
+QEMU only so far, see docs/SPRINT-PLAN-USERSPACE-DRIVERS.md). Every other
+driver still runs in the kernel, and without an IOMMU device DMA is not
+confined.
+
+What EuroOS does not claim: hardware-enforced isolation below the kernel (the
+IOMMU confines device DMA, it does not isolate software), fleet
 management of these policies, and an on-device model good enough to act as an
 assistant (the engine runs, see docs/LLM-LOCAL.md; a usable model is a
 hardware question).
