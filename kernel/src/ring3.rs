@@ -5055,6 +5055,20 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
     let user_ss = (sel.user_data.0 | 3) as u64;
     let child_pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     let task = crate::sched::spawn_thread(user_rip, user_rsp, user_cs, user_ss, kstack_top, pml4, fs, saved);
+    if task == usize::MAX {
+        // BUG-015: scheduler table full -> -EAGAIN; give the pooled frames back
+        // instead of registering a child that never runs (its parent would wait forever).
+        for f in 0..1024u64 {
+            crate::procpool::free(child_raw + f * 4096);
+        }
+        for f in 0..4u64 {
+            crate::procpool::free(child_kstack + f * 4096);
+        }
+        for fr in [pml4, pdpt, pd, pt] {
+            crate::procpool::free(fr);
+        }
+        return (-11i64) as u64;
+    }
     set_task_caps(task, effective_caps()); // lock-free read; thread shares its process' rights
     crate::sched::set_ident(task, child_pid as u32, parent_pid as u32);
 
@@ -5497,6 +5511,10 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             };
             let saved_regs = unsafe { SAVED_REGS };
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, p.pml4, fs, saved_regs);
+            if child == usize::MAX {
+                free_thread_kstack_slot(slot); // BUG-015: table full -> -EAGAIN, no ghost thread
+                return (-11i64) as u64;
+            }
             set_task_caps(child, effective_caps()); // thread: same rights
             register_thread_kstack(child, slot);
             p.threads.push(child);
@@ -5767,12 +5785,29 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
     // Exactly 2 MiB, 2 MiB-aligned in one go (no more 4 MiB over-allocation):
     // saves ~2 MiB per background process. On reaping we return exactly these 512
     // frames (arena_frames below).
-    let arena = falloc.allocate_aligned(512, 512).expect("bg-arena");
+    // LOADTEST-R630 BUG-015: out of memory or out of task slots is a refusal
+    // (false), never a kernel panic and never a process that cannot run.
+    let arena = match falloc.allocate_aligned(512, 512) {
+        Ok(a) => a,
+        Err(_) => {
+            crate::serial_println!("[euro] bg-musl (pid {pid}): no free 2 MiB arena - not started");
+            return false;
+        }
+    };
     let arena_raw = arena;
     let code = arena; // program code/segments at the bottom of the arena
     let heap = arena + 0x80000; // +512 KiB: own heap (musl mmap/TLS block)
     let stack_top = arena + MIB2; // user stack grows downward from the arena top
-    let kstack = falloc.allocate_contiguous(4).expect("bg-kstack"); // ring-0 stack (supervisor)
+    let kstack = match falloc.allocate_contiguous(4) {
+        Ok(k) => k, // ring-0 stack (supervisor)
+        Err(_) => {
+            for f in 0..512u64 {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            crate::serial_println!("[euro] bg-musl (pid {pid}): no kernel stack free - not started");
+            return false;
+        }
+    };
     let kstack_top = (kstack + 4 * 4096) & !0xF;
     let pages = program_span_pages(program);
     let info = load_program(program, code, pages);
@@ -5785,6 +5820,19 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
     // schedulable with cr3=0, or a preempting timer IRQ runs its ring-3 code on the boot PML4).
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
     let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
+    if idx == usize::MAX {
+        // Scheduler table full: undo instead of registering a process whose task
+        // never runs (it used to sit "live" forever with task usize::MAX).
+        for f in 0..512u64 {
+            let _ = falloc.free(arena + f * 4096);
+        }
+        for f in 0..4u64 {
+            let _ = falloc.free(kstack + f * 4096);
+        }
+        crate::paging::free_address_space(falloc, pml4);
+        crate::serial_println!("[euro] bg-musl (pid {pid}): scheduler task table full - not started");
+        return false;
+    }
     // BUG-007 hardening: irqsave BG hold (non-preemptible) for the registration push.
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().push(BgProc {
