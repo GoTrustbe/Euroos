@@ -48,6 +48,8 @@ pub const UDRV_MSIX_VECTOR: u8 = 0x4C;
 pub const UDRV_BLK_MSIX_VECTOR: u8 = 0x4D;
 /// MSI-X of the userspace BCM5720 driver (udrv_bcm5720.rs).
 pub const UDRV_BCM_MSIX_VECTOR: u8 = 0x4E;
+/// MSI-X of the MegaRAID controller driven from ring 3 (udrv_mr.rs): a EuroIPC message.
+pub const MEGARAID_MSIX_VECTOR: u8 = 0x4F;
 pub const SCI_VECTOR: u8 = 0x49; // ACPI SCI (power button etc.) — Metal M5-2
 /// Cooperative-yield software interrupt: a blocked/sleeping task triggers this
 /// (`int YIELD_VECTOR`) to switch away immediately (sched::yield_now). Not a
@@ -141,6 +143,7 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     idt[UDRV_MSIX_VECTOR].set_handler_fn(crate::udrv::irq_handler);
     idt[UDRV_BLK_MSIX_VECTOR].set_handler_fn(crate::udrv_blk::irq_handler);
     idt[UDRV_BCM_MSIX_VECTOR].set_handler_fn(crate::udrv_bcm5720::irq_handler);
+    idt[MEGARAID_MSIX_VECTOR].set_handler_fn(crate::udrv_mr::irq_handler);
     // Harmless spurious handler (LAPIC vector 0xFF).
     idt[0xFF].set_handler_fn(spurious_handler);
     idt

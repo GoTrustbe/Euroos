@@ -559,6 +559,21 @@ SMART/Health log page (LID=0x02): `smart` (`nvme.rs:339`) returns (temperature K
 
 Hardening: rejects queue size < 3 (would cause OOB descriptor writes, audit C2, `virtio_blk.rs:95`); rejects out-of-range/over-4096 transfers instead of silent truncation (audit C3, `virtio_blk.rs:315,335`). MSI-X is enabled additively (`[j2-blk]`) while the used-ring poll remains the completion source. `self_test` (`[blk]` marker, `virtio_blk.rs:394`) round-trips sector 2048. **Implemented & boot-verified** (`main.rs` root path; `init` logs `[blk] N virtio-blk schijf/schijven geïnitialiseerd`).
 
+### Userspace MegaRAID (`crates/euromegaraid`, `userland/megaraidd`, `kernel/src/udrv_mr.rs`, `kernel/src/mrblk.rs`)
+
+The second driver outside the kernel and the first storage one: LSI/Broadcom MegaRAID with the classic **MFI** interface, gen2 (SAS2108, `1000:0078`/`1000:0079`, QEMU `megasas-gen2`). There is no in-kernel MegaRAID driver; the root disk stays on the in-kernel drivers. Fusion controllers (SAS2208 `005b`, SAS3108 `005d` = Dell PERC H730, SAS3008 `005f`, newer) are recognised by `euromegaraid::regs::family` and left untouched. Plan, hardware notes, the fusion gap and the proof: `docs/SPRINT-PLAN-MEGARAID.md`.
+
+- **Core** (`crates/euromegaraid`, `no_std`, no alloc, `forbid(unsafe_code)`): `fw` (status word in OSP0 `0xB0`, the handshake: `WAIT_HANDSHAKE` -> `CLEAR_HANDSHAKE|HOTPLUG`, `BOOT_MSG_PENDING` -> `HOTPLUG`, `OPERATIONAL` -> mask + `READY|MFIMODE|ABORT`, per-state timeout, fault, flapping), `frame` (64-byte init/DCMD/LD-I/O/pass-through frames, one 64-bit SGL entry each), `info` (controller info `0x800` bytes, LD list, READ CAPACITY(16); bounded fields, strings cleaned for the log), `layout` (the 69-page DMA window: 32 frames, queue info, producer/consumer words, a reply ring of up to 2048 contexts, sense buffers, a DCMD buffer, four 64 KiB data slots), `mfi` (bring-up, posting through IQP `0x40`, reaping the reply ring, synchronous DCMDs), `grant` (the register window below the MSI-X table), `blkif` (the block messages). Host tests run it against a simulated gen2 controller modelled on QEMU's behaviour, with fault injection.
+- **Reply-ring hygiene.** A context is `generation << 16 | frame + 1`, with a new generation per driver instance. A completion is accepted only for this generation, a frame in flight, and a frame whose status byte no longer reads pending; everything else is counted as stray. A producer index outside the ring is not followed.
+- **Grant.** The register pages of the first memory BAR below the first MSI-X structure in it (`megasas-gen2`: `0x0000..0x2000` of 16 KiB; the kernel programs the table at `0x2000`), mapped `USER|RW|NX|PCD|PWT` at virtual == physical; the 69-page DMA window below 4 GiB (gen2 posts 32-bit frame addresses); under VT-d the device's own domain `megaraidd` with exactly that window. A BAR above the 512 GiB identity map is refused.
+- **Interrupts.** MSI-X entry 0 on vector `0x4D`; the handler bumps EuroIPC notification slot 1 (two atomics) and sends EOI; the driver receives `Irq`, acknowledges OSTS/ODCR0 and reaps.
+- **Block layer** (`mrblk.rs` + `blkif`, the part to swap for a shared block-over-IPC interface): `Read`/`Write`/`Flush` name a data slot, never an address; the kernel copies write data into the slot and read data out after `Done`. `MrBlock` is a `eurofs::BlockDevice` (4 KiB blocks) per logical drive; transfers are cut into 64 KiB chunks, up to four in flight. Waiting needs task context with interrupts on; otherwise the call fails with an I/O error instead of hanging.
+- **Crash and restart.** `udrv_mr::supervise` (desktop loop, and inside a block wait on task 0) quiesces first (bus mastering off, IOMMU domain revoked, port dropped, process reaped), keeps the old DMA window in **quarantine** until the next instance has reset the controller (its `Ready`), and restarts per `eurodrv::restart::Policy`. The new instance resets the firmware from `OPERATIONAL`, rebuilds the reply queue, drains the controller with a cache flush, and re-announces its drives. The block layer **replays** every chunk the dead instance did not acknowledge (writes are idempotent; the data is copied in again from the caller's buffer).
+
+**Boot proof** (QEMU 10.2/KVM, `-device intel-iommu,intremap=off -device megasas-gen2` with two `scsi-hd` logical drives, two boots on the same images, `scripts/megaraid-proof.sh`): `[mr-grant]`, `[mr-iommu]` (own domain, 69 pages), `[mr-info]` (controller "LSI MegaRAID SAS 9260-8i", two LDs, READ CAPACITY(16) matching the LD list), `[mr-io]` (1 sector and 1 MiB written and read back equal; a read past the end refused; the pattern also checked on the image file from the host), `[mr-irq]` (MSI-X completions delivered as EuroIPC messages), `[mr-fs]` (EuroFS formatted and written on LD1 in boot 1, read back equal in boot 2, scrub clean), `[mr-crash]` (the driver faults right after posting a write; restarted, one request replayed, every file equal after a remount, scrub clean; without replay the write fails and the remount shows the previous checkpoint, scrub clean), `[mr-dma]` (a DCMD buffer aimed at a kernel canary and a frame address on a kernel page: `DMA FAULT blocked` for the write and the read, both pages intact, driver still works). Without `-device intel-iommu` the same run passes with `[mr-iommu]`/`[mr-dma]` as not confined (⬜).
+
+**Status: 🟡 MFI gen2 in QEMU only.** No real MegaRAID card driven; the fusion path (Dell PERC H730) is not built because it cannot be tested here; one MSI-X vector, 512-byte sectors, 32-bit contexts; wake-up latency bounded by the 10 ms tick; the drives are not mounted into the global VFS yet; no interrupt remapping.
+
 ### Root block device + write-back cache
 
 `kernel/src/rootblk.rs` — `RootBlk` is the one type that carries EuroFS either in **RAM** (live mode, `RootBlk::ram`) or **directly on a virtio-blk GPT partition** (installed mode, `RootBlk::disk`/`disk_on`). In disk mode it translates EuroFS 4 KiB blocks to disk sectors via `part_start + block*SPB` where `SPB = 8`.
@@ -639,6 +654,7 @@ Swap LBA base is `FAULT_SWAP_LBA = 200` (`main.rs:366`), separate from the `[j3]
 | Swap manager (fault-driven) | Implemented + boot-verified |
 | Immutable gate / audit append-only | Implemented + boot-verified |
 | Bad-block remapping | Pure logic implemented + host-tested; not yet wired into a live device wrapper |
+| Userspace MegaRAID (MFI gen2, `megaraidd`) | Implemented, host-tested + boot-verified in QEMU (incl. EuroFS across a reboot, crash mid-write, IOMMU confinement); fusion (PERC H730) not built |
 
 Boot self-test markers in the storage cluster: `[nvme]`, `[blk]`, `[j2-blk]`, `[gpt]`, `[g2]` (mounts), `[g4]` (slot raw-block + image write), `[g5]` (scrub), `[k3]` (FDE), `[s]` (snapshot), `[j3]`/swap stats, `[l1]` (immutability), `[p3]` (audit).
 
@@ -1552,6 +1568,9 @@ Every subsystem proves itself at boot by printing one labelled line over the COM
 | `[j3]` / `[j3-fault]` | Fault-driven swap-out then transparent swap-in |
 | `[l1]` | Immutable + append-only flags enforced by the filesystem |
 | `[p3]` | Append-only audit log: tamper refused, genuine append grows the on-disk trail |
+| `[mr-grant]` / `[mr-iommu]` / `[mr-info]` | Userspace MegaRAID: register pages without the MSI-X table + DMA window only · own VT-d domain · controller info + LD list via DCMD |
+| `[mr-io]` / `[mr-irq]` / `[mr-fs]` | LD write/read verified · MSI-X completions as EuroIPC messages · EuroFS on a logical drive across a reboot |
+| `[mr-crash]` / `[mr-dma]` | Driver killed mid-write: restart + replay, filesystem consistent (also without replay) · controller DMA outside the window faults, memory intact |
 
 #### Part 3 — networking, crypto, PKI
 | Marker | Proves |

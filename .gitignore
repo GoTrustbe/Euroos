@@ -11,6 +11,7 @@ userland/*.elf
 userland/e1000d.elf.sig
 userland/nvmed.elf.sig
 userland/bcm5720d.elf.sig
+userland/megaraidd.elf.sig
 userland/*.signed
 
 # ── Bootable disk images (build output) ──────────────────────────────────────

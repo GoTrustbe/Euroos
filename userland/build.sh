@@ -80,6 +80,10 @@ echo "==> bcm5720d.elf (userspace Broadcom BCM5720 driver, Rust; logic in crates
 (cd bcm5720d && cargo build --release -q)
 cp bcm5720d/target/x86_64-unknown-none/release/bcm5720d bcm5720d.elf
 echo "==> bcm5720d.elf: $(stat -c%s bcm5720d.elf) bytes (static PIE, driver profile)"
+echo "==> megaraidd.elf (userspace MegaRAID MFI driver, Rust)..."
+(cd megaraidd && cargo build --release -q)
+cp megaraidd/target/x86_64-unknown-none/release/megaraidd megaraidd.elf
+echo "==> megaraidd.elf: $(stat -c%s megaraidd.elf) bytes (static PIE, driver profile)"
 
 # EuroToolchain security: sign every userland binary with the EuroOS Ed25519
 # developer key. The kernel verifies these signatures before running (verify-

@@ -26,6 +26,8 @@ mod bootopt;
 mod udrv;
 mod udrv_blk;
 mod udrv_bcm5720;
+mod udrv_mr;
+mod mrblk;
 mod klock;
 mod kvfs;
 mod percpu;
@@ -2248,6 +2250,9 @@ fn main() -> Status {
         demo_out.extend(net_late_suite(&mut allocator, &mut fs));
     }
     udrv_bcm5720::boot(&mut allocator);
+    // Userspace MegaRAID (MFI gen2): megaraidd is the only MegaRAID driver; the
+    // root disk stays on the in-kernel drivers.
+    udrv_mr::boot(&mut allocator);
     // M3-3: a CDC-ECM USB NIC only exists after xHCI enumeration (above) — if
     // no NIC bound during the main net bring-up, adopt it and bring it up now.
     net::late_bring_up();
@@ -6624,6 +6629,7 @@ fn main() -> Status {
             udrv::supervise(ctx.mem);
             udrv_blk::supervise(ctx.mem);
             udrv_bcm5720::supervise(ctx.mem);
+            udrv_mr::supervise(ctx.mem);
             init::flush_log(ctx.fs);
             // G5: periodic background scrub (rate-limited ~60 s) → /var/log/fsck.log.
             scrub::maybe_run(ctx.fs, t);
