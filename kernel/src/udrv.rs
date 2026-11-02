@@ -198,7 +198,8 @@ pub fn syscall(task: usize, num: u64, a1: u64, a2: u64, a3: u64) -> Option<u64> 
                 return err(abi::EFAULT);
             }
             for attempt in 0..2 {
-                if let Some((_, data)) = euroipc::take(g.info.own_port as u32, irq_msg) {
+                let deliver = |n: u32| if g.info.own_port == DRIVER_PORT as u64 { irq_msg(n) } else { crate::udrv_blk::irq_msg(n) };
+                if let Some((_, data)) = euroipc::take(g.info.own_port as u32, deliver) {
                     if data.len() > max {
                         return err(abi::ENOSPC); // dropped: the driver's buffer is MAX_MSG
                     }
@@ -232,7 +233,11 @@ pub fn syscall(task: usize, num: u64, a1: u64, a2: u64, a3: u64) -> Option<u64> 
                 // A task sleeping in a network wait (net.rs RxWait) has
                 // something to look at now: wake it instead of letting it
                 // sleep out its tick.
-                crate::net::wake_rx_waiters();
+                if g.info.stack_port == STACK_PORT as u64 {
+                    crate::net::wake_rx_waiters();
+                } else {
+                    crate::udrv_blk::wake();
+                }
             }
             Some(r as u64)
         }

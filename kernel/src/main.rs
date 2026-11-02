@@ -24,6 +24,7 @@ mod vault;
 mod euroipc;
 mod bootopt;
 mod udrv;
+mod udrv_blk;
 mod klock;
 mod kvfs;
 mod percpu;
@@ -3678,6 +3679,9 @@ fn main() -> Status {
             Err(_) => serial_println!("[g2] /nvme routing FAILED"),
         }
     }
+    // The first storage driver out of the kernel (storage.nvme=user): nvmed in
+    // ring 3 serves the NVMe disk as a DATA mount at /data (never the root).
+    udrv_blk::boot(&mut allocator, &mut vfs);
 
     // ── Phase 2B: SOVEREIGN SECURITY BACKBONE (L1 + L2 + P3) ──
     // L1 (EuroFS immutability) + L2 (CAP_IMMUTABLE_ADMIN gate) + P3 (append-only
@@ -6616,6 +6620,7 @@ fn main() -> Status {
             init::supervise(ctx.mem, ctx.fs);
             // Userspace drivers: restart a crashed e1000d (after quiescing its device).
             udrv::supervise(ctx.mem);
+            udrv_blk::supervise(ctx.mem);
             init::flush_log(ctx.fs);
             // G5: periodic background scrub (rate-limited ~60 s) → /var/log/fsck.log.
             scrub::maybe_run(ctx.fs, t);

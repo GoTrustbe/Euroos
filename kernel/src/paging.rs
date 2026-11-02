@@ -1232,10 +1232,20 @@ pub fn init(falloc: &mut FrameAllocator) -> u64 {
 /// are freed with the address space (`free_address_space` frees every non-huge
 /// table under PML4[0]). Call before the process first runs (no TLB shootdown).
 pub fn map_user_identity_4k(falloc: &mut FrameAllocator, pml4: u64, pa: u64, mmio: bool) -> bool {
+    map_user_4k_at(falloc, pml4, pa, pa, mmio)
+}
+
+/// Like [`map_user_identity_4k`], but the page at virtual `va` (below 512 GiB)
+/// shows physical `pa`, which may lie anywhere below 2^52: a device BAR above
+/// the identity map (QEMU's 64-bit NVMe BAR near 768 GiB) is given to its
+/// userspace driver at a virtual address of the driver's own (eurodrv
+/// `HIGH_MMIO_VA`). Only the leaf differs from the identity case; the split
+/// tables above it keep the supervisor identity mapping for everything else.
+pub fn map_user_4k_at(falloc: &mut FrameAllocator, pml4: u64, va: u64, pa: u64, mmio: bool) -> bool {
     const PCD_PWT: u64 = (1 << 4) | (1 << 3);
     const PAT_HUGE: u64 = 1 << 12; // PAT bit of a 1 GiB / 2 MiB entry
     const PAT_4K: u64 = 1 << 7; // PAT bit of a 4 KiB entry
-    if pa >= 512 * GIB || pa & 0xFFF != 0 {
+    if va >= 512 * GIB || va & 0xFFF != 0 || pa & 0xFFF != 0 || pa >= 1 << 52 {
         return false;
     }
     // Flags of a huge entry that carry over to the smaller pages (P, RW, U/S,
@@ -1249,7 +1259,7 @@ pub fn map_user_identity_4k(falloc: &mut FrameAllocator, pml4: u64, pa: u64, mmi
             return false;
         }
         let pdpt = e4 & ADDR_MASK;
-        let i3 = ((pa >> 30) & 0x1FF) as usize;
+        let i3 = ((va >> 30) & 0x1FF) as usize;
         let s3 = (pdpt as *mut u64).add(i3);
         let mut e3 = s3.read_volatile();
         if e3 & PRESENT == 0 {
@@ -1268,7 +1278,7 @@ pub fn map_user_identity_4k(falloc: &mut FrameAllocator, pml4: u64, pa: u64, mmi
             s3.write_volatile(e3 | USER);
         }
         let pd = e3 & ADDR_MASK;
-        let i2 = ((pa >> 21) & 0x1FF) as usize;
+        let i2 = ((va >> 21) & 0x1FF) as usize;
         let s2 = (pd as *mut u64).add(i2);
         let mut e2 = s2.read_volatile();
         if e2 & PRESENT == 0 {
@@ -1287,7 +1297,7 @@ pub fn map_user_identity_4k(falloc: &mut FrameAllocator, pml4: u64, pa: u64, mmi
             s2.write_volatile(e2 | USER);
         }
         let pt = e2 & ADDR_MASK;
-        let i1 = ((pa >> 12) & 0x1FF) as usize;
+        let i1 = ((va >> 12) & 0x1FF) as usize;
         let leaf = pa | PRESENT | WRITABLE | USER | NX | if mmio { PCD_PWT } else { 0 };
         (pt as *mut u64).add(i1).write_volatile(leaf);
     }

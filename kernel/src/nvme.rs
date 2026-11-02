@@ -107,6 +107,12 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         Some(d) => d,
         None => return false,
     };
+    if crate::bootopt::nvme_user_driver() {
+        // storage.nvme=user: the controller belongs to the userspace driver
+        // nvmed (udrv_blk.rs), started after the scheduler. Not touched here.
+        crate::serial_println!("[nvme] storage.nvme=user: controller {:02x}:{:02x}.{} left to the userspace driver nvmed (data disk)", dev.bus, dev.dev, dev.func);
+        return false;
+    }
     crate::pci::claim(dev.bus, dev.dev, dev.func, "nvme"); // hwprobe (M1-3)
     dev.enable(0x6); // bus-master + memory space
     let bar0 = dev.bar(0) as u64 & 0xFFFF_FFF0;
