@@ -1,6 +1,7 @@
 # Sprint plan: the first driver out of the kernel (userspace e1000)
 
-Status: ACTIVE, started 2026-11-02 on `feature/userspace-drivers`. Verified in
+Status: ACTIVE, started 2026-11-02 on `feature/userspace-drivers`, merged with
+the J1 locking work on `feature/integrate-j1-udrv`. Verified in
 QEMU under TCG only (no KVM on the build server); real hardware not yet.
 
 ## Why
@@ -220,7 +221,7 @@ QEMU line for the proofs (TCG, one instance, `-smp` at most 4):
 | 4. Crash test | ✅ QEMU | `[udrv-crash]` |
 | 5. IOMMU really confines | ✅ QEMU with `intel-iommu` · ⬜ real VT-d hardware | `[udrv-dma]` |
 | 6. Docs | ✅ | STATUS, deep reference, ISOLATION-LEVELS |
-| Make `user` the default | ⬜ | needs process network syscalls through the driver |
+| Make `user` the default | ⬜ | three blockers, measured after the merge: see "Making `user` the default" |
 
 ## Log
 
@@ -254,3 +255,56 @@ QEMU line for the proofs (TCG, one instance, `-smp` at most 4):
   probe built on `net::arp_resolve` stalled for minutes); the self-test waits in
   ticks instead, and the NIC backend yields at most once per tick. QEMU's VT-d has one fault-recording
   register: the self-test reads and clears it between the TX and RX probes.
+- 2026-11-02, merge with the J1 locking work (`feature/integrate-j1-udrv`):
+  EuroIPC now runs on the per-channel core `crates/euroipc` (one lock per port,
+  `Mode::Irq` instead of the hand-written `without_interrupts`, notification
+  slots unchanged). Wiring it found one semantic gap: the core treated
+  `only_from == u64::MAX` as "unrestricted", which would have opened the
+  netstack port to every sender before a driver holds the grant; fixed in the
+  core with a separate restricted flag. Re-verified on the merged kernel (QEMU
+  TCG, 512 MiB, `-smp 4`, `-device intel-iommu,intremap=off`,
+  `-nic user,model=e1000e`, `net.driver=user`): every `[udrv-*]` marker as in
+  the log above, including `[iommu] DMA FAULT blocked` for the read and the
+  write, canary unchanged, and the crash/restart with DHCP + HTTP again; also
+  without the IOMMU (`-smp 1`), where `[udrv-iommu]`/`[udrv-dma]` report "not
+  confined" as before. Logs: `docs/proof/integration-j1-udrv-2026-11-02/`.
+
+## Making `user` the default: where it is stuck (measured 2026-11-02)
+
+The default stays `net.driver=kernel`. What blocks the switch, precisely:
+
+1. **The dev self-test suite needs the network before the scheduler.** The
+   network block in `main.rs` (DHCP, ARP, ping, DNS, HTTP, HTTPS, IPv6) and the
+   foreground runs of `/bin/msock`, `/bin/mdns`, `/bin/mtrack` happen before
+   `sched::init()` and before the APIC timer starts. A ring-3 driver cannot run
+   then. Measured in `user` mode: `connect()` of msock returns -1 at once (no
+   network configuration yet), `[exec] /bin/msock ... exit=1`, and the markers
+   `[e1000]`, `[inet]`, `[udpq]`, `[g3]` are missing; every other marker is
+   the same as in `kernel` mode. Fix: move the network part of the suite after
+   the scheduler and `udrv::boot` (or give it a `user`-mode variant), keeping
+   the kernel-mode order identical.
+2. **Musl background processes have no socket syscalls.** `bg_dispatch`
+   (`ring3.rs`, run under the global `BG` lock) answers every number it does
+   not know with 0. Measured with an experimental `[udrv-msock]` (patch in the
+   proof folder, not merged): msock as a scheduled process over `e1000d`
+   "finished" in 8 ticks with 0 frames sent and `response: 0 bytes`. So for
+   this path the BG lock is not the blocker; the socket calls are simply
+   absent. Fix: route the socket numbers of that path to the existing socket
+   layer, outside the BG lock.
+3. **The Linux-ABI socket path spins with interrupts off.** `linux_dispatch`
+   (foreground programs, glibc processes) does not hold `BG`, and glibc
+   processes may already yield there (`syscall_yield_ok`, used by futex and
+   epoll), but the blocking calls in `net.rs` (`TcpConn::connect`/`recv`,
+   `poll_seg` = `SPINS * 3` iterations per round) never yield, and the NIC
+   backend only yields when interrupts are on. All ring-3 code, `e1000d`
+   included, runs on the BSP, so the driver cannot run while such a call waits.
+   Fix: blocking calls as loops over the existing `*_nowait` primitives
+   (`connect_nowait`/`poll_connect`, `recv_nowait`, `send_nowait`) with a
+   one-tick sleep between rounds when `syscall_yield_ok()`. This is code
+   reading, not yet measured in `user` mode: the glibc tests need more than
+   512 MiB.
+
+All three change the boot order or the syscall path that the kernel-mode
+default depends on; the switch should come with its own proof that nothing
+moves in `kernel` mode (`-smp 4` and `-smp 1`) and that msock and the network
+tests of the suite pass in `user` mode.

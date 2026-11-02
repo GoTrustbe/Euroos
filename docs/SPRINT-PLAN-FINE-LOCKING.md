@@ -179,14 +179,15 @@ cores (`kvfs::root()`).
   benchmarked; the per-socket locks are verified by the boot net self-tests and
   the order checker.
 
-### 3.5 Per-channel EuroIPC (`crates/euroipc`) ✅ core, ⬜ kernel wiring (merge)
+### 3.5 Per-channel EuroIPC (`crates/euroipc`) ✅ core, ✅ kernel wiring (after the merge)
 
 `ChannelTable`: channel table in a `ReadMostly`, **one lock per port**, per-CPU
 sharded counters and audit rings (merged by timestamp on read), all `Irq` mode.
 It already implements the driver branch's semantics (bounded queues with
 `MAX_QUEUE`, restricted ports, `set_only_from`, `unregister`, `take` by port,
-`send_with` without audit). The kernel's `euroipc.rs` is deliberately left
-unchanged on this branch, because the driver branch rewrote it; see §6.
+`send_with` without audit). The kernel's `euroipc.rs` was deliberately left
+unchanged on this branch, because the driver branch rewrote it; see §6. After
+the merge the kernel bus runs on `ChannelTable`: see §9.
 
 ### 3.6 Heap: per-CPU small-object caches (`kernel/src/allocator.rs`) ✅
 
@@ -347,8 +348,10 @@ two branches are merged.
   BSP; the APs run kernel work (`kwork`) only. Also: the APs share the BSP's IST
   configuration without a TSS of their own, so an exception that uses an IST
   stack on an AP is fatal today (it never happened in these runs).
-- ⬜ **BG per-process lock + blocking syscalls without IF=0** (see §6).
-- ⬜ **Kernel `euroipc.rs` on the per-channel core** (after the merge, §6).
+- ⬜ **BG per-process lock + blocking syscalls without IF=0** (see §6, and §9
+  for what the merge measured: the musl background path has no socket calls at
+  all, the Linux-ABI path spins without yielding).
+- ✅ **Kernel `euroipc.rs` on the per-channel core** (after the merge, §9).
 - 🟡 **Per-socket TCP**: structural (per-socket locks, verified by the boot net
   tests), not benchmarked in parallel: one NIC, driven from the BSP.
 - ⬜ Remaining legacy globals in `ring3.rs` (65 statics of per-process state in
@@ -376,3 +379,38 @@ Recent Redox kernel commits (October 2026) were read for this sprint:
   `try_lock`. `kwork` follows the same shape.
 
 No Redox source was copied; nothing in this branch needs the MIT notice.
+
+## 9. Merge with `feature/userspace-drivers` (2026-11-02)
+
+Both branches were rewritten onto `b117647` and merged on
+`feature/integrate-j1-udrv`.
+
+- **Conflicts** were only in `Cargo.toml` (both new crate sets), the module list
+  of `kernel/src/main.rs` and the EuroIPC section of the deep reference.
+  `ring3.rs` merged cleanly, as §6 predicted: the EuroLock declarations and the
+  driver-profile routing before the BG lock are separate hunks.
+- **Kernel EuroIPC on `ChannelTable`** ✅: `kernel/src/euroipc.rs` keeps the
+  driver branch's API and its IRQ notification slots, and stores ports, queues
+  and the audit trail in `crates/euroipc`. One semantic difference surfaced
+  while wiring it: the core used `only_from == u64::MAX` as "unrestricted",
+  but the driver supervisor claims the netstack port with `u64::MAX` to mean
+  "nobody until a driver holds the grant". The core now has a separate
+  restricted flag (host test `restricted_to_nobody_until_set`).
+- **Boot proof after the merge** (selftest image, QEMU TCG, 512 MiB): `-smp 4`
+  and `-smp 1` reach the interactive desktop with the same per-marker results as
+  this branch's own runs (the same glibc "no arena" failures at 512 MiB, nothing
+  else); `[lk]`, `[kwork]`, `[lk-stress]` OK, 0 order inversions, 0 task locks
+  under IF=0. With `net.driver=user` and `-device intel-iommu,intremap=off` all
+  `[udrv-*]` markers pass, including the IOMMU faults and the crash/restart,
+  with the per-channel EuroIPC underneath. Logs:
+  `docs/proof/integration-j1-udrv-2026-11-02/`.
+- **The BG lock and the userspace NIC (§6 open point), measured:** an
+  experimental boot ran `/bin/msock` as a scheduled musl background process
+  over `e1000d` (patch in the proof folder, not merged). It "finished" in 8
+  ticks with 0 frames sent: `bg_dispatch` has no socket syscalls (unknown
+  numbers return 0), so on that path the BG lock is not what stops the
+  network; the path does not exist. Socket syscalls live only in
+  `linux_dispatch` (foreground programs, glibc processes), which does not hold
+  BG but spins in `net.rs` with IF=0 and never yields. Splitting BG is still
+  worth doing (the hold times in §4.5 stand), but it is not by itself what
+  makes the userspace driver usable for processes; see the driver plan.
