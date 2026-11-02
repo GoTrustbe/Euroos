@@ -22,6 +22,9 @@ live-demos = []
 # desktop is the right place to start a browser -- `chrome` in the terminal or
 # "Chromium browser" in the app launcher.
 chrome-boot = []
+# J1: boot, run the multi-core lock stress + benchmark ([lk-stress]/[lk-bench])
+# right after SMP bring-up, print the contention report and power off.
+lockbench = []
 
 [[bin]]
 name = "eurokernel"
@@ -30,6 +33,8 @@ path = "src/main.rs"
 [dependencies]
 uefi = { version = "0.33", features = ["alloc"] }
 eurofs = { path = "../crates/eurofs" }
+eurolock = { path = "../crates/eurolock" }
+euroipc = { path = "../crates/euroipc" }
 euronet = { path = "../crates/euronet" }
 euromm = { path = "../crates/euromm" }
 eurotls = { path = "../crates/eurotls" }

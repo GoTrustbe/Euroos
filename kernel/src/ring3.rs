@@ -396,13 +396,19 @@ static STDOUT_REDIRECT: Mutex<Option<usize>> = Mutex::new(None);
 // Content is a Cow: embedded read-only libraries/binaries are served BORROWED straight
 // from the kernel image (include_bytes! → &'static), so the ~50 MiB desktop-graphics
 // lib set costs zero heap; writable files (/proc, created files, redirects) are Owned.
-static FILES: Mutex<alloc::vec::Vec<(String, alloc::borrow::Cow<'static, [u8]>)>> = Mutex::new(alloc::vec::Vec::new());
+static SITE_FILES: eurolock::LockSite = eurolock::LockSite::new("ring3.FILES (syscall file table)", eurolock::LockClass::Process);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static FILES: eurolock::sync::Mutex<alloc::vec::Vec<(String, alloc::borrow::Cow<'static, [u8]>)>> =
+    eurolock::sync::Mutex::new_site(&SITE_FILES, eurolock::Mode::Plain, alloc::vec::Vec::new());
 // Max open file descriptors per the flat VFS. 16 was fine for the shell + small
 // apps but chrome opens hundreds (libs, profile DBs, memfd shm, pipes, epoll) — a
 // full table made EVERY new open return -1 (EPERM): the shm/README/history failures.
 // Kept below UNIX_FD_BASE (600) so regular fds never collide with the socket range.
 const MAX_FD: usize = 512;
-static OPEN_FDS: Mutex<[Option<(usize, usize)>; MAX_FD]> = Mutex::new([None; MAX_FD]);
+static SITE_OPEN_FDS: eurolock::LockSite = eurolock::LockSite::new("ring3.OPEN_FDS", eurolock::LockClass::Process);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static OPEN_FDS: eurolock::sync::Mutex<[Option<(usize, usize)>; MAX_FD]> =
+    eurolock::sync::Mutex::new_site(&SITE_OPEN_FDS, eurolock::Mode::Plain, [None; MAX_FD]);
 /// Open DIRECTORY fds (Linux getdents64): (normalized dir path, cursor in the
 /// children list). Separate table so a dir fd is not read as a file.
 static OPEN_DIRS: Mutex<[Option<(String, usize)>; MAX_FD]> =
@@ -4031,12 +4037,18 @@ struct BgProc {
 
 /// Exit statuses of terminated children, kept separate from frame reaping, so that
 /// waitpid can still retrieve the status after the frames are already freed. (ppid, pid, code).
-static CHILD_EXITS: Mutex<alloc::vec::Vec<(u64, u64, i64)>> = Mutex::new(alloc::vec::Vec::new());
+static SITE_CHILD_EXITS: eurolock::LockSite = eurolock::LockSite::new("ring3.CHILD_EXITS", eurolock::LockClass::Process);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static CHILD_EXITS: eurolock::sync::Mutex<alloc::vec::Vec<(u64, u64, i64)>> =
+    eurolock::sync::Mutex::new_site(&SITE_CHILD_EXITS, eurolock::Mode::Plain, alloc::vec::Vec::new());
 
 /// Pid counter for forked children (starts high, separate from the fixed demo pids 1-16).
 static NEXT_FORK_PID: AtomicU64 = AtomicU64::new(1000);
 
-static BG: Mutex<alloc::vec::Vec<BgProc>> = Mutex::new(alloc::vec::Vec::new());
+static SITE_BG: eurolock::LockSite = eurolock::LockSite::new("ring3.BG (background processes)", eurolock::LockClass::Process);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static BG: eurolock::sync::Mutex<alloc::vec::Vec<BgProc>> =
+    eurolock::sync::Mutex::new_site(&SITE_BG, eurolock::Mode::Plain, alloc::vec::Vec::new());
 /// Tombstones of cleaned-up processes (for display).
 static REAPED: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new());
 
@@ -4510,7 +4522,10 @@ pub fn kill_pid(pid: u64) -> bool {
 
 /// Futex wait queue: (userspace address, blocked task). FUTEX_WAIT blocks the
 /// task (the scheduler skips it); FUTEX_WAKE unblocks up to `n` waiters.
-static FUTEX_QUEUE: Mutex<alloc::vec::Vec<(u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static SITE_FUTEX_QUEUE: eurolock::LockSite = eurolock::LockSite::new("ring3.FUTEX_QUEUE", eurolock::LockClass::Process);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static FUTEX_QUEUE: eurolock::sync::Mutex<alloc::vec::Vec<(u64, usize)>> =
+    eurolock::sync::Mutex::new_site(&SITE_FUTEX_QUEUE, eurolock::Mode::Plain, alloc::vec::Vec::new());
 /// Monotonic count of Linux syscalls dispatched — a progress heartbeat the launcher's
 /// stall detector watches to catch a many-thread deadlock (no syscall = frozen).
 static SYSCALL_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);

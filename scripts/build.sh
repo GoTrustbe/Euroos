@@ -26,6 +26,13 @@ if [ "$PROFILE" = "image" ]; then
   EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
   cargo kbuild-image
   cargo lbuild-release           # G4: two-stage loader
+elif [ "$PROFILE" = "lockbench" ]; then
+  # J1 lock benchmark image: boots, runs [lk-stress]/[lk-bench] on every core
+  # right after SMP bring-up, prints the contention report and powers off.
+  PROFILE="release"
+  EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
+  cargo kbuild-lockbench
+  cargo lbuild-release
 elif [ "$PROFILE" = "chrome" ]; then
   # Iteration image: chrome runs in the boot phase (see the chrome-boot feature).
   PROFILE="release"
