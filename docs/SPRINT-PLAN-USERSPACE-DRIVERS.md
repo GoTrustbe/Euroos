@@ -1,8 +1,11 @@
 # Sprint plan: the first driver out of the kernel (userspace e1000)
 
 Status: ACTIVE, started 2026-11-02 on `feature/userspace-drivers`, merged with
-the J1 locking work on `feature/integrate-j1-udrv`. Verified in
-QEMU under TCG only (no KVM on the build server); real hardware not yet.
+the J1 locking work on `feature/integrate-j1-udrv`. Since `feature/udrv-default`
+(2026-11-02) **`net.driver=user` is the default**; `net.driver=kernel` is the
+fallback. Verified in QEMU under TCG only (no KVM on the build server); real
+hardware not yet. The next driver (NVMe, a data disk) has its own plan:
+`SPRINT-PLAN-USERSPACE-STORAGE.md`.
 
 ## Why
 
@@ -169,15 +172,16 @@ driver crash is a process exit.
 ### Boot option and the in-kernel fallback
 
 `\EFI\BOOT\euroos-boot.conf` on the ESP (read before ExitBootServices):
-`net.driver=user` selects the userspace driver, `net.driver=kernel` (the
-default, and what a missing file means) keeps the in-kernel e1000.
-`scripts/build.sh` writes the file when `EUROOS_BOOTOPTS` is set.
+`net.driver=user` (the default since 2026-11-02, and what a missing file
+means) selects the userspace driver, `net.driver=kernel` keeps the in-kernel
+e1000 (the fallback). `scripts/build.sh` writes the file when
+`EUROOS_BOOTOPTS` is set.
 
-The default stays `kernel` for now: the dev self-test suite brings the
-network up before the scheduler exists, which a userspace driver cannot do.
-The userspace driver becomes the default when it is equal in function
-(early-boot networking moved after the scheduler, or the suite adapted) and
-in performance. Limitation: the option file is not signed; it can only pick
+At first the default stayed `kernel`: the dev self-test suite brought the
+network up before the scheduler existed. How that was solved is in "Making
+`user` the default" below. A machine with a virtio-net or USB NIC binds that
+in the kernel before the scheduler, as before; e1000d only takes the
+82540EM/82574L. Limitation: the option file is not signed; it can only pick
 between two shipped, signed code paths.
 
 ### Syscalls and profile
@@ -217,11 +221,11 @@ QEMU line for the proofs (TCG, one instance, `-smp` at most 4):
 |---|---|---|
 | 1. Primitives: grant + MMIO mapping, IRQ->IPC, IOMMU domain per driver | ✅ QEMU | `[udrv-grant]`, `[udrv-irq]`, `[udrv-iommu]` |
 | 2. Userspace e1000 driver | ✅ QEMU (82574L, MSI-X) · ⬜ 82540EM interrupts (polled) | `[udrv-e1000]` |
-| 3. Netstack via the driver: DHCP + HTTP | ✅ QEMU for kernel-side users (boot self-test, desktop loop) · 🟡 process network syscalls do not reach the driver yet | `[udrv-net]` |
+| 3. Netstack via the driver: DHCP + HTTP | ✅ QEMU, kernel-side users and processes (musl background processes, scheduled glibc processes) | `[udrv-net]`, `[net-late]`, `[exec] /bin/msock ...`, `[udrv-linux]` |
 | 4. Crash test | ✅ QEMU | `[udrv-crash]` |
 | 5. IOMMU really confines | ✅ QEMU with `intel-iommu` · ⬜ real VT-d hardware | `[udrv-dma]` |
 | 6. Docs | ✅ | STATUS, deep reference, ISOLATION-LEVELS |
-| Make `user` the default | ⬜ | three blockers, measured after the merge: see "Making `user` the default" |
+| Make `user` the default | ✅ QEMU (`-smp 4` and `-smp 1`) | see "Making `user` the default"; logs in `docs/proof/udrv-default-2026-11-02/` |
 
 ## Log
 
@@ -269,9 +273,9 @@ QEMU line for the proofs (TCG, one instance, `-smp` at most 4):
   without the IOMMU (`-smp 1`), where `[udrv-iommu]`/`[udrv-dma]` report "not
   confined" as before. Logs: `docs/proof/integration-j1-udrv-2026-11-02/`.
 
-## Making `user` the default: where it is stuck (measured 2026-11-02)
+## Making `user` the default: where it was stuck (measured 2026-11-02, solved the same day, see the next section)
 
-The default stays `net.driver=kernel`. What blocks the switch, precisely:
+At the time the default stayed `net.driver=kernel`. What blocked the switch, precisely:
 
 1. **The dev self-test suite needs the network before the scheduler.** The
    network block in `main.rs` (DHCP, ARP, ping, DNS, HTTP, HTTPS, IPv6) and the
@@ -308,3 +312,54 @@ All three change the boot order or the syscall path that the kernel-mode
 default depends on; the switch should come with its own proof that nothing
 moves in `kernel` mode (`-smp 4` and `-smp 1`) and that msock and the network
 tests of the suite pass in `user` mode.
+
+## How `user` became the default (2026-11-02, `feature/udrv-default`)
+
+1. **The network part of the boot moved behind the scheduler** (`main.rs`,
+   `net_late_suite`, marker `[net-late]`). With the userspace driver and no
+   other NIC bound before the scheduler, the pre-scheduler block only notes
+   that the e1000 is left to `e1000d`. After `udrv::boot` a bounded wait
+   (20 s; on expiry a FAILED line and every network program reported as not
+   run) checks link and DHCP, then the same probes as the kernel path run
+   (ARP, ping, DNS, HTTP, HTTPS, IPv6 router discovery, `[g3]`, SMB/NFS), and
+   `/bin/msock`, `/bin/mdns`, `/bin/mtrack` run as scheduled musl processes
+   with the capabilities of the program registry, their output mirrored to
+   the log (`[bg-out]`). The kernel path is unchanged: with
+   `net.driver=kernel` the per-marker verdicts are identical to the J1 x udrv
+   logs, `-smp 4` and `-smp 1`.
+2. **Socket syscalls for background processes** (`ring3.rs`,
+   `bg_net_dispatch`). Routed before the BG lock is held for them; their own
+   pointer checks; `socket()` needs `CAP_NET` in the process's own capability
+   set; sockets owned per pid; EuroGuard under the process's own name;
+   sockets closed when the process is reaped. Unknown background syscalls
+   answer `-ENOSYS` (`bg_unknown`; a whole selftest boot answered none, so
+   nothing relied on the silent 0 there). A static look at the embedded
+   programs shows what an interactive run could still meet: the DOOM port
+   links `mkdir`, `rmdir`, `unlink`, `rename`, `fcntl`, `getuid`/`getgid`
+   and friends that used to "succeed" with 0 and now fail with `ENOSYS`;
+   not exercised in this boot.
+3. **Blocking socket calls give the CPU away** (`net.rs`, `RxWait`; wake-up
+   from `udrv` on every driver send). Details in the deep reference,
+   "Userspace drivers". Effect on the BG lock: its boot-total hold-max is
+   18 to 22 ms in every run, before and after (the network waits of
+   background processes are outside the lock now: msock alone waits about
+   130 ms for its page, while the BG hold-max over the same stretch stays
+   below 19 ms); the scheduled glibc program `/bin/gnet` fetches a page with
+   blocking connect/send/recv, its waits gave the CPU away and were woken
+   early by e1000d (`[udrv-linux]`, a 1 GiB run; at 512 MiB glibc has no
+   arena and the line says so).
+
+Found on the way: with the userspace NIC a frame sent or received under a
+socket lock is a EuroIPC message, which the J1 lock order flagged as an
+inversion; the IPC classes moved inside the network classes
+(`SPRINT-PLAN-FINE-LOCKING.md` §10). And both supervisors turned bus
+mastering on after the driver task could already run; now it is on before.
+
+Honest limits that remain: a foreground program (a synchronous excursion on
+task 0, as the boot script runs its programs) cannot wait for the userspace
+NIC, its socket calls spin; wake-up latency is a tick when no frame arrives;
+QEMU/TCG only. Proof logs: `docs/proof/udrv-default-2026-11-02/`.
+Not explained: two boots of this branch stopped at the chrome_crashpad step
+of the glibc suite (one hang, one machine reset); neither reproduced in the
+reruns or in a side-by-side comparison with `813e627`. Details in the proof
+README.

@@ -292,9 +292,11 @@ times are interrupts-off windows: 25 ms under `BG` is 2.5 timer ticks with IF=0.
 
 ```
 Sched < RunQueue < Process < FsMountTable < Fs < BlockCache < Vault
-      < IpcTable < IpcChannel < Net < NetSocket < UnixTable < UnixConn
+      < Net < NetSocket < UnixTable < UnixConn < IpcTable < IpcChannel
       < Agent < Firewall < Audit < Serial < Heap
 ```
+
+(Changed 2026-11-02, see §10: the IPC classes used to sit before `Net`.)
 
 Table locks (`FsMountTable`, `IpcTable`, `UnixTable`) are released before the
 instance lock is taken, so in practice they never nest with it; the order still
@@ -414,3 +416,25 @@ Both branches were rewritten onto `b117647` and merged on
   BG but spins in `net.rs` with IF=0 and never yields. Splitting BG is still
   worth doing (the hold times in §4.5 stand), but it is not by itself what
   makes the userspace driver usable for processes; see the driver plan.
+
+## 10. The userspace NIC as the default (2026-11-02, `feature/udrv-default`)
+
+- **Lock order change.** The first boot with process sockets over `e1000d`
+  counted 942 order inversions (`[lk-stress]` then FAILED on the global
+  count): holding `NetSocket` while taking `IpcTable`/`IpcChannel`. With the
+  userspace driver `TcpConn::emit` -> `nic::send` -> `euroipc::send_with` and
+  `rx_route` -> `udrv::nic_poll` -> `euroipc::take` run under a socket lock,
+  so a socket lock legitimately comes first. No IPC lock is held while
+  another class is taken (`ChannelTable` never calls out), so the IPC classes
+  are leaves: they moved behind `UnixConn` (`IpcTable` 57, `IpcChannel` 58),
+  new host-test assertions `NetSocket < IpcTable` and `Net < IpcChannel`.
+  Every run since: 0 inversions, `[lk-stress]` OK.
+- **The §6 open point, socket calls under BG.** Background socket calls no
+  longer run under the BG lock at all: they are routed out of
+  `syscall_dispatch` before it is held, and a blocking one sleeps instead of
+  spinning (driver plan, "How `user` became the default"). Measured: the BG
+  hold-max stays 18 to 22 ms per boot, as before; what remains is the other
+  background syscalls, so splitting BG (§7) is still open.
+- **`klock::held_here()`.** The network waits ask the per-context order
+  tracker whether any tracked lock (`Irq` or `Task` mode) is held; only with
+  none may they give the CPU away. `Plain` locks are not tracked.
