@@ -12,6 +12,9 @@
 //! sides A/B of a connection share two crossed byte FIFOs. `no_std`+alloc,
 //! fully testable on the host (no NIC/QEMU).
 
+pub mod shared;
+pub use shared::SharedSwitchboard;
+
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
