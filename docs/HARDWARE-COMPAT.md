@@ -26,7 +26,7 @@ documents the tested envelope so operators can judge fitness for a deployment.*
 |---|---|---|
 | Boot | UEFI loader → A/B kernel slots, GPT + FAT32 ESP | `scripts/build.sh` + standalone-boot install (`[q1x3]`) |
 | Block | **virtio-blk** (legacy + modern) | root EuroFS, install, A/B update (`[g2]`,`[q1x3]`) |
-| Block | **NVMe** (admin/IO queues, MSI-X) | EuroFS on `/nvme` (`[g2]`,`[j2-blk]`) |
+| Block | **NVMe** (admin/IO queues, MSI-X) | EuroFS on `/nvme` (`[g2]`,`[j2-blk]`); opt-in, the userspace driver `nvmed` for a data disk at `/data` (`storage.nvme=user`, `[udrv-blk-*]`) |
 | RAID | **LSI/Broadcom MegaRAID, MFI gen2** (SAS2108, `1000:0078`/`1000:0079`; QEMU `megasas-gen2`), driven from ring 3 by `megaraidd` | controller info, LD list, LD read/write, EuroFS across a reboot, driver crash + restart, IOMMU confinement (`[mr-*]`, `docs/SPRINT-PLAN-MEGARAID.md`); needs the BAR below 512 GiB (QEMU: `-fw_cfg name=opt/ovmf/X-PciMmio64Mb,string=0`) |
 | Net | **virtio-net** (legacy) | live ARP/DHCP/TCP/TLS, update server (`[n2]`,`[3e2]`) |
 | USB | **xHCI** + HID (keyboard/mouse) | live desktop input (`[euro]` xHCI) |
@@ -46,7 +46,7 @@ bare; the driver code is the same.
 
 | Device | Machine | What is verified | Not verified / limits |
 |---|---|---|---|
-| **Broadcom BCM5720** gigabit Ethernet (`14e4:165f`, NetXtreme 5720 A0), userspace driver `bcm5720d` (`net.driver=user`) | Dell PowerEdge R630 (onboard LOM, ports 3/4) | chip reset with the APE (NCSI) and bootcode handshake; MAC from the bootcode mailbox and from NVRAM; PHY id and link state; frames through the send ring and back through the return ring via PHY loopback, byte-identical; MSI-X; DMA confined to the driver's window (deliberate escape refused by the VT-d, memory unchanged); crash and restart (`[udrv-bcm-*]`) | no link on the test ports (no cable): link up, DHCP and HTTP unproven; the netstack is not routed to the driver yet; MAC-internal loopback does not work on this chip (PHY loopback does); no TSO/checksum offload/jumbo/RSS; EuroOS maps BARs only below 512 GiB (a VM needs `host-phys-bits-limit=39`) |
+| **Broadcom BCM5720** gigabit Ethernet (`14e4:165f`, NetXtreme 5720 A0), userspace driver `bcm5720d` (`net.driver=user`, the default) | Dell PowerEdge R630 (onboard LOM, ports 3/4) | chip reset with the APE (NCSI) and bootcode handshake; MAC from the bootcode mailbox and from NVRAM; PHY id and link state; frames through the send ring and back through the return ring via PHY loopback, byte-identical; MSI-X; DMA confined to the driver's window (deliberate escape refused by the VT-d, memory unchanged); crash and restart (`[udrv-bcm-*]`) | no link on the test ports (no cable): link up, DHCP and HTTP unproven; the netstack is not routed to the driver yet; MAC-internal loopback does not work on this chip (PHY loopback does); no TSO/checksum offload/jumbo/RSS; EuroOS maps BARs only below 512 GiB (a VM needs `host-phys-bits-limit=39`) |
 
 ## Protocol core done, real silicon pending (`🔒`, Phase 3B)
 
@@ -91,4 +91,4 @@ that nothing is presented as working until it is shown to work.
 
 *Companion to [`CRA-CONFORMANCE.md`](CRA-CONFORMANCE.md) (secure-by-design
 evidence) and [`SUPPORT-POLICY.md`](../SUPPORT-POLICY.md) (support period &
-security updates). Last revised 2026-11-02 (BCM5720 on real hardware, userspace MegaRAID).*
+security updates). Last revised 2026-11-02 (BCM5720 on real hardware, userspace MegaRAID, the userspace drivers merged).*

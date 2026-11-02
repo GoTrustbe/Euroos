@@ -85,7 +85,9 @@ an IOMMU domain per driver, and a supervisor that quiesces and restarts.
   (IOVA == virtual == physical).
 - **DMA**: 8 pages (queues, identify page, an 8 KiB data buffer), under VT-d
   the controller's own domain `nvmed` with exactly those pages.
-- **IRQ**: MSI-X vector `0x4D` -> EuroIPC notification slot 1 -> `Irq` messages.
+- **IRQ**: an MSI-X vector from the userspace-driver pool (`udrv::alloc_vector`,
+  `0x4C..=0x4F`; it was a fixed `0x4D` until the driver merge) -> EuroIPC
+  notification slot 1 -> `Irq` messages.
 
 ### Requests, crash and the filesystem
 
@@ -146,9 +148,49 @@ machine; that is the installer's rule, not the driver's).
   which is the mitigation, not a proof.
 - QEMU/TCG only.
 
+## Two block interfaces (since the merge with megaraidd)
+
+megaraidd (`docs/SPRINT-PLAN-MEGARAID.md`) brought a second block-over-IPC
+interface, `euromegaraid::blkif`. The two were compared when the drivers were
+merged (`feature/integrate-drivers`) and kept apart:
+
+| | nvmed (`eurodrv::proto`) | megaraidd (`euromegaraid::blkif`) |
+|---|---|---|
+| Data | inside the messages, 1 KiB each | in 64 KiB slots of the driver's DMA window; messages name a slot |
+| In flight | one request | up to four |
+| Disks | one | several logical drives (`disk` field) |
+| Flush | none yet | `Flush` (controller cache) |
+| After a driver crash | the request fails with an I/O error; EuroFS's CoW decides | unacknowledged chunks are replayed to the next instance; the old window stays in quarantine until it reset the controller |
+| Kernel side | `udrv_blk::UserBlk` | `mrblk::MrBlock` |
+
+Both are EuroFS `BlockDevice`s, so everything above the block layer treats
+them alike. Moving megaraidd onto nvmed's messages would cost it the
+multi-disk, flush and replay paths and 64x the messages; moving nvmed onto
+slots changes its DMA layout and the proofs that rest on it. That is a
+sprint of its own, with both drivers' crash and DMA proofs run again; the
+slot model is the likelier common ground (it is the one that carries
+throughput and replay).
+
 ## Log
 
 - 2026-11-02: plan written; Redox `nvmed` studied; `euronvme` host-tested;
   `nvmed` and `udrv_blk.rs` built and verified in QEMU (TCG, 1 GiB,
   `-smp 4` and `-smp 1`, `-device intel-iommu,intremap=off`, a 64 MiB NVMe
   data disk). Proof logs: `docs/proof/udrv-default-2026-11-02/`.
+- 2026-11-02: merged with bcm5720d and megaraidd (`feature/integrate-drivers`).
+  nvmed's vector now comes from the shared pool, its syscalls go through the
+  one dispatch in `udrv.rs`.
+- 2026-11-02, a bug found while testing the merge: nvmed instances stopped
+  with `controller init failed: Unexpected` (an admin completion with a
+  command id it had not sent): the first instance of a TCG boot, and the
+  first instances after the crash test under TCG and under KVM. The
+  supervisor restarted them and the markers still passed, which is how it
+  hid. Cause: nvmed reads DMA memory byte by byte in ascending order, so a
+  completion posted during the read could show the new phase bit (byte 14)
+  with the old, zeroed command id (bytes 12-13). `euronvme` now reads the
+  phase and status half first and the id after it. On the fixed tree no
+  instance failed: every `[udrv-blk-*]` marker under TCG (`-smp 4` and
+  `-smp 1`), in one TCG boot with e1000d and megaraidd (`-smp 4` and
+  `-smp 1`), and in two KVM boots on the R630 with all four drivers. The
+  other drivers read DMA memory the same way; whether their cores read the
+  ready bit before the rest of an entry is open (see the proof README).

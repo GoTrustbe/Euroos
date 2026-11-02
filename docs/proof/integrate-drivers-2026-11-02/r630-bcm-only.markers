@@ -1,0 +1,30 @@
+[udrv] net.driver=user: the e1000 driver runs in ring 3 (e1000d); the in-kernel e1000 stays unbound
+[udrv] no e1000/e1000e (8086:100e / 8086:10d3) present: nothing to drive
+[udrv-bcm] Broadcom BCM5720 (14e4:165f) at 00:02.0: driven from ring 3 by bcm5720d
+[udrv] bcm5720d started: pid 139264, task 27, profile driver · BAR0 0x7000000000+0x10000 · BAR2 (APE) 0x7000010000+0x10000 · DMA 0xb780000+0x40000 (64 pages) · IRQ MSI-X 0x4c -> EuroIPC · IOMMU own domain (DMA confined)
+[udrv-bcm-grant] bcm5720d pid 139264: BAR0 0x7000000000+0x10000 mapped=true, BAR2 (APE) 0x7000010000+0x10000 mapped=true, a page next to either=false; DMA 64 pages mapped=true, page after=false; MSI-X table (BAR4)=false, LAPIC=false, kernel code=false → OK (exactly the granted ranges) ✓
+[bcm5720d pid 139264] up in 100 ms: BCM5720 chip 0x05720000, PCI fn 0, APE NCSI 1.5.12.0, bootcode ASF on, DMA confined by the IOMMU, IRQ MSI-X
+[bcm5720d pid 139264] MAC 80:18:44:f2:71:3a from the bootcode SRAM mailbox; NVRAM (offset 0x7c) says the same
+[udrv-bcm-iommu] device 00:02.0 has its own VT-d domain 'bcm5720d' with 64 page(s) = the DMA window, nothing else → OK ✓
+[bcm5720d pid 139264] no link (PHY reports link down: no cable or no partner)
+[bcm5720d pid 139264] PHY loopback: 16 sent, 16 back, 16 byte-identical
+[udrv-bcm] chip 0x05720000 (5720 A0), APE firmware NCSI v1.5.12.0, bootcode handshake done (ASF on); MAC 80:18:44:f2:71:3a from the bootcode SRAM mailbox, NVRAM agrees; PHY id 0362:5f60; link DOWN (no cable or no partner) → OK ✓
+[bcm5720d pid 139264] MAC-internal loopback: 4 sent, 0 back, 0 byte-identical
+[udrv-bcm-loop] PHY loopback (1000/full): 16 frames out through the send ring, 16 back through the return ring, 16 byte-identical → OK (TX DMA read + RX DMA write through the IOMMU) ✓
+[udrv-bcm-loop] MAC-internal loopback: 4 sent, 0 back (Broadcom deprecates it on chips with a CPMU; Linux tg3 skips it on the 5720) — informational
+[udrv-bcm-irq] MSI-X vector 0x4c: 1 interrupt(s) raised by the chip, 1 delivered to bcm5720d as EuroIPC Irq messages → OK ✓
+[udrv-bcm-net] no link on this port: DHCP and HTTP not attempted ⬜
+[bcm5720d pid 139264] DMA escape attempt: RX buffer at 0x1d9000 (66 loopback frames sent, 65 back), TX from 0x1da000 (Err(TxTimeout))
+[bcm5720d pid 139264] re-initialised after the escape: PHY loopback 8/8 byte-identical
+[udrv-bcm-dma] malicious bcm5720d: RX buffer aimed at kernel canary 0x1d9000, TX from kernel page 0x1da000 · loopback frames 66 sent, 65 back (the aimed one lost) · TX from the secret page completed=false · canary changed=false · guest vIOMMU fault records 0 (the host VT-d refuses VFIO DMA; see its DMAR log) · after a core reset: PHY loopback 8/8 → OK (device DMA confined to the driver's own window) ✓
+[bcm5720d pid 139264] crash requested by the self-test: faulting now
+[udrv] bcm5720d pid 139264 died (memory isolation: access 0x1000 denied) -> device quiesced: bus-master off, IOMMU domain revoked, 64 DMA pages freed; restart at tick 452 (death #1)
+[udrv] bcm5720d started: pid 139265, task 28, profile driver · BAR0 0x7000000000+0x10000 · BAR2 (APE) 0x7000010000+0x10000 · DMA 0x1cb000+0x40000 (64 pages) · IRQ MSI-X 0x4c -> EuroIPC · IOMMU own domain (DMA confined)
+[bcm5720d pid 139265] up in 100 ms: BCM5720 chip 0x05720000, PCI fn 0, APE NCSI 1.5.12.0, bootcode ASF on, DMA confined by the IOMMU, IRQ MSI-X
+[bcm5720d pid 139265] MAC 80:18:44:f2:71:3a from the bootcode SRAM mailbox; NVRAM (offset 0x7c) says the same
+[bcm5720d pid 139265] no link (PHY reports link down: no cable or no partner)
+[bcm5720d pid 139265] PHY loopback: 16 sent, 16 back, 16 byte-identical
+[bcm5720d pid 139265] MAC-internal loopback: 4 sent, 0 back, 0 byte-identical
+[udrv-bcm-crash] bcm5720d pid 139264 killed by a real fault (memory isolation: access 0x1000 denied); kernel kept running; restarted as pid 139265: chip reset again, MAC 80:18:44:f2:71:3a, PHY loopback 16/16 → OK (driver crash = process exit, chip back) ✓
+[udrv-bcm] userspace bcm5720d: pid 139265 task 28 (starts 2, deaths 1), irq 5
+[udrv-vec] MSI-X vectors from the pool 0x4c..0x4f: bcm5720d 0x4c; distinct=true, stubs bound to their owner=true, second claims on a held vector refused 3/3; unowned interrupts 0 → OK ✓

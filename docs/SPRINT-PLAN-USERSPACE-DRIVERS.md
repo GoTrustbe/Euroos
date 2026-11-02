@@ -104,7 +104,8 @@ pid without a grant (`-EPERM`).
 
 ### Interrupts as EuroIPC messages
 
-The 82574L gets one MSI-X vector (`0x4C`) routed to the BSP. The handler
+The 82574L gets one MSI-X vector (`0x4C`; since the driver merge it comes
+from the userspace-driver pool, `udrv::alloc_vector`) routed to the BSP. The handler
 does no allocation and takes no lock: it bumps an atomic notification word
 bound to the driver's EuroIPC port and sends EOI. The driver's receive call
 (`IPC_RECV`) delivers a pending notification first, as an ordinary EuroIPC

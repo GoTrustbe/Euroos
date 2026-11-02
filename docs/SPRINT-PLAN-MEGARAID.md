@@ -150,8 +150,9 @@ DMA is not confined.
 
 ### Interrupts
 
-MSI-X entry 0 on vector `0x4D` (BSP). The handler bumps EuroIPC notification
-slot 1 and sends EOI; the driver's next receive returns an `Irq` message. The
+MSI-X entry 0 on a vector from the userspace-driver pool (`0x4C..=0x4F`,
+`udrv::alloc_vector`; a fixed `0x4D` on the branch) on the BSP. The pool
+vector's stub bumps EuroIPC notification slot 3 and sends EOI; the driver's next receive returns an `Irq` message. The
 driver acknowledges OSTS/ODCR0 and reaps the ring. After posting, the driver
 also watches the ring for a short bounded spin before it sleeps, so a fast
 completion does not wait for the 10 ms tick.
@@ -321,6 +322,14 @@ with EuroOS writing only to a scratch virtual disk created on it.
 sign `megaraidd.elf`), `.gitignore` (`megaraidd.elf.sig`). No change to
 `udrv.rs`, `eurodrv`, `iommu.rs`, `euroipc.rs` or `eurosandbox`.
 
+Since the merge with nvmed and bcm5720d (`feature/integrate-drivers`) the
+vector comes from the pool in `udrv.rs`, the ports (`0x4E60`/`0x4E70`), the
+notification slot (3) and the pid range from `udrv::RES`, and `ring3.rs`
+calls only `udrv::syscall`, which knows megaraidd from its grant and speaks
+`blkif` to it; `udrv_mr::syscall` is gone. The block layer stays `blkif`
+(not nvmed's interface; the comparison is in
+`docs/SPRINT-PLAN-USERSPACE-STORAGE.md`, "Two block interfaces").
+
 ## Log
 
 - 2026-11-02: hardware study (QEMU `megasas.c`/`mfi.h` v10.2.0, FreeBSD `mfi` and
@@ -365,3 +374,11 @@ sign `megaraidd.elf`), `.gitignore` (`megaraidd.elf.sig`). No change to
   `813e627` on the same machine with the same controller attached; the few
   markers that fail on this host fail in both runs and are unrelated (the tests
   that depend on pre-signed artifacts, and the glibc churn/app-policy tests).
+- 2026-11-02, merged with nvmed and bcm5720d (`feature/integrate-drivers`):
+  `scripts/megaraid-proof.sh` again, now under TCG on the build server, with
+  and without `intel-iommu`: per-marker verdicts identical to the KVM proof
+  above, and the host-side check of both images passes. One TCG boot (with
+  `-smp 4` and with `-smp 1`) with e1000d, nvmed and megaraidd together, and on
+  the R630 (KVM) one boot with all four userspace drivers: every `[mr-*]`
+  marker OK, megaraidd on its own vector from the pool. Logs:
+  `docs/proof/integrate-drivers-2026-11-02/`.

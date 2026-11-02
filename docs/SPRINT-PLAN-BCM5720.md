@@ -88,7 +88,7 @@ Consequences:
 |---|---|
 | `crates/eurobcm5720` | host-tested, `no_std`, `#![forbid(unsafe_code)]`: register facts, APE locks, reset + handshake, block init, the three rings (standard RX producer, RX return, send), status block, PHY access, loopback test, link status. Runs against a simulated chip (`sim`) in the host tests. |
 | `userland/bcm5720d` | the ring-3 process: `Hal` over its two MMIO windows and the DMA window (volatile, bounds-checked against the grant), the EuroIPC loop, `Hello`/`Rx`/`Report` out, `Tx`/`Irq`/`Crash`/`DmaEscape` in. |
-| `kernel/src/udrv_bcm5720.rs` | thin glue, new file: supervisor (grant, IOMMU domain, MSI-X vector `0x4D` to EuroIPC, crash detection, quiesce, restart), the driver syscalls for this driver's grant, and the `[udrv-bcm-*]` self-tests. |
+| `kernel/src/udrv_bcm5720.rs` | thin glue, new file: supervisor (grant, IOMMU domain, MSI-X to EuroIPC, crash detection, quiesce, restart) and the `[udrv-bcm-*]` self-tests. Since the driver merge its vector comes from the shared pool and its syscalls go through the one dispatch in `udrv.rs` (the APE window rides along as extra info words of its grant). |
 
 Shared files touched, kept to one-line hooks (the other teams work there):
 `udrv.rs` (a syscall from a driver task without an e1000d grant is offered to
@@ -111,8 +111,10 @@ info words after the standard `DriverInfo` block (`eurobcm5720::wire`).
 
 ### Interrupts
 
-MSI-X entry 0 programmed by the kernel to vector `0x4D` on the BSP; the
-handler bumps EuroIPC notification slot 1, the driver receives `Irq{count}`.
+MSI-X entry 0 programmed by the kernel to a vector from the userspace-driver
+pool (`0x4C..=0x4F`, `udrv::alloc_vector`; it was a fixed `0x4D` on the
+branch) on the BSP; the pool vector's stub bumps EuroIPC notification slot 2,
+the driver receives `Irq{count}`.
 The chip runs in tagged-status mode with one-shot MSI off; the driver
 acknowledges by writing the status tag it read back into the interrupt
 mailbox (see the log: without tagged status the 5720 raises no MSI-X).
@@ -236,3 +238,14 @@ chip's rings survives.
   or glibc programs this VM does not provide), the marker sets are identical
   except for the new `[udrv-bcm-*]` lines in `user` mode, and no run panics.
   In `kernel` mode bcm5720d is not started at all.
+- 2026-11-02, merged with nvmed and megaraidd (`feature/integrate-drivers`).
+  bcm5720d had the same vector (`0x4D`), EuroIPC ports, notification slot and
+  pid range as nvmed and megaraidd; it now takes its vector from the shared
+  pool and its ports, slot (2) and pids from `udrv::RES`, and its own copy of
+  the driver syscalls is gone (the shared dispatch serves it). On the R630
+  again, through VFIO, with the proof's QEMU line: every `[udrv-bcm-*]`
+  marker as on the branch, the host's VT-d log with the refused write to the
+  canary and the refused read of the secret page, and `[udrv-vec]` (bcm5720d
+  alone gets `0x4C`). One more boot with e1000d, nvmed, megaraidd and
+  bcm5720d together: four drivers on four vectors, every marker of each.
+  eno3/eno4 went back to `tg3` afterwards. Logs: `docs/proof/integrate-drivers-2026-11-02/`.
