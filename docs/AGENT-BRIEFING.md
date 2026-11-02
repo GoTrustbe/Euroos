@@ -22,6 +22,7 @@ A lot of that is **already real and boot-verified**. Some of it is still **scaff
 4. **Capability-native, not Linux.** The native identity is EuroGuard capabilities / EuroIPC / `Euro*`. The Linux syscall ABI is a **compatibility bridge only**, never the identity. Don't "fix" things by making them more Linux-like.
 5. **`#![forbid(unsafe_code)]` on library crates.** Keep the host-tested cores safe. `unsafe` lives only where it must (the kernel's hardware layer), and is justified in a comment.
 6. **Honesty labels in docs and UI.** Use `✅ native/verified` · `🟡 partial` · `⬜ gap` consistently. The whole project's credibility rests on this.
+7. **Learn from Redox OS, don't copy it.** Redox (MIT) is our reference for hard problems: study it, re-implement the EuroOS way, and if code is really derived, keep the MIT notice (source comment + NOTICE + commit). Rules and pointers: `docs/REDOX-REFERENCE.md`.
 
 ---
 
