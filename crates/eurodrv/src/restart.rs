@@ -22,6 +22,11 @@ impl Policy {
     /// The default for NIC drivers: 5 deaths per minute, restart at once the
     /// first time, then 20 ms, 40 ms, ... capped at 2 s.
     pub const NIC: Policy = Policy { max_restarts: 5, window_ticks: 6000, backoff_ticks: 2, max_backoff_ticks: 200 };
+    /// Disk drivers: 3 deaths per minute, then the disk stays off. A storage
+    /// driver in a crash loop can corrupt what it was writing over and over,
+    /// so it gets fewer chances and a longer backoff than a NIC: the first
+    /// restart at once, then 100 ms, 200 ms, ..., capped at 5 s.
+    pub const DISK: Policy = Policy { max_restarts: 3, window_ticks: 6000, backoff_ticks: 10, max_backoff_ticks: 500 };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,6 +90,17 @@ impl Tracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_disk_driver_gets_fewer_chances_than_a_nic() {
+        let p = Policy::DISK;
+        let mut t = Tracker::new();
+        assert_eq!(t.on_death(1000, &p), Decision::RestartAt(1000));
+        assert_eq!(t.on_death(1100, &p), Decision::RestartAt(1110));
+        assert_eq!(t.on_death(1200, &p), Decision::RestartAt(1220));
+        assert_eq!(t.on_death(1300, &p), Decision::GiveUp);
+        assert!(Policy::DISK.max_restarts < Policy::NIC.max_restarts);
+    }
 
     #[test]
     fn first_death_restarts_immediately_then_backs_off() {

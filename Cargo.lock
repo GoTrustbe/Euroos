@@ -595,6 +595,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "euronvme"
+version = "0.1.0"
+
+[[package]]
 name = "euroobserve"
 version = "0.1.0"
 

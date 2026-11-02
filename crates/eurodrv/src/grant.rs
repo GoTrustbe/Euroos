@@ -4,14 +4,23 @@
 //! window (one BAR, page-rounded) the driver may map, and the DMA window the
 //! device may reach through its IOMMU domain. The kernel builds a grant only
 //! through [`DeviceGrant::new`], which refuses anything that is not
-//! page-aligned, empty, too large, above the identity-mapped 512 GiB, wraps,
-//! overlaps the other window, or overlaps a range the kernel declares
-//! forbidden (RAM for the MMIO window, for instance).
+//! page-aligned, empty, too large, wraps, overlaps the other window, or
+//! overlaps a range the kernel declares forbidden (RAM for the MMIO window,
+//! for instance). The DMA window must lie in the identity-mapped 512 GiB
+//! (IOVA == virtual == physical). An MMIO window may lie above it (QEMU puts
+//! the 64-bit NVMe BAR near 768 GiB): the driver then sees it at
+//! [`HIGH_MMIO_VA`] instead of at its physical address ([`DeviceGrant::mmio_va`]).
 
 /// Page size of every mapping a grant produces.
 pub const PAGE: u64 = 4096;
-/// EuroOS identity-maps the lower 512 GiB; a grant must lie below it.
+/// EuroOS identity-maps the lower 512 GiB; a DMA window must lie below it.
 pub const IDENTITY_LIMIT: u64 = 512 << 30;
+/// x86-64 physical addresses have at most 52 bits; an MMIO window must lie below.
+pub const PHYS_LIMIT: u64 = 1 << 52;
+/// Where a driver sees an MMIO window that lies above the identity map: a
+/// virtual range of its own address space whose identity counterpart (508 GiB)
+/// is no RAM and no device on any machine EuroOS runs on.
+pub const HIGH_MMIO_VA: u64 = 508 << 30;
 /// Largest MMIO window a grant may carry (a BAR larger than this is refused).
 pub const MAX_MMIO: u64 = 16 << 20;
 /// Largest DMA window a grant may carry, in pages.
@@ -109,7 +118,7 @@ pub struct DeviceGrant {
     pub irq_vector: Option<u8>,
 }
 
-fn check_window(w: &Window, max: u64) -> Result<(), GrantError> {
+fn check_window(w: &Window, max: u64, limit: u64) -> Result<(), GrantError> {
     if w.len == 0 {
         return Err(GrantError::Empty);
     }
@@ -120,7 +129,7 @@ fn check_window(w: &Window, max: u64) -> Result<(), GrantError> {
     if w.len > max {
         return Err(GrantError::TooLarge);
     }
-    if end > IDENTITY_LIMIT {
+    if end > limit {
         return Err(GrantError::AboveIdentity);
     }
     Ok(())
@@ -139,8 +148,8 @@ impl DeviceGrant {
         mmio_forbidden: &[Window],
         dma_forbidden: &[Window],
     ) -> Result<DeviceGrant, GrantError> {
-        check_window(&mmio, MAX_MMIO)?;
-        check_window(&dma, MAX_DMA_PAGES * PAGE)?;
+        check_window(&mmio, MAX_MMIO, PHYS_LIMIT)?;
+        check_window(&dma, MAX_DMA_PAGES * PAGE, IDENTITY_LIMIT)?;
         if mmio.overlaps(&dma) {
             return Err(GrantError::Overlap);
         }
@@ -148,6 +157,15 @@ impl DeviceGrant {
             return Err(GrantError::Forbidden);
         }
         Ok(DeviceGrant { bdf, mmio, dma, irq_vector })
+    }
+
+    /// The virtual address at which the driver sees the MMIO window: the
+    /// physical address inside the identity map, [`HIGH_MMIO_VA`] above it.
+    pub fn mmio_va(&self) -> u64 {
+        match self.mmio.end() {
+            Some(e) if e <= IDENTITY_LIMIT => self.mmio.base,
+            _ => HIGH_MMIO_VA,
+        }
     }
 
     /// May the driver access `[addr, addr + len)` through its MMIO mapping?
@@ -213,10 +231,24 @@ mod tests {
         assert_eq!(e(Window::new(0xfeb8_0000, 0x10), dma()), GrantError::Unaligned);
         assert_eq!(e(Window::new(0xfeb8_0000, 0), dma()), GrantError::Empty);
         assert_eq!(e(Window::new(0xf000_0000, 32 << 20), dma()), GrantError::TooLarge);
-        assert_eq!(e(Window::new(IDENTITY_LIMIT, 0x1000), dma()), GrantError::AboveIdentity);
+        assert_eq!(e(mmio(), Window::new(IDENTITY_LIMIT, 0x1000)), GrantError::AboveIdentity);
+        assert_eq!(e(Window::new(PHYS_LIMIT, 0x1000), dma()), GrantError::AboveIdentity);
         assert_eq!(e(Window::new(u64::MAX & !0xfff, 0x2000), dma()), GrantError::Wraps);
         assert_eq!(e(mmio(), Window::new(0x1000, (MAX_DMA_PAGES + 1) * PAGE)), GrantError::TooLarge);
         assert_eq!(e(mmio(), Window::new(0xfeb8_1000, 0x1000)), GrantError::Overlap);
+    }
+
+    #[test]
+    fn a_high_bar_is_seen_at_the_high_mmio_va() {
+        // QEMU's NVMe BAR near 768 GiB: allowed, mapped at HIGH_MMIO_VA.
+        let high = Window::new(768 << 30, 0x4000);
+        let g = DeviceGrant::new(BDF, high, dma(), None, &[RAM], &[high]).unwrap();
+        assert_eq!(g.mmio_va(), HIGH_MMIO_VA);
+        let low = DeviceGrant::new(BDF, mmio(), dma(), None, &[RAM], &[mmio()]).unwrap();
+        assert_eq!(low.mmio_va(), mmio().base, "identity below 512 GiB, as before");
+        // The high VA range is no RAM a grant could also hand out as DMA.
+        assert!(HIGH_MMIO_VA + MAX_MMIO <= IDENTITY_LIMIT);
+        assert!(!RAM.overlaps(&Window::new(HIGH_MMIO_VA, MAX_MMIO)));
     }
 
     #[test]
