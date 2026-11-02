@@ -298,6 +298,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "eurobcm5720"
+version = "0.1.0"
+
+[[package]]
 name = "euroca"
 version = "0.1.0"
 dependencies = [
@@ -860,6 +864,7 @@ dependencies = [
  "euroattest",
  "euroaudio",
  "euroaudit",
+ "eurobcm5720",
  "euroca",
  "eurocalc",
  "eurocalendar",
