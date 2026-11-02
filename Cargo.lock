@@ -859,6 +859,7 @@ dependencies = [
  "eurodns",
  "eurodoc",
  "eurodocio",
+ "eurodrv",
  "euroentropy",
  "euroexfat",
  "euroext",

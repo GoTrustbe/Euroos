@@ -76,6 +76,13 @@ mcopy -i "$IMG" "$EFI" ::/EFI/BOOT/eurokernel-A.efi
 mcopy -i "$IMG" "$EFI" ::/EFI/BOOT/eurokernel-B.efi
 mcopy -i "$IMG" "$SIG" ::/EFI/BOOT/eurokernel-A.efi.sig
 mcopy -i "$IMG" "$SIG" ::/EFI/BOOT/eurokernel-B.efi.sig
+# Boot options (kernel/src/bootopt.rs), e.g. EUROOS_BOOTOPTS="net.driver=user"
+# (several separated by ';'). Without it the ESP holds no option file: defaults.
+if [ -n "${EUROOS_BOOTOPTS:-}" ]; then
+  printf '%s\n' "$EUROOS_BOOTOPTS" | tr ';' '\n' > "$STAGE/euroos-boot.conf"
+  mcopy -i "$IMG" "$STAGE/euroos-boot.conf" ::/EFI/BOOT/euroos-boot.conf
+  echo "==> boot options on the ESP: $EUROOS_BOOTOPTS"
+fi
 echo "==> done: $IMG (two-stage: loader → eurokernel-A/B.efi)"
 echo "    Test:        ./scripts/run-qemu.sh"
 echo "    Screenshot:  python3 scripts/screenshot.py $IMG boot.png"

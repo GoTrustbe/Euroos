@@ -65,6 +65,14 @@ else
     echo "WARNING: musl-gcc not found — doom.elf skipped"
 fi
 
+# Userspace drivers (docs/SPRINT-PLAN-USERSPACE-DRIVERS.md): Rust, a freestanding
+# static PIE for x86_64-unknown-none, logic in crates/euroe1000 + crates/eurodrv.
+# The kernel embeds it and starts it under the `driver` profile (net.driver=user).
+echo "==> e1000d.elf (userspace e1000 driver, Rust)..."
+(cd e1000d && cargo build --release -q)
+cp e1000d/target/x86_64-unknown-none/release/e1000d e1000d.elf
+echo "==> e1000d.elf: $(stat -c%s e1000d.elf) bytes (static PIE, driver profile)"
+
 # EuroToolchain security: sign every userland binary with the EuroOS Ed25519
 # developer key. The kernel verifies these signatures before running (verify-
 # before-execute). Tampered binaries are cryptographically rejected.

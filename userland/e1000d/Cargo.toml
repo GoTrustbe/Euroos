@@ -1,0 +1,31 @@
+[package]
+name = "e1000d"
+version = "0.1.0"
+edition = "2021"
+license = "EUPL-1.2"
+description = "EuroOS userspace e1000/e1000e driver: runs in ring 3 under the driver profile, with a device grant (one BAR, one DMA window, MSI-X as EuroIPC messages)"
+
+[dependencies]
+eurodrv = { path = "../../crates/eurodrv" }
+euroe1000 = { path = "../../crates/euroe1000" }
+
+[[bin]]
+name = "e1000d"
+path = "src/main.rs"
+test = false
+bench = false
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = false
+strip = true
+
+[profile.dev]
+panic = "abort"
+
+# Its own workspace: built for x86_64-unknown-none by userland/build.sh, not
+# part of the host-test workspace.
+[workspace]

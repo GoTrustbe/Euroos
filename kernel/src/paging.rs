@@ -1218,3 +1218,98 @@ pub fn init(falloc: &mut FrameAllocator) -> u64 {
     }
     pml4
 }
+
+/// Userspace drivers (docs/SPRINT-PLAN-USERSPACE-DRIVERS.md): give the process
+/// `pml4` access to exactly one 4 KiB page at virtual == physical `pa` (below
+/// 512 GiB), `USER | RW | NX`, plus `PCD | PWT` (uncached) when `mmio`.
+///
+/// The process's lower 512 GiB is an identity map of supervisor huge pages
+/// (1 GiB in the PDPT, 2 MiB in the PD). The huge page covering `pa` is split
+/// into the next level with the very same supervisor mapping (address, flags,
+/// executable for the kernel), so ring 0 sees no difference; only the one leaf
+/// gets the USER bit, and U/S is ANDed down the walk, so everything around it
+/// stays out of reach of ring 3. The new table frames come from `falloc` and
+/// are freed with the address space (`free_address_space` frees every non-huge
+/// table under PML4[0]). Call before the process first runs (no TLB shootdown).
+pub fn map_user_identity_4k(falloc: &mut FrameAllocator, pml4: u64, pa: u64, mmio: bool) -> bool {
+    const PCD_PWT: u64 = (1 << 4) | (1 << 3);
+    const PAT_HUGE: u64 = 1 << 12; // PAT bit of a 1 GiB / 2 MiB entry
+    const PAT_4K: u64 = 1 << 7; // PAT bit of a 4 KiB entry
+    if pa >= 512 * GIB || pa & 0xFFF != 0 {
+        return false;
+    }
+    // Flags of a huge entry that carry over to the smaller pages (P, RW, U/S,
+    // PWT, PCD, G and NX); never the address, PS, A/D or the PAT position.
+    let carry = |e: u64| e & (0x1F | (1 << 8) | NX);
+    // SAFETY: every table touched is identity-mapped and belongs to this
+    // process's private hierarchy (PML4[0] -> its own PDPT), or is a fresh frame.
+    unsafe {
+        let e4 = (pml4 as *const u64).read_volatile();
+        if e4 & PRESENT == 0 {
+            return false;
+        }
+        let pdpt = e4 & ADDR_MASK;
+        let i3 = ((pa >> 30) & 0x1FF) as usize;
+        let s3 = (pdpt as *mut u64).add(i3);
+        let mut e3 = s3.read_volatile();
+        if e3 & PRESENT == 0 {
+            return false;
+        }
+        if e3 & HUGE != 0 {
+            let pd = match falloc.allocate() { Ok(f) => f, Err(_) => return false };
+            let base = e3 & 0x000F_FFFF_C000_0000;
+            let pat = e3 & PAT_HUGE;
+            for j in 0..512u64 {
+                (pd as *mut u64).add(j as usize).write_volatile((base + j * MIB2) | carry(e3) | HUGE | pat);
+            }
+            e3 = pd | PRESENT | WRITABLE | USER;
+            s3.write_volatile(e3);
+        } else if e3 & USER == 0 {
+            s3.write_volatile(e3 | USER);
+        }
+        let pd = e3 & ADDR_MASK;
+        let i2 = ((pa >> 21) & 0x1FF) as usize;
+        let s2 = (pd as *mut u64).add(i2);
+        let mut e2 = s2.read_volatile();
+        if e2 & PRESENT == 0 {
+            return false;
+        }
+        if e2 & HUGE != 0 {
+            let pt = match falloc.allocate() { Ok(f) => f, Err(_) => return false };
+            let base = e2 & 0x000F_FFFF_FFE0_0000;
+            let pat = if e2 & PAT_HUGE != 0 { PAT_4K } else { 0 };
+            for k in 0..512u64 {
+                (pt as *mut u64).add(k as usize).write_volatile((base + k * 4096) | carry(e2) | pat);
+            }
+            e2 = pt | PRESENT | WRITABLE | USER;
+            s2.write_volatile(e2);
+        } else if e2 & USER == 0 {
+            s2.write_volatile(e2 | USER);
+        }
+        let pt = e2 & ADDR_MASK;
+        let i1 = ((pa >> 12) & 0x1FF) as usize;
+        let leaf = pa | PRESENT | WRITABLE | USER | NX | if mmio { PCD_PWT } else { 0 };
+        (pt as *mut u64).add(i1).write_volatile(leaf);
+    }
+    true
+}
+
+/// Is `virt` a page ring 3 may touch in `pml4` (present and USER at every level)?
+pub fn user_accessible_in(pml4: u64, virt: u64) -> bool {
+    // SAFETY: identity-mapped table chain, read-only walk.
+    unsafe {
+        let mut table = pml4;
+        for shift in [39u64, 30, 21] {
+            let e = (table as *const u64).add(((virt >> shift) & 0x1FF) as usize).read_volatile();
+            if e & (PRESENT | USER) != (PRESENT | USER) {
+                return false;
+            }
+            if shift != 39 && e & HUGE != 0 {
+                return true;
+            }
+            table = e & ADDR_MASK;
+        }
+        let e = (table as *const u64).add(((virt >> 12) & 0x1FF) as usize).read_volatile();
+        e & (PRESENT | USER) == (PRESENT | USER)
+    }
+}

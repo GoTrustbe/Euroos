@@ -42,6 +42,8 @@ pub static XHCI_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 pub const VIRTIO_BLK_MSIX_VECTOR: u8 = 0x47; // virtio-blk completion via MSI-X (J2)
 pub const NVME_MSIX_VECTOR: u8 = 0x48; // NVMe I/O completion via MSI-X (Metal M2-1)
 pub const VIRTIO_NET_MSIX_VECTOR: u8 = 0x4B; // virtio-net receive via MSI-X
+/// MSI-X of a device driven from ring 3 (udrv.rs): delivered as a EuroIPC message.
+pub const UDRV_MSIX_VECTOR: u8 = 0x4C;
 pub const SCI_VECTOR: u8 = 0x49; // ACPI SCI (power button etc.) — Metal M5-2
 /// Cooperative-yield software interrupt: a blocked/sleeping task triggers this
 /// (`int YIELD_VECTOR`) to switch away immediately (sched::yield_now). Not a
@@ -132,6 +134,7 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     idt[VIRTIO_BLK_MSIX_VECTOR].set_handler_fn(blk_msix_handler);
     idt[NVME_MSIX_VECTOR].set_handler_fn(nvme_msix_handler);
     idt[VIRTIO_NET_MSIX_VECTOR].set_handler_fn(net_msix_handler);
+    idt[UDRV_MSIX_VECTOR].set_handler_fn(crate::udrv::irq_handler);
     // Harmless spurious handler (LAPIC vector 0xFF).
     idt[0xFF].set_handler_fn(spurious_handler);
     idt

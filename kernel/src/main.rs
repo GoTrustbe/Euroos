@@ -22,6 +22,8 @@ mod firewall;
 mod observe;
 mod vault;
 mod euroipc;
+mod bootopt;
+mod udrv;
 mod acpi;
 mod acpi_power;
 mod apic;
@@ -698,6 +700,8 @@ fn main() -> Status {
     // via UEFI — ONLY POSSIBLE NOW, before ExitBootServices. This lets the installer
     // later write a bootable copy to a target disk (no embed, the real current bytes).
     instexec::capture_media();
+    // Boot options (\EFI\BOOT\euroos-boot.conf): read while the ESP is reachable.
+    bootopt::capture();
 
     // ── THE JUMP: leave UEFI Boot Services. After this no more UEFI services. ──
     serial_println!("[euro] ExitBootServices...");
@@ -2212,6 +2216,9 @@ fn main() -> Status {
     // M2-1: NVMe MSI-X delivery proof — must run with interrupts ON (the boot
     // self-test above ran before this point, so its completions were unseen).
     nvme::msix_proof();
+    // Userspace drivers (net.driver=user): e1000d needs the scheduler, interrupts
+    // and the IOMMU domains, all of which exist from here on.
+    udrv::boot(&mut allocator);
     // M3-3: a CDC-ECM USB NIC only exists after xHCI enumeration (above) — if
     // no NIC bound during the main net bring-up, adopt it and bring it up now.
     net::late_bring_up();
@@ -6551,6 +6558,8 @@ fn main() -> Status {
             // S4: EuroInit supervision (restart stopped services) + eurologd
             // (kmsg ring periodically to /var/log/messages).
             init::supervise(ctx.mem, ctx.fs);
+            // Userspace drivers: restart a crashed e1000d (after quiescing its device).
+            udrv::supervise(ctx.mem);
             init::flush_log(ctx.fs);
             // G5: periodic background scrub (rate-limited ~60 s) → /var/log/fsck.log.
             scrub::maybe_run(ctx.fs, t);

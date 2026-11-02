@@ -5849,6 +5849,15 @@ fn euro_user_writable(p: &BgProc, ptr: u64, len: usize) -> bool {
     in_user_arena(ptr, len) && crate::paging::user_range_writable_in(p.pml4, ptr, len)
 }
 
+/// Where background process `pid` lives: (task, PML4, arena base, arena bytes).
+/// The userspace-driver supervisor maps the device grant into this address
+/// space before the task first runs.
+pub fn bg_layout(pid: u64) -> Option<(usize, u64, u64, u64)> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        BG.lock().iter().find(|p| p.pid == pid && !p.zombie).map(|p| (p.task, p.pml4, p.arena_virt, p.arena_frames * 4096))
+    })
+}
+
 /// Is the background process `pid` still running (spawned, not yet exited/killed)?
 pub fn bg_alive(pid: u64) -> bool {
     x86_64::instructions::interrupts::without_interrupts(|| BG.lock().iter().any(|p| p.pid == pid && !p.zombie))
@@ -11475,6 +11484,14 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
     if cur == DAEMON_TASK.load(Ordering::Relaxed) {
         return daemon_dispatch(num, a1, a2, a3);
     }
+    // Userspace drivers (udrv.rs): their calls are served WITHOUT the BG lock,
+    // so a driver can run while task 0 waits on it. Exit and profile kills
+    // (None here) take the ordinary route below.
+    if task_profile(cur) == eurosandbox::Profile::Driver {
+        if let Some(r) = crate::udrv::syscall(cur, num, a1, a2, a3) {
+            return r;
+        }
+    }
     // Preemptive per-process (PCB): route to the right background musl process
     // state (own heap/output/pid). A THREAD shares the PCB of its process, so
     // we match on the main task OR on one of the thread tasks.
@@ -11496,8 +11513,9 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
             // Sprint WP6: a NATIVE app runs under Profile::Euro, an allow-list.
             // Anything outside it ends the process here, before any handler
             // sees the arguments. The two calls that sleep run outside the lock.
-            if task_profile(cur) == eurosandbox::Profile::Euro {
-                if let eurosandbox::Verdict::Kill(sig) = eurosandbox::syscalls::check(eurosandbox::Profile::Euro, num, a1, a3) {
+            let prof = task_profile(cur);
+            if prof == eurosandbox::Profile::Euro || prof == eurosandbox::Profile::Driver {
+                if let eurosandbox::Verdict::Kill(sig) = eurosandbox::syscalls::check(prof, num, a1, a3) {
                     PROFILE_KILLS.fetch_add(1, Ordering::Relaxed);
                     crate::serial_println!(
                         "[sbx] native app pid {} (task {cur}): syscall {num:#x}({a1:#x}, {a2:#x}, {a3:#x}) outside the euro profile -> process killed (signal {sig}, exit {})",

@@ -12,6 +12,8 @@ const KIND_NONE: u8 = 0;
 const KIND_VIRTIO: u8 = 1;
 const KIND_E1000: u8 = 2;
 const KIND_USBNET: u8 = 3;
+/// The userspace e1000 driver (udrv.rs, `net.driver=user`): frames go over EuroIPC.
+const KIND_USER: u8 = 4;
 
 static KIND: AtomicU8 = AtomicU8::new(KIND_NONE);
 
@@ -21,7 +23,9 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         KIND.store(KIND_VIRTIO, Ordering::Relaxed);
         return true;
     }
-    if crate::e1000::init(falloc) {
+    // With `net.driver=user` the e1000 belongs to the userspace driver, which
+    // udrv.rs starts once the scheduler and the IOMMU are up.
+    if !crate::bootopt::net_user_driver() && crate::e1000::init(falloc) {
         KIND.store(KIND_E1000, Ordering::Relaxed);
         return true;
     }
@@ -44,12 +48,21 @@ pub fn late_bind_usbnet() -> bool {
     false
 }
 
+/// The userspace driver reported link up (its first `Hello`): bind it.
+pub fn bind_user() {
+    let k = KIND.load(Ordering::Relaxed);
+    if k == KIND_NONE || k == KIND_USER {
+        KIND.store(KIND_USER, Ordering::Relaxed);
+    }
+}
+
 /// Human-readable name of the bound driver (for the boot report / hwprobe).
 pub fn kind() -> &'static str {
     match KIND.load(Ordering::Relaxed) {
         KIND_VIRTIO => "virtio-net",
         KIND_E1000 => "e1000",
         KIND_USBNET => "usb-ethernet (CDC-ECM)",
+        KIND_USER => "e1000 via userspace driver e1000d (EuroIPC)",
         _ => "none",
     }
 }
@@ -59,6 +72,7 @@ pub fn mac() -> Option<[u8; 6]> {
         KIND_VIRTIO => crate::virtio_net::mac(),
         KIND_E1000 => crate::e1000::mac(),
         KIND_USBNET => crate::xhci::usbnet_mac(),
+        KIND_USER => crate::udrv::mac(),
         _ => None,
     }
 }
@@ -68,6 +82,7 @@ pub fn send(frame: &[u8]) -> bool {
         KIND_VIRTIO => crate::virtio_net::send(frame),
         KIND_E1000 => crate::e1000::send(frame),
         KIND_USBNET => crate::xhci::usbnet_send(frame),
+        KIND_USER => crate::udrv::nic_send(frame),
         _ => false,
     }
 }
@@ -77,6 +92,7 @@ pub fn poll_recv() -> Option<alloc::vec::Vec<u8>> {
         KIND_VIRTIO => crate::virtio_net::poll_recv(),
         KIND_E1000 => crate::e1000::poll_recv(),
         KIND_USBNET => crate::xhci::usbnet_poll_recv(),
+        KIND_USER => crate::udrv::nic_poll(),
         _ => None,
     }
 }
