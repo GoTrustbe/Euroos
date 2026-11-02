@@ -548,6 +548,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "euromegaraid"
+version = "0.1.0"
+
+[[package]]
 name = "euromime"
 version = "0.1.0"
 
@@ -901,6 +905,7 @@ dependencies = [
  "euromail",
  "euromdns",
  "euromedia",
+ "euromegaraid",
  "euromime",
  "euromm",
  "euromusic",

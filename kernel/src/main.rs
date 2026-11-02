@@ -24,6 +24,8 @@ mod vault;
 mod euroipc;
 mod bootopt;
 mod udrv;
+mod udrv_mr;
+mod mrblk;
 mod klock;
 mod kvfs;
 mod percpu;
@@ -2227,6 +2229,9 @@ fn main() -> Status {
     // Userspace drivers (net.driver=user): e1000d needs the scheduler, interrupts
     // and the IOMMU domains, all of which exist from here on.
     udrv::boot(&mut allocator);
+    // Userspace MegaRAID (MFI gen2): megaraidd is the only MegaRAID driver; the
+    // root disk stays on the in-kernel drivers.
+    udrv_mr::boot(&mut allocator);
     // M3-3: a CDC-ECM USB NIC only exists after xHCI enumeration (above) — if
     // no NIC bound during the main net bring-up, adopt it and bring it up now.
     net::late_bring_up();
@@ -6592,6 +6597,7 @@ fn main() -> Status {
             init::supervise(ctx.mem, ctx.fs);
             // Userspace drivers: restart a crashed e1000d (after quiescing its device).
             udrv::supervise(ctx.mem);
+            udrv_mr::supervise(ctx.mem);
             init::flush_log(ctx.fs);
             // G5: periodic background scrub (rate-limited ~60 s) → /var/log/fsck.log.
             scrub::maybe_run(ctx.fs, t);

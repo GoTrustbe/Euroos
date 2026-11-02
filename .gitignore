@@ -9,6 +9,7 @@
 userland/*.elf
 # Signed at build time by userland/build.sh (Rust driver output changes per toolchain).
 userland/e1000d.elf.sig
+userland/megaraidd.elf.sig
 userland/*.signed
 
 # ── Bootable disk images (build output) ──────────────────────────────────────
