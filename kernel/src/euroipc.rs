@@ -46,7 +46,7 @@ fn tsc() -> u64 {
 static TABLE: ChannelTable = ChannelTable::with_clock(tsc);
 
 /// Notification slots: (bound port, pending count). Port 0 = unbound.
-const NOTIFY_SLOTS: usize = 4;
+pub const NOTIFY_SLOTS: usize = 4;
 static NOTIFY_PORT: [AtomicU32; NOTIFY_SLOTS] = [const { AtomicU32::new(0) }; NOTIFY_SLOTS];
 static NOTIFY_COUNT: [AtomicU32; NOTIFY_SLOTS] = [const { AtomicU32::new(0) }; NOTIFY_SLOTS];
 

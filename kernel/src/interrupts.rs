@@ -42,19 +42,26 @@ pub static XHCI_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 pub const VIRTIO_BLK_MSIX_VECTOR: u8 = 0x47; // virtio-blk completion via MSI-X (J2)
 pub const NVME_MSIX_VECTOR: u8 = 0x48; // NVMe I/O completion via MSI-X (Metal M2-1)
 pub const VIRTIO_NET_MSIX_VECTOR: u8 = 0x4B; // virtio-net receive via MSI-X
-/// MSI-X of a device driven from ring 3 (udrv.rs): delivered as a EuroIPC message.
-pub const UDRV_MSIX_VECTOR: u8 = 0x4C;
-/// MSI-X of the NVMe controller driven from ring 3 (udrv_blk.rs, nvmed).
-pub const UDRV_BLK_MSIX_VECTOR: u8 = 0x4D;
-/// MSI-X of the userspace BCM5720 driver (udrv_bcm5720.rs).
-pub const UDRV_BCM_MSIX_VECTOR: u8 = 0x4E;
-/// MSI-X of the MegaRAID controller driven from ring 3 (udrv_mr.rs): a EuroIPC message.
-pub const MEGARAID_MSIX_VECTOR: u8 = 0x4F;
+/// MSI-X vectors of devices driven from ring 3 (e1000d, nvmed, bcm5720d,
+/// megaraidd): a pool of `UDRV_VECTORS` from `UDRV_VECTOR_BASE` on, handed out
+/// by `udrv::alloc_vector` (one owner per vector; a second claim is refused).
+/// Each delivers a EuroIPC message to its owner. No driver has a fixed vector.
+pub const UDRV_VECTOR_BASE: u8 = 0x4C;
+pub const UDRV_VECTORS: usize = 4;
 pub const SCI_VECTOR: u8 = 0x49; // ACPI SCI (power button etc.) — Metal M5-2
 /// Cooperative-yield software interrupt: a blocked/sleeping task triggers this
 /// (`int YIELD_VECTOR`) to switch away immediately (sched::yield_now). Not a
 /// hardware IRQ — its handler sends no EOI.
 pub const YIELD_VECTOR: u8 = 0x4A;
+/// No fixed vector lies inside the userspace-driver pool.
+const _: () = {
+    let fixed = [TIMER_VECTOR, KEYBOARD_VECTOR, MOUSE_VECTOR, AP_TIMER_VECTOR, IPI_PING_VECTOR, IPI_HALT_VECTOR, IPI_TLB_VECTOR, XHCI_MSIX_VECTOR, VIRTIO_BLK_MSIX_VECTOR, NVME_MSIX_VECTOR, SCI_VECTOR, YIELD_VECTOR, VIRTIO_NET_MSIX_VECTOR, 0xFF];
+    let mut i = 0;
+    while i < fixed.len() {
+        assert!(!(fixed[i] >= UDRV_VECTOR_BASE && (fixed[i] as usize) < UDRV_VECTOR_BASE as usize + UDRV_VECTORS), "a fixed vector lies in the udrv pool");
+        i += 1;
+    }
+};
 /// Number of received virtio-blk completion MSI-X interrupts.
 pub static BLK_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Number of NVMe completion interrupts received via MSI-X (M2-1: proof of
@@ -140,10 +147,10 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     idt[VIRTIO_BLK_MSIX_VECTOR].set_handler_fn(blk_msix_handler);
     idt[NVME_MSIX_VECTOR].set_handler_fn(nvme_msix_handler);
     idt[VIRTIO_NET_MSIX_VECTOR].set_handler_fn(net_msix_handler);
-    idt[UDRV_MSIX_VECTOR].set_handler_fn(crate::udrv::irq_handler);
-    idt[UDRV_BLK_MSIX_VECTOR].set_handler_fn(crate::udrv_blk::irq_handler);
-    idt[UDRV_BCM_MSIX_VECTOR].set_handler_fn(crate::udrv_bcm5720::irq_handler);
-    idt[MEGARAID_MSIX_VECTOR].set_handler_fn(crate::udrv_mr::irq_handler);
+    // The userspace-driver pool: one stub per vector, bound to its owner at run time.
+    for (i, stub) in crate::udrv::IRQ_STUBS.iter().enumerate() {
+        idt[UDRV_VECTOR_BASE + i as u8].set_handler_fn(*stub);
+    }
     // Harmless spurious handler (LAPIC vector 0xFF).
     idt[0xFF].set_handler_fn(spurious_handler);
     idt

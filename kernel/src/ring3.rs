@@ -12006,13 +12006,11 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
     if cur == DAEMON_TASK.load(Ordering::Relaxed) {
         return daemon_dispatch(num, a1, a2, a3);
     }
-    // Userspace drivers (udrv.rs): their calls are served WITHOUT the BG lock,
-    // so a driver can run while task 0 waits on it. Exit and profile kills
-    // (None here) take the ordinary route below.
+    // Userspace drivers (e1000d, nvmed, bcm5720d, megaraidd): one entry,
+    // udrv::syscall, which knows the driver from the caller's grant. Served
+    // WITHOUT the BG lock, so a driver can run while task 0 waits on it. Exit
+    // and profile kills (None here) take the ordinary route below.
     if task_profile(cur) == eurosandbox::Profile::Driver {
-        if let Some(r) = crate::udrv_mr::syscall(cur, num, a1, a2, a3) {
-            return r;
-        }
         if let Some(r) = crate::udrv::syscall(cur, num, a1, a2, a3) {
             return r;
         }

@@ -19,6 +19,17 @@
 //! Waiting needs the CPU to go to the driver: task context with interrupts on.
 //! A caller with interrupts off (a syscall path) gets an I/O error rather than
 //! a hang. Only task 0 supervises (restarts) from inside a wait.
+//!
+//! **Not the block interface of nvmed** (`udrv_blk.rs`, `eurodrv::proto`
+//! `BlkInfo`/`BlkRead`/`BlkWrite`/`BlkDone`). nvmed carries the data inside
+//! the messages (1 KiB per message, one request in flight, one disk);
+//! megaraidd keeps it in data slots of its DMA window (64 KiB per request, up
+//! to `SLOTS` in flight, several logical drives, an explicit `Flush`, chunks
+//! replayed to the next instance after a crash). Both end up as a EuroFS
+//! `BlockDevice`, which is where the kernel sees them alike. Moving one onto
+//! the other's wire format would cost megaraidd its multi-disk, flush and
+//! replay paths, or nvmed its proven DMA layout; the shared interface is
+//! left for a later sprint (docs/SPRINT-PLAN-USERSPACE-STORAGE.md).
 
 use alloc::format;
 use alloc::string::{String, ToString};

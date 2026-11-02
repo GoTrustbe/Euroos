@@ -1,5 +1,6 @@
-//! Userspace MegaRAID: the supervisor, the device grant, the driver syscalls,
-//! the MSI-X -> EuroIPC path and the boot self-tests for `megaraidd`
+//! Userspace MegaRAID: the supervisor, the device grant and the boot
+//! self-tests (the driver syscalls, the vector pool and the IRQ stubs are the
+//! shared ones in `udrv.rs`) for `megaraidd`
 //! (docs/SPRINT-PLAN-MEGARAID.md). The block layer on top is `mrblk.rs`.
 //!
 //! The kernel has no MegaRAID driver of its own: a gen2 MFI controller
@@ -14,8 +15,9 @@
 //! - **DMA**: a zeroed window of `layout::WINDOW_PAGES` pages below 4 GiB
 //!   (gen2 posts frames through a 32-bit port), mapped at virtual == physical,
 //!   and under VT-d the device's own IOMMU domain holding exactly that window.
-//! - **IRQ**: MSI-X entry 0 on `MEGARAID_MSIX_VECTOR`; the handler bumps a
-//!   EuroIPC notification slot, the driver receives an `Irq` message.
+//! - **IRQ**: MSI-X entry 0 on a vector from the userspace-driver pool
+//!   (`udrv::alloc_vector`); its stub bumps megaraidd's EuroIPC notification
+//!   slot (`udrv::RES`), the driver receives an `Irq` message (blkif format).
 //! - **EuroIPC**: its own port (only the kernel may send) and the block port
 //!   (only this driver's pid may send).
 //!
@@ -40,21 +42,20 @@ use euromegaraid::regs::{self as mrregs, Family};
 use euromm::FrameAllocator;
 use spin::Mutex;
 use x86_64::instructions::interrupts::without_interrupts;
-use x86_64::structures::idt::InterruptStackFrame;
 
 use crate::euroipc;
 use crate::pci::{self, PciDevice};
+use crate::udrv::{self, Drv, SysGrant};
 
 static MEGARAIDD_ELF: &[u8] = include_bytes!("../../userland/megaraidd.elf");
 static MEGARAIDD_SIG: &[u8] = include_bytes!("../../userland/megaraidd.elf.sig");
 
 /// EuroIPC ports: the driver's own, and the block layer's.
-pub const DRIVER_PORT: u32 = 0x4E60;
-pub const BLK_PORT: u32 = 0x4E70;
-const NOTIFY_SLOT: usize = 3;
+pub const DRIVER_PORT: u32 = Drv::Megaraidd.res().driver_port;
+pub const BLK_PORT: u32 = Drv::Megaraidd.res().stack_port;
 const DOMAIN: &str = "megaraidd";
 const ARENA_MIB: u64 = 4;
-const PID_BASE: u64 = 0x2_3000;
+const PID_BASE: u64 = Drv::Megaraidd.res().pid_base;
 /// Storage restart policy: as for NICs, 5 deaths per minute, then give up.
 const POLICY: Policy = Policy { max_restarts: 5, window_ticks: 6000, backoff_ticks: 2, max_backoff_ticks: 200 };
 /// Logical drives the block layer exports.
@@ -69,8 +70,6 @@ static EPOCH: AtomicU64 = AtomicU64::new(0);
 static DRIVER_PID: AtomicU64 = AtomicU64::new(u64::MAX);
 /// Base of the current instance's DMA window (0 while none runs).
 static DMA_BASE: AtomicU64 = AtomicU64::new(0);
-static IRQS: AtomicU64 = AtomicU64::new(0);
-static IRQS_DELIVERED: AtomicU64 = AtomicU64::new(0);
 static READIES: AtomicU64 = AtomicU64::new(0);
 static SEND_REFUSED_WHILE_DEAD: AtomicBool = AtomicBool::new(false);
 /// The boot frame allocator, for supervision from inside a block wait (task 0 only).
@@ -88,22 +87,6 @@ static DISKS: Mutex<([DiskInfo; MAX_DISKS], usize)> = Mutex::new(([DiskInfo { ta
 static REPORT: Mutex<(u8, u64, u64)> = Mutex::new((0, 0, 0));
 /// `Done` messages not yet picked up by the block layer: (tag, status, scsi).
 static DONES: Mutex<Vec<(u32, u8, u8)>> = Mutex::new(Vec::new());
-
-#[derive(Clone, Copy)]
-struct SysGrant {
-    task: usize,
-    pid: u64,
-    pml4: u64,
-    arena: u64,
-    arena_bytes: u64,
-    info: DriverInfo,
-}
-
-static SYS: Mutex<Option<SysGrant>> = Mutex::new(None);
-
-fn sys_grant(task: usize) -> Option<SysGrant> {
-    without_interrupts(|| SYS.lock().filter(|g| g.task == task))
-}
 
 struct Instance {
     pid: u64,
@@ -138,119 +121,6 @@ static SUP: Mutex<Supervisor> = Mutex::new(Supervisor {
     last_death: None,
     quarantine: None,
 });
-
-// ── The interrupt path ───────────────────────────────────────────────────────
-
-/// MSI-X handler: count, notify the driver's port, EOI. No lock, no allocation.
-pub extern "x86-interrupt" fn irq_handler(_frame: InterruptStackFrame) {
-    IRQS.fetch_add(1, Ordering::Relaxed);
-    euroipc::notify_from_irq(NOTIFY_SLOT);
-    crate::apic::eoi();
-}
-
-fn irq_msg(n: u32) -> Vec<u8> {
-    IRQS_DELIVERED.fetch_add(n as u64, Ordering::Relaxed);
-    let mut b = [0u8; blkif::MAX_MSG];
-    let len = blkif::encode(&Msg::Irq { count: n }, &mut b).unwrap_or(0);
-    b[..len].to_vec()
-}
-
-// ── Driver syscalls ──────────────────────────────────────────────────────────
-
-fn user_ok(g: &SysGrant, ptr: u64, len: usize, write: bool) -> bool {
-    let Some(end) = ptr.checked_add(len as u64) else { return false };
-    if len == 0 || ptr < g.arena || end > g.arena + g.arena_bytes {
-        return false;
-    }
-    if write {
-        return crate::paging::user_range_writable_in(g.pml4, ptr, len);
-    }
-    let mut p = ptr & !0xFFF;
-    while p < end {
-        if !crate::paging::user_accessible_in(g.pml4, p) {
-            return false;
-        }
-        p += 4096;
-    }
-    true
-}
-
-fn err(e: i64) -> Option<u64> {
-    Some(e as u64)
-}
-
-/// A syscall from a `driver`-profile task. `None`: the task is not megaraidd,
-/// or the call is not a driver call (exit, profile kills): the ordinary route.
-pub fn syscall(task: usize, num: u64, a1: u64, a2: u64, a3: u64) -> Option<u64> {
-    let g = sys_grant(task)?;
-    match num {
-        abi::SYS_DRV_INFO => {
-            let mut b = [0u8; abi::INFO_WORDS * 8];
-            let n = (a2 as usize).min(b.len());
-            if n == 0 || !user_ok(&g, a1, n, true) {
-                return err(abi::EFAULT);
-            }
-            g.info.write_bytes(&mut b[..n]);
-            // SAFETY: checked above: inside the caller's arena, user-writable in its tables.
-            unsafe { core::ptr::copy_nonoverlapping(b.as_ptr(), a1 as *mut u8, n) };
-            Some(0)
-        }
-        abi::SYS_IPC_RECV => {
-            let max = (a2 as usize).min(blkif::MAX_MSG);
-            if max == 0 || !user_ok(&g, a1, max, true) {
-                return err(abi::EFAULT);
-            }
-            for attempt in 0..2 {
-                if let Some((_, data)) = euroipc::take(g.info.own_port as u32, irq_msg) {
-                    if data.len() > max {
-                        return err(abi::ENOSPC);
-                    }
-                    // SAFETY: checked above (arena + writable), length bounded by max.
-                    unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), a1 as *mut u8, data.len()) };
-                    return Some(data.len() as u64);
-                }
-                if attempt == 0 {
-                    crate::sched::sleep_ticks(1);
-                    crate::sched::yield_now();
-                }
-            }
-            err(abi::EAGAIN)
-        }
-        abi::SYS_IPC_SEND => {
-            let (port, len) = (a1 as u32, a3 as usize);
-            if port as u64 != g.info.stack_port {
-                return err(abi::EPERM);
-            }
-            if len == 0 || len > blkif::MAX_MSG || !user_ok(&g, a2, len, false) {
-                return err(abi::EFAULT);
-            }
-            let mut buf = [0u8; blkif::MAX_MSG];
-            // SAFETY: checked above (inside the arena, user-accessible), len bounded.
-            unsafe { core::ptr::copy_nonoverlapping(a2 as *const u8, buf.as_mut_ptr(), len) };
-            let data = &buf[..len];
-            let quiet = matches!(blkif::decode(data), Ok(Msg::Done { .. }));
-            Some(euroipc::send_with(g.pid, port, data, !quiet) as u64)
-        }
-        0x6107 => {
-            let len = (a2 as usize).min(200);
-            if len == 0 || !user_ok(&g, a1, len, false) {
-                return err(abi::EFAULT);
-            }
-            let mut b = [0u8; 200];
-            // SAFETY: checked above.
-            unsafe { core::ptr::copy_nonoverlapping(a1 as *const u8, b.as_mut_ptr(), len) };
-            crate::serial_println!("[megaraidd pid {}] {}", g.pid, String::from_utf8_lossy(&b[..len]));
-            Some(0)
-        }
-        0x6108 => Some(crate::interrupts::ticks() * 10),
-        0x6109 => {
-            crate::sched::sleep_ticks(a1.min(600_000).div_ceil(10).max(1));
-            crate::sched::yield_now();
-            Some(0)
-        }
-        _ => None,
-    }
-}
 
 // ── The block port ───────────────────────────────────────────────────────────
 
@@ -415,7 +285,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
     unsafe { core::ptr::write_bytes(dma_base as *mut u8, 0, pages * 4096) };
     let dma = Window::new(dma_base, layout::WINDOW_BYTES);
     let ram = Window::new(0, falloc.total_bytes().min(0x8000_0000));
-    let irq = if sup.msix { Some(crate::interrupts::MEGARAID_MSIX_VECTOR) } else { None };
+    let irq = if sup.msix { udrv::alloc_vector(Drv::Megaraidd) } else { None };
     let grant = match DeviceGrant::new(bdf, sup.mmio, dma, irq, &[ram], &[sup.mmio]) {
         Ok(g) => g,
         Err(_) => {
@@ -452,11 +322,11 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
     euroipc::unregister(DRIVER_PORT);
     euroipc::register_restricted(pid, DRIVER_PORT, euroipc::KERNEL_PID);
     euroipc::set_only_from(BLK_PORT, pid);
-    euroipc::bind_notify(NOTIFY_SLOT, DRIVER_PORT);
+    euroipc::bind_notify(Drv::Megaraidd.res().notify_slot, DRIVER_PORT);
     DRIVER_PID.store(pid, Ordering::Relaxed);
     // The device may DMA (and interrupt) from here on: into its domain only.
-    if sup.msix {
-        crate::msix::enable(&dev, 0, crate::interrupts::MEGARAID_MSIX_VECTOR, crate::apic::lapic_id() as u8);
+    if let Some(v) = irq {
+        crate::msix::enable(&dev, 0, v, crate::apic::lapic_id() as u8);
     }
     bus_master(&dev, true);
     let spawned = without_interrupts(|| -> Result<usize, &'static str> {
@@ -475,7 +345,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
                 return Err("could not map the DMA window");
             }
         }
-        *SYS.lock() = Some(SysGrant { task, pid, pml4, arena, arena_bytes, info });
+        udrv::set_grant(Drv::Megaraidd, Some(SysGrant::new(Drv::Megaraidd, task, pid, pml4, arena, arena_bytes, info)));
         Ok(task)
     });
     let task = match spawned {
@@ -498,7 +368,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
     crate::serial_println!(
         "[mr] megaraidd started: pid {pid}, task {task}, profile driver · registers {:#x}+{:#x} ({} page(s); MSI-X table/PBA pages not granted) · DMA {:#x}+{:#x} ({} pages) · IRQ {} · IOMMU {}",
         grant.mmio.base, grant.mmio.len, grant.mmio.pages(), dma_base, dma.len, grant.dma.pages(),
-        if sup.msix { "MSI-X 0x4f -> EuroIPC" } else { "none (polled)" },
+        irq.map(|v| alloc::format!("MSI-X {v:#x} -> EuroIPC")).unwrap_or_else(|| String::from("none (polled)")),
         if iommu { "own domain (DMA confined)" } else { "absent: DMA NOT confined" }
     );
     Ok(pid)
@@ -509,7 +379,7 @@ fn on_death(sup: &mut Supervisor, falloc: &mut FrameAllocator, inst: Instance) {
     let reason = crate::ring3::bg_end_reason(inst.pid).unwrap_or_else(|| String::from("terminated"));
     READY.store(false, Ordering::Release);
     SEND_REFUSED_WHILE_DEAD.store(!send_request(&Msg::Flush { tag: u32::MAX }), Ordering::Relaxed);
-    without_interrupts(|| *SYS.lock() = None);
+    udrv::set_grant(Drv::Megaraidd, None);
     DMA_BASE.store(0, Ordering::Release);
     // 1. No new DMA (and no MSI-X, which is a DMA write): bus mastering off.
     if let Some(dev) = sup.dev {
@@ -539,6 +409,7 @@ fn on_death(sup: &mut Supervisor, falloc: &mut FrameAllocator, inst: Instance) {
         Decision::RestartAt(t) => sup.restart_at = Some(t),
         Decision::GiveUp => {
             sup.gave_up = true;
+            udrv::release_vector(Drv::Megaraidd);
             if let Some(q) = sup.quarantine.take() {
                 free_window(falloc, q); // bus mastering stays off: nothing can reach it
             }
@@ -727,15 +598,15 @@ fn selftest_info() {
 
 #[cfg(feature = "selftest")]
 fn selftest_irq(msix: bool) {
-    let raised = IRQS.load(Ordering::Relaxed);
-    let delivered = IRQS_DELIVERED.load(Ordering::Relaxed);
+    let raised = udrv::irqs(Drv::Megaraidd);
+    let delivered = udrv::irqs_delivered(Drv::Megaraidd);
     if !msix {
         crate::serial_println!("[mr-irq] device without MSI-X: megaraidd polls its reply ring, no interrupt path to prove ⬜");
         return;
     }
     crate::serial_println!(
         "[mr-irq] MSI-X vector 0x{:x}: {raised} interrupt(s) raised by reply-queue completions, {delivered} delivered to megaraidd as EuroIPC Irq messages → {}",
-        crate::interrupts::MEGARAID_MSIX_VECTOR,
+        udrv::vector_of(Drv::Megaraidd).unwrap_or(0),
         if raised > 0 && delivered > 0 { "OK ✓" } else { "FAILED" }
     );
 }
@@ -830,7 +701,7 @@ pub fn status_line() -> String {
         readies(),
         disk_count(),
         ready(),
-        IRQS.load(Ordering::Relaxed)
+        udrv::irqs(Drv::Megaraidd)
     )
 }
 

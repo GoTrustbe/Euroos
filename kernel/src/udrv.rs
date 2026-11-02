@@ -13,43 +13,281 @@
 //!   virtual == physical, and under VT-d the device's own IOMMU domain holding
 //!   exactly those pages (IOVA == PA). Without an IOMMU the log says the DMA is
 //!   not confined.
-//! - **IRQ**: MSI-X vector `UDRV_MSIX_VECTOR` on the BSP; the handler bumps a
-//!   EuroIPC notification slot and the driver receives it as an `Irq` message.
+//! - **IRQ**: an MSI-X vector from the userspace-driver pool (below) on the
+//!   BSP; the handler bumps a EuroIPC notification slot and the driver
+//!   receives it as an `Irq` message.
 //! - **EuroIPC**: its own port (only the kernel may send to it) and the
 //!   netstack port (only this driver's pid may send to it).
-//!
-//! The driver syscalls are served here WITHOUT the BG lock (ring3 routes the
-//! `driver` profile before taking it), so task 0 can hand the CPU to the
-//! driver while it waits for a frame. Everything this module locks is taken
-//! with interrupts off.
 //!
 //! When the driver dies, `supervise` quiesces the device before anything is
 //! freed (bus mastering off, IOMMU domain back to the empty table), reaps the
 //! process, frees the DMA window and restarts per `eurodrv::restart::Policy`.
+//!
+//! ## What every userspace driver shares (this module)
+//!
+//! Four drivers run in ring 3: e1000d (here), nvmed (`udrv_blk.rs`),
+//! bcm5720d (`udrv_bcm5720.rs`) and megaraidd (`udrv_mr.rs`). Their
+//! per-driver resources come from one place, so two drivers cannot end up on
+//! the same one:
+//! - [`Drv`] / [`RES`]: EuroIPC ports, notification slot and pid range per
+//!   driver, fixed and checked for overlap at compile time;
+//! - the **vector pool** `interrupts::UDRV_VECTOR_BASE ..+ UDRV_VECTORS`,
+//!   handed out by `eurodrv::vectors::VectorPool` ([`alloc_vector`]): one
+//!   owner per vector, a claim on a taken vector is refused, a restarted
+//!   driver keeps its vector, an exhausted pool means a polled device. Each
+//!   pool vector has a stub handler that notifies its owner's slot;
+//! - **one driver-syscall dispatch** ([`syscall`]): the caller's grant (looked
+//!   up by task) says which driver it is; there is no "try this module first".
+//!
+//! The driver syscalls are served WITHOUT the BG lock (ring3 routes the
+//! `driver` profile before taking it), so task 0 can hand the CPU to a
+//! driver while it waits for it. Everything this module locks is taken with
+//! interrupts off.
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 use eurodrv::abi::{self, DriverInfo};
 use eurodrv::grant::{Bdf, DeviceGrant, Window};
 use eurodrv::proto::{self, Msg};
 use eurodrv::restart::{Decision, Policy, Tracker};
+use eurodrv::vectors::{VecError, VectorPool};
 use euromm::FrameAllocator;
 use spin::Mutex;
 use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::structures::idt::InterruptStackFrame;
 
 use crate::euroipc;
+use crate::interrupts::{UDRV_VECTORS, UDRV_VECTOR_BASE};
 use crate::pci::{self, PciDevice};
+
+// ── Per-driver resources (every userspace driver) ────────────────────────────
+
+/// The userspace drivers. The discriminant indexes [`RES`], the grant table,
+/// the IRQ counters and the vector pool's owners.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub(crate) enum Drv {
+    E1000d = 0,
+    Nvmed = 1,
+    Bcm5720d = 2,
+    Megaraidd = 3,
+}
+
+pub(crate) const DRIVERS: usize = 4;
+const ALL: [Drv; DRIVERS] = [Drv::E1000d, Drv::Nvmed, Drv::Bcm5720d, Drv::Megaraidd];
+
+/// What one driver owns besides its grant: its EuroIPC port (only the kernel
+/// sends to it), the kernel-side port it sends to (only its pid may), the
+/// notification slot its interrupts bump and the pids its instances get
+/// (`pid_base + start number`, below `pid_base + PID_SPAN`).
+#[derive(Clone, Copy)]
+pub(crate) struct DrvRes {
+    pub name: &'static str,
+    pub driver_port: u32,
+    pub stack_port: u32,
+    pub notify_slot: usize,
+    pub pid_base: u64,
+}
+
+pub(crate) const PID_SPAN: u64 = 0x1000;
+
+pub(crate) const RES: [DrvRes; DRIVERS] = [
+    DrvRes { name: "e1000d", driver_port: 0x4E00, stack_port: 0x4E10, notify_slot: 0, pid_base: 0x2_0000 },
+    DrvRes { name: "nvmed", driver_port: 0x4E20, stack_port: 0x4E30, notify_slot: 1, pid_base: 0x2_1000 },
+    DrvRes { name: "bcm5720d", driver_port: 0x4E40, stack_port: 0x4E50, notify_slot: 2, pid_base: 0x2_2000 },
+    DrvRes { name: "megaraidd", driver_port: 0x4E60, stack_port: 0x4E70, notify_slot: 3, pid_base: 0x2_3000 },
+];
+
+impl Drv {
+    pub const fn res(self) -> DrvRes {
+        RES[self as usize]
+    }
+    pub const fn name(self) -> &'static str {
+        RES[self as usize].name
+    }
+}
+
+/// No two drivers share a port, a notification slot or a pid; every slot exists.
+const fn resources_distinct() -> bool {
+    let mut i = 0;
+    while i < DRIVERS {
+        let a = RES[i];
+        if a.notify_slot >= euroipc::NOTIFY_SLOTS || a.driver_port == a.stack_port {
+            return false;
+        }
+        let mut j = i + 1;
+        while j < DRIVERS {
+            let b = RES[j];
+            let ports_clash = a.driver_port == b.driver_port
+                || a.driver_port == b.stack_port
+                || a.stack_port == b.driver_port
+                || a.stack_port == b.stack_port;
+            let pids_clash = a.pid_base < b.pid_base + PID_SPAN && b.pid_base < a.pid_base + PID_SPAN;
+            if ports_clash || a.notify_slot == b.notify_slot || pids_clash {
+                return false;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    true
+}
+const _: () = assert!(resources_distinct(), "two userspace drivers share a port, notification slot or pid range");
+const _: () = assert!(ALL.len() == DRIVERS && UDRV_VECTORS >= DRIVERS);
+
+// ── The vector pool and its interrupt stubs ──────────────────────────────────
+
+static VECTORS: Mutex<VectorPool> = Mutex::new(VectorPool::new(UDRV_VECTOR_BASE, UDRV_VECTORS as u8));
+/// The driver bound to each pool vector (driver index + 1; 0 = none). Read
+/// by the stubs: no lock in the interrupt path.
+static VEC_OWNER: [AtomicU8; UDRV_VECTORS] = [const { AtomicU8::new(0) }; UDRV_VECTORS];
+static IRQS: [AtomicU64; DRIVERS] = [const { AtomicU64::new(0) }; DRIVERS];
+static IRQS_DELIVERED: [AtomicU64; DRIVERS] = [const { AtomicU64::new(0) }; DRIVERS];
+/// Interrupts on a pool vector nobody owns (a device left programmed).
+static IRQS_UNOWNED: AtomicU64 = AtomicU64::new(0);
+
+/// The MSI-X vector for driver `d`: the one it holds, or the first free one.
+/// `None` when the pool is exhausted: the device then runs polled.
+pub(crate) fn alloc_vector(d: Drv) -> Option<u8> {
+    let r = without_interrupts(|| {
+        let r = VECTORS.lock().alloc(d as u8);
+        if let Ok(v) = r {
+            VEC_OWNER[(v - UDRV_VECTOR_BASE) as usize].store(d as u8 + 1, Ordering::Release);
+        }
+        r
+    });
+    match r {
+        Ok(v) => Some(v),
+        Err(e) => {
+            crate::serial_println!("[udrv] no MSI-X vector for {}: {e:?} (pool {:#x}..{:#x}): the device runs polled", d.name(), UDRV_VECTOR_BASE, UDRV_VECTOR_BASE as usize + UDRV_VECTORS - 1);
+            None
+        }
+    }
+}
+
+/// Give driver `d`'s vector back (the device is off for good: bus mastering
+/// is off, so it cannot raise an MSI any more).
+pub(crate) fn release_vector(d: Drv) {
+    without_interrupts(|| {
+        let mut p = VECTORS.lock();
+        if let Some(v) = p.vector_of(d as u8) {
+            if p.release(v, d as u8).is_ok() {
+                VEC_OWNER[(v - UDRV_VECTOR_BASE) as usize].store(0, Ordering::Release);
+            }
+        }
+    });
+}
+
+pub(crate) fn vector_of(d: Drv) -> Option<u8> {
+    without_interrupts(|| VECTORS.lock().vector_of(d as u8))
+}
+
+/// Interrupts raised for driver `d`, and delivered to it as `Irq` messages.
+pub(crate) fn irqs(d: Drv) -> u64 {
+    IRQS[d as usize].load(Ordering::Relaxed)
+}
+pub(crate) fn irqs_delivered(d: Drv) -> u64 {
+    IRQS_DELIVERED[d as usize].load(Ordering::Relaxed)
+}
+
+/// The pool vector `i` fired: count it for its owner, notify the owner's
+/// port, EOI. No lock, no allocation (notify_from_irq is two atomics).
+#[inline(always)]
+fn irq_pool(i: usize) {
+    let o = VEC_OWNER[i].load(Ordering::Acquire);
+    if o != 0 && (o as usize) <= DRIVERS {
+        let d = o as usize - 1;
+        IRQS[d].fetch_add(1, Ordering::Relaxed);
+        euroipc::notify_from_irq(RES[d].notify_slot);
+    } else {
+        IRQS_UNOWNED.fetch_add(1, Ordering::Relaxed);
+    }
+    crate::apic::eoi();
+}
+
+extern "x86-interrupt" fn irq_pool0(_f: InterruptStackFrame) {
+    irq_pool(0)
+}
+extern "x86-interrupt" fn irq_pool1(_f: InterruptStackFrame) {
+    irq_pool(1)
+}
+extern "x86-interrupt" fn irq_pool2(_f: InterruptStackFrame) {
+    irq_pool(2)
+}
+extern "x86-interrupt" fn irq_pool3(_f: InterruptStackFrame) {
+    irq_pool(3)
+}
+
+/// The IDT entries of the pool, in vector order (interrupts.rs installs them).
+pub(crate) const IRQ_STUBS: [extern "x86-interrupt" fn(InterruptStackFrame); UDRV_VECTORS] = [irq_pool0, irq_pool1, irq_pool2, irq_pool3];
+
+/// The `Irq` message driver `d` receives for `n` pending notifications, in
+/// its own wire format.
+fn irq_msg(d: Drv, n: u32) -> Vec<u8> {
+    IRQS_DELIVERED[d as usize].fetch_add(n as u64, Ordering::Relaxed);
+    let mut b = [0u8; 16];
+    let len = match d {
+        Drv::Megaraidd => euromegaraid::blkif::encode(&euromegaraid::blkif::Msg::Irq { count: n }, &mut b).unwrap_or(0),
+        _ => proto::encode(&Msg::Irq { count: n }, &mut b).unwrap_or(0),
+    };
+    b[..len].to_vec()
+}
+
+/// [udrv-vec]: every driver holding a vector holds a different one, the
+/// stubs point at the right owner, and a second claim on a held vector is
+/// refused. Boot self-test, after the drivers started.
+pub fn selftest_vectors() {
+    let (pool, owners) = without_interrupts(|| {
+        let p = *VECTORS.lock();
+        let o: [u8; UDRV_VECTORS] = core::array::from_fn(|i| VEC_OWNER[i].load(Ordering::Acquire));
+        (p, o)
+    });
+    let mut held = Vec::new();
+    for d in ALL {
+        if let Some(v) = pool.vector_of(d as u8) {
+            held.push((d, v));
+        }
+    }
+    if held.is_empty() {
+        crate::serial_println!("[udrv-vec] no userspace driver holds an MSI-X vector on this machine (pool {:#x}..{:#x}) ⬜", UDRV_VECTOR_BASE, UDRV_VECTOR_BASE as usize + UDRV_VECTORS - 1);
+        return;
+    }
+    let distinct = held.iter().enumerate().all(|(i, a)| held.iter().skip(i + 1).all(|b| a.1 != b.1));
+    let stubs_ok = held.iter().all(|(d, v)| owners[(*v - UDRV_VECTOR_BASE) as usize] == *d as u8 + 1)
+        && (0..UDRV_VECTORS).all(|i| owners[i] == 0 || held.iter().any(|(d, v)| (*v - UDRV_VECTOR_BASE) as usize == i && owners[i] == *d as u8 + 1));
+    // A second claim on every held vector, by every other driver: all refused.
+    let mut probe = pool;
+    let mut refused = 0;
+    let mut tried = 0;
+    for &(holder, v) in &held {
+        for d in ALL.iter().filter(|d| **d != holder) {
+            tried += 1;
+            if probe.claim(v, *d as u8) == Err(VecError::Taken { owner: holder as u8 }) {
+                refused += 1;
+            }
+        }
+    }
+    let list: Vec<String> = held.iter().map(|(d, v)| alloc::format!("{} {v:#x}", d.name())).collect();
+    let ok = distinct && stubs_ok && refused == tried;
+    crate::serial_println!(
+        "[udrv-vec] MSI-X vectors from the pool {:#x}..{:#x}: {}; distinct={distinct}, stubs bound to their owner={stubs_ok}, second claims on a held vector refused {refused}/{tried}; unowned interrupts {} → {}",
+        UDRV_VECTOR_BASE, UDRV_VECTOR_BASE as usize + UDRV_VECTORS - 1,
+        list.join(", "),
+        IRQS_UNOWNED.load(Ordering::Relaxed),
+        if ok { "OK ✓" } else { "FAILED" }
+    );
+}
+
+// ── e1000d ───────────────────────────────────────────────────────────────────
 
 static E1000D_ELF: &[u8] = include_bytes!("../../userland/e1000d.elf");
 static E1000D_SIG: &[u8] = include_bytes!("../../userland/e1000d.elf.sig");
 
 /// EuroIPC ports: the driver's own, and the netstack's.
-pub const DRIVER_PORT: u32 = 0x4E00;
-pub const STACK_PORT: u32 = 0x4E10;
-const NOTIFY_SLOT: usize = 0;
+pub const DRIVER_PORT: u32 = Drv::E1000d.res().driver_port;
+pub const STACK_PORT: u32 = Drv::E1000d.res().stack_port;
 /// The DMA window: two descriptor rings + 2 x 16 buffers of 2 KiB need 18 pages.
 const DMA_PAGES: usize = 32;
 const DOMAIN: &str = "e1000d";
@@ -60,8 +298,6 @@ static ACTIVE: AtomicBool = AtomicBool::new(false);
 static LINK_UP: AtomicBool = AtomicBool::new(false);
 static MAC: AtomicU64 = AtomicU64::new(0);
 static DRIVER_PID: AtomicU64 = AtomicU64::new(u64::MAX);
-static IRQS: AtomicU64 = AtomicU64::new(0);
-static IRQS_DELIVERED: AtomicU64 = AtomicU64::new(0);
 static TX_FRAMES: AtomicU64 = AtomicU64::new(0);
 static RX_FRAMES: AtomicU64 = AtomicU64::new(0);
 static TX_REFUSED: AtomicU64 = AtomicU64::new(0);
@@ -71,31 +307,44 @@ static SEND_REFUSED_WHILE_DEAD: AtomicBool = AtomicBool::new(false);
 /// The last `Report` from the driver: (code, a, b), code 0 = none.
 static REPORT: Mutex<(u8, u64, u64)> = Mutex::new((0, 0, 0));
 
+/// Words a driver may get after the standard `DriverInfo` block.
+pub(crate) const MAX_EXTRA_WORDS: usize = 4;
+
 /// What a driver syscall needs to know about its caller (looked up by task).
 #[derive(Clone, Copy)]
 pub(crate) struct SysGrant {
+    /// Which driver this is: decides the wire format and who is woken.
+    pub drv: Drv,
     pub task: usize,
     pub pid: u64,
     pub pml4: u64,
     pub arena: u64,
     pub arena_bytes: u64,
     pub info: DriverInfo,
-    /// For the log prefix.
-    pub name: &'static str,
+    /// Driver-specific words after `info` in SYS_DRV_INFO (bcm5720d: the APE
+    /// window and its options), `extra_words` of them.
+    pub extra: [u64; MAX_EXTRA_WORDS],
+    pub extra_words: usize,
 }
 
-/// Grant slots of the running drivers: [`SLOT_NIC`] (e1000d), [`SLOT_BLK`] (nvmed).
-pub(crate) const SLOT_NIC: usize = 0;
-pub(crate) const SLOT_BLK: usize = 1;
-static SYS: Mutex<[Option<SysGrant>; 2]> = Mutex::new([None, None]);
+impl SysGrant {
+    /// A grant with no extra info words.
+    pub fn new(drv: Drv, task: usize, pid: u64, pml4: u64, arena: u64, arena_bytes: u64, info: DriverInfo) -> SysGrant {
+        SysGrant { drv, task, pid, pml4, arena, arena_bytes, info, extra: [0; MAX_EXTRA_WORDS], extra_words: 0 }
+    }
+}
+
+/// The running drivers' grants, one slot per [`Drv`].
+static SYS: Mutex<[Option<SysGrant>; DRIVERS]> = Mutex::new([None; DRIVERS]);
 
 fn sys_grant(task: usize) -> Option<SysGrant> {
     without_interrupts(|| SYS.lock().iter().flatten().find(|g| g.task == task).copied())
 }
 
-/// Publish (or clear) the grant of the driver in `slot` (interrupts off).
-pub(crate) fn set_grant(slot: usize, g: Option<SysGrant>) {
-    without_interrupts(|| SYS.lock()[slot] = g);
+/// Publish (or clear) the grant of driver `d` (interrupts off).
+pub(crate) fn set_grant(d: Drv, g: Option<SysGrant>) {
+    debug_assert!(g.is_none_or(|g| g.drv == d));
+    without_interrupts(|| SYS.lock()[d as usize] = g);
 }
 
 /// One running driver instance (task-0 state).
@@ -130,24 +379,7 @@ static SUP: Mutex<Supervisor> = Mutex::new(Supervisor {
     last_death: None,
 });
 
-// ── The interrupt path ───────────────────────────────────────────────────────
-
-/// MSI-X handler for the driver's device: count, notify the driver's port, EOI.
-/// No lock, no allocation (euroipc::notify_from_irq is two atomics).
-pub extern "x86-interrupt" fn irq_handler(_frame: InterruptStackFrame) {
-    IRQS.fetch_add(1, Ordering::Relaxed);
-    euroipc::notify_from_irq(NOTIFY_SLOT);
-    crate::apic::eoi();
-}
-
-fn irq_msg(n: u32) -> Vec<u8> {
-    IRQS_DELIVERED.fetch_add(n as u64, Ordering::Relaxed);
-    let mut b = [0u8; 8];
-    let len = proto::encode(&Msg::Irq { count: n }, &mut b).unwrap_or(0);
-    b[..len].to_vec()
-}
-
-// ── Driver syscalls ──────────────────────────────────────────────────────────
+// ── Driver syscalls (every userspace driver) ────────────────────────────────
 
 /// Is `[ptr, ptr+len)` inside the caller's arena and accessible (writable when
 /// `write`) for ring 3 in its own page tables?
@@ -173,34 +405,73 @@ fn err(e: i64) -> Option<u64> {
     Some(e as u64)
 }
 
-/// A syscall from a task under the `driver` profile. `None`: not ours (exit,
-/// and anything the profile kills), the ordinary route handles it.
+const _: () = assert!(euromegaraid::blkif::MAX_MSG <= proto::MAX_MSG);
+
+/// Largest message driver `d` sends or receives (its wire format's bound).
+fn max_msg(d: Drv) -> usize {
+    match d {
+        Drv::Megaraidd => euromegaraid::blkif::MAX_MSG,
+        _ => proto::MAX_MSG,
+    }
+}
+
+/// Bulk traffic stays out of the audit ring (frames, block completions).
+fn is_bulk(d: Drv, data: &[u8]) -> bool {
+    match d {
+        Drv::Megaraidd => matches!(euromegaraid::blkif::decode(data), Ok(euromegaraid::blkif::Msg::Done { .. })),
+        _ => matches!(proto::decode(data), Ok(Msg::Rx(_))),
+    }
+}
+
+/// The driver sent the kernel something: wake whoever sleeps waiting for it.
+fn after_send(d: Drv) {
+    match d {
+        // A task sleeping in a network wait (net.rs RxWait) has something to
+        // look at now: wake it instead of letting it sleep out its tick.
+        Drv::E1000d => crate::net::wake_rx_waiters(),
+        Drv::Nvmed => crate::udrv_blk::wake(),
+        // Their kernel sides poll per tick (bcm5720d has no netstack route;
+        // mrblk polls its completions).
+        Drv::Bcm5720d | Drv::Megaraidd => {}
+    }
+}
+
+/// THE driver-syscall entry: every task under the `driver` profile comes
+/// here (ring3.rs), whichever driver it is. The caller's grant, found by its
+/// task, says which driver it is and what it may touch; a driver-profile task
+/// without a grant gets EPERM for the driver calls. `None`: not a driver call
+/// (exit, and anything the profile kills), the ordinary route handles it.
 pub fn syscall(task: usize, num: u64, a1: u64, a2: u64, a3: u64) -> Option<u64> {
     if !(abi::is_driver_call(num) || matches!(num, 0x6107 | 0x6108 | 0x6109)) {
         return None;
     }
-    // A driver task without an e1000d grant may hold another driver's grant.
-    let Some(g) = sys_grant(task) else { return crate::udrv_bcm5720::syscall(task, num, a1, a2, a3) };
+    let Some(g) = sys_grant(task) else { return err(abi::EPERM) };
+    let d = g.drv;
     match num {
         abi::SYS_DRV_INFO => {
-            let mut b = [0u8; abi::INFO_WORDS * 8];
-            let n = (a2 as usize).min(b.len());
+            // The standard block, then the driver's extra words.
+            let mut b = [0u8; (abi::INFO_WORDS + MAX_EXTRA_WORDS) * 8];
+            g.info.write_bytes(&mut b[..abi::INFO_WORDS * 8]);
+            let extra = g.extra_words.min(MAX_EXTRA_WORDS);
+            for (i, w) in g.extra[..extra].iter().enumerate() {
+                let s = (abi::INFO_WORDS + i) * 8;
+                b[s..s + 8].copy_from_slice(&w.to_le_bytes());
+            }
+            let n = (a2 as usize).min((abi::INFO_WORDS + extra) * 8);
             if n == 0 || !user_ok(&g, a1, n, true) {
                 return err(abi::EFAULT);
             }
-            g.info.write_bytes(&mut b[..n]);
             // SAFETY: checked above: inside the caller's arena, user-writable in its tables.
             unsafe { core::ptr::copy_nonoverlapping(b.as_ptr(), a1 as *mut u8, n) };
             Some(0)
         }
         abi::SYS_IPC_RECV => {
-            let max = (a2 as usize).min(proto::MAX_MSG);
+            let max = (a2 as usize).min(max_msg(d));
             if max == 0 || !user_ok(&g, a1, max, true) {
                 return err(abi::EFAULT);
             }
             for attempt in 0..2 {
-                let deliver = |n: u32| if g.info.own_port == DRIVER_PORT as u64 { irq_msg(n) } else { crate::udrv_blk::irq_msg(n) };
-                if let Some((_, data)) = euroipc::take(g.info.own_port as u32, deliver) {
+                if let Some((_, data)) = euroipc::take(g.info.own_port as u32, |n| irq_msg(d, n)) {
                     if data.len() > max {
                         return err(abi::ENOSPC); // dropped: the driver's buffer is MAX_MSG
                     }
@@ -221,24 +492,17 @@ pub fn syscall(task: usize, num: u64, a1: u64, a2: u64, a3: u64) -> Option<u64> 
             if port as u64 != g.info.stack_port {
                 return err(abi::EPERM); // the grant names one destination
             }
-            if len == 0 || len > proto::MAX_MSG || !user_ok(&g, a2, len, false) {
+            if len == 0 || len > max_msg(d) || !user_ok(&g, a2, len, false) {
                 return err(abi::EFAULT);
             }
             let mut buf = [0u8; proto::MAX_MSG];
-            // SAFETY: checked above (inside the arena, user-accessible), len bounded.
+            // SAFETY: checked above (inside the arena, user-accessible), len bounded
+            // by max_msg(d) <= proto::MAX_MSG.
             unsafe { core::ptr::copy_nonoverlapping(a2 as *const u8, buf.as_mut_ptr(), len) };
             let data = &buf[..len];
-            let quiet = matches!(proto::decode(data), Ok(Msg::Rx(_)));
-            let r = euroipc::send_with(g.pid, port, data, !quiet);
+            let r = euroipc::send_with(g.pid, port, data, !is_bulk(d, data));
             if r >= 0 {
-                // A task sleeping in a network wait (net.rs RxWait) has
-                // something to look at now: wake it instead of letting it
-                // sleep out its tick.
-                if g.info.stack_port == STACK_PORT as u64 {
-                    crate::net::wake_rx_waiters();
-                } else {
-                    crate::udrv_blk::wake();
-                }
+                after_send(d);
             }
             Some(r as u64)
         }
@@ -251,7 +515,7 @@ pub fn syscall(task: usize, num: u64, a1: u64, a2: u64, a3: u64) -> Option<u64> 
             let mut b = [0u8; 200];
             // SAFETY: checked above.
             unsafe { core::ptr::copy_nonoverlapping(a1 as *const u8, b.as_mut_ptr(), len) };
-            crate::serial_println!("[{} pid {}] {}", g.name, g.pid, String::from_utf8_lossy(&b[..len]));
+            crate::serial_println!("[{} pid {}] {}", d.name(), g.pid, String::from_utf8_lossy(&b[..len]));
             Some(0)
         }
         0x6108 => Some(crate::interrupts::ticks() * 10),
@@ -410,7 +674,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
     // The BAR must not be RAM: below the PCI hole (2 GiB on every PC layout we
     // drive) everything the allocator covers is RAM.
     let ram = Window::new(0, falloc.total_bytes().min(0x8000_0000));
-    let irq = if sup.msix { Some(crate::interrupts::UDRV_MSIX_VECTOR) } else { None };
+    let irq = if sup.msix { alloc_vector(Drv::E1000d) } else { None };
     let grant = match DeviceGrant::new(bdf, sup.mmio, dma, irq, &[ram], &[sup.mmio]) {
         Ok(g) => g,
         Err(_) => {
@@ -424,7 +688,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
         free_dma(falloc, dma_base);
         return Err("IOMMU translation is on but the driver domain could not be built: refused");
     }
-    let pid = 0x2_0000 + sup.starts as u64;
+    let pid = Drv::E1000d.res().pid_base + sup.starts as u64;
     let info = DriverInfo {
         abi: abi::ABI_VERSION,
         vendor: dev.vendor as u64,
@@ -443,7 +707,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
     euroipc::unregister(DRIVER_PORT);
     euroipc::register_restricted(pid, DRIVER_PORT, euroipc::KERNEL_PID);
     euroipc::set_only_from(STACK_PORT, pid);
-    euroipc::bind_notify(NOTIFY_SLOT, DRIVER_PORT);
+    euroipc::bind_notify(Drv::E1000d.res().notify_slot, DRIVER_PORT);
     DRIVER_PID.store(pid, Ordering::Relaxed);
     // Spawn, map the grant, publish it: all with interrupts off, so the task
     // cannot run before its address space holds exactly its grant.
@@ -464,11 +728,11 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
                 return Err("could not map the DMA window");
             }
         }
-        SYS.lock()[SLOT_NIC] = Some(SysGrant { task, pid, pml4, arena, arena_bytes, info, name: "e1000d" });
+        SYS.lock()[Drv::E1000d as usize] = Some(SysGrant::new(Drv::E1000d, task, pid, pml4, arena, arena_bytes, info));
         // Interrupt routing and bus mastering before the driver can run: its
         // first DMA must find the device enabled (the IOMMU domain is in place).
-        if sup.msix {
-            crate::msix::enable(&dev, 0, crate::interrupts::UDRV_MSIX_VECTOR, crate::apic::lapic_id() as u8);
+        if let Some(v) = irq {
+            crate::msix::enable(&dev, 0, v, crate::apic::lapic_id() as u8);
         }
         bus_master(&dev, true);
         Ok(task)
@@ -490,7 +754,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
     crate::serial_println!(
         "[udrv] e1000d started: pid {pid}, task {task}, profile driver · BAR0 {:#x}+{:#x} ({} pages) · DMA {:#x}+{:#x} · IRQ {} · IOMMU {}",
         grant.mmio.base, grant.mmio.len, grant.mmio.pages(), dma_base, dma.len,
-        if sup.msix { "MSI-X 0x4c -> EuroIPC" } else { "none (polled)" },
+        irq.map(|v| alloc::format!("MSI-X {v:#x} -> EuroIPC")).unwrap_or_else(|| String::from("none (polled)")),
         if iommu { "own domain (DMA confined)" } else { "absent: DMA NOT confined" }
     );
     Ok(pid)
@@ -507,7 +771,7 @@ fn on_death(sup: &mut Supervisor, falloc: &mut FrameAllocator, inst: Instance) {
     let reason = crate::ring3::bg_end_reason(inst.pid).unwrap_or_else(|| String::from("terminated"));
     LINK_UP.store(false, Ordering::Relaxed);
     SEND_REFUSED_WHILE_DEAD.store(!nic_send(&[0u8; 60]), Ordering::Relaxed);
-    set_grant(SLOT_NIC, None);
+    set_grant(Drv::E1000d, None);
     // 1. No new DMA: bus mastering off.
     if let Some(dev) = sup.dev {
         bus_master(&dev, false);
@@ -536,6 +800,7 @@ fn on_death(sup: &mut Supervisor, falloc: &mut FrameAllocator, inst: Instance) {
         Decision::GiveUp => {
             sup.gave_up = true;
             ACTIVE.store(false, Ordering::Relaxed);
+            release_vector(Drv::E1000d);
         }
     }
 }
@@ -834,15 +1099,15 @@ fn selftest_grant(pid: u64) {
 }
 
 fn selftest_irq(msix: bool) {
-    let raised = IRQS.load(Ordering::Relaxed);
-    let delivered = IRQS_DELIVERED.load(Ordering::Relaxed);
+    let raised = irqs(Drv::E1000d);
+    let delivered = irqs_delivered(Drv::E1000d);
     if !msix {
         crate::serial_println!("[udrv-irq] device without MSI-X: e1000d is serviced on its receive timeout (polled), no interrupt path to prove ⬜");
         return;
     }
     crate::serial_println!(
         "[udrv-irq] MSI-X vector 0x{:x}: {raised} interrupt(s) raised, {delivered} delivered to e1000d as EuroIPC Irq messages → {}",
-        crate::interrupts::UDRV_MSIX_VECTOR,
+        vector_of(Drv::E1000d).unwrap_or(0),
         if raised > 0 && delivered > 0 { "OK ✓" } else { "FAILED" }
     );
 }
@@ -974,6 +1239,6 @@ pub fn status_line() -> String {
         if link_up() { "up" } else { "down" },
         TX_FRAMES.load(Ordering::Relaxed),
         RX_FRAMES.load(Ordering::Relaxed),
-        IRQS.load(Ordering::Relaxed)
+        irqs(Drv::E1000d)
     )
 }

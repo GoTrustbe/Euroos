@@ -1,7 +1,7 @@
 //! Userspace driver for the Broadcom BCM5720 (`bcm5720d`): its supervisor,
-//! grant, driver syscalls, IRQ->EuroIPC path and boot self-tests
-//! (docs/SPRINT-PLAN-BCM5720.md). Same model as `udrv.rs` (e1000d); kept in
-//! its own file so the two drivers do not share mutable state.
+//! grant and boot self-tests (docs/SPRINT-PLAN-BCM5720.md). Same model as
+//! `udrv.rs` (e1000d), its own device state; the driver syscalls, the vector
+//! pool and the IRQ->EuroIPC stubs are the shared ones in `udrv.rs`.
 //!
 //! What the kernel gives bcm5720d, and nothing more:
 //! - **MMIO**: BAR 0 (registers and the NIC SRAM window) and BAR 2 (the APE
@@ -12,8 +12,9 @@
 //!   no overlap with each other or the DMA window).
 //! - **DMA**: a zeroed window of `eurobcm5720::Layout::PAGES` pages, and under
 //!   VT-d the function's own IOMMU domain holding exactly those pages.
-//! - **IRQ**: MSI-X entry 0 -> vector `UDRV_BCM_MSIX_VECTOR` on the BSP; the
-//!   handler bumps EuroIPC notification slot `NOTIFY_SLOT`.
+//! - **IRQ**: MSI-X entry 0 -> a vector from the userspace-driver pool
+//!   (`udrv::alloc_vector`) on the BSP; its stub bumps bcm5720d's EuroIPC
+//!   notification slot (`udrv::RES`).
 //! - **EuroIPC**: its own port (only the kernel may send) and the supervisor's
 //!   port (only this driver's pid may send).
 //!
@@ -33,45 +34,25 @@ use eurodrv::restart::{Decision, Policy, Tracker};
 use euromm::FrameAllocator;
 use spin::Mutex;
 use x86_64::instructions::interrupts::without_interrupts;
-use x86_64::structures::idt::InterruptStackFrame;
 
 use crate::euroipc;
 use crate::pci::{self, PciDevice};
+use crate::udrv::{self, Drv, SysGrant};
 
 static BCM5720D_ELF: &[u8] = include_bytes!("../../userland/bcm5720d.elf");
 static BCM5720D_SIG: &[u8] = include_bytes!("../../userland/bcm5720d.elf.sig");
 
-pub const DRIVER_PORT: u32 = 0x4E40;
-pub const STACK_PORT: u32 = 0x4E50;
-const NOTIFY_SLOT: usize = 2;
+pub const DRIVER_PORT: u32 = Drv::Bcm5720d.res().driver_port;
+pub const STACK_PORT: u32 = Drv::Bcm5720d.res().stack_port;
 const DMA_PAGES: usize = eurobcm5720::Layout::PAGES as usize;
 const DOMAIN: &str = "bcm5720d";
 const ARENA_MIB: u64 = 4;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static DRIVER_PID: AtomicU64 = AtomicU64::new(u64::MAX);
-static IRQS: AtomicU64 = AtomicU64::new(0);
-static IRQS_DELIVERED: AtomicU64 = AtomicU64::new(0);
 /// Reports from the driver, newest last (code, a, b). Bounded.
 static REPORTS: Mutex<Vec<(u8, u64, u64)>> = Mutex::new(Vec::new());
 static SELFTEST: AtomicBool = AtomicBool::new(false);
-
-#[derive(Clone, Copy)]
-struct SysGrant {
-    task: usize,
-    pid: u64,
-    pml4: u64,
-    arena: u64,
-    arena_bytes: u64,
-    info: DriverInfo,
-    ape: Window,
-}
-
-static SYS: Mutex<Option<SysGrant>> = Mutex::new(None);
-
-fn sys_grant(task: usize) -> Option<SysGrant> {
-    without_interrupts(|| SYS.lock().filter(|g| g.task == task))
-}
 
 struct Instance {
     pid: u64,
@@ -106,129 +87,6 @@ static SUP: Mutex<Supervisor> = Mutex::new(Supervisor {
     msix: false,
     last_death: None,
 });
-
-// ── Interrupts ───────────────────────────────────────────────────────────────
-
-/// MSI-X handler: count, notify the driver's port, EOI. No lock, no allocation.
-pub extern "x86-interrupt" fn irq_handler(_frame: InterruptStackFrame) {
-    IRQS.fetch_add(1, Ordering::Relaxed);
-    euroipc::notify_from_irq(NOTIFY_SLOT);
-    crate::apic::eoi();
-}
-
-fn irq_msg(n: u32) -> Vec<u8> {
-    IRQS_DELIVERED.fetch_add(n as u64, Ordering::Relaxed);
-    let mut b = [0u8; 8];
-    let len = proto::encode(&Msg::Irq { count: n }, &mut b).unwrap_or(0);
-    b[..len].to_vec()
-}
-
-// ── Driver syscalls ──────────────────────────────────────────────────────────
-
-fn user_ok(g: &SysGrant, ptr: u64, len: usize, write: bool) -> bool {
-    let Some(end) = ptr.checked_add(len as u64) else { return false };
-    if len == 0 || ptr < g.arena || end > g.arena + g.arena_bytes {
-        return false;
-    }
-    if write {
-        return crate::paging::user_range_writable_in(g.pml4, ptr, len);
-    }
-    let mut p = ptr & !0xFFF;
-    while p < end {
-        if !crate::paging::user_accessible_in(g.pml4, p) {
-            return false;
-        }
-        p += 4096;
-    }
-    true
-}
-
-fn err(e: i64) -> Option<u64> {
-    Some(e as u64)
-}
-
-/// A driver-profile syscall from a task that holds no e1000d grant (udrv.rs
-/// offers it here). `None`: not a driver call; EPERM for a task with no grant.
-pub fn syscall(task: usize, num: u64, a1: u64, a2: u64, a3: u64) -> Option<u64> {
-    if !(abi::is_driver_call(num) || matches!(num, 0x6107 | 0x6108 | 0x6109)) {
-        return None;
-    }
-    let Some(g) = sys_grant(task) else { return err(abi::EPERM) };
-    match num {
-        abi::SYS_DRV_INFO => {
-            // The standard block, then the APE window and the options.
-            const WORDS: usize = abi::INFO_WORDS + wire::EXTRA_WORDS;
-            let mut b = [0u8; WORDS * 8];
-            g.info.write_bytes(&mut b[..abi::INFO_WORDS * 8]);
-            let opts = if SELFTEST.load(Ordering::Relaxed) { wire::OPT_SELFTEST } else { 0 };
-            for (i, w) in [g.ape.base, g.ape.len, opts].iter().enumerate() {
-                let s = (abi::INFO_WORDS + i) * 8;
-                b[s..s + 8].copy_from_slice(&w.to_le_bytes());
-            }
-            let n = (a2 as usize).min(b.len());
-            if n == 0 || !user_ok(&g, a1, n, true) {
-                return err(abi::EFAULT);
-            }
-            // SAFETY: checked above: inside the caller's arena, user-writable in its tables.
-            unsafe { core::ptr::copy_nonoverlapping(b.as_ptr(), a1 as *mut u8, n) };
-            Some(0)
-        }
-        abi::SYS_IPC_RECV => {
-            let max = (a2 as usize).min(proto::MAX_MSG);
-            if max == 0 || !user_ok(&g, a1, max, true) {
-                return err(abi::EFAULT);
-            }
-            for attempt in 0..2 {
-                if let Some((_, data)) = euroipc::take(g.info.own_port as u32, irq_msg) {
-                    if data.len() > max {
-                        return err(abi::ENOSPC);
-                    }
-                    // SAFETY: checked above (arena + writable), length bounded by max.
-                    unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), a1 as *mut u8, data.len()) };
-                    return Some(data.len() as u64);
-                }
-                if attempt == 0 {
-                    crate::sched::sleep_ticks(1);
-                    crate::sched::yield_now();
-                }
-            }
-            err(abi::EAGAIN)
-        }
-        abi::SYS_IPC_SEND => {
-            let (port, len) = (a1 as u32, a3 as usize);
-            if port as u64 != g.info.stack_port {
-                return err(abi::EPERM);
-            }
-            if len == 0 || len > proto::MAX_MSG || !user_ok(&g, a2, len, false) {
-                return err(abi::EFAULT);
-            }
-            let mut buf = [0u8; proto::MAX_MSG];
-            // SAFETY: checked above (inside the arena, user-accessible), len bounded.
-            unsafe { core::ptr::copy_nonoverlapping(a2 as *const u8, buf.as_mut_ptr(), len) };
-            let data = &buf[..len];
-            let quiet = matches!(proto::decode(data), Ok(Msg::Rx(_)));
-            Some(euroipc::send_with(g.pid, port, data, !quiet) as u64)
-        }
-        0x6107 => {
-            let len = (a2 as usize).min(200);
-            if len == 0 || !user_ok(&g, a1, len, false) {
-                return err(abi::EFAULT);
-            }
-            let mut b = [0u8; 200];
-            // SAFETY: checked above.
-            unsafe { core::ptr::copy_nonoverlapping(a1 as *const u8, b.as_mut_ptr(), len) };
-            crate::serial_println!("[bcm5720d pid {}] {}", g.pid, String::from_utf8_lossy(&b[..len]));
-            Some(0)
-        }
-        0x6108 => Some(crate::interrupts::ticks() * 10),
-        0x6109 => {
-            crate::sched::sleep_ticks(a1.min(600_000).div_ceil(10).max(1));
-            crate::sched::yield_now();
-            Some(0)
-        }
-        _ => err(abi::EPERM),
-    }
-}
 
 // ── Reports from the driver ──────────────────────────────────────────────────
 
@@ -319,7 +177,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
     unsafe { core::ptr::write_bytes(dma_base as *mut u8, 0, DMA_PAGES * 4096) };
     let dma = Window::new(dma_base, (DMA_PAGES * 4096) as u64);
     let ram = Window::new(0, falloc.total_bytes().min(0x8000_0000));
-    let irq = if sup.msix { Some(crate::interrupts::UDRV_BCM_MSIX_VECTOR) } else { None };
+    let irq = if sup.msix { udrv::alloc_vector(Drv::Bcm5720d) } else { None };
     // Both MMIO windows go through the same checks; they may not overlap.
     let grant = DeviceGrant::new(bdf, sup.bar0, dma, irq, &[ram, sup.bar2], &[sup.bar0, sup.bar2]);
     let ape = DeviceGrant::new(bdf, sup.bar2, dma, irq, &[ram, sup.bar0], &[sup.bar0, sup.bar2]);
@@ -339,7 +197,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
         free_dma(falloc, dma_base);
         return Err("IOMMU translation is on but the driver domain could not be built: refused");
     }
-    let pid = 0x2_2000 + sup.starts as u64;
+    let pid = Drv::Bcm5720d.res().pid_base + sup.starts as u64;
     let info = DriverInfo {
         abi: abi::ABI_VERSION,
         vendor: dev.vendor as u64,
@@ -357,7 +215,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
     euroipc::unregister(DRIVER_PORT);
     euroipc::register_restricted(pid, DRIVER_PORT, euroipc::KERNEL_PID);
     euroipc::set_only_from(STACK_PORT, pid);
-    euroipc::bind_notify(NOTIFY_SLOT, DRIVER_PORT);
+    euroipc::bind_notify(Drv::Bcm5720d.res().notify_slot, DRIVER_PORT);
     DRIVER_PID.store(pid, Ordering::Relaxed);
     let ape = sup.bar2;
     let spawned = without_interrupts(|| -> Result<usize, &'static str> {
@@ -376,7 +234,13 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
                 return Err("could not map the DMA window");
             }
         }
-        *SYS.lock() = Some(SysGrant { task, pid, pml4, arena, arena_bytes, info, ape });
+        // SYS_DRV_INFO: the standard block, then the APE window and the options
+        // (`eurobcm5720::wire`).
+        let opts = if SELFTEST.load(Ordering::Relaxed) { wire::OPT_SELFTEST } else { 0 };
+        let mut g = SysGrant::new(Drv::Bcm5720d, task, pid, pml4, arena, arena_bytes, info);
+        g.extra[..wire::EXTRA_WORDS].copy_from_slice(&[ape.base, ape.len, opts]);
+        g.extra_words = wire::EXTRA_WORDS;
+        udrv::set_grant(Drv::Bcm5720d, Some(g));
         Ok(task)
     });
     let task = match spawned {
@@ -389,8 +253,8 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
             return Err(e);
         }
     };
-    if sup.msix {
-        crate::msix::enable(&dev, 0, crate::interrupts::UDRV_BCM_MSIX_VECTOR, crate::apic::lapic_id() as u8);
+    if let Some(v) = irq {
+        crate::msix::enable(&dev, 0, v, crate::apic::lapic_id() as u8);
     }
     pcie_strict_ordering(&dev);
     bus_master(&dev, true);
@@ -401,7 +265,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
     crate::serial_println!(
         "[udrv] bcm5720d started: pid {pid}, task {task}, profile driver · BAR0 {:#x}+{:#x} · BAR2 (APE) {:#x}+{:#x} · DMA {:#x}+{:#x} ({} pages) · IRQ {} · IOMMU {}",
         grant.mmio.base, grant.mmio.len, ape.base, ape.len, dma_base, dma.len, DMA_PAGES,
-        if sup.msix { "MSI-X 0x4e -> EuroIPC" } else { "none (polled)" },
+        irq.map(|v| alloc::format!("MSI-X {v:#x} -> EuroIPC")).unwrap_or_else(|| String::from("none (polled)")),
         if iommu { "own domain (DMA confined)" } else { "absent: DMA NOT confined" }
     );
     Ok(pid)
@@ -409,7 +273,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
 
 fn on_death(sup: &mut Supervisor, falloc: &mut FrameAllocator, inst: Instance) {
     let reason = crate::ring3::bg_end_reason(inst.pid).unwrap_or_else(|| String::from("terminated"));
-    without_interrupts(|| *SYS.lock() = None);
+    udrv::set_grant(Drv::Bcm5720d, None);
     if let Some(dev) = sup.dev {
         bus_master(&dev, false);
     }
@@ -434,6 +298,7 @@ fn on_death(sup: &mut Supervisor, falloc: &mut FrameAllocator, inst: Instance) {
         Decision::GiveUp => {
             sup.gave_up = true;
             ACTIVE.store(false, Ordering::Relaxed);
+            udrv::release_vector(Drv::Bcm5720d);
         }
     }
 }
@@ -636,15 +501,15 @@ fn selftest_loopback(falloc: &mut FrameAllocator, from: usize) {
 }
 
 fn selftest_irq(msix: bool) {
-    let raised = IRQS.load(Ordering::Relaxed);
-    let delivered = IRQS_DELIVERED.load(Ordering::Relaxed);
+    let raised = udrv::irqs(Drv::Bcm5720d);
+    let delivered = udrv::irqs_delivered(Drv::Bcm5720d);
     if !msix {
         crate::serial_println!("[udrv-bcm-irq] no MSI-X capability: polled ⬜");
         return;
     }
     crate::serial_println!(
         "[udrv-bcm-irq] MSI-X vector 0x{:x}: {raised} interrupt(s) raised by the chip, {delivered} delivered to bcm5720d as EuroIPC Irq messages → {}",
-        crate::interrupts::UDRV_BCM_MSIX_VECTOR,
+        udrv::vector_of(Drv::Bcm5720d).unwrap_or(0),
         if raised > 0 && delivered > 0 { "OK ✓" } else { "FAILED" }
     );
 }
@@ -732,6 +597,6 @@ pub fn status_line() -> String {
         match sup.inst.as_ref() { Some(i) => alloc::format!("pid {} task {}", i.pid, i.task), None => String::from("not running") },
         sup.starts,
         sup.tracker.total_deaths(),
-        IRQS.load(Ordering::Relaxed)
+        udrv::irqs(Drv::Bcm5720d)
     )
 }

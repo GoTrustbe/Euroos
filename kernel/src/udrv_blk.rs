@@ -13,8 +13,8 @@
 //!   NOT granted, the kernel programs where the interrupts go.
 //! - **DMA**: a window of `DMA_PAGES` pages (queues, identify page, 8 KiB data
 //!   buffer), under VT-d the controller's own IOMMU domain holding exactly it.
-//! - **IRQ**: MSI-X vector `UDRV_BLK_MSIX_VECTOR` on the BSP -> notification
-//!   slot 1 -> an `Irq` EuroIPC message to nvmed.
+//! - **IRQ**: an MSI-X vector from the userspace-driver pool (`udrv::alloc_vector`) on the BSP -> notification
+//!   slot (`udrv::RES`) -> an `Irq` EuroIPC message to nvmed.
 //! - **EuroIPC**: nvmed's port (only the kernel may send) and the disk port
 //!   (only the pid holding the grant may send). Block requests and answers are
 //!   messages of at most `BLK_CHUNK` bytes of data.
@@ -23,6 +23,10 @@
 //!   when (and whether) a fresh nvmed starts, which resets the controller.
 //!   Requests in flight when it died fail with an I/O error; the filesystem's
 //!   CoW + A/B superblock commit decides what is on the disk afterwards.
+//!
+//! megaraidd (`udrv_mr.rs`, `mrblk.rs`) speaks a different block wire format
+//! (`euromegaraid::blkif`: data in DMA-window slots, several requests in
+//! flight); see `mrblk.rs` for why the two are not merged yet.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -36,19 +40,17 @@ use eurofs::block::{BlockDevice, BlockError, BlockResult};
 use euromm::FrameAllocator;
 use spin::Mutex;
 use x86_64::instructions::interrupts::without_interrupts;
-use x86_64::structures::idt::InterruptStackFrame;
 
 use crate::euroipc;
 use crate::pci::{self, PciDevice};
-use crate::udrv::{self, SysGrant, SLOT_BLK};
+use crate::udrv::{self, Drv, SysGrant};
 
 static NVMED_ELF: &[u8] = include_bytes!("../../userland/nvmed.elf");
 static NVMED_SIG: &[u8] = include_bytes!("../../userland/nvmed.elf.sig");
 
 /// EuroIPC ports: nvmed's own, and the kernel's disk port.
-pub const DRIVER_PORT: u32 = 0x4E20;
-pub const DISK_PORT: u32 = 0x4E30;
-const NOTIFY_SLOT: usize = 1;
+pub const DRIVER_PORT: u32 = Drv::Nvmed.res().driver_port;
+pub const DISK_PORT: u32 = Drv::Nvmed.res().stack_port;
 /// Queues (4 pages) + identify page + 8 KiB data buffer = 7 pages; one spare.
 const DMA_PAGES: usize = 8;
 const DOMAIN: &str = "nvmed";
@@ -61,8 +63,6 @@ static UP: AtomicBool = AtomicBool::new(false);
 static SECTORS: AtomicU64 = AtomicU64::new(0);
 static SECTOR_SIZE: AtomicU32 = AtomicU32::new(0);
 static DRIVER_PID: AtomicU64 = AtomicU64::new(u64::MAX);
-static IRQS: AtomicU64 = AtomicU64::new(0);
-static IRQS_DELIVERED: AtomicU64 = AtomicU64::new(0);
 static HELLOS: AtomicU32 = AtomicU32::new(0);
 static REQS: AtomicU64 = AtomicU64::new(0);
 static REQ_ERRORS: AtomicU64 = AtomicU64::new(0);
@@ -102,21 +102,6 @@ static SUP: Mutex<Supervisor> = Mutex::new(Supervisor {
 });
 
 // ── Interrupts and wake-ups ─────────────────────────────────────────────────
-
-/// MSI-X handler of the NVMe controller: count, notify nvmed's port, EOI.
-pub extern "x86-interrupt" fn irq_handler(_frame: InterruptStackFrame) {
-    IRQS.fetch_add(1, Ordering::Relaxed);
-    euroipc::notify_from_irq(NOTIFY_SLOT);
-    crate::apic::eoi();
-}
-
-/// The `Irq` message nvmed receives for `n` pending notifications.
-pub fn irq_msg(n: u32) -> Vec<u8> {
-    IRQS_DELIVERED.fetch_add(n as u64, Ordering::Relaxed);
-    let mut b = [0u8; 8];
-    let len = proto::encode(&Msg::Irq { count: n }, &mut b).unwrap_or(0);
-    b[..len].to_vec()
-}
 
 /// nvmed sent the kernel something: wake the task waiting for an answer.
 pub fn wake() {
@@ -185,7 +170,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
     unsafe { core::ptr::write_bytes(dma_base as *mut u8, 0, DMA_PAGES * 4096) };
     let dma = Window::new(dma_base, (DMA_PAGES * 4096) as u64);
     let ram = Window::new(0, falloc.total_bytes().min(0x8000_0000));
-    let irq = if sup.msix { Some(crate::interrupts::UDRV_BLK_MSIX_VECTOR) } else { None };
+    let irq = if sup.msix { udrv::alloc_vector(Drv::Nvmed) } else { None };
     let grant = match DeviceGrant::new(bdf, sup.mmio, dma, irq, &[ram], &[sup.mmio]) {
         Ok(g) => g,
         Err(e) => {
@@ -199,7 +184,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
         free_dma(falloc, dma_base);
         return Err("IOMMU translation is on but the driver domain could not be built: refused");
     }
-    let pid = 0x2_1000 + sup.starts as u64;
+    let pid = Drv::Nvmed.res().pid_base + sup.starts as u64;
     let info = DriverInfo {
         abi: abi::ABI_VERSION,
         vendor: dev.vendor as u64,
@@ -217,7 +202,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
     euroipc::unregister(DRIVER_PORT);
     euroipc::register_restricted(pid, DRIVER_PORT, euroipc::KERNEL_PID);
     euroipc::set_only_from(DISK_PORT, pid);
-    euroipc::bind_notify(NOTIFY_SLOT, DRIVER_PORT);
+    euroipc::bind_notify(Drv::Nvmed.res().notify_slot, DRIVER_PORT);
     DRIVER_PID.store(pid, Ordering::Relaxed);
     let spawned = without_interrupts(|| -> Result<usize, &'static str> {
         let task = crate::ring3::spawn_euro_app(falloc, NVMED_ELF, pid, &[b"nvmed"], ARENA_MIB, crate::ring3::CAP_CONSOLE, eurosandbox::Profile::Driver)
@@ -236,11 +221,11 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
                 return Err("could not map the DMA window");
             }
         }
-        udrv::set_grant(SLOT_BLK, Some(SysGrant { task, pid, pml4, arena, arena_bytes, info, name: "nvmed" }));
+        udrv::set_grant(Drv::Nvmed, Some(SysGrant::new(Drv::Nvmed, task, pid, pml4, arena, arena_bytes, info)));
         // Interrupt routing and bus mastering before nvmed can run: its first
         // admin command is a DMA (the IOMMU domain is in place).
-        if sup.msix {
-            crate::msix::enable(&dev, 0, crate::interrupts::UDRV_BLK_MSIX_VECTOR, crate::apic::lapic_id() as u8);
+        if let Some(v) = irq {
+            crate::msix::enable(&dev, 0, v, crate::apic::lapic_id() as u8);
         }
         udrv::bus_master(&dev, true);
         Ok(task)
@@ -259,7 +244,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
     crate::serial_println!(
         "[udrv-blk] nvmed started: pid {pid}, profile driver · BAR0 regs {:#x}+{:#x} ({} pages, MSI-X table not granted) · DMA {:#x}+{:#x} · IRQ {} · IOMMU {}",
         grant.mmio.base, grant.mmio.len, grant.mmio.pages(), dma_base, dma.len,
-        if sup.msix { "MSI-X 0x4d -> EuroIPC" } else { "none (polled)" },
+        irq.map(|v| alloc::format!("MSI-X {v:#x} -> EuroIPC")).unwrap_or_else(|| String::from("none (polled)")),
         if iommu { "own domain (DMA confined)" } else { "absent: DMA NOT confined" }
     );
     Ok(pid)
@@ -268,7 +253,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
 fn on_death(sup: &mut Supervisor, falloc: &mut FrameAllocator, inst: Instance) {
     let reason = crate::ring3::bg_end_reason(inst.pid).unwrap_or_else(|| String::from("terminated"));
     UP.store(false, Ordering::Relaxed);
-    udrv::set_grant(SLOT_BLK, None);
+    udrv::set_grant(Drv::Nvmed, None);
     if let Some(dev) = sup.dev {
         udrv::bus_master(&dev, false);
     }
@@ -292,6 +277,7 @@ fn on_death(sup: &mut Supervisor, falloc: &mut FrameAllocator, inst: Instance) {
         Decision::GiveUp => {
             sup.gave_up = true;
             ACTIVE.store(false, Ordering::Relaxed);
+            udrv::release_vector(Drv::Nvmed);
         }
     }
 }
@@ -626,15 +612,15 @@ fn selftest_rw(sectors: u64, ss: u32) {
 }
 
 fn selftest_irq(msix: bool) {
-    let raised = IRQS.load(Ordering::Relaxed);
-    let delivered = IRQS_DELIVERED.load(Ordering::Relaxed);
+    let raised = udrv::irqs(Drv::Nvmed);
+    let delivered = udrv::irqs_delivered(Drv::Nvmed);
     if !msix {
         crate::serial_println!("[udrv-blk-irq] controller without MSI-X: nvmed polls, no interrupt path to prove ⬜");
         return;
     }
     crate::serial_println!(
         "[udrv-blk-irq] MSI-X vector 0x{:x}: {raised} completion interrupt(s) raised, {delivered} delivered to nvmed as EuroIPC Irq messages → {}",
-        crate::interrupts::UDRV_BLK_MSIX_VECTOR,
+        udrv::vector_of(Drv::Nvmed).unwrap_or(0),
         if raised > 0 && delivered > 0 { "OK ✓" } else { "FAILED" }
     );
 }
@@ -787,6 +773,6 @@ pub fn status_line() -> String {
         SECTORS.load(Ordering::Relaxed),
         REQS.load(Ordering::Relaxed),
         REQ_ERRORS.load(Ordering::Relaxed),
-        IRQS.load(Ordering::Relaxed)
+        udrv::irqs(Drv::Nvmed)
     )
 }

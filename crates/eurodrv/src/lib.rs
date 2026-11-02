@@ -5,7 +5,8 @@
 //! optionally one interrupt vector). Everything it does goes through EuroIPC
 //! messages in the [`proto`] format and the few driver syscalls of [`abi`].
 //! When it dies, the kernel's supervisor decides with [`restart`] whether and
-//! when a fresh instance starts.
+//! when a fresh instance starts, and [`vectors`] hands out its interrupt
+//! vector (one owner per vector).
 //!
 //! This crate holds the rules; the kernel (`kernel/src/udrv.rs`) and the
 //! driver processes (`userland/e1000d`) are thin users of it. It is `no_std`
@@ -17,3 +18,4 @@ pub mod abi;
 pub mod grant;
 pub mod proto;
 pub mod restart;
+pub mod vectors;

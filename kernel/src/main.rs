@@ -3689,6 +3689,10 @@ fn main() -> Status {
     // The first storage driver out of the kernel (storage.nvme=user): nvmed in
     // ring 3 serves the NVMe disk as a DATA mount at /data (never the root).
     udrv_blk::boot(&mut allocator, &mut vfs);
+    // Every userspace driver that wanted an interrupt has its vector now.
+    if cfg!(feature = "selftest") {
+        udrv::selftest_vectors();
+    }
 
     // ── Phase 2B: SOVEREIGN SECURITY BACKBONE (L1 + L2 + P3) ──
     // L1 (EuroFS immutability) + L2 (CAP_IMMUTABLE_ADMIN gate) + P3 (append-only
