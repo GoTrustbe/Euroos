@@ -28,7 +28,10 @@ OVMF = next((c for c in ("/usr/share/ovmf/OVMF.fd", "/usr/share/OVMF/OVMF.fd",
                          "/usr/share/edk2-ovmf/x64/OVMF.fd") if os.path.exists(c)), None)
 # Match ONLY real crash output, not EuroOS's benign boot self-tests (which deliberately
 # print "breakpoint exception handled", "[isolation] … TERMINATED", "[j3-fault]", etc.).
-CRASH_RE = re.compile(r"KERNEL PANIC|\[PANIC\]|panicked at|DOUBLE FAULT|GENERAL PROTECTION FAULT")
+# `[idt] PAGE FAULT` is a ring-0 page fault (the kernel halts); healthy boots only
+# print `[idt] BREAKPOINT` (LOADTEST-R630: an NVMe boot under KVM faulted that way and
+# the harness waited out the whole boot timeout instead of reporting it).
+CRASH_RE = re.compile(r"KERNEL PANIC|\[PANIC\]|panicked at|DOUBLE FAULT|GENERAL PROTECTION FAULT|\[idt\] PAGE FAULT")
 READY = "[scon-ready]"
 
 
@@ -142,7 +145,7 @@ class SerialConsole:
 def launch_qemu(image, disks, sock_path, serial_log, a=None):
     accel = ["-cpu", "qemu64,+smep,+smap"]
     if a is not None and a.kvm:
-        accel = ["-enable-kvm", "-cpu", "host"]
+        accel = ["-enable-kvm", "-cpu", "host" + a.cpu_opts]
     mem = a.mem if a is not None else "1024"
     args = ["qemu-system-x86_64", "-machine", "q35", "-m", str(mem)] + accel
     if a is not None:
@@ -346,8 +349,9 @@ SCENARIOS = {
 # stream of that command (for verdict lines the kernel prints outside the [scon]
 # framing, e.g. `[churn-proc] ... OK`), and a per-command timeout.
 class C:
-    def __init__(self, cmd, expect=None, raw=None, timeout=60, raw_bad=None, baseline=None):
+    def __init__(self, cmd, expect=None, raw=None, timeout=60, raw_bad=None, baseline=None, max_ms=None):
         self.cmd, self.expect, self.raw, self.timeout, self.raw_bad = cmd, expect, raw, timeout, raw_bad
+        self.max_ms = max_ms  # the command must answer within this time (perf regression)
         self.baseline = baseline  # ltstat field that must equal its first sampled value
 
 
@@ -399,11 +403,13 @@ def scenario_fsio(args):
     # hashes, many small files, then a scrub. Run `persist-check-io` after a reboot
     # on the same disk (--keep-disks).
     b = args.iobase + "-io"
-    cmds = [C("df", "EuroFS"), C(f"mkdir {b}", "created"), C(f"fsdebug {b}", "blocks=")]
+    cmds = [C("df", "EuroFS"), C(f"mkdir {b}", "created"), C(f"fsdebug {b}", "blocks="),
+            C("echo /etc/hostname", "/etc/hostname")]  # a path argument is not stdin (BUG-022)
     for mib in args.io_sizes:
         sz = mib << 20
         cmds += [C(f"truncate -s {sz} {b}/z{mib}", "bytes", timeout=600),
-                 C(f"stat {b}/z{mib}", f"Size: {sz}"),
+                 # stat is metadata only: it must not read the file (BUG-022)
+                 C(f"stat {b}/z{mib}", f"Size: {sz}", max_ms=3000),
                  C(f"cp {b}/z{mib} {b}/c{mib}", f"c{mib}", timeout=900),
                  C(f"sha256sum {b}/c{mib}", f"{b}/c{mib}", timeout=900)]
     cmds += [C(f"mkdir {b}/small", "created")]
@@ -578,6 +584,7 @@ def main():
     # LOADTEST-R630 additions
     ap.add_argument("--kvm", action="store_true", help="-enable-kvm -cpu host (default: TCG qemu64)")
     ap.add_argument("--smp", type=int, default=1)
+    ap.add_argument("--cpu-opts", default="", help='appended to -cpu host, e.g. ",host-phys-bits=off,phys-bits=39" (BUG-021)')
     ap.add_argument("--mem", default="1024", help="guest RAM, QEMU syntax (e.g. 16G)")
     ap.add_argument("--pin", default="", help="taskset CPU list for the whole QEMU process")
     ap.add_argument("--disk-bus", choices=["virtio", "nvme", "ahci"], default="virtio")
@@ -676,6 +683,9 @@ def main():
                 if status == "ok" and item.raw and not re.search(item.raw, con.raw):
                     status = "err"
                     note = f"  (missing verdict /{item.raw}/)"
+                if status == "ok" and item.max_ms is not None and ms > item.max_ms:
+                    status = "err"
+                    note = f"  (took {ms} ms, limit {item.max_ms} ms)"
                 if status == "ok" and item.raw_bad and re.search(item.raw_bad, con.raw):
                     status = "err"
                     note = f"  (verdict /{item.raw_bad}/)"
