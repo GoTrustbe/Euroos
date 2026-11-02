@@ -4118,6 +4118,19 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
             }
             crate::paging::free_address_space(falloc, p.pml4);
         }
+        // LOADTEST-R630 BUG-014: give the scheduler slots back. The process task and
+        // its thread tasks are Dead (exit / exit_group marked them) and their kernel
+        // stacks + address space are gone; without this every background process
+        // ever started kept its slot, and after ~230 process lifetimes since boot
+        // the 256-slot table was full for good. reclaim_task only takes a Dead,
+        // non-current task (task 0 runs this), so a still-running thread keeps its slot.
+        crate::sched::reclaim_task(p.task);
+        for &t in p.threads.iter() {
+            if crate::sched::is_dead(t) {
+                free_thread_kstack(t); // idempotent; drops a stale owner entry before the slot is reused
+            }
+            crate::sched::reclaim_task(t);
+        }
         let kib = (p.arena_frames + 4 + 4) as usize * 4; // arena + kstack(4) + table frames(~4)
         // Show the last output (e.g. the result of a job) if there is
         // one, otherwise the termination reason (e.g. the isolation violation).
