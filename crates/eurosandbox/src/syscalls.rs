@@ -27,6 +27,13 @@ pub enum Profile {
     /// exit, memory, sleep and the clock. No Linux syscall at all: no open,
     /// no socket, no fork. Anything else ends the process with SIGSYS.
     Euro,
+    /// A userspace device driver (sprint userspace-drivers): the driver calls
+    /// (`0x6200..=0x6202`: grant info, EuroIPC receive and send), and from the
+    /// Euro API only info, log, clock, sleep and exit. No memory calls, no
+    /// files, no sockets, no window, no fork. Its device access is the MMIO and
+    /// DMA windows of its grant, mapped before it starts. Anything else ends
+    /// the process with SIGSYS.
+    Driver,
 }
 
 impl Profile {
@@ -36,6 +43,7 @@ impl Profile {
             2 => Profile::Strict,
             3 => Profile::Utility,
             4 => Profile::Euro,
+            5 => Profile::Driver,
             _ => Profile::Full,
         }
     }
@@ -46,6 +54,7 @@ impl Profile {
             Profile::Strict => 2,
             Profile::Utility => 3,
             Profile::Euro => 4,
+            Profile::Driver => 5,
         }
     }
     pub fn name(self) -> &'static str {
@@ -55,6 +64,7 @@ impl Profile {
             Profile::Strict => "strict",
             Profile::Utility => "utility",
             Profile::Euro => "euro",
+            Profile::Driver => "driver",
         }
     }
 }
@@ -95,6 +105,7 @@ pub fn check(profile: Profile, num: u64, a1: u64, a3: u64) -> Verdict {
         Profile::Renderer => renderer(num, a1, a3),
         Profile::Utility => utility(num, a1),
         Profile::Euro => euro(num, a3),
+        Profile::Driver => driver(num),
     }
 }
 
@@ -112,6 +123,21 @@ fn euro(num: u64, a3: u64) -> Verdict {
         // mmap / mprotect: never executable, never shared files (a3 = prot)
         9 | 10 if a3 & PROT_EXEC != 0 => Verdict::Kill(SIGSYS),
         9 | 10 => Verdict::Allow,
+        _ => Verdict::Kill(SIGSYS),
+    }
+}
+
+/// The driver calls (`eurodrv::abi`): grant info, EuroIPC receive, EuroIPC send.
+pub const DRIVER_FIRST: u64 = 0x6200;
+pub const DRIVER_LAST: u64 = 0x6202;
+
+fn driver(num: u64) -> Verdict {
+    match num {
+        n if (DRIVER_FIRST..=DRIVER_LAST).contains(&n) => Verdict::Allow,
+        // Euro API: info, log, clock, sleep, exit. Not the window, files or events.
+        0x6100 | 0x6107 | 0x6108 | 0x6109 | 0x610C => Verdict::Allow,
+        // exit, exit_group
+        60 | 231 => Verdict::Allow,
         _ => Verdict::Kill(SIGSYS),
     }
 }
@@ -209,6 +235,26 @@ mod tests {
         }
         assert_eq!(Profile::from_u8(Profile::Euro.as_u8()), Profile::Euro);
         assert_eq!(Profile::Euro.name(), "euro");
+    }
+
+    #[test]
+    fn driver_profile_is_a_narrow_allow_list() {
+        for n in DRIVER_FIRST..=DRIVER_LAST {
+            assert_eq!(check(Profile::Driver, n, 0, 0), Verdict::Allow, "driver call {n:#x}");
+        }
+        for n in [0x6100, 0x6107, 0x6108, 0x6109, 0x610C, 60, 231] {
+            assert_eq!(check(Profile::Driver, n, 0, 0), Verdict::Allow, "allowed {n:#x}");
+        }
+        // No window, files, events; no Linux memory, file, socket or process calls.
+        for n in [0x6101, 0x6102, 0x6103, 0x6104, 0x6105, 0x610A, 0x610B, 0x6203, 0x61FF,
+                  0, 1, 2, 9, 10, 11, 12, 35, 41, 56, 57, 59, 101, 165, 257] {
+            assert_eq!(check(Profile::Driver, n, 0, 0), Verdict::Kill(31), "denied {n:#x}");
+        }
+        // And the other profiles do not get the driver calls.
+        assert_eq!(check(Profile::Euro, DRIVER_FIRST, 0, 0), Verdict::Kill(31));
+        assert_eq!(check(Profile::Utility, DRIVER_FIRST, 0, 0), Verdict::Allow, "utility is a deny-list; the kernel checks the grant");
+        assert_eq!(Profile::from_u8(Profile::Driver.as_u8()), Profile::Driver);
+        assert_eq!(Profile::Driver.name(), "driver");
     }
 
     #[test]
