@@ -67,7 +67,7 @@ Last updated: 2026-09-22 · **1010 host tests green** · current release **2026.
 - **COM1 serial** — full logging that survives `ExitBootServices` (the backbone for bare-metal debugging).
 - **PS/2 keyboard & mouse** — IRQ-driven, real input.
 - **Observability** — a 512-line in-memory `dmesg` ring, leveled+timestamped logging, and a panic backtrace that an offline symbolizer resolves to function names against the linker map.
-- **SMP & HPET** — multiple cores via ACPI + INIT–SIPI–SIPI, each with its own run queue; LAPIC timer + IO-APIC; HPET as a 100 MHz high-precision time source alongside the CMOS RTC.
+- **SMP & HPET** — multiple cores via ACPI + INIT–SIPI–SIPI, each with its own run queue; LAPIC timer + IO-APIC; HPET as a 100 MHz high-precision time source alongside the CMOS RTC. The application processors run kernel work from per-CPU queues (J1); user processes still run on the boot processor.
 
 ### 1.2 Memory & paging (`euromm`)
 - **Frame allocator** — bitmap physical allocator built from the UEFI memory map; supports contiguous and **aligned** allocation (`allocate_aligned`, so a 2 MiB arena costs exactly 2 MiB, no over-allocation), plus double-free detection + high-water tracking.
@@ -178,7 +178,7 @@ Ordered by value × safety. Each item ships with tests (host where possible) + a
 - [x] **Live display server** (H2) — `eurodisplay::server`: a length-prefixed frame protocol carrying `Request`s + compositor metadata (Title/Line) over a byte stream, and `ServerView` translating mapped surfaces → `WindowView`. Kernel `dispserv::DispServer` binds AF_UNIX `/run/eurodisplay.sock`, accepts clients, decodes frames, and emits real `compositor::Window`s. An in-kernel app connects over AF_UNIX (H1) and opens a live 3rd desktop window — verified `[h2]` + `compositor actief — 3 vensters`. 7 host tests. *(deferred: Events back to apps, per-tick live updates, pixel buffers/SHM.)*
 
 ### Sprint D — SMP scalability
-- [ ] **Finer-grained locking**: syscalls run `IF=0` (safe shared state, no heavy locks) — perfect now, a bottleneck under heavy multi-core I/O. Start designing per-subsystem locks so SMP gains aren't lost to kernel contention.
+- [~] **Finer-grained locking (J1, 2026-11-02, partial)**: the application processors now run real kernel work (per-CPU work queues with work stealing; idle cores sleep in `hlt` instead of spinning), and the shared kernel state they touch has fine-grained locks: **per-mount** VFS locks (the root VFS is shareable across cores), **per-connection** AF_UNIX and **per-socket** TCP/UDP locks, a **per-channel** EuroIPC core (`crates/euroipc`, wired into the kernel after the driver-branch merge), **per-CPU heap caches**, and the EuroLock checker wired in (lock classes, IRQ-safe modes, order checking, contention statistics, `lockstat`). Boot-verified with a multi-core stress test (`[lk-stress]`: no data error, no inversion, no deadlock over repeated rounds). Measured under QEMU TCG (not hardware): four cores reach about 3x one core on parallel filesystem, IPC and local-socket work, where one global lock drops below 1x. **Still open:** ring-3 processes on the application processors, the global process-table lock in the syscall path, syscalls with interrupts off. Plan and numbers: [`docs/SPRINT-PLAN-FINE-LOCKING.md`](docs/SPRINT-PLAN-FINE-LOCKING.md).
 
 ### Sprint E — compatibility (Phase 3)
 - [ ] **glibc-compat** layer (run more unmodified Linux binaries).
