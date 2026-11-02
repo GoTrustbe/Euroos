@@ -9,6 +9,15 @@
 //! netstack port only the pid holding the device grant). Queues are bounded.
 //! no_std + alloc, kernel-internal.
 //!
+//! Since the J1 merge the port table is the host-tested per-channel core
+//! `crates/euroipc` (`ChannelTable`): the channel table is a per-CPU replicated
+//! read-mostly lock, every port has its own lock, and the audit trail is a
+//! lock-free per-CPU ring. All of its locks are EuroLock `Mode::Irq` (interrupts
+//! off while held or waited for), which is what the driver branch's
+//! `without_interrupts` wrappers did by hand: the driver's receive and send run
+//! in syscalls on the same CPU as task 0, which uses these ports with
+//! interrupts on.
+//!
 //! Interrupts reach a port through a **notification slot** ([`bind_notify`],
 //! [`notify_from_irq`]): the interrupt handler only bumps an atomic counter (no
 //! lock, no allocation), and the next receive on the bound port delivers it as
@@ -16,90 +25,49 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
-use spin::Mutex;
+use ::euroipc::ChannelTable;
 
 /// Messages one port may hold; further sends are refused (`-EAGAIN`) and counted.
-pub const MAX_QUEUE: usize = 256;
+#[allow(dead_code)]
+pub const MAX_QUEUE: usize = ::euroipc::MAX_QUEUE;
 /// The pid the kernel itself sends as.
 pub const KERNEL_PID: u64 = 0;
+/// Audit lines shown in the system window (the old six-line ring).
+const AUDIT_LINES: usize = 6;
 
-struct Port {
-    port: u32,
-    owner_pid: u64,
-    /// `Some(pid)`: only this sender is accepted.
-    only_from: Option<u64>,
-    queue: Vec<(u64, Vec<u8>)>, // (sender-pid, data)
+fn tsc() -> u64 {
+    // SAFETY: rdtsc has no side effects.
+    unsafe { core::arch::x86_64::_rdtsc() }
 }
 
-static PORTS: Mutex<Vec<Port>> = Mutex::new(Vec::new());
-static AUDIT: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// Sends refused: full queue, or a sender the port does not accept.
-pub static DROPPED_FULL: AtomicU64 = AtomicU64::new(0);
-pub static REFUSED_SENDER: AtomicU64 = AtomicU64::new(0);
+/// Every port, its queue and the audit ring (per-channel locks, J1).
+static TABLE: ChannelTable = ChannelTable::with_clock(tsc);
 
 /// Notification slots: (bound port, pending count). Port 0 = unbound.
 const NOTIFY_SLOTS: usize = 4;
 static NOTIFY_PORT: [AtomicU32; NOTIFY_SLOTS] = [const { AtomicU32::new(0) }; NOTIFY_SLOTS];
 static NOTIFY_COUNT: [AtomicU32; NOTIFY_SLOTS] = [const { AtomicU32::new(0) }; NOTIFY_SLOTS];
 
-/// Every lock here is taken with interrupts off: the driver's receive and send
-/// run in syscalls (interrupts off) on the same CPU as task 0, which uses these
-/// ports with interrupts on. A preempted holder would otherwise spin the
-/// syscall forever (the BUG-007 class).
-fn ports<R>(f: impl FnOnce(&mut Vec<Port>) -> R) -> R {
-    x86_64::instructions::interrupts::without_interrupts(|| f(&mut PORTS.lock()))
-}
-
-fn audit(line: String) {
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        let mut a = AUDIT.lock();
-        a.push(line);
-        let n = a.len();
-        if n > 6 {
-            a.drain(0..n - 6);
-        }
-    })
-}
-
 /// Claim a port for `pid`. 1 = ok, 0 = already in use.
 pub fn register(pid: u64, port: u32) -> i64 {
-    claim(pid, port, None)
+    TABLE.register(pid, port) as i64
 }
 
 /// Claim a port for `pid` that accepts messages only from `only_from`.
 pub fn register_restricted(pid: u64, port: u32, only_from: u64) -> i64 {
-    claim(pid, port, Some(only_from))
-}
-
-fn claim(pid: u64, port: u32, only_from: Option<u64>) -> i64 {
-    let fresh = ports(|ps| {
-        if ps.iter().any(|p| p.port == port) {
-            return false;
-        }
-        ps.push(Port { port, owner_pid: pid, only_from, queue: Vec::new() });
-        true
-    });
-    if !fresh {
-        return 0;
-    }
-    audit(alloc::format!("pid {pid} claimed port {port}{}", if only_from.is_some() { " (restricted)" } else { "" }));
-    1
+    TABLE.register_restricted(pid, port, only_from) as i64
 }
 
 /// Change which sender a restricted port accepts (a restarted driver has a new pid).
 pub fn set_only_from(port: u32, only_from: u64) {
-    ports(|ps| {
-        if let Some(p) = ps.iter_mut().find(|p| p.port == port) {
-            p.only_from = Some(only_from);
-        }
-    })
+    TABLE.set_only_from(port, only_from)
 }
 
 /// Release a port and drop its queue (its owner died).
 pub fn unregister(port: u32) {
-    ports(|ps| ps.retain(|p| p.port != port));
+    TABLE.unregister(port);
     for i in 0..NOTIFY_SLOTS {
         if NOTIFY_PORT[i].load(Ordering::Relaxed) == port {
             NOTIFY_PORT[i].store(0, Ordering::Relaxed);
@@ -116,60 +84,28 @@ pub fn send(sender_pid: u64, port: u32, data: &[u8]) -> i64 {
 }
 
 /// Like [`send`]; `audit_it = false` for the data path (every network frame
-/// would otherwise push the control messages out of the 6-line audit ring).
+/// would otherwise push the control messages out of the audit ring).
 pub fn send_with(sender_pid: u64, port: u32, data: &[u8], audit_it: bool) -> i64 {
-    let owner = ports(|ps| match ps.iter_mut().find(|p| p.port == port) {
-        Some(p) => {
-            if let Some(only) = p.only_from {
-                if only != sender_pid {
-                    return Err(-1);
-                }
-            }
-            // permission-check hook for unrestricted ports (now: allowed) — later EuroGuard policy.
-            if p.queue.len() >= MAX_QUEUE {
-                return Err(-11);
-            }
-            p.queue.push((sender_pid, data.to_vec()));
-            Ok(p.owner_pid)
-        }
-        None => Err(-3),
-    });
-    let owner = match owner {
-        Ok(o) => o,
-        Err(-1) => {
-            REFUSED_SENDER.fetch_add(1, Ordering::Relaxed);
-            audit(alloc::format!("pid {sender_pid} -> port {port}: REFUSED (restricted port)"));
-            return -1;
-        }
-        Err(-11) => {
-            DROPPED_FULL.fetch_add(1, Ordering::Relaxed);
-            return -11;
-        }
-        Err(e) => return e,
-    };
-    if audit_it {
-        audit(alloc::format!("pid {sender_pid} -> port {port} (pid {owner}): {} bytes", data.len()));
+    match TABLE.send_with(sender_pid, port, data, audit_it) {
+        Ok(n) => n as i64,
+        Err(e) => e,
     }
-    data.len() as i64
 }
 
 /// Receive one message from the port of `pid` into `buf` (max `max` bytes).
 /// Returns the number of bytes, -EAGAIN (-11) if there is nothing, or -ESRCH (-3)
-/// if `pid` has no port.
+/// if `pid` has no port. The copy into user memory happens after the channel
+/// lock is released.
 pub fn recv(pid: u64, buf: u64, max: usize) -> i64 {
-    ports(|ps| match ps.iter_mut().find(|p| p.owner_pid == pid) {
-        Some(p) => {
-            if p.queue.is_empty() {
-                return -11;
-            }
-            let (_, data) = p.queue.remove(0);
+    match TABLE.recv(pid) {
+        Ok((_, data)) => {
             let n = data.len().min(max);
             // SAFETY: buf lies in the USER arena of the receiving process.
             unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), buf as *mut u8, n) };
             n as i64
         }
-        None => -3,
-    })
+        Err(e) => e.errno(),
+    }
 }
 
 /// Take the next message of `port` as (sender, data): a pending interrupt
@@ -184,13 +120,7 @@ pub fn take(port: u32, irq_msg: impl Fn(u32) -> Vec<u8>) -> Option<(u64, Vec<u8>
             }
         }
     }
-    ports(|ps| {
-        let p = ps.iter_mut().find(|p| p.port == port)?;
-        if p.queue.is_empty() {
-            return None;
-        }
-        Some(p.queue.remove(0))
-    })
+    TABLE.take(port)
 }
 
 /// Bind notification slot `slot` to `port` (from task context).
@@ -209,7 +139,13 @@ pub fn notify_from_irq(slot: usize) {
     }
 }
 
+/// Sends refused because a queue was full / a restricted port refused the sender.
+#[allow(dead_code)]
+pub fn refused_counts() -> (u64, u64) {
+    (TABLE.dropped_full.load(Ordering::Relaxed), TABLE.refused_sender.load(Ordering::Relaxed))
+}
+
 /// The recent IPC audit lines (for the system window).
 pub fn audit_lines() -> Vec<String> {
-    x86_64::instructions::interrupts::without_interrupts(|| AUDIT.lock().clone())
+    TABLE.audit_lines(AUDIT_LINES)
 }

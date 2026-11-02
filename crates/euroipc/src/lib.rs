@@ -35,7 +35,7 @@ use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{fence, AtomicU64, Ordering};
+use core::sync::atomic::{fence, AtomicBool, AtomicU64, Ordering};
 
 use eurolock::sync::{cpu_shard, Mutex, ReadMostly, Replica};
 use eurolock::{LockClass, LockSite, Mode, SHARDS};
@@ -51,12 +51,15 @@ pub const EAGAIN: i64 = -11;
 struct Channel {
     port: u32,
     owner: u64,
-    /// `NO_RESTRICTION`, or the only sender pid this port accepts.
+    /// Set once the port is restricted; `only_from` is then the only sender
+    /// pid it accepts. A separate flag, not a sentinel pid: the driver branch
+    /// claims the netstack port with `only_from = u64::MAX` to mean "nobody
+    /// until a driver holds the grant", which a sentinel would turn into
+    /// "everybody".
+    restricted: AtomicBool,
     only_from: AtomicU64,
     queue: Mutex<VecDeque<(u64, Vec<u8>)>>,
 }
-
-const NO_RESTRICTION: u64 = u64::MAX;
 
 /// Messages one port may hold; further sends are refused (`-EAGAIN`) and counted.
 pub const MAX_QUEUE: usize = 256;
@@ -240,7 +243,8 @@ impl ChannelTable {
         let ch = Arc::new(Channel {
             port,
             owner: pid,
-            only_from: AtomicU64::new(only_from.unwrap_or(NO_RESTRICTION)),
+            restricted: AtomicBool::new(only_from.is_some()),
+            only_from: AtomicU64::new(only_from.unwrap_or(0)),
             queue: Mutex::new_site(&SITE_CHANNEL, Mode::Irq, VecDeque::new()),
         });
         let claimed = self.table.write(|t| {
@@ -262,6 +266,7 @@ impl ChannelTable {
     pub fn set_only_from(&self, port: u32, only_from: u64) {
         if let Some(c) = self.by_port(port) {
             c.only_from.store(only_from, Ordering::Release);
+            c.restricted.store(true, Ordering::Release);
         }
     }
 
@@ -291,8 +296,7 @@ impl ChannelTable {
     /// otherwise flood the audit ring (every network frame of a userspace NIC).
     pub fn send_with(&self, sender: u64, port: u32, data: &[u8], audit_it: bool) -> Result<usize, i64> {
         let ch = self.by_port(port).ok_or(ESRCH)?;
-        let only = ch.only_from.load(Ordering::Acquire);
-        if only != NO_RESTRICTION && only != sender {
+        if ch.restricted.load(Ordering::Acquire) && ch.only_from.load(Ordering::Acquire) != sender {
             self.refused_sender.fetch_add(1, Ordering::Relaxed);
             self.audit(AuditEvent::Refused { sender, port });
             return Err(EPERM);
@@ -465,6 +469,24 @@ mod tests {
         t.unregister(701);
         assert_eq!(t.send(2, 701, b"m"), Err(ESRCH));
         assert!(t.register(3, 701), "an unregistered port can be claimed again");
+    }
+
+    #[test]
+    fn restricted_to_nobody_until_set() {
+        // udrv claims the netstack port as register_restricted(0, port, u64::MAX):
+        // no sender at all until a driver holds the grant.
+        let t = ChannelTable::new();
+        assert!(t.register_restricted(0, 702, u64::MAX));
+        assert_eq!(t.send(5, 702, b"x"), Err(EPERM));
+        assert_eq!(t.send(0, 702, b"x"), Err(EPERM));
+        t.set_only_from(702, 5);
+        assert_eq!(t.send(5, 702, b"x"), Ok(1));
+        assert_eq!(t.send(6, 702, b"x"), Err(EPERM));
+        // set_only_from on an open port restricts it (as the old kernel bus did).
+        assert!(t.register(1, 703));
+        assert_eq!(t.send(7, 703, b"x"), Ok(1));
+        t.set_only_from(703, 8);
+        assert_eq!(t.send(7, 703, b"x"), Err(EPERM));
     }
 
     #[test]
