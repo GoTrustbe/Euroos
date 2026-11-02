@@ -12,5 +12,8 @@ twox-hash = { version = "1.6", default-features = false }
 # no_std spinlocks (RwLock/Mutex) voor de concurrente block-cache (J1).
 spin = { version = "0.9", default-features = false, features = ["spin_mutex", "rwlock"] }
 
+# Instrumented locks (per-mount locking in SharedVfs, J1).
+eurolock = { path = "../eurolock" }
+
 [features]
 default = []
