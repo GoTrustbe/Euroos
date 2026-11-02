@@ -1460,7 +1460,8 @@ fn coreutils(cmd: &str, line: &str, fs: &mut dyn FileSystem) -> Option<Vec<Strin
         }
         "arch" => return Some(vec![String::from("x86_64")]),
         "nproc" => {
-            let n = crate::acpi::parse().map(|m| m.enabled_cores()).unwrap_or(1).max(1);
+            // Cores the kernel runs, not the MADT count (at most 8, BUG-012).
+            let n = 1 + crate::smp::AP_ONLINE.load(core::sync::atomic::Ordering::Relaxed) as usize;
             return Some(vec![n.to_string()]);
         }
         "pwd" => return Some(vec![String::from("/")]),

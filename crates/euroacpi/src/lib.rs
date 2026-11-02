@@ -121,9 +121,74 @@ impl Fadt {
     }
 }
 
+/// Which MADT cores the kernel will actually run, given that its per-CPU state
+/// is indexed by `APIC id & (max_cpu - 1)` (`max_cpu` a power of two).
+///
+/// Returns `(used, skipped)`: `used` starts with the BSP, then the enabled APs
+/// in MADT order whose slot is still free, at most `max_cpu` cores in total;
+/// `skipped` counts enabled cores left offline (over the limit, or their slot
+/// would alias a core already in use, as with sparse APIC ids on multi-socket
+/// hardware). Every later per-core loop must use `used`, never the raw MADT
+/// list: a core that was never started has no per-CPU state of its own.
+pub fn select_cpus(bsp: u8, enabled: &[u8], max_cpu: usize) -> (Vec<u8>, usize) {
+    let mask = (max_cpu.max(1) - 1) as u8;
+    let mut used = alloc::vec![bsp];
+    let mut skipped = 0usize;
+    for &id in enabled {
+        if id == bsp {
+            continue;
+        }
+        if used.len() >= max_cpu || used.iter().any(|&u| u & mask == id & mask) {
+            skipped += 1;
+            continue;
+        }
+        used.push(id);
+    }
+    (used, skipped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn select_cpus_contiguous_within_limit() {
+        let (u, s) = select_cpus(0, &[0, 1, 2, 3], 8);
+        assert_eq!(u, alloc::vec![0, 1, 2, 3]);
+        assert_eq!(s, 0);
+    }
+
+    #[test]
+    fn select_cpus_caps_at_max_cpu() {
+        // Regression (LOADTEST-R630 BUG-012): `-smp 16` under KVM. Only 8 cores
+        // may be used; ids 8..15 would alias slots 0..7.
+        let all: Vec<u8> = (0..16).collect();
+        let (u, s) = select_cpus(0, &all, 8);
+        assert_eq!(u, (0..8).collect::<Vec<u8>>());
+        assert_eq!(s, 8);
+    }
+
+    #[test]
+    fn select_cpus_skips_aliasing_sparse_ids() {
+        // Two sockets with sparse APIC ids (0,2,4,6 and 16,18,20,22): 16 & 7 == 0
+        // would share the BSP's per-CPU slot, so it must not be started.
+        let ids = [0u8, 2, 4, 6, 16, 18, 20, 22];
+        let (u, s) = select_cpus(0, &ids, 8);
+        assert_eq!(u, alloc::vec![0, 2, 4, 6]);
+        assert_eq!(s, 4);
+        for (i, a) in u.iter().enumerate() {
+            for b in &u[i + 1..] {
+                assert_ne!(a & 7, b & 7);
+            }
+        }
+    }
+
+    #[test]
+    fn select_cpus_bsp_not_first_in_madt() {
+        let (u, s) = select_cpus(3, &[0, 1, 2, 3], 8);
+        assert_eq!(u, alloc::vec![3, 0, 1, 2]);
+        assert_eq!(s, 0);
+    }
 
     fn make_table(sig: &[u8; 4], len: usize) -> Vec<u8> {
         let mut t = alloc::vec![0u8; len];
