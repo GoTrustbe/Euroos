@@ -3990,8 +3990,12 @@ pub fn spawn_daemon(falloc: &mut FrameAllocator, program: &[u8]) {
     // Build the address space FIRST, then spawn the task with its cr3 already set
     // (before it is Ready) — see BUG-007 / spawn_user.
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
-    let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
-    DAEMON_TASK.store(idx, Ordering::Relaxed);
+    // BUG-024: known to syscall_dispatch (DAEMON_TASK) before it can first run.
+    let idx = x86_64::instructions::interrupts::without_interrupts(|| {
+        let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
+        DAEMON_TASK.store(idx, Ordering::Relaxed);
+        idx
+    });
     crate::serial_println!("[euro] daemon scheduled as task {idx} (pid 7), own address space PML4 {pml4:#x}");
 }
 
@@ -5819,6 +5823,14 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
     // Build it FIRST, then spawn with cr3 set before Ready (BUG-007: a task must never be
     // schedulable with cr3=0, or a preempting timer IRQ runs its ring-3 code on the boot PML4).
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
+    // LOADTEST-R630 BUG-024: the task is Ready the moment spawn_user returns, but
+    // syscall_dispatch only knows it once it is registered below. A timer tick in
+    // between ran its first syscall (musl's arch_prctl) through the FOREGROUND
+    // Linux path with the foreground's globals: a kernel page fault after ~1 h of
+    // spawning (soak). Ring-3 tasks run only on this core (the BSP), so keeping
+    // interrupts off from spawn to registration closes the window.
+    let irq_was_on = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::disable();
     let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
     if idx == usize::MAX {
         // Scheduler table full: undo instead of registering a process whose task
@@ -5830,6 +5842,9 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
             let _ = falloc.free(kstack + f * 4096);
         }
         crate::paging::free_address_space(falloc, pml4);
+        if irq_was_on {
+            x86_64::instructions::interrupts::enable();
+        }
         crate::serial_println!("[euro] bg-musl (pid {pid}): scheduler task table full - not started");
         return false;
     }
@@ -5855,6 +5870,9 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
             pooled: false,
         });
     });
+    if irq_was_on {
+        x86_64::instructions::interrupts::enable();
+    }
     crate::serial_println!("[euro] bg-musl (pid {pid}) -> task {idx}, own address space PML4 {pml4:#x}, arena {arena:#x}");
     true
 }
@@ -5902,6 +5920,14 @@ pub fn spawn_bg_app(
         &info.exec_pages,
         &info.writ_pages,
     );
+    // LOADTEST-R630 BUG-024: the task is Ready the moment spawn_user returns, but
+    // syscall_dispatch only knows it once it is registered below. A timer tick in
+    // between ran its first syscall (musl's arch_prctl) through the FOREGROUND
+    // Linux path with the foreground's globals: a kernel page fault after ~1 h of
+    // spawning (soak). Ring-3 tasks run only on this core (the BSP), so keeping
+    // interrupts off from spawn to registration closes the window.
+    let irq_was_on = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::disable();
     let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().push(BgProc {
@@ -5924,6 +5950,9 @@ pub fn spawn_bg_app(
             pooled: false,
         });
     });
+    if irq_was_on {
+        x86_64::instructions::interrupts::enable();
+    }
     crate::serial_println!("[euro] bg-app (pid {pid}) -> task {idx}, arena {arena:#x} span {arena_mib} MiB, heap {heap:#x}..{heap_end:#x}, PML4 {pml4:#x}");
     Some(idx)
 }
