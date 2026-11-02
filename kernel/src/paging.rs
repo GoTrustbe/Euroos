@@ -41,6 +41,16 @@ fn high_pdpt_entry() -> u64 {
 /// (2 MiB-aligned, < 1 GiB) gets the USER bit — that is where THIS process's
 /// user frames live. Other processes' arenas stay supervisor-only -> ring 3
 /// cannot reach them. Returns the physical PML4 address (does NOT load CR3).
+/// (GiB slot in the PDPT, 2 MiB slot in that GiB's PD) of an arena address.
+/// LOADTEST-R630 BUG-016: the per-process tables used to assume the arena lies in
+/// the lowest GiB; on a machine with more RAM the frame allocator hands out arenas
+/// above 1 GiB, the fine-grained PT was never linked, the arena stayed a
+/// supervisor-only 1 GiB identity page and the process died on its first
+/// instruction fetch (and the unlinked PT frame leaked).
+fn arena_slots(addr: u64) -> (usize, usize) {
+    ((addr / GIB) as usize & 0x1FF, ((addr % GIB) / MIB2) as usize)
+}
+
 pub fn build_address_space(
     falloc: &mut FrameAllocator,
     arena_phys: u64,
@@ -67,23 +77,27 @@ pub fn build_address_space(
         pml4p.write_volatile(pdpt | PRESENT | WRITABLE | USER);
         // Share the high region (PML4[1]) with the boot address space (A2/high MMIO).
         pml4p.add(1).write_volatile(high_pdpt_entry());
-        // PDPT[0] -> PD (lower 1 GiB, fine-grained 2 MiB).
-        pdptp.write_volatile(pd | PRESENT | WRITABLE | USER);
-        // PDPT[1..512] = identity 1 GiB supervisor (kernel/MMIO/framebuffer high).
-        // NO NX: kernel code in the lower 1 GiB runs ring-0 (syscalls/interrupts)
-        // UNDER this process CR3, so those pages must stay executable. W^X applies
-        // only to the USER arena (the PT below).
-        for i in 1..512u64 {
-            pdptp.add(i as usize).write_volatile((i * GIB) | PRESENT | WRITABLE | HUGE);
+        // PDPT[g] -> PD for the GiB that holds the arena (fine-grained 2 MiB);
+        // every other PDPT entry = identity 1 GiB supervisor (kernel/MMIO/
+        // framebuffer). NO NX: kernel code in the lower 1 GiB runs ring-0
+        // (syscalls/interrupts) UNDER this process CR3, so those pages must stay
+        // executable. W^X applies only to the USER arena (the PT below).
+        let (arena_gib, arena_idx) = arena_slots(arena_phys);
+        for i in 0..512usize {
+            if i == arena_gib {
+                pdptp.add(i).write_volatile(pd | PRESENT | WRITABLE | USER);
+            } else {
+                pdptp.add(i).write_volatile((i as u64 * GIB) | PRESENT | WRITABLE | HUGE);
+            }
         }
-        // PD[0..512] = identity 2 MiB supervisor (kernel — executable), except the
-        // arena block which points to the fine-grained W^X PT.
-        let arena_idx = (arena_phys / MIB2) as usize;
+        // PD[0..512] = identity 2 MiB supervisor of that GiB (executable), except
+        // the arena block which points to the fine-grained W^X PT.
+        let gib_base = arena_gib as u64 * GIB;
         for i in 0..512usize {
             if i == arena_idx {
                 pdp.add(i).write_volatile(pt | PRESENT | WRITABLE | USER);
             } else {
-                pdp.add(i).write_volatile((i as u64 * MIB2) | PRESENT | WRITABLE | HUGE);
+                pdp.add(i).write_volatile((gib_base + i as u64 * MIB2) | PRESENT | WRITABLE | HUGE);
             }
         }
         // PT[0..512]: the 512 4 KiB pages of the arena. W^X per page:
@@ -124,21 +138,32 @@ pub fn build_address_space_big(
     if nblocks <= 1 {
         return pml4;
     }
-    // Reach into the freshly built PD (PDPT[0] -> PD) and promote the arena's
-    // extra blocks from supervisor-huge to USER RW+NX huge pages.
-    let arena_idx = (arena_phys / MIB2) as usize;
+    // Promote the arena's extra blocks from supervisor-huge to USER RW+NX huge
+    // pages, in the PD of the GiB each block lies in (BUG-016: the arena may lie
+    // above 1 GiB and may cross into the next GiB; a missing PD is created as an
+    // identity 2 MiB directory, and free_address_space frees it with the others).
     // SAFETY: identity-mapped page tables we just allocated; single-threaded here.
     unsafe {
-        let pdpt = (*(pml4 as *const u64)) & 0x000f_ffff_ffff_f000;
-        let pd = (*(pdpt as *const u64)) & 0x000f_ffff_ffff_f000;
-        let pdp = pd as *mut u64;
-        for b in 1..nblocks as usize {
-            let i = arena_idx + b;
-            if i >= 512 {
-                break; // stays within the lower 1 GiB PD
-            }
-            pdp.add(i)
-                .write_volatile((i as u64 * MIB2) | PRESENT | WRITABLE | USER | HUGE | NX);
+        let pdpt = (*(pml4 as *const u64)) & ADDR_MASK;
+        for b in 1..nblocks {
+            let addr = arena_phys + b * MIB2;
+            let (g, i) = arena_slots(addr);
+            let e3 = (pdpt as *const u64).add(g).read_volatile();
+            let pd = if e3 & PRESENT != 0 && e3 & HUGE == 0 {
+                e3 & ADDR_MASK
+            } else {
+                let pd = match falloc.allocate() {
+                    Ok(f) => f,
+                    Err(_) => break, // out of frames: the block stays supervisor-only
+                };
+                let pdp = pd as *mut u64;
+                for k in 0..512u64 {
+                    pdp.add(k as usize).write_volatile((g as u64 * GIB + k * MIB2) | PRESENT | WRITABLE | HUGE);
+                }
+                (pdpt as *mut u64).add(g).write_volatile(pd | PRESENT | WRITABLE | USER);
+                pd
+            };
+            (pd as *mut u64).add(i).write_volatile((addr & !(MIB2 - 1)) | PRESENT | WRITABLE | USER | HUGE | NX);
         }
     }
     pml4
@@ -164,14 +189,19 @@ pub fn build_address_space_rwx(falloc: &mut FrameAllocator, arena_phys: u64) -> 
         pml4p.write_volatile(pdpt | PRESENT | WRITABLE | USER);
         // Share the high region (PML4[1]) with the boot address space (A2/high MMIO).
         pml4p.add(1).write_volatile(high_pdpt_entry());
-        pdptp.write_volatile(pd | PRESENT | WRITABLE | USER);
-        for i in 1..512u64 {
-            pdptp.add(i as usize).write_volatile((i * GIB) | PRESENT | WRITABLE | HUGE);
+        // PD under the arena's GiB, 1 GiB identity pages elsewhere (BUG-016).
+        let (arena_gib, arena_idx) = arena_slots(arena_phys);
+        for i in 0..512usize {
+            if i == arena_gib {
+                pdptp.add(i).write_volatile(pd | PRESENT | WRITABLE | USER);
+            } else {
+                pdptp.add(i).write_volatile((i as u64 * GIB) | PRESENT | WRITABLE | HUGE);
+            }
         }
-        let arena_idx = (arena_phys / MIB2) as usize;
+        let gib_base = arena_gib as u64 * GIB;
         for i in 0..512usize {
             let user = if i == arena_idx { USER } else { 0 };
-            pdp.add(i).write_volatile((i as u64 * MIB2) | PRESENT | WRITABLE | HUGE | user);
+            pdp.add(i).write_volatile((gib_base + i as u64 * MIB2) | PRESENT | WRITABLE | HUGE | user);
         }
     }
     pml4
@@ -279,18 +309,23 @@ pub fn fill_remap_tables(pml4: u64, pdpt: u64, pd: u64, virt_arena: u64, phys_ar
         pml4p.write_volatile(pdpt | PRESENT | WRITABLE | USER);
         // Share the high region (PML4[1]) with the boot address space (A2/high MMIO).
         pml4p.add(1).write_volatile(high_pdpt_entry());
-        pdptp.write_volatile(pd | PRESENT | WRITABLE | USER);
-        for i in 1..512u64 {
-            pdptp.add(i as usize).write_volatile((i * GIB) | PRESENT | WRITABLE | HUGE);
+        // PD under the GiB of the virtual arena, 1 GiB identity elsewhere (BUG-016).
+        let (virt_gib, virt_idx) = arena_slots(virt_arena);
+        for i in 0..512usize {
+            if i == virt_gib {
+                pdptp.add(i).write_volatile(pd | PRESENT | WRITABLE | USER);
+            } else {
+                pdptp.add(i).write_volatile((i as u64 * GIB) | PRESENT | WRITABLE | HUGE);
+            }
         }
         // PD[0..512] = identity supervisor 2 MiB, EXCEPT the virtual arena slot:
         // it points (USER) to the PHYSICAL frames of the child.
-        let virt_idx = (virt_arena / MIB2) as usize;
+        let gib_base = virt_gib as u64 * GIB;
         for i in 0..512usize {
             let entry = if i == virt_idx {
                 phys_arena | PRESENT | WRITABLE | HUGE | USER
             } else {
-                (i as u64 * MIB2) | PRESENT | WRITABLE | HUGE
+                (gib_base + i as u64 * MIB2) | PRESENT | WRITABLE | HUGE
             };
             pdp.add(i).write_volatile(entry);
         }
@@ -316,16 +351,22 @@ pub fn fill_remap_tables_wx(pml4: u64, pdpt: u64, pd: u64, pt: u64,
         pml4p.write_volatile(pdpt | PRESENT | WRITABLE | USER);
         // Share the high region (PML4[1]) with the boot address space (A2/high MMIO).
         pml4p.add(1).write_volatile(high_pdpt_entry());
-        pdptp.write_volatile(pd | PRESENT | WRITABLE | USER);
-        for i in 1..512u64 {
-            pdptp.add(i as usize).write_volatile((i * GIB) | PRESENT | WRITABLE | HUGE);
+        // Same layout as build_address_space: the PD under the GiB of the
+        // (virtual) arena, 1 GiB identity pages everywhere else (BUG-016).
+        let (virt_gib, virt_idx) = arena_slots(virt_arena);
+        for i in 0..512usize {
+            if i == virt_gib {
+                pdptp.add(i).write_volatile(pd | PRESENT | WRITABLE | USER);
+            } else {
+                pdptp.add(i).write_volatile((i as u64 * GIB) | PRESENT | WRITABLE | HUGE);
+            }
         }
-        let virt_idx = (virt_arena / MIB2) as usize;
+        let gib_base = virt_gib as u64 * GIB;
         for i in 0..512usize {
             if i == virt_idx {
                 pdp.add(i).write_volatile(pt | PRESENT | WRITABLE | USER);
             } else {
-                pdp.add(i).write_volatile((i as u64 * MIB2) | PRESENT | WRITABLE | HUGE);
+                pdp.add(i).write_volatile((gib_base + i as u64 * MIB2) | PRESENT | WRITABLE | HUGE);
             }
         }
         let par = parent_pt.map(|x| x as *const u64);
@@ -473,8 +514,12 @@ pub fn guard_page_unmapped() -> bool {
 pub fn arena_pt(pml4: u64, virt_arena: u64) -> Option<u64> {
     unsafe {
         let pdpt = (pml4 as *const u64).read_volatile() & ADDR_MASK;
-        let pd = (pdpt as *const u64).read_volatile() & ADDR_MASK;
-        let idx = (virt_arena / MIB2) as usize;
+        let (g, idx) = arena_slots(virt_arena);
+        let e3 = (pdpt as *const u64).add(g).read_volatile();
+        if e3 & PRESENT == 0 || e3 & HUGE != 0 {
+            return None; // no PD of ours for that GiB (BUG-016: never index past one PD)
+        }
+        let pd = e3 & ADDR_MASK;
         let e = (pd as *const u64).add(idx).read_volatile();
         if e & PRESENT != 0 && e & HUGE == 0 {
             Some(e & ADDR_MASK)
@@ -535,7 +580,16 @@ pub fn table_frames(pml4: u64) -> (u64, u64, u64) {
     const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
     unsafe {
         let pdpt = (pml4 as *const u64).read_volatile() & ADDR_MASK;
-        let pd = (pdpt as *const u64).read_volatile() & ADDR_MASK;
+        // The process PD sits under the PDPT entry of the arena's GiB, not
+        // necessarily entry 0 (BUG-016); the others are 1 GiB HUGE identity pages.
+        let mut pd = 0;
+        for i in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i).read_volatile();
+            if e3 & PRESENT != 0 && e3 & HUGE == 0 {
+                pd = e3 & ADDR_MASK;
+                break;
+            }
+        }
         (pml4, pdpt, pd)
     }
 }
