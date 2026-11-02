@@ -156,15 +156,25 @@ impl Queue {
     /// One look at the completion queue: `Some((command id, status))` when the
     /// next entry carries the expected phase (the head moves on, the doorbell
     /// is rung), `None` when nothing completed yet.
+    ///
+    /// The phase bit and the command id share DW3, and the controller writes
+    /// the entry while the driver may be reading it. A HAL that reads bytes in
+    /// ascending order could see the new phase with the old (zeroed) command
+    /// id, so the phase and status half is read first and the id only after
+    /// it showed the expected phase (the controller posts the entry as one
+    /// write, so the id is there once the phase is).
     fn poll(&mut self, hal: &mut impl Hal) -> Option<(u16, u16)> {
-        let mut e = [0u8; CQE as usize];
-        hal.dma_read(self.cq + self.head as u64 * CQE, &mut e);
-        let dw3 = u32::from_le_bytes([e[12], e[13], e[14], e[15]]);
-        if (dw3 >> 16) as u16 & 1 != self.phase {
+        let at = self.cq + self.head as u64 * CQE;
+        let mut hi = [0u8; 2];
+        hal.dma_read(at + 14, &mut hi);
+        let hi = u16::from_le_bytes(hi);
+        if hi & 1 != self.phase {
             return None;
         }
-        let cid = dw3 as u16;
-        let status = ((dw3 >> 17) & 0x7FF) as u16; // SC (8) + SCT (3)
+        let mut id = [0u8; 2];
+        hal.dma_read(at + 12, &mut id);
+        let cid = u16::from_le_bytes(id);
+        let status = (hi >> 1) & 0x7FF; // SC (8) + SCT (3)
         self.head = (self.head + 1) % QDEPTH;
         if self.head == 0 {
             self.phase ^= 1;
