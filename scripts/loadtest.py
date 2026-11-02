@@ -65,6 +65,7 @@ class SerialConsole:
         self.sock_path = sock_path
         self.log = open(logfile, "ab", buffering=0)
         self.buf = ""
+        self._tail = ""
         self.sock = None
 
     def connect(self, tries=120):
@@ -91,8 +92,13 @@ class SerialConsole:
             self.log.write(data)
             text = data.decode(errors="replace")
             self.buf += text
-            if CRASH_RE.search(text):
-                raise CrashError(text.strip().splitlines()[-1] if text.strip() else "crash")
+            # Scan across chunk borders: the panic path writes the UART byte by byte,
+            # so "KERNEL PANIC" can arrive split over several recv() calls (LOADTEST-R630:
+            # a real panic went unnoticed until the 900 s command timeout).
+            window = self._tail + text
+            self._tail = window[-256:]
+            if CRASH_RE.search(window):
+                raise CrashError(window.strip().splitlines()[-1] if window.strip() else "crash")
             return text
         return ""
 
@@ -407,26 +413,34 @@ def scenario_fsio(args):
             C("echo /etc/hostname", "/etc/hostname")]  # a path argument is not stdin (BUG-022)
     for mib in args.io_sizes:
         sz = mib << 20
+        # Long timeouts: the periodic scrub runs synchronously and can hold the
+        # console for tens of seconds once hundreds of MiB are stored (BUG-023).
         cmds += [C(f"truncate -s {sz} {b}/z{mib}", "bytes", timeout=600),
                  # stat is metadata only: it must not read the file (BUG-022)
-                 C(f"stat {b}/z{mib}", f"Size: {sz}", max_ms=3000),
+                 C(f"stat {b}/z{mib}", f"Size: {sz}", max_ms=3000, timeout=600),
                  C(f"cp {b}/z{mib} {b}/c{mib}", f"c{mib}", timeout=900),
                  C(f"sha256sum {b}/c{mib}", f"{b}/c{mib}", timeout=900)]
+    # A file larger than the kernel heap: refused with an error or created, never a
+    # panic (BUG-025); the system must still answer afterwards.
+    cmds += [C(f"truncate -s {args.huge_mib << 20} {b}/huge", None, timeout=900),
+             C(f"cp {b}/huge {b}/huge2", None, timeout=900),
+             C(f"stat {b}/z{args.io_sizes[-1]}", "Size:", timeout=600),
+             C(f"rm {b}/huge", None, timeout=600), C(f"rm {b}/huge2", None, timeout=600)]
     cmds += [C(f"mkdir {b}/small", "created")]
     for i in range(args.files):
-        cmds.append(C(f"write {b}/small/f{i:05d} payload-{i}", "written"))
-    cmds += [C(f"ls {b}/small", f"f{args.files - 1:05d}", timeout=120),
-             C(f"cat {b}/small/f00000", "payload-0"),
-             C(f"write {b}/marker SURVIVED-REBOOT-IO", "written"),
-             C("df", "EuroFS"), C("scrub", "HEALTHY", timeout=900), C("ltstat", "ltstat ")]
+        cmds.append(C(f"write {b}/small/f{i:05d} payload-{i}", "written", timeout=600))
+    cmds += [C(f"ls {b}/small", f"f{args.files - 1:05d}", timeout=600),
+             C(f"cat {b}/small/f00000", "payload-0", timeout=600),
+             C(f"write {b}/marker SURVIVED-REBOOT-IO", "written", timeout=600),
+             C("df", "EuroFS", timeout=600), C("scrub", "HEALTHY", timeout=900), C("ltstat", "ltstat ", timeout=600)]
     return cmds
 
 
 def scenario_persist_check_io(args):
     b = args.iobase + "-io"
-    cmds = [C(f"cat {b}/marker", "SURVIVED-REBOOT-IO"), C(f"cat {b}/small/f00000", "payload-0")]
+    cmds = [C(f"cat {b}/marker", "SURVIVED-REBOOT-IO", timeout=600), C(f"cat {b}/small/f00000", "payload-0", timeout=600)]
     for mib in args.io_sizes:
-        cmds.append(C(f"stat {b}/c{mib}", f"Size: {mib << 20}"))
+        cmds.append(C(f"stat {b}/c{mib}", f"Size: {mib << 20}", timeout=600))
     cmds += [C("scrub", "HEALTHY", timeout=900)]
     return cmds
 
@@ -602,6 +616,7 @@ def main():
     ap.add_argument("--threads", type=int, default=16, help="procs: mpthread processes at once")
     ap.add_argument("--churn-scale", type=int, default=4)
     ap.add_argument("--io-sizes", default="16,64,256", help="fsio file sizes in MiB")
+    ap.add_argument("--huge-mib", type=int, default=1024, help="fsio: a file larger than the kernel heap")
     ap.add_argument("--conns", type=int, default=200, help="net: sequential outbound connections")
     ap.add_argument("--downloads", type=int, default=50)
     ap.add_argument("--duration", type=int, default=4 * 3600, help="soak seconds")
