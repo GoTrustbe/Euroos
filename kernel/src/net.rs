@@ -322,6 +322,19 @@ fn rx_route() {
                             TCP_PARSE_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                         }
                         if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
+                            // LOADTEST-R630 BUG-018: a bare SYN (no ACK) opens a NEW
+                            // inbound connection. No socket owns it yet, so it must
+                            // reach service() (listen/accept and the background httpd),
+                            // which reads the legacy queue. Since the central demux
+                            // put every TCP segment into PORTQ, no listener ever saw
+                            // a SYN: accept() timed out and httpd served nothing.
+                            if seg.has(tcp::SYN) && !seg.has(tcp::ACK) {
+                                let mut l = NET_LEGACY.lock();
+                                if l.len() < 256 {
+                                    l.push_back(rx);
+                                }
+                                continue;
+                            }
                             let mut t = PORTQ.lock();
                             let q = match t.iter_mut().find(|(p, _)| *p == seg.dst_port) {
                                 Some((_, q)) => q,
@@ -359,16 +372,24 @@ fn legacy_rx() -> Option<alloc::vec::Vec<u8>> {
     NET_LEGACY.lock().pop_front()
 }
 
-/// Pop the next queued TCP segment for a local port (from `server` only).
-fn portq_pop(sport: u16, server: Ipv4Addr) -> Option<TcpSegment> {
+/// Pop the next queued TCP segment for a local port from one peer (`server`,
+/// `peer_port`). Segments from the same host on another port belong to another
+/// connection on the same local port (several clients of one listener, BUG-018)
+/// and stay queued; segments from another host are discarded (stale NAT).
+fn portq_pop(sport: u16, server: Ipv4Addr, peer_port: u16) -> Option<TcpSegment> {
     rx_route();
     let mut t = PORTQ.lock();
     let (_, q) = t.iter_mut().find(|(p, _)| *p == sport)?;
-    while let Some((src, seg)) = q.pop_front() {
-        if src == server {
-            return Some(seg);
+    let mut i = 0;
+    while i < q.len() {
+        if q[i].0 != server {
+            q.remove(i);
+            continue;
         }
-        // A segment from an unexpected source on our port: discard (stale NAT).
+        if q[i].1.src_port == peer_port {
+            return q.remove(i).map(|(_, seg)| seg);
+        }
+        i += 1;
     }
     None
 }
@@ -881,7 +902,7 @@ impl TcpConn {
     /// Wait for the next TCP segment from our peer for this port.
     fn poll_seg(&self) -> Option<TcpSegment> {
         for _ in 0..SPINS * 3 {
-            if let Some(seg) = portq_pop(self.sport, self.server) {
+            if let Some(seg) = portq_pop(self.sport, self.server, self.dport) {
                 return Some(seg);
             }
         }
@@ -924,7 +945,7 @@ impl TcpConn {
         if !self.syn_sent {
             return Some(false);
         }
-        while let Some(s) = portq_pop(self.sport, self.server) {
+        while let Some(s) = portq_pop(self.sport, self.server, self.dport) {
             if s.has(tcp::RST) {
                 self.syn_sent = false;
                 return Some(false);
@@ -1121,7 +1142,7 @@ impl TcpConn {
     /// waiting for more. The cooperative fetch (`HttpsFetch::step`) uses this so a
     /// step never spins: `net::service()` in the desktop loop keeps the NIC drained.
     fn pump_nowait(&mut self) {
-        while let Some(seg) = portq_pop(self.sport, self.server) {
+        while let Some(seg) = portq_pop(self.sport, self.server, self.dport) {
             if !self.handle_seg(seg) {
                 break;
             }
@@ -3137,22 +3158,11 @@ fn serve_connection(my_mac: MacAddr, my_ip: Ipv4Addr, peer_mac: MacAddr, peer_ip
             .build(&iph.build(&seg.build(my_ip, peer_ip)));
         nic::send(&frame);
     };
+    // The demux queues this connection's segments in PORTQ[80] (BUG-018).
     let poll = || -> Option<TcpSegment> {
         for _ in 0..SPINS {
-            if let Some(rx) = legacy_rx() {
-                if let Ok((h, p)) = EthernetHeader::parse(&rx) {
-                    if h.ethertype == EtherType::Ipv4 {
-                        if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
-                            if ih.protocol == Protocol::Tcp && ih.src == peer_ip {
-                                if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
-                                    if seg.dst_port == port {
-                                        return Some(seg);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            if let Some(seg) = portq_pop(port, peer_ip, peer_port) {
+                return Some(seg);
             }
         }
         None
@@ -3187,6 +3197,17 @@ fn serve_connection(my_mac: MacAddr, my_ip: Ipv4Addr, peer_mac: MacAddr, peer_ip
     my_seq = my_seq.wrapping_add(resp.len() as u32);
     emit(tcp::FIN | tcp::ACK, my_seq, their_seq, &[]);
     SERVED.fetch_add(1, Ordering::Relaxed);
+    // The client's last ACK/FIN for this connection would otherwise sit in
+    // PORTQ[80] forever and fill it (256) for every later client.
+    portq_purge(port, peer_ip, peer_port);
+}
+
+/// Drop every queued segment of one finished connection (local port, peer).
+fn portq_purge(sport: u16, peer: Ipv4Addr, peer_port: u16) {
+    let mut t = PORTQ.lock();
+    if let Some((_, q)) = t.iter_mut().find(|(p, _)| *p == sport) {
+        q.retain(|(src, seg)| !(*src == peer && seg.src_port == peer_port));
+    }
 }
 
 /// Shell command `serve` — run EuroOS as an HTTP server: listen on :80,
