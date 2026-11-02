@@ -286,6 +286,18 @@ pub struct EuroFs<D: BlockDevice> {
     usage: BTreeMap<u32, u64>,
 }
 
+/// The buffer for reading a whole file of `size` bytes. LOADTEST-R630 BUG-025:
+/// `Vec::with_capacity` aborts when the allocation fails, and in the kernel an
+/// allocation failure is a panic: `cp` of a 256 MiB file on a 4 GiB guest (heap
+/// ~512 MiB, partly in use) halted the machine. A file that does not fit in memory
+/// is reported as `NoSpace` instead (the same for a corrupt, absurd inode size).
+pub(crate) fn buffer_for(size: u64) -> FsResult<Vec<u8>> {
+    let n = usize::try_from(size).map_err(|_| FsError::NoSpace)?;
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| FsError::NoSpace)?;
+    Ok(v)
+}
+
 impl<D: BlockDevice> EuroFs<D> {
     /// Format a fresh volume and return a mounted filesystem.
     pub fn format(dev: D, uuid: [u8; 16], now: u64) -> FsResult<Self> {
@@ -737,7 +749,7 @@ impl<D: BlockDevice> EuroFs<D> {
         let out = if inode.extents.is_empty() {
             inode.inline.clone()
         } else {
-            let mut out = Vec::with_capacity(inode.size as usize);
+            let mut out = buffer_for(inode.size)?;
             for &(phys, cnt) in &inode.extents {
                 for k in 0..cnt as u64 {
                     let mut buf = [0u8; BS];
@@ -1782,6 +1794,15 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn buffer_for_refuses_what_cannot_be_allocated() {
+        // LOADTEST-R630 BUG-025: an error, never an abort/panic.
+        assert_eq!(buffer_for(u64::MAX).err(), Some(FsError::NoSpace));
+        assert_eq!(buffer_for(1 << 62).err(), Some(FsError::NoSpace));
+        assert!(buffer_for(4096).unwrap().capacity() >= 4096);
+        assert_eq!(buffer_for(0).unwrap().len(), 0);
+    }
+
     use super::*;
     use crate::block::MemoryBlockDevice;
 

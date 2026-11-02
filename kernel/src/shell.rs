@@ -940,7 +940,17 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             let file = toks.iter().rev().find(|t| !t.starts_with('-') && t.parse::<usize>().is_err());
             match (size, file) {
                 (Some(n), Some(f)) => {
-                    let mut data = fs.read_file(f).unwrap_or_default();
+                    // BUG-025: only a missing file starts empty. Any other read
+                    // error (a file too large for memory, corruption) used to
+                    // become an empty file here and was written back as zeros.
+                    let mut data = match fs.read_file(f) {
+                        Ok(d) => d,
+                        Err(eurofs::FsError::NotFound) => Vec::new(),
+                        Err(e) => return vec![format!("truncate: {f}: {e:?} (file left unchanged)")],
+                    };
+                    if n > data.len() && data.try_reserve_exact(n - data.len()).is_err() {
+                        return vec![format!("truncate: {f}: NoSpace ({n} bytes do not fit in memory; file left unchanged)")];
+                    }
                     data.resize(n, 0);
                     match fs.write_file(f, &data) {
                         Ok(()) => vec![format!("'{f}' truncated/extended to {n} bytes")],
