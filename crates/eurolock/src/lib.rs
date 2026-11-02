@@ -48,10 +48,6 @@ pub enum LockClass {
     BlockCache,
     /// Encryption vault + master key (sometimes during FS ops).
     Vault,
-    /// EuroIPC channel table (register / lookup only).
-    IpcTable,
-    /// One EuroIPC channel (per-port message queue).
-    IpcChannel,
     /// Network stack globals (config, port queues, socket-table allocation).
     Net,
     /// One network socket (per-socket state).
@@ -60,6 +56,13 @@ pub enum LockClass {
     UnixTable,
     /// One AF_UNIX connection (its two byte FIFOs).
     UnixConn,
+    /// EuroIPC channel table (register / lookup only). Inside the network
+    /// classes: with the userspace NIC driver every frame the netstack sends
+    /// or receives is a EuroIPC message, taken while a socket is held. No IPC
+    /// lock is ever held while another class is taken (leaf, above the heap).
+    IpcTable,
+    /// One EuroIPC channel (per-port message queue).
+    IpcChannel,
     /// Agent capabilities / registry.
     Agent,
     /// Firewall rules.
@@ -85,12 +88,12 @@ pub const ALL_CLASSES: &[LockClass] = &[
     LockClass::Fs,
     LockClass::BlockCache,
     LockClass::Vault,
-    LockClass::IpcTable,
-    LockClass::IpcChannel,
     LockClass::Net,
     LockClass::NetSocket,
     LockClass::UnixTable,
     LockClass::UnixConn,
+    LockClass::IpcTable,
+    LockClass::IpcChannel,
     LockClass::Agent,
     LockClass::Firewall,
     LockClass::Audit,
@@ -111,12 +114,12 @@ impl LockClass {
             LockClass::Fs => 30,
             LockClass::BlockCache => 35,
             LockClass::Vault => 40,
-            LockClass::IpcTable => 44,
-            LockClass::IpcChannel => 46,
             LockClass::Net => 50,
             LockClass::NetSocket => 52,
             LockClass::UnixTable => 54,
             LockClass::UnixConn => 56,
+            LockClass::IpcTable => 57,
+            LockClass::IpcChannel => 58,
             LockClass::Agent => 60,
             LockClass::Firewall => 70,
             LockClass::Audit => 80,
@@ -135,12 +138,12 @@ impl LockClass {
             LockClass::Fs => "Fs",
             LockClass::BlockCache => "BlockCache",
             LockClass::Vault => "Vault",
-            LockClass::IpcTable => "IpcTable",
-            LockClass::IpcChannel => "IpcChannel",
             LockClass::Net => "Net",
             LockClass::NetSocket => "NetSocket",
             LockClass::UnixTable => "UnixTable",
             LockClass::UnixConn => "UnixConn",
+            LockClass::IpcTable => "IpcTable",
+            LockClass::IpcChannel => "IpcChannel",
             LockClass::Agent => "Agent",
             LockClass::Firewall => "Firewall",
             LockClass::Audit => "Audit",
@@ -530,6 +533,10 @@ mod tests {
         assert!(IpcTable.rank() < IpcChannel.rank());
         assert!(Net.rank() < NetSocket.rank());
         assert!(UnixTable.rank() < UnixConn.rank());
+        // The userspace NIC driver: a socket send/receive is a EuroIPC message,
+        // so the IPC classes sit inside the network classes.
+        assert!(NetSocket.rank() < IpcTable.rank());
+        assert!(Net.rank() < IpcChannel.rank());
         // The heap is the innermost leaf: allocating under any lock is legal.
         for c in ALL_CLASSES {
             if !matches!(c, Heap | TestOuter | TestInner) {
