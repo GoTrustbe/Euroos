@@ -27,6 +27,7 @@ documents the tested envelope so operators can judge fitness for a deployment.*
 | Boot | UEFI loader → A/B kernel slots, GPT + FAT32 ESP | `scripts/build.sh` + standalone-boot install (`[q1x3]`) |
 | Block | **virtio-blk** (legacy + modern) | root EuroFS, install, A/B update (`[g2]`,`[q1x3]`) |
 | Block | **NVMe** (admin/IO queues, MSI-X) | EuroFS on `/nvme` (`[g2]`,`[j2-blk]`) |
+| RAID | **LSI/Broadcom MegaRAID, MFI gen2** (SAS2108, `1000:0078`/`1000:0079`; QEMU `megasas-gen2`), driven from ring 3 by `megaraidd` | controller info, LD list, LD read/write, EuroFS across a reboot, driver crash + restart, IOMMU confinement (`[mr-*]`, `docs/SPRINT-PLAN-MEGARAID.md`); needs the BAR below 512 GiB (QEMU: `-fw_cfg name=opt/ovmf/X-PciMmio64Mb,string=0`) |
 | Net | **virtio-net** (legacy) | live ARP/DHCP/TCP/TLS, update server (`[n2]`,`[3e2]`) |
 | USB | **xHCI** + HID (keyboard/mouse) | live desktop input (`[euro]` xHCI) |
 | USB | USB mass-storage auto-mount | `/usb` FAT/exFAT hot-mount (`[io-usb]`) |
@@ -50,13 +51,15 @@ physical hardware. Do not rely on them for a metal deployment yet.
 | Bluetooth | — (planned) | HCI stack + pairing |
 | Power/thermal | — (planned) | CPU freq scaling, ACPI battery, throttling |
 | Suspend/resume | partial | S3 device save/restore |
+| MegaRAID MFI gen2 on real silicon | `megaraidd`, proven against QEMU's emulation | a physical SAS2108-based card (e.g. LSI MegaRAID 9260/9261) |
+| **Dell PERC H730/H730P/H830** (SAS3108 Invader, `1000:005d`) and other **fusion** MegaRAIDs (`005b`, `005f`, Ventura, Aero) | recognised by PCI id and left untouched; the shared parts (grant with the MSI-X cut, handshake, MFI/DCMD formats, supervisor, block layer) carry over | the fusion command path: MPI2 request/reply descriptors, IOC INIT, LD I/O with a RAID context. Not built: it cannot be tested here without touching a production RAID volume (see the sprint plan) |
 
 ## Not supported
 
 - Legacy BIOS / MBR-only boot.
 - Non-x86-64 architectures.
 - GPUs beyond a linear framebuffer / virtio-gpu (no vendor 3D drivers).
-- Thunderbolt, discrete NICs other than virtio, RAID HBAs.
+- Thunderbolt, discrete NICs other than virtio, RAID HBAs other than MegaRAID MFI gen2 (above).
 
 ## Reporting a hardware result
 
@@ -77,4 +80,4 @@ that nothing is presented as working until it is shown to work.
 
 *Companion to [`CRA-CONFORMANCE.md`](CRA-CONFORMANCE.md) (secure-by-design
 evidence) and [`SUPPORT-POLICY.md`](../SUPPORT-POLICY.md) (support period &
-security updates). Last revised 2026-07-10 (Phase 3E).*
+security updates). Last revised 2026-11-02 (userspace MegaRAID).*
