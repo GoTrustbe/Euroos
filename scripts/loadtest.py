@@ -166,7 +166,7 @@ def launch_qemu(image, disks, sock_path, serial_log, a=None):
     if a is not None and a.nic:
         nd = "user,id=n0"
         if a.host_http:
-            nd += f",guestfwd=tcp:10.0.2.100:80-tcp:127.0.0.1:{a.host_http}"
+            nd += a.host_http_peer.netdev()
         if a.hostfwd:
             nd += f",hostfwd=tcp:127.0.0.1:{a.hostfwd}-:80"
         args += ["-netdev", nd, "-device", f"{a.nic},netdev=n0"]
@@ -346,23 +346,36 @@ SCENARIOS = {
 # stream of that command (for verdict lines the kernel prints outside the [scon]
 # framing, e.g. `[churn-proc] ... OK`), and a per-command timeout.
 class C:
-    def __init__(self, cmd, expect=None, raw=None, timeout=60, raw_bad=None):
+    def __init__(self, cmd, expect=None, raw=None, timeout=60, raw_bad=None, baseline=None):
         self.cmd, self.expect, self.raw, self.timeout, self.raw_bad = cmd, expect, raw, timeout, raw_bad
+        self.baseline = baseline  # ltstat field that must equal its first sampled value
+
+
+# A spawned worker that is killed by the isolation handler did not do its job
+# (BUG-016: every process whose arena lay above 1 GiB died on its first fetch).
+ISOLATION_KILL = r"\[isolation\].*TERMINATED"
 
 
 def scenario_procs(args):
     # Many processes at once: waves of signed musl programs started together as
     # preemptively scheduled background processes (own address space each), then
-    # reaped by the desktop loop. `ltstat` before/after every wave: the counters
-    # (frames, tasks, bg processes, kernel stacks) must come back.
-    cmds = [C("ltstat", "ltstat ")]
+    # reaped by the desktop loop. After every wave the live-process count must be back
+    # at its boot baseline (boot services keep running) and no worker may have been
+    # killed by the isolation handler; frames/tasks are logged per sample.
+    cmds = [C("ltstat", "ltstat ", baseline="bg_live")]
     for w in range(args.waves):
         cmds.append(C(f"spawn worker {args.procs}", "spawn: started", timeout=120))
-        cmds.append(C(f"spawn mpthread {max(1, args.procs // 4)}", "spawn: started", timeout=120))
         cmds.append(C("sleepwait 15", None))   # host-side pause: let them run + exit
-        # Every process of the wave must have run, exited and been reaped
-        # (BUG-014/015: a process that never got a scheduler slot stays "live").
-        cmds.append(C("ltstat", "bg_live=0 "))
+        cmds.append(C("ltstat", "ltstat ", raw_bad=ISOLATION_KILL, baseline="bg_live"))
+    # More processes in one go than the scheduler has free slots: the surplus must be
+    # refused cleanly ("stopped early"), the rest must run and be reaped (BUG-015).
+    cmds += [C(f"spawn worker {args.burst}", "spawn: started", timeout=300),
+             C("sleepwait 20", None),
+             C("ltstat", "ltstat ", raw_bad=ISOLATION_KILL, baseline="bg_live")]
+    # Threads: musl pthread_create/join in many processes at once (BUG-017).
+    cmds += [C(f"spawn mpthread {args.threads}", "spawn: started", timeout=120),
+             C("sleepwait 20", None),
+             C("ltstat", "ltstat ", raw_bad=ISOLATION_KILL, baseline="bg_live")]
     cmds += [C("ps", None), C("free", None), C("lockstat", None), C("eurohealth", "/100")]
     return cmds
 
@@ -385,8 +398,8 @@ def scenario_fsio(args):
     # --disk-bus). Large files via truncate (zero-filled, really allocated), copies,
     # hashes, many small files, then a scrub. Run `persist-check-io` after a reboot
     # on the same disk (--keep-disks).
-    b = "/lt-io"
-    cmds = [C("df", "EuroFS"), C(f"mkdir {b}", "created"), C(f"fsdebug /", "blocks=")]
+    b = args.iobase + "-io"
+    cmds = [C("df", "EuroFS"), C(f"mkdir {b}", "created"), C(f"fsdebug {b}", "blocks=")]
     for mib in args.io_sizes:
         sz = mib << 20
         cmds += [C(f"truncate -s {sz} {b}/z{mib}", "bytes", timeout=600),
@@ -398,15 +411,16 @@ def scenario_fsio(args):
         cmds.append(C(f"write {b}/small/f{i:05d} payload-{i}", "written"))
     cmds += [C(f"ls {b}/small", f"f{args.files - 1:05d}", timeout=120),
              C(f"cat {b}/small/f00000", "payload-0"),
-             C("write /lt-io/marker SURVIVED-REBOOT-IO", "written"),
+             C(f"write {b}/marker SURVIVED-REBOOT-IO", "written"),
              C("df", "EuroFS"), C("scrub", "HEALTHY", timeout=900), C("ltstat", "ltstat ")]
     return cmds
 
 
 def scenario_persist_check_io(args):
-    cmds = [C("cat /lt-io/marker", "SURVIVED-REBOOT-IO"), C("cat /lt-io/small/f00000", "payload-0")]
+    b = args.iobase + "-io"
+    cmds = [C(f"cat {b}/marker", "SURVIVED-REBOOT-IO"), C(f"cat {b}/small/f00000", "payload-0")]
     for mib in args.io_sizes:
-        cmds.append(C(f"stat /lt-io/c{mib}", f"Size: {mib << 20}"))
+        cmds.append(C(f"stat {b}/c{mib}", f"Size: {mib << 20}"))
     cmds += [C("scrub", "HEALTHY", timeout=900)]
     return cmds
 
@@ -420,7 +434,7 @@ def scenario_net(args):
     for i in range(args.conns):
         cmds.append(C("fetch 10.0.2.100", "200 OK", timeout=60))
     for i in range(args.downloads):
-        cmds.append(C(f"wget 10.0.2.100 /dl{i % 4}.bin", f"saved: {args.http_size} bytes", timeout=120))
+        cmds.append(C(f"wget 10.0.2.101 {args.iobase}-dl{i % 4}.bin", f"saved: {args.http_size} bytes", timeout=120))
     cmds += [C("sleepwait 30", None), C("httpd status", "served"), C("netstat", None),
              C("ltstat", "ltstat "), C("lockstat", None), C("eurohealth", "/100")]
     return cmds
@@ -428,32 +442,39 @@ def scenario_net(args):
 
 def scenario_soak(args):
     # Mixed load until --duration seconds have passed. Every round: a process wave,
-    # FS write/read/remove, outbound HTTP, a churn round, then ltstat; lockstat every
-    # 10th round. Host-side: the hammer keeps inbound connections going throughout.
+    # FS write/read/hash/remove on the persistent root, outbound HTTP (small fetch,
+    # a 200 KB download every 5th round), a churn round, then ltstat; lockstat and
+    # free every 10th round. Inbound (httpd + --hammer) only if asked for.
     t_end = time.time() + args.duration
+    d = args.iobase + "-soak"
     r = 0
-    yield C("httpd on", "listening")
-    yield C("mkdir /soak", "created")
+    yield C(f"mkdir {args.iobase}", None)
+    yield C(f"mkdir {d}", "created")
+    if args.hammer:
+        yield C("httpd on", "listening")
     while time.time() < t_end:
         yield C(f"spawn worker {args.procs}", "spawn: started", timeout=120)
-        yield C(f"write /soak/f{r % 50} round-{r}", "written")
-        yield C(f"cat /soak/f{r % 50}", f"round-{r}")
-        yield C(f"truncate -s {8 << 20} /soak/big{r % 4}", "bytes", timeout=300)
-        yield C(f"sha256sum /soak/big{r % 4}", "/soak/big", timeout=300)
-        yield C(f"rm /soak/big{(r + 2) % 4}", None)
+        yield C(f"write {d}/f{r % 50} round-{r}", "written")
+        yield C(f"cat {d}/f{r % 50}", f"round-{r}")
+        yield C(f"truncate -s {8 << 20} {d}/big{r % 4}", "bytes", timeout=300)
+        yield C(f"sha256sum {d}/big{r % 4}", f"{d}/big", timeout=300)
+        yield C(f"rm {d}/big{(r + 2) % 4}", None)
         yield C("fetch 10.0.2.100", "200 OK", timeout=60)
+        if r % 5 == 0:
+            yield C(f"wget 10.0.2.101 {d}/dl.bin", f"saved: {args.http_size} bytes", timeout=120)
         if r % 3 == 0:
             yield C("churn proc 4", "done", raw=r"\[churn-proc\] .*OK", timeout=300)
         if r % 3 == 1:
             yield C("churn fs 1", "done", raw=r"\[churn-fs\] .*OK", timeout=300)
         if r % 3 == 2:
             yield C("churn net 1", "done", raw=r"\[churn-net\] .*OK", timeout=300)
-        yield C("ltstat", "ltstat ")
+        yield C("ltstat", "ltstat ", raw_bad=ISOLATION_KILL)
         if r % 10 == 0:
             yield C("lockstat", None, timeout=120)
             yield C("free", None)
         r += 1
-    yield C("httpd status", "served")
+    if args.hammer:
+        yield C("httpd status", "served")
     yield C("scrub", "HEALTHY", timeout=900)
     yield C("lockstat", None, timeout=120)
     yield C("ltstat", "ltstat ")
@@ -465,29 +486,32 @@ SCENARIOS.update({"procs": scenario_procs, "churn": scenario_churn, "fsio": scen
 
 # ── host-side peers ──
 class HostHttp:
-    """Plain HTTP server on 127.0.0.1:<port> for the guest (via SLIRP guestfwd)."""
-    def __init__(self, port, size):
-        import http.server, threading
-        body = bytes((i * 31) & 0xFF for i in range(size))
-        self.hits = 0
-        outer = self
+    """Host-side HTTP peers for the guest, through SLIRP guestfwd with a command
+    per connection (a guestfwd to a tcp: target is ONE persistent chardev
+    connection, useless for many connections): 10.0.2.100:80 answers 1000 bytes,
+    10.0.2.101:80 answers `size` bytes. Every answered request is one line in
+    the hit log."""
+    PEER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "loadtest-http-peer.py")
 
-        class H(http.server.BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.0"
-            def do_GET(self):
-                outer.hits += 1
-                self.send_response(200)
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Connection", "close")
-                self.end_headers()
-                self.wfile.write(body)
-            def log_message(self, *a):
-                pass
-        self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), H)
-        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+    def __init__(self, workdir, size):
+        self.log = os.path.join(workdir or ".", "host-http-hits.log")
+        open(self.log, "w").close()
+        self.size = size
+
+    def netdev(self):
+        cmd = lambda n: f"cmd:python3 {self.PEER} {n} {self.log}"
+        return (f",guestfwd=tcp:10.0.2.100:80-{cmd(1000)}"
+                f",guestfwd=tcp:10.0.2.101:80-{cmd(self.size)}")
+
+    @property
+    def hits(self):
+        try:
+            return sum(1 for _ in open(self.log))
+        except OSError:
+            return 0
 
     def stop(self):
-        self.srv.shutdown()
+        pass
 
 
 class Hammer:
@@ -561,17 +585,20 @@ def main():
     ap.add_argument("--bootopts", default="", help='ESP boot options, e.g. "net.driver=user"')
     ap.add_argument("--iommu", action="store_true", help="-device intel-iommu,intremap=off")
     ap.add_argument("--nic", default="", help="NIC model, e.g. e1000e (SLIRP user network)")
-    ap.add_argument("--host-http", type=int, default=0, help="host HTTP server port (guest: 10.0.2.100)")
+    ap.add_argument("--host-http", action="store_true", help="host HTTP peers: guest 10.0.2.100 (1000 B), 10.0.2.101 (--http-size B)")
     ap.add_argument("--http-size", type=int, default=200 * 1024)
     ap.add_argument("--hostfwd", type=int, default=0, help="host port forwarded to guest :80")
     ap.add_argument("--hammer", type=int, default=0, help="concurrent host clients on --hostfwd")
     ap.add_argument("--procs", type=int, default=64, help="processes per spawn wave")
     ap.add_argument("--waves", type=int, default=5)
+    ap.add_argument("--burst", type=int, default=300, help="procs: processes in one spawn (> free slots)")
+    ap.add_argument("--threads", type=int, default=16, help="procs: mpthread processes at once")
     ap.add_argument("--churn-scale", type=int, default=4)
     ap.add_argument("--io-sizes", default="16,64,256", help="fsio file sizes in MiB")
     ap.add_argument("--conns", type=int, default=200, help="net: sequential outbound connections")
     ap.add_argument("--downloads", type=int, default=50)
     ap.add_argument("--duration", type=int, default=4 * 3600, help="soak seconds")
+    ap.add_argument("--iobase", default="/home/euro/lt", help="fsio/soak directory (the euro user can write here on a disk root)")
     ap.add_argument("--stop-on-err", action="store_true")
     a = ap.parse_args()
     a.io_sizes = [int(x) for x in a.io_sizes.split(",") if x.strip()]
@@ -600,7 +627,8 @@ def main():
     print(f"[loadtest] scenario={a.scenario} image={image} disks={disks} bus={a.disk_bus} "
           f"kvm={a.kvm} smp={a.smp} mem={a.mem} nic={a.nic or '-'} bootopts={a.bootopts or '-'} iommu={a.iommu}")
     print(f"[loadtest] serial log: {serial_log}  ·  CSV: {a.csv}")
-    host_http = HostHttp(a.host_http, a.http_size) if a.host_http else None
+    host_http = HostHttp(a.workdir, a.http_size) if a.host_http else None
+    a.host_http_peer = host_http
     qemu = launch_qemu(image, disks, sock_path, serial_log, a)
     con = SerialConsole(sock_path, serial_log)
     rc = 0
@@ -624,6 +652,7 @@ def main():
             w = csv.writer(cf)
             w.writerow(["id", "command", "status", "elapsed_ms", "output_lines", "t_s"])
             sw = None
+            baselines = {}
             crashed = False
             errors = 0
             for i, item in enumerate(cmds, 1):
@@ -651,16 +680,21 @@ def main():
                     status = "err"
                     note = f"  (verdict /{item.raw_bad}/)"
                 tnow = round(time.time() - t_start, 1)
-                w.writerow([i, cmd, status, ms, len(lines), tnow])
-                cf.flush()
                 for l in lines:
                     if l.startswith("ltstat "):
                         kv = dict(x.split("=", 1) for x in l.split()[1:] if "=" in x)
+                        if item.baseline and item.baseline in kv:
+                            base = baselines.setdefault(item.baseline, kv[item.baseline])
+                            if status == "ok" and kv[item.baseline] != base:
+                                status = "err"
+                                note = f"  ({item.baseline}={kv[item.baseline]}, baseline {base})"
                         if sw is None:
                             sw = csv.DictWriter(sf, fieldnames=["t_s", "cmd_id"] + list(kv))
                             sw.writeheader()
                         sw.writerow({"t_s": tnow, "cmd_id": i, **kv})
                         sf.flush()
+                w.writerow([i, cmd, status, ms, len(lines), tnow])
+                cf.flush()
                 tag = "✓" if status == "ok" else "✗"
                 if status != "ok" or not quiet or i % 25 == 0:
                     print(f"  [{i:>5}/{total}] {tag} {status:<8} {ms:>7}ms t={tnow:>7}s  {cmd}{note}", flush=True)
