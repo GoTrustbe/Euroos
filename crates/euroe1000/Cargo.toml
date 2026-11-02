@@ -1,0 +1,9 @@
+[package]
+name = "euroe1000"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "EuroE1000: Intel e1000/e1000e (82540EM, 82574L) driver logic against a small HAL. no_std, no alloc, host-tested against a simulated device."
+
+[dependencies]
