@@ -403,7 +403,10 @@ struct Scheduler {
     min_vr: u64,
 }
 
-static SCHED: Mutex<Scheduler> = Mutex::new(Scheduler {
+static SITE_SCHED: eurolock::LockSite = eurolock::LockSite::new("sched.SCHED (BSP scheduler)", eurolock::LockClass::Sched);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static SCHED: eurolock::sync::Mutex<Scheduler> =
+    eurolock::sync::Mutex::new_site(&SITE_SCHED, eurolock::Mode::Plain, Scheduler {
     tasks: [const {
         Task { rsp: 0, kstack: 0, fs_base: 0, cr3: 0, state: State::Ready, nice: 0, vruntime: 0, pid: 0, ppid: 0, stack_bottom: 0, sc_user_rsp: 0, sc_user_rip: 0, sc_saved_regs: 0 }
     }; MAX_TASKS],
@@ -1317,10 +1320,41 @@ pub extern "sysv64" fn ap_schedule_tick(rsp: u64) -> u64 {
     }
     let cur = s.current;
     s.tasks[cur].rsp = rsp;
+    // J1: once the [smp] self-test has read the demo workers' counters they are
+    // parked: drop them from this core's queue and stay on slot 0, the idle task
+    // that runs the per-CPU kwork loop (`kwork::ap_idle_loop`). Their stacks are
+    // simply abandoned (infinite loops, nothing to unwind). From then on the
+    // core sleeps in hlt when it has no work instead of spinning forever.
+    if AP_PARK.load(Ordering::Acquire) && s.count > 1 {
+        s.count = 1;
+        s.current = 0;
+        AP_PARKED[cpu].store(true, Ordering::Release);
+        return s.tasks[0].rsp;
+    }
     let n = (cur + 1) % s.count;
     s.current = n;
-    CURRENT_MIRROR.store(n as u64, Ordering::Relaxed);
+    // NOTE (J1): this used to store `n` into CURRENT_MIRROR, the BSP scheduler's
+    // lock-free "current task" mirror, so every AP tick overwrote the BSP's
+    // current-task index with an AP slot number (0..3). The AP run queue keeps
+    // its own `current`; the mirror is BSP-only.
     s.tasks[n].rsp
+}
+
+/// J1: park the AP demo workers (see `ap_schedule_tick`).
+static AP_PARK: AtomicBool = AtomicBool::new(false);
+static AP_PARKED: [AtomicBool; MAX_CPU] = [const { AtomicBool::new(false) }; MAX_CPU];
+
+/// Park the demo workers on every listed AP; returns how many cores confirmed
+/// (waits up to ~0.5 s). Called by `smp::init` after its counters were reported.
+pub fn ap_park_demo_workers(cpus: &[usize]) -> usize {
+    AP_PARK.store(true, Ordering::Release);
+    for _ in 0..500 {
+        if cpus.iter().all(|&c| AP_PARKED[c].load(Ordering::Acquire)) {
+            break;
+        }
+        crate::apic::busy_wait_us(1_000);
+    }
+    cpus.iter().filter(|&&c| AP_PARKED[c].load(Ordering::Acquire)).count()
 }
 
 fn ap_init_stack(cpu: usize, slot: usize, entry: extern "C" fn() -> !) -> u64 {
@@ -1347,13 +1381,16 @@ fn ap_init_stack(cpu: usize, slot: usize, entry: extern "C" fn() -> !) -> u64 {
 /// tick = the running ap_main hlt loop) + two worker tasks. Call on the AP
 /// itself, after `gdt::init_ap`, before the timer turns on.
 pub fn ap_setup(cpu: usize) {
+    // J1: the worker stacks of this core identify it (percpu.rs), registered
+    // before its timer can switch to them.
+    let base = unsafe { core::ptr::addr_of!(AP_STACKS2[cpu]) as u64 };
+    crate::percpu::register_stack(base, base + (AP_NTASK * STACK_SIZE) as u64, cpu);
     let mut s = AP_SCHED[cpu].lock();
     s.tasks[0].rsp = 0; // idle — rsp comes at the first preemption
     s.tasks[1].rsp = ap_init_stack(cpu, 1, ap_worker_a);
     s.tasks[2].rsp = ap_init_stack(cpu, 2, ap_worker_b);
     s.count = 3;
     s.current = 0;
-    CURRENT_MIRROR.store(0, Ordering::Relaxed);
 }
 
 extern "C" fn ap_worker_a() -> ! {

@@ -262,6 +262,9 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             v.insert(0, format!("audit log ({} events, append-only /var/log/audit.log):", crate::audit::count()));
             v
         }
+        // J1: lock contention statistics / the multi-core lock benchmark.
+        "lockstat" => crate::klock::shell(arg1),
+        "lockbench" => crate::lockstress::shell(&format!("{arg1} {arg2}")),
         // X: EuroPol — declarative policy → capabilities.
         "europol" => crate::europol::shell(&format!("{arg1} {arg2}")),
         // W: EuroObserve — live OpenMetrics export (the way Prometheus scrapes).

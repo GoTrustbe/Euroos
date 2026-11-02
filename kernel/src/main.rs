@@ -24,6 +24,11 @@ mod vault;
 mod euroipc;
 mod bootopt;
 mod udrv;
+mod klock;
+mod kvfs;
+mod percpu;
+mod kwork;
+mod lockstress;
 mod acpi;
 mod acpi_power;
 mod apic;
@@ -2147,6 +2152,9 @@ fn main() -> Status {
     // block against the signed root; a tampered backing block fails the read).
     verity::wire_selftest();
     interrupts::init_timer(100);
+    // J1: install the EuroLock hooks (IRQSAVE, per-context lock-order tracking)
+    // now that the Local APIC answers, before the APs start taking locks.
+    klock::init();
     // G1: give each application processor a GUARDED kernel stack from the pool (an
     // AP-stack overflow then faults on an unmapped guard page instead of silently
     // overwriting the neighbour AP stack). Before smp::init(), with the main allocator.
@@ -2226,6 +2234,19 @@ fn main() -> Status {
     // route the euroaudio mixer's output to it (no-op without one).
     audio::usb_wire_selftest();
     serial_println!("[euro] APIC timer 100 Hz + interrupts ON -> preemptive multitasking (incl. ring 3)");
+    // J1 fine-grained locking: the checker itself, then real kernel work on the
+    // APs (per-CPU queues + work stealing).
+    klock::selftest();
+    kwork::selftest();
+    // `lockbench` image: run the multi-core lock benchmark and power off.
+    #[cfg(feature = "lockbench")]
+    {
+        lockstress::selftest(3, 400);
+        lockstress::bench(3, 700);
+        klock::report("final", 24);
+        serial_println!("[lk-bench] powering off");
+        power::shutdown();
+    }
     // Chromium foundation: run REAL dynamically-linked GLIBC binaries via the
     // genuine ld-linux-x86-64.so.2 — NOW that the scheduler is up, each runs as a
     // scheduled process, so single-threaded AND multi-threaded (pthreads) work.
@@ -3504,7 +3525,10 @@ fn main() -> Status {
 
     // G2: build the VFS — the root + (if present) the second disk on /mnt — so that
     // the shell transparently serves `/mnt/...` on disk 1 (longest-prefix routing).
-    let mut vfs = eurofs::Vfs::new(alloc::boxed::Box::new(fs));
+    // J1: the root VFS is a SharedVfs: mount table behind a reader-writer lock,
+    // one lock per mounted filesystem, and a handle other cores can use.
+    let mut vfs: kvfs::KernelVfs = eurofs::SharedVfs::new(alloc::boxed::Box::new(fs));
+    kvfs::publish(&vfs);
 
     // G4: mount the **EuroVar** partition on /var (writable data, separate from the
     // — future read-only — system slot). Proves the multi-partition A/B GPT layout:
@@ -3641,6 +3665,10 @@ fn main() -> Status {
     // L1 (EuroFS immutability) + L2 (CAP_IMMUTABLE_ADMIN gate) + P3 (append-only
     // audit log): tamper-proof system files + an irreversible audit trail.
     {
+        // J1: multi-core lock stress with the root VFS mounted (fs/ipc/unix on
+        // every core at once, repeated rounds).
+        #[cfg(feature = "selftest")]
+        lockstress::selftest(3, 300);
         let boot_caps = ring3::CAP_IMMUTABLE_ADMIN | ring3::CAP_FILE;
         immutable::selftest(&mut vfs);
         let protected = immutable::protect_system_files(&mut vfs, boot_caps);
@@ -4956,6 +4984,10 @@ fn main() -> Status {
     // The E2E test waits for this before it injects keys; also proves that HLT-idle
     // does not hold the loop.
     serial_println!("[desktop] interactive loop started — input + shell live");
+    // J1: the lock picture of a whole boot: most contended, and longest held
+    // (an Irq-mode lock or any lock taken inside a syscall holds IF=0 that long).
+    klock::report("boot-total", 10);
+    klock::report_hold("boot-total", 10);
     // A first notification so the shade is not empty and the toast channel shows.
     notify::push("Welcome to EuroOS", "Click here to see notifications", interrupts::ticks());
     // 3G-2: arm the live deadman watchdog (5 s grace at 100 Hz). The loop pets it

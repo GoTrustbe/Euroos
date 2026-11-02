@@ -34,7 +34,10 @@ pub struct NetCfg {
     pub router_mac: Option<MacAddr>,
 }
 
-static CFG: Mutex<Option<NetCfg>> = Mutex::new(None);
+static SITE_CFG: eurolock::LockSite = eurolock::LockSite::new("net.CFG", eurolock::LockClass::Net);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static CFG: eurolock::sync::Mutex<Option<NetCfg>> =
+    eurolock::sync::Mutex::new_site(&SITE_CFG, eurolock::Mode::Plain, None);
 
 pub fn save(c: NetCfg) {
     *CFG.lock() = Some(c);
@@ -55,10 +58,14 @@ const SPINS: u64 = 4_000_000;
 // even drained the queue wholesale. Now a single router reads the NIC: TCP
 // segments to our IP land in a per-destination-port queue; everything else goes
 // to a legacy queue for the existing ARP/ICMP/UDP/DHCP readers.
-static PORTQ: spin::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, TcpSegment)>)>> =
-    spin::Mutex::new(alloc::vec::Vec::new());
-static NET_LEGACY: spin::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>> =
-    spin::Mutex::new(alloc::collections::VecDeque::new());
+static SITE_PORTQ: eurolock::LockSite = eurolock::LockSite::new("net.PORTQ (TCP port queues)", eurolock::LockClass::Net);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static PORTQ: eurolock::sync::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, TcpSegment)>)>> =
+    eurolock::sync::Mutex::new_site(&SITE_PORTQ, eurolock::Mode::Plain, alloc::vec::Vec::new());
+static SITE_NET_LEGACY: eurolock::LockSite = eurolock::LockSite::new("net.NET_LEGACY (rx ring)", eurolock::LockClass::Net);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static NET_LEGACY: eurolock::sync::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>> =
+    eurolock::sync::Mutex::new_site(&SITE_NET_LEGACY, eurolock::Mode::Plain, alloc::collections::VecDeque::new());
 
 /// Per-port queues for UDP datagrams to a REGISTERED local port (one per UdpSock),
 /// the way PORTQ holds TCP segments per port. Before this every UDP reader pulled
@@ -66,8 +73,10 @@ static NET_LEGACY: spin::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>
 /// its DNS lookups on several UDP sockets at once, so socket A's poll threw away
 /// the answers for B and C, and 31 queries got 2 answers in a run (the rest
 /// ended in ERR_NAME_NOT_RESOLVED). Entries: (source ip, payload).
-static UDPQ: spin::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, alloc::vec::Vec<u8>)>)>> =
-    spin::Mutex::new(alloc::vec::Vec::new());
+static SITE_UDPQ: eurolock::LockSite = eurolock::LockSite::new("net.UDPQ", eurolock::LockClass::Net);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static UDPQ: eurolock::sync::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, alloc::vec::Vec<u8>)>)>> =
+    eurolock::sync::Mutex::new_site(&SITE_UDPQ, eurolock::Mode::Plain, alloc::vec::Vec::new());
 static UDP_ROUTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// The DNS ledger: every query name on its way out and every answer on its way
@@ -178,16 +187,22 @@ pub fn pump_all() {
     if retransmit {
         PUMP_ALL_TICK.store(now, core::sync::atomic::Ordering::Relaxed);
     }
-    let mut t = SOCKETS.lock();
-    for slot in t.iter_mut() {
-        if let Some(Sock::Conn(c)) = slot {
-            if c.open {
-                if retransmit {
-                    c.tick();
-                } else {
-                    c.pump_nowait();
+    // One connection at a time: a syscall on another socket only waits for the
+    // connection being pumped, not for the whole pass. Only slots hinted as
+    // connections are visited.
+    for i in conn_hint_slots() {
+        let mut g = SOCKETS[i].lock();
+        match &mut *g {
+            Some(Sock::Conn(c)) => {
+                if c.open {
+                    if retransmit {
+                        c.tick();
+                    } else {
+                        c.pump_nowait();
+                    }
                 }
             }
+            _ => conn_hint_clear(i),
         }
     }
 }
@@ -200,11 +215,10 @@ static PUMP_ALL_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomic
 /// above this layer.
 pub fn rx_queued_bytes() -> usize {
     let _g = crate::sched::IfOffGuard::new();
-    let t = SOCKETS.lock();
-    t.iter()
-        .filter_map(|s| match s {
-            Some(Sock::Conn(c)) => Some(c.rx.len()),
-            _ => None,
+    conn_hint_slots()
+        .map(|i| match &*SOCKETS[i].lock() {
+            Some(Sock::Conn(c)) => c.rx.len(),
+            _ => 0,
         })
         .sum()
 }
@@ -666,20 +680,25 @@ fn icmp_err_allowed() -> bool {
 /// If so: complete the passive open (SYN-ACK) and put the connection in the queue.
 /// Returns `true` if a listener existed (so the caller does not send a RST).
 fn try_accept_listener(seg: &TcpSegment, peer_mac: MacAddr, peer_ip: Ipv4Addr, cfg: &NetCfg) -> bool {
-    let has_room = {
-        let t = SOCKETS.lock();
-        t.iter().any(|s| matches!(s, Some(Sock::Listen { port, backlog, queue }) if *port == seg.dst_port && queue.len() < *backlog))
-    };
+    let has_room = SOCKETS.iter().any(|s| {
+        matches!(&*s.lock(), Some(Sock::Listen { port, backlog, queue }) if *port == seg.dst_port && queue.len() < *backlog)
+    });
     if !has_room {
         return false;
     }
     // Passive open without holding the SOCKETS lock (it does network I/O).
     if let Some(conn) = TcpConn::accept_from(cfg.my_mac, cfg.my_ip, peer_mac, peer_ip, seg.src_port, seg.dst_port, seg) {
-        let mut t = SOCKETS.lock();
-        let idx = t.iter().position(|s| matches!(s, Some(Sock::Listen { port, backlog, queue }) if *port == seg.dst_port && queue.len() < *backlog));
-        if let Some(idx) = idx {
-            if let Some(Sock::Listen { queue, .. }) = &mut t[idx] {
-                queue.push_back(conn);
+        // Re-check under the listener's own lock (it may have filled meanwhile).
+        let mut conn = Some(conn);
+        for slot in SOCKETS.iter() {
+            let mut g = slot.lock();
+            if let Some(Sock::Listen { port, backlog, queue }) = &mut *g {
+                if *port == seg.dst_port && queue.len() < *backlog {
+                    if let Some(c) = conn.take() {
+                        queue.push_back(c);
+                    }
+                    break;
+                }
             }
         }
     }
@@ -1670,7 +1689,38 @@ enum Sock {
     Listen { port: u16, backlog: usize, queue: alloc::collections::VecDeque<TcpConn> },
 }
 
-static SOCKETS: Mutex<[Option<Sock>; MAX_SOCK]> = Mutex::new([const { None }; MAX_SOCK]);
+// J1 (fine-grained locking): one lock PER SOCKET instead of one mutex around the
+// whole table. A blocking recv on one connection (which can spin for seconds
+// pumping the NIC) no longer holds every other socket hostage, and pump_all locks
+// one connection at a time. `Mode::Irq`: socket calls run inside syscalls (IF=0
+// via FMASK) AND from task context, so by the IRQSAVE rule every holder runs with
+// interrupts off. No path holds two socket locks at once.
+static SITE_SOCKET: eurolock::LockSite = eurolock::LockSite::new("net.socket (per-socket)", eurolock::LockClass::NetSocket);
+static SOCKETS: [eurolock::sync::Mutex<Option<Sock>>; MAX_SOCK] =
+    [const { eurolock::sync::Mutex::new_site(&SITE_SOCKET, eurolock::Mode::Irq, None) }; MAX_SOCK];
+
+/// Slots that may hold a TCP connection: set (under the slot lock) when a
+/// connection is stored, cleared lazily by `pump_all` when it finds the slot
+/// is no longer one. Lets the desktop's periodic pump visit the live
+/// connections instead of locking all MAX_SOCK slots on every pass.
+static CONN_HINT: [core::sync::atomic::AtomicU64; MAX_SOCK.div_ceil(64)] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; MAX_SOCK.div_ceil(64)];
+
+fn conn_hint_set(i: usize) {
+    CONN_HINT[i / 64].fetch_or(1 << (i % 64), core::sync::atomic::Ordering::Release);
+}
+
+fn conn_hint_clear(i: usize) {
+    CONN_HINT[i / 64].fetch_and(!(1 << (i % 64)), core::sync::atomic::Ordering::Release);
+}
+
+/// Indexes whose hint bit is set.
+fn conn_hint_slots() -> impl Iterator<Item = usize> {
+    (0..CONN_HINT.len()).flat_map(|w| {
+        let bits = CONN_HINT[w].load(core::sync::atomic::Ordering::Acquire);
+        (0..64).filter(move |b| bits & (1 << b) != 0).map(move |b| w * 64 + b)
+    })
+}
 
 /// Has this socket fd been connected (TCP established or UDP peer set)?
 /// A Reserved slot has not — sendto() with an explicit destination uses this
@@ -1680,7 +1730,7 @@ pub fn sock_is_connected(fd: u64) -> bool {
         return false;
     }
     matches!(
-        SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize],
+        *SOCKETS[(fd - SOCK_FD_BASE) as usize].lock(),
         Some(Sock::Conn(_)) | Some(Sock::Udp(_)) | Some(Sock::LocalDns { .. })
     )
 }
@@ -1694,16 +1744,32 @@ pub fn is_sock_fd(fd: u64) -> bool {
 /// -1 if the table is full.
 /// Socket-table slots in use (the [churn-net] leak counter).
 pub fn sockets_in_use() -> usize {
-    SOCKETS.lock().iter().filter(|s| s.is_some()).count()
+    SOCKETS.iter().filter(|s| s.lock().is_some()).count()
+}
+
+/// Claim the first free slot for `s` (each slot checked and filled under its own
+/// lock, so two cores can never claim the same slot). A slot whose lock is held
+/// right now is skipped: it is in use, or another core is claiming it, and
+/// waiting would tie socket() to some other socket's blocking recv. The index,
+/// or None if full.
+fn sock_alloc(s: Sock) -> Option<usize> {
+    let mut s = Some(s);
+    for (i, slot) in SOCKETS.iter().enumerate() {
+        let Some(mut g) = slot.try_lock() else { continue };
+        if g.is_none() {
+            if matches!(s, Some(Sock::Conn(_))) {
+                conn_hint_set(i);
+            }
+            *g = s.take();
+            return Some(i);
+        }
+    }
+    None
 }
 
 pub fn sock_open(dgram: bool) -> u64 {
-    let mut t = SOCKETS.lock();
-    for (i, slot) in t.iter_mut().enumerate() {
-        if slot.is_none() {
-            *slot = Some(Sock::Reserved { dgram, bind_port: 0 });
-            return SOCK_FD_BASE + i as u64;
-        }
+    if let Some(i) = sock_alloc(Sock::Reserved { dgram, bind_port: 0 }) {
+        return SOCK_FD_BASE + i as u64;
     }
     // Say so. A full table used to be silent and the caller's EPERM was read as
     // a permission or resolver problem for three runs.
@@ -1737,9 +1803,9 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     // machine; EuroGuard governs the FORWARDED query inside sock_send instead).
     {
         let i = (fd - SOCK_FD_BASE) as usize;
-        let is_dgram = matches!(SOCKETS.lock()[i], Some(Sock::Reserved { dgram: true, .. }));
+        let is_dgram = matches!(*SOCKETS[i].lock(), Some(Sock::Reserved { dgram: true, .. }));
         if is_dgram && server.0 == [127, 0, 0, 1] && port == 53 {
-            SOCKETS.lock()[i] = Some(Sock::LocalDns { rx: alloc::collections::VecDeque::new() });
+            *SOCKETS[i].lock() = Some(Sock::LocalDns { rx: alloc::collections::VecDeque::new() });
             return 0;
         }
     }
@@ -1768,8 +1834,8 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     let i = (fd - SOCK_FD_BASE) as usize;
     // Determine the socket type without holding the lock during connect().
     let dgram = {
-        let t = SOCKETS.lock();
-        match t[i] {
+        let t = SOCKETS[i].lock();
+        match *t {
             Some(Sock::Reserved { dgram, .. }) => dgram,
             _ => return (-1i64) as u64,
         }
@@ -1777,7 +1843,7 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     if dgram {
         let s = UdpSock { my_mac: cfg.my_mac, my_ip: cfg.my_ip, nexthop, server, dport: port, sport: alloc_port() };
         udpq_register(s.sport);
-        SOCKETS.lock()[i] = Some(Sock::Udp(s));
+        *SOCKETS[i].lock() = Some(Sock::Udp(s));
         0
     } else {
         let conn = match TcpConn::connect(cfg.my_mac, cfg.my_ip, nexthop, server, port) {
@@ -1794,7 +1860,11 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
         if server.0 == [151, 240, 77, 50] {
             crate::ring3::arm_sys_trace(400);
         }
-        SOCKETS.lock()[i] = Some(Sock::Conn(conn));
+        {
+            let mut g = SOCKETS[i].lock();
+            *g = Some(Sock::Conn(conn));
+            conn_hint_set(i);
+        }
         0
     }
 }
@@ -1848,8 +1918,8 @@ pub fn sock_bind(fd: u64, port: u16) -> u64 {
         return (-1i64) as u64;
     }
     let i = (fd - SOCK_FD_BASE) as usize;
-    let mut t = SOCKETS.lock();
-    match &mut t[i] {
+    let mut t = SOCKETS[i].lock();
+    match &mut *t {
         Some(Sock::Reserved { dgram: false, bind_port }) => {
             *bind_port = port;
             0
@@ -1864,10 +1934,10 @@ pub fn sock_listen(fd: u64, backlog: usize) -> u64 {
         return (-1i64) as u64;
     }
     let i = (fd - SOCK_FD_BASE) as usize;
-    let mut t = SOCKETS.lock();
-    match t[i] {
+    let mut t = SOCKETS[i].lock();
+    match *t {
         Some(Sock::Reserved { dgram: false, bind_port }) if bind_port != 0 => {
-            t[i] = Some(Sock::Listen { port: bind_port, backlog: backlog.clamp(1, 32), queue: alloc::collections::VecDeque::new() });
+            *t = Some(Sock::Listen { port: bind_port, backlog: backlog.clamp(1, 32), queue: alloc::collections::VecDeque::new() });
             0
         }
         _ => (-1i64) as u64,
@@ -1889,21 +1959,17 @@ pub fn sock_accept(fd: u64) -> u64 {
     while crate::interrupts::ticks() < deadline {
         // Pop a ready connection (hold the lock briefly).
         let conn = {
-            let mut t = SOCKETS.lock();
-            match &mut t[i] {
+            let mut t = SOCKETS[i].lock();
+            match &mut *t {
                 Some(Sock::Listen { queue, .. }) => queue.pop_front(),
                 _ => return (-1i64) as u64, // no listening socket
             }
         };
         if let Some(conn) = conn {
-            let mut t = SOCKETS.lock();
-            for (j, slot) in t.iter_mut().enumerate() {
-                if slot.is_none() {
-                    *slot = Some(Sock::Conn(conn));
-                    return SOCK_FD_BASE + j as u64;
-                }
-            }
-            return (-1i64) as u64; // socket table full
+            return match sock_alloc(Sock::Conn(conn)) {
+                Some(j) => SOCK_FD_BASE + j as u64,
+                None => (-1i64) as u64, // socket table full
+            };
         }
         // No connection ready: process incoming packets (may complete one).
         service();
@@ -1939,8 +2005,8 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
     }
     let i = (fd - SOCK_FD_BASE) as usize;
     let sent = {
-        let mut t = SOCKETS.lock();
-        match &mut t[i] {
+        let mut t = SOCKETS[i].lock();
+        match &mut *t {
             Some(Sock::Conn(c)) => {
                 c.send(data);
                 data.len() as u64
@@ -1990,8 +2056,8 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
                     }
                 }
                 let answer = local_dns_answer(&query);
-                let mut t = SOCKETS.lock();
-                if let Some(Sock::LocalDns { rx }) = &mut t[i] {
+                let mut t = SOCKETS[i].lock();
+                if let Some(Sock::LocalDns { rx }) = &mut *t {
                     if let Some(a) = answer {
                         rx.push_back(a);
                     }
@@ -2066,8 +2132,8 @@ pub fn sock_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
     }
     let i = (fd - SOCK_FD_BASE) as usize;
     let data = {
-        let mut t = SOCKETS.lock();
-        match &mut t[i] {
+        let mut t = SOCKETS[i].lock();
+        match &mut *t {
             Some(Sock::Conn(c)) => c.recv(max),
             Some(Sock::Udp(u)) => {
                 let mut d = u.recv();
@@ -2119,8 +2185,8 @@ pub fn sock_peek_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
         return alloc::vec::Vec::new();
     }
     let i = (fd - SOCK_FD_BASE) as usize;
-    let mut t = SOCKETS.lock();
-    match &mut t[i] {
+    let mut t = SOCKETS[i].lock();
+    match &mut *t {
         Some(Sock::Conn(c)) => c.peek_nowait(max),
         Some(Sock::Udp(u)) => {
             // A datagram cannot be put back: take it, then keep it for the read.
@@ -2149,8 +2215,8 @@ pub fn sock_recv_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
     }
     let i = (fd - SOCK_FD_BASE) as usize;
     let data = {
-        let mut t = SOCKETS.lock();
-        match &mut t[i] {
+        let mut t = SOCKETS[i].lock();
+        match &mut *t {
             Some(Sock::Conn(c)) => c.recv_nowait(max),
             Some(Sock::Udp(u)) => {
                 let mut d = u.recv_nowait();
@@ -2179,12 +2245,12 @@ pub fn sock_send_nowait(fd: u64, data: &[u8]) -> u64 {
         return (-1i64) as u64;
     }
     let i = (fd - SOCK_FD_BASE) as usize;
-    let is_conn = matches!(SOCKETS.lock()[i], Some(Sock::Conn(_)));
+    let is_conn = matches!(*SOCKETS[i].lock(), Some(Sock::Conn(_)));
     if !is_conn {
         return sock_send(fd, data);
     }
-    let mut t = SOCKETS.lock();
-    if let Some(Sock::Conn(c)) = &mut t[i] {
+    let mut t = SOCKETS[i].lock();
+    if let Some(Sock::Conn(c)) = &mut *t {
         if !c.open {
             return (-32i64) as u64; // -EPIPE
         }
@@ -2202,7 +2268,7 @@ pub fn sock_is_tcp(fd: u64) -> bool {
     if !is_sock_fd(fd) {
         return false;
     }
-    matches!(&SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize], Some(Sock::Conn(_)))
+    matches!(&*SOCKETS[(fd - SOCK_FD_BASE) as usize].lock(), Some(Sock::Conn(_)))
 }
 
 /// The four-tuple of a connected socket, for getsockname/getpeername:
@@ -2211,7 +2277,7 @@ pub fn sock_names(fd: u64) -> Option<(Ipv4Addr, u16, Ipv4Addr, u16)> {
     if !is_sock_fd(fd) {
         return None;
     }
-    match &SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize] {
+    match &*SOCKETS[(fd - SOCK_FD_BASE) as usize].lock() {
         Some(Sock::Conn(c)) => Some((c.my_ip, c.sport, c.server, c.dport)),
         Some(Sock::Udp(u)) => Some((u.my_ip, u.sport, u.server, u.dport)),
         Some(Sock::LocalDns { .. }) => {
@@ -2237,7 +2303,7 @@ pub fn sock_peer_desc(fd: u64) -> alloc::string::String {
     if !is_sock_fd(fd) {
         return alloc::string::String::from("?");
     }
-    match &SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize] {
+    match &*SOCKETS[(fd - SOCK_FD_BASE) as usize].lock() {
         Some(Sock::Conn(c)) => alloc::format!(
             "{}.{}.{}.{}:{}", c.server.0[0], c.server.0[1], c.server.0[2], c.server.0[3], c.dport),
         Some(Sock::Udp(_)) => alloc::string::String::from("udp"),
@@ -2250,7 +2316,7 @@ pub fn sock_eof(fd: u64) -> bool {
     if !is_sock_fd(fd) {
         return false;
     }
-    match &SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize] {
+    match &*SOCKETS[(fd - SOCK_FD_BASE) as usize].lock() {
         Some(Sock::Conn(c)) => c.rx.is_empty() && !c.open,
         None => true,
         _ => false, // UDP / LocalDns / Listen never signal EOF
@@ -2266,7 +2332,7 @@ pub fn sock_writable(fd: u64) -> bool {
         return false;
     }
     matches!(
-        &SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize],
+        &*SOCKETS[(fd - SOCK_FD_BASE) as usize].lock(),
         Some(Sock::Conn(_)) | Some(Sock::Udp(_)) | Some(Sock::LocalDns { .. })
     )
 }
@@ -2280,8 +2346,8 @@ pub fn sock_readable(fd: u64) -> bool {
         return false;
     }
     service();
-    let mut t = SOCKETS.lock();
-    match &mut t[(fd - SOCK_FD_BASE) as usize] {
+    let mut t = SOCKETS[(fd - SOCK_FD_BASE) as usize].lock();
+    match &mut *t {
         Some(Sock::Conn(c)) => {
             // pump_nowait, never pump(1): pump(1) calls poll_seg, which is
             // SPINS*3 = 12 million busy iterations when nothing is queued, and
@@ -2312,8 +2378,8 @@ pub fn sock_close(fd: u64) -> u64 {
         return (-1i64) as u64;
     }
     let i = (fd - SOCK_FD_BASE) as usize;
-    let mut t = SOCKETS.lock();
-    if let Some(Sock::Conn(c)) = &mut t[i] {
+    let mut t = SOCKETS[i].lock();
+    if let Some(Sock::Conn(c)) = &mut *t {
         // One line per connection, uncapped: what it did before chrome let go of
         // it. The [conn] connect log is capped at 24 per run and hid every event
         // around run 52's burst of ERR_SSL_PROTOCOL_ERROR.
@@ -2323,11 +2389,11 @@ pub fn sock_close(fd: u64) -> u64 {
         c.close();
         portq_remove(c.sport);
     }
-    if let Some(Sock::Udp(u)) = &t[i] {
+    if let Some(Sock::Udp(u)) = &*t {
         portq_remove(u.sport);
         udpq_remove(u.sport);
     }
-    t[i] = None;
+    *t = None;
     0
 }
 
@@ -2368,11 +2434,12 @@ pub fn sock_poll(fds: &[u64], deadline_ticks: u64) -> alloc::vec::Vec<(u64, bool
     loop {
         service(); // process incoming packets → fills Listen queues
         {
-            // Pump Conn sockets so in-flight data lands in their rx buffer.
-            let mut t = SOCKETS.lock();
+            // Pump Conn sockets so in-flight data lands in their rx buffer
+            // (one socket lock at a time).
             for &fd in fds {
                 if is_sock_fd(fd) {
-                    if let Some(Sock::Conn(c)) = &mut t[(fd - SOCK_FD_BASE) as usize] {
+                    let mut t = SOCKETS[(fd - SOCK_FD_BASE) as usize].lock();
+                    if let Some(Sock::Conn(c)) = &mut *t {
                         if c.rx.is_empty() && c.open {
                             c.pump(1);
                         }
@@ -2381,11 +2448,10 @@ pub fn sock_poll(fds: &[u64], deadline_ticks: u64) -> alloc::vec::Vec<(u64, bool
             }
         }
         let ready: alloc::vec::Vec<(u64, bool)> = {
-            let t = SOCKETS.lock();
             fds.iter()
                 .map(|&fd| {
                     let r = is_sock_fd(fd)
-                        && match &t[(fd - SOCK_FD_BASE) as usize] {
+                        && match &*SOCKETS[(fd - SOCK_FD_BASE) as usize].lock() {
                             Some(Sock::Conn(c)) => !c.rx.is_empty() || !c.open, // data or EOF
                             Some(Sock::Listen { queue, .. }) => !queue.is_empty(),
                             Some(Sock::LocalDns { rx }) => !rx.is_empty(),
@@ -2410,34 +2476,38 @@ pub fn sock_poll(fds: &[u64], deadline_ticks: u64) -> alloc::vec::Vec<(u64, bool
 // the TCP/IP SOCKETS table. The building block for the live display server (H2:
 // compositor ↔ app) and IPC-heavy apps.
 // ---------------------------------------------------------------------------
-static UNIX_SWITCH: Mutex<euronet::unix::Switchboard> =
-    Mutex::new(euronet::unix::Switchboard::new());
+// J1 (fine-grained locking): per-connection locks. The listener table and the
+// connection table are separate IRQ-safe locks and every stream has its own,
+// so two processes streaming over two sockets no longer serialise on one
+// global switchboard mutex (and the switchboard is IRQSAVE-correct for the
+// syscall path, which runs with IF=0).
+static UNIX_SWITCH: euronet::unix::SharedSwitchboard = euronet::unix::SharedSwitchboard::new();
 
 pub use euronet::unix::{Endpoint as UnixEndpoint, UnixError};
 
 /// Bind+listen on an AF_UNIX path (server side).
 pub fn unix_bind_listen(path: &str, backlog: usize) -> Result<(), UnixError> {
-    UNIX_SWITCH.lock().bind_listen(path, backlog)
+    UNIX_SWITCH.bind_listen(path, backlog)
 }
 /// Connect to an AF_UNIX path (client side) → client endpoint.
 pub fn unix_connect(path: &str) -> Result<UnixEndpoint, UnixError> {
-    UNIX_SWITCH.lock().connect(path)
+    UNIX_SWITCH.connect(path)
 }
 /// Accept the oldest waiting connection (server side) → server endpoint.
 pub fn unix_accept(path: &str) -> Option<UnixEndpoint> {
-    UNIX_SWITCH.lock().accept(path)
+    UNIX_SWITCH.accept(path)
 }
 /// Write bytes from an endpoint.
 pub fn unix_send(ep: UnixEndpoint, data: &[u8]) -> Result<usize, UnixError> {
-    UNIX_SWITCH.lock().send(ep, data)
+    UNIX_SWITCH.send(ep, data)
 }
 /// Read up to `max` bytes for an endpoint (non-blocking).
 pub fn unix_recv(ep: UnixEndpoint, max: usize) -> Result<alloc::vec::Vec<u8>, UnixError> {
-    UNIX_SWITCH.lock().recv(ep, max)
+    UNIX_SWITCH.recv(ep, max)
 }
 /// Is this endpoint readable (data or EOF)?
 pub fn unix_readable(ep: UnixEndpoint) -> bool {
-    UNIX_SWITCH.lock().readable(ep)
+    UNIX_SWITCH.readable(ep)
 }
 /// The unix fd NUMBERS currently open (UNIX_FD_BASE-relative slots occupied) —
 /// the fork snapshot needs them so a live child's inherited channel end is not
@@ -2455,13 +2525,13 @@ pub fn unix_fds_open() -> alloc::vec::Vec<u64> {
 pub fn unix_fd_at_eof(fd: u64) -> bool {
     let t = UNIX_FDS.lock();
     match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
-        Some(UnixSock::Stream(e)) => UNIX_SWITCH.lock().at_eof(*e),
+        Some(UnixSock::Stream(e)) => UNIX_SWITCH.at_eof(*e),
         _ => false,
     }
 }
 /// Close an endpoint.
 pub fn unix_close(ep: UnixEndpoint) {
-    UNIX_SWITCH.lock().close(ep)
+    UNIX_SWITCH.close(ep)
 }
 
 // ── AF_UNIX socket fds for glibc/musl programs ───────────────────────────────
@@ -2581,7 +2651,10 @@ enum UnixSock {
     X(u64), // xserver connection fd
 }
 
-static UNIX_FDS: Mutex<[Option<UnixSock>; MAX_UNIX_FD]> = Mutex::new([const { None }; MAX_UNIX_FD]);
+static SITE_UNIX_FDS: eurolock::LockSite = eurolock::LockSite::new("net.UNIX_FDS", eurolock::LockClass::Net);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static UNIX_FDS: eurolock::sync::Mutex<[Option<UnixSock>; MAX_UNIX_FD]> =
+    eurolock::sync::Mutex::new_site(&SITE_UNIX_FDS, eurolock::Mode::Plain, [const { None }; MAX_UNIX_FD]);
 static UNIX_PAIR_CTR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 // Server-side bind: the path an AF_UNIX fd is bound+listening on (chrome's
 // ProcessSingleton listens on SingletonSocket). Tracked alongside UNIX_FDS so the
@@ -2744,7 +2817,7 @@ pub fn unix_socketpair() -> Option<(u64, u64)> {
     unix_bind_listen(&path, 1).ok()?;
     let client = unix_connect(&path).ok()?;
     let server = unix_accept(&path)?;
-    UNIX_SWITCH.lock().unbind(&path);
+    UNIX_SWITCH.unbind(&path);
     let a = unix_alloc(UnixSock::Stream(client))?;
     let b = unix_alloc(UnixSock::Stream(server))?;
     Some((a, b))
@@ -2795,7 +2868,7 @@ pub fn unix_fd_send(fd: u64, data: &[u8]) -> u64 {
 pub fn unix_fd_available(fd: u64) -> usize {
     let t = UNIX_FDS.lock();
     match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
-        Some(UnixSock::Stream(e)) => UNIX_SWITCH.lock().available(*e),
+        Some(UnixSock::Stream(e)) => UNIX_SWITCH.available(*e),
         Some(UnixSock::X(x)) => crate::xserver::queued_len(*x),
         _ => 0,
     }
@@ -2841,7 +2914,7 @@ pub fn x_fd_queued(fd: u64) -> Option<usize> {
 pub fn unix_queued_report() -> alloc::vec::Vec<(u64, usize)> {
     let mut out = alloc::vec::Vec::new();
     let t = UNIX_FDS.lock();
-    let sw = UNIX_SWITCH.lock();
+    let sw = &UNIX_SWITCH;
     for (i, s) in t.iter().enumerate() {
         if let Some(UnixSock::Stream(e)) = s {
             let n = sw.available(*e);
@@ -2925,7 +2998,7 @@ pub fn af_unix_selftest() {
         core::str::from_utf8(&got_rsp).unwrap_or("?"),
         eof
     );
-    UNIX_SWITCH.lock().unbind(path);
+    UNIX_SWITCH.unbind(path);
 }
 
 /// Listen on `port`, accept ONE incoming TCP connection, read the request,
@@ -3467,7 +3540,10 @@ pub fn set_hosts(entries: alloc::vec::Vec<(String, Ipv4Addr)>) {
 // Results of DNS queries are cached (name -> (IP, expiry tick)), so that
 // repeated lookups come straight from memory instead of going onto the network
 // again — faster and less traffic. TTL ~300 s (30000 ticks at 100 Hz).
-static DNS_CACHE: Mutex<alloc::vec::Vec<(String, Ipv4Addr, u64)>> = Mutex::new(alloc::vec::Vec::new());
+static SITE_DNS_CACHE: eurolock::LockSite = eurolock::LockSite::new("net.DNS_CACHE", eurolock::LockClass::Net);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static DNS_CACHE: eurolock::sync::Mutex<alloc::vec::Vec<(String, Ipv4Addr, u64)>> =
+    eurolock::sync::Mutex::new_site(&SITE_DNS_CACHE, eurolock::Mode::Plain, alloc::vec::Vec::new());
 const DNS_TTL_TICKS: u64 = 30_000;
 static DNS_HITS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static DNS_MISSES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);

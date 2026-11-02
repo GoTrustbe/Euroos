@@ -7,3 +7,5 @@ authors.workspace = true
 description = "EuroNet — eigen TCP/IP-stack (Track 4). no_std + alloc, host-testbaar."
 
 [dependencies]
+# Instrumented locks for the per-connection AF_UNIX switchboard (J1).
+eurolock = { path = "../eurolock" }

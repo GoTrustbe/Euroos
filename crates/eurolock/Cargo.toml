@@ -7,3 +7,7 @@ license = "EUPL-1.2"
 
 [lib]
 doctest = false
+
+[dependencies]
+# no_std spinlocks underneath the instrumented Mutex/RwLock (sync.rs).
+spin = { version = "0.9", default-features = false, features = ["mutex", "spin_mutex", "rwlock", "once"] }
