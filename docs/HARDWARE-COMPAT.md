@@ -36,6 +36,17 @@ documents the tested envelope so operators can judge fitness for a deployment.*
 | Timers | HPET, APIC timer, RTC | scheduling, wall clock |
 | SMP | multi-core via ACPI/MADT | AP bring-up (`EK_SMP=N`) |
 
+## Verified on real hardware (through VFIO)
+
+These run on physical silicon, passed into a EuroOS VM with VFIO (QEMU/KVM with
+QEMU's VT-d in front of the device, so EuroOS programs its own IOMMU domain and
+the host's VT-d enforces it). EuroOS itself does not yet boot on these machines
+bare; the driver code is the same.
+
+| Device | Machine | What is verified | Not verified / limits |
+|---|---|---|---|
+| **Broadcom BCM5720** gigabit Ethernet (`14e4:165f`, NetXtreme 5720 A0), userspace driver `bcm5720d` (`net.driver=user`) | Dell PowerEdge R630 (onboard LOM, ports 3/4) | chip reset with the APE (NCSI) and bootcode handshake; MAC from the bootcode mailbox and from NVRAM; PHY id and link state; frames through the send ring and back through the return ring via PHY loopback, byte-identical; MSI-X; DMA confined to the driver's window (deliberate escape refused by the VT-d, memory unchanged); crash and restart (`[udrv-bcm-*]`) | no link on the test ports (no cable): link up, DHCP and HTTP unproven; the netstack is not routed to the driver yet; MAC-internal loopback does not work on this chip (PHY loopback does); no TSO/checksum offload/jumbo/RSS; EuroOS maps BARs only below 512 GiB (a VM needs `host-phys-bits-limit=39`) |
+
 ## Protocol core done, real silicon pending (`🔒`, Phase 3B)
 
 These have a host-tested/in-VM implementation but are **not** verified on
@@ -56,7 +67,7 @@ physical hardware. Do not rely on them for a metal deployment yet.
 - Legacy BIOS / MBR-only boot.
 - Non-x86-64 architectures.
 - GPUs beyond a linear framebuffer / virtio-gpu (no vendor 3D drivers).
-- Thunderbolt, discrete NICs other than virtio, RAID HBAs.
+- Thunderbolt, RAID HBAs; NICs other than virtio-net, Intel e1000/e1000e and the Broadcom BCM5720 (see above).
 
 ## Reporting a hardware result
 
@@ -77,4 +88,4 @@ that nothing is presented as working until it is shown to work.
 
 *Companion to [`CRA-CONFORMANCE.md`](CRA-CONFORMANCE.md) (secure-by-design
 evidence) and [`SUPPORT-POLICY.md`](../SUPPORT-POLICY.md) (support period &
-security updates). Last revised 2026-07-10 (Phase 3E).*
+security updates). Last revised 2026-11-02 (BCM5720 on real hardware).*
