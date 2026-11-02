@@ -15,10 +15,14 @@ fault in the stream, or serial-silence past a timeout) and a **CSV results log**
 (one row per command: id, command, status, elapsed_ms, output_lines).
 
 Usage:
-  python3 scripts/loadtest.py [--image eurokernel.img] [--scenario smoke|users|fs]
+  python3 scripts/loadtest.py [--image eurokernel.img] [--scenario smoke|users|fs|...]
                               [--users N] [--disks "64M,2G"] [--csv results.csv]
+  KVM / load scenarios (LOADTEST-R630, docs/LOADTEST-R630-2026-11.md):
+  python3 scripts/loadtest.py --kvm --smp 4 --mem 16G --workdir DIR \
+      --scenario procs|churn|fsio|net|soak [--disk-bus virtio|nvme|ahci]
+      [--nic e1000e --bootopts net.driver=user --iommu --host-http P --hostfwd P --hammer K]
 """
-import argparse, csv, os, re, socket, subprocess, sys, time
+import argparse, csv, json, os, re, socket, subprocess, sys, time
 
 OVMF = next((c for c in ("/usr/share/ovmf/OVMF.fd", "/usr/share/OVMF/OVMF.fd",
                          "/usr/share/edk2-ovmf/x64/OVMF.fd") if os.path.exists(c)), None)
@@ -113,15 +117,19 @@ class SerialConsole:
 
     def run(self, cmd, timeout=60):
         """Send a command, collect its `[scon] …` output up to the next [scon-ready].
-        Returns (status, elapsed_ms, output_lines)."""
+        Returns (status, elapsed_ms, output_lines); `self.raw` keeps the whole serial
+        text of the command (verdict lines printed outside the [scon] framing)."""
         self.buf = ""
+        self.raw = ""
         self.sock.sendall((cmd + "\n").encode())
         t0 = time.time()
         try:
             self.wait_for(READY, timeout)
             status = "ok"
         except CrashError as e:
+            self.raw = self.buf
             return ("CRASH:" + str(e)[:60], int((time.time() - t0) * 1000), [])
+        self.raw = self.buf
         elapsed = int((time.time() - t0) * 1000)
         lines = [l[len("[scon] "):] for l in self.buf.splitlines()
                  if l.startswith("[scon] ") and not l.startswith("[scon] $ ")]
@@ -131,16 +139,57 @@ class SerialConsole:
         return (status, elapsed, lines)
 
 
-def launch_qemu(image, disks, sock_path, serial_log):
-    args = ["qemu-system-x86_64", "-machine", "q35", "-m", "1024",
-            "-cpu", "qemu64,+smep,+smap", "-bios", OVMF,
-            "-drive", f"format=raw,file={image}",          # NOT -snapshot (persistent)
-            "-chardev", f"socket,id=ser0,path={sock_path},server=on,wait=off",
-            "-serial", "chardev:ser0", "-display", "none", "-no-reboot"]
+def launch_qemu(image, disks, sock_path, serial_log, a=None):
+    accel = ["-cpu", "qemu64,+smep,+smap"]
+    if a is not None and a.kvm:
+        accel = ["-enable-kvm", "-cpu", "host"]
+    mem = a.mem if a is not None else "1024"
+    args = ["qemu-system-x86_64", "-machine", "q35", "-m", str(mem)] + accel
+    if a is not None:
+        args += ["-smp", str(a.smp)]
+        if a.iommu:
+            # Must precede the PCI devices it translates.
+            args += ["-device", "intel-iommu,intremap=off"]
+    args += ["-bios", OVMF,
+             "-drive", f"format=raw,file={image}",          # NOT -snapshot (persistent)
+             "-chardev", f"socket,id=ser0,path={sock_path},server=on,wait=off",
+             "-serial", "chardev:ser0", "-display", "none", "-no-reboot"]
+    bus = a.disk_bus if a is not None else "virtio"
     for i, path in enumerate(disks):
-        args += ["-drive", f"format=raw,file={path},if=none,id=ld{i}",
-                 "-device", f"virtio-blk-pci,drive=ld{i},disable-modern=on"]
+        args += ["-drive", f"format=raw,file={path},if=none,id=ld{i}"]
+        if bus == "nvme":
+            args += ["-device", f"nvme,drive=ld{i},serial=lt{i}"]
+        elif bus == "ahci":
+            args += ["-device", f"ich9-ahci,id=ltahci{i}", "-device", f"ide-hd,drive=ld{i},bus=ltahci{i}.0"]
+        else:
+            args += ["-device", f"virtio-blk-pci,drive=ld{i},disable-modern=on"]
+    if a is not None and a.nic:
+        nd = "user,id=n0"
+        if a.host_http:
+            nd += f",guestfwd=tcp:10.0.2.100:80-tcp:127.0.0.1:{a.host_http}"
+        if a.hostfwd:
+            nd += f",hostfwd=tcp:127.0.0.1:{a.hostfwd}-:80"
+        args += ["-netdev", nd, "-device", f"{a.nic},netdev=n0"]
+    if a is not None and a.pin:
+        args = ["taskset", "-c", a.pin] + args
     return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+
+
+def prepare_image(a, ts):
+    """With --workdir: boot from a private copy of the image (parallel VMs never
+    share one), with the boot options (--bootopts, e.g. net.driver=user) on its ESP."""
+    if not a.workdir:
+        return a.image
+    os.makedirs(a.workdir, exist_ok=True)
+    img = os.path.join(a.workdir, "boot.img")
+    if not (a.keep_disks and os.path.exists(img)):
+        subprocess.run(["cp", "--sparse=always", a.image, img], check=True)
+        if a.bootopts:
+            conf = os.path.join(a.workdir, "euroos-boot.conf")
+            with open(conf, "w") as f:
+                f.write(a.bootopts.replace(";", "\n") + "\n")
+            subprocess.run(["mcopy", "-o", "-i", img, conf, "::/EFI/BOOT/euroos-boot.conf"], check=True)
+    return img
 
 
 # ── scenarios ──
@@ -291,6 +340,204 @@ SCENARIOS = {
 }
 
 
+# ── LOADTEST-R630 (2026-11): KVM, disk buses, NIC, host-side peers, soak ──
+# Scenario items may also be `C(...)` records: a command, an optional positive
+# assertion on its [scon] output, an optional regex that must match the RAW serial
+# stream of that command (for verdict lines the kernel prints outside the [scon]
+# framing, e.g. `[churn-proc] ... OK`), and a per-command timeout.
+class C:
+    def __init__(self, cmd, expect=None, raw=None, timeout=60, raw_bad=None):
+        self.cmd, self.expect, self.raw, self.timeout, self.raw_bad = cmd, expect, raw, timeout, raw_bad
+
+
+def scenario_procs(args):
+    # Many processes at once: waves of signed musl programs started together as
+    # preemptively scheduled background processes (own address space each), then
+    # reaped by the desktop loop. `ltstat` before/after every wave: the counters
+    # (frames, tasks, bg processes, kernel stacks) must come back.
+    cmds = [C("ltstat", "ltstat ")]
+    for w in range(args.waves):
+        cmds.append(C(f"spawn worker {args.procs}", "spawn: started", timeout=120))
+        cmds.append(C(f"spawn mpthread {max(1, args.procs // 4)}", "spawn: started", timeout=120))
+        cmds.append(C("sleepwait 15", None))   # host-side pause: let them run + exit
+        # Every process of the wave must have run, exited and been reaped
+        # (BUG-014/015: a process that never got a scheduler slot stays "live").
+        cmds.append(C("ltstat", "bg_live=0 "))
+    cmds += [C("ps", None), C("free", None), C("lockstat", None), C("eurohealth", "/100")]
+    return cmds
+
+
+def scenario_churn(args):
+    s = args.churn_scale
+    return [
+        C("ltstat", "ltstat "),
+        C(f"churn proc {16 * s}", "done", raw=r"\[churn-proc\] .*OK", timeout=60 * s),
+        C(f"churn thread {s}", "done", raw=r"\[churn-thread\] .*OK", timeout=60 * s, raw_bad=r"\[churn-thread\] .*FAILED"),
+        C(f"churn fork {max(1, s // 2)}", "done", raw=r"\[churn-fork\] .*OK", timeout=120 * s, raw_bad=r"\[churn-fork\] .*FAILED"),
+        C(f"churn fs {s}", "done", raw=r"\[churn-fs\] .*OK", timeout=60 * s, raw_bad=r"\[churn-fs\] .*FAILED"),
+        C(f"churn net {s}", "done", raw=r"\[churn-net\] .*OK", timeout=60 * s, raw_bad=r"\[churn-net\] .*FAILED"),
+        C("ltstat", "ltstat "), C("lockstat", None), C("eurohealth", "/100"),
+    ]
+
+
+def scenario_fsio(args):
+    # File I/O on the PERSISTENT root disk (virtio / NVMe / AHCI, chosen with
+    # --disk-bus). Large files via truncate (zero-filled, really allocated), copies,
+    # hashes, many small files, then a scrub. Run `persist-check-io` after a reboot
+    # on the same disk (--keep-disks).
+    b = "/lt-io"
+    cmds = [C("df", "EuroFS"), C(f"mkdir {b}", "created"), C(f"fsdebug /", "blocks=")]
+    for mib in args.io_sizes:
+        sz = mib << 20
+        cmds += [C(f"truncate -s {sz} {b}/z{mib}", "bytes", timeout=600),
+                 C(f"stat {b}/z{mib}", f"Size: {sz}"),
+                 C(f"cp {b}/z{mib} {b}/c{mib}", f"c{mib}", timeout=900),
+                 C(f"sha256sum {b}/c{mib}", f"{b}/c{mib}", timeout=900)]
+    cmds += [C(f"mkdir {b}/small", "created")]
+    for i in range(args.files):
+        cmds.append(C(f"write {b}/small/f{i:05d} payload-{i}", "written"))
+    cmds += [C(f"ls {b}/small", f"f{args.files - 1:05d}", timeout=120),
+             C(f"cat {b}/small/f00000", "payload-0"),
+             C("write /lt-io/marker SURVIVED-REBOOT-IO", "written"),
+             C("df", "EuroFS"), C("scrub", "HEALTHY", timeout=900), C("ltstat", "ltstat ")]
+    return cmds
+
+
+def scenario_persist_check_io(args):
+    cmds = [C("cat /lt-io/marker", "SURVIVED-REBOOT-IO"), C("cat /lt-io/small/f00000", "payload-0")]
+    for mib in args.io_sizes:
+        cmds.append(C(f"stat /lt-io/c{mib}", f"Size: {mib << 20}"))
+    cmds += [C("scrub", "HEALTHY", timeout=900)]
+    return cmds
+
+
+def scenario_net(args):
+    # Outbound: many sequential HTTP connections from the guest to a host server
+    # (SLIRP guestfwd 10.0.2.100:80 -> 127.0.0.1:<--host-http>), and downloads of
+    # the body (wget keeps at most 256 KiB per response). Inbound: the guest's
+    # background httpd on :80, hammered from the host via hostfwd (--hammer).
+    cmds = [C("net", None), C("httpd on", "listening")]
+    for i in range(args.conns):
+        cmds.append(C("fetch 10.0.2.100", "200 OK", timeout=60))
+    for i in range(args.downloads):
+        cmds.append(C(f"wget 10.0.2.100 /dl{i % 4}.bin", f"saved: {args.http_size} bytes", timeout=120))
+    cmds += [C("sleepwait 30", None), C("httpd status", "served"), C("netstat", None),
+             C("ltstat", "ltstat "), C("lockstat", None), C("eurohealth", "/100")]
+    return cmds
+
+
+def scenario_soak(args):
+    # Mixed load until --duration seconds have passed. Every round: a process wave,
+    # FS write/read/remove, outbound HTTP, a churn round, then ltstat; lockstat every
+    # 10th round. Host-side: the hammer keeps inbound connections going throughout.
+    t_end = time.time() + args.duration
+    r = 0
+    yield C("httpd on", "listening")
+    yield C("mkdir /soak", "created")
+    while time.time() < t_end:
+        yield C(f"spawn worker {args.procs}", "spawn: started", timeout=120)
+        yield C(f"write /soak/f{r % 50} round-{r}", "written")
+        yield C(f"cat /soak/f{r % 50}", f"round-{r}")
+        yield C(f"truncate -s {8 << 20} /soak/big{r % 4}", "bytes", timeout=300)
+        yield C(f"sha256sum /soak/big{r % 4}", "/soak/big", timeout=300)
+        yield C(f"rm /soak/big{(r + 2) % 4}", None)
+        yield C("fetch 10.0.2.100", "200 OK", timeout=60)
+        if r % 3 == 0:
+            yield C("churn proc 4", "done", raw=r"\[churn-proc\] .*OK", timeout=300)
+        if r % 3 == 1:
+            yield C("churn fs 1", "done", raw=r"\[churn-fs\] .*OK", timeout=300)
+        if r % 3 == 2:
+            yield C("churn net 1", "done", raw=r"\[churn-net\] .*OK", timeout=300)
+        yield C("ltstat", "ltstat ")
+        if r % 10 == 0:
+            yield C("lockstat", None, timeout=120)
+            yield C("free", None)
+        r += 1
+    yield C("httpd status", "served")
+    yield C("scrub", "HEALTHY", timeout=900)
+    yield C("lockstat", None, timeout=120)
+    yield C("ltstat", "ltstat ")
+
+
+SCENARIOS.update({"procs": scenario_procs, "churn": scenario_churn, "fsio": scenario_fsio,
+                  "persist-check-io": scenario_persist_check_io, "net": scenario_net, "soak": scenario_soak})
+
+
+# ── host-side peers ──
+class HostHttp:
+    """Plain HTTP server on 127.0.0.1:<port> for the guest (via SLIRP guestfwd)."""
+    def __init__(self, port, size):
+        import http.server, threading
+        body = bytes((i * 31) & 0xFF for i in range(size))
+        self.hits = 0
+        outer = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+            def do_GET(self):
+                outer.hits += 1
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *a):
+                pass
+        self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), H)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.srv.shutdown()
+
+
+class Hammer:
+    """K concurrent clients opening fresh TCP connections to the guest httpd
+    (hostfwd 127.0.0.1:<port> -> guest :80); counts successes, errors, latency."""
+    def __init__(self, port, workers):
+        import threading
+        self.port, self.stop_ev = port, threading.Event()
+        self.ok = self.err = 0
+        self.lat = []
+        self.lock = threading.Lock()
+        self.threads = [threading.Thread(target=self.loop, daemon=True) for _ in range(workers)]
+        for t in self.threads:
+            t.start()
+
+    def loop(self):
+        while not self.stop_ev.is_set():
+            t0 = time.time()
+            try:
+                c = socket.create_connection(("127.0.0.1", self.port), timeout=10)
+                c.sendall(b"GET / HTTP/1.0\r\nHost: euroos\r\n\r\n")
+                c.settimeout(10)
+                got = b""
+                while True:
+                    d = c.recv(4096)
+                    if not d:
+                        break
+                    got += d
+                c.close()
+                good = got.startswith(b"HTTP/1.1 200") and b"EuroOS" in got
+            except OSError:
+                good = False
+            with self.lock:
+                if good:
+                    self.ok += 1
+                    self.lat.append(time.time() - t0)
+                else:
+                    self.err += 1
+            if not good:
+                time.sleep(0.5)
+
+    def stop(self):
+        self.stop_ev.set()
+        for t in self.threads:
+            t.join(timeout=15)
+        lat = sorted(self.lat)
+        pick = lambda q: round(lat[min(len(lat) - 1, int(q * len(lat)))] * 1000, 1) if lat else None
+        return {"ok": self.ok, "err": self.err, "p50_ms": pick(0.5), "p99_ms": pick(0.99)}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="eurokernel.img")
@@ -298,22 +545,51 @@ def main():
     ap.add_argument("--users", type=int, default=50)
     ap.add_argument("--fsbase", default="/mnt", help="fsstress target mountpoint")
     ap.add_argument("--depth", type=int, default=64, help="fsstress directory depth")
-    ap.add_argument("--files", type=int, default=120, help="fsstress files-per-dir count")
+    ap.add_argument("--files", type=int, default=120, help="fsstress/fsio files-per-dir count")
     ap.add_argument("--disks", default="", help='comma sizes, e.g. "64M,2G"')
     ap.add_argument("--csv", default="loadtest-results.csv")
     ap.add_argument("--keep-disks", action="store_true",
                     help="reuse existing disk files (don't re-zero) — for reboot/persistence tests")
     ap.add_argument("--boot-timeout", type=int, default=400)
+    # LOADTEST-R630 additions
+    ap.add_argument("--kvm", action="store_true", help="-enable-kvm -cpu host (default: TCG qemu64)")
+    ap.add_argument("--smp", type=int, default=1)
+    ap.add_argument("--mem", default="1024", help="guest RAM, QEMU syntax (e.g. 16G)")
+    ap.add_argument("--pin", default="", help="taskset CPU list for the whole QEMU process")
+    ap.add_argument("--disk-bus", choices=["virtio", "nvme", "ahci"], default="virtio")
+    ap.add_argument("--workdir", default="", help="private dir: image copy, disks, logs")
+    ap.add_argument("--bootopts", default="", help='ESP boot options, e.g. "net.driver=user"')
+    ap.add_argument("--iommu", action="store_true", help="-device intel-iommu,intremap=off")
+    ap.add_argument("--nic", default="", help="NIC model, e.g. e1000e (SLIRP user network)")
+    ap.add_argument("--host-http", type=int, default=0, help="host HTTP server port (guest: 10.0.2.100)")
+    ap.add_argument("--http-size", type=int, default=200 * 1024)
+    ap.add_argument("--hostfwd", type=int, default=0, help="host port forwarded to guest :80")
+    ap.add_argument("--hammer", type=int, default=0, help="concurrent host clients on --hostfwd")
+    ap.add_argument("--procs", type=int, default=64, help="processes per spawn wave")
+    ap.add_argument("--waves", type=int, default=5)
+    ap.add_argument("--churn-scale", type=int, default=4)
+    ap.add_argument("--io-sizes", default="16,64,256", help="fsio file sizes in MiB")
+    ap.add_argument("--conns", type=int, default=200, help="net: sequential outbound connections")
+    ap.add_argument("--downloads", type=int, default=50)
+    ap.add_argument("--duration", type=int, default=4 * 3600, help="soak seconds")
+    ap.add_argument("--stop-on-err", action="store_true")
     a = ap.parse_args()
+    a.io_sizes = [int(x) for x in a.io_sizes.split(",") if x.strip()]
 
     ts = time.strftime("%Y%m%d-%H%M%S")
-    serial_log = f"loadtest-serial-{ts}.log"
-    sock_path = f"/tmp/euroos-scon-{ts}.sock"
+    wd = a.workdir or "."
+    if a.workdir:
+        os.makedirs(a.workdir, exist_ok=True)
+        if not os.path.isabs(a.csv):
+            a.csv = os.path.join(a.workdir, a.csv)
+    serial_log = os.path.join(wd, f"loadtest-serial-{ts}.log")
+    sock_path = f"/tmp/euroos-scon-{ts}-{os.getpid()}.sock"
+    image = prepare_image(a, ts)
 
     # Persistent scratch disks (NOT -snapshot — writes must survive).
     disks = []
     for j, spec in enumerate([s for s in a.disks.split(",") if s.strip()]):
-        p = f"/tmp/loadtest-disk{j}-{spec}.raw"
+        p = os.path.join(a.workdir, f"disk{j}-{spec}.raw") if a.workdir else f"/tmp/loadtest-disk{j}-{spec}.raw"
         if a.keep_disks and os.path.exists(p):
             print(f"[loadtest] reusing existing disk {p} (--keep-disks)")
         else:
@@ -321,28 +597,45 @@ def main():
                 f.truncate(parse_size(spec))
         disks.append(p)
 
-    print(f"[loadtest] scenario={a.scenario} image={a.image} disks={disks}")
+    print(f"[loadtest] scenario={a.scenario} image={image} disks={disks} bus={a.disk_bus} "
+          f"kvm={a.kvm} smp={a.smp} mem={a.mem} nic={a.nic or '-'} bootopts={a.bootopts or '-'} iommu={a.iommu}")
     print(f"[loadtest] serial log: {serial_log}  ·  CSV: {a.csv}")
-    qemu = launch_qemu(a.image, disks, sock_path, serial_log)
+    host_http = HostHttp(a.host_http, a.http_size) if a.host_http else None
+    qemu = launch_qemu(image, disks, sock_path, serial_log, a)
     con = SerialConsole(sock_path, serial_log)
     rc = 0
+    hammer = None
+    t_boot = time.time()
+    samples_path = a.csv[:-4] + "-ltstat.csv" if a.csv.endswith(".csv") else a.csv + "-ltstat.csv"
     try:
         if not con.connect():
             print("[loadtest] FAILED: could not connect to serial socket"); return 2
         print("[loadtest] waiting for serial console …")
         con.boot(a.boot_timeout)
-        print("[loadtest] serial console up — driving commands")
+        print(f"[loadtest] serial console up after {time.time() - t_boot:.0f}s — driving commands", flush=True)
+        if a.hammer and a.hostfwd:
+            hammer = Hammer(a.hostfwd, a.hammer)
 
         cmds = SCENARIOS[a.scenario](a)
-        with open(a.csv, "w", newline="") as cf:
+        total = len(cmds) if isinstance(cmds, list) else "?"
+        quiet = not isinstance(cmds, list)   # the soak: print errors + every 25th row
+        t_start = time.time()
+        with open(a.csv, "w", newline="") as cf, open(samples_path, "w", newline="") as sf:
             w = csv.writer(cf)
-            w.writerow(["id", "command", "status", "elapsed_ms", "output_lines"])
+            w.writerow(["id", "command", "status", "elapsed_ms", "output_lines", "t_s"])
+            sw = None
             crashed = False
             errors = 0
             for i, item in enumerate(cmds, 1):
-                cmd, expect = item if isinstance(item, tuple) else (item, None)
+                if not isinstance(item, C):
+                    cmd, expect = item if isinstance(item, tuple) else (item, None)
+                    item = C(cmd, expect)
+                cmd, expect = item.cmd, item.expect
+                if cmd.startswith("sleepwait "):         # host-side pause, not a guest command
+                    time.sleep(int(cmd.split()[1]))
+                    continue
                 try:
-                    status, ms, lines = con.run(cmd)
+                    status, ms, lines = con.run(cmd, timeout=item.timeout)
                 except CrashError as e:
                     status, ms, lines = "CRASH:" + str(e)[:60], 0, []
                 # Positive baseline assertion: required output must be present.
@@ -351,12 +644,30 @@ def main():
                         and not any(expect in l for l in lines):
                     status = "err"
                     note = f"  (missing expected: {expect!r})"
-                w.writerow([i, cmd, status, ms, len(lines)])
+                if status == "ok" and item.raw and not re.search(item.raw, con.raw):
+                    status = "err"
+                    note = f"  (missing verdict /{item.raw}/)"
+                if status == "ok" and item.raw_bad and re.search(item.raw_bad, con.raw):
+                    status = "err"
+                    note = f"  (verdict /{item.raw_bad}/)"
+                tnow = round(time.time() - t_start, 1)
+                w.writerow([i, cmd, status, ms, len(lines), tnow])
                 cf.flush()
+                for l in lines:
+                    if l.startswith("ltstat "):
+                        kv = dict(x.split("=", 1) for x in l.split()[1:] if "=" in x)
+                        if sw is None:
+                            sw = csv.DictWriter(sf, fieldnames=["t_s", "cmd_id"] + list(kv))
+                            sw.writeheader()
+                        sw.writerow({"t_s": tnow, "cmd_id": i, **kv})
+                        sf.flush()
                 tag = "✓" if status == "ok" else "✗"
-                print(f"  [{i:>3}/{len(cmds)}] {tag} {status:<8} {ms:>6}ms  {cmd}{note}")
+                if status != "ok" or not quiet or i % 25 == 0:
+                    print(f"  [{i:>5}/{total}] {tag} {status:<8} {ms:>7}ms t={tnow:>7}s  {cmd}{note}", flush=True)
                 if status == "err":
                     errors += 1
+                    if a.stop_on_err:
+                        break
                 if status.startswith("CRASH"):
                     crashed = True
                     print(f"  !! CRASH after {cmd!r} — see {serial_log}")
@@ -368,14 +679,21 @@ def main():
             verdict = f"{errors} command(s) FAILED (returned but did not succeed)"
         else:
             verdict = "completed clean"
-        print(f"[loadtest] {verdict} · results → {a.csv}")
+        print(f"[loadtest] {verdict} · results → {a.csv} · ltstat samples → {samples_path}")
     finally:
+        if hammer:
+            print(f"[loadtest] hammer (inbound httpd, {a.hammer} clients): {json.dumps(hammer.stop())}")
+        if host_http:
+            print(f"[loadtest] host HTTP server served {host_http.hits} request(s)")
+            host_http.stop()
         try:
             qemu.terminate(); qemu.wait(timeout=10)
         except Exception:
             qemu.kill()
-        for d in disks:
-            pass  # leave persistent disks in place for reuse / post-mortem
+        try:
+            os.unlink(sock_path)
+        except OSError:
+            pass
     return rc
 
 

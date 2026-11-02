@@ -174,6 +174,7 @@ mod nfsmount;
 mod disktest;
 mod stresstest;
 mod scon;
+mod ltstat;
 mod media;
 mod xhci;
 

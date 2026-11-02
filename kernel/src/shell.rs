@@ -720,6 +720,11 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "umount" | "unmount" => crate::fatmount::umount_cmd(fs, arg1),
         "format" | "mkfs" => crate::fatmount::format_cmd(arg1, arg2),
         "mem" => mem_report(ctx.mem),
+        // LOADTEST-R630: hooks for the serial load-test harness (kernel/src/ltstat.rs).
+        "ltstat" => alloc::vec![crate::ltstat::stat_line(ctx.mem)],
+        "spawn" => crate::ltstat::spawn(fs, ctx.mem, arg1, arg2),
+        "churn" => crate::ltstat::churn(fs, ctx.mem, arg1, arg2),
+        "httpd" => crate::ltstat::httpd(arg1),
         "ls" => {
             let path = if arg1.is_empty() { "/" } else { arg1 };
             match fs.list_dir(path) {

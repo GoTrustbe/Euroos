@@ -17,7 +17,12 @@ fn heap_used() -> usize {
 /// thread kernel stacks, the file table). One warm-up run absorbs one-time
 /// allocations; then N runs must return every counter to its baseline.
 pub fn proc_churn(alloc: &mut FrameAllocator) {
-    const N: usize = 16;
+    proc_churn_n(alloc, 16)
+}
+
+/// [`proc_churn`] with `n` runs (the `churn proc <n>` load-test hook).
+pub fn proc_churn_n(alloc: &mut FrameAllocator, n: usize) {
+    let n = n.max(1);
     let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
     let run = |a: &mut FrameAllocator| {
         crate::ring3::run_glibc(a, crate::ring3::gtiny_bytes(), crate::ring3::ldlinux_bytes(),
@@ -28,9 +33,9 @@ pub fn proc_churn(alloc: &mut FrameAllocator) {
     let (f0, p0, t0, k0, fi0, h0) = (alloc.free_frames(), crate::procpool::free_frames(), crate::sched::task_count(),
         crate::ring3::thread_kstacks_used(), crate::ring3::files_count(), heap_used());
     let mut clean = 0usize;
-    for i in 0..N {
+    for i in 0..n {
         if run(alloc) == 42 { clean += 1; } // gtiny exits 42 by design
-        if i < 4 || i == N - 1 {
+        if i < 4 || i == n - 1 {
             crate::serial_println!("[churn-proc]   after run {}: free frames {}", i + 1, alloc.free_frames());
         }
     }
@@ -43,9 +48,9 @@ pub fn proc_churn(alloc: &mut FrameAllocator) {
     let kst_ok = k1 == k0;
     let files_ok = fi1 == fi0;
     let heap_ok = h1 <= h0 + 64 * 1024;
-    let ok = clean == N && frames_ok && pool_ok && tasks_ok && kst_ok && files_ok && heap_ok;
+    let ok = clean == n && frames_ok && pool_ok && tasks_ok && kst_ok && files_ok && heap_ok;
     crate::serial_println!(
-        "[churn-proc] {N} glibc processes (gtiny) run + reaped: clean-exits={clean}/{N} · frames {f0}→{f1} (leak-free={frames_ok}) · demand-pool {p0}→{p1} ({pool_ok}) · tasks {t0}→{t1} ({tasks_ok}) · thread-kstacks {k0}→{k1} ({kst_ok}) · file-table {fi0}→{fi1} ({files_ok}) · heap-used {h0}→{h1} ({heap_ok}) → {}",
+        "[churn-proc] {n} glibc processes (gtiny) run + reaped: clean-exits={clean}/{n} · frames {f0}→{f1} (leak-free={frames_ok}) · demand-pool {p0}→{p1} ({pool_ok}) · tasks {t0}→{t1} ({tasks_ok}) · thread-kstacks {k0}→{k1} ({kst_ok}) · file-table {fi0}→{fi1} ({files_ok}) · heap-used {h0}→{h1} ({heap_ok}) → {}",
         if ok { "OK ✓ (every process returns what it took)" } else { "FAILED" }
     );
 }

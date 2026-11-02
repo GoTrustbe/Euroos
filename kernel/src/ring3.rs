@@ -4145,6 +4145,15 @@ pub fn is_pid_alive(pid: u64) -> bool {
     })
 }
 
+/// Background processes (live, zombie-not-yet-reaped), for `ltstat`.
+pub fn bg_counts() -> (usize, usize) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let bg = BG.lock();
+        let z = bg.iter().filter(|p| p.zombie).count();
+        (bg.len() - z, z)
+    })
+}
+
 /// The most recent output line of each background musl process (for display).
 pub fn bg_lines() -> alloc::vec::Vec<String> {
     // BUG-007 hardening: irqsave BG hold (non-preemptible).
@@ -5736,7 +5745,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
 
 /// Load `program` (musl, Linux ABI) as a PREEMPTIVELY scheduled process with
 /// its own PCB (heap/output/pid/TLS). The program runs indefinitely.
-pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv0: &[u8]) {
+pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv0: &[u8]) -> bool {
     init_syscall_msrs();
     const MIB2: u64 = 1 << 21;
     // One 2 MiB-aligned user arena: ALL user frames of this process (code,
@@ -5786,6 +5795,7 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
         });
     });
     crate::serial_println!("[euro] bg-musl (pid {pid}) -> task {idx}, own address space PML4 {pml4:#x}, arena {arena:#x}");
+    true
 }
 
 /// Like [`spawn_bg_musl`] but with a LARGE arena (`arena_mib`, e.g. 32 MiB) for a
