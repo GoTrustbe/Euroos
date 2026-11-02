@@ -237,6 +237,12 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
             }
         }
         udrv::set_grant(SLOT_BLK, Some(SysGrant { task, pid, pml4, arena, arena_bytes, info, name: "nvmed" }));
+        // Interrupt routing and bus mastering before nvmed can run: its first
+        // admin command is a DMA (the IOMMU domain is in place).
+        if sup.msix {
+            crate::msix::enable(&dev, 0, crate::interrupts::UDRV_BLK_MSIX_VECTOR, crate::apic::lapic_id() as u8);
+        }
+        udrv::bus_master(&dev, true);
         Ok(task)
     });
     if let Err(e) = spawned {
@@ -246,10 +252,6 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
         free_dma(falloc, dma_base);
         return Err(e);
     }
-    if sup.msix {
-        crate::msix::enable(&dev, 0, crate::interrupts::UDRV_BLK_MSIX_VECTOR, crate::apic::lapic_id() as u8);
-    }
-    udrv::bus_master(&dev, true);
     sup.starts += 1;
     sup.inst = Some(Instance { pid, grant, iommu });
     sup.restart_at = None;
@@ -540,6 +542,8 @@ pub fn boot(falloc: &mut FrameAllocator, vfs: &mut crate::kvfs::KernelVfs) {
         crate::serial_println!("[udrv-blk] nvmed pid {pid} did not report the disk within 10 s → FAILED");
         return;
     }
+    // A restart may already have replaced the first instance.
+    let pid = DRIVER_PID.load(Ordering::Relaxed);
     let (sectors, ss) = (SECTORS.load(Ordering::Relaxed), SECTOR_SIZE.load(Ordering::Relaxed));
     crate::serial_println!(
         "[udrv-blk] nvmed (pid {pid}, ring 3, profile driver) brought the NVMe {:04x}:{:04x} up: {sectors} sectors x {ss} B = {} MiB, reported over EuroIPC → OK ✓",
@@ -550,7 +554,7 @@ pub fn boot(falloc: &mut FrameAllocator, vfs: &mut crate::kvfs::KernelVfs) {
     if cfg!(feature = "selftest") {
         selftest_dma(falloc);
     }
-    let fs = selftest_fs_and_crash(falloc, pid);
+    let fs = selftest_fs_and_crash(falloc);
     if let Some(fs) = fs {
         vfs.mount("/data", alloc::boxed::Box::new(fs));
         use eurofs::FileSystem;
@@ -687,7 +691,7 @@ fn disk_is_blank() -> bool {
 /// clean, keep the file committed before the crash byte for byte, and hold
 /// the file being written either whole or not at all. Returns the mounted
 /// filesystem for /data.
-fn selftest_fs_and_crash(falloc: &mut FrameAllocator, pid: u64) -> Option<eurofs::EuroFs<UserBlk>> {
+fn selftest_fs_and_crash(falloc: &mut FrameAllocator) -> Option<eurofs::EuroFs<UserBlk>> {
     use eurofs::FileSystem;
     let now = crate::rtc::epoch();
     let dev = UserBlk::new()?;
@@ -726,6 +730,7 @@ fn selftest_fs_and_crash(falloc: &mut FrameAllocator, pid: u64) -> Option<eurofs
     }
     // The crash: nvmed faults right after its 24th next write, before it
     // reports it, in the middle of a 256 KiB file.
+    let pid = DRIVER_PID.load(Ordering::Relaxed);
     let hellos = HELLOS.load(Ordering::Relaxed);
     let mut b = [0u8; 8];
     let n = proto::encode(&Msg::CrashAfterWrites { n: 24 }, &mut b).unwrap_or(0);

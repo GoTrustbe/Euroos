@@ -464,6 +464,12 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
             }
         }
         SYS.lock()[SLOT_NIC] = Some(SysGrant { task, pid, pml4, arena, arena_bytes, info, name: "e1000d" });
+        // Interrupt routing and bus mastering before the driver can run: its
+        // first DMA must find the device enabled (the IOMMU domain is in place).
+        if sup.msix {
+            crate::msix::enable(&dev, 0, crate::interrupts::UDRV_MSIX_VECTOR, crate::apic::lapic_id() as u8);
+        }
+        bus_master(&dev, true);
         Ok(task)
     });
     let task = match spawned {
@@ -476,10 +482,6 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
             return Err(e);
         }
     };
-    if sup.msix {
-        crate::msix::enable(&dev, 0, crate::interrupts::UDRV_MSIX_VECTOR, crate::apic::lapic_id() as u8);
-    }
-    bus_master(&dev, true);
     sup.starts += 1;
     sup.inst = Some(Instance { pid, task, grant, iommu });
     sup.restart_at = None;
