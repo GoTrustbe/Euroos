@@ -72,6 +72,10 @@ echo "==> e1000d.elf (userspace e1000 driver, Rust)..."
 (cd e1000d && cargo build --release -q)
 cp e1000d/target/x86_64-unknown-none/release/e1000d e1000d.elf
 echo "==> e1000d.elf: $(stat -c%s e1000d.elf) bytes (static PIE, driver profile)"
+echo "==> bcm5720d.elf (userspace Broadcom BCM5720 driver, Rust; logic in crates/eurobcm5720)..."
+(cd bcm5720d && cargo build --release -q)
+cp bcm5720d/target/x86_64-unknown-none/release/bcm5720d bcm5720d.elf
+echo "==> bcm5720d.elf: $(stat -c%s bcm5720d.elf) bytes (static PIE, driver profile)"
 
 # EuroToolchain security: sign every userland binary with the EuroOS Ed25519
 # developer key. The kernel verifies these signatures before running (verify-

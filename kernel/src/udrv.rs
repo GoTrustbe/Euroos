@@ -169,7 +169,8 @@ pub fn syscall(task: usize, num: u64, a1: u64, a2: u64, a3: u64) -> Option<u64> 
     if !(abi::is_driver_call(num) || matches!(num, 0x6107 | 0x6108 | 0x6109)) {
         return None;
     }
-    let Some(g) = sys_grant(task) else { return err(abi::EPERM) };
+    // A driver task without an e1000d grant may hold another driver's grant.
+    let Some(g) = sys_grant(task) else { return crate::udrv_bcm5720::syscall(task, num, a1, a2, a3) };
     match num {
         abi::SYS_DRV_INFO => {
             let mut b = [0u8; abi::INFO_WORDS * 8];
