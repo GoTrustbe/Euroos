@@ -1,5 +1,4 @@
 ld0.raw: self-test mark in sector 0: True
 ld0.raw: 1 MiB at LBA 4096 equals the pattern the driver wrote: True
-ld1.raw: /mr/hello.txt text of generation 1 present on the disk: False
-ld1.raw: /mr/hello.txt text of generation 2 present on the disk: True
+ld1.raw: /mr/hello.txt text of generation 2 (the last boot) present on the disk: True
 ld1.raw: EuroFS superblock magic present: True
