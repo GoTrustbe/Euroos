@@ -199,6 +199,30 @@ pub fn init() {
     );
 }
 
+/// How many tracked EuroLock locks (`Irq` and `Task` mode) the code running
+/// right now holds, per its context's order tracker. 0 before the hooks are
+/// installed. `Plain` locks are not tracked. Used by net.rs: a network wait
+/// only gives the CPU away when this is 0.
+pub fn held_here() -> usize {
+    if !INSTALLED.load(Ordering::Acquire) {
+        return 0;
+    }
+    let if_on = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::disable();
+    // SAFETY: see `Trackers`: own slot, interrupts off.
+    let d = unsafe { (*TRACKERS.0.get())[ctx()].depth() };
+    if if_on {
+        x86_64::instructions::interrupts::enable();
+    }
+    d
+}
+
+/// Is the code running right now on the bootstrap processor (where the
+/// scheduler and every ring-3 task run)? True before the hooks are installed.
+pub fn on_bsp() -> bool {
+    !INSTALLED.load(Ordering::Acquire) || cpu() == BSP_ID.load(Ordering::Relaxed)
+}
+
 // ── Legacy-lock measurement sites ────────────────────────────────────────────
 // The global locks that existed before J1, instrumented in `Mode::Plain`
 // (statistics only, behaviour unchanged) so the inventory is measured.

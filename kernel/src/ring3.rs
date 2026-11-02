@@ -4033,6 +4033,12 @@ struct BgProc {
     /// Do this process's frames come from the PROCESS POOL (fork/exec) instead of the
     /// main allocator? Determines where the reaper returns them.
     pooled: bool,
+    /// The program name (argv[0]): the app identity EuroGuard sees for this
+    /// process's connections and DNS queries.
+    name: String,
+    /// Mirror every output line to the serial log and keep up to 64 of them
+    /// (boot self-tests that read a scheduled program's whole output).
+    echo: bool,
 }
 
 /// Exit statuses of terminated children, kept separate from frame reaping, so that
@@ -4118,6 +4124,8 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
             }
             crate::paging::free_address_space(falloc, p.pml4);
         }
+        // Sockets the process still held: closed now (FIN for a live TCP peer).
+        bg_net_release(p.pid);
         let kib = (p.arena_frames + 4 + 4) as usize * 4; // arena + kstack(4) + table frames(~4)
         // Show the last output (e.g. the result of a job) if there is
         // one, otherwise the termination reason (e.g. the isolation violation).
@@ -4987,6 +4995,7 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
         let p = &bg[pos];
         (p.pid, p.arena_raw, p.arena_virt, p.heap_break, p.heap_end, p.pml4)
     };
+    let (parent_name, parent_echo) = (bg[pos].name.clone(), bg[pos].echo);
     let parent_arena = (parent_arena_raw + (MIB2 - 1)) & !(MIB2 - 1);
 
     // Frames from the process pool: 4 MiB arena + 4 frames kstack + 3 table frames.
@@ -5054,6 +5063,8 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
         thread_ctids: alloc::vec::Vec::new(),
         ppid: parent_pid,
         pooled: true,
+        name: parent_name,
+        echo: parent_echo,
     });
     crate::kinfo!("[fork] pid {parent_pid} -> child pid {child_pid} (task {task}, copy-arena {child_arena:#x}, pml4 {pml4:#x})");
     child_pid // the PARENT gets the child pid; the child got rax=0 via spawn_thread
@@ -5231,10 +5242,14 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
                     if p.pid != 0 && p.pid == crate::appgfx::app_pid() {
                         crate::serial_println!("[app-out] {}", line.trim_end());
                     }
+                    if p.echo {
+                        crate::serial_println!("[bg-out] pid {} {}: {}", p.pid, p.name, line.trim_end());
+                    }
                     p.output.push(String::from(line.trim_end()));
+                    let keep = if p.echo { 64 } else { 6 };
                     let len = p.output.len();
-                    if len > 6 {
-                        p.output.drain(0..len - 6);
+                    if len > keep {
+                        p.output.drain(0..len - keep);
                     }
                 }
             }
@@ -5730,8 +5745,456 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             crate::sched::mark_current_dead();
             0
         }
-        _ => 0,
+        _ => bg_unknown(p, num),
     }
+}
+
+/// Background-path syscalls answered with -ENOSYS (counted over the boot).
+pub static BG_ENOSYS: AtomicU64 = AtomicU64::new(0);
+
+/// A syscall number the background path does not implement: -ENOSYS, as Linux
+/// answers a call it does not know. It used to be a silent 0 ("success"), which
+/// hid missing calls: socket() "worked" and nothing was ever sent. The first
+/// occurrence of each number is logged with the program that made it, so a
+/// program that relied on the silent 0 shows up in the boot log.
+fn bg_unknown(p: &BgProc, num: u64) -> u64 {
+    static SEEN: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+    BG_ENOSYS.fetch_add(1, Ordering::Relaxed);
+    let first = if num < 512 {
+        let bit = 1u64 << (num % 64);
+        SEEN[(num / 64) as usize].fetch_or(bit, Ordering::Relaxed) & bit == 0
+    } else {
+        false
+    };
+    if first {
+        crate::serial_println!(
+            "[bg-enosys] pid {} ({}): syscall {num} is not implemented on the background path -> -ENOSYS",
+            p.pid, p.name
+        );
+    }
+    (-38i64) as u64
+}
+
+// ── Socket syscalls for scheduled musl processes ─────────────────────────────
+//
+// bg_dispatch runs the whole syscall under the global BG lock with IF=0, so a
+// socket call there could never wait for the network (and before this it did
+// not exist: unknown numbers returned 0). These calls are routed here BEFORE
+// the BG lock is taken for them: the caller's identity and address-space layout
+// are copied out under the lock, the lock is dropped, and the call runs on the
+// shared EuroNet socket layer. A blocking call gives the CPU away (net.rs
+// RxWait) instead of spinning, so the userspace NIC driver can run.
+//
+// Capabilities, EuroGuard-style: socket() needs CAP_NET in the process's OWN
+// capability set (a background process with no explicit set has no network;
+// it does not fall back to the global foreground caps). Every socket is owned
+// by the pid that opened it; another process using the number gets -EBADF.
+// Connections and DNS queries are checked by EuroGuard under the process's own
+// name (argv[0]), and audited.
+
+/// The caller of a background socket syscall, captured under the BG lock and
+/// used after it is released.
+struct BgCaller {
+    pid: u64,
+    ppid: u64,
+    pml4: u64,
+    lo: u64,
+    hi: u64,
+    name: String,
+}
+
+impl BgCaller {
+    /// `[ptr, ptr+len)` inside the caller's arena and present for ring 3 in its
+    /// own page tables (writable when `write`).
+    fn user_ok(&self, ptr: u64, len: usize, write: bool) -> bool {
+        let Some(end) = ptr.checked_add(len as u64) else { return false };
+        if len == 0 || ptr < self.lo || end > self.hi {
+            return false;
+        }
+        if write {
+            return crate::paging::user_range_writable_in(self.pml4, ptr, len);
+        }
+        let mut pg = ptr & !0xFFF;
+        while pg < end {
+            if !crate::paging::user_accessible_in(self.pml4, pg) {
+                return false;
+            }
+            pg += 4096;
+        }
+        true
+    }
+    fn copy_in(&self, ptr: u64, len: usize) -> Option<alloc::vec::Vec<u8>> {
+        if !self.user_ok(ptr, len, false) {
+            return None;
+        }
+        let mut v = alloc::vec![0u8; len];
+        // SAFETY: checked above against this process's arena and page tables;
+        // the syscall runs on this process's CR3 (also after a yield: the
+        // scheduler restores it), arenas are identity-mapped.
+        unsafe { core::ptr::copy_nonoverlapping(ptr as *const u8, v.as_mut_ptr(), len) };
+        Some(v)
+    }
+    fn copy_out(&self, ptr: u64, data: &[u8]) -> bool {
+        if data.is_empty() {
+            return true;
+        }
+        if !self.user_ok(ptr, data.len(), true) {
+            return false;
+        }
+        // SAFETY: as in copy_in, and writable for ring 3 in the caller's tables.
+        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len()) };
+        true
+    }
+}
+
+/// Socket ownership for background processes: (fd, owner pid, O_NONBLOCK).
+static BG_SOCKS: Mutex<alloc::vec::Vec<(u64, u64, bool)>> = Mutex::new(alloc::vec::Vec::new());
+/// Socket calls served on the background path / refused for a missing capability.
+pub static BG_NET_CALLS: AtomicU64 = AtomicU64::new(0);
+pub static BG_NET_DENIED: AtomicU64 = AtomicU64::new(0);
+
+fn bg_sock_owner(fd: u64) -> Option<(u64, bool)> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        BG_SOCKS.lock().iter().find(|e| e.0 == fd).map(|e| (e.1, e.2))
+    })
+}
+
+/// Close every socket a dead background process still owned (from reap_dead,
+/// BG lock not held).
+fn bg_net_release(pid: u64) {
+    let fds: alloc::vec::Vec<u64> = x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut t = BG_SOCKS.lock();
+        let fds = t.iter().filter(|e| e.1 == pid).map(|e| e.0).collect();
+        t.retain(|e| e.1 != pid);
+        fds
+    });
+    for fd in fds {
+        crate::net::sock_close(fd);
+    }
+}
+
+/// Is this a call the background socket path serves? Socket numbers always;
+/// read/write/close (and the vector forms) only on a socket descriptor.
+fn bg_is_net_call(num: u64, a1: u64) -> bool {
+    match num {
+        41..=55 => true,
+        0 | 1 | 3 | 19 | 20 => crate::net::is_sock_fd(a1),
+        _ => false,
+    }
+}
+
+/// Does task `t` hold `cap` in its OWN capability set? (no fallback to the
+/// global foreground set: a background process without an explicit set holds
+/// nothing).
+fn task_cap_strict(t: usize, cap: u64) -> bool {
+    t < crate::sched::MAX_TASKS && {
+        let tc = TASK_CAPS[t].load(Ordering::Relaxed);
+        tc != 0 && tc & cap == cap
+    }
+}
+
+/// Gather an iovec array (bounded) from the caller: the buffers' bytes.
+fn bg_iov_gather(c: &BgCaller, iov: u64, cnt: u64) -> Option<alloc::vec::Vec<u8>> {
+    if cnt > 64 {
+        return None;
+    }
+    let mut out = alloc::vec::Vec::new();
+    for i in 0..cnt {
+        let e = c.copy_in(iov + i * 16, 16)?;
+        let base = u64::from_le_bytes(e[0..8].try_into().ok()?);
+        let len = u64::from_le_bytes(e[8..16].try_into().ok()?) as usize;
+        if len > 0 {
+            if out.len() + len > 64 * 1024 {
+                return None;
+            }
+            out.extend_from_slice(&c.copy_in(base, len)?);
+        }
+    }
+    Some(out)
+}
+
+/// The iovec array as (base, len) pairs and their total length.
+fn bg_iov_list(c: &BgCaller, iov: u64, cnt: u64) -> Option<(alloc::vec::Vec<(u64, usize)>, usize)> {
+    if cnt > 64 {
+        return None;
+    }
+    let mut v = alloc::vec::Vec::new();
+    let mut total = 0usize;
+    for i in 0..cnt {
+        let e = c.copy_in(iov + i * 16, 16)?;
+        let base = u64::from_le_bytes(e[0..8].try_into().ok()?);
+        let len = u64::from_le_bytes(e[8..16].try_into().ok()?) as usize;
+        total = total.checked_add(len)?;
+        v.push((base, len));
+    }
+    Some((v, total))
+}
+
+/// Receive on a background socket with its blocking mode: data, or -EAGAIN
+/// for an empty read on a live connection (0 is EOF and only EOF).
+fn bg_sock_recv(c: &BgCaller, fd: u64, max: usize, nonblock: bool, peek: bool) -> Result<alloc::vec::Vec<u8>, u64> {
+    let max = max.min(64 * 1024);
+    let d = if peek {
+        crate::net::sock_peek_nowait(fd, max)
+    } else if nonblock {
+        crate::net::sock_recv_nowait_as(fd, max, &c.name)
+    } else {
+        crate::net::sock_recv_as(fd, max, &c.name)
+    };
+    if d.is_empty() && crate::net::sock_is_tcp(fd) && !crate::net::sock_eof(fd) {
+        return Err((-11i64) as u64); // -EAGAIN
+    }
+    note_inet_rx(fd, d.len());
+    Ok(d)
+}
+
+fn bg_sock_send(c: &BgCaller, fd: u64, data: &[u8], nonblock: bool) -> u64 {
+    let r = if nonblock {
+        crate::net::sock_send_nowait_as(fd, data, &c.name)
+    } else {
+        crate::net::sock_send_as(fd, data, &c.name)
+    };
+    if (r as i64) > 0 {
+        note_inet_tx(fd, r as usize);
+    }
+    r
+}
+
+/// One socket syscall of a background process, with the BG lock NOT held.
+fn bg_net_dispatch(c: &BgCaller, task: usize, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    const EBADF: u64 = (-9i64) as u64;
+    const EINVAL: u64 = (-22i64) as u64;
+    const EPERM: u64 = (-1i64) as u64;
+    BG_NET_CALLS.fetch_add(1, Ordering::Relaxed);
+    // A blocking network wait may give the CPU away from here on: no lock held.
+    let _nb = NetBlockScope::enter(true);
+    if num == 41 {
+        if !task_cap_strict(task, CAP_NET) {
+            BG_NET_DENIED.fetch_add(1, Ordering::Relaxed);
+            crate::serial_println!("[bgnet] pid {} ({}): socket() DENIED: no CAP_NET in its capability set", c.pid, c.name);
+            return EPERM;
+        }
+        let typ = a2 & 0xff;
+        let fd = match (a1, typ) {
+            (2, 1) => crate::net::sock_open(false), // AF_INET TCP
+            (2, 2) => crate::net::sock_open(true),  // AF_INET UDP
+            (2, _) => return (-93i64) as u64,       // -EPROTONOSUPPORT
+            _ => return (-97i64) as u64,            // -EAFNOSUPPORT (AF_INET only here)
+        };
+        if (fd as i64) < 0 {
+            return (-24i64) as u64; // -EMFILE: socket table full
+        }
+        x86_64::instructions::interrupts::without_interrupts(|| BG_SOCKS.lock().push((fd, c.pid, a2 & 0x800 != 0)));
+        return fd;
+    }
+    if num == 53 {
+        return (-97i64) as u64; // socketpair: AF_UNIX is not served on this path
+    }
+    // Everything else names a socket: it must be one of this process's own
+    // (or inherited from its parent across fork).
+    let Some((owner, nonblock)) = bg_sock_owner(a1) else { return EBADF };
+    if owner != c.pid && (c.ppid == 0 || owner != c.ppid) {
+        return EBADF;
+    }
+    match num {
+        42 => {
+            // connect(fd, sockaddr, len): AF_INET only.
+            if a3 < 8 {
+                return EINVAL;
+            }
+            let Some(sa) = c.copy_in(a2, (a3 as usize).min(16)) else { return EFAULT };
+            if u16::from_le_bytes([sa[0], sa[1]]) != 2 {
+                return (-97i64) as u64;
+            }
+            let port = u16::from_be_bytes([sa[2], sa[3]]);
+            crate::net::sock_connect_as(a1, euronet::ipv4::Ipv4Addr([sa[4], sa[5], sa[6], sa[7]]), port, &c.name)
+        }
+        44 => {
+            // sendto(fd, buf, len, flags, dest, destlen)
+            if a3 as usize > 64 * 1024 {
+                return EINVAL;
+            }
+            let Some(bytes) = c.copy_in(a2, a3 as usize) else { return EFAULT };
+            if a5 != 0 && !crate::net::sock_is_connected(a1) {
+                let Some(sa) = c.copy_in(a5, 8) else { return EFAULT };
+                if u16::from_le_bytes([sa[0], sa[1]]) == 2 {
+                    let port = u16::from_be_bytes([sa[2], sa[3]]);
+                    let r = crate::net::sock_connect_as(a1, euronet::ipv4::Ipv4Addr([sa[4], sa[5], sa[6], sa[7]]), port, &c.name);
+                    if (r as i64) < 0 {
+                        return r;
+                    }
+                }
+            }
+            bg_sock_send(c, a1, &bytes, nonblock || a4 & 0x40 != 0)
+        }
+        1 => {
+            if a3 as usize > 64 * 1024 {
+                return EINVAL;
+            }
+            let Some(bytes) = c.copy_in(a2, a3 as usize) else { return EFAULT };
+            bg_sock_send(c, a1, &bytes, nonblock)
+        }
+        20 => {
+            let Some(bytes) = bg_iov_gather(c, a2, a3) else { return EFAULT };
+            bg_sock_send(c, a1, &bytes, nonblock)
+        }
+        46 => {
+            // sendmsg(fd, msghdr, flags): the iovec of the message, no ancillary data.
+            let Some(h) = c.copy_in(a2, 56) else { return EFAULT };
+            let iov = u64::from_le_bytes(h[16..24].try_into().unwrap_or([0; 8]));
+            let cnt = u64::from_le_bytes(h[24..32].try_into().unwrap_or([0; 8]));
+            let Some(bytes) = bg_iov_gather(c, iov, cnt) else { return EFAULT };
+            bg_sock_send(c, a1, &bytes, nonblock || a3 & 0x40 != 0)
+        }
+        0 | 45 => {
+            // read(fd, buf, len) / recvfrom(fd, buf, len, flags, src, srclen)
+            let (flags, max) = if num == 45 { (a4, a3 as usize) } else { (0, a3 as usize) };
+            if max == 0 {
+                return 0;
+            }
+            if !c.user_ok(a2, max.min(64 * 1024), true) {
+                return EFAULT;
+            }
+            match bg_sock_recv(c, a1, max, nonblock || flags & 0x40 != 0, flags & 2 != 0) {
+                Ok(d) => {
+                    if !c.copy_out(a2, &d) {
+                        return EFAULT;
+                    }
+                    d.len() as u64
+                }
+                Err(e) => e,
+            }
+        }
+        19 | 47 => {
+            // readv(fd, iov, cnt) / recvmsg(fd, msghdr, flags): scatter one read.
+            let (iov, cnt, flags) = if num == 47 {
+                let Some(h) = c.copy_in(a2, 56) else { return EFAULT };
+                (
+                    u64::from_le_bytes(h[16..24].try_into().unwrap_or([0; 8])),
+                    u64::from_le_bytes(h[24..32].try_into().unwrap_or([0; 8])),
+                    a3,
+                )
+            } else {
+                (a2, a3, 0)
+            };
+            let Some((list, total)) = bg_iov_list(c, iov, cnt) else { return EFAULT };
+            if list.iter().any(|&(b, l)| l > 0 && !c.user_ok(b, l, true)) {
+                return EFAULT;
+            }
+            if total == 0 {
+                return 0;
+            }
+            match bg_sock_recv(c, a1, total, nonblock || flags & 0x40 != 0, flags & 2 != 0) {
+                Ok(d) => {
+                    let mut off = 0usize;
+                    for (b, l) in list {
+                        if off >= d.len() {
+                            break;
+                        }
+                        let n = l.min(d.len() - off);
+                        if !c.copy_out(b, &d[off..off + n]) {
+                            return EFAULT;
+                        }
+                        off += n;
+                    }
+                    d.len() as u64
+                }
+                Err(e) => e,
+            }
+        }
+        3 => {
+            // close: the owner closes; a fork child closing an inherited socket
+            // only drops its own reference (the parent still holds it).
+            if owner != c.pid {
+                return 0;
+            }
+            x86_64::instructions::interrupts::without_interrupts(|| BG_SOCKS.lock().retain(|e| e.0 != a1));
+            crate::net::sock_close(a1)
+        }
+        48 => 0, // shutdown: accepted, as on the Linux bridge (the FIN goes on close)
+        49 => {
+            // bind(fd, sockaddr_in, len): the local port of a listener.
+            let Some(sa) = c.copy_in(a2, 8) else { return EFAULT };
+            if u16::from_le_bytes([sa[0], sa[1]]) != 2 {
+                return (-97i64) as u64;
+            }
+            crate::net::sock_bind(a1, u16::from_be_bytes([sa[2], sa[3]]))
+        }
+        50 => crate::net::sock_listen(a1, (a2 as usize).clamp(1, 16)),
+        43 => {
+            let nfd = crate::net::sock_accept(a1);
+            if (nfd as i64) >= 0 {
+                x86_64::instructions::interrupts::without_interrupts(|| BG_SOCKS.lock().push((nfd, c.pid, false)));
+            }
+            nfd
+        }
+        51 | 52 => {
+            // getsockname / getpeername: a sockaddr_in.
+            let Some((lip, lport, pip, pport)) = crate::net::sock_names(a1) else { return (-107i64) as u64 }; // -ENOTCONN
+            let (ip, port) = if num == 51 { (lip, lport) } else { (pip, pport) };
+            let mut sa = [0u8; 16];
+            sa[0] = 2;
+            sa[2..4].copy_from_slice(&port.to_be_bytes());
+            sa[4..8].copy_from_slice(&ip.0);
+            if !c.copy_out(a2, &sa) || !c.copy_out(a3, &16u32.to_le_bytes()) {
+                return EFAULT;
+            }
+            0
+        }
+        54 => 0, // setsockopt: accepted as a no-op, as on the Linux bridge
+        55 => {
+            // getsockopt: every option reads 0 (SO_ERROR = no error).
+            if a4 != 0 && (!c.copy_out(a4, &0i32.to_le_bytes()) || (a5 != 0 && !c.copy_out(a5, &4u32.to_le_bytes()))) {
+                return EFAULT;
+            }
+            0
+        }
+        _ => (-38i64) as u64,
+    }
+}
+
+// ── May a network wait give the CPU away? (per task, scoped) ────────────────
+
+static NET_MAY_BLOCK: [core::sync::atomic::AtomicBool; crate::sched::MAX_TASKS] =
+    [const { core::sync::atomic::AtomicBool::new(false) }; crate::sched::MAX_TASKS];
+
+/// True while the current task is inside a syscall that holds no lock of the
+/// syscall layer (the Linux path of a scheduled process, or the background
+/// socket path): net.rs may then sleep instead of spinning. A foreground
+/// excursion (task 0 in `run_args`) is synchronous and never gets this: its
+/// kernel stack and address space are not those the scheduler would restore.
+pub fn net_may_block() -> bool {
+    let t = crate::sched::current_lockfree();
+    t < crate::sched::MAX_TASKS && NET_MAY_BLOCK[t].load(Ordering::Relaxed)
+}
+
+/// Scope guard for [`net_may_block`]; restores the previous value on drop.
+struct NetBlockScope {
+    t: usize,
+    prev: bool,
+}
+
+impl NetBlockScope {
+    fn enter(on: bool) -> Self {
+        let t = crate::sched::current_lockfree();
+        let prev = if t < crate::sched::MAX_TASKS { NET_MAY_BLOCK[t].swap(on, Ordering::Relaxed) } else { false };
+        NetBlockScope { t, prev }
+    }
+}
+
+impl Drop for NetBlockScope {
+    fn drop(&mut self) {
+        if self.t < crate::sched::MAX_TASKS {
+            NET_MAY_BLOCK[self.t].store(self.prev, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Give the CPU away from inside a syscall or task context, keeping the
+/// caller's interrupt state and re-establishing the per-process globals on
+/// return (another process may have loaded its own while this one slept).
+pub fn yield_keep_state() {
+    yield_reacquire();
 }
 
 /// Load `program` (musl, Linux ABI) as a PREEMPTIVELY scheduled process with
@@ -5783,9 +6246,48 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
             thread_ctids: alloc::vec::Vec::new(),
             ppid: 0,
             pooled: false,
+            name: String::from_utf8_lossy(argv0).into_owned(),
+            echo: false,
         });
     });
     crate::serial_println!("[euro] bg-musl (pid {pid}) -> task {idx}, own address space PML4 {pml4:#x}, arena {arena:#x}");
+}
+
+/// Like [`spawn_bg_musl`], for a program that must run with an EXPLICIT
+/// capability set (no fallback to the global foreground caps) and whose output
+/// a self-test reads back ([`bg_output`]): caps and the echo flag are in place
+/// before the task can run (interrupts stay off from spawn to bookkeeping).
+/// Returns the task index.
+pub fn spawn_bg_musl_caps(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv0: &[u8], caps: u64, echo: bool) -> Option<usize> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        spawn_bg_musl(falloc, program, pid, argv0);
+        let mut bg = BG.lock();
+        let p = bg.iter_mut().find(|p| p.pid == pid && !p.zombie)?;
+        p.echo = echo;
+        let task = p.task;
+        drop(bg);
+        set_task_caps(task, caps | CAP_TASK_SET);
+        Some(task)
+    })
+}
+
+/// Every output line a background process wrote so far (complete lines, plus
+/// an unterminated last one). With `echo` that is up to 64 lines, else the
+/// last 6.
+pub fn bg_output(pid: u64) -> alloc::vec::Vec<String> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        BG.lock()
+            .iter()
+            .find(|p| p.pid == pid)
+            .map(|p| {
+                let mut v = p.output.clone();
+                if !p.partial.is_empty() {
+                    v.push(p.partial.clone());
+                }
+                v
+            })
+            .unwrap_or_default()
+    })
 }
 
 /// Like [`spawn_bg_musl`] but with a LARGE arena (`arena_mib`, e.g. 32 MiB) for a
@@ -5851,6 +6353,8 @@ pub fn spawn_bg_app(
             thread_ctids: alloc::vec::Vec::new(),
             ppid: 0,
             pooled: false,
+            name: String::from_utf8_lossy(argv.first().copied().unwrap_or(b"app")).into_owned(),
+            echo: false,
         });
     });
     crate::serial_println!("[euro] bg-app (pid {pid}) -> task {idx}, arena {arena:#x} span {arena_mib} MiB, heap {heap:#x}..{heap_end:#x}, PML4 {pml4:#x}");
@@ -6882,6 +7386,7 @@ static CRASHPAD_ELF: &[u8] = include_bytes!("../../userland/glibc/chrome_crashpa
 static GDISKMAP_ELF: &[u8] = include_bytes!("../../userland/glibc/gdiskmap");
 // AF_UNIX socketpair round-trip (local IPC — the X11/dbus transport).
 static GUNIX_ELF: &[u8] = include_bytes!("../../userland/glibc/gunix");
+static GNET_ELF: &[u8] = include_bytes!("../../userland/glibc/gnet");
 // X11 CLIENT stack (a real Xlib client + its 6 transitive libs) — the GUI rung.
 static GLIBC_LIBX11: &[u8] = include_bytes!("../../userland/glibc/libX11.so.6");
 static GLIBC_LIBXCB: &[u8] = include_bytes!("../../userland/glibc/libxcb.so.1");
@@ -7024,6 +7529,7 @@ pub fn europack_has(path: &str) -> bool {
 }
 /// An AF_UNIX socketpair round-trip test (local IPC transport).
 pub fn gunix_bytes() -> &'static [u8] { GUNIX_ELF }
+pub fn gnet_bytes() -> &'static [u8] { GNET_ELF }
 /// The X11 client libraries (served to ld.so for a real Xlib client).
 pub fn glibc_libx11_bytes() -> &'static [u8] { GLIBC_LIBX11 }
 pub fn glibc_libxcb_bytes() -> &'static [u8] { GLIBC_LIBXCB }
@@ -7563,6 +8069,7 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gthreadchurn" => include_bytes!("../../userland/glibc/gthreadchurn.sig"),
         "/bin/gforkchurn" => include_bytes!("../../userland/glibc/gforkchurn.sig"),
         "/bin/gunix" => include_bytes!("../../userland/glibc/gunix.sig"),
+        "/bin/gnet" => include_bytes!("../../userland/glibc/gnet.sig"),
         "/bin/gunlink" => include_bytes!("../../userland/glibc/gunlink.sig"),
         "/bin/gvdso" => include_bytes!("../../userland/glibc/gvdso.sig"),
         "/bin/gvec" => include_bytes!("../../userland/glibc/gvec.sig"),
@@ -11583,6 +12090,22 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
                     return 0;
                 }
             }
+            // Socket syscalls (and read/write/close on a socket): served on the
+            // shared socket layer with the BG lock RELEASED, so a blocking call
+            // can give the CPU away (to the userspace NIC driver among others).
+            if bg_is_net_call(num, a1) {
+                let p = &bg[pos];
+                let caller = BgCaller {
+                    pid: p.pid,
+                    ppid: p.ppid,
+                    pml4: p.pml4,
+                    lo: p.arena_virt,
+                    hi: p.arena_virt + p.arena_frames * 4096,
+                    name: p.name.clone(),
+                };
+                drop(bg);
+                return bg_net_dispatch(&caller, cur, num, a1, a2, a3, a4, a5);
+            }
             // Validate THIS process's user pointers against ITS OWN arena for the
             // duration of the syscall (the global default span is only 2 MiB; a
             // large-arena app like DOOM needs its full 32 MiB span so the file
@@ -11615,6 +12138,10 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
         // socket-only [slife] log hid exactly the moment the child goes
         // silent). Bounded per child so the serial port survives.
         let trace_child = current_is_fork_child();
+        // A scheduled process on the Linux path holds no syscall-layer lock here,
+        // so a blocking socket call may sleep (net.rs). Not a foreground
+        // excursion: that one runs synchronously on task 0's borrowed stack.
+        let _nb = NetBlockScope::enter(!FG_ACTIVE.load(Ordering::Relaxed));
         let r = linux_dispatch(num, a1, a2, a3, a4, a5);
         if trace_child {
             // High budget: we want the renderer's WHOLE post-execve life

@@ -1712,9 +1712,17 @@ fn main() -> Status {
         });
         // G3: poll/select multiplexing — prove the readiness logic on the NIC.
         net::poll_selftest();
+    } else if bootopt::net_user_driver() && udrv::device_present() {
+        // net.driver=user: the e1000 belongs to the userspace driver, which can
+        // only run once the scheduler does. The network part of the boot (and
+        // the programs that need it) runs after udrv::boot instead: [net-late].
+        net_lines.push("NIC: e1000 left to the userspace driver e1000d (net.driver=user); network bring-up and the network tests run after the scheduler starts ([udrv-*], [net-late])".into());
     } else {
         net_lines.push("virtio-net NIC not found".into());
     }
+    // The network comes up after the scheduler (userspace NIC driver): the
+    // pre-scheduler network tests move behind udrv::boot.
+    let net_late = nic::kind() == "none" && bootopt::net_user_driver() && udrv::device_present();
     for l in &net_lines {
         serial_println!("[net] {l}");
     }
@@ -1723,7 +1731,7 @@ fn main() -> Status {
     // their OWN host — a downloaded OS must never probe the user's machine on
     // port 445/2049 uninvited (it also crashed the public boot when a host
     // answered 445 with a short response the parser did not expect).
-    if cfg!(feature = "selftest") {
+    if cfg!(feature = "selftest") && !net_late {
         smbfs::selftest();
         nfsmount::selftest();
     }
@@ -1884,6 +1892,11 @@ fn main() -> Status {
     ];
     let mut demo_out: Vec<(String, String)> = Vec::new();
     for (path, note) in boot_script {
+        // The network programs need the network; with the userspace NIC driver
+        // that exists only after the scheduler, so they run in [net-late].
+        if net_late && NET_LATE_PROGRAMS.iter().any(|(p, _)| *p == path) {
+            continue;
+        }
         let bytes = fs.read_file(path).unwrap_or_default();
         // Verify-before-execute: reject if the Ed25519 signature does not match.
         if !ring3::verify_program(path, &bytes) {
@@ -1900,7 +1913,7 @@ fn main() -> Status {
     // Demonstrate the EuroShell built-in commands (pure function shell::exec) —
     // serial-visible proof that the shell gives live system info from RTC/memory/
     // /etc, not from hard-coded text.
-    {
+    if !net_late {
         let mut sctx = shell::ShellCtx { fs: &mut fs, mem: &mut allocator };
         // Show the NATIVE EuroOS character: identity + capability security +
         // its own service supervisor (not the Linux compat layer).
@@ -2227,6 +2240,11 @@ fn main() -> Status {
     // Userspace drivers (net.driver=user): e1000d needs the scheduler, interrupts
     // and the IOMMU domains, all of which exist from here on.
     udrv::boot(&mut allocator);
+    // The network part of the boot that could not run before the scheduler
+    // (userspace NIC driver): the same probes and programs, now over e1000d.
+    if net_late {
+        demo_out.extend(net_late_suite(&mut allocator, &mut fs));
+    }
     // M3-3: a CDC-ECM USB NIC only exists after xHCI enumeration (above) — if
     // no NIC bound during the main net bring-up, adopt it and bring it up now.
     net::late_bring_up();
@@ -4988,6 +5006,12 @@ fn main() -> Status {
     // (an Irq-mode lock or any lock taken inside a syscall holds IF=0 that long).
     klock::report("boot-total", 10);
     klock::report_hold("boot-total", 10);
+    serial_println!(
+        "[bg-enosys] boot total: {} background-path syscall(s) answered -ENOSYS (first use of each number logged above); background socket calls served {} (refused for a missing CAP_NET: {})",
+        ring3::BG_ENOSYS.load(Ordering::Relaxed),
+        ring3::BG_NET_CALLS.load(Ordering::Relaxed),
+        ring3::BG_NET_DENIED.load(Ordering::Relaxed)
+    );
     // A first notification so the shade is not empty and the toast channel shows.
     notify::push("Welcome to EuroOS", "Click here to see notifications", interrupts::ticks());
     // 3G-2: arm the live deadman watchdog (5 s grace at 100 Hz). The loop pets it
@@ -6870,6 +6894,253 @@ fn eurojs_show(v: &eurojs::Value) -> String {
         eurojs::Value::Undefined => String::from("undefined"),
         _ => String::from("(object)"),
     }
+}
+
+/// The network programs of the boot script: with the userspace NIC driver they
+/// run in [`net_late_suite`] instead (path, note).
+const NET_LATE_PROGRAMS: [(&str, &str); 3] = [
+    ("/bin/msock", "POSIX sockets: socket/connect/send/recv -> EuroNet"),
+    ("/bin/mdns", "UDP socket (SOCK_DGRAM): DNS lookup from userspace"),
+    ("/bin/mtrack", "EuroGuard: tracker connection blocked by kernel policy"),
+];
+
+/// `a:b:c:d:e:f:g:h` (no `::` compression) for the boot log.
+fn ip6_plain(a: &euronet::ipv6::Ipv6Addr) -> String {
+    let g: Vec<String> = (0..8).map(|i| format!("{:x}", u16::from_be_bytes([a.0[i * 2], a.0[i * 2 + 1]]))).collect();
+    g.join(":")
+}
+
+/// [net-late]: the network part of the boot when the NIC belongs to the
+/// userspace driver (`net.driver=user`, the default). Before the scheduler
+/// there is no driver to talk to, so the same probes as the kernel path (ARP,
+/// ping, DNS, HTTP, HTTPS, IPv6, poll, SMB/NFS) and the network programs of
+/// the boot script (msock, mdns, mtrack) run here, after `udrv::boot`.
+///
+/// The programs run as SCHEDULED processes (not as synchronous foreground
+/// excursions on task 0): their socket calls go through the background
+/// socket path with the BG lock released, and a blocking call sleeps until
+/// e1000d delivers. Each runs with exactly the capabilities of the program
+/// registry, under EuroGuard with its own name. Every wait is bounded and an
+/// expiry is reported as such.
+fn net_late_suite(allocator: &mut FrameAllocator, fs: &mut dyn FileSystem) -> Vec<(String, String)> {
+    use euronet::ethernet::MacAddr;
+    use euronet::ipv4::Ipv4Addr;
+    let ipfmt = |ip: Ipv4Addr| format!("{}.{}.{}.{}", ip.0[0], ip.0[1], ip.0[2], ip.0[3]);
+    let mut demo: Vec<(String, String)> = Vec::new();
+    // Net ready: e1000d reported link up and DHCP configured the stack
+    // (udrv::boot). Bounded wait; an expiry is a FAILED, not a silent skip.
+    let t0 = interrupts::ticks();
+    let configured = || net::get().filter(|c| c.gw_mac != MacAddr::ZERO && udrv::link_up());
+    let mut cfg = configured();
+    while cfg.is_none() && interrupts::ticks() < t0 + 2000 {
+        udrv::supervise(allocator);
+        sched::yield_now();
+        x86_64::instructions::hlt();
+        cfg = configured();
+    }
+    let Some(cfg) = cfg else {
+        serial_println!("[net-late] network not ready 20 s after udrv::boot (no link or no DHCP lease over e1000d, see [udrv-*]): network tests and programs NOT run → FAILED");
+        for (path, note) in NET_LATE_PROGRAMS {
+            serial_println!("[exec] {path} not run: no network");
+            demo.push((format!("euroos:/ $ .{path}   ({note})"), String::from("not run: no network")));
+        }
+        return demo;
+    };
+    serial_println!(
+        "[net-late] network ready over e1000d (waited {} ticks): lease {}, gateway {}, dns {}; running the network part of the boot now",
+        interrupts::ticks() - t0, ipfmt(cfg.my_ip), ipfmt(cfg.gw_ip), ipfmt(cfg.dns_ip)
+    );
+    let sleeps0 = net::RX_SLEEPS.load(Ordering::Relaxed);
+    let wakes0 = net::RX_WAKEUPS.load(Ordering::Relaxed);
+    let mut lines: Vec<String> = Vec::new();
+    let m = cfg.my_mac.0;
+    lines.push(format!("NIC: {} MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", nic::kind(), m[0], m[1], m[2], m[3], m[4], m[5]));
+    lines.push(format!("ARP: {} is-at {:02x?} (resolved by udrv::boot over e1000d)", ipfmt(cfg.gw_ip), cfg.gw_mac.0));
+    let pong = net::icmp_ping(cfg.my_mac, cfg.my_ip, cfg.gw_mac, cfg.gw_ip);
+    lines.push(if pong { format!("PING {}: echo-reply OK ✓", ipfmt(cfg.gw_ip)) } else { "(no ping reply)".into() });
+    let host = "example.com";
+    let mut fetch_ip: Option<String> = None;
+    match net::dns_query(cfg.my_mac, cfg.my_ip, cfg.dns_mac, cfg.dns_ip, host) {
+        Some(ip) => {
+            fetch_ip = Some(ipfmt(ip));
+            lines.push(format!("DNS reply: {host} = {} ✓", ipfmt(ip)));
+            ring3::push_env(&format!("FETCH_IP={}", ipfmt(ip)));
+            ring3::push_env(&format!("FETCH_HOST={host}"));
+            ring3::push_env(&format!("DNS_IP={}", ipfmt(cfg.dns_ip)));
+            match net::http_get(cfg.my_mac, cfg.my_ip, cfg.gw_mac, ip, host, "/") {
+                Some((status, data)) => {
+                    lines.push(format!("HTTP GET http://{host}/ -> {} bytes ✓", data.len()));
+                    lines.push(format!("  {}", status.trim()));
+                }
+                None => lines.push("(no HTTP response)".into()),
+            }
+            lines.push("TLS 1.3 (X25519+ChaCha20) handshake ...".into());
+            match net::https_get(cfg.my_mac, cfg.my_ip, cfg.gw_mac, ip, host, "/") {
+                Some((status, data, cert)) => {
+                    lines.push(format!("HTTPS GET https://{host}/ -> {} bytes (encrypted) ✓", data.len()));
+                    lines.push(format!("  {}", status.trim()));
+                    if let Some(c) = cert {
+                        lines.push(format!("  server certificate received: {} bytes", c.len()));
+                    }
+                }
+                None => lines.push("(TLS handshake failed)".into()),
+            }
+        }
+        None => lines.push("(no DNS reply)".into()),
+    }
+    // IPv6: SLAAC link-local, router discovery, ping6 (as the kernel path).
+    let ll = euronet::ipv6::Ipv6Addr::link_local_from_mac(cfg.my_mac.0);
+    lines.push(format!("IPv6 link-local (SLAAC): {}", ip6_plain(&ll)));
+    let router = net::router_discovery(cfg.my_mac, ll);
+    match router {
+        Some((rll, rmac, prefix)) => {
+            lines.push(format!("IPv6 RA: router {}", ip6_plain(&rll)));
+            if let Some(p) = prefix {
+                lines.push(format!("IPv6 global (SLAAC): {}", ip6_plain(&euronet::ipv6::Ipv6Addr::from_prefix(p, &ll))));
+            }
+            lines.push(if net::icmp6_ping(cfg.my_mac, ll, rmac, rll) {
+                format!("PING6 {}: echo-reply OK ✓", ip6_plain(&rll))
+            } else {
+                "(no ping6 reply)".into()
+            });
+        }
+        None => lines.push("(no Router Advertisement — IPv6 possibly off)".into()),
+    }
+    net::save(net::NetCfg {
+        link_local: ll,
+        router_ll: router.map(|r| r.0),
+        router_mac: router.map(|r| r.1),
+        ..cfg
+    });
+    for l in &lines {
+        serial_println!("[net] {l}");
+    }
+    net::poll_selftest();
+    if cfg!(feature = "selftest") {
+        smbfs::selftest();
+        nfsmount::selftest();
+    }
+    // The network programs, as scheduled processes over e1000d. The lock
+    // statistics of this stretch show what the BG table lock was held for
+    // while three processes did blocking network I/O.
+    let lk0 = klock::snapshot_all();
+    for (i, (path, note)) in NET_LATE_PROGRAMS.iter().enumerate() {
+        let bytes = fs.read_file(path).unwrap_or_default();
+        if !ring3::verify_program(path, &bytes) {
+            serial_println!("[exec] {path} REJECTED — Ed25519 signature invalid");
+            demo.push((format!("euroos:/ $ .{path}   ({note})"), String::from("[sec] REJECTED: invalid Ed25519 signature")));
+            continue;
+        }
+        let (caps, abi) = ring3::program_caps_abi(path).unwrap_or((ring3::CAP_CONSOLE, false));
+        let pid = 0x3_0000 + i as u64;
+        let start = interrupts::ticks();
+        if ring3::spawn_bg_musl_caps(allocator, &bytes, pid, path.as_bytes(), caps, true).is_none() {
+            serial_println!("[exec] {path} could not be started as a scheduled process → FAILED");
+            continue;
+        }
+        while ring3::bg_alive(pid) && interrupts::ticks() < start + 6000 {
+            udrv::supervise(allocator);
+            sched::yield_now();
+            x86_64::instructions::hlt();
+        }
+        let timed_out = ring3::bg_alive(pid);
+        if timed_out {
+            ring3::kill_pid(pid);
+        }
+        let out_lines = ring3::bg_output(pid);
+        let mut out = String::new();
+        for l in &out_lines {
+            out.push_str(l);
+            out.push('\n');
+        }
+        let exit = ring3::bg_end_reason(pid)
+            .and_then(|r| r.strip_prefix("done (exit ").and_then(|s| s.strip_suffix(')')).map(String::from))
+            .unwrap_or_else(|| String::from("?"));
+        if timed_out {
+            serial_println!("[exec] {path} (abi={}, ed25519=ok, scheduled over e1000d) did not finish within 60 s: killed → FAILED", if abi { "linux" } else { "native" });
+        } else {
+            serial_println!(
+                "[exec] {path} (abi={}, ed25519=ok, scheduled over e1000d, {} ticks) exit={exit} ({} bytes)",
+                if abi { "linux" } else { "native" },
+                interrupts::ticks() - start,
+                out.len()
+            );
+        }
+        ring3::reap_dead(allocator);
+        demo.push((format!("euroos:/ $ .{path}   ({note})"), out));
+    }
+    klock::report_delta("net-late", &lk0, 6);
+    // EuroGuard model on the background path: the same program WITHOUT CAP_NET
+    // in its own capability set gets no socket at all.
+    if cfg!(feature = "selftest") {
+        if let Ok(bytes) = fs.read_file("/bin/msock") {
+            let denied0 = ring3::BG_NET_DENIED.load(Ordering::Relaxed);
+            let pid = 0x3_0010;
+            if ring3::spawn_bg_musl_caps(allocator, &bytes, pid, b"/bin/msock", ring3::CAP_CONSOLE, false).is_some() {
+                let start = interrupts::ticks();
+                while ring3::bg_alive(pid) && interrupts::ticks() < start + 3000 {
+                    sched::yield_now();
+                    x86_64::instructions::hlt();
+                }
+                let out = ring3::bg_output(pid).join(" | ");
+                let reason = ring3::bg_end_reason(pid).unwrap_or_else(|| String::from("still running"));
+                let denied = ring3::BG_NET_DENIED.load(Ordering::Relaxed) - denied0;
+                if ring3::bg_alive(pid) {
+                    ring3::kill_pid(pid);
+                }
+                ring3::reap_dead(allocator);
+                let ok = denied == 1 && reason == "done (exit 1)" && out.contains("socket() failed");
+                serial_println!(
+                    "[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused {denied} time(s), {reason}, output {out:?} → {}",
+                    if ok { "OK (no capability, no socket) ✓" } else { "FAILED" }
+                );
+            }
+        }
+    }
+    serial_println!(
+        "[net-late] network waits in this suite gave the CPU away {} time(s); {} of them were woken early by e1000d (EuroIPC frame delivery)",
+        net::RX_SLEEPS.load(Ordering::Relaxed) - sleeps0,
+        net::RX_WAKEUPS.load(Ordering::Relaxed) - wakes0
+    );
+    // [udrv-linux]: the Linux-ABI path. A real glibc program, scheduled, with
+    // BLOCKING sockets (connect/send/recv): each wait must give the CPU away
+    // so e1000d can run, or the program gets nothing. glibc needs a 64 MiB+
+    // arena, which a 512 MiB machine does not have at this point of the boot.
+    if cfg!(feature = "selftest") {
+        let ip = fetch_ip.clone().unwrap_or_else(|| String::from("172.66.147.243"));
+        let (s0, w0) = (net::RX_SLEEPS.load(Ordering::Relaxed), net::RX_WAKEUPS.load(Ordering::Relaxed));
+        let t = interrupts::ticks();
+        let (out, exit) = ring3::run_glibc(
+            allocator,
+            ring3::gnet_bytes(),
+            ring3::ldlinux_bytes(),
+            &[b"/bin/gnet", ip.as_bytes(), b"example.com"],
+            &[b"PATH=/bin"],
+            ring3::CAP_CONSOLE | ring3::CAP_NET,
+        );
+        let (sleeps, wakes) = (net::RX_SLEEPS.load(Ordering::Relaxed) - s0, net::RX_WAKEUPS.load(Ordering::Relaxed) - w0);
+        if out.contains("no arena for glibc") {
+            serial_println!("[udrv-linux] glibc process /bin/gnet not run: {} (needs more RAM than this machine has free here) ⬜", out.trim());
+        } else {
+            let ok = exit == 78 && sleeps > 0;
+            serial_println!(
+                "[udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking sockets) over e1000d in {} ticks: {:?} exit={exit}; its waits gave the CPU away {sleeps} time(s), {wakes} woken early by e1000d → {}",
+                interrupts::ticks() - t,
+                out.trim(),
+                if ok { "OK (blocking socket calls sleep and wake on the driver's EuroIPC delivery) ✓" } else { "FAILED" }
+            );
+        }
+    }
+    {
+        let mut sctx = shell::ShellCtx { fs, mem: allocator };
+        for cmd in ["nslookup example.com", "nslookup example.com", "netstat"] {
+            serial_println!("[shell] eurosh:/ $ {cmd}");
+            for line in shell::exec(&mut sctx, cmd) {
+                serial_println!("[shell]   {line}");
+            }
+        }
+    }
+    demo
 }
 
 pub fn system_binaries() -> [(&'static str, &'static [u8]); 32] {

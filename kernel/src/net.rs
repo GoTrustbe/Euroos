@@ -48,6 +48,128 @@ pub fn get() -> Option<NetCfg> {
 
 const SPINS: u64 = 4_000_000;
 
+// ── Waiting for frames: spin (in-kernel drivers) or sleep (userspace driver) ──
+//
+// The in-kernel NIC drivers are polled by whoever waits, so a wait is a bounded
+// spin over the receive path. With the userspace driver (`net.driver=user`) the
+// frames arrive only when the driver process `e1000d` runs, on this same CPU:
+// a waiter that spins with interrupts off (every syscall does) starves it, and
+// the wait times out with the answer sitting in the NIC. So when the frames
+// come from a process AND the caller may give the CPU away, a wait sleeps one
+// tick at a time and is woken early when the driver hands the netstack a frame
+// (`wake_rx_waiters`, from the driver's EuroIPC send). Its bound is in ticks.
+//
+// "May give the CPU away": on the BSP (where the scheduler and every ring-3
+// task run), holding no tracked EuroLock lock (`klock::held_here() == 0`, so
+// never under a socket lock), and either in task context with interrupts on, or
+// inside a syscall the syscall layer marked lock-free (`ring3::net_may_block`).
+// Anything else spins exactly as before.
+
+/// Tasks currently parked in a network wait.
+static RX_WAITER: [AtomicBool; crate::sched::MAX_TASKS] = [const { AtomicBool::new(false) }; crate::sched::MAX_TASKS];
+static RX_WAITING: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// Times a network wait gave the CPU away / waiters woken early by the driver.
+pub static RX_SLEEPS: AtomicU64 = AtomicU64::new(0);
+pub static RX_WAKEUPS: AtomicU64 = AtomicU64::new(0);
+
+/// May the code running now sleep (give the CPU away) inside a network call?
+pub fn may_sleep() -> bool {
+    crate::klock::on_bsp()
+        && crate::klock::held_here() == 0
+        && (x86_64::instructions::interrupts::are_enabled() || crate::ring3::net_may_block())
+}
+
+/// Should a wait for a frame sleep instead of spin? Only when the frames come
+/// from the userspace driver and the context may sleep.
+fn rx_should_block() -> bool {
+    crate::nic::frames_from_process() && may_sleep()
+}
+
+/// Sleep one tick (or until the driver delivers a frame), keeping the caller's
+/// interrupt state.
+fn block_tick() {
+    let t = crate::sched::current_lockfree();
+    let mark = t < crate::sched::MAX_TASKS;
+    if mark && !RX_WAITER[t].swap(true, Ordering::AcqRel) {
+        RX_WAITING.fetch_add(1, Ordering::AcqRel);
+    }
+    RX_SLEEPS.fetch_add(1, Ordering::Relaxed);
+    crate::sched::sleep_ticks(1);
+    crate::ring3::yield_keep_state();
+    if mark && RX_WAITER[t].swap(false, Ordering::AcqRel) {
+        RX_WAITING.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// The userspace driver handed the netstack something (a frame, link up):
+/// wake every task parked in a network wait. Called from the driver's syscall.
+pub fn wake_rx_waiters() {
+    if RX_WAITING.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    for t in 0..crate::sched::MAX_TASKS {
+        if RX_WAITER[t].swap(false, Ordering::AcqRel) {
+            RX_WAITING.fetch_sub(1, Ordering::AcqRel);
+            RX_WAKEUPS.fetch_add(1, Ordering::Relaxed);
+            crate::sched::unblock_any(t);
+        }
+    }
+}
+
+/// Tries between two sleeps of a sleeping wait: the loops take one frame per
+/// try, so a burst of unrelated frames is worked through before sleeping.
+const RX_BURST: u32 = 64;
+
+/// One bounded wait: `spins` iterations when spinning, `ticks` when sleeping.
+/// Use as `let mut w = RxWait::new(..); while w.next() { try once }`.
+struct RxWait {
+    block: bool,
+    left: u64,
+    deadline: u64,
+    first: bool,
+    burst: u32,
+}
+
+impl RxWait {
+    fn new(spins: u64, ticks: u64) -> Self {
+        let block = rx_should_block();
+        RxWait { block, left: spins, deadline: crate::interrupts::ticks() + ticks, first: true, burst: RX_BURST }
+    }
+    /// True: try (again). The first call never waits; later calls spin one
+    /// iteration, or (sleeping) try up to `RX_BURST` times and then sleep one
+    /// tick, until the bound is used up.
+    fn next(&mut self) -> bool {
+        if self.first {
+            self.first = false;
+            if !self.block {
+                if self.left == 0 {
+                    return false;
+                }
+                self.left -= 1;
+            }
+            return true;
+        }
+        if self.block {
+            if crate::interrupts::ticks() >= self.deadline {
+                return false;
+            }
+            if self.burst > 0 {
+                self.burst -= 1;
+                return true;
+            }
+            block_tick();
+            self.burst = RX_BURST;
+            true
+        } else {
+            if self.left == 0 {
+                return false;
+            }
+            self.left -= 1;
+            true
+        }
+    }
+}
+
 /// Recycle pending RX buffers (otherwise the 16 buffers fill up with idle
 /// multicast traffic) AND announce our IP→MAC with a gratuitous ARP, so that
 /// slirp's ARP cache stays fresh and IPv4 replies arrive.
@@ -527,7 +649,8 @@ pub fn arp_resolve(my_mac: MacAddr, my_ip: Ipv4Addr, ip: Ipv4Addr) -> Option<Mac
     };
     let frame = EthernetHeader { dst: MacAddr::BROADCAST, src: my_mac, ethertype: EtherType::Arp }.build(&req.build());
     nic::send(&frame);
-    for _ in 0..SPINS {
+    let mut w = RxWait::new(SPINS, 100);
+    while w.next() {
         if let Some(rx) = legacy_rx() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Arp {
@@ -550,7 +673,8 @@ pub fn icmp_ping(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, dst: Ipv4Ad
     let iph = Ipv4Header { protocol: Protocol::Icmp, ttl: 64, src: my_ip, dst, total_length: 0, identification: 1 };
     let frame = EthernetHeader { dst: nexthop, src: my_mac, ethertype: EtherType::Ipv4 }.build(&iph.build(&icmp.build()));
     nic::send(&frame);
-    for _ in 0..SPINS * 2 {
+    let mut w = RxWait::new(SPINS * 2, 200);
+    while w.next() {
         if let Some(rx) = legacy_rx() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Ipv4 {
@@ -592,7 +716,8 @@ pub fn dns_query(my_mac: MacAddr, my_ip: Ipv4Addr, dns_mac: MacAddr, dns_ip: Ipv
     let iph = Ipv4Header { protocol: Protocol::Udp, ttl: 64, src: my_ip, dst: dns_ip, total_length: 0, identification: 2 };
     let frame = EthernetHeader { dst: dns_mac, src: my_mac, ethertype: EtherType::Ipv4 }.build(&iph.build(&seg));
     nic::send(&frame);
-    for _ in 0..SPINS * 2 {
+    let mut w = RxWait::new(SPINS * 2, 200);
+    while w.next() {
         if let Some(rx) = legacy_rx() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Ipv4 {
@@ -624,7 +749,8 @@ pub fn icmp6_ping(my_mac: MacAddr, src_ll: Ipv6Addr, dst_mac: MacAddr, dst: Ipv6
     let eh = Ipv6Header { next_header: 58, hop_limit: 255, src: src_ll, dst, payload_len: 0 };
     let frame = EthernetHeader { dst: dst_mac, src: my_mac, ethertype: EtherType::Ipv6 }.build(&eh.build(&echo));
     nic::send(&frame);
-    for _ in 0..SPINS * 2 {
+    let mut w = RxWait::new(SPINS * 2, 200);
+    while w.next() {
         if let Some(rx) = legacy_rx() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Ipv6 {
@@ -638,6 +764,32 @@ pub fn icmp6_ping(my_mac: MacAddr, src_ll: Ipv6Addr, dst_mac: MacAddr, dst: Ipv6
         }
     }
     false
+}
+
+/// IPv6 router discovery: a Router Solicitation to ff02::2 from `ll`, then wait
+/// for a Router Advertisement. (router link-local, router MAC, /64 prefix).
+pub fn router_discovery(my_mac: MacAddr, ll: Ipv6Addr) -> Option<(Ipv6Addr, MacAddr, Option<[u8; 8]>)> {
+    let rs = icmpv6::router_solicit(my_mac.0, ll, Ipv6Addr::ALL_ROUTERS);
+    let h = Ipv6Header { next_header: 58, hop_limit: 255, src: ll, dst: Ipv6Addr::ALL_ROUTERS, payload_len: 0 };
+    let frame = EthernetHeader { dst: MacAddr(Ipv6Addr::ALL_ROUTERS.multicast_mac()), src: my_mac, ethertype: EtherType::Ipv6 }
+        .build(&h.build(&rs));
+    nic::send(&frame);
+    let mut w = RxWait::new(SPINS * 2, 200);
+    while w.next() {
+        if let Some(rx) = legacy_rx() {
+            if let Ok((eh, p)) = EthernetHeader::parse(&rx) {
+                if eh.ethertype == EtherType::Ipv6 {
+                    if let Ok((ih, pl)) = Ipv6Header::parse(p) {
+                        if ih.next_header == 58 && icmpv6::msg_type(pl) == Some(icmpv6::ROUTER_ADVERT) {
+                            let (prefix, _) = icmpv6::ra_info(pl);
+                            return Some((ih.src, eh.src, prefix));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Network service: poll some incoming traffic and ANSWER ARP requests for
@@ -880,7 +1032,8 @@ impl TcpConn {
 
     /// Wait for the next TCP segment from our peer for this port.
     fn poll_seg(&self) -> Option<TcpSegment> {
-        for _ in 0..SPINS * 3 {
+        let mut w = RxWait::new(SPINS * 3, 300);
+        while w.next() {
             if let Some(seg) = portq_pop(self.sport, self.server) {
                 return Some(seg);
             }
@@ -974,6 +1127,16 @@ impl TcpConn {
             self.open = false;
             return;
         }
+        for (seq, chunk) in self.retx.clone() {
+            let saved = self.my_seq;
+            self.my_seq = seq;
+            self.emit(tcp::PSH | tcp::ACK, &chunk);
+            self.my_seq = saved;
+        }
+    }
+    /// Retransmit every segment still waiting for its acknowledgement (one
+    /// round of what `send` does after each timeout).
+    fn retransmit_unacked(&mut self) {
         for (seq, chunk) in self.retx.clone() {
             let saved = self.my_seq;
             self.my_seq = seq;
@@ -1637,8 +1800,41 @@ impl UdpSock {
         }
         alloc::vec::Vec::new()
     }
+    /// One non-blocking look with the same outcome as one round of [`recv`]:
+    /// `Some(datagram)`, `Some(empty)` when an ICMP unreachable bounced our
+    /// datagram back (fail fast), `None` when nothing arrived yet.
+    pub fn try_recv(&self) -> Option<alloc::vec::Vec<u8>> {
+        rx_route();
+        if let Some(d) = udpq_pop(self.sport, self.server) {
+            return Some(d);
+        }
+        for _ in 0..64 {
+            let rx = legacy_rx()?;
+            if let Ok((h, p)) = EthernetHeader::parse(&rx) {
+                if h.ethertype == EtherType::Ipv4 {
+                    if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
+                        if ih.protocol == Protocol::Udp && ih.src == self.server {
+                            if let Ok(dg) = UdpDatagram::parse(ipl, ih.src, ih.dst) {
+                                if dg.dst_port == self.sport {
+                                    return Some(dg.payload);
+                                }
+                            }
+                        } else if ih.protocol == Protocol::Icmp && ih.src == self.server {
+                            if let Some((IcmpError::DestUnreachable(_), orig)) = IcmpError::parse(ipl) {
+                                if embedded_udp_matches(&orig, self.sport, self.dport) {
+                                    return Some(alloc::vec::Vec::new());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
     pub fn recv(&self) -> alloc::vec::Vec<u8> {
-        for _ in 0..SPINS * 3 {
+        let mut w = RxWait::new(SPINS * 3, 300);
+        while w.next() {
             rx_route();
             if let Some(d) = udpq_pop(self.sport, self.server) {
                 return d;
@@ -1787,6 +1983,12 @@ pub fn sock_open(dgram: bool) -> u64 {
 /// connect(fd, ip, port): for TCP a 3-way handshake, for UDP just
 /// remember the destination. 0 / -1.
 pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
+    sock_connect_as(fd, server, port, &crate::ring3::current_app())
+}
+
+/// [`sock_connect`] for a caller whose app identity is not the foreground
+/// program (a scheduled background process): EuroGuard decides on `app`.
+pub fn sock_connect_as(fd: u64, server: Ipv4Addr, port: u16, app: &str) -> u64 {
     {
         use core::sync::atomic::{AtomicU32, Ordering};
         static CONN_DIAG: AtomicU32 = AtomicU32::new(200);
@@ -1812,9 +2014,8 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     // EuroGuard (Track 7, Phase 7.1): let the policy engine evaluate this
     // outgoing connection BEFORE a packet leaves. A blocked app
     // gets -EPERM and the request is audited — a hard policy boundary.
-    let app = crate::ring3::current_app();
     let dst = alloc::format!("{}.{}.{}.{}:{port}", server.0[0], server.0[1], server.0[2], server.0[3]);
-    if crate::euroguard::check_connect(&app, server, port) == crate::euroguard::Decision::Block {
+    if crate::euroguard::check_connect(app, server, port) == crate::euroguard::Decision::Block {
         // 3D-6: a blocked connection is a policy violation in the hash-chained log.
         crate::serial_println!("[conn] BLOCKED by EuroGuard: {dst} (app {app:?})");
         crate::audit::record_connection(&dst, false);
@@ -1956,7 +2157,15 @@ pub fn sock_accept(fd: u64) -> u64 {
     // is in scheduler ticks (100 Hz guest time); `service()` is non-blocking, so
     // we pump until the clock reaches the upper bound.
     let deadline = crate::interrupts::ticks() + 400; // ~4 s guest-time upper bound
-    while crate::interrupts::ticks() < deadline {
+    // With interrupts off and nobody sleeping the tick clock stands still: a
+    // spin ceiling ends the wait then. A caller whose waits sleep lets it run.
+    let sleeping_caller = rx_should_block();
+    let mut spins: u64 = 0;
+    while crate::interrupts::ticks() < deadline && spins < 20_000_000 {
+        spins += 1;
+        if sleeping_caller && spins > 1 {
+            block_tick();
+        }
         // Pop a ready connection (hold the lock briefly).
         let conn = {
             let mut t = SOCKETS[i].lock();
@@ -1991,6 +2200,11 @@ pub fn resolve(host: &str) -> Option<Ipv4Addr> {
 
 /// send(fd, data): number of bytes sent, or -1.
 pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
+    sock_send_as(fd, data, &crate::ring3::current_app())
+}
+
+/// [`sock_send`] under the app identity `app` (EuroGuard DNS filter, statistics).
+pub fn sock_send_as(fd: u64, data: &[u8], app: &str) -> u64 {
     if !is_sock_fd(fd) {
         return (-1i64) as u64;
     }
@@ -2004,11 +2218,24 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
         }
     }
     let i = (fd - SOCK_FD_BASE) as usize;
+    // Decided before the lock: under it nothing may sleep.
+    let sleeping_caller = rx_should_block();
     let sent = {
         let mut t = SOCKETS[i].lock();
         match &mut *t {
             Some(Sock::Conn(c)) => {
-                c.send(data);
+                if sleeping_caller {
+                    // Put the data on the wire under the lock; wait for the
+                    // acknowledgement WITHOUT it (that wait sleeps).
+                    if !c.open {
+                        return (-32i64) as u64; // -EPIPE
+                    }
+                    c.send_nowait(data);
+                    drop(t);
+                    tcp_wait_acked(i);
+                } else {
+                    c.send(data);
+                }
                 data.len() as u64
             }
             Some(Sock::Udp(u)) => {
@@ -2016,9 +2243,8 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
                 // and block trackers/ads before the query goes onto the network.
                 if u.dport == 53 {
                     if let Some(name) = dns::parse_query_name(data) {
-                        let app = crate::ring3::current_app();
-                        let blocked = crate::euroguard::check_dns(&app, &name) == crate::euroguard::Decision::Block
-                            || crate::apppolicy::check_dns(&app, &name) == Some(false);
+                        let blocked = crate::euroguard::check_dns(app, &name) == crate::euroguard::Decision::Block
+                            || crate::apppolicy::check_dns(app, &name) == Some(false);
                         dns_ledger(&alloc::format!("query {name}{}", if blocked { " BLOCKED" } else { "" }), u.sport);
                         if blocked {
                             // Blocked: the app gets NXDOMAIN at once, not silence. A query
@@ -2049,7 +2275,7 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
                 drop(t);
                 // EuroGuard DNS filtering applies to the kernel resolver too.
                 if let Some(name) = dns::parse_query_name(&query) {
-                    if crate::euroguard::check_dns(&crate::ring3::current_app(), &name)
+                    if crate::euroguard::check_dns(app, &name)
                         == crate::euroguard::Decision::Block
                     {
                         return query.len() as u64; // swallowed, no reply
@@ -2068,8 +2294,35 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
         }
     };
     // EuroGuard statistic (Phase 7.4): bytes sent per app.
-    crate::euroguard::record_bytes(&crate::ring3::current_app(), sent, 0);
+    crate::euroguard::record_bytes(app, sent, 0);
     sent
+}
+
+/// Blocking-mode TCP send, after the data went out under the socket lock: wait
+/// for the acknowledgement with the lock released (sleeping, see RxWait), and
+/// retransmit what is still unacknowledged after each second without it, five
+/// rounds at most: the bound of `TcpConn::send`, in ticks instead of spins.
+fn tcp_wait_acked(i: usize) {
+    for _round in 0..5 {
+        let mut w = RxWait::new(SPINS * 3, 100);
+        while w.next() {
+            let mut t = SOCKETS[i].lock();
+            match &mut *t {
+                Some(Sock::Conn(c)) => {
+                    c.pump_nowait();
+                    if c.retx.is_empty() || !c.open {
+                        return;
+                    }
+                }
+                _ => return,
+            }
+        }
+        let mut t = SOCKETS[i].lock();
+        match &mut *t {
+            Some(Sock::Conn(c)) if c.open => c.retransmit_unacked(),
+            _ => return,
+        }
+    }
 }
 
 /// Parse one DNS query and produce a response: /etc/hosts first, then a real
@@ -2127,11 +2380,57 @@ fn local_dns_answer(q: &[u8]) -> Option<alloc::vec::Vec<u8>> {
 /// recv(fd, max): copy up to `max` received bytes into `out`; return the count
 /// (0 = connection closed and empty).
 pub fn sock_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
+    sock_recv_as(fd, max, &crate::ring3::current_app())
+}
+
+/// Blocking-mode receive with the socket lock released between looks: TCP
+/// waits until data arrives or the peer closes (30 s bound; unacknowledged
+/// data is retransmitted once a second meanwhile), UDP until a datagram from
+/// the peer or an ICMP unreachable arrives (3 s, the bound of `UdpSock::recv`).
+fn sock_recv_blocking(i: usize, max: usize) -> alloc::vec::Vec<u8> {
+    let tcp = matches!(*SOCKETS[i].lock(), Some(Sock::Conn(_)));
+    let mut w = RxWait::new(SPINS * 3, if tcp { 3000 } else { 300 });
+    let mut last_tick = crate::interrupts::ticks();
+    while w.next() {
+        let mut t = SOCKETS[i].lock();
+        match &mut *t {
+            Some(Sock::Conn(c)) => {
+                let d = c.recv_nowait(max);
+                if !d.is_empty() || !c.open {
+                    return d;
+                }
+                let now = crate::interrupts::ticks();
+                if now.wrapping_sub(last_tick) >= 100 {
+                    last_tick = now;
+                    c.tick();
+                }
+            }
+            Some(Sock::Udp(u)) => {
+                if let Some(mut d) = u.try_recv() {
+                    d.truncate(max);
+                    return d;
+                }
+            }
+            Some(Sock::LocalDns { rx }) => {
+                let mut d = rx.pop_front().unwrap_or_default();
+                d.truncate(max);
+                return d;
+            }
+            _ => return alloc::vec::Vec::new(),
+        }
+    }
+    alloc::vec::Vec::new()
+}
+
+/// [`sock_recv`] under the app identity `app` (statistics).
+pub fn sock_recv_as(fd: u64, max: usize, app: &str) -> alloc::vec::Vec<u8> {
     if !is_sock_fd(fd) {
         return alloc::vec::Vec::new();
     }
     let i = (fd - SOCK_FD_BASE) as usize;
-    let data = {
+    let data = if rx_should_block() {
+        sock_recv_blocking(i, max)
+    } else {
         let mut t = SOCKETS[i].lock();
         match &mut *t {
             Some(Sock::Conn(c)) => c.recv(max),
@@ -2149,7 +2448,7 @@ pub fn sock_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
         }
     };
     // EuroGuard statistic (Phase 7.4): bytes received per app.
-    crate::euroguard::record_bytes(&crate::ring3::current_app(), 0, data.len() as u64);
+    crate::euroguard::record_bytes(app, 0, data.len() as u64);
     {
         use core::sync::atomic::{AtomicU32, Ordering};
         static RECV_DIAG: AtomicU32 = AtomicU32::new(80);
@@ -2210,6 +2509,11 @@ fn udpq_unread(sport: u16, server: Ipv4Addr, d: &[u8]) {
     }
 }
 pub fn sock_recv_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
+    sock_recv_nowait_as(fd, max, &crate::ring3::current_app())
+}
+
+/// [`sock_recv_nowait`] under the app identity `app` (statistics).
+pub fn sock_recv_nowait_as(fd: u64, max: usize, app: &str) -> alloc::vec::Vec<u8> {
     if !is_sock_fd(fd) {
         return alloc::vec::Vec::new();
     }
@@ -2231,7 +2535,7 @@ pub fn sock_recv_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
             _ => alloc::vec::Vec::new(),
         }
     };
-    crate::euroguard::record_bytes(&crate::ring3::current_app(), 0, data.len() as u64);
+    crate::euroguard::record_bytes(app, 0, data.len() as u64);
     data
 }
 
@@ -2241,13 +2545,18 @@ pub fn sock_recv_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
 /// `TcpConn::send` waited up to five rounds for the ACK with interrupts off.
 /// UDP and the loopback resolver never waited, so they keep their path.
 pub fn sock_send_nowait(fd: u64, data: &[u8]) -> u64 {
+    sock_send_nowait_as(fd, data, &crate::ring3::current_app())
+}
+
+/// [`sock_send_nowait`] under the app identity `app`.
+pub fn sock_send_nowait_as(fd: u64, data: &[u8], app: &str) -> u64 {
     if !is_sock_fd(fd) {
         return (-1i64) as u64;
     }
     let i = (fd - SOCK_FD_BASE) as usize;
     let is_conn = matches!(*SOCKETS[i].lock(), Some(Sock::Conn(_)));
     if !is_conn {
-        return sock_send(fd, data);
+        return sock_send_as(fd, data, app);
     }
     let mut t = SOCKETS[i].lock();
     if let Some(Sock::Conn(c)) = &mut *t {
@@ -2257,7 +2566,7 @@ pub fn sock_send_nowait(fd: u64, data: &[u8]) -> u64 {
         c.send_nowait(data);
     }
     drop(t);
-    crate::euroguard::record_bytes(&crate::ring3::current_app(), data.len() as u64, 0);
+    crate::euroguard::record_bytes(app, data.len() as u64, 0);
     data.len() as u64
 }
 
@@ -2378,6 +2687,8 @@ pub fn sock_close(fd: u64) -> u64 {
         return (-1i64) as u64;
     }
     let i = (fd - SOCK_FD_BASE) as usize;
+    // Decided before the lock: under it nothing may sleep.
+    let sleeping_caller = rx_should_block();
     let mut t = SOCKETS[i].lock();
     if let Some(Sock::Conn(c)) = &mut *t {
         // One line per connection, uncapped: what it did before chrome let go of
@@ -2386,7 +2697,13 @@ pub fn sock_close(fd: u64) -> u64 {
         crate::serial_println!("[conn] fd{fd} closed {}.{}.{}.{}:{} sport {}: rx {} B, tx {} B, open={}, unacked={}",
             c.server.0[0], c.server.0[1], c.server.0[2], c.server.0[3], c.dport, c.sport,
             c.rx_bytes, c.tx_bytes, c.open, c.retx.len());
-        c.close();
+        // `close` waits briefly for the peer's FIN/ACK under this lock; a caller
+        // whose waits sleep sends the FIN without waiting (the answer is not used).
+        if sleeping_caller {
+            c.close_nowait();
+        } else {
+            c.close();
+        }
         portq_remove(c.sport);
     }
     if let Some(Sock::Udp(u)) = &*t {
@@ -2431,6 +2748,9 @@ pub fn sock_poll(fds: &[u64], deadline_ticks: u64) -> alloc::vec::Vec<(u64, bool
     // Spin ceiling alongside the tick deadline: if the timer tick for whatever reason
     // does not advance, poll() must NEVER block forever.
     let mut spins: u64 = 0;
+    // A caller whose waits sleep (userspace NIC driver, lock-free context) looks
+    // without waiting under the socket locks and sleeps a tick between rounds.
+    let sleeping_caller = rx_should_block();
     loop {
         service(); // process incoming packets → fills Listen queues
         {
@@ -2441,7 +2761,11 @@ pub fn sock_poll(fds: &[u64], deadline_ticks: u64) -> alloc::vec::Vec<(u64, bool
                     let mut t = SOCKETS[(fd - SOCK_FD_BASE) as usize].lock();
                     if let Some(Sock::Conn(c)) = &mut *t {
                         if c.rx.is_empty() && c.open {
-                            c.pump(1);
+                            if sleeping_caller {
+                                c.pump_nowait();
+                            } else {
+                                c.pump(1);
+                            }
                         }
                     }
                 }
@@ -2467,6 +2791,9 @@ pub fn sock_poll(fds: &[u64], deadline_ticks: u64) -> alloc::vec::Vec<(u64, bool
             || spins >= 2_000_000
         {
             return ready;
+        }
+        if sleeping_caller {
+            block_tick();
         }
     }
 }

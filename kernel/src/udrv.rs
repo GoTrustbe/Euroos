@@ -73,19 +73,29 @@ static REPORT: Mutex<(u8, u64, u64)> = Mutex::new((0, 0, 0));
 
 /// What a driver syscall needs to know about its caller (looked up by task).
 #[derive(Clone, Copy)]
-struct SysGrant {
-    task: usize,
-    pid: u64,
-    pml4: u64,
-    arena: u64,
-    arena_bytes: u64,
-    info: DriverInfo,
+pub(crate) struct SysGrant {
+    pub task: usize,
+    pub pid: u64,
+    pub pml4: u64,
+    pub arena: u64,
+    pub arena_bytes: u64,
+    pub info: DriverInfo,
+    /// For the log prefix.
+    pub name: &'static str,
 }
 
-static SYS: Mutex<Option<SysGrant>> = Mutex::new(None);
+/// Grant slots of the running drivers: [`SLOT_NIC`] (e1000d), [`SLOT_BLK`] (nvmed).
+pub(crate) const SLOT_NIC: usize = 0;
+pub(crate) const SLOT_BLK: usize = 1;
+static SYS: Mutex<[Option<SysGrant>; 2]> = Mutex::new([None, None]);
 
 fn sys_grant(task: usize) -> Option<SysGrant> {
-    without_interrupts(|| SYS.lock().filter(|g| g.task == task))
+    without_interrupts(|| SYS.lock().iter().flatten().find(|g| g.task == task).copied())
+}
+
+/// Publish (or clear) the grant of the driver in `slot` (interrupts off).
+pub(crate) fn set_grant(slot: usize, g: Option<SysGrant>) {
+    without_interrupts(|| SYS.lock()[slot] = g);
 }
 
 /// One running driver instance (task-0 state).
@@ -217,7 +227,14 @@ pub fn syscall(task: usize, num: u64, a1: u64, a2: u64, a3: u64) -> Option<u64> 
             unsafe { core::ptr::copy_nonoverlapping(a2 as *const u8, buf.as_mut_ptr(), len) };
             let data = &buf[..len];
             let quiet = matches!(proto::decode(data), Ok(Msg::Rx(_)));
-            Some(euroipc::send_with(g.pid, port, data, !quiet) as u64)
+            let r = euroipc::send_with(g.pid, port, data, !quiet);
+            if r >= 0 {
+                // A task sleeping in a network wait (net.rs RxWait) has
+                // something to look at now: wake it instead of letting it
+                // sleep out its tick.
+                crate::net::wake_rx_waiters();
+            }
+            Some(r as u64)
         }
         0x6107 => {
             // log(ptr, len): one line to the serial log, tagged with the driver.
@@ -228,7 +245,7 @@ pub fn syscall(task: usize, num: u64, a1: u64, a2: u64, a3: u64) -> Option<u64> 
             let mut b = [0u8; 200];
             // SAFETY: checked above.
             unsafe { core::ptr::copy_nonoverlapping(a1 as *const u8, b.as_mut_ptr(), len) };
-            crate::serial_println!("[e1000d pid {}] {}", g.pid, String::from_utf8_lossy(&b[..len]));
+            crate::serial_println!("[{} pid {}] {}", g.name, g.pid, String::from_utf8_lossy(&b[..len]));
             Some(0)
         }
         0x6108 => Some(crate::interrupts::ticks() * 10),
@@ -346,8 +363,14 @@ fn find_device() -> Option<PciDevice> {
     pci::find(|d| d.vendor == 0x8086 && (d.device == 0x100E || d.device == 0x10D3))
 }
 
+/// Is there a NIC the userspace driver drives (82540EM / 82574L)? The boot
+/// uses this to move its network part behind the scheduler.
+pub fn device_present() -> bool {
+    find_device().is_some()
+}
+
 /// Size of memory BAR 0, probed with decode off (PCI spec 6.2.5.1).
-fn bar0_window(dev: &PciDevice) -> Option<Window> {
+pub(crate) fn bar0_window(dev: &PciDevice) -> Option<Window> {
     let base = dev.bar_addr(0);
     let off = 0x10u8;
     let cmd = pci::cfg_read32(dev.bus, dev.dev, dev.func, 0x04);
@@ -361,7 +384,7 @@ fn bar0_window(dev: &PciDevice) -> Option<Window> {
     Window::page_round(base, size)
 }
 
-fn bus_master(dev: &PciDevice, on: bool) {
+pub(crate) fn bus_master(dev: &PciDevice, on: bool) {
     let cmd = pci::cfg_read32(dev.bus, dev.dev, dev.func, 0x04);
     let new = if on { cmd | 0x6 } else { cmd & !0x4 };
     pci::cfg_write32(dev.bus, dev.dev, dev.func, 0x04, new);
@@ -435,7 +458,7 @@ fn start(sup: &mut Supervisor, falloc: &mut FrameAllocator) -> Result<u64, &'sta
                 return Err("could not map the DMA window");
             }
         }
-        *SYS.lock() = Some(SysGrant { task, pid, pml4, arena, arena_bytes, info });
+        SYS.lock()[SLOT_NIC] = Some(SysGrant { task, pid, pml4, arena, arena_bytes, info, name: "e1000d" });
         Ok(task)
     });
     let task = match spawned {
@@ -476,7 +499,7 @@ fn on_death(sup: &mut Supervisor, falloc: &mut FrameAllocator, inst: Instance) {
     let reason = crate::ring3::bg_end_reason(inst.pid).unwrap_or_else(|| String::from("terminated"));
     LINK_UP.store(false, Ordering::Relaxed);
     SEND_REFUSED_WHILE_DEAD.store(!nic_send(&[0u8; 60]), Ordering::Relaxed);
-    without_interrupts(|| *SYS.lock() = None);
+    set_grant(SLOT_NIC, None);
     // 1. No new DMA: bus mastering off.
     if let Some(dev) = sup.dev {
         bus_master(&dev, false);
@@ -563,7 +586,7 @@ fn ipfmt(ip: euronet::ipv4::Ipv4Addr) -> String {
 
 /// DHCP (DISCOVER/OFFER/REQUEST/ACK) + ARP + DNS + HTTP GET, all through the
 /// userspace driver. Returns the lines for the log and whether it all worked.
-fn net_roundtrip(falloc: &mut FrameAllocator, xid: u32) -> (bool, Vec<String>) {
+fn net_roundtrip(falloc: &mut FrameAllocator, xid: u32, probe: bool) -> (bool, Vec<String>) {
     use euronet::dhcp;
     use euronet::ethernet::{EtherType, EthernetHeader, MacAddr};
     use euronet::ipv4::{Ipv4Addr, Ipv4Header, Protocol};
@@ -662,6 +685,10 @@ fn net_roundtrip(falloc: &mut FrameAllocator, xid: u32) -> (bool, Vec<String>) {
     let dns_mac = crate::net::arp_resolve(my_mac, my_ip, dns_ip).unwrap_or(gwm);
     save(gwm, dns_mac);
     out.push(alloc::format!("ARP: gateway {} is-at {:02x?}", ipfmt(gw_ip), gwm.0));
+    if !probe {
+        // Configuration only (the public image): no probe of outside hosts.
+        return (true, out);
+    }
     let host = "example.com";
     let Some(ip) = crate::net::dns_query(my_mac, my_ip, dns_mac, dns_ip, host) else {
         out.push(String::from("no DNS reply"));
@@ -741,9 +768,19 @@ pub fn boot(falloc: &mut FrameAllocator) {
         mac_str(),
         crate::nic::kind()
     );
-    let (ok, lines) = net_roundtrip(falloc, 0x4555_0001);
+    let (ok, lines) = net_roundtrip(falloc, 0x4555_0001, cfg!(feature = "selftest"));
     for l in &lines {
         crate::serial_println!("[udrv-net]   {l}");
+    }
+    if !cfg!(feature = "selftest") {
+        // The public image: bring the network up, prove nothing destructive
+        // (no malicious-DMA probe, no deliberate driver crash at every boot).
+        crate::serial_println!(
+            "[udrv-net] network over e1000d: {}",
+            if ok { "DHCP + ARP done, netstack configured" } else { "NOT configured (no DHCP lease / gateway)" }
+        );
+        crate::serial_println!("[udrv] {}", status_line());
+        return;
     }
     crate::serial_println!(
         "[udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HTTP: tx {} rx {} frames → {}",
@@ -903,7 +940,7 @@ fn selftest_crash(falloc: &mut FrameAllocator, pid: u64) {
         crate::serial_println!("[udrv-crash] driver died={died}, sends refused while dead={link_was_down}, came back={back} → FAILED");
         return;
     }
-    let (ok, lines) = net_roundtrip(falloc, 0x4555_0002);
+    let (ok, lines) = net_roundtrip(falloc, 0x4555_0002, true);
     for l in &lines {
         crate::serial_println!("[udrv-crash]   {l}");
     }

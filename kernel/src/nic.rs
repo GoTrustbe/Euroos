@@ -56,6 +56,13 @@ pub fn bind_user() {
     }
 }
 
+/// Do received frames come from a userspace driver process (`net.driver=user`)?
+/// Then a network wait has to let that process run on this CPU (net.rs RxWait);
+/// the in-kernel drivers are polled by the waiter itself.
+pub fn frames_from_process() -> bool {
+    KIND.load(Ordering::Relaxed) == KIND_USER
+}
+
 /// Human-readable name of the bound driver (for the boot report / hwprobe).
 pub fn kind() -> &'static str {
     match KIND.load(Ordering::Relaxed) {

@@ -6,17 +6,19 @@
 //! while UEFI boot services still exist. A missing or unreadable file means
 //! every default. Today there is one option:
 //!
-//! - `net.driver=kernel` (default): the in-kernel e1000 driver.
-//! - `net.driver=user`: the userspace e1000 driver (`e1000d`, see udrv.rs);
-//!   the kernel leaves the e1000 alone and starts the driver after the
-//!   scheduler and the IOMMU are up.
+//! - `net.driver=user` (default since 2026-11-02): the userspace e1000 driver
+//!   (`e1000d`, see udrv.rs); the kernel leaves the e1000 alone, starts the
+//!   driver after the scheduler and the IOMMU are up, and runs the network part
+//!   of the boot after it (`[net-late]` in main.rs).
+//! - `net.driver=kernel`: the in-kernel e1000 driver (the fallback), bound
+//!   before the scheduler as before.
 //!
 //! The file is not signed. It only chooses between two code paths that are
 //! both part of the signed kernel image; it cannot add code.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-static NET_USER: AtomicBool = AtomicBool::new(false);
+static NET_USER: AtomicBool = AtomicBool::new(true);
 static FOUND: AtomicBool = AtomicBool::new(false);
 
 /// Parse the option text (host-testable shape: pure over the bytes).
@@ -66,7 +68,7 @@ pub fn capture() {
     );
 }
 
-/// Was `net.driver=user` chosen?
+/// Is the userspace NIC driver selected? (the default; `net.driver=kernel` turns it off)
 pub fn net_user_driver() -> bool {
     NET_USER.load(Ordering::Relaxed)
 }
