@@ -25,6 +25,7 @@ mod euroipc;
 mod bootopt;
 mod udrv;
 mod udrv_blk;
+mod udrv_bcm5720;
 mod klock;
 mod kvfs;
 mod percpu;
@@ -2246,6 +2247,7 @@ fn main() -> Status {
     if net_late {
         demo_out.extend(net_late_suite(&mut allocator, &mut fs));
     }
+    udrv_bcm5720::boot(&mut allocator);
     // M3-3: a CDC-ECM USB NIC only exists after xHCI enumeration (above) — if
     // no NIC bound during the main net bring-up, adopt it and bring it up now.
     net::late_bring_up();
@@ -6621,6 +6623,7 @@ fn main() -> Status {
             // Userspace drivers: restart a crashed e1000d (after quiescing its device).
             udrv::supervise(ctx.mem);
             udrv_blk::supervise(ctx.mem);
+            udrv_bcm5720::supervise(ctx.mem);
             init::flush_log(ctx.fs);
             // G5: periodic background scrub (rate-limited ~60 s) → /var/log/fsck.log.
             scrub::maybe_run(ctx.fs, t);

@@ -10,6 +10,7 @@ userland/*.elf
 # Signed at build time by userland/build.sh (Rust driver output changes per toolchain).
 userland/e1000d.elf.sig
 userland/nvmed.elf.sig
+userland/bcm5720d.elf.sig
 userland/*.signed
 
 # ── Bootable disk images (build output) ──────────────────────────────────────

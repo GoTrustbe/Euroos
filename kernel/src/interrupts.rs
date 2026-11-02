@@ -46,6 +46,8 @@ pub const VIRTIO_NET_MSIX_VECTOR: u8 = 0x4B; // virtio-net receive via MSI-X
 pub const UDRV_MSIX_VECTOR: u8 = 0x4C;
 /// MSI-X of the NVMe controller driven from ring 3 (udrv_blk.rs, nvmed).
 pub const UDRV_BLK_MSIX_VECTOR: u8 = 0x4D;
+/// MSI-X of the userspace BCM5720 driver (udrv_bcm5720.rs).
+pub const UDRV_BCM_MSIX_VECTOR: u8 = 0x4E;
 pub const SCI_VECTOR: u8 = 0x49; // ACPI SCI (power button etc.) — Metal M5-2
 /// Cooperative-yield software interrupt: a blocked/sleeping task triggers this
 /// (`int YIELD_VECTOR`) to switch away immediately (sched::yield_now). Not a
@@ -138,6 +140,7 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     idt[VIRTIO_NET_MSIX_VECTOR].set_handler_fn(net_msix_handler);
     idt[UDRV_MSIX_VECTOR].set_handler_fn(crate::udrv::irq_handler);
     idt[UDRV_BLK_MSIX_VECTOR].set_handler_fn(crate::udrv_blk::irq_handler);
+    idt[UDRV_BCM_MSIX_VECTOR].set_handler_fn(crate::udrv_bcm5720::irq_handler);
     // Harmless spurious handler (LAPIC vector 0xFF).
     idt[0xFF].set_handler_fn(spurious_handler);
     idt
