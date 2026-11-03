@@ -299,11 +299,18 @@ impl E1000 {
         loop {
             let i = self.rx_head;
             let d = self.layout.rx_desc(i);
-            let mut desc = [0u8; 16];
-            hal.dma_read(d, &mut desc);
-            if desc[12] & DESC_STA_DD == 0 {
+            // The status byte (DD) first, the rest of the descriptor only after
+            // it showed DD: the device writes the descriptor back while we may
+            // be reading it, and a HAL that reads bytes in ascending order
+            // (e1000d does) could otherwise see DD with the old, zeroed length
+            // and drop a good frame. Same class as euronvme's phase/id read.
+            let mut sta = [0u8; 1];
+            hal.dma_read(d + 12, &mut sta);
+            if sta[0] & DESC_STA_DD == 0 {
                 return None;
             }
+            let mut desc = [0u8; 16];
+            hal.dma_read(d, &mut desc);
             let len = u16::from_le_bytes([desc[8], desc[9]]) as usize;
             let ok = len > 0 && len <= BUF_SIZE && len <= out.len() && desc[12] & RXD_STA_EOP != 0;
             if ok {
@@ -440,6 +447,64 @@ mod tests {
         for k in 0..15u8 {
             let n = e.receive(&mut s, &mut out).unwrap();
             assert_eq!(&out[..n], &frame(60, k)[..]);
+        }
+    }
+
+    /// A HAL that reads DMA memory one byte at a time in ascending order, like
+    /// e1000d, and lets the device post a frame after the `at`-th byte read.
+    struct ByteWise<'a> {
+        sim: &'a mut Sim,
+        read: usize,
+        at: usize,
+        frame: Option<Vec<u8>>,
+    }
+
+    impl Hal for ByteWise<'_> {
+        fn reg_read(&mut self, off: u32) -> u32 {
+            self.sim.reg_read(off)
+        }
+        fn reg_write(&mut self, off: u32, val: u32) {
+            self.sim.reg_write(off, val)
+        }
+        fn dma_write(&mut self, iova: u64, data: &[u8]) {
+            self.sim.dma_write(iova, data)
+        }
+        fn dma_read(&mut self, iova: u64, out: &mut [u8]) {
+            for (k, b) in out.iter_mut().enumerate() {
+                let mut one = [0u8; 1];
+                self.sim.dma_read(iova + k as u64, &mut one);
+                *b = one[0];
+                self.read += 1;
+                if self.read == self.at {
+                    if let Some(f) = self.frame.take() {
+                        assert!(self.sim.inject_rx(&f));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_descriptor_written_back_during_the_read_is_not_torn() {
+        // The device completes the descriptor after every possible number of
+        // bytes the driver has read so far: the driver must never drop it.
+        for at in 1..=40 {
+            let (mut s, mut e) = up(false);
+            let f = frame(98, at as u8);
+            let mut out = [0u8; BUF_SIZE];
+            let mut got = None;
+            {
+                let mut h = ByteWise { sim: &mut s, read: 0, at, frame: Some(f.clone()) };
+                for _ in 0..64 {
+                    if let Some(n) = e.receive(&mut h, &mut out) {
+                        got = Some(n);
+                        break;
+                    }
+                }
+            }
+            assert_eq!(e.stats.rx_dropped, 0, "frame posted after byte {at} was dropped (torn descriptor)");
+            assert_eq!(got, Some(f.len()), "frame posted after byte {at}");
+            assert_eq!(&out[..f.len()], &f[..]);
         }
     }
 
