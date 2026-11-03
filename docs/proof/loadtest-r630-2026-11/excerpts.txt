@@ -1,0 +1,102 @@
+
+== BUG-012 before: lockbench image, -smp 16 (813e627)
+[smp] parallel sum 0..2000000 over 16 core(s) = 2999999000000 (expected 1999999000000) -> WRONG
+[smp] core APIC-id 8 per-CPU scheduler: worker-A=0 worker-B=0 (own run queue)
+[smp] core APIC-id 8 cross-CPU: 0 ping IPIs received, 0 TLB shootdown(s)
+[smp] core APIC-id 8 runs the balanced task: worker-C=0
+[smp] J1: demo workers parked on 14/15 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[kwork] no APs accepting work (single core) — per-CPU queues idle
+
+== BUG-012/013 after
+[smp] MADT lists 16 enabled core(s); EuroOS runs at most 8 (per-CPU slots = APIC id & 7): using 8, 8 left offline
+[smp] parallel sum 0..2000000 over 8 core(s) = 1999999000000 (expected 1999999000000) -> OK
+[smp] J1: demo workers parked on 7/7 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[kwork] per-CPU work queues: 7 AP(s) online, 8 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (8 ok), work-stealing=yes -> OK ✓
+[lk-bench] start: 8 core(s) online, 3 round(s) x 700 ms per run, TSC 2203 MHz (KVM guest: hardware-virtualised vCPUs, NOT bare-metal numbers)
+[lk-bench] fs (mount per worker)          J1     1 core:    58278 ops/s | 8 cores:   108751 ops/s | scaling x1.86 | heap contended 1403839 (spins 75857794)
+
+== BUG-015/014 before: task table full (procs, 813e627 + hooks)
+[euro] bg-musl (pid 70228) -> task 18446744073709551615, own address space PML4 0x19b000, arena 0x4e200000
+[euro] bg-musl (pid 70229) -> task 18446744073709551615, own address space PML4 0x1a9000, arena 0x4e400000
+[euro] bg-musl (pid 70230) -> task 18446744073709551615, own address space PML4 0x1d3000, arena 0x4e600000
+
+== BUG-016 before: workers killed at their first instruction (-m 4G)
+[isolation] ring-3 page fault addr=0x4d800000 code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 0 (task 9) TERMINATED
+[isolation] ring-3 page fault addr=0x4da0117d code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 8 (task 10) TERMINATED
+isolation kills in that run: 415
+
+== BUG-017 before (bgps)
+[scon] pid 13 task 17:Blocked thr 24:Dead ctids=0 last="mpthread: pthread_create + pthread_join (real mu"
+[scon] pid 14 task 18:Blocked thr 25:Dead thr 26:Dead ctids=0 last="mmutex: 2 threads x 15000 under pthread_mutex..."
+[scon] pid 70000 task 35:Blocked thr 21:Dead ctids=0 last="mpthread: pthread_create + pthread_join (real mu"
+[scon] pid 70001 task 19:Blocked thr 20:Dead ctids=0 last="mpthread: pthread_create + pthread_join (real mu"
+
+== BUG-017 after (bgps, then ltstat)
+[scon] ltstat frames_free=403297 frames_usable=858221 heap_used=12397672 heap_free=524473240 tasks=62 bg_live=3 bg_zombie=16 kstacks=0 files=186 procpool_free=427008 demand_free=0 ticks=18221
+[scon] pid 8 task 10:Ready ctids=0 last="tls-proc 8: counter=9062318080"
+[scon] pid 9 task 11:Ready ctids=0 last="tls-proc 9: counter=9053143040"
+[scon] ltstat frames_free=412137 frames_usable=858221 heap_used=12340856 heap_free=524530056 tasks=62 bg_live=2 bg_zombie=0 kstacks=0 files=186 procpool_free=427008 demand_free=0 ticks=20227
+
+== BUG-018 before / after: tcpserve 8080 with a client in time
+[scon] tcpserve: accept() timeout (no client connected)
+[scon] tcpserve: accept() timeout (no client connected)
+[scon] tcpserve: accept() timeout (no client connected)
+[scon] tcpserve: connection ACCEPTED ✓
+[scon] tcpserve: connection ACCEPTED ✓
+
+== BUG-020: gfuzz under KVM (also 813e627)
+[glibc] gfuzz (syscall fuzzer): exit=0 (want 171)
+[fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+
+== BUG-022 before: stat reads the file (fix18 image, virtio)
+  [    5/322] ✓ ok          3635ms t=    7.4s  stat /home/euro/lt-io/z16
+  [    9/322] ✓ ok          6470ms t=   26.7s  stat /home/euro/lt-io/z64
+  [   13/322] ✗ CRASH:timeout waiting for '[scon-ready]'   60240ms t=  145.7s  stat /home/euro/lt-io/z256
+
+== BUG-023: periodic scrub duration (after the mitigation, the [g5] line reports it)
+[g5] scrub #1: 124 inodes, 377 data blocks, data verified 117, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 250 ms
+[g5] scrub #2: 139 inodes, 41337 data blocks, data verified 133, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 35780 ms
+[g5] scrub #1: 446 inodes, 172417 data blocks, data verified 440, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 113330 ms
+
+== BUG-024: first soak, 59 min
+[linux-abi] arch_prctl SET_FS = 0x44404138
+[idt] PAGE FAULT addr=0x44404138 code=PageFaultErrorCode(PROTECTION_VIOLATION | CAUSED_BY_WRITE) @ 0x5906e0b4
+
+== BUG-025 before: AHCI, cp of a 256 MiB file
+[scon] $ cp /home/euro/lt-io/z256 /home/euro/lt-io/c256
+
+========== KERNEL PANIC ==========
+[PANIC] panicked at /root/.rustup/toolchains/nightly-2026-05-31-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:573:9:
+memory allocation of 268435456 bytes failed
+
+== BUG-025 after
+[scon] truncate: /home/euro/lt-io/huge: NoSpace (1073741824 bytes do not fit in memory; file left unchanged)
+
+== BUG-026: 400 sequential fetches, kernel driver (index, status, ms, got-200)
+53 ok 85125 False ['fetch: no connection to 10.0.2.100']
+206 ok 13 False ['fetch: no connection to 10.0.2.100']
+356 ok 84348 False ['fetch: no connection to 10.0.2.100']
+359 ok 13 False ['fetch: no connection to 10.0.2.100']
+done 400 slow/failed: 4
+
+== BUG-019: inbound load on the background httpd (4 host clients)
+[3g2-wire] WATCHDOG TRIPPED - main loop hung; would reset (i6300esb) FAILED
+
+== BUG-021: NVMe disk, -enable-kvm -cpu host (log not kept; lines as captured, fix18 image)
+[blk] no virtio-blk device found
+[iommu] domain virtio-blk: 0 PCI function(s), 0 DMA page(s) registered
+[epk] no pack files registered (nothing to sweep)
+[idt] PAGE FAULT addr=0x380000000000 code=PageFaultErrorCode(0x0) @ 0x708a8842
+symbolized (scripts/symbolize.sh, target/kernel.map): 0x708a8842 -> efi_main +0x54bc
+with --cpu-opts ,host-phys-bits=off,phys-bits=39:
+[nvme] controller OK — model QEMU NVMe Ctrl, 16777216 LBAs × 512 B = 8192 MiB
+
+== BUG-019: background httpd under 4 host clients (net scenario, fix18 image; harness summary line as printed)
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 71, "err": 62, "p50_ms": 1.5, "p99_ms": 5867.4}
+[scon] httpd: listening on :80, served 74
+[3g2-wire] WATCHDOG TRIPPED - main loop hung; would reset (i6300esb) FAILED
+accept latency, kernel driver vs net.driver=user (scripts/loadtest-accept.py):
+round 3: guest accepted=True client=ok latency=7.23s shell=8238ms
+[accept] 4/4 inbound connections accepted and answered
+user driver (img with net.driver=user): round 0..3 latency 36.8-37.5 s, 4/4 accepted (printed by loadtest-accept.py)
+[bootopt] \EFI\BOOT\euroos-boot.conf read: net.driver=user

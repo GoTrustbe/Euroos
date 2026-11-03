@@ -1,0 +1,7 @@
+id,command,status,elapsed_ms,output_lines,t_s
+1,cat /home/euro/lt-io/marker,ok,922,1,0.9
+2,cat /home/euro/lt-io/small/f00000,ok,440,1,1.4
+3,stat /home/euro/lt-io/c16,ok,432,3,1.8
+4,stat /home/euro/lt-io/c64,ok,440,3,2.2
+5,stat /home/euro/lt-io/c256,ok,390,3,2.6
+6,scrub,ok,104421,8,107.1
