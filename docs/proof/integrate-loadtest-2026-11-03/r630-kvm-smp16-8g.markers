@@ -1,0 +1,77 @@
+[euro] bg-musl (pid 100) -> task 6, own address space PML4 0x132000, arena 0x200000
+[euro] bg-musl (pid 8) -> task 10, own address space PML4 0x150000, arena 0x42200000
+[euro] bg-musl (pid 9) -> task 11, own address space PML4 0x158000, arena 0x42400000
+[euro] bg-musl (pid 10) -> task 12, own address space PML4 0x160000, arena 0x42600000
+[euro] bg-musl (pid 11) -> task 13, own address space PML4 0x168000, arena 0x42800000
+[euro] bg-musl (pid 20) -> task 14, own address space PML4 0x170000, arena 0x42a00000
+[euro] bg-musl (pid 21) -> task 15, own address space PML4 0x178000, arena 0x42c00000
+[euro] bg-musl (pid 12) -> task 16, own address space PML4 0x180000, arena 0x42e00000
+[euro] bg-musl (pid 13) -> task 17, own address space PML4 0x188000, arena 0x43000000
+[euro] bg-musl (pid 14) -> task 18, own address space PML4 0x190000, arena 0x43200000
+[euro] bg-musl (pid 15) -> task 19, own address space PML4 0x198000, arena 0x43400000
+[euro] bg-musl (pid 16) -> task 20, own address space PML4 0x1a0000, arena 0x43600000
+[smp] MADT lists 16 enabled core(s); EuroOS runs at most 8 (per-CPU slots = APIC id & 7): using 8, 8 left offline
+[smp] core APIC-id 1 online
+[smp] core APIC-id 2 online
+[smp] core APIC-id 3 online
+[smp] core APIC-id 4 online
+[smp] core APIC-id 5 online
+[smp] core APIC-id 6 online
+[smp] core APIC-id 7 online
+[smp] 7/7 AP core(s) online (BSP = APIC-id 0, 16 cores total)
+[smp] parallel sum 0..2000000 over 8 core(s) = 1999999000000 (expected 1999999000000) -> OK
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=1189 worker-B=1201 (own run queue)
+[smp] core APIC-id 2 per-CPU scheduler: worker-A=1173 worker-B=1059 (own run queue)
+[smp] core APIC-id 3 per-CPU scheduler: worker-A=1042 worker-B=1056 (own run queue)
+[smp] core APIC-id 4 per-CPU scheduler: worker-A=1037 worker-B=958 (own run queue)
+[smp] core APIC-id 5 per-CPU scheduler: worker-A=910 worker-B=923 (own run queue)
+[smp] core APIC-id 6 per-CPU scheduler: worker-A=914 worker-B=860 (own run queue)
+[smp] core APIC-id 7 per-CPU scheduler: worker-A=784 worker-B=776 (own run queue)
+[smp] core APIC-id 1 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 2 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 3 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 4 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 5 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 6 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 7 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] load-balance: extra task placed on least-loaded core APIC-id 1
+[smp] core APIC-id 1 runs the balanced task: worker-C=181
+[smp] J1: demo workers parked on 7/7 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[isolation] ring-3 page fault addr=0x100000 code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE) -> process pid 10 (task 12) TERMINATED
+[isolation]   rip=0x4260108b rsp=0x427ffe30 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x42601088, 16 B): [04, 00, 00, 0f, b6, 04, 25, 00, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [0f, b6, 04, 25, 00, 00, 00, 00, 00, 00, 00, 00, 00]
+[udrv] net.driver=user: the e1000 driver runs in ring 3 (e1000d); the in-kernel e1000 stays unbound
+[udrv] e1000d started: pid 131072, task 27, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x1c0000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU absent: DMA NOT confined
+[udrv-grant] e1000d pid 131072: BAR0 0x810a0000..0x810c0000 mapped for ring 3 (first=true, last=true), page before=false, page after=false; DMA window 32 pages mapped=true, page after=false; LAPIC=false, kernel code=false → OK (exactly the granted ranges) ✓
+[udrv-iommu] no IOMMU translation on this machine: e1000d's DMA is NOT confined (boot QEMU with -device intel-iommu,intremap=off) ⬜
+[udrv-e1000] e1000d (pid 131072, ring 3, profile driver) brought the 82574L (e1000e) up: MAC 52:54:00:12:34:56 reported over EuroIPC; nic backend = e1000 via userspace driver e1000d (EuroIPC) → OK ✓
+[udrv-net]   DHCP ACK: lease 10.0.2.15 (router 10.0.2.2, dns 10.0.2.3, 86400s)
+[udrv-net]   ARP: gateway 10.0.2.2 is-at [52, 55, 0a, 00, 02, 02]
+[udrv-net]   no DNS reply
+[udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HTTP: tx 8 rx 4 frames → FAILED
+[udrv-irq] MSI-X vector 0x4c: 8 interrupt(s) raised, 8 delivered to e1000d as EuroIPC Irq messages → OK ✓
+[udrv-dma] no IOMMU translation: skipped (the escape would succeed; that is the unconfined case) ⬜
+[isolation] ring-3 page fault addr=0x1000 code=PageFaultErrorCode(PROTECTION_VIOLATION | CAUSED_BY_WRITE | USER_MODE) -> process pid 131072 (task 27) TERMINATED
+[isolation]   rip=0x43801a4e rsp=0x43bfdfd0 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x43801a48, 16 B): [c3, b8, 00, 10, 00, 00, 48, c7, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [48, c7, 00, 00, 00, 00, 00, 00, 00, 00]
+[udrv] e1000d pid 131072 died (memory isolation: access 0x1000 denied) -> device quiesced: bus-master off, IOMMU domain n/a (no IOMMU), 32 DMA pages freed; restart at tick 359 (death #1)
+[udrv] e1000d started: pid 131073, task 27, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x15c000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU absent: DMA NOT confined
+[udrv-crash]   DHCP ACK: lease 10.0.2.15 (router 10.0.2.2, dns 10.0.2.3, 86400s)
+[udrv-crash]   ARP: gateway 10.0.2.2 is-at [52, 55, 0a, 00, 02, 02]
+[udrv-crash]   no DNS reply
+[udrv-crash] e1000d pid 131072 killed by a real fault (memory isolation: access 0x1000 denied); kernel kept running; sends refused while dead=true; restarted as pid 131073, MAC 52:54:00:12:34:56, DHCP + HTTP again → FAILED
+[udrv] userspace e1000d: pid 131073 task 27 (starts 2, deaths 1), link up, tx 16 rx 8 irq 16
+[net-late] network ready over e1000d (waited 0 ticks): lease 10.0.2.15, gateway 10.0.2.2, dns 10.0.2.3; running the network part of the boot now
+[euro] bg-musl (pid 196608) -> task 22, own address space PML4 0x184000, arena 0x200000
+[euro] bg-musl (pid 196609) -> task 22, own address space PML4 0x184000, arena 0x200000
+[euro] bg-musl (pid 196610) -> task 22, own address space PML4 0x184000, arena 0x200000
+[euro] bg-musl (pid 196624) -> task 22, own address space PML4 0x184000, arena 0x200000
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 1 time(s), done (exit 1), output "msock: HTTP GET via POSIX sockets on EuroOS |   target: example.com (172.66.147.243):80 |   socket() failed" → OK (no capability, no socket) ✓
+[net-late] network waits in this suite gave the CPU away 308 time(s); 6 of them were woken early by e1000d (EuroIPC frame delivery)
+[udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking sockets) over e1000d in 6 ticks: "verify: refused" exit=18446744073709551615; its waits gave the CPU away 0 time(s), 0 woken early by e1000d → FAILED
+[kwork] per-CPU work queues: 7 AP(s) online, 8 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (8 ok), work-stealing=yes -> OK ✓
+[udrv-vec] MSI-X vectors from the pool 0x4c..0x4f: e1000d 0x4c; distinct=true, stubs bound to their owner=true, second claims on a held vector refused 3/3; unowned interrupts 0 → OK ✓
+[lk-stress] 3 round(s) x 8 core(s), mixed fs/ipc/unix + root VFS from every core: 1342219 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[euro] bg-musl (pid 101) -> task 19, own address space PML4 0x184000, arena 0x200000
+[euro] bg-musl (pid 102) -> task 19, own address space PML4 0x184000, arena 0x200000

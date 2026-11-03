@@ -1,0 +1,43 @@
+== r630-base-e2b4c96-kvm-smp8-4g.log  vs  r630-kvm-smp8-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   euroapp: base FAILx1 | new OKx1
+   eurofuzz: base FAILx1 | new OKx1
+   udrv-e1000: base FAILx1 | new OKx1
+   udrv-vec: base SKIPx1 | new OKx1
+-- only in base: 1
+   net-late: FAILx1
+-- only in new: 11
+   bg-out: OKx1
+   bgnet-cap: OKx1
+   conn: FAILx1
+   net: OKx1
+   udrv-crash: FAILx1
+   udrv-dma: SKIPx1
+   udrv-grant: OKx1
+   udrv-iommu: SKIPx1
+   udrv-irq: OKx1
+   udrv-linux: FAILx1
+   udrv-net: FAILx1
+== r630-base-e2b4c96-kvm-smp16-8g.log  vs  r630-kvm-smp16-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   euroapp: base FAILx1 | new OKx1
+   eurofuzz: base FAILx1 | new OKx1
+   udrv-e1000: base FAILx1 | new OKx1
+   udrv-vec: base SKIPx1 | new OKx1
+-- only in base: 1
+   net-late: FAILx1
+-- only in new: 12
+   bg-out: OKx1
+   bgnet-cap: OKx1
+   conn: FAILx1
+   kwork: OKx1
+   net: OKx1
+   udrv-crash: FAILx1
+   udrv-dma: SKIPx1
+   udrv-grant: OKx1
+   udrv-iommu: SKIPx1
+   udrv-irq: OKx1
+   udrv-linux: FAILx1
+   udrv-net: FAILx1

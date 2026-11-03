@@ -1,0 +1,141 @@
+[euro] bg-musl (pid 100) -> task 6, own address space PML4 0x132000, arena 0x200000
+[euro] bg-musl (pid 8) -> task 10, own address space PML4 0x150000, arena 0x42200000
+[euro] bg-musl (pid 9) -> task 11, own address space PML4 0x158000, arena 0x42400000
+[euro] bg-musl (pid 10) -> task 12, own address space PML4 0x160000, arena 0x42600000
+[euro] bg-musl (pid 11) -> task 13, own address space PML4 0x168000, arena 0x42800000
+[euro] bg-musl (pid 20) -> task 14, own address space PML4 0x170000, arena 0x42a00000
+[euro] bg-musl (pid 21) -> task 15, own address space PML4 0x178000, arena 0x42c00000
+[euro] bg-musl (pid 12) -> task 16, own address space PML4 0x180000, arena 0x42e00000
+[euro] bg-musl (pid 13) -> task 17, own address space PML4 0x188000, arena 0x43000000
+[euro] bg-musl (pid 14) -> task 18, own address space PML4 0x190000, arena 0x43200000
+[euro] bg-musl (pid 15) -> task 19, own address space PML4 0x198000, arena 0x43400000
+[euro] bg-musl (pid 16) -> task 20, own address space PML4 0x1a0000, arena 0x43600000
+[smp] core APIC-id 1 online
+[smp] core APIC-id 2 online
+[smp] core APIC-id 3 online
+[smp] core APIC-id 4 online
+[smp] core APIC-id 5 online
+[smp] core APIC-id 6 online
+[smp] core APIC-id 7 online
+[smp] 7/7 AP core(s) online (BSP = APIC-id 0, 16 cores total)
+[smp] parallel sum 0..2000000 over 16 core(s) = 2999999000000 (expected 1999999000000) -> WRONG
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=1153 worker-B=1159 (own run queue)
+[smp] core APIC-id 2 per-CPU scheduler: worker-A=1103 worker-B=1026 (own run queue)
+[smp] core APIC-id 3 per-CPU scheduler: worker-A=986 worker-B=992 (own run queue)
+[smp] core APIC-id 4 per-CPU scheduler: worker-A=1049 worker-B=961 (own run queue)
+[smp] core APIC-id 5 per-CPU scheduler: worker-A=876 worker-B=889 (own run queue)
+[smp] core APIC-id 6 per-CPU scheduler: worker-A=914 worker-B=850 (own run queue)
+[smp] core APIC-id 7 per-CPU scheduler: worker-A=743 worker-B=741 (own run queue)
+[smp] core APIC-id 8 per-CPU scheduler: worker-A=0 worker-B=0 (own run queue)
+[smp] core APIC-id 9 per-CPU scheduler: worker-A=1290 worker-B=1175 (own run queue)
+[smp] core APIC-id 10 per-CPU scheduler: worker-A=1103 worker-B=1117 (own run queue)
+[smp] core APIC-id 11 per-CPU scheduler: worker-A=1114 worker-B=1036 (own run queue)
+[smp] core APIC-id 12 per-CPU scheduler: worker-A=1049 worker-B=1054 (own run queue)
+[smp] core APIC-id 13 per-CPU scheduler: worker-A=1005 worker-B=963 (own run queue)
+[smp] core APIC-id 14 per-CPU scheduler: worker-A=939 worker-B=911 (own run queue)
+[smp] core APIC-id 15 per-CPU scheduler: worker-A=830 worker-B=823 (own run queue)
+[smp] core APIC-id 1 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 2 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 3 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 4 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 5 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 6 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 7 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 8 cross-CPU: 0 ping IPIs received, 0 TLB shootdown(s)
+[smp] core APIC-id 9 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 10 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 11 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 12 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 13 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 14 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 15 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] load-balance: extra task placed on least-loaded core APIC-id 8
+[smp] core APIC-id 8 runs the balanced task: worker-C=0
+[smp] J1: demo workers parked on 14/15 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[isolation] ring-3 page fault addr=0x42000000 code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 0 (task 9) TERMINATED
+[isolation]   rip=0x42000000 rsp=0x421ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x42000000, 16 B): [f3, 0f, 1e, fa, 45, 31, c0, 41, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [f3, 0f, 1e, fa, 45, 31, c0, 41, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x4220117d code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 8 (task 10) TERMINATED
+[isolation]   rip=0x4220117d rsp=0x423ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x42201178, 16 B): [e9, 4a, ff, ff, ff, 48, 31, ed, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [48, 31, ed, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x4240117d code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 9 (task 11) TERMINATED
+[isolation]   rip=0x4240117d rsp=0x425ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x42401178, 16 B): [e9, 4a, ff, ff, ff, 48, 31, ed, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [48, 31, ed, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x426010c8 code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 10 (task 12) TERMINATED
+[isolation]   rip=0x426010c8 rsp=0x427ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x426010c8, 16 B): [48, 31, ed, 48, 89, e7, 48, 8d, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [48, 31, ed, 48, 89, e7, 48, 8d, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x428011ec code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 11 (task 13) TERMINATED
+[isolation]   rip=0x428011ec rsp=0x429ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x428011e8, 16 B): [54, fe, ff, ff, 48, 31, ed, 48, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [48, 31, ed, 48, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x42a00000 code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 20 (task 14) TERMINATED
+[isolation]   rip=0x42a00000 rsp=0x42bffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x42a00000, 16 B): [f3, 0f, 1e, fa, 53, 48, 8d, 3d, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [f3, 0f, 1e, fa, 53, 48, 8d, 3d, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x42c00000 code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 21 (task 15) TERMINATED
+[isolation]   rip=0x42c00000 rsp=0x42dffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x42c00000, 16 B): [f3, 0f, 1e, fa, 50, 58, 48, 8d, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [f3, 0f, 1e, fa, 50, 58, 48, 8d, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x42e011cc code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 12 (task 16) TERMINATED
+[isolation]   rip=0x42e011cc rsp=0x42fffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x42e011c8, 16 B): [00, 00, 00, c3, 48, 31, ed, 48, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [48, 31, ed, 48, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x43001174 code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 13 (task 17) TERMINATED
+[isolation]   rip=0x43001174 rsp=0x431ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x43001170, 16 B): [89, d8, 5b, c3, 48, 31, ed, 48, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [48, 31, ed, 48, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x4320119d code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 14 (task 18) TERMINATED
+[isolation]   rip=0x4320119d rsp=0x433ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x43201198, 16 B): [88, 00, 00, 00, c3, 48, 31, ed, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [48, 31, ed, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x43401163 code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 15 (task 19) TERMINATED
+[isolation]   rip=0x43401163 rsp=0x435ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x43401160, 16 B): [5b, 5d, c3, 48, 31, ed, 48, 89, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [48, 31, ed, 48, 89, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x436011aa code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 16 (task 20) TERMINATED
+[isolation]   rip=0x436011aa rsp=0x437ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x436011a8, 16 B): [00, c3, 48, 31, ed, 48, 89, e7, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [48, 31, ed, 48, 89, e7, 00, 00, 00, 00, 00, 00, 00, 00]
+[udrv] net.driver=user: the e1000 driver runs in ring 3 (e1000d); the in-kernel e1000 stays unbound
+[isolation] ring-3 page fault addr=0x43801fad code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 131072 (task 21) TERMINATED
+[isolation]   rip=0x43801fad rsp=0x43bffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x43801fa8, 16 B): [e9, 13, 0b, 00, 00, 55, 41, 57, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [55, 41, 57, 00, 00, 00, 00, 00, 00, 00, 00]
+[udrv] e1000d started: pid 131072, task 21, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x1c0000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU absent: DMA NOT confined
+[udrv] e1000d pid 131072 died (memory isolation: access 0x43801fad denied) -> device quiesced: bus-master off, IOMMU domain n/a (no IOMMU), 32 DMA pages freed; restart at tick 33 (death #1)
+[isolation] ring-3 page fault addr=0x42201fad code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 131073 (task 22) TERMINATED
+[isolation]   rip=0x42201fad rsp=0x425ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x42201fa8, 16 B): [e9, 13, 0b, 00, 00, 55, 41, 57, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [55, 41, 57, 00, 00, 00, 00, 00, 00, 00, 00]
+[udrv] e1000d started: pid 131073, task 22, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x1c0000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU absent: DMA NOT confined
+[udrv] e1000d pid 131073 died (memory isolation: access 0x42201fad denied) -> device quiesced: bus-master off, IOMMU domain n/a (no IOMMU), 32 DMA pages freed; restart at tick 49 (death #2)
+[udrv] e1000d started: pid 131074, task 23, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x1c0000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU absent: DMA NOT confined
+[isolation] ring-3 page fault addr=0x42201fad code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 131074 (task 23) TERMINATED
+[isolation]   rip=0x42201fad rsp=0x425ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x42201fa8, 16 B): [e9, 13, 0b, 00, 00, 55, 41, 57, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [55, 41, 57, 00, 00, 00, 00, 00, 00, 00, 00]
+[udrv] e1000d pid 131074 died (memory isolation: access 0x42201fad denied) -> device quiesced: bus-master off, IOMMU domain n/a (no IOMMU), 32 DMA pages freed; restart at tick 73 (death #3)
+[udrv] e1000d started: pid 131075, task 24, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x1c0000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU absent: DMA NOT confined
+[isolation] ring-3 page fault addr=0x42201fad code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 131075 (task 24) TERMINATED
+[isolation]   rip=0x42201fad rsp=0x425ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x42201fa8, 16 B): [e9, 13, 0b, 00, 00, 55, 41, 57, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [55, 41, 57, 00, 00, 00, 00, 00, 00, 00, 00]
+[udrv] e1000d pid 131075 died (memory isolation: access 0x42201fad denied) -> device quiesced: bus-master off, IOMMU domain n/a (no IOMMU), 32 DMA pages freed; restart at tick 98 (death #4)
+[udrv] e1000d started: pid 131076, task 25, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x1c0000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU absent: DMA NOT confined
+[isolation] ring-3 page fault addr=0x42201fad code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 131076 (task 25) TERMINATED
+[isolation]   rip=0x42201fad rsp=0x425ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x42201fa8, 16 B): [e9, 13, 0b, 00, 00, 55, 41, 57, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [55, 41, 57, 00, 00, 00, 00, 00, 00, 00, 00]
+[udrv] e1000d pid 131076 died (memory isolation: access 0x42201fad denied) -> device quiesced: bus-master off, IOMMU domain n/a (no IOMMU), 32 DMA pages freed; restart at tick 134 (death #5)
+[udrv] e1000d started: pid 131077, task 26, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x1c0000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU absent: DMA NOT confined
+[isolation] ring-3 page fault addr=0x42201fad code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 131077 (task 26) TERMINATED
+[isolation]   rip=0x42201fad rsp=0x425ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x42201fa8, 16 B): [e9, 13, 0b, 00, 00, 55, 41, 57, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [55, 41, 57, 00, 00, 00, 00, 00, 00, 00, 00]
+[udrv] e1000d pid 131077 died (memory isolation: access 0x42201fad denied) -> device quiesced: bus-master off, IOMMU domain n/a (no IOMMU), 32 DMA pages freed; GIVING UP (too many deaths in the window; device stays off)
+[udrv-e1000] e1000d pid 131072 did not report link up within 10 s → FAILED
+[net-late] network not ready 20 s after udrv::boot (no link or no DHCP lease over e1000d, see [udrv-*]): network tests and programs NOT run → FAILED
+[kwork] no APs accepting work (single core) — per-CPU queues idle
+[udrv-vec] no userspace driver holds an MSI-X vector on this machine (pool 0x4c..0x4f) ⬜
+[lk-stress] 3 round(s) x 8 core(s), mixed fs/ipc/unix + root VFS from every core: 227307 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+[isolation] ring-3 page fault addr=0x42201cfa code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 300 (task 27) TERMINATED
+[isolation]   rip=0x42201cfa rsp=0x431ffe70 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x42201cf8, 16 B): [eb, d2, 50, e8, 8e, fd, ff, ff, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [50, e8, 8e, fd, ff, ff, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x43201cfa code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 301 (task 28) TERMINATED
+[isolation]   rip=0x43201cfa rsp=0x441ffe70 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x43201cf8, 16 B): [eb, d2, 50, e8, 8e, fd, ff, ff, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [50, e8, 8e, fd, ff, ff, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x4420132d code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 302 (task 29) TERMINATED
+[isolation]   rip=0x4420132d rsp=0x451ffe70 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x44201328, 16 B): [31, c0, 0f, 05, c3, 50, e8, 9a, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [50, e8, 9a, 00, 00, 00, 00, 00, 00, 00, 00]
+[isolation] ring-3 page fault addr=0x45201632 code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE | INSTRUCTION_FETCH) -> process pid 320 (task 30) TERMINATED
+[isolation]   rip=0x45201632 rsp=0x461ffe80 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x45201630, 16 B): [5d, c3, 50, e8, 5e, fc, ff, ff, 00, 00, 00, 00, 00, 00, 00, 00] | from rip: [50, e8, 5e, fc, ff, ff, 00, 00, 00, 00, 00, 00, 00, 00]
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[euro] bg-musl (pid 101) -> task 31, own address space PML4 0x132000, arena 0x200000
+[euro] bg-musl (pid 102) -> task 32, own address space PML4 0x132000, arena 0x200000

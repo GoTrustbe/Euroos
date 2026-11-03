@@ -147,6 +147,7 @@ the code.
 | `fsio` virtio / NVMe / AHCI (8 GiB) | 2026-11-02 | ✅ clean + reboot | `proof/loadtest-r630-2026-11/` | 3–10 MB/s; NVMe only with the BUG-021 workaround; BUG-022/023/025 found here |
 | `net` e1000e kernel / user / user+IOMMU | 2026-11-02 | 🟡 | `proof/loadtest-r630-2026-11/` | outbound ~1 % failures and ~85 s blocks (BUG-026, open); inbound fixed (BUG-018), slow (BUG-019) |
 | `soak` 4 h 10 min (KVM, `-m 16G`) | 2026-11-03 | ✅ no crash, 1 failed fetch (BUG-026) | `proof/loadtest-r630-2026-11/` | first soak: kernel fault after 59 min (BUG-024, fixed); 2 h 20 min on the final image: 0 failures; heap +33 kB/min (BUG-027) |
+| `soak` 1 h on the merged tree (KVM, `-m 16G`) | 2026-11-03 | ✅ 2 085/2 085 ok | `proof/integrate-loadtest-2026-11-03/` | after the merge into app-control (userspace NIC driver); tasks, files, frames flat; heap +31 kB/min (BUG-027) |
 | lockbench KVM matrix | 2026-11-02 | ✅ 0 errors | `proof/loadtest-r630-2026-11/` | see `LOADTEST-R630-2026-11.md` §3 |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
@@ -555,6 +556,10 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Fix:**      bare SYNs go to the legacy queue; `portq_pop` matches the peer port as well (several
   clients on one listening port); httpd reads its segments from PORTQ and purges them after.
   Proof: 6/6 accepted and answered (before 0/3).
+- **After the merge into app-control (2026-11-03):** with `net.driver=user` (the default
+  now) 6/6 accepted and answered, 0.26 s per connection under KVM; the NIC interrupt's
+  drain (`rx_route_irq`) sends a bare SYN to the legacy queue too.
+  Proof: `proof/integrate-loadtest-2026-11-03/`.
 
 ### BUG-019 — inbound TCP is handled synchronously; under client load the desktop loop starves ⬜ OPEN
 - **Status:**   OPEN (design) · **Severity:** HIGH for any server use, LOW for the desktop
