@@ -4162,6 +4162,40 @@ pub fn is_pid_alive(pid: u64) -> bool {
     })
 }
 
+/// One line per background process for `bgps` (load-test diagnostics): pid, its
+/// main task and every thread task with their scheduler state, pending
+/// CLONE_CHILD_CLEARTID slots, the futex addresses its tasks wait on, and the
+/// last output line.
+pub fn bg_debug_lines() -> alloc::vec::Vec<String> {
+    let snapshot: alloc::vec::Vec<(u64, usize, alloc::vec::Vec<usize>, usize, bool, String)> =
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            BG.lock()
+                .iter()
+                .map(|p| {
+                    (p.pid, p.task, p.threads.clone(), p.thread_ctids.len(), p.zombie,
+                     p.output.last().cloned().unwrap_or_default())
+                })
+                .collect()
+        });
+    let waits: alloc::vec::Vec<(u64, usize)> =
+        x86_64::instructions::interrupts::without_interrupts(|| FUTEX_QUEUE.lock().clone());
+    let st = |t: usize| crate::sched::state_of(t).unwrap_or("?");
+    let mut out = alloc::vec::Vec::new();
+    for (pid, task, threads, ctids, zombie, last) in snapshot {
+        let mut l = alloc::format!("pid {pid} task {task}:{}", st(task));
+        for t in &threads {
+            l.push_str(&alloc::format!(" thr {t}:{}", st(*t)));
+        }
+        for (a, t) in waits.iter().filter(|(_, t)| *t == task || threads.contains(t)) {
+            l.push_str(&alloc::format!(" futex {a:#x}<-{t}"));
+        }
+        l.push_str(&alloc::format!(" ctids={ctids}{} last={:?}", if zombie { " ZOMBIE" } else { "" },
+            last.chars().take(48).collect::<String>()));
+        out.push(l);
+    }
+    out
+}
+
 /// Background processes (live, zombie-not-yet-reaped), for `ltstat`.
 pub fn bg_counts() -> (usize, usize) {
     x86_64::instructions::interrupts::without_interrupts(|| {
