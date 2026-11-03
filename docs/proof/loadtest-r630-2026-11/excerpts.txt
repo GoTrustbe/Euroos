@@ -45,6 +45,9 @@ isolation kills in that run: 415
 [scon] tcpserve: connection ACCEPTED ✓
 
 == BUG-020: gfuzz under KVM (also 813e627)
+[linux-abi] GFUZZ: 5000 syscalls so far (4455 errors, 545 ok)
+[glibc] TIMEOUT waiting for the process to exit | main t27 last=106(a1=0x7fffffff)->0xffffffffffffffda
+[glibc] timed-out program killed: main t27 + 0 thread(s) (1 were still alive)
 [glibc] gfuzz (syscall fuzzer): exit=0 (want 171)
 [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
 

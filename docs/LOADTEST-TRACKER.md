@@ -146,7 +146,7 @@ the code.
 | `churn` scale 8 (KVM, `-m 16G`) | 2026-11-02 | ✅ clean | `proof/loadtest-r630-2026-11/` | 128 glibc procs, 8×60×4 threads, 4×6 forks, fs, net: counters back |
 | `fsio` virtio / NVMe / AHCI (8 GiB) | 2026-11-02 | ✅ clean + reboot | `proof/loadtest-r630-2026-11/` | 3–10 MB/s; NVMe only with the BUG-021 workaround; BUG-022/023/025 found here |
 | `net` e1000e kernel / user / user+IOMMU | 2026-11-02 | 🟡 | `proof/loadtest-r630-2026-11/` | outbound ~1 % failures and ~85 s blocks (BUG-026, open); inbound fixed (BUG-018), slow (BUG-019) |
-| `soak` 4 h (KVM, `-m 16G`) | 2026-11-03 | SOAK_STATUS | `proof/loadtest-r630-2026-11/` | first soak: kernel fault after 59 min (BUG-024, fixed) |
+| `soak` 4 h 10 min (KVM, `-m 16G`) | 2026-11-03 | ✅ no crash, 1 failed fetch (BUG-026) | `proof/loadtest-r630-2026-11/` | first soak: kernel fault after 59 min (BUG-024, fixed); 2 h 20 min on the final image: 0 failures; heap +33 kB/min (BUG-027) |
 | lockbench KVM matrix | 2026-11-02 | ✅ 0 errors | `proof/loadtest-r630-2026-11/` | see `LOADTEST-R630-2026-11.md` §3 |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
@@ -567,14 +567,20 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Analysis:** needs passive open as non-blocking state in the socket layer (SYN-RCVD per
   listener, driven by the NIC interrupt / pump), not a blocking handshake inside `service()`.
 
-### BUG-020 — `[fuzz]` fails under KVM (fuzzer process ends early with exit 0) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (also on 813e627 → not a regression of this branch)
-- **Actual:**   `[glibc] gfuzz (syscall fuzzer): exit=0 (want 171)`, output stops after
-  "5000 syscalls so far" and then shows lines of the previous glibc program (gsandbox): the fuzzer
-  process ended without its own exit path, and the captured output is stale. No kernel fault.
-- **Repro:**    selftest boot, `-enable-kvm -cpu host -smp 4 -m 2G`, glibc signatures valid
-- **Analysis:** not root-caused; one of the ~450 random syscalls (with random pointers) ends the
-  process or its run_glibc bookkeeping. Under TCG the same test passes (earlier proofs).
+### BUG-020 — `[fuzz]` fails under KVM: the fuzzer stops and run_glibc times it out ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (also on 813e627 → not a regression of this branch; the
+  kernel keeps running)
+- **Actual:**   `[glibc] gfuzz (syscall fuzzer): exit=0 (want 171)`. The fuzzer prints "5000 syscalls
+  so far", then makes no further syscall:
+  `[glibc] TIMEOUT waiting for the process to exit | main t27 last=106(a1=0x7fffffff)->...ffda`
+  (setgid, ENOSYS), `timed-out program killed: main t27 (1 were still alive)`; the output shown is
+  partly the previous program's (gsandbox), i.e. stale.
+- **Repro:**    selftest boot, `-enable-kvm -cpu host -smp 4 -m 2G`, glibc signatures valid. The
+  fuzzer's RNG seed is fixed, so the syscall sequence is the same on every run.
+- **Analysis:** not root-caused. Under TCG (`-smp 4 -m 512M`) the same test passes on this branch
+  and on 813e627. Next step: log the task state at the run_glibc timeout and every syscall of
+  that run between round 5000 and 10000 (the stuck one leaves the task not Ready, or spinning in
+  user space).
 
 ### BUG-021 — NVMe under KVM `-cpu host`: BAR above 512 GiB, kernel page fault at boot ⬜ OPEN
 - **Status:**   OPEN (workaround for tests) · **Severity:** HIGH (boot halts)
@@ -650,6 +656,21 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Analysis:** not root-caused. The connect path busy-polls the NIC (`poll_seg`: 3 × 4 M
   `portq_pop` → `rx_route` → NIC register reads, each a VM exit under KVM) with retries; a lost or
   late SYN-ACK costs tens of seconds of spinning. Same synchronous design as BUG-019.
+
+### BUG-027 — the kernel heap grows linearly under the soak mix ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (slow; frames are not affected)
+- **Found:**    2026-11-03 · scenario `soak` (`-m 16G`, 8 GiB disk root, e1000e)
+- **Expected:** `heap_used` (ltstat) flat at quiescent samples, like frames, tasks and the file table
+- **Actual:**   +8.2 MB over 4 h 10 min (147.4 → 155.6 MB, +32.8 kB/min, linear); the same rate in
+  the other two soaks (+32.4 and +34.5 kB/min). Frames, tasks, kernel stacks, file table and
+  process pool exactly flat.
+- **Repro:**    `scripts/loadtest.py --kvm --smp 4 --mem 16G --disks 8G --nic e1000e --host-http
+  --scenario soak --duration 3600`, then compare `heap_used` in the `-ltstat.csv`
+- **Analysis:** partly attributed: about 40 bytes per spawned process (240 `spawn worker` → +8.7 to
+  +11 KB, RAM root); 150 outbound connections, 40 `churn net` rounds, 10 `churn proc 4` and file
+  truncation left the heap unchanged. The remainder (~6–7 MB per 4 h) comes from something in the
+  disk-root file mix (writes, renames, `churn fs`, the periodic scrub's log append) and is not
+  isolated yet.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

@@ -1,5 +1,5 @@
 Full selftest boot, -enable-kvm -cpu host -smp 4 -m 2G, to the interactive desktop.
-813e627 (+ throw-away key, re-signed glibc tests) vs feature/loadtest-r630 4baf003 (same signing).
+813e627 (+ throw-away key, re-signed glibc tests) vs feature/loadtest-r630 4baf003 (same signing). KVM:
 
 813e627 (no glibc re-sign): boot to desktop: 1 after 47s; OK-lines 162; FAILED-lines 10; panic 0
 813e627 + glibc re-signed: boot to desktop after 165 s; FAILED-lines 13; panic 0
@@ -22,3 +22,9 @@ FAILED lines (both):
 [NfN] EuroContainer runtime: signed-image-verify=false (constrained-caps=true), tampered-manifest-REFUSED=true
 [updN] EdN verify-before-activate (dev.pub eNeNcN…): genuine=false · image-tamper-refused=true · sig-tamper-re
 [updN] update pipeline: real package staged=false · tampered package refused=true → FAILED ✗
+
+TCG (the CI setup): -cpu qemu64,+smep,+smap -smp 4 -m 512M, same images:
+813e627 + glibc re-signed: boot to desktop: 1 after 127s; OK-lines 161; FAILED-lines 10; panic 0
+4baf003:                   boot to desktop: 1 after 133s; OK-lines 161; FAILED-lines 10; panic 0
+OK marker kinds: 153 vs 153, diff: identical; FAILED lines diff: identical
+(at 512 MiB the glibc tests that need more memory fail with "no arena for glibc" on both, as in the J1 proof; [fuzz] passes under TCG)

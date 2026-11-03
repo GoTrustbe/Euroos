@@ -1,7 +1,7 @@
 # LOADTEST-R630 (2026-11-02/03): summary logs
 
 Report: [`../../LOADTEST-R630-2026-11.md`](../../LOADTEST-R630-2026-11.md). Bug entries:
-[`../../LOADTEST-TRACKER.md`](../../LOADTEST-TRACKER.md) (BUG-012 … BUG-026).
+[`../../LOADTEST-TRACKER.md`](../../LOADTEST-TRACKER.md) (BUG-012 … BUG-027).
 Dell R630 (2 × E5-2630 v4), QEMU 10.2.1 with KVM (`-cpu host`), OVMF 2025.11. The full serial
 logs (tens of MB) stayed on the test server and were deleted with the VM images; what is here
 are the harness CSVs and the lines quoted in the report.
@@ -17,5 +17,5 @@ are the harness CSVs and the lines quoted in the report.
 | `net-400-fetches.txt` | the 4 slow or failed out of 400 sequential connections (BUG-026) |
 | `accept-kernel.txt` | inbound accept test after BUG-018 |
 | `selftest-markers.txt` | full selftest boot `-smp 4`: 813e627 vs this branch, OK kinds and FAILED lines |
-| `soak*.csv`, `soak-summary.txt` | the soak: every 10th `ltstat` sample, per-command latency summary |
+| `soak{1,2}-summary.txt`, `soak3-final-image-summary.txt` and the `*-ltstat-every10.csv` | the three soaks: counters, heap, per-command latency, last `lockstat`; every 10th quiescent `ltstat` sample |
 | `excerpts.txt` | the serial lines behind each finding, before and after its fix |
