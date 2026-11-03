@@ -1,0 +1,5 @@
+53 ok 85125 False ['fetch: no connection to 10.0.2.100']
+206 ok 13 False ['fetch: no connection to 10.0.2.100']
+356 ok 84348 False ['fetch: no connection to 10.0.2.100']
+359 ok 13 False ['fetch: no connection to 10.0.2.100']
+done 400 slow/failed: 4

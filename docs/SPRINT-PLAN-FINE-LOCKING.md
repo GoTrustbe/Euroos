@@ -360,7 +360,8 @@ two branches are merged.
   global tables) move into per-process structures with the BG split.
 - ⬜ The heap's large-object path (> 2 KiB) still takes the shared list-heap lock;
   it showed up again at a few percent in the fs workload.
-- ⬜ Numbers on real hardware.
+- ⬜ Numbers on real hardware. (KVM numbers on a Dell R630, which are virtualised, not
+  bare metal: [`LOADTEST-R630-2026-11.md`](LOADTEST-R630-2026-11.md) §3.)
 
 ## 8. Reference: how Redox approaches this (studied, not copied)
 

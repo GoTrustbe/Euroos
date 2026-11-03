@@ -18,7 +18,8 @@
 //!
 //! Honesty: QEMU without KVM runs multi-threaded TCG, so the cores really run in
 //! parallel on host threads, but absolute numbers and ratios are TCG numbers,
-//! not hardware numbers. Memory allocation goes through the one global heap
+//! not hardware numbers; under KVM they are virtualised numbers (the start
+//! line says which, from CPUID). Memory allocation goes through the one global heap
 //! lock in every variant; its contention is reported separately.
 
 use alloc::boxed::Box;
@@ -75,6 +76,28 @@ const MAXW: usize = 8;
 
 fn tsc() -> u64 {
     unsafe { core::arch::x86_64::_rdtsc() }
+}
+
+/// What the numbers were measured on, from CPUID (leaf 1 ECX bit 31 = running
+/// under a hypervisor; leaf 0x4000_0000 = its vendor id). The `[lk-bench]`
+/// line used to say "QEMU TCG" unconditionally, also under KVM
+/// (LOADTEST-R630 BUG-013).
+fn platform_label() -> String {
+    let l1 = unsafe { core::arch::x86_64::__cpuid(1) };
+    if l1.ecx & (1 << 31) == 0 {
+        return String::from("no hypervisor bit in CPUID: bare metal (or an emulator that hides itself)");
+    }
+    let h = unsafe { core::arch::x86_64::__cpuid(0x4000_0000) };
+    let mut v = [0u8; 12];
+    v[0..4].copy_from_slice(&h.ebx.to_le_bytes());
+    v[4..8].copy_from_slice(&h.ecx.to_le_bytes());
+    v[8..12].copy_from_slice(&h.edx.to_le_bytes());
+    let vendor: String = v.iter().take_while(|&&b| b != 0).map(|&b| if b.is_ascii_graphic() { b as char } else { '?' }).collect();
+    match vendor.as_str() {
+        "KVMKVMKVM" => String::from("KVM guest: hardware-virtualised vCPUs, NOT bare-metal numbers"),
+        "TCGTCGTCGTCG" => String::from("QEMU TCG: parallel host threads, NOT hardware numbers"),
+        _ => format!("hypervisor '{}': virtualised, NOT bare-metal numbers", vendor),
+    }
 }
 
 fn tsc_per_sec() -> u64 {
@@ -200,12 +223,18 @@ pub fn bench(rounds: usize, ms: u64) -> u64 {
     let b = Arc::new(Bench::new());
     let ncpu = 1 + crate::kwork::online_aps().len();
     crate::serial_println!(
-        "[lk-bench] start: {} core(s) online, {} round(s) x {} ms per run, TSC {} MHz (QEMU TCG: parallel host threads, NOT hardware numbers)",
+        "[lk-bench] start: {} core(s) online, {} round(s) x {} ms per run, TSC {} MHz ({})",
         ncpu,
         rounds,
         ms,
-        tsc_per_sec() / 1_000_000
+        tsc_per_sec() / 1_000_000,
+        platform_label()
     );
+    if ncpu > 1 && !crate::kwork::accepting() {
+        // `kwork::parallel` would then run every worker inline on the BSP, one
+        // after the other: the "N cores" figures would not be parallel at all.
+        crate::serial_println!("[lk-bench] WARNING: APs online but kwork does not accept jobs: multi-core figures below are NOT parallel");
+    }
     let mut errors = 0u64;
     for work in [Work::Fs, Work::FsOneMount, Work::Ipc, Work::Unix] {
         for global in [false, true] {

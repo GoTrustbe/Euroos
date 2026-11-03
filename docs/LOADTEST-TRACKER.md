@@ -29,6 +29,9 @@ python3 scripts/loadtest.py --scenario smoke
 python3 scripts/loadtest.py --scenario fs
 python3 scripts/loadtest.py --scenario users --users 50
 python3 scripts/loadtest.py --scenario fs --disks "64M,2G"   # attach the §2 disk matrix
+# KVM and the load scenarios (LOADTEST-R630; full list in LOADTEST-R630-2026-11.md §7):
+python3 scripts/loadtest.py --kvm --smp 4 --mem 4G --workdir /tmp/p --scenario procs
+python3 scripts/loadtest.py --kvm --smp 4 --mem 4G --workdir /tmp/f --disks 8G --disk-bus ahci --scenario fsio
 ```
 
 Each run writes `loadtest-results.csv` (one row per command: `id, command, status,
@@ -139,6 +142,12 @@ the code.
 | `fs`     | 2026-06-15 06:22 | ✅ clean (11/11 ok) | `loadtest-fs.csv` · `loadtest-serial-20260615-062229.log` | all 11 match §7.2; **sha256 digest cross-checked against host** (`hello-eurofs\n` → `bdb1526…`); scrub HEALTHY |
 | `users` (50) | 2026-06-15 06:42 | ✅ clean (56/56 ok) | `loadtest-users.csv` · `loadtest-serial-20260615-064236.log` | **50/50 created (uid 1005–1054)**; list shows all 50; **audit chain 20→70, intact**; took 3 fixes (BUG-004/005/006) |
 | disk matrix `64M,2G` | 2026-06-15 (fixed) | ✅ **0/27 after fix** | `loadtest-diskmatrix*.csv` · `/tmp/repro-*.log` | was ~20–40% intermittent hang (**BUG-007**); root-caused to a `reap_dead`/`BG.lock` deadlock and **fixed** — 27/27 clean post-fix |
+| `procs` (KVM, `-m 4G`) | 2026-11-03 | ✅ clean | `proof/loadtest-r630-2026-11/` | 3 × 64 workers + 300 burst + 32 pthread processes; after BUG-014/015/016/017/024 |
+| `churn` scale 8 (KVM, `-m 16G`) | 2026-11-02 | ✅ clean | `proof/loadtest-r630-2026-11/` | 128 glibc procs, 8×60×4 threads, 4×6 forks, fs, net: counters back |
+| `fsio` virtio / NVMe / AHCI (8 GiB) | 2026-11-02 | ✅ clean + reboot | `proof/loadtest-r630-2026-11/` | 3–10 MB/s; NVMe only with the BUG-021 workaround; BUG-022/023/025 found here |
+| `net` e1000e kernel / user / user+IOMMU | 2026-11-02 | 🟡 | `proof/loadtest-r630-2026-11/` | outbound ~1 % failures and ~85 s blocks (BUG-026, open); inbound fixed (BUG-018), slow (BUG-019) |
+| `soak` 4 h 10 min (KVM, `-m 16G`) | 2026-11-03 | ✅ no crash, 1 failed fetch (BUG-026) | `proof/loadtest-r630-2026-11/` | first soak: kernel fault after 59 min (BUG-024, fixed); 2 h 20 min on the final image: 0 failures; heap +33 kB/min (BUG-027) |
+| lockbench KVM matrix | 2026-11-02 | ✅ 0 errors | `proof/loadtest-r630-2026-11/` | see `LOADTEST-R630-2026-11.md` §3 |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
 > it ✅ from "it should work".
@@ -443,5 +452,234 @@ requirement for `/mnt`.
 - **Note:** QMP-injected keys in the sandbox QEMU have a separate, host-side flakiness
   (send-key sometimes produces no HID report at all while a fullscreen app runs — diagnosed
   via QEMU tracing during the DOOM sprint); that is outside the kernel and not covered here.
+
+### LOADTEST-R630 (2026-11-02) — KVM load test on a Dell R630, branch `feature/loadtest-r630`
+
+Full report, numbers and limits: [`LOADTEST-R630-2026-11.md`](LOADTEST-R630-2026-11.md).
+QEMU 10.2 with KVM (`-cpu host`), OVMF, selftest image (`scripts/build.sh release`).
+The server carries a throw-away signing key, so the dev-key markers (`[upd3]`, `[3f1]`,
+`[3e6]`, `[appstore]`, part of `[app]`) fail there by construction; they are not findings.
+New harness pieces: `scripts/loadtest.py` (`--kvm`, `--workdir`, `--disk-bus`, `--nic`,
+scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
+`scripts/loadtest-accept.py`, `scripts/loadtest-http-peer.py`, and the shell hooks
+`ltstat`/`spawn`/`churn`/`httpd` (`kernel/src/ltstat.rs`).
+
+### BUG-012 — more than 8 vCPUs: per-CPU slots alias, kwork silently single-core ✅ FIXED
+- **Status:**   FIXED (`dcf87dd`)
+- **Severity:** HIGH (wrong results, false self-test output; a real 2-socket machine has more than 8 threads)
+- **Found:**    2026-11-02 · lockbench image · `-smp 16` under KVM
+- **Expected:** at most 8 cores used, the others left offline and said so; `[smp]`/`[kwork]` correct
+- **Actual:**   `[smp] parallel sum ... -> WRONG`; per-core lines for APIC ids 8..15 that never
+  started (their counters were those of ids 0..7); `demo workers parked on 14/15`; `[kwork] no APs
+  accepting work`, so every `kwork::parallel` job ran inline on the BSP and `[lk-bench]` printed
+  "8 cores" figures that were single-core (scaling x0.99 for every workload).
+- **Repro:**    `scripts/build.sh lockbench`, boot it with `-enable-kvm -cpu host -smp 16`
+- **Analysis:** `smp::init` started only `MAX_AP`=7 APs but kept iterating all MADT cores; per-CPU
+  state is indexed by `APIC id & 7` (`kernel/src/smp.rs`). Sparse APIC ids (multi-socket) alias the same way.
+- **Fix:**      `euroacpi::select_cpus` (BSP first, at most 8, no two cores in one slot) + only
+  online cores afterwards; `nproc` reports the cores in use. Host tests `select_cpus_*`.
+  Proof: `-smp 16` → "using 8, 8 left offline", sum OK, `[kwork]` 7 APs OK.
+
+### BUG-013 — `[lk-bench]` says "QEMU TCG" under KVM ✅ FIXED
+- **Status:**   FIXED (`30a094c`) · **Severity:** DOCS (honesty label)
+- **Actual:**   the start line was a constant string. **Fix:** label from CPUID (hypervisor bit,
+  vendor leaf); a WARNING when APs are online but kwork does not accept jobs (BUG-012 shape).
+
+### BUG-014 — reaped background processes never return their scheduler slot ✅ FIXED
+- **Status:**   FIXED (`f215965`)
+- **Severity:** CRITICAL (after ~230 process lifetimes since boot no new process can run)
+- **Found:**    2026-11-02 · scenario `procs` (`spawn worker 64` + `spawn mpthread 16` per wave)
+- **Expected:** `tasks` (scheduler slots in use) back to its high-water mark after every wave
+- **Actual:**   `tasks` 25 → 106 → 188 → 256 over three waves; from then on spawned processes were
+  registered but never scheduled (BUG-015).
+- **Repro:**    `python3 scripts/loadtest.py --kvm --smp 4 --mem 4G --workdir W --scenario procs --waves 4`
+- **Analysis:** `ring3::reap_dead` freed arena, kernel stack and address space but never called
+  `sched::reclaim_task` for the process task or its threads.
+- **Fix:**      reclaim the process and thread slots in `reap_dead` (dead threads' kernel-stack owner
+  entries dropped first). After: `tasks` stays at its high-water mark (81) over 5 waves + a 300 burst.
+
+### BUG-015 — full task table / OOM: ghost processes and a panic path ✅ FIXED
+- **Status:**   FIXED (`ca1ac1b`) · **Severity:** HIGH
+- **Actual:**   `spawn_bg_musl` registered a process with task `18446744073709551615` (usize::MAX)
+  when the table was full: never ran, stayed "live" with its 2 MiB arena (93 such after BUG-014 hit).
+  The bg clone path pushed a ghost thread (pthread_join waits forever), the bg fork path a ghost
+  child (parent waits forever); `expect("bg-arena")`/`expect("bg-kstack")` panicked on OOM.
+- **Fix:**      refuse cleanly: free what was taken, return false / `-EAGAIN`.
+  Proof: `spawn worker 300` → "started 240 of 300 ... stopped early", all 240 reaped, frames back.
+
+### BUG-016 — processes whose arena lies above 1 GiB die on their first instruction ✅ FIXED
+- **Status:**   FIXED (`4cad76f`)
+- **Severity:** CRITICAL (with ≥ ~2 GiB RAM almost every background process is killed)
+- **Found:**    2026-11-02 · scenario `procs`, `-m 4G` under KVM
+- **Expected:** a spawned worker computes its result and exits 0
+- **Actual:**   `[isolation] ring-3 page fault ... INSTRUCTION_FETCH ... TERMINATED` for 398 of 400
+  spawned processes; also the boot-time demo processes (tlscount, worker, forktest, forkpipe,
+  mthread, ...) and the native bg-app tests (stack write fault). One page-table frame leaked per process.
+- **Repro:**    any background musl process whose arena the frame allocator places above 1 GiB
+  (the kernel heap fills low memory, so: any guest with more than ~1.5 GiB RAM)
+- **Analysis:** `paging::build_address_space` refined only the PD of the lowest GiB (`arena/2MiB`
+  ≥ 512 silently skipped); the arena stayed a supervisor-only 1 GiB identity page. Same assumption in
+  `fill_remap_tables(_wx)`, `build_address_space_big/_rwx`, `arena_pt`, `table_frames`.
+  Invisible under TCG with 512 MiB (every arena below 1 GiB).
+- **Fix:**      the PD sits under the PDPT entry of the arena's GiB; helpers find it there.
+  Proof: procs (5 × 64 workers + 300 burst): 0 isolation kills, frames exactly back (411100) each
+  wave; selftest boot `-smp 4 -m 2G`: same OK/FAILED marker set as 813e627.
+
+### BUG-017 — many musl pthread processes at once: pthread_join never returns ✅ FIXED
+- **Status:**   FIXED (`4baf003`; diagnostic `bgps` in `c2ffef2`)
+- **Severity:** HIGH (user processes hang forever; also the boot demos pid 13/14 on 813e627)
+- **Found:**    2026-11-02 · scenario `procs` (`spawn mpthread 16`)
+- **Expected:** each mpthread creates one thread, joins it, exits 0 within a second
+- **Actual:**   12–16 of 16 never exit; 1 or 2 at a time usually finish. `bgps`:
+  `pid 70000 task 35:Blocked thr 21:Dead ctids=0` — main Blocked, its thread gone, and the main
+  task in no futex queue. The boot demos `/bin/mpthread` (pid 13) and `/bin/mmutex` (pid 14) were
+  in the same state for the whole uptime.
+- **Repro:**    `spawn mpthread 16`, wait 20 s, `bgps` / `ltstat` (bg_live above its boot value)
+- **Analysis:** `futex_wait` on the musl bg path (no yield under `BG`) marks the task Blocked and
+  should leave it queued until the next tick switches it out; the "resumed" code written for the
+  yielding glibc path ran immediately, found the fresh entry, removed it as "spurious" and
+  returned 0 — a Blocked task that no FUTEX_WAKE can reach once the joiner waited before the
+  thread exited. (`kernel/src/ring3.rs`, `futex_wait`.)
+- **Fix:**      return right after blocking on the bg path (musl re-checks the word); reap_dead drops
+  the futex entries of reclaimed tasks (slots are reused, BUG-014). Proof: `procs --threads 32`
+  clean, bg_live back to 2 (the two endless tlscount demos), pid 13/14 finish after boot.
+
+### BUG-018 — inbound TCP never reached listen/accept or the background httpd ✅ FIXED
+- **Status:**   FIXED (`3c27916`)
+- **Severity:** HIGH (EuroOS could not accept any TCP connection since 2026-08-26)
+- **Found:**    2026-11-02 · scenario `net` with `--hammer` (httpd `served 0`), then `tcpserve 8080`
+- **Actual:**   accept() always timed out (0/3 with a client connecting in time).
+- **Repro:**    `python3 scripts/loadtest-accept.py IMAGE WORKDIR 6`
+- **Analysis:** the central RX demux (77309db) queues every TCP segment in PORTQ; the only
+  passive-open code (`service()`: `try_accept_listener`, httpd) reads the legacy queue.
+- **Fix:**      bare SYNs go to the legacy queue; `portq_pop` matches the peer port as well (several
+  clients on one listening port); httpd reads its segments from PORTQ and purges them after.
+  Proof: 6/6 accepted and answered (before 0/3).
+
+### BUG-019 — inbound TCP is handled synchronously; under client load the desktop loop starves ⬜ OPEN
+- **Status:**   OPEN (design) · **Severity:** HIGH for any server use, LOW for the desktop
+- **Actual:**   each accepted connection costs ~6.4–7.2 s (tcpserve, kernel driver) and ~37 s
+  with `net.driver=user` under KVM: `accept_from`/httpd
+  busy-poll the NIC (`SPINS`=4 M iterations per poll) in the desktop loop. With 4 host clients on
+  the httpd: 71 ok / 62 errors, p99 5.9 s, `[3g2-wire] WATCHDOG TRIPPED - main loop hung`, and one
+  run where the console stayed silent for over 60 s (harness HANG).
+- **Repro:**    `scripts/loadtest.py --kvm --nic e1000e --hostfwd P --hammer 4 --scenario net`
+- **Analysis:** needs passive open as non-blocking state in the socket layer (SYN-RCVD per
+  listener, driven by the NIC interrupt / pump), not a blocking handshake inside `service()`.
+
+### BUG-020 — `[fuzz]` fails under KVM: the fuzzer stops and run_glibc times it out ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (also on 813e627 → not a regression of this branch; the
+  kernel keeps running)
+- **Actual:**   `[glibc] gfuzz (syscall fuzzer): exit=0 (want 171)`. The fuzzer prints "5000 syscalls
+  so far", then makes no further syscall:
+  `[glibc] TIMEOUT waiting for the process to exit | main t27 last=106(a1=0x7fffffff)->...ffda`
+  (setgid, ENOSYS), `timed-out program killed: main t27 (1 were still alive)`; the output shown is
+  partly the previous program's (gsandbox), i.e. stale.
+- **Repro:**    selftest boot, `-enable-kvm -cpu host -smp 4 -m 2G`, glibc signatures valid. The
+  fuzzer's RNG seed is fixed, so the syscall sequence is the same on every run.
+- **Analysis:** not root-caused. Under TCG (`-smp 4 -m 512M`) the same test passes on this branch
+  and on 813e627. Next step: log the task state at the run_glibc timeout and every syscall of
+  that run between round 5000 and 10000 (the stuck one leaves the task not Ready, or spinning in
+  user space).
+
+### BUG-021 — NVMe under KVM `-cpu host`: BAR above 512 GiB, kernel page fault at boot ⬜ OPEN
+- **Status:**   OPEN (workaround for tests) · **Severity:** HIGH (boot halts)
+- **Actual:**   `[idt] PAGE FAULT addr=0x380000000000 ... @ efi_main+0x54bc` right after
+  `[epk] no pack files registered`, with an NVMe disk attached; the boot never continues.
+- **Repro:**    `scripts/loadtest.py --kvm --disk-bus nvme --disks 8G --scenario fsio`
+- **Analysis:** with host physical-address bits (46) QEMU/OVMF put the 64-bit PCI window at
+  56 TiB; `nvme::init` dereferences BAR0 through the identity map, which covers only the lower
+  512 GiB. Any 64-bit BAR placed that high has the same problem (the harness uses virtio
+  `disable-modern=on`, legacy BARs). Real servers can place 64-bit BARs high too.
+  Workaround: `--cpu-opts ,host-phys-bits=off,phys-bits=39` (window below 512 GiB): NVMe works.
+  A fix needs an MMIO mapping facility for physical addresses above 512 GiB.
+- **Harness:**  `CRASH_RE` now also matches `[idt] PAGE FAULT` (a ring-0 fault halts; healthy boots
+  print only `[idt] BREAKPOINT`); before, the harness waited out the whole boot timeout.
+
+### BUG-022 — every shell command read its last file argument into the heap ✅ FIXED
+- **Status:**   FIXED (`b2e7260`) · **Severity:** HIGH (perf + heap exhaustion)
+- **Found:**    2026-11-02 · scenario `fsio` · `stat` of a 256 MiB file: > 60 s (harness HANG)
+- **Actual:**   `stat` of 16/64 MiB took 3.6/6.5 s; `echo /etc/hostname` printed nothing.
+- **Analysis:** `shell::coreutils()` runs before the native commands and read the last argument
+  that names a readable file for any command (`stat`, `cp`, `rm`, `truncate`, ...).
+- **Fix:**      only the coreutils that take file input read one; the others return early.
+  Regression: `fsio` asserts `stat` < 3 s and `echo /etc/hostname`.
+
+### BUG-023 — the periodic scrub freezes the desktop and console for its whole duration 🟡 MITIGATED
+- **Status:**   MITIGATED (`5e3d4e9`), root fix OPEN · **Severity:** HIGH (usability; grows with the data stored)
+- **Found:**    2026-11-02 · scenario `fsio` (8 GiB disk, ~600 MiB stored) · `stat` waited 38 s; two
+  harness HANGs (serial silent > 60 s) on NVMe and AHCI
+- **Analysis:** `scrub::maybe_run` runs a full `fs.scrub()` (every data block, XXH3) synchronously in
+  the desktop tick every ~60 s (`kernel/src/scrub.rs`). Measured pass: 60–134 s for ~600 MiB.
+- **Fix (mitigation):** the next periodic pass waits max(60 s, 100 × the last pass), and the `[g5]`
+  line reports the pass duration. One pass still freezes for its duration; an incremental scrub
+  (bounded work per tick) is the real fix.
+
+### BUG-024 — a new background process could run before it was registered → kernel page fault ✅ FIXED
+- **Status:**   FIXED (`947b868`)
+- **Severity:** CRITICAL (kernel halt)
+- **Found:**    2026-11-02 · scenario `soak` (KVM, `-smp 4 -m 16G`) · after 59 min / 2109 commands
+- **Actual:**   `[linux-abi] arch_prctl SET_FS = 0x44404138` then
+  `[idt] PAGE FAULT addr=0x44404138 code=(PROTECTION_VIOLATION | CAUSED_BY_WRITE) @ 0x5906e0b4`, halt.
+- **Repro:**    statistical: `spawn worker 32` repeatedly (the soak); one hit in ~6800 spawns
+- **Analysis:** `spawn_bg_musl` / `spawn_bg_app` made the task Ready before pushing its `BgProc`;
+  `syscall_dispatch` sends a task it does not find in `BG` to the foreground Linux path. A timer
+  tick in between ran musl's first syscall there with the foreground's globals. The daemon had
+  the same window before `DAEMON_TASK` was set.
+- **Fix:**      interrupts off from `spawn_user` until the process is registered (ring-3 tasks run
+  only on the BSP). Proof: the second soak (below) passed the point of the first crash.
+
+### BUG-025 — reading a file larger than the free kernel heap panicked the kernel ✅ FIXED
+- **Status:**   FIXED (`9b3730d`)
+- **Severity:** CRITICAL (kernel panic from a shell `cp`)
+- **Found:**    2026-11-02 · scenario `fsio` on AHCI (`-m 4G`, heap 512 MiB):
+  `cp z256 c256` → `memory allocation of 268435456 bytes failed` → KERNEL PANIC
+- **Analysis:** `EuroFs::read_data` used `Vec::with_capacity(size)`; an allocation failure aborts.
+  The kernel heap is 512 MiB whatever the RAM (also with `-m 64G`). `truncate` also turned any
+  read error into an empty file and wrote zeros back (data loss once reads can fail).
+- **Fix:**      `buffer_for` (try_reserve → `NoSpace`), host test
+  `buffer_for_refuses_what_cannot_be_allocated`; `truncate` only starts empty on `NotFound`.
+  Proof: `truncate -s 1073741824` → "NoSpace (1073741824 bytes do not fit in memory; file left
+  unchanged)", `cp` of 256 MiB on AHCI now completes (112 s), the system keeps answering.
+- **Harness:**  the panic went unnoticed for 900 s: the panic path writes the UART byte by byte and
+  `KERNEL PANIC` arrived split over reads. `CRASH_RE` now scans across chunk borders (`305125b`).
+
+### BUG-026 — an outbound TCP connect sometimes blocks the desktop loop for ~85 s ⬜ OPEN
+- **Status:**   OPEN · **Severity:** HIGH (freeze + watchdog line; also on 813e627-based images)
+- **Found:**    2026-11-02 · scenario `net` (sequential `fetch 10.0.2.100`, e1000e on SLIRP)
+- **Actual:**   400 sequential fetches (kernel driver): 396 OK (median ~0.13 s), 2 failed fast
+  ("no connection", 13 ms), 2 blocked 84–85 s and then failed; `[3g2-wire] WATCHDOG TRIPPED - main
+  loop hung` in the log. The `net` scenario saw it after 163 (kernel), 106 (user + IOMMU) and 230
+  (image without this branch's net change) connections; `net.driver=user` without IOMMU had 1
+  failure in 250, no long block.
+- **Repro:**    `scripts/loadtest.py --kvm --nic e1000e --host-http --scenario net --conns 300`
+- **Analysis:** not root-caused. The connect path busy-polls the NIC (`poll_seg`: 3 × 4 M
+  `portq_pop` → `rx_route` → NIC register reads, each a VM exit under KVM) with retries; a lost or
+  late SYN-ACK costs tens of seconds of spinning. Same synchronous design as BUG-019.
+
+### BUG-027 — the kernel heap grows linearly under the soak mix ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (slow; frames are not affected)
+- **Found:**    2026-11-03 · scenario `soak` (`-m 16G`, 8 GiB disk root, e1000e)
+- **Expected:** `heap_used` (ltstat) flat at quiescent samples, like frames, tasks and the file table
+- **Actual:**   +8.2 MB over 4 h 10 min (147.4 → 155.6 MB, +32.8 kB/min, linear); the same rate in
+  the other two soaks (+32.4 and +34.5 kB/min). Frames, tasks, kernel stacks, file table and
+  process pool exactly flat.
+- **Repro:**    `scripts/loadtest.py --kvm --smp 4 --mem 16G --disks 8G --nic e1000e --host-http
+  --scenario soak --duration 3600`, then compare `heap_used` in the `-ltstat.csv`
+- **Analysis:** partly attributed: about 40 bytes per spawned process (240 `spawn worker` → +8.7 to
+  +11 KB, RAM root); 150 outbound connections, 40 `churn net` rounds, 10 `churn proc 4` and file
+  truncation left the heap unchanged. The remainder (~6–7 MB per 4 h) comes from something in the
+  disk-root file mix (writes, renames, `churn fs`, the periodic scrub's log append) and is not
+  isolated yet.
+
+### Notes (not bugs, measured)
+- **Boot-time background musl processes and the native bg-app tests only run under KVM with
+  ≥ 2 GiB after BUG-016**; on 813e627 most were killed at their first instruction and the boot
+  self-tests did not notice (their markers do not check those processes' results). glibc
+  processes were not affected (their arenas are mapped by `map_user_arena`).
+- A QEMU guest without `-nic`/`-netdev` still gets the default e1000e on SLIRP: the background
+  update check then reaches `euro-os.eu` (HTTP 404 on the manifest). All runs had a NIC.
+- Swap self-test (`gswap`) on a disk-root boot: ~4 min of synchronous `virtio_blk::kick_and_wait`
+  under KVM; a selftest boot with an installed 8 GiB disk takes 330–455 s to the desktop.
 
 <!-- Add BUG-NNN entries above this line. Keep newest at the bottom of the relevant group. -->

@@ -186,8 +186,23 @@ pub fn init() {
         return;
     }
 
-    // Distribute a parallel sum 0..N over ALL enabled cores (BSP + APs).
-    let enabled: Vec<u8> = madt.cores.iter().filter(|c| c.enabled).map(|c| c.apic_id).collect();
+    // Which cores we will run: per-CPU state is indexed by `APIC id & 7`, so at
+    // most MAX_CPU cores, none sharing a slot (LOADTEST-R630 BUG-012: with
+    // `-smp 16` the old code started 7 APs but kept using all 16 MADT ids, so
+    // ids 8..15 aliased slots 0..7, the parallel sum read WRONG, the log
+    // reported cores that never ran, and kwork never accepted work).
+    let madt_enabled: Vec<u8> = madt.cores.iter().filter(|c| c.enabled).map(|c| c.apic_id).collect();
+    let (enabled, skipped) = euroacpi::select_cpus(bsp, &madt_enabled, MAX_CPU);
+    if skipped > 0 {
+        serial_println!(
+            "[smp] MADT lists {} enabled core(s); EuroOS runs at most {} (per-CPU slots = APIC id & 7): using {}, {} left offline",
+            madt_enabled.len(),
+            MAX_CPU,
+            enabled.len(),
+            skipped
+        );
+    }
+    // Distribute a parallel sum 0..N over the cores we run (BSP + APs).
     let ncores = enabled.len().max(1) as u64;
     let chunk = WORK_N / ncores;
     for (i, &id) in enabled.iter().enumerate() {
@@ -208,10 +223,8 @@ pub fn init() {
 
     let mut idx = 0usize;
     let mut started = 0u32;
-    for c in &madt.cores {
-        if !c.enabled || c.apic_id == bsp {
-            continue;
-        }
+    let mut online: Vec<u8> = alloc::vec![bsp];
+    for &apic_id in enabled.iter().skip(1) {
         if idx >= MAX_AP {
             break;
         }
@@ -229,15 +242,15 @@ pub fn init() {
         };
         unsafe { ((TRAMP + OFF_STACK) as *mut u64).write_volatile(sp) };
         // J1: this stack belongs to that core (cheap per-CPU identity, percpu.rs).
-        crate::percpu::register_stack(sp - AP_STACK_SIZE as u64, sp + 64, c.apic_id as usize);
+        crate::percpu::register_stack(sp - AP_STACK_SIZE as u64, sp + 64, apic_id as usize);
 
         let before = AP_ONLINE.load(Ordering::SeqCst);
         // INIT-SIPI-SIPI (Intel MP protocol).
-        crate::apic::send_init(c.apic_id);
+        crate::apic::send_init(apic_id);
         crate::apic::busy_wait_us(10_000);
-        crate::apic::send_sipi(c.apic_id, (TRAMP >> 12) as u8);
+        crate::apic::send_sipi(apic_id, (TRAMP >> 12) as u8);
         crate::apic::busy_wait_us(200);
-        crate::apic::send_sipi(c.apic_id, (TRAMP >> 12) as u8);
+        crate::apic::send_sipi(apic_id, (TRAMP >> 12) as u8);
 
         // Wait until this AP reports in (timeout ~100 ms).
         let mut ok = false;
@@ -250,9 +263,10 @@ pub fn init() {
         }
         if ok {
             started += 1;
-            serial_println!("[smp] core APIC-id {} online", c.apic_id);
+            online.push(apic_id);
+            serial_println!("[smp] core APIC-id {} online", apic_id);
         } else {
-            serial_println!("[smp] core APIC-id {} did NOT come online (timeout)", c.apic_id);
+            serial_println!("[smp] core APIC-id {} did NOT come online (timeout)", apic_id);
         }
         idx += 1;
     }
@@ -301,6 +315,9 @@ pub fn init() {
         expected,
         if total == expected { "OK" } else { "WRONG" }
     );
+    // From here on only the cores that really run (a core that timed out has
+    // no scheduler, counters or kwork loop of its own).
+    let enabled = online;
 
     // Give the APs ~80 ms and read their per-CPU work counters: proof that each core
     // independently runs its OWN run queue and alternates tasks (SMP scheduling).

@@ -720,6 +720,12 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "umount" | "unmount" => crate::fatmount::umount_cmd(fs, arg1),
         "format" | "mkfs" => crate::fatmount::format_cmd(arg1, arg2),
         "mem" => mem_report(ctx.mem),
+        // LOADTEST-R630: hooks for the serial load-test harness (kernel/src/ltstat.rs).
+        "ltstat" => alloc::vec![crate::ltstat::stat_line(ctx.mem)],
+        "spawn" => crate::ltstat::spawn(fs, ctx.mem, arg1, arg2),
+        "churn" => crate::ltstat::churn(fs, ctx.mem, arg1, arg2),
+        "httpd" => crate::ltstat::httpd(arg1),
+        "bgps" => crate::ring3::bg_debug_lines(),
         "ls" => {
             let path = if arg1.is_empty() { "/" } else { arg1 };
             match fs.list_dir(path) {
@@ -935,7 +941,17 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             let file = toks.iter().rev().find(|t| !t.starts_with('-') && t.parse::<usize>().is_err());
             match (size, file) {
                 (Some(n), Some(f)) => {
-                    let mut data = fs.read_file(f).unwrap_or_default();
+                    // BUG-025: only a missing file starts empty. Any other read
+                    // error (a file too large for memory, corruption) used to
+                    // become an empty file here and was written back as zeros.
+                    let mut data = match fs.read_file(f) {
+                        Ok(d) => d,
+                        Err(eurofs::FsError::NotFound) => Vec::new(),
+                        Err(e) => return vec![format!("truncate: {f}: {e:?} (file left unchanged)")],
+                    };
+                    if n > data.len() && data.try_reserve_exact(n - data.len()).is_err() {
+                        return vec![format!("truncate: {f}: NoSpace ({n} bytes do not fit in memory; file left unchanged)")];
+                    }
                     data.resize(n, 0);
                     match fs.write_file(f, &data) {
                         Ok(()) => vec![format!("'{f}' truncated/extended to {n} bytes")],
@@ -1408,11 +1424,26 @@ fn coreutils(cmd: &str, line: &str, fs: &mut dyn FileSystem) -> Option<Vec<Strin
         _ => {}
     }
 
+    // LOADTEST-R630 BUG-022: this runs for EVERY shell command before the native
+    // ones. It used to read the last argument that names a file whatever the
+    // command was, so `stat`, `cp`, `rm`, `truncate` ... of a 256 MiB file first
+    // pulled all of it into the kernel heap (stat of 256 MiB: over 60 s), and a
+    // file larger than the heap could exhaust it. Only the coreutils that take
+    // file input read one; the others never take a filename as stdin (so
+    // `echo /etc/hostname` prints the path again).
+    const NO_INPUT: &[&str] = &["echo", "seq", "basename", "dirname", "true", "false", "yes", "arch", "nproc", "pwd"];
+    const FILE_INPUT: &[&str] = &[
+        "head", "tail", "wc", "tac", "rev", "nl", "fold", "sort", "uniq", "cut", "tr", "grep", "sha256sum", "sha512sum",
+        "sha224sum", "sha384sum", "sha1sum", "md5sum", "b2sum", "shuf", "base64", "base32", "cksum",
+    ];
+    if !NO_INPUT.contains(&cmd) && !FILE_INPUT.contains(&cmd) {
+        return None;
+    }
     // Search (from the back) for a positional token that is a readable file → input.
     let mut input: Vec<u8> = Vec::new();
     let mut file_idx: Option<usize> = None;
     for (i, t) in toks.iter().enumerate().rev() {
-        if !t.starts_with('-') {
+        if FILE_INPUT.contains(&cmd) && !t.starts_with('-') {
             if let Ok(data) = fs.read_file(t) {
                 input = data;
                 file_idx = Some(i);
@@ -1460,7 +1491,8 @@ fn coreutils(cmd: &str, line: &str, fs: &mut dyn FileSystem) -> Option<Vec<Strin
         }
         "arch" => return Some(vec![String::from("x86_64")]),
         "nproc" => {
-            let n = crate::acpi::parse().map(|m| m.enabled_cores()).unwrap_or(1).max(1);
+            // Cores the kernel runs, not the MADT count (at most 8, BUG-012).
+            let n = 1 + crate::smp::AP_ONLINE.load(core::sync::atomic::Ordering::Relaxed) as usize;
             return Some(vec![n.to_string()]);
         }
         "pwd" => return Some(vec![String::from("/")]),

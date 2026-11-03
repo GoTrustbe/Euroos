@@ -866,6 +866,7 @@ dependencies = [
  "ab_glyph",
  "ed25519-dalek",
  "euroaccess",
+ "euroacpi",
  "euroagent",
  "euroaml",
  "euroarchive",

@@ -3990,8 +3990,12 @@ pub fn spawn_daemon(falloc: &mut FrameAllocator, program: &[u8]) {
     // Build the address space FIRST, then spawn the task with its cr3 already set
     // (before it is Ready) — see BUG-007 / spawn_user.
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
-    let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
-    DAEMON_TASK.store(idx, Ordering::Relaxed);
+    // BUG-024: known to syscall_dispatch (DAEMON_TASK) before it can first run.
+    let idx = x86_64::instructions::interrupts::without_interrupts(|| {
+        let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
+        DAEMON_TASK.store(idx, Ordering::Relaxed);
+        idx
+    });
     crate::serial_println!("[euro] daemon scheduled as task {idx} (pid 7), own address space PML4 {pml4:#x}");
 }
 
@@ -4126,6 +4130,33 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
         }
         // Sockets the process still held: closed now (FIN for a live TCP peer).
         bg_net_release(p.pid);
+        // LOADTEST-R630 BUG-014: give the scheduler slots back. The process task and
+        // its thread tasks are Dead (exit / exit_group marked them) and their kernel
+        // stacks + address space are gone; without this every background process
+        // ever started kept its slot, and after ~230 process lifetimes since boot
+        // the 256-slot table was full for good. reclaim_task only takes a Dead,
+        // non-current task (task 0 runs this), so a still-running thread keeps its slot.
+        // BUG-017: a reaped task may still sit in the futex queue (it left Blocked
+        // there); its slot is reused below, so a later wake on that address must not
+        // reach the new occupant. Irqsave: syscalls take FUTEX_QUEUE with IF=0.
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            FUTEX_QUEUE.lock().retain(|&(_, t)| t != p.task && !p.threads.contains(&t));
+        });
+        // A driver grant names its task slot; drop it with the process so a reused
+        // slot never inherits a driver's device rights (the supervisor may only
+        // notice the death later).
+        crate::udrv::revoke_pid(p.pid);
+        if crate::sched::is_dead(p.task) {
+            reset_task_slot(p.task);
+        }
+        crate::sched::reclaim_task(p.task);
+        for &t in p.threads.iter() {
+            if crate::sched::is_dead(t) {
+                free_thread_kstack(t); // idempotent; drops a stale owner entry before the slot is reused
+                reset_task_slot(t);
+            }
+            crate::sched::reclaim_task(t);
+        }
         let kib = (p.arena_frames + 4 + 4) as usize * 4; // arena + kstack(4) + table frames(~4)
         // Show the last output (e.g. the result of a job) if there is
         // one, otherwise the termination reason (e.g. the isolation violation).
@@ -4143,6 +4174,20 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
     }
 }
 
+/// Clear the per-task policy state of a dead task whose slot is about to be
+/// reused (BUG-014 made reuse routine): capabilities, sandbox profile (with its
+/// filter bit), the syscall-yield and network-block flags. Without this a new
+/// background process in the slot of a restarted driver would run under the Driver
+/// profile, and one in a chrome thread's slot would take the glibc yield path.
+fn reset_task_slot(t: usize) {
+    if t < crate::sched::MAX_TASKS {
+        TASK_CAPS[t].store(0, Ordering::Relaxed);
+        TASK_PROFILE[t].store(0, Ordering::Relaxed);
+        SYSCALL_YIELD_OK_T[t].store(false, Ordering::Relaxed);
+        NET_MAY_BLOCK[t].store(false, Ordering::Relaxed);
+    }
+}
+
 /// Is a process with this pid still alive? (a LIVE, non-zombie BgProc). Used by
 /// EuroInit to see whether a service is still running or must be restarted.
 pub fn is_pid_alive(pid: u64) -> bool {
@@ -4150,6 +4195,49 @@ pub fn is_pid_alive(pid: u64) -> bool {
     // while holding it — matching the interrupts-off syscall path. See reap_dead.
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().iter().any(|p| p.pid == pid && !p.zombie)
+    })
+}
+
+/// One line per background process for `bgps` (load-test diagnostics): pid, its
+/// main task and every thread task with their scheduler state, pending
+/// CLONE_CHILD_CLEARTID slots, the futex addresses its tasks wait on, and the
+/// last output line.
+pub fn bg_debug_lines() -> alloc::vec::Vec<String> {
+    let snapshot: alloc::vec::Vec<(u64, usize, alloc::vec::Vec<usize>, usize, bool, String)> =
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            BG.lock()
+                .iter()
+                .map(|p| {
+                    (p.pid, p.task, p.threads.clone(), p.thread_ctids.len(), p.zombie,
+                     p.output.last().cloned().unwrap_or_default())
+                })
+                .collect()
+        });
+    let waits: alloc::vec::Vec<(u64, usize)> =
+        x86_64::instructions::interrupts::without_interrupts(|| FUTEX_QUEUE.lock().clone());
+    let st = |t: usize| crate::sched::state_of(t).unwrap_or("?");
+    let mut out = alloc::vec::Vec::new();
+    for (pid, task, threads, ctids, zombie, last) in snapshot {
+        let mut l = alloc::format!("pid {pid} task {task}:{}", st(task));
+        for t in &threads {
+            l.push_str(&alloc::format!(" thr {t}:{}", st(*t)));
+        }
+        for (a, t) in waits.iter().filter(|(_, t)| *t == task || threads.contains(t)) {
+            l.push_str(&alloc::format!(" futex {a:#x}<-{t}"));
+        }
+        l.push_str(&alloc::format!(" ctids={ctids}{} last={:?}", if zombie { " ZOMBIE" } else { "" },
+            last.chars().take(48).collect::<String>()));
+        out.push(l);
+    }
+    out
+}
+
+/// Background processes (live, zombie-not-yet-reaped), for `ltstat`.
+pub fn bg_counts() -> (usize, usize) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let bg = BG.lock();
+        let z = bg.iter().filter(|p| p.zombie).count();
+        (bg.len() - z, z)
     })
 }
 
@@ -4850,6 +4938,16 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     // (fine at its low thread counts); chrome (glibc, ~30 threads) gets the real yield.
     if syscall_yield_ok() {
         yield_reacquire();
+    } else {
+        // LOADTEST-R630 BUG-017: the musl bg path does not yield here; the task is
+        // Blocked and leaves at the next timer tick. It must STAY in the queue so a
+        // FUTEX_WAKE can find it. The "resumed" check below used to run right away
+        // on this path, found the entry still there, took it out as "spurious" and
+        // returned 0, leaving a Blocked task no wake could reach: pthread_join hung
+        // whenever the joiner waited before the thread exited (12 of 16 mpthread
+        // processes started together, and the boot demos pid 13/14). musl re-checks
+        // the futex word after any return, so returning 0 here is correct.
+        return 0;
     }
     // Resumed. If we are STILL enqueued, the scheduler woke us at the deadline (a
     // FUTEX_WAKE would have removed us) -> report -ETIMEDOUT so the caller re-polls.
@@ -5042,6 +5140,20 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
     let user_ss = (sel.user_data.0 | 3) as u64;
     let child_pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     let task = crate::sched::spawn_thread(user_rip, user_rsp, user_cs, user_ss, kstack_top, pml4, fs, saved);
+    if task == usize::MAX {
+        // BUG-015: scheduler table full -> -EAGAIN; give the pooled frames back
+        // instead of registering a child that never runs (its parent would wait forever).
+        for f in 0..1024u64 {
+            crate::procpool::free(child_raw + f * 4096);
+        }
+        for f in 0..4u64 {
+            crate::procpool::free(child_kstack + f * 4096);
+        }
+        for fr in [pml4, pdpt, pd, pt] {
+            crate::procpool::free(fr);
+        }
+        return (-11i64) as u64;
+    }
     set_task_caps(task, effective_caps()); // lock-free read; thread shares its process' rights
     crate::sched::set_ident(task, child_pid as u32, parent_pid as u32);
 
@@ -5490,6 +5602,10 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             };
             let saved_regs = unsafe { SAVED_REGS };
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, p.pml4, fs, saved_regs);
+            if child == usize::MAX {
+                free_thread_kstack_slot(slot); // BUG-015: table full -> -EAGAIN, no ghost thread
+                return (-11i64) as u64;
+            }
             set_task_caps(child, effective_caps()); // thread: same rights
             register_thread_kstack(child, slot);
             p.threads.push(child);
@@ -6199,7 +6315,7 @@ pub fn yield_keep_state() {
 
 /// Load `program` (musl, Linux ABI) as a PREEMPTIVELY scheduled process with
 /// its own PCB (heap/output/pid/TLS). The program runs indefinitely.
-pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv0: &[u8]) {
+pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv0: &[u8]) -> bool {
     init_syscall_msrs();
     const MIB2: u64 = 1 << 21;
     // One 2 MiB-aligned user arena: ALL user frames of this process (code,
@@ -6208,12 +6324,29 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
     // Exactly 2 MiB, 2 MiB-aligned in one go (no more 4 MiB over-allocation):
     // saves ~2 MiB per background process. On reaping we return exactly these 512
     // frames (arena_frames below).
-    let arena = falloc.allocate_aligned(512, 512).expect("bg-arena");
+    // LOADTEST-R630 BUG-015: out of memory or out of task slots is a refusal
+    // (false), never a kernel panic and never a process that cannot run.
+    let arena = match falloc.allocate_aligned(512, 512) {
+        Ok(a) => a,
+        Err(_) => {
+            crate::serial_println!("[euro] bg-musl (pid {pid}): no free 2 MiB arena - not started");
+            return false;
+        }
+    };
     let arena_raw = arena;
     let code = arena; // program code/segments at the bottom of the arena
     let heap = arena + 0x80000; // +512 KiB: own heap (musl mmap/TLS block)
     let stack_top = arena + MIB2; // user stack grows downward from the arena top
-    let kstack = falloc.allocate_contiguous(4).expect("bg-kstack"); // ring-0 stack (supervisor)
+    let kstack = match falloc.allocate_contiguous(4) {
+        Ok(k) => k, // ring-0 stack (supervisor)
+        Err(_) => {
+            for f in 0..512u64 {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            crate::serial_println!("[euro] bg-musl (pid {pid}): no kernel stack free - not started");
+            return false;
+        }
+    };
     let kstack_top = (kstack + 4 * 4096) & !0xF;
     let pages = program_span_pages(program);
     let info = load_program(program, code, pages);
@@ -6225,7 +6358,31 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
     // Build it FIRST, then spawn with cr3 set before Ready (BUG-007: a task must never be
     // schedulable with cr3=0, or a preempting timer IRQ runs its ring-3 code on the boot PML4).
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
+    // LOADTEST-R630 BUG-024: the task is Ready the moment spawn_user returns, but
+    // syscall_dispatch only knows it once it is registered below. A timer tick in
+    // between ran its first syscall (musl's arch_prctl) through the FOREGROUND
+    // Linux path with the foreground's globals: a kernel page fault after ~1 h of
+    // spawning (soak). Ring-3 tasks run only on this core (the BSP), so keeping
+    // interrupts off from spawn to registration closes the window.
+    let irq_was_on = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::disable();
     let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
+    if idx == usize::MAX {
+        // Scheduler table full: undo instead of registering a process whose task
+        // never runs (it used to sit "live" forever with task usize::MAX).
+        for f in 0..512u64 {
+            let _ = falloc.free(arena + f * 4096);
+        }
+        for f in 0..4u64 {
+            let _ = falloc.free(kstack + f * 4096);
+        }
+        crate::paging::free_address_space(falloc, pml4);
+        if irq_was_on {
+            x86_64::instructions::interrupts::enable();
+        }
+        crate::serial_println!("[euro] bg-musl (pid {pid}): scheduler task table full - not started");
+        return false;
+    }
     // BUG-007 hardening: irqsave BG hold (non-preemptible) for the registration push.
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().push(BgProc {
@@ -6250,7 +6407,11 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
             echo: false,
         });
     });
+    if irq_was_on {
+        x86_64::instructions::interrupts::enable();
+    }
     crate::serial_println!("[euro] bg-musl (pid {pid}) -> task {idx}, own address space PML4 {pml4:#x}, arena {arena:#x}");
+    true
 }
 
 /// Like [`spawn_bg_musl`], for a program that must run with an EXPLICIT
@@ -6313,7 +6474,17 @@ pub fn spawn_bg_app(
     let heap = arena + MIB2; // heap starts at block 1
     let heap_end = arena + (nblocks - 1) * MIB2; // stops below the stack block
     let stack_top = arena + nblocks * MIB2; // stack grows down from the arena top
-    let kstack = falloc.allocate_contiguous(4).expect("app-kstack");
+    let kstack = match falloc.allocate_contiguous(4) {
+        Ok(k) => k,
+        Err(_) => {
+            // BUG-015: out of memory refuses the app instead of panicking.
+            for f in 0..frames {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            crate::serial_println!("[euro] bg-app (pid {pid}): no kernel stack free - not started");
+            return None;
+        }
+    };
     let kstack_top = (kstack + 4 * 4096) & !0xF;
     let pages = program_span_pages(program);
     if pages > 512 {
@@ -6333,7 +6504,32 @@ pub fn spawn_bg_app(
         &info.exec_pages,
         &info.writ_pages,
     );
+    // LOADTEST-R630 BUG-024: the task is Ready the moment spawn_user returns, but
+    // syscall_dispatch only knows it once it is registered below. A timer tick in
+    // between ran its first syscall (musl's arch_prctl) through the FOREGROUND
+    // Linux path with the foreground's globals: a kernel page fault after ~1 h of
+    // spawning (soak). Ring-3 tasks run only on this core (the BSP), so keeping
+    // interrupts off from spawn to registration closes the window.
+    let irq_was_on = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::disable();
     let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
+    if idx == usize::MAX {
+        // BUG-015 for apps and userspace drivers: a full task table is a refusal
+        // (the udrv supervisor retries later), never a registered process whose
+        // task never runs.
+        for f in 0..frames {
+            let _ = falloc.free(arena + f * 4096);
+        }
+        for f in 0..4u64 {
+            let _ = falloc.free(kstack + f * 4096);
+        }
+        crate::paging::free_address_space(falloc, pml4);
+        if irq_was_on {
+            x86_64::instructions::interrupts::enable();
+        }
+        crate::serial_println!("[euro] bg-app (pid {pid}): scheduler task table full - not started");
+        return None;
+    }
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().push(BgProc {
             task: idx,
@@ -6357,6 +6553,9 @@ pub fn spawn_bg_app(
             echo: false,
         });
     });
+    if irq_was_on {
+        x86_64::instructions::interrupts::enable();
+    }
     crate::serial_println!("[euro] bg-app (pid {pid}) -> task {idx}, arena {arena:#x} span {arena_mib} MiB, heap {heap:#x}..{heap_end:#x}, PML4 {pml4:#x}");
     Some(idx)
 }

@@ -1,0 +1,39 @@
+duration of driven load: 15007.5 s; commands: 9265; non-ok: 1
+  non-ok: id 4409 fetch 10.0.2.100 -> err (3 ms)
+rounds: 985; worker processes spawned: 31520
+frames_free    first      2981777 last      2981777 min      2981777 max      2981777
+heap_used      first    147390512 last    155589504 min    147377536 max    155589504
+tasks          first           59 last           59 min           59 max           59
+bg_live        first            4 last            4 min            4 max            4
+kstacks        first            0 last            0 min            0 max            0
+files          first          186 last          186 min          186 max          186
+procpool_free  first       887296 last       887296 min       887296 max       887296
+demand_free    first            0 last            0 min            0 max            0
+heap drift: +8.20 MB over 4.17 h = +32.8 kB/min
+latency per command (ms): name, n, median, p99, max
+  cat             985       10       84     1850
+  churn fs        328  28474.0    32872    36796
+  churn net       328    254.0      559     1488
+  churn proc      329     3137     4466     6364
+  fetch           984    126.0      200     2512
+  free             99       10       80       80
+  lockstat        100    438.0      553      561
+  ltstat          986     68.0     2741     3259
+  mkdir             2    501.0      500      502
+  rm              985       72      197     3688
+  scrub             1     2697     2697     2697
+  sha256sum       985     1485     1971     4291
+  spawn           985     1315     1623     1922
+  truncate        985      933     1361     2523
+  wget            197      562      737     1184
+  write           985      370      828     3013
+last lockstat (top lines):
+  EuroLock contention (ranked by spin cost):
+  vfs.mount (per-mount): acq=560898 contended=5296 (0.94%) spins=7668901 max-wait=1987153 try-fail=0 hold-max=3607712us hold-avg=20640us
+  heap (linked-list allocator): acq=30059251 contended=12255 (0.04%) spins=48597 max-wait=542 try-fail=0 hold-max=0us hold-avg=0us
+  net.CFG: acq=75407042 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=80062us hold-avg=0us
+  sched.SCHED (BSP scheduler): acq=68766057 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1025us hold-avg=0us
+  net.PORTQ (TCP port queues): acq=52724107 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=60059us hold-avg=0us
+  ring3.BG (background processes): acq=23452714 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=135006us hold-avg=1us
+  net.NET_LEGACY (rx ring): acq=18685593 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=50011us hold-avg=0us
+[g5] scrub passes: 62, WATCHDOG lines: 1, isolation kills: 2, kernel panics: 0

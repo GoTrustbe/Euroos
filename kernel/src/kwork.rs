@@ -53,6 +53,11 @@ pub fn online_aps() -> alloc::vec::Vec<usize> {
     (0..MAX_CPU).filter(|&c| ONLINE[c].load(Ordering::Acquire)).collect()
 }
 
+/// True once APs take jobs (else `parallel` runs every worker inline on the BSP).
+pub fn accepting() -> bool {
+    ACCEPTING.load(Ordering::Acquire)
+}
+
 /// Called by `smp` once the demo workers are parked.
 pub fn start_accepting() {
     ACCEPTING.store(true, Ordering::Release);

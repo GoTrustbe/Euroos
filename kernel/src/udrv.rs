@@ -341,6 +341,18 @@ fn sys_grant(task: usize) -> Option<SysGrant> {
     without_interrupts(|| SYS.lock().iter().flatten().find(|g| g.task == task).copied())
 }
 
+/// Drop every grant held by process `pid` (reap_dead, before its task slot can
+/// be reused by another process).
+pub(crate) fn revoke_pid(pid: u64) {
+    without_interrupts(|| {
+        for g in SYS.lock().iter_mut() {
+            if g.is_some_and(|g| g.pid == pid) {
+                *g = None;
+            }
+        }
+    });
+}
+
 /// Publish (or clear) the grant of driver `d` (interrupts off).
 pub(crate) fn set_grant(d: Drv, g: Option<SysGrant>) {
     debug_assert!(g.is_none_or(|g| g.drv == d));

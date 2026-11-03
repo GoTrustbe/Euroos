@@ -8,18 +8,31 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 use eurofs::{FileSystem, ScrubReport};
 
-static LAST_SCRUB_TICK: AtomicU64 = AtomicU64::new(0);
+static NEXT_SCRUB_TICK: AtomicU64 = AtomicU64::new(0);
 static SCRUB_RUNS: AtomicU64 = AtomicU64::new(0);
+/// Duration of the last pass, in ticks (10 ms).
+static LAST_SCRUB_TICKS: AtomicU64 = AtomicU64::new(0);
 /// ~60 s at 100 Hz — infrequent enough not to make the desktop stutter.
 const INTERVAL_TICKS: u64 = 6000;
+/// A pass runs synchronously in the desktop tick and reads every data block, so
+/// its cost grows with the data stored: ~38 s with ~600 MiB on a virtio disk under
+/// KVM (LOADTEST-R630 BUG-023), during which the desktop and the serial console
+/// stand still. Until the scrub is incremental, the next pass waits at least
+/// 100x as long as the last one took: the scrubber spends at most ~1 % of the
+/// time, instead of most of it once a disk holds a few GiB.
+const DUTY_FACTOR: u64 = 100;
 
 /// Run one scrub pass, append the result to `/var/log/fsck.log`, and log a
 /// summary to serial. Returns the report.
 pub fn run(fs: &mut dyn FileSystem) -> ScrubReport {
+    let t0 = crate::interrupts::ticks();
     let r = fs.scrub();
+    let took = crate::interrupts::ticks().saturating_sub(t0);
+    LAST_SCRUB_TICKS.store(took, Ordering::Relaxed);
+    NEXT_SCRUB_TICK.store(t0 + took + INTERVAL_TICKS.max(took * DUTY_FACTOR), Ordering::Relaxed);
     let run = SCRUB_RUNS.fetch_add(1, Ordering::Relaxed) + 1;
     let line = alloc::format!(
-        "scrub #{run}: {} inodes, {} data blocks, data verified {}, errors {}, unrecoverable {}, superblock {}, bitmap {}\n",
+        "scrub #{run}: {} inodes, {} data blocks, data verified {}, errors {}, unrecoverable {}, superblock {}, bitmap {}, took {} ms\n",
         r.objects,
         r.blocks_referenced,
         r.data_verified,
@@ -27,6 +40,7 @@ pub fn run(fs: &mut dyn FileSystem) -> ScrubReport {
         r.data_unrecoverable,
         if r.superblock_ok { "OK" } else { "FAIL" },
         if r.bitmap_ok { "OK" } else { "FAIL" },
+        took * 10,
     );
     // Append to /var/log/fsck.log (read-modify-write; /var = real EuroVar partition).
     let _ = fs.create_dir("/var");
@@ -42,9 +56,11 @@ pub fn run(fs: &mut dyn FileSystem) -> ScrubReport {
 /// interval (~60 s) since the previous pass has elapsed — this keeps the scrubber a
 /// light background task instead of a blocking full scan every tick.
 pub fn maybe_run(fs: &mut dyn FileSystem, now_ticks: u64) {
-    let last = LAST_SCRUB_TICK.load(Ordering::Relaxed);
-    if now_ticks.wrapping_sub(last) >= INTERVAL_TICKS {
-        LAST_SCRUB_TICK.store(now_ticks, Ordering::Relaxed);
+    let next = NEXT_SCRUB_TICK.load(Ordering::Relaxed);
+    if next == 0 {
+        // No pass yet: the first periodic one comes one interval from now.
+        NEXT_SCRUB_TICK.store(now_ticks + INTERVAL_TICKS, Ordering::Relaxed);
+    } else if now_ticks >= next {
         run(fs);
     }
 }

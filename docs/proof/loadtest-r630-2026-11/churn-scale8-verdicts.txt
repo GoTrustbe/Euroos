@@ -1,0 +1,36 @@
+[churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=16/16 · frames 2981849→2981849 (leak-free=true) · demand-pool 887296→887296 (true) · tasks 39→39 (true) · thread-kstacks 0→0 (true) · file-table 184→184 (true) · heap-used 12624384→12624384 (true) → OK ✓ (every process returns what it took)
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=77 (want 77) · sums-correct=true · thread-kstacks 0→0 · tasks 39→39 · frames 2981849→2981849 → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 39→39 · process-pool 887296→887296 · demand-pool 0→0 · frames 2981849→2981849 → OK ✓
+[churn-fs] 3 rounds × 120 files (write/rename/read/remove): op-failures=0 · bad-reads=0 · leftovers=0 · rmdir-failures=0 · sentinel-intact=true · heap-used after rounds [12633600, 12647936, 12654080] (stable=true) → OK ✓
+[churn-net] 64 sockets opened+closed (half UDP to the loopback DNS responder): open-failures=0 · close-failures=0 · loopback-sends=32/32 · table 0→0 → OK ✓
+[churn-surface] 160 surfaces created+presented+removed: create-failures=0 · present-failures=0 · surfaces 0→0 · absurd-size-refused=true · heap-used 12656384→12720384 (true) → OK ✓
+[churn-pkg] 12 signed-package install+remove cycles (hello-euro): installs=12/12 · removes=12/12 · installed-apps 5→5 · /pkg entries 2→2 · heap-used 12657408→12657664 (true) → OK ✓
+[churn-proc] 128 glibc processes (gtiny) run + reaped: clean-exits=128/128 · frames 2981849→2981849 (leak-free=true) · demand-pool 887296→887296 (true) · tasks 39→39 (true) · thread-kstacks 0→0 (true) · file-table 185→185 (true) · heap-used 12803584→12803584 (true) → OK ✓ (every process returns what it took)
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=77 (want 77) · sums-correct=true · thread-kstacks 0→0 · tasks 39→39 · frames 2981849→2981849 → OK ✓
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=77 (want 77) · sums-correct=true · thread-kstacks 0→0 · tasks 39→39 · frames 2981849→2981849 → OK ✓
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=77 (want 77) · sums-correct=true · thread-kstacks 0→0 · tasks 39→39 · frames 2981849→2981849 → OK ✓
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=77 (want 77) · sums-correct=true · thread-kstacks 0→0 · tasks 39→39 · frames 2981849→2981849 → OK ✓
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=77 (want 77) · sums-correct=true · thread-kstacks 0→0 · tasks 39→39 · frames 2981849→2981849 → OK ✓
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=77 (want 77) · sums-correct=true · thread-kstacks 0→0 · tasks 39→39 · frames 2981849→2981849 → OK ✓
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=77 (want 77) · sums-correct=true · thread-kstacks 0→0 · tasks 39→39 · frames 2981849→2981849 → OK ✓
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=77 (want 77) · sums-correct=true · thread-kstacks 0→0 · tasks 39→39 · frames 2981849→2981849 → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 39→39 · process-pool 887296→887296 · demand-pool 0→0 · frames 2981849→2981849 → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 39→40 · process-pool 887296→887296 · demand-pool 0→0 · frames 2981849→2981849 → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 40→46 · process-pool 887296→887296 · demand-pool 0→0 · frames 2981849→2981849 → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 46→52 · process-pool 887296→887296 · demand-pool 0→0 · frames 2981849→2981849 → OK ✓
+[churn-fs] 3 rounds × 120 files (write/rename/read/remove): op-failures=0 · bad-reads=0 · leftovers=0 · rmdir-failures=0 · sentinel-intact=true · heap-used after rounds [12848640, 12848640, 12854784] (stable=true) → OK ✓
+[churn-fs] 3 rounds × 120 files (write/rename/read/remove): op-failures=0 · bad-reads=0 · leftovers=0 · rmdir-failures=0 · sentinel-intact=true · heap-used after rounds [12860928, 12867072, 12873216] (stable=true) → OK ✓
+[churn-fs] 3 rounds × 120 files (write/rename/read/remove): op-failures=0 · bad-reads=0 · leftovers=0 · rmdir-failures=0 · sentinel-intact=true · heap-used after rounds [12893696, 12899840, 12905984] (stable=true) → OK ✓
+[churn-fs] 3 rounds × 120 files (write/rename/read/remove): op-failures=0 · bad-reads=0 · leftovers=0 · rmdir-failures=0 · sentinel-intact=true · heap-used after rounds [12912128, 12918272, 12924416] (stable=true) → OK ✓
+[churn-fs] 3 rounds × 120 files (write/rename/read/remove): op-failures=0 · bad-reads=0 · leftovers=0 · rmdir-failures=0 · sentinel-intact=true · heap-used after rounds [12938752, 12944896, 12951040] (stable=true) → OK ✓
+[churn-fs] 3 rounds × 120 files (write/rename/read/remove): op-failures=0 · bad-reads=0 · leftovers=0 · rmdir-failures=0 · sentinel-intact=true · heap-used after rounds [12957184, 12963328, 12977664] (stable=true) → OK ✓
+[churn-fs] 3 rounds × 120 files (write/rename/read/remove): op-failures=0 · bad-reads=0 · leftovers=0 · rmdir-failures=0 · sentinel-intact=true · heap-used after rounds [12989952, 12996096, 13002240] (stable=true) → OK ✓
+[churn-fs] 3 rounds × 120 files (write/rename/read/remove): op-failures=0 · bad-reads=0 · leftovers=0 · rmdir-failures=0 · sentinel-intact=true · heap-used after rounds [13008384, 13014528, 13028864] (stable=true) → OK ✓
+[churn-net] 64 sockets opened+closed (half UDP to the loopback DNS responder): open-failures=0 · close-failures=0 · loopback-sends=32/32 · table 0→0 → OK ✓
+[churn-net] 64 sockets opened+closed (half UDP to the loopback DNS responder): open-failures=0 · close-failures=0 · loopback-sends=32/32 · table 0→0 → OK ✓
+[churn-net] 64 sockets opened+closed (half UDP to the loopback DNS responder): open-failures=0 · close-failures=0 · loopback-sends=32/32 · table 0→0 → OK ✓
+[churn-net] 64 sockets opened+closed (half UDP to the loopback DNS responder): open-failures=0 · close-failures=0 · loopback-sends=32/32 · table 0→0 → OK ✓
+[churn-net] 64 sockets opened+closed (half UDP to the loopback DNS responder): open-failures=0 · close-failures=0 · loopback-sends=32/32 · table 0→0 → OK ✓
+[churn-net] 64 sockets opened+closed (half UDP to the loopback DNS responder): open-failures=0 · close-failures=0 · loopback-sends=32/32 · table 0→0 → OK ✓
+[churn-net] 64 sockets opened+closed (half UDP to the loopback DNS responder): open-failures=0 · close-failures=0 · loopback-sends=32/32 · table 0→0 → OK ✓
+[churn-net] 64 sockets opened+closed (half UDP to the loopback DNS responder): open-failures=0 · close-failures=0 · loopback-sends=32/32 · table 0→0 → OK ✓

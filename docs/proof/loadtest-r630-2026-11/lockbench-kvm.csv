@@ -1,0 +1,386 @@
+config,smp,run,workload,mode,one_core,ncores,n_core,scaling,host_load,wall_s
+smp1,1,1,fs (mount per worker),J1,73871,1,73640,0.99,2.09,36.9
+smp1,1,1,fs (mount per worker),GLOBAL,72857,1,72718,0.99,2.09,36.9
+smp1,1,1,fs (all on one mount),J1,73657,1,72155,0.97,2.09,36.9
+smp1,1,1,ipc (channel per worker),J1,1811120,1,1810344,0.99,2.09,36.9
+smp1,1,1,ipc (channel per worker),GLOBAL,1490805,1,1476528,0.99,2.09,36.9
+smp1,1,1,unix (connection per worker),J1,1633935,1,1651337,1.01,2.09,36.9
+smp1,1,1,unix (connection per worker),GLOBAL,1358208,1,1259854,0.92,2.09,36.9
+smp1,1,2,fs (mount per worker),J1,77861,1,77692,0.99,2.03,36.5
+smp1,1,2,fs (mount per worker),GLOBAL,77131,1,77077,0.99,2.03,36.5
+smp1,1,2,fs (all on one mount),J1,77877,1,77742,0.99,2.03,36.5
+smp1,1,2,ipc (channel per worker),J1,1910210,1,1917174,1.0,2.03,36.5
+smp1,1,2,ipc (channel per worker),GLOBAL,1589070,1,1586984,0.99,2.03,36.5
+smp1,1,2,unix (connection per worker),J1,1667771,1,1667357,0.99,2.03,36.5
+smp1,1,2,unix (connection per worker),GLOBAL,1365364,1,1363921,0.99,2.03,36.5
+smp1,1,3,fs (mount per worker),J1,78058,1,77795,0.99,1.57,36.3
+smp1,1,3,fs (mount per worker),GLOBAL,77248,1,76998,0.99,1.57,36.3
+smp1,1,3,fs (all on one mount),J1,77891,1,77811,0.99,1.57,36.3
+smp1,1,3,ipc (channel per worker),J1,1914705,1,1918612,1.0,1.57,36.3
+smp1,1,3,ipc (channel per worker),GLOBAL,1588652,1,1587630,0.99,1.57,36.3
+smp1,1,3,unix (connection per worker),J1,1618412,1,1615912,0.99,1.57,36.3
+smp1,1,3,unix (connection per worker),GLOBAL,1324170,1,1361594,1.02,1.57,36.3
+smp1,1,4,fs (mount per worker),J1,77942,1,77941,0.99,1.32,36.4
+smp1,1,4,fs (mount per worker),GLOBAL,77094,1,76385,0.99,1.32,36.4
+smp1,1,4,fs (all on one mount),J1,77835,1,77888,1.0,1.32,36.4
+smp1,1,4,ipc (channel per worker),J1,1919348,1,1916001,0.99,1.32,36.4
+smp1,1,4,ipc (channel per worker),GLOBAL,1587604,1,1587868,1.0,1.32,36.4
+smp1,1,4,unix (connection per worker),J1,1662105,1,1667490,1.0,1.32,36.4
+smp1,1,4,unix (connection per worker),GLOBAL,1364228,1,1365490,1.0,1.32,36.4
+smp1,1,5,fs (mount per worker),J1,77497,1,77478,0.99,1.16,36.7
+smp1,1,5,fs (mount per worker),GLOBAL,76854,1,76094,0.99,1.16,36.7
+smp1,1,5,fs (all on one mount),J1,77691,1,77087,0.99,1.16,36.7
+smp1,1,5,ipc (channel per worker),J1,1914287,1,1764678,0.92,1.16,36.7
+smp1,1,5,ipc (channel per worker),GLOBAL,1587588,1,1589840,1.0,1.16,36.7
+smp1,1,5,unix (connection per worker),J1,1618184,1,1625490,1.0,1.16,36.7
+smp1,1,5,unix (connection per worker),GLOBAL,1365362,1,1364978,0.99,1.16,36.7
+smp2,2,1,fs (mount per worker),J1,75982,2,110361,1.45,1.19,36.8
+smp2,2,1,fs (mount per worker),GLOBAL,75084,2,62748,0.83,1.19,36.8
+smp2,2,1,fs (all on one mount),J1,69470,2,48008,0.69,1.19,36.8
+smp2,2,1,ipc (channel per worker),J1,1815308,2,2678224,1.47,1.19,36.8
+smp2,2,1,ipc (channel per worker),GLOBAL,1498457,2,931861,0.62,1.19,36.8
+smp2,2,1,unix (connection per worker),J1,1540152,2,2390995,1.55,1.19,36.8
+smp2,2,1,unix (connection per worker),GLOBAL,1292454,2,941495,0.72,1.19,36.8
+smp2,2,2,fs (mount per worker),J1,75785,2,115931,1.52,1.35,36.5
+smp2,2,2,fs (mount per worker),GLOBAL,75991,2,60592,0.79,1.35,36.5
+smp2,2,2,fs (all on one mount),J1,68062,2,51030,0.74,1.35,36.5
+smp2,2,2,ipc (channel per worker),J1,1814637,2,2381271,1.31,1.35,36.5
+smp2,2,2,ipc (channel per worker),GLOBAL,1500174,2,985681,0.65,1.35,36.5
+smp2,2,2,unix (connection per worker),J1,1538650,2,2180834,1.41,1.35,36.5
+smp2,2,2,unix (connection per worker),GLOBAL,1288375,2,907465,0.7,1.35,36.5
+smp2,2,3,fs (mount per worker),J1,76832,2,110421,1.43,1.39,36.8
+smp2,2,3,fs (mount per worker),GLOBAL,76058,2,61695,0.81,1.39,36.8
+smp2,2,3,fs (all on one mount),J1,69400,2,48077,0.69,1.39,36.8
+smp2,2,3,ipc (channel per worker),J1,1815630,2,2688374,1.48,1.39,36.8
+smp2,2,3,ipc (channel per worker),GLOBAL,1505100,2,961322,0.63,1.39,36.8
+smp2,2,3,unix (connection per worker),J1,1540411,2,2304101,1.49,1.39,36.8
+smp2,2,3,unix (connection per worker),GLOBAL,1213842,2,854734,0.7,1.39,36.8
+smp2,2,4,fs (mount per worker),J1,77088,2,82017,1.06,1.35,36.8
+smp2,2,4,fs (mount per worker),GLOBAL,76031,2,53301,0.7,1.35,36.8
+smp2,2,4,fs (all on one mount),J1,71685,2,32252,0.44,1.35,36.8
+smp2,2,4,ipc (channel per worker),J1,1814055,2,1614081,0.88,1.35,36.8
+smp2,2,4,ipc (channel per worker),GLOBAL,1502274,2,760701,0.5,1.35,36.8
+smp2,2,4,unix (connection per worker),J1,1532178,2,1777077,1.15,1.35,36.8
+smp2,2,4,unix (connection per worker),GLOBAL,1291174,2,809545,0.62,1.35,36.8
+smp2,2,5,fs (mount per worker),J1,77058,2,108874,1.41,1.50,36.5
+smp2,2,5,fs (mount per worker),GLOBAL,75777,2,59022,0.77,1.50,36.5
+smp2,2,5,fs (all on one mount),J1,69817,2,44734,0.64,1.50,36.5
+smp2,2,5,ipc (channel per worker),J1,1812605,2,2675077,1.47,1.50,36.5
+smp2,2,5,ipc (channel per worker),GLOBAL,1503147,2,881910,0.58,1.50,36.5
+smp2,2,5,unix (connection per worker),J1,1539351,2,2393658,1.55,1.50,36.5
+smp2,2,5,unix (connection per worker),GLOBAL,1291384,2,817291,0.63,1.50,36.5
+smp4,4,1,fs (mount per worker),J1,73195,4,123275,1.68,1.49,36.9
+smp4,4,1,fs (mount per worker),GLOBAL,72028,4,47141,0.65,1.49,36.9
+smp4,4,1,fs (all on one mount),J1,56172,4,27702,0.49,1.49,36.9
+smp4,4,1,ipc (channel per worker),J1,1621692,4,1730492,1.06,1.49,36.9
+smp4,4,1,ipc (channel per worker),GLOBAL,1345598,4,615624,0.45,1.49,36.9
+smp4,4,1,unix (connection per worker),J1,1425831,4,2482840,1.74,1.49,36.9
+smp4,4,1,unix (connection per worker),GLOBAL,1150175,4,641190,0.55,1.49,36.9
+smp4,4,2,fs (mount per worker),J1,70925,4,127858,1.8,2.75,37.2
+smp4,4,2,fs (mount per worker),GLOBAL,70382,4,46561,0.66,2.75,37.2
+smp4,4,2,fs (all on one mount),J1,53334,4,31934,0.59,2.75,37.2
+smp4,4,2,ipc (channel per worker),J1,1616377,4,1888934,1.16,2.75,37.2
+smp4,4,2,ipc (channel per worker),GLOBAL,1334241,4,630800,0.47,2.75,37.2
+smp4,4,2,unix (connection per worker),J1,1424358,4,2310474,1.62,2.75,37.2
+smp4,4,2,unix (connection per worker),GLOBAL,1164390,4,660467,0.56,2.75,37.2
+smp4,4,3,fs (mount per worker),J1,72010,4,148321,2.05,2.75,36.8
+smp4,4,3,fs (mount per worker),GLOBAL,70981,4,42627,0.6,2.75,36.8
+smp4,4,3,fs (all on one mount),J1,55695,4,32575,0.58,2.75,36.8
+smp4,4,3,ipc (channel per worker),J1,1608364,4,1867775,1.16,2.75,36.8
+smp4,4,3,ipc (channel per worker),GLOBAL,1328835,4,654107,0.49,2.75,36.8
+smp4,4,3,unix (connection per worker),J1,1408697,4,2105210,1.49,2.75,36.8
+smp4,4,3,unix (connection per worker),GLOBAL,1159874,4,653925,0.56,2.75,36.8
+smp4,4,4,fs (mount per worker),J1,72088,4,127877,1.77,2.92,36.8
+smp4,4,4,fs (mount per worker),GLOBAL,71741,4,41242,0.57,2.92,36.8
+smp4,4,4,fs (all on one mount),J1,54840,4,34590,0.63,2.92,36.8
+smp4,4,4,ipc (channel per worker),J1,1620442,4,1636437,1.0,2.92,36.8
+smp4,4,4,ipc (channel per worker),GLOBAL,1330078,4,611234,0.45,2.92,36.8
+smp4,4,4,unix (connection per worker),J1,1421634,4,2230608,1.56,2.92,36.8
+smp4,4,4,unix (connection per worker),GLOBAL,1147130,4,700355,0.61,2.92,36.8
+smp4,4,5,fs (mount per worker),J1,73761,4,115982,1.57,3.13,37.0
+smp4,4,5,fs (mount per worker),GLOBAL,72841,4,48994,0.67,3.13,37.0
+smp4,4,5,fs (all on one mount),J1,56478,4,26660,0.47,3.13,37.0
+smp4,4,5,ipc (channel per worker),J1,1533358,4,1578501,1.02,3.13,37.0
+smp4,4,5,ipc (channel per worker),GLOBAL,1169935,4,534804,0.45,3.13,37.0
+smp4,4,5,unix (connection per worker),J1,1348674,4,2362504,1.75,3.13,37.0
+smp4,4,5,unix (connection per worker),GLOBAL,1105408,4,578925,0.52,3.13,37.0
+smp8,8,1,fs (mount per worker),J1,62064,8,113177,1.82,3.19,37.3
+smp8,8,1,fs (mount per worker),GLOBAL,60992,8,41481,0.68,3.19,37.3
+smp8,8,1,fs (all on one mount),J1,40837,8,18344,0.44,3.19,37.3
+smp8,8,1,ipc (channel per worker),J1,1185022,8,1995255,1.68,3.19,37.3
+smp8,8,1,ipc (channel per worker),GLOBAL,933961,8,447655,0.47,3.19,37.3
+smp8,8,1,unix (connection per worker),J1,1165727,8,2843965,2.43,3.19,37.3
+smp8,8,1,unix (connection per worker),GLOBAL,922267,8,457844,0.49,3.19,37.3
+smp8,8,2,fs (mount per worker),J1,56904,8,129840,2.28,4.11,36.8
+smp8,8,2,fs (mount per worker),GLOBAL,63642,8,39907,0.62,4.11,36.8
+smp8,8,2,fs (all on one mount),J1,41221,8,21994,0.53,4.11,36.8
+smp8,8,2,ipc (channel per worker),J1,1124837,8,1744272,1.55,4.11,36.8
+smp8,8,2,ipc (channel per worker),GLOBAL,1057961,8,467217,0.44,4.11,36.8
+smp8,8,2,unix (connection per worker),J1,1165211,8,2791450,2.39,4.11,36.8
+smp8,8,2,unix (connection per worker),GLOBAL,848338,8,492740,0.58,4.11,36.8
+smp8,8,3,fs (mount per worker),J1,57404,8,117844,2.05,4.63,37.4
+smp8,8,3,fs (mount per worker),GLOBAL,63728,8,32940,0.51,4.63,37.4
+smp8,8,3,fs (all on one mount),J1,40742,8,21734,0.53,4.63,37.4
+smp8,8,3,ipc (channel per worker),J1,1101547,8,1503484,1.36,4.63,37.4
+smp8,8,3,ipc (channel per worker),GLOBAL,941867,8,476547,0.5,4.63,37.4
+smp8,8,3,unix (connection per worker),J1,1166545,8,2863805,2.45,4.63,37.4
+smp8,8,3,unix (connection per worker),GLOBAL,963840,8,517017,0.53,4.63,37.4
+smp8,8,4,fs (mount per worker),J1,55098,8,111647,2.02,4.90,36.9
+smp8,8,4,fs (mount per worker),GLOBAL,64534,8,42311,0.65,4.90,36.9
+smp8,8,4,fs (all on one mount),J1,41807,8,19737,0.47,4.90,36.9
+smp8,8,4,ipc (channel per worker),J1,1156742,8,1666687,1.44,4.90,36.9
+smp8,8,4,ipc (channel per worker),GLOBAL,1054998,8,408704,0.38,4.90,36.9
+smp8,8,4,unix (connection per worker),J1,1166475,8,2965861,2.54,4.90,36.9
+smp8,8,4,unix (connection per worker),GLOBAL,958032,8,421190,0.43,4.90,36.9
+smp8,8,5,fs (mount per worker),J1,46311,8,121097,2.61,4.56,37.0
+smp8,8,5,fs (mount per worker),GLOBAL,62527,8,41011,0.65,4.56,37.0
+smp8,8,5,fs (all on one mount),J1,41564,8,22462,0.54,4.56,37.0
+smp8,8,5,ipc (channel per worker),J1,1096102,8,1721234,1.57,4.56,37.0
+smp8,8,5,ipc (channel per worker),GLOBAL,919131,8,492190,0.53,4.56,37.0
+smp8,8,5,unix (connection per worker),J1,1159770,8,2670267,2.3,4.56,37.0
+smp8,8,5,unix (connection per worker),GLOBAL,872682,8,522352,0.59,4.56,37.0
+smp16,16,1,fs (mount per worker),J1,54700,8,114674,2.09,5.11,37.0
+smp16,16,1,fs (mount per worker),GLOBAL,64210,8,42242,0.65,5.11,37.0
+smp16,16,1,fs (all on one mount),J1,41897,8,17662,0.42,5.11,37.0
+smp16,16,1,ipc (channel per worker),J1,1125564,8,1884010,1.67,5.11,37.0
+smp16,16,1,ipc (channel per worker),GLOBAL,913027,8,483164,0.52,5.11,37.0
+smp16,16,1,unix (connection per worker),J1,1143661,8,2995891,2.61,5.11,37.0
+smp16,16,1,unix (connection per worker),GLOBAL,831401,8,516180,0.62,5.11,37.0
+smp16,16,2,fs (mount per worker),J1,46474,8,117471,2.52,5.23,37.7
+smp16,16,2,fs (mount per worker),GLOBAL,47447,8,41938,0.88,5.23,37.7
+smp16,16,2,fs (all on one mount),J1,42375,8,20408,0.48,5.23,37.7
+smp16,16,2,ipc (channel per worker),J1,1157308,8,2019765,1.74,5.23,37.7
+smp16,16,2,ipc (channel per worker),GLOBAL,959061,8,402784,0.41,5.23,37.7
+smp16,16,2,unix (connection per worker),J1,1144445,8,3151265,2.75,5.23,37.7
+smp16,16,2,unix (connection per worker),GLOBAL,916051,8,474534,0.51,5.23,37.7
+smp16,16,3,fs (mount per worker),J1,55998,8,121000,2.16,5.01,37.2
+smp16,16,3,fs (mount per worker),GLOBAL,50382,8,43212,0.85,5.01,37.2
+smp16,16,3,fs (all on one mount),J1,38055,8,18637,0.48,5.01,37.2
+smp16,16,3,ipc (channel per worker),J1,1183688,8,2011138,1.69,5.01,37.2
+smp16,16,3,ipc (channel per worker),GLOBAL,1035442,8,408990,0.39,5.01,37.2
+smp16,16,3,unix (connection per worker),J1,1171287,8,3229001,2.75,5.01,37.2
+smp16,16,3,unix (connection per worker),GLOBAL,907740,8,504220,0.55,5.01,37.2
+smp16,16,4,fs (mount per worker),J1,62721,8,106574,1.69,5.19,36.7
+smp16,16,4,fs (mount per worker),GLOBAL,61582,8,41442,0.67,5.19,36.7
+smp16,16,4,fs (all on one mount),J1,41580,8,20891,0.5,5.19,36.7
+smp16,16,4,ipc (channel per worker),J1,1176132,8,1835937,1.56,5.19,36.7
+smp16,16,4,ipc (channel per worker),GLOBAL,902210,8,416900,0.46,5.19,36.7
+smp16,16,4,unix (connection per worker),J1,1143427,8,2940372,2.57,5.19,36.7
+smp16,16,4,unix (connection per worker),GLOBAL,815714,8,458937,0.56,5.19,36.7
+smp16,16,5,fs (mount per worker),J1,55060,8,127545,2.31,6.40,36.7
+smp16,16,5,fs (mount per worker),GLOBAL,61394,8,42971,0.69,6.40,36.7
+smp16,16,5,fs (all on one mount),J1,41211,8,20894,0.5,6.40,36.7
+smp16,16,5,ipc (channel per worker),J1,1184267,8,2031668,1.71,6.40,36.7
+smp16,16,5,ipc (channel per worker),GLOBAL,1020522,8,433734,0.42,6.40,36.7
+smp16,16,5,unix (connection per worker),J1,1129871,8,3081105,2.72,6.40,36.7
+smp16,16,5,unix (connection per worker),GLOBAL,813120,8,459018,0.56,6.40,36.7
+node0,8,1,fs (mount per worker),J1,58818,8,208505,3.54,6.22,37.0
+node0,8,1,fs (mount per worker),GLOBAL,57255,8,40001,0.69,6.22,37.0
+node0,8,1,fs (all on one mount),J1,37888,8,27517,0.72,6.22,37.0
+node0,8,1,ipc (channel per worker),J1,1180611,8,3225025,2.73,6.22,37.0
+node0,8,1,ipc (channel per worker),GLOBAL,986690,8,592564,0.6,6.22,37.0
+node0,8,1,unix (connection per worker),J1,1061707,8,3823641,3.6,6.22,37.0
+node0,8,1,unix (connection per worker),GLOBAL,868940,8,601342,0.69,6.22,37.0
+node0,8,2,fs (mount per worker),J1,59245,8,209802,3.54,6.19,36.8
+node0,8,2,fs (mount per worker),GLOBAL,58490,8,34585,0.59,6.19,36.8
+node0,8,2,fs (all on one mount),J1,38587,8,26677,0.69,6.19,36.8
+node0,8,2,ipc (channel per worker),J1,1186777,8,3420198,2.88,6.19,36.8
+node0,8,2,ipc (channel per worker),GLOBAL,980497,8,599767,0.61,6.19,36.8
+node0,8,2,unix (connection per worker),J1,1070520,8,4115338,3.84,6.19,36.8
+node0,8,2,unix (connection per worker),GLOBAL,871264,8,607181,0.69,6.19,36.8
+node0,8,3,fs (mount per worker),J1,58590,8,190444,3.25,6.72,36.6
+node0,8,3,fs (mount per worker),GLOBAL,57265,8,41252,0.72,6.72,36.6
+node0,8,3,fs (all on one mount),J1,39507,8,26640,0.67,6.72,36.6
+node0,8,3,ipc (channel per worker),J1,1177618,8,3233202,2.74,6.72,36.6
+node0,8,3,ipc (channel per worker),GLOBAL,989157,8,603578,0.61,6.72,36.6
+node0,8,3,unix (connection per worker),J1,1062538,8,3765212,3.54,6.72,36.6
+node0,8,3,unix (connection per worker),GLOBAL,895152,8,612621,0.68,6.72,36.6
+node0,8,4,fs (mount per worker),J1,58871,8,202930,3.44,6.46,36.6
+node0,8,4,fs (mount per worker),GLOBAL,57384,8,40254,0.7,6.46,36.6
+node0,8,4,fs (all on one mount),J1,37560,8,25538,0.67,6.46,36.6
+node0,8,4,ipc (channel per worker),J1,1175755,8,3270458,2.78,6.46,36.6
+node0,8,4,ipc (channel per worker),GLOBAL,980760,8,603245,0.61,6.46,36.6
+node0,8,4,unix (connection per worker),J1,1052747,8,3997710,3.79,6.46,36.6
+node0,8,4,unix (connection per worker),GLOBAL,885084,8,616084,0.69,6.46,36.6
+node0,8,5,fs (mount per worker),J1,57901,8,182532,3.15,6.49,36.6
+node0,8,5,fs (mount per worker),GLOBAL,58802,8,44861,0.76,6.49,36.6
+node0,8,5,fs (all on one mount),J1,35277,8,22527,0.63,6.49,36.6
+node0,8,5,ipc (channel per worker),J1,1207905,8,3506197,2.9,6.49,36.6
+node0,8,5,ipc (channel per worker),GLOBAL,963200,8,503420,0.52,6.49,36.6
+node0,8,5,unix (connection per worker),J1,1079878,8,4240424,3.92,6.49,36.6
+node0,8,5,unix (connection per worker),GLOBAL,879704,8,507122,0.57,6.49,36.6
+2nodes,8,1,fs (mount per worker),J1,55465,8,107454,1.93,6.57,36.6
+2nodes,8,1,fs (mount per worker),GLOBAL,59107,8,40245,0.68,6.57,36.6
+2nodes,8,1,fs (all on one mount),J1,37091,8,19867,0.53,6.57,36.6
+2nodes,8,1,ipc (channel per worker),J1,1125867,8,2015205,1.78,6.57,36.6
+2nodes,8,1,ipc (channel per worker),GLOBAL,1009088,8,441558,0.43,6.57,36.6
+2nodes,8,1,unix (connection per worker),J1,1107454,8,3133954,2.82,6.57,36.6
+2nodes,8,1,unix (connection per worker),GLOBAL,921804,8,464672,0.5,6.57,36.6
+2nodes,8,2,fs (mount per worker),J1,55150,8,101460,1.83,6.71,36.7
+2nodes,8,2,fs (mount per worker),GLOBAL,60647,8,45470,0.74,6.71,36.7
+2nodes,8,2,fs (all on one mount),J1,39455,8,21280,0.53,6.71,36.7
+2nodes,8,2,ipc (channel per worker),J1,1120455,8,2022630,1.8,6.71,36.7
+2nodes,8,2,ipc (channel per worker),GLOBAL,1018461,8,475838,0.46,6.71,36.7
+2nodes,8,2,unix (connection per worker),J1,1121450,8,3180920,2.83,6.71,36.7
+2nodes,8,2,unix (connection per worker),GLOBAL,950965,8,502084,0.52,6.71,36.7
+2nodes,8,3,fs (mount per worker),J1,54962,8,105417,1.91,6.36,36.6
+2nodes,8,3,fs (mount per worker),GLOBAL,60160,8,35668,0.59,6.36,36.6
+2nodes,8,3,fs (all on one mount),J1,42188,8,22368,0.53,6.36,36.6
+2nodes,8,3,ipc (channel per worker),J1,1102835,8,1688690,1.53,6.36,36.6
+2nodes,8,3,ipc (channel per worker),GLOBAL,1005657,8,457732,0.45,6.36,36.6
+2nodes,8,3,unix (connection per worker),J1,1166598,8,2648207,2.27,6.36,36.6
+2nodes,8,3,unix (connection per worker),GLOBAL,847157,8,506640,0.59,6.36,36.6
+2nodes,8,4,fs (mount per worker),J1,56195,8,115195,2.04,5.59,36.7
+2nodes,8,4,fs (mount per worker),GLOBAL,62667,8,40928,0.65,5.59,36.7
+2nodes,8,4,fs (all on one mount),J1,41274,8,23477,0.56,5.59,36.7
+2nodes,8,4,ipc (channel per worker),J1,1093250,8,1722700,1.57,5.59,36.7
+2nodes,8,4,ipc (channel per worker),GLOBAL,1003204,8,474128,0.47,5.59,36.7
+2nodes,8,4,unix (connection per worker),J1,1166790,8,2859404,2.45,5.59,36.7
+2nodes,8,4,unix (connection per worker),GLOBAL,867471,8,517712,0.59,5.59,36.7
+2nodes,8,5,fs (mount per worker),J1,56205,8,104621,1.86,5.24,36.9
+2nodes,8,5,fs (mount per worker),GLOBAL,63758,8,42497,0.66,5.24,36.9
+2nodes,8,5,fs (all on one mount),J1,42064,8,19715,0.46,5.24,36.9
+2nodes,8,5,ipc (channel per worker),J1,1126398,8,1939798,1.72,5.24,36.9
+2nodes,8,5,ipc (channel per worker),GLOBAL,952058,8,422220,0.44,5.24,36.9
+2nodes,8,5,unix (connection per worker),J1,1156744,8,3050924,2.63,5.24,36.9
+2nodes,8,5,unix (connection per worker),GLOBAL,929592,8,461610,0.49,5.24,36.9
+node0-rerun,8,1,fs (mount per worker),J1,59448,8,191454,3.22,2.47,37.1
+node0-rerun,8,1,fs (mount per worker),GLOBAL,56542,8,42220,0.74,2.47,37.1
+node0-rerun,8,1,fs (all on one mount),J1,39828,8,24815,0.62,2.47,37.1
+node0-rerun,8,1,ipc (channel per worker),J1,1179384,8,3335005,2.82,2.47,37.1
+node0-rerun,8,1,ipc (channel per worker),GLOBAL,939891,8,570332,0.6,2.47,37.1
+node0-rerun,8,1,unix (connection per worker),J1,1063538,8,4274630,4.01,2.47,37.1
+node0-rerun,8,1,unix (connection per worker),GLOBAL,856844,8,601532,0.7,2.47,37.1
+node0-rerun,8,2,fs (mount per worker),J1,59124,8,196165,3.31,3.98,36.7
+node0-rerun,8,2,fs (mount per worker),GLOBAL,58102,8,43541,0.74,3.98,36.7
+node0-rerun,8,2,fs (all on one mount),J1,40115,8,24742,0.61,3.98,36.7
+node0-rerun,8,2,ipc (channel per worker),J1,1183222,8,3308041,2.79,3.98,36.7
+node0-rerun,8,2,ipc (channel per worker),GLOBAL,982142,8,578378,0.58,3.98,36.7
+node0-rerun,8,2,unix (connection per worker),J1,1066247,8,3921404,3.67,3.98,36.7
+node0-rerun,8,2,unix (connection per worker),GLOBAL,864770,8,577748,0.66,3.98,36.7
+node0-rerun,8,3,fs (mount per worker),J1,58677,8,200708,3.42,5.43,36.6
+node0-rerun,8,3,fs (mount per worker),GLOBAL,57188,8,36891,0.64,5.43,36.6
+node0-rerun,8,3,fs (all on one mount),J1,36011,8,26508,0.73,5.43,36.6
+node0-rerun,8,3,ipc (channel per worker),J1,1170682,8,2994090,2.55,5.43,36.6
+node0-rerun,8,3,ipc (channel per worker),GLOBAL,981302,8,587638,0.59,5.43,36.6
+node0-rerun,8,3,unix (connection per worker),J1,1063872,8,3514540,3.3,5.43,36.6
+node0-rerun,8,3,unix (connection per worker),GLOBAL,893204,8,598470,0.67,5.43,36.6
+node0-rerun,8,4,fs (mount per worker),J1,58858,8,200187,3.4,6.32,36.8
+node0-rerun,8,4,fs (mount per worker),GLOBAL,58168,8,37398,0.64,6.32,36.8
+node0-rerun,8,4,fs (all on one mount),J1,37817,8,24985,0.66,6.32,36.8
+node0-rerun,8,4,ipc (channel per worker),J1,1183897,8,2999271,2.53,6.32,36.8
+node0-rerun,8,4,ipc (channel per worker),GLOBAL,983432,8,598692,0.6,6.32,36.8
+node0-rerun,8,4,unix (connection per worker),J1,1066978,8,3607035,3.38,6.32,36.8
+node0-rerun,8,4,unix (connection per worker),GLOBAL,897132,8,611371,0.68,6.32,36.8
+node0-rerun,8,5,fs (mount per worker),J1,58710,8,197808,3.36,6.19,36.6
+node0-rerun,8,5,fs (mount per worker),GLOBAL,57960,8,41012,0.7,6.19,36.6
+node0-rerun,8,5,fs (all on one mount),J1,38744,8,27735,0.71,6.19,36.6
+node0-rerun,8,5,ipc (channel per worker),J1,1178072,8,3217837,2.73,6.19,36.6
+node0-rerun,8,5,ipc (channel per worker),GLOBAL,979945,8,610304,0.62,6.19,36.6
+node0-rerun,8,5,unix (connection per worker),J1,1060468,8,3846832,3.62,6.19,36.6
+node0-rerun,8,5,unix (connection per worker),GLOBAL,882444,8,621581,0.7,6.19,36.6
+2nodes-rerun,8,1,fs (mount per worker),J1,58045,8,108002,1.86,5.66,36.5
+2nodes-rerun,8,1,fs (mount per worker),GLOBAL,63584,8,41864,0.65,5.66,36.5
+2nodes-rerun,8,1,fs (all on one mount),J1,39852,8,16620,0.41,5.66,36.5
+2nodes-rerun,8,1,ipc (channel per worker),J1,1140484,8,1930032,1.69,5.66,36.5
+2nodes-rerun,8,1,ipc (channel per worker),GLOBAL,1052514,8,412601,0.39,5.66,36.5
+2nodes-rerun,8,1,unix (connection per worker),J1,1166008,8,3207915,2.75,5.66,36.5
+2nodes-rerun,8,1,unix (connection per worker),GLOBAL,964984,8,436611,0.45,5.66,36.5
+2nodes-rerun,8,2,fs (mount per worker),J1,55457,8,108974,1.96,5.78,36.7
+2nodes-rerun,8,2,fs (mount per worker),GLOBAL,60532,8,42561,0.7,5.78,36.7
+2nodes-rerun,8,2,fs (all on one mount),J1,41058,8,20431,0.49,5.78,36.7
+2nodes-rerun,8,2,ipc (channel per worker),J1,1125988,8,1989142,1.76,5.78,36.7
+2nodes-rerun,8,2,ipc (channel per worker),GLOBAL,1060535,8,430861,0.4,5.78,36.7
+2nodes-rerun,8,2,unix (connection per worker),J1,1169468,8,3042568,2.6,5.78,36.7
+2nodes-rerun,8,2,unix (connection per worker),GLOBAL,966268,8,448522,0.46,5.78,36.7
+2nodes-rerun,8,3,fs (mount per worker),J1,55901,8,113051,2.02,5.23,36.7
+2nodes-rerun,8,3,fs (mount per worker),GLOBAL,61100,8,34055,0.55,5.23,36.7
+2nodes-rerun,8,3,fs (all on one mount),J1,42090,8,22314,0.53,5.23,36.7
+2nodes-rerun,8,3,ipc (channel per worker),J1,1101434,8,1858698,1.68,5.23,36.7
+2nodes-rerun,8,3,ipc (channel per worker),GLOBAL,1026675,8,491251,0.47,5.23,36.7
+2nodes-rerun,8,3,unix (connection per worker),J1,1170407,8,3272684,2.79,5.23,36.7
+2nodes-rerun,8,3,unix (connection per worker),GLOBAL,959285,8,529445,0.55,5.23,36.7
+2nodes-rerun,8,4,fs (mount per worker),J1,57077,8,119815,2.09,5.03,36.7
+2nodes-rerun,8,4,fs (mount per worker),GLOBAL,63342,8,38790,0.61,5.03,36.7
+2nodes-rerun,8,4,fs (all on one mount),J1,41754,8,22227,0.53,5.03,36.7
+2nodes-rerun,8,4,ipc (channel per worker),J1,1098651,8,1951397,1.77,5.03,36.7
+2nodes-rerun,8,4,ipc (channel per worker),GLOBAL,1029460,8,493100,0.47,5.03,36.7
+2nodes-rerun,8,4,unix (connection per worker),J1,1173695,8,2960077,2.52,5.03,36.7
+2nodes-rerun,8,4,unix (connection per worker),GLOBAL,869151,8,531420,0.61,5.03,36.7
+2nodes-rerun,8,5,fs (mount per worker),J1,55790,8,118264,2.11,4.97,36.7
+2nodes-rerun,8,5,fs (mount per worker),GLOBAL,63460,8,37004,0.58,4.97,36.7
+2nodes-rerun,8,5,fs (all on one mount),J1,41887,8,22607,0.53,4.97,36.7
+2nodes-rerun,8,5,ipc (channel per worker),J1,1098047,8,1848328,1.68,4.97,36.7
+2nodes-rerun,8,5,ipc (channel per worker),GLOBAL,1030750,8,487015,0.47,4.97,36.7
+2nodes-rerun,8,5,unix (connection per worker),J1,1174758,8,2657352,2.26,4.97,36.7
+2nodes-rerun,8,5,unix (connection per worker),GLOBAL,854234,8,524611,0.61,4.97,36.7
+node0-2,2,1,fs (mount per worker),J1,76477,2,118414,1.54,1.95,37.0
+node0-2,2,1,fs (mount per worker),GLOBAL,75681,2,64567,0.85,1.95,37.0
+node0-2,2,1,fs (all on one mount),J1,70534,2,53235,0.75,1.95,37.0
+node0-2,2,1,ipc (channel per worker),J1,1807877,2,3008760,1.66,1.95,37.0
+node0-2,2,1,ipc (channel per worker),GLOBAL,1495060,2,1032855,0.69,1.95,37.0
+node0-2,2,1,unix (connection per worker),J1,1530991,2,2408134,1.57,1.95,37.0
+node0-2,2,1,unix (connection per worker),GLOBAL,1285102,2,967265,0.75,1.95,37.0
+node0-2,2,2,fs (mount per worker),J1,76494,2,112928,1.47,2.94,36.4
+node0-2,2,2,fs (mount per worker),GLOBAL,75447,2,71248,0.94,2.94,36.4
+node0-2,2,2,fs (all on one mount),J1,69121,2,49817,0.72,2.94,36.4
+node0-2,2,2,ipc (channel per worker),J1,1809742,2,2924112,1.61,2.94,36.4
+node0-2,2,2,ipc (channel per worker),GLOBAL,1493785,2,957561,0.64,2.94,36.4
+node0-2,2,2,unix (connection per worker),J1,1522275,2,2831938,1.86,2.94,36.4
+node0-2,2,2,unix (connection per worker),GLOBAL,1276127,2,876405,0.68,2.94,36.4
+node0-2,2,3,fs (mount per worker),J1,76110,2,133482,1.75,3.22,36.4
+node0-2,2,3,fs (mount per worker),GLOBAL,75175,2,52717,0.7,3.22,36.4
+node0-2,2,3,fs (all on one mount),J1,69010,2,61425,0.89,3.22,36.4
+node0-2,2,3,ipc (channel per worker),J1,1799101,2,2465745,1.37,3.22,36.4
+node0-2,2,3,ipc (channel per worker),GLOBAL,1492834,2,1151791,0.77,3.22,36.4
+node0-2,2,3,unix (connection per worker),J1,1525957,2,1968247,1.28,3.22,36.4
+node0-2,2,3,unix (connection per worker),GLOBAL,1277150,2,1086135,0.85,3.22,36.4
+node0-2,2,4,fs (mount per worker),J1,76031,2,133527,1.75,3.38,36.3
+node0-2,2,4,fs (mount per worker),GLOBAL,75174,2,54334,0.72,3.38,36.3
+node0-2,2,4,fs (all on one mount),J1,68988,2,53411,0.77,3.38,36.3
+node0-2,2,4,ipc (channel per worker),J1,1803961,2,2503624,1.38,3.38,36.3
+node0-2,2,4,ipc (channel per worker),GLOBAL,1491768,2,1028987,0.68,3.38,36.3
+node0-2,2,4,unix (connection per worker),J1,1527655,2,1993738,1.3,3.38,36.3
+node0-2,2,4,unix (connection per worker),GLOBAL,1277077,2,945482,0.74,3.38,36.3
+node0-2,2,5,fs (mount per worker),J1,76257,2,104830,1.37,3.23,36.4
+node0-2,2,5,fs (mount per worker),GLOBAL,75267,2,70705,0.93,3.23,36.4
+node0-2,2,5,fs (all on one mount),J1,69662,2,43725,0.62,3.23,36.4
+node0-2,2,5,ipc (channel per worker),J1,1805157,2,2653480,1.46,3.23,36.4
+node0-2,2,5,ipc (channel per worker),GLOBAL,1496658,2,819068,0.54,3.23,36.4
+node0-2,2,5,unix (connection per worker),J1,1534302,2,2386367,1.55,3.23,36.4
+node0-2,2,5,unix (connection per worker),GLOBAL,1285207,2,899212,0.69,3.23,36.4
+node0-4,4,1,fs (mount per worker),J1,72178,4,191158,2.64,2.91,36.5
+node0-4,4,1,fs (mount per worker),GLOBAL,71460,4,48117,0.67,2.91,36.5
+node0-4,4,1,fs (all on one mount),J1,56087,4,39815,0.7,2.91,36.5
+node0-4,4,1,ipc (channel per worker),J1,1618930,4,2690967,1.66,2.91,36.5
+node0-4,4,1,ipc (channel per worker),GLOBAL,1338058,4,770037,0.57,2.91,36.5
+node0-4,4,1,unix (connection per worker),J1,1418271,4,2946254,2.07,2.91,36.5
+node0-4,4,1,unix (connection per worker),GLOBAL,1188810,4,776830,0.65,2.91,36.5
+node0-4,4,2,fs (mount per worker),J1,71908,4,163428,2.27,3.12,36.5
+node0-4,4,2,fs (mount per worker),GLOBAL,70944,4,51721,0.72,3.12,36.5
+node0-4,4,2,fs (all on one mount),J1,56161,4,35705,0.63,3.12,36.5
+node0-4,4,2,ipc (channel per worker),J1,1616214,4,2876821,1.77,3.12,36.5
+node0-4,4,2,ipc (channel per worker),GLOBAL,1341834,4,701561,0.52,3.12,36.5
+node0-4,4,2,unix (connection per worker),J1,1431311,4,2924670,2.04,3.12,36.5
+node0-4,4,2,unix (connection per worker),GLOBAL,1163190,4,666430,0.57,3.12,36.5
+node0-4,4,3,fs (mount per worker),J1,71948,4,180192,2.5,3.27,36.5
+node0-4,4,3,fs (mount per worker),GLOBAL,70888,4,52768,0.74,3.27,36.5
+node0-4,4,3,fs (all on one mount),J1,56072,4,39718,0.7,3.27,36.5
+node0-4,4,3,ipc (channel per worker),J1,1618358,4,2876257,1.77,3.27,36.5
+node0-4,4,3,ipc (channel per worker),GLOBAL,1337325,4,783057,0.58,3.27,36.5
+node0-4,4,3,unix (connection per worker),J1,1424098,4,3201408,2.24,3.27,36.5
+node0-4,4,3,unix (connection per worker),GLOBAL,1194011,4,775994,0.64,3.27,36.5
+node0-4,4,4,fs (mount per worker),J1,71977,4,181158,2.51,3.31,36.5
+node0-4,4,4,fs (mount per worker),GLOBAL,71320,4,51931,0.72,3.31,36.5
+node0-4,4,4,fs (all on one mount),J1,56064,4,39825,0.71,3.31,36.5
+node0-4,4,4,ipc (channel per worker),J1,1615097,4,2864778,1.77,3.31,36.5
+node0-4,4,4,ipc (channel per worker),GLOBAL,1338331,4,796578,0.59,3.31,36.5
+node0-4,4,4,unix (connection per worker),J1,1431325,4,3155917,2.2,3.31,36.5
+node0-4,4,4,unix (connection per worker),GLOBAL,1187047,4,790684,0.66,3.31,36.5
+node0-4,4,5,fs (mount per worker),J1,71834,4,183214,2.55,3.31,36.4
+node0-4,4,5,fs (mount per worker),GLOBAL,71138,4,42975,0.6,3.31,36.4
+node0-4,4,5,fs (all on one mount),J1,56261,4,39892,0.7,3.31,36.4
+node0-4,4,5,ipc (channel per worker),J1,1624017,4,2524827,1.55,3.31,36.4
+node0-4,4,5,ipc (channel per worker),GLOBAL,1344597,4,767304,0.57,3.31,36.4
+node0-4,4,5,unix (connection per worker),J1,1437442,4,2505490,1.74,3.31,36.4
+node0-4,4,5,unix (connection per worker),GLOBAL,1201114,4,753105,0.62,3.31,36.4
