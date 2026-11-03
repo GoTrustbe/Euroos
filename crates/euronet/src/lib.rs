@@ -22,6 +22,7 @@ pub mod icmp;
 pub mod icmpv6;
 pub mod ratelimit;
 pub mod tcpcc;
+pub mod tcpopen;
 pub mod ipv6;
 pub mod ipv4;
 pub mod tcp;

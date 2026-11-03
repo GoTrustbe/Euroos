@@ -1717,6 +1717,10 @@ fn main() -> Status {
         });
         // G3: poll/select multiplexing — prove the readiness logic on the NIC.
         net::poll_selftest();
+        // BUG-019/026: inbound without waiting, bounded connect ([net-async]).
+        if cfg!(feature = "selftest") {
+            net::async_selftest();
+        }
     } else if bootopt::net_user_driver() && udrv::device_present() {
         // net.driver=user: the e1000 belongs to the userspace driver, which can
         // only run once the scheduler does. The network part of the boot (and
@@ -7036,6 +7040,8 @@ fn net_late_suite(allocator: &mut FrameAllocator, fs: &mut dyn FileSystem) -> Ve
     }
     net::poll_selftest();
     if cfg!(feature = "selftest") {
+        // BUG-019/026: inbound without waiting, bounded connect ([net-async]).
+        net::async_selftest();
         smbfs::selftest();
         nfsmount::selftest();
     }

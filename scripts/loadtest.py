@@ -500,8 +500,24 @@ def scenario_soak(args):
     yield C("ltstat", "ltstat ")
 
 
+def scenario_inbound(args):
+    # BUG-019: inbound load (--hammer K host clients on the httpd through
+    # --hostfwd) while the console must keep answering: one `echo` a second for
+    # --duration seconds, each within --console-ms. Then the httpd and TCP
+    # counters (netstat's first line).
+    t_end = time.time() + args.duration
+    yield C("httpd on", "listening")
+    while time.time() < t_end:
+        yield C("echo console-alive", "console-alive", timeout=120, max_ms=args.console_ms)
+        yield C("sleepwait 1", None)
+    yield C("httpd status", "served")
+    yield C("netstat", "tcp: ")
+    yield C("ltstat", "ltstat ")
+
+
 SCENARIOS.update({"procs": scenario_procs, "churn": scenario_churn, "fsio": scenario_fsio,
-                  "persist-check-io": scenario_persist_check_io, "net": scenario_net, "soak": scenario_soak})
+                  "persist-check-io": scenario_persist_check_io, "net": scenario_net, "soak": scenario_soak,
+                  "inbound": scenario_inbound})
 
 
 # ── host-side peers ──
@@ -618,6 +634,7 @@ def main():
     ap.add_argument("--io-sizes", default="16,64,256", help="fsio file sizes in MiB")
     ap.add_argument("--huge-mib", type=int, default=1024, help="fsio: a file larger than the kernel heap")
     ap.add_argument("--conns", type=int, default=200, help="net: sequential outbound connections")
+    ap.add_argument("--console-ms", type=int, default=2000, help="inbound: limit for one console echo under load")
     ap.add_argument("--downloads", type=int, default=50)
     ap.add_argument("--duration", type=int, default=4 * 3600, help="soak seconds")
     ap.add_argument("--iobase", default="/home/euro/lt", help="fsio/soak directory (the euro user can write here on a disk root)")

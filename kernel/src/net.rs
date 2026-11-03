@@ -20,6 +20,23 @@ use euronet::udp::UdpDatagram;
 
 use crate::nic;
 
+// Inbound connections without waiting (BUG-019).
+#[path = "net_passive.rs"]
+mod passive;
+// [net-async] boot self-test: synthetic peers on TEST-NET-1.
+#[path = "net_asynctest.rs"]
+mod asynctest;
+pub use asynctest::async_selftest;
+
+/// Every frame this stack sends goes through here: the NIC, or the self-test's
+/// capture when it is running and the frame is for one of its synthetic peers.
+fn tx(frame: &[u8]) -> bool {
+    if asynctest::capture(frame) {
+        return true;
+    }
+    nic::send(frame)
+}
+
 /// The network configuration as discovered during boot bring-up.
 #[derive(Clone, Copy)]
 pub struct NetCfg {
@@ -122,18 +139,39 @@ const RX_BURST: u32 = 64;
 
 /// One bounded wait: `spins` iterations when spinning, `ticks` when sleeping.
 /// Use as `let mut w = RxWait::new(..); while w.next() { try once }`.
+///
+/// A spinning wait is ALSO bounded by `ticks` worth of HPET time (BUG-026). The
+/// spin count alone was the only bound there, and its length depends on the
+/// machine: one iteration polls the NIC, which under KVM is a VM exit per
+/// register read, so the 12 M iterations of a connect round took ~21 s and four
+/// unanswered SYNs held the desktop loop for 85 s. The HPET counter runs with
+/// interrupts off too, unlike the tick clock.
 struct RxWait {
     block: bool,
     left: u64,
     deadline: u64,
+    /// HPET nanoseconds after which a spinning wait ends (u64::MAX: no HPET).
+    deadline_ns: u64,
     first: bool,
     burst: u32,
 }
 
+/// A spinning wait looks at the HPET every this many iterations.
+const RX_HPET_EVERY: u64 = 512;
+
 impl RxWait {
     fn new(spins: u64, ticks: u64) -> Self {
         let block = rx_should_block();
-        RxWait { block, left: spins, deadline: crate::interrupts::ticks() + ticks, first: true, burst: RX_BURST }
+        let deadline_ns = if crate::hpet::present() {
+            crate::hpet::ns().saturating_add(ticks.saturating_mul(10_000_000))
+        } else {
+            u64::MAX
+        };
+        RxWait { block, left: spins, deadline: crate::interrupts::ticks() + ticks, deadline_ns, first: true, burst: RX_BURST }
+    }
+    /// Spinning: has the HPET bound passed? Checked every RX_HPET_EVERY spins.
+    fn spin_time_up(&self) -> bool {
+        self.deadline_ns != u64::MAX && self.left % RX_HPET_EVERY == 0 && crate::hpet::ns() >= self.deadline_ns
     }
     /// True: try (again). The first call never waits; later calls spin one
     /// iteration, or (sleeping) try up to `RX_BURST` times and then sleep one
@@ -161,7 +199,7 @@ impl RxWait {
             self.burst = RX_BURST;
             true
         } else {
-            if self.left == 0 {
+            if self.left == 0 || self.spin_time_up() {
                 return false;
             }
             self.left -= 1;
@@ -180,10 +218,41 @@ impl RxWait {
 // even drained the queue wholesale. Now a single router reads the NIC: TCP
 // segments to our IP land in a per-destination-port queue; everything else goes
 // to a legacy queue for the existing ARP/ICMP/UDP/DHCP readers.
+//
+// BUG-019: the queues are per CONNECTION (local port, peer address, peer port),
+// not per local port, and a connection registers its queue before its first
+// segment leaves. A listener's port is shared by every client, and the old
+// per-port queue made each reader skip or throw away the others' segments; a
+// segment for no registered connection (a SYN, a late ACK after close) goes to
+// the legacy queue, where service() answers it.
 static SITE_PORTQ: eurolock::LockSite = eurolock::LockSite::new("net.PORTQ (TCP port queues)", eurolock::LockClass::Net);
 // J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
-static PORTQ: eurolock::sync::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, TcpSegment)>)>> =
+static PORTQ: eurolock::sync::Mutex<alloc::vec::Vec<ConnQueue>> =
     eurolock::sync::Mutex::new_site(&SITE_PORTQ, eurolock::Mode::Plain, alloc::vec::Vec::new());
+
+/// The four-tuple of one TCP connection, seen from here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct ConnKey {
+    lport: u16,
+    peer: Ipv4Addr,
+    pport: u16,
+}
+
+/// The receive queue of one connection. `owner` is the id of the TcpConn that
+/// registered it: a connection that is replaced on the same four-tuple (a client
+/// that restarts its handshake) must not unregister its successor's queue.
+struct ConnQueue {
+    key: ConnKey,
+    owner: u64,
+    q: alloc::collections::VecDeque<TcpSegment>,
+}
+
+/// Segments one connection queue holds at most.
+const CONNQ_MAX: usize = 256;
+/// TCP segments for no registered connection (answered or dropped by service()).
+pub static TCP_UNOWNED: AtomicU64 = AtomicU64::new(0);
+/// Ids of TcpConn values (queue owners).
+static CONN_IDS: AtomicU64 = AtomicU64::new(1);
 static SITE_NET_LEGACY: eurolock::LockSite = eurolock::LockSite::new("net.NET_LEGACY (rx ring)", eurolock::LockClass::Net);
 // J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
 static NET_LEGACY: eurolock::sync::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>> =
@@ -327,6 +396,9 @@ pub fn pump_all() {
             _ => conn_hint_clear(i),
         }
     }
+    // Inbound handshakes and httpd connections, also where no service() runs
+    // (the launcher loop of a boot-phase program).
+    passive::step();
 }
 /// Tick of the last retransmit pass of `pump_all`.
 static PUMP_ALL_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -385,47 +457,133 @@ pub fn rx_route_irq() {
             Some(r) => r,
             None => break,
         };
-        let mut routed = false;
-        if let Ok((h, payload)) = EthernetHeader::parse(&rx) {
-            if h.ethertype == EtherType::Ipv4 {
-                if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
-                    if ih.protocol == Protocol::Tcp && ih.dst == my_ip {
-                        if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
-                            // BUG-018, as in rx_route: a bare SYN opens a new inbound
-                            // connection and belongs to service() (listen/accept,
-                            // httpd), which reads the legacy queue. With the NIC
-                            // drained from its interrupt this path sees most SYNs.
-                            if seg.has(tcp::SYN) && !seg.has(tcp::ACK) {
-                                if legacy.len() < 256 {
-                                    legacy.push_back(rx);
-                                }
-                                continue;
-                            }
-                            let q = match portq.iter_mut().find(|(p, _)| *p == seg.dst_port) {
-                                Some((_, q)) => q,
-                                None => {
-                                    portq.push((seg.dst_port, alloc::collections::VecDeque::new()));
-                                    &mut portq.last_mut().unwrap().1
-                                }
-                            };
-                            TCP_SEGS_IN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                            if q.len() < 256 {
-                                q.push_back((ih.src, seg));
-                            } else {
-                                TCP_Q_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                            }
-                            routed = true;
-                        }
-                    } else if ih.protocol == Protocol::Udp && ih.dst == my_ip {
+        match classify(&rx, my_ip) {
+            // BUG-018, as in rx_route: a bare SYN opens a new inbound connection
+            // and belongs to service() (listen/accept, httpd), which reads the
+            // legacy queue. With the NIC drained from its interrupt this path
+            // sees most SYNs.
+            Dest::Tcp(key, seg) => {
+                if connq_push(&mut portq, key, seg).is_some() && legacy.len() < 256 {
+                    legacy.push_back(rx);
+                }
+            }
+            Dest::Udp => {
+                let mut routed = false;
+                if let Ok((_, payload)) = EthernetHeader::parse(&rx) {
+                    if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
                         routed = udpq_route(&mut udpq, &ih, ipl);
+                    }
+                }
+                if !routed && legacy.len() < 256 {
+                    legacy.push_back(rx);
+                }
+            }
+            Dest::Legacy => {
+                if legacy.len() < 256 {
+                    legacy.push_back(rx);
+                }
+            }
+        }
+    }
+    drop(udpq);
+    drop(legacy);
+    drop(portq);
+    NET_RX_SEQ.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Where one received frame goes.
+enum Dest {
+    /// A checksum-valid TCP segment to our address that is not a bare SYN: the
+    /// queue of its connection, if one is registered.
+    Tcp(ConnKey, TcpSegment),
+    /// UDP to our address: the UDP port queues.
+    Udp,
+    /// Everything else (ARP, ICMP, DHCP, bare SYNs, bad TCP checksums).
+    Legacy,
+}
+
+fn classify(rx: &[u8], my_ip: Ipv4Addr) -> Dest {
+    let Ok((h, payload)) = EthernetHeader::parse(rx) else { return Dest::Legacy };
+    if h.ethertype != EtherType::Ipv4 {
+        return Dest::Legacy;
+    }
+    let Ok((ih, ipl)) = Ipv4Header::parse(payload) else { return Dest::Legacy };
+    if ih.dst != my_ip {
+        return Dest::Legacy;
+    }
+    match ih.protocol {
+        Protocol::Tcp => match TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
+            // LOADTEST-R630 BUG-018: a bare SYN (no ACK) opens a NEW inbound
+            // connection. No socket owns it yet, so it must reach service()
+            // (listen/accept and the background httpd), which reads the
+            // legacy queue.
+            Ok(seg) if seg.has(tcp::SYN) && !seg.has(tcp::ACK) => Dest::Legacy,
+            Ok(seg) => Dest::Tcp(ConnKey { lport: seg.dst_port, peer: ih.src, pport: seg.src_port }, seg),
+            Err(_) => {
+                // A TCP packet this stack could not accept. It falls through to
+                // the legacy queue, so the connection never sees it - which looks
+                // exactly like a gap in the sequence, and costs a retransmission.
+                TCP_PARSE_DROPS.fetch_add(1, Ordering::Relaxed);
+                Dest::Legacy
+            }
+        },
+        Protocol::Udp => Dest::Udp,
+        _ => Dest::Legacy,
+    }
+}
+
+fn is_tcp_frame(rx: &[u8]) -> bool {
+    matches!(EthernetHeader::parse(rx), Ok((h, p)) if h.ethertype == EtherType::Ipv4
+        && matches!(Ipv4Header::parse(p), Ok((ih, _)) if ih.protocol == Protocol::Tcp))
+}
+
+/// Queue `seg` for its registered connection. Returns the segment back when no
+/// connection owns `key` (the caller sends the frame to the legacy queue).
+fn connq_push(portq: &mut alloc::vec::Vec<ConnQueue>, key: ConnKey, seg: TcpSegment) -> Option<TcpSegment> {
+    let Some(c) = portq.iter_mut().find(|c| c.key == key) else {
+        TCP_UNOWNED.fetch_add(1, Ordering::Relaxed);
+        return Some(seg);
+    };
+    TCP_SEGS_IN.fetch_add(1, Ordering::Relaxed);
+    if c.q.len() < CONNQ_MAX {
+        c.q.push_back(seg);
+    } else {
+        TCP_Q_DROPS.fetch_add(1, Ordering::Relaxed);
+    }
+    None
+}
+
+/// Bumped whenever the demux moved frames (a cheap "something arrived" for the
+/// passive-open step).
+static NET_RX_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Route one received frame: its connection's queue, a UDP port queue, or the
+/// legacy queue.
+fn route_frame(rx: alloc::vec::Vec<u8>, my_ip: Ipv4Addr) {
+    match classify(&rx, my_ip) {
+        Dest::Tcp(key, seg) => {
+            let unowned = connq_push(&mut PORTQ.lock(), key, seg).is_some();
+            if !unowned {
+                NET_RX_SEQ.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+        Dest::Udp => {
+            if let Ok((_, payload)) = EthernetHeader::parse(&rx) {
+                if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
+                    if udpq_route(&mut UDPQ.lock(), &ih, ipl) {
+                        return;
                     }
                 }
             }
         }
-        if !routed && legacy.len() < 256 {
-            legacy.push_back(rx);
-        }
+        Dest::Legacy => {}
     }
+    let mut l = NET_LEGACY.lock();
+    if l.len() < 256 {
+        l.push_back(rx);
+    }
+    NET_RX_SEQ.fetch_add(1, Ordering::Relaxed);
 }
 
 fn rx_route() {
@@ -441,60 +599,7 @@ fn rx_route() {
             Some(r) => r,
             None => break,
         };
-        let mut routed = false;
-        if let Ok((h, payload)) = EthernetHeader::parse(&rx) {
-            if h.ethertype == EtherType::Ipv4 {
-                if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
-                    if ih.protocol == Protocol::Tcp && ih.dst == my_ip {
-                        if TcpSegment::parse_checked(ipl, ih.src, ih.dst).is_err() {
-                            // A TCP packet this stack could not accept. It falls
-                            // through to the legacy queue below, so the connection
-                            // never sees it - which looks exactly like a gap in the
-                            // sequence, and costs a retransmission.
-                            TCP_PARSE_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                        }
-                        if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
-                            // LOADTEST-R630 BUG-018: a bare SYN (no ACK) opens a NEW
-                            // inbound connection. No socket owns it yet, so it must
-                            // reach service() (listen/accept and the background httpd),
-                            // which reads the legacy queue. Since the central demux
-                            // put every TCP segment into PORTQ, no listener ever saw
-                            // a SYN: accept() timed out and httpd served nothing.
-                            if seg.has(tcp::SYN) && !seg.has(tcp::ACK) {
-                                let mut l = NET_LEGACY.lock();
-                                if l.len() < 256 {
-                                    l.push_back(rx);
-                                }
-                                continue;
-                            }
-                            let mut t = PORTQ.lock();
-                            let q = match t.iter_mut().find(|(p, _)| *p == seg.dst_port) {
-                                Some((_, q)) => q,
-                                None => {
-                                    t.push((seg.dst_port, alloc::collections::VecDeque::new()));
-                                    &mut t.last_mut().unwrap().1
-                                }
-                            };
-                            TCP_SEGS_IN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                            if q.len() < 256 {
-                                q.push_back((ih.src, seg));
-                            } else {
-                                TCP_Q_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                            }
-                            routed = true;
-                        }
-                    } else if ih.protocol == Protocol::Udp && ih.dst == my_ip {
-                        routed = udpq_route(&mut UDPQ.lock(), &ih, ipl);
-                    }
-                }
-            }
-        }
-        if !routed {
-            let mut l = NET_LEGACY.lock();
-            if l.len() < 256 {
-                l.push_back(rx);
-            }
-        }
+        route_frame(rx, my_ip);
     }
 }
 
@@ -504,37 +609,63 @@ fn legacy_rx() -> Option<alloc::vec::Vec<u8>> {
     NET_LEGACY.lock().pop_front()
 }
 
-/// Pop the next queued TCP segment for a local port from one peer (`server`,
-/// `peer_port`). Segments from the same host on another port belong to another
-/// connection on the same local port (several clients of one listener, BUG-018)
-/// and stay queued; segments from another host are discarded (stale NAT).
-fn portq_pop(sport: u16, server: Ipv4Addr, peer_port: u16) -> Option<TcpSegment> {
-    rx_route();
+/// Open the receive queue of a connection (before its first segment leaves).
+/// A queue already there for the same four-tuple is taken over (and keeps what
+/// it holds).
+fn portq_register(key: ConnKey, owner: u64) {
     let mut t = PORTQ.lock();
-    let (_, q) = t.iter_mut().find(|(p, _)| *p == sport)?;
-    let mut i = 0;
-    while i < q.len() {
-        if q[i].0 != server {
-            q.remove(i);
-            continue;
-        }
-        if q[i].1.src_port == peer_port {
-            return q.remove(i).map(|(_, seg)| seg);
-        }
-        i += 1;
+    match t.iter_mut().find(|c| c.key == key) {
+        Some(c) => c.owner = owner,
+        None => t.push(ConnQueue { key, owner, q: alloc::collections::VecDeque::new() }),
     }
-    None
 }
 
-/// Forget a port's queue when its socket closes.
-fn portq_remove(sport: u16) {
-    PORTQ.lock().retain(|(p, _)| *p != sport);
+/// Close the receive queue of a connection, unless another connection took the
+/// four-tuple over meanwhile.
+fn portq_unregister(key: ConnKey, owner: u64) {
+    PORTQ.lock().retain(|c| !(c.key == key && c.owner == owner));
+}
+
+/// Is a local port in use by any registered connection?
+fn portq_lport_in_use(lport: u16) -> bool {
+    PORTQ.lock().iter().any(|c| c.key.lport == lport)
+}
+
+/// Pop the next queued segment of one connection (after routing what the NIC
+/// has).
+fn portq_pop(sport: u16, server: Ipv4Addr, peer_port: u16) -> Option<TcpSegment> {
+    rx_route();
+    portq_take(ConnKey { lport: sport, peer: server, pport: peer_port })
+}
+
+/// Pop without polling the NIC first.
+fn portq_take(key: ConnKey) -> Option<TcpSegment> {
+    let mut t = PORTQ.lock();
+    t.iter_mut().find(|c| c.key == key)?.q.pop_front()
+}
+
+/// Registered connection queues and the segments they hold (netstat, tests).
+fn portq_stats() -> (usize, usize) {
+    let t = PORTQ.lock();
+    (t.len(), t.iter().map(|c| c.q.len()).sum())
 }
 
 fn drain() {
+    // Stale ARP/ICMP/UDP frames go; TCP frames stay for service(): a SYN for a
+    // listener or the httpd waiting here would otherwise be thrown away by every
+    // outbound fetch (its ARP lookup drains first) and cost the client a
+    // one-second SYN retransmission.
+    let mut keep = alloc::vec::Vec::new();
     for _ in 0..64 {
-        if legacy_rx().is_none() {
-            break;
+        let Some(f) = legacy_rx() else { break };
+        if is_tcp_frame(&f) {
+            keep.push(f);
+        }
+    }
+    if !keep.is_empty() {
+        let mut l = NET_LEGACY.lock();
+        for f in keep.into_iter().rev() {
+            l.push_front(f);
         }
     }
     if let Some(c) = get() {
@@ -547,7 +678,7 @@ fn drain() {
         };
         let frame = EthernetHeader { dst: MacAddr::BROADCAST, src: c.my_mac, ethertype: EtherType::Arp }
             .build(&g.build());
-        nic::send(&frame);
+        tx(&frame);
     }
 }
 
@@ -587,7 +718,7 @@ pub fn late_bring_up() {
         }
         .build(&seg);
         let frame = EthernetHeader { dst: MacAddr::BROADCAST, src: my_mac, ethertype: EtherType::Ipv4 }.build(&ipf);
-        nic::send(&frame);
+        tx(&frame);
     };
     let poll_dhcp = |want: u8| -> Option<dhcp::DhcpInfo> {
         for _ in 0..6_000_000u64 {
@@ -679,7 +810,7 @@ pub fn arp_resolve(my_mac: MacAddr, my_ip: Ipv4Addr, ip: Ipv4Addr) -> Option<Mac
         target_ip: ip,
     };
     let frame = EthernetHeader { dst: MacAddr::BROADCAST, src: my_mac, ethertype: EtherType::Arp }.build(&req.build());
-    nic::send(&frame);
+    tx(&frame);
     let mut w = RxWait::new(SPINS, 100);
     while w.next() {
         if let Some(rx) = legacy_rx() {
@@ -703,7 +834,7 @@ pub fn icmp_ping(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, dst: Ipv4Ad
     let icmp = IcmpEcho { kind: IcmpType::EchoRequest, identifier: 0xE401, sequence: 1, payload: b"euroos-ping".to_vec() };
     let iph = Ipv4Header { protocol: Protocol::Icmp, ttl: 64, src: my_ip, dst, total_length: 0, identification: 1 };
     let frame = EthernetHeader { dst: nexthop, src: my_mac, ethertype: EtherType::Ipv4 }.build(&iph.build(&icmp.build()));
-    nic::send(&frame);
+    tx(&frame);
     let mut w = RxWait::new(SPINS * 2, 200);
     while w.next() {
         if let Some(rx) = legacy_rx() {
@@ -746,7 +877,7 @@ pub fn dns_query(my_mac: MacAddr, my_ip: Ipv4Addr, dns_mac: MacAddr, dns_ip: Ipv
     let seg = UdpDatagram { src_port, dst_port: 53, payload: q }.build(my_ip, dns_ip);
     let iph = Ipv4Header { protocol: Protocol::Udp, ttl: 64, src: my_ip, dst: dns_ip, total_length: 0, identification: 2 };
     let frame = EthernetHeader { dst: dns_mac, src: my_mac, ethertype: EtherType::Ipv4 }.build(&iph.build(&seg));
-    nic::send(&frame);
+    tx(&frame);
     let mut w = RxWait::new(SPINS * 2, 200);
     while w.next() {
         if let Some(rx) = legacy_rx() {
@@ -779,7 +910,7 @@ pub fn icmp6_ping(my_mac: MacAddr, src_ll: Ipv6Addr, dst_mac: MacAddr, dst: Ipv6
     let echo = icmpv6::echo_request(0xE6, 1, b"euroos-ping6", src_ll, dst);
     let eh = Ipv6Header { next_header: 58, hop_limit: 255, src: src_ll, dst, payload_len: 0 };
     let frame = EthernetHeader { dst: dst_mac, src: my_mac, ethertype: EtherType::Ipv6 }.build(&eh.build(&echo));
-    nic::send(&frame);
+    tx(&frame);
     let mut w = RxWait::new(SPINS * 2, 200);
     while w.next() {
         if let Some(rx) = legacy_rx() {
@@ -804,7 +935,7 @@ pub fn router_discovery(my_mac: MacAddr, ll: Ipv6Addr) -> Option<(Ipv6Addr, MacA
     let h = Ipv6Header { next_header: 58, hop_limit: 255, src: ll, dst: Ipv6Addr::ALL_ROUTERS, payload_len: 0 };
     let frame = EthernetHeader { dst: MacAddr(Ipv6Addr::ALL_ROUTERS.multicast_mac()), src: my_mac, ethertype: EtherType::Ipv6 }
         .build(&h.build(&rs));
-    nic::send(&frame);
+    tx(&frame);
     let mut w = RxWait::new(SPINS * 2, 200);
     while w.next() {
         if let Some(rx) = legacy_rx() {
@@ -848,7 +979,7 @@ fn embedded_udp_matches(orig: &[u8], sport: u16, dport: u16) -> bool {
 fn send_ipv4(my_mac: MacAddr, my_ip: Ipv4Addr, dst_mac: MacAddr, dst_ip: Ipv4Addr, proto: Protocol, l4: &[u8]) {
     let iph = Ipv4Header { protocol: proto, ttl: 64, src: my_ip, dst: dst_ip, total_length: 0, identification: 9 };
     let frame = EthernetHeader { dst: dst_mac, src: my_mac, ethertype: EtherType::Ipv4 }.build(&iph.build(l4));
-    nic::send(&frame);
+    tx(&frame);
 }
 
 /// Rate limiter for outgoing ICMP/RST error messages (anti-amplification):
@@ -859,41 +990,15 @@ fn icmp_err_allowed() -> bool {
     ICMP_ERR_LIMIT.lock().allow(crate::interrupts::ticks())
 }
 
-/// Is there a userspace LISTEN socket on `seg.dst_port` with room in the queue?
-/// If so: complete the passive open (SYN-ACK) and put the connection in the queue.
-/// Returns `true` if a listener existed (so the caller does not send a RST).
-fn try_accept_listener(seg: &TcpSegment, peer_mac: MacAddr, peer_ip: Ipv4Addr, cfg: &NetCfg) -> bool {
-    let has_room = SOCKETS.iter().any(|s| {
-        matches!(&*s.lock(), Some(Sock::Listen { port, backlog, queue }) if *port == seg.dst_port && queue.len() < *backlog)
-    });
-    if !has_room {
-        return false;
-    }
-    // Passive open without holding the SOCKETS lock (it does network I/O).
-    if let Some(conn) = TcpConn::accept_from(cfg.my_mac, cfg.my_ip, peer_mac, peer_ip, seg.src_port, seg.dst_port, seg) {
-        // Re-check under the listener's own lock (it may have filled meanwhile).
-        let mut conn = Some(conn);
-        for slot in SOCKETS.iter() {
-            let mut g = slot.lock();
-            if let Some(Sock::Listen { port, backlog, queue }) = &mut *g {
-                if *port == seg.dst_port && queue.len() < *backlog {
-                    if let Some(c) = conn.take() {
-                        queue.push_back(c);
-                    }
-                    break;
-                }
-            }
-        }
-    }
-    true
-}
-
 pub fn service() {
     let cfg = match get() {
         Some(c) => c,
         None => return,
     };
-    for _ in 0..8 {
+    // Every frame here is handled without waiting (a SYN only creates a
+    // half-open entry, BUG-019), so the batch can be larger than the 8 it was
+    // when a SYN meant a blocking handshake.
+    for _ in 0..64 {
         let rx = match legacy_rx() {
             Some(r) => r,
             None => break,
@@ -905,7 +1010,7 @@ pub fn service() {
                         let reply = ArpPacket::reply_to(&a, cfg.my_mac);
                         let frame = EthernetHeader { dst: a.sender_mac, src: cfg.my_mac, ethertype: EtherType::Arp }
                             .build(&reply.build());
-                        nic::send(&frame);
+                        tx(&frame);
                     }
                 }
             } else if h.ethertype == EtherType::Ipv4 {
@@ -934,18 +1039,23 @@ pub fn service() {
                         Protocol::Tcp => {
                             if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
                                 let is_syn = seg.has(tcp::SYN) && !seg.has(tcp::ACK);
-                                let http = SERVER_ON.load(Ordering::Relaxed) && seg.dst_port == 80;
-                                if http && is_syn {
-                                    // Background HTTP server: serve an incoming SYN on :80.
-                                    serve_connection(cfg.my_mac, cfg.my_ip, h.src, ih.src, &seg);
-                                } else if is_syn && try_accept_listener(&seg, h.src, ih.src, &cfg) {
-                                    // A userspace LISTEN socket on this port accepted the
-                                    // connection (passive open + queued).
-                                } else if is_syn && icmp_err_allowed() {
-                                    // SYN to a closed port → "connection refused": RST
-                                    // (RFC 793), instead of letting the packet disappear. Rate-limited.
-                                    if let Some(rst) = TcpSegment::reset_to(&seg) {
-                                        send_ipv4(cfg.my_mac, cfg.my_ip, h.src, ih.src, Protocol::Tcp, &rst.build(cfg.my_ip, ih.src));
+                                let key = ConnKey { lport: seg.dst_port, peer: ih.src, pport: seg.src_port };
+                                if is_syn && passive::on_syn(&seg, key, h.src, &cfg) {
+                                    // The background httpd or a LISTEN socket owns the
+                                    // port: a half-open entry now, a SYN-ACK on the wire,
+                                    // and the handshake completes in passive::step.
+                                } else if let Some(s) = portq_take_late(key, seg) {
+                                    // The segment's connection registered its queue after
+                                    // the demux looked (or never existed).
+                                    if icmp_err_allowed() {
+                                        // SYN to a closed port → "connection refused": RST
+                                        // (RFC 793), instead of letting the packet disappear.
+                                        // Any other segment for no connection gets one too
+                                        // (RFC 793 §3.4): it clears a peer's half-open state
+                                        // for the four-tuple (BUG-026). Rate-limited.
+                                        if let Some(rst) = TcpSegment::reset_to(&s) {
+                                            send_ipv4(cfg.my_mac, cfg.my_ip, h.src, ih.src, Protocol::Tcp, &rst.build(cfg.my_ip, ih.src));
+                                        }
                                     }
                                 }
                             }
@@ -972,6 +1082,24 @@ pub fn service() {
             }
         }
     }
+    // Inbound connections move on: handshakes complete, httpd requests are
+    // answered, SYN-ACKs are retransmitted. Never waits.
+    passive::step();
+}
+
+/// A segment the demux found no connection for: if its connection exists by
+/// now, queue it there (None); otherwise hand it back.
+fn portq_take_late(key: ConnKey, seg: TcpSegment) -> Option<TcpSegment> {
+    let mut t = PORTQ.lock();
+    match t.iter_mut().find(|c| c.key == key) {
+        Some(c) => {
+            if c.q.len() < CONNQ_MAX {
+                c.q.push_back(seg);
+            }
+            None
+        }
+        None => Some(seg),
+    }
 }
 
 /// Minimal TCP client: HTTP/1.0 GET. Does the 3-way handshake, sends the
@@ -979,15 +1107,72 @@ pub fn service() {
 /// Returns (status line, raw response bytes).
 /// Next free ephemeral source port (49152–65535), so concurrent
 /// connections don't collide.
-static NEXT_PORT: Mutex<u16> = Mutex::new(49152);
+static RECENT_PORTS: Mutex<euronet::tcpopen::RecentPorts<1024>> = Mutex::new(euronet::tcpopen::RecentPorts::new());
 fn alloc_port() -> u16 {
     // Random ephemeral port (RFC 6056): a sequential allocator let an off-path
     // attacker predict the port of the next connection and reset it.
-    let mut p = NEXT_PORT.lock();
-    let span = 65000u32 - 49152;
-    let port = 49152 + (rand_u64() as u32 % span) as u16;
-    *p = port;
+    // BUG-026: but never a port in use, nor one of the last 1024 handed out. A
+    // repeat of a recent port can meet the peer's old control block for the same
+    // four-tuple (TIME-WAIT, or FIN-WAIT-2 for minutes), which drops or ACKs
+    // the new SYN instead of answering it.
+    let _g = crate::sched::IfOffGuard::new();
+    let mut recent = RECENT_PORTS.lock();
+    let port = euronet::tcpopen::pick_port(|| rand_u64() as u32, 49152, 65000, |p| {
+        recent.contains(p) || portq_lport_in_use(p) || udpq_port_in_use(p)
+    });
+    recent.remember(port);
     port
+}
+
+fn udpq_port_in_use(port: u16) -> bool {
+    UDPQ.lock().iter().any(|(p, _)| *p == port)
+}
+
+/// Outbound connect statistics (BUG-026): SYN rounds that timed out, stale
+/// half-open answers reset, fresh-port retries, refusals, give-ups, and the
+/// slowest successful connect.
+static CONNECT_SYN_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
+static CONNECT_STALE_RST: AtomicU64 = AtomicU64::new(0);
+static CONNECT_NEW_PORT: AtomicU64 = AtomicU64::new(0);
+static CONNECT_REFUSED: AtomicU64 = AtomicU64::new(0);
+static CONNECT_GAVE_UP: AtomicU64 = AtomicU64::new(0);
+static CONNECT_OK: AtomicU64 = AtomicU64::new(0);
+static CONNECT_MAX_US: AtomicU64 = AtomicU64::new(0);
+
+fn connect_record(us: u64) {
+    CONNECT_OK.fetch_add(1, Ordering::Relaxed);
+    CONNECT_MAX_US.fetch_max(us, Ordering::Relaxed);
+}
+
+/// Microseconds of HPET time (0 without an HPET).
+fn time_us() -> u64 {
+    if crate::hpet::present() {
+        crate::hpet::us()
+    } else {
+        crate::interrupts::ticks() * 10_000
+    }
+}
+
+/// One line on connects and inbound connections, for `netstat` and the logs.
+pub fn tcp_open_report() -> String {
+    let (conns, queued) = portq_stats();
+    let (half, httpd) = passive::counts();
+    alloc::format!(
+        "tcp: connect ok {} (slowest {} ms), SYN timeouts {}, stale-peer RSTs {}, new-port retries {}, refused {}, gave up {} | inbound: half-open {}, httpd conns {}, served {} | queues {} ({} segs), unowned segs {}",
+        CONNECT_OK.load(Ordering::Relaxed),
+        CONNECT_MAX_US.load(Ordering::Relaxed) / 1000,
+        CONNECT_SYN_TIMEOUTS.load(Ordering::Relaxed),
+        CONNECT_STALE_RST.load(Ordering::Relaxed),
+        CONNECT_NEW_PORT.load(Ordering::Relaxed),
+        CONNECT_REFUSED.load(Ordering::Relaxed),
+        CONNECT_GAVE_UP.load(Ordering::Relaxed),
+        half,
+        httpd,
+        SERVED.load(Ordering::Relaxed),
+        conns,
+        queued,
+        TCP_UNOWNED.load(Ordering::Relaxed),
+    )
 }
 
 /// An active TCP client connection: handshake, send, recv, teardown.
@@ -1029,22 +1214,138 @@ pub struct TcpConn {
     syn_tries: u8,
     /// Retransmission rounds without progress (`tick`): the link is dead past a bound.
     stale_rounds: u8,
+    /// Our FIN went out (it occupies one sequence number: my_seq counts it).
+    fin_sent: bool,
+    /// The peer's FIN arrived (and was acknowledged).
+    peer_fin: bool,
+    /// The connection was reset by the peer.
+    reset: bool,
+    /// Owner id of this connection's receive queue (see `ConnQueue`).
+    id: u64,
 }
 
 impl Drop for TcpConn {
     /// An abandoned connection (a dropped fetch, a timed-out job) still tells the
-    /// peer and frees its port queue; otherwise the queue and the server-side
-    /// socket lingered until the port came round again.
+    /// peer and frees its queue; otherwise the queue and the server-side socket
+    /// lingered until the port came round again.
     fn drop(&mut self) {
-        if self.open {
-            self.emit(tcp::FIN | tcp::ACK, &[]);
-            self.open = false;
-        }
-        portq_remove(self.sport);
+        self.send_fin();
+        portq_unregister(self.key(), self.id);
     }
 }
 
 impl TcpConn {
+    /// A connection in CLOSED state, its queue registered (nothing sent yet).
+    #[allow(clippy::too_many_arguments)]
+    fn new_raw(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, server: Ipv4Addr, dport: u16, sport: u16, isn: u32, their_seq: u32) -> TcpConn {
+        let c = TcpConn {
+            my_mac,
+            my_ip,
+            nexthop,
+            server,
+            dport,
+            sport,
+            my_seq: isn,
+            their_seq,
+            snd_una: isn,
+            open: false,
+            rx_bytes: 0,
+            tx_bytes: 0,
+            rx: alloc::collections::VecDeque::new(),
+            retx: alloc::vec::Vec::new(),
+            ooo: alloc::vec::Vec::new(),
+            syn_sent: false,
+            syn_tries: 0,
+            stale_rounds: 0,
+            fin_sent: false,
+            peer_fin: false,
+            reset: false,
+            id: CONN_IDS.fetch_add(1, Ordering::Relaxed),
+        };
+        portq_register(c.key(), c.id);
+        c
+    }
+
+    fn key(&self) -> ConnKey {
+        ConnKey { lport: self.sport, peer: self.server, pport: self.dport }
+    }
+
+    /// Send our FIN once, if the connection was ever synchronized and was not
+    /// reset. Also after the PEER closed first (CLOSE-WAIT → LAST-ACK): before
+    /// BUG-026 a connection whose server closed first (every HTTP/1.0 fetch)
+    /// never sent its FIN, and the peer kept the four-tuple in FIN-WAIT-2 for
+    /// minutes (slirp: 10 min); a later connect on the same random port then
+    /// ran into that old control block.
+    fn send_fin(&mut self) {
+        if self.fin_sent || self.reset || !(self.open || self.peer_fin) {
+            self.open = false;
+            return;
+        }
+        self.emit(tcp::FIN | tcp::ACK, &[]);
+        self.my_seq = self.my_seq.wrapping_add(1);
+        self.fin_sent = true;
+        self.open = false;
+    }
+
+    /// Is our FIN out and acknowledged?
+    fn fin_acked(&self) -> bool {
+        self.fin_sent && self.snd_una == self.my_seq
+    }
+
+    /// `<SEQ=seq><CTL=RST>`: the answer to an unacceptable ACK in SYN-SENT.
+    fn emit_rst(&self, seq: u32) {
+        let seg = TcpSegment { src_port: self.sport, dst_port: self.dport, seq, ack: 0, flags: tcp::RST, window: 0, payload: alloc::vec::Vec::new() };
+        let iph = Ipv4Header { protocol: Protocol::Tcp, ttl: 64, src: self.my_ip, dst: self.server, total_length: 0, identification: 3 };
+        let frame = EthernetHeader { dst: self.nexthop, src: self.my_mac, ethertype: EtherType::Ipv4 }
+            .build(&iph.build(&seg.build(self.my_ip, self.server)));
+        tx(&frame);
+    }
+
+    /// A new local port and ISN for an active open that got no answer: the
+    /// peer may be dropping SYNs for the old four-tuple without a word.
+    fn reidentify(&mut self) {
+        portq_unregister(self.key(), self.id);
+        self.sport = alloc_port();
+        let isn = (rand_u64() as u32) | 1;
+        self.my_seq = isn;
+        self.snd_una = isn;
+        portq_register(self.key(), self.id);
+        CONNECT_NEW_PORT.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Our SYN was answered by a SYN-ACK acknowledging it: ESTABLISHED.
+    fn established(&mut self, irs: u32) {
+        self.my_seq = self.my_seq.wrapping_add(1);
+        self.snd_una = self.my_seq;
+        self.their_seq = irs.wrapping_add(1);
+        self.emit(tcp::ACK, &[]);
+        self.open = true;
+        self.syn_sent = false;
+    }
+
+    /// One segment in SYN-SENT (RFC 793): Some(true) established, Some(false)
+    /// refused, None keep waiting. A stale ACK from a half-open peer is answered
+    /// with a RST and the SYN goes out again right away.
+    fn syn_sent_segment(&mut self, s: &TcpSegment) -> Option<bool> {
+        use euronet::tcpopen::{syn_sent_input, SynSent};
+        match syn_sent_input(self.my_seq, s.flags, s.seq, s.ack) {
+            SynSent::Established { irs } => {
+                self.established(irs);
+                Some(true)
+            }
+            SynSent::Refused => {
+                self.syn_sent = false;
+                Some(false)
+            }
+            SynSent::SendReset { seq } => {
+                self.emit_rst(seq);
+                self.emit(tcp::SYN, &[]);
+                CONNECT_STALE_RST.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+            SynSent::Ignore => None,
+        }
+    }
     fn emit(&self, flags: u8, payload: &[u8]) {
         let seg = TcpSegment {
             src_port: self.sport,
@@ -1058,7 +1359,7 @@ impl TcpConn {
         let iph = Ipv4Header { protocol: Protocol::Tcp, ttl: 64, src: self.my_ip, dst: self.server, total_length: 0, identification: 3 };
         let frame = EthernetHeader { dst: self.nexthop, src: self.my_mac, ethertype: EtherType::Ipv4 }
             .build(&iph.build(&seg.build(self.my_ip, self.server)));
-        nic::send(&frame);
+        tx(&frame);
     }
 
     /// Wait for the next TCP segment from our peer for this port.
@@ -1076,26 +1377,9 @@ impl TcpConn {
     /// with `poll_connect()`; the caller owns the timing (`resend_syn()`).
     pub fn connect_nowait(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, server: Ipv4Addr, dport: u16) -> TcpConn {
         let isn = (rand_u64() as u32) | 1;
-        let mut c = TcpConn {
-            my_mac,
-            my_ip,
-            nexthop,
-            server,
-            dport,
-            sport: alloc_port(),
-            my_seq: isn,
-            their_seq: 0,
-            snd_una: isn,
-            open: false,
-            rx_bytes: 0,
-            tx_bytes: 0,
-            rx: alloc::collections::VecDeque::new(),
-            retx: alloc::vec::Vec::new(),
-            ooo: alloc::vec::Vec::new(),
-            syn_sent: true,
-            syn_tries: 1,
-            stale_rounds: 0,
-        };
+        let mut c = TcpConn::new_raw(my_mac, my_ip, nexthop, server, dport, alloc_port(), isn, 0);
+        c.syn_sent = true;
+        c.syn_tries = 1;
         c.emit(tcp::SYN, &[]);
         c
     }
@@ -1109,27 +1393,21 @@ impl TcpConn {
             return Some(false);
         }
         while let Some(s) = portq_pop(self.sport, self.server, self.dport) {
-            if s.has(tcp::RST) {
-                self.syn_sent = false;
-                return Some(false);
-            }
-            if s.has(tcp::SYN) && s.has(tcp::ACK) {
-                self.my_seq = self.my_seq.wrapping_add(1);
-                self.snd_una = self.my_seq;
-                self.their_seq = s.seq.wrapping_add(1);
-                self.emit(tcp::ACK, &[]);
-                self.open = true;
-                self.syn_sent = false;
-                return Some(true);
+            if let Some(r) = self.syn_sent_segment(&s) {
+                return Some(r);
             }
         }
         None
     }
     /// Retransmit the SYN (caller-timed); false once the attempts are exhausted.
+    /// The third SYN goes out from a fresh port and ISN, as in [`connect`].
     pub fn resend_syn(&mut self) -> bool {
-        if !self.syn_sent || self.syn_tries >= 4 {
+        if !self.syn_sent || self.syn_tries >= euronet::tcpopen::SynSchedule::ROUNDS as u8 {
             self.syn_sent = false;
             return false;
+        }
+        if euronet::tcpopen::SynSchedule::new_identity(self.syn_tries as usize) {
+            self.reidentify();
         }
         self.syn_tries += 1;
         self.emit(tcp::SYN, &[]);
@@ -1147,10 +1425,21 @@ impl TcpConn {
     }
     /// Caller-timed retransmission of everything still unacknowledged (call about
     /// once a second while idle). After 8 rounds without an ACK the peer is gone.
+    /// A FIN that is not acknowledged yet goes out again too.
     pub fn tick(&mut self) {
         self.pump_nowait();
-        if self.retx.is_empty() || !self.open {
+        if self.reset {
+            return;
+        }
+        // Data still unacknowledged after our FIN (a half-closed connection,
+        // the httpd's answer) needs its retransmissions as much as an open one.
+        let fin_pending = self.fin_sent && !self.fin_acked();
+        let data_pending = !self.retx.is_empty() && (self.open || self.fin_sent);
+        if !data_pending && !fin_pending {
             self.stale_rounds = 0;
+            return;
+        }
+        if self.stale_rounds > 8 {
             return;
         }
         self.stale_rounds += 1;
@@ -1158,10 +1447,13 @@ impl TcpConn {
             self.open = false;
             return;
         }
-        for (seq, chunk) in self.retx.clone() {
+        if data_pending {
+            self.retransmit_unacked();
+        }
+        if fin_pending {
             let saved = self.my_seq;
-            self.my_seq = seq;
-            self.emit(tcp::PSH | tcp::ACK, &chunk);
+            self.my_seq = saved.wrapping_sub(1);
+            self.emit(tcp::FIN | tcp::ACK, &[]);
             self.my_seq = saved;
         }
     }
@@ -1178,120 +1470,80 @@ impl TcpConn {
     /// FIN without waiting for the peer's answer (cooperative callers; `Drop`
     /// covers the rest).
     pub fn close_nowait(&mut self) {
-        if self.open {
-            self.emit(tcp::FIN | tcp::ACK, &[]);
-            self.my_seq = self.my_seq.wrapping_add(1);
-            self.open = false;
-        }
+        self.send_fin();
     }
 
-    /// 3-way handshake. Returns a connected socket, or None on timeout.
+    /// 3-way handshake. Returns a connected socket, or None on refusal/timeout.
+    ///
+    /// BUG-026: bounded in TIME (SynSchedule: 1 s + 2 s, then a fresh port and
+    /// ISN for another 1 s + 2 s), and RFC 793's SYN-SENT rules: an ACK that does
+    /// not acknowledge our SYN comes from a peer that still holds an old
+    /// connection on this four-tuple and is answered with a RST at its ACK, after
+    /// which the SYN is sent again; a RST with an acceptable ACK is a refusal and
+    /// ends the connect at once. Before, any answer that was not a SYN-ACK cost a
+    /// round, four rounds of 12 M spins each.
     pub fn connect(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, server: Ipv4Addr, dport: u16) -> Option<TcpConn> {
+        use euronet::tcpopen::SynSchedule;
         // NO drain() here: with the central demux, other sockets' frames are not
         // ours to discard (the old drain threw away in-flight traffic of every
         // live connection each time anyone dialed out).
         // Randomized ISN (RFC 6528) — a fixed ISN would let an off-path attacker
         // guess sequence numbers and inject RST/data into the connection.
-        // (Server-side `accept_from` already does this; now the client too.)
         let isn = (rand_u64() as u32) | 1;
-        let mut c = TcpConn {
-            my_mac,
-            my_ip,
-            nexthop,
-            server,
-            dport,
-            sport: alloc_port(),
-            my_seq: isn,
-            their_seq: 0,
-            snd_una: isn,
-            open: false,
-            rx_bytes: 0,
-            tx_bytes: 0,
-            rx: alloc::collections::VecDeque::new(),
-            retx: alloc::vec::Vec::new(),
-            ooo: alloc::vec::Vec::new(),
-            syn_sent: false,
-            syn_tries: 0,
-            stale_rounds: 0,
-        };
-        // SYN with retransmission: a lost SYN or SYN-ACK would otherwise make the
-        // handshake fail immediately. At most 4 attempts (poll_seg timeout per round).
-        let mut synack = None;
-        for _ in 0..4 {
-            c.emit(tcp::SYN, &[]); // (re)transmit the SYN
-            if let Some(s) = c.poll_seg() {
-                if s.has(tcp::SYN) && s.has(tcp::ACK) {
-                    synack = Some(s);
-                    break;
-                }
+        let t0 = time_us();
+        let mut c = TcpConn::new_raw(my_mac, my_ip, nexthop, server, dport, alloc_port(), isn, 0);
+        c.syn_sent = true;
+        for round in 0..SynSchedule::ROUNDS {
+            if SynSchedule::new_identity(round) {
+                c.reidentify();
             }
-        }
-        let synack = synack?;
-        c.my_seq = isn.wrapping_add(1);
-        c.snd_una = c.my_seq;
-        c.their_seq = synack.seq.wrapping_add(1);
-        c.emit(tcp::ACK, &[]);
-        c.open = true;
-        Some(c)
-    }
-
-    /// Passive open (server side): we received a SYN; send SYN-ACK and wait
-    /// for the closing ACK. Returns a connected server socket, or None.
-    /// `local_port` = the listening port, `syn` = the incoming SYN segment.
-    pub fn accept_from(
-        my_mac: MacAddr,
-        my_ip: Ipv4Addr,
-        peer_mac: MacAddr,
-        peer_ip: Ipv4Addr,
-        peer_port: u16,
-        local_port: u16,
-        syn: &TcpSegment,
-    ) -> Option<TcpConn> {
-        let isn = (rand_u64() as u32) | 1; // randomized ISN
-        let mut c = TcpConn {
-            my_mac,
-            my_ip,
-            nexthop: peer_mac,
-            server: peer_ip,
-            dport: peer_port,
-            sport: local_port,
-            my_seq: isn,
-            their_seq: syn.seq.wrapping_add(1),
-            snd_una: isn,
-            open: false,
-            rx_bytes: 0,
-            tx_bytes: 0,
-            rx: alloc::collections::VecDeque::new(),
-            retx: alloc::vec::Vec::new(),
-            ooo: alloc::vec::Vec::new(),
-            syn_sent: false,
-            syn_tries: 0,
-            stale_rounds: 0,
-        };
-        c.emit(tcp::SYN | tcp::ACK, &[]);
-        c.my_seq = isn.wrapping_add(1);
-        c.snd_una = c.my_seq;
-        for _ in 0..4 {
-            match c.poll_seg() {
-                Some(s) => {
-                    if s.has(tcp::RST) {
-                        return None;
-                    }
-                    if s.has(tcp::ACK) && s.ack == c.my_seq {
-                        c.open = true;
-                        // Buffer an included request (data on the ACK) right away.
-                        if !s.payload.is_empty() && s.seq == c.their_seq {
-                            c.their_seq = c.their_seq.wrapping_add(s.payload.len() as u32);
-                            c.rx.extend(s.payload.iter().copied());
-                            c.emit(tcp::ACK, &[]);
-                        }
+            c.syn_tries = round as u8 + 1;
+            c.emit(tcp::SYN, &[]); // (re)transmit the SYN
+            if round > 0 {
+                CONNECT_SYN_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+            }
+            let mut w = RxWait::new(SPINS * 3, SynSchedule::wait_ticks(round));
+            while w.next() {
+                let Some(s) = portq_pop(c.sport, c.server, c.dport) else { continue };
+                match c.syn_sent_segment(&s) {
+                    Some(true) => {
+                        connect_record(time_us().saturating_sub(t0));
                         return Some(c);
                     }
+                    Some(false) => {
+                        CONNECT_REFUSED.fetch_add(1, Ordering::Relaxed);
+                        return None;
+                    }
+                    None => {}
                 }
-                None => c.emit(tcp::SYN | tcp::ACK, &[]), // retransmit SYN-ACK
             }
         }
+        c.syn_sent = false;
+        CONNECT_GAVE_UP.fetch_add(1, Ordering::Relaxed);
+        connect_record(time_us().saturating_sub(t0));
         None
+    }
+
+    /// A passive connection in SYN-RCVD: the peer's SYN (`syn`) arrived on
+    /// `local_port`; its queue is registered, nothing is sent yet. `my_seq` holds
+    /// our ISN until the handshake completes (see `passive`).
+    fn new_passive(my_mac: MacAddr, my_ip: Ipv4Addr, peer_mac: MacAddr, peer_ip: Ipv4Addr, local_port: u16, syn: &TcpSegment) -> TcpConn {
+        let isn = (rand_u64() as u32) | 1; // randomized ISN
+        TcpConn::new_raw(my_mac, my_ip, peer_mac, peer_ip, syn.src_port, local_port, isn, syn.seq.wrapping_add(1))
+    }
+
+    /// SYN-RCVD: send (or resend) our SYN-ACK; `my_seq` is still the ISN.
+    fn emit_syn_ack(&self) {
+        self.emit(tcp::SYN | tcp::ACK, &[]);
+    }
+
+    /// SYN-RCVD → ESTABLISHED on the handshake's final ACK `seg` (it may carry
+    /// the first request bytes already).
+    fn passive_established(&mut self, seg: TcpSegment) {
+        self.my_seq = self.my_seq.wrapping_add(1);
+        self.snd_una = self.my_seq;
+        self.open = true;
+        let _ = self.handle_seg(seg);
     }
 
     /// Process all immediately available segments: buffer in-order payload,
@@ -1349,6 +1601,7 @@ impl TcpConn {
                 self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
                 self.dport, self.sport);
             self.open = false;
+            self.reset = true;
             return false;
         }
         // Cumulative ACK from the peer: advance snd.una and drop
@@ -1418,13 +1671,31 @@ impl TcpConn {
             self.emit(tcp::ACK, &[]);
         }
         if seg.has(tcp::FIN) {
+            // Only the FIN at the next expected sequence closes the stream (a FIN
+            // behind a gap waits for its retransmission); a repeated FIN is
+            // acknowledged again.
+            let fin_seq = seg.seq.wrapping_add(seg.payload.len() as u32);
+            if self.peer_fin {
+                if fin_seq.wrapping_add(1) == self.their_seq {
+                    self.emit(tcp::ACK, &[]);
+                }
+                return false;
+            }
+            if fin_seq != self.their_seq {
+                return true;
+            }
             let t = crate::interrupts::ticks();
-            crate::serial_println!("[tcp] @{t} FIN from {}.{}.{}.{}:{} to sport {} — closing",
-                self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
-                self.dport, self.sport);
+            static FIN_LOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(200);
+            if FIN_LOG.load(Ordering::Relaxed) > 0 {
+                FIN_LOG.fetch_sub(1, Ordering::Relaxed);
+                crate::serial_println!("[tcp] @{t} FIN from {}.{}.{}.{}:{} to sport {} — closing",
+                    self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
+                    self.dport, self.sport);
+            }
             self.their_seq = self.their_seq.wrapping_add(1);
             self.emit(tcp::ACK, &[]);
             self.open = false;
+            self.peer_fin = true;
             return false;
         }
         true
@@ -1488,12 +1759,14 @@ impl TcpConn {
 
     /// Send a FIN and close the connection cleanly.
     pub fn close(&mut self) {
-        if self.open {
-            self.emit(tcp::FIN | tcp::ACK, &[]);
-            self.my_seq = self.my_seq.wrapping_add(1);
-            self.open = false;
-            // Wait briefly for the FIN/ACK from the peer.
-            let _ = self.poll_seg();
+        let was_fin = self.fin_sent;
+        self.send_fin();
+        if self.fin_sent && !was_fin {
+            // Wait briefly for the peer's answer to our FIN (its ACK, or its own
+            // FIN), so the four-tuple ends cleanly on both sides.
+            if let Some(s) = self.poll_seg() {
+                let _ = self.handle_seg(s);
+            }
         }
     }
 }
@@ -1799,7 +2072,7 @@ impl UdpSock {
         let iph = Ipv4Header { protocol: Protocol::Udp, ttl: 64, src: self.my_ip, dst: self.server, total_length: 0, identification: 4 };
         let frame = EthernetHeader { dst: self.nexthop, src: self.my_mac, ethertype: EtherType::Ipv4 }
             .build(&iph.build(&dg.build(self.my_ip, self.server)));
-        nic::send(&frame);
+        tx(&frame);
     }
 
     /// Wait for one datagram from the destination, back on our source port.
@@ -2170,10 +2443,49 @@ pub fn sock_listen(fd: u64, backlog: usize) -> u64 {
     match *t {
         Some(Sock::Reserved { dgram: false, bind_port }) if bind_port != 0 => {
             *t = Some(Sock::Listen { port: bind_port, backlog: backlog.clamp(1, 32), queue: alloc::collections::VecDeque::new() });
+            LISTENERS.fetch_add(1, Ordering::Relaxed);
             0
         }
         _ => (-1i64) as u64,
     }
+}
+
+/// LISTEN sockets open now (the SYN path skips the socket table when 0).
+static LISTENERS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The listener on `port`: (backlog, connections waiting in its accept queue).
+fn listener_info(port: u16) -> Option<(usize, usize)> {
+    if LISTENERS.load(Ordering::Relaxed) == 0 {
+        return None;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    for s in SOCKETS.iter() {
+        if let Some(Sock::Listen { port: p, backlog, queue }) = &*s.lock() {
+            if *p == port {
+                return Some((*backlog, queue.len()));
+            }
+        }
+    }
+    None
+}
+
+/// Hand a connection whose handshake completed to the listener on `port`.
+/// Gives it back when the listener is gone or its accept queue is full.
+fn listener_push(port: u16, conn: TcpConn) -> Result<(), TcpConn> {
+    let _g = crate::sched::IfOffGuard::new();
+    for s in SOCKETS.iter() {
+        let mut g = s.lock();
+        if let Some(Sock::Listen { port: p, backlog, queue }) = &mut *g {
+            if *p == port {
+                if queue.len() < *backlog {
+                    queue.push_back(conn);
+                    return Ok(());
+                }
+                return Err(conn);
+            }
+        }
+    }
+    Err(conn)
 }
 
 /// accept(fd): take the next completed connection from the accept queue and
@@ -2189,8 +2501,10 @@ pub fn sock_accept(fd: u64) -> u64 {
     // we pump until the clock reaches the upper bound.
     let deadline = crate::interrupts::ticks() + 400; // ~4 s guest-time upper bound
     // With interrupts off and nobody sleeping the tick clock stands still: a
-    // spin ceiling ends the wait then. A caller whose waits sleep lets it run.
-    let sleeping_caller = rx_should_block();
+    // spin ceiling ends the wait then. A caller that may sleep does, a tick at a
+    // time (BUG-019): the handshakes complete without it (passive::step from
+    // service(), here and in the desktop loop), and a completed one wakes it.
+    let sleeping_caller = may_sleep();
     let mut spins: u64 = 0;
     while crate::interrupts::ticks() < deadline && spins < 20_000_000 {
         spins += 1;
@@ -2215,6 +2529,23 @@ pub fn sock_accept(fd: u64) -> u64 {
         service();
     }
     (-1i64) as u64
+}
+
+/// accept() for an O_NONBLOCK listener: a completed connection if one is
+/// queued, else -1 at once.
+pub fn sock_accept_nowait(fd: u64) -> u64 {
+    if !is_sock_fd(fd) {
+        return (-1i64) as u64;
+    }
+    service();
+    let conn = match &mut *SOCKETS[(fd - SOCK_FD_BASE) as usize].lock() {
+        Some(Sock::Listen { queue, .. }) => queue.pop_front(),
+        _ => None,
+    };
+    match conn.and_then(|c| sock_alloc(Sock::Conn(c))) {
+        Some(j) => SOCK_FD_BASE + j as u64,
+        None => (-1i64) as u64,
+    }
 }
 
 /// Resolve a hostname (or "a.b.c.d") to an IPv4 address via DNS.
@@ -2735,13 +3066,21 @@ pub fn sock_close(fd: u64) -> u64 {
         } else {
             c.close();
         }
-        portq_remove(c.sport);
     }
     if let Some(Sock::Udp(u)) = &*t {
-        portq_remove(u.sport);
         udpq_remove(u.sport);
     }
+    let listen_port = match &*t {
+        Some(Sock::Listen { port, .. }) => Some(*port),
+        _ => None,
+    };
+    // The connection's Drop sends what is still owed and frees its queue.
     *t = None;
+    drop(t);
+    if let Some(port) = listen_port {
+        LISTENERS.fetch_sub(1, Ordering::Relaxed);
+        passive::listener_closed(port);
+    }
     0
 }
 
@@ -3410,7 +3749,7 @@ pub fn tcp_serve_once(port: u16, response: &[u8], timeout_spins: u64) -> Option<
         let iph = Ipv4Header { protocol: Protocol::Tcp, ttl: 64, src: my_ip, dst: peer_ip, total_length: 0, identification: 5 };
         let frame = EthernetHeader { dst: peer_mac, src: my_mac, ethertype: EtherType::Ipv4 }
             .build(&iph.build(&seg.build(my_ip, peer_ip)));
-        nic::send(&frame);
+        tx(&frame);
     };
 
     // 2. SYN-ACK; our SYN counts as 1 in the sequence space.
@@ -3479,72 +3818,6 @@ fn http_page() -> alloc::vec::Vec<u8> {
         body
     )
     .into_bytes()
-}
-
-/// Serve one incoming connection whose opening SYN was already received
-/// (by `service()`): SYN-ACK → request → response → FIN. Briefly blocking.
-fn serve_connection(my_mac: MacAddr, my_ip: Ipv4Addr, peer_mac: MacAddr, peer_ip: Ipv4Addr, syn: &TcpSegment) {
-    let port = 80u16;
-    let peer_port = syn.src_port;
-    let mut my_seq = 0x3000u32;
-    let mut their_seq = syn.seq.wrapping_add(1);
-    let emit = |flags: u8, seq: u32, ack: u32, payload: &[u8]| {
-        let seg = TcpSegment { src_port: port, dst_port: peer_port, seq, ack, flags, window: 64240, payload: payload.to_vec() };
-        let iph = Ipv4Header { protocol: Protocol::Tcp, ttl: 64, src: my_ip, dst: peer_ip, total_length: 0, identification: 7 };
-        let frame = EthernetHeader { dst: peer_mac, src: my_mac, ethertype: EtherType::Ipv4 }
-            .build(&iph.build(&seg.build(my_ip, peer_ip)));
-        nic::send(&frame);
-    };
-    // The demux queues this connection's segments in PORTQ[80] (BUG-018).
-    let poll = || -> Option<TcpSegment> {
-        for _ in 0..SPINS {
-            if let Some(seg) = portq_pop(port, peer_ip, peer_port) {
-                return Some(seg);
-            }
-        }
-        None
-    };
-    emit(tcp::SYN | tcp::ACK, my_seq, their_seq, &[]);
-    my_seq = my_seq.wrapping_add(1);
-    let mut req: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
-    for _ in 0..40 {
-        match poll() {
-            Some(seg) => {
-                if seg.has(tcp::RST) {
-                    return;
-                }
-                if !seg.payload.is_empty() && seg.seq == their_seq {
-                    their_seq = their_seq.wrapping_add(seg.payload.len() as u32);
-                    req.extend_from_slice(&seg.payload);
-                    emit(tcp::ACK, my_seq, their_seq, &[]);
-                }
-                if seg.has(tcp::FIN) {
-                    their_seq = their_seq.wrapping_add(1);
-                    emit(tcp::ACK, my_seq, their_seq, &[]);
-                }
-                if req.windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            None => break,
-        }
-    }
-    let resp = http_page();
-    emit(tcp::PSH | tcp::ACK, my_seq, their_seq, &resp);
-    my_seq = my_seq.wrapping_add(resp.len() as u32);
-    emit(tcp::FIN | tcp::ACK, my_seq, their_seq, &[]);
-    SERVED.fetch_add(1, Ordering::Relaxed);
-    // The client's last ACK/FIN for this connection would otherwise sit in
-    // PORTQ[80] forever and fill it (256) for every later client.
-    portq_purge(port, peer_ip, peer_port);
-}
-
-/// Drop every queued segment of one finished connection (local port, peer).
-fn portq_purge(sport: u16, peer: Ipv4Addr, peer_port: u16) {
-    let mut t = PORTQ.lock();
-    if let Some((_, q)) = t.iter_mut().find(|(p, _)| *p == sport) {
-        q.retain(|(src, seg)| !(*src == peer && seg.src_port == peer_port));
-    }
 }
 
 /// Shell command `serve` — run EuroOS as an HTTP server: listen on :80,
@@ -3929,6 +4202,7 @@ pub fn netstat_lines() -> alloc::vec::Vec<String> {
     let hits = DNS_HITS.load(core::sync::atomic::Ordering::Relaxed);
     let misses = DNS_MISSES.load(core::sync::atomic::Ordering::Relaxed);
     let mut out = alloc::vec::Vec::new();
+    out.push(tcp_open_report());
     out.push(alloc::format!("DNS cache: {} hits, {} misses", hits, misses));
     let c = DNS_CACHE.lock();
     for (n, ip, exp) in c.iter() {
