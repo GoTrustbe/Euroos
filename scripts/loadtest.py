@@ -173,7 +173,7 @@ def launch_qemu(image, disks, sock_path, serial_log, a=None):
         else:
             args += ["-device", f"virtio-blk-pci,drive=ld{i},disable-modern=on"]
     if a is not None and a.nic:
-        nd = "user,id=n0"
+        nd = "user,id=n0" + (",restrict=on" if a.restrict else "")
         if a.host_http:
             nd += a.host_http_peer.netdev()
         if a.hostfwd:
@@ -626,6 +626,7 @@ def main():
     ap.add_argument("--http-size", type=int, default=200 * 1024)
     ap.add_argument("--hostfwd", type=int, default=0, help="host port forwarded to guest :80")
     ap.add_argument("--hammer", type=int, default=0, help="concurrent host clients on --hostfwd")
+    ap.add_argument("--restrict", action="store_true", help="SLIRP restrict=on: no route out (hostfwd and guestfwd still work)")
     ap.add_argument("--procs", type=int, default=64, help="processes per spawn wave")
     ap.add_argument("--waves", type=int, default=5)
     ap.add_argument("--burst", type=int, default=300, help="procs: processes in one spawn (> free slots)")

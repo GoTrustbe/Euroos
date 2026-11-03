@@ -1158,7 +1158,7 @@ pub fn tcp_open_report() -> String {
     let (conns, queued) = portq_stats();
     let (half, httpd) = passive::counts();
     alloc::format!(
-        "tcp: connect ok {} (slowest {} ms), SYN timeouts {}, stale-peer RSTs {}, new-port retries {}, refused {}, gave up {} | inbound: half-open {}, httpd conns {}, served {} | queues {} ({} segs), unowned segs {}",
+        "tcp: connect ok {} (slowest {} ms), SYN timeouts {}, stale-peer RSTs {}, new-port retries {}, closed-port answers {}, gave up {} | inbound: half-open {}, httpd conns {}, served {} | queues {} ({} segs), unowned segs {}",
         CONNECT_OK.load(Ordering::Relaxed),
         CONNECT_MAX_US.load(Ordering::Relaxed) / 1000,
         CONNECT_SYN_TIMEOUTS.load(Ordering::Relaxed),
@@ -1759,11 +1759,13 @@ impl TcpConn {
 
     /// Send a FIN and close the connection cleanly.
     pub fn close(&mut self) {
-        let was_fin = self.fin_sent;
+        // We close first: wait briefly for the peer's answer (its ACK or its own
+        // FIN), as before. After the peer's FIN ours is the last word and is not
+        // waited for; an ACK that arrives after the queue is gone reaches
+        // service(), whose RST ends the peer's TIME-WAIT early.
+        let wait = self.open && !self.fin_sent;
         self.send_fin();
-        if self.fin_sent && !was_fin {
-            // Wait briefly for the peer's answer to our FIN (its ACK, or its own
-            // FIN), so the four-tuple ends cleanly on both sides.
+        if wait {
             if let Some(s) = self.poll_seg() {
                 let _ = self.handle_seg(s);
             }
