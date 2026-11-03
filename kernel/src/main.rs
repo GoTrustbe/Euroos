@@ -179,6 +179,8 @@ mod disktest;
 mod stresstest;
 mod scon;
 mod ltstat;
+#[cfg(feature = "heaptrace")]
+mod heaptrace;
 mod media;
 mod xhci;
 

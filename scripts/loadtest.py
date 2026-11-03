@@ -173,7 +173,7 @@ def launch_qemu(image, disks, sock_path, serial_log, a=None):
         else:
             args += ["-device", f"virtio-blk-pci,drive=ld{i},disable-modern=on"]
     if a is not None and a.nic:
-        nd = "user,id=n0"
+        nd = "user,id=n0" + (",restrict=on" if a.restrict else "")
         if a.host_http:
             nd += a.host_http_peer.netdev()
         if a.hostfwd:
@@ -492,13 +492,27 @@ def scenario_soak(args):
         if r % 10 == 0:
             yield C("lockstat", None, timeout=120)
             yield C("free", None)
+        if args.heaptrace:
+            if r + 1 == args.heaptrace:
+                yield C("heapsnap", "heapsnap:")
+            elif r + 1 > args.heaptrace and (r + 1 - args.heaptrace) % 50 == 0:
+                yield C("heapdiff 25", "[heaptrace]", timeout=120)
         r += 1
+    if args.heaptrace:
+        yield C("heapdiff 60", "[heaptrace]", timeout=120)
     if args.hammer:
         yield C("httpd status", "served")
     yield C("scrub", "HEALTHY", timeout=900)
     yield C("lockstat", None, timeout=120)
     yield C("ltstat", "ltstat ")
 
+
+def scenario_cmds(args):
+    # Ad-hoc: the shell commands given with --cmds, separated by ";" (no assertions).
+    return [C(c.strip(), None, timeout=300) for c in args.cmds.split(";") if c.strip()]
+
+
+SCENARIOS["cmds"] = scenario_cmds
 
 SCENARIOS.update({"procs": scenario_procs, "churn": scenario_churn, "fsio": scenario_fsio,
                   "persist-check-io": scenario_persist_check_io, "net": scenario_net, "soak": scenario_soak})
@@ -606,6 +620,7 @@ def main():
     ap.add_argument("--bootopts", default="", help='ESP boot options, e.g. "net.driver=user"')
     ap.add_argument("--iommu", action="store_true", help="-device intel-iommu,intremap=off")
     ap.add_argument("--nic", default="", help="NIC model, e.g. e1000e (SLIRP user network)")
+    ap.add_argument("--restrict", action="store_true", help="SLIRP restrict=on: no route out of the host (the update check cannot reach euro-os.eu); guestfwd/hostfwd still work")
     ap.add_argument("--host-http", action="store_true", help="host HTTP peers: guest 10.0.2.100 (1000 B), 10.0.2.101 (--http-size B)")
     ap.add_argument("--http-size", type=int, default=200 * 1024)
     ap.add_argument("--hostfwd", type=int, default=0, help="host port forwarded to guest :80")
@@ -620,8 +635,11 @@ def main():
     ap.add_argument("--conns", type=int, default=200, help="net: sequential outbound connections")
     ap.add_argument("--downloads", type=int, default=50)
     ap.add_argument("--duration", type=int, default=4 * 3600, help="soak seconds")
+    ap.add_argument("--heaptrace", type=int, default=0, metavar="ROUNDS",
+                    help="soak on a heaptrace image (BUG-027): heapsnap after ROUNDS warm-up rounds, heapdiff every 50 rounds and at the end")
     ap.add_argument("--iobase", default="/home/euro/lt", help="fsio/soak directory (the euro user can write here on a disk root)")
     ap.add_argument("--stop-on-err", action="store_true")
+    ap.add_argument("--cmds", default="", help="scenario cmds: shell commands separated by \";\"")
     a = ap.parse_args()
     a.io_sizes = [int(x) for x in a.io_sizes.split(",") if x.strip()]
 

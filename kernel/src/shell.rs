@@ -725,6 +725,8 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "spawn" => crate::ltstat::spawn(fs, ctx.mem, arg1, arg2),
         "churn" => crate::ltstat::churn(fs, ctx.mem, arg1, arg2),
         "httpd" => crate::ltstat::httpd(arg1),
+        // BUG-027: heap accounting per allocation site (heaptrace images only).
+        "heapsnap" | "heapdiff" | "heaptop" => crate::ltstat::heaptrace(cmd, arg1),
         "bgps" => crate::ring3::bg_debug_lines(),
         "ls" => {
             let path = if arg1.is_empty() { "/" } else { arg1 };

@@ -195,7 +195,37 @@ pub fn percpu_cached_bytes() -> usize {
 }
 
 unsafe impl GlobalAlloc for IrqSafeHeap {
+    // `heaptrace` (BUG-027): every block carries a site header in front of it;
+    // the inner allocator below sees the enlarged layout on alloc AND dealloc,
+    // so its class/pool decision stays consistent. See kernel/src/heaptrace.rs.
+    #[cfg(feature = "heaptrace")]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let (outer, off) = crate::heaptrace::outer(layout);
+        let raw = unsafe { self.alloc_inner(outer) };
+        if raw.is_null() {
+            return raw;
+        }
+        crate::heaptrace::on_alloc(raw, off, layout.size())
+    }
+    #[cfg(feature = "heaptrace")]
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        let raw = crate::heaptrace::on_free(ptr, layout);
+        let (outer, _) = crate::heaptrace::outer(layout);
+        unsafe { self.dealloc_inner(raw, outer) }
+    }
+    #[cfg(not(feature = "heaptrace"))]
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        unsafe { self.alloc_inner(layout) }
+    }
+    #[cfg(not(feature = "heaptrace"))]
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { self.dealloc_inner(ptr, layout) }
+    }
+}
+
+impl IrqSafeHeap {
+    #[inline(always)]
+    unsafe fn alloc_inner(&self, layout: Layout) -> *mut u8 {
         if layout.size() >= BIG_MIN && layout.align() <= 4096 {
             if let Some(p) = big_alloc(layout.size()) {
                 return p;
@@ -209,7 +239,8 @@ unsafe impl GlobalAlloc for IrqSafeHeap {
             with_heap(&self.0, |h| h.allocate_first_fit(layout).ok().map_or(core::ptr::null_mut(), |p| p.as_ptr()))
         })
     }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+    #[inline(always)]
+    unsafe fn dealloc_inner(&self, ptr: *mut u8, layout: Layout) {
         if big_owns(ptr) {
             big_free(ptr, layout.size());
             return;

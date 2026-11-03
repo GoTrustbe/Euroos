@@ -33,6 +33,13 @@ elif [ "$PROFILE" = "lockbench" ]; then
   EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
   cargo kbuild-lockbench
   cargo lbuild-release
+elif [ "$PROFILE" = "heaptrace" ]; then
+  # BUG-027 debug image: the selftest image plus heap accounting per allocation
+  # site (heapsnap / heapdiff / heaptop in the shell, kernel/src/heaptrace.rs).
+  PROFILE="release"
+  EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
+  cargo kbuild-heaptrace
+  cargo lbuild-release
 elif [ "$PROFILE" = "chrome" ]; then
   # Iteration image: chrome runs in the boot phase (see the chrome-boot feature).
   PROFILE="release"
