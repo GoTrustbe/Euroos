@@ -4128,6 +4128,12 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
         // ever started kept its slot, and after ~230 process lifetimes since boot
         // the 256-slot table was full for good. reclaim_task only takes a Dead,
         // non-current task (task 0 runs this), so a still-running thread keeps its slot.
+        // BUG-017: a reaped task may still sit in the futex queue (it left Blocked
+        // there); its slot is reused below, so a later wake on that address must not
+        // reach the new occupant. Irqsave: syscalls take FUTEX_QUEUE with IF=0.
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            FUTEX_QUEUE.lock().retain(|&(_, t)| t != p.task && !p.threads.contains(&t));
+        });
         crate::sched::reclaim_task(p.task);
         for &t in p.threads.iter() {
             if crate::sched::is_dead(t) {
@@ -4902,6 +4908,16 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     // (fine at its low thread counts); chrome (glibc, ~30 threads) gets the real yield.
     if syscall_yield_ok() {
         yield_reacquire();
+    } else {
+        // LOADTEST-R630 BUG-017: the musl bg path does not yield here; the task is
+        // Blocked and leaves at the next timer tick. It must STAY in the queue so a
+        // FUTEX_WAKE can find it. The "resumed" check below used to run right away
+        // on this path, found the entry still there, took it out as "spurious" and
+        // returned 0, leaving a Blocked task no wake could reach: pthread_join hung
+        // whenever the joiner waited before the thread exited (12 of 16 mpthread
+        // processes started together, and the boot demos pid 13/14). musl re-checks
+        // the futex word after any return, so returning 0 here is correct.
+        return 0;
     }
     // Resumed. If we are STILL enqueued, the scheduler woke us at the deadline (a
     // FUTEX_WAKE would have removed us) -> report -ETIMEDOUT so the caller re-polls.
