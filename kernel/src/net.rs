@@ -1047,7 +1047,9 @@ pub fn service() {
                                 } else if let Some(s) = portq_take_late(key, seg) {
                                     // The segment's connection registered its queue after
                                     // the demux looked (or never existed).
-                                    if icmp_err_allowed() {
+                                    if absorb_after_close(key, &s) {
+                                        // The peer's ACK of our last FIN: nothing to say.
+                                    } else if icmp_err_allowed() {
                                         // SYN to a closed port → "connection refused": RST
                                         // (RFC 793), instead of letting the packet disappear.
                                         // Any other segment for no connection gets one too
@@ -1158,7 +1160,7 @@ pub fn tcp_open_report() -> String {
     let (conns, queued) = portq_stats();
     let (half, httpd) = passive::counts();
     alloc::format!(
-        "tcp: connect ok {} (slowest {} ms), SYN timeouts {}, stale-peer RSTs {}, new-port retries {}, closed-port answers {}, gave up {} | inbound: half-open {}, httpd conns {}, served {} | queues {} ({} segs), unowned segs {}",
+        "tcp: connect ok {} (slowest {} ms), SYN timeouts {}, stale-peer RSTs {}, new-port retries {}, closed-port answers {}, gave up {} | inbound: half-open {}, httpd conns {}, served {} | queues {} ({} segs), unowned segs {} (after-close ACKs {})",
         CONNECT_OK.load(Ordering::Relaxed),
         CONNECT_MAX_US.load(Ordering::Relaxed) / 1000,
         CONNECT_SYN_TIMEOUTS.load(Ordering::Relaxed),
@@ -1172,6 +1174,7 @@ pub fn tcp_open_report() -> String {
         conns,
         queued,
         TCP_UNOWNED.load(Ordering::Relaxed),
+        TCP_TIMEWAIT_ABSORBED.load(Ordering::Relaxed),
     )
 }
 
@@ -1230,8 +1233,43 @@ impl Drop for TcpConn {
     /// lingered until the port came round again.
     fn drop(&mut self) {
         self.send_fin();
+        if self.fin_sent {
+            closed_recently(self.key());
+        }
         portq_unregister(self.key(), self.id);
     }
+}
+
+/// Four-tuples whose connection ended with our FIN in the last moments
+/// (a light TIME-WAIT): the peer's ACK of that FIN usually arrives after the
+/// queue is gone and is dropped quietly instead of being answered with a RST
+/// (one more frame through the userspace driver per connection).
+static CLOSED_RECENT: Mutex<([(ConnKey, u64); 64], usize)> =
+    Mutex::new(([(ConnKey { lport: 0, peer: Ipv4Addr([0; 4]), pport: 0 }, 0); 64], 0));
+/// How long (ticks) a closed four-tuple absorbs its stragglers.
+const CLOSED_RECENT_TICKS: u64 = 300;
+pub static TCP_TIMEWAIT_ABSORBED: AtomicU64 = AtomicU64::new(0);
+
+fn closed_recently(key: ConnKey) {
+    let _g = crate::sched::IfOffGuard::new();
+    let mut r = CLOSED_RECENT.lock();
+    let i = r.1;
+    r.0[i] = (key, crate::interrupts::ticks());
+    r.1 = (i + 1) % 64;
+}
+
+/// A bare ACK for a four-tuple that just closed: drop it without an answer.
+fn absorb_after_close(key: ConnKey, seg: &TcpSegment) -> bool {
+    if seg.flags & (tcp::SYN | tcp::FIN | tcp::RST) != 0 || !seg.payload.is_empty() || !seg.has(tcp::ACK) {
+        return false;
+    }
+    let now = crate::interrupts::ticks();
+    let _g = crate::sched::IfOffGuard::new();
+    let hit = CLOSED_RECENT.lock().0.iter().any(|(k, t)| *k == key && now.wrapping_sub(*t) <= CLOSED_RECENT_TICKS);
+    if hit {
+        TCP_TIMEWAIT_ABSORBED.fetch_add(1, Ordering::Relaxed);
+    }
+    hit
 }
 
 impl TcpConn {
