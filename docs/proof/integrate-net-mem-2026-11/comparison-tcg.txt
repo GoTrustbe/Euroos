@@ -1,0 +1,216 @@
+##### against integrate-loadtest-2026-11-03
+== ../integrate-loadtest-2026-11-03/user-smp4-iommu.log  vs  user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/user-smp1-iommu.log  vs  user-smp1-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/user-smp4-noiommu.log  vs  user-smp4-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/user-smp1-noiommu.log  vs  user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/storage-smp4-iommu-1g.log  vs  storage-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/storage-smp1-iommu-1g.log  vs  storage-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+   sbx2: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/combined-smp4-iommu-1g.log  vs  combined-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+   sbx2: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/combined-smp1-iommu-1g.log  vs  combined-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+   sbx2: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/user-smp4-iommu.log  vs  user-smp4-iommu-r2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/user-smp4-iommu.log  vs  user-smp4-iommu-r3.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/combined-smp4-iommu-1g-r2.log  vs  combined-smp4-iommu-1g-r2.log
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/combined-smp4-iommu-1g-r3.log  vs  combined-smp4-iommu-1g-r3.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+   sbx2: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+##### against mem-hygiene-2026-11 (final image logs)
+== ../mem-hygiene-2026-11 (server log) user-smp4-iommu.log  vs  user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) user-smp1-iommu.log  vs  user-smp1-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) user-smp4-noiommu.log  vs  user-smp4-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) user-smp1-noiommu.log  vs  user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) storage-smp4-iommu-1g.log  vs  storage-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) storage-smp1-iommu-1g.log  vs  storage-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) combined-smp4-iommu-1g.log  vs  combined-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) combined-smp1-iommu-1g.log  vs  combined-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) combined-smp4-iommu-1g-r2.log  vs  combined-smp4-iommu-1g-r2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) combined-smp4-iommu-1g-r3.log  vs  combined-smp4-iommu-1g-r3.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+##### against net-async-2026-11
+== ../net-async-2026-11/tcg-user-smp4-iommu-r1.log  vs  user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../net-async-2026-11/tcg-user-smp1-iommu.log  vs  user-smp1-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../net-async-2026-11/tcg-user-smp4-noiommu.log  vs  user-smp4-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../net-async-2026-11/tcg-user-smp1-noiommu.log  vs  user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../net-async-2026-11/tcg-kernel-smp4.log  vs  kernel-smp4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../net-async-2026-11/tcg-kernel-smp1.log  vs  kernel-smp1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../net-async-2026-11/tcg-base-kernel-smp4.log  vs  kernel-smp4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../net-async-2026-11/tcg-base-kernel-smp1.log  vs  kernel-smp1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../net-async-2026-11/tcg-combined-smp4-iommu-1g.log  vs  combined-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+-- only in base: 0
+-- only in new: 0
+== ../net-async-2026-11/tcg-combined-smp1-iommu-1g.log  vs  combined-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+   sbx2: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0

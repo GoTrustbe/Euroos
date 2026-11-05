@@ -153,6 +153,9 @@ the code.
 | lockbench KVM matrix | 2026-11-02 | ✅ 0 errors | `proof/loadtest-r630-2026-11/` | see `LOADTEST-R630-2026-11.md` §3 |
 | `soak` 70 min, mem-hygiene (KVM, `-m 16G`) | 2026-11-05 | ✅ 2 478/2 478 ok | `proof/mem-hygiene-2026-11/` | heap +0.4 kB/min after the BUG-027 fix (+29.3 kB/min on the same machine before it); tasks, files, frames, process pool flat |
 | `[sbx2]` and glibc at `-m 1G` (TCG) | 2026-11-05 | ✅ `[sbx2]` 15/15 | `proof/mem-hygiene-2026-11/` | BUG-028 fixed; GBIG, GSCM3's second fork and `[churn-fork]` still fail at 1 GiB (process pool too small, deterministic) |
+| TCG matrix + `megaraid-proof.sh` on net-async + mem-hygiene integrated | 2026-11-05 | ✅ 0 markers worse | `proof/integrate-net-mem-2026-11/` | 14 boots (user/kernel/storage/combined, smp4/smp1, ± IOMMU) + 10 megaraid boots; `[net-async]` OK, `[sbx2]` 6/6 at 1 GiB, `[lk]` 0 inversions |
+| `soak` 1 h + 4 httpd clients, integrated (KVM, `-m 16G`) | 2026-11-05 | ✅ 1 805/1 805 ok | `proof/integrate-net-mem-2026-11/` | heap +0.37 kB/min (heaptrace soak: no growing site); tasks, files, frames, process pool flat; httpd as on net-async (slow during long synchronous commands) |
+| `inbound` 4 clients 300 s + `net`, integrated (KVM) | 2026-11-05 | ✅ | `proof/integrate-net-mem-2026-11/` | user 4 165 ok, console max 693 ms; kernel 101 202 ok, max 380 ms; outbound 300/300 (user), 400/400 (kernel) |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
 > it ✅ from "it should work".
@@ -770,6 +773,39 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Analysis:** not attributed; 13 further boots without IOMMU and every other boot of the proof
   passed that point. `megaraid-proof.sh` now injects an NMI on a timeout, so a recurrence leaves
   the kernel's NMI probe in the log. `proof/mem-hygiene-2026-11/mr-noiommu-hang-boot2-tail.txt`.
+- **Related:** BUG-033 (TCG boots that stop in the self-tests, `user-smp4-iommu`, both trees) has
+  the same picture: silence during the boot self-tests, no fault line. They may share a cause; an
+  NMI probe of either would tell.
+
+### BUG-032 — `KERNEL PANIC` at `sched.rs:755`: `s.current` overwritten ⬜ OPEN
+- **Status:**   OPEN, seen once · **Severity:** CRITICAL when it hits (kernel panic), rare
+- **Found:**    2026-11-03 · R630, KVM, base image `bb2e9d2`, `net.driver=user`, an outbound run of
+  the net-async work (`proof/net-async-2026-11/r630-b2-out-user.txt`); numbered when
+  `feature/net-async` and `feature/mem-hygiene` were integrated
+- **Actual:**   during the boot, after the desktop apps came up: `panicked at kernel/src/sched.rs:755:5:
+  index out of bounds: the len is 256 but the index is 5242243857361403874`, i.e.
+  `s.tasks[cur]` in `schedule_core` with a `s.current` that is no task index.
+- **Analysis:** not attributed. The value is `0x48C031037FFFFFE2`, in memory order the bytes
+  `e2 ff ff 7f 03 31 c0 48`: that reads as x86-64 code (`… jg +3; xor eax,eax; REX.W …`), not as
+  a counter or a pointer gone wrong. So something wrote code bytes over the scheduler state (a
+  program image copied to the wrong place, or a page reused while still written to), rather than
+  a lost update of `current`. Not seen on `feature/net-async`, `feature/mem-hygiene` or their
+  integration (`proof/integrate-net-mem-2026-11/`).
+- **Next:**     a check of `current < count` in `schedule_core` that dumps the words around `SCHED`
+  before it panics would turn the next occurrence into a diagnosis.
+
+### BUG-033 — TCG boots that stop in the boot self-tests (`user-smp4-iommu`) ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (a boot that never reaches the desktop; a CI flake)
+- **Found:**    2026-11-05 · TCG, `-smp 4 -m 512M` with intel-iommu, selftest image, the net-async
+  work: 1 of 6 boots on `feature/net-async`, 1 of 3 on the base `bb2e9d2`
+  (`proof/net-async-2026-11/README.md`); numbered at the integration
+- **Actual:**   no output after a glibc self-test line (`[glibc] gscm` on the branch, a
+  `[sched-guard]` line on the base); no fault line, no panic.
+- **Analysis:** not attributed. The same picture as BUG-031 (a boot without IOMMU that went silent
+  after `[net-late]`, before the `[udrv-linux]` glibc program): a glibc program during the boot,
+  then silence. They may have the same cause. The TCG boot script of the integration proof sends
+  an NMI through the QEMU monitor when a boot is silent for 15 min or reaches no desktop, so a
+  recurrence leaves the kernel's NMI probe in the log.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with
@@ -781,12 +817,7 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - Swap self-test (`gswap`) on a disk-root boot: ~4 min of synchronous `virtio_blk::kick_and_wait`
   under KVM; a selftest boot with an installed 8 GiB disk takes 330–455 s to the desktop.
 
-- **Base `bb2e9d2` under KVM, once (2026-11-03, R630, `net.driver=user`):** `KERNEL PANIC` at
-  `kernel/src/sched.rs:755`, index out of bounds with a garbage `s.current`, during the boot
-  (`proof/net-async-2026-11/r630-b2-out-user.txt`). Not seen on `feature/net-async`. Not filed as
-  a number here (another team works on the heap); the lead decides.
-- **Boots that stop in the self-tests under TCG** (`user-smp4-iommu`, 512 MiB): 1 of 6 on
-  `feature/net-async`, 1 of 3 on the base, same picture (no output after a glibc self-test line).
-  `proof/net-async-2026-11/README.md`.
+- The `sched.rs:755` panic and the TCG self-test stops that the net-async work noted here are
+  BUG-032 and BUG-033 now.
 
 <!-- Add BUG-NNN entries above this line. Keep newest at the bottom of the relevant group. -->

@@ -1,0 +1,37 @@
+== ../net-async-2026-11/r630-n4-soak.log  vs  r630-soak-user.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../net-async-2026-11/r630-n-inbound-user.log  vs  r630-inbound-user.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../net-async-2026-11/r630-n4-inbound-kernel.log  vs  r630-inbound-kernel.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../net-async-2026-11/r630-n-out-kernel.log  vs  r630-out-kernel.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../net-async-2026-11/r630-n4-out-user.log  vs  r630-out-user.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== memruns/rf1/loadtest-serial-20261105-092524.log  vs  wt-integrate4-runs/soak-user/loadtest-serial-20261105-105913.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== memruns/ht3/loadtest-serial-20261105-085218.log  vs  wt-integrate4-runs/soak-heaptrace/loadtest-serial-20261105-105913.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
