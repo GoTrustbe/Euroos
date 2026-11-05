@@ -116,6 +116,18 @@ class SerialConsole:
             if data:
                 self.log.write(data)
 
+    def idle(self, seconds):
+        """A host-side pause that keeps reading the console (log + crash scan).
+        Nobody read the socket during a plain sleep: QEMU's chardev buffer
+        filled, and the guest's next UART write spun with interrupts off until
+        the harness read again (0.9 s stalls of the network path between the
+        `inbound` scenario's echoes, 44 s in a 45 s pause; net worker proof)."""
+        end = time.time() + seconds
+        while time.time() < end:
+            if not self._pump():
+                time.sleep(0.05)
+        self.buf = ""
+
     def wait_for(self, needle, timeout=60):
         """Wait until `needle` appears; raise CrashError on crash or silence."""
         deadline = time.time() + timeout
@@ -798,14 +810,18 @@ def main():
                     cmd, expect = item if isinstance(item, tuple) else (item, None)
                     item = C(cmd, expect)
                 cmd, expect = item.cmd, item.expect
-                if cmd.startswith("sleepwait "):         # host-side pause, not a guest command
-                    time.sleep(int(cmd.split()[1]))
-                    continue
                 t_cmd = time.time()
-                try:
-                    status, ms, lines = con.run(cmd, timeout=item.timeout)
-                except CrashError as e:
-                    status, ms, lines = "CRASH:" + str(e)[:60], 0, []
+                if cmd.startswith("sleepwait "):         # host-side pause, not a guest command
+                    try:
+                        con.idle(int(cmd.split()[1]))
+                        continue
+                    except CrashError as e:
+                        status, ms, lines = "CRASH:" + str(e)[:60], 0, []
+                else:
+                    try:
+                        status, ms, lines = con.run(cmd, timeout=item.timeout)
+                    except CrashError as e:
+                        status, ms, lines = "CRASH:" + str(e)[:60], 0, []
                 if time.time() - t_cmd >= 5:
                     busy_windows.append((t_cmd, time.time(), cmd))
                 # Positive baseline assertion: required output must be present.
