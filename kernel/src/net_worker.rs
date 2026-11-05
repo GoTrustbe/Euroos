@@ -180,17 +180,36 @@ fn pass() {
     // After the guard: the time with interrupts off, not a preemption before it.
     let t0 = time_us();
     rx_route();
+    let t1 = time_us();
     let n = inbound(&cfg);
+    let t2 = time_us();
     let now = crate::interrupts::ticks();
-    if LAST_PUMP.swap(now, Ordering::Relaxed) != now {
+    let pumped = LAST_PUMP.swap(now, Ordering::Relaxed) != now;
+    if pumped {
         pump_all(); // the socket connections' ACKs + clock, then passive::step
     } else {
         passive::step();
     }
+    let t3 = time_us();
     PASSES.fetch_add(1, Ordering::Relaxed);
     FRAMES.fetch_add(n as u64, Ordering::Relaxed);
-    PASS_MAX_US.fetch_max(time_us().saturating_sub(t0), Ordering::Relaxed);
+    let us = t3.saturating_sub(t0);
+    PASS_MAX_US.fetch_max(us, Ordering::Relaxed);
+    // A long stretch with interrupts off says where it went (first few only).
+    if us >= LONG_PASS_US && LONG_LOGGED.fetch_add(1, Ordering::Relaxed) < 8 {
+        crate::serial_println!(
+            "[net-worker] long pass: {us} us with interrupts off at tick {now} (rx_route {} us, inbound {} us for {n} frames, {} {} us; {} sockets with connections)",
+            t1.saturating_sub(t0),
+            t2.saturating_sub(t1),
+            if pumped { "pump_all" } else { "passive::step" },
+            t3.saturating_sub(t2),
+            conn_hint_slots().count()
+        );
+    }
 }
+/// A pass this long (µs) is logged.
+const LONG_PASS_US: u64 = 50_000;
+static LONG_LOGGED: AtomicU64 = AtomicU64::new(0);
 
 /// Is this a frame the worker may want (TCP to anyone, or ARP)? Only a cheap
 /// look at the headers; `handle_legacy` decides.

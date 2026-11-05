@@ -81,6 +81,7 @@ pub(super) static ESTABLISHED: AtomicU64 = AtomicU64::new(0);
 pub(super) static ACCEPT_OVERFLOW: AtomicU64 = AtomicU64::new(0);
 /// Longest `step` in microseconds (HPET).
 pub(super) static STEP_MAX_US: AtomicU64 = AtomicU64::new(0);
+static LONG_LOGGED: AtomicU64 = AtomicU64::new(0);
 
 fn set_active(p: &Passive) {
     ACTIVE.store(p.synq.len() + p.httpd.len(), Ordering::Relaxed);
@@ -150,15 +151,17 @@ pub(super) fn step() {
     if ACTIVE.load(Ordering::Relaxed) == 0 {
         return;
     }
-    let t0 = time_us();
     let now = crate::interrupts::ticks();
     let mut ready: alloc::vec::Vec<(u16, TcpConn)> = alloc::vec::Vec::new();
+    let t0;
     {
         let _g = crate::sched::IfOffGuard::new();
+        t0 = time_us();
         // Another context is stepping: it does the work.
         let Some(mut p) = PASSIVE.try_lock() else { return };
         rx_route();
         let p = &mut *p;
+        let ta = time_us();
 
         // 1. Half-open: the handshake's final ACK, or a reset.
         for key in p.synq.keys() {
@@ -186,6 +189,7 @@ pub(super) fn step() {
             }
         }
 
+        let tb = time_us();
         // 2. SYN-ACK retransmissions (1, 2, 4 s) and expiry.
         let (again, expired) = p.synq.due(now);
         for k in again {
@@ -198,7 +202,9 @@ pub(super) fn step() {
         HALF_EXPIRED.fetch_add(expired.len() as u64, Ordering::Relaxed);
         drop(expired);
 
+        let tc = time_us();
         // 3. httpd connections: read the request, answer, close, retire.
+        let n_httpd = p.httpd.len();
         let mut page: Option<alloc::vec::Vec<u8>> = None;
         let mut i = 0;
         while i < p.httpd.len() {
@@ -237,6 +243,13 @@ pub(super) fn step() {
             i += 1;
         }
         set_active(p);
+        let td = time_us();
+        if td.saturating_sub(t0) >= 50_000 && LONG_LOGGED.fetch_add(1, Ordering::Relaxed) < 8 {
+            crate::serial_println!(
+                "[net-async] long step: {} us (rx_route {} us, half-open {} us, SYN-ACK timers {} us, {n_httpd} httpd conns {} us)",
+                td.saturating_sub(t0), ta.saturating_sub(t0), tb.saturating_sub(ta), tc.saturating_sub(tb), td.saturating_sub(tc)
+            );
+        }
     }
 
     // 4. Completed handshakes to their listeners (socket locks, outside PASSIVE).
