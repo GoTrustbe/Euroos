@@ -20,12 +20,17 @@ pub fn init() {
     fw.push(Rule::new(Action::Drop).dir(Direction::In).proto(Proto::Tcp).dst_port(139));
     // Example blocklist: reject all traffic from 198.51.100.0/24 (TEST-NET-2).
     fw.push(Rule::new(Action::Drop).dir(Direction::In).src_cidr(u32::from_be_bytes([198, 51, 100, 0]), 24));
+    let _i = crate::sched::IfOffGuard::new();
     *FW.lock() = Some(fw);
 }
 
 /// Called by [`crate::net::service`] for every incoming IP packet. Returns true
 /// if the packet is allowed through.
 pub fn inbound_allowed(ip_proto: u8, src: u32, dst: u32, src_port: u16, dst_port: u16) -> bool {
+    // Interrupts off while FW is held: the network worker (net_worker.rs) checks
+    // inbound packets with IF=0, and a holder parked by the timer with IF=1 would
+    // leave it spinning on this core.
+    let _i = crate::sched::IfOffGuard::new();
     let mut g = FW.lock();
     match g.as_mut() {
         Some(fw) => {
@@ -44,6 +49,7 @@ pub fn inbound_allowed(ip_proto: u8, src: u32, dst: u32, src_port: u16, dst_port
 
 /// (accepted, dropped).
 pub fn stats() -> (u64, u64) {
+    let _i = crate::sched::IfOffGuard::new();
     match FW.lock().as_ref() {
         Some(fw) => (fw.accepted, fw.dropped),
         None => (0, 0),
@@ -56,6 +62,7 @@ fn ip(a: u8, b: u8, c: u8, d: u8) -> u32 {
 
 /// Boot self-test: exercise the rule engine on a few representative packets.
 pub fn selftest() {
+    let _i = crate::sched::IfOffGuard::new();
     let g = FW.lock();
     let fw = match g.as_ref() {
         Some(f) => f,
@@ -77,7 +84,10 @@ pub fn selftest() {
 /// `firewall` shell command: show the rules + counters.
 pub fn shell() -> Vec<String> {
     let (acc, drop) = stats();
-    let n = FW.lock().as_ref().map(|f| f.rule_count()).unwrap_or(0);
+    let n = {
+        let _i = crate::sched::IfOffGuard::new();
+        FW.lock().as_ref().map(|f| f.rule_count()).unwrap_or(0)
+    };
     alloc::vec![
         alloc::format!("EuroFW packet filter: {n} rules, {acc} allowed / {drop} dropped"),
         String::from("  drop in tcp dport 23 (Telnet) · drop in tcp dport 139 (NetBIOS) · drop in src 198.51.100.0/24"),

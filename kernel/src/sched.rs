@@ -217,6 +217,38 @@ pub fn unblock_any(idx: usize) {
     }
 }
 
+/// [`unblock_any`] for interrupt context: never waits for the scheduler lock.
+/// False when the lock was busy (the caller keeps its own "work pending" flag;
+/// the woken task's next look finds it).
+pub fn try_unblock_any(idx: usize) -> bool {
+    let Some(mut s) = SCHED.try_lock() else { return false };
+    if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(_) | State::Sleeping(_)) {
+        s.tasks[idx].state = State::Ready;
+        let floor = s.min_vr.saturating_sub(64);
+        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
+    }
+    true
+}
+
+/// Start a kernel task on the BSP: `entry` runs on its own 16 KiB stack (with
+/// the overflow canary) in the boot address space, with interrupts on, under
+/// the same mini-CFS as every other task. For kernel services that must keep
+/// running while task 0 is busy (the network worker). Never returns: the task
+/// lives as long as the kernel. None when the task table is full.
+pub fn spawn_kernel(entry: extern "C" fn() -> !, nice: i8) -> Option<usize> {
+    let _g = IfOffGuard::new();
+    let mut s = SCHED.lock();
+    let i = alloc_slot(&mut s)?;
+    FPU_VALID[i].store(false, Ordering::Relaxed);
+    s.tasks[i] = EMPTY_TASK;
+    s.tasks[i].rsp = init_stack(i, entry);
+    s.tasks[i].stack_bottom = task_stack_bottom(i);
+    s.tasks[i].nice = nice;
+    s.tasks[i].vruntime = s.min_vr;
+    s.tasks[i].state = State::Ready;
+    Some(i)
+}
+
 /// Tickless-idle helper: when NO task other than `current` is runnable, return the
 /// earliest Sleeping deadline among the others (so the caller can fast-forward the
 /// clock straight to it instead of busy-spinning through idle ticks). Returns:

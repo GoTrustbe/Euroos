@@ -268,6 +268,12 @@ pub(super) fn listener_closed(port: u16) {
     set_active(&p);
 }
 
+/// Inbound work in flight (half-open entries or httpd connections): the
+/// network worker then looks every tick (retransmission, linger, expiry).
+pub(super) fn busy() -> bool {
+    ACTIVE.load(Ordering::Relaxed) > 0
+}
+
 /// (half-open entries, httpd connections) right now.
 pub(super) fn counts() -> (usize, usize) {
     let _g = crate::sched::IfOffGuard::new();

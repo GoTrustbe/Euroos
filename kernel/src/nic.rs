@@ -63,6 +63,17 @@ pub fn frames_from_process() -> bool {
     KIND.load(Ordering::Relaxed) == KIND_USER
 }
 
+/// Does the bound in-kernel NIC interrupt on receive (MSI-X), so the network
+/// worker is woken by frames instead of polling? (The userspace driver wakes it
+/// through EuroIPC: `frames_from_process`.)
+pub fn rx_interrupts() -> bool {
+    match KIND.load(Ordering::Relaxed) {
+        KIND_VIRTIO => crate::virtio_net::rx_interrupts(),
+        KIND_E1000 => crate::e1000::rx_interrupts(),
+        _ => false,
+    }
+}
+
 /// Human-readable name of the bound driver (for the boot report / hwprobe).
 pub fn kind() -> &'static str {
     match KIND.load(Ordering::Relaxed) {

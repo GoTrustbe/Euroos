@@ -2264,6 +2264,11 @@ fn main() -> Status {
     // M3-3: a CDC-ECM USB NIC only exists after xHCI enumeration (above) — if
     // no NIC bound during the main net bring-up, adopt it and bring it up now.
     net::late_bring_up();
+    // Inbound TCP (SYN queue, httpd, accept queues) in its own kernel task, so a
+    // long synchronous shell command no longer holds it ([net-worker]).
+    if net::get().is_some() && net::worker_start().is_some() && cfg!(feature = "selftest") {
+        net::worker_selftest();
+    }
     // M4-3 live wiring: a USB DAC also only exists after xHCI enumeration —
     // route the euroaudio mixer's output to it (no-op without one).
     audio::usb_wire_selftest();
@@ -6716,6 +6721,9 @@ fn main() -> Status {
 
         // Keep the network alive: answer ARP requests + recycle RX buffers.
         net::service();
+        // The network worker does the inbound side; wake it if an interrupt's
+        // wake found the scheduler lock busy.
+        net::worker_poke();
         // And keep every TCP connection's clock running: non-blocking sends leave
         // their segments in the retransmit list and rely on tick() for the ACK
         // bookkeeping and retransmits, and tick() runs from pump_all. The launcher

@@ -4186,6 +4186,9 @@ fn reset_task_slot(t: usize) {
         SYSCALL_YIELD_OK_T[t].store(false, Ordering::Relaxed);
         NET_MAY_BLOCK[t].store(false, Ordering::Relaxed);
     }
+    // A task reaped while it slept in a network wait kept its RX_WAITER flag,
+    // and the next frame from e1000d woke the slot's next occupant early.
+    crate::net::forget_rx_waiter(t);
 }
 
 /// Is a process with this pid still alive? (a LIVE, non-zombie BgProc). Used by
@@ -9722,6 +9725,7 @@ fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: us
         futex_purge_task(t);
         free_thread_kstack(t);
         crate::sched::mark_dead(t);
+        crate::net::forget_rx_waiter(t);
     }
     if let Some(st) = status {
         GLIBC_CHILD_EXITS.lock().push((pid, st));
@@ -9748,6 +9752,9 @@ fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: us
     futex_purge_task(ctask);
     free_thread_kstack(ctask);
     crate::sched::mark_dead(ctask);
+    // Torn down in a network wait (kill(2), the end-of-run reap): not a waiter
+    // any more, or its reused slot gets an early wake (see reset_task_slot).
+    crate::net::forget_rx_waiter(ctask);
 }
 
 /// End every fork child the finished run left behind. A run is one process

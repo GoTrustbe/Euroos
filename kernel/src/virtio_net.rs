@@ -116,6 +116,13 @@ pub struct VirtioNet {
 }
 
 static mut NIC: Option<VirtioNet> = None;
+/// The receive queue raises MSI-X (set at init).
+static RX_MSIX: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Does the receive queue interrupt (MSI-X)?
+pub fn rx_interrupts() -> bool {
+    RX_MSIX.load(core::sync::atomic::Ordering::Relaxed)
+}
 
 fn vring_size(qsz: usize) -> usize {
     let align = 4096;
@@ -238,6 +245,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
             None => 0,
         };
         if msix_n > 0 {
+            RX_MSIX.store(true, core::sync::atomic::Ordering::Relaxed);
             Port::<u16>::new(io + 0x0E).write(0); // queue select 0 = receive
             Port::<u16>::new(io + 0x16).write(0); // queue_msix_vector = entry 0
             let rb: u16 = Port::<u16>::new(io + 0x16).read(); // 0xFFFF = NO_VECTOR
@@ -268,6 +276,9 @@ pub fn mac() -> Option<[u8; 6]> {
 
 /// Send one Ethernet frame (with virtio_net_hdr prepended). Synchronous.
 pub fn send(frame: &[u8]) -> bool {
+    // IF=0 for the one TX descriptor: the network worker sends too, and a sender
+    // parked by the timer mid-way would hand the device a half-written buffer.
+    let _g = crate::sched::IfOffGuard::new();
     unsafe {
         let nic = match (*core::ptr::addr_of_mut!(NIC)).as_mut() {
             Some(n) => n,

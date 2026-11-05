@@ -66,7 +66,12 @@ pub(super) fn capture(frame: &[u8]) -> bool {
     if !is_test_peer(ih.dst) {
         return false;
     }
-    CAPTURED.lock().push(frame.to_vec());
+    {
+        // IF=0 around CAPTURED and SCRIPT: the network worker sends with
+        // interrupts off ([net-worker] runs it against these peers).
+        let _g = crate::sched::IfOffGuard::new();
+        CAPTURED.lock().push(frame.to_vec());
+    }
     if let Some((dst, s)) = tcp_of(frame) {
         respond(dst, &s);
     }
@@ -84,6 +89,7 @@ fn respond(dst: Ipv4Addr, s: &TcpSegment) {
         return;
     }
     let answer = {
+        let _g = crate::sched::IfOffGuard::new();
         let mut sc = SCRIPT.lock();
         match sc.0 {
             Script::Answer => true,
@@ -119,7 +125,11 @@ fn inject(src: Ipv4Addr, sport: u16, dport: u16, seq: u32, ack: u32, flags: u8, 
 }
 
 fn take_captured() -> alloc::vec::Vec<(Ipv4Addr, TcpSegment)> {
-    core::mem::take(&mut *CAPTURED.lock()).iter().filter_map(|f| tcp_of(f)).collect()
+    let frames = {
+        let _g = crate::sched::IfOffGuard::new();
+        core::mem::take(&mut *CAPTURED.lock())
+    };
+    frames.iter().filter_map(|f| tcp_of(f)).collect()
 }
 
 fn client(i: usize) -> Ipv4Addr {
@@ -250,7 +260,10 @@ fn backlog_test() -> (bool, String) {
 
 /// One connect to the scripted server; (connected, µs, RSTs we sent, our ports used).
 fn connect_once(script: Script) -> (Option<TcpConn>, u64, usize, usize) {
-    *SCRIPT.lock() = (script, false, 0);
+    {
+        let _g = crate::sched::IfOffGuard::new();
+        *SCRIPT.lock() = (script, false, 0);
+    }
     take_captured();
     let Some(cfg) = get() else { return (None, 0, 0, 0) };
     let t = time_us();
@@ -298,15 +311,106 @@ pub fn async_selftest() {
     if get().is_none() {
         return;
     }
+    // These tests count what ONE service() pass does: no second context may
+    // do it meanwhile (the network worker, if it already runs).
+    worker::pause(true);
     ON.store(true, Ordering::Relaxed);
     let (h_ok, h) = httpd_test(16);
     let (l_ok, l) = backlog_test();
     let (c_ok, c) = connect_test();
     ON.store(false, Ordering::Relaxed);
-    CAPTURED.lock().clear();
+    worker::pause(false);
+    take_captured();
     let v = |ok: bool| if ok { "→ OK ✓" } else { "FAILED" };
     crate::serial_println!("[net-async] inbound httpd (synthetic peers, TEST-NET-1): {h} {}", v(h_ok));
     crate::serial_println!("[net-async] listen: {l} {}", v(l_ok));
     crate::serial_println!("[net-async] connect: {c} {}", v(c_ok));
     crate::serial_println!("[net-async] {}", tcp_open_report());
+}
+
+/// `[net-worker]`: the httpd answers while the boot task is busy.
+///
+/// The boot task stands in for a long synchronous shell command: it spins with
+/// interrupts on and never calls `service()` or `pump_all()`, the only places
+/// that drove inbound connections before the network worker. Synthetic clients
+/// on TEST-NET-1 open connections, send their requests and close; every frame
+/// they send is announced with `worker::kick()`, as e1000d's delivery or the
+/// NIC interrupt does. All of them must be served, by the worker alone.
+pub fn worker_selftest() {
+    const N: usize = 8;
+    const BUSY_MS: u64 = 3000;
+    let Some(wt) = worker::task() else { return };
+    if get().is_none() || !crate::hpet::present() {
+        return;
+    }
+    let saved = SERVER_ON.swap(true, Ordering::Relaxed);
+    let served0 = SERVED.load(Ordering::Relaxed);
+    let passes0 = worker::PASSES.load(Ordering::Relaxed);
+    let req = b"GET / HTTP/1.0\r\nHost: euroos\r\n\r\n";
+    let port = |i: usize| 44000 + i as u16;
+    let irs = |i: usize| 7000 * (i as u32 + 1);
+    let cl = |i: usize| Ipv4Addr([192, 0, 2, 100 + i as u8]);
+    ON.store(true, Ordering::Relaxed);
+    take_captured();
+    let t0 = time_us();
+    for i in 0..N {
+        inject(cl(i), port(i), 80, irs(i), 0, tcp::SYN, &[]);
+    }
+    worker::kick();
+    let (mut synacks, mut answered, mut closed) = (0usize, 0usize, 0usize);
+    let mut seen = [(false, false, false); N];
+    let mut first_answer_us = 0u64;
+    let mut done_us = 0u64;
+    // The "long command": interrupts on, no service(), no pump_all().
+    while time_us().saturating_sub(t0) < BUSY_MS * 1000 {
+        let mut sent = false;
+        for (dst, s) in take_captured() {
+            let Some(i) = (0..N).find(|&i| cl(i) == dst && port(i) == s.dst_port) else { continue };
+            if s.has(tcp::SYN) && s.has(tcp::ACK) && s.ack == irs(i).wrapping_add(1) && !seen[i].0 {
+                seen[i].0 = true;
+                synacks += 1;
+                inject(cl(i), port(i), 80, irs(i) + 1, s.seq.wrapping_add(1), tcp::ACK, &[]);
+                inject(cl(i), port(i), 80, irs(i) + 1, s.seq.wrapping_add(1), tcp::PSH | tcp::ACK, req);
+                sent = true;
+            }
+            if s.payload.starts_with(b"HTTP/1.1 200") && !seen[i].1 {
+                seen[i].1 = true;
+                answered += 1;
+                if first_answer_us == 0 {
+                    first_answer_us = time_us().saturating_sub(t0);
+                }
+            }
+            if s.has(tcp::FIN) && !seen[i].2 {
+                seen[i].2 = true;
+                closed += 1;
+                // The client closes too and acknowledges our FIN (and the page).
+                inject(cl(i), port(i), 80, irs(i) + 1 + req.len() as u32, s.seq.wrapping_add(1), tcp::FIN | tcp::ACK, &[]);
+                sent = true;
+            }
+        }
+        if sent {
+            worker::kick();
+        }
+        let (half, conns) = passive::counts();
+        if closed == N && half == 0 && conns == 0 {
+            done_us = time_us().saturating_sub(t0);
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    ON.store(false, Ordering::Relaxed);
+    take_captured();
+    let (half, conns) = passive::counts();
+    let served = SERVED.load(Ordering::Relaxed) - served0;
+    let passes = worker::PASSES.load(Ordering::Relaxed) - passes0;
+    SERVER_ON.store(saved, Ordering::Relaxed);
+    let ok = synacks == N && answered == N && closed == N && served == N as u64 && half == 0 && conns == 0 && done_us > 0;
+    crate::serial_println!(
+        "[net-worker] httpd while the boot task is busy ({} s spin, no service()/pump_all from it; synthetic peers): {N} clients, {synacks} SYN-ACKs, {answered} answered (first after {} ms), {closed} closed, {half} half-open + {conns} open left, all done after {} ms in {passes} worker passes (task {wt}) {}",
+        BUSY_MS / 1000,
+        first_answer_us / 1000,
+        if done_us > 0 { alloc::format!("{}", done_us / 1000) } else { alloc::string::String::from("-") },
+        if ok { "→ OK ✓" } else { "FAILED" }
+    );
+    crate::serial_println!("[net-worker] {}", worker::report());
 }
