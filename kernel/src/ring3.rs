@@ -9708,6 +9708,75 @@ fn child_mem_drop(task: usize) {
     CHILD_MEM.lock().retain(|c| c.task != task);
 }
 
+/// End a glibc fork child from OUTSIDE it (kill(2) by the parent, or the end of
+/// the run that forked it) and give back everything it holds: its threads and
+/// main task die, its saved state and descriptors go, its demand pages return to
+/// the demand pool and its arena, page tables and pml4 to the process pool.
+/// `status` is the wait status recorded for wait4 (None: nobody will wait).
+/// The child is not running: callers run on another task, and ring-3 tasks run
+/// only on the BSP.
+fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: usize, status: Option<u32>) {
+    let threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter()
+        .filter(|&&(_, m)| m == ctask).map(|&(t, _)| t).collect();
+    for t in threads {
+        futex_purge_task(t);
+        free_thread_kstack(t);
+        crate::sched::mark_dead(t);
+    }
+    if let Some(st) = status {
+        GLIBC_CHILD_EXITS.lock().push((pid, st));
+    }
+    globals_release_owner(ctask); // never drop state that is loaded
+    GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
+    FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != ctask);
+    child_mem_drop(ctask);
+    CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
+    fork_child_release_fds(ctask);
+    child_opened_release(ctask);
+    proc_state_drop(ctask);
+    static EXITLOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    let exit_log = EXITLOG.fetch_add(1, Ordering::Relaxed) < 4;
+    if exit_log {
+        crate::serial_println!("[fork-acct] child exit BEFORE frees: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
+    }
+    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+    // ... and the child's own page tables under PML4[0] (pdpt, pd,
+    // 4 KiB PTs: procpool frames), which only the pml4 free used to cover.
+    crate::paging::free_fork_tables(pml4);
+    crate::procpool::free_range(arena, frames);
+    crate::procpool::free(pml4);
+    futex_purge_task(ctask);
+    free_thread_kstack(ctask);
+    crate::sched::mark_dead(ctask);
+}
+
+/// End every fork child the finished run left behind. A run is one process
+/// tree: the fd table, the demand pool and the swapped globals (GLOBALS_OWNER)
+/// all belong to it. A child that outlived its parent kept running into the
+/// NEXT run: it could own the globals while that run set up its arena (the new
+/// main then swapped the old run's arena bounds in and ld.so's first mmap of
+/// libc.so.6 failed with "failed to map segment"), and its exit freed demand
+/// pages into the next run's pool. Seen at 1 GiB as a flaky [sbx2]: GSCM3's
+/// child A waits 30 s for a descriptor its failed sibling never sends.
+/// Called by the launcher after the main process ended, before the run's
+/// demand pool is torn down. Returns how many children were ended.
+fn reap_orphan_fork_children() -> usize {
+    let orphans: alloc::vec::Vec<(u64, usize, u64, u64, usize)> = GLIBC_FORK_CHILDREN.lock().clone();
+    for &(pid, ctask, pml4, arena, frames) in orphans.iter() {
+        crate::serial_println!("[fork] child pid {pid} (task {ctask}) outlived its run: ended, {} MiB back to the pool", frames / 256);
+        fork_child_teardown(pid, ctask, pml4, arena, frames, None);
+        crate::sched::reclaim_task(ctask);
+    }
+    // Whatever happened, the next run starts with its own state in the globals.
+    let owner = GLOBALS_OWNER.load(Ordering::Relaxed);
+    if owner != 0 {
+        crate::serial_println!("[fork] globals still owned by task {owner} at the end of the run: released");
+        x86_64::instructions::interrupts::without_interrupts(|| GLOBALS_OWNER.store(0, Ordering::Relaxed));
+    }
+    GLIBC_CHILD_EXITS.lock().clear();
+    orphans.len()
+}
+
 
 /// fork() for the demand-paged glibc process (M1): the child gets its OWN address
 /// space — the multi-block arena remapped onto its own physical frames (copied) plus
@@ -10719,6 +10788,9 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
         return;
     }
     crate::sched::mark_dead(main);
+    // Its fork children (chrome's renderer, gpu and utility processes) go with it,
+    // before the demand pool their pages came from is handed back below.
+    reap_orphan_fork_children();
     crate::sched::reclaim_task(main);
     for &t in GLIBC_THREADS.lock().iter() {
         crate::sched::mark_dead(t);
@@ -11560,6 +11632,8 @@ pub fn run_glibc_disk(
         // stacks and address space go away, or a later wake runs them on freed memory.
         kill_glibc_group(main_task);
     }
+    // The run is over: a fork child left behind dies with it (see the function).
+    reap_orphan_fork_children();
     // Idempotent: the clean exit path already freed these.
     free_thread_kstack(main_task);
     for &t in GLIBC_THREADS.lock().iter() {
@@ -11870,6 +11944,8 @@ pub fn run_glibc(
         // stacks and address space go away, or a later wake runs them on freed memory.
         kill_glibc_group(main_task);
     }
+    // The run is over: a fork child left behind dies with it (see the function).
+    reap_orphan_fork_children();
     // Reclaim any kstacks still held by this run's tasks (idempotent on the
     // clean-exit path, which already freed them).
     free_thread_kstack(main_task);
@@ -14614,35 +14690,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 Some((pid, ctask, pml4, arena, frames)) => {
                     if a2 != 0 {
                         crate::serial_println!("[kill] pid {pid} (task {ctask}) sig {a2} — terminated by parent");
-                        // Its threads die with it.
-                        let threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter()
-                            .filter(|&&(_, m)| m == ctask).map(|&(t, _)| t).collect();
-                        for t in threads {
-                            free_thread_kstack(t);
-                            crate::sched::mark_dead(t);
-                        }
-                        GLIBC_CHILD_EXITS.lock().push((pid, (a2 as u32) & 0x7f));
-                        globals_release_owner(ctask); // never drop state that is loaded
-                        GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
-                        FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != ctask);
-                        child_mem_drop(ctask);
-                        CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
-                        fork_child_release_fds(ctask);
-                        child_opened_release(ctask);
-                        proc_state_drop(ctask);
-                        static EXITLOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-                    let exit_log = EXITLOG.fetch_add(1, Ordering::Relaxed) < 4;
-                    if exit_log {
-                        crate::serial_println!("[fork-acct] child exit BEFORE frees: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
-                    }
-                    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
-                    // ... and the child's own page tables under PML4[0] (pdpt, pd,
-                    // 4 KiB PTs: procpool frames), which only the pml4 free used to cover.
-                    crate::paging::free_fork_tables(pml4);
-                        crate::procpool::free_range(arena, frames);
-                        crate::procpool::free(pml4);
-                        free_thread_kstack(ctask);
-                        crate::sched::mark_dead(ctask);
+                        fork_child_teardown(pid, ctask, pml4, arena, frames, Some((a2 as u32) & 0x7f));
                     }
                     0 // sig 0 = existence probe: child exists -> 0
                 }

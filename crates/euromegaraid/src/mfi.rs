@@ -17,6 +17,31 @@ use crate::info::{self, CtrlInfo, LdList};
 use crate::layout::{Layout, DCMD_BYTES, MAX_FRAMES, RING_MAX};
 use crate::regs;
 
+/// A ring index the firmware updates in host memory while we may be reading
+/// it. megaraidd reads DMA memory a byte at a time in ascending order, so an
+/// update from 0x00FF to 0x0100 between two bytes reads as 0x01FF (inside a
+/// 1008-entry ring): the driver would consume 256 reply slots the firmware
+/// never wrote, count them stray, and then skip the real completions that land
+/// there (their commands time out). Read until two reads in a row agree (an
+/// update changes the value, so a torn read cannot repeat itself); bounded to
+/// 16 retries, after which the last read is used.
+fn read_index<H: Hal>(h: &mut H, at: u64) -> u32 {
+    let read = |h: &mut H| {
+        let mut b = [0u8; 4];
+        h.dma_read(at, &mut b);
+        u32::from_le_bytes(b)
+    };
+    let mut last = read(h);
+    for _ in 0..16 {
+        let now = read(h);
+        if now == last {
+            return now;
+        }
+        last = now;
+    }
+    last
+}
+
 /// What the logic needs from the outside world.
 pub trait Hal {
     fn read32(&mut self, off: u32) -> u32;
@@ -170,9 +195,7 @@ impl Mfi {
         }
         // The init completion may itself have been posted to the ring: start
         // consuming from wherever the producer stands now.
-        let mut pi = [0u8; 4];
-        h.dma_read(lay.producer(), &mut pi);
-        let consumer = u32::from_le_bytes(pi) % ring_len;
+        let consumer = read_index(h, lay.producer()) % ring_len;
         h.dma_write(lay.consumer(), &consumer.to_le_bytes());
         h.write32(regs::ODCR0, regs::MASK_ALL);
         h.write32(regs::OMSK, regs::GEN2_UNMASK);
@@ -267,17 +290,16 @@ impl Mfi {
 
     /// Is something waiting in the reply ring?
     pub fn pending<H: Hal>(&self, h: &mut H) -> bool {
-        let mut pi = [0u8; 4];
-        h.dma_read(self.lay.producer(), &mut pi);
-        u32::from_le_bytes(pi) != self.consumer
+        read_index(h, self.lay.producer()) != self.consumer
     }
 
     /// Consume the reply ring up to the producer index. Calls `done` for every
     /// valid completion; returns how many.
     pub fn reap<H: Hal>(&mut self, h: &mut H, mut done: impl FnMut(Completion)) -> usize {
-        let mut pi = [0u8; 4];
-        h.dma_read(self.lay.producer(), &mut pi);
-        let producer = u32::from_le_bytes(pi);
+        // The producer index first (the firmware writes the frame status and
+        // the reply context before it moves the index), read so that it cannot
+        // be torn; then the entries up to it.
+        let producer = read_index(h, self.lay.producer());
         if producer >= self.ring_len {
             self.stats.bad_producer += 1;
             return 0;
@@ -559,6 +581,81 @@ mod tests {
         }
         assert_eq!(m.stats.completed, 23);
         assert_eq!(m.stats.stray, 0);
+    }
+
+    /// A HAL that reads DMA memory a byte at a time in ascending order, like
+    /// megaraidd, and lets the firmware run its queued commands right after
+    /// the `at`-th byte read.
+    struct ByteWise<'a> {
+        sim: &'a mut Sim,
+        read: usize,
+        at: usize,
+    }
+
+    impl Hal for ByteWise<'_> {
+        fn read32(&mut self, off: u32) -> u32 {
+            self.sim.read32(off)
+        }
+        fn write32(&mut self, off: u32, val: u32) {
+            self.sim.write32(off, val)
+        }
+        fn dma_read(&mut self, addr: u64, out: &mut [u8]) {
+            for (k, b) in out.iter_mut().enumerate() {
+                let mut one = [0u8; 1];
+                self.sim.dma_read(addr + k as u64, &mut one);
+                *b = one[0];
+                self.read += 1;
+                if self.read == self.at {
+                    self.sim.run_device();
+                }
+            }
+        }
+        fn dma_write(&mut self, addr: u64, data: &[u8]) {
+            self.sim.dma_write(addr, data)
+        }
+        fn now_ms(&mut self) -> u64 {
+            self.sim.now_ms()
+        }
+        fn relax(&mut self) {
+            self.sim.relax()
+        }
+    }
+
+    #[test]
+    fn a_producer_index_updated_during_the_read_is_not_torn() {
+        // Producer at 0x00FF; the firmware completes one command (0x00FF ->
+        // 0x0100) between bytes of the driver's read of the index. That one
+        // completion must be reaped, nothing counted stray, and the next
+        // command must still complete (the consumer stays in step).
+        for at in 1..=8 {
+            let mut sim = Sim::new(&[(0, 64)]);
+            let mut m = up(&mut sim);
+            let lay = *m.layout();
+            let producer = |sim: &mut Sim| {
+                let mut b = [0u8; 4];
+                sim.dma_read(lay.producer(), &mut b);
+                u32::from_le_bytes(b)
+            };
+            while producer(&mut sim) != 0xFF {
+                m.post_ld_io(&mut sim, 0, false, 0, 0, 1, lay.slot(0).unwrap()).unwrap();
+                assert_eq!(m.reap(&mut sim, |_| {}), 1);
+            }
+            sim.set_deferred(true);
+            m.post_ld_io(&mut sim, 7, false, 0, 0, 1, lay.slot(0).unwrap()).unwrap();
+            let mut got = std::vec::Vec::new();
+            {
+                let mut h = ByteWise { sim: &mut sim, read: 0, at };
+                for _ in 0..4 {
+                    m.reap(&mut h, |c| got.push(c.user));
+                }
+            }
+            assert_eq!(got, [7], "firmware update after byte {at}");
+            assert_eq!(m.stats.stray, 0, "unwritten reply slots taken (update after byte {at})");
+            m.post_ld_io(&mut sim, 8, false, 0, 0, 1, lay.slot(0).unwrap()).unwrap();
+            sim.run_device();
+            m.reap(&mut sim, |c| got.push(c.user));
+            assert_eq!(got, [7, 8], "the next command completes (update after byte {at})");
+        }
     }
 
     #[test]

@@ -102,6 +102,17 @@ class SerialConsole:
             return text
         return ""
 
+    def drain(self, seconds):
+        """Copy whatever the guest prints for `seconds` into the log (no crash scan)."""
+        end = time.time() + seconds
+        while time.time() < end:
+            try:
+                data = self.sock.recv(65536)
+            except (socket.timeout, OSError):
+                continue
+            if data:
+                self.log.write(data)
+
     def wait_for(self, needle, timeout=60):
         """Wait until `needle` appears; raise CrashError on crash or silence."""
         deadline = time.time() + timeout
@@ -163,6 +174,8 @@ def launch_qemu(image, disks, sock_path, serial_log, a=None):
              "-drive", f"format=raw,file={image}",          # NOT -snapshot (persistent)
              "-chardev", f"socket,id=ser0,path={sock_path},server=on,wait=off",
              "-serial", "chardev:ser0", "-display", "none", "-no-reboot"]
+    if a is not None and a.nmi_on_hang:
+        args += ["-monitor", f"unix:{sock_path}.mon,server=on,wait=off"]
     bus = a.disk_bus if a is not None else "virtio"
     for i, path in enumerate(disks):
         args += ["-drive", f"format=raw,file={path},if=none,id=ld{i}"]
@@ -182,6 +195,21 @@ def launch_qemu(image, disks, sock_path, serial_log, a=None):
     if a is not None and a.pin:
         args = ["taskset", "-c", a.pin] + args
     return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+
+
+def nmi_probe(mon_path, con):
+    """A hang: inject an NMI (the kernel's NMI handler prints where every core
+    is, `[NMI PROBE]`), and keep 5 s of serial output in the log."""
+    try:
+        m = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        m.connect(mon_path)
+        m.sendall(b"nmi\n")
+        time.sleep(0.5)
+        m.close()
+        con.drain(5)
+        print("  !! NMI injected; probe output in the serial log")
+    except OSError as e:
+        print(f"  !! NMI probe failed: {e}")
 
 
 def prepare_image(a, ts):
@@ -492,7 +520,14 @@ def scenario_soak(args):
         if r % 10 == 0:
             yield C("lockstat", None, timeout=120)
             yield C("free", None)
+        if args.heaptrace:
+            if r + 1 == args.heaptrace:
+                yield C("heapsnap", "heapsnap:")
+            elif r + 1 > args.heaptrace and (r + 1 - args.heaptrace) % 50 == 0:
+                yield C("heapdiff 25", "[heaptrace]", timeout=120)
         r += 1
+    if args.heaptrace:
+        yield C("heapdiff 60", "[heaptrace]", timeout=120)
     if args.hammer:
         yield C("httpd status", "served")
     yield C("scrub", "HEALTHY", timeout=900)
@@ -514,6 +549,13 @@ def scenario_inbound(args):
     yield C("netstat", "tcp: ")
     yield C("ltstat", "ltstat ")
 
+
+def scenario_cmds(args):
+    # Ad-hoc: the shell commands given with --cmds, separated by ";" (no assertions).
+    return [C(c.strip(), None, timeout=300) for c in args.cmds.split(";") if c.strip()]
+
+
+SCENARIOS["cmds"] = scenario_cmds
 
 SCENARIOS.update({"procs": scenario_procs, "churn": scenario_churn, "fsio": scenario_fsio,
                   "persist-check-io": scenario_persist_check_io, "net": scenario_net, "soak": scenario_soak,
@@ -622,6 +664,8 @@ def main():
     ap.add_argument("--bootopts", default="", help='ESP boot options, e.g. "net.driver=user"')
     ap.add_argument("--iommu", action="store_true", help="-device intel-iommu,intremap=off")
     ap.add_argument("--nic", default="", help="NIC model, e.g. e1000e (SLIRP user network)")
+    ap.add_argument("--nmi-on-hang", action="store_true", help="QEMU monitor socket; on a HANG inject an NMI so the kernel prints its probe before the VM is killed")
+    ap.add_argument("--restrict", action="store_true", help="SLIRP restrict=on: no route out of the host (the update check cannot reach euro-os.eu); guestfwd/hostfwd still work")
     ap.add_argument("--host-http", action="store_true", help="host HTTP peers: guest 10.0.2.100 (1000 B), 10.0.2.101 (--http-size B)")
     ap.add_argument("--http-size", type=int, default=200 * 1024)
     ap.add_argument("--hostfwd", type=int, default=0, help="host port forwarded to guest :80")
@@ -638,8 +682,11 @@ def main():
     ap.add_argument("--console-ms", type=int, default=2000, help="inbound: limit for one console echo under load")
     ap.add_argument("--downloads", type=int, default=50)
     ap.add_argument("--duration", type=int, default=4 * 3600, help="soak seconds")
+    ap.add_argument("--heaptrace", type=int, default=0, metavar="ROUNDS",
+                    help="soak on a heaptrace image (BUG-027): heapsnap after ROUNDS warm-up rounds, heapdiff every 50 rounds and at the end")
     ap.add_argument("--iobase", default="/home/euro/lt", help="fsio/soak directory (the euro user can write here on a disk root)")
     ap.add_argument("--stop-on-err", action="store_true")
+    ap.add_argument("--cmds", default="", help="scenario cmds: shell commands separated by \";\"")
     a = ap.parse_args()
     a.io_sizes = [int(x) for x in a.io_sizes.split(",") if x.strip()]
 
@@ -747,6 +794,8 @@ def main():
                         break
                 if status.startswith("CRASH"):
                     crashed = True
+                    if a.nmi_on_hang and ("timeout" in status or "silent" in status):
+                        nmi_probe(sock_path + ".mon", con)
                     print(f"  !! CRASH after {cmd!r} — see {serial_log}")
                     break
             rc = 1 if (crashed or errors) else 0

@@ -1357,6 +1357,93 @@ mod tests {
         assert_eq!(n.receive(&mut s, &mut out), None);
     }
 
+    /// A HAL that reads DMA memory a byte at a time in ascending order, like
+    /// bcm5720d, and lets the chip receive a frame right after the `at`-th
+    /// byte read.
+    struct ByteWise<'a> {
+        sim: &'a mut Sim,
+        read: usize,
+        at: usize,
+        frame: Option<Vec<u8>>,
+    }
+
+    impl Hal for ByteWise<'_> {
+        fn reg_read(&mut self, off: u32) -> u32 {
+            self.sim.reg_read(off)
+        }
+        fn reg_write(&mut self, off: u32, val: u32) {
+            self.sim.reg_write(off, val)
+        }
+        fn ape_read(&mut self, off: u32) -> u32 {
+            self.sim.ape_read(off)
+        }
+        fn ape_write(&mut self, off: u32, val: u32) {
+            self.sim.ape_write(off, val)
+        }
+        fn dma_write(&mut self, iova: u64, data: &[u8]) {
+            self.sim.dma_write(iova, data)
+        }
+        fn dma_read(&mut self, iova: u64, out: &mut [u8]) {
+            for (k, b) in out.iter_mut().enumerate() {
+                let mut one = [0u8; 1];
+                self.sim.dma_read(iova + k as u64, &mut one);
+                *b = one[0];
+                self.read += 1;
+                if self.read == self.at {
+                    if let Some(f) = self.frame.take() {
+                        assert!(self.sim.inject_rx(&f));
+                    }
+                }
+            }
+        }
+        fn delay_us(&mut self, us: u32) {
+            self.sim.delay_us(us)
+        }
+        fn sleep_ms(&mut self, ms: u32) {
+            self.sim.sleep_ms(ms)
+        }
+    }
+
+    #[test]
+    fn a_torn_producer_read_takes_no_phantom_entry() {
+        // DMA read-order audit (2026-11): bcm5720d reads the status block's
+        // 16-bit return-ring producer a byte at a time, so an update from
+        // 0x00FF to 0x0100 between the two bytes reads as 0x01FF. That is
+        // harmless only because `receive` reads the producer again before
+        // every entry: the torn value makes it take the one entry the chip
+        // did write, and the next read is whole. Guard that property: the
+        // chip receives a runt (dropped, so the loop goes on) between the
+        // bytes; exactly one drop, no entry the chip never wrote, and the
+        // ring stays in step for the frame after it.
+        for at in 1..=4 {
+            let (mut s, mut n) = up();
+            let mut out = [0u8; BUF_SIZE];
+            for b in 0..5u32 {
+                for j in 0..51u32 {
+                    assert!(s.inject_rx(&frame(64, (b * 51 + j) as u8)));
+                }
+                for _ in 0..51 {
+                    assert!(n.receive(&mut s, &mut out).is_some());
+                }
+            }
+            assert_eq!(n.stats.rx, 255);
+            let runt = MAC.to_vec();
+            {
+                let mut h = ByteWise { sim: &mut s, read: 0, at, frame: Some(runt) };
+                for _ in 0..4 {
+                    assert_eq!(n.receive(&mut h, &mut out), None, "chip update after byte {at}");
+                }
+            }
+            assert_eq!(n.stats.rx_dropped, 1, "phantom return entries taken (chip update after byte {at})");
+            let f = frame(100, 0xA5);
+            assert!(s.inject_rx(&f));
+            let (len, _) = n.receive(&mut s, &mut out).expect("the next frame arrives");
+            assert_eq!(&out[..len], &f[..]);
+            assert_eq!(n.receive(&mut s, &mut out), None);
+            assert_eq!(n.stats.rx, 256);
+        }
+    }
+
     #[test]
     fn a_full_standard_ring_makes_the_device_drop_not_overwrite() {
         let (mut s, mut n) = up();

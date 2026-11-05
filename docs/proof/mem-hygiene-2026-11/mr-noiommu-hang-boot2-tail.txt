@@ -1,0 +1,30 @@
+[dns] @1434 sport 63631: query ads.doubleclick.net BLOCKED
+[inet] fd500 -> udp wrote 37 B (sent 122 B in 3 writes)
+[sio] recv fd500 37 B
+[inet] @1434 fd500 <- udp read 37 B (total 986 B in 3 calls)
+[bg-out] pid 196609 /bin/mdns:     no A record in the answer
+[exec] /bin/mdns (abi=linux, ed25519=ok, scheduled over e1000d, 20 ticks) exit=0 (171 bytes)
+[elf] 11 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[euro] bg-musl (pid 196610) -> task 22, own address space PML4 0x183000, arena 0x200000
+[bg-out] pid 196610 /bin/mtrack: mtrack: 'telemetry' app tries to phone home
+[bg-out] pid 196610 /bin/mtrack:   target: 203.0.113.5:80 (tracker)
+[conn] @1446 sock_connect fd500 -> 203.0.113.5:80
+[conn] BLOCKED by EuroGuard: 203.0.113.5:80 (app "/bin/mtrack")
+[bg-out] pid 196610 /bin/mtrack:   connect() DENIED — EuroGuard blocked this ✓
+[bg-out] pid 196610 /bin/mtrack:   for contrast: 104.20.23.154:80 (allowed by policy)
+[conn] @1460 sock_connect fd500 -> 104.20.23.154:80
+[conn] @1462 TCP established to 104.20.23.154:80
+[conn] fd500 closed 104.20.23.154:80 sport 51593: rx 0 B, tx 0 B, open=true, unacked=0
+[bg-out] pid 196610 /bin/mtrack:   connect() OK — connection allowed ✓
+[exec] /bin/mtrack (abi=linux, ed25519=ok, scheduled over e1000d, 28 ticks) exit=0 (224 bytes)
+[lk] net-late sched.SCHED (BSP scheduler): acq=5890 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=556us hold-avg=1us
+[lk] net-late ring3.BG (background processes): acq=1565 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=22431us hold-avg=27us
+[lk] net-late ipc.channel_table: acq=1529 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] net-late ipc.channel (per-port): acq=1529 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=113us hold-avg=0us
+[lk] net-late net.CFG: acq=1384 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=53us hold-avg=0us
+[lk] net-late net.PORTQ (TCP port queues): acq=733 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=475us hold-avg=1us
+[elf] 11 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[euro] bg-musl (pid 196624) -> task 22, own address space PML4 0x183000, arena 0x200000
+[bgnet] pid 196624 (/bin/msock): socket() DENIED: no CAP_NET in its capability set
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 1 time(s), done (exit 1), output "msock: HTTP GET via POSIX sockets on EuroOS |   target: example.com (104.20.23.154):80 |   socket() failed" → OK (no capability, no socket) ✓
+[net-late] network waits in this suite gave the CPU away 18 time(s); 7 of them were woken early by e1000d (EuroIPC frame delivery)

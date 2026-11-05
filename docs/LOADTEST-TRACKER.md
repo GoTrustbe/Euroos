@@ -151,6 +151,8 @@ the code.
 | `soak` 4 h 10 min (KVM, `-m 16G`) | 2026-11-03 | ✅ no crash, 1 failed fetch (BUG-026) | `proof/loadtest-r630-2026-11/` | first soak: kernel fault after 59 min (BUG-024, fixed); 2 h 20 min on the final image: 0 failures; heap +33 kB/min (BUG-027) |
 | `soak` 1 h on the merged tree (KVM, `-m 16G`) | 2026-11-03 | ✅ 2 085/2 085 ok | `proof/integrate-loadtest-2026-11-03/` | after the merge into app-control (userspace NIC driver); tasks, files, frames flat; heap +31 kB/min (BUG-027) |
 | lockbench KVM matrix | 2026-11-02 | ✅ 0 errors | `proof/loadtest-r630-2026-11/` | see `LOADTEST-R630-2026-11.md` §3 |
+| `soak` 70 min, mem-hygiene (KVM, `-m 16G`) | 2026-11-05 | ✅ 2 478/2 478 ok | `proof/mem-hygiene-2026-11/` | heap +0.4 kB/min after the BUG-027 fix (+29.3 kB/min on the same machine before it); tasks, files, frames, process pool flat |
+| `[sbx2]` and glibc at `-m 1G` (TCG) | 2026-11-05 | ✅ `[sbx2]` 15/15 | `proof/mem-hygiene-2026-11/` | BUG-028 fixed; GBIG, GSCM3's second fork and `[churn-fork]` still fail at 1 GiB (process pool too small, deterministic) |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
 > it ✅ from "it should work".
@@ -693,8 +695,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Left:**     with `net.driver=user` the median fetch is ~50 ms slower (576 vs 530 ms): the extra
   FIN frame through e1000d (A/B without it: 531 ms; the kernel driver shows no difference).
 
-### BUG-027 — the kernel heap grows linearly under the soak mix ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (slow; frames are not affected)
+### BUG-027 — the kernel heap grows linearly under the soak mix ✅ FIXED
+- **Status:**   FIXED (`888001b`, branch `feature/mem-hygiene`) · **Severity:** MEDIUM (slow; frames are not affected)
 - **Found:**    2026-11-03 · scenario `soak` (`-m 16G`, 8 GiB disk root, e1000e)
 - **Expected:** `heap_used` (ltstat) flat at quiescent samples, like frames, tasks and the file table
 - **Actual:**   +8.2 MB over 4 h 10 min (147.4 → 155.6 MB, +32.8 kB/min, linear); the same rate in
@@ -702,11 +704,72 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   process pool exactly flat.
 - **Repro:**    `scripts/loadtest.py --kvm --smp 4 --mem 16G --disks 8G --nic e1000e --host-http
   --scenario soak --duration 3600`, then compare `heap_used` in the `-ltstat.csv`
-- **Analysis:** partly attributed: about 40 bytes per spawned process (240 `spawn worker` → +8.7 to
-  +11 KB, RAM root); 150 outbound connections, 40 `churn net` rounds, 10 `churn proc 4` and file
-  truncation left the heap unchanged. The remainder (~6–7 MB per 4 h) comes from something in the
-  disk-root file mix (writes, renames, `churn fs`, the periodic scrub's log append) and is not
-  isolated yet.
+- **Analysis:** with the new per-site heap accounting (`scripts/build.sh heaptrace`, `heapsnap` /
+  `heapdiff` in the shell, `--heaptrace ROUNDS` in the soak, `scripts/heaptrace-sym.py`) every
+  growing site was `EuroFs::write_object`'s insert into `extents_cache` (oid → data extents,
+  PERF-002). `remove_file`, `remove_dir` and both rename-over-a-target paths removed the object
+  from `objmap` but not from `extents_cache`; oids are never reused, so every removed file kept a
+  BTreeMap entry and its extents Vec (`crates/eurofs/src/disk.rs`). The soak removes files every
+  round (`rm`, `churn fs`). The ~40 bytes per spawned process measured on a RAM root did not show
+  up as a site of their own on the disk root.
+- **Fix:**      `EuroFs::forget_object` drops both entries; host test
+  `removed_objects_leave_no_extents_behind`. Soak on the R630, release image, same options:
+  +29.3 kB/min before, **+0.4 kB/min** after (least squares after the first 10 min, 70 min run,
+  range 106 kB); heaptrace soak after the fix: sum over all sites −12 kB after 50 min.
+  `proof/mem-hygiene-2026-11/`.
+- **Harness:**  `ltstat` also reports `heap_cached` (per-CPU caches, counted in `heap_used`) and
+  `big_mib` (big-block pool, not counted); `loadtest.py --restrict` (SLIRP restrict=on) and
+  `--nmi-on-hang` (an NMI through the QEMU monitor before a hung VM is stopped).
+
+### BUG-028 — `[sbx2]` and other glibc tests at `-m 1G` fail in some boots ✅ FIXED
+- **Status:**   FIXED (`00fb152`) · **Severity:** MEDIUM (flaky self-tests; a leftover process in the next program's run)
+- **Found:**    2026-11-02/03 · TCG boots at 1 GiB (`combined-*`, `storage-*`) · `[sbx2]` FAILED in 5 of 6
+  `combined-smp4` boots and in every `-smp 1` boot, on the merged tree and on its base alike
+- **Actual:**   `/bin/gsandbox: error while loading shared libraries: libc.so.6: failed to map
+  segment from shared object`; which sub-test failed varied (rlimit, filter, ASLR)
+- **Analysis:** GSCM3 forks child A; at 1 GiB fork B fails (one 96 MiB arena fits the process
+  pool), the parent exits, and A waits 30 s for a descriptor B never sends. A outlived its run.
+  While blocked in a syscall it owned the swapped per-process globals (`GLOBALS_OWNER`); the next
+  run wrote its arena bounds into them, and at the new main task's first syscall
+  `ensure_globals_for_current` swapped A's saved copy back in: the previous run's freed arena.
+  ld.so's mmap of libc then got ENOMEM. A's exit also freed its demand pages into the next run's
+  pool. Timing decided which test hit the window.
+- **Fix:**      `run_glibc`, `run_glibc_disk` and `kill_persistent_glibc` end every fork child still
+  registered before the run's demand pool goes back (`reap_orphan_fork_children`, sharing
+  `fork_child_teardown` with kill(2)); closing chrome no longer leaves its children running.
+  Proof: `[sbx2]` OK in 15 of 15 1 GiB boots; GEVFD's fork now succeeds too. GBIG, GSCM3's second
+  fork and `[churn-fork]` still fail at 1 GiB: the process pool (160 MiB) is too small, every run.
+
+### BUG-029 — e1000d could drop a received frame as zero-length (torn RX descriptor) ✅ FIXED
+- **Status:**   FIXED (`f6a6adc`) · **Severity:** LOW (a lost frame; TCP retransmits)
+- **Found:**    2026-11-05 · DMA read-order audit after euronvme's torn completion (`3f59298`)
+- **Analysis:** the HAL reads DMA memory byte by byte, ascending; `E1000::receive` read the whole
+  16-byte descriptor and then DD (byte 12), so a write-back during the read showed DD with the old,
+  zeroed length (bytes 8-9) and the frame counted as `rx_dropped`.
+- **Fix:**      status byte first, the descriptor once DD is set; host test
+  `a_descriptor_written_back_during_the_read_is_not_torn` (fails on the old order).
+
+### BUG-030 — megaraidd could read a torn reply-ring producer and skip completions ✅ FIXED
+- **Status:**   FIXED (`f6a6adc`) · **Severity:** MEDIUM (commands time out after a rare torn read)
+- **Found:**    2026-11-05 · the same audit
+- **Analysis:** the 32-bit producer was read once per `reap`, byte by byte; an update from 0x00FF
+  to 0x0100 between bytes reads 0x01FF, inside the 1008-entry ring: 256 slots the firmware never
+  wrote were consumed as stray and the real completions behind them skipped.
+- **Fix:**      `read_index` reads until two reads agree; host test
+  `a_producer_index_updated_during_the_read_is_not_torn` (old: 1 008 strays, the next command
+  lost). bcm5720d has the same torn read of its 16-bit producer, but `receive` re-reads it before
+  every entry, so it takes only the entry the chip wrote; guarded by
+  `a_torn_producer_read_takes_no_phantom_entry`, no change.
+
+### BUG-031 — one boot without IOMMU went silent after `[net-late]` ⬜ OPEN
+- **Status:**   OPEN, not reproduced · **Severity:** unknown (a hang, once in 15 boots)
+- **Found:**    2026-11-05 · `scripts/megaraid-proof.sh` with `NO_IOMMU=1`, TCG, second boot of the
+  first run, mem-hygiene image
+- **Actual:**   console silent right after `[net-late] network waits in this suite ...`, before the
+  `[udrv-linux]` glibc program loaded; no fault line; stopped by the 900 s timeout.
+- **Analysis:** not attributed; 13 further boots without IOMMU and every other boot of the proof
+  passed that point. `megaraid-proof.sh` now injects an NMI on a timeout, so a recurrence leaves
+  the kernel's NMI probe in the log. `proof/mem-hygiene-2026-11/mr-noiommu-hang-boot2-tail.txt`.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

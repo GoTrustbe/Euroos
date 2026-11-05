@@ -1,0 +1,21 @@
+# [sbx2] at -m 1G, every boot of this branch
+## before the rest of the branch (7d42f18 image, 2026-11-03), combined-smp4-iommu-1g
+e1: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+e2: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+e3: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+e4: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+e5: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+e6: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+## final image (c9d9b31)
+combined-smp4-iommu-1g: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+combined-smp4-iommu-1g-r2: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+combined-smp4-iommu-1g-r3: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+combined-smp4-iommu-1g-r4: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+combined-smp4-iommu-1g-r5: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+combined-smp4-iommu-1g-r6: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+combined-smp1-iommu-1g: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+storage-smp4-iommu-1g: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+storage-smp1-iommu-1g: OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+## the orphaned fork child each 1 GiB boot ended
+[fork] child pid 1004 (task 16) outlived its run: ended, 96 MiB back to the pool
+[fork] child pid 1004 (task 23) outlived its run: ended, 96 MiB back to the pool

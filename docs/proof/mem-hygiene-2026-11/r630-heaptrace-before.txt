@@ -1,0 +1,211 @@
+== diff since heapsnap: sum +374842 bytes over all sites
+     +270336 B      +66 blocks  (allocs ever 4715)  site 14702: eurofs::cache::block11blocks+0x19c
+     +167440 B     +455 blocks  (allocs ever 490)  site 14299: eurofs::disk::EuroFs::cache::object+0x57f
+      +94208 B      +23 blocks  (allocs ever 627)  site 11507: eurokernel::ltstat::churn+0x16a
+      +57344 B      +14 blocks  (allocs ever 1488)  site 15909: eurofs::cache::block11blocks+0x19c
+      +37536 B     +102 blocks  (allocs ever 102)  site 2236: eurofs::disk::EuroFs::cache::object+0x57f
+      +35328 B      +96 blocks  (allocs ever 145)  site 16797: eurofs::disk::EuroFs::cache::object+0x547
+      +35264 B      +76 blocks  (allocs ever 83)  site 266: eurofs::disk::EuroFs::cache::object+0x57f
+      +32768 B       +8 blocks  (allocs ever 272)  site 2353: eurofs::cache::block11blocks+0x19c
+      +32768 B       +8 blocks  (allocs ever 78)  site 13790: eurofs::cache::block11blocks+0x19c
+      +31648 B      +86 blocks  (allocs ever 86)  site 27283: eurofs::disk::EuroFs::cache::object+0x57f
+      +25392 B      +69 blocks  (allocs ever 69)  site 5630: eurofs::disk::EuroFs::cache::object+0x57f
+      +20480 B       +5 blocks  (allocs ever 459)  site 25609: eurofs::cache::block11blocks+0x19c
+      +12512 B      +34 blocks  (allocs ever 34)  site 2981: eurofs::disk::EuroFs::cache::object+0x57f
+      +12288 B       +3 blocks  (allocs ever 322)  site 21820: eurofs::cache::block11blocks+0x19c
+       +7888 B      +17 blocks  (allocs ever 17)  site 19600: eurofs::disk::EuroFs::cache::object+0x57f
+       +6992 B      +19 blocks  (allocs ever 26)  site 29163: eurofs::disk::EuroFs::cache::object+0x547
+       +6496 B      +14 blocks  (allocs ever 14)  site 637: eurofs::disk::EuroFs::cache::object+0x57f
+       +5104 B      +11 blocks  (allocs ever 18)  site 21190: eurofs::disk::EuroFs::cache::object+0x547
+       +5104 B      +11 blocks  (allocs ever 11)  site 28200: eurofs::disk::EuroFs::cache::object+0x57f
+       +4096 B       +1 blocks  (allocs ever 13)  site 3472: eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock+0x189
+       +4096 B       +1 blocks  (allocs ever 98)  site 11462: eurofs::cache::block11blocks+0x19c
+       +4096 B       +1 blocks  (allocs ever 31)  site 13544: eurofs::cache::block11blocks+0x2be
+       +4096 B       +1 blocks  (allocs ever 16)  site 15386: eurofs::cache::block11blocks+0x2be
+       +4096 B       +1 blocks  (allocs ever 44)  site 17658: eurofs::cache::block11blocks+0x2be
+       +4096 B       +1 blocks  (allocs ever 21)  site 20821: eurofs::cache::block11blocks+0x2be
+-- grouped by the first two frames outside the allocator
+     +303104 B      +74 blocks  (allocs ever 4987, 2 site(s))  eurofs::cache::block11blocks <- eurofs::disk::EuroFs::cache
+     +233200 B     +611 blocks  (allocs ever 653, 4 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::eurofs::shared::SharedVfs::fs::FileSystem::set_clock::eurokernel
+     +126976 B      +31 blocks  (allocs ever 2445, 5 site(s))  eurofs::cache::block11blocks <- eurofs::disk::EuroFs::cache::object
+      +94208 B      +23 blocks  (allocs ever 627, 1 site(s))  eurokernel::ltstat::churn <- eurofs::cache::block11blocks
+      +47424 B     +126 blocks  (allocs ever 189, 3 site(s))  eurofs::disk::EuroFs::cache::object <- eurofs::disk::EuroFs::cache::object
+      +45424 B     +119 blocks  (allocs ever 119, 2 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::eurolock::sync::MutexGuard::alloc::collections::vec_deque::VecDeque::vec::Vec::core::ops::drop::Drop::drop::euroipc
+      +38144 B     +100 blocks  (allocs ever 100, 2 site(s))  eurofs::disk::EuroFs::cache::object <- eurolock::sync::Mutex::alloc::vec::Vec::eurokernel::ring3
+      +12512 B      +34 blocks  (allocs ever 34, 1 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::alloc::raw_vec::RawVec::eurokernel::ring3::one
+       +8192 B       +2 blocks  (allocs ever 52, 2 site(s))  eurofs::cache::block11blocks <- eurofs::disk::EuroFs::cache::inode
+       +4096 B       +1 blocks  (allocs ever 13, 1 site(s))  eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock <- NtC::eurolock::sync::MutexGuard::alloc::collections::vec_deque::VecDeque::vec::Vec::core::ops::drop::Drop::drop::euroipc
+       +4096 B       +1 blocks  (allocs ever 16, 1 site(s))  eurofs::cache::block11blocks <- eurokernel::shell::exec
+       +4096 B       +1 blocks  (allocs ever 44, 1 site(s))  eurofs::cache::block11blocks <- eurofs::disk::EuroFs::cache::fs10FileSystem11remove_file
+== diff since heapsnap: sum +790710 bytes over all sites
+     +337456 B     +917 blocks  (allocs ever 952)  site 14299: eurofs::disk::EuroFs::cache::object+0x57f
+      +70064 B     +151 blocks  (allocs ever 158)  site 266: eurofs::disk::EuroFs::cache::object+0x57f
+      +62560 B     +170 blocks  (allocs ever 219)  site 16797: eurofs::disk::EuroFs::cache::object+0x547
+      +53360 B     +145 blocks  (allocs ever 145)  site 2236: eurofs::disk::EuroFs::cache::object+0x57f
+      +32768 B       +1 blocks  (allocs ever 332)  site 29972: NtC::eurofs::shared::SharedVfs::fs::FileSystem::remove_file::eurokernel+0x6b
+      +31648 B      +86 blocks  (allocs ever 86)  site 27283: eurofs::disk::EuroFs::cache::object+0x57f
+      +26496 B      +72 blocks  (allocs ever 72)  site 25036: eurofs::disk::EuroFs::cache::object+0x57f
+      +25392 B      +69 blocks  (allocs ever 69)  site 5630: eurofs::disk::EuroFs::cache::object+0x57f
+      +16560 B      +45 blocks  (allocs ever 45)  site 5089: eurofs::disk::EuroFs::cache::object+0x57f
+      +15456 B      +42 blocks  (allocs ever 42)  site 2718: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+      +12880 B      +35 blocks  (allocs ever 42)  site 29163: eurofs::disk::EuroFs::cache::object+0x547
+      +12512 B      +34 blocks  (allocs ever 34)  site 2981: eurofs::disk::EuroFs::cache::object+0x57f
+      +11408 B      +31 blocks  (allocs ever 31)  site 11703: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+      +11136 B      +24 blocks  (allocs ever 24)  site 19600: eurofs::disk::EuroFs::cache::object+0x57f
+       +9744 B      +21 blocks  (allocs ever 28)  site 21190: eurofs::disk::EuroFs::cache::object+0x547
+       +8192 B       +2 blocks  (allocs ever 49)  site 3472: eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock+0x189
+       +6496 B      +14 blocks  (allocs ever 14)  site 637: eurofs::disk::EuroFs::cache::object+0x57f
+       +5568 B      +12 blocks  (allocs ever 12)  site 8558: eurofs::disk::EuroFs::cache::object+0x57f
+       +5248 B      +14 blocks  (allocs ever 63)  site 3304: eurokernel::churn::fs_churn+0x2e3
+       +5152 B      +14 blocks  (allocs ever 17)  site 20070: eurofs::disk::EuroFs::cache::object+0x57f
+       +5104 B      +11 blocks  (allocs ever 11)  site 15123: NtC5::raw_vec::RawVecInner::finish_grow+0x87
+       +5104 B      +11 blocks  (allocs ever 11)  site 28200: eurofs::disk::EuroFs::cache::object+0x57f
+       +4176 B       +9 blocks  (allocs ever 9)  site 516: eurofs::disk::EuroFs::cache::object+0x57f
+       +4176 B       +9 blocks  (allocs ever 9)  site 7162: eurofs::disk::EuroFs::cache::object+0x547
+       +4096 B       +1 blocks  (allocs ever 203)  site 11462: eurofs::cache::block11blocks+0x19c
+-- grouped by the first two frames outside the allocator
+     +438016 B    +1148 blocks  (allocs ever 1190, 4 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::eurofs::shared::SharedVfs::fs::FileSystem::set_clock::eurokernel
+      +89360 B     +235 blocks  (allocs ever 298, 4 site(s))  eurofs::disk::EuroFs::cache::object <- eurofs::disk::EuroFs::cache::object
+      +64496 B     +169 blocks  (allocs ever 169, 2 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::eurolock::sync::MutexGuard::alloc::collections::vec_deque::VecDeque::vec::Vec::core::ops::drop::Drop::drop::euroipc
+      +52800 B     +138 blocks  (allocs ever 138, 4 site(s))  eurofs::disk::EuroFs::cache::object <- eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock
+      +38144 B     +100 blocks  (allocs ever 100, 2 site(s))  eurofs::disk::EuroFs::cache::object <- eurolock::sync::Mutex::alloc::vec::Vec::eurokernel::ring3
+      +32768 B       +1 blocks  (allocs ever 332, 1 site(s))  NtC::eurofs::shared::SharedVfs::fs::FileSystem::remove_file::eurokernel <- eurofs::disk::EuroFs::cache::fs10FileSystem11remove_file
+      +15456 B      +42 blocks  (allocs ever 42, 1 site(s))  NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel <- NtC5::raw_vec::RawVecInner::finish_grow
+      +12512 B      +34 blocks  (allocs ever 34, 1 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::alloc::raw_vec::RawVec::eurokernel::ring3::one
+      +11408 B      +31 blocks  (allocs ever 31, 1 site(s))  NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel <- eurolock::sync::Mutex::alloc::vec::Vec::eurokernel::ring3
+       +8192 B       +2 blocks  (allocs ever 49, 1 site(s))  eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock <- NtC::eurolock::sync::MutexGuard::alloc::collections::vec_deque::VecDeque::vec::Vec::core::ops::drop::Drop::drop::euroipc
+       +5248 B      +14 blocks  (allocs ever 63, 1 site(s))  eurokernel::churn::fs_churn <- NtC::eurofs::shared::SharedVfs::fs::FileSystem::set_clock::eurokernel
+       +5152 B      +14 blocks  (allocs ever 17, 1 site(s))  eurofs::disk::EuroFs::cache::object <- eurofs::disk::EuroFs::cache::fs10FileSystem10create_dir
+       +5104 B      +11 blocks  (allocs ever 11, 1 site(s))  NtC5::raw_vec::RawVecInner::finish_grow <- eurokernel::rootblk::Rootblo
+       +4096 B       +1 blocks  (allocs ever 203, 1 site(s))  eurofs::cache::block11blocks <- eurofs::disk::EuroFs::cache::object
+== diff since heapsnap: sum +1192742 bytes over all sites
+     +497536 B    +1352 blocks  (allocs ever 1387)  site 14299: eurofs::disk::EuroFs::cache::object+0x57f
+     +105984 B     +288 blocks  (allocs ever 288)  site 2236: eurofs::disk::EuroFs::cache::object+0x57f
+     +103008 B     +222 blocks  (allocs ever 229)  site 266: eurofs::disk::EuroFs::cache::object+0x57f
+      +92736 B     +252 blocks  (allocs ever 301)  site 16797: eurofs::disk::EuroFs::cache::object+0x547
+      +47472 B     +129 blocks  (allocs ever 129)  site 25036: eurofs::disk::EuroFs::cache::object+0x57f
+      +32768 B       +1 blocks  (allocs ever 521)  site 29972: NtC::eurofs::shared::SharedVfs::fs::FileSystem::remove_file::eurokernel+0x6b
+      +31648 B      +86 blocks  (allocs ever 86)  site 2718: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+      +31648 B      +86 blocks  (allocs ever 86)  site 27283: eurofs::disk::EuroFs::cache::object+0x57f
+      +25392 B      +69 blocks  (allocs ever 69)  site 5630: eurofs::disk::EuroFs::cache::object+0x57f
+      +23200 B      +50 blocks  (allocs ever 50)  site 19600: eurofs::disk::EuroFs::cache::object+0x57f
+      +22816 B      +62 blocks  (allocs ever 62)  site 11703: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+      +18768 B      +51 blocks  (allocs ever 58)  site 29163: eurofs::disk::EuroFs::cache::object+0x547
+      +16560 B      +45 blocks  (allocs ever 45)  site 5089: eurofs::disk::EuroFs::cache::object+0x57f
+      +12528 B      +27 blocks  (allocs ever 34)  site 21190: eurofs::disk::EuroFs::cache::object+0x547
+      +12512 B      +34 blocks  (allocs ever 34)  site 2981: eurofs::disk::EuroFs::cache::object+0x57f
+      +10208 B      +22 blocks  (allocs ever 22)  site 8558: eurofs::disk::EuroFs::cache::object+0x57f
+      +10208 B      +22 blocks  (allocs ever 22)  site 15123: NtC5::raw_vec::RawVecInner::finish_grow+0x87
+       +8192 B       +2 blocks  (allocs ever 11)  site 11337: efi_main+0x83d85
+       +6992 B      +19 blocks  (allocs ever 19)  site 9163: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+       +6992 B      +19 blocks  (allocs ever 22)  site 20070: eurofs::disk::EuroFs::cache::object+0x57f
+       +6960 B      +15 blocks  (allocs ever 15)  site 7162: eurofs::disk::EuroFs::cache::object+0x547
+       +6496 B      +14 blocks  (allocs ever 14)  site 637: eurofs::disk::EuroFs::cache::object+0x57f
+       +5888 B      +16 blocks  (allocs ever 16)  site 2599: eurofs::disk::EuroFs::cache::object+0x57f
+       +5712 B      +15 blocks  (allocs ever 134)  site 4588: eurokernel::churn::fs_churn+0x2e3
+       +5520 B      +15 blocks  (allocs ever 15)  site 19182: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+-- grouped by the first two frames outside the allocator
+     +625936 B    +1643 blocks  (allocs ever 1685, 3 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::eurofs::shared::SharedVfs::fs::FileSystem::set_clock::eurokernel
+     +130992 B     +345 blocks  (allocs ever 408, 4 site(s))  eurofs::disk::EuroFs::cache::object <- eurofs::disk::EuroFs::cache::object
+     +129184 B     +338 blocks  (allocs ever 338, 2 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::eurolock::sync::MutexGuard::alloc::collections::vec_deque::VecDeque::vec::Vec::core::ops::drop::Drop::drop::euroipc
+      +74240 B     +196 blocks  (allocs ever 196, 3 site(s))  eurofs::disk::EuroFs::cache::object <- eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock
+      +38144 B     +100 blocks  (allocs ever 100, 2 site(s))  eurofs::disk::EuroFs::cache::object <- eurolock::sync::Mutex::alloc::vec::Vec::eurokernel::ring3
+      +32768 B       +1 blocks  (allocs ever 521, 1 site(s))  NtC::eurofs::shared::SharedVfs::fs::FileSystem::remove_file::eurokernel <- eurofs::disk::EuroFs::cache::fs10FileSystem11remove_file
+      +31648 B      +86 blocks  (allocs ever 86, 1 site(s))  NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel <- NtC5::raw_vec::RawVecInner::finish_grow
+      +22816 B      +62 blocks  (allocs ever 62, 1 site(s))  NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel <- eurolock::sync::Mutex::alloc::vec::Vec::eurokernel::ring3
+      +12512 B      +34 blocks  (allocs ever 34, 1 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::alloc::raw_vec::RawVec::eurokernel::ring3::one
+      +10208 B      +22 blocks  (allocs ever 22, 1 site(s))  NtC5::raw_vec::RawVecInner::finish_grow <- eurokernel::rootblk::Rootblo
+       +8192 B       +2 blocks  (allocs ever 11, 1 site(s))  efi_main <- eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock
+       +6992 B      +19 blocks  (allocs ever 19, 1 site(s))  NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel <- eurokernel::shell::exec
+       +6992 B      +19 blocks  (allocs ever 22, 1 site(s))  eurofs::disk::EuroFs::cache::object <- eurofs::disk::EuroFs::cache::fs10FileSystem10create_dir
+       +5888 B      +16 blocks  (allocs ever 16, 1 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel
+       +5712 B      +15 blocks  (allocs ever 134, 1 site(s))  eurokernel::churn::fs_churn <- NtC::eurofs::shared::SharedVfs::fs::FileSystem::set_clock::eurokernel
+       +5520 B      +15 blocks  (allocs ever 15, 1 site(s))  NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel <- NtC::eurolock::sync::MutexGuard::alloc::collections::vec_deque::VecDeque::vec::Vec::core::ops::drop::Drop::drop::euroipc
+== diff since heapsnap: sum +1255662 bytes over all sites
+     +551632 B    +1499 blocks  (allocs ever 1534)  site 14299: eurofs::disk::EuroFs::cache::object+0x57f
+     +249856 B      +61 blocks  (allocs ever 13661)  site 14702: eurofs::cache::block11blocks+0x19c
+     +200704 B      +49 blocks  (allocs ever 1743)  site 14966: eurofs::cache::block11blocks+0x19c
+     +115536 B     +249 blocks  (allocs ever 256)  site 266: eurofs::disk::EuroFs::cache::object+0x57f
+     +105984 B     +288 blocks  (allocs ever 288)  site 2236: eurofs::disk::EuroFs::cache::object+0x57f
+     +101568 B     +276 blocks  (allocs ever 325)  site 16797: eurofs::disk::EuroFs::cache::object+0x547
+      +86016 B      +21 blocks  (allocs ever 1974)  site 11507: eurokernel::ltstat::churn+0x16a
+      +65536 B      +16 blocks  (allocs ever 1470)  site 13790: eurofs::cache::block11blocks+0x19c
+      +65536 B      +16 blocks  (allocs ever 3347)  site 15909: eurofs::cache::block11blocks+0x19c
+      +47472 B     +129 blocks  (allocs ever 129)  site 25036: eurofs::disk::EuroFs::cache::object+0x57f
+      +36800 B     +100 blocks  (allocs ever 100)  site 2718: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+      +31648 B      +86 blocks  (allocs ever 86)  site 27283: eurofs::disk::EuroFs::cache::object+0x57f
+      +28672 B       +7 blocks  (allocs ever 1065)  site 2353: eurofs::cache::block11blocks+0x19c
+      +26864 B      +73 blocks  (allocs ever 73)  site 11703: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+      +25392 B      +69 blocks  (allocs ever 69)  site 5630: eurofs::disk::EuroFs::cache::object+0x57f
+      +23200 B      +50 blocks  (allocs ever 50)  site 19600: eurofs::disk::EuroFs::cache::object+0x57f
+      +20240 B      +55 blocks  (allocs ever 62)  site 29163: eurofs::disk::EuroFs::cache::object+0x547
+      +16560 B      +45 blocks  (allocs ever 45)  site 5089: eurofs::disk::EuroFs::cache::object+0x57f
+      +14384 B      +31 blocks  (allocs ever 38)  site 21190: eurofs::disk::EuroFs::cache::object+0x547
+      +12512 B      +34 blocks  (allocs ever 34)  site 2981: eurofs::disk::EuroFs::cache::object+0x57f
+      +12288 B       +3 blocks  (allocs ever 1267)  site 25609: eurofs::cache::block11blocks+0x19c
+      +11136 B      +24 blocks  (allocs ever 24)  site 15123: NtC5::raw_vec::RawVecInner::finish_grow+0x87
+      +10208 B      +22 blocks  (allocs ever 22)  site 8558: eurofs::disk::EuroFs::cache::object+0x57f
+       +8288 B      +22 blocks  (allocs ever 131)  site 3304: eurokernel::churn::fs_churn+0x2e3
+       +8192 B       +2 blocks  (allocs ever 184)  site 17658: eurofs::cache::block11blocks+0x2be
+       +8192 B       +2 blocks  (allocs ever 1031)  site 19737: eurofs::cache::block11blocks+0x2be
+       +8192 B       +2 blocks  (allocs ever 582)  site 21820: eurofs::cache::block11blocks+0x19c
+       +7360 B      +20 blocks  (allocs ever 23)  site 20070: eurofs::disk::EuroFs::cache::object+0x57f
+       +6992 B      +19 blocks  (allocs ever 19)  site 9163: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+       +6960 B      +15 blocks  (allocs ever 15)  site 7162: eurofs::disk::EuroFs::cache::object+0x547
+       +6624 B      +18 blocks  (allocs ever 18)  site 2599: eurofs::disk::EuroFs::cache::object+0x57f
+       +6496 B      +14 blocks  (allocs ever 14)  site 637: eurofs::disk::EuroFs::cache::object+0x57f
+       +5712 B      +15 blocks  (allocs ever 151)  site 4588: eurokernel::churn::fs_churn+0x2e3
+       +5520 B      +15 blocks  (allocs ever 15)  site 19182: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+       +5104 B      +11 blocks  (allocs ever 11)  site 28200: eurofs::disk::EuroFs::cache::object+0x57f
+       +4176 B       +9 blocks  (allocs ever 9)  site 516: eurofs::disk::EuroFs::cache::object+0x57f
+       +4096 B       +1 blocks  (allocs ever 97)  site 3472: eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock+0x189
+       +4096 B       +1 blocks  (allocs ever 18)  site 4761: eurofs::cache::block11blocks+0x19c
+       +4096 B       +1 blocks  (allocs ever 314)  site 11462: eurofs::cache::block11blocks+0x19c
+       +4096 B       +1 blocks  (allocs ever 129)  site 13544: eurofs::cache::block11blocks+0x2be
+       +4096 B       +1 blocks  (allocs ever 68)  site 15386: eurofs::cache::block11blocks+0x2be
+       +4096 B       +1 blocks  (allocs ever 15)  site 20749: eurofs::cache::block11blocks+0x2be
+       +4096 B       +1 blocks  (allocs ever 421)  site 24665: eurofs::cache::block11blocks+0x19c
+       +4096 B       +1 blocks  (allocs ever 154)  site 25310: eurofs::cache::block11blocks+0x19c
+       +4096 B       +1 blocks  (allocs ever 34)  site 29533: eurofs::cache::block11blocks+0x2be
+       +4096 B       +1 blocks  (allocs ever 59)  site 31487: eurofs::cache::block11blocks+0x2be
+       +3072 B      +16 blocks  (allocs ever 17)  site 6822: eurofs::disk::EuroFs::cache::object+0x547
+       +2944 B       +8 blocks  (allocs ever 8)  site 9295: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+       +2944 B       +8 blocks  (allocs ever 8)  site 9742: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+       +2944 B       +8 blocks  (allocs ever 8)  site 16646: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+       +2944 B       +8 blocks  (allocs ever 8)  site 20706: eurokernel::churn::fs_churn+0x2e3
+       +2784 B       +6 blocks  (allocs ever 6)  site 15848: eurofs::disk::EuroFs::cache::object+0x57f
+       +2576 B       +7 blocks  (allocs ever 7)  site 6662: eurofs::disk::EuroFs::cache::object+0x57f
+       +2576 B       +7 blocks  (allocs ever 7)  site 32196: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+       +2320 B       +5 blocks  (allocs ever 5)  site 32392: NtC::eurolock::sync::MutexGuard::alloc::collections::vec_deque::VecDeque::vec::Vec::core::ops::drop::Drop::drop::euroipc+0xd8
+       +2320 B       +5 blocks  (allocs ever 5)  site 32606: eurofs::disk::EuroFs::cache::object+0x547
+       +2208 B       +6 blocks  (allocs ever 6)  site 1565: eurolock::sync::Mutex::alloc::vec::Vec::eurokernel::ring3+0x1a1
+       +2208 B       +6 blocks  (allocs ever 6)  site 20739: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+       +2208 B       +6 blocks  (allocs ever 6)  site 23866: NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel+0x81
+       +1856 B       +4 blocks  (allocs ever 4)  site 22544: eurofs::disk::EuroFs::cache::object+0x57f
+-- grouped by the first two frames outside the allocator
+     +697664 B    +1828 blocks  (allocs ever 1870, 4 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::eurofs::shared::SharedVfs::fs::FileSystem::set_clock::eurokernel
+     +368640 B      +90 blocks  (allocs ever 9316, 9 site(s))  eurofs::cache::block11blocks <- eurofs::disk::EuroFs::cache::object
+     +278528 B      +68 blocks  (allocs ever 14726, 2 site(s))  eurofs::cache::block11blocks <- eurofs::disk::EuroFs::cache
+     +145472 B     +382 blocks  (allocs ever 445, 5 site(s))  eurofs::disk::EuroFs::cache::object <- eurofs::disk::EuroFs::cache::object
+     +129184 B     +338 blocks  (allocs ever 338, 2 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::eurolock::sync::MutexGuard::alloc::collections::vec_deque::VecDeque::vec::Vec::core::ops::drop::Drop::drop::euroipc
+      +86016 B      +21 blocks  (allocs ever 1974, 1 site(s))  eurokernel::ltstat::churn <- eurofs::cache::block11blocks
+      +78416 B     +205 blocks  (allocs ever 205, 4 site(s))  eurofs::disk::EuroFs::cache::object <- eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock
+      +38144 B     +100 blocks  (allocs ever 100, 2 site(s))  eurofs::disk::EuroFs::cache::object <- eurolock::sync::Mutex::alloc::vec::Vec::eurokernel::ring3
+      +36800 B     +100 blocks  (allocs ever 100, 1 site(s))  NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel <- NtC5::raw_vec::RawVecInner::finish_grow
+      +26864 B      +73 blocks  (allocs ever 73, 1 site(s))  NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel <- eurolock::sync::Mutex::alloc::vec::Vec::eurokernel::ring3
+      +20480 B       +5 blocks  (allocs ever 1209, 4 site(s))  eurofs::cache::block11blocks <- eurofs::disk::EuroFs::cache::inode
+      +15296 B      +40 blocks  (allocs ever 40, 2 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::alloc::raw_vec::RawVec::eurokernel::ring3::one
+      +14352 B      +39 blocks  (allocs ever 39, 4 site(s))  NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel <- NtC::eurolock::sync::MutexGuard::alloc::collections::vec_deque::VecDeque::vec::Vec::core::ops::drop::Drop::drop::euroipc
+      +14000 B      +37 blocks  (allocs ever 282, 2 site(s))  eurokernel::churn::fs_churn <- NtC::eurofs::shared::SharedVfs::fs::FileSystem::set_clock::eurokernel
+      +11776 B      +32 blocks  (allocs ever 32, 3 site(s))  NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel <- eurokernel::shell::exec
+      +11552 B      +38 blocks  (allocs ever 39, 3 site(s))  eurofs::disk::EuroFs::cache::object <- NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel
+      +11136 B      +24 blocks  (allocs ever 24, 1 site(s))  NtC5::raw_vec::RawVecInner::finish_grow <- eurokernel::rootblk::Rootblo
+       +9936 B      +27 blocks  (allocs ever 30, 2 site(s))  eurofs::disk::EuroFs::cache::object <- eurofs::disk::EuroFs::cache::fs10FileSystem10create_dir
+       +8192 B       +2 blocks  (allocs ever 184, 1 site(s))  eurofs::cache::block11blocks <- eurofs::disk::EuroFs::cache::fs10FileSystem11remove_file
+       +4096 B       +1 blocks  (allocs ever 97, 1 site(s))  eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock <- NtC::eurolock::sync::MutexGuard::alloc::collections::vec_deque::VecDeque::vec::Vec::core::ops::drop::Drop::drop::euroipc
+       +4096 B       +1 blocks  (allocs ever 68, 1 site(s))  eurofs::cache::block11blocks <- eurokernel::shell::exec
+       +4096 B       +1 blocks  (allocs ever 59, 1 site(s))  eurofs::cache::block11blocks <- eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock
+       +2944 B       +8 blocks  (allocs ever 8, 1 site(s))  eurokernel::churn::fs_churn <- eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock
+       +2320 B       +5 blocks  (allocs ever 5, 1 site(s))  NtC::eurolock::sync::MutexGuard::alloc::collections::vec_deque::VecDeque::vec::Vec::core::ops::drop::Drop::drop::euroipc <- eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock
+       +2208 B       +6 blocks  (allocs ever 6, 1 site(s))  eurolock::sync::Mutex::alloc::vec::Vec::eurokernel::ring3 <- NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel
+       +2208 B       +6 blocks  (allocs ever 6, 1 site(s))  NtC::eurofs::shared::SharedVfs::fs::FileSystem::write_file::eurokernel <- eurolock::sync::Mutex::eurokernel::sched::Scheduler::try_lock

@@ -49,13 +49,21 @@ boot() {
         -device megasas-gen2,id=mr0 \
         -drive if=none,id=ld0,file="$LD0",format=raw -device scsi-hd,bus=mr0.0,drive=ld0,scsi-id=0 \
         -drive if=none,id=ld1,file="$LD1",format=raw -device scsi-hd,bus=mr0.0,drive=ld1,scsi-id=1 \
-        -nic user,model=e1000e -display none -serial file:"$log" -no-reboot &
+        -nic user,model=e1000e -display none -serial file:"$log" -no-reboot \
+        -monitor unix:"$OUT/monitor.sock",server=on,wait=off &
     local pid=$!
     local end=$((SECONDS + ${TIMEOUT:-600}))
     # The megaraid self-tests end with the "[mr] userspace megaraidd:" status line.
     until grep -aq '^\[mr\] userspace megaraidd:' "$log" || ! kill -0 "$pid" 2>/dev/null || [ $SECONDS -ge $end ]; do
         sleep 2
     done
+    if ! grep -aq '^\[mr\] userspace megaraidd:' "$log" && kill -0 "$pid" 2>/dev/null; then
+        # Timed out with the VM still up: an NMI makes the kernel print where
+        # its cores are (NMI PROBE) before the VM is stopped.
+        echo "==> no status line after ${TIMEOUT:-600} s: NMI probe" >&2
+        python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(b"nmi\n")' "$OUT/monitor.sock" || true
+        sleep 8
+    fi
     sleep 2
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true

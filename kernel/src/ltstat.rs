@@ -31,12 +31,17 @@ static NEXT_PID: AtomicU64 = AtomicU64::new(70_000);
 pub fn stat_line(mem: &mut FrameAllocator) -> String {
     let (heap_used, heap_free) = crate::allocator::stats();
     let (live, zombie) = crate::ring3::bg_counts();
+    // heap_used counts the blocks parked in the per-CPU caches (heap_cached, at
+    // most HIGH_WATER per class and core) and not the big-block pool (big_kib).
+    let (big_used_mib, _, _) = crate::allocator::big_stats();
     format!(
-        "ltstat frames_free={} frames_usable={} heap_used={} heap_free={} tasks={} bg_live={} bg_zombie={} kstacks={} files={} procpool_free={} demand_free={} ticks={}",
+        "ltstat frames_free={} frames_usable={} heap_used={} heap_free={} heap_cached={} big_mib={} tasks={} bg_live={} bg_zombie={} kstacks={} files={} procpool_free={} demand_free={} ticks={}",
         mem.free_frames(),
         mem.usable_frames(),
         heap_used,
         heap_free,
+        crate::allocator::percpu_cached_bytes(),
+        big_used_mib,
         crate::sched::task_count(),
         live,
         zombie,
@@ -125,4 +130,21 @@ pub fn httpd(arg: &str) -> Vec<String> {
     }
     let (on, served) = crate::net::httpd_status();
     alloc::vec![format!("httpd: {} on :80, served {served}", if on { "listening" } else { "off" })]
+}
+
+/// `heapsnap`, `heapdiff [n]`, `heaptop [n]` (BUG-027): the per-site heap
+/// accounting of a `heaptrace` image (kernel/src/heaptrace.rs).
+#[cfg(feature = "heaptrace")]
+pub fn heaptrace(cmd: &str, arg: &str) -> Vec<String> {
+    let n: usize = arg.trim().parse().unwrap_or(30);
+    match cmd {
+        "heapsnap" => crate::heaptrace::snapshot(),
+        "heapdiff" => crate::heaptrace::report(true, n),
+        _ => crate::heaptrace::report(false, n),
+    }
+}
+
+#[cfg(not(feature = "heaptrace"))]
+pub fn heaptrace(cmd: &str, _arg: &str) -> Vec<String> {
+    alloc::vec![format!("{cmd}: this image has no heap tracing (build it with scripts/build.sh heaptrace)")]
 }
