@@ -1,0 +1,140 @@
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/user-smp4-iommu.log  vs  user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/user-smp1-iommu.log  vs  user-smp1-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/user-smp4-noiommu.log  vs  user-smp4-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/user-smp1-noiommu.log  vs  user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/storage-smp4-iommu-1g.log  vs  storage-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/storage-smp1-iommu-1g.log  vs  storage-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+   sbx2: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/combined-smp4-iommu-1g.log  vs  combined-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+   sbx2: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/combined-smp1-iommu-1g.log  vs  combined-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+   sbx2: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/combined-smp4-iommu-1g-r2.log  vs  combined-smp4-iommu-1g-r2.log
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/combined-smp4-iommu-1g-r3.log  vs  combined-smp4-iommu-1g-r3.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+   sbx2: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/combined-smp4-iommu-1g-r4.log  vs  combined-smp4-iommu-1g-r4.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+   sbx2: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/combined-smp4-iommu-1g-r5.log  vs  combined-smp4-iommu-1g-r5.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+   sbx2: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/combined-smp4-iommu-1g-r6.log  vs  combined-smp4-iommu-1g-r6.log
+-- WORSE: 0
+-- CHANGED (not worse): 4
+   fork: base FAILx8 | new FAILx7
+   glibc: base FAILx3 | new FAILx2
+   linux-abi: base FAILx3 | new FAILx2
+   sbx2: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/mr-iommu-boot1.log  vs  mr-iommu/boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/mr-iommu-boot2.log  vs  mr-iommu/boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/mr-noiommu-boot1.log  vs  mr-noiommu/boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/mr-noiommu-boot2.log  vs  mr-noiommu/boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 11
+   kwork: OKx1
+   lk: OKx1
+   mr-crash: OKx2
+   mr-dma: SKIPx1
+   mr-fs: OKx2
+   mr-grant: OKx1
+   mr-info: OKx1
+   mr-io: OKx1
+   mr-iommu: SKIPx1
+   mr-irq: OKx1
+   udrv-linux: OKx1
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/mr-noiommu-boot1.log  vs  mr-noiommu-c/boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== /opt/euroos/eurokernel/docs/proof/integrate-loadtest-2026-11-03/mr-noiommu-boot2.log  vs  mr-noiommu-c/boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0

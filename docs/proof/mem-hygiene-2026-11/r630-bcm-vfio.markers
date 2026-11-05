@@ -1,0 +1,12 @@
+[udrv-bcm] Broadcom BCM5720 (14e4:165f) at 00:02.0: driven from ring 3 by bcm5720d
+[udrv-bcm-grant] bcm5720d pid 139264: BAR0 0x7000000000+0x10000 mapped=true, BAR2 (APE) 0x7000010000+0x10000 mapped=true, a page next to either=false; DMA 64 pages mapped=true, page after=false; MSI-X table (BAR4)=false, LAPIC=false, kernel code=false → OK (exactly the granted ranges) ✓
+[udrv-bcm-iommu] device 00:02.0 has its own VT-d domain 'bcm5720d' with 64 page(s) = the DMA window, nothing else → OK ✓
+[udrv-bcm] chip 0x05720000 (5720 A0), APE firmware NCSI v1.5.12.0, bootcode handshake done (ASF on); MAC 80:18:44:f2:71:3a from the bootcode SRAM mailbox, NVRAM agrees; PHY id 0362:5f60; link DOWN (no cable or no partner) → OK ✓
+[udrv-bcm-loop] PHY loopback (1000/full): 16 frames out through the send ring, 16 back through the return ring, 16 byte-identical → OK (TX DMA read + RX DMA write through the IOMMU) ✓
+[udrv-bcm-loop] MAC-internal loopback: 4 sent, 0 back (Broadcom deprecates it on chips with a CPMU; Linux tg3 skips it on the 5720) — informational
+[udrv-bcm-irq] MSI-X vector 0x4c: 1 interrupt(s) raised by the chip, 1 delivered to bcm5720d as EuroIPC Irq messages → OK ✓
+[udrv-bcm-net] no link on this port: DHCP and HTTP not attempted ⬜
+[udrv-bcm-dma] malicious bcm5720d: RX buffer aimed at kernel canary 0x1d9000, TX from kernel page 0x1da000 · loopback frames 66 sent, 65 back (the aimed one lost) · TX from the secret page completed=false · canary changed=false · guest vIOMMU fault records 0 (the host VT-d refuses VFIO DMA; see its DMAR log) · after a core reset: PHY loopback 8/8 → OK (device DMA confined to the driver's own window) ✓
+[udrv-bcm-crash] bcm5720d pid 139264 killed by a real fault (memory isolation: access 0x1000 denied); kernel kept running; restarted as pid 139265: chip reset again, MAC 80:18:44:f2:71:3a, PHY loopback 16/16 → OK (driver crash = process exit, chip back) ✓
+[udrv-bcm] userspace bcm5720d: pid 139265 task 27 (starts 2, deaths 1), irq 5
+[udrv-vec] MSI-X vectors from the pool 0x4c..0x4f: bcm5720d 0x4c; distinct=true, stubs bound to their owner=true, second claims on a held vector refused 3/3; unowned interrupts 0 → OK ✓
