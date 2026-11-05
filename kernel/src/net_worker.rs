@@ -176,8 +176,9 @@ extern "C" fn worker_main() -> ! {
 /// One pass. Never waits; interrupts off throughout (see the module docs).
 fn pass() {
     let Some(cfg) = get() else { return };
-    let t0 = time_us();
     let _g = crate::sched::IfOffGuard::new();
+    // After the guard: the time with interrupts off, not a preemption before it.
+    let t0 = time_us();
     rx_route();
     let n = inbound(&cfg);
     let now = crate::interrupts::ticks();
