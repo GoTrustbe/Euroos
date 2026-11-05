@@ -1,0 +1,83 @@
+[net] /etc/hosts: 3 name->IP mapping(s) loaded
+[net] no virtio-net device found
+[net-async] inbound httpd (synthetic peers, TEST-NET-1): 16 concurrent clients: 16 SYN-ACKs from one service() pass, 16 answered, 16 closed, 0 half-open + 0 open left, passes 2565/1873/7300 us (longest 7300 us) → OK ✓
+[net-async] listen: backlog 4, 6 SYNs: 4 half-open + 2 dropped, then 6/6 accepted after the retransmitted SYNs → OK ✓
+[net-async] connect: answered 1490 us; half-open peer (stale ACK): RST at its ACK sent, established in 340 us; silent drop: fresh port after 3001 ms (2 ports); our FIN after the peer's: sent; bound 6 s → OK ✓
+[net-async] tcp: connect ok 3 (slowest 3001 ms), SYN timeouts 2, stale-peer RSTs 1, new-port retries 1, closed-port answers 0, gave up 0 | inbound: half-open 0, httpd conns 0, served 16 | queues 0 (0 segs), unowned segs 0 (after-close ACKs 0)
+[net] NIC: e1000 MAC 52:54:00:12:34:56
+[net] DHCP: DISCOVER sent (broadcast)
+[net] DHCP OFFER: 10.0.2.15 from server 10.0.2.2
+[net] DHCP ACK: lease 10.0.2.15 (router 10.0.2.2, dns 10.0.2.3, 86400s)
+[net] (no ARP reply from the gateway)
+[net] IPv6 link-local (SLAAC): fe80::5054:ff:fe12:3456
+[net] IPv6: Router Solicitation -> ff02::2 sent
+[net] (no Router Advertisement — IPv6 possibly off)
+[lk] EuroLock hooks installed: IRQSAVE for Irq-mode locks, per-context order tracking (264 contexts), 20 lock classes
+[smp] core APIC-id 1 online
+[smp] core APIC-id 2 online
+[smp] core APIC-id 3 online
+[smp] 3/3 AP core(s) online (BSP = APIC-id 0, 4 cores total)
+[smp] parallel sum 0..2000000 over 4 core(s) = 1999999000000 (expected 1999999000000) -> OK
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=43 worker-B=44 (own run queue)
+[smp] core APIC-id 2 per-CPU scheduler: worker-A=48 worker-B=47 (own run queue)
+[smp] core APIC-id 3 per-CPU scheduler: worker-A=39 worker-B=37 (own run queue)
+[smp] core APIC-id 1 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 2 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] core APIC-id 3 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] load-balance: extra task placed on least-loaded core APIC-id 1
+[smp] core APIC-id 1 runs the balanced task: worker-C=6
+[smp] J1: demo workers parked on 3/3 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[lk] checker self-test: irqsave=true correct-order-silent=true deliberate-inversion-detected=true task-mode-keeps-IF=true try_lock=true rwlock=true tracker-balanced=true -> OK ✓
+[kwork] per-CPU work queues: 3 AP(s) online, 4 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (4 ok), work-stealing=yes -> OK ✓
+[udrv-vec] no userspace driver holds an MSI-X vector on this machine (pool 0x4c..0x4f) ⬜
+[lk] after-stress vfs.mount (per-mount): acq=13810 contended=238 (1.72%) spins=736656 max-wait=313986 try-fail=0 hold-max=51377us hold-avg=99us
+[lk] after-stress heap (linked-list allocator): acq=62008 contended=1592 (2.56%) spins=15780 max-wait=3599 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress net.CFG: acq=9816184 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress net.socket (per-socket): acq=8000105 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress net.NET_LEGACY (rx ring): acq=4441688 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress net.PORTQ (TCP port queues): acq=3358709 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress ipc.channel_table: acq=142967 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress ipc.channel (per-port): acq=142958 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=258us hold-avg=0us
+[lk] after-stress class Fs: acq=13810 contended=238 (1.72%) spins=736656 max-wait=313986 try-fail=0 hold-max=51377us hold-avg=99us
+[lk] after-stress class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=208us hold-avg=63us
+[lk] after-stress class Net: acq=17632472 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress class NetSocket: acq=8000105 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress class IpcTable: acq=142967 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress class IpcChannel: acq=142958 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=258us hold-avg=0us
+[lk] after-stress class UnixTable: acq=114686 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=257us hold-avg=0us
+[lk] after-stress class UnixConn: acq=114647 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1074us hold-avg=1us
+[lk] after-stress heap per-CPU caches: hits=2396998 refills=142 flushes=31 parked=299 KiB
+[lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[lk] boot-total vfs.mount (per-mount): acq=16469 contended=238 (1.44%) spins=736656 max-wait=313986 try-fail=0 hold-max=120779us hold-avg=444us
+[lk] boot-total heap (linked-list allocator): acq=143589 contended=1592 (1.10%) spins=15780 max-wait=3599 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total net.CFG: acq=9822143 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=36us hold-avg=0us
+[lk] boot-total net.socket (per-socket): acq=8000585 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=154us hold-avg=0us
+[lk] boot-total net.NET_LEGACY (rx ring): acq=4441712 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=35us hold-avg=0us
+[lk] boot-total net.PORTQ (TCP port queues): acq=3364671 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=360us hold-avg=0us
+[lk] boot-total sched.SCHED (BSP scheduler): acq=192102 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=868us hold-avg=1us
+[lk] boot-total ipc.channel_table: acq=142967 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ipc.channel (per-port): acq=142958 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=258us hold-avg=0us
+[lk] boot-total unix.conn_table: acq=114676 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class Fs: acq=16469 contended=238 (1.44%) spins=736656 max-wait=313986 try-fail=0 hold-max=120779us hold-avg=444us
+[lk] boot-total class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=208us hold-avg=63us
+[lk] boot-total class Net: acq=17644425 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=360us hold-avg=0us
+[lk] boot-total class NetSocket: acq=8000585 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=154us hold-avg=0us
+[lk] boot-total class Sched: acq=192102 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=868us hold-avg=1us
+[lk] boot-total class IpcTable: acq=142967 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class IpcChannel: acq=142958 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=258us hold-avg=0us
+[lk] boot-total class UnixTable: acq=114715 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=257us hold-avg=0us
+[lk] boot-total class UnixConn: acq=114664 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1074us hold-avg=1us
+[lk] boot-total class Process: acq=83689 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=24309us hold-avg=17us
+[lk] boot-total heap per-CPU caches: hits=2843158 refills=2349 flushes=2195 parked=295 KiB
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[lk] boot-total longest-held vfs.mount (per-mount): acq=16469 contended=238 (1.44%) spins=736656 max-wait=313986 try-fail=0 hold-max=120779us hold-avg=444us
+[lk] boot-total longest-held ring3.BG (background processes): acq=80569 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=24309us hold-avg=17us
+[lk] boot-total longest-held ring3.CHILD_EXITS: acq=1632 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1580us hold-avg=1us
+[lk] boot-total longest-held ring3.OPEN_FDS: acq=163 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1458us hold-avg=12us
+[lk] boot-total longest-held unix.conn (per-connection): acq=114664 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1074us hold-avg=1us
+[lk] boot-total longest-held sched.SCHED (BSP scheduler): acq=192183 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=868us hold-avg=1us
+[lk] boot-total longest-held ring3.FUTEX_QUEUE: acq=1158 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=397us hold-avg=2us
+[lk] boot-total longest-held net.PORTQ (TCP port queues): acq=3364671 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=360us hold-avg=0us
+[lk] boot-total longest-held kwork.runqueue (per-CPU): acq=30 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=318us hold-avg=30us
+[lk] boot-total longest-held ipc.channel (per-port): acq=142958 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=258us hold-avg=0us
+[3g2-wire] deadman watchdog LIVE: main loop petting (pets=20), scheduler-tick checking, tripped=false → OK (hang would trip the timer-IRQ deadman) ✓

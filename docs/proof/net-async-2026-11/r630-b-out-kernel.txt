@@ -1,0 +1,9 @@
+[loadtest] scenario=net image=/srv/euroos/wt-net-runs/b-out-kernel/boot.img disks=[] bus=virtio kvm=True smp=4 mem=4G nic=e1000e bootopts=net.driver=kernel iommu=False
+[loadtest] serial log: /srv/euroos/wt-net-runs/b-out-kernel/loadtest-serial-20261103-072759.log  ·  CSV: /srv/euroos/wt-net-runs/b-out-kernel/b-out-kernel.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 154s — driving commands
+  [  119/428] ✗ err           10ms t=   15.4s  fetch 10.0.2.100  (missing expected: '200 OK')
+  [  178/428] ✗ CRASH:timeout waiting for '[scon-ready]'   60407ms t=   83.2s  fetch 10.0.2.100
+  !! CRASH after 'fetch 10.0.2.100' — see /srv/euroos/wt-net-runs/b-out-kernel/loadtest-serial-20261103-072759.log
+[loadtest] CRASH/HANG detected · results → /srv/euroos/wt-net-runs/b-out-kernel/b-out-kernel.csv · ltstat samples → /srv/euroos/wt-net-runs/b-out-kernel/b-out-kernel-ltstat.csv
+[loadtest] host HTTP server served 174 request(s)

@@ -1,0 +1,7 @@
+[loadtest] scenario=inbound image=/srv/euroos/wt-net-runs/n-inbound-user/boot.img disks=[] bus=virtio kvm=True smp=4 mem=4G nic=e1000e bootopts=- iommu=False
+[loadtest] serial log: /srv/euroos/wt-net-runs/n-inbound-user/loadtest-serial-20261103-071745.log  ·  CSV: /srv/euroos/wt-net-runs/n-inbound-user/n-inbound-user.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 171s — driving commands
+  [  547/?] ✗ err          326ms t=  300.7s  netstat
+[loadtest] 1 command(s) FAILED (returned but did not succeed) · results → /srv/euroos/wt-net-runs/n-inbound-user/n-inbound-user.csv · ltstat samples → /srv/euroos/wt-net-runs/n-inbound-user/n-inbound-user-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 4174, "err": 3, "p50_ms": 269.6, "p99_ms": 750.7}

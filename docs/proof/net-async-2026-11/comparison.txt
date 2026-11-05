@@ -1,0 +1,49 @@
+== ../integrate-loadtest-2026-11-03/user-smp1-iommu.log  vs  tcg-user-smp1-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/user-smp4-noiommu.log  vs  tcg-user-smp4-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/user-smp1-noiommu.log  vs  tcg-user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/combined-smp4-iommu-1g.log  vs  tcg-combined-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   sbx2: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/combined-smp1-iommu-1g.log  vs  tcg-combined-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/user-smp4-iommu.log  vs  tcg-user-smp4-iommu-r1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== tcg-base-kernel-smp4.log  vs  tcg-kernel-smp4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== tcg-base-kernel-smp1.log  vs  tcg-kernel-smp1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3

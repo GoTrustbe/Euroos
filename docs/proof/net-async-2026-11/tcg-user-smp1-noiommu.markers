@@ -1,0 +1,105 @@
+[net] /etc/hosts: 3 name->IP mapping(s) loaded
+[net] no virtio-net device found
+[net] NIC: e1000 left to the userspace driver e1000d (net.driver=user); network bring-up and the network tests run after the scheduler starts ([udrv-*], [net-late])
+[lk] EuroLock hooks installed: IRQSAVE for Irq-mode locks, per-context order tracking (264 contexts), 20 lock classes
+[smp] 0/0 AP core(s) online (BSP = APIC-id 0, 1 cores total)
+[smp] parallel sum 0..2000000 over 1 core(s) = 1999999000000 (expected 1999999000000) -> OK
+[smp] J1: demo workers parked on 0/0 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[udrv] net.driver=user: the e1000 driver runs in ring 3 (e1000d); the in-kernel e1000 stays unbound
+[udrv] e1000d started: pid 131072, task 27, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x1c0000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU absent: DMA NOT confined
+[udrv-grant] e1000d pid 131072: BAR0 0x810a0000..0x810c0000 mapped for ring 3 (first=true, last=true), page before=false, page after=false; DMA window 32 pages mapped=true, page after=false; LAPIC=false, kernel code=false → OK (exactly the granted ranges) ✓
+[udrv-iommu] no IOMMU translation on this machine: e1000d's DMA is NOT confined (boot QEMU with -device intel-iommu,intremap=off) ⬜
+[udrv-net]   DHCP ACK: lease 10.0.2.15 (router 10.0.2.2, dns 10.0.2.3, 86400s)
+[udrv-net]   ARP: gateway 10.0.2.2 is-at [52, 55, 0a, 00, 02, 02]
+[udrv-net]   DNS: example.com = 172.66.147.243
+[udrv-net]   HTTP GET http://example.com/ -> 888 bytes, HTTP/1.1 200 OK
+[udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HTTP: tx 14 rx 9 frames → OK (the kernel e1000 driver was not used) ✓
+[udrv-irq] MSI-X vector 0x4c: 16 interrupt(s) raised, 16 delivered to e1000d as EuroIPC Irq messages → OK ✓
+[udrv-dma] no IOMMU translation: skipped (the escape would succeed; that is the unconfined case) ⬜
+[udrv] e1000d pid 131072 died (memory isolation: access 0x1000 denied) -> device quiesced: bus-master off, IOMMU domain n/a (no IOMMU), 32 DMA pages freed; restart at tick 229 (death #1)
+[udrv] e1000d started: pid 131073, task 27, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x15c000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU absent: DMA NOT confined
+[udrv-crash]   DHCP ACK: lease 10.0.2.15 (router 10.0.2.2, dns 10.0.2.3, 86400s)
+[udrv-crash]   ARP: gateway 10.0.2.2 is-at [52, 55, 0a, 00, 02, 02]
+[udrv-crash]   DNS: example.com = 172.66.147.243
+[udrv-crash]   HTTP GET http://example.com/ -> 888 bytes, HTTP/1.1 200 OK
+[udrv-crash] e1000d pid 131072 killed by a real fault (memory isolation: access 0x1000 denied); kernel kept running; sends refused while dead=true; restarted as pid 131073, MAC 52:54:00:12:34:56, DHCP + HTTP again → OK (driver crash = process exit, network back) ✓
+[udrv] userspace e1000d: pid 131073 task 27 (starts 2, deaths 1), link up, tx 26 rx 17 irq 31
+[net-late] network ready over e1000d (waited 0 ticks): lease 10.0.2.15, gateway 10.0.2.2, dns 10.0.2.3; running the network part of the boot now
+[net] NIC: e1000 via userspace driver e1000d (EuroIPC) MAC 52:54:00:12:34:56
+[net] ARP: 10.0.2.2 is-at [52, 55, 0a, 00, 02, 02] (resolved by udrv::boot over e1000d)
+[net] PING 10.0.2.2: echo-reply OK ✓
+[net] DNS reply: example.com = 172.66.147.243 ✓
+[net] HTTP GET http://example.com/ -> 888 bytes ✓
+[net]   HTTP/1.1 200 OK
+[net] TLS 1.3 (X25519+ChaCha20) handshake ...
+[net] HTTPS GET https://example.com/ -> 888 bytes (encrypted) ✓
+[net]   HTTP/1.1 200 OK
+[net]   server certificate received: 1002 bytes
+[net] IPv6 link-local (SLAAC): fe80:0:0:0:5054:ff:fe12:3456
+[net] (no Router Advertisement — IPv6 possibly off)
+[net-async] inbound httpd (synthetic peers, TEST-NET-1): 16 concurrent clients: 16 SYN-ACKs from one service() pass, 16 answered, 16 closed, 0 half-open + 0 open left, passes 878519/55677/51191 us (longest 878519 us) → OK ✓
+[net-async] listen: backlog 4, 6 SYNs: 4 half-open + 2 dropped, then 6/6 accepted after the retransmitted SYNs → OK ✓
+[net-async] connect: answered 51108 us; half-open peer (stale ACK): RST at its ACK sent, established in 100756 us; silent drop: fresh port after 3150 ms (2 ports); our FIN after the peer's: sent; bound 6 s → OK ✓
+[net-async] tcp: connect ok 7 (slowest 3150 ms), SYN timeouts 2, stale-peer RSTs 1, new-port retries 1, closed-port answers 0, gave up 0 | inbound: half-open 0, httpd conns 0, served 16 | queues 0 (0 segs), unowned segs 3 (after-close ACKs 0)
+[lk] net-late sched.SCHED (BSP scheduler): acq=2295 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1559us hold-avg=1us
+[lk] net-late ipc.channel_table: acq=1241 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] net-late ipc.channel (per-port): acq=1241 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=137us hold-avg=0us
+[lk] net-late net.CFG: acq=1125 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=214us hold-avg=0us
+[lk] net-late net.PORTQ (TCP port queues): acq=866 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=300us hold-avg=1us
+[lk] net-late ring3.BG (background processes): acq=660 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29758us hold-avg=36us
+[net-late] network waits in this suite gave the CPU away 17 time(s); 6 of them were woken early by e1000d (EuroIPC frame delivery)
+[udrv-linux] glibc process /bin/gnet not run: (no arena for glibc) (needs more RAM than this machine has free here) ⬜
+[lk] checker self-test: irqsave=true correct-order-silent=true deliberate-inversion-detected=true task-mode-keeps-IF=true try_lock=true rwlock=true tracker-balanced=true -> OK ✓
+[kwork] no APs accepting work (single core) — per-CPU queues idle
+[udrv-vec] MSI-X vectors from the pool 0x4c..0x4f: e1000d 0x4c; distinct=true, stubs bound to their owner=true, second claims on a held vector refused 3/3; unowned interrupts 0 → OK ✓
+[lk] after-stress sched.SCHED (BSP scheduler): acq=110758 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1559us hold-avg=1us
+[lk] after-stress ring3.BG (background processes): acq=35258 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29758us hold-avg=12us
+[lk] after-stress ipc.channel_table: acq=28160 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress ipc.channel (per-port): acq=28143 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=137us hold-avg=0us
+[lk] after-stress unix.conn_table: acq=12844 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress unix.conn (per-connection): acq=12835 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=75us hold-avg=1us
+[lk] after-stress heap (linked-list allocator): acq=9017 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress ring3.FUTEX_QUEUE: acq=2255 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1195us hold-avg=2us
+[lk] after-stress class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=165us hold-avg=66us
+[lk] after-stress class Sched: acq=110758 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1559us hold-avg=1us
+[lk] after-stress class Process: acq=39913 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29758us hold-avg=11us
+[lk] after-stress class IpcTable: acq=28160 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress class IpcChannel: acq=28143 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=137us hold-avg=0us
+[lk] after-stress class UnixTable: acq=12874 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=155us hold-avg=0us
+[lk] after-stress class UnixConn: acq=12835 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=75us hold-avg=1us
+[lk] after-stress class Net: acq=3489 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1255us hold-avg=2us
+[lk] after-stress heap per-CPU caches: hits=110543 refills=97 flushes=31 parked=76 KiB
+[lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[lk] boot-total sched.SCHED (BSP scheduler): acq=275244 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=2262us hold-avg=2us
+[lk] boot-total ring3.BG (background processes): acq=98466 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29758us hold-avg=14us
+[lk] boot-total heap (linked-list allocator): acq=91598 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ipc.channel_table: acq=43576 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ipc.channel (per-port): acq=43559 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=269us hold-avg=0us
+[lk] boot-total unix.conn_table: acq=12864 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn (per-connection): acq=12852 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=75us hold-avg=1us
+[lk] boot-total vfs.mount_table: acq=3367 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total vfs.mount (per-mount): acq=3216 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=80792us hold-avg=1676us
+[lk] boot-total ring3.FUTEX_QUEUE: acq=2259 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1195us hold-avg=2us
+[lk] boot-total class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=165us hold-avg=66us
+[lk] boot-total class Sched: acq=275244 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=2262us hold-avg=2us
+[lk] boot-total class Process: acq=103152 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29758us hold-avg=13us
+[lk] boot-total class IpcTable: acq=43576 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class IpcChannel: acq=43559 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=269us hold-avg=0us
+[lk] boot-total class UnixTable: acq=12903 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=155us hold-avg=0us
+[lk] boot-total class UnixConn: acq=12852 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=75us hold-avg=1us
+[lk] boot-total class Net: acq=3678 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1255us hold-avg=3us
+[lk] boot-total class FsMountTable: acq=3367 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class Fs: acq=3216 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=80792us hold-avg=1676us
+[lk] boot-total heap per-CPU caches: hits=550342 refills=2813 flushes=2694 parked=74 KiB
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[lk] boot-total longest-held vfs.mount (per-mount): acq=3216 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=80792us hold-avg=1676us
+[lk] boot-total longest-held ring3.BG (background processes): acq=98497 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29758us hold-avg=14us
+[lk] boot-total longest-held net.socket (per-socket): acq=1015 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=8784us hold-avg=24us
+[lk] boot-total longest-held sched.SCHED (BSP scheduler): acq=275335 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=2262us hold-avg=2us
+[lk] boot-total longest-held ring3.CHILD_EXITS: acq=2071 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1643us hold-avg=1us
+[lk] boot-total longest-held net.UDPQ: acq=32 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1255us hold-avg=76us
+[lk] boot-total longest-held ring3.FUTEX_QUEUE: acq=2259 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1195us hold-avg=2us
+[lk] boot-total longest-held ring3.OPEN_FDS: acq=154 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=363us hold-avg=5us
+[lk] boot-total longest-held net.PORTQ (TCP port queues): acq=1439 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=300us hold-avg=3us
+[lk] boot-total longest-held ipc.channel (per-port): acq=43571 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=269us hold-avg=0us
+[3g2-wire] deadman watchdog LIVE: main loop petting (pets=20), scheduler-tick checking, tripped=false → OK (hang would trip the timer-IRQ deadman) ✓

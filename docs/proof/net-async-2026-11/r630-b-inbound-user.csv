@@ -1,0 +1,11 @@
+id,command,status,elapsed_ms,output_lines,t_s
+1,httpd on,ok,622,1,0.6
+2,echo console-alive,err,2012,1,2.6
+4,echo console-alive,ok,1055,1,4.7
+6,echo console-alive,ok,767,1,6.5
+8,echo console-alive,ok,711,1,8.2
+10,echo console-alive,ok,732,1,9.9
+12,echo console-alive,ok,711,1,11.6
+14,echo console-alive,ok,700,1,13.3
+16,echo console-alive,ok,651,1,15.0
+18,echo console-alive,CRASH:timeout waiting for '[scon-ready]',120593,0,136.6
