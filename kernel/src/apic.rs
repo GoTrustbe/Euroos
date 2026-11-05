@@ -273,12 +273,104 @@ unsafe fn calibrate(hz: u32) -> u32 {
     wr(REG_LVT_TIMER, LVT_MASKED);
     let elapsed = 0xFFFF_FFFFu32 - rd(REG_TIMER_CUR);
     let tsc = core::arch::x86_64::_rdtsc().wrapping_sub(tsc0);
-    if elapsed >= 1000 && guard <= 50_000_000 {
+    // In mode 0 OUT2 drops when the control word is written and rises at the
+    // terminal count, so OUT2 already high at the first poll (or never high)
+    // means no PIT answers on these ports. Machines without a PIT (Kyvernon
+    // VMM, `-machine pit=off`, some modern boards) read 0xFF on port 0x61.
+    let pit_ok = elapsed >= 1000 && guard <= 50_000_000 && guard >= 2;
+    if pit_ok {
         TSC_PER_TICK.store(tsc, core::sync::atomic::Ordering::Relaxed);
+        CAL_SOURCE = "PIT";
+        return elapsed;
     }
+    if let Some((e, t)) = calibrate_against(hz, ClockSrc::Hpet).or_else(|| calibrate_against(hz, ClockSrc::PmTimer)) {
+        TSC_PER_TICK.store(t, core::sync::atomic::Ordering::Relaxed);
+        return e;
+    }
+    CAL_SOURCE = "none (fixed fallback count)";
+    1_000_000 // fallback on a failed calibration
+}
+
+/// Which clock calibrated the LAPIC timer ("PIT", "HPET", "ACPI PM timer").
+pub static mut CAL_SOURCE: &str = "";
+
+pub fn calibration_source() -> &'static str {
+    unsafe { core::ptr::addr_of!(CAL_SOURCE).read() }
+}
+
+#[derive(Clone, Copy)]
+enum ClockSrc {
+    Hpet,
+    PmTimer,
+}
+
+/// Calibrate against the HPET main counter or the ACPI PM timer when the PIT
+/// is absent: run the LAPIC timer from its maximum for one `hz` period of the
+/// reference clock. Returns (LAPIC ticks, TSC cycles) for that period.
+unsafe fn calibrate_against(hz: u32, src: ClockSrc) -> Option<(u32, u64)> {
+    // Reference clock: a reader of a free-running counter plus its frequency
+    // and wrap mask.
+    let (read, freq, mask): (fn() -> u64, u64, u64) = match src {
+        ClockSrc::Hpet => {
+            if !crate::hpet::present() && !crate::hpet::init() {
+                return None;
+            }
+            (crate::hpet::counter as fn() -> u64, crate::hpet::freq_hz(), u64::MAX)
+        }
+        ClockSrc::PmTimer => {
+            let f = crate::acpi::fadt()?;
+            if f.pm_tmr_blk == 0 || f.pm_tmr_blk > 0xFFFF {
+                return None;
+            }
+            let port = f.pm_tmr_blk as u16;
+            let mask = if f.pm_tmr_32bit { 0xFFFF_FFFF } else { 0x00FF_FFFF };
+            // A port nobody decodes reads all ones: not a timer.
+            let a = Port::<u32>::new(port).read() as u64 & mask;
+            if a == mask {
+                return None;
+            }
+            PM_PORT = port;
+            (read_pm as fn() -> u64, 3_579_545, mask)
+        }
+    };
+    if freq == 0 {
+        return None;
+    }
+    let want = freq / hz as u64;
+    wr(REG_TIMER_DIV, 0x3);
+    wr(REG_TIMER_INIT, 0xFFFF_FFFF);
+    let tsc0 = core::arch::x86_64::_rdtsc();
+    let start = read() & mask;
+    let mut guard = 0u64;
+    loop {
+        let now = read() & mask;
+        if now.wrapping_sub(start) & mask >= want {
+            break;
+        }
+        guard += 1;
+        if guard > 200_000_000 {
+            wr(REG_LVT_TIMER, LVT_MASKED);
+            return None; // the reference clock does not advance
+        }
+        core::hint::spin_loop();
+    }
+    wr(REG_LVT_TIMER, LVT_MASKED);
+    let elapsed = 0xFFFF_FFFFu32 - rd(REG_TIMER_CUR);
+    let tsc = core::arch::x86_64::_rdtsc().wrapping_sub(tsc0);
     if elapsed < 1000 {
-        1_000_000 // fallback on a failed calibration
-    } else {
-        elapsed
+        return None;
     }
+    CAL_SOURCE = match src {
+        ClockSrc::Hpet => "HPET (no PIT)",
+        ClockSrc::PmTimer => "ACPI PM timer (no PIT)",
+    };
+    Some((elapsed, tsc))
+}
+
+static mut PM_PORT: u16 = 0;
+
+fn read_pm() -> u64 {
+    // SAFETY: PM_PORT is set once before the first call; reading the PM timer
+    // port has no side effects.
+    unsafe { Port::<u32>::new(core::ptr::addr_of!(PM_PORT).read()).read() as u64 }
 }
