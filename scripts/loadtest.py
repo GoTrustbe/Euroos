@@ -728,7 +728,14 @@ def main():
         if not con.connect():
             print("[loadtest] FAILED: could not connect to serial socket"); return 2
         print("[loadtest] waiting for serial console …")
-        con.boot(a.boot_timeout)
+        try:
+            con.boot(a.boot_timeout)
+        except CrashError as e:
+            # A boot that hangs before the console is up (BUG-031/033: silence after
+            # a glibc self-test) gets the NMI probe too, not only a hung command.
+            if a.nmi_on_hang and ("timeout" in str(e) or "silent" in str(e)):
+                nmi_probe(sock_path + ".mon", con)
+            raise
         print(f"[loadtest] serial console up after {time.time() - t_boot:.0f}s — driving commands", flush=True)
         if a.hammer and a.hostfwd:
             hammer = Hammer(a.hostfwd, a.hammer)
