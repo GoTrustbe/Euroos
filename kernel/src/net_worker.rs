@@ -243,10 +243,16 @@ fn inbound(cfg: &NetCfg) -> usize {
 
 /// One line for `netstat` / the boot report.
 pub fn report() -> String {
+    let drv = if crate::nic::frames_from_process() {
+        let (send, irq) = crate::udrv::recv_wakes();
+        alloc::format!("; e1000d woken early {send} (frame to send) + {irq} (its interrupt)")
+    } else {
+        String::new()
+    };
     match task() {
-        None => "net worker: not running".into(),
+        None => alloc::format!("net worker: not running{drv}"),
         Some(t) => alloc::format!(
-            "net worker: task {t}, {} passes, {} inbound frames, longest pass {} us; kicks {} (e1000d/task) + {} (interrupt, {} found the scheduler busy)",
+            "net worker: task {t}, {} passes, {} inbound frames, longest pass {} us; kicks {} (e1000d/task) + {} (interrupt, {} found the scheduler busy){drv}",
             PASSES.load(Ordering::Relaxed),
             FRAMES.load(Ordering::Relaxed),
             PASS_MAX_US.load(Ordering::Relaxed),

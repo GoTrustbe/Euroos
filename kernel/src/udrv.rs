@@ -201,6 +201,16 @@ fn irq_pool(i: usize) {
         let d = o as usize - 1;
         IRQS[d].fetch_add(1, Ordering::Relaxed);
         euroipc::notify_from_irq(RES[d].notify_slot);
+        // e1000d sleeping in its receive: let it look now, not at the next tick.
+        // Never waits for the scheduler lock (interrupt context); if it is busy
+        // the driver wakes on its tick as before.
+        if d == Drv::E1000d as usize {
+            let t = RECV_SLEEPER[d].load(Ordering::Acquire);
+            if t != usize::MAX && crate::sched::try_unblock_any(t) {
+                RECV_SLEEPER[d].store(usize::MAX, Ordering::Release);
+                RECV_WAKES_IRQ.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     } else {
         IRQS_UNOWNED.fetch_add(1, Ordering::Relaxed);
     }
@@ -307,6 +317,35 @@ static SEND_REFUSED_WHILE_DEAD: AtomicBool = AtomicBool::new(false);
 /// The last `Report` from the driver: (code, a, b), code 0 = none.
 static REPORT: Mutex<(u8, u64, u64)> = Mutex::new((0, 0, 0));
 
+/// The task of driver `d` while it sleeps in SYS_IPC_RECV (usize::MAX: none).
+///
+/// An empty receive sleeps the driver one tick, and before this nothing woke
+/// it early: a frame the netstack handed e1000d waited up to a tick (10 ms)
+/// for the driver to look, and so did the interrupt of a received frame. Every
+/// frame of a connection paid that, in both directions: the ~50 ms that one
+/// extra frame per fetch cost with `net.driver=user` (net-async proof), and
+/// most of the gap to the kernel driver. Now `nic_send` and the driver's
+/// interrupt wake it (e1000d only; the block drivers keep their own pacing).
+static RECV_SLEEPER: [core::sync::atomic::AtomicUsize; DRIVERS] =
+    [const { core::sync::atomic::AtomicUsize::new(usize::MAX) }; DRIVERS];
+/// Early wakes of a driver sleeping in SYS_IPC_RECV (from a send / from its interrupt).
+static RECV_WAKES: AtomicU64 = AtomicU64::new(0);
+static RECV_WAKES_IRQ: AtomicU64 = AtomicU64::new(0);
+
+/// Wake driver `d` if it sleeps in SYS_IPC_RECV (task or syscall context).
+fn wake_recv(d: Drv) {
+    let t = RECV_SLEEPER[d as usize].swap(usize::MAX, Ordering::AcqRel);
+    if t != usize::MAX {
+        RECV_WAKES.fetch_add(1, Ordering::Relaxed);
+        crate::sched::unblock_any(t);
+    }
+}
+
+/// (early wakes from a send, early wakes from the interrupt) of the drivers.
+pub fn recv_wakes() -> (u64, u64) {
+    (RECV_WAKES.load(Ordering::Relaxed), RECV_WAKES_IRQ.load(Ordering::Relaxed))
+}
+
 /// Words a driver may get after the standard `DriverInfo` block.
 pub(crate) const MAX_EXTRA_WORDS: usize = 4;
 
@@ -346,7 +385,9 @@ fn sys_grant(task: usize) -> Option<SysGrant> {
 pub(crate) fn revoke_pid(pid: u64) {
     without_interrupts(|| {
         for g in SYS.lock().iter_mut() {
-            if g.is_some_and(|g| g.pid == pid) {
+            if let Some(old) = g.filter(|g| g.pid == pid) {
+                // Its slot may be reused: no wake for the next occupant.
+                let _ = RECV_SLEEPER[old.drv as usize].compare_exchange(old.task, usize::MAX, Ordering::AcqRel, Ordering::Relaxed);
                 *g = None;
             }
         }
@@ -493,8 +534,17 @@ pub fn syscall(task: usize, num: u64, a1: u64, a2: u64, a3: u64) -> Option<u64> 
                 }
                 if attempt == 0 {
                     // Nothing pending: sleep one tick and give the CPU away (no lock held).
+                    // e1000d is woken early by a frame to send or its interrupt
+                    // (RECV_SLEEPER). Interrupts are off here, so no waker on this
+                    // core runs between the mark and the sleep.
+                    if d == Drv::E1000d {
+                        RECV_SLEEPER[d as usize].store(task, Ordering::Release);
+                    }
                     crate::sched::sleep_ticks(1);
                     crate::sched::yield_now();
+                    if d == Drv::E1000d {
+                        let _ = RECV_SLEEPER[d as usize].compare_exchange(task, usize::MAX, Ordering::AcqRel, Ordering::Relaxed);
+                    }
                 }
             }
             err(abi::EAGAIN)
@@ -567,6 +617,7 @@ pub fn nic_send(frame: &[u8]) -> bool {
     let ok = euroipc::send_with(euroipc::KERNEL_PID, DRIVER_PORT, &b[..n], false) >= 0;
     if ok {
         TX_FRAMES.fetch_add(1, Ordering::Relaxed);
+        wake_recv(Drv::E1000d);
     }
     ok
 }
