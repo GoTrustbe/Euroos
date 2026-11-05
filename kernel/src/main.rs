@@ -104,6 +104,8 @@ mod virtio_blk;
 mod virtio_gpu;
 mod virtio_snd;
 mod virtio_net;
+mod virtio_pci;
+mod virtio_input;
 mod vpn;
 mod agent;
 mod locale;
@@ -2203,6 +2205,12 @@ fn main() -> Status {
     // interrupt-IN endpoint; the reports flow into the same input paths as PS/2.
     if iommu::dma_scope(&mut allocator, "xhci", |f| xhci::init(f)) {
         serial_println!("[euro] xHCI USB initialized — {} HID device(s) live", xhci::hid_count());
+    }
+    // virtio-input (virtio 1.x): the virtio-tablet absolute pointer and the
+    // virtio-keyboard of Kyvernon VMM / QEMU, polled like the USB HID devices.
+    let vin = iommu::dma_scope(&mut allocator, "virtio-input", |f| virtio_input::init(f));
+    if vin > 0 {
+        serial_println!("[euro] virtio-input initialized — {vin} device(s)");
     }
     // I2: Intel HD-Audio — codec enumeration + stream DMA that plays a (euroaudio-mixed)
     // tone. Proves the mixer→hardware chain (LPIB running = DMA playing).
@@ -5069,6 +5077,7 @@ fn main() -> Status {
         // clicks still depended on the per-boot MSI-X delivery lottery (dt7: the
         // QMP click never arrived; dt3/dt4 simply got lucky).
         xhci::poll();
+        crate::virtio_input::poll(); // virtio-tablet / virtio-keyboard (polled)
         // One-shot liveness proof once the loop has petted a while.
         if !wd_reported && watchdog::pets() >= 20 {
             wd_reported = true;
@@ -5653,6 +5662,7 @@ fn main() -> Status {
         // I1: harvest USB-HID interrupt transfers (keyboard/mouse) and inject them
         // into the same scancode/mouse paths as PS/2 — before we read the keys.
         xhci::poll();
+        crate::virtio_input::poll(); // virtio-tablet / virtio-keyboard (polled)
 
         // A graphical app (the DOOM port) owns the keyboard while it runs: route
         // RAW scancodes (press/release + arrows/ctrl, which poll_key's char

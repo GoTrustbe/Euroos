@@ -11522,6 +11522,7 @@ pub fn run_glibc_disk(
         // arrive regardless of that lottery; the poll is cheap when the ring is
         // empty, and the IRQ path (when it does work) just finds the ring drained.
         crate::xhci::poll();
+        crate::virtio_input::poll(); // virtio-tablet / virtio-keyboard (polled)
         if iters % 64 == 0 {
             // %64, not %1024: with the idle-hlt launcher this loop iterates a few
             // times per second, and the old gate silenced the heartbeat AND the

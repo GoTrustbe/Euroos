@@ -122,6 +122,7 @@ pub fn gate(fb: &FrameBuffer, default_user: &str) -> String {
 
     loop {
         crate::xhci::poll(); // also service the USB keyboard
+        crate::virtio_input::poll(); // virtio-tablet / virtio-keyboard (polled)
         let mut dirty = false;
         while let Some(c) = crate::ps2::poll_key() {
             dirty = true;
