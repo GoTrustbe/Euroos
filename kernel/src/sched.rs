@@ -552,6 +552,12 @@ pub fn set_task_guarded_stack(idx: usize, top: u64) {
 global_asm!(
     ".global timer_switch",
     "timer_switch:",
+    // BUG-032: an interrupt does not clear RFLAGS.DF, and the interrupted code may
+    // be inside a backward copy (`std; rep movsq; cld`: compiler_builtins memmove,
+    // or ring 3). Rust code assumes DF=0, so the scheduler's own `rep movsq` ran
+    // backwards and read a stale stack word as its SCHED guard pointer. The
+    // interrupted DF comes back with its RFLAGS on iretq.
+    "cld",
     "push rax", "push rbx", "push rcx", "push rdx", "push rsi", "push rdi", "push rbp",
     "push r8", "push r9", "push r10", "push r11", "push r12", "push r13", "push r14", "push r15",
     "mov rdi, rsp",   // arg1 = current stack pointer (full saved context)
@@ -570,6 +576,12 @@ global_asm!(
 global_asm!(
     ".global yield_switch",
     "yield_switch:",
+    // BUG-032: an interrupt does not clear RFLAGS.DF, and the interrupted code may
+    // be inside a backward copy (`std; rep movsq; cld`: compiler_builtins memmove,
+    // or ring 3). Rust code assumes DF=0, so the scheduler's own `rep movsq` ran
+    // backwards and read a stale stack word as its SCHED guard pointer. The
+    // interrupted DF comes back with its RFLAGS on iretq.
+    "cld",
     "push rax", "push rbx", "push rcx", "push rdx", "push rsi", "push rdi", "push rbp",
     "push r8", "push r9", "push r10", "push r11", "push r12", "push r13", "push r14", "push r15",
     "mov rdi, rsp",
@@ -629,6 +641,76 @@ pub fn yield_now() {
 /// BUG-007 diagnostic: timer ticks that found SCHED already held (in task context) and
 /// were safely skipped instead of deadlocking. Nonzero ⇒ the deadlock window was hit.
 pub static SCHED_SKIPS: AtomicU64 = AtomicU64::new(0);
+
+/// BUG-032: context switches entered while the interrupted code had RFLAGS.DF set
+/// (read from its interrupt frame), and those in which the Rust handler itself
+/// still saw DF set (must stay 0: the stubs clear it). For the `[bug032]` self-test.
+pub static DF_INTERRUPTED: AtomicU64 = AtomicU64::new(0);
+pub static DF_IN_HANDLER: AtomicU64 = AtomicU64::new(0);
+const RFLAGS_DF: u64 = 1 << 10;
+
+#[inline(always)]
+fn note_df(rsp: u64) {
+    let f: u64;
+    // SAFETY: reads RFLAGS; `rsp` is the stub's frame: 15 GPRs, RIP, CS, RFLAGS.
+    unsafe { core::arch::asm!("pushfq", "pop {}", out(reg) f, options(preserves_flags)) };
+    if f & RFLAGS_DF != 0 {
+        DF_IN_HANDLER.fetch_add(1, Ordering::Relaxed);
+    }
+    if unsafe { *((rsp + 136) as *const u64) } & RFLAGS_DF != 0 {
+        DF_INTERRUPTED.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// BUG-032 regression self-test: run across timer ticks and one cooperative yield
+/// with RFLAGS.DF set (pure assembly: Rust code must never run with DF=1), then
+/// check that every context switch in that window saw DF set in the interrupted
+/// frame, that the Rust handler never saw it (the stubs clear it), that iretq gave
+/// the interrupted code its DF back, and that SYSCALL entry clears DF (FMASK).
+/// Before the fix the handler ran with DF=1 and the scheduler's `rep movsq` copied
+/// its lock guard backwards (the sched.rs:755 panic, `current` read through a stale
+/// stack word).
+pub fn df_selftest() {
+    let was_on = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::enable();
+    let (i0, h0) = (DF_INTERRUPTED.load(Ordering::Relaxed), DF_IN_HANDLER.load(Ordering::Relaxed));
+    let ticks = core::ptr::addr_of!(crate::interrupts::TICKS) as *const u64;
+    let target = crate::interrupts::TICKS.load(Ordering::Relaxed) + 3;
+    let f_after: u64;
+    // SAFETY: only `cmp`/`pause`/`int`/flag instructions run between std and cld;
+    // the yield vector is the scheduler's own stub (round-robins when nobody blocked).
+    unsafe {
+        core::arch::asm!(
+            "std",
+            "2:",
+            "pause",
+            "cmp [{t}], {n}",
+            "jb 2b",
+            "int {v}",
+            "pushfq",
+            "pop {f}",
+            "cld",
+            v = const crate::interrupts::YIELD_VECTOR,
+            t = in(reg) ticks,
+            n = in(reg) target,
+            f = out(reg) f_after,
+        );
+    }
+    if !was_on {
+        x86_64::instructions::interrupts::disable();
+    }
+    let interrupted = DF_INTERRUPTED.load(Ordering::Relaxed) - i0;
+    let in_handler = DF_IN_HANDLER.load(Ordering::Relaxed) - h0;
+    let kept = f_after & RFLAGS_DF != 0;
+    let fmask = unsafe { x86_64::registers::model_specific::Msr::new(0xC000_0084).read() };
+    let fmask_df = fmask & RFLAGS_DF != 0;
+    let ok = interrupted >= 2 && in_handler == 0 && kept && fmask_df;
+    crate::serial_println!(
+        "[bug032] DF set across context switches: {interrupted} switch(es) interrupted code with DF=1, \
+         handler saw DF=1 in {in_handler}, DF back after iretq={kept}, SYSCALL clears DF (FMASK {fmask:#x})={fmask_df} → {}",
+        if ok { "OK ✓" } else { "FAILED" }
+    );
+}
 static SCHED_LOG_CTR: AtomicU64 = AtomicU64::new(0);
 
 pub static TRACE_SCHED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -648,6 +730,7 @@ static LATE_TICKS_LOGGED: AtomicU64 = AtomicU64::new(0);
 
 #[no_mangle]
 pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
+    note_df(rsp);
     // A late tick: the periodic LAPIC timer has one pending bit, so a window with
     // interrupts off longer than a period swallows every period but one. The clock
     // is kept on real time from the TSC, and the first late ticks say WHERE the
@@ -733,6 +816,7 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
 /// (no TICKS bump, no EOI, no watchdog/USB poll). Called from `yield_now`.
 #[no_mangle]
 pub extern "sysv64" fn yield_tick(rsp: u64) -> u64 {
+    note_df(rsp);
     schedule_core(rsp, true)
 }
 
@@ -980,11 +1064,14 @@ fn sched_state_corrupt(cur: usize, count: usize, pc: u64, rsp: u64) -> ! {
     let cr3: u64;
     unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags)) };
     // SAFETY: `rsp` is the interrupt frame the stub built (15 GPRs, then RIP, CS).
-    let (rip, cs) = unsafe { (*((rsp + 120) as *const u64), *((rsp + 128) as *const u64)) };
+    let (rip, cs, rflags) =
+        unsafe { (*((rsp + 120) as *const u64), *((rsp + 128) as *const u64), *((rsp + 136) as *const u64)) };
     crate::serial_println!(
         "\n[bug032] SCHED.current is no task index: current={cur:#018x} (bytes {:02x?}) count={count} \
-         @ {pc:#x}; cpu={} cr3={cr3:#x}; interrupted rip={rip:#x} cs={cs:#x}; write watch {} core(s), {} writes checked",
+         @ {pc:#x} (SCHED.current is @ {:#x}); cpu={} cr3={cr3:#x}; interrupted rip={rip:#x} cs={cs:#x} rflags={rflags:#x}; \
+         write watch {} core(s), {} writes checked",
         (cur as u64).to_le_bytes(),
+        crate::memwatch::current_field(),
         crate::apic::lapic_id(),
         crate::memwatch::armed_cpus(),
         crate::memwatch::HITS.load(Ordering::Relaxed)
@@ -1341,6 +1428,12 @@ pub static AP_WORK_C: [AtomicU64; MAX_CPU] = [const { AtomicU64::new(0) }; MAX_C
 global_asm!(
     ".global ap_timer_switch",
     "ap_timer_switch:",
+    // BUG-032: an interrupt does not clear RFLAGS.DF, and the interrupted code may
+    // be inside a backward copy (`std; rep movsq; cld`: compiler_builtins memmove,
+    // or ring 3). Rust code assumes DF=0, so the scheduler's own `rep movsq` ran
+    // backwards and read a stale stack word as its SCHED guard pointer. The
+    // interrupted DF comes back with its RFLAGS on iretq.
+    "cld",
     "push rax", "push rbx", "push rcx", "push rdx", "push rsi", "push rdi", "push rbp",
     "push r8", "push r9", "push r10", "push r11", "push r12", "push r13", "push r14", "push r15",
     "mov rdi, rsp",
@@ -1365,6 +1458,7 @@ pub fn ap_stub_addr() -> u64 {
 /// task rsp. Only touches `AP_SCHED[cpu]` (single-writer → no contention).
 #[no_mangle]
 pub extern "sysv64" fn ap_schedule_tick(rsp: u64) -> u64 {
+    note_df(rsp);
     crate::apic::eoi();
     let cpu = this_cpu();
     let mut s = AP_SCHED[cpu].lock();

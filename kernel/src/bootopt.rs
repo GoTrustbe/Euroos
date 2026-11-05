@@ -17,8 +17,8 @@
 //!   `nvme.rs` leaves it alone, so the root is never on it. `storage.nvme=kernel`
 //!   (the default) keeps the in-kernel driver.
 //!
-//! - `debug.schedwatch=off`: no hardware write watch on the scheduler state
-//!   (BUG-032, memwatch.rs; on by default).
+//! - `debug.schedwatch=on`: a hardware write watch on the scheduler state
+//!   (BUG-032, memwatch.rs; off by default, one #DB per context switch).
 //!
 //! The file is not signed. It only chooses between two code paths that are
 //! both part of the signed kernel image; it cannot add code.
@@ -27,7 +27,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 static NET_USER: AtomicBool = AtomicBool::new(true);
 static NVME_USER: AtomicBool = AtomicBool::new(false);
-static SCHED_WATCH: AtomicBool = AtomicBool::new(true);
+static SCHED_WATCH: AtomicBool = AtomicBool::new(false);
 static FOUND: AtomicBool = AtomicBool::new(false);
 
 /// Parse the option text (host-testable shape: pure over the bytes).
@@ -83,7 +83,7 @@ pub fn capture() {
 }
 
 /// BUG-032: is the hardware write watch on the scheduler state on (memwatch.rs)?
-/// On by default; `debug.schedwatch=off` turns it off.
+/// Off by default; `debug.schedwatch=on` arms it.
 pub fn sched_watch() -> bool {
     SCHED_WATCH.load(Ordering::Relaxed)
 }

@@ -5012,6 +5012,7 @@ fn main() -> Status {
     let mut portal_buttons: Option<(u64, [(usize, usize, usize, usize); 3])> = None;
     // BUG-032: is the hardware write watch on the scheduler state live on this machine?
     memwatch::selftest();
+    sched::df_selftest();
     serial_println!(
         "[3f7-live] permission-portal armed — no request pending at boot; a modal is shown only when an app requests a resource (wired to portal::respond)"
     );

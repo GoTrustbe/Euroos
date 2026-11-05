@@ -16,7 +16,11 @@
 //! seen here; `sched::schedule_core` validates `current` before using it and
 //! dumps the surrounding memory, which covers that case.
 //!
-//! Off with `debug.schedwatch=off` in `euroos-boot.conf` (bootopt.rs).
+//! On with `debug.schedwatch=on` in `euroos-boot.conf` (bootopt.rs). Off by
+//! default: every context switch then costs one #DB (a VM exit under KVM).
+//! The cause of BUG-032 turned out to be a wild READ (RFLAGS.DF set in the
+//! scheduler, sched.rs), which this watch cannot see; it stays for the next
+//! suspected wild write.
 //!
 //! Not in Redox; the DR7 layout is the Intel SDM's (Vol. 3, 17.2).
 
@@ -68,6 +72,11 @@ pub fn arm_this_cpu() {
         write_dr7(DR7_BASE);
     }
     ARMED.fetch_or(cpu_bit(), Ordering::AcqRel);
+}
+
+/// Address of `SCHED.current` as the scheduler published it (0 before init).
+pub fn current_field() -> u64 {
+    ADDR_CUR.load(Ordering::Relaxed)
 }
 
 /// Is the watch armed on any core?
@@ -130,7 +139,7 @@ fn selftest_write(v: u64) {
 /// scheduler watch is live, without touching the scheduler.
 pub fn selftest() {
     if !crate::bootopt::sched_watch() {
-        crate::serial_println!("[bug032] scheduler write watch off (debug.schedwatch=off)");
+        crate::serial_println!("[bug032] scheduler write watch off (debug.schedwatch=on arms it)");
         return;
     }
     if ARMED.load(Ordering::Acquire) & cpu_bit() == 0 {

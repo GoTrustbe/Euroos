@@ -16541,7 +16541,9 @@ fn init_syscall_msrs() {
         efer.write(v | 1 | nxe); // EFER.SCE (+ NXE)
         Msr::new(0xC000_0081).write((kdata << 48) | (kcode << 32)); // STAR
         Msr::new(0xC000_0082).write(syscall_entry as usize as u64); // LSTAR
-        Msr::new(0xC000_0084).write(0x200); // FMASK: clear IF on entry
+        // FMASK: clear IF, and DF/TF/NT (BUG-032): ring 3 may enter with DF=1 (a
+        // backward copy), and the kernel's Rust code assumes DF=0 like the SysV ABI.
+        Msr::new(0xC000_0084).write(0x200 | 0x400 | 0x100 | 0x4000);
         // Kernel stack for the syscall handler. CURRENT_SC_STACK is the per-task
         // syscall stack the entry actually uses; default it to the global KSTACK for
         // any syscall before the first context switch (schedule_core then keeps it
