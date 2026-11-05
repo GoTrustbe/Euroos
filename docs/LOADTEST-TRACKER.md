@@ -155,6 +155,7 @@ the code.
 | `[sbx2]` and glibc at `-m 1G` (TCG) | 2026-11-05 | ✅ `[sbx2]` 15/15 | `proof/mem-hygiene-2026-11/` | BUG-028 fixed; GBIG, GSCM3's second fork and `[churn-fork]` still fail at 1 GiB (process pool too small, deterministic) |
 | TCG matrix + `megaraid-proof.sh` on net-async + mem-hygiene integrated | 2026-11-05 | ✅ 0 markers worse | `proof/integrate-net-mem-2026-11/` | 14 boots (user/kernel/storage/combined, smp4/smp1, ± IOMMU) + 10 megaraid boots; `[net-async]` OK, `[sbx2]` 6/6 at 1 GiB, `[lk]` 0 inversions |
 | `soak` 1 h + 4 httpd clients, integrated (KVM, `-m 16G`) | 2026-11-05 | ✅ 1 805/1 805 ok | `proof/integrate-net-mem-2026-11/` | heap +0.37 kB/min (heaptrace soak: no growing site); tasks, files, frames, process pool flat; httpd as on net-async (slow during long synchronous commands) |
+| BUG-032 fix: TCG matrix + megaraid + R630 boots and soak (`feature/bug032`) | 2026-11-05 | ✅ 0 markers worse | `proof/bug032-2026-11/` | 30 TCG boots, 8 megaraid boots, 59 R630 KVM boots, 1 h soak with 4 httpd clients (1 720/1 720 commands, heap +0.43 kB/min); `[bug032]` DF self-test OK everywhere, `[lk]` 0 inversions |
 | `inbound` 4 clients 300 s + `net`, integrated (KVM) | 2026-11-05 | ✅ | `proof/integrate-net-mem-2026-11/` | user 4 165 ok, console max 693 ms; kernel 101 202 ok, max 380 ms; outbound 300/300 (user), 400/400 (kernel) |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
@@ -764,48 +765,73 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   every entry, so it takes only the entry the chip wrote; guarded by
   `a_torn_producer_read_takes_no_phantom_entry`, no change.
 
-### BUG-031 — one boot without IOMMU went silent after `[net-late]` ⬜ OPEN
-- **Status:**   OPEN, not reproduced · **Severity:** unknown (a hang, once in 15 boots)
+### BUG-031 — one boot without IOMMU went silent after `[net-late]` 🟡 LIKELY FIXED (BUG-032)
+- **Status:**   not reproduced; probably BUG-032 · **Severity:** unknown (a hang, once in 15 boots)
 - **Found:**    2026-11-05 · `scripts/megaraid-proof.sh` with `NO_IOMMU=1`, TCG, second boot of the
   first run, mem-hygiene image
 - **Actual:**   console silent right after `[net-late] network waits in this suite ...`, before the
   `[udrv-linux]` glibc program loaded; no fault line; stopped by the 900 s timeout.
-- **Analysis:** not attributed; 13 further boots without IOMMU and every other boot of the proof
-  passed that point. `megaraid-proof.sh` now injects an NMI on a timeout, so a recurrence leaves
-  the kernel's NMI probe in the log. `proof/mem-hygiene-2026-11/mr-noiommu-hang-boot2-tail.txt`.
-- **Related:** BUG-033 (TCG boots that stop in the self-tests, `user-smp4-iommu`, both trees) has
-  the same picture: silence during the boot self-tests, no fault line. They may share a cause; an
-  NMI probe of either would tell.
+- **Analysis:** no probe of the hang exists, but BUG-032 explains this kind of silence: a context
+  switch that runs with RFLAGS.DF set copies the scheduler's lock guard backwards, and with a
+  stale stack word as its SCHED pointer the switch can run on a fake run queue, return a wrong
+  stack or leave interrupts on inside the tick, without a fault line. Not seen again: megaraid
+  proof 4 runs (8 boots) with and without IOMMU on the fix
+  (`proof/bug032-2026-11/`). `megaraid-proof.sh` sends an NMI on a timeout, so a recurrence
+  leaves the probe. `proof/mem-hygiene-2026-11/mr-noiommu-hang-boot2-tail.txt`.
 
-### BUG-032 — `KERNEL PANIC` at `sched.rs:755`: `s.current` overwritten ⬜ OPEN
-- **Status:**   OPEN, seen once · **Severity:** CRITICAL when it hits (kernel panic), rare
+### BUG-032 — `KERNEL PANIC` at `sched.rs:755`: `s.current` read through a stale pointer ✅ FIXED
+- **Status:**   FIXED (`b6a6fa8`, `feature/bug032`) · **Severity:** CRITICAL (kernel panic; silent
+  corruption and hangs in the other cases)
 - **Found:**    2026-11-03 · R630, KVM, base image `bb2e9d2`, `net.driver=user`, an outbound run of
   the net-async work (`proof/net-async-2026-11/r630-b2-out-user.txt`); numbered when
   `feature/net-async` and `feature/mem-hygiene` were integrated
 - **Actual:**   during the boot, after the desktop apps came up: `panicked at kernel/src/sched.rs:755:5:
   index out of bounds: the len is 256 but the index is 5242243857361403874`, i.e.
   `s.tasks[cur]` in `schedule_core` with a `s.current` that is no task index.
-- **Analysis:** not attributed. The value is `0x48C031037FFFFFE2`, in memory order the bytes
-  `e2 ff ff 7f 03 31 c0 48`: that reads as x86-64 code (`… jg +3; xor eax,eax; REX.W …`), not as
-  a counter or a pointer gone wrong. So something wrote code bytes over the scheduler state (a
-  program image copied to the wrong place, or a page reused while still written to), rather than
-  a lost update of `current`. Not seen on `feature/net-async`, `feature/mem-hygiene` or their
-  integration (`proof/integrate-net-mem-2026-11/`).
-- **Next:**     a check of `current < count` in `schedule_core` that dumps the words around `SCHED`
-  before it panics would turn the next occurrence into a diagnosis.
+- **Analysis:** nothing wrote over the scheduler; the scheduler read through a wrong pointer. An
+  interrupt does not clear RFLAGS.DF, and the three raw context-switch stubs (`timer_switch`,
+  `yield_switch`, `ap_timer_switch`) called Rust with the interrupted DF. The interrupted code can
+  be inside a backward copy: `compiler_builtins` memmove does `std; rep movsq; cld` for an
+  overlapping copy (the TCG recurrence interrupted `memmove+0x56`, under EuroFS
+  `rebuild_allocator_trim`). Rust code assumes DF=0. `schedule_core` copies its 40-byte `SCHED`
+  lock guard with `rep movsq`; with DF=1 the copy runs backwards, the guard's data pointer stays
+  whatever word the stack held there, and `current` is read at that word + 0x6820. On the R630
+  that word was a return address in `ab_glyph` (`quad_to`, the lockscreen text being drawn):
+  return address + 0x6820 is `.text` of `core::num::dec2flt::lemire::compute_float<f32>`, exactly
+  the eight bytes of the panic, and the panic dump shows `RFLAGS=0x406` (DF set). On TCG the word
+  was 0 (`current` read at 0x6820) and, in the self-test, heap text. The same DF made every
+  `memcpy` in the tick path write below its destination. SYSCALL had the same exposure: FMASK
+  cleared only IF, so a ring-3 program could run the syscall path with DF=1.
+  `proof/bug032-2026-11/r630-original-panic-analysis.txt`.
+- **Fix:**      `cld` as the first instruction of the three stubs (iretq gives the interrupted code
+  its DF back); FMASK clears DF, TF and NT as well as IF. `schedule_core` now checks `current`
+  against `MAX_TASKS` and `count` before it indexes and dumps the guard address against the real
+  `SCHED.current`, the interrupted RFLAGS and the 32 words around it (one compare). A
+  debug-register write watch on `current`/`count` (`memwatch.rs`, `debug.schedwatch=on`) is left
+  in as an opt-in tool.
+- **Regression test:** boot self-test `[bug032] DF set across context switches` runs across timer
+  ticks and a yield with DF=1 (pure assembly) and checks: handler never saw DF, DF back after
+  iretq, FMASK clears DF. The same image without the three `cld` panics in that self-test with
+  the BUG-032 signature (`proof/bug032-2026-11/tcg-nocld-selftest-panic.txt`).
+- **Before / after:** before the fix 1 panic in 12 TCG `user-smp4-iommu`
+  boots and 1 hang (silent after `gsdl`) in 31 R630 KVM boots; on the fix
+  30 TCG boots and 59 R630 KVM boots without either, a 1 h soak with 4 httpd clients (1 720/1 720 commands, heap +0.43 kB/min).
 
-### BUG-033 — TCG boots that stop in the boot self-tests (`user-smp4-iommu`) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (a boot that never reaches the desktop; a CI flake)
+### BUG-033 — TCG boots that stop in the boot self-tests (`user-smp4-iommu`) 🟡 LIKELY FIXED (BUG-032)
+- **Status:**   not reproduced on the fix · **Severity:** MEDIUM (a boot that never reaches the
+  desktop; a CI flake)
 - **Found:**    2026-11-05 · TCG, `-smp 4 -m 512M` with intel-iommu, selftest image, the net-async
   work: 1 of 6 boots on `feature/net-async`, 1 of 3 on the base `bb2e9d2`
   (`proof/net-async-2026-11/README.md`); numbered at the integration
 - **Actual:**   no output after a glibc self-test line (`[glibc] gscm` on the branch, a
-  `[sched-guard]` line on the base); no fault line, no panic.
-- **Analysis:** not attributed. The same picture as BUG-031 (a boot without IOMMU that went silent
-  after `[net-late]`, before the `[udrv-linux]` glibc program): a glibc program during the boot,
-  then silence. They may have the same cause. The TCG boot script of the integration proof sends
-  an NMI through the QEMU monitor when a boot is silent for 15 min or reaches no desktop, so a
-  recurrence leaves the kernel's NMI probe in the log.
+  `[sched-guard]` line on the base, after `gsdl`); no fault line, no panic.
+- **Analysis:** the BUG-032 mechanism (a context switch with DF=1) gives this picture when the
+  stale guard pointer happens to read a small `current`: the switch then works on a fake run
+  queue and the boot goes silent. Before the fix an R630 KVM boot went silent at the same place
+  (after `[glibc] === SDL2 app (gsdl) ===`, `proof/bug032-2026-11/r630-before-hang-tail.txt`),
+  and the TCG loop that reproduced BUG-032 ran on the same configuration. On the fix:
+  21 `user-smp4-iommu` TCG boots, all to the desktop. `loadtest.py --nmi-on-hang`
+  now also probes a boot that hangs before the console is up (`ffec65c`).
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

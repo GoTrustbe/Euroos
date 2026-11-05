@@ -1,0 +1,203 @@
+== tcg-user-smp4-iommu.log  vs  bug032/user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp1-iommu.log  vs  bug032/user-smp1-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-noiommu.log  vs  bug032/user-smp4-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp1-noiommu.log  vs  bug032/user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-kernel-smp4.log  vs  bug032/kernel-smp4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-kernel-smp1.log  vs  bug032/kernel-smp1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-storage-smp4-iommu-1g.log  vs  bug032/storage-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-storage-smp1-iommu-1g.log  vs  bug032/storage-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-combined-smp4-iommu-1g.log  vs  bug032/combined-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-combined-smp1-iommu-1g.log  vs  bug032/combined-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/user-smp4-iommu-r2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/user-smp4-iommu-r3.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/user-smp4-iommu-r4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/user-smp4-iommu-r5.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/user-smp4-iommu-r6.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/user-smp4-iommu-r7.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/a33/u4ia-r1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/a33/u4ia-r2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/a33/u4ia-r3.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/a33/u4ia-r4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/a33/u4ib-r1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/a33/u4ib-r2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/a33/u4ib-r3.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/a33/u4ib-r4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/a33/u4ic-r1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/a33/u4ic-r2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/a33/u4ic-r3.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/a33/u4ic-r4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+
+== tcg-user-smp4-iommu.log  vs  bug032/m4/head-user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   bug032: OKx1
+

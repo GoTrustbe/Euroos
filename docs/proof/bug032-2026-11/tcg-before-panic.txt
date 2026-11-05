@@ -1,0 +1,51 @@
+# TCG, v1 image (44885f4: detection only, no fix), user-smp4-iommu 512M, boot u4ic-r1 (1 of 12)
+[3g1] EuroJournal persistence: restored-from-disk=0 entries, wrote-to-disk=true, on-disk-decode-has-boot-line=true, live-ring=2 → OK (structured journal survives reboot on the root FS) ✓
+[g5] scrub #1: 128 inodes, 376 data blocks, data verified 123, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 130 ms
+
+[bug032] SCHED.current is no task index: current=0x0000000000000000 (bytes [00, 00, 00, 00, 00, 00, 00, 00]) count=0 @ 0x6820; cpu=0 cr3=0x100000; interrupted rip=0x10650f3b cs=0x8; write watch 4 core(s), 11998 writes checked
+[bug032]   0x00000000000067a0: 0000000000000000 0000000000000000 0000000000000000 0000000000000000
+[bug032]   0x00000000000067c0: 0000000000000000 0000000000000000 0000000000000000 0000000000000000
+[bug032]   0x00000000000067e0: 0000000000000000 0000000000000000 0000000000000000 0000000000000000
+[bug032]   0x0000000000006800: 0000000000000000 0000000000000000 0000000000000000 0000000000000000
+[bug032]   0x0000000000006820: 0000000000000000 0000000000000000 0000000000000000 0000000000000000   <- field
+[bug032]   0x0000000000006840: 0000000000000000 0000000000000000 0000000000000000 0000000000000000
+[bug032]   0x0000000000006860: 0000000000000000 0000000000000000 0000000000000000 0000000000000000
+[bug032]   0x0000000000006880: 0000000000000000 0000000000000000 0000000000000000 0000000000000000
+
+========== KERNEL PANIC ==========
+[PANIC] panicked at kernel/src/sched.rs:993:5:
+BUG-032: SCHED.current=0x0 (count 0) — scheduler state overwritten
+[panic] RSP=0x000000001fe44510 RBP=0x000000001fe44590 RFLAGS=0x402
+[panic] CR2=0x0000000000000000 CR3=0x0000000000100000
+[panic] anchor dump_registers_and_backtrace @ 0x00000000103ef78c
+[panic] backtrace (raw return addresses):
+[panic] (RBP chain empty; stack scan)
+  ? 0x0000000010560a1a
+  ? 0x0000000010372e73
+  ? 0x00000000103ef78c
+  ? 0x0000000010560a1a
+  ? 0x000000001056167d
+  ? 0x0000000010560a1a
+  ? 0x0000000010374e02
+  ? 0x000000001055e328
+  ? 0x00000000104c215b
+  ? 0x00000000104cabe8
+  ? 0x000000001039c53e
+  ? 0x00000000104ca120
+  ? 0x00000000104ca83f
+  ? 0x00000000104ca859
+  ? 0x000000001039cc39
+  ? 0x0000000010398ecd
+  ? 0x00000000104a2141
+  ? 0x00000000104ce9cb
+  ? 0x00000000104a2141
+  ? 0x0000000010560f3a
+  ? 0x0000000010560c7a
+  ? 0x00000000104a21d2
+  ? 0x00000000104a211e
+
+# symbolized (scripts/symbolize.sh v1/kernel.map, anchor 0x103ef78c)
+anchor_rva=0xa278c  runtime_base=0x1034d000
+  0x0000000010650f3b  rva=0x303f3b    ->  _RNvNtCsaspWaaaqwXF_17compiler_builtins3mem7memmove +0x56
+  0x000000001039c53e  rva=0x4f53e     ->  _RNvMs_NtCsk3DEuN05blY_6eurofs4diskINtB4_6EuroFsINtNtB6_5cache10BlockCacheNtNtCsddqNmnkFqfT_10eurokernel7rootblk7RootBlkEE22rebuild_allocator_trimB1d_ +0xaa2
+  0x00000000104ca120  rva=0x17d120    ->  _RNvXs_NtCsddqNmnkFqfT_10eurokernel7rootblkNtB4_7RootBlkNtNtCsk3DEuN05blY_6eurofs5block11BlockDevice12write_blocks +0xac

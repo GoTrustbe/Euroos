@@ -1,0 +1,31 @@
+# R630 KVM, img-v1 (44885f4, detection only, no fix), net-user, slot 1 run 3 of 31 before-fix boots: silent after gsdl, boot timeout 900 s (no NMI probe: --nmi-on-hang did not cover the boot wait then, ffec65c)
+[loadtest] scenario=net image=/srv/euroos/bug032-runs/net-user/s1-r3/boot.img disks=[] bus=virtio kvm=True smp=4 mem=4G nic=e1000e bootopts=- iommu=False
+[loadtest] serial log: /srv/euroos/bug032-runs/net-user/s1-r3/loadtest-serial-20261105-132426.log  ·  CSV: /srv/euroos/bug032-runs/net-user/s1-r3/loadtest-results.csv
+[loadtest] waiting for serial console …
+[loadtest] host HTTP server served 0 request(s)
+Traceback (most recent call last):
+  File "/srv/euroos/wt-bug032/scripts/loadtest.py", line 829, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/srv/euroos/wt-bug032/scripts/loadtest.py", line 731, in main
+    con.boot(a.boot_timeout)
+    ~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/srv/euroos/wt-bug032/scripts/loadtest.py", line 138, in boot
+    self.wait_for(READY, timeout)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/srv/euroos/wt-bug032/scripts/loadtest.py", line 134, in wait_for
+    raise CrashError(f"timeout waiting for {needle!r}")
+CrashError: timeout waiting for '[scon-ready]'
+--- serial tail
+[xserver] PutImage draw=0xa00001 fmt=2 520x126 @(0,0)
+[xserver] PutImage samples q(TL=0xff131c2a BR=0xff131c2a) p(100,110)=0xff131c2a p(220,110)=0xff131c2a p(150,150)=0xff131c2a
+[xserver] present id=0xa00001 520x200 centre-pixel=0xff131c2a
+[xserver] req op=72 detail=2 len=153944 seq=13
+[xserver] PutImage draw=0xa00001 fmt=2 520x74 @(0,126)
+[xserver] PutImage samples q(TL=0xff131c2a BR=0xff131c2a) p(100,110)=0xff131c2a p(220,110)=0xff131c2a p(150,150)=0xff131c2a
+[xserver] present id=0xa00001 520x200 centre-pixel=0xff131c2a
+[glibc] gpango (Pango+HarfBuzz layout): exit=0
+[glibc]   GPANGO: fontconfig registered DejaVuSans.ttf
+[glibc]   GPANGO: layout1 pixel size 280x48
+[glibc]   GPANGO: pango+harfbuzz text rendered (520x200)
+[glibc] === SDL2 app (gsdl) ===

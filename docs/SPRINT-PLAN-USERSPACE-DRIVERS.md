@@ -176,7 +176,9 @@ driver crash is a process exit.
 `net.driver=user` (the default since 2026-11-02, and what a missing file
 means) selects the userspace driver, `net.driver=kernel` keeps the in-kernel
 e1000 (the fallback). `scripts/build.sh` writes the file when
-`EUROOS_BOOTOPTS` is set.
+`EUROOS_BOOTOPTS` is set. The same file takes `storage.nvme=user` and, for
+debugging, `debug.schedwatch=on` (a debug-register write watch on the
+scheduler state, BUG-032).
 
 At first the default stayed `kernel`: the dev self-test suite brought the
 network up before the scheduler existed. How that was solved is in "Making

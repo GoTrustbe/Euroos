@@ -1,0 +1,32 @@
+# before the fix: img-v1 (44885f4, detection only, write watch on), --scenario net --host-http --conns 50 --downloads 10
+2026-11-05_13:18:55 slot=4 run=1 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:18:55 slot=0 run=1 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:18:57 slot=7 run=1 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:18:59 slot=2 run=1 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:19:00 slot=1 run=1 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:19:00 slot=5 run=1 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:19:01 slot=6 run=1 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:19:02 slot=3 run=1 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:24:20 slot=0 run=2 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:24:21 slot=4 run=2 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:24:21 slot=6 run=2 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:24:22 slot=3 run=2 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:24:22 slot=7 run=2 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:24:26 slot=1 run=2 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:24:26 slot=2 run=2 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:24:27 slot=5 run=2 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:29:45 slot=6 run=3 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:29:47 slot=0 run=3 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:29:47 slot=4 run=3 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:29:48 slot=3 run=3 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:29:49 slot=7 run=3 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:29:51 slot=2 run=3 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:29:53 slot=5 run=3 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:35:10 slot=3 run=4 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:35:10 slot=4 run=4 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:35:10 slot=0 run=4 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:35:12 slot=6 run=4 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:35:15 slot=7 run=4 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:35:19 slot=5 run=4 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:35:19 slot=2 run=4 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:39:28 slot=1 run=3 rc=1 verdict=crash 

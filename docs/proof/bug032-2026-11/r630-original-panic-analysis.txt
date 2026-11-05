@@ -1,0 +1,50 @@
+# The sched.rs:755 panic of proof/net-async-2026-11/r630-b2-out-user.log, on a rebuild of bb2e9d2 (same toolchain; .text and .data layout do not depend on the signing key or the musl ELFs)
+
+## schedule_core: current is read through the guard copy on the stack
+00000001400f8129 <.text+0xf7129>:
+   1400f8129:	mov    %rsi,%rcx
+   1400f812c:	call   0x14003345a
+   1400f8131:	cmpb   $0xff,0x22(%rsi)
+   1400f8135:	je     0x1400f8255
+   1400f813b:	lea    0x10(%rbp),%rax
+   1400f813f:	mov    $0x5,%ecx
+   1400f8144:	mov    %rax,%rdi
+   1400f8147:	rep movsq (%rsi),(%rdi)
+   1400f814a:	cmpq   $0x0,(%rax)
+   1400f814e:	je     0x1400f858f
+   1400f8154:	mov    0x18(%rbp),%rdi
+   1400f8158:	mov    0x6820(%rdi),%rsi
+   1400f815f:	mov    %rsi,0x58(%rbp)
+   1400f8163:	cmp    $0x100,%rsi
+   1400f816a:	jae    0x1400f8628
+   1400f8170:	imul   $0x68,%rsi,%r15
+
+## the real SCHED (try_lock): data at SCHED+0x18, current at data+0x6820
+00000001400335e7 <.text+0x325e7>:
+   1400335e7:	lea    0x400e7a2(%rip),%rcx        # 0x144041d90
+   1400335ee:	mov    %rcx,(%rsi)
+   1400335f1:	lea    0x400e7a0(%rip),%rcx        # 0x144041d98
+ 0003:00017d80       _RNvNtCsddqNmnkFqfT_10eurokernel5sched5SCHED 0000000144041d80     eurokernel-e3d978eb3262
+
+## the bad value 0x48C031037FFFFFE2 = bytes e2 ff ff 7f 03 31 c0 48 = .text at 0x140211b3c (core::num::dec2flt::lemire::compute_float<f32>)
+0000000140211b37 <.text+0x210b37>:
+   140211b37:	89 ca                	mov    %ecx,%edx
+   140211b39:	d1 ea                	shr    $1,%edx
+   140211b3b:	81 e2 ff ff 7f 03    	and    $0x37fffff,%edx
+   140211b41:	31 c0                	xor    %eax,%eax
+   140211b43:	48 81 f9 00 00 00 02 	cmp    $0x2000000,%rcx
+   140211b4a:	48 0f 42 c2          	cmovb  %rdx,%rax
+
+## 0x140211b3c - 0x6820 = 0x14020b31c: a return address (after a call in ab_glyph OutlineCurveBuilder::quad_to, the lockscreen text that [ag-lock] was drawing)
+000000014020b314 <.text+0x20a314>:
+   14020b314:	mov    %rdi,%rcx
+   14020b317:	call   0x14025cdab
+   14020b31c:	mov    0x70(%rbp),%edx
+   14020b31f:	mov    0x8(%rdi),%rax
+
+## the panic dump: RFLAGS=0x406 (DF, bit 10, set inside the panic handler)
+========== KERNEL PANIC ==========
+[PANIC] panicked at kernel/src/sched.rs:755:5:
+index out of bounds: the len is 256 but the index is 5242243857361403874
+[panic] RSP=0x000000007fe45150 RBP=0x000000007fe451d0 RFLAGS=0x406
+[panic] CR2=0x0000010024006068 CR3=0x0000000000100

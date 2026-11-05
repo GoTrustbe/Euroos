@@ -1,0 +1,7 @@
+# after the fix: fix-net-kernel (img-v3 b6a6fa8 for user/kernel, img-v4 e5abd63 for iommu), --scenario net --host-http --conns 50 --downloads 10
+2026-11-05_13:43:55 slot=6 run=1 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:47:22 slot=6 run=2 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:50:48 slot=6 run=3 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:54:09 slot=6 run=4 rc=0 verdict=ok [bug032] sc
+2026-11-05_13:57:34 slot=6 run=5 rc=0 verdict=ok [bug032] sc
+2026-11-05_14:00:58 slot=6 run=6 rc=0 verdict=ok [bug032] sc
