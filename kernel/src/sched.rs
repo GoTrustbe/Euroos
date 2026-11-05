@@ -752,6 +752,16 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
         }
     };
     let cur = s.current;
+    // BUG-032: `current` once held eight bytes of kernel machine code here, and the
+    // index below panicked with nothing but the bad value. Check it first (one
+    // compare, the bounds check it replaces was there anyway) and dump what lies
+    // around the field, so a recurrence says what was written over it.
+    if cur >= MAX_TASKS || cur >= s.count {
+        let count = s.count;
+        let pc = core::ptr::addr_of!(s.current) as u64;
+        drop(s);
+        sched_state_corrupt(cur, count, pc, rsp);
+    }
     s.tasks[cur].rsp = rsp;
     // Save the OUTGOING task's in-flight syscall state (it may be mid-syscall, having
     // yielded from futex/epoll) so a concurrent thread's syscall cannot clobber its
@@ -951,6 +961,49 @@ pub fn init() {
     }
     s.current = 0;
     CURRENT_MIRROR.store(0, Ordering::Relaxed);
+    // BUG-032: the hardware write watch (memwatch.rs) guards these two fields.
+    crate::memwatch::set_targets(
+        core::ptr::addr_of!(s.current) as u64,
+        core::ptr::addr_of!(s.count) as u64,
+        MAX_TASKS,
+    );
+    drop(s);
+    crate::memwatch::arm_this_cpu();
+}
+
+/// BUG-032: `schedule_core` found a `current` that is no task index. Name what is
+/// around the field (the scheduler's tail and the statics behind it), the core,
+/// the address space and the interrupted code, then stop: the state is corrupt.
+#[cold]
+#[inline(never)]
+fn sched_state_corrupt(cur: usize, count: usize, pc: u64, rsp: u64) -> ! {
+    let cr3: u64;
+    unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags)) };
+    // SAFETY: `rsp` is the interrupt frame the stub built (15 GPRs, then RIP, CS).
+    let (rip, cs) = unsafe { (*((rsp + 120) as *const u64), *((rsp + 128) as *const u64)) };
+    crate::serial_println!(
+        "\n[bug032] SCHED.current is no task index: current={cur:#018x} (bytes {:02x?}) count={count} \
+         @ {pc:#x}; cpu={} cr3={cr3:#x}; interrupted rip={rip:#x} cs={cs:#x}; write watch {} core(s), {} writes checked",
+        (cur as u64).to_le_bytes(),
+        crate::apic::lapic_id(),
+        crate::memwatch::armed_cpus(),
+        crate::memwatch::HITS.load(Ordering::Relaxed)
+    );
+    dump_corrupt_neighbourhood(pc);
+    panic!("BUG-032: SCHED.current={cur:#x} (count {count}) — scheduler state overwritten");
+}
+
+/// Hex dump of the 32 words around `addr` (an address inside the static scheduler
+/// state), for the BUG-032 reports. Reads only: no lock, no allocation.
+pub fn dump_corrupt_neighbourhood(addr: u64) {
+    let base = (addr & !7).wrapping_sub(16 * 8);
+    for row in 0..8u64 {
+        let a = base + row * 32;
+        // SAFETY: the static scheduler and its neighbours in .data are always mapped.
+        let w: [u64; 4] = core::array::from_fn(|k| unsafe { ((a + k as u64 * 8) as *const u64).read_volatile() });
+        crate::serial_println!("[bug032]   {a:#018x}: {:016x} {:016x} {:016x} {:016x}{}",
+            w[0], w[1], w[2], w[3], if addr >= a && addr < a + 32 { "   <- field" } else { "" });
+    }
 }
 
 /// Add a **ring-3** task to the round-robin. `kstack_top` is the kernel

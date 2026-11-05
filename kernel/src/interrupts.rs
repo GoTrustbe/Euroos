@@ -100,6 +100,8 @@ pub fn init_timer(hz: u32) {
 static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     let mut idt = InterruptDescriptorTable::new();
     idt.breakpoint.set_handler_fn(breakpoint_handler);
+    // BUG-032: debug-register traps (the scheduler write watch, memwatch.rs).
+    idt.debug.set_handler_fn(debug_handler);
     idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
     idt.general_protection_fault.set_handler_fn(gp_handler);
     unsafe {
@@ -356,6 +358,15 @@ pub fn route_io_apic(madt: &crate::acpi::Madt) {
 
 pub fn init() {
     IDT.load();
+}
+
+extern "x86-interrupt" fn debug_handler(frame: InterruptStackFrame) {
+    crate::memwatch::on_debug(
+        frame.instruction_pointer.as_u64(),
+        frame.code_segment.0 as u64,
+        frame.stack_pointer.as_u64(),
+        frame.cpu_flags.bits(),
+    );
 }
 
 extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {

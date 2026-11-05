@@ -23,6 +23,7 @@ mod observe;
 mod vault;
 mod euroipc;
 mod bootopt;
+mod memwatch;
 mod udrv;
 mod udrv_blk;
 mod udrv_bcm5720;
@@ -5009,6 +5010,8 @@ fn main() -> Status {
     // buttons route the answer to portal::respond via the click loop below. The
     // broker mechanism itself is exercised by portal::selftest() ([3f7]).
     let mut portal_buttons: Option<(u64, [(usize, usize, usize, usize); 3])> = None;
+    // BUG-032: is the hardware write watch on the scheduler state live on this machine?
+    memwatch::selftest();
     serial_println!(
         "[3f7-live] permission-portal armed — no request pending at boot; a modal is shown only when an app requests a resource (wired to portal::respond)"
     );

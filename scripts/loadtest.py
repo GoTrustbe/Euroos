@@ -98,6 +98,9 @@ class SerialConsole:
             window = self._tail + text
             self._tail = window[-256:]
             if CRASH_RE.search(window):
+                # Let the kernel finish its dump (registers, backtrace, kmsg) before
+                # the VM is killed: the only BUG-032 panic log ends at the CR3 line.
+                self.drain(8)
                 raise CrashError(window.strip().splitlines()[-1] if window.strip() else "crash")
             return text
         return ""

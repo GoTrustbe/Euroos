@@ -99,6 +99,8 @@ pub extern "sysv64" fn ap_main() -> ! {
     //    is the idle task: the first tick saves it and switches to a worker.
     crate::gdt::init_ap();
     crate::interrupts::init();
+    // BUG-032: the scheduler write watch on this core too (a wild write may come from an AP).
+    crate::memwatch::arm_this_cpu();
     // J1: give this core the BSP's CPU feature state before it runs general
     // kernel code (the trampoline only enables PAE + long mode).
     ap_cpu_features();

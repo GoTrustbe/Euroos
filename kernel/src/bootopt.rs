@@ -17,6 +17,9 @@
 //!   `nvme.rs` leaves it alone, so the root is never on it. `storage.nvme=kernel`
 //!   (the default) keeps the in-kernel driver.
 //!
+//! - `debug.schedwatch=off`: no hardware write watch on the scheduler state
+//!   (BUG-032, memwatch.rs; on by default).
+//!
 //! The file is not signed. It only chooses between two code paths that are
 //! both part of the signed kernel image; it cannot add code.
 
@@ -24,6 +27,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 static NET_USER: AtomicBool = AtomicBool::new(true);
 static NVME_USER: AtomicBool = AtomicBool::new(false);
+static SCHED_WATCH: AtomicBool = AtomicBool::new(true);
 static FOUND: AtomicBool = AtomicBool::new(false);
 
 /// Parse the option text (host-testable shape: pure over the bytes).
@@ -39,6 +43,8 @@ fn apply(text: &str) {
                 ("net.driver", "kernel") => NET_USER.store(false, Ordering::Relaxed),
                 ("storage.nvme", "user") => NVME_USER.store(true, Ordering::Relaxed),
                 ("storage.nvme", "kernel") => NVME_USER.store(false, Ordering::Relaxed),
+                ("debug.schedwatch", "on") => SCHED_WATCH.store(true, Ordering::Relaxed),
+                ("debug.schedwatch", "off") => SCHED_WATCH.store(false, Ordering::Relaxed),
                 (k, v) => crate::serial_println!("[bootopt] unknown option {k}={v} ignored"),
             }
         }
@@ -74,6 +80,12 @@ pub fn capture() {
         if net_user_driver() { "user" } else { "kernel" },
         if nvme_user_driver() { "user (data disk only)" } else { "kernel" }
     );
+}
+
+/// BUG-032: is the hardware write watch on the scheduler state on (memwatch.rs)?
+/// On by default; `debug.schedwatch=off` turns it off.
+pub fn sched_watch() -> bool {
+    SCHED_WATCH.load(Ordering::Relaxed)
 }
 
 /// Is the userspace NIC driver selected? (the default; `net.driver=kernel` turns it off)
