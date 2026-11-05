@@ -1305,7 +1305,7 @@ fn main() -> Status {
         }
         let t2 = hpet::ns();
         kinfo!(
-            "[hpet] HPET @ {} MHz active — 1M spin iterations = {} us (high-resolution HAL time source)",
+            "[hpet] HPET active @ {} MHz — 1M spin iterations = {} us (high-resolution HAL time source)",
             hpet::freq_hz() / 1_000_000,
             (t2 - t1) / 1000
         );
