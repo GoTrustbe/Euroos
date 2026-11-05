@@ -864,6 +864,9 @@ def main():
                         break
                 if status.startswith("CRASH"):
                     crashed = True
+                    # The panic path is still printing: keep it in the log (the VM
+                    # was killed after "[PA" once).
+                    con.drain(10)
                     if a.nmi_on_hang and ("timeout" in status or "silent" in status):
                         nmi_probe(sock_path + ".mon", con)
                     print(f"  !! CRASH after {cmd!r} — see {serial_log}")
