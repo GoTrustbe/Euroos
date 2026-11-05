@@ -2564,6 +2564,8 @@ pub fn sock_listen(fd: u64, backlog: usize) -> u64 {
         Some(Sock::Reserved { dgram: false, bind_port }) if bind_port != 0 => {
             *t = Some(Sock::Listen { port: bind_port, backlog: backlog.clamp(1, 32), queue: alloc::collections::VecDeque::new() });
             LISTENERS.fetch_add(1, Ordering::Relaxed);
+            drop(t);
+            worker::kick(); // see httpd_toggle
             0
         }
         _ => (-1i64) as u64,
@@ -3921,6 +3923,9 @@ static SERVED: AtomicU64 = AtomicU64::new(0);
 pub fn httpd_toggle() -> bool {
     let new = !SERVER_ON.load(Ordering::Relaxed);
     SERVER_ON.store(new, Ordering::Relaxed);
+    // On a card without a receive interrupt the worker polls while the httpd
+    // or a listener is on: let it notice (it may be blocked since the boot).
+    worker::kick();
     new
 }
 pub fn httpd_status() -> (bool, u64) {
