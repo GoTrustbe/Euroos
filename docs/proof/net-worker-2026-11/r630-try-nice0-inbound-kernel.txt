@@ -1,0 +1,17 @@
+[loadtest] scenario=inbound image=/srv/euroos/nwruns/x-nice0-kernel/boot.img disks=[] bus=virtio kvm=True smp=4 mem=4G nic=e1000e bootopts=net.driver=kernel iommu=False
+[loadtest] serial log: /srv/euroos/nwruns/x-nice0-kernel/loadtest-serial-20261105-171109.log  ·  CSV: /srv/euroos/nwruns/x-nice0-kernel/x-nice0-kernel.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 157s — driving commands
+  [   50/?] ✓ ok             4ms t=   28.2s  echo console-alive
+  [  100/?] ✓ ok            17ms t=   55.9s  echo console-alive
+  [  150/?] ✓ ok             6ms t=   82.8s  echo console-alive
+  [  200/?] ✓ ok            31ms t=  109.6s  echo console-alive
+  [  250/?] ✓ ok             4ms t=  137.3s  echo console-alive
+  [  300/?] ✓ ok             4ms t=  164.5s  echo console-alive
+  [  350/?] ✓ ok            20ms t=  192.0s  echo console-alive
+  [  400/?] ✓ ok            43ms t=  218.9s  echo console-alive
+  [  450/?] ✓ ok            52ms t=  246.6s  echo console-alive
+  [  500/?] ✓ ok            58ms t=  273.6s  echo console-alive
+  [  550/?] ✓ ok            42ms t=  300.4s  httpd status
+[loadtest] completed clean · results → /srv/euroos/nwruns/x-nice0-kernel/x-nice0-kernel.csv · ltstat samples → /srv/euroos/nwruns/x-nice0-kernel/x-nice0-kernel-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 147308, "err": 0, "p50_ms": 3.1, "p99_ms": 60.9, "max_ms": 1099.8}

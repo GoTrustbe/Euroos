@@ -156,6 +156,10 @@ the code.
 | TCG matrix + `megaraid-proof.sh` on net-async + mem-hygiene integrated | 2026-11-05 | ✅ 0 markers worse | `proof/integrate-net-mem-2026-11/` | 14 boots (user/kernel/storage/combined, smp4/smp1, ± IOMMU) + 10 megaraid boots; `[net-async]` OK, `[sbx2]` 6/6 at 1 GiB, `[lk]` 0 inversions |
 | `soak` 1 h + 4 httpd clients, integrated (KVM, `-m 16G`) | 2026-11-05 | ✅ 1 805/1 805 ok | `proof/integrate-net-mem-2026-11/` | heap +0.37 kB/min (heaptrace soak: no growing site); tasks, files, frames, process pool flat; httpd as on net-async (slow during long synchronous commands) |
 | BUG-032 fix: TCG matrix + megaraid + R630 boots and soak (`feature/bug032`) | 2026-11-05 | ✅ 0 markers worse | `proof/bug032-2026-11/` | 30 TCG boots, 8 megaraid boots, 59 R630 KVM boots, 1 h soak with 4 httpd clients (1 720/1 720 commands, heap +0.43 kB/min); `[bug032]` DF self-test OK everywhere, `[lk]` 0 inversions |
+| `inbound` 4 clients 300 s on `feature/net-worker` (KVM) | 2026-11-05 | ✅ | `proof/net-worker-2026-11/` | user 36 233 ok, p50 5.5 ms (base 4 356, 270 ms); kernel 207 498 ok, p50 5.9 ms, p99 17 ms (base 111 904, 9.9 / 21.7 ms); BUG-034/035, harness BUG-036 fixed |
+| `inbound-busy` 600 s (new: httpd during long synchronous commands, KVM) | 2026-11-05 | ✅ | `proof/net-worker-2026-11/` | during the commands: user 63 212 ok / 0 failed, p99 125 ms (base 84 / 160, p99 8.8 s); kernel 206 822 / 0, p99 11.4 ms (base 76 / 162) |
+| `soak` 1 h + 4 httpd clients on `feature/net-worker` (KVM, `-m 16G`) | 2026-11-05 | ✅ 1 663/1 663 ok | `proof/net-worker-2026-11/` | httpd 460 905 ok / 12 failed (first attempts), p99 123 ms, 302 014 / 0 during long commands (base 4 376 / 704, p99 9.5 s); heap +0.37 kB/min; tasks, files, frames, process pool flat; the base `52755fc` soak hit a ring-0 GPF after 47 min |
+| TCG matrix + `megaraid-proof.sh` on `feature/net-worker` | 2026-11-05 | ✅ 0 markers worse | `proof/net-worker-2026-11/` | 10 TCG boots (user/kernel/storage/combined, smp4/smp1, ± IOMMU) + 4 megaraid boots against `proof/bug032-2026-11/`: 0 worse, 0 changed; `[net-worker]` OK everywhere, `[lk]` 0 inversions |
 | `inbound` 4 clients 300 s + `net`, integrated (KVM) | 2026-11-05 | ✅ | `proof/integrate-net-mem-2026-11/` | user 4 165 ok, console max 693 ms; kernel 101 202 ok, max 380 ms; outbound 300/300 (user), 400/400 (kernel) |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
@@ -593,7 +597,7 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   / 3 failed (`net.driver=kernel`, p99 21.6 ms). `proof/net-async-2026-11/`.
 - **Left:**     inbound connections are still driven from the desktop loop, so a long synchronous
   shell or file-system command delays them (1 h soak with 4 clients: 4 384 ok, 641 failed, during
-  `churn fs`/`truncate`/`sha256sum`).
+  `churn fs`/`truncate`/`sha256sum`). → BUG-034, fixed by the network worker.
 
 ### BUG-020 — `[fuzz]` fails under KVM: the fuzzer stops and run_glibc times it out ⬜ OPEN
 - **Status:**   OPEN · **Severity:** MEDIUM (also on 813e627 → not a regression of this branch; the
@@ -832,6 +836,60 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   and the TCG loop that reproduced BUG-032 ran on the same configuration. On the fix:
   21 `user-smp4-iommu` TCG boots, all to the desktop. `loadtest.py --nmi-on-hang`
   now also probes a boot that hangs before the console is up (`ffec65c`).
+
+### BUG-034 — the httpd and listen/accept stand still while a long synchronous shell command runs ✅ FIXED
+- **Status:**   FIXED (`feature/net-worker`, `69cd2f3` `77aeec0`) · **Severity:** HIGH for any server use
+- **Found:**    2026-11-05 · the 1 h soaks with 4 httpd clients of `proof/net-async-2026-11/` and
+  `proof/integrate-net-mem-2026-11/` (4 570 answered, 652 failed, p99 9.5 s); BUG-019's "Left"
+- **Actual:**   the failures fall into the shell's long synchronous commands (`churn fs`,
+  `truncate`/`sha256sum` of 8 MiB). `--scenario inbound-busy` (only such commands, 600 s): 84
+  answered and 180 failed during them, p50 3.8 s, p99 9.8 s.
+- **Analysis:** after BUG-019 nothing on the inbound path waits, but it still only moved when the
+  desktop loop called `service()` / `pump_all()`, and that loop also runs the shell.
+- **Fix:**      a kernel task on the BSP (`kernel/src/net_worker.rs`, `sched::spawn_kernel`, nice
+  -5) takes the inbound frames from the legacy queue (SYNs for the httpd or a listener, segments of
+  a late-registered connection, ARP requests; the rest goes back for `service()` and the blocking
+  readers) and runs `passive::step` and, once a tick, `pump_all`. Woken by e1000d's frame
+  deliveries (`net.driver=user`); with an in-kernel driver it polls every tick while the httpd or a
+  listener is on (virtio-net's MSI-X wakes it earlier; an MSI-X interrupt for the 82574L was tried
+  and measured worse: p99 21 → 61 ms idle, p50 59 ms busy); every tick while inbound work is in
+  flight. A pass runs with interrupts off, so the net-global locks (CFG,
+  PORTQ, NET_LEGACY, UDPQ: `lk()`), the firewall, the ICMP limiter and the e1000/virtio-net rings
+  are held with IF=0 now (a syscall meeting one of them held by a preempted task 0 had the same
+  exposure before). Also: `RX_WAITER` is cleared in `reap_dead` (`reset_task_slot`) and when a fork
+  child is torn down (the loose end of the integration proof). Boot marker `[net-worker]`: 8
+  synthetic clients served while the boot task spins 3 s without `service()`. `inbound-busy` on
+  the R630, during the long commands: `net.driver=user` 84 answered / 160 failed (p50 6.5 s) →
+  63 212 / 0 (p50 5.7 ms, p99 125 ms); `kernel` 76 / 162 → 206 822 / 0 (p50 10.0 ms, p99 11.4 ms).
+  `proof/net-worker-2026-11/`.
+- **Left:**     the desktop loop itself is still held by such a command (watchdog line, console);
+  `churn fs` takes ~35 % longer while the BSP serves 120-390 requests a second.
+
+### BUG-035 — e1000d slept a tick per frame: 10 ms on every frame of `net.driver=user` ✅ FIXED
+- **Status:**   FIXED (`feature/net-worker`, `d04b533`) · **Severity:** MEDIUM (performance)
+- **Found:**    2026-11-05 · the ~50 ms extra per sequential fetch with `net.driver=user`
+  (`proof/net-async-2026-11/`: one frame more per connection through e1000d)
+- **Analysis:** an empty `SYS_IPC_RECV` sleeps the driver one tick and nothing woke it early, so
+  every frame the netstack queued for e1000d and every received frame its MSI-X interrupt announced
+  waited up to 10 ms for the driver to look.
+- **Fix:**      the driver's task is recorded while it sleeps in its receive (`RECV_SLEEPER`);
+  `nic_send` wakes it, the pool interrupt stub try-wakes it, `revoke_pid` drops the mark. e1000d only.
+  Sequential fetches (no inbound load): median 601 → 436 ms. 4 httpd clients, 300 s, together
+  with BUG-034's worker: 4 356 → 36 233 answered, p50 270 → 5.5 ms, p99 351 → 111 ms.
+  `proof/net-worker-2026-11/`.
+
+### BUG-036 — harness: `sleepwait` left the console unread; the guest stalled in UART writes ✅ FIXED
+- **Status:**   FIXED (`scripts/loadtest.py`, `2ef3934`) · **Severity:** MEDIUM (it skewed measurements)
+- **Found:**    2026-11-05 · the net worker's long-pass log: a pass of 0.84-0.96 s with interrupts off
+  every 1-2 s in the `inbound` scenario, base included (`[tick-late] +88 … +95 ticks` after each);
+  a 45 s `sleepwait` stalled one pass for 44.6 s
+- **Analysis:** a `sleepwait` was `time.sleep`: nobody read the console socket, QEMU's chardev
+  buffer filled and the guest's next UART write (the `[tcp] FIN …` log, say) spun with interrupts
+  off until the harness read again.
+- **Fix:**      the pause pumps the socket into the log and scans for crashes (`SerialConsole.idle`);
+  after a crash the harness reads 10 s more before it stops the VM (a log once ended at `[PA`).
+  Longest worker pass after the fix: 16 ms. The `inbound` numbers before 2026-11-05 carry this stall
+  in their `max_ms` and part of their p99.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

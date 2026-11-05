@@ -1,0 +1,46 @@
+[scon]   Connection: close
+[scon-ready]
+[scon] $ churn proc 4
+[elf] 3 R_X86_64_RELATIVE relocations applied @ base 0x1c8200000
+[elf] 0 R_X86_64_RELATIVE relocations applied @ base 0x1c8a00000
+[glibc] spawned scheduled task 54: ld-entry@0x1c8a1f540 rsp@0x1e00ace70 phdr@0x1c8200040 phnum=13
+[linux-abi] mmap(fd=3, off=0, 2170880 B) file-backed -> 0x1cc392000 (2125328 B copied)
+[linux-abi] mmap(fd=3, off=163840, 1605632 B) file-backed -> 0x1cc3ba000 (1605632 B copied)
+[linux-abi] mmap(fd=3, off=1769472, 323584 B) file-backed -> 0x1cc542000 (323584 B copied)
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0x1cc591000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0x1cc5a4740
+[linux-abi] GLIBC-DYNAMIC-OK
+[elf] 3 R_X86_64_RELATIVE relocations applied @ base 0x1c8200000
+[elf] 0 R_X86_64_RELATIVE relocations applied @ base 0x1c8a00000
+[glibc] spawned scheduled task 54: ld-entry@0x1c8a1f540 rsp@0x1e0014e70 phdr@0x1c8200040 phnum=13
+[linux-abi] mmap(fd=3, off=0, 2170880 B) file-backed -> 0x1cc3c2000 (2125328 B copied)
+[linux-abi] mmap(fd=3, off=163840, 1605632 B) file-backed -> 0x1cc3ea000 (1605632 B copied)
+[linux-abi] mmap(fd=3, off=1769472, 323584 B) file-backed -> 0x1cc572000 (323584 B copied)
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0x1cc5c1000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0x1cc5d4740
+[linux-abi] GLIBC-DYNAMIC-OK
+[churn-proc]   after run 1: free frames 2981623
+[elf] 3 R_X86_64_RELATIVE relocations applied @ base 0x1c8200000
+[elf] 0 R_X86_64_RELATIVE relocations applied @ base 0x1c8a00000
+[glibc] spawned scheduled task 54: ld-entry@0x1c8a1f540 rsp@0x1e009fe70 phdr@0x1c8200040 phnum=13
+[linux-abi] mmap(fd=3, off=0, 2170880 B) file-backed -> 0x1cc352000 (2125328 B copied)
+[linux-abi] mmap(fd=3, off=163840, 1605632 B) file-backed -> 0x1cc37a000 (1605632 B copied)
+[linux-abi] mmap(fd=3, off=1769472, 323584 B) file-backed -> 0x1cc502000 (323584 B copied)
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0x1cc551000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0x1cc564740
+[linux-abi] GLIBC-DYNAMIC-OK
+[churn-proc]   after run 2: free frames 2981623
+[elf] 3 R_X86_64_RELATIVE relocations applied @ base 0x1c8200000
+[elf] 0 R_X86_64_RELATIVE relocations applied @ base 0x1c8a00000
+[linux-abi] mmap(fd=3, off=0, 2170880 B) file-backed -> 0x1cc382000 (2125328 B copied)
+[linux-abi] mmap(fd=3, off=163840, 1605632 B) file-backed -> 0x1cc3aa000 (1605632 B copied)
+[linux-abi] mmap(fd=3, off=1769472, 323584 B) file-backed -> 0x1cc532000 (323584 B copied)
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0x1cc581000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0x1cc594740
+[linux-abi] GLIBC-DYNAMIC-OK
+[idt] GENERAL PROTECTION FAULT code=0x0 @ 0x7fe46c12 cs=0x8 ss=0x10 rsp=0x7fe46b80
+[idt]   [rsp+0] = 0x746c9520
+[idt]   [rsp+8] = 0x60000020
+[idt]   [rsp+16] = 0x746c9520
+[idt]   [rsp+24] = 0x7fe4a160
+[idt]   [rsp+32] = 0x59085c78

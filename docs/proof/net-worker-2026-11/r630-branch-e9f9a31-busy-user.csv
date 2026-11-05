@@ -1,0 +1,58 @@
+id,command,status,elapsed_ms,output_lines,t_s
+1,mkdir /home/euro/lt,ok,753,1,0.8
+2,mkdir /home/euro/lt-busy,ok,871,1,1.6
+3,httpd on,ok,763,1,2.4
+4,churn fs 1,ok,31700,2,34.1
+5,truncate -s 8388608 /home/euro/lt-busy/big0,ok,3530,1,37.6
+6,sha256sum /home/euro/lt-busy/big0,ok,1784,1,39.4
+7,churn fs 1,ok,30697,2,70.1
+8,truncate -s 8388608 /home/euro/lt-busy/big1,ok,2429,1,72.5
+9,sha256sum /home/euro/lt-busy/big1,ok,1777,1,74.3
+10,churn fs 1,ok,30841,2,105.2
+11,truncate -s 8388608 /home/euro/lt-busy/big0,ok,3292,1,108.4
+12,sha256sum /home/euro/lt-busy/big0,ok,1767,1,110.2
+13,churn fs 1,ok,30208,2,140.4
+14,truncate -s 8388608 /home/euro/lt-busy/big1,ok,3142,1,143.6
+15,sha256sum /home/euro/lt-busy/big1,ok,1754,1,145.3
+16,churn fs 1,ok,30754,2,176.1
+17,truncate -s 8388608 /home/euro/lt-busy/big0,ok,3308,1,179.4
+18,sha256sum /home/euro/lt-busy/big0,ok,1797,1,181.2
+19,churn fs 1,ok,30657,2,211.8
+20,truncate -s 8388608 /home/euro/lt-busy/big1,ok,5375,1,217.2
+21,sha256sum /home/euro/lt-busy/big1,ok,1778,1,219.0
+22,churn fs 1,ok,30318,2,249.3
+23,truncate -s 8388608 /home/euro/lt-busy/big0,ok,3553,1,252.9
+24,sha256sum /home/euro/lt-busy/big0,ok,1915,1,254.8
+25,churn fs 1,ok,30795,2,285.6
+26,truncate -s 8388608 /home/euro/lt-busy/big1,ok,3365,1,288.9
+27,sha256sum /home/euro/lt-busy/big1,ok,1853,1,290.8
+28,churn fs 1,ok,30709,2,321.5
+29,truncate -s 8388608 /home/euro/lt-busy/big0,ok,3353,1,324.9
+30,sha256sum /home/euro/lt-busy/big0,ok,1789,1,326.6
+31,churn fs 1,ok,29992,2,356.6
+32,truncate -s 8388608 /home/euro/lt-busy/big1,ok,3129,1,359.8
+33,sha256sum /home/euro/lt-busy/big1,ok,1727,1,361.5
+34,churn fs 1,ok,30171,2,391.7
+35,truncate -s 8388608 /home/euro/lt-busy/big0,ok,3122,1,394.8
+36,sha256sum /home/euro/lt-busy/big0,ok,1780,1,396.6
+37,churn fs 1,ok,30138,2,426.7
+38,truncate -s 8388608 /home/euro/lt-busy/big1,ok,3248,1,430.0
+39,sha256sum /home/euro/lt-busy/big1,ok,1804,1,431.8
+40,churn fs 1,ok,30826,2,462.6
+41,truncate -s 8388608 /home/euro/lt-busy/big0,ok,6197,1,468.8
+42,sha256sum /home/euro/lt-busy/big0,ok,1867,1,470.7
+43,churn fs 1,ok,30453,2,501.1
+44,truncate -s 8388608 /home/euro/lt-busy/big1,ok,3014,1,504.1
+45,sha256sum /home/euro/lt-busy/big1,ok,1709,1,505.8
+46,churn fs 1,ok,30234,2,536.1
+47,truncate -s 8388608 /home/euro/lt-busy/big0,ok,3161,1,539.2
+48,sha256sum /home/euro/lt-busy/big0,ok,1778,1,541.0
+49,churn fs 1,ok,30098,2,571.1
+50,truncate -s 8388608 /home/euro/lt-busy/big1,ok,3116,1,574.2
+51,sha256sum /home/euro/lt-busy/big1,ok,1657,1,575.9
+52,churn fs 1,ok,29854,2,605.7
+53,truncate -s 8388608 /home/euro/lt-busy/big0,ok,3163,1,608.9
+54,sha256sum /home/euro/lt-busy/big0,ok,1766,1,610.7
+55,httpd status,ok,72,1,610.7
+56,netstat,ok,149,4,610.9
+57,ltstat,ok,75,1,611.0

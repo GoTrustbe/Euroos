@@ -1,0 +1,123 @@
+##### TCG boots against ../integrate-net-mem-2026-11/ (feature/app-control e9f9a31, same setup)
+== ../integrate-net-mem-2026-11/tcg-user-smp4-iommu.log  vs  tcg-user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/tcg-user-smp4-iommu.log  vs  tcg-user-smp4-iommu-r2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/tcg-user-smp1-iommu.log  vs  tcg-user-smp1-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/tcg-user-smp4-noiommu.log  vs  tcg-user-smp4-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/tcg-user-smp1-noiommu.log  vs  tcg-user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/tcg-kernel-smp4.log  vs  tcg-kernel-smp4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/tcg-kernel-smp1.log  vs  tcg-kernel-smp1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/tcg-storage-smp4-iommu-1g.log  vs  tcg-storage-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/tcg-storage-smp1-iommu-1g.log  vs  tcg-storage-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/tcg-combined-smp4-iommu-1g.log  vs  tcg-combined-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/tcg-combined-smp4-iommu-1g.log  vs  tcg-combined-smp4-iommu-1g-r2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/tcg-combined-smp1-iommu-1g.log  vs  tcg-combined-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+
+##### megaraid-proof.sh against ../integrate-net-mem-2026-11/
+== ../integrate-net-mem-2026-11/mr-iommu-boot1.log  vs  mr-iommu-boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/mr-iommu-boot2.log  vs  mr-iommu-boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/mr-iommu-boot1.log  vs  mr-iommu-b-boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/mr-iommu-boot2.log  vs  mr-iommu-b-boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/mr-noiommu-boot1.log  vs  mr-noiommu-boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/mr-noiommu-boot2.log  vs  mr-noiommu-boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/mr-noiommu-boot1.log  vs  mr-noiommu-b-boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../integrate-net-mem-2026-11/mr-noiommu-boot2.log  vs  mr-noiommu-b-boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1

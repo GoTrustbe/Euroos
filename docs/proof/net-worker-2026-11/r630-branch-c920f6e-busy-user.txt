@@ -1,0 +1,8 @@
+[loadtest] scenario=inbound-busy image=/srv/euroos/nwruns/r-br-busy-user/boot.img disks=['/srv/euroos/nwruns/r-br-busy-user/disk0-8G.raw'] bus=virtio kvm=True smp=4 mem=16G nic=e1000e bootopts=- iommu=False
+[loadtest] serial log: /srv/euroos/nwruns/r-br-busy-user/loadtest-serial-20261105-164543.log  ·  CSV: /srv/euroos/nwruns/r-br-busy-user/r-br-busy-user.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 322s — driving commands
+  [   25/?] ✓ ok         32598ms t=  299.7s  churn fs 1
+  [   50/?] ✓ ok          3539ms t=  606.3s  truncate -s 8388608 /home/euro/lt-busy/big1
+[loadtest] completed clean · results → /srv/euroos/nwruns/r-br-busy-user/r-br-busy-user.csv · ltstat samples → /srv/euroos/nwruns/r-br-busy-user/r-br-busy-user-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 75829, "err": 12, "p50_ms": 4.9, "p99_ms": 123.6, "max_ms": 6173.9, "busy_windows": 18, "busy_s": 527, "busy": {"ok": 65852, "err": 0, "p50_ms": 4.9, "p99_ms": 123.5, "max_ms": 1047.5}, "idle": {"ok": 9977, "err": 12, "p50_ms": 4.8, "p99_ms": 131.1, "max_ms": 6173.9}}

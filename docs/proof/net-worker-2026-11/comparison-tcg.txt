@@ -1,0 +1,243 @@
+##### TCG boots of feature/net-worker (77aeec0) against ../bug032-2026-11/ (feature/app-control 52755fc, same setup)
+== ../bug032-2026-11/tcg-user-smp4-iommu.markers  vs  tcg-user-smp4-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../bug032-2026-11/tcg-user-smp1-iommu.markers  vs  tcg-user-smp1-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../bug032-2026-11/tcg-user-smp4-noiommu.markers  vs  tcg-user-smp4-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../bug032-2026-11/tcg-user-smp1-noiommu.markers  vs  tcg-user-smp1-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../bug032-2026-11/tcg-kernel-smp4.markers  vs  tcg-kernel-smp4.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../bug032-2026-11/tcg-kernel-smp1.markers  vs  tcg-kernel-smp1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../bug032-2026-11/tcg-storage-smp4-iommu-1g.markers  vs  tcg-storage-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../bug032-2026-11/tcg-storage-smp1-iommu-1g.markers  vs  tcg-storage-smp1-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../bug032-2026-11/tcg-combined-smp4-iommu-1g.markers  vs  tcg-combined-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+== ../bug032-2026-11/tcg-combined-smp1-iommu-1g.markers  vs  tcg-combined-smp1-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-worker: OKx1
+
+##### megaraid-proof.sh against ../bug032-2026-11/
+== ../bug032-2026-11/mr-iommu-a-boot1.markers  vs  mr-iommu-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 40
+   3c3: OKx1
+   3d2: OKx1
+   3d2-wire: OKx1
+   3d7: OKx1
+   3d8: OKx1
+   3f1: OKx1
+   7guard: OKx1
+   ahci: OKx1
+   bg-out: OKx2
+   bgnet-cap: OKx1
+   ecam: OKx1
+   edit: OKx2
+   g1: OKx1
+   h1: OKx1
+   h4: OKx1
+   h4-ctr: OKx2
+   h5: OKx1
+   i3-s5: OKx1
+   io1: OKx1
+   io2: OKx1
+   io3: OKx1
+   j1-cache: OKx1
+   kwork: OKx1
+   lk: OKx1
+   net: OKx4
+   net-async: OKx3
+   net-worker: OKx1
+   tls: OKx1
+   tls2: OKx1
+   trash: OKx1
+   udrv-crash: OKx1
+   udrv-dma: OKx1
+   udrv-e1000: OKx1
+   udrv-grant: OKx1
+   udrv-iommu: OKx1
+   udrv-irq: OKx1
+   udrv-linux: OKx1
+   udrv-net: OKx1
+   upd3: OKx2
+   wasi: OKx1
+== ../bug032-2026-11/mr-iommu-a-boot2.markers  vs  mr-iommu-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 40
+   3c3: OKx1
+   3d2: OKx1
+   3d2-wire: OKx1
+   3d7: OKx1
+   3d8: OKx1
+   3f1: OKx1
+   7guard: OKx1
+   ahci: OKx1
+   bg-out: OKx2
+   bgnet-cap: OKx1
+   ecam: OKx1
+   edit: OKx2
+   g1: OKx1
+   h1: OKx1
+   h4: OKx1
+   h4-ctr: OKx2
+   h5: OKx1
+   i3-s5: OKx1
+   io1: OKx1
+   io2: OKx1
+   io3: OKx1
+   j1-cache: OKx1
+   kwork: OKx1
+   lk: OKx1
+   net: OKx4
+   net-async: OKx3
+   net-worker: OKx1
+   tls: OKx1
+   tls2: OKx1
+   trash: OKx1
+   udrv-crash: OKx1
+   udrv-dma: OKx1
+   udrv-e1000: OKx1
+   udrv-grant: OKx1
+   udrv-iommu: OKx1
+   udrv-irq: OKx1
+   udrv-linux: OKx1
+   udrv-net: OKx1
+   upd3: OKx2
+   wasi: OKx1
+== ../bug032-2026-11/mr-noiommu-a-boot1.markers  vs  mr-noiommu-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 40
+   3c3: OKx1
+   3d2: OKx1
+   3d2-wire: OKx1
+   3d7: OKx1
+   3d8: OKx1
+   3f1: OKx1
+   7guard: OKx1
+   ahci: OKx1
+   bg-out: OKx2
+   bgnet-cap: OKx1
+   ecam: OKx1
+   edit: OKx2
+   g1: OKx1
+   h1: OKx1
+   h4: OKx1
+   h4-ctr: OKx2
+   h5: OKx1
+   i3-s5: OKx1
+   io1: OKx1
+   io2: OKx1
+   io3: OKx1
+   j1-cache: OKx1
+   kwork: OKx1
+   lk: OKx1
+   net: OKx4
+   net-async: OKx3
+   net-worker: OKx1
+   tls: OKx1
+   tls2: OKx1
+   trash: OKx1
+   udrv-crash: OKx1
+   udrv-dma: SKIPx1
+   udrv-e1000: OKx1
+   udrv-grant: OKx1
+   udrv-iommu: SKIPx1
+   udrv-irq: OKx1
+   udrv-linux: OKx1
+   udrv-net: OKx1
+   upd3: OKx2
+   wasi: OKx1
+== ../bug032-2026-11/mr-noiommu-a-boot2.markers  vs  mr-noiommu-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 40
+   3c3: OKx1
+   3d2: OKx1
+   3d2-wire: OKx1
+   3d7: OKx1
+   3d8: OKx1
+   3f1: OKx1
+   7guard: OKx1
+   ahci: OKx1
+   bg-out: OKx2
+   bgnet-cap: OKx1
+   ecam: OKx1
+   edit: OKx2
+   g1: OKx1
+   h1: OKx1
+   h4: OKx1
+   h4-ctr: OKx2
+   h5: OKx1
+   i3-s5: OKx1
+   io1: OKx1
+   io2: OKx1
+   io3: OKx1
+   j1-cache: OKx1
+   kwork: OKx1
+   lk: OKx1
+   net: OKx4
+   net-async: OKx3
+   net-worker: OKx1
+   tls: OKx1
+   tls2: OKx1
+   trash: OKx1
+   udrv-crash: OKx1
+   udrv-dma: SKIPx1
+   udrv-e1000: OKx1
+   udrv-grant: OKx1
+   udrv-iommu: SKIPx1
+   udrv-irq: OKx1
+   udrv-linux: OKx1
+   udrv-net: OKx1
+   upd3: OKx2
+   wasi: OKx1
