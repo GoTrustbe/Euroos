@@ -15,12 +15,13 @@
 //!
 //! - by e1000d (`net.driver=user`): every EuroIPC delivery of a frame already
 //!   calls `wake_rx_waiters` from the driver's syscall;
-//! - by the NIC's receive interrupt (kernel drivers: the 82574L and virtio-net
-//!   raise MSI-X; `rx_route_irq` drains the ring and wakes the worker without
-//!   waiting for the scheduler lock);
+//! - by the NIC's receive interrupt where there is one (virtio-net's MSI-X:
+//!   `rx_route_irq` drains the ring and wakes the worker without waiting for
+//!   the scheduler lock);
 //! - every tick while inbound work is in flight (half-open entries, httpd
-//!   connections: SYN-ACK retransmission, linger, expiry), and on a card that
-//!   cannot interrupt (82540EM) while the httpd or a listener is on.
+//!   connections: SYN-ACK retransmission, linger, expiry), and, with an
+//!   in-kernel driver, every tick while the httpd or a listener is on (the
+//!   e1000 has no receive interrupt; see `needs_tick`).
 //!
 //! A pass takes from the legacy queue only what belongs to inbound TCP (SYNs
 //! for the httpd or a listener, segments of a connection that registered its
@@ -91,9 +92,9 @@ pub fn start() -> Option<usize> {
         if crate::nic::frames_from_process() {
             "e1000d's frame deliveries (EuroIPC)"
         } else if crate::nic::rx_interrupts() {
-            "the NIC's receive interrupt (MSI-X)"
+            "the NIC's receive interrupt (MSI-X) and the tick while the httpd or a listener is on"
         } else {
-            "the tick (this NIC does not interrupt)"
+            "the tick while the httpd or a listener is on (polled NIC)"
         }
     );
     Some(t)
@@ -140,10 +141,14 @@ fn needs_tick() -> bool {
     if passive::busy() {
         return true; // retransmissions, linger and expiry run on the tick
     }
-    // A card without a receive interrupt is polled while someone can be
-    // reached from outside.
+    // An in-kernel NIC is polled every tick while someone can be reached from
+    // outside (virtio-net's interrupt also wakes the worker earlier). The
+    // 82574L got an MSI-X receive interrupt during this work and lost it again:
+    // on the R630 it cost the httpd's tail (p99 21 -> 61 ms, shell idle) and,
+    // with the shell busy, the messages thinned out (33 a second) and a worker
+    // driven by them answered at p50 59 ms, a polling one at 10 ms.
+    // e1000d's deliveries (`net.driver=user`) always wake the worker.
     !crate::nic::frames_from_process()
-        && !crate::nic::rx_interrupts()
         && (SERVER_ON.load(Ordering::Relaxed) || LISTENERS.load(Ordering::Relaxed) > 0)
 }
 

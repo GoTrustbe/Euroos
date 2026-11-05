@@ -253,8 +253,6 @@ extern "x86-interrupt" fn net_msix_handler(_frame: InterruptStackFrame) {
                 _frame.instruction_pointer.as_u64(), _frame.cpu_flags.bits() & 0x200 != 0);
         }
     }
-    // The kernel e1000e driver shares this vector: acknowledge its causes.
-    crate::e1000::ack_irq();
     crate::net::rx_route_irq();
     crate::apic::eoi();
 }

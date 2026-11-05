@@ -9,11 +9,9 @@
 //! Scope, honestly: QEMU-verified on 8086:100E and 8086:10D3. Real laptop
 //! I219/I225 PHYs are related but not identical; they stay unclaimed until
 //! validated on hardware via `hwprobe` (the driver only binds the two known
-//! ids). Polled, single queue pair, no TSO/checksum offload. The 82574L
-//! raises an MSI-X interrupt on receive (net worker, `net_worker.rs`): the
-//! handler drains the ring into the netstack's queues and wakes the network
-//! worker; every other cause stays masked. The 82540EM stays fully polled.
-//! Buffers/rings live in identity-mapped DMA frames like the other drivers.
+//! ids). Polled, single queue pair, no TSO/checksum offload, interrupts
+//! masked. Buffers/rings live in identity-mapped DMA frames like the other
+//! drivers.
 
 use euromm::FrameAllocator;
 
@@ -34,9 +32,6 @@ const R_TDLEN: u64 = 0x3808;
 const R_TDH: u64 = 0x3810;
 const R_TDT: u64 = 0x3818;
 const R_IMC: u64 = 0x00D8;
-const R_ICR: u64 = 0x00C0;
-const R_IMS: u64 = 0x00D0;
-const R_IVAR: u64 = 0x00E4; // 82574L only: MSI-X cause -> vector
 const R_MTA: u64 = 0x5200; // 128 dwords multicast table
 const R_RAL0: u64 = 0x5400;
 const R_RAH0: u64 = 0x5404;
@@ -72,27 +67,6 @@ struct E1000 {
 }
 
 static mut NIC: Option<E1000> = None;
-/// The 82574L delivers its receive interrupt over MSI-X (vector
-/// `interrupts::VIRTIO_NET_MSIX_VECTOR`, shared with virtio-net: one NIC binds).
-static MSIX: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-
-/// Does the bound card interrupt on receive?
-pub fn rx_interrupts() -> bool {
-    MSIX.load(core::sync::atomic::Ordering::Relaxed)
-}
-
-/// From the NIC's interrupt handler: read (and so acknowledge) the causes, or
-/// the card raises no further MSI-X message for them.
-pub fn ack_irq() {
-    if !rx_interrupts() {
-        return;
-    }
-    unsafe {
-        if let Some(n) = (*core::ptr::addr_of!(NIC)).as_ref() {
-            let _ = rd32(n.mmio + R_ICR);
-        }
-    }
-}
 
 /// Find + initialize an Intel e1000/e1000e. Returns true when the NIC is up.
 pub fn init(falloc: &mut FrameAllocator) -> bool {
@@ -170,20 +144,6 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         wr32(mmio + R_TCTL, TCTL_EN | TCTL_PSP | (0x10 << 4) | (0x40 << 12));
         // Link up (internal PHY auto-negotiates; QEMU links instantly).
         wr32(mmio + R_CTRL, rd32(mmio + R_CTRL) | CTRL_SLU);
-        // 82574L: receive causes to MSI-X vector 0, as e1000d does
-        // (euroe1000::IVAR_ALL_TO_VEC0, RXQ0|RXT0|RXDMT0|LSC). Without an
-        // interrupt the ring is only emptied when a task polls, and inbound
-        // connections wait for the desktop loop (net worker).
-        let mut msix_n = 0;
-        if dev.device == 0x10D3 {
-            msix_n = crate::msix::enable(&dev, 0, crate::interrupts::VIRTIO_NET_MSIX_VECTOR, crate::apic::lapic_id() as u8);
-            if msix_n > 0 {
-                let _ = rd32(mmio + R_ICR);
-                wr32(mmio + R_IVAR, (1 << 3) | (1 << 11) | (1 << 19));
-                wr32(mmio + R_IMS, (1 << 20) | (1 << 7) | (1 << 4) | (1 << 2));
-                MSIX.store(true, core::sync::atomic::Ordering::Relaxed);
-            }
-        }
 
         NIC = Some(E1000 {
             mmio,
@@ -196,10 +156,9 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
             mac,
         });
         crate::serial_println!(
-            "[e1000] {} up — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (legacy descriptors, {})",
+            "[e1000] {} up — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (legacy descriptors, polled)",
             if dev.device == 0x10D3 { "82574L (e1000e)" } else { "82540EM (e1000)" },
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-            if msix_n > 0 { "MSI-X receive interrupt" } else { "polled" }
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
         );
     }
     true
@@ -211,9 +170,9 @@ pub fn mac() -> Option<[u8; 6]> {
 
 /// Transmit one ethernet frame (blocking until the NIC reports DD; bounded).
 pub fn send(frame: &[u8]) -> bool {
-    // IF=0 for the ring manipulation: the network worker and the receive
-    // interrupt use this driver too, and a sender parked by the timer between
-    // filling a descriptor and moving the tail would share the slot with the next.
+    // IF=0 for the ring manipulation: the network worker uses this driver too
+    // (with interrupts off), and a sender parked by the timer between filling a
+    // descriptor and moving the tail would share the slot with the next.
     let _g = crate::sched::IfOffGuard::new();
     unsafe {
         let n = match (*core::ptr::addr_of_mut!(NIC)).as_mut() {
@@ -247,7 +206,7 @@ pub fn send(frame: &[u8]) -> bool {
 
 /// Non-blocking receive: the next pending frame, or None.
 pub fn poll_recv() -> Option<alloc::vec::Vec<u8>> {
-    // IF=0, as in send (and virtio_net::poll_recv): the MSI-X handler polls too.
+    // IF=0, as in send (and virtio_net::poll_recv).
     let _g = crate::sched::IfOffGuard::new();
     unsafe {
         let n = (*core::ptr::addr_of_mut!(NIC)).as_mut()?;
