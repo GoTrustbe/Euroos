@@ -1,0 +1,7 @@
+round 0: guest accepted=True client=ok latency=0.27s shell=1270ms
+round 1: guest accepted=True client=ok latency=0.26s shell=1259ms
+round 2: guest accepted=True client=ok latency=0.25s shell=1249ms
+round 3: guest accepted=True client=ok latency=0.25s shell=1248ms
+round 4: guest accepted=True client=ok latency=0.26s shell=1258ms
+round 5: guest accepted=True client=ok latency=0.24s shell=1239ms
+[accept] 6/6 inbound connections accepted and answered

@@ -1,0 +1,9 @@
+[loadtest] scenario=inbound image=/srv/euroos/wt-net-runs/b-inbound-user/boot.img disks=[] bus=virtio kvm=True smp=4 mem=4G nic=e1000e bootopts=- iommu=False
+[loadtest] serial log: /srv/euroos/wt-net-runs/b-inbound-user/loadtest-serial-20261103-071745.log  ·  CSV: /srv/euroos/wt-net-runs/b-inbound-user/b-inbound-user.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 166s — driving commands
+  [    2/?] ✗ err         2012ms t=    2.6s  echo console-alive  (took 2012 ms, limit 2000 ms)
+  [   18/?] ✗ CRASH:timeout waiting for '[scon-ready]'  120593ms t=  136.6s  echo console-alive
+  !! CRASH after 'echo console-alive' — see /srv/euroos/wt-net-runs/b-inbound-user/loadtest-serial-20261103-071745.log
+[loadtest] CRASH/HANG detected · results → /srv/euroos/wt-net-runs/b-inbound-user/b-inbound-user.csv · ltstat samples → /srv/euroos/wt-net-runs/b-inbound-user/b-inbound-user-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 64, "err": 51, "p50_ms": 821.3, "p99_ms": 1402.0}

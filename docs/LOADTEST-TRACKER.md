@@ -146,6 +146,8 @@ the code.
 | `churn` scale 8 (KVM, `-m 16G`) | 2026-11-02 | ✅ clean | `proof/loadtest-r630-2026-11/` | 128 glibc procs, 8×60×4 threads, 4×6 forks, fs, net: counters back |
 | `fsio` virtio / NVMe / AHCI (8 GiB) | 2026-11-02 | ✅ clean + reboot | `proof/loadtest-r630-2026-11/` | 3–10 MB/s; NVMe only with the BUG-021 workaround; BUG-022/023/025 found here |
 | `net` e1000e kernel / user / user+IOMMU | 2026-11-02 | 🟡 | `proof/loadtest-r630-2026-11/` | outbound ~1 % failures and ~85 s blocks (BUG-026, open); inbound fixed (BUG-018), slow (BUG-019) |
+| `net` + `inbound` on `feature/net-async` (KVM) | 2026-11-05 | ✅ | `proof/net-async-2026-11/` | outbound 400/400 (kernel), 300/300 (user, user+IOMMU), max 1.25 s; 4 httpd clients: 4 174 ok (user), 102 447 ok (kernel), console answers every second (max 633 ms); BUG-019/026 fixed |
+| `soak` 1 h + 4 httpd clients on `feature/net-async` (KVM, `-m 16G`) | 2026-11-05 | ✅ 1 747/1 747 ok | `proof/net-async-2026-11/` | counters flat, heap +26 kB/min (BUG-027); httpd slow during long synchronous shell commands |
 | `soak` 4 h 10 min (KVM, `-m 16G`) | 2026-11-03 | ✅ no crash, 1 failed fetch (BUG-026) | `proof/loadtest-r630-2026-11/` | first soak: kernel fault after 59 min (BUG-024, fixed); 2 h 20 min on the final image: 0 failures; heap +33 kB/min (BUG-027) |
 | `soak` 1 h on the merged tree (KVM, `-m 16G`) | 2026-11-03 | ✅ 2 085/2 085 ok | `proof/integrate-loadtest-2026-11-03/` | after the merge into app-control (userspace NIC driver); tasks, files, frames flat; heap +31 kB/min (BUG-027) |
 | lockbench KVM matrix | 2026-11-02 | ✅ 0 errors | `proof/loadtest-r630-2026-11/` | see `LOADTEST-R630-2026-11.md` §3 |
@@ -561,16 +563,31 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   drain (`rx_route_irq`) sends a bare SYN to the legacy queue too.
   Proof: `proof/integrate-loadtest-2026-11-03/`.
 
-### BUG-019 — inbound TCP is handled synchronously; under client load the desktop loop starves ⬜ OPEN
-- **Status:**   OPEN (design) · **Severity:** HIGH for any server use, LOW for the desktop
+### BUG-019 — inbound TCP is handled synchronously; under client load the desktop loop starves ✅ FIXED
+- **Status:**   FIXED (`feature/net-async`, `0d8a4c2`) · **Severity:** HIGH for any server use, LOW for the desktop
 - **Actual:**   each accepted connection costs ~6.4–7.2 s (tcpserve, kernel driver) and ~37 s
   with `net.driver=user` under KVM: `accept_from`/httpd
   busy-poll the NIC (`SPINS`=4 M iterations per poll) in the desktop loop. With 4 host clients on
   the httpd: 71 ok / 62 errors, p99 5.9 s, `[3g2-wire] WATCHDOG TRIPPED - main loop hung`, and one
   run where the console stayed silent for over 60 s (harness HANG).
-- **Repro:**    `scripts/loadtest.py --kvm --nic e1000e --hostfwd P --hammer 4 --scenario net`
-- **Analysis:** needs passive open as non-blocking state in the socket layer (SYN-RCVD per
-  listener, driven by the NIC interrupt / pump), not a blocking handshake inside `service()`.
+- **Repro:**    `scripts/loadtest.py --kvm --nic e1000e --restrict --hostfwd P --hammer 4 --scenario inbound --duration 300`
+  (the `inbound` scenario: one console `echo` a second must answer within 2 s)
+- **Analysis:** a SYN for the httpd or a LISTEN socket was served inside `service()` (the desktop
+  loop): SYN-ACK, then polling for the ACK and the request, one connection at a time.
+- **Fix:**      passive open without waiting (`kernel/src/net_passive.rs`): a SYN creates a half-open
+  entry in a bounded table (`euronet::tcpopen::SynQueue`, host-tested: backlog, SYN-ACK
+  retransmission 1/2/4 s, expiry, RFC 5961 resets) and sends the SYN-ACK; `passive::step` (from
+  `service()` and `pump_all()`) completes handshakes, answers httpd requests, retires connections,
+  never waits. Completed handshakes go to the listener's accept queue and wake accept(), which
+  sleeps between looks. TCP receive queues are per connection (local port, peer, peer port),
+  registered before the first segment leaves; a segment for no connection gets a rate-limited RST.
+  Boot marker `[net-async]` (synthetic peers on TEST-NET-1: 16 concurrent httpd clients, a listen
+  backlog). Proof (R630, 4 clients, 300 s): base 64 ok / 51 failed and the console silent for
+  120 s; now 4 174 ok / 3 failed (`net.driver=user`, p99 751 ms, console max 633 ms) and 102 447 ok
+  / 3 failed (`net.driver=kernel`, p99 21.6 ms). `proof/net-async-2026-11/`.
+- **Left:**     inbound connections are still driven from the desktop loop, so a long synchronous
+  shell or file-system command delays them (1 h soak with 4 clients: 4 384 ok, 641 failed, during
+  `churn fs`/`truncate`/`sha256sum`).
 
 ### BUG-020 — `[fuzz]` fails under KVM: the fuzzer stops and run_glibc times it out ⬜ OPEN
 - **Status:**   OPEN · **Severity:** MEDIUM (also on 813e627 → not a regression of this branch; the
@@ -649,18 +666,32 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Harness:**  the panic went unnoticed for 900 s: the panic path writes the UART byte by byte and
   `KERNEL PANIC` arrived split over reads. `CRASH_RE` now scans across chunk borders (`305125b`).
 
-### BUG-026 — an outbound TCP connect sometimes blocks the desktop loop for ~85 s ⬜ OPEN
-- **Status:**   OPEN · **Severity:** HIGH (freeze + watchdog line; also on 813e627-based images)
+### BUG-026 — an outbound TCP connect sometimes blocks the desktop loop for ~85 s ✅ FIXED
+- **Status:**   FIXED (`feature/net-async`, `0d8a4c2`, `77923ac`, `24b0fd5`) · **Severity:** HIGH (freeze + watchdog line; also on 813e627-based images)
 - **Found:**    2026-11-02 · scenario `net` (sequential `fetch 10.0.2.100`, e1000e on SLIRP)
 - **Actual:**   400 sequential fetches (kernel driver): 396 OK (median ~0.13 s), 2 failed fast
   ("no connection", 13 ms), 2 blocked 84–85 s and then failed; `[3g2-wire] WATCHDOG TRIPPED - main
   loop hung` in the log. The `net` scenario saw it after 163 (kernel), 106 (user + IOMMU) and 230
   (image without this branch's net change) connections; `net.driver=user` without IOMMU had 1
   failure in 250, no long block.
-- **Repro:**    `scripts/loadtest.py --kvm --nic e1000e --host-http --scenario net --conns 300`
-- **Analysis:** not root-caused. The connect path busy-polls the NIC (`poll_seg`: 3 × 4 M
-  `portq_pop` → `rx_route` → NIC register reads, each a VM exit under KVM) with retries; a lost or
-  late SYN-ACK costs tens of seconds of spinning. Same synchronous design as BUG-019.
+- **Repro:**    `scripts/loadtest.py --kvm --nic e1000e --restrict --host-http --scenario net --conns 400`
+- **Analysis:** the peer closes first on every HTTP/1.0 fetch, and `TcpConn::close()` only sent our
+  FIN while the connection was still open: each fetch left slirp's side in FIN-WAIT-2, which slirp
+  keeps 10 min (`tcp_maxidle`). A later connect that drew the same random port met that block.
+  libslirp drops such a SYN without an answer when its sequence lies left of `rcv_nxt` (no ACK
+  flag: `goto drop`) and ACKs it otherwise (`dropafterack`): four unanswered SYN rounds of
+  `SPINS`×3 spins (~21 s each under KVM) = the 85 s blocks, or four ACKed rounds in 13 ms = the
+  fast failures, about equally often. Not a lost wake-up and not ARP.
+- **Fix:**      our FIN goes out after the peer's FIN too (tick retransmits it); ephemeral ports avoid
+  ports in use and the last 1024; SYN-SENT per RFC 793 (a stale ACK is answered with a RST at its
+  ACK, then the SYN again; an acceptable RST refuses at once); the handshake is bounded in time
+  (1 s + 2 s, then a fresh port and ISN, 1 s + 2 s); a spinning `RxWait` is bounded by HPET time as
+  well as by spins. Host tests in `euronet::tcpopen`; `[net-async] connect` covers the stale-ACK
+  and silent-drop peers. Proof (R630): kernel driver 400/400, max 558 ms (base: a fast failure at
+  #119 and a 60 s hang at #178); `user` 300/300, max 1.0 s (base 3 failures); `user`+IOMMU 300/300,
+  max 1.25 s (base 2 failures of 12.3 s). `proof/net-async-2026-11/`.
+- **Left:**     with `net.driver=user` the median fetch is ~50 ms slower (576 vs 530 ms): the extra
+  FIN frame through e1000d (A/B without it: 531 ms; the kernel driver shows no difference).
 
 ### BUG-027 — the kernel heap grows linearly under the soak mix ⬜ OPEN
 - **Status:**   OPEN · **Severity:** MEDIUM (slow; frames are not affected)
@@ -686,5 +717,13 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   update check then reaches `euro-os.eu` (HTTP 404 on the manifest). All runs had a NIC.
 - Swap self-test (`gswap`) on a disk-root boot: ~4 min of synchronous `virtio_blk::kick_and_wait`
   under KVM; a selftest boot with an installed 8 GiB disk takes 330–455 s to the desktop.
+
+- **Base `bb2e9d2` under KVM, once (2026-11-03, R630, `net.driver=user`):** `KERNEL PANIC` at
+  `kernel/src/sched.rs:755`, index out of bounds with a garbage `s.current`, during the boot
+  (`proof/net-async-2026-11/r630-b2-out-user.txt`). Not seen on `feature/net-async`. Not filed as
+  a number here (another team works on the heap); the lead decides.
+- **Boots that stop in the self-tests under TCG** (`user-smp4-iommu`, 512 MiB): 1 of 6 on
+  `feature/net-async`, 1 of 3 on the base, same picture (no output after a glibc self-test line).
+  `proof/net-async-2026-11/README.md`.
 
 <!-- Add BUG-NNN entries above this line. Keep newest at the bottom of the relevant group. -->

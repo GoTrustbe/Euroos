@@ -26,7 +26,7 @@ q = subprocess.Popen(["taskset", "-c", cpus, "qemu-system-x86_64", "-machine", "
                       "-smp", "4", "-m", "4G", "-bios", lt.OVMF, "-drive", f"format=raw,file={wd}/boot.img",
                       "-chardev", f"socket,id=s,path={sock},server=on,wait=off", "-serial", "chardev:s",
                       "-display", "none", "-no-reboot",
-                      "-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:8080", "-device", "e1000e,netdev=n0"],
+                      "-netdev", f"user,id=n0,restrict=on,hostfwd=tcp:127.0.0.1:{port}-:8080", "-device", "e1000e,netdev=n0"],
                      stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 con = lt.SerialConsole(sock, os.path.join(wd, "serial.log"))
 res = []

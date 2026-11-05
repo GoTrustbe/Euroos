@@ -1,0 +1,19 @@
+[loadtest] scenario=net image=/srv/euroos/wt-net-runs/b2-out-user/boot.img disks=[] bus=virtio kvm=True smp=4 mem=4G nic=e1000e bootopts=- iommu=False
+[loadtest] serial log: /srv/euroos/wt-net-runs/b2-out-user/loadtest-serial-20261103-080559.log  ·  CSV: /srv/euroos/wt-net-runs/b2-out-user/b2-out-user.csv
+[loadtest] waiting for serial console …
+[loadtest] host HTTP server served 0 request(s)
+Traceback (most recent call last):
+  File "/srv/euroos/wt-net/scripts/loadtest.py", line 778, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/srv/euroos/wt-net/scripts/loadtest.py", line 682, in main
+    con.boot(a.boot_timeout)
+    ~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/srv/euroos/wt-net/scripts/loadtest.py", line 124, in boot
+    self.wait_for(READY, timeout)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/srv/euroos/wt-net/scripts/loadtest.py", line 110, in wait_for
+    chunk = self._pump()
+  File "/srv/euroos/wt-net/scripts/loadtest.py", line 101, in _pump
+    raise CrashError(window.strip().splitlines()[-1] if window.strip() else "crash")
+CrashError: [panic] CR2=0x0000010024006068 CR3=0x0000000000100
