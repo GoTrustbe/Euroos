@@ -655,7 +655,7 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
             let mut bytes = [0u8; 16];
             let mut n = 0;
             for k in 0..2u64 {
-                if let Some(q) = read_user_qword(rip & !7 + k * 8) {
+                if let Some(q) = read_user_qword((rip & !7) + k * 8) {
                     bytes[(k * 8) as usize..(k * 8 + 8) as usize].copy_from_slice(&q.to_le_bytes());
                     n += 8;
                 }
