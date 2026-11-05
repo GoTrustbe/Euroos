@@ -553,6 +553,30 @@ def scenario_inbound(args):
     yield C("ltstat", "ltstat ")
 
 
+def scenario_inbound_busy(args):
+    # Net worker: the httpd while the shell is busy. --hammer K host clients on
+    # the httpd (--hostfwd) for --duration seconds while the console runs only
+    # long synchronous commands (churn fs, truncate + sha256sum of 8 MiB: 10-30 s
+    # each under KVM), the ones that held the desktop loop and with it the
+    # inbound connections. The harness's summary splits the clients' requests
+    # into those that started during a command of >= 5 s and the rest. Needs a
+    # disk root for --iobase (--disks 8G).
+    t_end = time.time() + args.duration
+    d = args.iobase + "-busy"
+    yield C(f"mkdir {args.iobase}", None)
+    yield C(f"mkdir {d}", "created")
+    yield C("httpd on", "listening")
+    r = 0
+    while time.time() < t_end:
+        yield C("churn fs 1", "done", raw=r"\[churn-fs\] .*OK", timeout=300)
+        yield C(f"truncate -s {8 << 20} {d}/big{r % 2}", "bytes", timeout=300)
+        yield C(f"sha256sum {d}/big{r % 2}", f"{d}/big", timeout=300)
+        r += 1
+    yield C("httpd status", "served")
+    yield C("netstat", "tcp: ")
+    yield C("ltstat", "ltstat ")
+
+
 def scenario_cmds(args):
     # Ad-hoc: the shell commands given with --cmds, separated by ";" (no assertions).
     return [C(c.strip(), None, timeout=300) for c in args.cmds.split(";") if c.strip()]
@@ -562,7 +586,7 @@ SCENARIOS["cmds"] = scenario_cmds
 
 SCENARIOS.update({"procs": scenario_procs, "churn": scenario_churn, "fsio": scenario_fsio,
                   "persist-check-io": scenario_persist_check_io, "net": scenario_net, "soak": scenario_soak,
-                  "inbound": scenario_inbound})
+                  "inbound": scenario_inbound, "inbound-busy": scenario_inbound_busy})
 
 
 # ── host-side peers ──
@@ -603,6 +627,7 @@ class Hammer:
         self.port, self.stop_ev = port, threading.Event()
         self.ok = self.err = 0
         self.lat = []
+        self.reqs = []  # (start, end, good) per request
         self.lock = threading.Lock()
         self.threads = [threading.Thread(target=self.loop, daemon=True) for _ in range(workers)]
         for t in self.threads:
@@ -625,22 +650,37 @@ class Hammer:
                 good = got.startswith(b"HTTP/1.1 200") and b"EuroOS" in got
             except OSError:
                 good = False
+            t1 = time.time()
             with self.lock:
+                self.reqs.append((t0, t1, good))
                 if good:
                     self.ok += 1
-                    self.lat.append(time.time() - t0)
+                    self.lat.append(t1 - t0)
                 else:
                     self.err += 1
             if not good:
                 time.sleep(0.5)
 
-    def stop(self):
+    def stop(self, windows=()):
+        """Totals; with `windows` [(t0, t1, cmd)] also the requests that started
+        inside one of them ("busy") and the others ("idle")."""
         self.stop_ev.set()
         for t in self.threads:
             t.join(timeout=15)
-        lat = sorted(self.lat)
-        pick = lambda q: round(lat[min(len(lat) - 1, int(q * len(lat)))] * 1000, 1) if lat else None
-        return {"ok": self.ok, "err": self.err, "p50_ms": pick(0.5), "p99_ms": pick(0.99)}
+
+        def stats(reqs):
+            lat = sorted(e - s for s, e, g in reqs if g)
+            pick = lambda q: round(lat[min(len(lat) - 1, int(q * len(lat)))] * 1000, 1) if lat else None
+            return {"ok": len(lat), "err": sum(1 for r in reqs if not r[2]), "p50_ms": pick(0.5), "p99_ms": pick(0.99),
+                    "max_ms": round(lat[-1] * 1000, 1) if lat else None}
+        out = {"ok": self.ok, "err": self.err, **{k: v for k, v in stats(self.reqs).items() if k.endswith("_ms")}}
+        if windows:
+            inside = lambda s: any(w0 <= s < w1 for w0, w1, _ in windows)
+            out["busy_windows"] = len(windows)
+            out["busy_s"] = round(sum(w1 - w0 for w0, w1, _ in windows))
+            out["busy"] = stats([r for r in self.reqs if inside(r[0])])
+            out["idle"] = stats([r for r in self.reqs if not inside(r[0])])
+        return out
 
 
 def main():
@@ -722,6 +762,7 @@ def main():
     con = SerialConsole(sock_path, serial_log)
     rc = 0
     hammer = None
+    busy_windows = []
     t_boot = time.time()
     samples_path = a.csv[:-4] + "-ltstat.csv" if a.csv.endswith(".csv") else a.csv + "-ltstat.csv"
     try:
@@ -744,6 +785,7 @@ def main():
         total = len(cmds) if isinstance(cmds, list) else "?"
         quiet = not isinstance(cmds, list)   # the soak: print errors + every 25th row
         t_start = time.time()
+        busy_windows = []  # console commands of >= 5 s: (t0, t1, cmd)
         with open(a.csv, "w", newline="") as cf, open(samples_path, "w", newline="") as sf:
             w = csv.writer(cf)
             w.writerow(["id", "command", "status", "elapsed_ms", "output_lines", "t_s"])
@@ -759,10 +801,13 @@ def main():
                 if cmd.startswith("sleepwait "):         # host-side pause, not a guest command
                     time.sleep(int(cmd.split()[1]))
                     continue
+                t_cmd = time.time()
                 try:
                     status, ms, lines = con.run(cmd, timeout=item.timeout)
                 except CrashError as e:
                     status, ms, lines = "CRASH:" + str(e)[:60], 0, []
+                if time.time() - t_cmd >= 5:
+                    busy_windows.append((t_cmd, time.time(), cmd))
                 # Positive baseline assertion: required output must be present.
                 note = ""
                 if status == "ok" and expect is not None \
@@ -817,7 +862,7 @@ def main():
         print(f"[loadtest] {verdict} · results → {a.csv} · ltstat samples → {samples_path}")
     finally:
         if hammer:
-            print(f"[loadtest] hammer (inbound httpd, {a.hammer} clients): {json.dumps(hammer.stop())}")
+            print(f"[loadtest] hammer (inbound httpd, {a.hammer} clients): {json.dumps(hammer.stop(busy_windows))}")
         if host_http:
             print(f"[loadtest] host HTTP server served {host_http.hits} request(s)")
             host_http.stop()
