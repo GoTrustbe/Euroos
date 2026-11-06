@@ -92,8 +92,9 @@ pub fn init_timer(hz: u32) {
     // J1: from now on the lock-free kmsg tee may read `lapic_id()` (LAPIC mapped).
     crate::klog::mark_apic_ready();
     serial_println!(
-        "[apic] Local APIC #{} on — timer {hz} Hz (calibrated: {count} ticks/period)",
-        crate::apic::lapic_id()
+        "[apic] Local APIC #{} on — timer {hz} Hz (calibrated: {count} ticks/period against {})",
+        crate::apic::lapic_id(),
+        crate::apic::calibration_source()
     );
 }
 

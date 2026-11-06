@@ -41,9 +41,20 @@ pub fn enable(dev: &PciDevice, entry: u16, vector: u8, dest_apic: u8) -> u16 {
     let tbl = pci::cfg_read32(dev.bus, dev.dev, dev.func, ptr + 4);
     let bir = (tbl & 0x7) as u8;
     let off = (tbl & !0x7) as u64;
-    let table = bar_base(dev, bir) + off;
-    if table == 0 {
+    let base = bar_base(dev, bir);
+    if base == 0 || entry >= table_size {
         return 0;
+    }
+    // A 64-bit BAR may lie above the 1 TiB identity map (OVMF with many
+    // physical address bits): reach the table through the high-MMIO window.
+    let Some(table) = crate::paging::mmio_virt(base + off, table_size as u64 * 16) else {
+        return 0;
+    };
+    // The table lives in a memory BAR: memory decoding must be on (a legacy
+    // virtio driver only enabled I/O decoding on its function).
+    let cmd = pci::cfg_read32(dev.bus, dev.dev, dev.func, 0x04);
+    if cmd & 0x2 == 0 {
+        pci::cfg_write32(dev.bus, dev.dev, dev.func, 0x04, (cmd & 0xFFFF) | 0x2);
     }
     unsafe {
         // Entry = 16 bytes: [msg_addr_lo][msg_addr_hi][msg_data][vector_control].

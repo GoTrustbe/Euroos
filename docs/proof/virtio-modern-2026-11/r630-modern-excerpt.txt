@@ -1,0 +1,23 @@
+[paging] high MMIO 0x380000000000+0x1000 (above the 1 TiB identity map) → window 0xffc0000000
+[blk] virtio-blk OK — 524288 sectors (256 MiB) @ 00:02.0 modern virtio-1.x, common cfg @ 0xffc0000000 · features 0x100002200 · FLUSH on (real durability)
+[blk] virtio-blk OK — 131072 sectors (64 MiB) @ 00:03.0 modern virtio-1.x, common cfg @ 0xffc0004000 · features 0x100002200 · FLUSH on (real durability)
+[    0.00 INF] [hpet] HPET @ 100 MHz active — 1M spin iterations = 20102 us (high-resolution HAL time source)
+[net] virtio-net OK — MAC 52:54:00:12:34:56 (RX 128 bufs, 12-byte header, features 0x100010020)
+[apic] Local APIC #0 on — timer 100 Hz (calibrated: 625374 ticks/period against PIT)
+[vinput] virtio-input 00:05.0 "QEMU Virtio Tablet": tablet, absolute pointer (ABS_X 0..32767, ABS_Y 0..32767), 64 event buffers, polled ✓
+[vinput] virtio-input 00:06.0 "QEMU Virtio Keyboard": keyboard (modern virtio-1.x, common cfg @ 0xffc0010000), 64 event buffers, polled ✓
+[net-worker] kernel task 27 started: inbound TCP (SYN queue, httpd, accept queues) runs here, woken by the NIC's receive interrupt (MSI-X) and the tick while the httpd or a listener is on
+[net-worker] httpd while the boot task is busy (3 s spin, no service()/pump_all from it; synthetic peers): 8 clients, 8 SYN-ACKs, 8 answered (first after 131 ms), 8 closed, 0 half-open + 0 open left, all done after 241 ms in 15 worker passes (task 27) → OK ✓
+[net-worker] net worker: task 27, 15 passes, 8 inbound frames, longest pass 13810 us; kicks 3 (e1000d/task) + 0 (interrupt, 0 found the scheduler busy)
+[vinput] Pointer { abs: Some((5122, 6073)), dx: 0, dy: 0, wheel: 0, buttons: 0 } → cursor 299,199
+[vinput] Pointer { abs: Some((27320, 28849)), dx: 0, dy: 0, wheel: 0, buttons: 0 } → cursor 1599,949
+[vinput] Pointer { abs: Some((16392, 16398)), dx: 0, dy: 0, wheel: 0, buttons: 0 } → cursor 959,539
+[vinput] Pointer { abs: None, dx: 0, dy: 0, wheel: 0, buttons: 1 } → cursor 959,539
+[vinput] Pointer { abs: None, dx: 0, dy: 0, wheel: 0, buttons: 0 } → cursor 959,539
+[vinput] Key { extended: false, code: 33, pressed: true } → cursor 959,539
+[vinput] Key { extended: false, code: 33, pressed: false } → cursor 959,539
+[vinput] Key { extended: false, code: 18, pressed: true } → cursor 959,539
+[vinput] Key { extended: false, code: 18, pressed: false } → cursor 959,539
+[vinput] Key { extended: false, code: 20, pressed: true } → cursor 959,539
+[vinput] Key { extended: false, code: 20, pressed: false } → cursor 959,539
+[vinput] Key { extended: false, code: 46, pressed: true } → cursor 959,539

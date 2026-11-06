@@ -1,0 +1,13 @@
+[paging] high MMIO 0x380000000000+0x1000 (above the 1 TiB identity map) → window 0xffc0000000
+[blk] virtio-blk OK — 524288 sectors (256 MiB) @ 00:02.0 modern virtio-1.x, common cfg @ 0xffc0000000 · features 0x100002200 · FLUSH on (real durability)
+[    0.00 INF] [hpet] HPET active @ 100 MHz — 1M spin iterations = 21298 us (high-resolution HAL time source)
+[apic] Local APIC #0 on — timer 100 Hz (calibrated: 628626 ticks/period against HPET (no PIT))
+[vinput] virtio-input 00:05.0 "QEMU Virtio Tablet": tablet, absolute pointer (ABS_X 0..32767, ABS_Y 0..32767), 64 event buffers, polled ✓
+[vinput] virtio-input 00:06.0 "QEMU Virtio Keyboard": keyboard (modern virtio-1.x, common cfg @ 0xffc0010000), 64 event buffers, polled ✓
+[desktop] interactive loop started — input + shell live
+[vinput] Pointer { abs: Some((8537, 12147)), dx: 0, dy: 0, wheel: 0, buttons: 0 } → cursor 499,399
+[vinput] Pointer { abs: Some((16392, 16398)), dx: 0, dy: 0, wheel: 0, buttons: 0 } → cursor 959,539
+[vinput] Pointer { abs: None, dx: 0, dy: 0, wheel: 0, buttons: 1 } → cursor 959,539
+[vinput] Pointer { abs: None, dx: 0, dy: 0, wheel: 0, buttons: 0 } → cursor 959,539
+[vinput] Key { extended: false, code: 28, pressed: true } → cursor 959,539
+[vinput] Key { extended: false, code: 28, pressed: false } → cursor 959,539

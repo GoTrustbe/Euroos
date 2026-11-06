@@ -161,6 +161,7 @@ the code.
 | `soak` 1 h + 4 httpd clients on `feature/net-worker` (KVM, `-m 16G`) | 2026-11-05 | ✅ 1 663/1 663 ok | `proof/net-worker-2026-11/` | httpd 460 905 ok / 12 failed (first attempts), p99 123 ms, 302 014 / 0 during long commands (base 4 376 / 704, p99 9.5 s); heap +0.37 kB/min; tasks, files, frames, process pool flat; the base `52755fc` soak hit a ring-0 GPF after 47 min |
 | TCG matrix + `megaraid-proof.sh` on `feature/net-worker` | 2026-11-05 | ✅ 0 markers worse | `proof/net-worker-2026-11/` | 10 TCG boots (user/kernel/storage/combined, smp4/smp1, ± IOMMU) + 4 megaraid boots against `proof/bug032-2026-11/`: 0 worse, 0 changed; `[net-worker]` OK everywhere, `[lk]` 0 inversions |
 | `inbound` 4 clients 300 s + `net`, integrated (KVM) | 2026-11-05 | ✅ | `proof/integrate-net-mem-2026-11/` | user 4 165 ok, console max 693 ms; kernel 101 202 ok, max 380 ms; outbound 300/300 (user), 400/400 (kernel) |
+| virtio 1.x (modern, non-transitional) on `feature/virtio-modern`: TCG device configs, matrix, megaraid; R630 KVM | 2026-11-06 | 🟡 0 markers worse; 2 of 10 matrix boots hung (BUG-037, not in the changed code) | `proof/virtio-modern-2026-11/` | modern virtio-blk (boot + data disk), virtio-net (DHCP, fetch, net worker), virtio-tablet/keyboard typed and pointed, BARs at 56 TiB through the high-MMIO window, no PIT (HPET / PM timer); transitional and legacy 0 worse; reruns of the hung configs 6/6 (branch) and 6/6 (base); megaraid 8 boots 0 worse; R630 `net` 8/8 clean, `inbound` over modern virtio-net within run-to-run spread of legacy |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
 > it ✅ from "it should work".
@@ -890,6 +891,19 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   after a crash the harness reads 10 s more before it stops the VM (a log once ended at `[PA`).
   Longest worker pass after the fix: 16 ms. The `inbound` numbers before 2026-11-05 carry this stall
   in their `max_ms` and part of their p99.
+
+### BUG-037 — `PIPE_FDS` taken with and without interrupts off: a process spins with IF=0 for ever 🟡 OPEN
+- **Status:**   OPEN · **Severity:** HIGH (boot hang, rare)
+- **Found:**    2026-11-05 · `feature/virtio-modern` TCG matrix, `user-smp4-iommu` and `user-smp1-noiommu`
+  (2 of 10 boots, up to six QEMUs on the build server); NMI probe in `proof/virtio-modern-2026-11/tcg-hang-*`
+- **Analysis:** task 10 (a musl background process) sits in `ring3::pipe_write_fd` (`+0xd1`) spinning on
+  `ring3::PIPE_FDS` with RFLAGS `0x50002` (IF=0, AC=1), the boot task Ready. `pipe_write_fd` takes the
+  lock under an `IfOffGuard` (`96f0aac`, 2026-08-31); most other users (`pipe_fd_exists`, dup/dup2,
+  close, the fork fd copy) take it with interrupts on. A holder preempted by the tick and a spinner
+  with IF=0 on the same core never meet again: the BUG-007 class. Not in the code the branch changes;
+  3 more boots of each configuration on the branch and on the base all reached the desktop.
+- **Fix (proposed):** take `PIPE_FDS` (and `PIPES`/`PIPE_WAITERS`, which `pipe_write_fd` nests) only with
+  interrupts off everywhere, as `SCANCODES` and the UART lock do, or drop the IF-off section there.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

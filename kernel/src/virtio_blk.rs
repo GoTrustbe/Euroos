@@ -1,79 +1,37 @@
-//! virtio-blk-pci legacy driver (Run 7 / doc §10) — a REAL block disk.
+//! virtio-blk-pci driver (Run 7 / doc §10) — a REAL block disk.
 //!
-//! Same legacy-virtio approach as `virtio_net` (PIO via BAR0, split-ring
-//! virtqueue), but with a single request queue. A block request is a chain of
-//! three descriptors: [16-byte header | 512-byte data | 1-byte status].
-//! This lets EuroFS eventually live on a real disk → files survive
-//! a restart.
+//! Runs over the shared virtio PCI transport (`virtio_pci.rs`): modern
+//! virtio 1.x (PCI id 1af4:1042, memory BAR, `disable-legacy=on`) or legacy
+//! 0.9.5 (1af4:1001, I/O BAR 0). One request queue; a request is a chain of
+//! three descriptors: [16-byte header | data | 1-byte status].
+//!
+//! Features accepted (only what is implemented): VERSION_1 (modern), FLUSH
+//! (EuroFS checkpoints really reach the medium), DISCARD, RO (writes are
+//! refused). Not accepted: EVENT_IDX, INDIRECT_DESC, packed rings, MQ,
+//! SEG_MAX/BLK_SIZE (one descriptor per data buffer, 512-byte sectors).
 
 use core::sync::atomic::{compiler_fence, Ordering};
 
 use euromm::FrameAllocator;
-use x86_64::instructions::port::Port;
 
-const VIRTIO_DEVICE_FEATURES: u16 = 0x00;
-const VIRTIO_DRIVER_FEATURES: u16 = 0x04;
-const VIRTIO_QUEUE_PFN: u16 = 0x08;
-const VIRTIO_QUEUE_SIZE: u16 = 0x0C;
-const VIRTIO_QUEUE_SELECT: u16 = 0x0E;
-const VIRTIO_QUEUE_NOTIFY: u16 = 0x10;
-const VIRTIO_STATUS: u16 = 0x12;
-const VIRTIO_BLK_CAPACITY: u16 = 0x14; // u64 capacity in sectors
-
-const STATUS_ACK: u8 = 1;
-const STATUS_DRIVER: u8 = 2;
-const STATUS_DRIVER_OK: u8 = 4;
-const DESC_NEXT: u16 = 1;
-const DESC_WRITE: u16 = 2;
+use crate::virtio_pci::{feat, Queue, Transport, DESC_NEXT, DESC_WRITE};
 
 pub const SECTOR: usize = 512;
 const VIRTIO_BLK_T_IN: u32 = 0; // read (device → us)
 const VIRTIO_BLK_T_OUT: u32 = 1; // write (us → device)
 const VIRTIO_BLK_T_FLUSH: u32 = 4; // force device cache → persistent medium
 const VIRTIO_BLK_T_DISCARD: u32 = 11; // TRIM: tell the device a range is unused
-const VIRTIO_BLK_F_FLUSH: u32 = 1 << 9; // device supports the FLUSH command
-const VIRTIO_BLK_F_DISCARD: u32 = 1 << 13; // device supports the DISCARD command
-
-#[repr(C)]
-struct VqDesc {
-    addr: u64,
-    len: u32,
-    flags: u16,
-    next: u16,
-}
-
-struct VirtQueue {
-    size: u16,
-    desc: u64,
-    avail: u64,
-    used: u64,
-    last_used: u16,
-}
-
-impl VirtQueue {
-    fn desc(&self, i: u16) -> *mut VqDesc {
-        (self.desc + (i as u64) * 16) as *mut VqDesc
-    }
-    fn avail_idx_ptr(&self) -> *mut u16 {
-        (self.avail + 2) as *mut u16
-    }
-    fn avail_ring(&self, i: u16) -> *mut u16 {
-        (self.avail + 4 + (i as u64) * 2) as *mut u16
-    }
-    fn used_idx(&self) -> u16 {
-        unsafe { ((self.used + 2) as *const u16).read_volatile() }
-    }
-}
 
 pub struct VirtioBlk {
-    io: u16,
-    vq: VirtQueue,
+    tp: Transport,
+    vq: Queue,
     pub capacity_sectors: u64,
     hdr: u64,
     data: u64,
     status: u64,
     flush_ok: bool, // VIRTIO_BLK_F_FLUSH negotiated → the FLUSH command is valid
     discard_ok: bool, // VIRTIO_BLK_F_DISCARD negotiated → the DISCARD (TRIM) command is valid
+    read_only: bool, // VIRTIO_BLK_F_RO: the device refuses writes, so do we
 }
 
 /// Up to 4 virtio-blk disks (root + extra mounts). Index 0 = the first/root.
@@ -88,46 +46,10 @@ unsafe fn dev_mut(dev: usize) -> Option<&'static mut VirtioBlk> {
     (*core::ptr::addr_of_mut!(BLKS))[dev].as_mut()
 }
 
-fn setup_queue(io: u16, sel: u16, falloc: &mut FrameAllocator) -> Option<VirtQueue> {
-    unsafe {
-        Port::new(io + VIRTIO_QUEUE_SELECT).write(sel);
-        let qsz: u16 = Port::new(io + VIRTIO_QUEUE_SIZE).read();
-        // The driver uses a fixed 3-descriptor chain (hdr/data/status); a
-        // device that advertises a smaller queue would cause OOB descriptors to be
-        // written (audit C2). Reject qsz < 3.
-        if qsz < 3 {
-            return None;
-        }
-        // Legacy split-ring: ONE contiguous region. The device computes the used-ring
-        // at `align(desc+avail, 4096)` from the QUEUE_PFN base — so keep the same
-        // layout and reserve enough contiguous frames.
-        let q = qsz as u64;
-        let desc_sz = 16 * q;
-        let avail_sz = 6 + 2 * q;
-        let used_off = (desc_sz + avail_sz + 4095) & !4095;
-        let used_sz = 6 + 8 * q;
-        let total = used_off + used_sz;
-        let frames = ((total + 4095) / 4096) as usize;
-        let base = falloc.allocate().ok()?;
-        for _ in 1..frames {
-            falloc.allocate().ok()?; // reserve the contiguous follow-up frames
-        }
-        core::ptr::write_bytes(base as *mut u8, 0, frames * 4096);
-        let desc = base;
-        let avail = base + desc_sz;
-        let used = base + used_off;
-        Port::new(io + VIRTIO_QUEUE_PFN).write((base >> 12) as u32);
-        Some(VirtQueue { size: qsz, desc, avail, used, last_used: 0 })
-    }
-}
-
 /// Initialize ALL virtio-blk disks (up to `MAX_BLK`). Returns false if there is no
 /// device at all. Disk 0 is the root; further disks are extra mounts (B3).
 pub fn init(falloc: &mut FrameAllocator) -> bool {
-    let devs: alloc::vec::Vec<_> = crate::pci::enumerate()
-        .into_iter()
-        .filter(|d| d.vendor == 0x1AF4 && (d.device == 0x1001 || d.device == 0x1042))
-        .collect();
+    let devs = crate::virtio_pci::find_all(2);
     if devs.is_empty() {
         crate::serial_println!("[blk] no virtio-blk device found");
         return false;
@@ -151,75 +73,66 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
 
 /// Set up a single virtio-blk device (own virtqueue + buffer frames). None on error.
 fn setup_device(dev: &crate::pci::PciDevice, falloc: &mut FrameAllocator) -> Option<VirtioBlk> {
-    let io = (dev.bar(0) & 0xFFFC) as u16;
-    dev.enable(0x5); // I/O + bus master
-    unsafe {
-        let mut status: Port<u8> = Port::new(io + VIRTIO_STATUS);
-        status.write(0);
-        status.write(STATUS_ACK);
-        status.write(STATUS_ACK | STATUS_DRIVER);
-        // Negotiate ONLY VIRTIO_BLK_F_FLUSH (if the device offers it): that gives
-        // us a real FLUSH command so that EuroFS checkpoints actually land on the medium
-        // instead of in the disk's write-back cache. No other features.
-        let dev_features = Port::<u32>::new(io + VIRTIO_DEVICE_FEATURES).read();
-        let flush_ok = dev_features & VIRTIO_BLK_F_FLUSH != 0;
-        let discard_ok = dev_features & VIRTIO_BLK_F_DISCARD != 0;
-        let mut accept = 0u32;
-        if flush_ok {
-            accept |= VIRTIO_BLK_F_FLUSH;
-        }
-        if discard_ok {
-            accept |= VIRTIO_BLK_F_DISCARD;
-        }
-        Port::<u32>::new(io + VIRTIO_DRIVER_FEATURES).write(accept);
-
-        let capacity_sectors: u64 = {
-            let lo = Port::<u32>::new(io + VIRTIO_BLK_CAPACITY).read() as u64;
-            let hi = Port::<u32>::new(io + VIRTIO_BLK_CAPACITY + 4).read() as u64;
-            (hi << 32) | lo
-        };
-
-        let vq = match setup_queue(io, 0, falloc) {
-            Some(q) => q,
-            None => return None,
-        };
-        // Fixed buffer frames: header/status in frame 0, a full 4 KiB
-        // data frame so we do up to 8 sectors (one EuroFS block) per request.
-        let frame = falloc.allocate().expect("blk-buf");
-        // A CONTIGUOUS data area of DATA_FRAMES frames: one descriptor covers the whole
-        // request, so a 64 KiB read is still a single device round-trip.
-        let data_frame = falloc.allocate_contiguous(DATA_FRAMES).expect("blk-data");
-        let hdr = frame; // 16 B
-        let status_buf = frame + 16; // 1 B
-        let data = data_frame; // DATA_MAX B
-
-        // J2: MSI-X on the storage controller. ADDITIVE — the used-ring poll remains the
-        // completion confirmation; the IRQ proves interrupt-driven storage completion.
-        // Capacity has ALREADY been read ABOVE (device-config @0x14, MSI-X still off); once
-        // MSI-X is on, device-config shifts to 0x18 and 0x14/0x16 become the vector
-        // registers — we read NO more device-config after that, so no regression.
-        let msix_n = crate::msix::enable(dev, 0, crate::interrupts::VIRTIO_BLK_MSIX_VECTOR, crate::apic::lapic_id() as u8);
-        if msix_n > 0 {
-            Port::<u16>::new(io + 0x0E).write(0); // queue select 0
-            Port::<u16>::new(io + 0x16).write(0); // queue_msix_vector = MSI-X entry 0
-            let rb: u16 = Port::<u16>::new(io + 0x16).read(); // 0xFFFF = NO_VECTOR (failed)
-            Port::<u16>::new(io + 0x14).write(0xFFFF); // config_msix_vector = NO_VECTOR
+    let mut tp = Transport::probe(dev)?;
+    tp.begin();
+    let accepted = match tp.negotiate(feat::BLK_FLUSH | feat::BLK_DISCARD | feat::BLK_RO) {
+        Some(a) => a,
+        None => {
             crate::serial_println!(
-                "[j2-blk] virtio-blk MSI-X on ({} entries) → vector {:#x}, queue_msix_vector readback={:#06x}",
-                msix_n, crate::interrupts::VIRTIO_BLK_MSIX_VECTOR, rb
+                "[blk] {:02x}:{:02x}.{}: feature negotiation refused (offered {:#x})",
+                dev.bus, dev.dev, dev.func, tp.device_features()
             );
+            return None;
         }
+    };
+    let flush_ok = accepted & feat::BLK_FLUSH != 0;
+    let discard_ok = accepted & feat::BLK_DISCARD != 0;
+    let read_only = accepted & feat::BLK_RO != 0;
+    // Capacity (config offset 0, u64 sectors), read before MSI-X moves the
+    // legacy device config.
+    let capacity_sectors = tp.cfg64(0);
 
-        status.write(STATUS_ACK | STATUS_DRIVER | STATUS_DRIVER_OK);
-        crate::serial_println!(
-            "[blk] virtio-blk OK — {} sectors ({} MiB) @ BAR0 I/O={:#06x} · FLUSH {}",
-            capacity_sectors,
-            capacity_sectors * 512 / (1024 * 1024),
-            io,
-            if flush_ok { "on (real durability)" } else { "n/a" }
-        );
-        Some(VirtioBlk { io, vq, capacity_sectors, hdr, data, status: status_buf, flush_ok, discard_ok })
+    // The driver uses a fixed 3-descriptor chain (hdr/data/status); a device
+    // with a smaller queue would get descriptors past its table (audit C2).
+    let vq = tp.setup_queue(0, 256, &mut |pages| falloc.allocate_contiguous(pages).ok())?;
+    if vq.size < 3 {
+        tp.set_status(eurovirtio::status::FAILED);
+        return None;
     }
+    // Fixed buffer frames: header/status in frame 0, a CONTIGUOUS data area of
+    // DATA_FRAMES frames: one descriptor covers the whole request, so a 64 KiB
+    // read is still a single device round-trip.
+    let frame = falloc.allocate().ok()?;
+    let data = falloc.allocate_contiguous(DATA_FRAMES).ok()?;
+    let hdr = frame; // 16 B
+    let status_buf = frame + 16; // 1 B
+
+    // J2: MSI-X on the storage controller. ADDITIVE — the used-ring poll remains
+    // the completion confirmation; the IRQ proves interrupt-driven completion.
+    let msix_n = tp.enable_msix(0, crate::interrupts::VIRTIO_BLK_MSIX_VECTOR, crate::apic::lapic_id() as u8);
+    if msix_n > 0 {
+        let rb = tp.set_queue_vector(0, 0);
+        tp.set_config_vector(eurovirtio::NO_VECTOR);
+        crate::serial_println!(
+            "[j2-blk] virtio-blk MSI-X on ({} entries) → vector {:#x}, queue_msix_vector readback={:#06x}",
+            msix_n, crate::interrupts::VIRTIO_BLK_MSIX_VECTOR, rb
+        );
+    } else {
+        crate::serial_println!("[blk] virtio-blk: no MSI-X, completions are polled");
+    }
+
+    tp.driver_ok();
+    crate::serial_println!(
+        "[blk] virtio-blk OK — {} sectors ({} MiB) @ {:02x}:{:02x}.{} {} · features {:#x} · FLUSH {}{}",
+        capacity_sectors,
+        capacity_sectors * 512 / (1024 * 1024),
+        dev.bus, dev.dev, dev.func,
+        tp.describe(),
+        accepted,
+        if flush_ok { "on (real durability)" } else { "n/a" },
+        if read_only { " · READ-ONLY" } else { "" }
+    );
+    Some(VirtioBlk { tp, vq, capacity_sectors, hdr, data, status: status_buf, flush_ok, discard_ok, read_only })
 }
 
 // Max bytes per request. Was 4096 (one EuroFS block): serving a 495 MB chrome binary
@@ -280,7 +193,7 @@ unsafe fn kick_and_wait_inner(blk: &mut VirtioBlk) -> bool {
     compiler_fence(Ordering::SeqCst);
     blk.vq.avail_idx_ptr().write(idx.wrapping_add(1));
     compiler_fence(Ordering::SeqCst);
-    Port::<u16>::new(blk.io + VIRTIO_QUEUE_NOTIFY).write(0);
+    blk.tp.notify(&blk.vq);
 
     for _ in 0..40_000_000 {
         if blk.vq.used_idx() != blk.vq.last_used {
@@ -418,7 +331,7 @@ pub fn write_io_dev(dev: usize, sector: u64, buf: &[u8]) -> bool {
         };
         // No silent truncation or out-of-range LBA (audit C3).
         let n = buf.len();
-        if n > DATA_MAX || sector + (n as u64).div_ceil(512) > blk.capacity_sectors {
+        if n > DATA_MAX || sector + (n as u64).div_ceil(512) > blk.capacity_sectors || blk.read_only {
             return false;
         }
         core::ptr::copy_nonoverlapping(buf.as_ptr(), blk.data as *mut u8, n);

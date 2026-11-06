@@ -817,6 +817,7 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     // keeps the endpoint serviced + re-armed regardless of load. IRQ-safe: the
     // `POLLING` guard bails if a task-context poll is mid-flight.
     crate::xhci::poll();
+    crate::virtio_input::poll(); // virtio-tablet / virtio-keyboard (polled)
     // Refresh the vDSO clock page (userspace clock_gettime reads it, no syscall).
     crate::ring3::vdso_tick();
     // Sample WHERE the preempted thread was executing, if it was in ring 3. The stub

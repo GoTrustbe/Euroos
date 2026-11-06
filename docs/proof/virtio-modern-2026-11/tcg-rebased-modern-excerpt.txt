@@ -1,0 +1,27 @@
+[blk] virtio-blk OK — 524288 sectors (256 MiB) @ 00:02.0 modern virtio-1.x, common cfg @ 0xc000000000 · features 0x100002200 · FLUSH on (real durability)
+[blk] virtio-blk OK — 131072 sectors (64 MiB) @ 00:03.0 modern virtio-1.x, common cfg @ 0xc000004000 · features 0x100002200 · FLUSH on (real durability)
+[    0.00 INF] [hpet] HPET @ 100 MHz active — 1M spin iterations = 189891 us (high-resolution HAL time source)
+[net] virtio-net @ PCI 00:04.0, modern virtio-1.x, common cfg @ 0xc000008000
+[net] virtio-net MSI-X on (4 entries) -> vector 0x4b, queue readback=0x0000
+[net] virtio-net OK — MAC 52:54:00:12:34:56 (RX 128 bufs, 12-byte header, features 0x100010020)
+[net] DHCP ACK: lease 10.0.2.15 (router 10.0.2.2, dns 10.0.2.3, 86400s)
+[apic] Local APIC #0 on — timer 100 Hz (calibrated: 629186 ticks/period against PIT)
+[vinput] virtio-input 00:05.0 "QEMU Virtio Tablet": tablet, absolute pointer (ABS_X 0..32767, ABS_Y 0..32767), 64 event buffers, polled ✓
+[vinput] virtio-input 00:06.0 "QEMU Virtio Keyboard": keyboard (modern virtio-1.x, common cfg @ 0xc000010000), 64 event buffers, polled ✓
+[net-worker] kernel task 27 started: inbound TCP (SYN queue, httpd, accept queues) runs here, woken by the NIC's receive interrupt (MSI-X) and the tick while the httpd or a listener is on
+[net-worker] httpd while the boot task is busy (3 s spin, no service()/pump_all from it; synthetic peers): 8 clients, 8 SYN-ACKs, 8 answered (first after 176 ms), 8 closed, 0 half-open + 0 open left, all done after 287 ms in 29 worker passes (task 27) → OK ✓
+[net-worker] net worker: task 27, 29 passes, 8 inbound frames, longest pass 4963 us; kicks 3 (e1000d/task) + 0 (interrupt, 0 found the scheduler busy)
+[j2-blk] virtio-blk MSI-X completions: 5 (after 4 block reads, +4) → interrupt-driven storage completion works ✓
+[g2] VFS routes /mnt/hello-disk2.txt → 42 bytes from disk 1 ✓
+[vinput] Pointer { abs: Some((2049, 27331)), dx: 0, dy: 0, wheel: 0, buttons: 0 } → cursor 119,899
+[vinput] Pointer { abs: Some((16392, 16398)), dx: 0, dy: 0, wheel: 0, buttons: 0 } → cursor 959,539
+[vinput] Pointer { abs: None, dx: 0, dy: 0, wheel: 0, buttons: 1 } → cursor 959,539
+[vinput] Pointer { abs: None, dx: 0, dy: 0, wheel: 0, buttons: 0 } → cursor 959,539
+[vinput] Key { extended: false, code: 35, pressed: true } → cursor 959,539
+[vinput] Key { extended: false, code: 35, pressed: false } → cursor 959,539
+[vinput] Key { extended: false, code: 18, pressed: true } → cursor 959,539
+[vinput] Key { extended: false, code: 18, pressed: false } → cursor 959,539
+[vinput] Key { extended: false, code: 38, pressed: true } → cursor 959,539
+[vinput] Key { extended: false, code: 38, pressed: false } → cursor 959,539
+[vinput] Key { extended: false, code: 25, pressed: true } → cursor 959,539
+[vinput] Key { extended: false, code: 25, pressed: false } → cursor 959,539

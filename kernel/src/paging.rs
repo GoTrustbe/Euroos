@@ -35,6 +35,77 @@ fn high_pdpt_entry() -> u64 {
     }
 }
 
+// ── MMIO above the 1 TiB identity map ───────────────────────────────────────
+// Boot and every process share PML4[0] (0..512 GiB, identity) and PML4[1]
+// (512 GiB..1 TiB, the shared high PDPT). Firmware may still put a 64-bit BAR
+// higher: OVMF places its 64-bit PCI window near the top of the guest's
+// physical address space, which with `-cpu host` (46 physical bits) is tens of
+// TiB up. Such a BAR is reached through a window: on first use the LAST GiB of
+// the shared high region (virtual 1023..1024 GiB, PDPT_hi[511]) becomes a PD of
+// uncached 2 MiB pages, handed out to high BARs in order. Because the PDPT is
+// shared, the window is valid under every CR3. The identity mapping of
+// physical 1023..1024 GiB is given up when (and only when) the window is
+// first needed.
+const MMIO_WIN_SLOT: usize = 511;
+const MMIO_WIN_VIRT: u64 = (512 + MMIO_WIN_SLOT as u64) * GIB;
+const PWT: u64 = 1 << 3;
+const PCD: u64 = 1 << 4;
+
+#[repr(C, align(4096))]
+struct PdPage([u64; 512]);
+static mut MMIO_WIN_PD: PdPage = PdPage([0; 512]);
+static MMIO_WIN: spin::Mutex<usize> = spin::Mutex::new(0); // next free PD slot
+
+/// Virtual address through which the kernel reaches MMIO `phys..phys+len`.
+/// Identity (returns `phys`) below 1 TiB; above it the range is mapped into the
+/// shared high-BAR window (uncached). None if the window is full.
+pub fn mmio_virt(phys: u64, len: u64) -> Option<u64> {
+    let len = len.max(1);
+    if phys.checked_add(len)? <= 1024 * GIB {
+        return Some(phys);
+    }
+    let pdpt_hi = HIGH_PDPT.load(core::sync::atomic::Ordering::Relaxed);
+    if pdpt_hi == 0 {
+        return None;
+    }
+    let first = phys & !(MIB2 - 1);
+    let last = (phys + len - 1) & !(MIB2 - 1);
+    let n = ((last - first) / MIB2 + 1) as usize;
+    let mut next = MMIO_WIN.lock();
+    // SAFETY: the PD is only touched under MMIO_WIN; the PDPT entry is shared
+    // and written once, before any user of the window exists.
+    unsafe {
+        let pd = &mut *core::ptr::addr_of_mut!(MMIO_WIN_PD);
+        // Already mapped (another cap of the same BAR, the MSI-X table)?
+        'reuse: for s in 0..*next {
+            for k in 0..n {
+                if s + k >= *next || pd.0[s + k] & ADDR_MASK != first + k as u64 * MIB2 {
+                    continue 'reuse;
+                }
+            }
+            return Some(MMIO_WIN_VIRT + s as u64 * MIB2 + (phys - first));
+        }
+        if *next + n > 512 {
+            return None;
+        }
+        if *next == 0 {
+            let pd_phys = core::ptr::addr_of!(MMIO_WIN_PD) as u64;
+            (pdpt_hi as *mut u64).add(MMIO_WIN_SLOT).write_volatile(pd_phys | PRESENT | WRITABLE);
+        }
+        let s = *next;
+        for k in 0..n {
+            pd.0[s + k] = (first + k as u64 * MIB2) | PRESENT | WRITABLE | HUGE | PCD | PWT | NX;
+        }
+        *next += n;
+        flush_tlb();
+        crate::serial_println!(
+            "[paging] high MMIO {:#x}+{:#x} (above the 1 TiB identity map) → window {:#x}",
+            phys, len, MMIO_WIN_VIRT + s as u64 * MIB2 + (phys - first)
+        );
+        Some(MMIO_WIN_VIRT + s as u64 * MIB2 + (phys - first))
+    }
+}
+
 /// Build an ISOLATED address space (PML4) for one process. The kernel is mapped
 /// supervisor everywhere (identity), so that syscalls/interrupts/kernel stacks
 /// keep working after a CR3 switch. Only the 2 MiB block at `arena_phys`

@@ -1,0 +1,7 @@
+# R630 KVM, loadtest.py --scenario inbound --hammer 4 --duration 300 --restrict, --nic as named; base = ce04f9e-equivalent 77aeec0 image, v2 = 6087e93
+base-legacy (nic=virtio-net-pci,disable-modern=on):  hammer (inbound httpd, 4 clients): {"ok": 178506, "err": 4, "p50_ms": 0.9, "p99_ms": 60.6, "max_ms": 1155.2}; [loadtest] completed clean · r
+base-legacy-2 (nic=virtio-net-pci,disable-modern=on):  hammer (inbound httpd, 4 clients): {"ok": 173780, "err": 3, "p50_ms": 0.9, "p99_ms": 60.8, "max_ms": 1117.7}; [loadtest] completed clean · r
+v2-legacy (nic=virtio-net-pci,disable-modern=on):  hammer (inbound httpd, 4 clients): {"ok": 157448, "err": 2, "p50_ms": 0.9, "p99_ms": 60.9, "max_ms": 2111.7}; [loadtest] completed clean · r
+v2-legacy-2 (nic=virtio-net-pci,disable-modern=on):  hammer (inbound httpd, 4 clients): {"ok": 170454, "err": 4, "p50_ms": 0.9, "p99_ms": 60.7, "max_ms": 1119.7}; [loadtest] completed clean · r
+v2-modern (nic=virtio-net-pci,disable-legacy=on):  hammer (inbound httpd, 4 clients): {"ok": 150479, "err": 4, "p50_ms": 0.9, "p99_ms": 60.9, "max_ms": 2111.5}; [loadtest] completed clean · r
+v2-modern-2 (nic=virtio-net-pci,disable-legacy=on):  hammer (inbound httpd, 4 clients): {"ok": 174231, "err": 2, "p50_ms": 0.9, "p99_ms": 60.7, "max_ms": 2132.0}; [loadtest] completed clean · r

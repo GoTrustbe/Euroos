@@ -119,6 +119,7 @@ eurofiles = { path = "../crates/eurofiles" }
 euromedia = { path = "../crates/euromedia" }
 eurowifi = { path = "../crates/eurowifi" }
 eurogpu = { path = "../crates/eurogpu" }
+eurovirtio = { path = "../crates/eurovirtio" }
 europrint = { path = "../crates/europrint" }
 euroscan = { path = "../crates/euroscan" }
 eurogeo = { path = "../crates/eurogeo" }

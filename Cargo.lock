@@ -742,6 +742,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "eurovirtio"
+version = "0.1.0"
+
+[[package]]
 name = "eurovpn"
 version = "0.1.0"
 dependencies = [
@@ -944,6 +948,7 @@ dependencies = [
  "eurousb",
  "eurovault",
  "euroverity",
+ "eurovirtio",
  "eurovpn",
  "eurowallet",
  "eurowasm",

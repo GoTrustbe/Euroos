@@ -112,6 +112,10 @@ pub struct Fadt {
     pub pm1_evt_len: u8,    // total length; enable register = block + len/2
     pub smi_cmd: u32,       // SMI command port (0 = already in ACPI mode)
     pub acpi_enable: u8,    // value to write to SMI_CMD to enter ACPI mode
+    /// ACPI PM timer I/O port (3.579545 MHz, 24 or 32 bit; 0 = none).
+    pub pm_tmr_blk: u32,
+    /// FADT flag TMR_VAL_EXT: the PM timer counts 32 bits instead of 24.
+    pub pm_tmr_32bit: bool,
 }
 
 /// Parse the FADT (signature "FACP") for shutdown/reboot + ACPI events.
@@ -135,6 +139,8 @@ pub fn fadt() -> Option<Fadt> {
             pm1_evt_len: rd::<u8>(f + 88),
             smi_cmd: rd::<u32>(f + 48),
             acpi_enable: rd::<u8>(f + 52),
+            pm_tmr_blk: rd::<u32>(f + 76),
+            pm_tmr_32bit: flags & (1 << 8) != 0,
         })
     }
 }

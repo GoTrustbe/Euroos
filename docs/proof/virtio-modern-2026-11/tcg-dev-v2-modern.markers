@@ -1,0 +1,204 @@
+[upd3] Ed25519 verify-before-activate (dev.pub ed852b80…): genuine=true · image-tamper-refused=true · sig-tamper-refused=true · short-sig-refused=true → OK ✓
+[upd3] update pipeline: real package staged=true · tampered package refused=true → OK ✓
+[edit] save /tmp/edit-selftest.txt → OK
+[edit] EuroText edit+save+reread: write-OK=true, reread="Hello\nEuroOS 4" (expected "Hello\nEuroOS 4") → OK ✓
+[trash] Trash + undo: delete-to-trash=true, original-gone=true, restore-brings-it-back=true → OK (deletes are recoverable) ✓
+[io1] FAT32 mount + read (kernel, no_std): readme=true seed-6000B=true ls-root=true → OK ✓
+[io2] FAT32 write (kernel): create=true mkdir=true nested=true grow+readback=true nested-read=true remove=true/gone=true → OK ✓
+[io3] FAT32 format (kernel): blank volume formatted → mount + write + read back → OK ✓
+[j2] bad-block: LBA 48 → spare 50 remapped, read-after-remap=true (1 bad, 7 spares left) ✓
+[j3] swap cycle: page → CLOCK victim → swap slot 0 (LBA 60) → read back into new frame, data-intact=true (8 swap slots free) ✓
+[j3-fault] transparent swap: swapped-out=true, after page-fault data-intact=true (swap-ins=1, swap-outs=1) ✓
+[j3-evict] CLOCK auto-evict under pressure: frame-reclaimed-to-allocator=true (free 110676→110677), swap-in-on-access-intact=true → OK ✓
+[y] EuroCrash: minidump write→disk(LBA 300)→read, round-trip-intact=true → OK (crash dumps + recovery boot work) ✓
+[j1-cache] block-cache (no_std): block 5 written+read 2x (hits) + 1 miss → data-intact=true, hits=2 misses=1 → OK (read-lock hits, write-through) ✓
+[3f1] EuroContainer runtime: signed-image-verify=true (constrained-caps=true), tampered-manifest-REFUSED=true, mem-limit-enforced(3K-ok,+2K-refused)=true, overlay-CoW(copy-up=true,whiteout=true) → OK (signed images + ResourceLimits + EuroFS overlay, on EuroGuard caps) ✓
+[h1] AF_UNIX round-trip: server got 'ping', client got 'pong', EOF-after-close=true ✓
+[euro] /mnt self-test: 42 bytes back from disk 1 ✓
+[7guard] EuroGuard network control: geo-attribution(CN=true, local-unmapped=true), geo-block(CN-refused=true, local-allowed=true), per-app-block=true, allow-list(in=true, out-refused=true) → OK (per-app + geo network control: block a country, cut an app off, or clamp an agent to an allow-list) ✓
+[net-async] inbound httpd (synthetic peers, TEST-NET-1): 16 concurrent clients: 16 SYN-ACKs from one service() pass, 16 answered, 16 closed, 0 half-open + 0 open left, passes 4205/2410/8214 us (longest 8214 us) → OK ✓
+[net-async] listen: backlog 4, 6 SYNs: 4 half-open + 2 dropped, then 6/6 accepted after the retransmitted SYNs → OK ✓
+[net-async] connect: answered 1622 us; half-open peer (stale ACK): RST at its ACK sent, established in 348 us; silent drop: fresh port after 3000 ms (2 ports); our FIN after the peer's: sent; bound 6 s → OK ✓
+[net] PING6 fe80::2: echo-reply OK ✓
+[tls] kernel-ld.so TLS setup: standalone __thread PIE (41->42) -> exit 42 ✓ (static TLS block + FS_BASE set up by the kernel)
+[tls2] cross-module IE-TLS (.so __thread via TPOFF64): bump() 41->42 -> exit 42 ✓ (multi-module TLS block + TPOFF64 patch by the kernel-ld.so)
+[3c3] PT_INTERP + userspace ld.so: exe names /lib/ld-euro.so=true, interpreter resolved the cross-module symbol in userspace → output="3C3: 42" exit=42 OK (dynamic linking done by a userspace interpreter via PT_INTERP, not the kernel) ✓
+[h4] WASI capability gate: fd_write DENIED without CAP_CONSOLE for fd_write ✓
+[wasi] real WASI preview1 (wasi_snapshot_preview1.fd_write, true iovec ABI): ran=true, iovec-message-written=true, *nwritten-set-correctly=true, cap-gate-denies-without-CAP_CONSOLE=true → OK (runs real wasm32-wasi fd_write, not a custom shim; proc_exit/random_get/clock/env/args also implemented) ✓
+[h4-ctr] container 'no-net' (caps 0b0001): sock_connect DENIED — CAP_NET ✓
+[h4-ctr] container 'scoped' (caps 0b1101): sock_connect DENIED — network scope forbids 10.0.2.2:80 ✓
+[h5] Wayland server: surface 5 committed → window "EuroOS — real Wayland protocol" ✓
+[linux-abi]   connect() DENIED — EuroGuard blocked this ✓[linux-abi] 
+[ecam] PCIe config via ECAM @ 0xe0000000 (buses 0..=255, MCFG, port-verified) ✓
+[i3-s5] ACPI shutdown ready: PM1a_CNT port 0x604, S5 value 0x2000, SLP_TYP-from-AML=true → `poweroff` performs a clean soft-off ✓ (end-to-end proven via scripts/shutdown-test.py: QEMU guest-shutdown)
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1089bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-KE-over-TLS + AES-SIV pending) ✓
+[3d2] EuroVerity (dm-verity-style, Ed25519-signed Merkle root over 16 blocks): manifest-signature-verified=true, block-verified-against-signed-root=true, tampered-block-DETECTED=true, forged-manifest-REFUSED=true → OK (system image integrity provable block-by-block; tamper ⇒ fall back to the good slot) ✓
+[3d2-wire] verity on the LIVE EuroFS read path: fmt+write=true/true, signed-manifest=true, EuroFS-mounted-on-VerityBlk+file-read(every-block-verified)=true, untouched-block-verifies=true, tampered-backing-block-REFUSED-on-read=true → OK (read path verifies every block; tamper ⇒ read fails ⇒ A/B fallback) ✓
+[vinput] virtio-input 00:05.0 "QEMU Virtio Tablet": tablet, absolute pointer (ABS_X 0..32767, ABS_Y 0..32767), 64 event buffers, polled ✓
+[vinput] virtio-input 00:06.0 "QEMU Virtio Keyboard": keyboard (modern virtio-1.x, common cfg @ 0xc000010000), 64 event buffers, polled ✓
+[g1] KERNEL STACK OVERFLOW: task 5 hit guard page 0x8000019f70 @ 0x304b77b6 → task TERMINATED, kernel keeps running ✓
+[net-worker] httpd while the boot task is busy (3 s spin, no service()/pump_all from it; synthetic peers): 8 clients, 8 SYN-ACKs, 8 answered (first after 176 ms), 8 closed, 0 half-open + 0 open left, all done after 287 ms in 29 worker passes (task 27) → OK ✓
+[lk] checker self-test: irqsave=true correct-order-silent=true deliberate-inversion-detected=true task-mode-keeps-IF=true try_lock=true rwlock=true tracker-balanced=true -> OK ✓
+[kwork] per-CPU work queues: 1 AP(s) online, 2 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (2 ok), work-stealing=n/a (one AP) -> OK ✓
+[linux-abi] GBIG: malloc(209715200) FAILED
+[glibc]   GBIG: malloc(209715200) FAILED
+[fork] arena alloc FAILED (96 MiB, pool has 55 MiB)
+[linux-abi] GSCM3: fork B FAILED
+[glibc]   GSCM3: fork B FAILED
+[sbx] syscall profiles: full-profile-runs=true · strict-mode-write-allowed=true · strict-mode-open-kills-process=true (exit 137) · never-returned-into-program=true → OK (kernel-enforced per-process syscall policy, Linux seccomp strict semantics) ✓
+[fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=true (exit 171) → OK (no panic, no ring-0 fault, every answer an errno or a result) ✓
+[sbx2] cBPF-filter(getpid-EPERM + socket-kills)=true · rlimits(NOFILE=8 -> EMFILE, hard-limit-raise-EPERM)=true · ASLR(stack/heap/mmap differ across runs: 3/3)=true · renderer-scope(/etc ok, /home EACCES, uid drop to 65534, no raise)=true → OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓
+[j2-blk] virtio-blk MSI-X completions: 5 (after 4 block reads, +4) → interrupt-driven storage completion works ✓
+[j1] lock-free kmsg ring: 64 lines claimed (HEAD 15804→15868), 64 read back intact → OK (no Mutex on the log path) ✓
+[j3-demand] transparent swap on the demand pool: process asked 24 MiB against a 16 MiB pool · pages-swapped-OUT=8 · pages-swapped-IN=0 · exit=139 · pattern-verified-twice=false → FAILED
+[sym] EuroFS symlinks: create+readlink+follow-through=true → OK ✓
+[cu2] coreutils long-tail: md5sum/sha1sum vectors=true · b2sum/shuf/comm/join/split/ln/readlink/realpath/mktemp/env wired → OK ✓
+[udrv-vec] no userspace driver holds an MSI-X vector on this machine (pool 0x4c..0x4f) ⬜
+[lk-stress] 3 round(s) x 2 core(s), mixed fs/ipc/unix + root VFS from every core: 93375 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+[l1] immutability + CAP_IMMUTABLE_ADMIN: cap-gate-on-set=true, write-blocked=true, delete-blocked=true, content-intact=true, cap-gate-on-clear=true, mutable-again-after-clear=true → OK (even root cannot change anything without the cap) ✓
+[intg] tamper-detection: clean-before=true, tamper-detected=true, restored+clean=true → OK (integrity sweep is live) ✓
+[intg] system integrity at boot: 32/32 files match the signed kernel image ✓
+[3h] per-file versioning (live FS): 3-writes->2 stored, restore-v1=true, replaced-kept->3 -> OK (history is real) ✓
+[p3] append-only audit log: 51 events, persisted=true, append-only-flag=true, tamper-blocked=true, extend-OK=true, lines-on-disk 49→51 → OK (tamper-evident audit trail) ✓
+[3d6-wire] audit hash-chain LIVE: chain-verifies=true, execve+connection-call-sites=true, chain-integrity=true, json-persisted-append-only=true → OK (system audit log is hash-chained + tamper-evident + persisted) ✓
+[s] EuroSnap: snapshot #1 'boot-checkpoint', test file before-rollback=true → after-rollback=false, system-file-intact=true, rollback-ok=true, 1 snapshot(s) → OK (CoW rollback works, system intact) ✓
+[k3] FDE: EuroFS on encrypted block layer (ChaCha20), key-from-TPM=false, key-TPM-sealed-to-boot=false, read-after-write-intact=true → OK (transparent full-disk encryption works) ✓
+[x] EuroPol: policy 'firefox', caps 0b11111→0b01111 (CAP_IMMUTABLE_ADMIN revoked, CAP_NET retained), /etc denied=true, violation→P3-audit → OK (policy enforced as capabilities) ✓
+[3d4] EuroPol signed bundles (Ed25519 verify-before-load): valid-bundle-loaded=true, tampered-bundle-REFUSED=true, wrong-signer-REFUSED=true → OK (a policy can only change capabilities if it is signed by the release key) ✓
+[3d5] EuroAttr user immutability (no admin cap on your own files): set-own-immutable=true, write-then-blocked=true, system-path-denied=true, other-user-denied=true, owner-can-clear=true, write-after-clear=true → OK (users protect their own files; system files still need CAP_IMMUTABLE_ADMIN) ✓
+[3d6] EuroAudit GDPR trail (hash-chained): chain-verifies=true, tamper-detected=true, json-export=true, query=true, rotation-keeps-chain=true · sealed-vault-persisted+reloaded=true → OK (tamper-evident audit + the sealed vault survives on disk) ✓
+[w] EuroObserve: 13 metric values in OpenMetrics (syscalls=12838, fs_reads=191, msix=6, free-frames=102688, fs_read-histogram count=5) → OK (Prometheus-scrapable) ✓
+[u] EuroVault: 2 secrets, master-from-TPM=false, read-with-cap=true, read-without-cap-denied=true, blob-without-plaintext=true, unseal-OK=true, wrong-key-fails=true → OK (capability-gated, encrypted, tamper-evident) ✓
+[z] EuroHealth: no NVMe disk (SMART n/a); FS-errors=0/unrecoverable=0; free 102688/261814 frames → total score 100/100 = HEALTHY ✓
+[n3] EuroFW: 3 rules, incoming Telnet:23-blocked=true, HTTPS:443-allowed=true, blocklist-source-rejected=true → OK (packet filter works in the RX path) ✓
+[n2] EuroVPN: handshake (4×X25519-DH → HKDF) + ChaCha20-Poly1305 transport, seeds-from-TPM=false, pubkey 7b4e909bbe7ffe44…, encrypted=true, peer-decrypts=true, reply-ok=true → OK (forward-secret, mutually-authenticated tunnel) ✓
+[3d9] EuroVPN hybrid PQC: X25519 + ML-KEM-768 (FIPS 203, NIST-KAT-verified), ek=1184B ct=1088B, seeds-from-TPM=false, encrypted=true, peer-decrypts=true, reply-ok=true, tampered-KEM-breaks-tunnel=true → OK (secret if EITHER X25519 or ML-KEM stands — harvest-now-decrypt-later resistant) ✓
+[aa] EuroAgent: manifest 'facilitator' v1.0.0 (4 caps), MCP fs_write=allowed/exec=denied(cap), NET denied(policy)/EXEC denied(user-clamp), intent→facilitator, agent loop: 2 tool-calls/1 denied→'Summary saved.', Ed25519 bundle: valid-OK+tampered-rejected=true → OK (kernel trust boundary, capability-isolated, audited, LLM↔MCP loop, signed bundle, registry+anti-hijack) ✓
+[bb1] EuroAgent LLM transport READY: HTTP POST /api/chat over EuroNet TCP built; no endpoint on 10.0.2.2:11434 (start Ollama/mock to see the real model response) ✓
+[loc] EuroLocale: 24 EU languages — currency=true, date(nl/en/sv)=true, plural(pl/fr/en)=true, collation=true, month+weekday-names(all 24, CLDR)=true, weekday-calc(el Σάββατο)=true, long-date(bg)=true → OK (sovereign localization for the whole EU) ✓
+[install] EuroInstall planner: 13-step A/B install (FDE before format=true, 5 non-overlapping partitions=true), live mode leaves disk alone=true, wizard lists valid (langs=true, keymaps=true) → OK (guided install + live image, host-tested planner) ✓
+[ca] EuroCA: root CA (seed-from-TPM=false), service cert 'vpn.euro-os.eu' issued+verified=true, refused-after-revocation=true, root-fpr 0dc4610fbd0618bc… → OK (sovereign local certificate authority) ✓
+[o2] EuroAttest: quote over 2 PCRs (AK-seed-from-TPM=false), fresh-quote-accepted=true, replay-rejected=true, modified-state-rejected=true → OK (remote attestation — provable trusted state) ✓
+[3d3] EuroCA+Attest: 3-level chain(root→intermediate→leaf)-verifies=true, on-disk-cert-store-roundtrip=true · attestation JSON-report=true, verifier-accepts=true, replay-REFUSED=true, tampered-PCR-REFUSED=true → OK (sovereign PKI + remote attestation over the boot PCRs; live HTTPS endpoint + hardware-resident TPM2_Quote pending) ✓
+[v] EuroIDM: token 'anke'(users) issued+verified=true (IDM-seed-from-TPM=false), caps=read+net-no-write=true, escalation(add-group)-denied=true → OK (identity→capabilities, signed tokens, locally sovereign) ✓
+[k1] EuroID: useradd+Argon2id(TPM-salt=false) → login alice(caps users∪net=true)=true · unknown-user-indistinguishable=true · 5×wrong→bob-locked=true · soft-delete-keeps-record=true · hash-chain-intact=true (13 events, root sha256:05e5ca04e8a2635f) → OK (Sprint K1: sovereign user management + tamper-evident audit, NIS2/GDPR/ISO 27001) ✓
+[k1] eurousers shell-path: 'list'-shows-users=true · 'add carla'=true · 'audit --verify-chain'=true → OK (command path verified live) ✓
+[ae] EuroID login (Argon2id, no more SHA-256): euro/'euro'=true · euro/'wrong'-rejected=true · root-locked-rejected=true → OK (login path on sovereign Argon2id identity) ✓
+[3d10] EuroID EUDI-wallet (SD-JWT VC, EdDSA, keys-from-TPM=false): PID issued, holder discloses ONLY nationality=true · name/birthdate-hidden=true · replay-nonce-denied=true · wrong-issuer-denied=true → OK (selective disclosure + holder key binding, eIDAS 2.0) ✓
+[m2] EuroPkg: dependency resolution 'eurosuite' → 4 packages topological (highest-libc-chosen)=true, missing-detected=true, cycle-detected=true → OK (semver resolver: deps-first, conflict/cycle-safe) ✓
+[3e6] eupkg EXECUTION (signed index + content-addressed store): install-via-resolver=true, /bin-link=true, CAS-blob=true, tampered-pkg-REFUSED=true, forged-index-REFUSED-before-fetch=true, remove+GC=true → OK (install/remove/upgrade for real, dev.key-signed fixtures) ✓
+[app] EuroApps SDK: unknown-key-refused=true · key-enrolled=true · signed-package-installed=true · tampered-refused=true · listed-as-app=true · runs-with-manifest-caps+profile(exit 7)=true → OK (third-party app: own key, signed package, installed and run under kernel policy) ✓
+[euroapp] native app (Euro API, no Linux library): installed=true · abi=euro=true · frame-presented=true · header-blue=true · body-white=true · kernel-text-drawn=true · key-event-redraw=true · escape-exit-0=true · without-window-cap-refused=true · linux-syscall-killed=true · file-scope=true → OK (a native EuroOS app runs under the euro profile with its manifest capabilities) ✓
+[euroapp-wasm] WASM app (eurowasm, frame-driven, Euro API import): installed=true · abi=wasm=true · init-presented=true · header-blue=true · body-white=true · kernel-text-drawn=true · key-event-redraw=true · escape-exit-0=true · without-window-cap-refused=true · spinning-module-ended-by-fuel=true → OK (one app source, native and WASM, same policy) ✓
+[euro-fscope] WASM file scope: symlink-in-home-refused=true · plain-file-roundtrip=true · empty-path-refused=true → OK (home only, no symlink escape) ✓
+[eurofuzz] Euro API fuzzer: 20000 random Euro calls with hostile arguments (caps console,window,file): installed=true · ran-to-completion=true · exit="done (exit 171)" → OK (every call answered with a value or an error; no fault, no panic) ✓
+[appstore] signed app index: parsed=true · forged-signature-refused=true · wrong-developer-key-refused=true · vouched-package-installed-without-enrolment=true → OK (index signed by EuroOS vouches for developer keys; packages still verified) ✓
+[churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=16/16 · frames 107888→107888 (leak-free=true) · demand-pool 40960→40960 (true) · tasks 38→38 (true) · thread-kstacks 0→0 (true) · file-table 193→193 (true) · heap-used 162964064→162964064 (true) → OK ✓ (every process returns what it took)
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=77 (want 77) · sums-correct=true · thread-kstacks 0→0 · tasks 38→38 · frames 107888→107888 → OK ✓
+[fork] arena alloc FAILED (192 MiB, pool has 160 MiB)
+[fork] arena alloc FAILED (192 MiB, pool has 160 MiB)
+[fork] arena alloc FAILED (192 MiB, pool has 160 MiB)
+[fork] arena alloc FAILED (192 MiB, pool has 160 MiB)
+[fork] arena alloc FAILED (192 MiB, pool has 160 MiB)
+[fork] arena alloc FAILED (192 MiB, pool has 160 MiB)
+[churn-fork] 6 fork/exit/wait cycles: exit=1 (want 66) · every-child-reaped-with-its-status=false · tasks 38→38 · process-pool 40960→40960 · demand-pool 0→0 · frames 107888→107888 → FAILED
+[churn-fs] 3 rounds × 120 files (write/rename/read/remove): op-failures=0 · bad-reads=0 · leftovers=0 · rmdir-failures=0 · sentinel-intact=true · heap-used after rounds [162973280, 162973280, 162973280] (stable=true) → OK ✓
+[churn-net] 64 sockets opened+closed (half UDP to the loopback DNS responder): open-failures=0 · close-failures=0 · loopback-sends=32/32 · table 0→0 → OK ✓
+[churn-surface] 160 surfaces created+presented+removed: create-failures=0 · present-failures=0 · surfaces 0→0 · absurd-size-refused=true · heap-used 162975584→163039584 (true) → OK ✓
+[churn-pkg] 12 signed-package install+remove cycles (hello-euro): installs=12/12 · removes=12/12 · installed-apps 5→5 · /pkg entries 2→2 · heap-used 162976096→162976096 (true) → OK ✓
+[storm-io] 300 × 64 KiB root reads + 300 surface presents back to back: bad-reads=0 · bad-presents=0 · ticks elapsed=119 · lost-ticks=0 (≤10%=true) → OK ✓ (timer stays regular under I/O pressure)
+[3e5] GDB RSP stub (COM2): halt=S05=true, g-regs(real RIP/RSP)=true, m-read==direct-read=true, guarded-M-write-roundtrip=true, out-of-window-write-denied=true, qSupported=true → OK (speaks the real gdb protocol against live kernel state; attach with COM2→tcp + `target remote`) ✓
+[m3] EuroRepro: bit-for-bit-reproduction=true, 2-builder-consensus=true, forged-attestation-rejected=true, volatile-input-flagged=true → OK (verifiable source→binary, independently confirmed) ✓
+[p2] EuroAccess: focus-order=true, screen-reader-announcement(nl)=true, cyclic-Tab-navigation=true, multilingual(nl/de/fr)=true → OK (accessibility layer, EN 301 549, multilingual screen reader) ✓
+[bb8] EuroAccess LIVE events: 4 focus steps → screen reader spoke: [tekstveld: Gebruikersnaam, leeg  |  selectievakje: Onthoud mij, niet aangevinkt  |  knop: Aanmelden  |  knop: Annuleren] · 0 EARCONS through the HDA DAC (tone per role: text field 440 · check box 587 · button 784 Hz) · output stream running=false (RUN bit), LPIB 0→0 → chain widget→focus→announcement→AUDIO (EN 301 549) ✓; intelligible speech synthesis = next milestone
+[3f3] EuroAccess EAA: screen-reader(role+state,nl)=true · keyboard-nav(Enter-toggle=true, arrow-slider=true, Escape=true) · high-contrast WCAG(ink/bg=21.0:1, AAA)=true · magnifier(2x-blit=true, follow-focus-lens=true) → OK (a11y tree + full keyboard nav + high-contrast + magnification, EN 301 549 / EAA) ✓
+[3g1] EuroJournal structured log: query(severity/facility)=true, json-export=true, bounded-ring(drops-oldest+counts)=true, panic-path-now-persists-a-minidump=true → OK (queryable structured journal + crash/panic capture to disk) ✓
+[3g2] EuroWatchdog (deadman): alive-within-grace=true, trips-on-hang=true, recovers-after-pet=true → OK (a hung main loop is detected; live reset-on-trip wiring into the scheduler tick pending) ✓
+[3g3] Kernel-hardening baseline (CRA secure-by-design): CR0.WP=true, CR4.SMEP=true, CR4.SMAP=true, EFER.NX=true, W^X-per-page=enforced(build_address_space), stack-canary=active(sched) → OK (hardware exploit-mitigations on; documented in docs/CRA-CONFORMANCE.md) ✓
+[3g5] IPv6/DHCPv6 (RFC 8415): solicit(client-DUID+IA_NA)=true, request(assigned-addr 2001:db8::5)=true → OK (stateful IPv6 config alongside SLAAC; live lease loop pending) ✓
+[3g6] EuroMDNS (RFC 6762/6763): answers-own-.local-name=true, silent-for-others=true, DNS-SD-service-discovery(_ipp._tcp)=true → OK (zero-config .local resolution + service discovery; live multicast socket pending) ✓
+[3g7] EuroDNS DNSSEC (Ed25519, RFC 8080): rrsig-verified=true, spoofed-record-REJECTED=true, wrong-key-REJECTED=true → OK (DNS answers cryptographically validated; DoT/DoH transport + RSA/ECDSA algs pending) ✓
+[3a5] EuroFSID mount-detect: xfs=true, ntfs(readable)=true, btrfs(identified,label=EUROBTR,read-deferred)=true → OK (recognises btrfs/xfs/ntfs; NTFS read via eurontfs, btrfs/xfs full read deferred) ✓
+[3a6] EuroSMB signing (HMAC-SHA256, SMB 2.1): sign+verify=true, tampered-REJECTED=true, wrong-key-REJECTED=true → OK (message authentication; SMB3 AES-CMAC encryption + NFSv4 deferred) ✓
+[3a4] EuroNTFS read: host-verified vs a real mkntfs image (reads a file verbatim through $MFT + runlists + USA fixup); live disk-mount pending — crates/eurontfs ✓
+[es] EuroSuite: Writer(OOXML-round-trip=true, HTML-export=true, word-count=true), Calc(formulas+ranges=true, cycle-detection=true), Impress(slides=true) → OK (sovereign office suite on one Universal Document Model — OOXML+ODF) ✓
+[3f2] EuroSuite real Office files (ZIP+DEFLATE via euroflate): open-real-.docx(inflate+OOXML)=true, save-.docx(deflate)+reopen=true → OK (opens & saves real .docx end-to-end) ✓
+[3f4] keyboard layouts (eurokeymap): US 'Q'-key=Some('q'), AZERTY same key=Some('a') (+shift-digit=Some('1')), QWERTZ 'Z'-key=Some('y'), switch-by-tag=true → OK (US-QWERTY/BE-AZERTY/FR-AZERTY/DE-QWERTZ, installer-selectable) ✓
+[3f7] EuroPortal (caps, not namespaces): benign-auto-allow=true, camera-ask→grant-once→auto-revoke=true, persisted-refusal-remembered=true, host-scoped-grant=true, persistent-grants-on-disk=true → OK (per-action, user-visible permission portals) ✓
+[7app] Unified app control: roster-with-caps=true, one-screen(caps+perms+net)=true, network-clamp-visible=true, revoke-permissions=true → OK (total per-app control: rights + network in one place, clamp an AI agent) ✓
+[7appgui] Desktop app-control (EuroBeheer › Apps): select-app=true, block-switch-cuts-network=true, toggle-restores=true, revoke-runs=true → OK (rights + network controllable per app from the desktop) ✓
+[clip] System clipboard: copy→paste round-trip=true, secret-excluded=true, history-intact=true → OK (live copy/paste, not just an engine) ✓
+[ctx] Context menus: opens=true, item-chosen=true, closes-after-choice=true, click-outside-dismisses=true → OK (right-click menus with real actions) ✓
+[snap] Window snapping: left+right halves tile=true, top→maximize=true, centre→none=true → OK (drag to an edge to snap) ✓
+[launch] App launcher: opens=true, search-filters=true, Enter-opens-match=true, Esc-dismisses=true → OK (type to find and open any app) ✓
+[fdlg] File dialog: lists-a-dir=true, open-returns-file=true, save-returns-path=true → OK (a real file picker for apps) ✓
+[notif] Notifications: posted-to-centre=true, toast-shows=true, toast-expires=true, history-kept=true, centre-toggles=true → OK (toasts + a notification centre) ✓
+[shot] Screenshot (PPM): header=true, size=true, pixels=true → OK (capture the screen to a file) ✓
+[tip] Tooltips: set-shows=true, clear-hides=true, dock-names=true → OK (hover labels on controls) ✓
+[symbol] Symbol picker: opens=true, pick-returns-symbol=true, closes=true → OK (insert symbols into text) ✓
+[spell] Spell-check: known-words-pass=true, typos-flagged=true, span-located=true → OK (underlines unknown words) ✓
+[altab] App switcher: opens=true, starts-on-previous=true, cycles=true, wraps=true → OK (Alt-Tab between windows) ✓
+[ws] Workspaces: restore-saved=true, fresh-workspace-empty=true → OK (Alt+1..4 virtual desktops) ✓
+[netb] Net bridge for apps: url-parse=true/true, request→busy=true, poll-returns-result=true, cleared=true → OK (graphics apps can fetch via the kernel HTTP/TLS/DNS) ✓
+[3f6] audio routing (euroaudio::Router): per-app-mix=true, per-app-route-to-device=true, per-stream-volume=true, master-mute=true, default-device-hotplug-reroute=true → OK (mixer + per-app routing + device policy; HDA plays render()) ✓
+[ab] EuroWeb tokenizer+DOM+CSS+layout+flex: 23 nodes, html=1 li=3 strong=1, title="EuroOS — sovereign", h1.class=hero, h1.color=green strong.color(inherited)=gray, layout div2.y=50 flex(2×grow→150)=true ✓
+[post] EuroWeb form POST: method=true action-abs=true body="naam=Ada&bericht=Hallo+EuroOS" (correct urlencoded) get-stays-get=true ✓
+[js] EuroJS on a page: engine(console+document.write)=true dom-mutated=true rendered=true ✓
+[ar] EuroReken: 1+2*3=7 2^10=1024 sqrt2+sin(pi/2)=2.414213562373095 | 0xF0|0x0F=255=0xFF 1<<8=256 | 1mi=1.6093km 100C=212F ✓
+[an] EuroNotes: title="Sprint plan #euros", 7 blocks, headings=1 list items=3 (nested=true), tags=["euros", "q3-2026"] ✓
+[az] EuroArchive: tar 3584 bytes, round-trip=true, corruption-detected=true, manifest-verify=1/2 ✓
+[sf] EuroSafe: 3 apps, high-risk=1, top-cap=Key vault, denied=1, recommendations=3, system-risk=High ✓
+[wm] window management: buttons(close=true min=true max=true empty=true), maximize→work area 1518×1052 ok=true, restore ok=true, hide ok=true ✓
+[cl] EuroClip: dedup-promote=true, password-excluded=true, after-expire only-pinned=true, GDPR-persist=1/1 ✓
+[ck] EuroClock: Brussels=11:00(true) NYC=05:00(true) 12h=true TZ+1=true | timer=true stopwatch=true alarm=true ✓
+[st] EuroShot: full-screen=true, region-clamp=true, manifest-detects-change=true, Ed25519-payload=true, FNV=true ✓
+[ct] EuroContacts: vCards=2, sort(surname)=true, fields(ORG/EMAIL)=true, search+group=true, round-trip=true ✓
+[cal] EuroCalendar: date/weekday=true, weekly x3=true, monthly(feb-clamp)=true, reminder=true, next-upcoming=true ✓
+[sg] EuroSign: .eurosig-round-trip=true, valid=true, tampering-detected=true, bad-signature=true ✓
+[mu] EuroMusic: search=true, album-sort=true, duration=true, queue=true, repeat-all-wrap=true, shuffle-permutation=true ✓
+[ma] EuroMail: base64=true QP=true RFC2047=true | from=true subject("Café")=true text=true attachment=true ✓
+[ft] EuroFont: parse(family/style/upem/glyphs)=true, non-font-rejected=true, bounds-safe=true ✓
+[js] EuroJS: factorial(6)=720=true, closure=42=true, array+loop+object(sumEven)=30=true, console.log+Math=true ✓
+[fl] EuroFiles: path=/etc/euro, 2 directories/3 files, dirs-first=true, visible=4 (of 5), kernel.efi🔒signed=true ✓
+[mv] EuroMedia QOI: gradient 16×16 lossless=true (1149 bytes), solid 64×64 16384→93 bytes (×176 compression) ✓
+[n1] EuroWiFi: beacon→scan (SSID 'EuroGov-Secure', channel 36, Wpa3)=true, WPA-PTK derivation (48B, direction-symmetric)=true → OK (802.11 protocol core; radio driver = hardware work) ✓
+[bb3] EuroWiFi radio: no Intel 802.11 radio present (QEMU emulates no AX200/210). Protocol core (beacon scan + WPA2/3 PTK) PROVEN by [n1]; the iwlwifi-style radio driver (firmware load/MAC-PHY/TX-RX rings + 4-way) is HONESTLY hardware-attended — real Intel WiFi required, not a false check ✓
+[k4] EuroGPU: virtio-gpu command stream (displayinfo→create-2d→backing→scanout→transfer→flush)=true, displayinfo-response-parsed=Some((1024, 768)), OK-response-recognized=true → OK (virtio-gpu protocol core; modern-virtio driver = hardware-attended) ✓
+[bb4] EuroPrint IPP transport READY: IPP request built + HTTP/1.1 POST over EuroNet-TCP; no printer/CUPS reachable on 10.0.2.2:{631,6631} (start one to see the print job) ✓
+[m72] EuroScan eSCL transport READY: ScanSettings XML built + HTTP round-trip over EuroNet-TCP; no scanner reachable on 10.0.2.2:8631 (start one to see a real scan) ✓
+[cu] EuroCoreutils: printf=true, expr=true, test=true, factor=true, numfmt=true → OK (GNU-compatible coreutils core live in the shell) ✓
+[find] CU-5 find: -name *.txt (recursive)=true, -type d=true, -maxdepth 1=true → OK (VFS walk + glob/type/depth filters) ✓
+[wasm2] `wasm <file>`: self-contained .wasm (data section) on EuroFS=true, with-cap fd_write+run()=55=true, without-cap host-call-denied=true → OK (real .wasm from disk in the no-JIT sandbox, WASI cap-gated) ✓
+[pipe] built-in pipeline: cat|grep|wc-l=2 →true, seq|tail-2 →true, echo|tr →true, seq|tee|wc(through=true,file=true), xargs(echo=true,-n2=true), sha224-filter=true → OK (stdout→stdin + tee + xargs + sha-filter) ✓
+[aa-fs] EuroAgent real tools: fs_write+fs_read on EuroFS (sandbox /agents/facilitator)=true, path-escape-blocked=true, without-cap-denied+nothing-written=true → OK (agent does real work, capability-isolated in a sandbox) ✓
+[aa-nv] EuroAgent net+vault: vault_get(cap)→real-EuroVault-value=true+not-in-audit=true, without-cap-denied=true · net_get(cap+domain) path-open=true(peer responded), forbidden-domain-denied=true, without-cap-denied=true → OK (least agency: cap ∧ domain allow-list; credentials at the boundary, value never logged) ✓
+[p3-agent] EuroAgent audit PERSISTENT: 2 tool-calls→disk, fs_write-allowed-logged=true, exec-denied-logged=true, append-only-flag=true, tampering-blocked=true, lines 51→64 → OK (agent trail no longer RAM-only: irreversible + survives a restart) ✓
+[af-jit] JIT elevation: elevated-cap-without-grant-denied=true, after-grant-one-action-allowed=true, auto-revoke-2nd-call-denied=true → OK (least agency in time: elevate-for-the-task, auto-revoke) ✓
+[af-anom] behavior detection (deterministic, audit-fed): learning-phase-quiet=true, known-behavior-quiet=true, probing(4×deny)-flagged=true, drift(new-tool)-flagged=true → OK (anomalous agent behavior visible to audit/response) ✓
+[policy-learn] manifest learning: denied-before=2 · wants-fs_write=true · proposal(required+fs_write=true, exec-stays-out=true) · export→import-equal=true · newer-schema-refused=true · approve-as-owner=true · on-disk-equal=true · denied-after=1 (only the denied exec) · non-owner-approve-refused=true → OK ✓ (enforcement on while learning; the person approves the boundary)
+[app-policy] a Linux program under a policy from the outside: no-policy exit=3 (hostname+home ok; identity store readable in this context=false) · learning(empty policy, enforcement on) exit=0 (want 0) wants-read-hostname=true wants-write-home=true · proposal adds both=true, identity store never proposed=true · export→import-equal=true · newer-schema-refused=true · approve-as-owner=true · approved run exit=3 (want 3: hostname+home ok, identity store refused BY POLICY) · non-owner-refused=true → OK ✓ (the boundary is written by the owner, enforced in the syscall path)
+[ae-persist] EuroID persistent on EuroFS: written=true, euro-Argon2id-after-reread=true, root-locked-after-reread=true, new-user-survives-remount=true → OK (identity + password hashes survive a reboot) ✓
+[3e3] session lifecycle: switch-closes-previous=true, /home/alice auto-created+alice-owned=true, session-files-owned-by-user=true, logout-closes=true → OK (multi-user session model live) ✓
+[3e9] per-user disk quota (limit 2 blocks): within-quota-write=true, usage/limit=(2, 2), over-quota-REFUSED(+no-partial-file)=true, delete-credits→write-OK=true → OK (quota enforced on the live root FS) ✓
+[3f5] MIME + default-app (euromime): magic-beats-extension(png-as-.txt→euroshot)=true, real-.docx→eurowriter=true, text→eurotext=true, user-override=true → OK (open-with routing on the live FS) ✓
+[ae-mustchange] must-change enforcement: correct-pw-but-blocked=true, self-service-change-clears-flag=true, login-with-new-pw-OK=true, old-pw-fails=true → OK (forced password change enforced end-to-end) ✓
+[aa-mcp] EuroAgent MCP daemon: socket-bind=true, served-via-AF_UNIX=true, client-got-result=true, file-on-EuroFS-via-socket=true → OK (MCP gateway as sovereign agent service over AF_UNIX) ✓
+[aa-wasm] WASM agent host: WASM code→host import→MCP gateway→EuroFS, with-cap-written=true, file-on-disk=true, without-cap-denied=true → OK (agent code runs in WASM sandbox, capability-gated at kernel level) ✓
+[q1x] EuroInstall execution: EuroFS-format=true, 5 steps provisioned, after remount: hostname=true, user=true, locale=true, EuroCA=true → OK (installation actually executed + survives reboot) ✓
+[g2] VFS routes /mnt/hello-disk2.txt → 42 bytes from disk 1 ✓
+[3g1] EuroJournal persistence: restored-from-disk=0 entries, wrote-to-disk=true, on-disk-decode-has-boot-line=true, live-ring=2 → OK (structured journal survives reboot on the root FS) ✓
+[h2] display-server @ /run/eurodisplay.sock: 1 client(s), 1 app window(s) via AF_UNIX → compositor (5 windows total) ✓
+[h5] Wayland window (surface 5) → compositor (6 windows total) ✓
+[bb5] EuroSuite renderer: Writer/Calc/Impress rendering tested (demo documents, not on dock) ✓
+[b6] EuroWeb: usable browser (tabs + address bar) ready (open via dock; type a URL) ✓
+[rk] EuroReken REALLY interactive: 12+34*2 = 80 (engine, expected 80, with precedence) ✓
+[set] EuroBeheer: settings panel ready (live EuroGuard/network/system; open via dock) ✓
+[set] EuroBeheer manages for REAL: domain before=false → after add_blocked_domain=true ✓
+[bb6] EuroAgent dispatch panel ready (intent → cap-gated agent loop + live audit; open via dock) ✓
+[bb7] EuroInstall: guided graphical installer ready (plan + live FDE enrol; execution = instexec) ✓
+[ag] EuroApps: EuroFiles (live FS @ /), EuroNotes (euronotes), EuroClock (RTC 19:23) — 3 windows + dock tiles 0/1/2 ✓
+[ag-lock] GUI lockscreen: correct-password-signs-in=true, wrong-rejected=true, screen-drawn=true → OK (desktop session behind EuroID-Argon2id instead of auto-euro) ✓
+[bug032] DF set across context switches: 2 switch(es) interrupted code with DF=1, handler saw DF=1 in 0, DF back after iretq=true, SYSCALL clears DF (FMASK 0x4700)=true → OK ✓
+[intg] system integrity periodic: 32/32 files match the signed kernel image ✓
+[3g2-wire] deadman watchdog LIVE: main loop petting (pets=20), scheduler-tick checking, tripped=false → OK (hang would trip the timer-IRQ deadman) ✓

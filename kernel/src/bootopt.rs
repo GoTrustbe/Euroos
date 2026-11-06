@@ -17,6 +17,11 @@
 //!   `nvme.rs` leaves it alone, so the root is never on it. `storage.nvme=kernel`
 //!   (the default) keeps the in-kernel driver.
 //!
+//! - `virtio.transport=legacy`: drive transitional virtio devices (which offer
+//!   both) through the legacy I/O BAR, as before 2026-11-05. The default,
+//!   `modern`, uses the virtio 1.x capabilities whenever a device has them;
+//!   modern-only devices (`disable-legacy=on`, Kyvernon VMM) always use them.
+//!
 //! - `debug.schedwatch=on`: a hardware write watch on the scheduler state
 //!   (BUG-032, memwatch.rs; off by default, one #DB per context switch).
 //!
@@ -45,6 +50,8 @@ fn apply(text: &str) {
                 ("storage.nvme", "kernel") => NVME_USER.store(false, Ordering::Relaxed),
                 ("debug.schedwatch", "on") => SCHED_WATCH.store(true, Ordering::Relaxed),
                 ("debug.schedwatch", "off") => SCHED_WATCH.store(false, Ordering::Relaxed),
+                ("virtio.transport", "legacy") => crate::virtio_pci::PREFER_LEGACY.store(true, Ordering::Relaxed),
+                ("virtio.transport", "modern") => crate::virtio_pci::PREFER_LEGACY.store(false, Ordering::Relaxed),
                 (k, v) => crate::serial_println!("[bootopt] unknown option {k}={v} ignored"),
             }
         }
