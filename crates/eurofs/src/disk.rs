@@ -286,6 +286,18 @@ pub struct EuroFs<D: BlockDevice> {
     usage: BTreeMap<u32, u64>,
 }
 
+/// The buffer for reading a whole file of `size` bytes. LOADTEST-R630 BUG-025:
+/// `Vec::with_capacity` aborts when the allocation fails, and in the kernel an
+/// allocation failure is a panic: `cp` of a 256 MiB file on a 4 GiB guest (heap
+/// ~512 MiB, partly in use) halted the machine. A file that does not fit in memory
+/// is reported as `NoSpace` instead (the same for a corrupt, absurd inode size).
+pub(crate) fn buffer_for(size: u64) -> FsResult<Vec<u8>> {
+    let n = usize::try_from(size).map_err(|_| FsError::NoSpace)?;
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| FsError::NoSpace)?;
+    Ok(v)
+}
+
 impl<D: BlockDevice> EuroFs<D> {
     /// Format a fresh volume and return a mounted filesystem.
     pub fn format(dev: D, uuid: [u8; 16], now: u64) -> FsResult<Self> {
@@ -737,7 +749,7 @@ impl<D: BlockDevice> EuroFs<D> {
         let out = if inode.extents.is_empty() {
             inode.inline.clone()
         } else {
-            let mut out = Vec::with_capacity(inode.size as usize);
+            let mut out = buffer_for(inode.size)?;
             for &(phys, cnt) in &inode.extents {
                 for k in 0..cnt as u64 {
                     let mut buf = [0u8; BS];
@@ -754,6 +766,16 @@ impl<D: BlockDevice> EuroFs<D> {
             return Err(FsError::Corruption);
         }
         Ok(out)
+    }
+
+    /// An object leaves the tree (unlink, rmdir, a rename over it): drop its
+    /// map entry AND its extents hint. BUG-027: only the map entry went, so
+    /// every removed file left its extents (a BTreeMap entry plus a Vec) in
+    /// `extents_cache` for good; oids are never reused, so a create/remove
+    /// churn grew the kernel heap by a few hundred bytes per file.
+    fn forget_object(&mut self, oid: u64) {
+        self.objmap.remove(&oid);
+        self.extents_cache.remove(&oid);
     }
 
     /// Write data for a (new) inode via CoW: allocate fresh data and
@@ -1187,7 +1209,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
         // 3E-9: the file's data blocks return to the owner's quota.
         self.usage_sub(inode.uid, Self::data_blocks_of(&inode));
         entries.remove(pos);
-        self.objmap.remove(&oid);
+        self.forget_object(oid);
         self.rewrite_dir(parent_oid, &entries)?;
         self.path_cache.lock().clear(); // PERF-001: a name→oid mapping was removed
         self.commit()
@@ -1515,7 +1537,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
                     return Err(FsError::AlreadyExists); // do not overwrite directories
                 }
                 entries.remove(tp);
-                self.objmap.remove(&t_oid);
+                self.forget_object(t_oid);
             }
             let pos = entries
                 .iter()
@@ -1533,7 +1555,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
                     return Err(FsError::AlreadyExists);
                 }
                 to.remove(tp);
-                self.objmap.remove(&t_oid);
+                self.forget_object(t_oid);
             }
             from.retain(|(n, _, _)| n != old_name);
             to.push((new_name.to_string(), oid, otype));
@@ -1574,7 +1596,7 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
             .position(|(n, _, t)| n == name && *t == TYPE_DIR)
             .ok_or(FsError::NotFound)?;
         entries.remove(pos);
-        self.objmap.remove(&oid);
+        self.forget_object(oid);
         self.rewrite_dir(parent_oid, &entries)?;
         self.path_cache.lock().clear(); // PERF-001: a name→oid mapping was removed
         self.commit()
@@ -1782,6 +1804,15 @@ impl<D: BlockDevice> FileSystem for EuroFs<D> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn buffer_for_refuses_what_cannot_be_allocated() {
+        // LOADTEST-R630 BUG-025: an error, never an abort/panic.
+        assert_eq!(buffer_for(u64::MAX).err(), Some(FsError::NoSpace));
+        assert_eq!(buffer_for(1 << 62).err(), Some(FsError::NoSpace));
+        assert!(buffer_for(4096).unwrap().capacity() >= 4096);
+        assert_eq!(buffer_for(0).unwrap().len(), 0);
+    }
+
     use super::*;
     use crate::block::MemoryBlockDevice;
 
@@ -1796,6 +1827,28 @@ mod tests {
         assert_eq!(fs.list_dir("/").unwrap().len(), 0);
         let ckpt = fs.superblock().checkpoint_id;
         assert_eq!(ckpt, 2); // format commit
+    }
+
+    #[test]
+    fn removed_objects_leave_no_extents_behind() {
+        // BUG-027: the extents hint of an unlinked file, a removed directory and
+        // a file replaced by rename stayed in memory forever.
+        let mut fs = EuroFs::format(dev(1024), [3; 16], 1).unwrap();
+        fs.create_dir("/d").unwrap();
+        fs.write_file("/d/keep", b"stays").unwrap();
+        let base = fs.extents_cache.len();
+        for i in 0..200 {
+            let p = alloc::format!("/d/f{i}");
+            fs.write_file(&p, &[i as u8; 5000]).unwrap();
+            fs.write_file("/d/t", b"target").unwrap();
+            fs.rename(&p, "/d/t").unwrap(); // replaces /d/t: its object goes
+            fs.create_dir("/d/sub").unwrap();
+            fs.remove_dir("/d/sub").unwrap();
+        }
+        fs.remove_file("/d/t").unwrap();
+        assert_eq!(fs.extents_cache.len(), base, "extents of removed objects stayed in memory");
+        assert!(fs.extents_cache.keys().all(|o| fs.objmap.contains_key(o)));
+        assert_eq!(fs.read_file("/d/keep").unwrap(), b"stays");
     }
 
     #[test]

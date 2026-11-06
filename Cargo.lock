@@ -298,6 +298,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "eurobcm5720"
+version = "0.1.0"
+
+[[package]]
 name = "euroca"
 version = "0.1.0"
 dependencies = [
@@ -368,6 +372,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "eurodrv"
+version = "0.1.0"
+
+[[package]]
+name = "euroe1000"
+version = "0.1.0"
+
+[[package]]
 name = "euroentropy"
 version = "0.1.0"
 dependencies = [
@@ -424,6 +436,7 @@ version = "0.1.0"
 name = "eurofs"
 version = "0.1.0"
 dependencies = [
+ "eurolock",
  "spin",
  "twox-hash",
 ]
@@ -491,6 +504,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "euroipc"
+version = "0.1.0"
+dependencies = [
+ "eurolock",
+]
+
+[[package]]
 name = "eurojournal"
 version = "0.1.0"
 
@@ -509,6 +529,9 @@ version = "0.1.0"
 [[package]]
 name = "eurolock"
 version = "0.1.0"
+dependencies = [
+ "spin",
+]
 
 [[package]]
 name = "euromail"
@@ -529,6 +552,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "euromegaraid"
+version = "0.1.0"
+
+[[package]]
 name = "euromime"
 version = "0.1.0"
 
@@ -543,6 +570,9 @@ version = "0.1.0"
 [[package]]
 name = "euronet"
 version = "0.1.0"
+dependencies = [
+ "eurolock",
+]
 
 [[package]]
 name = "euronfs"
@@ -571,6 +601,10 @@ dependencies = [
  "hkdf",
  "sha2",
 ]
+
+[[package]]
+name = "euronvme"
+version = "0.1.0"
 
 [[package]]
 name = "euroobserve"
@@ -611,6 +645,14 @@ version = "0.1.0"
 [[package]]
 name = "europrint"
 version = "0.1.0"
+
+[[package]]
+name = "eurordp"
+version = "0.1.0"
+dependencies = [
+ "crypto-bigint",
+ "eurotls",
+]
 
 [[package]]
 name = "euroreken"
@@ -698,6 +740,10 @@ dependencies = [
  "ed25519-dalek",
  "sha2",
 ]
+
+[[package]]
+name = "eurovirtio"
+version = "0.1.0"
 
 [[package]]
 name = "eurovpn"
@@ -824,12 +870,14 @@ dependencies = [
  "ab_glyph",
  "ed25519-dalek",
  "euroaccess",
+ "euroacpi",
  "euroagent",
  "euroaml",
  "euroarchive",
  "euroattest",
  "euroaudio",
  "euroaudit",
+ "eurobcm5720",
  "euroca",
  "eurocalc",
  "eurocalendar",
@@ -843,6 +891,7 @@ dependencies = [
  "eurodns",
  "eurodoc",
  "eurodocio",
+ "eurodrv",
  "euroentropy",
  "euroexfat",
  "euroext",
@@ -861,13 +910,16 @@ dependencies = [
  "euroid",
  "euroidm",
  "euroinstall",
+ "euroipc",
  "eurojournal",
  "eurojs",
  "eurokeymap",
  "eurolocale",
+ "eurolock",
  "euromail",
  "euromdns",
  "euromedia",
+ "euromegaraid",
  "euromime",
  "euromm",
  "euromusic",
@@ -881,6 +933,7 @@ dependencies = [
  "europol",
  "europortal",
  "europrint",
+ "eurordp",
  "euroreken",
  "eurorepro",
  "eurosafe",
@@ -895,6 +948,7 @@ dependencies = [
  "eurousb",
  "eurovault",
  "euroverity",
+ "eurovirtio",
  "eurovpn",
  "eurowallet",
  "eurowasm",

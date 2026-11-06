@@ -33,6 +33,11 @@ pub fn claim(bus: u8, dev: u8, func: u8, driver: &'static str) {
     }
 }
 
+/// Every (bus, dev, func, driver) claim so far, in claim order.
+pub fn claims() -> Vec<(u8, u8, u8, &'static str)> {
+    CLAIMS.lock().clone()
+}
+
 fn claimed_by(bus: u8, dev: u8, func: u8) -> Option<&'static str> {
     CLAIMS.lock().iter().find(|&&(b, d, f, _)| (b, d, f) == (bus, dev, func)).map(|&(_, _, _, n)| n)
 }
@@ -401,7 +406,10 @@ pub fn device_name(vendor: u16, device: u16) -> &'static str {
         (0x1AF4, 0x1001) | (0x1AF4, 0x1042) => "virtio-blk",
         (0x1AF4, 0x1003) | (0x1AF4, 0x1043) => "virtio-console",
         (0x1AF4, 0x1005) | (0x1AF4, 0x1044) => "virtio-rng",
+        (0x1AF4, 0x1045) => "virtio-balloon",
         (0x1AF4, 0x1050) => "virtio-gpu",
+        (0x1AF4, 0x1052) => "virtio-input",
+        (0x1AF4, 0x1059) => "virtio-sound",
         (0x8086, 0x29C0) => "Intel Q35 host bridge",
         (0x8086, 0x2918) => "Intel ICH9 LPC",
         (0x8086, 0x2922) => "Intel ICH9 AHCI",

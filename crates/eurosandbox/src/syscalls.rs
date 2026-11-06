@@ -1,0 +1,340 @@
+//! Kernel-enforced per-process syscall profiles (sprint WP1, process isolation
+//! for the Linux-ABI layer). A profile is the set of Linux syscalls a process
+//! may make; anything outside it ends the process, the way seccomp does on
+//! Linux. Pure logic, host-tested; the kernel consults `check` on every
+//! Linux-ABI syscall of a process whose profile is not `Full`.
+
+/// Which syscall policy a process runs under.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Profile {
+    /// Every syscall the kernel implements (the EuroGuard capability checks
+    /// still apply). The default for a compat process.
+    Full,
+    /// A Chromium renderer, GPU or utility child: may compute, talk to its
+    /// broker over AF_UNIX and map memory, but may not start processes, reach
+    /// the network, change its identity or modify the file system.
+    Renderer,
+    /// `seccomp` strict mode as Linux defines it: read, write, exit and
+    /// sigreturn only. A process asks for this itself (`prctl(PR_SET_SECCOMP,
+    /// SECCOMP_MODE_STRICT)` or `seccomp(SECCOMP_SET_MODE_STRICT)`).
+    Strict,
+    /// A Chromium utility or GPU child (the network service lives here and
+    /// owns cookies, cache and sockets): may use the network and the file
+    /// system, but may not start processes or images, trace, mount, load
+    /// modules, change group identity or use System V IPC.
+    Utility,
+    /// A native EuroOS app (sprint WP6): exactly the Euro API (`0x6100..`),
+    /// exit, memory, sleep and the clock. No Linux syscall at all: no open,
+    /// no socket, no fork. Anything else ends the process with SIGSYS.
+    Euro,
+    /// A userspace device driver (sprint userspace-drivers): the driver calls
+    /// (`0x6200..=0x6202`: grant info, EuroIPC receive and send), and from the
+    /// Euro API only info, log, clock, sleep and exit. No memory calls, no
+    /// files, no sockets, no window, no fork. Its device access is the MMIO and
+    /// DMA windows of its grant, mapped before it starts. Anything else ends
+    /// the process with SIGSYS.
+    Driver,
+}
+
+impl Profile {
+    pub fn from_u8(v: u8) -> Profile {
+        match v {
+            1 => Profile::Renderer,
+            2 => Profile::Strict,
+            3 => Profile::Utility,
+            4 => Profile::Euro,
+            5 => Profile::Driver,
+            _ => Profile::Full,
+        }
+    }
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Profile::Full => 0,
+            Profile::Renderer => 1,
+            Profile::Strict => 2,
+            Profile::Utility => 3,
+            Profile::Euro => 4,
+            Profile::Driver => 5,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Profile::Full => "full",
+            Profile::Renderer => "renderer",
+            Profile::Strict => "strict",
+            Profile::Utility => "utility",
+            Profile::Euro => "euro",
+            Profile::Driver => "driver",
+        }
+    }
+}
+
+/// What the kernel must do with a syscall under a profile.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Verdict {
+    Allow,
+    /// Allowed for now, but worth a log line: a W^X mapping under the renderer
+    /// profile (enforcement waits until the browser's JIT behaviour is measured).
+    LogOnly(&'static str),
+    /// End the process with this signal number (SIGKILL = 9 for strict mode,
+    /// SIGSYS = 31 for a profile violation), exit status 128 + signal.
+    Kill(u8),
+}
+
+const PROT_WRITE: u64 = 2;
+const PROT_EXEC: u64 = 4;
+const CLONE_THREAD: u64 = 0x10000;
+const AF_UNIX: u64 = 1;
+
+const SIGKILL: u8 = 9;
+const SIGSYS: u8 = 31;
+
+/// Decide `num(a1, .., a3, ..)` under `profile`. `a1` is the first argument
+/// (clone flags, socket domain), `a3` the third (mmap/mprotect protection).
+pub fn check(profile: Profile, num: u64, a1: u64, a3: u64) -> Verdict {
+    match profile {
+        Profile::Full => Verdict::Allow,
+        Profile::Strict => {
+            // read, write, exit, exit_group, rt_sigreturn: the Linux strict set.
+            if matches!(num, 0 | 1 | 15 | 60 | 231) {
+                Verdict::Allow
+            } else {
+                Verdict::Kill(SIGKILL)
+            }
+        }
+        Profile::Renderer => renderer(num, a1, a3),
+        Profile::Utility => utility(num, a1),
+        Profile::Euro => euro(num, a3),
+        Profile::Driver => driver(num),
+    }
+}
+
+/// The Euro API numbers a native app may call (`0x6100..=0x610C`).
+pub const EURO_FIRST: u64 = 0x6100;
+pub const EURO_LAST: u64 = 0x610C;
+
+fn euro(num: u64, a3: u64) -> Verdict {
+    match num {
+        n if (EURO_FIRST..=EURO_LAST).contains(&n) => Verdict::Allow,
+        // exit, exit_group, brk, munmap, nanosleep, clock_gettime, clock_nanosleep
+        60 | 231 | 12 | 11 | 35 | 228 | 230 => Verdict::Allow,
+        // write: only the console (stdout/stderr): checked by the capability model
+        1 => Verdict::Allow,
+        // mmap / mprotect: never executable, never shared files (a3 = prot)
+        9 | 10 if a3 & PROT_EXEC != 0 => Verdict::Kill(SIGSYS),
+        9 | 10 => Verdict::Allow,
+        _ => Verdict::Kill(SIGSYS),
+    }
+}
+
+/// The driver calls (`eurodrv::abi`): grant info, EuroIPC receive, EuroIPC send.
+pub const DRIVER_FIRST: u64 = 0x6200;
+pub const DRIVER_LAST: u64 = 0x6202;
+
+fn driver(num: u64) -> Verdict {
+    match num {
+        n if (DRIVER_FIRST..=DRIVER_LAST).contains(&n) => Verdict::Allow,
+        // Euro API: info, log, clock, sleep, exit. Not the window, files or events.
+        0x6100 | 0x6107 | 0x6108 | 0x6109 | 0x610C => Verdict::Allow,
+        // exit, exit_group
+        60 | 231 => Verdict::Allow,
+        _ => Verdict::Kill(SIGSYS),
+    }
+}
+
+/// What every browser child loses: new processes and images, tracing,
+/// mounts, modules, reboot, host name, group identity, System V IPC, keyrings
+/// and the clock.
+fn common_denied(num: u64) -> bool {
+    matches!(
+        num,
+        57 | 58 | 59 | 322
+        | 101 | 175 | 176 | 165 | 166 | 161 | 155 | 169 | 170 | 171
+        | 106 | 114 | 119 | 116 | 122 | 123
+        | 29 | 30 | 31 | 64 | 65 | 66
+        | 248 | 249 | 250 | 164 | 227 | 229
+    )
+}
+
+fn utility(num: u64, a1: u64) -> Verdict {
+    if common_denied(num) {
+        return Verdict::Kill(SIGSYS);
+    }
+    match num {
+        56 if a1 & CLONE_THREAD == 0 => Verdict::Kill(SIGSYS),
+        _ => Verdict::Allow,
+    }
+}
+
+fn renderer(num: u64, a1: u64, a3: u64) -> Verdict {
+    // On top of the common set: inbound network and file-system modification.
+    // setuid/setreuid/setresuid (105/113/117) stay allowed: the kernel only ever
+    // lets them DROP to the sandbox uid. unlink/unlinkat/rmdir stay allowed: a
+    // renderer deletes its own unlinked-but-open shared-memory files (measured
+    // on Chromium 152, 2026-10-05); what it may delete is the file scope.
+    let denied = common_denied(num)
+        || matches!(
+            num,
+            49 | 50 | 43 | 288
+            | 85 | 76 | 82 | 316 | 83 | 258 | 86 | 265 | 88 | 266 | 90 | 268 | 92 | 260 | 133
+        );
+    if denied {
+        return Verdict::Kill(SIGSYS);
+    }
+    match num {
+        // clone: threads only, never a new process.
+        56 if a1 & CLONE_THREAD == 0 => Verdict::Kill(SIGSYS),
+        // socket: the broker channel is AF_UNIX; no AF_INET/AF_INET6/AF_NETLINK.
+        41 if a1 != AF_UNIX => Verdict::Kill(SIGSYS),
+        // mmap / mprotect: a writable+executable mapping is logged, not yet refused.
+        9 | 10 if a3 & (PROT_WRITE | PROT_EXEC) == (PROT_WRITE | PROT_EXEC) => Verdict::LogOnly("W^X: writable+executable mapping"),
+        _ => Verdict::Allow,
+    }
+}
+
+/// May a process under `profile` name `path` in open/stat/access/readlink/execve?
+/// The compat VFS has no ownership model, so this is the renderer's file-system
+/// scope: program images, libraries, fonts, configuration, scratch and device
+/// files; never the user's data, the identity store or system state.
+pub fn path_allowed(profile: Profile, path: &[u8]) -> bool {
+    if profile != Profile::Renderer {
+        return true;
+    }
+    const DENY: &[&[u8]] = &[b"/etc/euroid", b"/etc/shadow", b"/etc/fde", b"/etc/euroguard", b"/etc/vault"];
+    const ALLOW: &[&[u8]] = &[
+        b"/pack/", b"/lib", b"/usr/", b"/etc/", b"/bin/", b"/tmp/", b"/dev/", b"/proc/", b"/sys/", b"/run/",
+    ];
+    if DENY.iter().any(|d| path.starts_with(d)) {
+        return false;
+    }
+    // A relative path resolves inside the process's cwd (the pack root).
+    if !path.starts_with(b"/") {
+        return true;
+    }
+    // "/etc" names the allowed directory itself (readlink/stat probe it).
+    ALLOW.iter().any(|a| path.starts_with(a) || (a.ends_with(b"/") && path == &a[..a.len() - 1]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn euro_profile_is_an_allow_list() {
+        for n in EURO_FIRST..=EURO_LAST {
+            assert_eq!(check(Profile::Euro, n, 0, 0), Verdict::Allow, "euro call {n:#x}");
+        }
+        for n in [60, 231, 12, 11, 35, 228, 230, 1] {
+            assert_eq!(check(Profile::Euro, n, 0, 0), Verdict::Allow, "allowed {n}");
+        }
+        assert_eq!(check(Profile::Euro, 9, 0, 3), Verdict::Allow);
+        assert_eq!(check(Profile::Euro, 9, 0, 7), Verdict::Kill(31));
+        assert_eq!(check(Profile::Euro, 10, 0, 4), Verdict::Kill(31));
+        for n in [0, 2, 257, 41, 42, 49, 56, 57, 58, 59, 101, 165, 16, 72, 0x6000, 0x6001, 0x6002, 0x610D, 0x6200, 500] {
+            assert_eq!(check(Profile::Euro, n, 0, 0), Verdict::Kill(31), "denied {n:#x}");
+        }
+        assert_eq!(Profile::from_u8(Profile::Euro.as_u8()), Profile::Euro);
+        assert_eq!(Profile::Euro.name(), "euro");
+    }
+
+    #[test]
+    fn driver_profile_is_a_narrow_allow_list() {
+        for n in DRIVER_FIRST..=DRIVER_LAST {
+            assert_eq!(check(Profile::Driver, n, 0, 0), Verdict::Allow, "driver call {n:#x}");
+        }
+        for n in [0x6100, 0x6107, 0x6108, 0x6109, 0x610C, 60, 231] {
+            assert_eq!(check(Profile::Driver, n, 0, 0), Verdict::Allow, "allowed {n:#x}");
+        }
+        // No window, files, events; no Linux memory, file, socket or process calls.
+        for n in [0x6101, 0x6102, 0x6103, 0x6104, 0x6105, 0x610A, 0x610B, 0x6203, 0x61FF,
+                  0, 1, 2, 9, 10, 11, 12, 35, 41, 56, 57, 59, 101, 165, 257] {
+            assert_eq!(check(Profile::Driver, n, 0, 0), Verdict::Kill(31), "denied {n:#x}");
+        }
+        // And the other profiles do not get the driver calls.
+        assert_eq!(check(Profile::Euro, DRIVER_FIRST, 0, 0), Verdict::Kill(31));
+        assert_eq!(check(Profile::Utility, DRIVER_FIRST, 0, 0), Verdict::Allow, "utility is a deny-list; the kernel checks the grant");
+        assert_eq!(Profile::from_u8(Profile::Driver.as_u8()), Profile::Driver);
+        assert_eq!(Profile::Driver.name(), "driver");
+    }
+
+    #[test]
+    fn renderer_file_scope() {
+        for p in [&b"/pack/chrome/chrome_100_percent.pak"[..], b"/etc/fonts/fonts.conf", b"/dev/urandom", b"/proc/self/maps", b"/tmp/.org.chromium.x", b"chrome.pak"] {
+            assert!(path_allowed(Profile::Renderer, p), "{}", core::str::from_utf8(p).unwrap());
+        }
+        for p in [&b"/home/euro/demo/welcome.txt"[..], b"/etc/euroid/users.db", b"/etc/shadow", b"/var/log/x", b"/data/x", b"/boot/version"] {
+            assert!(!path_allowed(Profile::Renderer, p), "{}", core::str::from_utf8(p).unwrap());
+        }
+        assert!(path_allowed(Profile::Renderer, b"/etc"));
+        assert!(path_allowed(Profile::Renderer, b"/tmp"));
+        assert!(!path_allowed(Profile::Renderer, b"/etcetera"));
+        assert!(path_allowed(Profile::Utility, b"/root/.config/chromium"));
+        assert!(path_allowed(Profile::Full, b"/home/euro/anything"));
+        assert!(path_allowed(Profile::Strict, b"/home/euro/anything")); // strict never gets to open at all
+    }
+
+    #[test]
+    fn full_allows_everything() {
+        for n in 0..450u64 {
+            assert_eq!(check(Profile::Full, n, 0, 7), Verdict::Allow);
+        }
+    }
+
+    #[test]
+    fn strict_is_the_linux_strict_set() {
+        for n in [0u64, 1, 15, 60, 231] {
+            assert_eq!(check(Profile::Strict, n, 0, 0), Verdict::Allow);
+        }
+        for n in [2u64, 257, 9, 41, 59, 157, 202] {
+            assert_eq!(check(Profile::Strict, n, 0, 0), Verdict::Kill(SIGKILL), "syscall {n}");
+        }
+    }
+
+    #[test]
+    fn renderer_denies_process_network_and_fs_changes() {
+        for n in [57u64, 58, 59, 101, 165, 106, 49, 50, 82, 83, 90, 92, 29] {
+            assert_eq!(check(Profile::Renderer, n, 0, 0), Verdict::Kill(SIGSYS), "syscall {n}");
+        }
+        // fork via clone (no CLONE_THREAD) is a new process; a thread is fine.
+        assert_eq!(check(Profile::Renderer, 56, 0x1200011, 0), Verdict::Kill(SIGSYS));
+        assert_eq!(check(Profile::Renderer, 56, 0x3d0f00 | CLONE_THREAD, 0), Verdict::Allow);
+        // AF_UNIX to the broker yes, AF_INET no.
+        assert_eq!(check(Profile::Renderer, 41, AF_UNIX, 0), Verdict::Allow);
+        assert_eq!(check(Profile::Renderer, 41, 2, 0), Verdict::Kill(SIGSYS));
+    }
+
+    #[test]
+    fn renderer_keeps_what_rendering_needs() {
+        // read/write/mmap/munmap/futex/openat/close/epoll/sendmsg/recvmsg/memfd/clock_gettime
+        for n in [0u64, 1, 9, 11, 202, 257, 3, 232, 233, 46, 47, 319, 228, 14, 13, 157, 87, 263, 105, 117] {
+            assert_eq!(check(Profile::Renderer, n, 0, 3), Verdict::Allow, "syscall {n}");
+        }
+    }
+
+    #[test]
+    fn renderer_logs_wx_mappings_but_allows_them_for_now() {
+        assert_eq!(check(Profile::Renderer, 9, 0, 7), Verdict::LogOnly("W^X: writable+executable mapping"));
+        assert_eq!(check(Profile::Renderer, 10, 0, 6), Verdict::LogOnly("W^X: writable+executable mapping"));
+        assert_eq!(check(Profile::Renderer, 10, 0, 5), Verdict::Allow);
+        assert_eq!(check(Profile::Renderer, 9, 0, 3), Verdict::Allow);
+    }
+
+    #[test]
+    fn utility_keeps_network_and_files_but_not_processes() {
+        for n in [41u64, 42, 49, 50, 257, 82, 83, 87, 90] {
+            assert_eq!(check(Profile::Utility, n, 2, 0), Verdict::Allow, "syscall {n}");
+        }
+        for n in [57u64, 59, 101, 165, 106, 29] {
+            assert_eq!(check(Profile::Utility, n, 0, 0), Verdict::Kill(SIGSYS), "syscall {n}");
+        }
+        assert_eq!(check(Profile::Utility, 56, 0x1200011, 0), Verdict::Kill(SIGSYS));
+        assert_eq!(check(Profile::Utility, 56, CLONE_THREAD, 0), Verdict::Allow);
+    }
+
+    #[test]
+    fn profile_round_trips_through_a_byte() {
+        for p in [Profile::Full, Profile::Renderer, Profile::Strict, Profile::Utility] {
+            assert_eq!(Profile::from_u8(p.as_u8()), p);
+        }
+    }
+}

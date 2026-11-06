@@ -7,6 +7,11 @@
 *.map
 *.o
 userland/*.elf
+# Signed at build time by userland/build.sh (Rust driver output changes per toolchain).
+userland/e1000d.elf.sig
+userland/nvmed.elf.sig
+userland/bcm5720d.elf.sig
+userland/megaraidd.elf.sig
 userland/*.signed
 
 # ── Bootable disk images (build output) ──────────────────────────────────────
@@ -105,6 +110,53 @@ id_ed25519*
 .claude/
 *.tsbuildinfo
 # --- end standard ---
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+
+# EuroApps SDK examples: build outputs (the signed packages the kernel embeds live in toolchain/eupkg/)
+sdk/examples/*/hello
+sdk/examples/*/*.eupkg
+/crates/eurontfs/tests/ntfs.img
+sdk/rust/target/
+sdk/c/hello-euro-c
+sdk/c/*.eupkg
+/crates/eurontfs/tests/ntfs.img
+wizard-test/
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
+/crates/eurontfs/tests/ntfs.img
 /crates/eurontfs/tests/ntfs.img
 /crates/eurontfs/tests/ntfs.img
 /crates/eurontfs/tests/ntfs.img

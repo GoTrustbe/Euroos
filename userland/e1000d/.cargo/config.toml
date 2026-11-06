@@ -1,0 +1,7 @@
+# e1000d: a userspace driver is a freestanding static PIE (like a native app),
+# loaded by the kernel's ELF loader and run under the `driver` syscall profile.
+[build]
+target = "x86_64-unknown-none"
+
+[target.x86_64-unknown-none]
+rustflags = ["-C", "relocation-model=pie", "-C", "link-arg=-pie", "-C", "link-arg=--no-dynamic-linker", "-C", "link-arg=-z", "-C", "link-arg=max-page-size=4096", "-C", "link-arg=-z", "-C", "link-arg=noexecstack"]

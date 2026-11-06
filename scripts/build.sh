@@ -26,6 +26,20 @@ if [ "$PROFILE" = "image" ]; then
   EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
   cargo kbuild-image
   cargo lbuild-release           # G4: two-stage loader
+elif [ "$PROFILE" = "lockbench" ]; then
+  # J1 lock benchmark image: boots, runs [lk-stress]/[lk-bench] on every core
+  # right after SMP bring-up, prints the contention report and powers off.
+  PROFILE="release"
+  EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
+  cargo kbuild-lockbench
+  cargo lbuild-release
+elif [ "$PROFILE" = "heaptrace" ]; then
+  # BUG-027 debug image: the selftest image plus heap accounting per allocation
+  # site (heapsnap / heapdiff / heaptop in the shell, kernel/src/heaptrace.rs).
+  PROFILE="release"
+  EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
+  cargo kbuild-heaptrace
+  cargo lbuild-release
 elif [ "$PROFILE" = "chrome" ]; then
   # Iteration image: chrome runs in the boot phase (see the chrome-boot feature).
   PROFILE="release"
@@ -76,6 +90,13 @@ mcopy -i "$IMG" "$EFI" ::/EFI/BOOT/eurokernel-A.efi
 mcopy -i "$IMG" "$EFI" ::/EFI/BOOT/eurokernel-B.efi
 mcopy -i "$IMG" "$SIG" ::/EFI/BOOT/eurokernel-A.efi.sig
 mcopy -i "$IMG" "$SIG" ::/EFI/BOOT/eurokernel-B.efi.sig
+# Boot options (kernel/src/bootopt.rs), e.g. EUROOS_BOOTOPTS="net.driver=user"
+# (several separated by ';'). Without it the ESP holds no option file: defaults.
+if [ -n "${EUROOS_BOOTOPTS:-}" ]; then
+  printf '%s\n' "$EUROOS_BOOTOPTS" | tr ';' '\n' > "$STAGE/euroos-boot.conf"
+  mcopy -i "$IMG" "$STAGE/euroos-boot.conf" ::/EFI/BOOT/euroos-boot.conf
+  echo "==> boot options on the ESP: $EUROOS_BOOTOPTS"
+fi
 echo "==> done: $IMG (two-stage: loader → eurokernel-A/B.efi)"
 echo "    Test:        ./scripts/run-qemu.sh"
 echo "    Screenshot:  python3 scripts/screenshot.py $IMG boot.png"

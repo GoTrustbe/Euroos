@@ -22,7 +22,7 @@ use euroid::argon2::Params;
 use euroid::persist::{deserialize_db, serialize_db};
 use euroid::{
     authenticate, cap_names, effective_caps, validate_password, validate_username, Argon2idHash,
-    AuditEvent, AuditLog, AuthError, Credential, Group, GroupDb, GroupId, LockReason,
+    AuditEvent, AuditLog, AuthError, Credential, GroupDb, GroupId, LockReason,
     PasswordPolicy, PasswordRecord, Timestamp, User, UserDb, UserError, UserState, ALLOW_ALL,
     CAP_FILE, CAP_NET, GROUP_NET, GROUP_USERS, GROUP_WHEEL,
 };
@@ -168,6 +168,85 @@ fn build_state() -> State {
 }
 
 /// **K1 boot self-test** — the entire chain manage→auth→audit, end-to-end.
+/// True once the identity store was loaded from the root disk (an installed
+/// system). The demo store (`euro`, `alice`, `bob`) is then never installed.
+static FROM_DISK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Boot: load `/etc/euroid/users.db` from the (just mounted) root. Present =
+/// an installed system: that store becomes THE identity store. Absent (live
+/// medium, RAM root) = the built-in demo store. Returns true when loaded from disk.
+pub fn init_from_disk(fs: &mut dyn eurofs::FileSystem) -> bool {
+    match load_users_from_disk(fs) {
+        Some(users) => {
+            let n = users.all().len();
+            let mut audit = AuditLog::new();
+            audit.append(&AuditEvent::SystemInit, now());
+            let dummy = Argon2idHash::create(b"*invalid*", &salt32(), &BOOT_PARAMS);
+            *STATE.lock() = Some(State { users, groups: GroupDb::with_builtins(), audit, dummy, policy: PasswordPolicy::default() });
+            FROM_DISK.store(true, core::sync::atomic::Ordering::Relaxed);
+            crate::serial_println!("[euroid] identity store loaded from disk: {USERS_DB} ({n} users) — installed system, demo accounts NOT loaded");
+            true
+        }
+        None => {
+            if STATE.lock().is_none() {
+                *STATE.lock() = Some(build_state());
+            }
+            crate::serial_println!("[euroid] no {USERS_DB} on the root — live medium, built-in demo store (euro/alice/bob)");
+            false
+        }
+    }
+}
+
+/// Was the identity store loaded from the installed disk?
+pub fn store_from_disk() -> bool {
+    FROM_DISK.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// May an unattended boot auto-login (CI/VNC convenience)? Never on an
+/// installed system in a release build; self-test builds keep it for the
+/// standalone-boot harness.
+pub fn unattended_login_allowed() -> bool {
+    !store_from_disk() || cfg!(feature = "selftest")
+}
+
+/// The account the lockscreen offers: the first active, non-system user of the
+/// store (the account created by the installer), else the demo user `euro`.
+pub fn default_login_user() -> String {
+    let guard = STATE.lock();
+    guard
+        .as_ref()
+        .and_then(|st| st.users.all().iter().find(|u| u.uid.0 >= 1000 && u.is_active()).map(|u| u.username.clone()))
+        .unwrap_or_else(|| "euro".to_string())
+}
+
+/// Check a candidate password against the sovereign policy (installer wizard).
+pub fn check_password(pw: &str) -> Result<(), String> {
+    validate_password(pw, &PasswordPolicy::default()).map_err(|e| e.message().to_string())
+}
+
+/// Check a candidate username (installer wizard).
+pub fn check_username(name: &str) -> Result<(), String> {
+    validate_username(name)
+}
+
+/// The identity store of a FRESH installation, serialized for
+/// `/etc/euroid/users.db`: `root` locked (no interactive login, like a real
+/// sudo system) + the first user (uid 1000) as administrator (`wheel`) with
+/// network access, password hashed with Argon2id. The password itself never
+/// leaves this function. `Err` names the policy violation.
+pub fn install_db(username: &str, display: &str, password: &str) -> Result<String, String> {
+    validate_username(username)?;
+    check_password(password)?;
+    let mut users = UserDb::new();
+    let mut root = build_user(0, "root", "System Administrator", GROUP_WHEEL, &[], 0, "*locked*", 0);
+    root.state = UserState::Locked { reason: LockReason::AdminLock, locked_at: now(), locked_by: euroid::UserId::ROOT };
+    users.insert(root).map_err(|_| "could not create root".to_string())?;
+    let display = if display.trim().is_empty() { username } else { display };
+    let first = build_user(1000, username, display, GROUP_USERS, &[GROUP_WHEEL, GROUP_NET], CAP_FILE, password, 0);
+    users.insert(first).map_err(|_| "could not create the user".to_string())?;
+    Ok(serialize_db(&users))
+}
+
 pub fn selftest() {
     let mut st = build_state();
     let from_tpm = crate::tpm::get_random(1).is_some();
@@ -257,6 +336,10 @@ pub fn selftest() {
         if ok { "OK (Sprint K1: sovereign user management + tamper-evident audit, NIS2/GDPR/ISO 27001) ✓" } else { "FAILED" }
     );
 
+    if store_from_disk() {
+        crate::serial_println!("[k1] identity store came from the installed disk — demo store + shell-path checks skipped (real accounts untouched)");
+        return;
+    }
     *STATE.lock() = Some(st);
 
     // Smoke test of the REAL shell path (not just compiled): run a few

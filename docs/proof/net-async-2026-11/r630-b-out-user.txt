@@ -1,0 +1,9 @@
+[loadtest] scenario=net image=/srv/euroos/wt-net-runs/b-out-user/boot.img disks=[] bus=virtio kvm=True smp=4 mem=4G nic=e1000e bootopts=- iommu=False
+[loadtest] serial log: /srv/euroos/wt-net-runs/b-out-user/loadtest-serial-20261103-074427.log  ·  CSV: /srv/euroos/wt-net-runs/b-out-user/b-out-user.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 168s — driving commands
+  [  190/328] ✗ err        12317ms t=  119.2s  fetch 10.0.2.100  (missing expected: '200 OK')
+  [  216/328] ✗ err          615ms t=  133.6s  fetch 10.0.2.100  (missing expected: '200 OK')
+  [  292/328] ✗ err          675ms t=  176.2s  fetch 10.0.2.100  (missing expected: '200 OK')
+[loadtest] 3 command(s) FAILED (returned but did not succeed) · results → /srv/euroos/wt-net-runs/b-out-user/b-out-user.csv · ltstat samples → /srv/euroos/wt-net-runs/b-out-user/b-out-user-ltstat.csv
+[loadtest] host HTTP server served 317 request(s)

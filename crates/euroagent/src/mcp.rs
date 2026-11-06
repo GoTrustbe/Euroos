@@ -36,6 +36,11 @@ pub struct ToolDef {
     pub required_cap: u64,
 }
 
+/// The capability a built-in tool requires (None = no such tool).
+pub fn tool_cap(name: &str) -> Option<u64> {
+    builtin_tools().iter().find(|t| t.name == name).map(|t| t.required_cap)
+}
+
 /// The standard EuroOS toolset (see EUROAGENT-PLAN §MCP-gateway).
 pub fn builtin_tools() -> Vec<ToolDef> {
     vec![

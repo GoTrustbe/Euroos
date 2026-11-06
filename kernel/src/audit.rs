@@ -30,6 +30,8 @@ pub enum Event {
     /// One EuroAgent MCP tool call (allowed or denied). The persistent
     /// trail of what an agent did — survives a restart (P0.3 / audit #7).
     AgentTool,
+    /// An agent manifest (its boundary) was approved and installed.
+    PolicyApproved,
     /// A program was executed (`execve`) — 3D-6 wiring.
     Execve,
     /// An outbound network connection was made — 3D-6 wiring.
@@ -47,6 +49,7 @@ impl Event {
             Event::Logout => "LOGOUT",
             Event::Boot => "BOOT",
             Event::AgentTool => "AGENT_TOOL",
+            Event::PolicyApproved => "POLICY_APPROVED",
             Event::Execve => "EXECVE",
             Event::Connection => "CONNECTION",
         }
@@ -61,6 +64,7 @@ impl Event {
             Event::Logout => Kind::Logout,
             Event::Boot => Kind::Boot,
             Event::AgentTool => Kind::AgentTool,
+            Event::PolicyApproved => Kind::AgentTool,
             Event::Execve => Kind::Execve,
             Event::Connection => Kind::Connection,
         }

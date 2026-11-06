@@ -251,6 +251,23 @@ pub fn draw_window_body(fb: &FrameBuffer, win: &Window) {
     // Hosted X11 client (real GTK app): blit the live X-server window buffer (0x00RRGGBB)
     // into the window body, clipped/centred. This is how a glibc GUI app appears as a
     // first-class framed window on the EuroOS desktop.
+    // Native EuroOS app (Euro API surface): blit the last presented frame.
+    if win.app == crate::suite_ui::SuiteApp::EuroSurface {
+        let (bx, by, bw, bh) = window_body_rect(win);
+        fb.fill_rect(bx, by, bw, bh, Color::SURFACE);
+        crate::euroapi::with_front(|sw, sh, buf| {
+            let ox = bx + bw.saturating_sub(sw) / 2;
+            let oy = by + bh.saturating_sub(sh) / 2;
+            for sy in 0..sh.min(bh) {
+                let row = &buf[sy * sw..sy * sw + sw];
+                for (sx, &v) in row.iter().enumerate() {
+                    if sx >= bw { break; }
+                    fb.put_pixel(ox + sx, oy + sy, Color::rgb(((v >> 16) & 0xff) as u8, ((v >> 8) & 0xff) as u8, (v & 0xff) as u8));
+                }
+            }
+        });
+        return;
+    }
     if win.app == crate::suite_ui::SuiteApp::XClient {
         let (bx, by, bw, bh) = window_body_rect(win);
         fb.fill_rect(bx, by, bw, bh, Color::SURFACE);

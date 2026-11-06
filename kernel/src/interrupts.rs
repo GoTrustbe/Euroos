@@ -42,11 +42,26 @@ pub static XHCI_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 pub const VIRTIO_BLK_MSIX_VECTOR: u8 = 0x47; // virtio-blk completion via MSI-X (J2)
 pub const NVME_MSIX_VECTOR: u8 = 0x48; // NVMe I/O completion via MSI-X (Metal M2-1)
 pub const VIRTIO_NET_MSIX_VECTOR: u8 = 0x4B; // virtio-net receive via MSI-X
+/// MSI-X vectors of devices driven from ring 3 (e1000d, nvmed, bcm5720d,
+/// megaraidd): a pool of `UDRV_VECTORS` from `UDRV_VECTOR_BASE` on, handed out
+/// by `udrv::alloc_vector` (one owner per vector; a second claim is refused).
+/// Each delivers a EuroIPC message to its owner. No driver has a fixed vector.
+pub const UDRV_VECTOR_BASE: u8 = 0x4C;
+pub const UDRV_VECTORS: usize = 4;
 pub const SCI_VECTOR: u8 = 0x49; // ACPI SCI (power button etc.) — Metal M5-2
 /// Cooperative-yield software interrupt: a blocked/sleeping task triggers this
 /// (`int YIELD_VECTOR`) to switch away immediately (sched::yield_now). Not a
 /// hardware IRQ — its handler sends no EOI.
 pub const YIELD_VECTOR: u8 = 0x4A;
+/// No fixed vector lies inside the userspace-driver pool.
+const _: () = {
+    let fixed = [TIMER_VECTOR, KEYBOARD_VECTOR, MOUSE_VECTOR, AP_TIMER_VECTOR, IPI_PING_VECTOR, IPI_HALT_VECTOR, IPI_TLB_VECTOR, XHCI_MSIX_VECTOR, VIRTIO_BLK_MSIX_VECTOR, NVME_MSIX_VECTOR, SCI_VECTOR, YIELD_VECTOR, VIRTIO_NET_MSIX_VECTOR, 0xFF];
+    let mut i = 0;
+    while i < fixed.len() {
+        assert!(!(fixed[i] >= UDRV_VECTOR_BASE && (fixed[i] as usize) < UDRV_VECTOR_BASE as usize + UDRV_VECTORS), "a fixed vector lies in the udrv pool");
+        i += 1;
+    }
+};
 /// Number of received virtio-blk completion MSI-X interrupts.
 pub static BLK_MSIX_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Number of NVMe completion interrupts received via MSI-X (M2-1: proof of
@@ -77,14 +92,17 @@ pub fn init_timer(hz: u32) {
     // J1: from now on the lock-free kmsg tee may read `lapic_id()` (LAPIC mapped).
     crate::klog::mark_apic_ready();
     serial_println!(
-        "[apic] Local APIC #{} on — timer {hz} Hz (calibrated: {count} ticks/period)",
-        crate::apic::lapic_id()
+        "[apic] Local APIC #{} on — timer {hz} Hz (calibrated: {count} ticks/period against {})",
+        crate::apic::lapic_id(),
+        crate::apic::calibration_source()
     );
 }
 
 static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     let mut idt = InterruptDescriptorTable::new();
     idt.breakpoint.set_handler_fn(breakpoint_handler);
+    // BUG-032: debug-register traps (the scheduler write watch, memwatch.rs).
+    idt.debug.set_handler_fn(debug_handler);
     idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
     idt.general_protection_fault.set_handler_fn(gp_handler);
     unsafe {
@@ -132,6 +150,10 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     idt[VIRTIO_BLK_MSIX_VECTOR].set_handler_fn(blk_msix_handler);
     idt[NVME_MSIX_VECTOR].set_handler_fn(nvme_msix_handler);
     idt[VIRTIO_NET_MSIX_VECTOR].set_handler_fn(net_msix_handler);
+    // The userspace-driver pool: one stub per vector, bound to its owner at run time.
+    for (i, stub) in crate::udrv::IRQ_STUBS.iter().enumerate() {
+        idt[UDRV_VECTOR_BASE + i as u8].set_handler_fn(*stub);
+    }
     // Harmless spurious handler (LAPIC vector 0xFF).
     idt[0xFF].set_handler_fn(spurious_handler);
     idt
@@ -339,6 +361,15 @@ pub fn init() {
     IDT.load();
 }
 
+extern "x86-interrupt" fn debug_handler(frame: InterruptStackFrame) {
+    crate::memwatch::on_debug(
+        frame.instruction_pointer.as_u64(),
+        frame.code_segment.0 as u64,
+        frame.stack_pointer.as_u64(),
+        frame.cpu_flags.bits(),
+    );
+}
+
 extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {
     serial_println!("[idt] BREAKPOINT @ {:#x}", frame.instruction_pointer.as_u64());
     BREAKPOINT_HIT.store(true, Ordering::SeqCst);
@@ -452,6 +483,7 @@ extern "x86-interrupt" fn invalid_opcode_handler(frame: InterruptStackFrame) {
         }
         let idx = crate::sched::mark_current_dead();
         crate::ring3::note_isolation_kill(idx, ip);
+        crate::ring3::fault_kill_group(idx, 4); // SIGILL: the whole thread group, as on Linux
         x86_64::instructions::interrupts::enable();
         loop {
             x86_64::instructions::hlt();
@@ -504,6 +536,7 @@ extern "x86-interrupt" fn gp_handler(frame: InterruptStackFrame, code: u64) {
         }
         let idx = crate::sched::mark_current_dead();
         crate::ring3::note_isolation_kill(idx, ip);
+        crate::ring3::fault_kill_group(idx, 11); // SIGSEGV: the whole thread group, as on Linux
         x86_64::instructions::interrupts::enable();
         loop {
             x86_64::instructions::hlt();
@@ -599,6 +632,7 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
         // A PREEMPTIVE background process: terminate that task; the rest keeps running.
         let idx = crate::sched::mark_current_dead();
         let pid = crate::ring3::note_isolation_kill(idx, addr);
+        crate::ring3::fault_kill_group(idx, 11); // SIGSEGV: the whole thread group, as on Linux
         {
             let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
             crate::paging::dump_walk(cr3, addr);
@@ -622,7 +656,7 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
             let mut bytes = [0u8; 16];
             let mut n = 0;
             for k in 0..2u64 {
-                if let Some(q) = read_user_qword(rip & !7 + k * 8) {
+                if let Some(q) = read_user_qword((rip & !7) + k * 8) {
                     bytes[(k * 8) as usize..(k * 8 + 8) as usize].copy_from_slice(&q.to_le_bytes());
                     n += 8;
                 }

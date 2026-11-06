@@ -1,0 +1,4 @@
+# diag image (branch + TSC timing of pump_nowait), --scenario cmds: httpd on; sleepwait 45 (old harness: sleepwait did not read the console)
+[diag] pump: rx_route 0 Mcyc, take 0 Mcyc, handle_seg 98100 Mcyc
+[net-async] long step: 44594261 us (rx_route 14 us, half-open 14 us, SYN-ACK timers 13 us, 2 httpd conns 44594220 us)
+[net-worker] long pass: 44597809 us with interrupts off at tick 5215 (rx_route 39 us, inbound 23 us for 2 frames, passive::step 44597747 us; 0 sockets with connections)

@@ -33,4 +33,6 @@ kbuild-release = "build --release -p kernel --target x86_64-unknown-uefi -Z buil
 # dev self-test/demo suite does NOT run and the OS boots straight to an idle desktop.
 kbuild-chrome = "build --release -p kernel --features chrome-boot --target x86_64-unknown-uefi -Z build-std=core,compiler_builtins,alloc -Z build-std-features=compiler-builtins-mem"
 kbuild-image = "build --release -p kernel --no-default-features --target x86_64-unknown-uefi -Z build-std=core,compiler_builtins,alloc -Z build-std-features=compiler-builtins-mem"
+kbuild-lockbench = "build --release -p kernel --no-default-features --features lockbench --target x86_64-unknown-uefi -Z build-std=core,compiler_builtins,alloc -Z build-std-features=compiler-builtins-mem"
+kbuild-heaptrace = "build --release -p kernel --features heaptrace --target x86_64-unknown-uefi -Z build-std=core,compiler_builtins,alloc -Z build-std-features=compiler-builtins-mem"
 lbuild-release = "build --release -p loader --target x86_64-unknown-uefi -Z build-std=core,compiler_builtins,alloc -Z build-std-features=compiler-builtins-mem"

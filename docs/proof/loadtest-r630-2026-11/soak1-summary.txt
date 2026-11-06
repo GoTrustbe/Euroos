@@ -1,0 +1,38 @@
+duration of driven load: 3586.2 s; commands: 2110; non-ok: 1
+  non-ok: id 2110 spawn worker 32 -> CRASH:timeout waiting for '[scon-ready]' (120482 ms)
+rounds: 225; worker processes spawned: 7200
+frames_free    first      2981779 last      2981779 min      2981779 max      2981779
+heap_used      first    147383344 last    149246848 min    147370368 max    149261184
+tasks          first           59 last           59 min           59 max           59
+bg_live        first            4 last            4 min            4 max            4
+kstacks        first            0 last            0 min            0 max            0
+files          first          186 last          186 min          186 max          186
+procpool_free  first       887296 last       887296 min       887296 max       887296
+demand_free    first            0 last            0 min            0 max            0
+heap drift: +1.86 MB over 0.96 h = +32.4 kB/min
+latency per command (ms): name, n, median, p99, max
+  cat             224     10.0       78      374
+  churn fs         75    26089    31791    33321
+  churn net        74    260.0      747     1050
+  churn proc       75     3017     5341     6151
+  fetch           224    130.0      251     2264
+  free             23       14       72       72
+  lockstat         23      435      501      553
+  ltstat          224     68.0     2209     2520
+  mkdir             2    375.0      370      380
+  rm              224    804.5     3405     3623
+  sha256sum       224   1274.5     1968     3682
+  spawn           224   1351.0     1619     1793
+  truncate        224    802.5     1732     2160
+  wget             45      563      640      683
+  write           224    315.5      550     2118
+last lockstat (top lines):
+  EuroLock contention (ranked by spin cost):
+  vfs.mount (per-mount): acq=221100 contended=4409 (1.99%) spins=5228095 max-wait=1966299 try-fail=0 hold-max=2802297us hold-avg=12064us
+  heap (linked-list allocator): acq=9691977 contended=12135 (0.12%) spins=42875 max-wait=64 try-fail=0 hold-max=0us hold-avg=0us
+  sched.SCHED (BSP scheduler): acq=16054987 contended=1 (0.00%) spins=0 max-wait=0 try-fail=1 hold-max=2866us hold-avg=0us
+  net.CFG: acq=97006918 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=80023us hold-avg=0us
+  net.PORTQ (TCP port queues): acq=74979261 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=60095us hold-avg=0us
+  net.NET_LEGACY (rx ring): acq=17762686 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=16us hold-avg=0us
+  net.socket (per-socket): acq=8035567 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=15us hold-avg=0us
+[g5] scrub passes: 51, WATCHDOG lines: 1, isolation kills: 2, kernel panics: 0

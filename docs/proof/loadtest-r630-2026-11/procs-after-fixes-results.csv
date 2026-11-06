@@ -1,0 +1,16 @@
+id,command,status,elapsed_ms,output_lines,t_s
+1,ltstat,ok,465,1,0.5
+2,spawn worker 64,ok,3233,2,3.7
+4,ltstat,ok,114,1,18.8
+5,spawn worker 64,ok,2940,2,21.8
+7,ltstat,ok,70,1,36.8
+8,spawn worker 64,ok,3521,2,40.4
+10,ltstat,ok,67,1,55.4
+11,spawn worker 300,ok,14353,3,69.8
+13,ltstat,ok,72,1,89.8
+14,spawn mpthread 32,ok,2398,2,92.2
+16,ltstat,ok,64,1,112.3
+17,ps,ok,85,2,112.4
+18,free,ok,12,3,112.4
+19,lockstat,ok,681,27,113.1
+20,eurohealth,ok,70,4,113.2

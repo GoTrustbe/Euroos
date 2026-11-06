@@ -1,0 +1,6 @@
+[loadtest] scenario=net image=/srv/euroos/wt-integrate4-runs/out-kernel/boot.img disks=[] bus=virtio kvm=True smp=4 mem=4G nic=e1000e bootopts=net.driver=kernel iommu=False
+[loadtest] serial log: /srv/euroos/wt-integrate4-runs/out-kernel/loadtest-serial-20261105-105913.log  ·  CSV: /srv/euroos/wt-integrate4-runs/out-kernel/out-kernel.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 160s — driving commands
+[loadtest] completed clean · results → /srv/euroos/wt-integrate4-runs/out-kernel/out-kernel.csv · ltstat samples → /srv/euroos/wt-integrate4-runs/out-kernel/out-kernel-ltstat.csv
+[loadtest] host HTTP server served 450 request(s)

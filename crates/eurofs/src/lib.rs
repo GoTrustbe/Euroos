@@ -26,6 +26,7 @@ pub mod path;
 pub mod ramdisk;
 pub mod superblock;
 pub mod vfs;
+pub mod shared;
 
 pub use block::{BlockDevice, BlockError, BlockResult, MemoryBlockDevice};
 pub use disk::EuroFs;
@@ -35,4 +36,5 @@ pub use fs::{
 };
 pub use ramdisk::RamDisk;
 pub use vfs::Vfs;
+pub use shared::{SharedVfs, VfsMember};
 pub use superblock::EuroFsSuperblock;

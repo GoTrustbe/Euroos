@@ -22,6 +22,13 @@ live-demos = []
 # desktop is the right place to start a browser -- `chrome` in the terminal or
 # "Chromium browser" in the app launcher.
 chrome-boot = []
+# J1: boot, run the multi-core lock stress + benchmark ([lk-stress]/[lk-bench])
+# right after SMP bring-up, print the contention report and power off.
+lockbench = []
+# BUG-027: per-call-site heap accounting (`heapsnap`, `heapdiff`, `heaptop` in
+# the shell; kernel/src/heaptrace.rs). A 16-byte header per heap block: debug
+# images only (`scripts/build.sh heaptrace`).
+heaptrace = []
 
 [[bin]]
 name = "eurokernel"
@@ -30,13 +37,20 @@ path = "src/main.rs"
 [dependencies]
 uefi = { version = "0.33", features = ["alloc"] }
 eurofs = { path = "../crates/eurofs" }
+eurolock = { path = "../crates/eurolock" }
+euroacpi = { path = "../crates/euroacpi" }
+euroipc = { path = "../crates/euroipc" }
 euronet = { path = "../crates/euronet" }
 euromm = { path = "../crates/euromm" }
 eurotls = { path = "../crates/eurotls" }
 euroupdate = { path = "../crates/euroupdate" }
 eurosandbox = { path = "../crates/eurosandbox" }
+eurodrv = { path = "../crates/eurodrv" }
+eurobcm5720 = { path = "../crates/eurobcm5720" }
+euromegaraid = { path = "../crates/euromegaraid" }
 eurodisplay = { path = "../crates/eurodisplay" }
 eurowasm = { path = "../crates/eurowasm" }
+eurordp = { path = "../crates/eurordp" }
 eurowl = { path = "../crates/eurowl" }
 eurousb = { path = "../crates/eurousb" }
 euroaudio = { path = "../crates/euroaudio" }
@@ -105,6 +119,7 @@ eurofiles = { path = "../crates/eurofiles" }
 euromedia = { path = "../crates/euromedia" }
 eurowifi = { path = "../crates/eurowifi" }
 eurogpu = { path = "../crates/eurogpu" }
+eurovirtio = { path = "../crates/eurovirtio" }
 europrint = { path = "../crates/europrint" }
 euroscan = { path = "../crates/euroscan" }
 eurogeo = { path = "../crates/eurogeo" }

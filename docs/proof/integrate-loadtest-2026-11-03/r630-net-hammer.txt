@@ -1,0 +1,88 @@
+[loadtest] scenario=net image=/root/int3/net/boot.img disks=[] bus=virtio kvm=True smp=4 mem=4G nic=e1000e bootopts=- iommu=False
+[loadtest] serial log: /root/int3/net/loadtest-serial-20261103-035916.log  ·  CSV: /root/int3/net.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 165s — driving commands
+  [    1/128] ✓ ok           667ms t=    0.7s  net
+  [    2/128] ✓ ok           633ms t=    1.3s  httpd on
+  [    3/128] ✓ ok          2676ms t=    4.0s  fetch 10.0.2.100
+  [    4/128] ✓ ok           649ms t=    4.6s  fetch 10.0.2.100
+  [    5/128] ✓ ok           662ms t=    5.3s  fetch 10.0.2.100
+  [    6/128] ✓ ok           575ms t=    5.9s  fetch 10.0.2.100
+  [    7/128] ✓ ok           525ms t=    6.4s  fetch 10.0.2.100
+  [    8/128] ✓ ok           580ms t=    7.0s  fetch 10.0.2.100
+  [    9/128] ✓ ok           518ms t=    7.5s  fetch 10.0.2.100
+  [   10/128] ✓ ok           520ms t=    8.0s  fetch 10.0.2.100
+  [   11/128] ✓ ok           582ms t=    8.6s  fetch 10.0.2.100
+  [   12/128] ✓ ok           519ms t=    9.1s  fetch 10.0.2.100
+  [   13/128] ✓ ok           687ms t=    9.8s  fetch 10.0.2.100
+  [   14/128] ✓ ok           603ms t=   10.4s  fetch 10.0.2.100
+  [   15/128] ✓ ok           582ms t=   11.0s  fetch 10.0.2.100
+  [   16/128] ✓ ok           520ms t=   11.5s  fetch 10.0.2.100
+  [   17/128] ✓ ok           518ms t=   12.0s  fetch 10.0.2.100
+  [   18/128] ✓ ok           580ms t=   12.6s  fetch 10.0.2.100
+  [   19/128] ✓ ok           520ms t=   13.1s  fetch 10.0.2.100
+  [   20/128] ✓ ok           520ms t=   13.6s  fetch 10.0.2.100
+  [   21/128] ✓ ok          2262ms t=   15.9s  fetch 10.0.2.100
+  [   22/128] ✓ ok           580ms t=   16.5s  fetch 10.0.2.100
+  [   23/128] ✓ ok           582ms t=   17.1s  fetch 10.0.2.100
+  [   24/128] ✓ ok           518ms t=   17.6s  fetch 10.0.2.100
+  [   25/128] ✓ ok           520ms t=   18.1s  fetch 10.0.2.100
+  [   26/128] ✓ ok           635ms t=   18.7s  fetch 10.0.2.100
+  [   27/128] ✓ ok           592ms t=   19.3s  fetch 10.0.2.100
+  [   28/128] ✓ ok           525ms t=   19.9s  fetch 10.0.2.100
+  [   29/128] ✓ ok           599ms t=   20.5s  fetch 10.0.2.100
+  [   30/128] ✓ ok           581ms t=   21.0s  fetch 10.0.2.100
+  [   31/128] ✓ ok           518ms t=   21.6s  fetch 10.0.2.100
+  [   32/128] ✓ ok           672ms t=   22.2s  fetch 10.0.2.100
+  [   33/128] ✓ ok           645ms t=   22.9s  fetch 10.0.2.100
+  [   34/128] ✓ ok          1461ms t=   24.3s  fetch 10.0.2.100
+  [   35/128] ✓ ok           644ms t=   25.0s  fetch 10.0.2.100
+  [   36/128] ✓ ok           521ms t=   25.5s  fetch 10.0.2.100
+  [   37/128] ✓ ok          2253ms t=   27.8s  fetch 10.0.2.100
+  [   38/128] ✓ ok           647ms t=   28.4s  fetch 10.0.2.100
+  [   39/128] ✓ ok           582ms t=   29.0s  fetch 10.0.2.100
+  [   40/128] ✓ ok           518ms t=   29.5s  fetch 10.0.2.100
+  [   41/128] ✓ ok           520ms t=   30.0s  fetch 10.0.2.100
+  [   42/128] ✓ ok           610ms t=   30.6s  fetch 10.0.2.100
+  [   43/128] ✓ ok           535ms t=   31.2s  fetch 10.0.2.100
+  [   44/128] ✓ ok           577ms t=   31.8s  fetch 10.0.2.100
+  [   45/128] ✓ ok           518ms t=   32.3s  fetch 10.0.2.100
+  [   46/128] ✓ ok           647ms t=   32.9s  fetch 10.0.2.100
+  [   47/128] ✓ ok           533ms t=   33.5s  fetch 10.0.2.100
+  [   48/128] ✓ ok           775ms t=   34.2s  fetch 10.0.2.100
+  [   49/128] ✓ ok           846ms t=   35.1s  fetch 10.0.2.100
+  [   50/128] ✓ ok           737ms t=   35.8s  fetch 10.0.2.100
+  [   51/128] ✓ ok           536ms t=   36.4s  fetch 10.0.2.100
+  [   52/128] ✓ ok           637ms t=   37.0s  fetch 10.0.2.100
+  [   53/128] ✓ ok           522ms t=   37.5s  fetch 10.0.2.100
+  [   54/128] ✓ ok          2260ms t=   39.8s  fetch 10.0.2.100
+  [   55/128] ✓ ok           620ms t=   40.4s  fetch 10.0.2.100
+  [   56/128] ✓ ok           580ms t=   41.0s  fetch 10.0.2.100
+  [   57/128] ✓ ok           520ms t=   41.5s  fetch 10.0.2.100
+  [   58/128] ✓ ok           838ms t=   42.3s  fetch 10.0.2.100
+  [   59/128] ✓ ok           643ms t=   43.0s  fetch 10.0.2.100
+  [   60/128] ✓ ok           520ms t=   43.5s  fetch 10.0.2.100
+  [   61/128] ✓ ok           520ms t=   44.0s  fetch 10.0.2.100
+  [   62/128] ✓ ok           570ms t=   44.6s  fetch 10.0.2.100
+  [   63/128] ✓ ok           580ms t=   45.2s  fetch 10.0.2.100
+  [   64/128] ✓ ok           637ms t=   45.8s  fetch 10.0.2.100
+  [   65/128] ✓ ok           625ms t=   46.4s  fetch 10.0.2.100
+  [   66/128] ✓ ok           590ms t=   47.0s  fetch 10.0.2.100
+  [   67/128] ✓ ok           786ms t=   47.8s  fetch 10.0.2.100
+  [   68/128] ✓ ok           533ms t=   48.3s  fetch 10.0.2.100
+  [   69/128] ✓ ok           582ms t=   48.9s  fetch 10.0.2.100
+  [   70/128] ✓ ok          2397ms t=   51.3s  fetch 10.0.2.100
+  [   71/128] ✓ ok           645ms t=   52.0s  fetch 10.0.2.100
+  [   72/128] ✓ ok           518ms t=   52.5s  fetch 10.0.2.100
+  [   73/128] ✓ ok           590ms t=   53.1s  fetch 10.0.2.100
+  [   74/128] ✓ ok           520ms t=   53.6s  fetch 10.0.2.100
+  [   75/128] ✓ ok           522ms t=   54.1s  fetch 10.0.2.100
+  [   76/128] ✓ ok           582ms t=   54.7s  fetch 10.0.2.100
+  [   77/128] ✓ ok           571ms t=   55.3s  fetch 10.0.2.100
+  [   78/128] ✓ ok           592ms t=   55.9s  fetch 10.0.2.100
+  [   79/128] ✓ ok           525ms t=   56.4s  fetch 10.0.2.100
+  [   80/128] ✗ CRASH:timeout waiting for '[scon-ready]'   60812ms t=  117.2s  fetch 10.0.2.100
+  !! CRASH after 'fetch 10.0.2.100' — see /root/int3/net/loadtest-serial-20261103-035916.log
+[loadtest] CRASH/HANG detected · results → /root/int3/net.csv · ltstat samples → /root/int3/net-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 39, "err": 50, "p50_ms": 610.7, "p99_ms": 7428.0}
+[loadtest] host HTTP server served 77 request(s)

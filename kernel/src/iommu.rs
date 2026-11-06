@@ -15,11 +15,13 @@
 //! and enforces a configurable **boot policy** (`Warn` by default, `Required` for
 //! high-assurance deployments that must fail-closed when no IOMMU is present).
 //!
-//! ## What it does NOT do yet (the follow-on, tracked on the roadmap)
-//! It does not yet *program* translation — root/context tables + second-level page
-//! tables that confine each device's DMA to only its own buffers. Until that lands,
-//! detecting an IOMMU does **not** by itself isolate DMA; this module is honest about
-//! that and never reports "protected" merely because a unit exists.
+//! ## Translation (since 2026-10-05)
+//! After every DMA driver has initialised, `program` builds root/context tables and
+//! one second-level page table per driver domain (identity-mapped, only the frames
+//! that driver allocated for DMA) and enables translation on every unit. A PCI
+//! function no driver claimed gets an empty table, so its DMA faults. Faults are
+//! read back with `poll_faults` and logged. Detection alone still never reports
+//! "protected": `dma_unprotected()` only clears once translation is on.
 
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
@@ -168,9 +170,9 @@ pub fn detect_and_enforce() -> bool {
         crate::serial_println!("[iommu] a unit reports translation ENABLED — DMA confined by firmware/prior setup");
     } else {
         crate::serial_println!(
-            "[iommu] hardware IOMMU present but EuroOS has not programmed translation yet: \
-             device DMA remains unrestricted until per-device remapping lands (roadmap). \
-             Detection + boot policy is the first step of GitHub #11."
+            "[iommu] hardware IOMMU present, translation not yet active: EuroOS programs \
+             per-driver DMA domains once every DMA driver has initialised (see \
+             `translation ENABLED` below; GitHub #11)."
         );
     }
     true
@@ -198,4 +200,434 @@ fn enforce_absent() {
             );
         }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Translation (GitHub #11, second step): per-driver DMA domains.
+//
+// Every DMA buffer a driver owns is allocated through the frame allocator while
+// its init runs under `dma_scope`; those frames become that driver's domain, and
+// the PCI functions it claims get a context entry pointing at the domain's
+// second-level page table (identity-mapped, 4 KiB granules, read+write). A device
+// nobody claims gets no context entry at all, so its DMA faults. Everything that
+// is not a driver's own buffer (the kernel heap, page tables, process arenas,
+// the demand pool, the identity store) is simply absent from every table.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+use alloc::vec::Vec;
+use spin::Mutex;
+
+const REG_GCMD: u64 = 0x18;
+const REG_RTADDR: u64 = 0x20;
+const REG_CCMD: u64 = 0x28;
+const REG_FSTS: u64 = 0x34;
+const GCMD_TE: u32 = 1 << 31;
+const GCMD_SRTP: u32 = 1 << 30;
+const GSTS_TES: u32 = 1 << 31;
+const GSTS_RTPS: u32 = 1 << 30;
+const SL_R: u64 = 1;
+const SL_W: u64 = 2;
+
+struct Domain {
+    name: &'static str,
+    bdfs: Vec<(u8, u8, u8)>,
+    frames: Vec<(u64, usize)>,
+    /// Root of the second-level page table once built (0 before `program`).
+    slpt: u64,
+    id: u16,
+}
+
+struct Tables {
+    levels: u8,       // 3 (39-bit) or 4 (48-bit) second-level paging
+    root: u64,        // root table physical address
+    ctx: [u64; 256],  // context table per bus (0 = none)
+    units: Vec<(u64, u64, u64)>, // (base, iotlb-register offset, fault-record offset)
+    nfr: u64,         // fault-record count per unit
+    table_frames: u64,
+    /// The empty table (and its domain id) every unclaimed function points at.
+    deny_slpt: u64,
+    deny_id: u16,
+}
+
+static DOMAINS: Mutex<Vec<Domain>> = Mutex::new(Vec::new());
+static TABLES: Mutex<Option<Tables>> = Mutex::new(None);
+static TRANSLATING: AtomicBool = AtomicBool::new(false);
+static FAULTS_SEEN: AtomicU64 = AtomicU64::new(0);
+
+unsafe fn wr32(base: u64, off: u64, v: u32) {
+    core::ptr::write_volatile((base + off) as *mut u32, v)
+}
+unsafe fn wr64(base: u64, off: u64, v: u64) {
+    core::ptr::write_volatile((base + off) as *mut u64, v)
+}
+
+/// Is EuroOS's own translation active (devices confined to their domains)?
+pub fn translating() -> bool {
+    TRANSLATING.load(Ordering::Relaxed)
+}
+
+/// Run a driver's initialisation and record what it allocated and claimed: the
+/// frames become the driver's DMA domain, the claimed PCI functions its members.
+pub fn dma_scope<R>(falloc: &mut euromm::FrameAllocator, name: &'static str, f: impl FnOnce(&mut euromm::FrameAllocator) -> R) -> R {
+    let claims_before = crate::pci::claims().len();
+    falloc.trace_start();
+    let r = f(falloc);
+    let frames = falloc.trace_take();
+    let bdfs: Vec<(u8, u8, u8)> = crate::pci::claims().into_iter().skip(claims_before).map(|(b, d, fu, _)| (b, d, fu)).collect();
+    let pages: usize = frames.iter().map(|&(_, n)| n).sum();
+    let mut doms = DOMAINS.lock();
+    match doms.iter_mut().find(|d| d.name == name) {
+        Some(d) => {
+            d.frames.extend(frames);
+            for b in bdfs {
+                if !d.bdfs.contains(&b) {
+                    d.bdfs.push(b);
+                }
+            }
+        }
+        None => {
+            let id = doms.len() as u16 + 1;
+            doms.push(Domain { name, bdfs, frames, slpt: 0, id });
+        }
+    }
+    if let Some(d) = doms.iter().find(|d| d.name == name) {
+        crate::serial_println!("[iommu] domain {name}: {} PCI function(s), {} DMA page(s) registered", d.bdfs.len(), pages);
+    }
+    r
+}
+
+/// A DMA buffer allocated outside a scope (heap-backed virtqueues, a scanout
+/// framebuffer, a hot-plugged USB device): add it to the named driver's domain,
+/// live if translation already runs.
+pub fn dma_add(name: &'static str, pa: u64, len: usize) {
+    let start = pa & !0xFFF;
+    let pages = ((pa + len as u64 + 0xFFF) / 4096 - start / 4096) as usize;
+    let mut doms = DOMAINS.lock();
+    let slpt = match doms.iter_mut().find(|d| d.name == name) {
+        Some(d) => {
+            d.frames.push((start, pages));
+            d.slpt
+        }
+        None => {
+            let id = doms.len() as u16 + 1;
+            doms.push(Domain { name, bdfs: Vec::new(), frames: alloc::vec![(start, pages)], slpt: 0, id });
+            0
+        }
+    };
+    drop(doms);
+    if slpt != 0 && TRANSLATING.load(Ordering::Relaxed) {
+        let mut t = TABLES.lock();
+        if let Some(tb) = t.as_mut() {
+            if let Some(fp) = unsafe { crate::DMA_FALLOC } {
+                let fa = unsafe { &mut *fp };
+                for i in 0..pages as u64 {
+                    map_sl(fa, tb, slpt, start + i * 4096);
+                }
+            }
+            for &(base, iro, _) in tb.units.iter() {
+                unsafe { invalidate_iotlb(base, iro) };
+            }
+        }
+    }
+}
+
+fn zeroed_frame(falloc: &mut euromm::FrameAllocator, tb: &mut Tables) -> Option<u64> {
+    let f = falloc.allocate().ok()?;
+    unsafe { core::ptr::write_bytes(f as *mut u8, 0, 4096) };
+    tb.table_frames += 1;
+    Some(f)
+}
+
+/// Map one 4 KiB page identity (IOVA == PA, read+write) in a second-level table.
+fn map_sl(falloc: &mut euromm::FrameAllocator, tb: &mut Tables, slpt: u64, pa: u64) -> bool {
+    let mut table = slpt;
+    let shifts: &[u32] = if tb.levels == 4 { &[39, 30, 21] } else { &[30, 21] };
+    for &sh in shifts {
+        let idx = ((pa >> sh) & 0x1FF) as u64;
+        let entry = unsafe { core::ptr::read_volatile((table + idx * 8) as *const u64) };
+        let next = if entry & SL_R != 0 {
+            entry & 0x000F_FFFF_FFFF_F000
+        } else {
+            let n = match zeroed_frame(falloc, tb) { Some(n) => n, None => return false };
+            unsafe { core::ptr::write_volatile((table + idx * 8) as *mut u64, n | SL_R | SL_W) };
+            n
+        };
+        table = next;
+    }
+    let idx = ((pa >> 12) & 0x1FF) as u64;
+    unsafe { core::ptr::write_volatile((table + idx * 8) as *mut u64, (pa & !0xFFF) | SL_R | SL_W) };
+    true
+}
+
+unsafe fn invalidate_context_cache(base: u64) {
+    wr64(base, REG_CCMD, (1u64 << 63) | (1u64 << 61)); // ICC + global invalidation
+    while rd64(base, REG_CCMD) & (1 << 63) != 0 {}
+}
+
+unsafe fn invalidate_iotlb(base: u64, iro: u64) {
+    wr64(base, iro + 8, (1u64 << 63) | (1u64 << 60)); // IVT + global
+    while rd64(base, iro + 8) & (1 << 63) != 0 {}
+}
+
+/// Build the tables for every registered domain and switch the remapping units
+/// to EuroOS's translation. Call once all DMA drivers have initialised. Returns
+/// the number of PCI functions now confined.
+pub fn program(falloc: &mut euromm::FrameAllocator) -> usize {
+    if !present() || policy() == Policy::Off {
+        return 0;
+    }
+    let dmar = match crate::acpi::dmar() { Some(d) => d, None => return 0 };
+    if dmar.units.is_empty() {
+        return 0;
+    }
+    // Capabilities of the first unit decide the paging depth (QEMU: one unit).
+    let cap = unsafe { rd64(dmar.units[0].base, REG_CAP) };
+    let sagaw = (cap >> 8) & 0x1F;
+    let levels: u8 = if sagaw & 0x2 != 0 { 3 } else if sagaw & 0x4 != 0 { 4 } else {
+        crate::serial_println!("[iommu] unit supports neither 39- nor 48-bit second-level paging (sagaw={sagaw:#x}) — not programmed");
+        return 0;
+    };
+    let nfr = ((cap >> 40) & 0xFF) + 1;
+    let fro = ((cap >> 24) & 0x3FF) * 16;
+    let mut tb = Tables { levels, root: 0, ctx: [0; 256], units: Vec::new(), nfr, table_frames: 0, deny_slpt: 0, deny_id: 0 };
+    for u in dmar.units.iter() {
+        let ecap = unsafe { rd64(u.base, REG_ECAP) };
+        let iro = ((ecap >> 8) & 0x3FF) * 16;
+        tb.units.push((u.base, iro, fro));
+    }
+    let root = match zeroed_frame(falloc, &mut tb) { Some(r) => r, None => return 0 };
+    tb.root = root;
+
+    // Second-level tables: one per domain; an empty one for unclaimed functions.
+    let mut doms = DOMAINS.lock();
+    for d in doms.iter_mut() {
+        let slpt = match zeroed_frame(falloc, &mut tb) { Some(s) => s, None => return 0 };
+        for &(base, n) in d.frames.iter() {
+            for i in 0..n as u64 {
+                map_sl(falloc, &mut tb, slpt, base + i * 4096);
+            }
+        }
+        d.slpt = slpt;
+    }
+    let deny_slpt = match zeroed_frame(falloc, &mut tb) { Some(s) => s, None => return 0 };
+    let deny_id = doms.len() as u16 + 1;
+    tb.deny_slpt = deny_slpt;
+    tb.deny_id = deny_id;
+
+    // Context entries for every PCI function that exists.
+    let aw_code: u64 = if levels == 4 { 2 } else { 1 };
+    let mut confined = 0usize;
+    let mut unclaimed = 0usize;
+    for dev in crate::pci::enumerate() {
+        let ctx = if tb.ctx[dev.bus as usize] != 0 {
+            tb.ctx[dev.bus as usize]
+        } else {
+            let c = match zeroed_frame(falloc, &mut tb) { Some(c) => c, None => return 0 };
+            tb.ctx[dev.bus as usize] = c;
+            unsafe { core::ptr::write_volatile((root + dev.bus as u64 * 16) as *mut u64, c | 1) };
+            c
+        };
+        let (slpt, did) = match doms.iter().find(|d| d.bdfs.contains(&(dev.bus, dev.dev, dev.func))) {
+            Some(d) => { confined += 1; (d.slpt, d.id) }
+            None => { unclaimed += 1; (deny_slpt, deny_id) }
+        };
+        let idx = ((dev.dev as u64) << 3 | dev.func as u64) * 16;
+        unsafe {
+            core::ptr::write_volatile((ctx + idx) as *mut u64, slpt | 1); // present, SL translation
+            core::ptr::write_volatile((ctx + idx + 8) as *mut u64, aw_code | ((did as u64) << 8));
+        }
+    }
+    drop(doms);
+
+    // Program every unit: root table, invalidate caches, enable translation.
+    for &(base, iro, _) in tb.units.iter() {
+        unsafe {
+            wr64(base, REG_RTADDR, root);
+            wr32(base, REG_GCMD, GCMD_SRTP);
+            while rd32(base, REG_GSTS) & GSTS_RTPS == 0 {}
+            invalidate_context_cache(base);
+            invalidate_iotlb(base, iro);
+            wr32(base, REG_GCMD, GCMD_TE);
+            while rd32(base, REG_GSTS) & GSTS_TES == 0 {}
+        }
+    }
+    let frames = tb.table_frames;
+    *TABLES.lock() = Some(tb);
+    TRANSLATING.store(true, Ordering::Relaxed);
+    DMA_UNPROTECTED.store(false, Ordering::Relaxed);
+    let names: Vec<&str> = DOMAINS.lock().iter().map(|d| d.name).collect();
+    crate::serial_println!(
+        "[iommu] translation ENABLED: {}-level second-level paging, {} domain(s) [{}], {confined} claimed PCI function(s) confined to their own DMA buffers, {unclaimed} unclaimed function(s) get NO DMA, {frames} table frame(s)",
+        levels, names.len(), names.join(", ")
+    );
+    confined
+}
+
+/// Read and clear the fault records of every unit; each one is a DMA the
+/// hardware refused. Returns how many were found now.
+pub fn poll_faults() -> usize {
+    let t = TABLES.lock();
+    let tb = match t.as_ref() { Some(t) => t, None => return 0 };
+    let mut found = 0;
+    for &(base, _, fro) in tb.units.iter() {
+        let fsts = unsafe { rd32(base, REG_FSTS) };
+        if fsts & 0x2 == 0 {
+            continue; // PPF: no pending primary fault
+        }
+        for i in 0..tb.nfr {
+            let off = fro + i * 16;
+            let hi = unsafe { rd64(base, off + 8) };
+            if hi & (1 << 63) == 0 {
+                continue;
+            }
+            let lo = unsafe { rd64(base, off) };
+            let sid = (hi & 0xFFFF) as u16;
+            let reason = ((hi >> 32) & 0xFF) as u8;
+            let is_read = hi & (1 << 62) != 0;
+            found += 1;
+            let n = FAULTS_SEEN.fetch_add(1, Ordering::Relaxed);
+            if n < 32 {
+                crate::serial_println!(
+                    "[iommu] DMA FAULT blocked: device {:02x}:{:02x}.{} tried to {} physical {:#x} (reason {reason:#x}) — outside its domain",
+                    sid >> 8, (sid >> 3) & 0x1F, sid & 7, if is_read { "read" } else { "write" }, lo & !0xFFF
+                );
+            }
+            unsafe { wr64(base, off + 8, 1 << 63) }; // clear this record
+        }
+        unsafe { wr32(base, REG_FSTS, fsts & 0x7F) }; // clear the summary bits
+    }
+    found
+}
+
+/// Total faults recorded since boot.
+pub fn faults_total() -> u64 {
+    FAULTS_SEEN.load(Ordering::Relaxed)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Runtime domains for userspace drivers (docs/SPRINT-PLAN-USERSPACE-DRIVERS.md).
+//
+// A userspace driver's device is not claimed at boot, so `program` gives it the
+// empty table: it can DMA nowhere. When the supervisor starts the driver it
+// builds a fresh second-level table holding exactly the driver's DMA window and
+// points the device's context entry at it (`attach_runtime`). When the driver
+// dies the supervisor points the entry back at the empty table, invalidates the
+// caches and only then frees the table and the window (`detach_runtime`): the
+// device never holds a translation to memory that is being handed back.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Write the context entry of `bdf`: first not-present (and flush), then the
+/// new translation (and flush), so the unit never caches a half-written entry.
+fn set_context(tb: &Tables, bdf: (u8, u8, u8), slpt: u64, did: u16) -> bool {
+    let ctx = tb.ctx[bdf.0 as usize];
+    if ctx == 0 {
+        return false;
+    }
+    let idx = ((bdf.1 as u64) << 3 | bdf.2 as u64) * 16;
+    let aw_code: u64 = if tb.levels == 4 { 2 } else { 1 };
+    // SAFETY: `ctx` is a context-table frame this module allocated (identity-
+    // mapped); the unit registers are the DMAR-reported, identity-mapped bases.
+    unsafe {
+        core::ptr::write_volatile((ctx + idx) as *mut u64, 0);
+        for &(base, iro, _) in tb.units.iter() {
+            invalidate_context_cache(base);
+            invalidate_iotlb(base, iro);
+        }
+        core::ptr::write_volatile((ctx + idx + 8) as *mut u64, aw_code | ((did as u64) << 8));
+        core::ptr::write_volatile((ctx + idx) as *mut u64, slpt | 1);
+        for &(base, iro, _) in tb.units.iter() {
+            invalidate_context_cache(base);
+            invalidate_iotlb(base, iro);
+        }
+    }
+    true
+}
+
+/// Free a second-level table tree (the root and every intermediate table; the
+/// leaves are the driver's own frames, freed by their owner).
+fn free_sl_tree(falloc: &mut euromm::FrameAllocator, tb: &mut Tables, table: u64, level: u8) {
+    if level > 1 {
+        for i in 0..512u64 {
+            // SAFETY: a table frame of this tree (identity-mapped).
+            let e = unsafe { core::ptr::read_volatile((table + i * 8) as *const u64) };
+            if e & SL_R != 0 {
+                free_sl_tree(falloc, tb, e & 0x000F_FFFF_FFFF_F000, level - 1);
+            }
+        }
+    }
+    let _ = falloc.free(table);
+    tb.table_frames = tb.table_frames.saturating_sub(1);
+}
+
+/// Give PCI function `bdf` its own domain `name` that maps exactly the
+/// `pages` 4 KiB pages at `base` (IOVA == PA, read+write). Returns the domain
+/// id, or None when EuroOS translation is not running (no IOMMU, policy Off)
+/// or the tables could not be built; the device then keeps what it had.
+pub fn attach_runtime(falloc: &mut euromm::FrameAllocator, name: &'static str, bdf: (u8, u8, u8), base: u64, pages: usize) -> Option<u16> {
+    if !TRANSLATING.load(Ordering::Relaxed) {
+        return None;
+    }
+    let mut doms = DOMAINS.lock();
+    let mut t = TABLES.lock();
+    let tb = t.as_mut()?;
+    let pos = match doms.iter().position(|d| d.name == name) {
+        Some(p) => p,
+        None => {
+            // Ids after the deny domain, so they never collide with it.
+            let id = tb.deny_id + 1 + doms.iter().filter(|d| d.id > tb.deny_id).count() as u16;
+            doms.push(Domain { name, bdfs: Vec::new(), frames: Vec::new(), slpt: 0, id });
+            doms.len() - 1
+        }
+    };
+    if doms[pos].slpt != 0 {
+        return None; // still attached: detach first
+    }
+    let slpt = zeroed_frame(falloc, tb)?;
+    let levels = tb.levels;
+    for i in 0..pages as u64 {
+        if !map_sl(falloc, tb, slpt, base + i * 4096) {
+            free_sl_tree(falloc, tb, slpt, levels);
+            return None;
+        }
+    }
+    let did = doms[pos].id;
+    if !set_context(tb, bdf, slpt, did) {
+        free_sl_tree(falloc, tb, slpt, levels);
+        return None;
+    }
+    let d = &mut doms[pos];
+    d.slpt = slpt;
+    d.frames = alloc::vec![(base, pages)];
+    d.bdfs = alloc::vec![bdf];
+    crate::serial_println!(
+        "[iommu] runtime domain {name} (id {did}): {:02x}:{:02x}.{} -> {pages} page(s) at {base:#x}, nothing else",
+        bdf.0, bdf.1, bdf.2
+    );
+    Some(did)
+}
+
+/// Take `name`'s device back to the empty table, flush, free the domain's
+/// tables. After this returns the device can DMA nowhere.
+pub fn detach_runtime(falloc: &mut euromm::FrameAllocator, name: &'static str) -> bool {
+    let mut doms = DOMAINS.lock();
+    let mut t = TABLES.lock();
+    let Some(tb) = t.as_mut() else { return false };
+    let Some(d) = doms.iter_mut().find(|d| d.name == name) else { return false };
+    if d.slpt == 0 {
+        return false;
+    }
+    for &bdf in d.bdfs.iter() {
+        set_context(tb, bdf, tb.deny_slpt, tb.deny_id);
+    }
+    let slpt = d.slpt;
+    d.slpt = 0;
+    d.frames.clear();
+    let levels = tb.levels;
+    free_sl_tree(falloc, tb, slpt, levels);
+    true
+}
+
+/// The pages `name`'s domain maps right now (diagnostics and self-tests).
+pub fn domain_pages(name: &str) -> usize {
+    DOMAINS.lock().iter().find(|d| d.name == name && d.slpt != 0).map(|d| d.frames.iter().map(|&(_, n)| n).sum()).unwrap_or(0)
 }

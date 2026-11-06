@@ -378,6 +378,22 @@ pub fn self_test() {
             *b = (i as u8) ^ 0x5A;
         }
         let mut one_rd = [0u8; 512];
+        // A disk without a boot signature is NOT necessarily blank: a EuroPack data
+        // disk, a raw volume, any content. Write only when sector 0 AND the two test
+        // windows read back all-zero; otherwise say so and leave the disk alone
+        // (2026-10-09: this test overwrote a model pack's Merkle leaf table).
+        {
+            let mut s0 = [0u8; 512];
+            let mut w1 = [0u8; 512];
+            let mut w2 = alloc::vec![0u8; 65536];
+            let zero0 = read_sectors(idx, 0, &mut s0) && s0.iter().all(|&b| b == 0);
+            let zero1 = read_sectors(idx, 1000, &mut w1) && w1.iter().all(|&b| b == 0);
+            let zero2 = read_sectors(idx, 2000, &mut w2) && w2.iter().all(|&b| b == 0);
+            if !(zero0 && zero1 && zero2) || crate::ring3::is_europack_header(&s0) {
+                crate::serial_println!("[ahci] disk {idx}: holds data without a boot signature (sector0-zero={zero0}, test windows zero={}): write self-test SKIPPED, disk left untouched", zero1 && zero2);
+                continue;
+            }
+        }
         let ok1 = write_sectors(idx, 1000, &one) && read_sectors(idx, 1000, &mut one_rd) && one == one_rd;
         let mut big = alloc::vec![0u8; DATA_MAX];
         for (i, b) in big.iter_mut().enumerate() {

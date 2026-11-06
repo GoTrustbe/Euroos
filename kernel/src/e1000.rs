@@ -170,6 +170,10 @@ pub fn mac() -> Option<[u8; 6]> {
 
 /// Transmit one ethernet frame (blocking until the NIC reports DD; bounded).
 pub fn send(frame: &[u8]) -> bool {
+    // IF=0 for the ring manipulation: the network worker uses this driver too
+    // (with interrupts off), and a sender parked by the timer between filling a
+    // descriptor and moving the tail would share the slot with the next.
+    let _g = crate::sched::IfOffGuard::new();
     unsafe {
         let n = match (*core::ptr::addr_of_mut!(NIC)).as_mut() {
             Some(n) => n,
@@ -202,6 +206,8 @@ pub fn send(frame: &[u8]) -> bool {
 
 /// Non-blocking receive: the next pending frame, or None.
 pub fn poll_recv() -> Option<alloc::vec::Vec<u8>> {
+    // IF=0, as in send (and virtio_net::poll_recv).
+    let _g = crate::sched::IfOffGuard::new();
     unsafe {
         let n = (*core::ptr::addr_of_mut!(NIC)).as_mut()?;
         let i = n.rx_head;

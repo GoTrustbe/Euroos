@@ -1,0 +1,32 @@
+[smp] 0/0 AP core(s) online (BSP = APIC-id 0, 1 cores total)
+[smp] parallel sum 0..2000000 over 1 core(s) = 1999999000000 (expected 1999999000000) -> OK
+[smp] J1: demo workers parked on 0/0 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[udrv] net.driver=user: the e1000 driver runs in ring 3 (e1000d); the in-kernel e1000 stays unbound
+[udrv] e1000d started: pid 131072, task 27, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x1c0000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU absent: DMA NOT confined
+[udrv-grant] e1000d pid 131072: BAR0 0x810a0000..0x810c0000 mapped for ring 3 (first=true, last=true), page before=false, page after=false; DMA window 32 pages mapped=true, page after=false; LAPIC=false, kernel code=false → OK (exactly the granted ranges) ✓
+[udrv-iommu] no IOMMU translation on this machine: e1000d's DMA is NOT confined (boot QEMU with -device intel-iommu,intremap=off) ⬜
+[udrv-e1000] e1000d (pid 131072, ring 3, profile driver) brought the 82574L (e1000e) up: MAC 52:54:00:12:34:56 reported over EuroIPC; nic backend = e1000 via userspace driver e1000d (EuroIPC) → OK ✓
+[udrv-net]   DHCP ACK: lease 10.0.2.15 (router 10.0.2.2, dns 10.0.2.3, 86400s)
+[udrv-net]   ARP: gateway 10.0.2.2 is-at [52, 55, 0a, 00, 02, 02]
+[udrv-net]   DNS: example.com = 104.20.23.154
+[udrv-net]   HTTP GET http://example.com/ -> 891 bytes, HTTP/1.1 200 OK
+[udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HTTP: tx 13 rx 9 frames → OK (the kernel e1000 driver was not used) ✓
+[udrv-irq] MSI-X vector 0x4c: 16 interrupt(s) raised, 16 delivered to e1000d as EuroIPC Irq messages → OK ✓
+[udrv-dma] no IOMMU translation: skipped (the escape would succeed; that is the unconfined case) ⬜
+[udrv] e1000d pid 131072 died (memory isolation: access 0x1000 denied) -> device quiesced: bus-master off, IOMMU domain n/a (no IOMMU), 32 DMA pages freed; restart at tick 225 (death #1)
+[udrv] e1000d started: pid 131073, task 27, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x15c000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU absent: DMA NOT confined
+[udrv-crash]   DHCP ACK: lease 10.0.2.15 (router 10.0.2.2, dns 10.0.2.3, 86400s)
+[udrv-crash]   ARP: gateway 10.0.2.2 is-at [52, 55, 0a, 00, 02, 02]
+[udrv-crash]   DNS: example.com = 104.20.23.154
+[udrv-crash]   HTTP GET http://example.com/ -> 891 bytes, HTTP/1.1 200 OK
+[udrv-crash] e1000d pid 131072 killed by a real fault (memory isolation: access 0x1000 denied); kernel kept running; sends refused while dead=true; restarted as pid 131073, MAC 52:54:00:12:34:56, DHCP + HTTP again → OK (driver crash = process exit, network back) ✓
+[udrv] userspace e1000d: pid 131073 task 27 (starts 2, deaths 1), link up, tx 24 rx 17 irq 30
+[net-late] network ready over e1000d (waited 0 ticks): lease 10.0.2.15, gateway 10.0.2.2, dns 10.0.2.3; running the network part of the boot now
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 1 time(s), done (exit 1), output "msock: HTTP GET via POSIX sockets on EuroOS |   target: example.com (104.20.23.154):80 |   socket() failed" → OK (no capability, no socket) ✓
+[net-late] network waits in this suite gave the CPU away 18 time(s); 7 of them were woken early by e1000d (EuroIPC frame delivery)
+[udrv-linux] glibc process /bin/gnet not run: (no arena for glibc) (needs more RAM than this machine has free here) ⬜
+[kwork] no APs accepting work (single core) — per-CPU queues idle
+[sbx2] cBPF-filter(getpid-EPERM + socket-kills)=false · rlimits(NOFILE=8 -> EMFILE, hard-limit-raise-EPERM)=false · ASLR(stack/heap/mmap differ across runs: 0/3)=false · renderer-scope(/etc ok, /home EACCES, uid drop to 65534, no raise)=false → skipped (glibc self-tests off in this boot)
+[udrv-vec] MSI-X vectors from the pool 0x4c..0x4f: e1000d 0x4c; distinct=true, stubs bound to their owner=true, second claims on a held vector refused 3/3; unowned interrupts 0 → OK ✓
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[bg-enosys] boot total: 0 background-path syscall(s) answered -ENOSYS (first use of each number logged above); background socket calls served 23 (refused for a missing CAP_NET: 1)

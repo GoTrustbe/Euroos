@@ -28,6 +28,7 @@ pub mod caps;
 pub mod intent;
 pub mod json;
 pub mod llm;
+pub mod learn;
 pub mod manifest;
 pub mod mcp;
 pub mod policy;

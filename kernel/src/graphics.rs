@@ -191,6 +191,14 @@ impl FrameBuffer {
     /// lives as long as the kernel). Drawing goes here; `present()` blits.
     /// # Safety
     /// See `new`.
+    /// A frame buffer over a caller-owned XRGB8888 pixel slice (`w*h` pixels),
+    /// so the text engine can render into an app's surface. No MMIO, nothing
+    /// allocated; the slice must outlive the returned value (it does: callers
+    /// use it within one syscall).
+    pub fn over_pixels(px: *mut u32, width: usize, height: usize) -> Self {
+        Self { base: core::ptr::null_mut(), buf: px, width, height, stride: width, format: PixelFormat::Bgr }
+    }
+
     pub unsafe fn new_buffered(
         base: *mut u8,
         width: usize,

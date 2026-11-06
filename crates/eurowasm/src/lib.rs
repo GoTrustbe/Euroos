@@ -127,8 +127,16 @@ enum Op {
     F64Const(u64),
     I32Load(u32),
     I32Store(u32),
+    /// The other loads (0x29..=0x35: i64/f32/f64 and the narrow sign/zero-extending ones).
+    Load { op: u8, off: u32 },
+    /// The other stores (0x37..=0x3e: i64/f32/f64 and the narrow ones).
+    Store { op: u8, off: u32 },
+    BrTable(Vec<u32>, u32),
     MemoryGrow,
     MemorySize,
+    /// Bulk memory (0xFC prefix): memory.fill (11) and memory.copy (10).
+    MemoryFill,
+    MemoryCopy,
     Num(u8), // numeric opcode, dispatched in exec
 }
 
@@ -430,6 +438,19 @@ fn decode_body(c: &mut Reader) -> Result<Vec<Op>, WasmError> {
             }
             0x0c => ops.push(Op::Br(c.uleb()? as u32)),
             0x0d => ops.push(Op::BrIf(c.uleb()? as u32)),
+            0x0e => {
+                // br_table: n labels + a default; a jump table (Rust's `match`).
+                let n = c.uleb()? as usize;
+                if n > 65536 {
+                    return Err(WasmError::Unsupported("br_table too large"));
+                }
+                let mut labels = Vec::with_capacity(n);
+                for _ in 0..n {
+                    labels.push(c.uleb()? as u32);
+                }
+                let default = c.uleb()? as u32;
+                ops.push(Op::BrTable(labels, default));
+            }
             0x0f => ops.push(Op::Return),
             0x10 => ops.push(Op::Call(c.uleb()? as u32)),
             0x1a => ops.push(Op::Drop),
@@ -446,6 +467,31 @@ fn decode_body(c: &mut Reader) -> Result<Vec<Op>, WasmError> {
             0x36 => {
                 let _align = c.uleb()?;
                 ops.push(Op::I32Store(c.uleb()? as u32));
+            }
+            0x29..=0x35 => {
+                let _align = c.uleb()?;
+                ops.push(Op::Load { op, off: c.uleb()? as u32 });
+            }
+            0x37..=0x3e => {
+                let _align = c.uleb()?;
+                ops.push(Op::Store { op, off: c.uleb()? as u32 });
+            }
+            0xfc => {
+                // Bulk-memory prefix. Only the two every compiler emits for
+                // memset/memcpy; memory.init/data.drop (8/9) stay unsupported.
+                let sub = c.uleb()?;
+                match sub {
+                    10 => {
+                        let _ = c.byte()?;
+                        let _ = c.byte()?;
+                        ops.push(Op::MemoryCopy);
+                    }
+                    11 => {
+                        let _ = c.byte()?;
+                        ops.push(Op::MemoryFill);
+                    }
+                    _ => return Err(WasmError::Unsupported("bulk-memory op")),
+                }
             }
             0x3f => {
                 let _ = c.byte()?; // mem-index 0
@@ -529,6 +575,11 @@ pub struct Instance<'m> {
     m: &'m Module,
     mem: Vec<u8>,
     globals: Vec<i64>,
+    /// Step budget per `invoke` (fuel). The default (50 million) catches an
+    /// infinite loop; a frame-driven host (sprint WP6: a windowed app's
+    /// `frame()` called from the desktop loop) sets a small budget so one
+    /// call can never hold the desktop.
+    fuel: u64,
 }
 
 impl<'m> Instance<'m> {
@@ -541,7 +592,7 @@ impl<'m> Instance<'m> {
                 mem[o..o + bytes.len()].copy_from_slice(bytes);
             }
         }
-        Instance { m, mem, globals: m.globals.clone() }
+        Instance { m, mem, globals: m.globals.clone(), fuel: 50_000_000 }
     }
 
     /// Write bytes into the linear memory (to prepare arguments).
@@ -555,6 +606,11 @@ impl<'m> Instance<'m> {
 
     pub fn mem(&self) -> &[u8] {
         &self.mem
+    }
+
+    /// Set the step budget of each `invoke` (see `fuel`).
+    pub fn set_fuel(&mut self, steps: u64) {
+        self.fuel = steps.max(1);
     }
 
     /// Call an exported function with `args`. Returns the results.
@@ -600,14 +656,15 @@ impl<'m> Instance<'m> {
         let mut frames: Vec<Frame> = Vec::new();
         frames.push(self.make_frame(code_idx, args, 0)?);
 
+        let fuel = self.fuel;
         let mut steps: u64 = 0;
         'frames: loop {
             // Work with the topmost frame.
             let fi = frames.len() - 1;
             loop {
                 steps += 1;
-                if steps > 50_000_000 {
-                    return Err(WasmError::Trap("step limit (possible infinite loop)"));
+                if steps > fuel {
+                    return Err(WasmError::Trap("step limit (fuel exhausted)"));
                 }
                 let f = &mut frames[fi];
                 let func = &self.m.funcs[f.code_idx];
@@ -736,6 +793,66 @@ impl<'m> Instance<'m> {
                             return Err(WasmError::Trap("store oob"));
                         }
                         self.mem[addr..addr + 4].copy_from_slice(&v.to_le_bytes());
+                    }
+                    Op::Load { op, off } => {
+                        let addr = stack.pop().ok_or(WasmError::Trap("stack"))? as u32 as usize;
+                        let addr = addr.checked_add(off as usize).ok_or(WasmError::Trap("load oob"))?;
+                        let n = match op { 0x29 | 0x2b => 8, 0x2a | 0x34 | 0x35 => 4, 0x2e | 0x2f | 0x32 | 0x33 => 2, _ => 1 };
+                        if addr.checked_add(n).map_or(true, |e| e > self.mem.len()) {
+                            return Err(WasmError::Trap("load oob"));
+                        }
+                        let m = &self.mem[addr..addr + n];
+                        let v: i64 = match op {
+                            0x29 | 0x2b => i64::from_le_bytes([m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7]]),
+                            0x2a => u32::from_le_bytes([m[0], m[1], m[2], m[3]]) as i64,
+                            0x2c => m[0] as i8 as i32 as i64,
+                            0x2d => m[0] as i64,
+                            0x2e => i16::from_le_bytes([m[0], m[1]]) as i32 as i64,
+                            0x2f => u16::from_le_bytes([m[0], m[1]]) as i64,
+                            0x30 => m[0] as i8 as i64,
+                            0x31 => m[0] as i64,
+                            0x32 => i16::from_le_bytes([m[0], m[1]]) as i64,
+                            0x33 => u16::from_le_bytes([m[0], m[1]]) as i64,
+                            0x34 => i32::from_le_bytes([m[0], m[1], m[2], m[3]]) as i64,
+                            _ => u32::from_le_bytes([m[0], m[1], m[2], m[3]]) as i64, // 0x35
+                        };
+                        stack.push(v);
+                    }
+                    Op::Store { op, off } => {
+                        let v = stack.pop().ok_or(WasmError::Trap("stack"))?;
+                        let addr = stack.pop().ok_or(WasmError::Trap("stack"))? as u32 as usize;
+                        let addr = addr.checked_add(off as usize).ok_or(WasmError::Trap("store oob"))?;
+                        let n = match op { 0x37 | 0x39 => 8, 0x38 | 0x3e => 4, 0x3b | 0x3d => 2, _ => 1 };
+                        if addr.checked_add(n).map_or(true, |e| e > self.mem.len()) {
+                            return Err(WasmError::Trap("store oob"));
+                        }
+                        let b = (v as u64).to_le_bytes();
+                        self.mem[addr..addr + n].copy_from_slice(&b[..n]);
+                    }
+                    Op::BrTable(ref labels, default) => {
+                        let i = stack.pop().ok_or(WasmError::Trap("stack"))? as u32 as usize;
+                        let d = labels.get(i).copied().unwrap_or(default);
+                        do_branch(f, &mut stack, d)?;
+                    }
+                    Op::MemoryFill => {
+                        let n = stack.pop().ok_or(WasmError::Trap("stack"))? as u32 as usize;
+                        let val = stack.pop().ok_or(WasmError::Trap("stack"))? as u8;
+                        let d = stack.pop().ok_or(WasmError::Trap("stack"))? as u32 as usize;
+                        if d.checked_add(n).map_or(true, |e| e > self.mem.len()) {
+                            return Err(WasmError::Trap("memory.fill oob"));
+                        }
+                        self.mem[d..d + n].fill(val);
+                    }
+                    Op::MemoryCopy => {
+                        let n = stack.pop().ok_or(WasmError::Trap("stack"))? as u32 as usize;
+                        let src = stack.pop().ok_or(WasmError::Trap("stack"))? as u32 as usize;
+                        let d = stack.pop().ok_or(WasmError::Trap("stack"))? as u32 as usize;
+                        if d.checked_add(n).map_or(true, |e| e > self.mem.len())
+                            || src.checked_add(n).map_or(true, |e| e > self.mem.len())
+                        {
+                            return Err(WasmError::Trap("memory.copy oob"));
+                        }
+                        self.mem.copy_within(src..src + n, d);
                     }
                     Op::MemorySize => stack.push((self.mem.len() / PAGE) as i64),
                     Op::MemoryGrow => {
@@ -957,6 +1074,12 @@ fn exec_num(op: u8, st: &mut Vec<i64>) -> Result<(), WasmError> {
             let a = pop!();
             st.push(a as i32 as i64); // i32.wrap_i64
         }
+        // Sign-extension ops (0xc0..=0xc4), emitted by every current compiler.
+        0xc0 => { let a = pop!(); st.push(a as i8 as i32 as i64); }
+        0xc1 => { let a = pop!(); st.push(a as i16 as i32 as i64); }
+        0xc2 => { let a = pop!(); st.push(a as i8 as i64); }
+        0xc3 => { let a = pop!(); st.push(a as i16 as i64); }
+        0xc4 => { let a = pop!(); st.push(a as i32 as i64); }
         0xac => {
             let a = i32v(pop!());
             st.push(a as i64); // i64.extend_i32_s
@@ -1045,6 +1168,39 @@ fn exec_num(op: u8, st: &mut Vec<i64>) -> Result<(), WasmError> {
             st.push(v as i64); // f32.reinterpret_i32
         }
         0xbd | 0xbf => { /* i64/f64 reinterpret: bits stay the same → no-op */ }
+        // Sprint WP6: the integer ops a Rust-compiled module still needed.
+        0x67 => { let a = pop!(); st.push((a as i32).leading_zeros() as i64); }
+        0x68 => { let a = pop!(); st.push((a as i32).trailing_zeros() as i64); }
+        0x69 => { let a = pop!(); st.push((a as i32).count_ones() as i64); }
+        0x79 => { let a = pop!(); st.push(a.leading_zeros() as i64); }
+        0x7a => { let a = pop!(); st.push(a.trailing_zeros() as i64); }
+        0x7b => { let a = pop!(); st.push(a.count_ones() as i64); }
+        0x7f => {
+            let b = pop!();
+            let a = pop!();
+            st.push(a.checked_div(b).ok_or(WasmError::Trap("i64.div_s: zero or overflow"))?);
+        }
+        0x80 => {
+            let b = pop!();
+            let a = pop!();
+            if b == 0 { return Err(WasmError::Trap("i64.div_u: zero")); }
+            st.push(((a as u64) / (b as u64)) as i64);
+        }
+        0x81 => {
+            let b = pop!();
+            let a = pop!();
+            if b == 0 { return Err(WasmError::Trap("i64.rem_s: zero")); }
+            st.push(if b == -1 { 0 } else { a % b });
+        }
+        0x82 => {
+            let b = pop!();
+            let a = pop!();
+            if b == 0 { return Err(WasmError::Trap("i64.rem_u: zero")); }
+            st.push(((a as u64) % (b as u64)) as i64);
+        }
+        0x88 => { let b = pop!(); let a = pop!(); st.push(((a as u64) >> ((b as u64) & 63)) as i64); }
+        0x89 => { let b = pop!(); let a = pop!(); st.push(a.rotate_left(((b as u64) & 63) as u32)); }
+        0x8a => { let b = pop!(); let a = pop!(); st.push(a.rotate_right(((b as u64) & 63) as u32)); }
         _ => return Err(WasmError::Unsupported("num-opcode")),
     }
     Ok(())
@@ -1122,6 +1278,61 @@ mod tests {
     }
 
     /// () -> i32 { 42 }
+    /// Sprint WP6: the opcodes Rust-compiled modules use beyond the first
+    /// rung: narrow loads/stores, i64 load, memory.fill/copy, br_table and the
+    /// sign-extension ops. One function computes a known value through all of them.
+    #[test]
+    fn wp6_opcodes_rust_modules_need() {
+        let mut w = header();
+        w.extend(section(1, vec![1, 0x60, 0, 1, 0x7f]));
+        w.extend(section(3, vec![1, 0]));
+        w.extend(section(5, vec![1, 0x00, 1]));
+        let mut ex = vec![1u8, 3];
+        ex.extend_from_slice(b"run");
+        ex.extend_from_slice(&[0x00, 0]);
+        w.extend(section(7, ex));
+        let mut b: Vec<u8> = vec![0]; // no locals
+        b.extend_from_slice(&[0x41, 0x08, 0x41, 0xc4, 0xe6, 0x88, 0x89, 0x01, 0x36, 0x02, 0x00]); // mem[8] = 0x11223344
+        b.extend_from_slice(&[0x41, 0x09, 0x2d, 0x00, 0x00]); // i32.load8_u @9 = 0x33
+        b.extend_from_slice(&[0x41, 0x10, 0x41, 0xab, 0x01, 0x41, 0x08, 0xfc, 0x0b, 0x00]); // memory.fill(16, 0xAB, 8)
+        b.extend_from_slice(&[0x41, 0x10, 0x29, 0x03, 0x00, 0x42, 0x38, 0x88, 0xa7, 0x6a]); // + (i64.load @16 >> 56) = 0xAB
+        b.extend_from_slice(&[0x41, 0x20, 0x41, 0x08, 0x41, 0x04, 0xfc, 0x0a, 0x00, 0x00]); // memory.copy(32, 8, 4)
+        b.extend_from_slice(&[0x41, 0x20, 0x2f, 0x01, 0x00, 0x6a]); // + i32.load16_u @32 = 0x3344
+        b.extend_from_slice(&[0x02, 0x40, 0x02, 0x40, 0x41, 0x00, 0x0e, 0x02, 0x00, 0x01, 0x01, 0x0b, 0x41, 0xe4, 0x00, 0x6a, 0x0b]); // br_table idx 0 -> +100
+        b.extend_from_slice(&[0x02, 0x40, 0x02, 0x40, 0x41, 0x05, 0x0e, 0x02, 0x00, 0x01, 0x01, 0x0b, 0x41, 0xe8, 0x07, 0x6a, 0x0b]); // idx 5 -> default (outer): no +1000
+        b.extend_from_slice(&[0x41, 0x80, 0x01, 0xc0, 0x6a]); // + i32.extend8_s(0x80) = -128
+        b.push(0x0b);
+        let mut code = vec![1u8];
+        code.extend(u(b.len() as u32));
+        code.extend(b);
+        w.extend(section(10, code));
+        let m = Module::parse(&w).expect("parse");
+        let mut inst = Instance::new(&m);
+        let r = inst.invoke("run", &[], &mut NoImports).expect("run");
+        assert_eq!(r, vec![0x33 + 0xab + 0x3344 + 100 - 128]);
+    }
+
+    /// Sprint WP6: the fuel bound ends a spinning module.
+    #[test]
+    fn fuel_ends_an_infinite_loop() {
+        let mut w = header();
+        w.extend(section(1, vec![1, 0x60, 0, 1, 0x7f]));
+        w.extend(section(3, vec![1, 0]));
+        let mut ex = vec![1u8, 3];
+        ex.extend_from_slice(b"run");
+        ex.extend_from_slice(&[0x00, 0]);
+        w.extend(section(7, ex));
+        let body = vec![0u8, 0x03, 0x40, 0x0c, 0x00, 0x0b, 0x41, 0x07, 0x0b];
+        let mut code = vec![1u8];
+        code.extend(u(body.len() as u32));
+        code.extend(body);
+        w.extend(section(10, code));
+        let m = Module::parse(&w).unwrap();
+        let mut inst = Instance::new(&m);
+        inst.set_fuel(5_000);
+        assert!(matches!(inst.invoke("run", &[], &mut NoImports), Err(WasmError::Trap(_))));
+    }
+
     fn mod_answer() -> Vec<u8> {
         let mut w = header();
         // type: () -> (i32)

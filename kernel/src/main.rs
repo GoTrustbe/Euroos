@@ -22,11 +22,32 @@ mod firewall;
 mod observe;
 mod vault;
 mod euroipc;
+mod bootopt;
+mod memwatch;
+mod udrv;
+mod udrv_blk;
+mod udrv_bcm5720;
+mod udrv_mr;
+mod mrblk;
+mod klock;
+mod kvfs;
+mod percpu;
+mod kwork;
+mod lockstress;
 mod acpi;
 mod acpi_power;
 mod apic;
 mod iommu;
+/// The boot frame allocator, reachable by `iommu::dma_add` for live mappings after
+/// `iommu::program` (the desktop's scanout and hot-plugged USB buffers).
+pub static mut DMA_FALLOC: Option<*mut euromm::FrameAllocator> = None;
 mod appgfx;
+mod apppolicy;
+mod llm;
+mod appstore;
+mod churn;
+mod euroapi;
+mod rdpclient;
 mod appicons;
 mod auth;
 mod euroui;
@@ -83,6 +104,8 @@ mod virtio_blk;
 mod virtio_gpu;
 mod virtio_snd;
 mod virtio_net;
+mod virtio_pci;
+mod virtio_input;
 mod vpn;
 mod agent;
 mod locale;
@@ -158,6 +181,9 @@ mod nfsmount;
 mod disktest;
 mod stresstest;
 mod scon;
+mod ltstat;
+#[cfg(feature = "heaptrace")]
+mod heaptrace;
 mod media;
 mod xhci;
 
@@ -220,7 +246,7 @@ fn build_context_menu(
     ry: usize,
     windows: &[compositor::Window],
     order: &[usize],
-    dock_targets: &[Option<usize>; 14],
+    dock_targets: &[Option<usize>; 15],
     sw: usize,
     sh: usize,
 ) {
@@ -419,6 +445,85 @@ fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
 /// must agree on it exactly: the blit that paints the pixels, and the input routing
 /// that turns a pointer position back into a window coordinate. When they disagree,
 /// every click misses by the offset — and nothing on screen shows why.
+/// Launch an installed app package (EuroApps SDK). The binary is re-hashed
+/// against the registry, the manifest's capabilities and syscall profile apply.
+/// `x11` apps run persistently in the hosted X window; `none` apps run to
+/// completion and their output is kept in `ring3::last_app_output`.
+fn launch_installed_app(ctx: &mut shell::ShellCtx, name: &str) -> (bool, String) {
+    let (bytes, hash, app) = match pkg::app_binary(ctx.fs, name) {
+        Ok(v) => v,
+        Err(e) => return (false, e),
+    };
+    let caps = pkg::app_caps(&app.caps);
+    let profile = pkg::app_profile(&app.profile);
+    let argv0 = format!("/pkg/bin/{}", app.name);
+    let mut argv: Vec<&[u8]> = alloc::vec![argv0.as_bytes()];
+    for a in app.args.split_whitespace() { argv.push(a.as_bytes()); }
+    let envp: &[&[u8]] = &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts"];
+    if app.abi == "wasm" {
+        // A WASM app: the eurowasm interpreter in the kernel, frame-driven under a
+        // fuel budget, the Euro API as its only import, its manifest capabilities.
+        // Own range, clear of the fork pids (1000+) and the system apps.
+        static WASM_PID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0x2_0000);
+        let pid = WASM_PID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if app.display == "x11" {
+            if let Some(p) = euroapi::focus() {
+                if ring3::bg_alive(p) || wasm::app_alive(p) {
+                    return (false, String::from("a hosted app is already running (close its window first)"));
+                }
+                euroapi::remove(p);
+            }
+            return match wasm::start_app(&bytes, pid, caps, ctx.fs) {
+                Ok(()) => (true, format!("{}: launched in the WASM sandbox (pid {pid}; caps '{}', fuel {} steps/frame)", app.title, app.caps, wasm::FRAME_FUEL)),
+                Err(why) => (false, format!("{}: {why}", app.title)),
+            };
+        }
+        let (out, code) = wasm::run_cli(&bytes, pid, caps, ctx.fs);
+        ring3::set_last_app_output(&out.join("\n"));
+        return (code >= 0, format!("{}: exit {code} (WASM sandbox; caps '{}')", app.title, app.caps));
+    }
+    if app.abi == "euro" {
+        // A NATIVE app: no loader, no libc, no X. It runs under Profile::Euro with
+        // exactly its manifest capabilities; its window is the EuroSurface frame.
+        if let Some(pid) = euroapi::focus() {
+            if ring3::bg_alive(pid) {
+                return (false, String::from("a native app is already running (close its window first)"));
+            }
+            euroapi::remove(pid);
+        }
+        static EURO_PID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0x1_0000);
+        let pid = EURO_PID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        return match ring3::spawn_euro_app(ctx.mem, &bytes, pid, &argv, 16, caps | ring3::CAP_PROC_INFO, eurosandbox::Profile::Euro) {
+            Some(t) => (true, format!("{}: launched natively (pid {pid}, task {t}; caps '{}', profile euro; no Linux library)", app.title, app.caps)),
+            None => (false, format!("{}: launch failed (memory)", app.title)),
+        };
+    }
+    ring3::NEXT_SPAWN_PROFILE.store(profile.as_u8(), core::sync::atomic::Ordering::Relaxed);
+    ring3::app_trust_hash(Some(hash));
+    // A per-app policy from the outside, if the owner installed one (or learning is armed).
+    if let Some(p) = apppolicy::activate(ctx.fs, &format!("/pkg/bin/{}", app.name)) {
+        let _ = p;
+    }
+    let r = if app.display == "x11" {
+        if ring3::persistent_running() {
+            ring3::app_trust_hash(None);
+            ring3::NEXT_SPAWN_PROFILE.store(0, core::sync::atomic::Ordering::Relaxed);
+            return (false, String::from("a hosted app is already running (close its window first)"));
+        }
+        xserver::set_windowed(true);
+        match ring3::spawn_glibc_persistent(ctx.mem, &bytes, ring3::ldlinux_bytes(), &argv, envp, caps) {
+            Some(t) => (true, format!("{}: launched in a window (task {t}; caps '{}', profile {})", app.title, app.caps, app.profile)),
+            None => { xserver::set_windowed(false); (false, format!("{}: launch failed (memory)", app.title)) }
+        }
+    } else {
+        let (output, exit) = ring3::run_glibc(ctx.mem, &bytes, ring3::ldlinux_bytes(), &argv, envp, caps);
+        ring3::set_last_app_output(&output);
+        (exit != u64::MAX, format!("{}: exit {} (caps '{}', profile {})", app.title, exit as i64, app.caps, app.profile))
+    };
+    ring3::app_trust_hash(None);
+    r
+}
+
 pub fn screen_place(sw: usize, sh: usize) -> Option<(usize, usize, usize)> {
     let fbi = FB_INFO.get()?;
     if sw == 0 || sh == 0 {
@@ -536,7 +641,30 @@ pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
 #[entry]
 fn main() -> Status {
     // ── First of all: our own heap + serial (work even after ExitBootServices). ──
-    allocator::init();
+    // The heap is a UEFI-allocated region sized from installed RAM (a quarter,
+    // 64 MiB to 512 MiB), below 4 GiB so it is inside the identity map, and of
+    // type LoaderData so the frame allocator never hands it out. Halve on
+    // failure; fall back to the small static heap only if nothing fits.
+    {
+        let total: u64 = boot::memory_map(MemoryType::LOADER_DATA)
+            .map(|m| m.entries().filter(|d| d.ty == MemoryType::CONVENTIONAL).map(|d| d.page_count * 4096).sum())
+            .unwrap_or(0);
+        let mut size = allocator::wanted_size(total);
+        let mut done = false;
+        while size >= 64 * 1024 * 1024 {
+            match boot::allocate_pages(boot::AllocateType::MaxAddress(0xFFFF_FFFF), MemoryType::LOADER_DATA, size / 4096) {
+                Ok(p) => {
+                    allocator::init_at(p.as_ptr(), size);
+                    done = true;
+                    break;
+                }
+                Err(_) => size /= 2,
+            }
+        }
+        if !done {
+            allocator::init();
+        }
+    }
     serial::init();
     serial_println!("\n[euro] EuroKernel bring-up — heap ({} MiB) + COM1 active", allocator::size() / (1024 * 1024));
     // Symbolization anchor at BOOT (not only on panic): a hung boot leaves no
@@ -587,6 +715,8 @@ fn main() -> Status {
     // via UEFI — ONLY POSSIBLE NOW, before ExitBootServices. This lets the installer
     // later write a bootable copy to a target disk (no embed, the real current bytes).
     instexec::capture_media();
+    // Boot options (\EFI\BOOT\euroos-boot.conf): read while the ESP is reachable.
+    bootopt::capture();
 
     // ── THE JUMP: leave UEFI Boot Services. After this no more UEFI services. ──
     serial_println!("[euro] ExitBootServices...");
@@ -725,7 +855,7 @@ fn main() -> Status {
     }
 
     // virtio-blk: initialize the real disk (PIO/DMA works on our identity map).
-    virtio_blk::init(&mut allocator);
+    iommu::dma_scope(&mut allocator, "virtio-blk", |f| virtio_blk::init(f));
     // EuroPack: register files served straight from a pack disk (no RAM copy) —
     // how binaries too large to embed (chrome) reach the glibc loader.
     ring3::europack_scan();
@@ -738,7 +868,7 @@ fn main() -> Status {
 
     // NVMe (B2): detect + initialize an NVMe controller (admin/I/O queues,
     // identify), do a read/write self-test + SMART readout. No-op without NVMe.
-    if nvme::init(&mut allocator) {
+    if iommu::dma_scope(&mut allocator, "nvme", |f| nvme::init(f)) {
         nvme::self_test();
     }
 
@@ -746,7 +876,7 @@ fn main() -> Status {
     // controller (q35's built-in ICH9 carries the boot medium; the metal
     // matrix attaches scratch disks). Read-only self-test on partitioned
     // disks, full write/read/verify on blank ones. No-op without AHCI.
-    if ahci::init(&mut allocator) > 0 {
+    if iommu::dma_scope(&mut allocator, "ahci", |f| ahci::init(f)) > 0 {
         ahci::self_test();
     }
 
@@ -773,9 +903,11 @@ fn main() -> Status {
         extmount::selftest();
         false
     } else if instexec::media_available() && virtio_blk::present() {
-        if instexec::disk_is_blank(0) {
+        if instexec::disk_is_blank(0) && cfg!(feature = "selftest") {
             // Fresh target disk → install a bootable, provisioned EuroOS (slot A).
-            instexec::install_to_disk(0, &instexec::default_config())
+            // Self-test builds only: a release medium never writes a disk on its
+            // own; the guided installer (wizard) is the only install path there.
+            instexec::install_to_disk(0, &instexec::default_config(), &|_| {})
         } else if gpt::find_eurofs_partition().is_some() && cfg!(feature = "selftest") {
             // Our own installed disk → demonstrate the A/B SELF-UPDATE: stage slot B
             // + flip slot_config. After a standalone reboot the loader picks slot B.
@@ -809,8 +941,9 @@ fn main() -> Status {
                 }
                 rootblk::RootBlk::disk(start, blocks)
             }
-            None if instexec::disk_is_blank(0) => {
-                // Blank disk → lay down our GPT + EuroFS root.
+            None if instexec::disk_is_blank(0) && cfg!(feature = "selftest") => {
+                // Blank disk → lay down our GPT + EuroFS root (self-test builds; a
+                // release medium leaves a blank disk alone until the wizard installs).
                 let (start, blocks) = gpt::install(total);
                 rootblk::RootBlk::disk(start, blocks)
             }
@@ -818,7 +951,7 @@ fn main() -> Status {
                 // Disk 0 carries a NON-EuroFS filesystem (exFAT/FAT/ext/NTFS/…).
                 // Never format/clobber it as our root — boot a RAM root instead;
                 // the disk stays intact and can be mounted (mount vblkN /mnt).
-                serial_println!("[euro] disk 0 is not EuroFS and not blank — booting a RAM root; the disk is left intact + mountable");
+                serial_println!("[euro] disk 0 is not an EuroOS installation — booting a RAM root (live); the disk is left intact (blank: install it via the wizard; foreign FS: mountable)");
                 rootblk::RootBlk::ram(2048)
             }
         }
@@ -833,8 +966,8 @@ fn main() -> Status {
                 nvme_root = true;
                 rootblk::RootBlk::nvme(start, blocks)
             }
-            None if instexec::media_available() && instexec::nvme_is_blank() => {
-                if instexec::install_to_nvme(&instexec::default_config()) {
+            None if instexec::media_available() && instexec::nvme_is_blank() && cfg!(feature = "selftest") => {
+                if instexec::install_to_nvme(&instexec::default_config(), &|_| {}) {
                     match instexec::nvme_eurofs_partition() {
                         Some((start, blocks)) => {
                             serial_println!("[euro] live root = the freshly-installed EuroFS on NVMe");
@@ -865,9 +998,9 @@ fn main() -> Status {
                 break;
             }
         }
-        if chosen.is_none() && instexec::media_available() {
+        if chosen.is_none() && instexec::media_available() && cfg!(feature = "selftest") {
             for idx in 0..ahci::disk_count() {
-                if instexec::ahci_is_blank(idx) && instexec::install_to_ahci(idx, &instexec::default_config()) {
+                if instexec::ahci_is_blank(idx) && instexec::install_to_ahci(idx, &instexec::default_config(), &|_| {}) {
                     if let Some((start, blocks)) = instexec::ahci_eurofs_partition(idx) {
                         serial_println!("[euro] live root = the freshly-installed EuroFS on AHCI disk {idx}");
                         chosen = Some(rootblk::RootBlk::ahci(idx, start, blocks));
@@ -1172,7 +1305,7 @@ fn main() -> Status {
         }
         let t2 = hpet::ns();
         kinfo!(
-            "[hpet] HPET @ {} MHz active — 1M spin iterations = {} us (high-resolution HAL time source)",
+            "[hpet] HPET active @ {} MHz — 1M spin iterations = {} us (high-resolution HAL time source)",
             hpet::freq_hz() / 1_000_000,
             (t2 - t1) / 1000
         );
@@ -1186,6 +1319,17 @@ fn main() -> Status {
     // Mini-EuroUpdate: an installed (disk) system that boots with a NEWER kernel
     // automatically gets its /bin synced with the bundled binaries — otherwise
     // the new Ed25519 signature would reject the old binary on disk.
+    // EuroID: an installed root carries /etc/euroid/users.db; that store (not the
+    // demo accounts) is the identity of this system from here on.
+    euroid::init_from_disk(&mut fs);
+    // The keyboard layout chosen at install time (/etc/keymap) applies from the
+    // lockscreen on; a medium without the file keeps the US default.
+    if let Ok(k) = fs.read_file("/etc/keymap") {
+        let tag = String::from(String::from_utf8_lossy(&k).trim());
+        if ps2::set_layout_tag(&tag) {
+            serial_println!("[ps2] keyboard layout from /etc/keymap: {tag}");
+        }
+    }
     if on_disk && sync_system_files(&mut fs) {
         serial_println!("[update] /bin synced with kernel build {:016x}", system_digest());
     }
@@ -1314,7 +1458,7 @@ fn main() -> Status {
     use euronet::udp::UdpDatagram;
     let ipfmt = |ip: Ipv4Addr| format!("{}.{}.{}.{}", ip.0[0], ip.0[1], ip.0[2], ip.0[3]);
     let mut net_lines: Vec<String> = Vec::new();
-    if nic::init(&mut allocator) {
+    if iommu::dma_scope(&mut allocator, "nic", |f| nic::init(f)) {
         let my_mac = MacAddr(nic::mac().unwrap_or([0; 6]));
         let gw_ip = Ipv4Addr::new(10, 0, 2, 2);
         net_lines.push(format!(
@@ -1578,9 +1722,21 @@ fn main() -> Status {
         });
         // G3: poll/select multiplexing — prove the readiness logic on the NIC.
         net::poll_selftest();
+        // BUG-019/026: inbound without waiting, bounded connect ([net-async]).
+        if cfg!(feature = "selftest") {
+            net::async_selftest();
+        }
+    } else if bootopt::net_user_driver() && udrv::device_present() {
+        // net.driver=user: the e1000 belongs to the userspace driver, which can
+        // only run once the scheduler does. The network part of the boot (and
+        // the programs that need it) runs after udrv::boot instead: [net-late].
+        net_lines.push("NIC: e1000 left to the userspace driver e1000d (net.driver=user); network bring-up and the network tests run after the scheduler starts ([udrv-*], [net-late])".into());
     } else {
         net_lines.push("virtio-net NIC not found".into());
     }
+    // The network comes up after the scheduler (userspace NIC driver): the
+    // pre-scheduler network tests move behind udrv::boot.
+    let net_late = nic::kind() == "none" && bootopt::net_user_driver() && udrv::device_present();
     for l in &net_lines {
         serial_println!("[net] {l}");
     }
@@ -1589,7 +1745,7 @@ fn main() -> Status {
     // their OWN host — a downloaded OS must never probe the user's machine on
     // port 445/2049 uninvited (it also crashed the public boot when a host
     // answered 445 with a short response the parser did not expect).
-    if cfg!(feature = "selftest") {
+    if cfg!(feature = "selftest") && !net_late {
         smbfs::selftest();
         nfsmount::selftest();
     }
@@ -1750,6 +1906,11 @@ fn main() -> Status {
     ];
     let mut demo_out: Vec<(String, String)> = Vec::new();
     for (path, note) in boot_script {
+        // The network programs need the network; with the userspace NIC driver
+        // that exists only after the scheduler, so they run in [net-late].
+        if net_late && NET_LATE_PROGRAMS.iter().any(|(p, _)| *p == path) {
+            continue;
+        }
         let bytes = fs.read_file(path).unwrap_or_default();
         // Verify-before-execute: reject if the Ed25519 signature does not match.
         if !ring3::verify_program(path, &bytes) {
@@ -1766,7 +1927,7 @@ fn main() -> Status {
     // Demonstrate the EuroShell built-in commands (pure function shell::exec) —
     // serial-visible proof that the shell gives live system info from RTC/memory/
     // /etc, not from hard-coded text.
-    {
+    if !net_late {
         let mut sctx = shell::ShellCtx { fs: &mut fs, mem: &mut allocator };
         // Show the NATIVE EuroOS character: identity + capability security +
         // its own service supervisor (not the Linux compat layer).
@@ -2018,6 +2179,9 @@ fn main() -> Status {
     // block against the signed root; a tampered backing block fails the read).
     verity::wire_selftest();
     interrupts::init_timer(100);
+    // J1: install the EuroLock hooks (IRQSAVE, per-context lock-order tracking)
+    // now that the Local APIC answers, before the APs start taking locks.
+    klock::init();
     // G1: give each application processor a GUARDED kernel stack from the pool (an
     // AP-stack overflow then faults on an unmapped guard page instead of silently
     // overwriting the neighbour AP stack). Before smp::init(), with the main allocator.
@@ -2039,12 +2203,18 @@ fn main() -> Status {
     // I1: xHCI USB stack — real USB-HID input (keyboard/mouse) on modern
     // machines without PS/2. Enumerates every root-port device and polls the
     // interrupt-IN endpoint; the reports flow into the same input paths as PS/2.
-    if xhci::init(&mut allocator) {
+    if iommu::dma_scope(&mut allocator, "xhci", |f| xhci::init(f)) {
         serial_println!("[euro] xHCI USB initialized — {} HID device(s) live", xhci::hid_count());
+    }
+    // virtio-input (virtio 1.x): the virtio-tablet absolute pointer and the
+    // virtio-keyboard of Kyvernon VMM / QEMU, polled like the USB HID devices.
+    let vin = iommu::dma_scope(&mut allocator, "virtio-input", |f| virtio_input::init(f));
+    if vin > 0 {
+        serial_println!("[euro] virtio-input initialized — {vin} device(s)");
     }
     // I2: Intel HD-Audio — codec enumeration + stream DMA that plays a (euroaudio-mixed)
     // tone. Proves the mixer→hardware chain (LPIB running = DMA playing).
-    if hda::init(&mut allocator) {
+    if iommu::dma_scope(&mut allocator, "hda", |f| hda::init(f)) {
         serial_println!("[euro] HD-Audio initialized — stream playing (LPIB={})", hda::stream_pos());
         // The self-test tone loops in the ring until something overwrites it: a
         // desktop that hums for ten minutes (run 70's WAV). Silence it now; the
@@ -2053,17 +2223,77 @@ fn main() -> Status {
             hda::pcm_zero(0, bytes);
         }
     }
+    // GitHub #11, second step: every DMA driver has initialised, so confine each
+    // one to its own buffers and switch the VT-d units to EuroOS's translation.
+    unsafe { DMA_FALLOC = Some(&mut allocator as *mut _) };
+    let confined = iommu::program(&mut allocator);
+    if confined > 0 {
+        // Proof, not a claim: a deliberate DMA into a frame that belongs to no
+        // device must be refused by the hardware and show up as a fault record,
+        // while the driver's own reads keep working.
+        if nvme::present() {
+            match allocator.allocate() {
+                Ok(scratch) => {
+                    unsafe { core::ptr::write_bytes(scratch as *mut u8, 0xA5, 4096) };
+                    let completed = nvme::dma_probe(scratch);
+                    let changed = unsafe { core::slice::from_raw_parts(scratch as *const u8, 512) }.iter().any(|&b| b != 0xA5);
+                    let faults = iommu::poll_faults();
+                    let mut sector = [0u8; 512];
+                    let own = nvme::read_sectors(0, &mut sector);
+                    let ok = !changed && faults >= 1 && own;
+                    serial_println!(
+                        "[iommu-dma] foreign DMA (NVMe read into unmapped frame {scratch:#x}): completed={completed:?} memory-changed={changed} fault-records={faults} · NVMe's own read still works={own} → {}",
+                        if ok { "OK (device DMA confined by VT-d second-level translation; GitHub #11) ✓" } else { "FAILED" }
+                    );
+                    let _ = allocator.free(scratch);
+                }
+                Err(_) => serial_println!("[iommu-dma] no scratch frame — probe skipped"),
+            }
+        } else {
+            serial_println!("[iommu-dma] translation on, but no NVMe controller to run the foreign-DMA probe against (attach -device nvme)");
+        }
+    }
     x86_64::instructions::interrupts::enable();
     // M2-1: NVMe MSI-X delivery proof — must run with interrupts ON (the boot
     // self-test above ran before this point, so its completions were unseen).
     nvme::msix_proof();
+    // Userspace drivers (net.driver=user): e1000d needs the scheduler, interrupts
+    // and the IOMMU domains, all of which exist from here on.
+    udrv::boot(&mut allocator);
+    // The network part of the boot that could not run before the scheduler
+    // (userspace NIC driver): the same probes and programs, now over e1000d.
+    if net_late {
+        demo_out.extend(net_late_suite(&mut allocator, &mut fs));
+    }
+    udrv_bcm5720::boot(&mut allocator);
+    // Userspace MegaRAID (MFI gen2): megaraidd is the only MegaRAID driver; the
+    // root disk stays on the in-kernel drivers.
+    udrv_mr::boot(&mut allocator);
     // M3-3: a CDC-ECM USB NIC only exists after xHCI enumeration (above) — if
     // no NIC bound during the main net bring-up, adopt it and bring it up now.
     net::late_bring_up();
+    // Inbound TCP (SYN queue, httpd, accept queues) in its own kernel task, so a
+    // long synchronous shell command no longer holds it ([net-worker]).
+    if net::get().is_some() && net::worker_start().is_some() && cfg!(feature = "selftest") {
+        net::worker_selftest();
+    }
     // M4-3 live wiring: a USB DAC also only exists after xHCI enumeration —
     // route the euroaudio mixer's output to it (no-op without one).
     audio::usb_wire_selftest();
     serial_println!("[euro] APIC timer 100 Hz + interrupts ON -> preemptive multitasking (incl. ring 3)");
+    // J1 fine-grained locking: the checker itself, then real kernel work on the
+    // APs (per-CPU queues + work stealing).
+    klock::selftest();
+    kwork::selftest();
+    // `lockbench` image: run the multi-core lock benchmark and power off.
+    #[cfg(feature = "lockbench")]
+    {
+        lockstress::selftest(3, 400);
+        lockstress::bench(3, 700);
+        klock::report("final", 24);
+        serial_println!("[lk-bench] powering off");
+        power::shutdown();
+    }
     // Chromium foundation: run REAL dynamically-linked GLIBC binaries via the
     // genuine ld-linux-x86-64.so.2 — NOW that the scheduler is up, each runs as a
     // scheduled process, so single-threaded AND multi-threaded (pthreads) work.
@@ -2299,6 +2529,76 @@ fn main() -> Status {
         let (obk, ebk) = ring3::run_glibc(&mut allocator, ring3::gbrk_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gbrk"], &[b"PATH=/bin"], caps);
         serial_println!("[glibc] gbrk (zeroed break growth): exit={ebk} (want 163)");
         for l in obk.lines() { serial_println!("[glibc]   {l}"); }
+
+        // gsandbox (WP1): a process keeps its full syscall set until it asks for
+        // less; after seccomp strict mode its first open() must END the process
+        // (SIGKILL, status 137) and never return into the program.
+        let (osb1, esb1) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsandbox (full profile): exit={esb1} (want 161)");
+        for l in osb1.lines() { serial_println!("[glibc]   {l}"); }
+        let kills_before = ring3::PROFILE_KILLS.load(core::sync::atomic::Ordering::Relaxed);
+        let (osb2, esb2) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox", b"strict"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsandbox strict (seccomp strict mode): exit={esb2} (want 137)");
+        for l in osb2.lines() { serial_println!("[glibc]   {l}"); }
+        let sbx_ok = esb1 == 161
+            && esb2 == 137
+            && osb2.contains("write still allowed")
+            && !osb2.contains("NOT enforced")
+            && ring3::PROFILE_KILLS.load(core::sync::atomic::Ordering::Relaxed) == kills_before + 1;
+        serial_println!(
+            "[sbx] syscall profiles: full-profile-runs={} · strict-mode-write-allowed={} · strict-mode-open-kills-process={} (exit {esb2}) · never-returned-into-program={} → {}",
+            esb1 == 161, osb2.contains("write still allowed"), esb2 == 137, !osb2.contains("NOT enforced"),
+            if sbx_ok { "OK (kernel-enforced per-process syscall policy, Linux seccomp strict semantics) ✓" } else if esb1 == u64::MAX { "skipped (glibc self-tests off in this boot)" } else { "FAILED" }
+        );
+
+        // N3.2 syscall fuzzer: 20000 random syscalls with random arguments at the
+        // Linux-ABI layer; the kernel must answer every one and keep running.
+        let (ofz, efz) = ring3::run_glibc(&mut allocator, ring3::gfuzz_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gfuzz", b"20000"], &[b"PATH=/bin"], caps_net);
+        serial_println!("[glibc] gfuzz (syscall fuzzer): exit={efz} (want 171)");
+        for l in ofz.lines() { serial_println!("[glibc]   {l}"); }
+        let fuzz_ok = efz == 171 && ofz.contains("kernel still answering");
+        serial_println!(
+            "[fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived={fuzz_ok} (exit {efz}) → {}",
+            if fuzz_ok { "OK (no panic, no ring-0 fault, every answer an errno or a result) ✓" } else if efz == u64::MAX { "skipped" } else { "FAILED" }
+        );
+
+        // WP1 second half: cBPF seccomp filters, resource limits, ASLR, renderer scope.
+        let (osf, esf) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox", b"filter"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsandbox filter (cBPF seccomp): exit={esf} (want 159)");
+        for l in osf.lines() { serial_println!("[glibc]   {l}"); }
+        let (orl, erl) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox", b"rlimit"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsandbox rlimit (RLIMIT_NOFILE): exit={erl} (want 165)");
+        for l in orl.lines() { serial_println!("[glibc]   {l}"); }
+        let (oa1, ea1) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox", b"aslr"], &[b"PATH=/bin"], caps);
+        let (oa2, ea2) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox", b"aslr"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsandbox aslr x2: exit={ea1}/{ea2} (want 167)");
+        for l in oa1.lines().chain(oa2.lines()) { serial_println!("[glibc]   {l}"); }
+        let addrs = |o: &str| -> [u64; 3] {
+            let mut out = [0u64; 3];
+            if let Some(l) = o.lines().find(|l| l.starts_with("GSBX-ASLR")) {
+                for (i, key) in ["stack=", "heap=", "mmap="].iter().enumerate() {
+                    if let Some(p) = l.find(key) {
+                        let v = &l[p + key.len()..];
+                        let hex = v.trim_start_matches("0x");
+                        let end = hex.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(hex.len());
+                        out[i] = u64::from_str_radix(&hex[..end], 16).unwrap_or(0);
+                    }
+                }
+            }
+            out
+        };
+        let (p1, p2) = (addrs(&oa1), addrs(&oa2));
+        let differing = (0..3).filter(|&i| p1[i] != 0 && p2[i] != 0 && p1[i] != p2[i]).count();
+        let (osr, esr) = ring3::run_glibc(&mut allocator, ring3::gsandbox_bytes(), ring3::ldlinux_bytes(), &[b"/bin/gsandbox", b"--type=renderer"], &[b"PATH=/bin"], caps);
+        serial_println!("[glibc] gsandbox renderer scope (path scope + uid drop): exit={esr} (want 169)");
+        for l in osr.lines() { serial_println!("[glibc]   {l}"); }
+        let sbx2_ok = esf == 159 && osf.contains("getpid -> EPERM") && !osf.contains("NOT enforced")
+            && erl == 165 && ea1 == 167 && ea2 == 167 && differing >= 2 && esr == 169;
+        serial_println!(
+            "[sbx2] cBPF-filter(getpid-EPERM + socket-kills)={} · rlimits(NOFILE=8 -> EMFILE, hard-limit-raise-EPERM)={} · ASLR(stack/heap/mmap differ across runs: {differing}/3)={} · renderer-scope(/etc ok, /home EACCES, uid drop to 65534, no raise)={} → {}",
+            esf == 159 && osf.contains("getpid -> EPERM"), erl == 165, differing >= 2, esr == 169,
+            if sbx2_ok { "OK (seccomp filters, resource limits, address randomisation, renderer file scope) ✓" } else if esf == u64::MAX { "skipped (glibc self-tests off in this boot)" } else { "FAILED" }
+        );
         ring3::GLIBC_DEADLINE_TICKS.store(prev_deadline, core::sync::atomic::Ordering::Relaxed);
 
         // LEAN chrome-headless-shell run: skip the GUI/demo glibc tests (X11/gsparse/
@@ -3057,8 +3357,14 @@ fn main() -> Status {
 
         // Linux-compatibility scorecard: tally the glibc suite against expected exits.
         if !chrome_run {
-        let results: [(&str, u64, u64); 31] = [
+        let results: [(&str, u64, u64); 37] = [
             ("gpoll(poll timeout)", epo, 143),
+            ("gsandbox(full profile)", esb1, 161),
+            ("gsandbox(seccomp strict kills)", esb2, 137),
+            ("gsandbox(cBPF filter)", esf, 159),
+            ("gsandbox(rlimits)", erl, 165),
+            ("gsandbox(aslr)", if ea1 == 167 && ea2 == 167 && differing >= 2 { 167 } else { 0 }, 167),
+            ("gsandbox(renderer scope)", esr, 169),
             ("gcond(condvar broadcast)", eco, 157),
             ("gbrk(zeroed break growth)", ebk, 163),
             ("gscm(SCM_RIGHTS fd passing)", esc, 151),
@@ -3150,8 +3456,13 @@ fn main() -> Status {
             const FONTS_CONF: &[u8] = b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>Sans</family><prefer><family>DejaVu Sans</family></prefer></alias>\n</fontconfig>\n";
             ring3::register_file("/etc/fonts/fonts.conf", FONTS_CONF.to_vec());
             xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
+            // Demand paging on: glibc reserves a 64 MiB (first try 128 MiB) heap for
+            // a thread's malloc arena; a real allocation of that size overflows the
+            // identity arena's mmap window (ENOMEM -> NULL -> the 0x18 write).
+            let prev_demand = ring3::DEMAND_ENABLED.swap(true, core::sync::atomic::Ordering::Relaxed);
             let (opo, epo) = ring3::run_glibc(&mut allocator, ring3::gpango_bytes(), ring3::ldlinux_bytes(), &[b"gpango"], &[b"DISPLAY=:0", b"PATH=/bin", b"FONTCONFIG_PATH=/etc/fonts"], caps_net);
             xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
+            ring3::DEMAND_ENABLED.store(prev_demand, core::sync::atomic::Ordering::Relaxed);
             serial_println!("[glibc] gpango (Pango+HarfBuzz layout): exit={epo}");
             for l in opo.lines() { serial_println!("[glibc]   {l}"); }
         }
@@ -3261,12 +3572,28 @@ fn main() -> Status {
 
     // G2: build the VFS — the root + (if present) the second disk on /mnt — so that
     // the shell transparently serves `/mnt/...` on disk 1 (longest-prefix routing).
-    let mut vfs = eurofs::Vfs::new(alloc::boxed::Box::new(fs));
+    // J1: the root VFS is a SharedVfs: mount table behind a reader-writer lock,
+    // one lock per mounted filesystem, and a handle other cores can use.
+    let mut vfs: kvfs::KernelVfs = eurofs::SharedVfs::new(alloc::boxed::Box::new(fs));
+    kvfs::publish(&vfs);
 
     // G4: mount the **EuroVar** partition on /var (writable data, separate from the
     // — future read-only — system slot). Proves the multi-partition A/B GPT layout:
     // /var lives on disk 0 next to slot A, with absolute-sector-correct block cache.
     if virtio_blk::present() {
+        // Sprint N2 (J3 on the demand pool): the EuroSwap partition backs the
+        // anonymous pages of Linux-ABI processes once the demand pool is dry.
+        if let Some((sfirst, sblocks)) = gpt::find_partition_by_name("EuroSwap") {
+            let mut reserve = Vec::new();
+            for _ in 0..32 {
+                if let Ok(f) = allocator.allocate() { reserve.push(f); }
+            }
+            let slots = sblocks as usize; // the lookup reports 4 KiB blocks: one slot each
+            swapmgr::init(sfirst, slots, reserve);
+            serial_println!("[j3] swap: EuroSwap partition @ LBA {sfirst}: {} MiB = {slots} slots (+32 reserve frames)", slots * 4 / 1024);
+        } else {
+            serial_println!("[j3] swap: no EuroSwap partition on this disk (layout before 2026-10-07): swap stays off");
+        }
         if let Some((vfirst, vblocks)) = gpt::find_partition_by_name("EuroVar") {
             let vdev = rootblk::RootBlk::disk_on(0, vfirst, vblocks);
             let var_fs = match EuroFs::mount(vdev.clone(), rtc::epoch()) {
@@ -3286,6 +3613,41 @@ fn main() -> Status {
                 Ok(d) => serial_println!("[g4] VFS routes /var → {} bytes on the EuroVar partition ✓", d.len()),
                 Err(_) => serial_println!("[g4] /var routing FAILED"),
             }
+        }
+        // [j3-demand]: a glibc process allocates MORE than the demand pool holds
+        // and verifies its pattern twice. With swap the kernel pages its oldest
+        // pages out to EuroSwap and back on access; without swap it would die at
+        // the first page past the pool.
+        #[cfg(feature = "selftest")]
+        if swapmgr::active() {
+            // A 16 MiB pool for this one process; it asks for 16 + 48 MiB.
+            let pool_mib = 16usize;
+            ring3::DEMAND_POOL_CAP_FRAMES.store(pool_mib * 256, core::sync::atomic::Ordering::Relaxed);
+            let (_, cap_pages) = swapmgr::usage();
+            let over = 48usize.min(cap_pages * 4 / 1024 / 2).max(8);
+            let want = pool_mib + over;
+            let free_mib = pool_mib;
+            let arg = alloc::format!("{want}");
+            let (ins0, outs0) = swapmgr::stats();
+            // Demand paging is opt-in per run (the Chromium path); the swap works on
+            // the demand pool, so this run opts in.
+            let prev_demand = ring3::DEMAND_ENABLED.swap(true, core::sync::atomic::Ordering::Relaxed);
+            let (o, e) = ring3::run_glibc(&mut allocator, ring3::gswap_bytes(), ring3::ldlinux_bytes(),
+                &[b"/bin/gswap", arg.as_bytes()], &[b"PATH=/bin"], ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO);
+            ring3::DEMAND_ENABLED.store(prev_demand, core::sync::atomic::Ordering::Relaxed);
+            ring3::DEMAND_POOL_CAP_FRAMES.store(0, core::sync::atomic::Ordering::Relaxed);
+            let (ins, outs) = swapmgr::stats();
+            for l in o.lines() { serial_println!("[j3-demand]   {l}"); }
+            // gswap exits 0 only after both verification passes (3 on a mismatch); the
+            // console capture of a slow, swapping run can drop lines, so exit is the proof.
+            let ok = e == 0 && outs > outs0 && ins > ins0;
+            serial_println!(
+                "[j3-demand] transparent swap on the demand pool: process asked {want} MiB against a {pool_mib} MiB pool · pages-swapped-OUT={} · pages-swapped-IN={} · exit={e} · pattern-verified-twice={} → {}",
+                outs - outs0, ins - ins0, o.contains("verified twice"),
+                if ok { "OK ✓ (anonymous memory beyond the pool lives on EuroSwap and comes back intact)" } else { "FAILED" }
+            );
+        } else {
+            serial_println!("[j3-demand] no swap partition on this boot: skipped");
         }
     }
 
@@ -3345,11 +3707,22 @@ fn main() -> Status {
             Err(_) => serial_println!("[g2] /nvme routing FAILED"),
         }
     }
+    // The first storage driver out of the kernel (storage.nvme=user): nvmed in
+    // ring 3 serves the NVMe disk as a DATA mount at /data (never the root).
+    udrv_blk::boot(&mut allocator, &mut vfs);
+    // Every userspace driver that wanted an interrupt has its vector now.
+    if cfg!(feature = "selftest") {
+        udrv::selftest_vectors();
+    }
 
     // ── Phase 2B: SOVEREIGN SECURITY BACKBONE (L1 + L2 + P3) ──
     // L1 (EuroFS immutability) + L2 (CAP_IMMUTABLE_ADMIN gate) + P3 (append-only
     // audit log): tamper-proof system files + an irreversible audit trail.
     {
+        // J1: multi-core lock stress with the root VFS mounted (fs/ipc/unix on
+        // every core at once, repeated rounds).
+        #[cfg(feature = "selftest")]
+        lockstress::selftest(3, 300);
         let boot_caps = ring3::CAP_IMMUTABLE_ADMIN | ring3::CAP_FILE;
         immutable::selftest(&mut vfs);
         let protected = immutable::protect_system_files(&mut vfs, boot_caps);
@@ -3520,7 +3893,10 @@ fn main() -> Status {
     // 3E-1 wiring: the FDE unseal-at-boot cycle — enrol (seal + persist), then
     // re-read the sealed blob and unseal it via the TPM (PCR16) as a normal boot
     // would, auto-recovering the disk key on an untampered system.
-    instexec::fde_unseal_selftest(&mut vfs);
+    if !rootblk::booted_from_disk() {
+        // Writes /etc/fde/root.seal on the live root: never on an installed system.
+        instexec::fde_unseal_selftest(&mut vfs);
+    }
 
     // Z: EuroHealth — SMART (if NVMe) + FS scrub + memory → health score.
     {
@@ -3628,6 +4004,22 @@ fn main() -> Status {
     // 3E-6: the package-manager EXECUTOR — signed index → resolver → verify →
     // content-addressed store → /bin link; tamper/forgery refused; remove+GC.
     pkg::exec_selftest(rtc::epoch());
+    // EuroApps SDK: a third-party package under its own key, end to end.
+    pkg::app_selftest(&mut allocator, &mut vfs);
+    pkg::euroapp_selftest(&mut allocator, &mut vfs);
+    pkg::euroapp_wasm_selftest(&mut vfs);
+    wasm::fscope_selftest(&mut vfs);
+    pkg::eurofuzz_selftest(&mut allocator, &mut vfs);
+    appstore::selftest(&mut vfs);
+    // Churn: short, sharp lifecycle stress that must leave every counter where it started.
+    churn::proc_churn(&mut allocator);
+    churn::thread_churn(&mut allocator);
+    churn::fork_churn(&mut allocator);
+    churn::fs_churn(&mut vfs);
+    churn::net_churn();
+    churn::surface_churn();
+    churn::pkg_churn(&mut vfs);
+    churn::io_storm(&mut vfs);
 
     // 3E-5: GDB Remote Serial Protocol stub over COM2 — prove the wire protocol
     // against live kernel register/memory state (a real gdb attaches via COM2→tcp).
@@ -3850,10 +4242,16 @@ fn main() -> Status {
     // AF / Zero-Trust P2.3: behavior detection on the agent audit stream — anomalous
     // behavior (probing, drift, rate spikes) is made visible deterministically.
     agent::anomaly_selftest();
+    agent::learn_selftest(&mut vfs);
+    apppolicy::selftest(&mut allocator, &mut vfs);
+    llm::selftest(&mut allocator);
 
     // Sprint AE-e2e: EuroID storage (users + Argon2id hashes + state) persistent
     // on EuroFS — survives a restart instead of being rebuilt every boot.
-    euroid::persist_selftest(&mut vfs);
+    if !euroid::store_from_disk() {
+        // Writes /etc/euroid/users.db on the live root: never over an installed store.
+        euroid::persist_selftest(&mut vfs);
+    }
     // 3E-3/3E-9: session lifecycle (owned homes, uid-context) + per-user disk
     // quota — both on the LIVE root FS.
     session::selftest(&mut vfs);
@@ -3865,15 +4263,26 @@ fn main() -> Status {
     euroid::must_change_selftest();
 
     // EuroAgent MCP daemon (AA-3 capstone): the gateway served over AF_UNIX.
-    mcpd::selftest(&mut vfs);
+    // Both agent self-tests write under /agents (created by [aa] as system): they
+    // run as system too, because the session self-tests before them leave the
+    // uid-context on the logged-in user and rwx is enforced on the live root.
+    sysctx::as_system(&mut vfs, |fs| mcpd::selftest(fs));
 
     // WASM agent host (AA-5 capstone): agent code runs in WASM → host import →
     // MCP gateway → EuroFS, capability-gated.
-    wagent::selftest(&mut vfs);
+    sysctx::as_system(&mut vfs, |fs| wagent::selftest(fs));
 
     // EuroInstall execution (Q1 capstone): really format + provision a
     // RAM disk and prove the installation survives a remount.
     instexec::selftest(rtc::epoch());
+    // Lab default for self-test builds: the QEMU/NUC harnesses (qmp-input.py,
+    // chrome-desktop.sh, nuc-desktop-run.sh) inject keys as if the guest keyboard
+    // were Belgian AZERTY. That used to be a side effect of the [q1x] provisioning
+    // self-test; it is now explicit, and only here. Release media stay on the US
+    // default until the installer's /etc/keymap applies.
+    if cfg!(feature = "selftest") && ps2::set_layout_tag("be-azerty") {
+        serial_println!("[ps2] lab default keyboard layout: be-azerty (self-test builds; the harnesses type AZERTY)");
+    }
 
     if has_mnt {
         use eurofs::FileSystem;
@@ -4066,15 +4475,27 @@ fn main() -> Status {
             visible: true, // the persistent GTK app renders into it live
             restore: None,
         },
+        // Sprint WP6: a NATIVE EuroOS app hosted as a framed window; its body is
+        // the last frame the app presented through the Euro API. Opens on launch.
+        compositor::Window {
+            x: SIDEBAR_W + 60, y: 90, w: 800, h: 600 + compositor::TITLEBAR_H,
+            title: String::from("EuroApp"),
+            content: Vec::new(), ui: Vec::new(),
+            active: false, accent: Color::BLUE,
+            sec: eds::SecState::new(true, false, false),
+            app: suite_ui::SuiteApp::EuroSurface,
+            visible: false,
+            restore: None,
+        },
     ];
     // Z-order (back-to-front): System back, Terminal, GTK window front.
-    let mut order: Vec<usize> = alloc::vec![0, 1, 2];
+    let mut order: Vec<usize> = alloc::vec![0, 1, 2, 3];
     // Dock tile (see compositor::DOCK_APPS: files/notes/clock/browser/terminal/
     // settings/store/star) → window index. The desktop starts EMPTY (all windows
     // hidden); a dock click opens an app. (AG-1 added files/notes/clock.)
     // 12 slots for 11 dock tiles: index 11 has no tile of its own — it is the hosted
     // X-client window (Chromium), reachable from the app launcher and the shell.
-    let mut dock_targets: [Option<usize>; 14] = [None; 14];
+    let mut dock_targets: [Option<usize>; 15] = [None; 15];
     dock_targets[4] = Some(1); // terminal → Terminal (the real shell)
     dock_targets[11] = Some(2); // launcher: "Chromium" → the hosted X window
 
@@ -4311,11 +4732,14 @@ fn main() -> Status {
         // steps + live FDE enrol. Opens in the live/installation boot mode; visible
         // here for the verification screenshot.
         let i_inst = windows.len();
+        // Sized to the screen: QEMU/OVMF boots at 800x600, laptops at 1920x1080.
+        let inst_w = 820usize.min(width.saturating_sub(SIDEBAR_W + 32));
+        let inst_h = 600usize.min(height.saturating_sub(70));
         windows.push(compositor::Window {
-            x: SIDEBAR_W + 180,
-            y: 70,
-            w: 820,
-            h: 600,
+            x: SIDEBAR_W + 16,
+            y: 56,
+            w: inst_w,
+            h: inst_h,
             title: String::from("EuroInstall  -  Install EuroOS"),
             content: Vec::new(),
             ui: Vec::new(),
@@ -4323,10 +4747,19 @@ fn main() -> Status {
             accent: Color::ACCENT,
             sec: eds::SecState::new(true, true, false),
             app: suite_ui::SuiteApp::Installer,
-            visible: false,
+            // Open on a live boot of an install medium (the public image); hidden on an
+            // installed system and in self-test builds, whose harnesses type into the
+            // terminal and must keep it focused (a pack disk makes install media appear).
+            visible: installer::open_on_live_boot() && !cfg!(feature = "selftest"),
             restore: None,
         });
         order.push(i_inst);
+        dock_targets[14] = Some(i_inst); // launcher: "Install EuroOS"
+        if windows[i_inst].visible {
+            for (j, w) in windows.iter_mut().enumerate() {
+                w.active = j == i_inst;
+            }
+        }
         serial_println!("[bb7] EuroInstall: guided graphical installer ready (plan + live FDE enrol; execution = instexec) ✓");
 
         // ── AG-1: EuroFiles / EuroNotes / EuroClock — real desktop apps ────────
@@ -4513,7 +4946,7 @@ fn main() -> Status {
     // authenticate the desktop session via EuroID (Argon2id) before the desktop starts.
     // Unattended/CI boots log in automatically after a short grace period (honestly logged).
     lockscreen::selftest(&fb);
-    let session_user = lockscreen::gate(&fb, "euro");
+    let session_user = lockscreen::gate(&fb, &euroid::default_login_user());
     // 3E-3: register the authenticated desktop session in the session table —
     // this closes the boot self-test session, ensures the user's OWNED home and
     // sets the FS uid-context (files created on the desktop belong to the user).
@@ -4590,6 +5023,9 @@ fn main() -> Status {
     // buttons route the answer to portal::respond via the click loop below. The
     // broker mechanism itself is exercised by portal::selftest() ([3f7]).
     let mut portal_buttons: Option<(u64, [(usize, usize, usize, usize); 3])> = None;
+    // BUG-032: is the hardware write watch on the scheduler state live on this machine?
+    memwatch::selftest();
+    sched::df_selftest();
     serial_println!(
         "[3f7-live] permission-portal armed — no request pending at boot; a modal is shown only when an app requests a resource (wired to portal::respond)"
     );
@@ -4598,12 +5034,23 @@ fn main() -> Status {
     let term_idx = 1;
     let sys_idx = 0; // the live System window (behind the Terminal)
     let gtk_idx = 2; // the hosted live GTK app window (SuiteApp::XClient)
+    let euro_idx = 3; // the hosted native app window (SuiteApp::EuroSurface, sprint WP6)
     let mut input = String::new();
     let vis_lines = ((windows[term_idx].h - 44) / 16) as usize;
     // Marker: from here the interactive desktop loop runs (polls input + shell).
     // The E2E test waits for this before it injects keys; also proves that HLT-idle
     // does not hold the loop.
     serial_println!("[desktop] interactive loop started — input + shell live");
+    // J1: the lock picture of a whole boot: most contended, and longest held
+    // (an Irq-mode lock or any lock taken inside a syscall holds IF=0 that long).
+    klock::report("boot-total", 10);
+    klock::report_hold("boot-total", 10);
+    serial_println!(
+        "[bg-enosys] boot total: {} background-path syscall(s) answered -ENOSYS (first use of each number logged above); background socket calls served {} (refused for a missing CAP_NET: {})",
+        ring3::BG_ENOSYS.load(Ordering::Relaxed),
+        ring3::BG_NET_CALLS.load(Ordering::Relaxed),
+        ring3::BG_NET_DENIED.load(Ordering::Relaxed)
+    );
     // A first notification so the shade is not empty and the toast channel shows.
     notify::push("Welcome to EuroOS", "Click here to see notifications", interrupts::ticks());
     // 3G-2: arm the live deadman watchdog (5 s grace at 100 Hz). The loop pets it
@@ -4630,6 +5077,7 @@ fn main() -> Status {
         // clicks still depended on the per-boot MSI-X delivery lottery (dt7: the
         // QMP click never arrived; dt3/dt4 simply got lucky).
         xhci::poll();
+        crate::virtio_input::poll(); // virtio-tablet / virtio-keyboard (polled)
         // One-shot liveness proof once the loop has petted a while.
         if !wd_reported && watchdog::pets() >= 20 {
             wd_reported = true;
@@ -4650,6 +5098,7 @@ fn main() -> Status {
         // raised in one place after input handling.
         let mut launch_icon: Option<usize> = None;
         let mut launch_path: Option<String> = None;
+        let mut launch_store: Option<String> = None;
         // A screenshot requested this iteration, captured after a clean render.
         let mut pending_shot = false;
 
@@ -4680,6 +5129,7 @@ fn main() -> Status {
                 match launcher::click_at(cx, cy, width, height) {
                     Some(launcher::Launch::App(icon)) => launch_icon = Some(icon),
                     Some(launcher::Launch::Path(p)) => launch_path = Some(p),
+                    Some(launcher::Launch::StoreInstall(n)) => launch_store = Some(n),
                     None => {}
                 }
                 need_full = true;
@@ -4842,6 +5292,8 @@ fn main() -> Status {
                 need_full = true; // repaint (dialog gone or still up); consume the click
             } else if compositor::brand_button_at(px, py) {
                 // The EU mark is the "start button": open the app launcher.
+                launcher::sync_apps(ctx.fs);
+                launcher::sync_store(ctx.fs); // installed app packages join the catalog
                 launcher::open();
                 launcher::refresh(ctx.fs); // fill the initial (all-apps) list
                 need_full = true;
@@ -4893,6 +5345,33 @@ fn main() -> Status {
                             // + frees its arena (spawn_glibc_persistent has no teardown).
                             if windows[i].app == suite_ui::SuiteApp::XClient {
                                 ring3::kill_persistent_glibc(ctx.mem);
+                            }
+                            if windows[i].app == suite_ui::SuiteApp::EuroSurface {
+                                // Ask first (Close event); a native app that is still
+                                // alive a moment later is terminated by the kernel.
+                                if let Some(pid) = euroapi::focus() {
+                                    euroapi::push_close();
+                                    for _ in 0..20 {
+                                        if !ring3::bg_alive(pid) { break; }
+                                        sched::sleep_ticks(1);
+                                        sched::yield_now(); // let the app see the event
+                                    }
+                                    if ring3::bg_alive(pid) {
+                                        serial_println!("[euroapp] pid {pid} ignored Close: terminated");
+                                        ring3::kill_pid(pid);
+                                    }
+                                    if wasm::app_alive(pid) {
+                                        let _ = wasm::pump(ctx.fs); // one frame to see the Close event
+                                        if wasm::app_alive(pid) {
+                                            serial_println!("[euroapp] wasm pid {pid} ignored Close: terminated");
+                                            wasm::kill(pid);
+                                        }
+                                    }
+                                    if pid == rdpclient::RDP_PID {
+                                        rdpclient::stop();
+                                    }
+                                    euroapi::remove(pid);
+                                }
                             }
                             windows[i].visible = false;
                             order.retain(|&x| x != i);
@@ -4981,6 +5460,17 @@ fn main() -> Status {
                                 xserver::deliver_button((px - ox) as i16, (py - oy) as i16);
                             }
                         }
+                    } else if windows[i].app == suite_ui::SuiteApp::EuroSurface {
+                        // Click on the native app's body -> a Button event at surface
+                        // coordinates (the surface is centred in the body).
+                        let (bx, by, bw, bh) = compositor::window_body_rect(&windows[i]);
+                        if let Some((sw, sh)) = euroapi::front_size() {
+                            let ox = bx + bw.saturating_sub(sw) / 2;
+                            let oy = by + bh.saturating_sub(sh) / 2;
+                            if px >= ox && py >= oy && px < ox + sw && py < oy + sh {
+                                euroapi::push_button(1, true, (px - ox) as i32, (py - oy) as i32);
+                            }
+                        }
                     } else if windows[i].app == suite_ui::SuiteApp::Browser {
                         // Click on tab / "+" button / address bar.
                         match webview::hit_test(windows[i].x, windows[i].y, windows[i].w, px, py) {
@@ -5067,11 +5557,9 @@ fn main() -> Status {
                             textedit::click(windows[i].x, windows[i].y, px, py);
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Installer {
-                        // 3E-1: "Install EuroOS" button → REAL install to the first
-                        // BLANK virtio disk (in-use disks are never touched).
-                        if installer::button_at(windows[i].x, windows[i].y, windows[i].w, windows[i].h, px, py) {
-                            installer::gui_install();
-                        }
+                        // The wizard: buttons, list rows, fields, the encryption toggle.
+                        let (wx, wy, ww, wh) = (windows[i].x, windows[i].y, windows[i].w, windows[i].h);
+                        installer::click(&fb, wx, wy, ww, wh, px, py);
                     }
                     need_full = true;
                 }
@@ -5174,6 +5662,7 @@ fn main() -> Status {
         // I1: harvest USB-HID interrupt transfers (keyboard/mouse) and inject them
         // into the same scancode/mouse paths as PS/2 — before we read the keys.
         xhci::poll();
+        crate::virtio_input::poll(); // virtio-tablet / virtio-keyboard (polled)
 
         // A graphical app (the DOOM port) owns the keyboard while it runs: route
         // RAW scancodes (press/release + arrows/ctrl, which poll_key's char
@@ -5240,6 +5729,18 @@ fn main() -> Status {
         }
         let editor_focused = !files::prompt_open() && (text_focused || notes_focused)
             && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open();
+        // The install wizard takes rich keys (Tab, arrows, Esc) while it is on top.
+        let installer_focused = !files::prompt_open()
+            && focused.map(|i| windows[i].app == suite_ui::SuiteApp::Installer).unwrap_or(false)
+            && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open();
+        if installer_focused {
+            let fi = focused.unwrap();
+            let (wx, wy, ww, wh) = (windows[fi].x, windows[fi].y, windows[fi].w, windows[fi].h);
+            while let Some(k) = ps2::poll_key_ex() {
+                installer::key(&fb, wx, wy, ww, wh, k);
+                need_full = true;
+            }
+        }
         if editor_focused {
             while let Some(k) = ps2::poll_key_ex() {
                 if text_focused {
@@ -5252,7 +5753,7 @@ fn main() -> Status {
                 need_full = true;
             }
         }
-        while let Some(k) = if editor_focused || files::prompt_open() { None } else { ps2::poll_key() } {
+        while let Some(k) = if editor_focused || installer_focused || files::prompt_open() { None } else { ps2::poll_key() } {
             // The symbol picker only needs Esc to dismiss.
             if symbolpicker::is_open() {
                 if k == '\u{1b}' { symbolpicker::close(); }
@@ -5275,6 +5776,8 @@ fn main() -> Status {
                     launch_path = Some(p);
                 } else if let Some(launcher::Launch::App(icon)) = lr {
                     launch_icon = Some(icon);
+                } else if let Some(launcher::Launch::StoreInstall(n)) = lr {
+                    launch_store = Some(n);
                 }
                 need_full = true;
                 continue;
@@ -5567,6 +6070,83 @@ fn main() -> Status {
                                 }
                             }
                         }
+                    } else if exec_cmd.split_whitespace().next() == Some("rdp") {
+                        // Sprint N4: the RDP client. `rdp <host>[:port] <user> [password]`.
+                        let mut t = exec_cmd.split_whitespace().skip(1);
+                        // Dev convenience (selftest builds only): `rdp test` connects to the
+                        // QEMU-host RDP server at 10.0.2.2 so the live proof needs no digits
+                        // typed (the AZERTY test keyboard mangles an IP).
+                        let (a1, a2) = if cfg!(feature = "selftest") && exec_cmd.split_whitespace().nth(1) == Some("test") {
+                            (Some("10.0.2.2:3389"), Some("euro"))
+                        } else {
+                            let mut t2 = exec_cmd.split_whitespace().skip(1);
+                            (t2.next(), t2.next())
+                        };
+                        let fixed_pw = cfg!(feature = "selftest") && exec_cmd.split_whitespace().nth(1) == Some("test");
+                        match (a1, a2) {
+                            (Some(hp), Some(user)) => {
+                                let (host, port) = match hp.rsplit_once(':') {
+                                    Some((h, p)) => (h, p.parse::<u16>().unwrap_or(3389)),
+                                    None => (hp, 3389),
+                                };
+                                let pw = if fixed_pw { "euro-test-1" } else { t.next().unwrap_or("") };
+                                if euroapi::focus().map(|p| ring3::bg_alive(p) || wasm::app_alive(p) || rdpclient::active()).unwrap_or(false) {
+                                    out.push(String::from("rdp: a hosted app is already running (close its window first)"));
+                                } else {
+                                    match rdpclient::start(host, port, user, pw, 1024, 768) {
+                                        Ok(msg) => {
+                                            out.push(msg);
+                                            let w = euro_idx;
+                                            windows[w].title = alloc::format!("Remote desktop  -  {host}");
+                                            windows[w].w = 1024;
+                                            windows[w].h = 768 + compositor::TITLEBAR_H;
+                                            windows[w].x = SIDEBAR_W + 40;
+                                            windows[w].y = 60;
+                                            order.retain(|&i| i != w);
+                                            order.push(w);
+                                            for ww in windows.iter_mut() { ww.active = false; }
+                                            windows[w].visible = true;
+                                            windows[w].active = true;
+                                            need_full = true;
+                                        }
+                                        Err(e) => out.push(e),
+                                    }
+                                }
+                            }
+                            _ => out.extend(rdpclient::status_lines()),
+                        }
+                    } else if {
+                        let mut t = exec_cmd.split_whitespace();
+                        t.next() == Some("app") && matches!(t.next(), Some("installed" | "install" | "trust" | "trusted" | "remove" | "run" | "surfaces" | "store"))
+                    } {
+                        // EuroApps SDK: package install / trust / run from the shell.
+                        let rest = exec_cmd.trim_start_matches("app").trim();
+                        if let Some(name) = rest.strip_prefix("run ").map(str::trim) {
+                            let (ok, msg) = launch_installed_app(&mut ctx, name);
+                            out.push(msg);
+                            if ok {
+                                for l in ring3::last_app_output().lines() { out.push(format!("  {l}")); }
+                                // A windowed app gets the hosted window under its own title
+                                // (the same framing the launcher path gives it).
+                                if let Some((app, w)) = pkg::installed_apps(ctx.fs).into_iter().find(|a| a.name == name)
+                                    .and_then(|a| if a.abi == "euro" || (a.abi == "wasm" && a.display == "x11") { Some((a, euro_idx)) } else if a.display == "x11" { Some((a, gtk_idx)) } else { None })
+                                {
+                                    windows[w].title = alloc::format!("{}  -  {}", app.title, app.name);
+                                    windows[w].w = 800;
+                                    windows[w].h = 600 + compositor::TITLEBAR_H;
+                                    windows[w].x = SIDEBAR_W + 60;
+                                    windows[w].y = 90;
+                                    order.retain(|&i| i != w);
+                                    order.push(w);
+                                    for ww in windows.iter_mut() { ww.active = false; }
+                                    windows[w].visible = true;
+                                    windows[w].active = true;
+                                    need_full = true;
+                                }
+                            }
+                        } else {
+                            for l in pkg::app_shell(ctx.fs, rest) { out.push(l); }
+                        }
                     } else if {
                         let n = exec_cmd.split_whitespace().next().unwrap_or("");
                         n == "chrome" || n == "chromium"
@@ -5828,7 +6408,39 @@ fn main() -> Status {
             }
             need_full = true;
         }
-        if let Some(icon) = launch_icon {
+        if let Some(name) = launch_store.take() {
+            // The store: fetch over HTTPS, verify against the key the signed index
+            // vouches for, install; the launcher then lists it as an app.
+            let lines = appstore::install(ctx.fs, &name);
+            for l in &lines { serial_println!("[appstore] {l}"); }
+            let last = lines.last().cloned().unwrap_or_default();
+            notify::push("App store", &last, interrupts::ticks());
+            launcher::sync_store(ctx.fs);
+            need_full = true;
+        }
+        if let Some(icon) = launch_icon.filter(|&i| i >= launcher::APP_ICON_BASE) {
+            // An installed app package from the launcher (EuroApps SDK).
+            let apps = pkg::installed_apps(ctx.fs);
+            if let Some(app) = apps.get(icon - launcher::APP_ICON_BASE) {
+                let (ok, msg) = launch_installed_app(&mut ctx, &app.name);
+                serial_println!("[app] {msg}");
+                notify::push(&app.title, &msg, interrupts::ticks());
+                if ok && (app.display == "x11" || app.abi == "euro") {
+                    let w = if app.abi == "euro" || app.abi == "wasm" { euro_idx } else { gtk_idx };
+                    windows[w].title = alloc::format!("{}  -  {}", app.title, app.name);
+                    windows[w].w = 800;
+                    windows[w].h = 600 + compositor::TITLEBAR_H;
+                    windows[w].x = SIDEBAR_W + 60;
+                    windows[w].y = 90;
+                    order.retain(|&x| x != w);
+                    order.push(w);
+                    for ww in windows.iter_mut() { ww.active = false; }
+                    windows[w].visible = true;
+                    windows[w].active = true;
+                }
+            }
+            need_full = true;
+        } else if let Some(icon) = launch_icon {
             if let Some(w) = dock_targets.get(icon).copied().flatten().filter(|&w| w < windows.len()) {
                 // The hosted X window is only a frame: opening it has to start the app
                 // behind it, or it opens onto nothing.
@@ -5958,6 +6570,19 @@ fn main() -> Status {
         {
             need_full = true;
         }
+        // The native app's frame takes the size of its surface once that is known
+        // (the launch framed it at 800x600 before the first present). Before the
+        // repaint decision of this iteration: need_full is per iteration.
+        if windows[euro_idx].visible {
+            if let Some((sw, sh)) = euroapi::front_size() {
+                let (fw, fh) = (sw.max(200).min(width), (sh + compositor::TITLEBAR_H).min(height));
+                if windows[euro_idx].w != fw || windows[euro_idx].h != fh {
+                    windows[euro_idx].w = fw;
+                    windows[euro_idx].h = fh;
+                    need_full = true;
+                }
+            }
+        }
         if need_full { full_repaints += 1; }
         if need_full {
             // Full redraw (drag or z-order changed).
@@ -6030,6 +6655,11 @@ fn main() -> Status {
             // S4: EuroInit supervision (restart stopped services) + eurologd
             // (kmsg ring periodically to /var/log/messages).
             init::supervise(ctx.mem, ctx.fs);
+            // Userspace drivers: restart a crashed e1000d (after quiescing its device).
+            udrv::supervise(ctx.mem);
+            udrv_blk::supervise(ctx.mem);
+            udrv_bcm5720::supervise(ctx.mem);
+            udrv_mr::supervise(ctx.mem);
             init::flush_log(ctx.fs);
             // G5: periodic background scrub (rate-limited ~60 s) → /var/log/fsck.log.
             scrub::maybe_run(ctx.fs, t);
@@ -6055,6 +6685,12 @@ fn main() -> Status {
             if gtk_vis {
                 compositor::draw_window_body(&fb, &windows[gtk_idx]);
             }
+            // Native app window (Euro API surface): repaint on a new frame; the
+            // frame takes the surface's size the first time it is known.
+            let euro_vis = windows[euro_idx].visible && euroapi::take_dirty();
+            if euro_vis {
+                compositor::draw_window_body(&fb, &windows[euro_idx]);
+            }
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
@@ -6070,6 +6706,10 @@ fn main() -> Status {
             if gtk_vis {
                 let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
                 fb.present_rect(gx, gy, gw, gh);
+            }
+            if euro_vis {
+                let (ex, ey, ew, eh) = compositor::window_body_rect(&windows[euro_idx]);
+                fb.present_rect(ex, ey, ew, eh);
             }
             fb.present_rect(ox, oy, compositor::CURSOR_W, compositor::CURSOR_H);
             fb.present_rect(cmx, cmy, compositor::CURSOR_W, compositor::CURSOR_H);
@@ -6091,6 +6731,9 @@ fn main() -> Status {
 
         // Keep the network alive: answer ARP requests + recycle RX buffers.
         net::service();
+        // The network worker does the inbound side; wake it if an interrupt's
+        // wake found the scheduler lock busy.
+        net::worker_poke();
         // And keep every TCP connection's clock running: non-blocking sends leave
         // their segments in the retransmit list and rely on tick() for the ACK
         // bookkeeping and retransmits, and tick() runs from pump_all. The launcher
@@ -6161,6 +6804,85 @@ fn main() -> Status {
         // Keyboard focus: when the hosted GTK window is the active window, route real
         // keystrokes to it (X KeyPress via the keymap) instead of the shell. Otherwise
         // the shell keeps the keyboard as normal.
+        // Native app window focused: raw scancodes become Key events for it (with
+        // the layout's character), pointer motion over its body becomes Move events.
+        if windows[euro_idx].visible && windows[euro_idx].active {
+            // Ctrl+Alt+Esc always belongs to the desktop: it closes the native app
+            // (Close event, then termination), so a focused app can never keep the
+            // keyboard for good. Modifier state is tracked from the raw stream.
+            static NATIVE_CTRL: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+            static NATIVE_ALT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+            while let Some(sc) = ps2::poll_scancode() {
+                if sc == 0xE0 {
+                    continue;
+                }
+                match sc {
+                    0x1D => NATIVE_CTRL.store(true, core::sync::atomic::Ordering::Relaxed),
+                    0x9D => NATIVE_CTRL.store(false, core::sync::atomic::Ordering::Relaxed),
+                    0x38 => NATIVE_ALT.store(true, core::sync::atomic::Ordering::Relaxed),
+                    0xB8 => NATIVE_ALT.store(false, core::sync::atomic::Ordering::Relaxed),
+                    _ => {}
+                }
+                if sc == 0x01 && NATIVE_CTRL.load(core::sync::atomic::Ordering::Relaxed) && NATIVE_ALT.load(core::sync::atomic::Ordering::Relaxed) {
+                    if let Some(pid) = euroapi::focus() {
+                        serial_println!("[euroapp] Ctrl+Alt+Esc: closing the native app pid {pid}");
+                        euroapi::push_close();
+                        for _ in 0..20 {
+                            if !ring3::bg_alive(pid) && !wasm::app_alive(pid) && !(pid == rdpclient::RDP_PID && rdpclient::active()) { break; }
+                            sched::sleep_ticks(1);
+                            sched::yield_now();
+                        }
+                        if ring3::bg_alive(pid) { ring3::kill_pid(pid); }
+                        if wasm::app_alive(pid) { wasm::kill(pid); }
+                        if pid == rdpclient::RDP_PID { rdpclient::stop(); }
+                    }
+                    NATIVE_CTRL.store(false, core::sync::atomic::Ordering::Relaxed);
+                    NATIVE_ALT.store(false, core::sync::atomic::Ordering::Relaxed);
+                    continue;
+                }
+                euroapi::push_key(sc & 0x7F, sc & 0x80 == 0);
+            }
+            let (mpx, mpy) = mouse::pos();
+            if (mpx, mpy) != last_hover {
+                last_hover = (mpx, mpy);
+                let (bx, by, bw, bh) = compositor::window_body_rect(&windows[euro_idx]);
+                if let Some((sw, sh)) = euroapi::front_size() {
+                    let ox = bx + bw.saturating_sub(sw) / 2;
+                    let oy = by + bh.saturating_sub(sh) / 2;
+                    if mpx >= ox && mpy >= oy && mpx < ox + sw && mpy < oy + sh {
+                        euroapi::push_move((mpx - ox) as i32, (mpy - oy) as i32);
+                    }
+                }
+            }
+        }
+        // The RDP client: one transport step per tick (sprint N4).
+        if rdpclient::active() && rdpclient::step() {
+            serial_println!("[rdp] session ended");
+        }
+        // A WASM app runs one frame per desktop tick under its fuel budget.
+        if let Some(done) = wasm::pump(ctx.fs) {
+            match done {
+                Ok(code) => serial_println!("[euroapp] wasm app ended: exit {code}"),
+                Err(why) => serial_println!("[euroapp] wasm app ended: {why}"),
+            }
+        }
+        // A native or WASM app that exited (or was killed) takes its window with it.
+        if windows[euro_idx].visible {
+            if let Some(pid) = euroapi::focus() {
+                if !ring3::bg_alive(pid) && !wasm::app_alive(pid) && !(pid == rdpclient::RDP_PID && rdpclient::active()) {
+                    let why = ring3::bg_end_reason(pid).unwrap_or_default();
+                    serial_println!("[euroapp] pid {pid} ended ({why}): closing its window");
+                    euroapi::remove(pid);
+                    windows[euro_idx].visible = false;
+                    order.retain(|&x| x != euro_idx);
+                    if let Some(&top) = order.iter().rev().find(|&&j| windows[j].visible) {
+                        for ww in windows.iter_mut() { ww.active = false; }
+                        windows[top].active = true;
+                    }
+                    need_full = true;
+                }
+            }
+        }
         if windows[gtk_idx].visible && windows[gtk_idx].active {
             xserver::pump_keyboard();
             // Hover: forward pointer motion over the hosted window's body, so the app
@@ -6219,6 +6941,255 @@ fn eurojs_show(v: &eurojs::Value) -> String {
         eurojs::Value::Undefined => String::from("undefined"),
         _ => String::from("(object)"),
     }
+}
+
+/// The network programs of the boot script: with the userspace NIC driver they
+/// run in [`net_late_suite`] instead (path, note).
+const NET_LATE_PROGRAMS: [(&str, &str); 3] = [
+    ("/bin/msock", "POSIX sockets: socket/connect/send/recv -> EuroNet"),
+    ("/bin/mdns", "UDP socket (SOCK_DGRAM): DNS lookup from userspace"),
+    ("/bin/mtrack", "EuroGuard: tracker connection blocked by kernel policy"),
+];
+
+/// `a:b:c:d:e:f:g:h` (no `::` compression) for the boot log.
+fn ip6_plain(a: &euronet::ipv6::Ipv6Addr) -> String {
+    let g: Vec<String> = (0..8).map(|i| format!("{:x}", u16::from_be_bytes([a.0[i * 2], a.0[i * 2 + 1]]))).collect();
+    g.join(":")
+}
+
+/// [net-late]: the network part of the boot when the NIC belongs to the
+/// userspace driver (`net.driver=user`, the default). Before the scheduler
+/// there is no driver to talk to, so the same probes as the kernel path (ARP,
+/// ping, DNS, HTTP, HTTPS, IPv6, poll, SMB/NFS) and the network programs of
+/// the boot script (msock, mdns, mtrack) run here, after `udrv::boot`.
+///
+/// The programs run as SCHEDULED processes (not as synchronous foreground
+/// excursions on task 0): their socket calls go through the background
+/// socket path with the BG lock released, and a blocking call sleeps until
+/// e1000d delivers. Each runs with exactly the capabilities of the program
+/// registry, under EuroGuard with its own name. Every wait is bounded and an
+/// expiry is reported as such.
+fn net_late_suite(allocator: &mut FrameAllocator, fs: &mut dyn FileSystem) -> Vec<(String, String)> {
+    use euronet::ethernet::MacAddr;
+    use euronet::ipv4::Ipv4Addr;
+    let ipfmt = |ip: Ipv4Addr| format!("{}.{}.{}.{}", ip.0[0], ip.0[1], ip.0[2], ip.0[3]);
+    let mut demo: Vec<(String, String)> = Vec::new();
+    // Net ready: e1000d reported link up and DHCP configured the stack
+    // (udrv::boot). Bounded wait; an expiry is a FAILED, not a silent skip.
+    let t0 = interrupts::ticks();
+    let configured = || net::get().filter(|c| c.gw_mac != MacAddr::ZERO && udrv::link_up());
+    let mut cfg = configured();
+    while cfg.is_none() && interrupts::ticks() < t0 + 2000 {
+        udrv::supervise(allocator);
+        sched::yield_now();
+        x86_64::instructions::hlt();
+        cfg = configured();
+    }
+    let Some(cfg) = cfg else {
+        serial_println!("[net-late] network not ready 20 s after udrv::boot (no link or no DHCP lease over e1000d, see [udrv-*]): network tests and programs NOT run → FAILED");
+        for (path, note) in NET_LATE_PROGRAMS {
+            serial_println!("[exec] {path} not run: no network");
+            demo.push((format!("euroos:/ $ .{path}   ({note})"), String::from("not run: no network")));
+        }
+        return demo;
+    };
+    serial_println!(
+        "[net-late] network ready over e1000d (waited {} ticks): lease {}, gateway {}, dns {}; running the network part of the boot now",
+        interrupts::ticks() - t0, ipfmt(cfg.my_ip), ipfmt(cfg.gw_ip), ipfmt(cfg.dns_ip)
+    );
+    let sleeps0 = net::RX_SLEEPS.load(Ordering::Relaxed);
+    let wakes0 = net::RX_WAKEUPS.load(Ordering::Relaxed);
+    let mut lines: Vec<String> = Vec::new();
+    let m = cfg.my_mac.0;
+    lines.push(format!("NIC: {} MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", nic::kind(), m[0], m[1], m[2], m[3], m[4], m[5]));
+    lines.push(format!("ARP: {} is-at {:02x?} (resolved by udrv::boot over e1000d)", ipfmt(cfg.gw_ip), cfg.gw_mac.0));
+    let pong = net::icmp_ping(cfg.my_mac, cfg.my_ip, cfg.gw_mac, cfg.gw_ip);
+    lines.push(if pong { format!("PING {}: echo-reply OK ✓", ipfmt(cfg.gw_ip)) } else { "(no ping reply)".into() });
+    let host = "example.com";
+    let mut fetch_ip: Option<String> = None;
+    match net::dns_query(cfg.my_mac, cfg.my_ip, cfg.dns_mac, cfg.dns_ip, host) {
+        Some(ip) => {
+            fetch_ip = Some(ipfmt(ip));
+            lines.push(format!("DNS reply: {host} = {} ✓", ipfmt(ip)));
+            ring3::push_env(&format!("FETCH_IP={}", ipfmt(ip)));
+            ring3::push_env(&format!("FETCH_HOST={host}"));
+            ring3::push_env(&format!("DNS_IP={}", ipfmt(cfg.dns_ip)));
+            match net::http_get(cfg.my_mac, cfg.my_ip, cfg.gw_mac, ip, host, "/") {
+                Some((status, data)) => {
+                    lines.push(format!("HTTP GET http://{host}/ -> {} bytes ✓", data.len()));
+                    lines.push(format!("  {}", status.trim()));
+                }
+                None => lines.push("(no HTTP response)".into()),
+            }
+            lines.push("TLS 1.3 (X25519+ChaCha20) handshake ...".into());
+            match net::https_get(cfg.my_mac, cfg.my_ip, cfg.gw_mac, ip, host, "/") {
+                Some((status, data, cert)) => {
+                    lines.push(format!("HTTPS GET https://{host}/ -> {} bytes (encrypted) ✓", data.len()));
+                    lines.push(format!("  {}", status.trim()));
+                    if let Some(c) = cert {
+                        lines.push(format!("  server certificate received: {} bytes", c.len()));
+                    }
+                }
+                None => lines.push("(TLS handshake failed)".into()),
+            }
+        }
+        None => lines.push("(no DNS reply)".into()),
+    }
+    // IPv6: SLAAC link-local, router discovery, ping6 (as the kernel path).
+    let ll = euronet::ipv6::Ipv6Addr::link_local_from_mac(cfg.my_mac.0);
+    lines.push(format!("IPv6 link-local (SLAAC): {}", ip6_plain(&ll)));
+    let router = net::router_discovery(cfg.my_mac, ll);
+    match router {
+        Some((rll, rmac, prefix)) => {
+            lines.push(format!("IPv6 RA: router {}", ip6_plain(&rll)));
+            if let Some(p) = prefix {
+                lines.push(format!("IPv6 global (SLAAC): {}", ip6_plain(&euronet::ipv6::Ipv6Addr::from_prefix(p, &ll))));
+            }
+            lines.push(if net::icmp6_ping(cfg.my_mac, ll, rmac, rll) {
+                format!("PING6 {}: echo-reply OK ✓", ip6_plain(&rll))
+            } else {
+                "(no ping6 reply)".into()
+            });
+        }
+        None => lines.push("(no Router Advertisement — IPv6 possibly off)".into()),
+    }
+    net::save(net::NetCfg {
+        link_local: ll,
+        router_ll: router.map(|r| r.0),
+        router_mac: router.map(|r| r.1),
+        ..cfg
+    });
+    for l in &lines {
+        serial_println!("[net] {l}");
+    }
+    net::poll_selftest();
+    if cfg!(feature = "selftest") {
+        // BUG-019/026: inbound without waiting, bounded connect ([net-async]).
+        net::async_selftest();
+        smbfs::selftest();
+        nfsmount::selftest();
+    }
+    // The network programs, as scheduled processes over e1000d. The lock
+    // statistics of this stretch show what the BG table lock was held for
+    // while three processes did blocking network I/O.
+    let lk0 = klock::snapshot_all();
+    for (i, (path, note)) in NET_LATE_PROGRAMS.iter().enumerate() {
+        let bytes = fs.read_file(path).unwrap_or_default();
+        if !ring3::verify_program(path, &bytes) {
+            serial_println!("[exec] {path} REJECTED — Ed25519 signature invalid");
+            demo.push((format!("euroos:/ $ .{path}   ({note})"), String::from("[sec] REJECTED: invalid Ed25519 signature")));
+            continue;
+        }
+        let (caps, abi) = ring3::program_caps_abi(path).unwrap_or((ring3::CAP_CONSOLE, false));
+        let pid = 0x3_0000 + i as u64;
+        let start = interrupts::ticks();
+        if ring3::spawn_bg_musl_caps(allocator, &bytes, pid, path.as_bytes(), caps, true).is_none() {
+            serial_println!("[exec] {path} could not be started as a scheduled process → FAILED");
+            continue;
+        }
+        while ring3::bg_alive(pid) && interrupts::ticks() < start + 6000 {
+            udrv::supervise(allocator);
+            sched::yield_now();
+            x86_64::instructions::hlt();
+        }
+        let timed_out = ring3::bg_alive(pid);
+        if timed_out {
+            ring3::kill_pid(pid);
+        }
+        let out_lines = ring3::bg_output(pid);
+        let mut out = String::new();
+        for l in &out_lines {
+            out.push_str(l);
+            out.push('\n');
+        }
+        let exit = ring3::bg_end_reason(pid)
+            .and_then(|r| r.strip_prefix("done (exit ").and_then(|s| s.strip_suffix(')')).map(String::from))
+            .unwrap_or_else(|| String::from("?"));
+        if timed_out {
+            serial_println!("[exec] {path} (abi={}, ed25519=ok, scheduled over e1000d) did not finish within 60 s: killed → FAILED", if abi { "linux" } else { "native" });
+        } else {
+            serial_println!(
+                "[exec] {path} (abi={}, ed25519=ok, scheduled over e1000d, {} ticks) exit={exit} ({} bytes)",
+                if abi { "linux" } else { "native" },
+                interrupts::ticks() - start,
+                out.len()
+            );
+        }
+        ring3::reap_dead(allocator);
+        demo.push((format!("euroos:/ $ .{path}   ({note})"), out));
+    }
+    klock::report_delta("net-late", &lk0, 6);
+    // EuroGuard model on the background path: the same program WITHOUT CAP_NET
+    // in its own capability set gets no socket at all.
+    if cfg!(feature = "selftest") {
+        if let Ok(bytes) = fs.read_file("/bin/msock") {
+            let denied0 = ring3::BG_NET_DENIED.load(Ordering::Relaxed);
+            let pid = 0x3_0010;
+            if ring3::spawn_bg_musl_caps(allocator, &bytes, pid, b"/bin/msock", ring3::CAP_CONSOLE, false).is_some() {
+                let start = interrupts::ticks();
+                while ring3::bg_alive(pid) && interrupts::ticks() < start + 3000 {
+                    sched::yield_now();
+                    x86_64::instructions::hlt();
+                }
+                let out = ring3::bg_output(pid).join(" | ");
+                let reason = ring3::bg_end_reason(pid).unwrap_or_else(|| String::from("still running"));
+                let denied = ring3::BG_NET_DENIED.load(Ordering::Relaxed) - denied0;
+                if ring3::bg_alive(pid) {
+                    ring3::kill_pid(pid);
+                }
+                ring3::reap_dead(allocator);
+                let ok = denied == 1 && reason == "done (exit 1)" && out.contains("socket() failed");
+                serial_println!(
+                    "[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused {denied} time(s), {reason}, output {out:?} → {}",
+                    if ok { "OK (no capability, no socket) ✓" } else { "FAILED" }
+                );
+            }
+        }
+    }
+    serial_println!(
+        "[net-late] network waits in this suite gave the CPU away {} time(s); {} of them were woken early by e1000d (EuroIPC frame delivery)",
+        net::RX_SLEEPS.load(Ordering::Relaxed) - sleeps0,
+        net::RX_WAKEUPS.load(Ordering::Relaxed) - wakes0
+    );
+    // [udrv-linux]: the Linux-ABI path. A real glibc program, scheduled, with
+    // BLOCKING sockets (connect/send/recv): each wait must give the CPU away
+    // so e1000d can run, or the program gets nothing. glibc needs a 64 MiB+
+    // arena, which a 512 MiB machine does not have at this point of the boot.
+    if cfg!(feature = "selftest") {
+        let ip = fetch_ip.clone().unwrap_or_else(|| String::from("172.66.147.243"));
+        let (s0, w0) = (net::RX_SLEEPS.load(Ordering::Relaxed), net::RX_WAKEUPS.load(Ordering::Relaxed));
+        let t = interrupts::ticks();
+        let (out, exit) = ring3::run_glibc(
+            allocator,
+            ring3::gnet_bytes(),
+            ring3::ldlinux_bytes(),
+            &[b"/bin/gnet", ip.as_bytes(), b"example.com"],
+            &[b"PATH=/bin"],
+            ring3::CAP_CONSOLE | ring3::CAP_NET,
+        );
+        let (sleeps, wakes) = (net::RX_SLEEPS.load(Ordering::Relaxed) - s0, net::RX_WAKEUPS.load(Ordering::Relaxed) - w0);
+        if out.contains("no arena for glibc") {
+            serial_println!("[udrv-linux] glibc process /bin/gnet not run: {} (needs more RAM than this machine has free here) ⬜", out.trim());
+        } else {
+            let ok = exit == 78 && sleeps > 0;
+            serial_println!(
+                "[udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking sockets) over e1000d in {} ticks: {:?} exit={exit}; its waits gave the CPU away {sleeps} time(s), {wakes} woken early by e1000d → {}",
+                interrupts::ticks() - t,
+                out.trim(),
+                if ok { "OK (blocking socket calls sleep and wake on the driver's EuroIPC delivery) ✓" } else { "FAILED" }
+            );
+        }
+    }
+    {
+        let mut sctx = shell::ShellCtx { fs, mem: allocator };
+        for cmd in ["nslookup example.com", "nslookup example.com", "netstat"] {
+            serial_println!("[shell] eurosh:/ $ {cmd}");
+            for line in shell::exec(&mut sctx, cmd) {
+                serial_println!("[shell]   {line}");
+            }
+        }
+    }
+    demo
 }
 
 pub fn system_binaries() -> [(&'static str, &'static [u8]); 32] {

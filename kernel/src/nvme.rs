@@ -107,6 +107,12 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         Some(d) => d,
         None => return false,
     };
+    if crate::bootopt::nvme_user_driver() {
+        // storage.nvme=user: the controller belongs to the userspace driver
+        // nvmed (udrv_blk.rs), started after the scheduler. Not touched here.
+        crate::serial_println!("[nvme] storage.nvme=user: controller {:02x}:{:02x}.{} left to the userspace driver nvmed (data disk)", dev.bus, dev.dev, dev.func);
+        return false;
+    }
     crate::pci::claim(dev.bus, dev.dev, dev.func, "nvme"); // hwprobe (M1-3)
     dev.enable(0x6); // bus-master + memory space
     let bar0 = dev.bar(0) as u64 & 0xFFFF_FFF0;
@@ -333,6 +339,25 @@ impl Nvme {
 /// DMA window: 64 KiB (16 contiguous frames) — one command moves up to 128
 /// 512-byte LBAs via a PRP list. Larger requests are chunked transparently.
 const DATA_MAX: usize = 64 * 1024;
+
+/// IOMMU proof: ask the controller to DMA one block (LBA 0) into `target_pa`,
+/// a frame that is deliberately NOT in the NVMe domain. With translation on the
+/// device must be refused: the memory stays untouched and the unit records a
+/// fault. Returns `Some(status == 0)` once the command completes, `None` without
+/// a controller. Never used for real I/O.
+pub fn dma_probe(target_pa: u64) -> Option<bool> {
+    unsafe {
+        let nv = (*core::ptr::addr_of_mut!(NVME)).as_mut()?;
+        let mut cmd = [0u32; 16];
+        cmd[0] = 0x02 | ((nv.cid() as u32) << 16); // read
+        cmd[1] = 1;
+        cmd[6] = (target_pa & 0xFFFF_FFFF) as u32;
+        cmd[7] = (target_pa >> 32) as u32;
+        cmd[12] = 0; // one LBA
+        nv.io.submit(&cmd);
+        Some(matches!(nv.io.wait(), Some(0)))
+    }
+}
 
 /// Read `buf.len()` bytes from byte-LBA `lba` (512-byte sectors). Requests
 /// larger than the DMA window are split into 64 KiB commands.

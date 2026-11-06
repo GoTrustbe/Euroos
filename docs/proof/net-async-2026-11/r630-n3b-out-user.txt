@@ -1,0 +1,6 @@
+[loadtest] scenario=net image=/srv/euroos/wt-net-runs/n3b-out-user/boot.img disks=[] bus=virtio kvm=True smp=4 mem=4G nic=e1000e bootopts=- iommu=False
+[loadtest] serial log: /srv/euroos/wt-net-runs/n3b-out-user/loadtest-serial-20261103-075736.log  ·  CSV: /srv/euroos/wt-net-runs/n3b-out-user/n3b-out-user.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 173s — driving commands
+[loadtest] completed clean · results → /srv/euroos/wt-net-runs/n3b-out-user/n3b-out-user.csv · ltstat samples → /srv/euroos/wt-net-runs/n3b-out-user/n3b-out-user-ltstat.csv
+[loadtest] host HTTP server served 200 request(s)

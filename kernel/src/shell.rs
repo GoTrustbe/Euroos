@@ -216,7 +216,10 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             vec![
                 "               total        used        free".to_string(),
                 format!("Mem:    {total:>12} {used:>11} {free:>11}"),
-                "Swap:              0           0           0".to_string(),
+                {
+                    let (used, cap) = crate::swapmgr::usage();
+                    format!("Swap:   {:>12} {:>11} {:>11}", cap * 4, used * 4, (cap - used) * 4)
+                },
             ]
         }
         "date" => {
@@ -259,6 +262,9 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             v.insert(0, format!("audit log ({} events, append-only /var/log/audit.log):", crate::audit::count()));
             v
         }
+        // J1: lock contention statistics / the multi-core lock benchmark.
+        "lockstat" => crate::klock::shell(arg1),
+        "lockbench" => crate::lockstress::shell(&format!("{arg1} {arg2}")),
         // X: EuroPol — declarative policy → capabilities.
         "europol" => crate::europol::shell(&format!("{arg1} {arg2}")),
         // W: EuroObserve — live OpenMetrics export (the way Prometheus scrapes).
@@ -277,8 +283,17 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "firewall" | "eurofw" => crate::firewall::shell(),
         // N2: EuroVPN — sovereign VPN tunnel.
         "vpn" | "eurovpn" => crate::vpn::shell(),
+        // On-device language model (llama.cpp from a signed EuroPack, sandboxed, no network).
+        "llm" => crate::llm::shell(ctx.mem, line),
         // AA: EuroAgent — sovereign agent-first runtime.
-        "agent" | "euroagent" => crate::agent::shell(&format!("{arg1} {arg2}")),
+        "agent" | "euroagent" => {
+            // learn / propose / approve / export / import need the file system (and the owner for approve)
+            let owner = current_user(fs).1 == 1000;
+            match crate::agent::shell_fs(fs, line, owner) {
+                Some(out) => out,
+                None => crate::agent::shell(&format!("{arg1} {arg2}")),
+            }
+        }
         // CU-5: find — walk the VFS tree and filter on -name/-type/-maxdepth.
         "find" => find_walk(fs, line),
         // AH-3: run a real `.wasm` from the VFS in the no-JIT sandbox (cap-gated WASI).
@@ -414,7 +429,15 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         // The unified per-app control surface (Part 2): capabilities +
         // permission grants + network policy + traffic, all in one place, with
         // actions to restrict an app or an AI agent.
-        "app" | "apps" => app_cmd(line),
+        "app" | "apps" => {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            if words.get(1) == Some(&"policy") {
+                let owner = current_user(fs).1 == 1000;
+                crate::apppolicy::shell(fs, &words[2..], owner)
+            } else {
+                app_cmd(line)
+            }
+        }
         // Notifications history (click the status panel to open the centre).
         "notify" | "notifications" => {
             let mut out = vec![format!("Notifications ({}):", crate::notify::count())];
@@ -697,6 +720,14 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "umount" | "unmount" => crate::fatmount::umount_cmd(fs, arg1),
         "format" | "mkfs" => crate::fatmount::format_cmd(arg1, arg2),
         "mem" => mem_report(ctx.mem),
+        // LOADTEST-R630: hooks for the serial load-test harness (kernel/src/ltstat.rs).
+        "ltstat" => alloc::vec![crate::ltstat::stat_line(ctx.mem)],
+        "spawn" => crate::ltstat::spawn(fs, ctx.mem, arg1, arg2),
+        "churn" => crate::ltstat::churn(fs, ctx.mem, arg1, arg2),
+        "httpd" => crate::ltstat::httpd(arg1),
+        // BUG-027: heap accounting per allocation site (heaptrace images only).
+        "heapsnap" | "heapdiff" | "heaptop" => crate::ltstat::heaptrace(cmd, arg1),
+        "bgps" => crate::ring3::bg_debug_lines(),
         "ls" => {
             let path = if arg1.is_empty() { "/" } else { arg1 };
             match fs.list_dir(path) {
@@ -912,7 +943,17 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             let file = toks.iter().rev().find(|t| !t.starts_with('-') && t.parse::<usize>().is_err());
             match (size, file) {
                 (Some(n), Some(f)) => {
-                    let mut data = fs.read_file(f).unwrap_or_default();
+                    // BUG-025: only a missing file starts empty. Any other read
+                    // error (a file too large for memory, corruption) used to
+                    // become an empty file here and was written back as zeros.
+                    let mut data = match fs.read_file(f) {
+                        Ok(d) => d,
+                        Err(eurofs::FsError::NotFound) => Vec::new(),
+                        Err(e) => return vec![format!("truncate: {f}: {e:?} (file left unchanged)")],
+                    };
+                    if n > data.len() && data.try_reserve_exact(n - data.len()).is_err() {
+                        return vec![format!("truncate: {f}: NoSpace ({n} bytes do not fit in memory; file left unchanged)")];
+                    }
                     data.resize(n, 0);
                     match fs.write_file(f, &data) {
                         Ok(()) => vec![format!("'{f}' truncated/extended to {n} bytes")],
@@ -1385,11 +1426,26 @@ fn coreutils(cmd: &str, line: &str, fs: &mut dyn FileSystem) -> Option<Vec<Strin
         _ => {}
     }
 
+    // LOADTEST-R630 BUG-022: this runs for EVERY shell command before the native
+    // ones. It used to read the last argument that names a file whatever the
+    // command was, so `stat`, `cp`, `rm`, `truncate` ... of a 256 MiB file first
+    // pulled all of it into the kernel heap (stat of 256 MiB: over 60 s), and a
+    // file larger than the heap could exhaust it. Only the coreutils that take
+    // file input read one; the others never take a filename as stdin (so
+    // `echo /etc/hostname` prints the path again).
+    const NO_INPUT: &[&str] = &["echo", "seq", "basename", "dirname", "true", "false", "yes", "arch", "nproc", "pwd"];
+    const FILE_INPUT: &[&str] = &[
+        "head", "tail", "wc", "tac", "rev", "nl", "fold", "sort", "uniq", "cut", "tr", "grep", "sha256sum", "sha512sum",
+        "sha224sum", "sha384sum", "sha1sum", "md5sum", "b2sum", "shuf", "base64", "base32", "cksum",
+    ];
+    if !NO_INPUT.contains(&cmd) && !FILE_INPUT.contains(&cmd) {
+        return None;
+    }
     // Search (from the back) for a positional token that is a readable file → input.
     let mut input: Vec<u8> = Vec::new();
     let mut file_idx: Option<usize> = None;
     for (i, t) in toks.iter().enumerate().rev() {
-        if !t.starts_with('-') {
+        if FILE_INPUT.contains(&cmd) && !t.starts_with('-') {
             if let Ok(data) = fs.read_file(t) {
                 input = data;
                 file_idx = Some(i);
@@ -1437,7 +1493,8 @@ fn coreutils(cmd: &str, line: &str, fs: &mut dyn FileSystem) -> Option<Vec<Strin
         }
         "arch" => return Some(vec![String::from("x86_64")]),
         "nproc" => {
-            let n = crate::acpi::parse().map(|m| m.enabled_cores()).unwrap_or(1).max(1);
+            // Cores the kernel runs, not the MADT count (at most 8, BUG-012).
+            let n = 1 + crate::smp::AP_ONLINE.load(core::sync::atomic::Ordering::Relaxed) as usize;
             return Some(vec![n.to_string()]);
         }
         "pwd" => return Some(vec![String::from("/")]),

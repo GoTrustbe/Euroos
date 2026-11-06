@@ -1,0 +1,61 @@
+[ahci] disk 0 read-only self-test (boot sector via DMA): OK ✓
+[upd3] Ed25519 verify-before-activate (dev.pub ed852b80…): genuine=true · image-tamper-refused=true · sig-tamper-refused=true · short-sig-refused=true → OK ✓
+[upd3] update pipeline: real package staged=true · tampered package refused=true → OK ✓
+[edit] save /tmp/edit-selftest.txt → OK
+[edit] EuroText edit+save+reread: write-OK=true, reread="Hello\nEuroOS 4" (expected "Hello\nEuroOS 4") → OK ✓
+[trash] Trash + undo: delete-to-trash=true, original-gone=true, restore-brings-it-back=true → OK (deletes are recoverable) ✓
+[io1] FAT32 mount + read (kernel, no_std): readme=true seed-6000B=true ls-root=true → OK ✓
+[io2] FAT32 write (kernel): create=true mkdir=true nested=true grow+readback=true nested-read=true remove=true/gone=true → OK ✓
+[io3] FAT32 format (kernel): blank volume formatted → mount + write + read back → OK ✓
+[j1-cache] block-cache (no_std): block 5 written+read 2x (hits) + 1 miss → data-intact=true, hits=2 misses=1 → OK (read-lock hits, write-through) ✓
+[3f1] EuroContainer runtime: signed-image-verify=true (constrained-caps=true), tampered-manifest-REFUSED=true, mem-limit-enforced(3K-ok,+2K-refused)=true, overlay-CoW(copy-up=true,whiteout=true) → OK (signed images + ResourceLimits + EuroFS overlay, on EuroGuard caps) ✓
+[h1] AF_UNIX round-trip: server got 'ping', client got 'pong', EOF-after-close=true ✓
+[7guard] EuroGuard network control: geo-attribution(CN=true, local-unmapped=true), geo-block(CN-refused=true, local-allowed=true), per-app-block=true, allow-list(in=true, out-refused=true) → OK (per-app + geo network control: block a country, cut an app off, or clamp an agent to an allow-list) ✓
+[tls] kernel-ld.so TLS setup: standalone __thread PIE (41->42) -> exit 42 ✓ (static TLS block + FS_BASE set up by the kernel)
+[tls2] cross-module IE-TLS (.so __thread via TPOFF64): bump() 41->42 -> exit 42 ✓ (multi-module TLS block + TPOFF64 patch by the kernel-ld.so)
+[3c3] PT_INTERP + userspace ld.so: exe names /lib/ld-euro.so=true, interpreter resolved the cross-module symbol in userspace → output="3C3: 42" exit=42 OK (dynamic linking done by a userspace interpreter via PT_INTERP, not the kernel) ✓
+[h4] WASI capability gate: fd_write DENIED without CAP_CONSOLE for fd_write ✓
+[wasi] real WASI preview1 (wasi_snapshot_preview1.fd_write, true iovec ABI): ran=true, iovec-message-written=true, *nwritten-set-correctly=true, cap-gate-denies-without-CAP_CONSOLE=true → OK (runs real wasm32-wasi fd_write, not a custom shim; proc_exit/random_get/clock/env/args also implemented) ✓
+[h4-ctr] container 'no-net' (caps 0b0001): sock_connect DENIED — CAP_NET ✓
+[h4-ctr] container 'scoped' (caps 0b1101): sock_connect DENIED — network scope forbids 10.0.2.2:80 ✓
+[h5] Wayland server: surface 5 committed → window "EuroOS — real Wayland protocol" ✓
+[ecam] PCIe config via ECAM @ 0xe0000000 (buses 0..=255, MCFG, port-verified) ✓
+[i3-s5] ACPI shutdown ready: PM1a_CNT port 0x604, S5 value 0x2000, SLP_TYP-from-AML=true → `poweroff` performs a clean soft-off ✓ (end-to-end proven via scripts/shutdown-test.py: QEMU guest-shutdown)
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1092bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-KE-over-TLS + AES-SIV pending) ✓
+[3d2] EuroVerity (dm-verity-style, Ed25519-signed Merkle root over 16 blocks): manifest-signature-verified=true, block-verified-against-signed-root=true, tampered-block-DETECTED=true, forged-manifest-REFUSED=true → OK (system image integrity provable block-by-block; tamper ⇒ fall back to the good slot) ✓
+[3d2-wire] verity on the LIVE EuroFS read path: fmt+write=true/true, signed-manifest=true, EuroFS-mounted-on-VerityBlk+file-read(every-block-verified)=true, untouched-block-verifies=true, tampered-backing-block-REFUSED-on-read=true → OK (read path verifies every block; tamper ⇒ read fails ⇒ A/B fallback) ✓
+[g1] KERNEL STACK OVERFLOW: task 5 hit guard page 0x8000019f70 @ 0x3049f465 → task TERMINATED, kernel keeps running ✓
+[udrv-grant] e1000d pid 131072: BAR0 0x810e0000..0x81100000 mapped for ring 3 (first=true, last=true), page before=false, page after=false; DMA window 32 pages mapped=true, page after=false; LAPIC=false, kernel code=false → OK (exactly the granted ranges) ✓
+[udrv-iommu] device 00:02.0 has its own VT-d domain 'e1000d' with 32 page(s) = the DMA window, nothing else → OK ✓
+[udrv-e1000] e1000d (pid 131072, ring 3, profile driver) brought the 82574L (e1000e) up: MAC 52:54:00:12:34:56 reported over EuroIPC; nic backend = e1000 via userspace driver e1000d (EuroIPC) → OK ✓
+[udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HTTP: tx 14 rx 9 frames → OK (the kernel e1000 driver was not used) ✓
+[udrv-irq] MSI-X vector 0x4c: 16 interrupt(s) raised, 16 delivered to e1000d as EuroIPC Irq messages → OK ✓
+[udrv-dma] malicious e1000d: RX slot 10 aimed at kernel canary 0x1f9000, TX from kernel page 0x1fa000 (driver saw tx done) · IOMMU fault records: TX read 1, RX write 1 (total 2) · canary changed=false · driver still works=true → OK (device DMA confined to the driver's own window) ✓
+[udrv-crash] e1000d pid 131072 killed by a real fault (memory isolation: access 0x1000 denied); kernel kept running; sends refused while dead=true; restarted as pid 131073, MAC 52:54:00:12:34:56, DHCP + HTTP again → OK (driver crash = process exit, network back) ✓
+[net] PING 10.0.2.2: echo-reply OK ✓
+[net] DNS reply: example.com = 172.66.147.243 ✓
+[net] HTTP GET http://example.com/ -> 888 bytes ✓
+[net] HTTPS GET https://example.com/ -> 888 bytes (encrypted) ✓
+[net-async] inbound httpd (synthetic peers, TEST-NET-1): 16 concurrent clients: 16 SYN-ACKs from one service() pass, 16 answered, 16 closed, 0 half-open + 0 open left, passes 876529/48889/49344 us (longest 876529 us) → OK ✓
+[net-async] listen: backlog 4, 6 SYNs: 4 half-open + 2 dropped, then 6/6 accepted after the retransmitted SYNs → OK ✓
+[net-async] connect: answered 46235 us; half-open peer (stale ACK): RST at its ACK sent, established in 99843 us; silent drop: fresh port after 3136 ms (2 ports); our FIN after the peer's: sent; bound 6 s → OK ✓
+[bg-out] pid 196610 /bin/mtrack:   connect() DENIED — EuroGuard blocked this ✓
+[bg-out] pid 196610 /bin/mtrack:   connect() OK — connection allowed ✓
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 1 time(s), done (exit 1), output "msock: HTTP GET via POSIX sockets on EuroOS |   target: example.com (172.66.147.243):80 |   socket() failed" → OK (no capability, no socket) ✓
+[udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking sockets) over e1000d in 74 ticks: "GNET: glibc blocking sockets: connect+send+recv to example.com (172.66.147.243): 888 bytes, status \"HTTP/1.1 200 OK\"" exit=78; its waits gave the CPU away 8 time(s), 3 woken early by e1000d → OK (blocking socket calls sleep and wake on the driver's EuroIPC delivery) ✓
+[mr-grant] megaraidd pid 143360: register pages 0x81100000..0x81102000 mapped for ring 3 (first=true, last=true), next page (MSI-X table)=false, page before=false; DMA window 69 pages mapped=true, page after=false; LAPIC=false, kernel code=false → OK (exactly the granted ranges) ✓
+[mr-iommu] device 00:03.0 has its own VT-d domain 'megaraidd' with 69 page(s) = the DMA window, nothing else → OK ✓
+[mr-info] controller info + LD list via DCMD (see the megaraidd lines above), exported to the block layer over EuroIPC: LD0=target 0 131072 sectors (64 MiB) optimal, LD1=target 1 524288 sectors (256 MiB) optimal → OK ✓
+[mr-io] LD0 (self-test mark from an earlier boot): 1 sector write/read equal · 1 MiB at LBA 4096 written in 200 ms, read back in 210 ms, byte-for-byte equal · cache flush ok · read past the end refused=true → OK ✓
+[mr-irq] MSI-X vector 0x4d: 41 interrupt(s) raised by reply-queue completions, 41 delivered to megaraidd as EuroIPC Irq messages → OK ✓
+[mr-fs] EuroFS on LD1 mounted from disk: generation 1 written by the previous boot; /mr/gen-1.bin 196608 bytes, content matches; /mr/hello.txt "written by EuroOS through megaraidd, generation 1, rtc 1793903557" → OK (persisted across the reboot) ✓
+[mr-fs] wrote generation 2 (/mr/gen-2.bin 192 KiB, /mr/hello.txt, /mr/generation): written=true · remounted from disk, read back equal=true · scrub: 11 objects, 0 errors, superblock ok=true → OK ✓
+[mr-crash] megaraidd pid 143360 killed by a real fault (memory isolation: access 0x1000 denied) with write #3 posted to the controller and unacknowledged; restarted as pid 143361; 1 request(s) replayed; 6/6 files written, after a remount 6/6 read back equal; scrub: 11 objects, 0 errors, superblock ok=true → OK (driver crash mid-write = process exit, filesystem consistent, no data lost) ✓
+[mr-crash] without replay: driver killed during write #2 of /mr/lost.bin -> write_file returned Some(IoError); driver back=true; remount: earlier files 6/6 equal, /mr/lost.bin absent (the old checkpoint); scrub: 11 objects, 0 errors, superblock ok=true → OK (copy-on-write keeps the filesystem consistent when a write is lost) ✓
+[mr-dma] malicious megaraidd: DCMD data buffer aimed at kernel canary 0x194000 (completed, status 0x0) -> IOMMU fault records 1, canary intact=true; frame address = kernel page 0x195000 -> fault records 1, page intact=true, 1 stray completion(s) ignored · driver still works=true → OK (controller DMA confined to the driver's own window) ✓
+[net-worker] kernel task 21 started: inbound TCP (SYN queue, httpd, accept queues) runs here, woken by e1000d's frame deliveries (EuroIPC)
+[net-worker] httpd while the boot task is busy (3 s spin, no service()/pump_all from it; synthetic peers): 8 clients, 8 SYN-ACKs, 8 answered (first after 121 ms), 8 closed, 0 half-open + 0 open left, all done after 191 ms in 13 worker passes (task 21) → OK ✓
+[net-worker] net worker: task 21, 14 passes, 8 inbound frames, longest pass 2551 us; kicks 3 (e1000d/task) + 0 (interrupt, 0 found the scheduler busy); e1000d woken early 47 (frame to send) + 41 (its interrupt)
+[lk] checker self-test: irqsave=true correct-order-silent=true deliberate-inversion-detected=true task-mode-keeps-IF=true try_lock=true rwlock=true tracker-balanced=true -> OK ✓
+[kwork] per-CPU work queues: 3 AP(s) online, 4 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (4 ok), work-stealing=yes -> OK ✓

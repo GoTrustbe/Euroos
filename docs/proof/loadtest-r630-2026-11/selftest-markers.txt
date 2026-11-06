@@ -1,0 +1,30 @@
+Full selftest boot, -enable-kvm -cpu host -smp 4 -m 2G, to the interactive desktop.
+813e627 (+ throw-away key, re-signed glibc tests) vs feature/loadtest-r630 4baf003 (same signing). KVM:
+
+813e627 (no glibc re-sign): boot to desktop: 1 after 47s; OK-lines 162; FAILED-lines 10; panic 0
+813e627 + glibc re-signed: boot to desktop after 165 s; FAILED-lines 13; panic 0
+4baf003: boot to desktop after 164 s; FAILED-lines 13; panic 0
+
+OK marker kinds: 813e627 160, 4baf003 160; diff: identical
+FAILED lines (digits normalised to N): diff: identical
+
+FAILED lines (both):
+[appstore] signed app index: parsed=false · forged-signature-refused=true · wrong-developer-key-refused=false 
+[churn-fork] N fork/exit/wait cycles: exit=N (want N) · every-child-reaped-with-its-status=false · tasks N→N ·
+[fork] arena alloc FAILED (N MiB, pool has N MiB)
+[fork] arena alloc FAILED (N MiB, pool has N MiB)
+[fork] arena alloc FAILED (N MiB, pool has N MiB)
+[fork] arena alloc FAILED (N MiB, pool has N MiB)
+[fork] arena alloc FAILED (N MiB, pool has N MiB)
+[fork] arena alloc FAILED (N MiB, pool has N MiB)
+[fuzz] Linux-ABI syscall fuzzer: N random syscalls/args fired, kernel-survived=false (exit N) → FAILED
+[NeN] eupkg EXECUTION (signed index + content-addressed store): install-via-resolver=false, /bin-link=false, C
+[NfN] EuroContainer runtime: signed-image-verify=false (constrained-caps=true), tampered-manifest-REFUSED=true
+[updN] EdN verify-before-activate (dev.pub eNeNcN…): genuine=false · image-tamper-refused=true · sig-tamper-re
+[updN] update pipeline: real package staged=false · tampered package refused=true → FAILED ✗
+
+TCG (the CI setup): -cpu qemu64,+smep,+smap -smp 4 -m 512M, same images:
+813e627 + glibc re-signed: boot to desktop: 1 after 127s; OK-lines 161; FAILED-lines 10; panic 0
+4baf003:                   boot to desktop: 1 after 133s; OK-lines 161; FAILED-lines 10; panic 0
+OK marker kinds: 153 vs 153, diff: identical; FAILED lines diff: identical
+(at 512 MiB the glibc tests that need more memory fail with "no arena for glibc" on both, as in the J1 proof; [fuzz] passes under TCG)

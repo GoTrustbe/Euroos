@@ -1,0 +1,77 @@
+== ../integrate-drivers-2026-11-02/user-smp4-iommu.log  vs  user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../integrate-drivers-2026-11-02/user-smp1-iommu.log  vs  user-smp1-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../integrate-drivers-2026-11-02/user-smp4-noiommu.log  vs  user-smp4-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../integrate-drivers-2026-11-02/user-smp1-noiommu.log  vs  user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../integrate-drivers-2026-11-02/storage-smp4-iommu-1g.log  vs  storage-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../integrate-drivers-2026-11-02/storage-smp1-iommu-1g.log  vs  storage-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../integrate-drivers-2026-11-02/combined-smp4-iommu-1g.log  vs  combined-smp4-iommu-1g.log
+-- WORSE: 1
+   sbx2: base OKx1 | new FAILx1
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../integrate-drivers-2026-11-02/combined-smp1-iommu-1g.log  vs  combined-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== base-e2b4c96-combined-smp4-1.log  vs  combined-smp4-iommu-1g-r4.log (same time, side by side)
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== base-e2b4c96-combined-smp4-2.log  vs  combined-smp4-iommu-1g-r5.log (same time, side by side)
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== base-e2b4c96-combined-smp4-3.log  vs  combined-smp4-iommu-1g-r6.log (same time, side by side)
+-- WORSE: 1
+   sbx2: base OKx1 | new FAILx1
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../integrate-drivers-2026-11-02/mr-iommu-boot1.log  vs  mr-iommu-boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../integrate-drivers-2026-11-02/mr-iommu-boot2.log  vs  mr-iommu-boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../integrate-drivers-2026-11-02/mr-noiommu-boot1.log  vs  mr-noiommu-boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== ../integrate-drivers-2026-11-02/mr-noiommu-boot2.log  vs  mr-noiommu-boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0

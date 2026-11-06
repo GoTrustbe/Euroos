@@ -1,0 +1,7 @@
+[loadtest] scenario=soak image=/srv/euroos/wt-net-runs/n4-soak/boot.img disks=['/srv/euroos/wt-net-runs/n4-soak/disk0-8G.raw'] bus=virtio kvm=True smp=4 mem=16G nic=e1000e bootopts=- iommu=False
+[loadtest] serial log: /srv/euroos/wt-net-runs/n4-soak/loadtest-serial-20261105-082404.log  ·  CSV: /srv/euroos/wt-net-runs/n4-soak/n4-soak.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 335s — driving commands
+[loadtest] completed clean · results → /srv/euroos/wt-net-runs/n4-soak/n4-soak.csv · ltstat samples → /srv/euroos/wt-net-runs/n4-soak/n4-soak-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 4384, "err": 641, "p50_ms": 903.3, "p99_ms": 9603.1}
+[loadtest] host HTTP server served 222 request(s)

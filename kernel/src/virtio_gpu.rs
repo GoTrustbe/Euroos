@@ -1,9 +1,7 @@
-//! **BB-2** — native **modern-virtio (virtio-1.0)** transport + **virtio-gpu** 2D
-//! driver. The existing virtio-net/blk use the *legacy* transport (port I/O
-//! from BAR0); the modern transport publishes its register blocks via
-//! PCI capabilities in MMIO BARs. Because the kernel **identity-maps** the lower
-//! 512 GiB (`paging.rs`), every BAR/heap address is at once physical and
-//! virtual — no separate MMIO mapping or IOMMU needed for DMA.
+//! **BB-2** — native **virtio-gpu** 2D driver on the shared modern virtio
+//! transport (`virtio_pci.rs`, the same one virtio-blk/net/input use). RAM is
+//! identity-mapped, so every heap address is also the DMA address; BARs above
+//! the identity map are reached through `paging::mmio_virt`.
 //!
 //! The control virtqueue sends the `eurogpu` command stream (host-tested) to the
 //! real device: `GET_DISPLAY_INFO` → `RESOURCE_CREATE_2D` → `ATTACH_BACKING` →
@@ -18,31 +16,10 @@ use crate::pci;
 
 // ── volatile MMIO (identity-mapped physical = virtual) ─────────────────────
 unsafe fn r8(a: u64) -> u8 { core::ptr::read_volatile(a as *const u8) }
-unsafe fn w8(a: u64, v: u8) { core::ptr::write_volatile(a as *mut u8, v) }
 unsafe fn r16(a: u64) -> u16 { core::ptr::read_volatile(a as *const u16) }
 unsafe fn w16(a: u64, v: u16) { core::ptr::write_volatile(a as *mut u16, v) }
-unsafe fn r32(a: u64) -> u32 { core::ptr::read_volatile(a as *const u32) }
 unsafe fn w32(a: u64, v: u32) { core::ptr::write_volatile(a as *mut u32, v) }
 unsafe fn w64(a: u64, v: u64) { core::ptr::write_volatile(a as *mut u64, v) }
-
-// virtio_pci_common_cfg field offsets (little-endian MMIO).
-const C_DEV_FEAT_SEL: u64 = 0x00;
-const C_DEV_FEAT: u64 = 0x04;
-const C_DRV_FEAT_SEL: u64 = 0x08;
-const C_DRV_FEAT: u64 = 0x0C;
-const C_STATUS: u64 = 0x14;
-const C_Q_SELECT: u64 = 0x16;
-const C_Q_SIZE: u64 = 0x18;
-const C_Q_ENABLE: u64 = 0x1C;
-const C_Q_NOTIFY_OFF: u64 = 0x1E;
-const C_Q_DESC: u64 = 0x20;
-const C_Q_DRIVER: u64 = 0x28;
-const C_Q_DEVICE: u64 = 0x30;
-
-const S_ACK: u8 = 1;
-const S_DRIVER: u8 = 2;
-const S_DRIVER_OK: u8 = 4;
-const S_FEAT_OK: u8 = 8;
 
 // Split-virtqueue descriptor flags.
 const VRING_DESC_F_NEXT: u16 = 1;
@@ -55,22 +32,23 @@ fn dma_zeroed(size: usize, align: usize) -> u64 {
     use alloc::alloc::{alloc_zeroed, Layout};
     let layout = Layout::from_size_align(size.max(1), align).unwrap();
     let p = unsafe { alloc_zeroed(layout) };
+    crate::iommu::dma_add("virtio-gpu", p as u64, size.max(1)); // heap-backed DMA buffer: into the device's domain
     p as u64
 }
 
-/// One split virtqueue (the GPU's control queue).
+/// One split virtqueue (the GPU's control queue), on the shared transport.
 struct Vq {
     size: u16,
     desc: u64,
     avail: u64,
     used: u64,
-    notify: u64,
     avail_idx: u16,
     last_used: u16,
 }
 
 pub struct VirtioGpu {
-    common: u64,
+    tp: crate::virtio_pci::Transport,
+    q: crate::virtio_pci::Queue,
     vq: Vq,
     pub width: u32,
     pub height: u32,
@@ -147,75 +125,30 @@ pub fn scanout_active() -> bool {
 }
 
 impl VirtioGpu {
-    /// Bring the device up via the **modern** transport and set up the control queue.
+    /// Bring the device up via the shared **modern** virtio transport
+    /// (`virtio_pci.rs`: capabilities, VERSION_1, FEATURES_OK read back) and set
+    /// up the control queue. No device features are accepted (2D only; no
+    /// VIRGL, no EDID, no EVENT_IDX).
     pub fn init() -> Option<VirtioGpu> {
         let dev = find_gpu()?;
         pci::claim(dev.bus, dev.dev, dev.func, "virtio-gpu"); // hwprobe (M1-3)
-        // Enable bus-master (DMA) + MMIO decode.
-        dev.enable(0x0006);
-        let common = dev.virtio_cap(1)?.addr; // common cfg
-        let notify_cap = dev.virtio_cap(2)?; // notify cfg
-
-        unsafe {
-            // 1) Reset, then ACK + DRIVER.
-            w8(common + C_STATUS, 0);
-            // short settle loop until the device confirms the reset (status 0).
-            for _ in 0..100_000 {
-                if r8(common + C_STATUS) == 0 {
-                    break;
-                }
-            }
-            w8(common + C_STATUS, S_ACK);
-            w8(common + C_STATUS, S_ACK | S_DRIVER);
-
-            // 2) Feature negotiation: require VIRTIO_F_VERSION_1 (bit 32 → sel 1, bit 0).
-            w32(common + C_DEV_FEAT_SEL, 1);
-            let _hi = r32(common + C_DEV_FEAT);
-            w32(common + C_DRV_FEAT_SEL, 0);
-            w32(common + C_DRV_FEAT, 0);
-            w32(common + C_DRV_FEAT_SEL, 1);
-            w32(common + C_DRV_FEAT, 1); // VERSION_1
-            w8(common + C_STATUS, S_ACK | S_DRIVER | S_FEAT_OK);
-            if r8(common + C_STATUS) & S_FEAT_OK == 0 {
-                return None; // device refused our features
-            }
-
-            // 3) Set up the control queue (index 0).
-            w16(common + C_Q_SELECT, 0);
-            let qsize = r16(common + C_Q_SIZE);
-            if qsize == 0 {
-                return None;
-            }
-            let desc = dma_zeroed(qsize as usize * 16, 16);
-            let avail = dma_zeroed(6 + qsize as usize * 2, 2);
-            let used = dma_zeroed(6 + qsize as usize * 8, 4);
-            w64(common + C_Q_DESC, desc);
-            w64(common + C_Q_DRIVER, avail);
-            w64(common + C_Q_DEVICE, used);
-            let notify_off = r16(common + C_Q_NOTIFY_OFF);
-            let notify = notify_cap.addr + notify_off as u64 * notify_cap.notify_mult as u64;
-            w16(common + C_Q_ENABLE, 1);
-
-            // 4) DRIVER_OK — the device is now operational.
-            w8(common + C_STATUS, S_ACK | S_DRIVER | S_FEAT_OK | S_DRIVER_OK);
-
-            let mut gpu = VirtioGpu {
-                common,
-                vq: Vq { size: qsize, desc, avail, used, notify, avail_idx: 0, last_used: 0 },
-                width: 0,
-                height: 0,
-                fb: 0,
-                sw: 0,
-                sh: 0,
-            };
-            // 5) Query the screen (real round-trip over the control queue).
-            let resp = gpu.submit(&eurogpu::get_display_info(), 256);
-            if let Some((w, h)) = parse_display_info(&resp) {
-                gpu.width = w;
-                gpu.height = h;
-            }
-            Some(gpu)
+        let mut tp = crate::virtio_pci::Transport::probe(&dev)?;
+        if !tp.is_modern() {
+            return None;
         }
+        tp.begin();
+        tp.negotiate(0)?;
+        let q = tp.setup_queue(0, 64, &mut |pages| Some(dma_zeroed(pages * 4096, 4096)))?;
+        tp.driver_ok();
+        let vq = Vq { size: q.size, desc: q.desc, avail: q.avail, used: q.used, avail_idx: 0, last_used: 0 };
+        let mut gpu = VirtioGpu { tp, q, vq, width: 0, height: 0, fb: 0, sw: 0, sh: 0 };
+        // Query the screen (real round-trip over the control queue).
+        let resp = gpu.submit(&eurogpu::get_display_info(), 256);
+        if let Some((w, h)) = parse_display_info(&resp) {
+            gpu.width = w;
+            gpu.height = h;
+        }
+        Some(gpu)
     }
 
     /// Send one control command (`cmd`) and read back up to `resp_cap` response bytes.
@@ -250,7 +183,7 @@ impl VirtioGpu {
             fence(Ordering::SeqCst);
 
             // Notify the control queue (queue index 0).
-            w16(self.vq.notify, 0);
+            self.tp.notify(&self.q);
 
             // Poll the used ring until it advances (bounded → cannot hang).
             let mut spins = 0u64;

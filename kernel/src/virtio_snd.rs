@@ -1,10 +1,10 @@
-//! **3B-7 (VM-verifiable)** — native **modern-virtio (virtio-1.0)** **virtio-sound**
-//! driver. Where the Intel HDA path finds no controller under QEMU's default
-//! machine, `virtio-sound-pci` IS emulated, so this driver is provable in a VM:
-//! it brings the device up over the modern PCI-caps transport (the same one the
-//! virtio-gpu driver uses), reads the device config (how many PCM streams), and
-//! round-trips a `VIRTIO_SND_R_PCM_INFO` control request that the device answers
-//! `VIRTIO_SND_S_OK`.
+//! **3B-7 (VM-verifiable)** — native **virtio-sound** driver on the shared
+//! modern virtio transport (`virtio_pci.rs`, the same one virtio-blk/net/gpu/
+//! input use). Where the Intel HDA path finds no controller under QEMU's
+//! default machine, `virtio-sound-pci` IS emulated, so this driver is provable
+//! in a VM: it brings the device up, reads the device config (how many PCM
+//! streams), and round-trips a `VIRTIO_SND_R_PCM_INFO` control request that the
+//! device answers `VIRTIO_SND_S_OK`.
 //!
 //! Scope: this proves the transport + control queue live in a VM. Actual PCM
 //! playback (SET_PARAMS → PREPARE → START + PCM frames on the tx queue, fed by
@@ -15,25 +15,6 @@ use alloc::vec::Vec;
 use core::sync::atomic::{fence, Ordering};
 
 use crate::pci;
-
-// virtio_pci_common_cfg field offsets (identical layout to virtio-gpu).
-const C_DEV_FEAT_SEL: u64 = 0x00;
-const C_DEV_FEAT: u64 = 0x04;
-const C_DRV_FEAT_SEL: u64 = 0x08;
-const C_DRV_FEAT: u64 = 0x0C;
-const C_STATUS: u64 = 0x14;
-const C_Q_SELECT: u64 = 0x16;
-const C_Q_SIZE: u64 = 0x18;
-const C_Q_ENABLE: u64 = 0x1C;
-const C_Q_NOTIFY_OFF: u64 = 0x1E;
-const C_Q_DESC: u64 = 0x20;
-const C_Q_DRIVER: u64 = 0x28;
-const C_Q_DEVICE: u64 = 0x30;
-
-const S_ACK: u8 = 1;
-const S_DRIVER: u8 = 2;
-const S_DRIVER_OK: u8 = 4;
-const S_FEAT_OK: u8 = 8;
 
 const VRING_DESC_F_NEXT: u16 = 1;
 const VRING_DESC_F_WRITE: u16 = 2;
@@ -49,20 +30,12 @@ unsafe fn r8(a: u64) -> u8 {
     core::ptr::read_volatile(a as *const u8)
 }
 #[inline]
-unsafe fn w8(a: u64, v: u8) {
-    core::ptr::write_volatile(a as *mut u8, v)
-}
-#[inline]
 unsafe fn r16(a: u64) -> u16 {
     core::ptr::read_volatile(a as *const u16)
 }
 #[inline]
 unsafe fn w16(a: u64, v: u16) {
     core::ptr::write_volatile(a as *mut u16, v)
-}
-#[inline]
-unsafe fn r32(a: u64) -> u32 {
-    core::ptr::read_volatile(a as *const u32)
 }
 #[inline]
 unsafe fn w32(a: u64, v: u32) {
@@ -76,7 +49,9 @@ unsafe fn w64(a: u64, v: u64) {
 fn dma_zeroed(size: usize, align: usize) -> u64 {
     use alloc::alloc::{alloc_zeroed, Layout};
     let layout = Layout::from_size_align(size.max(1), align).unwrap();
-    unsafe { alloc_zeroed(layout) as u64 }
+    let pa = unsafe { alloc_zeroed(layout) as u64 };
+    crate::iommu::dma_add("virtio-snd", pa, size.max(1)); // heap-backed DMA buffer: into the device's domain
+    pa
 }
 
 struct Vq {
@@ -84,12 +59,13 @@ struct Vq {
     desc: u64,
     avail: u64,
     used: u64,
-    notify: u64,
     avail_idx: u16,
     last_used: u16,
 }
 
 pub struct VirtioSnd {
+    tp: crate::virtio_pci::Transport,
+    q: crate::virtio_pci::Queue,
     ctrl: Vq,
     /// Device config: number of jacks / PCM streams / channel maps.
     pub jacks: u32,
@@ -108,70 +84,23 @@ pub fn present() -> bool {
 }
 
 impl VirtioSnd {
-    /// Bring the device up via the modern transport, set up the control queue,
-    /// and read the device config.
+    /// Bring the device up via the modern transport (no device features
+    /// accepted), set up the control queue, and read the device config.
     pub fn init() -> Option<VirtioSnd> {
         let dev = find_snd()?;
         pci::claim(dev.bus, dev.dev, dev.func, "virtio-snd"); // hwprobe (M1-3)
-        dev.enable(0x0006); // bus-master + MMIO decode
-        let common = dev.virtio_cap(1)?.addr; // common cfg
-        let notify_cap = dev.virtio_cap(2)?; // notify cfg
-        let devcfg = dev.virtio_cap(4)?.addr; // device-specific cfg
-
-        unsafe {
-            // Reset → ACK → DRIVER.
-            w8(common + C_STATUS, 0);
-            for _ in 0..100_000 {
-                if r8(common + C_STATUS) == 0 {
-                    break;
-                }
-            }
-            w8(common + C_STATUS, S_ACK);
-            w8(common + C_STATUS, S_ACK | S_DRIVER);
-
-            // Negotiate VIRTIO_F_VERSION_1 (feature bit 32).
-            w32(common + C_DEV_FEAT_SEL, 1);
-            let _hi = r32(common + C_DEV_FEAT);
-            w32(common + C_DRV_FEAT_SEL, 0);
-            w32(common + C_DRV_FEAT, 0);
-            w32(common + C_DRV_FEAT_SEL, 1);
-            w32(common + C_DRV_FEAT, 1); // VERSION_1
-            w8(common + C_STATUS, S_ACK | S_DRIVER | S_FEAT_OK);
-            if r8(common + C_STATUS) & S_FEAT_OK == 0 {
-                return None;
-            }
-
-            // Set up the control queue (index 0).
-            w16(common + C_Q_SELECT, 0);
-            let qsize = r16(common + C_Q_SIZE);
-            if qsize == 0 {
-                return None;
-            }
-            let desc = dma_zeroed(qsize as usize * 16, 16);
-            let avail = dma_zeroed(6 + qsize as usize * 2, 2);
-            let used = dma_zeroed(6 + qsize as usize * 8, 4);
-            w64(common + C_Q_DESC, desc);
-            w64(common + C_Q_DRIVER, avail);
-            w64(common + C_Q_DEVICE, used);
-            let notify_off = r16(common + C_Q_NOTIFY_OFF);
-            let notify = notify_cap.addr + notify_off as u64 * notify_cap.notify_mult as u64;
-            w16(common + C_Q_ENABLE, 1);
-
-            // DRIVER_OK.
-            w8(common + C_STATUS, S_ACK | S_DRIVER | S_FEAT_OK | S_DRIVER_OK);
-
-            // Read the device config (virtio_snd_config: jacks, streams, chmaps).
-            let jacks = r32(devcfg);
-            let streams = r32(devcfg + 4);
-            let chmaps = r32(devcfg + 8);
-
-            Some(VirtioSnd {
-                ctrl: Vq { size: qsize, desc, avail, used, notify, avail_idx: 0, last_used: 0 },
-                jacks,
-                streams,
-                chmaps,
-            })
+        let mut tp = crate::virtio_pci::Transport::probe(&dev)?;
+        if !tp.is_modern() {
+            return None;
         }
+        tp.begin();
+        tp.negotiate(0)?;
+        let q = tp.setup_queue(0, 64, &mut |pages| Some(dma_zeroed(pages * 4096, 4096)))?;
+        tp.driver_ok();
+        // virtio_snd_config: jacks, streams, chmaps.
+        let (jacks, streams, chmaps) = (tp.cfg32(0), tp.cfg32(4), tp.cfg32(8));
+        let ctrl = Vq { size: q.size, desc: q.desc, avail: q.avail, used: q.used, avail_idx: 0, last_used: 0 };
+        Some(VirtioSnd { tp, q, ctrl, jacks, streams, chmaps })
     }
 
     /// Send a control request and read back `resp_cap` response bytes.
@@ -200,7 +129,7 @@ impl VirtioSnd {
             self.ctrl.avail_idx = self.ctrl.avail_idx.wrapping_add(1);
             w16(self.ctrl.avail + 2, self.ctrl.avail_idx);
             fence(Ordering::SeqCst);
-            w16(self.ctrl.notify, 0);
+            self.tp.notify(&self.q);
 
             let mut spins = 0u64;
             loop {

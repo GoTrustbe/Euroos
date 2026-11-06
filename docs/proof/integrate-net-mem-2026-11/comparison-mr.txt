@@ -1,0 +1,120 @@
+== ../integrate-loadtest-2026-11-03/mr-iommu-boot1.log  vs  mr-iommu/boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) mr-iommu/boot1.log  vs  mr-iommu/boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/mr-iommu-boot2.log  vs  mr-iommu/boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) mr-iommu/boot2.log  vs  mr-iommu/boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/mr-iommu-boot1.log  vs  mr-iommu-b/boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) mr-iommu/boot1.log  vs  mr-iommu-b/boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/mr-iommu-boot2.log  vs  mr-iommu-b/boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) mr-iommu/boot2.log  vs  mr-iommu-b/boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/mr-noiommu-boot1.log  vs  mr-noiommu/boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) mr-noiommu-e1/boot1.log  vs  mr-noiommu/boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/mr-noiommu-boot2.log  vs  mr-noiommu/boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) mr-noiommu-e1/boot2.log  vs  mr-noiommu/boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/mr-noiommu-boot1.log  vs  mr-noiommu-b/boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) mr-noiommu-e1/boot1.log  vs  mr-noiommu-b/boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/mr-noiommu-boot2.log  vs  mr-noiommu-b/boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) mr-noiommu-e1/boot2.log  vs  mr-noiommu-b/boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/mr-noiommu-boot1.log  vs  mr-noiommu-c/boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) mr-noiommu-e1/boot1.log  vs  mr-noiommu-c/boot1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../integrate-loadtest-2026-11-03/mr-noiommu-boot2.log  vs  mr-noiommu-c/boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3
+== ../mem-hygiene-2026-11 (server log) mr-noiommu-e1/boot2.log  vs  mr-noiommu-c/boot2.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   net-async: OKx3

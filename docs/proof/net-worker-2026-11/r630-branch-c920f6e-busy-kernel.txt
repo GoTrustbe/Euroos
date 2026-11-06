@@ -1,0 +1,7 @@
+[loadtest] scenario=inbound-busy image=/srv/euroos/nwruns/x-msix-busy-kernel/boot.img disks=['/srv/euroos/nwruns/x-msix-busy-kernel/disk0-8G.raw'] bus=virtio kvm=True smp=4 mem=16G nic=e1000e bootopts=net.driver=kernel iommu=False
+[loadtest] serial log: /srv/euroos/nwruns/x-msix-busy-kernel/loadtest-serial-20261105-172306.log  ·  CSV: /srv/euroos/nwruns/x-msix-busy-kernel/x-msix-busy-kernel.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 316s — driving commands
+  [   25/?] ✓ ok         37572ms t=  339.0s  churn fs 1
+[loadtest] completed clean · results → /srv/euroos/nwruns/x-msix-busy-kernel/x-msix-busy-kernel.csv · ltstat samples → /srv/euroos/nwruns/x-msix-busy-kernel/x-msix-busy-kernel-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 50570, "err": 8, "p50_ms": 59.1, "p99_ms": 71.2, "max_ms": 6637.5, "busy_windows": 15, "busy_s": 528, "busy": {"ok": 44427, "err": 0, "p50_ms": 59.1, "p99_ms": 71.2, "max_ms": 1041.0}, "idle": {"ok": 6143, "err": 8, "p50_ms": 59.0, "p99_ms": 71.2, "max_ms": 6637.5}}

@@ -1,0 +1,16 @@
+[loadtest] scenario=inbound image=/srv/euroos/nwruns/r-br-inbound-user/boot.img disks=[] bus=virtio kvm=True smp=4 mem=4G nic=e1000e bootopts=- iommu=False
+[loadtest] serial log: /srv/euroos/nwruns/r-br-inbound-user/loadtest-serial-20261105-163015.log  ·  CSV: /srv/euroos/nwruns/r-br-inbound-user/r-br-inbound-user.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 165s — driving commands
+  [   50/?] ✓ ok            19ms t=   29.0s  echo console-alive
+  [  100/?] ✓ ok            29ms t=   56.3s  echo console-alive
+  [  150/?] ✓ ok            69ms t=   83.9s  echo console-alive
+  [  200/?] ✓ ok            49ms t=  111.2s  echo console-alive
+  [  250/?] ✓ ok            19ms t=  139.1s  echo console-alive
+  [  300/?] ✓ ok            69ms t=  166.3s  echo console-alive
+  [  350/?] ✓ ok            19ms t=  193.7s  echo console-alive
+  [  400/?] ✓ ok            49ms t=  220.9s  echo console-alive
+  [  450/?] ✓ ok            57ms t=  248.1s  echo console-alive
+  [  500/?] ✓ ok            21ms t=  275.4s  echo console-alive
+[loadtest] completed clean · results → /srv/euroos/nwruns/r-br-inbound-user/r-br-inbound-user.csv · ltstat samples → /srv/euroos/nwruns/r-br-inbound-user/r-br-inbound-user-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 41398, "err": 4, "p50_ms": 4.6, "p99_ms": 103.2, "max_ms": 189.1}

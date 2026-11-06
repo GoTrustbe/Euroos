@@ -1,0 +1,59 @@
+diff --git a/kernel/src/ring3.rs b/kernel/src/ring3.rs
+index 4b3fd2e..f07a260 100644
+--- a/kernel/src/ring3.rs
++++ b/kernel/src/ring3.rs
+@@ -4146,6 +4146,12 @@ pub fn is_pid_alive(pid: u64) -> bool {
+ }
+ 
+ /// The most recent output line of each background musl process (for display).
++/// EXPERIMENT: every output line of background process `pid`.
++pub fn bg_output_of(pid: u64) -> alloc::vec::Vec<String> {
++    x86_64::instructions::interrupts::without_interrupts(|| {
++        BG.lock().iter().find(|p| p.pid == pid).map(|p| { let mut v = p.output.clone(); if !p.partial.is_empty() { v.push(p.partial.clone()); } v }).unwrap_or_default()
++    })
++}
+ pub fn bg_lines() -> alloc::vec::Vec<String> {
+     // BUG-007 hardening: irqsave BG hold (non-preemptible).
+     x86_64::instructions::interrupts::without_interrupts(|| {
+diff --git a/kernel/src/udrv.rs b/kernel/src/udrv.rs
+index e757eb2..7a10dde 100644
+--- a/kernel/src/udrv.rs
++++ b/kernel/src/udrv.rs
+@@ -754,9 +754,37 @@ pub fn boot(falloc: &mut FrameAllocator) {
+     selftest_irq(msix);
+     selftest_dma(falloc);
+     selftest_crash(falloc, pid);
++    diag_msock(falloc);
+     crate::serial_println!("[udrv] {}", status_line());
+ }
+ 
++/// EXPERIMENT (not for merge): /bin/msock as a scheduled background process
++/// over e1000d, to measure where process network syscalls get stuck.
++fn diag_msock(falloc: &mut FrameAllocator) {
++    let t0 = crate::interrupts::ticks();
++    let (tx0, rx0, irq0) = (TX_FRAMES.load(Ordering::Relaxed), RX_FRAMES.load(Ordering::Relaxed), IRQS_DELIVERED.load(Ordering::Relaxed));
++    let before = crate::klock::snapshot_all();
++    without_interrupts(|| {
++        crate::ring3::spawn_bg_musl(falloc, crate::ring3::msock_bytes(), 990, b"/bin/msock");
++        if let Some((task, ..)) = crate::ring3::bg_layout(990) {
++            crate::ring3::set_task_caps(task, crate::ring3::CAP_NET | crate::ring3::CAP_CONSOLE);
++        }
++    });
++    let done = wait_for(6000, falloc, || !crate::ring3::bg_alive(990));
++    crate::serial_println!(
++        "[udrv-msock] (diagnostic) /bin/msock as a scheduled process over e1000d: finished={done} after {} ticks; during the run: netstack tx {} rx {} frames, driver IRQ messages {}",
++        crate::interrupts::ticks() - t0,
++        TX_FRAMES.load(Ordering::Relaxed) - tx0,
++        RX_FRAMES.load(Ordering::Relaxed) - rx0,
++        IRQS_DELIVERED.load(Ordering::Relaxed) - irq0
++    );
++    for l in crate::ring3::bg_output_of(990) {
++        crate::serial_println!("[udrv-msock]   | {l}");
++    }
++    crate::klock::report_delta("udrv-msock", &before, 6);
++    crate::klock::report_hold("udrv-msock", 4);
++}
++
+ fn selftest_grant(pid: u64) {
+     let Some((_, pml4, _, _)) = crate::ring3::bg_layout(pid) else { return };
+     let sup = SUP.lock();

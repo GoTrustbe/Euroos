@@ -1,0 +1,7 @@
+[loadtest] scenario=soak image=/srv/euroos/wt-integrate4-runs/soak-heaptrace/boot.img disks=['/srv/euroos/wt-integrate4-runs/soak-heaptrace/disk0-8G.raw'] bus=virtio kvm=True smp=4 mem=16G nic=e1000e bootopts=- iommu=False
+[loadtest] serial log: /srv/euroos/wt-integrate4-runs/soak-heaptrace/loadtest-serial-20261105-105913.log  ·  CSV: /srv/euroos/wt-integrate4-runs/soak-heaptrace/soak-heaptrace.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 337s — driving commands
+[loadtest] completed clean · results → /srv/euroos/wt-integrate4-runs/soak-heaptrace/soak-heaptrace.csv · ltstat samples → /srv/euroos/wt-integrate4-runs/soak-heaptrace/soak-heaptrace-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 4524, "err": 615, "p50_ms": 951.5, "p99_ms": 9508.3}
+[loadtest] host HTTP server served 225 request(s)

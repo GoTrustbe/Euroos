@@ -99,11 +99,73 @@ pub extern "sysv64" fn ap_main() -> ! {
     //    is the idle task: the first tick saves it and switches to a worker.
     crate::gdt::init_ap();
     crate::interrupts::init();
+    // BUG-032: the scheduler write watch on this core too (a wild write may come from an AP).
+    crate::memwatch::arm_this_cpu();
+    // J1: give this core the BSP's CPU feature state before it runs general
+    // kernel code (the trampoline only enables PAE + long mode).
+    ap_cpu_features();
     crate::sched::ap_setup(id);
     crate::apic::start_timer_on_this_cpu(0x41);
     x86_64::instructions::interrupts::enable();
-    loop {
-        x86_64::instructions::hlt();
+    // The idle task of this core = the per-CPU kernel work loop (sleeps in hlt
+    // when there is no work).
+    crate::kwork::ap_idle_loop(id)
+}
+
+/// CR0/CR4/EFER bits recorded on the BSP for the APs (J1).
+static BSP_CR0: AtomicU64 = AtomicU64::new(0);
+static BSP_CR4: AtomicU64 = AtomicU64::new(0);
+static BSP_EFER: AtomicU64 = AtomicU64::new(0);
+
+fn record_bsp_cpu_features() {
+    unsafe {
+        let (cr0, cr4): (u64, u64);
+        core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack, preserves_flags));
+        BSP_CR0.store(cr0, Ordering::Release);
+        BSP_CR4.store(cr4, Ordering::Release);
+        BSP_EFER.store(x86_64::registers::model_specific::Msr::new(0xC000_0080).read(), Ordering::Release);
+    }
+}
+
+/// J1: an AP leaves the trampoline with only CR4.PAE, CR0.PE|PG and EFER.LME set.
+/// General kernel code needs more: Rust on this target uses SSE (memcpy, float
+/// formatting), which faults with #UD unless CR4.OSFXSR is set and CR0.EM clear;
+/// page-table entries carry NX bits, which are RESERVED (a page fault) unless
+/// EFER.NXE is set. Before J1 no AP ever ran such code (only the integer
+/// parallel sum and spin loops), so this was never visible. Copy the BSP
+/// settings for exactly these bits.
+fn ap_cpu_features() {
+    const CR0_MP: u64 = 1 << 1;
+    const CR0_EM: u64 = 1 << 2;
+    const CR0_NE: u64 = 1 << 5;
+    const CR0_WP: u64 = 1 << 16;
+    const CR4_OSFXSR: u64 = 1 << 9;
+    const CR4_OSXMMEXCPT: u64 = 1 << 10;
+    const CR4_OSXSAVE: u64 = 1 << 18;
+    const EFER_NXE: u64 = 1 << 11;
+    let bcr0 = BSP_CR0.load(Ordering::Acquire);
+    let bcr4 = BSP_CR4.load(Ordering::Acquire);
+    let befer = BSP_EFER.load(Ordering::Acquire);
+    unsafe {
+        let mut cr0: u64;
+        core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack, preserves_flags));
+        cr0 = (cr0 & !CR0_EM) | CR0_MP | CR0_NE | (bcr0 & CR0_WP);
+        core::arch::asm!("mov cr0, {}", in(reg) cr0, options(nostack, preserves_flags));
+        let mut cr4: u64;
+        core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack, preserves_flags));
+        cr4 |= CR4_OSFXSR | CR4_OSXMMEXCPT | (bcr4 & CR4_OSXSAVE);
+        core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, preserves_flags));
+        if bcr4 & CR4_OSXSAVE != 0 {
+            // Same XCR0 as the BSP (x87|SSE|AVX), see sched::fpu_init.
+            core::arch::asm!("xsetbv", in("ecx") 0u32, in("eax") 0x7u32, in("edx") 0u32, options(nomem, nostack, preserves_flags));
+        }
+        if befer & EFER_NXE != 0 {
+            let mut efer = x86_64::registers::model_specific::Msr::new(0xC000_0080);
+            let v = efer.read();
+            efer.write(v | EFER_NXE);
+        }
+        core::arch::asm!("fninit", options(nomem, nostack));
     }
 }
 
@@ -119,14 +181,30 @@ pub fn init() {
         }
     };
     let bsp = crate::apic::lapic_id() as u8;
+    record_bsp_cpu_features();
     let cr3 = crate::sched::boot_pml4();
     if cr3 == 0 {
         serial_println!("[smp] boot PML4 unknown — bring-up skipped");
         return;
     }
 
-    // Distribute a parallel sum 0..N over ALL enabled cores (BSP + APs).
-    let enabled: Vec<u8> = madt.cores.iter().filter(|c| c.enabled).map(|c| c.apic_id).collect();
+    // Which cores we will run: per-CPU state is indexed by `APIC id & 7`, so at
+    // most MAX_CPU cores, none sharing a slot (LOADTEST-R630 BUG-012: with
+    // `-smp 16` the old code started 7 APs but kept using all 16 MADT ids, so
+    // ids 8..15 aliased slots 0..7, the parallel sum read WRONG, the log
+    // reported cores that never ran, and kwork never accepted work).
+    let madt_enabled: Vec<u8> = madt.cores.iter().filter(|c| c.enabled).map(|c| c.apic_id).collect();
+    let (enabled, skipped) = euroacpi::select_cpus(bsp, &madt_enabled, MAX_CPU);
+    if skipped > 0 {
+        serial_println!(
+            "[smp] MADT lists {} enabled core(s); EuroOS runs at most {} (per-CPU slots = APIC id & 7): using {}, {} left offline",
+            madt_enabled.len(),
+            MAX_CPU,
+            enabled.len(),
+            skipped
+        );
+    }
+    // Distribute a parallel sum 0..N over the cores we run (BSP + APs).
     let ncores = enabled.len().max(1) as u64;
     let chunk = WORK_N / ncores;
     for (i, &id) in enabled.iter().enumerate() {
@@ -147,10 +225,8 @@ pub fn init() {
 
     let mut idx = 0usize;
     let mut started = 0u32;
-    for c in &madt.cores {
-        if !c.enabled || c.apic_id == bsp {
-            continue;
-        }
+    let mut online: Vec<u8> = alloc::vec![bsp];
+    for &apic_id in enabled.iter().skip(1) {
         if idx >= MAX_AP {
             break;
         }
@@ -167,14 +243,16 @@ pub fn init() {
             }
         };
         unsafe { ((TRAMP + OFF_STACK) as *mut u64).write_volatile(sp) };
+        // J1: this stack belongs to that core (cheap per-CPU identity, percpu.rs).
+        crate::percpu::register_stack(sp - AP_STACK_SIZE as u64, sp + 64, apic_id as usize);
 
         let before = AP_ONLINE.load(Ordering::SeqCst);
         // INIT-SIPI-SIPI (Intel MP protocol).
-        crate::apic::send_init(c.apic_id);
+        crate::apic::send_init(apic_id);
         crate::apic::busy_wait_us(10_000);
-        crate::apic::send_sipi(c.apic_id, (TRAMP >> 12) as u8);
+        crate::apic::send_sipi(apic_id, (TRAMP >> 12) as u8);
         crate::apic::busy_wait_us(200);
-        crate::apic::send_sipi(c.apic_id, (TRAMP >> 12) as u8);
+        crate::apic::send_sipi(apic_id, (TRAMP >> 12) as u8);
 
         // Wait until this AP reports in (timeout ~100 ms).
         let mut ok = false;
@@ -187,9 +265,10 @@ pub fn init() {
         }
         if ok {
             started += 1;
-            serial_println!("[smp] core APIC-id {} online", c.apic_id);
+            online.push(apic_id);
+            serial_println!("[smp] core APIC-id {} online", apic_id);
         } else {
-            serial_println!("[smp] core APIC-id {} did NOT come online (timeout)", c.apic_id);
+            serial_println!("[smp] core APIC-id {} did NOT come online (timeout)", apic_id);
         }
         idx += 1;
     }
@@ -238,6 +317,9 @@ pub fn init() {
         expected,
         if total == expected { "OK" } else { "WRONG" }
     );
+    // From here on only the cores that really run (a core that timed out has
+    // no scheduler, counters or kwork loop of its own).
+    let enabled = online;
 
     // Give the APs ~80 ms and read their per-CPU work counters: proof that each core
     // independently runs its OWN run queue and alternates tasks (SMP scheduling).
@@ -295,6 +377,19 @@ pub fn init() {
             );
         }
     }
+
+    // J1: the demo workers have proven their point; park them so the APs sleep
+    // when idle and run real kernel work (kwork) instead of spinning forever.
+    let ap_idx: Vec<usize> = aps.iter().map(|&id| (id & 7) as usize).collect();
+    let parked = crate::sched::ap_park_demo_workers(&ap_idx);
+    if parked == ap_idx.len() {
+        crate::kwork::start_accepting();
+    }
+    serial_println!(
+        "[smp] J1: demo workers parked on {}/{} AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues",
+        parked,
+        ap_idx.len()
+    );
 }
 
 /// Send a TLB shootdown to all other cores (call after modifying

@@ -122,6 +122,7 @@ pub fn gate(fb: &FrameBuffer, default_user: &str) -> String {
 
     loop {
         crate::xhci::poll(); // also service the USB keyboard
+        crate::virtio_input::poll(); // virtio-tablet / virtio-keyboard (polled)
         let mut dirty = false;
         while let Some(c) = crate::ps2::poll_key() {
             dirty = true;
@@ -135,13 +136,14 @@ pub fn gate(fb: &FrameBuffer, default_user: &str) -> String {
                                 return ok.name;
                             }
                             Err(reason) => {
-                                if reason.contains("gewijzigd") {
+                                if reason.contains("must be changed") {
                                     // must-change: ask for a new password.
                                     lk.saved_old = core::mem::take(&mut lk.input);
                                     lk.phase = Phase::MustChange;
                                     lk.status = "Password expired — choose a new one".to_string();
                                     lk.error = false;
                                 } else {
+                                    crate::serial_println!("[lock] login rejected for {}: {reason}", lk.user);
                                     lk.status = reason;
                                     lk.error = true;
                                     lk.input.clear();
@@ -187,10 +189,17 @@ pub fn gate(fb: &FrameBuffer, default_user: &str) -> String {
         }
 
         // Unattended boot: after the grace period, auto-login as the desktop user.
-        if crate::interrupts::ticks().saturating_sub(start) > UNATTENDED_AUTOLOGIN_TICKS {
-            // Try a real login with the demo password; if that fails,
-            // fall back to the existing session default (uid 1000).
-            if let Ok(ok) = crate::euroid::login(default_user, "euro") {
+        // Only on a live medium (demo store) or in self-test builds: an INSTALLED
+        // system in a release build always waits for the real password.
+        if crate::euroid::unattended_login_allowed()
+            && crate::interrupts::ticks().saturating_sub(start) > UNATTENDED_AUTOLOGIN_TICKS
+        {
+            // Try a real login with the demo password (live) or the dev install
+            // password (self-test standalone boot); if that fails, fall back to
+            // the existing session default (uid 1000).
+            let attempt = crate::euroid::login(default_user, "euro")
+                .or_else(|_| crate::euroid::login(default_user, crate::instexec::DEV_INSTALL_PASSWORD));
+            if let Ok(ok) = attempt {
                 set_session(&ok.name, ok.uid);
                 crate::serial_println!(
                     "[lock] unattended boot — no input within grace → auto-login as {} (demo/CI)",
@@ -218,6 +227,10 @@ fn set_session(name: &str, uid: u32) {
 /// an interactive keyboard: the correct password signs in, a wrong one is
 /// rejected, and rendering the screen does not panic (drawn headless).
 pub fn selftest(fb: &FrameBuffer) {
+    if crate::euroid::store_from_disk() {
+        crate::serial_println!("[ag-lock] GUI lockscreen: installed system (identity store from disk) — demo-credential check skipped");
+        return;
+    }
     let good = crate::euroid::login("euro", "euro").is_ok();
     let bad = crate::euroid::login("euro", "fout").is_err();
     // Render one frame headless (proves the draw routine does not panic).

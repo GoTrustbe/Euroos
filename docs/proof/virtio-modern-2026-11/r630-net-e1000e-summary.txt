@@ -1,0 +1,19 @@
+# R630 KVM, loadtest.py --kvm --smp 4 --mem 4G --nic e1000e --restrict --nmi-on-hang --scenario net --host-http --conns 50 --downloads 10, image 6087e93 (selftest)
+## net.driver=user
+2026-11-05_19:27:42 slot=2 run=1 rc=0 verdict=ok [bug032] scheduler write watch off (debug.schedwatch=on arms it)
+2026-11-05_19:27:43 slot=1 run=1 rc=0 verdict=ok [bug032] scheduler write watch off (debug.schedwatch=on arms it)
+2026-11-05_19:27:45 slot=0 run=1 rc=0 verdict=ok [bug032] scheduler write watch off (debug.schedwatch=on arms it)
+2026-11-05_19:32:52 slot=2 run=2 rc=0 verdict=ok [bug032] scheduler write watch off (debug.schedwatch=on arms it)
+2026-11-05_19:32:56 slot=1 run=2 rc=0 verdict=ok [bug032] scheduler write watch off (debug.schedwatch=on arms it)
+2026-11-05_19:32:58 slot=0 run=2 rc=0 verdict=ok [bug032] scheduler write watch off (debug.schedwatch=on arms it)
+## net.driver=kernel
+2026-11-05_19:25:59 slot=3 run=1 rc=0 verdict=ok [bug032] scheduler write watch off (debug.schedwatch=on arms it)
+2026-11-05_19:29:21 slot=3 run=2 rc=0 verdict=ok [bug032] scheduler write watch off (debug.schedwatch=on arms it)
+net-user/s0-r1: 67 ok, 0 failed; [loadtest] completed clean · r
+net-user/s0-r2: 67 ok, 0 failed; [loadtest] completed clean · r
+net-user/s1-r1: 67 ok, 0 failed; [loadtest] completed clean · r
+net-user/s1-r2: 67 ok, 0 failed; [loadtest] completed clean · r
+net-user/s2-r1: 67 ok, 0 failed; [loadtest] completed clean · r
+net-user/s2-r2: 67 ok, 0 failed; [loadtest] completed clean · r
+net-kernel/s3-r1: 67 ok, 0 failed; [loadtest] completed clean · r
+net-kernel/s3-r2: 67 ok, 0 failed; [loadtest] completed clean · r

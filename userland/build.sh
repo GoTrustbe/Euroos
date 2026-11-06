@@ -65,6 +65,26 @@ else
     echo "WARNING: musl-gcc not found — doom.elf skipped"
 fi
 
+# Userspace drivers (docs/SPRINT-PLAN-USERSPACE-DRIVERS.md): Rust, a freestanding
+# static PIE for x86_64-unknown-none, logic in crates/euroe1000 + crates/eurodrv.
+# The kernel embeds it and starts it under the `driver` profile (net.driver=user).
+echo "==> e1000d.elf (userspace e1000 driver, Rust)..."
+(cd e1000d && cargo build --release -q)
+cp e1000d/target/x86_64-unknown-none/release/e1000d e1000d.elf
+echo "==> e1000d.elf: $(stat -c%s e1000d.elf) bytes (static PIE, driver profile)"
+echo "==> nvmed.elf (userspace NVMe driver, Rust)..."
+(cd nvmed && cargo build --release -q)
+cp nvmed/target/x86_64-unknown-none/release/nvmed nvmed.elf
+echo "==> nvmed.elf: $(stat -c%s nvmed.elf) bytes (static PIE, driver profile)"
+echo "==> bcm5720d.elf (userspace Broadcom BCM5720 driver, Rust; logic in crates/eurobcm5720)..."
+(cd bcm5720d && cargo build --release -q)
+cp bcm5720d/target/x86_64-unknown-none/release/bcm5720d bcm5720d.elf
+echo "==> bcm5720d.elf: $(stat -c%s bcm5720d.elf) bytes (static PIE, driver profile)"
+echo "==> megaraidd.elf (userspace MegaRAID MFI driver, Rust)..."
+(cd megaraidd && cargo build --release -q)
+cp megaraidd/target/x86_64-unknown-none/release/megaraidd megaraidd.elf
+echo "==> megaraidd.elf: $(stat -c%s megaraidd.elf) bytes (static PIE, driver profile)"
+
 # EuroToolchain security: sign every userland binary with the EuroOS Ed25519
 # developer key. The kernel verifies these signatures before running (verify-
 # before-execute). Tampered binaries are cryptographically rejected.

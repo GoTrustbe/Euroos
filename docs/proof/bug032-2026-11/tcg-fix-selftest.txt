@@ -1,0 +1,2 @@
+[bug032] scheduler write watch off (debug.schedwatch=on arms it)
+[bug032] DF set across context switches: 2 switch(es) interrupted code with DF=1, handler saw DF=1 in 0, DF back after iretq=true, SYSCALL clears DF (FMASK 0x4700)=true → OK ✓

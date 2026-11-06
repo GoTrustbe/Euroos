@@ -347,3 +347,29 @@ mod tests {
         assert_eq!(page_count(b.size), 2);
     }
 }
+
+#[cfg(test)]
+mod image_tests {
+    extern crate std;
+    use super::*;
+    use alloc::string::String;
+    /// `EUROPACK_IMG=<pack.img> cargo test -p europack -- --ignored`: recompute every
+    /// file's Merkle root from the on-disk leaf table with the kernel's own code path.
+    #[test]
+    #[ignore]
+    fn real_image_roots_match() {
+        let path = std::env::var("EUROPACK_IMG").expect("EUROPACK_IMG");
+        let img = std::fs::read(&path).unwrap();
+        let h = parse_header(&img).unwrap();
+        let man = &img[..manifest_len(h.count as usize)];
+        for i in 0..h.count as usize {
+            let e = parse_entry(man, i).unwrap();
+            let n = page_count(e.size);
+            let raw = &img[e.leaves_off as usize..e.leaves_off as usize + n * 32];
+            let leaves = parse_leaves(raw, e.size).unwrap();
+            let root = root_of_leaves(&h.salt, &leaves);
+            std::println!("{}: {} pages, root match = {}", String::from_utf8_lossy(&e.path), n, root == e.root);
+            assert_eq!(root, e.root, "root mismatch for {}", String::from_utf8_lossy(&e.path));
+        }
+    }
+}

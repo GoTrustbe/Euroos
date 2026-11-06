@@ -1,0 +1,61 @@
+[loadtest] scenario=soak image=/srv/euroos/nwruns/r-base-soak/boot.img disks=['/srv/euroos/nwruns/r-base-soak/disk0-8G.raw'] bus=virtio kvm=True smp=4 mem=16G nic=e1000e bootopts=- iommu=False
+[loadtest] serial log: /srv/euroos/nwruns/r-base-soak/loadtest-serial-20261105-170136.log  ·  CSV: /srv/euroos/nwruns/r-base-soak/r-base-soak.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 329s — driving commands
+  [   25/?] ✓ ok          1571ms t=   58.4s  spawn worker 32
+  [   50/?] ✓ ok         24931ms t=  106.3s  churn fs 1
+  [   75/?] ✓ ok          1606ms t=  138.3s  sha256sum /home/euro/lt-soak/big3
+  [  100/?] ✓ ok           384ms t=  186.3s  cat /home/euro/lt-soak/f10
+  [  125/?] ✓ ok           516ms t=  240.8s  fetch 10.0.2.100
+  [  150/?] ✓ ok          1468ms t=  297.4s  sha256sum /home/euro/lt-soak/big3
+  [  175/?] ✓ ok           433ms t=  355.1s  write /home/euro/lt-soak/f18 round-18
+  [  200/?] ✓ ok           620ms t=  413.1s  churn net 1
+  [  225/?] ✓ ok          1247ms t=  465.5s  truncate -s 8388608 /home/euro/lt-soak/big3
+  [  250/?] ✓ ok          1849ms t=  524.7s  spawn worker 32
+  [  275/?] ✓ ok         26196ms t=  573.5s  churn fs 1
+  [  300/?] ✓ ok           261ms t=  603.5s  cat /home/euro/lt-soak/f31
+  [  325/?] ✓ ok          1601ms t=  657.5s  spawn worker 32
+  [  350/?] ✓ ok          1142ms t=  713.0s  fetch 10.0.2.100
+  [  375/?] ✓ ok          1469ms t=  765.9s  sha256sum /home/euro/lt-soak/big3
+  [  400/?] ✓ ok            61ms t=  820.7s  ltstat
+  [  425/?] ✓ ok          1081ms t=  876.4s  fetch 10.0.2.100
+  [  450/?] ✓ ok          1126ms t=  936.4s  truncate -s 8388608 /home/euro/lt-soak/big3
+  [  475/?] ✓ ok           454ms t=  989.9s  write /home/euro/lt-soak/f0 round-50
+  [  500/?] ✓ ok           385ms t= 1020.7s  rm /home/euro/lt-soak/big2
+  [  525/?] ✓ ok          1294ms t= 1077.4s  truncate -s 8388608 /home/euro/lt-soak/big3
+  [  550/?] ✓ ok          1961ms t= 1137.2s  spawn worker 32
+  [  575/?] ✓ ok          8844ms t= 1194.3s  wget 10.0.2.101 /home/euro/lt-soak/dl.bin
+  [  600/?] ✓ ok            63ms t= 1249.3s  cat /home/euro/lt-soak/f13
+  [  625/?] ✓ ok           310ms t= 1312.1s  ltstat
+  [  650/?] ✓ ok          1082ms t= 1365.1s  fetch 10.0.2.100
+  [  675/?] ✓ ok           454ms t= 1425.3s  write /home/euro/lt-soak/f21 round-71
+  [  700/?] ✓ ok          1461ms t= 1475.7s  ltstat
+  [  725/?] ✓ ok           388ms t= 1507.8s  rm /home/euro/lt-soak/big2
+  [  750/?] ✓ ok          1312ms t= 1563.4s  truncate -s 8388608 /home/euro/lt-soak/big3
+  [  775/?] ✓ ok          6610ms t= 1628.5s  churn proc 4
+  [  800/?] ✓ ok           119ms t= 1684.4s  rm /home/euro/lt-soak/big2
+  [  825/?] ✓ ok           130ms t= 1751.1s  cat /home/euro/lt-soak/f37
+  [  850/?] ✓ ok          1692ms t= 1804.4s  spawn worker 32
+  [  875/?] ✓ ok          1792ms t= 1875.6s  sha256sum /home/euro/lt-soak/big0
+  [  900/?] ✓ ok           530ms t= 1925.7s  cat /home/euro/lt-soak/f45
+  [  925/?] ✓ ok          1140ms t= 1984.5s  ltstat
+  [  950/?] ✓ ok          1082ms t= 2009.6s  fetch 10.0.2.100
+  [  975/?] ✓ ok           748ms t= 2068.7s  write /home/euro/lt-soak/f3 round-103
+  [ 1000/?] ✓ ok          4878ms t= 2126.7s  churn proc 4
+  [ 1025/?] ✓ ok            64ms t= 2176.7s  rm /home/euro/lt-soak/big2
+  [ 1050/?] ✓ ok          1821ms t= 2245.5s  spawn worker 32
+  [ 1075/?] ✓ ok           571ms t= 2303.3s  churn net 1
+  [ 1100/?] ✓ ok          1734ms t= 2369.7s  sha256sum /home/euro/lt-soak/big0
+  [ 1125/?] ✓ ok           376ms t= 2422.7s  cat /home/euro/lt-soak/f19
+  [ 1150/?] ✓ ok          1147ms t= 2458.6s  fetch 10.0.2.100
+  [ 1175/?] ✓ ok          1800ms t= 2521.3s  sha256sum /home/euro/lt-soak/big0
+  [ 1200/?] ✓ ok           636ms t= 2588.6s  write /home/euro/lt-soak/f27 round-127
+  [ 1225/?] ✓ ok           168ms t= 2639.1s  ltstat
+  [ 1250/?] ✓ ok          1040ms t= 2695.7s  truncate -s 8388608 /home/euro/lt-soak/big0
+  [ 1275/?] ✓ ok           556ms t= 2747.2s  write /home/euro/lt-soak/f35 round-135
+  [ 1300/?] ✓ ok           666ms t= 2807.0s  churn net 1
+  [ 1309/?] ✗ CRASH:[idt] GENERAL PROTECTION FAULT   12292ms t= 2824.8s  churn proc 4
+  !! CRASH after 'churn proc 4' — see /srv/euroos/nwruns/r-base-soak/loadtest-serial-20261105-170136.log
+[loadtest] CRASH/HANG detected · results → /srv/euroos/nwruns/r-base-soak/r-base-soak.csv · ltstat samples → /srv/euroos/nwruns/r-base-soak/r-base-soak-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 3340, "err": 519, "p50_ms": 960.3, "p99_ms": 9539.0, "max_ms": 10001.0, "busy_windows": 85, "busy_s": 1584, "busy": {"ok": 192, "err": 296, "p50_ms": 6709.9, "p99_ms": 9750.5, "max_ms": 9750.5}, "idle": {"ok": 3148, "err": 223, "p50_ms": 791.0, "p99_ms": 9528.7, "max_ms": 10001.0}}
+[loadtest] host HTTP server served 167 request(s)

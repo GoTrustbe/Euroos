@@ -267,6 +267,12 @@ impl BlockDevice for RootBlk {
 /// (a foreign data disk on virtio 0 must never receive slot_config writes);
 /// `Some(Some(b))` = the disk the root lives on.
 static BOOT: spin::Mutex<Option<Option<Backend>>> = spin::Mutex::new(None);
+/// Did this boot mount its root from an installed disk (as opposed to the
+/// live/RAM root of the install medium)?
+pub fn booted_from_disk() -> bool {
+    matches!(*BOOT.lock(), Some(Some(_)))
+}
+
 fn boot_backend() -> Option<Backend> {
     match *BOOT.lock() {
         Some(chosen) => chosen,

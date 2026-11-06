@@ -25,6 +25,12 @@ pub const CAP_PROC_INFO: u64 = 1 << 1; // getpid/uname
 pub const CAP_FILE: u64 = 1 << 2; // open/read/close
 pub const CAP_NET: u64 = 1 << 3; // network access
 pub const CAP_IMMUTABLE_ADMIN: u64 = 1 << 4; // L2: set/clear immutability flags
+/// Sprint WP6: a window surface + its input (the Euro API's surface/event calls).
+pub const CAP_WINDOW: u64 = 1 << 5;
+/// Marks a per-task capability set as SET even when it grants nothing: without
+/// it a zero TASK_CAPS entry falls back to the global CURRENT_CAPS, and a
+/// native app declaring no capabilities would inherit the desktop's rights.
+const CAP_TASK_SET: u64 = 1 << 62;
 
 static CURRENT_CAPS: AtomicU64 = AtomicU64::new(0);
 /// Capabilities PER TASK. CURRENT_CAPS is one global, and the desktop runs many
@@ -245,6 +251,15 @@ pub(crate) fn copy_to_user(dst: u64, src: &[u8]) -> bool {
     if !in_user_arena(dst, src.len()) || demand_file_backed(dst, src.len()) {
         return false; // out of bounds, or a read-only file-backed mapping
     }
+    // A native app (euro profile) may hand us any address in its arena,
+    // including its own read-only code pages: a kernel write there is a
+    // ring-0 page fault. Walk the tables first; a refused write is -EFAULT.
+    if task_profile(crate::sched::current_lockfree()) == eurosandbox::Profile::Euro {
+        let (frame, _) = x86_64::registers::control::Cr3::read();
+        if !crate::paging::user_range_writable_in(frame.start_address().as_u64(), dst, src.len()) {
+            return false;
+        }
+    }
     // SAFETY: arena-validated; arena is identity-mapped and writable.
     unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst as *mut u8, src.len()) };
     true
@@ -381,13 +396,19 @@ static STDOUT_REDIRECT: Mutex<Option<usize>> = Mutex::new(None);
 // Content is a Cow: embedded read-only libraries/binaries are served BORROWED straight
 // from the kernel image (include_bytes! → &'static), so the ~50 MiB desktop-graphics
 // lib set costs zero heap; writable files (/proc, created files, redirects) are Owned.
-static FILES: Mutex<alloc::vec::Vec<(String, alloc::borrow::Cow<'static, [u8]>)>> = Mutex::new(alloc::vec::Vec::new());
+static SITE_FILES: eurolock::LockSite = eurolock::LockSite::new("ring3.FILES (syscall file table)", eurolock::LockClass::Process);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static FILES: eurolock::sync::Mutex<alloc::vec::Vec<(String, alloc::borrow::Cow<'static, [u8]>)>> =
+    eurolock::sync::Mutex::new_site(&SITE_FILES, eurolock::Mode::Plain, alloc::vec::Vec::new());
 // Max open file descriptors per the flat VFS. 16 was fine for the shell + small
 // apps but chrome opens hundreds (libs, profile DBs, memfd shm, pipes, epoll) — a
 // full table made EVERY new open return -1 (EPERM): the shm/README/history failures.
 // Kept below UNIX_FD_BASE (600) so regular fds never collide with the socket range.
 const MAX_FD: usize = 512;
-static OPEN_FDS: Mutex<[Option<(usize, usize)>; MAX_FD]> = Mutex::new([None; MAX_FD]);
+static SITE_OPEN_FDS: eurolock::LockSite = eurolock::LockSite::new("ring3.OPEN_FDS", eurolock::LockClass::Process);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static OPEN_FDS: eurolock::sync::Mutex<[Option<(usize, usize)>; MAX_FD]> =
+    eurolock::sync::Mutex::new_site(&SITE_OPEN_FDS, eurolock::Mode::Plain, [None; MAX_FD]);
 /// Open DIRECTORY fds (Linux getdents64): (normalized dir path, cursor in the
 /// children list). Separate table so a dir fd is not read as a file.
 static OPEN_DIRS: Mutex<[Option<(String, usize)>; MAX_FD]> =
@@ -603,7 +624,7 @@ fn unix_recv_blocking(fd: u64, cap: usize) -> Option<alloc::vec::Vec<u8>> {
         if !d.is_empty() || crate::net::unix_fd_at_eof(fd) || scm_pending_for(fd) {
             return Some(d);
         }
-        if fd_is_nonblock(fd) || !SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+        if fd_is_nonblock(fd) || !syscall_yield_ok() {
             return None;
         }
         if crate::interrupts::ticks() > deadline {
@@ -2521,7 +2542,7 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
         tries += 1;
         let before = crate::interrupts::ticks();
         crate::sched::sleep_ticks(2);
-        if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+        if syscall_yield_ok() {
             { yield_reacquire(); } // deschedule so whoever will wake us can run
         }
         if crate::interrupts::ticks() == before {
@@ -2614,7 +2635,7 @@ fn pipe_read_blocking(fd: usize, buf: u64, len: usize) -> Option<u64> {
         // the whole system wedges (the chrome --headless task-39 hang; NMI-confirmed
         // RIP inside this function). On the musl bg path (SYSCALL_YIELD_OK=false) a
         // mid-syscall yield is unsafe (BG.lock), so fall back to a non-blocking return.
-        if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+        if syscall_yield_ok() {
             yield_reacquire();
         } else {
             return Some((-11i64) as u64); // -EAGAIN (bg path: caller polls)
@@ -3785,8 +3806,8 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
     let mut files = FILES.lock();
     let Some(entry) = files.get_mut(fi) else { return u64::MAX };
     let data = entry.1.to_mut(); // clone-on-write if this were a borrowed lib (never)
-    if end > data.len() {
-        data.resize(end, 0);
+    if end > data.len() && !grow_ram_file(data, end) {
+        return u64::MAX; // ENOSPC-class: the RAM file cannot grow that far
     }
     // SAFETY: buf now provably lies within the arena of the running process.
     unsafe {
@@ -3969,8 +3990,12 @@ pub fn spawn_daemon(falloc: &mut FrameAllocator, program: &[u8]) {
     // Build the address space FIRST, then spawn the task with its cr3 already set
     // (before it is Ready) — see BUG-007 / spawn_user.
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
-    let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
-    DAEMON_TASK.store(idx, Ordering::Relaxed);
+    // BUG-024: known to syscall_dispatch (DAEMON_TASK) before it can first run.
+    let idx = x86_64::instructions::interrupts::without_interrupts(|| {
+        let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
+        DAEMON_TASK.store(idx, Ordering::Relaxed);
+        idx
+    });
     crate::serial_println!("[euro] daemon scheduled as task {idx} (pid 7), own address space PML4 {pml4:#x}");
 }
 
@@ -4012,16 +4037,28 @@ struct BgProc {
     /// Do this process's frames come from the PROCESS POOL (fork/exec) instead of the
     /// main allocator? Determines where the reaper returns them.
     pooled: bool,
+    /// The program name (argv[0]): the app identity EuroGuard sees for this
+    /// process's connections and DNS queries.
+    name: String,
+    /// Mirror every output line to the serial log and keep up to 64 of them
+    /// (boot self-tests that read a scheduled program's whole output).
+    echo: bool,
 }
 
 /// Exit statuses of terminated children, kept separate from frame reaping, so that
 /// waitpid can still retrieve the status after the frames are already freed. (ppid, pid, code).
-static CHILD_EXITS: Mutex<alloc::vec::Vec<(u64, u64, i64)>> = Mutex::new(alloc::vec::Vec::new());
+static SITE_CHILD_EXITS: eurolock::LockSite = eurolock::LockSite::new("ring3.CHILD_EXITS", eurolock::LockClass::Process);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static CHILD_EXITS: eurolock::sync::Mutex<alloc::vec::Vec<(u64, u64, i64)>> =
+    eurolock::sync::Mutex::new_site(&SITE_CHILD_EXITS, eurolock::Mode::Plain, alloc::vec::Vec::new());
 
 /// Pid counter for forked children (starts high, separate from the fixed demo pids 1-16).
 static NEXT_FORK_PID: AtomicU64 = AtomicU64::new(1000);
 
-static BG: Mutex<alloc::vec::Vec<BgProc>> = Mutex::new(alloc::vec::Vec::new());
+static SITE_BG: eurolock::LockSite = eurolock::LockSite::new("ring3.BG (background processes)", eurolock::LockClass::Process);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static BG: eurolock::sync::Mutex<alloc::vec::Vec<BgProc>> =
+    eurolock::sync::Mutex::new_site(&SITE_BG, eurolock::Mode::Plain, alloc::vec::Vec::new());
 /// Tombstones of cleaned-up processes (for display).
 static REAPED: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new());
 
@@ -4033,6 +4070,16 @@ pub fn reaped_lines() -> alloc::vec::Vec<String> {
 /// Free the frames of all terminated (zombie) processes and remove them
 /// from the table. Called from the desktop loop (task 0, boot PML4), where it is
 /// safe: a dead process never runs again and its frames are not in use.
+/// Thread kernel stacks currently marked in use (the [churn-proc] leak counter).
+pub fn thread_kstacks_used() -> usize {
+    THREAD_KSTACK_USED.iter().filter(|b| b.load(Ordering::Relaxed)).count()
+}
+
+/// Entries in the global file table (the [churn-proc] leak counter).
+pub fn files_count() -> usize {
+    FILES.lock().len()
+}
+
 pub fn reap_dead(falloc: &mut FrameAllocator) {
     // BUG-007: do NOT hold BG.lock() across the (preemptible) frame-freeing below. If the
     // timer preempts task 0 mid-free, the scheduler may switch to a bg-musl process whose
@@ -4081,6 +4128,35 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
             }
             crate::paging::free_address_space(falloc, p.pml4);
         }
+        // Sockets the process still held: closed now (FIN for a live TCP peer).
+        bg_net_release(p.pid);
+        // LOADTEST-R630 BUG-014: give the scheduler slots back. The process task and
+        // its thread tasks are Dead (exit / exit_group marked them) and their kernel
+        // stacks + address space are gone; without this every background process
+        // ever started kept its slot, and after ~230 process lifetimes since boot
+        // the 256-slot table was full for good. reclaim_task only takes a Dead,
+        // non-current task (task 0 runs this), so a still-running thread keeps its slot.
+        // BUG-017: a reaped task may still sit in the futex queue (it left Blocked
+        // there); its slot is reused below, so a later wake on that address must not
+        // reach the new occupant. Irqsave: syscalls take FUTEX_QUEUE with IF=0.
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            FUTEX_QUEUE.lock().retain(|&(_, t)| t != p.task && !p.threads.contains(&t));
+        });
+        // A driver grant names its task slot; drop it with the process so a reused
+        // slot never inherits a driver's device rights (the supervisor may only
+        // notice the death later).
+        crate::udrv::revoke_pid(p.pid);
+        if crate::sched::is_dead(p.task) {
+            reset_task_slot(p.task);
+        }
+        crate::sched::reclaim_task(p.task);
+        for &t in p.threads.iter() {
+            if crate::sched::is_dead(t) {
+                free_thread_kstack(t); // idempotent; drops a stale owner entry before the slot is reused
+                reset_task_slot(t);
+            }
+            crate::sched::reclaim_task(t);
+        }
         let kib = (p.arena_frames + 4 + 4) as usize * 4; // arena + kstack(4) + table frames(~4)
         // Show the last output (e.g. the result of a job) if there is
         // one, otherwise the termination reason (e.g. the isolation violation).
@@ -4098,6 +4174,23 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
     }
 }
 
+/// Clear the per-task policy state of a dead task whose slot is about to be
+/// reused (BUG-014 made reuse routine): capabilities, sandbox profile (with its
+/// filter bit), the syscall-yield and network-block flags. Without this a new
+/// background process in the slot of a restarted driver would run under the Driver
+/// profile, and one in a chrome thread's slot would take the glibc yield path.
+fn reset_task_slot(t: usize) {
+    if t < crate::sched::MAX_TASKS {
+        TASK_CAPS[t].store(0, Ordering::Relaxed);
+        TASK_PROFILE[t].store(0, Ordering::Relaxed);
+        SYSCALL_YIELD_OK_T[t].store(false, Ordering::Relaxed);
+        NET_MAY_BLOCK[t].store(false, Ordering::Relaxed);
+    }
+    // A task reaped while it slept in a network wait kept its RX_WAITER flag,
+    // and the next frame from e1000d woke the slot's next occupant early.
+    crate::net::forget_rx_waiter(t);
+}
+
 /// Is a process with this pid still alive? (a LIVE, non-zombie BgProc). Used by
 /// EuroInit to see whether a service is still running or must be restarted.
 pub fn is_pid_alive(pid: u64) -> bool {
@@ -4105,6 +4198,49 @@ pub fn is_pid_alive(pid: u64) -> bool {
     // while holding it — matching the interrupts-off syscall path. See reap_dead.
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().iter().any(|p| p.pid == pid && !p.zombie)
+    })
+}
+
+/// One line per background process for `bgps` (load-test diagnostics): pid, its
+/// main task and every thread task with their scheduler state, pending
+/// CLONE_CHILD_CLEARTID slots, the futex addresses its tasks wait on, and the
+/// last output line.
+pub fn bg_debug_lines() -> alloc::vec::Vec<String> {
+    let snapshot: alloc::vec::Vec<(u64, usize, alloc::vec::Vec<usize>, usize, bool, String)> =
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            BG.lock()
+                .iter()
+                .map(|p| {
+                    (p.pid, p.task, p.threads.clone(), p.thread_ctids.len(), p.zombie,
+                     p.output.last().cloned().unwrap_or_default())
+                })
+                .collect()
+        });
+    let waits: alloc::vec::Vec<(u64, usize)> =
+        x86_64::instructions::interrupts::without_interrupts(|| FUTEX_QUEUE.lock().clone());
+    let st = |t: usize| crate::sched::state_of(t).unwrap_or("?");
+    let mut out = alloc::vec::Vec::new();
+    for (pid, task, threads, ctids, zombie, last) in snapshot {
+        let mut l = alloc::format!("pid {pid} task {task}:{}", st(task));
+        for t in &threads {
+            l.push_str(&alloc::format!(" thr {t}:{}", st(*t)));
+        }
+        for (a, t) in waits.iter().filter(|(_, t)| *t == task || threads.contains(t)) {
+            l.push_str(&alloc::format!(" futex {a:#x}<-{t}"));
+        }
+        l.push_str(&alloc::format!(" ctids={ctids}{} last={:?}", if zombie { " ZOMBIE" } else { "" },
+            last.chars().take(48).collect::<String>()));
+        out.push(l);
+    }
+    out
+}
+
+/// Background processes (live, zombie-not-yet-reaped), for `ltstat`.
+pub fn bg_counts() -> (usize, usize) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let bg = BG.lock();
+        let z = bg.iter().filter(|p| p.zombie).count();
+        (bg.len() - z, z)
     })
 }
 
@@ -4162,6 +4298,290 @@ pub fn note_isolation_kill(task: usize, addr: u64) -> u64 {
     0
 }
 
+/// Drop every futex wait-queue entry of task `t`. A task that dies while parked
+/// on a futex must not be woken later by a wake on the same address from an
+/// unrelated program (every run_glibc program maps at the same base).
+fn futex_purge_task(t: usize) {
+    FUTEX_QUEUE.lock().retain(|&(_, task)| task != t);
+    if t < 64 {
+        FUTEX_WAIT_ADDR[t].store(0, Ordering::Relaxed);
+    }
+}
+
+// ── Syscall profiles (sprint WP1): kernel-enforced per-process syscall policy ──
+// One byte per scheduler task (eurosandbox::Profile::as_u8). Lock-free: read on
+// every Linux-ABI syscall. Threads inherit from the task that created them, a
+// fork child from its parent, an execve'd chrome child gets the renderer profile
+// from its --type=, and a process may lower itself with seccomp strict mode.
+static TASK_PROFILE: [core::sync::atomic::AtomicU8; crate::sched::MAX_TASKS] =
+    [const { core::sync::atomic::AtomicU8::new(0) }; crate::sched::MAX_TASKS];
+/// Processes ended for a syscall outside their profile (diagnostics / `[sbx]`).
+pub static PROFILE_KILLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// W^X mappings seen under the renderer profile (log-only until measured).
+pub static WX_SEEN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Bit 7 of a TASK_PROFILE byte: this task's process has seccomp filters
+/// installed (consult PROC_FILTERS); the low bits are the profile.
+const PROFILE_FILTERED: u8 = 0x80;
+
+pub fn task_profile(t: usize) -> eurosandbox::Profile {
+    if t < crate::sched::MAX_TASKS {
+        eurosandbox::Profile::from_u8(TASK_PROFILE[t].load(Ordering::Relaxed) & !PROFILE_FILTERED)
+    } else {
+        eurosandbox::Profile::Full
+    }
+}
+
+fn task_has_filters(t: usize) -> bool {
+    t < crate::sched::MAX_TASKS && TASK_PROFILE[t].load(Ordering::Relaxed) & PROFILE_FILTERED != 0
+}
+
+pub fn set_task_profile(t: usize, p: eurosandbox::Profile) {
+    if t < crate::sched::MAX_TASKS {
+        let keep = TASK_PROFILE[t].load(Ordering::Relaxed) & PROFILE_FILTERED;
+        TASK_PROFILE[t].store(p.as_u8() | keep, Ordering::Relaxed);
+    }
+}
+
+fn set_task_filtered(t: usize) {
+    if t < crate::sched::MAX_TASKS {
+        TASK_PROFILE[t].fetch_or(PROFILE_FILTERED, Ordering::Relaxed);
+    }
+}
+
+fn inherit_profile(parent: usize, child: usize) {
+    if parent < crate::sched::MAX_TASKS && child < crate::sched::MAX_TASKS {
+        TASK_PROFILE[child].store(TASK_PROFILE[parent].load(Ordering::Relaxed), Ordering::Relaxed);
+    }
+}
+
+/// The key of a process's state tables: a fork child's main task, or MAIN_KEY
+/// for the run_glibc main group (which has one process per run).
+const MAIN_KEY: usize = usize::MAX - 1;
+fn proc_key(task: usize) -> usize {
+    fork_child_owner(task).unwrap_or(MAIN_KEY)
+}
+
+/// Every task of the process of `cur` (main + its threads).
+fn proc_tasks(cur: usize) -> alloc::vec::Vec<usize> {
+    let mut v = alloc::vec::Vec::new();
+    match fork_child_owner(cur) {
+        Some(owner) => {
+            v.push(owner);
+            for &(t, m) in CHILD_THREADS.lock().iter() {
+                if m == owner { v.push(t); }
+            }
+        }
+        None => {
+            let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+            if main != usize::MAX { v.push(main); }
+            let child_threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter().map(|&(t, _)| t).collect();
+            for &t in GLIBC_THREADS.lock().iter() {
+                if !child_threads.contains(&t) { v.push(t); }
+            }
+        }
+    }
+    if !v.contains(&cur) { v.push(cur); }
+    v
+}
+
+/// seccomp filters per process (newest last), resource limits, and the
+/// process uid. Keyed by `proc_key`.
+static PROC_FILTERS: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<eurosandbox::bpf::Filter>)>> = Mutex::new(alloc::vec::Vec::new());
+static PROC_LIMITS: Mutex<alloc::vec::Vec<(usize, eurosandbox::Limits)>> = Mutex::new(alloc::vec::Vec::new());
+static PROC_UID: Mutex<alloc::vec::Vec<(usize, u32)>> = Mutex::new(alloc::vec::Vec::new());
+/// The unprivileged identity a process may drop to (`nobody`).
+pub const SANDBOX_UID: u32 = 65534;
+/// Renderer-scope path refusals (diagnostics).
+pub static PATH_DENIES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+fn proc_limits(key: usize) -> eurosandbox::Limits {
+    PROC_LIMITS.lock().iter().find(|(k, _)| *k == key).map(|(_, l)| *l)
+        .unwrap_or_else(|| eurosandbox::Limits::defaults(MAX_FD as u64))
+}
+
+fn proc_limits_set(key: usize, l: eurosandbox::Limits) {
+    let mut t = PROC_LIMITS.lock();
+    match t.iter_mut().find(|(k, _)| *k == key) {
+        Some(e) => e.1 = l,
+        None => t.push((key, l)),
+    }
+}
+
+fn proc_uid(key: usize) -> u32 {
+    PROC_UID.lock().iter().find(|(k, _)| *k == key).map(|(_, u)| *u)
+        .unwrap_or(crate::auth::session_uid() as u32)
+}
+
+fn proc_uid_set(key: usize, uid: u32) {
+    let mut t = PROC_UID.lock();
+    match t.iter_mut().find(|(k, _)| *k == key) {
+        Some(e) => e.1 = uid,
+        None => t.push((key, uid)),
+    }
+}
+
+/// A fork child starts with a copy of its parent's filters, limits and uid.
+fn proc_state_inherit(parent_task: usize, child_key: usize) {
+    let pk = proc_key(parent_task);
+    let filters = PROC_FILTERS.lock().iter().find(|(k, _)| *k == pk).map(|(_, f)| f.clone());
+    if let Some(f) = filters {
+        PROC_FILTERS.lock().push((child_key, f));
+    }
+    let lim = PROC_LIMITS.lock().iter().find(|(k, _)| *k == pk).map(|(_, l)| *l);
+    if let Some(l) = lim { proc_limits_set(child_key, l); }
+    let uid = PROC_UID.lock().iter().find(|(k, _)| *k == pk).map(|(_, u)| *u);
+    if let Some(u) = uid { proc_uid_set(child_key, u); }
+}
+
+fn proc_state_drop(key: usize) {
+    PROC_FILTERS.lock().retain(|(k, _)| *k != key);
+    PROC_LIMITS.lock().retain(|(k, _)| *k != key);
+    PROC_UID.lock().retain(|(k, _)| *k != key);
+}
+
+/// Install a seccomp filter from a user `struct sock_fprog` (len u16 @0, ptr @8)
+/// for the whole process of `cur`. Linux semantics: validated at load, newest
+/// filter evaluated first, the most restrictive action wins.
+fn seccomp_install_filter(cur: usize, fprog: u64) -> u64 {
+    let len = match read_user::<u16>(fprog) { Some(l) => l as usize, None => return EFAULT };
+    let ptr = match read_user::<u64>(fprog + 8) { Some(p) => p, None => return EFAULT };
+    if len == 0 || len > eurosandbox::bpf::MAX_INSNS {
+        return (-22i64) as u64; // -EINVAL
+    }
+    let bytes = match copy_from_user(ptr, len * 8) { Some(b) => b, None => return EFAULT };
+    let filter = match eurosandbox::bpf::Filter::from_bytes(&bytes) {
+        Ok(f) => f,
+        Err(e) => {
+            crate::serial_println!("[sbx] task {cur}: seccomp filter refused at load: {e:?}");
+            return (-22i64) as u64;
+        }
+    };
+    let key = proc_key(cur);
+    {
+        let mut t = PROC_FILTERS.lock();
+        match t.iter_mut().find(|(k, _)| *k == key) {
+            Some(e) => e.1.push(filter),
+            None => t.push((key, alloc::vec![filter])),
+        }
+    }
+    let n = PROC_FILTERS.lock().iter().find(|(k, _)| *k == key).map(|(_, f)| f.len()).unwrap_or(0);
+    for t in proc_tasks(cur) {
+        set_task_filtered(t);
+    }
+    crate::serial_println!("[sbx] task {cur}: seccomp filter #{n} installed ({len} insns) for its process");
+    0
+}
+
+/// Run the process's filters over this syscall. `None` = allowed; `Some(ret)` =
+/// the value to return (an errno) or the kill path already taken.
+fn seccomp_evaluate(cur: usize, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> Option<u64> {
+    let key = proc_key(cur);
+    let ret = {
+        let t = PROC_FILTERS.lock();
+        let filters = match t.iter().find(|(k, _)| *k == key) { Some((_, f)) => f, None => return None };
+        let data = eurosandbox::bpf::SeccompData {
+            nr: num as i32,
+            arch: eurosandbox::bpf::AUDIT_ARCH_X86_64,
+            instruction_pointer: unsafe { USER_RIP },
+            args: [a1, a2, a3, a4, a5, 0],
+        };
+        eurosandbox::bpf::evaluate(filters, &data)
+    };
+    use eurosandbox::bpf::Action;
+    match eurosandbox::bpf::action_of(ret) {
+        Action::Allow => None,
+        Action::Log => {
+            crate::serial_println!("[sbx] task {cur}: seccomp LOG syscall {num}");
+            None
+        }
+        Action::Errno(e) => Some((-(e as i64)) as u64),
+        Action::Enosys => Some((-38i64) as u64),
+        Action::Trap | Action::KillThread | Action::KillProcess => {
+            PROFILE_KILLS.fetch_add(1, Ordering::Relaxed);
+            crate::serial_println!("[sbx] task {cur}: seccomp filter -> syscall {num}({a1:#x}, {a2:#x}, {a3:#x}) killed the process (SIGSYS, exit 159)");
+            Some(linux_dispatch_inner_raw(231, 128 + 31, 0, 0, 0, 0))
+        }
+    }
+}
+
+/// Address-space layout randomisation for a fresh image: page-granular slides
+/// for the brk base, the mmap bump base and the stack top inside the arena, and
+/// a 2 MiB-granular slide of the demand pool. Entropy from the kernel CSPRNG.
+struct Slides { brk: u64, mmap: u64, stack: u64, demand: u64 }
+fn aslr_slides() -> Slides {
+    let r = crate::net::rand_u64();
+    Slides {
+        brk: (r & 0xF) << 16,              // 0..1 MiB in 64 KiB steps
+        mmap: ((r >> 4) & 0x1F) << 16,     // 0..2 MiB in 64 KiB steps
+        stack: ((r >> 9) & 0xFF) << 12,    // 0..1 MiB in 4 KiB steps
+        demand: ((r >> 17) & 0x3FF) << 21, // 0..2 GiB in 2 MiB steps
+    }
+}
+
+/// Apply `p` to the whole process of task `cur`: its main task and every thread
+/// that shares its address space (the main group, or one fork child's group).
+fn set_process_profile(cur: usize, p: eurosandbox::Profile) {
+    set_task_profile(cur, p);
+    match fork_child_owner(cur) {
+        Some(owner) => {
+            set_task_profile(owner, p);
+            for &(t, m) in CHILD_THREADS.lock().iter() {
+                if m == owner {
+                    set_task_profile(t, p);
+                }
+            }
+        }
+        None => {
+            let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+            if main != usize::MAX {
+                set_task_profile(main, p);
+            }
+            let child_threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter().map(|&(t, _)| t).collect();
+            for &t in GLIBC_THREADS.lock().iter() {
+                if !child_threads.contains(&t) {
+                    set_task_profile(t, p);
+                }
+            }
+        }
+    }
+}
+
+/// A fault in one thread of a run_glibc program kills the whole thread group, as
+/// on Linux (SIGILL/SIGSEGV are delivered to the process). Without this the main
+/// thread waits forever in pthread_join for a worker that died, the launcher gives
+/// up on a timeout, and its teardown freed the still-live task's kernel stack and
+/// address space under it: the next wake ran that task on another thread's stack
+/// (the ring-3 INVALID OPCODE at a stack address followed by a kernel #GP in the
+/// gcond self-test). The persistent app (chrome) keeps the per-thread kill so a
+/// renderer-thread crash does not take the whole browser down. Returns true if a
+/// group was terminated.
+pub fn fault_kill_group(cur: usize, signal: u8) -> bool {
+    let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+    if main == usize::MAX || PERSIST_PML4.load(Ordering::Relaxed) != 0 {
+        return false;
+    }
+    let threads: alloc::vec::Vec<usize> = GLIBC_THREADS.lock().clone();
+    if cur != main && !threads.contains(&cur) {
+        return false;
+    }
+    let mut killed = 0usize;
+    for &t in core::iter::once(&main).chain(threads.iter()) {
+        futex_purge_task(t);
+        if t != cur && !crate::sched::is_dead(t) {
+            crate::sched::mark_dead(t);
+            killed += 1;
+        }
+    }
+    GLIBC_EXIT_CODE.store(128 + signal as u64, Ordering::Relaxed);
+    GLIBC_DONE.store(true, Ordering::Relaxed);
+    crate::serial_println!(
+        "[glibc] fault in task {cur}: thread group terminated (main t{main}, {} other task(s) killed) -> exit {}",
+        killed, 128 + signal as u64
+    );
+    true
+}
+
 /// Process overview (`ps`): the background musl processes + the fixed system tasks.
 pub fn ps_lines() -> alloc::vec::Vec<String> {
     let mut out = alloc::vec::Vec::new();
@@ -4201,7 +4621,10 @@ pub fn kill_pid(pid: u64) -> bool {
 
 /// Futex wait queue: (userspace address, blocked task). FUTEX_WAIT blocks the
 /// task (the scheduler skips it); FUTEX_WAKE unblocks up to `n` waiters.
-static FUTEX_QUEUE: Mutex<alloc::vec::Vec<(u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static SITE_FUTEX_QUEUE: eurolock::LockSite = eurolock::LockSite::new("ring3.FUTEX_QUEUE", eurolock::LockClass::Process);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static FUTEX_QUEUE: eurolock::sync::Mutex<alloc::vec::Vec<(u64, usize)>> =
+    eurolock::sync::Mutex::new_site(&SITE_FUTEX_QUEUE, eurolock::Mode::Plain, alloc::vec::Vec::new());
 /// Monotonic count of Linux syscalls dispatched — a progress heartbeat the launcher's
 /// stall detector watches to catch a many-thread deadlock (no syscall = frozen).
 static SYSCALL_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -4516,8 +4939,18 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     // runs the whole syscall UNDER BG.lock, so yielding there would let the next bg
     // task spin forever on BG.lock → total wedge. musl keeps the old timer-driven block
     // (fine at its low thread counts); chrome (glibc, ~30 threads) gets the real yield.
-    if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+    if syscall_yield_ok() {
         yield_reacquire();
+    } else {
+        // LOADTEST-R630 BUG-017: the musl bg path does not yield here; the task is
+        // Blocked and leaves at the next timer tick. It must STAY in the queue so a
+        // FUTEX_WAKE can find it. The "resumed" check below used to run right away
+        // on this path, found the entry still there, took it out as "spurious" and
+        // returned 0, leaving a Blocked task no wake could reach: pthread_join hung
+        // whenever the joiner waited before the thread exited (12 of 16 mpthread
+        // processes started together, and the boot demos pid 13/14). musl re-checks
+        // the futex word after any return, so returning 0 here is correct.
+        return 0;
     }
     // Resumed. If we are STILL enqueued, the scheduler woke us at the deadline (a
     // FUTEX_WAKE would have removed us) -> report -ETIMEDOUT so the caller re-polls.
@@ -4543,7 +4976,23 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
 }
 /// True only while a lock-free glibc syscall (linux_dispatch) is executing — set on
 /// its entry, cleared by the musl bg path — so futex/epoll only yield when it's safe.
-pub static SYSCALL_YIELD_OK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Per task: may a blocking syscall of the CURRENT task deschedule mid-call?
+/// True on the lock-free glibc path, false on the musl bg path (which runs the
+/// whole syscall under BG.lock). It used to be one global flag, so a musl task
+/// taking a syscall flipped it to false under a glibc task parked in wait4 or
+/// futex, which then returned "still running" early (the gevfd waitpid failure).
+static SYSCALL_YIELD_OK_T: [core::sync::atomic::AtomicBool; crate::sched::MAX_TASKS] =
+    [const { core::sync::atomic::AtomicBool::new(false) }; crate::sched::MAX_TASKS];
+pub fn syscall_yield_ok() -> bool {
+    let t = crate::sched::current();
+    t < crate::sched::MAX_TASKS && SYSCALL_YIELD_OK_T[t].load(Ordering::Relaxed)
+}
+fn set_syscall_yield_ok(v: bool) {
+    let t = crate::sched::current();
+    if t < crate::sched::MAX_TASKS {
+        SYSCALL_YIELD_OK_T[t].store(v, Ordering::Relaxed);
+    }
+}
 
 
 // Static pool of kernel stacks for THREADS (clone) and scheduled glibc mains.
@@ -4647,6 +5096,7 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
         let p = &bg[pos];
         (p.pid, p.arena_raw, p.arena_virt, p.heap_break, p.heap_end, p.pml4)
     };
+    let (parent_name, parent_echo) = (bg[pos].name.clone(), bg[pos].echo);
     let parent_arena = (parent_arena_raw + (MIB2 - 1)) & !(MIB2 - 1);
 
     // Frames from the process pool: 4 MiB arena + 4 frames kstack + 3 table frames.
@@ -4693,6 +5143,20 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
     let user_ss = (sel.user_data.0 | 3) as u64;
     let child_pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     let task = crate::sched::spawn_thread(user_rip, user_rsp, user_cs, user_ss, kstack_top, pml4, fs, saved);
+    if task == usize::MAX {
+        // BUG-015: scheduler table full -> -EAGAIN; give the pooled frames back
+        // instead of registering a child that never runs (its parent would wait forever).
+        for f in 0..1024u64 {
+            crate::procpool::free(child_raw + f * 4096);
+        }
+        for f in 0..4u64 {
+            crate::procpool::free(child_kstack + f * 4096);
+        }
+        for fr in [pml4, pdpt, pd, pt] {
+            crate::procpool::free(fr);
+        }
+        return (-11i64) as u64;
+    }
     set_task_caps(task, effective_caps()); // lock-free read; thread shares its process' rights
     crate::sched::set_ident(task, child_pid as u32, parent_pid as u32);
 
@@ -4714,6 +5178,8 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
         thread_ctids: alloc::vec::Vec::new(),
         ppid: parent_pid,
         pooled: true,
+        name: parent_name,
+        echo: parent_echo,
     });
     crate::kinfo!("[fork] pid {parent_pid} -> child pid {child_pid} (task {task}, copy-arena {child_arena:#x}, pml4 {pml4:#x})");
     child_pid // the PARENT gets the child pid; the child got rax=0 via spawn_thread
@@ -4839,7 +5305,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
     unsafe { EXITED = 0 };
     // This path runs the whole syscall UNDER BG.lock -> a mid-syscall yield would
     // deadlock the next bg task on BG.lock. Forbid futex/epoll yields here.
-    SYSCALL_YIELD_OK.store(false, Ordering::Relaxed);
+    set_syscall_yield_ok(false);
     match num {
         1 | 20 => {
             // write(fd,buf,len) / writev(fd,iov,cnt) -> own line buffer.
@@ -4891,10 +5357,14 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
                     if p.pid != 0 && p.pid == crate::appgfx::app_pid() {
                         crate::serial_println!("[app-out] {}", line.trim_end());
                     }
+                    if p.echo {
+                        crate::serial_println!("[bg-out] pid {} {}: {}", p.pid, p.name, line.trim_end());
+                    }
                     p.output.push(String::from(line.trim_end()));
+                    let keep = if p.echo { 64 } else { 6 };
                     let len = p.output.len();
-                    if len > 6 {
-                        p.output.drain(0..len - 6);
+                    if len > keep {
+                        p.output.drain(0..len - keep);
                     }
                 }
             }
@@ -5135,6 +5605,10 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             };
             let saved_regs = unsafe { SAVED_REGS };
             let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, p.pml4, fs, saved_regs);
+            if child == usize::MAX {
+                free_thread_kstack_slot(slot); // BUG-015: table full -> -EAGAIN, no ghost thread
+                return (-11i64) as u64;
+            }
             set_task_caps(child, effective_caps()); // thread: same rights
             register_thread_kstack(child, slot);
             p.threads.push(child);
@@ -5164,6 +5638,157 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
                 _ => 0,
             }
         }
+        // ── Euro API v1 (sprint WP6): the native app interface. Every pointer is
+        // checked against THIS process's arena (the route swapped ARENA_BASE to
+        // it), every size is bounded, every call is capability-gated. The two
+        // sleeping calls (event_wait, sleep_ms) are handled in the route, where
+        // the BG lock can be dropped first.
+        0x6100 => {
+            // info(out, cap): abi, screen w, screen h, this process's capabilities.
+            let (sw, sh) = crate::appgfx::screen();
+            let caps = (effective_caps() & 0xffff_ffff) as u32;
+            let mut b = [0u8; 16];
+            for (i, v) in [crate::euroapi::ABI_VERSION, sw as u32, sh as u32, caps].iter().enumerate() {
+                b[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+            }
+            let n = (a2 as usize).min(16);
+            if n > 0 && !copy_to_user(a1, &b[..n]) {
+                return EFAULT;
+            }
+            0
+        }
+        0x6101 => {
+            if !has_cap(CAP_WINDOW) {
+                return (-1i64) as u64;
+            }
+            crate::euroapi::create(p.pid, a1 as usize, a2 as usize) as u64
+        }
+        0x6102 => {
+            // surface_present(buf, w, h)
+            if !has_cap(CAP_WINDOW) {
+                return (-1i64) as u64;
+            }
+            let (w, h) = (a2 as usize, a3 as usize);
+            if w == 0 || h == 0 || w > crate::euroapi::MAX_W || h > crate::euroapi::MAX_H || a1 & 3 != 0 {
+                return (-22i64) as u64;
+            }
+            if !in_user_arena(a1, w * h * 4) {
+                return EFAULT;
+            }
+            // SAFETY: bounds-checked against this process's arena, under its CR3.
+            let px = unsafe { core::slice::from_raw_parts(a1 as *const u32, w * h) };
+            crate::euroapi::present(p.pid, px, w, h) as u64
+        }
+        0x6103 => {
+            // event_poll(out, cap) -> 1 with a 16-byte event written, 0 when none.
+            if !has_cap(CAP_WINDOW) {
+                return (-1i64) as u64;
+            }
+            match crate::euroapi::poll(p.pid) {
+                Some(ev) => {
+                    let n = (a2 as usize).min(16);
+                    if !copy_to_user(a1, &ev.to_bytes()[..n]) { EFAULT } else { 1 }
+                }
+                None => 0,
+            }
+        }
+        0x6105 => {
+            // text_draw(buf, w<<32|h, x<<32|y, str, len<<40 | px<<32 | argb)
+            if !has_cap(CAP_WINDOW) {
+                return (-1i64) as u64;
+            }
+            let (w, h) = ((a2 >> 32) as usize, (a2 & 0xffff_ffff) as usize);
+            let (x, y) = ((a3 >> 32) as u32 as i32, (a3 & 0xffff_ffff) as u32 as i32);
+            let len = (a5 >> 40) as usize;
+            let size = ((a5 >> 32) & 0xff) as u32;
+            let argb = (a5 & 0xff_ffff) as u32;
+            if w == 0 || h == 0 || w > crate::euroapi::MAX_W || h > crate::euroapi::MAX_H || len > crate::euroapi::MAX_TEXT {
+                return (-22i64) as u64;
+            }
+            if a1 & 3 != 0 || !euro_user_writable(p, a1, w * h * 4) {
+                return EFAULT;
+            }
+            let bytes = match copy_from_user(a4, len) { Some(v) => v, None => return EFAULT };
+            let s = String::from_utf8_lossy(&bytes);
+            // SAFETY: bounds-checked against this process's arena, under its CR3.
+            let px = unsafe { core::slice::from_raw_parts_mut(a1 as *mut u32, w * h) };
+            crate::euroapi::text_draw(px, w, h, x, y, &s, argb, size) as u64
+        }
+        0x6106 => {
+            let len = a2 as usize;
+            if len > crate::euroapi::MAX_TEXT {
+                return (-22i64) as u64;
+            }
+            let bytes = match copy_from_user(a1, len) { Some(v) => v, None => return EFAULT };
+            crate::euroapi::text_measure(&String::from_utf8_lossy(&bytes), a3 as u32)
+        }
+        0x6107 => {
+            // log(str, len): one line to the serial log and the app's output.
+            if !has_cap(CAP_CONSOLE) {
+                return (-1i64) as u64;
+            }
+            let len = a2 as usize;
+            if len > crate::euroapi::MAX_STR {
+                return (-22i64) as u64;
+            }
+            let bytes = match copy_from_user(a1, len) { Some(v) => v, None => return EFAULT };
+            let line = String::from_utf8_lossy(&bytes).into_owned();
+            crate::serial_println!("[euroapp pid {}] {}", p.pid, line.trim_end());
+            if p.output.len() < 512 {
+                p.output.push(line);
+            }
+            0
+        }
+        0x6108 => crate::interrupts::ticks() * 10, // time_ms (100 Hz ticks)
+        0x610A | 0x610B => {
+            // file_read(path, len, buf, cap) / file_write(path, len, buf, n): whole
+            // files inside the user's home or /tmp; the kernel VFS does the I/O
+            // with the same user-pointer checks as read(2)/write(2).
+            if !has_cap(CAP_FILE) {
+                return (-1i64) as u64;
+            }
+            if a2 as usize > 512 {
+                return (-22i64) as u64;
+            }
+            let pb = match copy_from_user(a1, a2 as usize) { Some(v) => v, None => return EFAULT };
+            let path = match crate::euroapi::file_path_ok(&String::from_utf8_lossy(&pb)) {
+                Some(p) => p,
+                None => return (-13i64) as u64, // -EACCES: outside the app's file scope
+            };
+            let n = (a4 as usize).min(crate::euroapi::MAX_FILE);
+            if num == 0x610A {
+                if n > 0 && !euro_user_writable(p, a3, n) {
+                    return EFAULT;
+                }
+                let fd = vfs_open(path.as_bytes());
+                if (fd as i64) < 0 {
+                    return (-2i64) as u64;
+                }
+                let mut done = 0usize;
+                while done < n {
+                    let r = vfs_read(fd as usize, a3 + done as u64, n - done);
+                    if (r as i64) <= 0 { break; }
+                    done += r as usize;
+                }
+                vfs_close(fd as usize);
+                done as u64
+            } else {
+                if n > 0 && !in_user_arena(a3, n) {
+                    return EFAULT;
+                }
+                if n > crate::euroapi::MAX_FILE_WRITE || !crate::euroapi::write_budget(p.pid, n) {
+                    return (-28i64) as u64; // -ENOSPC: per-call size or per-process budget
+                }
+                let fd = vfs_open_create(path.as_bytes(), true);
+                if (fd as i64) < 0 {
+                    return (-13i64) as u64;
+                }
+                let r = if n > 0 { vfs_write(fd as usize, a3, n) } else { 0 };
+                vfs_close(fd as usize);
+                r
+            }
+        }
+        0x610C => return bg_dispatch(p, 231, a1 & 0xff, 0, 0, 0, 0), // exit(code)
         // EuroIPC — own message-bus syscalls (own number space 500-502).
         500 => crate::euroipc::register(p.pid, a1 as u32) as u64,
         501 => {
@@ -5239,13 +5864,461 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             crate::sched::mark_current_dead();
             0
         }
-        _ => 0,
+        _ => bg_unknown(p, num),
     }
+}
+
+/// Background-path syscalls answered with -ENOSYS (counted over the boot).
+pub static BG_ENOSYS: AtomicU64 = AtomicU64::new(0);
+
+/// A syscall number the background path does not implement: -ENOSYS, as Linux
+/// answers a call it does not know. It used to be a silent 0 ("success"), which
+/// hid missing calls: socket() "worked" and nothing was ever sent. The first
+/// occurrence of each number is logged with the program that made it, so a
+/// program that relied on the silent 0 shows up in the boot log.
+fn bg_unknown(p: &BgProc, num: u64) -> u64 {
+    static SEEN: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+    BG_ENOSYS.fetch_add(1, Ordering::Relaxed);
+    let first = if num < 512 {
+        let bit = 1u64 << (num % 64);
+        SEEN[(num / 64) as usize].fetch_or(bit, Ordering::Relaxed) & bit == 0
+    } else {
+        false
+    };
+    if first {
+        crate::serial_println!(
+            "[bg-enosys] pid {} ({}): syscall {num} is not implemented on the background path -> -ENOSYS",
+            p.pid, p.name
+        );
+    }
+    (-38i64) as u64
+}
+
+// ── Socket syscalls for scheduled musl processes ─────────────────────────────
+//
+// bg_dispatch runs the whole syscall under the global BG lock with IF=0, so a
+// socket call there could never wait for the network (and before this it did
+// not exist: unknown numbers returned 0). These calls are routed here BEFORE
+// the BG lock is taken for them: the caller's identity and address-space layout
+// are copied out under the lock, the lock is dropped, and the call runs on the
+// shared EuroNet socket layer. A blocking call gives the CPU away (net.rs
+// RxWait) instead of spinning, so the userspace NIC driver can run.
+//
+// Capabilities, EuroGuard-style: socket() needs CAP_NET in the process's OWN
+// capability set (a background process with no explicit set has no network;
+// it does not fall back to the global foreground caps). Every socket is owned
+// by the pid that opened it; another process using the number gets -EBADF.
+// Connections and DNS queries are checked by EuroGuard under the process's own
+// name (argv[0]), and audited.
+
+/// The caller of a background socket syscall, captured under the BG lock and
+/// used after it is released.
+struct BgCaller {
+    pid: u64,
+    ppid: u64,
+    pml4: u64,
+    lo: u64,
+    hi: u64,
+    name: String,
+}
+
+impl BgCaller {
+    /// `[ptr, ptr+len)` inside the caller's arena and present for ring 3 in its
+    /// own page tables (writable when `write`).
+    fn user_ok(&self, ptr: u64, len: usize, write: bool) -> bool {
+        let Some(end) = ptr.checked_add(len as u64) else { return false };
+        if len == 0 || ptr < self.lo || end > self.hi {
+            return false;
+        }
+        if write {
+            return crate::paging::user_range_writable_in(self.pml4, ptr, len);
+        }
+        let mut pg = ptr & !0xFFF;
+        while pg < end {
+            if !crate::paging::user_accessible_in(self.pml4, pg) {
+                return false;
+            }
+            pg += 4096;
+        }
+        true
+    }
+    fn copy_in(&self, ptr: u64, len: usize) -> Option<alloc::vec::Vec<u8>> {
+        if !self.user_ok(ptr, len, false) {
+            return None;
+        }
+        let mut v = alloc::vec![0u8; len];
+        // SAFETY: checked above against this process's arena and page tables;
+        // the syscall runs on this process's CR3 (also after a yield: the
+        // scheduler restores it), arenas are identity-mapped.
+        unsafe { core::ptr::copy_nonoverlapping(ptr as *const u8, v.as_mut_ptr(), len) };
+        Some(v)
+    }
+    fn copy_out(&self, ptr: u64, data: &[u8]) -> bool {
+        if data.is_empty() {
+            return true;
+        }
+        if !self.user_ok(ptr, data.len(), true) {
+            return false;
+        }
+        // SAFETY: as in copy_in, and writable for ring 3 in the caller's tables.
+        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len()) };
+        true
+    }
+}
+
+/// Socket ownership for background processes: (fd, owner pid, O_NONBLOCK).
+static BG_SOCKS: Mutex<alloc::vec::Vec<(u64, u64, bool)>> = Mutex::new(alloc::vec::Vec::new());
+/// Socket calls served on the background path / refused for a missing capability.
+pub static BG_NET_CALLS: AtomicU64 = AtomicU64::new(0);
+pub static BG_NET_DENIED: AtomicU64 = AtomicU64::new(0);
+
+fn bg_sock_owner(fd: u64) -> Option<(u64, bool)> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        BG_SOCKS.lock().iter().find(|e| e.0 == fd).map(|e| (e.1, e.2))
+    })
+}
+
+/// Close every socket a dead background process still owned (from reap_dead,
+/// BG lock not held).
+fn bg_net_release(pid: u64) {
+    let fds: alloc::vec::Vec<u64> = x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut t = BG_SOCKS.lock();
+        let fds = t.iter().filter(|e| e.1 == pid).map(|e| e.0).collect();
+        t.retain(|e| e.1 != pid);
+        fds
+    });
+    for fd in fds {
+        crate::net::sock_close(fd);
+    }
+}
+
+/// Is this a call the background socket path serves? Socket numbers always;
+/// read/write/close (and the vector forms) only on a socket descriptor.
+fn bg_is_net_call(num: u64, a1: u64) -> bool {
+    match num {
+        41..=55 => true,
+        0 | 1 | 3 | 19 | 20 => crate::net::is_sock_fd(a1),
+        _ => false,
+    }
+}
+
+/// Does task `t` hold `cap` in its OWN capability set? (no fallback to the
+/// global foreground set: a background process without an explicit set holds
+/// nothing).
+fn task_cap_strict(t: usize, cap: u64) -> bool {
+    t < crate::sched::MAX_TASKS && {
+        let tc = TASK_CAPS[t].load(Ordering::Relaxed);
+        tc != 0 && tc & cap == cap
+    }
+}
+
+/// Gather an iovec array (bounded) from the caller: the buffers' bytes.
+fn bg_iov_gather(c: &BgCaller, iov: u64, cnt: u64) -> Option<alloc::vec::Vec<u8>> {
+    if cnt > 64 {
+        return None;
+    }
+    let mut out = alloc::vec::Vec::new();
+    for i in 0..cnt {
+        let e = c.copy_in(iov + i * 16, 16)?;
+        let base = u64::from_le_bytes(e[0..8].try_into().ok()?);
+        let len = u64::from_le_bytes(e[8..16].try_into().ok()?) as usize;
+        if len > 0 {
+            if out.len() + len > 64 * 1024 {
+                return None;
+            }
+            out.extend_from_slice(&c.copy_in(base, len)?);
+        }
+    }
+    Some(out)
+}
+
+/// The iovec array as (base, len) pairs and their total length.
+fn bg_iov_list(c: &BgCaller, iov: u64, cnt: u64) -> Option<(alloc::vec::Vec<(u64, usize)>, usize)> {
+    if cnt > 64 {
+        return None;
+    }
+    let mut v = alloc::vec::Vec::new();
+    let mut total = 0usize;
+    for i in 0..cnt {
+        let e = c.copy_in(iov + i * 16, 16)?;
+        let base = u64::from_le_bytes(e[0..8].try_into().ok()?);
+        let len = u64::from_le_bytes(e[8..16].try_into().ok()?) as usize;
+        total = total.checked_add(len)?;
+        v.push((base, len));
+    }
+    Some((v, total))
+}
+
+/// Receive on a background socket with its blocking mode: data, or -EAGAIN
+/// for an empty read on a live connection (0 is EOF and only EOF).
+fn bg_sock_recv(c: &BgCaller, fd: u64, max: usize, nonblock: bool, peek: bool) -> Result<alloc::vec::Vec<u8>, u64> {
+    let max = max.min(64 * 1024);
+    let d = if peek {
+        crate::net::sock_peek_nowait(fd, max)
+    } else if nonblock {
+        crate::net::sock_recv_nowait_as(fd, max, &c.name)
+    } else {
+        crate::net::sock_recv_as(fd, max, &c.name)
+    };
+    if d.is_empty() && crate::net::sock_is_tcp(fd) && !crate::net::sock_eof(fd) {
+        return Err((-11i64) as u64); // -EAGAIN
+    }
+    note_inet_rx(fd, d.len());
+    Ok(d)
+}
+
+fn bg_sock_send(c: &BgCaller, fd: u64, data: &[u8], nonblock: bool) -> u64 {
+    let r = if nonblock {
+        crate::net::sock_send_nowait_as(fd, data, &c.name)
+    } else {
+        crate::net::sock_send_as(fd, data, &c.name)
+    };
+    if (r as i64) > 0 {
+        note_inet_tx(fd, r as usize);
+    }
+    r
+}
+
+/// One socket syscall of a background process, with the BG lock NOT held.
+fn bg_net_dispatch(c: &BgCaller, task: usize, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    const EBADF: u64 = (-9i64) as u64;
+    const EINVAL: u64 = (-22i64) as u64;
+    const EPERM: u64 = (-1i64) as u64;
+    BG_NET_CALLS.fetch_add(1, Ordering::Relaxed);
+    // A blocking network wait may give the CPU away from here on: no lock held.
+    let _nb = NetBlockScope::enter(true);
+    if num == 41 {
+        if !task_cap_strict(task, CAP_NET) {
+            BG_NET_DENIED.fetch_add(1, Ordering::Relaxed);
+            crate::serial_println!("[bgnet] pid {} ({}): socket() DENIED: no CAP_NET in its capability set", c.pid, c.name);
+            return EPERM;
+        }
+        let typ = a2 & 0xff;
+        let fd = match (a1, typ) {
+            (2, 1) => crate::net::sock_open(false), // AF_INET TCP
+            (2, 2) => crate::net::sock_open(true),  // AF_INET UDP
+            (2, _) => return (-93i64) as u64,       // -EPROTONOSUPPORT
+            _ => return (-97i64) as u64,            // -EAFNOSUPPORT (AF_INET only here)
+        };
+        if (fd as i64) < 0 {
+            return (-24i64) as u64; // -EMFILE: socket table full
+        }
+        x86_64::instructions::interrupts::without_interrupts(|| BG_SOCKS.lock().push((fd, c.pid, a2 & 0x800 != 0)));
+        return fd;
+    }
+    if num == 53 {
+        return (-97i64) as u64; // socketpair: AF_UNIX is not served on this path
+    }
+    // Everything else names a socket: it must be one of this process's own
+    // (or inherited from its parent across fork).
+    let Some((owner, nonblock)) = bg_sock_owner(a1) else { return EBADF };
+    if owner != c.pid && (c.ppid == 0 || owner != c.ppid) {
+        return EBADF;
+    }
+    match num {
+        42 => {
+            // connect(fd, sockaddr, len): AF_INET only.
+            if a3 < 8 {
+                return EINVAL;
+            }
+            let Some(sa) = c.copy_in(a2, (a3 as usize).min(16)) else { return EFAULT };
+            if u16::from_le_bytes([sa[0], sa[1]]) != 2 {
+                return (-97i64) as u64;
+            }
+            let port = u16::from_be_bytes([sa[2], sa[3]]);
+            crate::net::sock_connect_as(a1, euronet::ipv4::Ipv4Addr([sa[4], sa[5], sa[6], sa[7]]), port, &c.name)
+        }
+        44 => {
+            // sendto(fd, buf, len, flags, dest, destlen)
+            if a3 as usize > 64 * 1024 {
+                return EINVAL;
+            }
+            let Some(bytes) = c.copy_in(a2, a3 as usize) else { return EFAULT };
+            if a5 != 0 && !crate::net::sock_is_connected(a1) {
+                let Some(sa) = c.copy_in(a5, 8) else { return EFAULT };
+                if u16::from_le_bytes([sa[0], sa[1]]) == 2 {
+                    let port = u16::from_be_bytes([sa[2], sa[3]]);
+                    let r = crate::net::sock_connect_as(a1, euronet::ipv4::Ipv4Addr([sa[4], sa[5], sa[6], sa[7]]), port, &c.name);
+                    if (r as i64) < 0 {
+                        return r;
+                    }
+                }
+            }
+            bg_sock_send(c, a1, &bytes, nonblock || a4 & 0x40 != 0)
+        }
+        1 => {
+            if a3 as usize > 64 * 1024 {
+                return EINVAL;
+            }
+            let Some(bytes) = c.copy_in(a2, a3 as usize) else { return EFAULT };
+            bg_sock_send(c, a1, &bytes, nonblock)
+        }
+        20 => {
+            let Some(bytes) = bg_iov_gather(c, a2, a3) else { return EFAULT };
+            bg_sock_send(c, a1, &bytes, nonblock)
+        }
+        46 => {
+            // sendmsg(fd, msghdr, flags): the iovec of the message, no ancillary data.
+            let Some(h) = c.copy_in(a2, 56) else { return EFAULT };
+            let iov = u64::from_le_bytes(h[16..24].try_into().unwrap_or([0; 8]));
+            let cnt = u64::from_le_bytes(h[24..32].try_into().unwrap_or([0; 8]));
+            let Some(bytes) = bg_iov_gather(c, iov, cnt) else { return EFAULT };
+            bg_sock_send(c, a1, &bytes, nonblock || a3 & 0x40 != 0)
+        }
+        0 | 45 => {
+            // read(fd, buf, len) / recvfrom(fd, buf, len, flags, src, srclen)
+            let (flags, max) = if num == 45 { (a4, a3 as usize) } else { (0, a3 as usize) };
+            if max == 0 {
+                return 0;
+            }
+            if !c.user_ok(a2, max.min(64 * 1024), true) {
+                return EFAULT;
+            }
+            match bg_sock_recv(c, a1, max, nonblock || flags & 0x40 != 0, flags & 2 != 0) {
+                Ok(d) => {
+                    if !c.copy_out(a2, &d) {
+                        return EFAULT;
+                    }
+                    d.len() as u64
+                }
+                Err(e) => e,
+            }
+        }
+        19 | 47 => {
+            // readv(fd, iov, cnt) / recvmsg(fd, msghdr, flags): scatter one read.
+            let (iov, cnt, flags) = if num == 47 {
+                let Some(h) = c.copy_in(a2, 56) else { return EFAULT };
+                (
+                    u64::from_le_bytes(h[16..24].try_into().unwrap_or([0; 8])),
+                    u64::from_le_bytes(h[24..32].try_into().unwrap_or([0; 8])),
+                    a3,
+                )
+            } else {
+                (a2, a3, 0)
+            };
+            let Some((list, total)) = bg_iov_list(c, iov, cnt) else { return EFAULT };
+            if list.iter().any(|&(b, l)| l > 0 && !c.user_ok(b, l, true)) {
+                return EFAULT;
+            }
+            if total == 0 {
+                return 0;
+            }
+            match bg_sock_recv(c, a1, total, nonblock || flags & 0x40 != 0, flags & 2 != 0) {
+                Ok(d) => {
+                    let mut off = 0usize;
+                    for (b, l) in list {
+                        if off >= d.len() {
+                            break;
+                        }
+                        let n = l.min(d.len() - off);
+                        if !c.copy_out(b, &d[off..off + n]) {
+                            return EFAULT;
+                        }
+                        off += n;
+                    }
+                    d.len() as u64
+                }
+                Err(e) => e,
+            }
+        }
+        3 => {
+            // close: the owner closes; a fork child closing an inherited socket
+            // only drops its own reference (the parent still holds it).
+            if owner != c.pid {
+                return 0;
+            }
+            x86_64::instructions::interrupts::without_interrupts(|| BG_SOCKS.lock().retain(|e| e.0 != a1));
+            crate::net::sock_close(a1)
+        }
+        48 => 0, // shutdown: accepted, as on the Linux bridge (the FIN goes on close)
+        49 => {
+            // bind(fd, sockaddr_in, len): the local port of a listener.
+            let Some(sa) = c.copy_in(a2, 8) else { return EFAULT };
+            if u16::from_le_bytes([sa[0], sa[1]]) != 2 {
+                return (-97i64) as u64;
+            }
+            crate::net::sock_bind(a1, u16::from_be_bytes([sa[2], sa[3]]))
+        }
+        50 => crate::net::sock_listen(a1, (a2 as usize).clamp(1, 16)),
+        43 => {
+            let nfd = crate::net::sock_accept(a1);
+            if (nfd as i64) >= 0 {
+                x86_64::instructions::interrupts::without_interrupts(|| BG_SOCKS.lock().push((nfd, c.pid, false)));
+            }
+            nfd
+        }
+        51 | 52 => {
+            // getsockname / getpeername: a sockaddr_in.
+            let Some((lip, lport, pip, pport)) = crate::net::sock_names(a1) else { return (-107i64) as u64 }; // -ENOTCONN
+            let (ip, port) = if num == 51 { (lip, lport) } else { (pip, pport) };
+            let mut sa = [0u8; 16];
+            sa[0] = 2;
+            sa[2..4].copy_from_slice(&port.to_be_bytes());
+            sa[4..8].copy_from_slice(&ip.0);
+            if !c.copy_out(a2, &sa) || !c.copy_out(a3, &16u32.to_le_bytes()) {
+                return EFAULT;
+            }
+            0
+        }
+        54 => 0, // setsockopt: accepted as a no-op, as on the Linux bridge
+        55 => {
+            // getsockopt: every option reads 0 (SO_ERROR = no error).
+            if a4 != 0 && (!c.copy_out(a4, &0i32.to_le_bytes()) || (a5 != 0 && !c.copy_out(a5, &4u32.to_le_bytes()))) {
+                return EFAULT;
+            }
+            0
+        }
+        _ => (-38i64) as u64,
+    }
+}
+
+// ── May a network wait give the CPU away? (per task, scoped) ────────────────
+
+static NET_MAY_BLOCK: [core::sync::atomic::AtomicBool; crate::sched::MAX_TASKS] =
+    [const { core::sync::atomic::AtomicBool::new(false) }; crate::sched::MAX_TASKS];
+
+/// True while the current task is inside a syscall that holds no lock of the
+/// syscall layer (the Linux path of a scheduled process, or the background
+/// socket path): net.rs may then sleep instead of spinning. A foreground
+/// excursion (task 0 in `run_args`) is synchronous and never gets this: its
+/// kernel stack and address space are not those the scheduler would restore.
+pub fn net_may_block() -> bool {
+    let t = crate::sched::current_lockfree();
+    t < crate::sched::MAX_TASKS && NET_MAY_BLOCK[t].load(Ordering::Relaxed)
+}
+
+/// Scope guard for [`net_may_block`]; restores the previous value on drop.
+struct NetBlockScope {
+    t: usize,
+    prev: bool,
+}
+
+impl NetBlockScope {
+    fn enter(on: bool) -> Self {
+        let t = crate::sched::current_lockfree();
+        let prev = if t < crate::sched::MAX_TASKS { NET_MAY_BLOCK[t].swap(on, Ordering::Relaxed) } else { false };
+        NetBlockScope { t, prev }
+    }
+}
+
+impl Drop for NetBlockScope {
+    fn drop(&mut self) {
+        if self.t < crate::sched::MAX_TASKS {
+            NET_MAY_BLOCK[self.t].store(self.prev, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Give the CPU away from inside a syscall or task context, keeping the
+/// caller's interrupt state and re-establishing the per-process globals on
+/// return (another process may have loaded its own while this one slept).
+pub fn yield_keep_state() {
+    yield_reacquire();
 }
 
 /// Load `program` (musl, Linux ABI) as a PREEMPTIVELY scheduled process with
 /// its own PCB (heap/output/pid/TLS). The program runs indefinitely.
-pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv0: &[u8]) {
+pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv0: &[u8]) -> bool {
     init_syscall_msrs();
     const MIB2: u64 = 1 << 21;
     // One 2 MiB-aligned user arena: ALL user frames of this process (code,
@@ -5254,12 +6327,29 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
     // Exactly 2 MiB, 2 MiB-aligned in one go (no more 4 MiB over-allocation):
     // saves ~2 MiB per background process. On reaping we return exactly these 512
     // frames (arena_frames below).
-    let arena = falloc.allocate_aligned(512, 512).expect("bg-arena");
+    // LOADTEST-R630 BUG-015: out of memory or out of task slots is a refusal
+    // (false), never a kernel panic and never a process that cannot run.
+    let arena = match falloc.allocate_aligned(512, 512) {
+        Ok(a) => a,
+        Err(_) => {
+            crate::serial_println!("[euro] bg-musl (pid {pid}): no free 2 MiB arena - not started");
+            return false;
+        }
+    };
     let arena_raw = arena;
     let code = arena; // program code/segments at the bottom of the arena
     let heap = arena + 0x80000; // +512 KiB: own heap (musl mmap/TLS block)
     let stack_top = arena + MIB2; // user stack grows downward from the arena top
-    let kstack = falloc.allocate_contiguous(4).expect("bg-kstack"); // ring-0 stack (supervisor)
+    let kstack = match falloc.allocate_contiguous(4) {
+        Ok(k) => k, // ring-0 stack (supervisor)
+        Err(_) => {
+            for f in 0..512u64 {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            crate::serial_println!("[euro] bg-musl (pid {pid}): no kernel stack free - not started");
+            return false;
+        }
+    };
     let kstack_top = (kstack + 4 * 4096) & !0xF;
     let pages = program_span_pages(program);
     let info = load_program(program, code, pages);
@@ -5271,7 +6361,31 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
     // Build it FIRST, then spawn with cr3 set before Ready (BUG-007: a task must never be
     // schedulable with cr3=0, or a preempting timer IRQ runs its ring-3 code on the boot PML4).
     let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
+    // LOADTEST-R630 BUG-024: the task is Ready the moment spawn_user returns, but
+    // syscall_dispatch only knows it once it is registered below. A timer tick in
+    // between ran its first syscall (musl's arch_prctl) through the FOREGROUND
+    // Linux path with the foreground's globals: a kernel page fault after ~1 h of
+    // spawning (soak). Ring-3 tasks run only on this core (the BSP), so keeping
+    // interrupts off from spawn to registration closes the window.
+    let irq_was_on = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::disable();
     let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
+    if idx == usize::MAX {
+        // Scheduler table full: undo instead of registering a process whose task
+        // never runs (it used to sit "live" forever with task usize::MAX).
+        for f in 0..512u64 {
+            let _ = falloc.free(arena + f * 4096);
+        }
+        for f in 0..4u64 {
+            let _ = falloc.free(kstack + f * 4096);
+        }
+        crate::paging::free_address_space(falloc, pml4);
+        if irq_was_on {
+            x86_64::instructions::interrupts::enable();
+        }
+        crate::serial_println!("[euro] bg-musl (pid {pid}): scheduler task table full - not started");
+        return false;
+    }
     // BUG-007 hardening: irqsave BG hold (non-preemptible) for the registration push.
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().push(BgProc {
@@ -5292,9 +6406,52 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
             thread_ctids: alloc::vec::Vec::new(),
             ppid: 0,
             pooled: false,
+            name: String::from_utf8_lossy(argv0).into_owned(),
+            echo: false,
         });
     });
+    if irq_was_on {
+        x86_64::instructions::interrupts::enable();
+    }
     crate::serial_println!("[euro] bg-musl (pid {pid}) -> task {idx}, own address space PML4 {pml4:#x}, arena {arena:#x}");
+    true
+}
+
+/// Like [`spawn_bg_musl`], for a program that must run with an EXPLICIT
+/// capability set (no fallback to the global foreground caps) and whose output
+/// a self-test reads back ([`bg_output`]): caps and the echo flag are in place
+/// before the task can run (interrupts stay off from spawn to bookkeeping).
+/// Returns the task index.
+pub fn spawn_bg_musl_caps(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv0: &[u8], caps: u64, echo: bool) -> Option<usize> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        spawn_bg_musl(falloc, program, pid, argv0);
+        let mut bg = BG.lock();
+        let p = bg.iter_mut().find(|p| p.pid == pid && !p.zombie)?;
+        p.echo = echo;
+        let task = p.task;
+        drop(bg);
+        set_task_caps(task, caps | CAP_TASK_SET);
+        Some(task)
+    })
+}
+
+/// Every output line a background process wrote so far (complete lines, plus
+/// an unterminated last one). With `echo` that is up to 64 lines, else the
+/// last 6.
+pub fn bg_output(pid: u64) -> alloc::vec::Vec<String> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        BG.lock()
+            .iter()
+            .find(|p| p.pid == pid)
+            .map(|p| {
+                let mut v = p.output.clone();
+                if !p.partial.is_empty() {
+                    v.push(p.partial.clone());
+                }
+                v
+            })
+            .unwrap_or_default()
+    })
 }
 
 /// Like [`spawn_bg_musl`] but with a LARGE arena (`arena_mib`, e.g. 32 MiB) for a
@@ -5320,7 +6477,17 @@ pub fn spawn_bg_app(
     let heap = arena + MIB2; // heap starts at block 1
     let heap_end = arena + (nblocks - 1) * MIB2; // stops below the stack block
     let stack_top = arena + nblocks * MIB2; // stack grows down from the arena top
-    let kstack = falloc.allocate_contiguous(4).expect("app-kstack");
+    let kstack = match falloc.allocate_contiguous(4) {
+        Ok(k) => k,
+        Err(_) => {
+            // BUG-015: out of memory refuses the app instead of panicking.
+            for f in 0..frames {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            crate::serial_println!("[euro] bg-app (pid {pid}): no kernel stack free - not started");
+            return None;
+        }
+    };
     let kstack_top = (kstack + 4 * 4096) & !0xF;
     let pages = program_span_pages(program);
     if pages > 512 {
@@ -5340,7 +6507,32 @@ pub fn spawn_bg_app(
         &info.exec_pages,
         &info.writ_pages,
     );
+    // LOADTEST-R630 BUG-024: the task is Ready the moment spawn_user returns, but
+    // syscall_dispatch only knows it once it is registered below. A timer tick in
+    // between ran its first syscall (musl's arch_prctl) through the FOREGROUND
+    // Linux path with the foreground's globals: a kernel page fault after ~1 h of
+    // spawning (soak). Ring-3 tasks run only on this core (the BSP), so keeping
+    // interrupts off from spawn to registration closes the window.
+    let irq_was_on = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::disable();
     let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
+    if idx == usize::MAX {
+        // BUG-015 for apps and userspace drivers: a full task table is a refusal
+        // (the udrv supervisor retries later), never a registered process whose
+        // task never runs.
+        for f in 0..frames {
+            let _ = falloc.free(arena + f * 4096);
+        }
+        for f in 0..4u64 {
+            let _ = falloc.free(kstack + f * 4096);
+        }
+        crate::paging::free_address_space(falloc, pml4);
+        if irq_was_on {
+            x86_64::instructions::interrupts::enable();
+        }
+        crate::serial_println!("[euro] bg-app (pid {pid}): scheduler task table full - not started");
+        return None;
+    }
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().push(BgProc {
             task: idx,
@@ -5360,13 +6552,75 @@ pub fn spawn_bg_app(
             thread_ctids: alloc::vec::Vec::new(),
             ppid: 0,
             pooled: false,
+            name: String::from_utf8_lossy(argv.first().copied().unwrap_or(b"app")).into_owned(),
+            echo: false,
         });
     });
+    if irq_was_on {
+        x86_64::instructions::interrupts::enable();
+    }
     crate::serial_println!("[euro] bg-app (pid {pid}) -> task {idx}, arena {arena:#x} span {arena_mib} MiB, heap {heap:#x}..{heap_end:#x}, PML4 {pml4:#x}");
     Some(idx)
 }
 
 /// Close an fd.
+/// For the Euro arms that write into app memory in place (text_draw, file_read):
+/// inside the arena AND mapped writable for the process (never its R-X code).
+fn euro_user_writable(p: &BgProc, ptr: u64, len: usize) -> bool {
+    in_user_arena(ptr, len) && crate::paging::user_range_writable_in(p.pml4, ptr, len)
+}
+
+/// Where background process `pid` lives: (task, PML4, arena base, arena bytes).
+/// The userspace-driver supervisor maps the device grant into this address
+/// space before the task first runs.
+pub fn bg_layout(pid: u64) -> Option<(usize, u64, u64, u64)> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        BG.lock().iter().find(|p| p.pid == pid && !p.zombie).map(|p| (p.task, p.pml4, p.arena_virt, p.arena_frames * 4096))
+    })
+}
+
+/// Is the background process `pid` still running (spawned, not yet exited/killed)?
+pub fn bg_alive(pid: u64) -> bool {
+    x86_64::instructions::interrupts::without_interrupts(|| BG.lock().iter().any(|p| p.pid == pid && !p.zombie))
+}
+
+/// Why a background process ended, while it has not been reaped yet.
+pub fn bg_end_reason(pid: u64) -> Option<String> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        BG.lock().iter().find(|p| p.pid == pid && p.zombie).and_then(|p| p.kill_reason.clone())
+    })
+}
+
+/// Sprint WP6: start a NATIVE EuroOS app. The program is a freestanding static
+/// PIE that speaks the Euro API; it runs with exactly `caps` (a zero set is a
+/// zero set, not the desktop's rights) under `profile` (normally
+/// `Profile::Euro`, the allow-list of the Euro API). Caps and profile are in
+/// place before the task can run: interrupts stay off from spawn to the end of
+/// the bookkeeping, so the first syscall already meets the policy.
+pub fn spawn_euro_app(
+    falloc: &mut FrameAllocator,
+    program: &[u8],
+    pid: u64,
+    argv: &[&[u8]],
+    arena_mib: u64,
+    caps: u64,
+    profile: eurosandbox::Profile,
+) -> Option<usize> {
+    // The fine-grained W^X page table covers the first 2 MiB block only; a
+    // program whose code+data+bss span more would get RWX pages. Refuse it.
+    if program_span_pages(program) > 512 {
+        crate::serial_println!("[euroapp] pid {pid}: program spans more than 2 MiB (code+data+bss): refused (W^X)");
+        return None;
+    }
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let idx = spawn_bg_app(falloc, program, pid, argv, arena_mib)?;
+        set_task_caps(idx, caps | CAP_TASK_SET);
+        set_task_profile(idx, profile);
+        crate::serial_println!("[euroapp] pid {pid} -> task {idx}: caps {caps:#x}, profile {}", profile.name());
+        Some(idx)
+    })
+}
+
 fn vfs_close(fd: usize) -> u64 {
     if fd < MAX_FD {
         FD_NONBLOCK[fd].store(false, Ordering::Relaxed); // reset status flags for reuse
@@ -5480,6 +6734,27 @@ pub fn unalias_fd(fd: u64) -> u64 {
         }
         fd
     })
+}
+
+/// Grow a RAM-backed VFS file to `need` bytes, FALLIBLY. Every grow path
+/// (write past EOF, ftruncate, fallocate) funnels through here so a user-chosen
+/// size can never take the kernel heap down: the gfuzz campaign found
+/// fallocate(fd, mode, 2, 0x100000000) panicking in the allocator with
+/// "memory allocation of 4294967298 bytes failed". A grow is refused when it
+/// exceeds half the kernel heap or when the allocator cannot reserve it.
+pub fn grow_ram_file(v: &mut alloc::vec::Vec<u8>, need: usize) -> bool {
+    if need <= v.len() {
+        return true;
+    }
+    let cap = crate::allocator::size() / 2;
+    if need > cap {
+        return false;
+    }
+    if v.try_reserve(need - v.len()).is_err() {
+        return false;
+    }
+    v.resize(need, 0);
+    true
 }
 
 /// Low fds that were OPEN at the moment a still-living fork child was created:
@@ -5652,7 +6927,11 @@ fn vfs_ftruncate(fd: usize, len: usize) -> u64 {
     let mut files = FILES.lock();
     if let Some(f) = files.get_mut(fi) {
         let path = f.0.clone();
-        f.1.to_mut().resize(len, 0);
+        if len < f.1.len() {
+            f.1.to_mut().truncate(len);
+        } else if !grow_ram_file(f.1.to_mut(), len) {
+            return (-28i64) as u64; // -ENOSPC: refused rather than exhausting the heap
+        }
         drop(files);
         if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
             crate::serial_println!("[ftrunc] fd={fd} {path:?} -> {len} B");
@@ -6225,6 +7504,9 @@ static BROWSER_ELF: &[u8] = include_bytes!("../../userland/browser.elf");
 static LDLINUX_ELF: &[u8] = include_bytes!("../../userland/glibc/ld-linux-x86-64.so.2");
 static GLIBC_LIBC: &[u8] = include_bytes!("../../userland/glibc/libc.so.6");
 static GTINY_ELF: &[u8] = include_bytes!("../../userland/glibc/gtiny");
+static GPOLICY_ELF: &[u8] = include_bytes!("../../userland/glibc/gpolicy");
+static GTHREADCHURN_ELF: &[u8] = include_bytes!("../../userland/glibc/gthreadchurn");
+static GFORKCHURN_ELF: &[u8] = include_bytes!("../../userland/glibc/gforkchurn");
 static GTEST_ELF: &[u8] = include_bytes!("../../userland/glibc/gtest");
 static GTHREAD_ELF: &[u8] = include_bytes!("../../userland/glibc/gthread");
 // Multi-library test: needs libm.so.6 (a SECOND real shared lib) + dlopen/dlsym.
@@ -6287,6 +7569,11 @@ static GSCM_ELF: &[u8] = include_bytes!("../../userland/glibc/gscm");
 // CONDITION-VARIABLE test: a broadcast must reach every waiter. glibc implements it
 // with futex REQUEUE/WAKE_OP, which a kernel can silently answer with "nobody".
 static GCOND_ELF: &[u8] = include_bytes!("../../userland/glibc/gcond");
+static GSANDBOX_ELF: &[u8] = include_bytes!("../../userland/glibc/gsandbox");
+/// gswap (sprint N2): allocates past the demand pool and verifies its pattern
+/// twice; only correct with swap. Dev builds only.
+static GSWAP_ELF: &[u8] = include_bytes!("../../userland/glibc/gswap");
+static GFUZZ_ELF: &[u8] = include_bytes!("../../userland/glibc/gfuzz");
 // BRK test: memory gained through the program break must read as zeros — glibc's
 // calloc skips its memset for kernel-fresh chunks and inherits our garbage if not.
 static GBRK_ELF: &[u8] = include_bytes!("../../userland/glibc/gbrk");
@@ -6301,6 +7588,7 @@ static CRASHPAD_ELF: &[u8] = include_bytes!("../../userland/glibc/chrome_crashpa
 static GDISKMAP_ELF: &[u8] = include_bytes!("../../userland/glibc/gdiskmap");
 // AF_UNIX socketpair round-trip (local IPC — the X11/dbus transport).
 static GUNIX_ELF: &[u8] = include_bytes!("../../userland/glibc/gunix");
+static GNET_ELF: &[u8] = include_bytes!("../../userland/glibc/gnet");
 // X11 CLIENT stack (a real Xlib client + its 6 transitive libs) — the GUI rung.
 static GLIBC_LIBX11: &[u8] = include_bytes!("../../userland/glibc/libX11.so.6");
 static GLIBC_LIBXCB: &[u8] = include_bytes!("../../userland/glibc/libxcb.so.1");
@@ -6360,6 +7648,9 @@ pub fn ldlinux_bytes() -> &'static [u8] { LDLINUX_ELF }
 pub fn glibc_libc_bytes() -> &'static [u8] { GLIBC_LIBC }
 /// The tiny dynamic glibc test binary.
 pub fn gtiny_bytes() -> &'static [u8] { GTINY_ELF }
+pub fn gpolicy_bytes() -> &'static [u8] { GPOLICY_ELF }
+pub fn gthreadchurn_bytes() -> &'static [u8] { GTHREADCHURN_ELF }
+pub fn gforkchurn_bytes() -> &'static [u8] { GFORKCHURN_ELF }
 /// A richer glibc test: printf + malloc + pthreads.
 pub fn gtest_bytes() -> &'static [u8] { GTEST_ELF }
 /// A threaded glibc test: pthread_create + join of 3 workers.
@@ -6415,6 +7706,9 @@ pub fn gsleep_bytes() -> &'static [u8] { GSLEEP_ELF }
 pub fn gscm_bytes() -> &'static [u8] { GSCM_ELF }
 /// A condition-variable broadcast test (futex REQUEUE).
 pub fn gcond_bytes() -> &'static [u8] { GCOND_ELF }
+pub fn gsandbox_bytes() -> &'static [u8] { GSANDBOX_ELF }
+pub fn gswap_bytes() -> &'static [u8] { GSWAP_ELF }
+pub fn gfuzz_bytes() -> &'static [u8] { GFUZZ_ELF }
 /// A brk-zeroing test (grow, poison, shrink, regrow: zeros every time).
 pub fn gbrk_bytes() -> &'static [u8] { GBRK_ELF }
 /// glibc stub libs chrome declares as NEEDED (real code is in libc.so.6).
@@ -6437,6 +7731,7 @@ pub fn europack_has(path: &str) -> bool {
 }
 /// An AF_UNIX socketpair round-trip test (local IPC transport).
 pub fn gunix_bytes() -> &'static [u8] { GUNIX_ELF }
+pub fn gnet_bytes() -> &'static [u8] { GNET_ELF }
 /// The X11 client libraries (served to ld.so for a real Xlib client).
 pub fn glibc_libx11_bytes() -> &'static [u8] { GLIBC_LIBX11 }
 pub fn glibc_libxcb_bytes() -> &'static [u8] { GLIBC_LIBXCB }
@@ -6947,6 +8242,9 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gcairo" => include_bytes!("../../userland/glibc/gcairo.sig"),
         "/bin/gcairotext" => include_bytes!("../../userland/glibc/gcairotext.sig"),
         "/bin/gcond" => include_bytes!("../../userland/glibc/gcond.sig"),
+        "/bin/gsandbox" => include_bytes!("../../userland/glibc/gsandbox.sig"),
+        "/bin/gswap" => include_bytes!("../../userland/glibc/gswap.sig"),
+        "/bin/gfuzz" => include_bytes!("../../userland/glibc/gfuzz.sig"),
         "/bin/gcpp" => include_bytes!("../../userland/glibc/gcpp.sig"),
         "/bin/gdiskmap" => include_bytes!("../../userland/glibc/gdiskmap.sig"),
         "/bin/gevfd" => include_bytes!("../../userland/glibc/gevfd.sig"),
@@ -6969,7 +8267,11 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gtest" => include_bytes!("../../userland/glibc/gtest.sig"),
         "/bin/gthread" => include_bytes!("../../userland/glibc/gthread.sig"),
         "/bin/gtiny" => include_bytes!("../../userland/glibc/gtiny.sig"),
+        "/bin/gpolicy" => include_bytes!("../../userland/glibc/gpolicy.sig"),
+        "/bin/gthreadchurn" => include_bytes!("../../userland/glibc/gthreadchurn.sig"),
+        "/bin/gforkchurn" => include_bytes!("../../userland/glibc/gforkchurn.sig"),
         "/bin/gunix" => include_bytes!("../../userland/glibc/gunix.sig"),
+        "/bin/gnet" => include_bytes!("../../userland/glibc/gnet.sig"),
         "/bin/gunlink" => include_bytes!("../../userland/glibc/gunlink.sig"),
         "/bin/gvdso" => include_bytes!("../../userland/glibc/gvdso.sig"),
         "/bin/gvec" => include_bytes!("../../userland/glibc/gvec.sig"),
@@ -7025,10 +8327,39 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
 /// Verify the Ed25519 signature of a program (by name) over the
 /// actually-loaded bytes. `true` = authentic + unchanged -> may run.
 pub fn verify_program(path: &str, bytes: &[u8]) -> bool {
+    if app_hash_matches(bytes) {
+        return true; // an installed app: trusted through its verified package hash
+    }
     match program_sig(path) {
         Some(sig) => crate::crypto::verify(bytes, sig),
         None => false, // no signature known -> not trusted
     }
+}
+
+/// The SHA-256 of an installed app's binary, set by the launcher right before
+/// the spawn: the package store already verified the signature over that hash
+/// (`eupkg`), so a binary with exactly this hash is trusted for one spawn.
+static APP_TRUSTED_HASH: Mutex<Option<[u8; 32]>> = Mutex::new(None);
+/// The syscall profile the next spawned main task gets (eurosandbox byte), or
+/// 0 for the default. Set by the app launcher from the package manifest.
+pub static NEXT_SPAWN_PROFILE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// Output of the last `app run` (command-line app package), for the terminal.
+static LAST_APP_OUTPUT: Mutex<String> = Mutex::new(String::new());
+pub fn set_last_app_output(o: &str) {
+    *LAST_APP_OUTPUT.lock() = String::from(o);
+}
+pub fn last_app_output() -> String {
+    LAST_APP_OUTPUT.lock().clone()
+}
+
+pub fn app_trust_hash(h: Option<[u8; 32]>) {
+    *APP_TRUSTED_HASH.lock() = h;
+}
+
+fn app_hash_matches(bytes: &[u8]) -> bool {
+    let want = match *APP_TRUSTED_HASH.lock() { Some(h) => h, None => return false };
+    eurotls::keyschedule::sha256(bytes) == want
 }
 
 // ── Minimal ELF64 loader ─────────────────────────────────────────────────
@@ -7273,6 +8604,19 @@ fn vdso_prepare(falloc: &mut FrameAllocator) -> bool {
 
 /// Map the prepared vDSO frames into `pml4`. Table frames come from the FRAME
 /// ALLOCATOR, so this works at process-build time — before any demand pool exists.
+/// Tear down a process address space completely: the vDSO's own table chain
+/// (its PML4 slot, tables from falloc; a no-op when no vDSO was mapped) and then
+/// the arena chain + pml4. Every teardown path uses this; freeing only the
+/// arena chain leaked 4 frames per glibc run ([churn-proc], 2026-10-07).
+fn free_process_space(falloc: &mut FrameAllocator, pml4: u64) {
+    let n = crate::paging::free_user_table_chain(falloc, pml4, (VDSO_BASE >> 39) as usize);
+    static DIAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    if DIAG.fetch_add(1, Ordering::Relaxed) < 3 {
+        crate::serial_println!("[glibc] teardown: vDSO table chain freed ({n} frames), then the arena chain");
+    }
+    crate::paging::free_address_space(falloc, pml4);
+}
+
 fn vdso_map_into(falloc: &mut FrameAllocator, pml4: u64) -> bool {
     let imgs = VDSO_IMAGE_FRAMES.lock();
     for (i, &f) in imgs.iter().enumerate() {
@@ -7933,7 +9277,7 @@ pub fn run_dynamic(
     for f in 0..512u64 {
         let _ = falloc.free(arena + f * 4096);
     }
-    crate::paging::free_address_space(falloc, pml4);
+    crate::paging::free_address_space(falloc, pml4); // (vDSO chain: only the run_glibc paths free it, see free_process_space)
     let exit_code = unsafe { EXIT_CODE };
     let out = OUTPUT.lock().clone();
     (out, exit_code)
@@ -8029,7 +9373,7 @@ pub fn run_interp(
     for f in 0..512u64 {
         let _ = falloc.free(arena + f * 4096);
     }
-    crate::paging::free_address_space(falloc, pml4);
+    crate::paging::free_address_space(falloc, pml4); // (vDSO chain: only the run_glibc paths free it, see free_process_space)
     let exit_code = unsafe { EXIT_CODE };
     let out = OUTPUT.lock().clone();
     (out, exit_code)
@@ -8367,6 +9711,79 @@ fn child_mem_drop(task: usize) {
     CHILD_MEM.lock().retain(|c| c.task != task);
 }
 
+/// End a glibc fork child from OUTSIDE it (kill(2) by the parent, or the end of
+/// the run that forked it) and give back everything it holds: its threads and
+/// main task die, its saved state and descriptors go, its demand pages return to
+/// the demand pool and its arena, page tables and pml4 to the process pool.
+/// `status` is the wait status recorded for wait4 (None: nobody will wait).
+/// The child is not running: callers run on another task, and ring-3 tasks run
+/// only on the BSP.
+fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: usize, status: Option<u32>) {
+    let threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter()
+        .filter(|&&(_, m)| m == ctask).map(|&(t, _)| t).collect();
+    for t in threads {
+        futex_purge_task(t);
+        free_thread_kstack(t);
+        crate::sched::mark_dead(t);
+        crate::net::forget_rx_waiter(t);
+    }
+    if let Some(st) = status {
+        GLIBC_CHILD_EXITS.lock().push((pid, st));
+    }
+    globals_release_owner(ctask); // never drop state that is loaded
+    GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
+    FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != ctask);
+    child_mem_drop(ctask);
+    CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
+    fork_child_release_fds(ctask);
+    child_opened_release(ctask);
+    proc_state_drop(ctask);
+    static EXITLOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    let exit_log = EXITLOG.fetch_add(1, Ordering::Relaxed) < 4;
+    if exit_log {
+        crate::serial_println!("[fork-acct] child exit BEFORE frees: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
+    }
+    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+    // ... and the child's own page tables under PML4[0] (pdpt, pd,
+    // 4 KiB PTs: procpool frames), which only the pml4 free used to cover.
+    crate::paging::free_fork_tables(pml4);
+    crate::procpool::free_range(arena, frames);
+    crate::procpool::free(pml4);
+    futex_purge_task(ctask);
+    free_thread_kstack(ctask);
+    crate::sched::mark_dead(ctask);
+    // Torn down in a network wait (kill(2), the end-of-run reap): not a waiter
+    // any more, or its reused slot gets an early wake (see reset_task_slot).
+    crate::net::forget_rx_waiter(ctask);
+}
+
+/// End every fork child the finished run left behind. A run is one process
+/// tree: the fd table, the demand pool and the swapped globals (GLOBALS_OWNER)
+/// all belong to it. A child that outlived its parent kept running into the
+/// NEXT run: it could own the globals while that run set up its arena (the new
+/// main then swapped the old run's arena bounds in and ld.so's first mmap of
+/// libc.so.6 failed with "failed to map segment"), and its exit freed demand
+/// pages into the next run's pool. Seen at 1 GiB as a flaky [sbx2]: GSCM3's
+/// child A waits 30 s for a descriptor its failed sibling never sends.
+/// Called by the launcher after the main process ended, before the run's
+/// demand pool is torn down. Returns how many children were ended.
+fn reap_orphan_fork_children() -> usize {
+    let orphans: alloc::vec::Vec<(u64, usize, u64, u64, usize)> = GLIBC_FORK_CHILDREN.lock().clone();
+    for &(pid, ctask, pml4, arena, frames) in orphans.iter() {
+        crate::serial_println!("[fork] child pid {pid} (task {ctask}) outlived its run: ended, {} MiB back to the pool", frames / 256);
+        fork_child_teardown(pid, ctask, pml4, arena, frames, None);
+        crate::sched::reclaim_task(ctask);
+    }
+    // Whatever happened, the next run starts with its own state in the globals.
+    let owner = GLOBALS_OWNER.load(Ordering::Relaxed);
+    if owner != 0 {
+        crate::serial_println!("[fork] globals still owned by task {owner} at the end of the run: released");
+        x86_64::instructions::interrupts::without_interrupts(|| GLOBALS_OWNER.store(0, Ordering::Relaxed));
+    }
+    GLIBC_CHILD_EXITS.lock().clear();
+    orphans.len()
+}
+
 
 /// fork() for the demand-paged glibc process (M1): the child gets its OWN address
 /// space — the multi-block arena remapped onto its own physical frames (copied) plus
@@ -8435,6 +9852,18 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     if let Some(t) = argv.iter().find(|a| a.starts_with(b"--type=")) {
         crate::serial_println!("[execve] task {} is {}", crate::sched::current(),
             alloc::string::String::from_utf8_lossy(t));
+        // A renderer, GPU or utility child computes for the browser; it never needs
+        // to start processes, reach the network or change the file system. The
+        // kernel applies that profile here, the child cannot opt out.
+        let prof = match &t[..] {
+            b"--type=renderer" => Some(eurosandbox::Profile::Renderer),
+            b"--type=gpu-process" | b"--type=utility" => Some(eurosandbox::Profile::Utility),
+            _ => None,
+        };
+        if let Some(p) = prof {
+            set_task_profile(crate::sched::current(), p);
+            crate::serial_println!("[sbx] {} syscall profile applied to task {}", p.name(), crate::sched::current());
+        }
     }
 
     // The child's arena (its VA is in the swapped-in globals; Cr3 is the child's,
@@ -8460,16 +9889,19 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         // Flush the TLB so the now-unmapped VAs re-fault.
         unsafe { Cr3::write(Cr3::read().0, Cr3::read().1); }
     }
-    DEMAND_NEXT.store(DEMAND_BASE, Ordering::Relaxed);
+    let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
+    DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); // past the exe window, randomised
+    DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_FILE_MAPS.lock().clear();
     PROT_NONE_RANGES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_MAPS.lock().clear();
 
     let ldso_base = arena + 0x0080_0000;
-    let brk_start = arena + 0x0200_0000;
-    let mmap_start = arena + 0x0400_0000;
-    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000;
+    let sl = aslr_slides();
+    let brk_start = arena + 0x0200_0000 + sl.brk;
+    let mmap_start = arena + 0x0400_0000 + sl.mmap;
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000 - sl.stack;
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
@@ -8524,6 +9956,11 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
 }
 
 fn do_glibc_fork() -> u64 {
+    static FORKLOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    let fork_log = FORKLOG.fetch_add(1, Ordering::Relaxed) < 4;
+    if fork_log {
+        crate::serial_println!("[fork-acct] fork START: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
+    }
     use x86_64::registers::control::Cr3;
     let parent_pml4 = Cr3::read().0.start_address().as_u64();
     let arena = ARENA_BASE.load(Ordering::Relaxed);
@@ -8581,6 +10018,8 @@ fn do_glibc_fork() -> u64 {
     register_thread_kstack(child, slot);
     let pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     GLIBC_FORK_CHILDREN.lock().push((pid, child, pml4, child_arena, arena_frames));
+    inherit_profile(crate::sched::current(), child);
+    proc_state_inherit(crate::sched::current(), child);
     child_mem_snapshot(child); // the child inherits the parent's demand-state
     // The child inherits the fd table INCLUDING its close-on-exec flags, so it
     // inherits the marks too. Without this the marks stayed on the parent and a
@@ -8669,6 +10108,10 @@ const DEMAND_SIZE: u64 = 480 * (1 << 30);
 const DEMAND_MIN_BYTES: u64 = 16 * (1 << 20); // route anon mmaps >= 16 MiB here
 pub static DEMAND_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
+/// The lowest demand address that can be committed this run (DEMAND_NEXT at
+/// reset). Swap eviction scans [DEMAND_FLOOR, DEMAND_NEXT), not from DEMAND_BASE
+/// (192 MiB of the region below the exe window is never mapped).
+pub static DEMAND_FLOOR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
 static DEMAND_COMMITTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Pages zeroed by madvise(MADV_DONTNEED/MADV_FREE) so far, and how many calls did it.
@@ -8908,6 +10351,16 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
         return false;
     }
     let page = addr & !0xFFF;
+    // A page this process swapped OUT earlier (sprint N2): bring it back from the
+    // EuroSwap partition, evicting another page first if the pool is dry. This
+    // runs before any fresh-page logic, or the swapped data would be lost.
+    if SWAP_DEMAND_EVICT.load(Ordering::Relaxed) && crate::paging::demand_pte_raw(pml4, page) & (1 << 9) != 0 {
+        if crate::procpool::demand_free_frames() < 4 {
+            crate::swapmgr::reclaim_batch(pml4, DEMAND_FLOOR.load(Ordering::Relaxed), DEMAND_NEXT.load(Ordering::Relaxed), 8);
+        }
+        let frame = crate::procpool::demand_alloc();
+        return crate::swapmgr::swap_in_into(page, frame);
+    }
     // A SHARED mapping: every alias of the same file faults onto the same frame, so
     // the mappings really are one memory.
     let alias = SHARED_ALIASES.lock().iter().find(|&&(b, l, _)| page >= b && page < b + l).copied();
@@ -8944,11 +10397,27 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
         }
         drop(frames);
         if !crate::paging::map_demand_4k(pml4, page, phys) {
+        static MAPFAIL: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+        if MAPFAIL.fetch_add(1, Ordering::Relaxed) < 4 {
+            crate::serial_println!("[demand] map FAILED at {page:#x} (pool {} free frames; a 2 MiB boundary needs a page-table frame)", crate::procpool::demand_free_frames());
+        }
             return false;
         }
         unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
         DEMAND_USED.store(true, Ordering::Relaxed);
         return true;
+    }
+    // Pool dry? Swap out an old page of THIS process (CLOCK over its demand
+    // region) and take its frame: anonymous memory beyond the pool now lives on
+    // the EuroSwap partition instead of ending the process (sprint N2).
+    // Pool dry? Reclaim a BATCH of old pages of this process to the swap partition
+    // and back into the pool, so this fault can allocate both its data page and
+    // any page-table frames the mapping needs (sprint N2). A 2 MiB-aligned page
+    // needs a fresh page table, hence more than one frame.
+    // A page at a 2 MiB boundary also needs a fresh page table (and at a 1 GiB
+    // boundary a page directory): keep a few frames in hand, not just one.
+    if SWAP_DEMAND_EVICT.load(Ordering::Relaxed) && crate::procpool::demand_free_frames() < 4 {
+        crate::swapmgr::reclaim_batch(pml4, DEMAND_FLOOR.load(Ordering::Relaxed), DEMAND_NEXT.load(Ordering::Relaxed), 8);
     }
     let phys = match crate::procpool::demand_alloc() {
         Some(p) => p,
@@ -9249,9 +10718,10 @@ pub fn spawn_glibc_persistent(
     let ldso_base = arena + 0x0080_0000;
     // brk heap: [arena+32MiB, arena+64MiB); mmap bump area starts AFTER it so brk() and
     // mmap() never share a cursor (see BRK_CUR/BRK_END).
-    let brk_start = arena + 0x0200_0000;
-    let mmap_start = arena + 0x0400_0000;
-    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000;
+    let sl = aslr_slides();
+    let brk_start = arena + 0x0200_0000 + sl.brk;
+    let mmap_start = arena + 0x0400_0000 + sl.mmap;
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000 - sl.stack;
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
@@ -9284,6 +10754,22 @@ pub fn spawn_glibc_persistent(
     set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
+    TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
+    proc_state_drop(MAIN_KEY);
+    if let Some(p) = argv.iter().find_map(|a| match &a[..] {
+        b"--type=renderer" => Some(eurosandbox::Profile::Renderer),
+        b"--type=gpu-process" | b"--type=utility" => Some(eurosandbox::Profile::Utility),
+        _ => None,
+    }) {
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from argv)", p.name());
+    }
+    let next = NEXT_SPAWN_PROFILE.swap(0, Ordering::Relaxed);
+    if next != 0 {
+        let p = eurosandbox::Profile::from_u8(next);
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from the app manifest)", p.name());
+    }
     PERSIST_ARENA.store(arena, Ordering::Relaxed);
     PERSIST_PML4.store(pml4, Ordering::Relaxed);
     PERSIST_FRAMES.store(frames as u64, Ordering::Relaxed);
@@ -9309,6 +10795,9 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
         return;
     }
     crate::sched::mark_dead(main);
+    // Its fork children (chrome's renderer, gpu and utility processes) go with it,
+    // before the demand pool their pages came from is handed back below.
+    reap_orphan_fork_children();
     crate::sched::reclaim_task(main);
     for &t in GLIBC_THREADS.lock().iter() {
         crate::sched::mark_dead(t);
@@ -9320,7 +10809,7 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
     let arena = PERSIST_ARENA.swap(0, Ordering::Relaxed);
     let frames = PERSIST_FRAMES.swap(0, Ordering::Relaxed);
     if pml4 != 0 {
-        crate::paging::free_address_space(falloc, pml4);
+        crate::paging::free_address_space(falloc, pml4); // (vDSO chain: only the run_glibc paths free it, see free_process_space)
     }
     if arena != 0 && frames != 0 {
         for i in 0..frames {
@@ -9701,6 +11190,15 @@ fn register_disk_exe_segments(diskidx: usize, dev: usize, doff: u64, exe_base: u
 /// system. 8192 (32 MiB) suits a boot-phase run; the desktop raises it before it
 /// launches a browser that would otherwise take the memory the compositor needs.
 pub static DEMAND_MARGIN_FRAMES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(8192);
+/// Upper bound on the demand pool of the next spawn, in frames (0 = none).
+pub static DEMAND_POOL_CAP_FRAMES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// Demand-pool swap eviction (sprint N2): when a demand-paged process outgrows
+/// its pool, cold pages of that process go to the EuroSwap partition and come
+/// back on access, instead of the process being ended. ON by default since
+/// 2026-10-07 ([j3-demand]: 64 MiB through a 16 MiB pool, 20856 out / 8524 in,
+/// pattern verified twice). It only ever acts where the alternative was an OOM
+/// kill, and only when a swap partition is present (swapmgr::active).
+pub static SWAP_DEMAND_EVICT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
 
 /// Hand the demand pool's extra backing regions (procpool::demand_install_regions)
 /// back to the main allocator; the first region is freed by the caller as before.
@@ -9837,9 +11335,10 @@ fn glibc_disk_launch(
     unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
 
     let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
-    let brk_start = arena + 0x0200_0000;
-    let mmap_start = arena + 0x0400_0000;
-    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000;
+    let sl = aslr_slides();
+    let brk_start = arena + 0x0200_0000 + sl.brk;
+    let mmap_start = arena + 0x0400_0000 + sl.mmap;
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000 - sl.stack;
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
@@ -9869,7 +11368,9 @@ fn glibc_disk_launch(
     GLIBC_CTIDS.lock().clear();
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
-    DEMAND_NEXT.store(DEMAND_BASE, Ordering::Relaxed);
+    let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
+    DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); // past the exe window, randomised
+    DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_COMMITTED.store(0, Ordering::Relaxed);
     DEMAND_USED.store(false, Ordering::Relaxed);
     // Register the exe's disk-backed segments NOW (after the DEMAND_NEXT reset).
@@ -9888,6 +11389,12 @@ fn glibc_disk_launch(
     // 1.6 GiB free, less than the 4608M guest had. The first run found is the
     // largest (the ask only shrinks) and is the one recorded as dp_base/dp_frames.
     let mut budget = falloc.free_frames().saturating_sub(DEMAND_MARGIN_FRAMES.load(Ordering::Relaxed) as usize);
+    // A test may cap the pool (0 = no cap): the [j3-demand] swap proof runs a
+    // process against a small pool so the overflow goes to the swap partition.
+    let cap = DEMAND_POOL_CAP_FRAMES.load(Ordering::Relaxed);
+    if cap > 0 {
+        budget = budget.min(cap);
+    }
     let mut regions: [(u64, usize); 8] = [(0, 0); 8];
     let mut nreg = 0usize;
     let mut want = budget;
@@ -9919,6 +11426,22 @@ fn glibc_disk_launch(
     set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
+    TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
+    proc_state_drop(MAIN_KEY);
+    if let Some(p) = argv.iter().find_map(|a| match &a[..] {
+        b"--type=renderer" => Some(eurosandbox::Profile::Renderer),
+        b"--type=gpu-process" | b"--type=utility" => Some(eurosandbox::Profile::Utility),
+        _ => None,
+    }) {
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from argv)", p.name());
+    }
+    let next = NEXT_SPAWN_PROFILE.swap(0, Ordering::Relaxed);
+    if next != 0 {
+        let p = eurosandbox::Profile::from_u8(next);
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from the app manifest)", p.name());
+    }
 
     Ok(DiskRun { main_task, arena, frames, pml4, dp_base, dp_frames, prev_demand, prev_file })
 }
@@ -9999,6 +11522,7 @@ pub fn run_glibc_disk(
         // arrive regardless of that lottery; the poll is cheap when the ring is
         // empty, and the IRQ path (when it does work) just finds the ring drained.
         crate::xhci::poll();
+        crate::virtio_input::poll(); // virtio-tablet / virtio-keyboard (polled)
         if iters % 64 == 0 {
             // %64, not %1024: with the idle-hlt launcher this loop iterates a few
             // times per second, and the old gate silenced the heartbeat AND the
@@ -10112,10 +11636,16 @@ pub fn run_glibc_disk(
     if !GLIBC_DONE.load(Ordering::Relaxed) {
         crate::serial_println!("[glibc-disk] TIMEOUT waiting for the process to exit (committed {} demand pages, {} from-file/disk)",
             DEMAND_COMMITTED.load(Ordering::Relaxed), DEMAND_FILE_FILLED.load(Ordering::Relaxed));
-        free_thread_kstack(main_task);
-        for &t in GLIBC_THREADS.lock().iter() {
-            free_thread_kstack(t);
-        }
+        // The tasks are still alive in the scheduler: kill them BEFORE their kernel
+        // stacks and address space go away, or a later wake runs them on freed memory.
+        kill_glibc_group(main_task);
+    }
+    // The run is over: a fork child left behind dies with it (see the function).
+    reap_orphan_fork_children();
+    // Idempotent: the clean exit path already freed these.
+    free_thread_kstack(main_task);
+    for &t in GLIBC_THREADS.lock().iter() {
+        free_thread_kstack(t);
     }
     GLIBC_MAIN_TASK.store(usize::MAX, Ordering::Relaxed);
     crate::sched::reclaim_task(main_task);
@@ -10131,7 +11661,7 @@ pub fn run_glibc_disk(
         }
         free_demand_extra(falloc);
     }
-    crate::paging::free_address_space(falloc, pml4);
+    free_process_space(falloc, pml4);
     for i in 0..frames as u64 {
         let _ = falloc.free(arena + i * 4096);
     }
@@ -10144,6 +11674,22 @@ pub fn run_glibc_disk(
 /// Skip every run_glibc self-test (each costs ~30-60 s of wall time under TCG).
 /// Set for a chrome-iteration boot: chrome IS the test there, and the suite in
 /// front of it turned a 5-minute cycle into a 40-minute one.
+/// Terminate a run_glibc program that never exited (launcher timeout): mark its
+/// main and worker tasks Dead and drop their futex waits, so nothing can wake them
+/// after their stacks and address space are freed. Caller is task 0, never one of them.
+fn kill_glibc_group(main_task: usize) {
+    let threads: alloc::vec::Vec<usize> = GLIBC_THREADS.lock().clone();
+    let mut killed = 0usize;
+    for &t in core::iter::once(&main_task).chain(threads.iter()) {
+        futex_purge_task(t);
+        if !crate::sched::is_dead(t) {
+            crate::sched::mark_dead(t);
+            killed += 1;
+        }
+    }
+    crate::serial_println!("[glibc] timed-out program killed: main t{main_task} + {} thread(s) ({killed} were still alive)", threads.len());
+}
+
 pub static SKIP_GLIBC_TESTS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 pub fn run_glibc(
@@ -10154,6 +11700,10 @@ pub fn run_glibc(
     envp: &[&[u8]],
     caps: u64,
 ) -> (String, u64) {
+    // [churn-proc] frame accounting (bounded): where does the last frame per run go?
+    static FRAMELOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    let frame_log = FRAMELOG.fetch_add(1, Ordering::Relaxed) < 20;
+    let frames_at_start = falloc.free_frames();
     // Verify before execute. The program is named by argv[0] (a bare name means
     // /bin/<name>); the dynamic loader is verified under its own path. A program
     // without a known, valid signature does not run.
@@ -10239,9 +11789,10 @@ pub fn run_glibc(
     let exe_base = arena; // PIE exe: first PT_LOAD has p_vaddr 0
     let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
     // brk heap [+32 MiB, +64 MiB); mmap bump area starts after it (disjoint cursors).
-    let brk_start = arena + 0x0200_0000;
-    let mmap_start = arena + 0x0400_0000; // runtime mmaps (libc, …) bump from +64 MiB
-    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000; // near the arena top
+    let sl = aslr_slides();
+    let brk_start = arena + 0x0200_0000 + sl.brk;
+    let mmap_start = arena + 0x0400_0000 + sl.mmap; // runtime mmaps (libc, …) bump from +64 MiB (+ slide)
+    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000 - sl.stack; // near the arena top (- slide)
 
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
@@ -10281,7 +11832,9 @@ pub fn run_glibc(
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
     // Fresh demand-paging state for this run (bump pointer, counters, used flag).
-    DEMAND_NEXT.store(DEMAND_BASE, Ordering::Relaxed);
+    let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
+    DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); // past the exe window, randomised
+    DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_COMMITTED.store(0, Ordering::Relaxed);
     DEMAND_USED.store(false, Ordering::Relaxed);
     // If this run uses demand paging, reserve a LARGE contiguous region from the main
@@ -10296,6 +11849,10 @@ pub fn run_glibc(
         // between runs.
         const MARGIN: usize = 8192; // keep 32 MiB free for kernel allocations
         let mut want = falloc.free_frames().saturating_sub(MARGIN);
+        let cap = DEMAND_POOL_CAP_FRAMES.load(Ordering::Relaxed);
+        if cap > 0 {
+            want = want.min(cap); // [j3-demand]: a small pool so the overflow swaps
+        }
         let mut got = (0u64, 0usize);
         while want >= 4096 {
             // >= 16 MiB
@@ -10328,6 +11885,22 @@ pub fn run_glibc(
     set_task_caps(main_task, caps);
     register_thread_kstack(main_task, main_slot);
     GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
+    TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
+    proc_state_drop(MAIN_KEY);
+    if let Some(p) = argv.iter().find_map(|a| match &a[..] {
+        b"--type=renderer" => Some(eurosandbox::Profile::Renderer),
+        b"--type=gpu-process" | b"--type=utility" => Some(eurosandbox::Profile::Utility),
+        _ => None,
+    }) {
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from argv)", p.name());
+    }
+    let next = NEXT_SPAWN_PROFILE.swap(0, Ordering::Relaxed);
+    if next != 0 {
+        let p = eurosandbox::Profile::from_u8(next);
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from the app manifest)", p.name());
+    }
     crate::serial_println!(
         "[glibc] spawned scheduled task {main_task}: ld-entry@{:#x} rsp@{rsp:#x} phdr@{:#x} phnum={}",
         ld_info.entry, exe_info.phdr, exe_info.phnum
@@ -10375,12 +11948,17 @@ pub fn run_glibc(
             let (n2, a2, r2) = last_syscall(t);
             crate::serial_println!("[glibc]   thread t{t} {:?}: last={n2}(a1={a2:#x})->{r2:#x}", thread_name(t));
         }
-        // Reclaim any kstacks still held by this run's tasks (idempotent on the
-        // clean-exit path, which already freed them).
-        free_thread_kstack(main_task);
-        for &t in GLIBC_THREADS.lock().iter() {
-            free_thread_kstack(t);
-        }
+        // The tasks are still alive in the scheduler: kill them BEFORE their kernel
+        // stacks and address space go away, or a later wake runs them on freed memory.
+        kill_glibc_group(main_task);
+    }
+    // The run is over: a fork child left behind dies with it (see the function).
+    reap_orphan_fork_children();
+    // Reclaim any kstacks still held by this run's tasks (idempotent on the
+    // clean-exit path, which already freed them).
+    free_thread_kstack(main_task);
+    for &t in GLIBC_THREADS.lock().iter() {
+        free_thread_kstack(t);
     }
     GLIBC_MAIN_TASK.store(usize::MAX, Ordering::Relaxed);
     // Recycle this run's scheduler slots (main + any workers). They are Dead, their
@@ -10408,7 +11986,10 @@ pub fn run_glibc(
     // (never rescheduled) and the launcher runs on the boot PML4, so nothing
     // references this address space. Without this, every run leaked its arena (96 MiB
     // each) and ~8 runs exhausted RAM — and a large arena could never be allocated.
-    crate::paging::free_address_space(falloc, pml4);
+    free_process_space(falloc, pml4);
+    if frame_log {
+        crate::serial_println!("[glibc] frames: start={frames_at_start} end={} (delta {})", falloc.free_frames(), frames_at_start as i64 - falloc.free_frames() as i64);
+    }
     for i in 0..frames as u64 {
         let _ = falloc.free(arena + i * 4096);
     }
@@ -10708,6 +12289,15 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
     if cur == DAEMON_TASK.load(Ordering::Relaxed) {
         return daemon_dispatch(num, a1, a2, a3);
     }
+    // Userspace drivers (e1000d, nvmed, bcm5720d, megaraidd): one entry,
+    // udrv::syscall, which knows the driver from the caller's grant. Served
+    // WITHOUT the BG lock, so a driver can run while task 0 waits on it. Exit
+    // and profile kills (None here) take the ordinary route below.
+    if task_profile(cur) == eurosandbox::Profile::Driver {
+        if let Some(r) = crate::udrv::syscall(cur, num, a1, a2, a3) {
+            return r;
+        }
+    }
     // Preemptive per-process (PCB): route to the right background musl process
     // state (own heap/output/pid). A THREAD shares the PCB of its process, so
     // we match on the main task OR on one of the thread tasks.
@@ -10725,6 +12315,80 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
                 drop(bg);
                 crate::sched::sleep_ticks(2);
                 return 0;
+            }
+            // Sprint WP6: a NATIVE app runs under Profile::Euro, an allow-list.
+            // Anything outside it ends the process here, before any handler
+            // sees the arguments. The two calls that sleep run outside the lock.
+            let prof = task_profile(cur);
+            if prof == eurosandbox::Profile::Euro || prof == eurosandbox::Profile::Driver {
+                if let eurosandbox::Verdict::Kill(sig) = eurosandbox::syscalls::check(prof, num, a1, a3) {
+                    PROFILE_KILLS.fetch_add(1, Ordering::Relaxed);
+                    crate::serial_println!(
+                        "[sbx] native app pid {} (task {cur}): syscall {num:#x}({a1:#x}, {a2:#x}, {a3:#x}) outside the euro profile -> process killed (signal {sig}, exit {})",
+                        bg[pos].pid, 128 + sig as u64);
+                    let p = &mut bg[pos];
+                    let r = bg_dispatch(p, 231, 128 + sig as u64, 0, 0, 0, 0);
+                    // The task is dead now; do not let it run one more instruction
+                    // (the exit path otherwise returns to user space until the
+                    // next timer tick, long enough for a log line or a syscall).
+                    drop(bg);
+                    crate::sched::yield_now();
+                    return r;
+                }
+                if num == 1 && !has_cap(CAP_CONSOLE) {
+                    return (-1i64) as u64; // write(): the console is a capability
+                }
+                if num == 60 || num == 231 || num == 0x610C {
+                    // exit: mark dead and leave the CPU at once (no instruction of
+                    // the dead process runs on until the next tick).
+                    let p = &mut bg[pos];
+                    let r = bg_dispatch(p, 231, a1 & 0xff, 0, 0, 0, 0);
+                    drop(bg);
+                    crate::sched::yield_now();
+                    return r;
+                }
+                if num == 0x6104 {
+                    // event_wait(timeout_ms): sleep in 1-tick steps until an event is
+                    // pending or the timeout passes. 1 = ready, 0 = timeout.
+                    if !has_cap(CAP_WINDOW) {
+                        return (-1i64) as u64;
+                    }
+                    // A syscall runs with interrupts off: a wait LOOP in here would
+                    // freeze the clock and the machine (measured: the [euroapp] boot
+                    // hung after the first frame). Like nanosleep: mark this task
+                    // sleeping for one tick and return; a 0 is "not yet", and the
+                    // SDK's loop calls again. An early return is allowed by the API.
+                    let pid = bg[pos].pid;
+                    drop(bg);
+                    if crate::euroapi::pending(pid) {
+                        return 1;
+                    }
+                    if a1 > 0 {
+                        crate::sched::sleep_ticks(1);
+                    }
+                    return 0;
+                }
+                if num == 0x6109 {
+                    drop(bg);
+                    crate::sched::sleep_ticks(((a1.min(600_000) + 9) / 10).max(1));
+                    return 0;
+                }
+            }
+            // Socket syscalls (and read/write/close on a socket): served on the
+            // shared socket layer with the BG lock RELEASED, so a blocking call
+            // can give the CPU away (to the userspace NIC driver among others).
+            if bg_is_net_call(num, a1) {
+                let p = &bg[pos];
+                let caller = BgCaller {
+                    pid: p.pid,
+                    ppid: p.ppid,
+                    pml4: p.pml4,
+                    lo: p.arena_virt,
+                    hi: p.arena_virt + p.arena_frames * 4096,
+                    name: p.name.clone(),
+                };
+                drop(bg);
+                return bg_net_dispatch(&caller, cur, num, a1, a2, a3, a4, a5);
             }
             // Validate THIS process's user pointers against ITS OWN arena for the
             // duration of the syscall (the global default span is only 2 MiB; a
@@ -10758,6 +12422,10 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
         // socket-only [slife] log hid exactly the moment the child goes
         // silent). Bounded per child so the serial port survives.
         let trace_child = current_is_fork_child();
+        // A scheduled process on the Linux path holds no syscall-layer lock here,
+        // so a blocking socket call may sleep (net.rs). Not a foreground
+        // excursion: that one runs synchronously on task 0's borrowed stack.
+        let _nb = NetBlockScope::enter(!FG_ACTIVE.load(Ordering::Relaxed));
         let r = linux_dispatch(num, a1, a2, a3, a4, a5);
         if trace_child {
             // High budget: we want the renderer's WHOLE post-execve life
@@ -10885,12 +12553,57 @@ fn linux_required_cap(num: u64, a1: u64) -> u64 {
     if crate::net::is_sock_fd(a1) && matches!(num, 0 | 1 | 3) {
         return CAP_NET;
     }
+    // AF_UNIX as a CLIENT is local IPC, not network: an x11 app reaches the
+    // in-kernel X server over /tmp/.X11-unix/X0 without the `net` capability
+    // (the hello-x11 example, caps console,file,proc, failed with "cannot open
+    // DISPLAY" until this). Serving a socket (bind/listen/accept) stays `net`.
+    if num == 41 && a1 == 1 {
+        return 0; // socket(AF_UNIX, ...)
+    }
+    if crate::net::is_unix_fd(a1) && matches!(num, 0 | 1 | 3 | 42 | 44 | 45) {
+        return 0; // read/write/close/connect/sendto/recvfrom on a unix socket
+    }
     match num {
         1 | 16 | 20 => CAP_CONSOLE,            // write/ioctl/writev (tty)
         0 | 2 | 3 | 5 | 8 | 17 | 19 | 89 | 217 | 257 | 262 | 267 => CAP_FILE, // read/open/close/(f)stat/lseek/pread64/readv/readlink/getdents64/openat
         41 | 42 | 43 | 44 | 45 | 49 | 50 => CAP_NET, // socket/connect/accept/sendto/recvfrom/bind/listen
         39 => CAP_PROC_INFO,                    // getpid
         _ => 0, // memory/process management (mmap, brk, arch_prctl, exit, …) free
+    }
+}
+
+/// Read-only access to the SYSTEM LIBRARIES is not "file access": CAP_FILE guards
+/// the user's data, and every dynamically linked program must still be able to
+/// let ld.so map libc. An installed EuroApp whose manifest grants no `file`
+/// capability therefore still starts (the [app] self-test proved the opposite
+/// first: "libc.so.6: cannot open shared object file: Operation not permitted").
+/// Exempt: open/stat/access/readlink of these prefixes WITHOUT a write flag, and
+/// read/close/fstat/lseek/pread/readv on an fd that names such a file.
+const SYSTEM_LIB_PREFIXES: &[&[u8]] = &[
+    b"/lib", b"/usr/lib", b"/usr/share", b"/etc/ld.so.cache", b"/etc/ld.so.preload", b"/proc/self/",
+];
+fn system_lib_path(p: &[u8]) -> bool {
+    SYSTEM_LIB_PREFIXES.iter().any(|x| p.starts_with(x))
+}
+fn system_lib_exempt(num: u64, a1: u64, a2: u64, a3: u64) -> bool {
+    match num {
+        // openat(dirfd, path, flags) / open(path, flags): read-only opens only.
+        257 => (a3 & 0x43) == 0 && system_lib_path(&user_cstr(a2, 256)), // O_WRONLY|O_RDWR|O_CREAT
+        2 => (a2 & 0x43) == 0 && system_lib_path(&user_cstr(a1, 256)),
+        262 | 89 => system_lib_path(&user_cstr(a2, 256)), // newfstatat / readlink(at)
+        4 | 21 => system_lib_path(&user_cstr(a1, 256)),  // stat / access
+        0 | 3 | 5 | 8 | 17 | 19 | 217 => {
+            let fd = a1 as usize;
+            if fd >= MAX_FD {
+                return false;
+            }
+            let fi = match OPEN_FDS.lock()[fd] {
+                Some((fi, _)) => fi,
+                None => return false,
+            };
+            system_lib_path(fi_path(fi).as_bytes())
+        }
+        _ => false,
     }
 }
 
@@ -11381,6 +13094,19 @@ pub fn dump_main_syscalls() {
 /// after the dispatch covers every creating syscall on every trace path.
 fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let r = linux_dispatch_inner_raw(num, a1, a2, a3, a4, a5);
+    // RLIMIT_NOFILE: a new descriptor number at or above the soft limit is closed
+    // again and the call fails with EMFILE, exactly as Linux reports it.
+    let returns_fd = matches!(num,
+        2 | 257 | 85 | 32 | 33 | 292 | 41 | 43 | 288 | 290 | 284 | 291 | 213 | 319 | 253 | 294 | 283 | 282 | 289);
+    // Only the low descriptor table counts: sockets, eventfds and epoll instances
+    // carry kernel-internal numbers from 500 up and are not what NOFILE bounds.
+    if returns_fd && (r as i64) >= 0 && r < MAX_FD as u64 {
+        let key = proc_key(crate::sched::current());
+        if proc_limits(key).fd_exceeds(r) {
+            let _ = linux_dispatch_inner_raw(3, r, 0, 0, 0, 0);
+            return (-24i64) as u64; // -EMFILE
+        }
+    }
     // NOT dup/dup2/dup3: those alias an object that other holders share, and a
     // child's close on the alias must stay a mark, as the fd-ownership work
     // decided. Registering them (run 28) freed objects out from under NSS's
@@ -11415,6 +13141,85 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
 fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let _ = a4; // not every syscall uses arg4/arg5 (r10/r8)
     SYSCALL_SEQ.fetch_add(1, Ordering::Relaxed); // progress heartbeat (stall detector)
+    {
+        let cur = crate::sched::current();
+        let prof = task_profile(cur);
+        if prof == eurosandbox::Profile::Renderer {
+            // The renderer's file-system scope: refuse (EACCES) a path outside it.
+            let path_ptr = match num {
+                2 | 4 | 6 | 21 | 59 | 89 => a1,
+                257 | 262 | 269 | 267 | 322 => a2,
+                _ => 0,
+            };
+            if path_ptr != 0 {
+                let raw = user_cstr(path_ptr, 160);
+                if !eurosandbox::syscalls::path_allowed(prof, &raw) {
+                    let n = PATH_DENIES.fetch_add(1, Ordering::Relaxed);
+                    if n < 24 {
+                        crate::serial_println!("[sbx] task {cur} (renderer): syscall {num} path {:?} outside the renderer scope -> EACCES", String::from_utf8_lossy(&raw));
+                    }
+                    return (-13i64) as u64;
+                }
+            }
+        }
+        // A per-app policy from the outside (apppolicy): path syscalls of the
+        // running app are checked against its read/write/deny lists; a refusal
+        // is EACCES (and a recorded want while learning), never a kill.
+        if crate::apppolicy::active() {
+            let (path_ptr, write) = match num {
+                2 => (a1, a2 & 0x3 != 0 || a2 & 0x40 != 0 || a2 & 0x200 != 0), // open: O_WRONLY/O_RDWR/O_CREAT/O_TRUNC
+                257 => (a2, a3 & 0x3 != 0 || a3 & 0x40 != 0 || a3 & 0x200 != 0), // openat
+                85 | 87 | 83 | 82 | 76 | 90 | 92 | 133 => (a1, true), // creat unlink mkdir rename truncate chmod chown mknod
+                263 | 258 | 264 | 268 => (a2, true), // unlinkat mkdirat renameat fchmodat
+                4 | 6 | 21 | 89 | 262 | 267 | 269 => (if matches!(num, 262 | 267 | 269) { a2 } else { a1 }, false), // stat lstat access readlink newfstatat readlinkat faccessat
+                _ => (0, false),
+            };
+            if path_ptr != 0 {
+                let raw = user_cstr(path_ptr, 160);
+                let p = String::from_utf8_lossy(&raw).into_owned();
+                if crate::apppolicy::check_path(&current_app(), &p, write) == Some(false) {
+                    let n = PATH_DENIES.fetch_add(1, Ordering::Relaxed);
+                    if n < 24 {
+                        crate::serial_println!("[policy] app {} : syscall {num} {} {p:?} outside its policy -> EACCES", crate::apppolicy::key(&current_app()), if write { "write" } else { "read" });
+                    }
+                    return (-13i64) as u64;
+                }
+            }
+        }
+        if task_has_filters(cur) {
+            if let Some(r) = seccomp_evaluate(cur, num, a1, a2, a3, a4, a5) {
+                return r;
+            }
+        }
+        if prof != eurosandbox::Profile::Full {
+            match eurosandbox::syscalls::check(prof, num, a1, a3) {
+                eurosandbox::Verdict::Allow => {}
+                eurosandbox::Verdict::LogOnly(why) => {
+                    let n = WX_SEEN.fetch_add(1, Ordering::Relaxed);
+                    if n < 8 {
+                        crate::serial_println!("[sbx] task {cur} ({}): syscall {num} prot={a3:#x}: {why} (allowed, logged)", prof.name());
+                    }
+                }
+                eurosandbox::Verdict::Kill(sig) => {
+                    PROFILE_KILLS.fetch_add(1, Ordering::Relaxed);
+                    // Name the path for the path-taking syscalls, so a too-strict
+                    // profile can be read straight off the log.
+                    let path_ptr = match num {
+                        2 | 4 | 6 | 21 | 59 | 76 | 83 | 84 | 85 | 87 | 88 | 89 | 90 | 92 | 133 | 161 => a1,
+                        257 | 258 | 260 | 263 | 265 | 266 | 268 | 322 => a2,
+                        _ => 0,
+                    };
+                    let path = if path_ptr != 0 { String::from_utf8_lossy(&user_cstr(path_ptr, 96)).into_owned() } else { String::new() };
+                    crate::serial_println!(
+                        "[sbx] task {cur} ({}): syscall {num}({a1:#x}, {a2:#x}, {a3:#x}){} outside its profile -> process killed (signal {sig}, exit {})",
+                        prof.name(), if path.is_empty() { String::new() } else { alloc::format!(" path={path:?}") }, 128 + sig as u64
+                    );
+                    // The same path as exit_group(): frees the process, never returns.
+                    return linux_dispatch_inner_raw(231, 128 + sig as u64, 0, 0, 0, 0);
+                }
+            }
+        }
+    }
     if (num as usize) < 512 {
         SYSCALL_BY_NUM[num as usize].fetch_add(1, Ordering::Relaxed);
     }
@@ -11425,13 +13230,13 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
         MSC[i][2].store(a1, Ordering::Relaxed);
         MSC[i][3].store(u64::MAX, Ordering::Relaxed); // in flight; overwritten on return
     }
-    SYSCALL_YIELD_OK.store(true, Ordering::Relaxed); // lock-free path: futex/epoll may yield
+    set_syscall_yield_ok(true); // lock-free path: futex/epoll may yield
     if TRACE_SYS.load(Ordering::Relaxed) {
         crate::serial_println!("[sys t{}] {num}({a1:#x},{a2:#x},{a3:#x})", crate::sched::current());
     }
     // Capability enforcement also in the Linux ABI: deny without the proper right.
     let need = linux_required_cap(num, a1);
-    if need != 0 && !has_cap(need) {
+    if need != 0 && !has_cap(need) && !(need == CAP_FILE && system_lib_exempt(num, a1, a2, a3)) {
         crate::serial_println!("[cap] Linux syscall {num} DENIED — missing capability");
         return (-1i64) as u64; // -EPERM
     }
@@ -11619,6 +13424,36 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             if cur == GLIBC_MAIN_TASK.load(Ordering::Relaxed) { 1 } else { cur as u64 }
         }
         157 => {
+            {
+                const PR_GET_SECCOMP: u64 = 21;
+                const PR_SET_SECCOMP: u64 = 22;
+                const PR_SET_NO_NEW_PRIVS: u64 = 38;
+                const PR_GET_NO_NEW_PRIVS: u64 = 39;
+                const SECCOMP_MODE_STRICT: u64 = 1;
+                const SECCOMP_MODE_FILTER: u64 = 2;
+                if a1 == PR_SET_SECCOMP {
+                    let cur = crate::sched::current();
+                    if a2 == SECCOMP_MODE_STRICT {
+                        set_process_profile(cur, eurosandbox::Profile::Strict);
+                        crate::serial_println!("[sbx] task {cur}: seccomp strict mode (read/write/exit only) from here on");
+                        return 0;
+                    }
+                    if a2 == SECCOMP_MODE_FILTER {
+                        return seccomp_install_filter(cur, a3);
+                    }
+                    return (-22i64) as u64;
+                }
+                if a1 == PR_GET_SECCOMP {
+                    let cur = crate::sched::current();
+                    return if task_profile(cur) == eurosandbox::Profile::Strict { 1 } else if task_has_filters(cur) { 2 } else { 0 };
+                }
+                if a1 == PR_SET_NO_NEW_PRIVS {
+                    return 0; // always in effect: EuroOS has no setuid transitions
+                }
+                if a1 == PR_GET_NO_NEW_PRIVS {
+                    return 1;
+                }
+            }
             // prctl(option, ...): accept the common setters as no-ops (PR_SET_DUMPABLE,
             // PR_SET_PDEATHSIG, PR_SET_VMA mapping-naming, …). chrome calls these
             // during thread + allocator setup; success is the safe answer.
@@ -11668,6 +13503,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 }
                 free_thread_kstack(cur); // recycle its kernel stack back to the pool
                 crate::sched::mark_dead(cur);
+                // Drop this thread from the run's registries NOW, so a later reuse
+                // of its slot can never be mistaken for it (teardown iterates the
+                // list and frees kernel stacks), then offer the slot for lazy reuse.
+                GLIBC_THREADS.lock().retain(|&t| t != cur);
+                CHILD_THREADS.lock().retain(|&(t, _)| t != cur);
+                crate::sched::RECLAIMABLE[cur].store(true, Ordering::Relaxed);
                 // Switch away NOW and never come back: this thread is Dead, so it does
                 // not need its (shared, IF=0) syscall stack or user-context preserved —
                 // the usual "don't yield mid-syscall" hazard doesn't apply to a task
@@ -11719,12 +13560,24 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
                     fork_child_release_fds(ctask); // flush deferred parent closes
                     child_opened_release(ctask);   // free the fds the child opened
+                    proc_state_drop(ctask);
                     // Give the child's COMMITTED demand pages back: without this every
                     // dead child leaked its pages and the pool ran dry at ~524 MiB
                     // under MP relaunch churn (run 12 POOL EXHAUSTED).
+                    static EXITLOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+                    let exit_log = EXITLOG.fetch_add(1, Ordering::Relaxed) < 4;
+                    if exit_log {
+                        crate::serial_println!("[fork-acct] child exit BEFORE frees: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
+                    }
                     crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+                    // ... and the child's own page tables under PML4[0] (pdpt, pd,
+                    // 4 KiB PTs: procpool frames), which only the pml4 free used to cover.
+                    crate::paging::free_fork_tables(pml4);
                     crate::procpool::free_range(arena, frames);
                     crate::procpool::free(pml4);
+                    if exit_log {
+                        crate::serial_println!("[fork-acct] child exit AFTER frees: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
+                    }
                     free_thread_kstack(cur);
                     crate::sched::mark_dead(cur);
                     yield_reacquire();
@@ -11789,6 +13642,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
         56 => {
             // clone(flags, child_stack, ptid, ctid, tls): a THREAD sharing this
             // glibc process's address space (pthread_create). Mirrors the bg path.
+            {
+                let cur = crate::sched::current();
+                if proc_limits(proc_key(cur)).tasks_exceed(proc_tasks(cur).len() as u64) {
+                    return (-11i64) as u64; // -EAGAIN: RLIMIT_NPROC
+                }
+            }
             let (flags, child_stack) = (a1, a2);
             if child_stack == 0 || flags & 0x0000_0100 == 0 {
                 // No CLONE_VM (or no stack) = a real fork (new address space). M1.
@@ -11821,6 +13680,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
             register_thread_kstack(child, slot);
             GLIBC_THREADS.lock().push(child);
+            inherit_profile(crate::sched::current(), child);
             // If a fork child (or its thread) spawned this, the new thread
             // shares the child's address space -> the same ChildMem swap.
             if let Some(owner) = fork_child_owner(crate::sched::current()) {
@@ -11839,6 +13699,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             child as u64
         }
         435 => {
+            {
+                let cur = crate::sched::current();
+                if proc_limits(proc_key(cur)).tasks_exceed(proc_tasks(cur).len() as u64) {
+                    return (-11i64) as u64; // -EAGAIN: RLIMIT_NPROC
+                }
+            }
             // clone3(cl_args, size): modern glibc's PRIMARY pthread_create path. We
             // implement it natively (rather than ENOSYS-forcing the fragile clone3->
             // clone fallback, which sets up the child stack for the wrong ABI and made
@@ -11883,6 +13749,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
             register_thread_kstack(child, slot);
             GLIBC_THREADS.lock().push(child);
+            inherit_profile(crate::sched::current(), child);
             // If a fork child (or its thread) spawned this, the new thread
             // shares the child's address space -> the same ChildMem swap.
             if let Some(owner) = fork_child_owner(crate::sched::current()) {
@@ -12246,6 +14113,14 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             } else {
                 let b = (HEAP_BREAK.load(Ordering::Relaxed) + 0xFFF) & !0xFFF;
                 if b + len > HEAP_END.load(Ordering::Relaxed) {
+                    // An ENOMEM here is what a C library then dereferences as NULL
+                    // (gpango's write to 0x18): always worth one line, a few per boot.
+                    static DIAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+                    if DIAG.fetch_add(1, Ordering::Relaxed) < 6 {
+                        crate::serial_println!("[linux-abi] mmap anon {} KiB -> ENOMEM: arena mmap window full (break {b:#x}, end {:#x}, {} KiB left; demand paging {})",
+                            len / 1024, HEAP_END.load(Ordering::Relaxed), HEAP_END.load(Ordering::Relaxed).saturating_sub(b) / 1024,
+                            if DEMAND_ENABLED.load(Ordering::Relaxed) { "on" } else { "off" });
+                    }
                     return (-12i64) as u64; // -ENOMEM
                 }
                 HEAP_BREAK.store(b + len, Ordering::Relaxed);
@@ -12752,6 +14627,10 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
         33 | 292 => dup2_fd(a1, a2),       // dup2(old,new) / dup3(old,new,flags)
         57 | 58 => {
             crate::serial_println!("[fork] {} syscall -> do_glibc_fork", if num == 57 { "fork" } else { "vfork" });
+            let cur = crate::sched::current();
+            if proc_limits(proc_key(cur)).tasks_exceed(proc_tasks(cur).len() as u64) {
+                return (-11i64) as u64; // -EAGAIN: RLIMIT_NPROC
+            }
             do_glibc_fork()
         }
         59 => {
@@ -12796,7 +14675,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 {
                     return (-10i64) as u64; // -ECHILD
                 }
-                if wnohang || !SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                if wnohang || !syscall_yield_ok() {
                     return 0; // "still running", the caller polls again
                 }
                 if crate::interrupts::ticks() > deadline {
@@ -12819,26 +14698,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 Some((pid, ctask, pml4, arena, frames)) => {
                     if a2 != 0 {
                         crate::serial_println!("[kill] pid {pid} (task {ctask}) sig {a2} — terminated by parent");
-                        // Its threads die with it.
-                        let threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter()
-                            .filter(|&&(_, m)| m == ctask).map(|&(t, _)| t).collect();
-                        for t in threads {
-                            free_thread_kstack(t);
-                            crate::sched::mark_dead(t);
-                        }
-                        GLIBC_CHILD_EXITS.lock().push((pid, (a2 as u32) & 0x7f));
-                        globals_release_owner(ctask); // never drop state that is loaded
-                        GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
-                        FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != ctask);
-                        child_mem_drop(ctask);
-                        CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
-                        fork_child_release_fds(ctask);
-                        child_opened_release(ctask);
-                        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
-                        crate::procpool::free_range(arena, frames);
-                        crate::procpool::free(pml4);
-                        free_thread_kstack(ctask);
-                        crate::sched::mark_dead(ctask);
+                        fork_child_teardown(pid, ctask, pml4, arena, frames, Some((a2 as u32) & 0x7f));
                     }
                     0 // sig 0 = existence probe: child exists -> 0
                 }
@@ -12865,8 +14725,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             let mut files = FILES.lock();
             match files.get_mut(fi) {
                 Some(f) => {
-                    if f.1.len() < need {
-                        f.1.to_mut().resize(need, 0);
+                    if f.1.len() < need && !grow_ram_file(f.1.to_mut(), need) {
+                        return (-28i64) as u64; // -ENOSPC
                     }
                     0
                 }
@@ -13078,9 +14938,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 }
             } else if tries >= 64 {
                 // Infinite wait: hand the CPU back regularly, but never claim a
-                // timeout. Returning after enough yields keeps the caller's own event
-                // loop turning (glibc retries) without burning the core.
-                break 0;
+                // timeout. The early return is -EINTR, the one spurious result POSIX
+                // allows for poll(-1): glib, libevent and xcb all retry on it. A 0
+                // here was fatal for every xcb client: xcb_wait_for_event treats a
+                // 0 from an infinite poll as "connection gone" (hello-x11 died with
+                // "X connection to :0 broken" after exactly 64 tries).
+                break (-4i64) as u64;
             }
             tries += 1;
             // Sleep the REMAINING time in one go for a finite timeout. A loop of
@@ -13094,7 +14957,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // it runs out. A poll that returns early is a spurious wakeup, which every
             // caller must already handle; a poll that never returns is a hung machine.
             if tries >= 200 {
-                break 0;
+                break if deadline.is_none() { (-4i64) as u64 } else { 0 };
             }
             let before = crate::interrupts::ticks();
             match deadline {
@@ -13107,14 +14970,14 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         // under TCG's ~60x stretch feels like input never landing.
                         // The loop re-checks readiness after every tick.
                         crate::sched::sleep_ticks(1);
-                        if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                        if syscall_yield_ok() {
                             yield_reacquire();
                         }
                     }
                 }
                 None => {
                     crate::sched::sleep_ticks(1);
-                    if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                    if syscall_yield_ok() {
                         yield_reacquire();
                     }
                 }
@@ -14154,11 +16017,32 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
             0
         }
+        105 | 113 | 117 => {
+            // setuid / setreuid / setresuid: a process may DROP to the sandbox identity
+            // (nobody, 65534) and nothing else; -1 arguments mean "unchanged".
+            let cur = crate::sched::current();
+            let key = proc_key(cur);
+            let have = proc_uid(key);
+            let wanted: alloc::vec::Vec<u32> = match num {
+                105 => alloc::vec![a1 as u32],
+                113 => alloc::vec![a1 as u32, a2 as u32],
+                _ => alloc::vec![a1 as u32, a2 as u32, a3 as u32],
+            };
+            let target = wanted.iter().copied().filter(|&u| u != u32::MAX).find(|&u| u != have);
+            match target {
+                None => 0,
+                Some(SANDBOX_UID) => {
+                    proc_uid_set(key, SANDBOX_UID);
+                    crate::serial_println!("[sbx] task {cur}: process dropped to uid {SANDBOX_UID} (nobody)");
+                    0
+                }
+                Some(_) => (-1i64) as u64, // -EPERM
+            }
+        }
         118 => {
-            // getresuid(*ruid, *euid, *suid): real/effective/saved uid — all the session
-            // uid here (no set-uid transitions). chrome reads these during sandbox/privilege
-            // checks. Args are 32-bit uid_t pointers.
-            let uid = crate::auth::session_uid() as u32;
+            // getresuid(*ruid, *euid, *suid): real/effective/saved uid of this process.
+            // chrome reads these during sandbox/privilege checks. Args are 32-bit uid_t pointers.
+            let uid = proc_uid(proc_key(crate::sched::current()));
             for p in [a1, a2, a3] {
                 if p != 0 && !write_user(p, uid) {
                     return EFAULT;
@@ -14210,7 +16094,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
             0
         }
-        102 | 107 => crate::auth::session_uid() as u64, // getuid/geteuid -> session uid
+        102 | 107 => proc_uid(proc_key(crate::sched::current())) as u64, // getuid/geteuid -> the process uid
         104 | 108 => crate::auth::session_gid() as u64, // getgid/getegid -> session gid
         24 => 0,                    // sched_yield — single-thread foreground: no-op
         72 => {
@@ -14271,18 +16155,43 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // getrlimit(resource, *rlim): WRITE {rlim_cur, rlim_max}. Returning success
             // without filling the buffer left chrome reading uninitialized limits and
             // CHECK-crashing (traced: last syscall before an IMMEDIATE_CRASH was this).
-            let (cur, max) = rlimit_for(a1);
+            // The process's own limits (eurosandbox::Limits); rlimit_for keeps the
+            // defaults table documented.
+            let _ = rlimit_for(a1);
+            let key = proc_key(crate::sched::current());
+            let (cur, max) = match proc_limits(key).get(a1 as u32) { Ok(v) => v, Err(_) => return (-22i64) as u64 };
             if a2 != 0 && (!write_user(a2, cur) || !write_user(a2 + 8, max)) {
                 return EFAULT;
             }
             0
         }
+        160 => {
+            // setrlimit(resource, *rlim): lower freely, never raise the hard limit.
+            let key = proc_key(crate::sched::current());
+            let (cur, max) = match (read_user::<u64>(a2), read_user::<u64>(a2 + 8)) { (Some(c), Some(m)) => (c, m), _ => return EFAULT };
+            let mut l = proc_limits(key);
+            match l.set(a1 as u32, cur, max) {
+                Ok(()) => { proc_limits_set(key, l); 0 }
+                Err(eurosandbox::rlimits::LimitError::Invalid) => (-22i64) as u64,
+                Err(eurosandbox::rlimits::LimitError::Perm) => (-1i64) as u64,
+            }
+        }
         302 => {
-            // prlimit64(pid, resource, *new_limit, *old_limit): report the current limit
-            // into old_limit; accept (ignore) any new_limit. resource = a2.
-            let (cur, max) = rlimit_for(a2);
+            // prlimit64(pid, resource, *new_limit, *old_limit): own process only
+            // (pid 0 / self); report the old limit, apply a new one the setrlimit way.
+            let key = proc_key(crate::sched::current());
+            let mut l = proc_limits(key);
+            let (cur, max) = match l.get(a2 as u32) { Ok(v) => v, Err(_) => return (-22i64) as u64 };
             if a4 != 0 && (!write_user(a4, cur) || !write_user(a4 + 8, max)) {
                 return EFAULT;
+            }
+            if a3 != 0 {
+                let (nc, nm) = match (read_user::<u64>(a3), read_user::<u64>(a3 + 8)) { (Some(c), Some(m)) => (c, m), _ => return EFAULT };
+                match l.set(a2 as u32, nc, nm) {
+                    Ok(()) => proc_limits_set(key, l),
+                    Err(eurosandbox::rlimits::LimitError::Invalid) => return (-22i64) as u64,
+                    Err(eurosandbox::rlimits::LimitError::Perm) => return (-1i64) as u64,
+                }
             }
             0
         }
@@ -14445,7 +16354,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             let mut before_spin = crate::interrupts::ticks();
             while crate::interrupts::ticks() < deadline {
                 crate::sched::sleep_ticks(1);
-                if SYSCALL_YIELD_OK.load(Ordering::Relaxed) {
+                if syscall_yield_ok() {
                     { yield_reacquire(); } // let everyone else run while we wait
                 }
                 // Same guard as poll(): with interrupts off and nothing else runnable
@@ -14536,6 +16445,30 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             unsafe { core::ptr::write_bytes(a3 as *mut u8, 1, pages) };
             0
         }
+        317 => {
+            // seccomp(op, flags, args): strict mode is honoured; a cBPF filter
+            // (SECCOMP_SET_MODE_FILTER) is refused with EINVAL until the kernel
+            // interprets filters, so a caller falls back cleanly.
+            const SECCOMP_SET_MODE_STRICT: u64 = 0;
+            const SECCOMP_SET_MODE_FILTER: u64 = 1;
+            const SECCOMP_GET_ACTION_AVAIL: u64 = 2;
+            let cur = crate::sched::current();
+            match a1 {
+                SECCOMP_SET_MODE_STRICT => {
+                    set_process_profile(cur, eurosandbox::Profile::Strict);
+                    crate::serial_println!("[sbx] task {cur}: seccomp strict mode (read/write/exit only) from here on");
+                    0
+                }
+                // flags: TSYNC (1) is implied (filters are per process here); LOG (2)
+                // and SPEC_ALLOW (4) are accepted; NEW_LISTENER (8) is not offered.
+                SECCOMP_SET_MODE_FILTER if a2 & !7 == 0 => seccomp_install_filter(cur, a3),
+                SECCOMP_GET_ACTION_AVAIL => {
+                    let act = read_user::<u32>(a3).unwrap_or(u32::MAX);
+                    if matches!(eurosandbox::bpf::action_of(act), eurosandbox::bpf::Action::Enosys) { (-95i64) as u64 } else { 0 }
+                }
+                _ => (-22i64) as u64,
+            }
+        }
         _ => {
             crate::serial_println!("[linux-abi] ENOSYS Linux syscall {num}");
             (-38i64) as u64 // -ENOSYS (Linux convention: negative errno)
@@ -14616,7 +16549,9 @@ fn init_syscall_msrs() {
         efer.write(v | 1 | nxe); // EFER.SCE (+ NXE)
         Msr::new(0xC000_0081).write((kdata << 48) | (kcode << 32)); // STAR
         Msr::new(0xC000_0082).write(syscall_entry as usize as u64); // LSTAR
-        Msr::new(0xC000_0084).write(0x200); // FMASK: clear IF on entry
+        // FMASK: clear IF, and DF/TF/NT (BUG-032): ring 3 may enter with DF=1 (a
+        // backward copy), and the kernel's Rust code assumes DF=0 like the SysV ABI.
+        Msr::new(0xC000_0084).write(0x200 | 0x400 | 0x100 | 0x4000);
         // Kernel stack for the syscall handler. CURRENT_SC_STACK is the per-task
         // syscall stack the entry actually uses; default it to the global KSTACK for
         // any syscall before the first context switch (schedule_core then keeps it
@@ -14750,7 +16685,7 @@ pub fn run_args(
     for f in 0..512u64 {
         let _ = falloc.free(arena_raw + f * 4096);
     }
-    crate::paging::free_address_space(falloc, pml4);
+    crate::paging::free_address_space(falloc, pml4); // (vDSO chain: only the run_glibc paths free it, see free_process_space)
 
     let out = OUTPUT.lock().clone();
     unsafe { (core::ptr::read(core::ptr::addr_of!(EXIT_CODE)), out) }

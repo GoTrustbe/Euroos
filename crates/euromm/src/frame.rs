@@ -30,6 +30,9 @@ pub struct FrameAllocator {
     hint: usize,
     /// Number of detected double-frees (memory-hardening diagnostics, S6).
     double_frees: usize,
+    /// Allocation trace `(base, frames)` while `trace_start` is active: how the
+    /// kernel learns which frames a device driver took for DMA (IOMMU domains).
+    trace: Option<Vec<(u64, usize)>>,
     /// Peak usage (highest number of simultaneously allocated frames) — for diagnostics
     /// + capacity planning.
     high_water: usize,
@@ -46,6 +49,7 @@ impl FrameAllocator {
             usable_total: 0,
             hint: 0,
             double_frees: 0,
+            trace: None,
             high_water: 0,
         }
     }
@@ -101,7 +105,31 @@ impl FrameAllocator {
     }
 
     /// Allocate one frame; returns the physical start address.
+    /// Start recording every allocation (base, frame count) until `trace_take`.
+    pub fn trace_start(&mut self) {
+        self.trace = Some(Vec::new());
+    }
+
+    /// Stop recording and return the allocations made since `trace_start`.
+    pub fn trace_take(&mut self) -> Vec<(u64, usize)> {
+        self.trace.take().unwrap_or_default()
+    }
+
+    fn note_alloc(&mut self, base: u64, count: usize) {
+        if let Some(t) = self.trace.as_mut() {
+            t.push((base, count));
+        }
+    }
+
     pub fn allocate(&mut self) -> Result<u64, FrameError> {
+        let r = self.allocate_inner();
+        if let Ok(b) = r {
+            self.note_alloc(b, 1);
+        }
+        r
+    }
+
+    fn allocate_inner(&mut self) -> Result<u64, FrameError> {
         for w in (self.hint..self.bitmap.len()).chain(0..self.hint) {
             if self.bitmap[w] != u64::MAX {
                 let b = self.bitmap[w].trailing_ones() as usize;
@@ -120,58 +148,77 @@ impl FrameAllocator {
     }
 
     /// Allocate `count` contiguous frames.
+    /// First USED frame in `[start, start + len)`, scanning whole 64-bit words
+    /// (a fully free word costs one compare). None = the whole window is free.
+    fn first_used_in(&self, start: usize, len: usize) -> Option<usize> {
+        let end = start + len; // exclusive, caller keeps it <= total_frames
+        let mut f = start;
+        while f < end {
+            let w = f / 64;
+            let lo = f % 64;
+            let hi = core::cmp::min(64, end - w * 64); // bits [lo, hi) of this word matter
+            let mut word = self.bitmap[w] >> lo;
+            if hi < 64 {
+                word &= (1u64 << (hi - lo)) - 1;
+            }
+            if word != 0 {
+                return Some(f + word.trailing_zeros() as usize);
+            }
+            f = (w + 1) * 64;
+        }
+        None
+    }
+
+    fn mark_run(&mut self, f: usize, count: usize) {
+        for j in 0..count {
+            self.bitmap[(f + j) / 64] |= 1 << ((f + j) % 64);
+        }
+        self.free_frames -= count;
+        self.note_high_water();
+        self.note_alloc(f as u64 * PAGE_SIZE, count);
+    }
+
+    /// Allocate `count` contiguous frames (first fit). A used frame at `p`
+    /// inside a candidate window moves the search to `p + 1` and free words are
+    /// skipped 64 frames at a time: linear in the bitmap, not in
+    /// `windows × count` (the old scan froze a fragmented system for minutes on
+    /// a 384 MiB request, 2026-10-07).
     pub fn allocate_contiguous(&mut self, count: usize) -> Result<u64, FrameError> {
         if count == 0 {
             return Err(FrameError::OutOfBounds);
         }
-        let mut f = 0;
-        'outer: while f + count <= self.total_frames {
-            for j in 0..count {
-                if self.bitmap[(f + j) / 64] & (1 << ((f + j) % 64)) != 0 {
-                    f += j + 1;
-                    continue 'outer;
+        let mut f = 0usize;
+        while f + count <= self.total_frames {
+            match self.first_used_in(f, count) {
+                None => {
+                    self.mark_run(f, count);
+                    return Ok(f as u64 * PAGE_SIZE);
                 }
+                Some(p) => f = p + 1,
             }
-            for j in 0..count {
-                self.bitmap[(f + j) / 64] |= 1 << ((f + j) % 64);
-            }
-            self.free_frames -= count;
-            self.note_high_water();
-            return Ok(f as u64 * PAGE_SIZE);
         }
         Err(FrameError::OutOfMemory)
     }
 
     /// Allocate `count` contiguous frames with a start frame aligned to
-    /// `align` frames (e.g. `align = 512` → 2 MiB boundary). Returns an aligned physical
-    /// address without the "over-allocate-and-align" waste of
-    /// [`allocate_contiguous`] (which has to reserve up to `align-1` extra frames).
+    /// `align` frames (e.g. `align = 512` → 2 MiB boundary). Returns an aligned
+    /// physical address without the "over-allocate-and-align" waste of
+    /// [`allocate_contiguous`]. Same linear scan: a used frame at `p` moves the
+    /// search to the next aligned boundary after `p`.
     pub fn allocate_aligned(&mut self, count: usize, align: usize) -> Result<u64, FrameError> {
         if count == 0 || align == 0 {
             return Err(FrameError::OutOfBounds);
         }
+        let round_up = |x: usize| -> usize { x.div_ceil(align) * align };
         let mut f = 0usize;
         while f + count <= self.total_frames {
-            if !f.is_multiple_of(align) {
-                f += align - (f % align); // jump to the next aligned boundary
-                continue;
-            }
-            let mut free = true;
-            for j in 0..count {
-                if self.bitmap[(f + j) / 64] & (1 << ((f + j) % 64)) != 0 {
-                    free = false;
-                    break;
+            match self.first_used_in(f, count) {
+                None => {
+                    self.mark_run(f, count);
+                    return Ok(f as u64 * PAGE_SIZE);
                 }
+                Some(p) => f = round_up(p + 1),
             }
-            if free {
-                for j in 0..count {
-                    self.bitmap[(f + j) / 64] |= 1 << ((f + j) % 64);
-                }
-                self.free_frames -= count;
-                self.note_high_water();
-                return Ok(f as u64 * PAGE_SIZE);
-            }
-            f += align; // next aligned boundary
         }
         Err(FrameError::OutOfMemory)
     }
@@ -239,6 +286,32 @@ impl FrameAllocator {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn aligned_and_contiguous_scan_fragmented_bitmap_fast_and_right() {
+        // 1 M frames (4 GiB); mark one frame used every 3000 frames, placed near
+        // the END of each 2 MiB window, which made the old window-by-window scan
+        // re-check ~count bits per window. Then ask for 98304 frames (384 MiB)
+        // aligned to 512: must fail quickly (no free run of that size) ...
+        let mut a = super::FrameAllocator::new(1 << 20);
+        for f in 0..(1usize << 20) {
+            let _ = a.free(f as u64 * super::PAGE_SIZE); // new() starts fully used
+        }
+        for f in (2999..(1 << 20)).step_by(3000) {
+            a.bitmap[f / 64] |= 1 << (f % 64);
+            a.free_frames -= 1;
+        }
+        let before = a.free_frames();
+        assert!(a.allocate_aligned(98304, 512).is_err());
+        assert_eq!(a.free_frames(), before);
+        // ... and a request that fits between the used frames succeeds, aligned.
+        let got = a.allocate_aligned(1024, 512).unwrap();
+        assert_eq!(got % (512 * super::PAGE_SIZE), 0);
+        assert_eq!(a.free_frames(), before - 1024);
+        let got2 = a.allocate_contiguous(2000).unwrap();
+        assert!(got2 > 0);
+        assert_eq!(a.free_frames(), before - 1024 - 2000);
+    }
+
     use super::*;
 
     fn regions() -> Vec<MemoryRegion> {
@@ -320,5 +393,25 @@ mod tests {
         }
         assert_eq!(a.allocate(), Err(FrameError::OutOfMemory));
         assert_eq!(a.free_frames(), 0);
+    }
+}
+
+#[cfg(test)]
+mod trace_tests {
+    use super::*;
+
+    #[test]
+    fn trace_records_every_allocation_between_start_and_take() {
+        let regions = [MemoryRegion { start: 0, len: 64 * 4096, usable: true }];
+        let mut fa = FrameAllocator::from_regions(&regions, 0);
+        let _ = fa.allocate().unwrap(); // not traced
+        fa.trace_start();
+        let a = fa.allocate().unwrap();
+        let b = fa.allocate_contiguous(3).unwrap();
+        let c = fa.allocate_aligned(2, 2).unwrap();
+        let t = fa.trace_take();
+        assert_eq!(t, vec![(a, 1), (b, 3), (c, 2)]);
+        let _ = fa.allocate().unwrap();
+        assert!(fa.trace_take().is_empty()); // tracing stopped
     }
 }

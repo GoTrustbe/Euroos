@@ -20,6 +20,27 @@ use euronet::udp::UdpDatagram;
 
 use crate::nic;
 
+// Inbound connections without waiting (BUG-019).
+#[path = "net_passive.rs"]
+mod passive;
+// [net-async] boot self-test: synthetic peers on TEST-NET-1.
+#[path = "net_asynctest.rs"]
+mod asynctest;
+pub use asynctest::{async_selftest, worker_selftest};
+// Inbound TCP in its own kernel task (net worker).
+#[path = "net_worker.rs"]
+mod worker;
+pub use worker::{poke as worker_poke, start as worker_start};
+
+/// Every frame this stack sends goes through here: the NIC, or the self-test's
+/// capture when it is running and the frame is for one of its synthetic peers.
+fn tx(frame: &[u8]) -> bool {
+    if asynctest::capture(frame) {
+        return true;
+    }
+    nic::send(frame)
+}
+
 /// The network configuration as discovered during boot bring-up.
 #[derive(Clone, Copy)]
 pub struct NetCfg {
@@ -34,16 +55,204 @@ pub struct NetCfg {
     pub router_mac: Option<MacAddr>,
 }
 
-static CFG: Mutex<Option<NetCfg>> = Mutex::new(None);
+static SITE_CFG: eurolock::LockSite = eurolock::LockSite::new("net.CFG", eurolock::LockClass::Net);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static CFG: eurolock::sync::Mutex<Option<NetCfg>> =
+    eurolock::sync::Mutex::new_site(&SITE_CFG, eurolock::Mode::Plain, None);
+
+/// A net-global lock held with interrupts off (net worker).
+///
+/// The netstack globals (CFG, PORTQ, NET_LEGACY, UDPQ) are `Mode::Plain` locks:
+/// measured, not order-checked (a socket lock is held while a connection reads
+/// its queue, and two Net-class locks nest in the demux). They used to be taken
+/// with interrupts as the caller had them. Since the network worker
+/// (`net_worker.rs`) runs inbound TCP in its own task with IF=0, a holder that
+/// the timer parks with IF=1 would make that task (and any syscall, which also
+/// runs with IF=0) spin on this core forever: the BUG-007 family. So every
+/// acquisition goes through here and holds IF=0 for the few microseconds of a
+/// queue operation; the guard is dropped before interrupts come back on.
+struct NetGuard<'a, T> {
+    g: eurolock::sync::MutexGuard<'a, T>,
+    _if: crate::sched::IfOffGuard,
+}
+impl<T> core::ops::Deref for NetGuard<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.g
+    }
+}
+impl<T> core::ops::DerefMut for NetGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.g
+    }
+}
+fn lk<T>(m: &eurolock::sync::Mutex<T>) -> NetGuard<'_, T> {
+    let i = crate::sched::IfOffGuard::new();
+    NetGuard { g: m.lock(), _if: i }
+}
 
 pub fn save(c: NetCfg) {
-    *CFG.lock() = Some(c);
+    *lk(&CFG) = Some(c);
 }
 pub fn get() -> Option<NetCfg> {
-    *CFG.lock()
+    *lk(&CFG)
 }
 
 const SPINS: u64 = 4_000_000;
+
+// ── Waiting for frames: spin (in-kernel drivers) or sleep (userspace driver) ──
+//
+// The in-kernel NIC drivers are polled by whoever waits, so a wait is a bounded
+// spin over the receive path. With the userspace driver (`net.driver=user`) the
+// frames arrive only when the driver process `e1000d` runs, on this same CPU:
+// a waiter that spins with interrupts off (every syscall does) starves it, and
+// the wait times out with the answer sitting in the NIC. So when the frames
+// come from a process AND the caller may give the CPU away, a wait sleeps one
+// tick at a time and is woken early when the driver hands the netstack a frame
+// (`wake_rx_waiters`, from the driver's EuroIPC send). Its bound is in ticks.
+//
+// "May give the CPU away": on the BSP (where the scheduler and every ring-3
+// task run), holding no tracked EuroLock lock (`klock::held_here() == 0`, so
+// never under a socket lock), and either in task context with interrupts on, or
+// inside a syscall the syscall layer marked lock-free (`ring3::net_may_block`).
+// Anything else spins exactly as before.
+
+/// Tasks currently parked in a network wait.
+static RX_WAITER: [AtomicBool; crate::sched::MAX_TASKS] = [const { AtomicBool::new(false) }; crate::sched::MAX_TASKS];
+static RX_WAITING: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// Times a network wait gave the CPU away / waiters woken early by the driver.
+pub static RX_SLEEPS: AtomicU64 = AtomicU64::new(0);
+pub static RX_WAKEUPS: AtomicU64 = AtomicU64::new(0);
+
+/// May the code running now sleep (give the CPU away) inside a network call?
+pub fn may_sleep() -> bool {
+    crate::klock::on_bsp()
+        && crate::klock::held_here() == 0
+        && (x86_64::instructions::interrupts::are_enabled() || crate::ring3::net_may_block())
+}
+
+/// Should a wait for a frame sleep instead of spin? Only when the frames come
+/// from the userspace driver and the context may sleep.
+fn rx_should_block() -> bool {
+    crate::nic::frames_from_process() && may_sleep()
+}
+
+/// Sleep one tick (or until the driver delivers a frame), keeping the caller's
+/// interrupt state.
+fn block_tick() {
+    let t = crate::sched::current_lockfree();
+    let mark = t < crate::sched::MAX_TASKS;
+    if mark && !RX_WAITER[t].swap(true, Ordering::AcqRel) {
+        RX_WAITING.fetch_add(1, Ordering::AcqRel);
+    }
+    RX_SLEEPS.fetch_add(1, Ordering::Relaxed);
+    crate::sched::sleep_ticks(1);
+    crate::ring3::yield_keep_state();
+    if mark && RX_WAITER[t].swap(false, Ordering::AcqRel) {
+        RX_WAITING.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// The userspace driver handed the netstack something (a frame, link up):
+/// wake every task parked in a network wait. Called from the driver's syscall.
+pub fn wake_rx_waiters() {
+    // The network worker too: the frame may be a SYN or a client's request.
+    worker::kick();
+    if RX_WAITING.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    for t in 0..crate::sched::MAX_TASKS {
+        if RX_WAITER[t].swap(false, Ordering::AcqRel) {
+            RX_WAITING.fetch_sub(1, Ordering::AcqRel);
+            RX_WAKEUPS.fetch_add(1, Ordering::Relaxed);
+            crate::sched::unblock_any(t);
+        }
+    }
+}
+
+/// Task slot `t` is reset for reuse (a reaped process or thread, a torn-down
+/// fork child): forget that it slept in a network wait. Otherwise the next
+/// `wake_rx_waiters` would `unblock_any` the slot's new occupant early.
+pub fn forget_rx_waiter(t: usize) {
+    if t < crate::sched::MAX_TASKS && RX_WAITER[t].swap(false, Ordering::AcqRel) {
+        RX_WAITING.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Tries between two sleeps of a sleeping wait: the loops take one frame per
+/// try, so a burst of unrelated frames is worked through before sleeping.
+const RX_BURST: u32 = 64;
+
+/// One bounded wait: `spins` iterations when spinning, `ticks` when sleeping.
+/// Use as `let mut w = RxWait::new(..); while w.next() { try once }`.
+///
+/// A spinning wait is ALSO bounded by `ticks` worth of HPET time (BUG-026). The
+/// spin count alone was the only bound there, and its length depends on the
+/// machine: one iteration polls the NIC, which under KVM is a VM exit per
+/// register read, so the 12 M iterations of a connect round took ~21 s and four
+/// unanswered SYNs held the desktop loop for 85 s. The HPET counter runs with
+/// interrupts off too, unlike the tick clock.
+struct RxWait {
+    block: bool,
+    left: u64,
+    deadline: u64,
+    /// HPET nanoseconds after which a spinning wait ends (u64::MAX: no HPET).
+    deadline_ns: u64,
+    first: bool,
+    burst: u32,
+}
+
+/// A spinning wait looks at the HPET every this many iterations.
+const RX_HPET_EVERY: u64 = 512;
+
+impl RxWait {
+    fn new(spins: u64, ticks: u64) -> Self {
+        let block = rx_should_block();
+        let deadline_ns = if crate::hpet::present() {
+            crate::hpet::ns().saturating_add(ticks.saturating_mul(10_000_000))
+        } else {
+            u64::MAX
+        };
+        RxWait { block, left: spins, deadline: crate::interrupts::ticks() + ticks, deadline_ns, first: true, burst: RX_BURST }
+    }
+    /// Spinning: has the HPET bound passed? Checked every RX_HPET_EVERY spins.
+    fn spin_time_up(&self) -> bool {
+        self.deadline_ns != u64::MAX && self.left % RX_HPET_EVERY == 0 && crate::hpet::ns() >= self.deadline_ns
+    }
+    /// True: try (again). The first call never waits; later calls spin one
+    /// iteration, or (sleeping) try up to `RX_BURST` times and then sleep one
+    /// tick, until the bound is used up.
+    fn next(&mut self) -> bool {
+        if self.first {
+            self.first = false;
+            if !self.block {
+                if self.left == 0 {
+                    return false;
+                }
+                self.left -= 1;
+            }
+            return true;
+        }
+        if self.block {
+            if crate::interrupts::ticks() >= self.deadline {
+                return false;
+            }
+            if self.burst > 0 {
+                self.burst -= 1;
+                return true;
+            }
+            block_tick();
+            self.burst = RX_BURST;
+            true
+        } else {
+            if self.left == 0 || self.spin_time_up() {
+                return false;
+            }
+            self.left -= 1;
+            true
+        }
+    }
+}
 
 /// Recycle pending RX buffers (otherwise the 16 buffers fill up with idle
 /// multicast traffic) AND announce our IP→MAC with a gratuitous ARP, so that
@@ -55,10 +264,45 @@ const SPINS: u64 = 4_000_000;
 // even drained the queue wholesale. Now a single router reads the NIC: TCP
 // segments to our IP land in a per-destination-port queue; everything else goes
 // to a legacy queue for the existing ARP/ICMP/UDP/DHCP readers.
-static PORTQ: spin::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, TcpSegment)>)>> =
-    spin::Mutex::new(alloc::vec::Vec::new());
-static NET_LEGACY: spin::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>> =
-    spin::Mutex::new(alloc::collections::VecDeque::new());
+//
+// BUG-019: the queues are per CONNECTION (local port, peer address, peer port),
+// not per local port, and a connection registers its queue before its first
+// segment leaves. A listener's port is shared by every client, and the old
+// per-port queue made each reader skip or throw away the others' segments; a
+// segment for no registered connection (a SYN, a late ACK after close) goes to
+// the legacy queue, where service() answers it.
+static SITE_PORTQ: eurolock::LockSite = eurolock::LockSite::new("net.PORTQ (TCP port queues)", eurolock::LockClass::Net);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static PORTQ: eurolock::sync::Mutex<alloc::vec::Vec<ConnQueue>> =
+    eurolock::sync::Mutex::new_site(&SITE_PORTQ, eurolock::Mode::Plain, alloc::vec::Vec::new());
+
+/// The four-tuple of one TCP connection, seen from here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct ConnKey {
+    lport: u16,
+    peer: Ipv4Addr,
+    pport: u16,
+}
+
+/// The receive queue of one connection. `owner` is the id of the TcpConn that
+/// registered it: a connection that is replaced on the same four-tuple (a client
+/// that restarts its handshake) must not unregister its successor's queue.
+struct ConnQueue {
+    key: ConnKey,
+    owner: u64,
+    q: alloc::collections::VecDeque<TcpSegment>,
+}
+
+/// Segments one connection queue holds at most.
+const CONNQ_MAX: usize = 256;
+/// TCP segments for no registered connection (answered or dropped by service()).
+pub static TCP_UNOWNED: AtomicU64 = AtomicU64::new(0);
+/// Ids of TcpConn values (queue owners).
+static CONN_IDS: AtomicU64 = AtomicU64::new(1);
+static SITE_NET_LEGACY: eurolock::LockSite = eurolock::LockSite::new("net.NET_LEGACY (rx ring)", eurolock::LockClass::Net);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static NET_LEGACY: eurolock::sync::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>> =
+    eurolock::sync::Mutex::new_site(&SITE_NET_LEGACY, eurolock::Mode::Plain, alloc::collections::VecDeque::new());
 
 /// Per-port queues for UDP datagrams to a REGISTERED local port (one per UdpSock),
 /// the way PORTQ holds TCP segments per port. Before this every UDP reader pulled
@@ -66,8 +310,10 @@ static NET_LEGACY: spin::Mutex<alloc::collections::VecDeque<alloc::vec::Vec<u8>>
 /// its DNS lookups on several UDP sockets at once, so socket A's poll threw away
 /// the answers for B and C, and 31 queries got 2 answers in a run (the rest
 /// ended in ERR_NAME_NOT_RESOLVED). Entries: (source ip, payload).
-static UDPQ: spin::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, alloc::vec::Vec<u8>)>)>> =
-    spin::Mutex::new(alloc::vec::Vec::new());
+static SITE_UDPQ: eurolock::LockSite = eurolock::LockSite::new("net.UDPQ", eurolock::LockClass::Net);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static UDPQ: eurolock::sync::Mutex<alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, alloc::vec::Vec<u8>)>)>> =
+    eurolock::sync::Mutex::new_site(&SITE_UDPQ, eurolock::Mode::Plain, alloc::vec::Vec::new());
 static UDP_ROUTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// The DNS ledger: every query name on its way out and every answer on its way
@@ -82,13 +328,13 @@ fn dns_ledger(what: &str, sport: u16) {
 }
 /// A UDP socket opened on `sport`: its datagrams go to its own queue from now on.
 fn udpq_register(sport: u16) {
-    let mut t = UDPQ.lock();
+    let mut t = lk(&UDPQ);
     if !t.iter().any(|(p, _)| *p == sport) {
         t.push((sport, alloc::collections::VecDeque::new()));
     }
 }
 fn udpq_remove(sport: u16) {
-    UDPQ.lock().retain(|(p, _)| *p != sport);
+    lk(&UDPQ).retain(|(p, _)| *p != sport);
 }
 /// Route one received IPv4/UDP packet to its port's queue; false = not ours.
 fn udpq_route(udpq: &mut alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv4Addr, alloc::vec::Vec<u8>)>)>,
@@ -113,7 +359,7 @@ fn udpq_route(udpq: &mut alloc::vec::Vec<(u16, alloc::collections::VecDeque<(Ipv
 /// Pop the next queued datagram for `sport` from `server` (others are dropped, as
 /// a connected UDP socket does).
 fn udpq_pop(sport: u16, server: Ipv4Addr) -> Option<alloc::vec::Vec<u8>> {
-    let mut t = UDPQ.lock();
+    let mut t = lk(&UDPQ);
     let (_, q) = t.iter_mut().find(|(p, _)| *p == sport)?;
     while let Some((src, d)) = q.pop_front() {
         if src == server {
@@ -123,7 +369,7 @@ fn udpq_pop(sport: u16, server: Ipv4Addr) -> Option<alloc::vec::Vec<u8>> {
     None
 }
 fn udpq_has(sport: u16, server: Ipv4Addr) -> bool {
-    UDPQ.lock().iter().any(|(p, q)| *p == sport && q.iter().any(|(src, _)| *src == server))
+    lk(&UDPQ).iter().any(|(p, q)| *p == sport && q.iter().any(|(src, _)| *src == server))
 }
 
 /// Segments this stack THREW AWAY, and why. A TCP that silently drops recovers
@@ -178,18 +424,27 @@ pub fn pump_all() {
     if retransmit {
         PUMP_ALL_TICK.store(now, core::sync::atomic::Ordering::Relaxed);
     }
-    let mut t = SOCKETS.lock();
-    for slot in t.iter_mut() {
-        if let Some(Sock::Conn(c)) = slot {
-            if c.open {
-                if retransmit {
-                    c.tick();
-                } else {
-                    c.pump_nowait();
+    // One connection at a time: a syscall on another socket only waits for the
+    // connection being pumped, not for the whole pass. Only slots hinted as
+    // connections are visited.
+    for i in conn_hint_slots() {
+        let mut g = SOCKETS[i].lock();
+        match &mut *g {
+            Some(Sock::Conn(c)) => {
+                if c.open {
+                    if retransmit {
+                        c.tick();
+                    } else {
+                        c.pump_nowait();
+                    }
                 }
             }
+            _ => conn_hint_clear(i),
         }
     }
+    // Inbound handshakes and httpd connections, also where no service() runs
+    // (the launcher loop of a boot-phase program).
+    passive::step();
 }
 /// Tick of the last retransmit pass of `pump_all`.
 static PUMP_ALL_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -200,11 +455,10 @@ static PUMP_ALL_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomic
 /// above this layer.
 pub fn rx_queued_bytes() -> usize {
     let _g = crate::sched::IfOffGuard::new();
-    let t = SOCKETS.lock();
-    t.iter()
-        .filter_map(|s| match s {
-            Some(Sock::Conn(c)) => Some(c.rx.len()),
-            _ => None,
+    conn_hint_slots()
+        .map(|i| match &*SOCKETS[i].lock() {
+            Some(Sock::Conn(c)) => c.rx.len(),
+            _ => 0,
         })
         .sum()
 }
@@ -244,42 +498,144 @@ pub fn rx_route_irq() {
     let Some(mut portq) = PORTQ.try_lock() else { return };
     let Some(mut legacy) = NET_LEGACY.try_lock() else { return };
     let Some(mut udpq) = UDPQ.try_lock() else { return };
+    let mut moved = 0usize;
     for _ in 0..256 {
         let rx = match nic::poll_recv() {
             Some(r) => r,
             None => break,
         };
-        let mut routed = false;
-        if let Ok((h, payload)) = EthernetHeader::parse(&rx) {
-            if h.ethertype == EtherType::Ipv4 {
-                if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
-                    if ih.protocol == Protocol::Tcp && ih.dst == my_ip {
-                        if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
-                            let q = match portq.iter_mut().find(|(p, _)| *p == seg.dst_port) {
-                                Some((_, q)) => q,
-                                None => {
-                                    portq.push((seg.dst_port, alloc::collections::VecDeque::new()));
-                                    &mut portq.last_mut().unwrap().1
-                                }
-                            };
-                            TCP_SEGS_IN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                            if q.len() < 256 {
-                                q.push_back((ih.src, seg));
-                            } else {
-                                TCP_Q_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                            }
-                            routed = true;
-                        }
-                    } else if ih.protocol == Protocol::Udp && ih.dst == my_ip {
+        moved += 1;
+        match classify(&rx, my_ip) {
+            // BUG-018, as in rx_route: a bare SYN opens a new inbound connection
+            // and belongs to service() (listen/accept, httpd), which reads the
+            // legacy queue. With the NIC drained from its interrupt this path
+            // sees most SYNs.
+            Dest::Tcp(key, seg) => {
+                if connq_push(&mut portq, key, seg).is_some() && legacy.len() < 256 {
+                    legacy.push_back(rx);
+                }
+            }
+            Dest::Udp => {
+                let mut routed = false;
+                if let Ok((_, payload)) = EthernetHeader::parse(&rx) {
+                    if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
                         routed = udpq_route(&mut udpq, &ih, ipl);
+                    }
+                }
+                if !routed && legacy.len() < 256 {
+                    legacy.push_back(rx);
+                }
+            }
+            Dest::Legacy => {
+                if legacy.len() < 256 {
+                    legacy.push_back(rx);
+                }
+            }
+        }
+    }
+    drop(udpq);
+    drop(legacy);
+    drop(portq);
+    NET_RX_SEQ.fetch_add(1, Ordering::Relaxed);
+    // The network worker handles what came in, also while task 0 is busy.
+    if moved > 0 {
+        worker::kick_irq();
+    }
+}
+
+/// Where one received frame goes.
+enum Dest {
+    /// A checksum-valid TCP segment to our address that is not a bare SYN: the
+    /// queue of its connection, if one is registered.
+    Tcp(ConnKey, TcpSegment),
+    /// UDP to our address: the UDP port queues.
+    Udp,
+    /// Everything else (ARP, ICMP, DHCP, bare SYNs, bad TCP checksums).
+    Legacy,
+}
+
+fn classify(rx: &[u8], my_ip: Ipv4Addr) -> Dest {
+    let Ok((h, payload)) = EthernetHeader::parse(rx) else { return Dest::Legacy };
+    if h.ethertype != EtherType::Ipv4 {
+        return Dest::Legacy;
+    }
+    let Ok((ih, ipl)) = Ipv4Header::parse(payload) else { return Dest::Legacy };
+    if ih.dst != my_ip {
+        return Dest::Legacy;
+    }
+    match ih.protocol {
+        Protocol::Tcp => match TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
+            // LOADTEST-R630 BUG-018: a bare SYN (no ACK) opens a NEW inbound
+            // connection. No socket owns it yet, so it must reach service()
+            // (listen/accept and the background httpd), which reads the
+            // legacy queue.
+            Ok(seg) if seg.has(tcp::SYN) && !seg.has(tcp::ACK) => Dest::Legacy,
+            Ok(seg) => Dest::Tcp(ConnKey { lport: seg.dst_port, peer: ih.src, pport: seg.src_port }, seg),
+            Err(_) => {
+                // A TCP packet this stack could not accept. It falls through to
+                // the legacy queue, so the connection never sees it - which looks
+                // exactly like a gap in the sequence, and costs a retransmission.
+                TCP_PARSE_DROPS.fetch_add(1, Ordering::Relaxed);
+                Dest::Legacy
+            }
+        },
+        Protocol::Udp => Dest::Udp,
+        _ => Dest::Legacy,
+    }
+}
+
+fn is_tcp_frame(rx: &[u8]) -> bool {
+    matches!(EthernetHeader::parse(rx), Ok((h, p)) if h.ethertype == EtherType::Ipv4
+        && matches!(Ipv4Header::parse(p), Ok((ih, _)) if ih.protocol == Protocol::Tcp))
+}
+
+/// Queue `seg` for its registered connection. Returns the segment back when no
+/// connection owns `key` (the caller sends the frame to the legacy queue).
+fn connq_push(portq: &mut alloc::vec::Vec<ConnQueue>, key: ConnKey, seg: TcpSegment) -> Option<TcpSegment> {
+    let Some(c) = portq.iter_mut().find(|c| c.key == key) else {
+        TCP_UNOWNED.fetch_add(1, Ordering::Relaxed);
+        return Some(seg);
+    };
+    TCP_SEGS_IN.fetch_add(1, Ordering::Relaxed);
+    if c.q.len() < CONNQ_MAX {
+        c.q.push_back(seg);
+    } else {
+        TCP_Q_DROPS.fetch_add(1, Ordering::Relaxed);
+    }
+    None
+}
+
+/// Bumped whenever the demux moved frames (a cheap "something arrived" for the
+/// passive-open step).
+static NET_RX_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Route one received frame: its connection's queue, a UDP port queue, or the
+/// legacy queue.
+fn route_frame(rx: alloc::vec::Vec<u8>, my_ip: Ipv4Addr) {
+    match classify(&rx, my_ip) {
+        Dest::Tcp(key, seg) => {
+            let unowned = connq_push(&mut lk(&PORTQ), key, seg).is_some();
+            if !unowned {
+                NET_RX_SEQ.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+        Dest::Udp => {
+            if let Ok((_, payload)) = EthernetHeader::parse(&rx) {
+                if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
+                    if udpq_route(&mut lk(&UDPQ), &ih, ipl) {
+                        return;
                     }
                 }
             }
         }
-        if !routed && legacy.len() < 256 {
-            legacy.push_back(rx);
-        }
+        Dest::Legacy => {}
     }
+    let mut l = lk(&NET_LEGACY);
+    if l.len() < 256 {
+        l.push_back(rx);
+    }
+    NET_RX_SEQ.fetch_add(1, Ordering::Relaxed);
 }
 
 fn rx_route() {
@@ -295,79 +651,73 @@ fn rx_route() {
             Some(r) => r,
             None => break,
         };
-        let mut routed = false;
-        if let Ok((h, payload)) = EthernetHeader::parse(&rx) {
-            if h.ethertype == EtherType::Ipv4 {
-                if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
-                    if ih.protocol == Protocol::Tcp && ih.dst == my_ip {
-                        if TcpSegment::parse_checked(ipl, ih.src, ih.dst).is_err() {
-                            // A TCP packet this stack could not accept. It falls
-                            // through to the legacy queue below, so the connection
-                            // never sees it - which looks exactly like a gap in the
-                            // sequence, and costs a retransmission.
-                            TCP_PARSE_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                        }
-                        if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
-                            let mut t = PORTQ.lock();
-                            let q = match t.iter_mut().find(|(p, _)| *p == seg.dst_port) {
-                                Some((_, q)) => q,
-                                None => {
-                                    t.push((seg.dst_port, alloc::collections::VecDeque::new()));
-                                    &mut t.last_mut().unwrap().1
-                                }
-                            };
-                            TCP_SEGS_IN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                            if q.len() < 256 {
-                                q.push_back((ih.src, seg));
-                            } else {
-                                TCP_Q_DROPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                            }
-                            routed = true;
-                        }
-                    } else if ih.protocol == Protocol::Udp && ih.dst == my_ip {
-                        routed = udpq_route(&mut UDPQ.lock(), &ih, ipl);
-                    }
-                }
-            }
-        }
-        if !routed {
-            let mut l = NET_LEGACY.lock();
-            if l.len() < 256 {
-                l.push_back(rx);
-            }
-        }
+        route_frame(rx, my_ip);
     }
 }
 
 /// The demux-aware replacement for nic::poll_recv() in every non-TCP reader.
 fn legacy_rx() -> Option<alloc::vec::Vec<u8>> {
     rx_route();
-    NET_LEGACY.lock().pop_front()
+    lk(&NET_LEGACY).pop_front()
 }
 
-/// Pop the next queued TCP segment for a local port (from `server` only).
-fn portq_pop(sport: u16, server: Ipv4Addr) -> Option<TcpSegment> {
-    rx_route();
-    let mut t = PORTQ.lock();
-    let (_, q) = t.iter_mut().find(|(p, _)| *p == sport)?;
-    while let Some((src, seg)) = q.pop_front() {
-        if src == server {
-            return Some(seg);
-        }
-        // A segment from an unexpected source on our port: discard (stale NAT).
+/// Open the receive queue of a connection (before its first segment leaves).
+/// A queue already there for the same four-tuple is taken over (and keeps what
+/// it holds).
+fn portq_register(key: ConnKey, owner: u64) {
+    let mut t = lk(&PORTQ);
+    match t.iter_mut().find(|c| c.key == key) {
+        Some(c) => c.owner = owner,
+        None => t.push(ConnQueue { key, owner, q: alloc::collections::VecDeque::new() }),
     }
-    None
 }
 
-/// Forget a port's queue when its socket closes.
-fn portq_remove(sport: u16) {
-    PORTQ.lock().retain(|(p, _)| *p != sport);
+/// Close the receive queue of a connection, unless another connection took the
+/// four-tuple over meanwhile.
+fn portq_unregister(key: ConnKey, owner: u64) {
+    lk(&PORTQ).retain(|c| !(c.key == key && c.owner == owner));
+}
+
+/// Is a local port in use by any registered connection?
+fn portq_lport_in_use(lport: u16) -> bool {
+    lk(&PORTQ).iter().any(|c| c.key.lport == lport)
+}
+
+/// Pop the next queued segment of one connection (after routing what the NIC
+/// has).
+fn portq_pop(sport: u16, server: Ipv4Addr, peer_port: u16) -> Option<TcpSegment> {
+    rx_route();
+    portq_take(ConnKey { lport: sport, peer: server, pport: peer_port })
+}
+
+/// Pop without polling the NIC first.
+fn portq_take(key: ConnKey) -> Option<TcpSegment> {
+    let mut t = lk(&PORTQ);
+    t.iter_mut().find(|c| c.key == key)?.q.pop_front()
+}
+
+/// Registered connection queues and the segments they hold (netstat, tests).
+fn portq_stats() -> (usize, usize) {
+    let t = lk(&PORTQ);
+    (t.len(), t.iter().map(|c| c.q.len()).sum())
 }
 
 fn drain() {
+    // Stale ARP/ICMP/UDP frames go; TCP frames stay for service(): a SYN for a
+    // listener or the httpd waiting here would otherwise be thrown away by every
+    // outbound fetch (its ARP lookup drains first) and cost the client a
+    // one-second SYN retransmission.
+    let mut keep = alloc::vec::Vec::new();
     for _ in 0..64 {
-        if legacy_rx().is_none() {
-            break;
+        let Some(f) = legacy_rx() else { break };
+        if is_tcp_frame(&f) {
+            keep.push(f);
+        }
+    }
+    if !keep.is_empty() {
+        let mut l = lk(&NET_LEGACY);
+        for f in keep.into_iter().rev() {
+            l.push_front(f);
         }
     }
     if let Some(c) = get() {
@@ -380,7 +730,7 @@ fn drain() {
         };
         let frame = EthernetHeader { dst: MacAddr::BROADCAST, src: c.my_mac, ethertype: EtherType::Arp }
             .build(&g.build());
-        nic::send(&frame);
+        tx(&frame);
     }
 }
 
@@ -420,7 +770,7 @@ pub fn late_bring_up() {
         }
         .build(&seg);
         let frame = EthernetHeader { dst: MacAddr::BROADCAST, src: my_mac, ethertype: EtherType::Ipv4 }.build(&ipf);
-        nic::send(&frame);
+        tx(&frame);
     };
     let poll_dhcp = |want: u8| -> Option<dhcp::DhcpInfo> {
         for _ in 0..6_000_000u64 {
@@ -512,8 +862,9 @@ pub fn arp_resolve(my_mac: MacAddr, my_ip: Ipv4Addr, ip: Ipv4Addr) -> Option<Mac
         target_ip: ip,
     };
     let frame = EthernetHeader { dst: MacAddr::BROADCAST, src: my_mac, ethertype: EtherType::Arp }.build(&req.build());
-    nic::send(&frame);
-    for _ in 0..SPINS {
+    tx(&frame);
+    let mut w = RxWait::new(SPINS, 100);
+    while w.next() {
         if let Some(rx) = legacy_rx() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Arp {
@@ -535,8 +886,9 @@ pub fn icmp_ping(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, dst: Ipv4Ad
     let icmp = IcmpEcho { kind: IcmpType::EchoRequest, identifier: 0xE401, sequence: 1, payload: b"euroos-ping".to_vec() };
     let iph = Ipv4Header { protocol: Protocol::Icmp, ttl: 64, src: my_ip, dst, total_length: 0, identification: 1 };
     let frame = EthernetHeader { dst: nexthop, src: my_mac, ethertype: EtherType::Ipv4 }.build(&iph.build(&icmp.build()));
-    nic::send(&frame);
-    for _ in 0..SPINS * 2 {
+    tx(&frame);
+    let mut w = RxWait::new(SPINS * 2, 200);
+    while w.next() {
         if let Some(rx) = legacy_rx() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Ipv4 {
@@ -577,8 +929,9 @@ pub fn dns_query(my_mac: MacAddr, my_ip: Ipv4Addr, dns_mac: MacAddr, dns_ip: Ipv
     let seg = UdpDatagram { src_port, dst_port: 53, payload: q }.build(my_ip, dns_ip);
     let iph = Ipv4Header { protocol: Protocol::Udp, ttl: 64, src: my_ip, dst: dns_ip, total_length: 0, identification: 2 };
     let frame = EthernetHeader { dst: dns_mac, src: my_mac, ethertype: EtherType::Ipv4 }.build(&iph.build(&seg));
-    nic::send(&frame);
-    for _ in 0..SPINS * 2 {
+    tx(&frame);
+    let mut w = RxWait::new(SPINS * 2, 200);
+    while w.next() {
         if let Some(rx) = legacy_rx() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Ipv4 {
@@ -609,8 +962,9 @@ pub fn icmp6_ping(my_mac: MacAddr, src_ll: Ipv6Addr, dst_mac: MacAddr, dst: Ipv6
     let echo = icmpv6::echo_request(0xE6, 1, b"euroos-ping6", src_ll, dst);
     let eh = Ipv6Header { next_header: 58, hop_limit: 255, src: src_ll, dst, payload_len: 0 };
     let frame = EthernetHeader { dst: dst_mac, src: my_mac, ethertype: EtherType::Ipv6 }.build(&eh.build(&echo));
-    nic::send(&frame);
-    for _ in 0..SPINS * 2 {
+    tx(&frame);
+    let mut w = RxWait::new(SPINS * 2, 200);
+    while w.next() {
         if let Some(rx) = legacy_rx() {
             if let Ok((h, p)) = EthernetHeader::parse(&rx) {
                 if h.ethertype == EtherType::Ipv6 {
@@ -624,6 +978,32 @@ pub fn icmp6_ping(my_mac: MacAddr, src_ll: Ipv6Addr, dst_mac: MacAddr, dst: Ipv6
         }
     }
     false
+}
+
+/// IPv6 router discovery: a Router Solicitation to ff02::2 from `ll`, then wait
+/// for a Router Advertisement. (router link-local, router MAC, /64 prefix).
+pub fn router_discovery(my_mac: MacAddr, ll: Ipv6Addr) -> Option<(Ipv6Addr, MacAddr, Option<[u8; 8]>)> {
+    let rs = icmpv6::router_solicit(my_mac.0, ll, Ipv6Addr::ALL_ROUTERS);
+    let h = Ipv6Header { next_header: 58, hop_limit: 255, src: ll, dst: Ipv6Addr::ALL_ROUTERS, payload_len: 0 };
+    let frame = EthernetHeader { dst: MacAddr(Ipv6Addr::ALL_ROUTERS.multicast_mac()), src: my_mac, ethertype: EtherType::Ipv6 }
+        .build(&h.build(&rs));
+    tx(&frame);
+    let mut w = RxWait::new(SPINS * 2, 200);
+    while w.next() {
+        if let Some(rx) = legacy_rx() {
+            if let Ok((eh, p)) = EthernetHeader::parse(&rx) {
+                if eh.ethertype == EtherType::Ipv6 {
+                    if let Ok((ih, pl)) = Ipv6Header::parse(p) {
+                        if ih.next_header == 58 && icmpv6::msg_type(pl) == Some(icmpv6::ROUTER_ADVERT) {
+                            let (prefix, _) = icmpv6::ra_info(pl);
+                            return Some((ih.src, eh.src, prefix));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Network service: poll some incoming traffic and ANSWER ARP requests for
@@ -651,7 +1031,7 @@ fn embedded_udp_matches(orig: &[u8], sport: u16, dport: u16) -> bool {
 fn send_ipv4(my_mac: MacAddr, my_ip: Ipv4Addr, dst_mac: MacAddr, dst_ip: Ipv4Addr, proto: Protocol, l4: &[u8]) {
     let iph = Ipv4Header { protocol: proto, ttl: 64, src: my_ip, dst: dst_ip, total_length: 0, identification: 9 };
     let frame = EthernetHeader { dst: dst_mac, src: my_mac, ethertype: EtherType::Ipv4 }.build(&iph.build(l4));
-    nic::send(&frame);
+    tx(&frame);
 }
 
 /// Rate limiter for outgoing ICMP/RST error messages (anti-amplification):
@@ -659,31 +1039,8 @@ fn send_ipv4(my_mac: MacAddr, my_ip: Ipv4Addr, dst_mac: MacAddr, dst_ip: Ipv4Add
 /// IPs from reflecting our port-unreachable/RST replies to victims.
 static ICMP_ERR_LIMIT: Mutex<TokenBucket> = Mutex::new(TokenBucket::new(20, 20, 100));
 fn icmp_err_allowed() -> bool {
+    let _g = crate::sched::IfOffGuard::new();
     ICMP_ERR_LIMIT.lock().allow(crate::interrupts::ticks())
-}
-
-/// Is there a userspace LISTEN socket on `seg.dst_port` with room in the queue?
-/// If so: complete the passive open (SYN-ACK) and put the connection in the queue.
-/// Returns `true` if a listener existed (so the caller does not send a RST).
-fn try_accept_listener(seg: &TcpSegment, peer_mac: MacAddr, peer_ip: Ipv4Addr, cfg: &NetCfg) -> bool {
-    let has_room = {
-        let t = SOCKETS.lock();
-        t.iter().any(|s| matches!(s, Some(Sock::Listen { port, backlog, queue }) if *port == seg.dst_port && queue.len() < *backlog))
-    };
-    if !has_room {
-        return false;
-    }
-    // Passive open without holding the SOCKETS lock (it does network I/O).
-    if let Some(conn) = TcpConn::accept_from(cfg.my_mac, cfg.my_ip, peer_mac, peer_ip, seg.src_port, seg.dst_port, seg) {
-        let mut t = SOCKETS.lock();
-        let idx = t.iter().position(|s| matches!(s, Some(Sock::Listen { port, backlog, queue }) if *port == seg.dst_port && queue.len() < *backlog));
-        if let Some(idx) = idx {
-            if let Some(Sock::Listen { queue, .. }) = &mut t[idx] {
-                queue.push_back(conn);
-            }
-        }
-    }
-    true
 }
 
 pub fn service() {
@@ -691,84 +1048,139 @@ pub fn service() {
         Some(c) => c,
         None => return,
     };
-    for _ in 0..8 {
+    // Every frame here is handled without waiting (a SYN only creates a
+    // half-open entry, BUG-019), so the batch can be larger than the 8 it was
+    // when a SYN meant a blocking handshake.
+    for _ in 0..64 {
         let rx = match legacy_rx() {
             Some(r) => r,
             None => break,
         };
-        if let Ok((h, payload)) = EthernetHeader::parse(&rx) {
-            if h.ethertype == EtherType::Arp {
-                if let Ok(a) = ArpPacket::parse(payload) {
-                    if a.op == ArpOp::Request && a.target_ip == cfg.my_ip {
-                        let reply = ArpPacket::reply_to(&a, cfg.my_mac);
-                        let frame = EthernetHeader { dst: a.sender_mac, src: cfg.my_mac, ethertype: EtherType::Arp }
-                            .build(&reply.build());
-                        nic::send(&frame);
-                    }
-                }
-            } else if h.ethertype == EtherType::Ipv4 {
-                if let Ok((ih, ipl)) = Ipv4Header::parse(payload) {
-                    // Only traffic that is really addressed to us.
-                    if ih.dst != cfg.my_ip {
-                        continue;
-                    }
-                    // N3: packet filter (EuroFW). Test the incoming packet; a
-                    // blocked packet is silently dropped (stealth, no RST/ICMP).
-                    let (sport, dport) = if ipl.len() >= 4 && matches!(ih.protocol, Protocol::Tcp | Protocol::Udp) {
-                        (u16::from_be_bytes([ipl[0], ipl[1]]), u16::from_be_bytes([ipl[2], ipl[3]]))
-                    } else {
-                        (0, 0)
-                    };
-                    if !crate::firewall::inbound_allowed(
-                        ih.protocol.as_u8(),
-                        u32::from_be_bytes(ih.src.0),
-                        u32::from_be_bytes(ih.dst.0),
-                        sport,
-                        dport,
-                    ) {
-                        continue;
-                    }
-                    match ih.protocol {
-                        Protocol::Tcp => {
-                            if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
-                                let is_syn = seg.has(tcp::SYN) && !seg.has(tcp::ACK);
-                                let http = SERVER_ON.load(Ordering::Relaxed) && seg.dst_port == 80;
-                                if http && is_syn {
-                                    // Background HTTP server: serve an incoming SYN on :80.
-                                    serve_connection(cfg.my_mac, cfg.my_ip, h.src, ih.src, &seg);
-                                } else if is_syn && try_accept_listener(&seg, h.src, ih.src, &cfg) {
-                                    // A userspace LISTEN socket on this port accepted the
-                                    // connection (passive open + queued).
-                                } else if is_syn && icmp_err_allowed() {
-                                    // SYN to a closed port → "connection refused": RST
-                                    // (RFC 793), instead of letting the packet disappear. Rate-limited.
-                                    if let Some(rst) = TcpSegment::reset_to(&seg) {
-                                        send_ipv4(cfg.my_mac, cfg.my_ip, h.src, ih.src, Protocol::Tcp, &rst.build(cfg.my_ip, ih.src));
-                                    }
-                                }
-                            }
-                        }
-                        // Make EuroOS pingable: reply to an incoming echo-request.
-                        Protocol::Icmp => {
-                            if let Ok(echo) = IcmpEcho::parse(ipl) {
-                                if echo.kind == IcmpType::EchoRequest {
-                                    let reply = IcmpEcho::reply_to(&echo);
-                                    send_ipv4(cfg.my_mac, cfg.my_ip, h.src, ih.src, Protocol::Icmp, &reply.build());
-                                }
-                            }
-                        }
-                        // Unsolicited UDP datagram = no listener → ICMP port-unreachable
-                        // (RFC 792). During a blocking DNS/ping, service() doesn't run, so
-                        // whatever arrives here is not expected by anyone.
-                        Protocol::Udp if icmp_err_allowed() => {
-                            let err = IcmpError::DestUnreachable(UnreachCode::Port).build(payload);
-                            send_ipv4(cfg.my_mac, cfg.my_ip, h.src, ih.src, Protocol::Icmp, &err);
-                        }
-                        _ => {}
-                    }
+        handle_legacy(&rx, &cfg, false);
+    }
+    // Inbound connections move on: handshakes complete, httpd requests are
+    // answered, SYN-ACKs are retransmitted. Never waits.
+    passive::step();
+}
+
+/// One frame from the legacy queue: answer an ARP request, open an inbound
+/// connection (SYN), refuse a segment for no connection, answer a ping.
+///
+/// `worker` = the network worker asks (`net_worker.rs`). It takes only what
+/// belongs to inbound TCP (a SYN for the httpd or a listener, a segment whose
+/// connection registered its queue late) and answers ARP requests for us; for
+/// anything else it returns false and the frame goes back to the legacy queue,
+/// for `service()` and the blocking readers (ARP/ICMP/DNS/DHCP, `serve`) that
+/// wait for exactly those frames. True = the frame was used up.
+fn handle_legacy(rx: &[u8], cfg: &NetCfg, worker: bool) -> bool {
+    let Ok((h, payload)) = EthernetHeader::parse(rx) else { return !worker };
+    if h.ethertype == EtherType::Arp {
+        if let Ok(a) = ArpPacket::parse(payload) {
+            if a.op == ArpOp::Request && a.target_ip == cfg.my_ip {
+                let reply = ArpPacket::reply_to(&a, cfg.my_mac);
+                let frame = EthernetHeader { dst: a.sender_mac, src: cfg.my_mac, ethertype: EtherType::Arp }
+                    .build(&reply.build());
+                tx(&frame);
+                return true;
+            }
+        }
+        return !worker;
+    }
+    if h.ethertype != EtherType::Ipv4 {
+        return !worker;
+    }
+    let Ok((ih, ipl)) = Ipv4Header::parse(payload) else { return !worker };
+    // Only traffic that is really addressed to us.
+    if ih.dst != cfg.my_ip {
+        return !worker;
+    }
+    if worker && ih.protocol != Protocol::Tcp {
+        return false;
+    }
+    // N3: packet filter (EuroFW). Test the incoming packet; a
+    // blocked packet is silently dropped (stealth, no RST/ICMP).
+    let (sport, dport) = if ipl.len() >= 4 && matches!(ih.protocol, Protocol::Tcp | Protocol::Udp) {
+        (u16::from_be_bytes([ipl[0], ipl[1]]), u16::from_be_bytes([ipl[2], ipl[3]]))
+    } else {
+        (0, 0)
+    };
+    if !crate::firewall::inbound_allowed(
+        ih.protocol.as_u8(),
+        u32::from_be_bytes(ih.src.0),
+        u32::from_be_bytes(ih.dst.0),
+        sport,
+        dport,
+    ) {
+        return true;
+    }
+    match ih.protocol {
+        Protocol::Tcp => {
+            let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) else { return !worker };
+            let is_syn = seg.has(tcp::SYN) && !seg.has(tcp::ACK);
+            let key = ConnKey { lport: seg.dst_port, peer: ih.src, pport: seg.src_port };
+            if is_syn && passive::on_syn(&seg, key, h.src, cfg) {
+                // The background httpd or a LISTEN socket owns the
+                // port: a half-open entry now, a SYN-ACK on the wire,
+                // and the handshake completes in passive::step.
+                return true;
+            }
+            if is_syn && worker {
+                return false; // nobody listens: service() refuses it (or `serve` takes it)
+            }
+            let Some(s) = portq_take_late(key, seg) else {
+                // The segment's connection registered its queue after
+                // the demux looked: queued there now.
+                return true;
+            };
+            if worker {
+                return false;
+            }
+            if absorb_after_close(key, &s) {
+                // The peer's ACK of our last FIN: nothing to say.
+            } else if icmp_err_allowed() {
+                // SYN to a closed port → "connection refused": RST
+                // (RFC 793), instead of letting the packet disappear.
+                // Any other segment for no connection gets one too
+                // (RFC 793 §3.4): it clears a peer's half-open state
+                // for the four-tuple (BUG-026). Rate-limited.
+                if let Some(rst) = TcpSegment::reset_to(&s) {
+                    send_ipv4(cfg.my_mac, cfg.my_ip, h.src, ih.src, Protocol::Tcp, &rst.build(cfg.my_ip, ih.src));
                 }
             }
         }
+        // Make EuroOS pingable: reply to an incoming echo-request.
+        Protocol::Icmp => {
+            if let Ok(echo) = IcmpEcho::parse(ipl) {
+                if echo.kind == IcmpType::EchoRequest {
+                    let reply = IcmpEcho::reply_to(&echo);
+                    send_ipv4(cfg.my_mac, cfg.my_ip, h.src, ih.src, Protocol::Icmp, &reply.build());
+                }
+            }
+        }
+        // Unsolicited UDP datagram = no listener → ICMP port-unreachable
+        // (RFC 792). During a blocking DNS/ping, service() doesn't run, so
+        // whatever arrives here is not expected by anyone.
+        Protocol::Udp if icmp_err_allowed() => {
+            let err = IcmpError::DestUnreachable(UnreachCode::Port).build(payload);
+            send_ipv4(cfg.my_mac, cfg.my_ip, h.src, ih.src, Protocol::Icmp, &err);
+        }
+        _ => {}
+    }
+    true
+}
+
+/// A segment the demux found no connection for: if its connection exists by
+/// now, queue it there (None); otherwise hand it back.
+fn portq_take_late(key: ConnKey, seg: TcpSegment) -> Option<TcpSegment> {
+    let mut t = lk(&PORTQ);
+    match t.iter_mut().find(|c| c.key == key) {
+        Some(c) => {
+            if c.q.len() < CONNQ_MAX {
+                c.q.push_back(seg);
+            }
+            None
+        }
+        None => Some(seg),
     }
 }
 
@@ -777,15 +1189,73 @@ pub fn service() {
 /// Returns (status line, raw response bytes).
 /// Next free ephemeral source port (49152–65535), so concurrent
 /// connections don't collide.
-static NEXT_PORT: Mutex<u16> = Mutex::new(49152);
+static RECENT_PORTS: Mutex<euronet::tcpopen::RecentPorts<1024>> = Mutex::new(euronet::tcpopen::RecentPorts::new());
 fn alloc_port() -> u16 {
     // Random ephemeral port (RFC 6056): a sequential allocator let an off-path
     // attacker predict the port of the next connection and reset it.
-    let mut p = NEXT_PORT.lock();
-    let span = 65000u32 - 49152;
-    let port = 49152 + (rand_u64() as u32 % span) as u16;
-    *p = port;
+    // BUG-026: but never a port in use, nor one of the last 1024 handed out. A
+    // repeat of a recent port can meet the peer's old control block for the same
+    // four-tuple (TIME-WAIT, or FIN-WAIT-2 for minutes), which drops or ACKs
+    // the new SYN instead of answering it.
+    let _g = crate::sched::IfOffGuard::new();
+    let mut recent = RECENT_PORTS.lock();
+    let port = euronet::tcpopen::pick_port(|| rand_u64() as u32, 49152, 65000, |p| {
+        recent.contains(p) || portq_lport_in_use(p) || udpq_port_in_use(p)
+    });
+    recent.remember(port);
     port
+}
+
+fn udpq_port_in_use(port: u16) -> bool {
+    lk(&UDPQ).iter().any(|(p, _)| *p == port)
+}
+
+/// Outbound connect statistics (BUG-026): SYN rounds that timed out, stale
+/// half-open answers reset, fresh-port retries, refusals, give-ups, and the
+/// slowest successful connect.
+static CONNECT_SYN_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
+static CONNECT_STALE_RST: AtomicU64 = AtomicU64::new(0);
+static CONNECT_NEW_PORT: AtomicU64 = AtomicU64::new(0);
+static CONNECT_REFUSED: AtomicU64 = AtomicU64::new(0);
+static CONNECT_GAVE_UP: AtomicU64 = AtomicU64::new(0);
+static CONNECT_OK: AtomicU64 = AtomicU64::new(0);
+static CONNECT_MAX_US: AtomicU64 = AtomicU64::new(0);
+
+fn connect_record(us: u64) {
+    CONNECT_OK.fetch_add(1, Ordering::Relaxed);
+    CONNECT_MAX_US.fetch_max(us, Ordering::Relaxed);
+}
+
+/// Microseconds of HPET time (0 without an HPET).
+fn time_us() -> u64 {
+    if crate::hpet::present() {
+        crate::hpet::us()
+    } else {
+        crate::interrupts::ticks() * 10_000
+    }
+}
+
+/// One line on connects and inbound connections, for `netstat` and the logs.
+pub fn tcp_open_report() -> String {
+    let (conns, queued) = portq_stats();
+    let (half, httpd) = passive::counts();
+    alloc::format!(
+        "tcp: connect ok {} (slowest {} ms), SYN timeouts {}, stale-peer RSTs {}, new-port retries {}, closed-port answers {}, gave up {} | inbound: half-open {}, httpd conns {}, served {} | queues {} ({} segs), unowned segs {} (after-close ACKs {})",
+        CONNECT_OK.load(Ordering::Relaxed),
+        CONNECT_MAX_US.load(Ordering::Relaxed) / 1000,
+        CONNECT_SYN_TIMEOUTS.load(Ordering::Relaxed),
+        CONNECT_STALE_RST.load(Ordering::Relaxed),
+        CONNECT_NEW_PORT.load(Ordering::Relaxed),
+        CONNECT_REFUSED.load(Ordering::Relaxed),
+        CONNECT_GAVE_UP.load(Ordering::Relaxed),
+        half,
+        httpd,
+        SERVED.load(Ordering::Relaxed),
+        conns,
+        queued,
+        TCP_UNOWNED.load(Ordering::Relaxed),
+        TCP_TIMEWAIT_ABSORBED.load(Ordering::Relaxed),
+    )
 }
 
 /// An active TCP client connection: handshake, send, recv, teardown.
@@ -827,22 +1297,173 @@ pub struct TcpConn {
     syn_tries: u8,
     /// Retransmission rounds without progress (`tick`): the link is dead past a bound.
     stale_rounds: u8,
+    /// Our FIN went out (it occupies one sequence number: my_seq counts it).
+    fin_sent: bool,
+    /// The peer's FIN arrived (and was acknowledged).
+    peer_fin: bool,
+    /// The connection was reset by the peer.
+    reset: bool,
+    /// Owner id of this connection's receive queue (see `ConnQueue`).
+    id: u64,
 }
 
 impl Drop for TcpConn {
     /// An abandoned connection (a dropped fetch, a timed-out job) still tells the
-    /// peer and frees its port queue; otherwise the queue and the server-side
-    /// socket lingered until the port came round again.
+    /// peer and frees its queue; otherwise the queue and the server-side socket
+    /// lingered until the port came round again.
     fn drop(&mut self) {
-        if self.open {
-            self.emit(tcp::FIN | tcp::ACK, &[]);
-            self.open = false;
+        self.send_fin();
+        if self.fin_sent {
+            closed_recently(self.key());
         }
-        portq_remove(self.sport);
+        portq_unregister(self.key(), self.id);
     }
 }
 
+/// Four-tuples whose connection ended with our FIN in the last moments
+/// (a light TIME-WAIT): the peer's ACK of that FIN usually arrives after the
+/// queue is gone and is dropped quietly instead of being answered with a RST
+/// (one more frame through the userspace driver per connection).
+static CLOSED_RECENT: Mutex<([(ConnKey, u64); 64], usize)> =
+    Mutex::new(([(ConnKey { lport: 0, peer: Ipv4Addr([0; 4]), pport: 0 }, 0); 64], 0));
+/// How long (ticks) a closed four-tuple absorbs its stragglers.
+const CLOSED_RECENT_TICKS: u64 = 300;
+pub static TCP_TIMEWAIT_ABSORBED: AtomicU64 = AtomicU64::new(0);
+
+fn closed_recently(key: ConnKey) {
+    let _g = crate::sched::IfOffGuard::new();
+    let mut r = CLOSED_RECENT.lock();
+    let i = r.1;
+    r.0[i] = (key, crate::interrupts::ticks());
+    r.1 = (i + 1) % 64;
+}
+
+/// A bare ACK for a four-tuple that just closed: drop it without an answer.
+fn absorb_after_close(key: ConnKey, seg: &TcpSegment) -> bool {
+    if seg.flags & (tcp::SYN | tcp::FIN | tcp::RST) != 0 || !seg.payload.is_empty() || !seg.has(tcp::ACK) {
+        return false;
+    }
+    let now = crate::interrupts::ticks();
+    let _g = crate::sched::IfOffGuard::new();
+    let hit = CLOSED_RECENT.lock().0.iter().any(|(k, t)| *k == key && now.wrapping_sub(*t) <= CLOSED_RECENT_TICKS);
+    if hit {
+        TCP_TIMEWAIT_ABSORBED.fetch_add(1, Ordering::Relaxed);
+    }
+    hit
+}
+
 impl TcpConn {
+    /// A connection in CLOSED state, its queue registered (nothing sent yet).
+    #[allow(clippy::too_many_arguments)]
+    fn new_raw(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, server: Ipv4Addr, dport: u16, sport: u16, isn: u32, their_seq: u32) -> TcpConn {
+        let c = TcpConn {
+            my_mac,
+            my_ip,
+            nexthop,
+            server,
+            dport,
+            sport,
+            my_seq: isn,
+            their_seq,
+            snd_una: isn,
+            open: false,
+            rx_bytes: 0,
+            tx_bytes: 0,
+            rx: alloc::collections::VecDeque::new(),
+            retx: alloc::vec::Vec::new(),
+            ooo: alloc::vec::Vec::new(),
+            syn_sent: false,
+            syn_tries: 0,
+            stale_rounds: 0,
+            fin_sent: false,
+            peer_fin: false,
+            reset: false,
+            id: CONN_IDS.fetch_add(1, Ordering::Relaxed),
+        };
+        portq_register(c.key(), c.id);
+        c
+    }
+
+    fn key(&self) -> ConnKey {
+        ConnKey { lport: self.sport, peer: self.server, pport: self.dport }
+    }
+
+    /// Send our FIN once, if the connection was ever synchronized and was not
+    /// reset. Also after the PEER closed first (CLOSE-WAIT → LAST-ACK): before
+    /// BUG-026 a connection whose server closed first (every HTTP/1.0 fetch)
+    /// never sent its FIN, and the peer kept the four-tuple in FIN-WAIT-2 for
+    /// minutes (slirp: 10 min); a later connect on the same random port then
+    /// ran into that old control block.
+    fn send_fin(&mut self) {
+        if self.fin_sent || self.reset || !(self.open || self.peer_fin) {
+            self.open = false;
+            return;
+        }
+        self.emit(tcp::FIN | tcp::ACK, &[]);
+        self.my_seq = self.my_seq.wrapping_add(1);
+        self.fin_sent = true;
+        self.open = false;
+    }
+
+    /// Is our FIN out and acknowledged?
+    fn fin_acked(&self) -> bool {
+        self.fin_sent && self.snd_una == self.my_seq
+    }
+
+    /// `<SEQ=seq><CTL=RST>`: the answer to an unacceptable ACK in SYN-SENT.
+    fn emit_rst(&self, seq: u32) {
+        let seg = TcpSegment { src_port: self.sport, dst_port: self.dport, seq, ack: 0, flags: tcp::RST, window: 0, payload: alloc::vec::Vec::new() };
+        let iph = Ipv4Header { protocol: Protocol::Tcp, ttl: 64, src: self.my_ip, dst: self.server, total_length: 0, identification: 3 };
+        let frame = EthernetHeader { dst: self.nexthop, src: self.my_mac, ethertype: EtherType::Ipv4 }
+            .build(&iph.build(&seg.build(self.my_ip, self.server)));
+        tx(&frame);
+    }
+
+    /// A new local port and ISN for an active open that got no answer: the
+    /// peer may be dropping SYNs for the old four-tuple without a word.
+    fn reidentify(&mut self) {
+        portq_unregister(self.key(), self.id);
+        self.sport = alloc_port();
+        let isn = (rand_u64() as u32) | 1;
+        self.my_seq = isn;
+        self.snd_una = isn;
+        portq_register(self.key(), self.id);
+        CONNECT_NEW_PORT.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Our SYN was answered by a SYN-ACK acknowledging it: ESTABLISHED.
+    fn established(&mut self, irs: u32) {
+        self.my_seq = self.my_seq.wrapping_add(1);
+        self.snd_una = self.my_seq;
+        self.their_seq = irs.wrapping_add(1);
+        self.emit(tcp::ACK, &[]);
+        self.open = true;
+        self.syn_sent = false;
+    }
+
+    /// One segment in SYN-SENT (RFC 793): Some(true) established, Some(false)
+    /// refused, None keep waiting. A stale ACK from a half-open peer is answered
+    /// with a RST and the SYN goes out again right away.
+    fn syn_sent_segment(&mut self, s: &TcpSegment) -> Option<bool> {
+        use euronet::tcpopen::{syn_sent_input, SynSent};
+        match syn_sent_input(self.my_seq, s.flags, s.seq, s.ack) {
+            SynSent::Established { irs } => {
+                self.established(irs);
+                Some(true)
+            }
+            SynSent::Refused => {
+                self.syn_sent = false;
+                Some(false)
+            }
+            SynSent::SendReset { seq } => {
+                self.emit_rst(seq);
+                self.emit(tcp::SYN, &[]);
+                CONNECT_STALE_RST.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+            SynSent::Ignore => None,
+        }
+    }
     fn emit(&self, flags: u8, payload: &[u8]) {
         let seg = TcpSegment {
             src_port: self.sport,
@@ -856,13 +1477,14 @@ impl TcpConn {
         let iph = Ipv4Header { protocol: Protocol::Tcp, ttl: 64, src: self.my_ip, dst: self.server, total_length: 0, identification: 3 };
         let frame = EthernetHeader { dst: self.nexthop, src: self.my_mac, ethertype: EtherType::Ipv4 }
             .build(&iph.build(&seg.build(self.my_ip, self.server)));
-        nic::send(&frame);
+        tx(&frame);
     }
 
     /// Wait for the next TCP segment from our peer for this port.
     fn poll_seg(&self) -> Option<TcpSegment> {
-        for _ in 0..SPINS * 3 {
-            if let Some(seg) = portq_pop(self.sport, self.server) {
+        let mut w = RxWait::new(SPINS * 3, 300);
+        while w.next() {
+            if let Some(seg) = portq_pop(self.sport, self.server, self.dport) {
                 return Some(seg);
             }
         }
@@ -873,26 +1495,9 @@ impl TcpConn {
     /// with `poll_connect()`; the caller owns the timing (`resend_syn()`).
     pub fn connect_nowait(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, server: Ipv4Addr, dport: u16) -> TcpConn {
         let isn = (rand_u64() as u32) | 1;
-        let mut c = TcpConn {
-            my_mac,
-            my_ip,
-            nexthop,
-            server,
-            dport,
-            sport: alloc_port(),
-            my_seq: isn,
-            their_seq: 0,
-            snd_una: isn,
-            open: false,
-            rx_bytes: 0,
-            tx_bytes: 0,
-            rx: alloc::collections::VecDeque::new(),
-            retx: alloc::vec::Vec::new(),
-            ooo: alloc::vec::Vec::new(),
-            syn_sent: true,
-            syn_tries: 1,
-            stale_rounds: 0,
-        };
+        let mut c = TcpConn::new_raw(my_mac, my_ip, nexthop, server, dport, alloc_port(), isn, 0);
+        c.syn_sent = true;
+        c.syn_tries = 1;
         c.emit(tcp::SYN, &[]);
         c
     }
@@ -905,28 +1510,22 @@ impl TcpConn {
         if !self.syn_sent {
             return Some(false);
         }
-        while let Some(s) = portq_pop(self.sport, self.server) {
-            if s.has(tcp::RST) {
-                self.syn_sent = false;
-                return Some(false);
-            }
-            if s.has(tcp::SYN) && s.has(tcp::ACK) {
-                self.my_seq = self.my_seq.wrapping_add(1);
-                self.snd_una = self.my_seq;
-                self.their_seq = s.seq.wrapping_add(1);
-                self.emit(tcp::ACK, &[]);
-                self.open = true;
-                self.syn_sent = false;
-                return Some(true);
+        while let Some(s) = portq_pop(self.sport, self.server, self.dport) {
+            if let Some(r) = self.syn_sent_segment(&s) {
+                return Some(r);
             }
         }
         None
     }
     /// Retransmit the SYN (caller-timed); false once the attempts are exhausted.
+    /// The third SYN goes out from a fresh port and ISN, as in [`connect`].
     pub fn resend_syn(&mut self) -> bool {
-        if !self.syn_sent || self.syn_tries >= 4 {
+        if !self.syn_sent || self.syn_tries >= euronet::tcpopen::SynSchedule::ROUNDS as u8 {
             self.syn_sent = false;
             return false;
+        }
+        if euronet::tcpopen::SynSchedule::new_identity(self.syn_tries as usize) {
+            self.reidentify();
         }
         self.syn_tries += 1;
         self.emit(tcp::SYN, &[]);
@@ -944,10 +1543,21 @@ impl TcpConn {
     }
     /// Caller-timed retransmission of everything still unacknowledged (call about
     /// once a second while idle). After 8 rounds without an ACK the peer is gone.
+    /// A FIN that is not acknowledged yet goes out again too.
     pub fn tick(&mut self) {
         self.pump_nowait();
-        if self.retx.is_empty() || !self.open {
+        if self.reset {
+            return;
+        }
+        // Data still unacknowledged after our FIN (a half-closed connection,
+        // the httpd's answer) needs its retransmissions as much as an open one.
+        let fin_pending = self.fin_sent && !self.fin_acked();
+        let data_pending = !self.retx.is_empty() && (self.open || self.fin_sent);
+        if !data_pending && !fin_pending {
             self.stale_rounds = 0;
+            return;
+        }
+        if self.stale_rounds > 8 {
             return;
         }
         self.stale_rounds += 1;
@@ -955,6 +1565,19 @@ impl TcpConn {
             self.open = false;
             return;
         }
+        if data_pending {
+            self.retransmit_unacked();
+        }
+        if fin_pending {
+            let saved = self.my_seq;
+            self.my_seq = saved.wrapping_sub(1);
+            self.emit(tcp::FIN | tcp::ACK, &[]);
+            self.my_seq = saved;
+        }
+    }
+    /// Retransmit every segment still waiting for its acknowledgement (one
+    /// round of what `send` does after each timeout).
+    fn retransmit_unacked(&mut self) {
         for (seq, chunk) in self.retx.clone() {
             let saved = self.my_seq;
             self.my_seq = seq;
@@ -965,120 +1588,80 @@ impl TcpConn {
     /// FIN without waiting for the peer's answer (cooperative callers; `Drop`
     /// covers the rest).
     pub fn close_nowait(&mut self) {
-        if self.open {
-            self.emit(tcp::FIN | tcp::ACK, &[]);
-            self.my_seq = self.my_seq.wrapping_add(1);
-            self.open = false;
-        }
+        self.send_fin();
     }
 
-    /// 3-way handshake. Returns a connected socket, or None on timeout.
+    /// 3-way handshake. Returns a connected socket, or None on refusal/timeout.
+    ///
+    /// BUG-026: bounded in TIME (SynSchedule: 1 s + 2 s, then a fresh port and
+    /// ISN for another 1 s + 2 s), and RFC 793's SYN-SENT rules: an ACK that does
+    /// not acknowledge our SYN comes from a peer that still holds an old
+    /// connection on this four-tuple and is answered with a RST at its ACK, after
+    /// which the SYN is sent again; a RST with an acceptable ACK is a refusal and
+    /// ends the connect at once. Before, any answer that was not a SYN-ACK cost a
+    /// round, four rounds of 12 M spins each.
     pub fn connect(my_mac: MacAddr, my_ip: Ipv4Addr, nexthop: MacAddr, server: Ipv4Addr, dport: u16) -> Option<TcpConn> {
+        use euronet::tcpopen::SynSchedule;
         // NO drain() here: with the central demux, other sockets' frames are not
         // ours to discard (the old drain threw away in-flight traffic of every
         // live connection each time anyone dialed out).
         // Randomized ISN (RFC 6528) — a fixed ISN would let an off-path attacker
         // guess sequence numbers and inject RST/data into the connection.
-        // (Server-side `accept_from` already does this; now the client too.)
         let isn = (rand_u64() as u32) | 1;
-        let mut c = TcpConn {
-            my_mac,
-            my_ip,
-            nexthop,
-            server,
-            dport,
-            sport: alloc_port(),
-            my_seq: isn,
-            their_seq: 0,
-            snd_una: isn,
-            open: false,
-            rx_bytes: 0,
-            tx_bytes: 0,
-            rx: alloc::collections::VecDeque::new(),
-            retx: alloc::vec::Vec::new(),
-            ooo: alloc::vec::Vec::new(),
-            syn_sent: false,
-            syn_tries: 0,
-            stale_rounds: 0,
-        };
-        // SYN with retransmission: a lost SYN or SYN-ACK would otherwise make the
-        // handshake fail immediately. At most 4 attempts (poll_seg timeout per round).
-        let mut synack = None;
-        for _ in 0..4 {
-            c.emit(tcp::SYN, &[]); // (re)transmit the SYN
-            if let Some(s) = c.poll_seg() {
-                if s.has(tcp::SYN) && s.has(tcp::ACK) {
-                    synack = Some(s);
-                    break;
-                }
+        let t0 = time_us();
+        let mut c = TcpConn::new_raw(my_mac, my_ip, nexthop, server, dport, alloc_port(), isn, 0);
+        c.syn_sent = true;
+        for round in 0..SynSchedule::ROUNDS {
+            if SynSchedule::new_identity(round) {
+                c.reidentify();
             }
-        }
-        let synack = synack?;
-        c.my_seq = isn.wrapping_add(1);
-        c.snd_una = c.my_seq;
-        c.their_seq = synack.seq.wrapping_add(1);
-        c.emit(tcp::ACK, &[]);
-        c.open = true;
-        Some(c)
-    }
-
-    /// Passive open (server side): we received a SYN; send SYN-ACK and wait
-    /// for the closing ACK. Returns a connected server socket, or None.
-    /// `local_port` = the listening port, `syn` = the incoming SYN segment.
-    pub fn accept_from(
-        my_mac: MacAddr,
-        my_ip: Ipv4Addr,
-        peer_mac: MacAddr,
-        peer_ip: Ipv4Addr,
-        peer_port: u16,
-        local_port: u16,
-        syn: &TcpSegment,
-    ) -> Option<TcpConn> {
-        let isn = (rand_u64() as u32) | 1; // randomized ISN
-        let mut c = TcpConn {
-            my_mac,
-            my_ip,
-            nexthop: peer_mac,
-            server: peer_ip,
-            dport: peer_port,
-            sport: local_port,
-            my_seq: isn,
-            their_seq: syn.seq.wrapping_add(1),
-            snd_una: isn,
-            open: false,
-            rx_bytes: 0,
-            tx_bytes: 0,
-            rx: alloc::collections::VecDeque::new(),
-            retx: alloc::vec::Vec::new(),
-            ooo: alloc::vec::Vec::new(),
-            syn_sent: false,
-            syn_tries: 0,
-            stale_rounds: 0,
-        };
-        c.emit(tcp::SYN | tcp::ACK, &[]);
-        c.my_seq = isn.wrapping_add(1);
-        c.snd_una = c.my_seq;
-        for _ in 0..4 {
-            match c.poll_seg() {
-                Some(s) => {
-                    if s.has(tcp::RST) {
-                        return None;
-                    }
-                    if s.has(tcp::ACK) && s.ack == c.my_seq {
-                        c.open = true;
-                        // Buffer an included request (data on the ACK) right away.
-                        if !s.payload.is_empty() && s.seq == c.their_seq {
-                            c.their_seq = c.their_seq.wrapping_add(s.payload.len() as u32);
-                            c.rx.extend(s.payload.iter().copied());
-                            c.emit(tcp::ACK, &[]);
-                        }
+            c.syn_tries = round as u8 + 1;
+            c.emit(tcp::SYN, &[]); // (re)transmit the SYN
+            if round > 0 {
+                CONNECT_SYN_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+            }
+            let mut w = RxWait::new(SPINS * 3, SynSchedule::wait_ticks(round));
+            while w.next() {
+                let Some(s) = portq_pop(c.sport, c.server, c.dport) else { continue };
+                match c.syn_sent_segment(&s) {
+                    Some(true) => {
+                        connect_record(time_us().saturating_sub(t0));
                         return Some(c);
                     }
+                    Some(false) => {
+                        CONNECT_REFUSED.fetch_add(1, Ordering::Relaxed);
+                        return None;
+                    }
+                    None => {}
                 }
-                None => c.emit(tcp::SYN | tcp::ACK, &[]), // retransmit SYN-ACK
             }
         }
+        c.syn_sent = false;
+        CONNECT_GAVE_UP.fetch_add(1, Ordering::Relaxed);
+        connect_record(time_us().saturating_sub(t0));
         None
+    }
+
+    /// A passive connection in SYN-RCVD: the peer's SYN (`syn`) arrived on
+    /// `local_port`; its queue is registered, nothing is sent yet. `my_seq` holds
+    /// our ISN until the handshake completes (see `passive`).
+    fn new_passive(my_mac: MacAddr, my_ip: Ipv4Addr, peer_mac: MacAddr, peer_ip: Ipv4Addr, local_port: u16, syn: &TcpSegment) -> TcpConn {
+        let isn = (rand_u64() as u32) | 1; // randomized ISN
+        TcpConn::new_raw(my_mac, my_ip, peer_mac, peer_ip, syn.src_port, local_port, isn, syn.seq.wrapping_add(1))
+    }
+
+    /// SYN-RCVD: send (or resend) our SYN-ACK; `my_seq` is still the ISN.
+    fn emit_syn_ack(&self) {
+        self.emit(tcp::SYN | tcp::ACK, &[]);
+    }
+
+    /// SYN-RCVD → ESTABLISHED on the handshake's final ACK `seg` (it may carry
+    /// the first request bytes already).
+    fn passive_established(&mut self, seg: TcpSegment) {
+        self.my_seq = self.my_seq.wrapping_add(1);
+        self.snd_una = self.my_seq;
+        self.open = true;
+        let _ = self.handle_seg(seg);
     }
 
     /// Process all immediately available segments: buffer in-order payload,
@@ -1102,7 +1685,7 @@ impl TcpConn {
     /// waiting for more. The cooperative fetch (`HttpsFetch::step`) uses this so a
     /// step never spins: `net::service()` in the desktop loop keeps the NIC drained.
     fn pump_nowait(&mut self) {
-        while let Some(seg) = portq_pop(self.sport, self.server) {
+        while let Some(seg) = portq_pop(self.sport, self.server, self.dport) {
             if !self.handle_seg(seg) {
                 break;
             }
@@ -1136,6 +1719,7 @@ impl TcpConn {
                 self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
                 self.dport, self.sport);
             self.open = false;
+            self.reset = true;
             return false;
         }
         // Cumulative ACK from the peer: advance snd.una and drop
@@ -1205,13 +1789,31 @@ impl TcpConn {
             self.emit(tcp::ACK, &[]);
         }
         if seg.has(tcp::FIN) {
+            // Only the FIN at the next expected sequence closes the stream (a FIN
+            // behind a gap waits for its retransmission); a repeated FIN is
+            // acknowledged again.
+            let fin_seq = seg.seq.wrapping_add(seg.payload.len() as u32);
+            if self.peer_fin {
+                if fin_seq.wrapping_add(1) == self.their_seq {
+                    self.emit(tcp::ACK, &[]);
+                }
+                return false;
+            }
+            if fin_seq != self.their_seq {
+                return true;
+            }
             let t = crate::interrupts::ticks();
-            crate::serial_println!("[tcp] @{t} FIN from {}.{}.{}.{}:{} to sport {} — closing",
-                self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
-                self.dport, self.sport);
+            static FIN_LOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(200);
+            if FIN_LOG.load(Ordering::Relaxed) > 0 {
+                FIN_LOG.fetch_sub(1, Ordering::Relaxed);
+                crate::serial_println!("[tcp] @{t} FIN from {}.{}.{}.{}:{} to sport {} — closing",
+                    self.server.0[0], self.server.0[1], self.server.0[2], self.server.0[3],
+                    self.dport, self.sport);
+            }
             self.their_seq = self.their_seq.wrapping_add(1);
             self.emit(tcp::ACK, &[]);
             self.open = false;
+            self.peer_fin = true;
             return false;
         }
         true
@@ -1275,12 +1877,16 @@ impl TcpConn {
 
     /// Send a FIN and close the connection cleanly.
     pub fn close(&mut self) {
-        if self.open {
-            self.emit(tcp::FIN | tcp::ACK, &[]);
-            self.my_seq = self.my_seq.wrapping_add(1);
-            self.open = false;
-            // Wait briefly for the FIN/ACK from the peer.
-            let _ = self.poll_seg();
+        // We close first: wait briefly for the peer's answer (its ACK or its own
+        // FIN), as before. After the peer's FIN ours is the last word and is not
+        // waited for; an ACK that arrives after the queue is gone reaches
+        // service(), whose RST ends the peer's TIME-WAIT early.
+        let wait = self.open && !self.fin_sent;
+        self.send_fin();
+        if wait {
+            if let Some(s) = self.poll_seg() {
+                let _ = self.handle_seg(s);
+            }
         }
     }
 }
@@ -1586,7 +2192,7 @@ impl UdpSock {
         let iph = Ipv4Header { protocol: Protocol::Udp, ttl: 64, src: self.my_ip, dst: self.server, total_length: 0, identification: 4 };
         let frame = EthernetHeader { dst: self.nexthop, src: self.my_mac, ethertype: EtherType::Ipv4 }
             .build(&iph.build(&dg.build(self.my_ip, self.server)));
-        nic::send(&frame);
+        tx(&frame);
     }
 
     /// Wait for one datagram from the destination, back on our source port.
@@ -1618,8 +2224,41 @@ impl UdpSock {
         }
         alloc::vec::Vec::new()
     }
+    /// One non-blocking look with the same outcome as one round of [`recv`]:
+    /// `Some(datagram)`, `Some(empty)` when an ICMP unreachable bounced our
+    /// datagram back (fail fast), `None` when nothing arrived yet.
+    pub fn try_recv(&self) -> Option<alloc::vec::Vec<u8>> {
+        rx_route();
+        if let Some(d) = udpq_pop(self.sport, self.server) {
+            return Some(d);
+        }
+        for _ in 0..64 {
+            let rx = legacy_rx()?;
+            if let Ok((h, p)) = EthernetHeader::parse(&rx) {
+                if h.ethertype == EtherType::Ipv4 {
+                    if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
+                        if ih.protocol == Protocol::Udp && ih.src == self.server {
+                            if let Ok(dg) = UdpDatagram::parse(ipl, ih.src, ih.dst) {
+                                if dg.dst_port == self.sport {
+                                    return Some(dg.payload);
+                                }
+                            }
+                        } else if ih.protocol == Protocol::Icmp && ih.src == self.server {
+                            if let Some((IcmpError::DestUnreachable(_), orig)) = IcmpError::parse(ipl) {
+                                if embedded_udp_matches(&orig, self.sport, self.dport) {
+                                    return Some(alloc::vec::Vec::new());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
     pub fn recv(&self) -> alloc::vec::Vec<u8> {
-        for _ in 0..SPINS * 3 {
+        let mut w = RxWait::new(SPINS * 3, 300);
+        while w.next() {
             rx_route();
             if let Some(d) = udpq_pop(self.sport, self.server) {
                 return d;
@@ -1670,7 +2309,38 @@ enum Sock {
     Listen { port: u16, backlog: usize, queue: alloc::collections::VecDeque<TcpConn> },
 }
 
-static SOCKETS: Mutex<[Option<Sock>; MAX_SOCK]> = Mutex::new([const { None }; MAX_SOCK]);
+// J1 (fine-grained locking): one lock PER SOCKET instead of one mutex around the
+// whole table. A blocking recv on one connection (which can spin for seconds
+// pumping the NIC) no longer holds every other socket hostage, and pump_all locks
+// one connection at a time. `Mode::Irq`: socket calls run inside syscalls (IF=0
+// via FMASK) AND from task context, so by the IRQSAVE rule every holder runs with
+// interrupts off. No path holds two socket locks at once.
+static SITE_SOCKET: eurolock::LockSite = eurolock::LockSite::new("net.socket (per-socket)", eurolock::LockClass::NetSocket);
+static SOCKETS: [eurolock::sync::Mutex<Option<Sock>>; MAX_SOCK] =
+    [const { eurolock::sync::Mutex::new_site(&SITE_SOCKET, eurolock::Mode::Irq, None) }; MAX_SOCK];
+
+/// Slots that may hold a TCP connection: set (under the slot lock) when a
+/// connection is stored, cleared lazily by `pump_all` when it finds the slot
+/// is no longer one. Lets the desktop's periodic pump visit the live
+/// connections instead of locking all MAX_SOCK slots on every pass.
+static CONN_HINT: [core::sync::atomic::AtomicU64; MAX_SOCK.div_ceil(64)] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; MAX_SOCK.div_ceil(64)];
+
+fn conn_hint_set(i: usize) {
+    CONN_HINT[i / 64].fetch_or(1 << (i % 64), core::sync::atomic::Ordering::Release);
+}
+
+fn conn_hint_clear(i: usize) {
+    CONN_HINT[i / 64].fetch_and(!(1 << (i % 64)), core::sync::atomic::Ordering::Release);
+}
+
+/// Indexes whose hint bit is set.
+fn conn_hint_slots() -> impl Iterator<Item = usize> {
+    (0..CONN_HINT.len()).flat_map(|w| {
+        let bits = CONN_HINT[w].load(core::sync::atomic::Ordering::Acquire);
+        (0..64).filter(move |b| bits & (1 << b) != 0).map(move |b| w * 64 + b)
+    })
+}
 
 /// Has this socket fd been connected (TCP established or UDP peer set)?
 /// A Reserved slot has not — sendto() with an explicit destination uses this
@@ -1680,7 +2350,7 @@ pub fn sock_is_connected(fd: u64) -> bool {
         return false;
     }
     matches!(
-        SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize],
+        *SOCKETS[(fd - SOCK_FD_BASE) as usize].lock(),
         Some(Sock::Conn(_)) | Some(Sock::Udp(_)) | Some(Sock::LocalDns { .. })
     )
 }
@@ -1692,13 +2362,34 @@ pub fn is_sock_fd(fd: u64) -> bool {
 
 /// socket(AF_INET, SOCK_STREAM): reserve a slot, return the fd number.
 /// -1 if the table is full.
-pub fn sock_open(dgram: bool) -> u64 {
-    let mut t = SOCKETS.lock();
-    for (i, slot) in t.iter_mut().enumerate() {
-        if slot.is_none() {
-            *slot = Some(Sock::Reserved { dgram, bind_port: 0 });
-            return SOCK_FD_BASE + i as u64;
+/// Socket-table slots in use (the [churn-net] leak counter).
+pub fn sockets_in_use() -> usize {
+    SOCKETS.iter().filter(|s| s.lock().is_some()).count()
+}
+
+/// Claim the first free slot for `s` (each slot checked and filled under its own
+/// lock, so two cores can never claim the same slot). A slot whose lock is held
+/// right now is skipped: it is in use, or another core is claiming it, and
+/// waiting would tie socket() to some other socket's blocking recv. The index,
+/// or None if full.
+fn sock_alloc(s: Sock) -> Option<usize> {
+    let mut s = Some(s);
+    for (i, slot) in SOCKETS.iter().enumerate() {
+        let Some(mut g) = slot.try_lock() else { continue };
+        if g.is_none() {
+            if matches!(s, Some(Sock::Conn(_))) {
+                conn_hint_set(i);
+            }
+            *g = s.take();
+            return Some(i);
         }
+    }
+    None
+}
+
+pub fn sock_open(dgram: bool) -> u64 {
+    if let Some(i) = sock_alloc(Sock::Reserved { dgram, bind_port: 0 }) {
+        return SOCK_FD_BASE + i as u64;
     }
     // Say so. A full table used to be silent and the caller's EPERM was read as
     // a permission or resolver problem for three runs.
@@ -1716,6 +2407,12 @@ pub fn sock_open(dgram: bool) -> u64 {
 /// connect(fd, ip, port): for TCP a 3-way handshake, for UDP just
 /// remember the destination. 0 / -1.
 pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
+    sock_connect_as(fd, server, port, &crate::ring3::current_app())
+}
+
+/// [`sock_connect`] for a caller whose app identity is not the foreground
+/// program (a scheduled background process): EuroGuard decides on `app`.
+pub fn sock_connect_as(fd: u64, server: Ipv4Addr, port: u16, app: &str) -> u64 {
     {
         use core::sync::atomic::{AtomicU32, Ordering};
         static CONN_DIAG: AtomicU32 = AtomicU32::new(200);
@@ -1732,18 +2429,17 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     // machine; EuroGuard governs the FORWARDED query inside sock_send instead).
     {
         let i = (fd - SOCK_FD_BASE) as usize;
-        let is_dgram = matches!(SOCKETS.lock()[i], Some(Sock::Reserved { dgram: true, .. }));
+        let is_dgram = matches!(*SOCKETS[i].lock(), Some(Sock::Reserved { dgram: true, .. }));
         if is_dgram && server.0 == [127, 0, 0, 1] && port == 53 {
-            SOCKETS.lock()[i] = Some(Sock::LocalDns { rx: alloc::collections::VecDeque::new() });
+            *SOCKETS[i].lock() = Some(Sock::LocalDns { rx: alloc::collections::VecDeque::new() });
             return 0;
         }
     }
     // EuroGuard (Track 7, Phase 7.1): let the policy engine evaluate this
     // outgoing connection BEFORE a packet leaves. A blocked app
     // gets -EPERM and the request is audited — a hard policy boundary.
-    let app = crate::ring3::current_app();
     let dst = alloc::format!("{}.{}.{}.{}:{port}", server.0[0], server.0[1], server.0[2], server.0[3]);
-    if crate::euroguard::check_connect(&app, server, port) == crate::euroguard::Decision::Block {
+    if crate::euroguard::check_connect(app, server, port) == crate::euroguard::Decision::Block {
         // 3D-6: a blocked connection is a policy violation in the hash-chained log.
         crate::serial_println!("[conn] BLOCKED by EuroGuard: {dst} (app {app:?})");
         crate::audit::record_connection(&dst, false);
@@ -1763,8 +2459,8 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     let i = (fd - SOCK_FD_BASE) as usize;
     // Determine the socket type without holding the lock during connect().
     let dgram = {
-        let t = SOCKETS.lock();
-        match t[i] {
+        let t = SOCKETS[i].lock();
+        match *t {
             Some(Sock::Reserved { dgram, .. }) => dgram,
             _ => return (-1i64) as u64,
         }
@@ -1772,7 +2468,7 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
     if dgram {
         let s = UdpSock { my_mac: cfg.my_mac, my_ip: cfg.my_ip, nexthop, server, dport: port, sport: alloc_port() };
         udpq_register(s.sport);
-        SOCKETS.lock()[i] = Some(Sock::Udp(s));
+        *SOCKETS[i].lock() = Some(Sock::Udp(s));
         0
     } else {
         let conn = match TcpConn::connect(cfg.my_mac, cfg.my_ip, nexthop, server, port) {
@@ -1789,7 +2485,11 @@ pub fn sock_connect(fd: u64, server: Ipv4Addr, port: u16) -> u64 {
         if server.0 == [151, 240, 77, 50] {
             crate::ring3::arm_sys_trace(400);
         }
-        SOCKETS.lock()[i] = Some(Sock::Conn(conn));
+        {
+            let mut g = SOCKETS[i].lock();
+            *g = Some(Sock::Conn(conn));
+            conn_hint_set(i);
+        }
         0
     }
 }
@@ -1843,8 +2543,8 @@ pub fn sock_bind(fd: u64, port: u16) -> u64 {
         return (-1i64) as u64;
     }
     let i = (fd - SOCK_FD_BASE) as usize;
-    let mut t = SOCKETS.lock();
-    match &mut t[i] {
+    let mut t = SOCKETS[i].lock();
+    match &mut *t {
         Some(Sock::Reserved { dgram: false, bind_port }) => {
             *bind_port = port;
             0
@@ -1859,14 +2559,55 @@ pub fn sock_listen(fd: u64, backlog: usize) -> u64 {
         return (-1i64) as u64;
     }
     let i = (fd - SOCK_FD_BASE) as usize;
-    let mut t = SOCKETS.lock();
-    match t[i] {
+    let mut t = SOCKETS[i].lock();
+    match *t {
         Some(Sock::Reserved { dgram: false, bind_port }) if bind_port != 0 => {
-            t[i] = Some(Sock::Listen { port: bind_port, backlog: backlog.clamp(1, 32), queue: alloc::collections::VecDeque::new() });
+            *t = Some(Sock::Listen { port: bind_port, backlog: backlog.clamp(1, 32), queue: alloc::collections::VecDeque::new() });
+            LISTENERS.fetch_add(1, Ordering::Relaxed);
+            drop(t);
+            worker::kick(); // see httpd_toggle
             0
         }
         _ => (-1i64) as u64,
     }
+}
+
+/// LISTEN sockets open now (the SYN path skips the socket table when 0).
+static LISTENERS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The listener on `port`: (backlog, connections waiting in its accept queue).
+fn listener_info(port: u16) -> Option<(usize, usize)> {
+    if LISTENERS.load(Ordering::Relaxed) == 0 {
+        return None;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    for s in SOCKETS.iter() {
+        if let Some(Sock::Listen { port: p, backlog, queue }) = &*s.lock() {
+            if *p == port {
+                return Some((*backlog, queue.len()));
+            }
+        }
+    }
+    None
+}
+
+/// Hand a connection whose handshake completed to the listener on `port`.
+/// Gives it back when the listener is gone or its accept queue is full.
+fn listener_push(port: u16, conn: TcpConn) -> Result<(), TcpConn> {
+    let _g = crate::sched::IfOffGuard::new();
+    for s in SOCKETS.iter() {
+        let mut g = s.lock();
+        if let Some(Sock::Listen { port: p, backlog, queue }) = &mut *g {
+            if *p == port {
+                if queue.len() < *backlog {
+                    queue.push_back(conn);
+                    return Ok(());
+                }
+                return Err(conn);
+            }
+        }
+    }
+    Err(conn)
 }
 
 /// accept(fd): take the next completed connection from the accept queue and
@@ -1881,29 +2622,52 @@ pub fn sock_accept(fd: u64) -> u64 {
     // is in scheduler ticks (100 Hz guest time); `service()` is non-blocking, so
     // we pump until the clock reaches the upper bound.
     let deadline = crate::interrupts::ticks() + 400; // ~4 s guest-time upper bound
-    while crate::interrupts::ticks() < deadline {
+    // With interrupts off and nobody sleeping the tick clock stands still: a
+    // spin ceiling ends the wait then. A caller that may sleep does, a tick at a
+    // time (BUG-019): the handshakes complete without it (passive::step from
+    // service(), here and in the desktop loop), and a completed one wakes it.
+    let sleeping_caller = may_sleep();
+    let mut spins: u64 = 0;
+    while crate::interrupts::ticks() < deadline && spins < 20_000_000 {
+        spins += 1;
+        if sleeping_caller && spins > 1 {
+            block_tick();
+        }
         // Pop a ready connection (hold the lock briefly).
         let conn = {
-            let mut t = SOCKETS.lock();
-            match &mut t[i] {
+            let mut t = SOCKETS[i].lock();
+            match &mut *t {
                 Some(Sock::Listen { queue, .. }) => queue.pop_front(),
                 _ => return (-1i64) as u64, // no listening socket
             }
         };
         if let Some(conn) = conn {
-            let mut t = SOCKETS.lock();
-            for (j, slot) in t.iter_mut().enumerate() {
-                if slot.is_none() {
-                    *slot = Some(Sock::Conn(conn));
-                    return SOCK_FD_BASE + j as u64;
-                }
-            }
-            return (-1i64) as u64; // socket table full
+            return match sock_alloc(Sock::Conn(conn)) {
+                Some(j) => SOCK_FD_BASE + j as u64,
+                None => (-1i64) as u64, // socket table full
+            };
         }
         // No connection ready: process incoming packets (may complete one).
         service();
     }
     (-1i64) as u64
+}
+
+/// accept() for an O_NONBLOCK listener: a completed connection if one is
+/// queued, else -1 at once.
+pub fn sock_accept_nowait(fd: u64) -> u64 {
+    if !is_sock_fd(fd) {
+        return (-1i64) as u64;
+    }
+    service();
+    let conn = match &mut *SOCKETS[(fd - SOCK_FD_BASE) as usize].lock() {
+        Some(Sock::Listen { queue, .. }) => queue.pop_front(),
+        _ => None,
+    };
+    match conn.and_then(|c| sock_alloc(Sock::Conn(c))) {
+        Some(j) => SOCK_FD_BASE + j as u64,
+        None => (-1i64) as u64,
+    }
 }
 
 /// Resolve a hostname (or "a.b.c.d") to an IPv4 address via DNS.
@@ -1920,6 +2684,11 @@ pub fn resolve(host: &str) -> Option<Ipv4Addr> {
 
 /// send(fd, data): number of bytes sent, or -1.
 pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
+    sock_send_as(fd, data, &crate::ring3::current_app())
+}
+
+/// [`sock_send`] under the app identity `app` (EuroGuard DNS filter, statistics).
+pub fn sock_send_as(fd: u64, data: &[u8], app: &str) -> u64 {
     if !is_sock_fd(fd) {
         return (-1i64) as u64;
     }
@@ -1933,11 +2702,24 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
         }
     }
     let i = (fd - SOCK_FD_BASE) as usize;
+    // Decided before the lock: under it nothing may sleep.
+    let sleeping_caller = rx_should_block();
     let sent = {
-        let mut t = SOCKETS.lock();
-        match &mut t[i] {
+        let mut t = SOCKETS[i].lock();
+        match &mut *t {
             Some(Sock::Conn(c)) => {
-                c.send(data);
+                if sleeping_caller {
+                    // Put the data on the wire under the lock; wait for the
+                    // acknowledgement WITHOUT it (that wait sleeps).
+                    if !c.open {
+                        return (-32i64) as u64; // -EPIPE
+                    }
+                    c.send_nowait(data);
+                    drop(t);
+                    tcp_wait_acked(i);
+                } else {
+                    c.send(data);
+                }
                 data.len() as u64
             }
             Some(Sock::Udp(u)) => {
@@ -1945,8 +2727,8 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
                 // and block trackers/ads before the query goes onto the network.
                 if u.dport == 53 {
                     if let Some(name) = dns::parse_query_name(data) {
-                        let blocked = crate::euroguard::check_dns(&crate::ring3::current_app(), &name)
-                            == crate::euroguard::Decision::Block;
+                        let blocked = crate::euroguard::check_dns(app, &name) == crate::euroguard::Decision::Block
+                            || crate::apppolicy::check_dns(app, &name) == Some(false);
                         dns_ledger(&alloc::format!("query {name}{}", if blocked { " BLOCKED" } else { "" }), u.sport);
                         if blocked {
                             // Blocked: the app gets NXDOMAIN at once, not silence. A query
@@ -1977,15 +2759,15 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
                 drop(t);
                 // EuroGuard DNS filtering applies to the kernel resolver too.
                 if let Some(name) = dns::parse_query_name(&query) {
-                    if crate::euroguard::check_dns(&crate::ring3::current_app(), &name)
+                    if crate::euroguard::check_dns(app, &name)
                         == crate::euroguard::Decision::Block
                     {
                         return query.len() as u64; // swallowed, no reply
                     }
                 }
                 let answer = local_dns_answer(&query);
-                let mut t = SOCKETS.lock();
-                if let Some(Sock::LocalDns { rx }) = &mut t[i] {
+                let mut t = SOCKETS[i].lock();
+                if let Some(Sock::LocalDns { rx }) = &mut *t {
                     if let Some(a) = answer {
                         rx.push_back(a);
                     }
@@ -1996,8 +2778,35 @@ pub fn sock_send(fd: u64, data: &[u8]) -> u64 {
         }
     };
     // EuroGuard statistic (Phase 7.4): bytes sent per app.
-    crate::euroguard::record_bytes(&crate::ring3::current_app(), sent, 0);
+    crate::euroguard::record_bytes(app, sent, 0);
     sent
+}
+
+/// Blocking-mode TCP send, after the data went out under the socket lock: wait
+/// for the acknowledgement with the lock released (sleeping, see RxWait), and
+/// retransmit what is still unacknowledged after each second without it, five
+/// rounds at most: the bound of `TcpConn::send`, in ticks instead of spins.
+fn tcp_wait_acked(i: usize) {
+    for _round in 0..5 {
+        let mut w = RxWait::new(SPINS * 3, 100);
+        while w.next() {
+            let mut t = SOCKETS[i].lock();
+            match &mut *t {
+                Some(Sock::Conn(c)) => {
+                    c.pump_nowait();
+                    if c.retx.is_empty() || !c.open {
+                        return;
+                    }
+                }
+                _ => return,
+            }
+        }
+        let mut t = SOCKETS[i].lock();
+        match &mut *t {
+            Some(Sock::Conn(c)) if c.open => c.retransmit_unacked(),
+            _ => return,
+        }
+    }
 }
 
 /// Parse one DNS query and produce a response: /etc/hosts first, then a real
@@ -2055,13 +2864,59 @@ fn local_dns_answer(q: &[u8]) -> Option<alloc::vec::Vec<u8>> {
 /// recv(fd, max): copy up to `max` received bytes into `out`; return the count
 /// (0 = connection closed and empty).
 pub fn sock_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
+    sock_recv_as(fd, max, &crate::ring3::current_app())
+}
+
+/// Blocking-mode receive with the socket lock released between looks: TCP
+/// waits until data arrives or the peer closes (30 s bound; unacknowledged
+/// data is retransmitted once a second meanwhile), UDP until a datagram from
+/// the peer or an ICMP unreachable arrives (3 s, the bound of `UdpSock::recv`).
+fn sock_recv_blocking(i: usize, max: usize) -> alloc::vec::Vec<u8> {
+    let tcp = matches!(*SOCKETS[i].lock(), Some(Sock::Conn(_)));
+    let mut w = RxWait::new(SPINS * 3, if tcp { 3000 } else { 300 });
+    let mut last_tick = crate::interrupts::ticks();
+    while w.next() {
+        let mut t = SOCKETS[i].lock();
+        match &mut *t {
+            Some(Sock::Conn(c)) => {
+                let d = c.recv_nowait(max);
+                if !d.is_empty() || !c.open {
+                    return d;
+                }
+                let now = crate::interrupts::ticks();
+                if now.wrapping_sub(last_tick) >= 100 {
+                    last_tick = now;
+                    c.tick();
+                }
+            }
+            Some(Sock::Udp(u)) => {
+                if let Some(mut d) = u.try_recv() {
+                    d.truncate(max);
+                    return d;
+                }
+            }
+            Some(Sock::LocalDns { rx }) => {
+                let mut d = rx.pop_front().unwrap_or_default();
+                d.truncate(max);
+                return d;
+            }
+            _ => return alloc::vec::Vec::new(),
+        }
+    }
+    alloc::vec::Vec::new()
+}
+
+/// [`sock_recv`] under the app identity `app` (statistics).
+pub fn sock_recv_as(fd: u64, max: usize, app: &str) -> alloc::vec::Vec<u8> {
     if !is_sock_fd(fd) {
         return alloc::vec::Vec::new();
     }
     let i = (fd - SOCK_FD_BASE) as usize;
-    let data = {
-        let mut t = SOCKETS.lock();
-        match &mut t[i] {
+    let data = if rx_should_block() {
+        sock_recv_blocking(i, max)
+    } else {
+        let mut t = SOCKETS[i].lock();
+        match &mut *t {
             Some(Sock::Conn(c)) => c.recv(max),
             Some(Sock::Udp(u)) => {
                 let mut d = u.recv();
@@ -2077,7 +2932,7 @@ pub fn sock_recv(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
         }
     };
     // EuroGuard statistic (Phase 7.4): bytes received per app.
-    crate::euroguard::record_bytes(&crate::ring3::current_app(), 0, data.len() as u64);
+    crate::euroguard::record_bytes(app, 0, data.len() as u64);
     {
         use core::sync::atomic::{AtomicU32, Ordering};
         static RECV_DIAG: AtomicU32 = AtomicU32::new(80);
@@ -2113,8 +2968,8 @@ pub fn sock_peek_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
         return alloc::vec::Vec::new();
     }
     let i = (fd - SOCK_FD_BASE) as usize;
-    let mut t = SOCKETS.lock();
-    match &mut t[i] {
+    let mut t = SOCKETS[i].lock();
+    match &mut *t {
         Some(Sock::Conn(c)) => c.peek_nowait(max),
         Some(Sock::Udp(u)) => {
             // A datagram cannot be put back: take it, then keep it for the read.
@@ -2132,19 +2987,24 @@ pub fn sock_peek_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
 }
 /// Put a datagram back at the head of its port's queue (a peek).
 fn udpq_unread(sport: u16, server: Ipv4Addr, d: &[u8]) {
-    let mut t = UDPQ.lock();
+    let mut t = lk(&UDPQ);
     if let Some((_, q)) = t.iter_mut().find(|(p, _)| *p == sport) {
         q.push_front((server, d.to_vec()));
     }
 }
 pub fn sock_recv_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
+    sock_recv_nowait_as(fd, max, &crate::ring3::current_app())
+}
+
+/// [`sock_recv_nowait`] under the app identity `app` (statistics).
+pub fn sock_recv_nowait_as(fd: u64, max: usize, app: &str) -> alloc::vec::Vec<u8> {
     if !is_sock_fd(fd) {
         return alloc::vec::Vec::new();
     }
     let i = (fd - SOCK_FD_BASE) as usize;
     let data = {
-        let mut t = SOCKETS.lock();
-        match &mut t[i] {
+        let mut t = SOCKETS[i].lock();
+        match &mut *t {
             Some(Sock::Conn(c)) => c.recv_nowait(max),
             Some(Sock::Udp(u)) => {
                 let mut d = u.recv_nowait();
@@ -2159,7 +3019,7 @@ pub fn sock_recv_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
             _ => alloc::vec::Vec::new(),
         }
     };
-    crate::euroguard::record_bytes(&crate::ring3::current_app(), 0, data.len() as u64);
+    crate::euroguard::record_bytes(app, 0, data.len() as u64);
     data
 }
 
@@ -2169,23 +3029,28 @@ pub fn sock_recv_nowait(fd: u64, max: usize) -> alloc::vec::Vec<u8> {
 /// `TcpConn::send` waited up to five rounds for the ACK with interrupts off.
 /// UDP and the loopback resolver never waited, so they keep their path.
 pub fn sock_send_nowait(fd: u64, data: &[u8]) -> u64 {
+    sock_send_nowait_as(fd, data, &crate::ring3::current_app())
+}
+
+/// [`sock_send_nowait`] under the app identity `app`.
+pub fn sock_send_nowait_as(fd: u64, data: &[u8], app: &str) -> u64 {
     if !is_sock_fd(fd) {
         return (-1i64) as u64;
     }
     let i = (fd - SOCK_FD_BASE) as usize;
-    let is_conn = matches!(SOCKETS.lock()[i], Some(Sock::Conn(_)));
+    let is_conn = matches!(*SOCKETS[i].lock(), Some(Sock::Conn(_)));
     if !is_conn {
-        return sock_send(fd, data);
+        return sock_send_as(fd, data, app);
     }
-    let mut t = SOCKETS.lock();
-    if let Some(Sock::Conn(c)) = &mut t[i] {
+    let mut t = SOCKETS[i].lock();
+    if let Some(Sock::Conn(c)) = &mut *t {
         if !c.open {
             return (-32i64) as u64; // -EPIPE
         }
         c.send_nowait(data);
     }
     drop(t);
-    crate::euroguard::record_bytes(&crate::ring3::current_app(), data.len() as u64, 0);
+    crate::euroguard::record_bytes(app, data.len() as u64, 0);
     data.len() as u64
 }
 
@@ -2196,7 +3061,7 @@ pub fn sock_is_tcp(fd: u64) -> bool {
     if !is_sock_fd(fd) {
         return false;
     }
-    matches!(&SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize], Some(Sock::Conn(_)))
+    matches!(&*SOCKETS[(fd - SOCK_FD_BASE) as usize].lock(), Some(Sock::Conn(_)))
 }
 
 /// The four-tuple of a connected socket, for getsockname/getpeername:
@@ -2205,7 +3070,7 @@ pub fn sock_names(fd: u64) -> Option<(Ipv4Addr, u16, Ipv4Addr, u16)> {
     if !is_sock_fd(fd) {
         return None;
     }
-    match &SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize] {
+    match &*SOCKETS[(fd - SOCK_FD_BASE) as usize].lock() {
         Some(Sock::Conn(c)) => Some((c.my_ip, c.sport, c.server, c.dport)),
         Some(Sock::Udp(u)) => Some((u.my_ip, u.sport, u.server, u.dport)),
         Some(Sock::LocalDns { .. }) => {
@@ -2231,7 +3096,7 @@ pub fn sock_peer_desc(fd: u64) -> alloc::string::String {
     if !is_sock_fd(fd) {
         return alloc::string::String::from("?");
     }
-    match &SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize] {
+    match &*SOCKETS[(fd - SOCK_FD_BASE) as usize].lock() {
         Some(Sock::Conn(c)) => alloc::format!(
             "{}.{}.{}.{}:{}", c.server.0[0], c.server.0[1], c.server.0[2], c.server.0[3], c.dport),
         Some(Sock::Udp(_)) => alloc::string::String::from("udp"),
@@ -2244,7 +3109,7 @@ pub fn sock_eof(fd: u64) -> bool {
     if !is_sock_fd(fd) {
         return false;
     }
-    match &SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize] {
+    match &*SOCKETS[(fd - SOCK_FD_BASE) as usize].lock() {
         Some(Sock::Conn(c)) => c.rx.is_empty() && !c.open,
         None => true,
         _ => false, // UDP / LocalDns / Listen never signal EOF
@@ -2260,7 +3125,7 @@ pub fn sock_writable(fd: u64) -> bool {
         return false;
     }
     matches!(
-        &SOCKETS.lock()[(fd - SOCK_FD_BASE) as usize],
+        &*SOCKETS[(fd - SOCK_FD_BASE) as usize].lock(),
         Some(Sock::Conn(_)) | Some(Sock::Udp(_)) | Some(Sock::LocalDns { .. })
     )
 }
@@ -2274,8 +3139,8 @@ pub fn sock_readable(fd: u64) -> bool {
         return false;
     }
     service();
-    let mut t = SOCKETS.lock();
-    match &mut t[(fd - SOCK_FD_BASE) as usize] {
+    let mut t = SOCKETS[(fd - SOCK_FD_BASE) as usize].lock();
+    match &mut *t {
         Some(Sock::Conn(c)) => {
             // pump_nowait, never pump(1): pump(1) calls poll_seg, which is
             // SPINS*3 = 12 million busy iterations when nothing is queued, and
@@ -2306,22 +3171,38 @@ pub fn sock_close(fd: u64) -> u64 {
         return (-1i64) as u64;
     }
     let i = (fd - SOCK_FD_BASE) as usize;
-    let mut t = SOCKETS.lock();
-    if let Some(Sock::Conn(c)) = &mut t[i] {
+    // Decided before the lock: under it nothing may sleep.
+    let sleeping_caller = rx_should_block();
+    let mut t = SOCKETS[i].lock();
+    if let Some(Sock::Conn(c)) = &mut *t {
         // One line per connection, uncapped: what it did before chrome let go of
         // it. The [conn] connect log is capped at 24 per run and hid every event
         // around run 52's burst of ERR_SSL_PROTOCOL_ERROR.
         crate::serial_println!("[conn] fd{fd} closed {}.{}.{}.{}:{} sport {}: rx {} B, tx {} B, open={}, unacked={}",
             c.server.0[0], c.server.0[1], c.server.0[2], c.server.0[3], c.dport, c.sport,
             c.rx_bytes, c.tx_bytes, c.open, c.retx.len());
-        c.close();
-        portq_remove(c.sport);
+        // `close` waits briefly for the peer's FIN/ACK under this lock; a caller
+        // whose waits sleep sends the FIN without waiting (the answer is not used).
+        if sleeping_caller {
+            c.close_nowait();
+        } else {
+            c.close();
+        }
     }
-    if let Some(Sock::Udp(u)) = &t[i] {
-        portq_remove(u.sport);
+    if let Some(Sock::Udp(u)) = &*t {
         udpq_remove(u.sport);
     }
-    t[i] = None;
+    let listen_port = match &*t {
+        Some(Sock::Listen { port, .. }) => Some(*port),
+        _ => None,
+    };
+    // The connection's Drop sends what is still owed and frees its queue.
+    *t = None;
+    drop(t);
+    if let Some(port) = listen_port {
+        LISTENERS.fetch_sub(1, Ordering::Relaxed);
+        passive::listener_closed(port);
+    }
     0
 }
 
@@ -2359,27 +3240,34 @@ pub fn sock_poll(fds: &[u64], deadline_ticks: u64) -> alloc::vec::Vec<(u64, bool
     // Spin ceiling alongside the tick deadline: if the timer tick for whatever reason
     // does not advance, poll() must NEVER block forever.
     let mut spins: u64 = 0;
+    // A caller whose waits sleep (userspace NIC driver, lock-free context) looks
+    // without waiting under the socket locks and sleeps a tick between rounds.
+    let sleeping_caller = rx_should_block();
     loop {
         service(); // process incoming packets → fills Listen queues
         {
-            // Pump Conn sockets so in-flight data lands in their rx buffer.
-            let mut t = SOCKETS.lock();
+            // Pump Conn sockets so in-flight data lands in their rx buffer
+            // (one socket lock at a time).
             for &fd in fds {
                 if is_sock_fd(fd) {
-                    if let Some(Sock::Conn(c)) = &mut t[(fd - SOCK_FD_BASE) as usize] {
+                    let mut t = SOCKETS[(fd - SOCK_FD_BASE) as usize].lock();
+                    if let Some(Sock::Conn(c)) = &mut *t {
                         if c.rx.is_empty() && c.open {
-                            c.pump(1);
+                            if sleeping_caller {
+                                c.pump_nowait();
+                            } else {
+                                c.pump(1);
+                            }
                         }
                     }
                 }
             }
         }
         let ready: alloc::vec::Vec<(u64, bool)> = {
-            let t = SOCKETS.lock();
             fds.iter()
                 .map(|&fd| {
                     let r = is_sock_fd(fd)
-                        && match &t[(fd - SOCK_FD_BASE) as usize] {
+                        && match &*SOCKETS[(fd - SOCK_FD_BASE) as usize].lock() {
                             Some(Sock::Conn(c)) => !c.rx.is_empty() || !c.open, // data or EOF
                             Some(Sock::Listen { queue, .. }) => !queue.is_empty(),
                             Some(Sock::LocalDns { rx }) => !rx.is_empty(),
@@ -2396,6 +3284,9 @@ pub fn sock_poll(fds: &[u64], deadline_ticks: u64) -> alloc::vec::Vec<(u64, bool
         {
             return ready;
         }
+        if sleeping_caller {
+            block_tick();
+        }
     }
 }
 
@@ -2404,34 +3295,38 @@ pub fn sock_poll(fds: &[u64], deadline_ticks: u64) -> alloc::vec::Vec<(u64, bool
 // the TCP/IP SOCKETS table. The building block for the live display server (H2:
 // compositor ↔ app) and IPC-heavy apps.
 // ---------------------------------------------------------------------------
-static UNIX_SWITCH: Mutex<euronet::unix::Switchboard> =
-    Mutex::new(euronet::unix::Switchboard::new());
+// J1 (fine-grained locking): per-connection locks. The listener table and the
+// connection table are separate IRQ-safe locks and every stream has its own,
+// so two processes streaming over two sockets no longer serialise on one
+// global switchboard mutex (and the switchboard is IRQSAVE-correct for the
+// syscall path, which runs with IF=0).
+static UNIX_SWITCH: euronet::unix::SharedSwitchboard = euronet::unix::SharedSwitchboard::new();
 
 pub use euronet::unix::{Endpoint as UnixEndpoint, UnixError};
 
 /// Bind+listen on an AF_UNIX path (server side).
 pub fn unix_bind_listen(path: &str, backlog: usize) -> Result<(), UnixError> {
-    UNIX_SWITCH.lock().bind_listen(path, backlog)
+    UNIX_SWITCH.bind_listen(path, backlog)
 }
 /// Connect to an AF_UNIX path (client side) → client endpoint.
 pub fn unix_connect(path: &str) -> Result<UnixEndpoint, UnixError> {
-    UNIX_SWITCH.lock().connect(path)
+    UNIX_SWITCH.connect(path)
 }
 /// Accept the oldest waiting connection (server side) → server endpoint.
 pub fn unix_accept(path: &str) -> Option<UnixEndpoint> {
-    UNIX_SWITCH.lock().accept(path)
+    UNIX_SWITCH.accept(path)
 }
 /// Write bytes from an endpoint.
 pub fn unix_send(ep: UnixEndpoint, data: &[u8]) -> Result<usize, UnixError> {
-    UNIX_SWITCH.lock().send(ep, data)
+    UNIX_SWITCH.send(ep, data)
 }
 /// Read up to `max` bytes for an endpoint (non-blocking).
 pub fn unix_recv(ep: UnixEndpoint, max: usize) -> Result<alloc::vec::Vec<u8>, UnixError> {
-    UNIX_SWITCH.lock().recv(ep, max)
+    UNIX_SWITCH.recv(ep, max)
 }
 /// Is this endpoint readable (data or EOF)?
 pub fn unix_readable(ep: UnixEndpoint) -> bool {
-    UNIX_SWITCH.lock().readable(ep)
+    UNIX_SWITCH.readable(ep)
 }
 /// The unix fd NUMBERS currently open (UNIX_FD_BASE-relative slots occupied) —
 /// the fork snapshot needs them so a live child's inherited channel end is not
@@ -2449,13 +3344,13 @@ pub fn unix_fds_open() -> alloc::vec::Vec<u64> {
 pub fn unix_fd_at_eof(fd: u64) -> bool {
     let t = UNIX_FDS.lock();
     match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
-        Some(UnixSock::Stream(e)) => UNIX_SWITCH.lock().at_eof(*e),
+        Some(UnixSock::Stream(e)) => UNIX_SWITCH.at_eof(*e),
         _ => false,
     }
 }
 /// Close an endpoint.
 pub fn unix_close(ep: UnixEndpoint) {
-    UNIX_SWITCH.lock().close(ep)
+    UNIX_SWITCH.close(ep)
 }
 
 // ── AF_UNIX socket fds for glibc/musl programs ───────────────────────────────
@@ -2575,7 +3470,10 @@ enum UnixSock {
     X(u64), // xserver connection fd
 }
 
-static UNIX_FDS: Mutex<[Option<UnixSock>; MAX_UNIX_FD]> = Mutex::new([const { None }; MAX_UNIX_FD]);
+static SITE_UNIX_FDS: eurolock::LockSite = eurolock::LockSite::new("net.UNIX_FDS", eurolock::LockClass::Net);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static UNIX_FDS: eurolock::sync::Mutex<[Option<UnixSock>; MAX_UNIX_FD]> =
+    eurolock::sync::Mutex::new_site(&SITE_UNIX_FDS, eurolock::Mode::Plain, [const { None }; MAX_UNIX_FD]);
 static UNIX_PAIR_CTR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 // Server-side bind: the path an AF_UNIX fd is bound+listening on (chrome's
 // ProcessSingleton listens on SingletonSocket). Tracked alongside UNIX_FDS so the
@@ -2738,7 +3636,7 @@ pub fn unix_socketpair() -> Option<(u64, u64)> {
     unix_bind_listen(&path, 1).ok()?;
     let client = unix_connect(&path).ok()?;
     let server = unix_accept(&path)?;
-    UNIX_SWITCH.lock().unbind(&path);
+    UNIX_SWITCH.unbind(&path);
     let a = unix_alloc(UnixSock::Stream(client))?;
     let b = unix_alloc(UnixSock::Stream(server))?;
     Some((a, b))
@@ -2789,7 +3687,7 @@ pub fn unix_fd_send(fd: u64, data: &[u8]) -> u64 {
 pub fn unix_fd_available(fd: u64) -> usize {
     let t = UNIX_FDS.lock();
     match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
-        Some(UnixSock::Stream(e)) => UNIX_SWITCH.lock().available(*e),
+        Some(UnixSock::Stream(e)) => UNIX_SWITCH.available(*e),
         Some(UnixSock::X(x)) => crate::xserver::queued_len(*x),
         _ => 0,
     }
@@ -2835,7 +3733,7 @@ pub fn x_fd_queued(fd: u64) -> Option<usize> {
 pub fn unix_queued_report() -> alloc::vec::Vec<(u64, usize)> {
     let mut out = alloc::vec::Vec::new();
     let t = UNIX_FDS.lock();
-    let sw = UNIX_SWITCH.lock();
+    let sw = &UNIX_SWITCH;
     for (i, s) in t.iter().enumerate() {
         if let Some(UnixSock::Stream(e)) = s {
             let n = sw.available(*e);
@@ -2919,7 +3817,7 @@ pub fn af_unix_selftest() {
         core::str::from_utf8(&got_rsp).unwrap_or("?"),
         eof
     );
-    UNIX_SWITCH.lock().unbind(path);
+    UNIX_SWITCH.unbind(path);
 }
 
 /// Listen on `port`, accept ONE incoming TCP connection, read the request,
@@ -2973,7 +3871,7 @@ pub fn tcp_serve_once(port: u16, response: &[u8], timeout_spins: u64) -> Option<
         let iph = Ipv4Header { protocol: Protocol::Tcp, ttl: 64, src: my_ip, dst: peer_ip, total_length: 0, identification: 5 };
         let frame = EthernetHeader { dst: peer_mac, src: my_mac, ethertype: EtherType::Ipv4 }
             .build(&iph.build(&seg.build(my_ip, peer_ip)));
-        nic::send(&frame);
+        tx(&frame);
     };
 
     // 2. SYN-ACK; our SYN counts as 1 in the sequence space.
@@ -3025,6 +3923,9 @@ static SERVED: AtomicU64 = AtomicU64::new(0);
 pub fn httpd_toggle() -> bool {
     let new = !SERVER_ON.load(Ordering::Relaxed);
     SERVER_ON.store(new, Ordering::Relaxed);
+    // On a card without a receive interrupt the worker polls while the httpd
+    // or a listener is on: let it notice (it may be blocked since the boot).
+    worker::kick();
     new
 }
 pub fn httpd_status() -> (bool, u64) {
@@ -3042,72 +3943,6 @@ fn http_page() -> alloc::vec::Vec<u8> {
         body
     )
     .into_bytes()
-}
-
-/// Serve one incoming connection whose opening SYN was already received
-/// (by `service()`): SYN-ACK → request → response → FIN. Briefly blocking.
-fn serve_connection(my_mac: MacAddr, my_ip: Ipv4Addr, peer_mac: MacAddr, peer_ip: Ipv4Addr, syn: &TcpSegment) {
-    let port = 80u16;
-    let peer_port = syn.src_port;
-    let mut my_seq = 0x3000u32;
-    let mut their_seq = syn.seq.wrapping_add(1);
-    let emit = |flags: u8, seq: u32, ack: u32, payload: &[u8]| {
-        let seg = TcpSegment { src_port: port, dst_port: peer_port, seq, ack, flags, window: 64240, payload: payload.to_vec() };
-        let iph = Ipv4Header { protocol: Protocol::Tcp, ttl: 64, src: my_ip, dst: peer_ip, total_length: 0, identification: 7 };
-        let frame = EthernetHeader { dst: peer_mac, src: my_mac, ethertype: EtherType::Ipv4 }
-            .build(&iph.build(&seg.build(my_ip, peer_ip)));
-        nic::send(&frame);
-    };
-    let poll = || -> Option<TcpSegment> {
-        for _ in 0..SPINS {
-            if let Some(rx) = legacy_rx() {
-                if let Ok((h, p)) = EthernetHeader::parse(&rx) {
-                    if h.ethertype == EtherType::Ipv4 {
-                        if let Ok((ih, ipl)) = Ipv4Header::parse(p) {
-                            if ih.protocol == Protocol::Tcp && ih.src == peer_ip {
-                                if let Ok(seg) = TcpSegment::parse_checked(ipl, ih.src, ih.dst) {
-                                    if seg.dst_port == port {
-                                        return Some(seg);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        None
-    };
-    emit(tcp::SYN | tcp::ACK, my_seq, their_seq, &[]);
-    my_seq = my_seq.wrapping_add(1);
-    let mut req: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
-    for _ in 0..40 {
-        match poll() {
-            Some(seg) => {
-                if seg.has(tcp::RST) {
-                    return;
-                }
-                if !seg.payload.is_empty() && seg.seq == their_seq {
-                    their_seq = their_seq.wrapping_add(seg.payload.len() as u32);
-                    req.extend_from_slice(&seg.payload);
-                    emit(tcp::ACK, my_seq, their_seq, &[]);
-                }
-                if seg.has(tcp::FIN) {
-                    their_seq = their_seq.wrapping_add(1);
-                    emit(tcp::ACK, my_seq, their_seq, &[]);
-                }
-                if req.windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            None => break,
-        }
-    }
-    let resp = http_page();
-    emit(tcp::PSH | tcp::ACK, my_seq, their_seq, &resp);
-    my_seq = my_seq.wrapping_add(resp.len() as u32);
-    emit(tcp::FIN | tcp::ACK, my_seq, their_seq, &[]);
-    SERVED.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Shell command `serve` — run EuroOS as an HTTP server: listen on :80,
@@ -3461,7 +4296,10 @@ pub fn set_hosts(entries: alloc::vec::Vec<(String, Ipv4Addr)>) {
 // Results of DNS queries are cached (name -> (IP, expiry tick)), so that
 // repeated lookups come straight from memory instead of going onto the network
 // again — faster and less traffic. TTL ~300 s (30000 ticks at 100 Hz).
-static DNS_CACHE: Mutex<alloc::vec::Vec<(String, Ipv4Addr, u64)>> = Mutex::new(alloc::vec::Vec::new());
+static SITE_DNS_CACHE: eurolock::LockSite = eurolock::LockSite::new("net.DNS_CACHE", eurolock::LockClass::Net);
+// J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
+static DNS_CACHE: eurolock::sync::Mutex<alloc::vec::Vec<(String, Ipv4Addr, u64)>> =
+    eurolock::sync::Mutex::new_site(&SITE_DNS_CACHE, eurolock::Mode::Plain, alloc::vec::Vec::new());
 const DNS_TTL_TICKS: u64 = 30_000;
 static DNS_HITS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static DNS_MISSES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -3489,6 +4327,8 @@ pub fn netstat_lines() -> alloc::vec::Vec<String> {
     let hits = DNS_HITS.load(core::sync::atomic::Ordering::Relaxed);
     let misses = DNS_MISSES.load(core::sync::atomic::Ordering::Relaxed);
     let mut out = alloc::vec::Vec::new();
+    out.push(tcp_open_report());
+    out.push(worker::report());
     out.push(alloc::format!("DNS cache: {} hits, {} misses", hits, misses));
     let c = DNS_CACHE.lock();
     for (n, ip, exp) in c.iter() {
@@ -3638,6 +4478,28 @@ pub struct HttpsFetch {
     idle: u32,
     finished: bool,
 }
+/// A non-blocking TCP connection to `host:port` (name or dotted IPv4) through
+/// the configured interface: the same resolution HttpsFetch does (sprint N4,
+/// the RDP client). None = no network or the name does not resolve.
+pub fn tcp_connect_nowait_to(host: &str, port: u16) -> Option<TcpConn> {
+    let cfg = get()?;
+    let server = match parse_ipv4(host) {
+        Some(ip) => ip,
+        None => hosts_lookup(host).or_else(|| dns_query(cfg.my_mac, cfg.my_ip, cfg.dns_mac, cfg.dns_ip, host))?,
+    };
+    let nexthop = if same_subnet(server, cfg.my_ip) {
+        arp_resolve(cfg.my_mac, cfg.my_ip, server).unwrap_or(cfg.gw_mac)
+    } else {
+        cfg.gw_mac
+    };
+    Some(TcpConn::connect_nowait(cfg.my_mac, cfg.my_ip, nexthop, server, port))
+}
+
+/// 32 bytes of entropy for a TLS client (random / key share scalar).
+pub fn entropy(i: u8) -> [u8; 32] {
+    gather_entropy(i)
+}
+
 impl HttpsFetch {
     /// Steps without any incoming byte before the fetch gives up (~10 ms per
     /// desktop-loop step → about 60 s of silence).

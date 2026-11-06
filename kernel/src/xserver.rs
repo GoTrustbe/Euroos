@@ -45,12 +45,16 @@ struct XWindow {
     mapped: bool,
     event_mask: u32, // XSelectInput: which events this window wants
     buf: Vec<u32>,
+    /// CWBackPixel: what ClearArea and a fresh window show (opaque ARGB).
+    bg: u32,
 }
 
 /// A graphics context — for the first rendering rung we only track the fill colour.
 struct XGc {
     id: u32,
     fg: u32,
+    /// GCBackground: the fill behind ImageText8 glyphs.
+    bg: u32,
 }
 
 /// An off-screen drawable. Toolkits (GTK) render their widget tree into a pixmap,
@@ -863,10 +867,13 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             let raw_h = ru16(c, req, 18);
             let w = if raw_w >= 8192 { 400 } else { raw_w.clamp(1, SCREEN_W) };
             let h = if raw_h >= 8192 { 260 } else { raw_h.clamp(1, SCREEN_H) };
-            let buf = alloc::vec![0xff20_2020u32; w as usize * h as usize]; // opaque dark
+            // CWBackPixel (0x2): the window starts filled with its background, as a
+            // core-X client expects (hello-x11 asked for WhitePixel and got dark).
+            let bg = value_at(c, req, 28, 32, 0x2).map(|v| v | 0xff00_0000).unwrap_or(0xff20_2020);
+            let buf = alloc::vec![bg; w as usize * h as usize];
             // CreateWindow can carry an event-mask too (value-mask @28, CWEventMask=0x800).
             let em = win_event_mask(c, req, 28, 32);
-            c.windows.push(XWindow { id, x, y, w, h, mapped: false, event_mask: em, buf });
+            c.windows.push(XWindow { id, x, y, w, h, mapped: false, event_mask: em, buf, bg });
             if em != 0 {
                 select_events(id, conn_index(c), em);
             }
@@ -876,7 +883,8 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
         55 => {
             let id = ru32(c, req, 4);
             let fg = gc_foreground(c, req, 12, 16).unwrap_or(0);
-            c.gcs.push(XGc { id, fg });
+            let bg = value_at(c, req, 12, 16, 0x8).unwrap_or(0xffff_ffff);
+            c.gcs.push(XGc { id, fg, bg });
             trace(format_args!("CreateGC id={id:#x} fg={fg:#08x}"));
         }
         // ChangeGC(56): gc@4, value-mask@8, values@12 (XSetForeground uses this).
@@ -887,6 +895,11 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                     g.fg = fg;
                 }
                 trace(format_args!("ChangeGC id={id:#x} fg={fg:#08x}"));
+            }
+            if let Some(bg) = value_at(c, req, 8, 12, 0x8) {
+                if let Some(g) = c.gcs.iter_mut().find(|g| g.id == id) {
+                    g.bg = bg;
+                }
             }
         }
         // ChangeWindowAttributes(2): window@4, value-mask@8, values@12. XSelectInput
@@ -1226,11 +1239,85 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             let r = reply_header(c, 2); // 40 bytes, keys @8..40 already zero
             c.outbuf.extend_from_slice(&r);
         }
-        // QueryFont(47): a minimal font reply so a core-font query doesn't hang. Reply
-        // has 7 extra fixed units (min/max bounds + counts, all zero = an empty font).
+        // QueryFont(47): the metrics of the one server font (the 8x8 bitmap font
+        // every core-text request draws with): fixed 8-pixel advance, ascent 7,
+        // descent 1, ASCII 32..126, no per-char table (Xlib then uses min_bounds
+        // for every glyph, so XTextWidth = 8 * len). Reply = 32 + 7 units.
         47 => {
-            let r = reply_header(c, 7);
+            let mut r = reply_header(c, 7);
+            for base in [8usize, 24] { // min_bounds @8, max_bounds @24 (12 bytes each)
+                put16(c, &mut r, base, 0);      // left-side-bearing
+                put16(c, &mut r, base + 2, 8);  // right-side-bearing
+                put16(c, &mut r, base + 4, 8);  // character-width
+                put16(c, &mut r, base + 6, 7);  // ascent
+                put16(c, &mut r, base + 8, 1);  // descent
+            }
+            put16(c, &mut r, 40, 32);  // min-char-or-byte2
+            put16(c, &mut r, 42, 126); // max-char-or-byte2
+            put16(c, &mut r, 44, 32);  // default-char
+            put16(c, &mut r, 46, 0);   // n-properties
+            r[48] = 0; r[49] = 0; r[50] = 0; r[51] = 1; // draw-direction, min/max byte1, all-chars-exist
+            put16(c, &mut r, 52, 7);   // font-ascent
+            put16(c, &mut r, 54, 1);   // font-descent
+            put32(c, &mut r, 56, 0);   // n-char-infos
             c.outbuf.extend_from_slice(&r);
+        }
+        // ClearArea(61): window@4, x@8, y@10 (i16), w@12, h@14 (u16, 0 = to the edge):
+        // paint the window background back; exposures(detail) sends Expose for it.
+        61 => {
+            let id = ru32(c, req, 4);
+            let rx = ru16(c, req, 8) as i16 as i32;
+            let ry = ru16(c, req, 10) as i16 as i32;
+            let mut rw = ru16(c, req, 12) as i32;
+            let mut rh = ru16(c, req, 14) as i32;
+            if let Some(win) = c.windows.iter_mut().find(|w| w.id == id) {
+                if rw == 0 { rw = win.w as i32 - rx; }
+                if rh == 0 { rh = win.h as i32 - ry; }
+                let bg = win.bg;
+                fill_buf(&mut win.buf, win.w as i32, win.h as i32, rx, ry, rw, rh, bg);
+            }
+            present(c, id);
+            if detail != 0 {
+                send_expose(c, id, rw.max(0) as u16, rh.max(0) as u16);
+            }
+        }
+        // PolyText8(74): drawable@4, gc@8, x@12, y@14 (i16, baseline), then TEXTITEM8s:
+        // (len u8, delta i8, string[len]); len 255 = a font shift (5 bytes, ignored).
+        // XDrawString ends here. Glyphs come from the kernel's 8x8 bitmap font.
+        74 => {
+            let draw = ru32(c, req, 4);
+            let gcid = ru32(c, req, 8);
+            let mut x = ru16(c, req, 12) as i16 as i32;
+            let y = ru16(c, req, 14) as i16 as i32;
+            let fg = c.gcs.iter().find(|g| g.id == gcid).map(|g| g.fg | 0xff00_0000).unwrap_or(0xff00_0000);
+            let mut off = 16;
+            while off + 2 <= req.len() {
+                let len = req[off] as usize;
+                if len == 255 { off += 5; continue; }
+                if len == 0 { break; }
+                let delta = req[off + 1] as i8 as i32;
+                let end = (off + 2 + len).min(req.len());
+                let text: Vec<u8> = req[off + 2..end].to_vec();
+                x += delta;
+                draw_text8(c, draw, x, y, &text, fg, None);
+                x += 8 * text.len() as i32;
+                off = end;
+            }
+            present(c, draw);
+        }
+        // ImageText8(76): drawable@4, gc@8, x@12, y@14, string@16 (len = detail);
+        // the glyph cells are filled with the GC background first (XDrawImageString).
+        76 => {
+            let draw = ru32(c, req, 4);
+            let gcid = ru32(c, req, 8);
+            let x = ru16(c, req, 12) as i16 as i32;
+            let y = ru16(c, req, 14) as i16 as i32;
+            let (fg, bg) = c.gcs.iter().find(|g| g.id == gcid)
+                .map(|g| (g.fg | 0xff00_0000, g.bg | 0xff00_0000)).unwrap_or((0xff00_0000, 0xffff_ffff));
+            let n = (detail as usize).min(req.len().saturating_sub(16));
+            let text: Vec<u8> = req[16..16 + n].to_vec();
+            draw_text8(c, draw, x, y, &text, fg, Some(bg));
+            present(c, draw);
         }
         // Bell(104)/ChangeKeyboardControl(102)/NoOperation(127): no reply.
         104 | 102 | 127 => {}
@@ -1599,6 +1686,51 @@ fn gc_foreground(c: &XConn, req: &[u8], mask_off: usize, vals_off: usize) -> Opt
     let idx = (mask & (GC_FOREGROUND - 1)).count_ones() as usize; // values below foreground
     let at = vals_off + idx * 4;
     if at + 4 <= req.len() { Some(ru32(c, req, at)) } else { None }
+}
+
+/// The value for `bit` of an X value-list (CreateWindow/CreateGC/ChangeGC style:
+/// a value-mask at `mask_off`, then one u32 per set bit below it, in bit order).
+fn value_at(c: &XConn, req: &[u8], mask_off: usize, vals_off: usize, bit: u32) -> Option<u32> {
+    let mask = ru32(c, req, mask_off);
+    if mask & bit == 0 {
+        return None;
+    }
+    let idx = (mask & (bit - 1)).count_ones() as usize;
+    let at = vals_off + idx * 4;
+    if at + 4 <= req.len() { Some(ru32(c, req, at)) } else { None }
+}
+
+/// Core-X text: draw `text` with the kernel's 8x8 bitmap font at baseline (x, y)
+/// into a drawable (window or pixmap); `bg` fills each 8x8 cell first (ImageText).
+fn draw_text8(c: &mut XConn, draw: u32, x: i32, y: i32, text: &[u8], fg: u32, bg: Option<u32>) {
+    let (buf, ww, wh): (&mut Vec<u32>, i32, i32) =
+        if let Some(win) = c.windows.iter_mut().find(|w| w.id == draw) { (&mut win.buf, win.w as i32, win.h as i32) }
+        else if let Some(pm) = c.pixmaps.iter_mut().find(|p| p.id == draw) { (&mut pm.buf, pm.w as i32, pm.h as i32) }
+        else { return };
+    let top = y - 7; // ascent 7 of the 8-row glyph cell (row 7 carries descenders)
+    for (i, &ch) in text.iter().enumerate() {
+        let cx = x + 8 * i as i32;
+        if let Some(bg) = bg {
+            fill_buf(buf, ww, wh, cx, top, 8, 8, bg);
+        }
+        let ascii = ch as usize;
+        if !(33..=126).contains(&ascii) {
+            continue;
+        }
+        let glyph = &crate::font::FONT_DATA[ascii - 32];
+        for (row, bits) in glyph.iter().enumerate() {
+            let yy = top + row as i32;
+            if yy < 0 || yy >= wh { continue; }
+            for col in 0..8 {
+                if bits & (1 << col) != 0 { // LSB = left pixel (see font::draw_char)
+                    let xx = cx + col as i32;
+                    if xx >= 0 && xx < ww {
+                        buf[(yy * ww + xx) as usize] = fg;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Fill a rectangle in the target window's buffer (clipped) with `argb`.
