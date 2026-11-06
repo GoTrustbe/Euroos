@@ -1,0 +1,16 @@
+[af-jit] JIT elevation: elevated-cap-without-grant-denied=true, after-grant-one-action-allowed=true, auto-revoke-2nd-call-denied=true → OK (least agency in time: elevate-for-the-task, auto-revoke) ✓
+[af-anom] behavior detection (deterministic, audit-fed): learning-phase-quiet=true, known-behavior-quiet=true, probing(4×deny)-flagged=true, drift(new-tool)-flagged=true → OK (anomalous agent behavior visible to audit/response) ✓
+[policy-learn] manifest learning: denied-before=2 · wants-fs_write=true · proposal(required+fs_write=true, exec-stays-out=true) · export→import-equal=true · newer-schema-refused=true · approve-as-owner=true · on-disk-equal=true · denied-after=1 (only the denied exec) · non-owner-approve-refused=true → OK ✓ (enforcement on while learning; the person approves the boundary)
+========== NMI PROBE (wedge RIP capture) ==========
+[nmi] interrupted RIP=0x000000001041137b CS=0x8 RSP=0x000000000014f570 RFLAGS=0x50002
+[nmi] anchor kernel_base ~ nmi_handler @ 0x00000000103bfbc4
+[nmi] code rip-16..: [31, c0, f0, 0f, b0, 0d, 6b, 77, f7, 03, 75, 04, eb, 0e, f3, 90]
+[nmi] code rip..   : [8a, 05, 5f, 77, f7, 03, 84, c0, 74, e6, eb, f2, 48, c1, e7, 04]
+[nmi] current task 10 "?" last-syscall=0(a1=0x0)->0x0 globals-owner=0
+[nmi] stack scan (return addresses):
+[census] 28 tasks, current=10
+[census] t0 cr3=0x0 sys=185 cpu=0 Ready
+[census] t1 cr3=0x0 sys=0 cpu=0 Sleeping(until 6208)
+[census] t2 cr3=0x0 sys=0 cpu=0 Sleeping(until 6216)
+[census] t3 cr3=0x0 sys=0 cpu=0 Sleeping(until 6227)
+[census] t4 cr3=0x0 sys=0 cpu=0 Sleeping(until 5707)

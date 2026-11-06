@@ -178,7 +178,8 @@ means) selects the userspace driver, `net.driver=kernel` keeps the in-kernel
 e1000 (the fallback). `scripts/build.sh` writes the file when
 `EUROOS_BOOTOPTS` is set. The same file takes `storage.nvme=user` and, for
 debugging, `debug.schedwatch=on` (a debug-register write watch on the
-scheduler state, BUG-032).
+scheduler state, BUG-032) and `virtio.transport=legacy` (transitional
+virtio devices through the legacy I/O BAR instead of virtio 1.x).
 
 At first the default stayed `kernel`: the dev self-test suite brought the
 network up before the scheduler existed. How that was solved is in "Making

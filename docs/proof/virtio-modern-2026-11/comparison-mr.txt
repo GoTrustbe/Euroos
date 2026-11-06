@@ -1,0 +1,368 @@
+== /opt/euroos/wt-virtio/docs/proof/net-worker-2026-11/mr-iommu-boot1.markers  vs  /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/mr-iommu-1-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 40
+   3c3: OKx1
+   3d2: OKx1
+   3d2-wire: OKx1
+   3d7: OKx1
+   3d8: OKx1
+   3f1: OKx1
+   7guard: OKx1
+   ahci: OKx1
+   bg-out: OKx2
+   bgnet-cap: OKx1
+   ecam: OKx1
+   edit: OKx2
+   g1: OKx1
+   h1: OKx1
+   h4: OKx1
+   h4-ctr: OKx2
+   h5: OKx1
+   i3-s5: OKx1
+   io1: OKx1
+   io2: OKx1
+   io3: OKx1
+   j1-cache: OKx1
+   kwork: OKx1
+   lk: OKx1
+   net: OKx4
+   net-async: OKx3
+   net-worker: OKx1
+   tls: OKx1
+   tls2: OKx1
+   trash: OKx1
+   udrv-crash: OKx1
+   udrv-dma: OKx1
+   udrv-e1000: OKx1
+   udrv-grant: OKx1
+   udrv-iommu: OKx1
+   udrv-irq: OKx1
+   udrv-linux: OKx1
+   udrv-net: OKx1
+   upd3: OKx2
+   wasi: OKx1
+-- only in new: 0
+
+== /opt/euroos/wt-virtio/docs/proof/net-worker-2026-11/mr-iommu-boot2.markers  vs  /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/mr-iommu-1-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 40
+   3c3: OKx1
+   3d2: OKx1
+   3d2-wire: OKx1
+   3d7: OKx1
+   3d8: OKx1
+   3f1: OKx1
+   7guard: OKx1
+   ahci: OKx1
+   bg-out: OKx2
+   bgnet-cap: OKx1
+   ecam: OKx1
+   edit: OKx2
+   g1: OKx1
+   h1: OKx1
+   h4: OKx1
+   h4-ctr: OKx2
+   h5: OKx1
+   i3-s5: OKx1
+   io1: OKx1
+   io2: OKx1
+   io3: OKx1
+   j1-cache: OKx1
+   kwork: OKx1
+   lk: OKx1
+   net: OKx4
+   net-async: OKx3
+   net-worker: OKx1
+   tls: OKx1
+   tls2: OKx1
+   trash: OKx1
+   udrv-crash: OKx1
+   udrv-dma: OKx1
+   udrv-e1000: OKx1
+   udrv-grant: OKx1
+   udrv-iommu: OKx1
+   udrv-irq: OKx1
+   udrv-linux: OKx1
+   udrv-net: OKx1
+   upd3: OKx2
+   wasi: OKx1
+-- only in new: 0
+
+== /opt/euroos/wt-virtio/docs/proof/net-worker-2026-11/mr-iommu-boot1.markers  vs  /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/mr-iommu-2-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 40
+   3c3: OKx1
+   3d2: OKx1
+   3d2-wire: OKx1
+   3d7: OKx1
+   3d8: OKx1
+   3f1: OKx1
+   7guard: OKx1
+   ahci: OKx1
+   bg-out: OKx2
+   bgnet-cap: OKx1
+   ecam: OKx1
+   edit: OKx2
+   g1: OKx1
+   h1: OKx1
+   h4: OKx1
+   h4-ctr: OKx2
+   h5: OKx1
+   i3-s5: OKx1
+   io1: OKx1
+   io2: OKx1
+   io3: OKx1
+   j1-cache: OKx1
+   kwork: OKx1
+   lk: OKx1
+   net: OKx4
+   net-async: OKx3
+   net-worker: OKx1
+   tls: OKx1
+   tls2: OKx1
+   trash: OKx1
+   udrv-crash: OKx1
+   udrv-dma: OKx1
+   udrv-e1000: OKx1
+   udrv-grant: OKx1
+   udrv-iommu: OKx1
+   udrv-irq: OKx1
+   udrv-linux: OKx1
+   udrv-net: OKx1
+   upd3: OKx2
+   wasi: OKx1
+-- only in new: 0
+
+== /opt/euroos/wt-virtio/docs/proof/net-worker-2026-11/mr-iommu-boot2.markers  vs  /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/mr-iommu-2-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 40
+   3c3: OKx1
+   3d2: OKx1
+   3d2-wire: OKx1
+   3d7: OKx1
+   3d8: OKx1
+   3f1: OKx1
+   7guard: OKx1
+   ahci: OKx1
+   bg-out: OKx2
+   bgnet-cap: OKx1
+   ecam: OKx1
+   edit: OKx2
+   g1: OKx1
+   h1: OKx1
+   h4: OKx1
+   h4-ctr: OKx2
+   h5: OKx1
+   i3-s5: OKx1
+   io1: OKx1
+   io2: OKx1
+   io3: OKx1
+   j1-cache: OKx1
+   kwork: OKx1
+   lk: OKx1
+   net: OKx4
+   net-async: OKx3
+   net-worker: OKx1
+   tls: OKx1
+   tls2: OKx1
+   trash: OKx1
+   udrv-crash: OKx1
+   udrv-dma: OKx1
+   udrv-e1000: OKx1
+   udrv-grant: OKx1
+   udrv-iommu: OKx1
+   udrv-irq: OKx1
+   udrv-linux: OKx1
+   udrv-net: OKx1
+   upd3: OKx2
+   wasi: OKx1
+-- only in new: 0
+
+== /opt/euroos/wt-virtio/docs/proof/net-worker-2026-11/mr-noiommu-boot1.markers  vs  /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/mr-noiommu-1-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 40
+   3c3: OKx1
+   3d2: OKx1
+   3d2-wire: OKx1
+   3d7: OKx1
+   3d8: OKx1
+   3f1: OKx1
+   7guard: OKx1
+   ahci: OKx1
+   bg-out: OKx2
+   bgnet-cap: OKx1
+   ecam: OKx1
+   edit: OKx2
+   g1: OKx1
+   h1: OKx1
+   h4: OKx1
+   h4-ctr: OKx2
+   h5: OKx1
+   i3-s5: OKx1
+   io1: OKx1
+   io2: OKx1
+   io3: OKx1
+   j1-cache: OKx1
+   kwork: OKx1
+   lk: OKx1
+   net: OKx4
+   net-async: OKx3
+   net-worker: OKx1
+   tls: OKx1
+   tls2: OKx1
+   trash: OKx1
+   udrv-crash: OKx1
+   udrv-dma: SKIPx1
+   udrv-e1000: OKx1
+   udrv-grant: OKx1
+   udrv-iommu: SKIPx1
+   udrv-irq: OKx1
+   udrv-linux: OKx1
+   udrv-net: OKx1
+   upd3: OKx2
+   wasi: OKx1
+-- only in new: 0
+
+== /opt/euroos/wt-virtio/docs/proof/net-worker-2026-11/mr-noiommu-boot2.markers  vs  /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/mr-noiommu-1-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 40
+   3c3: OKx1
+   3d2: OKx1
+   3d2-wire: OKx1
+   3d7: OKx1
+   3d8: OKx1
+   3f1: OKx1
+   7guard: OKx1
+   ahci: OKx1
+   bg-out: OKx2
+   bgnet-cap: OKx1
+   ecam: OKx1
+   edit: OKx2
+   g1: OKx1
+   h1: OKx1
+   h4: OKx1
+   h4-ctr: OKx2
+   h5: OKx1
+   i3-s5: OKx1
+   io1: OKx1
+   io2: OKx1
+   io3: OKx1
+   j1-cache: OKx1
+   kwork: OKx1
+   lk: OKx1
+   net: OKx4
+   net-async: OKx3
+   net-worker: OKx1
+   tls: OKx1
+   tls2: OKx1
+   trash: OKx1
+   udrv-crash: OKx1
+   udrv-dma: SKIPx1
+   udrv-e1000: OKx1
+   udrv-grant: OKx1
+   udrv-iommu: SKIPx1
+   udrv-irq: OKx1
+   udrv-linux: OKx1
+   udrv-net: OKx1
+   upd3: OKx2
+   wasi: OKx1
+-- only in new: 0
+
+== /opt/euroos/wt-virtio/docs/proof/net-worker-2026-11/mr-noiommu-boot1.markers  vs  /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/mr-noiommu-2-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 40
+   3c3: OKx1
+   3d2: OKx1
+   3d2-wire: OKx1
+   3d7: OKx1
+   3d8: OKx1
+   3f1: OKx1
+   7guard: OKx1
+   ahci: OKx1
+   bg-out: OKx2
+   bgnet-cap: OKx1
+   ecam: OKx1
+   edit: OKx2
+   g1: OKx1
+   h1: OKx1
+   h4: OKx1
+   h4-ctr: OKx2
+   h5: OKx1
+   i3-s5: OKx1
+   io1: OKx1
+   io2: OKx1
+   io3: OKx1
+   j1-cache: OKx1
+   kwork: OKx1
+   lk: OKx1
+   net: OKx4
+   net-async: OKx3
+   net-worker: OKx1
+   tls: OKx1
+   tls2: OKx1
+   trash: OKx1
+   udrv-crash: OKx1
+   udrv-dma: SKIPx1
+   udrv-e1000: OKx1
+   udrv-grant: OKx1
+   udrv-iommu: SKIPx1
+   udrv-irq: OKx1
+   udrv-linux: OKx1
+   udrv-net: OKx1
+   upd3: OKx2
+   wasi: OKx1
+-- only in new: 0
+
+== /opt/euroos/wt-virtio/docs/proof/net-worker-2026-11/mr-noiommu-boot2.markers  vs  /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/mr-noiommu-2-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 40
+   3c3: OKx1
+   3d2: OKx1
+   3d2-wire: OKx1
+   3d7: OKx1
+   3d8: OKx1
+   3f1: OKx1
+   7guard: OKx1
+   ahci: OKx1
+   bg-out: OKx2
+   bgnet-cap: OKx1
+   ecam: OKx1
+   edit: OKx2
+   g1: OKx1
+   h1: OKx1
+   h4: OKx1
+   h4-ctr: OKx2
+   h5: OKx1
+   i3-s5: OKx1
+   io1: OKx1
+   io2: OKx1
+   io3: OKx1
+   j1-cache: OKx1
+   kwork: OKx1
+   lk: OKx1
+   net: OKx4
+   net-async: OKx3
+   net-worker: OKx1
+   tls: OKx1
+   tls2: OKx1
+   trash: OKx1
+   udrv-crash: OKx1
+   udrv-dma: SKIPx1
+   udrv-e1000: OKx1
+   udrv-grant: OKx1
+   udrv-iommu: SKIPx1
+   udrv-irq: OKx1
+   udrv-linux: OKx1
+   udrv-net: OKx1
+   upd3: OKx2
+   wasi: OKx1
+-- only in new: 0
+

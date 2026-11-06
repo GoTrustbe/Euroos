@@ -1,0 +1,43 @@
+== /tmp/vp/r630-kb-trans.markers  vs  /tmp/vp/r630-k2-modern.markers
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   appstore: base FAILx1 | new OKx1
+   upd3: base FAILx2 | new OKx2
+-- only in base: 0
+-- only in new: 1
+   vinput: OKx2
+
+== /tmp/vp/r630-kb-trans.markers  vs  /tmp/vp/r630-k2-trans.markers
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   appstore: base FAILx1 | new OKx1
+   upd3: base FAILx2 | new OKx2
+-- only in base: 0
+-- only in new: 1
+   vinput: OKx2
+
+== /tmp/vp/r630-kb-trans.markers  vs  /tmp/vp/r630-k2-modern-pitoff.markers
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   appstore: base FAILx1 | new OKx1
+   upd3: base FAILx2 | new OKx2
+-- only in base: 0
+-- only in new: 1
+   vinput: OKx2
+
+== /tmp/vp/r630-kb-trans.markers  vs  /tmp/vp/r630-k2-trans-legacyopt.markers
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   appstore: base FAILx1 | new OKx1
+   upd3: base FAILx2 | new OKx2
+-- only in base: 0
+-- only in new: 1
+   vinput: OKx2
+
+== /tmp/vp/r630-kb-legacy.markers  vs  /tmp/vp/r630-k2-legacy.markers
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   appstore: base FAILx1 | new OKx1
+   upd3: base FAILx2 | new OKx2
+-- only in base: 0
+-- only in new: 0

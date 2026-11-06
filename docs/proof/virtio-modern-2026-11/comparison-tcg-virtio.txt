@@ -1,0 +1,34 @@
+== /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/tcg-dev-base2-trans.markers  vs  /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/tcg-dev-v2-modern.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   vinput: OKx2
+
+== /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/tcg-dev-base2-trans.markers  vs  /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/tcg-dev-v2-trans.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   vinput: OKx2
+
+== /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/tcg-dev-base2-trans.markers  vs  /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/tcg-dev-v2-modern-novec.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 1
+   j2-blk: OKx1
+-- only in new: 1
+   vinput: OKx2
+
+== /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/tcg-dev-base2-trans.markers  vs  /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/tcg-dev-v2-modern-pitoff.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   vinput: OKx2
+
+== /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/tcg-dev-base2-legacy.markers  vs  /opt/euroos/wt-virtio/docs/proof/virtio-modern-2026-11/tcg-dev-v2-legacy.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0

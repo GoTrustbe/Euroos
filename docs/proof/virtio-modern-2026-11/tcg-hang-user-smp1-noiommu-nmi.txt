@@ -1,0 +1,16 @@
+[churn-proc]   after run 16: free frames 33297
+[churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=0/16 · frames 33297→33297 (leak-free=true) · demand-pool 16384→16384 (true) · tasks 28→28 (true) · thread-kstacks 0→0 (true) · file-table 159→159 (true) · heap-used 20679984→20679984 (true) → FAILED
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=18446744073709551615 (want 77) · sums-correct=false · thread-kstacks 0→0 · tasks 28→28 · frames 33297→33297 → FAILED
+========== NMI PROBE (wedge RIP capture) ==========
+[nmi] interrupted RIP=0x000000001044137b CS=0x8 RSP=0x000000000014f570 RFLAGS=0x50002
+[nmi] anchor kernel_base ~ nmi_handler @ 0x00000000103efbc4
+[nmi] code rip-16..: [31, c0, f0, 0f, b0, 0d, 6b, 77, f7, 03, 75, 04, eb, 0e, f3, 90]
+[nmi] code rip..   : [8a, 05, 5f, 77, f7, 03, 84, c0, 74, e6, eb, f2, 48, c1, e7, 04]
+[nmi] current task 10 "?" last-syscall=0(a1=0x0)->0x0 globals-owner=0
+[nmi] stack scan (return addresses):
+[census] 28 tasks, current=10
+[census] t0 cr3=0x0 sys=185 cpu=0 Ready
+[census] t1 cr3=0x0 sys=0 cpu=0 Sleeping(until 4206)
+[census] t2 cr3=0x0 sys=0 cpu=0 Sleeping(until 4221)
+[census] t3 cr3=0x0 sys=0 cpu=0 Sleeping(until 4205)
+[census] t4 cr3=0x0 sys=0 cpu=0 Sleeping(until 3904)

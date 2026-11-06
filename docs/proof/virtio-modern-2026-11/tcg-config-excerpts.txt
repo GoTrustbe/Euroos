@@ -1,0 +1,56 @@
+== v2-modern-novec
+[blk] virtio-blk: no MSI-X, completions are polled
+[blk] virtio-blk OK — 524288 sectors (256 MiB) @ 00:02.0 modern virtio-1.x, common cfg @ 0xc000000000 · features 0x100002200 · FLUSH on (real durability)
+[blk] virtio-blk: no MSI-X, completions are polled
+[blk] virtio-blk OK — 131072 sectors (64 MiB) @ 00:03.0 modern virtio-1.x, common cfg @ 0xc000004000 · features 0x100002200 · FLUSH on (real durability)
+[blk] 2 virtio-blk disk(s) initialized
+[    0.00 INF] [hpet] HPET @ 100 MHz active — 1M spin iterations = 181342 us (high-resolution HAL time source)
+[net] virtio-net: no MSI-X, the receive ring is polled
+[net] virtio-net OK — MAC 52:54:00:12:34:56 (RX 128 bufs, 12-byte header, features 0x100010020)
+[net-async] connect: answered 1507 us; half-open peer (stale ACK): RST at its ACK sent, established in 382 us; silent drop: fresh port after 3001 ms (2 ports); our FIN after the peer's: sent; bound 6 s → OK ✓
+[apic] Local APIC #0 on — timer 100 Hz (calibrated: 630107 ticks/period against PIT)
+== v2-modern-pitoff
+[blk] virtio-blk OK — 524288 sectors (256 MiB) @ 00:02.0 modern virtio-1.x, common cfg @ 0xc000000000 · features 0x100002200 · FLUSH on (real durability)
+[blk] virtio-blk OK — 131072 sectors (64 MiB) @ 00:03.0 modern virtio-1.x, common cfg @ 0xc000004000 · features 0x100002200 · FLUSH on (real durability)
+[blk] 2 virtio-blk disk(s) initialized
+[    0.00 INF] [hpet] HPET @ 100 MHz active — 1M spin iterations = 208867 us (high-resolution HAL time source)
+[net] virtio-net OK — MAC 52:54:00:12:34:56 (RX 128 bufs, 12-byte header, features 0x100010020)
+[net-async] connect: answered 1438 us; half-open peer (stale ACK): RST at its ACK sent, established in 352 us; silent drop: fresh port after 3001 ms (2 ports); our FIN after the peer's: sent; bound 6 s → OK ✓
+[apic] Local APIC #0 on — timer 100 Hz (calibrated: 634514 ticks/period against HPET (no PIT))
+== v1-modern-nopit-nohpet
+[blk] virtio-blk OK — 524288 sectors (256 MiB) @ 00:02.0 modern virtio-1.x, common cfg @ 0xc000000000 · features 0x100002200 · FLUSH on (real durability)
+[blk] virtio-blk OK — 131072 sectors (64 MiB) @ 00:03.0 modern virtio-1.x, common cfg @ 0xc000004000 · features 0x100002200 · FLUSH on (real durability)
+[blk] 2 virtio-blk disk(s) initialized
+[    0.00 WRN] [hpet] no HPET present — falling back to APIC timer/RTC
+[net] virtio-net OK — MAC 52:54:00:12:34:56 (RX 128 bufs, 12-byte header, features 0x100010020)
+[net-async] connect: answered 0 us; half-open peer (stale ACK): RST at its ACK sent, established in 0 us; silent drop: fresh port after 0 ms (2 ports); our FIN after the peer's: sent; bound 6 s FAILED
+[apic] Local APIC #0 on — timer 100 Hz (calibrated: 637078 ticks/period against ACPI PM timer (no PIT))
+== base2-pitoff
+[blk] virtio-blk OK — 524288 sectors (256 MiB) @ BAR0 I/O=0x6080 · FLUSH on (real durability)
+[blk] virtio-blk OK — 131072 sectors (64 MiB) @ BAR0 I/O=0x6000 · FLUSH on (real durability)
+[blk] 2 virtio-blk disk(s) initialized
+[    0.00 INF] [hpet] HPET @ 100 MHz active — 1M spin iterations = 226251 us (high-resolution HAL time source)
+[net] virtio-net OK — MAC 52:54:00:12:34:56 (RX 128 bufs)
+[net-async] connect: answered 1027 us; half-open peer (stale ACK): RST at its ACK sent, established in 284 us; silent drop: fresh port after 3001 ms (2 ports); our FIN after the peer's: sent; bound 6 s → OK ✓
+[apic] Local APIC #0 on — timer 100 Hz (calibrated: 6450 ticks/period)
+== base2-modern
+[blk] 0 virtio-blk disk(s) initialized
+[    0.00 INF] [hpet] HPET @ 100 MHz active — 1M spin iterations = 164973 us (high-resolution HAL time source)
+[net] virtio-net NIC not found
+[apic] Local APIC #0 on — timer 100 Hz (calibrated: 631824 ticks/period)
+== v2-trans
+[blk] virtio-blk OK — 524288 sectors (256 MiB) @ 00:02.0 modern virtio-1.x, common cfg @ 0xc000000000 · features 0x100002200 · FLUSH on (real durability)
+[blk] virtio-blk OK — 131072 sectors (64 MiB) @ 00:03.0 modern virtio-1.x, common cfg @ 0xc000004000 · features 0x100002200 · FLUSH on (real durability)
+[blk] 2 virtio-blk disk(s) initialized
+[    0.00 INF] [hpet] HPET @ 100 MHz active — 1M spin iterations = 208929 us (high-resolution HAL time source)
+[net] virtio-net OK — MAC 52:54:00:12:34:56 (RX 128 bufs, 12-byte header, features 0x100010020)
+[net-async] connect: answered 1273 us; half-open peer (stale ACK): RST at its ACK sent, established in 308 us; silent drop: fresh port after 3001 ms (2 ports); our FIN after the peer's: sent; bound 6 s → OK ✓
+[apic] Local APIC #0 on — timer 100 Hz (calibrated: 633598 ticks/period against PIT)
+== v2-legacy
+[blk] virtio-blk OK — 524288 sectors (256 MiB) @ 00:02.0 legacy virtio-0.9.5, I/O BAR 0x6080 · features 0x2200 · FLUSH on (real durability)
+[blk] virtio-blk OK — 131072 sectors (64 MiB) @ 00:03.0 legacy virtio-0.9.5, I/O BAR 0x6000 · features 0x2200 · FLUSH on (real durability)
+[blk] 2 virtio-blk disk(s) initialized
+[    0.00 INF] [hpet] HPET @ 100 MHz active — 1M spin iterations = 242086 us (high-resolution HAL time source)
+[net] virtio-net OK — MAC 52:54:00:12:34:56 (RX 128 bufs, 10-byte header, features 0x10020)
+[net-async] connect: answered 1746 us; half-open peer (stale ACK): RST at its ACK sent, established in 600 us; silent drop: fresh port after 3001 ms (2 ports); our FIN after the peer's: sent; bound 6 s → OK ✓
+[apic] Local APIC #0 on — timer 100 Hz (calibrated: 633897 ticks/period against PIT)
