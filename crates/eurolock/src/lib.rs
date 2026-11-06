@@ -320,11 +320,10 @@ pub struct StatsSnapshot {
 impl StatsSnapshot {
     /// Contended acquisitions per million acquisitions (avoids floats in no_std).
     pub fn contention_ppm(&self) -> u64 {
-        if self.acquires == 0 {
-            0
-        } else {
-            self.contended.saturating_mul(1_000_000) / self.acquires
-        }
+        self.contended
+            .saturating_mul(1_000_000)
+            .checked_div(self.acquires)
+            .unwrap_or(0)
     }
     /// Difference `self - earlier` (for before/after measurements); `max_spins`
     /// keeps the later value.
