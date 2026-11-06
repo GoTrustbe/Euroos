@@ -84,6 +84,28 @@ pub fn capture_media() {
             Err(_) => continue,
         };
         let mut fs = FileSystem::new(sfs);
+        // The media is read into the kernel heap, and an allocation failure there
+        // is a panic. On a small machine (512 MiB RAM gives a 128 MiB heap) the
+        // two kernels do not fit: skip the preload instead of panicking. The
+        // installer then reports that no install media is available.
+        let mut need = 0usize;
+        for p in [
+            cstr16!("\\EFI\\BOOT\\eurokernel-A.efi"),
+            cstr16!("\\EFI\\BOOT\\eurokernel-B.efi"),
+            cstr16!("\\EFI\\BOOT\\BOOTX64.EFI"),
+        ] {
+            need += fs.metadata(p).map(|m| m.file_size() as usize).unwrap_or(0);
+        }
+        let (_, free) = crate::allocator::stats();
+        // Keep a quarter of the free heap for the rest of the boot.
+        if need > 0 && need.saturating_mul(4) / 3 > free {
+            crate::serial_println!(
+                "[inst] install media ({} MiB) does not fit the heap ({} MiB free) — preload skipped, installer unavailable on this machine",
+                need >> 20,
+                free >> 20
+            );
+            return;
+        }
         // This volume is our ESP if the kernel-A image is on it.
         let kernel_a = match fs.read(cstr16!("\\EFI\\BOOT\\eurokernel-A.efi")) {
             Ok(d) => d,

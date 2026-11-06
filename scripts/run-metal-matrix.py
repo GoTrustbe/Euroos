@@ -115,6 +115,11 @@ def leg_devices(leg):
     raise SystemExit(f"unknown leg {leg}")
 
 
+# Self-tests that verify fixtures signed with the release dev key
+# (toolchain/eupkg/*.eupkg, testdata/*.sig). With EK_FRESH_DEV_KEY=1 (CI
+# generates its own key) their FAILED lines are not counted as forbidden.
+KEY_BOUND_TESTS = ("[upd3]", "[3f1]", "[3e6]")
+
 # (leg, [required serial markers], [forbidden serial markers])
 LEGS = {
     "base": (["[ecam] PCIe config via ECAM", "[pci]",
@@ -125,7 +130,10 @@ LEGS = {
              ["self-test: write FAILED", "self-test: read FAILED", "MISMATCH"]),
     "ahci": (["[ahci] disk 1", "self-test write/read: sector OK ✓ · 64 KiB OK ✓",
               "interactive loop started"], ["MISMATCH", "FAILED ✗"]),
-    "e1000e": (["NIC: e1000 MAC", "[net] DHCP OFFER:",
+    # net.driver=user is the default: e1000d (ring 3) owns the NIC, so the
+    # in-kernel "NIC: e1000 MAC" / "[net] DHCP OFFER:" lines are not printed.
+    "e1000e": (["[udrv-e1000] e1000d", "brought the 82574L (e1000e) up",
+                "[udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HTTP",
                 "PING 10.0.2.2: echo-reply OK ✓", "interactive loop started"], []),
     "hda": (["interactive loop started"], []),  # + dynamic check below: hda init line
     "usb": (["mass storage LIVE", "interactive loop started"], []),
@@ -318,8 +326,13 @@ def run_leg(leg):
         if m not in txt:
             print(f"  [{leg}] FAIL: marker missing: {m!r}")
             ok = False
+    if os.environ.get("EK_FRESH_DEV_KEY") == "1":
+        txt_forbid = "\n".join(l for l in txt.splitlines()
+                                if not l.lstrip().startswith(KEY_BOUND_TESTS))
+    else:
+        txt_forbid = txt
     for m in forbid:
-        if m in txt:
+        if m in txt_forbid:
             print(f"  [{leg}] FAIL: forbidden marker present: {m!r}")
             ok = False
     if leg == "hda" and "[hda]" not in txt and "[snd]" not in txt:

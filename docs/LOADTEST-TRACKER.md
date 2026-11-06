@@ -905,6 +905,28 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Fix (proposed):** take `PIPE_FDS` (and `PIPES`/`PIPE_WAITERS`, which `pipe_write_fd` nests) only with
   interrupts off everywhere, as `SCANCODES` and the UART lock do, or drop the IF-off section there.
 
+### BUG-038 — install-media preload panicked on a 512 MiB machine with a second disk ✅ FIXED
+- **Status:**   FIXED · **Severity:** HIGH (boot panic)
+- **Found:**    2026-11-06 · CI `q35 metal matrix` (`nvme`, `ahci`, `usb` legs, `-m 512M`), reproduced on the R630
+- **Analysis:** with a second disk, `instexec::capture_media` reads `eurokernel-A/B.efi` and the loader
+  (128 MiB together since the A/B kernels grew to ~52 MiB each) into the kernel heap before
+  ExitBootServices. 512 MiB RAM gives a 128 MiB heap: `memory allocation of 67562496 bytes failed`.
+- **Fix:** the preload sums the file sizes first and skips itself when they need more than three
+  quarters of the free heap (`[inst] install media (…) does not fit the heap …`). The installer then
+  reports that no install media is available, instead of the boot panicking. Matrix `nvme`, `ahci`,
+  `usb` PASS at 512 MiB.
+
+### BUG-039 — CDC-ECM USB ethernet gets no DHCP OFFER in the late bring-up 🟡 OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (USB tethering has no network)
+- **Found:**    2026-11-06 · CI `q35 metal matrix`, `usbnet` leg (TCG, `-nic none`, `usb-net` on SLIRP)
+- **Analysis:** the device enumerates (`[xhci] slot 3: USB ethernet (CDC-ECM) LIVE`) and the netstack
+  binds it (`[net] NIC: usb-ethernet (CDC-ECM) … (late bring-up)`), but six DISCOVERs get no OFFER
+  (`[net] late bring-up: no DHCP OFFER over usb-ethernet (CDC-ECM)`). Not new this week: the
+  2026.11.05 image (`52755fc`, before the net worker) fails the same way. The matrix job never ran
+  to the end before (it was cancelled), so the last good state is unknown.
+- **Next:** check whether the DISCOVER reaches SLIRP (`-object filter-dump` on the usb-net netdev)
+  and whether the bulk-IN pipe is polled during `poll_dhcp` (it spins on `legacy_rx()` only).
+
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with
   ≥ 2 GiB after BUG-016**; on 813e627 most were killed at their first instruction and the boot

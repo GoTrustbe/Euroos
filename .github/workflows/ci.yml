@@ -240,4 +240,6 @@ jobs:
         # Those stay in the full local matrix, which runs on a KVM-capable host.
         env:
           EK_BOOT_DEADLINE: "900"
+          # The image is signed with a key generated above, not the release key.
+          EK_FRESH_DEV_KEY: "1"
         run: python3 scripts/run-metal-matrix.py eurokernel.img --legs base,nvme,ahci,e1000e,hda,usb,usbhub,usbaudio,usbnet,scan,printer,power,hwprobe
