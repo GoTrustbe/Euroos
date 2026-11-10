@@ -340,12 +340,13 @@ pub fn field_key(ch: char) -> bool {
         None => return false,
     };
     let mut fs = FORM_STATE.lock();
-    let slot = match fs.iter_mut().find(|(n, _)| *n == node) {
-        Some(s) => &mut s.1,
-        None => {
-            fs.push((node, String::new()));
-            &mut fs.last_mut().unwrap().1
-        }
+    // A focused field without a value slot (focus set by a click on a page
+    // that was replaced since): make the slot, then look it up like any other.
+    if !fs.iter().any(|(n, _)| *n == node) {
+        fs.push((node, String::new()));
+    }
+    let Some(slot) = fs.iter_mut().find(|(n, _)| *n == node).map(|s| &mut s.1) else {
+        return false;
     };
     match ch {
         '\r' => {
@@ -892,4 +893,21 @@ fn clip(s: &str, max: usize) -> String {
 
 fn col(c: u32) -> Color {
     Color::rgb(((c >> 16) & 0xFF) as u8, ((c >> 8) & 0xFF) as u8, (c & 0xFF) as u8)
+}
+
+/// **[robust] webview** — typing into a focused form field that has no value
+/// slot yet (the `last_mut().unwrap()` path), then leaving it.
+#[cfg(feature = "selftest")]
+pub fn robust_selftest() -> bool {
+    const NODE: usize = usize::MAX - 7; // no page has this node
+    let saved_focus = FOCUSED_FIELD.lock().take();
+    FORM_STATE.lock().retain(|(n, _)| *n != NODE);
+    *FOCUSED_FIELD.lock() = Some(NODE);
+    let typed = field_key('a') && field_key('b') && field_key('c') && field_key('\u{8}');
+    let value = FORM_STATE.lock().iter().find(|(n, _)| *n == NODE).map(|(_, v)| v.clone());
+    let left = field_key('\r') && !field_focused();
+    let ignored = !field_key('x'); // no focused field: nothing to type into
+    FORM_STATE.lock().retain(|(n, _)| *n != NODE);
+    *FOCUSED_FIELD.lock() = saved_focus;
+    typed && value.as_deref() == Some("ab") && left && ignored
 }

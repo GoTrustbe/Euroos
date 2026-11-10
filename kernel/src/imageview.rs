@@ -35,6 +35,34 @@ static VIEW: Mutex<View> = Mutex::new(View {
     siblings: Vec::new(),
 });
 
+/// The largest image file the viewer reads into memory.
+const MAX_OPEN_BYTES: u64 = 64 * 1024 * 1024;
+/// Self-test hook: a size limit that replaces the memory budget.
+static LIMIT_OVERRIDE: Mutex<Option<u64>> = Mutex::new(None);
+
+/// Part of **[robust-fs]**: a file over the limit is not read; the viewer shows
+/// why. The viewer's previous picture is put back afterwards.
+#[cfg(feature = "selftest")]
+pub fn robust_open_selftest(fs: &mut dyn eurofs::fs::FileSystem, big: &str) -> bool {
+    let saved_path = VIEW.lock().path.clone();
+    *LIMIT_OVERRIDE.lock() = Some(4096);
+    open(fs, big);
+    *LIMIT_OVERRIDE.lock() = None;
+    let ok = {
+        let v = VIEW.lock();
+        v.img.is_none() && v.status.contains("too large")
+    };
+    if saved_path.is_empty() {
+        let mut v = VIEW.lock();
+        v.path.clear();
+        v.status.clear();
+        v.siblings.clear();
+    } else {
+        open(fs, &saved_path);
+    }
+    ok
+}
+
 /// Open a file: sniff the format by content, decode, and remember it (or a
 /// clear, honest status if the format is not one we decode).
 pub fn open(fs: &mut dyn eurofs::fs::FileSystem, path: &str) {
@@ -63,11 +91,18 @@ pub fn open(fs: &mut dyn eurofs::fs::FileSystem, path: &str) {
         }
         v.siblings.sort();
     }
-    let bytes = match fs.read_file(path) {
+    // The file and the decoded picture are both in memory while it decodes.
+    let limit = LIMIT_OVERRIDE
+        .lock()
+        .unwrap_or_else(|| eurofs::read_budget(crate::allocator::stats().1 as u64, MAX_OPEN_BYTES, 2));
+    let bytes = match eurofs::read_file_bounded(&*fs, path, limit) {
         Ok(b) => b,
-        Err(_) => {
+        Err(e) => {
             v.img = None;
-            v.status = alloc::format!("could not read {path}");
+            v.status = match e {
+                eurofs::BoundedReadError::TooLarge { .. } => alloc::format!("{path}: {e}"),
+                eurofs::BoundedReadError::Fs(_) => alloc::format!("could not read {path}"),
+            };
             return;
         }
     };

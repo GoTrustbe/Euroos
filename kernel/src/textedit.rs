@@ -30,23 +30,38 @@ struct Editor {
 static ED: Mutex<Option<Editor>> = Mutex::new(None);
 
 fn ed<'a>(g: &'a mut Option<Editor>) -> &'a mut Editor {
-    if g.is_none() {
-        *g = Some(Editor {
-            buf: crate::editcore::Buffer::new(),
-            path: String::new(),
-            status: String::new(),
-            scroll: 0,
-        });
-    }
-    g.as_mut().unwrap()
+    g.get_or_insert_with(|| Editor {
+        buf: crate::editcore::Buffer::new(),
+        path: String::new(),
+        status: String::new(),
+        scroll: 0,
+    })
 }
+
+/// The largest file EuroText opens. The text lives in memory as lines and is
+/// built into one string again on every save, so a file costs several times
+/// its size; beyond this (or a quarter of the free heap) the editor says so.
+const MAX_OPEN_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Open `path` (or the default file) in the editor; if it does not exist, we start
 /// with a welcome text. Fills the line buffer from the REAL file content.
 pub fn open(fs: &mut dyn FileSystem, path: &str) {
+    let free = crate::allocator::stats().1 as u64;
+    open_limited(fs, path, eurofs::read_budget(free, MAX_OPEN_BYTES, 3));
+}
+
+/// [`open`] with an explicit size limit. A file over the limit is not opened:
+/// the document that was open stays, the status line says why.
+fn open_limited(fs: &mut dyn FileSystem, path: &str, limit: u64) -> bool {
     let p = if path.is_empty() { DEFAULT_PATH } else { path };
-    let content = match fs.read_file(p) {
+    let content = match eurofs::read_file_bounded(&*fs, p, limit) {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(e @ eurofs::BoundedReadError::TooLarge { .. }) => {
+            serial_println!("[edit] {p}: {e}");
+            let mut g = ED.lock();
+            ed(&mut g).status = alloc::format!("{p}: {e}");
+            return false;
+        }
         Err(_) => String::from("Welcome to EuroText.\nType here; click 'Save' to write to EuroFS.\n"),
     };
     let mut g = ED.lock();
@@ -55,6 +70,45 @@ pub fn open(fs: &mut dyn FileSystem, path: &str) {
     e.path = String::from(p);
     e.scroll = 0;
     e.status = alloc::format!("opened: {p}");
+    true
+}
+
+/// **[robust-fs]** — a file larger than what fits in memory is refused with a
+/// message by the editor, the paint app, the image viewer and `cat`, instead
+/// of being read into the heap (BUG-025/BUG-038 class). The limits are set
+/// low here so a 64 KiB file is "too large"; the code path is the real one.
+#[cfg(feature = "selftest")]
+fn robust_selftest(fs: &mut dyn FileSystem) {
+    let big = "/tmp/robust-big.bin";
+    let small = "/tmp/robust-small.txt";
+    let wrote = fs.write_file(big, &alloc::vec![b'x'; 64 * 1024]).is_ok() && fs.write_file(small, b"kept").is_ok();
+    // Editor: open a small file, then the big one with a 4 KiB limit.
+    let opened_small = open_limited(fs, small, 4096);
+    let refused = !open_limited(fs, big, 4096);
+    let (text, path, status) = {
+        let mut g = ED.lock();
+        let e = ed(&mut g);
+        (e.buf.text(), e.path.clone(), e.status.clone())
+    };
+    let editor_ok = opened_small && refused && text == "kept" && path == small && status.contains("too large");
+    // The same file through the shared helper at the real budget is read.
+    let free = crate::allocator::stats().1 as u64;
+    let helper_ok = eurofs::read_file_bounded(&*fs, big, eurofs::read_budget(free, MAX_OPEN_BYTES, 3)).map(|d| d.len())
+        == Ok(64 * 1024)
+        && matches!(
+            eurofs::read_file_bounded(&*fs, big, 65535),
+            Err(eurofs::BoundedReadError::TooLarge { size: 65536, limit: 65535 })
+        );
+    let paint_ok = crate::paint::robust_open_selftest(fs, big);
+    let view_ok = crate::imageview::robust_open_selftest(fs, big);
+    let cat_ok = crate::shell::robust_read_selftest(fs, big);
+    let _ = fs.remove_file(big);
+    let _ = fs.remove_file(small);
+    let ok = wrote && editor_ok && helper_ok && paint_ok && view_ok && cat_ok;
+    serial_println!(
+        "[robust-fs] file larger than the memory budget: editor refused+kept document={editor_ok} ({status:?}), helper={helper_ok}, paint={paint_ok}, image viewer={view_ok}, shell cat={cat_ok} → {}",
+        if ok { "OK ✓" } else { "FAILED ✗" }
+    );
 }
 
 /// A raw character (paste, or the symbol picker) inserted at the cursor.
@@ -249,6 +303,8 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
 /// **[edit]** — prove the edit-→-save-→-reload cycle on the REAL EuroFS,
 /// independent of keyboard/mouse: type text in, save, reload, compare.
 pub fn selftest(fs: &mut dyn FileSystem) {
+    #[cfg(feature = "selftest")]
+    robust_selftest(fs);
     let path = "/tmp/edit-selftest.txt";
     open(fs, path); // fresh buffer (file does not exist → welcome text)
     // Replace the buffer with controlled content via input().

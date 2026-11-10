@@ -16,6 +16,7 @@
 extern crate alloc;
 
 pub mod badblocks;
+pub mod bounded;
 pub mod block;
 pub mod cache;
 pub mod checksum;
@@ -28,6 +29,7 @@ pub mod superblock;
 pub mod vfs;
 pub mod shared;
 
+pub use bounded::{read_budget, read_file_bounded, BoundedReadError};
 pub use block::{BlockDevice, BlockError, BlockResult, MemoryBlockDevice};
 pub use disk::EuroFs;
 pub use fs::{

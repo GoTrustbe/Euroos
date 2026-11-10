@@ -19,10 +19,19 @@ fn with_registry<R>(f: impl FnOnce(&mut Registry) -> R) -> R {
     f(r)
 }
 
+/// Files up to this size are read for the magic sniff.
+const SNIFF_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
 /// The MIME type + default app for a real file on `fs` (reads a prefix for the
 /// magic sniff). Returns `(mime, Some(app)|None)`.
 pub fn resolve(fs: &mut dyn FileSystem, path: &str) -> (String, Option<String>) {
-    let data = fs.read_file(path).unwrap_or_default();
+    // Only the first 64 bytes are sniffed, and the filesystem has no partial
+    // read: a file that is not small is typed by its name alone instead of
+    // being pulled into the heap for its first line (the BUG-022 pattern).
+    let data = match eurofs::read_file_bounded(&*fs, path, SNIFF_MAX_BYTES) {
+        Ok(d) => d,
+        Err(_) => Vec::new(),
+    };
     let head = &data[..data.len().min(64)];
     let mime = euromime::detect_refined(path, head);
     let app = with_registry(|r| r.default_app(&mime).map(String::from));
