@@ -589,3 +589,62 @@ pub fn selftest() {
         if ok { "✓" } else { "✗ FAIL" }
     );
 }
+
+/// Tooltip text for the control under (mx,my): the action toolbar and the
+/// "protected" badge of a row. Same geometry as `toolbar_click` and `render`.
+pub fn tip_at(win_x: usize, win_y: usize, win_w: usize, mx: usize, my: usize) -> Option<&'static str> {
+    let list_x = win_x + PLACES_W + 1;
+    let list_w = win_w.saturating_sub(PLACES_W + 1);
+    let by = win_y + TITLEBAR_H;
+    let tb_y = by + 40;
+    if my >= tb_y && my < tb_y + 30 {
+        let i = mx.checked_sub(list_x + 8)? / 92;
+        if list_x + 8 + i * 92 + 88 > list_x + list_w {
+            return None; // not drawn in a narrow window
+        }
+        return Some(match *ACTIONS.get(i)? {
+            "New Folder" => "Create a folder here",
+            "Rename" => "Rename the selected item",
+            "Delete" => "Delete the selection at once, not via the Trash (a folder only when empty)",
+            "Copy" => "Remember the selected file; Paste then copies it into the open folder",
+            "Cut" => "Remember the selected item; Paste then moves it into the open folder",
+            "Paste" => "Copy or move the remembered item into this folder",
+            "Perms" => "Change the permission bits (octal, for example 644)",
+            "Protect" => "Make the selected file immutable, or remove that again (own files under /home)",
+            "History" => "Earlier versions of the selected file; click one to restore it",
+            _ => return None,
+        });
+    }
+    // A "protected" badge: right of the name, left of the size (see render).
+    let list_y0 = by + 90;
+    if mx < list_x || my < list_y0 + ROW_H {
+        return None;
+    }
+    let i = (my - list_y0) / ROW_H - 1;
+    let guard = LISTING.lock();
+    let e = guard.as_ref()?.entries.get(i)?;
+    if !e.badges.contains(&Badge::Immutable) {
+        return None;
+    }
+    let right = if e.kind == FileKind::Dir {
+        list_x + list_w - 56
+    } else {
+        list_x + list_w - text::width_px(&human_size(e.size), 11.5) - 28
+    };
+    let cw = text::width_px("protected", 10.5) + 16;
+    if mx + cw >= right && mx < right {
+        Some("Immutable: cannot be changed, renamed or deleted until Protect removes it")
+    } else {
+        None
+    }
+}
+
+/// Part of the `[help]` boot self-test: the toolbar tips line up with ACTIONS.
+pub fn tip_selftest() -> bool {
+    let at = |i: usize| tip_at(0, 0, 1200, PLACES_W + 1 + 8 + i * 92 + 10, TITLEBAR_H + 40 + 10);
+    (0..ACTIONS.len()).all(|i| at(i).is_some())
+        && at(7).map(|t| t.contains("immutable")).unwrap_or(false)
+        && at(8).map(|t| t.contains("versions")).unwrap_or(false)
+        && at(ACTIONS.len()).is_none()
+        && tip_at(0, 0, 1200, PLACES_W + 20, TITLEBAR_H + 10).is_none()
+}

@@ -1,0 +1,154 @@
+wait 3
+shot tour-1.ppm
+key right
+wait 1
+shot tour-2.ppm
+key right
+wait 1
+shot tour-3.ppm
+key right
+wait 1
+shot tour-4.ppm
+key right
+wait 1
+shot tour-5.ppm
+key right
+wait 1
+shot tour-6.ppm
+key esc
+wait 1
+move 45 42
+click
+wait 1
+key p
+key a
+key i
+key n
+key t
+wait 1
+key ret
+wait 2
+move 190 215
+wait 2
+shot tooltip-paint-bucket.ppm
+move 346 486
+wait 2
+shot tooltip-paint-save.ppm
+move 956 92
+wait 2
+shot tooltip-help-button.ppm
+click
+wait 1
+shot help-paint.ppm
+key esc
+wait 1
+move 45 99
+click
+wait 2
+move 509 169
+wait 2
+shot tooltip-files-delete.ppm
+key f1
+wait 1
+shot help-files.ppm
+key esc
+wait 1
+move 45 149
+click
+wait 2
+key f1
+wait 1
+shot help-notes.ppm
+key esc
+wait 1
+move 45 199
+click
+wait 2
+key f1
+wait 1
+shot help-clock.ppm
+key esc
+wait 1
+move 45 349
+click
+wait 2
+key f1
+wait 1
+shot help-settings.ppm
+key esc
+wait 1
+move 45 399
+click
+wait 2
+key f1
+wait 1
+shot help-calc.ppm
+key esc
+wait 1
+move 45 449
+click
+wait 2
+key f1
+wait 1
+shot help-agent.ppm
+key esc
+wait 1
+move 45 499
+click
+wait 2
+key f1
+wait 1
+shot help-text.ppm
+key esc
+wait 1
+move 45 549
+click
+wait 2
+key f1
+wait 1
+shot help-monitor.ppm
+key esc
+wait 1
+move 45 599
+click
+wait 2
+key f1
+wait 1
+shot help-log.ppm
+key esc
+wait 1
+move 45 299
+click
+wait 1
+key f1
+wait 1
+shot help-terminal.ppm
+move 540 256
+click
+wait 1
+shot help-overview-1.ppm
+key pgdn
+wait 1
+shot help-overview-2.ppm
+key pgdn
+wait 1
+shot help-overview-3.ppm
+move 540 306
+click
+wait 1
+shot help-security.ppm
+key pgdn
+wait 1
+shot help-security-2.ppm
+key f2
+wait 1
+shot shortcuts-1.ppm
+key pgdn
+wait 1
+shot shortcuts-2.ppm
+key pgdn
+wait 1
+shot shortcuts-3.ppm
+key esc
+wait 1
+shot end.ppm

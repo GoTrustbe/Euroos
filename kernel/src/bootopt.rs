@@ -33,6 +33,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 static NET_USER: AtomicBool = AtomicBool::new(true);
 static NVME_USER: AtomicBool = AtomicBool::new(false);
 static SCHED_WATCH: AtomicBool = AtomicBool::new(false);
+static TOUR_OFF: AtomicBool = AtomicBool::new(false);
 static FOUND: AtomicBool = AtomicBool::new(false);
 
 /// Parse the option text (host-testable shape: pure over the bytes).
@@ -52,6 +53,9 @@ fn apply(text: &str) {
                 ("debug.schedwatch", "off") => SCHED_WATCH.store(false, Ordering::Relaxed),
                 ("virtio.transport", "legacy") => crate::virtio_pci::PREFER_LEGACY.store(true, Ordering::Relaxed),
                 ("virtio.transport", "modern") => crate::virtio_pci::PREFER_LEGACY.store(false, Ordering::Relaxed),
+                // First-run tour (kernel/src/onboarding.rs): off for unattended images.
+                ("ui.tour", "off") => TOUR_OFF.store(true, Ordering::Relaxed),
+                ("ui.tour", "on") => TOUR_OFF.store(false, Ordering::Relaxed),
                 (k, v) => crate::serial_println!("[bootopt] unknown option {k}={v} ignored"),
             }
         }
@@ -91,6 +95,11 @@ pub fn capture() {
 
 /// BUG-032: is the hardware write watch on the scheduler state on (memwatch.rs)?
 /// Off by default; `debug.schedwatch=on` arms it.
+/// `ui.tour=off`: do not show the first-run tour.
+pub fn tour_off() -> bool {
+    TOUR_OFF.load(Ordering::Relaxed)
+}
+
 pub fn sched_watch() -> bool {
     SCHED_WATCH.load(Ordering::Relaxed)
 }

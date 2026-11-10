@@ -622,3 +622,40 @@ pub fn selftest() {
         if ok { "✓" } else { "✗ FAIL" }
     );
 }
+
+/// Tooltip text for the control under (mx,my): the formatting toolbar, the
+/// font switch and the delete mark of a row. Same geometry as `toolbar_click`,
+/// `hit_test` and `render`.
+pub fn tip_at(win_x: usize, win_y: usize, win_w: usize, mx: usize, my: usize) -> Option<&'static str> {
+    let list_w = 210usize;
+    let px = win_x + list_w + 1;
+    let pw = win_w.saturating_sub(list_w + 1);
+    let tb_y = win_y + TITLEBAR_H + 8;
+    if my >= tb_y && my < tb_y + 26 && mx >= px {
+        if mx >= px + pw.saturating_sub(90) && mx + 12 < px + pw {
+            return Some("Switch the note font between sans-serif and monospace");
+        }
+        let d = mx.checked_sub(px + 12)?;
+        if d % 46 >= 42 {
+            return None; // the gap between two buttons
+        }
+        return Some(match TOOLBAR.get(d / 46)?.0 {
+            "B" => "Bold: puts ** around the word at the cursor",
+            "I" => "Italic: puts * around the word at the cursor",
+            "H1" => "Heading: starts the line with #",
+            "H2" => "Subheading: starts the line with ##",
+            "<>" => "Code: puts ` around the word at the cursor",
+            "\u{2022}" => "List item: starts the line with -",
+            _ => "Quote: starts the line with >",
+        });
+    }
+    // The delete mark at the right end of a note row.
+    let ly = win_y + TITLEBAR_H + 72;
+    if mx >= win_x + list_w - 30 && mx < win_x + list_w && my >= ly {
+        let n = filtered().len();
+        if (my - ly) / 50 < n && live_notes().len() > 1 {
+            return Some("Delete this note at once (no undo)");
+        }
+    }
+    None
+}

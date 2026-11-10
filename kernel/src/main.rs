@@ -161,6 +161,9 @@ mod filedialog;
 mod notify;
 mod screenshot;
 mod tooltip;
+mod help; // T3-hook
+mod help_text; // T3-hook
+mod onboarding; // T3-hook
 mod symbolpicker;
 mod spell;
 mod switcher;
@@ -331,6 +334,7 @@ fn build_context_menu(
 /// The tooltip text for whatever control is under the cursor, if any: the EU
 /// mark, a dock tile, the status panel, or a window's traffic-light buttons.
 fn tooltip_for(px: usize, py: usize, windows: &[compositor::Window], order: &[usize], width: usize) -> Option<String> {
+    if let Some(t) = help::tooltip_hook(px, py, windows, order) { return t; } // T3-hook: help overlays + in-app tooltips
     if compositor::brand_button_at(px, py) {
         return Some(String::from("Open the app launcher"));
     }
@@ -4196,6 +4200,7 @@ fn main() -> Status {
         notify::selftest();
         screenshot::selftest();
         tooltip::selftest();
+        help::selftest(); // T3-hook: [help] every app has a help page
         symbolpicker::selftest();
         spell::selftest();
         switcher::selftest();
@@ -5267,6 +5272,7 @@ fn main() -> Status {
         let mut launch_store: Option<String> = None;
         // A screenshot requested this iteration, captured after a clean render.
         let mut pending_shot = false;
+        if help::pump(&windows, &order, ctx.fs, width, height) { need_full = true; } // T3-hook: F1/F2, help panel input, first-run tour
 
         // The symbol picker is modal: a click inserts the chosen symbol into the
         // focused text field (or dismisses).
@@ -5504,6 +5510,7 @@ fn main() -> Status {
                 .find(|&i| windows[i].visible && windows[i].contains(px, py))
             {
                 // First: traffic-light buttons (close/minimize/maximize).
+                if help::title_button_at(&windows[i], px, py) { help::open_for(&windows[i]); need_full = true; } else // T3-hook: "?" in the title bar
                 if let Some(btn) = windows[i].title_button_at(px, py) {
                     match btn {
                         compositor::TitleButton::Close => {
@@ -6052,6 +6059,7 @@ fn main() -> Status {
                         };
 
                     let mut out: Vec<String> = Vec::new();
+                    if let Some(h) = help::shell_line(&exec_cmd) { out.extend(h); } else // T3-hook: help, help <command>, help tour
                     if exec_cmd == "clear" {
                         windows[term_idx].content.clear();
                     } else if exec_cmd == "help" {
@@ -6786,6 +6794,7 @@ fn main() -> Status {
             }
             // The Alt-Tab switcher overlay.
             switcher::render(&fb, width, height);
+            help::render(&fb, width, height); // T3-hook: help panel + first-run tour, above the other overlays
             // Workspace pager: one dot per virtual desktop, the active one filled.
             {
                 let n = workspace::COUNT;
@@ -7538,48 +7547,50 @@ const WELCOME_TXT: &[u8] = b"\
 EuroOS - Welcome
 ================
 
-EuroOS is a sovereign, security-first operating system built from scratch in
-Rust. It has its own kernel, filesystem, network stack, capability security and
-desktop - with no Linux or BSD underneath. Zero telemetry. Licensed under the
-European Union Public Licence (EUPL) v1.2.
+EuroOS is an operating system written from scratch in Rust: its own kernel,
+file system, network stack and desktop. No telemetry. Licence: EUPL v1.2.
+This is a preview for trying things out, not for daily work.
 
-This is an ALPHA PREVIEW: something to explore and build on, not yet a
-daily-driver OS.
+Help
+----
+F1      help for the window in front (or click the ? in its title bar)
+F2      all keyboard shortcuts
+help    in the Terminal: commands by topic; `help <command>` explains one
 
-What you can do here
---------------------
-* Open the Terminal from the dock and explore an interactive shell.
-* Browse the filesystem and read/write files (EuroFS is copy-on-write).
-* Use real networking: DNS, HTTP/HTTPS over TLS 1.3.
-* Try the sovereign subsystems: user identity, the encrypted secrets vault,
-  capability-isolated AI agents, the firewall, snapshots, and the audit log.
+Desktop
+-------
+* Dock (left): click a tile to open an app. The EU mark at the top opens
+  the launcher: type to find apps and files.
+* Alt+Tab switches windows, Alt+1..4 switches workspaces.
+* Right-click the desktop, a file or a text window for a menu.
+* Click the clock panel (top right) for earlier notifications.
 
-Useful shell commands  (type `help` for the exact, current list)
-----------------------------------------------------------------
-Files     : ls, cat, write <file> <text>, mkdir, cp, find, df
-Text      : echo, grep, sort, uniq, cut, wc, head, tail   (GNU-compatible)
-System    : uname, hostname, whoami, id, date, free, ps, lspci, lsdev, metrics
-Identity  : login <user> <pw>, su, sudo <cmd>, logout, eurousers
-Security  : vault, europol, audit, eurosnap, eurohealth
-Network   : net, eurofw (firewall), vpn
-Agents    : euroagent   (capability-isolated AI agents)
+Apps
+----
+In the dock: EuroFiles, EuroNotes, EuroClock, EuroWeb, Terminal, EuroBeheer
+(settings), EuroReken (calculator), EuroAgent, EuroText, EuroMonitor, EuroLog.
+From the launcher: EuroView, EuroPaint, Chromium (needs its pack disk) and
+the installer. More apps come from the app store: `app store` in the
+Terminal (needs a network connection).
 
-The demo desktop user is `euro` (password: euro). Root access is via `sudo`.
+Account
+-------
+The preview signs in as the demo user `euro` (password: euro).
+`sudo <command>` runs one command as root.
 
-Known limitations (alpha)
--------------------------
-* Not every desktop app is fully interactive yet; some are previews.
-* Hardware support is limited - it runs best in QEMU/KVM with virtio devices.
-* There is no internet app store / package installation yet.
-* This preview is for evaluation - do not store important data here.
+Limits of the preview
+---------------------
+* Started from the image alone, files live in memory and are gone after a
+  restart. Install EuroOS on a disk (launcher: Install EuroOS) to keep them.
+* Several apps are partial. Each help page (F1) lists what is missing.
+* Hardware support is limited; it runs best in QEMU/KVM with virtio devices.
+* Do not keep the only copy of important data here.
 
-Learn more
-----------
+More
+----
 Website : https://euro-os.eu
-Source  : https://github.com/GoTrustbe/Euroos   (open source, EUPL-1.2)
+Source  : https://github.com/GoTrustbe/Euroos   (EUPL-1.2)
 Docs    : https://euro-os.eu/docs
-
-Welcome to a computer that is yours, on your terms.  - The EuroOS project
 ";
 
 /// Mini-EuroUpdate (Track 9): keep an INSTALLED system in sync with the kernel.

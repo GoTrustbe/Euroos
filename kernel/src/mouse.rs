@@ -109,6 +109,19 @@ pub fn take_press() -> Option<(usize, usize)> {
     }
 }
 
+/// The position of a pending left-button press WITHOUT consuming it (the
+/// first-run tour uses this to let a click outside its card through).
+pub fn peek_press() -> Option<(usize, usize)> {
+    if PRESS_PENDING.load(Ordering::Relaxed) {
+        Some((
+            CLICK_X.load(Ordering::Relaxed).max(0) as usize,
+            CLICK_Y.load(Ordering::Relaxed).max(0) as usize,
+        ))
+    } else {
+        None
+    }
+}
+
 // Packet assembly: (phase 0..3, bytes).
 static PACKET: Mutex<(u8, [u8; 3])> = Mutex::new((0, [0; 3]));
 

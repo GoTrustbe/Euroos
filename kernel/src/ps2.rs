@@ -20,6 +20,10 @@ static ALT: AtomicBool = AtomicBool::new(false);
 static ALT_TAB: AtomicBool = AtomicBool::new(false);
 /// Latched Alt+digit workspace request (0xFF = none, else 0-based workspace).
 static WS_SWITCH: AtomicU8 = AtomicU8::new(0xFF);
+/// Latched F1 press (help for the active window; consumed by `help::pump`).
+static HELP_KEY: AtomicBool = AtomicBool::new(false);
+/// Latched F2 press (keyboard shortcut overview).
+static SHORTCUTS_KEY: AtomicBool = AtomicBool::new(false);
 /// The active layout, as `Layout::ALL` index. Default 0 = US QWERTY.
 static LAYOUT: AtomicU8 = AtomicU8::new(0);
 
@@ -35,6 +39,15 @@ pub fn take_alt_tab() -> bool {
 pub fn take_ws_switch() -> Option<usize> {
     let v = WS_SWITCH.swap(0xFF, Ordering::Relaxed);
     if v == 0xFF { None } else { Some(v as usize) }
+}
+
+/// Consume a pending F1 press.
+pub fn take_help_key() -> bool {
+    HELP_KEY.swap(false, Ordering::Relaxed)
+}
+/// Consume a pending F2 press.
+pub fn take_shortcuts_key() -> bool {
+    SHORTCUTS_KEY.swap(false, Ordering::Relaxed)
 }
 
 /// Set the active keyboard layout (installer keymap / `keymap` command).
@@ -105,6 +118,15 @@ pub fn push_scancode(sc: u8) {
     // code lost forever (the flaky-first-keystroke bug). Since every acquisition of
     // SCANCODES now happens with interrupts disabled, an IRQ can never preempt a
     // holder on this CPU: the blocking lock is deadlock-free AND lossless.
+    // F1 / F2 make codes are latched HERE, at the one place every keyboard
+    // (PS/2, USB HID, virtio-input) passes, so help opens whichever consumer
+    // drains the ring afterwards (char poll, rich poll, a program that owns
+    // the keyboard). No layout maps these codes to a character.
+    match sc {
+        0x3B => HELP_KEY.store(true, Ordering::Relaxed),
+        0x3C => SHORTCUTS_KEY.store(true, Ordering::Relaxed),
+        _ => {}
+    }
     without_interrupts(|| {
         let mut r = SCANCODES.lock();
         let next = (r.tail + 1) % RING_SIZE;
@@ -127,6 +149,23 @@ fn pop_scancode() -> Option<u8> {
             r.head = (r.head + 1) % RING_SIZE;
             Some(sc)
         }
+    })
+}
+
+/// Copy the pending scancodes into `buf` WITHOUT consuming them; returns how
+/// many. For an overlay that must decide whether the keys are meant for it
+/// before anyone takes them (the first-run tour lets typing through).
+pub fn peek_scancodes(buf: &mut [u8]) -> usize {
+    without_interrupts(|| {
+        let r = SCANCODES.lock();
+        let mut i = r.head;
+        let mut n = 0;
+        while i != r.tail && n < buf.len() {
+            buf[n] = r.buf[i];
+            n += 1;
+            i = (i + 1) % RING_SIZE;
+        }
+        n
     })
 }
 

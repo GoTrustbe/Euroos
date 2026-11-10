@@ -267,3 +267,24 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     };
     text::draw_px(fb, bx + 12, by + bh - 20, &stat, Color::rgb(0xE6, 0xE8, 0xEC), 12.5);
 }
+
+/// Tooltip text for the toolbar button under (mx,my). Same geometry as `click`.
+pub fn tip_at(win_x: usize, win_y: usize, mx: usize, my: usize) -> Option<&'static str> {
+    let tb_y = win_y + TITLEBAR_H + 6;
+    if my < tb_y || my >= tb_y + 26 {
+        return None;
+    }
+    let d = mx.checked_sub(win_x + 10)?;
+    if d % 86 >= 82 {
+        return None;
+    }
+    Some(match d / 86 {
+        0 => "Fit: scale the image to the window",
+        1 => "Show the image at its real size",
+        2 => "Show the image at twice its size",
+        3 => "Rotate a quarter turn (not saved to the file)",
+        4 => "Previous image in the same folder",
+        5 => "Next image in the same folder",
+        _ => return None,
+    })
+}
