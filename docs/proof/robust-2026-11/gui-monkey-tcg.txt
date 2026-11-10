@@ -1,0 +1,6 @@
+gui-smoke: PASS
+tcg smp=2 mem=2G input=usb net=none seed=7 soak=12.0 min, 760 s, max console latency 2356 ms
+
+ok   boot: desktop after 28 s, screen 1920x1080, layout us
+ok   monkey: desktop still works after 200 actions (terminal runs a typed command)
+ok   monkey soak 12.0 min, seed 7: 230 actions (alt-tab 5, click 54, click-in-window 33, ctrl-alt-esc 1, dock 29, double-click 12, drag 11, key 16, launcher 3, move-window 13, right-click 11, status-panel 4, title-button 6, type 21, workspace 11); max console latency 2356 ms

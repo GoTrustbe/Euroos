@@ -1,0 +1,14 @@
+cargo test (default members) on feature/robust, 2026-11-10
+184 result lines (test binaries and doc-test sets), 1284 passed, 0 failed
+
+Crates this branch changed:
+     Running unittests src/lib.rs [euroflate]
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.79s
+     Running unittests src/lib.rs [eurofs]
+test result: ok. 117 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+     Running unittests src/lib.rs [euromedia]
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 45.74s
+     Running unittests src/lib.rs [euromm]
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running unittests src/lib.rs [euronvme]
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s

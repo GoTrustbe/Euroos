@@ -19,6 +19,13 @@ not to trip on EuroOS's benign boot self-tests** (`breakpoint exception handled`
 `[isolation] … TERMINATED`, `[j3-fault]`, …) — see BUG-001 below for the false-positive
 that drove that tuning.
 
+**The desktop.** `loadtest.py` never touches a window. `scripts/gui-smoke.py` boots the
+image and drives the desktop with a pointer and a keyboard over QMP: every dock app opened,
+used, moved and closed, Alt-Tab, workspaces, launcher, context menu, and a seeded monkey soak
+(`--soak MINUTES --seed N`). After every step the guest must be alive (no crash signature,
+the desktop loop answers the serial console, the screen reacts). See
+[`GUI-TESTING.md`](GUI-TESTING.md).
+
 ---
 
 ## How to run
@@ -32,6 +39,9 @@ python3 scripts/loadtest.py --scenario fs --disks "64M,2G"   # attach the §2 di
 # KVM and the load scenarios (LOADTEST-R630; full list in LOADTEST-R630-2026-11.md §7):
 python3 scripts/loadtest.py --kvm --smp 4 --mem 4G --workdir /tmp/p --scenario procs
 python3 scripts/loadtest.py --kvm --smp 4 --mem 4G --workdir /tmp/f --disks 8G --disk-bus ahci --scenario fsio
+# the desktop (public image, ./scripts/build.sh image):
+python3 scripts/gui-smoke.py --image eurokernel.img --workdir /tmp/g
+python3 scripts/gui-smoke.py --image eurokernel.img --kvm --smp 4 --mem 4G --soak 30 --seed 1 --workdir /tmp/gs
 ```
 
 Each run writes `loadtest-results.csv` (one row per command: `id, command, status,
@@ -162,6 +172,9 @@ the code.
 | TCG matrix + `megaraid-proof.sh` on `feature/net-worker` | 2026-11-05 | ✅ 0 markers worse | `proof/net-worker-2026-11/` | 10 TCG boots (user/kernel/storage/combined, smp4/smp1, ± IOMMU) + 4 megaraid boots against `proof/bug032-2026-11/`: 0 worse, 0 changed; `[net-worker]` OK everywhere, `[lk]` 0 inversions |
 | `inbound` 4 clients 300 s + `net`, integrated (KVM) | 2026-11-05 | ✅ | `proof/integrate-net-mem-2026-11/` | user 4 165 ok, console max 693 ms; kernel 101 202 ok, max 380 ms; outbound 300/300 (user), 400/400 (kernel) |
 | virtio 1.x (modern, non-transitional) on `feature/virtio-modern`: TCG device configs, matrix, megaraid; R630 KVM | 2026-11-06 | 🟡 0 markers worse; 2 of 10 matrix boots hung (BUG-037, not in the changed code) | `proof/virtio-modern-2026-11/` | modern virtio-blk (boot + data disk), virtio-net (DHCP, fetch, net worker), virtio-tablet/keyboard typed and pointed, BARs at 56 TiB through the high-MMIO window, no PIT (HPET / PM timer); transitional and legacy 0 worse; reruns of the hung configs 6/6 (branch) and 6/6 (base); megaraid 8 boots 0 worse; R630 `net` 8/8 clean, `inbound` over modern virtio-net within run-to-run spread of legacy |
+| GUI smoke `scripts/gui-smoke.py` on `feature/robust` (public image): TCG, and KVM with USB and with virtio input | 2026-11-10 | ✅ 54/55 steps (TCG), 1 known (BUG-044) | `proof/robust-2026-11/` | all eleven dock apps opened, used, moved by the title bar and closed; Alt-Tab, workspaces, launcher search, context menu; a typed terminal command checked on serial; the first runs found BUG-042 (xHCI BAR at 56 TiB under KVM, with BUG-021) and BUG-043 (no Alt from a USB keyboard), both fixed; BUG-044 and BUG-045 found and left open (not this branch's files) |
+| GUI monkey soak, 2 × 35 min (KVM): USB input smp 4 / 4 GiB, virtio input smp 2 / 2 GiB | 2026-11-10 | ✅ 2230 + 2246 actions, no crash, no hang | `proof/robust-2026-11/` | seeds 20261110 and 20261111; functional check (terminal runs a typed command) every 200 actions: 11/11 and 11/11; longest console round trip 302 ms and 1562 ms |
+| Stability pass on `feature/robust`: TCG selftest boots, q35 legs `usb`/`hda`/`nvme`, R630 KVM with BARs at 56 TiB | 2026-11-10 | ✅ 0 markers worse | `proof/robust-2026-11/` | four TCG boots against `proof/net-worker-2026-11/`: 0 worse, 0 changed, the five `[robust…]` self-tests OK in every boot, `[lk]` 0 inversions; matrix legs PASS; NVMe and xHCI under `-cpu host` without the phys-bits workaround (BUG-021 fixed); BUG-041 (image decoders) fixed |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
 > it ✅ from "it should work".
@@ -615,8 +628,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   that run between round 5000 and 10000 (the stuck one leaves the task not Ready, or spinning in
   user space).
 
-### BUG-021 — NVMe under KVM `-cpu host`: BAR above 512 GiB, kernel page fault at boot ⬜ OPEN
-- **Status:**   OPEN (workaround for tests) · **Severity:** HIGH (boot halts)
+### BUG-021 — NVMe under KVM `-cpu host`: BAR above 512 GiB, kernel page fault at boot ✅ FIXED
+- **Status:**   FIXED (`bf87957`, 2026-11-10; the workaround is no longer needed) · **Severity:** HIGH (boot halts)
 - **Actual:**   `[idt] PAGE FAULT addr=0x380000000000 ... @ efi_main+0x54bc` right after
   `[epk] no pack files registered`, with an NVMe disk attached; the boot never continues.
 - **Repro:**    `scripts/loadtest.py --kvm --disk-bus nvme --disks 8G --scenario fsio`
@@ -626,6 +639,10 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   `disable-modern=on`, legacy BARs). Real servers can place 64-bit BARs high too.
   Workaround: `--cpu-opts ,host-phys-bits=off,phys-bits=39` (window below 512 GiB): NVMe works.
   A fix needs an MMIO mapping facility for physical addresses above 512 GiB.
+- **Fix:**      that facility came with the virtio 1.x work (`paging::mmio_virt`, the high-MMIO
+  window); `nvme::init` now reaches BAR0 through it, as do `xhci.rs` (BUG-042) and `hda.rs`.
+  R630, `-cpu host` without the phys-bits workaround: `[nvme] self-test read/write @ LBA 1000: OK`,
+  64 KiB PRP list OK, MSI-X delivery confirmed (`proof/robust-2026-11/r630-kvm-highbar-*.markers`).
 - **Harness:**  `CRASH_RE` now also matches `[idt] PAGE FAULT` (a ring-0 fault halts; healthy boots
   print only `[idt] BREAKPOINT`); before, the harness waited out the whole boot timeout.
 
@@ -926,6 +943,88 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   to the end before (it was cancelled), so the last good state is unknown.
 - **Next:** check whether the DISCOVER reaches SLIRP (`-object filter-dump` on the usb-net netdev)
   and whether the bulk-IN pipe is polled during `poll_dhcp` (it spins on `legacy_rx()` only).
+
+### BUG-040 — reserved (debug team, `feature/bug-gpf`)
+
+### BUG-041 — an image file can panic the kernel: header bombs and unchecked JPEG segments ✅ FIXED
+- **Status:**   FIXED (`5090eff`) · **Severity:** CRITICAL (kernel panic from a file or a web page)
+- **Found:**    2026-11-10 · host tests written while moving EuroPaint's flood fill into `crates/euromedia`
+  (`robusttests.rs`); not seen in a guest first
+- **Analysis:** the decoders trusted the file. QOI: 14 bytes with width = height = 65535 went to
+  `Vec::with_capacity(4 294 836 225)` pixels, a 16 GiB allocation (the allocation-failure handler
+  halts the kernel). PPM and BMP the same from their headers; PNG through an unbounded inflate of one
+  block. JPEG indexed marker segments, table selectors (`qtables[tq]` with `tq` up to 15 of 4),
+  sampling factors (0 divides, underflows) and Huffman size categories straight from the data:
+  2003 truncations of the four test JPEGs panicked the old decoder. The image viewer, EuroPaint and
+  the web view (`webview.rs`: `<img>` over HTTP(S) and `data:` URLs → `euromedia::decode` /
+  `decode_ppm`) feed these decoders files and downloads.
+- **Fix:**      `MAX_PIXELS` (16 Mpx) with `pixel_count()`, fallible `Image::try_new` / `try_clone`;
+  QOI/PPM/BMP check the claimed size against the data length before a buffer exists; every JPEG
+  segment through a bounds-checked `segment()`, selectors and factors validated, a scan that runs
+  out of data returns `Truncated`; the inflate output cap (64 MiB) is checked inside a block.
+  Host tests: header bombs per format, every truncation and about 50 000 corruptions of 13 sample
+  files without a panic.
+- **Left:**     `eurodocio` (zip/docx) uses the same inflate and is now capped at 64 MiB per entry,
+  but its own parsing was not mutation-tested. `gzip_decompress` has no caller in the kernel.
+
+### BUG-042 — xHCI under KVM `-cpu host`: BAR above the identity map, kernel page fault at boot ✅ FIXED
+- **Status:**   FIXED (`bf87957`, with BUG-021) · **Severity:** HIGH (boot halts with any USB controller)
+- **Found:**    2026-11-10 · the first KVM run of `scripts/gui-smoke.py` on the R630 (USB tablet and
+  keyboard on `qemu-xhci`): `[idt] PAGE FAULT addr=0x380000000000` right after
+  `[euro] PS/2 mouse initialized`
+- **Analysis:** the BUG-021 mechanism in another driver. With the host's 46 physical address bits
+  OVMF puts the 64-bit PCI window at 56 TiB; `xhci::init` read the capability registers through
+  BAR0 as an identity-mapped address. The earlier KVM runs used virtio input (its transport maps
+  high BARs since the virtio 1.x work) or no input device at all.
+- **Fix:**      `xhci.rs`, `nvme.rs` and `hda.rs` translate BAR0 with `paging::mmio_virt` and skip
+  the device with a log line when the window is full. R630, `-cpu host`, xhci + usb-kbd +
+  usb-tablet + intel-hda + nvme: page fault 4 s into the boot before, desktop after, NVMe
+  self-tests and MSI-X OK (`proof/robust-2026-11/r630-highbar-before.txt`, `r630-kvm-highbar-*.markers`).
+- **Repro (before):** `python3 scripts/gui-smoke.py --image eurokernel.img --kvm` on a host with
+  more than 40 physical address bits.
+
+### BUG-043 — Alt+Tab and Alt+1..4 do nothing on a USB keyboard ✅ FIXED
+- **Status:**   FIXED (`54e843f`) · **Severity:** MEDIUM (app switcher and workspaces unreachable from
+  the keyboard on any machine without PS/2)
+- **Found:**    2026-11-10 · `scripts/gui-smoke.py` under TCG with `usb-kbd`: after Alt+2 the windows
+  were still there and a `2` had been typed into the terminal; the same steps passed with
+  virtio-keyboard
+- **Analysis:** `xhci::inject_keyboard` turns the modifier byte of a HID report into set-1
+  scancodes for Shift and Ctrl only. Left Alt (bit 2) was dropped, so the keyboard layer's Alt
+  latch never set and `ps2::poll_key` saw a plain Tab or digit.
+- **Fix:**      left Alt transitions are forwarded as `0x38` / `0xB8` before the keys of the same
+  report. Right Alt (AltGr) is not: it would turn AltGr combinations into shortcuts.
+- **Proof:**    gui-smoke over `usb-kbd`: "Alt-Tab shows the switcher", "workspace switch" and the
+  launcher step after them pass under TCG and KVM (`proof/robust-2026-11/gui-smoke-tcg.txt`, `gui-soak-usb.txt`).
+
+### BUG-044 — Alt+Tab and Alt+1..4 are typed into the document while an editor has the keyboard ⬜ OPEN
+- **Status:**   OPEN (not in this branch's files) · **Severity:** LOW (shortcut does nothing; a Tab or a digit lands in the text)
+- **Found:**    2026-11-10 · `scripts/gui-smoke.py`, step "Alt-Tab with the text editor in front"
+  (KVM and TCG, USB and virtio keyboard); screenshot `proof/robust-2026-11/bug044-alt-tab-editor.png`
+- **Analysis:** the app switcher and the workspace switch are recognised in `ps2::poll_key`
+  (`0x0F if ALT`, `0x02..=0x05 if ALT`). While EuroText, EuroNotes, the EuroFiles name prompt or the
+  install wizard has the keyboard, the desktop loop drains the scancodes with `ps2::poll_key_ex`
+  instead, which tracks the Alt latch but has no such arms: Tab comes back as `Key::Tab` and the
+  digit as a character.
+- **Repro:**    open the Terminal and EuroText from the dock (EuroText in front), hold Alt, press Tab:
+  no "Switch window" panel, the caret moves a tab stop. With the Terminal in front the panel appears.
+- **Fix (proposed):** the same two arms in `poll_key_ex`, before the `0xE0` arm, each followed by
+  `continue`. The harness lists the step under `KNOWN_ISSUES` (reported as `known`, not counted);
+  remove that entry with the fix.
+
+### BUG-045 — a window dragged to the left edge covers the dock, and the dock takes the clicks ⬜ OPEN
+- **Status:**   OPEN (not in this branch's files) · **Severity:** LOW (clicks land on something the user cannot see)
+- **Found:**    2026-11-10 · while reading the screenshots of the monkey soak; repro
+  `proof/robust-2026-11/bug045-repro.py`, screenshot `bug045-window-over-dock.png`
+- **Analysis:** the drag code in the desktop loop clamps a window's `x` at 0 (`saturating_sub`), not at
+  the dock's right edge (`SIDEBAR_W`), and windows are drawn after the dock. The click path tests the
+  dock before the windows (`compositor::dock_icon_at` comes first), so a click on the strip of the
+  window that lies over a dock tile opens or closes that tile's app.
+- **Repro:**    drag the Terminal by its title bar until the pointer is at x ≈ 120: the window stops at
+  x = 0 over the dock. Click inside the window 45 px from the left, at the height of the Settings
+  tile: the Settings window opens.
+- **Fix (proposed):** clamp `nx` to `SIDEBAR_W` in the drag code (and in the un-snap on pickup), or
+  draw the dock after the windows.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

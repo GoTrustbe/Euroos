@@ -1,0 +1,2 @@
+usb: serial lines 2417, crash signatures 0, [isolation] lines 0, scon echoes 290, e2e commands 48
+virtio: serial lines 2372, crash signatures 0, [isolation] lines 0, scon echoes 291, e2e commands 44
