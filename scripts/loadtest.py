@@ -527,6 +527,9 @@ def scenario_soak(args):
             yield C(f"wget 10.0.2.101 {d}/dl.bin", f"saved: {args.http_size} bytes", timeout=120)
         if r % 3 == 0:
             yield C("churn proc 4", "done", raw=r"\[churn-proc\] .*OK", timeout=300)
+        if args.soak_churn_proc:
+            # BUG-040: glibc launch/exit churn in every round, not every third.
+            yield C(f"churn proc {args.soak_churn_proc}", "done", raw=r"\[churn-proc\] .*OK", timeout=600)
         if r % 3 == 1:
             yield C("churn fs 1", "done", raw=r"\[churn-fs\] .*OK", timeout=300)
         if r % 3 == 2:
@@ -739,6 +742,8 @@ def main():
     ap.add_argument("--heaptrace", type=int, default=0, metavar="ROUNDS",
                     help="soak on a heaptrace image (BUG-027): heapsnap after ROUNDS warm-up rounds, heapdiff every 50 rounds and at the end")
     ap.add_argument("--iobase", default="/home/euro/lt", help="fsio/soak directory (the euro user can write here on a disk root)")
+    ap.add_argument("--soak-churn-proc", type=int, default=0, metavar="N",
+                    help="soak: an extra `churn proc N` (N+1 glibc launches) in every round")
     ap.add_argument("--stop-on-err", action="store_true")
     ap.add_argument("--cmds", default="", help="scenario cmds: shell commands separated by \";\"")
     a = ap.parse_args()
