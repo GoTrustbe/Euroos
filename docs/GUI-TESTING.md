@@ -86,7 +86,7 @@ and stops.
 A step that fails because of a tracked, open bug is listed in `KNOWN_ISSUES`
 at the top of the script with its tracker number. It is reported as `known`
 and does not fail the run; when the bug is fixed the entry is removed, and the
-step counts again. Today: "Alt-Tab with the text editor in front" (BUG-044).
+step counts again. Today the list is empty (BUG-044 was the first entry).
 
 Under TCG the guest notices a button press some milliseconds late, so a window
 that is dragged ends up a few pixels short of the pointer's path. The drag

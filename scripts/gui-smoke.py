@@ -79,7 +79,6 @@ AZERTY.update({" ": ("spc", False), ":": ("dot", False), "/": ("dot", True), "."
 # Steps that fail because of a tracked, open bug (docs/LOADTEST-TRACKER.md). They are
 # reported as "known" and do not fail the run; remove the entry when the bug is fixed.
 KNOWN_ISSUES = {
-    "Alt-Tab with the text editor in front": "BUG-044",
 }
 SPECIAL_KEYS = ["ret", "esc", "tab", "backspace", "delete", "up", "down", "left", "right",
                 "home", "end", "pgup", "pgdn", "f1", "f2", "f5", "f11", "insert", "spc"]

@@ -214,6 +214,17 @@ pub fn poll_key_ex() -> Option<Key> {
             0x9D => CTRL.store(false, Ordering::Relaxed),
             0x38 => ALT.store(true, Ordering::Relaxed),
             0xB8 => ALT.store(false, Ordering::Relaxed),
+            // BUG-044: Alt+Tab (app switcher) and Alt+1..4 (workspace) are desktop
+            // shortcuts whoever has the keyboard: latched as in `poll_key`, never
+            // handed to the editor, the notes, the Settings panel or the installer.
+            0x0F if ALT.load(Ordering::Relaxed) => {
+                ALT_TAB.store(true, Ordering::Relaxed);
+                continue;
+            }
+            0x02..=0x05 if ALT.load(Ordering::Relaxed) => {
+                WS_SWITCH.store(sc - 0x02, Ordering::Relaxed);
+                continue;
+            }
             0xE0 => {
                 // Extended: the NEXT byte is a navigation/edit key.
                 if let Some(code) = pop_scancode() {
