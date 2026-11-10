@@ -1,0 +1,27 @@
+# Why the lockscreen phase of the self-test image takes 94 s under TCG instead of 50 s (BUG-056).
+# TCG, smp 4, 512 MiB, 1920x1080, boot-time.py timestamps; then throwaway TSC marks (not committed).
+
+== 1. per merge commit: time of the two halves of the phase (each holds one lock-screen frame)
+9ebc65e: ag-lock self-test (2 logins) 24.662 s, grace + auto-login (1 login) 24.937 s; lock-9ebc65e: kernel-entry 5.08s desktop 90.75s
+11c30d2: ag-lock self-test (2 logins) 25.646 s, grace + auto-login (1 login) 25.307 s; lock-11c30d2: kernel-entry 5.07s desktop 92.92s
+05218c2: ag-lock self-test (2 logins) 43.974 s, grace + auto-login (1 login) 43.912 s; lock-05218c2: kernel-entry 4.93s desktop 130.95s
+bc198f3: ag-lock self-test (2 logins) 48.173 s, grace + auto-login (1 login) 47.620 s; lock-bc198f3: kernel-entry 5.37s desktop 142.67s
+
+== 2. lockscreen::selftest, TSC per step (Mc = million cycles)
+11c30d2: [lock-timing] login-ok 14 Mc, login-wrong 13 Mc, clock_string 0 Mc, render 61849 Mc
+05218c2: [lock-timing] login-ok 146 Mc, login-wrong 10 Mc, clock_string 0 Mc, render 108830 Mc
+
+== 3. lockscreen::render, TSC per part, both frames of a boot
+11c30d2: [render-timing] 1920x1080: gradient 59652 Mc, card+text 1948 Mc, present 11 Mc, virtio-gpu 0 Mc
+[render-timing] 1920x1080: gradient 64338 Mc, card+text 1479 Mc, present 145 Mc, virtio-gpu 0 Mc
+
+05218c2: [render-timing] 1920x1080: gradient 99214 Mc, card+text 2110 Mc, present 12 Mc, virtio-gpu 0 Mc
+[render-timing] 1920x1080: gradient 105124 Mc, card+text 1480 Mc, present 170 Mc, virtio-gpu 0 Mc
+
+
+== 4. release image, installed system, R630 KVM: Enter sent right after the mark before the lock screen
+    3.233 [boot-time] phase desktop-build: 65.341 ms (at 806 ms)
+    3.677 [lock] login rejected for tester: invalid username or password
+
+== 5. self-test image, R630 KVM, 2 vCPU
+  151.324 [boot-time] phase lockscreen: 5399.341 ms (at 149029 ms)

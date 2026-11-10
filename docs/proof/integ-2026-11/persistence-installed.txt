@@ -1,0 +1,30 @@
+== boot 1 of the installed disk (tour: do not show again; settings changed in the panel; then QEMU quit = power cut)
+[euro] live root = the on-disk EuroFS on AHCI disk 0 (standalone SATA boot)
+[ps2] keyboard layout from /etc/keymap: us-qwerty
+[prefs] system settings applied: /etc/euroos/settings.conf (0 key(s), 0 broken line(s) skipped), time zone UTC, region nl, EuroGuard saved rules: 0 domain change(s), 0 app rule(s)
+[lock] login successful: tester (uid=1000)
+[prefs] session settings applied: /home/tester/.config/euroos/desktop.conf (0 key(s)), clock 24h, wallpaper euro, text scale 100%
+[tour] first-run tour shown (Esc, Skip, a click outside or typing closes it)
+[tour] closed at step 1 of 6: do not show again
+[tour] do not show again: tour.done=true saved in /home/tester/.config/euroos/desktop.conf
+[set] computer name set to euro-desk7: Ok(Atomic)
+[set] time zone set to Europe/Brussels: Ok(Atomic)
+[set] EuroGuard: domain blocked via the settings panel: ads.trackertest.com (saved=true)
+[set] keyboard layout set to de-qwertz: Ok(Atomic)
+
+== boot 2 of the same disk (nothing changed, only read back)
+[euro] live root = the on-disk EuroFS on AHCI disk 0 (standalone SATA boot)
+[ps2] keyboard layout from /etc/keymap: de-qwertz
+[prefs] system settings applied: /etc/euroos/settings.conf (1 key(s), 0 broken line(s) skipped), time zone Europe/Brussels, region nl, EuroGuard saved rules: 1 domain change(s), 1 app rule(s)
+[lock] login successful: tester (uid=1000)
+[prefs] session settings applied: /home/tester/.config/euroos/desktop.conf (4 key(s)), clock 12h, wallpaper mist, text scale 110%
+(no [tour] line in boot 2: the tour stays away)
+
+== harness verdicts, boot 2
+[t2-gui] expect '[ps2] keyboard layout from /etc/keymap: de-qwertz': PASS
+[t2-gui] expect 'time zone Europe/Brussels': PASS
+[t2-gui] expect 'EuroGuard saved rules: 1 domain change(s), 1 app rule(s)': PASS
+[t2-gui] expect 'clock 12h, wallpaper mist, text scale 110%': PASS
+[t2-gui] expect 'desktop.conf (4 key(s))': PASS
+[t2-gui] done, 0 failed step(s)
+[t2-gui] done, 0 failed step(s)

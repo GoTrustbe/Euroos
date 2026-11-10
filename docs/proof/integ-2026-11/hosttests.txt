@@ -1,0 +1,3 @@
+cargo test (default members), head a42b265
+186 suites, 1304 passed, 0 failed, 1 ignored
+EXIT 0

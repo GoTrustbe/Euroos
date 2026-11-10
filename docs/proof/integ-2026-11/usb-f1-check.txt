@@ -1,0 +1,7 @@
+[gui-smoke] QEMU pid 1284606, booting (TCG, 2 cpu, 2G)...
+[gui-smoke] ok   boot: desktop after 6 s, screen 1920x1080, layout us
+[gui-smoke] ok   first-run tour: shown on the first desktop, Esc closes it
+F1 from the USB keyboard opens the help panel: True
+Esc closes it: True
+F2 from the USB keyboard opens the shortcut overview (another page than F1): True
+USB-F1-CHECK PASS

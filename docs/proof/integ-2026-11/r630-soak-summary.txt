@@ -1,0 +1,52 @@
+ltstat samples: 1113, t = 4 .. 7509 s (125.1 min)
+heap_used first / at 10 min / last: 148 219 472 / 148 285 344 / 148 277 664
+heap slope after 10 min (least squares): +0.25 kB/min, range 105 kB
+tasks: first 56, at 10 min 56, last 56, min 56, max 56 (after 10 min)
+files: first 187, at 10 min 187, last 187, min 187, max 187 (after 10 min)
+kstacks: first 0, at 10 min 0, last 0, min 0, max 0 (after 10 min)
+procpool_free: first 887296, at 10 min 887296, last 887296, min 887296, max 887296 (after 10 min)
+frames_free: first 2964767, at 10 min 2981407, last 2981407, min 2964767, max 2981407 (after 10 min)
+bg_zombie: first 32, at 10 min 0, last 0, min 0, max 32 (after 10 min)
+bg_live: first 3, at 10 min 3, last 3, min 3, max 5 (after 10 min)
+commands: 2899; columns: id, command, status, elapsed_ms, output_lines, t_s
+by status: {'ok': 2899}
+churn proc commands: 371
+serial: loadtest-serial-20261110-134319.log 4.9 MB
+  'GLIBC-DYNAMIC-OK': 2987
+  'KERNEL PANIC': 0
+  'GENERAL PROTECTION': 0
+  '[idt] PAGE FAULT': 0
+  'DOUBLE FAULT': 0
+  'NMI PROBE': 0
+  '[watchdog]': 0
+  'refused to free': 0
+  'out of memory: page tables': 0
+  'no frames for page tables': 0
+  [churn-proc] verdict lines: 2139, with FAILED: 0
+  [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+--- end of the harness output:
+  [ 2350/?] ✓ ok           213ms t= 6063.1s  rm /home/euro/lt-soak/big3
+  [ 2375/?] ✓ ok            68ms t= 6141.1s  ltstat
+  [ 2400/?] ✓ ok          1775ms t= 6210.5s  sha256sum /home/euro/lt-soak/big2
+  [ 2425/?] ✓ ok           497ms t= 6250.8s  fetch 10.0.2.100
+  [ 2450/?] ✓ ok           505ms t= 6320.3s  write /home/euro/lt-soak/f35 round-235
+  [ 2475/?] ✓ ok           141ms t= 6389.9s  rm /home/euro/lt-soak/big3
+  [ 2500/?] ✓ ok          1604ms t= 6457.7s  spawn worker 32
+  [ 2525/?] ✓ ok            68ms t= 6530.5s  cat /home/euro/lt-soak/f42
+  [ 2550/?] ✓ ok          6537ms t= 6569.7s  churn proc 8
+  [ 2575/?] ✓ ok           565ms t= 6642.3s  write /home/euro/lt-soak/f47 round-247
+  [ 2600/?] ✓ ok           495ms t= 6704.8s  fetch 10.0.2.100
+  [ 2625/?] ✓ ok           427ms t= 6784.2s  churn net 1
+  [ 2650/?] ✓ ok          1339ms t= 6853.4s  truncate -s 8388608 /home/euro/lt-soak/big2
+  [ 2675/?] ✓ ok          6653ms t= 6900.9s  churn proc 8
+  [ 2700/?] ✓ ok            70ms t= 6964.8s  cat /home/euro/lt-soak/f9
+  [ 2725/?] ✓ ok          1810ms t= 7037.2s  sha256sum /home/euro/lt-soak/big1
+  [ 2750/?] ✓ ok            76ms t= 7109.1s  ltstat
+  [ 2775/?] ✓ ok          1210ms t= 7185.7s  truncate -s 8388608 /home/euro/lt-soak/big2
+  [ 2800/?] ✓ ok         33658ms t= 7259.0s  churn fs 1
+  [ 2825/?] ✓ ok          1595ms t= 7302.1s  spawn worker 32
+  [ 2850/?] ✓ ok           143ms t= 7363.6s  rm /home/euro/lt-soak/big3
+  [ 2875/?] ✓ ok            76ms t= 7442.1s  ltstat
+[loadtest] completed clean · results → /srv/euroos/integ-runs/soak/w/loadtest-results.csv · ltstat samples → /srv/euroos/integ-runs/soak/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 1006005, "err": 11, "p50_ms": 4.5, "p99_ms": 122.4, "max_ms": 6296.1, "busy_windows": 436, "busy_s": 5419, "busy": {"ok": 736363, "err": 0, "p50_ms": 4.5, "p99_ms": 122.3, "max_ms": 6207.8}, "idle": {"ok": 269642, "err": 11, "p50_ms": 4.5, "p99_ms": 122.4, "max_ms": 6296.1}}
+[loadtest] host HTTP server served 334 request(s)

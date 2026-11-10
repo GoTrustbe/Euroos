@@ -1,0 +1,12 @@
+DRAG-BOTTOM files: window to y=1050: alive
+DRAG-BOTTOM notes: window to y=1050: alive
+DRAG-BOTTOM clock: window to y=1050: alive
+DRAG-BOTTOM browser: window to y=1050: alive
+DRAG-BOTTOM terminal: window to y=1050: alive
+DRAG-BOTTOM settings: window to y=1050: alive
+DRAG-BOTTOM store: window to y=1050: alive
+DRAG-BOTTOM star: window to y=1050: alive
+DRAG-BOTTOM text: window to y=1050: alive
+DRAG-BOTTOM monitor: window to y=1050: alive
+DRAG-BOTTOM log: window to y=1050: alive
+DRAG-BOTTOM RESULT: all alive

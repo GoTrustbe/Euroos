@@ -1,0 +1,8 @@
+gui-usb: 1485 lines; panic/fault lines: 0; NMI probes: 0; typed commands run: 45; gui-monkey checks echoed: 10; scrub passes: 28
+gui-usb-r2: 1354 lines; panic/fault lines: 0; NMI probes: 1; typed commands run: 52; gui-monkey checks echoed: 8; scrub passes: 20
+gui-usb-r3: 1496 lines; panic/fault lines: 0; NMI probes: 0; typed commands run: 48; gui-monkey checks echoed: 10; scrub passes: 28
+gui-usb-r4: 1515 lines; panic/fault lines: 0; NMI probes: 0; typed commands run: 63; gui-monkey checks echoed: 10; scrub passes: 26
+gui-virtio: 1469 lines; panic/fault lines: 0; NMI probes: 0; typed commands run: 55; gui-monkey checks echoed: 11; scrub passes: 30
+gui-usb-v2a: 1495 lines; panic/fault lines: 0; NMI probes: 0; typed commands run: 53; gui-monkey checks echoed: 11; scrub passes: 27
+gui-usb-v2b: 1415 lines; panic/fault lines: 0; NMI probes: 0; typed commands run: 54; gui-monkey checks echoed: 9; scrub passes: 26
+gui-virtio-v2: 1439 lines; panic/fault lines: 0; NMI probes: 0; typed commands run: 55; gui-monkey checks echoed: 10; scrub passes: 27

@@ -1,0 +1,10 @@
+user-smp4-iommu: desktop=yes fault-lines=0 kernel-to-desktop=158816 ms phase-net=1.459 ms | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp4-noiommu: desktop=yes fault-lines=0 kernel-to-desktop=154951 ms phase-net=1.594 ms | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+kernel-smp4: desktop=yes fault-lines=0 kernel-to-desktop=143656 ms phase-net=16002.033 ms | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp4-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=302660 ms phase-net=3.686 ms | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+combined-smp4-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=379999 ms phase-net=1.149 ms | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp1-iommu: desktop=yes fault-lines=0 kernel-to-desktop=152849 ms phase-net=1.977 ms | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp1-noiommu: desktop=yes fault-lines=0 kernel-to-desktop=147273 ms phase-net=2.260 ms | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+kernel-smp1: desktop=yes fault-lines=0 kernel-to-desktop=144368 ms phase-net=15525.173 ms | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp1-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=295649 ms phase-net=1.383 ms | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+combined-smp1-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=367302 ms phase-net=3.142 ms | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0

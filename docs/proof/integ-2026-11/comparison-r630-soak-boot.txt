@@ -1,0 +1,47 @@
+# The boot of the soak guest (KVM, smp 4, 16 GiB, e1000e with the userspace driver, restrict=on, blank 8 GiB disk)
+# against the boot of bug-gpf's soak a (same configuration; its serial log is on the R630, not in the repository).
+# FAILED lines both have: [udrv-net], [udrv-crash], [udrv-linux], [conn] (no route out), [fuzz].
+== bug-gpf r630-soak-a boot  vs  r630-soak-182b19c-boot.markers
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   3e6: base FAILx1 | new OKx1
+   3f1: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 14
+   help: OKx1
+   prefs-bad: OKx1
+   prefs-rt: OKx1
+   prefs-user: OKx1
+   robust: OKx1
+   robust-fs: FAILx1
+   robust-hda: OKx1
+   robust-paging: OKx1
+   robust-usb: OKx1
+   set-guard: OKx1
+   set-host: OKx1
+   set-keymap: OKx1
+   set-time: OKx1
+   uikit: OKx1
+
+== bug-gpf r630-soak-a boot  vs  r630-soak-boot.markers
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   3e6: base FAILx1 | new OKx1
+   3f1: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 14
+   help: OKx1
+   prefs-bad: OKx1
+   prefs-rt: OKx1
+   prefs-user: OKx1
+   robust: OKx1
+   robust-fs: OKx1
+   robust-hda: OKx1
+   robust-paging: OKx1
+   robust-usb: OKx1
+   set-guard: OKx1
+   set-host: OKx1
+   set-keymap: OKx1
+   set-time: OKx1
+   uikit: OKx1
+

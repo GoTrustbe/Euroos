@@ -1,0 +1,24 @@
+== ../bug-gpf-2026-11/mr-iommu-a-boot1.markers  vs  mr-iommu-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== ../bug-gpf-2026-11/mr-iommu-a-boot2.markers  vs  mr-iommu-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== ../bug-gpf-2026-11/mr-noiommu-a-boot1.markers  vs  mr-noiommu-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== ../bug-gpf-2026-11/mr-noiommu-a-boot2.markers  vs  mr-noiommu-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+

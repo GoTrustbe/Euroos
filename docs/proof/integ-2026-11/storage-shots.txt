@@ -1,0 +1,13 @@
+# Public image, live session: Storage after two periodic checks, scrolled to the last result (BUG-051).
+wait 6
+key esc
+waitlog [tour] closed 30
+wait 2
+clickat 45 349
+wait 130
+clickat 385 508
+wait 4
+shot 10-eurobeheer-storage-top.png
+key pgdn
+wait 3
+shot 11-eurobeheer-storage-last-result.png

@@ -1,0 +1,80 @@
+# Boot 1 of the installed system: sign in, change settings in the panel, then power is cut.
+wait 8
+type Sovereign-Pass-2026!
+key ret
+waitlog [desktop] interactive loop started 400
+wait 15
+# Integration: the first-run tour is up on the first desktop of this user. "Do not show again".
+expect [tour] first-run tour shown
+shot A00-tour.png
+clickat 877 581
+waitlog [tour] do not show again: tour.done=true saved 60
+wait 3
+clickat 45 349
+wait 6
+shot A0-system-before.png
+# System: computer name
+clickat 886 275
+wait 2
+key end
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+type euro-desk7
+key ret
+wait 3
+shot A1-system-renamed.png
+# Date & time: Central Europe, 12-hour clock
+clickat 385 348
+wait 3
+clickat 880 275
+wait 3
+clickat 880 377
+wait 3
+clickat 995 350
+wait 3
+shot A2-datetime.png
+# EuroGuard: block a domain
+clickat 385 428
+wait 3
+clickat 885 291
+wait 2
+type ads.trackertest.com
+key ret
+wait 3
+shot A3-euroguard.png
+# Apps: cut the first app off the network
+clickat 385 468
+wait 3
+clickat 995 430
+wait 3
+shot A4-apps.png
+# Display: background "Blue mist", text size 110 %
+clickat 385 268
+wait 3
+clickat 940 259
+wait 3
+clickat 880 337
+wait 4
+clickat 881 327
+wait 4
+shot A5-display.png
+# Language & keyboard: German QWERTZ (last, so the typing above stays US)
+clickat 385 308
+wait 3
+clickat 940 271
+wait 3
+shot A6-language-dropdown.png
+clickat 880 378
+wait 4
+shot A7-language-german.png
+wait 6

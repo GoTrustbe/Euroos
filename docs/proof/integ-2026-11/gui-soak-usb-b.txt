@@ -1,0 +1,72 @@
+# USB input, seed 20261114, final harness
+# taskset -c 20-23 qemu-system-x86_64 -machine q35 -m 4G -smp 4 -enable-kvm -cpu host -bios /usr/share/ovmf/OVMF.fd -drive format=raw,file=gui-usb-v2b/boot.img -chardev socket,id=ser0,path=gui-usb-v2b/serial.sock,server=on,wait=off,logfile=gui-usb-v2b/serial.log,logappend=off -serial chardev:ser0 -display none -no-reboot -qmp unix:gui-usb-v2b/qmp.sock,server=on,wait=off -device qemu-xhci,id=xhci -device usb-kbd,bus=xhci.0 -device usb-tablet,bus=xhci.0 -nic none
+
+gui-smoke: PASS
+kvm smp=4 mem=4G input=usb net=none seed=20261114 soak=35.0 min, 2265 s, max console latency 200 ms
+
+ok   boot: desktop after 3 s, screen 1920x1080, layout us
+ok   first-run tour: shown on the first desktop, Esc closes it
+ok   close every window the desktop boots with
+ok   files: dock tile opens a window
+ok   files: used (clicks, typing, keys): window at 119,69; screenshot app-00-files.png
+ok   files: window moves with a title-bar drag: 119,69 -> 189,119
+ok   files: close button closes the window
+ok   notes: dock tile opens a window
+ok   notes: used (clicks, typing, keys): window at 869,69; screenshot app-01-notes.png
+ok   notes: window moves with a title-bar drag: 869,69 -> 939,119
+ok   notes: close button closes the window
+ok   clock: dock tile opens a window
+ok   clock: used (clicks, typing, keys): window at 869,579; screenshot app-02-clock.png
+ok   clock: window moves with a title-bar drag: 869,579 -> 939,629
+ok   clock: close button closes the window
+ok   browser: dock tile opens a window
+ok   browser: used (clicks, typing, keys): window at 199,63; screenshot app-03-browser.png
+ok   browser: window moves with a title-bar drag: 199,63 -> 269,113
+ok   browser: close button closes the window
+ok   terminal: dock tile opens a window
+ok   terminal: typed command runs (keyboard -> shell -> serial)
+ok   terminal: used (clicks, typing, keys): window at 757,149; screenshot app-04-terminal.png
+ok   terminal: window moves with a title-bar drag: 757,149 -> 827,199
+ok   terminal: close button closes the window
+ok   settings: dock tile opens a window
+ok   settings: used (clicks, typing, keys): window at 289,119; screenshot app-05-settings.png
+ok   settings: window moves with a title-bar drag: 289,119 -> 359,169
+ok   settings: close button closes the window
+ok   store: dock tile opens a window
+ok   store: used (clicks, typing, keys): window at 249,119; screenshot app-06-store.png
+ok   store: window moves with a title-bar drag: 249,119 -> 319,169
+ok   store: close button closes the window
+ok   star: dock tile opens a window
+ok   star: used (clicks, typing, keys): window at 329,89; screenshot app-07-star.png
+ok   star: window moves with a title-bar drag: 329,89 -> 399,139
+ok   star: close button closes the window
+ok   text: dock tile opens a window
+ok   text: used (clicks, typing, keys): window at 149,89; screenshot app-08-text.png
+ok   text: window moves with a title-bar drag: 149,89 -> 219,139
+ok   text: close button closes the window
+ok   monitor: dock tile opens a window
+ok   monitor: used (clicks, typing, keys): window at 209,109; screenshot app-09-monitor.png
+ok   monitor: window moves with a title-bar drag: 209,109 -> 279,159
+ok   monitor: close button closes the window
+ok   log: dock tile opens a window
+ok   log: used (clicks, typing, keys): window at 869,109; screenshot app-10-log.png
+ok   log: window moves with a title-bar drag: 869,109 -> 939,159
+ok   log: close button closes the window
+ok   three apps open together: 2 title bars visible
+ok   Alt-Tab shows the switcher, releasing Alt closes it and raises a window: switcher panel shown=True, closed after Alt release=True
+ok   Alt-Tab with the text editor in front
+ok   workspace switch (Alt+2 empty, Alt+1 windows back): desktop 2: 0 windows, back on 1: 2
+ok   launcher opens and takes a search
+ok   launcher search 'term' + Enter opens a working terminal
+ok   right click opens a context menu
+ok   desktop back to rest
+ok   monkey: desktop still works after 200 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 400 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 600 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 800 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 1000 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 1200 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 1400 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 1600 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 1800 actions (terminal runs a typed command)
+ok   monkey soak 35.0 min, seed 20261114: 1958 actions (alt-tab 58, click 441, click-in-window 278, ctrl-alt-esc 11, dock 201, double-click 89, drag 95, key 177, launcher 39, move-window 115, right-click 65, status-panel 15, title-button 96, type 217, workspace 61); max console latency 200 ms

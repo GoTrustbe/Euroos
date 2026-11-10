@@ -1,0 +1,23 @@
+# EuroBeheer > Storage, "Checks since start: 2" next to an empty log (BUG-051).
+# release image, TCG, no NIC; after two periodic passes: cat /var/log/fsck.log on the serial console
+
+== before (image of a19d507, without the fix)
+   71.499 [g5] scrub #1: 75 inodes, 341 data blocks, data verified 74, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 10 ms
+  133.925 [g5] scrub #2: 75 inodes, 341 data blocks, data verified 74, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 10 ms
+  176.384 [scon] $ cat /var/log/fsck.log
+  176.385 [scon] cat: /var/log/fsck.log: NotFound
+  176.434 [scon] $ ls -l /var/log
+  176.435 [scon] ls: -l: NotFound
+  176.475 [scon] $ ls -l /var
+  176.475 [scon] ls: -l: NotFound
+
+== after (head)
+   73.085 [g5] scrub #1: 75 inodes, 341 data blocks, data verified 74, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 10 ms
+  135.562 [g5] scrub #2: 76 inodes, 341 data blocks, data verified 75, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 10 ms
+  176.666 [scon] $ cat /var/log/fsck.log
+  176.667 [scon] scrub #1: 75 inodes, 341 data blocks, data verified 74, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 10 ms
+  176.667 [scon] scrub #2: 76 inodes, 341 data blocks, data verified 75, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 10 ms
+  176.677 [scon] $ ls /var/log
+  176.677 [scon]   -rw-r--r--     1782 B  2026-11-10 11:34  audit.log
+  176.680 [scon]   -rw-r--r--      240 B  2026-11-10 11:34  fsck.log
+  176.680 [scon]   -rw-r--r--      132 B  2026-11-10 11:34  journal.bin

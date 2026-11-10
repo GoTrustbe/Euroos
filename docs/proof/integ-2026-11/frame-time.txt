@@ -1,0 +1,9 @@
+# frame_time.py, R630 KVM, smp 4, 4 GiB, USB input: release image of the head (182b19c) and of 11c30d2 (before the settings and help merges)
+== 182b19c
+FRAME-TIME empty desktop: console echo median 50 ms, max 50 ms; pointer visible after: 126 ms, 126 ms, 123 ms, 47 ms, 127 ms
+FRAME-TIME 7 windows: console echo median 50 ms, max 50 ms; pointer visible after: 57 ms, 43 ms, 43 ms, 39 ms, 43 ms
+FRAME-TIME 7 windows + notification list open (full repaint in every iteration): console echo median 150 ms, max 201 ms; pointer visible after: 380 ms, 379 ms, 379 ms, 391 ms, 290 ms
+== 11c30d2
+FRAME-TIME empty desktop: console echo median 50 ms, max 50 ms; pointer visible after: 126 ms, 128 ms, 128 ms, 125 ms, 124 ms
+FRAME-TIME 7 windows: console echo median 50 ms, max 50 ms; pointer visible after: 45 ms, 44 ms, 43 ms, 44 ms, 44 ms
+FRAME-TIME 7 windows + notification list open (full repaint in every iteration): console echo median 150 ms, max 200 ms; pointer visible after: 361 ms, 296 ms, 376 ms, 42 ms, 292 ms

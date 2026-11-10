@@ -63,6 +63,12 @@ Release image (`./scripts/build.sh image`), before = `a36ef4b`, after =
 | Build server, TCG, 2 vCPU, 2 GiB, SATA + legacy virtio-net, open user-net (3 boots) | 36.75 s | 6.46 s |
 | Build server, TCG, 1 vCPU, 1 GiB (1 boot) | 32.12 s | 7.11 s |
 
+After the integration of the five 2026-11 branches (`182b19c`, settings,
+help and the first-run tour included; `docs/proof/integ-2026-11/`), the same
+two R630 configurations, five boots each: **2.71 s** (2.42 to 2.92) and
+**2.34 s** (2.05 to 2.43); kernel entry to desktop 812 ms. The tour costs one
+read of the user's `desktop.conf`, after the desktop mark.
+
 Of the 2.95 s under KVM, 1.2 s is firmware and 0.6 s the loader; the kernel
 takes 1.0 s. Under TCG firmware and loader take 4.4 s, the kernel 2.1 s.
 (The first modern-virtio series on the R630 ran next to other guests: median
@@ -244,6 +250,14 @@ self-test image keeps the grace period.
 - The first frame is 1 s under TCG (full-screen software composite).
 - `udrv::boot` waits for e1000d's link and its DHCP inline (50 ms under KVM;
   up to 10 s without a link).
-- The inline bring-up of the self-test image and `net::late_bring_up` look for
-  ARP answers before the configuration is saved and cannot see them
-  (BUG-047 in `docs/LOADTEST-TRACKER.md`).
+- The lock screen paints its background with `fill_rounded_rect_grad` over
+  the whole screen (per-pixel float): 25 to 45 s per frame for the self-test
+  image under TCG at 1920x1080, two frames per boot (BUG-056 in
+  `docs/LOADTEST-TRACKER.md`). The release image on a live medium skips the
+  lock screen; on an installed system under KVM the first frame and a sign-in
+  attempt together take 0.44 s.
+
+Closed since: the inline bring-up of the self-test image looked for answers
+before the configuration was saved (BUG-047: fixed by BUG-039 and `182b19c`;
+`phase net` of a kernel-driver boot under TCG is 15.9 s, with the HTTP and
+HTTPS probes answered).

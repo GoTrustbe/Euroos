@@ -1,0 +1,19 @@
+== ../bug-gpf-2026-11/tcg-dev-modern.markers  vs  tcg-dev-modern.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 14
+   help: OKx1
+   prefs-bad: OKx1
+   prefs-rt: OKx1
+   prefs-user: OKx1
+   robust: OKx1
+   robust-fs: OKx1
+   robust-hda: OKx1
+   robust-paging: OKx1
+   robust-usb: OKx1
+   set-guard: OKx1
+   set-host: OKx1
+   set-keymap: OKx1
+   set-time: OKx1
+   uikit: OKx1

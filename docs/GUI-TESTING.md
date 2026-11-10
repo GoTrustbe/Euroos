@@ -70,6 +70,10 @@ and stops.
 ## The smoke pass
 
 1. Boot to `[desktop] interactive loop started` and `[scon-ready]`.
+   On the release image the first-run tour is up then (`[tour] first-run tour
+   shown`): Esc must close it (`[tour] closed`), which is a step of its own. The
+   self-test image and an image with `ui.tour=off` show no tour and have one
+   step fewer (55 instead of 56).
 2. Close every window the desktop boots with (terminal, install wizard).
 3. For each of the eleven dock tiles (files, notes, clock, browser, terminal,
    settings, store, star, text, monitor, log): click the tile, expect a window;
@@ -105,12 +109,18 @@ KVM.
 
 - every action: crash scan of the serial console;
 - every 10 actions: the liveness check above;
-- every 50 actions: the pointer is moved between two screendumps, which must
-  differ (a frozen screen fails the run), and a screenshot is kept;
+- every 50 actions: the pointer is moved and the picture must follow within
+  5 s (15 s under TCG); two checkpoints in a row without that fail the run as a
+  frozen screen. (A single look 0.3 s after the move was too strict: with the
+  notification list open the desktop repaints everything in every iteration,
+  0.3 to 0.4 s per frame under KVM, BUG-057.) A screenshot is kept;
 - every 200 actions: back to workspace 1, the windows that can be found
   closed, the terminal raised through the launcher (`term`, Enter), Enter again
   (to send off whatever the monkey left on the prompt), a command typed and
-  checked on serial. A desktop that survives but no longer does work fails this
+  checked on serial. Before the click on the EU mark one click goes to the
+  strip beside the dock: a context menu the monkey left open takes the next
+  left click, and Esc does not close it. A failed check saves
+  `monkey-check-N-failed.png`. A desktop that survives but no longer does work fails this
   step. The launcher is used because it raises and focuses the terminal
   wherever the monkey dragged it: at the bottom or right edge fewer than three
   title-bar buttons are visible and the window cannot be found on a screendump,

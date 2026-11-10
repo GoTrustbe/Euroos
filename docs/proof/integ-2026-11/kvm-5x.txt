@@ -1,0 +1,17 @@
+default-1: kernel-entry 1.62s desktop 2.42s
+default-2: kernel-entry 1.83s desktop 2.66s
+default-3: kernel-entry 1.92s desktop 2.74s
+default-4: kernel-entry 1.92s desktop 2.71s
+default-5: kernel-entry 2.13s desktop 2.92s
+modern-1: kernel-entry 1.62s desktop 2.43s
+modern-2: kernel-entry 1.44s desktop 2.34s
+modern-3: kernel-entry 1.19s desktop 2.05s
+modern-4: kernel-entry 1.40s desktop 2.39s
+modern-5: kernel-entry 1.36s desktop 2.28s
+
+# extra boots (screenshots): tour kept / default
+tour-keep: kernel-entry 1.88s desktop 2.68s shot=True
+desktop: kernel-entry 1.74s desktop 2.56s shot=True
+
+# [boot-time] of default-3
+[boot-time] desktop after 812 ms since kernel entry (HPET, release build): firmware-exit=64 cpu-mm=9 storage-rootfs=48 storage-checks=8 identity-config=46 net=22 userland-demos=189 sched-init=12 acpi-pci-tpm=53 smp-timer=47 devices=23 drivers-late=18 glibc-suite=10 vfs-mounts=3 subsystems=86 boot-good-scrub=8 desktop-build=38 lockscreen=9 first-frame=109 (ms per phase)

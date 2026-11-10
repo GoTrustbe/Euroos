@@ -1,0 +1,33 @@
+# Public image, live session: the screenshots of the integration proof.
+wait 6
+shot 01-tour-step1.png
+key esc
+waitlog [tour] closed 30
+wait 3
+shot 02-desktop.png
+key f1
+wait 4
+shot 03-help-terminal.png
+key esc
+wait 2
+clickat 45 349
+wait 5
+shot 04-eurobeheer-system.png
+key f1
+wait 4
+shot 05-help-eurobeheer.png
+key esc
+wait 2
+clickat 385 268
+wait 3
+shot 06-eurobeheer-display.png
+wait 125
+clickat 385 508
+wait 4
+shot 07-eurobeheer-storage.png
+clickat 385 548
+wait 3
+shot 08-eurobeheer-updates.png
+key f2
+wait 3
+shot 09-shortcuts.png

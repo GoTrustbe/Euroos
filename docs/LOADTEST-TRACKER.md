@@ -176,6 +176,10 @@ the code.
 | GUI smoke `scripts/gui-smoke.py` on `feature/robust` (public image): TCG, and KVM with USB and with virtio input | 2026-11-10 | ✅ 54/55 steps (TCG), 1 known (BUG-044) | `proof/robust-2026-11/` | all eleven dock apps opened, used, moved by the title bar and closed; Alt-Tab, workspaces, launcher search, context menu; a typed terminal command checked on serial; the first runs found BUG-042 (xHCI BAR at 56 TiB under KVM, with BUG-021) and BUG-043 (no Alt from a USB keyboard), both fixed; BUG-044 and BUG-045 found and left open (not this branch's files) |
 | GUI monkey soak, 2 × 35 min (KVM): USB input smp 4 / 4 GiB, virtio input smp 2 / 2 GiB | 2026-11-10 | ✅ 2230 + 2246 actions, no crash, no hang | `proof/robust-2026-11/` | seeds 20261110 and 20261111; functional check (terminal runs a typed command) every 200 actions: 11/11 and 11/11; longest console round trip 302 ms and 1562 ms |
 | Stability pass on `feature/robust`: TCG selftest boots, q35 legs `usb`/`hda`/`nvme`, R630 KVM with BARs at 56 TiB | 2026-11-10 | ✅ 0 markers worse | `proof/robust-2026-11/` | four TCG boots against `proof/net-worker-2026-11/`: 0 worse, 0 changed, the five `[robust…]` self-tests OK in every boot, `[lk]` 0 inversions; matrix legs PASS; NVMe and xHCI under `-cpu host` without the phys-bits workaround (BUG-021 fixed); BUG-041 (image decoders) fixed |
+| Integration of bug-gpf, fast-boot, robust, settings, help (`feature/integ-2026-11`): TCG matrix, megaraid, modern virtio, CI q35 matrix, host tests | 2026-11-10 | ✅ 0 markers worse | `proof/integ-2026-11/` | 10 TCG boots, 27 comparisons against the five branch proofs; megaraid 4 boots (host checks 4/4 twice); modern virtio; q35 13/13; `[lk]` 0 inversions; 186 host suites, 1 304 tests; BUG-044, 045, 047, 051, 059 fixed; the self-test image reaches the desktop 45 s later under TCG since the settings merge (BUG-056, open) |
+| Release image, integrated: wizard install, GUI smoke, settings across a power cut, open network, boot time (TCG and R630 KVM) | 2026-11-10 | ✅ | `proof/integ-2026-11/` | wizard 14/14; gui-smoke 56/56 (BUG-044 step counting, tour step new); installed system reads back seven settings and `tour.done` after QEMU was quit; ping, DNS, HTTP, HTTPS; R630 boot 2.71 s (SATA + legacy virtio-net) and 2.34 s (modern virtio), 5 boots each (fast-boot: 2.95 s, 2.70 s) |
+| GUI monkey soak, integrated, 35 min each (R630 KVM): USB smp 4 / 4 GiB, virtio smp 2 / 2 GiB | 2026-11-10 | ✅ 3/3 with the fixed harness; 🟡 3/5 with the harness as merged | `proof/integ-2026-11/` | final harness: 2 217 + 1 958 (USB) and 2 190 (virtio) actions, functional checks 11/11, 9/9, 10/10, no crash, console max 250 ms / 2.0 s; as merged: one false "screen frozen" and one failed check, both with the notification list or a context menu open (BUG-057: full repaint in every iteration, 0.3 to 0.4 s per frame; same before the settings and help merges) |
+| `soak` 2 h 05 + `churn proc 8` every round + 4 httpd clients, integrated (KVM, `-m 16G`) | 2026-11-10 | ✅ 2 899/2 899 ok | `proof/integ-2026-11/` | on the head (`fb18477`): 371 `churn proc` commands, 2 987 glibc launches, every verdict OK; heap +0.25 kB/min; tasks, files, frames, process pool flat; httpd 1 006 005 answered / 11 failed, p99 122 ms; 0 panics, 0 fault lines. The same on `182b19c` before it (2 868 ok, +0.24 kB/min), whose boot showed BUG-059 |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
 > it ✅ from "it should work".
@@ -1037,8 +1041,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Proof:**    gui-smoke over `usb-kbd`: "Alt-Tab shows the switcher", "workspace switch" and the
   launcher step after them pass under TCG and KVM (`proof/robust-2026-11/gui-smoke-tcg.txt`, `gui-soak-usb.txt`).
 
-### BUG-044 — Alt+Tab and Alt+1..4 are typed into the document while an editor has the keyboard ⬜ OPEN
-- **Status:**   OPEN (not in this branch's files) · **Severity:** LOW (shortcut does nothing; a Tab or a digit lands in the text)
+### BUG-044 — Alt+Tab and Alt+1..4 are typed into the document while an editor has the keyboard ✅ FIXED
+- **Status:**   FIXED (`3da84bf`, integration `feature/integ-2026-11`) · **Severity:** LOW (shortcut does nothing; a Tab or a digit lands in the text)
 - **Found:**    2026-11-10 · `scripts/gui-smoke.py`, step "Alt-Tab with the text editor in front"
   (KVM and TCG, USB and virtio keyboard); screenshot `proof/robust-2026-11/bug044-alt-tab-editor.png`
 - **Analysis:** the app switcher and the workspace switch are recognised in `ps2::poll_key`
@@ -1048,12 +1052,15 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   digit as a character.
 - **Repro:**    open the Terminal and EuroText from the dock (EuroText in front), hold Alt, press Tab:
   no "Switch window" panel, the caret moves a tab stop. With the Terminal in front the panel appears.
-- **Fix (proposed):** the same two arms in `poll_key_ex`, before the `0xE0` arm, each followed by
-  `continue`. The harness lists the step under `KNOWN_ISSUES` (reported as `known`, not counted);
-  remove that entry with the fix.
+- **Fix:**      the same two arms in `poll_key_ex`, before the `0xE0` arm, each followed by `continue`: every
+  consumer of `poll_key_ex` (EuroText, EuroNotes, the Settings panel, the help panel, the install wizard,
+  the EuroFiles prompt) leaves the shortcut to the desktop. `KNOWN_ISSUES` in `gui-smoke.py` is empty; the step
+  "Alt-Tab with the text editor in front" passes under TCG and KVM (`proof/integ-2026-11/`).
+- **Left:**     programs that drain raw scancodes (a full-screen app, an X11 or Chromium window, an installed
+  app in front) still keep the two shortcuts to themselves; the help text says so.
 
-### BUG-045 — a window dragged to the left edge covers the dock, and the dock takes the clicks ⬜ OPEN
-- **Status:**   OPEN (not in this branch's files) · **Severity:** LOW (clicks land on something the user cannot see)
+### BUG-045 — a window dragged to the left edge covers the dock, and the dock takes the clicks ✅ FIXED
+- **Status:**   FIXED (`b65b395`, integration) · **Severity:** LOW (clicks land on something the user cannot see)
 - **Found:**    2026-11-10 · while reading the screenshots of the monkey soak; repro
   `proof/robust-2026-11/bug045-repro.py`, screenshot `bug045-window-over-dock.png`
 - **Analysis:** the drag code in the desktop loop clamps a window's `x` at 0 (`saturating_sub`), not at
@@ -1063,8 +1070,10 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Repro:**    drag the Terminal by its title bar until the pointer is at x ≈ 120: the window stops at
   x = 0 over the dock. Click inside the window 45 px from the left, at the height of the Settings
   tile: the Settings window opens.
-- **Fix (proposed):** clamp `nx` to `SIDEBAR_W` in the drag code (and in the un-snap on pickup), or
-  draw the dock after the windows.
+- **Fix:**      `nx` is clamped to `SIDEBAR_W` in the drag and in the un-snap on pickup. The drag of the repro
+  script now leaves the Terminal at the right edge of the dock (`proof/integ-2026-11/bug045-after.txt`; the
+  last line of the script still says "reproduced" because it clicks at x = 45, which is the dock itself now,
+  not a window).
 
 ### BUG-046 — an NVMe disk with foreign content was formatted at boot ✅ FIXED
 - **Status:**   FIXED (`feature/fast-boot`) · **Severity:** HIGH (data loss on someone else's disk)
@@ -1078,8 +1087,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   format is a log line instead of an `expect`. `docs/proof/fast-boot-2026-11/kvm-nvme-foreign-disk.txt`.
 - **Numbering:** this was BUG-042 on `feature/fast-boot` (and is in that branch's commit messages); renumbered at the integration because `feature/robust` used the same numbers.
 
-### BUG-047 — ARP lookups before the configuration is saved cannot see their answers 🟡 OPEN
-- **Status:**   OPEN for the self-test image and for `late_bring_up` · **Severity:** LOW/MEDIUM (2 s of every boot under KVM, 9 s under TCG; probably the cause of BUG-039)
+### BUG-047 — ARP lookups before the configuration is saved cannot see their answers ✅ FIXED
+- **Status:**   FIXED: ARP, ping and DNS by BUG-039 (`9553f59`, `feature/bug-gpf`), the TCP probes by `182b19c` (integration) · **Severity:** LOW/MEDIUM (self-test image and `late_bring_up` only)
 - **Found:**    2026-11-10 · `[boot-time] phase net` on a virtio-net boot
 - **Analysis:** `arp_resolve`, `icmp_ping`, `dns_query` read `legacy_rx()`, which starts with `rx_route()`, and
   `rx_route()` returns at once while `net::get()` is None. The inline bring-up in `main.rs` and
@@ -1088,9 +1097,16 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   (so the ping, DNS, HTTP and HTTPS probes behind it never ran on that path). `late_bring_up`'s `poll_dhcp`
   reads `legacy_rx()` too, so it cannot see the OFFER either, which would explain BUG-039 (not verified on a USB NIC).
 - **Release image:** not affected any more: `[net-up]` polls the NIC itself until it saves the configuration.
-- **Next:** in the inline path and `late_bring_up`, save a preliminary configuration (address, no gateway MAC)
-  before the first lookup, or poll `nic::poll_recv` directly as `[net-up]` does. Changes the `[net]` lines of
-  the self-test image, so it was left out of `feature/fast-boot`.
+- **After the merge with BUG-039:** `rx_route` polls the NIC without a configuration, so the two ARP lookups, the
+  ping and the DNS query of the inline path answer (`[net] ARP: 10.0.2.2 is-at …`, `PING … OK`, `DNS reply … ✓`),
+  and `late_bring_up` (ARP and ping only before its `save`) is complete. What was left: `net::classify` sorts TCP
+  segments by the SAVED address, so the HTTP and HTTPS probes of the inline path never saw a SYN-ACK:
+  `(no HTTP response)`, `(TLS handshake failed)`, and `phase net` 22.2 s under TCG where it had been 11.8 s
+  with the lookups failing early.
+- **Fix:**      the inline path saves the address from DHCP before the first lookup (gateway and DNS MAC
+  zero, as `udrv::boot` does) and the full configuration at the end. TCG, in-kernel e1000: `HTTP GET … 888 bytes ✓`,
+  `HTTPS GET … (encrypted) ✓`, `phase net` 16.2 s; the ten-configuration matrix has 0 markers worse
+  (`proof/integ-2026-11/`). The release image never ran this path (`[net-up]`).
 - **Numbering:** this was BUG-043 on `feature/fast-boot` (and is in that branch's commit messages); renumbered at the integration because `feature/robust` used the same numbers.
 
 ### BUG-048 — the release image ran the self-tests, the churn runs and the boot network probes ✅ FIXED
@@ -1120,6 +1136,107 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Regression test:** `[ap-tss]`: an NMI IPI to every AP; each must run on its own NMI stack with TR
   loaded. With `load_tss` left out the same image resets in this self-test
   (`proof/bug-gpf-2026-11/tcg-ap-tss-selftest.txt`).
+
+### BUG-051 — the periodic integrity check ran and was counted, but its log line was dropped ✅ FIXED
+- **Status:**   FIXED (`7bf0a2d`, integration) · **Severity:** LOW (the check itself ran; its record did not exist)
+- **Found:**    2026-11-10 · EuroBeheer, Storage, on the live image: "Checks since start: 2" next to "The log of the
+  checks so far (/var/log/fsck.log) is empty or cannot be read"
+- **Analysis:** both statements were true. `scrub::run` appended its line to `/var/log/fsck.log` with the uid of
+  whoever called it and ignored the result. The release image no longer runs a pass before the session opens
+  (BUG-048), so every pass comes from the desktop loop under the signed-in user, who may not write `/var/log`:
+  two `[g5] scrub #…` lines on the serial log, then `cat /var/log/fsck.log: NotFound`
+  (`proof/integ-2026-11/scrub-log-before-after.txt`). An interaction of `feature/fast-boot` and the periodic scrubber;
+  the "Check now" button of the panel already ran in system context.
+- **Fix:**      `scrub::run` appends the line in system context whoever calls it, and prints a `[g5]` line when the
+  write is refused. After two passes the file holds two lines and the panel shows the last one.
+
+### BUG-052 — right Alt (AltGr) counts as Alt in `poll_key`, not in `poll_key_ex` ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (AltGr+Tab or AltGr+1..4 switch window or workspace in the Terminal, not in an editor)
+- **Found:**    2026-11-10 · reading `ps2.rs` for BUG-044; not tried on a keyboard
+- **Analysis:** `poll_key_ex` consumes the `0xE0` prefix and ignores `E0 38`. `poll_key` has no `0xE0` arm: the prefix
+  is dropped as a break code and the following `0x38` sets the Alt latch. PS/2 and virtio keyboards only (the USB
+  path forwards left Alt alone, BUG-043). `eurokeymap::translate` takes no AltGr level, so AltGr has no other use yet.
+- **Next:**     an `0xE0` arm in `poll_key` that skips the next code, when the keymaps get their AltGr level.
+
+### BUG-053 — a glibc launcher that fails after it took its arena keeps the arena ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (needs a damaged executable or loader; 64 to 96 MiB per failed start)
+- **Found:**    2026-11-10 · converting the callers of `build_address_space*` (`a19d507`); read, not provoked
+- **Analysis:** `spawn_glibc_persistent` (`?` on `load_elf64` and `alloc_thread_kstack`), `glibc_disk_launch`
+  (`(bad ld.so ELF)`, `(disk exe segment map failed)`, which also leave the demand flags switched on) and `run_glibc`
+  (`(bad exe ELF)`, `(bad ld.so ELF)`) return after the arena was allocated without freeing it. The new
+  out-of-frames exits in the same functions do free it. Also still `expect`s on allocation, boot only:
+  `daemon-arena`, `daemon-kstack`, `utask-arena`, `utask kernel-stack`.
+
+### BUG-054 — the default desktop background has a vertical seam at half the screen width ⬜ OPEN
+- **Status:**   OPEN · **Severity:** COSMETIC
+- **Found:**    2026-11-10 · reading the screenshots of the integration (it is in the earlier ones too,
+  `proof/fast-boot-2026-11/kvm-after-desktop.png`)
+- **Analysis:** `compositor::draw_wallpaper_compute` approximates the diagonal gradient with two row fills per line,
+  left half and right half, each in one colour; the step between them is visible at x = width / 2 on a 1920 px screen.
+
+### BUG-055 — EuroBeheer, Storage: "1 MiB of 8 MiB used (21%)", and "no virtio-blk devices" on a SATA boot ⬜ OPEN
+- **Status:**   OPEN · **Severity:** COSMETIC
+- **Found:**    2026-11-10 · the Storage screenshots of the integration (`proof/integ-2026-11/screenshots/`)
+- **Analysis:** `settings_ui::mib` rounds both figures down to whole MiB while the percentage comes from the bytes,
+  so a small file system reads inconsistent. The "Disks" list is `fatmount::lsblk`, which knows virtio-blk only: a
+  system booted from SATA, NVMe or USB is told there are no disks.
+
+### BUG-056 — the lock screen paints 25 to 45 s per frame under TCG (self-test image, 1920x1080) ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (TCG boots of the self-test image; no marker changes; the release image under KVM is not slow)
+- **Found:**    2026-11-10 · `[boot-time]` of the integrated matrix boots against `proof/fast-boot-2026-11/`:
+  `lockscreen` 50 s -> 94 s in all ten configurations, 150 to 165 s to the desktop where fast-boot had 97 to 114 s
+- **Analysis:** bisected over the merge commits with timestamped boots, then with throwaway TSC marks
+  (`proof/integ-2026-11/lockscreen-bisect.txt`). The sign-ins take milliseconds. The time is
+  `lockscreen::render`'s background, `fill_rounded_rect_grad(0, 0, w, h, 0, …)`: a float gradient and a
+  `put_pixel` per pixel, written for icon tiles, here over two million pixels, twice per boot (self-test frame and
+  the frame before the unattended sign-in). 60 000 to 64 000 Mcycles per frame up to the robust merge (`11c30d2`),
+  99 000 to 105 000 after the settings merge (`05218c2`), about a tenth more after the help merge (timestamps
+  only); neither that function nor `Color::lerp` changed in between, so the difference is in how the same code
+  was compiled into the larger kernel (not established further). The kernel is built without hardware float:
+  every `f32` operation is a call into the soft-float routines of `compiler_builtins` (`__mulsf3`, `__nesf2`, …;
+  the NMI probe of BUG-057 stopped in one), which is why per-pixel float code costs this much, most of all under TCG.
+- **Not affected:** the release image on a live medium skips the lock screen (`lockscreen` 9 ms). Installed system,
+  release image, R630 KVM: first frame plus a refused sign-in 0.44 s after the mark before the lock screen.
+  Self-test image under KVM: `lockscreen` 5.4 s.
+- **Next:**     paint that background with row fills (as `draw_wallpaper_compute` does), or cache it.
+
+### BUG-057 — the notification list stays open and the desktop repaints everything in every loop iteration ⬜ OPEN
+- **Status:**   OPEN (kernel) · the two harness heuristics it tripped are fixed in `gui-smoke.py` · **Severity:** LOW/MEDIUM (a sluggish desktop for as long as the list is open)
+- **Found:**    2026-11-10 · monkey soaks of the integration on the R630 (USB input): one run with a failed functional
+  check after 2 200 actions, one stopped as "screen frozen" after 1 750 (`proof/integ-2026-11/gui-soak-usb-run1.txt`,
+  `gui-soak-usb-run2.txt`); in both the notification list was open
+- **Analysis:** the list opens and closes only by a click on the status panel (`notify::toggle_centre`; `close_centre`
+  has no caller): no Esc, no click outside. While it is open `need_full` is set in every iteration. With seven
+  windows on the R630 under KVM: a console echo takes 150 ms (50 ms otherwise) and a pointer move shows after 0.3 to
+  0.4 s (0.04 s otherwise): `frame-time.txt`, the same on `11c30d2` before the settings and help merges, so not from
+  this integration. The loop was alive in the "frozen" run: it ran a typed command and answered the console between
+  the two looks; the NMI probe found it painting (`draw_window_body` -> `fill_rounded_rect` -> soft-float compare).
+- **Harness:**  `gui-smoke.py` looked once, 0.3 s after moving the pointer, and called two such looks in a row a frozen
+  screen; it now gives the picture up to 5 s. Its functional check clicked the EU mark with a context menu still open
+  (Esc does not close one, and with no window button on screen nothing had clicked before): the menu took the click,
+  no launcher opened and the command went elsewhere; it now spends a click beside the dock first. A failed check
+  saves a screenshot.
+- **Next:**     close the list on Esc and on a click outside it; repaint only when a toast or the list changes.
+
+### BUG-058 — EuroReken lower than 252 px draws its keypad down to the bottom of the screen ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (picture only; the desktop keeps working)
+- **Found:**    2026-11-10 · looking for the cause of BUG-057; `proof/integ-2026-11/screenshots/bug058-calculator-200px.png`
+- **Analysis:** the desktop lets a window shrink to 320 x 200. `calc_ui::button_area` leaves 0 px for the keypad below
+  252 px of window height, and `button_rect` then computes `(ah - gap * (ROWS - 1)) / ROWS` in `usize`: it wraps,
+  the 36 keys become six columns as tall as the screen, drawn outside the window. `render` has the same unchecked
+  subtraction for the width (`w - pad * 2 - HIST_W`), out of reach while the minimum width is 320.
+- **Next:**     saturating arithmetic in `button_rect` and `render`, or a minimum size per app.
+
+### BUG-059 — `[robust-fs]` FAILED on a root the installer self-test had just provisioned (no `/tmp`) ✅ FIXED
+- **Status:**   FIXED (`fb18477`, integration) · **Severity:** LOW (a self-test, not the code it tests)
+- **Found:**    2026-11-10 · the boot of the R630 soak guest (`loadtest.py --disks 8G`): `[robust-fs] … editor
+  refused+kept document=false ("opened: /tmp/robust-big.bin"), helper=false, … → FAILED ✗`; OK in every RAM-root
+  boot of the matrix
+- **Analysis:** with a blank virtio disk the self-test image installs onto it (`[q1x3]`) and runs on that root, which
+  has no `/tmp` until the `[edit]` self-test saves its file (`textedit::save` creates the directory). `[robust-fs]`
+  runs just before `[edit]`, on `feature/robust` as here, and wrote its two test files into `/tmp` without creating
+  it; a missing file then "opens" as a new document. `feature/robust` never booted with a blank virtio disk.
+- **Fix:**      the self-test creates `/tmp` first. Self-test code only (`cfg(feature = "selftest")`).
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with
