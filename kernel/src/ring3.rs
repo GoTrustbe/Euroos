@@ -10750,26 +10750,9 @@ pub fn spawn_glibc_persistent(
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
     let (main_slot, main_kstack) = alloc_thread_kstack()?;
-    let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
-    set_task_caps(main_task, caps);
-    register_thread_kstack(main_task, main_slot);
-    GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
-    TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
-    proc_state_drop(MAIN_KEY);
-    if let Some(p) = argv.iter().find_map(|a| match &a[..] {
-        b"--type=renderer" => Some(eurosandbox::Profile::Renderer),
-        b"--type=gpu-process" | b"--type=utility" => Some(eurosandbox::Profile::Utility),
-        _ => None,
-    }) {
-        set_task_profile(main_task, p);
-        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from argv)", p.name());
-    }
-    let next = NEXT_SPAWN_PROFILE.swap(0, Ordering::Relaxed);
-    if next != 0 {
-        let p = eurosandbox::Profile::from_u8(next);
-        set_task_profile(main_task, p);
-        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from the app manifest)", p.name());
-    }
+    let Some(main_task) = spawn_glibc_main(ld_info.entry, rsp, user_cs, user_ss, main_slot, main_kstack, pml4, caps, argv) else {
+        return None;
+    };
     PERSIST_ARENA.store(arena, Ordering::Relaxed);
     PERSIST_PML4.store(pml4, Ordering::Relaxed);
     PERSIST_FRAMES.store(frames as u64, Ordering::Relaxed);
@@ -11422,26 +11405,9 @@ fn glibc_disk_launch(
         Some(s) => s,
         None => return Err("(no kernel stack)"),
     };
-    let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
-    set_task_caps(main_task, caps);
-    register_thread_kstack(main_task, main_slot);
-    GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
-    TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
-    proc_state_drop(MAIN_KEY);
-    if let Some(p) = argv.iter().find_map(|a| match &a[..] {
-        b"--type=renderer" => Some(eurosandbox::Profile::Renderer),
-        b"--type=gpu-process" | b"--type=utility" => Some(eurosandbox::Profile::Utility),
-        _ => None,
-    }) {
-        set_task_profile(main_task, p);
-        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from argv)", p.name());
-    }
-    let next = NEXT_SPAWN_PROFILE.swap(0, Ordering::Relaxed);
-    if next != 0 {
-        let p = eurosandbox::Profile::from_u8(next);
-        set_task_profile(main_task, p);
-        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from the app manifest)", p.name());
-    }
+    let Some(main_task) = spawn_glibc_main(ld_info.entry, rsp, user_cs, user_ss, main_slot, main_kstack, pml4, caps, argv) else {
+        return Err("(scheduler task table full)");
+    };
 
     Ok(DiskRun { main_task, arena, frames, pml4, dp_base, dp_frames, prev_demand, prev_file })
 }
@@ -11692,6 +11658,96 @@ fn kill_glibc_group(main_task: usize) {
 
 pub static SKIP_GLIBC_TESTS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
+/// BUG-040: start a glibc program's main task only after everything its syscalls
+/// look at is published. The task used to be spawned Ready and then told who it
+/// is (`GLIBC_MAIN_TASK`, its caps, its kernel-stack owner, its sandbox profile)
+/// with interrupts on; a timer tick in that window ran the program while
+/// `GLIBC_MAIN_TASK` still said "no scheduled glibc process", so its
+/// `exit_group` took the foreground (musl excursion) exit: `EXITED = 1` and a
+/// `ret` through a stale `SAVED_KERNEL_RSP` into the boot task's stack (the
+/// ring-0 #GP at a stack address in a 1 h soak, `churn proc`). Now the task is
+/// parked until the last store. Returns None (kernel stack slot released) when
+/// the scheduler table is full.
+#[allow(clippy::too_many_arguments)]
+fn spawn_glibc_main(entry: u64, rsp: u64, user_cs: u64, user_ss: u64, slot: usize, kstack: u64, pml4: u64,
+                    caps: u64, argv: &[&[u8]]) -> Option<usize> {
+    let main_task = crate::sched::spawn_user_parked(entry, rsp, user_cs, user_ss, kstack, pml4);
+    if main_task == usize::MAX {
+        free_thread_kstack_slot(slot);
+        return None;
+    }
+    // Self-test hook ([bug040]): give the CPU away in the window, as a timer tick would.
+    if SPAWN_WINDOW_PROBE.swap(false, Ordering::Relaxed) {
+        let before = SYSCALLS_PER_TASK[main_task].load(Ordering::Relaxed);
+        // Up to a second, or until the task is gone: long enough for a task that
+        // was let run to make its syscalls and reach exit_group.
+        for _ in 0..100 {
+            crate::sched::sleep_ticks(1);
+            crate::sched::yield_now();
+            if crate::sched::is_dead(main_task) {
+                break;
+            }
+        }
+        let ran = SYSCALLS_PER_TASK[main_task].load(Ordering::Relaxed) != before || !crate::sched::is_parked(main_task);
+        SPAWN_WINDOW_RAN.store(if ran { 2 } else { 1 }, Ordering::Relaxed);
+    }
+    set_task_caps(main_task, caps);
+    register_thread_kstack(main_task, slot);
+    GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
+    TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
+    proc_state_drop(MAIN_KEY);
+    if let Some(p) = argv.iter().find_map(|a| match &a[..] {
+        b"--type=renderer" => Some(eurosandbox::Profile::Renderer),
+        b"--type=gpu-process" | b"--type=utility" => Some(eurosandbox::Profile::Utility),
+        _ => None,
+    }) {
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from argv)", p.name());
+    }
+    let next = NEXT_SPAWN_PROFILE.swap(0, Ordering::Relaxed);
+    if next != 0 {
+        let p = eurosandbox::Profile::from_u8(next);
+        set_task_profile(main_task, p);
+        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from the app manifest)", p.name());
+    }
+    crate::sched::start_parked(main_task);
+    Some(main_task)
+}
+
+/// [bug040] self-test hook: the next glibc launch gives the CPU away (up to 1 s)
+/// between spawn and start.
+static SPAWN_WINDOW_PROBE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// 0 = no probe ran, 1 = the task stayed parked, 2 = it ran inside the window.
+static SPAWN_WINDOW_RAN: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// BUG-040 regression self-test: launch `gtiny` with the CPU given away (up to a
+/// second) between spawning its main task and publishing it. The task must not
+/// run in that window and the program must end through the scheduled exit
+/// (exit 42, the launcher wakes). Before the fix the window ran the program and
+/// its exit_group returned through a stale `SAVED_KERNEL_RSP`.
+pub fn spawn_window_selftest(falloc: &mut FrameAllocator) {
+    let caps = CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO;
+    SPAWN_WINDOW_RAN.store(0, Ordering::Relaxed);
+    SPAWN_WINDOW_PROBE.store(true, Ordering::Relaxed);
+    let (_, exit) = run_glibc(falloc, gtiny_bytes(), ldlinux_bytes(), &[b"/bin/gtiny"], &[b"PATH=/bin"], caps);
+    SPAWN_WINDOW_PROBE.store(false, Ordering::Relaxed);
+    let ran = SPAWN_WINDOW_RAN.load(Ordering::Relaxed);
+    let ok = ran == 1 && exit == 42;
+    let (pool_f, demand_f) = crate::procpool::foreign_frees();
+    if ran == 0 {
+        crate::serial_println!(
+            "[bug040] spawn-window self-test skipped: the launch ended before its spawn (exit={exit:#x}; no glibc arena at this RAM size) · foreign frees refused so far: main={} pool={pool_f} demand={demand_f} ⬜",
+            falloc.foreign_frees().0
+        );
+        return;
+    }
+    crate::serial_println!(
+        "[bug040] glibc main task with the CPU given away between spawn and start: probe-ran={} ran-before-start={} exit={exit} (want 42) · foreign frees refused so far: main={} pool={pool_f} demand={demand_f} → {}",
+        ran != 0, ran == 2, falloc.foreign_frees().0, if ok { "OK ✓" } else { "FAILED" }
+    );
+}
+
+
 pub fn run_glibc(
     falloc: &mut FrameAllocator,
     exe: &[u8],
@@ -11881,26 +11937,9 @@ pub fn run_glibc(
     // thread as a normal ring-3 scheduler task (own kstack, glibc CR3). Its
     // pthread workers are scheduler siblings, so blocking + preemption + waking
     // all work — unlike a boot-task excursion, which starved.
-    let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
-    set_task_caps(main_task, caps);
-    register_thread_kstack(main_task, main_slot);
-    GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
-    TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
-    proc_state_drop(MAIN_KEY);
-    if let Some(p) = argv.iter().find_map(|a| match &a[..] {
-        b"--type=renderer" => Some(eurosandbox::Profile::Renderer),
-        b"--type=gpu-process" | b"--type=utility" => Some(eurosandbox::Profile::Utility),
-        _ => None,
-    }) {
-        set_task_profile(main_task, p);
-        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from argv)", p.name());
-    }
-    let next = NEXT_SPAWN_PROFILE.swap(0, Ordering::Relaxed);
-    if next != 0 {
-        let p = eurosandbox::Profile::from_u8(next);
-        set_task_profile(main_task, p);
-        crate::serial_println!("[sbx] {} syscall profile applied to task {main_task} (from the app manifest)", p.name());
-    }
+    let Some(main_task) = spawn_glibc_main(ld_info.entry, rsp, user_cs, user_ss, main_slot, main_kstack, pml4, caps, argv) else {
+        return (String::from("(scheduler task table full)"), u64::MAX);
+    };
     crate::serial_println!(
         "[glibc] spawned scheduled task {main_task}: ld-entry@{:#x} rsp@{rsp:#x} phdr@{:#x} phnum={}",
         ld_info.entry, exe_info.phdr, exe_info.phnum

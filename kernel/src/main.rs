@@ -4013,6 +4013,7 @@ fn main() -> Status {
     appstore::selftest(&mut vfs);
     // Churn: short, sharp lifecycle stress that must leave every counter where it started.
     churn::proc_churn(&mut allocator);
+    ring3::spawn_window_selftest(&mut allocator);
     churn::thread_churn(&mut allocator);
     churn::fork_churn(&mut allocator);
     churn::fs_churn(&mut vfs);
