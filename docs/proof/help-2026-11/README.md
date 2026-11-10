@@ -3,6 +3,15 @@
 Branch `feature/help`, on `feature/app-control` at `a36ef4b`. Not merged.
 Description and maintenance rules: [`docs/HELP-SYSTEM.md`](../../HELP-SYSTEM.md).
 
+| Commit | What |
+|---|---|
+| `476f059` | `crates/eurokeymap`: Esc decoded, host test |
+| `1a46c52` | `ps2.rs` F1/F2 latches and `peek_scancodes`, `mouse.rs` `peek_press`, `xhci.rs` F1/F2 for USB keyboards, `bootopt.rs` `ui.tour` |
+| `8eecda4` | `help.rs`, `help_text.rs`, `onboarding.rs`, in-app tooltips, shell help, the hooks in `main.rs` and `compositor.rs`, `Welcome.txt` |
+| (last two) | docs, this proof |
+
+The images that were tested were built from the tree of `8eecda4`.
+
 Serial logs stay on the build servers; the `.markers` files hold the verdict
 lines.
 
