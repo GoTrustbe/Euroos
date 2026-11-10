@@ -320,6 +320,12 @@ fn inflate_block(
     dist: &Huffman,
 ) -> Result<(), InflateError> {
     loop {
+        // One block can expand ~1000:1, so the cap is checked per symbol and not
+        // only between blocks: a 1 MiB stream of one block must not grow to 1 GiB
+        // of heap before anyone looks (allocation failure aborts a no_std kernel).
+        if out.len() > MAX_OUTPUT {
+            return Err(InflateError::TooLarge);
+        }
         let sym = litlen.decode(br)?;
         match sym {
             0..=255 => out.push(sym as u8),
@@ -347,5 +353,47 @@ fn inflate_block(
             }
             _ => return Err(InflateError::BadCode),
         }
+    }
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::*;
+
+    /// One fixed-Huffman block of `n` zero bytes: a literal 0, then 258-byte
+    /// matches at distance 1. About 1 bit per 100 output bytes.
+    fn one_block_of_zeros(n: usize) -> alloc::vec::Vec<u8> {
+        let mut bits: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        let mut put = |v: u32, len: u32, msb_first: bool| {
+            for i in 0..len {
+                let b = if msb_first { (v >> (len - 1 - i)) & 1 } else { (v >> i) & 1 };
+                bits.push(b as u8);
+            }
+        };
+        put(1, 1, false); // BFINAL
+        put(1, 2, false); // BTYPE = fixed
+        put(0x30, 8, true); // literal 0
+        let mut left = n - 1;
+        while left >= 258 {
+            put(0b1100_0101, 8, true); // length symbol 285 (258 bytes)
+            put(0, 5, true); // distance symbol 0 (distance 1)
+            left -= 258;
+        }
+        put(0, 7, true); // end of block
+        let mut out = alloc::vec![0u8; bits.len().div_ceil(8)];
+        for (i, b) in bits.iter().enumerate() {
+            out[i / 8] |= b << (i % 8);
+        }
+        out
+    }
+
+    #[test]
+    fn a_single_block_is_stopped_at_the_cap() {
+        let small = one_block_of_zeros(1 + 258 * 4);
+        assert_eq!(inflate(&small).unwrap().len(), 1 + 258 * 4);
+        // 80 MiB from one block of about 530 KiB: refused at the 64 MiB cap.
+        let bomb = one_block_of_zeros(80 * 1024 * 1024);
+        assert!(bomb.len() < 1024 * 1024);
+        assert_eq!(inflate(&bomb), Err(InflateError::TooLarge));
     }
 }
