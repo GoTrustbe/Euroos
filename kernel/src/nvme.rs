@@ -121,6 +121,13 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
     if mmio == 0 {
         return false;
     }
+    // BUG-021: under KVM with the host's physical address bits OVMF places the
+    // 64-bit BAR at 56 TiB, far above the identity map, and the first register
+    // read was a kernel page fault. Reach it through the high-MMIO window.
+    let Some(mmio) = crate::paging::mmio_virt(mmio, 0x1_0000) else {
+        crate::serial_println!("[nvme] BAR0 {mmio:#x} cannot be mapped (high-MMIO window full) — disk skipped");
+        return false;
+    };
 
     unsafe {
         let cap = rd64(mmio + REG_CAP);

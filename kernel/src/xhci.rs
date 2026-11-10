@@ -284,6 +284,11 @@ fn controller_frames(max_scratch: u32) -> usize {
     4 + if max_scratch > 0 { 1 + max_scratch as usize } else { 0 }
 }
 
+/// Register space mapped for the controller. A BAR is aligned to its size and
+/// the window maps whole 2 MiB pages, so this reaches every register of a BAR
+/// up to 2 MiB (capability, operational, runtime and doorbell registers).
+const MMIO_LEN: u64 = 0x1_0000;
+
 /// Detect + initialize the xHCI controller and enumerate all HID devices.
 pub fn init(falloc: &mut FrameAllocator) -> bool {
     let dev = match pci::find(|d| d.class == 0x0C && d.subclass == 0x03 && d.prog_if == 0x30) {
@@ -305,6 +310,15 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         crate::serial_println!("[xhci] BAR0 not assigned");
         return false;
     }
+    // A 64-bit BAR may lie above the 1 TiB identity map: OVMF puts its 64-bit
+    // PCI window near the top of the physical address space, which under KVM
+    // with the host's address bits is tens of TiB up (0x380000000000 on the
+    // R630). The registers are then reached through the high-MMIO window;
+    // dereferencing the BAR itself was a kernel page fault at boot (BUG-042).
+    let Some(mmio) = crate::paging::mmio_virt(mmio, MMIO_LEN) else {
+        crate::serial_println!("[xhci] BAR0 {mmio:#x} cannot be mapped (high-MMIO window full) — USB skipped");
+        return false;
+    };
     dev.enable(0x6); // memory-space + bus-master
 
     unsafe {

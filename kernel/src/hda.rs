@@ -187,6 +187,12 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         crate::serial_println!("[hda] BAR0 not assigned");
         return false;
     }
+    // Above the 1 TiB identity map (KVM with the host's address bits): through
+    // the high-MMIO window, as in xhci.rs (BUG-042).
+    let Some(mmio) = crate::paging::mmio_virt(mmio, 0x4000) else {
+        crate::serial_println!("[hda] BAR0 {mmio:#x} cannot be mapped (high-MMIO window full) — audio skipped");
+        return false;
+    };
     dev.enable(0x6); // memory-space + bus-master
 
     // Checked BEFORE the controller is reset: out of frames means no audio, with
