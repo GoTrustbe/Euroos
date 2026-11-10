@@ -86,6 +86,26 @@ struct EuroGuard {
     audit: Vec<AuditEvent>,
     /// Total number of blocked requests (for the dashboard overview).
     blocked_total: u64,
+    /// The domain block list as the system policy defined it (before the
+    /// user's own changes) — what `domains.added/removed` are relative to.
+    base_domains: Vec<String>,
+    /// Domains the user blocked on top of the system policy (saved).
+    user_added: Vec<String>,
+    /// System-policy domains the user unblocked (saved).
+    user_removed: Vec<String>,
+}
+
+/// User rule changes count (and are saved) only once the desktop runs: what the
+/// boot self-tests add and remove before that is not the user's.
+static ARMED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// A saved rule changed since the last save.
+static DIRTY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+fn armed() -> bool {
+    ARMED.load(core::sync::atomic::Ordering::Relaxed)
+}
+fn mark_dirty() {
+    DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
 }
 
 const AUDIT_MAX: usize = 64;
@@ -104,6 +124,9 @@ impl EuroGuard {
             dns_log: BTreeMap::new(),
             audit: Vec::new(),
             blocked_total: 0,
+            base_domains: Vec::new(),
+            user_added: Vec::new(),
+            user_removed: Vec::new(),
         }
     }
 
@@ -130,6 +153,7 @@ pub fn init() {
     for d in ["ads.doubleclick.net", "telemetry.mozilla.org", "google-analytics.com", "graph.facebook.com"] {
         g.blocked_domains.push(d.to_string());
     }
+    g.base_domains = g.blocked_domains.clone();
     g.log("INFO", "euroguard", "system policy loaded (Level 1)".to_string());
 }
 
@@ -169,6 +193,9 @@ pub fn load_config(text: &str) {
             _ => {}
         }
     }
+    g.base_domains = g.blocked_domains.clone();
+    g.user_added.clear();
+    g.user_removed.clear();
     let (ni, np, nd) = (g.blocked_ips.len(), g.blocked_ports.len(), g.blocked_domains.len());
     g.log(
         "INFO",
@@ -185,6 +212,15 @@ pub fn add_blocked_domain(domain: &str) {
     if !g.blocked_domains.contains(&d) {
         g.blocked_domains.push(d.clone());
     }
+    if armed() {
+        // Remember it as the user's change, relative to the system policy.
+        if let Some(p) = g.user_removed.iter().position(|x| x == &d) {
+            g.user_removed.remove(p);
+        } else if !g.base_domains.contains(&d) && !g.user_added.contains(&d) {
+            g.user_added.push(d.clone());
+        }
+        mark_dirty();
+    }
     g.log("INFO", "shell", alloc::format!("domain blocked: {d}"));
 }
 
@@ -196,6 +232,14 @@ pub fn remove_blocked_domain(domain: &str) -> bool {
     let before = g.blocked_domains.len();
     g.blocked_domains.retain(|x| x != &d);
     let removed = g.blocked_domains.len() < before;
+    if removed && armed() {
+        if let Some(p) = g.user_added.iter().position(|x| x == &d) {
+            g.user_added.remove(p);
+        } else if g.base_domains.contains(&d) && !g.user_removed.contains(&d) {
+            g.user_removed.push(d.clone());
+        }
+        mark_dirty();
+    }
     if removed {
         g.log("INFO", "shell", alloc::format!("domain unblocked: {d}"));
     }
@@ -302,6 +346,9 @@ pub fn set_app_net(app: &str, rule: AppNet) {
         g.app_rules.remove(app);
     } else {
         g.app_rules.insert(app.to_string(), rule);
+    }
+    if armed() {
+        mark_dirty();
     }
     g.log("INFO", "shell", alloc::format!("app {app}: {label}"));
 }
@@ -579,4 +626,194 @@ pub fn audit_lines(limit: usize) -> Vec<String> {
         out.push(alloc::format!("  {} t+{:>5} {:<8} {:<14} {}", mark, e.ticks, e.kind, e.app, e.detail));
     }
     out
+}
+
+// ── Saved rules: the user's own changes survive a restart ───────────────────
+//
+// Stored through `prefs` in `/etc/euroos/euroguard.conf`:
+//   domains.added   = names the user blocked on top of the system policy
+//   domains.removed = system-policy names the user unblocked
+//   app.N           = <app>|blocked   or   <app>|allow:<a.b.c.d/len>;...
+// The system policy itself stays in `/etc/euroguard/system.conf`.
+
+/// The prefs app name of the saved rules.
+const SAVED_APP: &str = "euroguard";
+
+/// The domains the user blocked (on top of the system policy).
+pub fn user_domains() -> Vec<String> {
+    GUARD.lock().user_added.clone()
+}
+
+fn rule_text(rule: &AppNet) -> Option<String> {
+    match rule {
+        AppNet::Default => None,
+        AppNet::Blocked => Some("blocked".to_string()),
+        AppNet::AllowOnly(nets) => {
+            let parts: Vec<String> = nets
+                .iter()
+                .map(|(net, len)| {
+                    let b = net.to_be_bytes();
+                    alloc::format!("{}.{}.{}.{}/{}", b[0], b[1], b[2], b[3], len)
+                })
+                .collect();
+            Some(alloc::format!("allow:{}", parts.join(";")))
+        }
+    }
+}
+
+fn rule_parse(text: &str) -> Option<AppNet> {
+    if text == "blocked" {
+        return Some(AppNet::Blocked);
+    }
+    let list = text.strip_prefix("allow:")?;
+    let mut nets = Vec::new();
+    for part in list.split(';').filter(|p| !p.is_empty()) {
+        let (ip, len) = part.split_once('/')?;
+        let len: u8 = len.parse().ok().filter(|l| *l <= 32)?;
+        nets.push((ip_u32(crate::net::parse_ipv4(ip)?), len));
+    }
+    Some(AppNet::AllowOnly(nets))
+}
+
+fn save_as(fs: &mut dyn eurofs::FileSystem, app: &str) -> bool {
+    let (added, removed, rules) = {
+        let g = GUARD.lock();
+        let rules: Vec<(String, String)> = g
+            .app_rules
+            .iter()
+            .filter(|(name, _)| !name.contains(['|', '\n', '\r']))
+            .filter_map(|(name, rule)| rule_text(rule).map(|t| (name.clone(), t)))
+            .collect();
+        (g.user_added.clone(), g.user_removed.clone(), rules)
+    };
+    let mut p = crate::prefs::open_system(fs, app);
+    if p.to_text().is_empty() {
+        *p = crate::prefs::Conf::with_header("EuroGuard rules set by the user (written by EuroOS; see docs/SETTINGS.md)");
+    }
+    let stale: Vec<String> = p.keys().filter(|k| k.starts_with("app.")).map(String::from).collect();
+    for k in stale {
+        p.remove(&k);
+    }
+    p.set_list("domains.added", &added);
+    p.set_list("domains.removed", &removed);
+    for (i, (name, rule)) in rules.iter().enumerate() {
+        p.set(&alloc::format!("app.{i}"), &alloc::format!("{name}|{rule}"));
+    }
+    p.save(fs).is_ok()
+}
+
+fn load_from(fs: &mut dyn eurofs::FileSystem, app: &str) -> (usize, usize) {
+    let p = crate::prefs::open_system(fs, app);
+    let added: Vec<String> = p.get_list("domains.added").into_iter().map(|d| d.to_ascii_lowercase()).collect();
+    let removed: Vec<String> = p.get_list("domains.removed").into_iter().map(|d| d.to_ascii_lowercase()).collect();
+    let mut rules = Vec::new();
+    for key in p.keys().filter(|k| k.starts_with("app.")) {
+        if let Some((name, rule)) = p.get(key).and_then(|v| v.split_once('|')) {
+            if let (false, Some(rule)) = (name.is_empty(), rule_parse(rule)) {
+                rules.push((name.to_string(), rule));
+            }
+        }
+    }
+    let mut g = GUARD.lock();
+    for d in &added {
+        if !g.blocked_domains.contains(d) {
+            g.blocked_domains.push(d.clone());
+        }
+    }
+    g.blocked_domains.retain(|d| !removed.contains(d));
+    let counts = (added.len() + removed.len(), rules.len());
+    g.user_added = added.into_iter().filter(|d| !g.base_domains.contains(d)).collect();
+    g.user_removed = removed.into_iter().filter(|d| g.base_domains.contains(d)).collect();
+    for (name, rule) in rules {
+        g.app_rules.insert(name, rule);
+    }
+    if counts != (0, 0) {
+        g.log("INFO", "euroguard", alloc::format!("saved user rules loaded: {} domain change(s), {} app rule(s)", counts.0, counts.1));
+    }
+    counts
+}
+
+/// Boot: apply the user's saved rules on top of the system policy. Returns
+/// (domain changes, app rules) applied.
+pub fn load_saved(fs: &mut dyn eurofs::FileSystem) -> (usize, usize) {
+    load_from(fs, SAVED_APP)
+}
+
+/// Write the user's rules now. `false` if the file could not be written.
+pub fn save(fs: &mut dyn eurofs::FileSystem) -> bool {
+    DIRTY.store(false, core::sync::atomic::Ordering::Relaxed);
+    save_as(fs, SAVED_APP)
+}
+
+/// Desktop loop, every iteration: the first call starts counting rule changes
+/// as the user's; later calls save when a rule changed (from the settings
+/// panel or the shell). One atomic load when nothing changed.
+pub fn persist_tick(fs: &mut dyn eurofs::FileSystem) {
+    use core::sync::atomic::Ordering;
+    if !ARMED.swap(true, Ordering::Relaxed) {
+        DIRTY.store(false, Ordering::Relaxed);
+        return;
+    }
+    if DIRTY.swap(false, Ordering::Relaxed) {
+        let ok = save_as(fs, SAVED_APP);
+        crate::serial_println!("[euroguard] user rules saved to /etc/euroos/euroguard.conf: {}", if ok { "ok" } else { "FAILED" });
+    }
+}
+
+/// `[set-guard]` boot self-test — the user's rules survive a restart: block a
+/// domain, unblock a system-policy domain, cut one app off and clamp another to
+/// an allow-list; save; forget everything (as a reboot does); load; all four
+/// are back. Uses a scratch file and restores the live policy exactly.
+pub fn persist_selftest(fs: &mut dyn eurofs::FileSystem) {
+    use core::sync::atomic::Ordering;
+    const SCRATCH: &str = "euroguard-selftest";
+    let snapshot = {
+        let g = GUARD.lock();
+        (g.blocked_domains.clone(), g.app_rules.clone(), g.user_added.clone(), g.user_removed.clone())
+    };
+    let put_back = |s: &(Vec<String>, BTreeMap<String, AppNet>, Vec<String>, Vec<String>)| {
+        let mut g = GUARD.lock();
+        g.blocked_domains = s.0.clone();
+        g.app_rules = s.1.clone();
+        g.user_added = s.2.clone();
+        g.user_removed = s.3.clone();
+    };
+    let was_armed = ARMED.swap(true, Ordering::Relaxed);
+    let base_first = GUARD.lock().base_domains.first().cloned();
+
+    add_blocked_domain("persist-test.example");
+    if let Some(d) = &base_first {
+        remove_blocked_domain(d);
+    }
+    set_app_net("persist-app", AppNet::Blocked);
+    set_app_net("persist-agent", AppNet::AllowOnly(alloc::vec![(u32::from_be_bytes([10, 0, 0, 0]), 8)]));
+    let dirty = DIRTY.load(Ordering::Relaxed);
+    let saved = save_as(fs, SCRATCH);
+
+    // "Restart": back to the policy as it was, nothing of the above left.
+    put_back(&snapshot);
+    let forgotten = !GUARD.lock().blocked_domains.iter().any(|d| d == "persist-test.example") && !app_is_blocked("persist-app");
+
+    let (nd, na) = load_from(fs, SCRATCH);
+    let (domain_back, base_gone, app_back, allow_back) = {
+        let g = GUARD.lock();
+        (
+            g.blocked_domains.iter().any(|d| d == "persist-test.example") && g.user_added.iter().any(|d| d == "persist-test.example"),
+            base_first.as_ref().map(|d| !g.blocked_domains.contains(d)).unwrap_or(true),
+            matches!(g.app_rules.get("persist-app"), Some(AppNet::Blocked)),
+            matches!(g.app_rules.get("persist-agent"), Some(AppNet::AllowOnly(n)) if n.as_slice() == [(u32::from_be_bytes([10, 0, 0, 0]), 8)]),
+        )
+    };
+
+    put_back(&snapshot);
+    ARMED.store(was_armed, Ordering::Relaxed);
+    DIRTY.store(false, Ordering::Relaxed);
+    crate::sysctx::as_system(fs, |fs| {
+        let _ = fs.remove_file("/etc/euroos/euroguard-selftest.conf");
+    });
+    let ok = dirty && saved && forgotten && domain_back && base_gone && app_back && allow_back;
+    crate::serial_println!(
+        "[set-guard] EuroGuard rules across a restart: change-noticed={dirty}, saved={saved}, forgotten-after-reset={forgotten}, loaded({nd} domain change(s), {na} app rule(s)): blocked-domain-back={domain_back}, unblocked-system-domain-stays-unblocked={base_gone}, app-block-back={app_back}, allow-list-back={allow_back} → {}",
+        if ok { "OK (user rules persist via prefs) ✓" } else { "FAILED ✗" }
+    );
 }

@@ -80,6 +80,7 @@ mod scrub;
 mod swapmgr;
 mod wasm;
 mod wayland;
+mod prefs; // T2-hook: settings storage
 mod ps2;
 mod ring3;
 mod rtc;
@@ -1442,6 +1443,7 @@ fn main() -> Status {
         Ok(bytes) => euroguard::load_config(&String::from_utf8_lossy(&bytes)),
         Err(_) => euroguard::init(), // fallback: built-in starter set
     }
+    prefs::boot_apply(&mut fs); // T2-hook: saved system settings + the user's EuroGuard rules
     // A geo feed extends the built-in country table if present (full GeoIP drops
     // in as data, no code change). Then prove the network-control core.
     if let Ok(bytes) = fs.read_file("/etc/euroguard/geoip.conf") {
@@ -4256,6 +4258,7 @@ fn main() -> Status {
     // quota — both on the LIVE root FS.
     session::selftest(&mut vfs);
     session::quota_selftest(&mut vfs);
+    if cfg!(feature = "selftest") { prefs::selftest(&mut vfs); settings_ui::state_selftest(&mut vfs); } // T2-hook
     // 3F-5: MIME detection + default-app associations on the live FS.
     mime::selftest(&mut vfs);
     // Sprint AE-e2e: must-change-password enforced end-to-end (login refuses until
@@ -4955,6 +4958,7 @@ fn main() -> Status {
         let gid = auth::session_gid();
         let caps = euroid::user_caps(&session_user).map(|(_, c)| c).unwrap_or(0);
         session::open(ctx.fs, uid, gid, &session_user, caps, "desktop");
+        prefs::session_apply(ctx.fs); // T2-hook: the user's desktop preferences
     }
 
     // EuroMonitor's first paint must show the real RAM figures (not the 0 atomics).
@@ -5483,7 +5487,8 @@ fn main() -> Status {
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::Settings {
                         // Click on section nav / domain input field / HTTP-server toggle.
-                        if let Some(s) = settings_ui::nav_at(windows[i].x, windows[i].y, px, py) {
+                        if settings_ui::click(ctx.fs, windows[i].x, windows[i].y, windows[i].w, windows[i].h, px, py) { // T2-hook: the panel handles its own clicks
+                        } else if let Some(s) = settings_ui::nav_at(windows[i].x, windows[i].y, px, py) {
                             settings_ui::set_section(s);
                         } else if settings_ui::domain_field_at(windows[i].x, windows[i].y, px, py) {
                             settings_ui::begin_domain_edit();
@@ -5741,6 +5746,9 @@ fn main() -> Status {
                 need_full = true;
             }
         }
+        // T2-hook: EuroBeheer takes rich keys (Tab, arrows, Page keys) while it is on top.
+        let settings_keys = settings_focused && !files::prompt_open() && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open(); // T2-hook
+        if settings_keys { let fi = focused.unwrap(); while let Some(k) = ps2::poll_key_ex() { settings_ui::key(ctx.fs, windows[fi].x, windows[fi].y, windows[fi].w, windows[fi].h, k); need_full = true; } } // T2-hook
         if editor_focused {
             while let Some(k) = ps2::poll_key_ex() {
                 if text_focused {
@@ -5753,7 +5761,7 @@ fn main() -> Status {
                 need_full = true;
             }
         }
-        while let Some(k) = if editor_focused || installer_focused || files::prompt_open() { None } else { ps2::poll_key() } {
+        while let Some(k) = if editor_focused || installer_focused || settings_keys /* T2-hook */ || files::prompt_open() { None } else { ps2::poll_key() } {
             // The symbol picker only needs Esc to dismiss.
             if symbolpicker::is_open() {
                 if k == '\u{1b}' { symbolpicker::close(); }
@@ -6302,6 +6310,7 @@ fn main() -> Status {
             notes::save_all(ctx.fs);
         }
         paint::flush_save(ctx.fs); // EuroPaint: write a pending Save to EuroFS
+        settings_ui::tick(ctx.fs); // T2-hook: save changed EuroGuard rules, refresh the panel's snapshot
         // Periodic system-integrity sweep (~5 min of guest ticks). Detects
         // on-disk tampering of /bin//lib while the desktop runs.
         {
