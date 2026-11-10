@@ -4594,7 +4594,9 @@ impl HttpsFetch {
             return FetchStep::Pending;
         }
         self.idle = 0;
-        let tls = self.tls.as_mut().expect("tls set after connect");
+        let Some(tls) = self.tls.as_mut() else {
+            return self.fail("TLS session missing after connect");
+        };
         tls.feed(&data);
         let closed = match tls.process() {
             Ok(out) => {
