@@ -105,6 +105,7 @@ flag through `immutable::set_protected`, which audits both steps.
 | `~/.config/euroos/desktop.conf` | `clock.24h` | 24-hour clock (`true`) or 12-hour with AM/PM | session start (`prefs::session_apply`) |
 | | `display.wallpaper` | `euro`, `sand` or `mist` | session start |
 | | `ui.text_scale` | Text size of form-based panels, 90 to 130 (percent) | session start |
+| | `tour.done` | `true` once the first-run tour was finished or "Do not show again" was chosen (`onboarding.rs`; not in the panel) | first desktop-loop iteration |
 
 Single-purpose files that already existed keep their place and format, and the
 panel writes them: `/etc/keymap` (layout tag, read at boot by `main.rs`),

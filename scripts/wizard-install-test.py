@@ -85,6 +85,18 @@ class Vm:
             time.sleep(1)
         return False
 
+    def close_tour(self, after=0):
+        """The first desktop of a user shows the first-run tour. Typed keys pass
+        through it (and close it), but it would be on every screenshot: Esc closes
+        it, and Esc is the one key the tour keeps for itself."""
+        if not self.wait_for("[tour] first-run tour shown", 5, after=after):
+            return
+        mark = len(self.log())
+        self.key("esc")
+        ok = self.wait_for("[tour] closed", 60, after=mark)
+        print(f"[wizard-test] first-run tour {'closed with Esc' if ok else 'did NOT close on Esc'}", flush=True)
+        time.sleep(2)
+
     def quit(self):
         try: self.cmd({"execute": "quit"})
         except Exception: pass
@@ -111,7 +123,7 @@ else:
   log = vm.log()
   check("install media read from own ESP", "install media read from own ESP" in log)
   check("live boot did not write the blank disk (RAM root)", "booting a RAM root" in log or "live root" not in log)
-  time.sleep(3); vm.shot("1-welcome.png")
+  time.sleep(3); vm.close_tour(); vm.shot("1-welcome.png")
   vm.key("ret"); time.sleep(1.5)                 # Welcome -> Language
   vm.key("ret"); time.sleep(1.5)                 # Language (nl-BE) -> Keyboard
   vm.key("up"); vm.key("ret"); time.sleep(2)     # Keyboard: US QWERTY (what QMP sends) -> Disk
@@ -152,6 +164,7 @@ mark = len(vm.log())
 vm.type(PASSWORD + "\n")
 check("typed password signs in as the created user", vm.wait_for(f"[lock] login successful: {USER}", 60, after=mark))
 check("desktop after login", vm.wait_for("[desktop] interactive loop started", 300))
+vm.close_tour(after=mark)
 time.sleep(20); vm.shot("9-desktop.png")  # TCG: give the first desktop frame time to be presented
 vm.quit()
 

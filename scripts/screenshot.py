@@ -14,6 +14,10 @@ OVMF = "/usr/share/ovmf/OVMF.fd"
 QMP = os.environ.get("EK_QMP", "/tmp/ek-qmp.sock")
 SERIAL = os.environ.get("EK_SERIAL", "serial.log")
 PCAP = os.environ.get("EK_PCAP", "net.pcap")
+# The release image shows the first-run tour on the first desktop. EK_TOUR=close
+# (default) presses Esc when the serial log says the tour is up, so the picture is
+# the desktop; EK_TOUR=keep leaves the card in the picture.
+TOUR = os.environ.get("EK_TOUR", "close")
 
 for p in (QMP,):
     try: os.unlink(p)
@@ -57,6 +61,22 @@ cmd({"execute": "qmp_capabilities"})
 
 print(f"[screenshot] booting, waiting {WAIT}s for render (TCG is slow)...", flush=True)
 time.sleep(WAIT)
+
+def serial_text():
+    try:
+        return open(SERIAL, errors="replace").read()
+    except OSError:
+        return ""
+
+if TOUR != "keep" and "[tour] first-run tour shown" in serial_text():
+    cmd({"execute": "send-key", "arguments": {"keys": [{"type": "qcode", "data": "esc"}]}})
+    for _ in range(60):
+        if "[tour] closed" in serial_text():
+            break
+        time.sleep(1)
+    print("[screenshot] first-run tour closed with Esc" if "[tour] closed" in serial_text()
+          else "[screenshot] WARNING: the tour did not close on Esc", flush=True)
+    time.sleep(5)  # the repaint without the card
 
 # Try PNG; fall back to PPM if this QEMU has no PNG screendump.
 r = cmd({"execute": "screendump", "arguments": {"filename": os.path.abspath(OUT), "format": "png"}})

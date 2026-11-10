@@ -81,17 +81,24 @@ must be changed together with `paint.rs`.
 - Shown when the desktop loop starts, unless: the image is the self-test
   image (`feature = "selftest"`), the boot option `ui.tour=off` is set
   (`EUROOS_BOOTOPTS="ui.tour=off"` at build time, or `euroos-boot.conf` on the
-  ESP), or the flag file exists.
-- Flag file: `/home/<user>/.config/euroos/tour-done`, written by "Do not show
-  again" and by finishing the tour. A stand-in until the preferences store
-  exists. On the preview image the file system is in memory, so the tour
-  returns after a restart.
+  ESP), or the user has `tour.done=true`.
+- `tour.done` is a key in the user's desktop preferences
+  (`~/.config/euroos/desktop.conf`, see `SETTINGS.md`), set by "Do not show
+  again" and by finishing the tour, through `prefs::open_user`. Without a
+  session nothing is saved and the log says so. On the preview image the file
+  system is in memory, so the tour returns after a restart; on an installed
+  system it stays away for that user.
 - It never holds input that is not meant for it: Esc, the arrow keys and
   clicks on the card are consumed; any other key and any click outside the
   card close the tour and are left in place for the desktop. An unattended
   script that types or clicks loses nothing.
-- Cost at boot: one `exists()` on the flag file in the first loop iteration.
-- Serial log: `[tour] first-run tour shown ...`, `[tour] closed ...`.
+- Cost at boot: one read of `desktop.conf` in the first loop iteration.
+- Serial log: `[tour] first-run tour shown ...`, `[tour] closed ...`,
+  `[tour] do not show again: tour.done=true saved in <file>`.
+- Test harnesses: `gui-smoke.py`, `wizard-install-test.py` and `screenshot.py`
+  press Esc when the log says the tour is up (gui-smoke counts it as a step;
+  `EK_TOUR=keep` keeps the card in a `screenshot.py` picture); `boot-time.py`
+  writes `ui.tour=off` into its private image copy unless `--tour keep`.
 
 ## Keyboard notes
 

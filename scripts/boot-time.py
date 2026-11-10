@@ -16,6 +16,9 @@ usage: boot-time.py NAME IMG OUTDIR [options]
                     their output is in the log as `[scon] ...`
   --type TEXT       type TEXT on the guest keyboard through QMP
   --extra "ARGS"    extra QEMU arguments
+  --tour off|keep   off (default): `ui.tour=off` goes into euroos-boot.conf on the
+                    private image copy, so the first-run tour is not on the
+                    screenshot and takes no typed key; keep: the image as built
 
 Writes OUTDIR/NAME.tlog. Everything it creates (boot image copy, QMP socket,
 pid file) lives in OUTDIR/NAME.d, so several runs and several people do not
@@ -36,9 +39,17 @@ ap.add_argument("--cmds", help="file with shell commands for the serial console 
 ap.add_argument("--cmd-timeout", type=float, default=60)
 ap.add_argument("--extra", default="", help="extra QEMU arguments (one string)")
 ap.add_argument("--nic", default="virtio", help="virtio | e1000e | e1000 (default mode only)")
+ap.add_argument("--tour", choices=["off", "keep"], default="off", help="off: ui.tour=off on the image copy (default)")
 a = ap.parse_args()
 w = os.path.join(a.out, a.name + ".d"); os.makedirs(w, exist_ok=True)
 img = os.path.join(w, "boot.img"); shutil.copyfile(a.img, img)
+if a.tour == "off":
+    # Keep whatever boot options the image was built with, and add ours.
+    conf = os.path.join(w, "euroos-boot.conf")
+    old = subprocess.run(["mtype", "-i", img, "::/EFI/BOOT/euroos-boot.conf"], capture_output=True)
+    lines = [l for l in old.stdout.decode("utf-8", "replace").splitlines() if not l.strip().startswith("ui.tour")] if old.returncode == 0 else []
+    open(conf, "w").write("".join(l + chr(10) for l in lines + ["ui.tour=off"]))
+    subprocess.run(["mcopy", "-o", "-i", img, conf, "::/EFI/BOOT/euroos-boot.conf"], check=True)
 qmp = os.path.join(w, "qmp.sock")
 if os.path.exists(qmp): os.unlink(qmp)
 netdev = "user,id=n0,restrict=on" if a.net == "restrict" else "user,id=n0"

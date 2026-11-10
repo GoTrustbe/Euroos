@@ -320,6 +320,20 @@ class Guest:
         s = self.shot()
         self.w, self.h = s.w, s.h
         self.record("boot", True, f"desktop after {boot_s} s, screen {self.w}x{self.h}, layout {'be-azerty' if self.layout is AZERTY else 'us'}")
+        # The release image opens the first-run tour on the first desktop (not the
+        # self-test image, not with ui.tour=off). Clicks and typed keys pass through
+        # it, but the card would be in every comparison: close it with Esc, the key
+        # it keeps for itself, and count that as a step.
+        if "[tour] first-run tour shown" in self.serial.since(0):
+            s.save_png(os.path.join(self.wd, "tour-step-1.png"))
+            pos = self.serial.mark()
+            self.key("esc")
+            closed = self.serial.wait_for("[tour] closed", 20 * self.slow, pos)
+            self.nap(1.0)
+            after = self.shot("tour-closed")
+            self.record("first-run tour: shown on the first desktop, Esc closes it",
+                        closed and after.differs(s, min_pixels=2000), "" if closed else "no [tour] closed line on the serial log")
+            s = after
         return s
 
     # ── results ─────────────────────────────────────────────────────────────

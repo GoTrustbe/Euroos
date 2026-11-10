@@ -7,12 +7,12 @@
 //! - Esc, "Skip", a click outside the card or any typed key closes it. A click
 //!   outside and a typed key are NOT swallowed: they reach the desktop as if
 //!   the card had not been there;
-//! - it costs the boot one `exists()` on the flag file.
+//! - it costs the boot one read of the user's desktop preferences.
 //!
-//! "Do not show again" (and finishing the tour) writes a small flag file under
-//! `/home/<user>/.config/euroos/`. This is a stand-in until the preferences
-//! store exists. On the preview image the file system lives in memory, so the
-//! tour comes back after a restart.
+//! "Do not show again" (and finishing the tour) sets `tour.done=true` in the
+//! user's desktop preferences (`prefs.rs`, `~/.config/euroos/desktop.conf`).
+//! On the preview image the file system lives in memory, so the tour comes
+//! back after a restart; on an installed system it stays away.
 
 use alloc::string::String;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -170,13 +170,23 @@ pub fn restart() {
     *PHASE.lock() = Phase::Active(0);
 }
 
-fn flag_path() -> (String, String, String) {
-    let user = crate::auth::session_name();
-    let user = if user.is_empty() { String::from("euro") } else { user };
-    let cfg = alloc::format!("/home/{user}/.config");
-    let dir = alloc::format!("{cfg}/euroos");
-    let file = alloc::format!("{dir}/tour-done");
-    (cfg, dir, file)
+/// The key in the user's desktop preferences (`~/.config/euroos/desktop.conf`,
+/// `prefs.rs`) that says the tour was finished or switched off.
+pub const DONE_KEY: &str = "tour.done";
+
+/// Has the user of this session finished the tour or chosen "Do not show again"?
+fn seen(fs: &mut dyn eurofs::FileSystem) -> bool {
+    crate::prefs::open_user(fs, crate::prefs::DESKTOP).get_bool(DONE_KEY, false)
+}
+
+/// Remember it. Reads the file again first: the Settings panel writes the same file.
+fn remember(fs: &mut dyn eurofs::FileSystem) {
+    let mut p = crate::prefs::open_user(fs, crate::prefs::DESKTOP);
+    p.set_bool(DONE_KEY, true);
+    match p.save(fs) {
+        Ok(_) => crate::serial_println!("[tour] do not show again: {DONE_KEY}=true saved in {}", p.path()),
+        Err(e) => crate::serial_println!("[tour] do not show again: NOT saved ({e:?}); the tour returns at the next start"),
+    }
 }
 
 fn apply(p: &mut Phase, act: Act) {
@@ -250,15 +260,11 @@ fn classify(codes: &[u8]) -> Keys {
 /// the desktop must be repainted.
 pub fn pump(fs: &mut dyn eurofs::FileSystem, sw: usize, sh: usize) -> bool {
     if REMEMBER.swap(false, Ordering::Relaxed) {
-        let (cfg, dir, file) = flag_path();
-        let _ = fs.create_dir(&cfg);
-        let _ = fs.create_dir(&dir);
-        let ok = fs.write_file(&file, b"1\n").is_ok();
-        crate::serial_println!("[tour] do not show again: {file} {}", if ok { "written" } else { "NOT written" });
+        remember(fs);
     }
     let mut p = PHASE.lock();
     if *p == Phase::Unknown {
-        let off = cfg!(feature = "selftest") || crate::bootopt::tour_off() || fs.exists(&flag_path().2);
+        let off = cfg!(feature = "selftest") || crate::bootopt::tour_off() || seen(fs);
         *p = if off { Phase::Off } else { Phase::Active(0) };
         if !off {
             crate::serial_println!("[tour] first-run tour shown (Esc, Skip, a click outside or typing closes it)");
@@ -393,6 +399,6 @@ pub fn selftest() -> bool {
         }
     }
     let off_here = !cfg!(feature = "selftest") || !is_active();
-    let path_ok = flag_path().2.ends_with("/.config/euroos/tour-done");
+    let path_ok = crate::prefs::user_path("euro", crate::prefs::DESKTOP).as_deref() == Some("/home/euro/.config/euroos/desktop.conf");
     steps_ok && geom_ok && keys_ok && fits && off_here && path_ok
 }
