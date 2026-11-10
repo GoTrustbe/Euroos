@@ -23,6 +23,7 @@ mod observe;
 mod vault;
 mod euroipc;
 mod bootopt;
+mod boottime;
 mod memwatch;
 mod udrv;
 mod udrv_blk;
@@ -640,6 +641,7 @@ pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
 
 #[entry]
 fn main() -> Status {
+    boottime::start(); // [boot-time]: the zero of every phase time
     // ── First of all: our own heap + serial (work even after ExitBootServices). ──
     // The heap is a UEFI-allocated region sized from installed RAM (a quarter,
     // 64 MiB to 512 MiB), below 4 GiB so it is inside the identity map, and of
@@ -722,6 +724,7 @@ fn main() -> Status {
     serial_println!("[euro] ExitBootServices...");
     let _ = unsafe { boot::exit_boot_services(MemoryType::LOADER_DATA) };
     serial_println!("[euro] >>> UEFI left — kernel mode <<<");
+    boottime::phase("firmware-exit");
 
     // ── Kernel-mode bring-up: interrupts off, GDT, IDT, exception test. ──
     x86_64::instructions::interrupts::disable();
@@ -854,6 +857,10 @@ fn main() -> Status {
         }
     }
 
+    // [boot-time] takes its clock from here on (the HPET is reachable on our own
+    // page tables); the [hpet] report further down stays where it was.
+    boottime::clock_ready(hpet::init());
+    boottime::phase("cpu-mm");
     // virtio-blk: initialize the real disk (PIO/DMA works on our identity map).
     iommu::dma_scope(&mut allocator, "virtio-blk", |f| virtio_blk::init(f));
     // EuroPack: register files served straight from a pack disk (no RAM copy) —
@@ -1046,6 +1053,7 @@ fn main() -> Status {
         }
     };
 
+    boottime::phase("storage-rootfs");
     // EuroUpdate (F1): A/B slot decision + attempt counter/rollback on every boot.
     update::boot_init(&mut fs);
     // G4: prove the direct image→slot-partition write (EuroOS-B, sector I/O + read-back).
@@ -1293,6 +1301,7 @@ fn main() -> Status {
         serial_println!("[df] /mnt   {:>6} KiB total {:>6} KiB free  (virtio-blk 1)", t2 / 1024, free2 / 1024);
     }
 
+    boottime::phase("storage-checks");
     kinfo!("observability active — kmsg ring {} lines, leveled logging + dmesg", klog::LINES);
 
     // S8 HAL: activate the HPET (high-resolution timer) + measure it as a
@@ -1452,6 +1461,7 @@ fn main() -> Status {
     // ── REAL NETWORKING: initialize the virtio-net NIC and do a live ARP exchange
     // with the gateway. EuroNet now not only builds/parses packets — they
     // go REALLY over the wire (QEMU user-net: gw 10.0.2.2, us 10.0.2.15). ──
+    boottime::phase("identity-config");
     use euronet::dhcp;
     use euronet::ethernet::{EtherType, EthernetHeader, MacAddr};
     use euronet::ipv4::{Ipv4Addr, Ipv4Header, Protocol};
@@ -1754,6 +1764,7 @@ fn main() -> Status {
     // the program bytes against the public key baked into the kernel. Only
     // authentic, unmodified code runs. (Production chain via eupkg.)
     // Audit C1: prove that the syscall layer validates user pointers against the arena.
+    boottime::phase("net");
     ring3::user_ptr_selftest();
     serial_println!("[euro] loading /bin/hello from EuroFS...");
     let prog = fs.read_file("/bin/hello").unwrap_or_default();
@@ -1939,6 +1950,7 @@ fn main() -> Status {
         }
     }
 
+    boottime::phase("userland-demos");
     x86_64::instructions::interrupts::int3(); // breakpoint exception
     let bp = interrupts::BREAKPOINT_HIT.load(Ordering::SeqCst);
     serial_println!("[euro] breakpoint exception handled: {bp}");
@@ -2068,6 +2080,7 @@ fn main() -> Status {
     }
     let _ = (ucnt1, ucnt2);
     // ACPI MADT: discover the CPU cores + IO-APIC (foundation for SMP).
+    boottime::phase("sched-init");
     if let Some(madt) = acpi::parse() {
         serial_println!(
             "[acpi] MADT: {} CPU core(s) (LAPIC @ {:#x}, IO-APIC @ {:#x} gsi-base {})",
@@ -2178,6 +2191,7 @@ fn main() -> Status {
     // 3D-2 wiring: verity on the LIVE EuroFS read path (VerityBlk verifies every
     // block against the signed root; a tampered backing block fails the read).
     verity::wire_selftest();
+    boottime::phase("acpi-pci-tpm");
     interrupts::init_timer(100);
     // J1: install the EuroLock hooks (IRQSAVE, per-context lock-order tracking)
     // now that the Local APIC answers, before the APs start taking locks.
@@ -2203,6 +2217,7 @@ fn main() -> Status {
     // I1: xHCI USB stack — real USB-HID input (keyboard/mouse) on modern
     // machines without PS/2. Enumerates every root-port device and polls the
     // interrupt-IN endpoint; the reports flow into the same input paths as PS/2.
+    boottime::phase("smp-timer");
     if iommu::dma_scope(&mut allocator, "xhci", |f| xhci::init(f)) {
         serial_println!("[euro] xHCI USB initialized — {} HID device(s) live", xhci::hid_count());
     }
@@ -2256,6 +2271,7 @@ fn main() -> Status {
     x86_64::instructions::interrupts::enable();
     // M2-1: NVMe MSI-X delivery proof — must run with interrupts ON (the boot
     // self-test above ran before this point, so its completions were unseen).
+    boottime::phase("devices");
     nvme::msix_proof();
     // Userspace drivers (net.driver=user): e1000d needs the scheduler, interrupts
     // and the IOMMU domains, all of which exist from here on.
@@ -2294,6 +2310,7 @@ fn main() -> Status {
         serial_println!("[lk-bench] powering off");
         power::shutdown();
     }
+    boottime::phase("drivers-late");
     // Chromium foundation: run REAL dynamically-linked GLIBC binaries via the
     // genuine ld-linux-x86-64.so.2 — NOW that the scheduler is up, each runs as a
     // scheduled process, so single-threaded AND multi-threaded (pthreads) work.
@@ -3531,6 +3548,7 @@ fn main() -> Status {
     }
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.
+    boottime::phase("glibc-suite");
     if xhci::present() {
         for _ in 0..100 {
             if interrupts::XHCI_MSIX_COUNT.load(core::sync::atomic::Ordering::Relaxed) > 0 {
@@ -3709,6 +3727,7 @@ fn main() -> Status {
     }
     // The first storage driver out of the kernel (storage.nvme=user): nvmed in
     // ring 3 serves the NVMe disk as a DATA mount at /data (never the root).
+    boottime::phase("vfs-mounts");
     udrv_blk::boot(&mut allocator, &mut vfs);
     // Every userspace driver that wanted an interrupt has its vector now.
     if cfg!(feature = "selftest") {
@@ -4300,6 +4319,7 @@ fn main() -> Status {
     // EuroUpdate (F1): all core init succeeded (we are starting the desktop) →
     // mark the active slot definitively good, so a staged update does not
     // roll back unnecessarily. Before the VFS is borrowed into the shell context.
+    boottime::phase("subsystems");
     update::mark_boot_good(&mut vfs);
 
     // 3G-1 wiring: the structured journal now persists to the root FS —
@@ -4319,6 +4339,7 @@ fn main() -> Status {
     }
 
     // ── EuroDesktop compositor (Track 5) ──
+    boottime::phase("boot-good-scrub");
     let _ = bp;
     let mut ctx = shell::ShellCtx {
         fs: &mut vfs,
@@ -4945,6 +4966,7 @@ fn main() -> Status {
     // Sprint AG: GUI lockscreen — prove the auth wiring, show the screen, and
     // authenticate the desktop session via EuroID (Argon2id) before the desktop starts.
     // Unattended/CI boots log in automatically after a short grace period (honestly logged).
+    boottime::phase("desktop-build");
     lockscreen::selftest(&fb);
     let session_user = lockscreen::gate(&fb, &euroid::default_login_user());
     // 3E-3: register the authenticated desktop session in the session table —
@@ -4958,6 +4980,7 @@ fn main() -> Status {
     }
 
     // EuroMonitor's first paint must show the real RAM figures (not the 0 atomics).
+    boottime::phase("lockscreen");
     monitor::set_mem(
         ctx.mem.usable_bytes() / (1024 * 1024),
         ctx.mem.free_bytes() / (1024 * 1024),
@@ -5040,7 +5063,9 @@ fn main() -> Status {
     // Marker: from here the interactive desktop loop runs (polls input + shell).
     // The E2E test waits for this before it injects keys; also proves that HLT-idle
     // does not hold the loop.
+    boottime::phase("first-frame");
     serial_println!("[desktop] interactive loop started — input + shell live");
+    boottime::desktop();
     // J1: the lock picture of a whole boot: most contended, and longest held
     // (an Irq-mode lock or any lock taken inside a syscall holds IF=0 that long).
     klock::report("boot-total", 10);
