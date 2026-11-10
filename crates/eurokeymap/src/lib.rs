@@ -72,6 +72,7 @@ impl Layout {
 /// Control keys shared by every layout (same physical scancode everywhere).
 fn control_key(sc: u8) -> Option<char> {
     match sc {
+        0x01 => Some('\u{1b}'), // escape (every consumer matches on it: launcher, dialogs, prompts)
         0x0E => Some('\u{8}'), // backspace
         0x0F => Some('\t'),
         0x1C => Some('\r'), // enter
@@ -387,6 +388,11 @@ mod tests {
             assert_eq!(translate(l, 0x39, false), Some(' '));
             assert_eq!(translate(l, 0x1C, false), Some('\r'));
             assert_eq!(translate(l, 0x0E, false), Some('\u{8}'));
+            assert_eq!(translate(l, 0x01, false), Some('\u{1b}'));
+            assert_eq!(translate(l, 0x01, true), Some('\u{1b}'));
+            // Function keys are not characters in any layout.
+            assert_eq!(translate(l, 0x3B, false), None);
+            assert_eq!(translate(l, 0x3C, false), None);
         }
     }
 }
