@@ -204,13 +204,19 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         if !nv.identify(0, 1) {
             return false;
         }
+        // NSZE + the current LBA format, validated: the page is the device's
+        // word. An empty page, a block size outside 512..4096 or a size that
+        // does not fit an address means no disk, not a guess of 512 bytes.
         let nsdata = core::slice::from_raw_parts(data as *const u8, 4096);
-        nv.capacity = u64::from_le_bytes(nsdata[0..8].try_into().unwrap()); // NSZE (LBAs)
-        let flbas = nsdata[26] & 0xF; // current LBA format index
-        let lbaf_off = 128 + (flbas as usize) * 4;
-        let lbads = nsdata[lbaf_off + 2]; // log2(LBA size)
-        if (9..=12).contains(&lbads) {
-            nv.lba_bytes = 1u32 << lbads;
+        match euronvme::identify::parse_identify_namespace(nsdata) {
+            Ok(g) => {
+                nv.capacity = g.sectors;
+                nv.lba_bytes = g.sector_size;
+            }
+            Err(e) => {
+                crate::serial_println!("[nvme] Identify Namespace data unusable ({e:?}) — disk skipped");
+                return false;
+            }
         }
 
         // M2-1: point MSI-X entry 0 at our NVMe vector BEFORE creating the I/O
