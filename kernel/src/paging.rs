@@ -122,18 +122,39 @@ fn arena_slots(addr: u64) -> (usize, usize) {
     ((addr / GIB) as usize & 0x1FF, ((addr % GIB) / MIB2) as usize)
 }
 
+/// Building a process address space ran out of page-table frames. The caller
+/// refuses to start the process (ENOMEM / "cannot start"); nothing was leaked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutOfFrames;
+
+/// Message of the panic the infallible builders still end in. Every caller of
+/// those lives in ring3.rs; they move to the `try_` variants one by one (see
+/// docs/proof/robust-2026-11/RING3-ENOMEM-TODO.md).
+const NO_TABLE_FRAMES: &str = "out of frames for process page tables (caller must use the try_ variant)";
+
+/// [`try_build_address_space`] for callers that cannot refuse yet: panics when
+/// the machine is out of frames.
 pub fn build_address_space(
     falloc: &mut FrameAllocator,
     arena_phys: u64,
     exec_pages: &[u64; 8],
     writ_pages: &[u64; 8],
 ) -> u64 {
-    let pml4 = falloc.allocate().expect("frame for process PML4");
-    let pdpt = falloc.allocate().expect("frame for process PDPT");
-    let pd = falloc.allocate().expect("frame for process PD");
+    try_build_address_space(falloc, arena_phys, exec_pages, writ_pages).expect(NO_TABLE_FRAMES)
+}
+
+/// Build the W^X address space of a process, or `Err(OutOfFrames)` when the four
+/// table frames are not available. All four are taken together: a refusal
+/// leaves the frame allocator untouched.
+pub fn try_build_address_space(
+    falloc: &mut FrameAllocator,
+    arena_phys: u64,
+    exec_pages: &[u64; 8],
+    writ_pages: &[u64; 8],
+) -> Result<u64, OutOfFrames> {
     // Fourth frame: the PT that maps the 2 MiB arena block fine-grained (4 KiB), so
     // we can enforce W^X per page (executable XOR writable).
-    let pt = falloc.allocate().expect("frame for arena PT");
+    let [pml4, pdpt, pd, pt] = falloc.allocate_many::<4>().map_err(|_| OutOfFrames)?;
     // SAFETY: four fresh, identity-mapped frames; we fill them completely.
     unsafe {
         core::ptr::write_bytes(pml4 as *mut u8, 0, 4096);
@@ -189,7 +210,7 @@ pub fn build_address_space(
             ptp.add(p).write_volatile((arena_phys + p as u64 * 4096) | flags);
         }
     }
-    pml4
+    Ok(pml4)
 }
 
 /// Like [`build_address_space`] but for a LARGE arena spanning `nblocks`
@@ -205,9 +226,35 @@ pub fn build_address_space_big(
     exec_pages: &[u64; 8],
     writ_pages: &[u64; 8],
 ) -> u64 {
-    let pml4 = build_address_space(falloc, arena_phys, exec_pages, writ_pages);
+    big_inner(falloc, arena_phys, nblocks, exec_pages, writ_pages, false).expect(NO_TABLE_FRAMES)
+}
+
+/// [`build_address_space_big`] that refuses instead of panicking. Stricter than
+/// the infallible variant on one point: when a page directory for a later arena
+/// block cannot be allocated, the whole address space is freed again and the
+/// start is refused, where the old function left that block supervisor-only
+/// and let the process die on its first access to it.
+pub fn try_build_address_space_big(
+    falloc: &mut FrameAllocator,
+    arena_phys: u64,
+    nblocks: u64,
+    exec_pages: &[u64; 8],
+    writ_pages: &[u64; 8],
+) -> Result<u64, OutOfFrames> {
+    big_inner(falloc, arena_phys, nblocks, exec_pages, writ_pages, true)
+}
+
+fn big_inner(
+    falloc: &mut FrameAllocator,
+    arena_phys: u64,
+    nblocks: u64,
+    exec_pages: &[u64; 8],
+    writ_pages: &[u64; 8],
+    strict: bool,
+) -> Result<u64, OutOfFrames> {
+    let pml4 = try_build_address_space(falloc, arena_phys, exec_pages, writ_pages)?;
     if nblocks <= 1 {
-        return pml4;
+        return Ok(pml4);
     }
     // Promote the arena's extra blocks from supervisor-huge to USER RW+NX huge
     // pages, in the PD of the GiB each block lies in (BUG-016: the arena may lie
@@ -225,6 +272,10 @@ pub fn build_address_space_big(
             } else {
                 let pd = match falloc.allocate() {
                     Ok(f) => f,
+                    Err(_) if strict => {
+                        free_address_space(falloc, pml4);
+                        return Err(OutOfFrames);
+                    }
                     Err(_) => break, // out of frames: the block stays supervisor-only
                 };
                 let pdp = pd as *mut u64;
@@ -237,7 +288,7 @@ pub fn build_address_space_big(
             (pd as *mut u64).add(i).write_volatile((addr & !(MIB2 - 1)) | PRESENT | WRITABLE | USER | HUGE | NX);
         }
     }
-    pml4
+    Ok(pml4)
 }
 
 /// Like [`build_address_space`], but maps the arena block as a single 2 MiB USER
@@ -246,9 +297,13 @@ pub fn build_address_space_big(
 /// data cannot be separated — W^X is not applicable there. Real ELF programs
 /// always use the W^X variant above.
 pub fn build_address_space_rwx(falloc: &mut FrameAllocator, arena_phys: u64) -> u64 {
-    let pml4 = falloc.allocate().expect("frame for process PML4");
-    let pdpt = falloc.allocate().expect("frame for process PDPT");
-    let pd = falloc.allocate().expect("frame for process PD");
+    try_build_address_space_rwx(falloc, arena_phys).expect(NO_TABLE_FRAMES)
+}
+
+/// [`build_address_space_rwx`] that refuses instead of panicking when the three
+/// table frames are not available (nothing is taken in that case).
+pub fn try_build_address_space_rwx(falloc: &mut FrameAllocator, arena_phys: u64) -> Result<u64, OutOfFrames> {
+    let [pml4, pdpt, pd] = falloc.allocate_many::<3>().map_err(|_| OutOfFrames)?;
     // SAFETY: three fresh, identity-mapped frames; we fill them completely.
     unsafe {
         core::ptr::write_bytes(pml4 as *mut u8, 0, 4096);
@@ -275,7 +330,7 @@ pub fn build_address_space_rwx(falloc: &mut FrameAllocator, arena_phys: u64) -> 
             pdp.add(i).write_volatile((gib_base + i as u64 * MIB2) | PRESENT | WRITABLE | HUGE | user);
         }
     }
-    pml4
+    Ok(pml4)
 }
 
 /// A large all-RWX USER arena spanning `nblocks` 2 MiB huge pages, for running a
@@ -337,19 +392,40 @@ pub fn map_user_arena(
 }
 
 pub fn build_address_space_rwx_big(falloc: &mut FrameAllocator, arena_phys: u64, nblocks: u64) -> u64 {
-    let pml4 = build_address_space_rwx(falloc, arena_phys);
+    rwx_big_inner(falloc, arena_phys, nblocks, false).expect(NO_TABLE_FRAMES)
+}
+
+/// [`build_address_space_rwx_big`] that refuses instead of panicking. Also
+/// refuses (and frees what it built) when a page directory for a later GiB
+/// window cannot be allocated; the infallible variant only logs that and hands
+/// out an address space whose arena tail is not mapped for the process.
+pub fn try_build_address_space_rwx_big(
+    falloc: &mut FrameAllocator,
+    arena_phys: u64,
+    nblocks: u64,
+) -> Result<u64, OutOfFrames> {
+    rwx_big_inner(falloc, arena_phys, nblocks, true)
+}
+
+fn rwx_big_inner(falloc: &mut FrameAllocator, arena_phys: u64, nblocks: u64, strict: bool) -> Result<u64, OutOfFrames> {
+    let pml4 = try_build_address_space_rwx(falloc, arena_phys)?;
     if nblocks <= 1 {
-        return pml4;
+        return Ok(pml4);
     }
     // SAFETY: identity-mapped tables we just built; single-threaded here.
-    unsafe {
+    let mapped = unsafe {
         let pdpt = (*(pml4 as *const u64)) & 0x000f_ffff_ffff_f000;
         let mut get_pd = || falloc.allocate().ok();
-        if !map_user_arena(pdpt, arena_phys, arena_phys, nblocks, &mut get_pd) {
-            crate::serial_println!("[paging] map_user_arena: table frame allocation failed");
+        map_user_arena(pdpt, arena_phys, arena_phys, nblocks, &mut get_pd)
+    };
+    if !mapped {
+        if strict {
+            free_address_space(falloc, pml4);
+            return Err(OutOfFrames);
         }
+        crate::serial_println!("[paging] map_user_arena: table frame allocation failed");
     }
-    pml4
+    Ok(pml4)
 }
 
 /// Like [`build_address_space`], but for a FORKED child: the USER arena lies at a
@@ -359,11 +435,18 @@ pub fn build_address_space_rwx_big(falloc: &mut FrameAllocator, arena_phys: u64,
 /// an exact copy at the same virtual addresses, but with its own memory.
 /// (S3 fork: child pml4 = build_address_space_remap(parent_virt_arena, child_phys_arena).)
 pub fn build_address_space_remap(falloc: &mut FrameAllocator, virt_arena: u64, phys_arena: u64) -> u64 {
-    let pml4 = falloc.allocate().expect("frame for child PML4");
-    let pdpt = falloc.allocate().expect("frame for child PDPT");
-    let pd = falloc.allocate().expect("frame for child PD");
+    try_build_address_space_remap(falloc, virt_arena, phys_arena).expect(NO_TABLE_FRAMES)
+}
+
+/// [`build_address_space_remap`] that refuses instead of panicking.
+pub fn try_build_address_space_remap(
+    falloc: &mut FrameAllocator,
+    virt_arena: u64,
+    phys_arena: u64,
+) -> Result<u64, OutOfFrames> {
+    let [pml4, pdpt, pd] = falloc.allocate_many::<3>().map_err(|_| OutOfFrames)?;
     fill_remap_tables(pml4, pdpt, pd, virt_arena, phys_arena);
-    pml4
+    Ok(pml4)
 }
 
 /// Fill PRE-allocated table frames (pml4/pdpt/pd) for a remapped child address
@@ -498,8 +581,12 @@ fn ensure_guard_pt(falloc: &mut FrameAllocator) -> u64 {
     if pdpt_hi == 0 {
         return 0;
     }
-    let pd = falloc.allocate().expect("frame for guard PD");
-    let pt = falloc.allocate().expect("frame for guard PT");
+    // Out of frames: no guarded stacks (0 = "none", which every caller handles
+    // by keeping the unguarded stack it already has).
+    let Ok([pd, pt]) = falloc.allocate_many::<2>() else {
+        crate::serial_println!("[paging] no frames for the guarded-stack tables: stacks stay unguarded");
+        return 0;
+    };
     unsafe {
         core::ptr::write_bytes(pd as *mut u8, 0, 4096);
         core::ptr::write_bytes(pt as *mut u8, 0, 4096);
@@ -528,13 +615,17 @@ pub fn guarded_stack_alloc(falloc: &mut FrameAllocator) -> u64 {
         return 0; // PT full
     }
     let pt_base = (idx * UNIT_PAGES) as usize;
+    // The stack pages together or not at all: a half-mapped unit would be a
+    // stack that faults halfway down.
+    let Ok(frames) = falloc.allocate_many::<{ UNIT_STACK_PAGES as usize }>() else {
+        return 0; // out of frames: the caller keeps its unguarded stack
+    };
     unsafe {
         let ptp = pt as *mut u64;
         ptp.add(pt_base).write_volatile(0); // guard page: absent
-        for p in 1..=UNIT_STACK_PAGES as usize {
-            let frame = falloc.allocate().expect("frame for guarded stack");
+        for (p, frame) in frames.into_iter().enumerate() {
             core::ptr::write_bytes(frame as *mut u8, 0, 4096);
-            ptp.add(pt_base + p).write_volatile(frame | PRESENT | WRITABLE);
+            ptp.add(pt_base + 1 + p).write_volatile(frame | PRESENT | WRITABLE);
         }
         flush_tlb();
     }
@@ -1295,6 +1386,8 @@ pub fn free_user_table_chain(falloc: &mut FrameAllocator, pml4: u64, slot: usize
 
 /// Build the page tables and load CR3. Returns the physical PML4 address.
 pub fn init(falloc: &mut FrameAllocator) -> u64 {
+    // The only allocations in this file that may still panic: without the boot
+    // page tables there is no kernel to report an error to.
     let pml4 = falloc.allocate().expect("frame for PML4");
     let pdpt = falloc.allocate().expect("frame for PDPT");
 
@@ -1447,4 +1540,79 @@ pub fn user_accessible_in(pml4: u64, virt: u64) -> bool {
         let e = (table as *const u64).add(((virt >> 12) & 0x1FF) as usize).read_volatile();
         e & (PRESENT | USER) == (PRESENT | USER)
     }
+}
+
+/// **[robust-paging]** — out-of-frames while building a process address space
+/// is a refusal, not a panic, and leaks nothing. Runs every `try_` builder
+/// against a private frame allocator that owns `have` real (heap) frames, for
+/// every `have` from 0 up to what the builder needs; the tables are built for
+/// real in those frames (never loaded into CR3) and freed again.
+#[cfg(feature = "selftest")]
+pub fn robust_selftest() -> bool {
+    use alloc::alloc::{alloc_zeroed, dealloc, Layout};
+    use euromm::MemoryRegion;
+    const POOL: usize = 8;
+    let Ok(layout) = Layout::from_size_align(POOL * 4096, 4096) else { return false };
+    // SAFETY: plain heap allocation; the kernel heap is identity-mapped, so the
+    // buffer doubles as POOL physical frames for the private allocator.
+    let buf = unsafe { alloc_zeroed(layout) } as u64;
+    if buf == 0 {
+        crate::serial_println!("[robust-paging] no heap for the test pool → SKIPPED");
+        return false;
+    }
+    let pool = |have: usize| {
+        FrameAllocator::from_regions(&[MemoryRegion { start: buf, len: have as u64 * 4096, usable: true }], 0)
+    };
+    // A fake arena: six 2 MiB blocks ending 4 MiB past a GiB boundary, so the fifth block crosses into
+    // the next GiB window and the _big builders need one more page directory.
+    let arena = 3 * GIB + 1020 * MIB2;
+    let (exec, writ) = ([0u64; 8], [0u64; 8]);
+    let mut ok = true;
+    let mut refused = 0;
+    let mut built = 0;
+    // (name, frames needed, builder)
+    type Builder = fn(&mut FrameAllocator, u64, &[u64; 8], &[u64; 8]) -> Result<u64, OutOfFrames>;
+    let cases: [(&str, usize, Builder); 5] = [
+        ("wx", 4, |f, a, e, w| try_build_address_space(f, a, e, w)),
+        ("wx_big", 5, |f, a, e, w| try_build_address_space_big(f, a, 6, e, w)),
+        ("rwx", 3, |f, a, _, _| try_build_address_space_rwx(f, a)),
+        ("rwx_big", 4, |f, a, _, _| try_build_address_space_rwx_big(f, a, 6)),
+        ("remap", 3, |f, a, _, _| try_build_address_space_remap(f, a, a)),
+    ];
+    for (name, need, build) in cases {
+        for have in 0..=need {
+            let mut fa = pool(have);
+            match build(&mut fa, arena, &exec, &writ) {
+                Err(OutOfFrames) => {
+                    refused += 1;
+                    if have >= need || fa.free_frames() != have {
+                        crate::serial_println!(
+                            "[robust-paging] {name}: {have}/{need} frames → refused, {} free afterwards ✗",
+                            fa.free_frames()
+                        );
+                        ok = false;
+                    }
+                }
+                Ok(pml4) => {
+                    built += 1;
+                    let used = have - fa.free_frames();
+                    free_address_space(&mut fa, pml4);
+                    if have < need || used != need || fa.free_frames() != have {
+                        crate::serial_println!(
+                            "[robust-paging] {name}: {have}/{need} frames → built with {used}, {} free after free ✗",
+                            fa.free_frames()
+                        );
+                        ok = false;
+                    }
+                }
+            }
+        }
+    }
+    // SAFETY: same layout as the allocation above; no table in it is in use.
+    unsafe { dealloc(buf as *mut u8, layout) };
+    crate::serial_println!(
+        "[robust-paging] process page tables at 0..n free frames: {refused} refusals (OutOfFrames, 0 frames kept), {built} builds (freed again) → {}",
+        if ok && refused == 19 && built == 5 { "OK ✓" } else { "FAILED ✗" }
+    );
+    ok && refused == 19 && built == 5
 }
