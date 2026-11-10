@@ -43,12 +43,21 @@ pub fn run(fs: &mut dyn FileSystem) -> ScrubReport {
         took * 10,
     );
     // Append to /var/log/fsck.log (read-modify-write; /var = real EuroVar partition).
-    let _ = fs.create_dir("/var");
-    let _ = fs.create_dir("/var/log");
-    let mut buf = fs.read_file("/var/log/fsck.log").unwrap_or_default();
-    buf.extend_from_slice(line.as_bytes());
-    let _ = fs.write_file("/var/log/fsck.log", &buf);
+    // In system context: the periodic pass runs from the desktop loop under the
+    // uid of the signed-in user, who may not write /var/log. Without this the
+    // release image (no pass before the session opens) counted its passes and
+    // logged none of them (BUG-051).
+    let logged = crate::sysctx::as_system(fs, |fs| {
+        let _ = fs.create_dir("/var");
+        let _ = fs.create_dir("/var/log");
+        let mut buf = fs.read_file("/var/log/fsck.log").unwrap_or_default();
+        buf.extend_from_slice(line.as_bytes());
+        fs.write_file("/var/log/fsck.log", &buf)
+    });
     crate::serial_println!("[g5] {}", line.trim_end());
+    if let Err(e) = logged {
+        crate::serial_println!("[g5] scrub #{run}: the line could not be appended to /var/log/fsck.log ({e:?})");
+    }
     r
 }
 
