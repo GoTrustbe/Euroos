@@ -639,10 +639,12 @@ fn route_frame(rx: alloc::vec::Vec<u8>, my_ip: Ipv4Addr) {
 }
 
 fn rx_route() {
-    let my_ip = match get() {
-        Some(c) => c.my_ip,
-        None => return,
-    };
+    // BUG-039: without a configuration this used to return before it polled the
+    // NIC at all, so the readers of the late bring-up (DHCP over a USB ethernet
+    // that appeared after boot: no address yet) never saw a frame and six
+    // DISCOVERs got "no OFFER". With no address nothing is "for us": every frame
+    // goes to the legacy queue, where the DHCP and ARP readers look.
+    let my_ip = get().map(|c| c.my_ip).unwrap_or(Ipv4Addr([0, 0, 0, 0]));
     // 32 was too few. A page load arrives in bursts, and whatever is still in the
     // NIC ring when it wraps is lost: 89 real gaps in one load, each one costing a
     // retransmission that the strictly-in-order receive path then waits for.
