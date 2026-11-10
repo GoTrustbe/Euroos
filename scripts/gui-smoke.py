@@ -793,18 +793,23 @@ class Guest:
                 print(f"[gui-smoke] monkey: {n} actions, {int(time.time() - t0)} s, max console latency {self.max_echo_ms} ms", flush=True)
             if n % 200 == 0:
                 # After all that: is it still a desktop that does work? Back to the
-                # first workspace, close what is open, open a terminal, run a command.
+                # first workspace, close what can be found, bring the terminal to the
+                # front and run a command in it. The terminal is opened through the
+                # launcher, which raises and focuses it wherever the monkey left the
+                # window. Dragged to the bottom or the right edge it shows less than
+                # its three buttons and cannot be found on a screendump, and a dock
+                # click on a window that is already in front would close it.
                 self.key("esc"); self.key("esc")
                 self.key("alt", "1")
                 self.nap(0.5)
                 self.close_all_windows()
-                self.click(*dock_tile(4))
+                self.click(*BRAND)
+                self.nap(0.5)
+                self.type("term")
+                self.nap(0.3)
+                self.key("ret")
                 self.nap(0.8)
-                wins = self.look().windows()
-                ok = bool(wins)
-                if ok:
-                    self.click(wins[0][0] + 300, wins[0][1] + 200)
-                    ok = self.terminal_echo(f"gui-monkey-{n}")
+                ok = self.terminal_echo(f"gui-monkey-{n}")
                 self.record(f"monkey: desktop still works after {n} actions (terminal runs a typed command)", ok)
                 self.alive(f"monkey functional check {n}")
         self.alive("monkey end")

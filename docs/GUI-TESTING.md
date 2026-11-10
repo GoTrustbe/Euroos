@@ -107,10 +107,14 @@ KVM.
 - every 10 actions: the liveness check above;
 - every 50 actions: the pointer is moved between two screendumps, which must
   differ (a frozen screen fails the run), and a screenshot is kept;
-- every 200 actions: back to workspace 1, all windows closed, the terminal
-  opened from the dock, Enter (to send off whatever the monkey left on the
-  prompt), a command typed and checked on serial. A desktop that survives but
-  no longer does work fails this step.
+- every 200 actions: back to workspace 1, the windows that can be found
+  closed, the terminal raised through the launcher (`term`, Enter), Enter again
+  (to send off whatever the monkey left on the prompt), a command typed and
+  checked on serial. A desktop that survives but no longer does work fails this
+  step. The launcher is used because it raises and focuses the terminal
+  wherever the monkey dragged it: at the bottom or right edge fewer than three
+  title-bar buttons are visible and the window cannot be found on a screendump,
+  and a dock click on a terminal that is already in front would close it.
 
 The same seed gives the same sequence of actions. Where the sequence looks at
 the screen (which window to click in), it depends on what the guest drew, so a
@@ -122,6 +126,9 @@ events that were sent are in `actions.log` either way.
 - It checks that apps open, take input and do not take the kernel down, and one
   end-to-end result (the terminal). It does not check what each app draws.
 - No Chromium pack, no native (ring 3) GUI apps, no network content.
+- Window detection needs the three title-bar buttons of a window visible and
+  uncovered. A window pushed half off the screen, or with another window over
+  its buttons, is not found (the monkey then simply does not pick it).
 - The monkey can reach the install wizard and the power controls. It runs on a
   private copy of the image, so nothing outside the work directory is at stake;
   a guest that powers itself off ends the run and is reported as such.
