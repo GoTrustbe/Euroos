@@ -444,7 +444,31 @@ fn pipes_lock() -> PipesGuard {
     PipesGuard { g, _if }
 }
 /// Pipe fds: per fd (pipe-id, is_write_end). Separate table alongside file/dir fds.
+/// Taken only through [`pipe_fds`] (interrupts off while held).
 static PIPE_FDS: Mutex<[Option<(usize, bool)>; MAX_FD]> = Mutex::new([None; MAX_FD]);
+
+/// BUG-037 (and the BUG-033 hangs): PIPE_FDS is the same disease as PIPES above. The launcher (task 0)
+/// clears it in `reset_fd_table` with interrupts on, and every pipe syscall of a
+/// background process takes it with interrupts off. A TCG boot of the BUG-040
+/// work wedged exactly there: task 0 preempted in the table reset, a bg-musl task
+/// spinning in `pipe_write_fd` on PIPE_FDS with IF=0 (NMI probe), silence. Every
+/// acquisition goes through here: interrupts off first, lock second.
+struct PipeFdsGuard {
+    g: spin::MutexGuard<'static, [Option<(usize, bool)>; MAX_FD]>,
+    _if: crate::sched::IfOffGuard,
+}
+impl core::ops::Deref for PipeFdsGuard {
+    type Target = [Option<(usize, bool)>; MAX_FD];
+    fn deref(&self) -> &Self::Target { &self.g }
+}
+impl core::ops::DerefMut for PipeFdsGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.g }
+}
+fn pipe_fds() -> PipeFdsGuard {
+    let _if = crate::sched::IfOffGuard::new();
+    let g = PIPE_FDS.lock();
+    PipeFdsGuard { g, _if }
+}
 /// Per pipe-id: is the pipe non-blocking (O_NONBLOCK)? A BLOCKING read on an empty
 /// pipe parks the caller (chrome's shutdown-detector thread reads a signal pipe that
 /// way and FATALs on a spurious EAGAIN). Parallel to PIPES by index.
@@ -1165,7 +1189,7 @@ fn cdp_pipes_create() {
         p.len() - 1
     };
     {
-        let mut pf = PIPE_FDS.lock();
+        let mut pf = pipe_fds();
         pf[3] = Some((cmd_id, false)); // fd 3: chrome reads our commands
         pf[4] = Some((res_id, true));  // fd 4: chrome writes its answers
     }
@@ -2198,7 +2222,7 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     let ceil = (crate::net::SOCK_FD_BASE as usize).min(MAX_FD); // stay below socket fds
     let files = OPEN_FDS.lock();
     let dirs = OPEN_DIRS.lock();
-    let mut pf = PIPE_FDS.lock();
+    let mut pf = pipe_fds();
     let mut got = [usize::MAX; 2];
     let mut k = 0;
     for fd in 3..ceil {
@@ -2241,7 +2265,7 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
 
 /// True if `fd` is either end of a pipe.
 fn is_pipe_fd(fd: usize) -> bool {
-    fd < MAX_FD && PIPE_FDS.lock()[fd].is_some()
+    fd < MAX_FD && pipe_fds()[fd].is_some()
 }
 
 /// Is `fd` a currently-open descriptor of ANY kind (VFS file, pipe, epoll, eventfd,
@@ -2307,14 +2331,14 @@ pub fn fd_kind(fd: u64) -> &'static str {
 /// blocking with pipe() then flips O_NONBLOCK per fd — untracked, a "non-blocking"
 /// read would park the caller forever and deadlock the browser.
 fn pipe_set_nonblock(fd: usize, nb: bool) {
-    if let Some((id, _)) = PIPE_FDS.lock().get(fd).copied().flatten() {
+    if let Some((id, _)) = pipe_fds().get(fd).copied().flatten() {
         if let Some(slot) = PIPE_NONBLOCK.lock().get_mut(id) {
             *slot = nb;
         }
     }
 }
 fn pipe_is_nonblock(fd: usize) -> bool {
-    match PIPE_FDS.lock().get(fd).copied().flatten() {
+    match pipe_fds().get(fd).copied().flatten() {
         Some((id, _)) => PIPE_NONBLOCK.lock().get(id).copied().unwrap_or(false),
         None => false,
     }
@@ -2412,7 +2436,7 @@ fn epoll_fd_ready(fd: u64) -> bool {
         // invisible to byte-based readiness (the MP child-connect stall).
         crate::net::unix_fd_readable(fd) || scm_pending_for(fd)
     } else if (fd as usize) < MAX_FD && is_pipe_fd(fd as usize) {
-        match PIPE_FDS.lock()[fd as usize] {
+        match pipe_fds()[fd as usize] {
             Some((id, false)) => !pipes_lock()[id].is_empty(), // read end w/ data
             _ => false,                                        // write end: not "readable"
         }
@@ -2571,7 +2595,7 @@ fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
             bytes.len(), core::str::from_utf8(&bytes[..bytes.len().min(60)]).unwrap_or("?"));
     }
     let _g = crate::sched::IfOffGuard::new();
-    if let Some((id, true)) = PIPE_FDS.lock()[fd] {
+    if let Some((id, true)) = pipe_fds()[fd] {
         pipes_lock()[id].extend_from_slice(bytes);
         // Wake any tasks blocked reading this pipe.
         let mut w = PIPE_WAITERS.lock();
@@ -2593,7 +2617,7 @@ fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
 /// returns immediately if the pipe is non-blocking / already has data). Returns the
 /// byte count, -EAGAIN (nonblocking + empty), or None if `fd` is not a pipe read end.
 fn pipe_read_blocking(fd: usize, buf: u64, len: usize) -> Option<u64> {
-    let (id, is_read) = match PIPE_FDS.lock().get(fd).copied().flatten() {
+    let (id, is_read) = match pipe_fds().get(fd).copied().flatten() {
         Some((id, w)) => (id, !w),
         None => return None,
     };
@@ -2649,7 +2673,7 @@ fn pipe_read_fd(fd: usize, buf: u64, len: usize) -> Option<u64> {
     if fd >= MAX_FD {
         return None;
     }
-    if let Some((id, false)) = PIPE_FDS.lock()[fd] {
+    if let Some((id, false)) = pipe_fds()[fd] {
         let mut pipes = pipes_lock();
         let p = &mut pipes[id];
         if p.is_empty() {
@@ -2676,6 +2700,13 @@ fn pipe_read_fd(fd: usize, buf: u64, len: usize) -> Option<u64> {
 /// In the synchronous foreground model one process runs at a time, so this gives
 /// real per-process fd semantics: open fds do not leak between programs.
 fn reset_fd_table() {
+    // BUG-037: the launcher runs this with interrupts on, and syscalls of the
+    // background processes take these tables with interrupts off: a preemption
+    // while one is held here wedged the boot. Not preemptible while it clears.
+    x86_64::instructions::interrupts::without_interrupts(reset_fd_table_inner);
+}
+
+fn reset_fd_table_inner() {
     *OPEN_FDS.lock() = [None; MAX_FD];
     for slot in OPEN_DIRS.lock().iter_mut() {
         *slot = None;
@@ -2683,7 +2714,7 @@ fn reset_fd_table() {
     // Clear any pipe fds left by an earlier program (PIPE_FDS/PIPES are global): a
     // stale pipe marker on fd 3 would otherwise hijack this program's libc reads on
     // that fd number (EAGAIN "cannot read file data"). See the bg_read_fd note.
-    *PIPE_FDS.lock() = [None; MAX_FD];
+    *pipe_fds() = [None; MAX_FD];
     pipes_lock().clear();
     PIPE_NONBLOCK.lock().clear();
     PIPE_WAITERS.lock().clear();
@@ -5532,8 +5563,8 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             // dup2(oldfd, newfd): copy the pipe end to newfd.
             let (old, new) = (a1 as usize, a2 as usize);
             if old < MAX_FD && new < MAX_FD {
-                let v = PIPE_FDS.lock()[old];
-                PIPE_FDS.lock()[new] = v;
+                let v = pipe_fds()[old];
+                pipe_fds()[new] = v;
                 new as u64
             } else {
                 (-9i64) as u64
@@ -6664,12 +6695,12 @@ fn dup_fd(oldfd: u64) -> u64 {
     }
     // Pipe end: alias into a new fd sharing the same pipe buffer (by id). NOTE the
     // value MUST be read out of PIPE_FDS before re-locking it below — an `if let
-    // Some(_) = PIPE_FDS.lock()[..]` would hold the guard across the block and the
+    // Some(_) = pipe_fds()[..]` would hold the guard across the block and the
     // inner lock would self-deadlock the spinlock (IF=0 spin forever).
-    let pipe_ent = PIPE_FDS.lock()[ofd];
+    let pipe_ent = pipe_fds()[ofd];
     if let Some(pe) = pipe_ent {
         if let Some(fd) = alloc_low_fd() {
-            PIPE_FDS.lock()[fd] = Some(pe);
+            pipe_fds()[fd] = Some(pe);
             copy_fd_flags(ofd, fd); // dup preserves access mode + O_NONBLOCK
             return fd as u64;
         }
@@ -6700,7 +6731,7 @@ fn alloc_low_fd() -> Option<usize> {
     // already owns in another table.
     let ceil = (crate::net::SOCK_FD_BASE as usize).min(MAX_FD);
     let open = OPEN_FDS.lock();
-    let pipes = PIPE_FDS.lock();
+    let pipes = pipe_fds();
     let dirs = OPEN_DIRS.lock();
     (3..ceil).find(|&fd| open[fd].is_none() && pipes[fd].is_none() && dirs[fd].is_none()
         && !fd_is_aliased(fd))
@@ -6872,7 +6903,7 @@ fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
         fd_alias_set(nfd, oldfd);
         OPEN_FDS.lock()[nfd] = None;
         OPEN_DIRS.lock()[nfd] = None;
-        PIPE_FDS.lock()[nfd] = None;
+        pipe_fds()[nfd] = None;
         return newfd;
     }
     if (oldfd as usize) < MAX_FD {
@@ -6883,16 +6914,16 @@ fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
         // Read the source slot values out FIRST (drop the guard) before writing newfd —
         // re-locking the same table inside an `if let Some(_) = TABLE.lock()[..]` block
         // would self-deadlock the spinlock.
-        let pipe_ent = PIPE_FDS.lock()[oldfd as usize];
+        let pipe_ent = pipe_fds()[oldfd as usize];
         if let Some(pe) = pipe_ent {
             OPEN_FDS.lock()[nfd] = None;
             OPEN_DIRS.lock()[nfd] = None;
-            PIPE_FDS.lock()[nfd] = Some(pe);
+            pipe_fds()[nfd] = Some(pe);
             return newfd;
         }
         let reg_ent = OPEN_FDS.lock()[oldfd as usize];
         if let Some(entry) = reg_ent {
-            PIPE_FDS.lock()[nfd] = None;
+            pipe_fds()[nfd] = None;
             OPEN_DIRS.lock()[nfd] = None;
             OPEN_FDS.lock()[nfd] = Some(entry);
             return newfd;
@@ -10040,7 +10071,7 @@ fn do_glibc_fork() -> u64 {
     // so a later parent close of one must not free the number (see close(3)).
     {
         let open = OPEN_FDS.lock();
-        let pipes = PIPE_FDS.lock();
+        let pipes = pipe_fds();
         let dirs = OPEN_DIRS.lock();
         let ceil = (crate::net::SOCK_FD_BASE as usize).min(MAX_FD);
         // A DEFERRED slot is parent-CLOSED: still occupied only for older
@@ -15881,7 +15912,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             let n: usize = if crate::net::is_unix_fd(a1) {
                 crate::net::unix_fd_available(a1)
             } else if (a1 as usize) < MAX_FD && is_pipe_fd(a1 as usize) {
-                match PIPE_FDS.lock()[a1 as usize] {
+                match pipe_fds()[a1 as usize] {
                     Some((id, false)) => pipes_lock()[id].len(),
                     _ => 0,
                 }
