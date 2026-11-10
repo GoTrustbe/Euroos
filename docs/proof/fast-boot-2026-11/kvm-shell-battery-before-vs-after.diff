@@ -1,0 +1,172 @@
+7,9c7
+< [scon] 4    euro             1000   desktop  open
+< [scon] 3    euro             1000   auto     closed (+2s)
+< [scon] 2    alice            1002   login    closed (+0s)
+---
+> [scon] 2    euro             1000   desktop  open
+12d9
+< [scon]   drwxr-xr-x        0 B    .versions
+17d13
+< [scon]   drwxr-xr-x        0 B    containers
+20d15
+< [scon]   drwxr-xr-x        0 B    find-test
+23,26d17
+< [scon]   drwxr-xr-x        0 B    mimetest
+< [scon]   -rw-r--r--        6 B    pipe-tee.txt
+< [scon]   -rw-r--r--       23 B    pipe-test.txt
+< [scon]   drwxr-xr-x        0 B    pkg
+30d20
+< [scon]   drwxr-xr-x        0 B    alice
+38,45c28
+< [scon]   -rw-r--r--     3535 B    efuzz.eupkg
+< [scon]   -rw-r--r--     2710 B    euro-forbidden.eupkg
+< [scon]   -rw-r--r--       32 B    example-dev.pub
+< [scon]   -rw-r--r--    16849 B    hello-cli-tampered.eupkg
+< [scon]   -rw-r--r--    16849 B    hello-cli.eupkg
+< [scon]   -rw-r--r--     4932 B    hello-euro-wasm.eupkg
+< [scon]   -rw-r--r--     5950 B    hello-euro.eupkg
+< [scon]   -rw-r--r--    17224 B    hello-x11.eupkg
+---
+> [scon] /tmp: (empty)
+47,48d29
+< [scon]   drwxr-xr-x        0 B    euroagent
+< [scon]   drwxr-xr-x        0 B    euroapps
+50d30
+< [scon]   drwxr-xr-x        0 B    euroid
+60,61d39
+< [scon]   drwxr-xr-x        0 B    auditor
+< [scon]   drwxr-xr-x        0 B    daemon
+63,65d40
+< [scon]   drwxr-xr-x        0 B    facilitator
+< [scon]   drwxr-xr-x        0 B    readonly
+< [scon]   drwxr-xr-x        0 B    wasm
+68d42
+< [scon]   drwxr-xr-x        0 B    trash
+70,71c44
+< [scon]   -rw-r--r--     8142 B    audit.json
+< [scon]   -rw-r--r--     3033 B    audit.log
+---
+> [scon]   -rw-r--r--     1782 B    audit.log
+80,81d52
+< [scon]   -rw-r--r--        0 B    efuzz
+< [scon]   -rw-r--r--        0 B    euro-forbidden
+87,90d57
+< [scon]   -rw-r--r--        0 B    hello-cli
+< [scon]   -rw-r--r--        0 B    hello-euro
+< [scon]   -rw-r--r--        0 B    hello-euro-wasm
+< [scon]   -rw-r--r--        0 B    hello-x11
+115c82
+< [scon]   EuroFS         8192       2120       6072   /
+---
+> [scon]   EuroFS         8192       1732       6460   /
+151c118
+< [scon]   dns block list:    5 domains
+---
+> [scon]   dns block list:    4 domains
+159c126
+< [scon]   dns block list:    5 domains
+---
+> [scon]   dns block list:    4 domains
+162,180c129,130
+< [scon] per-app network report — 6 blocked total
+< [scon]   /bin/gforkchurn  0 conn · 0 blocked · tx 0 / rx 1376 B
+< [scon]   /bin/mdns        2 conn · 1 blocked · tx 29 / rx 37 B
+< [scon]       countries: ??:2
+< [scon]       hosts: 10.0.2.3[??]
+< [scon]   /bin/msock       1 conn · 0 blocked · tx 0 / rx 0 B
+< [scon]       countries: ??:1
+< [scon]       hosts: 172.66.147.243[??]
+< [scon]   /bin/mtrack      0 conn · 1 blocked · tx 0 / rx 0 B
+< [scon]       countries: ??:1
+< [scon]   euroguard-agent  1 conn · 1 blocked · tx 0 / rx 0 B
+< [scon]       countries: ??:2
+< [scon]       hosts: 10.0.2.2[??]
+< [scon]   euroguard-evil   0 conn · 1 blocked · tx 0 / rx 0 B
+< [scon]       countries: ??:1
+< [scon]   euroguard-test   1 conn · 1 blocked · tx 0 / rx 0 B
+< [scon]       countries: ??:1  CN:1
+< [scon]       hosts: 10.0.2.2[??]
+< [scon]   selftest         0 conn · 1 blocked · tx 0 / rx 0 B
+---
+> [scon] per-app network report — 0 blocked total
+> [scon]   (no app network activity yet)
+182,202c132,152
+< [scon] audit log (75 events, append-only /var/log/audit.log):
+< [scon]     55  IMMUTABLE_SET /home/alice/notes.txt
+< [scon]     56  IMMUTABLE_DENIED /etc/passwd
+< [scon]     57  IMMUTABLE_DENIED /home/bob/secret
+< [scon]     58  IMMUTABLE_CLEARED /home/alice/notes.txt
+< [scon]     59  LOGIN vault-get (allowed)
+< [scon]     60  AGENT_TOOL agent=auditor tool=fs_write allowed=true ok=true reason=ok
+< [scon]     61  AGENT_TOOL agent=auditor tool=exec allowed=false ok=false reason=insufficient_capability
+< [scon]     62  AGENT_TOOL agent=auditor tool=fs_write allowed=true ok=true reason=ok
+< [scon]     63  AGENT_TOOL learn facilitator: wants fs_write (CAP_AGENT_FS_WRITE)
+< [scon]     64  AGENT_TOOL learn facilitator: wants exec (CAP_AGENT_EXEC, elevated)
+< [scon]     65  POLICY_APPROVED facilitator v1.0.0 schema 1
+< [scon]     66  AGENT_TOOL learn facilitator: wants exec (CAP_AGENT_EXEC, elevated)
+< [scon]     67  POLICY_APPROVED app gpolicy schema 1
+< [scon]     68  LOGIN session opened
+< [scon]     69  LOGOUT session closed
+< [scon]     70  LOGIN session opened
+< [scon]     71  LOGOUT session closed
+< [scon]     72  LOGIN session opened
+< [scon]     73  LOGOUT session closed
+< [scon]     74  LOGIN session opened
+---
+> [scon] audit log (44 events, append-only /var/log/audit.log):
+> [scon]     24  IMMUTABLE_SET /bin/menv
+> [scon]     25  IMMUTABLE_SET /bin/msock
+> [scon]     26  IMMUTABLE_SET /bin/mdns
+> [scon]     27  IMMUTABLE_SET /bin/mtrack
+> [scon]     28  IMMUTABLE_SET /bin/tlscount
+> [scon]     29  IMMUTABLE_SET /bin/isotest
+> [scon]     30  IMMUTABLE_SET /bin/worker
+> [scon]     31  IMMUTABLE_SET /bin/mthread
+> [scon]     32  IMMUTABLE_SET /bin/mpthread
+> [scon]     33  IMMUTABLE_SET /bin/mmutex
+> [scon]     34  IMMUTABLE_SET /bin/ipcrecv
+> [scon]     35  IMMUTABLE_SET /bin/ipcsend
+> [scon]     36  BOOT kernel-start
+> [scon]     37  LOGIN user=root tty=console
+> [scon]     38  IMMUTABLE_CLEARED /var/log/audit.log
+> [scon]     39  IMMUTABLE_SET /bin/hello
+> [scon]     40  CAP_DENIED firefox requested CAP_IMMUTABLE_ADMIN (europol-deny)
+> [scon]     41  LOGIN session opened
+> [scon]     42  LOGOUT session closed
+> [scon]     43  LOGIN session opened
+231c181
+< [scon] ticker      stopped   101    2       always
+---
+> [scon] ticker      stopped   100    1       always
+273,274c223
+< [scon] UID         USED(blk)   LIMIT(blk)
+< [scon] 4242                0            -
+---
+> [scon] no quotas set and no owned blocks (quota set <uid> <blocks>)
+286,288c235,237
+< [scon] tcp: connect ok 0 (slowest 0 ms), SYN timeouts 0, stale-peer RSTs 0, new-port retries 0, closed-port answers 9, gave up 0 | inbound: half-open 0, httpd conns 0, served 0 | queues 0 (0 segs), unowned segs 0 (after-close ACKs 0)
+< [scon] net worker: task 2, 6 passes, 0 inbound frames, longest pass 102 us; kicks 0 (e1000d/task) + 16 (interrupt, 0 found the scheduler busy)
+< [scon] DNS cache: 0 hits, 2 misses
+---
+> [scon] tcp: connect ok 0 (slowest 0 ms), SYN timeouts 0, stale-peer RSTs 0, new-port retries 0, closed-port answers 0, gave up 0 | inbound: half-open 0, httpd conns 0, served 0 | queues 0 (0 segs), unowned segs 0 (after-close ACKs 0)
+> [scon] net worker: task 3, 1 passes, 0 inbound frames, longest pass 60 us; kicks 0 (e1000d/task) + 0 (interrupt, 0 found the scheduler busy)
+> [scon] DNS cache: 0 hits, 0 misses
+307,309c256,257
+< [scon] alice       1002 deleted    users,net
+< [scon] bob         1003 locked(failed-login-threshold) wheel
+< [scon] carla       1004 active     users,users,net
+---
+> [scon] alice       1002 active     users,net
+> [scon] bob         1003 active     wheel
+314c262
+< [scon]   memory: 278989/523958 frames free
+---
+> [scon]   memory: 279257/523958 frames free
+355,357c303,305
+< [scon]   inodes checked       : 139
+< [scon]   data checksums (XXH3): 134 verified
+< [scon]   data blocks (ref)    : 375
+---
+> [scon]   inodes checked       : 76
+> [scon]   data checksums (XXH3): 75 verified
+> [scon]   data blocks (ref)    : 341

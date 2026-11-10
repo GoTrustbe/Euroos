@@ -1,0 +1,18 @@
+# release image, e1000e (userspace driver e1000d), KVM
+    2.557 [net] NIC: e1000 left to the userspace driver e1000d (net.driver=user); network bring-up and the network tests run after the scheduler starts ([udrv-*], [net-late])
+    2.954 [udrv] net.driver=user: the e1000 driver runs in ring 3 (e1000d); the in-kernel e1000 stays unbound
+    2.982 [udrv] e1000d started: pid 131072, task 2, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x152000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU absent: DMA NOT confined
+    2.990 [udrv-grant] e1000d pid 131072: BAR0 0x810a0000..0x810c0000 mapped for ring 3 (first=true, last=true), page before=false, page after=false; DMA window 32 pages mapped=true, page after=false; LAPIC=false, kernel code=false → OK (exactly the granted ranges) ✓
+    2.994 [udrv-iommu] no IOMMU translation on this machine: e1000d's DMA is NOT confined (boot QEMU with -device intel-iommu,intremap=off) ⬜
+    3.000 [udrv-e1000] e1000d (pid 131072, ring 3, profile driver) brought the 82574L (e1000e) up: MAC 52:54:00:12:34:56 reported over EuroIPC; nic backend = e1000 via userspace driver e1000d (EuroIPC) → OK ✓
+    3.022 [udrv-net]   DHCP ACK: lease 10.0.2.15 (router 10.0.2.2, dns 10.0.2.3, 86400s)
+    3.024 [udrv-net]   ARP: gateway 10.0.2.2 is-at [52, 55, 0a, 00, 02, 02]
+    3.027 [udrv-net] network over e1000d: DHCP + ARP done, netstack configured
+    3.030 [udrv] userspace e1000d: pid 131072 task 2 (starts 1, deaths 0), link up, tx 6 rx 4 irq 8
+    3.044 [net-worker] kernel task 3 started: inbound TCP (SYN queue, httpd, accept queues) runs here, woken by e1000d's frame deliveries (EuroIPC)
+    3.371 [boot-time] desktop after 1123 ms since kernel entry (HPET, release build): firmware-exit=152 cpu-mm=11 storage-rootfs=52 storage-checks=10 identity-config=67 net=31 userland-demos=220 sched-init=14 acpi-pci-tpm=64 smp-timer=63 devices=28 drivers-late=98 glibc-suite=1 vfs-mounts=3 subsyste
+
+# release image, 100 s after the desktop: the first update check (90 s after boot)
+    2.061 [euroupdate] boot from slot A (gen 1, 0 attempt(s) left, A=Good B=Empty), running version 20261110
+    2.690 [euroupdate] slot A confirmed GOOD (boot succeeded)
+   92.653 [euroupdate] no slot partitions on the boot disk: automatic updates are off (install EuroOS to enable them)

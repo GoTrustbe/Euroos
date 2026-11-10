@@ -1,0 +1,5 @@
+after-modern-r2-1: kernel-entry 1.80s desktop 2.72s
+after-modern-r2-2: kernel-entry 1.75s desktop 2.70s
+after-modern-r2-3: kernel-entry 1.60s desktop 2.53s
+after-modern-r2-4: kernel-entry 1.74s desktop 2.65s
+after-modern-r2-5: kernel-entry 1.87s desktop 2.77s

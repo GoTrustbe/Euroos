@@ -1,0 +1,278 @@
+    1.204 [2J[001;001H[=3h[2J[001;001H[2J[001;001H[8;042;160t[2J[001;001H[2J[001;001H[8;056;240t[2J[001;001HBdsDxe: loading Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+    1.208 BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+    1.208 
+    1.209 [loader] EuroOS two-stage A/B loader (G4)
+    1.211 [loader] slot_config → boot slot A
+    1.213 [loader] slot image unusable — trying the other slot partition
+    1.821 [loader] kernel image from the ESP file (Ed25519 verified)
+    1.823 [loader] kernel image loaded — LoadImage + StartImage...
+    1.860 
+    1.861 [euro] EuroKernel bring-up — heap (460 MiB) + COM1 active
+    1.863 [euro] anchor dump_registers_and_backtrace @ 0x00000000721d32c7
+    1.867 [euro] frame allocator: 1381 MiB usable RAM
+    1.908 [euro] GOP 1920x1080 stride=1920 Bgr
+    1.909 [acpi] RSDP @ 0x7fb7e014
+    1.911 [inst] single-disk boot (1 disk(s)) — no install target, media preload skipped
+    1.914 [bootopt] no euroos-boot.conf (defaults): net.driver=user, storage.nvme=kernel
+    1.915 [euro] ExitBootServices...
+    1.930 [euro] >>> UEFI left — kernel mode <<<
+    1.931 [euro] GDT+TSS loaded
+    1.931 [euro] IDT loaded
+    1.933 [euro] framebuffer @ 0x80000000 — loading our own page tables...
+    1.935 [euro] CR3 loaded (PML4 @ 0x100000) — our own paging active
+    1.939 [a2] guarded kernel stack: top 0x8000005000, guard 0x8000000000 — stack writable=true, guard not-present=true
+    1.941 [mm] process frame pool: 288 MiB @ 0x1780000 (fork/exec)
+    1.949 [blk] no virtio-blk device found
+    1.952 [iommu] domain virtio-blk: 0 PCI function(s), 0 DMA page(s) registered
+    1.961 [iommu] domain nvme: 0 PCI function(s), 0 DMA page(s) registered
+    1.970 [iommu] domain ahci: 1 PCI function(s), 17 DMA page(s) registered
+    1.973 [ahci] disk 0 (port 0): 'QEMU HARDDISK', 524288 sectors = 256 MiB, partitioned (boot signature)
+    1.975 [ahci] disk 0 read-only self-test (boot sector via DMA): OK ✓
+    1.978 [euro] no installable/EuroFS SATA disk — booting a RAM root (disks left intact)
+    1.995 [euro] EuroFS formatted + populated in RAM (live) (through 1 MiB block cache)
+    1.997 [boot-time] phase firmware-exit: 71.071 ms (at 71 ms)
+    1.999 [boot-time] phase cpu-mm: 11.660 ms (at 82 ms)
+    2.001 [boot-time] phase storage-rootfs: 54.141 ms (at 136 ms)
+    2.004 [euroupdate] boot from slot A (gen 1, 0 attempt(s) left, A=Good B=Empty), running version 20261110
+    2.007 [g4] raw-block slot_config not readable (no virtio-blk?)
+    2.009 [boot-time] phase storage-checks: 11.607 ms (at 148 ms)
+    2.012 [    0.00 INF] observability active — kmsg ring 512 lines, leveled logging + dmesg
+    2.039 [    0.00 INF] [hpet] HPET active @ 100 MHz — 1M spin iterations = 24261 us (high-resolution HAL time source)
+    2.048 [euroid] no /etc/euroid/users.db on the root — live medium, built-in demo store (euro/alice/bob)
+    2.049 [euro] boot #1 (live/RAM)
+    2.053 [net] /etc/hosts: 3 name->IP mapping(s) loaded
+    2.055 [boot-time] phase identity-config: 45.981 ms (at 194 ms)
+    2.064 [net] virtio-net @ PCI 00:02.0, legacy virtio-0.9.5, I/O BAR 0x6060
+    2.068 [net] virtio-net MSI-X on (4 entries) -> vector 0x4b, queue readback=0x0000
+    2.072 [net] virtio-net OK — MAC 52:54:00:12:34:56 (RX 128 bufs, 10-byte header, features 0x10020)
+    2.074 [iommu] domain nic: 1 PCI function(s), 135 DMA page(s) registered
+    2.075 [net] NIC: virtio-net MAC 52:54:00:12:34:56
+    2.078 [net] DHCP runs in the background: the network comes up shortly after the desktop
+    2.080 [net] (`net` shows the address; `netstat` the connections)
+    2.081 [boot-time] phase net: 26.697 ms (at 221 ms)
+    2.082 [euro] loading /bin/hello from EuroFS...
+    2.084 [euro] /bin/hello Ed25519: VERIFIED (pubkey ed852b80…)
+    2.086 [euro] tamper-test: 1 byte changed -> REJECTED (correct)
+    2.090 [sec] SMEP ON · SMAP ON (CR4; ring 0 can no longer execute/touch user pages, except in a short syscall window)
+    2.093 [ring3->sys_write] EuroOS userspace program (C, ring 3) — via syscalls:
+    2.093 
+    2.094 [ring3->sys_write]   getpid() = 
+    2.095 [ring3->sys_write] 1
+    2.095 [ring3->sys_write] 
+    2.096 
+    2.097 [ring3->sys_write]   uname()  = 
+    2.098 [ring3->sys_write] EuroKernel 0.1-alpha x86_64
+    2.099 [ring3->sys_write] 
+    2.099 
+    2.100 [ring3->sys_write]   read(/etc/hostname, 
+    2.101 [ring3->sys_write] 11
+    2.102 [ring3->sys_write]  bytes) = 
+    2.103 [ring3->sys_write] eurokernel
+    2.103 
+    2.105 [cap] syscall 60 DENIED — missing capability
+    2.107 [ring3->sys_write]   net()    = DENIED by kernel (process lacks CAP_NET)
+    2.108 
+    2.108 [ring3->sys_write]   malloc() = 
+    2.110 [ring3->sys_write] dynamic memory via sbrk()/malloc()!
+    2.111 [ring3->sys_write] 
+    2.111 
+    2.113 [euro] /bin/hello done: exit=0, 259 bytes via sys_write
+    2.114 [ring3->sys_write] cat /etc/eurokernel.conf:
+    2.115 
+    2.116 [ring3->sys_write] version=0.1
+    2.116 encryption=off
+    2.116 
+    2.118 [exec] /bin/cat (abi=native, ed25519=ok) exit=0 (53 bytes)
+    2.121 [linux-abi] Hello via the LINUX syscall ABI (write=1, getpid=39, exit=60)!
+    2.124 [linux-abi]   Linux getpid()      = [linux-abi] 1[linux-abi] 
+    2.129 [linux-abi]   Linux uname.sysname = [linux-abi] Linux[linux-abi]   release = [linux-abi] 6.6.0-euroos[linux-abi] 
+    2.132 [linux-abi]   Linux getuid()      = [linux-abi] 1000[linux-abi] 
+    2.136 [linux-abi]   Linux gettimeofday  = [linux-abi] 1794301506[linux-abi]  (Unix-epoch seconds)
+    2.137 [linux-abi]   --- /proc (live kernel info) ---
+    2.144 [linux-abi]   [linux-abi] /proc/version[linux-abi] : [linux-abi] Linux version 6.6.0-euroos (euro@eurokernel) (EuroToolchain rustc) #1 SMP EuroOS[linux-abi] 
+    2.149 [linux-abi]   [linux-abi] /proc/cpuinfo[linux-abi] : [linux-abi] processor	: 0[linux-abi] 
+    2.154 [linux-abi]   [linux-abi] /proc/meminfo[linux-abi] : [linux-abi] MemTotal:       262144 kB[linux-abi] 
+    2.158 [linux-abi]   [linux-abi] /proc/uptime[linux-abi] : [linux-abi] 0.00 0.00[linux-abi] 
+    2.163 [linux-abi]   [linux-abi] /proc/loadavg[linux-abi] : [linux-abi] 0.00 0.00 0.00 1/1 1[linux-abi] 
+    2.166 [linux-abi]   readlink(/proc/self/exe) = [linux-abi] /bin/linuxprog[linux-abi] 
+    2.168 [linux-abi]   --- /etc (system config) ---
+    2.172 [linux-abi]   [linux-abi] /etc/os-release[linux-abi] : [linux-abi] NAME="EuroOS"[linux-abi] 
+    2.177 [linux-abi]   [linux-abi] /etc/passwd[linux-abi] : [linux-abi] root:x:0:0:root:/root:/bin/eurosh[linux-abi] 
+    2.178 [linux-abi]   --- getdents64(/etc) ---
+    2.181 [linux-abi]     [d] [linux-abi] .[linux-abi] 
+    2.183 [linux-abi]     [d] [linux-abi] ..[linux-abi] 
+    2.185 [linux-abi]     [f] [linux-abi] hostname[linux-abi] 
+    2.188 [linux-abi]     [f] [linux-abi] hosts[linux-abi] 
+    2.190 [linux-abi]     [f] [linux-abi] eurokernel.conf[linux-abi] 
+    2.193 [linux-abi]     [f] [linux-abi] passwd[linux-abi] 
+    2.195 [linux-abi]     [f] [linux-abi] group[linux-abi] 
+    2.198 [linux-abi]     [f] [linux-abi] os-release[linux-abi] 
+    2.200 [linux-abi]     [d] [linux-abi] euroguard[linux-abi] 
+    2.203 [linux-abi]     [f] [linux-abi] system.ver[linux-abi] 
+    2.205 [linux-abi]     [f] [linux-abi] mmap-test[linux-abi] 
+    2.207 [exec] /bin/linuxprog (abi=linux, ed25519=ok) exit=0 (862 bytes)
+    2.209 [linux-abi] arch_prctl SET_FS = 0x200400
+    2.210 [linux-abi] arch_prctl(SET_FS): TLS set up OK
+    2.212 [linux-abi]   %fs:0 reads the thread pointer back: OK
+    2.216 [linux-abi]   set_tid_address -> tid [linux-abi] 1[linux-abi] 
+    2.219 [linux-abi]   mmap(4096) OK, write+read from new page: [linux-abi] Hi
+    2.224 [linux-abi]   writev: part-1[linux-abi] + part-2 (musl stdio path)[linux-abi] mmap(fd=3, off=0, 4096 B) file-backed -> 0x281000 (35 B copied)
+    2.227 [linux-abi]   file-backed mmap: mapped file bytes MATCH -> FILE-BACKED-MMAP-OK
+    2.230 [exec] /bin/muslprog (abi=linux, ed25519=ok) exit=0 (258 bytes)
+    2.232 [ring3->sys_write] SysV stack read by the process:
+    2.232 
+    2.233 [ring3->sys_write]   argc = 
+    2.233 [ring3->sys_write] 1
+    2.234 [ring3->sys_write] 
+    2.234 
+    2.235 [ring3->sys_write]   argv[0] = 
+    2.236 [ring3->sys_write] /bin/argvprog
+    2.237 [ring3->sys_write] 
+    2.237 
+    2.238 [ring3->sys_write]   envc = 
+    2.239 [ring3->sys_write] 9
+    2.239 [ring3->sys_write] 
+    2.239 
+    2.241 [ring3->sys_write]   auxv AT_PAGESZ = 
+    2.241 [ring3->sys_write] 4096
+    2.242 [ring3->sys_write] 
+    2.242 
+    2.244 [ring3->sys_write]   auxv AT_RANDOM[0..1] = 
+    2.244 [ring3->sys_write] 90
+    2.245 [ring3->sys_write] ,
+    2.246 [ring3->sys_write] 69
+    2.247 [ring3->sys_write] 
+    2.247 
+    2.249 [exec] /bin/argvprog (abi=native, ed25519=ok) exit=0 (135 bytes)
+    2.251 [elf] 3 R_X86_64_RELATIVE relocations applied @ base 0x200000
+    2.253 [ring3->sys_write] PIE with relocations is running. Relocated pointers:
+    2.253 
+    2.254 [ring3->sys_write]   - 
+    2.255 [ring3->sys_write] sovereign
+    2.256 [ring3->sys_write] 
+    2.256 
+    2.257 [ring3->sys_write]   - 
+    2.258 [ring3->sys_write] European
+    2.258 [ring3->sys_write] 
+    2.258 
+    2.259 [ring3->sys_write]   - 
+    2.260 [ring3->sys_write] operating system
+    2.261 [ring3->sys_write] 
+    2.261 
+    2.263 [exec] /bin/pieprog (abi=native, ed25519=ok) exit=0 (101 bytes)
+    2.265 [elf] 12 R_X86_64_RELATIVE relocations applied @ base 0x200000
+    2.267 [linux-abi] arch_prctl SET_FS = 0x20aa38
+    2.269 [linux-abi] Hello from a REAL musl-libc binary on EuroKernel![linux-abi] 
+    2.271 [linux-abi]   argc=1, argv[0]=/bin/muslreal[linux-abi] 
+    2.274 [linux-abi]   buffer (38 bytes): malloc + strcpy + printf via musl libc[linux-abi] 
+    2.276 [linux-abi]   sum(1..10) = 55[linux-abi]  (musl runs ordinary C runtime)
+    2.278 [exec] /bin/muslreal (abi=linux, ed25519=ok) exit=0 (191 bytes)
+    2.281 [elf] 12 R_X86_64_RELATIVE relocations applied @ base 0x200000
+    2.282 [linux-abi] arch_prctl SET_FS = 0x20a658
+    2.286 [linux-abi] musl reads /etc/eurokernel.conf[linux-abi]  via fopen/fgets:
+    2.287 [linux-abi]   | [linux-abi] version=0.1
+    2.289 [linux-abi]   | [linux-abi] encryption=off
+    2.291 [linux-abi]   (2[linux-abi]  lines read, fclose OK)
+    2.294 [exec] /bin/muslfile (abi=linux, ed25519=ok) exit=0 (112 bytes)
+    2.296 [elf] 16 R_X86_64_RELATIVE relocations applied @ base 0x200000
+    2.298 [linux-abi] arch_prctl SET_FS = 0x208698
+    2.299 [linux-abi] getenv via musl libc:[linux-abi] 
+    2.301 [linux-abi]   EUROOS_VERSION  = 0.1-alpha[linux-abi] 
+    2.303 [linux-abi]   LANG            = nl_BE.UTF-8[linux-abi] 
+    2.304 [linux-abi]   TERM            = euroterm[linux-abi] 
+    2.306 [linux-abi]   USER            = euro[linux-abi] 
+    2.308 [linux-abi]   SHELL           = /bin/sh[linux-abi] 
+    2.309 [linux-abi]   (9[linux-abi]  variables in environ)
+    2.311 [exec] /bin/menv (abi=linux, ed25519=ok) exit=0 (193 bytes)
+    2.313 [boot-time] phase userland-demos: 231.369 ms (at 452 ms)
+    2.314 [idt] BREAKPOINT @ 0x722ae489
+    2.315 [euro] breakpoint exception handled: true
+    2.317 [g1] 5 scheduler task stacks on guarded stacks (pool: 6 total)
+    2.319 [fpu] context-switch FPU save: XSAVE (x87+SSE+AVX/YMM) (AVX ON)
+    2.322 [euro] bg-musl (pid 100) -> task 1, own address space PML4 0x1b9000, arena 0x200000
+    2.324 [    0.00 INF] [init] service ticker started (pid 100, start #1)
+    2.326 [    0.00 INF] [init] EuroInit active — 1 service(s) under supervision
+    2.328 [boot-time] phase sched-init: 15.078 ms (at 467 ms)
+    2.330 [acpi] MADT: 2 CPU core(s) (LAPIC @ 0xfee00000, IO-APIC @ 0xfec00000 gsi-base 0)
+    2.331 [acpi]   core: APIC-id 0 (on)
+    2.332 [acpi]   core: APIC-id 1 (on)
+    2.338 [iommu] no ACPI DMAR — NO hardware IOMMU. Device DMA is UNRESTRICTED: a malicious/buggy NVMe/USB/NIC can DMA over any physical memory, bypassing capabilities. (GitHub #11)
+    2.342 [iommu] policy=Warn — continuing WITHOUT DMA isolation. Set policy=Required on high-assurance deployments to fail-closed instead.
+    2.352 [ecam] PCIe config via ECAM @ 0xe0000000 (buses 0..=255, MCFG, port-verified) ✓
+    2.359 [pci] 6 devices found:
+    2.361 [pci]   00:00.0  8086:29c0  Bridge  (Intel Q35 host bridge)
+    2.363 [pci]   00:01.0  1234:1111  Display (GPU)  (QEMU VGA)
+    2.365 [pci]   00:02.0  1af4:1000  Network  (virtio-net)
+    2.366 [pci]   00:1f.0  8086:2918  Bridge  (Intel ICH9 LPC)
+    2.369 [pci]   00:1f.2  8086:2922  Mass Storage (SATA/AHCI)  (Intel ICH9 AHCI)
+    2.370 [pci]   00:1f.3  8086:2930  SMBus
+    2.377 [r] EuroDevice: 6 devices in the device tree, 3 bound via 7 registered drivers
+    2.381 [i3-aml] DSDT interpreted: 8504 bytes → 39 AML objects. \_S5=Some([0, 0, 0, 0]), known methods present: ["_STA", "_S5_"]
+    2.384 [acpi-pwr] no ACPI battery / AC adapter / lid in this firmware (expected on a desktop or VM)
+    2.390 [i3-s5] ACPI shutdown ready: PM1a_CNT port 0x604, S5 value 0x2000, SLP_TYP-from-AML=true → `poweroff` performs a clean soft-off ✓ (end-to-end proven via scripts/shutdown-test.py: QEMU guest-shutdown)
+    2.392 [tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+    2.395 [boot-time] phase acpi-pci-tpm: 66.692 ms (at 534 ms)
+    2.408 [apic] Local APIC #0 on — timer 100 Hz (calibrated: 626489 ticks/period against PIT)
+    2.411 [lk] EuroLock hooks installed: IRQSAVE for Irq-mode locks, per-context order tracking (264 contexts), 20 lock classes
+    2.414 [g1] 7 AP stack(s) on guarded stacks (pool: 13 guarded stacks total, unit=16 KiB + guard)
+    2.431 [smp] core APIC-id 1 online
+    2.433 [smp] 1/1 AP core(s) online (BSP = APIC-id 0, 2 cores total)
+    2.440 [smp] parallel sum 0..2000000 over 2 core(s) = 1999999000000 (expected 1999999000000) -> OK
+    2.461 [smp] 1/1 AP(s) idle in hlt, taking kernel work from per-CPU queues
+    2.464 [acpi] power button armed → SCI GSI9 vec 0x49 (press = clean S5)
+    2.468 [ioapic] @ 0xfec00000: kbd IRQ1->GSI1 vec 0x21, mouse IRQ12->GSI12 vec 0x2c -> BSP #0 (8259 masked)
+    2.470 [euro] PS/2 mouse initialized (IRQ12)
+    2.473 [boot-time] phase smp-timer: 77.520 ms (at 611 ms)
+    2.480 [xhci] no xHCI controller found (PCI 0C:03:30)
+    2.482 [iommu] domain xhci: 0 PCI function(s), 0 DMA page(s) registered
+    2.496 [iommu] domain virtio-input: 0 PCI function(s), 0 DMA page(s) registered
+    2.506 [hda] no HD-Audio controller found (PCI 04:03)
+    2.508 [iommu] domain hda: 0 PCI function(s), 0 DMA page(s) registered
+    2.526 [boot-time] phase devices: 44.783 ms (at 656 ms)
+    2.534 [udrv] net.driver=user: the e1000 driver runs in ring 3 (e1000d); the in-kernel e1000 stays unbound
+    2.537 [udrv] another NIC (virtio-net) is already bound by the kernel: e1000d not started
+    2.552 [net-up] kernel task 2: DHCP + ARP + router discovery over virtio-net run in the background
+    2.555 [euro] APIC timer 100 Hz + interrupts ON -> preemptive multitasking (incl. ring 3)
+    2.561 [net-up] lease 10.0.2.15 (gateway 10.0.2.2, dns 10.0.2.2, 86400 s) over virtio-net; IPv6 router found; 10 ms after the task started ✓
+    2.569 [net-worker] kernel task 3 started: inbound TCP (SYN queue, httpd, accept queues) runs here, woken by the NIC's receive interrupt (MSI-X) and the tick while the httpd or a listener is on
+    2.572 [boot-time] phase drivers-late: 54.264 ms (at 710 ms)
+    2.574 [boot-time] phase glibc-suite: 2.429 ms (at 713 ms)
+    2.576 [rtc] real wall-clock time: 09:05 Tue 10 November
+    2.578 [boot-time] phase vfs-mounts: 4.564 ms (at 717 ms)
+    2.615 [l2rec] /bin recursively protected: /bin/doom immutable=true
+    2.620 [l2] 36 system file(s) marked IMMUTABLE — tamper-proof (changing requires CAP_IMMUTABLE_ADMIN; the boot updater clears the flag legitimately)
+    2.625 [intg] system integrity at boot: 32/32 files match the signed kernel image ✓
+    2.633 [p3] append-only audit log: 40 events, persisted=true, append-only-flag=true, tamper-blocked=true, extend-OK=true, lines-on-disk 38→40 → OK (tamper-evident audit trail) ✓
+    2.639 [x] EuroPol: policy 'firefox', caps 0b11111→0b01111 (CAP_IMMUTABLE_ADMIN revoked, CAP_NET retained), /etc denied=true, violation→P3-audit → OK (policy enforced as capabilities) ✓
+    2.649 [3d4] EuroPol signed bundles (Ed25519 verify-before-load): valid-bundle-loaded=true, tampered-bundle-REFUSED=true, wrong-signer-REFUSED=true → OK (a policy can only change capabilities if it is signed by the release key) ✓
+    2.659 [u] EuroVault: 2 secrets, master-from-TPM=false, read-with-cap=true, read-without-cap-denied=true, blob-without-plaintext=true, unseal-OK=true, wrong-key-fails=true → OK (capability-gated, encrypted, tamper-evident) ✓
+    2.686 [n2] EuroVPN: handshake (4×X25519-DH → HKDF) + ChaCha20-Poly1305 transport, seeds-from-TPM=false, pubkey 7b4e909bbe7ffe44…, encrypted=true, peer-decrypts=true, reply-ok=true → OK (forward-secret, mutually-authenticated tunnel) ✓
+    2.691 [tick-late] #1 +1 ticks (61 Mcycles) rip=0x7223fb6d cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=1
+    2.707 [aa] EuroAgent: manifest 'facilitator' v1.0.0 (4 caps), MCP fs_write=allowed/exec=denied(cap), NET denied(policy)/EXEC denied(user-clamp), intent→facilitator, agent loop: 2 tool-calls/1 denied→'Summary saved.', Ed25519 bundle: valid-OK+tampered-rejected=true → OK (kernel trust boundary, capability-isolated, audited, LLM↔MCP loop, signed bundle, registry+anti-hijack) ✓
+    2.711 [tick-late] #2 +1 ticks (45 Mcycles) rip=0x7223fb6d cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=2
+    2.721 [ca] EuroCA: root CA (seed-from-TPM=false), service cert 'vpn.euro-os.eu' issued+verified=true, refused-after-revocation=true, root-fpr b2e9c60fa25d525a… → OK (sovereign local certificate authority) ✓
+    2.728 [o2] EuroAttest: quote over 2 PCRs (AK-seed-from-TPM=false), fresh-quote-accepted=true, replay-rejected=true, modified-state-rejected=true → OK (remote attestation — provable trusted state) ✓
+    2.736 [v] EuroIDM: token 'anke'(users) issued+verified=true (IDM-seed-from-TPM=false), caps=read+net-no-write=true, escalation(add-group)-denied=true → OK (identity→capabilities, signed tokens, locally sovereign) ✓
+    2.743 [wasm2] `wasm <file>`: self-contained .wasm (data section) on EuroFS=true, with-cap fd_write+run()=55=true, without-cap host-call-denied=true → OK (real .wasm from disk in the no-JIT sandbox, WASI cap-gated) ✓
+    2.744 [boot-time] phase subsystems: 166.240 ms (at 884 ms)
+    2.746 [euroupdate] slot A confirmed GOOD (boot succeeded)
+    2.753 [3g1] EuroJournal persistence: restored-from-disk=0 entries, wrote-to-disk=true, on-disk-decode-has-boot-line=true, live-ring=2 → OK (structured journal survives reboot on the root FS) ✓
+    2.754 [boot-time] phase boot-good-scrub: 9.882 ms (at 893 ms)
+    2.761 [h2] display-server @ /run/eurodisplay.sock: 1 client(s), 1 app window(s) via AF_UNIX → compositor (5 windows total) ✓
+    2.765 [h5] real Wayland protocol: handshake processed, 108 bytes of events back (registry globals + xdg-configure), 1 window(s)
+    2.767 [h5] Wayland window (surface 5) → compositor (6 windows total) ✓
+    2.770 [bb5] EuroSuite renderer: Writer/Calc/Impress rendering tested (demo documents, not on dock) ✓
+    2.773 [b6] EuroWeb: usable browser (tabs + address bar) ready (open via dock; type a URL) ✓
+    2.776 [rk] EuroReken REALLY interactive: 12+34*2 = 80 (engine, expected 80, with precedence) ✓
+    2.778 [set] EuroBeheer: settings panel ready (live EuroGuard/network/system; open via dock) ✓
+    2.781 [bb6] EuroAgent dispatch panel ready (intent → cap-gated agent loop + live audit; open via dock) ✓
+    2.785 [bb7] EuroInstall: guided graphical installer ready (plan + live FDE enrol; execution = instexec) ✓
+    2.794 [ag] EuroApps: EuroFiles (live FS @ /), EuroNotes (euronotes), EuroClock (RTC 09:05) — 3 windows + dock tiles 0/1/2 ✓
+    2.801 [boot-time] phase desktop-build: 46.590 ms (at 940 ms)
+    2.805 [lock] unattended boot — no input within grace → auto-login as euro (demo/CI)
+    2.808 [boot-time] phase lockscreen: 6.958 ms (at 947 ms)
+    2.931 [euro] EuroDesktop compositor active — 22 windows + mouse
+    2.941 [    0.43 INF] [sperf] present-blit: full-screen 6660 us vs status-panel rect 93 us (~71x less work per clock tick)
+    2.946 [3f7-live] permission-portal armed — no request pending at boot; a modal is shown only when an app requests a resource (wired to portal::respond)
+    2.948 [boot-time] phase first-frame: 139.855 ms (at 1087 ms)
+    2.950 [desktop] interactive loop started — input + shell live

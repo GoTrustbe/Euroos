@@ -113,7 +113,7 @@ A clean-room, RFC-conformant TCP/IP stack, **`#![forbid(unsafe_code)]`**, big-en
 - **Rate limiting** (`ratelimit`) — token buckets guard ICMP error generation.
 - **Driver:** virtio-net (PCI), with the parsing/building layers fully host-tested independent of the NIC.
 
-Verified end-to-end at boot: DHCP lease → ARP → ICMP ping → DNS → `HTTP GET` → `HTTPS GET` (encrypted) → IPv6 SLAAC, plus POSIX-socket HTTP/DNS through the Linux-ABI layer.
+Verified end-to-end at boot of the self-test image: DHCP lease → ARP → ICMP ping → DNS → `HTTP GET` → `HTTPS GET` (encrypted) → IPv6 SLAAC, plus POSIX-socket HTTP/DNS through the Linux-ABI layer. The release image does none of this before the desktop: a kernel task gets the lease, resolves the gateway and DNS server and looks for an IPv6 router in the background (`[net-up]`, `docs/BOOT-TIME.md`), and keeps asking when no DHCP server answers.
 
 ### Unix-domain sockets — AF_UNIX (H1)
 

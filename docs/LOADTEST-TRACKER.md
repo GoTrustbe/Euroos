@@ -927,6 +927,46 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Next:** check whether the DISCOVER reaches SLIRP (`-object filter-dump` on the usb-net netdev)
   and whether the bulk-IN pipe is polled during `poll_dhcp` (it spins on `legacy_rx()` only).
 
+### BUG-041 — the release image ran the self-tests, the churn runs and the boot network probes ✅ FIXED
+- **Status:**   FIXED (`feature/fast-boot`) · **Severity:** MEDIUM (16 s from kernel entry to the desktop under KVM, 30 s under TCG; test residue in the release system)
+- **Found:**    2026-11-10 · `[boot-time]` (new, per boot phase) on the release image, R630 KVM and build-server TCG
+- **Analysis:** only the glibc/X11/chrome suite was behind the `selftest` feature. `./scripts/build.sh image`
+  still ran about 150 self-tests, the eight churn runs, the inline network sequence (DHCP, ARP, ping, DNS, HTTP
+  and HTTPS to example.com, IPv6) and the lockscreen self-test on every boot, wrote 164 kB to the serial port
+  and left their residue behind: test files in `/`, six test apps and the example developer key, a
+  `selftest-block.example` DNS block, deleted/locked demo accounts, a `[churn-thread] … FAILED` line. The
+  bad-block, swap and crash-dump proofs wrote into the GPT gap of virtio disk 0 whatever it held.
+- **Fix:** `SELFTEST` in `main.rs` is the one switch; the release image keeps only the self-tests that set up
+  state the system uses (list in `docs/BOOT-TIME.md`). The network of an in-kernel NIC comes up in a kernel
+  task (`[net-up]`, `net_bringup.rs`); no lockscreen flash on a live medium; no SMP demo. KVM: 19.5 s → 2.95 s
+  from QEMU start to the desktop (kernel 16.0 s → 1.0 s); TCG: 36.8 s → 6.5 s (kernel 29.7 s → 2.1 s). The
+  self-test image is marker-identical. Proof: `docs/proof/fast-boot-2026-11/`.
+
+### BUG-042 — an NVMe disk with foreign content was formatted at boot ✅ FIXED
+- **Status:**   FIXED (`feature/fast-boot`) · **Severity:** HIGH (data loss on someone else's disk)
+- **Found:**    2026-11-10 · reading `main.rs` for BUG-041, reproduced under KVM on the R630
+- **Analysis:** an NVMe disk that is not the root is mounted at `/nvme`; when it did not mount as EuroFS it was
+  formatted, in every image. A release medium booted on a machine with another system on its NVMe disk logs
+  `NVMe disk is not EuroFS and not blank — … it stays intact` and then `[g2] EuroFS formatted on NVMe`.
+  A 64 MiB disk of random data with a boot signature had another sha256 after one boot.
+- **Fix:** only a disk whose first 4 KiB are zero is formatted (the rule the second virtio disk has); anything
+  else is left alone (`[g2] NVMe disk carries unknown content: left untouched (no /nvme)`), and a failed
+  format is a log line instead of an `expect`. `docs/proof/fast-boot-2026-11/kvm-nvme-foreign-disk.txt`.
+
+### BUG-043 — ARP lookups before the configuration is saved cannot see their answers 🟡 OPEN
+- **Status:**   OPEN for the self-test image and for `late_bring_up` · **Severity:** LOW/MEDIUM (2 s of every boot under KVM, 9 s under TCG; probably the cause of BUG-039)
+- **Found:**    2026-11-10 · `[boot-time] phase net` on a virtio-net boot
+- **Analysis:** `arp_resolve`, `icmp_ping`, `dns_query` read `legacy_rx()`, which starts with `rx_route()`, and
+  `rx_route()` returns at once while `net::get()` is None. The inline bring-up in `main.rs` and
+  `late_bring_up` (USB NIC) call them BEFORE `net::save`: nobody polls the NIC, both ARP lookups run into
+  their time-out and every virtio-net boot logs `(no ARP reply from the gateway)`, also on an open network
+  (so the ping, DNS, HTTP and HTTPS probes behind it never ran on that path). `late_bring_up`'s `poll_dhcp`
+  reads `legacy_rx()` too, so it cannot see the OFFER either, which would explain BUG-039 (not verified on a USB NIC).
+- **Release image:** not affected any more: `[net-up]` polls the NIC itself until it saves the configuration.
+- **Next:** in the inline path and `late_bring_up`, save a preliminary configuration (address, no gateway MAC)
+  before the first lookup, or poll `nic::poll_recv` directly as `[net-up]` does. Changes the `[net]` lines of
+  the self-test image, so it was left out of `feature/fast-boot`.
+
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with
   ≥ 2 GiB after BUG-016**; on 813e627 most were killed at their first instruction and the boot

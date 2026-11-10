@@ -1,0 +1,14 @@
+foreign NVMe disk, sha256 before: f7808fe4e35edad582d3235ce131f17117cec8b7cdb2e442110d1bbeac54cc4f
+after-nvme-foreign: kernel-entry 2.10s desktop 3.78s
+after a boot of the AFTER image:  f7808fe4e35edad582d3235ce131f17117cec8b7cdb2e442110d1bbeac54cc4f
+before-nvme-foreign: kernel-entry 2.30s desktop 20.65s
+after a boot of the BEFORE image: 7464bd5a67ab8e98a18aa61c182eca7f5233d4d6587a29b2a7444601f1212aef
+after-nvme-blank: kernel-entry 2.10s desktop 3.83s
+out/final/after-nvme-foreign.tlog:    2.903 [euro] NVMe disk is not EuroFS and not blank — booting a RAM root; it stays intact + mountable at /nvme
+out/final/after-nvme-foreign.tlog:    3.457 [g2] NVMe disk carries unknown content: left untouched (no /nvme)
+out/final/before-nvme-foreign.tlog:    3.279 [euro] NVMe disk is not EuroFS and not blank — booting a RAM root; it stays intact + mountable at /nvme
+out/final/before-nvme-foreign.tlog:   12.761 [g2] EuroFS formatted on NVMe (installation)
+out/final/before-nvme-foreign.tlog:   12.765 [g2] VFS routes /nvme → 33 bytes from the NVMe disk ✓
+out/final/after-nvme-blank.tlog:    2.962 [euro] NVMe disk is not EuroFS and not blank — booting a RAM root; it stays intact + mountable at /nvme
+out/final/after-nvme-blank.tlog:    3.498 [g2] EuroFS formatted on NVMe (installation)
+out/final/after-nvme-blank.tlog:    3.508 [g2] VFS routes /nvme → 33 bytes from the NVMe disk ✓
