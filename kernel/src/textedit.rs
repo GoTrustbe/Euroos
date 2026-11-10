@@ -258,8 +258,10 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     } else if e.buf.row >= e.scroll + maxrows {
         e.scroll = e.buf.row + 1 - maxrows;
     }
-    // Gutter background.
-    fb.fill_rect(bx, ty0 - 4, PAD + gutter - 6, bh, Color::rgb(0xF4, 0xF6, 0xFA));
+    // Gutter background, from under the toolbar to the bottom of the window. (It
+    // was `bh` high from there: 44 px past the window, painted over whatever lay
+    // below it; seen on the first gui-smoke screenshots.)
+    fb.fill_rect(bx, ty0 - 4, PAD + gutter - 6, bh.saturating_sub(TOOLBAR_H + 4), Color::rgb(0xF4, 0xF6, 0xFA));
     let start = e.scroll;
     for vis in 0..maxrows {
         let i = start + vis;
