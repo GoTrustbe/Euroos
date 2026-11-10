@@ -1,0 +1,21 @@
+== leg usb
+[robust-fs] file larger than the memory budget: editor refused+kept document=true ("/tmp/robust-big.bin: file too large to open (64 KiB; at most 4096 B fits in memory here)"), helper=true, paint=true, image viewer=true, shell cat=true → OK ✓
+[robust-paging] process page tables at 0..n free frames: 19 refusals (OutOfFrames, 0 frames kept), 5 builds (freed again) → OK ✓
+[robust-usb] xHCI init with 0 free frames: refused=true (controller present: stopped before the reset), device frame refused=true, running controller untouched=true (2 HID) → OK ✓
+[robust-hda] HDA init with 0 free frames: refused=true (no running controller), driver state untouched=true → OK ✓
+[robust] former panic sites answer with an error: net-cmd=true, app-cmd=true, nvme-identify=true, page-tables=true, usb=true, hda=true, paint-bucket=true, form-field=true → OK ✓
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+== leg hda
+[robust-fs] file larger than the memory budget: editor refused+kept document=true ("/tmp/robust-big.bin: file too large to open (64 KiB; at most 4096 B fits in memory here)"), helper=true, paint=true, image viewer=true, shell cat=true → OK ✓
+[robust-paging] process page tables at 0..n free frames: 19 refusals (OutOfFrames, 0 frames kept), 5 builds (freed again) → OK ✓
+[robust-usb] xHCI init with 0 free frames: refused=true (controller present: stopped before the reset), device frame refused=true, running controller untouched=true (2 HID) → OK ✓
+[robust-hda] HDA init with 0 free frames: refused=true (controller running: stopped before the reset), driver state untouched=true → OK ✓
+[robust] former panic sites answer with an error: net-cmd=true, app-cmd=true, nvme-identify=true, page-tables=true, usb=true, hda=true, paint-bucket=true, form-field=true → OK ✓
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+== leg nvme
+[robust-fs] file larger than the memory budget: editor refused+kept document=true ("/tmp/robust-big.bin: file too large to open (64 KiB; at most 4096 B fits in memory here)"), helper=true, paint=true, image viewer=true, shell cat=true → OK ✓
+[robust-paging] process page tables at 0..n free frames: 19 refusals (OutOfFrames, 0 frames kept), 5 builds (freed again) → OK ✓
+[robust-usb] xHCI init with 0 free frames: refused=true (controller present: stopped before the reset), device frame refused=true, running controller untouched=true (2 HID) → OK ✓
+[robust-hda] HDA init with 0 free frames: refused=true (no running controller), driver state untouched=true → OK ✓
+[robust] former panic sites answer with an error: net-cmd=true, app-cmd=true, nvme-identify=true, page-tables=true, usb=true, hda=true, paint-bucket=true, form-field=true → OK ✓
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0

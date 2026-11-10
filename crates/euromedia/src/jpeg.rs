@@ -4,7 +4,6 @@
 //! honestly rejected as Unsupported. From scratch, no_std + alloc.
 
 use crate::Image;
-use alloc::vec;
 use alloc::vec::Vec;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -61,11 +60,15 @@ struct BitReader<'a> {
     bit_cnt: u32,
     /// Set when a marker (RSTn or EOI) interrupted the stream.
     marker: Option<u8>,
+    /// Zero bytes fed since the data ran out (end of input, or a marker that
+    /// was not answered by a restart). A few are normal: the reader looks four
+    /// bytes ahead. Many mean the scan is decoding nothing but padding.
+    pad: usize,
 }
 
 impl<'a> BitReader<'a> {
     fn new(data: &'a [u8]) -> Self {
-        BitReader { data, pos: 0, bit_buf: 0, bit_cnt: 0, marker: None }
+        BitReader { data, pos: 0, bit_buf: 0, bit_cnt: 0, marker: None, pad: 0 }
     }
 
     fn fill(&mut self) {
@@ -74,10 +77,12 @@ impl<'a> BitReader<'a> {
                 // After a marker: feed zero bits (the scan is over / resyncs).
                 self.bit_buf |= 0 << (24 - self.bit_cnt);
                 self.bit_cnt += 8;
+                self.pad += 1;
                 continue;
             }
             if self.pos >= self.data.len() {
                 self.bit_cnt += 8; // pad with zeros at EOF
+                self.pad += 1;
                 continue;
             }
             let b = self.data[self.pos];
@@ -124,6 +129,7 @@ impl<'a> BitReader<'a> {
     fn restart(&mut self) {
         self.bit_buf = 0;
         self.bit_cnt = 0;
+        self.pad = 0;
         if self.marker.take().is_some() {
             return; // prefetch already consumed the marker
         }
@@ -230,6 +236,20 @@ struct Component {
     plane_h: usize,
 }
 
+/// The body of the marker segment whose two length bytes sit at `pos`, and the
+/// segment length (which counts those two bytes). Every index into a segment
+/// goes through this: the lengths come from the file.
+fn segment(data: &[u8], pos: usize) -> Result<(&[u8], usize), JpegError> {
+    let hi = *data.get(pos).ok_or(JpegError::Truncated)? as usize;
+    let lo = *data.get(pos + 1).ok_or(JpegError::Truncated)? as usize;
+    let len = (hi << 8) | lo;
+    if len < 2 {
+        return Err(JpegError::BadData);
+    }
+    let body = data.get(pos + 2..pos + len).ok_or(JpegError::Truncated)?;
+    Ok((body, len))
+}
+
 /// Decode a baseline JPEG into RGBA.
 pub fn decode_jpeg(data: &[u8]) -> Result<Image, JpegError> {
     if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
@@ -257,8 +277,13 @@ pub fn decode_jpeg(data: &[u8]) -> Result<Image, JpegError> {
             0x01 | 0xD0..=0xD7 => continue, // TEM / RSTn outside a scan
             0xC0 => {
                 // SOF0: baseline.
-                let len = ((data[pos] as usize) << 8) | data[pos + 1] as usize;
-                let seg = &data[pos + 2..pos + len];
+                let (seg, len) = segment(data, pos)?;
+                if seg.len() < 6 {
+                    return Err(JpegError::Truncated);
+                }
+                if !comps.is_empty() {
+                    return Err(JpegError::BadData); // a second frame header
+                }
                 if seg[0] != 8 {
                     return Err(JpegError::Unsupported); // 12-bit
                 }
@@ -268,8 +293,19 @@ pub fn decode_jpeg(data: &[u8]) -> Result<Image, JpegError> {
                 if nc != 1 && nc != 3 {
                     return Err(JpegError::Unsupported);
                 }
+                if seg.len() < 6 + nc * 3 {
+                    return Err(JpegError::Truncated);
+                }
                 for c in 0..nc {
                     let b = &seg[6 + c * 3..9 + c * 3];
+                    // Sampling factors 1 or 2 (0 divides by zero further on, 3
+                    // and 4 are not supported), one of the four quantisation tables.
+                    if b[1] >> 4 == 0 || b[1] & 0xF == 0 || b[1] >> 4 > 2 || b[1] & 0xF > 2 {
+                        return Err(JpegError::Unsupported);
+                    }
+                    if b[2] >= 4 {
+                        return Err(JpegError::BadData);
+                    }
                     comps.push(Component {
                         id: b[0],
                         h: (b[1] >> 4) as usize,
@@ -290,16 +326,18 @@ pub fn decode_jpeg(data: &[u8]) -> Result<Image, JpegError> {
             }
             0xC4 => {
                 // DHT — possibly several tables in one segment.
-                let len = ((data[pos] as usize) << 8) | data[pos + 1] as usize;
-                let mut p = pos + 2;
-                let end = pos + len;
-                while p < end {
-                    let tc = data[p] >> 4;
-                    let th = (data[p] & 0xF) as usize;
+                let (seg, len) = segment(data, pos)?;
+                let mut p = 0;
+                while p < seg.len() {
+                    let tc = seg[p] >> 4;
+                    let th = (seg[p] & 0xF) as usize;
+                    if tc > 1 || th >= 4 {
+                        return Err(JpegError::BadData);
+                    }
                     let mut bits = [0u8; 16];
-                    bits.copy_from_slice(&data[p + 1..p + 17]);
+                    bits.copy_from_slice(seg.get(p + 1..p + 17).ok_or(JpegError::Truncated)?);
                     let total: usize = bits.iter().map(|&b| b as usize).sum();
-                    let values = data[p + 17..p + 17 + total].to_vec();
+                    let values = seg.get(p + 17..p + 17 + total).ok_or(JpegError::Truncated)?.to_vec();
                     let table = Huffman::build(&bits, values);
                     if tc == 0 {
                         dc_tables[th] = Some(table);
@@ -312,13 +350,20 @@ pub fn decode_jpeg(data: &[u8]) -> Result<Image, JpegError> {
             }
             0xDB => {
                 // DQT — one or more tables.
-                let len = ((data[pos] as usize) << 8) | data[pos + 1] as usize;
-                let mut p = pos + 2;
-                let end = pos + len;
+                let (seg, len) = segment(data, pos)?;
+                let data = seg; // the table loop below indexes the segment only
+                let mut p = 0;
+                let end = seg.len();
                 while p < end {
                     let pq = data[p] >> 4;
                     let tq = (data[p] & 0xF) as usize;
                     p += 1;
+                    if tq >= 4 {
+                        return Err(JpegError::BadData);
+                    }
+                    if p + if pq == 0 { 64 } else { 128 } > end {
+                        return Err(JpegError::Truncated);
+                    }
                     // Indexed on purpose: `p` advances by one or two bytes per
                     // entry depending on the precision, so this walks the table
                     // slot by slot rather than iterating a slice.
@@ -339,18 +384,26 @@ pub fn decode_jpeg(data: &[u8]) -> Result<Image, JpegError> {
                 pos += len;
             }
             0xDD => {
-                let len = ((data[pos] as usize) << 8) | data[pos + 1] as usize;
-                restart_interval = ((data[pos + 2] as usize) << 8) | data[pos + 3] as usize;
+                let (seg, len) = segment(data, pos)?;
+                if seg.len() < 2 {
+                    return Err(JpegError::Truncated);
+                }
+                restart_interval = ((seg[0] as usize) << 8) | seg[1] as usize;
                 pos += len;
             }
             0xDA => {
                 // SOS: per-scan table selectors, then the entropy-coded data.
-                let len = ((data[pos] as usize) << 8) | data[pos + 1] as usize;
-                let seg = &data[pos + 2..pos + len];
-                let ns = seg[0] as usize;
+                let (seg, len) = segment(data, pos)?;
+                let ns = *seg.first().ok_or(JpegError::Truncated)? as usize;
+                if seg.len() < 1 + ns * 2 {
+                    return Err(JpegError::Truncated);
+                }
                 for i in 0..ns {
                     let cid = seg[1 + i * 2];
                     let tt = seg[2 + i * 2];
+                    if tt >> 4 >= 4 || tt & 0xF >= 4 {
+                        return Err(JpegError::BadData);
+                    }
                     if let Some(c) = comps.iter_mut().find(|c| c.id == cid) {
                         c.td = (tt >> 4) as usize;
                         c.ta = (tt & 0xF) as usize;
@@ -372,10 +425,7 @@ pub fn decode_jpeg(data: &[u8]) -> Result<Image, JpegError> {
             0xD9 => return Err(JpegError::Truncated), // EOI before SOS
             _ => {
                 // APPn/COM/other: skip by length.
-                if pos + 2 > data.len() {
-                    return Err(JpegError::Truncated);
-                }
-                let len = ((data[pos] as usize) << 8) | data[pos + 1] as usize;
+                let (_, len) = segment(data, pos)?;
                 pos += len;
             }
         }
@@ -396,6 +446,9 @@ fn decode_scan(
     if width == 0 || height == 0 || comps.is_empty() {
         return Err(JpegError::BadData);
     }
+    if crate::pixel_count(width as u32, height as u32).is_none() {
+        return Err(JpegError::Unsupported);
+    }
     let hmax = comps.iter().map(|c| c.h).max().unwrap_or(1);
     let vmax = comps.iter().map(|c| c.v).max().unwrap_or(1);
     if hmax == 0 || vmax == 0 || hmax > 2 || vmax > 2 {
@@ -406,7 +459,10 @@ fn decode_scan(
     for c in comps.iter_mut() {
         c.plane_w = mcus_x * c.h * 8;
         c.plane_h = mcus_y * c.v * 8;
-        c.plane = vec![0u8; c.plane_w * c.plane_h];
+        let mut plane = Vec::new();
+        plane.try_reserve_exact(c.plane_w * c.plane_h).map_err(|_| JpegError::Unsupported)?;
+        plane.resize(c.plane_w * c.plane_h, 0u8);
+        c.plane = plane;
         c.dc_pred = 0;
     }
 
@@ -417,6 +473,12 @@ fn decode_scan(
 
     for my in 0..mcus_y {
         for mx in 0..mcus_x {
+            // The data ended (or stopped at a marker) well before this MCU: the
+            // rest would be decoded from padding, for as many MCUs as the header
+            // claims. A cut-off file is reported, not painted grey for seconds.
+            if br.pad > 16 {
+                return Err(JpegError::Truncated);
+            }
             if restart_interval > 0 && mcu_count > 0 && mcu_count.is_multiple_of(restart_interval) {
                 // Byte-align to the RSTn marker + reset the DC predictors.
                 br.restart();
@@ -435,9 +497,12 @@ fn decode_scan(
                         // DC coefficient.
                         block = [0i32; 64];
                         let s = br.decode_huff(dc)? as u32;
+                        if s > 16 {
+                            return Err(JpegError::BadData); // a size category, not a byte
+                        }
                         let diff = extend(br.get_bits(s), s);
-                        comps[ci].dc_pred += diff;
-                        block[0] = comps[ci].dc_pred * qtables[tq][0] as i32;
+                        comps[ci].dc_pred = comps[ci].dc_pred.wrapping_add(diff);
+                        block[0] = comps[ci].dc_pred.wrapping_mul(qtables[tq][0] as i32);
                         // AC coefficients.
                         let mut k = 1usize;
                         while k < 64 {
@@ -456,7 +521,7 @@ fn decode_scan(
                                 return Err(JpegError::BadData);
                             }
                             let coeff = extend(br.get_bits(s), s);
-                            block[ZIGZAG[k]] = coeff * qtables[tq][k] as i32;
+                            block[ZIGZAG[k]] = coeff.wrapping_mul(qtables[tq][k] as i32);
                             k += 1;
                         }
                         idct8x8(&block, &mut pixels);
@@ -477,7 +542,7 @@ fn decode_scan(
     }
 
     // Colour conversion + upsampling (nearest) into the RGBA image.
-    let mut img = Image::new(width as u32, height as u32, [0, 0, 0, 255]);
+    let mut img = Image::try_new(width as u32, height as u32, [0, 0, 0, 255]).ok_or(JpegError::Unsupported)?;
     if comps.len() == 1 {
         let c = &comps[0];
         for y in 0..height {

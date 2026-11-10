@@ -1,0 +1,27 @@
+# R630, KVM -cpu host, public image with xhci.rs, nvme.rs and hda.rs as at 11ddc27 (before bf87957; unchanged from the base in this respect).
+
+== before-highbar-xhci
+423-[smp] J1: demo workers parked on 3/3 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+424-[acpi] power button armed → SCI GSI9 vec 0x49 (press = clean S5)
+425-[ioapic] @ 0xfec00000: kbd IRQ1->GSI1 vec 0x21, mouse IRQ12->GSI12 vec 0x2c -> BSP #0 (8259 masked)
+426-[euro] PS/2 mouse initialized (IRQ12)
+427:[idt] PAGE FAULT addr=0x380000000000 code=PageFaultErrorCode(0x0) @ 0x7213638b
+
+== before-highbar-nvme
+131-[mm] process frame pool: 1152 MiB @ 0x1780000 (fork/exec) + 258 MiB @ 0x100000000 + 258 MiB @ 0x110200000
+132-[mm] big-block heap pool: 64 MiB @ 0x49780000
+133-[blk] no virtio-blk device found
+134-[iommu] domain virtio-blk: 0 PCI function(s), 0 DMA page(s) registered
+135:[idt] PAGE FAULT addr=0x380000000000 code=PageFaultErrorCode(0x0) @ 0x72118b09
+
+== before-highbar-all
+131-[mm] process frame pool: 1152 MiB @ 0x1780000 (fork/exec) + 258 MiB @ 0x100000000 + 258 MiB @ 0x110200000
+132-[mm] big-block heap pool: 64 MiB @ 0x49780000
+133-[blk] no virtio-blk device found
+134-[iommu] domain virtio-blk: 0 PCI function(s), 0 DMA page(s) registered
+135:[idt] PAGE FAULT addr=0x380000000000 code=PageFaultErrorCode(0x0) @ 0x72118b09
+
+== before-highbar-hda
+(no fault)
+[hda] controller @ 0x81010000 — GCAP=0x4401 (in=4 out=4 bidir=0), STATESTS=0x1
+[desktop] interactive loop started — input + shell live

@@ -927,6 +927,7 @@ dependencies = [
  "euronfs",
  "euronotes",
  "euronts",
+ "euronvme",
  "euroobserve",
  "europack",
  "europkg",

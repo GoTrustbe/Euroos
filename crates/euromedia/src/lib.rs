@@ -13,7 +13,9 @@
 
 extern crate alloc;
 
+pub mod fill;
 pub mod jpeg;
+pub use fill::flood_fill;
 pub use jpeg::{decode_jpeg, JpegError};
 
 use alloc::vec;
@@ -30,10 +32,41 @@ pub struct Image {
     pub pixels: Vec<Rgba>,
 }
 
+/// The largest image a decoder produces: 16 megapixels (64 MiB of RGBA). A
+/// header is free to claim 65535 x 65535; allocating for that claim aborts a
+/// kernel whose heap is 128-512 MiB, so every decoder checks the claim first.
+pub const MAX_PIXELS: usize = 16 * 1024 * 1024;
+
+/// `width x height` in pixels when a decoder may produce such an image.
+pub fn pixel_count(width: u32, height: u32) -> Option<usize> {
+    let n = (width as usize).checked_mul(height as usize)?;
+    (n <= MAX_PIXELS).then_some(n)
+}
+
 impl Image {
     /// Create an image filled with a single color.
     pub fn new(width: u32, height: u32, fill: Rgba) -> Self {
-        Image { width, height, pixels: vec![fill; (width * height) as usize] }
+        Image { width, height, pixels: vec![fill; width as usize * height as usize] }
+    }
+    /// Like [`Image::new`] for sizes that come from a file: `None` when the size
+    /// is over [`MAX_PIXELS`] or the memory is not there (instead of aborting).
+    pub fn try_new(width: u32, height: u32, fill: Rgba) -> Option<Self> {
+        let n = pixel_count(width, height)?;
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(n).ok()?;
+        pixels.resize(n, fill);
+        Some(Image { width, height, pixels })
+    }
+    /// A copy, or `None` when the memory for it is not there (undo history).
+    pub fn try_clone(&self) -> Option<Self> {
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(self.pixels.len()).ok()?;
+        pixels.extend_from_slice(&self.pixels);
+        Some(Image { width: self.width, height: self.height, pixels })
+    }
+    /// Bytes of pixel data.
+    pub fn byte_len(&self) -> usize {
+        self.pixels.len() * 4
     }
     /// Read a pixel (None out of bounds).
     pub fn get(&self, x: u32, y: u32) -> Option<Rgba> {
@@ -170,11 +203,17 @@ pub fn decode(data: &[u8]) -> Result<Image, QoiError> {
     let width = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
     let height = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
     let channels = data[12];
-    let n_pixels = (width as usize) * (height as usize);
+    let n_pixels = pixel_count(width, height).ok_or(QoiError::DimensionMismatch)?;
+    // One byte encodes at most a run of 62 pixels: a header that claims more
+    // pixels than the data can hold is truncated, and gets no buffer.
+    if n_pixels > (data.len() - 14).saturating_mul(62) {
+        return Err(QoiError::Truncated);
+    }
 
     let mut index = [[0u8; 4]; 64];
     let mut px: Rgba = [0, 0, 0, 255];
-    let mut pixels: Vec<Rgba> = Vec::with_capacity(n_pixels);
+    let mut pixels: Vec<Rgba> = Vec::new();
+    pixels.try_reserve_exact(n_pixels).map_err(|_| QoiError::DimensionMismatch)?;
     let mut p = 14;
 
     while pixels.len() < n_pixels {
@@ -307,8 +346,13 @@ pub fn decode_ppm(data: &[u8]) -> Result<Image, PpmError> {
     if width == 0 || height == 0 || maxval == 0 || maxval > 255 {
         return Err(PpmError::Unsupported);
     }
-    let n = (width * height) as usize;
-    let mut pixels = Vec::with_capacity(n);
+    let n = pixel_count(width, height).ok_or(PpmError::Unsupported)?;
+    // Every pixel takes at least one byte of input in all four variants.
+    if n > data.len() {
+        return Err(PpmError::Truncated);
+    }
+    let mut pixels = Vec::new();
+    pixels.try_reserve_exact(n).map_err(|_| PpmError::Unsupported)?;
     if ascii {
         // ASCII samples: 1 (gray) or 3 (rgb) numbers per pixel.
         for _ in 0..n {
@@ -498,7 +542,12 @@ pub fn decode_bmp(data: &[u8]) -> Result<Image, BmpError> {
     let width = width as u32;
     let bytes_pp = (bpp / 8) as usize;
     let row_size = (width as usize * bytes_pp).div_ceil(4) * 4; // padded to 4 bytes
-    let mut img = Image::new(width, height, [0, 0, 0, 255]);
+    // The rows must be in the file before a buffer for them is allocated.
+    let rows_end = (height as usize).checked_mul(row_size).and_then(|b| b.checked_add(pix_off));
+    if height > 0 && rows_end.is_none_or(|end| end - (row_size - width as usize * bytes_pp) > data.len()) {
+        return Err(BmpError::Truncated);
+    }
+    let mut img = Image::try_new(width, height, [0, 0, 0, 255]).ok_or(BmpError::Unsupported)?;
     for row in 0..height {
         let src_row = if top_down { row } else { height - 1 - row };
         let base = pix_off + src_row as usize * row_size;
@@ -583,6 +632,9 @@ pub fn decode_png(data: &[u8]) -> Result<Image, PngError> {
         6 => 4,
         _ => return Err(PngError::Unsupported),
     };
+    if pixel_count(width, height).is_none() {
+        return Err(PngError::Unsupported);
+    }
     let raw = euroflate::zlib_decompress(&idat).map_err(|_| PngError::Inflate)?;
     let bpp = channels; // bytes per pixel at depth 8
     let stride = width as usize * bpp;
@@ -591,7 +643,7 @@ pub fn decode_png(data: &[u8]) -> Result<Image, PngError> {
     }
     // Reverse the PNG scanline filters into a flat RGB(A) buffer.
     let mut prev: Vec<u8> = vec![0; stride];
-    let mut img = Image::new(width, height, [0, 0, 0, 255]);
+    let mut img = Image::try_new(width, height, [0, 0, 0, 255]).ok_or(PngError::Unsupported)?;
     let mut off = 0usize;
     for y in 0..height as usize {
         let filter = raw[off];
@@ -670,3 +722,6 @@ include!("imgtests.rs");
 
 #[cfg(test)]
 include!("jpegtests.rs");
+
+#[cfg(test)]
+mod robusttests;

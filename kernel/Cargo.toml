@@ -45,6 +45,7 @@ euroacpi = { path = "../crates/euroacpi" }
 euroipc = { path = "../crates/euroipc" }
 euronet = { path = "../crates/euronet" }
 euromm = { path = "../crates/euromm" }
+euronvme = { path = "../crates/euronvme" }
 eurotls = { path = "../crates/eurotls" }
 euroupdate = { path = "../crates/euroupdate" }
 eurosandbox = { path = "../crates/eurosandbox" }

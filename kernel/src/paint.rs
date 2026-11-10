@@ -61,25 +61,22 @@ static PAINT: Mutex<Option<Paint>> = Mutex::new(None);
 static PENDING_SAVE: Mutex<Option<(String, Vec<u8>)>> = Mutex::new(None);
 
 fn ensure(p: &mut Option<Paint>) -> &mut Paint {
-    if p.is_none() {
-        *p = Some(Paint {
-            canvas: euromedia::Image::new(CANVAS_W, CANVAS_H, [255, 255, 255, 255]),
-            tool: Tool::Brush,
-            hue: 0,
-            sat: 200,
-            val: 220,
-            brush: 4,
-            recent: Vec::new(),
-            undo: Vec::new(),
-            redo: Vec::new(),
-            start: None,
-            cur: None,
-            last: None,
-            committed_start: false,
-            status: String::from("EuroPaint \u{00B7} pick a tool and draw"),
-        });
-    }
-    p.as_mut().unwrap()
+    p.get_or_insert_with(|| Paint {
+        canvas: euromedia::Image::new(CANVAS_W, CANVAS_H, [255, 255, 255, 255]),
+        tool: Tool::Brush,
+        hue: 0,
+        sat: 200,
+        val: 220,
+        brush: 4,
+        recent: Vec::new(),
+        undo: Vec::new(),
+        redo: Vec::new(),
+        start: None,
+        cur: None,
+        last: None,
+        committed_start: false,
+        status: String::from("EuroPaint \u{00B7} pick a tool and draw"),
+    })
 }
 
 fn hsv_to_rgb(h: u16, s: u8, v: u8) -> [u8; 4] {
@@ -104,12 +101,27 @@ fn fg(p: &Paint) -> [u8; 4] {
     hsv_to_rgb(p.hue, p.sat, p.val)
 }
 
+/// Memory the undo history may hold: 24 steps of the default canvas are 29 MiB;
+/// an opened photo is larger, and 24 copies of it are not a reasonable price.
+const UNDO_BYTES: usize = 48 * 1024 * 1024;
+
+/// Push the canvas on the undo stack. The history is bounded in steps AND in
+/// bytes (and by a quarter of the free heap), and the copy is made fallibly:
+/// when there is no room the oldest steps go, and if even one copy does not
+/// fit the stroke simply cannot be undone. It never aborts the kernel.
 fn snapshot(p: &mut Paint) {
-    if p.undo.len() >= HISTORY {
+    p.redo.clear();
+    let need = p.canvas.byte_len();
+    let budget = UNDO_BYTES.min(crate::allocator::stats().1 / 4);
+    while !p.undo.is_empty()
+        && (p.undo.len() >= HISTORY || p.undo.iter().map(|i| i.byte_len()).sum::<usize>() + need > budget)
+    {
         p.undo.remove(0);
     }
-    p.undo.push(p.canvas.clone());
-    p.redo.clear();
+    match p.canvas.try_clone().filter(|_| need <= budget) {
+        Some(copy) => p.undo.push(copy),
+        None => p.status = String::from("not enough memory to keep an undo step"),
+    }
 }
 
 fn push_recent(p: &mut Paint, c: [u8; 4]) {
@@ -233,39 +245,32 @@ fn cos_sin(deg: i32) -> (i32, i32) {
     (cos, sin)
 }
 
-fn flood_fill(img: &mut euromedia::Image, sx: i32, sy: i32, col: [u8; 4]) {
-    if sx < 0 || sy < 0 || sx as u32 >= img.width || sy as u32 >= img.height {
-        return;
-    }
-    let target = img.get(sx as u32, sy as u32).unwrap();
-    if target == col {
-        return;
-    }
-    let mut stack: Vec<(u32, u32)> = alloc::vec![(sx as u32, sy as u32)];
-    while let Some((x, y)) = stack.pop() {
-        if img.get(x, y) != Some(target) {
-            continue;
-        }
-        img.set(x, y, col);
-        if x > 0 {
-            stack.push((x - 1, y));
-        }
-        if x + 1 < img.width {
-            stack.push((x + 1, y));
-        }
-        if y > 0 {
-            stack.push((x, y - 1));
-        }
-        if y + 1 < img.height {
-            stack.push((x, y + 1));
-        }
-    }
-}
-
 // ── Public open / save ──────────────────────────────────────────────────────
 
+/// The largest image FILE EuroPaint reads (the decoded image has its own limit).
+const MAX_OPEN_BYTES: u64 = 32 * 1024 * 1024;
+
 pub fn open(fs: &mut dyn eurofs::fs::FileSystem, path: &str) {
-    if let Ok(bytes) = fs.read_file(path) {
+    let free = crate::allocator::stats().1;
+    // The decoded image must fit a few times: canvas, the copy for the screen, undo.
+    open_limited(fs, path, eurofs::read_budget(free as u64, MAX_OPEN_BYTES, 2), free / 8);
+}
+
+/// [`open`] with explicit limits for the file and for the decoded image. Over
+/// either limit the canvas stays as it is and the status line says why.
+fn open_limited(fs: &mut dyn eurofs::fs::FileSystem, path: &str, file_limit: u64, image_limit: usize) -> bool {
+    let bytes = match eurofs::read_file_bounded(&*fs, path, file_limit) {
+        Ok(b) => b,
+        Err(e) => {
+            if let eurofs::BoundedReadError::TooLarge { .. } = e {
+                crate::serial_println!("[paint] {path}: {e}");
+                let mut g = PAINT.lock();
+                ensure(&mut g).status = alloc::format!("{path}: {e}");
+            }
+            return false;
+        }
+    };
+    {
         let img = if bytes.len() >= 8 && bytes[0..8] == [137, 80, 78, 71, 13, 10, 26, 10] {
             euromedia::decode_png(&bytes).ok()
         } else if bytes.len() >= 2 && &bytes[0..2] == b"BM" {
@@ -280,12 +285,92 @@ pub fn open(fs: &mut dyn eurofs::fs::FileSystem, path: &str) {
         if let Some(im) = img {
             let mut g = PAINT.lock();
             let p = ensure(&mut g);
+            if im.byte_len() > image_limit {
+                p.status = alloc::format!("{path}: image too large to edit ({}x{})", im.width, im.height);
+                return false;
+            }
             p.canvas = im;
             p.undo.clear();
             p.redo.clear();
             p.status = alloc::format!("editing {path}");
+            return true;
         }
     }
+    false
+}
+
+/// **[robust] paint** — bucket clicks on, at the edge of and far outside the
+/// canvas (`flood_fill` used to `unwrap()` the clicked pixel), on a fresh
+/// state; the user's painting is put back afterwards.
+#[cfg(feature = "selftest")]
+pub fn robust_selftest() -> bool {
+    const WHITE: [u8; 4] = [255, 255, 255, 255];
+    let saved = PAINT.lock().take();
+    let saved_override = RECENT_OVERRIDE.lock().take();
+    {
+        let mut g = PAINT.lock();
+        ensure(&mut g).tool = Tool::Bucket;
+    }
+    let (wx, wy) = (100usize, 100usize);
+    let (cx0, cy0) = (wx + TOOLBAR_W + 8, wy + TITLEBAR_H + 8);
+    // Outside first: nothing may change, nothing may panic.
+    for (mx, my) in [
+        (0, 0),
+        (usize::MAX, usize::MAX),
+        (cx0 + CANVAS_W as usize, cy0),
+        (cx0, cy0 + CANVAS_H as usize),
+        (cx0 - 1, cy0),
+        (cx0, usize::MAX),
+        (usize::MAX / 2, cy0),
+    ] {
+        let _ = pointer(wx, wy, mx, my, true);
+        release();
+    }
+    let untouched = {
+        let mut g = PAINT.lock();
+        ensure(&mut g).canvas.pixels.iter().all(|p| *p == WHITE)
+    };
+    // The last pixel of the canvas: fills all of it.
+    let hit = pointer(wx, wy, cx0 + CANVAS_W as usize - 1, cy0 + CANVAS_H as usize - 1, true);
+    release();
+    let (filled, undo_steps) = {
+        let mut g = PAINT.lock();
+        let p = ensure(&mut g);
+        (p.canvas.pixels.iter().all(|px| *px != WHITE), p.undo.len())
+    };
+    let mut scratch = euromedia::Image::new(4, 4, WHITE);
+    let direct = euromedia::flood_fill(&mut scratch, -1, 2, [0, 0, 0, 255]) == 0
+        && euromedia::flood_fill(&mut scratch, 2, i64::MAX, [0, 0, 0, 255]) == 0
+        && euromedia::flood_fill(&mut scratch, 4, 4, [0, 0, 0, 255]) == 0;
+    *PAINT.lock() = saved;
+    *RECENT_OVERRIDE.lock() = saved_override;
+    untouched && hit && filled && undo_steps == 1 && direct
+}
+
+/// Part of **[robust-fs]**: a file over the limit, and a decoded image over the
+/// image limit, leave the canvas alone and set the status line.
+#[cfg(feature = "selftest")]
+pub fn robust_open_selftest(fs: &mut dyn eurofs::fs::FileSystem, big: &str) -> bool {
+    let saved = PAINT.lock().take();
+    let refused_file = !open_limited(fs, big, 4096, usize::MAX);
+    let status_file = {
+        let mut g = PAINT.lock();
+        ensure(&mut g).status.clone()
+    };
+    // A real 32x32 PNG, but only 1 KiB of decoded image allowed.
+    let png = euromedia::encode_png(&euromedia::Image::new(32, 32, [1, 2, 3, 255]));
+    let path = "/tmp/robust-32.png";
+    let wrote = fs.write_file(path, &png).is_ok();
+    let refused_image = !open_limited(fs, path, 1 << 20, 1024);
+    let (status_image, canvas_kept) = {
+        let mut g = PAINT.lock();
+        let p = ensure(&mut g);
+        (p.status.clone(), p.canvas.width == CANVAS_W && p.canvas.height == CANVAS_H)
+    };
+    let accepted = open_limited(fs, path, 1 << 20, 1 << 20);
+    let _ = fs.remove_file(path);
+    *PAINT.lock() = saved;
+    refused_file && status_file.contains("too large") && wrote && refused_image && status_image.contains("too large to edit") && canvas_kept && accepted
 }
 
 pub fn flush_save(fs: &mut dyn eurofs::fs::FileSystem) {
@@ -443,7 +528,9 @@ pub fn pointer(win_x: usize, win_y: usize, mx: usize, my: usize, down: bool) -> 
         }
         Tool::Bucket => {
             snapshot(p);
-            flood_fill(&mut p.canvas, px, py, colour);
+            // euromedia::flood_fill takes any coordinate (a click outside the
+            // canvas fills nothing) and cannot run the heap dry.
+            euromedia::flood_fill(&mut p.canvas, px as i64, py as i64, colour);
             push_recent(p, colour);
         }
         Tool::Picker => {

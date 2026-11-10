@@ -16,6 +16,60 @@ pub struct ShellCtx<'a> {
     pub mem: &'a mut FrameAllocator,
 }
 
+/// Read a file a command is going to process in memory. `copies` = how many
+/// more buffers of about the file's size the command builds from it (0 for a
+/// digest, 1 for a filter that produces output of the same size, 3 for `cat`,
+/// which turns the text into lines). An eighth of the free heap is left alone.
+/// Too large is an error message for the user, not an allocation that aborts
+/// the kernel (BUG-025 made the read itself fallible; the copies were not).
+fn read_bounded(fs: &dyn FileSystem, path: &str, copies: u64) -> Result<Vec<u8>, eurofs::BoundedReadError> {
+    let free = crate::allocator::stats().1 as u64;
+    eurofs::read_file_bounded(fs, path, eurofs::read_budget(free - free / 8, u64::MAX, copies))
+}
+
+/// Part of **[robust-fs]**: the shell's bounded read. A file that fits is
+/// read, a missing file and a directory keep their filesystem error, and a
+/// budget one byte short of what `cat` needs for the 64 KiB file refuses it.
+#[cfg(feature = "selftest")]
+pub fn robust_read_selftest(fs: &mut dyn FileSystem, big: &str) -> bool {
+    let fits = read_bounded(&*fs, big, 3).map(|d| d.len()) == Ok(64 * 1024);
+    let missing = matches!(read_bounded(&*fs, "/tmp/robust-nope", 0), Err(eurofs::BoundedReadError::Fs(eurofs::FsError::NotFound)));
+    let dir = matches!(read_bounded(&*fs, "/tmp", 0), Err(eurofs::BoundedReadError::Fs(eurofs::FsError::NotAFile)));
+    let refused = matches!(
+        eurofs::read_file_bounded(&*fs, big, eurofs::read_budget(64 * 1024 * 4 - 1, u64::MAX, 3)),
+        Err(eurofs::BoundedReadError::TooLarge { .. })
+    );
+    fits && missing && dir && refused
+}
+
+/// **[robust]** — the panic sites of the stability pass, each provoked on the
+/// live kernel: page tables without frames, USB and audio bring-up without
+/// frames, broken NVMe identify data, a paint-bucket click outside the canvas,
+/// typing into a form field without a slot, and the `net` and `app` commands.
+#[cfg(feature = "selftest")]
+fn robust_selftest() {
+    let net = net_selftest();
+    let net_ok = net.len() >= 4 && !net.iter().any(|l| l.contains("FAILED"));
+    let app_ok = ["app", "apps x y", "app nosuch", "app nosuch net", "app nosuch net only", "app nosuch frobnicate"]
+        .iter()
+        .all(|c| !app_cmd(c).is_empty());
+    crate::euroguard::set_app_net("nosuch", crate::euroguard::AppNet::Default);
+    use euronvme::identify::{parse_identify_namespace, IdentifyError};
+    let nvme_ok = parse_identify_namespace(&[0u8; 4096]) == Err(IdentifyError::NoCapacity)
+        && matches!(parse_identify_namespace(&[0xFFu8; 4096]), Err(IdentifyError::BadSectorSize(_)))
+        && matches!(parse_identify_namespace(&[0u8; 64]), Err(IdentifyError::Short(64)));
+    let paging_ok = crate::paging::robust_selftest();
+    let usb_ok = crate::xhci::robust_selftest();
+    let hda_ok = crate::hda::robust_selftest();
+    let paint_ok = crate::paint::robust_selftest();
+    let web_ok = crate::webview::robust_selftest();
+    let ok = net_ok && app_ok && nvme_ok && paging_ok && usb_ok && hda_ok && paint_ok && web_ok;
+    crate::serial_println!(
+        "[robust] former panic sites answer with an error: net-cmd={net_ok}, app-cmd={app_ok}, nvme-identify={nvme_ok}, page-tables={paging_ok}, usb={usb_ok}, hda={hda_ok}, paint-bucket={paint_ok}, form-field={web_ok} → {}",
+        if ok { "OK ✓" } else { "FAILED ✗" }
+    );
+}
+
 pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
     let line = line.trim();
     if line.is_empty() {
@@ -753,12 +807,12 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
                 Err(e) => vec![format!("ls: {path}: {e:?}")],
             }
         }
-        "cat" => match fs.read_file(arg1) {
+        "cat" => match read_bounded(&*fs, arg1, 3) {
             Ok(data) => match core::str::from_utf8(&data) {
                 Ok(s) => s.lines().map(|l| l.to_string()).collect(),
                 Err(_) => vec![format!("cat: {arg1}: binary ({} bytes)", data.len())],
             },
-            Err(e) => vec![format!("cat: {arg1}: {e:?}")],
+            Err(e) => vec![format!("cat: {arg1}: {e}")],
         },
         "write" => {
             if arg1.is_empty() {
@@ -862,7 +916,7 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             } else {
                 let fa = file_idxs[file_idxs.len() - 2];
                 let fb = file_idxs[file_idxs.len() - 1];
-                match (fs.read_file(toks[fa]), fs.read_file(toks[fb])) {
+                match (read_bounded(&*fs, toks[fa], 2), read_bounded(&*fs, toks[fb], 2)) {
                     (Ok(a), Ok(b)) => {
                         let args: Vec<&str> = toks.iter().enumerate().filter(|(i, _)| *i != fa && *i != fb).map(|(_, t)| *t).collect();
                         let out = if cmd == "comm" {
@@ -880,7 +934,8 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "split" => {
             let toks: Vec<&str> = line.split_whitespace().skip(1).collect();
             let infile = toks.iter().rev().find(|t| !t.starts_with('-') && fs.exists(t)).copied();
-            match infile.map(|f| fs.read_file(f)) {
+            match infile.map(|f| read_bounded(&*fs, f, 1)) {
+                Some(Err(e @ eurofs::BoundedReadError::TooLarge { .. })) => vec![format!("split: {e}")],
                 Some(Ok(data)) => {
                     let cargs: Vec<&str> = toks.iter().filter(|t| Some(**t) != infile).copied().collect();
                     let pieces = eurocoreutils::compare::split(&cargs, &data);
@@ -1135,7 +1190,10 @@ fn net_selftest() -> Vec<String> {
         target_mac: MacAddr::ZERO,
         target_ip: my_ip,
     };
-    let arp = ArpPacket::parse(&req.build()).unwrap();
+    let Ok(arp) = ArpPacket::parse(&req.build()) else {
+        out.push("ARP  : own request does not parse → FAILED".to_string());
+        return out;
+    };
     let reply = ArpPacket::reply_to(&arp, my_mac);
     out.push(format!(
         "ARP  : {} asks {}  ->  reply: {} is-at {}",
@@ -1185,9 +1243,15 @@ fn net_selftest() -> Vec<String> {
     let frame = eth.build(&ip_pkt);
 
     // Full receive chain: Ethernet -> IPv4 -> UDP.
-    let (eth_h, l3) = EthernetHeader::parse(&frame).unwrap();
-    let (ip_h, l4) = Ipv4Header::parse(l3).unwrap();
-    let udp_dg = UdpDatagram::parse(l4, ip_h.src, ip_h.dst).unwrap();
+    let parsed = EthernetHeader::parse(&frame).ok().and_then(|(eth_h, l3)| {
+        let (ip_h, l4) = Ipv4Header::parse(l3).ok()?;
+        let udp_dg = UdpDatagram::parse(l4, ip_h.src, ip_h.dst).ok()?;
+        Some((eth_h, ip_h, udp_dg))
+    });
+    let Some((eth_h, ip_h, udp_dg)) = parsed else {
+        out.push("IPv4 : own Ethernet/IPv4/UDP frame does not parse → FAILED".to_string());
+        return out;
+    };
     out.push(format!(
         "IPv4 : {} -> {} ttl={} proto={:?}  hdr-checksum OK",
         fmt_ip(ip_h.src),
@@ -1288,6 +1352,8 @@ fn guard_cmd(line: &str) -> Vec<String> {
 /// code path the shell command runs (not a mock).
 pub fn selftest() {
     use crate::euroguard::{self, AppNet};
+    #[cfg(feature = "selftest")]
+    robust_selftest();
 
     // Seed a network clamp on a throwaway app (the "restrict this agent" action).
     euroguard::set_app_net("selftest-agent", AppNet::Blocked);
@@ -1348,7 +1414,9 @@ fn app_cmd(line: &str) -> Vec<String> {
         return out;
     }
 
-    let name = name.unwrap();
+    let Some(name) = name else {
+        return vec!["usage: app <name> [revoke | net <block|allow|only <cidr>>]".to_string()];
+    };
     // Actions.
     match t.next() {
         Some("revoke") => {
@@ -1446,10 +1514,21 @@ fn coreutils(cmd: &str, line: &str, fs: &mut dyn FileSystem) -> Option<Vec<Strin
     let mut file_idx: Option<usize> = None;
     for (i, t) in toks.iter().enumerate().rev() {
         if FILE_INPUT.contains(&cmd) && !t.starts_with('-') {
-            if let Ok(data) = fs.read_file(t) {
-                input = data;
-                file_idx = Some(i);
-                break;
+            // Digests and counters only read; every other filter builds an
+            // output of about the input's size.
+            const READ_ONLY: &[&str] = &[
+                "wc", "sha256sum", "sha512sum", "sha224sum", "sha384sum", "sha1sum", "md5sum", "b2sum", "cksum",
+            ];
+            match read_bounded(&*fs, t, if READ_ONLY.contains(&cmd) { 0 } else { 1 }) {
+                Ok(data) => {
+                    input = data;
+                    file_idx = Some(i);
+                    break;
+                }
+                Err(e @ eurofs::BoundedReadError::TooLarge { .. }) => {
+                    return Some(vec![format!("{cmd}: {t}: {e}")]);
+                }
+                Err(_) => {}
             }
         }
     }

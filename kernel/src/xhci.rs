@@ -264,6 +264,31 @@ unsafe fn run_command(x: &mut Xhci, p_lo: u32, p_hi: u32, control: u32) -> Optio
     Some((cc, slot as u8))
 }
 
+/// One DMA frame for `what`, or `None` with a log line. Out of frames while
+/// bringing up a controller or a device is not a reason to stop the kernel:
+/// the caller skips that device (`return false`) and the rest keeps working.
+fn dma_frame(falloc: &mut FrameAllocator, what: &str) -> Option<u64> {
+    match falloc.allocate() {
+        Ok(f) => Some(f),
+        Err(_) => {
+            crate::serial_println!("[xhci] out of memory (no frame for {what}) — device skipped");
+            None
+        }
+    }
+}
+
+/// Frames the controller itself needs before any device is enumerated: DCBAA,
+/// command ring, event-ring segment, ERST, and the scratchpad array with its
+/// pages when the controller asks for scratchpads (HCSPARAMS2).
+fn controller_frames(max_scratch: u32) -> usize {
+    4 + if max_scratch > 0 { 1 + max_scratch as usize } else { 0 }
+}
+
+/// Register space mapped for the controller. A BAR is aligned to its size and
+/// the window maps whole 2 MiB pages, so this reaches every register of a BAR
+/// up to 2 MiB (capability, operational, runtime and doorbell registers).
+const MMIO_LEN: u64 = 0x1_0000;
+
 /// Detect + initialize the xHCI controller and enumerate all HID devices.
 pub fn init(falloc: &mut FrameAllocator) -> bool {
     let dev = match pci::find(|d| d.class == 0x0C && d.subclass == 0x03 && d.prog_if == 0x30) {
@@ -285,6 +310,15 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         crate::serial_println!("[xhci] BAR0 not assigned");
         return false;
     }
+    // A 64-bit BAR may lie above the 1 TiB identity map: OVMF puts its 64-bit
+    // PCI window near the top of the physical address space, which under KVM
+    // with the host's address bits is tens of TiB up (0x380000000000 on the
+    // R630). The registers are then reached through the high-MMIO window;
+    // dereferencing the BAR itself was a kernel page fault at boot (BUG-042).
+    let Some(mmio) = crate::paging::mmio_virt(mmio, MMIO_LEN) else {
+        crate::serial_println!("[xhci] BAR0 {mmio:#x} cannot be mapped (high-MMIO window full) — USB skipped");
+        return false;
+    };
     dev.enable(0x6); // memory-space + bus-master
 
     unsafe {
@@ -300,6 +334,18 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         let op = mmio + caplen;
         let rt = mmio + rtsoff;
         let db = mmio + dboff;
+        // Checked BEFORE the controller is reset: without the frames for its own
+        // data structures there is no USB, and the controller stays exactly as
+        // the firmware (or an earlier init) left it.
+        let max_scratch = (((hcsp2 >> 21) & 0x1F) << 5) | ((hcsp2 >> 27) & 0x1F);
+        let need = controller_frames(max_scratch);
+        if falloc.free_frames() < need {
+            crate::serial_println!(
+                "[xhci] out of memory: the controller needs {need} frames, {} free — USB skipped",
+                falloc.free_frames()
+            );
+            return false;
+        }
         crate::serial_println!(
             "[xhci] controller @ {:#x} — {} slots, {} ports, ctx={}B, op+{:#x} rt+{:#x} db+{:#x}",
             mmio, max_slots, max_ports, ctx_size, caplen, rtsoff, dboff
@@ -324,16 +370,15 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         }
 
         // 2. Device-Context-Base-Address-Array (one frame, 256 × u64 pointers).
-        let dcbaa = falloc.allocate().expect("xhci dcbaa");
+        let Some(dcbaa) = dma_frame(falloc, "dcbaa") else { return false };
         core::ptr::write_bytes(dcbaa as *mut u8, 0, 4096);
 
         // 3. Scratchpad buffers (if the controller requires them): DCBAA[0] = array.
-        let max_scratch = (((hcsp2 >> 21) & 0x1F) << 5) | ((hcsp2 >> 27) & 0x1F);
         if max_scratch > 0 {
-            let arr = falloc.allocate().expect("xhci scratch-array");
+            let Some(arr) = dma_frame(falloc, "scratch-array") else { return false };
             core::ptr::write_bytes(arr as *mut u8, 0, 4096);
             for i in 0..max_scratch as u64 {
-                let pg = falloc.allocate().expect("xhci scratch-page");
+                let Some(pg) = dma_frame(falloc, "scratch-page") else { return false };
                 core::ptr::write_bytes(pg as *mut u8, 0, 4096);
                 w64(arr + i * 8, pg);
             }
@@ -342,14 +387,14 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         w64(op + OP_DCBAAP, dcbaa);
 
         // 4. Command ring.
-        let cmd_frame = falloc.allocate().expect("xhci cmd-ring");
+        let Some(cmd_frame) = dma_frame(falloc, "cmd-ring") else { return false };
         let cmd_ring = Ring::new(cmd_frame);
         w64(op + OP_CRCR, cmd_frame | 1); // RCS = 1
 
         // 5. Event ring: one segment + an ERST with one entry.
-        let ev_seg = falloc.allocate().expect("xhci ev-seg");
+        let Some(ev_seg) = dma_frame(falloc, "ev-seg") else { return false };
         core::ptr::write_bytes(ev_seg as *mut u8, 0, RING_BYTES);
-        let erst = falloc.allocate().expect("xhci erst");
+        let Some(erst) = dma_frame(falloc, "erst") else { return false };
         core::ptr::write_bytes(erst as *mut u8, 0, 4096);
         w64(erst, ev_seg); // ring-segment base address
         w32(erst + 8, RING_TRBS as u32); // segment size (number of TRBs)
@@ -394,7 +439,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
     // 7. Enumerate each connected root-port device.
     let mut found = 0;
     unsafe {
-        let ports = (*core::ptr::addr_of!(XHCI)).as_ref().unwrap().max_ports;
+        let ports = (*core::ptr::addr_of!(XHCI)).as_ref().map(|x| x.max_ports).unwrap_or(0);
         for port in 1..=ports {
             if enumerate_port(falloc, port) {
                 found += 1;
@@ -430,7 +475,7 @@ unsafe fn portsc_write(x: &Xhci, port: u8, set_bits: u32) {
 /// descriptors, configure the HID interrupt endpoint and arm the first poll.
 unsafe fn enumerate_port(falloc: &mut FrameAllocator, port: u8) -> bool {
     let xp = core::ptr::addr_of_mut!(XHCI);
-    let x = (*xp).as_mut().unwrap();
+    let Some(x) = (*xp).as_mut() else { return false };
     let psc = r32(portsc(x, port));
     if psc & 1 == 0 {
         return false; // nothing connected (CCS=0)
@@ -475,7 +520,7 @@ unsafe fn enumerate_device(
     depth: u8,
 ) -> bool {
     let xp = core::ptr::addr_of_mut!(XHCI);
-    let x = (*xp).as_mut().unwrap();
+    let Some(x) = (*xp).as_mut() else { return false };
     let max_pkt0: u16 = match speed {
         2 => 8,    // Low-speed
         4 | 5 => 512, // Super(Plus)-speed
@@ -496,13 +541,13 @@ unsafe fn enumerate_device(
     }
 
     // Device context (output) + input context. Both one frame, zeroed.
-    let dev_ctx = falloc.allocate().expect("xhci dev-ctx");
+    let Some(dev_ctx) = dma_frame(falloc, "dev-ctx") else { return false };
     core::ptr::write_bytes(dev_ctx as *mut u8, 0, 4096);
     w64(x.dcbaa + slot as u64 * 8, dev_ctx);
 
-    let in_ctx = falloc.allocate().expect("xhci in-ctx");
+    let Some(in_ctx) = dma_frame(falloc, "in-ctx") else { return false };
     let cs = x.ctx_size;
-    let ep0_ring_frame = falloc.allocate().expect("xhci ep0-ring");
+    let Some(ep0_ring_frame) = dma_frame(falloc, "ep0-ring") else { return false };
     let mut ep0_ring = Ring::new(ep0_ring_frame);
 
     // TT fields (slot-context DW2): only a LS/FS device behind a HS hub needs
@@ -535,7 +580,7 @@ unsafe fn enumerate_device(
     }
 
     // GET_DESCRIPTOR(device, 18) via EP0.
-    let buf = falloc.allocate().expect("xhci ctrl-buf");
+    let Some(buf) = dma_frame(falloc, "ctrl-buf") else { return false };
     core::ptr::write_bytes(buf as *mut u8, 0, 4096);
     if !control_in(x, slot, &mut ep0_ring, 0x80, 6, 0x0100, 0, 18, buf) {
         crate::serial_println!("[xhci] slot {slot}: GET_DESCRIPTOR(device) failed");
@@ -677,12 +722,17 @@ unsafe fn enumerate_device(
         if control_in(x, slot, &mut ep0_ring, 0x81, 6, 0x2200, iface_num as u16, 256, buf) {
             let d = core::slice::from_raw_parts(buf as *const u8, 256);
             input_map = eurousb::parse_report_descriptor(d);
-            if let Some(m) = &input_map {
+            // A descriptor without an X or Y axis is not a pointer map: a device
+            // decides what it sends here, so that is a fallback, not a panic.
+            if input_map.as_ref().is_some_and(|m| m.x.is_none() || m.y.is_none()) {
+                input_map = None;
+            }
+            if let Some((m, mx, my)) = input_map.as_ref().and_then(|m| Some((m, m.x?, m.y?))) {
                 crate::serial_println!(
                     "[xhci] slot {slot}: HID report descriptor parsed — X {}@{} bits, Y @{}, {} button(s), max {}",
-                    if m.x.unwrap().relative { "rel" } else { "abs" },
-                    m.x.unwrap().bit_off, m.y.unwrap().bit_off, m.buttons_n,
-                    m.x.unwrap().logical_max
+                    if mx.relative { "rel" } else { "abs" },
+                    mx.bit_off, my.bit_off, m.buttons_n,
+                    mx.logical_max
                 );
             } else {
                 crate::serial_println!("[xhci] slot {slot}: report descriptor not a pointer map — fallback layout");
@@ -694,7 +744,7 @@ unsafe fn enumerate_device(
     // DCI = (endpoint number × 2) + (IN ? 1 : 0).
     let ep_num = (ep_addr & 0x0F) as u32;
     let ep_dci = (ep_num * 2 + 1) as u8;
-    let ep_ring_frame = falloc.allocate().expect("xhci ep-ring");
+    let Some(ep_ring_frame) = dma_frame(falloc, "ep-ring") else { return false };
     let ep_ring = Ring::new(ep_ring_frame);
 
     build_input_context(in_ctx, cs, 1 | (1 << ep_dci), |slot_ctx, ep_ctxs| {
@@ -724,7 +774,7 @@ unsafe fn enumerate_device(
     }
 
     // Register the device + arm the first interrupt-IN transfer.
-    let report_buf = falloc.allocate().expect("xhci report-buf");
+    let Some(report_buf) = dma_frame(falloc, "report-buf") else { return false };
     core::ptr::write_bytes(report_buf as *mut u8, 0, 4096);
     let mut hid = HidDevice {
         slot,
@@ -775,7 +825,7 @@ unsafe fn setup_hub(
     depth: u8,
 ) -> bool {
     let xp = core::ptr::addr_of_mut!(XHCI);
-    let x = (*xp).as_mut().unwrap();
+    let Some(x) = (*xp).as_mut() else { return false };
 
     if !control_no_data(x, slot, ep0_ring, 0x00, 9, cfg_value as u16, 0) {
         crate::serial_println!("[xhci] hub slot {slot}: SET_CONFIGURATION failed");
@@ -1171,6 +1221,17 @@ fn inject_keyboard(hid: &mut HidDevice, report: &[u8]) {
     } else if !shift_now && shift_prev {
         crate::ps2::push_scancode(0xAA);
     }
+    // Left Alt as 0x38/0xB8, before the keys of the same report: the keyboard
+    // layer's Alt latch decides Alt+Tab (app switcher) and Alt+1..4 (workspaces).
+    // Only Shift and Ctrl were forwarded, so neither shortcut did anything on a
+    // USB keyboard (BUG-043). Right Alt is AltGr and stays out of it.
+    let alt_now = mods & 0x04 != 0;
+    let alt_prev = hid.prev_mods & 0x04 != 0;
+    if alt_now && !alt_prev {
+        crate::ps2::push_scancode(0x38);
+    } else if !alt_now && alt_prev {
+        crate::ps2::push_scancode(0xB8);
+    }
     hid.prev_mods = mods;
     // Track Ctrl so editors can see Ctrl+key combos (copy/paste/save/select-all).
     let ctrl_now = mods & 0x11 != 0; // LCtrl (bit0) or RCtrl (bit4)
@@ -1535,7 +1596,9 @@ unsafe fn setup_usbaudio(
             return false;
         }
     };
-    let ep = stream.endpoints.iter().find(|e| !e.is_in() && e.attributes & 3 == 1).unwrap();
+    let Some(ep) = stream.endpoints.iter().find(|e| !e.is_in() && e.attributes & 3 == 1) else {
+        return false; // the interface was picked for having one
+    };
 
     // Recover the alternate-setting number from the raw config blob
     // (Configuration::parse drops bAlternateSetting).
@@ -1563,7 +1626,7 @@ unsafe fn setup_usbaudio(
     // (2^(b-1) frames) — unlike FS interrupt (frames) — so encode directly.
     let ep_num = (ep.address & 0x0F) as u32;
     let ep_dci = (ep_num * 2) as u8; // OUT
-    let ring_frame = falloc.allocate().expect("xhci audio-ring");
+    let Some(ring_frame) = dma_frame(falloc, "audio-ring") else { return false };
     let mut iso_ring = Ring::new(ring_frame);
     let interval = match speed {
         1 | 2 => (ep.interval.max(1) as u32 - 1 + 3).min(15), // FS/LS isoch: log2 + 3
@@ -1588,7 +1651,7 @@ unsafe fn setup_usbaudio(
     }
 
     // UAC1 SET_CUR sampling frequency on the endpoint: 48 kHz little-endian.
-    let rate_buf = falloc.allocate().expect("xhci audio-rate");
+    let Some(rate_buf) = dma_frame(falloc, "audio-rate") else { return false };
     let rate = 48_000u32;
     core::ptr::copy_nonoverlapping(rate.to_le_bytes().as_ptr(), rate_buf as *mut u8, 3);
     let rate_ok = control_out(x, slot, ep0, 0x22, 0x01, 0x0100, ep.address as u16, 3, rate_buf);
@@ -1596,9 +1659,13 @@ unsafe fn setup_usbaudio(
     // Stream a real tone: 96 packets of 1 ms @ 48 kHz stereo 16-bit = 192 B each.
     const PKT_BYTES: usize = 192; // 48 samples × 2 ch × 2 B
     const NPKTS: usize = 96;
-    let audio_buf = falloc
-        .allocate_aligned((NPKTS * PKT_BYTES).div_ceil(4096), 1)
-        .expect("xhci audio-buf");
+    let audio_buf = match falloc.allocate_aligned((NPKTS * PKT_BYTES).div_ceil(4096), 1) {
+        Ok(b) => b,
+        Err(_) => {
+            crate::serial_println!("[xhci] slot {slot}: out of memory (audio buffer) — USB audio skipped");
+            return false;
+        }
+    };
     let tone = crate::hda::tone_for_usb(NPKTS * PKT_BYTES / 2); // i16 samples; usbaudio_play copies it in
 
     // Keep the endpoint alive so the audio layer can stream into it later.
@@ -1720,12 +1787,16 @@ unsafe fn setup_usbnet(
     }
 
     // Open the bulk pipes (same shape as mass storage).
-    let ein = data.endpoints.iter().find(|e| e.is_in() && e.attributes & 3 == 2).unwrap();
-    let eout = data.endpoints.iter().find(|e| !e.is_in() && e.attributes & 3 == 2).unwrap();
+    let bulk_in = data.endpoints.iter().find(|e| e.is_in() && e.attributes & 3 == 2);
+    let bulk_out = data.endpoints.iter().find(|e| !e.is_in() && e.attributes & 3 == 2);
+    let (Some(ein), Some(eout)) = (bulk_in, bulk_out) else {
+        crate::serial_println!("[xhci] slot {slot}: ECM data interface without bulk-IN+OUT — skipped");
+        return false;
+    };
     let in_dci = ((ein.address & 0x0F) * 2 + 1) as u8;
     let out_dci = ((eout.address & 0x0F) * 2) as u8;
-    let in_ring_frame = falloc.allocate().expect("xhci ecm-in-ring");
-    let out_ring_frame = falloc.allocate().expect("xhci ecm-out-ring");
+    let Some(in_ring_frame) = dma_frame(falloc, "ecm-in-ring") else { return false };
+    let Some(out_ring_frame) = dma_frame(falloc, "ecm-out-ring") else { return false };
     let in_ring = Ring::new(in_ring_frame);
     let out_ring = Ring::new(out_ring_frame);
     let max_dci = in_dci.max(out_dci) as u32;
@@ -1751,10 +1822,13 @@ unsafe fn setup_usbnet(
 
     let mut rx_bufs = [0u64; USBNET_RX_BUFS];
     for b in &mut rx_bufs {
-        *b = falloc.allocate().expect("xhci ecm-rx");
+        *b = match dma_frame(falloc, "ecm-rx") {
+            Some(f) => f,
+            None => return false,
+        };
         core::ptr::write_bytes(*b as *mut u8, 0, 4096);
     }
-    let tx_buf = falloc.allocate().expect("xhci ecm-tx");
+    let Some(tx_buf) = dma_frame(falloc, "ecm-tx") else { return false };
     let mut un = UsbNet { slot, in_dci, out_dci, in_ring, out_ring, rx_bufs, rx_deq: 0, tx_buf, mac };
     usbnet_arm_all_rx(x, &mut un);
     crate::serial_println!(
@@ -1793,8 +1867,8 @@ unsafe fn setup_mass_storage(
     let out_dci = ((eout.address & 0x0F) * 2) as u8;
     let in_pkt = ein.max_packet;
     let out_pkt = eout.max_packet;
-    let in_ring_frame = falloc.allocate().expect("xhci bulk-in-ring");
-    let out_ring_frame = falloc.allocate().expect("xhci bulk-out-ring");
+    let Some(in_ring_frame) = dma_frame(falloc, "bulk-in-ring") else { return false };
+    let Some(out_ring_frame) = dma_frame(falloc, "bulk-out-ring") else { return false };
     let in_ring = Ring::new(in_ring_frame);
     let out_ring = Ring::new(out_ring_frame);
 
@@ -1827,7 +1901,7 @@ unsafe fn setup_mass_storage(
         return false;
     }
 
-    let io = falloc.allocate().expect("xhci ms-iobuf");
+    let Some(io) = dma_frame(falloc, "ms-iobuf") else { return false };
     core::ptr::write_bytes(io as *mut u8, 0, 4096);
     let mut ms = MassStorage { slot, in_dci, out_dci, in_ring, out_ring, io, block_size: 512, last_lba: 0 };
 
@@ -1936,4 +2010,27 @@ pub fn present() -> bool {
 /// Number of live polled HID devices (diagnostics/self-test).
 pub fn hid_count() -> usize {
     unsafe { (*core::ptr::addr_of!(HIDS)).iter().filter(|h| h.is_some()).count() }
+}
+
+/// **[robust-usb]** — the controller bring-up on a machine without free frames:
+/// `init` must return `false` (USB skipped) before it touches the controller,
+/// and a device that cannot get a frame is skipped. Runs the real `init`
+/// against an empty frame allocator; a controller that is already running keeps
+/// running (its HID devices are counted before and after).
+#[cfg(feature = "selftest")]
+pub fn robust_selftest() -> bool {
+    let mut empty = FrameAllocator::from_regions(&[], 0);
+    let had = present();
+    let hid_before = hid_count();
+    let init_refused = !init(&mut empty);
+    let frame_refused = dma_frame(&mut empty, "selftest").is_none();
+    let intact = present() == had && hid_count() == hid_before;
+    let need_ok = controller_frames(0) == 4 && controller_frames(3) == 8;
+    let ok = init_refused && frame_refused && intact && need_ok;
+    crate::serial_println!(
+        "[robust-usb] xHCI init with 0 free frames: refused={init_refused} ({}), device frame refused={frame_refused}, running controller untouched={intact} ({hid_before} HID) → {}",
+        if had { "controller present: stopped before the reset" } else { "no controller: nothing to bring up" },
+        if ok { "OK ✓" } else { "FAILED ✗" }
+    );
+    ok
 }

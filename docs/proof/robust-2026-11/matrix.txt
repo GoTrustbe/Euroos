@@ -1,0 +1,13 @@
+[matrix] image=v4-matrix.img legs=usb,hda,nvme
+[matrix] leg: usb
+  [usb] PASS ✓
+[matrix] leg: hda
+  [hda] PASS ✓
+[matrix] leg: nvme
+  [nvme] PASS ✓
+
+[matrix] result:
+  usb      PASS
+  hda      PASS
+  nvme     PASS
+[matrix] ALL LEGS PASS ✓

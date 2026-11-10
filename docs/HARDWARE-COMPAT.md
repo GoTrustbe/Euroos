@@ -46,7 +46,10 @@ and no PIT boots to the desktop: virtio-blk as the boot disk, virtio-net,
 virtio-tablet and virtio-keyboard, the Bochs/VBE display through GOP. The
 virtio drivers share one transport (`kernel/src/virtio_pci.rs`): register
 blocks from the vendor capabilities, any memory BAR including one above the
-1 TiB identity map (reached through the high-MMIO window, `paging::mmio_virt`),
+1 TiB identity map (reached through the high-MMIO window, `paging::mmio_virt`;
+since 2026-11-10 the xHCI, NVMe and HD-Audio drivers use the same window, so a
+USB controller or an NVMe disk whose BAR the firmware places that high no
+longer stops the boot: BUG-021, BUG-042),
 MSI-X per queue, polling without MSI-X (INTx is not routed). Features: only
 VERSION_1 plus FLUSH/DISCARD/RO (blk) and MAC/STATUS (net); no EVENT_IDX, no
 indirect descriptors, no packed rings, no MQ. Not driven: virtio-console

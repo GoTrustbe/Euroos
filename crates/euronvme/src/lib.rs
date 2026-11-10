@@ -18,6 +18,7 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
+pub mod identify;
 #[cfg(test)]
 mod sim;
 
