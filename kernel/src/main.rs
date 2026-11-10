@@ -7504,11 +7504,27 @@ fn ensure_etc_skeleton(fs: &mut dyn FileSystem) -> usize {
     added
 }
 
+/// First boot of a blank root: the directory skeleton, the system configuration and
+/// the programs. A step the filesystem refuses (a full or damaged disk) is a log
+/// line, not a panic: the boot goes on with what could be written.
 fn populate_fs(fs: &mut dyn FileSystem) {
-    fs.create_dir("/etc").unwrap();
-    fs.create_dir("/boot").unwrap();
+    fn mkdir(fs: &mut dyn FileSystem, path: &str, failed: &mut usize) {
+        if let Err(e) = fs.create_dir(path) {
+            serial_println!("[euro] populate: create_dir {path} failed: {e:?}");
+            *failed += 1;
+        }
+    }
+    fn put(fs: &mut dyn FileSystem, path: &str, data: &[u8], failed: &mut usize) {
+        if let Err(e) = fs.write_file(path, data) {
+            serial_println!("[euro] populate: write_file {path} ({} bytes) failed: {e:?}", data.len());
+            *failed += 1;
+        }
+    }
+    let mut failed = 0usize;
+    mkdir(fs, "/etc", &mut failed);
+    mkdir(fs, "/boot", &mut failed);
     for (path, content) in etc_skeleton() {
-        fs.write_file(path, content).unwrap();
+        put(fs, path, content, &mut failed);
     }
     // /etc/shadow (S5): password hashes. 'euro' has password "euro" (demo);
     // 'root' is locked ("*") — access via sudo, like a real sudo system.
@@ -7516,23 +7532,23 @@ fn populate_fs(fs: &mut dyn FileSystem) {
         "root:*:*\n{}\n",
         auth::shadow_line("euro", b"euro-salt-v1", b"euro")
     );
-    fs.write_file("/etc/shadow", shadow.as_bytes()).unwrap();
-    fs.create_dir("/etc/euroguard").unwrap();
-    fs.write_file("/etc/euroguard/system.conf", EUROGUARD_CONF).unwrap();
-    fs.write_file("/boot/version", b"EuroKernel v0.1-alpha\n").unwrap();
-    fs.write_file("/boot/kernel.img", &[0u8; 12_000]).unwrap();
-    fs.create_dir("/bin").unwrap();
+    put(fs, "/etc/shadow", shadow.as_bytes(), &mut failed);
+    mkdir(fs, "/etc/euroguard", &mut failed);
+    put(fs, "/etc/euroguard/system.conf", EUROGUARD_CONF, &mut failed);
+    put(fs, "/boot/version", b"EuroKernel v0.1-alpha\n", &mut failed);
+    put(fs, "/boot/kernel.img", &[0u8; 12_000], &mut failed);
+    mkdir(fs, "/bin", &mut failed);
     for (path, bytes) in system_binaries() {
-        fs.write_file(path, bytes).unwrap();
+        put(fs, path, bytes, &mut failed);
     }
     // NOTE: /doom1.wad is served straight from the kernel image (ring3::vfs_open
     // special-case) — NOT written to the RAM FS, so it neither doubles the WAD's
     // RAM nor makes the boot-time FS scrub crawl over 4 MiB under TCG.
     // Record the build-id so the next boot sees that /bin is up to date.
-    fs.write_file("/etc/system.ver", format!("{:016x}\n", system_digest()).as_bytes()).unwrap();
-    fs.create_dir("/tmp").unwrap();
-    fs.create_dir("/var").unwrap();
-    fs.create_dir("/var/log").unwrap(); // eurologd destination (full daemon = S4)
+    put(fs, "/etc/system.ver", format!("{:016x}\n", system_digest()).as_bytes(), &mut failed);
+    mkdir(fs, "/tmp", &mut failed);
+    mkdir(fs, "/var", &mut failed);
+    mkdir(fs, "/var/log", &mut failed); // eurologd destination (full daemon = S4)
     // H3: a dynamically-linked binary + its shared library in the FS, so that the
     // dynlinker can resolve the .so from /lib via DT_NEEDED (run-by-name).
     let _ = fs.create_dir("/lib");
@@ -7543,8 +7559,11 @@ fn populate_fs(fs: &mut dyn FileSystem) {
     // Files app or `cat /Welcome.txt`.
     let _ = fs.create_dir("/home");
     let _ = fs.create_dir("/home/euro");
-    fs.write_file("/Welcome.txt", WELCOME_TXT).unwrap();
+    put(fs, "/Welcome.txt", WELCOME_TXT, &mut failed);
     let _ = fs.write_file("/home/euro/Welcome.txt", WELCOME_TXT);
+    if failed > 0 {
+        serial_println!("[euro] populate: {failed} step(s) failed; the root file system is incomplete");
+    }
 }
 
 /// The English-language welcome/info file seeded into the FS.
