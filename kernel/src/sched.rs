@@ -198,7 +198,7 @@ pub fn block_on(chan: u64) {
 /// Unblock task `idx` (FUTEX_WAKE on a specific task).
 pub fn unblock(idx: usize) {
     let mut s = SCHED.lock();
-    if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(_)) {
+    if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(c) if c != PARKED) {
         s.tasks[idx].state = State::Ready;
         let floor = s.min_vr.saturating_sub(64);
         if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
@@ -210,7 +210,7 @@ pub fn unblock(idx: usize) {
 /// must be able to wake it EARLY too, which plain `unblock` (Blocked-only) cannot.
 pub fn unblock_any(idx: usize) {
     let mut s = SCHED.lock();
-    if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(_) | State::Sleeping(_)) {
+    if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(c) if c != PARKED) || matches!(s.tasks[idx].state, State::Sleeping(_)) {
         s.tasks[idx].state = State::Ready;
         let floor = s.min_vr.saturating_sub(64);
         if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
@@ -222,7 +222,7 @@ pub fn unblock_any(idx: usize) {
 /// the woken task's next look finds it).
 pub fn try_unblock_any(idx: usize) -> bool {
     let Some(mut s) = SCHED.try_lock() else { return false };
-    if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(_) | State::Sleeping(_)) {
+    if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(c) if c != PARKED) || matches!(s.tasks[idx].state, State::Sleeping(_)) {
         s.tasks[idx].state = State::Ready;
         let floor = s.min_vr.saturating_sub(64);
         if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
@@ -1218,6 +1218,39 @@ pub fn reclaim_task(idx: usize) {
 }
 
 pub fn spawn_user(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u64) -> usize {
+    spawn_user_in(rip, rsp, cs, ss, kstack_top, cr3, State::Ready)
+}
+
+/// BUG-040: the wait channel of a task that exists but must not run yet. No code
+/// wakes it but [`start_parked`]; `unblock`/`unblock_any` skip it.
+const PARKED: u64 = 0xB040_9A4B_ED00_0001;
+
+/// Like [`spawn_user`], but the task stays parked (never scheduled) until
+/// [`start_parked`]. For a launcher that has to publish who the task is (the
+/// glibc main task, its caps and kernel-stack owner) before the task's first
+/// syscall can look: with `spawn_user` a timer tick in between ran the program
+/// against the previous run's globals (BUG-040).
+pub fn spawn_user_parked(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u64) -> usize {
+    spawn_user_in(rip, rsp, cs, ss, kstack_top, cr3, State::Blocked(PARKED))
+}
+
+/// Let a task made by [`spawn_user_parked`] run. No-op for any other state.
+pub fn start_parked(idx: usize) {
+    let mut s = SCHED.lock();
+    if idx < s.count && s.tasks[idx].state == State::Blocked(PARKED) {
+        s.tasks[idx].state = State::Ready;
+        let floor = s.min_vr.saturating_sub(64);
+        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
+    }
+}
+
+/// Is `idx` still parked (made by [`spawn_user_parked`], not started)?
+pub fn is_parked(idx: usize) -> bool {
+    let s = SCHED.lock();
+    idx < s.count && s.tasks[idx].state == State::Blocked(PARKED)
+}
+
+fn spawn_user_in(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u64, initial: State) -> usize {
     let mut s = SCHED.lock();
     // Return a sentinel instead of panicking when the table is full: a program that
     // spawns too many threads (chrome) must get -EAGAIN, never crash the kernel.
@@ -1245,7 +1278,7 @@ pub fn spawn_user(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u6
     // (see the `else boot` fallback in `switch`) would run its ring-3 code on the boot
     // PML4, where the user arena is supervisor-only -> fault/hang. Mirrors spawn_thread.
     s.tasks[idx].cr3 = cr3;
-    s.tasks[idx].state = State::Ready;
+    s.tasks[idx].state = initial;
     s.tasks[idx].vruntime = s.tasks[s.current].vruntime.max(s.min_vr); // at the pack, never behind it
     s.tasks[idx].nice = 0;
     idx

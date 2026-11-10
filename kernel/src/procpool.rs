@@ -55,18 +55,41 @@ pub fn alloc() -> Option<u64> {
 }
 
 /// Return a previously allocated frame to the pool.
+/// A free the pool refused because the frame was never its own (BUG-040 audit):
+/// say where it came from, the first few times.
+#[track_caller]
+fn note_foreign(pool: &str, r: Result<(), euromm::frame::FrameError>, addr: u64) {
+    static LOGGED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    if r == Err(euromm::frame::FrameError::Foreign) && LOGGED.fetch_add(1, core::sync::atomic::Ordering::Relaxed) < 8 {
+        let at = core::panic::Location::caller();
+        crate::serial_println!("[frames] {pool}: refused to free {addr:#x}, not a frame of this pool (from {}:{})", at.file(), at.line());
+    }
+}
+
+/// Refused foreign frees (process pool, demand pool).
+pub fn foreign_frees() -> (usize, usize) {
+    (
+        POOL.lock().as_ref().map(|p| p.foreign_frees().0).unwrap_or(0),
+        DEMAND_POOL.lock().as_ref().map(|p| p.foreign_frees().0).unwrap_or(0),
+    )
+}
+
+#[track_caller]
 pub fn free(addr: u64) {
     if let Some(p) = POOL.lock().as_mut() {
-        let _ = p.free(addr);
+        let r = p.free(addr);
+        note_foreign("process pool", r, addr);
     }
 }
 
 /// Return a contiguous run of `frames` frames (e.g. a fork child's arena) to
 /// the pool, so the next fork can reuse the space.
+#[track_caller]
 pub fn free_range(base: u64, frames: usize) {
     if let Some(p) = POOL.lock().as_mut() {
         for i in 0..frames as u64 {
-            let _ = p.free(base + i * 4096);
+            let r = p.free(base + i * 4096);
+            note_foreign("process pool", r, base + i * 4096);
         }
     }
 }
@@ -112,9 +135,11 @@ pub fn demand_alloc() -> Option<u64> {
     DEMAND_POOL.lock().as_mut()?.allocate().ok()
 }
 /// Return a frame to the demand pool.
+#[track_caller]
 pub fn demand_free(addr: u64) {
     if let Some(p) = DEMAND_POOL.lock().as_mut() {
-        let _ = p.free(addr);
+        let r = p.free(addr);
+        note_foreign("demand pool", r, addr);
     }
 }
 pub fn demand_free_frames() -> usize {

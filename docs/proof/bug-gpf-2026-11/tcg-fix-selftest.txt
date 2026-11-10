@@ -1,0 +1,5 @@
+# TCG, 1 GiB, head b085395 (matrix boots user-smp4-iommu-1g and storage-smp4-iommu-1g):
+user-smp4-iommu-1g.log:[bug040] glibc main task with the CPU given away between spawn and start: probe-ran=true ran-before-start=false exit=42 (want 42) · foreign frees refused so far: main=0 pool=0 demand=0 → OK ✓
+user-smp4-iommu-1g.log:[ap-tss] 3 AP(s), an NMI to each through the shared IDT's IST gate: cpu1: tr=0x28 nmi-rsp=0x36369350 own-stack=true cpu2: tr=0x28 nmi-rsp=0x36378350 own-stack=true cpu3: tr=0x28 nmi-rsp=0x36387350 own-stack=true → OK ✓ (own TSS, own IST stack)
+storage-smp4-iommu-1g.log:[bug040] glibc main task with the CPU given away between spawn and start: probe-ran=true ran-before-start=false exit=42 (want 42) · foreign frees refused so far: main=0 pool=0 demand=0 → OK ✓
+storage-smp4-iommu-1g.log:[ap-tss] 3 AP(s), an NMI to each through the shared IDT's IST gate: cpu1: tr=0x28 nmi-rsp=0x36369350 own-stack=true cpu2: tr=0x28 nmi-rsp=0x36378350 own-stack=true cpu3: tr=0x28 nmi-rsp=0x36387350 own-stack=true → OK ✓ (own TSS, own IST stack)

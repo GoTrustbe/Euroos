@@ -161,6 +161,7 @@ the code.
 | `soak` 1 h + 4 httpd clients on `feature/net-worker` (KVM, `-m 16G`) | 2026-11-05 | ✅ 1 663/1 663 ok | `proof/net-worker-2026-11/` | httpd 460 905 ok / 12 failed (first attempts), p99 123 ms, 302 014 / 0 during long commands (base 4 376 / 704, p99 9.5 s); heap +0.37 kB/min; tasks, files, frames, process pool flat; the base `52755fc` soak hit a ring-0 GPF after 47 min |
 | TCG matrix + `megaraid-proof.sh` on `feature/net-worker` | 2026-11-05 | ✅ 0 markers worse | `proof/net-worker-2026-11/` | 10 TCG boots (user/kernel/storage/combined, smp4/smp1, ± IOMMU) + 4 megaraid boots against `proof/bug032-2026-11/`: 0 worse, 0 changed; `[net-worker]` OK everywhere, `[lk]` 0 inversions |
 | `inbound` 4 clients 300 s + `net`, integrated (KVM) | 2026-11-05 | ✅ | `proof/integrate-net-mem-2026-11/` | user 4 165 ok, console max 693 ms; kernel 101 202 ok, max 380 ms; outbound 300/300 (user), 400/400 (kernel) |
+| BUG-040/037/039/041 on `feature/bug-gpf`: TCG matrix, megaraid, modern virtio, CI q35 matrix; R630 KVM soaks and boots | 2026-11-10 | ✅ 0 markers worse | `proof/bug-gpf-2026-11/` | 24 TCG boots (matrix ×11, the two BUG-037 configurations ×12, modern virtio), megaraid 8 boots, CI q35 matrix 13/13 (`usbnet` green); R630: 168 boots ok, two soaks of 2 h 05 with `churn proc 8` every round: 5 268 commands ok, 5 430 glibc launches, 0 faults, heap +0.23 kB/min, httpd 1 779 547 answered / 22 failed; `[lk]` 0 inversions, `[net-worker]` OK |
 | virtio 1.x (modern, non-transitional) on `feature/virtio-modern`: TCG device configs, matrix, megaraid; R630 KVM | 2026-11-06 | 🟡 0 markers worse; 2 of 10 matrix boots hung (BUG-037, not in the changed code) | `proof/virtio-modern-2026-11/` | modern virtio-blk (boot + data disk), virtio-net (DHCP, fetch, net worker), virtio-tablet/keyboard typed and pointed, BARs at 56 TiB through the high-MMIO window, no PIT (HPET / PM timer); transitional and legacy 0 worse; reruns of the hung configs 6/6 (branch) and 6/6 (base); megaraid 8 boots 0 worse; R630 `net` 8/8 clean, `inbound` over modern virtio-net within run-to-run spread of legacy |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
@@ -770,7 +771,7 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   every entry, so it takes only the entry the chip wrote; guarded by
   `a_torn_producer_read_takes_no_phantom_entry`, no change.
 
-### BUG-031 — one boot without IOMMU went silent after `[net-late]` 🟡 LIKELY FIXED (BUG-032)
+### BUG-031 — one boot without IOMMU went silent after `[net-late]` 🟡 LIKELY FIXED (BUG-032 or BUG-037)
 - **Status:**   not reproduced; probably BUG-032 · **Severity:** unknown (a hang, once in 15 boots)
 - **Found:**    2026-11-05 · `scripts/megaraid-proof.sh` with `NO_IOMMU=1`, TCG, second boot of the
   first run, mem-hygiene image
@@ -783,6 +784,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   proof 4 runs (8 boots) with and without IOMMU on the fix
   (`proof/bug032-2026-11/`). `megaraid-proof.sh` sends an NMI on a timeout, so a recurrence
   leaves the probe. `proof/mem-hygiene-2026-11/mr-noiommu-hang-boot2-tail.txt`.
+  2026-11-10: the place also fits BUG-037 (the step after `[net-late]` is a glibc launch, which
+  starts with `reset_fd_table`); no probe of this one exists, so it stays 🟡.
 
 ### BUG-032 — `KERNEL PANIC` at `sched.rs:755`: `s.current` read through a stale pointer ✅ FIXED
 - **Status:**   FIXED (`b6a6fa8`, `feature/bug032`) · **Severity:** CRITICAL (kernel panic; silent
@@ -822,9 +825,11 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   boots and 1 hang (silent after `gsdl`) in 31 R630 KVM boots; on the fix
   30 TCG boots and 59 R630 KVM boots without either, a 1 h soak with 4 httpd clients (1 720/1 720 commands, heap +0.43 kB/min).
 
-### BUG-033 — TCG boots that stop in the boot self-tests (`user-smp4-iommu`) 🟡 LIKELY FIXED (BUG-032)
-- **Status:**   not reproduced on the fix · **Severity:** MEDIUM (a boot that never reaches the
-  desktop; a CI flake)
+### BUG-033 — TCG boots that stop in the boot self-tests (`user-smp4-iommu`) ✅ FIXED (it is BUG-037)
+- **Status:**   FIXED as BUG-037 (`a410803`): it recurred after the BUG-032 fix, with an NMI probe,
+  and that probe shows the `PIPE_FDS` wedge (`proof/bug-gpf-2026-11/tcg-bug033-nmi-probe.txt`). The
+  BUG-032 mechanism was real but not this hang · **Severity:** MEDIUM (a boot that never reaches
+  the desktop; a CI flake)
 - **Found:**    2026-11-05 · TCG, `-smp 4 -m 512M` with intel-iommu, selftest image, the net-async
   work: 1 of 6 boots on `feature/net-async`, 1 of 3 on the base `bb2e9d2`
   (`proof/net-async-2026-11/README.md`); numbered at the integration
@@ -892,8 +897,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   Longest worker pass after the fix: 16 ms. The `inbound` numbers before 2026-11-05 carry this stall
   in their `max_ms` and part of their p99.
 
-### BUG-037 — `PIPE_FDS` taken with and without interrupts off: a process spins with IF=0 for ever 🟡 OPEN
-- **Status:**   OPEN · **Severity:** HIGH (boot hang, rare)
+### BUG-037 — `PIPE_FDS` taken with and without interrupts off: a process spins with IF=0 for ever ✅ FIXED
+- **Status:**   FIXED (`a410803`, `feature/bug-gpf`) · **Severity:** HIGH (boot hang, rare)
 - **Found:**    2026-11-05 · `feature/virtio-modern` TCG matrix, `user-smp4-iommu` and `user-smp1-noiommu`
   (2 of 10 boots, up to six QEMUs on the build server); NMI probe in `proof/virtio-modern-2026-11/tcg-hang-*`
 - **Analysis:** task 10 (a musl background process) sits in `ring3::pipe_write_fd` (`+0xd1`) spinning on
@@ -902,8 +907,13 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   close, the fork fd copy) take it with interrupts on. A holder preempted by the tick and a spinner
   with IF=0 on the same core never meet again: the BUG-007 class. Not in the code the branch changes;
   3 more boots of each configuration on the branch and on the base all reached the desktop.
-- **Fix (proposed):** take `PIPE_FDS` (and `PIPES`/`PIPE_WAITERS`, which `pipe_write_fd` nests) only with
-  interrupts off everywhere, as `SCANCODES` and the UART lock do, or drop the IF-off section there.
+- **Fix:**      `PIPE_FDS` only through `ring3::pipe_fds()` (interrupts off first, lock second, as
+  `pipes_lock()`; 23 call sites), and `reset_fd_table` (the launcher clears `PIPE_FDS`, `OPEN_FDS`,
+  `OPEN_DIRS`, `PIPE_NONBLOCK`, `PIPE_WAITERS` at the start of every glibc run, with interrupts on
+  until now) runs without interrupts. `PIPE_WAITERS` and `PIPE_NONBLOCK` were already only taken
+  inside IF-off sections elsewhere. Seen once more before the fix (1 of 16 TCG boots of the BUG-040
+  work, same probe: `proof/bug-gpf-2026-11/tcg-bug033-nmi-probe.txt`); on the fix 14 TCG
+  boots of the two configurations and 168 R630 KVM boots, none silent. BUG-033 is this bug.
 
 ### BUG-038 — install-media preload panicked on a 512 MiB machine with a second disk ✅ FIXED
 - **Status:**   FIXED · **Severity:** HIGH (boot panic)
@@ -916,16 +926,60 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   reports that no install media is available, instead of the boot panicking. Matrix `nvme`, `ahci`,
   `usb` PASS at 512 MiB.
 
-### BUG-039 — CDC-ECM USB ethernet gets no DHCP OFFER in the late bring-up 🟡 OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (USB tethering has no network)
+### BUG-039 — CDC-ECM USB ethernet gets no DHCP OFFER in the late bring-up ✅ FIXED
+- **Status:**   FIXED (`9553f59`, `feature/bug-gpf`) · **Severity:** MEDIUM (USB tethering has no network)
 - **Found:**    2026-11-06 · CI `q35 metal matrix`, `usbnet` leg (TCG, `-nic none`, `usb-net` on SLIRP)
 - **Analysis:** the device enumerates (`[xhci] slot 3: USB ethernet (CDC-ECM) LIVE`) and the netstack
   binds it (`[net] NIC: usb-ethernet (CDC-ECM) … (late bring-up)`), but six DISCOVERs get no OFFER
   (`[net] late bring-up: no DHCP OFFER over usb-ethernet (CDC-ECM)`). Not new this week: the
   2026.11.05 image (`52755fc`, before the net worker) fails the same way. The matrix job never ran
   to the end before (it was cancelled), so the last good state is unknown.
-- **Next:** check whether the DISCOVER reaches SLIRP (`-object filter-dump` on the usb-net netdev)
-  and whether the bulk-IN pipe is polled during `poll_dhcp` (it spins on `legacy_rx()` only).
+- **Cause:**    `legacy_rx()` → `net::rx_route()` returned before it polled the NIC when the netstack
+  had no configuration (`get()` is None), and the late bring-up is exactly that state: the DHCP and
+  ARP readers never saw a frame. The DISCOVERs went out and the xHCI bulk-IN was armed; nobody
+  fetched what arrived. Since the demux of BUG-019 (`0d8a4c2`), which is why `52755fc` fails too.
+- **Fix:**      without an address `rx_route` routes with 0.0.0.0: every frame goes to the legacy
+  queue. `run-metal-matrix.py --legs usbnet`: PASS (DHCP OFFER, ping 10.0.2.2); the full CI q35
+  matrix 13/13 (`proof/bug-gpf-2026-11/q35-matrix.txt`).
+
+### BUG-040 — ring-0 #GP at a stack address: a glibc program ran before its launcher published it ✅ FIXED
+- **Status:**   FIXED (`22a1685`, `feature/bug-gpf`) · **Severity:** CRITICAL (kernel fault), rare
+- **Found:**    2026-11-05 · R630 KVM, 1 h soak of `52755fc` (the published 2026.11.05 image), t = 2825 s:
+  `[idt] GENERAL PROTECTION FAULT code=0x0 @ 0x7fe46c12 cs=0x8 ss=0x10 rsp=0x7fe46b80` in the third
+  run of a `churn proc 4` (`proof/net-worker-2026-11/r630-base-soak-gpf-tail.txt`)
+- **Analysis:** RIP and RSP are in the boot task's stack: the CPU executed stack bytes. The crashing
+  launch is the only one of 252 `gtiny` launches in that log without its `[glibc] spawned scheduled
+  task` line: the launcher was preempted between `sched::spawn_user` (task Ready) and its stores of
+  `GLIBC_MAIN_TASK`, the caps, the kernel-stack owner and the profile, all done with interrupts
+  on. The program ran in that window, `GLIBC_MAIN_TASK` still `usize::MAX`: its `exit_group` took
+  the foreground (musl excursion) branch, `EXITED = 1`, and `syscall_entry` returned through a
+  stale `SAVED_KERNEL_RSP` (`mov rsp, …; pop ×6; ret`) into the boot task's stack. The BUG-024
+  class; daemon and bg-musl had their window closed then, the three glibc launch paths not.
+- **Is this the cause of the #GP?** Demonstrated, not reproduced unprovoked. With the window held
+  open (`[bug040]` self-test) and the old launch order, the same image dies at the same place with
+  the same signature: R630 KVM: no spawn line, silence after `GLIBC-DYNAMIC-OK`, the NMI probe finds
+  the glibc task after `exit_group(42)` with `RSP=0x7fe46b30` (0x50 below the original fault's RSP)
+  at a wild RIP; TCG: reset. Unprovoked on `52755fc`: 23 runs of 50 × `churn proc 20` (24 150
+  launches) and one more 1 h soak, no fault; the window is a few instructions against a 10 ms tick.
+- **Fix:**      `sched::spawn_user_parked` / `start_parked`: the task is not runnable until
+  `ring3::spawn_glibc_main` has stored everything (one helper for `run_glibc`, the disk and the
+  persistent variant). A full task table returns an error instead of indexing with `usize::MAX`.
+- **Regression test:** boot self-test `[bug040]` gives the CPU away for up to 1 s between spawn and
+  start: the task must not run, `gtiny` must exit 42 through the scheduled exit. (It needs a glibc
+  arena: skipped at 512 MiB, runs at 1 GiB and on the R630.)
+- **Proof:**    `proof/bug-gpf-2026-11/`: the analysis, the provoked runs, 24 TCG boots + megaraid + the CI q35 matrix (0 markers worse), 168 R630 KVM boots, two 2 h soaks with 5 430 glibc launches (0 faults, heap +0.23 kB/min).
+
+### BUG-050 — an exception through an IST gate on an AP ran on a garbage stack (APs loaded no TSS) ✅ FIXED
+- **Status:**   FIXED (`dd4c3c8`, `feature/bug-gpf`) · **Severity:** HIGH when it hits (reset), latent
+- **Found:**    2026-11-05 · code review during BUG-032 ("open" in `proof/bug032-2026-11/`)
+- **Analysis:** the IDT is shared by all cores and its double-fault, page-fault and NMI gates use IST
+  stacks; `gdt::init_ap` loaded the shared GDT and no TSS. TR after INIT has base 0, so an AP read
+  the IST pointer from linear address 0x24… and pushed the frame there. Any #PF/#DF on an AP, and
+  every monitor `nmi` (`--nmi-on-hang`, `tcg-boot.sh`) since it goes to all cores.
+- **Fix:**      a GDT (the BSP's selector layout), a TSS and three IST stacks per AP.
+- **Regression test:** `[ap-tss]`: an NMI IPI to every AP; each must run on its own NMI stack with TR
+  loaded. With `load_tss` left out the same image resets in this self-test
+  (`proof/bug-gpf-2026-11/tcg-ap-tss-selftest.txt`).
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

@@ -97,7 +97,7 @@ pub extern "sysv64" fn ap_main() -> ! {
     //    own run queue (idle + 2 workers) + own LAPIC timer (vector 0x41).
     //    After sti this core ticks itself and alternates its own tasks. This hlt loop
     //    is the idle task: the first tick saves it and switches to a worker.
-    crate::gdt::init_ap();
+    crate::gdt::init_ap(id);
     crate::interrupts::init();
     // BUG-032: the scheduler write watch on this core too (a wild write may come from an AP).
     crate::memwatch::arm_this_cpu();
@@ -409,4 +409,47 @@ pub fn halt_others(cores: &[u8], self_id: u8) {
             crate::apic::send_ipi(id, crate::interrupts::IPI_HALT_VECTOR);
         }
     }
+}
+
+/// `[ap-tss]` boot self-test: send every application processor an NMI (an IST
+/// gate in the shared IDT) and check that it ran on that core's own NMI stack
+/// with a TSS loaded. Before the per-AP TSS an AP took the IST pointer from a
+/// TSS "at" linear address 0.
+pub fn ap_tss_selftest() {
+    use crate::interrupts::{NMI_TEST, NMI_TEST_RSP, NMI_TEST_TR};
+    let aps = crate::kwork::online_aps();
+    if aps.is_empty() {
+        crate::serial_println!("[ap-tss] no application processor online: nothing to check ⬜");
+        return;
+    }
+    for &c in &aps {
+        NMI_TEST_RSP[c].store(0, Ordering::Release);
+        NMI_TEST_TR[c].store(0, Ordering::Release);
+    }
+    NMI_TEST.store(true, Ordering::Release);
+    let mut good = 0;
+    let mut detail = alloc::string::String::new();
+    for &c in &aps {
+        crate::apic::send_nmi(c as u8);
+        for _ in 0..200 {
+            if NMI_TEST_RSP[c].load(Ordering::Acquire) != 0 {
+                break;
+            }
+            crate::apic::busy_wait_us(1_000);
+        }
+        let rsp = NMI_TEST_RSP[c].load(Ordering::Acquire);
+        let tr = NMI_TEST_TR[c].load(Ordering::Acquire) & 0xFFFF;
+        let (lo, hi) = crate::gdt::ap_ist_range(c, crate::gdt::NMI_IST_INDEX);
+        let ok = rsp >= lo && rsp < hi && tr != 0;
+        if ok {
+            good += 1;
+        }
+        detail.push_str(&alloc::format!(" cpu{c}: tr={tr:#x} nmi-rsp={rsp:#x} own-stack={}", rsp >= lo && rsp < hi));
+    }
+    NMI_TEST.store(false, Ordering::Release);
+    crate::serial_println!(
+        "[ap-tss] {} AP(s), an NMI to each through the shared IDT's IST gate:{detail} → {}",
+        aps.len(),
+        if good == aps.len() { "OK ✓ (own TSS, own IST stack)" } else { "FAILED" }
+    );
 }

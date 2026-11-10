@@ -1,0 +1,200 @@
+# h-boots-user (head image, --scenario smoke, 4 GiB)
+2026-11-10_07:54:34 slot=2 run=1 rc=0 ok
+2026-11-10_07:54:34 slot=4 run=1 rc=0 ok
+2026-11-10_07:54:37 slot=1 run=1 rc=0 ok
+2026-11-10_07:54:39 slot=3 run=1 rc=0 ok
+2026-11-10_07:57:37 slot=4 run=2 rc=0 ok
+2026-11-10_07:57:43 slot=1 run=2 rc=0 ok
+2026-11-10_07:57:43 slot=2 run=2 rc=0 ok
+2026-11-10_07:57:43 slot=3 run=2 rc=0 ok
+2026-11-10_08:00:40 slot=4 run=3 rc=0 ok
+2026-11-10_08:00:47 slot=2 run=3 rc=0 ok
+2026-11-10_08:00:48 slot=1 run=3 rc=0 ok
+2026-11-10_08:00:48 slot=3 run=3 rc=0 ok
+2026-11-10_08:03:44 slot=4 run=4 rc=0 ok
+2026-11-10_08:03:52 slot=2 run=4 rc=0 ok
+2026-11-10_08:03:52 slot=3 run=4 rc=0 ok
+2026-11-10_08:03:53 slot=1 run=4 rc=0 ok
+2026-11-10_08:06:49 slot=4 run=5 rc=0 ok
+2026-11-10_08:06:56 slot=2 run=5 rc=0 ok
+2026-11-10_08:06:57 slot=1 run=5 rc=0 ok
+2026-11-10_08:06:58 slot=3 run=5 rc=0 ok
+2026-11-10_08:09:54 slot=4 run=6 rc=0 ok
+2026-11-10_08:10:02 slot=1 run=6 rc=0 ok
+2026-11-10_08:10:02 slot=2 run=6 rc=0 ok
+2026-11-10_08:10:03 slot=3 run=6 rc=0 ok
+2026-11-10_08:12:58 slot=4 run=7 rc=0 ok
+2026-11-10_08:13:03 slot=1 run=7 rc=0 ok
+2026-11-10_08:13:05 slot=2 run=7 rc=0 ok
+2026-11-10_08:13:08 slot=3 run=7 rc=0 ok
+2026-11-10_08:16:02 slot=4 run=8 rc=0 ok
+2026-11-10_08:16:07 slot=1 run=8 rc=0 ok
+2026-11-10_08:16:11 slot=2 run=8 rc=0 ok
+2026-11-10_08:16:17 slot=3 run=8 rc=0 ok
+2026-11-10_08:19:05 slot=4 run=9 rc=0 ok
+2026-11-10_08:19:08 slot=1 run=9 rc=0 ok
+2026-11-10_08:19:13 slot=2 run=9 rc=0 ok
+2026-11-10_08:19:21 slot=3 run=9 rc=0 ok
+2026-11-10_08:22:09 slot=4 run=10 rc=0 ok
+2026-11-10_08:22:12 slot=1 run=10 rc=0 ok
+2026-11-10_08:22:16 slot=2 run=10 rc=0 ok
+2026-11-10_08:22:26 slot=3 run=10 rc=0 ok
+2026-11-10_08:25:14 slot=4 run=11 rc=0 ok
+2026-11-10_08:25:16 slot=1 run=11 rc=0 ok
+2026-11-10_08:25:21 slot=2 run=11 rc=0 ok
+2026-11-10_08:25:29 slot=3 run=11 rc=0 ok
+2026-11-10_08:28:19 slot=4 run=12 rc=0 ok
+2026-11-10_08:28:19 slot=1 run=12 rc=0 ok
+2026-11-10_08:28:27 slot=2 run=12 rc=0 ok
+2026-11-10_08:28:36 slot=3 run=12 rc=0 ok
+# h-boots-user-iommu (head image, --scenario smoke, 4 GiB)
+2026-11-10_07:54:38 slot=5 run=1 rc=0 ok
+2026-11-10_07:57:46 slot=5 run=2 rc=0 ok
+2026-11-10_08:00:51 slot=5 run=3 rc=0 ok
+2026-11-10_08:04:01 slot=5 run=4 rc=0 ok
+2026-11-10_08:07:08 slot=5 run=5 rc=0 ok
+2026-11-10_08:10:14 slot=5 run=6 rc=0 ok
+2026-11-10_08:13:25 slot=5 run=7 rc=0 ok
+2026-11-10_08:16:34 slot=5 run=8 rc=0 ok
+2026-11-10_08:19:40 slot=5 run=9 rc=0 ok
+2026-11-10_08:22:48 slot=5 run=10 rc=0 ok
+2026-11-10_08:25:54 slot=5 run=11 rc=0 ok
+2026-11-10_08:28:58 slot=5 run=12 rc=0 ok
+# h-boots-kernel (head image, --scenario smoke, 4 GiB)
+2026-11-10_07:54:18 slot=6 run=1 rc=0 ok
+2026-11-10_07:57:08 slot=6 run=2 rc=0 ok
+2026-11-10_07:59:58 slot=6 run=3 rc=0 ok
+2026-11-10_08:02:48 slot=6 run=4 rc=0 ok
+2026-11-10_08:05:39 slot=6 run=5 rc=0 ok
+2026-11-10_08:08:28 slot=6 run=6 rc=0 ok
+2026-11-10_08:11:16 slot=6 run=7 rc=0 ok
+2026-11-10_08:14:05 slot=6 run=8 rc=0 ok
+2026-11-10_08:16:55 slot=6 run=9 rc=0 ok
+2026-11-10_08:19:44 slot=6 run=10 rc=0 ok
+2026-11-10_08:22:31 slot=6 run=11 rc=0 ok
+2026-11-10_08:25:19 slot=6 run=12 rc=0 ok
+# h-boots-smp1 (head image, --scenario smoke, 4 GiB)
+2026-11-10_07:54:35 slot=7 run=1 rc=0 ok
+2026-11-10_07:57:39 slot=7 run=2 rc=0 ok
+2026-11-10_08:00:43 slot=7 run=3 rc=0 ok
+2026-11-10_08:03:48 slot=7 run=4 rc=0 ok
+2026-11-10_08:06:53 slot=7 run=5 rc=0 ok
+2026-11-10_08:09:57 slot=7 run=6 rc=0 ok
+2026-11-10_08:13:02 slot=7 run=7 rc=0 ok
+2026-11-10_08:16:07 slot=7 run=8 rc=0 ok
+2026-11-10_08:19:09 slot=7 run=9 rc=0 ok
+2026-11-10_08:22:12 slot=7 run=10 rc=0 ok
+2026-11-10_08:25:15 slot=7 run=11 rc=0 ok
+2026-11-10_08:28:20 slot=7 run=12 rc=0 ok
+# h2-boots-user (head image, --scenario smoke, 4 GiB)
+2026-11-10_08:37:29 slot=1 run=1 rc=0 ok
+2026-11-10_08:37:29 slot=2 run=1 rc=0 ok
+2026-11-10_08:37:31 slot=4 run=1 rc=0 ok
+2026-11-10_08:37:33 slot=3 run=1 rc=0 ok
+2026-11-10_08:40:35 slot=2 run=2 rc=0 ok
+2026-11-10_08:40:35 slot=1 run=2 rc=0 ok
+2026-11-10_08:40:37 slot=4 run=2 rc=0 ok
+2026-11-10_08:40:39 slot=3 run=2 rc=0 ok
+2026-11-10_08:43:40 slot=1 run=3 rc=0 ok
+2026-11-10_08:43:44 slot=2 run=3 rc=0 ok
+2026-11-10_08:43:45 slot=4 run=3 rc=0 ok
+2026-11-10_08:43:45 slot=3 run=3 rc=0 ok
+2026-11-10_08:46:48 slot=1 run=4 rc=0 ok
+2026-11-10_08:46:49 slot=4 run=4 rc=0 ok
+2026-11-10_08:46:50 slot=2 run=4 rc=0 ok
+2026-11-10_08:46:52 slot=3 run=4 rc=0 ok
+2026-11-10_08:49:55 slot=4 run=5 rc=0 ok
+2026-11-10_08:49:56 slot=1 run=5 rc=0 ok
+2026-11-10_08:50:00 slot=3 run=5 rc=0 ok
+2026-11-10_08:50:03 slot=2 run=5 rc=0 ok
+2026-11-10_08:53:03 slot=1 run=6 rc=0 ok
+2026-11-10_08:53:05 slot=4 run=6 rc=0 ok
+2026-11-10_08:53:07 slot=3 run=6 rc=0 ok
+2026-11-10_08:53:09 slot=2 run=6 rc=0 ok
+2026-11-10_08:56:07 slot=1 run=7 rc=0 ok
+2026-11-10_08:56:12 slot=3 run=7 rc=0 ok
+2026-11-10_08:56:14 slot=4 run=7 rc=0 ok
+2026-11-10_08:56:22 slot=2 run=7 rc=0 ok
+2026-11-10_08:59:13 slot=1 run=8 rc=0 ok
+2026-11-10_08:59:20 slot=4 run=8 rc=0 ok
+2026-11-10_08:59:20 slot=3 run=8 rc=0 ok
+2026-11-10_08:59:27 slot=2 run=8 rc=0 ok
+2026-11-10_09:02:26 slot=3 run=9 rc=0 ok
+2026-11-10_09:02:27 slot=4 run=9 rc=0 ok
+2026-11-10_09:02:32 slot=1 run=9 rc=0 ok
+2026-11-10_09:02:33 slot=2 run=9 rc=0 ok
+2026-11-10_09:05:34 slot=3 run=10 rc=0 ok
+2026-11-10_09:05:34 slot=4 run=10 rc=0 ok
+2026-11-10_09:05:37 slot=1 run=10 rc=0 ok
+2026-11-10_09:05:41 slot=2 run=10 rc=0 ok
+2026-11-10_09:08:41 slot=3 run=11 rc=0 ok
+2026-11-10_09:08:41 slot=4 run=11 rc=0 ok
+2026-11-10_09:08:46 slot=1 run=11 rc=0 ok
+2026-11-10_09:08:50 slot=2 run=11 rc=0 ok
+2026-11-10_09:11:47 slot=4 run=12 rc=0 ok
+2026-11-10_09:11:47 slot=3 run=12 rc=0 ok
+2026-11-10_09:11:52 slot=1 run=12 rc=0 ok
+2026-11-10_09:11:56 slot=2 run=12 rc=0 ok
+# h2-boots-user-iommu (head image, --scenario smoke, 4 GiB)
+2026-11-10_08:37:33 slot=5 run=1 rc=0 ok
+2026-11-10_08:40:41 slot=5 run=2 rc=0 ok
+2026-11-10_08:43:48 slot=5 run=3 rc=0 ok
+2026-11-10_08:46:55 slot=5 run=4 rc=0 ok
+2026-11-10_08:50:03 slot=5 run=5 rc=0 ok
+2026-11-10_08:53:11 slot=5 run=6 rc=0 ok
+2026-11-10_08:56:18 slot=5 run=7 rc=0 ok
+2026-11-10_08:59:29 slot=5 run=8 rc=0 ok
+2026-11-10_09:02:37 slot=5 run=9 rc=0 ok
+2026-11-10_09:05:49 slot=5 run=10 rc=0 ok
+2026-11-10_09:08:58 slot=5 run=11 rc=0 ok
+2026-11-10_09:12:04 slot=5 run=12 rc=0 ok
+# h2-boots-kernel (head image, --scenario smoke, 4 GiB)
+2026-11-10_08:37:14 slot=6 run=1 rc=0 ok
+2026-11-10_08:40:05 slot=6 run=2 rc=0 ok
+2026-11-10_08:42:55 slot=6 run=3 rc=0 ok
+2026-11-10_08:45:46 slot=6 run=4 rc=0 ok
+2026-11-10_08:48:36 slot=6 run=5 rc=0 ok
+2026-11-10_08:51:27 slot=6 run=6 rc=0 ok
+2026-11-10_08:54:18 slot=6 run=7 rc=0 ok
+2026-11-10_08:57:07 slot=6 run=8 rc=0 ok
+2026-11-10_08:59:58 slot=6 run=9 rc=0 ok
+2026-11-10_09:02:49 slot=6 run=10 rc=0 ok
+2026-11-10_09:05:42 slot=6 run=11 rc=0 ok
+2026-11-10_09:08:34 slot=6 run=12 rc=0 ok
+# h2-boots-smp1 (head image, --scenario smoke, 4 GiB)
+2026-11-10_08:37:28 slot=7 run=1 rc=0 ok
+2026-11-10_08:40:32 slot=7 run=2 rc=0 ok
+2026-11-10_08:43:38 slot=7 run=3 rc=0 ok
+2026-11-10_08:46:43 slot=7 run=4 rc=0 ok
+2026-11-10_08:49:47 slot=7 run=5 rc=0 ok
+2026-11-10_08:52:52 slot=7 run=6 rc=0 ok
+2026-11-10_08:55:59 slot=7 run=7 rc=0 ok
+2026-11-10_08:59:02 slot=7 run=8 rc=0 ok
+2026-11-10_09:02:08 slot=7 run=9 rc=0 ok
+2026-11-10_09:05:13 slot=7 run=10 rc=0 ok
+2026-11-10_09:08:17 slot=7 run=11 rc=0 ok
+2026-11-10_09:11:21 slot=7 run=12 rc=0 ok
+# unprovoked attempts on the unfixed 52755fc image: 50 x churn proc 20 per run (1050 glibc launches)
+2026-11-05_19:44:13 slot=4 run=1 rc=0 verdict=ok [bug03
+2026-11-05_19:44:30 slot=3 run=1 rc=0 verdict=ok [bug03
+2026-11-05_19:44:30 slot=5 run=1 rc=0 verdict=ok [bug03
+2026-11-05_19:44:41 slot=7 run=1 rc=0 verdict=ok [bug03
+2026-11-05_19:45:03 slot=6 run=1 rc=0 verdict=ok [bug03
+2026-11-05_19:57:02 slot=4 run=2 rc=0 verdict=ok [bug03
+2026-11-05_19:57:11 slot=5 run=2 rc=0 verdict=ok [bug03
+2026-11-05_19:57:26 slot=3 run=2 rc=0 verdict=ok [bug03
+2026-11-05_19:57:28 slot=7 run=2 rc=0 verdict=ok [bug03
+2026-11-05_19:57:49 slot=6 run=2 rc=0 verdict=ok [bug03
+2026-11-05_20:09:46 slot=4 run=3 rc=0 verdict=ok [bug03
+2026-11-05_20:09:56 slot=5 run=3 rc=0 verdict=ok [bug03
+2026-11-05_20:10:09 slot=7 run=3 rc=0 verdict=ok [bug03
+2026-11-05_20:10:12 slot=3 run=3 rc=0 verdict=ok [bug03
+2026-11-05_20:10:30 slot=6 run=3 rc=0 verdict=ok [bug03
+2026-11-10_09:00:42 slot=0 run=1 rc=0 verdict=ok [bug03
+2026-11-10_09:12:21 slot=0 run=2 rc=1 verdict=ok [bug03
+2026-11-10_09:25:02 slot=0 run=3 rc=0 verdict=ok [bug03
+2026-11-10_09:37:32 slot=0 run=4 rc=0 verdict=ok [bug03
+2026-11-10_09:50:10 slot=0 run=5 rc=0 verdict=ok [bug03
+2026-11-10_10:03:03 slot=0 run=6 rc=0 verdict=ok [bug03
+2026-11-10_10:15:19 slot=0 run=7 rc=0 verdict=ok [bug03
+2026-11-10_10:28:08 slot=0 run=8 rc=0 verdict=ok [bug03

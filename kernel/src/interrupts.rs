@@ -379,7 +379,21 @@ extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {
 /// an IF=0 wedge. Dumps the interrupted RIP + a raw scan of the interrupted stack for
 /// return addresses (symbolize offline against the kernel .efi). Then returns (iret)
 /// so the guest keeps running — this is a probe, not a fatal.
+/// `[ap-tss]` self-test: while set, an NMI only records the stack it runs on and
+/// the task register of its core (index: LAPIC id & 7), and returns.
+pub static NMI_TEST: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+pub static NMI_TEST_RSP: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+pub static NMI_TEST_TR: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+
 extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
+    if NMI_TEST.load(Ordering::Acquire) {
+        let cpu = (crate::apic::lapic_id() & 7) as usize;
+        let rsp: u64;
+        unsafe { core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nomem, nostack, preserves_flags)) };
+        NMI_TEST_TR[cpu].store(crate::gdt::task_register() as u64 | (1 << 32), Ordering::Release);
+        NMI_TEST_RSP[cpu].store(rsp, Ordering::Release);
+        return;
+    }
     let rip = frame.instruction_pointer.as_u64();
     let rsp = frame.stack_pointer.as_u64();
     let cs = frame.code_segment.0;

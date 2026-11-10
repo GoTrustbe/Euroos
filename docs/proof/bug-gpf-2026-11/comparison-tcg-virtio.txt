@@ -1,0 +1,7 @@
+== docs/proof/virtio-modern-2026-11/tcg-dev-v2-modern.markers  vs  docs/proof/bug-gpf-2026-11/tcg-dev-modern.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   ap-tss: OKx1
+   bug040: OKx1

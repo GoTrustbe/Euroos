@@ -18,6 +18,9 @@ pub enum FrameError {
     OutOfMemory,
     DoubleFree,
     OutOfBounds,
+    /// The frame was never this allocator's to give out (outside the usable
+    /// regions it was built from): refused, so it cannot enter the free list.
+    Foreign,
 }
 
 /// Bitmap allocator: 1 bit per 4 KiB frame, 64 frames per `u64`.
@@ -36,6 +39,12 @@ pub struct FrameAllocator {
     /// Peak usage (highest number of simultaneously allocated frames) — for diagnostics
     /// + capacity planning.
     high_water: usize,
+    /// Frame ranges `[first, end)` this allocator owns (the usable regions it was
+    /// built from, sorted, merged). Empty = no check ([`FrameAllocator::new`]).
+    owned: Vec<(usize, usize)>,
+    /// Frees of frames outside `owned`, refused, and the last such address.
+    foreign_frees: usize,
+    last_foreign: u64,
 }
 
 impl FrameAllocator {
@@ -51,6 +60,9 @@ impl FrameAllocator {
             double_frees: 0,
             trace: None,
             high_water: 0,
+            owned: Vec::new(),
+            foreign_frees: 0,
+            last_foreign: 0,
         }
     }
 
@@ -76,6 +88,30 @@ impl FrameAllocator {
         }
         // Reserve low memory (IVT/BIOS/kernel-image protection).
         a.set_range(0, reserve_below, true);
+        // What this allocator owns: the usable regions above `reserve_below`. A
+        // bitmap that starts all-used turns a free of ANY other frame (the kernel
+        // image, the heap, another pool's frame) into a free frame of this pool;
+        // `free` refuses those (BUG-040 audit).
+        let low = reserve_below.div_ceil(PAGE_SIZE) as usize;
+        let mut owned: Vec<(usize, usize)> = regions
+            .iter()
+            .filter(|r| r.usable && r.len >= PAGE_SIZE)
+            .map(|r| {
+                let first = (r.start.div_ceil(PAGE_SIZE) as usize).max(low);
+                let end = (((r.start + r.len) / PAGE_SIZE) as usize).min(a.total_frames);
+                (first, end)
+            })
+            .filter(|&(f, e)| f < e)
+            .collect();
+        owned.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for (f, e) in owned {
+            match merged.last_mut() {
+                Some(last) if f <= last.1 => last.1 = last.1.max(e),
+                _ => merged.push((f, e)),
+            }
+        }
+        a.owned = merged;
         a.recount();
         a.usable_total = a.free_frames;
         a
@@ -241,11 +277,31 @@ impl FrameAllocator {
         self.high_water
     }
 
+    /// Does this allocator own `frame` (always true for [`FrameAllocator::new`])?
+    pub fn owns(&self, phys: u64) -> bool {
+        let frame = (phys / PAGE_SIZE) as usize;
+        if self.owned.is_empty() {
+            return frame < self.total_frames;
+        }
+        let i = self.owned.partition_point(|&(f, _)| f <= frame);
+        i > 0 && frame < self.owned[i - 1].1
+    }
+
+    /// Refused frees of frames this allocator never owned, and the last address.
+    pub fn foreign_frees(&self) -> (usize, u64) {
+        (self.foreign_frees, self.last_foreign)
+    }
+
     /// Free a frame.
     pub fn free(&mut self, phys: u64) -> Result<(), FrameError> {
         let frame = (phys / PAGE_SIZE) as usize;
         if frame >= self.total_frames {
             return Err(FrameError::OutOfBounds);
+        }
+        if !self.owns(phys) {
+            self.foreign_frees += 1;
+            self.last_foreign = phys;
+            return Err(FrameError::Foreign);
         }
         let (w, b) = (frame / 64, frame % 64);
         if self.bitmap[w] & (1 << b) == 0 {
@@ -313,6 +369,44 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_frame_outside_the_usable_regions_cannot_be_freed_into_the_pool() {
+        // A pool over [4 MiB, 8 MiB) of a 16 MiB address range, like procpool.
+        let r = [MemoryRegion { start: 0x40_0000, len: 0x40_0000, usable: true }];
+        let mut a = FrameAllocator::from_regions(&r, 0);
+        let free0 = a.free_frames();
+        // The kernel image / another allocator's frame below and inside the bitmap.
+        assert_eq!(a.free(0x20_0000), Err(FrameError::Foreign));
+        assert_eq!(a.free(0x3F_F000), Err(FrameError::Foreign));
+        assert_eq!(a.free_frames(), free0);
+        assert_eq!(a.foreign_frees(), (2, 0x3F_F000));
+        // Nothing foreign comes back out: every allocation stays in the region.
+        for _ in 0..free0 {
+            let f = a.allocate().unwrap();
+            assert!((0x40_0000..0x80_0000).contains(&f));
+        }
+        assert!(a.allocate().is_err());
+        // Its own frames still free normally (and a double free is still caught).
+        assert_eq!(a.free(0x40_0000), Ok(()));
+        assert_eq!(a.free(0x40_0000), Err(FrameError::DoubleFree));
+        assert!(a.owns(0x7F_F000) && !a.owns(0x80_0000));
+    }
+
+    #[test]
+    fn reserved_low_memory_and_unusable_regions_are_not_owned() {
+        let r = [
+            MemoryRegion { start: 0, len: 0x20_0000, usable: true },
+            MemoryRegion { start: 0x20_0000, len: 0x10_0000, usable: false },
+            MemoryRegion { start: 0x30_0000, len: 0x10_0000, usable: true },
+        ];
+        let mut a = FrameAllocator::from_regions(&r, 0x10_0000);
+        assert!(!a.owns(0x8_0000)); // below reserve_below
+        assert!(a.owns(0x10_0000) && a.owns(0x1F_F000));
+        assert!(!a.owns(0x20_0000)); // the unusable hole
+        assert_eq!(a.free(0x25_0000), Err(FrameError::Foreign));
+        assert!(a.owns(0x30_0000));
+    }
 
     fn regions() -> Vec<MemoryRegion> {
         vec![
