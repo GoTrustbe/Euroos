@@ -6074,21 +6074,11 @@ fn main() -> Status {
                         };
 
                     let mut out: Vec<String> = Vec::new();
-                    if let Some(h) = help::shell_line(&exec_cmd) { out.extend(h); } else // T3-hook: help, help <command>, help tour
-                    if exec_cmd == "clear" {
+                    // help, help <command>, help tour: the help system answers (help.rs).
+                    if let Some(h) = help::shell_line(&exec_cmd) {
+                        out.extend(h);
+                    } else if exec_cmd == "clear" {
                         windows[term_idx].content.clear();
-                    } else if exec_cmd == "help" {
-                        out.push("programs (exec from EuroFS): hello cat linuxprog muslprog".into());
-                        out.push("        argvprog pieprog muslreal muslfile mcat mwrite".into());
-                        out.push("        mecho <text> · mupper (stdin->UPPERCASE)".into());
-                        out.push("pipes/redirection: a | b · prog > file · prog >> file".into());
-                        out.push("install <package> (Ed25519 verification) · packages: msum".into());
-                        out.push("network (live NIC): ping <ip|name> · ping6 · net · fetch <host> · https <host>".into());
-                        out.push("server: serve (one connection) · httpd (background HTTP server on/off)".into());
-                        out.push("EuroGuard (Track 7): guard · guard block <domain> · guard allow <domain>".into());
-                        out.push("processes: ps · kill <pid> (background musl processes)".into());
-                        out.push("engines: calc <expr> (EuroReken) · js <code> (EuroJS)".into());
-                        out.push("builtins: ls, uname, mem, df, clear, help".into());
                     } else if let Some(expr) = exec_cmd.strip_prefix("calc ") {
                         // REAL calculation via the euroreken engine (no mockup).
                         match euroreken::eval(expr.trim()) {
