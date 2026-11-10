@@ -1261,6 +1261,17 @@ EuroFont crate (`[ft]`) — a separate **sfnt/TrueType metadata parser** (no Fre
 - **Vector icons (`icons.rs`)** — a from-scratch **SVG-path renderer** (no bitmaps). `icon_svg()` holds the `euicons` set as mini-SVG strings; `draw()` (`:40`) scales from a 24px viewBox, parses `<circle>`/`<rect>`/`<path>`, and strokes them with `aa_seg`/`aa_ring` primitives at scaled thickness — resolution-independent.
 - **App icons (`appicons.rs`)** — `draw_tile()` (`:33`) renders the colored squircle app tiles: a tinted drop shadow, a `fill_rounded_rect_grad` 150° gradient squircle (radius 28%), a glass inset-highlight, and a white icon glyph centered at ~52%.
 
+### Help, shortcut overview, first-run tour, tooltips (`kernel/src/help.rs`, `help_text.rs`, `onboarding.rs`, `tooltip.rs`)
+
+Branch `feature/help` (2026-11); details and maintenance rules in [`HELP-SYSTEM.md`](HELP-SYSTEM.md), proof in [`proof/help-2026-11/`](proof/help-2026-11/README.md).
+
+- **Help panel** — an overlay like the launcher: page list left, wrapped text right. F1 opens the page of the active window, the `?` in a title bar does the same for that window, F2 opens the keyboard shortcut overview. Pages are data in `help_text.rs` (`PAGES`: title, summary, sections, keys); `help::page_for(SuiteApp, title)` maps a window to its page. The shortcut page is generated from `SYSTEM_KEYS`, `POINTER_KEYS` and each page's `keys`.
+- **F1/F2** are latched in `ps2::push_scancode` (every keyboard passes there) and consumed by `help::pump`, the one call the desktop loop makes before its own input handling. The USB HID table maps F1/F2; `eurokeymap` now decodes Esc (scancode 0x01), which no consumer received before.
+- **Tour** (`onboarding.rs`) — six cards on the first desktop of a session. Off in the self-test image and with `ui.tour=off`; "Do not show again" writes `/home/<user>/.config/euroos/tour-done`. It looks at pending input without taking it (`ps2::peek_scancodes`, `mouse::peek_press`): only Esc, arrows and clicks on the card are consumed.
+- **Tooltips inside apps** — `tooltip::app_tip(win, x, y)`, reached through `help::tooltip_hook` at the top of `tooltip_for`. EuroFiles, EuroNotes and EuroView answer from `tip_at` next to their layout; EuroText, EuroWeb and EuroReken through their hit tests; EuroPaint through a mirrored table.
+- **Shell** — `help` (commands by topic), `help <command>` (one line + example), `help tour`; table `CMDS` in `help_text.rs`.
+- **`[help]`** boot marker: every window kind and every launcher entry has a page with content; panel state machine; shell help; tooltip table; tour geometry against the compositor's dock hit tests.
+
 ### Input — PS/2 Keyboard & Mouse, USB-HID (`kernel/src/ps2.rs`, `kernel/src/mouse.rs`)
 
 - **Keyboard (`ps2.rs`)** — IRQ-driven scancode-set-1 US QWERTY. The IRQ1 handler calls `push_scancode()` into a 256-entry ring buffer so no keystroke is lost while the shell isn't scheduled. `poll_key()` (`:56`) pops codes, tracks `SHIFT` (make/break), and `translate()` (`:72`) maps to chars including `\r`, backspace, tab, with `shifted_symbol()` for punctuation.

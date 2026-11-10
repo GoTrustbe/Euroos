@@ -1,0 +1,41 @@
+== tcg-base-user-smp4.markers  vs  tcg-help-user-smp4.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   help: OKx1
+== docs/proof/net-worker-2026-11/tcg-user-smp4-noiommu.markers  vs  tcg-help-user-smp4.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   help: OKx1
+tcg-base-user-smp4.markers: 177 tags, 185 OK lines, FAILED: {'app': 1, 'churn-proc': 1, 'churn-thread': 1, 'churn-fork': 1, 'app-policy': 1}
+tcg-help-user-smp4.markers: 178 tags, 186 OK lines, FAILED: {'app': 1, 'churn-proc': 1, 'churn-thread': 1, 'churn-fork': 1, 'app-policy': 1}
+[lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[help] help pages: window kinds 21/21 · launcher apps 15/15 · 21 pages (18 apps) · shortcut rows 43 · panel open/page/close=true/true/true · shell help 98 cmds ok=true · in-app tooltips=true · tour steps ok=true → OK (every app has a help page; F1, F2, ?) ✓
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+
+== tcg-base-user-smp1.markers  vs  tcg-help-user-smp1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   help: OKx1
+== docs/proof/net-worker-2026-11/tcg-user-smp1-noiommu.markers  vs  tcg-help-user-smp1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   help: OKx1
+tcg-base-user-smp1.markers: 176 tags, 184 OK lines, FAILED: {'app': 1, 'churn-proc': 1, 'churn-thread': 1, 'churn-fork': 1, 'app-policy': 1}
+tcg-help-user-smp1.markers: 177 tags, 185 OK lines, FAILED: {'app': 1, 'churn-proc': 1, 'churn-thread': 1, 'churn-fork': 1, 'app-policy': 1}
+[lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[help] help pages: window kinds 21/21 · launcher apps 15/15 · 21 pages (18 apps) · shortcut rows 43 · panel open/page/close=true/true/true · shell help 98 cmds ok=true · in-app tooltips=true · tour steps ok=true → OK (every app has a help page; F1, F2, ?) ✓
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+
+wall time of tcg-boot.sh (desktop marker polled every 5 s, then 120 s):
+base-user-smp4 done 09:02:46 after 246s
+help-user-smp4 done 10:08:42 after 256s
+base-user-smp1 done 09:02:51 after 251s
+help-user-smp1 done 10:08:37 after 251s

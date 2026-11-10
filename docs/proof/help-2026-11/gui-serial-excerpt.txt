@@ -1,0 +1,31 @@
+== run r6: gui-tour-help-tooltips.txt
+[help] help pages: window kinds 21/21 · launcher apps 15/15 · 21 pages (18 apps) · shortcut rows 43 · panel open/page/close=true/true/true · shell help 98 cmds ok=true · in-app tooltips=true · tour steps ok=true → OK (every app has a help page; F1, F2, ?) ✓
+[lock] unattended boot — no input within grace → auto-login as euro (demo/CI)
+[desktop] interactive loop started — input + shell live
+[tour] first-run tour shown (Esc, Skip, a click outside or typing closes it)
+[tour] closed at step 6 of 6: skipped (Esc or Skip)
+== run r7: gui-passthrough-shell.txt
+[help] help pages: window kinds 21/21 · launcher apps 15/15 · 21 pages (18 apps) · shortcut rows 43 · panel open/page/close=true/true/true · shell help 98 cmds ok=true · in-app tooltips=true · tour steps ok=true → OK (every app has a help page; F1, F2, ?) ✓
+[lock] unattended boot — no input within grace → auto-login as euro (demo/CI)
+[desktop] interactive loop started — input + shell live
+[tour] first-run tour shown (Esc, Skip, a click outside or typing closes it)
+[tour] closed by a click at 1399,759 outside the card (the click goes to the desktop)
+[e2e] $ help
+[e2e] $ help tour
+[e2e] The tour is shown on the desktop (Esc closes it).
+[tour] closed by typing (scancodes [23] stay for the desktop)
+[e2e] $ help ls
+[e2e] ls [path]  -  list a directory
+[e2e] example: ls /home/euro
+[e2e] $ help fetch
+[e2e] fetch <host> [save-path]  -  HTTP GET; with a path, save the answer to a file
+[e2e] example: fetch example.com
+[e2e] also: wget
+[e2e] $ help nosuch
+[e2e] help: no entry for 'nosuch'.  Type help for the list by topic.
+[e2e] $ help tour
+[e2e] The tour is shown on the desktop (Esc closes it).
+[tour] closed at step 1 of 6: do not show again
+[tour] do not show again: /home/euro/.config/euroos/tour-done written
+[e2e] $ ls /home/euro/.config/euroos
+[e2e]   -rw-r--r--        2 B  2026-11-10 09:15  tour-done
