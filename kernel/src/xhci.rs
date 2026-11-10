@@ -1221,6 +1221,17 @@ fn inject_keyboard(hid: &mut HidDevice, report: &[u8]) {
     } else if !shift_now && shift_prev {
         crate::ps2::push_scancode(0xAA);
     }
+    // Left Alt as 0x38/0xB8, before the keys of the same report: the keyboard
+    // layer's Alt latch decides Alt+Tab (app switcher) and Alt+1..4 (workspaces).
+    // Only Shift and Ctrl were forwarded, so neither shortcut did anything on a
+    // USB keyboard (BUG-043). Right Alt is AltGr and stays out of it.
+    let alt_now = mods & 0x04 != 0;
+    let alt_prev = hid.prev_mods & 0x04 != 0;
+    if alt_now && !alt_prev {
+        crate::ps2::push_scancode(0x38);
+    } else if !alt_now && alt_prev {
+        crate::ps2::push_scancode(0xB8);
+    }
     hid.prev_mods = mods;
     // Track Ctrl so editors can see Ctrl+key combos (copy/paste/save/select-all).
     let ctrl_now = mods & 0x11 != 0; // LCtrl (bit0) or RCtrl (bit4)
