@@ -177,6 +177,16 @@ pub fn send_ipi(apic_id: u8, vector: u8) {
     }
 }
 
+/// Send an NMI to core `apic_id` (delivery mode 100b; the vector is ignored).
+/// For the `[ap-tss]` self-test: an NMI enters through an IST gate.
+pub fn send_nmi(apic_id: u8) {
+    unsafe {
+        wr(REG_ICR_HIGH, (apic_id as u32) << 24);
+        wr(REG_ICR_LOW, 0x0000_4400); // NMI, assert, edge, physical dest
+        wait_icr_idle();
+    }
+}
+
 /// Send an INIT-IPI to core `apic_id` (physical destination mode).
 pub fn send_init(apic_id: u8) {
     unsafe {

@@ -117,18 +117,62 @@ pub fn init() {
     }
 }
 
-/// Bring-up of an application processor: load the **shared** GDT and set the
-/// kernel segments, so that the CS selector in the (shared) IDT entries is valid
-/// and the AP can handle ring-0 interrupts. We load NO TSS: the only TSS is
-/// that of the BSP (busy bit), and a parked/timer-only AP does no ring-3
-/// or IST. (Per-CPU TSS is the next step towards AP tasks in ring 3.)
-pub fn init_ap() {
+// ── Per-AP GDT + TSS ────────────────────────────────────────────────────────
+// The IDT is shared by every core and its double-fault, page-fault and NMI
+// gates name IST stacks. A core without a loaded TSS takes the IST pointer from
+// wherever TR points after INIT: base 0, i.e. the stack pointer is read from
+// linear address 0x24.. (the real-mode vector table) and the exception frame
+// is written there. The APs loaded no TSS, so a page fault, a double fault or
+// an NMI on an AP (the `nmi` of `--nmi-on-hang` reaches every core) ran on a
+// garbage stack. Each AP now has its own GDT (same selector layout as the
+// BSP's, so the shared IDT's CS stays valid) with its own TSS and its own
+// three IST stacks.
+const MAX_CPU: usize = 8;
+const AP_IST_COUNT: usize = 3; // double fault, page fault, NMI (the indexes above)
+static mut AP_IST: [[[u8; IST_STACK_SIZE]; AP_IST_COUNT]; MAX_CPU] = [[[0; IST_STACK_SIZE]; AP_IST_COUNT]; MAX_CPU];
+static mut AP_TSS: [TaskStateSegment; MAX_CPU] = [const { TaskStateSegment::new() }; MAX_CPU];
+static mut AP_GDT: [GlobalDescriptorTable; MAX_CPU] = [const { GlobalDescriptorTable::new() }; MAX_CPU];
+
+/// `[bottom, top)` of IST stack `ist` (one of the `*_IST_INDEX` values) of AP `cpu`.
+pub fn ap_ist_range(cpu: usize, ist: u16) -> (u64, u64) {
+    let base = unsafe { core::ptr::addr_of!(AP_IST[cpu % MAX_CPU][ist as usize % AP_IST_COUNT]) as u64 };
+    (base, base + IST_STACK_SIZE as u64)
+}
+
+/// Bring-up of application processor `cpu` (its LAPIC id & 7): its own GDT with
+/// the BSP's selector layout and its own TSS with three IST stacks. Call once,
+/// on that core.
+pub fn init_ap(cpu: usize) {
     use x86_64::instructions::segmentation::{Segment, CS, DS, ES, SS};
-    GDT.0.load();
+    use x86_64::instructions::tables::load_tss;
+    let cpu = cpu % MAX_CPU;
+    // SAFETY: slot `cpu` belongs to this core alone and is written once, here,
+    // before the core takes its first interrupt; the tables live for ever.
     unsafe {
-        CS::set_reg(GDT.1.code);
-        SS::set_reg(GDT.1.data);
-        DS::set_reg(GDT.1.data);
-        ES::set_reg(GDT.1.data);
+        let tss: &'static mut TaskStateSegment = &mut *core::ptr::addr_of_mut!(AP_TSS[cpu]);
+        for ist in [DOUBLE_FAULT_IST_INDEX, PAGE_FAULT_IST_INDEX, NMI_IST_INDEX] {
+            tss.interrupt_stack_table[ist as usize] = VirtAddr::new(ap_ist_range(cpu, ist).1 & !0xF);
+        }
+        let gdt: &'static mut GlobalDescriptorTable = &mut *core::ptr::addr_of_mut!(AP_GDT[cpu]);
+        *gdt = GlobalDescriptorTable::new();
+        let code = gdt.append(Descriptor::kernel_code_segment());
+        let data = gdt.append(Descriptor::kernel_data_segment());
+        let _user_data = gdt.append(Descriptor::user_data_segment());
+        let _user_code = gdt.append(Descriptor::user_code_segment());
+        let tss_sel = gdt.append(Descriptor::tss_segment(tss));
+        debug_assert!(code == GDT.1.code && data == GDT.1.data);
+        gdt.load();
+        CS::set_reg(code);
+        SS::set_reg(data);
+        DS::set_reg(data);
+        ES::set_reg(data);
+        load_tss(tss_sel);
     }
+}
+
+/// The task register of this core (0 = no TSS loaded).
+pub fn task_register() -> u16 {
+    let tr: u16;
+    unsafe { core::arch::asm!("str {0:x}", out(reg) tr, options(nomem, nostack, preserves_flags)) };
+    tr
 }

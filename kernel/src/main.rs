@@ -5027,6 +5027,7 @@ fn main() -> Status {
     // BUG-032: is the hardware write watch on the scheduler state live on this machine?
     memwatch::selftest();
     sched::df_selftest();
+    smp::ap_tss_selftest();
     serial_println!(
         "[3f7-live] permission-portal armed — no request pending at boot; a modal is shown only when an app requests a resource (wired to portal::respond)"
     );
