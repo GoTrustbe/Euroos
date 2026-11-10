@@ -9694,6 +9694,21 @@ fn globals_release_owner(owner: usize) {
 pub fn thread_name_pub(t: usize) -> String { thread_name(t) }
 pub fn globals_owner_now() -> usize { GLOBALS_OWNER.load(Ordering::Relaxed) }
 
+/// The current task is Dead and has given back what it ran on (its kernel-stack
+/// slot; for a fork child also its arena, page tables and pml4): leave for
+/// good. One `yield_now` is not a promise: the scheduler skips the switch when
+/// SCHED is held on another core (BUG-007), and the caller then returned to
+/// ring 3 as a dead task on freed memory, where glibc's `_exit` loop calls
+/// exit_group again (for a fork child that second call no longer finds the
+/// child and takes the MAIN exit: the whole run torn down under its main
+/// task). Yield until the switch happens; a Dead task is never picked again.
+fn switch_away_dead() -> ! {
+    loop {
+        crate::sched::yield_now();
+        core::hint::spin_loop();
+    }
+}
+
 fn yield_reacquire() {
     // Preserve the caller's interrupt state across the yield. A syscall arm
     // runs with IF=0 (FMASK); yield_now re-enables to switch, and returning
@@ -13584,8 +13599,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 // the usual "don't yield mid-syscall" hazard doesn't apply to a task
                 // that never resumes. Yielding here avoids running glibc's post-exit
                 // ring-3 garbage (which else spins, or GP-faults, until the timer skips it).
-                yield_reacquire();
-                return 0; // unreachable in practice (Dead task is never rescheduled)
+                switch_away_dead();
             }
             // A FORK CHILD exits: recycle its arena, page tables and kstack into
             // the process pool, drop its bookkeeping, and die quietly. Without
@@ -13650,8 +13664,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     }
                     free_thread_kstack(cur);
                     crate::sched::mark_dead(cur);
-                    yield_reacquire();
-                    return 0; // unreachable: a Dead task is never rescheduled
+                    switch_away_dead();
                 }
             }
             if main != usize::MAX {
@@ -13699,8 +13712,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 // Switch away for good (same reasoning as the worker path): the Dead
                 // main must not run glibc's post-exit_group code (it GP-faults once
                 // libraries like libm are mapped). The launcher already has its result.
-                yield_reacquire();
-                return 0;
+                switch_away_dead();
             }
             // Foreground run_args (musl) excursion: the synchronous EXITED model.
             unsafe {
