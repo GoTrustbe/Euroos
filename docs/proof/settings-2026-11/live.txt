@@ -1,0 +1,155 @@
+# Public image, live session: every section as it opens, then the settings in use.
+wait 8
+shot 00-desktop.png
+clickat 45 349
+wait 6
+shot 01-system.png
+clickat 385 268
+wait 4
+shot 02-display.png
+clickat 385 308
+wait 4
+shot 03-language-keyboard.png
+clickat 385 348
+wait 4
+shot 04-date-time.png
+clickat 385 388
+wait 4
+shot 05-network.png
+clickat 385 428
+wait 4
+shot 06-euroguard.png
+key pgdn
+wait 3
+shot 06b-euroguard-page2.png
+key pgdn
+wait 3
+shot 06c-euroguard-page3.png
+clickat 385 468
+wait 4
+shot 07-apps.png
+key pgdn
+wait 3
+shot 07b-apps-page2.png
+clickat 385 508
+wait 4
+shot 08-storage.png
+clickat 385 548
+wait 4
+shot 09-updates.png
+key pgdn
+wait 3
+shot 09b-updates-page2.png
+# ── in use ──
+# System: rename the computer
+clickat 385 228
+wait 3
+clickat 886 315
+wait 2
+key end
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+type euro-desk7
+wait 1
+shot 10-system-typing-name.png
+key ret
+wait 3
+shot 11-system-renamed.png
+# Language & keyboard: US -> German, then type on the same keys
+clickat 385 308
+wait 3
+clickat 886 382
+wait 2
+type qwertz yz
+wait 2
+shot 20-keyboard-us-typed.png
+clickat 940 307
+wait 3
+shot 21-keyboard-dropdown.png
+clickat 880 409
+wait 3
+clickat 886 382
+wait 2
+type qwertz yz
+wait 2
+shot 22-keyboard-german-typed.png
+# Date & time: Central Europe, 12-hour clock (see the status panel clock)
+clickat 385 348
+wait 3
+clickat 880 315
+wait 3
+shot 30-timezone-dropdown.png
+clickat 880 417
+wait 3
+shot 31-timezone-brussels.png
+clickat 995 390
+wait 3
+shot 32-clock-12h.png
+# EuroGuard: block a domain
+clickat 385 428
+wait 3
+clickat 885 291
+wait 2
+type ads.trackertest.com
+wait 1
+key ret
+wait 3
+shot 40-euroguard-domain-blocked.png
+# Apps: cut the first app off the network
+clickat 385 468
+wait 3
+clickat 995 430
+wait 3
+shot 41-apps-network-blocked.png
+# Storage: integrity check now
+clickat 385 508
+wait 3
+clickat 967 509
+wait 6
+shot 50-storage-checked.png
+key pgdn
+wait 3
+shot 51-storage-last-result.png
+# Updates: check now (real server, signed manifest)
+clickat 385 548
+wait 3
+clickat 967 540
+wait 3
+shot 60-updates-checking.png
+wait 25
+clickat 700 330
+wait 3
+shot 61-updates-result.png
+# Network: web server on
+clickat 385 388
+wait 3
+clickat 995 280
+wait 3
+shot 70-network-httpd-on.png
+# Display: background Blue mist, text 110 %, then keyboard focus
+clickat 385 268
+wait 3
+clickat 940 299
+wait 3
+shot 80-display-dropdown.png
+clickat 880 377
+wait 4
+clickat 881 367
+wait 4
+shot 81-display-mist-110.png
+key tab
+wait 1
+key tab
+wait 2
+shot 82-display-keyboard-focus.png
+key right
+wait 3
+shot 83-display-slider-by-key.png

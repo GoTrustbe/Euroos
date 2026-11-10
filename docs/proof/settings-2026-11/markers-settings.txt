@@ -1,0 +1,26 @@
+== tcg-user-smp4-iommu
+[prefs] system settings applied: /etc/euroos/settings.conf (0 key(s), 0 broken line(s) skipped), time zone UTC, region en, EuroGuard saved rules: 0 domain change(s), 0 app rule(s)
+[7appgui] Desktop app-control (EuroBeheer › Apps): select-app=true, block-switch-cuts-network=true, toggle-restores=true, revoke-runs=true → OK (rights + network controllable per app from the desktop) ✓
+[prefs-rt] settings round trip (/etc/euroos/selftest.conf): defaults-when-missing=true, save=Ok(Atomic), typed-values-read-back=true, temp-file-gone=true, overwrite=true → OK (typed key=value store, atomic save) ✓
+[prefs-bad] damaged settings file: intact-lines-kept=true, broken-lines-skipped=4 (4 expected), binary-file-gives-defaults=true, next-save-is-clean=true → OK (tolerant parser, no panic) ✓
+[prefs-user] per-user settings (/home/<user>/.config/euroos/<app>.conf): saved=true, separate-per-user=true, owned-by-user=true, path-escape-refused=true, cleaned-up=true → OK (per-user store on the live root FS) ✓
+[uikit] EuroUI forms: hit-test=true, tab-order=true, checkbox=true, dropdown=true, slider=true, text-field=true, scroll=true, disabled-inert=true, wrap=true → OK (interactive toolkit: focus, input, events) ✓
+[set-keymap] Settings › Language & keyboard: dropdown-opens=true, click-picks-German=true (Z-key: Some('z') → Some('y')), /etc/keymap=de-qwertz=true, arrow-key-steps-to-French=true (Q-key → Some('a')), /etc/keymap=fr-azerty=true, panel-shows-it=true → OK (layout switches live and is saved) ✓
+[set-time] Settings › Date & time: zone-applied=true, clock-shifted=true, saved-in-/etc/euroos/settings.conf=true, 12h-clock=true (10:02 AM), per-user-saved=true, 24h-clock=true (10:02), reloaded-from-file=true → OK (time zone + clock format live and saved) ✓
+[set-host] Settings › System: field-takes-typing=true, /etc/hostname-written=true, panel-shows-it=true, protection-flag-kept=true (flags 0x1), invalid-name-refused=true → OK (computer name changeable from the desktop) ✓
+[set-guard] EuroGuard rules across a restart: change-noticed=true, saved=true, forgotten-after-reset=true, loaded(2 domain change(s), 2 app rule(s)): blocked-domain-back=true, unblocked-system-domain-stays-unblocked=true, app-block-back=true, allow-list-back=true → OK (user rules persist via prefs) ✓
+[prefs] session settings applied: /home/euro/.config/euroos/desktop.conf (0 key(s)), clock 24h, wallpaper euro, text scale 100%
+
+== tcg-user-smp1-noiommu
+[prefs] system settings applied: /etc/euroos/settings.conf (0 key(s), 0 broken line(s) skipped), time zone UTC, region en, EuroGuard saved rules: 0 domain change(s), 0 app rule(s)
+[7appgui] Desktop app-control (EuroBeheer › Apps): select-app=true, block-switch-cuts-network=true, toggle-restores=true, revoke-runs=true → OK (rights + network controllable per app from the desktop) ✓
+[prefs-rt] settings round trip (/etc/euroos/selftest.conf): defaults-when-missing=true, save=Ok(Atomic), typed-values-read-back=true, temp-file-gone=true, overwrite=true → OK (typed key=value store, atomic save) ✓
+[prefs-bad] damaged settings file: intact-lines-kept=true, broken-lines-skipped=4 (4 expected), binary-file-gives-defaults=true, next-save-is-clean=true → OK (tolerant parser, no panic) ✓
+[prefs-user] per-user settings (/home/<user>/.config/euroos/<app>.conf): saved=true, separate-per-user=true, owned-by-user=true, path-escape-refused=true, cleaned-up=true → OK (per-user store on the live root FS) ✓
+[uikit] EuroUI forms: hit-test=true, tab-order=true, checkbox=true, dropdown=true, slider=true, text-field=true, scroll=true, disabled-inert=true, wrap=true → OK (interactive toolkit: focus, input, events) ✓
+[set-keymap] Settings › Language & keyboard: dropdown-opens=true, click-picks-German=true (Z-key: Some('z') → Some('y')), /etc/keymap=de-qwertz=true, arrow-key-steps-to-French=true (Q-key → Some('a')), /etc/keymap=fr-azerty=true, panel-shows-it=true → OK (layout switches live and is saved) ✓
+[set-time] Settings › Date & time: zone-applied=true, clock-shifted=true, saved-in-/etc/euroos/settings.conf=true, 12h-clock=true (10:02 AM), per-user-saved=true, 24h-clock=true (10:02), reloaded-from-file=true → OK (time zone + clock format live and saved) ✓
+[set-host] Settings › System: field-takes-typing=true, /etc/hostname-written=true, panel-shows-it=true, protection-flag-kept=true (flags 0x1), invalid-name-refused=true → OK (computer name changeable from the desktop) ✓
+[set-guard] EuroGuard rules across a restart: change-noticed=true, saved=true, forgotten-after-reset=true, loaded(2 domain change(s), 2 app rule(s)): blocked-domain-back=true, unblocked-system-domain-stays-unblocked=true, app-block-back=true, allow-list-back=true → OK (user rules persist via prefs) ✓
+[prefs] session settings applied: /home/euro/.config/euroos/desktop.conf (0 key(s)), clock 24h, wallpaper euro, text scale 100%
+

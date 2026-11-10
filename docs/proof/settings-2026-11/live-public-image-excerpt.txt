@@ -1,0 +1,17 @@
+[prefs] system settings applied: /etc/euroos/settings.conf (0 key(s), 0 broken line(s) skipped), time zone UTC, region en, EuroGuard saved rules: 0 domain change(s), 0 app rule(s)
+[g5] scrub #1: 128 inodes, 375 data blocks, data verified 123, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 20 ms
+[prefs] session settings applied: /home/euro/.config/euroos/desktop.conf (0 key(s)), clock 24h, wallpaper euro, text scale 100%
+[g5] scrub #2: 138 inodes, 375 data blocks, data verified 133, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 10 ms
+[g5] scrub #3: 138 inodes, 375 data blocks, data verified 133, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 20 ms
+[set] computer name set to euro-desk7: Ok(Atomic)
+[set] keyboard layout set to de-qwertz: Ok(Atomic)
+[g5] scrub #4: 139 inodes, 375 data blocks, data verified 134, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 10 ms
+[set] time zone set to Europe/Brussels: Ok(Atomic)
+[set] EuroGuard: domain blocked via the settings panel: ads.trackertest.com (saved=true)
+[g5] scrub #5: 145 inodes, 375 data blocks, data verified 140, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 10 ms
+[g5] scrub #6: 145 inodes, 375 data blocks, data verified 140, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 20 ms
+[euroupdate] background check started: https://euro-os.eu/update/channel/stable.json
+[euroupdate] fetched manifest: HTTP 200
+[euroupdate] fetched manifest signature: HTTP 200
+[euroupdate] up to date
+[g5] scrub #7: 146 inodes, 375 data blocks, data verified 141, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 10 ms

@@ -1,0 +1,84 @@
+$ cargo test -p europrefs -p eurokeymap -p eurolocale -p euroclock
+     Running unittests src/lib.rs (target/debug/deps/euroclock-625fd23cdd48c578)
+running 7 tests
+test tests::alarm_crosses_midnight ... ok
+test tests::alarm_fires_when_crossed ... ok
+test tests::stopwatch_with_laps ... ok
+test tests::formatting_12_24 ... ok
+test tests::time_of_day_with_offsets ... ok
+test tests::world_clock_zones ... ok
+test tests::timer_countdown_pause_resume ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/eurokeymap-cfeffb4fbf0d8ff5)
+running 7 tests
+test tests::azerty_letter_transposition ... ok
+test tests::belgian_azerty_punctuation ... ok
+test tests::azerty_digit_row_needs_shift ... ok
+test tests::control_keys_layout_independent ... ok
+test tests::parse_and_tags ... ok
+test tests::qwerty_baseline ... ok
+test tests::qwertz_swaps_y_and_z ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/eurolocale-ce06e9b90191dd2f)
+running 31 tests
+test collation::tests::diacritic_folds_near_base ... ok
+test collation::tests::czech_c_hacek_after_c ... ok
+test collation::tests::spanish_enye_after_n ... ok
+test collation::tests::case_insensitive_primary ... ok
+test collation::tests::swedish_aa_after_z ... ok
+test currency::tests::eurozone_symbols ... ok
+test collation::tests::german_umlaut_as_base ... ok
+test currency::tests::placement_and_separators ... ok
+test currency::tests::non_euro_currencies ... ok
+test datefmt::tests::all_24_languages_have_month_and_weekday_names ... ok
+test datefmt::tests::cldr_spot_checks_for_the_new_languages ... ok
+test datefmt::tests::day_of_week_is_correct ... ok
+test datefmt::tests::long_forms ... ok
+test datefmt::tests::short_forms ... ok
+test lang::tests::all_24_distinct_codes ... ok
+test lang::tests::date_patterns ... ok
+test datefmt::tests::long_form_now_uses_names_for_every_language ... ok
+test lang::tests::separators_make_sense ... ok
+test number::tests::extremes ... ok
+test lang::tests::parse_tags ... ok
+test number::tests::fixed_point ... ok
+test plural::tests::croatian ... ok
+test tests::all_24 ... ok
+test plural::tests::czech_west_slavic ... ok
+test plural::tests::english_one_other ... ok
+test plural::tests::french_zero_is_one ... ok
+test number::tests::integers ... ok
+test plural::tests::polish ... ok
+test plural::tests::latvian_has_zero ... ok
+test plural::tests::slovenian_dual ... ok
+test tests::locale_facade ... ok
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running unittests src/lib.rs (target/debug/deps/europrefs-a10ba9661c9898ef)
+running 18 tests
+test tests::broken_lines_are_skipped_not_fatal ... ok
+test tests::escapes_round_trip ... ok
+test tests::header_and_bom_and_crlf ... ok
+test tests::last_duplicate_wins_and_keeps_first_position ... ok
+test tests::lists ... ok
+test tests::round_trip_keeps_order_comments_and_values ... ok
+test tests::setters_validate ... ok
+test tests::typed_getters_fall_back_to_defaults ... ok
+test tz::tests::eu_summer_time_boundaries_2026 ... ok
+test tz::tests::civil_round_trip ... ok
+test tz::tests::eu_summer_time_other_years ... ok
+test tz::tests::zone_offsets ... ok
+test validate::tests::app_and_user_names ... ok
+test tz::tests::labels_and_clock_format ... ok
+test validate::tests::domains ... ok
+test validate::tests::hostnames ... ok
+test tests::garbage_never_panics ... ok
+test tests::limits_hold ... ok
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
