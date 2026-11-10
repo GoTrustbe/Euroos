@@ -639,6 +639,13 @@ pub fn screen_present_xrgb(src: &[u32], sw: usize, sh: usize) {
     }
 }
 
+/// True in the self-test image (the `selftest` feature, on by default): the boot
+/// then runs every self-test, churn run and demo, and its serial log is what the
+/// test matrix compares marker by marker. The release image (`scripts/build.sh
+/// image`, built without the feature) runs only what a working desktop needs.
+/// A self-test that also SETS UP state the running system uses (the vault, the
+/// policy, the agent capabilities, ...) stays in both; see docs/BOOT-TIME.md.
+const SELFTEST: bool = cfg!(feature = "selftest");
 #[entry]
 fn main() -> Status {
     boottime::start(); // [boot-time]: the zero of every phase time
@@ -676,7 +683,11 @@ fn main() -> Status {
         "[euro] anchor dump_registers_and_backtrace @ {:#018x}",
         klog::dump_registers_and_backtrace as usize as u64
     );
-    ring3::dump_suspect_addrs(); // for mapping an NMI-captured wedge RIP
+    // The table of suspect addresses (106 lines) is a lab aid for mapping an
+    // NMI-captured wedge RIP; the anchor above is enough for symbolize.sh.
+    if SELFTEST {
+        ring3::dump_suspect_addrs();
+    }
 
     // EuroFS is set up later (after virtio-blk init): either on the GPT disk
     // (installed, persistent) or in RAM (live mode). See `populate_fs`.
@@ -1058,25 +1069,27 @@ fn main() -> Status {
     update::boot_init(&mut fs);
     // G4: prove the direct image→slot-partition write (EuroOS-B, sector I/O + read-back).
     // Skip if virtio dev 0 is a foreign EuroPack data disk (would overwrite it).
-    if !ring3::europack_on_vblk0() {
+    if SELFTEST && !ring3::europack_on_vblk0() {
         update::slot_partition_selftest();
     }
-    // [upd3] (Sprint 3): verify-before-activate with a REAL Ed25519 signature +
-    // prove that the update pipeline rejects a tampered package.
-    crypto::selftest();
-    update::apply_gate_selftest(rtc::epoch());
-    // [edit] (Sprint 4): edit EuroText → save → re-read on the REAL EuroFS.
-    textedit::selftest(&mut fs);
-    trash::selftest(&mut fs); // conveniences: delete-to-trash + undo
-    // [io1]/[io2] (Sprint IO): FAT32 mount + read + write driver, proven in-kernel.
-    fatmount::selftest();
+    if SELFTEST {
+        // [upd3] (Sprint 3): verify-before-activate with a REAL Ed25519 signature +
+        // prove that the update pipeline rejects a tampered package.
+        crypto::selftest();
+        update::apply_gate_selftest(rtc::epoch());
+        // [edit] (Sprint 4): edit EuroText → save → re-read on the REAL EuroFS.
+        textedit::selftest(&mut fs);
+        trash::selftest(&mut fs); // conveniences: delete-to-trash + undo
+        // [io1]/[io2] (Sprint IO): FAT32 mount + read + write driver, proven in-kernel.
+        fatmount::selftest();
+    }
 
     // J2: bad-block remap on the REAL disk — mark a block bad and prove that
     // I/O is transparently redirected to a spare block (bad-block table ↔ scrub).
     // Skip when virtio dev 0 is a foreign DATA disk (a EuroPack chrome-serving
     // volume): these tests scribble on GPT-gap LBAs (50, 60+) that hold the served
     // file's bytes there — never write over a data disk we do not own.
-    if virtio_blk::present() && !ring3::europack_on_vblk0() {
+    if SELFTEST && virtio_blk::present() && !ring3::europack_on_vblk0() {
         let mut bbt = eurofs::badblocks::BadBlockTable::new(50, 8); // spare pool LBA 50..58 (GPT gap)
         let bad = 48u64;
         if let Some(spare) = bbt.mark_bad(bad) {
@@ -1196,11 +1209,16 @@ fn main() -> Status {
         crashdump::selftest();
     }
 
+    // Release image: none of the raw-sector proofs above (they write into the GPT
+    // gap of disk 0), only the report of a crash dump the previous boot left.
+    if !SELFTEST && virtio_blk::present() && !ring3::europack_on_vblk0() {
+        crashdump::recover();
+    }
     // J1: prove the concurrent block cache (eurofs::cache) no_std in the kernel. A
     // write-through write caches the block; the subsequent reads are HITS
     // (read-lock only). The cache is a transparent BlockDevice drop-in (host test
     // proves a real EuroFs mounts through it); this shows the same layer live.
-    {
+    if SELFTEST {
         use eurofs::BlockDevice;
         let mut cache = eurofs::cache::BlockCache::new(rootblk::RootBlk::ram(32), 8);
         let mut wbuf = [0u8; 4096];
@@ -1222,15 +1240,17 @@ fn main() -> Status {
         );
     }
 
-    // EuroContainers (F2): self-test of the capability sandbox (chroot + caps + net).
-    container::boot_selftest(&mut fs);
-    // 3F-1: the container RUNTIME — signed images + ResourceLimits + CoW overlay.
-    container::runtime_selftest();
+    if SELFTEST {
+        // EuroContainers (F2): self-test of the capability sandbox (chroot + caps + net).
+        container::boot_selftest(&mut fs);
+        // 3F-1: the container RUNTIME — signed images + ResourceLimits + CoW overlay.
+        container::runtime_selftest();
+    }
 
     // EuroDisplay (E2): drive the Wayland-shaped surface protocol through a
     // lifecycle in the kernel (no_std proof). Live compositor binding +
     // Unix-socket transport are the integration on top.
-    {
+    if SELFTEST {
         use eurodisplay::{Display, Request};
         let mut disp = Display::new();
         disp.handle(Request::CreateSurface { id: 1 });
@@ -1246,7 +1266,9 @@ fn main() -> Status {
     }
 
     // ── H1: AF_UNIX local-socket round-trip (separate from TCP/IP; building block for H2) ──
-    net::af_unix_selftest();
+    if SELFTEST {
+        net::af_unix_selftest();
+    }
 
     // ── SECOND DISK (B3 multi-disk) ── if there is a second virtio-blk disk,
     // mount a separate EuroFS on it (mountpoint /mnt). Proves multiple real
@@ -1288,7 +1310,7 @@ fn main() -> Status {
             },
         }
     }
-    if let Some(ref mut f2) = fs2 {
+    if let (true, Some(f2)) = (SELFTEST, fs2.as_mut()) {
         // B3 self-test: write+read on the second disk, then `df` for both mounts.
         let _ = f2.write_file("/hello-disk2.txt", b"Written to the SECOND disk (virtio-blk 1)\n");
         match f2.read_file("/hello-disk2.txt") {
@@ -1456,7 +1478,9 @@ fn main() -> Status {
     if let Ok(bytes) = fs.read_file("/etc/euroguard/geoip.conf") {
         euroguard::load_geo_feed(&String::from_utf8_lossy(&bytes));
     }
-    euroguard::selftest();
+    if SELFTEST {
+        euroguard::selftest();
+    }
 
     // ── REAL NETWORKING: initialize the virtio-net NIC and do a live ARP exchange
     // with the gateway. EuroNet now not only builds/parses packets — they
@@ -1468,7 +1492,20 @@ fn main() -> Status {
     use euronet::udp::UdpDatagram;
     let ipfmt = |ip: Ipv4Addr| format!("{}.{}.{}.{}", ip.0[0], ip.0[1], ip.0[2], ip.0[3]);
     let mut net_lines: Vec<String> = Vec::new();
-    if iommu::dma_scope(&mut allocator, "nic", |f| nic::init(f)) {
+    let nic_up = iommu::dma_scope(&mut allocator, "nic", |f| nic::init(f));
+    if nic_up && !SELFTEST {
+        // Release image: the NIC is initialized here, the network is brought up
+        // in the background once the scheduler runs ([net-up], net_bringup.rs):
+        // DHCP, ARP and router discovery no longer hold the boot. None of the
+        // probes below (ping, DNS, HTTP and HTTPS to example.com) run at boot.
+        let m = nic::mac().unwrap_or([0; 6]);
+        net_lines.push(format!(
+            "NIC: {} MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            nic::kind(), m[0], m[1], m[2], m[3], m[4], m[5]
+        ));
+        net_lines.push("DHCP runs in the background: the network comes up shortly after the desktop".into());
+        net_lines.push("(`net` shows the address; `netstat` the connections)".into());
+    } else if nic_up {
         let my_mac = MacAddr(nic::mac().unwrap_or([0; 6]));
         let gw_ip = Ipv4Addr::new(10, 0, 2, 2);
         net_lines.push(format!(
@@ -1765,7 +1802,9 @@ fn main() -> Status {
     // authentic, unmodified code runs. (Production chain via eupkg.)
     // Audit C1: prove that the syscall layer validates user pointers against the arena.
     boottime::phase("net");
-    ring3::user_ptr_selftest();
+    if SELFTEST {
+        ring3::user_ptr_selftest();
+    }
     serial_println!("[euro] loading /bin/hello from EuroFS...");
     let prog = fs.read_file("/bin/hello").unwrap_or_default();
     let verified = !prog.is_empty() && ring3::verify_program("/bin/hello", &prog);
@@ -1846,23 +1885,25 @@ fn main() -> Status {
         ring3::register_file_static("/lib/x86_64-linux-gnu/libXdmcp.so.6", ring3::glibc_libxdmcp_bytes());
         ring3::register_file_static("/lib/x86_64-linux-gnu/libbsd.so.0", ring3::glibc_libbsd_bytes());
         ring3::register_file_static("/lib/x86_64-linux-gnu/libmd.so.0", ring3::glibc_libmd_bytes());
-        let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
-        serial_println!(
-            "[h3] dyntest (dynamically linked) done: exit={h3_exit}, output={:?}",
-            h3_out.trim_end()
-        );
-        // Sprint 1: kernel-ld.so sets up static TLS for a standalone __thread PIE,
-        // and patches cross-module IE-TLS (TPOFF64) for a .so `__thread`.
-        ring3::tls_selftest(&mut allocator);
-        ring3::tls_cross_selftest(&mut allocator);
-        // 3C-3: the PT_INTERP path — a from-scratch USERSPACE ld.so does the
-        // dynamic linking (not the kernel), the way unmodified Linux binaries link.
-        ring3::interp_selftest(&mut allocator);
+        if SELFTEST {
+            let (h3_out, h3_exit) = ring3::dynlink_selftest(&mut allocator);
+            serial_println!(
+                "[h3] dyntest (dynamically linked) done: exit={h3_exit}, output={:?}",
+                h3_out.trim_end()
+            );
+            // Sprint 1: kernel-ld.so sets up static TLS for a standalone __thread PIE,
+            // and patches cross-module IE-TLS (TPOFF64) for a .so `__thread`.
+            ring3::tls_selftest(&mut allocator);
+            ring3::tls_cross_selftest(&mut allocator);
+            // 3C-3: the PT_INTERP path — a from-scratch USERSPACE ld.so does the
+            // dynamic linking (not the kernel), the way unmodified Linux binaries link.
+            ring3::interp_selftest(&mut allocator);
+        }
     }
 
     // H3 follow-up: run a dynamically-linked binary BY NAME from the FS — the .so
     // dependency is resolved from /lib via DT_NEEDED (run-by-name, not embedded).
-    {
+    if SELFTEST {
         let exe = fs.read_file("/bin/dyntest").unwrap_or_default();
         if !exe.is_empty() {
             let needs = ring3::needed_libs(&exe);
@@ -1883,17 +1924,19 @@ fn main() -> Status {
         }
     }
 
-    // H4: EuroWASM — run a WASM module via the no-JIT interpreter; the WASI import
-    // `fd_write` is mapped to an EuroGuard capability (denied without it).
-    wasm::selftest();
-    // 3C-4: a REAL wasi_snapshot_preview1 host (true iovec fd_write ABI, proc_exit,
-    // random_get, clock, environ/args) running a real wasm32-wasi-shaped module.
-    wasm::wasi_selftest();
-    // H4 follow-up: bind the WASM-WASI to REAL EuroSandbox containers (capability +
-    // net scope determine whether an import is allowed) — the sovereign sandbox model closed.
-    wasm::container_selftest();
-    // H5: the REAL Wayland wire-protocol server — a handshake → a titled window.
-    wayland::selftest();
+    if SELFTEST {
+        // H4: EuroWASM — run a WASM module via the no-JIT interpreter; the WASI import
+        // `fd_write` is mapped to an EuroGuard capability (denied without it).
+        wasm::selftest();
+        // 3C-4: a REAL wasi_snapshot_preview1 host (true iovec fd_write ABI, proc_exit,
+        // random_get, clock, environ/args) running a real wasm32-wasi-shaped module.
+        wasm::wasi_selftest();
+        // H4 follow-up: bind the WASM-WASI to REAL EuroSandbox containers (capability +
+        // net scope determine whether an import is allowed) — the sovereign sandbox model closed.
+        wasm::container_selftest();
+        // H5: the REAL Wayland wire-protocol server — a handshake → a titled window.
+        wayland::selftest();
+    }
 
     // 3C-3: seed a known file so the muslprog boot binary can prove FILE-BACKED
     // mmap — it opens this and mmaps its contents into its address space.
@@ -1919,7 +1962,9 @@ fn main() -> Status {
     for (path, note) in boot_script {
         // The network programs need the network; with the userspace NIC driver
         // that exists only after the scheduler, so they run in [net-late].
-        if net_late && NET_LATE_PROGRAMS.iter().any(|(p, _)| *p == path) {
+        // The release image runs none of them at boot: its network comes up in
+        // the background, and a boot should not wait for DNS answers.
+        if (net_late || !SELFTEST) && NET_LATE_PROGRAMS.iter().any(|(p, _)| *p == path) {
             continue;
         }
         let bytes = fs.read_file(path).unwrap_or_default();
@@ -1938,7 +1983,7 @@ fn main() -> Status {
     // Demonstrate the EuroShell built-in commands (pure function shell::exec) —
     // serial-visible proof that the shell gives live system info from RTC/memory/
     // /etc, not from hard-coded text.
-    if !net_late {
+    if SELFTEST && !net_late {
         let mut sctx = shell::ShellCtx { fs: &mut fs, mem: &mut allocator };
         // Show the NATIVE EuroOS character: identity + capability security +
         // its own service supervisor (not the Linux compat layer).
@@ -2130,7 +2175,9 @@ fn main() -> Status {
     // the existing drivers and bind them. One coherent device tree instead of separate
     // ad-hoc discovery; shows all bindings (basis for future drivers).
     eurodevice::init();
-    eurodevice::selftest();
+    if SELFTEST {
+        eurodevice::selftest();
+    }
 
     // I3: AML interpreter — parse the REAL DSDT from the firmware and evaluate a
     // control method/name. \_S5 (soft-off sleep-type package) proves that the AML
@@ -2182,15 +2229,21 @@ fn main() -> Status {
     // 3D-8: seed the sovereign CSPRNG (CPU jitter + the TPM RNG if present) and
     // prove the getrandom readiness gate. Runs regardless of a TPM — CPU jitter
     // alone reaches the entropy threshold — so it is OUTSIDE the TPM block.
-    entropy::selftest();
-    // 3D-7: Network Time Security (RFC 8915) authenticated-time core — proves the
-    // clock only trusts a cryptographically-bound server (uses the 3D-8 CSPRNG).
-    nts::selftest();
-    // 3D-2: system-image integrity — Ed25519-signed Merkle root, tamper detection.
-    verity::selftest();
-    // 3D-2 wiring: verity on the LIVE EuroFS read path (VerityBlk verifies every
-    // block against the signed root; a tampered backing block fails the read).
-    verity::wire_selftest();
+    if SELFTEST {
+        entropy::selftest();
+    } else {
+        entropy::init(); // the seeding the self-test also does, without the proof
+    }
+    if SELFTEST {
+        // 3D-7: Network Time Security (RFC 8915) authenticated-time core — proves the
+        // clock only trusts a cryptographically-bound server (uses the 3D-8 CSPRNG).
+        nts::selftest();
+        // 3D-2: system-image integrity — Ed25519-signed Merkle root, tamper detection.
+        verity::selftest();
+        // 3D-2 wiring: verity on the LIVE EuroFS read path (VerityBlk verifies every
+        // block against the signed root; a tampered backing block fails the read).
+        verity::wire_selftest();
+    }
     boottime::phase("acpi-pci-tpm");
     interrupts::init_timer(100);
     // J1: install the EuroLock hooks (IRQSAVE, per-context lock-order tracking)
@@ -2272,19 +2325,27 @@ fn main() -> Status {
     // M2-1: NVMe MSI-X delivery proof — must run with interrupts ON (the boot
     // self-test above ran before this point, so its completions were unseen).
     boottime::phase("devices");
-    nvme::msix_proof();
+    if SELFTEST {
+        nvme::msix_proof();
+    }
     // Userspace drivers (net.driver=user): e1000d needs the scheduler, interrupts
     // and the IOMMU domains, all of which exist from here on.
     udrv::boot(&mut allocator);
     // The network part of the boot that could not run before the scheduler
     // (userspace NIC driver): the same probes and programs, now over e1000d.
-    if net_late {
+    if SELFTEST && net_late {
         demo_out.extend(net_late_suite(&mut allocator, &mut fs));
     }
     udrv_bcm5720::boot(&mut allocator);
     // Userspace MegaRAID (MFI gen2): megaraidd is the only MegaRAID driver; the
     // root disk stays on the in-kernel drivers.
     udrv_mr::boot(&mut allocator);
+    // Release image: DHCP, ARP and router discovery of the in-kernel NIC in a
+    // kernel task of their own ([net-up]); it starts the network worker when
+    // the lease is there. The desktop does not wait for it.
+    if !SELFTEST && nic_up {
+        net::bring_up_in_background();
+    }
     // M3-3: a CDC-ECM USB NIC only exists after xHCI enumeration (above) — if
     // no NIC bound during the main net bring-up, adopt it and bring it up now.
     net::late_bring_up();
@@ -2297,10 +2358,12 @@ fn main() -> Status {
     // route the euroaudio mixer's output to it (no-op without one).
     audio::usb_wire_selftest();
     serial_println!("[euro] APIC timer 100 Hz + interrupts ON -> preemptive multitasking (incl. ring 3)");
-    // J1 fine-grained locking: the checker itself, then real kernel work on the
-    // APs (per-CPU queues + work stealing).
-    klock::selftest();
-    kwork::selftest();
+    if SELFTEST {
+        // J1 fine-grained locking: the checker itself, then real kernel work on the
+        // APs (per-CPU queues + work stealing).
+        klock::selftest();
+        kwork::selftest();
+    }
     // `lockbench` image: run the multi-core lock benchmark and power off.
     #[cfg(feature = "lockbench")]
     {
@@ -3549,7 +3612,7 @@ fn main() -> Status {
     // J2: confirm MSI-X delivery. The xHCI interrupter IRQ latched during USB
     // enumeration (MSI-X → LAPIC vector 0x46) fires as soon as interrupts are on.
     boottime::phase("glibc-suite");
-    if xhci::present() {
+    if SELFTEST && xhci::present() {
         for _ in 0..100 {
             if interrupts::XHCI_MSIX_COUNT.load(core::sync::atomic::Ordering::Relaxed) > 0 {
                 break;
@@ -3570,7 +3633,7 @@ fn main() -> Status {
     // interrupts ON) → the virtio-blk completion sends an MSI-X message → the
     // counter goes up. The used-ring poll confirms the data; the IRQ proves the
     // interrupt-driven completion on the data path.
-    if virtio_blk::present() {
+    if SELFTEST && virtio_blk::present() {
         let before = interrupts::BLK_MSIX_COUNT.load(core::sync::atomic::Ordering::Relaxed);
         let mut sb = [0u8; 512];
         for _ in 0..4 {
@@ -3585,7 +3648,9 @@ fn main() -> Status {
         );
     }
     // J1: verify the lock-free kmsg ring (the APs already logged via this path at boot).
-    klog::lockfree_selftest();
+    if SELFTEST {
+        klog::lockfree_selftest();
+    }
     serial_println!("[rtc] real wall-clock time: {} {}", rtc::clock_string(), rtc::date_string());
 
     // G2: build the VFS — the root + (if present) the second disk on /mnt — so that
@@ -3670,7 +3735,7 @@ fn main() -> Status {
     }
 
     // [sym]/[cu2] (Sprint 3C): symbolic links on the live EuroFS + the new coreutils.
-    {
+    if SELFTEST {
         use eurocoreutils as cu;
         let _ = vfs.write_file("/symtarget", b"symlink payload");
         let sym_ok = vfs.create_symlink("/symlink", "/symtarget").is_ok()
@@ -3743,7 +3808,9 @@ fn main() -> Status {
         #[cfg(feature = "selftest")]
         lockstress::selftest(3, 300);
         let boot_caps = ring3::CAP_IMMUTABLE_ADMIN | ring3::CAP_FILE;
-        immutable::selftest(&mut vfs);
+        if SELFTEST {
+            immutable::selftest(&mut vfs);
+        }
         let protected = immutable::protect_system_files(&mut vfs, boot_caps);
         // Sanity: the recursive sweep really covered /bin — spot-check a binary
         // that is NOT in the explicit SYSTEM_FILES list.
@@ -3756,7 +3823,9 @@ fn main() -> Status {
         // Phase-3 FS security: the integrity sweep — /bin + /lib on disk must
         // match the (loader-verified) kernel image, boot + periodically.
         let bins = system_binaries();
-        integrity::selftest(&mut vfs, &bins, boot_caps);
+        if SELFTEST {
+            integrity::selftest(&mut vfs, &bins, boot_caps);
+        }
         integrity::check_and_report(&mut vfs, &bins, "at boot");
         // 3H: per-file versioning on the LIVE root FS — write 3 versions,
         // list them, restore v1, and prove nothing was lost.
@@ -3766,58 +3835,62 @@ fn main() -> Status {
             let _ = vfs.create_dir("/home/euro");
             let hcur = vfs.get_flags("/home/euro").unwrap_or(0);
             let _ = vfs.set_flags("/home/euro", hcur | eurofs::FLAG_VERSIONED);
-            // Start from whatever this disk already holds: on a PERSISTENT disk
-            // the previous boot's versions are still there (correct product
-            // behaviour), so assert on the DELTA rather than absolute counts.
-            // Absolute counts only ever held on a virgin disk, which is all
-            // emulation ever gave us; real hardware with a kept disk failed it.
-            // Assert the SEMANTICS, not absolute counts: on a persistent disk the
-            // history carries over from earlier boots and rotates at MAX_VERSIONS
-            // (8). Both are correct behaviour; only a virgin disk ever produced
-            // the fixed numbers this test used to demand, which is all emulation
-            // ever gave us. Real hardware with a kept disk exposed the gap.
-            const CAP: usize = 8;
-            let _ = vfs.remove_file(p);
-            let base = vfs.versions(p).map(|v| v.len()).unwrap_or(0);
-            let _ = vfs.write_file(p, b"draft 1");
-            let _ = vfs.write_file(p, b"draft 2");
-            let _ = vfs.write_file(p, b"draft 3");
-            let hist = vfs.versions(p).map(|v| v.len()).unwrap_or(0);
-            // 3 writes add 2 history entries, unless the history is already full.
-            let grew = hist >= (base + 2).min(CAP);
-            // Restore the OLDEST AVAILABLE version by its real id. Version ids do
-            // not restart at 1 once the history has rotated, so asking for "1"
-            // fails on any disk that has been through more than CAP writes -
-            // exactly what a long-lived system looks like. It must hand back
-            // REAL historical content, not garbage.
-            let oldest = vfs.versions(p).ok().and_then(|v| v.first().map(|e| e.0));
-            let restored = match oldest {
-                Some(id) => vfs.restore_version(p, id).is_ok()
-                    && vfs.read_file(p).map(|d| {
-                        d == b"draft 1" || d == b"draft 2" || d == b"draft 3"
-                    }).unwrap_or(false),
-                None => false,
-            };
-            let kept = vfs.versions(p).map(|v| v.len()).unwrap_or(0);
-            let _ = vfs.remove_file(p);
-            // Restoring keeps the replaced content as history too (or stays at cap).
-            let ok = grew && restored && kept >= hist.min(CAP);
-            serial_println!(
-                "[3h] per-file versioning (live FS): 3-writes->{hist} stored, restore-v1={restored}, replaced-kept->{kept} -> {}",
-                if ok { "OK (history is real) \u{2713}" } else { "FAILED \u{2717}" }
-            );
+            if SELFTEST {
+                // Start from whatever this disk already holds: on a PERSISTENT disk
+                // the previous boot's versions are still there (correct product
+                // behaviour), so assert on the DELTA rather than absolute counts.
+                // Absolute counts only ever held on a virgin disk, which is all
+                // emulation ever gave us; real hardware with a kept disk failed it.
+                // Assert the SEMANTICS, not absolute counts: on a persistent disk the
+                // history carries over from earlier boots and rotates at MAX_VERSIONS
+                // (8). Both are correct behaviour; only a virgin disk ever produced
+                // the fixed numbers this test used to demand, which is all emulation
+                // ever gave us. Real hardware with a kept disk exposed the gap.
+                const CAP: usize = 8;
+                let _ = vfs.remove_file(p);
+                let base = vfs.versions(p).map(|v| v.len()).unwrap_or(0);
+                let _ = vfs.write_file(p, b"draft 1");
+                let _ = vfs.write_file(p, b"draft 2");
+                let _ = vfs.write_file(p, b"draft 3");
+                let hist = vfs.versions(p).map(|v| v.len()).unwrap_or(0);
+                // 3 writes add 2 history entries, unless the history is already full.
+                let grew = hist >= (base + 2).min(CAP);
+                // Restore the OLDEST AVAILABLE version by its real id. Version ids do
+                // not restart at 1 once the history has rotated, so asking for "1"
+                // fails on any disk that has been through more than CAP writes -
+                // exactly what a long-lived system looks like. It must hand back
+                // REAL historical content, not garbage.
+                let oldest = vfs.versions(p).ok().and_then(|v| v.first().map(|e| e.0));
+                let restored = match oldest {
+                    Some(id) => vfs.restore_version(p, id).is_ok()
+                        && vfs.read_file(p).map(|d| {
+                            d == b"draft 1" || d == b"draft 2" || d == b"draft 3"
+                        }).unwrap_or(false),
+                    None => false,
+                };
+                let kept = vfs.versions(p).map(|v| v.len()).unwrap_or(0);
+                let _ = vfs.remove_file(p);
+                // Restoring keeps the replaced content as history too (or stays at cap).
+                let ok = grew && restored && kept >= hist.min(CAP);
+                serial_println!(
+                    "[3h] per-file versioning (live FS): 3-writes->{hist} stored, restore-v1={restored}, replaced-kept->{kept} -> {}",
+                    if ok { "OK (history is real) \u{2713}" } else { "FAILED \u{2717}" }
+                );
+            }
         }
         audit::selftest(&mut vfs, boot_caps);
         // 3D-6 wiring: the live audit log is now hash-chained + tamper-evident,
         // fed by the real execve/connection call sites, and persisted as JSON.
-        audit::chain_selftest(&mut vfs, boot_caps);
+        if SELFTEST {
+            audit::chain_selftest(&mut vfs, boot_caps);
+        }
     }
 
     // ── Sprint S: EuroSnap — CoW snapshots + rollback on the REAL root FS ──
     // We snapshot the already-set-up system state, then write a test
     // file, and roll back: the test file (after the snapshot) disappears, while
     // the system files (before the snapshot) stay intact — cheap thanks to CoW.
-    {
+    if SELFTEST {
         use eurofs::FileSystem;
         let snap = vfs.snapshot_create("boot-checkpoint", eurofs::SNAP_READONLY);
         match snap {
@@ -3843,7 +3916,7 @@ fn main() -> Status {
     // A REAL EuroFS on top of the transparent FDE layer (on a RAM volume, so we
     // do not reformat the real root). The 256-bit key comes from the TPM (O1);
     // proves that the whole FS lands transparently encrypted on the disk.
-    {
+    if SELFTEST {
         use eurofs::{EuroFs, FileSystem};
         let (key_bytes, from_tpm) = match tpm::get_random(32) {
             Some(b) => (b, true),
@@ -3886,12 +3959,14 @@ fn main() -> Status {
     europol::selftest();
     // 3D-4: signed policy bundles — a policy can only change caps if Ed25519-signed.
     europol::bundle_selftest();
-    // 3D-5: user-scoped file immutability (own home files, no admin cap).
-    euroattr::selftest();
-    // 3D-6: hash-chained GDPR audit + sealed-vault persistence.
-    gdpr::selftest();
-    // W: EuroObserve — lock-free kernel metrics + OpenMetrics export.
-    observe::selftest(allocator.free_frames() as u64);
+    if SELFTEST {
+        // 3D-5: user-scoped file immutability (own home files, no admin cap).
+        euroattr::selftest();
+        // 3D-6: hash-chained GDPR audit + sealed-vault persistence.
+        gdpr::selftest();
+        // W: EuroObserve — lock-free kernel metrics + OpenMetrics export.
+        observe::selftest(allocator.free_frames() as u64);
+    }
     // U: EuroVault — capability-gated, encrypted secrets with a TPM master key.
     {
         let (mk, from_tpm) = match tpm::get_random(32) {
@@ -3906,26 +3981,30 @@ fn main() -> Status {
         // 3D-1: real TPM seal — the master key is sealed INSIDE the TPM to the
         // measured-boot PCR and released only on an untampered boot (replaces the
         // earlier software-KDF PCR-seal).
-        vault::tpm_seal_selftest(mk);
+        if SELFTEST {
+            vault::tpm_seal_selftest(mk);
+        }
     }
 
     // 3E-1 wiring: the FDE unseal-at-boot cycle — enrol (seal + persist), then
     // re-read the sealed blob and unseal it via the TPM (PCR16) as a normal boot
     // would, auto-recovering the disk key on an untampered system.
-    if !rootblk::booted_from_disk() {
+    if SELFTEST && !rootblk::booted_from_disk() {
         // Writes /etc/fde/root.seal on the live root: never on an installed system.
         instexec::fde_unseal_selftest(&mut vfs);
     }
 
     // Z: EuroHealth — SMART (if NVMe) + FS scrub + memory → health score.
-    {
+    if SELFTEST {
         use eurofs::FileSystem;
         let sr = vfs.scrub();
         health::selftest(sr.errors, sr.data_unrecoverable, allocator.free_frames() as u64, allocator.total_frames() as u64);
     }
     // N3: EuroFW — packet filter in the RX path (stealth-drop of blocked traffic).
     firewall::init();
-    firewall::selftest();
+    if SELFTEST {
+        firewall::selftest();
+    }
     // N2: EuroVPN — sovereign forward-secret tunnel (seeds from the TPM if present).
     {
         let mut seeds = [[0u8; 32]; 4];
@@ -3941,32 +4020,36 @@ fn main() -> Status {
             }
         }
         vpn::selftest(seeds[0], seeds[1], seeds[2], seeds[3], from_tpm);
-        // 3D-9: the hybrid post-quantum tunnel (X25519 + ML-KEM-768). Two more
-        // seeds for the ML-KEM key pair + encapsulation randomness.
-        let mut kem_seed = [0x21u8; 32];
-        let mut kem_rand = [0x22u8; 32];
-        if let Some(b) = tpm::get_random(32) {
-            kem_seed.copy_from_slice(&b[..32]);
+        if SELFTEST {
+            // 3D-9: the hybrid post-quantum tunnel (X25519 + ML-KEM-768). Two more
+            // seeds for the ML-KEM key pair + encapsulation randomness.
+            let mut kem_seed = [0x21u8; 32];
+            let mut kem_rand = [0x22u8; 32];
+            if let Some(b) = tpm::get_random(32) {
+                kem_seed.copy_from_slice(&b[..32]);
+            }
+            if let Some(b) = tpm::get_random(32) {
+                kem_rand.copy_from_slice(&b[..32]);
+            }
+            vpn::selftest_hybrid(seeds[0], seeds[1], seeds[2], seeds[3], kem_seed, kem_rand, from_tpm);
         }
-        if let Some(b) = tpm::get_random(32) {
-            kem_rand.copy_from_slice(&b[..32]);
-        }
-        vpn::selftest_hybrid(seeds[0], seeds[1], seeds[2], seeds[3], kem_seed, kem_rand, from_tpm);
     }
 
     // EuroAgent (Sprint AA): prove the sovereign agent-runtime core at boot —
     // manifest → least-privilege caps → cap-gated MCP call → intent routing.
     agent::selftest();
 
-    // BB-1: prove the REAL LLM transport — the agent loop talks over EuroNet-TCP
-    // with a local Ollama `/api/chat` endpoint (10.0.2.2:11434 via SLIRP host).
-    agent::llm_selftest();
+    if SELFTEST {
+        // BB-1: prove the REAL LLM transport — the agent loop talks over EuroNet-TCP
+        // with a local Ollama `/api/chat` endpoint (10.0.2.2:11434 via SLIRP host).
+        agent::llm_selftest();
 
-    // EuroLocale (P1): prove localization for the 24 EU languages at boot.
-    locale::selftest();
+        // EuroLocale (P1): prove localization for the 24 EU languages at boot.
+        locale::selftest();
 
-    // EuroInstall (Q1): prove the installer planner at boot.
-    installer::selftest();
+        // EuroInstall (Q1): prove the installer planner at boot.
+        installer::selftest();
+    }
 
     // EuroCA (O3): sovereign local certificate authority (TPM-seeded root).
     {
@@ -3996,7 +4079,9 @@ fn main() -> Status {
     }
     // 3D-3: CA hierarchy (root→intermediate→leaf) + on-disk store + a JSON
     // attestation report a remote verifier checks against the boot PCRs.
-    attest3::selftest();
+    if SELFTEST {
+        attest3::selftest();
+    }
 
     // EuroIDM (V): sovereign enterprise identity (identity → capabilities).
     {
@@ -4011,148 +4096,152 @@ fn main() -> Status {
         idm::selftest(seed, from_tpm, rtc::epoch());
     }
 
-    // EuroID (K1 + P3): sovereign user management — Argon2id credentials, sessions,
-    // per-user caps, lockout, and a tamper-evident hash-chain audit log.
-    euroid::selftest();
-    // 3D-10: EuroID as an eIDAS 2.0 EUDI-wallet issuer + relying party
-    // (SD-JWT VC selective disclosure + holder key binding).
-    euroid::wallet_selftest();
+    if SELFTEST {
+        // EuroID (K1 + P3): sovereign user management — Argon2id credentials, sessions,
+        // per-user caps, lockout, and a tamper-evident hash-chain audit log.
+        euroid::selftest();
+        // 3D-10: EuroID as an eIDAS 2.0 EUDI-wallet issuer + relying party
+        // (SD-JWT VC selective disclosure + holder key binding).
+        euroid::wallet_selftest();
 
-    // EuroPkg (M2): dependency resolution of the package manager.
-    pkg::selftest();
-    // 3E-6: the package-manager EXECUTOR — signed index → resolver → verify →
-    // content-addressed store → /bin link; tamper/forgery refused; remove+GC.
-    pkg::exec_selftest(rtc::epoch());
-    // EuroApps SDK: a third-party package under its own key, end to end.
-    pkg::app_selftest(&mut allocator, &mut vfs);
-    pkg::euroapp_selftest(&mut allocator, &mut vfs);
-    pkg::euroapp_wasm_selftest(&mut vfs);
-    wasm::fscope_selftest(&mut vfs);
-    pkg::eurofuzz_selftest(&mut allocator, &mut vfs);
-    appstore::selftest(&mut vfs);
-    // Churn: short, sharp lifecycle stress that must leave every counter where it started.
-    churn::proc_churn(&mut allocator);
-    churn::thread_churn(&mut allocator);
-    churn::fork_churn(&mut allocator);
-    churn::fs_churn(&mut vfs);
-    churn::net_churn();
-    churn::surface_churn();
-    churn::pkg_churn(&mut vfs);
-    churn::io_storm(&mut vfs);
+        // EuroPkg (M2): dependency resolution of the package manager.
+        pkg::selftest();
+        // 3E-6: the package-manager EXECUTOR — signed index → resolver → verify →
+        // content-addressed store → /bin link; tamper/forgery refused; remove+GC.
+        pkg::exec_selftest(rtc::epoch());
+        // EuroApps SDK: a third-party package under its own key, end to end.
+        pkg::app_selftest(&mut allocator, &mut vfs);
+        pkg::euroapp_selftest(&mut allocator, &mut vfs);
+        pkg::euroapp_wasm_selftest(&mut vfs);
+        wasm::fscope_selftest(&mut vfs);
+        pkg::eurofuzz_selftest(&mut allocator, &mut vfs);
+        appstore::selftest(&mut vfs);
+        // Churn: short, sharp lifecycle stress that must leave every counter where it started.
+        churn::proc_churn(&mut allocator);
+        churn::thread_churn(&mut allocator);
+        churn::fork_churn(&mut allocator);
+        churn::fs_churn(&mut vfs);
+        churn::net_churn();
+        churn::surface_churn();
+        churn::pkg_churn(&mut vfs);
+        churn::io_storm(&mut vfs);
+    }
 
     // 3E-5: GDB Remote Serial Protocol stub over COM2 — prove the wire protocol
     // against live kernel register/memory state (a real gdb attaches via COM2→tcp).
     gdbstub::init();
-    gdbstub::selftest();
+    if SELFTEST {
+        gdbstub::selftest();
 
-    // EuroRepro (M3/Q2): reproducible builds — attestation + consensus.
-    repro::selftest();
+        // EuroRepro (M3/Q2): reproducible builds — attestation + consensus.
+        repro::selftest();
 
-    // EuroAccess (P2): accessibility layer — focus + multilingual screen reader.
-    access::selftest();
+        // EuroAccess (P2): accessibility layer — focus + multilingual screen reader.
+        access::selftest();
 
-    // BB-8: LIVE accessibility events — focus navigation through a dialog → multilingual
-    // screen-reader announcements → routed to EuroAudio (HDA). EN 301 549 end-to-end.
-    access::live_selftest();
-    // 3F-3: the broadened European Accessibility Act surface — accessibility tree
-    // + states, complete keyboard navigation, WCAG high-contrast, magnification.
-    access::eaa_selftest();
-    // Phase 3G: journal, watchdog, hardening baseline, DHCPv6, mDNS, DNSSEC.
-    phase3g::selftest();
-    phase3a::selftest();
+        // BB-8: LIVE accessibility events — focus navigation through a dialog → multilingual
+        // screen-reader announcements → routed to EuroAudio (HDA). EN 301 549 end-to-end.
+        access::live_selftest();
+        // 3F-3: the broadened European Accessibility Act surface — accessibility tree
+        // + states, complete keyboard navigation, WCAG high-contrast, magnification.
+        access::eaa_selftest();
+        // Phase 3G: journal, watchdog, hardening baseline, DHCPv6, mDNS, DNSSEC.
+        phase3g::selftest();
+        phase3a::selftest();
 
-    // EuroSuite (ES-Core/IO/Calc): sovereign office suite on one UDM.
-    suite::selftest();
-    // 3F-2: open & save REAL .docx (ZIP + DEFLATE via euroflate + OOXML).
-    suite::docx_selftest();
-    // 3F-4: selectable keyboard layouts (US-QWERTY/AZERTY/QWERTZ).
-    ps2::keymap_selftest();
-    // 3F-7: capability-scoped app permission portals (request → ask → scoped grant).
-    portal::selftest();
-    // Part 2: unified per-app control surface (caps + permissions + network in one).
-    shell::selftest();
-    // Part 3: the desktop per-app control screen's actions do real kernel work.
-    settings_ui::selftest();
-    // Everyday-conveniences layer: live clipboard + right-click context menus +
-    // window snapping (drag to a screen edge).
-    clipboard::selftest();
-    ctxmenu::selftest();
-    compositor::snap_selftest();
-    launcher::selftest();
-    filedialog::selftest();
-    notify::selftest();
-    screenshot::selftest();
-    tooltip::selftest();
-    symbolpicker::selftest();
-    spell::selftest();
-    switcher::selftest();
-    workspace::selftest();
-    netbridge::selftest();
-    // 3F-6: audio routing — per-app streams, per-device routing, default policy.
-    audio::selftest();
+        // EuroSuite (ES-Core/IO/Calc): sovereign office suite on one UDM.
+        suite::selftest();
+        // 3F-2: open & save REAL .docx (ZIP + DEFLATE via euroflate + OOXML).
+        suite::docx_selftest();
+        // 3F-4: selectable keyboard layouts (US-QWERTY/AZERTY/QWERTZ).
+        ps2::keymap_selftest();
+        // 3F-7: capability-scoped app permission portals (request → ask → scoped grant).
+        portal::selftest();
+        // Part 2: unified per-app control surface (caps + permissions + network in one).
+        shell::selftest();
+        // Part 3: the desktop per-app control screen's actions do real kernel work.
+        settings_ui::selftest();
+        // Everyday-conveniences layer: live clipboard + right-click context menus +
+        // window snapping (drag to a screen edge).
+        clipboard::selftest();
+        ctxmenu::selftest();
+        compositor::snap_selftest();
+        launcher::selftest();
+        filedialog::selftest();
+        notify::selftest();
+        screenshot::selftest();
+        tooltip::selftest();
+        symbolpicker::selftest();
+        spell::selftest();
+        switcher::selftest();
+        workspace::selftest();
+        netbridge::selftest();
+        // 3F-6: audio routing — per-app streams, per-device routing, default policy.
+        audio::selftest();
 
-    // EuroWeb (AB-B1): sovereign browser engine — HTML5 tokenizer + DOM.
-    web::selftest();
-    // AG-2: images (<img> + QOI/PPM decode) + forms (real GET).
-    web::selftest_ag2();
-    // Sprint 4: form POST (urlencoded body) + JS on a page (EuroJS).
-    web::selftest_post();
-    web::selftest_js();
+        // EuroWeb (AB-B1): sovereign browser engine — HTML5 tokenizer + DOM.
+        web::selftest();
+        // AG-2: images (<img> + QOI/PPM decode) + forms (real GET).
+        web::selftest_ag2();
+        // Sprint 4: form POST (urlencoded body) + JS on a page (EuroJS).
+        web::selftest_post();
+        web::selftest_js();
 
-    // EuroReken (AC-1): sovereign calculator — std/scientific/programmer.
-    reken::selftest();
+        // EuroReken (AC-1): sovereign calculator — std/scientific/programmer.
+        reken::selftest();
 
-    // EuroNotes (AC-1): notes app — Markdown → EuroDoc UDM.
-    notes::selftest();
+        // EuroNotes (AC-1): notes app — Markdown → EuroDoc UDM.
+        notes::selftest();
 
-    // EuroArchive (AC-2): archive manager — USTAR tar + checksum + manifest.
-    archive::selftest();
+        // EuroArchive (AC-2): archive manager — USTAR tar + checksum + manifest.
+        archive::selftest();
 
-    // EuroSafe (AC-1): capability dashboard — risk scoring + recommendations.
-    safe::selftest();
+        // EuroSafe (AC-1): capability dashboard — risk scoring + recommendations.
+        safe::selftest();
 
-    // Window management + AC apps (EuroClip/Clock/Shot/Contacts).
-    wm::selftest();
-    clip::selftest();
-    clockapp::selftest();
-    shot::selftest();
-    contacts::selftest();
-    calapp::selftest();
-    signapp::selftest();
-    musicapp::selftest();
-    mailapp::selftest();
-    fontapp::selftest();
-    jsapp::selftest();
+        // Window management + AC apps (EuroClip/Clock/Shot/Contacts).
+        wm::selftest();
+        clip::selftest();
+        clockapp::selftest();
+        shot::selftest();
+        contacts::selftest();
+        calapp::selftest();
+        signapp::selftest();
+        musicapp::selftest();
+        mailapp::selftest();
+        fontapp::selftest();
+        jsapp::selftest();
 
-    // EuroFiles (AC-1): file manager — sort/filter/path/badges.
-    files::selftest();
-    // EuroMedia (AC-1): image viewer — sovereign QOI codec.
-    media::selftest();
+        // EuroFiles (AC-1): file manager — sort/filter/path/badges.
+        files::selftest();
+        // EuroMedia (AC-1): image viewer — sovereign QOI codec.
+        media::selftest();
 
-    // EuroWiFi (N1): 802.11 protocol core — beacon scan + WPA key derivation.
-    wifi::selftest();
+        // EuroWiFi (N1): 802.11 protocol core — beacon scan + WPA key derivation.
+        wifi::selftest();
 
-    // BB-3: detect an Intel WiFi radio + HONEST driver status (QEMU emulates
-    // no 802.11; the protocol core is proven by [n1], radio = hardware-attended).
-    wifi::bb3_selftest();
+        // BB-3: detect an Intel WiFi radio + HONEST driver status (QEMU emulates
+        // no 802.11; the protocol core is proven by [n1], radio = hardware-attended).
+        wifi::bb3_selftest();
 
-    // EuroGPU (K4): virtio-gpu command protocol — displayinfo→scanout→flush.
-    gpu::selftest();
+        // EuroGPU (K4): virtio-gpu command protocol — displayinfo→scanout→flush.
+        gpu::selftest();
 
-    // BB-2: NATIVE modern-virtio transport + virtio-gpu driver against a real
-    // device (init handshake + GET_DISPLAY_INFO over the control virtqueue).
-    virtio_gpu::selftest();
-    // 3B-7: native modern-virtio virtio-sound driver (control-queue round-trip).
-    virtio_snd::selftest();
+        // BB-2: NATIVE modern-virtio transport + virtio-gpu driver against a real
+        // device (init handshake + GET_DISPLAY_INFO over the control virtqueue).
+        virtio_gpu::selftest();
+        // 3B-7: native modern-virtio virtio-sound driver (control-queue round-trip).
+        virtio_snd::selftest();
 
-    // BB-4: EuroPrint — real IPP-over-TCP round-trip to a network printer/CUPS
-    // (10.0.2.2:631 via SLIRP host); Get-Printer-Attributes + Print-Job.
-    print::selftest();
-    scan::selftest();
+        // BB-4: EuroPrint — real IPP-over-TCP round-trip to a network printer/CUPS
+        // (10.0.2.2:631 via SLIRP host); Get-Printer-Attributes + Print-Job.
+        print::selftest();
+        scan::selftest();
+    }
 
     // EuroCoreutils (CU-7): prove the compute/control commands live in the kernel
     // (deterministic — not dependent on USB keystrokes under slow TCG).
-    {
+    if SELFTEST {
         use eurocoreutils::compute;
         let printf_ok = compute::printf(&["%s=%05d", "x", "42"]) == b"x=00042";
         let expr_ok = compute::expr(&["(", "2", "+", "3", ")", "*", "4"]).0 == b"20\n";
@@ -4168,7 +4257,7 @@ fn main() -> Status {
 
     // find (CU-5): prove the VFS tree walk + filters live, deterministically. Make a
     // small tree, then search by name and by type, and check the results.
-    {
+    if SELFTEST {
         use eurofs::FileSystem;
         let _ = vfs.create_dir("/find-test");
         let _ = vfs.create_dir("/find-test/sub");
@@ -4201,7 +4290,7 @@ fn main() -> Status {
 
     // pipe-stdin (CU finishing): prove that coreutils built-ins compose through a
     // pipeline — stdout of stage N → stdin of N+1 — deterministically.
-    {
+    if SELFTEST {
         use eurofs::FileSystem;
         let _ = vfs.write_file("/pipe-test.txt", b"alpha\nbeta\nbravo\ngamma\n");
         let mut pctx = shell::ShellCtx { fs: &mut vfs, mem: &mut allocator };
@@ -4237,63 +4326,65 @@ fn main() -> Status {
         );
     }
 
-    // 3E-2: EuroUpdate delivery — live signed-channel check against the update
-    // server on the SLIRP host gateway (verify manifest → version → hash-pinned
-    // signed image → A/B stage); READY-reported when no server runs.
-    update::channel_selftest(rtc::epoch());
+    if SELFTEST {
+        // 3E-2: EuroUpdate delivery — live signed-channel check against the update
+        // server on the SLIRP host gateway (verify manifest → version → hash-pinned
+        // signed image → A/B stage); READY-reported when no server runs.
+        update::channel_selftest(rtc::epoch());
 
-    // EuroAgent real tools (Phase 2C): an agent really writes+reads on EuroFS via
-    // the cap-gated MCP gateway, sandbox-clamped — no longer a stub.
-    agent::real_tools_selftest(&mut vfs);
+        // EuroAgent real tools (Phase 2C): an agent really writes+reads on EuroFS via
+        // the cap-gated MCP gateway, sandbox-clamped — no longer a stub.
+        agent::real_tools_selftest(&mut vfs);
 
-    // AD-1: the REAL net_get/vault_get tools, double-gated (cap + domain allow-list);
-    // the vault value ends up in the result but never in the audit.
-    agent::net_vault_selftest(&mut vfs);
+        // AD-1: the REAL net_get/vault_get tools, double-gated (cap + domain allow-list);
+        // the vault value ends up in the result but never in the audit.
+        agent::net_vault_selftest(&mut vfs);
 
-    // Audit #7 / P0.3: the EuroAgent audit trail is no longer RAM-only — every
-    // tool call is persisted to the append-only on-disk log (survives restart).
-    agent::audit_persist_selftest(&mut vfs, ring3::CAP_IMMUTABLE_ADMIN | ring3::CAP_FILE);
+        // Audit #7 / P0.3: the EuroAgent audit trail is no longer RAM-only — every
+        // tool call is persisted to the append-only on-disk log (survives restart).
+        agent::audit_persist_selftest(&mut vfs, ring3::CAP_IMMUTABLE_ADMIN | ring3::CAP_FILE);
 
-    // AF / Zero-Trust P2.2: just-in-time capability elevation + auto-revoke — an
-    // elevated cap applies to only one confirmed action, not the whole session.
-    agent::jit_selftest();
+        // AF / Zero-Trust P2.2: just-in-time capability elevation + auto-revoke — an
+        // elevated cap applies to only one confirmed action, not the whole session.
+        agent::jit_selftest();
 
-    // AF / Zero-Trust P2.3: behavior detection on the agent audit stream — anomalous
-    // behavior (probing, drift, rate spikes) is made visible deterministically.
-    agent::anomaly_selftest();
-    agent::learn_selftest(&mut vfs);
-    apppolicy::selftest(&mut allocator, &mut vfs);
-    llm::selftest(&mut allocator);
+        // AF / Zero-Trust P2.3: behavior detection on the agent audit stream — anomalous
+        // behavior (probing, drift, rate spikes) is made visible deterministically.
+        agent::anomaly_selftest();
+        agent::learn_selftest(&mut vfs);
+        apppolicy::selftest(&mut allocator, &mut vfs);
+        llm::selftest(&mut allocator);
 
-    // Sprint AE-e2e: EuroID storage (users + Argon2id hashes + state) persistent
-    // on EuroFS — survives a restart instead of being rebuilt every boot.
-    if !euroid::store_from_disk() {
-        // Writes /etc/euroid/users.db on the live root: never over an installed store.
-        euroid::persist_selftest(&mut vfs);
+        // Sprint AE-e2e: EuroID storage (users + Argon2id hashes + state) persistent
+        // on EuroFS — survives a restart instead of being rebuilt every boot.
+        if !euroid::store_from_disk() {
+            // Writes /etc/euroid/users.db on the live root: never over an installed store.
+            euroid::persist_selftest(&mut vfs);
+        }
+        // 3E-3/3E-9: session lifecycle (owned homes, uid-context) + per-user disk
+        // quota — both on the LIVE root FS.
+        session::selftest(&mut vfs);
+        session::quota_selftest(&mut vfs);
+        // 3F-5: MIME detection + default-app associations on the live FS.
+        mime::selftest(&mut vfs);
+        // Sprint AE-e2e: must-change-password enforced end-to-end (login refuses until
+        // the user changes their own password).
+        euroid::must_change_selftest();
+
+        // EuroAgent MCP daemon (AA-3 capstone): the gateway served over AF_UNIX.
+        // Both agent self-tests write under /agents (created by [aa] as system): they
+        // run as system too, because the session self-tests before them leave the
+        // uid-context on the logged-in user and rwx is enforced on the live root.
+        sysctx::as_system(&mut vfs, |fs| mcpd::selftest(fs));
+
+        // WASM agent host (AA-5 capstone): agent code runs in WASM → host import →
+        // MCP gateway → EuroFS, capability-gated.
+        sysctx::as_system(&mut vfs, |fs| wagent::selftest(fs));
+
+        // EuroInstall execution (Q1 capstone): really format + provision a
+        // RAM disk and prove the installation survives a remount.
+        instexec::selftest(rtc::epoch());
     }
-    // 3E-3/3E-9: session lifecycle (owned homes, uid-context) + per-user disk
-    // quota — both on the LIVE root FS.
-    session::selftest(&mut vfs);
-    session::quota_selftest(&mut vfs);
-    // 3F-5: MIME detection + default-app associations on the live FS.
-    mime::selftest(&mut vfs);
-    // Sprint AE-e2e: must-change-password enforced end-to-end (login refuses until
-    // the user changes their own password).
-    euroid::must_change_selftest();
-
-    // EuroAgent MCP daemon (AA-3 capstone): the gateway served over AF_UNIX.
-    // Both agent self-tests write under /agents (created by [aa] as system): they
-    // run as system too, because the session self-tests before them leave the
-    // uid-context on the logged-in user and rwx is enforced on the live root.
-    sysctx::as_system(&mut vfs, |fs| mcpd::selftest(fs));
-
-    // WASM agent host (AA-5 capstone): agent code runs in WASM → host import →
-    // MCP gateway → EuroFS, capability-gated.
-    sysctx::as_system(&mut vfs, |fs| wagent::selftest(fs));
-
-    // EuroInstall execution (Q1 capstone): really format + provision a
-    // RAM disk and prove the installation survives a remount.
-    instexec::selftest(rtc::epoch());
     // Lab default for self-test builds: the QEMU/NUC harnesses (qmp-input.py,
     // chrome-desktop.sh, nuc-desktop-run.sh) inject keys as if the guest keyboard
     // were Belgian AZERTY. That used to be a side effect of the [q1x] provisioning
@@ -4303,7 +4394,7 @@ fn main() -> Status {
         serial_println!("[ps2] lab default keyboard layout: be-azerty (self-test builds; the harnesses type AZERTY)");
     }
 
-    if has_mnt {
+    if SELFTEST && has_mnt {
         use eurofs::FileSystem;
         // The boot self-test wrote "/hello-disk2.txt" to disk 1. Via the VFS it now
         // lives at "/mnt/hello-disk2.txt" — prove the routing goes to disk 1.
@@ -4329,7 +4420,11 @@ fn main() -> Status {
     // G5: first background scrub pass over EuroFS (data-path XXH3 + structure) →
     // /var/log/fsck.log. After that the scrubber runs periodically (rate-limited) from
     // the desktop tick.
-    scrub::run(&mut vfs);
+    // Release image: no scrub pass before the desktop; the periodic one (the
+    // desktop tick, `scrub::maybe_run`) makes its first pass a minute in.
+    if SELFTEST {
+        scrub::run(&mut vfs);
+    }
 
     // [stress] big load/stress test, if armed by the EUROSTRESS sentinel on disk0.
     // Runs here while both `vfs` and `allocator` are still separately borrowable and
@@ -4384,6 +4479,13 @@ fn main() -> Status {
     // Files app. Proves the shell + EuroFS really work.
     // The demo now also SHOWS the rwx protection: a user mkdir in / is
     // refused, the same mkdir in the home directory works.
+    // Release image: the session self-tests that used to leave the desktop user
+    // (uid 1000) in charge here do not run, so the demo opens that automatic
+    // session itself and hands the system context back afterwards.
+    let demo_uid_before = ctx.fs.uid_context();
+    if !SELFTEST {
+        session::open(ctx.fs, 1000, 1000, "euro", 0, "auto");
+    }
     for c in [
         "uname",
         "mkdir /demo",
@@ -4397,6 +4499,9 @@ fn main() -> Status {
         for l in shell::exec(&mut ctx, c) {
             term.push(l);
         }
+    }
+    if !SELFTEST {
+        ctx.fs.set_uid_context(demo_uid_before);
     }
     term.push(String::from("euroos:/ $ "));
 
@@ -4493,7 +4598,9 @@ fn main() -> Status {
             active: false, accent: Color::BLUE,
             sec: eds::SecState::new(true, false, false),
             app: suite_ui::SuiteApp::XClient,
-            visible: true, // the persistent GTK app renders into it live
+            // Only the self-test image starts the GTK demo that draws here; the
+            // release image would show an empty frame (it opens from the launcher).
+            visible: SELFTEST,
             restore: None,
         },
         // Sprint WP6: a NATIVE EuroOS app hosted as a framed window; its body is
@@ -4711,18 +4818,20 @@ fn main() -> Status {
         order.push(i_set);
         dock_targets[5] = Some(i_set); // dock: settings icon → EuroBeheer
         serial_println!("[set] EuroBeheer: settings panel ready (live EuroGuard/network/system; open via dock) ✓");
-        // Self-test: prove the panel REALLY manages — add_blocked_domain (the function
-        // that the "block domain" button calls) actually blocks a DNS domain.
-        let probe = "selftest-block.example";
-        let before = matches!(euroguard::check_dns("selftest", probe), euroguard::Decision::Block);
-        euroguard::add_blocked_domain(probe);
-        let after = matches!(euroguard::check_dns("selftest", probe), euroguard::Decision::Block);
-        serial_println!(
-            "[set] EuroBeheer manages for REAL: domain before={} → after add_blocked_domain={} {}",
-            before,
-            after,
-            if !before && after { "✓" } else { "✗ WRONG" }
-        );
+        if SELFTEST {
+            // Self-test: prove the panel REALLY manages — add_blocked_domain (the function
+            // that the "block domain" button calls) actually blocks a DNS domain.
+            let probe = "selftest-block.example";
+            let before = matches!(euroguard::check_dns("selftest", probe), euroguard::Decision::Block);
+            euroguard::add_blocked_domain(probe);
+            let after = matches!(euroguard::check_dns("selftest", probe), euroguard::Decision::Block);
+            serial_println!(
+                "[set] EuroBeheer manages for REAL: domain before={} → after add_blocked_domain={} {}",
+                before,
+                after,
+                if !before && after { "✓" } else { "✗ WRONG" }
+            );
+        }
 
         // EuroAgent dispatch panel (BB-6): type an intent → the runtime routes,
         // runs the agent loop, and shows every cap-gated tool call live + the audit.
@@ -4967,7 +5076,9 @@ fn main() -> Status {
     // authenticate the desktop session via EuroID (Argon2id) before the desktop starts.
     // Unattended/CI boots log in automatically after a short grace period (honestly logged).
     boottime::phase("desktop-build");
-    lockscreen::selftest(&fb);
+    if SELFTEST {
+        lockscreen::selftest(&fb);
+    }
     let session_user = lockscreen::gate(&fb, &euroid::default_login_user());
     // 3E-3: register the authenticated desktop session in the session table —
     // this closes the boot self-test session, ensures the user's OWNED home and
@@ -5046,9 +5157,11 @@ fn main() -> Status {
     // buttons route the answer to portal::respond via the click loop below. The
     // broker mechanism itself is exercised by portal::selftest() ([3f7]).
     let mut portal_buttons: Option<(u64, [(usize, usize, usize, usize); 3])> = None;
-    // BUG-032: is the hardware write watch on the scheduler state live on this machine?
-    memwatch::selftest();
-    sched::df_selftest();
+    if SELFTEST {
+        // BUG-032: is the hardware write watch on the scheduler state live on this machine?
+        memwatch::selftest();
+        sched::df_selftest();
+    }
     serial_println!(
         "[3f7-live] permission-portal armed — no request pending at boot; a modal is shown only when an app requests a resource (wired to portal::respond)"
     );
@@ -6759,6 +6872,16 @@ fn main() -> Status {
         // The network worker does the inbound side; wake it if an interrupt's
         // wake found the scheduler lock busy.
         net::worker_poke();
+        // [net-up]: the background bring-up got its lease (release image).
+        if net::take_up_event() {
+            if let Some(c) = net::get() {
+                notify::push(
+                    "Network connected",
+                    &format!("{}.{}.{}.{} (DHCP)", c.my_ip.0[0], c.my_ip.0[1], c.my_ip.0[2], c.my_ip.0[3]),
+                    interrupts::ticks(),
+                );
+            }
+        }
         // And keep every TCP connection's clock running: non-blocking sends leave
         // their segments in the retransmit list and rely on tick() for the ACK
         // bookkeeping and retransmits, and tick() runs from pump_all. The launcher

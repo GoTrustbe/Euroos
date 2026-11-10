@@ -11,6 +11,9 @@ description = "EuroKernel — bootable UEFI kernel (Track 1)."
 # glibc/GUI/chrome self-test + demo suite. The DOWNLOAD/VNC release image is built
 # with `--no-default-features` so it SKIPS that ~5-minute suite and boots straight to
 # a clean, idle desktop (the tester on hup.hu saw the suite, not a real idle hang).
+# Since 2026-11 the release image also skips every other boot self-test, churn
+# run and demo (`SELFTEST` in main.rs), except the few that set up state the
+# running system uses; what runs where, and what it costs: docs/BOOT-TIME.md.
 default = ["selftest"]
 selftest = []
 # Persistent live-animating demo apps on the desktop (e.g. the ggtk GMainLoop
