@@ -5411,7 +5411,7 @@ fn main() -> Status {
                         }
                         OpenDisplaySettings => {
                             if let Some(w) = windows.iter().position(|win| win.app == suite_ui::SuiteApp::Settings) {
-                                settings_ui::set_section(3); // System
+                                settings_ui::set_section(3); // legacy id 3 = the Display section
                                 order.retain(|&x| x != w);
                                 order.push(w);
                                 for ww in windows.iter_mut() { ww.active = false; }

@@ -109,8 +109,9 @@ must be changed together with `paint.rs`.
   dialog, prompts, calculator, address bar) was dead on a real keyboard. It is
   mapped now, with a host test.
 - Known gaps, also listed on the shortcut page: Alt+Tab and Alt+1..4 are not
-  seen while EuroText, EuroNotes, EuroInstall or a EuroFiles prompt has the
-  keyboard (they use `poll_key_ex`, which does not latch them); the key names
+  seen while a program that drains raw scancodes has the keyboard (a
+  full-screen app, an X11 or Chromium window, an installed app in front;
+  `poll_key` and, since BUG-044, `poll_key_ex` latch them); the key names
   at the right of context-menu items are labels only; there are no Ctrl
   shortcuts.
 

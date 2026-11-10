@@ -36,7 +36,7 @@ pub const SYSTEM_KEYS: &[(&str, &str)] = &[
 ];
 
 pub const SYSTEM_KEY_NOTES: &[&str] = &[
-    "Alt+Tab and Alt+1..4 are not picked up while EuroText, EuroNotes, EuroInstall or a EuroFiles name prompt has the keyboard. Click another window first.",
+    "Alt+Tab and Alt+1..4 work in every built-in app. They are not picked up while a program that reads the keyboard itself has it: a full-screen app, an X11 or Chromium window, or an installed app in front.",
     "The key names shown at the right of context-menu items (Ctrl C, Del, F5, ...) are labels. They are not connected to the keyboard yet: choose the menu item.",
     "There are no Ctrl shortcuts for copy, paste, save or undo yet.",
 ];
@@ -376,24 +376,39 @@ pub const PAGES: &[Page] = &[
         id: "settings",
         nav: "EuroBeheer",
         title: "EuroBeheer (Settings)",
-        summary: "Shows and changes the live state of the system: network policy, per-program access, network, system.",
+        summary: "Settings and live state of the system, in nine sections. A change applies at once and is saved.",
         app: true,
-        keys: &[("Enter", "EuroGuard section: block the typed domain"), ("Esc", "Stop editing the domain field")],
+        keys: &[
+            ("Up / Down", "Nothing focused: previous or next section. Otherwise: previous or next control; in a list, the row"),
+            ("Tab", "Next control"),
+            ("Space or Enter", "Switch, press or open the focused control; in a text field Enter applies what you typed"),
+            ("Left / Right", "Change a slider or a choice without opening it"),
+            ("Esc", "Drop the edit of a text field, close an open choice, release the focus"),
+            ("PgUp / PgDn / Home / End", "Scroll the section"),
+        ],
         sections: &[
             Section {
                 head: "Sections",
                 lines: &[
-                    "EuroGuard: the current network policy. Type a domain and press Enter to add it to the block list.",
-                    "Apps: click a program to see its capabilities and the permissions it was granted. 'Block all network' cuts that program off from the network; 'Revoke all permissions' makes it ask again next time.",
-                    "Network: the state of the network connection, and a switch for the built-in HTTP server on port 80.",
-                    "System: uptime, number of tasks, kernel memory and processor protection. Read-only.",
+                    "System: the computer name (letters, digits and hyphens; Enter applies) and read-only figures: version, kernel heap, running tasks, uptime, the signed-in user, live session or installed.",
+                    "Display: desktop background (three to choose from) and the text size of this panel, 90 to 130 percent; other apps keep their own size. The screen resolution is shown, not changeable.",
+                    "Language & keyboard: keyboard layout (US QWERTY, Belgian AZERTY, French AZERTY, German QWERTZ) with a field to try it, and the regional formats for numbers, currency and dates with a preview.",
+                    "Date & time: time zone and the 24-hour or 12-hour clock, for the status panel, the lock screen and EuroClock. Summer time follows the EU rule by itself.",
+                    "Network: a switch for the built-in web server on port 80, and the state of the connection.",
+                    "EuroGuard: type a domain and press Enter to block it for all apps. 'Domains you blocked' lists your own entries; Unblock removes the selected one. Below: status, the built-in policy and recent activity.",
+                    "Apps: choose a program to see its capabilities and the permissions it was granted. 'Block all network access' cuts it off from the network; 'Revoke all' withdraws its grants, so it has to ask again.",
+                    "Storage: usage per file system, the disks, and 'Check now', which reads every file and compares it with its stored checksum. The desktop pauses while the check runs.",
+                    "Updates: installed version, what happens when an update is available (install and restart, download then ask, only tell), and 'Check now'.",
                 ],
             },
             Section {
                 head: "Good to know",
                 lines: &[
-                    "Changes apply at once; there is no Apply or Undo button. To unblock a domain use guard allow <domain> in the Terminal.",
-                    "'Display settings' in the desktop menu opens the System section. Screen resolution and theme cannot be changed here.",
+                    "There is no Apply or Undo button. The line under the form reports what was done and whether it was saved.",
+                    "Started from the preview image, settings last until shutdown (the panel then says Live session). On an installed system they are kept. Background, text size and clock format are saved per user; the rest is for the whole system.",
+                    "Unblock only removes domains you blocked yourself. A domain of the built-in policy is released with guard allow <domain> in the Terminal.",
+                    "'Display settings' in the desktop menu opens the Display section.",
+                    "Limits: the interface is English only; a region changes formats, not the language. Accent colour, dark theme and display scaling cannot be changed. Programs for Linux still see UTC as their time zone. On the preview image 'Check now' under Updates only reports whether a newer version exists; it cannot install it.",
                 ],
             },
         ],
@@ -483,6 +498,7 @@ pub const PAGES: &[Page] = &[
                 head: "Limits",
                 lines: &[
                     "No undo, no text selection, no search. Ctrl+S and other Ctrl shortcuts do nothing: use the buttons. Closing the window does not ask about unsaved changes; the text stays in the window until the system restarts.",
+                    "A file larger than 8 MiB, or larger than a quarter of the free kernel memory, is not opened: the status bar says 'too large' and the text that was open stays.",
                 ],
             },
         ],
@@ -580,7 +596,7 @@ pub const PAGES: &[Page] = &[
             Section {
                 head: "Undo and save",
                 lines: &[
-                    "Undo and Redo step back and forward through up to 24 changes. Clear empties the canvas and can be undone.",
+                    "Undo and Redo step back and forward through up to 24 changes; fewer when memory is short. Clear empties the canvas and can be undone.",
                     "Save always writes the PNG file /home/euro/pictures/painting.png and replaces the painting saved before. To keep a painting, rename or copy that file in EuroFiles before saving the next one.",
                 ],
             },
