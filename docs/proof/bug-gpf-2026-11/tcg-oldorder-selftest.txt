@@ -1,0 +1,18 @@
+# TCG, 1 GiB, smp4 + intel-iommu: 22a1685 (then 73eadab) with spawn_user in place of spawn_user_parked (the old launch order), [bug040] self-test (CPU given away up to 1 s between spawn and start).
+# The program runs in the window, and the VM dies right after its GLIBC-DYNAMIC-OK, before the launcher printed its spawn line: the last lines of the 52755fc soak. Under TCG the stale return ends in a reset (QEMU -no-reboot exits) instead of the #GP line.
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0x10531000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0x10544740
+[linux-abi] GLIBC-DYNAMIC-OK
+[churn-proc]   after run 16: free frames 106957
+[churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=16/16 · frames 106957→106957 (leak-free=true) · demand-pool 40960→40960 (true) · tasks 28→28 (true) · thread-kstacks 0→0 (true) · file
+[glibc] arena: 384 MiB unavailable (fragmented) -> using 192 MiB
+[elf] 3 R_X86_64_RELATIVE relocations applied @ base 0xc200000
+[elf] 0 R_X86_64_RELATIVE relocations applied @ base 0xca00000
+[linux-abi] mmap(fd=3, off=0, 2170880 B) file-backed -> 0x103a2000 (2125328 B copied)
+[linux-abi] mmap(fd=3, off=163840, 1605632 B) file-backed -> 0x103ca000 (1605632 B copied)
+[linux-abi] mmap(fd=3, off=1769472, 323584 B) file-backed -> 0x10552000 (323584 B copied)
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0x105a1000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0x105b4740
+[linux-abi] GLIBC-DYNAMIC-OK
+
+(problems.txt: noparked3-u4i-1g: no desktop (exit) 20:42:21)

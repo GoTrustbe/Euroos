@@ -1,0 +1,105 @@
+# The ring-0 #GP of the 1 h soak of 52755fc (proof/net-worker-2026-11/r630-base-soak.log, R630 KVM, -m 16G, net.driver=user), t=2825 s, churn proc 4
+
+## the last churn proc 4: run 3 has no "[glibc] spawned scheduled task" line
+[scon] $ churn proc 4
+[elf] 3 R_X86_64_RELATIVE relocations applied @ base 0x1c8200000
+[elf] 0 R_X86_64_RELATIVE relocations applied @ base 0x1c8a00000
+[glibc] spawned scheduled task 54: ld-entry@0x1c8a1f540 rsp@0x1e00ace70 phdr@0x1c8200040 phnum=13
+[linux-abi] mmap(fd=3, off=0, 2170880 B) file-backed -> 0x1cc392000 (2125328 B copied)
+[linux-abi] mmap(fd=3, off=163840, 1605632 B) file-backed -> 0x1cc3ba000 (1605632 B copied)
+[linux-abi] mmap(fd=3, off=1769472, 323584 B) file-backed -> 0x1cc542000 (323584 B copied)
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0x1cc591000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0x1cc5a4740
+[linux-abi] GLIBC-DYNAMIC-OK
+[elf] 3 R_X86_64_RELATIVE relocations applied @ base 0x1c8200000
+[elf] 0 R_X86_64_RELATIVE relocations applied @ base 0x1c8a00000
+[glibc] spawned scheduled task 54: ld-entry@0x1c8a1f540 rsp@0x1e0014e70 phdr@0x1c8200040 phnum=13
+[linux-abi] mmap(fd=3, off=0, 2170880 B) file-backed -> 0x1cc3c2000 (2125328 B copied)
+[linux-abi] mmap(fd=3, off=163840, 1605632 B) file-backed -> 0x1cc3ea000 (1605632 B copied)
+[linux-abi] mmap(fd=3, off=1769472, 323584 B) file-backed -> 0x1cc572000 (323584 B copied)
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0x1cc5c1000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0x1cc5d4740
+[linux-abi] GLIBC-DYNAMIC-OK
+[churn-proc]   after run 1: free frames 2981623
+[elf] 3 R_X86_64_RELATIVE relocations applied @ base 0x1c8200000
+[elf] 0 R_X86_64_RELATIVE relocations applied @ base 0x1c8a00000
+[glibc] spawned scheduled task 54: ld-entry@0x1c8a1f540 rsp@0x1e009fe70 phdr@0x1c8200040 phnum=13
+[linux-abi] mmap(fd=3, off=0, 2170880 B) file-backed -> 0x1cc352000 (2125328 B copied)
+[linux-abi] mmap(fd=3, off=163840, 1605632 B) file-backed -> 0x1cc37a000 (1605632 B copied)
+[linux-abi] mmap(fd=3, off=1769472, 323584 B) file-backed -> 0x1cc502000 (323584 B copied)
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0x1cc551000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0x1cc564740
+[linux-abi] GLIBC-DYNAMIC-OK
+[churn-proc]   after run 2: free frames 2981623
+[elf] 3 R_X86_64_RELATIVE relocations applied @ base 0x1c8200000
+[elf] 0 R_X86_64_RELATIVE relocations applied @ base 0x1c8a00000
+[linux-abi] mmap(fd=3, off=0, 2170880 B) file-backed -> 0x1cc382000 (2125328 B copied)
+[linux-abi] mmap(fd=3, off=163840, 1605632 B) file-backed -> 0x1cc3aa000 (1605632 B copied)
+[linux-abi] mmap(fd=3, off=1769472, 323584 B) file-backed -> 0x1cc532000 (323584 B copied)
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0x1cc581000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0x1cc594740
+[linux-abi] GLIBC-DYNAMIC-OK
+[idt] GENERAL PROTECTION FAULT code=0x0 @ 0x7fe46c12 cs=0x8 ss=0x10 rsp=0x7fe46b80
+[idt]   [rsp+0] = 0x746c9520
+[idt]   [rsp+8] = 0x60000020
+[idt]   [rsp+16] = 0x746c9520
+[idt]   [rsp+24] = 0x7fe4a160
+[idt]   [rsp+32] = 0x59085c78
+
+## where RIP and RSP are
+[euro] anchor dump_registers_and_backtrace @ 0x000000007075578b
+RIP 0x7fe46c12 and RSP 0x7fe46b80 lie in the boot task (task 0) stack that UEFI gave the kernel (the BUG-032 panic dump of the same image family had RSP=0x7fe45150 there); RIP is 0x92 above RSP: the CPU executes stack bytes.
+Stack words, with the exact build map of 52755fc (R630 /srv/euroos/wt-networker-base, copied):
+  [rsp+0]  0x746c9520 = .rdata of the image (rva 0x4016520, an anonymous constant)
+  [rsp+8]  0x60000020 = not in the image
+  [rsp+16] 0x746c9520 = the same constant
+  [rsp+24] 0x7fe4a160 = higher in the boot task stack
+  [rsp+32] 0x59085c78 = not in the image (kernel heap range)
+
+## the launch order at ce04f9e (ring3.rs run_glibc): the task is Ready before it is published
+    let main_task = crate::sched::spawn_user(ld_info.entry, rsp, user_cs, user_ss, main_kstack, pml4);
+    set_task_caps(main_task, caps);
+    register_thread_kstack(main_task, main_slot);
+    GLIBC_MAIN_TASK.store(main_task, Ordering::Relaxed);
+    TASK_PROFILE[main_task].store(0, Ordering::Relaxed);
+    proc_state_drop(MAIN_KEY);
+   ... (sandbox profile)
+        "[glibc] spawned scheduled task {main_task}: ld-entry@{:#x} rsp@{rsp:#x} phdr@{:#x} phnum={}",
+        ld_info.entry, exe_info.phdr, exe_info.phnum
+    );
+
+
+## exit_group (231) of a glibc task: scheduled exit only if GLIBC_MAIN_TASK is set
+            let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+            // A cloned WORKER thread's exit(60): end only that thread.
+            if main != usize::MAX {
+                // A SCHEDULED glibc process exits: record the code, kill any leftover
+                // worker threads, signal the waiting launcher, mark this task dead.
+                return 0;
+            }
+            // Foreground run_args (musl) excursion: the synchronous EXITED model.
+            unsafe {
+                EXIT_CODE = a1;
+                EXITED = 1;
+            }
+            0
+        }
+
+## syscall_entry after the dispatch: EXITED != 0 returns through SAVED_KERNEL_RSP (the last foreground exec, on the boot task stack)
+    "mov r10, [rip + EXITED]",
+    "test r10, r10",
+    "jnz 9f",
+    // Normal syscall -> restore registers (rax stays the return value) and SYSRET.
+    "sysretq",
+    "9:",                             // sys_exit -> back to the kernel.
+    "mov rsp, [rip + SAVED_KERNEL_RSP]",
+    "pushfq",                         // SMAP window CLOSED: clear AC (no sysret that restores r11)
+    "btr qword ptr [rsp], 18",
+    "popfq",
+    "pop r15",                        // restore callee-saved registers of run()
+    "pop r14",
+    "pop r13",
+    "pop r12",
+    "pop rbp",
+    "pop rbx",
+    "ret",                          // into whatever that stale frame holds now

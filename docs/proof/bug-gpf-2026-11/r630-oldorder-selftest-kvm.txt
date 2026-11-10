@@ -1,0 +1,44 @@
+# R630 KVM (-m 4G, smp 4, -cpu host): head b085395 with spawn_user in place of spawn_user_parked (the old launch order), [bug040] self-test: CPU given away up to 1 s between spawn and publication.
+# The program runs in the window; its exit_group(42) takes the foreground exit; no spawn line, silence after GLIBC-DYNAMIC-OK; boot timeout, NMI probe:
+[churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=16/16 · frames 410806→410806 (leak-free=true) · demand-pool 427008→427008 (true) · tasks 28→28 (true) · thread-kst
+[elf] 3 R_X86_64_RELATIVE relocations applied @ base 0x120400000
+[elf] 0 R_X86_64_RELATIVE relocations applied @ base 0x120c00000
+[linux-abi] mmap(fd=3, off=0, 2170880 B) file-backed -> 0x124592000 (2125328 B copied)
+[linux-abi] mmap(fd=3, off=163840, 1605632 B) file-backed -> 0x1245ba000 (1605632 B copied)
+[linux-abi] mmap(fd=3, off=1769472, 323584 B) file-backed -> 0x124742000 (323584 B copied)
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0x124791000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0x1247a4740
+[linux-abi] GLIBC-DYNAMIC-OK
+========== NMI PROBE (wedge RIP capture) ==========
+--
+[census] t19 cr3=0x182000 sys=23 cpu=0 Dead
+[census] t20 cr3=0x182000 sys=23 cpu=0 Dead
+[census] t21 cr3=0x18e000 sys=9362 cpu=173 Dead
+[census] t22 cr3=0x0 sys=36 cpu=0 Blocked(chan=0x4e4554574f524b52)
+[census] t23 cr3=0x1780000 sys=9 cpu=0 Dead
+[census] t24 cr3=0x182000 sys=177 cpu=0 Dead
+[census] t25 cr3=0x182000 sys=78 cpu=0 Dead
+[census] t26 cr3=0x182000 sys=16 cpu=0 Dead
+[census] t27 cr3=0x132000 sys=0 cpu=8 Sleeping(until 15316)
+========== END NMI PROBE ==========
+========== NMI PROBE (wedge RIP capture) ==========
+[nmi] interrupted RIP=0x000000000000800e CS=0x8 RSP=0x000000007fe46b30 RFLAGS=0x46
+[nmi] anchor kernel_base ~ nmi_handler @ 0x00000000706a6636
+[nmi] code rip-16..: [00, 00, fa, fc, 31, c0, 8e, d8, 8e, c0, 8e, d0, 8e, e0, 8e, e8]
+[nmi] code rip..   : [66, 0f, 01, 16, b8, 80, 0f, 20, c0, 66, 83, c8, 01, 0f, 22, c0]
+[nmi] current task 13 "?" last-syscall=231(a1=0x2a)->0x0 globals-owner=0
+[nmi] stack scan (return addresses):
+[nmi]   0x00000000709f6713
+[nmi]   0x000000007fe4a0e0
+[nmi]   0x000000007fe47340
+[nmi]   0x000000007fe47340
+[nmi]   0x000000007fe52480
+[nmi]   0x0000000050ecf200
+[nmi]   0x000000007fe4a0e0
+[nmi]   0x000000007fe46e01
+[nmi]   0x000000007fe46d00
+[nmi]   0x00000000707fc9d1
+--
+========== END NMI PROBE ==========
+
+# task 13 = the glibc main task, last syscall 231 = exit_group(0x2a = 42); RSP 0x7fe46b30 is in the boot task stack (the original #GP: RSP 0x7fe46b80, RIP 0x7fe46c12, same image family and stack); RIP 0x800e = wherever the stale frame sent it.

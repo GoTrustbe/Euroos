@@ -1,0 +1,48 @@
+== docs/proof/virtio-modern-2026-11/mr-iommu-1-boot1.markers  vs  docs/proof/bug-gpf-2026-11/mr-iommu-a-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== docs/proof/virtio-modern-2026-11/mr-iommu-1-boot2.markers  vs  docs/proof/bug-gpf-2026-11/mr-iommu-a-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== docs/proof/virtio-modern-2026-11/mr-iommu-1-boot1.markers  vs  docs/proof/bug-gpf-2026-11/mr-iommu-b-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== docs/proof/virtio-modern-2026-11/mr-iommu-1-boot2.markers  vs  docs/proof/bug-gpf-2026-11/mr-iommu-b-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== docs/proof/virtio-modern-2026-11/mr-noiommu-1-boot1.markers  vs  docs/proof/bug-gpf-2026-11/mr-noiommu-a-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== docs/proof/virtio-modern-2026-11/mr-noiommu-1-boot2.markers  vs  docs/proof/bug-gpf-2026-11/mr-noiommu-a-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== docs/proof/virtio-modern-2026-11/mr-noiommu-1-boot1.markers  vs  docs/proof/bug-gpf-2026-11/mr-noiommu-b-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== docs/proof/virtio-modern-2026-11/mr-noiommu-1-boot2.markers  vs  docs/proof/bug-gpf-2026-11/mr-noiommu-b-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+

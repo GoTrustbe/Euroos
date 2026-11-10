@@ -1,0 +1,8 @@
+# TCG smp 4: head with load_tss left out of gdt::init_ap (an AP without a TSS, as before): the VM resets in the [ap-tss] self-test (QEMU -no-reboot exits); last lines:
+[  119.02 INF] [sperf] present-blit: full-screen 56304 us vs status-panel rect 497 us (~113x less work per clock tick)
+[bug032] scheduler write watch off (debug.schedwatch=on arms it)
+[bug032] DF set across context switches: 2 switch(es) interrupted code with DF=1, handler saw DF=1 in 0, DF back after iretq=true, SYSCALL clears DF (FMASK 0x4700)=true → OK ✓
+(problems.txt: notss-u4: no desktop (exit) 08:43:06)
+
+# the fix:
+[ap-tss] 3 AP(s), an NMI to each through the shared IDT's IST gate: cpu1: tr=0x28 nmi-rsp=0x16369350 own-stack=true cpu2: tr=0x28 nmi-rsp=0x16378350 own-stack=true cpu3: tr=0x28 nmi-rsp=0x16387350 own-stack=true → OK ✓ (own TSS, own IST stack)

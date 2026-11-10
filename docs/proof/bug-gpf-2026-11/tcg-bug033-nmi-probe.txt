@@ -1,0 +1,45 @@
+# TCG matrix of 73eadab (the spawn-window fix, BUG-040, before the PIPE_FDS fix), user-smp4-iommu-r2 (512 MiB): silent 900 s after the boot self-tests (the BUG-033 picture; BUG-037); the NMI probe of tcg-boot.sh: (the self-test tag was still [bug037] then)
+[churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=0/16 · frames 33229→33229 (leak-free=true) · demand-pool 16384→16384 (true) · tasks 28→28 (true) · thread-kstacks 0→0 (true) · file-ta
+[bug037] spawn-window self-test skipped: the launch ended before its spawn (exit=0xffffffffffffffff; no glibc arena at this RAM size) · foreign frees refused so far: main=0 pool=0 demand=0 ⬜
+========== NMI PROBE (wedge RIP capture) ==========
+[nmi] interrupted RIP=0x0000000010413e35 CS=0x8 RSP=0x000000000014f570 RFLAGS=0x50002
+[nmi] anchor kernel_base ~ nmi_handler @ 0x00000000103c2e22
+[nmi] code rip-16..: [31, c0, f0, 0f, b0, 0d, b1, 72, f7, 03, 75, 04, eb, 0e, f3, 90]
+[nmi] code rip..   : [8a, 05, a5, 72, f7, 03, 84, c0, 74, e6, eb, f2, 48, c1, e7, 04]
+[nmi] current task 10 "?" last-syscall=0(a1=0x0)->0x0 globals-owner=0
+[nmi] stack scan (return addresses):
+[census] 28 tasks, current=10
+[census] t0 cr3=0x0 sys=185 cpu=0 Ready
+[census] t1 cr3=0x0 sys=0 cpu=0 Sleeping(until 4215)
+[census] t2 cr3=0x0 sys=0 cpu=0 Sleeping(until 4223)
+[census] t3 cr3=0x0 sys=0 cpu=0 Sleeping(until 4216)
+[census] t4 cr3=0x0 sys=0 cpu=0 Sleeping(until 4106)
+[census] t5 cr3=0x0 sys=0 cpu=0 Dead
+[census] t6 cr3=0x132000 sys=0 cpu=1 Dead
+[census] t7 cr3=0x13a000 sys=0 cpu=702 Ready
+[census] t8 cr3=0x141000 sys=0 cpu=702 Ready
+[census] t9 cr3=0x148000 sys=0 cpu=702 Ready
+[census] t10 cr3=0x150000 sys=0 cpu=701 Ready
+[census] t11 cr3=0x158000 sys=0 cpu=701 Ready
+[census] t12 cr3=0x160000 sys=0 cpu=0 Dead
+[census] t13 cr3=0x168000 sys=0 cpu=2 Dead
+[census] t14 cr3=0x170000 sys=0 cpu=3 Dead
+[census] t15 cr3=0x178000 sys=0 cpu=3 Dead
+[census] t16 cr3=0x180000 sys=0 cpu=3 Dead
+[census] t17 cr3=0x188000 sys=0 cpu=2 Dead
+[census] t18 cr3=0x190000 sys=0 cpu=2 Dead
+[census] t19 cr3=0x198000 sys=0 cpu=11 Dead
+[census] t20 cr3=0x190000 sys=0 cpu=10 Dead
+[census] t21 cr3=0x188000 sys=2 cpu=8 Dead
+[census] t22 cr3=0x0 sys=0 cpu=11 Blocked(chan=0x4e4554574f524b52)
+[census] t23 cr3=0x188000 sys=0 cpu=1 Dead
+[census] t24 cr3=0x190000 sys=0 cpu=1 Dead
+[census] t25 cr3=0x1a0000 sys=0 cpu=31 Dead
+[census] t26 cr3=0x180000 sys=0 cpu=1 Dead
+[census] t27 cr3=0x135000 sys=0 cpu=5 Sleeping(until 4105)
+========== END NMI PROBE ==========
+
+# symbolized with that build (anchor nmi_handler @ 0x103c2e22):
+  RIP 0x10413e35 -> ring3::pipe_write_fd +0xd1 (spin on the lock: pause; mov al,[lock]; test al,al)
+  lock 0x1438b0e0 -> ring3::PIPE_FDS +0x0
+  RFLAGS 0x50002: IF=0, AC=1 (inside a syscall), task 10 = a bg-musl process (cr3 0x150000); task 0 Ready

@@ -1,0 +1,2672 @@
+id,command,status,elapsed_ms,output_lines,t_s
+1,mkdir /home/euro/lt,ok,765,1,0.8
+2,mkdir /home/euro/lt-soak,ok,760,1,1.5
+3,httpd on,ok,813,1,2.3
+4,spawn worker 32,ok,2809,2,5.2
+5,write /home/euro/lt-soak/f0 round-0,ok,2546,1,7.7
+6,cat /home/euro/lt-soak/f0,ok,230,1,7.9
+7,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1504,1,9.4
+8,sha256sum /home/euro/lt-soak/big0,ok,2205,1,11.6
+9,rm /home/euro/lt-soak/big2,ok,215,1,11.9
+10,fetch 10.0.2.100,ok,500,4,12.4
+11,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9454,2,21.8
+12,churn proc 4,ok,3983,2,25.8
+13,churn proc 8,ok,6138,2,31.9
+14,ltstat,ok,208,1,32.1
+15,lockstat,ok,649,27,32.8
+16,free,ok,66,3,32.9
+17,spawn worker 32,ok,2106,2,35.0
+18,write /home/euro/lt-soak/f1 round-1,ok,209,1,35.2
+19,cat /home/euro/lt-soak/f1,ok,78,1,35.3
+20,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1488,1,36.7
+21,sha256sum /home/euro/lt-soak/big1,ok,1851,1,38.6
+22,rm /home/euro/lt-soak/big3,ok,140,1,38.7
+23,fetch 10.0.2.100,ok,522,4,39.3
+24,churn proc 8,ok,6405,2,45.7
+25,churn fs 1,ok,39012,2,84.7
+26,ltstat,ok,2841,1,87.5
+27,spawn worker 32,ok,1973,2,89.5
+28,write /home/euro/lt-soak/f2 round-2,ok,273,1,89.8
+29,cat /home/euro/lt-soak/f2,ok,70,1,89.8
+30,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1784,1,91.6
+31,sha256sum /home/euro/lt-soak/big2,ok,2086,1,93.7
+32,rm /home/euro/lt-soak/big0,ok,296,1,94.0
+33,fetch 10.0.2.100,ok,498,4,94.5
+34,churn proc 8,ok,6051,2,100.6
+35,churn net 1,ok,1561,2,102.1
+36,ltstat,ok,148,1,102.3
+37,spawn worker 32,ok,1982,2,104.3
+38,write /home/euro/lt-soak/f3 round-3,ok,650,1,104.9
+39,cat /home/euro/lt-soak/f3,ok,73,1,105.0
+40,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1406,1,106.4
+41,sha256sum /home/euro/lt-soak/big3,ok,2374,1,108.8
+42,rm /home/euro/lt-soak/big1,ok,225,1,109.0
+43,fetch 10.0.2.100,ok,505,4,109.5
+44,churn proc 4,ok,3620,2,113.1
+45,churn proc 8,ok,6026,2,119.1
+46,ltstat,ok,208,1,119.3
+47,spawn worker 32,ok,1883,2,121.2
+48,write /home/euro/lt-soak/f4 round-4,ok,726,1,122.0
+49,cat /home/euro/lt-soak/f4,ok,68,1,122.0
+50,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1233,1,123.3
+51,sha256sum /home/euro/lt-soak/big0,ok,2131,1,125.4
+52,rm /home/euro/lt-soak/big2,ok,215,1,125.6
+53,fetch 10.0.2.100,ok,522,4,126.1
+54,churn proc 8,ok,6032,2,132.2
+55,churn fs 1,ok,36171,2,168.3
+56,ltstat,ok,219,1,168.6
+57,spawn worker 32,ok,1942,2,170.5
+58,write /home/euro/lt-soak/f5 round-5,ok,210,1,170.7
+59,cat /home/euro/lt-soak/f5,ok,73,1,170.8
+60,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1364,1,172.1
+61,sha256sum /home/euro/lt-soak/big1,ok,2205,1,174.3
+62,rm /home/euro/lt-soak/big3,ok,211,1,174.6
+63,fetch 10.0.2.100,ok,561,4,175.1
+64,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9695,2,184.8
+65,churn proc 8,ok,6049,2,190.9
+66,churn net 1,ok,1141,2,192.0
+67,ltstat,ok,208,1,192.2
+68,spawn worker 32,ok,1933,2,194.2
+69,write /home/euro/lt-soak/f6 round-6,ok,343,1,194.5
+70,cat /home/euro/lt-soak/f6,ok,69,1,194.6
+71,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1202,1,195.8
+72,sha256sum /home/euro/lt-soak/big2,ok,2167,1,197.9
+73,rm /home/euro/lt-soak/big0,ok,214,1,198.2
+74,fetch 10.0.2.100,ok,550,4,198.7
+75,churn proc 4,ok,3749,2,202.5
+76,churn proc 8,ok,6527,2,209.0
+77,ltstat,ok,158,1,209.1
+78,spawn worker 32,ok,1903,2,211.0
+79,write /home/euro/lt-soak/f7 round-7,ok,639,1,211.7
+80,cat /home/euro/lt-soak/f7,ok,204,1,211.9
+81,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1154,1,213.0
+82,sha256sum /home/euro/lt-soak/big3,ok,1804,1,214.8
+83,rm /home/euro/lt-soak/big1,ok,281,1,215.1
+84,fetch 10.0.2.100,ok,505,4,215.6
+85,churn proc 8,ok,6001,2,221.6
+86,churn fs 1,ok,36643,2,258.3
+87,ltstat,ok,148,1,258.4
+88,spawn worker 32,ok,1892,2,260.3
+89,write /home/euro/lt-soak/f8 round-8,ok,211,1,260.5
+90,cat /home/euro/lt-soak/f8,ok,82,1,260.6
+91,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1260,1,261.9
+92,sha256sum /home/euro/lt-soak/big0,ok,1968,1,263.8
+93,rm /home/euro/lt-soak/big2,ok,271,1,264.1
+94,fetch 10.0.2.100,ok,494,4,264.6
+95,churn proc 8,ok,6102,2,270.7
+96,churn net 1,ok,850,2,271.6
+97,ltstat,ok,218,1,271.8
+98,spawn worker 32,ok,1903,2,273.7
+99,write /home/euro/lt-soak/f9 round-9,ok,573,1,274.3
+100,cat /home/euro/lt-soak/f9,ok,70,1,274.3
+101,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1143,1,275.5
+102,sha256sum /home/euro/lt-soak/big1,ok,1923,1,277.4
+103,rm /home/euro/lt-soak/big3,ok,202,1,277.6
+104,fetch 10.0.2.100,ok,509,4,278.1
+105,churn proc 4,ok,3754,2,281.9
+106,churn proc 8,ok,6206,2,288.1
+107,ltstat,ok,158,1,288.2
+108,spawn worker 32,ok,1873,2,290.1
+109,write /home/euro/lt-soak/f10 round-10,ok,583,1,290.7
+110,cat /home/euro/lt-soak/f10,ok,70,1,290.8
+111,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1277,1,292.0
+112,sha256sum /home/euro/lt-soak/big2,ok,1968,1,294.0
+113,rm /home/euro/lt-soak/big0,ok,142,1,294.1
+114,fetch 10.0.2.100,ok,565,4,294.7
+115,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9695,2,304.4
+116,churn proc 8,ok,6548,2,311.0
+117,churn fs 1,ok,34940,2,345.9
+118,ltstat,ok,2471,1,348.4
+119,lockstat,ok,780,27,349.2
+120,free,ok,76,3,349.2
+121,spawn worker 32,ok,1866,2,351.1
+122,write /home/euro/lt-soak/f11 round-11,ok,221,1,351.3
+123,cat /home/euro/lt-soak/f11,ok,71,1,351.4
+124,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1341,1,352.7
+125,sha256sum /home/euro/lt-soak/big3,ok,1867,1,354.6
+126,rm /home/euro/lt-soak/big1,ok,280,1,354.9
+127,fetch 10.0.2.100,ok,506,4,355.4
+128,churn proc 8,ok,6731,2,362.1
+129,churn net 1,ok,1009,2,363.1
+130,ltstat,ok,140,1,363.3
+131,spawn worker 32,ok,2201,2,365.5
+132,write /home/euro/lt-soak/f12 round-12,ok,635,1,366.1
+133,cat /home/euro/lt-soak/f12,ok,69,1,366.2
+134,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1213,1,367.4
+135,sha256sum /home/euro/lt-soak/big0,ok,1985,1,369.4
+136,rm /home/euro/lt-soak/big2,ok,210,1,369.6
+137,fetch 10.0.2.100,ok,509,4,370.1
+138,churn proc 4,ok,3805,2,373.9
+139,churn proc 8,ok,6697,2,380.6
+140,ltstat,ok,219,1,380.8
+141,spawn worker 32,ok,2101,2,382.9
+142,write /home/euro/lt-soak/f13 round-13,ok,660,1,383.6
+143,cat /home/euro/lt-soak/f13,ok,145,1,383.7
+144,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1354,1,385.1
+145,sha256sum /home/euro/lt-soak/big1,ok,2058,1,387.1
+146,rm /home/euro/lt-soak/big3,ok,207,1,387.4
+147,fetch 10.0.2.100,ok,513,4,387.9
+148,churn proc 8,ok,6792,2,394.7
+149,churn fs 1,ok,39095,2,433.8
+150,ltstat,ok,220,1,434.0
+151,spawn worker 32,ok,2030,2,436.0
+152,write /home/euro/lt-soak/f14 round-14,ok,273,1,436.3
+153,cat /home/euro/lt-soak/f14,ok,81,1,436.4
+154,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1471,1,437.8
+155,sha256sum /home/euro/lt-soak/big2,ok,1847,1,439.7
+156,rm /home/euro/lt-soak/big0,ok,224,1,439.9
+157,fetch 10.0.2.100,ok,501,4,440.4
+158,churn proc 8,ok,6663,2,447.1
+159,churn net 1,ok,940,2,448.0
+160,ltstat,ok,208,1,448.2
+161,spawn worker 32,ok,1883,2,450.1
+162,write /home/euro/lt-soak/f15 round-15,ok,634,1,450.7
+163,cat /home/euro/lt-soak/f15,ok,70,1,450.8
+164,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1562,1,452.4
+165,sha256sum /home/euro/lt-soak/big3,ok,2239,1,454.6
+166,rm /home/euro/lt-soak/big1,ok,257,1,454.9
+167,fetch 10.0.2.100,ok,504,4,455.4
+168,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9812,2,465.2
+169,churn proc 4,ok,3647,2,468.8
+170,churn proc 8,ok,6247,2,475.1
+171,ltstat,ok,259,1,475.3
+172,spawn worker 32,ok,1980,2,477.3
+173,write /home/euro/lt-soak/f16 round-16,ok,354,1,477.7
+174,cat /home/euro/lt-soak/f16,ok,139,1,477.8
+175,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1434,1,479.3
+176,sha256sum /home/euro/lt-soak/big0,ok,2049,1,481.3
+177,rm /home/euro/lt-soak/big2,ok,155,1,481.5
+178,fetch 10.0.2.100,ok,685,4,482.1
+179,churn proc 8,ok,6743,2,488.9
+180,churn fs 1,ok,38344,2,527.2
+181,ltstat,ok,147,1,527.4
+182,spawn worker 32,ok,2094,2,529.5
+183,write /home/euro/lt-soak/f17 round-17,ok,206,1,529.7
+184,cat /home/euro/lt-soak/f17,ok,138,1,529.8
+185,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1364,1,531.2
+186,sha256sum /home/euro/lt-soak/big1,ok,1777,1,533.0
+187,rm /home/euro/lt-soak/big3,ok,206,1,533.2
+188,fetch 10.0.2.100,ok,553,4,533.7
+189,churn proc 8,ok,6296,2,540.0
+190,churn net 1,ok,486,2,540.5
+191,ltstat,ok,138,1,540.6
+192,spawn worker 32,ok,1883,2,542.5
+193,write /home/euro/lt-soak/f18 round-18,ok,575,1,543.1
+194,cat /home/euro/lt-soak/f18,ok,68,1,543.2
+195,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1447,1,544.6
+196,sha256sum /home/euro/lt-soak/big2,ok,2078,1,546.7
+197,rm /home/euro/lt-soak/big0,ok,205,1,546.9
+198,fetch 10.0.2.100,ok,564,4,547.5
+199,churn proc 4,ok,3898,2,551.4
+200,churn proc 8,ok,6637,2,558.0
+201,ltstat,ok,209,1,558.2
+202,spawn worker 32,ok,2021,2,560.2
+203,write /home/euro/lt-soak/f19 round-19,ok,568,1,560.8
+204,cat /home/euro/lt-soak/f19,ok,65,1,560.9
+205,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1153,1,562.0
+206,sha256sum /home/euro/lt-soak/big3,ok,1935,1,564.0
+207,rm /home/euro/lt-soak/big1,ok,220,1,564.2
+208,fetch 10.0.2.100,ok,504,4,564.7
+209,churn proc 8,ok,6315,2,571.0
+210,churn fs 1,ok,36419,2,607.4
+211,ltstat,ok,2712,1,610.1
+212,spawn worker 32,ok,2172,2,612.3
+213,write /home/euro/lt-soak/f20 round-20,ok,213,1,612.5
+214,cat /home/euro/lt-soak/f20,ok,80,1,612.6
+215,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1232,1,613.8
+216,sha256sum /home/euro/lt-soak/big0,ok,1914,1,615.8
+217,rm /home/euro/lt-soak/big2,ok,271,1,616.0
+218,fetch 10.0.2.100,ok,504,4,616.5
+219,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9728,2,626.3
+220,churn proc 8,ok,6144,2,632.4
+221,churn net 1,ok,499,2,632.9
+222,ltstat,ok,68,1,633.0
+223,lockstat,ok,651,27,633.6
+224,free,ok,67,3,633.7
+225,spawn worker 32,ok,1906,2,635.6
+226,write /home/euro/lt-soak/f21 round-21,ok,204,1,635.8
+227,cat /home/euro/lt-soak/f21,ok,127,1,635.9
+228,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1220,1,637.2
+229,sha256sum /home/euro/lt-soak/big1,ok,1776,1,638.9
+230,rm /home/euro/lt-soak/big3,ok,214,1,639.1
+231,fetch 10.0.2.100,ok,559,4,639.7
+232,churn proc 4,ok,3933,2,643.6
+233,churn proc 8,ok,6687,2,650.3
+234,ltstat,ok,209,1,650.5
+235,spawn worker 32,ok,2121,2,652.7
+236,write /home/euro/lt-soak/f22 round-22,ok,579,1,653.2
+237,cat /home/euro/lt-soak/f22,ok,134,1,653.4
+238,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1310,1,654.7
+239,sha256sum /home/euro/lt-soak/big2,ok,1998,1,656.7
+240,rm /home/euro/lt-soak/big0,ok,202,1,656.9
+241,fetch 10.0.2.100,ok,503,4,657.4
+242,churn proc 8,ok,6681,2,664.1
+243,churn fs 1,ok,35009,2,699.1
+244,ltstat,ok,218,1,699.3
+245,spawn worker 32,ok,1883,2,701.2
+246,write /home/euro/lt-soak/f23 round-23,ok,210,1,701.4
+247,cat /home/euro/lt-soak/f23,ok,73,1,701.5
+248,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1213,1,702.7
+249,sha256sum /home/euro/lt-soak/big3,ok,1942,1,704.6
+250,rm /home/euro/lt-soak/big1,ok,213,1,704.8
+251,fetch 10.0.2.100,ok,484,4,705.3
+252,churn proc 8,ok,6392,2,711.7
+253,churn net 1,ok,560,2,712.3
+254,ltstat,ok,211,1,712.5
+255,spawn worker 32,ok,2129,2,714.6
+256,write /home/euro/lt-soak/f24 round-24,ok,577,1,715.2
+257,cat /home/euro/lt-soak/f24,ok,66,1,715.3
+258,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1271,1,716.5
+259,sha256sum /home/euro/lt-soak/big0,ok,1987,1,718.5
+260,rm /home/euro/lt-soak/big2,ok,220,1,718.7
+261,fetch 10.0.2.100,ok,505,4,719.3
+262,churn proc 4,ok,3828,2,723.1
+263,churn proc 8,ok,6687,2,729.8
+264,ltstat,ok,209,1,730.0
+265,spawn worker 32,ok,2242,2,732.2
+266,write /home/euro/lt-soak/f25 round-25,ok,574,1,732.8
+267,cat /home/euro/lt-soak/f25,ok,69,1,732.9
+268,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1234,1,734.1
+269,sha256sum /home/euro/lt-soak/big1,ok,1983,1,736.1
+270,rm /home/euro/lt-soak/big3,ok,280,1,736.4
+271,fetch 10.0.2.100,ok,507,4,736.9
+272,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9800,2,746.7
+273,churn proc 8,ok,6110,2,752.8
+274,churn fs 1,ok,35290,2,788.1
+275,ltstat,ok,218,1,788.3
+276,spawn worker 32,ok,1873,2,790.2
+277,write /home/euro/lt-soak/f26 round-26,ok,212,1,790.4
+278,cat /home/euro/lt-soak/f26,ok,62,1,790.4
+279,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1121,1,791.6
+280,sha256sum /home/euro/lt-soak/big2,ok,1715,1,793.3
+281,rm /home/euro/lt-soak/big0,ok,260,1,793.5
+282,fetch 10.0.2.100,ok,601,4,794.1
+283,churn proc 8,ok,6546,2,800.7
+284,churn net 1,ok,570,2,801.3
+285,ltstat,ok,79,1,801.3
+286,spawn worker 32,ok,2022,2,803.4
+287,write /home/euro/lt-soak/f27 round-27,ok,517,1,803.9
+288,cat /home/euro/lt-soak/f27,ok,65,1,804.0
+289,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1233,1,805.2
+290,sha256sum /home/euro/lt-soak/big3,ok,1791,1,807.0
+291,rm /home/euro/lt-soak/big1,ok,144,1,807.1
+292,fetch 10.0.2.100,ok,555,4,807.7
+293,churn proc 4,ok,3839,2,811.5
+294,churn proc 8,ok,6226,2,817.7
+295,ltstat,ok,219,1,818.0
+296,spawn worker 32,ok,2181,2,820.1
+297,write /home/euro/lt-soak/f28 round-28,ok,720,1,820.9
+298,cat /home/euro/lt-soak/f28,ok,74,1,820.9
+299,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1644,1,822.6
+300,sha256sum /home/euro/lt-soak/big0,ok,2145,1,824.7
+301,rm /home/euro/lt-soak/big2,ok,222,1,825.0
+302,fetch 10.0.2.100,ok,504,4,825.5
+303,churn proc 8,ok,6142,2,831.6
+304,churn fs 1,ok,38962,2,870.6
+305,ltstat,ok,208,1,870.8
+306,spawn worker 32,ok,1894,2,872.7
+307,write /home/euro/lt-soak/f29 round-29,ok,221,1,872.9
+308,cat /home/euro/lt-soak/f29,ok,71,1,873.0
+309,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1232,1,874.2
+310,sha256sum /home/euro/lt-soak/big1,ok,1914,1,876.1
+311,rm /home/euro/lt-soak/big3,ok,193,1,876.3
+312,fetch 10.0.2.100,ok,513,4,876.8
+313,churn proc 8,ok,6152,2,883.0
+314,churn net 1,ok,490,2,883.5
+315,ltstat,ok,138,1,883.6
+316,spawn worker 32,ok,1983,2,885.6
+317,write /home/euro/lt-soak/f30 round-30,ok,572,1,886.2
+318,cat /home/euro/lt-soak/f30,ok,141,1,886.3
+319,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1223,1,887.5
+320,sha256sum /home/euro/lt-soak/big2,ok,2168,1,889.7
+321,rm /home/euro/lt-soak/big0,ok,161,1,889.9
+322,fetch 10.0.2.100,ok,560,4,890.4
+323,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9816,2,900.2
+324,churn proc 4,ok,3674,2,903.9
+325,churn proc 8,ok,6136,2,910.0
+326,ltstat,ok,428,1,910.5
+327,lockstat,ok,630,27,911.1
+328,free,ok,66,3,911.2
+329,spawn worker 32,ok,1886,2,913.1
+330,write /home/euro/lt-soak/f31 round-31,ok,203,1,913.3
+331,cat /home/euro/lt-soak/f31,ok,79,1,913.3
+332,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1313,1,914.7
+333,sha256sum /home/euro/lt-soak/big3,ok,2035,1,916.7
+334,rm /home/euro/lt-soak/big1,ok,220,1,916.9
+335,fetch 10.0.2.100,ok,504,4,917.4
+336,churn proc 8,ok,6182,2,923.6
+337,churn fs 1,ok,33829,2,957.4
+338,ltstat,ok,207,1,957.6
+339,spawn worker 32,ok,1894,2,959.5
+340,write /home/euro/lt-soak/f32 round-32,ok,211,1,959.7
+341,cat /home/euro/lt-soak/f32,ok,71,1,959.8
+342,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1223,1,961.0
+343,sha256sum /home/euro/lt-soak/big0,ok,1984,1,963.0
+344,rm /home/euro/lt-soak/big2,ok,182,1,963.2
+345,fetch 10.0.2.100,ok,504,4,963.7
+346,churn proc 8,ok,6195,2,969.9
+347,churn net 1,ok,437,2,970.3
+348,ltstat,ok,219,1,970.6
+349,spawn worker 32,ok,1882,2,972.4
+350,write /home/euro/lt-soak/f33 round-33,ok,637,1,973.1
+351,cat /home/euro/lt-soak/f33,ok,67,1,973.1
+352,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1387,1,974.5
+353,sha256sum /home/euro/lt-soak/big1,ok,1935,1,976.5
+354,rm /home/euro/lt-soak/big3,ok,206,1,976.7
+355,fetch 10.0.2.100,ok,554,4,977.2
+356,churn proc 4,ok,3288,2,980.5
+357,churn proc 8,ok,6026,2,986.6
+358,ltstat,ok,250,1,986.8
+359,spawn worker 32,ok,1962,2,988.8
+360,write /home/euro/lt-soak/f34 round-34,ok,575,1,989.3
+361,cat /home/euro/lt-soak/f34,ok,68,1,989.4
+362,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1212,1,990.6
+363,sha256sum /home/euro/lt-soak/big2,ok,1967,1,992.6
+364,rm /home/euro/lt-soak/big0,ok,210,1,992.8
+365,fetch 10.0.2.100,ok,504,4,993.3
+366,churn proc 8,ok,6222,2,999.5
+367,churn fs 1,ok,36742,2,1036.3
+368,ltstat,ok,208,1,1036.5
+369,spawn worker 32,ok,1943,2,1038.4
+370,write /home/euro/lt-soak/f35 round-35,ok,223,1,1038.6
+371,cat /home/euro/lt-soak/f35,ok,69,1,1038.7
+372,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1354,1,1040.1
+373,sha256sum /home/euro/lt-soak/big3,ok,2055,1,1042.1
+374,rm /home/euro/lt-soak/big1,ok,211,1,1042.3
+375,fetch 10.0.2.100,ok,572,4,1042.9
+376,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9904,2,1052.8
+377,churn proc 8,ok,6292,2,1059.1
+378,churn net 1,ok,417,2,1059.5
+379,ltstat,ok,148,1,1059.7
+380,spawn worker 32,ok,1863,2,1061.5
+381,write /home/euro/lt-soak/f36 round-36,ok,225,1,1061.8
+382,cat /home/euro/lt-soak/f36,ok,128,1,1061.9
+383,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1344,1,1063.2
+384,sha256sum /home/euro/lt-soak/big0,ok,2217,1,1065.5
+385,rm /home/euro/lt-soak/big2,ok,227,1,1065.7
+386,fetch 10.0.2.100,ok,545,4,1066.2
+387,churn proc 4,ok,3529,2,1069.8
+388,churn proc 8,ok,6437,2,1076.2
+389,ltstat,ok,148,1,1076.3
+390,spawn worker 32,ok,2083,2,1078.4
+391,write /home/euro/lt-soak/f37 round-37,ok,562,1,1079.0
+392,cat /home/euro/lt-soak/f37,ok,74,1,1079.1
+393,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1359,1,1080.4
+394,sha256sum /home/euro/lt-soak/big1,ok,2196,1,1082.6
+395,rm /home/euro/lt-soak/big3,ok,201,1,1082.8
+396,fetch 10.0.2.100,ok,504,4,1083.3
+397,churn proc 8,ok,5872,2,1089.2
+398,churn fs 1,ok,37172,2,1126.4
+399,ltstat,ok,208,1,1126.6
+400,spawn worker 32,ok,1882,2,1128.5
+401,write /home/euro/lt-soak/f38 round-38,ok,278,1,1128.7
+402,cat /home/euro/lt-soak/f38,ok,73,1,1128.8
+403,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1247,1,1130.1
+404,sha256sum /home/euro/lt-soak/big2,ok,1857,1,1131.9
+405,rm /home/euro/lt-soak/big0,ok,204,1,1132.1
+406,fetch 10.0.2.100,ok,507,4,1132.6
+407,churn proc 8,ok,6101,2,1138.7
+408,churn net 1,ok,489,2,1139.2
+409,ltstat,ok,69,1,1139.3
+410,spawn worker 32,ok,1884,2,1141.2
+411,write /home/euro/lt-soak/f39 round-39,ok,574,1,1141.8
+412,cat /home/euro/lt-soak/f39,ok,69,1,1141.8
+413,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1195,1,1143.0
+414,sha256sum /home/euro/lt-soak/big3,ok,1879,1,1144.9
+415,rm /home/euro/lt-soak/big1,ok,204,1,1145.1
+416,fetch 10.0.2.100,ok,504,4,1145.6
+417,churn proc 4,ok,3409,2,1149.0
+418,churn proc 8,ok,5785,2,1154.8
+419,ltstat,ok,2752,1,1157.6
+420,spawn worker 32,ok,2022,2,1159.6
+421,write /home/euro/lt-soak/f40 round-40,ok,644,1,1160.2
+422,cat /home/euro/lt-soak/f40,ok,70,1,1160.3
+423,truncate -s 8388608 /home/euro/lt-soak/big0,ok,993,1,1161.3
+424,sha256sum /home/euro/lt-soak/big0,ok,1911,1,1163.2
+425,rm /home/euro/lt-soak/big2,ok,204,1,1163.4
+426,fetch 10.0.2.100,ok,445,4,1163.9
+427,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9781,2,1173.6
+428,churn proc 8,ok,6131,2,1179.8
+429,churn fs 1,ok,39265,2,1219.0
+430,ltstat,ok,427,1,1219.5
+431,lockstat,ok,703,27,1220.2
+432,free,ok,73,3,1220.2
+433,spawn worker 32,ok,2086,2,1222.3
+434,write /home/euro/lt-soak/f41 round-41,ok,211,1,1222.5
+435,cat /home/euro/lt-soak/f41,ok,141,1,1222.7
+436,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1347,1,1224.0
+437,sha256sum /home/euro/lt-soak/big1,ok,1888,1,1225.9
+438,rm /home/euro/lt-soak/big3,ok,209,1,1226.1
+439,fetch 10.0.2.100,ok,447,4,1226.6
+440,churn proc 8,ok,5961,2,1232.5
+441,churn net 1,ok,480,2,1233.0
+442,ltstat,ok,77,1,1233.1
+443,spawn worker 32,ok,1914,2,1235.0
+444,write /home/euro/lt-soak/f42 round-42,ok,717,1,1235.7
+445,cat /home/euro/lt-soak/f42,ok,69,1,1235.8
+446,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1560,1,1237.4
+447,sha256sum /home/euro/lt-soak/big2,ok,2062,1,1239.4
+448,rm /home/euro/lt-soak/big0,ok,198,1,1239.6
+449,fetch 10.0.2.100,ok,500,4,1240.1
+450,churn proc 4,ok,8437,2,1248.6
+451,churn proc 8,ok,6718,2,1255.3
+452,ltstat,ok,155,1,1255.4
+453,spawn worker 32,ok,1863,2,1257.3
+454,write /home/euro/lt-soak/f43 round-43,ok,780,1,1258.1
+455,cat /home/euro/lt-soak/f43,ok,73,1,1258.2
+456,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1557,1,1259.7
+457,sha256sum /home/euro/lt-soak/big3,ok,2152,1,1261.9
+458,rm /home/euro/lt-soak/big1,ok,210,1,1262.1
+459,fetch 10.0.2.100,ok,614,4,1262.7
+460,churn proc 8,ok,6151,2,1268.8
+461,churn fs 1,ok,36732,2,1305.6
+462,ltstat,ok,208,1,1305.8
+463,spawn worker 32,ok,1875,2,1307.7
+464,write /home/euro/lt-soak/f44 round-44,ok,218,1,1307.9
+465,cat /home/euro/lt-soak/f44,ok,73,1,1308.0
+466,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1282,1,1309.2
+467,sha256sum /home/euro/lt-soak/big0,ok,1987,1,1311.2
+468,rm /home/euro/lt-soak/big2,ok,219,1,1311.4
+469,fetch 10.0.2.100,ok,484,4,1311.9
+470,churn proc 8,ok,6062,2,1318.0
+471,churn net 1,ok,550,2,1318.5
+472,ltstat,ok,189,1,1318.7
+473,spawn worker 32,ok,1892,2,1320.6
+474,write /home/euro/lt-soak/f45 round-45,ok,572,1,1321.2
+475,cat /home/euro/lt-soak/f45,ok,63,1,1321.3
+476,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1198,1,1322.5
+477,sha256sum /home/euro/lt-soak/big1,ok,2182,1,1324.6
+478,rm /home/euro/lt-soak/big3,ok,197,1,1324.8
+479,fetch 10.0.2.100,ok,504,4,1325.3
+480,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9814,2,1335.2
+481,churn proc 4,ok,3886,2,1339.0
+482,churn proc 8,ok,6148,2,1345.2
+483,ltstat,ok,149,1,1345.3
+484,spawn worker 32,ok,1882,2,1347.2
+485,write /home/euro/lt-soak/f46 round-46,ok,223,1,1347.4
+486,cat /home/euro/lt-soak/f46,ok,70,1,1347.5
+487,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1286,1,1348.8
+488,sha256sum /home/euro/lt-soak/big2,ok,2207,1,1351.0
+489,rm /home/euro/lt-soak/big0,ok,207,1,1351.2
+490,fetch 10.0.2.100,ok,502,4,1351.7
+491,churn proc 8,ok,6172,2,1357.9
+492,churn fs 1,ok,37023,2,1394.9
+493,ltstat,ok,158,1,1395.1
+494,spawn worker 32,ok,1950,2,1397.0
+495,write /home/euro/lt-soak/f47 round-47,ok,202,1,1397.2
+496,cat /home/euro/lt-soak/f47,ok,73,1,1397.3
+497,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1223,1,1398.5
+498,sha256sum /home/euro/lt-soak/big3,ok,1842,1,1400.4
+499,rm /home/euro/lt-soak/big1,ok,213,1,1400.6
+500,fetch 10.0.2.100,ok,504,4,1401.1
+501,churn proc 8,ok,6082,2,1407.2
+502,churn net 1,ok,509,2,1407.7
+503,ltstat,ok,138,1,1407.8
+504,spawn worker 32,ok,1832,2,1409.7
+505,write /home/euro/lt-soak/f48 round-48,ok,626,1,1410.3
+506,cat /home/euro/lt-soak/f48,ok,118,1,1410.4
+507,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1153,1,1411.6
+508,sha256sum /home/euro/lt-soak/big0,ok,1844,1,1413.4
+509,rm /home/euro/lt-soak/big2,ok,3734,1,1417.1
+510,fetch 10.0.2.100,ok,697,4,1417.8
+511,churn proc 4,ok,3778,2,1421.6
+512,churn proc 8,ok,6286,2,1427.9
+513,ltstat,ok,148,1,1428.0
+514,spawn worker 32,ok,1753,2,1429.8
+515,write /home/euro/lt-soak/f49 round-49,ok,637,1,1430.4
+516,cat /home/euro/lt-soak/f49,ok,67,1,1430.5
+517,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1073,1,1431.6
+518,sha256sum /home/euro/lt-soak/big1,ok,1691,1,1433.3
+519,rm /home/euro/lt-soak/big3,ok,206,1,1433.5
+520,fetch 10.0.2.100,ok,493,4,1434.0
+521,churn proc 8,ok,6362,2,1440.3
+522,churn fs 1,ok,36341,2,1476.7
+523,ltstat,ok,198,1,1476.9
+524,spawn worker 32,ok,1964,2,1478.8
+525,write /home/euro/lt-soak/f0 round-50,ok,292,1,1479.1
+526,cat /home/euro/lt-soak/f0,ok,71,1,1479.2
+527,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1283,1,1480.5
+528,sha256sum /home/euro/lt-soak/big2,ok,1864,1,1482.4
+529,rm /home/euro/lt-soak/big0,ok,184,1,1482.5
+530,fetch 10.0.2.100,ok,502,4,1483.0
+531,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9833,2,1492.9
+532,churn proc 8,ok,8534,2,1501.4
+533,churn net 1,ok,490,2,1501.9
+534,ltstat,ok,138,1,1502.0
+535,lockstat,ok,650,27,1502.7
+536,free,ok,66,3,1502.8
+537,spawn worker 32,ok,1936,2,1504.7
+538,write /home/euro/lt-soak/f1 round-51,ok,242,1,1504.9
+539,cat /home/euro/lt-soak/f1,ok,140,1,1505.1
+540,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1258,1,1506.3
+541,sha256sum /home/euro/lt-soak/big3,ok,1852,1,1508.2
+542,rm /home/euro/lt-soak/big1,ok,210,1,1508.4
+543,fetch 10.0.2.100,ok,518,4,1508.9
+544,churn proc 4,ok,3681,2,1512.6
+545,churn proc 8,ok,6294,2,1518.9
+546,ltstat,ok,139,1,1519.0
+547,spawn worker 32,ok,1893,2,1520.9
+548,write /home/euro/lt-soak/f2 round-52,ok,990,1,1521.9
+549,cat /home/euro/lt-soak/f2,ok,73,1,1522.0
+550,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1263,1,1523.3
+551,sha256sum /home/euro/lt-soak/big0,ok,1963,1,1525.2
+552,rm /home/euro/lt-soak/big2,ok,262,1,1525.5
+553,fetch 10.0.2.100,ok,494,4,1526.0
+554,churn proc 8,ok,6272,2,1532.2
+555,churn fs 1,ok,35721,2,1568.0
+556,ltstat,ok,200,1,1568.2
+557,spawn worker 32,ok,1992,2,1570.2
+558,write /home/euro/lt-soak/f3 round-53,ok,290,1,1570.5
+559,cat /home/euro/lt-soak/f3,ok,73,1,1570.5
+560,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1213,1,1571.7
+561,sha256sum /home/euro/lt-soak/big1,ok,1904,1,1573.6
+562,rm /home/euro/lt-soak/big3,ok,211,1,1573.9
+563,fetch 10.0.2.100,ok,504,4,1574.4
+564,churn proc 8,ok,6282,2,1580.6
+565,churn net 1,ok,500,2,1581.1
+566,ltstat,ok,218,1,1581.4
+567,spawn worker 32,ok,1802,2,1583.2
+568,write /home/euro/lt-soak/f4 round-54,ok,709,1,1583.9
+569,cat /home/euro/lt-soak/f4,ok,65,1,1583.9
+570,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1224,1,1585.2
+571,sha256sum /home/euro/lt-soak/big2,ok,1913,1,1587.1
+572,rm /home/euro/lt-soak/big0,ok,212,1,1587.3
+573,fetch 10.0.2.100,ok,494,4,1587.8
+574,churn proc 4,ok,3630,2,1591.4
+575,churn proc 8,ok,6247,2,1597.7
+576,ltstat,ok,158,1,1597.8
+577,spawn worker 32,ok,1883,2,1599.7
+578,write /home/euro/lt-soak/f5 round-55,ok,648,1,1600.4
+579,cat /home/euro/lt-soak/f5,ok,65,1,1600.4
+580,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1283,1,1601.7
+581,sha256sum /home/euro/lt-soak/big3,ok,1925,1,1603.6
+582,rm /home/euro/lt-soak/big1,ok,280,1,1603.9
+583,fetch 10.0.2.100,ok,564,4,1604.5
+584,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9753,2,1614.2
+585,churn proc 8,ok,6279,2,1620.5
+586,churn fs 1,ok,35411,2,1655.9
+587,ltstat,ok,208,1,1656.1
+588,spawn worker 32,ok,1895,2,1658.0
+589,write /home/euro/lt-soak/f6 round-56,ok,270,1,1658.3
+590,cat /home/euro/lt-soak/f6,ok,82,1,1658.4
+591,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1262,1,1659.6
+592,sha256sum /home/euro/lt-soak/big0,ok,1917,1,1661.6
+593,rm /home/euro/lt-soak/big2,ok,147,1,1661.7
+594,fetch 10.0.2.100,ok,565,4,1662.3
+595,churn proc 8,ok,6421,2,1668.7
+596,churn net 1,ok,430,2,1669.1
+597,ltstat,ok,138,1,1669.3
+598,spawn worker 32,ok,1833,2,1671.1
+599,write /home/euro/lt-soak/f7 round-57,ok,764,1,1671.9
+600,cat /home/euro/lt-soak/f7,ok,130,1,1672.0
+601,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1203,1,1673.2
+602,sha256sum /home/euro/lt-soak/big1,ok,1946,1,1675.1
+603,rm /home/euro/lt-soak/big3,ok,220,1,1675.4
+604,fetch 10.0.2.100,ok,545,4,1675.9
+605,churn proc 4,ok,3548,2,1679.5
+606,churn proc 8,ok,6227,2,1685.7
+607,ltstat,ok,218,1,1685.9
+608,spawn worker 32,ok,1874,2,1687.8
+609,write /home/euro/lt-soak/f8 round-58,ok,658,1,1688.4
+610,cat /home/euro/lt-soak/f8,ok,65,1,1688.5
+611,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1205,1,1689.7
+612,sha256sum /home/euro/lt-soak/big2,ok,1953,1,1691.7
+613,rm /home/euro/lt-soak/big0,ok,280,1,1691.9
+614,fetch 10.0.2.100,ok,505,4,1692.4
+615,churn proc 8,ok,6151,2,1698.6
+616,churn fs 1,ok,35851,2,1734.5
+617,ltstat,ok,208,1,1734.7
+618,spawn worker 32,ok,1913,2,1736.6
+619,write /home/euro/lt-soak/f9 round-59,ok,281,1,1736.9
+620,cat /home/euro/lt-soak/f9,ok,81,1,1736.9
+621,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1213,1,1738.2
+622,sha256sum /home/euro/lt-soak/big3,ok,1920,1,1740.1
+623,rm /home/euro/lt-soak/big1,ok,207,1,1740.3
+624,fetch 10.0.2.100,ok,502,4,1740.8
+625,churn proc 8,ok,6382,2,1747.2
+626,churn net 1,ok,560,2,1747.7
+627,ltstat,ok,78,1,1747.8
+628,spawn worker 32,ok,1903,2,1749.7
+629,write /home/euro/lt-soak/f10 round-60,ok,697,1,1750.4
+630,cat /home/euro/lt-soak/f10,ok,77,1,1750.5
+631,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1193,1,1751.7
+632,sha256sum /home/euro/lt-soak/big0,ok,1910,1,1753.6
+633,rm /home/euro/lt-soak/big2,ok,215,1,1753.8
+634,fetch 10.0.2.100,ok,505,4,1754.3
+635,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9766,2,1764.1
+636,churn proc 4,ok,3714,2,1767.8
+637,churn proc 8,ok,6268,2,1774.1
+638,ltstat,ok,2709,1,1776.8
+639,lockstat,ok,791,27,1777.6
+640,free,ok,206,3,1777.8
+641,spawn worker 32,ok,1816,2,1779.6
+642,write /home/euro/lt-soak/f11 round-61,ok,283,1,1779.9
+643,cat /home/euro/lt-soak/f11,ok,72,1,1779.9
+644,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1285,1,1781.2
+645,sha256sum /home/euro/lt-soak/big1,ok,2045,1,1783.3
+646,rm /home/euro/lt-soak/big3,ok,217,1,1783.5
+647,fetch 10.0.2.100,ok,504,4,1784.0
+648,churn proc 8,ok,6283,2,1790.3
+649,churn fs 1,ok,37422,2,1827.7
+650,ltstat,ok,2571,1,1830.3
+651,spawn worker 32,ok,1997,2,1832.3
+652,write /home/euro/lt-soak/f12 round-62,ok,289,1,1832.6
+653,cat /home/euro/lt-soak/f12,ok,70,1,1832.6
+654,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1133,1,1833.8
+655,sha256sum /home/euro/lt-soak/big2,ok,1952,1,1835.7
+656,rm /home/euro/lt-soak/big0,ok,195,1,1835.9
+657,fetch 10.0.2.100,ok,552,4,1836.5
+658,churn proc 8,ok,6192,2,1842.7
+659,churn net 1,ok,490,2,1843.2
+660,ltstat,ok,208,1,1843.4
+661,spawn worker 32,ok,1924,2,1845.3
+662,write /home/euro/lt-soak/f13 round-63,ok,647,1,1845.9
+663,cat /home/euro/lt-soak/f13,ok,66,1,1846.0
+664,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1215,1,1847.2
+665,sha256sum /home/euro/lt-soak/big3,ok,1831,1,1849.0
+666,rm /home/euro/lt-soak/big1,ok,72,1,1849.1
+667,fetch 10.0.2.100,ok,737,4,1849.9
+668,churn proc 4,ok,4078,2,1853.9
+669,churn proc 8,ok,6637,2,1860.6
+670,ltstat,ok,270,1,1860.8
+671,spawn worker 32,ok,1821,2,1862.7
+672,write /home/euro/lt-soak/f14 round-64,ok,638,1,1863.3
+673,cat /home/euro/lt-soak/f14,ok,134,1,1863.4
+674,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1213,1,1864.7
+675,sha256sum /home/euro/lt-soak/big0,ok,1856,1,1866.5
+676,rm /home/euro/lt-soak/big2,ok,159,1,1866.7
+677,fetch 10.0.2.100,ok,434,4,1867.1
+678,churn proc 8,ok,6093,2,1873.2
+679,churn fs 1,ok,33534,2,1906.7
+680,ltstat,ok,141,1,1906.9
+681,spawn worker 32,ok,1744,2,1908.6
+682,write /home/euro/lt-soak/f15 round-65,ok,279,1,1908.9
+683,cat /home/euro/lt-soak/f15,ok,73,1,1909.0
+684,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1153,1,1910.1
+685,sha256sum /home/euro/lt-soak/big1,ok,1836,1,1912.0
+686,rm /home/euro/lt-soak/big3,ok,149,1,1912.1
+687,fetch 10.0.2.100,ok,566,4,1912.7
+688,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9705,2,1922.4
+689,churn proc 8,ok,5886,2,1928.3
+690,churn net 1,ok,430,2,1928.7
+691,ltstat,ok,68,1,1928.8
+692,spawn worker 32,ok,1784,2,1930.6
+693,write /home/euro/lt-soak/f16 round-66,ok,290,1,1930.8
+694,cat /home/euro/lt-soak/f16,ok,65,1,1930.9
+695,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1181,1,1932.1
+696,sha256sum /home/euro/lt-soak/big2,ok,1854,1,1933.9
+697,rm /home/euro/lt-soak/big0,ok,141,1,1934.1
+698,fetch 10.0.2.100,ok,635,4,1934.7
+699,churn proc 4,ok,3508,2,1938.2
+700,churn proc 8,ok,6056,2,1944.3
+701,ltstat,ok,208,1,1944.5
+702,spawn worker 32,ok,1770,2,1946.3
+703,write /home/euro/lt-soak/f17 round-67,ok,636,1,1946.9
+704,cat /home/euro/lt-soak/f17,ok,70,1,1947.0
+705,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1143,1,1948.1
+706,sha256sum /home/euro/lt-soak/big3,ok,1786,1,1949.9
+707,rm /home/euro/lt-soak/big1,ok,149,1,1950.1
+708,fetch 10.0.2.100,ok,495,4,1950.6
+709,churn proc 8,ok,6262,2,1956.8
+710,churn fs 1,ok,32917,2,1989.7
+711,ltstat,ok,139,1,1989.9
+712,spawn worker 32,ok,1793,2,1991.7
+713,write /home/euro/lt-soak/f18 round-68,ok,229,1,1991.9
+714,cat /home/euro/lt-soak/f18,ok,183,1,1992.1
+715,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1341,1,1993.4
+716,sha256sum /home/euro/lt-soak/big0,ok,1851,1,1995.3
+717,rm /home/euro/lt-soak/big2,ok,166,1,1995.4
+718,fetch 10.0.2.100,ok,505,4,1995.9
+719,churn proc 8,ok,7372,2,2003.3
+720,churn net 1,ok,430,2,2003.7
+721,ltstat,ok,138,1,2003.9
+722,spawn worker 32,ok,1764,2,2005.7
+723,write /home/euro/lt-soak/f19 round-69,ok,725,1,2006.4
+724,cat /home/euro/lt-soak/f19,ok,68,1,2006.4
+725,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1292,1,2007.7
+726,sha256sum /home/euro/lt-soak/big1,ok,1908,1,2009.6
+727,rm /home/euro/lt-soak/big3,ok,159,1,2009.8
+728,fetch 10.0.2.100,ok,495,4,2010.3
+729,churn proc 4,ok,5340,2,2015.6
+730,churn proc 8,ok,6667,2,2022.3
+731,ltstat,ok,2631,1,2024.9
+732,spawn worker 32,ok,1834,2,2026.8
+733,write /home/euro/lt-soak/f20 round-70,ok,645,1,2027.4
+734,cat /home/euro/lt-soak/f20,ok,138,1,2027.6
+735,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1288,1,2028.8
+736,sha256sum /home/euro/lt-soak/big2,ok,1846,1,2030.7
+737,rm /home/euro/lt-soak/big0,ok,155,1,2030.9
+738,fetch 10.0.2.100,ok,564,4,2031.4
+739,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9934,2,2041.4
+740,churn proc 8,ok,6979,2,2048.3
+741,churn fs 1,ok,32748,2,2081.1
+742,ltstat,ok,199,1,2081.3
+743,lockstat,ok,650,27,2081.9
+744,free,ok,138,3,2082.1
+745,spawn worker 32,ok,1755,2,2083.8
+746,write /home/euro/lt-soak/f21 round-71,ok,219,1,2084.0
+747,cat /home/euro/lt-soak/f21,ok,133,1,2084.2
+748,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1153,1,2085.3
+749,sha256sum /home/euro/lt-soak/big3,ok,1789,1,2087.1
+750,rm /home/euro/lt-soak/big1,ok,145,1,2087.3
+751,fetch 10.0.2.100,ok,495,4,2087.8
+752,churn proc 8,ok,6613,2,2094.4
+753,churn net 1,ok,367,2,2094.7
+754,ltstat,ok,129,1,2094.9
+755,spawn worker 32,ok,2134,2,2097.0
+756,write /home/euro/lt-soak/f22 round-72,ok,635,1,2097.6
+757,cat /home/euro/lt-soak/f22,ok,139,1,2097.8
+758,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1211,1,2099.0
+759,sha256sum /home/euro/lt-soak/big0,ok,1759,1,2100.8
+760,rm /home/euro/lt-soak/big2,ok,155,1,2100.9
+761,fetch 10.0.2.100,ok,496,4,2101.4
+762,churn proc 4,ok,3718,2,2105.1
+763,churn proc 8,ok,6597,2,2111.7
+764,ltstat,ok,148,1,2111.9
+765,spawn worker 32,ok,1683,2,2113.6
+766,write /home/euro/lt-soak/f23 round-73,ok,571,1,2114.1
+767,cat /home/euro/lt-soak/f23,ok,133,1,2114.3
+768,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1153,1,2115.4
+769,sha256sum /home/euro/lt-soak/big1,ok,1796,1,2117.2
+770,rm /home/euro/lt-soak/big3,ok,78,1,2117.3
+771,fetch 10.0.2.100,ok,495,4,2117.8
+772,churn proc 8,ok,6712,2,2124.5
+773,churn fs 1,ok,32958,2,2157.5
+774,ltstat,ok,418,1,2157.9
+775,spawn worker 32,ok,1754,2,2159.6
+776,write /home/euro/lt-soak/f24 round-74,ok,292,1,2159.9
+777,cat /home/euro/lt-soak/f24,ok,120,1,2160.0
+778,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1283,1,2161.3
+779,sha256sum /home/euro/lt-soak/big2,ok,1906,1,2163.2
+780,rm /home/euro/lt-soak/big0,ok,79,1,2163.3
+781,fetch 10.0.2.100,ok,484,4,2163.8
+782,churn proc 8,ok,6692,2,2170.5
+783,churn net 1,ok,491,2,2171.0
+784,ltstat,ok,78,1,2171.1
+785,spawn worker 32,ok,1964,2,2173.0
+786,write /home/euro/lt-soak/f25 round-75,ok,638,1,2173.7
+787,cat /home/euro/lt-soak/f25,ok,133,1,2173.8
+788,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1123,1,2174.9
+789,sha256sum /home/euro/lt-soak/big3,ok,1883,1,2176.8
+790,rm /home/euro/lt-soak/big1,ok,213,1,2177.0
+791,fetch 10.0.2.100,ok,494,4,2177.5
+792,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9751,2,2187.3
+793,churn proc 4,ok,3617,2,2190.9
+794,churn proc 8,ok,5935,2,2196.8
+795,ltstat,ok,149,1,2197.0
+796,spawn worker 32,ok,1743,2,2198.7
+797,write /home/euro/lt-soak/f26 round-76,ok,282,1,2199.0
+798,cat /home/euro/lt-soak/f26,ok,73,1,2199.1
+799,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1113,1,2200.2
+800,sha256sum /home/euro/lt-soak/big0,ok,1845,1,2202.0
+801,rm /home/euro/lt-soak/big2,ok,148,1,2202.2
+802,fetch 10.0.2.100,ok,545,4,2202.7
+803,churn proc 8,ok,6381,2,2209.1
+804,churn fs 1,ok,44553,2,2253.7
+805,ltstat,ok,209,1,2253.9
+806,spawn worker 32,ok,1952,2,2255.8
+807,write /home/euro/lt-soak/f27 round-77,ok,293,1,2256.1
+808,cat /home/euro/lt-soak/f27,ok,70,1,2256.2
+809,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1270,1,2257.5
+810,sha256sum /home/euro/lt-soak/big1,ok,1856,1,2259.3
+811,rm /home/euro/lt-soak/big3,ok,202,1,2259.5
+812,fetch 10.0.2.100,ok,505,4,2260.0
+813,churn proc 8,ok,6282,2,2266.3
+814,churn net 1,ok,711,2,2267.0
+815,ltstat,ok,143,1,2267.2
+816,spawn worker 32,ok,2027,2,2269.2
+817,write /home/euro/lt-soak/f28 round-78,ok,785,1,2270.0
+818,cat /home/euro/lt-soak/f28,ok,148,1,2270.1
+819,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1187,1,2271.3
+820,sha256sum /home/euro/lt-soak/big2,ok,1862,1,2273.2
+821,rm /home/euro/lt-soak/big0,ok,210,1,2273.4
+822,fetch 10.0.2.100,ok,555,4,2273.9
+823,churn proc 4,ok,3999,2,2277.9
+824,churn proc 8,ok,8759,2,2286.7
+825,ltstat,ok,209,1,2286.9
+826,spawn worker 32,ok,2094,2,2289.0
+827,write /home/euro/lt-soak/f29 round-79,ok,647,1,2289.7
+828,cat /home/euro/lt-soak/f29,ok,56,1,2289.7
+829,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1251,1,2291.0
+830,sha256sum /home/euro/lt-soak/big3,ok,1826,1,2292.8
+831,rm /home/euro/lt-soak/big1,ok,210,1,2293.0
+832,fetch 10.0.2.100,ok,504,4,2293.5
+833,churn proc 8,ok,6502,2,2300.0
+834,churn fs 1,ok,39413,2,2339.4
+835,ltstat,ok,212,1,2339.6
+836,spawn worker 32,ok,1961,2,2341.6
+837,write /home/euro/lt-soak/f30 round-80,ok,295,1,2341.9
+838,cat /home/euro/lt-soak/f30,ok,138,1,2342.0
+839,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1563,1,2343.6
+840,sha256sum /home/euro/lt-soak/big0,ok,2180,1,2345.8
+841,rm /home/euro/lt-soak/big2,ok,196,1,2346.0
+842,fetch 10.0.2.100,ok,506,4,2346.5
+843,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9762,2,2356.2
+844,churn proc 8,ok,7731,2,2364.0
+845,churn net 1,ok,630,2,2364.6
+846,ltstat,ok,88,1,2364.7
+847,lockstat,ok,703,27,2365.4
+848,free,ok,73,3,2365.5
+849,spawn worker 32,ok,1925,2,2367.4
+850,write /home/euro/lt-soak/f31 round-81,ok,357,1,2367.8
+851,cat /home/euro/lt-soak/f31,ok,207,1,2368.0
+852,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1432,1,2369.4
+853,sha256sum /home/euro/lt-soak/big1,ok,2068,1,2371.5
+854,rm /home/euro/lt-soak/big3,ok,213,1,2371.7
+855,fetch 10.0.2.100,ok,500,4,2372.2
+856,churn proc 4,ok,3609,2,2375.8
+857,churn proc 8,ok,6727,2,2382.5
+858,ltstat,ok,148,1,2382.7
+859,spawn worker 32,ok,1893,2,2384.6
+860,write /home/euro/lt-soak/f32 round-82,ok,706,1,2385.3
+861,cat /home/euro/lt-soak/f32,ok,67,1,2385.3
+862,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1739,1,2387.1
+863,sha256sum /home/euro/lt-soak/big2,ok,2301,1,2389.4
+864,rm /home/euro/lt-soak/big0,ok,274,1,2389.6
+865,fetch 10.0.2.100,ok,501,4,2390.1
+866,churn proc 8,ok,6643,2,2396.8
+867,churn fs 1,ok,42819,2,2439.6
+868,ltstat,ok,149,1,2439.8
+869,spawn worker 32,ok,2042,2,2441.8
+870,write /home/euro/lt-soak/f33 round-83,ok,213,1,2442.0
+871,cat /home/euro/lt-soak/f33,ok,140,1,2442.2
+872,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1277,1,2443.4
+873,sha256sum /home/euro/lt-soak/big3,ok,2009,1,2445.4
+874,rm /home/euro/lt-soak/big1,ok,264,1,2445.7
+875,fetch 10.0.2.100,ok,532,4,2446.2
+876,churn proc 8,ok,10927,2,2457.2
+877,churn net 1,ok,570,2,2457.7
+878,ltstat,ok,88,1,2457.8
+879,spawn worker 32,ok,2321,2,2460.2
+880,write /home/euro/lt-soak/f34 round-84,ok,1067,1,2461.2
+881,cat /home/euro/lt-soak/f34,ok,79,1,2461.3
+882,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1342,1,2462.6
+883,sha256sum /home/euro/lt-soak/big0,ok,2136,1,2464.8
+884,rm /home/euro/lt-soak/big2,ok,286,1,2465.1
+885,fetch 10.0.2.100,ok,489,4,2465.6
+886,churn proc 4,ok,3599,2,2469.2
+887,churn proc 8,ok,6507,2,2475.7
+888,ltstat,ok,158,1,2475.8
+889,spawn worker 32,ok,1902,2,2477.7
+890,write /home/euro/lt-soak/f35 round-85,ok,855,1,2478.6
+891,cat /home/euro/lt-soak/f35,ok,147,1,2478.7
+892,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1355,1,2480.1
+893,sha256sum /home/euro/lt-soak/big1,ok,2415,1,2482.5
+894,rm /home/euro/lt-soak/big3,ok,207,1,2482.7
+895,fetch 10.0.2.100,ok,558,4,2483.3
+896,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9914,2,2493.2
+897,churn proc 8,ok,9012,2,2502.2
+898,churn fs 1,ok,43841,2,2546.0
+899,ltstat,ok,2590,1,2548.6
+900,spawn worker 32,ok,2674,2,2551.3
+901,write /home/euro/lt-soak/f36 round-86,ok,288,1,2551.6
+902,cat /home/euro/lt-soak/f36,ok,65,1,2551.7
+903,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1415,1,2553.1
+904,sha256sum /home/euro/lt-soak/big2,ok,2265,1,2555.3
+905,rm /home/euro/lt-soak/big0,ok,223,1,2555.6
+906,fetch 10.0.2.100,ok,531,4,2556.1
+907,churn proc 8,ok,8254,2,2564.3
+908,churn net 1,ok,497,2,2564.8
+909,ltstat,ok,80,1,2564.9
+910,spawn worker 32,ok,2063,2,2567.0
+911,write /home/euro/lt-soak/f37 round-87,ok,645,1,2567.6
+912,cat /home/euro/lt-soak/f37,ok,68,1,2567.7
+913,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1694,1,2569.4
+914,sha256sum /home/euro/lt-soak/big3,ok,2494,1,2571.9
+915,rm /home/euro/lt-soak/big1,ok,283,1,2572.2
+916,fetch 10.0.2.100,ok,573,4,2572.8
+917,churn proc 4,ok,3769,2,2576.5
+918,churn proc 8,ok,8769,2,2585.3
+919,ltstat,ok,218,1,2585.5
+920,spawn worker 32,ok,1963,2,2587.5
+921,write /home/euro/lt-soak/f38 round-88,ok,1007,1,2588.5
+922,cat /home/euro/lt-soak/f38,ok,137,1,2588.6
+923,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1424,1,2590.0
+924,sha256sum /home/euro/lt-soak/big0,ok,2194,1,2592.2
+925,rm /home/euro/lt-soak/big2,ok,220,1,2592.5
+926,fetch 10.0.2.100,ok,504,4,2593.0
+927,churn proc 8,ok,8735,2,2601.7
+928,churn fs 1,ok,38595,2,2640.3
+929,ltstat,ok,198,1,2640.5
+930,spawn worker 32,ok,1892,2,2642.4
+931,write /home/euro/lt-soak/f39 round-89,ok,354,1,2642.7
+932,cat /home/euro/lt-soak/f39,ok,69,1,2642.8
+933,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1332,1,2644.1
+934,sha256sum /home/euro/lt-soak/big1,ok,1987,1,2646.1
+935,rm /home/euro/lt-soak/big3,ok,226,1,2646.4
+936,fetch 10.0.2.100,ok,549,4,2646.9
+937,churn proc 8,ok,7463,2,2654.4
+938,churn net 1,ok,560,2,2654.9
+939,ltstat,ok,77,1,2655.0
+940,spawn worker 32,ok,1923,2,2656.9
+941,write /home/euro/lt-soak/f40 round-90,ok,782,1,2657.7
+942,cat /home/euro/lt-soak/f40,ok,82,1,2657.8
+943,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1353,1,2659.2
+944,sha256sum /home/euro/lt-soak/big2,ok,2266,1,2661.4
+945,rm /home/euro/lt-soak/big0,ok,270,1,2661.7
+946,fetch 10.0.2.100,ok,504,4,2662.2
+947,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9950,2,2672.1
+948,churn proc 4,ok,4251,2,2676.4
+949,churn proc 8,ok,6206,2,2682.6
+950,ltstat,ok,208,1,2682.8
+951,lockstat,ok,630,27,2683.4
+952,free,ok,67,3,2683.5
+953,spawn worker 32,ok,1884,2,2685.4
+954,write /home/euro/lt-soak/f41 round-91,ok,354,1,2685.8
+955,cat /home/euro/lt-soak/f41,ok,69,1,2685.8
+956,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1533,1,2687.4
+957,sha256sum /home/euro/lt-soak/big3,ok,2276,1,2689.6
+958,rm /home/euro/lt-soak/big1,ok,217,1,2689.9
+959,fetch 10.0.2.100,ok,497,4,2690.3
+960,churn proc 8,ok,6301,2,2696.7
+961,churn fs 1,ok,43551,2,2740.2
+962,ltstat,ok,148,1,2740.4
+963,spawn worker 32,ok,1883,2,2742.2
+964,write /home/euro/lt-soak/f42 round-92,ok,285,1,2742.5
+965,cat /home/euro/lt-soak/f42,ok,67,1,2742.6
+966,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1647,1,2744.2
+967,sha256sum /home/euro/lt-soak/big0,ok,2162,1,2746.4
+968,rm /home/euro/lt-soak/big2,ok,210,1,2746.6
+969,fetch 10.0.2.100,ok,538,4,2747.1
+970,churn proc 8,ok,12100,2,2759.2
+971,churn net 1,ok,709,2,2760.0
+972,ltstat,ok,138,1,2760.1
+973,spawn worker 32,ok,1872,2,2762.0
+974,write /home/euro/lt-soak/f43 round-93,ok,788,1,2762.8
+975,cat /home/euro/lt-soak/f43,ok,137,1,2762.9
+976,truncate -s 8388608 /home/euro/lt-soak/big1,ok,2794,1,2765.7
+977,sha256sum /home/euro/lt-soak/big1,ok,1794,1,2767.5
+978,rm /home/euro/lt-soak/big3,ok,284,1,2767.8
+979,fetch 10.0.2.100,ok,554,4,2768.3
+980,churn proc 4,ok,3808,2,2772.1
+981,churn proc 8,ok,5976,2,2778.1
+982,ltstat,ok,208,1,2778.3
+983,spawn worker 32,ok,2035,2,2780.4
+984,write /home/euro/lt-soak/f44 round-94,ok,775,1,2781.1
+985,cat /home/euro/lt-soak/f44,ok,81,1,2781.2
+986,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1354,1,2782.6
+987,sha256sum /home/euro/lt-soak/big2,ok,2211,1,2784.8
+988,rm /home/euro/lt-soak/big0,ok,209,1,2785.0
+989,fetch 10.0.2.100,ok,503,4,2785.5
+990,churn proc 8,ok,8655,2,2794.1
+991,churn fs 1,ok,46013,2,2840.2
+992,ltstat,ok,218,1,2840.4
+993,spawn worker 32,ok,2173,2,2842.6
+994,write /home/euro/lt-soak/f45 round-95,ok,329,1,2842.9
+995,cat /home/euro/lt-soak/f45,ok,133,1,2843.0
+996,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1360,1,2844.4
+997,sha256sum /home/euro/lt-soak/big3,ok,2456,1,2846.8
+998,rm /home/euro/lt-soak/big1,ok,426,1,2847.3
+999,fetch 10.0.2.100,ok,552,4,2847.8
+1000,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9977,2,2857.8
+1001,churn proc 8,ok,8619,2,2866.4
+1002,churn net 1,ok,520,2,2866.9
+1003,ltstat,ok,77,1,2867.0
+1004,spawn worker 32,ok,1963,2,2869.0
+1005,write /home/euro/lt-soak/f46 round-96,ok,289,1,2869.3
+1006,cat /home/euro/lt-soak/f46,ok,144,1,2869.4
+1007,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1342,1,2870.8
+1008,sha256sum /home/euro/lt-soak/big0,ok,2087,1,2872.8
+1009,rm /home/euro/lt-soak/big2,ok,191,1,2873.0
+1010,fetch 10.0.2.100,ok,589,4,2873.6
+1011,churn proc 4,ok,3592,2,2877.2
+1012,churn proc 8,ok,6677,2,2883.9
+1013,ltstat,ok,148,1,2884.0
+1014,spawn worker 32,ok,1963,2,2886.0
+1015,write /home/euro/lt-soak/f47 round-97,ok,1030,1,2887.0
+1016,cat /home/euro/lt-soak/f47,ok,144,1,2887.2
+1017,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1537,1,2888.7
+1018,sha256sum /home/euro/lt-soak/big1,ok,2422,1,2891.1
+1019,rm /home/euro/lt-soak/big3,ok,223,1,2891.4
+1020,fetch 10.0.2.100,ok,551,4,2891.9
+1021,churn proc 8,ok,6534,2,2898.5
+1022,churn fs 1,ok,43498,2,2942.0
+1023,ltstat,ok,208,1,2942.2
+1024,spawn worker 32,ok,1952,2,2944.1
+1025,write /home/euro/lt-soak/f48 round-98,ok,407,1,2944.5
+1026,cat /home/euro/lt-soak/f48,ok,136,1,2944.7
+1027,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1431,1,2946.1
+1028,sha256sum /home/euro/lt-soak/big2,ok,2174,1,2948.3
+1029,rm /home/euro/lt-soak/big0,ok,271,1,2948.5
+1030,fetch 10.0.2.100,ok,567,4,2949.1
+1031,churn proc 8,ok,9028,2,2958.1
+1032,churn net 1,ok,567,2,2958.7
+1033,ltstat,ok,219,1,2958.9
+1034,spawn worker 32,ok,2312,2,2961.2
+1035,write /home/euro/lt-soak/f49 round-99,ok,790,1,2962.0
+1036,cat /home/euro/lt-soak/f49,ok,73,1,2962.1
+1037,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1423,1,2963.5
+1038,sha256sum /home/euro/lt-soak/big3,ok,1710,1,2965.2
+1039,rm /home/euro/lt-soak/big1,ok,144,1,2965.4
+1040,fetch 10.0.2.100,ok,495,4,2965.9
+1041,churn proc 4,ok,3739,2,2969.6
+1042,churn proc 8,ok,6487,2,2976.1
+1043,ltstat,ok,148,1,2976.2
+1044,spawn worker 32,ok,2053,2,2978.3
+1045,write /home/euro/lt-soak/f0 round-100,ok,868,1,2979.2
+1046,cat /home/euro/lt-soak/f0,ok,137,1,2979.3
+1047,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1493,1,2980.8
+1048,sha256sum /home/euro/lt-soak/big0,ok,2055,1,2982.9
+1049,rm /home/euro/lt-soak/big2,ok,228,1,2983.1
+1050,fetch 10.0.2.100,ok,570,4,2983.7
+1051,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9722,2,2993.4
+1052,churn proc 8,ok,9183,2,3002.6
+1053,churn fs 1,ok,47755,2,3050.3
+1054,ltstat,ok,148,1,3050.5
+1055,lockstat,ok,683,27,3051.2
+1056,free,ok,143,3,3051.3
+1057,spawn worker 32,ok,1895,2,3053.2
+1058,write /home/euro/lt-soak/f1 round-101,ok,360,1,3053.6
+1059,cat /home/euro/lt-soak/f1,ok,65,1,3053.6
+1060,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1829,1,3055.5
+1061,sha256sum /home/euro/lt-soak/big1,ok,2433,1,3057.9
+1062,rm /home/euro/lt-soak/big3,ok,214,1,3058.1
+1063,fetch 10.0.2.100,ok,523,4,3058.6
+1064,churn proc 8,ok,6327,2,3065.0
+1065,churn net 1,ok,3603,2,3068.6
+1066,ltstat,ok,208,1,3068.8
+1067,spawn worker 32,ok,1943,2,3070.7
+1068,write /home/euro/lt-soak/f2 round-102,ok,701,1,3071.4
+1069,cat /home/euro/lt-soak/f2,ok,73,1,3071.5
+1070,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1494,1,3073.0
+1071,sha256sum /home/euro/lt-soak/big2,ok,2249,1,3075.2
+1072,rm /home/euro/lt-soak/big0,ok,168,1,3075.4
+1073,fetch 10.0.2.100,ok,622,4,3076.0
+1074,churn proc 4,ok,3809,2,3079.8
+1075,churn proc 8,ok,6297,2,3086.1
+1076,ltstat,ok,148,1,3086.3
+1077,spawn worker 32,ok,1932,2,3088.2
+1078,write /home/euro/lt-soak/f3 round-103,ok,770,1,3089.0
+1079,cat /home/euro/lt-soak/f3,ok,206,1,3089.2
+1080,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1472,1,3090.7
+1081,sha256sum /home/euro/lt-soak/big3,ok,2423,1,3093.1
+1082,rm /home/euro/lt-soak/big1,ok,211,1,3093.3
+1083,fetch 10.0.2.100,ok,546,4,3093.8
+1084,churn proc 8,ok,6162,2,3100.0
+1085,churn fs 1,ok,43938,2,3143.9
+1086,ltstat,ok,141,1,3144.1
+1087,spawn worker 32,ok,2182,2,3146.3
+1088,write /home/euro/lt-soak/f4 round-104,ok,219,1,3146.5
+1089,cat /home/euro/lt-soak/f4,ok,134,1,3146.6
+1090,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1250,1,3147.9
+1091,sha256sum /home/euro/lt-soak/big0,ok,2048,1,3149.9
+1092,rm /home/euro/lt-soak/big2,ok,210,1,3150.1
+1093,fetch 10.0.2.100,ok,504,4,3150.6
+1094,churn proc 8,ok,8164,2,3158.8
+1095,churn net 1,ok,500,2,3159.3
+1096,ltstat,ok,78,1,3159.4
+1097,spawn worker 32,ok,1883,2,3161.3
+1098,write /home/euro/lt-soak/f5 round-105,ok,633,1,3161.9
+1099,cat /home/euro/lt-soak/f5,ok,69,1,3162.0
+1100,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1278,1,3163.2
+1101,sha256sum /home/euro/lt-soak/big1,ok,1932,1,3165.2
+1102,rm /home/euro/lt-soak/big3,ok,200,1,3165.4
+1103,fetch 10.0.2.100,ok,494,4,3165.9
+1104,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9847,2,3175.7
+1105,churn proc 4,ok,4685,2,3180.4
+1106,churn proc 8,ok,10161,2,3190.6
+1107,ltstat,ok,158,1,3190.7
+1108,spawn worker 32,ok,1932,2,3192.7
+1109,write /home/euro/lt-soak/f6 round-106,ok,430,1,3193.1
+1110,cat /home/euro/lt-soak/f6,ok,145,1,3193.2
+1111,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1556,1,3194.8
+1112,sha256sum /home/euro/lt-soak/big2,ok,2107,1,3196.9
+1113,rm /home/euro/lt-soak/big0,ok,204,1,3197.1
+1114,fetch 10.0.2.100,ok,504,4,3197.6
+1115,churn proc 8,ok,6142,2,3203.8
+1116,churn fs 1,ok,44429,2,3248.2
+1117,ltstat,ok,321,1,3248.5
+1118,spawn worker 32,ok,1941,2,3250.4
+1119,write /home/euro/lt-soak/f7 round-107,ok,216,1,3250.7
+1120,cat /home/euro/lt-soak/f7,ok,66,1,3250.7
+1121,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1585,1,3252.3
+1122,sha256sum /home/euro/lt-soak/big3,ok,2063,1,3254.4
+1123,rm /home/euro/lt-soak/big1,ok,539,1,3254.9
+1124,fetch 10.0.2.100,ok,907,4,3255.8
+1125,churn proc 8,ok,6532,2,3262.4
+1126,churn net 1,ok,500,2,3262.9
+1127,ltstat,ok,148,1,3263.0
+1128,spawn worker 32,ok,1973,2,3265.0
+1129,write /home/euro/lt-soak/f8 round-108,ok,905,1,3265.9
+1130,cat /home/euro/lt-soak/f8,ok,138,1,3266.0
+1131,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1455,1,3267.5
+1132,sha256sum /home/euro/lt-soak/big0,ok,2056,1,3269.5
+1133,rm /home/euro/lt-soak/big2,ok,211,1,3269.8
+1134,fetch 10.0.2.100,ok,503,4,3270.3
+1135,churn proc 4,ok,3529,2,3273.8
+1136,churn proc 8,ok,6236,2,3280.0
+1137,ltstat,ok,148,1,3280.2
+1138,spawn worker 32,ok,1893,2,3282.1
+1139,write /home/euro/lt-soak/f9 round-109,ok,789,1,3282.9
+1140,cat /home/euro/lt-soak/f9,ok,214,1,3283.1
+1141,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1057,1,3284.1
+1142,sha256sum /home/euro/lt-soak/big1,ok,1701,1,3285.8
+1143,rm /home/euro/lt-soak/big3,ok,210,1,3286.0
+1144,fetch 10.0.2.100,ok,504,4,3286.5
+1145,churn proc 8,ok,6105,2,3292.7
+1146,churn fs 1,ok,44769,2,3337.4
+1147,ltstat,ok,209,1,3337.6
+1148,spawn worker 32,ok,2031,2,3339.7
+1149,write /home/euro/lt-soak/f10 round-110,ok,287,1,3340.0
+1150,cat /home/euro/lt-soak/f10,ok,136,1,3340.1
+1151,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1133,1,3341.2
+1152,sha256sum /home/euro/lt-soak/big2,ok,2276,1,3343.5
+1153,rm /home/euro/lt-soak/big0,ok,211,1,3343.7
+1154,fetch 10.0.2.100,ok,524,4,3344.2
+1155,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9892,2,3354.1
+1156,churn proc 8,ok,6377,2,3360.5
+1157,churn net 1,ok,560,2,3361.1
+1158,ltstat,ok,208,1,3361.3
+1159,lockstat,ok,694,27,3362.0
+1160,free,ok,73,3,3362.0
+1161,spawn worker 32,ok,1965,2,3364.0
+1162,write /home/euro/lt-soak/f11 round-111,ok,2853,1,3366.9
+1163,cat /home/euro/lt-soak/f11,ok,394,1,3367.3
+1164,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1355,1,3368.6
+1165,sha256sum /home/euro/lt-soak/big3,ok,1893,1,3370.5
+1166,rm /home/euro/lt-soak/big1,ok,346,1,3370.9
+1167,fetch 10.0.2.100,ok,594,4,3371.4
+1168,churn proc 4,ok,3727,2,3375.2
+1169,churn proc 8,ok,6317,2,3381.5
+1170,ltstat,ok,149,1,3381.6
+1171,spawn worker 32,ok,1963,2,3383.6
+1172,write /home/euro/lt-soak/f12 round-112,ok,644,1,3384.2
+1173,cat /home/euro/lt-soak/f12,ok,69,1,3384.3
+1174,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1481,1,3385.8
+1175,sha256sum /home/euro/lt-soak/big0,ok,2519,1,3388.3
+1176,rm /home/euro/lt-soak/big2,ok,220,1,3388.5
+1177,fetch 10.0.2.100,ok,494,4,3389.0
+1178,churn proc 8,ok,6453,2,3395.5
+1179,churn fs 1,ok,50809,2,3446.3
+1180,ltstat,ok,148,1,3446.4
+1181,spawn worker 32,ok,1982,2,3448.4
+1182,write /home/euro/lt-soak/f13 round-113,ok,353,1,3448.8
+1183,cat /home/euro/lt-soak/f13,ok,70,1,3448.9
+1184,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1496,1,3450.3
+1185,sha256sum /home/euro/lt-soak/big1,ok,4490,1,3454.8
+1186,rm /home/euro/lt-soak/big3,ok,428,1,3455.3
+1187,fetch 10.0.2.100,ok,727,4,3456.0
+1188,churn proc 8,ok,13360,2,3469.4
+1189,churn net 1,ok,507,2,3469.9
+1190,ltstat,ok,71,1,3469.9
+1191,spawn worker 32,ok,2023,2,3472.0
+1192,write /home/euro/lt-soak/f14 round-114,ok,869,1,3472.8
+1193,cat /home/euro/lt-soak/f14,ok,64,1,3472.9
+1194,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1224,1,3474.1
+1195,sha256sum /home/euro/lt-soak/big2,ok,2315,1,3476.4
+1196,rm /home/euro/lt-soak/big0,ok,219,1,3476.7
+1197,fetch 10.0.2.100,ok,605,4,3477.3
+1198,churn proc 4,ok,4592,2,3481.9
+1199,churn proc 8,ok,6735,2,3488.6
+1200,ltstat,ok,148,1,3488.7
+1201,spawn worker 32,ok,2007,2,3490.7
+1202,write /home/euro/lt-soak/f15 round-115,ok,773,1,3491.5
+1203,cat /home/euro/lt-soak/f15,ok,216,1,3491.7
+1204,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1559,1,3493.3
+1205,sha256sum /home/euro/lt-soak/big3,ok,1989,1,3495.3
+1206,rm /home/euro/lt-soak/big1,ok,265,1,3495.6
+1207,fetch 10.0.2.100,ok,499,4,3496.1
+1208,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9796,2,3505.9
+1209,churn proc 8,ok,6446,2,3512.3
+1210,churn fs 1,ok,45473,2,3557.8
+1211,ltstat,ok,270,1,3558.0
+1212,spawn worker 32,ok,1901,2,3559.9
+1213,write /home/euro/lt-soak/f16 round-116,ok,340,1,3560.3
+1214,cat /home/euro/lt-soak/f16,ok,73,1,3560.4
+1215,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1635,1,3562.0
+1216,sha256sum /home/euro/lt-soak/big0,ok,2455,1,3564.5
+1217,rm /home/euro/lt-soak/big2,ok,212,1,3564.7
+1218,fetch 10.0.2.100,ok,442,4,3565.1
+1219,churn proc 8,ok,7003,2,3572.1
+1220,churn net 1,ok,497,2,3572.6
+1221,ltstat,ok,131,1,3572.7
+1222,spawn worker 32,ok,2091,2,3574.8
+1223,write /home/euro/lt-soak/f17 round-117,ok,836,1,3575.7
+1224,cat /home/euro/lt-soak/f17,ok,219,1,3575.9
+1225,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1521,1,3577.4
+1226,sha256sum /home/euro/lt-soak/big1,ok,2466,1,3579.9
+1227,rm /home/euro/lt-soak/big3,ok,206,1,3580.1
+1228,fetch 10.0.2.100,ok,506,4,3580.6
+1229,churn proc 4,ok,3678,2,3584.3
+1230,churn proc 8,ok,6457,2,3590.7
+1231,ltstat,ok,147,1,3590.9
+1232,spawn worker 32,ok,2033,2,3592.9
+1233,write /home/euro/lt-soak/f18 round-118,ok,926,1,3593.8
+1234,cat /home/euro/lt-soak/f18,ok,208,1,3594.0
+1235,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1551,1,3595.6
+1236,sha256sum /home/euro/lt-soak/big2,ok,2392,1,3598.0
+1237,rm /home/euro/lt-soak/big0,ok,213,1,3598.2
+1238,fetch 10.0.2.100,ok,438,4,3598.6
+1239,churn proc 8,ok,6241,2,3604.9
+1240,churn fs 1,ok,47145,2,3652.0
+1241,ltstat,ok,5514,1,3657.5
+1242,spawn worker 32,ok,2093,2,3659.6
+1243,write /home/euro/lt-soak/f19 round-119,ok,228,1,3659.9
+1244,cat /home/euro/lt-soak/f19,ok,65,1,3659.9
+1245,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1572,1,3661.5
+1246,sha256sum /home/euro/lt-soak/big3,ok,2381,1,3663.9
+1247,rm /home/euro/lt-soak/big1,ok,169,1,3664.1
+1248,fetch 10.0.2.100,ok,502,4,3664.6
+1249,churn proc 8,ok,13220,2,3677.8
+1250,churn net 1,ok,790,2,3678.6
+1251,ltstat,ok,78,1,3678.7
+1252,spawn worker 32,ok,1943,2,3680.6
+1253,write /home/euro/lt-soak/f20 round-120,ok,934,1,3681.5
+1254,cat /home/euro/lt-soak/f20,ok,140,1,3681.7
+1255,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1274,1,3682.9
+1256,sha256sum /home/euro/lt-soak/big0,ok,1927,1,3684.9
+1257,rm /home/euro/lt-soak/big2,ok,207,1,3685.1
+1258,fetch 10.0.2.100,ok,561,4,3685.6
+1259,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,10176,2,3695.8
+1260,churn proc 4,ok,6060,2,3701.9
+1261,churn proc 8,ok,6296,2,3708.2
+1262,ltstat,ok,209,1,3708.4
+1263,lockstat,ok,649,27,3709.0
+1264,free,ok,66,3,3709.1
+1265,spawn worker 32,ok,1946,2,3711.1
+1266,write /home/euro/lt-soak/f21 round-121,ok,281,1,3711.3
+1267,cat /home/euro/lt-soak/f21,ok,82,1,3711.4
+1268,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1202,1,3712.6
+1269,sha256sum /home/euro/lt-soak/big1,ok,1911,1,3714.5
+1270,rm /home/euro/lt-soak/big3,ok,188,1,3714.7
+1271,fetch 10.0.2.100,ok,502,4,3715.2
+1272,churn proc 8,ok,6082,2,3721.3
+1273,churn fs 1,ok,39643,2,3760.9
+1274,ltstat,ok,141,1,3761.1
+1275,spawn worker 32,ok,2022,2,3763.1
+1276,write /home/euro/lt-soak/f22 round-122,ok,219,1,3763.3
+1277,cat /home/euro/lt-soak/f22,ok,144,1,3763.5
+1278,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1416,1,3764.9
+1279,sha256sum /home/euro/lt-soak/big2,ok,1990,1,3766.9
+1280,rm /home/euro/lt-soak/big0,ok,355,1,3767.2
+1281,fetch 10.0.2.100,ok,544,4,3767.8
+1282,churn proc 8,ok,8785,2,3776.6
+1283,churn net 1,ok,437,2,3777.0
+1284,ltstat,ok,139,1,3777.1
+1285,spawn worker 32,ok,1912,2,3779.1
+1286,write /home/euro/lt-soak/f23 round-123,ok,706,1,3779.8
+1287,cat /home/euro/lt-soak/f23,ok,143,1,3779.9
+1288,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1773,1,3781.7
+1289,sha256sum /home/euro/lt-soak/big3,ok,2060,1,3783.7
+1290,rm /home/euro/lt-soak/big1,ok,277,1,3784.0
+1291,fetch 10.0.2.100,ok,489,4,3784.5
+1292,churn proc 4,ok,3588,2,3788.1
+1293,churn proc 8,ok,6256,2,3794.4
+1294,ltstat,ok,218,1,3794.6
+1295,spawn worker 32,ok,1953,2,3796.5
+1296,write /home/euro/lt-soak/f24 round-124,ok,649,1,3797.2
+1297,cat /home/euro/lt-soak/f24,ok,64,1,3797.2
+1298,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1451,1,3798.7
+1299,sha256sum /home/euro/lt-soak/big0,ok,2240,1,3800.9
+1300,rm /home/euro/lt-soak/big2,ok,182,1,3801.1
+1301,fetch 10.0.2.100,ok,500,4,3801.6
+1302,churn proc 8,ok,8324,2,3809.9
+1303,churn fs 1,ok,43800,2,3853.7
+1304,ltstat,ok,209,1,3854.0
+1305,spawn worker 32,ok,1892,2,3855.9
+1306,write /home/euro/lt-soak/f25 round-125,ok,350,1,3856.2
+1307,cat /home/euro/lt-soak/f25,ok,72,1,3856.3
+1308,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1425,1,3857.7
+1309,sha256sum /home/euro/lt-soak/big1,ok,2132,1,3859.8
+1310,rm /home/euro/lt-soak/big3,ok,220,1,3860.1
+1311,fetch 10.0.2.100,ok,505,4,3860.6
+1312,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,10042,2,3870.6
+1313,churn proc 8,ok,6612,2,3877.2
+1314,churn net 1,ok,527,2,3877.7
+1315,ltstat,ok,141,1,3877.9
+1316,spawn worker 32,ok,1951,2,3879.8
+1317,write /home/euro/lt-soak/f26 round-126,ok,350,1,3880.2
+1318,cat /home/euro/lt-soak/f26,ok,73,1,3880.3
+1319,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1414,1,3881.7
+1320,sha256sum /home/euro/lt-soak/big2,ok,2203,1,3883.9
+1321,rm /home/euro/lt-soak/big0,ok,210,1,3884.1
+1322,fetch 10.0.2.100,ok,547,4,3884.6
+1323,churn proc 4,ok,3779,2,3888.4
+1324,churn proc 8,ok,6286,2,3894.7
+1325,ltstat,ok,148,1,3894.9
+1326,spawn worker 32,ok,1893,2,3896.7
+1327,write /home/euro/lt-soak/f27 round-127,ok,623,1,3897.4
+1328,cat /home/euro/lt-soak/f27,ok,71,1,3897.4
+1329,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1658,1,3899.1
+1330,sha256sum /home/euro/lt-soak/big3,ok,2342,1,3901.4
+1331,rm /home/euro/lt-soak/big1,ok,269,1,3901.7
+1332,fetch 10.0.2.100,ok,718,4,3902.4
+1333,churn proc 8,ok,6605,2,3909.0
+1334,churn fs 1,ok,46665,2,3955.7
+1335,ltstat,ok,208,1,3955.9
+1336,spawn worker 32,ok,2003,2,3957.9
+1337,write /home/euro/lt-soak/f28 round-128,ok,350,1,3958.3
+1338,cat /home/euro/lt-soak/f28,ok,73,1,3958.3
+1339,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1557,1,3959.9
+1340,sha256sum /home/euro/lt-soak/big0,ok,2296,1,3962.2
+1341,rm /home/euro/lt-soak/big2,ok,115,1,3962.3
+1342,fetch 10.0.2.100,ok,554,4,3962.9
+1343,churn proc 8,ok,6283,2,3969.2
+1344,churn net 1,ok,500,2,3969.7
+1345,ltstat,ok,88,1,3969.7
+1346,spawn worker 32,ok,5487,2,3975.2
+1347,write /home/euro/lt-soak/f29 round-129,ok,717,1,3975.9
+1348,cat /home/euro/lt-soak/f29,ok,127,1,3976.1
+1349,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1352,1,3977.4
+1350,sha256sum /home/euro/lt-soak/big1,ok,2376,1,3979.8
+1351,rm /home/euro/lt-soak/big3,ok,504,1,3980.3
+1352,fetch 10.0.2.100,ok,501,4,3980.8
+1353,churn proc 4,ok,3529,2,3984.3
+1354,churn proc 8,ok,6507,2,3990.8
+1355,ltstat,ok,208,1,3991.1
+1356,spawn worker 32,ok,1884,2,3992.9
+1357,write /home/euro/lt-soak/f30 round-130,ok,719,1,3993.7
+1358,cat /home/euro/lt-soak/f30,ok,48,1,3993.7
+1359,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1576,1,3995.3
+1360,sha256sum /home/euro/lt-soak/big2,ok,2242,1,3997.5
+1361,rm /home/euro/lt-soak/big0,ok,233,1,3997.8
+1362,fetch 10.0.2.100,ok,597,4,3998.4
+1363,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,10094,2,4008.5
+1364,churn proc 8,ok,8552,2,4017.0
+1365,churn fs 1,ok,43561,2,4060.6
+1366,ltstat,ok,272,1,4060.8
+1367,lockstat,ok,628,27,4061.5
+1368,free,ok,66,3,4061.5
+1369,spawn worker 32,ok,2026,2,4063.6
+1370,write /home/euro/lt-soak/f31 round-131,ok,294,1,4063.9
+1371,cat /home/euro/lt-soak/f31,ok,139,1,4064.0
+1372,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1560,1,4065.6
+1373,sha256sum /home/euro/lt-soak/big3,ok,2209,1,4067.8
+1374,rm /home/euro/lt-soak/big1,ok,255,1,4068.0
+1375,fetch 10.0.2.100,ok,590,4,4068.6
+1376,churn proc 8,ok,8755,2,4077.4
+1377,churn net 1,ok,497,2,4077.9
+1378,ltstat,ok,241,1,4078.1
+1379,spawn worker 32,ok,2023,2,4080.1
+1380,write /home/euro/lt-soak/f32 round-132,ok,769,1,4080.9
+1381,cat /home/euro/lt-soak/f32,ok,64,1,4081.0
+1382,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1561,1,4082.5
+1383,sha256sum /home/euro/lt-soak/big0,ok,2049,1,4084.6
+1384,rm /home/euro/lt-soak/big2,ok,213,1,4084.8
+1385,fetch 10.0.2.100,ok,502,4,4085.3
+1386,churn proc 4,ok,6041,2,4091.3
+1387,churn proc 8,ok,6187,2,4097.5
+1388,ltstat,ok,148,1,4097.7
+1389,spawn worker 32,ok,2001,2,4099.7
+1390,write /home/euro/lt-soak/f33 round-133,ok,928,1,4100.6
+1391,cat /home/euro/lt-soak/f33,ok,207,1,4100.8
+1392,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1645,1,4102.5
+1393,sha256sum /home/euro/lt-soak/big1,ok,2336,1,4104.8
+1394,rm /home/euro/lt-soak/big3,ok,159,1,4105.0
+1395,fetch 10.0.2.100,ok,615,4,4105.6
+1396,churn proc 8,ok,8655,2,4114.2
+1397,churn fs 1,ok,43570,2,4157.8
+1398,ltstat,ok,245,1,4158.0
+1399,spawn worker 32,ok,2091,2,4160.1
+1400,write /home/euro/lt-soak/f34 round-134,ok,217,1,4160.4
+1401,cat /home/euro/lt-soak/f34,ok,144,1,4160.5
+1402,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1413,1,4161.9
+1403,sha256sum /home/euro/lt-soak/big2,ok,2074,1,4164.0
+1404,rm /home/euro/lt-soak/big0,ok,273,1,4164.3
+1405,fetch 10.0.2.100,ok,519,4,4164.8
+1406,churn proc 8,ok,6692,2,4171.5
+1407,churn net 1,ok,500,2,4172.0
+1408,ltstat,ok,199,1,4172.2
+1409,spawn worker 32,ok,1935,2,4174.1
+1410,write /home/euro/lt-soak/f35 round-135,ok,697,1,4174.8
+1411,cat /home/euro/lt-soak/f35,ok,64,1,4174.9
+1412,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1421,1,4176.3
+1413,sha256sum /home/euro/lt-soak/big3,ok,1885,1,4178.2
+1414,rm /home/euro/lt-soak/big1,ok,194,1,4178.4
+1415,fetch 10.0.2.100,ok,503,4,4178.9
+1416,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9755,2,4188.6
+1417,churn proc 4,ok,3664,2,4192.3
+1418,churn proc 8,ok,6446,2,4198.7
+1419,ltstat,ok,148,1,4198.9
+1420,spawn worker 32,ok,1968,2,4200.9
+1421,write /home/euro/lt-soak/f36 round-136,ok,424,1,4201.3
+1422,cat /home/euro/lt-soak/f36,ok,64,1,4201.4
+1423,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1271,1,4202.6
+1424,sha256sum /home/euro/lt-soak/big0,ok,1783,1,4204.4
+1425,rm /home/euro/lt-soak/big2,ok,218,1,4204.6
+1426,fetch 10.0.2.100,ok,623,4,4205.3
+1427,churn proc 8,ok,9345,2,4214.6
+1428,churn fs 1,ok,40417,2,4255.0
+1429,ltstat,ok,158,1,4255.2
+1430,spawn worker 32,ok,2093,2,4257.3
+1431,write /home/euro/lt-soak/f37 round-137,ok,218,1,4257.5
+1432,cat /home/euro/lt-soak/f37,ok,65,1,4257.6
+1433,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1312,1,4258.9
+1434,sha256sum /home/euro/lt-soak/big1,ok,2267,1,4261.1
+1435,rm /home/euro/lt-soak/big3,ok,211,1,4261.3
+1436,fetch 10.0.2.100,ok,503,4,4261.8
+1437,churn proc 8,ok,6121,2,4268.0
+1438,churn net 1,ok,530,2,4268.5
+1439,ltstat,ok,218,1,4268.7
+1440,spawn worker 32,ok,2013,2,4270.7
+1441,write /home/euro/lt-soak/f38 round-138,ok,700,1,4271.4
+1442,cat /home/euro/lt-soak/f38,ok,73,1,4271.5
+1443,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1854,1,4273.4
+1444,sha256sum /home/euro/lt-soak/big2,ok,2075,1,4275.4
+1445,rm /home/euro/lt-soak/big0,ok,280,1,4275.7
+1446,fetch 10.0.2.100,ok,504,4,4276.2
+1447,churn proc 4,ok,3859,2,4280.1
+1448,churn proc 8,ok,6799,2,4286.9
+1449,ltstat,ok,496,1,4287.4
+1450,spawn worker 32,ok,1904,2,4289.3
+1451,write /home/euro/lt-soak/f39 round-139,ok,649,1,4289.9
+1452,cat /home/euro/lt-soak/f39,ok,133,1,4290.1
+1453,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1334,1,4291.4
+1454,sha256sum /home/euro/lt-soak/big3,ok,1861,1,4293.3
+1455,rm /home/euro/lt-soak/big1,ok,194,1,4293.5
+1456,fetch 10.0.2.100,ok,504,4,4294.0
+1457,churn proc 8,ok,6362,2,4300.3
+1458,churn fs 1,ok,38681,2,4339.0
+1459,ltstat,ok,3275,1,4342.3
+1460,spawn worker 32,ok,2033,2,4344.3
+1461,write /home/euro/lt-soak/f40 round-140,ok,355,1,4344.7
+1462,cat /home/euro/lt-soak/f40,ok,68,1,4344.7
+1463,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1577,1,4346.3
+1464,sha256sum /home/euro/lt-soak/big0,ok,2148,1,4348.5
+1465,rm /home/euro/lt-soak/big2,ok,222,1,4348.7
+1466,fetch 10.0.2.100,ok,487,4,4349.2
+1467,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9810,2,4359.0
+1468,churn proc 8,ok,8905,2,4367.9
+1469,churn net 1,ok,581,2,4368.5
+1470,ltstat,ok,219,1,4368.7
+1471,lockstat,ok,649,27,4369.3
+1472,free,ok,56,3,4369.4
+1473,spawn worker 32,ok,1957,2,4371.4
+1474,write /home/euro/lt-soak/f41 round-141,ok,272,1,4371.6
+1475,cat /home/euro/lt-soak/f41,ok,78,1,4371.7
+1476,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1562,1,4373.3
+1477,sha256sum /home/euro/lt-soak/big1,ok,2416,1,4375.7
+1478,rm /home/euro/lt-soak/big3,ok,220,1,4375.9
+1479,fetch 10.0.2.100,ok,564,4,4376.5
+1480,churn proc 4,ok,3650,2,4380.1
+1481,churn proc 8,ok,6306,2,4386.4
+1482,ltstat,ok,208,1,4386.6
+1483,spawn worker 32,ok,1923,2,4388.6
+1484,write /home/euro/lt-soak/f42 round-142,ok,660,1,4389.2
+1485,cat /home/euro/lt-soak/f42,ok,134,1,4389.4
+1486,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1417,1,4390.8
+1487,sha256sum /home/euro/lt-soak/big2,ok,2193,1,4393.0
+1488,rm /home/euro/lt-soak/big0,ok,207,1,4393.2
+1489,fetch 10.0.2.100,ok,498,4,4393.7
+1490,churn proc 8,ok,6489,2,4400.2
+1491,churn fs 1,ok,40225,2,4440.4
+1492,ltstat,ok,141,1,4440.5
+1493,spawn worker 32,ok,1963,2,4442.5
+1494,write /home/euro/lt-soak/f43 round-143,ok,198,1,4442.7
+1495,cat /home/euro/lt-soak/f43,ok,64,1,4442.8
+1496,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1154,1,4443.9
+1497,sha256sum /home/euro/lt-soak/big3,ok,1829,1,4445.8
+1498,rm /home/euro/lt-soak/big1,ok,217,1,4446.0
+1499,fetch 10.0.2.100,ok,602,4,4446.6
+1500,churn proc 8,ok,8866,2,4455.4
+1501,churn net 1,ok,691,2,4456.1
+1502,ltstat,ok,73,1,4456.2
+1503,spawn worker 32,ok,1873,2,4458.1
+1504,write /home/euro/lt-soak/f44 round-144,ok,680,1,4458.8
+1505,cat /home/euro/lt-soak/f44,ok,153,1,4458.9
+1506,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1143,1,4460.1
+1507,sha256sum /home/euro/lt-soak/big0,ok,1754,1,4461.8
+1508,rm /home/euro/lt-soak/big2,ok,210,1,4462.0
+1509,fetch 10.0.2.100,ok,504,4,4462.5
+1510,churn proc 4,ok,3690,2,4466.2
+1511,churn proc 8,ok,6335,2,4472.6
+1512,ltstat,ok,208,1,4472.8
+1513,spawn worker 32,ok,1824,2,4474.6
+1514,write /home/euro/lt-soak/f45 round-145,ok,630,1,4475.2
+1515,cat /home/euro/lt-soak/f45,ok,73,1,4475.3
+1516,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1217,1,4476.5
+1517,sha256sum /home/euro/lt-soak/big1,ok,1778,1,4478.3
+1518,rm /home/euro/lt-soak/big3,ok,183,1,4478.5
+1519,fetch 10.0.2.100,ok,564,4,4479.0
+1520,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9735,2,4488.8
+1521,churn proc 8,ok,6298,2,4495.1
+1522,churn fs 1,ok,34288,2,4529.4
+1523,ltstat,ok,150,1,4529.5
+1524,spawn worker 32,ok,1872,2,4531.4
+1525,write /home/euro/lt-soak/f46 round-146,ok,227,1,4531.6
+1526,cat /home/euro/lt-soak/f46,ok,57,1,4531.7
+1527,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1259,1,4532.9
+1528,sha256sum /home/euro/lt-soak/big2,ok,1844,1,4534.8
+1529,rm /home/euro/lt-soak/big0,ok,152,1,4534.9
+1530,fetch 10.0.2.100,ok,615,4,4535.5
+1531,churn proc 8,ok,6102,2,4541.7
+1532,churn net 1,ok,500,2,4542.2
+1533,ltstat,ok,68,1,4542.2
+1534,spawn worker 32,ok,1883,2,4544.1
+1535,write /home/euro/lt-soak/f47 round-147,ok,682,1,4544.8
+1536,cat /home/euro/lt-soak/f47,ok,151,1,4544.9
+1537,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1267,1,4546.2
+1538,sha256sum /home/euro/lt-soak/big3,ok,1779,1,4548.0
+1539,rm /home/euro/lt-soak/big1,ok,142,1,4548.1
+1540,fetch 10.0.2.100,ok,585,4,4548.7
+1541,churn proc 4,ok,3670,2,4552.4
+1542,churn proc 8,ok,6436,2,4558.8
+1543,ltstat,ok,148,1,4559.0
+1544,spawn worker 32,ok,1800,2,4560.8
+1545,write /home/euro/lt-soak/f48 round-148,ok,572,1,4561.3
+1546,cat /home/euro/lt-soak/f48,ok,65,1,4561.4
+1547,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1153,1,4562.6
+1548,sha256sum /home/euro/lt-soak/big0,ok,1843,1,4564.4
+1549,rm /home/euro/lt-soak/big2,ok,152,1,4564.6
+1550,fetch 10.0.2.100,ok,495,4,4565.1
+1551,churn proc 8,ok,6279,2,4571.3
+1552,churn fs 1,ok,34252,2,4605.6
+1553,ltstat,ok,430,1,4606.0
+1554,spawn worker 32,ok,1882,2,4607.9
+1555,write /home/euro/lt-soak/f49 round-149,ok,228,1,4608.1
+1556,cat /home/euro/lt-soak/f49,ok,65,1,4608.2
+1557,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1231,1,4609.4
+1558,sha256sum /home/euro/lt-soak/big1,ok,1852,1,4611.3
+1559,rm /home/euro/lt-soak/big3,ok,205,1,4611.5
+1560,fetch 10.0.2.100,ok,504,4,4612.0
+1561,churn proc 8,ok,6373,2,4618.4
+1562,churn net 1,ok,468,2,4618.8
+1563,ltstat,ok,139,1,4619.0
+1564,spawn worker 32,ok,1883,2,4620.9
+1565,write /home/euro/lt-soak/f0 round-150,ok,578,1,4621.4
+1566,cat /home/euro/lt-soak/f0,ok,64,1,4621.5
+1567,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1154,1,4622.7
+1568,sha256sum /home/euro/lt-soak/big2,ok,1700,1,4624.4
+1569,rm /home/euro/lt-soak/big0,ok,195,1,4624.5
+1570,fetch 10.0.2.100,ok,574,4,4625.1
+1571,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9690,2,4634.8
+1572,churn proc 4,ok,3499,2,4638.3
+1573,churn proc 8,ok,6116,2,4644.4
+1574,ltstat,ok,148,1,4644.6
+1575,lockstat,ok,710,27,4645.3
+1576,free,ok,66,3,4645.4
+1577,spawn worker 32,ok,1876,2,4647.2
+1578,write /home/euro/lt-soak/f1 round-151,ok,268,1,4647.5
+1579,cat /home/euro/lt-soak/f1,ok,74,1,4647.6
+1580,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1173,1,4648.8
+1581,sha256sum /home/euro/lt-soak/big3,ok,5599,1,4654.4
+1582,rm /home/euro/lt-soak/big1,ok,270,1,4654.6
+1583,fetch 10.0.2.100,ok,504,4,4655.1
+1584,churn proc 8,ok,6393,2,4661.5
+1585,churn fs 1,ok,36891,2,4698.4
+1586,ltstat,ok,138,1,4698.6
+1587,spawn worker 32,ok,1924,2,4700.5
+1588,write /home/euro/lt-soak/f2 round-152,ok,155,1,4700.6
+1589,cat /home/euro/lt-soak/f2,ok,137,1,4700.8
+1590,truncate -s 8388608 /home/euro/lt-soak/big0,ok,921,1,4701.7
+1591,sha256sum /home/euro/lt-soak/big0,ok,1774,1,4703.5
+1592,rm /home/euro/lt-soak/big2,ok,217,1,4703.7
+1593,fetch 10.0.2.100,ok,500,4,4704.2
+1594,churn proc 8,ok,6493,2,4710.7
+1595,churn net 1,ok,500,2,4711.2
+1596,ltstat,ok,119,1,4711.3
+1597,spawn worker 32,ok,1832,2,4713.1
+1598,write /home/euro/lt-soak/f3 round-153,ok,630,1,4713.8
+1599,cat /home/euro/lt-soak/f3,ok,73,1,4713.8
+1600,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1268,1,4715.1
+1601,sha256sum /home/euro/lt-soak/big1,ok,1918,1,4717.0
+1602,rm /home/euro/lt-soak/big3,ok,153,1,4717.2
+1603,fetch 10.0.2.100,ok,485,4,4717.7
+1604,churn proc 4,ok,3639,2,4721.3
+1605,churn proc 8,ok,6477,2,4727.8
+1606,ltstat,ok,149,1,4727.9
+1607,spawn worker 32,ok,1851,2,4729.8
+1608,write /home/euro/lt-soak/f4 round-154,ok,571,1,4730.4
+1609,cat /home/euro/lt-soak/f4,ok,123,1,4730.5
+1610,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1145,1,4731.6
+1611,sha256sum /home/euro/lt-soak/big2,ok,1904,1,4733.5
+1612,rm /home/euro/lt-soak/big0,ok,159,1,4733.7
+1613,fetch 10.0.2.100,ok,430,4,4734.1
+1614,churn proc 8,ok,6427,2,4740.5
+1615,churn fs 1,ok,34119,2,4774.7
+1616,ltstat,ok,218,1,4774.9
+1617,spawn worker 32,ok,1804,2,4776.7
+1618,write /home/euro/lt-soak/f5 round-155,ok,207,1,4776.9
+1619,cat /home/euro/lt-soak/f5,ok,65,1,4777.0
+1620,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1213,1,4778.2
+1621,sha256sum /home/euro/lt-soak/big3,ok,1745,1,4779.9
+1622,rm /home/euro/lt-soak/big1,ok,314,1,4780.2
+1623,fetch 10.0.2.100,ok,501,4,4780.7
+1624,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9822,2,4790.6
+1625,churn proc 8,ok,6229,2,4796.8
+1626,churn net 1,ok,420,2,4797.2
+1627,ltstat,ok,78,1,4797.3
+1628,spawn worker 32,ok,1834,2,4799.1
+1629,write /home/euro/lt-soak/f6 round-156,ok,227,1,4799.4
+1630,cat /home/euro/lt-soak/f6,ok,65,1,4799.4
+1631,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1263,1,4800.7
+1632,sha256sum /home/euro/lt-soak/big0,ok,1846,1,4802.5
+1633,rm /home/euro/lt-soak/big2,ok,131,1,4802.7
+1634,fetch 10.0.2.100,ok,494,4,4803.2
+1635,churn proc 4,ok,3606,2,4806.8
+1636,churn proc 8,ok,6178,2,4812.9
+1637,ltstat,ok,138,1,4813.1
+1638,spawn worker 32,ok,1813,2,4814.9
+1639,write /home/euro/lt-soak/f7 round-157,ok,573,1,4815.5
+1640,cat /home/euro/lt-soak/f7,ok,70,1,4815.5
+1641,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1141,1,4816.7
+1642,sha256sum /home/euro/lt-soak/big1,ok,1726,1,4818.4
+1643,rm /home/euro/lt-soak/big3,ok,182,1,4818.6
+1644,fetch 10.0.2.100,ok,543,4,4819.1
+1645,churn proc 8,ok,5972,2,4825.1
+1646,churn fs 1,ok,34359,2,4859.5
+1647,ltstat,ok,139,1,4859.6
+1648,spawn worker 32,ok,1830,2,4861.4
+1649,write /home/euro/lt-soak/f8 round-158,ok,209,1,4861.6
+1650,cat /home/euro/lt-soak/f8,ok,66,1,4861.7
+1651,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1145,1,4862.9
+1652,sha256sum /home/euro/lt-soak/big2,ok,1834,1,4864.7
+1653,rm /home/euro/lt-soak/big0,ok,280,1,4865.0
+1654,fetch 10.0.2.100,ok,505,4,4865.5
+1655,churn proc 8,ok,6281,2,4871.8
+1656,churn net 1,ok,428,2,4872.2
+1657,ltstat,ok,70,1,4872.3
+1658,spawn worker 32,ok,1754,2,4874.0
+1659,write /home/euro/lt-soak/f9 round-159,ok,640,1,4874.7
+1660,cat /home/euro/lt-soak/f9,ok,73,1,4874.7
+1661,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1123,1,4875.8
+1662,sha256sum /home/euro/lt-soak/big3,ok,1847,1,4877.7
+1663,rm /home/euro/lt-soak/big1,ok,148,1,4877.8
+1664,fetch 10.0.2.100,ok,575,4,4878.4
+1665,churn proc 4,ok,3559,2,4882.0
+1666,churn proc 8,ok,6176,2,4888.2
+1667,ltstat,ok,138,1,4888.3
+1668,spawn worker 32,ok,1853,2,4890.1
+1669,write /home/euro/lt-soak/f10 round-160,ok,569,1,4890.7
+1670,cat /home/euro/lt-soak/f10,ok,64,1,4890.8
+1671,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1221,1,4892.0
+1672,sha256sum /home/euro/lt-soak/big0,ok,1742,1,4893.7
+1673,rm /home/euro/lt-soak/big2,ok,156,1,4893.9
+1674,fetch 10.0.2.100,ok,565,4,4894.5
+1675,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9691,2,4904.2
+1676,churn proc 8,ok,6351,2,4910.5
+1677,churn fs 1,ok,35550,2,4946.1
+1678,ltstat,ok,271,1,4946.3
+1679,lockstat,ok,770,27,4947.1
+1680,free,ok,145,3,4947.3
+1681,spawn worker 32,ok,1996,2,4949.2
+1682,write /home/euro/lt-soak/f11 round-161,ok,226,1,4949.5
+1683,cat /home/euro/lt-soak/f11,ok,66,1,4949.5
+1684,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1203,1,4950.7
+1685,sha256sum /home/euro/lt-soak/big1,ok,1785,1,4952.5
+1686,rm /home/euro/lt-soak/big3,ok,270,1,4952.8
+1687,fetch 10.0.2.100,ok,504,4,4953.3
+1688,churn proc 8,ok,6353,2,4959.7
+1689,churn net 1,ok,570,2,4960.2
+1690,ltstat,ok,78,1,4960.3
+1691,spawn worker 32,ok,2012,2,4962.3
+1692,write /home/euro/lt-soak/f12 round-162,ok,578,1,4962.9
+1693,cat /home/euro/lt-soak/f12,ok,204,1,4963.1
+1694,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1207,1,4964.3
+1695,sha256sum /home/euro/lt-soak/big2,ok,1781,1,4966.1
+1696,rm /home/euro/lt-soak/big0,ok,149,1,4966.2
+1697,fetch 10.0.2.100,ok,562,4,4966.8
+1698,churn proc 4,ok,3862,2,4970.7
+1699,churn proc 8,ok,6737,2,4977.4
+1700,ltstat,ok,89,1,4977.5
+1701,spawn worker 32,ok,2062,2,4979.6
+1702,write /home/euro/lt-soak/f13 round-163,ok,579,1,4980.1
+1703,cat /home/euro/lt-soak/f13,ok,64,1,4980.2
+1704,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1203,1,4981.4
+1705,sha256sum /home/euro/lt-soak/big3,ok,1905,1,4983.3
+1706,rm /home/euro/lt-soak/big1,ok,220,1,4983.5
+1707,fetch 10.0.2.100,ok,505,4,4984.0
+1708,churn proc 8,ok,6210,2,4990.3
+1709,churn fs 1,ok,34467,2,5024.7
+1710,ltstat,ok,2753,1,5027.5
+1711,spawn worker 32,ok,1850,2,5029.3
+1712,write /home/euro/lt-soak/f14 round-164,ok,219,1,5029.6
+1713,cat /home/euro/lt-soak/f14,ok,58,1,5029.6
+1714,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1328,1,5030.9
+1715,sha256sum /home/euro/lt-soak/big0,ok,1899,1,5032.8
+1716,rm /home/euro/lt-soak/big2,ok,79,1,5032.9
+1717,fetch 10.0.2.100,ok,634,4,5033.6
+1718,churn proc 8,ok,5951,2,5039.5
+1719,churn net 1,ok,421,2,5039.9
+1720,ltstat,ok,77,1,5040.0
+1721,spawn worker 32,ok,1794,2,5041.8
+1722,write /home/euro/lt-soak/f15 round-165,ok,579,1,5042.4
+1723,cat /home/euro/lt-soak/f15,ok,64,1,5042.4
+1724,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1268,1,5043.7
+1725,sha256sum /home/euro/lt-soak/big1,ok,1769,1,5045.5
+1726,rm /home/euro/lt-soak/big3,ok,151,1,5045.6
+1727,fetch 10.0.2.100,ok,485,4,5046.1
+1728,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9744,2,5055.9
+1729,churn proc 4,ok,3495,2,5059.4
+1730,churn proc 8,ok,6106,2,5065.5
+1731,ltstat,ok,139,1,5065.6
+1732,spawn worker 32,ok,1823,2,5067.4
+1733,write /home/euro/lt-soak/f16 round-166,ok,228,1,5067.7
+1734,cat /home/euro/lt-soak/f16,ok,65,1,5067.7
+1735,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1267,1,5069.0
+1736,sha256sum /home/euro/lt-soak/big2,ok,2172,1,5071.2
+1737,rm /home/euro/lt-soak/big0,ok,149,1,5071.3
+1738,fetch 10.0.2.100,ok,568,4,5071.9
+1739,churn proc 8,ok,6107,2,5078.0
+1740,churn fs 1,ok,33408,2,5111.4
+1741,ltstat,ok,139,1,5111.5
+1742,spawn worker 32,ok,1601,2,5113.1
+1743,write /home/euro/lt-soak/f17 round-167,ok,216,1,5113.4
+1744,cat /home/euro/lt-soak/f17,ok,68,1,5113.4
+1745,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1211,1,5114.6
+1746,sha256sum /home/euro/lt-soak/big3,ok,1785,1,5116.4
+1747,rm /home/euro/lt-soak/big1,ok,143,1,5116.6
+1748,fetch 10.0.2.100,ok,574,4,5117.1
+1749,churn proc 8,ok,5941,2,5123.1
+1750,churn net 1,ok,410,2,5123.5
+1751,ltstat,ok,68,1,5123.6
+1752,spawn worker 32,ok,1804,2,5125.4
+1753,write /home/euro/lt-soak/f18 round-168,ok,640,1,5126.0
+1754,cat /home/euro/lt-soak/f18,ok,73,1,5126.1
+1755,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1213,1,5127.3
+1756,sha256sum /home/euro/lt-soak/big0,ok,1936,1,5129.2
+1757,rm /home/euro/lt-soak/big2,ok,149,1,5129.4
+1758,fetch 10.0.2.100,ok,565,4,5129.9
+1759,churn proc 4,ok,3408,2,5133.4
+1760,churn proc 8,ok,6077,2,5139.4
+1761,ltstat,ok,137,1,5139.6
+1762,spawn worker 32,ok,1874,2,5141.4
+1763,write /home/euro/lt-soak/f19 round-169,ok,579,1,5142.0
+1764,cat /home/euro/lt-soak/f19,ok,194,1,5142.2
+1765,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1129,1,5143.3
+1766,sha256sum /home/euro/lt-soak/big1,ok,1930,1,5145.3
+1767,rm /home/euro/lt-soak/big3,ok,149,1,5145.4
+1768,fetch 10.0.2.100,ok,565,4,5146.0
+1769,churn proc 8,ok,5981,2,5152.0
+1770,churn fs 1,ok,33396,2,5185.4
+1771,ltstat,ok,140,1,5185.5
+1772,spawn worker 32,ok,1804,2,5187.3
+1773,write /home/euro/lt-soak/f20 round-170,ok,216,1,5187.5
+1774,cat /home/euro/lt-soak/f20,ok,67,1,5187.6
+1775,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1276,1,5188.9
+1776,sha256sum /home/euro/lt-soak/big2,ok,1798,1,5190.7
+1777,rm /home/euro/lt-soak/big0,ok,152,1,5190.8
+1778,fetch 10.0.2.100,ok,494,4,5191.3
+1779,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9867,2,5201.2
+1780,churn proc 8,ok,6146,2,5207.3
+1781,churn net 1,ok,399,2,5207.7
+1782,ltstat,ok,88,1,5207.8
+1783,lockstat,ok,630,27,5208.5
+1784,free,ok,67,3,5208.5
+1785,spawn worker 32,ok,1853,2,5210.4
+1786,write /home/euro/lt-soak/f21 round-171,ok,210,1,5210.6
+1787,cat /home/euro/lt-soak/f21,ok,66,1,5210.7
+1788,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1211,1,5211.9
+1789,sha256sum /home/euro/lt-soak/big3,ok,2191,1,5214.1
+1790,rm /home/euro/lt-soak/big1,ok,146,1,5214.2
+1791,fetch 10.0.2.100,ok,564,4,5214.8
+1792,churn proc 4,ok,3699,2,5218.5
+1793,churn proc 8,ok,5916,2,5224.4
+1794,ltstat,ok,138,1,5224.5
+1795,spawn worker 32,ok,1824,2,5226.4
+1796,write /home/euro/lt-soak/f22 round-172,ok,630,1,5227.0
+1797,cat /home/euro/lt-soak/f22,ok,75,1,5227.1
+1798,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1137,1,5228.2
+1799,sha256sum /home/euro/lt-soak/big0,ok,1882,1,5230.1
+1800,rm /home/euro/lt-soak/big2,ok,295,1,5230.4
+1801,fetch 10.0.2.100,ok,486,4,5230.9
+1802,churn proc 8,ok,5891,2,5236.8
+1803,churn fs 1,ok,33889,2,5270.6
+1804,ltstat,ok,138,1,5270.8
+1805,spawn worker 32,ok,1884,2,5272.7
+1806,write /home/euro/lt-soak/f23 round-173,ok,146,1,5272.8
+1807,cat /home/euro/lt-soak/f23,ok,76,1,5272.9
+1808,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1133,1,5274.0
+1809,sha256sum /home/euro/lt-soak/big1,ok,1852,1,5275.9
+1810,rm /home/euro/lt-soak/big3,ok,144,1,5276.0
+1811,fetch 10.0.2.100,ok,614,4,5276.6
+1812,churn proc 8,ok,5841,2,5282.5
+1813,churn net 1,ok,430,2,5282.9
+1814,ltstat,ok,68,1,5283.0
+1815,spawn worker 32,ok,1806,2,5284.8
+1816,write /home/euro/lt-soak/f24 round-174,ok,638,1,5285.4
+1817,cat /home/euro/lt-soak/f24,ok,144,1,5285.6
+1818,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1249,1,5286.8
+1819,sha256sum /home/euro/lt-soak/big2,ok,1779,1,5288.6
+1820,rm /home/euro/lt-soak/big0,ok,149,1,5288.7
+1821,fetch 10.0.2.100,ok,554,4,5289.3
+1822,churn proc 4,ok,3518,2,5292.8
+1823,churn proc 8,ok,8459,2,5301.3
+1824,ltstat,ok,218,1,5301.5
+1825,spawn worker 32,ok,1753,2,5303.3
+1826,write /home/euro/lt-soak/f25 round-175,ok,557,1,5303.8
+1827,cat /home/euro/lt-soak/f25,ok,147,1,5304.0
+1828,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1208,1,5305.2
+1829,sha256sum /home/euro/lt-soak/big3,ok,1711,1,5306.9
+1830,rm /home/euro/lt-soak/big1,ok,159,1,5307.0
+1831,fetch 10.0.2.100,ok,495,4,5307.5
+1832,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9730,2,5317.3
+1833,churn proc 8,ok,5902,2,5323.2
+1834,churn fs 1,ok,33087,2,5356.3
+1835,ltstat,ok,218,1,5356.5
+1836,spawn worker 32,ok,1874,2,5358.3
+1837,write /home/euro/lt-soak/f26 round-176,ok,275,1,5358.6
+1838,cat /home/euro/lt-soak/f26,ok,67,1,5358.7
+1839,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1163,1,5359.9
+1840,sha256sum /home/euro/lt-soak/big0,ok,1715,1,5361.6
+1841,rm /home/euro/lt-soak/big2,ok,201,1,5361.8
+1842,fetch 10.0.2.100,ok,504,4,5362.3
+1843,churn proc 8,ok,6001,2,5368.3
+1844,churn net 1,ok,428,2,5368.7
+1845,ltstat,ok,70,1,5368.8
+1846,spawn worker 32,ok,1844,2,5370.6
+1847,write /home/euro/lt-soak/f27 round-177,ok,579,1,5371.2
+1848,cat /home/euro/lt-soak/f27,ok,63,1,5371.3
+1849,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1133,1,5372.4
+1850,sha256sum /home/euro/lt-soak/big1,ok,1620,1,5374.0
+1851,rm /home/euro/lt-soak/big3,ok,145,1,5374.2
+1852,fetch 10.0.2.100,ok,564,4,5374.7
+1853,churn proc 4,ok,3409,2,5378.1
+1854,churn proc 8,ok,5825,2,5384.0
+1855,ltstat,ok,148,1,5384.1
+1856,spawn worker 32,ok,1806,2,5385.9
+1857,write /home/euro/lt-soak/f28 round-178,ok,567,1,5386.5
+1858,cat /home/euro/lt-soak/f28,ok,74,1,5386.6
+1859,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1121,1,5387.7
+1860,sha256sum /home/euro/lt-soak/big2,ok,1832,1,5389.5
+1861,rm /home/euro/lt-soak/big0,ok,145,1,5389.7
+1862,fetch 10.0.2.100,ok,485,4,5390.1
+1863,churn proc 8,ok,6122,2,5396.3
+1864,churn fs 1,ok,32187,2,5428.5
+1865,ltstat,ok,150,1,5428.6
+1866,spawn worker 32,ok,1762,2,5430.4
+1867,write /home/euro/lt-soak/f29 round-179,ok,225,1,5430.6
+1868,cat /home/euro/lt-soak/f29,ok,67,1,5430.7
+1869,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1068,1,5431.7
+1870,sha256sum /home/euro/lt-soak/big3,ok,1757,1,5433.5
+1871,rm /home/euro/lt-soak/big1,ok,152,1,5433.6
+1872,fetch 10.0.2.100,ok,564,4,5434.2
+1873,churn proc 8,ok,5971,2,5440.2
+1874,churn net 1,ok,491,2,5440.7
+1875,ltstat,ok,77,1,5440.8
+1876,spawn worker 32,ok,1725,2,5442.5
+1877,write /home/euro/lt-soak/f30 round-180,ok,575,1,5443.1
+1878,cat /home/euro/lt-soak/f30,ok,76,1,5443.1
+1879,truncate -s 8388608 /home/euro/lt-soak/big0,ok,990,1,5444.1
+1880,sha256sum /home/euro/lt-soak/big0,ok,1638,1,5445.8
+1881,rm /home/euro/lt-soak/big2,ok,199,1,5446.0
+1882,fetch 10.0.2.100,ok,504,4,5446.5
+1883,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9703,2,5456.2
+1884,churn proc 4,ok,5679,2,5461.8
+1885,churn proc 8,ok,5926,2,5467.8
+1886,ltstat,ok,138,1,5467.9
+1887,lockstat,ok,635,27,5468.6
+1888,free,ok,82,3,5468.6
+1889,spawn worker 32,ok,1697,2,5470.3
+1890,write /home/euro/lt-soak/f31 round-181,ok,206,1,5470.5
+1891,cat /home/euro/lt-soak/f31,ok,75,1,5470.6
+1892,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1270,1,5471.9
+1893,sha256sum /home/euro/lt-soak/big1,ok,1847,1,5473.7
+1894,rm /home/euro/lt-soak/big3,ok,141,1,5473.9
+1895,fetch 10.0.2.100,ok,494,4,5474.4
+1896,churn proc 8,ok,5942,2,5480.3
+1897,churn fs 1,ok,33337,2,5513.6
+1898,ltstat,ok,429,1,5514.1
+1899,spawn worker 32,ok,1754,2,5515.8
+1900,write /home/euro/lt-soak/f32 round-182,ok,217,1,5516.1
+1901,cat /home/euro/lt-soak/f32,ok,66,1,5516.1
+1902,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1277,1,5517.4
+1903,sha256sum /home/euro/lt-soak/big2,ok,1799,1,5519.2
+1904,rm /home/euro/lt-soak/big0,ok,141,1,5519.3
+1905,fetch 10.0.2.100,ok,645,4,5520.0
+1906,churn proc 8,ok,6051,2,5526.0
+1907,churn net 1,ok,420,2,5526.5
+1908,ltstat,ok,68,1,5526.5
+1909,spawn worker 32,ok,2015,2,5528.5
+1910,write /home/euro/lt-soak/f33 round-183,ok,714,1,5529.3
+1911,cat /home/euro/lt-soak/f33,ok,69,1,5529.3
+1912,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1244,1,5530.6
+1913,sha256sum /home/euro/lt-soak/big3,ok,1918,1,5532.5
+1914,rm /home/euro/lt-soak/big1,ok,209,1,5532.7
+1915,fetch 10.0.2.100,ok,481,4,5533.2
+1916,churn proc 4,ok,3548,2,5536.7
+1917,churn proc 8,ok,6057,2,5542.8
+1918,ltstat,ok,208,1,5543.0
+1919,spawn worker 32,ok,1814,2,5544.8
+1920,write /home/euro/lt-soak/f34 round-184,ok,3266,1,5548.1
+1921,cat /home/euro/lt-soak/f34,ok,150,1,5548.2
+1922,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1264,1,5549.5
+1923,sha256sum /home/euro/lt-soak/big0,ok,1882,1,5551.4
+1924,rm /home/euro/lt-soak/big2,ok,142,1,5551.5
+1925,fetch 10.0.2.100,ok,505,4,5552.0
+1926,churn proc 8,ok,6252,2,5558.3
+1927,churn fs 1,ok,34559,2,5592.8
+1928,ltstat,ok,208,1,5593.0
+1929,spawn worker 32,ok,1802,2,5594.8
+1930,write /home/euro/lt-soak/f35 round-185,ok,210,1,5595.1
+1931,cat /home/euro/lt-soak/f35,ok,125,1,5595.2
+1932,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1316,1,5596.5
+1933,sha256sum /home/euro/lt-soak/big1,ok,1918,1,5598.4
+1934,rm /home/euro/lt-soak/big3,ok,205,1,5598.6
+1935,fetch 10.0.2.100,ok,503,4,5599.1
+1936,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9764,2,5608.9
+1937,churn proc 8,ok,6889,2,5615.8
+1938,churn net 1,ok,490,2,5616.3
+1939,ltstat,ok,77,1,5616.3
+1940,spawn worker 32,ok,1804,2,5618.2
+1941,write /home/euro/lt-soak/f36 round-186,ok,227,1,5618.4
+1942,cat /home/euro/lt-soak/f36,ok,66,1,5618.4
+1943,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1204,1,5619.7
+1944,sha256sum /home/euro/lt-soak/big2,ok,1945,1,5621.6
+1945,rm /home/euro/lt-soak/big0,ok,79,1,5621.7
+1946,fetch 10.0.2.100,ok,509,4,5622.2
+1947,churn proc 4,ok,3493,2,5625.7
+1948,churn proc 8,ok,7279,2,5633.0
+1949,ltstat,ok,148,1,5633.1
+1950,spawn worker 32,ok,1733,2,5634.8
+1951,write /home/euro/lt-soak/f37 round-187,ok,632,1,5635.5
+1952,cat /home/euro/lt-soak/f37,ok,71,1,5635.5
+1953,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1280,1,5636.8
+1954,sha256sum /home/euro/lt-soak/big3,ok,1833,1,5638.7
+1955,rm /home/euro/lt-soak/big1,ok,216,1,5638.9
+1956,fetch 10.0.2.100,ok,505,4,5639.4
+1957,churn proc 8,ok,5820,2,5645.2
+1958,churn fs 1,ok,32487,2,5677.7
+1959,ltstat,ok,138,1,5677.8
+1960,spawn worker 32,ok,1754,2,5679.6
+1961,write /home/euro/lt-soak/f38 round-188,ok,145,1,5679.7
+1962,cat /home/euro/lt-soak/f38,ok,177,1,5679.9
+1963,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1203,1,5681.1
+1964,sha256sum /home/euro/lt-soak/big0,ok,1786,1,5682.9
+1965,rm /home/euro/lt-soak/big2,ok,78,1,5683.0
+1966,fetch 10.0.2.100,ok,486,4,5683.5
+1967,churn proc 8,ok,6010,2,5689.5
+1968,churn net 1,ok,458,2,5689.9
+1969,ltstat,ok,190,1,5690.1
+1970,spawn worker 32,ok,1674,2,5691.8
+1971,write /home/euro/lt-soak/f39 round-189,ok,509,1,5692.3
+1972,cat /home/euro/lt-soak/f39,ok,64,1,5692.4
+1973,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1213,1,5693.6
+1974,sha256sum /home/euro/lt-soak/big1,ok,1756,1,5695.3
+1975,rm /home/euro/lt-soak/big3,ok,159,1,5695.5
+1976,fetch 10.0.2.100,ok,436,4,5695.9
+1977,churn proc 4,ok,3167,2,5699.1
+1978,churn proc 8,ok,5645,2,5704.8
+1979,ltstat,ok,138,1,5704.9
+1980,spawn worker 32,ok,1684,2,5706.6
+1981,write /home/euro/lt-soak/f40 round-190,ok,579,1,5707.2
+1982,cat /home/euro/lt-soak/f40,ok,64,1,5707.2
+1983,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1223,1,5708.4
+1984,sha256sum /home/euro/lt-soak/big2,ok,1876,1,5710.3
+1985,rm /home/euro/lt-soak/big0,ok,78,1,5710.4
+1986,fetch 10.0.2.100,ok,436,4,5710.8
+1987,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9790,2,5720.6
+1988,churn proc 8,ok,5951,2,5726.6
+1989,churn fs 1,ok,31556,2,5758.1
+1990,ltstat,ok,137,1,5758.3
+1991,lockstat,ok,641,27,5758.9
+1992,free,ok,76,3,5759.0
+1993,spawn worker 32,ok,1766,2,5760.8
+1994,write /home/euro/lt-soak/f41 round-191,ok,207,1,5761.0
+1995,cat /home/euro/lt-soak/f41,ok,75,1,5761.0
+1996,truncate -s 8388608 /home/euro/lt-soak/big3,ok,993,1,5762.0
+1997,sha256sum /home/euro/lt-soak/big3,ok,1839,1,5763.9
+1998,rm /home/euro/lt-soak/big1,ok,155,1,5764.0
+1999,fetch 10.0.2.100,ok,625,4,5764.7
+2000,churn proc 8,ok,5591,2,5770.2
+2001,churn net 1,ok,409,2,5770.7
+2002,ltstat,ok,68,1,5770.7
+2003,spawn worker 32,ok,1741,2,5772.5
+2004,write /home/euro/lt-soak/f42 round-192,ok,582,1,5773.1
+2005,cat /home/euro/lt-soak/f42,ok,65,1,5773.1
+2006,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1246,1,5774.4
+2007,sha256sum /home/euro/lt-soak/big0,ok,1847,1,5776.2
+2008,rm /home/euro/lt-soak/big2,ok,144,1,5776.4
+2009,fetch 10.0.2.100,ok,495,4,5776.9
+2010,churn proc 4,ok,3568,2,5780.4
+2011,churn proc 8,ok,6177,2,5786.6
+2012,ltstat,ok,138,1,5786.7
+2013,spawn worker 32,ok,1813,2,5788.6
+2014,write /home/euro/lt-soak/f43 round-193,ok,630,1,5789.2
+2015,cat /home/euro/lt-soak/f43,ok,73,1,5789.3
+2016,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1244,1,5790.5
+2017,sha256sum /home/euro/lt-soak/big1,ok,1926,1,5792.4
+2018,rm /home/euro/lt-soak/big3,ok,220,1,5792.6
+2019,fetch 10.0.2.100,ok,504,4,5793.2
+2020,churn proc 8,ok,6022,2,5799.2
+2021,churn fs 1,ok,33837,2,5833.0
+2022,ltstat,ok,2762,1,5835.8
+2023,spawn worker 32,ok,1822,2,5837.6
+2024,write /home/euro/lt-soak/f44 round-194,ok,189,1,5837.8
+2025,cat /home/euro/lt-soak/f44,ok,65,1,5837.9
+2026,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1287,1,5839.1
+2027,sha256sum /home/euro/lt-soak/big2,ok,1861,1,5841.0
+2028,rm /home/euro/lt-soak/big0,ok,270,1,5841.3
+2029,fetch 10.0.2.100,ok,504,4,5841.8
+2030,churn proc 8,ok,6222,2,5848.0
+2031,churn net 1,ok,369,2,5848.4
+2032,ltstat,ok,68,1,5848.4
+2033,spawn worker 32,ok,1854,2,5850.3
+2034,write /home/euro/lt-soak/f45 round-195,ok,639,1,5850.9
+2035,cat /home/euro/lt-soak/f45,ok,126,1,5851.1
+2036,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1263,1,5852.3
+2037,sha256sum /home/euro/lt-soak/big3,ok,1849,1,5854.2
+2038,rm /home/euro/lt-soak/big1,ok,143,1,5854.3
+2039,fetch 10.0.2.100,ok,498,4,5854.8
+2040,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9697,2,5864.5
+2041,churn proc 4,ok,3489,2,5868.0
+2042,churn proc 8,ok,6208,2,5874.2
+2043,ltstat,ok,79,1,5874.3
+2044,spawn worker 32,ok,1744,2,5876.0
+2045,write /home/euro/lt-soak/f46 round-196,ok,214,1,5876.3
+2046,cat /home/euro/lt-soak/f46,ok,66,1,5876.3
+2047,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1203,1,5877.5
+2048,sha256sum /home/euro/lt-soak/big0,ok,1786,1,5879.3
+2049,rm /home/euro/lt-soak/big2,ok,209,1,5879.5
+2050,fetch 10.0.2.100,ok,438,4,5880.0
+2051,churn proc 8,ok,6008,2,5886.0
+2052,churn fs 1,ok,34648,2,5920.6
+2053,ltstat,ok,150,1,5920.8
+2054,spawn worker 32,ok,1793,2,5922.6
+2055,write /home/euro/lt-soak/f47 round-197,ok,156,1,5922.7
+2056,cat /home/euro/lt-soak/f47,ok,66,1,5922.8
+2057,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1209,1,5924.0
+2058,sha256sum /home/euro/lt-soak/big1,ok,1854,1,5925.8
+2059,rm /home/euro/lt-soak/big3,ok,75,1,5925.9
+2060,fetch 10.0.2.100,ok,485,4,5926.4
+2061,churn proc 8,ok,6522,2,5932.9
+2062,churn net 1,ok,481,2,5933.4
+2063,ltstat,ok,77,1,5933.5
+2064,spawn worker 32,ok,1760,2,5935.3
+2065,write /home/euro/lt-soak/f48 round-198,ok,633,1,5935.9
+2066,cat /home/euro/lt-soak/f48,ok,75,1,5936.0
+2067,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1251,1,5937.2
+2068,sha256sum /home/euro/lt-soak/big2,ok,1842,1,5939.1
+2069,rm /home/euro/lt-soak/big0,ok,143,1,5939.2
+2070,fetch 10.0.2.100,ok,635,4,5939.8
+2071,churn proc 4,ok,3558,2,5943.4
+2072,churn proc 8,ok,6056,2,5949.5
+2073,ltstat,ok,138,1,5949.6
+2074,spawn worker 32,ok,1782,2,5951.4
+2075,write /home/euro/lt-soak/f49 round-199,ok,570,1,5951.9
+2076,cat /home/euro/lt-soak/f49,ok,65,1,5952.0
+2077,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1224,1,5953.2
+2078,sha256sum /home/euro/lt-soak/big3,ok,1825,1,5955.1
+2079,rm /home/euro/lt-soak/big1,ok,79,1,5955.1
+2080,fetch 10.0.2.100,ok,685,4,5955.8
+2081,churn proc 8,ok,6192,2,5962.0
+2082,churn fs 1,ok,34456,2,5996.5
+2083,ltstat,ok,141,1,5996.6
+2084,spawn worker 32,ok,1810,2,5998.4
+2085,write /home/euro/lt-soak/f0 round-200,ok,201,1,5998.6
+2086,cat /home/euro/lt-soak/f0,ok,64,1,5998.7
+2087,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1207,1,5999.9
+2088,sha256sum /home/euro/lt-soak/big0,ok,1797,1,6001.7
+2089,rm /home/euro/lt-soak/big2,ok,214,1,6001.9
+2090,fetch 10.0.2.100,ok,504,4,6002.4
+2091,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9909,2,6012.3
+2092,churn proc 8,ok,6364,2,6018.7
+2093,churn net 1,ok,550,2,6019.2
+2094,ltstat,ok,148,1,6019.4
+2095,lockstat,ok,641,27,6020.0
+2096,free,ok,66,3,6020.1
+2097,spawn worker 32,ok,1916,2,6022.0
+2098,write /home/euro/lt-soak/f1 round-201,ok,147,1,6022.2
+2099,cat /home/euro/lt-soak/f1,ok,146,1,6022.3
+2100,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1183,1,6023.5
+2101,sha256sum /home/euro/lt-soak/big1,ok,1815,1,6025.3
+2102,rm /home/euro/lt-soak/big3,ok,149,1,6025.5
+2103,fetch 10.0.2.100,ok,488,4,6025.9
+2104,churn proc 4,ok,3576,2,6029.5
+2105,churn proc 8,ok,6147,2,6035.7
+2106,ltstat,ok,320,1,6036.0
+2107,spawn worker 32,ok,1819,2,6037.8
+2108,write /home/euro/lt-soak/f2 round-202,ok,634,1,6038.4
+2109,cat /home/euro/lt-soak/f2,ok,142,1,6038.6
+2110,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1143,1,6039.7
+2111,sha256sum /home/euro/lt-soak/big2,ok,1940,1,6041.7
+2112,rm /home/euro/lt-soak/big0,ok,215,1,6041.9
+2113,fetch 10.0.2.100,ok,504,4,6042.4
+2114,churn proc 8,ok,6541,2,6048.9
+2115,churn fs 1,ok,34320,2,6083.3
+2116,ltstat,ok,2711,1,6086.0
+2117,spawn worker 32,ok,1956,2,6087.9
+2118,write /home/euro/lt-soak/f3 round-203,ok,204,1,6088.1
+2119,cat /home/euro/lt-soak/f3,ok,66,1,6088.2
+2120,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1290,1,6089.5
+2121,sha256sum /home/euro/lt-soak/big3,ok,1725,1,6091.2
+2122,rm /home/euro/lt-soak/big1,ok,205,1,6091.4
+2123,fetch 10.0.2.100,ok,503,4,6091.9
+2124,churn proc 8,ok,5731,2,6097.7
+2125,churn net 1,ok,471,2,6098.1
+2126,ltstat,ok,77,1,6098.2
+2127,spawn worker 32,ok,1880,2,6100.1
+2128,write /home/euro/lt-soak/f4 round-204,ok,595,1,6100.7
+2129,cat /home/euro/lt-soak/f4,ok,133,1,6100.8
+2130,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1196,1,6102.0
+2131,sha256sum /home/euro/lt-soak/big0,ok,1758,1,6103.8
+2132,rm /home/euro/lt-soak/big2,ok,153,1,6103.9
+2133,fetch 10.0.2.100,ok,555,4,6104.5
+2134,churn proc 4,ok,3488,2,6108.0
+2135,churn proc 8,ok,5936,2,6113.9
+2136,ltstat,ok,200,1,6114.1
+2137,spawn worker 32,ok,1801,2,6115.9
+2138,write /home/euro/lt-soak/f5 round-205,ok,589,1,6116.5
+2139,cat /home/euro/lt-soak/f5,ok,134,1,6116.6
+2140,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1193,1,6117.8
+2141,sha256sum /home/euro/lt-soak/big1,ok,1773,1,6119.6
+2142,rm /home/euro/lt-soak/big3,ok,142,1,6119.7
+2143,fetch 10.0.2.100,ok,505,4,6120.2
+2144,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9841,2,6130.1
+2145,churn proc 8,ok,5810,2,6135.9
+2146,churn fs 1,ok,32987,2,6168.9
+2147,ltstat,ok,159,1,6169.0
+2148,spawn worker 32,ok,1834,2,6170.9
+2149,write /home/euro/lt-soak/f6 round-206,ok,208,1,6171.1
+2150,cat /home/euro/lt-soak/f6,ok,75,1,6171.2
+2151,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1201,1,6172.4
+2152,sha256sum /home/euro/lt-soak/big2,ok,1907,1,6174.3
+2153,rm /home/euro/lt-soak/big0,ok,201,1,6174.5
+2154,fetch 10.0.2.100,ok,503,4,6175.0
+2155,churn proc 8,ok,6101,2,6181.1
+2156,churn net 1,ok,429,2,6181.5
+2157,ltstat,ok,110,1,6181.6
+2158,spawn worker 32,ok,1811,2,6183.4
+2159,write /home/euro/lt-soak/f7 round-207,ok,587,1,6184.0
+2160,cat /home/euro/lt-soak/f7,ok,66,1,6184.1
+2161,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1205,1,6185.3
+2162,sha256sum /home/euro/lt-soak/big3,ok,1823,1,6187.1
+2163,rm /home/euro/lt-soak/big1,ok,140,1,6187.3
+2164,fetch 10.0.2.100,ok,565,4,6187.8
+2165,churn proc 4,ok,3718,2,6191.5
+2166,churn proc 8,ok,6156,2,6197.7
+2167,ltstat,ok,138,1,6197.8
+2168,spawn worker 32,ok,1814,2,6199.7
+2169,write /home/euro/lt-soak/f8 round-208,ok,568,1,6200.2
+2170,cat /home/euro/lt-soak/f8,ok,64,1,6200.3
+2171,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1238,1,6201.5
+2172,sha256sum /home/euro/lt-soak/big0,ok,1851,1,6203.4
+2173,rm /home/euro/lt-soak/big2,ok,270,1,6203.6
+2174,fetch 10.0.2.100,ok,504,4,6204.2
+2175,churn proc 8,ok,6301,2,6210.5
+2176,churn fs 1,ok,33789,2,6244.2
+2177,ltstat,ok,138,1,6244.4
+2178,spawn worker 32,ok,1894,2,6246.3
+2179,write /home/euro/lt-soak/f9 round-209,ok,146,1,6246.4
+2180,cat /home/euro/lt-soak/f9,ok,136,1,6246.6
+2181,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1210,1,6247.8
+2182,sha256sum /home/euro/lt-soak/big1,ok,1773,1,6249.5
+2183,rm /home/euro/lt-soak/big3,ok,156,1,6249.7
+2184,fetch 10.0.2.100,ok,617,4,6250.3
+2185,churn proc 8,ok,6039,2,6256.4
+2186,churn net 1,ok,429,2,6256.8
+2187,ltstat,ok,140,1,6256.9
+2188,spawn worker 32,ok,1742,2,6258.7
+2189,write /home/euro/lt-soak/f10 round-210,ok,630,1,6259.3
+2190,cat /home/euro/lt-soak/f10,ok,73,1,6259.4
+2191,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1234,1,6260.6
+2192,sha256sum /home/euro/lt-soak/big2,ok,1843,1,6262.5
+2193,rm /home/euro/lt-soak/big0,ok,264,1,6262.7
+2194,fetch 10.0.2.100,ok,503,4,6263.2
+2195,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9651,2,6272.9
+2196,churn proc 4,ok,3538,2,6276.4
+2197,churn proc 8,ok,6026,2,6282.4
+2198,ltstat,ok,138,1,6282.6
+2199,lockstat,ok,650,27,6283.2
+2200,free,ok,66,3,6283.3
+2201,spawn worker 32,ok,1743,2,6285.0
+2202,write /home/euro/lt-soak/f11 round-211,ok,282,1,6285.3
+2203,cat /home/euro/lt-soak/f11,ok,134,1,6285.5
+2204,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1133,1,6286.6
+2205,sha256sum /home/euro/lt-soak/big3,ok,1896,1,6288.5
+2206,rm /home/euro/lt-soak/big1,ok,159,1,6288.6
+2207,fetch 10.0.2.100,ok,565,4,6289.2
+2208,churn proc 8,ok,5860,2,6295.1
+2209,churn fs 1,ok,33990,2,6329.1
+2210,ltstat,ok,218,1,6329.3
+2211,spawn worker 32,ok,1893,2,6331.2
+2212,write /home/euro/lt-soak/f12 round-212,ok,216,1,6331.4
+2213,cat /home/euro/lt-soak/f12,ok,66,1,6331.5
+2214,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1220,1,6332.7
+2215,sha256sum /home/euro/lt-soak/big0,ok,1848,1,6334.5
+2216,rm /home/euro/lt-soak/big2,ok,210,1,6334.7
+2217,fetch 10.0.2.100,ok,504,4,6335.2
+2218,churn proc 8,ok,6233,2,6341.5
+2219,churn net 1,ok,418,2,6341.9
+2220,ltstat,ok,68,1,6342.0
+2221,spawn worker 32,ok,1804,2,6343.8
+2222,write /home/euro/lt-soak/f13 round-213,ok,3183,1,6347.0
+2223,cat /home/euro/lt-soak/f13,ok,143,1,6347.1
+2224,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1143,1,6348.2
+2225,sha256sum /home/euro/lt-soak/big1,ok,1700,1,6349.9
+2226,rm /home/euro/lt-soak/big3,ok,144,1,6350.1
+2227,fetch 10.0.2.100,ok,495,4,6350.6
+2228,churn proc 4,ok,3609,2,6354.2
+2229,churn proc 8,ok,5925,2,6360.1
+2230,ltstat,ok,148,1,6360.3
+2231,spawn worker 32,ok,1834,2,6362.1
+2232,write /home/euro/lt-soak/f14 round-214,ok,579,1,6362.7
+2233,cat /home/euro/lt-soak/f14,ok,203,1,6362.9
+2234,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1138,1,6364.0
+2235,sha256sum /home/euro/lt-soak/big2,ok,1791,1,6365.8
+2236,rm /home/euro/lt-soak/big0,ok,199,1,6366.0
+2237,fetch 10.0.2.100,ok,565,4,6366.6
+2238,churn proc 8,ok,6361,2,6372.9
+2239,churn fs 1,ok,34117,2,6407.1
+2240,ltstat,ok,140,1,6407.2
+2241,spawn worker 32,ok,1760,2,6409.0
+2242,write /home/euro/lt-soak/f15 round-215,ok,259,1,6409.2
+2243,cat /home/euro/lt-soak/f15,ok,77,1,6409.3
+2244,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1210,1,6410.5
+2245,sha256sum /home/euro/lt-soak/big3,ok,1737,1,6412.3
+2246,rm /home/euro/lt-soak/big1,ok,151,1,6412.4
+2247,fetch 10.0.2.100,ok,566,4,6413.0
+2248,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9809,2,6422.8
+2249,churn proc 8,ok,6181,2,6429.0
+2250,churn net 1,ok,430,2,6429.4
+2251,ltstat,ok,68,1,6429.5
+2252,spawn worker 32,ok,1764,2,6431.2
+2253,write /home/euro/lt-soak/f16 round-216,ok,227,1,6431.5
+2254,cat /home/euro/lt-soak/f16,ok,65,1,6431.5
+2255,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1133,1,6432.7
+2256,sha256sum /home/euro/lt-soak/big0,ok,1844,1,6434.5
+2257,rm /home/euro/lt-soak/big2,ok,71,1,6434.6
+2258,fetch 10.0.2.100,ok,565,4,6435.1
+2259,churn proc 4,ok,3467,2,6438.6
+2260,churn proc 8,ok,6368,2,6445.0
+2261,ltstat,ok,87,1,6445.1
+2262,spawn worker 32,ok,1804,2,6446.9
+2263,write /home/euro/lt-soak/f17 round-217,ok,637,1,6447.5
+2264,cat /home/euro/lt-soak/f17,ok,66,1,6447.6
+2265,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1202,1,6448.8
+2266,sha256sum /home/euro/lt-soak/big1,ok,1785,1,6450.6
+2267,rm /home/euro/lt-soak/big3,ok,70,1,6450.6
+2268,fetch 10.0.2.100,ok,595,4,6451.2
+2269,churn proc 8,ok,5861,2,6457.1
+2270,churn fs 1,ok,32960,2,6490.0
+2271,ltstat,ok,135,1,6490.2
+2272,spawn worker 32,ok,1781,2,6492.0
+2273,write /home/euro/lt-soak/f18 round-218,ok,249,1,6492.2
+2274,cat /home/euro/lt-soak/f18,ok,67,1,6492.3
+2275,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1219,1,6493.5
+2276,sha256sum /home/euro/lt-soak/big2,ok,1825,1,6495.3
+2277,rm /home/euro/lt-soak/big0,ok,154,1,6495.5
+2278,fetch 10.0.2.100,ok,495,4,6496.0
+2279,churn proc 8,ok,6302,2,6502.3
+2280,churn net 1,ok,419,2,6502.7
+2281,ltstat,ok,139,1,6502.8
+2282,spawn worker 32,ok,1832,2,6504.7
+2283,write /home/euro/lt-soak/f19 round-219,ok,559,1,6505.2
+2284,cat /home/euro/lt-soak/f19,ok,66,1,6505.3
+2285,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1152,1,6506.4
+2286,sha256sum /home/euro/lt-soak/big3,ok,1844,1,6508.3
+2287,rm /home/euro/lt-soak/big1,ok,214,1,6508.5
+2288,fetch 10.0.2.100,ok,552,4,6509.1
+2289,churn proc 4,ok,3620,2,6512.7
+2290,churn proc 8,ok,6185,2,6518.9
+2291,ltstat,ok,148,1,6519.0
+2292,spawn worker 32,ok,1924,2,6520.9
+2293,write /home/euro/lt-soak/f20 round-220,ok,574,1,6521.5
+2294,cat /home/euro/lt-soak/f20,ok,69,1,6521.6
+2295,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1127,1,6522.7
+2296,sha256sum /home/euro/lt-soak/big0,ok,1728,1,6524.4
+2297,rm /home/euro/lt-soak/big2,ok,72,1,6524.5
+2298,fetch 10.0.2.100,ok,495,4,6525.0
+2299,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9783,2,6534.8
+2300,churn proc 8,ok,6329,2,6541.1
+2301,churn fs 1,ok,34540,2,6575.7
+2302,ltstat,ok,138,1,6575.8
+2303,lockstat,ok,630,27,6576.4
+2304,free,ok,76,3,6576.5
+2305,spawn worker 32,ok,1675,2,6578.2
+2306,write /home/euro/lt-soak/f21 round-221,ok,200,1,6578.4
+2307,cat /home/euro/lt-soak/f21,ok,143,1,6578.5
+2308,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1281,1,6579.8
+2309,sha256sum /home/euro/lt-soak/big1,ok,1876,1,6581.7
+2310,rm /home/euro/lt-soak/big3,ok,140,1,6581.8
+2311,fetch 10.0.2.100,ok,436,4,6582.3
+2312,churn proc 8,ok,6229,2,6588.5
+2313,churn net 1,ok,428,2,6588.9
+2314,ltstat,ok,150,1,6589.1
+2315,spawn worker 32,ok,1734,2,6590.8
+2316,write /home/euro/lt-soak/f22 round-222,ok,676,1,6591.5
+2317,cat /home/euro/lt-soak/f22,ok,77,1,6591.6
+2318,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1203,1,6592.8
+2319,sha256sum /home/euro/lt-soak/big2,ok,1804,1,6594.6
+2320,rm /home/euro/lt-soak/big0,ok,71,1,6594.6
+2321,fetch 10.0.2.100,ok,484,4,6595.1
+2322,churn proc 4,ok,3608,2,6598.7
+2323,churn proc 8,ok,6378,2,6605.1
+2324,ltstat,ok,2680,1,6607.8
+2325,spawn worker 32,ok,1834,2,6609.6
+2326,write /home/euro/lt-soak/f23 round-223,ok,577,1,6610.2
+2327,cat /home/euro/lt-soak/f23,ok,58,1,6610.3
+2328,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1222,1,6611.5
+2329,sha256sum /home/euro/lt-soak/big3,ok,1783,1,6613.3
+2330,rm /home/euro/lt-soak/big1,ok,141,1,6613.4
+2331,fetch 10.0.2.100,ok,554,4,6614.0
+2332,churn proc 8,ok,6302,2,6620.3
+2333,churn fs 1,ok,33677,2,6654.0
+2334,ltstat,ok,151,1,6654.1
+2335,spawn worker 32,ok,1863,2,6656.0
+2336,write /home/euro/lt-soak/f24 round-224,ok,227,1,6656.2
+2337,cat /home/euro/lt-soak/f24,ok,65,1,6656.3
+2338,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1213,1,6657.5
+2339,sha256sum /home/euro/lt-soak/big0,ok,1843,1,6659.3
+2340,rm /home/euro/lt-soak/big2,ok,192,1,6659.5
+2341,fetch 10.0.2.100,ok,506,4,6660.0
+2342,churn proc 8,ok,7260,2,6667.3
+2343,churn net 1,ok,428,2,6667.7
+2344,ltstat,ok,112,1,6667.8
+2345,spawn worker 32,ok,1748,2,6669.6
+2346,write /home/euro/lt-soak/f25 round-225,ok,651,1,6670.2
+2347,cat /home/euro/lt-soak/f25,ok,65,1,6670.3
+2348,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1243,1,6671.5
+2349,sha256sum /home/euro/lt-soak/big1,ok,1900,1,6673.4
+2350,rm /home/euro/lt-soak/big3,ok,145,1,6673.6
+2351,fetch 10.0.2.100,ok,514,4,6674.1
+2352,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9737,2,6683.8
+2353,churn proc 4,ok,3933,2,6687.8
+2354,churn proc 8,ok,6497,2,6694.3
+2355,ltstat,ok,138,1,6694.4
+2356,spawn worker 32,ok,1674,2,6696.1
+2357,write /home/euro/lt-soak/f26 round-226,ok,219,1,6696.3
+2358,cat /home/euro/lt-soak/f26,ok,64,1,6696.4
+2359,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1143,1,6697.5
+2360,sha256sum /home/euro/lt-soak/big2,ok,1854,1,6699.4
+2361,rm /home/euro/lt-soak/big0,ok,140,1,6699.5
+2362,fetch 10.0.2.100,ok,565,4,6700.1
+2363,churn proc 8,ok,7762,2,6707.8
+2364,churn fs 1,ok,33770,2,6741.6
+2365,ltstat,ok,428,1,6742.0
+2366,spawn worker 32,ok,1673,2,6743.7
+2367,write /home/euro/lt-soak/f27 round-227,ok,216,1,6743.9
+2368,cat /home/euro/lt-soak/f27,ok,66,1,6744.0
+2369,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1353,1,6745.3
+2370,sha256sum /home/euro/lt-soak/big3,ok,1914,1,6747.3
+2371,rm /home/euro/lt-soak/big1,ok,205,1,6747.5
+2372,fetch 10.0.2.100,ok,550,4,6748.0
+2373,churn proc 8,ok,10647,2,6758.7
+2374,churn net 1,ok,420,2,6759.1
+2375,ltstat,ok,147,1,6759.2
+2376,spawn worker 32,ok,1805,2,6761.0
+2377,write /home/euro/lt-soak/f28 round-228,ok,661,1,6761.7
+2378,cat /home/euro/lt-soak/f28,ok,80,1,6761.8
+2379,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1214,1,6763.0
+2380,sha256sum /home/euro/lt-soak/big0,ok,1775,1,6764.8
+2381,rm /home/euro/lt-soak/big2,ok,79,1,6764.8
+2382,fetch 10.0.2.100,ok,485,4,6765.3
+2383,churn proc 4,ok,3708,2,6769.0
+2384,churn proc 8,ok,6146,2,6775.2
+2385,ltstat,ok,148,1,6775.3
+2386,spawn worker 32,ok,1682,2,6777.0
+2387,write /home/euro/lt-soak/f29 round-229,ok,570,1,6777.6
+2388,cat /home/euro/lt-soak/f29,ok,65,1,6777.7
+2389,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1213,1,6778.9
+2390,sha256sum /home/euro/lt-soak/big1,ok,1781,1,6780.6
+2391,rm /home/euro/lt-soak/big3,ok,196,1,6780.8
+2392,fetch 10.0.2.100,ok,533,4,6781.4
+2393,churn proc 8,ok,5951,2,6787.3
+2394,churn fs 1,ok,32277,2,6819.6
+2395,ltstat,ok,138,1,6819.7
+2396,spawn worker 32,ok,1842,2,6821.6
+2397,write /home/euro/lt-soak/f30 round-230,ok,217,1,6821.8
+2398,cat /home/euro/lt-soak/f30,ok,67,1,6821.9
+2399,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1194,1,6823.1
+2400,sha256sum /home/euro/lt-soak/big2,ok,1835,1,6824.9
+2401,rm /home/euro/lt-soak/big0,ok,78,1,6825.0
+2402,fetch 10.0.2.100,ok,495,4,6825.5
+2403,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9804,2,6835.3
+2404,churn proc 8,ok,5998,2,6841.3
+2405,churn net 1,ok,500,2,6841.8
+2406,ltstat,ok,78,1,6841.9
+2407,lockstat,ok,620,27,6842.5
+2408,free,ok,67,3,6842.6
+2409,spawn worker 32,ok,1734,2,6844.3
+2410,write /home/euro/lt-soak/f31 round-231,ok,219,1,6844.5
+2411,cat /home/euro/lt-soak/f31,ok,65,1,6844.6
+2412,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1143,1,6845.7
+2413,sha256sum /home/euro/lt-soak/big3,ok,1850,1,6847.6
+2414,rm /home/euro/lt-soak/big1,ok,145,1,6847.7
+2415,fetch 10.0.2.100,ok,570,4,6848.3
+2416,churn proc 4,ok,3463,2,6851.7
+2417,churn proc 8,ok,6227,2,6858.0
+2418,ltstat,ok,2781,1,6860.8
+2419,spawn worker 32,ok,1854,2,6862.6
+2420,write /home/euro/lt-soak/f32 round-232,ok,630,1,6863.2
+2421,cat /home/euro/lt-soak/f32,ok,73,1,6863.3
+2422,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1271,1,6864.6
+2423,sha256sum /home/euro/lt-soak/big0,ok,1778,1,6866.4
+2424,rm /home/euro/lt-soak/big2,ok,79,1,6866.4
+2425,fetch 10.0.2.100,ok,495,4,6866.9
+2426,churn proc 8,ok,7674,2,6874.6
+2427,churn fs 1,ok,32155,2,6906.8
+2428,ltstat,ok,141,1,6906.9
+2429,spawn worker 32,ok,1800,2,6908.7
+2430,write /home/euro/lt-soak/f33 round-233,ok,217,1,6908.9
+2431,cat /home/euro/lt-soak/f33,ok,67,1,6909.0
+2432,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1197,1,6910.2
+2433,sha256sum /home/euro/lt-soak/big1,ok,1816,1,6912.0
+2434,rm /home/euro/lt-soak/big3,ok,144,1,6912.2
+2435,fetch 10.0.2.100,ok,489,4,6912.6
+2436,churn proc 8,ok,5827,2,6918.5
+2437,churn net 1,ok,409,2,6918.9
+2438,ltstat,ok,78,1,6919.0
+2439,spawn worker 32,ok,1744,2,6920.7
+2440,write /home/euro/lt-soak/f34 round-234,ok,672,1,6921.4
+2441,cat /home/euro/lt-soak/f34,ok,141,1,6921.5
+2442,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1202,1,6922.7
+2443,sha256sum /home/euro/lt-soak/big2,ok,1777,1,6924.5
+2444,rm /home/euro/lt-soak/big0,ok,148,1,6924.7
+2445,fetch 10.0.2.100,ok,500,4,6925.2
+2446,churn proc 4,ok,3703,2,6928.9
+2447,churn proc 8,ok,6026,2,6934.9
+2448,ltstat,ok,201,1,6935.1
+2449,spawn worker 32,ok,1741,2,6936.8
+2450,write /home/euro/lt-soak/f35 round-235,ok,572,1,6937.4
+2451,cat /home/euro/lt-soak/f35,ok,151,1,6937.6
+2452,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1213,1,6938.8
+2453,sha256sum /home/euro/lt-soak/big3,ok,1773,1,6940.5
+2454,rm /home/euro/lt-soak/big1,ok,194,1,6940.7
+2455,fetch 10.0.2.100,ok,493,4,6941.2
+2456,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9814,2,6951.0
+2457,churn proc 8,ok,5636,2,6956.7
+2458,churn fs 1,ok,31737,2,6988.4
+2459,ltstat,ok,149,1,6988.6
+2460,spawn worker 32,ok,1670,2,6990.2
+2461,write /home/euro/lt-soak/f36 round-236,ok,208,1,6990.4
+2462,cat /home/euro/lt-soak/f36,ok,78,1,6990.5
+2463,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1234,1,6991.8
+2464,sha256sum /home/euro/lt-soak/big0,ok,1779,1,6993.5
+2465,rm /home/euro/lt-soak/big2,ok,206,1,6993.7
+2466,fetch 10.0.2.100,ok,504,4,6994.2
+2467,churn proc 8,ok,7753,2,7002.0
+2468,churn net 1,ok,418,2,7002.4
+2469,ltstat,ok,70,1,7002.5
+2470,spawn worker 32,ok,1746,2,7004.2
+2471,write /home/euro/lt-soak/f37 round-237,ok,577,1,7004.8
+2472,cat /home/euro/lt-soak/f37,ok,65,1,7004.9
+2473,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1221,1,7006.1
+2474,sha256sum /home/euro/lt-soak/big1,ok,1838,1,7007.9
+2475,rm /home/euro/lt-soak/big3,ok,79,1,7008.0
+2476,fetch 10.0.2.100,ok,495,4,7008.5
+2477,churn proc 4,ok,3457,2,7012.0
+2478,churn proc 8,ok,5616,2,7017.6
+2479,ltstat,ok,138,1,7017.7
+2480,spawn worker 32,ok,1601,2,7019.3
+2481,write /home/euro/lt-soak/f38 round-238,ok,561,1,7019.9
+2482,cat /home/euro/lt-soak/f38,ok,74,1,7020.0
+2483,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1213,1,7021.2
+2484,sha256sum /home/euro/lt-soak/big2,ok,1786,1,7023.0
+2485,rm /home/euro/lt-soak/big0,ok,88,1,7023.1
+2486,fetch 10.0.2.100,ok,495,4,7023.6
+2487,churn proc 8,ok,5861,2,7029.4
+2488,churn fs 1,ok,33769,2,7063.2
+2489,ltstat,ok,428,1,7063.6
+2490,spawn worker 32,ok,1800,2,7065.4
+2491,write /home/euro/lt-soak/f39 round-239,ok,219,1,7065.6
+2492,cat /home/euro/lt-soak/f39,ok,66,1,7065.7
+2493,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1186,1,7066.9
+2494,sha256sum /home/euro/lt-soak/big3,ok,1780,1,7068.7
+2495,rm /home/euro/lt-soak/big1,ok,202,1,7068.9
+2496,fetch 10.0.2.100,ok,544,4,7069.4
+2497,churn proc 8,ok,8253,2,7077.7
+2498,churn net 1,ok,491,2,7078.2
+2499,ltstat,ok,77,1,7078.2
+2500,spawn worker 32,ok,1740,2,7080.0
+2501,write /home/euro/lt-soak/f40 round-240,ok,651,1,7080.6
+2502,cat /home/euro/lt-soak/f40,ok,65,1,7080.7
+2503,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1163,1,7081.9
+2504,sha256sum /home/euro/lt-soak/big0,ok,1842,1,7083.7
+2505,rm /home/euro/lt-soak/big2,ok,204,1,7083.9
+2506,fetch 10.0.2.100,ok,504,4,7084.4
+2507,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9611,2,7094.0
+2508,churn proc 4,ok,3377,2,7097.4
+2509,churn proc 8,ok,6136,2,7103.5
+2510,ltstat,ok,149,1,7103.7
+2511,lockstat,ok,633,27,7104.3
+2512,free,ok,74,3,7104.4
+2513,spawn worker 32,ok,1656,2,7106.1
+2514,write /home/euro/lt-soak/f41 round-241,ok,168,1,7106.2
+2515,cat /home/euro/lt-soak/f41,ok,115,1,7106.3
+2516,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1203,1,7107.5
+2517,sha256sum /home/euro/lt-soak/big1,ok,1846,1,7109.4
+2518,rm /home/euro/lt-soak/big3,ok,78,1,7109.5
+2519,fetch 10.0.2.100,ok,426,4,7109.9
+2520,churn proc 8,ok,5720,2,7115.6
+2521,churn fs 1,ok,32608,2,7148.2
+2522,ltstat,ok,2822,1,7151.0
+2523,spawn worker 32,ok,1781,2,7152.8
+2524,write /home/euro/lt-soak/f42 round-242,ok,207,1,7153.0
+2525,cat /home/euro/lt-soak/f42,ok,67,1,7153.1
+2526,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1207,1,7154.3
+2527,sha256sum /home/euro/lt-soak/big2,ok,1719,1,7156.0
+2528,rm /home/euro/lt-soak/big0,ok,192,1,7156.2
+2529,fetch 10.0.2.100,ok,449,4,7156.7
+2530,churn proc 8,ok,9810,2,7166.5
+2531,churn net 1,ok,430,2,7166.9
+2532,ltstat,ok,68,1,7167.0
+2533,spawn worker 32,ok,1674,2,7168.7
+2534,write /home/euro/lt-soak/f43 round-243,ok,653,1,7169.3
+2535,cat /home/euro/lt-soak/f43,ok,70,1,7169.4
+2536,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1280,1,7170.7
+2537,sha256sum /home/euro/lt-soak/big3,ok,1873,1,7172.5
+2538,rm /home/euro/lt-soak/big1,ok,216,1,7172.8
+2539,fetch 10.0.2.100,ok,498,4,7173.3
+2540,churn proc 4,ok,3694,2,7176.9
+2541,churn proc 8,ok,5756,2,7182.7
+2542,ltstat,ok,148,1,7182.9
+2543,spawn worker 32,ok,1672,2,7184.5
+2544,write /home/euro/lt-soak/f44 round-244,ok,632,1,7185.2
+2545,cat /home/euro/lt-soak/f44,ok,83,1,7185.2
+2546,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1215,1,7186.5
+2547,sha256sum /home/euro/lt-soak/big0,ok,1838,1,7188.3
+2548,rm /home/euro/lt-soak/big2,ok,146,1,7188.4
+2549,fetch 10.0.2.100,ok,495,4,7188.9
+2550,churn proc 8,ok,6122,2,7195.1
+2551,churn fs 1,ok,34787,2,7229.8
+2552,ltstat,ok,201,1,7230.1
+2553,spawn worker 32,ok,1901,2,7232.0
+2554,write /home/euro/lt-soak/f45 round-245,ok,198,1,7232.2
+2555,cat /home/euro/lt-soak/f45,ok,66,1,7232.2
+2556,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1288,1,7233.5
+2557,sha256sum /home/euro/lt-soak/big1,ok,1923,1,7235.4
+2558,rm /home/euro/lt-soak/big3,ok,138,1,7235.6
+2559,fetch 10.0.2.100,ok,515,4,7236.1
+2560,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9732,2,7245.8
+2561,churn proc 8,ok,5869,2,7251.7
+2562,churn net 1,ok,428,2,7252.1
+2563,ltstat,ok,69,1,7252.2
+2564,spawn worker 32,ok,1754,2,7253.9
+2565,write /home/euro/lt-soak/f46 round-246,ok,217,1,7254.2
+2566,cat /home/euro/lt-soak/f46,ok,65,1,7254.2
+2567,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1288,1,7255.5
+2568,sha256sum /home/euro/lt-soak/big2,ok,1776,1,7257.3
+2569,rm /home/euro/lt-soak/big0,ok,216,1,7257.5
+2570,fetch 10.0.2.100,ok,454,4,7258.0
+2571,churn proc 4,ok,3698,2,7261.7
+2572,churn proc 8,ok,10201,2,7271.9
+2573,ltstat,ok,138,1,7272.0
+2574,spawn worker 32,ok,1874,2,7273.9
+2575,write /home/euro/lt-soak/f47 round-247,ok,572,1,7274.4
+2576,cat /home/euro/lt-soak/f47,ok,71,1,7274.5
+2577,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1274,1,7275.8
+2578,sha256sum /home/euro/lt-soak/big3,ok,1915,1,7277.7
+2579,rm /home/euro/lt-soak/big1,ok,159,1,7277.9
+2580,fetch 10.0.2.100,ok,566,4,7278.4
+2581,churn proc 8,ok,6179,2,7284.6
+2582,churn fs 1,ok,33707,2,7318.3
+2583,ltstat,ok,150,1,7318.5
+2584,spawn worker 32,ok,1602,2,7320.1
+2585,write /home/euro/lt-soak/f48 round-248,ok,206,1,7320.3
+2586,cat /home/euro/lt-soak/f48,ok,67,1,7320.4
+2587,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1153,1,7321.5
+2588,sha256sum /home/euro/lt-soak/big0,ok,1662,1,7323.2
+2589,rm /home/euro/lt-soak/big2,ok,142,1,7323.3
+2590,fetch 10.0.2.100,ok,494,4,7323.8
+2591,churn proc 8,ok,6031,2,7329.8
+2592,churn net 1,ok,500,2,7330.3
+2593,ltstat,ok,67,1,7330.4
+2594,spawn worker 32,ok,2065,2,7332.5
+2595,write /home/euro/lt-soak/f49 round-249,ok,680,1,7333.2
+2596,cat /home/euro/lt-soak/f49,ok,73,1,7333.2
+2597,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1218,1,7334.4
+2598,sha256sum /home/euro/lt-soak/big1,ok,1690,1,7336.1
+2599,rm /home/euro/lt-soak/big3,ok,201,1,7336.3
+2600,fetch 10.0.2.100,ok,505,4,7336.8
+2601,churn proc 4,ok,3296,2,7340.1
+2602,churn proc 8,ok,5766,2,7345.9
+2603,ltstat,ok,148,1,7346.1
+2604,spawn worker 32,ok,1736,2,7347.8
+2605,write /home/euro/lt-soak/f0 round-250,ok,566,1,7348.4
+2606,cat /home/euro/lt-soak/f0,ok,65,1,7348.4
+2607,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1153,1,7349.6
+2608,sha256sum /home/euro/lt-soak/big2,ok,1760,1,7351.3
+2609,rm /home/euro/lt-soak/big0,ok,154,1,7351.5
+2610,fetch 10.0.2.100,ok,526,4,7352.0
+2611,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9659,2,7361.7
+2612,churn proc 8,ok,6353,2,7368.0
+2613,churn fs 1,ok,34187,2,7402.2
+2614,ltstat,ok,142,1,7402.4
+2615,lockstat,ok,626,27,7403.0
+2616,free,ok,80,3,7403.1
+2617,spawn worker 32,ok,1866,2,7404.9
+2618,write /home/euro/lt-soak/f1 round-251,ok,217,1,7405.2
+2619,cat /home/euro/lt-soak/f1,ok,65,1,7405.2
+2620,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1215,1,7406.4
+2621,sha256sum /home/euro/lt-soak/big3,ok,1912,1,7408.3
+2622,rm /home/euro/lt-soak/big1,ok,131,1,7408.5
+2623,fetch 10.0.2.100,ok,625,4,7409.1
+2624,churn proc 8,ok,8503,2,7417.6
+2625,churn net 1,ok,429,2,7418.0
+2626,ltstat,ok,138,1,7418.2
+2627,spawn worker 32,ok,1804,2,7420.0
+2628,write /home/euro/lt-soak/f2 round-252,ok,3113,1,7423.1
+2629,cat /home/euro/lt-soak/f2,ok,123,1,7423.2
+2630,truncate -s 8388608 /home/euro/lt-soak/big0,ok,1258,1,7424.5
+2631,sha256sum /home/euro/lt-soak/big0,ok,1857,1,7426.3
+2632,rm /home/euro/lt-soak/big2,ok,144,1,7426.5
+2633,fetch 10.0.2.100,ok,614,4,7427.1
+2634,churn proc 4,ok,3488,2,7430.6
+2635,churn proc 8,ok,6186,2,7436.8
+2636,ltstat,ok,208,1,7437.0
+2637,spawn worker 32,ok,1830,2,7438.8
+2638,write /home/euro/lt-soak/f3 round-253,ok,613,1,7439.4
+2639,cat /home/euro/lt-soak/f3,ok,73,1,7439.5
+2640,truncate -s 8388608 /home/euro/lt-soak/big1,ok,1344,1,7440.8
+2641,sha256sum /home/euro/lt-soak/big1,ok,1939,1,7442.8
+2642,rm /home/euro/lt-soak/big3,ok,197,1,7443.0
+2643,fetch 10.0.2.100,ok,503,4,7443.5
+2644,churn proc 8,ok,6475,2,7450.0
+2645,churn fs 1,ok,33315,2,7483.3
+2646,ltstat,ok,138,1,7483.4
+2647,spawn worker 32,ok,1663,2,7485.1
+2648,write /home/euro/lt-soak/f4 round-254,ok,157,1,7485.2
+2649,cat /home/euro/lt-soak/f4,ok,65,1,7485.3
+2650,truncate -s 8388608 /home/euro/lt-soak/big2,ok,1144,1,7486.4
+2651,sha256sum /home/euro/lt-soak/big2,ok,1768,1,7488.2
+2652,rm /home/euro/lt-soak/big0,ok,145,1,7488.4
+2653,fetch 10.0.2.100,ok,496,4,7488.9
+2654,churn proc 8,ok,7803,2,7496.7
+2655,churn net 1,ok,420,2,7497.1
+2656,ltstat,ok,78,1,7497.2
+2657,spawn worker 32,ok,1743,2,7498.9
+2658,write /home/euro/lt-soak/f5 round-255,ok,628,1,7499.5
+2659,cat /home/euro/lt-soak/f5,ok,66,1,7499.6
+2660,truncate -s 8388608 /home/euro/lt-soak/big3,ok,1223,1,7500.8
+2661,sha256sum /home/euro/lt-soak/big3,ok,1822,1,7502.6
+2662,rm /home/euro/lt-soak/big1,ok,203,1,7502.9
+2663,fetch 10.0.2.100,ok,504,4,7503.4
+2664,wget 10.0.2.101 /home/euro/lt-soak/dl.bin,ok,9681,2,7513.0
+2665,churn proc 4,ok,3608,2,7516.6
+2666,churn proc 8,ok,5986,2,7522.6
+2667,ltstat,ok,148,1,7522.8
+2668,httpd status,ok,65,1,7522.8
+2669,scrub,ok,2616,8,7525.5
+2670,lockstat,ok,711,27,7526.2
+2671,ltstat,ok,139,1,7526.3
