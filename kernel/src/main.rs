@@ -3770,24 +3770,46 @@ fn main() -> Status {
     // shared high region that maps the NVMe MMIO @768 GiB everywhere).
     // Metal M2-3: skip when NVMe already carries the live ROOT (mounted at / via
     // the block cache) — mounting the same disk again here would be a double mount.
+    // NEVER format a disk that carries something (as for disk 1 above). This
+    // formatted every NVMe disk that did not mount as EuroFS: a release medium
+    // booted on a machine with someone else's system on its NVMe disk wrote an
+    // EuroFS over it, right after logging that the disk "stays intact". Only a
+    // disk whose first 4 KiB are all zero is formatted; anything else is left
+    // alone and said so, and a failed format is a log line, not a panic.
     if let Some(nb) = nvme::NvmeBlock::new().filter(|_| !nvme_root) {
         let nfs = match EuroFs::mount(nb, rtc::epoch()) {
             Ok(f) => {
                 serial_println!("[g2] EuroFS mounted on NVMe (existing)");
-                f
+                Some(f)
             }
             Err(_) => {
-                let f = EuroFs::format(nb, [0xC0; 16], rtc::epoch()).expect("EuroFS format NVMe");
-                serial_println!("[g2] EuroFS formatted on NVMe (installation)");
-                f
+                let mut head = [0u8; 4096];
+                let blank = nvme::read_sectors(0, &mut head) && head.iter().all(|&b| b == 0);
+                if !blank {
+                    serial_println!("[g2] NVMe disk carries unknown content: left untouched (no /nvme)");
+                    None
+                } else {
+                    match EuroFs::format(nb, [0xC0; 16], rtc::epoch()) {
+                        Ok(f) => {
+                            serial_println!("[g2] EuroFS formatted on NVMe (installation)");
+                            Some(f)
+                        }
+                        Err(e) => {
+                            serial_println!("[g2] NVMe format failed ({e:?}): no /nvme");
+                            None
+                        }
+                    }
+                }
             }
         };
-        vfs.mount("/nvme", alloc::boxed::Box::new(nfs));
-        use eurofs::FileSystem;
-        let _ = vfs.write_file("/nvme/op-nvme.txt", b"this file lives on the NVMe disk\n");
-        match vfs.read_file("/nvme/op-nvme.txt") {
-            Ok(d) => serial_println!("[g2] VFS routes /nvme → {} bytes from the NVMe disk ✓", d.len()),
-            Err(_) => serial_println!("[g2] /nvme routing FAILED"),
+        if let Some(nfs) = nfs {
+            vfs.mount("/nvme", alloc::boxed::Box::new(nfs));
+            use eurofs::FileSystem;
+            let _ = vfs.write_file("/nvme/op-nvme.txt", b"this file lives on the NVMe disk\n");
+            match vfs.read_file("/nvme/op-nvme.txt") {
+                Ok(d) => serial_println!("[g2] VFS routes /nvme → {} bytes from the NVMe disk ✓", d.len()),
+                Err(_) => serial_println!("[g2] /nvme routing FAILED"),
+            }
         }
     }
     // The first storage driver out of the kernel (storage.nvme=user): nvmed in
