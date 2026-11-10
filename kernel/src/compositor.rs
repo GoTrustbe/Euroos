@@ -215,6 +215,8 @@ pub fn draw_window(fb: &FrameBuffer, win: &Window) {
         crate::text::draw_px(fb, pillx + 25, pilly + 5, label, Color::SUCCESS, 11.5);
     }
 
+    crate::help::draw_title_button(fb, win); // T3-hook: the "?" help button
+
     // Hairline under the title bar.
     fb.fill_rect(win.x, win.y + TITLEBAR_H, win.w, 1, Color::BORDER);
 
