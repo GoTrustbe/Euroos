@@ -131,10 +131,16 @@ const MONTHS: [&str; 12] = [
     "September", "October", "November", "December",
 ];
 
-/// "HH:MM" (24-hour) from the RTC.
+/// The wall-clock time in the configured time zone (Settings › Date & time).
+/// The RTC itself is read as UTC.
+pub fn local_now() -> DateTime {
+    from_epoch(crate::prefs::local_time(epoch()))
+}
+
+/// The local time as the user wants it shown: "14:05" or "2:05 PM".
 pub fn clock_string() -> alloc::string::String {
-    let d = now();
-    alloc::format!("{:02}:{:02}", d.hour, d.min)
+    let d = local_now();
+    crate::prefs::format_clock(d.hour, d.min)
 }
 
 /// "Wed 2 June" — real date line for the status panel.
@@ -180,7 +186,7 @@ pub fn short_datetime(secs: u64) -> alloc::string::String {
 }
 
 pub fn date_string() -> alloc::string::String {
-    let d = now();
+    let d = local_now();
     let m = MONTHS[(d.month.max(1) as usize - 1).min(11)];
     alloc::format!("{} {} {}", DAYS[weekday(&d) as usize % 7], d.day, m)
 }

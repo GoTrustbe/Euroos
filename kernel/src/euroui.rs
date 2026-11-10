@@ -1,18 +1,49 @@
-//! EuroUI — a widget + layout layer on top of the compositor (Track 5).
+//! EuroUI — the widget toolkit on top of the compositor (Track 5).
 //!
-//! Apps build a screen out of REUSABLE widgets (heading, row, toggle, button,
-//! badge, …) in a vertical stack; EuroUI lays them out and draws them with the
-//! EDS tokens (spacing on the `eu` unit, the radius system, the security
-//! color language) — never with arbitrary values. This way all apps look consistent
-//! and no longer have to draw pixels by hand.
+//! Two layers, both drawn with the EDS tokens (spacing on the `eu` unit, the
+//! radius system, the security color language) and `text::draw_px`:
+//!
+//! - [`form`] — interactive forms: a scrollable column of labelled controls
+//!   (toggle, checkbox, dropdown, slider, text field, button, list) with
+//!   hit-testing, Tab focus and events. Settings screens are built from this;
+//!   start there for anything a user can change. [`draw`] holds the control
+//!   painters it uses.
+//! - [`Widget`] + [`draw_panel`] — the original static stack (heading, row,
+//!   badge, …) for read-only panels.
+//!
+//! The text scale ([`text_scale`]) applies to forms: one user setting grows the
+//! text and the controls of every panel built on them.
 
 use alloc::string::String;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::eds;
-use crate::font::{draw_string, draw_string_centered, text_width, CHAR_HEIGHT};
 use crate::graphics::{Color, FrameBuffer};
+use crate::text;
 
-/// A UI element. Apps assemble a `Vec<Widget>` (vertical stack).
+#[path = "uikit_draw.rs"]
+pub mod draw;
+#[path = "uikit_form.rs"]
+pub mod form;
+
+/// Smallest / largest / step of the text scale, in percent.
+pub const TEXT_SCALE_MIN: u32 = 90;
+pub const TEXT_SCALE_MAX: u32 = 130;
+pub const TEXT_SCALE_STEP: u32 = 10;
+
+static TEXT_SCALE: AtomicU32 = AtomicU32::new(100);
+
+/// The text scale of form-based panels, in percent (100 = default).
+pub fn text_scale() -> u32 {
+    TEXT_SCALE.load(Ordering::Relaxed)
+}
+
+/// Set the text scale; out-of-range values are clamped.
+pub fn set_text_scale(pct: u32) {
+    TEXT_SCALE.store(pct.clamp(TEXT_SCALE_MIN, TEXT_SCALE_MAX), Ordering::Relaxed);
+}
+
+/// A static UI element. Apps assemble a `Vec<Widget>` (vertical stack).
 #[derive(Clone)]
 pub enum Widget {
     /// Section header (large).
@@ -21,7 +52,8 @@ pub enum Widget {
     Caption(String),
     /// Label row with a value right-aligned (settings style).
     Row(String, String),
-    /// Label + on/off toggle (green = on).
+    /// Label + on/off toggle (green = on). Display only; use `form` for a
+    /// switch the user can operate.
     Toggle(String, bool),
     /// Button; `primary` = filled accent button, otherwise subtle.
     Button(String, bool),
@@ -35,6 +67,8 @@ pub enum Widget {
 
 /// Draw a vertical stack of widgets within the area (`x`,`y`,`w`).
 pub fn draw_panel(fb: &FrameBuffer, x: usize, y: usize, w: usize, widgets: &[Widget]) {
+    const BODY: f32 = 13.5;
+    const HEAD: f32 = 20.0;
     let pad = eds::eu(4);
     let cx = x + pad;
     let inner = w.saturating_sub(pad * 2);
@@ -45,56 +79,39 @@ pub fn draw_panel(fb: &FrameBuffer, x: usize, y: usize, w: usize, widgets: &[Wid
     for wdg in widgets {
         match wdg {
             Widget::Heading(t) => {
-                draw_string(fb, cx, cy, t, Color::INK, 2);
-                cy += CHAR_HEIGHT * 2 + eds::eu(2);
+                text::draw_px(fb, cx, cy, t, Color::INK, HEAD);
+                cy += text::line_height(HEAD) + eds::eu(2);
             }
             Widget::Caption(t) => {
-                draw_string(fb, cx, cy, t, Color::TEXT_SEC, 1);
-                cy += CHAR_HEIGHT + eds::eu(2);
+                text::draw_px(fb, cx, cy, t, Color::TEXT_SEC, BODY);
+                cy += text::line_height(BODY) + eds::eu(2);
             }
             Widget::Row(l, val) => {
                 fb.fill_rounded_rect(cx, cy, inner, rowh, eds::RADIUS_S, Color::CARD);
-                let ty = cy + (rowh - CHAR_HEIGHT) / 2;
-                draw_string(fb, cx + eds::eu(3), ty, l, Color::TEXT_SEC, 1);
-                let vw = text_width(val, 1);
-                draw_string(fb, cx + inner - vw - eds::eu(3), ty, val, Color::INK, 1);
+                let ty = draw::text_y(cy, rowh, BODY);
+                text::draw_px(fb, cx + eds::eu(3), ty, l, Color::TEXT_SEC, BODY);
+                let vw = text::width_px(val, BODY);
+                text::draw_px(fb, cx + inner.saturating_sub(vw + eds::eu(3)), ty, val, Color::INK, BODY);
                 cy += rowh + gap;
             }
             Widget::Toggle(l, on) => {
                 fb.fill_rounded_rect(cx, cy, inner, rowh, eds::RADIUS_S, Color::CARD);
-                let ty = cy + (rowh - CHAR_HEIGHT) / 2;
-                draw_string(fb, cx + eds::eu(3), ty, l, Color::TEXT_SEC, 1);
-                // Toggle on the right.
-                let pw = eds::eu(9);
-                let ph = eds::eu(4);
-                let px = cx + inner - pw - eds::eu(3);
-                let py = cy + (rowh - ph) / 2;
-                let track = if *on { eds::SEC_VERIFIED } else { Color::BORDER };
-                fb.fill_rounded_rect(px, py, pw, ph, ph / 2, track);
-                let knob = ph.saturating_sub(4);
-                let kx = if *on { px + pw - knob - 2 } else { px + 2 };
-                fb.fill_rounded_rect(kx, py + 2, knob, knob, knob / 2, Color::WHITE);
+                text::draw_px(fb, cx + eds::eu(3), draw::text_y(cy, rowh, BODY), l, Color::TEXT_SEC, BODY);
+                let (pw, ph) = (eds::eu(10), eds::eu(5) + 2);
+                let track = form::Rect::new(cx + inner.saturating_sub(pw + eds::eu(3)), cy + (rowh - ph) / 2, pw, ph);
+                draw::toggle(fb, track, *on, true);
                 cy += rowh + gap;
             }
             Widget::Button(t, primary) => {
                 let bh = eds::eu(9);
-                let (bg, fg) = if *primary {
-                    (Color::ACCENT, Color::WHITE)
-                } else {
-                    (Color::SURFACE, Color::INK)
-                };
-                fb.fill_rounded_rect(cx, cy, inner, bh, eds::RADIUS_M, bg);
-                if !*primary {
-                    fb.draw_border(cx, cy, inner, bh, 1, Color::BORDER);
-                }
-                draw_string_centered(fb, cx, inner, cy + (bh - CHAR_HEIGHT) / 2, t, fg, 1);
+                draw::button(fb, form::Rect::new(cx, cy, inner, bh), t, *primary, true, &form::metrics());
                 cy += bh + gap;
             }
             Widget::Badge(t, c) => {
-                let bw = text_width(t, 1) + eds::eu(4);
-                let bh = eds::eu(5);
+                let bw = text::width_px(t, BODY) + eds::eu(4);
+                let bh = eds::eu(6);
                 fb.fill_rounded_rect(cx, cy, bw, bh, bh / 2, Color::SURFACE);
-                draw_string(fb, cx + eds::eu(2), cy + (bh - CHAR_HEIGHT) / 2, t, *c, 1);
+                text::draw_px(fb, cx + eds::eu(2), draw::text_y(cy, bh, BODY), t, *c, BODY);
                 cy += bh + gap;
             }
             Widget::Divider => {

@@ -643,6 +643,10 @@ name = "europq"
 version = "0.1.0"
 
 [[package]]
+name = "europrefs"
+version = "0.1.0"
+
+[[package]]
 name = "europrint"
 version = "0.1.0"
 
@@ -933,6 +937,7 @@ dependencies = [
  "europkg",
  "europol",
  "europortal",
+ "europrefs",
  "europrint",
  "eurordp",
  "euroreken",

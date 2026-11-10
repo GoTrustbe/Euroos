@@ -98,6 +98,7 @@ europkg = { path = "../crates/europkg" }
 eurorepro = { path = "../crates/eurorepro" }
 eurogdb = { path = "../crates/eurogdb" }
 eurokeymap = { path = "../crates/eurokeymap" }
+europrefs = { path = "../crates/europrefs" }
 europortal = { path = "../crates/europortal" }
 euromime = { path = "../crates/euromime" }
 euroaccess = { path = "../crates/euroaccess" }

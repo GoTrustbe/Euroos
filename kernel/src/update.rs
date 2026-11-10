@@ -1071,3 +1071,42 @@ pub fn step(fs: &mut dyn FileSystem, now: u64) {
         }
     }
 }
+
+// ── Accessors for Settings › Updates (settings_ui.rs) ───────────────────────
+
+/// Summary of the last check ("up to date", "staged version N", …), if any ran.
+pub fn last_result() -> Option<String> {
+    LAST_RESULT.lock().clone()
+}
+/// The version that is verified and staged for the next restart (0 = none).
+pub fn staged_version() -> u64 {
+    STAGED_VERSION.load(core::sync::atomic::Ordering::Relaxed)
+}
+/// Is a check running right now?
+pub fn check_busy() -> bool {
+    JOB.lock().is_some()
+}
+/// Does the boot disk have A/B update slots (an installed system)?
+pub fn slots_present() -> bool {
+    esp_first().is_some()
+}
+/// "Check now": start the cooperative background check (the same job the
+/// periodic check runs; `step()` advances it). On a system without update slots,
+/// or with the `manual` policy, it only looks and never downloads an image.
+pub fn check_now(fs: &mut dyn FileSystem, now: u64) -> Result<(), &'static str> {
+    if check_busy() {
+        return Err("a check is already running.");
+    }
+    if crate::net::get().is_none() {
+        return Err("there is no network connection.");
+    }
+    let look_only = policy(fs) == Policy::Manual || !slots_present();
+    LAST_CHECK.store(now.max(1), core::sync::atomic::Ordering::Relaxed);
+    if start_job(now, look_only) {
+        *LAST_RESULT.lock() = Some("checking...".into());
+        Ok(())
+    } else {
+        *LAST_RESULT.lock() = Some("could not reach the update server".into());
+        Err("the update server could not be reached.")
+    }
+}

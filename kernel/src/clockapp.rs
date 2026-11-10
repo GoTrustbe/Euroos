@@ -23,9 +23,17 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     // ── Hero panel: local wall-clock time (RTC) ─────────────────────────────
     let hero_h = (bh * 38 / 100).clamp(120, 220);
     fb.fill_rect(bx, by, bw, hero_h, accent);
-    let dt = rtc::now();
-    let big = alloc::format!("{:02}:{:02}", dt.hour, dt.min);
-    let secs = alloc::format!(":{:02}", dt.sec);
+    let dt = rtc::local_now();
+    let hour24 = crate::prefs::hour24();
+    let (big, secs) = if hour24 {
+        (alloc::format!("{:02}:{:02}", dt.hour, dt.min), alloc::format!(":{:02}", dt.sec))
+    } else {
+        let h12 = match dt.hour % 12 {
+            0 => 12,
+            h => h,
+        };
+        (alloc::format!("{}:{:02}", h12, dt.min), alloc::format!(":{:02} {}", dt.sec, if dt.hour < 12 { "AM" } else { "PM" }))
+    };
     let bigsz = 76.0f32;
     let bw_px = text::width_px(&big, bigsz);
     let sw_px = text::width_px(&secs, 30.0);
@@ -67,7 +75,7 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         let utc = alloc::format!("UTC{}{}", if off_h >= 0 { "+" } else { "-" }, off_h.abs());
         text::draw_px(fb, cxp + 30, cyp + 32, &utc, Color::TEXT_DIM, 11.0);
         // Time, right-aligned, large.
-        let t = z.formatted(epoch, true);
+        let t = z.formatted(epoch, hour24);
         let tw = text::width_px(&t, 22.0);
         text::draw_px(fb, cxp + card_w.saturating_sub(tw + 16), cyp + 16, &t, accent, 22.0);
     }

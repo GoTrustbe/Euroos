@@ -1,0 +1,46 @@
+== wizard install (scripts/wizard-install-test.py public image, 4 GiB target)
+[wizard-test] RUN 1: live image + blank 4 GiB virtio target
+[wizard-test] PASS: live desktop up
+[wizard-test] PASS: install media read from own ESP
+[wizard-test] PASS: live boot did not write the blank disk (RAM root)
+[wizard-test] PASS: executor ran
+[wizard-test] PASS: install verified OK ([q1x3] ... OK)
+[wizard-test] PASS: euroid store on target verified
+[wizard-test] PASS: wizard reported completion
+[wizard-test] RUN 2: boot the installed disk alone
+[wizard-test] PASS: installed root mounted from disk
+[wizard-test] PASS: identity store loaded from disk
+[wizard-test] PASS: lockscreen reached
+[wizard-test] PASS: no unattended auto-login on the installed system
+[wizard-test] PASS: wrong password rejected
+[wizard-test] PASS: typed password signs in as the created user
+[wizard-test] PASS: desktop after login
+[wizard-test] 14/14 checks passed; screenshots + serial logs in wiz-v3/
+
+== boot 1 of the installed disk (settings changed in the panel, then QEMU quit = power cut)
+[euro] live root = the on-disk EuroFS on AHCI disk 0 (standalone SATA boot)
+[ps2] keyboard layout from /etc/keymap: us-qwerty
+[prefs] system settings applied: /etc/euroos/settings.conf (0 key(s), 0 broken line(s) skipped), time zone UTC, region nl, EuroGuard saved rules: 0 domain change(s), 0 app rule(s)
+[3e9] per-user disk quota (limit 2 blocks): within-quota-write=true, usage/limit=(2, 2), over-quota-REFUSED(+no-partial-file)=true, delete-credits→write-OK=true → OK (quota enforced on the live root FS) ✓
+[lock] login successful: tester (uid=1000)
+[prefs] session settings applied: /home/tester/.config/euroos/desktop.conf (0 key(s)), clock 24h, wallpaper euro, text scale 100%
+[set] computer name set to euro-desk7: Ok(Atomic)
+[set] time zone set to Europe/Brussels: Ok(Atomic)
+[set] EuroGuard: domain blocked via the settings panel: ads.trackertest.com (saved=true)
+[set] keyboard layout set to de-qwertz: Ok(Atomic)
+
+== boot 2 of the same disk (nothing changed, only read back)
+[euro] live root = the on-disk EuroFS on AHCI disk 0 (standalone SATA boot)
+[ps2] keyboard layout from /etc/keymap: de-qwertz
+[prefs] system settings applied: /etc/euroos/settings.conf (1 key(s), 0 broken line(s) skipped), time zone Europe/Brussels, region nl, EuroGuard saved rules: 1 domain change(s), 1 app rule(s)
+[3e9] per-user disk quota (limit 2 blocks): within-quota-write=true, usage/limit=(2, 2), over-quota-REFUSED(+no-partial-file)=true, delete-credits→write-OK=true → OK (quota enforced on the live root FS) ✓
+[lock] login successful: tester (uid=1000)
+[prefs] session settings applied: /home/tester/.config/euroos/desktop.conf (3 key(s)), clock 12h, wallpaper mist, text scale 110%
+
+== harness verdicts, boot 2
+[t2-gui] expect '[ps2] keyboard layout from /etc/keymap: de-qwertz': PASS
+[t2-gui] expect 'time zone Europe/Brussels': PASS
+[t2-gui] expect 'EuroGuard saved rules: 1 domain change(s), 1 app rule(s)': PASS
+[t2-gui] waitlog '[desktop] interactive loop started': ok
+[t2-gui] expect 'clock 12h, wallpaper mist, text scale 110%': PASS
+[t2-gui] done, 0 failed step(s)

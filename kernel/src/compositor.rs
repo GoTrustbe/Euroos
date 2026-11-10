@@ -450,6 +450,23 @@ fn draw_sidebar(fb: &FrameBuffer, h: usize) {
 /// compute it once and restore it with a memcpy on every later frame.
 static WALLPAPER_CACHE: spin::Mutex<alloc::vec::Vec<u32>> = spin::Mutex::new(alloc::vec::Vec::new());
 
+/// Which desktop background is drawn (Settings › Display): 0 = the EuroOS
+/// gradient with glow and grid, 1 = warm sand, 2 = blue mist. Light tones only:
+/// the dock and the status panel are drawn for a light background.
+static WALLPAPER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+pub fn wallpaper() -> usize {
+    WALLPAPER.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Choose the desktop background; takes effect at the next full redraw.
+pub fn set_wallpaper(style: usize) {
+    let style = style.min(2);
+    if WALLPAPER.swap(style, core::sync::atomic::Ordering::Relaxed) != style {
+        WALLPAPER_CACHE.lock().clear(); // recompute on the next frame
+    }
+}
+
 fn draw_wallpaper(fb: &FrameBuffer) {
     {
         let cache = WALLPAPER_CACHE.lock();
@@ -469,6 +486,18 @@ fn draw_wallpaper(fb: &FrameBuffer) {
 fn draw_wallpaper_compute(fb: &FrameBuffer) {
     let w = fb.width();
     let h = fb.height().max(1);
+    // The plain backgrounds: one calm vertical gradient, nothing else.
+    let style = wallpaper();
+    if style != 0 {
+        let (top, bottom) = match style {
+            1 => (Color::BACKGROUND, Color::PAPER_2),
+            _ => (Color::rgb(0xE6, 0xEC, 0xF4), Color::rgb(0xCB, 0xD7, 0xE6)),
+        };
+        for row in 0..h {
+            fb.fill_rect(0, row, w, 1, top.lerp(bottom, row as f32 / h as f32));
+        }
+        return;
+    }
     // Diagonal gradient: cool blue-grey (top-left) → warm sand-beige
     // (bottom-right). Slightly stronger contrast than the reference CSS so it is also
     // visible on a camera/screen dump, but still calm.

@@ -230,3 +230,10 @@ pub fn mono_advance(scale: usize) -> usize {
     let sf = f.as_scaled(PxScale::from(mono_px(scale)));
     sf.h_advance(f.glyph_id('M')) as usize
 }
+
+/// Does the UI font have a glyph for every character of `s`? Lets a caller fall
+/// back instead of drawing empty boxes (e.g. Greek or Cyrillic names).
+pub fn can_render(s: &str) -> bool {
+    let f = ui();
+    s.chars().all(|c| c == ' ' || f.glyph_id(c).0 != 0)
+}

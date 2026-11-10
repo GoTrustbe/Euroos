@@ -1,0 +1,29 @@
+# Boot 2 of the same disk: nothing is changed, only read back.
+expect [ps2] keyboard layout from /etc/keymap: de-qwertz
+expect time zone Europe/Brussels
+expect EuroGuard saved rules: 1 domain change(s), 1 app rule(s)
+wait 8
+type Sovereign-Pass-2026!
+key ret
+waitlog [desktop] interactive loop started 400
+expect clock 12h, wallpaper mist, text scale 110%
+wait 15
+shot B0-desktop.png
+clickat 45 349
+wait 6
+shot B1-system.png
+clickat 385 308
+wait 3
+shot B2-language.png
+clickat 385 348
+wait 3
+shot B3-datetime.png
+clickat 385 428
+wait 3
+shot B4-euroguard.png
+clickat 385 468
+wait 3
+shot B5-apps.png
+clickat 385 268
+wait 3
+shot B6-display.png
