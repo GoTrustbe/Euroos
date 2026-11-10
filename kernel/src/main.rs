@@ -5620,7 +5620,7 @@ fn main() -> Status {
                         if let Some((_rx, _ry, rw, rh)) = windows[i].restore.take() {
                             windows[i].w = rw;
                             windows[i].h = rh;
-                            windows[i].x = px.saturating_sub(rw / 2);
+                            windows[i].x = px.saturating_sub(rw / 2).max(SIDEBAR_W); // BUG-045: never over the dock
                             windows[i].y = py.saturating_sub(14);
                         }
                         drag_off = (px.saturating_sub(windows[i].x), py.saturating_sub(windows[i].y));
@@ -5816,7 +5816,10 @@ fn main() -> Status {
             }
         }
         if let Some(idx) = dragging {
-            let nx = px.saturating_sub(drag_off.0);
+            // BUG-045: a dragged window stops at the right edge of the dock. The dock is
+            // drawn under the windows but takes the clicks first, so a window over it hid
+            // tiles that still answered.
+            let nx = px.saturating_sub(drag_off.0).max(SIDEBAR_W);
             let ny = py.saturating_sub(drag_off.1);
             if nx != windows[idx].x || ny != windows[idx].y {
                 windows[idx].x = nx;
