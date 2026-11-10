@@ -246,4 +246,4 @@ self-test image keeps the grace period.
   up to 10 s without a link).
 - The inline bring-up of the self-test image and `net::late_bring_up` look for
   ARP answers before the configuration is saved and cannot see them
-  (BUG-043 in `docs/LOADTEST-TRACKER.md`).
+  (BUG-047 in `docs/LOADTEST-TRACKER.md`).

@@ -171,7 +171,7 @@ the code.
 | `soak` 1 h + 4 httpd clients on `feature/net-worker` (KVM, `-m 16G`) | 2026-11-05 | ✅ 1 663/1 663 ok | `proof/net-worker-2026-11/` | httpd 460 905 ok / 12 failed (first attempts), p99 123 ms, 302 014 / 0 during long commands (base 4 376 / 704, p99 9.5 s); heap +0.37 kB/min; tasks, files, frames, process pool flat; the base `52755fc` soak hit a ring-0 GPF after 47 min |
 | TCG matrix + `megaraid-proof.sh` on `feature/net-worker` | 2026-11-05 | ✅ 0 markers worse | `proof/net-worker-2026-11/` | 10 TCG boots (user/kernel/storage/combined, smp4/smp1, ± IOMMU) + 4 megaraid boots against `proof/bug032-2026-11/`: 0 worse, 0 changed; `[net-worker]` OK everywhere, `[lk]` 0 inversions |
 | `inbound` 4 clients 300 s + `net`, integrated (KVM) | 2026-11-05 | ✅ | `proof/integrate-net-mem-2026-11/` | user 4 165 ok, console max 693 ms; kernel 101 202 ok, max 380 ms; outbound 300/300 (user), 400/400 (kernel) |
-| BUG-040/037/039/041 on `feature/bug-gpf`: TCG matrix, megaraid, modern virtio, CI q35 matrix; R630 KVM soaks and boots | 2026-11-10 | ✅ 0 markers worse | `proof/bug-gpf-2026-11/` | 24 TCG boots (matrix ×11, the two BUG-037 configurations ×12, modern virtio), megaraid 8 boots, CI q35 matrix 13/13 (`usbnet` green); R630: 168 boots ok, two soaks of 2 h 05 with `churn proc 8` every round: 5 268 commands ok, 5 430 glibc launches, 0 faults, heap +0.23 kB/min, httpd 1 779 547 answered / 22 failed; `[lk]` 0 inversions, `[net-worker]` OK |
+| BUG-040/037/039/050 on `feature/bug-gpf`: TCG matrix, megaraid, modern virtio, CI q35 matrix; R630 KVM soaks and boots | 2026-11-10 | ✅ 0 markers worse | `proof/bug-gpf-2026-11/` | 24 TCG boots (matrix ×11, the two BUG-037 configurations ×12, modern virtio), megaraid 8 boots, CI q35 matrix 13/13 (`usbnet` green); R630: 168 boots ok, two soaks of 2 h 05 with `churn proc 8` every round: 5 268 commands ok, 5 430 glibc launches, 0 faults, heap +0.23 kB/min, httpd 1 779 547 answered / 22 failed; `[lk]` 0 inversions, `[net-worker]` OK |
 | virtio 1.x (modern, non-transitional) on `feature/virtio-modern`: TCG device configs, matrix, megaraid; R630 KVM | 2026-11-06 | 🟡 0 markers worse; 2 of 10 matrix boots hung (BUG-037, not in the changed code) | `proof/virtio-modern-2026-11/` | modern virtio-blk (boot + data disk), virtio-net (DHCP, fetch, net worker), virtio-tablet/keyboard typed and pointed, BARs at 56 TiB through the high-MMIO window, no PIT (HPET / PM timer); transitional and legacy 0 worse; reruns of the hung configs 6/6 (branch) and 6/6 (base); megaraid 8 boots 0 worse; R630 `net` 8/8 clean, `inbound` over modern virtio-net within run-to-run spread of legacy |
 | GUI smoke `scripts/gui-smoke.py` on `feature/robust` (public image): TCG, and KVM with USB and with virtio input | 2026-11-10 | ✅ 54/55 steps (TCG), 1 known (BUG-044) | `proof/robust-2026-11/` | all eleven dock apps opened, used, moved by the title bar and closed; Alt-Tab, workspaces, launcher search, context menu; a typed terminal command checked on serial; the first runs found BUG-042 (xHCI BAR at 56 TiB under KVM, with BUG-021) and BUG-043 (no Alt from a USB keyboard), both fixed; BUG-044 and BUG-045 found and left open (not this branch's files) |
 | GUI monkey soak, 2 × 35 min (KVM): USB input smp 4 / 4 GiB, virtio input smp 2 / 2 GiB | 2026-11-10 | ✅ 2230 + 2246 actions, no crash, no hang | `proof/robust-2026-11/` | seeds 20261110 and 20261111; functional check (terminal runs a typed command) every 200 actions: 11/11 and 11/11; longest console round trip 302 ms and 1562 ms |
@@ -986,60 +986,6 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   arena: skipped at 512 MiB, runs at 1 GiB and on the R630.)
 - **Proof:**    `proof/bug-gpf-2026-11/`: the analysis, the provoked runs, 24 TCG boots + megaraid + the CI q35 matrix (0 markers worse), 168 R630 KVM boots, two 2 h soaks with 5 430 glibc launches (0 faults, heap +0.23 kB/min).
 
-### BUG-050 — an exception through an IST gate on an AP ran on a garbage stack (APs loaded no TSS) ✅ FIXED
-- **Status:**   FIXED (`dd4c3c8`, `feature/bug-gpf`) · **Severity:** HIGH when it hits (reset), latent
-- **Found:**    2026-11-05 · code review during BUG-032 ("open" in `proof/bug032-2026-11/`)
-- **Analysis:** the IDT is shared by all cores and its double-fault, page-fault and NMI gates use IST
-  stacks; `gdt::init_ap` loaded the shared GDT and no TSS. TR after INIT has base 0, so an AP read
-  the IST pointer from linear address 0x24… and pushed the frame there. Any #PF/#DF on an AP, and
-  every monitor `nmi` (`--nmi-on-hang`, `tcg-boot.sh`) since it goes to all cores.
-- **Fix:**      a GDT (the BSP's selector layout), a TSS and three IST stacks per AP.
-- **Regression test:** `[ap-tss]`: an NMI IPI to every AP; each must run on its own NMI stack with TR
-  loaded. With `load_tss` left out the same image resets in this self-test
-  (`proof/bug-gpf-2026-11/tcg-ap-tss-selftest.txt`).
-
-### BUG-041 — the release image ran the self-tests, the churn runs and the boot network probes ✅ FIXED
-- **Status:**   FIXED (`feature/fast-boot`) · **Severity:** MEDIUM (16 s from kernel entry to the desktop under KVM, 30 s under TCG; test residue in the release system)
-- **Found:**    2026-11-10 · `[boot-time]` (new, per boot phase) on the release image, R630 KVM and build-server TCG
-- **Analysis:** only the glibc/X11/chrome suite was behind the `selftest` feature. `./scripts/build.sh image`
-  still ran about 150 self-tests, the eight churn runs, the inline network sequence (DHCP, ARP, ping, DNS, HTTP
-  and HTTPS to example.com, IPv6) and the lockscreen self-test on every boot, wrote 164 kB to the serial port
-  and left their residue behind: test files in `/`, six test apps and the example developer key, a
-  `selftest-block.example` DNS block, deleted/locked demo accounts, a `[churn-thread] … FAILED` line. The
-  bad-block, swap and crash-dump proofs wrote into the GPT gap of virtio disk 0 whatever it held.
-- **Fix:** `SELFTEST` in `main.rs` is the one switch; the release image keeps only the self-tests that set up
-  state the system uses (list in `docs/BOOT-TIME.md`). The network of an in-kernel NIC comes up in a kernel
-  task (`[net-up]`, `net_bringup.rs`); no lockscreen flash on a live medium; no SMP demo. KVM: 19.5 s → 2.95 s
-  from QEMU start to the desktop (kernel 16.0 s → 1.0 s); TCG: 36.8 s → 6.5 s (kernel 29.7 s → 2.1 s). The
-  self-test image is marker-identical. Proof: `docs/proof/fast-boot-2026-11/`.
-
-### BUG-042 — an NVMe disk with foreign content was formatted at boot ✅ FIXED
-- **Status:**   FIXED (`feature/fast-boot`) · **Severity:** HIGH (data loss on someone else's disk)
-- **Found:**    2026-11-10 · reading `main.rs` for BUG-041, reproduced under KVM on the R630
-- **Analysis:** an NVMe disk that is not the root is mounted at `/nvme`; when it did not mount as EuroFS it was
-  formatted, in every image. A release medium booted on a machine with another system on its NVMe disk logs
-  `NVMe disk is not EuroFS and not blank — … it stays intact` and then `[g2] EuroFS formatted on NVMe`.
-  A 64 MiB disk of random data with a boot signature had another sha256 after one boot.
-- **Fix:** only a disk whose first 4 KiB are zero is formatted (the rule the second virtio disk has); anything
-  else is left alone (`[g2] NVMe disk carries unknown content: left untouched (no /nvme)`), and a failed
-  format is a log line instead of an `expect`. `docs/proof/fast-boot-2026-11/kvm-nvme-foreign-disk.txt`.
-
-### BUG-043 — ARP lookups before the configuration is saved cannot see their answers 🟡 OPEN
-- **Status:**   OPEN for the self-test image and for `late_bring_up` · **Severity:** LOW/MEDIUM (2 s of every boot under KVM, 9 s under TCG; probably the cause of BUG-039)
-- **Found:**    2026-11-10 · `[boot-time] phase net` on a virtio-net boot
-- **Analysis:** `arp_resolve`, `icmp_ping`, `dns_query` read `legacy_rx()`, which starts with `rx_route()`, and
-  `rx_route()` returns at once while `net::get()` is None. The inline bring-up in `main.rs` and
-  `late_bring_up` (USB NIC) call them BEFORE `net::save`: nobody polls the NIC, both ARP lookups run into
-  their time-out and every virtio-net boot logs `(no ARP reply from the gateway)`, also on an open network
-  (so the ping, DNS, HTTP and HTTPS probes behind it never ran on that path). `late_bring_up`'s `poll_dhcp`
-  reads `legacy_rx()` too, so it cannot see the OFFER either, which would explain BUG-039 (not verified on a USB NIC).
-- **Release image:** not affected any more: `[net-up]` polls the NIC itself until it saves the configuration.
-- **Next:** in the inline path and `late_bring_up`, save a preliminary configuration (address, no gateway MAC)
-  before the first lookup, or poll `nic::poll_recv` directly as `[net-up]` does. Changes the `[net]` lines of
-  the self-test image, so it was left out of `feature/fast-boot`.
-
-### BUG-040 — reserved (debug team, `feature/bug-gpf`)
-
 ### BUG-041 — an image file can panic the kernel: header bombs and unchecked JPEG segments ✅ FIXED
 - **Status:**   FIXED (`5090eff`) · **Severity:** CRITICAL (kernel panic from a file or a web page)
 - **Found:**    2026-11-10 · host tests written while moving EuroPaint's flood fill into `crates/euromedia`
@@ -1119,6 +1065,61 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   tile: the Settings window opens.
 - **Fix (proposed):** clamp `nx` to `SIDEBAR_W` in the drag code (and in the un-snap on pickup), or
   draw the dock after the windows.
+
+### BUG-046 — an NVMe disk with foreign content was formatted at boot ✅ FIXED
+- **Status:**   FIXED (`feature/fast-boot`) · **Severity:** HIGH (data loss on someone else's disk)
+- **Found:**    2026-11-10 · reading `main.rs` for BUG-048, reproduced under KVM on the R630
+- **Analysis:** an NVMe disk that is not the root is mounted at `/nvme`; when it did not mount as EuroFS it was
+  formatted, in every image. A release medium booted on a machine with another system on its NVMe disk logs
+  `NVMe disk is not EuroFS and not blank — … it stays intact` and then `[g2] EuroFS formatted on NVMe`.
+  A 64 MiB disk of random data with a boot signature had another sha256 after one boot.
+- **Fix:** only a disk whose first 4 KiB are zero is formatted (the rule the second virtio disk has); anything
+  else is left alone (`[g2] NVMe disk carries unknown content: left untouched (no /nvme)`), and a failed
+  format is a log line instead of an `expect`. `docs/proof/fast-boot-2026-11/kvm-nvme-foreign-disk.txt`.
+- **Numbering:** this was BUG-042 on `feature/fast-boot` (and is in that branch's commit messages); renumbered at the integration because `feature/robust` used the same numbers.
+
+### BUG-047 — ARP lookups before the configuration is saved cannot see their answers 🟡 OPEN
+- **Status:**   OPEN for the self-test image and for `late_bring_up` · **Severity:** LOW/MEDIUM (2 s of every boot under KVM, 9 s under TCG; probably the cause of BUG-039)
+- **Found:**    2026-11-10 · `[boot-time] phase net` on a virtio-net boot
+- **Analysis:** `arp_resolve`, `icmp_ping`, `dns_query` read `legacy_rx()`, which starts with `rx_route()`, and
+  `rx_route()` returns at once while `net::get()` is None. The inline bring-up in `main.rs` and
+  `late_bring_up` (USB NIC) call them BEFORE `net::save`: nobody polls the NIC, both ARP lookups run into
+  their time-out and every virtio-net boot logs `(no ARP reply from the gateway)`, also on an open network
+  (so the ping, DNS, HTTP and HTTPS probes behind it never ran on that path). `late_bring_up`'s `poll_dhcp`
+  reads `legacy_rx()` too, so it cannot see the OFFER either, which would explain BUG-039 (not verified on a USB NIC).
+- **Release image:** not affected any more: `[net-up]` polls the NIC itself until it saves the configuration.
+- **Next:** in the inline path and `late_bring_up`, save a preliminary configuration (address, no gateway MAC)
+  before the first lookup, or poll `nic::poll_recv` directly as `[net-up]` does. Changes the `[net]` lines of
+  the self-test image, so it was left out of `feature/fast-boot`.
+- **Numbering:** this was BUG-043 on `feature/fast-boot` (and is in that branch's commit messages); renumbered at the integration because `feature/robust` used the same numbers.
+
+### BUG-048 — the release image ran the self-tests, the churn runs and the boot network probes ✅ FIXED
+- **Status:**   FIXED (`feature/fast-boot`) · **Severity:** MEDIUM (16 s from kernel entry to the desktop under KVM, 30 s under TCG; test residue in the release system)
+- **Found:**    2026-11-10 · `[boot-time]` (new, per boot phase) on the release image, R630 KVM and build-server TCG
+- **Analysis:** only the glibc/X11/chrome suite was behind the `selftest` feature. `./scripts/build.sh image`
+  still ran about 150 self-tests, the eight churn runs, the inline network sequence (DHCP, ARP, ping, DNS, HTTP
+  and HTTPS to example.com, IPv6) and the lockscreen self-test on every boot, wrote 164 kB to the serial port
+  and left their residue behind: test files in `/`, six test apps and the example developer key, a
+  `selftest-block.example` DNS block, deleted/locked demo accounts, a `[churn-thread] … FAILED` line. The
+  bad-block, swap and crash-dump proofs wrote into the GPT gap of virtio disk 0 whatever it held.
+- **Fix:** `SELFTEST` in `main.rs` is the one switch; the release image keeps only the self-tests that set up
+  state the system uses (list in `docs/BOOT-TIME.md`). The network of an in-kernel NIC comes up in a kernel
+  task (`[net-up]`, `net_bringup.rs`); no lockscreen flash on a live medium; no SMP demo. KVM: 19.5 s → 2.95 s
+  from QEMU start to the desktop (kernel 16.0 s → 1.0 s); TCG: 36.8 s → 6.5 s (kernel 29.7 s → 2.1 s). The
+  self-test image is marker-identical. Proof: `docs/proof/fast-boot-2026-11/`.
+- **Numbering:** this was BUG-041 on `feature/fast-boot` (and is in that branch's commit messages); renumbered at the integration because `feature/robust` used the same numbers.
+
+### BUG-050 — an exception through an IST gate on an AP ran on a garbage stack (APs loaded no TSS) ✅ FIXED
+- **Status:**   FIXED (`dd4c3c8`, `feature/bug-gpf`) · **Severity:** HIGH when it hits (reset), latent
+- **Found:**    2026-11-05 · code review during BUG-032 ("open" in `proof/bug032-2026-11/`)
+- **Analysis:** the IDT is shared by all cores and its double-fault, page-fault and NMI gates use IST
+  stacks; `gdt::init_ap` loaded the shared GDT and no TSS. TR after INIT has base 0, so an AP read
+  the IST pointer from linear address 0x24… and pushed the frame there. Any #PF/#DF on an AP, and
+  every monitor `nmi` (`--nmi-on-hang`, `tcg-boot.sh`) since it goes to all cores.
+- **Fix:**      a GDT (the BSP's selector layout), a TSS and three IST stacks per AP.
+- **Regression test:** `[ap-tss]`: an NMI IPI to every AP; each must run on its own NMI stack with TR
+  loaded. With `load_tss` left out the same image resets in this self-test
+  (`proof/bug-gpf-2026-11/tcg-ap-tss-selftest.txt`).
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

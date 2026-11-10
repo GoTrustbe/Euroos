@@ -2,7 +2,8 @@
 
 Branch `feature/fast-boot`, started on `feature/app-control` `a36ef4b`. Not
 merged. What changed and why: `../../BOOT-TIME.md`, `../../LOADTEST-TRACKER.md`
-(BUG-041 to BUG-043) and the commit messages.
+(BUG-046 to BUG-048; the commit messages still say BUG-042, BUG-043 and
+BUG-041, renumbered at the integration) and the commit messages.
 
 | Commit | What |
 |---|---|
@@ -140,7 +141,7 @@ Serial log up to the desktop: 1590 lines, 164 kB → 278 lines, 18 kB
   the lockscreen self-test line; it now waits for the `[boot-time]` mark
   before the lockscreen.
 
-## D. NVMe disk with foreign content (BUG-042)
+## D. NVMe disk with foreign content (BUG-046)
 
 `kvm-nvme-foreign-disk.txt`: a 64 MiB disk of random bytes with a boot
 signature, attached as NVMe. After one boot of the "before" image its sha256
