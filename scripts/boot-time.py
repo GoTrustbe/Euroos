@@ -15,6 +15,7 @@ usage: boot-time.py NAME IMG OUTDIR [options]
   --cmds FILE       shell commands for the serial console (scon), one per line;
                     their output is in the log as `[scon] ...`
   --type TEXT       type TEXT on the guest keyboard through QMP
+  --extra "ARGS"    extra QEMU arguments
 
 Writes OUTDIR/NAME.tlog. Everything it creates (boot image copy, QMP socket,
 pid file) lives in OUTDIR/NAME.d, so several runs and several people do not
@@ -33,6 +34,7 @@ ap.add_argument("--type", help="text to type through QMP after the desktop (\n =
 ap.add_argument("--type-wait", type=float, default=15)
 ap.add_argument("--cmds", help="file with shell commands for the serial console (scon), one per line")
 ap.add_argument("--cmd-timeout", type=float, default=60)
+ap.add_argument("--extra", default="", help="extra QEMU arguments (one string)")
 ap.add_argument("--nic", default="virtio", help="virtio | e1000e | e1000 (default mode only)")
 a = ap.parse_args()
 w = os.path.join(a.out, a.name + ".d"); os.makedirs(w, exist_ok=True)
@@ -56,7 +58,7 @@ if a.net == "none":
     i = dev.index("-netdev"); del dev[i:i+4]; dev += ["-nic", "none"]
 acc = ["-enable-kvm", "-cpu", "host"] if a.accel == "kvm" else ["-cpu", "qemu64,+smep,+smap"]
 cmd = ["qemu-system-x86_64", "-machine", "q35", *acc, "-m", a.mem, "-smp", a.smp, "-bios", "/usr/share/ovmf/OVMF.fd",
-       *dev, "-vga", "std", "-display", "none", "-serial", "stdio", "-no-reboot", "-qmp", f"unix:{qmp},server,nowait"]
+       *dev, "-vga", "std", "-display", "none", "-serial", "stdio", "-no-reboot", "-qmp", f"unix:{qmp},server,nowait"] + a.extra.split()
 if a.pin: cmd = ["taskset", "-c", a.pin] + cmd
 log = open(os.path.join(a.out, a.name + ".tlog"), "w")
 t0 = time.monotonic()
