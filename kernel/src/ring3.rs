@@ -4020,7 +4020,20 @@ pub fn spawn_daemon(falloc: &mut FrameAllocator, program: &[u8]) {
     let user_ss = (sel.user_data.0 | 3) as u64;
     // Build the address space FIRST, then spawn the task with its cr3 already set
     // (before it is Ready) — see BUG-007 / spawn_user.
-    let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
+    let pml4 = match crate::paging::try_build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages) {
+        Ok(p) => p,
+        Err(crate::paging::OutOfFrames) => {
+            // No frames for the page tables: refuse the start (nothing was kept by the builder).
+            for f in 0..512u64 {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            for f in 0..4u64 {
+                let _ = falloc.free(kstack + f * 4096);
+            }
+            crate::serial_println!("[euro] daemon: no frames for page tables - not started");
+            return;
+        }
+    };
     // BUG-024: known to syscall_dispatch (DAEMON_TASK) before it can first run.
     let idx = x86_64::instructions::interrupts::without_interrupts(|| {
         let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
@@ -6391,7 +6404,20 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
     // Own isolated W^X address space; from the next switch on this process runs on it.
     // Build it FIRST, then spawn with cr3 set before Ready (BUG-007: a task must never be
     // schedulable with cr3=0, or a preempting timer IRQ runs its ring-3 code on the boot PML4).
-    let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
+    let pml4 = match crate::paging::try_build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages) {
+        Ok(p) => p,
+        Err(crate::paging::OutOfFrames) => {
+            // No frames for the page tables: refuse the start (nothing was kept by the builder).
+            for f in 0..512u64 {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            for f in 0..4u64 {
+                let _ = falloc.free(kstack + f * 4096);
+            }
+            crate::serial_println!("[euro] bg-musl (pid {pid}): no frames for page tables - not started");
+            return false;
+        }
+    };
     // LOADTEST-R630 BUG-024: the task is Ready the moment spawn_user returns, but
     // syscall_dispatch only knows it once it is registered below. A timer tick in
     // between ran its first syscall (musl's arch_prctl) through the FOREGROUND
@@ -6531,13 +6557,20 @@ pub fn spawn_bg_app(
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = crate::paging::build_address_space_big(
-        falloc,
-        arena,
-        nblocks,
-        &info.exec_pages,
-        &info.writ_pages,
-    );
+    let pml4 = match crate::paging::try_build_address_space_big(falloc, arena, nblocks, &info.exec_pages, &info.writ_pages) {
+        Ok(p) => p,
+        Err(crate::paging::OutOfFrames) => {
+            // No frames for the page tables: refuse the start (nothing was kept by the builder).
+            for f in 0..frames {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            for f in 0..4u64 {
+                let _ = falloc.free(kstack + f * 4096);
+            }
+            crate::serial_println!("[euro] bg-app (pid {pid}): no frames for page tables - not started");
+            return None;
+        }
+    };
     // LOADTEST-R630 BUG-024: the task is Ready the moment spawn_user returns, but
     // syscall_dispatch only knows it once it is registered below. A timer tick in
     // between ran its first syscall (musl's arch_prctl) through the FOREGROUND
@@ -8110,7 +8143,20 @@ pub fn spawn_counter_task(falloc: &mut FrameAllocator) -> u64 {
     // Counter demo: raw machine-code blob with the counter variable IN the code page ->
     // code/data cannot be separated, so RWX instead of W^X (see build_address_space_rwx).
     // Build the address space first, then spawn with cr3 set before Ready (BUG-007).
-    let pml4 = crate::paging::build_address_space_rwx(falloc, arena);
+    let pml4 = match crate::paging::try_build_address_space_rwx(falloc, arena) {
+        Ok(p) => p,
+        Err(crate::paging::OutOfFrames) => {
+            // No frames for the page tables: refuse the start (nothing was kept by the builder).
+            for f in 0..512u64 {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            for f in 0..4u64 {
+                let _ = falloc.free(kstack + f * 4096);
+            }
+            crate::serial_println!("[euro] counter task: no frames for page tables - not started");
+            return 0;
+        }
+    };
     let idx = crate::sched::spawn_user(code, stack_top, user_cs, user_ss, kstack_top, pml4);
     counter_ptr
 }
@@ -9290,7 +9336,16 @@ pub fn run_dynamic(
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
+    let pml4 = match crate::paging::try_build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages) {
+        Ok(p) => p,
+        Err(crate::paging::OutOfFrames) => {
+            // No frames for the page tables: refuse the start (nothing was kept by the builder).
+            for f in 0..512u64 {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            return (String::from("(out of memory: page tables)"), u64::MAX);
+        }
+    };
     let boot = crate::sched::boot_pml4();
     unsafe { crate::gdt::set_rsp0(KERNEL_RSP) };
     // Load FS_BASE = TP (the musl/IE-TLS pointer) if the program uses TLS.
@@ -9390,7 +9445,16 @@ pub fn run_interp(
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
+    let pml4 = match crate::paging::try_build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages) {
+        Ok(p) => p,
+        Err(crate::paging::OutOfFrames) => {
+            // No frames for the page tables: refuse the start (nothing was kept by the builder).
+            for f in 0..512u64 {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            return (String::from("(out of memory: page tables)"), u64::MAX);
+        }
+    };
     let boot = crate::sched::boot_pml4();
     unsafe { crate::gdt::set_rsp0(KERNEL_RSP) };
     FG_ACTIVE.store(true, Ordering::Relaxed);
@@ -10785,7 +10849,17 @@ pub fn spawn_glibc_persistent(
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = crate::paging::build_address_space_rwx_big(falloc, arena, nblocks);
+    let pml4 = match crate::paging::try_build_address_space_rwx_big(falloc, arena, nblocks) {
+        Ok(p) => p,
+        Err(crate::paging::OutOfFrames) => {
+            // No frames for the page tables: refuse the start (nothing was kept by the builder).
+            for f in 0..frames as u64 {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            crate::serial_println!("[glibc] persistent app: no frames for page tables - not started");
+            return None;
+        }
+    };
     // Mapping happens LATER (after demand_install): map_demand_4k allocates its
     // table frames from the demand pool, which does not exist yet at this point —
     // the first attempt mapped nothing and the auxv promise nearly caused a crash.
@@ -11388,7 +11462,18 @@ fn glibc_disk_launch(
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = crate::paging::build_address_space_rwx_big(falloc, arena, nblocks);
+    let pml4 = match crate::paging::try_build_address_space_rwx_big(falloc, arena, nblocks) {
+        Ok(p) => p,
+        Err(crate::paging::OutOfFrames) => {
+            // No frames for the page tables: refuse the start (nothing was kept by the builder).
+            for f in 0..frames as u64 {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            DEMAND_ENABLED.store(prev_demand, Ordering::Relaxed);
+            DEMAND_FILE_ENABLED.store(prev_file, Ordering::Relaxed);
+            return Err("(out of memory: page tables)");
+        }
+    };
     if vdso_ok && !vdso_map_into(falloc, pml4) {
         crate::serial_println!("[vdso] mapping FAILED — the auxv promised one; expect a crash");
     }
@@ -11923,7 +12008,16 @@ pub fn run_glibc(
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = crate::paging::build_address_space_rwx_big(falloc, arena, nblocks);
+    let pml4 = match crate::paging::try_build_address_space_rwx_big(falloc, arena, nblocks) {
+        Ok(p) => p,
+        Err(crate::paging::OutOfFrames) => {
+            // No frames for the page tables: refuse the start (nothing was kept by the builder).
+            for f in 0..frames as u64 {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            return (String::from("(out of memory: page tables)"), u64::MAX);
+        }
+    };
     if vdso_ok && !vdso_map_into(falloc, pml4) {
         crate::serial_println!("[vdso] mapping FAILED — the auxv promised one; expect a crash");
     }
@@ -16726,7 +16820,11 @@ pub fn run_args(
     const MIB2: u64 = 1 << 21;
     // Exactly 2 MiB, 2 MiB-aligned (no 4 MiB over-allocation); below we free
     // exactly these 512 frames again after the synchronous exec.
-    let arena = falloc.allocate_aligned(512, 512).expect("fg-arena");
+    let arena = match falloc.allocate_aligned(512, 512) {
+        Ok(a) => a,
+        // No free 2 MiB arena: the program is not started (it used to be a panic).
+        Err(_) => return (u64::MAX, String::from("(no arena)")),
+    };
     let arena_raw = arena;
     let code = arena;
     let heap = arena + 0x80000; // +512 KiB
@@ -16746,7 +16844,16 @@ pub fn run_args(
     let user_ss = (sel.user_data.0 | 3) as u64;
 
     // Build the own W^X PML4 and switch to it just before the ring-3 excursion.
-    let pml4 = crate::paging::build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages);
+    let pml4 = match crate::paging::try_build_address_space(falloc, arena, &info.exec_pages, &info.writ_pages) {
+        Ok(p) => p,
+        Err(crate::paging::OutOfFrames) => {
+            // No frames for the page tables: refuse the start (nothing was kept by the builder).
+            for f in 0..512u64 {
+                let _ = falloc.free(arena + f * 4096);
+            }
+            return (u64::MAX, String::from("(out of memory: page tables)"));
+        }
+    };
     let boot = crate::sched::boot_pml4();
     // Kernel stack for a possible fault from this foreground process.
     unsafe { crate::gdt::set_rsp0(KERNEL_RSP) };
