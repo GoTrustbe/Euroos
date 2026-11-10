@@ -1611,6 +1611,23 @@ fn main() -> Status {
                 Ipv4Addr::new(10, 0, 2, 15)
             }
         };
+        // BUG-047: the receive path sorts frames by the SAVED address (net::classify).
+        // Without one every frame goes to the legacy queue: ARP, ping and DNS read
+        // there (BUG-039), but a TCP connection never saw its SYN-ACK, so the HTTP
+        // and HTTPS probes below ran into their time-outs on every boot with an
+        // in-kernel NIC. Save what is known now; the full configuration (gateway
+        // and DNS MAC, IPv6 router) replaces it at the end of the bring-up.
+        net::save(net::NetCfg {
+            my_mac,
+            my_ip,
+            gw_ip,
+            gw_mac: MacAddr::ZERO,
+            dns_ip,
+            dns_mac: MacAddr::ZERO,
+            link_local: euronet::ipv6::Ipv6Addr::link_local_from_mac(my_mac.0),
+            router_ll: None,
+            router_mac: None,
+        });
         // ── Gateway + DNS via the reusable net layer (net.rs). ──
         let gw_mac = net::arp_resolve(my_mac, my_ip, gw_ip);
         let dns_mac = net::arp_resolve(my_mac, my_ip, dns_ip).or(gw_mac).unwrap_or(MacAddr::ZERO);
