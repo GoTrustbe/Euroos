@@ -79,6 +79,10 @@ fn open_limited(fs: &mut dyn FileSystem, path: &str, limit: u64) -> bool {
 /// low here so a 64 KiB file is "too large"; the code path is the real one.
 #[cfg(feature = "selftest")]
 pub fn robust_selftest(fs: &mut dyn FileSystem) {
+    // A root the installer self-test provisioned on a blank disk in this boot has no
+    // /tmp yet (a RAM root gets one from populate_fs): without it both files below
+    // could not be written and the test failed on every boot of that kind.
+    let _ = fs.create_dir("/tmp");
     let big = "/tmp/robust-big.bin";
     let small = "/tmp/robust-small.txt";
     let wrote = fs.write_file(big, &alloc::vec![b'x'; 64 * 1024]).is_ok() && fs.write_file(small, b"kept").is_ok();
