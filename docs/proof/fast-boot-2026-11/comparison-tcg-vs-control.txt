@@ -1,0 +1,229 @@
+== control-tcg-user-smp4-iommu.markers  vs  tcg-user-smp4-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== control-tcg-user-smp4-noiommu.markers  vs  tcg-user-smp4-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== control-tcg-kernel-smp4.markers  vs  tcg-kernel-smp4.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== control-tcg-storage-smp4-iommu-1g.markers  vs  tcg-storage-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   glibc: base FAILx2 | new FAILx1
+   linux-abi: base FAILx2 | new FAILx1
+-- only in base: 150
+   3a4: OKx1
+   3a5: OKx1
+   3a6: OKx1
+   3d10: OKx1
+   3d3: OKx1
+   3d4: OKx1
+   3d5: OKx1
+   3d6: OKx1
+   3d6-wire: OKx1
+   3d9: OKx1
+   3e3: OKx1
+   3e5: OKx1
+   3e6: OKx1
+   3e9: OKx1
+   3f2: OKx1
+   3f3: OKx1
+   3f4: OKx1
+   3f5: OKx1
+   3f6: OKx1
+   3f7: OKx1
+   3g1: OKx2
+   3g2: OKx1
+   3g2-wire: OKx1
+   3g3: OKx1
+   3g5: OKx1
+   3g6: OKx1
+   3g7: OKx1
+   3h: OKx1
+   7app: OKx1
+   7appgui: OKx1
+   aa: OKx1
+   aa-fs: OKx1
+   aa-mcp: OKx1
+   aa-nv: OKx1
+   aa-wasm: OKx1
+   ab: OKx1
+   ae: OKx1
+   ae-mustchange: OKx1
+   ae-persist: OKx1
+   af-anom: OKx1
+   af-jit: OKx1
+   ag: OKx1
+   ag-lock: OKx1
+   altab: OKx1
+   an: OKx1
+   app: OKx1
+   app-policy: OKx1
+   appstore: OKx1
+   ar: OKx1
+   az: OKx1
+   b6: OKx1
+   bb1: OKx1
+   bb3: OKx1
+   bb4: OKx1
+   bb5: OKx1
+   bb6: OKx1
+   bb7: OKx1
+   bb8: OKx1
+   bug032: OKx1
+   ca: OKx1
+   cal: OKx1
+   churn-fork: FAILx1
+   churn-fs: OKx1
+   churn-net: OKx1
+   churn-pkg: OKx1
+   churn-proc: OKx1
+   churn-surface: OKx1
+   churn-thread: OKx1
+   ck: OKx1
+   cl: OKx1
+   clip: OKx1
+   ct: OKx1
+   ctx: OKx1
+   cu: OKx1
+   cu2: OKx1
+   es: OKx1
+   euro-fscope: OKx1
+   euroapp: OKx1
+   euroapp-wasm: OKx1
+   eurofuzz: OKx1
+   fdlg: OKx1
+   find: OKx1
+   fl: OKx1
+   fork: FAILx7
+   ft: OKx1
+   fuzz: OKx1
+   h2: OKx1
+   install: OKx1
+   intg: OKx3
+   j1: OKx1
+   js: OKx2
+   k1: OKx2
+   k3: OKx1
+   k4: OKx1
+   l1: OKx1
+   launch: OKx1
+   lk-stress: OKx1
+   loc: OKx1
+   m2: OKx1
+   m3: OKx1
+   m72: OKx1
+   ma: OKx1
+   mu: OKx1
+   mv: OKx1
+   n1: OKx1
+   n2: OKx1
+   n3: OKx1
+   netb: OKx1
+   notif: OKx1
+   o2: OKx1
+   p2: OKx1
+   p3: OKx1
+   p3-agent: OKx1
+   pipe: OKx1
+   policy-learn: OKx1
+   post: OKx1
+   q1x: OKx1
+   rk: OKx1
+   s: OKx1
+   sbx: OKx1
+   sbx2: OKx1
+   set: OKx2
+   sf: OKx1
+   sg: OKx1
+   shot: OKx1
+   snap: OKx1
+   spell: OKx1
+   st: OKx1
+   storm-io: OKx1
+   sym: OKx1
+   symbol: OKx1
+   tip: OKx1
+   u: OKx1
+   udrv-blk: OKx1
+   udrv-blk-crash: OKx1
+   udrv-blk-dma: OKx1
+   udrv-blk-fs: OKx1
+   udrv-blk-grant: OKx1
+   udrv-blk-iommu: OKx1
+   udrv-blk-irq: OKx1
+   udrv-blk-mount: OKx1
+   udrv-blk-rw: OKx1
+   udrv-vec: OKx1
+   v: OKx1
+   w: OKx1
+   wasm2: OKx1
+   wm: OKx1
+   ws: OKx1
+   x: OKx1
+   z: OKx1
+-- only in new: 0
+
+== control-tcg-combined-smp4-iommu-1g.markers  vs  tcg-combined-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== control-tcg-user-smp1-iommu.markers  vs  tcg-user-smp1-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== control-tcg-user-smp1-noiommu.markers  vs  tcg-user-smp1-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== control-tcg-kernel-smp1.markers  vs  tcg-kernel-smp1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== control-tcg-storage-smp1-iommu-1g.markers  vs  tcg-storage-smp1-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== control-tcg-combined-smp1-iommu-1g.markers  vs  tcg-combined-smp1-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== control-tcg-storage-smp4-iommu-1g.markers  vs  tcg-storage-smp4-iommu-1g-r1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== control-tcg-storage-smp4-iommu-1g.markers  vs  tcg-storage-smp4-iommu-1g-r2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== control-tcg-storage-smp4-iommu-1g.markers  vs  tcg-storage-smp4-iommu-1g-r3.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0

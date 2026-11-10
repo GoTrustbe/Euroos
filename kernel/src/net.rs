@@ -31,6 +31,11 @@ pub use asynctest::{async_selftest, worker_selftest};
 #[path = "net_worker.rs"]
 mod worker;
 pub use worker::{poke as worker_poke, start as worker_start};
+// [net-up]: DHCP + ARP + router discovery of an in-kernel NIC in a kernel task
+// of their own, so the boot does not wait for the network (the release image).
+#[path = "net_bringup.rs"]
+mod bringup;
+pub use bringup::{start as bring_up_in_background, take_up_event};
 
 /// Every frame this stack sends goes through here: the NIC, or the self-test's
 /// capture when it is running and the frame is for one of its synthetic peers.

@@ -1,0 +1,63 @@
+# release image, modern virtio only (virtio-blk, virtio-net, virtio-tablet, virtio-keyboard: disable-legacy=on), KVM
+    1.930 [blk] virtio-blk OK — 524288 sectors (256 MiB) @ 00:02.0 modern virtio-1.x, common cfg @ 0xffc0000000 · features 0x100002200 · FLUSH on (real durability)
+    1.931 [blk] 1 virtio-blk disk(s) initialized
+    1.958 [euro] disk 0 is not an EuroOS installation — booting a RAM root (live); the disk is left intact (blank: install it via the wizard; foreign FS: mountable)
+    2.042 [net] virtio-net @ PCI 00:03.0, modern virtio-1.x, common cfg @ 0xffc0004000
+    2.047 [net] virtio-net MSI-X on (4 entries) -> vector 0x4b, queue readback=0x0000
+    2.050 [net] virtio-net OK — MAC 52:54:00:12:34:56 (RX 128 bufs, 12-byte header, features 0x100010020)
+    2.054 [net] NIC: virtio-net MAC 52:54:00:12:34:56
+    2.345 [pci]   00:04.0  1af4:1052  Other  (virtio-input)
+    2.346 [pci]   00:05.0  1af4:1052  Other  (virtio-input)
+    2.463 [vinput] virtio-input 00:04.0 "QEMU Virtio Tablet": tablet, absolute pointer (ABS_X 0..32767, ABS_Y 0..32767), 64 event buffers, polled ✓
+    2.470 [vinput] virtio-input 00:05.0 "QEMU Virtio Keyboard": keyboard (modern virtio-1.x, common cfg @ 0xffc000c000), 64 event buffers, polled ✓
+    2.472 [iommu] domain virtio-input: 2 PCI function(s), 6 DMA page(s) registered
+    2.473 [euro] virtio-input initialized — 2 device(s)
+    2.507 [net-up] kernel task 2: DHCP + ARP + router discovery over virtio-net run in the background
+    2.515 [net-up] lease 10.0.2.15 (gateway 10.0.2.2, dns 10.0.2.2, 86400 s) over virtio-net; IPv6 router found; 10 ms after the task started ✓
+    2.830 [desktop] interactive loop started — input + shell live
+    2.842 [boot-time] desktop after 998 ms since kernel entry (HPET, release build): firmware-exit=72 cpu-mm=11 storage-rootfs=64 storage-checks=10 identity-config=45 net=27 userland-demos=227 sched-init=15 acpi-pci-tpm=72 smp-timer=63 devices=47 drivers-late=
+    2.960 [notify] Welcome to EuroOS: Click here to see notifications
+    3.038 [notify] Network connected: 10.0.2.15 (DHCP)
+    6.020 [scon] $ whoami
+    6.021 [scon] euro
+    6.100 [scon] $ net
+    6.102 [scon] ARP  : 10.0.2.2 asks 10.0.2.15  ->  reply: 10.0.2.15 is-at 52:54:00:12:34:56
+    6.104 [scon] ICMP : echo id=4660 seq=7 -> reply, checksum OK
+    6.106 [scon] IPv4 : 10.0.2.15 -> 8.8.8.8 ttl=64 proto=Udp  hdr-checksum OK
+    6.108 [scon] UDP  : :5353 -> :53  'DNS-query'  pseudo-checksum OK
+    6.110 [scon] Frame: ethertype Ipv4, 51 bytes, fully parsed  [OK]
+    6.190 [scon] $ ping 10.0.2.2
+    6.192 [scon] PING 10.0.2.2: echo-reply OK ✓
+    6.270 [scon] $ netstat
+    6.278 [scon] tcp: connect ok 0 (slowest 0 ms), SYN timeouts 0, stale-peer RSTs 0, new-port retries 0, closed-port answers 0, gave up 0 | inbound: half-open 0, httpd conns 0, served 0 | queues 0 (0 segs), unowned segs 0 (after-close ACKs 0)
+    6.283 [scon] net worker: task 3, 2 passes, 0 inbound frames, longest pass 104 us; kicks 0 (e1000d/task) + 2 (interrupt, 0 found the scheduler busy)
+    6.284 [scon] DNS cache: 0 hits, 0 misses
+    6.285 [scon]   (cache empty)
+    6.320 [scon] $ ls /
+    6.323 [scon]   -rw-r--r--     1996 B  2026-11-10 09:08  Welcome.txt
+    6.324 [scon]   drwxr-xr-x        0 B  2026-11-10 09:08  agents
+    6.326 [scon]   drwxr-xr-x        0 B  2026-11-10 09:08  bin
+    6.327 [scon]   drwxr-xr-x        0 B  2026-11-10 09:08  boot
+    6.329 [scon]   drwxr-xr-x        0 B  2026-11-10 09:08  data
+    6.331 [scon]   drwxr-xr-x        0 B  2026-11-10 09:08  etc
+    6.332 [scon]   drwxr-xr-x        0 B  2026-11-10 09:08  home
+    6.334 [scon]   drwxr-xr-x        0 B  2026-11-10 09:08  lib
+    6.336 [scon]   drwxrwxrwx        0 B  2026-11-10 09:08  tmp
+    6.337 [scon]   drwxr-xr-x        0 B  2026-11-10 09:08  var
+    6.370 [scon] $ df
+    6.373 [scon] Filesystem   Size(KiB)  Used(KiB)  Avail(KiB)  Mounted on
+    6.375 [scon]   EuroFS         8192       1732       6460   /
+    6.431 [scon] $ euroupdate status
+    6.459 [scon] EuroUpdate — A/B system slots
+    6.459 [scon]   active slot   : A
+    6.459 [scon]   next boot     : A (0 attempt(s) left)
+    6.459 [scon]   slot A        : Good
+    6.459 [scon]   slot B        : Empty
+    6.459 [scon]   generation    : 1
+    6.459 [scon]   running       : version 20261110
+    6.459 [scon]   policy        : ask (euroupdate policy <auto|ask|manual>)
+    6.459 [scon]   server        : https://euro-os.eu/update/channel/stable.json
+    6.459 [scon]   keys          : daily ed852b8056a7ef8e · rotation c1e1122a1d606ed5
+    6.459 [scon]   anti-rollback : highest staged version 0
+    6.459 [scon]   last check    : not yet
+    6.459 [scon]   staged        : nothing

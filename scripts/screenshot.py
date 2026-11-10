@@ -9,7 +9,11 @@ OUT = sys.argv[2] if len(sys.argv) > 2 else "boot.png"
 # Render is heavier at 1920x1080 on TCG; wait longer by default.
 WAIT = int(sys.argv[3]) if len(sys.argv) > 3 else int(os.environ.get("WAIT", "65"))
 OVMF = "/usr/share/ovmf/OVMF.fd"
-QMP = "/tmp/ek-qmp.sock"
+# EK_QMP / EK_SERIAL / EK_PCAP: own socket and log paths, so two people (or two
+# runs) on one machine do not take each other's QEMU or overwrite each other's log.
+QMP = os.environ.get("EK_QMP", "/tmp/ek-qmp.sock")
+SERIAL = os.environ.get("EK_SERIAL", "serial.log")
+PCAP = os.environ.get("EK_PCAP", "net.pcap")
 
 for p in (QMP,):
     try: os.unlink(p)
@@ -27,10 +31,10 @@ qemu = subprocess.Popen([
     "-bios", OVMF,
     "-drive", f"format=raw,file={IMG}",
     "-display", "none",
-    "-serial", "file:serial.log",
+    "-serial", f"file:{SERIAL}",
     "-qmp", f"unix:{QMP},server,nowait",
     "-netdev", "user,id=n0,ipv4=on,ipv6=on", "-device", "virtio-net-pci,netdev=n0,disable-modern=on",
-    "-object", "filter-dump,id=d0,netdev=n0,file=net.pcap",
+    "-object", f"filter-dump,id=d0,netdev=n0,file={PCAP}",
     "-no-reboot",
 ], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 

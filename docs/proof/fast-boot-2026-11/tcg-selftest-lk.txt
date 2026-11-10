@@ -1,0 +1,36 @@
+user-smp4-iommu: [lk-stress] 3 round(s) x 4 core(s), mixed fs/ipc/unix + root VFS from every core: 137864 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+user-smp4-iommu: [lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp4-iommu: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp4-noiommu: [lk-stress] 3 round(s) x 4 core(s), mixed fs/ipc/unix + root VFS from every core: 124518 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+user-smp4-noiommu: [lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp4-noiommu: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+kernel-smp4: [lk-stress] 3 round(s) x 4 core(s), mixed fs/ipc/unix + root VFS from every core: 148180 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+kernel-smp4: [lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+kernel-smp4: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+combined-smp4-iommu-1g: [lk-stress] 3 round(s) x 4 core(s), mixed fs/ipc/unix + root VFS from every core: 149973 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+combined-smp4-iommu-1g: [lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+combined-smp4-iommu-1g: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp1-iommu: [lk-stress] 3 round(s) x 1 core(s), mixed fs/ipc/unix + root VFS from every core: 12822 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+user-smp1-iommu: [lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp1-iommu: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp1-noiommu: [lk-stress] 3 round(s) x 1 core(s), mixed fs/ipc/unix + root VFS from every core: 11524 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+user-smp1-noiommu: [lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp1-noiommu: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+kernel-smp1: [lk-stress] 3 round(s) x 1 core(s), mixed fs/ipc/unix + root VFS from every core: 14426 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+kernel-smp1: [lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+kernel-smp1: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp1-iommu-1g: [lk-stress] 3 round(s) x 1 core(s), mixed fs/ipc/unix + root VFS from every core: 11598 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+storage-smp1-iommu-1g: [lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp1-iommu-1g: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+combined-smp1-iommu-1g: [lk-stress] 3 round(s) x 1 core(s), mixed fs/ipc/unix + root VFS from every core: 9454 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+combined-smp1-iommu-1g: [lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+combined-smp1-iommu-1g: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp4-iommu-1g-r1: [lk-stress] 3 round(s) x 4 core(s), mixed fs/ipc/unix + root VFS from every core: 122784 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+storage-smp4-iommu-1g-r1: [lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp4-iommu-1g-r1: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp4-iommu-1g-r2: [lk-stress] 3 round(s) x 4 core(s), mixed fs/ipc/unix + root VFS from every core: 118469 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+storage-smp4-iommu-1g-r2: [lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp4-iommu-1g-r2: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp4-iommu-1g-r3: [lk-stress] 3 round(s) x 4 core(s), mixed fs/ipc/unix + root VFS from every core: 120379 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+storage-smp4-iommu-1g-r3: [lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp4-iommu-1g-r3: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0

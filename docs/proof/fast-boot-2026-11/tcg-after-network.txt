@@ -1,0 +1,50 @@
+# release image under TCG, user-net unrestricted: the network after the background bring-up
+    4.731 [net-up] kernel task 2: DHCP + ARP + router discovery over virtio-net run in the background
+    4.759 [net-up] lease 10.0.2.15 (gateway 10.0.2.2, dns 10.0.2.3, 86400 s) over virtio-net; IPv6 router found; 30 ms after the task started ✓
+    4.763 [net-worker] kernel task 3 started: inbound TCP (SYN queue, httpd, accept queues) runs here, woken by the NIC's receive interrupt (MSI-X) and the tick while the httpd or a listener is on
+    6.039 [notify] Welcome to EuroOS: Click here to see notifications
+    6.654 [notify] Network connected: 10.0.2.15 (DHCP)
+   11.081 [scon] $ net
+   11.083 [scon] ARP  : 10.0.2.2 asks 10.0.2.15  ->  reply: 10.0.2.15 is-at 52:54:00:12:34:56
+   11.089 [scon] ICMP : echo id=4660 seq=7 -> reply, checksum OK
+   11.089 [scon] IPv4 : 10.0.2.15 -> 8.8.8.8 ttl=64 proto=Udp  hdr-checksum OK
+   11.089 [scon] UDP  : :5353 -> :53  'DNS-query'  pseudo-checksum OK
+   11.089 [scon] Frame: ethertype Ipv4, 51 bytes, fully parsed  [OK]
+   11.129 [scon] $ ping 10.0.2.2
+   11.134 [scon] PING 10.0.2.2: echo-reply OK ✓
+   11.190 [scon] $ nslookup example.com
+   11.202 [scon] example.com = 104.20.23.154
+   11.241 [scon] $ fetch example.com
+   11.281 [scon] DNS: example.com = 104.20.23.154
+   11.281 [scon] GET http://example.com/ -> 892 bytes
+   11.281 [scon]   HTTP/1.1 200 OK
+   11.281 [scon]   Date: Tue, 10 Nov 2026 09:11:01 GMT
+   11.281 [scon]   Content-Type: text/html; charset=utf-8
+   11.281 [scon]   Connection: close
+   11.342 [scon] $ https example.com
+   18.737 [scon] DNS: example.com = 104.20.23.154
+   18.739 [scon] TLS 1.3 handshake (X25519 + ChaCha20-Poly1305) ...
+   18.739 [scon] GET https://example.com/ -> 892 bytes (encrypted)
+   18.739 [scon]   HTTP/1.1 200 OK
+   18.739 [scon]   server certificate: 1002 bytes, SHA-256 85ca6ab068e9bcce…
+   18.849 [scon] $ netstat
+   18.851 [scon] tcp: connect ok 2 (slowest 12 ms), SYN timeouts 0, stale-peer RSTs 0, new-port retries 0, closed-port answers 0, gave up 0 | inbound: half-open 0, httpd conns 0, served 0 | queues 0 (0 segs), unowned segs 0 (after-close ACK
+   18.853 [scon] net worker: task 3, 11 passes, 0 inbound frames, longest pass 726 us; kicks 0 (e1000d/task) + 12 (interrupt, 0 found the scheduler busy)
+   18.853 [scon] DNS cache: 2 hits, 1 misses
+   18.853 [scon]   example.com              104.20.23.154 (TTL 292s)
+   18.950 [scon] $ update
+   18.951 [scon] unknown command: update  (type 'help')
+   19.020 [scon] $ euroupdate status
+   19.022 [scon] EuroUpdate — A/B system slots
+   19.024 [scon]   active slot   : A
+   19.024 [scon]   next boot     : A (0 attempt(s) left)
+   19.024 [scon]   slot A        : Good
+   19.024 [scon]   slot B        : Empty
+   19.024 [scon]   generation    : 1
+   19.024 [scon]   running       : version 20261110
+   19.024 [scon]   policy        : ask (euroupdate policy <auto|ask|manual>)
+   19.024 [scon]   server        : https://euro-os.eu/update/channel/stable.json
+   19.024 [scon]   keys          : daily ed852b8056a7ef8e · rotation c1e1122a1d606ed5
+   19.024 [scon]   anti-rollback : highest staged version 0
+   19.024 [scon]   last check    : not yet
+   19.024 [scon]   staged        : nothing

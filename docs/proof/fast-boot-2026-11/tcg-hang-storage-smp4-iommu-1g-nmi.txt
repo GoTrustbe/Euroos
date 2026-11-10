@@ -1,0 +1,76 @@
+# storage-smp4-iommu-1g, 3ab5d2c self-test image: silent for 900 s, NMI through the QEMU monitor
+# last lines before the stop:
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0x105d1000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0x105e4740
+[linux-abi] GFILE: wrote 37 read 37 bytes, roundtrip PASS
+[glibc] frames: start=106931 end=82355 (delta 24576)
+[glibc] gfile (file I/O roundtrip): exit=44
+[glibc]   GFILE: wrote 37 read 37 bytes, roundtrip PASS
+
+========== NMI PROBE (wedge RIP capture) ==========
+[nmi] interrupted RIP=0x000000003040b65b CS=0x8 RSP=0x000000000014f570 RFLAGS=0x50002
+[nmi] anchor kernel_base ~ nmi_handler @ 0x00000000303b9ea4
+[nmi] code rip-16..: [31, c0, f0, 0f, b0, 0d, 8b, a4, f7, 03, 75, 04, eb, 0e, f3, 90]
+[nmi] code rip..   : [8a, 05, 7f, a4, f7, 03, 84, c0, 74, e6, eb, f2, 48, c1, e7, 04]
+[nmi] current task 10 "?" last-syscall=0(a1=0x0)->0x0 globals-owner=0
+[nmi] stack scan (return addresses):
+[nmi]   0x000000003436eefc
+[nmi]   0x000000003436eefc
+[nmi]   0x000000003040cc7c
+[nmi]   0x0000000037acfca0
+[nmi]   0x0000000023d9c2c0
+[nmi]   0x00000000371fb319
+[nmi]   0x0000000030403de2
+[nmi]   0x0000000023d9c2c0
+[nmi]   0x0000000023d9c2c0
+[nmi]   0x0000000023d9c2c0
+[nmi]   0x000000003036e506
+[nmi]   0x00000000304369e6
+[nmi]   0x000000002ce93ae0
+[nmi]   0x000000002ce93ae0
+[nmi]   0x0000000034382090
+[nmi]   0x000000003054e96b
+[nmi]   0x000000003036f1f1
+[nmi]   0x000000003034393e
+[nmi]   0x000000003438bdd8
+[nmi]   0x000000003438c8d0
+[nmi]   0x0000000030435ef4
+[nmi]   0x000000003438bdd0
+[nmi]   0x000000003438bdd8
+[nmi]   0x000000003438bb80
+[census] 28 tasks, current=10
+[census] t0 cr3=0x0 sys=185 cpu=0 Ready
+[census] t1 cr3=0x0 sys=0 cpu=0 Sleeping(until 4218)
+[census] t2 cr3=0x0 sys=0 cpu=0 Sleeping(until 4212)
+[census] t3 cr3=0x0 sys=0 cpu=0 Sleeping(until 4238)
+[census] t4 cr3=0x0 sys=0 cpu=0 Sleeping(until 3355)
+[census] t5 cr3=0x0 sys=0 cpu=0 Dead
+[census] t6 cr3=0x132000 sys=0 cpu=1 Dead
+[census] t7 cr3=0x13a000 sys=0 cpu=578 Ready
+[census] t8 cr3=0x141000 sys=0 cpu=578 Ready
+[census] t9 cr3=0x148000 sys=0 cpu=578 Ready
+[census] t10 cr3=0x150000 sys=0 cpu=577 Ready
+[census] t11 cr3=0x158000 sys=0 cpu=577 Ready
+[census] t12 cr3=0x160000 sys=0 cpu=0 Dead
+[census] t13 cr3=0x168000 sys=0 cpu=1 Dead
+[census] t14 cr3=0x170000 sys=0 cpu=3 Dead
+[census] t15 cr3=0x178000 sys=0 cpu=2 Dead
+[census] t16 cr3=0x180000 sys=0 cpu=2 Dead
+[census] t17 cr3=0x188000 sys=0 cpu=2 Dead
+[census] t18 cr3=0x184000 sys=128 cpu=2 Dead
+[census] t19 cr3=0x184000 sys=16 cpu=8 Dead
+[census] t20 cr3=0x184000 sys=16 cpu=8 Dead
+[census] t21 cr3=0x184000 sys=628 cpu=70 Dead
+[census] t22 cr3=0x0 sys=36 cpu=9 Blocked(chan=0x4e4554574f524b52)
+[census] t23 cr3=0x180000 sys=0 cpu=1 Dead
+[census] t24 cr3=0x184000 sys=178 cpu=3 Dead
+[census] t25 cr3=0x184000 sys=79 cpu=1 Dead
+[census] t26 cr3=0x184000 sys=16 cpu=1 Dead
+[census] t27 cr3=0x135000 sys=0 cpu=4 Sleeping(until 3354)
+========== END NMI PROBE ==========
+
+# scripts/symbolize.sh target/kernel.map <anchor> <RIP> <stack addresses>:
+anchor_rva=0xa3ed7  runtime_base=0x3033a000
+  0x000000003040b65b  rva=0xd165b     ->  _RNvNtCs9jgfWuZNK9t_10eurokernel5ring313pipe_write_fd +0xd1
+  0x000000003040cc7c  rva=0xd2c7c     ->  _RNvNtCs9jgfWuZNK9t_10eurokernel5ring314copy_from_user +0x72
+  0x0000000030403de2  rva=0xc9de2     ->  _RNvNtCs9jgfWuZNK9t_10eurokernel5ring311bg_dispatch +0xac2

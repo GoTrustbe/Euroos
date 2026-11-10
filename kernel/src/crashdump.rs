@@ -61,13 +61,13 @@ pub fn read_last() -> Option<CrashDump> {
     CrashDump::decode(&b)
 }
 
-/// Boot self-test + recovery: show any dump from the previous boot, and prove the
-/// dump write/read cycle (cross-boot persistent).
-pub fn selftest() {
+/// Recovery: report a dump the previous boot left and continue its sequence
+/// numbers. This is the part of the boot check every image runs; the release
+/// image runs only this (no test dump is written to the disk).
+pub fn recover() {
     if !crate::virtio_blk::present() {
         return;
     }
-    // (1) Recovery: was there a dump from the previous boot?
     let prev = read_last();
     if let Some(d) = prev {
         NEXT_SEQ.store(d.seq + 1, Ordering::Relaxed);
@@ -83,6 +83,16 @@ pub fn selftest() {
             );
         }
     }
+}
+
+/// Boot self-test + recovery: show any dump from the previous boot, and prove the
+/// dump write/read cycle (cross-boot persistent).
+pub fn selftest() {
+    if !crate::virtio_blk::present() {
+        return;
+    }
+    // (1) Recovery: was there a dump from the previous boot?
+    recover();
     // (2) Write a fresh test dump (synthetic #PF-like state) + read it back.
     let mut t = CrashDump::new(TEST_VECTOR, 0x2, 0x1_4000_ABCD, 0xFFFF_8000_0000_1000, 0x202);
     t.cr2 = 0xCAFE_BABE;

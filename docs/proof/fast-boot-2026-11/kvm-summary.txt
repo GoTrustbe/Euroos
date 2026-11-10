@@ -1,0 +1,5 @@
+== FAILED / PANIC / panic lines in the AFTER logs:
+none
+== serial log size to the desktop (lines, bytes): before / after
+1590 163512
+278 17609

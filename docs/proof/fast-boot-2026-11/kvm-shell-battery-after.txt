@@ -1,0 +1,310 @@
+[scon] $ whoami
+[scon] euro
+[scon] $ id
+[scon] uid=1000(euro) gid=1000(euro) groups=1000(euro),0(root)
+[scon] $ sessions
+[scon] ID   USER             UID    VIA      STATE
+[scon] 2    euro             1000   desktop  open
+[scon] 1    euro             1000   auto     closed (+0s)
+[scon] $ ls /
+[scon]   -rw-r--r--     1996 B    Welcome.txt
+[scon]   drwxr-xr-x        0 B    agents
+[scon]   drwxr-xr-x        0 B    bin
+[scon]   drwxr-xr-x        0 B    boot
+[scon]   drwxr-xr-x        0 B    data
+[scon]   drwxr-xr-x        0 B    etc
+[scon]   drwxr-xr-x        0 B    home
+[scon]   drwxr-xr-x        0 B    lib
+[scon]   drwxrwxrwx        0 B    tmp
+[scon]   drwxr-xr-x        0 B    var
+[scon] $ ls /home
+[scon]   drwxr-xr-x        0 B    euro
+[scon] $ ls /home/euro
+[scon]   -rw-r--r--     1996 B    Welcome.txt
+[scon]   drwxr-xr-x        0 B    demo
+[scon]   drwxr-xr-x        0 B    notes
+[scon]   drwxr-xr-x        0 B    pictures
+[scon] $ ls /tmp
+[scon] /tmp: (empty)
+[scon] $ ls /etc
+[scon]   drwxr-xr-x        0 B    euroguard
+[scon]   -rw-r--r--       27 B    eurokernel.conf
+[scon]   -rw-r--r--       23 B    group
+[scon]   -rw-r--r--       11 B    hostname
+[scon]   -rw-r--r--       58 B    hosts
+[scon]   -rw-r--r--      105 B    os-release
+[scon]   -rw-r--r--       84 B    passwd
+[scon]   -rw-r--r--      104 B    shadow
+[scon]   -rw-r--r--       17 B    system.ver
+[scon] $ ls /agents
+[scon]   -rw-r--r--      168 B    demo.wasm
+[scon] $ ls /var
+[scon]   drwxr-xr-x        0 B    log
+[scon] $ ls /var/log
+[scon]   -rw-r--r--     1782 B    audit.log
+[scon]   -rw-r--r--      132 B    journal.bin
+[scon] $ ls /bin
+[scon]   -rw-r--r--     1016 B    argvprog
+[scon]   -rw-r--r--    35224 B    browser
+[scon]   -rw-r--r--      600 B    cat
+[scon]   -rw-r--r--      576 B    daemon
+[scon]   -rw-r--r--   552864 B    doom
+[scon]   -rw-r--r--    13888 B    dyntest
+[scon]   -rw-r--r--      488 B    execee
+[scon]   -rw-r--r--    27840 B    fbtest
+[scon]   -rw-r--r--      808 B    forkpipe
+[scon]   -rw-r--r--     1032 B    forktest
+[scon]   -rw-r--r--     1208 B    hello
+[scon]   -rw-r--r--    23184 B    ipcrecv
+[scon]   -rw-r--r--    23184 B    ipcsend
+[scon]   -rw-r--r--    23088 B    isotest
+[scon]   -rw-r--r--     1856 B    linuxprog
+[scon]   -rw-r--r--    52320 B    mcat
+[scon]   -rw-r--r--    51648 B    mdns
+[scon]   -rw-r--r--    28904 B    mecho
+[scon]   -rw-r--r--    42296 B    menv
+[scon]   -rw-r--r--    35008 B    mmutex
+[scon]   -rw-r--r--    34704 B    mpthread
+[scon]   -rw-r--r--    51744 B    msock
+[scon]   -rw-r--r--    28040 B    mthread
+[scon]   -rw-r--r--    51616 B    mtrack
+[scon]   -rw-r--r--    29456 B    mupper
+[scon]   -rw-r--r--    56456 B    muslfile
+[scon]   -rw-r--r--     1464 B    muslprog
+[scon]   -rw-r--r--    55808 B    muslreal
+[scon]   -rw-r--r--    52192 B    mwrite
+[scon]   -rw-r--r--    13344 B    pieprog
+[scon]   -rw-r--r--      464 B    ticker
+[scon]   -rw-r--r--    23360 B    tlscount
+[scon]   -rw-r--r--    23256 B    worker
+[scon] $ df
+[scon] Filesystem   Size(KiB)  Used(KiB)  Avail(KiB)  Mounted on
+[scon]   EuroFS         8192       1732       6460   /
+[scon] $ caps
+[scon] EuroGuard — capability security (NATIVE EuroOS model: no ambient
+[scon]   root/sudo; each app gets minimal, signed rights)
+[scon] 
+[scon] PROGRAM            ABI            CAPABILITIES
+[scon] /bin/fbtest        linux-compat   console
+[scon] /bin/doom          linux-compat   console file
+[scon] /bin/browser       linux-compat   console file net
+[scon] /bin/hello         EuroOS-native  console procinfo file
+[scon] /bin/cat           EuroOS-native  console file
+[scon] /bin/linuxprog     linux-compat   console procinfo file
+[scon] /bin/forktest      linux-compat   console procinfo
+[scon] /bin/execee        linux-compat   console
+[scon] /bin/forkpipe      linux-compat   console
+[scon] /bin/ticker        linux-compat   console
+[scon] /bin/muslprog      linux-compat   console file
+[scon] /bin/argvprog      EuroOS-native  console
+[scon] /bin/pieprog       EuroOS-native  console
+[scon] /bin/muslreal      linux-compat   console procinfo
+[scon] /bin/muslfile      linux-compat   console file
+[scon] /bin/mcat          linux-compat   console file
+[scon] /bin/mwrite        linux-compat   console file
+[scon] /bin/mecho         linux-compat   console
+[scon] /bin/mupper        linux-compat   console file
+[scon] /bin/menv          linux-compat   console
+[scon] /bin/msock         linux-compat   console net
+[scon] /bin/mdns          linux-compat   console net
+[scon] /bin/mtrack        linux-compat   console net
+[scon] /bin/isotest       linux-compat   console
+[scon] /bin/worker        linux-compat   console procinfo
+[scon] 
+[scon] network policy (EuroGuard firewall):
+[scon] policy (Level 1 — /etc/euroguard/system.conf):
+[scon]   blocked IPs:   203.0.113.5
+[scon]   blocked ports: 23, 1900
+[scon]   dns block list:    4 domains
+[scon]   geo-block:     none (47 country blocks in the table)
+[scon] 
+[scon] (try `guard` to control per-app + geo network policy)
+[scon] $ guard
+[scon] policy (Level 1 — /etc/euroguard/system.conf):
+[scon]   blocked IPs:   203.0.113.5
+[scon]   blocked ports: 23, 1900
+[scon]   dns block list:    4 domains
+[scon]   geo-block:     none (47 country blocks in the table)
+[scon] 
+[scon] per-app network report — 0 blocked total
+[scon]   (no app network activity yet)
+[scon] $ audit
+[scon] audit log (44 events, append-only /var/log/audit.log):
+[scon]     24  IMMUTABLE_SET /bin/menv
+[scon]     25  IMMUTABLE_SET /bin/msock
+[scon]     26  IMMUTABLE_SET /bin/mdns
+[scon]     27  IMMUTABLE_SET /bin/mtrack
+[scon]     28  IMMUTABLE_SET /bin/tlscount
+[scon]     29  IMMUTABLE_SET /bin/isotest
+[scon]     30  IMMUTABLE_SET /bin/worker
+[scon]     31  IMMUTABLE_SET /bin/mthread
+[scon]     32  IMMUTABLE_SET /bin/mpthread
+[scon]     33  IMMUTABLE_SET /bin/mmutex
+[scon]     34  IMMUTABLE_SET /bin/ipcrecv
+[scon]     35  IMMUTABLE_SET /bin/ipcsend
+[scon]     36  BOOT kernel-start
+[scon]     37  LOGIN user=root tty=console
+[scon]     38  IMMUTABLE_CLEARED /var/log/audit.log
+[scon]     39  IMMUTABLE_SET /bin/hello
+[scon]     40  CAP_DENIED firefox requested CAP_IMMUTABLE_ADMIN (europol-deny)
+[scon]     41  LOGIN session opened
+[scon]     42  LOGOUT session closed
+[scon]     43  LOGIN session opened
+[scon] $ eurosnap
+[scon] snapshots (0):
+[scon] commands: eurosnap create [label] | rollback <id> | delete <id>
+[scon] $ europol
+[scon] policy 'firefox' (effective policy):
+[scon]   CAP_CONSOLE          allowed
+[scon]   CAP_PROC_INFO        DENIED
+[scon]   CAP_FILE             allowed
+[scon]   CAP_NET              allowed
+[scon]   CAP_IMMUTABLE_ADMIN  DENIED
+[scon] commands: europol | europol explain <CAP_NAME>
+[scon] $ vault
+[scon] vault (2 secrets — labels + cap requirement, NEVER values):
+[scon]   db-password      read_caps=0x400
+[scon]   tls-key          read_caps=0x400
+[scon] commands: vault | vault get <label>
+[scon] $ vault get db-password
+[scon] 'db-password': EPERM — this session does not have CAP_DB_ACCESS
+[scon] $ firewall
+[scon] EuroFW packet filter: 3 rules, 0 allowed / 0 dropped
+[scon]   drop in tcp dport 23 (Telnet) · drop in tcp dport 139 (NetBIOS) · drop in src 198.51.100.0/24
+[scon]   default policy: ACCEPT (stricter default-deny via EuroPol policy)
+[scon] $ vpn
+[scon] EuroVPN — sovereign, forward-secret VPN (X25519 + HKDF-SHA256 + ChaCha20-Poly1305)
+[scon]   local public key: 7b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f13
+[scon]   share this with a peer (like a WireGuard config) to set up a tunnel
+[scon] $ services
+[scon] SERVICE     STATUS    PID    STARTS  POLICY
+[scon] ticker      stopped   100    1       always
+[scon] $ lsdev
+[scon] EuroDevice — device tree (6 devices):
+[scon]   00:00.0  8086:29c0  Intel Q35 host bridge  → pci-bridge   [bound]
+[scon]   00:01.0  1234:1111  QEMU VGA               → —            [unbound]
+[scon]   00:02.0  1af4:1000  virtio-net             → virtio-net   [bound]
+[scon]   00:1f.0  8086:2918  Intel ICH9 LPC         → pci-bridge   [bound]
+[scon]   00:1f.2  8086:2922  Intel ICH9 AHCI        → —            [unbound]
+[scon]   00:1f.3  8086:2930  SMBus                  → —            [unbound]
+[scon] $ battery
+[scon] No ACPI battery or AC adapter in this firmware.
+[scon] (This is normal on a desktop or virtual machine.)
+[scon] $ apps
+[scon] Applications — capabilities + network policy (control any of them with `app <name>`)
+[scon] 
+[scon] APP                ABI            CAPABILITIES           NETWORK
+[scon] /bin/fbtest        linux-compat   console                default
+[scon] /bin/doom          linux-compat   console file           default
+[scon] /bin/browser       linux-compat   console file net       default
+[scon] /bin/hello         EuroOS-native  console procinfo file  default
+[scon] /bin/cat           EuroOS-native  console file           default
+[scon] /bin/linuxprog     linux-compat   console procinfo file  default
+[scon] /bin/forktest      linux-compat   console procinfo       default
+[scon] /bin/execee        linux-compat   console                default
+[scon] /bin/forkpipe      linux-compat   console                default
+[scon] /bin/ticker        linux-compat   console                default
+[scon] /bin/muslprog      linux-compat   console file           default
+[scon] /bin/argvprog      EuroOS-native  console                default
+[scon] /bin/pieprog       EuroOS-native  console                default
+[scon] /bin/muslreal      linux-compat   console procinfo       default
+[scon] /bin/muslfile      linux-compat   console file           default
+[scon] /bin/mcat          linux-compat   console file           default
+[scon] /bin/mwrite        linux-compat   console file           default
+[scon] /bin/mecho         linux-compat   console                default
+[scon] /bin/mupper        linux-compat   console file           default
+[scon] /bin/menv          linux-compat   console                default
+[scon] /bin/msock         linux-compat   console net            default
+[scon] /bin/mdns          linux-compat   console net            default
+[scon] /bin/mtrack        linux-compat   console net            default
+[scon] /bin/isotest       linux-compat   console                default
+[scon] /bin/worker        linux-compat   console procinfo       default
+[scon] $ quota
+[scon] no quotas set and no owned blocks (quota set <uid> <blocks>)
+[scon] $ hostname
+[scon] eurokernel
+[scon] $ uname -a
+[scon] EuroOS eurokernel 0.1-alpha #1 SMP EuroKernel x86_64
+[scon] $ net
+[scon] ARP  : 10.0.2.2 asks 10.0.2.15  ->  reply: 10.0.2.15 is-at 52:54:00:12:34:56
+[scon] ICMP : echo id=4660 seq=7 -> reply, checksum OK
+[scon] IPv4 : 10.0.2.15 -> 8.8.8.8 ttl=64 proto=Udp  hdr-checksum OK
+[scon] UDP  : :5353 -> :53  'DNS-query'  pseudo-checksum OK
+[scon] Frame: ethertype Ipv4, 51 bytes, fully parsed  [OK]
+[scon] $ netstat
+[scon] tcp: connect ok 0 (slowest 0 ms), SYN timeouts 0, stale-peer RSTs 0, new-port retries 0, closed-port answers 0, gave up 0 | inbound: half-open 0, httpd conns 0, served 0 | queues 0 (0 segs), unowned segs 0 (after-close ACKs 0)
+[scon] net worker: task 3, 1 passes, 0 inbound frames, longest pass 60 us; kicks 0 (e1000d/task) + 0 (interrupt, 0 found the scheduler busy)
+[scon] DNS cache: 0 hits, 0 misses
+[scon]   (cache empty)
+[scon] $ ca
+[scon] unknown command: ca  (type 'help')
+[scon] $ attest
+[scon] unknown command: attest  (type 'help')
+[scon] $ idm
+[scon] unknown command: idm  (type 'help')
+[scon] $ euroagent
+[scon] EuroAgent — sovereign agent-first runtime (Sprint AA)
+[scon]   agents = WASM + declarative capability manifest; trust boundary in the kernel (EuroGuard), not the cloud
+[scon]   MCP gateway: open Model-Context-Protocol, capability-gated, every call → P3 audit
+[scon]   LLM: default local (Ollama-compatible); cloud opt-in via EuroVault
+[scon]   vs. Project Solara: EuroAgent runs fully offline, EU data residency guaranteed
+[scon]   subcommands: euroagent list · caps · mcp list · inspect · llm · dispatch test <intent>
+[scon] $ eurousers list
+[scon] USER         UID STATE      GROUPS
+[scon] root           0 locked(admin-lock) wheel
+[scon] euro        1000 active     users,net
+[scon] alice       1002 active     users,net
+[scon] bob         1003 active     wheel
+[scon] $ eurohealth
+[scon] EuroHealth — total score 100/100 (HEALTHY)
+[scon]   disk: no NVMe (SMART not available)
+[scon]   filesystem: 0 scrub errors, 0 unrecoverable
+[scon]   memory: 279257/523958 frames free
+[scon] $ pkg list
+[scon] unknown command: pkg  (type 'help')
+[scon] $ app list
+[scon] ── list ──────────────────────────────
+[scon]   identity:     (not a registered program — showing runtime policy only)
+[scon]   permissions:  no grants (it must ask, and you allow/deny)
+[scon] 
+[scon]   network policy: default (system + geo rules only)
+[scon]   traffic: (no connections yet)
+[scon] 
+[scon]   control it:   app list revoke   ·   app list net block|allow|only <cidr>
+[scon] $ wasm /agents/demo.wasm
+[scon]   [fd_write] EuroWASM: no-JIT interpreter runs in the kernel
+[scon] wasm: /agents/demo.wasm · run() = 55 · no-JIT sandbox, WASI cap-gated
+[scon] $ mkdir /scon-test
+[scon] mkdir: /scon-test: PermissionDenied
+[scon] $ write /home/euro/scon.txt hi
+[scon] written: /home/euro/scon.txt (3 bytes)
+[scon] $ cat /home/euro/scon.txt
+[scon] hi
+[scon] $ ls /home/euro
+[scon]   -rw-r--r--     1996 B    Welcome.txt
+[scon]   drwxr-xr-x        0 B    demo
+[scon]   drwxr-xr-x        0 B    notes
+[scon]   drwxr-xr-x        0 B    pictures
+[scon]   -rw-r--r--        3 B    scon.txt
+[scon] $ versions /home/euro/scon.txt
+[scon] usage: versions on|off|list|restore <path> [n]
+[scon] $ entropy
+[scon] unknown command: entropy  (type 'help')
+[scon] $ update
+[scon] unknown command: update  (type 'help')
+[scon] $ journal
+[scon] journal — 2 entries (of 2 live, 0 dropped):
+[scon]    notice   boot: kernel reached the desktop
+[scon]    info     journal: journal persisted to disk
+[scon] usage: journal [err|warn|<facility>]  (persisted across reboot)
+[scon] $ fsck
+[scon] EuroFSck — integrity check (scrub):
+[scon]   superblock           : OK
+[scon]   inodes checked       : 76
+[scon]   data checksums (XXH3): 75 verified
+[scon]   data blocks (ref)    : 341
+[scon]   free-space bitmap    : consistent
+[scon]   errors               : 0
+[scon]   => filesystem HEALTHY ✓
+[scon] $ ping 10.0.2.2
+[scon] PING 10.0.2.2: echo-reply OK ✓

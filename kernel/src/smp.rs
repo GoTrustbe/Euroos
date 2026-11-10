@@ -321,6 +321,19 @@ pub fn init() {
     // no scheduler, counters or kwork loop of its own).
     let enabled = online;
 
+    // Release image: no scheduler/IPI/load-balance demonstration (0.25 s of
+    // waiting for counters to move). The demo workers are parked at once and
+    // the APs take kernel work.
+    if !cfg!(feature = "selftest") {
+        let ap_idx: Vec<usize> = enabled.iter().copied().filter(|&id| id != bsp).map(|id| (id & 7) as usize).collect();
+        let parked = crate::sched::ap_park_demo_workers(&ap_idx);
+        if parked == ap_idx.len() {
+            crate::kwork::start_accepting();
+        }
+        serial_println!("[smp] {}/{} AP(s) idle in hlt, taking kernel work from per-CPU queues", parked, ap_idx.len());
+        return;
+    }
+
     // Give the APs ~80 ms and read their per-CPU work counters: proof that each core
     // independently runs its OWN run queue and alternates tasks (SMP scheduling).
     crate::apic::busy_wait_us(200_000);

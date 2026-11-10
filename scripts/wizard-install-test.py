@@ -139,7 +139,9 @@ print("[wizard-test] RUN 2: boot the installed disk alone", flush=True)
 vm = Vm(["-drive", f"format=raw,file={TARGET}"], os.path.join(OUT, "serial-standalone.log"))
 check("installed root mounted from disk", vm.wait_for("live root = the on-disk EuroFS", 600))
 check("identity store loaded from disk", vm.wait_for("identity store loaded from disk", 300))
-check("lockscreen reached", vm.wait_for("[ag-lock]", 300))
+# The release image no longer runs the lockscreen self-test ([ag-lock]); the
+# [boot-time] mark of the phase before it says the lockscreen is next.
+check("lockscreen reached", vm.wait_for("[boot-time] phase desktop-build", 300))
 time.sleep(5); vm.shot("7-lockscreen.png")
 log = vm.log()
 check("no unattended auto-login on the installed system", "unattended boot" not in log and "login successful" not in log)

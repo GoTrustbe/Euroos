@@ -1,0 +1,50 @@
+whoami
+id
+sessions
+ls /
+ls /home
+ls /home/euro
+ls /tmp
+ls /etc
+ls /agents
+ls /var
+ls /var/log
+ls /bin
+df
+caps
+guard
+audit
+eurosnap
+europol
+vault
+vault get db-password
+firewall
+vpn
+services
+lsdev
+battery
+apps
+quota
+hostname
+uname -a
+net
+netstat
+ca
+attest
+idm
+euroagent
+eurousers list
+eurohealth
+pkg list
+app list
+wasm /agents/demo.wasm
+mkdir /scon-test
+write /home/euro/scon.txt hi
+cat /home/euro/scon.txt
+ls /home/euro
+versions /home/euro/scon.txt
+entropy
+update
+journal
+fsck
+ping 10.0.2.2

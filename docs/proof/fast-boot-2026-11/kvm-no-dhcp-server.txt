@@ -1,0 +1,17 @@
+# a virtio-net NIC on an empty hub (no DHCP server), KVM
+after:      2.538 s to the desktop
+    2.235 [net-up] kernel task 2: DHCP + ARP + router discovery over virtio-net run in the background
+    2.549 [boot-time] desktop after 879 ms since kernel entry (HPET, release build): firmware-exit=64 cpu-mm=10 storage-rootfs=50 storage-checks=8 identity-config=40 net=22 userland-demos=199 sched-init=13 acpi-pci-tpm=58 smp-timer=58 devices=33 drivers-late=53 glibc-suite=1 vfs-mounts=3 subsystems=91 boot-good-scrub=8 desktop-b
+    3.270 [net-up] no DHCP offer in the first second over virtio-net; asking again in the background
+before:    90.847 s to the desktop
+    2.050 [net] /etc/hosts: 3 name->IP mapping(s) loaded
+    2.066 [net] virtio-net @ PCI 00:02.0, legacy virtio-0.9.5, I/O BAR 0x6060
+    2.069 [net] virtio-net MSI-X on (4 entries) -> vector 0x4b, queue readback=0x0000
+    2.072 [net] virtio-net OK — MAC 52:54:00:12:34:56 (RX 128 bufs, 10-byte header, features 0x10020)
+   12.909 [net] NIC: virtio-net MAC 52:54:00:12:34:56
+   12.910 [net] DHCP: DISCOVER sent (broadcast)
+   12.911 [net] (no OFFER) — falling back to 10.0.2.15
+   12.912 [net] (no ARP reply from the gateway)
+   12.914 [net] IPv6 link-local (SLAAC): fe80::5054:ff:fe12:3456
+   12.915 [net] IPv6: Router Solicitation -> ff02::2 sent
+   12.917 [net] (no Router Advertisement — IPv6 possibly off)

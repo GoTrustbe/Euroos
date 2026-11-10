@@ -1,0 +1,3 @@
+before-instr-1: kernel-entry 1.68s desktop 17.66s
+before-instr-2: kernel-entry 1.81s desktop 17.98s
+before-instr-3: kernel-entry 1.74s desktop 17.74s

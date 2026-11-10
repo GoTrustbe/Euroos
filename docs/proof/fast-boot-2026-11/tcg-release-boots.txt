@@ -1,0 +1,13 @@
+before-1: kernel-entry 4.60s desktop 36.46s
+after-1: kernel-entry 4.59s desktop 6.69s
+before-2: kernel-entry 4.60s desktop 39.32s
+after-2: kernel-entry 4.37s desktop 6.46s
+before-3: kernel-entry 4.36s desktop 36.75s
+after-3: kernel-entry 4.35s desktop 6.40s
+after-modern: kernel-entry 4.39s desktop 6.35s shot=True
+after-smp1-1g: kernel-entry 5.05s desktop 7.11s shot=True
+before-smp1-1g: kernel-entry 4.12s desktop 32.12s
+after-net: kernel-entry 4.08s desktop 6.03s
+before-instr-1: kernel-entry 4.64s desktop 34.03s
+before-instr-2: kernel-entry 4.32s desktop 34.07s
+before-instr-3: kernel-entry 4.35s desktop 36.08s

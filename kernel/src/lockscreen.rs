@@ -109,6 +109,15 @@ fn render(fb: &FrameBuffer, lk: &Lock, clock: &str) {
 /// unattended boot, until the auto-login grace expires). Sets the session via
 /// EuroAuth and returns the signed-in username.
 pub fn gate(fb: &FrameBuffer, default_user: &str) -> String {
+    // Release image on a live medium (the demo store): the session is signed in
+    // without anyone typing, so drawing the lockscreen and waiting out the grace
+    // period only delays the desktop (0.6 s under KVM, several seconds under TCG
+    // for the two full-screen renders). An installed system never comes here: it
+    // waits for its password. The self-test image keeps the grace period, which
+    // its harnesses rely on.
+    if !cfg!(feature = "selftest") && crate::euroid::unattended_login_allowed() {
+        return unattended_login(default_user);
+    }
     let mut lk = Lock {
         user: default_user.to_string(),
         input: String::new(),
@@ -194,21 +203,7 @@ pub fn gate(fb: &FrameBuffer, default_user: &str) -> String {
         if crate::euroid::unattended_login_allowed()
             && crate::interrupts::ticks().saturating_sub(start) > UNATTENDED_AUTOLOGIN_TICKS
         {
-            // Try a real login with the demo password (live) or the dev install
-            // password (self-test standalone boot); if that fails, fall back to
-            // the existing session default (uid 1000).
-            let attempt = crate::euroid::login(default_user, "euro")
-                .or_else(|_| crate::euroid::login(default_user, crate::instexec::DEV_INSTALL_PASSWORD));
-            if let Ok(ok) = attempt {
-                set_session(&ok.name, ok.uid);
-                crate::serial_println!(
-                    "[lock] unattended boot — no input within grace → auto-login as {} (demo/CI)",
-                    ok.name
-                );
-                return ok.name;
-            }
-            crate::serial_println!("[lock] unattended boot — auto-login fell back to default session");
-            return default_user.to_string();
+            return unattended_login(default_user);
         }
 
         if dirty {
@@ -216,6 +211,24 @@ pub fn gate(fb: &FrameBuffer, default_user: &str) -> String {
         }
         x86_64::instructions::hlt();
     }
+}
+
+/// The unattended sign-in: a real login with the demo password (live) or the
+/// dev install password (self-test standalone boot); if that fails, the
+/// existing session default (uid 1000).
+fn unattended_login(default_user: &str) -> String {
+    let attempt = crate::euroid::login(default_user, "euro")
+        .or_else(|_| crate::euroid::login(default_user, crate::instexec::DEV_INSTALL_PASSWORD));
+    if let Ok(ok) = attempt {
+        set_session(&ok.name, ok.uid);
+        crate::serial_println!(
+            "[lock] unattended boot — no input within grace → auto-login as {} (demo/CI)",
+            ok.name
+        );
+        return ok.name;
+    }
+    crate::serial_println!("[lock] unattended boot — auto-login fell back to default session");
+    default_user.to_string()
 }
 
 fn set_session(name: &str, uid: u32) {
