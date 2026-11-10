@@ -47,7 +47,7 @@ pub fn robust_read_selftest(fs: &mut dyn FileSystem, big: &str) -> bool {
 /// frames, broken NVMe identify data, a paint-bucket click outside the canvas,
 /// typing into a form field without a slot, and the `net` and `app` commands.
 #[cfg(feature = "selftest")]
-fn robust_selftest() {
+pub fn robust_selftest() {
     let net = net_selftest();
     let net_ok = net.len() >= 4 && !net.iter().any(|l| l.contains("FAILED"));
     let app_ok = ["app", "apps x y", "app nosuch", "app nosuch net", "app nosuch net only", "app nosuch frobnicate"]
@@ -1306,8 +1306,6 @@ fn guard_cmd(line: &str) -> Vec<String> {
 /// code path the shell command runs (not a mock).
 pub fn selftest() {
     use crate::euroguard::{self, AppNet};
-    #[cfg(feature = "selftest")]
-    robust_selftest();
 
     // Seed a network clamp on a throwaway app (the "restrict this agent" action).
     euroguard::set_app_net("selftest-agent", AppNet::Blocked);

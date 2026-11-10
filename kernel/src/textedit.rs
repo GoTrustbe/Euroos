@@ -78,7 +78,7 @@ fn open_limited(fs: &mut dyn FileSystem, path: &str, limit: u64) -> bool {
 /// of being read into the heap (BUG-025/BUG-038 class). The limits are set
 /// low here so a 64 KiB file is "too large"; the code path is the real one.
 #[cfg(feature = "selftest")]
-fn robust_selftest(fs: &mut dyn FileSystem) {
+pub fn robust_selftest(fs: &mut dyn FileSystem) {
     let big = "/tmp/robust-big.bin";
     let small = "/tmp/robust-small.txt";
     let wrote = fs.write_file(big, &alloc::vec![b'x'; 64 * 1024]).is_ok() && fs.write_file(small, b"kept").is_ok();
@@ -305,8 +305,6 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
 /// **[edit]** — prove the edit-→-save-→-reload cycle on the REAL EuroFS,
 /// independent of keyboard/mouse: type text in, save, reload, compare.
 pub fn selftest(fs: &mut dyn FileSystem) {
-    #[cfg(feature = "selftest")]
-    robust_selftest(fs);
     let path = "/tmp/edit-selftest.txt";
     open(fs, path); // fresh buffer (file does not exist → welcome text)
     // Replace the buffer with controlled content via input().

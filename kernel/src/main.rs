@@ -1082,6 +1082,10 @@ fn main() -> Status {
         // prove that the update pipeline rejects a tampered package.
         crypto::selftest();
         update::apply_gate_selftest(rtc::epoch());
+        // [robust-fs]: a file larger than the memory budget is refused by the editor,
+        // the paint app, the image viewer and `cat`.
+        #[cfg(feature = "selftest")]
+        textedit::robust_selftest(&mut fs);
         // [edit] (Sprint 4): edit EuroText → save → re-read on the REAL EuroFS.
         textedit::selftest(&mut fs);
         trash::selftest(&mut fs); // conveniences: delete-to-trash + undo
@@ -4186,6 +4190,10 @@ fn main() -> Status {
         ps2::keymap_selftest();
         // 3F-7: capability-scoped app permission portals (request → ask → scoped grant).
         portal::selftest();
+        // [robust] and its parts ([robust-paging], [robust-usb], [robust-hda]): the former
+        // panic sites of the stability pass answer with an error.
+        #[cfg(feature = "selftest")]
+        shell::robust_selftest();
         // Part 2: unified per-app control surface (caps + permissions + network in one).
         shell::selftest();
         // Part 3: the desktop per-app control screen's actions do real kernel work.
@@ -4200,7 +4208,8 @@ fn main() -> Status {
         notify::selftest();
         screenshot::selftest();
         tooltip::selftest();
-        help::selftest(); // T3-hook: [help] every app has a help page
+        // [help]: every app has a help page; panel, shortcut overview, tour cards, tooltips.
+        help::selftest();
         symbolpicker::selftest();
         spell::selftest();
         switcher::selftest();
@@ -4395,7 +4404,10 @@ fn main() -> Status {
         // quota — both on the LIVE root FS.
         session::selftest(&mut vfs);
         session::quota_selftest(&mut vfs);
-        prefs::selftest(&mut vfs); settings_ui::state_selftest(&mut vfs); // T2-hook
+        // [prefs-rt]/[prefs-bad]/[prefs-user]: settings storage on the live root FS;
+        // then the form toolkit and the Settings panel driven through its own events.
+        prefs::selftest(&mut vfs);
+        settings_ui::state_selftest(&mut vfs);
         // 3F-5: MIME detection + default-app associations on the live FS.
         mime::selftest(&mut vfs);
         // Sprint AE-e2e: must-change-password enforced end-to-end (login refuses until
