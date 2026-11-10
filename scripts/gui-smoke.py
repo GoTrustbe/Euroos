@@ -791,13 +791,20 @@ class Guest:
                 self.alive(f"monkey action {n} ({act})")
             if n % 50 == 0:
                 # The screen must not be frozen: move the pointer across it and compare.
+                # The picture gets up to 5 s to follow: while the notification list is
+                # open the desktop repaints everything in every loop iteration, 0.3 to
+                # 0.4 s per frame with a handful of windows (measured on the R630), and
+                # a single look 0.3 s after the move called that "frozen".
                 self.move(self.w // 2, self.h // 2)
-                self.nap(0.3)
+                self.nap(1.0)
                 a = self.shot()
                 self.move(self.w // 2 + 150, self.h // 2 + 90)
-                self.nap(0.3)
-                b = self.shot(f"monkey-{(n // 50) % 12:02d}")
-                if not a.differs(b, min_pixels=4):
+                moved, t_move = False, time.time()
+                while not moved and time.time() - t_move < 5 * self.slow:
+                    self.nap(0.3)
+                    b = self.shot(f"monkey-{(n // 50) % 12:02d}")
+                    moved = a.differs(b, min_pixels=4)
+                if not moved:
                     frozen += 1
                     if frozen >= 2:
                         self.fatal(f"monkey action {n}", "screen frozen: moving the pointer no longer changes the picture")
@@ -816,6 +823,11 @@ class Guest:
                 self.key("alt", "1")
                 self.nap(0.5)
                 self.close_all_windows()
+                # A context menu the monkey left open takes the next left click (Esc does
+                # not close it): spend one on the bare strip beside the dock, so the click
+                # on the EU mark opens the launcher.
+                self.click(SIDEBAR_W + 6, self.h - 6)
+                self.nap(0.3)
                 self.click(*BRAND)
                 self.nap(0.5)
                 self.type("term")
@@ -823,6 +835,8 @@ class Guest:
                 self.key("ret")
                 self.nap(0.8)
                 ok = self.terminal_echo(f"gui-monkey-{n}")
+                if not ok:                      # what did the desktop look like when the command did not arrive?
+                    self.shot(f"monkey-check-{n}-failed")
                 self.record(f"monkey: desktop still works after {n} actions (terminal runs a typed command)", ok)
                 self.alive(f"monkey functional check {n}")
         self.alive("monkey end")
