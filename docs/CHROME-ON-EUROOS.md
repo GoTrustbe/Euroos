@@ -36,7 +36,7 @@ python3 scripts/chrome-smoke.py --image eurokernel.img --pack chrome-pack2.img \
 Image bouwen met `EUROOS_BOOTOPTS="ui.tour=off;update.check=off"`. De NSS-pack
 moet bij de chrome-pack horen: `packs/nss-pack.img` (NSS 3.120) doet dat NIET,
 `nss-pack-vid.img` wel. In de EuroOS-shell: `ctabs` (open pagina's met URL en
-titel), `cdiag` (threads, X-invoerstatus, vensters, fd-gebruik), `xtrace
+titel), `cdiag` (threads, X-invoerstatus, vensters), `xtrace
 on|off`, `fstrace N`. Bootopties: `update.check=off`, `chrome.input=cdp` (de
 oude DevTools-kopie van invoer, standaard uit).
 

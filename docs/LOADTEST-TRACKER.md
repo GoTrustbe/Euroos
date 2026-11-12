@@ -1788,7 +1788,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 ### BUG-098 — one fd space for the browser and all its children: "Too many open files" on the third site ⬜ OPEN
 - **Status:**   OPEN · **Severity:** HIGH for a browsing session (the site matrix does not pass in one session)
 - **Found:**    2026-11-12 · `chrome-smoke.py --only sites`, R630.
-- **Actual:**   `cdiag` counts 245 open files in the browser's fd space after euro-os.eu, 380 after
+- **Actual:**   a census of the descriptor table (a temporary addition to `cdiag`, not in the tree;
+  `proof/chrome-2026-11/fd-usage-b22.txt`) counts 245 open files in the browser's fd space after euro-os.eu, 380 after
   nl.wikipedia.org, 483 during github.com; then `Creating shared memory in /tmp/.org.chromium.Chromium.* failed:
   Too many open files (24)` in a renderer and `FATAL:base/memory/shared_memory_switch.cc:111 Check failed:
   shmem_token` in the browser. About 315 of the 483 are unlinked files: shared-memory regions, one number per
