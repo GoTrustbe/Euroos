@@ -466,6 +466,7 @@ fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
     // A browser is a UI: it must LIVE. The tickless fast-forward exists to make a
     // run-to-completion boot test finish, and would race a live window's deadlines.
     ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
+    xserver::forget_clients();
     xserver::set_windowed(true);
     // The X screen is the real screen: the window can then be as large as the
     // desktop makes its frame (maximise), not 1280x800 at most.
@@ -566,6 +567,7 @@ fn launch_installed_app(ctx: &mut shell::ShellCtx, name: &str) -> (bool, String)
             ring3::NEXT_SPAWN_PROFILE.store(0, core::sync::atomic::Ordering::Relaxed);
             return (false, String::from("a hosted app is already running (close its window first)"));
         }
+        xserver::forget_clients();
         xserver::set_windowed(true);
         match ring3::spawn_glibc_persistent(ctx.mem, &bytes, ring3::ldlinux_bytes(), &argv, envp, caps) {
             Some(t) => (true, format!("{}: launched in a window (task {t}; caps '{}', profile {})", app.title, app.caps, app.profile)),
@@ -3687,6 +3689,7 @@ fn main() -> Status {
             if live_gtk_demo {
                 // WINDOWED: retain the GTK window's pixels instead of blitting fullscreen,
                 // so the desktop composites it as a framed window.
+                xserver::forget_clients();
                 xserver::set_windowed(true);
                 match ring3::spawn_glibc_persistent(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net) {
                     Some(t) => serial_println!("[glibc] ggtk live on task {t}"),
