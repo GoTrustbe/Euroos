@@ -453,6 +453,12 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             crate::xserver::TRACE.store(on, core::sync::atomic::Ordering::Relaxed);
             vec![format!("xtrace: {}", if on { "on" } else { "off" })]
         }
+        // `fstrace N`: log the next N pread/pwrite calls of every program.
+        "fstrace" => {
+            let n: u32 = arg1.parse().unwrap_or(0);
+            crate::ring3::FSTRACE_LEFT.store(n, core::sync::atomic::Ordering::Relaxed);
+            vec![format!("fstrace: the next {n} positioned reads and writes go to the serial console")]
+        }
         "cdiag" => {
             // What a hosted glibc program (the browser) is doing right now: every
             // thread with its state and last syscall, the main thread's recent

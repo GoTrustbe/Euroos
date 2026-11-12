@@ -13956,6 +13956,9 @@ pub fn dump_epoll_sets() {
     }
 }
 
+/// Budget of the positioned-I/O trace (`fstrace N` in the shell).
+pub static FSTRACE_LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 pub fn dump_main_syscalls() {
     let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
     crate::serial_println!("[msc] main thread t{main}: last {} syscalls (tick num(a1)=ret):", MSC_RING);
@@ -14002,6 +14005,17 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         41 | 43 | 288 | 290 | 284 | 291 | 213 | 319 | 253 | 294 | 283 | 282 | 289);
     if creates_fd && (r as i64) >= 0 && r < 1000 {
         child_note_open(r as usize);
+    }
+    // `fstrace N` (shell): the next N positioned reads and writes, whatever the file.
+    if matches!(num, 17 | 18) && FSTRACE_LEFT.load(Ordering::Relaxed) > 0 {
+        FSTRACE_LEFT.fetch_sub(1, Ordering::Relaxed);
+        let (fi, path) = {
+            let fi = if (a1 as usize) < MAX_FD { OPEN_FDS.lock()[a1 as usize].map(|(fi, _)| fi) } else { None };
+            let path = fi.and_then(|fi| FILES.lock().get(fi).map(|(q, _)| q.clone())).unwrap_or_default();
+            (fi, path)
+        };
+        crate::serial_println!("[fstrace] t{} {}(fd {a1}, len {a3:#x}, off {a4:#x}) = {r:#x} fi={fi:?} {path:?} size={:?}",
+            crate::sched::current_lockfree(), if num == 17 { "pread" } else { "pwrite" }, vfs_size(a1 as usize));
     }
     // Profile-directory file ops that failed or came up short (see FSDIAG_BITS).
     if a1 < 1024 && matches!(num, 0 | 1 | 17 | 18 | 8 | 77 | 5 | 74 | 75 | 3) && fsdiag_is(a1) {
