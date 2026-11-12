@@ -7494,7 +7494,7 @@ fn vfs_unlink(path: &[u8]) -> u64 {
 }
 
 /// Can file `fi` still be reached without its name: a descriptor in any fd
-/// space, or a shared mapping?
+/// space, or a mapping in any process?
 fn file_referenced(fi: usize) -> bool {
     if OPEN_FDS_ALL.lock().any(|e| matches!(e, Some((f, _)) if *f == fi)) {
         return true;
@@ -7505,7 +7505,23 @@ fn file_referenced(fi: usize) -> bool {
     if SHARED_FRAMES.lock().iter().any(|(f, _)| *f == fi) {
         return true;
     }
-    SHARED_ALIASES.lock().iter().any(|&(_, _, f)| f == fi)
+    if SHARED_ALIASES.lock().iter().any(|&(_, _, f)| f == fi) {
+        return true;
+    }
+    // A mapping that is filled page by page reads the file at every first touch,
+    // long after its descriptor was closed (BUG-110: "map, close, unlink" and a
+    // save over a mapped file read zeros in the pages not touched before).
+    if DEMAND_FILE_MAPS.lock().iter().any(|&(_, _, f, _, _)| f == fi) {
+        return true;
+    }
+    // The three lists above are those of the process that is running; the ones of
+    // the other processes are parked in CHILD_MEM (and while a fork child runs,
+    // the parent's are).
+    CHILD_MEM.lock().iter().any(|c| {
+        c.file_maps.iter().any(|&(_, _, f, _, _)| f == fi)
+            || c.shared_aliases.iter().any(|&(_, _, f)| f == fi)
+            || c.shared_maps.iter().any(|&(f, _, _)| f == fi)
+    })
 }
 
 /// Free the BYTES of files that have just lost their name (unlink, or a rename
