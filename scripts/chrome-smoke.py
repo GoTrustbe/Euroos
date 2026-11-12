@@ -1,0 +1,875 @@
+#!/usr/bin/env python3
+"""Chromium on the EuroOS desktop: smoke test, site matrix, interaction matrix, soak.
+
+Boots an image under QEMU with the Chromium EuroPack and the NSS EuroPack attached,
+starts `chrome` from the EuroOS Terminal and works the browser the way a person does:
+a USB tablet and a USB keyboard injected over QMP (the Guest class of gui-smoke.py).
+Nothing is sent to the page over DevTools. What the browser shows is judged from
+
+  * screendumps (the content area: how many colours, did it change, is it stable), and
+  * the serial console: `ctabs` (a shell command) prints every open page with its URL
+    and title, chrome's own FATAL lines and the kernel's fault lines are counted, and
+    the input test page (/tmp/input-test.html in the guest) mirrors its form fields,
+    the last clipboard event and the scroll position into its title.
+
+  python3 scripts/chrome-smoke.py --image eurokernel.img --pack chrome-pack2.img \\
+      --nss nss-pack.img --kvm --workdir /srv/euroos/chrome-runs/smoke-1
+  ... --only sites            the site matrix alone (also: interact, youtube, perf, starts)
+  ... --soak-hours 2          repeat sites + interaction for that long, memory per round
+  ... --starts 20             boot, start chrome, type a URL in the omnibox: 20 fresh boots
+
+The guest needs the internet for the site matrix, so QEMU's user-mode network runs
+WITHOUT restrict=on here (gui-smoke keeps it on). Use an image built with the boot
+option update.check=off, visit only the sites of the matrix, log in nowhere.
+
+Exit status: 0 = every step passed, 1 = a step failed, 2 = the guest crashed or hung.
+Details: docs/CHROME-ON-EUROOS.md ("Testing"), docs/GUI-TESTING.md.
+"""
+import argparse, hashlib, importlib.util, json, os, re, shlex, statistics, struct, sys, time, types, wave
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+_spec = importlib.util.spec_from_file_location("gui_smoke", os.path.join(HERE, "gui-smoke.py"))
+gs = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(gs)
+
+# Chromium's own UI in window pixels (Chromium 152, default theme, scale factor 1).
+TOOLBAR_Y = 62
+BACK_X, FORWARD_X, RELOAD_X, OMNIBOX_X = 22, 58, 95, 350
+CONTENT_TOP, INFOBAR_H = 87, 56
+# The input test page (kernel/src/input_test_page.html), in page pixels.
+FIELD_A, FIELD_B, WORD = (300, 105), (300, 183), (50, 237)
+SENTENCE = "select-this-word and copy it"
+
+# The site matrix (docs/SPRINT-PLAN-CHROME-WORKPLACE.md). `host` must be in the URL the
+# browser ends on; `colours` is the least number of distinct colours a real rendering of
+# that page has in the content area (an error page or a blank one has a few dozen).
+SITES = [
+    {"name": "euro-os", "url": "https://euro-os.eu/", "host": "euro-os.eu", "colours": 400},
+    {"name": "wikipedia", "url": "https://nl.wikipedia.org/", "host": "wikipedia.org", "colours": 300},
+    {"name": "github", "url": "https://github.com/GoTrustbe/Euroos", "host": "github.com", "colours": 150},
+    {"name": "youtube", "url": "https://www.youtube.com/", "host": "youtube.com", "colours": 60},
+    {"name": "openstreetmap", "url": "https://www.openstreetmap.org/", "host": "openstreetmap.org", "colours": 300},
+    {"name": "pdf", "url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf", "host": "w3.org", "colours": 8},
+]
+VIDEO_URL = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"      # Big Buck Bunny, 10 minutes
+
+# Characters beyond the tables of gui-smoke: (qcode, shift, altgr).
+US_EXTRA = {"#": ("3", True, False), "%": ("5", True, False), "@": ("2", True, False), "'": ("apostrophe", False, False),
+            "[": ("bracket_left", False, False), "]": ("bracket_right", False, False), "{": ("bracket_left", True, False),
+            "}": ("bracket_right", True, False), "\\": ("backslash", False, False), "|": ("backslash", True, False),
+            "~": ("grave_accent", True, False), "$": ("4", True, False), "<": ("comma", True, False), ">": ("dot", True, False)}
+AZ_EXTRA = {"@": ("2", False, True), "#": ("3", False, True), "{": ("9", False, True), "}": ("0", False, True),
+            "[": ("bracket_left", False, True), "]": ("bracket_right", False, True), "€": ("e", False, True),
+            "|": ("1", False, True), "'": ("4", False, False), "\"": ("3", False, False), "<": ("less", False, False),
+            ">": ("less", True, False), "é": ("2", False, False), "è": ("7", False, False),
+            "ç": ("9", False, False), "à": ("0", False, False), "%": ("apostrophe", True, False),
+            "$": ("bracket_right", False, False), "*": ("backslash", False, False)}
+
+BAD_RE = re.compile(r":FATAL:|\[abort\]|TERMINATED|arena alloc FAILED|POOL EXHAUSTED")
+
+
+class Chrome(gs.Guest):
+    """The gui-smoke guest plus what a browser test needs."""
+
+    def __init__(self, a):
+        super().__init__(a)
+        self.win = None                 # (x, y) of the Chromium frame on the screen
+        self.xw, self.xh = 800, 600     # chrome's X window (= the frame's body)
+        self.infobars = 0
+        self.bad_pos = 0
+        self.layout_name = "us"
+
+    # ── input ───────────────────────────────────────────────────────────────
+    def type(self, text):
+        """Like gui-smoke's, with AltGr and the characters its tables do not have."""
+        self.actions.write(f"type {text!r}\n")
+        k = lambda q, down: {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": q}}}
+        extra = AZ_EXTRA if self.layout_name == "be-azerty" else US_EXTRA
+        for ch in text:
+            if ch in self.layout and ch not in extra:
+                qc, shift = self.layout[ch]
+                altgr = False
+            elif ch in extra:
+                qc, shift, altgr = extra[ch]
+            else:
+                raise gs.Fatal(f"chrome-smoke cannot type {ch!r} on {self.layout_name}")
+            mods = (["shift"] if shift else []) + (["alt_r"] if altgr else [])
+            self._send([k(m, True) for m in mods] + [k(qc, True)])
+            self.nap(0.04)
+            self._send([k(qc, False)] + [k(m, False) for m in reversed(mods)])
+            self.nap(0.04)
+
+    def set_layout(self, name):
+        """Switch the guest's keyboard layout (the `keymap` shell command) and our table."""
+        self.scon("keymap " + name)
+        self.layout = gs.AZERTY if name == "be-azerty" else gs.US
+        self.layout_name = name
+        self.nap(0.8)                   # MappingNotify, and the client fetches the mapping
+
+    def step(self, name, cond, detail=""):
+        """A failed step also says what the X server's input state was (a stuck
+        modifier or button explains a shortcut that did nothing) and keeps the picture."""
+        if not cond and self.win:
+            pos = self.serial.mark()
+            self.serial.send_line("cdiag")
+            self.serial.wait_for("[xin] state:", 10 * self.slow, pos)
+            m = re.search(r"\[xin\] state: (.*)", self.serial.since(pos))
+            detail += " | X input " + (m.group(1).strip() if m else "state unknown")
+            self.fail_n = getattr(self, "fail_n", 0) + 1
+            try:
+                self.shot(f"fail-{self.fail_n:02d}")
+            except gs.Fatal:
+                pass
+        return super().step(name, cond, detail)
+
+    # ── geometry ────────────────────────────────────────────────────────────
+    def cx(self, x, y):
+        """A point of chrome's window (x < 0: from the right edge) on the screen."""
+        wx, wy = self.win
+        return wx + (x if x >= 0 else self.xw + x), wy + gs.TITLEBAR_H + y
+
+    def page(self, x, y):
+        """A point of the PAGE (content area) on the screen."""
+        return self.cx(x, CONTENT_TOP + INFOBAR_H * self.infobars + y)
+
+    def content(self):
+        """The content area as a screen rectangle (x0, y0, x1, y1), without the scrollbar."""
+        x0, y0 = self.page(0, 0)
+        x1, y1 = self.cx(self.xw - 16, self.xh)
+        return x0, y0, min(x1, self.w), min(y1, self.h)
+
+    def track_size(self):
+        """Follow the kernel's own account of the X window's size."""
+        m = re.findall(r"\[xserver\] hosted window 0x[0-9a-f]+ resized to (\d+)x(\d+) by the desktop", self.serial.since(0))
+        if m:
+            self.xw, self.xh = int(m[-1][0]), int(m[-1][1])
+
+    def find_chrome(self, known=()):
+        """The frame that was not on the screen before chrome started."""
+        for w in self.look().windows():
+            if not any(abs(w[0] - k[0]) < 8 and abs(w[1] - k[1]) < 8 for k in known):
+                return w
+        return None
+
+    # ── what the browser says ───────────────────────────────────────────────
+    def tabs(self, timeout=10):
+        """[(url, title)] of every open page, from the `ctabs` shell command."""
+        pos = self.serial.mark()
+        self.serial.send_line("ctabs")
+        end = time.time() + timeout * self.slow
+        while time.time() < end:
+            out = self.serial.since(pos)
+            if re.search(r"\[tabs\] \d+ page\(s\)", out):
+                pages = []
+                for url, title in re.findall(r'\[tabs\] page url="((?:[^"\\]|\\.)*)" title="((?:[^"\\]|\\.)*)"', out):
+                    try:
+                        pages.append((json.loads('"' + url + '"'), json.loads('"' + title + '"')))
+                    except ValueError:
+                        pages.append((url, title))
+                return pages
+            if "ctabs: no hosted browser" in out:
+                return []
+            time.sleep(0.05)
+        return None
+
+    def title(self):
+        t = self.tabs()
+        return t[0][1] if t else ""
+
+    def wait_tab(self, pred, timeout):
+        """Poll `ctabs` until pred(url, title) holds for a page; returns (seconds, url, title) or None."""
+        t0 = time.time()
+        while time.time() - t0 < timeout * self.slow:
+            for url, title in self.tabs() or []:
+                if pred(url, title):
+                    return time.time() - t0, url, title
+            time.sleep(0.25)
+        return None
+
+    def page_state(self):
+        """(A, B, clip, y) of the input test page, whichever tab it is in."""
+        for url, title in self.tabs() or []:
+            m = re.search(r"A=\[(.*)\] B=\[(.*)\] clip=(\S+) y=(-?\d+)", title)
+            if m:
+                return m.group(1), m.group(2), m.group(3), int(m.group(4))
+        return None
+
+    def field(self, name):
+        st = self.page_state()
+        return None if st is None else st[0 if name == "A" else 1]
+
+    def wait_state(self, pred, timeout=6):
+        """page_state() until pred(state) holds: the title follows a key by a moment
+        (the renderer, the browser, then the DevTools answer). Returns the last state."""
+        t0, st = time.time(), None
+        while time.time() - t0 < timeout * self.slow:
+            st = self.page_state()
+            if st and pred(st):
+                return st
+            time.sleep(0.2)
+        return st
+
+    def new_bad(self):
+        """Lines since the last call in which chrome or the kernel reports a failure."""
+        text = self.serial.since(self.bad_pos)
+        self.bad_pos = self.serial.mark()
+        return [l.strip()[:200] for l in text.splitlines() if BAD_RE.search(l)]
+
+    # ── the picture ─────────────────────────────────────────────────────────
+    def colours(self, s, region=None, step=3):
+        """Distinct colours and the share of the commonest one in a screen region."""
+        x0, y0, x1, y1 = region or self.content()
+        seen = {}
+        for y in range(y0, y1, step):
+            row = s.rgb[(y * s.w + x0) * 3:(y * s.w + x1) * 3]
+            for i in range(0, len(row) - 2, 3 * step):
+                c = row[i:i + 3]
+                seen[c] = seen.get(c, 0) + 1
+        total = sum(seen.values()) or 1
+        return len(seen), max(seen.values(), default=0) / total
+
+    def digest(self, s, region=None):
+        x0, y0, x1, y1 = region or self.content()
+        h = hashlib.sha1()
+        for y in range(y0, y1):
+            h.update(s.rgb[(y * s.w + x0) * 3:(y * s.w + x1) * 3])
+        return h.digest()
+
+    def settle(self, timeout, quiet=1.5, region=None, save_as=None):
+        """Screendumps until the region has not changed for `quiet` seconds (or the time is
+        over). Returns (screen, seconds until the final picture first appeared, settled?)."""
+        t0 = time.time()
+        last, since, first_seen = None, t0, {}
+        while True:
+            s = self.shot()
+            now = time.time()
+            d = self.digest(s, region)
+            first_seen.setdefault(d, now)
+            if d != last:
+                last, since = d, now
+            if now - since >= quiet * self.slow or now - t0 >= timeout * self.slow:
+                if save_as:
+                    s.save_png(os.path.join(self.wd, save_as + ".png"))
+                return s, first_seen[d] - t0, now - since >= quiet * self.slow
+            time.sleep(0.05)
+
+    # ── chrome ──────────────────────────────────────────────────────────────
+    def desktop_ready(self):
+        """Close the install wizard, focus the Terminal."""
+        s = self.look()
+        for w in s.windows():
+            if abs(w[0] - (gs.SIDEBAR_W + 16)) <= 3:          # the install wizard (main.rs)
+                self.click(w[0] + 20, w[1] + 22)
+                self.nap(0.6)
+        wins = self.look().windows()
+        if not wins:
+            self.fatal("desktop", "no Terminal window on the first desktop")
+        self.term = wins[0]
+        return wins
+
+    def start_chrome(self, url):
+        """Type `chrome URL` in the Terminal; wait for the window and the first page."""
+        known = self.desktop_ready()
+        self.click(self.term[0] + 300, self.term[1] + 300)
+        self.key("ret")
+        self.nap(0.3)
+        pos = self.serial.mark()
+        self.bad_pos = pos
+        t0 = time.time()
+        self.type("chrome " + url)
+        self.key("ret")
+        ok = self.serial.wait_for("[e2e] chrome: launched", 30 * self.slow, pos)
+        if not ok:
+            self.record("chrome starts from the Terminal", False, "no '[e2e] chrome: launched' on the serial console")
+            return False
+        # Where the start-up goes: the moment each of these first shows on the serial console.
+        marks = {"launched": "[e2e] chrome: launched", "X connection": "[x11] client connects",
+                 "first child process": "[fork] pid", "renderer": "is --type=renderer", "DevTools attached": "[cdp] input bridge attached"}
+        seen = {}
+        end = time.time() + 90 * self.slow
+        while time.time() < end and not (self.win and len(seen) == len(marks)):
+            text = self.serial.since(pos)
+            for k, needle in marks.items():
+                if k not in seen and needle in text:
+                    seen[k] = time.time() - t0
+            if not self.win:
+                self.win = self.find_chrome(known)
+                if self.win:
+                    seen["window on screen"] = time.time() - t0
+            time.sleep(0.2)
+        self.start_marks = seen
+        if not self.win:
+            self.record("chrome starts from the Terminal", False, "no Chromium frame appeared on the screen")
+            return False
+        hit = self.wait_tab(lambda u, t: t != "" and not u.startswith("about:"), 120)
+        s, _, _ = self.settle(40, save_as="chrome-started")
+        n, share = self.colours(s)
+        secs = time.time() - t0
+        ok = hit is not None and n >= 8          # the test page: two flat colours and its text
+        timeline = ", ".join(f"{k} {v:.1f}" for k, v in sorted(self.start_marks.items(), key=lambda kv: kv[1]))
+        self.record("chrome starts from the Terminal", ok,
+                    f"window at {self.win}, first page {hit[1] if hit else '?'} painted and settled after {secs:.1f} s "
+                    f"(seconds after Enter: {timeline}), {n} colours in the content area")
+        return ok
+
+    def close_infobars(self):
+        """Close chrome's infobars. Only on the input test page: its background is not
+        white, an infobar is, and nothing clickable sits under the close button. Each
+        infobar pushes the page down by INFOBAR_H."""
+        for _ in range(3):
+            s = self.shot()
+            top = s.px(*self.cx(6, CONTENT_TOP + 6))
+            below = s.px(*self.cx(6, CONTENT_TOP + INFOBAR_H + 6))
+            white = bytes((255, 255, 255))
+            if not (top == white and below != white):
+                self.infobars = 0
+                break
+            self.infobars = 1
+            self.click(*self.cx(-30, CONTENT_TOP + 28))
+            self.nap(1.2)
+        return self.infobars
+
+    def navigate(self, url, host, timeout=90):
+        """Ctrl+L, the URL, Enter. Returns (ok, seconds until the new document is there, detail).
+        "There" is: the tab's URL has `host` in it AND its title is no longer the title
+        of the page we left. (The URL alone changes the moment Enter is pressed, while
+        the old document is still on the screen.)"""
+        before = self.tabs() or []
+        old_titles = {t for _, t in before}
+        same = any(host in u for u, _ in before)          # going to the page we are on
+        self.key("ctrl", "l")
+        self.nap(0.3)
+        self.type(url)
+        self.nap(0.2)
+        t0 = time.time()
+        self.key("ret")
+        hit = self.wait_tab(lambda u, t: host in u and t != "" and (same or t not in old_titles), timeout)
+        if not hit:
+            t = self.tabs()
+            return False, time.time() - t0, f"the tab never showed {host} with a title of its own: {t}"
+        return True, hit[0], hit[1]
+
+    # ── steps ───────────────────────────────────────────────────────────────
+    def site_matrix(self, sites, tag=""):
+        """Every site: typed in the omnibox, a screendump, a verdict."""
+        results = []
+        for site in sites:
+            name = site["name"]
+            self.new_bad()
+            ok_nav, secs, detail = self.navigate(site["url"], site["host"])
+            s, paint, settled = self.settle(45, quiet=2.0, save_as=f"site-{name}{tag}")
+            n, share = self.colours(s)
+            bad = self.new_bad()
+            ok = ok_nav and n >= site["colours"] and not bad
+            why = f"{detail} after {secs:.1f} s; content {n} colours, commonest {share:.0%}" + ("" if settled else ", still changing") \
+                + (f"; {len(bad)} failure line(s): {bad[0]}" if bad else "")
+            self.step(f"site {name}: {site['url']}", ok, why)
+            results.append((name, ok, secs, n))
+        return results
+
+    def interaction_matrix(self, tag=""):
+        """The interaction matrix: the input test page first (what was typed, copied,
+        scrolled is read from its title), then the browser's own UI, the window, and
+        a link with back and forward on the reference site."""
+        rec = lambda name, ok, detail="": self.step(name + tag, ok, detail)
+        short = tag.replace(" ", "").replace("(", "-").replace(")", "")
+        # 1. omnibox to the local test page; typing in a form (US)
+        ok, secs, detail = self.navigate("file:///tmp/input-test.html", "input-test")
+        rec("omnibox: Ctrl+L, a URL, Enter", ok, f"{detail} after {secs:.1f} s")
+        self.wait_state(lambda s: True)
+        self.click(*self.page(*FIELD_A))
+        text = "Hello EuroOS 2026, a/b?c=d&e-f_g:h;i.j"
+        self.type(text)
+        st = self.wait_state(lambda s: s[0] == text)
+        rec("form: typed text arrives in the field (US)", bool(st) and st[0] == text, f"state {st}")
+        # 2. select all, copy, paste in the other field
+        self.key("ctrl", "a"); self.key("ctrl", "c")
+        self.click(*self.page(*FIELD_B))
+        self.key("ctrl", "v")
+        st = self.wait_state(lambda s: s[1] == text and s[2] == "paste")
+        rec("clipboard: Ctrl+A, Ctrl+C in field A, Ctrl+V in field B", bool(st) and st[1] == text and st[2] == "paste", f"state {st}")
+        # 3. select text on the page with the mouse (double click = a word), copy, paste.
+        #    Right after the previous paste: the second copy must replace the first.
+        self.click(*self.page(*FIELD_B)); self.key("ctrl", "a"); self.key("delete")
+        self.wait_state(lambda s: s[1] == "")
+        self.click(*self.page(*WORD), double=True)
+        self.shot("select-word" + short)
+        self.key("ctrl", "c")
+        self.click(*self.page(*FIELD_B))
+        self.key("ctrl", "v")
+        st = self.wait_state(lambda s: s[1].strip() != "")
+        b = st[1] if st else ""
+        rec("selection: double click selects a word on the page, copy, paste", b.strip() != "" and b.strip() in SENTENCE and b != text, f"field B = {b!r}")
+        # 3b. a drag selects a stretch of text
+        self.click(*self.page(*FIELD_B)); self.key("ctrl", "a"); self.key("delete")
+        self.wait_state(lambda s: s[1] == "")
+        x0, y0 = self.page(26, WORD[1]); x1, y1 = self.page(26 + 190, WORD[1])
+        self.drag(x0, y0, x1, y1, steps=10)
+        self.key("ctrl", "c")
+        self.click(*self.page(*FIELD_B))
+        self.key("ctrl", "v")
+        st = self.wait_state(lambda s: len(s[1]) >= 8)
+        b = st[1] if st else ""
+        rec("selection: a drag with the button held selects text, copy, paste", len(b) >= 8 and b in SENTENCE, f"field B = {b!r}")
+        # 4. scrolling: wheel, keys
+        self.move(*self.page(400, 300))
+        self.wheel(4)
+        st = self.wait_state(lambda s: s[3] > 0); y_wheel = st[3] if st else -1
+        self.click(*self.page(700, 300))            # focus on the page, not a field
+        self.key("pgdn")
+        st = self.wait_state(lambda s: s[3] > y_wheel); y_pg = st[3] if st else -1
+        self.key("end")
+        st = self.wait_state(lambda s: s[3] > y_pg); y_end = st[3] if st else -1
+        self.key("home")
+        st = self.wait_state(lambda s: s[3] == 0); y_home = st[3] if st else -1
+        self.wheel(3)
+        self.wait_state(lambda s: s[3] > 0)
+        self.wheel(-3)
+        st = self.wait_state(lambda s: s[3] == 0); y_back = st[3] if st else -1
+        rec("scroll: wheel down, PageDown, End, Home, wheel down and up again",
+            0 < y_wheel < y_pg < y_end and y_home == 0 and y_back == 0,
+            f"scrollY {y_wheel} -> {y_pg} -> {y_end} -> {y_home} -> {y_back}")
+        # 5. reload: the fields are empty again
+        self.click(*self.page(*FIELD_A)); self.key("end"); self.type("x")
+        st = self.wait_state(lambda s: s[0] == text + "x")
+        before = st[0] if st else None
+        self.key("f5")
+        hit = self.wait_tab(lambda u, t: "A=[] B=[]" in t, 20)
+        rec("reload: F5 loads the page again", before == text + "x" and hit is not None, f"field A {before!r} -> title {self.title()!r}")
+        # 6. AZERTY with AltGr: the layout is switched while the browser runs
+        self.set_layout("be-azerty")
+        self.click(*self.page(*FIELD_A))
+        az = "azerty AZERTY 0123456789 m,;:=?./+ @#{}[]|€"
+        self.type(az)
+        st = self.wait_state(lambda s: s[0] == az)
+        self.set_layout("us")
+        rec("form: be-azerty with AltGr characters", bool(st) and st[0] == az, f"field A = {st[0] if st else None!r}")
+        # 7. tabs: a second tab, a page in it, back to the first (typing lands in ITS
+        #    field), close the second
+        self.click(*self.page(*FIELD_B)); self.key("ctrl", "a"); self.key("delete")
+        self.wait_state(lambda s: s[1] == "")
+        self.key("ctrl", "t")
+        two = self.wait_tab(lambda u, t: len(self.tabs() or []) == 2, 15)
+        self.type("file:///tmp/euro.html"); self.key("ret")
+        loaded = self.wait_tab(lambda u, t: "euro.html" in u and t != "", 30)
+        self.settle(15, quiet=1.0, save_as="tab-two" + short)
+        self.key("ctrl", "pgup")
+        self.nap(0.8)
+        self.click(*self.page(*FIELD_B)); self.type("tab one")
+        st = self.wait_state(lambda s: s[1] == "tab one")
+        first = bool(st) and st[1] == "tab one"
+        self.key("ctrl", "pgdn"); self.nap(0.8)
+        self.key("ctrl", "w")
+        one = self.wait_tab(lambda u, t: len(self.tabs() or []) == 1 and "input-test" in u, 15)
+        rec("tabs: Ctrl+T, a page in the new tab, Ctrl+PageUp to the first, Ctrl+PageDown, Ctrl+W",
+            two is not None and loaded is not None and first and one is not None,
+            f"two tabs {'ok' if two else 'no'}, second loaded {'ok' if loaded else 'no'}, typing in the first tab {'ok' if first else 'no'}, the first tab is left {'ok' if one else 'no'}")
+        # 8. the browser's own popups: the menu opens at its button, Esc closes it
+        closed = self.settle(10, quiet=0.8)[0]
+        self.click(*self.cx(-23, TOOLBAR_Y))
+        opened = self.settle(10, quiet=0.8, save_as="menu-open" + short)[0]
+        mx0, my0 = self.cx(-340, TOOLBAR_Y + 20)
+        mregion = (mx0, my0, mx0 + 330, my0 + 300)
+        n, share = self.colours(opened, mregion)
+        is_open = opened.differs(closed, min_pixels=20000, region=mregion)
+        self.key("esc")
+        again = self.settle(10, quiet=0.8)[0]
+        rec("browser UI: the menu opens on a click at its button, Esc closes it",
+            is_open and not again.differs(closed, min_pixels=3000, region=mregion), f"menu region: {n} colours while open")
+        # 9. the window: move, maximise, restore
+        self.window_steps(rec)
+        # 10. a link, back, forward (the reference site's own navigation)
+        ok, secs, detail = self.navigate("https://euro-os.eu/en/", "euro-os.eu/en")
+        self.settle(30, quiet=1.5)
+        self.click(*self.page(self.xw - 58 - 16, 33))        # the "Download" link in the page header
+        hit = self.wait_tab(lambda u, t: u.endswith("#download"), 15)
+        rec("link: a click on a link in the page navigates", ok and hit is not None, f"{self.tabs()}")
+        self.key("alt", "left")
+        back = self.wait_tab(lambda u, t: u.endswith("/en/"), 15)
+        self.click(*self.cx(FORWARD_X, TOOLBAR_Y))
+        fwd = self.wait_tab(lambda u, t: u.endswith("#download"), 15)
+        rec("history: Alt+Left goes back, the toolbar's forward button goes forward", back is not None and fwd is not None,
+            f"back {'ok' if back else 'no'}, forward {'ok' if fwd else 'no'}: {self.tabs()}")
+
+    def window_steps(self, rec):
+        wx, wy = self.win
+        # drag by the title bar
+        nx, ny = wx + 140, wy + 90
+        wins = self.drag_window(self.win, wx + 300, wy + 22, nx + 300, ny + 22,
+                                lambda w: abs(w[0] - nx) <= 12 and abs(w[1] - ny) <= 12)
+        moved = next((w for w in wins if abs(w[0] - nx) <= 12 and abs(w[1] - ny) <= 12), None)
+        if moved:
+            self.win = moved
+        self.click(*self.page(*FIELD_A)); self.key("ctrl", "a"); self.type("moved")
+        st = self.wait_state(lambda s: s[0] == "moved")
+        rec("window: drag by the title bar, input lands in the moved window", moved is not None and bool(st) and st[0] == "moved",
+            f"frame at {self.win}, state {st}")
+        # maximise with the green button
+        pos = self.serial.mark()
+        self.click(self.win[0] + 60, self.win[1] + 21)
+        grown = self.serial.wait_for("resized to", 15 * self.slow, pos)
+        self.track_size()
+        big = (self.xw, self.xh)
+        self.nap(1.0)
+        old = self.win
+        wins = self.look().windows()
+        if wins:
+            self.win = min(wins, key=lambda w: w[1])            # the maximised frame is the topmost one
+        s, _, _ = self.settle(15, quiet=1.0, save_as="window-maximised")
+        # chrome's toolbar reaches the right edge of the larger window: its menu button is there
+        rx, ry = self.cx(-23, TOOLBAR_Y)
+        dots = sum(1 for dy in range(-8, 9) for dx in range(-3, 4) if s.px(rx + dx, ry + dy) != s.px(rx - 14, ry - 14))
+        self.click(*self.page(*FIELD_A)); self.key("ctrl", "a"); self.type("maximised")
+        st = self.wait_state(lambda s: s[0] == "maximised")
+        rec("window: maximise, chrome lays out for the new size, input lands",
+            grown and big[0] > 1000 and dots >= 6 and bool(st) and st[0] == "maximised",
+            f"X window {big[0]}x{big[1]}, menu button drawn at the new right edge: {dots >= 6}, state {st}")
+        # restore with the same button
+        pos = self.serial.mark()
+        self.click(self.win[0] + 60, self.win[1] + 21)
+        shrunk = self.serial.wait_for("resized to", 15 * self.slow, pos)
+        self.track_size()
+        self.nap(1.0)
+        w = self.find_chrome([self.term])
+        if w:
+            self.win = w
+        self.settle(15, quiet=1.0, save_as="window-restored")
+        self.click(*self.page(*FIELD_B)); self.key("ctrl", "a"); self.type("restored")
+        st = self.wait_state(lambda s: s[1] == "restored")
+        rec("window: restore, input still lands", shrunk and (self.xw, self.xh) != big and bool(st) and st[1] == "restored",
+            f"X window {self.xw}x{self.xh}, frame at {self.win}, state {st}")
+
+    def perf(self, n_load=5, n_keys=30):
+        """Page load of the reference site, and key-to-screen latency."""
+        loads = []
+        for i in range(n_load):
+            self.navigate("file:///tmp/input-test.html", "input-test")
+            self.settle(10, quiet=0.8)
+            self.key("ctrl", "l"); self.nap(0.3)
+            self.type("https://euro-os.eu/en/"); self.nap(0.3)
+            region = self.content()
+            before = self.digest(self.shot(), region)
+            pos = self.serial.mark()
+            t0 = time.time()
+            self.key("ret", hold=0.02)
+            # the first picture that is no longer the old page, then the final one
+            first, seen, last, since = None, {}, None, t0
+            while time.time() - t0 < 40:
+                s = self.shot(); now = time.time()
+                d = self.digest(s, region)
+                if d != before and first is None:
+                    first = now - t0
+                seen.setdefault(d, now - t0)
+                if d != last:
+                    last, since = d, now
+                if d != before and now - since >= 2.0:
+                    break
+            final = seen.get(last, 40.0)
+            m = None
+            for _ in range(20):
+                if "loadEventFired" in self.serial.since(pos):
+                    m = True
+                    break
+                time.sleep(0.1)
+            loads.append((first if first is not None else 40.0, final))
+            print(f"[chrome-smoke]   load {i + 1}: first change {loads[-1][0]:.2f} s, final picture {final:.2f} s", flush=True)
+        firsts = sorted(l[0] for l in loads); finals = sorted(l[1] for l in loads)
+        med_final = statistics.median(finals)
+        self.step("perf: reference site loads in under 3 s (Enter to the final picture)", med_final < 3.0,
+                  f"final picture median {med_final:.2f} s (min {finals[0]:.2f}, max {finals[-1]:.2f}), first change median {statistics.median(firsts):.2f} s, n={n_load}")
+        # key to screen: a character typed in a form field, until the field's pixels change
+        self.navigate("file:///tmp/input-test.html", "input-test")
+        self.settle(10, quiet=0.8)
+        self.click(*self.page(*FIELD_A))
+        fx, fy = self.page(24, 85)
+        region = (fx, fy, fx + 580, fy + 40)
+        k = lambda q, down: {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": q}}}
+        lat, dump_ms = [], []
+        self.nap(1.2)                      # past the caret's first blink
+        for i in range(n_keys):
+            before = self.digest(self.shot(), region)
+            t0 = time.time()
+            self._send([k("x", True)])
+            dt = None
+            while time.time() - t0 < 2.0:
+                ts = time.time()
+                s = self.shot()
+                dump_ms.append((time.time() - ts) * 1000)
+                if self.digest(s, region) != before:
+                    dt = (time.time() - t0) * 1000
+                    break
+            self._send([k("x", False)])
+            if dt is not None:
+                lat.append(dt)
+            time.sleep(0.25)
+        typed = self.field("A") or ""
+        if lat:
+            lat.sort()
+            med, p90 = statistics.median(lat), lat[int(len(lat) * 0.9) - 1]
+            self.step("perf: key to screen under 100 ms", med < 100 and len(typed) == n_keys,
+                      f"median {med:.0f} ms, p90 {p90:.0f} ms, max {lat[-1]:.0f} ms over {len(lat)} keys ({len(typed)} characters arrived); "
+                      f"one screendump takes {statistics.median(dump_ms):.0f} ms, which is in every number")
+        else:
+            self.step("perf: key to screen under 100 ms", False, "no key changed the field within 2 s")
+        return loads, lat
+
+    def youtube(self, seconds=120):
+        """A YouTube video: picture that advances and sound, for `seconds`. The play
+        gesture is a real mouse click on the player."""
+        rec = self.step
+        ok, secs, detail = self.navigate("https://www.youtube.com/", "youtube.com")
+        s, _, _ = self.settle(60, quiet=2.5, save_as="youtube-front")
+        n, _ = self.colours(s)
+        rec("youtube: the front page (or its consent dialog) loads", ok and n >= 30, f"{detail} after {secs:.1f} s, {n} colours")
+        if not ok:
+            return False
+        # The EU consent dialog: "Reject all" is the left one of the two buttons under the text.
+        if a_consent := self.find_consent(s):
+            self.click(*a_consent)
+            self.wait_tab(lambda u, t: "consent" not in u and "youtube.com" in u, 40)
+            s, _, _ = self.settle(60, quiet=2.5, save_as="youtube-after-consent")
+            rec("youtube: consent dialog answered with 'Reject all'", "consent" not in (self.tabs() or [("", "")])[0][0], f"{self.tabs()}")
+        ok, secs, detail = self.navigate(VIDEO_URL, "watch")
+        s, _, _ = self.settle(60, quiet=3.0, save_as="youtube-watch")
+        rec("youtube: the watch page loads", ok, f"{detail} after {secs:.1f} s")
+        if not ok:
+            return False
+        # The player: top left of the page, 16:9 over most of the width at this window size.
+        px0, py0 = self.page(24, 80)
+        pw = min(self.xw - 48, 1280)
+        player = (px0 + 20, py0 + 20, px0 + pw - 20, py0 + int(pw * 9 / 16) - 60)
+        wav = os.path.join(self.wd, "audio.wav")
+        self.click((player[0] + player[2]) // 2, (player[1] + player[3]) // 2)      # the user gesture
+        self.nap(3.0)
+        self.move(self.w - 4, self.h - 4)           # the pointer off the player: its controls fade
+        wav0 = os.path.getsize(wav) if os.path.exists(wav) else 0
+        t0 = time.time()
+        digests, shots = [], 0
+        while time.time() - t0 < seconds:
+            s = self.shot()
+            digests.append(self.digest(s, player))
+            if int(time.time() - t0) // 30 >= shots:
+                shots += 1
+                s.save_png(os.path.join(self.wd, f"youtube-play-{shots:02d}.png"))
+            if self.new_bad():
+                break
+            time.sleep(4.0)
+        changes = sum(1 for i in range(1, len(digests)) if digests[i] != digests[i - 1])
+        levels = wav_levels(wav, start=wav0)
+        loud = sum(1 for v in levels if v > 40)
+        self.youtube_result = {"samples": len(digests), "changed": changes, "audio_rms_5s": levels}
+        rec(f"youtube: the picture advances for {seconds} s", len(digests) >= seconds // 6 and changes >= (len(digests) - 1) * 0.9,
+            f"{changes} of {len(digests) - 1} consecutive screendumps of the player differ")
+        rec(f"youtube: sound for {seconds} s", len(levels) >= seconds // 5 - 2 and loud >= len(levels) * 0.8,
+            f"{loud} of {len(levels)} five-second windows of the guest's audio output are above the noise floor (RMS {levels[:24]})")
+        return True
+
+    def find_consent(self, s):
+        """The centre of the 'Reject all' button of Google's consent page, or None: the
+        page is light, and the two wide pill buttons are the only dark-on-light blocks
+        in the lower half that span tens of pixels in one colour."""
+        if "consent" not in ((self.tabs() or [("", "")])[0][0]):
+            return None
+        x0, y0, x1, y1 = self.content()
+        # rows where a long run of one non-background colour starts in the left half
+        for y in range(y1 - 20, y0 + 100, -6):
+            x = x0 + 40
+            while x < (x0 + x1) // 2:
+                c = s.px(x, y)
+                run = 0
+                while x + run < x1 and s.px(x + run, y) == c:
+                    run += 4
+                if 60 <= run <= 400 and c not in (bytes((255, 255, 255)), s.px(x0 + 4, y)):
+                    return x + run // 2, y
+                x += max(run, 4)
+        return None
+
+    def memory(self):
+        """The kernel's own memory account while a browser runs: the newest `[cpu]`
+        heartbeat line (every 30 s): kernel heap, big-block pool, RAM files, demand pool."""
+        lines = re.findall(r"\[cpu\] \d+ ticks since last heartbeat; (heap \d+ MiB used, \d+ MiB free; big \d+/\d+ MiB \(peak \d+\); files \d+ MiB; demand \d+ MiB free)", self.serial.since(0))
+        return lines[-1] if lines else "no [cpu] heartbeat line yet"
+
+
+def wav_levels(path, window=5.0, start=0):
+    """RMS per `window` seconds of a 16-bit WAV that QEMU is still writing, from byte
+    `start` of the file on (what was there before the measurement is not counted)."""
+    out = []
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        if len(data) < 64:
+            return out
+        ch, rate = struct.unpack_from("<HI", data, 22)
+        frame0 = 2 * ch
+        begin = max(44, start - (start - 44) % frame0)
+        pcm = memoryview(data)[begin:]
+        pcm = pcm[:len(pcm) - len(pcm) % frame0]
+        frame = 2 * ch
+        n = int(rate * window) * frame
+        for off in range(0, len(pcm) - n + 1, n):
+            chunk = pcm[off:off + n].cast("h")
+            step = max(1, len(chunk) // 20000)
+            acc = sum(v * v for v in chunk[::step])
+            out.append(int((acc / max(1, len(chunk[::step]))) ** 0.5))
+    except (OSError, struct.error):
+        pass
+    return out
+
+
+def make_args(a, workdir):
+    extra = (f"-drive format=raw,file={a.pack},if=virtio,readonly=on -drive format=raw,file={a.nss},if=virtio,readonly=on "
+             f"-netdev user,id=n0 -device {a.nic},netdev=n0 "
+             f"-audiodev wav,id=a0,path={os.path.join(workdir, 'audio.wav')} -device intel-hda -device hda-duplex,audiodev=a0 " + a.extra)
+    return types.SimpleNamespace(image=a.image, workdir=workdir, kvm=a.kvm, cpu_opts="", smp=a.smp, mem=a.mem, pin=a.pin,
+                                 input=a.input, net="none", layout="auto", extra=extra,
+                                 boot_timeout=300 if a.kvm else 1500, alive_timeout=40 if a.kvm else 240,
+                                 slow=1.0 if a.kvm else 3.0, soak=0, seed=0, skip_smoke=True, keep_image=False)
+
+
+def one_boot(a, workdir, body):
+    """Boot, run `body(g)`, stop. Returns (guest, verdict, rc)."""
+    os.makedirs(workdir, exist_ok=True)
+    if os.path.exists(os.path.join(workdir, "qmp.sock")):
+        sys.exit(f"{workdir} has a live qmp.sock: another run uses this work directory")
+    g = Chrome(make_args(a, workdir))
+    verdict, rc = "PASS", 0
+    try:
+        g.boot()
+        g.alive("boot")
+        body(g)
+        g.alive("end")
+    except gs.Fatal as e:
+        verdict, rc = f"CRASH/HANG: {e}", 2
+    except KeyboardInterrupt:
+        verdict, rc = "interrupted", 1
+    finally:
+        g.stop()
+    failed = [r for r in g.results if not r[1]]
+    if rc == 0 and failed:
+        verdict, rc = f"FAIL ({len(failed)} step(s))", 1
+    return g, verdict, rc
+
+
+def write_report(a, workdir, g, verdict, t0, extra=None):
+    report = {"verdict": verdict, "image": os.path.abspath(a.image), "accel": "kvm" if a.kvm else "tcg", "smp": a.smp,
+              "mem": a.mem, "input": a.input, "nic": a.nic, "seconds": int(time.time() - t0),
+              "max_console_latency_ms": g.max_echo_ms,
+              "steps": [{"name": n, "ok": ok, "detail": d} for n, ok, d in g.results]}
+    report.update(extra or {})
+    with open(os.path.join(workdir, "report.json"), "w") as f:
+        json.dump(report, f, indent=1)
+    with open(os.path.join(workdir, "report.txt"), "w") as f:
+        f.write(f"chrome-smoke: {verdict}\n{report['accel']} smp={a.smp} mem={a.mem} input={a.input} nic={a.nic}, {report['seconds']} s, "
+                f"max console latency {g.max_echo_ms} ms\n\n")
+        for n, ok, d in g.results:
+            f.write(f"{'ok  ' if ok else 'FAIL'} {n}{': ' + d if d else ''}\n")
+        for k, v in (extra or {}).items():
+            f.write(f"\n{k}: {json.dumps(v, indent=1) if not isinstance(v, str) else v}\n")
+    ok = sum(1 for r in g.results if r[1])
+    print(f"[chrome-smoke] {verdict} - {ok}/{len(g.results)} steps ok, report and screenshots in {workdir}", flush=True)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--image", default="eurokernel.img")
+    ap.add_argument("--pack", required=True, help="the Chromium EuroPack disk (chrome-pack2.img)")
+    ap.add_argument("--nss", required=True, help="the NSS EuroPack disk; its NSS generation must match the chrome pack's (scripts/mk-nss-pack.sh)")
+    ap.add_argument("--workdir", required=True)
+    ap.add_argument("--kvm", action="store_true")
+    ap.add_argument("--smp", type=int, default=2)
+    ap.add_argument("--mem", default="6144M")
+    ap.add_argument("--pin", default="")
+    ap.add_argument("--input", choices=["usb", "virtio"], default="usb")
+    ap.add_argument("--nic", default="virtio-net-pci", help="virtio-net-pci or e1000e (the userspace driver e1000d)")
+    ap.add_argument("--extra", default="")
+    ap.add_argument("--only", default="", help="comma list of: sites, interact, youtube, perf (default: sites, interact, perf)")
+    ap.add_argument("--sites", default="", help="comma list of site names (default: all of the matrix)")
+    ap.add_argument("--rounds", type=int, default=1, help="repeat the site matrix this many times in one browser session")
+    ap.add_argument("--soak-hours", type=float, default=0.0, help="repeat sites + interaction in one session for this long")
+    ap.add_argument("--starts", type=int, default=0, help="N fresh boots: start chrome, close the infobar, type a URL in the omnibox")
+    ap.add_argument("--video-seconds", type=int, default=120)
+    a = ap.parse_args()
+    if gs.OVMF is None:
+        sys.exit("no OVMF firmware found")
+    a.workdir = os.path.abspath(a.workdir)
+    os.makedirs(a.workdir, exist_ok=True)
+    only = [x for x in a.only.split(",") if x] or ["sites", "interact", "perf"]
+    sites = [s for s in SITES if not a.sites or s["name"] in a.sites.split(",")]
+    t0 = time.time()
+
+    if a.starts:
+        rows = []
+        for i in range(a.starts):
+            wd = os.path.join(a.workdir, f"start-{i + 1:02d}")
+            def body(g):
+                if not g.start_chrome("file:///tmp/input-test.html"):
+                    return
+                g.close_infobars()
+                g.click(*g.page(*FIELD_A)); g.type("first-key")
+                v = g.field("A")
+                g.step("page input right after start: typed text arrives", v == "first-key", f"field A = {v!r}")
+                t = time.time()
+                ok, secs, detail = g.navigate("https://euro-os.eu/", "euro-os.eu")
+                s, _, _ = g.settle(30, quiet=1.5, save_as="start-site")
+                n, _ = g.colours(s)
+                g.step("omnibox right after start: Ctrl+L, URL, Enter", ok and n >= 400, f"{detail} after {secs:.1f} s, {n} colours")
+                r = g.shot()
+                g.click(*g.cx(-23, TOOLBAR_Y)); g.nap(1.0)
+                m = g.shot("start-menu")
+                opened = m.differs(r, min_pixels=8000)
+                g.key("esc"); g.nap(0.5)
+                g.step("browser UI right after start: the menu opens on a click", opened)
+            g, verdict, rc = one_boot(a, wd, body)
+            write_report(a, wd, g, verdict, t0)
+            rows.append((i + 1, verdict, [r[1] for r in g.results]))
+            print(f"[chrome-smoke] start {i + 1}/{a.starts}: {verdict}", flush=True)
+        good = sum(1 for r in rows if r[1] == "PASS")
+        with open(os.path.join(a.workdir, "starts.txt"), "w") as f:
+            f.write(f"chrome-smoke --starts {a.starts}: {good}/{a.starts} PASS\n")
+            for i, v, steps in rows:
+                f.write(f"start {i:02d}: {v} {''.join('.' if s else 'F' for s in steps)}\n")
+        print(f"[chrome-smoke] starts: {good}/{a.starts} PASS", flush=True)
+        sys.exit(0 if good == a.starts else 1)
+
+    extra = {}
+
+    def body(g):
+        if not g.start_chrome("file:///tmp/input-test.html"):
+            return
+        g.close_infobars()
+        g.step("chrome's infobars are closed or absent", g.infobars == 0, f"{g.infobars} left")
+        extra["memory_start"] = g.memory()
+        if a.soak_hours > 0:
+            end = time.time() + a.soak_hours * 3600
+            rnd, mem = 0, []
+            while time.time() < end:
+                rnd += 1
+                g.site_matrix(sites, tag=f"-r{rnd}" if rnd <= 3 else "-last")
+                g.interaction_matrix(tag=f" (round {rnd})")
+                mem.append((int(time.time() - t0), g.memory()))
+                print(f"[chrome-smoke] soak round {rnd} done after {int(time.time() - t0)} s: {mem[-1][1]}", flush=True)
+                extra["soak_rounds"], extra["soak_memory"] = rnd, mem
+                write_report(a, a.workdir, g, "running", t0, extra)
+            return
+        if "sites" in only:
+            for r in range(a.rounds):
+                g.site_matrix(sites, tag=f"-r{r + 1}" if a.rounds > 1 else "")
+        if "interact" in only:
+            g.interaction_matrix()
+        if "youtube" in only:
+            g.youtube(a.video_seconds)
+            extra["youtube"] = getattr(g, "youtube_result", None)
+        if "perf" in only:
+            loads, lat = g.perf()
+            extra["perf_loads_s"] = loads
+            extra["perf_key_ms"] = [round(x) for x in lat]
+        extra["memory_end"] = g.memory()
+
+    g, verdict, rc = one_boot(a, a.workdir, body)
+    write_report(a, a.workdir, g, verdict, t0, extra)
+    sys.exit(rc)
+
+
+if __name__ == "__main__":
+    main()
