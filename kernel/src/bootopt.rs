@@ -32,6 +32,10 @@
 //!   one up to 1920x1080. An unknown or unavailable mode is ignored and logged.
 //!   Meant for testing the desktop at a smaller size.
 //!
+//! - `update.check=off`: no automatic update check (update.rs `maybe_check`):
+//!   nothing is fetched, staged or installed unless `euroupdate check` is typed.
+//!   For test guests that have a route to the internet.
+//!
 //! The file is not signed. It only chooses between two code paths that are
 //! both part of the signed kernel image; it cannot add code.
 
@@ -41,6 +45,7 @@ static NET_USER: AtomicBool = AtomicBool::new(true);
 static NVME_USER: AtomicBool = AtomicBool::new(false);
 static SCHED_WATCH: AtomicBool = AtomicBool::new(false);
 static TOUR_OFF: AtomicBool = AtomicBool::new(false);
+static UPDATE_CHECK_OFF: AtomicBool = AtomicBool::new(false);
 static FOUND: AtomicBool = AtomicBool::new(false);
 /// `display.mode`: width << 16 | height, 0 = not set.
 static DISPLAY_MODE: AtomicUsize = AtomicUsize::new(0);
@@ -78,6 +83,8 @@ fn apply(text: &str) {
                 // First-run tour (kernel/src/onboarding.rs): off for unattended images.
                 ("ui.tour", "off") => TOUR_OFF.store(true, Ordering::Relaxed),
                 ("ui.tour", "on") => TOUR_OFF.store(false, Ordering::Relaxed),
+                ("update.check", "off") => UPDATE_CHECK_OFF.store(true, Ordering::Relaxed),
+                ("update.check", "on") => UPDATE_CHECK_OFF.store(false, Ordering::Relaxed),
                 ("display.mode", v) => match parse_mode(v) {
                     Some((w, h)) => DISPLAY_MODE.store(w << 16 | h, Ordering::Relaxed),
                     None => crate::serial_println!("[bootopt] display.mode={v} is not <width>x<height>: ignored"),
@@ -124,6 +131,11 @@ pub fn capture() {
 /// `ui.tour=off`: do not show the first-run tour.
 pub fn tour_off() -> bool {
     TOUR_OFF.load(Ordering::Relaxed)
+}
+
+/// `update.check=off`: the periodic update check does nothing.
+pub fn update_check_off() -> bool {
+    UPDATE_CHECK_OFF.load(Ordering::Relaxed)
 }
 
 pub fn sched_watch() -> bool {
