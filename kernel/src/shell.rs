@@ -446,6 +446,27 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
                 app_cmd(line)
             }
         }
+        // `xtrace on|off`: every X request and reply of the in-kernel X server on
+        // the serial console (bring-up of an X client; a browser sends thousands).
+        "xtrace" => {
+            let on = arg1 == "on";
+            crate::xserver::TRACE.store(on, core::sync::atomic::Ordering::Relaxed);
+            vec![format!("xtrace: {}", if on { "on" } else { "off" })]
+        }
+        "cdiag" => {
+            // What a hosted glibc program (the browser) is doing right now: every
+            // thread with its state and last syscall, the main thread's recent
+            // syscalls, the epoll sets and the futex table, on the serial console.
+            // Interrupts off for the whole dump: the syscall paths take these
+            // tables with interrupts off, and this task preempted while holding
+            // one of them would wedge the next epoll_wait.
+            let _g = crate::sched::IfOffGuard::new();
+            crate::ring3::dump_threads_now("cdiag (shell)");
+            crate::ring3::dump_main_syscalls();
+            crate::ring3::dump_epoll_sets();
+            crate::ring3::dump_futex_state();
+            vec!["cdiag: written to the serial console".into()]
+        }
         // How often the desktop repainted everything (BUG-057: once per loop
         // iteration while an overlay was open).
         "repaints" => {
