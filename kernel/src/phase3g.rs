@@ -118,8 +118,10 @@ fn mdns_3g6() {
 fn dnssec_3g7() {
     use ed25519_dalek::{Signer, SigningKey};
     use eurodns::{signed_data, verify_rrsig, DnssecError, Dnskey, Rr, Rrsig, ALG_ED25519, CLASS_IN, TYPE_A};
-    let mut seed = [0u8; 32];
-    crate::entropy::getrandom(&mut seed);
+    let Some(seed) = crate::entropy::draw::<32>() else {
+        crate::serial_println!("[3g7] EuroDNS DNSSEC (Ed25519, RFC 8080): the CSPRNG is not seeded, so no key or nonce was drawn → FAILED");
+        return;
+    };
     let sk = SigningKey::from_bytes(&seed);
     let dk = Dnskey { flags: 257, protocol: 3, algorithm: ALG_ED25519, public_key: sk.verifying_key().to_bytes().to_vec() };
     let rrset = alloc::vec![Rr {

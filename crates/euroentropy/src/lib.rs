@@ -12,6 +12,10 @@
 //!   conservatively estimates its min-entropy, and refuses to hand out randomness
 //!   (`ready() == false`) until it has seeded the DRBG with enough of it — a hard
 //!   **`getrandom`-blocking** guarantee, not best-effort.
+//! - [`EntropyPool::seed_from`] — the seeding procedure: which sources
+//!   ([`NoiseSources`]: TPM, RDSEED, RDRAND, jitter), in which order, how much
+//!   each is credited, and that it goes on gathering until the threshold is met
+//!   or a bound is reached ([`SeedPolicy`], [`SeedReport`]).
 //!
 //! No external crypto crate beyond SHA-256; HMAC is built here.
 
@@ -160,13 +164,26 @@ pub struct EntropyPool {
     /// Staged conditioned material before the first instantiate.
     staged: Vec<u8>,
     reseeds: u64,
+    /// What [`seed_from`](Self::seed_from) has gathered so far, over all its calls.
+    report: SeedReport,
 }
+
+/// Staged material is folded into one conditioned block when it reaches this
+/// size, so a pool that waits long for its threshold does not grow without end.
+const STAGED_FOLD_BYTES: usize = 32 * 64;
 
 impl EntropyPool {
     /// A pool requiring `threshold_bits` (256 is the sane default for 128-bit
     /// security with margin).
     pub fn new(threshold_bits: usize) -> Self {
-        EntropyPool { drbg: None, entropy_bits: 0, threshold_bits, staged: Vec::new(), reseeds: 0 }
+        EntropyPool {
+            drbg: None,
+            entropy_bits: 0,
+            threshold_bits,
+            staged: Vec::new(),
+            reseeds: 0,
+            report: SeedReport { threshold: threshold_bits, ..SeedReport::default() },
+        }
     }
 
     /// Add noise `material` credited with `estimated_bits` of entropy. Before the
@@ -182,6 +199,10 @@ impl EntropyPool {
                     let nonce = (self.staged.len() as u64).to_le_bytes();
                     self.drbg = Some(HmacDrbg::instantiate(&self.staged, &nonce, b"EuroEntropy-pool-v1"));
                     self.staged.clear();
+                } else if self.staged.len() >= STAGED_FOLD_BYTES {
+                    let folded = condition(&self.staged);
+                    self.staged.clear();
+                    self.staged.extend_from_slice(&folded);
                 }
             }
             Some(drbg) => {
@@ -224,6 +245,339 @@ impl EntropyPool {
     }
     pub fn reseed_count(&self) -> u64 {
         self.reseeds
+    }
+}
+
+// ── Seeding: which sources, in which order, until when ─────────────────────
+
+/// What a platform can offer [`EntropyPool::seed_from`]. A source that is not
+/// there answers `None`; the jitter source is the one every platform has.
+pub trait NoiseSources {
+    /// Up to 32 bytes from a TPM's random number generator.
+    fn tpm(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+    /// One word from the CPU's entropy source (RDSEED), if the CPU has the
+    /// instruction and it delivered.
+    fn rdseed(&mut self) -> Option<u64> {
+        None
+    }
+    /// One word from the CPU's generator (RDRAND), likewise.
+    fn rdrand(&mut self) -> Option<u64> {
+        None
+    }
+    /// `n` raw timing samples. An empty batch counts as a batch without credit.
+    fn jitter(&mut self, n: usize) -> Vec<u64>;
+}
+
+/// Credit for one RDSEED word of 64 bits: half of what the CPU claims.
+pub const RDSEED_BITS_PER_WORD: usize = 32;
+/// Credit for one RDRAND word of 64 bits: a quarter (RDRAND is the output of
+/// the CPU's own DRBG, reseeded from the same source as RDSEED).
+pub const RDRAND_BITS_PER_WORD: usize = 16;
+/// Credit for one byte from the TPM (32 bytes: 256 bits, as before).
+pub const TPM_BITS_PER_BYTE: usize = 8;
+
+/// How long [`EntropyPool::seed_from`] gathers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SeedPolicy {
+    /// Timing samples per batch.
+    pub jitter_batch: usize,
+    /// Batches of jitter that are gathered and mixed in whatever the other
+    /// sources gave: no source replaces the jitter.
+    pub min_jitter_batches: usize,
+    /// The bound: after this many batches in one call the seeding gives up,
+    /// and the pool stays closed.
+    pub max_jitter_batches: usize,
+    /// Words asked of RDSEED and of RDRAND per call.
+    pub cpu_words: usize,
+}
+
+impl SeedPolicy {
+    /// At boot: gather until the threshold is met, at most 4096 batches.
+    pub const BOOT: SeedPolicy = SeedPolicy { jitter_batch: 512, min_jitter_batches: 4, max_jitter_batches: 4096, cpu_words: 8 };
+    /// A later attempt on behalf of a request that found the pool closed.
+    pub const RETRY: SeedPolicy = SeedPolicy { jitter_batch: 512, min_jitter_batches: 1, max_jitter_batches: 64, cpu_words: 8 };
+}
+
+/// What the seeding gathered (summed over every call on one pool).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SeedReport {
+    /// The pool hands out randomness.
+    pub ready: bool,
+    /// Credited entropy so far, and the threshold it has to reach.
+    pub bits: usize,
+    pub threshold: usize,
+    pub tpm_bytes: usize,
+    pub rdseed_words: usize,
+    pub rdrand_words: usize,
+    /// Credit given to the two CPU sources together (capped, see `seed_from`).
+    pub cpu_bits: usize,
+    pub jitter_batches: usize,
+    pub jitter_bits: usize,
+    /// The last call reached its bound without meeting the threshold.
+    pub gave_up: bool,
+}
+
+impl EntropyPool {
+    /// Seed the pool from every source the platform has, and go on gathering
+    /// jitter until the pool is ready or `policy.max_jitter_batches` is reached.
+    ///
+    /// Order: the TPM (if any), RDSEED and RDRAND (if the CPU has them), then
+    /// jitter. All of it is conditioned and mixed into the same seed; nothing
+    /// replaces anything.
+    ///
+    /// Credit:
+    /// - TPM bytes at [`TPM_BITS_PER_BYTE`], once per pool;
+    /// - RDSEED and RDRAND words at [`RDSEED_BITS_PER_WORD`] and
+    ///   [`RDRAND_BITS_PER_WORD`], together **at most half the threshold**: the
+    ///   CPU's generator alone never opens the pool, the other half has to
+    ///   come from jitter or the TPM;
+    /// - jitter by [`estimate_jitter_bits`], unchanged.
+    ///
+    /// When the bound is reached the pool stays closed (`gave_up`, and
+    /// [`fill`](Self::fill) refuses); what was gathered stays staged, so a
+    /// later call continues from there.
+    pub fn seed_from(&mut self, src: &mut dyn NoiseSources, policy: &SeedPolicy) -> SeedReport {
+        // 1. TPM.
+        if let Some(b) = src.tpm() {
+            if !b.is_empty() {
+                let credit = if self.report.tpm_bytes == 0 { b.len().min(32) * TPM_BITS_PER_BYTE } else { 0 };
+                self.add(&b, credit);
+                self.report.tpm_bytes += b.len();
+            }
+        }
+        // 2. The CPU's sources. Material from both goes in; the credit is capped.
+        let cpu_cap = self.threshold_bits / 2;
+        let mut words: Vec<u8> = Vec::new();
+        let mut credit = 0usize;
+        for _ in 0..policy.cpu_words {
+            if let Some(w) = src.rdseed() {
+                words.extend_from_slice(&w.to_le_bytes());
+                self.report.rdseed_words += 1;
+                credit += RDSEED_BITS_PER_WORD;
+            }
+        }
+        for _ in 0..policy.cpu_words {
+            if let Some(w) = src.rdrand() {
+                words.extend_from_slice(&w.to_le_bytes());
+                self.report.rdrand_words += 1;
+                credit += RDRAND_BITS_PER_WORD;
+            }
+        }
+        if !words.is_empty() {
+            let credit = credit.min(cpu_cap.saturating_sub(self.report.cpu_bits));
+            self.add(&words, credit);
+            self.report.cpu_bits += credit;
+        }
+        // 3. Jitter: at least the minimum, then until ready, at most the bound.
+        let mut batches = 0usize;
+        self.report.gave_up = false;
+        loop {
+            if batches >= policy.min_jitter_batches && self.ready() {
+                break;
+            }
+            if batches >= policy.max_jitter_batches {
+                self.report.gave_up = !self.ready();
+                break;
+            }
+            let samples = src.jitter(policy.jitter_batch);
+            self.report.jitter_bits += estimate_jitter_bits(&samples);
+            self.add_jitter(&samples);
+            self.report.jitter_batches += 1;
+            batches += 1;
+        }
+        self.report.ready = self.ready();
+        self.report.bits = self.entropy_bits;
+        self.report
+    }
+
+    /// What [`seed_from`](Self::seed_from) has gathered so far.
+    pub fn seed_report(&self) -> SeedReport {
+        SeedReport { ready: self.ready(), bits: self.entropy_bits, ..self.report }
+    }
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::*;
+
+    /// A scripted platform: `quiet` batches of constant samples (no credit),
+    /// then noisy ones; optional CPU sources and TPM.
+    struct Script {
+        quiet: usize,
+        asked: usize,
+        rdseed: bool,
+        rdrand: bool,
+        tpm: bool,
+        x: u64,
+    }
+    impl Script {
+        fn new(quiet: usize) -> Self {
+            Script { quiet, asked: 0, rdseed: false, rdrand: false, tpm: false, x: 0x1234_5678_9abc_def1 }
+        }
+        fn next(&mut self) -> u64 {
+            // xorshift64: test data, not randomness.
+            self.x ^= self.x << 13;
+            self.x ^= self.x >> 7;
+            self.x ^= self.x << 17;
+            self.x
+        }
+    }
+    impl NoiseSources for Script {
+        fn tpm(&mut self) -> Option<Vec<u8>> {
+            self.tpm.then(|| vec![0xA5; 32])
+        }
+        fn rdseed(&mut self) -> Option<u64> {
+            if self.rdseed {
+                Some(self.next())
+            } else {
+                None
+            }
+        }
+        fn rdrand(&mut self) -> Option<u64> {
+            if self.rdrand {
+                Some(self.next())
+            } else {
+                None
+            }
+        }
+        fn jitter(&mut self, n: usize) -> Vec<u64> {
+            self.asked += 1;
+            if self.asked <= self.quiet {
+                vec![24; n]
+            } else {
+                (0..n).map(|_| 100 + (self.next() & 0x3f)).collect()
+            }
+        }
+    }
+
+    const P: SeedPolicy = SeedPolicy { jitter_batch: 512, min_jitter_batches: 2, max_jitter_batches: 100, cpu_words: 8 };
+
+    #[test]
+    fn a_quiet_start_is_waited_out() {
+        // The BUG-065 boot: the first batches carry nothing. The old init
+        // stopped after a fixed number; this one goes on until there is enough.
+        let mut src = Script::new(70);
+        let mut p = EntropyPool::new(256);
+        let r = p.seed_from(&mut src, &P);
+        assert!(r.ready && !r.gave_up);
+        assert!(r.jitter_batches > 70 && r.jitter_batches < 100);
+        assert!(r.jitter_bits >= 256 && r.bits >= 256);
+        let mut b = [0u8; 32];
+        assert!(p.fill(&mut b));
+    }
+
+    #[test]
+    fn no_noise_ends_at_the_bound_and_the_pool_stays_closed() {
+        let mut src = Script::new(usize::MAX);
+        let mut p = EntropyPool::new(256);
+        let r = p.seed_from(&mut src, &P);
+        assert!(!r.ready && r.gave_up);
+        assert_eq!(r.jitter_batches, 100);
+        assert_eq!(r.bits, 0);
+        let mut b = [0x77u8; 32];
+        assert!(!p.fill(&mut b));
+        assert_eq!(b, [0x77u8; 32]); // not a byte written
+    }
+
+    #[test]
+    fn a_later_attempt_seeds_a_pool_that_gave_up() {
+        let mut src = Script::new(100);
+        let mut p = EntropyPool::new(256);
+        assert!(p.seed_from(&mut src, &P).gave_up);
+        // The same platform, later: the noise is there now.
+        let r = p.seed_from(&mut src, &SeedPolicy::RETRY);
+        assert!(r.ready && !r.gave_up);
+        assert_eq!(r.jitter_batches, p.seed_report().jitter_batches);
+        assert!(r.jitter_batches > 100);
+        let mut b = [0u8; 16];
+        assert!(p.fill(&mut b));
+    }
+
+    #[test]
+    fn the_cpu_sources_alone_never_open_the_pool() {
+        let mut src = Script::new(usize::MAX);
+        src.rdseed = true;
+        src.rdrand = true;
+        let mut p = EntropyPool::new(256);
+        let r = p.seed_from(&mut src, &P);
+        assert_eq!((r.rdseed_words, r.rdrand_words), (8, 8));
+        assert_eq!(r.cpu_bits, 128); // 8 x 32 + 8 x 16 = 384, capped at half of 256
+        assert!(!r.ready && r.gave_up);
+        // Asking again does not add credit past the cap.
+        let r = p.seed_from(&mut src, &P);
+        assert_eq!(r.cpu_bits, 128);
+        assert_eq!(r.bits, 128);
+        assert!(!r.ready);
+    }
+
+    #[test]
+    fn rdrand_alone_is_credited_less_than_rdseed() {
+        let mut src = Script::new(usize::MAX);
+        src.rdrand = true;
+        let mut p = EntropyPool::new(256);
+        let r = p.seed_from(&mut src, &SeedPolicy { cpu_words: 4, max_jitter_batches: 1, ..P });
+        assert_eq!((r.rdseed_words, r.rdrand_words, r.cpu_bits), (0, 4, 64));
+    }
+
+    #[test]
+    fn cpu_words_and_jitter_are_mixed_not_swapped() {
+        // The same jitter with and without the CPU's words: both pools open,
+        // and they give different streams, so the words are in the seed.
+        let mut a = Script::new(0);
+        let mut b = Script::new(0);
+        b.rdseed = true;
+        let mut pa = EntropyPool::new(256);
+        let mut pb = EntropyPool::new(256);
+        let ra = pa.seed_from(&mut a, &P);
+        let rb = pb.seed_from(&mut b, &P);
+        assert!(ra.ready && rb.ready);
+        assert!(rb.jitter_batches >= P.min_jitter_batches && rb.jitter_bits > 0);
+        assert_eq!(rb.rdseed_words, 8);
+        let (mut oa, mut ob) = ([0u8; 32], [0u8; 32]);
+        assert!(pa.fill(&mut oa) && pb.fill(&mut ob));
+        assert_ne!(oa, ob);
+    }
+
+    #[test]
+    fn jitter_is_gathered_even_when_the_tpm_alone_meets_the_threshold() {
+        let mut src = Script::new(0);
+        src.tpm = true;
+        let mut p = EntropyPool::new(256);
+        let r = p.seed_from(&mut src, &P);
+        assert!(r.ready);
+        assert_eq!(r.tpm_bytes, 32);
+        assert_eq!(r.jitter_batches, P.min_jitter_batches);
+        // A second call does not credit the TPM again.
+        let before = p.entropy_bits();
+        let r2 = p.seed_from(&mut src, &SeedPolicy { min_jitter_batches: 0, ..P });
+        assert_eq!(p.entropy_bits(), before);
+        assert_eq!(r2.tpm_bytes, 64);
+    }
+
+    #[test]
+    fn a_long_wait_does_not_grow_the_staged_material() {
+        let mut p = EntropyPool::new(256);
+        for i in 0..1000u32 {
+            p.add(&i.to_le_bytes(), 0);
+        }
+        assert!(p.staged.len() <= STAGED_FOLD_BYTES);
+        assert!(!p.ready());
+        p.add(b"enough", 256);
+        assert!(p.ready());
+    }
+
+    #[test]
+    fn the_estimator_gives_a_constant_series_nothing() {
+        // What the old two-instruction sample looked like in a BUG-065 boot.
+        assert_eq!(estimate_jitter_bits(&[24; 512]), 0);
+        let mut s = vec![24u64; 512];
+        for i in (8..512).step_by(9) {
+            s[i] = 28;
+        }
+        // 56 steps up of 4 are counted, the 56 steps back are too: 112 / 4.
+        assert!(estimate_jitter_bits(&s) <= 28);
     }
 }
 

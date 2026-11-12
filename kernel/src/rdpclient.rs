@@ -52,9 +52,12 @@ pub fn start(host: &str, port: u16, user: &str, password: &str, w: u32, h: u32) 
     {
         // Licensing randomness (client random, pre-master secret, hardware id).
         let mut e = [0u8; 96];
-        e[0..32].copy_from_slice(&crate::net::entropy(2u8));
-        e[32..64].copy_from_slice(&crate::net::entropy(3u8));
-        e[64..96].copy_from_slice(&crate::net::entropy(4u8));
+        let (Some(e0), Some(e1), Some(e2)) = (crate::net::entropy(2u8), crate::net::entropy(3u8), crate::net::entropy(4u8)) else {
+            return Err(String::from("rdp: the CSPRNG is not seeded, no session keys"));
+        };
+        e[0..32].copy_from_slice(&e0);
+        e[32..64].copy_from_slice(&e1);
+        e[64..96].copy_from_slice(&e2);
         sess.set_entropy(&e);
     }
     if crate::euroapi::create(RDP_PID, w as usize, h as usize) < 0 {
@@ -151,8 +154,11 @@ pub fn step() -> bool {
     for ev in c.sess.take_events() {
         match ev {
             Event::StartTls => {
-                let random = crate::net::entropy(0u8);
-                let secret = crate::net::entropy(1u8);
+                let (Some(random), Some(secret)) = (crate::net::entropy(0u8), crate::net::entropy(1u8)) else {
+                    let _ = end(c, "the CSPRNG is not seeded: no TLS key material");
+                    *g = None;
+                    return true;
+                };
                 let (mut tls, hello) = eurotls::Tls13Client::new(&c.host, random, secret);
                 tls.allow_insecure_no_verification(); // see the module note: self-signed RDP certificates (v1)
                 c.tcp.send_nowait(&hello);

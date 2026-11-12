@@ -382,6 +382,7 @@ fn wr_u32(mem: &mut [u8], p: usize, v: u32) {
 
 const WASI_ESUCCESS: i64 = 0;
 const WASI_EBADF: i64 = 8;
+const WASI_EIO: i64 = 29;
 
 impl HostImports for WasiPreview1 {
     fn call(&mut self, m: &str, n: &str, args: &[Val], mem: &mut [u8]) -> Result<Vec<Val>, WasmError> {
@@ -426,7 +427,10 @@ impl HostImports for WasiPreview1 {
                 let len = args[1] as usize;
                 if buf + len <= mem.len() {
                     let mut tmp = vec![0u8; len];
-                    crate::entropy::getrandom(&mut tmp);
+                    if !crate::entropy::getrandom(&mut tmp) {
+                        // Not seeded: an error, never bytes that are not random.
+                        return Ok(vec![WASI_EIO]);
+                    }
                     mem[buf..buf + len].copy_from_slice(&tmp);
                 }
                 Ok(vec![WASI_ESUCCESS])

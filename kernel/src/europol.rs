@@ -42,8 +42,10 @@ pub fn bundle_selftest() {
     let bytes = europol::bundle::serialize(&policies);
 
     // Sign with a release key (from the CSPRNG here; offline in production).
-    let mut seed = [0u8; 32];
-    crate::entropy::getrandom(&mut seed);
+    let Some(seed) = crate::entropy::draw::<32>() else {
+        crate::serial_println!("[3d4] EuroPol signed bundles (Ed25519 verify-before-load): the CSPRNG is not seeded, so no key or nonce was drawn → FAILED");
+        return;
+    };
     let key = SigningKey::from_bytes(&seed);
     let pubkey = key.verifying_key().to_bytes();
     let sig = europol::bundle::sign(&bytes, &key);

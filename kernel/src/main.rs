@@ -2296,9 +2296,10 @@ fn main() -> Status {
     if tpm::init() {
         tpm::selftest();
     }
-    // 3D-8: seed the sovereign CSPRNG (CPU jitter + the TPM RNG if present) and
-    // prove the getrandom readiness gate. Runs regardless of a TPM — CPU jitter
-    // alone reaches the entropy threshold — so it is OUTSIDE the TPM block.
+    // 3D-8: seed the sovereign CSPRNG (CPU jitter, RDSEED/RDRAND and the TPM RNG
+    // where present, mixed) and prove the getrandom readiness gate. Runs
+    // regardless of a TPM — CPU jitter alone reaches the entropy threshold — so
+    // it is OUTSIDE the TPM block. Both paths print the `[entropy]` status line.
     if SELFTEST {
         entropy::selftest();
     } else {

@@ -66,14 +66,18 @@ pub fn selftest() {
     for (i, b) in img.iter_mut().enumerate() {
         *b = (i as u32 * 31 + 7) as u8;
     }
-    let mut salt = [0u8; 32];
-    crate::entropy::getrandom(&mut salt);
+    let Some(salt) = crate::entropy::draw::<32>() else {
+        crate::serial_println!("[3d2] EuroVerity (dm-verity-style, Ed25519-signed Merkle root): the CSPRNG is not seeded, so no key or nonce was drawn → FAILED");
+        return;
+    };
     let tree = VerityTree::build(&img, 512, salt);
 
     // The release-signed manifest (test key from the CSPRNG; in production the
     // root is signed offline by the same key that signs A/B images).
-    let mut seed = [0u8; 32];
-    crate::entropy::getrandom(&mut seed);
+    let Some(seed) = crate::entropy::draw::<32>() else {
+        crate::serial_println!("[3d2] EuroVerity (dm-verity-style, Ed25519-signed Merkle root): the CSPRNG is not seeded, so no key or nonce was drawn → FAILED");
+        return;
+    };
     let key = SigningKey::from_bytes(&seed);
     let pubkey = key.verifying_key().to_bytes();
     let manifest = Manifest::of(&tree);
@@ -136,11 +140,15 @@ pub fn wire_selftest() {
 
     // (2) Build the Merkle tree over the frozen image + sign the manifest.
     let bytes = image_bytes(&dev);
-    let mut salt = [0u8; 32];
-    crate::entropy::getrandom(&mut salt);
+    let Some(salt) = crate::entropy::draw::<32>() else {
+        crate::serial_println!("[3d2-wire] verity on the LIVE EuroFS read path: the CSPRNG is not seeded, so no key or nonce was drawn → FAILED ✗");
+        return;
+    };
     let tree = VerityTree::build(&bytes, 4096, salt);
-    let mut seed = [0u8; 32];
-    crate::entropy::getrandom(&mut seed);
+    let Some(seed) = crate::entropy::draw::<32>() else {
+        crate::serial_println!("[3d2-wire] verity on the LIVE EuroFS read path: the CSPRNG is not seeded, so no key or nonce was drawn → FAILED ✗");
+        return;
+    };
     let key = SigningKey::from_bytes(&seed);
     let manifest = Manifest::of(&tree);
     let sig = manifest.sign(&key);

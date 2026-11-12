@@ -55,10 +55,10 @@ fn vault_persist_roundtrip() -> bool {
     use eurofs::{EuroFs, FileSystem, MemoryBlockDevice};
     use eurovault::Vault;
 
-    let mut master = [0u8; 32];
-    let mut nonce = [0u8; 12];
-    crate::entropy::getrandom(&mut master);
-    crate::entropy::getrandom(&mut nonce);
+    // No vault is sealed with a key or a nonce the CSPRNG did not give.
+    let (Some(master), Some(nonce)) = (crate::entropy::draw::<32>(), crate::entropy::draw::<12>()) else {
+        return false;
+    };
 
     let mut v = Vault::new();
     v.set("db-password", b"euro-s3cr3t", 1 << 10);

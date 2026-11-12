@@ -1971,9 +1971,15 @@ pub fn rand_u64() -> u64 {
 
 /// 32 random bytes for a TLS key/nonce. `domain` separates
 /// independent draws within one handshake.
-fn gather_entropy(domain: u8) -> [u8; 32] {
+///
+/// BUG-065: the bytes come from the kernel CSPRNG (`entropy`), mixed with what
+/// this function gathered before (TPM, RDTSC, RDRAND, ticks, a counter).
+/// `None` when the CSPRNG is not seeded: no handshake is started with key
+/// material from the weaker mix alone.
+fn gather_entropy(domain: u8) -> Option<[u8; 32]> {
     let mut seed: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
     seed.push(domain);
+    seed.extend_from_slice(&crate::entropy::draw::<32>()?);
     // ★ Audit H1: mix in the TPM's hardware RNG. On TCG/QEMU RDRAND is absent,
     // which made the old fallback (RDTSC^HPET^counter) low-entropy and partly
     // predictable — fatal for an ephemeral X25519 key. The TPM RNG
@@ -1997,7 +2003,7 @@ fn gather_entropy(domain: u8) -> [u8; 32] {
         *c = c.wrapping_add(0x9E37_79B9_7F4A_7C15);
         seed.extend_from_slice(&c.to_le_bytes());
     }
-    eurotls::keyschedule::sha256(&seed)
+    Some(eurotls::keyschedule::sha256(&seed))
 }
 
 /// HTTPS GET via our own TLS 1.3 stack on top of TcpConn. Returns
@@ -2043,9 +2049,11 @@ fn https_exchange_max(
     request: &[u8],
     max: usize,
 ) -> Option<(alloc::vec::Vec<u8>, Option<alloc::vec::Vec<u8>>)> {
+    let (Some(random), Some(secret)) = (gather_entropy(0), gather_entropy(1)) else {
+        crate::serial_println!("[tls] no handshake with {host}: the CSPRNG is not seeded");
+        return None;
+    };
     let mut tcp = TcpConn::connect(my_mac, my_ip, nexthop, server, 443)?;
-    let random = gather_entropy(0);
-    let secret = gather_entropy(1);
     let (mut tls, hello) = eurotls::Tls13Client::new(host, random, secret);
     // Enable certificate validation: verify the chain against the bundled
     // EU/international root CAs + the server name + the validity window, and
@@ -4503,7 +4511,8 @@ pub fn tcp_connect_nowait_to(host: &str, port: u16) -> Option<TcpConn> {
 }
 
 /// 32 bytes of entropy for a TLS client (random / key share scalar).
-pub fn entropy(i: u8) -> [u8; 32] {
+/// `None` when the CSPRNG is not seeded.
+pub fn entropy(i: u8) -> Option<[u8; 32]> {
     gather_entropy(i)
 }
 
@@ -4560,8 +4569,9 @@ impl HttpsFetch {
         if self.tls.is_none() {
             match self.tcp.poll_connect() {
                 Some(true) => {
-                    let random = gather_entropy(0);
-                    let secret = gather_entropy(1);
+                    let (Some(random), Some(secret)) = (gather_entropy(0), gather_entropy(1)) else {
+                        return self.fail("the CSPRNG is not seeded: no TLS key material");
+                    };
                     let (mut tls, hello) = eurotls::Tls13Client::new(&self.host, random, secret);
                     tls.set_trust_anchor(crate::rtc::epoch() as i64, crate::tls_roots::ROOTS);
                     self.tcp.send_nowait(&hello);

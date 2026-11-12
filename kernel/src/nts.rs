@@ -8,17 +8,19 @@
 pub fn selftest() {
     // In production the C2S/S2C keys come from an NTS-KE handshake over TLS; here
     // we derive them from a CSPRNG-drawn exporter secret to exercise the schedule.
-    let mut ems = [0x42u8; 32];
-    crate::entropy::getrandom(&mut ems);
+    let (Some(ems), Some(uid), Some(n1), Some(n2)) = (
+        crate::entropy::draw::<32>(),
+        crate::entropy::draw::<32>(),
+        crate::entropy::draw::<12>(),
+        crate::entropy::draw::<12>(),
+    ) else {
+        crate::serial_println!(
+            "[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): the CSPRNG is not seeded, so no key or nonce was drawn → FAILED"
+        );
+        return;
+    };
     let c2s = euronts::derive_key(&ems, euronts::AEAD_CHACHA20_POLY1305, true);
     let s2c = euronts::derive_key(&ems, euronts::AEAD_CHACHA20_POLY1305, false);
-
-    let mut uid = [0u8; 32];
-    let mut n1 = [0u8; 12];
-    let mut n2 = [0u8; 12];
-    crate::entropy::getrandom(&mut uid);
-    crate::entropy::getrandom(&mut n1);
-    crate::entropy::getrandom(&mut n2);
 
     let _req = euronts::client_request(&c2s, b"cookie-boot", uid, n1, 0);
     let server_time = 0xE9F5_1234_0000_0000u64; // demo NTP 64-bit timestamp
