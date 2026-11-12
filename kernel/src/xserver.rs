@@ -396,6 +396,37 @@ fn mod_state() -> u16 {
 /// An `E0` prefix was read from the scancode ring and its code is still to come.
 static KBD_EXT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
+/// The pointer's position in the hosted client's root coordinates (x << 16 | y),
+/// as the last event sent to it said. QueryPointer answers with it.
+static LAST_ROOT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// The window a held mouse button belongs to (0 = no button held): X's implicit
+/// pointer grab, from the press to the release.
+static IMPLICIT_GRAB: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// The keyboard half of the server's input state, for `cdiag`: the modifier
+/// word that goes into every event, the focus window, a pending `E0`.
+pub fn dump_input_state() {
+    crate::serial_println!("[xin] state: modifiers={:#x} (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons={:#x} focus={:#x} shown={:#x} E0-pending={}",
+        MOD_STATE.load(core::sync::atomic::Ordering::Relaxed), crate::mouse::buttons(),
+        FOCUS_WINDOW.load(core::sync::atomic::Ordering::Relaxed),
+        RETAINED_ID.load(core::sync::atomic::Ordering::Relaxed),
+        KBD_EXT.load(core::sync::atomic::Ordering::Relaxed));
+    let sel: Vec<_> = SEL_OWNERS.lock().clone();
+    crate::serial_println!("[xin] selections owned (atom, window, connection): {sel:?}");
+    crate::serial_println!("[xin] events that waited for a connection busy on another core: {}",
+        HOME_WAITS.load(core::sync::atomic::Ordering::Relaxed));
+    let t = lock_home();
+    for (ci, c) in t.iter().enumerate() {
+        if let Some(c) = c {
+            let wins: Vec<_> = c.windows.iter().filter(|w| w.w > 1 && w.h > 1)
+                .map(|w| (w.id, w.x, w.y, w.w, w.h, w.mapped)).collect();
+            crate::serial_println!("[xin] connection {ci}: {} B queued, {} windows, larger than 1x1 (id, x, y, w, h, mapped): {wins:x?}",
+                c.outbuf.len(), c.windows.len());
+        }
+    }
+}
+
 /// The X keycode of a set-1 scancode: the evdev code + 8, which is what every X
 /// client's keycode tables assume. The main block is scancode + 8; the extended
 /// (`E0`) keys have codes of their own. 0 = a key this server does not know.
@@ -922,9 +953,33 @@ fn deliver_to_shown(kind: u8, detail: u8, lx: i16, ly: i16) {
         if shown != 0 {
             if let Some(ci) = conn_of_window(&t[..], shown) {
                 if let Some(conn) = t[ci].as_mut() {
-                    let (wx, wy) = conn.windows.iter().find(|w| w.id == shown)
-                        .map(|w| (w.x, w.y)).unwrap_or((0, 0));
-                    send_input(conn, kind, detail, shown, lx + wx, ly + wy, lx, ly);
+                    let (mx, my) = conn.windows.iter().find(|w| w.id == shown)
+                        .map(|w| (w.x as i32, w.y as i32)).unwrap_or((0, 0));
+                    let (rx, ry) = (lx as i32 + mx, ly as i32 + my);
+                    // The window under the pointer: the newest popup that contains
+                    // it, else the main window. While a button is held the events
+                    // stay with the window the press went to (X's implicit grab),
+                    // so a drag that crosses a popup or leaves the window is whole.
+                    let held = IMPLICIT_GRAB.load(core::sync::atomic::Ordering::Relaxed);
+                    let target = conn.windows.iter().rev()
+                        .filter(|w| w.mapped && w.w > 1 && w.h > 1)
+                        .find(|w| if held != 0 { w.id == held } else {
+                            w.id != shown && rx >= w.x as i32 && ry >= w.y as i32
+                                && rx < w.x as i32 + w.w as i32 && ry < w.y as i32 + w.h as i32
+                        })
+                        .map(|w| (w.id, w.x as i32, w.y as i32))
+                        .unwrap_or((shown, mx, my));
+                    if (1..=3).contains(&detail) {
+                        if kind == 4 && held == 0 {
+                            IMPLICIT_GRAB.store(target.0, core::sync::atomic::Ordering::Relaxed);
+                        } else if kind == 5 && crate::mouse::buttons() == 0 {
+                            IMPLICIT_GRAB.store(0, core::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    LAST_ROOT.store(((rx as i16 as u16 as u32) << 16) | ry as i16 as u16 as u32,
+                        core::sync::atomic::Ordering::Relaxed);
+                    send_input(conn, kind, detail, target.0, rx as i16, ry as i16,
+                               (rx - target.1) as i16, (ry - target.2) as i16);
                     return;
                 }
             }
@@ -1429,6 +1484,7 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             let mask = ru16(c, req, 8) as u32;
             let mut voff = 12usize;
             let (mut nw, mut nh) = (None, None);
+            let (mut nx, mut ny): (Option<i16>, Option<i16>) = (None, None);
             for bit in 0..7 {
                 if mask & (1 << bit) != 0 {
                     let v = ru32(c, req, voff);
@@ -1436,6 +1492,9 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                     // asks for its full unconstrained size; honouring it would make a
                     // giant window. Keep the current size for those.
                     match bit {
+                        // x and y: where a popup sits (a tooltip follows the pointer).
+                        0 => nx = Some(v as i16),
+                        1 => ny = Some(v as i16),
                         2 if v < 8192 => nw = Some((v as u16).clamp(1, screen_w())),
                         3 if v < 8192 => nh = Some((v as u16).clamp(1, screen_h())),
                         _ => {}
@@ -1444,7 +1503,14 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                 }
             }
             let mut notify = None;
+            let mut moved = false;
             if let Some(win) = c.windows.iter_mut().find(|w| w.id == id) {
+                if X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) {
+                    let (x, y) = (nx.unwrap_or(win.x), ny.unwrap_or(win.y));
+                    moved = (x, y) != (win.x, win.y) && win.mapped;
+                    win.x = x;
+                    win.y = y;
+                }
                 let w = nw.unwrap_or(win.w);
                 let h = nh.unwrap_or(win.h);
                 if w != win.w || h != win.h {
@@ -1456,7 +1522,10 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                     notify = Some((win.x, win.y, win.w, win.h));
                 }
             }
-            trace(format_args!("ConfigureWindow id={id:#x} -> {:?}x{:?}", nw, nh));
+            trace(format_args!("ConfigureWindow id={id:#x} -> {:?}x{:?} at {:?},{:?}", nw, nh, nx, ny));
+            if moved {
+                compose_windowed(c);
+            }
             if let Some((x, y, w, h)) = notify {
                 send_configure_notify(c, id, x, y, w, h);
                 send_expose(c, id, w, h);
@@ -1587,17 +1656,31 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             put16(c, &mut r, 40, 0);                  // do-not-propagate-mask
             c.outbuf.extend_from_slice(&r);
         }
-        // QueryPointer(38): pointer on root, at the live mouse position, no buttons.
+        // QueryPointer(38): window@4. Where the pointer is, in the SAME coordinates
+        // the events carry. In the desktop frame that is not the screen position
+        // of the mouse: the client's root coordinates are its window's X position
+        // plus the offset inside the frame (LAST_ROOT, from the last event sent).
+        // Answering with the raw screen position told the client its pointer was
+        // somewhere else than its own events said, by the frame's offset on the
+        // desktop; after the user moved the frame, often outside the window.
         38 => {
             let (mx, my) = crate::mouse::pos();
+            let (rx, ry) = if X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) {
+                let p = LAST_ROOT.load(core::sync::atomic::Ordering::Relaxed);
+                ((p >> 16) as i16, p as i16)
+            } else {
+                (mx as i16, my as i16)
+            };
+            let win = ru32(c, req, 4);
+            let (wx, wy) = c.windows.iter().find(|w| w.id == win).map(|w| (w.x, w.y)).unwrap_or((0, 0));
             let mut r = reply_header(c, 0);
             r[1] = 1; // same-screen = true
             wr32(c, &mut r, 8, ROOT_WINDOW);   // root
             wr32(c, &mut r, 12, 0);            // child = None
-            put16(c, &mut r, 16, mx as u16);   // root-x
-            put16(c, &mut r, 18, my as u16);   // root-y
-            put16(c, &mut r, 20, mx as u16);   // win-x
-            put16(c, &mut r, 22, my as u16);   // win-y
+            put16(c, &mut r, 16, rx as u16);   // root-x
+            put16(c, &mut r, 18, ry as u16);   // root-y
+            put16(c, &mut r, 20, (rx - wx) as u16); // win-x
+            put16(c, &mut r, 22, (ry - wy) as u16); // win-y
             put16(c, &mut r, 24, mod_state()); // mask (buttons/mods)
             c.outbuf.extend_from_slice(&r);
         }
@@ -1786,6 +1869,12 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                 win.mapped = false;
             }
             trace(format_args!("{} id={id:#x}", if opcode == 4 { "DestroyWindow" } else { "UnmapWindow" }));
+            if IMPLICIT_GRAB.load(core::sync::atomic::Ordering::Relaxed) == id {
+                IMPLICIT_GRAB.store(0, core::sync::atomic::Ordering::Relaxed);
+            }
+            if X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) {
+                compose_windowed(c); // the popup is gone from the frame
+            }
         }
         // GrabPointer (26) / GrabKeyboard (31): chrome grabs both — for menus, for
         // drags, for its own modal dialogs. Both expect a REPLY, and the old default
@@ -2284,6 +2373,10 @@ fn present(c: &XConn, id: u32) {
         }
     }
     ANCHOR.lock().clone_from(&best);
+    if X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) {
+        compose_windowed(c);
+        return;
+    }
     if c.windows.iter().any(|w| w.id == id) {
         present_win(c.windows.iter().find(|w| w.id == id && w.mapped), id);
         return;
@@ -2297,6 +2390,55 @@ fn present(c: &XConn, id: u32) {
             return;
         }
     }
+}
+
+/// Windowed mode: what the desktop shows in the client's frame. The MAIN window
+/// (the largest mapped one: the browser window) fills the frame; every other
+/// mapped window (a tooltip, a menu, a drop-down) is drawn on top of it at its
+/// X position relative to the main window, in creation order, clipped to it.
+///
+/// It used to be "the window that painted last": the first tooltip took the
+/// browser's place in the frame (a white frame with one line of text), clicks
+/// were sent to the tooltip, and a maximise resized the tooltip (BUG-097).
+/// `c` is the connection being processed (it is out of the table).
+fn compose_windowed(c: &XConn) {
+    let t = XCONNS.lock();
+    let all = c.windows.iter().chain(t.iter().flatten().flat_map(|x| x.windows.iter()))
+        .filter(|w| w.mapped && w.w > 1 && w.h > 1 && w.buf.len() == w.w as usize * w.h as usize);
+    let Some(main) = all.clone().max_by_key(|w| (w.w as u32 * w.h as u32, core::cmp::Reverse(w.id))) else {
+        return;
+    };
+    let (mw, mh) = (main.w as usize, main.h as usize);
+    let mut r = RETAINED_WINDOW.lock();
+    match r.as_mut() {
+        Some((w, h, buf)) if buf.len() == main.buf.len() => {
+            *w = mw;
+            *h = mh;
+            buf.copy_from_slice(&main.buf);
+        }
+        _ => *r = Some((mw, mh, main.buf.clone())),
+    }
+    if let Some((_, _, buf)) = r.as_mut() {
+        for p in all.filter(|w| w.id != main.id) {
+            let (ox, oy) = (p.x as i32 - main.x as i32, p.y as i32 - main.y as i32);
+            let (x0, x1) = (ox.max(0), (ox + p.w as i32).min(mw as i32));
+            if x0 >= x1 {
+                continue;
+            }
+            let n = (x1 - x0) as usize;
+            for sy in 0..p.h as i32 {
+                let dy = oy + sy;
+                if dy < 0 || dy >= mh as i32 {
+                    continue;
+                }
+                let s0 = sy as usize * p.w as usize + (x0 - ox) as usize;
+                let d0 = dy as usize * mw + x0 as usize;
+                buf[d0..d0 + n].copy_from_slice(&p.buf[s0..s0 + n]);
+            }
+        }
+    }
+    RETAINED_ID.store(main.id, core::sync::atomic::Ordering::Relaxed);
+    X_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
 }
 
 /// The current placement anchor (x, y, w, h), refreshed by present() BEFORE the
