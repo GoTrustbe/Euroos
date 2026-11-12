@@ -4183,10 +4183,20 @@ pub fn spawn_daemon(falloc: &mut FrameAllocator, program: &[u8]) {
     // SMEP/SMAP stay enforced.
     // Exactly 2 MiB, 2 MiB-aligned in one go (the daemon never reaps -> no
     // free path; no more 4 MiB over-allocation).
-    let arena = falloc.allocate_aligned(512, 512).expect("daemon-arena");
+    // BUG-053: no memory for the daemon is a line in the log, not a boot panic.
+    let Ok(arena) = falloc.allocate_aligned(512, 512) else {
+        crate::serial_println!("[euro] daemon: no free 2 MiB arena - not started");
+        return;
+    };
     let code = arena;
     let stack_top = arena + MIB2; // user stack grows downward from the arena top
-    let kstack = falloc.allocate_contiguous(4).expect("daemon-kstack");
+    let Ok(kstack) = falloc.allocate_contiguous(4) else {
+        for f in 0..512u64 {
+            let _ = falloc.free(arena + f * 4096);
+        }
+        crate::serial_println!("[euro] daemon: no kernel stack free - not started");
+        return;
+    };
     let kstack_top = (kstack + 4 * 4096) & !0xF;
     let pages = program_span_pages(program);
     let info = load_program(program, code, pages);
@@ -8352,11 +8362,22 @@ pub fn spawn_counter_task(falloc: &mut FrameAllocator) -> u64 {
     // 2 MiB, exactly 2 MiB-aligned in one go (no more 4 MiB over-allocation):
     // the counter task never reaps, so this is the safest place to use
     // allocate_aligned. Saves ~2 MiB compared to allocate_contiguous(1024)+manual alignment.
-    let arena = falloc.allocate_aligned(512, 512).expect("utask-arena");
+    // BUG-053: no memory for the demo task is a line in the log (and a counter
+    // that reads 0), not a boot panic.
+    let Ok(arena) = falloc.allocate_aligned(512, 512) else {
+        crate::serial_println!("[euro] counter task: no free 2 MiB arena - not started");
+        return 0;
+    };
     let code = arena;
     let stack_top = arena + MIB2; // user stack grows downward from the arena top
     // Own kernel stack (4 frames = 16 KiB) for the ring3->ring0 interrupt frames.
-    let kstack = falloc.allocate_contiguous(4).expect("utask kernel-stack");
+    let Ok(kstack) = falloc.allocate_contiguous(4) else {
+        for f in 0..512u64 {
+            let _ = falloc.free(arena + f * 4096);
+        }
+        crate::serial_println!("[euro] counter task: no kernel stack free - not started");
+        return 0;
+    };
     let kstack_top = (kstack + 4 * 4096) & !0xF;
     // SAFETY: arena lies in the identity-mapped lowest 1 GiB; under the boot CR3
     // (where we now run) that is a supervisor page -> writing is allowed.
@@ -8864,7 +8885,13 @@ fn vdso_prepare(falloc: &mut FrameAllocator) -> bool {
             for _ in 0..npages {
                 match falloc.allocate() {
                     Ok(f) => { unsafe { core::ptr::write_bytes(f as *mut u8, 0, 4096) }; frames.push(f); }
-                    Err(_) => return false,
+                    Err(_) => {
+                        // BUG-053: the pages taken so far go back; the next launch tries again.
+                        for f in frames {
+                            let _ = falloc.free(f);
+                        }
+                        return false;
+                    }
                 }
             }
             let e_phoff = rd_u64(VDSO_SO, 32) as usize;
@@ -11067,8 +11094,15 @@ pub fn spawn_glibc_persistent(
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
     HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
 
-    let exe_info = load_elf64(exe, exe_base, program_span_pages(exe))?;
-    let ld_info = load_elf64(ldso, ldso_base, program_span_pages(ldso))?;
+    // BUG-053: from here on the arena is held; every refusal gives it back.
+    let (Some(exe_info), Some(ld_info)) = (
+        load_elf64(exe, exe_base, program_span_pages(exe)),
+        load_elf64(ldso, ldso_base, program_span_pages(ldso)),
+    ) else {
+        glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
+        crate::serial_println!("[glibc] persistent app: executable or loader is not a loadable ELF - not started");
+        return None;
+    };
     // NO vDSO here: this RAM-based persistent path never installs a demand pool, so
     // the deferred mapping would never run — and an auxv that promises a vDSO which
     // is not mapped crashes ld.so. The glibc syscall clock keeps working.
@@ -11097,8 +11131,14 @@ pub fn spawn_glibc_persistent(
     GLIBC_CTIDS.lock().clear();
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
-    let (main_slot, main_kstack) = alloc_thread_kstack()?;
+    let Some((main_slot, main_kstack)) = alloc_thread_kstack() else {
+        glibc_launch_abort(falloc, arena, frames, pml4, 0, 0);
+        crate::serial_println!("[glibc] persistent app: no kernel stack - not started");
+        return None;
+    };
     let Some(main_task) = spawn_glibc_main(ld_info.entry, rsp, user_cs, user_ss, main_slot, main_kstack, pml4, caps, argv) else {
+        glibc_launch_abort(falloc, arena, frames, pml4, 0, 0);
+        crate::serial_println!("[glibc] persistent app: scheduler task table full - not started");
         return None;
     };
     PERSIST_ARENA.store(arena, Ordering::Relaxed);
@@ -11541,6 +11581,36 @@ fn free_demand_extra(falloc: &mut euromm::FrameAllocator) {
     }
 }
 
+/// BUG-053: a glibc launch that fails after it took its arena gives back all it
+/// holds at that point: the demand pool (`dp_frames` != 0), the address space
+/// (`pml4` != 0, with the vDSO's table chain) and the arena.
+fn glibc_launch_abort(falloc: &mut FrameAllocator, arena: u64, frames: usize, pml4: u64, dp_base: u64, dp_frames: usize) {
+    if dp_frames != 0 {
+        crate::procpool::demand_uninstall();
+        for i in 0..dp_frames as u64 {
+            let _ = falloc.free(dp_base + i * 4096);
+        }
+        free_demand_extra(falloc);
+    }
+    if pml4 != 0 {
+        free_process_space(falloc, pml4);
+    }
+    for i in 0..frames as u64 {
+        let _ = falloc.free(arena + i * 4096);
+    }
+}
+
+/// [`glibc_launch_abort`] for the disk-served launch, which also switched demand
+/// paging on and may have registered file mappings.
+#[allow(clippy::too_many_arguments)]
+fn glibc_disk_launch_abort(falloc: &mut FrameAllocator, arena: u64, frames: usize, pml4: u64, dp_base: u64, dp_frames: usize,
+                           prev_demand: bool, prev_file: bool) {
+    glibc_launch_abort(falloc, arena, frames, pml4, dp_base, dp_frames);
+    DEMAND_FILE_MAPS.lock().clear();
+    DEMAND_ENABLED.store(prev_demand, Ordering::Relaxed);
+    DEMAND_FILE_ENABLED.store(prev_file, Ordering::Relaxed);
+}
+
 /// The launched state of a disk-served glibc process: everything the two lifecycles
 /// (run-to-completion, and persistent-alongside-the-desktop) must eventually give back.
 struct DiskRun {
@@ -11658,7 +11728,12 @@ fn glibc_disk_launch(
         }
         match got {
             Some(v) => v,
-            None => return Err("(no arena for glibc)"),
+            None => {
+                // BUG-053: the demand flags were switched on above.
+                DEMAND_ENABLED.store(prev_demand, Ordering::Relaxed);
+                DEMAND_FILE_ENABLED.store(prev_file, Ordering::Relaxed);
+                return Err("(no arena for glibc)");
+            }
         }
     };
     let nblocks = arena_mib / 2;
@@ -11679,7 +11754,10 @@ fn glibc_disk_launch(
 
     let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
         Some(i) => i,
-        None => return Err("(bad ld.so ELF)"),
+        None => {
+            glibc_disk_launch_abort(falloc, arena, frames, 0, 0, 0, prev_demand, prev_file);
+            return Err("(bad ld.so ELF)");
+        }
     };
     let vdso_ok = vdso_prepare(falloc);
     if vdso_ok {
@@ -11703,7 +11781,9 @@ fn glibc_disk_launch(
         }
     };
     if vdso_ok && !vdso_map_into(falloc, pml4) {
-        crate::serial_println!("[vdso] mapping FAILED — the auxv promised one; expect a crash");
+        // As in run_glibc: no frames for the vDSO's tables is a refusal (BUG-053).
+        glibc_disk_launch_abort(falloc, arena, frames, pml4, 0, 0, prev_demand, prev_file);
+        return Err("(out of memory: vDSO mapping)");
     }
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
     GLIBC_THREADS.lock().clear();
@@ -11717,6 +11797,7 @@ fn glibc_disk_launch(
     DEMAND_USED.store(false, Ordering::Relaxed);
     // Register the exe's disk-backed segments NOW (after the DEMAND_NEXT reset).
     if !register_disk_exe_segments(diskidx, dev, doff, exe_base) {
+        glibc_disk_launch_abort(falloc, arena, frames, pml4, 0, 0, prev_demand, prev_file);
         return Err("(disk exe segment map failed)");
     }
 
@@ -11762,9 +11843,13 @@ fn glibc_disk_launch(
 
     let (main_slot, main_kstack) = match alloc_thread_kstack() {
         Some(s) => s,
-        None => return Err("(no kernel stack)"),
+        None => {
+            glibc_disk_launch_abort(falloc, arena, frames, pml4, dp_base, dp_frames, prev_demand, prev_file);
+            return Err("(no kernel stack)");
+        }
     };
     let Some(main_task) = spawn_glibc_main(ld_info.entry, rsp, user_cs, user_ss, main_slot, main_kstack, pml4, caps, argv) else {
+        glibc_disk_launch_abort(falloc, arena, frames, pml4, dp_base, dp_frames, prev_demand, prev_file);
         return Err("(scheduler task table full)");
     };
 
@@ -12539,11 +12624,17 @@ pub fn run_glibc(
     // (idempotent: ld.so also self-relocates).
     let exe_info = match load_elf64(exe, exe_base, program_span_pages(exe)) {
         Some(i) => i,
-        None => return (String::from("(bad exe ELF)"), u64::MAX),
+        None => {
+            glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
+            return (String::from("(bad exe ELF)"), u64::MAX);
+        }
     };
     let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
         Some(i) => i,
-        None => return (String::from("(bad ld.so ELF)"), u64::MAX),
+        None => {
+            glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
+            return (String::from("(bad ld.so ELF)"), u64::MAX);
+        }
     };
 
     let vdso_ok = vdso_prepare(falloc);
@@ -12566,7 +12657,10 @@ pub fn run_glibc(
         }
     };
     if vdso_ok && !vdso_map_into(falloc, pml4) {
-        crate::serial_println!("[vdso] mapping FAILED — the auxv promised one; expect a crash");
+        // The auxv on the stack already promises a vDSO: a process started without
+        // the mapping jumps into nothing. No frames for its tables: refuse (BUG-053).
+        glibc_launch_abort(falloc, arena, frames, pml4, 0, 0);
+        return (String::from("(out of memory: vDSO mapping)"), u64::MAX);
     }
     // Threads this process clones share this address space.
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
@@ -12617,7 +12711,10 @@ pub fn run_glibc(
     // Own kernel stack for the main thread (from the recycling thread-kstack pool).
     let (main_slot, main_kstack) = match alloc_thread_kstack() {
         Some(s) => s,
-        None => return (String::from("(no kernel stack)"), u64::MAX),
+        None => {
+            glibc_launch_abort(falloc, arena, frames, pml4, dp_base, dp_frames);
+            return (String::from("(no kernel stack)"), u64::MAX);
+        }
     };
 
     // Run the glibc program as a FIRST-CLASS SCHEDULED process: spawn its main
@@ -12625,6 +12722,7 @@ pub fn run_glibc(
     // pthread workers are scheduler siblings, so blocking + preemption + waking
     // all work — unlike a boot-task excursion, which starved.
     let Some(main_task) = spawn_glibc_main(ld_info.entry, rsp, user_cs, user_ss, main_slot, main_kstack, pml4, caps, argv) else {
+        glibc_launch_abort(falloc, arena, frames, pml4, dp_base, dp_frames);
         return (String::from("(scheduler task table full)"), u64::MAX);
     };
     crate::serial_println!(
