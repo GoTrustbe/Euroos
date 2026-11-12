@@ -1,0 +1,71 @@
+ltstat samples: 1045, t = 5 .. 7524 s (125.4 min)
+heap_used first / at 10 min / last: 149 649 488 / 148 502 688 / 148 525 216
+heap slope after 10 min (least squares): +0.17 kB/min, range 1282 kB
+tasks: first 56, at 10 min 56, last 56, min 56, max 56 (after 10 min)
+files: first 187, at 10 min 187, last 187, min 187, max 187 (after 10 min)
+kstacks: first 0, at 10 min 0, last 0, min 0, max 0 (after 10 min)
+procpool_free: first 887296, at 10 min 887296, last 887296, min 887296, max 887296 (after 10 min)
+frames_free: first 2964754, at 10 min 2981394, last 2981394, min 2964754, max 2981394 (after 10 min)
+bg_zombie: first 31, at 10 min 0, last 0, min 0, max 32 (after 10 min)
+bg_live: first 4, at 10 min 3, last 3, min 3, max 5 (after 10 min)
+commands: 2724; columns: id, command, status, elapsed_ms, output_lines, t_s
+by status: {'ok': 2724}
+churn proc commands: 348
+serial: loadtest-serial-20261112-093658.log 4.6 MB
+  'GLIBC-DYNAMIC-OK': 2808
+  'KERNEL PANIC': 0
+  'GENERAL PROTECTION': 0
+  '[idt] PAGE FAULT': 0
+  'DOUBLE FAULT': 0
+  'NMI PROBE': 0
+  '[watchdog]': 0
+  'refused to free': 0
+  'out of memory: page tables': 0
+  'no frames for page tables': 4
+  [churn-proc] verdict lines: 2007, with FAILED: 0
+  [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+--- end of the harness output:
+  [ 2175/?] ✓ ok          6146ms t= 5994.9s  churn proc 8
+  [ 2200/?] ✓ ok            76ms t= 6069.7s  free
+  [ 2225/?] ✓ ok          1910ms t= 6134.8s  sha256sum /home/euro/lt-soak/big1
+  [ 2250/?] ✓ ok           501ms t= 6222.3s  churn net 1
+  [ 2275/?] ✓ ok          1313ms t= 6293.0s  truncate -s 8388608 /home/euro/lt-soak/big2
+  [ 2300/?] ✓ ok          6896ms t= 6343.2s  churn proc 8
+  [ 2325/?] ✓ ok          2139ms t= 6412.5s  spawn worker 32
+  [ 2350/?] ✓ ok            70ms t= 6479.4s  rm /home/euro/lt-soak/big3
+  [ 2375/?] ✓ ok            68ms t= 6557.2s  ltstat
+  [ 2400/?] ✓ ok          1864ms t= 6623.4s  sha256sum /home/euro/lt-soak/big2
+  [ 2425/?] ✓ ok           556ms t= 6667.4s  fetch 10.0.2.100
+  [ 2450/?] ✓ ok           641ms t= 6743.5s  write /home/euro/lt-soak/f35 round-235
+  [ 2475/?] ✓ ok           210ms t= 6818.3s  rm /home/euro/lt-soak/big3
+  [ 2500/?] ✓ ok          1807ms t= 6893.6s  spawn worker 32
+  [ 2525/?] ✓ ok            65ms t= 6971.7s  cat /home/euro/lt-soak/f42
+  [ 2550/?] ✓ ok          6717ms t= 7016.0s  churn proc 8
+  [ 2575/?] ✓ ok           747ms t= 7096.1s  write /home/euro/lt-soak/f47 round-247
+  [ 2600/?] ✓ ok           565ms t= 7163.2s  fetch 10.0.2.100
+  [ 2625/?] ✓ ok           550ms t= 7248.1s  churn net 1
+  [ 2650/?] ✓ ok          1356ms t= 7323.3s  truncate -s 8388608 /home/euro/lt-soak/big2
+  [ 2675/?] ✓ ok          6406ms t= 7373.9s  churn proc 8
+  [ 2700/?] ✓ ok            71ms t= 7445.7s  cat /home/euro/lt-soak/f9
+[loadtest] completed clean · results → /srv/euroos/kdebug-runs/soak/w/loadtest-results.csv · ltstat samples → /srv/euroos/kdebug-runs/soak/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 910221, "err": 11, "p50_ms": 5.1, "p99_ms": 123.6, "max_ms": 6673.0, "busy_windows": 407, "busy_s": 5385, "busy": {"ok": 660996, "err": 0, "p50_ms": 5.1, "p99_ms": 123.5, "max_ms": 6355.5}, "idle": {"ok": 249225, "err": 11, "p50_ms": 5.1, "p99_ms": 124.3, "max_ms": 6673.0}}
+[loadtest] host HTTP server served 314 request(s)
+--- serial log of the soak guest, counts over the whole run:
+  KERNEL PANIC: 0
+  GENERAL PROTECTION: 0
+  \[idt\] PAGE FAULT: 0
+  DOUBLE FAULT: 0
+  NMI PROBE: 0
+  \[watchdog\]: 0
+  refused to free: 0
+  no fd space free: 0
+  out of memory: page tables: 0
+  out of memory: vDSO: 0
+  not a loadable ELF: 1
+  [churn-proc] verdict lines: 349, of them FAILED: 0
+  the three new self-tests in the boot of the guest:
+    [bug063] foreground program returned (exit 0): exit flag = 0 (want 0), then 30 ticks with interrupts on while drivers and background processes make syscalls → OK ✓
+    [fdspace] 2 background processes keep a pipe and a file open across a foreground launch (musl exit=0, glibc exit=42): phase1=true ended=true pass=2/2 | pid 0x40601: phase2 pipe=ok (write=2 read=2) file=ok (lseek=0 read=1) | pid 0x40602: phase2 pipe=ok (write=2 read=2) file=ok (lseek=0 read=1) | fd spaces in use 3 → 3 → OK ✓
+    [bug053] process starts with only their arena + k frames free: bg-musl refused x8, started with 8 spare · foreground refused x4, ran with 4 spare (exit 0) · glibc refused x6, ran with 6 spare (exit 42), bad executable refused=true kept 0 frames, next launch exit 42 · frames kept by refused starts: 0 · free frames 2981394 → 29813
+  httpd clients (end of the harness output):
+    [loadtest] hammer (inbound httpd, 4 clients): {"ok": 910221, "err": 11, "p50_ms": 5.1, "p99_ms": 123.6, "max_ms": 6673.0, "busy_windows": 407, "busy_s": 5385, "busy": {"ok": 660996, "err": 0, "p50_ms": 5.1, "p99_ms": 123.5, "max_ms": 6355.5}, "idle": {"ok": 249225, "err": 11, "p50_ms": 5.1, "p99_ms": 124.3, "max_ms": 6673.0}}

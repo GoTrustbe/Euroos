@@ -1,0 +1,35 @@
+After the fix (tree of the build commit). 2026-11-12, build server, one checkout.
+
+1. ./scripts/build.sh release twice, the second after rm -rf target/x86_64-unknown-uefi target/release:
+   sel1.efi: 67759104 bytes sha256 32df30e4dfcf75aee4f490fd9597fb5c9ebb6335f1ffc7af1045e695ec02f78d
+   sel2.efi: 67759104 bytes sha256 32df30e4dfcf75aee4f490fd9597fb5c9ebb6335f1ffc7af1045e695ec02f78d
+   
+   differing bytes: 0
+   loader.efi: 83b9b2223947c90c508dd7f69a14ee512b63402b0221385bb7529b2c55855670 / 83b9b2223947c90c508dd7f69a14ee512b63402b0221385bb7529b2c55855670
+
+2. ./scripts/build.sh image twice, the same way:
+   pub1.efi: 53851648 bytes sha256 7dd15212296d9e882e60dbb48520b0a413d0cec7e7ee751b6ac79770c501ec4f
+   pub2.efi: 53851648 bytes sha256 7dd15212296d9e882e60dbb48520b0a413d0cec7e7ee751b6ac79770c501ec4f
+   
+   differing bytes: 0
+
+3. The CI job (.github/workflows/ci.yml, "Reproducible build"): scripts/repro-build.sh, remove the .efi,
+   touch kernel/src/main.rs, scripts/repro-build.sh again:
+   build #1: 0a6399231716e0471178e759edbc1f4c582fbd97e741a7198cf7ec0a432652a5 loader 1b0b4ddd2a06f9c6d29bb72edc010b4435a60fbd32863038910ffcdc0190f09e
+   build #2: 0a6399231716e0471178e759edbc1f4c582fbd97e741a7198cf7ec0a432652a5 loader 1b0b4ddd2a06f9c6d29bb72edc010b4435a60fbd32863038910ffcdc0190f09e
+   REPRODUCIBLE
+   absolute paths in that kernel (strings | grep /root/.cargo or /root/.rustup): 0 (remapped to /cargo and /rustup: 70); in the build.sh kernel: 70
+
+Not identical, and not asked: eurokernel.img (the FAT image: mkfs.fat volume id and directory times).
+   sel1.img f02e7660f570d91e… sel2.img d37bb747eff90e94…
+
+target/eurokernel.map after a full build: 17367 lines of the kernel crate (target/kernel.map: 0, it is the loader map).
+
+4. The same on the last code commit (BUG-064, the tree every run of the proof used), ./scripts/build.sh
+   release and image, each a second time after rm -rf target/x86_64-unknown-uefi target/release:
+   self-f.efi: 67759104 bytes sha256 5f0efc153df6ea02ae224dade1b290f40ae6347501c829756405063bad2eec28
+   self-f2.efi: 67759104 bytes sha256 5f0efc153df6ea02ae224dade1b290f40ae6347501c829756405063bad2eec28
+   differing bytes: 0
+   pub-f.efi: 53851648 bytes sha256 eff1136426552e386eb1ca7c9f9f5c5bdbe310b18c9735b89a2277dc5267a80d
+   pub-f2.efi: 53851648 bytes sha256 eff1136426552e386eb1ca7c9f9f5c5bdbe310b18c9735b89a2277dc5267a80d
+   differing bytes: 0

@@ -1,0 +1,14 @@
+cargo test (default members), head ff8d562
+187 suites, 1312 passed, 0 failed, 1 ignored
+
+eurofdspace:
+running 8 tests
+test tests::install_remove_and_reuse_of_a_space_number ... ok
+test tests::a_launch_reset_of_root_leaves_the_other_spaces_alone ... ok
+test tests::registry_refuses_when_full ... ok
+test tests::lists_are_per_space_and_cost_nothing_until_written ... ok
+test tests::flags_default_to_blocking_read_write_and_are_per_space ... ok
+test tests::a_space_without_a_table_falls_back_to_orphan_then_root ... ok
+test tests::a_guard_dereferences_to_its_space ... ok
+test tests::registry_counts_references ... ok
+EXIT 0

@@ -1,0 +1,20 @@
+# The lock screen frame of the self-test image, base 7858b72 against this branch, pixel by pixel (cmpshot.py).
+# boot-time.py --marker "[ag-lock] GUI" --shot, 1920x1080, -smp 2 -m 2G, the RTC started at a fixed time so that
+# both frames show the same clock.
+
+== KVM (R630), -rtc base=2026-11-12T10:00:00: the self-test frame, six masked characters
+screenshots/lock-base-kvm.png: 1920x1080  screenshots/lock-kdebug-kvm.png: 1920x1080
+differing pixels: 0 of 2073600; bounding box: None
+
+== TCG (build server), -rtc base=2026-11-12T10:00:50
+screenshots/lock-base-tcg.png: 1920x1080  screenshots/lock-kdebug-tcg.png: 1920x1080
+differing pixels: 0 of 2073600; bounding box: None
+
+== KVM, a screenshot 0.3 s later: this branch already shows the next frame (the sign-in frame, empty
+   field), which now comes 0.2 s after the first instead of 2.4 s; the base still shows the first
+screenshots/lock-base-kvm.png: 1920x1080  screenshots/lock-kdebug-kvm-next-frame.png: 1920x1080
+differing pixels: 122 of 2073600; bounding box: (810, 566, 839, 577)
+   (the differing box is the password field: six masked characters against none)
+
+# Three earlier TCG pairs differed in 38 pixels, box (1117,654)-(1123,663): the last digit of the clock. The base
+# evaluates the clock about 40 s before its frame is on screen, this branch 2.5 s before.

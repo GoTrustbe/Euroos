@@ -1,0 +1,25 @@
+# The self-test commit (the [fdspace], [bug053], [bug063] self-tests on the BUG-063 fix, nothing else), TCG.
+# Both boots reached the desktop. Lines of the three self-tests and of their test program.
+
+== user-smp4-noiommu (512 MiB)
+[bug063] foreground program returned (exit 0): exit flag = 0 (want 0), then 30 ticks with interrupts on while drivers and background processes make syscalls → OK ✓
+[bg-out] pid 263682 /bin/pipehold: pipehold: phase1 pipe=ok file=ok fds r=3 w=4 f=5
+[bg-out] pid 263681 /bin/pipehold: pipehold: phase1 pipe=ok file=ok fds r=6 w=7 f=8
+[bg-out] pid 263682 /bin/pipehold: B2pipehold: phase2 pipe=BAD (write=2 read=0) file=BAD (lseek=-1 read=0)
+[bg-out] pid 263682 /bin/pipehold: pipehold: FAIL
+[bg-out] pid 263681 /bin/pipehold: B2pipehold: phase2 pipe=BAD (write=2 read=0) file=BAD (lseek=-1 read=0)
+[bg-out] pid 263681 /bin/pipehold: pipehold: FAIL
+[fdspace] 2 background processes keep a pipe and a file open across a foreground launch (musl exit=0, glibc exit=-1): phase1=true ended=true pass=0/2 | pid 0x40601: phase2 pipe=BAD (write=2 read=0) file=BAD (lseek=-1 read=0) | pid 0x40602: phase2 pipe=BAD (write=2 read=0) file=BAD (lseek=-1 read=0) → FAILED
+[bug053] process starts with only their arena + k frames free: bg-musl refused x8, started with 8 spare · foreground refused x4, ran with 4 spare (exit 0) · glibc part skipped (no glibc arena at this RAM size) · frames kept by refused starts: 0 · free frames 33062 → 33062 → OK ✓
+
+== storage-smp4-iommu-1g (1 GiB)
+[bug063] foreground program returned (exit 0): exit flag = 0 (want 0), then 30 ticks with interrupts on while drivers and background processes make syscalls → OK ✓
+[bg-out] pid 263681 /bin/pipehold: pipehold: phase1 pipe=ok file=ok fds r=3 w=4 f=5
+[bg-out] pid 263682 /bin/pipehold: pipehold: phase1 pipe=ok file=ok fds r=6 w=7 f=8
+[bg-out] pid 263681 /bin/pipehold: B2pipehold: phase2 pipe=BAD (write=2 read=0) file=BAD (lseek=-1 read=0)
+[bg-out] pid 263681 /bin/pipehold: pipehold: FAIL
+[bg-out] pid 263682 /bin/pipehold: B2pipehold: phase2 pipe=BAD (write=2 read=0) file=BAD (lseek=-1 read=0)
+[bg-out] pid 263682 /bin/pipehold: pipehold: FAIL
+[fdspace] 2 background processes keep a pipe and a file open across a foreground launch (musl exit=0, glibc exit=42): phase1=true ended=true pass=0/2 | pid 0x40601: phase2 pipe=BAD (write=2 read=0) file=BAD (lseek=-1 read=0) | pid 0x40602: phase2 pipe=BAD (write=2 read=0) file=BAD (lseek=-1 read=0) → FAILED
+[vdso] mapping FAILED — the auxv promised one; expect a crash
+[bug053] process starts with only their arena + k frames free: bg-musl refused x8, started with 8 spare · foreground refused x4, ran with 4 spare (exit 0) · glibc refused x3, ran with 3 spare (exit 139), bad executable refused=true kept 49152 frames, next launch exit 42 · frames kept by refused starts: 49152 · free frames 105712 → 56560 → FAILED

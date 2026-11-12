@@ -1,0 +1,24 @@
+# BUG-065: [3d8] EuroEntropy on the R630 (KVM). Base image 7858b72 (r630-base-boots.sh) and the final image
+# of the branch (r630-final-boots-a.sh, -b.sh), --scenario smoke, 4 GiB, booted at the same time on the same
+# CPU sets, 2026-11-12.
+
+== base 7858b72: 60 boots, 60 to the desktop and clean through the smoke commands; [3d8] FAILED in 0, [3d7] in 0, [3d3] in 0
+   jitter-alone estimate of every boot, bits, sorted:
+   322 460 498 517 521 571 583 615 618 622 623 634 657 711 713 719 741 755 756 765 769 773 791 806 810 826 833 
+   838 844 847 854 867 867 880 883 896 899 905 919 921 922 937 947 948 951 966 983 990 991 1004 1013 1030 1040 
+   1113 1145 1147 1148 1149 1155 1190 
+
+== final image of the branch: 60 boots, 60 to the desktop and clean through the smoke commands; [3d8] FAILED in 3, [3d7] in 1, [3d3] in 1
+   jitter-alone estimate of every boot, bits, sorted:
+   28 124 167 285 294 492 495 535 614 630 659 660 666 690 699 725 732 740 740 745 750 752 753 756 765 774 781 
+   785 785 804 806 806 828 869 885 888 890 898 909 913 926 939 941 946 954 975 976 983 989 991 999 1003 1005 
+   1015 1047 1058 1098 1114 1156 1157 
+         1 [3d3] EuroCA+Attest: 3-level chain(root→intermediate→leaf)-verifies=true, on-disk-cert-store-roundtrip=true · attestation JSON-report=true, verifier-accepts=true, replay-REFUSED=false, tampered-PCR-REFUSED=true → FAILED
+         1 [3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=false → FAILED
+         1 [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈124bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=true, output-nonzero-distinct=true → FAILED
+         1 [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈167bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=false, output-nonzero-distinct=false → FAILED
+         1 [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈28bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=true, output-nonzero-distinct=true → FAILED
+
+# The boot loops of the two proof rounds (only the first 160 characters of a FAILED line were kept there):
+#   final image, 100 boots: [3d8] FAILED in 8, [3d7] in 4, [3d3] in 4; jitter estimates of the failing boots: 13 14 24 27 93 220 344 802 
+#   first-round image, 78 boots: [3d8] FAILED in 5, [3d7] in 3, [3d3] in 3; jitter estimates of the failing boots: 19 26 51 225 592 

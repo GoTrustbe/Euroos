@@ -180,6 +180,8 @@ the code.
 | Release image, integrated: wizard install, GUI smoke, settings across a power cut, open network, boot time (TCG and R630 KVM) | 2026-11-10 | ✅ | `proof/integ-2026-11/` | wizard 14/14; gui-smoke 56/56 (BUG-044 step counting, tour step new); installed system reads back seven settings and `tour.done` after QEMU was quit; ping, DNS, HTTP, HTTPS; R630 boot 2.71 s (SATA + legacy virtio-net) and 2.34 s (modern virtio), 5 boots each (fast-boot: 2.95 s, 2.70 s) |
 | GUI monkey soak, integrated, 35 min each (R630 KVM): USB smp 4 / 4 GiB, virtio smp 2 / 2 GiB | 2026-11-10 | ✅ 3/3 with the fixed harness; 🟡 3/5 with the harness as merged | `proof/integ-2026-11/` | final harness: 2 217 + 1 958 (USB) and 2 190 (virtio) actions, functional checks 11/11, 9/9, 10/10, no crash, console max 250 ms / 2.0 s; as merged: one false "screen frozen" and one failed check, both with the notification list or a context menu open (BUG-057: full repaint in every iteration, 0.3 to 0.4 s per frame; same before the settings and help merges) |
 | `soak` 2 h 05 + `churn proc 8` every round + 4 httpd clients, integrated (KVM, `-m 16G`) | 2026-11-10 | ✅ 2 899/2 899 ok | `proof/integ-2026-11/` | on the head (`fb18477`): 371 `churn proc` commands, 2 987 glibc launches, every verdict OK; heap +0.25 kB/min; tasks, files, frames, process pool flat; httpd 1 006 005 answered / 11 failed, p99 122 ms; 0 panics, 0 fault lines. The same on `182b19c` before it (2 868 ok, +0.24 kB/min), whose boot showed BUG-059 |
+| Kernel debug round on `feature/kdebug` (BUG-053, 056, 060 to 065): TCG matrix, CI q35 matrix, host tests | 2026-11-12 | ✅ 0 markers worse | `proof/kdebug-2026-11/` | 10 TCG boots against `proof/integ-2026-11/`: 0 worse, 0 changed, `[lk]` 0 inversions; new `[bug063]`, `[fdspace]`, `[bug053]` OK in all ten; megaraid 4 boots 0 worse; q35 13/13 (12/13 before BUG-064, a self-test race); 187 host suites, 1 312 tests; self-test image reaches the desktop in 67 to 79 s under TCG at 512 MiB (144 to 159 s before; BUG-056); two builds of one commit give one `eurokernel.efi` (BUG-062); BUG-031 closed (60 boots, none silent) |
+| Same, R630 KVM: 100 short boots (user, user + IOMMU, smp 1), `soak` 2 h 05 + `churn proc 8` + 4 httpd clients, release image boot time and wizard install | 2026-11-12 | ✅ 100/100 boots, soak 2 671/2 671 ok; 🟡 BUG-065 in 8 of the 100 boots | `proof/kdebug-2026-11/` | final image: 100 boots (40 user, 30 user + IOMMU, 30 smp 1) to the desktop and clean, the three new self-tests OK in each; soak 2 h 05: 342 `churn proc` commands, 2 758 glibc launches, every verdict OK, heap +0.17 kB/min, 0 panics, httpd 883 286 answered / 10 failed; a first round on the commit before BUG-064: 78/78 boots, soak 2 724/2 724; release image 2.71 s (base 2.69 s beside it), wizard 14/14; lock screen phase 5.39 s → 0.87 s; `[3d8]` (BUG-065, open) FAILED in 8 of the 100 boots, base image 0 of 60 |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
 > it ✅ from "it should work".
@@ -792,8 +794,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   every entry, so it takes only the entry the chip wrote; guarded by
   `a_torn_producer_read_takes_no_phantom_entry`, no change.
 
-### BUG-031 — one boot without IOMMU went silent after `[net-late]` 🟡 LIKELY FIXED (BUG-032 or BUG-037)
-- **Status:**   not reproduced; probably BUG-032 · **Severity:** unknown (a hang, once in 15 boots)
+### BUG-031 — one boot without IOMMU went silent after `[net-late]` ✅ CLOSED (not reproducible after BUG-037)
+- **Status:**   CLOSED 2026-11-12: not reproducible after BUG-037 (60 boots of its configuration, none silent); no probe of the original boot exists · **Severity:** unknown (a hang, once in 15 boots)
 - **Found:**    2026-11-05 · `scripts/megaraid-proof.sh` with `NO_IOMMU=1`, TCG, second boot of the
   first run, mem-hygiene image
 - **Actual:**   console silent right after `[net-late] network waits in this suite ...`, before the
@@ -807,6 +809,13 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   leaves the probe. `proof/mem-hygiene-2026-11/mr-noiommu-hang-boot2-tail.txt`.
   2026-11-10: the place also fits BUG-037 (the step after `[net-late]` is a glibc launch, which
   starts with `reset_fd_table`); no probe of this one exists, so it stays 🟡.
+  2026-11-12: `megaraid-proof.sh` with `NO_IOMMU=1` under TCG on the head of `feature/app-control`
+  (`7858b72`, with both fixes), three runs at a time beside other builds and boots (host load 6 to 21
+  on 16 cores): 60 boots, 60 to the status line, no NMI probe, no fault line
+  (`proof/kdebug-2026-11/bug031-megaraid-noiommu-tcg-60-boots.txt`). At 1 in 15 the chance of that
+  is 1.6 %. Closed. BUG-063 (found the same day) is a third bug that fits the picture: a userspace
+  driver's syscall returning through a stale stack pointer, no fault line. Which of the three it
+  was cannot be told without a probe.
 
 ### BUG-032 — `KERNEL PANIC` at `sched.rs:755`: `s.current` read through a stale pointer ✅ FIXED
 - **Status:**   FIXED (`b6a6fa8`, `feature/bug032`) · **Severity:** CRITICAL (kernel panic; silent
@@ -1158,14 +1167,29 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   path forwards left Alt alone, BUG-043). `eurokeymap::translate` takes no AltGr level, so AltGr has no other use yet.
 - **Next:**     an `0xE0` arm in `poll_key` that skips the next code, when the keymaps get their AltGr level.
 
-### BUG-053 — a glibc launcher that fails after it took its arena keeps the arena ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (needs a damaged executable or loader; 64 to 96 MiB per failed start)
+### BUG-053 — a glibc launcher that fails after it took its arena keeps the arena ✅ FIXED
+- **Status:**   FIXED (`082afd1`, `feature/kdebug`) · **Severity:** LOW (needs a damaged executable or loader; 64 to 384 MiB per failed start)
 - **Found:**    2026-11-10 · converting the callers of `build_address_space*` (`a19d507`); read, not provoked
 - **Analysis:** `spawn_glibc_persistent` (`?` on `load_elf64` and `alloc_thread_kstack`), `glibc_disk_launch`
   (`(bad ld.so ELF)`, `(disk exe segment map failed)`, which also leave the demand flags switched on) and `run_glibc`
   (`(bad exe ELF)`, `(bad ld.so ELF)`) return after the arena was allocated without freeing it. The new
   out-of-frames exits in the same functions do free it. Also still `expect`s on allocation, boot only:
   `daemon-arena`, `daemon-kstack`, `utask-arena`, `utask kernel-stack`.
+- **Provoked:** 2026-11-12, `[bug053]` on the unfixed tree, 1 GiB, TCG: `spawn_glibc_persistent` with an
+  executable that is no ELF: `bad executable refused=true kept 49152 frames` (192 MiB), `free frames
+  105708 → 56556 → FAILED` (`proof/kdebug-2026-11/bug053-before-fix-1g.txt`).
+- **Fix:**      `glibc_launch_abort` / `glibc_disk_launch_abort` give back the demand pool, the address
+  space (with the vDSO's table chain) and the arena; every exit after the arena allocation in
+  `run_glibc`, `spawn_glibc_persistent` and `glibc_disk_launch` goes through one of them. The disk
+  launch restores the two demand-paging flags on every exit (also when it found no arena, where it
+  left them on too). `vdso_prepare` frees a half-allocated image. The four `expect`s are a log line
+  and a return.
+- **Regression test:** boot self-test `[bug053]`: the frame allocator drained down to the arena of the
+  process, one frame handed back per attempt, for a background musl process (refused 8 times), a
+  foreground program (4) and a glibc process (6); every refusal must leave the frames it found; the
+  first attempt with enough frames runs with nothing else free; then the bad executable (0 frames
+  kept) and an ordinary launch (exit 42). The glibc part needs a glibc arena (skipped at 512 MiB under
+  TCG). Not provoked: the disk-served launch, `(no kernel stack)`, `(scheduler task table full)`.
 
 ### BUG-054 — the default desktop background has a vertical seam at half the screen width ⬜ OPEN
 - **Status:**   OPEN · **Severity:** COSMETIC
@@ -1181,8 +1205,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   so a small file system reads inconsistent. The "Disks" list is `fatmount::lsblk`, which knows virtio-blk only: a
   system booted from SATA, NVMe or USB is told there are no disks.
 
-### BUG-056 — the lock screen paints 25 to 45 s per frame under TCG (self-test image, 1920x1080) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (TCG boots of the self-test image; no marker changes; the release image under KVM is not slow)
+### BUG-056 — the lock screen paints 25 to 45 s per frame under TCG (self-test image, 1920x1080) ✅ FIXED
+- **Status:**   FIXED (`6022a8b`, `feature/kdebug`) · **Severity:** LOW (TCG boots of the self-test image; no marker changes; the release image under KVM is not slow)
 - **Found:**    2026-11-10 · `[boot-time]` of the integrated matrix boots against `proof/fast-boot-2026-11/`:
   `lockscreen` 50 s -> 94 s in all ten configurations, 150 to 165 s to the desktop where fast-boot had 97 to 114 s
 - **Analysis:** bisected over the merge commits with timestamped boots, then with throwaway TSC marks
@@ -1198,7 +1222,24 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Not affected:** the release image on a live medium skips the lock screen (`lockscreen` 9 ms). Installed system,
   release image, R630 KVM: first frame plus a refused sign-in 0.44 s after the mark before the lock screen.
   Self-test image under KVM: `lockscreen` 5.4 s.
-- **Next:**     paint that background with row fills (as `draw_wallpaper_compute` does), or cache it.
+- **Why it got slower without a change** (2026-11-12): the settings merge added a fourth call site of
+  `Color::lerp` (`compositor.rs`), and at `opt-level = "s"` LLVM stopped inlining it: `fill_rounded_rect_grad`
+  is 1481 bytes with no `lerp` symbol in the link maps of kernels built before that merge, 951 bytes
+  plus a 454-byte `Color::lerp` since. Out of line `lerp` makes 26 soft-float calls per call; nine of
+  them (six `u8` to `f32` conversions and three subtractions of the two end colours) do not depend on
+  the pixel and are hoisted out of the loop only when it is inlined. Measured under TCG, same host
+  load: `phase lockscreen` 88.1 s on the base tree, 52.4 s on the base tree with `#[inline(always)]`
+  on `lerp` (fast-boot had 50 s).
+- **Fix:**      `lockscreen::paint_background`: a row of this gradient is about a dozen runs of one
+  colour and every channel is monotone along the row, so the end of a run is found by bisection with
+  the same float expression and the run is filled with one row fill: about a hundred evaluations per
+  row instead of 1920, no `put_pixel`. The picture is the same pixel for pixel: `[ag-lock]` compares
+  15 360 pixels of the painted frame with the per-pixel expression in every boot (0 off), and full
+  screenshots of base and fix are compared in `proof/kdebug-2026-11/lockscreen-pixel-compare.txt`.
+- **Before / after** (self-test image, `phase lockscreen` = two frames + 0.6 s grace): TCG 88.7 s →
+  5.4 s, one frame about 40 s → 2.6 s, kernel entry to desktop 160.6 s → 71.0 s
+  (`user-smp4-noiommu`); R630 KVM 5.39 s → 0.87 s, one frame about 2.4 s → 0.18 s.
+  `fill_rounded_rect_grad` and `Color::lerp` themselves are unchanged (the icon tiles use them).
 
 ### BUG-057 — the notification list stays open and the desktop repaints everything in every loop iteration ⬜ OPEN
 - **Status:**   OPEN (kernel) · the two harness heuristics it tripped are fixed in `gui-smoke.py` · **Severity:** LOW/MEDIUM (a sluggish desktop for as long as the list is open)
@@ -1237,6 +1278,112 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   runs just before `[edit]`, on `feature/robust` as here, and wrote its two test files into `/tmp` without creating
   it; a missing file then "opens" as a new document. `feature/robust` never booted with a blank virtio disk.
 - **Fix:**      the self-test creates `/tmp` first. Self-test code only (`cfg(feature = "selftest")`).
+
+### BUG-060 — every program launch wiped the descriptors of the background processes ✅ FIXED
+- **Status:**   FIXED (`cb65a7e`, `feature/kdebug`) · **Severity:** HIGH (a background process silently loses its pipes and open files; wrong data goes to the wrong descriptor)
+- **Found:**    2026-11-10 by reading (`proof/bug-gpf-2026-11/`, "the fd tables are global"); provoked 2026-11-12 with the `[fdspace]` self-test
+- **Analysis:** `OPEN_FDS`, `OPEN_DIRS`, `PIPE_FDS`, the pipes, `PIPE_NONBLOCK`, `PIPE_WAITERS` and the per-fd
+  status flags were one global set, and every launch (`run_args`, `run_glibc`, the disk and persistent
+  variants, `run_dynamic`, `run_interp`) begins with `reset_fd_table`, also when it then finds no arena.
+  BUG-037 made that reset atomic; it stayed a wipe. `[fdspace]` on the unfixed tree: two background
+  processes open a pipe and a file (the second gets fds 6, 7, 8: one table for both), a musl and a glibc
+  program are launched in the foreground, and then `write=2 read=0` on the pipe (the write went to the
+  console) and `lseek=-1` on the file, in both. Two smaller leaks sat in the same tables: a close in one
+  process reset the `F_GETFL` flags of that fd number for every process, and a dead background process
+  kept its fd numbers until the next launch.
+- **Fix:**      fd spaces (`crates/eurofdspace`, `kernel/src/fdspace.rs`): a space owns descriptors. `ROOT`
+  is the launcher, the kernel tasks and the one foreground or glibc process with its threads and fork
+  children; `reset_fd_table` clears that space only. Every background process (`spawn_bg_musl`,
+  `spawn_bg_app`) gets its own; its threads use it, a fork child shares it with its parent (reference
+  counted), and it is released when the last process of the group is reaped. The locks are the same
+  locks, taken where and how they were: a guard dereferences to the table of the calling task's space.
+  A start that finds no heap for the tables (36 kB) is refused.
+- **Regression test:** boot self-test `[fdspace]` (every build) and 8 host tests in `eurofdspace`.
+- **Left:**     the glibc group is still one space with the per-child overlays (`FD_ALIAS`, deferred closes);
+  epoll, eventfd and socket descriptors are numbered globally. Design for the next step:
+  `proof/kdebug-2026-11/README.md`.
+
+### BUG-061 — a glibc process without frames for its vDSO tables was started anyway ✅ FIXED
+- **Status:**   FIXED (`082afd1`, `feature/kdebug`) · **Severity:** LOW (needs a launch with fewer than three free frames after its page tables)
+- **Found:**    2026-11-12 · the `[bug053]` self-test on the unfixed tree, 1 GiB, TCG
+- **Analysis:** `run_glibc` and `glibc_disk_launch` write the auxv (with `AT_SYSINFO_EHDR`) before they map
+  the vDSO; when `vdso_map_into` found no frames for the three table levels they printed `[vdso] mapping
+  FAILED — the auxv promised one; expect a crash` and started the process. With the arena plus three
+  frames free: `glibc refused x3, ran with 3 spare (exit 139)`.
+- **Fix:**      a refusal, `(out of memory: vDSO mapping)`, that frees the address space and the arena, as
+  for the arena's own page tables. `[bug053]`: `glibc refused x6, ran with 6 spare (exit 42)`.
+
+### BUG-062 — the same commit built twice gave two different `eurokernel.efi` ✅ FIXED
+- **Status:**   FIXED (`dbf8460`, `feature/kdebug`) · **Severity:** LOW (builds; the release pipeline's reproducibility claim)
+- **Found:**    2026-11-10 · integration, when the release kernel was relinked for its symbols
+- **Analysis:** two clean builds of `7858b72` in one checkout differ in 4 bytes: the COFF `TimeDateStamp`
+  of the PE header (file offset 0x80) and its copy in the debug directory (0x406ae44); lld-link writes
+  the link time there. Nothing else differs (`proof/kdebug-2026-11/repro-binary-diff.txt`).
+  `scripts/repro-build.sh` passed `/Brepro` against exactly that, but in `RUSTFLAGS`, which replaces the
+  `rustflags` of `.cargo/config.toml`: the CI job "Reproducible build" compared two builds of a kernel
+  without `panic=abort`, frame pointers, the link map and the forced soft crypto back ends. And kernel
+  and loader are linked with the same `/MAP:target/kernel.map`, the loader last, so the map left behind
+  was the loader's (hence the relink).
+- **Fix:**      `/Brepro` in `.cargo/config.toml` for every build; `repro-build.sh` adds its remap flags
+  through `--config`, refuses a `RUSTFLAGS` in the environment, pins the build version to the commit
+  date; `build.sh` keeps the kernel's map as `target/eurokernel.map`. After: two clean `build.sh` builds of the self-test kernel and of the release kernel are byte-identical, and the CI procedure reports REPRODUCIBLE.
+- **Left:**     two machines or two checkout paths were not compared; `EUROOS_BUILD_VERSION` is the date in
+  `build.sh` by design.
+
+### BUG-063 — after a foreground program, a driver's syscall returned through the foreground exit path ✅ FIXED
+- **Status:**   FIXED (`0009b95`, `feature/kdebug`) · **Severity:** CRITICAL (kernel fault or silent corruption of the boot task's stack)
+- **Found:**    2026-11-12 · the first version of the `[fdspace]` self-test under TCG with `net.driver=user`:
+  3 boots of 3 died right after its foreground program returned
+  (`proof/kdebug-2026-11/bug063-tcg-crash.txt`); not seen in a guest before
+- **Actual:**   the launcher's locals were garbage (a self-test line printed with wild strings and counts),
+  then `[idt] GENERAL PROTECTION FAULT code=0xa090 @ timer_switch+0x3e` (the `iretq`), `rsp` in the boot
+  task's stack, the frame made of boot-stack words.
+- **Analysis:** a foreground program leaves through `sys_exit`: `EXITED = 1`, and `syscall_entry` returns to
+  the launcher through `SAVED_KERNEL_RSP`. The flag stayed 1 until the next launch cleared it, and
+  `syscall_entry` tests it after every syscall of every task. `daemon_dispatch` and `bg_dispatch` clear
+  it first thing for that reason; `udrv::syscall` (the userspace drivers) and the background routes that
+  return before `bg_dispatch` (nanosleep, fork, wait4, socket calls, the two Euro sleeps) do not. The
+  next syscall of `e1000d` after the foreground program had ended took the exit path in the driver's
+  task: `mov rsp, [SAVED_KERNEL_RSP]`, six pops and a `ret` on the boot task's stack. The BUG-040
+  class through another door. The boot's own foreground runs leave interrupts off until the next
+  launch, which is why it had not been seen; the shell restores them after `run_args`, so a foreground
+  program typed in the terminal while a userspace driver polls was exposed. The load tests start glibc
+  and background processes, not foreground musl programs.
+- **Fix:**      the exit epilogue and `force_kernel_return` clear the flag: it is set and consumed inside
+  one syscall, with interrupts off.
+- **Regression test:** boot self-test `[bug063]`: after a foreground program the flag is 0, then 30 ticks
+  with interrupts on while the drivers and background processes make syscalls. `[fdspace]` does the
+  same with two busy background processes.
+
+### BUG-064 — the `[m43-wire]` self-test raced the interrupt for its USB audio completion events ✅ FIXED
+- **Status:**   FIXED (`ff8d562`, `feature/kdebug`) · **Severity:** LOW (a self-test; CI leg `usbaudio`)
+- **Found:**    2026-11-12 · CI q35 matrix of the kernel debug round, leg `usbaudio`: `[m43-wire] … 0 packet(s)
+  consumed by the USB DAC → no consumption ✗`, with no change in the audio or xHCI code
+- **Analysis:** `xhci::usbaudio_play` counts the transfer events it reads from the xHCI event ring, and
+  `xhci::poll` reads the same ring from the timer interrupt; the self-test runs with interrupts on. Nine
+  runs of the leg: 0, 0, 2, 2, 1 packets on the branch, 1, 2, 2, 1 on the base
+  (`proof/kdebug-2026-11/usbaudio-runs.txt`): a race on both, lost twice.
+- **Fix:**      the self-test calls `usbaudio_play` with interrupts off. Three runs of the leg after it: 2 of 2 packets each; the full matrix on the final image is 13 of 13.
+
+### BUG-065 — the CSPRNG stays unseeded in some KVM boots: `[3d8]`, and `[3d7]`, `[3d3]` with it ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (`getrandom` refuses for the whole boot when it happens; so far only under KVM on the R630)
+- **Found:**    2026-11-12 · R630 KVM boot loops of the kernel debug round, by reading the FAILED lines of boots that
+  were otherwise ok: `[3d8] … jitter-alone≈167bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=false →
+  FAILED` in 8 of 100 boots of the branch's final image and 5 of 78 of its first-round image. Older than that:
+  `proof/robust-2026-11/r630-kvm-highbar-smp4.markers` has the line with 21 bits.
+- **Base against branch:** the base image `7858b72` and the branch's image booted side by side on the same CPUs:
+  base 0 of 60, branch 3 of 60 (`proof/kdebug-2026-11/r630-bug065-base-vs-final.txt`).
+- **Analysis:** `entropy::gather_jitter` times two instructions between two RDTSCs; `estimate_jitter_bits`
+  credits a quarter bit per sample whose difference from the previous one has non-trivial low four bits;
+  `init` stops after 64 batches of 512 samples, ready or not, and nothing seeds the pool later. Over 16
+  batches the estimate is 322 to 1157 bits in the 60 base boots (threshold 256), 810 to 1278 in the TCG matrix boots, and
+  13 to 225 bits in the branch's failing boots. The self-test runs before any code the branch changed and
+  `gather_jitter` is byte-identical in both images; in the base image the two RDTSCs and what lies between
+  them are in one 64-byte line, in the branch's image they straddle a line boundary. Placement as the
+  cause is what is left, not what was tested.
+- **Next:**     `init` gathers until the pool is ready (same conservative credit), a later request seeds again
+  when the pool was not ready, and the sampling loop gets work whose timing does not depend on its
+  alignment. `entropy.rs` / `crates/euroentropy` were not touched by the kernel debug round.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

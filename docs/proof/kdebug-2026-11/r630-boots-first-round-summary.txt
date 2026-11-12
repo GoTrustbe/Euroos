@@ -1,0 +1,109 @@
+# Round 1: the image of the build commit, before the BUG-064 self-test fix (sha256 f02e7660...); stopped at 78 boots
+
+# boots-user (user driver (default), smp 4; --scenario smoke, 4 GiB)
+2026-11-12_09:40:16 slot=1 run=1 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:40:18 slot=0 run=1 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:43:30 slot=1 run=2 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=9
+2026-11-12_09:43:33 slot=0 run=2 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:46:46 slot=1 run=3 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:46:51 slot=0 run=3 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:50:01 slot=1 run=4 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:50:12 slot=0 run=4 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:53:18 slot=1 run=5 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:53:21 slot=0 run=5 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:56:33 slot=1 run=6 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:56:38 slot=0 run=6 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:59:53 slot=1 run=7 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:59:54 slot=0 run=7 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:03:05 slot=1 run=8 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:03:13 slot=0 run=8 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:06:16 slot=1 run=9 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:06:27 slot=0 run=9 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:09:30 slot=1 run=10 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:09:43 slot=0 run=10 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:12:39 slot=1 run=11 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:12:59 slot=0 run=11 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:15:55 slot=1 run=12 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:16:16 slot=0 run=12 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:19:03 slot=1 run=13 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:19:27 slot=0 run=13 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+# boots-user: 26 of 26 boots ok, to the desktop and through the smoke commands, the new self-tests OK
+
+# boots-user-iommu (user driver + intel-iommu, smp 4; --scenario smoke, 4 GiB)
+2026-11-12_09:40:17 slot=2 run=1 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:40:40 slot=3 run=1 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:43:34 slot=2 run=2 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:44:03 slot=3 run=2 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:46:53 slot=2 run=3 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:47:20 slot=3 run=3 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:50:09 slot=2 run=4 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:50:38 slot=3 run=4 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=9
+2026-11-12_09:53:26 slot=2 run=5 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:53:52 slot=3 run=5 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:56:41 slot=2 run=6 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:57:10 slot=3 run=6 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:59:57 slot=2 run=7 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:00:28 slot=3 run=7 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:03:12 slot=2 run=8 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:03:47 slot=3 run=8 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:06:27 slot=2 run=9 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:07:01 slot=3 run=9 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=9
+2026-11-12_10:09:43 slot=2 run=10 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:10:16 slot=3 run=10 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:13:06 slot=2 run=11 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:13:35 slot=3 run=11 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:16:23 slot=2 run=12 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:16:46 slot=3 run=12 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:19:39 slot=2 run=13 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=7
+2026-11-12_10:19:57 slot=3 run=13 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+# boots-user-iommu: 26 of 26 boots ok, to the desktop and through the smoke commands, the new self-tests OK
+
+# boots-smp1 (user driver, smp 1; --scenario smoke, 4 GiB)
+2026-11-12_09:40:43 slot=4 run=1 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:41:14 slot=5 run=1 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:44:00 slot=4 run=2 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:44:30 slot=5 run=2 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:47:22 slot=4 run=3 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:47:42 slot=5 run=3 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:50:43 slot=4 run=4 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:50:53 slot=5 run=4 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:54:05 slot=4 run=5 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:54:06 slot=5 run=5 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:57:19 slot=5 run=6 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_09:57:24 slot=4 run=6 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:00:31 slot=5 run=7 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:00:44 slot=4 run=7 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:03:41 slot=5 run=8 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:03:54 slot=4 run=8 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:06:49 slot=5 run=9 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:07:05 slot=4 run=9 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:09:57 slot=5 run=10 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:10:14 slot=4 run=10 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:13:06 slot=5 run=11 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=7
+2026-11-12_10:13:23 slot=4 run=11 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:16:12 slot=5 run=12 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:16:37 slot=4 run=12 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:19:19 slot=5 run=13 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+2026-11-12_10:19:51 slot=4 run=13 rc=0 ok fdspace-ok=1 bug053-ok=1 failed-lines=6
+# boots-smp1: 26 of 26 boots ok, to the desktop and through the smoke commands, the new self-tests OK
+
+# FAILED verdict lines (count = boots that have the line):
+      3 [3d3]
+      3 [3d7]
+      5 [3d8]
+    156 [conn]
+     78 [fuzz]
+     78 [udrv-crash]
+     78 [udrv-linux]
+     78 [udrv-net]
+
+# [lk] boot-total order lines (count = boots):
+     78 [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+
+# [ag-lock] (count = boots; the frame time replaced by N):
+     78 [ag-lock] GUI lockscreen: correct-password-signs-in=true, wrong-rejected=true, screen-drawn=true, background 0 of 15360 sampled pixels off the per-pixel gradient, frame N ms → OK (desktop se
+
+# [ag-lock] frame time, ms: min / median / max
+180 / 250 / 430 (78 boots)
+# [boot-time] phase lockscreen, ms: min / median / max
+869 / 976 / 1229 (78 boots)

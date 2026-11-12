@@ -1,0 +1,45 @@
+[matrix] image=/opt/euroos/kdebug-runs/q35-image.img legs=base,nvme,ahci,e1000e,hda,usb,usbhub,usbaudio,usbnet,scan,printer,power,hwprobe work=/opt/euroos/kdebug-runs/tmp/ek-matrix-bujzjr7_
+[matrix] leg: base
+  [base] PASS ✓
+[matrix] leg: nvme
+  [nvme] PASS ✓
+[matrix] leg: ahci
+  [ahci] PASS ✓
+[matrix] leg: e1000e
+  [e1000e] PASS ✓
+[matrix] leg: hda
+  [hda] PASS ✓
+[matrix] leg: usb
+  [usb] PASS ✓
+[matrix] leg: usbhub
+  [usbhub] PASS ✓
+[matrix] leg: usbaudio
+  [usbaudio] FAIL: marker missing: 'LIVE ✓'
+  [usbaudio] FAIL: forbidden marker present: 'no consumption'
+  [usbaudio] FAIL ✗
+[matrix] leg: usbnet
+  [usbnet] PASS ✓
+[matrix] leg: scan
+  [scan] PASS ✓
+[matrix] leg: printer
+  [printer] PASS ✓
+[matrix] leg: power
+  [power] PASS ✓
+[matrix] leg: hwprobe
+  [hwprobe] PASS ✓
+
+[matrix] result:
+  base     PASS
+  nvme     PASS
+  ahci     PASS
+  e1000e   PASS
+  hda      PASS
+  usb      PASS
+  usbhub   PASS
+  usbaudio FAIL
+  usbnet   PASS
+  scan     PASS
+  printer  PASS
+  power    PASS
+  hwprobe  PASS
+rc=1
