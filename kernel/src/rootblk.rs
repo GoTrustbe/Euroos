@@ -312,3 +312,139 @@ pub fn boot_flush() -> bool {
         None => false,
     }
 }
+
+// ── The disks of this machine, whatever their bus (BUG-055) ─────────────────
+
+/// One disk as the Storage page and `lsblk` show it.
+pub struct DiskInfo {
+    /// `vblk0`, `sata0`, `nvme0`, `raid0`, `usb0`.
+    pub name: alloc::string::String,
+    pub bytes: u64,
+    /// The bus or driver, in words: "virtio-blk", "SATA (AHCI)", "NVMe", ...
+    pub bus: &'static str,
+    /// What the disk calls itself; empty when the bus has no such string.
+    pub model: alloc::string::String,
+    /// The root file system of this boot lives on this disk.
+    pub system: bool,
+}
+
+/// Every disk a kernel driver has brought up: virtio-blk, SATA (AHCI), NVMe,
+/// MegaRAID logical drives and a USB mass-storage device. Sizes come from the
+/// drivers; nothing is read from the disks.
+pub fn all_disks() -> Vec<DiskInfo> {
+    use alloc::format;
+    use alloc::string::String;
+    let boot = *BOOT.lock();
+    let is_boot = |b: Backend| match (boot, b) {
+        (Some(Some(Backend::Virtio(a))), Backend::Virtio(c)) => a == c,
+        (Some(Some(Backend::Nvme)), Backend::Nvme) => true,
+        (Some(Some(Backend::Ahci(a))), Backend::Ahci(c)) => a == c,
+        _ => false,
+    };
+    let mut out = Vec::new();
+    for dev in 0..crate::virtio_blk::device_count() {
+        if crate::virtio_blk::present_dev(dev) {
+            out.push(DiskInfo {
+                name: format!("vblk{dev}"),
+                bytes: crate::virtio_blk::capacity_sectors_dev(dev) * 512,
+                bus: "virtio-blk",
+                model: String::new(),
+                system: is_boot(Backend::Virtio(dev)),
+            });
+        }
+    }
+    for idx in 0..crate::ahci::DISK_SLOTS {
+        let sectors = crate::ahci::disk_sectors(idx);
+        if sectors > 0 {
+            out.push(DiskInfo {
+                name: format!("sata{idx}"),
+                bytes: sectors * 512,
+                bus: "SATA (AHCI)",
+                model: crate::ahci::disk_model(idx),
+                system: is_boot(Backend::Ahci(idx)),
+            });
+        }
+    }
+    if crate::nvme::present() {
+        out.push(DiskInfo {
+            name: String::from("nvme0"),
+            bytes: crate::nvme::capacity_sectors() * 512,
+            bus: "NVMe",
+            model: crate::nvme::model(),
+            system: is_boot(Backend::Nvme),
+        });
+    }
+    for ld in 0..8 {
+        if let Some(sectors) = crate::mrblk::disk_sectors(ld) {
+            out.push(DiskInfo {
+                name: format!("raid{ld}"),
+                bytes: sectors * 512,
+                bus: "MegaRAID logical drive",
+                model: String::new(),
+                system: false,
+            });
+        }
+    }
+    if crate::xhci::usb_disk_present() {
+        out.push(DiskInfo {
+            name: String::from("usb0"),
+            bytes: crate::xhci::usb_block_count() * 512,
+            bus: "USB",
+            model: String::new(),
+            system: false,
+        });
+    }
+    out
+}
+
+/// "20.0 GiB", "256 MiB", "1.7 MiB": one decimal below 100 of a unit, rounded
+/// to the nearest, so two sizes and their ratio read consistently.
+pub fn human_bytes(bytes: u64) -> alloc::string::String {
+    use alloc::format;
+    const K: u64 = 1024;
+    const M: u64 = K * K;
+    const G: u64 = M * K;
+    let whole = |unit: u64| (bytes as u128 + unit as u128 / 2) / unit as u128;
+    let tenths = |unit: u64| (bytes as u128 * 10 + unit as u128 / 2) / unit as u128;
+    if bytes >= 100 * G {
+        format!("{} GiB", whole(G))
+    } else if bytes >= G {
+        let t = tenths(G);
+        format!("{}.{} GiB", t / 10, t % 10)
+    } else if bytes >= 100 * M {
+        format!("{} MiB", whole(M))
+    } else if bytes >= M {
+        let t = tenths(M);
+        format!("{}.{} MiB", t / 10, t % 10)
+    } else if bytes >= K {
+        format!("{} KiB", whole(K))
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+/// `[disks]` boot self-test: the size formatting of the Storage page (the
+/// "1 MiB of 8 MiB used (21%)" of BUG-055) and the disk list of this boot.
+pub fn disks_selftest() {
+    let fmt = human_bytes(1_782_579) == "1.7 MiB"
+        && human_bytes(8_388_608) == "8.0 MiB"
+        && human_bytes(0) == "0 bytes"
+        && human_bytes(1023) == "1023 bytes"
+        && human_bytes(4096) == "4 KiB"
+        && human_bytes(268_435_456) == "256 MiB"
+        && human_bytes(21_474_836_480) == "20.0 GiB"
+        && human_bytes(1_610_612_736) == "1.5 GiB"
+        && human_bytes(500_107_862_016) == "466 GiB";
+    let disks = all_disks();
+    let named = disks.iter().all(|d| !d.name.is_empty() && d.bytes > 0 && !d.bus.is_empty());
+    let one_system = disks.iter().filter(|d| d.system).count() <= 1;
+    let consistent = booted_from_disk() == disks.iter().any(|d| d.system);
+    let list: Vec<alloc::string::String> = disks.iter().map(|d| alloc::format!("{} {} {}", d.name, human_bytes(d.bytes), d.bus)).collect();
+    crate::serial_println!(
+        "[disks] sizes formatted={fmt}, {} disk(s) [{}], each with name, size and bus={named}, system disk marked consistently={} → {}",
+        disks.len(),
+        list.join("; "),
+        one_system && consistent,
+        if fmt && named && one_system && consistent { "OK ✓" } else { "FAILED ✗" }
+    );
+}

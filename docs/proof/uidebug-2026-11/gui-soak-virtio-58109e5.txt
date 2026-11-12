@@ -1,0 +1,80 @@
+gui-smoke: PASS
+kvm smp=2 mem=2G input=virtio net=restrict seed=20261113 soak=35.0 min, 2312 s, max console latency 250 ms
+
+ok   boot: desktop after 3 s, screen 1920x1080, layout us
+ok   first-run tour: shown on the first desktop, Esc closes it
+ok   close every window the desktop boots with
+ok   files: dock tile opens a window
+ok   files: used (clicks, typing, keys): window at 119,69; screenshot app-00-files.png
+ok   files: window moves with a title-bar drag: 119,69 -> 189,119
+ok   files: close button closes the window
+ok   notes: dock tile opens a window
+ok   notes: used (clicks, typing, keys): window at 869,69; screenshot app-01-notes.png
+ok   notes: window moves with a title-bar drag: 869,69 -> 939,119
+ok   notes: close button closes the window
+ok   clock: dock tile opens a window
+ok   clock: used (clicks, typing, keys): window at 869,579; screenshot app-02-clock.png
+ok   clock: window moves with a title-bar drag: 869,579 -> 939,629
+ok   clock: close button closes the window
+ok   browser: dock tile opens a window
+ok   browser: used (clicks, typing, keys): window at 199,63; screenshot app-03-browser.png
+ok   browser: window moves with a title-bar drag: 199,63 -> 269,113
+ok   browser: close button closes the window
+ok   terminal: dock tile opens a window
+ok   terminal: typed command runs (keyboard -> shell -> serial)
+ok   terminal: used (clicks, typing, keys): window at 757,149; screenshot app-04-terminal.png
+ok   terminal: window moves with a title-bar drag: 757,149 -> 827,199
+ok   terminal: close button closes the window
+ok   settings: dock tile opens a window
+ok   settings: used (clicks, typing, keys): window at 289,119; screenshot app-05-settings.png
+ok   settings: window moves with a title-bar drag: 289,119 -> 359,169
+ok   settings: close button closes the window
+ok   store: dock tile opens a window
+ok   store: used (clicks, typing, keys): window at 249,119; screenshot app-06-store.png
+ok   store: window moves with a title-bar drag: 249,119 -> 319,169
+ok   store: close button closes the window
+ok   star: dock tile opens a window
+ok   star: used (clicks, typing, keys): window at 329,89; screenshot app-07-star.png
+ok   star: window moves with a title-bar drag: 329,89 -> 399,139
+ok   star: close button closes the window
+ok   text: dock tile opens a window
+ok   text: used (clicks, typing, keys): window at 149,89; screenshot app-08-text.png
+ok   text: window moves with a title-bar drag: 149,89 -> 219,139
+ok   text: close button closes the window
+ok   monitor: dock tile opens a window
+ok   monitor: used (clicks, typing, keys): window at 209,109; screenshot app-09-monitor.png
+ok   monitor: window moves with a title-bar drag: 209,109 -> 279,159
+ok   monitor: close button closes the window
+ok   log: dock tile opens a window
+ok   log: used (clicks, typing, keys): window at 869,109; screenshot app-10-log.png
+ok   log: window moves with a title-bar drag: 869,109 -> 939,159
+ok   log: close button closes the window
+ok   three apps open together: 2 title bars visible
+ok   Alt-Tab shows the switcher, releasing Alt closes it and raises a window: switcher panel shown=True, closed after Alt release=True
+ok   Alt-Tab with the text editor in front
+ok   workspace switch (Alt+2 empty, Alt+1 windows back): desktop 2: 0 windows, back on 1: 2
+ok   launcher opens and takes a search
+ok   launcher search 'term' + Enter opens a working terminal
+ok   right click opens a context menu
+ok   Esc closes the context menu (BUG-057)
+ok   notification list: a click on the status panel opens it
+ok   notification list open: the desktop repaints on change, not in every loop iteration (BUG-057): 2 full repaints in 285 loop iterations
+ok   notification list: Esc closes it (BUG-057)
+ok   notification list: a click beside it closes it (BUG-057)
+ok   AltGr: third-level characters on be-azerty, fr-azerty and de-qwertz (BUG-052)
+ok   AltGr+Tab and AltGr+2 in the Terminal: no switcher, no workspace change (BUG-052): 1 window(s) after AltGr+2
+ok   AltGr+Tab and AltGr+2 in EuroText: no switcher, no workspace change (BUG-052): 1 window(s) after AltGr+2
+ok   mouse wheel scrolls EuroBeheer down and back up
+ok   mouse wheel scrolls the Terminal back, a key returns to the prompt
+ok   desktop back to rest
+ok   monkey: desktop still works after 200 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 400 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 600 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 800 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 1000 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 1200 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 1400 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 1600 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 1800 actions (terminal runs a typed command)
+ok   monkey: desktop still works after 2000 actions (terminal runs a typed command)
+ok   monkey soak 35.0 min, seed 20261113: 2084 actions (alt-tab 58, altgr 20, click 363, click-in-window 308, ctrl-alt-esc 9, dock 258, double-click 93, drag 79, key 165, launcher 56, move-window 129, right-click 84, status-panel 19, title-button 112, type 205, wheel 54, workspace 72); max console latency 250 ms

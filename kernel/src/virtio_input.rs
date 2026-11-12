@@ -153,7 +153,7 @@ fn apply(kind: Kind, a: Action) {
             crate::ps2::push_scancode(if pressed { code } else { code | 0x80 });
             KEYS.fetch_add(1, Ordering::Relaxed);
         }
-        Action::Pointer { abs, dx, dy, wheel: _, buttons } => {
+        Action::Pointer { abs, dx, dy, wheel, buttons } => {
             if kind == Kind::Other {
                 return;
             }
@@ -161,6 +161,8 @@ fn apply(kind: Kind, a: Action) {
                 Some((x, y)) => crate::mouse::apply_usb_abs(x, y, buttons),
                 None => crate::mouse::apply_usb(dx, dy, buttons),
             }
+            // REL_WHEEL: positive = away from the user; the desktop counts scroll-down.
+            crate::mouse::add_wheel(-wheel);
             POINTER_REPORTS.fetch_add(1, Ordering::Relaxed);
         }
     }

@@ -1,0 +1,10 @@
+closeall
+dock 5
+nap 1
+wclick 80 387
+nap 2
+wmove 500 300
+wheel 2
+nap 1
+shot disks-four-buses
+scon lsblk

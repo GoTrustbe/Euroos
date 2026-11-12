@@ -34,7 +34,7 @@ Exit status: 0 = every step passed, 1 = a step failed, 2 = crash or hang. A step
 that fails on a tracked, open bug (KNOWN_ISSUES below) is reported as "known" and
 does not count. Details: docs/GUI-TESTING.md.
 """
-import argparse, json, os, random, re, shlex, socket, struct, subprocess, sys, tempfile, threading, time, zlib
+import argparse, codecs, json, os, random, re, shlex, socket, struct, subprocess, sys, tempfile, threading, time, zlib
 
 OVMF = next((c for c in ("/usr/share/ovmf/OVMF.fd", "/usr/share/OVMF/OVMF.fd",
                          "/usr/share/edk2-ovmf/x64/OVMF.fd", "/usr/share/qemu/OVMF.fd") if os.path.exists(c)), None)
@@ -80,6 +80,15 @@ AZERTY.update({" ": ("spc", False), ":": ("dot", False), "/": ("dot", True), "."
 # reported as "known" and do not fail the run; remove the entry when the bug is fixed.
 KNOWN_ISSUES = {
 }
+# AltGr (BUG-052): per layout, the keys that give  @ # { } [ ] ~ euro \ |  in that order.
+# A string is a qcode pressed with AltGr (alt_r) held; ("plain", qcode) is pressed alone
+# (German QWERTZ has # on a key of its own).
+ALTGR_WANT = "@#{}[]~\u20ac\\|"
+ALTGR_KEYS = {
+    "be-azerty": ["2", "3", "9", "0", "bracket_left", "bracket_right", "slash", "e", "less", "1"],
+    "fr-azerty": ["0", "3", "4", "equal", "5", "minus", "2", "e", "8", "6"],
+    "de-qwertz": ["q", ("plain", "backslash"), "7", "0", "8", "9", "bracket_right", "e", "minus", "less"],
+}
 SPECIAL_KEYS = ["ret", "esc", "tab", "backspace", "delete", "up", "down", "left", "right",
                 "home", "end", "pgup", "pgdn", "f1", "f2", "f5", "f11", "insert", "spc"]
 
@@ -112,6 +121,10 @@ class Serial:
 
     def _reader(self):
         tail = ""
+        # Incremental: the UART hands over a character of several bytes (the euro sign
+        # of the AltGr step) in pieces, and decoding each piece alone made three
+        # replacement characters of it.
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         while not self.closed:
             try:
                 data = self.sock.recv(65536)
@@ -121,7 +134,7 @@ class Serial:
                 break
             if not data:
                 break
-            chunk = data.decode(errors="replace")
+            chunk = decoder.decode(data)
             with self.lock:
                 self.text += chunk
                 if len(self.text) > 64 << 20:            # a soak must not eat the host
@@ -413,6 +426,36 @@ class Guest:
             self.nap(0.12)
         self.nap(0.25)
 
+    def wheel(self, notches):
+        """Turn the mouse wheel: positive = towards the user (scroll down)."""
+        self.actions.write(f"wheel {notches}\n")
+        b = "wheel-down" if notches > 0 else "wheel-up"
+        for _ in range(abs(notches)):
+            self.button(True, b)
+            self.button(False, b)
+            self.nap(0.06)
+
+    def scon(self, line):
+        """Run a shell command over the serial console; returns the serial position before it."""
+        pos = self.serial.mark()
+        self.serial.send_line(line)
+        self.serial.wait_for("[scon] $ " + line, 20 * self.slow, pos)
+        self.nap(0.3)
+        return pos
+
+    def repaints(self):
+        """(full repaints, loop iterations) of the desktop since boot, from the `repaints`
+        shell command; None when the image does not have it."""
+        pos = self.serial.mark()
+        self.serial.send_line("repaints")
+        end = time.time() + 20 * self.slow
+        while time.time() < end:
+            m = re.search(r"\[scon\] desktop: (\d+) full repaints, (\d+) loop iterations", self.serial.since(pos))
+            if m:
+                return int(m.group(1)), int(m.group(2))
+            time.sleep(0.05)
+        return None
+
     def drag(self, x0, y0, x1, y1, steps=8):
         self.actions.write(f"drag {int(x0)} {int(y0)} {int(x1)} {int(y1)}\n")
         self.move(x0, y0)
@@ -469,6 +512,18 @@ class Guest:
         self.move(self.w - 4, self.h - 4)
         self.nap(0.25)
         return self.shot(save_as)
+
+    def wait_changed(self, before, save_as, region, min_pixels=15000, seconds=4.0):
+        """Screenshots until the picture differs from `before` (an overlay came up) or the
+        time is over; returns the last one. Under TCG on a busy host one full repaint
+        can take longer than a fixed pause: two runs of 2026-11-12 looked 0.9 s after
+        Alt-Tab and saw the desktop without the switcher, which was there a moment later."""
+        end = time.time() + seconds * self.slow
+        while True:
+            s = self.shot(save_as)
+            if s.differs(before, min_pixels=min_pixels, region=region) or time.time() >= end:
+                return s
+            self.nap(0.2)
 
     def desktop_region(self):
         """The part of the screen windows live in (not the dock, not the clock)."""
@@ -570,6 +625,15 @@ class Guest:
     def smoke(self):
         self.shot("00-boot")
         ok = self.close_all_windows()
+        # With the install wizard open at boot (a blank disk attached) the tour waits
+        # for that window to be closed: it comes up now. Esc closes it.
+        log = self.serial.since(0)
+        if "[tour] waiting: the install wizard is open" in log and "[tour] closed" not in log:
+            shown = self.serial.wait_for("[tour] first-run tour shown", 10 * self.slow)
+            pos = self.serial.mark()
+            self.key("esc")
+            closed = self.serial.wait_for("[tour] closed", 20 * self.slow, pos)
+            self.record("first-run tour: waits for the install wizard, shown when it is closed, Esc closes it", shown and closed)
         empty = self.look("01-empty-desktop")
         self.step("close every window the desktop boots with", ok and not empty.windows())
         region = self.desktop_region()
@@ -632,7 +696,7 @@ class Guest:
         self.nap(0.1)
         for _ in range(2):
             self._send([k("tab", True)]); self.nap(0.1); self._send([k("tab", False)]); self.nap(0.3)
-        sw = self.shot("feature-alt-tab")
+        sw = self.wait_changed(three, "feature-alt-tab", region)
         self._send([k("alt", False)])
         self.nap(0.5)
         after = self.look()
@@ -652,7 +716,7 @@ class Guest:
         self._send([k("alt", True)])
         self.nap(0.1)
         self._send([k("tab", True)]); self.nap(0.1); self._send([k("tab", False)]); self.nap(0.3)
-        sw2 = self.shot("feature-alt-tab-editor")
+        sw2 = self.wait_changed(two, "feature-alt-tab-editor", region)
         self._send([k("alt", False)])
         self.nap(0.5)
         self.step("Alt-Tab with the text editor in front", sw2.differs(two, min_pixels=15000, region=region))
@@ -697,10 +761,183 @@ class Guest:
         menu = self.shot("feature-context-menu")
         self.step("right click opens a context menu", menu.differs(base, min_pixels=400, region=region))
         self.key("esc")
-        self.click(cx - 200, cy - 200)
+        self.nap(0.5)
+        closed = self.shot()
+        self.step("Esc closes the context menu (BUG-057)",
+                  closed.differs(menu, min_pixels=400, region=region) and not closed.differs(base, min_pixels=400, region=region))
+        self.click(cx - 200, cy - 200)      # an image without that fix: the click dismisses the menu
         self.nap(0.4)
+        self.notification_list(cx, cy)
+        self.altgr()
+        self.mouse_wheel()
         self.close_all_windows()
         self.step("desktop back to rest", not self.look("99-final").windows())
+
+    def notification_list(self, cx, cy):
+        """BUG-057: the list opens on the status panel, closes with Esc and with a click
+        beside it, and while it is open the desktop repaints when something changes
+        instead of in every loop iteration."""
+        px, py = self.w - PANEL_W // 2, 60
+        self.move(cx, cy)
+        self.nap(0.3)
+        base = self.shot()
+        self.click(px, py)
+        self.nap(0.8)
+        self.move(cx, cy)
+        self.nap(0.5)
+        lst = self.shot("feature-notification-list")
+        self.step("notification list: a click on the status panel opens it", lst.differs(base, min_pixels=8000))
+        r1 = self.repaints()
+        self.nap(3.0)
+        r2 = self.repaints()
+        if r1 and r2:
+            d_rep, d_iter = r2[0] - r1[0], r2[1] - r1[1]
+            self.step("notification list open: the desktop repaints on change, not in every loop iteration (BUG-057)",
+                      d_iter >= 20 and d_rep * 10 <= d_iter, f"{d_rep} full repaints in {d_iter} loop iterations")
+        else:
+            self.step("notification list open: the desktop repaints on change, not in every loop iteration (BUG-057)",
+                      False, "the image has no `repaints` command")
+        self.key("esc")
+        self.nap(0.6)
+        after = self.shot()
+        self.step("notification list: Esc closes it (BUG-057)",
+                  after.differs(lst, min_pixels=8000) and not after.differs(base, min_pixels=8000))
+        self.click(px, py)
+        self.nap(0.8)
+        self.move(cx, cy)
+        self.nap(0.5)
+        lst2 = self.shot()
+        self.click(cx, cy)                  # beside the list, on the bare desktop
+        self.nap(0.6)
+        after2 = self.shot()
+        self.step("notification list: a click beside it closes it (BUG-057)",
+                  lst2.differs(base, min_pixels=8000) and after2.differs(lst2, min_pixels=8000)
+                  and not after2.differs(base, min_pixels=8000))
+        if after2.differs(base, min_pixels=8000):       # still open on an image without the fix
+            self.click(px, py)
+            self.nap(0.5)
+
+    def altgr(self):
+        """BUG-052: AltGr gives the third level of the Belgian, French and German layouts
+        (the characters arrive in a Terminal command) and is never Alt: AltGr+Tab opens no
+        switcher and AltGr+2 leaves the workspace alone, in the Terminal (character path of
+        the keyboard driver) and in EuroText (rich-key path)."""
+        region = self.desktop_region()
+        restore = "be-azerty" if self.layout is AZERTY else "us"
+        self.close_all_windows()
+        self.click(*dock_tile(4))
+        self.nap(0.8)
+        wins = self.look().windows()
+        if not wins:
+            self.step("AltGr: third-level characters on be-azerty, fr-azerty and de-qwertz (BUG-052)", False, "no terminal window")
+            return
+        self.click(wins[0][0] + 300, wins[0][1] + 200)
+        got = []
+        for tag, keys in ALTGR_KEYS.items():
+            self.scon("keymap " + tag)
+            self.key("ret")
+            self.nap(0.3)
+            pos = self.serial.mark()
+            for q in ("e", "c", "h", "o", "spc"):       # the same keys on all four layouts
+                self.key(q)
+            for q in keys:
+                if isinstance(q, tuple):
+                    self.key(q[1])
+                else:
+                    self.key("alt_r", q)
+            self.key("ret")
+            ok = self.serial.wait_for("[e2e] $ echo " + ALTGR_WANT, 20 * self.slow, pos)
+            if not ok:
+                line = [l for l in self.serial.since(pos).splitlines() if l.startswith("[e2e] $")]
+                got.append(f"{tag}: {line[0] if line else 'no command on serial'}")
+        self.step("AltGr: third-level characters on be-azerty, fr-azerty and de-qwertz (BUG-052)", not got, "; ".join(got))
+        # AltGr is not Alt. Belgian layout: AltGr+2 is '@', and must not be workspace 2.
+        self.scon("keymap be-azerty")
+        before = self.look()
+        k = lambda q, down: {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": q}}}
+        self.actions.write("altgr-tab (terminal in front)\n")
+        self._send([k("alt_r", True)])
+        self.nap(0.1)
+        self._send([k("tab", True)]); self.nap(0.1); self._send([k("tab", False)]); self.nap(0.4)
+        held = self.shot("feature-altgr-tab")
+        self._send([k("alt_r", False)])
+        self.nap(0.3)
+        self.key("alt_r", "2")
+        self.nap(0.6)
+        after = self.look()
+        self.step("AltGr+Tab and AltGr+2 in the Terminal: no switcher, no workspace change (BUG-052)",
+                  not held.differs(before, min_pixels=15000, region=region) and bool(after.windows()),
+                  f"{len(after.windows())} window(s) after AltGr+2")
+        self.key("ret")
+        self.click(*dock_tile(8))           # EuroText in front: the rich-key path
+        self.nap(0.8)
+        before = self.look()
+        self.actions.write("altgr-tab (editor in front)\n")
+        self._send([k("alt_r", True)])
+        self.nap(0.1)
+        self._send([k("tab", True)]); self.nap(0.1); self._send([k("tab", False)]); self.nap(0.4)
+        held = self.shot("feature-altgr-tab-editor")
+        self._send([k("alt_r", False)])
+        self.nap(0.3)
+        self.key("alt_r", "2")
+        self.nap(0.6)
+        after = self.look()
+        self.step("AltGr+Tab and AltGr+2 in EuroText: no switcher, no workspace change (BUG-052)",
+                  not held.differs(before, min_pixels=15000, region=region) and bool(after.windows()),
+                  f"{len(after.windows())} window(s) after AltGr+2")
+        self.scon("keymap " + restore)
+        self.close_all_windows()
+
+    def mouse_wheel(self):
+        """The wheel scrolls the window under the pointer: EuroBeheer's form, and the
+        Terminal's output (a key brings the prompt back)."""
+        self.click(*dock_tile(5))
+        self.nap(0.8)
+        wins = self.look().windows()
+        ok, detail = False, "no settings window"
+        if wins:
+            x, y = wins[0]
+            box = (x + 190, y + TITLEBAR_H, x + 750, y + 550)
+            self.click(x + 70, y + TITLEBAR_H + 64)       # the System section: longer than the window
+            self.nap(0.5)
+            self.move(x + 500, y + 300)
+            self.nap(0.4)
+            before = self.shot()
+            self.wheel(3)
+            self.nap(0.6)
+            down = self.shot("feature-wheel-settings")
+            self.wheel(-6)
+            self.nap(0.6)
+            up = self.shot()
+            ok = down.differs(before, min_pixels=1500, region=box) and up.differs(down, min_pixels=1500, region=box)
+            detail = "" if ok else "the picture did not change with the wheel"
+        self.step("mouse wheel scrolls EuroBeheer down and back up", ok, detail)
+        self.close_all_windows()
+        self.click(*dock_tile(4))
+        self.nap(0.8)
+        wins = self.look().windows()
+        ok, detail = False, "no terminal window"
+        if wins:
+            x, y = wins[0]
+            box = (x, y + TITLEBAR_H, x + 780, y + 720)
+            self.click(x + 300, y + 200)
+            self.key("ret")
+            self.type("help")
+            self.key("ret")
+            self.nap(0.8)
+            self.move(x + 300, y + 300)
+            self.nap(0.4)
+            before = self.shot()
+            self.wheel(-3)
+            self.nap(0.6)
+            back = self.shot("feature-wheel-terminal")
+            self.key("spc")
+            self.nap(0.6)
+            prompt = self.shot()
+            ok = back.differs(before, min_pixels=1500, region=box) and prompt.differs(back, min_pixels=1500, region=box)
+            detail = "" if ok else "the Terminal did not scroll back, or a key did not return to the prompt"
+            self.key("backspace")
+        self.step("mouse wheel scrolls the Terminal back, a key returns to the prompt", ok, detail)
 
     # ── monkey ──────────────────────────────────────────────────────────────
     def monkey(self, minutes, seed):
@@ -729,9 +966,16 @@ class Guest:
             if r < 0.12:
                 act = "dock"
                 self.click(*dock_tile(rng.randrange(len(DOCK_APPS))))
-            elif r < 0.34:
+            elif r < 0.31:
                 act = "click"
                 self.click(*rand_point())
+            elif r < 0.33:
+                act = "wheel"
+                self.move(*rand_point())
+                self.wheel(rng.choice([-5, -3, -1, 1, 2, 4, 8]))
+            elif r < 0.34:
+                act = "altgr"
+                self.key("alt_r", rng.choice(["tab", "1", "2", "3", "e", "q", "less", "bracket_left", "esc", "ret"]))
             elif r < 0.38:
                 act = "right-click"
                 self.click(*rand_point(), button="right")
@@ -791,10 +1035,10 @@ class Guest:
                 self.alive(f"monkey action {n} ({act})")
             if n % 50 == 0:
                 # The screen must not be frozen: move the pointer across it and compare.
-                # The picture gets up to 5 s to follow: while the notification list is
-                # open the desktop repaints everything in every loop iteration, 0.3 to
-                # 0.4 s per frame with a handful of windows (measured on the R630), and
-                # a single look 0.3 s after the move called that "frozen".
+                # The picture gets up to 5 s to follow. (Until BUG-057 was fixed the
+                # desktop repainted everything in every loop iteration while the
+                # notification list was open, 0.3 to 0.4 s per frame with a handful of
+                # windows, and a single look 0.3 s after the move called that "frozen".)
                 self.move(self.w // 2, self.h // 2)
                 self.nap(1.0)
                 a = self.shot()
@@ -823,9 +1067,10 @@ class Guest:
                 self.key("alt", "1")
                 self.nap(0.5)
                 self.close_all_windows()
-                # A context menu the monkey left open takes the next left click (Esc does
-                # not close it): spend one on the bare strip beside the dock, so the click
-                # on the EU mark opens the launcher.
+                # A context menu or the notification list the monkey left open takes the
+                # next left click (the two Esc above close them since BUG-057; an older
+                # image needs the click): spend one on the bare strip beside the dock, so
+                # the click on the EU mark opens the launcher.
                 self.click(SIDEBAR_W + 6, self.h - 6)
                 self.nap(0.3)
                 self.click(*BRAND)

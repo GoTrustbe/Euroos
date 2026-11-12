@@ -1,0 +1,38 @@
+# boot-time.py, R630 KVM, release image, SATA boot medium + legacy virtio-net, -smp 2 -m 2G, restrict=on, pinned to two cores;
+# host time from QEMU start to "[desktop] interactive loop started"
+== 58109e5, the machine otherwise idle
+default-1: kernel-entry 1.55s desktop 2.40s
+default-2: kernel-entry 1.78s desktop 2.55s
+default-3: kernel-entry 1.78s desktop 2.55s
+default-4: kernel-entry 1.51s desktop 2.28s
+default-5: kernel-entry 1.87s desktop 2.69s
+== 7858b72 (before), same session
+base-1: kernel-entry 2.16s desktop 3.00s
+base-2: kernel-entry 1.54s desktop 2.30s
+base-3: kernel-entry 1.61s desktop 2.37s
+base-4: kernel-entry 1.64s desktop 2.46s
+base-5: kernel-entry 1.55s desktop 2.31s
+== c78a8e8 (head), other KVM guests running on the machine
+default-1: kernel-entry 1.80s desktop 2.70s
+default-2: kernel-entry 2.12s desktop 3.01s
+default-3: kernel-entry 1.97s desktop 2.85s
+default-4: kernel-entry 1.76s desktop 2.63s
+default-5: kernel-entry 1.71s desktop 2.58s
+== 7858b72 (before), same session
+base-1: kernel-entry 1.62s desktop 2.37s
+base-2: kernel-entry 1.67s desktop 2.51s
+base-3: kernel-entry 1.98s desktop 2.93s
+base-4: kernel-entry 1.83s desktop 2.77s
+base-5: kernel-entry 1.88s desktop 2.75s
+== c78a8e8, first series, while this team ran four soaks and the screenshot guests
+default-1: kernel-entry 2.00s desktop 2.94s
+default-2: kernel-entry 2.13s desktop 3.14s
+default-3: kernel-entry 1.95s desktop 2.96s
+default-4: kernel-entry 1.82s desktop 2.77s
+default-5: kernel-entry 1.94s desktop 2.89s
+== 7858b72, same session
+base-1: kernel-entry 2.91s desktop 4.51s
+base-2: kernel-entry 2.86s desktop 4.51s
+base-3: kernel-entry 1.81s desktop 2.73s
+base-4: kernel-entry 1.88s desktop 2.80s
+base-5: kernel-entry 1.87s desktop 2.83s

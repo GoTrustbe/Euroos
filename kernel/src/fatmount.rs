@@ -250,13 +250,32 @@ fn find_exfat_volume(dev: usize) -> Option<(u64, u64)> {
     None
 }
 
-/// `lsblk` — list virtio block devices + detected filesystem.
+/// The disks on other buses than virtio-blk (SATA, NVMe, MegaRAID, USB), one
+/// line each: `lsblk` could only see virtio-blk and called a SATA or NVMe
+/// machine diskless (BUG-055). `mount` works on virtio-blk devices only.
+fn other_bus_lines() -> Vec<String> {
+    crate::rootblk::all_disks()
+        .iter()
+        .filter(|d| d.bus != "virtio-blk")
+        .map(|d| {
+            let model = if d.model.is_empty() { String::new() } else { format!(", {}", d.model) };
+            format!("{:<8} {:>6} MiB  {}{}{}", d.name, d.bytes / (1024 * 1024), d.bus, model, if d.system { " (system disk)" } else { "" })
+        })
+        .collect()
+}
+
+/// `lsblk` — list the disks: virtio block devices with their detected
+/// filesystem, then the disks on the other buses.
 pub fn lsblk() -> Vec<String> {
     let mut out = Vec::new();
     out.push("DEVICE   SIZE       TYPE".to_string());
     let n = crate::virtio_blk::device_count();
     if n == 0 {
-        out.push("(no virtio-blk devices — running in live/RAM mode)".to_string());
+        let others = other_bus_lines();
+        if others.is_empty() {
+            out.push("(no disks: running in live/RAM mode)".to_string());
+        }
+        out.extend(others);
         return out;
     }
     for dev in 0..n {
@@ -286,6 +305,7 @@ pub fn lsblk() -> Vec<String> {
             out.push(format!("  └─ FAT volume present — mount with: mount {dev} /mnt/fat"));
         }
     }
+    out.extend(other_bus_lines());
     out
 }
 

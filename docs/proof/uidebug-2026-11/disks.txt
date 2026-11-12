@@ -1,0 +1,15 @@
+# Storage page and lsblk with a virtio, a second SATA and an NVMe disk attached (release image 58109e5, R630 KVM; scenarios/disks.txt)
+[gui-smoke] QEMU pid 885816, booting (KVM, 2 cpu, 2G)...
+[gui-smoke] ok   boot: desktop after 3 s, screen 1920x1080, layout us
+screen 1920x1080
+> shot disks-four-buses
+> scon lsblk
+    | [scon] $ lsblk
+    | [scon] DEVICE   SIZE       TYPE
+    | [scon] vblk0      3072 MiB  unknown/blank
+    | [scon] sata0       256 MiB  SATA (AHCI), QEMU HARDDISK
+    | [scon] sata1      3072 MiB  SATA (AHCI), QEMU HARDDISK
+    | [scon] nvme0     20480 MiB  NVMe, QEMU NVMe Ctrl
+    | [scon-ready]
+    | [scon-ready]
+PROBE PASS (0 failed check(s)), max console latency 50 ms

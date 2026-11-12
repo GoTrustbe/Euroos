@@ -25,16 +25,38 @@
 //! - `debug.schedwatch=on`: a hardware write watch on the scheduler state
 //!   (BUG-032, memwatch.rs; off by default, one #DB per context switch).
 //!
+//! - `ui.tour=off`: no first-run tour (onboarding.rs); for unattended images.
+//!
+//! - `display.mode=<width>x<height>` (for example `display.mode=1280x720`): use
+//!   this screen resolution when the firmware offers it, instead of the largest
+//!   one up to 1920x1080. An unknown or unavailable mode is ignored and logged.
+//!   Meant for testing the desktop at a smaller size.
+//!
 //! The file is not signed. It only chooses between two code paths that are
 //! both part of the signed kernel image; it cannot add code.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 static NET_USER: AtomicBool = AtomicBool::new(true);
 static NVME_USER: AtomicBool = AtomicBool::new(false);
 static SCHED_WATCH: AtomicBool = AtomicBool::new(false);
 static TOUR_OFF: AtomicBool = AtomicBool::new(false);
 static FOUND: AtomicBool = AtomicBool::new(false);
+/// `display.mode`: width << 16 | height, 0 = not set.
+static DISPLAY_MODE: AtomicUsize = AtomicUsize::new(0);
+
+/// "1280x720" -> (1280, 720); both between 640x480 and 8192x8192.
+fn parse_mode(v: &str) -> Option<(usize, usize)> {
+    let (w, h) = v.split_once(['x', 'X'])?;
+    let (w, h) = (w.trim().parse::<usize>().ok()?, h.trim().parse::<usize>().ok()?);
+    ((640..=8192).contains(&w) && (480..=8192).contains(&h)).then_some((w, h))
+}
+
+/// The resolution asked for with `display.mode`, if any.
+pub fn display_mode() -> Option<(usize, usize)> {
+    let v = DISPLAY_MODE.load(Ordering::Relaxed);
+    (v != 0).then_some((v >> 16, v & 0xFFFF))
+}
 
 /// Parse the option text (host-testable shape: pure over the bytes).
 fn apply(text: &str) {
@@ -56,6 +78,10 @@ fn apply(text: &str) {
                 // First-run tour (kernel/src/onboarding.rs): off for unattended images.
                 ("ui.tour", "off") => TOUR_OFF.store(true, Ordering::Relaxed),
                 ("ui.tour", "on") => TOUR_OFF.store(false, Ordering::Relaxed),
+                ("display.mode", v) => match parse_mode(v) {
+                    Some((w, h)) => DISPLAY_MODE.store(w << 16 | h, Ordering::Relaxed),
+                    None => crate::serial_println!("[bootopt] display.mode={v} is not <width>x<height>: ignored"),
+                },
                 (k, v) => crate::serial_println!("[bootopt] unknown option {k}={v} ignored"),
             }
         }

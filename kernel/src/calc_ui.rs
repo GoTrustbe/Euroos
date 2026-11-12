@@ -29,13 +29,30 @@ const HIST_MAX: usize = 8;
 const HIST_W: usize = 210; // history panel on the right
 
 /// The little rectangle (x,y,w,h) of button `i`, within the buttons area.
+/// A key never has a negative size (BUG-058: below 252 px of window height the
+/// subtraction wrapped and the keys became as tall as the screen).
 fn button_rect(i: usize, ax: usize, ay: usize, aw: usize, ah: usize) -> (usize, usize, usize, usize) {
     let gap = 8usize;
-    let cw = (aw - gap * (COLS - 1)) / COLS;
-    let chh = (ah - gap * (ROWS - 1)) / ROWS;
+    let cw = aw.saturating_sub(gap * (COLS - 1)) / COLS;
+    let chh = ah.saturating_sub(gap * (ROWS - 1)) / ROWS;
     let col = i % COLS;
     let row = i / COLS;
     (ax + col * (cw + gap), ay + row * (chh + gap), cw, chh)
+}
+
+/// The smallest window the desktop lets the calculator shrink to: the keypad
+/// keeps keys of 32 x 20 px next to the history column.
+pub const MIN_W: usize = 500;
+pub const MIN_H: usize = 380;
+/// The smallest key that is drawn and takes a click. The desktop keeps the
+/// window above [`MIN_W`] x [`MIN_H`]; if it is smaller all the same, the
+/// keypad is left out and the keyboard still works.
+const MIN_KEY_W: usize = 18;
+const MIN_KEY_H: usize = 14;
+
+fn keypad_fits(aw: usize, ah: usize) -> bool {
+    let (_, _, cw, chh) = button_rect(0, 0, 0, aw, ah);
+    cw >= MIN_KEY_W && chh >= MIN_KEY_H
 }
 
 /// The buttons area within the window body (below the display).
@@ -60,16 +77,16 @@ fn equals_rect(x: usize, y: usize, w: usize, h: usize) -> (usize, usize, usize, 
 /// Which button-token lies under (mx,my)? `win_*` = full window geometry.
 /// "=" for the equals bar; "H0".."H7" for a history row (recall it).
 pub fn button_at(win_x: usize, win_y: usize, win_w: usize, win_h: usize, mx: usize, my: usize) -> Option<&'static str> {
-    // The '=' bar.
+    // The '=' bar (only where it is drawn: inside the window).
     {
         let (ex, ey, ew, eh) = equals_rect(win_x, win_y + TITLEBAR_H, win_w, win_h.saturating_sub(TITLEBAR_H));
-        if mx >= ex && mx < ex + ew && my >= ey && my < ey + eh {
+        if ey + eh <= win_y + win_h && mx >= ex && mx < ex + ew && my >= ey && my < ey + eh {
             return Some("=");
         }
     }
     // History rows (right panel).
     {
-        let hx = win_x + win_w - HIST_W + 4;
+        let hx = (win_x + win_w).saturating_sub(HIST_W) + 4;
         let hy0 = win_y + TITLEBAR_H + 44;
         if mx >= hx && my >= hy0 && my < hy0 + HIST_MAX * 30 {
             const H: [&str; 8] = ["H0", "H1", "H2", "H3", "H4", "H5", "H6", "H7"];
@@ -81,6 +98,9 @@ pub fn button_at(win_x: usize, win_y: usize, win_w: usize, win_h: usize, mx: usi
     }
     let (bx, by, bw, bh) = (win_x, win_y + TITLEBAR_H, win_w, win_h.saturating_sub(TITLEBAR_H));
     let (ax, ay, aw, ah) = button_area(bx, by, bw, bh);
+    if !keypad_fits(aw, ah) {
+        return None; // not drawn at this size
+    }
     for i in 0..BUTTONS.len() {
         let (rx, ry, rw, rh) = button_rect(i, ax, ay, aw, ah);
         if mx >= rx && mx < rx + rw && my >= ry && my < ry + rh {
@@ -103,23 +123,27 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
     // ── Display (shows the REAL input + the REAL result) ──
     let pad = 16usize;
     let disp_h = 92usize;
-    fb.fill_rounded_rect(x + pad, y + pad, w - pad * 2 - HIST_W, disp_h - 8, crate::eds::RADIUS_M, Color::rgb(0x20, 0x2A, 0x36));
+    fb.fill_rounded_rect(x + pad, y + pad, w.saturating_sub(pad * 2 + HIST_W), disp_h - 8, crate::eds::RADIUS_M, Color::rgb(0x20, 0x2A, 0x36));
     let empty = alloc::string::String::new();
     let expr = content.first().unwrap_or(&empty);
     let result = content.get(1).unwrap_or(&empty);
     // Expression (small, light gray, right-aligned).
     let ew = text::width_px(expr, 16.0);
-    let exr = (x + w - pad - 14 - HIST_W).saturating_sub(ew);
+    let exr = (x + w).saturating_sub(pad + 14 + HIST_W).saturating_sub(ew);
     text::draw_px(fb, exr.max(x + pad + 14), y + pad + 14, expr, Color::rgb(0x9A, 0xA6, 0xB4), 16.0);
     // Result (large, white, right-aligned).
     let disp_res = if result.is_empty() { "0" } else { result.as_str() };
     let rw = text::width_px(disp_res, 34.0);
-    let rxr = (x + w - pad - 14 - HIST_W).saturating_sub(rw);
+    let rxr = (x + w).saturating_sub(pad + 14 + HIST_W).saturating_sub(rw);
     text::draw_px(fb, rxr.max(x + pad + 14), y + pad + 40, disp_res, Color::WHITE, 34.0);
 
     // ── Buttons (6×6: scientific + memory + classic) ──
     let (ax, ay, aw, ah) = button_area(x, y, w, h);
+    let keys = keypad_fits(aw, ah);
     for (i, (label, tok)) in BUTTONS.iter().enumerate() {
+        if !keys {
+            break;
+        }
         let (rx, ry, rw_, rh) = button_rect(i, ax, ay, aw, ah);
         let (bg, fg, size) = match *tok {
             "+" | "-" | "*" | "/" | "(" | ")" | "^" | "%" => (Color::ACCENT_SOFT, Color::ACCENT, 17.0),
@@ -129,6 +153,11 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
             t if t.ends_with('(') || t == "pi" || t == "e" => (Color::SURFACE_3, Color::TEXT_SEC, 14.0),
             _ => (Color::CARD, Color::INK, 17.0),
         };
+        // BUG-071: the UI font has no glyph for the erase-to-the-left sign of the
+        // backspace key (it showed as an empty box); "<x" then.
+        let label: &str = if text::can_render(label) { *label } else { "<x" };
+        // A low key gets a smaller label, so it stays inside the key.
+        let size: f32 = if rh < 24 && size > 12.5 { 12.5 } else { size };
         fb.fill_rounded_rect(rx, ry, rw_, rh, crate::eds::RADIUS_M, bg);
         if matches!(*tok, "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | ".") {
             fb.draw_border(rx, ry, rw_, rh, 1, Color::BORDER);
@@ -138,12 +167,14 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
     }
     // The wide '=' bar.
     let (ex, ey, ew, eh) = equals_rect(x, y, w, h);
-    fb.fill_rounded_rect(ex, ey, ew, eh, crate::eds::RADIUS_M, Color::ACCENT);
-    let eqw = text::width_px("=", 20.0);
-    text::draw_px(fb, ex + (ew - eqw) / 2, ey + 7, "=", Color::WHITE, 20.0);
+    if ew >= MIN_KEY_W && ey + eh <= y + h {
+        fb.fill_rounded_rect(ex, ey, ew, eh, crate::eds::RADIUS_M, Color::ACCENT);
+        let eqw = text::width_px("=", 20.0);
+        text::draw_px(fb, ex + ew.saturating_sub(eqw) / 2, ey + 7, "=", Color::WHITE, 20.0);
+    }
 
     // ── Memory chip + history panel (right) ──
-    let hx = x + w - HIST_W + 4;
+    let hx = (x + w).saturating_sub(HIST_W) + 4;
     fb.fill_rect(hx - 8, y, 1, h, Color::BORDER);
     let mem = content.get(2).map(|s| s.as_str()).unwrap_or("");
     let mem_lbl = if mem.is_empty() { alloc::string::String::from("M: empty") } else { alloc::format!("M: {mem}") };
@@ -153,6 +184,9 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
     for i in 0..HIST_MAX {
         let Some(line) = content.get(3 + i) else { break };
         let ry = hy0 + i * 30;
+        if ry + 26 > y + h {
+            break; // a low window shows the rows that fit
+        }
         fb.fill_rounded_rect(hx, ry, HIST_W - 16, 26, 6, Color::CARD);
         // Clip long lines from the left so the RESULT stays visible.
         let mut shown = line.clone();

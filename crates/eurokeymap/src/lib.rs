@@ -3,10 +3,14 @@
 //! DE-QWERTZ. The active layout is chosen at install time (3F-4) and by the
 //! `keymap` shell command; the kernel PS/2 driver calls [`translate`].
 //!
-//! Honest scope: the **alphanumeric block** (letters, the digit row, the common
-//! punctuation keys, space/enter/tab/backspace) is mapped per layout, including
-//! the AZERTY digit-row shift inversion. Full dead-key composition and the
-//! complete AltGr symbol planes are simplified — documented as remaining.
+//! Scope: the **alphanumeric block** (letters, the digit row, the punctuation
+//! keys including the ISO key left of Z/W/Y, space/enter/tab/backspace) is
+//! mapped per layout, with the AZERTY digit-row shift inversion, and the
+//! **AltGr level** of each layout ([`translate_ex`]): `@ # { } [ ] \ | ~ €` and
+//! the other symbols printed on the key caps. There is no dead-key
+//! composition: a dead key (circumflex, diaeresis, acute, grave, tilde)
+//! produces its own character at once. Shift+AltGr (the fourth level) is not
+//! mapped.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -295,11 +299,128 @@ fn azerty_shift_digit(sc: u8) -> Option<char> {
     Some(d)
 }
 
+/// Keys whose two levels are specific to one national layout: (unshifted,
+/// shifted). Looked up before the shared tables; the US layout has none.
+fn national(layout: Layout, sc: u8) -> Option<(char, char)> {
+    use Layout::*;
+    let p = match (layout, sc) {
+        // The ISO key between left Shift and the first letter of the bottom row.
+        (UsQwerty, 0x56) => ('\\', '|'),
+        (_, 0x56) => ('<', '>'),
+        (UsQwerty, _) => return None,
+
+        // Belgian AZERTY (period variant).
+        (BeAzerty, 0x29) => ('²', '³'),
+        (BeAzerty, 0x1A) => ('^', '¨'),
+        (BeAzerty, 0x1B) => ('$', '*'),
+        (BeAzerty, 0x28) => ('ù', '%'),
+        (BeAzerty, 0x2B) => ('µ', '£'),
+
+        // French AZERTY.
+        (FrAzerty, 0x29) => ('²', '²'),
+        (FrAzerty, 0x09) => ('_', '8'),
+        (FrAzerty, 0x1A) => ('^', '¨'),
+        (FrAzerty, 0x1B) => ('$', '£'),
+        (FrAzerty, 0x28) => ('ù', '%'),
+        (FrAzerty, 0x2B) => ('*', 'µ'),
+
+        // German QWERTZ.
+        (DeQwertz, 0x29) => ('^', '°'),
+        (DeQwertz, 0x02) => ('1', '!'),
+        (DeQwertz, 0x03) => ('2', '"'),
+        (DeQwertz, 0x04) => ('3', '§'),
+        (DeQwertz, 0x05) => ('4', '$'),
+        (DeQwertz, 0x06) => ('5', '%'),
+        (DeQwertz, 0x07) => ('6', '&'),
+        (DeQwertz, 0x08) => ('7', '/'),
+        (DeQwertz, 0x09) => ('8', '('),
+        (DeQwertz, 0x0A) => ('9', ')'),
+        (DeQwertz, 0x0B) => ('0', '='),
+        (DeQwertz, 0x0C) => ('ß', '?'),
+        (DeQwertz, 0x0D) => ('´', '`'),
+        (DeQwertz, 0x1A) => ('ü', 'Ü'),
+        (DeQwertz, 0x1B) => ('+', '*'),
+        (DeQwertz, 0x27) => ('ö', 'Ö'),
+        (DeQwertz, 0x28) => ('ä', 'Ä'),
+        (DeQwertz, 0x2B) => ('#', '\''),
+        (DeQwertz, 0x33) => (',', ';'),
+        (DeQwertz, 0x34) => ('.', ':'),
+        (DeQwertz, 0x35) => ('-', '_'),
+        _ => return None,
+    };
+    Some(p)
+}
+
+/// The AltGr (third) level of a key: the character printed bottom-right on the
+/// key cap. `None` when the key has none; the US layout has no AltGr level.
+pub fn level3(layout: Layout, sc: u8) -> Option<char> {
+    use Layout::*;
+    let c = match (layout, sc) {
+        (UsQwerty, _) => return None,
+        // The euro sign is on E in all three.
+        (_, 0x12) => '€',
+
+        (BeAzerty, 0x02) => '|',
+        (BeAzerty, 0x03) => '@',
+        (BeAzerty, 0x04) => '#',
+        (BeAzerty, 0x07) => '^',
+        (BeAzerty, 0x0A) => '{',
+        (BeAzerty, 0x0B) => '}',
+        (BeAzerty, 0x1A) => '[',
+        (BeAzerty, 0x1B) => ']',
+        (BeAzerty, 0x28) => '´',
+        (BeAzerty, 0x2B) => '`',
+        (BeAzerty, 0x35) => '~',
+        (BeAzerty, 0x56) => '\\',
+
+        (FrAzerty, 0x03) => '~',
+        (FrAzerty, 0x04) => '#',
+        (FrAzerty, 0x05) => '{',
+        (FrAzerty, 0x06) => '[',
+        (FrAzerty, 0x07) => '|',
+        (FrAzerty, 0x08) => '`',
+        (FrAzerty, 0x09) => '\\',
+        (FrAzerty, 0x0A) => '^',
+        (FrAzerty, 0x0B) => '@',
+        (FrAzerty, 0x0C) => ']',
+        (FrAzerty, 0x0D) => '}',
+        (FrAzerty, 0x1B) => '¤',
+
+        (DeQwertz, 0x03) => '²',
+        (DeQwertz, 0x04) => '³',
+        (DeQwertz, 0x08) => '{',
+        (DeQwertz, 0x09) => '[',
+        (DeQwertz, 0x0A) => ']',
+        (DeQwertz, 0x0B) => '}',
+        (DeQwertz, 0x0C) => '\\',
+        (DeQwertz, 0x10) => '@',
+        (DeQwertz, 0x1B) => '~',
+        (DeQwertz, 0x32) => 'µ',
+        (DeQwertz, 0x56) => '|',
+        _ => return None,
+    };
+    Some(c)
+}
+
+/// [`translate`] with the AltGr level: while AltGr is held a key gives its
+/// third-level character or nothing at all (never the base character), and
+/// Shift is not looked at. Control keys (Esc, Tab, Enter, Backspace, Space)
+/// are the same with or without AltGr.
+pub fn translate_ex(layout: Layout, sc: u8, shift: bool, altgr: bool) -> Option<char> {
+    if altgr {
+        return control_key(sc).or_else(|| level3(layout, sc));
+    }
+    translate(layout, sc, shift)
+}
+
 /// Translate a make-code scancode to a character under `layout` + `shift`.
 /// Break codes (bit 7 set) and modifier/non-character keys return `None`.
 pub fn translate(layout: Layout, sc: u8, shift: bool) -> Option<char> {
     if let Some(c) = control_key(sc) {
         return Some(c);
+    }
+    if let Some((b, s)) = national(layout, sc) {
+        return Some(if shift { s } else { b });
     }
     let b = base(layout, sc)?;
     if shift {
@@ -380,6 +501,127 @@ mod tests {
         assert_eq!(translate(Layout::DeQwertz, 0x2C, false), Some('y'));
         assert_eq!(translate(Layout::DeQwertz, 0x2C, true), Some('Y'));
         assert_eq!(translate(Layout::DeQwertz, 0x10, false), Some('q'));
+    }
+
+    /// Every scancode of a layout that gives `want` with AltGr.
+    fn altgr_keys(l: Layout, want: char) -> Vec<u8> {
+        (0u8..0x80).filter(|&sc| translate_ex(l, sc, false, true) == Some(want)).collect()
+    }
+
+    #[test]
+    fn altgr_belgian_azerty() {
+        let l = Layout::BeAzerty;
+        // The key caps of a Belgian keyboard: & e-acute " section c-cedilla
+        // a-grave on the digit row, ^ $ right of P, = left of right Shift,
+        // < left of W, and E.
+        for (sc, c) in [(0x02, '|'), (0x03, '@'), (0x04, '#'), (0x07, '^'), (0x0A, '{'), (0x0B, '}'),
+                        (0x1A, '['), (0x1B, ']'), (0x56, '\\'), (0x35, '~'), (0x12, '€'), (0x2B, '`')] {
+            assert_eq!(translate_ex(l, sc, false, true), Some(c), "be AltGr+{sc:#x}");
+        }
+        // Each of the ten required characters is on exactly one key.
+        for c in ['@', '#', '{', '}', '[', ']', '\\', '|', '€', '~'] {
+            assert_eq!(altgr_keys(l, c).len(), 1, "be: {c}");
+        }
+    }
+
+    #[test]
+    fn altgr_french_azerty() {
+        let l = Layout::FrAzerty;
+        for (sc, c) in [(0x03, '~'), (0x04, '#'), (0x05, '{'), (0x06, '['), (0x07, '|'), (0x08, '`'),
+                        (0x09, '\\'), (0x0A, '^'), (0x0B, '@'), (0x0C, ']'), (0x0D, '}'), (0x12, '€')] {
+            assert_eq!(translate_ex(l, sc, false, true), Some(c), "fr AltGr+{sc:#x}");
+        }
+        for c in ['@', '#', '{', '}', '[', ']', '\\', '|', '€', '~'] {
+            assert_eq!(altgr_keys(l, c).len(), 1, "fr: {c}");
+        }
+    }
+
+    #[test]
+    fn altgr_german_qwertz() {
+        let l = Layout::DeQwertz;
+        for (sc, c) in [(0x10, '@'), (0x08, '{'), (0x09, '['), (0x0A, ']'), (0x0B, '}'), (0x0C, '\\'),
+                        (0x56, '|'), (0x1B, '~'), (0x12, '€'), (0x03, '²'), (0x04, '³'), (0x32, 'µ')] {
+            assert_eq!(translate_ex(l, sc, false, true), Some(c), "de AltGr+{sc:#x}");
+        }
+        for c in ['@', '{', '}', '[', ']', '\\', '|', '€', '~'] {
+            assert_eq!(altgr_keys(l, c).len(), 1, "de: {c}");
+        }
+        // '#' is a key of its own on QWERTZ (left of Enter), not an AltGr character.
+        assert_eq!(altgr_keys(l, '#'), Vec::<u8>::new());
+        assert_eq!(translate(l, 0x2B, false), Some('#'));
+        assert_eq!(translate(l, 0x2B, true), Some('\''));
+    }
+
+    #[test]
+    fn altgr_never_gives_the_base_character() {
+        for l in Layout::ALL {
+            for sc in 0u8..0x80 {
+                let plain = translate(l, sc, false);
+                let third = translate_ex(l, sc, false, true);
+                if control_key(sc).is_some() {
+                    assert_eq!(third, plain, "{l:?} control key {sc:#x}");
+                    continue;
+                }
+                // A key without a third level is silent under AltGr.
+                if let Some(c) = third {
+                    assert_ne!(Some(c), plain, "{l:?} {sc:#x}: AltGr repeats the base character");
+                    assert_eq!(level3(l, sc), Some(c));
+                }
+                // translate_ex without AltGr is translate.
+                assert_eq!(translate_ex(l, sc, false, false), plain);
+                assert_eq!(translate_ex(l, sc, true, false), translate(l, sc, true));
+            }
+        }
+        // The US layout has no AltGr level at all.
+        assert!((0u8..0x80).all(|sc| level3(Layout::UsQwerty, sc).is_none()));
+        assert_eq!(translate_ex(Layout::UsQwerty, 0x1E, false, true), None);
+    }
+
+    #[test]
+    fn iso_key_left_of_the_bottom_row() {
+        assert_eq!(translate(Layout::BeAzerty, 0x56, false), Some('<'));
+        assert_eq!(translate(Layout::BeAzerty, 0x56, true), Some('>'));
+        assert_eq!(translate(Layout::FrAzerty, 0x56, false), Some('<'));
+        assert_eq!(translate(Layout::DeQwertz, 0x56, true), Some('>'));
+        assert_eq!(translate(Layout::UsQwerty, 0x56, false), Some('\\'));
+        assert_eq!(translate(Layout::UsQwerty, 0x56, true), Some('|'));
+    }
+
+    #[test]
+    fn french_digit_row_and_right_hand_keys() {
+        let l = Layout::FrAzerty;
+        assert_eq!(translate(l, 0x07, false), Some('-'));
+        assert_eq!(translate(l, 0x09, false), Some('_'));
+        assert_eq!(translate(l, 0x09, true), Some('8'));
+        assert_eq!(translate(l, 0x1B, false), Some('$'));
+        assert_eq!(translate(l, 0x2B, false), Some('*'));
+        assert_eq!(translate(l, 0x28, true), Some('%'));
+        assert_eq!(translate(l, 0x35, false), Some('!'));
+    }
+
+    #[test]
+    fn belgian_right_hand_keys() {
+        let l = Layout::BeAzerty;
+        assert_eq!(translate(l, 0x09, false), Some('!'));
+        assert_eq!(translate(l, 0x09, true), Some('8'));
+        assert_eq!(translate(l, 0x1A, false), Some('^'));
+        assert_eq!(translate(l, 0x1B, false), Some('$'));
+        assert_eq!(translate(l, 0x1B, true), Some('*'));
+        assert_eq!(translate(l, 0x28, false), Some('ù'));
+        assert_eq!(translate(l, 0x28, true), Some('%'));
+        assert_eq!(translate(l, 0x2B, false), Some('µ'));
+    }
+
+    #[test]
+    fn german_punctuation() {
+        let l = Layout::DeQwertz;
+        for (sc, b, s) in [(0x02, '1', '!'), (0x03, '2', '"'), (0x04, '3', '§'), (0x05, '4', '$'), (0x07, '6', '&'),
+                           (0x08, '7', '/'), (0x09, '8', '('), (0x0A, '9', ')'), (0x0B, '0', '='), (0x0C, 'ß', '?'),
+                           (0x1A, 'ü', 'Ü'), (0x1B, '+', '*'), (0x27, 'ö', 'Ö'), (0x28, 'ä', 'Ä'),
+                           (0x33, ',', ';'), (0x34, '.', ':'), (0x35, '-', '_'), (0x29, '^', '°')] {
+            assert_eq!(translate(l, sc, false), Some(b), "de {sc:#x}");
+            assert_eq!(translate(l, sc, true), Some(s), "de shift+{sc:#x}");
+        }
     }
 
     #[test]

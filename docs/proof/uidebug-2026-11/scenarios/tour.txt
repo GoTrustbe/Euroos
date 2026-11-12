@@ -1,0 +1,23 @@
+shot tour-1
+key right
+nap 0.8
+shot tour-2
+key right
+nap 0.8
+shot tour-3
+key right
+nap 0.8
+shot tour-4
+key right
+nap 0.8
+shot tour-5
+key right
+nap 0.8
+shot tour-6
+key right
+nap 0.8
+shot tour-7-after-done
+scon help tour
+nap 1
+shot tour-8-help-tour
+key esc

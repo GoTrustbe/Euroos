@@ -123,7 +123,11 @@ else:
   log = vm.log()
   check("install media read from own ESP", "install media read from own ESP" in log)
   check("live boot did not write the blank disk (RAM root)", "booting a RAM root" in log or "live root" not in log)
-  time.sleep(3); vm.close_tour(); vm.shot("1-welcome.png")
+  time.sleep(3)
+  log = vm.log()
+  check("the first-run tour waits while the install wizard is open",
+        "[tour] waiting: the install wizard is open" in log and "[tour] first-run tour shown" not in log)
+  vm.close_tour(); vm.shot("1-welcome.png")
   vm.key("ret"); time.sleep(1.5)                 # Welcome -> Language
   vm.key("ret"); time.sleep(1.5)                 # Language (nl-BE) -> Keyboard
   vm.key("up"); vm.key("ret"); time.sleep(2)     # Keyboard: US QWERTY (what QMP sends) -> Disk

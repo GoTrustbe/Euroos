@@ -87,10 +87,28 @@ and stops.
    opened with the EU mark, `term` typed, Enter, and a command run in the
    terminal that opens; a right click on the bare desktop (context menu).
 
+5. Since 2026-11-12 (ten more steps, 66 on the release image): Esc closes the
+   context menu; the notification list opens on a click on the status panel,
+   closes with Esc and with a click beside it, and while it is open the desktop
+   repaints on change (the `repaints` shell command is read twice, 3 s apart:
+   at most one full repaint per ten loop iterations; BUG-057); AltGr gives
+   `@ # { } [ ] ~ € \ |` on be-azerty, fr-azerty and de-qwertz (the layout is
+   switched with `keymap` over the serial console, the characters are typed
+   into a Terminal command and read back from the `[e2e]` line) and AltGr+Tab
+   and AltGr+2 open no switcher and change no workspace, with the Terminal and
+   with EuroText in front (BUG-052); the mouse wheel scrolls EuroBeheer down and
+   back up, and the Terminal back, where a key returns to the prompt. The same
+   steps on the image without the fixes: 59/66
+   (`proof/uidebug-2026-11/gui-smoke-kvm-baseline-image.txt`).
+
 A step that fails because of a tracked, open bug is listed in `KNOWN_ISSUES`
 at the top of the script with its tracker number. It is reported as `known`
 and does not fail the run; when the bug is fixed the entry is removed, and the
 step counts again. Today the list is empty (BUG-044 was the first entry).
+
+The two Alt-Tab steps take screenshots until the switcher is on screen (up to 4 s,
+12 s under TCG): on a busy host one full repaint under TCG can take longer than a
+fixed pause.
 
 Under TCG the guest notices a button press some milliseconds late, so a window
 that is dragged ends up a few pixels short of the pointer's path. The drag
@@ -104,22 +122,25 @@ report): dock tiles, clicks, right and double clicks anywhere, clicks inside
 windows, window drags, drags between random points, title-bar buttons, random
 text with and without Enter (now and then a line of a few hundred characters),
 navigation and function keys, Alt-Tab, workspace switches, the launcher with a
-random query, the status panel, Ctrl+Alt+Esc. About 70 actions a minute under
-KVM.
+random query, the status panel, Ctrl+Alt+Esc, and since 2026-11-12 the mouse
+wheel at a random place and AltGr chords (a seed therefore gives another
+sequence than before that date). About 70 actions a minute under KVM.
 
 - every action: crash scan of the serial console;
 - every 10 actions: the liveness check above;
 - every 50 actions: the pointer is moved and the picture must follow within
   5 s (15 s under TCG); two checkpoints in a row without that fail the run as a
-  frozen screen. (A single look 0.3 s after the move was too strict: with the
-  notification list open the desktop repaints everything in every iteration,
-  0.3 to 0.4 s per frame under KVM, BUG-057.) A screenshot is kept;
+  frozen screen. (A single look 0.3 s after the move was too strict as long as
+  the desktop repainted everything in every iteration with the notification
+  list open, 0.3 to 0.4 s per frame under KVM; BUG-057, fixed 2026-11-12.) A
+  screenshot is kept;
 - every 200 actions: back to workspace 1, the windows that can be found
   closed, the terminal raised through the launcher (`term`, Enter), Enter again
   (to send off whatever the monkey left on the prompt), a command typed and
   checked on serial. Before the click on the EU mark one click goes to the
-  strip beside the dock: a context menu the monkey left open takes the next
-  left click, and Esc does not close it. A failed check saves
+  strip beside the dock: a context menu or the notification list the monkey
+  left open takes the next left click (Esc closes both since BUG-057; the click
+  stays for older images). A failed check saves
   `monkey-check-N-failed.png`. A desktop that survives but no longer does work fails this
   step. The launcher is used because it raises and focuses the terminal
   wherever the monkey dragged it: at the bottom or right edge fewer than three
@@ -130,6 +151,16 @@ The same seed gives the same sequence of actions. Where the sequence looks at
 the screen (which window to click in), it depends on what the guest drew, so a
 replay follows the original as long as the guest behaves the same; the exact
 events that were sent are in `actions.log` either way.
+
+## Looking at the desktop: `probe.py`
+
+`docs/proof/uidebug-2026-11/probe.py` runs a list of input steps with the same
+`Guest` class and keeps named screenshots (`dock N`, `wclick DX DY`, `key
+alt_r+2`, `wheel 3`, `wshrink`, `scon COMMAND`, `shot NAME`, `expect TEXT`).
+`--bootopt display.mode=1280x720` writes the boot option into a private copy
+of the image, so the same scenario runs at 1920x1080 and at 1280x720; `--extra`
+adds a blank disk for the install wizard. `montage.py` next to it tiles crops
+of several screenshots into one picture.
 
 ## What it does not cover
 

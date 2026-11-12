@@ -181,8 +181,9 @@ Behaviour:
   scroll. In a field: Left, Right, Home, End, Backspace, Delete.
 - **Scrolling:** the framebuffer has no clip rectangle, so an item that does
   not fit completely is not drawn and scrolling moves by whole items. The
-  scrollbar pages on a click above or below the thumb. `form::scroll(…, delta)`
-  exists for a mouse wheel; the kernel does not deliver wheel events yet.
+  scrollbar pages on a click above or below the thumb. The mouse wheel calls
+  `form::scroll(…, delta)`, one item per notch (`settings_ui::scroll`, from the
+  desktop loop when the pointer is over the panel).
 - **Text size:** `euroui::set_text_scale(90..=130)` scales text and controls of
   every form.
 - `form::rect_of`, `form::hit` and `form::popup_option_center` give the
@@ -221,7 +222,7 @@ With nothing focused, Up / Down move between sections and Tab enters the form.
 | | Status, policy, recent activity | Live | read-only |
 | Apps | Block all network access | The selected app cannot connect | `euroguard.conf` |
 | | Revoke all | Withdraws the app's portal grants | portal state |
-| Storage | Usage, disks | Per mount and per disk | read-only |
+| Storage | Usage, disks | Per mount (sizes with one decimal below 100 of a unit); every disk a driver has brought up (virtio-blk, SATA, NVMe, MegaRAID logical drive, USB) with name, size, bus and model, the system disk marked (`rootblk::all_disks`) | read-only |
 | | Verify all files | Runs `scrub::run` now; result and log line shown | `/var/log/fsck.log` |
 | Updates | When an update is available | `auto`, `ask` or `manual` policy | `/etc/euroupdate.conf` |
 | | Check now | Starts the background check of `update.rs`; without update slots it only looks | |
@@ -236,7 +237,9 @@ Known limits, stated in the panel where they apply:
   programs still get UTC from `/etc/localtime`.
 - Self-test builds force the lab keyboard default (`be-azerty`) late in boot,
   after `/etc/keymap` was applied; release images do not.
-- No mouse-wheel scrolling: the pointer drivers deliver no wheel events.
+- A disk behind a controller without a kernel driver is not in the Storage
+  list, and neither is an NVMe disk handed to the user-space driver
+  (`storage.nvme=user`).
 - The userspace view of `/etc` (the copy `ring3` registers at boot) is not
   refreshed when the panel rewrites a file; a Linux-compatible program sees the
   new host name, keymap or locale after a restart.
@@ -254,5 +257,6 @@ Known limits, stated in the panel where they apply:
 | `[set-time]` | Zone and clock format change the clock string, are saved and re-read |
 | `[set-host]` | Host name typed into the field is written, protection flag kept |
 | `[set-guard]` | Blocked domain and per-app rules survive save, reset, load |
+| `[disks]` | The size formatting of the Storage page; every listed disk has a name, a size and a bus; the system disk is marked when the root is on a disk |
 
 Host tests: `cargo test -p europrefs`.

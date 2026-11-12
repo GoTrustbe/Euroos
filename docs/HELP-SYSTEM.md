@@ -18,8 +18,10 @@ Branch `feature/help` (2026-11). Proof: [`docs/proof/help-2026-11/`](proof/help-
 
 The panel has a page list on the left (three general pages, then the apps) and
 the text on the right. Keys: Esc closes, Up/Down and PgUp/PgDn scroll,
-Left/Right or Tab change page, Home/End jump. A click outside the panel closes
-it; a click on the text scrolls.
+Left/Right or Tab change page, Home/End jump. The mouse wheel scrolls the page
+(`help::wheel`). A click outside the panel closes it; a click on the text
+scrolls. While the panel is open the workspace pager is not drawn (on a
+720-line screen the panel reaches down to it).
 
 ## Files
 
@@ -82,6 +84,12 @@ must be changed together with `paint.rs`.
   image (`feature = "selftest"`), the boot option `ui.tour=off` is set
   (`EUROOS_BOOTOPTS="ui.tour=off"` at build time, or `euroos-boot.conf` on the
   ESP), or the user has `tour.done=true`.
+- It waits for the install wizard: a live medium with a blank disk opens
+  EuroInstall on the first desktop, and the tour is decided and shown when
+  that window is closed (`help::pump` tells `onboarding::pump` whether a
+  visible window is the wizard). Serial log: `[tour] waiting: the install
+  wizard is open; the tour starts when it is closed`. `help tour` shows the
+  tour at once, wizard or not.
 - `tour.done` is a key in the user's desktop preferences
   (`~/.config/euroos/desktop.conf`, see `SETTINGS.md`), set by "Do not show
   again" and by finishing the tour, through `prefs::open_user`. Without a
@@ -92,11 +100,14 @@ must be changed together with `paint.rs`.
   clicks on the card are consumed; any other key and any click outside the
   card close the tour and are left in place for the desktop. An unattended
   script that types or clicks loses nothing.
-- Cost at boot: one read of `desktop.conf` in the first loop iteration.
+- Cost at boot: one read of `desktop.conf` in the first loop iteration (in the
+  first iteration without the wizard, when that is open).
 - Serial log: `[tour] first-run tour shown ...`, `[tour] closed ...`,
   `[tour] do not show again: tour.done=true saved in <file>`.
 - Test harnesses: `gui-smoke.py`, `wizard-install-test.py` and `screenshot.py`
-  press Esc when the log says the tour is up (gui-smoke counts it as a step;
+  press Esc when the log says the tour is up, also when that is after the
+  wizard was closed (gui-smoke counts it as a step; `wizard-install-test.py`
+  checks that the tour waits;
   `EK_TOUR=keep` keeps the card in a `screenshot.py` picture); `boot-time.py`
   writes `ui.tour=off` into its private image copy unless `--tour keep`.
 
@@ -108,6 +119,13 @@ must be changed together with `paint.rs`.
   scancode 0x01), so every `'\u{1b}'` arm in the desktop (launcher, file
   dialog, prompts, calculator, address bar) was dead on a real keyboard. It is
   mapped now, with a host test.
+- AltGr (right Alt, `E0 38`) selects the third level of the Belgian, French
+  and German layouts (`eurokeymap::translate_ex`) in `poll_key` and
+  `poll_key_ex`, and is never Alt (BUG-052). The `0xE0` prefix is remembered
+  across polls. Dead keys do not combine; Shift+AltGr is not mapped.
+- Esc also closes a context menu and the notification list: the desktop loop
+  takes that Esc out of the key ring (`ps2::take_pending_esc`), so the window
+  that has the keyboard does not act on it as well.
 - Known gaps, also listed on the shortcut page: Alt+Tab and Alt+1..4 are not
   seen while a program that drains raw scancodes has the keyboard (a
   full-screen app, an X11 or Chromium window, an installed app in front;
@@ -119,5 +137,21 @@ must be changed together with `paint.rs`.
 
 The panel and the tour are static. While one is up, the loop is asked for a
 full repaint only after input and once after each 2 s status tick (the tick
-redraws the status panel and live window bodies in place). The housekeeping
-that runs in the tick branch keeps running.
+redraws the status panel and live window bodies in place).
+
+The other overlays follow the same rule since BUG-057 (`main.rs`, the block
+before the repaint decision): a context menu, the launcher, the file dialog,
+the symbol picker, the Alt-Tab switcher, the notification list and the toasts
+are repainted when what they show changes (their open flags,
+`notify::active_toasts`, `notify::generation`, the menu row under the pointer),
+after the input they handle, and once per 2 s tick. A key in the Terminal or
+the calculator, which normally redraws that one window in place, becomes a full
+repaint while something is drawn above the windows. The 2 s housekeeping
+(`reap_dead`, service and driver supervision, log flush, scrub, update check)
+runs on every tick, whatever is painted. The `repaints` shell command prints
+the number of full repaints and loop iterations since boot.
+
+Still one full repaint per event: every pointer move while a file is dragged
+out of EuroFiles (the ghost follows the pointer), every change of the
+highlighted row of a context menu, every pointer move while a window is
+dragged or resized or a stroke is painted in EuroPaint.

@@ -129,6 +129,24 @@ pub fn close() {
     *MENU.lock() = None;
 }
 
+/// The row the pointer highlights (an item with an action), if any. The desktop
+/// loop repaints an open menu when this changes, not in every iteration.
+pub fn hover_row(mx: usize, my: usize) -> Option<usize> {
+    let g = MENU.lock();
+    let m = g.as_ref()?;
+    if mx < m.x || mx >= m.x + m.w {
+        return None;
+    }
+    let mut cy = m.y + 5;
+    for (i, it) in m.items.iter().enumerate() {
+        if my >= cy && my < cy + ITEM_H {
+            return if it.action.is_some() { Some(i) } else { None };
+        }
+        cy += row_height(it);
+    }
+    None
+}
+
 /// Result of a click while a menu is open.
 pub enum Hit {
     /// The user chose an item; carry out this action.

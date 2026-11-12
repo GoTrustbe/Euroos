@@ -32,6 +32,8 @@ static LISTING: Mutex<Option<Listing>> = Mutex::new(None);
 use core::sync::atomic::{AtomicUsize, Ordering};
 /// Selected row index in the listing (usize::MAX = nothing selected).
 static SELECTED: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Index of the first listing entry shown: the list scrolls with the mouse wheel.
+static LIST_TOP: AtomicUsize = AtomicUsize::new(0);
 /// Clipboard: (absolute path, is_cut). Copy leaves it; Cut removes on paste.
 static CLIPBOARD: Mutex<Option<(String, bool)>> = Mutex::new(None);
 
@@ -81,8 +83,8 @@ pub fn history_click(win_x: usize, win_y: usize, mx: usize, my: usize, win_w: us
     let Some((path, rows)) = g.as_ref() else { return None };
     let pw = 420usize;
     let ph = 90 + rows.len().min(8) * 28;
-    let ox = win_x + (win_w - pw) / 2;
-    let oy = win_y + TITLEBAR_H + (win_h - TITLEBAR_H - ph) / 2;
+    let ox = win_x + win_w.saturating_sub(pw) / 2;
+    let oy = win_y + TITLEBAR_H + win_h.saturating_sub(TITLEBAR_H + ph) / 2;
     if mx >= ox && mx < ox + pw && my >= oy + 44 && my < oy + 44 + rows.len().min(8) * 28 {
         let i = (my - (oy + 44)) / 28;
         if let Some((n, _, _)) = rows.get(i).copied() {
@@ -97,6 +99,47 @@ pub fn history_click(win_x: usize, win_y: usize, mx: usize, my: usize, win_w: us
 
 /// The toolbar actions (label shown on the button).
 const ACTIONS: [&str; 9] = ["New Folder", "Rename", "Delete", "Copy", "Cut", "Paste", "Perms", "Protect", "History"];
+
+/// The toolbar buttons that fit in a list column `list_w` wide starting at
+/// `list_x`: (x, width) per action, `None` for one that does not fit. Each
+/// button is as wide as its label, so all nine fit the default window (the
+/// last three, Perms, Protect and History, used to fall outside it with a
+/// fixed 92 px pitch). Render, click and tooltip all use this one layout.
+fn tool_rects(list_x: usize, list_w: usize) -> [Option<(usize, usize)>; ACTIONS.len()] {
+    let mut out = [None; ACTIONS.len()];
+    let mut x = list_x + 8;
+    for (i, label) in ACTIONS.iter().enumerate() {
+        let w = text::width_px(label, 11.5) + 18;
+        if x + w + 4 > list_x + list_w {
+            break;
+        }
+        out[i] = Some((x, w));
+        x += w + 5;
+    }
+    out
+}
+
+/// The action whose button is under `mx`.
+fn tool_at(list_x: usize, list_w: usize, mx: usize) -> Option<usize> {
+    tool_rects(list_x, list_w).iter().position(|r| matches!(r, Some((x, w)) if mx >= *x && mx < *x + *w))
+}
+
+/// How many listing entries fit in a window `win_h` high (below the ".." row,
+/// above the status bar).
+fn rows_fit(win_h: usize) -> usize {
+    (win_h.saturating_sub(TITLEBAR_H + 90 + 26) / ROW_H).saturating_sub(1)
+}
+
+/// Mouse wheel over the window: scroll the list by `notches` (positive = down),
+/// three rows per notch. Returns true when the view moved.
+pub fn wheel(win_h: usize, notches: i32) -> bool {
+    let n = LISTING.lock().as_ref().map(|l| l.entries.len()).unwrap_or(0);
+    let max_top = n.saturating_sub(rows_fit(win_h).max(1));
+    let cur = LIST_TOP.load(Ordering::Relaxed).min(max_top);
+    let new = (cur as i64 + notches as i64 * 3).clamp(0, max_top as i64) as usize;
+    LIST_TOP.store(new, Ordering::Relaxed);
+    new != cur
+}
 
 /// A Unix-style permission string like "drwxr-xr-x" from a mode + kind.
 fn perm_string(mode: u16, is_dir: bool) -> String {
@@ -164,9 +207,8 @@ pub fn toolbar_click(win_x: usize, win_y: usize, mx: usize, my: usize, win_w: us
     if my < tb_y || my >= tb_y + 30 {
         return false;
     }
-    let i = mx.checked_sub(list_x + 8).map(|d| d / 92);
-    let Some(i) = i.filter(|&i| i < ACTIONS.len()) else { return false };
-    let _ = win_w;
+    // Only a button that is drawn takes the click (a narrow window draws fewer).
+    let Some(i) = tool_at(list_x, win_w.saturating_sub(PLACES_W + 1), mx) else { return false };
     match ACTIONS[i] {
         "New Folder" => {
             *PROMPT.lock() = Some(Prompt { mode: PromptMode::NewDir, buf: crate::editcore::Buffer::new(), orig: String::new() });
@@ -252,7 +294,7 @@ pub fn select_row(win_x: usize, win_y: usize, mx: usize, my: usize) -> bool {
     if my < list_y0 + ROW_H {
         return false; // the ".." row
     }
-    let idx = (my - list_y0) / ROW_H;
+    let idx = (my - list_y0) / ROW_H + LIST_TOP.load(Ordering::Relaxed);
     if idx >= 1 && idx - 1 < l.entries.len() {
         SELECTED.store(idx - 1, Ordering::Relaxed);
         return true;
@@ -279,7 +321,12 @@ pub fn load_dir(path: &str, items: Vec<(String, bool, u64, u64, u16, bool)>) {
         .collect();
     let mut l = Listing::new(&normalize(path), entries);
     l.sort(SortKey::Name, SortOrder::Asc); // directories first, then alphabetically
-    *LISTING.lock() = Some(l);
+    let mut g = LISTING.lock();
+    // Another folder starts at its top; a reload of the same one keeps its place.
+    if g.as_ref().map(|old| old.path != l.path).unwrap_or(true) {
+        LIST_TOP.store(0, Ordering::Relaxed);
+    }
+    *g = Some(l);
 }
 
 /// Click handling: return the path where the user wants to go (directory or
@@ -306,7 +353,7 @@ pub fn hit_test(win_x: usize, win_y: usize, mx: usize, my: usize) -> Option<Stri
         }
         let guard = LISTING.lock();
         if let Some(l) = guard.as_ref() {
-            let idx = row - 1;
+            let idx = row - 1 + LIST_TOP.load(Ordering::Relaxed);
             if let Some(e) = l.entries.get(idx) {
                 if e.kind == FileKind::Dir {
                     return Some(join(&cur, &e.name));
@@ -333,7 +380,7 @@ pub fn hit_test_file(win_x: usize, win_y: usize, mx: usize, my: usize) -> Option
     let cur = current_path();
     let guard = LISTING.lock();
     let l = guard.as_ref()?;
-    let e = l.entries.get(row - 1)?;
+    let e = l.entries.get(row - 1 + LIST_TOP.load(Ordering::Relaxed))?;
     if e.kind == FileKind::File {
         Some(join(&cur, &e.name))
     } else {
@@ -368,7 +415,7 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
 
     // ── Path bar ─────────────────────────────────────────────────────────────
     let list_x = bx + PLACES_W + 1;
-    let list_w = bw - PLACES_W - 1;
+    let list_w = bw.saturating_sub(PLACES_W + 1);
     fb.fill_rect(list_x, by, list_w, 40, Color::SURFACE);
     fb.fill_rect(list_x, by + 39, list_w, 1, Color::BORDER);
     let shown_path = if cur.is_empty() { "/" } else { &cur };
@@ -381,9 +428,9 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     fb.fill_rect(list_x, tb_y + 29, list_w, 1, Color::BORDER);
     let has_sel = SELECTED.load(Ordering::Relaxed) != usize::MAX;
     let has_clip = CLIPBOARD.lock().is_some();
+    let tools = tool_rects(list_x, list_w);
     for (i, label) in ACTIONS.iter().enumerate() {
-        let bxp = list_x + 8 + i * 92;
-        if bxp + 88 > list_x + list_w { break; }
+        let Some((bxp, bwid)) = tools[i] else { break };
         // Grey out actions that need a selection / clipboard.
         let enabled = match *label {
             "Rename" | "Delete" | "Copy" | "Cut" | "Perms" | "Protect" | "History" => has_sel,
@@ -392,25 +439,32 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         };
         let bg = if enabled { Color::rgb(0xEA, 0xEE, 0xF4) } else { Color::rgb(0xF2, 0xF4, 0xF7) };
         let fgc = if enabled { accent } else { Color::TEXT_DIM };
-        fb.fill_rounded_rect(bxp, tb_y + 4, 88, 22, 6, bg);
-        text::draw_px(fb, bxp + 10, tb_y + 8, label, fgc, 11.5);
+        fb.fill_rounded_rect(bxp, tb_y + 4, bwid, 22, 6, bg);
+        text::draw_px(fb, bxp + 9, tb_y + 8, label, fgc, 11.5);
     }
 
     // Column headers (Name / Modified / Size).
     let hdr_y = by + 70;
     fb.fill_rect(list_x, hdr_y, list_w, 20, Color::rgb(0xF6, 0xF7, 0xFA));
+    // A narrow window drops the Modified column instead of writing it over the names.
+    let show_date = list_w >= 430;
     text::draw_px(fb, list_x + 44, hdr_y + 3, "Name", Color::TEXT_SEC, 11.0);
-    text::draw_px(fb, list_x + list_w - 230, hdr_y + 3, "Modified", Color::TEXT_SEC, 11.0);
-    text::draw_px(fb, list_x + list_w - 60, hdr_y + 3, "Size", Color::TEXT_SEC, 11.0);
+    if show_date {
+        text::draw_px(fb, list_x + list_w - 230, hdr_y + 3, "Modified", Color::TEXT_SEC, 11.0);
+    }
+    text::draw_px(fb, (list_x + list_w).saturating_sub(60), hdr_y + 3, "Size", Color::TEXT_SEC, 11.0);
     fb.fill_rect(list_x, hdr_y + 20, list_w, 1, Color::BORDER);
 
     // ── File list ────────────────────────────────────────────────────────────
     let guard = LISTING.lock();
     let list_y0 = by + 90;
-    let ymax = by + bh - 26;
+    let ymax = (by + bh).saturating_sub(26);
     // ".." row to go up.
     text::draw_px(fb, list_x + 44, list_y0 + 8, "..", Color::TEXT_SEC, 13.0);
-    icons::draw(fb, "folder", list_x + 18, list_y0 + 6, 16, Color::TEXT_DIM);
+    // BUG-070: the "folder" glyph is an SVG path with arcs, which the icon
+    // rasteriser does not draw (it came out as a slanted hook); "files" is the
+    // folder shape made of straight segments that the Places column uses.
+    icons::draw(fb, "files", list_x + 18, list_y0 + 6, 16, Color::TEXT_DIM);
 
     let (mut ndirs, mut nfiles, mut total) = (0usize, 0usize, 0u64);
     if let Some(l) = guard.as_ref() {
@@ -418,8 +472,20 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
         ndirs = d;
         nfiles = f;
         total = l.total_size();
-        for (i, e) in l.entries.iter().enumerate() {
-            let ry = list_y0 + (i + 1) * ROW_H;
+        // The wheel scrolls the entries under the fixed ".." row.
+        let fit = rows_fit(h).max(1);
+        let top = LIST_TOP.load(Ordering::Relaxed).min(l.entries.len().saturating_sub(fit));
+        LIST_TOP.store(top, Ordering::Relaxed);
+        if l.entries.len() > fit {
+            // Scroll position: a thin thumb at the right edge of the list.
+            let track_y = list_y0 + ROW_H;
+            let track_h = ymax.saturating_sub(track_y);
+            let thumb_h = (track_h * fit / l.entries.len()).max(16).min(track_h);
+            let thumb_y = track_y + (track_h - thumb_h) * top / (l.entries.len() - fit);
+            fb.fill_rect((list_x + list_w).saturating_sub(4), thumb_y, 3, thumb_h, Color::BORDER);
+        }
+        for (i, e) in l.entries.iter().enumerate().skip(top) {
+            let ry = list_y0 + (i - top + 1) * ROW_H;
             if ry + ROW_H > ymax {
                 break;
             }
@@ -427,12 +493,14 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
             if SELECTED.load(Ordering::Relaxed) == i {
                 fb.fill_rounded_rect(list_x + 6, ry + 1, list_w - 12, ROW_H - 4, 6, Color::ACCENT_SOFT);
             }
-            let (glyph, gcol) = if is_dir { ("folder", accent) } else { ("doc", Color::TEXT_SEC) };
+            let (glyph, gcol) = if is_dir { ("files", accent) } else { ("doc", Color::TEXT_SEC) };
             icons::draw(fb, glyph, list_x + 18, ry + 6, 16, gcol);
             text::draw_px(fb, list_x + 44, ry + 8, &e.name, Color::INK, 13.0);
             // Modified date (middle column) + size (right column).
-            let date = crate::rtc::short_datetime(e.modified);
-            text::draw_px(fb, list_x + list_w - 230, ry + 9, &date, Color::TEXT_DIM, 11.5);
+            if show_date {
+                let date = crate::rtc::short_datetime(e.modified);
+                text::draw_px(fb, list_x + list_w - 230, ry + 9, &date, Color::TEXT_DIM, 11.5);
+            }
             let mut rx = list_x + list_w;
             if !is_dir {
                 let sz = human_size(e.size);
@@ -466,7 +534,7 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     drop(guard); // release the list lock before any further LISTING access
 
     // ── Status bar ───────────────────────────────────────────────────────────
-    let sy = by + bh - 26;
+    let sy = (by + bh).saturating_sub(26);
     fb.fill_rect(bx, sy, bw, 26, accent);
     text::draw_px(fb, bx + 14, sy + 6, "EuroFiles  ·  live EuroFS", Color::WHITE, 11.5);
     // Properties strip for the selected entry, just above the status bar (single lock).
@@ -477,7 +545,7 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
             if let Some(e) = l.entries.get(i) {
                 let is_dir = e.kind == FileKind::Dir;
                 let path = join(&l.path, &e.name);
-                let py = by + bh - 26 - 22;
+                let py = (by + bh).saturating_sub(26 + 22);
                 fb.fill_rect(list_x, py, list_w, 22, Color::rgb(0xF0, 0xF2, 0xF6));
                 let perms = perm_string(e.mode, is_dir);
                 let info = if is_dir {
@@ -494,14 +562,17 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
 
     let right = alloc::format!("{} directories \u{00B7} {} files \u{00B7} {}", ndirs, nfiles, human_size(total));
     let rw = text::width_px(&right, 11.5);
-    text::draw_px(fb, bx + bw - rw - 14, sy + 6, &right, Color::WHITE, 11.5);
+    // The counts go where there is room next to the label on the left.
+    if bw >= rw + 14 + 190 {
+        text::draw_px(fb, bx + bw - rw - 14, sy + 6, &right, Color::WHITE, 11.5);
+    }
 
     // ── History panel: stored versions of the selected file ─────────────────
     if let Some((path, rows)) = HISTORY.lock().as_ref() {
         let pw = 420usize;
         let ph = 90 + rows.len().min(8) * 28;
-        let ox = bx + (bw - pw) / 2;
-        let oy = by + (bh - ph) / 2;
+        let ox = bx + bw.saturating_sub(pw) / 2;
+        let oy = by + bh.saturating_sub(ph) / 2;
         fb.fill_rounded_rect(ox - 2, oy - 2, pw + 4, ph + 4, 12, Color::rgb(0, 0, 0));
         fb.fill_rounded_rect(ox, oy, pw, ph, 10, Color::SURFACE);
         let name = path.rsplit('/').next().unwrap_or(path);
@@ -523,8 +594,8 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     if let Some(p) = PROMPT.lock().as_ref() {
         let pw = 360usize;
         let ph = 96usize;
-        let ox = bx + (bw - pw) / 2;
-        let oy = by + (bh - ph) / 2;
+        let ox = bx + bw.saturating_sub(pw) / 2;
+        let oy = by + bh.saturating_sub(ph) / 2;
         fb.fill_rounded_rect(ox - 2, oy - 2, pw + 4, ph + 4, 12, Color::rgb(0, 0, 0));
         fb.fill_rounded_rect(ox, oy, pw, ph, 10, Color::SURFACE);
         let title = match p.mode {
@@ -598,10 +669,7 @@ pub fn tip_at(win_x: usize, win_y: usize, win_w: usize, mx: usize, my: usize) ->
     let by = win_y + TITLEBAR_H;
     let tb_y = by + 40;
     if my >= tb_y && my < tb_y + 30 {
-        let i = mx.checked_sub(list_x + 8)? / 92;
-        if list_x + 8 + i * 92 + 88 > list_x + list_w {
-            return None; // not drawn in a narrow window
-        }
+        let i = tool_at(list_x, list_w, mx)?; // only a button that is drawn
         return Some(match *ACTIONS.get(i)? {
             "New Folder" => "Create a folder here",
             "Rename" => "Rename the selected item",
@@ -620,7 +688,7 @@ pub fn tip_at(win_x: usize, win_y: usize, win_w: usize, mx: usize, my: usize) ->
     if mx < list_x || my < list_y0 + ROW_H {
         return None;
     }
-    let i = (my - list_y0) / ROW_H - 1;
+    let i = (my - list_y0) / ROW_H - 1 + LIST_TOP.load(Ordering::Relaxed);
     let guard = LISTING.lock();
     let e = guard.as_ref()?.entries.get(i)?;
     if !e.badges.contains(&Badge::Immutable) {
@@ -641,10 +709,17 @@ pub fn tip_at(win_x: usize, win_y: usize, win_w: usize, mx: usize, my: usize) ->
 
 /// Part of the `[help]` boot self-test: the toolbar tips line up with ACTIONS.
 pub fn tip_selftest() -> bool {
-    let at = |i: usize| tip_at(0, 0, 1200, PLACES_W + 1 + 8 + i * 92 + 10, TITLEBAR_H + 40 + 10);
+    // All nine buttons are drawn at the default window width (720) and have a tip.
+    let rects = tool_rects(PLACES_W + 1, 720 - PLACES_W - 1);
+    let at = |i: usize| rects.get(i).copied().flatten().and_then(|(x, _)| tip_at(0, 0, 720, x + 5, TITLEBAR_H + 40 + 10));
+    let past_last = rects[ACTIONS.len() - 1].map(|(x, w)| x + w + 3).unwrap_or(0);
+    // The smallest window draws fewer buttons, and the missing ones take no click.
+    let narrow = tool_rects(PLACES_W + 1, 320 - PLACES_W - 1);
     (0..ACTIONS.len()).all(|i| at(i).is_some())
         && at(7).map(|t| t.contains("immutable")).unwrap_or(false)
         && at(8).map(|t| t.contains("versions")).unwrap_or(false)
-        && at(ACTIONS.len()).is_none()
+        && tip_at(0, 0, 720, past_last, TITLEBAR_H + 40 + 10).is_none()
+        && narrow[ACTIONS.len() - 1].is_none()
+        && tool_at(PLACES_W + 1, 320 - PLACES_W - 1, 319).is_none()
         && tip_at(0, 0, 1200, PLACES_W + 20, TITLEBAR_H + 10).is_none()
 }

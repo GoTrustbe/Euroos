@@ -1224,13 +1224,21 @@ fn inject_keyboard(hid: &mut HidDevice, report: &[u8]) {
     // Left Alt as 0x38/0xB8, before the keys of the same report: the keyboard
     // layer's Alt latch decides Alt+Tab (app switcher) and Alt+1..4 (workspaces).
     // Only Shift and Ctrl were forwarded, so neither shortcut did anything on a
-    // USB keyboard (BUG-043). Right Alt is AltGr and stays out of it.
+    // USB keyboard (BUG-043). Right Alt is AltGr and is forwarded below.
     let alt_now = mods & 0x04 != 0;
     let alt_prev = hid.prev_mods & 0x04 != 0;
     if alt_now && !alt_prev {
         crate::ps2::push_scancode(0x38);
     } else if !alt_now && alt_prev {
         crate::ps2::push_scancode(0xB8);
+    }
+    // Right Alt (bit 6) is AltGr: forwarded as the extended pair `E0 38` /
+    // `E0 B8`, which the keyboard layer keeps apart from Alt (BUG-052).
+    let altgr_now = mods & 0x40 != 0;
+    let altgr_prev = hid.prev_mods & 0x40 != 0;
+    if altgr_now != altgr_prev {
+        crate::ps2::push_scancode(0xE0);
+        crate::ps2::push_scancode(if altgr_now { 0x38 } else { 0xB8 });
     }
     hid.prev_mods = mods;
     // Track Ctrl so editors can see Ctrl+key combos (copy/paste/save/select-all).
@@ -1276,6 +1284,8 @@ fn hid_extended(usage: u8) -> Option<u8> {
 fn inject_mouse(report: &[u8]) {
     if let Some(m) = eurousb::parse_mouse(report) {
         crate::mouse::apply_usb(m.dx as i32, m.dy as i32, m.buttons);
+        // HID: positive = away from the user; the desktop counts scroll-down.
+        crate::mouse::add_wheel(-(m.wheel as i32));
     }
 }
 
@@ -1304,11 +1314,13 @@ fn inject_pointer(hid: &HidDevice, report: &[u8]) {
             } else {
                 crate::mouse::apply_usb(x, y, buttons);
             }
+            crate::mouse::add_wheel(-m.decode_wheel(report));
             return;
         }
     }
     if let Some(a) = eurousb::parse_tablet(report) {
         crate::mouse::apply_usb_abs(a.x, a.y, a.buttons);
+        crate::mouse::add_wheel(-eurousb::parse_tablet_wheel(report));
     }
 }
 
@@ -1331,6 +1343,8 @@ fn hid_to_set1(usage: u8) -> Option<u8> {
         0x2D => 0x0C, 0x2E => 0x0D, // - =
         0x2F => 0x1A, 0x30 => 0x1B, // [ ]
         0x31 => 0x2B, // backslash
+        0x32 => 0x2B, // the ISO key left of Enter (same set-1 code as backslash)
+        0x64 => 0x56, // the ISO key left of Z (< > on AZERTY and QWERTZ)
         0x33 => 0x27, 0x34 => 0x28, 0x35 => 0x29, // ; ' `
         0x36 => 0x33, 0x37 => 0x34, 0x38 => 0x35, // , . /
         0x3A => 0x3B, 0x3B => 0x3C, // F1 F2 (help, shortcut overview: ps2::take_help_key)

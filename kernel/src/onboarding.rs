@@ -3,6 +3,9 @@
 //!
 //! It must never be in the way:
 //! - it is off in the self-test image and with the boot option `ui.tour=off`;
+//! - it waits while the install wizard is open (a live medium with a blank
+//!   disk opens EuroInstall on the first desktop) and starts when that window
+//!   is closed;
 //! - it does not hold the desktop: the loop keeps running underneath;
 //! - Esc, "Skip", a click outside the card or any typed key closes it. A click
 //!   outside and a typed key are NOT swallowed: they reach the desktop as if
@@ -30,6 +33,8 @@ enum Phase {
 }
 
 static PHASE: Mutex<Phase> = Mutex::new(Phase::Unknown);
+/// The "waiting for the install wizard" line was printed.
+static WAIT_LOGGED: AtomicBool = AtomicBool::new(false);
 /// A "do not show again" that still has to be written to the file system.
 static REMEMBER: AtomicBool = AtomicBool::new(false);
 
@@ -256,14 +261,23 @@ fn classify(codes: &[u8]) -> Keys {
     if consumed_any { Keys::Tour(acts) } else { Keys::Nothing }
 }
 
-/// One call per desktop-loop iteration (from `help::pump`). Returns true when
-/// the desktop must be repainted.
-pub fn pump(fs: &mut dyn eurofs::FileSystem, sw: usize, sh: usize) -> bool {
+/// One call per desktop-loop iteration (from `help::pump`). `wizard_open`: the
+/// install wizard's window is on screen. Returns true when the desktop must be
+/// repainted.
+pub fn pump(fs: &mut dyn eurofs::FileSystem, sw: usize, sh: usize, wizard_open: bool) -> bool {
     if REMEMBER.swap(false, Ordering::Relaxed) {
         remember(fs);
     }
     let mut p = PHASE.lock();
     if *p == Phase::Unknown {
+        // The tour is not laid over the install wizard: it is decided, and shown,
+        // once that window is closed. Nothing is read from the disk until then.
+        if wizard_open && !cfg!(feature = "selftest") && !crate::bootopt::tour_off() {
+            if !WAIT_LOGGED.swap(true, Ordering::Relaxed) {
+                crate::serial_println!("[tour] waiting: the install wizard is open; the tour starts when it is closed");
+            }
+            return false;
+        }
         let off = cfg!(feature = "selftest") || crate::bootopt::tour_off() || seen(fs);
         *p = if off { Phase::Off } else { Phase::Active(0) };
         if !off {

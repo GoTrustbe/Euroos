@@ -10,8 +10,20 @@ use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
 
 /// Pick the best GOP mode: prefer 1024x768, otherwise the largest ≤1920x1080.
 /// Best-effort — if no suitable mode is found, the current mode stays.
-pub fn set_best_mode(gop: &mut GraphicsOutput) {
+/// `wanted` (the boot option `display.mode`) takes precedence when the
+/// firmware offers exactly that resolution.
+pub fn set_best_mode(gop: &mut GraphicsOutput, wanted: Option<(usize, usize)>) {
     let modes: alloc::vec::Vec<_> = gop.modes().collect();
+    if let Some((ww, wh)) = wanted {
+        match modes.iter().find(|m| m.info().resolution() == (ww, wh)) {
+            Some(m) => {
+                let _ = gop.set_mode(m);
+                crate::serial_println!("[bootopt] display.mode={ww}x{wh} set");
+                return;
+            }
+            None => crate::serial_println!("[bootopt] display.mode={ww}x{wh} is not offered by the firmware: ignored"),
+        }
+    }
     let mut best: Option<usize> = None;
     let mut best_score: i64 = -1;
 
@@ -107,6 +119,18 @@ impl Color {
     pub const YELLOW: Self = Self::rgb(0xD9, 0x98, 0x2B); // --warn
     pub const RED: Self = Self::rgb(0xD6, 0x45, 0x3D); // --danger
 }
+
+// The clip rectangle (BUG-058): while a window body is drawn, every pixel
+// write to that framebuffer's backbuffer outside the window is dropped, so an
+// app whose layout arithmetic goes wrong at a small window size cannot paint
+// over the rest of the desktop. One rectangle, owned by the framebuffer whose
+// backbuffer address is in `CLIP_BUF` (0 = none); other framebuffers (an
+// off-screen canvas, the panic screen in direct mode) are never clipped.
+static CLIP_BUF: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static CLIP_X0: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static CLIP_Y0: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static CLIP_X1: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static CLIP_Y1: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// An owned view onto the UEFI framebuffer.
 ///
@@ -274,6 +298,43 @@ impl FrameBuffer {
         }
     }
 
+    /// Restrict drawing on this framebuffer to the rectangle (x, y, w, h), cut
+    /// to the screen, until [`clear_clip`](Self::clear_clip). Not nested: a
+    /// second call replaces the first. No effect in direct (panic) mode.
+    pub fn set_clip(&self, x: usize, y: usize, w: usize, h: usize) {
+        use core::sync::atomic::Ordering::Relaxed;
+        if self.buf.is_null() {
+            return;
+        }
+        let x0 = x.min(self.width);
+        let y0 = y.min(self.height);
+        CLIP_X0.store(x0, Relaxed);
+        CLIP_Y0.store(y0, Relaxed);
+        CLIP_X1.store(x.saturating_add(w).min(self.width).max(x0), Relaxed);
+        CLIP_Y1.store(y.saturating_add(h).min(self.height).max(y0), Relaxed);
+        CLIP_BUF.store(self.buf as usize, Relaxed);
+    }
+
+    /// Drawing covers the whole framebuffer again.
+    pub fn clear_clip(&self) {
+        use core::sync::atomic::Ordering::Relaxed;
+        if CLIP_BUF.load(Relaxed) == self.buf as usize {
+            CLIP_BUF.store(0, Relaxed);
+        }
+    }
+
+    /// The drawable rectangle as (x0, y0, x1, y1), end exclusive: the clip
+    /// rectangle while one is set on this framebuffer, else the whole of it.
+    #[inline]
+    fn bounds(&self) -> (usize, usize, usize, usize) {
+        use core::sync::atomic::Ordering::Relaxed;
+        if !self.buf.is_null() && CLIP_BUF.load(Relaxed) == self.buf as usize {
+            (CLIP_X0.load(Relaxed), CLIP_Y0.load(Relaxed), CLIP_X1.load(Relaxed).min(self.width), CLIP_Y1.load(Relaxed).min(self.height))
+        } else {
+            (0, 0, self.width, self.height)
+        }
+    }
+
     /// Blend `c` with opacity `a` over the existing pixel (anti-aliasing).
     #[inline]
     pub fn blend(&self, x: usize, y: usize, c: Color, a: u8) {
@@ -297,7 +358,8 @@ impl FrameBuffer {
 
     #[inline]
     pub fn put_pixel(&self, x: usize, y: usize, c: Color) {
-        if x >= self.width || y >= self.height {
+        let (x0, y0, x1, y1) = self.bounds();
+        if x < x0 || y < y0 || x >= x1 || y >= y1 {
             return;
         }
         if self.buf.is_null() {
@@ -332,8 +394,13 @@ impl FrameBuffer {
     }
 
     pub fn fill_rect(&self, x: usize, y: usize, w: usize, h: usize, c: Color) {
-        let x_end = (x + w).min(self.width);
-        let y_end = (y + h).min(self.height);
+        // Saturating: a caller whose width or height wrapped (a window smaller
+        // than its layout expects) gets a rectangle cut to the drawable area.
+        let (cx0, cy0, cx1, cy1) = self.bounds();
+        let x_end = x.saturating_add(w).min(cx1);
+        let y_end = y.saturating_add(h).min(cy1);
+        let x = x.max(cx0);
+        let y = y.max(cy0);
         if x_end <= x || y_end <= y {
             return;
         }
@@ -373,18 +440,23 @@ impl FrameBuffer {
             return;
         }
         let scale = scale.max(1);
+        let (cx0, cy0, cx1, cy1) = self.bounds();
         for sy in 0..sh {
             let src_row = &src[sy * sw..sy * sw + sw];
             for k in 0..scale {
                 let ty = dy + sy * scale + k;
-                if ty >= self.height {
+                if ty >= cy1 {
                     return;
                 }
-                let maxrun = self.width.saturating_sub(dx);
+                if ty < cy0 {
+                    continue;
+                }
+                let maxrun = cx1.saturating_sub(dx);
                 if maxrun == 0 {
                     continue;
                 }
-                // SAFETY: `ty < height`, and we clamp the run to `maxrun` below.
+                // SAFETY: `ty < height`, and we clamp the run to `maxrun` below
+                // (`dx + maxrun <= cx1 <= width`).
                 let dst = unsafe { core::slice::from_raw_parts_mut(self.buf.add(ty * self.width + dx), maxrun) };
                 let mut di = 0usize;
                 for &v in src_row {
@@ -392,7 +464,9 @@ impl FrameBuffer {
                         if di >= maxrun {
                             break;
                         }
-                        dst[di] = v;
+                        if dx + di >= cx0 {
+                            dst[di] = v;
+                        }
                         di += 1;
                     }
                 }
