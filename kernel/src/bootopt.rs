@@ -36,6 +36,10 @@
 //!   nothing is fetched, staged or installed unless `euroupdate check` is typed.
 //!   For test guests that have a route to the internet.
 //!
+//! - `chrome.input=cdp`: the desktop also copies clicks and typed text for a
+//!   hosted Chromium to the page over DevTools, as it did until 2026-11. The
+//!   default, `x11`, sends X events only.
+//!
 //! The file is not signed. It only chooses between two code paths that are
 //! both part of the signed kernel image; it cannot add code.
 
@@ -46,6 +50,7 @@ static NVME_USER: AtomicBool = AtomicBool::new(false);
 static SCHED_WATCH: AtomicBool = AtomicBool::new(false);
 static TOUR_OFF: AtomicBool = AtomicBool::new(false);
 static UPDATE_CHECK_OFF: AtomicBool = AtomicBool::new(false);
+static CHROME_INPUT_CDP: AtomicBool = AtomicBool::new(false);
 static FOUND: AtomicBool = AtomicBool::new(false);
 /// `display.mode`: width << 16 | height, 0 = not set.
 static DISPLAY_MODE: AtomicUsize = AtomicUsize::new(0);
@@ -83,6 +88,8 @@ fn apply(text: &str) {
                 // First-run tour (kernel/src/onboarding.rs): off for unattended images.
                 ("ui.tour", "off") => TOUR_OFF.store(true, Ordering::Relaxed),
                 ("ui.tour", "on") => TOUR_OFF.store(false, Ordering::Relaxed),
+                ("chrome.input", "cdp") => CHROME_INPUT_CDP.store(true, Ordering::Relaxed),
+                ("chrome.input", "x11") => CHROME_INPUT_CDP.store(false, Ordering::Relaxed),
                 ("update.check", "off") => UPDATE_CHECK_OFF.store(true, Ordering::Relaxed),
                 ("update.check", "on") => UPDATE_CHECK_OFF.store(false, Ordering::Relaxed),
                 ("display.mode", v) => match parse_mode(v) {
@@ -131,6 +138,11 @@ pub fn capture() {
 /// `ui.tour=off`: do not show the first-run tour.
 pub fn tour_off() -> bool {
     TOUR_OFF.load(Ordering::Relaxed)
+}
+
+/// `chrome.input=cdp`: input for a hosted Chromium is also copied over DevTools.
+pub fn chrome_input_cdp() -> bool {
+    CHROME_INPUT_CDP.load(Ordering::Relaxed)
 }
 
 /// `update.check=off`: the periodic update check does nothing.

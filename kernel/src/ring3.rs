@@ -1148,8 +1148,17 @@ pub fn cdp_window_to_view(wx: i32, wy: i32) -> (i32, i32) {
     (x, y)
 }
 
+/// Does the desktop ALSO send clicks and typed text to the page over DevTools
+/// (boot option `chrome.input=cdp`)? Off by default since BUG-090: the browser
+/// reads its X connection, so X events are the one input route, and a second
+/// copy over DevTools is a second click (on whatever page coordinate the copy
+/// was translated to) and every character twice.
+pub fn cdp_ferry() -> bool {
+    crate::bootopt::chrome_input_cdp()
+}
+
 pub fn cdp_input_mouse(kind: u8, x: i32, y: i32) {
-    if !CDP_DRIVE.load(Ordering::Relaxed) {
+    if !CDP_DRIVE.load(Ordering::Relaxed) || !cdp_ferry() {
         return;
     }
     let sid = CDP_SESSION.lock().clone();
@@ -1168,7 +1177,7 @@ pub fn cdp_input_mouse(kind: u8, x: i32, y: i32) {
 /// Press Enter on the page: a raw key event pair, which submits forms and
 /// follows focused links (an inserted carriage return does neither).
 pub fn cdp_input_enter() {
-    if !CDP_DRIVE.load(Ordering::Relaxed) {
+    if !CDP_DRIVE.load(Ordering::Relaxed) || !cdp_ferry() {
         return;
     }
     let sid = CDP_SESSION.lock().clone();
@@ -1182,7 +1191,7 @@ pub fn cdp_input_enter() {
 }
 
 pub fn cdp_input_text(text: &str) {
-    if !CDP_DRIVE.load(Ordering::Relaxed) {
+    if !CDP_DRIVE.load(Ordering::Relaxed) || !cdp_ferry() {
         return;
     }
     let sid = CDP_SESSION.lock().clone();

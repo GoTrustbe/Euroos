@@ -5261,6 +5261,12 @@ fn main() -> Status {
     // its Reset button to prove desktop->X input routing (the counter visibly resets).
     let mut gtk_dtick = 0u32;
     let mut last_hover = (usize::MAX, usize::MAX); // last pointer position forwarded to a hosted X app
+    // The hosted X window (Chromium): a button that went down in its body is held
+    // there until the physical button goes up, and it has the X focus while it is
+    // the active window.
+    let mut x_held = false;
+    let mut x_rheld = false;
+    let mut x_focus = false;
     // Desktop cost accounting while a hosted app runs: (tick, loops, x-repaints, full repaints)
     let mut hosted_last = (0u64, 0u64, 0u64, 0u64);
     let mut loop_iters = 0u64;
@@ -5385,6 +5391,17 @@ fn main() -> Status {
                         suite_ui::SuiteApp::Files => files::wheel(wh, wheel),
                         suite_ui::SuiteApp::Text => textedit::wheel(wheel),
                         suite_ui::SuiteApp::None => compositor::term_scroll(&windows[i], wheel),
+                        suite_ui::SuiteApp::XClient => {
+                            // A hosted X client scrolls itself: the notches go to it
+                            // as presses of buttons 4 and 5 at the pointer.
+                            let (bx, by, bw, bh) = compositor::window_body_rect(&windows[i]);
+                            if let Some((xw, xh)) = xserver::front_window_size() {
+                                let ox = (bx + bw.saturating_sub(xw) / 2) as i32;
+                                let oy = (by + bh.saturating_sub(xh) / 2) as i32;
+                                xserver::hosted_wheel(wheel, (px as i32 - ox) as i16, (py as i32 - oy) as i16);
+                            }
+                            false
+                        }
                         _ => false,
                     };
                     if moved {
@@ -5585,7 +5602,25 @@ fn main() -> Status {
                 need_full = true;
             }
         } else if let Some((rx, ry)) = mouse::take_right_press() {
-            if portal_buttons.is_none() && !launcher::is_open() && !filedialog::is_open() && !symbolpicker::is_open() {
+            // A right click in the body of the hosted X window belongs to that
+            // program (a browser's own context menu), not to the desktop's menu.
+            let mut to_x = false;
+            if ring3::persistent_running()
+                && order.iter().rev().copied().find(|&i| windows[i].visible && windows[i].contains(rx, ry)) == Some(gtk_idx)
+            {
+                let (bx, by, bw, bh) = compositor::window_body_rect(&windows[gtk_idx]);
+                if let Some((xw, xh)) = xserver::front_window_size() {
+                    let ox = bx + bw.saturating_sub(xw) / 2;
+                    let oy = by + bh.saturating_sub(xh) / 2;
+                    if rx >= ox && ry >= oy && rx < ox + xw && ry < oy + xh {
+                        xserver::hosted_press(3, (rx - ox) as i16, (ry - oy) as i16);
+                        x_rheld = true;
+                        to_x = true;
+                    }
+                }
+            }
+            if to_x {
+            } else if portal_buttons.is_none() && !launcher::is_open() && !filedialog::is_open() && !symbolpicker::is_open() {
                 build_context_menu(rx, ry, &windows, &order, &dock_targets, width, height);
                 need_full = true;
             }
@@ -5789,8 +5824,15 @@ fn main() -> Status {
                             let ox = bx + bw.saturating_sub(xw) / 2;
                             let oy = by + bh.saturating_sub(xh) / 2;
                             if px >= ox && py >= oy && px < ox + xw && py < oy + xh {
-                                xserver::deliver_focus(true); // clicking the window focuses it
-                                xserver::deliver_button((px - ox) as i16, (py - oy) as i16);
+                                // The press now, the release when the button goes
+                                // up (below, with the motion): a click, a double
+                                // click or a drag, whichever the user makes.
+                                if !x_focus {
+                                    x_focus = true;
+                                    xserver::deliver_focus(true); // clicking the window focuses it
+                                }
+                                xserver::hosted_press(1, (px - ox) as i16, (py - oy) as i16);
+                                x_held = true;
                             }
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::EuroSurface {
@@ -6095,7 +6137,15 @@ fn main() -> Status {
                 need_full = true;
             }
         }
-        while let Some(k) = if editor_focused || installer_focused || settings_keys /* T2-hook */ || files::prompt_open() { None } else { ps2::poll_key() } {
+        // The hosted X client (Chromium) takes RAW scancodes while its window has
+        // the keyboard: xserver::pump_keyboard, further down, turns them into X key
+        // events. The character loop below would empty the ring first (and drop
+        // every key, as no shell window is focused): Ctrl+L and typing never
+        // reached the browser.
+        let xclient_keys = focused.map(|i| windows[i].app == suite_ui::SuiteApp::XClient).unwrap_or(false)
+            && ring3::persistent_running()
+            && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open() && !files::prompt_open();
+        while let Some(k) = if editor_focused || installer_focused || settings_keys /* T2-hook */ || files::prompt_open() || xclient_keys { None } else { ps2::poll_key() } {
             // The symbol picker only needs Esc to dismiss.
             if symbolpicker::is_open() {
                 if k == '\u{1b}' { symbolpicker::close(); }
@@ -7275,23 +7325,41 @@ fn main() -> Status {
                 }
             }
         }
-        if windows[gtk_idx].visible && windows[gtk_idx].active {
-            xserver::pump_keyboard();
-            // Hover: forward pointer motion over the hosted window's body, so the app
-            // highlights what is under the cursor (a browser's tabs, buttons and links
-            // all react to hover long before anyone clicks). Only on a real move — a
-            // motion event per desktop frame would be a needless flood.
+        // The hosted X window: focus follows the active window, keys go to it while
+        // it is active, the pointer while it is over the body or a button is held.
+        let x_active = windows[gtk_idx].visible && windows[gtk_idx].active;
+        if x_active != x_focus {
+            x_focus = x_active;
+            xserver::deliver_focus(x_active);
+        }
+        if x_active || x_held || x_rheld {
+            if x_active {
+                xserver::pump_keyboard();
+            }
             let (mpx, mpy) = mouse::pos();
-            if (mpx, mpy) != last_hover {
-                last_hover = (mpx, mpy);
-                let (bx, by, bw, bh) = compositor::window_body_rect(&windows[gtk_idx]);
-                if let Some((xw, xh)) = xserver::front_window_size() {
-                    let ox = bx + bw.saturating_sub(xw) / 2;
-                    let oy = by + bh.saturating_sub(xh) / 2;
-                    if mpx >= ox && mpy >= oy && mpx < ox + xw && mpy < oy + xh {
-                        xserver::deliver_motion((mpx - ox) as i16, (mpy - oy) as i16);
-                    }
+            let (bx, by, bw, bh) = compositor::window_body_rect(&windows[gtk_idx]);
+            if let Some((xw, xh)) = xserver::front_window_size() {
+                let lx = mpx as i32 - (bx + bw.saturating_sub(xw) / 2) as i32;
+                let ly = mpy as i32 - (by + bh.saturating_sub(xh) / 2) as i32;
+                let inside = lx >= 0 && ly >= 0 && lx < xw as i32 && ly < xh as i32;
+                // Hover and drag: only on a real move (a motion event per desktop
+                // frame would be a flood), and outside the body only while a
+                // button that went down inside is still held.
+                if (mpx, mpy) != last_hover && (inside || x_held || x_rheld) {
+                    last_hover = (mpx, mpy);
+                    xserver::deliver_motion(lx as i16, ly as i16);
                 }
+                if x_held && !mouse::left_down() {
+                    x_held = false;
+                    xserver::hosted_release(1, lx as i16, ly as i16);
+                }
+                if x_rheld && mouse::buttons() & 0x2 == 0 {
+                    x_rheld = false;
+                    xserver::hosted_release(3, lx as i16, ly as i16);
+                }
+            } else {
+                x_held = false;
+                x_rheld = false;
             }
         }
 

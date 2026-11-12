@@ -212,8 +212,43 @@ fn input_target(c: &XConn, want: u32) -> Option<(u32, i16, i16)> {
 /// for shift-click, ctrl-click and drag; a hardcoded 0 makes every event a plain one.
 static MOD_STATE: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
 fn mod_state() -> u16 {
+    // Button1 = left (0x100), Button2 = middle (0x200), Button3 = right (0x400).
+    let b = crate::mouse::buttons();
     MOD_STATE.load(core::sync::atomic::Ordering::Relaxed)
-        | if crate::mouse::left_down() { 0x100 } else { 0 }
+        | if b & 0x1 != 0 { 0x100 } else { 0 }
+        | if b & 0x4 != 0 { 0x200 } else { 0 }
+        | if b & 0x2 != 0 { 0x400 } else { 0 }
+}
+/// An `E0` prefix was read from the scancode ring and its code is still to come.
+static KBD_EXT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// The X keycode of a set-1 scancode: the evdev code + 8, which is what every X
+/// client's keycode tables assume. The main block is scancode + 8; the extended
+/// (`E0`) keys have codes of their own. 0 = a key this server does not know.
+fn x_keycode(ext: bool, code: u8) -> u8 {
+    if !ext {
+        return code + 8;
+    }
+    match code {
+        0x1C => 104, // KP_Enter
+        0x1D => 105, // Control_R
+        0x35 => 106, // KP_Divide
+        0x38 => 108, // AltGr
+        0x47 => 110, // Home
+        0x48 => 111, // Up
+        0x49 => 112, // Prior
+        0x4B => 113, // Left
+        0x4D => 114, // Right
+        0x4F => 115, // End
+        0x50 => 116, // Down
+        0x51 => 117, // Next
+        0x52 => 118, // Insert
+        0x53 => 119, // Delete
+        0x5B => 133, // Super_L
+        0x5C => 134, // Super_R
+        0x5D => 135, // Menu
+        _ => 0,
+    }
 }
 
 /// Pump REAL keyboard input into X key events. Pops PS/2 scancodes and delivers a
@@ -244,14 +279,24 @@ pub fn pump_keyboard() {
                     crate::serial_println!("[sc] {sc:#04x}");
                 }
             }
+            // An extended key is two bytes, `E0` and the code, and they can arrive
+            // in different calls. Taking `E0` for a key (code 0x60, a release) and
+            // the code after it for a plain key turned every arrow into a keypad
+            // digit and AltGr into Alt.
+            if sc == 0xE0 {
+                KBD_EXT.store(true, core::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
+            let ext = KBD_EXT.swap(false, core::sync::atomic::Ordering::Relaxed);
             let pressed = sc & 0x80 == 0;
             let code = sc & 0x7f;
             // Track the modifiers ourselves: the state field of EVERY event carries
             // them, and a key event only means "A" instead of "a" because of it.
-            let bit: u16 = match code {
-                0x2a | 0x36 => 0x1, // Shift_L / Shift_R
-                0x1d => 0x4,        // Control_L
-                0x38 => 0x8,        // Alt_L (mod1)
+            let bit: u16 = match (ext, code) {
+                (false, 0x2a) | (false, 0x36) => 0x1, // Shift_L / Shift_R
+                (_, 0x1d) => 0x4,                     // Control_L / Control_R
+                (false, 0x38) => 0x8,                 // Alt_L (Mod1)
+                (true, 0x38) => 0x80,                 // AltGr = Mode_switch (Mod5)
                 _ => 0,
             };
             if bit != 0 {
@@ -261,14 +306,21 @@ pub fn pump_keyboard() {
                     MOD_STATE.fetch_and(!bit, core::sync::atomic::Ordering::Relaxed);
                 }
             }
-            let keycode = code + 8; // X keycode = PS/2 scancode + 8
+            // Caps Lock toggles the Lock bit on its press.
+            if !ext && code == 0x3a && pressed {
+                MOD_STATE.fetch_xor(0x2, core::sync::atomic::Ordering::Relaxed);
+            }
+            let keycode = x_keycode(ext, code);
+            if keycode == 0 {
+                continue;
+            }
             let want: u32 = if pressed { 0x1 } else { 0x2 }; // KeyPress / KeyRelease mask
             let kind: u8 = if pressed { 2 } else { 3 };
             // Ferry typed characters to the page over the CDP bridge as well (the
             // reliable route; see pump_mouse). Presses only; layout = our qwerty
             // keysym table, shift honoured. Enter goes as a raw key event — an
             // inserted "\r" does not submit forms or activate links.
-            if pressed {
+            if pressed && crate::ring3::cdp_ferry() {
                 let (lo, hi) = keysym_for(keycode);
                 let shifted = MOD_STATE.load(core::sync::atomic::Ordering::Relaxed) & 0x1 != 0;
                 let ks = if shifted { hi } else { lo };
@@ -393,20 +445,14 @@ fn deliver_selected(win: u32, want: u32, kind: u8, detail: u8, rx: i16, ry: i16,
         }
     }
     // Every connection that selected `want` on `win`...
-    let mut targets: Vec<usize> = SELECTIONS.lock().iter()
+    let targets: Vec<usize> = SELECTIONS.lock().iter()
         .filter(|(w, _, m)| *w == win && (want == 0 || m & want != 0))
         .map(|(_, c, _)| *c)
         .collect();
-    // ...PLUS every connection with a live event loop (a reader). Chrome's browser
-    // connection selects input on its window but never polls that socket — its input
-    // thread pumps a DIFFERENT connection, and X input for the UI is routed to it.
-    // Without this the event sits unread on a connection nobody reads (measured:
-    // only fd606 was ever polled; the click queued forever on fd603).
-    for r in READER_CONNS.lock().iter() {
-        if !targets.contains(r) {
-            targets.push(*r);
-        }
-    }
+    // Only the selectors. Until BUG-090 the browser's first connection (the one
+    // that selects input on its window) was dead to xcb, and a copy of every event
+    // went to each connection that had ever read anything; with that connection
+    // alive a copy is a second key press.
     let mut sent = 0;
     let mut t = XCONNS.lock();
     for ci in targets {
@@ -660,6 +706,32 @@ pub fn deliver_button(lx: i16, ly: i16) {
     trace(format_args!("deliver_button local=({lx},{ly})"));
 }
 
+/// A mouse button went DOWN over the hosted window, at window-local coordinates:
+/// the pointer is moved there first, then the ButtonPress. `button`: 1 left,
+/// 2 middle, 3 right. The release comes separately ([`hosted_release`]), when the
+/// physical button goes up, so a drag (text selection, a scrollbar, a slider) is a
+/// press, motion with the button in the state, and a release, as on any X server.
+pub fn hosted_press(button: u8, lx: i16, ly: i16) {
+    deliver_to_shown(6, 0, lx, ly);
+    deliver_to_shown(4, button, lx, ly);
+}
+
+/// The button went up again; the pointer may be outside the window by now
+/// (coordinates beyond its edges are what X reports during a grab).
+pub fn hosted_release(button: u8, lx: i16, ly: i16) {
+    deliver_to_shown(5, button, lx, ly);
+}
+
+/// The mouse wheel over the hosted window: X has no wheel event, a notch is a
+/// press and release of button 4 (up) or 5 (down). `notches` > 0 = scroll down.
+pub fn hosted_wheel(notches: i32, lx: i16, ly: i16) {
+    let button = if notches > 0 { 5 } else { 4 };
+    for _ in 0..notches.unsigned_abs().min(32) {
+        deliver_to_shown(4, button, lx, ly);
+        deliver_to_shown(5, button, lx, ly);
+    }
+}
+
 /// Pointer motion from the desktop into the hosted window (hover). Same routing as the
 /// click, so whatever highlights under the cursor is what a click would actually hit.
 pub fn deliver_motion(lx: i16, ly: i16) {
@@ -693,40 +765,70 @@ fn deliver_to_shown(kind: u8, detail: u8, lx: i16, ly: i16) {
     });
 }
 
-/// US-QWERTY X keysyms for a keycode (which is PS/2 set-1 scancode + 8, matching the
-/// standard X keycodes): returns (unshifted, shifted). NoSymbol (0,0) if unmapped.
-fn keysym_for(kc: u8) -> (u32, u32) {
-    // Letters: lowercase = ASCII, shifted = uppercase.
-    let letter = |c: u8| (c as u32, (c - 0x20) as u32);
-    match kc {
-        9 => (0xff1b, 0xff1b),   // Escape
-        10 => (0x31, 0x21), 11 => (0x32, 0x40), 12 => (0x33, 0x23), 13 => (0x34, 0x24),
-        14 => (0x35, 0x25), 15 => (0x36, 0x5e), 16 => (0x37, 0x26), 17 => (0x38, 0x2a),
-        18 => (0x39, 0x28), 19 => (0x30, 0x29), // 1..9 0
-        20 => (0x2d, 0x5f), 21 => (0x3d, 0x2b), // - =
-        22 => (0xff08, 0xff08), // BackSpace
-        23 => (0xff09, 0xff09), // Tab
-        24 => letter(b'q'), 25 => letter(b'w'), 26 => letter(b'e'), 27 => letter(b'r'),
-        28 => letter(b't'), 29 => letter(b'y'), 30 => letter(b'u'), 31 => letter(b'i'),
-        32 => letter(b'o'), 33 => letter(b'p'),
-        34 => (0x5b, 0x7b), 35 => (0x5d, 0x7d), // [ ]
-        36 => (0xff0d, 0xff0d), // Return
-        37 => (0xffe3, 0xffe3), // Control_L
-        38 => letter(b'a'), 39 => letter(b's'), 40 => letter(b'd'), 41 => letter(b'f'),
-        42 => letter(b'g'), 43 => letter(b'h'), 44 => letter(b'j'), 45 => letter(b'k'),
-        46 => letter(b'l'),
-        47 => (0x3b, 0x3a), 48 => (0x27, 0x22), 49 => (0x60, 0x7e), // ; ' `
-        50 => (0xffe1, 0xffe1), // Shift_L
-        51 => (0x5c, 0x7c), // backslash |
-        52 => letter(b'z'), 53 => letter(b'x'), 54 => letter(b'c'), 55 => letter(b'v'),
-        56 => letter(b'b'), 57 => letter(b'n'), 58 => letter(b'm'),
-        59 => (0x2c, 0x3c), 60 => (0x2e, 0x3e), 61 => (0x2f, 0x3f), // , . /
-        62 => (0xffe2, 0xffe2), // Shift_R
-        64 => (0xffe9, 0xffe9), // Alt_L
-        65 => (0x20, 0x20), // space
-        66 => (0xffe5, 0xffe5), // Caps_Lock
-        _ => (0, 0),
+/// The keysym of a character: Latin-1 is its own keysym, the euro sign has a
+/// legacy one, everything else is the Unicode keysym (0x01000000 + code point).
+fn char_keysym(c: char) -> u32 {
+    match c as u32 {
+        0x20..=0x7e | 0xa0..=0xff => c as u32,
+        0x20ac => 0x20ac,
+        u => 0x0100_0000 | u,
     }
+}
+
+/// The four keysyms of a keycode, from the ACTIVE keyboard layout (ps2::layout,
+/// the one the rest of the system types with): group 1 = (plain, Shift), group 2
+/// = (AltGr, AltGr+Shift). AltGr is Mode_switch, which is how the core protocol
+/// selects the second group. NoSymbol (0) where a level has nothing.
+fn keysyms4(kc: u8) -> [u32; 4] {
+    let both = |k: u32| [k, k, 0, 0];
+    match kc {
+        9 => both(0xff1b),            // Escape
+        22 => both(0xff08),           // BackSpace
+        23 => [0xff09, 0xfe20, 0, 0], // Tab, ISO_Left_Tab
+        36 => both(0xff0d),           // Return
+        37 => both(0xffe3),           // Control_L
+        50 => both(0xffe1),           // Shift_L
+        62 => both(0xffe2),           // Shift_R
+        64 => both(0xffe9),           // Alt_L
+        65 => both(0x20),             // space
+        66 => both(0xffe5),           // Caps_Lock
+        67..=76 => both(0xffbe + (kc as u32 - 67)), // F1..F10
+        77 => both(0xff7f),           // Num_Lock
+        95 => both(0xffc8),           // F11
+        96 => both(0xffc9),           // F12
+        104 => both(0xff8d),          // KP_Enter
+        105 => both(0xffe4),          // Control_R
+        106 => both(0xffaf),          // KP_Divide
+        108 => both(0xff7e),          // Mode_switch (AltGr)
+        110 => both(0xff50),          // Home
+        111 => both(0xff52),          // Up
+        112 => both(0xff55),          // Prior
+        113 => both(0xff51),          // Left
+        114 => both(0xff53),          // Right
+        115 => both(0xff57),          // End
+        116 => both(0xff54),          // Down
+        117 => both(0xff56),          // Next
+        118 => both(0xff63),          // Insert
+        119 => both(0xffff),          // Delete
+        133 => both(0xffeb),          // Super_L
+        134 => both(0xffec),          // Super_R
+        135 => both(0xff67),          // Menu
+        10..=94 => {
+            let sc = kc - 8;
+            let layout = crate::ps2::layout();
+            let ks = |shift: bool| eurokeymap::translate(layout, sc, shift)
+                .filter(|c| !c.is_control()).map(char_keysym).unwrap_or(0);
+            let l3 = eurokeymap::level3(layout, sc).map(char_keysym).unwrap_or(0);
+            [ks(false), ks(true), l3, l3]
+        }
+        _ => [0; 4],
+    }
+}
+
+/// (plain, shifted) keysym of a keycode.
+fn keysym_for(kc: u8) -> (u32, u32) {
+    let k = keysyms4(kc);
+    (k[0], k[1])
 }
 
 fn trace(args: core::fmt::Arguments) {
@@ -1172,7 +1274,7 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             put16(c, &mut r, 18, my as u16);   // root-y
             put16(c, &mut r, 20, mx as u16);   // win-x
             put16(c, &mut r, 22, my as u16);   // win-y
-            put16(c, &mut r, 24, 0);           // mask (buttons/mods)
+            put16(c, &mut r, 24, mod_state()); // mask (buttons/mods)
             c.outbuf.extend_from_slice(&r);
         }
         // TranslateCoordinates(40): src-x@12(i16), src-y@14 → echo (windows share the
@@ -1193,21 +1295,23 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             wr32(c, &mut r, 8, 0); // number of events = 0
             c.outbuf.extend_from_slice(&r);
         }
-        // GetKeyboardMapping(101): first-keycode@4, count@5. Return a US-QWERTY keymap
-        // (2 keysyms/keycode: unshifted, shifted). Our keycodes are scancode+8, which
-        // match the standard X keycodes, so a toolkit maps keycode->keysym->character.
+        // GetKeyboardMapping(101): first-keycode@4, count@5. Four keysyms per
+        // keycode from the active layout: plain, Shift, AltGr, AltGr+Shift (the
+        // second pair is group 2, which Mode_switch selects). Keycodes are the
+        // evdev code + 8, so a toolkit maps keycode -> keysym -> character.
         101 => {
             let first = req.get(4).copied().unwrap_or(8);
             let count = req.get(5).copied().unwrap_or(0) as usize;
-            const N: usize = 2; // keysyms per keycode
+            const N: usize = 4; // keysyms per keycode
             let mut r = reply_header(c, (count * N) as u32);
             r[1] = N as u8;
             for i in 0..count {
                 let kc = first.wrapping_add(i as u8);
-                let (lo, hi) = keysym_for(kc);
-                let base = 32 + i * N * 4;
-                r[base..base + 4].copy_from_slice(&lo.to_le_bytes());
-                r[base + 4..base + 8].copy_from_slice(&hi.to_le_bytes());
+                let ks = keysyms4(kc);
+                for (k, sym) in ks.iter().enumerate() {
+                    let base = 32 + (i * N + k) * 4;
+                    put32(c, &mut r, base, *sym);
+                }
             }
             c.outbuf.extend_from_slice(&r);
             trace(format_args!("GetKeyboardMapping first={first} count={count}"));
@@ -1219,10 +1323,13 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             // Data = 8 modifiers × KPM keycodes × 1 byte = 8*KPM bytes = 2*KPM units.
             let mut r = reply_header(c, (2 * KPM) as u32);
             r[1] = KPM as u8;
-            // modifier index: 0 Shift, 1 Lock, 2 Control, 3 Mod1(Alt) ...
-            let mods: [(usize, u8); 4] = [(0, 50), (1, 66), (2, 37), (3, 64)]; // Shift_L, Caps, Ctrl_L, Alt_L
-            for (m, kc) in mods {
-                r[32 + m * KPM] = kc; // first keycode for that modifier
+            // Modifier index: 0 Shift, 1 Lock, 2 Control, 3 Mod1 (Alt), 4 Mod2
+            // (Num_Lock), 7 Mod5 (Mode_switch = AltGr, the second keysym group).
+            let mods: [(usize, [u8; KPM]); 6] = [
+                (0, [50, 62]), (1, [66, 0]), (2, [37, 105]), (3, [64, 0]), (4, [77, 0]), (7, [108, 0]),
+            ];
+            for (m, kcs) in mods {
+                r[32 + m * KPM..32 + m * KPM + KPM].copy_from_slice(&kcs);
             }
             c.outbuf.extend_from_slice(&r);
             trace(format_args!("GetModifierMapping"));
