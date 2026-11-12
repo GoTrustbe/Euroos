@@ -1,0 +1,8 @@
+serial: panics 0, fault lines 0, NMI probes 0, watchdog 1
+[entropy] CSPRNG seeded: 544 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 128 bits, at most half the threshold), jitter=4 batches of 512 samples (416 bits) · 0.747 ms → OK
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1727bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[bug063] foreground program returned (exit 0): exit flag = 0 (want 0), then 30 ticks with interrupts on while drivers and background processes make syscalls → OK ✓
+[fdspace] 2 background processes keep a pipe and a file open across a foreground launch (musl exit=0, glibc exit=42): phase1=true ended=true pass=2/2 | pid 0x40601: phase2 pipe=ok (write=2 read=2) file=ok (lseek=0 read=1) | pid 0x40602: phase2 pipe=ok (write=2 read=2) file=ok (lseek=0 read=1) | fd spaces in use 3 → 3 → OK ✓
+[bug053] process starts with only their arena + k frames free: bg-musl refused x8, started with 8 spare · foreground refused x4, ran with 4 spare (exit 0) · glibc refused x6, ran with 6 spare (exit 42), bad executable refused=true kept 0 frames, next launch exit 42 · frames kept by refused starts: 0 · free frames 2981379 → 29813
+[altgr] AltGr third level in both decoders (be, fr, de)=true, AltGr+Tab/1..4 switch nothing=true, typed instead=true, split prefix=true, left Alt still Alt+Tab=true Alt+2=true, latches released at the end=true → OK ✓
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0

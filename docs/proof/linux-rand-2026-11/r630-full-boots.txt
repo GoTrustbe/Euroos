@@ -1,0 +1,12 @@
+# Two full boots with the loadtest smoke scenario (4 GiB, smp 4, e1000e restrict=on; the second with intel-iommu), before the loops were replaced by the short boots.
+2026-11-12_17:39:28 slot=0 run=1 rc=0 ok 3d8 ok=1 failed=0 | 3d7 ok=1 failed=0 | 3d3 ok=1 failed=0 | entropy lines=1 seeded=1 not-seeded=0 | linux-rand ok=1 failed=0 | failed-lines=6
+2026-11-12_17:40:42 slot=0 run=2 rc=143 nodesktop 3d8 ok=1 failed=0 | 3d7 ok=1 failed=0 | 3d3 ok=0 failed=0 | entropy lines=1 seeded=1 not-seeded=0 | linux-rand ok=0 failed=0 | failed-lines=5
+2026-11-12_17:39:35 slot=1 run=1 rc=0 ok 3d8 ok=1 failed=0 | 3d7 ok=1 failed=0 | 3d3 ok=1 failed=0 | entropy lines=1 seeded=1 not-seeded=0 | linux-rand ok=1 failed=0 | failed-lines=6
+2026-11-12_17:40:42 slot=1 run=2 rc=143 nodesktop 3d8 ok=1 failed=0 | 3d7 ok=1 failed=0 | 3d3 ok=0 failed=0 | entropy lines=1 seeded=1 not-seeded=0 | linux-rand ok=0 failed=0 | failed-lines=3
+== FAILED lines of the first (the same four network lines and [fuzz] as in ../integ-2026-11b/r630-soak-boot.markers)
+[udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HTTP: tx 8 rx 4 frames → FAILED
+[udrv-crash] e1000d pid 131072 killed by a real fault (memory isolation: access 0x1000 denied); kernel kept running; sends refused while dead=true; restarted as pid 131073, MAC 52:54:00:12:34:56, DHCP
+[conn] TCP handshake FAILED to 172.66.147.243:80
+[conn] TCP handshake FAILED to 172.66.147.243:80
+[udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking sockets) over e1000d in 37 ticks: "GNET: connect(172.66.147.243:80) failed" exit=2; its waits gave the CPU away 1 time(s), 1 woken 
+[fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED

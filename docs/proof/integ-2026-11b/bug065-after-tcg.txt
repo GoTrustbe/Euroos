@@ -1,0 +1,14 @@
+== after the fix, final image 6fcf24c (st5): build server, TCG, -cpu qemu64,+smep,+smap (no RDRAND, no RDSEED), smp 4, 2 GiB, no NIC, each boot to [3d3]
+boots: 20 (20 reached the marker); seconds per boot min/median/max: 135.4 / 140.8 / 149.0
+[3d8]: OK in 20, FAILED in 0, no line in 0
+[3d7]: OK in 20, FAILED in 0, no line in 0
+[3d3]: OK in 20, FAILED in 0, no line in 0
+[3d8] reports the global pool not ready (unseeded boot): 0
+[entropy] line: seeded in 20, NOT SEEDED in 0, no line in 0
+  credited bits min/median/max: 416 / 428 / 441; of which jitter: 416 / 428 / 441; jitter batches: 4 / 4 / 4
+  time of entropy::init, ms, min/median/max: 4.009 / 4.954 / 8.999
+  sources in 20 boots: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU, CPU credit 0
+[3d8] jitter-alone estimate over 16 batches, bits, min/median/max: 1684 / 1717.5 / 1766; below 256 in 0 boots
+
+[entropy] CSPRNG seeded: 430 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (430 bits) · 4.870 ms → OK
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1718bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓

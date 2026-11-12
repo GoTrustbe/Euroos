@@ -1,0 +1,10 @@
+user-smp4-iommu: desktop=yes fault-lines=0 kernel-to-desktop=79312 ms entropy-lines=1 seeded=1 | [lk] boot-total longest-held net.NET_LEGACY (rx ring): acq=915 contended=0 (0.00%) spins=0 max-wait=0 try-fail
+user-smp4-noiommu: desktop=yes fault-lines=0 kernel-to-desktop=75473 ms entropy-lines=1 seeded=1 | [lk] boot-total longest-held net.PORTQ (TCP port queues): acq=1866 contended=0 (0.00%) spins=0 max-wait=0 try-
+kernel-smp4: desktop=yes fault-lines=0 kernel-to-desktop=67787 ms entropy-lines=1 seeded=1 | [lk] boot-total longest-held net.PORTQ (TCP port queues): acq=10119799 contended=0 (0.00%) spins=0 max-wait=0 
+storage-smp4-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=252193 ms entropy-lines=1 seeded=1 | [lk] boot-total longest-held ipc.channel (per-port): acq=218975 contended=0 (0.00%) spins=0 max-wait=0 try-fai
+combined-smp4-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=332134 ms entropy-lines=1 seeded=1 | [lk] boot-total longest-held ipc.channel (per-port): acq=281850 contended=0 (0.00%) spins=0 max-wait=0 try-fai
+user-smp1-iommu: desktop=yes fault-lines=0 kernel-to-desktop=78499 ms entropy-lines=1 seeded=1 | [lk] boot-total longest-held unix.listeners: acq=39 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max
+user-smp1-noiommu: desktop=yes fault-lines=0 kernel-to-desktop=74539 ms entropy-lines=1 seeded=1 | [lk] boot-total longest-held ring3.FILES (syscall file table): acq=274 contended=0 (0.00%) spins=0 max-wait=0 
+kernel-smp1: desktop=yes fault-lines=0 kernel-to-desktop=69861 ms entropy-lines=1 seeded=1 | [lk] boot-total longest-held net.NET_LEGACY (rx ring): acq=2023084 contended=0 (0.00%) spins=0 max-wait=0 try-
+storage-smp1-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=245236 ms entropy-lines=1 seeded=1 | [lk] boot-total longest-held unix.listeners: acq=84 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max
+combined-smp1-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=318381 ms entropy-lines=1 seeded=1 | [lk] boot-total longest-held net.PORTQ (TCP port queues): acq=2599 contended=0 (0.00%) spins=0 max-wait=0 try-

@@ -1,0 +1,37 @@
+# BUG-065, diagnosis. Diagnostic kernel: the merged tree 1c8eb91 plus kernel/src/entdiag.rs (entdiag.rs.txt in this
+# directory; never committed to the kernel), called before entropy::selftest. R630, KVM, -cpu host, smp 4, 2 GiB.
+# 'old' is the two-RDTSC loop of entropy.rs as it was; 'asm aligned' and 'asm straddling' are the same loop in
+# assembly, once inside one 64-byte line and once across a line boundary; 'memory walk' is the new sample.
+# Credit is estimate_jitter_bits over batches of 512 samples. Three numbers are min / median / max over the boots.
+
+== host idle: 60 boots
+credit over 64 batches   old loop: 1216 / 4208 / 6170   asm aligned: 1178 / 3829 / 6318   asm straddling: 1039 / 3892 / 6220   memory walk: 5713 / 6609 / 6775
+placement: the straddling copy was credited more than the aligned one in 35 boots, less in 25
+old loop, credit per batch over all 3840 batches: 18 / 63 / 99; batches under 32 bits: 87
+TSC ticks for 64 batches (median): old loop 1331699, memory walk 5092245
+old loop, first batch: distinct sample values per batch 2 / 4 / 9; share of the most frequent value 46 to 92 %; sample min 12, median of medians 12; boots whose first 64 samples repeat with a period of at most 16: 1 of 60
+memory walk, first batch: distinct sample values per batch 20 / 37 / 161; share of the most frequent value 5 to 19 %; sample min 88, median of medians 106; boots whose first 64 samples repeat with a period of at most 16: 0 of 60
+old loop, first batch, by (min, max, distinct values): boots, credit for that batch, first 24 samples of one boot
+  (12, 40, 4): 34 boots, 59 to 95 bits, e.g. [12, 12, 12, 12, 38, 12, 12, 12, 12, 38, 12, 12, 14, 12, 38, 14, 12, 12, 14, 40, 12, 14, 12, 12]
+  (18, 22, 4): 10 boots, 40 to 86 bits, e.g. [18, 19, 18, 21, 18, 19, 18, 22, 18, 18, 18, 18, 19, 18, 18, 18, 18, 18, 18, 19, 18, 22, 18, 18]
+  (18, 22, 3): 5 boots, 34 to 81 bits, e.g. [19, 19, 19, 19, 18, 19, 19, 19, 22, 19, 19, 19, 19, 19, 19, 19, 19, 22, 19, 19, 19, 18, 19, 19]
+  (18, 34, 4): 3 boots, 63 to 81 bits, e.g. [18, 18, 18, 18, 18, 18, 18, 21, 18, 18, 21, 18, 18, 21, 18, 18, 21, 18, 18, 18, 18, 21, 18, 18]
+  (24, 28, 2): 3 boots, 18 to 19 bits, e.g. [24, 24, 24, 24, 24, 28, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24]
+  (12, 40, 8): 1 boots, 55 to 55 bits, e.g. [18, 18, 19, 18, 18, 21, 18, 19, 18, 18, 18, 18, 18, 18, 19, 18, 18, 18, 21, 18, 18, 19, 18, 18]
+memory walk, first 24 samples of one boot: [230, 236, 224, 184, 150, 150, 142, 130, 110, 114, 116, 142, 144, 134, 160, 110, 118, 114, 124, 104, 116, 112, 138, 152]
+
+== all 40 hyperthreads of the host busy (nice 19 loops): 48 boots
+credit over 64 batches   old loop: 5344 / 5404 / 5951   asm aligned: 5912 / 6326 / 6426   asm straddling: 5501 / 6329 / 6362   memory walk: 6613 / 6650 / 6879
+placement: the straddling copy was credited more than the aligned one in 21 boots, less in 27
+old loop, credit per batch over all 3072 batches: 75 / 85 / 98; batches under 32 bits: 0
+TSC ticks for 64 batches (median): old loop 2303478, memory walk 8410205
+old loop, first batch: distinct sample values per batch 3 / 7 / 13; share of the most frequent value 33 to 92 %; sample min 22, median of medians 28; boots whose first 64 samples repeat with a period of at most 16: 0 of 48
+memory walk, first batch: distinct sample values per batch 41 / 58 / 84; share of the most frequent value 4 to 9 %; sample min 173, median of medians 270; boots whose first 64 samples repeat with a period of at most 16: 0 of 48
+old loop, first batch, by (min, max, distinct values): boots, credit for that batch, first 24 samples of one boot
+  (22, 35, 7): 21 boots, 79 to 92 bits, e.g. [28, 31, 28, 28, 32, 32, 28, 28, 31, 32, 32, 25, 28, 25, 28, 25, 28, 32, 32, 25, 25, 28, 25, 28]
+  (22, 38, 8): 9 boots, 80 to 88 bits, e.g. [29, 32, 28, 25, 31, 31, 32, 32, 32, 38, 35, 28, 28, 28, 25, 32, 29, 25, 28, 25, 25, 25, 29, 29]
+  (22, 35, 8): 9 boots, 81 to 88 bits, e.g. [25, 35, 25, 25, 25, 32, 25, 28, 25, 25, 28, 32, 32, 29, 28, 28, 31, 25, 28, 28, 32, 29, 32, 28]
+  (25, 35, 7): 2 boots, 81 to 82 bits, e.g. [25, 25, 25, 31, 28, 25, 32, 32, 32, 25, 28, 31, 25, 29, 32, 28, 28, 28, 31, 25, 28, 32, 29, 29]
+  (22, 1921, 13): 1 boots, 97 to 97 bits, e.g. [25, 25, 25, 25, 32, 25, 28, 35, 32, 25, 28, 25, 28, 25, 32, 25, 31, 28, 32, 22, 32, 25, 25, 28]
+  (22, 29, 3): 1 boots, 18 to 18 bits, e.g. [22, 22, 22, 22, 22, 29, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 25, 22, 22]
+memory walk, first 24 samples of one boot: [358, 302, 343, 298, 292, 311, 308, 349, 305, 305, 318, 320, 299, 302, 314, 349, 327, 311, 314, 327, 305, 308, 302, 305]

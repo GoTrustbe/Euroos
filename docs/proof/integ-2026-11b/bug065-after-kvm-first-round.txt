@@ -1,0 +1,35 @@
+== first round, image of c0db228 (st2; differs from the final image in two self-tests that run later in the boot): the same 6 loops, stopped at 174 boots when the round was restarted
+boots: 174 (174 reached the marker); seconds per boot min/median/max: 108.8 / 111.6 / 114.8
+[3d8]: OK in 174, FAILED in 0, no line in 0
+[3d7]: OK in 174, FAILED in 0, no line in 0
+[3d3]: OK in 174, FAILED in 0, no line in 0
+[3d8] reports the global pool not ready (unseeded boot): 0
+[entropy] line: seeded in 174, NOT SEEDED in 0, no line in 0
+  credited bits min/median/max: 493 / 545 / 571; of which jitter: 365 / 417 / 443; jitter batches: 4 / 4 / 4
+  time of entropy::init, ms, min/median/max: 0.604 / 0.736 / 1.492
+  sources in 174 boots: tpm=none, rdseed=8 words, rdrand=8 words, CPU credit 128
+[3d8] jitter-alone estimate over 16 batches, bits, min/median/max: 1472 / 1672 / 1750; below 256 in 0 boots
+
+== first round, st2, jitter only: KVM, -cpu qemu64,+smep,+smap,-rdrand,-rdseed, smp 4
+boots: 20 (20 reached the marker); seconds per boot min/median/max: 108.0 / 109.2 / 110.5
+[3d8]: OK in 20, FAILED in 0, no line in 0
+[3d7]: OK in 20, FAILED in 0, no line in 0
+[3d3]: OK in 20, FAILED in 0, no line in 0
+[3d8] reports the global pool not ready (unseeded boot): 0
+[entropy] line: seeded in 20, NOT SEEDED in 0, no line in 0
+  credited bits min/median/max: 374 / 424.5 / 443; of which jitter: 374 / 424.5 / 443; jitter batches: 4 / 4 / 4
+  time of entropy::init, ms, min/median/max: 0.639 / 0.728 / 0.966
+  sources in 20 boots: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU, CPU credit 0
+[3d8] jitter-alone estimate over 16 batches, bits, min/median/max: 1501 / 1701.5 / 1740; below 256 in 0 boots
+
+== first check of the fix, image st1 (the tree of 35a60c5 before it was committed), each boot stopped after [3d7]
+boots: 60 (60 reached the marker); seconds per boot min/median/max: 2.5 / 2.8 / 3.3
+[3d8]: OK in 60, FAILED in 0, no line in 0
+[3d7]: OK in 60, FAILED in 0, no line in 0
+[3d3]: OK in 0, FAILED in 0, no line in 60
+[3d8] reports the global pool not ready (unseeded boot): 0
+[entropy] line: seeded in 60, NOT SEEDED in 0, no line in 0
+  credited bits min/median/max: 501 / 545.5 / 570; of which jitter: 373 / 417.5 / 442; jitter batches: 4 / 4 / 4
+  time of entropy::init, ms, min/median/max: 0.581 / 0.684 / 1.218
+  sources in 60 boots: tpm=none, rdseed=8 words, rdrand=8 words, CPU credit 128
+[3d8] jitter-alone estimate over 16 batches, bits, min/median/max: 1501 / 1665.5 / 1751; below 256 in 0 boots

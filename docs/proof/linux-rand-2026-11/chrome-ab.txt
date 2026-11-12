@@ -1,0 +1,159 @@
+# One chrome-boot run each, side by side on the build server (TCG, -m 3584M, one vCPU each, the kernel built with
+# `scripts/build.sh chrome`, /opt/euroos/packs/chrome-pack2.img opened snapshot=on): base b9a5755 and fd0982b.
+# chrome-ab.sh stops a run at `[chrome-run] DONE` or after 40 minutes.
+tree back at fd0982b (was fd0982b)
+base: timeout after 2402 s
+after: timeout after 2402 s
+
+serial lines per tag (base, after):
+  krip              663    663
+  xserver           390    390
+  linux-abi         384    384
+  europack           98     98
+  (other)            82     82
+  glibc              79     79
+  addr               53     53
+  saddr              53     53
+  cost               51     51
+  hb                 51     51
+  pollset            40     40
+  tcp                30     30
+  euro               27     27
+  tick-late          24     24
+  bg-out             17     17
+  conn               16     16
+  mmaplib            15     15
+  gvdso              15     15
+  net                15     15
+  packpath           15     15
+  elf                14     14
+  boot-time          12     12
+  glibc-thread       12     12
+  exec               11     11
+  iommu               9      9
+  shell               9      9
+  r                   9      9
+  lk                  8      8
+  pci                 8      8
+  dns                 7      7
+  shm                 6      6
+  inet                6      6
+  sio                 6      6
+  scm                 5      5
+  udrv-crash          5      5
+  h3                  5      5
+  udrv                5      5
+  udrv-net            5      5
+  loader              5      5
+  acpi                4      4
+  net-async           4      4
+  madvise             4      4
+  sockfam             4      4
+  walk                4      4
+  tls                 4      4
+  net-worker          3      3
+  edit                3      3
+  isolation           3      3
+  g1                  3      3
+  diropen             3      3
+  smp                 3      3
+  h4-ctr              3      3
+  glibc-disk          2      2
+  upd3                2      2
+  euroapp             2      2
+  ftrunc              2      2
+  chrome              2      2
+  net-late            2      2
+  h5                  2      2
+  mm                  2      2
+  cdp                 2      2
+  h4                  2      2
+  ahci                2      2
+  blk                 2      2
+  e2                  1      1
+  bgnet-cap           1      1
+  io6                 1      1
+  3d2-wire            1      1
+  epk                 1      1
+  a2                  1      1
+  sbx2                1      1
+  ecam                1      1
+  g3                  1      1
+  sbx                 1      1
+  robust-fs           1      1
+  i3-s5               1      1
+  io3                 1      1
+  euroupdate          1      1
+  fpu                 1      1
+  inst                1      1
+  euroid              1      1
+  ioapic              1      1
+  sec                 1      1
+  trash               1      1
+  cap                 1      1
+  udrv-grant          1      1
+  io5                 1      1
+  j1-cache            1      1
+  entropy             1      1
+  udrv-irq            1      1
+  msc                 1      1
+  tls2                1      1
+  udrv-linux          1      1
+  7guard              1      1
+  acpi-pwr            1      1
+  chrome-run          1      1
+  i3-aml              1      1
+  3d2                 1      1
+  3c3                 1      1
+  wasi                1      1
+  prefs               1      1
+  udrv-dma            1      1
+  hda                 1      1
+  g4                  1      1
+  fsdiag              1      1
+  3d8                 1      1
+  paint               1      1
+  h3-fs               1      1
+  container           1      1
+  heap                1      1
+  uptr                1      1
+  udrv-e1000          1      1
+  j2-blk              1      1
+  tpm                 1      1
+  udrv-iommu          1      1
+  h1                  1      1
+  3f1                 1      1
+  x11                 1      1
+  idt                 1      1
+  fuzz                1      1
+  io2                 1      1
+  kwork               1      1
+  sched-guard         1      1
+  bgnet               1      1
+  3d7                 1      1
+  io1                 1      1
+  apic                1      1
+  xhci                1      1
+  udpq                1      1
+  bootopt             1      1
+  total            2400   2400
+
+== base
+  [chrome-run] glibc self-tests SKIPPED for iteration speed
+  [tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+  [entropy] CSPRNG seeded: 394 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (394 bits) · 7.346 ms → OK
+  [gvdso] exit=0
+  [x11] client connects to the X server (/tmp/.X11-unix/X0)
+  first and last [cost] line:
+  [cost] faults=43 (43 disk-filled, 0 ra, 210 Mcyc) | virtio kicks=141554 (139973 Mcyc wait) | X: 0 reqs, 0 PutImage (0 MiB), 0 Mcyc
+  [cost] faults=2670 (2168 disk-filled, 3 ra, 36427 Mcyc) | virtio kicks=144816 (146374 Mcyc wait) | X: 183 reqs, 0 PutImage (0 MiB), 183 Mcyc
+
+== after
+  [tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+  [entropy] CSPRNG seeded: 418 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (418 bits) · 6.221 ms → OK
+  [chrome-run] glibc self-tests SKIPPED for iteration speed
+  [gvdso] exit=0
+  [x11] client connects to the X server (/tmp/.X11-unix/X0)
+  first and last [cost] line:
+  [cost] faults=43 (43 disk-filled, 0 ra, 211 Mcyc) | virtio kicks=141540 (125441 Mcyc wait) | X: 0 reqs, 0 PutImage (0 MiB), 0 Mcyc
+  [cost] faults=2691 (2184 disk-filled, 3 ra, 30378 Mcyc) | virtio kicks=144847 (130903 Mcyc wait) | X: 183 reqs, 0 PutImage (0 MiB), 235 Mcyc

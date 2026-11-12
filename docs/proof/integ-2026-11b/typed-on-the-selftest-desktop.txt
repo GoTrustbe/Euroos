@@ -1,0 +1,33 @@
+# A command typed on the desktop of the self-test image right after it started (probe.py, TCG, usb-kbd):
+# 8 s after the desktop: uname, Enter; then 30 wheel notches down, uname, Enter; then a click on the Terminal,
+# uname, Enter. The [e2e] lines are what the Terminal ran; [scon] step lines mark the three stages.
+
+== feature/kdebug 931fe66 (only the first stage was run)
+[e2e] $ uname
+[e2e] EuroOS
+[scon] step1-plain
+
+== merged, c0db228, before BUG-083 and BUG-084
+[scon] step1-plain
+[scon] step2-after-wheel-down
+[e2e] $ €
+[e2e] unknown command: €  (type 'help')
+[scon] step3-after-click
+
+== c0db228 + the BUG-083 fix only
+[scon] step1-plain
+[scon] step2-after-wheel-down
+[e2e] $ uname
+[e2e] EuroOS
+[scon] step3-after-click
+
+== final, 6fcf24c
+[e2e] $ uname
+[e2e] EuroOS
+[scon] step1-plain
+[e2e] $ uname
+[e2e] EuroOS
+[scon] step2-after-wheel-down
+[e2e] $ uname
+[e2e] EuroOS
+[scon] step3-after-click

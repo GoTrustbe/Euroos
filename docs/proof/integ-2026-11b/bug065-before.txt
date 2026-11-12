@@ -1,0 +1,37 @@
+== before the fix: the merged tree 1c8eb91 (image st0), R630, KVM, -cpu host, smp 4, 2 GiB, no NIC, each boot stopped after [3d7] (6 loops of 34 on CPUs 0-3, 12-15, 16-19, 20-23, 24-27, 36-39)
+boots: 204 (204 reached the marker); seconds per boot min/median/max: 2.5 / 2.9 / 3.5
+[3d8]: OK in 191, FAILED in 13, no line in 0
+[3d7]: OK in 193, FAILED in 11, no line in 0
+[3d3]: OK in 0, FAILED in 0, no line in 204
+[3d8] reports the global pool not ready (unseeded boot): 11
+[entropy] line: this image has none
+[3d8] jitter-alone estimate over 16 batches, bits, min/median/max: 16 / 783.5 / 1604; below 256 in 13 boots
+  FAILED: before-0-3 boot 6: [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈36bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=false, output-nonzero-distinct=false → FAILED
+  FAILED: before-0-3 boot 6: [3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=false → FAILED
+  FAILED: before-0-3 boot 18: [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈25bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=false, output-nonzero-distinct=false → FAILED
+  FAILED: before-0-3 boot 18: [3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=false → FAILED
+  FAILED: before-0-3 boot 26: [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈49bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=false, output-nonzero-distinct=false → FAILED
+  FAILED: before-0-3 boot 26: [3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=false → FAILED
+  FAILED: before-12-15 boot 24: [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈27bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=false, output-nonzero-distinct=false → FAILED
+  FAILED: before-12-15 boot 24: [3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=false → FAILED
+  FAILED: before-16-19 boot 31: [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈191bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=true, output-nonzero-distinct=true → FAILED
+  FAILED: before-20-23 boot 9: [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈24bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=true, output-nonzero-distinct=true → FAILED
+  FAILED: before-20-23 boot 10: [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈16bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=false, output-nonzero-distinct=false → FAILED
+  FAILED: before-20-23 boot 10: [3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=false → FAILED
+  FAILED: before-24-27 boot 6: [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈24bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=false, output-nonzero-distinct=false → FAILED
+  FAILED: before-24-27 boot 6: [3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=false → FAILED
+  FAILED: before-24-27 boot 31: [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈22bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=false, output-nonzero-distinct=false → FAILED
+  FAILED: before-24-27 boot 31: [3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=false → FAILED
+  FAILED: before-24-27 boot 32: [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈18bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=false, output-nonzero-distinct=false → FAILED
+  FAILED: before-24-27 boot 32: [3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=false → FAILED
+  FAILED: before-36-39 boot 9: [3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈38bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=false, output-nonzero-distinct=false → FAILED
+  FAILED: before-36-39 boot 9: [3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=false → FAILED
+
+== the same tree with one more print in entropy::selftest (image diag2; raw samples in bug065-samples-failing-boots.txt)
+boots: 204 (204 reached the marker); seconds per boot min/median/max: 2.5 / 2.9 / 3.3
+[3d8]: OK in 192, FAILED in 12, no line in 0
+[3d7]: OK in 198, FAILED in 6, no line in 0
+[3d3]: OK in 0, FAILED in 0, no line in 204
+[3d8] reports the global pool not ready (unseeded boot): 6
+[entropy] line: this image has none
+[3d8] jitter-alone estimate over 16 batches, bits, min/median/max: 20 / 852 / 1565; below 256 in 12 boots

@@ -1,0 +1,1 @@
+  166.912 [ag-lock] GUI lockscreen: correct-password-signs-in=true, wrong-rejected=true, screen-drawn=true, background 0 of 15360 sampled pixels off the per-pixel gradient, frame 250 ms → OK (desktop session behind EuroID-Argon2id instead of auto-euro) ✓

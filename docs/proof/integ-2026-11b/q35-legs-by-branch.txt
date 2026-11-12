@@ -1,0 +1,29 @@
+# CI q35 matrix legs usbhub and hwprobe (a command typed on the desktop of the self-test image), by tree.
+
+== feature/kdebug 931fe66
+  [usbhub] PASS ✓
+  [hwprobe] PASS ✓
+[matrix] ALL LEGS PASS ✓
+
+== feature/uidebug 03286a0
+  [usbhub] FAIL: typed uname never echoed — hub keyboard not delivering
+  [usbhub] FAIL ✗
+  [hwprobe] FAIL: hwprobe output not seen over serial
+  [hwprobe] FAIL ✗
+
+== merged, c0db228
+  [usbhub] FAIL: typed uname never echoed — hub keyboard not delivering
+  [usbhub] FAIL ✗
+  [hwprobe] FAIL: hwprobe output not seen over serial
+  [hwprobe] FAIL ✗
+
+== c0db228 + the BUG-083 fix only
+  [usbhub] FAIL: typed uname never echoed — hub keyboard not delivering
+  [usbhub] FAIL ✗
+  [hwprobe] FAIL: hwprobe output not seen over serial
+  [hwprobe] FAIL ✗
+
+== c0db228 + the BUG-083 and BUG-084 fixes (the tree of 6fcf24c)
+  [usbhub] PASS ✓
+  [hwprobe] PASS ✓
+[matrix] ALL LEGS PASS ✓

@@ -10,9 +10,20 @@
 //! the result is the `[entropy]` line every image prints. A pool that did not
 //! get there stays closed: [`getrandom`] and [`draw`] refuse (after one more
 //! bounded attempt to seed), and every caller has to deal with that refusal.
+//!
+//! One seeding, early (BUG-080, BUG-081): `main.rs` calls [`init`] as soon as
+//! there is a heap and a clock, before the identity store, the network and
+//! the first process. A request that comes before that call does the same
+//! seeding itself and says so; either way there is one `[entropy]` status
+//! line. The pool is taken with interrupts off, so it can be asked from any
+//! context (a port is chosen with interrupts off, a SYN is answered from
+//! the receive path). Callers that cannot refuse (the `AT_RANDOM` bytes of a
+//! process start, a TCP sequence number, a salt) use [`fill_wait`] and
+//! [`draw_wait`]: they keep gathering noise until the pool opens and never
+//! return other bytes.
 
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use euroentropy::{estimate_jitter_bits, EntropyPool, NoiseSources, SeedPolicy, SeedReport};
 use spin::Mutex;
 
@@ -21,6 +32,20 @@ static POOL: Mutex<Option<EntropyPool>> = Mutex::new(None);
 static REFUSED: AtomicU64 = AtomicU64::new(0);
 /// Timer tick of the last seeding attempt made on behalf of a request.
 static LAST_RETRY_TICK: AtomicU64 = AtomicU64::new(0);
+/// [`init`] has been entered: there is one boot seeding.
+static INIT_DONE: AtomicBool = AtomicBool::new(false);
+/// A seeding is gathering noise right now (the pool is out of [`POOL`]).
+static SEEDING: AtomicBool = AtomicBool::new(false);
+/// Kernel callers that had to wait for the seed ([`fill_wait`]).
+static WAITED: AtomicU64 = AtomicU64::new(0);
+
+/// The pool, with interrupts off while it is held. The holder is never
+/// parked by the timer and an interrupt handler never finds its own core
+/// holding the lock; what runs under it is short (a few HMACs).
+fn with_pool<R>(f: impl FnOnce(&mut Option<EntropyPool>) -> R) -> R {
+    let _if_off = crate::sched::IfOffGuard::new();
+    f(&mut POOL.lock())
+}
 
 #[inline]
 fn rdtsc() -> u64 {
@@ -194,25 +219,31 @@ fn status_line(r: &SeedReport, us: u64) -> alloc::string::String {
 
 /// Seed the global pool: TPM, RDSEED, RDRAND, jitter, mixed, until the
 /// threshold is met or the bound of [`SeedPolicy::BOOT`] is reached. Prints
-/// the `[entropy]` status line (every image).
+/// the `[entropy]` status line (every image). The first call does the work;
+/// a later call returns at once, so there is one seeding and one line.
 pub fn init() {
+    if INIT_DONE.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    SEEDING.store(true, Ordering::SeqCst);
     let t0 = now_us();
     let mut pool = EntropyPool::new(256);
     let mut plat = Platform::all();
     let report = pool.seed_from(&mut plat, &SeedPolicy::BOOT);
-    *POOL.lock() = Some(pool);
+    with_pool(|p| *p = Some(pool));
+    SEEDING.store(false, Ordering::SeqCst);
     LAST_RETRY_TICK.store(crate::interrupts::ticks(), Ordering::Relaxed);
     crate::serial_println!("{}", status_line(&report, now_us().saturating_sub(t0)));
 }
 
 /// Whether the pool has gathered enough real entropy to hand out randomness.
 pub fn ready() -> bool {
-    POOL.lock().as_ref().map(|p| p.ready()).unwrap_or(false)
+    with_pool(|p| p.as_ref().map(|p| p.ready()).unwrap_or(false))
 }
 
 /// What the seeding gathered so far (`None` before [`init`]).
 pub fn report() -> Option<SeedReport> {
-    POOL.lock().as_ref().map(|p| p.seed_report())
+    with_pool(|p| p.as_ref().map(|p| p.seed_report()))
 }
 
 /// Requests refused so far because the pool was not seeded.
@@ -220,26 +251,53 @@ pub fn refused() -> u64 {
     REFUSED.load(Ordering::Relaxed)
 }
 
-/// One more bounded attempt to seed a pool that is not ready, at most once a
-/// second (a request then waits for it; without noise it costs a few
-/// milliseconds and changes nothing).
-fn seed_again() {
+/// One more bounded attempt to seed a pool that is not ready. On behalf of a
+/// request that can be refused: at most once a second (the request waits for
+/// it; without noise it costs a few milliseconds and changes nothing). With
+/// `force`, for a caller that waits: now. The noise is gathered with the pool
+/// out of its lock; a request that comes meanwhile finds no pool and is
+/// refused or waits, as it would have been.
+fn seed_again(force: bool) {
     let now = crate::interrupts::ticks();
-    let last = LAST_RETRY_TICK.load(Ordering::Relaxed);
-    if now.saturating_sub(last) < 100 && last != 0 {
-        return;
+    if !force {
+        let last = LAST_RETRY_TICK.load(Ordering::Relaxed);
+        if now.saturating_sub(last) < 100 && last != 0 {
+            return;
+        }
+    }
+    if SEEDING.swap(true, Ordering::SeqCst) {
+        return; // one seeding at a time
     }
     LAST_RETRY_TICK.store(now.max(1), Ordering::Relaxed);
-    let mut plat = Platform::all();
-    let mut guard = POOL.lock();
-    let pool = guard.get_or_insert_with(|| EntropyPool::new(256));
-    let was_ready = pool.ready();
-    let t0 = now_us();
-    let report = pool.seed_from(&mut plat, &SeedPolicy::RETRY);
-    drop(guard);
-    if report.ready && !was_ready {
-        crate::serial_println!("{}", status_line(&report, now_us().saturating_sub(t0)));
+    // Only a pool that is not ready leaves the lock.
+    let taken = with_pool(|p| match p {
+        Some(pool) if pool.ready() => None,
+        _ => Some(p.take()),
+    });
+    if let Some(taken) = taken {
+        let mut pool = taken.unwrap_or_else(|| EntropyPool::new(256));
+        let mut plat = Platform::all();
+        let t0 = now_us();
+        let report = pool.seed_from(&mut plat, &SeedPolicy::RETRY);
+        with_pool(|p| *p = Some(pool));
+        if report.ready {
+            crate::serial_println!("{}", status_line(&report, now_us().saturating_sub(t0)));
+        }
     }
+    SEEDING.store(false, Ordering::SeqCst);
+}
+
+/// The boot seeding, for a request that comes before `main.rs` asked for it.
+/// Not expected: it is reported, so an ordering mistake in the boot shows.
+fn init_on_demand() {
+    if !INIT_DONE.load(Ordering::SeqCst) {
+        crate::serial_println!("[entropy] random bytes were asked for before the boot seeded the CSPRNG: seeding now");
+        init();
+    }
+}
+
+fn try_fill(buf: &mut [u8]) -> bool {
+    with_pool(|p| p.as_mut().map(|p| p.fill(buf)).unwrap_or(false))
 }
 
 /// Fill `buf` with CSPRNG output. Returns `false` (and writes nothing) if the
@@ -248,18 +306,58 @@ fn seed_again() {
 /// attempt. The caller must act on `false`: the buffer is as it was.
 #[must_use = "false means the CSPRNG is not seeded and the buffer was not written"]
 pub fn getrandom(buf: &mut [u8]) -> bool {
-    let fill = |buf: &mut [u8]| POOL.lock().as_mut().map(|p| p.fill(buf)).unwrap_or(false);
-    if fill(buf) {
+    init_on_demand();
+    if try_fill(buf) {
         return true;
     }
-    seed_again();
-    if fill(buf) {
+    seed_again(false);
+    if try_fill(buf) {
         return true;
     }
     if REFUSED.fetch_add(1, Ordering::Relaxed) == 0 {
         crate::serial_println!("[entropy] a request for random bytes was refused: the CSPRNG is not seeded");
     }
     false
+}
+
+/// One seeding attempt now if the pool is closed; whether it is open after.
+/// For a waiter that gives the CPU away between attempts (the `getrandom`
+/// syscall without `GRND_NONBLOCK`).
+pub fn seed_step() -> bool {
+    init_on_demand();
+    if ready() {
+        return true;
+    }
+    seed_again(true);
+    ready()
+}
+
+/// Fill `buf` with CSPRNG output, waiting for the seed if need be: the form
+/// for kernel callers that can neither refuse nor go on without the bytes
+/// (the `AT_RANDOM` bytes and the layout of a new process, a TCP sequence
+/// number, a port, a salt, a session id). Waiting is work: each round gathers
+/// more noise into the pool (64 batches), with or without a running clock or
+/// scheduler. It never returns bytes from anything but the seeded generator.
+pub fn fill_wait(buf: &mut [u8]) {
+    init_on_demand();
+    let mut waiting = false;
+    while !try_fill(buf) {
+        if !waiting {
+            waiting = true;
+            if WAITED.fetch_add(1, Ordering::Relaxed) == 0 {
+                crate::serial_println!("[entropy] a kernel caller waits for the CSPRNG to be seeded (gathering more noise)");
+            }
+        }
+        seed_again(true);
+        core::hint::spin_loop();
+    }
+}
+
+/// `N` bytes from the CSPRNG, waiting for the seed if need be ([`fill_wait`]).
+pub fn draw_wait<const N: usize>() -> [u8; N] {
+    let mut b = [0u8; N];
+    fill_wait(&mut b);
+    b
 }
 
 /// `N` bytes from the CSPRNG, or `None` when it is not seeded. The form for
@@ -298,6 +396,7 @@ pub fn selftest() {
     let jitter_ready = probe.ready();
 
     // (3) The real global pool (all sources) hands out distinct, non-zero bytes.
+    // It was seeded early in the boot; `init` here is a no-op unless it was not.
     init();
     let from_tpm = crate::tpm::present();
     let is_ready = ready();

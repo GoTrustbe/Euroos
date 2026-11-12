@@ -366,7 +366,7 @@ pub fn seal_to_pcr(pcr: u32, secret: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     }
     let parent = eurotpm::parse_handle(&transact(&eurotpm::create_primary_owner())?)?;
     let out = (|| {
-        let nonce = get_random(16).unwrap_or_else(|| alloc::vec![0x5A; 16]);
+        let nonce = get_random(16).unwrap_or_else(|| crate::entropy::draw_wait::<16>().to_vec());
         let trial = eurotpm::parse_handle(&transact(&eurotpm::start_auth_session(true, &nonce))?)?;
         transact(&eurotpm::policy_pcr(trial, pcr))?;
         let policy = eurotpm::parse_policy_digest(&transact(&eurotpm::policy_get_digest(trial))?)?;
@@ -389,7 +389,7 @@ pub fn unseal_from_pcr(pcr: u32, private: &[u8], public: &[u8]) -> Option<Vec<u8
     let parent = eurotpm::parse_handle(&transact(&eurotpm::create_primary_owner())?)?;
     let out = (|| {
         let item = eurotpm::parse_handle(&transact(&eurotpm::load(parent, private, public))?)?;
-        let nonce = get_random(16).unwrap_or_else(|| alloc::vec![0x5A; 16]);
+        let nonce = get_random(16).unwrap_or_else(|| crate::entropy::draw_wait::<16>().to_vec());
         let sess = eurotpm::parse_handle(&transact(&eurotpm::start_auth_session(false, &nonce))?)?;
         transact(&eurotpm::policy_pcr(sess, pcr))?;
         let secret = transact(&eurotpm::unseal(item, sess)).and_then(|r| eurotpm::parse_unseal(&r));

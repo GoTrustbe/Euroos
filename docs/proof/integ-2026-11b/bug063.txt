@@ -1,0 +1,19 @@
+closeall
+dock 4
+nap 1
+wclick 300 200
+key ret
+mark
+type hello
+key ret
+nap 2
+type ping 10.0.2.2
+key ret
+nap 6
+scon ps
+type hello
+key ret
+nap 3
+scon uptime
+shot bug063-terminal
+expect [e2e] $ hello

@@ -184,6 +184,10 @@ the code.
 | `soak` 2 h 05 + `churn proc 8` every round + 4 httpd clients, integrated (KVM, `-m 16G`) | 2026-11-10 | ✅ 2 899/2 899 ok | `proof/integ-2026-11/` | on the head (`fb18477`): 371 `churn proc` commands, 2 987 glibc launches, every verdict OK; heap +0.25 kB/min; tasks, files, frames, process pool flat; httpd 1 006 005 answered / 11 failed, p99 122 ms; 0 panics, 0 fault lines. The same on `182b19c` before it (2 868 ok, +0.24 kB/min), whose boot showed BUG-059 |
 | Kernel debug round on `feature/kdebug` (BUG-053, 056, 060 to 065): TCG matrix, CI q35 matrix, host tests | 2026-11-12 | ✅ 0 markers worse | `proof/kdebug-2026-11/` | 10 TCG boots against `proof/integ-2026-11/`: 0 worse, 0 changed, `[lk]` 0 inversions; new `[bug063]`, `[fdspace]`, `[bug053]` OK in all ten; megaraid 4 boots 0 worse; q35 13/13 (12/13 before BUG-064, a self-test race); 187 host suites, 1 312 tests; self-test image reaches the desktop in 67 to 79 s under TCG at 512 MiB (144 to 159 s before; BUG-056); two builds of one commit give one `eurokernel.efi` (BUG-062); BUG-031 closed (60 boots, none silent) |
 | Same, R630 KVM: 100 short boots (user, user + IOMMU, smp 1), `soak` 2 h 05 + `churn proc 8` + 4 httpd clients, release image boot time and wizard install | 2026-11-12 | ✅ 100/100 boots, soak 2 671/2 671 ok; 🟡 BUG-065 in 8 of the 100 boots | `proof/kdebug-2026-11/` | final image: 100 boots (40 user, 30 user + IOMMU, 30 smp 1) to the desktop and clean, the three new self-tests OK in each; soak 2 h 05: 342 `churn proc` commands, 2 758 glibc launches, every verdict OK, heap +0.17 kB/min, 0 panics, httpd 883 286 answered / 10 failed; a first round on the commit before BUG-064: 78/78 boots, soak 2 724/2 724; release image 2.71 s (base 2.69 s beside it), wizard 14/14; lock screen phase 5.39 s → 0.87 s; `[3d8]` (BUG-065, open) FAILED in 8 of the 100 boots, base image 0 of 60 |
+| Integration of `feature/kdebug` and `feature/uidebug` with BUG-065 (`feature/integ-2026-11b`): host tests, TCG matrix, megaraid, CI q35 matrix, reproducible build; public image: GUI smoke twice, wizard install, open network | 2026-11-12 | ✅ 0 markers worse, q35 13/13 | `proof/integ-2026-11b/` | 1 330 host tests; matrix 10/10, 0 worse in 30 comparisons against three proofs, `[lk]` 0 inversions; megaraid 0 worse; q35 13/13 (11/13 in the first round: BUG-083, BUG-084, from the desktop pass); REPRODUCIBLE; gui-smoke 67/67 without NIC and with e1000e; wizard 15/15; ping, DNS, fetch, https on both NICs |
+| Same, R630 KVM: 204 + 20 entropy boots (and 20 under TCG), `soak` 2 h 05 + `churn proc 8` + 4 httpd clients, monkey soak 2 × 35 min, boot time, NVMe untouched, BUG-063 from the desktop | 2026-11-12 | ✅ 0 unseeded boots of 244; soak 2 744/2 744 ok | `proof/integ-2026-11b/` | before the fix 13 of 204 boots FAILED `[3d8]` and 11 were unseeded; after: 0 of 204, 0 of 20 jitter-only (KVM), 0 of 20 (TCG); soak heap +0.17 kB/min, 0 panics, httpd 917 858 answered / 0 failed; monkey 2 225 and 2 102 actions, no crash; public image 2.62 s; base image crashes 5 of 5 in the desktop BUG-063 scenario, final 0 of 5 |
+| BUG-080, BUG-081 (`feature/linux-rand`): `getrandom`, `/dev/urandom`, `/dev/random`, `AT_RANDOM` and the kernel's own callers on the CSPRNG; one early seeding. Host tests, TCG matrix, CI q35 matrix, reproducible build, public image on the open network | 2026-11-12 | ✅ 0 markers worse, q35 13/13 | `proof/linux-rand-2026-11/` | 1 330 host tests; matrix 10/10, 0 worse and 0 changed against `integ-2026-11b`, `[lk]` 0 inversions, one `[entropy]` line in every leg (two in the `kernel` legs before); `[linux-rand]` OK in 10/10; q35 13/13; REPRODUCIBLE; ping, DNS, fetch, https on both NICs. Before the fix, the same probe: one `AT_RANDOM` for 8 of 8 processes of two boots, 32 of 32 `getrandom`/device results predicted from their first 8 bytes |
+| Same, R630 KVM: 104 short boots, before/after boots (also without RDRAND and RDSEED), `soak` 1 h + `churn proc 8` + 4 httpd clients, process start before/after, public image GUI smoke and boot time | 2026-11-12 | ✅ 104/104 boots seeded, soak 1 364/1 364 ok, gui-smoke 67/67 twice; 🟡 one configuration asks before the early seeding | `proof/linux-rand-2026-11/` | 104 boots: `[3d8]`, `[3d7]`, `[3d3]` FAILED in 0, unseeded 0, `[linux-rand]` OK in 104; 416 `AT_RANDOM` values, guards, `getrandom` results and device reads each, none twice. Soak: 1 366 commands per hour (previous 1 314), 1 423 glibc launches, 0 panics, httpd 440 088 answered / 0 failed. `churn proc 8` before/after, alternating: 4 994 against 5 044 ms median, inside the spread. Boot time 2.62 s base and 2.55 s final (median of 5), kernel entry to desktop 811 and 812 ms. With a blank virtio disk the install self-test asks for a salt before the early seeding (served by the same seeding, one status line; see the proof's Open) |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
 > it ✅ from "it should work".
@@ -1392,6 +1396,9 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   and background processes, not foreground musl programs.
 - **Fix:**      the exit epilogue and `force_kernel_return` clear the flag: it is set and consumed inside
   one syscall, with interrupts off.
+- **From the desktop** (2026-11-12, `proof/integ-2026-11b/bug063-desktop.txt`): `hello` typed in the Terminal on a guest
+  with an e1000e NIC (e1000d): the public image of `7858b72` dies with `[idt] PAGE FAULT` in 5 of 5 runs, the
+  integrated image runs it in 5 of 5. `gui-smoke.py` has the step (`--net e1000e` for the driver).
 - **Regression test:** boot self-test `[bug063]`: after a foreground program the flag is 0, then 30 ticks
   with interrupts on while the drivers and background processes make syscalls. `[fdspace]` does the
   same with two busy background processes.
@@ -1406,25 +1413,63 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   (`proof/kdebug-2026-11/usbaudio-runs.txt`): a race on both, lost twice.
 - **Fix:**      the self-test calls `usbaudio_play` with interrupts off. Three runs of the leg after it: 2 of 2 packets each; the full matrix on the final image is 13 of 13.
 
-### BUG-065 — the CSPRNG stays unseeded in some KVM boots: `[3d8]`, and `[3d7]`, `[3d3]` with it ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (`getrandom` refuses for the whole boot when it happens; so far only under KVM on the R630)
+### BUG-065 — the CSPRNG stays unseeded in some KVM boots: `[3d8]`, and `[3d7]`, `[3d3]` with it ✅ FIXED
+- **Status:**   FIXED (`35a60c5`, `feature/integ-2026-11b`) · **Severity:** HIGH (keys, seeds and nonces drawn from an unseeded generator were all-zero buffers: every caller ignored the refusal)
 - **Found:**    2026-11-12 · R630 KVM boot loops of the kernel debug round, by reading the FAILED lines of boots that
   were otherwise ok: `[3d8] … jitter-alone≈167bits→ready=false, seeded(jitter+TPM,from-tpm=false)-ready=false →
   FAILED` in 8 of 100 boots of the branch's final image and 5 of 78 of its first-round image. Older than that:
   `proof/robust-2026-11/r630-kvm-highbar-smp4.markers` has the line with 21 bits.
-- **Base against branch:** the base image `7858b72` and the branch's image booted side by side on the same CPUs:
-  base 0 of 60, branch 3 of 60 (`proof/kdebug-2026-11/r630-bug065-base-vs-final.txt`).
-- **Analysis:** `entropy::gather_jitter` times two instructions between two RDTSCs; `estimate_jitter_bits`
-  credits a quarter bit per sample whose difference from the previous one has non-trivial low four bits;
-  `init` stops after 64 batches of 512 samples, ready or not, and nothing seeds the pool later. Over 16
-  batches the estimate is 322 to 1157 bits in the 60 base boots (threshold 256), 810 to 1278 in the TCG matrix boots, and
-  13 to 225 bits in the branch's failing boots. The self-test runs before any code the branch changed and
-  `gather_jitter` is byte-identical in both images; in the base image the two RDTSCs and what lies between
-  them are in one 64-byte line, in the branch's image they straddle a line boundary. Placement as the
-  cause is what is left, not what was tested.
-- **Next:**     `init` gathers until the pool is ready (same conservative credit), a later request seeds again
-  when the pool was not ready, and the sampling loop gets work whose timing does not depend on its
-  alignment. `entropy.rs` / `crates/euroentropy` were not touched by the kernel debug round.
+- **Before the fix, measured again** (`proof/integ-2026-11b/`, the merged tree `1c8eb91`, R630, KVM, `-cpu host`,
+  204 boots): `[3d8]` FAILED in 13 (6.4 %), the generator unseeded for the whole boot in 11 (5.4 %), `[3d7]` FAILED
+  in those 11.
+- **Cause.**    Three things, each measured or read:
+  1. *The noise source.* `gather_jitter` timed one multiplication between two RDTSCs, about 20 cycles. A sample
+     took one of two to four values, and what changed from sample to sample was the beat between the core's
+     clock and the TSC's: `12, 12, 12, 12, 38, …` with a 38 about every fifth sample in one P-state,
+     `18, 18, 18, 19, …` in another, and in the boots that failed `24, 24, 24, …` with a `28` every few dozen
+     samples (the raw samples of the 12
+     failing boots of a second run of 204: `bug065-samples-failing-boots.txt`). Which of these a boot sees
+     depends on the frequency the host's governor has the core at in that millisecond; it changes from batch
+     to batch within a boot. `estimate_jitter_bits` credits a constant nothing, as it should.
+  2. *`init` gave up.* 64 batches of 512 samples, about 0.6 ms, ready or not, and nothing seeded the pool later.
+  3. *The callers.* `entropy::getrandom` returns `false` and leaves the buffer alone when the pool is not
+     ready. None of its 18 call sites looked at the result: the EuroCA and attestation keys, the NTS nonces,
+     the verity salt and key, the vault master key and nonce, the policy-bundle key and WASI `random_get`
+     went on with the zeroed buffer. That is why `[3d7]` and `[3d3]` failed in the same boots: two nonces
+     that are both zero make a replayed answer look fresh.
+- **Not the cause:** where the loop lies. The kernel debug round suspected the cache-line placement of the two
+  RDTSCs. A diagnostic kernel ran the same loop from two assembly copies in every boot, one inside a 64-byte
+  line and one straddling a boundary: over 60 boots on an idle host the straddling copy was credited more in
+  35 and less in 25, the medians are 3 829 and 3 892 bits per 64 batches (`bug065-diagnosis.txt`). The placement changes
+  the cycle count of an iteration and with it which P-states give a constant; it is not what makes the
+  source poor.
+- **Fix.**
+  - `crates/euroentropy`: `EntropyPool::seed_from` is the seeding procedure, host-tested (9 tests). Order: TPM
+    (if any), RDSEED and RDRAND (if CPUID reports them), jitter. Everything is conditioned into one seed.
+    The CPU's two sources are credited 32 and 16 bits per 64-bit word and together at most half the
+    threshold, so the CPU's generator alone never opens the pool. At least four jitter batches are gathered
+    whatever the other sources gave. Gathering goes on until the 256 bits are there, at most 4 096 batches;
+    then the pool stays closed, the status line says so, and a later request continues from what is staged
+    (64 more batches, at most once a second). `estimate_jitter_bits` and the threshold are unchanged.
+  - `kernel/src/entropy.rs`: a jitter sample now times 32 read-modify-write accesses at pseudo-random places
+    of a 512 KiB block (larger than the first two cache levels), the duration of each sample fed back into
+    the walk. `getrandom` is `must_use`; `draw::<N>()` returns the bytes or `None`.
+  - Callers: the six self-tests draw with `draw()` and print FAILED without bytes; `random_get` returns `EIO`;
+    the TLS client random and key share (`net::gather_entropy`, also the RDP client's) take 32 bytes of the
+    CSPRNG into their mix, and no handshake starts without them.
+  - Every image prints one line: `[entropy] CSPRNG seeded: 537 of 256 bits · sources mixed: tpm=none,
+    rdseed=8 words, rdrand=8 words (CPU credit 128 bits, at most half the threshold), jitter=4 batches of 512
+    samples (409 bits) · 0.667 ms → OK`, or `CSPRNG NOT SEEDED: … → FAILED`.
+- **After** (`proof/integ-2026-11b/`): 204 KVM boots on the R630 (`-cpu host`): `[3d8]`, `[3d7]`, `[3d3]` FAILED in 0, unseeded 0,
+  537 bits credited in the median boot, four jitter batches in every boot; 20 KVM boots with
+  `-cpu qemu64,-rdrand,-rdseed` and 20 under TCG (jitter only): 0 and 0. A first round on the commit before
+  BUG-083/084: 174 + 20 boots, 0 and 0.
+- **Cost:** `entropy::init` 0.58 to 1.51 ms under KVM (median 0.75), 4 to 9 ms under TCG; kernel entry to desktop of the
+  public image 830 ms (median of 5) against 838 ms before the fix; `boot-time.py` 2.62 s against 2.77 s, inside
+  the spread of a shared host.
+- **Regression tests:** `[3d8]` (unchanged in what it demands: jitter alone reaches 256 bits in 16 batches; new:
+  jitter is in the seed of the global pool); `[entropy]` in every boot; `seed_tests` in `crates/euroentropy`.
+- **Left open:** BUG-082. BUG-080 and BUG-081 are fixed on `feature/linux-rand` (`proof/linux-rand-2026-11/`).
 
 ### BUG-070 — EuroFiles: the folder icon of a list row is a slanted hook ✅ FIXED
 - **Status:**   FIXED (`98bb550`) · **Severity:** COSMETIC
@@ -1491,6 +1536,185 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Found:**    2026-11-12 · the AltGr step: the euro sign of `[e2e] $ echo …` arrived as three U+FFFD
 - **Analysis:** the reader decoded every `recv` on its own; the UART delivers the three bytes in separate reads.
   **Fix:** an incremental UTF-8 decoder.
+
+### BUG-080 — `getrandom`, `/dev/urandom` and `/dev/random` of the Linux ABI are not the CSPRNG ✅ FIXED
+- **Status:**   FIXED (`f83007a`, with `0b33035`; `feature/linux-rand`) · **Severity:** HIGH (every key a userspace
+  program makes: Chromium's TLS, an SSH or GnuPG key; and the stack guard of every process)
+- **Found:**    2026-11-12 · by reading, while looking for the callers of the CSPRNG (BUG-065). Measured in this
+  round with `userland/randprobe.c` on the image before the fix (`proof/linux-rand-2026-11/`).
+- **Before, measured** (self-test image of `91afd7d`, two boots under TCG and two under KVM, two musl and two
+  glibc processes per boot):
+  - `ring3::fill_random` served the `getrandom` syscall (318, both dispatchers) and reads of `/dev/urandom` and
+    `/dev/random`: splitmix64 over a global counter plus `ticks * constant`. The first 8 bytes of a result
+    are the generator's state: `scripts/rand-boots.py` predicted words 2 to 4 of 32 of 32 results from
+    word 1, under TCG and under KVM.
+  - `AT_RANDOM` was the constant `5a45640726c1e083a24d6c0f2ec9e88b` in all three stack builders: 8 of 8
+    processes. glibc's stack guard was `0045640726c1e083` and its pointer guard `a24d6c0f2ec9e88b`, musl's
+    guard `5a00640726c1e083`, in every process of every boot. A stack protector with a published canary
+    protects nothing.
+  - `pread` on a random device returned the bytes it was registered with: `00bb7733efab6622…` for
+    `/dev/urandom` at offset 0 in every process, 32 zero bytes for `/dev/random`. `main.rs` registers
+    `/dev/urandom` again for a chrome run, as an ordinary 4 KiB file; a name lookup takes the first entry.
+  - Any flag value was accepted; nothing ever waited or refused.
+  - Wrong in the tracker until now: "the pool is seeded before the first process starts". `entropy::init`
+    ran at line 2304 of `main.rs`, after the scheduler, the network bring-up, `euroid::init_from_disk` and
+    the boot programs.
+- **Fix.**
+  - `0b33035`: `tpm::init` and `entropy::init` run right after the HPET, before anything that draws. `init`
+    works once; a request before it does the same seeding and says so. The pool is taken with interrupts
+    off. `fill_wait`/`draw_wait` for kernel callers that cannot refuse.
+  - `f83007a`: `fill_random` draws from `entropy::getrandom` in 4 KiB pieces. `getrandom(buf, len, flags)`:
+    unknown flags and `GRND_RANDOM|GRND_INSECURE` → `EINVAL`; pool not seeded → the call waits (each round
+    gathers 64 batches of noise), with `GRND_NONBLOCK` → `EAGAIN` and nothing written; `GRND_RANDOM` is the
+    same generator; `GRND_INSECURE` is accepted and waits like no flag (no unseeded bytes exist here); never
+    a short result; at most 32 MiB − 1 per call. Both devices: the same generator for `read` and `pread`,
+    one entry per device in the file table, no stored bytes. `AT_RANDOM`: 16 CSPRNG bytes per process
+    image. `aslr_slides`: 8 CSPRNG bytes.
+  - There is no vDSO `getrandom` and no `/proc/sys/kernel/random`.
+- **After** (`proof/linux-rand-2026-11/`): `[linux-rand]` OK in the 10 matrix boots, in 104 short KVM boots on
+  the R630 and in 7 comparison boots (TCG, KVM, KVM without RDRAND and RDSEED); over the short boots
+  416 `AT_RANDOM` values, stack guards, `getrandom` results and device reads each, no value twice;
+  0 of them predicted; 1 MiB streams from `getrandom` and from `/dev/urandom` pass bit balance, chi-square
+  and the repeated-block search (they did before as well: splitmix64 is statistically clean; the constant
+  and the prediction are what distinguish the two).
+- **Cost:**     `churn proc 8` (8 glibc launches) before and after, alternating, three rounds under KVM: median 4 994 against
+  5 044 ms, inside the spread of the rounds; the 1 h soak ran 1 366 commands per hour (previous soak 1 314)
+  and 1 423 glibc launches; public image boot 2.62 s base, 2.55 s final, kernel entry to desktop 811 and
+  812 ms (median of 5). `entropy::init` 0.59 to 1.35 ms under KVM, as before; it only moved.
+- **Regression tests:** `[linux-rand]` (every self-test image); `scripts/rand-boots.py` (between boots);
+  `userland/randprobe.c` runs on Linux as well, as the reference.
+- **Left open:** with a blank virtio data disk the install self-test `[q1x3]` asks for a salt before the early
+  seeding and does the seeding itself (one status line and a note; a TPM would be missing from that seed):
+  the two init lines belong before the storage phase. A Chromium start on this kernel was run once (40 minutes of a chrome boot under TCG beside the base: the same serial lines per tag, no fault, neither got to a paint); the Chromium team's own
+  round is still to come. A read of a random device holds the fd-table lock for the whole request, as
+  before, and the generator is slower than splitmix64: a cap per read (short reads are allowed above
+  256 bytes) would bound that. `O_NONBLOCK` on the devices is not looked at. BUG-088 (the slides are
+  narrow), BUG-089 (no reseed).
+
+### BUG-081 — key material outside the CSPRNG with a weak fallback: `euroid::rand_bytes`, `net::rand_u64` ✅ FIXED
+- **Status:**   FIXED (`fd0982b`, `feature/linux-rand`) · **Severity:** MEDIUM (only on a machine without a TPM,
+  respectively without RDRAND; the QEMU default CPU model has neither)
+- **Found:**    2026-11-12 · by reading (BUG-065). Not provoked.
+- **Before:**   `euroid::rand_bytes` (password salts at 10 call sites, the session id of a login, the wallet's
+  issuer and holder seeds) asked the TPM and otherwise ran a xorshift seeded with the tick counter.
+  `net::rand_u64` (DNS transaction id and source port, TCP initial sequence numbers at four places,
+  ephemeral ports, the ASLR slides) was RDRAND when the CPU has it and otherwise `rdtsc ^ hpet ^ counter`.
+  Without a TPM, `main.rs` gave fixed bytes to the FDE self-test (`5a…`), the vault as its master key
+  (`a5…`, kept for the running system), the VPN (`11…` to `14…`), ML-KEM (`21…`, `22…`), EuroCA (`3c…`),
+  the quote (`2a…`, `9e…`) and EuroIDM (`1d…`). The vault's seal nonce was a counter without a TPM; the
+  caller nonce of the two TPM policy sessions was `5a…` when `GetRandom` failed; `mktemp` named its file
+  after `epoch ^ ticks * constant`.
+- **Fix.**      All of them draw from the CSPRNG with `entropy::fill_wait`/`draw_wait`: they wait for the seed and
+  have no other source. The pool is seeded before any of them runs (`0b33035`). The TPM arm of the
+  `main.rs` seeds is unchanged (`from-tpm=true` still means bytes straight from the TPM).
+- **After:**    the matrix (0 markers worse, the `kernel` legs run DHCP, DNS, HTTP and HTTPS through
+  `rand_u64`), the public image on the open network (ping, DNS, fetch, https on both NICs), the soak with
+  4 httpd clients.
+- **Not covered:** no configuration of this proof has a TPM (no `swtpm` on either machine): the early
+  `tpm::init` and a pool with TPM bytes in it were not run. BUG-086 (the DHCP id was never one of
+  `rand_u64`'s users; it is a constant).
+
+### BUG-082 — the jitter estimator credits a periodic series ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (an over-estimate; the source it over-estimated is no longer used)
+- **Found:**    2026-11-12 · the raw samples of the BUG-065 diagnosis.
+- **Actual:**   `estimate_jitter_bits` counts a sample when its difference from the previous one has low four bits
+  other than 0 and 15, and credits a quarter bit per counted sample. The old two-instruction sample gave
+  `12, 12, 12, 12, 38, 12, 12, 12, 14, 38, …`: two to four values, a 38 about every fifth sample. Every step
+  to 38 and back is counted: 60 to 95 bits per batch of 512, 4 200 bits over 64 batches in the median boot,
+  for a series that is mostly a clock beat. The estimator cannot tell a near-period from noise.
+- **Now:**      the memory-walk sample is not such a series (88 ticks and up, 20 to 161 distinct values per batch,
+  the most frequent value 5 to 19 % of a batch, no period up to 16 in the first 64 samples of any of 108
+  boots: `proof/integ-2026-11b/bug065-diagnosis.txt`), and the quarter bit per sample is far below what its
+  spread suggests. But the estimate is still a heuristic and not an SP 800-90B assessment.
+- **Next:**     add the two SP 800-90B health tests on the raw samples (repetition count, adaptive proportion)
+  and a check that refuses a batch drawn from a handful of values; measure the min-entropy of the walk
+  off line with the 90B estimators on raw dumps from the R630, a NUC and TCG. This strengthens the gate;
+  it was not done in the integration because every boot of every configuration has to be shown to still
+  reach the threshold with it.
+- **2026-11-12:** not done in the BUG-080/081 round either; what it needs, in five steps, is section 6 of
+  `proof/linux-rand-2026-11/README.md`. With BUG-089 the same tests have to run on every reseed.
+
+### BUG-083 — the `[altgr]` self-test left the AltGr latch set: typing on the self-test image gave third-level characters ✅ FIXED
+- **Status:**   FIXED (`6fcf24c`) · **Severity:** LOW (self-test image only; the public image runs no self-test)
+- **Found:**    2026-11-12 · CI q35 matrix of the integration, legs `usbhub` and `hwprobe`: a command typed on the
+  desktop never ran. `feature/uidebug` alone fails the same two legs, `feature/kdebug` passes them
+  (`proof/integ-2026-11b/q35-legs-by-branch.txt`); the desktop pass had not run this matrix.
+- **Analysis:** `ps2::altgr_selftest` feeds `E0` alone, then `38 03 83 E0 B8`, reads one character and empties the
+  ring. The release of AltGr (`E0 B8`) was thrown away undecoded, the latch stayed set for the rest of the
+  boot, and every key was looked up in the third level of the layout: `uname` arrived as `€`
+  (`typed-on-the-selftest-desktop.txt`).
+- **Fix:**      the rest of the ring is decoded before it is emptied; the verdict now includes "latches released at
+  the end".
+
+### BUG-084 — staged 3-byte PS/2 mouse packets in 4-byte mode: no window had the keyboard, the Terminal was scrolled back ✅ FIXED
+- **Status:**   FIXED (`6fcf24c`) · **Severity:** LOW (self-test image only)
+- **Found:**    2026-11-12 · the same two q35 legs, after BUG-083 was fixed and they still failed.
+- **Analysis:** the X11 self-tests (`gxwin`, `gxlive`) stage mouse input with `mouse::push_byte`, three bytes per
+  packet, ending with the left button down. That press is still pending when the desktop loop starts and
+  lands on the Terminal under the pointer, which is how the Terminal came to the front on the self-test
+  image. Since the mouse wheel (desktop pass) a PS/2 mouse that answers as an IntelliMouse is in 4-byte
+  mode: the staged bytes were framed as other packets, the press was lost and the wheel nibble of a
+  misframed packet scrolled the Terminal 63 lines back. The window in front was the empty GTK demo
+  window, which takes no keys.
+- **Fix:**      `mouse::push_packet(flags, dx, dy)` sends a whole packet in the format the mouse is in; the two
+  self-tests use it.
+- **After:**    CI q35 matrix 13/13; `uname` typed 8 s after the desktop runs.
+
+### BUG-085 — the desktop loop's deadman trips on a shell command longer than 15 s: one FAILED line in every soak ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (a log line; nothing is reset)
+- **Found:**    2026-11-12 · the soak of the integration, by reading the FAILED lines of the whole serial log
+  instead of the boot part: `[3g2-wire] WATCHDOG TRIPPED - main loop hung; would reset (i6300esb) FAILED`.
+- **Analysis:** `watchdog::arm(1500)`: the desktop loop pets the deadman once per iteration and the scheduler
+  tick checks it. A shell command runs inside one iteration; the first `churn fs 1` of a soak takes 30 to
+  57 s. The line is in the serial logs of the integration's soak (2026-11-10) and of both soaks of the
+  kernel debug round as well, at the same command (`proof/integ-2026-11b/watchdog-line-in-soaks.txt`): the
+  markers kept of a soak were cut at the desktop.
+- **Next:**     pet from the long shell commands, or check the scheduler's progress instead of the desktop loop;
+  keep the verdict lines of the whole soak log in the proof.
+
+### BUG-086 — the DHCP transaction id is a constant and a reply is not matched on it ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW to MEDIUM (a host on the same link that answers faster than the DHCP server
+  sets address, gateway and DNS server; the id is what makes that a race it has to win blind)
+- **Found:**    2026-11-12 · by reading, the grep round of BUG-080/081 for randomness in a security context. Not provoked.
+- **Actual:**   five senders use a fixed `xid`: `main.rs` (`0x4505_5201`), `net_bringup.rs` (`0x4E55_5021`), `net.rs`
+  late bring-up (`0x4C41_5445`) and `udrv.rs` (`0x4555_0001`, `0x4555_0002`). `dhcp::parse` (`crates/euronet`) does
+  not return the `xid` of a reply, and `dhcp_reply` filters on the message type only: any OFFER or ACK that
+  arrives is taken. BUG-081's description counted the DHCP id among the users of `net::rand_u64`; it never was.
+- **Next:**     `xid` from `net::rand_u64` (the CSPRNG since BUG-081) per exchange; `DhcpInfo` carries the reply's
+  `xid` and the client MAC, and a reply with another one is dropped; host tests in `euronet`. Not done here: it
+  touches all four bring-up paths, and each needs its DHCP run again on every NIC driver.
+
+### BUG-087 — the SMB client challenge is the RTC second ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW to MEDIUM (the client challenge is the client's contribution to the
+  NTLM response; a server that knows it in advance can prepare its side)
+- **Found:**    2026-11-12 · by reading (the same grep round). Not provoked.
+- **Actual:**   `smbfs::open_share` builds the 8-byte client challenge of the session setup from `rtc::epoch()`
+  (four bytes) and the constant `45 55 52 4F`; the comment says "good enough; not secret". It has to be
+  unpredictable per session.
+- **Next:**     `crate::entropy::draw_wait::<8>()`. Two lines; not changed in this round because the images under
+  test were already built and the SMB mount self-test (`[io5]`) only runs in a dev build with a server.
+
+### BUG-088 — the address-space slides of a Linux-ABI process are 4 to 10 bits wide ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (hardening: the layout can be guessed in a few hundred tries)
+- **Found:**    2026-11-12 · by reading `aslr_slides` while moving its source to the CSPRNG (BUG-080).
+- **Actual:**   `brk` 4 bits (64 KiB steps), the mmap base 5 bits (64 KiB steps), the stack top 8 bits (4 KiB
+  steps), the demand pool 10 bits (2 MiB steps). The bits are now unpredictable (they came from RDRAND or
+  `rdtsc ^ hpet ^ counter`), but there are few of them: the slides stay inside a 2 MiB arena, respectively
+  2 GiB of the demand pool. Where the executable and the interpreter are loaded was not looked at.
+- **Next:**     measure what a glibc process can take (the arena is the limit, not the generator); 28 bits for
+  mmap and 22 for the stack are what Linux gives a 64-bit process.
+
+### BUG-089 — the CSPRNG is seeded once per boot and never again ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise
+- **Found:**    2026-11-12 · by reading `entropy.rs` and `crates/euroentropy` (BUG-080).
+- **Actual:**   `seed_from` runs in `entropy::init` and, for a pool that is still closed, on a later request.
+  Once the pool is open nothing is added to it: no periodic reseed, no reseed after resume, no
+  `vmgenid`. Two guests resumed from one snapshot continue the same HMAC-DRBG state and hand out the same
+  bytes (`AT_RANDOM`, TLS key shares, sequence numbers) until they diverge by the number of requests. A
+  state that leaks once (a memory dump) predicts every later output of that boot.
+- **Next:**     reseed from RDSEED/RDRAND, the TPM and a jitter batch every N minutes or N requests
+  (`EntropyPool::add` already reseeds an open pool; SP 800-90A allows 2^48 requests, so this is about
+  recovery, not about the limit), on resume, and when the ACPI VM generation id changes.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

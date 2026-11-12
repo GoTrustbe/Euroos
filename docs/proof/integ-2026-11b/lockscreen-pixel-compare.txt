@@ -1,0 +1,15 @@
+# The lock screen frame of the final self-test image (6fcf24c), against the frames of ../kdebug-2026-11/screenshots/
+# (cmpshot.py of that round). boot-time.py --marker "[ag-lock] GUI" --shot, 1920x1080, -smp 2 -m 2G.
+
+== KVM (R630), -rtc base=2026-11-12T10:00:00
+lock-kdebug-kvm.png vs screenshots/lock-integ-kvm.png: differing pixels: 0 of 2073600; bounding box: None
+lock-base-kvm.png   vs screenshots/lock-integ-kvm.png: differing pixels: 0 of 2073600; bounding box: None
+[ag-lock] background 0 of 15360 sampled pixels off the per-pixel gradient, frame 250 ms
+
+== TCG (build server, smp 4, 512 MiB), -rtc base=2026-11-12T10:00:50
+lock-kdebug-tcg.png vs screenshots/lock-integ-tcg.png: differing pixels: 166 of 2073600; bounding box: (1098, 654, 1123, 663)
+outside (1090,650)-(1130,668): 0 differing pixels
+   (the box is the clock on the card: this frame was painted in another minute than that one)
+[ag-lock] background 0 of 15360 sampled pixels off the per-pixel gradient, frame 2380 ms
+
+# First round (image of c0db228), KVM: 0 of 2073600 against both, frame 240 ms.

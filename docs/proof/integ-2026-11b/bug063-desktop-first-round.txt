@@ -1,0 +1,10 @@
+pubbase run 1: probe rc=1; hello lines on the Terminal: 0; ping answers: 0; crash lines: [idt] PAGE FAULT addr=0xfffffffffffffff5 code=PageFaultErrorCode(CAUSED_BY_WRITE) @ 0x0
+pubbase run 2: probe rc=1; hello lines on the Terminal: 0; ping answers: 0; crash lines: [idt] PAGE FAULT addr=0xfffffffffffffff5 code=PageFaultErrorCode(CAUSED_BY_WRITE) @ 0x0
+pubbase run 3: probe rc=1; hello lines on the Terminal: 0; ping answers: 0; crash lines: [idt] PAGE FAULT addr=0xfffffffffffffff5 code=PageFaultErrorCode(CAUSED_BY_WRITE) @ 0x0
+pubbase run 4: probe rc=1; hello lines on the Terminal: 0; ping answers: 0; crash lines: [idt] PAGE FAULT addr=0xfffffffffffffff5 code=PageFaultErrorCode(CAUSED_BY_WRITE) @ 0x0
+pubbase run 5: probe rc=1; hello lines on the Terminal: 0; ping answers: 0; crash lines: [idt] PAGE FAULT addr=0xfffffffffffffff5 code=PageFaultErrorCode(CAUSED_BY_WRITE) @ 0x0
+pub2 run 1: probe rc=0; hello lines on the Terminal: 2; ping answers: 1; crash lines: none
+pub2 run 2: probe rc=0; hello lines on the Terminal: 2; ping answers: 1; crash lines: none
+pub2 run 3: probe rc=0; hello lines on the Terminal: 2; ping answers: 1; crash lines: none
+pub2 run 4: probe rc=0; hello lines on the Terminal: 2; ping answers: 1; crash lines: none
+pub2 run 5: probe rc=0; hello lines on the Terminal: 2; ping answers: 1; crash lines: none

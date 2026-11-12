@@ -1951,22 +1951,13 @@ fn rdrand64() -> Option<u64> {
     None
 }
 
-/// 64 bits of unpredictability: hardware RDRAND if available, otherwise a
-/// mix of RDTSC + HPET + a running counter. For txid/source-port randomization
-/// (defence-in-depth against DNS spoofing — RFC 5452).
+/// 64 unpredictable bits from the kernel CSPRNG: DNS transaction ids and
+/// source ports (RFC 5452), TCP initial sequence numbers (RFC 6528) and
+/// ephemeral ports. Before BUG-081 this was RDRAND alone where the CPU has
+/// it and `rdtsc ^ hpet ^ counter` where it does not. Waits for the seed
+/// rather than return anything else; safe with interrupts off.
 pub fn rand_u64() -> u64 {
-    // Only call RDRAND if the CPU advertises it — otherwise the opcode is
-    // invalid (#UD). On qemu64/TCG RDRAND is absent; then the fallback mix.
-    if have_rdrand() {
-        if let Some(r) = rdrand64() {
-            return r;
-        }
-    }
-    let t = unsafe { core::arch::x86_64::_rdtsc() };
-    let h = crate::hpet::counter();
-    let mut c = ENTROPY_CTR.lock();
-    *c = c.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    t ^ h.rotate_left(17) ^ *c
+    u64::from_le_bytes(crate::entropy::draw_wait::<8>())
 }
 
 /// 32 random bytes for a TLS key/nonce. `domain` separates

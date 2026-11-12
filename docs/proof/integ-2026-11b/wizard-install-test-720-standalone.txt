@@ -1,0 +1,11 @@
+[wizard-test] RUN 1 skipped (--standalone)
+[wizard-test] RUN 2: boot the installed disk alone
+[wizard-test] PASS: installed root mounted from disk
+[wizard-test] PASS: identity store loaded from disk
+[wizard-test] PASS: lockscreen reached
+[wizard-test] PASS: no unattended auto-login on the installed system
+[wizard-test] PASS: wrong password rejected
+[wizard-test] PASS: typed password signs in as the created user
+[wizard-test] PASS: desktop after login
+[wizard-test] first-run tour closed with Esc
+[wizard-test] 7/7 checks passed; screenshots + serial logs in /opt/euroos/integ2-runs/wizard720/

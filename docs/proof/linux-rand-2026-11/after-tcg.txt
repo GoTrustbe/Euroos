@@ -1,0 +1,89 @@
+boot 1: verdict after 182.2 s
+boot 2: verdict after 176.7 s
+
+== 2 boot(s)
+boot 1: [linux-rand] verdict OK; processes ['glibc#1', 'glibc#2', 'musl#1', 'musl#2']; [entropy] status lines 1 (seeded 1)
+boot 2: [linux-rand] verdict OK; processes ['glibc#1', 'glibc#2', 'musl#1', 'musl#2']; [entropy] status lines 1 (seeded 1)
+
+-- at_random: 8 values, 8 distinct
+   boot1/glibc#1      6a769e22bc7a0ed70ed7476b483ac53d
+   boot1/glibc#2      ebe75a175ca303932a136e35265bcead
+   boot1/musl#1       65052db8c251b990a2df8eafaa0be0ea
+   boot1/musl#2       5e94716205e1f2e85ebbef3ebc6f9636
+   boot2/glibc#1      e432118527577e1e5a82a52d9f7de409
+   boot2/glibc#2      ff8afce209294e705ad7e28ece90624d
+   boot2/musl#1       182437c3d802f73801a40ba9c5b986e7
+   boot2/musl#2       8b142afc43682f94cfabc6faf5ac41c5
+
+-- stack_guard: 8 values, 8 distinct
+   boot1/glibc#1      00769e22bc7a0ed7
+   boot1/glibc#2      00e75a175ca30393
+   boot1/musl#1       65002db8c251b990
+   boot1/musl#2       5e00716205e1f2e8
+   boot2/glibc#1      0032118527577e1e
+   boot2/glibc#2      008afce209294e70
+   boot2/musl#1       180037c3d802f738
+   boot2/musl#2       8b002afc43682f94
+
+-- getrandom: 8 values, 8 distinct
+   boot1/glibc#1      48553b0d513d6764d0ee7d2352b5fd4857122d89e52da85141381d03a2b16924
+   boot1/glibc#2      f2f39daedc14b767c20adff3cc318fd2f4d2cbc2200357fd2b4e4639505d7504
+   boot1/musl#1       81ba14161d3e128c4961a03969cfdd29d711904aec9b9dfd8a0db909743cc36d
+   boot1/musl#2       85a27356fda29078d12f15354a57a095f13a87ab575937db9888ff50cba44712
+   boot2/glibc#1      909c3f953e9170877e5dcf81c5fe5cbb1e18a4f01bf0d4670e628d1de2516c20
+   boot2/glibc#2      0d78b9cd6d0213bac7380960aee54399080a1ab93c505b32fa99bc5f12786c31
+   boot2/musl#1       5f90e0f3a859229097222dabebe33606b8629acde20d82931c46892d99f19780
+   boot2/musl#2       6e87879ac4b6078386f664cd91f17c3c17cb846393931fdbdd4079650cf9122f
+
+-- getrandom2: 8 values, 8 distinct
+   boot1/glibc#1      05f438c750810d2a4ef95332e396112f2e6d549047ac37ef735d91acc6a597e0
+   boot1/glibc#2      186d598687eae10ea78520b3cf4b347f04ce2412e8a60246fb1fac9ce692faaa
+   boot1/musl#1       1e9b358b29c6f342d46d853fb90ccee5c46ef999cfd67ab45d104b1f2121bf0e
+   boot1/musl#2       cc4a037e1a51a929928720e0a7efe8df534ab3273bfdc61742cd50c103b1d77d
+   boot2/glibc#1      b3a78adcfc2485aea065380b52b708e7231411ff99b4b8ce80887f069d8f1d9d
+   boot2/glibc#2      46a0a8a7efc03958ef7b7d0cfd0614ef1403364c5fd5d6a1de4dc3c1209bbabb
+   boot2/musl#1       7597c3ce7f952e3bbad5f380e01920c04ec331fbbfb63272760a7be2bd690c50
+   boot2/musl#2       3fb29032e894536f7cfe61398067d07091a293515bd672e0d1da700ec2b6cb5c
+
+-- urandom: 8 values, 8 distinct
+   boot1/glibc#1      4eee7a4e7aa3c0af30af01a54d41768709afe3f285dfce41837465081a9ce6e7
+   boot1/glibc#2      d3770c755d4f7e6b533cb800cacfe7e8f98ec1e046981d00a2ffb44f384fbb7b
+   boot1/musl#1       68fb01cfc8ce5d51dcd50c4583b5f4bf37578485395c45fc4932852489022c3a
+   boot1/musl#2       1dfd69df0d5fbc546f8cf72fa4d03504b2bca3336e13c77b53fa9474956a189c
+   boot2/glibc#1      696b01f7ccab6d0323c9ac16dd3ffa22a0dad3b3466f6aeb3c49e740c233a392
+   boot2/glibc#2      3e9484f2a8d8066f26d7166bab35ede89e76861784189f9c6cef2e36b643ce9c
+   boot2/musl#1       de0284f1662bdc80f9711a07994c7d9d12c1ae0efe6f5392e900d605fe0bb3c6
+   boot2/musl#2       d2042ffb0449e4df06b4701c62f77841dc301d156effe712b28d9bb715c6ee55
+
+-- random: 8 values, 8 distinct
+   boot1/glibc#1      7aee477996bc525b3a107c5a74fc406ded33dd3dfc487d4ae391008528acdf29
+   boot1/glibc#2      3c6c43625fcf9869f435249924eee7a5d972ebe1a7d2b8d864ddb3001122402b
+   boot1/musl#1       597a5a3e7562e361e6d9da46ed0a7280ad2421de390b554077f5f52d457a3dc8
+   boot1/musl#2       d60421054cc43a42761c2c3041d6e5d45bd23736df3969eae7a9a583883fe63b
+   boot2/glibc#1      c5dd4be4db17e2238f46a58ea3c85e781ee2d1c1008f82389bffc37541eba16b
+   boot2/glibc#2      50570dc7b8ea08b9209883e6600b075f328ba8cdd4d717af2234a329c69de3d1
+   boot2/musl#1       0ed3f5babe5073f47c298030bbf5be4f591a7b136766033855d5b3fdc9476562
+   boot2/musl#2       8c5d6fe05f477f627a6eb8b5d7dd6d3355033b87f8cbaef166f8c670f910a5af
+
+-- getrandom against the old generator (splitmix64 over a counter): words 2..4 of a call predicted from its first word
+   boot1/glibc#1      getrandom  predicted 0 of 3
+   boot1/glibc#2      getrandom  predicted 0 of 3
+   boot1/musl#1       getrandom  predicted 0 of 3
+   boot1/musl#2       getrandom  predicted 0 of 3
+   boot2/glibc#1      getrandom  predicted 0 of 3
+   boot2/glibc#2      getrandom  predicted 0 of 3
+   boot2/musl#1       getrandom  predicted 0 of 3
+   boot2/musl#2       getrandom  predicted 0 of 3
+
+-- stream statistics
+   boot1/glibc#2      stat getrandom bytes=1048576 ones=4195879 of 8388608 (off by 1575, limit 7242) worst-bit-position-off=829 (limit 2560) chi2=269 (140..370) blocks16=65536 repeated=0 ok
+   boot1/glibc#2      stat urandom bytes=1048576 ones=4194763 of 8388608 (off by 459, limit 7242) worst-bit-position-off=701 (limit 2560) chi2=261 (140..370) blocks16=65536 repeated=0 ok
+   boot1/musl#2       stat getrandom bytes=262144 ones=1049597 of 2097152 (off by 1021, limit 3622) worst-bit-position-off=520 (limit 1280) chi2=261 (140..370) blocks16=16384 repeated=0 ok
+   boot1/musl#2       stat urandom bytes=262144 ones=1048337 of 2097152 (off by 239, limit 3622) worst-bit-position-off=320 (limit 1280) chi2=239 (140..370) blocks16=16384 repeated=0 ok
+   boot2/glibc#2      stat getrandom bytes=1048576 ones=4196105 of 8388608 (off by 1801, limit 7242) worst-bit-position-off=1209 (limit 2560) chi2=253 (140..370) blocks16=65536 repeated=0 ok
+   boot2/glibc#2      stat urandom bytes=1048576 ones=4196145 of 8388608 (off by 1841, limit 7242) worst-bit-position-off=1067 (limit 2560) chi2=218 (140..370) blocks16=65536 repeated=0 ok
+   boot2/musl#2       stat getrandom bytes=262144 ones=1047618 of 2097152 (off by 958, limit 3622) worst-bit-position-off=577 (limit 1280) chi2=248 (140..370) blocks16=16384 repeated=0 ok
+   boot2/musl#2       stat urandom bytes=262144 ones=1049193 of 2097152 (off by 617, limit 3622) worst-bit-position-off=419 (limit 1280) chi2=271 (140..370) blocks16=16384 repeated=0 ok
+
+nothing equal, nothing predicted, every verdict OK
+RESULT: PASS (random)

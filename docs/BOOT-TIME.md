@@ -259,6 +259,11 @@ self-test image keeps the grace period.
   under TCG and from 5.39 s to 0.87 s on the R630. The release image on a
   live medium skips the lock screen.
 
+- 2026-11-12, after BUG-065 (`docs/proof/integ-2026-11b/`): seeding the CSPRNG takes
+  0.58 to 1.51 ms under KVM and 4 to 9 ms under TCG (`[entropy] … ms`). Release
+  image on the R630, five boots: 2.62 s (2.33 to 2.81), kernel entry to desktop
+  830 ms; the image before the fix beside it 2.77 s and 838 ms.
+
 Closed since: the inline bring-up of the self-test image looked for answers
 before the configuration was saved (BUG-047: fixed by BUG-039 and `182b19c`;
 `phase net` of a kernel-driver boot under TCG is 15.9 s, with the HTTP and

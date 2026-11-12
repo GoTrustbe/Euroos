@@ -1,0 +1,160 @@
+//! TEMPORARY diagnostic for BUG-065 (never committed).
+use alloc::vec::Vec;
+use euroentropy::estimate_jitter_bits;
+
+core::arch::global_asm!(
+    ".p2align 6",
+    ".global ent_diag_a",
+    "ent_diag_a:",
+    "mov r8, 0x9E3779B97F4A7C15",
+    "mov r10, 6364136223846793005",
+    "xor ecx, ecx",
+    "2:",
+    "rdtsc",
+    "shl rdx, 32",
+    "or rax, rdx",
+    "mov r9, rax",
+    "imul r8, r10",
+    "add r8, rcx",
+    "rdtsc",
+    "shl rdx, 32",
+    "or rax, rdx",
+    "sub rax, r9",
+    "mov [rdi + rcx*8], rax",
+    "inc rcx",
+    "cmp rcx, rsi",
+    "jb 2b",
+    "ret",
+    ".p2align 6",
+    ".skip 31, 0x90",
+    ".global ent_diag_b",
+    "ent_diag_b:",
+    "mov r8, 0x9E3779B97F4A7C15",
+    "mov r10, 6364136223846793005",
+    "xor ecx, ecx",
+    "2:",
+    "rdtsc",
+    "shl rdx, 32",
+    "or rax, rdx",
+    "mov r9, rax",
+    "imul r8, r10",
+    "add r8, rcx",
+    "rdtsc",
+    "shl rdx, 32",
+    "or rax, rdx",
+    "sub rax, r9",
+    "mov [rdi + rcx*8], rax",
+    "inc rcx",
+    "cmp rcx, rsi",
+    "jb 2b",
+    "ret",
+);
+extern "sysv64" {
+    fn ent_diag_a(buf: *mut u64, n: usize);
+    fn ent_diag_b(buf: *mut u64, n: usize);
+}
+
+fn rdtsc() -> u64 {
+    unsafe { core::arch::x86_64::_rdtsc() }
+}
+
+fn old_loop(n: usize) -> Vec<u64> {
+    let mut s = Vec::with_capacity(n);
+    let mut acc: u64 = 0x9E37_79B9_7F4A_7C15;
+    for i in 0..n {
+        let t0 = rdtsc();
+        acc = acc.wrapping_mul(6364136223846793005).wrapping_add(i as u64);
+        core::hint::black_box(acc);
+        let t1 = rdtsc();
+        s.push(t1.wrapping_sub(t0));
+    }
+    s
+}
+
+fn mem_loop(n: usize, mem: &mut [u8], acc: &mut u64) -> Vec<u64> {
+    let mut s = Vec::with_capacity(n);
+    let mask = mem.len() - 1;
+    for _ in 0..n {
+        let t0 = rdtsc();
+        for _ in 0..32 {
+            *acc = acc.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let idx = ((*acc >> 33) as usize) & mask;
+            mem[idx] = mem[idx].wrapping_add(*acc as u8);
+        }
+        core::hint::black_box(&mem);
+        let t1 = rdtsc();
+        let d = t1.wrapping_sub(t0);
+        *acc ^= d;
+        s.push(d);
+    }
+    s
+}
+
+fn stats(tag: &str, s: &[u64]) {
+    let mut v = s.to_vec();
+    v.sort_unstable();
+    let (min, max, med) = (v[0], v[v.len() - 1], v[v.len() / 2]);
+    let mut distinct = 0;
+    let (mut mode, mut modecnt) = (0u64, 0usize);
+    let mut i = 0;
+    while i < v.len() {
+        let mut j = i;
+        while j < v.len() && v[j] == v[i] {
+            j += 1;
+        }
+        distinct += 1;
+        if j - i > modecnt {
+            modecnt = j - i;
+            mode = v[i];
+        }
+        i = j;
+    }
+    crate::serial_println!(
+        "[ent-diag] {tag} bits={} min={min} med={med} max={max} distinct={distinct} mode={mode}x{modecnt} first64={:?}",
+        estimate_jitter_bits(s),
+        &s[..64]
+    );
+}
+
+pub fn run() {
+    let mut buf = alloc::vec![0u64; 512];
+    for r in 0..3 {
+        stats(if r == 0 { "old r0" } else if r == 1 { "old r1" } else { "old r2" }, &old_loop(512));
+    }
+    unsafe { ent_diag_a(buf.as_mut_ptr(), 512) };
+    stats("asm-aligned", &buf);
+    unsafe { ent_diag_b(buf.as_mut_ptr(), 512) };
+    stats("asm-straddle", &buf);
+    let mut mem = alloc::vec![0u8; 256 * 1024];
+    let mut acc = rdtsc();
+    stats("mem r0", &mem_loop(512, &mut mem, &mut acc));
+    stats("mem r1", &mem_loop(512, &mut mem, &mut acc));
+    // totals over 64 batches, with the time they take
+    let mut line = alloc::string::String::new();
+    use core::fmt::Write;
+    let t = rdtsc();
+    let mut b = 0;
+    let mut per = Vec::new();
+    for _ in 0..64 {
+        let e = estimate_jitter_bits(&old_loop(512));
+        b += e;
+        per.push(e);
+    }
+    let _ = write!(line, "old64={b} tsc={} per={:?} ", rdtsc() - t, per);
+    let t = rdtsc();
+    let (mut ba, mut bb) = (0, 0);
+    for _ in 0..64 {
+        unsafe { ent_diag_a(buf.as_mut_ptr(), 512) };
+        ba += estimate_jitter_bits(&buf);
+        unsafe { ent_diag_b(buf.as_mut_ptr(), 512) };
+        bb += estimate_jitter_bits(&buf);
+    }
+    let _ = write!(line, "| asm-aligned64={ba} asm-straddle64={bb} tsc={} ", rdtsc() - t);
+    let t = rdtsc();
+    let mut bm = 0;
+    for _ in 0..64 {
+        bm += estimate_jitter_bits(&mem_loop(512, &mut mem, &mut acc));
+    }
+    let _ = write!(line, "| mem64={bm} tsc={} ", rdtsc() - t);
+    crate::serial_println!("[ent-diag] totals {line} fn={:#x}", old_loop as usize);
+}

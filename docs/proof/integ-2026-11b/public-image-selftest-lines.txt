@@ -1,0 +1,10 @@
+# self-test lines in the boot log of the public image (gui-smoke TCG run): there must be none
+[bug063]: 0 line(s)
+[fdspace]: 0 line(s)
+[bug053]: 0 line(s)
+[ag-lock]: 0 line(s)
+[altgr]: 0 line(s)
+[3d8]: 0 line(s)
+[3d7]: 0 line(s)
+[3d3]: 0 line(s)
+[entropy]: [entropy] CSPRNG seeded: 440 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (440 bits) · 10.257 ms → OK

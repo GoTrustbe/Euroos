@@ -1,0 +1,64 @@
+# diag2 image: the merged tree 1c8eb91 with one more line in entropy::selftest that prints, for the 16 batches of its
+# jitter-alone probe, the credit per batch and the first samples of batch 0 (R630, KVM, -cpu host, 204 boots).
+# Below: the 12 boots in which [3d8] FAILED. A sample is the TSC difference around one multiplication.
+d2-0-3/boot-23.log: jitter-alone 49 bits, pool seeded=false
+   credit per batch: 7, 1, 2, 2, 1, 2, 2, 3, 4, 2, 3, 5, 3, 3, 4, 5
+   batch 0, first 96 samples, value x count: 24x92, 28x4
+   batch 8, first 96 samples, value x count: 24x94, 28x2
+   batch 0, first 40 samples: [24, 24, 24, 24, 28, 24, 24, 24, 24, 24, 24, 24, 24, 24, 28, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 28, 24]
+d2-0-3/boot-3.log: jitter-alone 20 bits, pool seeded=false
+   credit per batch: 0, 0, 2, 1, 2, 1, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1
+   batch 0, first 96 samples, value x count: 24x95, 28x1
+   batch 8, first 96 samples, value x count: 24x92, 28x4
+   batch 0, first 40 samples: [24, 24, 24, 24, 24, 24, 28, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24]
+d2-12-15/boot-3.log: jitter-alone 30 bits, pool seeded=true
+   credit per batch: 0, 2, 2, 2, 2, 0, 2, 2, 2, 3, 2, 2, 3, 2, 2, 2
+   batch 0, first 96 samples, value x count: 24x95, 28x1
+   batch 8, first 96 samples, value x count: 24x92, 28x4
+   batch 0, first 40 samples: [24, 24, 24, 24, 24, 28, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24]
+d2-12-15/boot-5.log: jitter-alone 223 bits, pool seeded=true
+   credit per batch: 1, 18, 20, 20, 19, 19, 19, 20, 20, 8, 1, 1, 1, 19, 18, 19
+   batch 0, first 96 samples, value x count: 22x95, 25x1
+   batch 8, first 96 samples, value x count: 18x13, 19x79, 22x4
+   batch 0, first 40 samples: [22, 22, 22, 22, 25, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22]
+d2-16-19/boot-20.log: jitter-alone 199 bits, pool seeded=true
+   credit per batch: 0, 2, 3, 62, 1, 1, 2, 2, 56, 1, 2, 2, 3, 3, 59, 0
+   batch 0, first 96 samples, value x count: 24x95, 28x1
+   batch 8, first 96 samples, value x count: 24x66, 28x25, 32x4, 52x1
+   batch 0, first 40 samples: [24, 24, 24, 28, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24]
+d2-16-19/boot-26.log: jitter-alone 29 bits, pool seeded=false
+   credit per batch: 1, 2, 2, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2
+   batch 0, first 96 samples, value x count: 24x93, 28x3
+   batch 8, first 96 samples, value x count: 24x92, 28x4
+   batch 0, first 40 samples: [24, 24, 24, 24, 24, 24, 28, 24, 24, 28, 24, 24, 28, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24]
+d2-16-19/boot-27.log: jitter-alone 69 bits, pool seeded=true
+   credit per batch: 0, 2, 2, 2, 1, 2, 2, 2, 49, 1, 1, 1, 1, 1, 1, 1
+   batch 0, first 96 samples, value x count: 24x96
+   batch 8, first 96 samples, value x count: 24x69, 28x23, 32x2, 36x1, 40x1
+   batch 0, first 40 samples: [24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24]
+d2-16-19/boot-33.log: jitter-alone 194 bits, pool seeded=true
+   credit per batch: 40, 40, 9, 1, 0, 84, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2
+   batch 0, first 96 samples, value x count: 24x95, 28x1
+   batch 8, first 96 samples, value x count: 24x92, 28x4
+   batch 0, first 40 samples: [24, 24, 24, 24, 24, 24, 24, 28, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24]
+d2-24-27/boot-20.log: jitter-alone 225 bits, pool seeded=true
+   credit per batch: 13, 14, 14, 14, 14, 14, 15, 15, 14, 14, 14, 14, 14, 14, 14, 14
+   batch 0, first 96 samples, value x count: 18x50, 23x45, 26x1
+   batch 8, first 96 samples, value x count: 18x53, 21x2, 23x39, 26x2
+   batch 0, first 40 samples: [18, 26, 18, 18, 18, 18, 18, 18, 23, 23, 23, 23, 23, 23, 23, 23, 23, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 23, 23, 23, 23, 23, 23, 23, 23, 23, 18, 18, 18, 18]
+d2-24-27/boot-3.log: jitter-alone 20 bits, pool seeded=false
+   credit per batch: 1, 0, 0, 2, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1
+   batch 0, first 96 samples, value x count: 24x93, 28x3
+   batch 8, first 96 samples, value x count: 24x92, 28x4
+   batch 0, first 40 samples: [24, 24, 24, 24, 28, 28, 24, 24, 28, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24]
+d2-24-27/boot-30.log: jitter-alone 29 bits, pool seeded=false
+   credit per batch: 0, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2
+   batch 0, first 96 samples, value x count: 24x95, 28x1
+   batch 8, first 96 samples, value x count: 24x92, 28x4
+   batch 0, first 40 samples: [24, 24, 24, 24, 24, 28, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24]
+d2-36-39/boot-7.log: jitter-alone 28 bits, pool seeded=false
+   credit per batch: 0, 1, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2
+   batch 0, first 96 samples, value x count: 24x96
+   batch 8, first 96 samples, value x count: 24x91, 28x5
+   batch 0, first 40 samples: [24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24]
+# 12 boots

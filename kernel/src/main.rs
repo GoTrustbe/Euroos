@@ -98,6 +98,7 @@ mod tls_roots;
 mod update;
 mod tpm;
 mod entropy;
+mod linuxrand;
 mod nts;
 mod verity;
 mod euroattr;
@@ -1402,6 +1403,16 @@ fn main() -> Status {
         kwarn!("[hpet] no HPET present — falling back to APIC timer/RTC");
     }
 
+    // 3D-8: seed the sovereign CSPRNG here (CPU jitter, RDSEED/RDRAND and the
+    // TPM RNG where present, mixed), before anything draws from it: the
+    // identity store below (salts), the network bring-up (TLS, sequence
+    // numbers, ports) and every process start (AT_RANDOM, the address-space
+    // layout) do (BUG-080, BUG-081). It needs the heap and a clock; the TPM is
+    // detected first so that its generator is one of the sources. This is the
+    // one seeding of a boot and it prints the one `[entropy]` status line.
+    let tpm_up = tpm::init();
+    entropy::init();
+
     // Login verification now runs via EuroID (Argon2id, memory-hard) instead of the old
     // iterated SHA-256 — proven by the [ae] self-test in `euroid::selftest()`.
 
@@ -2299,17 +2310,15 @@ fn main() -> Status {
     }
     // O1: TPM 2.0 (hardware root of trust) via the TIS-MMIO interface. Detect +
     // Startup; the self-test proves measured boot (PCR-extend) — foundation for K3-FDE.
-    if tpm::init() {
+    if tpm_up {
         tpm::selftest();
     }
-    // 3D-8: seed the sovereign CSPRNG (CPU jitter, RDSEED/RDRAND and the TPM RNG
-    // where present, mixed) and prove the getrandom readiness gate. Runs
-    // regardless of a TPM — CPU jitter alone reaches the entropy threshold — so
-    // it is OUTSIDE the TPM block. Both paths print the `[entropy]` status line.
+    // 3D-8: prove the getrandom readiness gate of the CSPRNG that was seeded
+    // early in the boot (see `entropy::init` above). Runs regardless of a TPM —
+    // CPU jitter alone reaches the entropy threshold — so it is OUTSIDE the
+    // TPM block.
     if SELFTEST {
         entropy::selftest();
-    } else {
-        entropy::init(); // the seeding the self-test also does, without the proof
     }
     if SELFTEST {
         // 3D-7: Network Time Security (RFC 8915) authenticated-time core — proves the
@@ -4019,7 +4028,7 @@ fn main() -> Status {
         use eurofs::{EuroFs, FileSystem};
         let (key_bytes, from_tpm) = match tpm::get_random(32) {
             Some(b) => (b, true),
-            None => (alloc::vec![0x5Au8; 32], false), // fallback without TPM
+            None => (entropy::draw_wait::<32>().to_vec(), false), // no TPM: the CSPRNG
         };
         let mut key = [0u8; 32];
         key.copy_from_slice(&key_bytes[..32]);
@@ -4074,7 +4083,7 @@ fn main() -> Status {
                 k.copy_from_slice(&b[..32]);
                 (k, true)
             }
-            None => ([0xA5u8; 32], false),
+            None => (entropy::draw_wait::<32>(), false), // no TPM: the CSPRNG
         };
         vault::selftest(mk, from_tpm);
         // 3D-1: real TPM seal — the master key is sealed INSIDE the TPM to the
@@ -4108,13 +4117,13 @@ fn main() -> Status {
     {
         let mut seeds = [[0u8; 32]; 4];
         let mut from_tpm = true;
-        for (i, s) in seeds.iter_mut().enumerate() {
+        for s in seeds.iter_mut() {
             // TPM GetRandom returns ≤32 bytes per call → four separate calls.
             match tpm::get_random(32) {
                 Some(b) => s.copy_from_slice(&b[..32]),
                 None => {
                     from_tpm = false;
-                    *s = [(i as u8) + 0x11; 32];
+                    *s = entropy::draw_wait::<32>(); // no TPM: the CSPRNG
                 }
             }
         }
@@ -4122,8 +4131,8 @@ fn main() -> Status {
         if SELFTEST {
             // 3D-9: the hybrid post-quantum tunnel (X25519 + ML-KEM-768). Two more
             // seeds for the ML-KEM key pair + encapsulation randomness.
-            let mut kem_seed = [0x21u8; 32];
-            let mut kem_rand = [0x22u8; 32];
+            let mut kem_seed = entropy::draw_wait::<32>();
+            let mut kem_rand = entropy::draw_wait::<32>();
             if let Some(b) = tpm::get_random(32) {
                 kem_seed.copy_from_slice(&b[..32]);
             }
@@ -4158,7 +4167,7 @@ fn main() -> Status {
                 s.copy_from_slice(&b[..32]);
                 (s, true)
             }
-            None => ([0x3c; 32], false),
+            None => (entropy::draw_wait::<32>(), false), // no TPM: the CSPRNG
         };
         ca::selftest(seed, from_tpm, rtc::epoch());
     }
@@ -4172,7 +4181,7 @@ fn main() -> Status {
                 no.copy_from_slice(&n[..32]);
                 (s, no, true)
             }
-            _ => ([0x2a; 32], [0x9e; 32], false),
+            _ => (entropy::draw_wait::<32>(), entropy::draw_wait::<32>(), false), // no TPM: the CSPRNG
         };
         attest::selftest(ak_seed, nonce, from_tpm);
     }
@@ -4190,7 +4199,7 @@ fn main() -> Status {
                 s.copy_from_slice(&b[..32]);
                 (s, true)
             }
-            None => ([0x1d; 32], false),
+            None => (entropy::draw_wait::<32>(), false), // no TPM: the CSPRNG
         };
         idm::selftest(seed, from_tpm, rtc::epoch());
     }
@@ -4221,6 +4230,8 @@ fn main() -> Status {
         // The process self-tests of 2026-11: [bug063], [fdspace], [bug053].
         ring3::exit_flag_selftest(&mut allocator);
         ring3::fdspace_selftest(&mut allocator);
+        // BUG-080: what a Linux program gets as random bytes ([linux-rand]).
+        linuxrand::selftest(&mut allocator);
         ring3::lowmem_launch_selftest(&mut allocator);
         churn::thread_churn(&mut allocator);
         churn::fork_churn(&mut allocator);
