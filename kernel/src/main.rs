@@ -1397,6 +1397,16 @@ fn main() -> Status {
         kwarn!("[hpet] no HPET present — falling back to APIC timer/RTC");
     }
 
+    // 3D-8: seed the sovereign CSPRNG here (CPU jitter, RDSEED/RDRAND and the
+    // TPM RNG where present, mixed), before anything draws from it: the
+    // identity store below (salts), the network bring-up (TLS, sequence
+    // numbers, ports) and every process start (AT_RANDOM, the address-space
+    // layout) do (BUG-080, BUG-081). It needs the heap and a clock; the TPM is
+    // detected first so that its generator is one of the sources. This is the
+    // one seeding of a boot and it prints the one `[entropy]` status line.
+    let tpm_up = tpm::init();
+    entropy::init();
+
     // Login verification now runs via EuroID (Argon2id, memory-hard) instead of the old
     // iterated SHA-256 — proven by the [ae] self-test in `euroid::selftest()`.
 
@@ -2294,17 +2304,15 @@ fn main() -> Status {
     }
     // O1: TPM 2.0 (hardware root of trust) via the TIS-MMIO interface. Detect +
     // Startup; the self-test proves measured boot (PCR-extend) — foundation for K3-FDE.
-    if tpm::init() {
+    if tpm_up {
         tpm::selftest();
     }
-    // 3D-8: seed the sovereign CSPRNG (CPU jitter, RDSEED/RDRAND and the TPM RNG
-    // where present, mixed) and prove the getrandom readiness gate. Runs
-    // regardless of a TPM — CPU jitter alone reaches the entropy threshold — so
-    // it is OUTSIDE the TPM block. Both paths print the `[entropy]` status line.
+    // 3D-8: prove the getrandom readiness gate of the CSPRNG that was seeded
+    // early in the boot (see `entropy::init` above). Runs regardless of a TPM —
+    // CPU jitter alone reaches the entropy threshold — so it is OUTSIDE the
+    // TPM block.
     if SELFTEST {
         entropy::selftest();
-    } else {
-        entropy::init(); // the seeding the self-test also does, without the proof
     }
     if SELFTEST {
         // 3D-7: Network Time Security (RFC 8915) authenticated-time core — proves the
