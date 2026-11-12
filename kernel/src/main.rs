@@ -99,6 +99,7 @@ mod update;
 mod tpm;
 mod entropy;
 mod linuxrand;
+mod renametest;
 mod nts;
 mod verity;
 mod euroattr;
@@ -1490,7 +1491,7 @@ fn main() -> Status {
     // granted capabilities (least-privilege) and the syscall ABI. This lets a
     // shell later start them by NAME — the kernel itself knows with which rights + ABI.
     use ring3::{CAP_CONSOLE as CO, CAP_FILE as FI, CAP_NET as NE, CAP_PROC_INFO as PR};
-    let installed: [(&str, u64, bool); 25] = [
+    let installed: [(&str, u64, bool); 26] = [
         ("/bin/fbtest", CO, true), // app-graphics smoke test (large-arena scheduled)
         ("/bin/doom", CO | FI, true), // the DOOM port: draws frames + reads its WAD (CAP_FILE)
         ("/bin/browser", CO | FI | NE, true), // EuroBrowser: draws + fetches live sites (CAP_NET)
@@ -1508,6 +1509,7 @@ fn main() -> Status {
         ("/bin/muslfile", CO | FI, true),
         ("/bin/mcat", CO | FI, true),
         ("/bin/mwrite", CO | FI, true),
+        ("/bin/renprobe", CO | FI, true), // BUG-091: rename over an existing file; `renprobe save|check DIR VER`
         ("/bin/mecho", CO, true),
         ("/bin/mupper", CO | FI, true), // reads stdin (read=0 falls under CAP_FILE)
         ("/bin/menv", CO, true),        // reads envp/getenv
@@ -4232,6 +4234,8 @@ fn main() -> Status {
         ring3::fdspace_selftest(&mut allocator);
         // BUG-080: what a Linux program gets as random bytes ([linux-rand]).
         linuxrand::selftest(&mut allocator);
+        // BUG-091: rename over an existing file under open descriptors and mappings ([rename]).
+        renametest::selftest(&mut allocator);
         ring3::lowmem_launch_selftest(&mut allocator);
         churn::thread_churn(&mut allocator);
         churn::fork_churn(&mut allocator);
@@ -7700,7 +7704,7 @@ fn net_late_suite(allocator: &mut FrameAllocator, fs: &mut dyn FileSystem) -> Ve
     demo
 }
 
-pub fn system_binaries() -> [(&'static str, &'static [u8]); 32] {
+pub fn system_binaries() -> [(&'static str, &'static [u8]); 33] {
     [
         ("/bin/fbtest", ring3::fbtest_bytes()),
         ("/bin/doom", ring3::doom_bytes()),
@@ -7719,6 +7723,7 @@ pub fn system_binaries() -> [(&'static str, &'static [u8]); 32] {
         ("/bin/muslfile", ring3::muslfile_bytes()),
         ("/bin/mcat", ring3::mcat_bytes()),
         ("/bin/mwrite", ring3::mwrite_bytes()),
+        ("/bin/renprobe", renametest::renprobe_bytes()),
         ("/bin/mecho", ring3::mecho_bytes()),
         ("/bin/mupper", ring3::mupper_bytes()),
         ("/bin/daemon", ring3::daemon_bytes()),
