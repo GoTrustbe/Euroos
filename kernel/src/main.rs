@@ -333,6 +333,48 @@ fn build_context_menu(
 
 /// The tooltip text for whatever control is under the cursor, if any: the EU
 /// mark, a dock tile, the status panel, or a window's traffic-light buttons.
+/// Lines of Terminal output kept for scrolling back.
+const TERM_SCROLLBACK: usize = 400;
+
+/// The smallest size the resize grip gives a window of this app.
+fn min_window_size(app: suite_ui::SuiteApp) -> (usize, usize) {
+    match app {
+        suite_ui::SuiteApp::Reken => (calc_ui::MIN_W, calc_ui::MIN_H),
+        _ => (320, 200),
+    }
+}
+
+/// Bring a window inside the screen: between the dock and (when the screen is
+/// wide enough to leave 640 px beside it) the status panel, above the pager.
+/// The default positions are laid out for 1920 x 1080 and are untouched there;
+/// on 1280 x 720 several windows opened partly outside the screen or under
+/// the status panel.
+fn fit_window(win: &mut compositor::Window, width: usize, height: usize) {
+    let left = SIDEBAR_W;
+    let (px, _, _, _) = compositor::status_panel_rect(width);
+    let right = if px >= left + 640 { px } else { width };
+    let bottom = height.saturating_sub(34); // the workspace pager
+    let (min_w, min_h) = min_window_size(win.app);
+    win.w = win.w.min(right.saturating_sub(left + 8)).max(min_w.min(win.w));
+    win.h = win.h.min(bottom.saturating_sub(8)).max(min_h.min(win.h));
+    if win.x + win.w > right {
+        win.x = right.saturating_sub(win.w).max(left);
+    }
+    if win.y + win.h > bottom {
+        win.y = bottom.saturating_sub(win.h).max(4);
+    }
+}
+
+/// Is anything drawn above the windows at tick `now`: a context menu, the
+/// launcher, the file dialog, the symbol picker, the Alt-Tab switcher, the
+/// notification list, a toast, the help panel or the tour? A window body must
+/// then not be redrawn in place.
+fn overlay_above_windows(now: u64) -> bool {
+    ctxmenu::is_open() || launcher::is_open() || filedialog::is_open() || symbolpicker::is_open()
+        || switcher::is_open() || notify::is_centre_open() || notify::has_active_toasts(now)
+        || help::is_open() || onboarding::is_active()
+}
+
 fn tooltip_for(px: usize, py: usize, windows: &[compositor::Window], order: &[usize], width: usize) -> Option<String> {
     if let Some(t) = help::tooltip_hook(px, py, windows, order) { return t; } // T3-hook: help overlays + in-app tooltips
     if compositor::brand_button_at(px, py) {
@@ -704,7 +746,10 @@ fn main() -> Status {
     // ── Fetch and keep the GOP framebuffer (stays valid after exit). ──
     let handle = boot::get_handle_for_protocol::<GraphicsOutput>().expect("GOP handle");
     let mut gop = boot::open_protocol_exclusive::<GraphicsOutput>(handle).expect("GOP open");
-    graphics::set_best_mode(&mut gop);
+    // Boot options (\EFI\BOOT\euroos-boot.conf): read while the ESP is reachable,
+    // and before the screen mode is chosen (`display.mode`).
+    bootopt::capture();
+    graphics::set_best_mode(&mut gop, bootopt::display_mode());
     let mode = gop.current_mode_info();
     let (width, height) = mode.resolution();
     let stride = mode.stride();
@@ -733,8 +778,6 @@ fn main() -> Status {
     // via UEFI — ONLY POSSIBLE NOW, before ExitBootServices. This lets the installer
     // later write a bootable copy to a target disk (no embed, the real current bytes).
     instexec::capture_media();
-    // Boot options (\EFI\BOOT\euroos-boot.conf): read while the ESP is reachable.
-    bootopt::capture();
 
     // ── THE JUMP: leave UEFI Boot Services. After this no more UEFI services. ──
     serial_println!("[euro] ExitBootServices...");
@@ -4205,6 +4248,8 @@ fn main() -> Status {
         suite::docx_selftest();
         // 3F-4: selectable keyboard layouts (US-QWERTY/AZERTY/QWERTZ).
         ps2::keymap_selftest();
+        // BUG-052: AltGr is the third level of the layout, never Alt.
+        ps2::altgr_selftest();
         // 3F-7: capability-scoped app permission portals (request → ask → scoped grant).
         portal::selftest();
         // [robust] and its parts ([robust-paging], [robust-usb], [robust-hda]): the former
@@ -4425,6 +4470,8 @@ fn main() -> Status {
         // then the form toolkit and the Settings panel driven through its own events.
         prefs::selftest(&mut vfs);
         settings_ui::state_selftest(&mut vfs);
+        // BUG-055: the Storage page lists the disks of every bus; its size formatting.
+        rootblk::disks_selftest();
         // 3F-5: MIME detection + default-app associations on the live FS.
         mime::selftest(&mut vfs);
         // Sprint AE-e2e: must-change-password enforced end-to-end (login refuses until
@@ -5200,6 +5247,10 @@ fn main() -> Status {
     let mut ws_saved: [Option<alloc::vec::Vec<bool>>; workspace::COUNT] = [None, None, None, None];
     let mut drag_off = (0usize, 0usize);
     let mut last_t = u64::MAX;
+    // BUG-057: what the overlays showed at the last full repaint (see the repaint
+    // decision in the loop) and the context-menu row under the pointer.
+    let mut ov_last = (false, false, false, false, false, false, 0usize, 0u32);
+    let mut ctx_hover_last: Option<usize> = None;
     let mut last_kbd = 0u64; // diagnostics: keyboard IRQs via the IO-APIC
     // One-shot self-test: after the live GTK window is up a while, synthesize a click on
     // its Reset button to prove desktop->X input routing (the counter visibly resets).
@@ -5218,6 +5269,10 @@ fn main() -> Status {
     // buttons route the answer to portal::respond via the click loop below. The
     // broker mechanism itself is exercised by portal::selftest() ([3f7]).
     let mut portal_buttons: Option<(u64, [(usize, usize, usize, usize); 3])> = None;
+    // Every window starts inside the screen (matters below 1920 x 1080).
+    for w in windows.iter_mut() {
+        fit_window(w, width, height);
+    }
     if SELFTEST {
         // BUG-032: is the hardware write watch on the scheduler state live on this machine?
         memwatch::selftest();
@@ -5303,19 +5358,86 @@ fn main() -> Status {
         let mut pending_shot = false;
         if help::pump(&windows, &order, ctx.fs, width, height) { need_full = true; } // T3-hook: F1/F2, help panel input, first-run tour
 
+        // The mouse wheel (PS/2 IntelliMouse, USB HID, virtio-input) scrolls what is
+        // under the pointer: the help panel while it is open, else the top window
+        // there if it is EuroBeheer, EuroFiles, EuroText or the Terminal. A modal
+        // overlay (launcher, dialogs, a menu, the notification list) takes no wheel.
+        let wheel = mouse::take_wheel();
+        if wheel != 0 && !appgfx::active() {
+            if help::is_open() {
+                help::wheel(wheel);
+                need_full = true;
+            } else if !(launcher::is_open() || filedialog::is_open() || symbolpicker::is_open()
+                || ctxmenu::is_open() || notify::is_centre_open() || files::prompt_open())
+            {
+                if let Some(i) = order.iter().rev().copied().find(|&i| windows[i].visible && windows[i].contains(px, py)) {
+                    let (wx, wy, ww, wh) = (windows[i].x, windows[i].y, windows[i].w, windows[i].h);
+                    let moved = match windows[i].app {
+                        suite_ui::SuiteApp::Settings => {
+                            settings_ui::scroll(wx, wy, ww, wh, wheel);
+                            true
+                        }
+                        suite_ui::SuiteApp::Files => files::wheel(wh, wheel),
+                        suite_ui::SuiteApp::Text => textedit::wheel(wheel),
+                        suite_ui::SuiteApp::None => compositor::term_scroll(&windows[i], wheel),
+                        _ => false,
+                    };
+                    if moved {
+                        need_full = true;
+                    }
+                }
+            }
+        }
+
+        // BUG-057: Esc closes the notification list and an open context menu. The
+        // Esc is taken out of the key ring so the window that has the keyboard
+        // does not act on it too. The launcher, the file dialog, the symbol picker
+        // and a name prompt lie above them and read their own Esc.
+        if (notify::is_centre_open() || ctxmenu::is_open())
+            && !launcher::is_open() && !filedialog::is_open() && !symbolpicker::is_open() && !files::prompt_open()
+            && ps2::take_pending_esc()
+        {
+            notify::close_centre();
+            ctxmenu::close();
+            need_full = true;
+        }
+        // A left click beside the list closes it and is used up by that; a click on
+        // the list itself stays there (it used to reach the window underneath). The
+        // status panel keeps its toggle, further down. A right click closes the list
+        // and opens its menu as usual.
+        if notify::is_centre_open() {
+            if let Some((cx, cy)) = mouse::peek_press() {
+                let (rx, ry, rw, rh) = compositor::status_panel_rect(width);
+                let on_panel = cx >= rx && cx < rx + rw && cy >= ry && cy < ry + rh;
+                if !on_panel {
+                    let _ = mouse::take_press();
+                    if !notify::centre_contains(cx, cy, width, height) {
+                        notify::close_centre();
+                    }
+                    need_full = true;
+                }
+            }
+            if mouse::right_press_pending() {
+                notify::close_centre();
+                need_full = true;
+            }
+        }
+
         // The symbol picker is modal: a click inserts the chosen symbol into the
         // focused text field (or dismisses).
         if symbolpicker::is_open() {
             if let Some((cx, cy)) = mouse::take_press() {
                 if let Some(sym) = symbolpicker::click_at(cx, cy, width, height) {
-                    let to_terminal = order.iter().rev().copied()
-                        .find(|&i| windows[i].visible)
-                        .map(|i| windows[i].app == suite_ui::SuiteApp::None)
-                        .unwrap_or(false);
-                    if to_terminal {
-                        input.push_str(&sym);
-                    } else {
-                        for ch in sym.chars() { textedit::input(ch); }
+                    // Into the window the picker was opened for: the Terminal's
+                    // prompt, the note in EuroNotes, else the EuroText buffer.
+                    match order.iter().rev().copied().find(|&i| windows[i].visible).map(|i| windows[i].app) {
+                        Some(suite_ui::SuiteApp::None) => input.push_str(&sym),
+                        Some(suite_ui::SuiteApp::Notes) => {
+                            for ch in sym.chars() { notes::input(ch); }
+                        }
+                        _ => {
+                            for ch in sym.chars() { textedit::input(ch); }
+                        }
                     }
                 }
                 need_full = true;
@@ -5410,12 +5532,16 @@ fn main() -> Status {
                         }
                         Paste => {
                             if let Some(text) = clipboard::paste() {
-                                let to_terminal = order.iter().rev().copied()
-                                    .find(|&i| windows[i].visible)
-                                    .map(|i| windows[i].app == suite_ui::SuiteApp::None)
-                                    .unwrap_or(false);
+                                // Into the window the menu was opened on: the Terminal's
+                                // prompt, the note in EuroNotes (it used to land in
+                                // EuroText), else the EuroText buffer.
+                                let target = order.iter().rev().copied().find(|&i| windows[i].visible).map(|i| windows[i].app);
                                 for ch in text.chars() {
-                                    if to_terminal { input.push(ch); } else { textedit::input(ch); }
+                                    match target {
+                                        Some(suite_ui::SuiteApp::None) => input.push(ch),
+                                        Some(suite_ui::SuiteApp::Notes) => notes::input(ch),
+                                        _ => textedit::input(ch),
+                                    }
                                 }
                             }
                         }
@@ -5854,10 +5980,12 @@ fn main() -> Status {
             }
         }
         if let Some(idx) = resizing {
-            const MIN_W: usize = 320;
-            const MIN_H: usize = 200;
-            let nw = px.saturating_sub(windows[idx].x).max(MIN_W).min(width.saturating_sub(windows[idx].x));
-            let nh = py.saturating_sub(windows[idx].y).max(MIN_H).min(height.saturating_sub(windows[idx].y));
+            // The smallest size per app (BUG-058): the calculator keeps room for its
+            // keypad; every other window goes down to 320 x 200, where its body is
+            // cut off at the window edge (the clip in `compositor::draw_window_body`).
+            let (min_w, min_h) = min_window_size(windows[idx].app);
+            let nw = px.saturating_sub(windows[idx].x).max(min_w).min(width.saturating_sub(windows[idx].x).max(min_w));
+            let nh = py.saturating_sub(windows[idx].y).max(min_h).min(height.saturating_sub(windows[idx].y).max(min_h));
             if nw != windows[idx].w || nh != windows[idx].h {
                 windows[idx].w = nw;
                 windows[idx].h = nh;
@@ -6478,8 +6606,11 @@ fn main() -> Status {
                     input.clear();
                     // Keep the buffer at the visible height so the prompt stays visible.
                     let c = &mut windows[term_idx].content;
-                    if c.len() > vis_lines {
-                        c.drain(0..c.len() - vis_lines);
+                    // Keep more than fits the window: the mouse wheel scrolls back
+                    // through it (`compositor::term_scroll`).
+                    let keep = vis_lines.max(TERM_SCROLLBACK);
+                    if c.len() > keep {
+                        c.drain(0..c.len() - keep);
                     }
                 }
                 '\u{8}' => {
@@ -6633,6 +6764,7 @@ fn main() -> Status {
                     windows[w].h = 600 + compositor::TITLEBAR_H;
                     windows[w].x = SIDEBAR_W + 60;
                     windows[w].y = 90;
+                    fit_window(&mut windows[w], width, height);
                     order.retain(|&x| x != w);
                     order.push(w);
                     for ww in windows.iter_mut() { ww.active = false; }
@@ -6655,6 +6787,7 @@ fn main() -> Status {
                         windows[w].h = 600 + compositor::TITLEBAR_H;
                         windows[w].x = SIDEBAR_W + 60;
                         windows[w].y = 90;
+                        fit_window(&mut windows[w], width, height);
                     }
                 }
                 order.retain(|&x| x != w);
@@ -6669,7 +6802,19 @@ fn main() -> Status {
             need_full = true;
         }
 
-        if term_dirty && windows[term_idx].visible {
+        // With something drawn above the windows (a menu, the launcher, a toast, the
+        // notification list, a tooltip) a window is not redrawn in place: it would
+        // cover the overlay until the next full repaint. The keystroke becomes a full
+        // repaint instead (BUG-057: before, every iteration was one while they were up).
+        // A key in the Terminal returns a scrolled-back view to the prompt.
+        if term_dirty && compositor::term_scroll_reset() {
+            need_full = true;
+        }
+        let above_windows = overlay_above_windows(interrupts::ticks()) || file_drag.is_some() || tip_shown;
+        if above_windows && (term_dirty || calc_dirty) {
+            need_full = true;
+        }
+        if term_dirty && windows[term_idx].visible && !above_windows {
             compositor::restore_cursor_bg(&fb, cmx, cmy, &cur_bg);
             // The Terminal is the front window and overlaps nothing above it, so only
             // redrawing this window is enough (System sits behind it, next to the terminal).
@@ -6682,7 +6827,7 @@ fn main() -> Status {
         }
 
         // The REAL calculator changed → redraw only its window.
-        if calc_dirty {
+        if calc_dirty && !above_windows {
             if let Some(fi) = focused {
                 compositor::restore_cursor_bg(&fb, cmx, cmy, &cur_bg);
                 compositor::draw_window(&fb, &windows[fi]);
@@ -6763,12 +6908,33 @@ fn main() -> Status {
             }
         }
 
-        // While a context menu or the launcher is open, keep repainting so the
-        // hovered row tracks the cursor and the overlay stays above everything.
-        if ctxmenu::is_open() || launcher::is_open() || filedialog::is_open()
-            || symbolpicker::is_open() || notify::has_active_toasts(t) || notify::is_centre_open()
-            || file_drag.is_some() || switcher::is_open()
-        {
+        // BUG-057: an overlay is repainted when what it shows changes, not in every
+        // loop iteration (which made each frame cost 0.3 to 0.4 s for as long as the
+        // notification list, a menu, the launcher, a dialog, the switcher or a toast
+        // was up). The launcher, the dialogs, the symbol picker and the switcher change
+        // only on input, and their handlers ask for the repaint; a notification that is
+        // posted, a toast that expires and the list opening or closing change
+        // `ov_state`; the highlighted row of a context menu and the ghost of a dragged
+        // file follow the pointer.
+        let ov_state = (
+            ctxmenu::is_open(), launcher::is_open(), filedialog::is_open(), symbolpicker::is_open(),
+            switcher::is_open(), notify::is_centre_open(), notify::active_toasts(t), notify::generation(),
+        );
+        if ov_state != ov_last {
+            ov_last = ov_state;
+            need_full = true;
+        }
+        let ctx_hover = ctxmenu::hover_row(px, py);
+        if ctx_hover != ctx_hover_last {
+            ctx_hover_last = ctx_hover;
+            need_full = true;
+        }
+        if file_drag.is_some() && (px != cmx || py != cmy) {
+            need_full = true;
+        }
+        // The 2 s tick redraws the status panel and the live window bodies in place.
+        // With an overlay up that would paint over it: one full repaint instead.
+        if tick && (overlay_above_windows(t) || file_drag.is_some() || tip_shown) {
             need_full = true;
         }
         // The native app's frame takes the size of its surface once that is known
@@ -6783,6 +6949,35 @@ fn main() -> Status {
                     need_full = true;
                 }
             }
+        }
+        // The 2 s housekeeping. It used to sit in the branch below that runs only
+        // when the tick does not coincide with a full repaint, so it did not run at
+        // all while every iteration was one (BUG-057: no reaping of ended processes,
+        // no service supervision, no log flush for as long as the list was open).
+        if tick {
+            // Diagnostics: log the number of keyboard IRQs (via IO-APIC) on change.
+            let kc = interrupts::KBD_IRQ_COUNT.load(Ordering::Relaxed);
+            if kc != last_kbd {
+                last_kbd = kc;
+                serial_println!("[ioapic] keyboard IRQs received via IO-APIC: {}", kc);
+            }
+            // Clean up terminated processes (free frames) — safe from
+            // task 0 on the boot PML4. Free RAM visibly recovers.
+            ring3::reap_dead(ctx.mem);
+            // S4: EuroInit supervision (restart stopped services) + eurologd
+            // (kmsg ring periodically to /var/log/messages).
+            init::supervise(ctx.mem, ctx.fs);
+            // Userspace drivers: restart a crashed e1000d (after quiescing its device).
+            udrv::supervise(ctx.mem);
+            udrv_blk::supervise(ctx.mem);
+            udrv_bcm5720::supervise(ctx.mem);
+            udrv_mr::supervise(ctx.mem);
+            init::flush_log(ctx.fs);
+            // G5: periodic background scrub (rate-limited ~60 s) → /var/log/fsck.log.
+            scrub::maybe_run(ctx.fs, t);
+            // Automatic updates: signed channel check 90 s after boot, then every 6 h
+            // (policy in /etc/euroupdate.conf; never on the plain preview image).
+            update::maybe_check(ctx.fs, t);
         }
         if need_full { full_repaints += 1; }
         if need_full {
@@ -6844,30 +7039,8 @@ fn main() -> Status {
             }
         } else if tick {
             // Update the live system window (incl. daemon heartbeat) + clock.
+            // (The housekeeping of the tick runs above, whatever is painted.)
             last_t = t / 200;
-            // Diagnostics: log the number of keyboard IRQs (via IO-APIC) on change.
-            let kc = interrupts::KBD_IRQ_COUNT.load(Ordering::Relaxed);
-            if kc != last_kbd {
-                last_kbd = kc;
-                serial_println!("[ioapic] keyboard IRQs received via IO-APIC: {}", kc);
-            }
-            // Clean up terminated processes (free frames) — safe from
-            // task 0 on the boot PML4. Free RAM visibly recovers.
-            ring3::reap_dead(ctx.mem);
-            // S4: EuroInit supervision (restart stopped services) + eurologd
-            // (kmsg ring periodically to /var/log/messages).
-            init::supervise(ctx.mem, ctx.fs);
-            // Userspace drivers: restart a crashed e1000d (after quiescing its device).
-            udrv::supervise(ctx.mem);
-            udrv_blk::supervise(ctx.mem);
-            udrv_bcm5720::supervise(ctx.mem);
-            udrv_mr::supervise(ctx.mem);
-            init::flush_log(ctx.fs);
-            // G5: periodic background scrub (rate-limited ~60 s) → /var/log/fsck.log.
-            scrub::maybe_run(ctx.fs, t);
-            // Automatic updates: signed channel check 90 s after boot, then every 6 h
-            // (policy in /etc/euroupdate.conf; never on the plain preview image).
-            update::maybe_check(ctx.fs, t);
             let (ox, oy) = (cmx, cmy);
             compositor::restore_cursor_bg(&fb, cmx, cmy, &cur_bg);
             // Refresh the status panel (large clock) — without shadow so it does not stack.
@@ -7127,6 +7300,7 @@ fn main() -> Status {
         // sleeps energy-efficiently between frames; the timer tick guarantees ~10 ms
         // responsiveness and every input IRQ wakes the desktop immediately.
         loop_iters += 1;
+        compositor::LOOP_ITERATIONS.fetch_add(1, Ordering::Relaxed);
         x86_64::instructions::hlt();
     }
 }

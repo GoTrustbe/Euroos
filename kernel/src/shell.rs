@@ -446,6 +446,17 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
                 app_cmd(line)
             }
         }
+        // How often the desktop repainted everything (BUG-057: once per loop
+        // iteration while an overlay was open).
+        "repaints" => {
+            use core::sync::atomic::Ordering::Relaxed;
+            vec![format!(
+                "desktop: {} full repaints, {} loop iterations, {} timer ticks since start",
+                crate::compositor::FULL_REPAINTS.load(Relaxed),
+                crate::compositor::LOOP_ITERATIONS.load(Relaxed),
+                crate::interrupts::ticks()
+            )]
+        }
         // Notifications history (click the status panel to open the centre).
         "notify" | "notifications" => {
             let mut out = vec![format!("Notifications ({}):", crate::notify::count())];

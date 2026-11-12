@@ -25,6 +25,9 @@ struct Editor {
     path: String,
     status: String,
     scroll: usize, // first visible row
+    /// The wheel moved the view away from the cursor: the view stays put until
+    /// a key or a click, which bring the cursor row back on screen.
+    free_scroll: bool,
 }
 
 static ED: Mutex<Option<Editor>> = Mutex::new(None);
@@ -35,6 +38,7 @@ fn ed<'a>(g: &'a mut Option<Editor>) -> &'a mut Editor {
         path: String::new(),
         status: String::new(),
         scroll: 0,
+        free_scroll: false,
     })
 }
 
@@ -69,6 +73,7 @@ fn open_limited(fs: &mut dyn FileSystem, path: &str, limit: u64) -> bool {
     e.buf.set_text(&content);
     e.path = String::from(p);
     e.scroll = 0;
+    e.free_scroll = false;
     e.status = alloc::format!("opened: {p}");
     true
 }
@@ -130,9 +135,26 @@ pub fn input(ch: char) {
 pub fn key(k: crate::ps2::Key) {
     let mut g = ED.lock();
     let e = ed(&mut g);
+    e.free_scroll = false;
     if e.buf.key(k) {
         e.status = if e.buf.dirty { String::from("unsaved changes") } else { e.status.clone() };
     }
+}
+
+/// Mouse wheel over the window: scroll the text by `notches` (positive = down),
+/// three lines per notch, without moving the cursor. Returns true when the
+/// view moved.
+pub fn wheel(notches: i32) -> bool {
+    let mut g = ED.lock();
+    let e = ed(&mut g);
+    let max = e.buf.lines.len().saturating_sub(1);
+    let new = (e.scroll as i64 + notches as i64 * 3).clamp(0, max as i64) as usize;
+    let moved = new != e.scroll;
+    if moved {
+        e.scroll = new;
+        e.free_scroll = true;
+    }
+    moved
 }
 
 /// Move the text cursor to the character nearest a click at window-local (mx,my).
@@ -149,6 +171,7 @@ pub fn click(win_x: usize, win_y: usize, mx: usize, my: usize) -> bool {
         return false;
     }
     e.buf.row = rrow;
+    e.free_scroll = false;
     // Column: widest prefix whose pixel width fits the click x.
     let line = e.buf.lines[rrow].clone();
     let mut col = 0;
@@ -256,11 +279,14 @@ pub fn render(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize) {
     let ty0 = by + TOOLBAR_H + 8;
     let maxrows = bh.saturating_sub(TOOLBAR_H + 8 + 24) / LINE_H;
     let total = e.buf.lines.len();
-    // Keep the cursor row on screen (scroll to follow it).
-    if e.buf.row < e.scroll {
+    // Keep the cursor row on screen (scroll to follow it), unless the wheel
+    // moved the view: then it stays where the wheel put it.
+    if e.free_scroll {
+        e.scroll = e.scroll.min(total.saturating_sub(1));
+    } else if e.buf.row < e.scroll {
         e.scroll = e.buf.row;
     } else if e.buf.row >= e.scroll + maxrows {
-        e.scroll = e.buf.row + 1 - maxrows;
+        e.scroll = (e.buf.row + 1).saturating_sub(maxrows);
     }
     // Gutter background, from under the toolbar to the bottom of the window. (It
     // was `bh` high from there: 44 px past the window, painted over whatever lay

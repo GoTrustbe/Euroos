@@ -250,6 +250,15 @@ pub fn draw_window(fb: &FrameBuffer, win: &Window) {
 /// (e.g. the System window per clock tick) without redrawing the drop shadow
 /// (which would otherwise stack). First clears the old text and then draws the content.
 pub fn draw_window_body(fb: &FrameBuffer, win: &Window) {
+    // BUG-058: nothing an app draws leaves its window. The apps lay themselves
+    // out from the window size with unchecked arithmetic in places; at the
+    // smallest size (320 x 200) one of them painted its keys down the screen.
+    fb.set_clip(win.x, win.y, win.w, win.h);
+    draw_window_body_unclipped(fb, win);
+    fb.clear_clip();
+}
+
+fn draw_window_body_unclipped(fb: &FrameBuffer, win: &Window) {
     // Hosted X11 client (real GTK app): blit the live X-server window buffer (0x00RRGGBB)
     // into the window body, clipped/centred. This is how a glibc GUI app appears as a
     // first-class framed window on the EuroOS desktop.
@@ -365,17 +374,58 @@ pub fn draw_window_body(fb: &FrameBuffer, win: &Window) {
     fb.fill_rect(win.x + 1, by, win.w - 2, bh, Color::SURFACE);
     // Scroll to the BOTTOM: show the LAST lines (incl. the live prompt) instead of
     // the top of the buffer — that way you really see what the shell is doing now.
+    // The Terminal can be scrolled back with the mouse wheel (`term_scroll`).
     let visible = (win.h.saturating_sub(TITLEBAR_H + 24)) / 16;
-    let start = win.content.len().saturating_sub(visible);
+    let back = if is_terminal(win) {
+        TERM_BACK.load(core::sync::atomic::Ordering::Relaxed).min(win.content.len().saturating_sub(visible))
+    } else {
+        0
+    };
+    let start = win.content.len().saturating_sub(visible + back);
+    let end = win.content.len() - back;
     let mut ty = win.y + TITLEBAR_H + 12;
-    for line in &win.content[start..] {
+    for (n, line) in win.content[start..end].iter().enumerate() {
         if ty + CHAR_HEIGHT > win.y + win.h {
+            break;
+        }
+        if back > 0 && n + 1 == end - start {
+            // The last row says where the view is; typing returns to the prompt.
+            let note = alloc::format!("-- {back} line(s) back: wheel down or type to return --");
+            crate::text::draw_mono(fb, win.x + 16, ty, &note, Color::ACCENT, 1);
             break;
         }
         // Terminal/system status: monospace so columns line up.
         crate::text::draw_mono(fb, win.x + 16, ty, line, Color::TEXT_SEC, 1);
         ty += 16;
     }
+}
+
+/// Lines the Terminal view is scrolled back from its last line (0 = the prompt).
+static TERM_BACK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+fn is_terminal(win: &Window) -> bool {
+    win.app == crate::suite_ui::SuiteApp::None && win.ui.is_empty() && win.title.starts_with("Terminal")
+}
+
+/// Mouse wheel over the Terminal: move the view by `notches` (positive = down,
+/// towards the prompt), three lines per notch. Returns true when it moved.
+pub fn term_scroll(win: &Window, notches: i32) -> bool {
+    use core::sync::atomic::Ordering::Relaxed;
+    if !is_terminal(win) {
+        return false;
+    }
+    let visible = (win.h.saturating_sub(TITLEBAR_H + 24)) / 16;
+    let max = win.content.len().saturating_sub(visible);
+    let cur = TERM_BACK.load(Relaxed).min(max);
+    let new = (cur as i64 - notches as i64 * 3).clamp(0, max as i64) as usize;
+    TERM_BACK.store(new, Relaxed);
+    new != cur
+}
+
+/// Back to the prompt (after a key or new output). Returns true if the view
+/// was scrolled back.
+pub fn term_scroll_reset() -> bool {
+    TERM_BACK.swap(0, core::sync::atomic::Ordering::Relaxed) != 0
 }
 
 /// The body rectangle area (x,y,w,h) of a window — for `present_rect` after a
@@ -505,17 +555,28 @@ fn draw_wallpaper_compute(fb: &FrameBuffer) {
     // visible on a camera/screen dump, but still calm.
     let cool = Color::rgb(0xE6, 0xEC, 0xF4); // light blue-grey
     let warm = Color::rgb(0xED, 0xE4, 0xD4); // warm sand-beige
-    let denom = (w + h).max(1) as f32;
+    // BUG-054: each row used to be two fills, the left and the right half in
+    // one colour each, and the step between them showed as a vertical seam at
+    // half the screen width. Now the colour follows the diagonal in segments
+    // of WALL_SEG pixels: no step is larger than one level of one channel (the
+    // whole gradient spans 32 levels), which is the gradient itself. Integer
+    // arithmetic, no soft-float call per segment.
+    const WALL_SEG: usize = 8;
+    let denom = (w + h).max(1);
+    let chan = |a: u8, b: u8, num: usize| -> u8 {
+        let (a, b) = (a as i64, b as i64);
+        (a + ((b - a) * num as i64 * 2 + denom as i64).div_euclid(2 * denom as i64)) as u8
+    };
     for row in 0..h {
-        // Per row one base color on the diagonal (x=0); the horizontal drift is
-        // small enough to approximate per row → 1 lerp + row fill (cheap).
-        let t0 = row as f32 / denom;
-        // Two segments so the horizontal component still tints along: left and
-        // right halves colored slightly differently.
-        let left = cool.lerp(warm, t0);
-        let right = cool.lerp(warm, (row as f32 + w as f32 * 0.5) / denom);
-        fb.fill_rect(0, row, w / 2, 1, left);
-        fb.fill_rect(w / 2, row, w - w / 2, 1, right);
+        let mut x = 0;
+        while x < w {
+            let seg = WALL_SEG.min(w - x);
+            // Position on the diagonal of the middle of this segment.
+            let num = row + x + seg / 2;
+            let c = Color::rgb(chan(cool.r, warm.r, num), chan(cool.g, warm.g, num), chan(cool.b, warm.b, num));
+            fb.fill_rect(x, row, seg, 1, c);
+            x += seg;
+        }
     }
 
     // 2) Soft radial glow (EU blue), center-left. Coarse: step 2px + 2×2 block.
@@ -718,7 +779,13 @@ pub fn draw_cursor(fb: &FrameBuffer, mx: usize, my: usize) {
 /// Draw the full desktop: warm background, floating dock, windows (z-order
 /// `order`, back-to-front), and the right status panel on top.
 /// The cursor is managed separately by the desktop loop.
+/// Full repaints of the desktop and iterations of the desktop loop since boot
+/// (the `repaints` shell command; BUG-057 was one repaint per iteration).
+pub static FULL_REPAINTS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static LOOP_ITERATIONS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 pub fn render(fb: &FrameBuffer, windows: &[Window], order: &[usize], clock: &str, date: &str, stats: &SysStats) {
+    FULL_REPAINTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let w = fb.width();
     let h = fb.height();
     draw_wallpaper(fb);

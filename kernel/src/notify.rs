@@ -1,11 +1,16 @@
 //! Notifications: transient toasts plus a notification centre (history shade).
 //! Any part of the system can `push` a message; it appears as a toast top-right
 //! for a few seconds and is kept in the centre, which the user opens by clicking
+//! the status panel and closes with Esc, a click beside it or a second click on
 //! the status panel. This is the "something happened" channel a desktop needs.
+//!
+//! Neither the toasts nor the list change between two events, so the desktop
+//! loop repaints for them only when [`generation`], [`active_toasts`] or
+//! [`is_centre_open`] changes (BUG-057), not in every iteration.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use spin::Mutex;
 
@@ -19,11 +24,15 @@ pub struct Note {
 
 static NOTES: Mutex<Vec<Note>> = Mutex::new(Vec::new());
 static CENTRE_OPEN: AtomicBool = AtomicBool::new(false);
+/// Counts every `push`: the list and the toasts show something new.
+static GENERATION: AtomicU32 = AtomicU32::new(0);
 
 const CAP: usize = 50;
 /// How long a toast stays on screen (ticks; the loop runs ~100 Hz).
 const TOAST_TICKS: u64 = 320;
 const TOAST_W: usize = 320;
+const CENTRE_W: usize = 340;
+const CENTRE_Y: usize = 120;
 
 /// Post a notification (title + one-line body) stamped with the current tick.
 pub fn push(title: &str, body: &str, now: u64) {
@@ -33,6 +42,7 @@ pub fn push(title: &str, body: &str, now: u64) {
     if len > CAP {
         n.drain(0..len - CAP);
     }
+    GENERATION.fetch_add(1, Ordering::Relaxed);
     crate::serial_println!("[notify] {title}: {body}");
 }
 
@@ -49,9 +59,32 @@ pub fn close_centre() {
     CENTRE_OPEN.store(false, Ordering::Relaxed);
 }
 
-/// Are any toasts still within their on-screen window (so the loop repaints)?
+/// Are any toasts still within their on-screen window?
 pub fn has_active_toasts(now: u64) -> bool {
     NOTES.lock().iter().any(|n| now.saturating_sub(n.tick) < TOAST_TICKS)
+}
+
+/// How many toasts are on screen at `now`. It changes when one expires.
+pub fn active_toasts(now: u64) -> usize {
+    NOTES.lock().iter().filter(|n| now.saturating_sub(n.tick) < TOAST_TICKS).count()
+}
+
+/// Number of notifications posted since boot (wraps): changes with every `push`.
+pub fn generation() -> u32 {
+    GENERATION.load(Ordering::Relaxed)
+}
+
+/// The rectangle (x, y, w, h) of the notification list on a screen of this size.
+pub fn centre_rect(screen_w: usize, screen_h: usize) -> (usize, usize, usize, usize) {
+    let w = CENTRE_W;
+    let y = CENTRE_Y;
+    (screen_w.saturating_sub(w + 16), y, w, screen_h.saturating_sub(y + 40))
+}
+
+/// Is (mx, my) on the open notification list?
+pub fn centre_contains(mx: usize, my: usize, screen_w: usize, screen_h: usize) -> bool {
+    let (x, y, w, h) = centre_rect(screen_w, screen_h);
+    is_centre_open() && mx >= x && mx < x + w && my >= y && my < y + h
 }
 
 /// Number of notifications in the centre.
@@ -92,10 +125,7 @@ pub fn render_centre(fb: &FrameBuffer, screen_w: usize, screen_h: usize) {
     if !is_centre_open() {
         return;
     }
-    let w = 340usize;
-    let x = screen_w.saturating_sub(w + 16);
-    let y = 120usize;
-    let h = screen_h.saturating_sub(y + 40);
+    let (x, y, w, h) = centre_rect(screen_w, screen_h);
     fb.fill_rounded_rect(x + 1, y + 3, w, h, crate::eds::RADIUS_L, Color::BORDER);
     fb.fill_rounded_rect(x, y, w, h, crate::eds::RADIUS_L, Color::CARD);
     fb.draw_border(x, y, w, h, 1, Color::BORDER);
@@ -131,10 +161,20 @@ pub fn selftest() {
     let opened = is_centre_open();
     toggle_centre();
     let closed = !is_centre_open();
-    let ok = stored && toast_now && toast_gone && history_kept && opened && closed;
+    // BUG-057: what the desktop loop watches instead of repainting all the time.
+    let g0 = generation();
+    push("Test", "again", 5000);
+    let counted = generation() == g0.wrapping_add(1) && active_toasts(5000) == 1 && active_toasts(5000 + TOAST_TICKS) == 0;
+    toggle_centre();
+    let (cx, cy, cw, ch) = centre_rect(1280, 720);
+    let hit = centre_contains(cx + 5, cy + 5, 1280, 720) && !centre_contains(cx - 1, cy + 5, 1280, 720) && cx + cw <= 1280 && cy + ch <= 720;
+    close_centre();
+    let shut = !is_centre_open() && !centre_contains(cx + 5, cy + 5, 1280, 720);
+    let ok = stored && toast_now && toast_gone && history_kept && opened && closed && counted && hit && shut;
     crate::serial_println!(
-        "[notif] Notifications: posted-to-centre={stored}, toast-shows={toast_now}, toast-expires={toast_gone}, history-kept={history_kept}, centre-toggles={} → {}",
+        "[notif] Notifications: posted-to-centre={stored}, toast-shows={toast_now}, toast-expires={toast_gone}, history-kept={history_kept}, centre-toggles={}, change-counters={counted}, list hit-test and close={} → {}",
         opened && closed,
+        hit && shut,
         if ok { "OK (toasts + a notification centre) ✓" } else { "FAILED ✗" }
     );
 }

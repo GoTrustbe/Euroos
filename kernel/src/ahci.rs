@@ -250,6 +250,14 @@ pub fn disk_sectors(idx: usize) -> u64 {
     with_disk(idx, |d| d.sectors).unwrap_or(0)
 }
 
+/// Number of disk slots (a slot can be empty: `disk_sectors` is 0 then).
+pub const DISK_SLOTS: usize = MAX_DISKS;
+
+/// The model string the disk reported (IDENTIFY words 27..46), trimmed.
+pub fn disk_model(idx: usize) -> alloc::string::String {
+    with_disk(idx, |d| alloc::string::String::from(core::str::from_utf8(&d.model).unwrap_or("").trim())).unwrap_or_default()
+}
+
 pub fn disk_partitioned(idx: usize) -> bool {
     with_disk(idx, |d| d.partitioned).unwrap_or(true)
 }

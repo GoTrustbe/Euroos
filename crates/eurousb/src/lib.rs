@@ -585,6 +585,31 @@ impl InputMap {
         };
         Some((x, y, buttons, !fx.relative))
     }
+
+    /// The wheel field of a report this map describes: notches, positive =
+    /// rotated away from the user (HID convention). 0 when the device has no
+    /// wheel, the report carries another id, or the field lies outside it.
+    pub fn decode_wheel(&self, report: &[u8]) -> i32 {
+        let body = match self.report_id {
+            Some(id) => {
+                if report.first() != Some(&id) {
+                    return 0;
+                }
+                &report[1..]
+            }
+            None => report,
+        };
+        match self.wheel.as_ref() {
+            Some(f) if f.bit_size > 0 && (f.bit_off as usize + f.bit_size as usize).div_ceil(8) <= body.len() => extract_signed(body, f),
+            _ => 0,
+        }
+    }
+}
+
+/// The wheel byte of a usb-tablet report (`[buttons, x, x, y, y, wheel]`):
+/// notches, positive = rotated away from the user. 0 for a 5-byte report.
+pub fn parse_tablet_wheel(report: &[u8]) -> i32 {
+    report.get(5).map(|&w| w as i8 as i32).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -651,6 +676,39 @@ mod tests {
         let hi = parse_tablet(&[0, 0xFF, 0x7F, 0xFF, 0x7F]).unwrap();
         assert_eq!((hi.x, hi.y), (0x7FFF, 0x7FFF));
         assert!(parse_tablet(&[0, 1, 2]).is_none());
+    }
+
+    #[test]
+    fn wheel_from_boot_mouse_tablet_and_descriptor() {
+        // Boot mouse: the fourth byte.
+        assert_eq!(parse_mouse(&[0, 0, 0, 0xFF]).unwrap().wheel, -1);
+        assert_eq!(parse_mouse(&[0, 0, 0]).unwrap().wheel, 0);
+        // usb-tablet: the sixth byte, absent on a 5-byte report.
+        assert_eq!(parse_tablet_wheel(&[0, 1, 2, 3, 4, 0x01]), 1);
+        assert_eq!(parse_tablet_wheel(&[0, 1, 2, 3, 4, 0xFE]), -2);
+        assert_eq!(parse_tablet_wheel(&[0, 1, 2, 3, 4]), 0);
+        // Report descriptor of a wheel mouse: 3 buttons + 5 bits padding,
+        // then X, Y, Wheel as three relative 8-bit fields.
+        let d: [u8; 52] = [
+            0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x09, 0x01, 0xA1, 0x00, // GD, Mouse, App, Pointer, Physical
+            0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01, // Buttons 1..3, 0..1
+            0x95, 0x03, 0x75, 0x01, 0x81, 0x02, // 3 x 1 bit, Input (Data,Var,Abs)
+            0x95, 0x01, 0x75, 0x05, 0x81, 0x01, // 5 bits padding (Const)
+            0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38, // GD: X, Y, Wheel
+            0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x03, 0x81, 0x06, // -127..127, 3 x 8 bit, Input (Rel)
+            0xC0, 0xC0,
+        ];
+        let m = parse_report_descriptor(&d).unwrap();
+        let w = m.wheel.unwrap();
+        assert_eq!((w.bit_off, w.bit_size, w.relative), (24, 8, true));
+        assert_eq!(m.decode_wheel(&[0x00, 0x00, 0x00, 0xFF]), -1);
+        assert_eq!(m.decode_wheel(&[0x01, 0x05, 0xFB, 0x03]), 3);
+        assert_eq!(m.decode(&[0x01, 0x05, 0xFB, 0x03]), Some((5, -5, 1, false)));
+        // A report too short to hold the wheel field gives 0, not a bit of padding.
+        assert_eq!(m.decode_wheel(&[0x00, 0x00, 0x00]), 0);
+        // A device without a wheel usage.
+        let no_wheel = InputMap { x: m.x, y: m.y, ..Default::default() };
+        assert_eq!(no_wheel.decode_wheel(&[0, 0, 0, 5]), 0);
     }
 
     #[test]

@@ -1,8 +1,13 @@
 //! PS/2 mouse (i8042 auxiliary device), IRQ12 — drives the desktop cursor.
 //!
-//! The controller delivers 3-byte packets: [flags, dx, dy]. The IRQ12 handler
-//! (interrupts.rs) pushes each byte here; we decode the packet and update
-//! the cursor position + button state (atomically, so the desktop loop reads them).
+//! The controller delivers 3-byte packets: [flags, dx, dy], or 4-byte packets
+//! [flags, dx, dy, dz] once the mouse has accepted the IntelliMouse sequence
+//! (a wheel mouse). The IRQ12 handler (interrupts.rs) pushes each byte here; we
+//! decode the packet and update the cursor position + button state (atomically,
+//! so the desktop loop reads them).
+//!
+//! The wheel of every pointer driver (PS/2, USB HID, virtio-input) ends in
+//! [`add_wheel`]; the desktop loop takes the sum with [`take_wheel`].
 
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicUsize, Ordering};
 
@@ -15,6 +20,32 @@ static MOUSE_Y: AtomicI32 = AtomicI32::new(0);
 static BUTTONS: AtomicU8 = AtomicU8::new(0);
 static SCREEN_W: AtomicUsize = AtomicUsize::new(0);
 static SCREEN_H: AtomicUsize = AtomicUsize::new(0);
+/// Wheel movement not yet taken by the desktop loop, in notches; positive =
+/// the wheel was turned towards the user (the content moves up, "scroll down").
+static WHEEL: AtomicI32 = AtomicI32::new(0);
+/// Bytes per PS/2 packet: 3, or 4 for an IntelliMouse (wheel) device.
+static PACKET_LEN: AtomicU8 = AtomicU8::new(3);
+
+/// Add wheel movement: `notches_down` > 0 = towards the user (scroll down).
+/// Called by the pointer drivers; bounded so a stuck device cannot run it away.
+pub fn add_wheel(notches_down: i32) {
+    if notches_down == 0 {
+        return;
+    }
+    let cur = WHEEL.load(Ordering::Relaxed);
+    WHEEL.store((cur + notches_down).clamp(-64, 64), Ordering::Relaxed);
+}
+
+/// Take the wheel movement since the last call (positive = scroll down).
+pub fn take_wheel() -> i32 {
+    WHEEL.swap(0, Ordering::Relaxed)
+}
+
+/// Does the PS/2 mouse report a wheel (IntelliMouse, 4-byte packets)?
+pub fn ps2_has_wheel() -> bool {
+    PACKET_LEN.load(Ordering::Relaxed) == 4
+}
+
 // Left-button press LATCH: set the instant a report shows a 0→1 edge, with the
 // cursor position at that moment. The desktop loop consumes it via take_press(),
 // so a click is never missed because the loop happened to sample between the
@@ -122,8 +153,8 @@ pub fn peek_press() -> Option<(usize, usize)> {
     }
 }
 
-// Packet assembly: (phase 0..3, bytes).
-static PACKET: Mutex<(u8, [u8; 3])> = Mutex::new((0, [0; 3]));
+// Packet assembly: (phase 0..4, bytes).
+static PACKET: Mutex<(u8, [u8; 4])> = Mutex::new((0, [0; 4]));
 
 fn wait_input_empty(status: &mut Port<u8>) {
     for _ in 0..100_000 {
@@ -173,18 +204,35 @@ pub fn init(width: usize, height: usize) {
         wait_output_full(&mut status);
         let _ack_kbd = data.read(); // 0xFA
         // Mouse: defaults + data reporting on (each with 0xD4 prefix to aux).
-        mouse_write(&mut cmd, &mut data, &mut status, 0xF6); // set defaults
+        let acked = mouse_write(&mut cmd, &mut data, &mut status, 0xF6) == 0xFA; // set defaults
+        // IntelliMouse: the sample-rate sequence 200, 100, 80 switches a wheel
+        // mouse to 4-byte packets; its device id then reads 3. Only tried when
+        // a mouse answered the command above (no device: no extra waits), and a
+        // plain mouse keeps id 0 and 3-byte packets.
+        if acked {
+            for rate in [200u8, 100, 80] {
+                mouse_write(&mut cmd, &mut data, &mut status, 0xF3);
+                mouse_write(&mut cmd, &mut data, &mut status, rate);
+            }
+            if mouse_write(&mut cmd, &mut data, &mut status, 0xF2) == 0xFA {
+                wait_output_full(&mut status);
+                if data.read() == 0x03 {
+                    PACKET_LEN.store(4, Ordering::Relaxed);
+                }
+            }
+        }
         mouse_write(&mut cmd, &mut data, &mut status, 0xF4); // enable reporting
     }
 }
 
-unsafe fn mouse_write(cmd: &mut Port<u8>, data: &mut Port<u8>, status: &mut Port<u8>, value: u8) {
+/// Send one byte to the mouse and return its answer (0xFA = acknowledged).
+unsafe fn mouse_write(cmd: &mut Port<u8>, data: &mut Port<u8>, status: &mut Port<u8>, value: u8) -> u8 {
     wait_input_empty(status);
     cmd.write(0xD4);
     wait_input_empty(status);
     data.write(value);
     wait_output_full(status);
-    let _ack = data.read(); // 0xFA
+    data.read()
 }
 
 /// Called by the IRQ12 handler with each received byte.
@@ -201,14 +249,19 @@ pub fn push_byte(byte: u8) {
             return None;
         }
         p.1[phase as usize] = byte;
-        if phase < 2 {
+        let len = PACKET_LEN.load(Ordering::Relaxed);
+        if phase + 1 < len {
             p.0 = phase + 1;
             return None;
         }
         p.0 = 0;
-        Some((p.1[0], p.1[1] as i8 as i32, p.1[2] as i8 as i32))
+        // IntelliMouse byte 3: Z movement, two's complement, -8..7; positive =
+        // the wheel turned towards the user.
+        let dz = if len == 4 { ((p.1[3] & 0x0F) as i8) << 4 >> 4 } else { 0 };
+        Some((p.1[0], p.1[1] as i8 as i32, p.1[2] as i8 as i32, dz as i32))
     });
-    let Some((flags, dx, dy)) = done else { return };
+    let Some((flags, dx, dy, dz)) = done else { return };
+    add_wheel(dz);
 
     let w = SCREEN_W.load(Ordering::Relaxed) as i32;
     let h = SCREEN_H.load(Ordering::Relaxed) as i32;
@@ -278,6 +331,11 @@ pub fn left_down() -> bool {
 /// read the pointer via the app-graphics bridge (e.g. the browser).
 pub fn buttons() -> u8 {
     BUTTONS.load(Ordering::Relaxed)
+}
+
+/// Is a right-button press waiting to be taken?
+pub fn right_press_pending() -> bool {
+    RPRESS_PENDING.load(Ordering::Relaxed)
 }
 
 /// Consume a pending right-button press → the screen position where it happened

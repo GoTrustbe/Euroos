@@ -31,14 +31,16 @@ pub const SYSTEM_KEYS: &[(&str, &str)] = &[
     ("F2", "This shortcut overview"),
     ("Alt+Tab", "Switch window: hold Alt, tap Tab, release Alt"),
     ("Alt+1 .. Alt+4", "Switch to workspace 1 to 4"),
-    ("Esc", "Close the launcher, a dialog, a name prompt, the tour or help"),
+    ("Esc", "Close the launcher, a dialog, a name prompt, a context menu, the notification list, the tour or help"),
     ("Enter", "Launcher: open the first result"),
+    ("AltGr + key", "Belgian, French and German layout: the third character on the key (@ # { } [ ] \\ | ~ and the euro sign)"),
 ];
 
 pub const SYSTEM_KEY_NOTES: &[&str] = &[
     "Alt+Tab and Alt+1..4 work in every built-in app. They are not picked up while a program that reads the keyboard itself has it: a full-screen app, an X11 or Chromium window, or an installed app in front.",
     "The key names shown at the right of context-menu items (Ctrl C, Del, F5, ...) are labels. They are not connected to the keyboard yet: choose the menu item.",
     "There are no Ctrl shortcuts for copy, paste, save or undo yet.",
+    "AltGr is the right Alt key. It is not Alt: AltGr+Tab and AltGr+1..4 do not switch windows or workspaces, and with AltGr held a key without a third character types nothing. The US layout has no AltGr characters. Accent keys do not combine with the next letter: ^ and the others type their own character at once.",
 ];
 
 pub const POINTER_KEYS: &[(&str, &str)] = &[
@@ -47,7 +49,8 @@ pub const POINTER_KEYS: &[(&str, &str)] = &[
     ("Right-click", "Context menu for the desktop, a dock tile, a file, a text window"),
     ("Drag title bar", "Move the window; drop at the left or right edge for half the screen, at the top to maximize"),
     ("Drag corner", "Resize from the bottom-right corner"),
-    ("Click status panel", "Open or close the notification list (clock, top right)"),
+    ("Click status panel", "Open or close the notification list (clock, top right); a click beside the list closes it too"),
+    ("Mouse wheel", "Scroll what is under the pointer: the help panel, EuroBeheer, the EuroFiles list, EuroText, the Terminal"),
     ("Click ?", "Help for that window"),
 ];
 
@@ -88,13 +91,14 @@ pub const PAGES: &[Page] = &[
                 lines: &[
                     "Right-click the desktop: open the Terminal, take a screenshot (saved as /screenshots/shot-N.ppm, opens in EuroView), display settings, restore the last deleted file.",
                     "Right-click a file or folder in EuroFiles: open, copy the path, move to Trash. Right-click a dock tile: open.",
-                    "Right-click in the Terminal or EuroText: Paste and Insert symbol.",
+                    "Right-click in the Terminal, EuroText or EuroNotes: Paste and Insert symbol.",
+                    "Esc or a click beside a menu closes it without choosing.",
                 ],
             },
             Section {
                 head: "Notifications",
                 lines: &[
-                    "Messages appear at the top right for a few seconds. Click the status panel (the clock, top right) to open or close the list of earlier messages.",
+                    "Messages appear at the top right for a few seconds. Click the status panel (the clock, top right) to open or close the list of earlier messages. Esc or a click beside the list closes it as well; that click does nothing else.",
                 ],
             },
             Section {
@@ -219,7 +223,7 @@ pub const PAGES: &[Page] = &[
             Section {
                 head: "Toolbar",
                 lines: &[
-                    "The toolbar shows as many buttons as fit. In a narrow window Perms, Protect and History are missing: widen or maximize the window.",
+                    "All nine buttons fit the window at its default width. A narrower window shows as many as fit, from the left: widen it to get the others back.",
                     "New Folder, Rename and Perms ask for a name or an octal mode such as 644. Enter confirms, Esc cancels.",
                     "Copy or Cut, go to the target folder, then Paste. Copy works for single files, not for folders.",
                     "Delete removes the selected file at once, without the Trash. A folder is removed only when it is empty.",
@@ -238,6 +242,7 @@ pub const PAGES: &[Page] = &[
                 head: "Good to know",
                 lines: &[
                     "The badge 'protected' marks an immutable file. An operation the system refuses (permissions, protection, quota) is reported as a notification.",
+                    "A folder with more entries than fit in the window scrolls with the mouse wheel; the mark at the right edge of the list shows the position. There is no scroll bar to drag and no key for it.",
                     "Limits: one selection at a time, no keyboard navigation in the list, no search field (use the launcher to search).",
                 ],
             },
@@ -280,7 +285,7 @@ pub const PAGES: &[Page] = &[
             Section {
                 head: "Limits",
                 lines: &[
-                    "No undo. Paste and Insert symbol from the right-click menu insert into EuroText, not into the note.",
+                    "No undo. Paste and Insert symbol from the right-click menu insert at the cursor of the note.",
                 ],
             },
         ],
@@ -366,7 +371,8 @@ pub const PAGES: &[Page] = &[
             Section {
                 head: "Limits",
                 lines: &[
-                    "No command history, no tab completion, no cursor movement within the line. Output that scrolls out of the window is gone; clear empties the window.",
+                    "No command history, no tab completion, no cursor movement within the line.",
+                    "The mouse wheel scrolls back through the last 400 lines of output; the bottom row then says how far back the view is. Wheel down or any key returns to the prompt. There is no key for scrolling. clear empties the window.",
                     "A command that waits for the network holds the whole desktop until it returns.",
                 ],
             },
@@ -384,7 +390,7 @@ pub const PAGES: &[Page] = &[
             ("Space or Enter", "Switch, press or open the focused control; in a text field Enter applies what you typed"),
             ("Left / Right", "Change a slider or a choice without opening it"),
             ("Esc", "Drop the edit of a text field, close an open choice, release the focus"),
-            ("PgUp / PgDn / Home / End", "Scroll the section"),
+            ("PgUp / PgDn / Home / End", "Scroll the section (the mouse wheel does the same)"),
         ],
         sections: &[
             Section {
@@ -397,7 +403,7 @@ pub const PAGES: &[Page] = &[
                     "Network: a switch for the built-in web server on port 80, and the state of the connection.",
                     "EuroGuard: type a domain and press Enter to block it for all apps. 'Domains you blocked' lists your own entries; Unblock removes the selected one. Below: status, the built-in policy and recent activity.",
                     "Apps: choose a program to see its capabilities and the permissions it was granted. 'Block all network access' cuts it off from the network; 'Revoke all' withdraws its grants, so it has to ask again.",
-                    "Storage: usage per file system, the disks, and 'Check now', which reads every file and compares it with its stored checksum. The desktop pauses while the check runs.",
+                    "Storage: usage per file system; the disks on every bus with a driver (virtio, SATA, NVMe, MegaRAID logical drives, a USB disk) with size, type and model, the system disk marked; and 'Check now', which reads every file and compares it with its stored checksum. The desktop pauses while the check runs.",
                     "Updates: installed version, what happens when an update is available (install and restart, download then ask, only tell), and 'Check now'.",
                 ],
             },
@@ -439,6 +445,7 @@ pub const PAGES: &[Page] = &[
                 lines: &[
                     "The same engine is available in the Terminal: calc 2*(3+4).",
                     "Nothing is saved: the history is empty again after a restart.",
+                    "The window cannot be made smaller than 500 x 380 pixels, the size at which the keypad still fits next to the history.",
                 ],
             },
         ],
@@ -492,6 +499,7 @@ pub const PAGES: &[Page] = &[
                 head: "Editing",
                 lines: &[
                     "Click in the text to place the cursor. Right-click for Paste and Insert symbol.",
+                    "The mouse wheel scrolls the text, three lines per notch, and leaves the cursor where it is; the next key or click brings the view back to the cursor.",
                 ],
             },
             Section {
@@ -808,13 +816,14 @@ pub const CMDS: &[Cmd] = &[
     c("journal", "journalctl", 2, "journal", "the structured system journal", "journal"),
     c("lspci", "", 2, "lspci", "PCI devices", "lspci"),
     c("lsdev", "eurodevice", 2, "lsdev", "devices and the drivers bound to them", "lsdev"),
-    c("lsblk", "blkid", 2, "lsblk", "disks and partitions", "lsblk"),
+    c("lsblk", "blkid", 2, "lsblk", "the disks: virtio with their file system, then SATA, NVMe, MegaRAID, USB", "lsblk"),
     c("hwprobe", "", 2, "hwprobe", "hardware and driver inventory", "hwprobe"),
     c("services", "euroctl", 2, "services", "state of the system services", "services"),
     c("battery", "power", 2, "battery", "battery and mains adapter state", "battery"),
     c("keymap", "", 2, "keymap [us|be-azerty|fr-azerty|de-qwertz]", "show or set the keyboard layout", "keymap be-azerty"),
     c("locale", "", 2, "locale", "language and regional formats", "locale"),
     c("notify", "notifications", 2, "notify", "earlier notifications", "notify"),
+    c("repaints", "", 2, "repaints", "how often the desktop redrew the whole screen", "repaints"),
     c("clip", "", 2, "clip [text]", "show the clipboard history, or copy text to it", "clip hello"),
     c("clear", "", 2, "clear", "empty the Terminal window", "clear"),
     c("reboot", "", 2, "reboot", "restart the computer", "reboot"),

@@ -165,7 +165,8 @@ pub fn pump(windows: &[Window], order: &[usize], fs: &mut dyn eurofs::FileSystem
         let _ = crate::ps2::take_shortcuts_key();
         return false;
     }
-    let mut dirty = crate::onboarding::pump(fs, sw, sh);
+    let wizard_open = windows.iter().any(|w| w.visible && w.app == SuiteApp::Installer);
+    let mut dirty = crate::onboarding::pump(fs, sw, sh, wizard_open);
 
     if crate::ps2::take_help_key() {
         crate::onboarding::dismiss();
@@ -452,6 +453,16 @@ pub fn key(k: Key) {
             st.scroll = 0;
         }
         _ => {}
+    }
+}
+
+/// Mouse wheel while the panel is open: scroll the page by `notches`
+/// (positive = down), four text rows per notch.
+pub fn wheel(notches: i32) {
+    let mut g = HELP.lock();
+    let Some(st) = g.as_mut() else { return };
+    for _ in 0..notches.unsigned_abs().min(16) * 2 {
+        scroll_by(st, notches > 0, false);
     }
 }
 

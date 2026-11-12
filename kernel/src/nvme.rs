@@ -425,6 +425,16 @@ pub fn present() -> bool {
     unsafe { (*core::ptr::addr_of!(NVME)).is_some() }
 }
 
+/// The model string of the controller (Identify Controller bytes 24..64), trimmed.
+pub fn model() -> alloc::string::String {
+    unsafe {
+        (*core::ptr::addr_of!(NVME))
+            .as_ref()
+            .map(|n| alloc::string::String::from(core::str::from_utf8(&n.model).unwrap_or("").trim_matches(|c: char| c == ' ' || c == '\0')))
+            .unwrap_or_default()
+    }
+}
+
 /// Capacity in 512-byte sectors (normalized regardless of the LBA size).
 pub fn capacity_sectors() -> u64 {
     unsafe {

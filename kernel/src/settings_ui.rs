@@ -291,15 +291,11 @@ const WALLPAPER_NAMES: [&str; 3] = ["EuroOS gradient", "Warm sand", "Blue mist"]
 
 const LIVE_NOTE: &str = "Live session: this system runs from memory. Changes apply at once and last until shutdown; on an installed system they are kept.";
 
+/// A size for the panel. BUG-055: both figures of "used of total" were rounded
+/// down to whole MiB while the percentage came from the bytes, so a small file
+/// system read "1 MiB of 8 MiB used (21%)".
 fn mib(bytes: u64) -> String {
-    let m = bytes / (1024 * 1024);
-    if m >= 10 * 1024 {
-        alloc::format!("{} GiB", m / 1024)
-    } else if m >= 1024 {
-        alloc::format!("{}.{} GiB", m / 1024, (m % 1024) * 10 / 1024)
-    } else {
-        alloc::format!("{m} MiB")
-    }
+    crate::rootblk::human_bytes(bytes)
 }
 
 /// A string the UI font can show, or the fallback.
@@ -485,11 +481,27 @@ fn build(section: Sec) -> Vec<Item> {
             }));
             for (mp, total, free) in &snap.df {
                 let used = total.saturating_sub(*free);
-                let pct = if *total > 0 { (used * 100 / *total) as u8 } else { 0 };
+                let pct = if *total > 0 { ((used as u128 * 100 + *total as u128 / 2) / *total as u128).min(100) as u8 } else { 0 };
                 v.push(Item::meter(&alloc::format!("EuroFS on {mp}"), pct, &alloc::format!("{} of {} used ({pct}%)", mib(used), mib(*total))));
             }
             v.push(Item::heading("Disks"));
-            push_lines(&mut v, crate::fatmount::lsblk());
+            // BUG-055: this was `lsblk`, which lists virtio-blk only and told a
+            // system booted from SATA, NVMe or USB that it had no disks.
+            let disks = crate::rootblk::all_disks();
+            if disks.is_empty() {
+                v.push(Item::text("No disk found. (Disks behind a controller without a driver are not listed.)"));
+            }
+            for d in &disks {
+                let mut what = alloc::format!("{}, {}", mib(d.bytes), d.bus);
+                if !d.model.is_empty() {
+                    what.push_str(", ");
+                    what.push_str(&d.model);
+                }
+                if d.system {
+                    what.push_str(" (system disk)");
+                }
+                v.push(Item::info(&d.name, &what));
+            }
             v.push(Item::heading("Integrity check"));
             v.push(Item::button(ID_SCRUB, "Verify all files", "Check now", true).hint(
                 "Reads every file and compares it with its stored checksum, to find silent disk errors. The desktop pauses while it runs: seconds on a small disk, longer on a full one. It also runs by itself in the background.",
@@ -764,9 +776,8 @@ pub fn key(fs: &mut dyn FileSystem, wx: usize, wy: usize, ww: usize, wh: usize, 
     }
 }
 
-/// Scroll the form by `delta` rows (for a wheel; the kernel has no wheel
-/// events yet, PageUp/PageDown and the scrollbar do the same).
-#[allow(dead_code)]
+/// Scroll the form by `delta` items (the mouse wheel; PageUp/PageDown and the
+/// scrollbar do the same).
 pub fn scroll(wx: usize, wy: usize, ww: usize, wh: usize, delta: i32) {
     let items = build(sec());
     form::scroll(form_area(wx, wy, ww, wh), &items, &mut FORM.lock(), delta);

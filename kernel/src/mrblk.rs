@@ -256,6 +256,11 @@ impl BlockDevice for MrBlock {
     }
 }
 
+/// Size of logical drive `disk` in 512-byte sectors; `None` when there is none.
+pub fn disk_sectors(disk: usize) -> Option<u64> {
+    mr::disk(disk).map(|d| d.sectors)
+}
+
 pub fn stats_line() -> String {
     format!(
         "{} request(s), {} replayed after a driver death, {} I/O error(s)",
