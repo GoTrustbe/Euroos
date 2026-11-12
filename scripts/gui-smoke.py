@@ -304,6 +304,10 @@ class Guest:
             args += ["-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-tablet,bus=xhci.0"]
         if a.net == "none":
             args += ["-nic", "none"]
+        elif a.net == "e1000e":
+            # The NIC the userspace driver e1000d serves (net.driver=user, the
+            # default): its syscalls run beside everything the desktop does.
+            args += ["-netdev", "user,id=n0,restrict=on", "-device", "e1000e,netdev=n0"]
         else:
             # restrict=on: the guest sees a network (DHCP, the SLIRP DNS) but nothing
             # it sends leaves the host.
@@ -540,6 +544,47 @@ class Guest:
         return not self.look().windows()
 
     # ── smoke pass ──────────────────────────────────────────────────────────
+    def drag_window(self, win, x0, y0, x1, y1, arrived, steps=8):
+        """Drag the window whose title bar is at `win` from (x0, y0) to (x1, y1) and
+        return the title bars seen after the release.
+
+        The guest is waited for, twice. After the press the pointer moves a few
+        pixels and stays there until the window is seen to have moved: only then
+        has the guest latched the press. (Under TCG on a busy host it latched it
+        when the pointer was already most of the way, and the window then
+        followed for the rest only: 37 % of the distance where the step wants
+        half.) At the end the pointer stays down until `arrived` holds for a
+        window, or the wait runs out; the caller's check of the result is the
+        same as before."""
+        self.actions.write(f"drag-window {int(x0)} {int(y0)} {int(x1)} {int(y1)}\n")
+        sx = 1 if x1 >= x0 else -1
+        sy = 1 if y1 >= y0 else -1
+        self.move(x0, y0)
+        self.nap(0.12)
+        self.button(True)
+        self.nap(0.3)
+        nx, ny = x0 + 6 * sx, y0 + 6 * sy
+        self.move(nx, ny)
+        end = time.time() + 6 * self.slow
+        while time.time() < end:
+            self.nap(0.25)
+            if any(0 < (w[0] - win[0]) * sx <= 18 and 0 < (w[1] - win[1]) * sy <= 18 for w in self.shot().windows()):
+                break
+            self.move(nx, ny)
+        for i in range(1, steps + 1):
+            self.move(nx + (x1 - nx) * i / steps, ny + (y1 - ny) * i / steps)
+            self.nap(0.05)
+        end = time.time() + 6 * self.slow
+        while time.time() < end:
+            self.nap(0.25)
+            if any(arrived(w) for w in self.shot().windows()):
+                break
+            self.move(x1, y1)
+        self.nap(0.1)
+        self.button(False)
+        self.nap(0.3)
+        return self.look().windows()
+
     def step(self, name, cond, detail=""):
         """Record a step and check the guest is still alive after it."""
         self.record(name, bool(cond), detail)
@@ -661,14 +706,13 @@ class Guest:
                 x, y = min(wins, key=lambda w: abs(w[0] - x) + abs(w[1] - y))
             # Move it by its title bar and look where it went.
             dx, dy = (70, 50) if x + 70 + 400 < self.w - PANEL_W else (-70, 50)
-            self.drag(x + 190, y + 22, x + 190 + dx, y + 22 + dy)
-            moved = self.look().windows()
             # The window must have followed the pointer: at least half of the way in
             # both directions and not past it. (Under TCG the guest latches the press
             # a few pixels into the drag, so the grab offset is not the click point.)
             def followed(w):
                 mx, my = (w[0] - x) * (1 if dx > 0 else -1), w[1] - y
                 return abs(dx) / 2 <= mx <= abs(dx) + 12 and dy / 2 <= my <= dy + 12
+            moved = self.drag_window((x, y), x + 190, y + 22, x + 190 + dx, y + 22 + dy, followed)
             near = [w for w in moved if followed(w)]
             self.step(f"{name}: window moves with a title-bar drag", bool(near),
                       f"{x},{y} -> {near[0][0]},{near[0][1]}" if near else f"expected about {x + dx},{y + dy}, windows now {moved}")
@@ -770,6 +814,7 @@ class Guest:
         self.notification_list(cx, cy)
         self.altgr()
         self.mouse_wheel()
+        self.foreground_program()
         self.close_all_windows()
         self.step("desktop back to rest", not self.look("99-final").windows())
 
@@ -938,6 +983,73 @@ class Guest:
             detail = "" if ok else "the Terminal did not scroll back, or a key did not return to the prompt"
             self.key("backspace")
         self.step("mouse wheel scrolls the Terminal back, a key returns to the prompt", ok, detail)
+
+    def terminal_run(self, cmd, answer, timeout):
+        """Type `cmd` in the focused Terminal; the lines it printed (from the serial
+        mirror `[e2e]`) once one of them matches `answer`, else None."""
+        pos = self.serial.mark()
+        self.type(cmd)
+        self.key("ret")
+        end = time.time() + timeout
+        while time.time() < end:
+            text = self.serial.since(pos)
+            at = text.find("[e2e] $ " + cmd)
+            if at >= 0:
+                lines = [l[6:].strip() for l in text[at:].splitlines()[1:] if l.startswith("[e2e] ")]
+                if any(re.search(answer, l) for l in lines):
+                    return lines
+            time.sleep(0.1)
+        return None
+
+    def foreground_program(self):
+        """BUG-063: a foreground program started from the Terminal leaves through
+        sys_exit, and the Terminal turns interrupts back on. While the exit flag of
+        that program stayed set, the next syscall of a userspace driver or of a
+        background process returned through the foreground exit path and the
+        kernel died within a tick or two. So: run /bin/hello in the Terminal, then
+        commands that go through the process table (`ps`) and, when the guest has
+        the NIC of the userspace driver (--net e1000e), through that driver
+        (`ping` of the SLIRP gateway); give the drivers two seconds with the
+        desktop idle; and the Terminal must still run a command."""
+        name = "Terminal: after a foreground program, commands that reach the process table and a userspace driver (BUG-063)"
+        self.close_all_windows()
+        self.click(*dock_tile(4))
+        self.nap(0.8)
+        wins = self.look().windows()
+        if not wins:
+            self.step(name, False, "no terminal window")
+            return
+        x, y = wins[0]
+        self.click(x + 300, y + 200)
+        self.key("ret")
+        self.nap(0.3)
+        t = 30 * self.slow
+        boot = self.serial.since(0)
+        udrv = "e1000d" if "the e1000 driver runs in ring 3 (e1000d)" in boot and "e1000d not started" not in boot else ""
+        notes, ok = [], True
+        hello = self.terminal_run("hello", r"\S", t)
+        ok = ok and hello is not None
+        notes.append("hello: " + (hello[0][:50] if hello else "no output"))
+        self.alive(name + ": hello")
+        ps = self.terminal_run("ps", r"\S", t)
+        ok = ok and ps is not None
+        notes.append(f"ps: {len(ps) if ps else 0} line(s)")
+        if self.a.net == "e1000e":
+            ping = self.terminal_run("ping 10.0.2.2", r"^PING|^ping:", 3 * t)
+            got = bool(ping) and any("echo-reply OK" in l for l in ping)
+            ok = ok and got and bool(udrv)
+            notes.append("ping 10.0.2.2 through " + (udrv or "NO userspace driver") + ": " + (ping[-1][:40] if ping else "no answer line"))
+        else:
+            notes.append("no e1000e NIC in this run (--net e1000e adds the userspace driver)")
+        # The drivers and background processes make their syscalls with the desktop idle.
+        self.nap(2.0)
+        self.alive(name + ": idle")
+        again = self.terminal_run("hello", r"\S", t)
+        echo = self.terminal_echo("gui-smoke-after-foreground")
+        ok = ok and again is not None and echo
+        if again is None or not echo:
+            notes.append("the Terminal did not run a command afterwards")
+        self.step(name, ok, "; ".join(notes))
 
     # ── monkey ──────────────────────────────────────────────────────────────
     def monkey(self, minutes, seed):
@@ -1129,7 +1241,8 @@ def main():
     ap.add_argument("--mem", default="2G")
     ap.add_argument("--pin", default="", help="taskset CPU list for QEMU")
     ap.add_argument("--input", choices=["usb", "virtio"], default="usb", help="usb-tablet + usb-kbd on xHCI, or virtio-tablet + virtio-keyboard")
-    ap.add_argument("--net", choices=["none", "restrict"], default="none", help="no NIC, or SLIRP with restrict=on")
+    ap.add_argument("--net", choices=["none", "restrict", "e1000e"], default="none",
+                    help="no NIC; virtio-net on SLIRP with restrict=on; or e1000e on SLIRP with restrict=on (served by the userspace driver e1000d)")
     ap.add_argument("--extra", default="", help='more QEMU arguments, e.g. "-device intel-hda -device hda-output"')
     ap.add_argument("--layout", choices=["auto", "us", "be-azerty"], default="auto")
     ap.add_argument("--boot-timeout", type=int, default=0, help="seconds to the desktop (default 300 KVM, 1500 TCG)")
