@@ -175,7 +175,7 @@ static SEL_OWNERS: Mutex<Vec<(u32, u32, usize)>> = Mutex::new(Vec::new());
 /// client gets a MappingNotify, on which it fetches the keyboard mapping again.
 pub fn keymap_changed() {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        for conn in XCONNS.lock().iter_mut().flatten() {
+        for conn in lock_home().iter_mut().flatten() {
             if conn.state != State::Connected {
                 continue;
             }
@@ -200,7 +200,7 @@ pub fn hosted_resize(w: usize, h: usize) {
         if shown == 0 {
             return;
         }
-        let mut t = XCONNS.lock();
+        let mut t = lock_home();
         let Some(ci) = conn_of_window(&t[..], shown) else { return };
         let Some(conn) = t[ci].as_mut() else { return };
         let mut at = None;
@@ -228,17 +228,66 @@ pub fn write(fd: u64, data: &[u8]) -> u64 {
     // browser connection created), and holding the table lock across processing
     // made that lookup impossible.
     let idx = (fd - XCONN_FD_BASE) as usize;
-    let mut c = match XCONNS.lock().get_mut(idx).and_then(|s| s.take()) {
-        Some(c) => c,
-        None => return (-9i64) as u64, // -EBADF
+    if idx >= MAX_XCONN {
+        return (-9i64) as u64;
+    }
+    let mut c = {
+        let mut t = XCONNS.lock();
+        match t[idx].take() {
+            Some(c) => {
+                // Marked under the table lock: see lock_home().
+                OUT_MASK.fetch_or(1 << idx, core::sync::atomic::Ordering::Relaxed);
+                c
+            }
+            None => return (-9i64) as u64, // -EBADF
+        }
     };
     c.inbuf.extend_from_slice(data);
     process(&mut c);
-    if let Some(slot) = XCONNS.lock().get_mut(idx) {
-        *slot = Some(c);
+    {
+        let mut t = XCONNS.lock();
+        t[idx] = Some(c);
+        OUT_MASK.fetch_and(!(1 << idx), core::sync::atomic::Ordering::Relaxed);
     }
     data.len() as u64
 }
+
+/// Connections that are OUT of the table right now (bit = index): `write` takes
+/// a connection out while it processes that client's requests.
+static OUT_MASK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// The connection table with EVERY connection in it, for whoever has an event to
+/// deliver. An input event that found its connection out of the table (the
+/// client busy in a PutImage on another core) had no owner to go to and was
+/// dropped: a key of a typed word, the release of a click, one press of a double
+/// click (BUG-094). The wait is as long as one batch of requests takes, on
+/// another core. On one core it never waits: a syscall is not preempted. Bounded
+/// anyway, so a mistake here costs an event and not the machine.
+fn lock_home() -> spin::MutexGuard<'static, [Option<XConn>; MAX_XCONN]> {
+    let mut spins = 0u32;
+    loop {
+        let t = XCONNS.lock();
+        if OUT_MASK.load(core::sync::atomic::Ordering::Relaxed) == 0 || spins > 20_000_000 {
+            if spins > 20_000_000 {
+                static SAID: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+                if !SAID.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                    crate::serial_println!("[xserver] a connection stayed out of the table for 20M spins (mask {:#x}): delivering without it",
+                        OUT_MASK.load(core::sync::atomic::Ordering::Relaxed));
+                }
+            }
+            return t;
+        }
+        drop(t);
+        if spins == 0 {
+            HOME_WAITS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+        spins += 1;
+        core::hint::spin_loop();
+    }
+}
+/// How often an event had to wait for a connection that was out of the table
+/// (each of these was a dropped event before BUG-094). `cdiag` prints it.
+static HOME_WAITS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// The client is reading — drain up to `max` bytes of queued replies/events.
 /// Connections that have DRAINED events (called read and got bytes) — the ones with
@@ -368,7 +417,7 @@ pub fn pump_keyboard() {
     // XCONNS with IF=0 — a preemption holding this lock would deadlock (BUG-007 class).
     x86_64::instructions::interrupts::without_interrupts(|| {
         let wants = {
-            let t = XCONNS.lock();
+            let t = lock_home();
             t.iter().flatten().any(|c| c.windows.iter().any(|w| w.mapped && w.event_mask & 0x3 != 0))
         };
         if !wants {
@@ -440,7 +489,7 @@ pub fn pump_keyboard() {
             }
             let (mx, my) = crate::mouse::pos();
             #[allow(unused_assignments)]
-            let mut t = XCONNS.lock();
+            let mut t = lock_home();
             // A key belongs to ONE window: the one holding the input focus, else the
             // one on top of the screen. Broadcasting a keystroke to every window was
             // survivable with a single demo client and is not, once a browser has a
@@ -455,7 +504,7 @@ pub fn pump_keyboard() {
                                     mx as i16, my as i16) > 0 {
                     continue;
                 }
-                t = XCONNS.lock();
+                t = lock_home();
             }
             if let Some(ci) = chosen.and_then(|w| conn_of_window(&t[..], w)) {
                 let wid = chosen.unwrap();
@@ -541,7 +590,7 @@ fn deliver_selected(win: u32, want: u32, kind: u8, detail: u8, rx: i16, ry: i16,
             crate::serial_println!("[xin]   selections(win,conn,mask)={sel:?}");
             let readers: Vec<_> = READER_CONNS.lock().clone();
             crate::serial_println!("[xin]   readers={readers:?} focus={:#x}", FOCUS_WINDOW.load(core::sync::atomic::Ordering::Relaxed));
-            let t = XCONNS.lock();
+            let t = lock_home();
             for (ci, c) in t.iter().enumerate() {
                 if let Some(c) = c {
                     let wins: Vec<_> = c.windows.iter()
@@ -561,7 +610,7 @@ fn deliver_selected(win: u32, want: u32, kind: u8, detail: u8, rx: i16, ry: i16,
     // went to each connection that had ever read anything; with that connection
     // alive a copy is a second key press.
     let mut sent = 0;
-    let mut t = XCONNS.lock();
+    let mut t = lock_home();
     for ci in targets {
         if let Some(Some(conn)) = t.get_mut(ci).map(|s| s.as_mut()) {
             // If this connection does NOT own `win`, its xcb event demux has no
@@ -726,7 +775,7 @@ fn deliver_pointer(kind: u8, detail: u8, px: usize, py: usize, require_mask: u32
                 crate::serial_println!("[xin]   selections(win,conn,mask)={sel:?}");
                 let readers: Vec<_> = READER_CONNS.lock().clone();
                 crate::serial_println!("[xin]   readers={readers:?}");
-                let t = XCONNS.lock();
+                let t = lock_home();
                 for (ci, c) in t.iter().enumerate() {
                     if let Some(c) = c {
                         let wins: Vec<_> = c.windows.iter().filter(|w| w.mapped)
@@ -747,7 +796,7 @@ fn deliver_pointer(kind: u8, detail: u8, px: usize, py: usize, require_mask: u32
             if sent > 0 {
                 return;
             }
-            let mut t = XCONNS.lock();
+            let mut t = lock_home();
             if let Some(ci) = conn_of_window(&t[..], wid) {
                 if let Some(conn) = t[ci].as_mut() {
                     let ok = conn.windows.iter().find(|w| w.id == wid)
@@ -760,7 +809,7 @@ fn deliver_pointer(kind: u8, detail: u8, px: usize, py: usize, require_mask: u32
             }
             return;
         }
-        let mut t = XCONNS.lock();
+        let mut t = lock_home();
         for conn in t.iter_mut().flatten() {
             if let Some((wid, wx, wy)) = input_target(conn, require_mask) {
                 send_input(conn, kind, detail, wid, px as i16, py as i16,
@@ -779,7 +828,7 @@ fn deliver_pointer(kind: u8, detail: u8, px: usize, py: usize, require_mask: u32
 /// sends this when the hosted X window gains/loses focus. IRQ-safe.
 pub fn deliver_focus(focused: bool) {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        let mut t = XCONNS.lock();
+        let mut t = lock_home();
         for conn in t.iter_mut().flatten() {
             if let Some(wid) = conn.windows.iter().filter(|w| w.mapped && w.w > 1 && w.h > 1)
                 .max_by_key(|w| w.w as u32 * w.h as u32).map(|w| w.id)
@@ -850,7 +899,7 @@ pub fn deliver_motion(lx: i16, ly: i16) {
 /// when nothing has been retained yet.
 fn deliver_to_shown(kind: u8, detail: u8, lx: i16, ly: i16) {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        let mut t = XCONNS.lock();
+        let mut t = lock_home();
         let shown = RETAINED_ID.load(core::sync::atomic::Ordering::Relaxed);
         if shown != 0 {
             if let Some(ci) = conn_of_window(&t[..], shown) {
