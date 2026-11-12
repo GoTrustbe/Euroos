@@ -7163,6 +7163,25 @@ fn main() -> Status {
             }
             fb.present_rect(ox, oy, compositor::CURSOR_W, compositor::CURSOR_H);
             fb.present_rect(cmx, cmy, compositor::CURSOR_W, compositor::CURSOR_H);
+        } else if windows[gtk_idx].visible && xserver::take_dirty() {
+            // The hosted X client painted: its body, now. This used to wait for
+            // the 2-second status tick above (the tick was 10 Hz until the
+            // idle-CPU work made it t/200), so a character typed into the
+            // browser showed up to two seconds later unless the mouse happened
+            // to move: 1742 ms key to screen, median of 27 keys (chrome-smoke
+            // --only perf). Only the body's rectangle and the cursor are blitted.
+            xrepaints += 1;
+            let (ox, oy) = (cmx, cmy);
+            compositor::restore_cursor_bg(&fb, cmx, cmy, &cur_bg);
+            compositor::draw_window_body(&fb, &windows[gtk_idx]);
+            cmx = px;
+            cmy = py;
+            compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
+            compositor::draw_cursor(&fb, cmx, cmy);
+            let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
+            fb.present_rect(gx, gy, gw, gh);
+            fb.present_rect(ox, oy, compositor::CURSOR_W, compositor::CURSOR_H);
+            fb.present_rect(cmx, cmy, compositor::CURSOR_W, compositor::CURSOR_H);
         } else if px != cmx || py != cmy {
             // Only move the cursor (save-under) — blit only the area
             // the cursor leaves + arrives at, so the mouse stays smooth.
