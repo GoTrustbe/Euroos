@@ -7290,11 +7290,30 @@ fn vfs_rename(oldp: &[u8], newp: &[u8]) -> u64 {
     if o.is_empty() || n.is_empty() {
         return (-2i64) as u64; // -ENOENT
     }
+    // Replacing an existing destination TOMBSTONES it, exactly like unlink and for
+    // the same reason: every open descriptor holds an INDEX into FILES. This used
+    // to be `files.retain(|(p, _)| *p != n)`, which removed the entry and moved
+    // every later file down one slot, so from the second time a program replaced
+    // a file by renaming a new one over it (how chrome saves Preferences, Local
+    // State and every other ImportantFileWriter file) all descriptors opened
+    // after that file read and wrote their neighbour's bytes: SQLite's WAL frames
+    // landed in the -shm file, and the renderers aborted on "Likely file
+    // corruption" (BUG-091).
+    let mut dead: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
     {
         let mut files = FILES.lock();
-        files.retain(|(p, _)| *p != n); // replace an existing destination
-        if let Some(e) = files.iter_mut().find(|(p, _)| *p == o) {
-            e.0 = n.clone();
+        if let Some(src) = files.iter().position(|(p, _)| *p == o) {
+            if o != n {
+                for (i, (p, _)) in files.iter_mut().enumerate() {
+                    if i != src && *p == n {
+                        p.clear();
+                        dead.push(i);
+                    }
+                }
+                files[src].0 = n.clone();
+            }
+            drop(files);
+            reclaim_tombstones(&dead);
             return 0;
         }
     }
@@ -7304,7 +7323,15 @@ fn vfs_rename(oldp: &[u8], newp: &[u8]) -> u64 {
         if let Some(e) = sl.iter_mut().find(|(p, _)| *p == o) {
             let t = e.1.clone();
             sl.retain(|(p, _)| *p != n && *p != o);
-            sl.push((n, t));
+            sl.push((n.clone(), t));
+            drop(sl);
+            for (i, (p, _)) in FILES.lock().iter_mut().enumerate() {
+                if *p == n {
+                    p.clear();
+                    dead.push(i);
+                }
+            }
+            reclaim_tombstones(&dead);
             return 0;
         }
     }
@@ -7347,14 +7374,50 @@ fn vfs_unlink(path: &[u8]) -> u64 {
     // POSIX promises, and what "create, unlink, ftruncate, mmap(MAP_SHARED)"
     // depends on: the standard way to get anonymous shared memory, and how chrome
     // allocates the Mojo buffers that carry a page's bytes to its renderer.
-    for (q, _) in FILES.lock().iter_mut() {
-        if *q == p {
+    let mut dead: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+    for (i, (q, _)) in FILES.lock().iter_mut().enumerate() {
+        if *q == p && !p.is_empty() {
             q.clear();
+            dead.push(i);
         }
     }
     SYMLINKS.lock().retain(|(q, _)| *q != p);
     MKDIRS.lock().retain(|q| *q != p);
+    reclaim_tombstones(&dead);
     0
+}
+
+/// Can file `fi` still be reached without its name: a descriptor in any fd
+/// space, or a shared mapping?
+fn file_referenced(fi: usize) -> bool {
+    if OPEN_FDS_ALL.lock().any(|e| matches!(e, Some((f, _)) if *f == fi)) {
+        return true;
+    }
+    if SHARED_MAPS.lock().iter().any(|(f, _, _)| *f == fi) {
+        return true;
+    }
+    if SHARED_FRAMES.lock().iter().any(|(f, _)| *f == fi) {
+        return true;
+    }
+    SHARED_ALIASES.lock().iter().any(|&(_, _, f)| f == fi)
+}
+
+/// Free the BYTES of files that have just lost their name (unlink, or a rename
+/// over them) and that nobody holds open or mapped. The slot stays, so no index
+/// moves; without this every file a program deleted or replaced kept its
+/// contents in the kernel heap until reboot. A file that is still open keeps
+/// its bytes (and, for now, keeps them after the last close too).
+fn reclaim_tombstones(idxs: &[usize]) {
+    for &fi in idxs {
+        if file_referenced(fi) {
+            continue;
+        }
+        if let Some(e) = FILES.lock().get_mut(fi) {
+            if e.0.is_empty() {
+                e.1 = alloc::borrow::Cow::Borrowed(&[]);
+            }
+        }
+    }
 }
 
 /// symlink(target, linkpath): record a symlink. Replaces any existing one (chrome

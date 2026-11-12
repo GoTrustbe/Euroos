@@ -93,6 +93,13 @@ impl<E: Clone + 'static, const N: usize> Tab<E, N> {
         s == ROOT || (s <= self.extra.len() && self.extra[s - 1].is_some())
     }
 
+    /// Does any slot of ANY space satisfy `f`? For the rare question that is
+    /// about the object behind a descriptor and not about one process: "does
+    /// anybody still have this file open".
+    pub fn any(&self, mut f: impl FnMut(&E) -> bool) -> bool {
+        self.root.iter().any(&mut f) || self.extra.iter().flatten().any(|b| b.iter().any(&mut f))
+    }
+
     fn slot(&self, s: usize) -> usize {
         if self.has(s) {
             s
@@ -328,6 +335,20 @@ mod tests {
             t.install(s, T::block(None).unwrap());
         }
         t
+    }
+
+    #[test]
+    fn any_looks_in_every_space() {
+        // BUG-091: "does anybody still have file 12 open" is asked of all spaces.
+        let mut t = tab_with(&[ORPHAN, 2, 3]);
+        assert!(!t.any(|e| matches!(e, Some((12, _)))));
+        t.of_mut(3)[4] = Some((12, 0));
+        assert!(t.any(|e| matches!(e, Some((12, _)))));
+        assert!(!t.any(|e| matches!(e, Some((13, _)))));
+        t.of_mut(ROOT)[1] = Some((13, 9));
+        assert!(t.any(|e| matches!(e, Some((13, _)))));
+        let _ = t.remove(3);
+        assert!(!t.any(|e| matches!(e, Some((12, _)))));
     }
 
     #[test]
