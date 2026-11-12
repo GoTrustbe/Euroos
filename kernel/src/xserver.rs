@@ -1408,8 +1408,51 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             crate::mouse::set_pos(nx.max(0) as usize, ny.max(0) as usize);
             trace(format_args!("WarpPointer -> ({nx},{ny})"));
         }
+        // GetPointerMapping (117): the physical-to-logical button map. Seven
+        // buttons, identity: 1-3 the buttons, 4-7 the wheel (up, down, left, right).
+        // Reply: map length in byte 1, then the map padded to 4.
+        117 => {
+            const BUTTONS: usize = 7;
+            let mut r = reply_header(c, BUTTONS.div_ceil(4) as u32);
+            r[1] = BUTTONS as u8;
+            for i in 0..BUTTONS {
+                r[32 + i] = (i + 1) as u8;
+            }
+            c.outbuf.extend_from_slice(&r);
+            trace(format_args!("GetPointerMapping -> {BUTTONS} buttons"));
+        }
+        // A request that owes a reply and has no handler above must still be
+        // answered: a client that waits for a reply waits forever (BUG-090: xcb
+        // sat in poll() on GetPointerMapping, the browser's first connection never
+        // got past its setup). The answer is the X error BadImplementation, which
+        // every client library turns into a failed call instead of a hang.
+        _ if owes_reply(opcode) => {
+            send_error(c, 17, 0, opcode, 0);
+            crate::serial_println!("[xserver] request {opcode} (owes a reply) is not implemented: answered with BadImplementation");
+        }
         _ => {}
     }
+}
+
+/// Core requests that the client waits on (X11 protocol, appendix B). Extension
+/// requests (128 and up) never arrive: QueryExtension reports none present.
+fn owes_reply(opcode: u8) -> bool {
+    matches!(opcode,
+        3 | 14 | 15 | 16 | 17 | 20 | 21 | 23 | 26 | 31 | 38 | 39 | 40 | 43 | 44 | 47 | 48 | 49 | 50 | 52
+        | 73 | 83 | 84 | 85 | 86 | 87 | 91 | 92 | 97 | 98 | 99 | 101 | 103 | 106 | 108 | 110 | 116 | 117
+        | 118 | 119)
+}
+
+/// Queue an X error for the request being handled: code, the offending value,
+/// and the major/minor opcode it answers (32 bytes, byte 0 = 0).
+fn send_error(c: &mut XConn, code: u8, bad_value: u32, major: u8, minor: u16) {
+    let mut e = alloc::vec![0u8; 32];
+    e[1] = code;
+    put16(c, &mut e, 2, c.seq);
+    put32(c, &mut e, 4, bad_value);
+    put16(c, &mut e, 8, minor);
+    e[10] = major;
+    c.outbuf.extend_from_slice(&e);
 }
 
 /// Copy a ZPixmap (32-bpp, LSBFirst) into the target window buffer, clipped.
