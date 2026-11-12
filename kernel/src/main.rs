@@ -4211,6 +4211,10 @@ fn main() -> Status {
         // Churn: short, sharp lifecycle stress that must leave every counter where it started.
         churn::proc_churn(&mut allocator);
         ring3::spawn_window_selftest(&mut allocator);
+        // The process self-tests of 2026-11: [bug063], [fdspace], [bug053].
+        ring3::exit_flag_selftest(&mut allocator);
+        ring3::fdspace_selftest(&mut allocator);
+        ring3::lowmem_launch_selftest(&mut allocator);
         churn::thread_churn(&mut allocator);
         churn::fork_churn(&mut allocator);
         churn::fs_churn(&mut vfs);

@@ -12170,15 +12170,6 @@ static SPAWN_WINDOW_RAN: core::sync::atomic::AtomicU8 = core::sync::atomic::Atom
 /// (exit 42, the launcher wakes). Before the fix the window ran the program and
 /// its exit_group returned through a stale `SAVED_KERNEL_RSP`.
 pub fn spawn_window_selftest(falloc: &mut FrameAllocator) {
-    spawn_window_selftest_inner(falloc);
-    // The process self-tests of 2026-11 run from here, so that main.rs
-    // (which already calls this function in its SELFTEST block) needs no new line.
-    exit_flag_selftest(falloc);
-    fdspace_selftest(falloc);
-    lowmem_launch_selftest(falloc);
-}
-
-fn spawn_window_selftest_inner(falloc: &mut FrameAllocator) {
     let caps = CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO;
     SPAWN_WINDOW_RAN.store(0, Ordering::Relaxed);
     SPAWN_WINDOW_PROBE.store(true, Ordering::Relaxed);

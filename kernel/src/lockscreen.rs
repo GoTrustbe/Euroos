@@ -117,6 +117,8 @@ fn background_rows_exact(fb: &FrameBuffer, c0: Color, c1: Color) -> (usize, usiz
 /// and the status/hint line.
 fn render(fb: &FrameBuffer, lk: &Lock, clock: &str) {
     let (w, h) = (fb.width(), fb.height());
+    // The lock screen covers the whole framebuffer: no window clip applies to it.
+    fb.clear_clip();
     // Background in the house style (sand → slightly darker at the bottom).
     paint_background(fb, Color::BACKGROUND, Color::PAPER_2);
 
