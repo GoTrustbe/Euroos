@@ -45,22 +45,13 @@ struct State {
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 
-/// Generate `n` random bytes — TPM-RNG if available, otherwise a
-/// functional tick/RDTSC mix (the self-test stays valid; production uses TPM).
+/// `n` random bytes from the kernel CSPRNG (salts, session ids, the wallet
+/// seeds). The TPM, when there is one, is one of the generator's sources.
+/// Before BUG-081 a machine without a TPM got a xorshift of the tick count
+/// here. Waits for the seed rather than return anything else.
 fn rand_bytes(n: usize) -> Vec<u8> {
-    if let Some(b) = crate::tpm::get_random(n as u16) {
-        if b.len() >= n {
-            return b[..n].to_vec();
-        }
-    }
-    let mut out = Vec::with_capacity(n);
-    let mut x = crate::interrupts::ticks().wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(0x1234_5678);
-    for _ in 0..n {
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        out.push((x >> 24) as u8);
-    }
+    let mut out = alloc::vec![0u8; n];
+    crate::entropy::fill_wait(&mut out);
     out
 }
 

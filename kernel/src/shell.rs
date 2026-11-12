@@ -838,7 +838,7 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         // CU-2: mktemp — create a uniquely-named empty file under /tmp and print its path.
         "mktemp" => {
             let _ = fs.create_dir("/tmp");
-            let stamp = crate::rtc::epoch() ^ (crate::interrupts::ticks().wrapping_mul(2654435761));
+            let stamp = u64::from_le_bytes(crate::entropy::draw_wait::<8>()); // not guessable from the clock
             let path = format!("/tmp/tmp.{:08x}", stamp & 0xFFFF_FFFF);
             match fs.write_file(&path, b"") {
                 Ok(()) => vec![path],

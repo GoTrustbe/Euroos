@@ -44,21 +44,8 @@ pub fn selftest(master_key: [u8; 32], from_tpm: bool) {
 
     // (2) Seal → an encrypted blob that contains NO plaintext; then unseal again.
     // Fresh nonce per seal (audit M1): nonce reuse under the same master key
-    // breaks ChaCha20-Poly1305. Pull it from the TPM RNG; fallback = a monotonic counter.
-    let nonce = match crate::tpm::get_random(12) {
-        Some(b) => {
-            let mut n = [0u8; 12];
-            n.copy_from_slice(&b[..12]);
-            n
-        }
-        None => {
-            static SEAL_CTR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
-            let c = SEAL_CTR.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            let mut n = [0u8; 12];
-            n[..8].copy_from_slice(&c.to_le_bytes());
-            n
-        }
-    };
+    // breaks ChaCha20-Poly1305. From the kernel CSPRNG (the TPM is one of its sources).
+    let nonce = crate::entropy::draw_wait::<12>();
     let sealed = v.seal(&master_key, &nonce);
     let no_plaintext = sealed.as_ref().map(|b| !b.windows(11).any(|w| w == b"euro-s3cr3t")).unwrap_or(false);
     let unsealed_ok = sealed
