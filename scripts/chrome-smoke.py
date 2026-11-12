@@ -65,7 +65,11 @@ AZ_EXTRA = {"@": ("2", False, True), "#": ("3", False, True), "{": ("9", False, 
             "ç": ("9", False, False), "à": ("0", False, False), "%": ("apostrophe", True, False),
             "$": ("bracket_right", False, False), "*": ("backslash", False, False)}
 
-BAD_RE = re.compile(r":FATAL:|\[abort\]|TERMINATED|arena alloc FAILED|POOL EXHAUSTED")
+BAD_RE = re.compile(r":FATAL:|\[abort\]|TERMINATED|arena alloc FAILED|POOL EXHAUSTED|WATCHDOG TRIPPED")
+# The desktop loop's deadman ("WATCHDOG TRIPPED", 15 s without a turn of the loop,
+# BUG-085) only writes a line and the guest goes on: here it fails the step it
+# happens in (BAD_RE) instead of ending the run as a crash.
+gs.CRASH_RE = re.compile(gs.CRASH_RE.pattern.replace("|WATCHDOG", ""))
 
 
 class Chrome(gs.Guest):
@@ -307,10 +311,29 @@ class Chrome(gs.Guest):
         secs = time.time() - t0
         ok = hit is not None and n >= 8          # the test page: two flat colours and its text
         timeline = ", ".join(f"{k} {v:.1f}" for k, v in sorted(self.start_marks.items(), key=lambda kv: kv[1]))
+        self.move(self.w - 4, self.h - 4)
+        self.nap(0.5)
+        self.idle_icon = self.reload_icon()
         self.record("chrome starts from the Terminal", ok,
                     f"window at {self.win}, first page {hit[1] if hit else '?'} painted and settled after {secs:.1f} s "
                     f"(seconds after Enter: {timeline}), {n} colours in the content area")
         return ok
+
+    def reload_icon(self, s=None):
+        """The pixels of the toolbar's reload button: it shows a cross while a page loads."""
+        x, y = self.cx(RELOAD_X, TOOLBAR_Y)
+        return self.digest(s or self.shot(), (x - 9, y - 9, x + 9, y + 9))
+
+    def wait_loaded(self, timeout=60):
+        """Until the browser itself says the load is over: the reload button is the
+        reload arrow again (as it was on the idle start page). Returns (seconds, done?)."""
+        t0 = time.time()
+        idle = getattr(self, "idle_icon", None)
+        while idle is not None and time.time() - t0 < timeout * self.slow:
+            if self.reload_icon() == idle:
+                return time.time() - t0, True
+            time.sleep(0.25)
+        return time.time() - t0, idle is None
 
     def close_infobars(self):
         """Close chrome's infobars. Only on the input test page: its background is not
@@ -357,11 +380,19 @@ class Chrome(gs.Guest):
             name = site["name"]
             self.new_bad()
             ok_nav, secs, detail = self.navigate(site["url"], site["host"])
-            s, paint, settled = self.settle(45, quiet=2.0, save_as=f"site-{name}{tag}")
+            # The picture is judged when the BROWSER says the load is over (its reload
+            # button is an arrow again), not when the tab has a URL and a title: the old
+            # page stays on the screen for seconds after that.
+            self.move(self.w - 4, self.h - 4)
+            painted, loaded = self.wait_loaded(75)
+            s, paint, settled = self.settle(45, quiet=2.5, save_as=f"site-{name}{tag}")
             n, share = self.colours(s)
             bad = self.new_bad()
+            # `loaded` is in the detail only: the reload-button comparison does not yet
+            # recognise the idle arrow on every page, and then the picture is simply
+            # judged after the full wait.
             ok = ok_nav and n >= site["colours"] and not bad
-            why = f"{detail} after {secs:.1f} s; content {n} colours, commonest {share:.0%}" + ("" if settled else ", still changing") \
+            why = f"{detail} after {secs:.1f} s, load {'finished' if loaded else 'NOT finished'} {painted:.1f} s later; content {n} colours, commonest {share:.0%}" + ("" if settled else ", still changing") \
                 + (f"; {len(bad)} failure line(s): {bad[0]}" if bad else "")
             self.step(f"site {name}: {site['url']}", ok, why)
             results.append((name, ok, secs, n))
