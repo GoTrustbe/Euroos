@@ -356,7 +356,7 @@ static mut USER_RIP: u64 = 0; // saved user-rip (clone: thread resume point)
 #[no_mangle]
 static mut SAVED_REGS: u64 = 0; // points to the saved register block (clone: child inherits the regs)
 #[no_mangle]
-static mut EXITED: u64 = 0; // set by sys_exit
+static mut EXITED: u64 = 0; // set by sys_exit of a foreground excursion, cleared by the exit epilogue (BUG-063)
 
 static mut EXIT_CODE: u64 = 0;
 static OUTPUT: Mutex<String> = Mutex::new(String::new());
@@ -7460,6 +7460,13 @@ global_asm!(
     "mov rsp, [rip + USER_RSP]",
     "sysretq",
     "9:",                             // sys_exit -> back to the kernel.
+    // BUG-063: the flag is consumed here. It used to stay 1 until the next
+    // launch, and the next syscall of any scheduled task whose route does not
+    // reset it (a userspace driver, a background process's nanosleep, fork,
+    // wait4 or socket call) then came out of syscall_dispatch, found it set and
+    // took THIS path: a return through the stale SAVED_KERNEL_RSP, on the boot
+    // task's stack, in the wrong task.
+    "mov qword ptr [rip + EXITED], 0",
     "mov rsp, [rip + SAVED_KERNEL_RSP]",
     "pushfq",                         // SMAP window CLOSED: clear AC (no sysret that restores r11)
     "btr qword ptr [rsp], 18",
@@ -7477,6 +7484,7 @@ global_asm!(
     // to the caller.
     ".global force_kernel_return",
     "force_kernel_return:",
+    "mov qword ptr [rip + EXITED], 0", // BUG-063: consumed, as in the sys_exit epilogue
     "mov rsp, [rip + SAVED_KERNEL_RSP]",
     "pushfq",                         // SMAP window CLOSED (a faulted exec may have left AC open)
     "btr qword ptr [rsp], 18",
