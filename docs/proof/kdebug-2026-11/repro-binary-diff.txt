@@ -1,0 +1,21 @@
+Two clean builds of feature/app-control 7858b72 in one checkout, ./scripts/build.sh release, the second
+after rm -rf target; 2026-11-12 09:29 and 09:33 CET. Before the fix. Output of pediff.py (in this directory).
+
+base-self-1.efi: 67734528 bytes sha256 5a482cb1ee33ea8924425af1c0a739c5f19c775080cb25d13bebf4c35f1d9107
+base-self-2.efi: 67734528 bytes sha256 a1c300937f9959b9cca751b68b32bd0ad06a50057117f4893f4175e8726c9eb5
+
+differing bytes: 4
+  file offset 0x80: 0xf0 / 0xe8
+  file offset 0x81: 0x78 / 0x79
+  file offset 0x406ae44: 0xf0 / 0xe8
+  file offset 0x406ae45: 0x78 / 0x79
+
+PE header at 0x78; COFF TimeDateStamp at 0x80:
+  build 1: 0x6af578f0 (as a time: 2026-11-12 08:29:36 UTC)
+  build 2: 0x6af579e8 (as a time: 2026-11-12 08:33:44 UTC)
+
+debug directory: RVA 0x406bc40, 28 bytes, in .rdata, file offset 0x406ae40; its TimeDateStamp at 0x406ae44:
+  build 1: 0x6af578f0
+  build 2: 0x6af579e8
+
+userland/*.elf, *.sig, *.so after build 1 and after build 2: identical (sha256 of 86 files).

@@ -1,0 +1,63 @@
+s1-r1 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc] spawned scheduled task 20: ld-entry@0xce1f540 rsp@0x124f8e70 phdr@0xc600040 phnum=13" 09:39:32
+s1-r1 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[tick-late] #11 +1 ticks (78 Mcycles) rip=0x3058859c cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) l" 09:39:32
+s3-r1 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] arch_prctl SET_FS = 0x109a4740" 09:39:32
+s3-r1 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[tick-late] #7 +1 ticks (71 Mcycles) rip=0x3058859c cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lo" 09:39:32
+s2-r1 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GMATH: dlsym sin(2)=0.90930 -> PASS" 09:39:34
+s2-r1 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] GMATH: sqrt(2)=1.41421 pow(2,10)=1024.0 log(10)=2.30259 cos(2)=-0.41615" 09:39:34
+s3-r2 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc-thread] clone3 -> task 26 sp=0x11887f80 [sp]=0x0 [sp-8]=0x0 rdx=0x1070e720 r9=0x124d5be7" 09:43:04
+s1-r2 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] arch_prctl SET_FS = 0x1094d740" 09:43:04
+s3-r2 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[tick-late] #12 +1 ticks (67 Mcycles) rip=0x3058859c cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) l" 09:43:04
+s1-r2 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] arch_prctl SET_FS = 0x10a0d740" 09:43:04
+s2-r2 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] arch_prctl SET_FS = 0x10944740" 09:43:06
+s2-r2 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTHREAD: 3 threads joined, total=6997000 (expect 6997000) -> PASS" 09:43:06
+s3-r3 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] arch_prctl SET_FS = 0x109d4740" 09:46:37
+s3-r3 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[tick-late] #12 +2 ticks (94 Mcycles) rip=0x3058859c cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) l" 09:46:37
+s1-r3 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc] spawned scheduled task 20: ld-entry@0xce1f540 rsp@0x12431e70 phdr@0xc600040 phnum=13" 09:46:39
+s1-r3 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] arch_prctl SET_FS = 0x10cfac40" 09:46:39
+s2-r3 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] arch_prctl SET_FS = 0x10ceac40" 09:46:40
+s2-r3 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[tick-late] #10 +1 ticks (68 Mcycles) rip=0x3058859c cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) l" 09:46:40
+s3-r4 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] GTHREAD: creating 3 pthreads" 09:50:11
+s3-r4 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] arch_prctl SET_FS = 0x1097d740" 09:50:11
+s2-r4 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[tick-late] #10 +1 ticks (73 Mcycles) rip=0x3058859c cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) l" 09:50:12
+s2-r4 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[tick-late] #20 +1 ticks (54 Mcycles) rip=0x3058859c cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) l" 09:50:12
+s1-r4 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] GMATH: sqrt(2)=1.41421 pow(2,10)=1024.0 log(10)=2.30259 cos(2)=-0.41615" 09:50:13
+s1-r4 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] mmap(fd=3, off=585728, 360448 B) file-backed -> 0x10761000 (360448 B copied)" 09:50:13
+s3-r5 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[tick-late] #17 +1 ticks (57 Mcycles) rip=0x3058859c cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) l" 09:53:50
+s3-r5 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[" 09:53:50
+s1-r5 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[tick-late] #22 +2 ticks (85 Mcycles) rip=0x3058859c cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) l" 09:53:53
+s1-r5 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTHREAD: 3 threads joined, total=6997000 (expect 6997000) -> PASS" 09:53:54
+s2-r5 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] GTHREAD: creating 3 pthreads" 09:53:55
+s2-r5 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[glibc] spawned scheduled task 20: ld-entry@0xce1f540 rsp@0x12417e70 phdr@0xc600040 phnum=13" 09:53:55
+s3-r6 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] arch_prctl SET_FS = 0x109e4740" 09:57:35
+s3-r6 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTEST: snprintf='42-ff-euro' strtol=12345" 09:57:36
+s1-r6 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTEST: snprintf='42-ff-euro' strtol=12345" 09:57:39
+s1-r6 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTEST: snprintf='42-ff-euro' strtol=12345" 09:57:39
+s2-r6 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTHREAD: 3 threads joined, total=6997000 (expect 6997000) -> PASS" 09:57:44
+s2-r6 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[glibc-thread] clone3 -> task 26 sp=0x11959f80 [sp]=0x0 [sp-8]=0x0 rdx=0x107de720 r9=0x1249ebe7" 09:57:44
+s1-r7 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTEST: snprintf='42-ff-euro' strtol=12345" 10:01:25
+s1-r7 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTEST: snprintf='42-ff-euro' strtol=12345" 10:01:25
+s3-r7 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTHREAD: 3 threads joined, total=6997000 (expect 6997000) -> PASS" 10:01:26
+s3-r7 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTEST: snprintf='42-ff-euro' strtol=12345" 10:01:26
+s2-r7 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTHREAD: 3 threads joined, total=6997000 (expect 6997000) -> PASS" 10:01:32
+s2-r7 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTHREAD: 3 threads joined, total=6997000 (expect 6997000) -> PASS" 10:01:32
+s1-r8 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] arch_prctl SET_FS = 0x10814740" 10:05:04
+s1-r8 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[glibc] spawned scheduled task 20: ld-entry@0xce1f540 rsp@0x124b6e70 phdr@0xc600040 phnum=13" 10:05:05
+s3-r8 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc] spawned scheduled task 20: ld-entry@0xce1f540 rsp@0x124a9e70 phdr@0xc600040 phnum=13" 10:05:07
+s3-r8 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTHREAD: 3 threads joined, total=6997000 (expect 6997000) -> PASS" 10:05:07
+s2-r8 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTEST: snprintf='42-ff-euro' strtol=12345" 10:05:13
+s2-r8 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GMATH: dlsym sin(2)=0.90930 -> PASS" 10:05:13
+s1-r9 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] arch_prctl SET_FS = 0x10914740" 10:08:44
+s1-r9 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] arch_prctl SET_FS = 0x10894740" 10:08:44
+s3-r9 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTEST: snprintf='42-ff-euro' strtol=12345" 10:08:48
+s3-r9 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GMATH: dlsym sin(2)=0.90930 -> PASS" 10:08:48
+s2-r9 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTHREAD: 3 threads joined, total=6997000 (expect 6997000) -> PASS" 10:08:54
+s2-r9 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] mmap(fd=3, off=1986560, 552960 B) file-backed -> 0x108a7000 (552960 B copied)" 10:08:54
+s1-r10 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTHREAD: 3 threads joined, total=6997000 (expect 6997000) -> PASS" 10:12:18
+s1-r10 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[tick-late] #20 +2 ticks (90 Mcycles) rip=0x3058859c cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) l" 10:12:18
+stream 1 done 10:12:18
+s3-r10 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GMATH: dlsym sin(2)=0.90930 -> PASS" 10:12:22
+s3-r10 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[linux-abi] arch_prctl SET_FS = 0x10abd740" 10:12:22
+stream 3 done 10:12:22
+s2-r10 boot1: ok net-late-lines=2 nmi=0 panic=0 last="[glibc]   GTHREAD: 3 threads joined, total=6997000 (expect 6997000) -> PASS" 10:12:30
+s2-r10 boot2: ok net-late-lines=2 nmi=0 panic=0 last="[tick-late] #21 +1 ticks (65 Mcycles) rip=0x3058859c cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) l" 10:12:30
+stream 2 done 10:12:30

@@ -60,7 +60,12 @@ pub fn usb_wire_selftest() {
         r.submit(s, &src);
         // Render the device mix (interleaved stereo) and stream it to USB.
         let mixed = r.render(3, 96 * 2);
-        crate::xhci::usbaudio_play(&mixed)
+        // BUG-064: usbaudio_play counts the completion events it reads from the
+        // xHCI event ring, and xhci::poll reads the same ring from the timer
+        // interrupt. With interrupts on, the interrupt side took most of them:
+        // the count here was 1 on some kernels and 0 on others, by the timing of
+        // the build. The count is this test's verdict, so it reads alone.
+        x86_64::instructions::interrupts::without_interrupts(|| crate::xhci::usbaudio_play(&mixed))
     });
     crate::serial_println!(
         "[m43-wire] mixer→USB path: euroaudio::Router (device 'USB Audio') → isoch stream → {played} packet(s) consumed by the USB DAC → {}",

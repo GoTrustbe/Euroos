@@ -421,6 +421,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "eurofdspace"
+version = "0.1.0"
+
+[[package]]
 name = "eurofiles"
 version = "0.1.0"
 
@@ -902,6 +906,7 @@ dependencies = [
  "eurofat",
  "eurofatfs",
  "eurofde",
+ "eurofdspace",
  "eurofiles",
  "eurofont",
  "eurofs",

@@ -1,0 +1,20 @@
+# CI q35 matrix, leg usbaudio alone (run-metal-matrix.py --legs usbaudio), TCG, before the BUG-064 fix.
+# The [m43-wire] line of each run.
+
+== in the full matrix (first round), branch:
+[m43-wire] mixer→USB path: euroaudio::Router (device 'USB Audio') → isoch stream → 0 packet(s) consumed by the USB DAC → no consumption ✗
+== alone, branch and base side by side:
+branch: → 0 packet(s) consumed by the USB DAC → no consumption ✗
+base:   → 1 packet(s) consumed by the USB DAC → LIVE ✓
+== three more of each, six at a time:
+branch: → 2 packet(s) consumed by the USB DAC → LIVE ✓
+branch: → 2 packet(s) consumed by the USB DAC → LIVE ✓
+branch: → 1 packet(s) consumed by the USB DAC → LIVE ✓
+base:   → 2 packet(s) consumed by the USB DAC → LIVE ✓
+base:   → 2 packet(s) consumed by the USB DAC → LIVE ✓
+base:   → 1 packet(s) consumed by the USB DAC → LIVE ✓
+
+== after the fix (the self-test reads the ring with interrupts off), three runs of the leg, three at a time:
+branch: → 2 packet(s) consumed by the USB DAC → LIVE ✓
+branch: → 2 packet(s) consumed by the USB DAC → LIVE ✓
+branch: → 2 packet(s) consumed by the USB DAC → LIVE ✓

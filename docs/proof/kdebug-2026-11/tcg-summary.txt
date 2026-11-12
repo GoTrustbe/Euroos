@@ -1,0 +1,10 @@
+user-smp4-iommu: desktop=yes fault-lines=0 kernel-to-desktop=78936 ms lockscreen=5799 ms (frame 2880 ms) | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp4-noiommu: desktop=yes fault-lines=0 kernel-to-desktop=71035 ms lockscreen=5371 ms (frame 2580 ms) | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+kernel-smp4: desktop=yes fault-lines=0 kernel-to-desktop=67593 ms lockscreen=5309 ms (frame 2570 ms) | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp4-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=233086 ms lockscreen=4980 ms (frame 2380 ms) | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+combined-smp4-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=299352 ms lockscreen=5478 ms (frame 2610 ms) | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp1-iommu: desktop=yes fault-lines=0 kernel-to-desktop=77617 ms lockscreen=5871 ms (frame 2840 ms) | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp1-noiommu: desktop=yes fault-lines=0 kernel-to-desktop=72185 ms lockscreen=5303 ms (frame 2630 ms) | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+kernel-smp1: desktop=yes fault-lines=0 kernel-to-desktop=66754 ms lockscreen=5491 ms (frame 2750 ms) | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp1-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=221474 ms lockscreen=5131 ms (frame 2390 ms) | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+combined-smp1-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=305516 ms lockscreen=5042 ms (frame 2270 ms) | [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0

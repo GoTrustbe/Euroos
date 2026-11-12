@@ -35,13 +35,90 @@ struct Lock {
     error: bool,           // show status in red?
 }
 
+/// The colour of background pixel (`col`, `row`): the 150° gradient of
+/// `FrameBuffer::fill_rounded_rect_grad`, the same expression operation for
+/// operation, so both give the same bits.
+#[inline(always)]
+fn background_at(col: usize, row: usize, maxp: f32, c0: Color, c1: Color) -> Color {
+    let t = ((col as f32) * 0.5f32 + (row as f32) * 0.866f32) / maxp;
+    c0.lerp(c1, t)
+}
+
+/// Paint the full-screen background gradient (BUG-056).
+///
+/// This used to be `fb.fill_rounded_rect_grad(0, 0, w, h, 0, c0, c1)`: a
+/// function written for icon tiles that computes the gradient in `f32` and
+/// stores one pixel at a time. The kernel has no hardware float, so that was
+/// about 30 soft-float calls per pixel, two million pixels per frame: 25 to
+/// 45 s per frame under TCG.
+///
+/// The two colours are a few steps apart per channel, so a row is a handful of
+/// runs of one colour. Each channel is monotone along a row (every float
+/// operation in `background_at` is monotone in `col`), so the end of a run is
+/// found by bisection with the same expression, and the run is filled in one
+/// go. The picture is the same pixel for pixel; a row costs about a hundred
+/// evaluations instead of `w`, and the fills are plain row fills.
+fn paint_background(fb: &FrameBuffer, c0: Color, c1: Color) {
+    let (w, h) = (fb.width(), fb.height());
+    if w == 0 || h == 0 {
+        return;
+    }
+    let maxp = (w as f32) * 0.5f32 + (h as f32) * 0.866f32;
+    for row in 0..h {
+        let last = background_at(w - 1, row, maxp, c0, c1);
+        let mut x = 0usize;
+        let mut cx = background_at(0, row, maxp, c0, c1);
+        loop {
+            if cx == last {
+                fb.fill_rect(x, row, w - x, 1, cx);
+                break;
+            }
+            // Invariant: column `lo` has colour `cx`, column `hi` has another one.
+            let (mut lo, mut hi) = (x, w - 1);
+            while hi - lo > 1 {
+                let mid = lo + (hi - lo) / 2;
+                if background_at(mid, row, maxp, c0, c1) == cx {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            fb.fill_rect(x, row, lo + 1 - x, 1, cx);
+            x = hi;
+            cx = background_at(hi, row, maxp, c0, c1);
+        }
+    }
+}
+
+/// Self-test half of BUG-056: a few rows of the painted frame above and below
+/// the card, every pixel against the per-pixel expression.
+fn background_rows_exact(fb: &FrameBuffer, c0: Color, c1: Color) -> (usize, usize) {
+    let (w, h) = (fb.width(), fb.height());
+    if w == 0 || h < 400 {
+        return (0, 0);
+    }
+    let maxp = (w as f32) * 0.5f32 + (h as f32) * 0.866f32;
+    let card_top = (h - 280) / 2;
+    let rows = [0, 1, card_top / 3, card_top / 2 + 1, card_top - 1, h - card_top / 2, h - 2, h - 1];
+    let (mut checked, mut wrong) = (0usize, 0usize);
+    for &row in rows.iter() {
+        for col in 0..w {
+            checked += 1;
+            if fb.get_pixel(col, row) != background_at(col, row, maxp, c0, c1) {
+                wrong += 1;
+            }
+        }
+    }
+    (checked, wrong)
+}
+
 /// Draw the lockscreen frame: sand background + centered card with wordmark,
 /// username, masked password field (with cursor), an EuroID/Argon2id badge
 /// and the status/hint line.
 fn render(fb: &FrameBuffer, lk: &Lock, clock: &str) {
     let (w, h) = (fb.width(), fb.height());
     // Background in the house style (sand → slightly darker at the bottom).
-    fb.fill_rounded_rect_grad(0, 0, w, h, 0, Color::BACKGROUND, Color::PAPER_2);
+    paint_background(fb, Color::BACKGROUND, Color::PAPER_2);
 
     // Card, centered.
     let cw = 380usize;
@@ -255,12 +332,17 @@ pub fn selftest(fb: &FrameBuffer) {
         status: String::new(),
         error: false,
     };
+    let t0 = crate::interrupts::ticks();
     render(fb, &lk, &crate::rtc::clock_string());
+    let frame_ms = crate::interrupts::ticks().saturating_sub(t0) * 10;
     let rendered = true;
+    // BUG-056: the background is painted in runs; it must be the per-pixel gradient.
+    let (checked, wrong) = background_rows_exact(fb, Color::BACKGROUND, Color::PAPER_2);
+    let exact = wrong == 0;
 
-    let ok = good && bad && rendered;
+    let ok = good && bad && rendered && exact;
     crate::serial_println!(
-        "[ag-lock] GUI lockscreen: correct-password-signs-in={good}, wrong-rejected={bad}, screen-drawn={rendered} → {}",
+        "[ag-lock] GUI lockscreen: correct-password-signs-in={good}, wrong-rejected={bad}, screen-drawn={rendered}, background {wrong} of {checked} sampled pixels off the per-pixel gradient, frame {frame_ms} ms → {}",
         if ok { "OK (desktop session behind EuroID-Argon2id instead of auto-euro) ✓" } else { "FAILED" }
     );
 }

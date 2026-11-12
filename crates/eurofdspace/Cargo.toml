@@ -1,0 +1,11 @@
+[package]
+name = "eurofdspace"
+version = "0.1.0"
+edition = "2021"
+description = "Per-process-group descriptor tables (fd spaces) for the EuroOS syscall layer: tables, lists, guards and reference counts. no_std + alloc, host-tested."
+license = "EUPL-1.2"
+
+[lib]
+doctest = false
+
+[dependencies]

@@ -8,7 +8,7 @@ CC=${CC:-gcc}
 echo "==> compiler: $($CC --version | head -1)"
 
 # Build each userspace program: C -> freestanding, stripped, position-independent ELF.
-for prog in hello cat linuxprog muslprog argvprog daemon forktest execee forkpipe ticker; do
+for prog in hello cat linuxprog muslprog argvprog daemon forktest execee forkpipe ticker pipehold; do
     # -fpie: rip-relative (no absolute relocations); -ffreestanding -nostdlib: no libc.
     $CC -ffreestanding -nostdlib -fpie -fno-stack-protector -fno-asynchronous-unwind-tables \
         -Os -c "$prog.c" -o "$prog.o"

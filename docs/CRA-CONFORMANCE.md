@@ -56,7 +56,7 @@ machine-readable SBOM (below).
 | Modern cryptography / future-proofing | From-scratch, constant-time-minded crypto; **post-quantum** hybrid X25519+ML-KEM-768 (NIST-KAT) in the VPN (3D-9); **authenticated time** via NTS (3D-7); a **NIST-KAT HMAC-DRBG** CSPRNG gated on real entropy (3D-8). | 🟢 (KEM); ML-DSA signing ⬜ |
 | Secure logging | Append-only, tamper-evident audit log **plus** a structured, queryable, severity/facility-tagged **journal** with panic-minidump capture (3G-1). | 🟢 |
 | Secure update mechanism | Signed A/B updates (Ed25519 verify-before-activate, auto-rollback); a **signed delivery channel** (signed manifest + hash-pinned signed image, 3E-2); a **signed package manager** on a content-addressed store (3E-6). | 🟢 |
-| Reproducible / verifiable builds | Reproducible kernel build (`--remap-path-prefix` + lld `/Brepro` → byte-identical `eurokernel.efi`; CI double-builds and compares) + a **signed release manifest** binding source commit → binary hashes (3E-4). | 🟢 |
+| Reproducible / verifiable builds | Reproducible kernel build (lld `/Brepro` in every build since 2026-11-12, `--remap-path-prefix` added by `scripts/repro-build.sh` → byte-identical `eurokernel.efi`; CI double-builds and compares) + a **signed release manifest** binding source commit → binary hashes (3E-4). | 🟢 |
 
 ## Annex II — information & instructions to the user
 

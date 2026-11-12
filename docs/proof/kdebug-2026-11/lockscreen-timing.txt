@@ -1,0 +1,39 @@
+# [boot-time] and [ag-lock] of three self-test images booted at the same time on the build server (TCG, smp 4,
+# 512 MiB, 1920x1080, -nic user,model=e1000e), 2026-11-12, so under the same host load.
+
+== base 7858b72
+[ag-lock] GUI lockscreen: correct-password-signs-in=true, wrong-rejected=true, screen-drawn=true → OK (desktop session behind EuroID-Argon2id instead of auto-euro) ✓
+[boot-time] phase lockscreen: 88131.284 ms (at 150133 ms)
+[boot-time] phase first-frame: 8762.768 ms (at 158896 ms)
+[boot-time] desktop after 158896 ms since kernel entry (HPET, selftest build): firmware-exit=258 cpu-mm=6 storage-rootfs=209 storage-checks=180 identity-config=264 net=7 userland-demos=234 sched-init=
+
+== base 7858b72 + #[inline(always)] on Color::lerp (not committed)
+[ag-lock] GUI lockscreen: correct-password-signs-in=true, wrong-rejected=true, screen-drawn=true → OK (desktop session behind EuroID-Argon2id instead of auto-euro) ✓
+[boot-time] phase lockscreen: 52435.055 ms (at 114956 ms)
+[boot-time] phase first-frame: 7844.831 ms (at 122801 ms)
+[boot-time] desktop after 122801 ms since kernel entry (HPET, selftest build): firmware-exit=277 cpu-mm=11 storage-rootfs=240 storage-checks=173 identity-config=251 net=6 userland-demos=236 sched-init
+
+== base 7858b72, an earlier boot of the same configuration (one other QEMU beside it)
+[boot-time] phase lockscreen: 88702.220 ms (at 151957 ms)
+[boot-time] desktop after 160640 ms since kernel entry (HPET, selftest build): firmware-exit=264 cpu-mm=6 storage-rootfs
+
+== this branch (tree of the build commit), booted alone with one other QEMU
+[ag-lock] GUI lockscreen: correct-password-signs-in=true, wrong-rejected=true, screen-drawn=true, background 0 of 15360 sampled pixels off the per-pixel gradient, frame 2450 ms → OK (desktop session behind EuroID-Argon2id instead of auto-euro) ✓
+[boot-time] phase lockscreen: 5025.389 ms (at 70455 ms)
+[boot-time] phase first-frame: 7793.158 ms (at 78248 ms)
+[boot-time] desktop after 78248 ms since kernel entry (HPET, selftest build): firmware-exit=230 cpu-mm=9 storage-rootfs=125 storage-checks=180 identity-config=225 net=3 userland-demos=308 sched-init=102 acpi-pci-tpm=484 smp-timer=377 devices=475 drivers-late=20457 glibc-suite=5055 vfs-mounts=305 sub
+
+== Color::lerp in the link maps (size = distance to the next symbol)
+-- bug-gpf head (before the settings merge)
+     1481 bytes  icsNtB4_11FrameBuffer22fill_rounded_rect_grad
+-- mem-hygiene (before the settings merge)
+     1481 bytes  icsNtB4_11FrameBuffer22fill_rounded_rect_grad
+-- integration, release kernel
+      454 bytes  fsmbdot_10eurokernel8graphicsNtB2_5Color4lerp
+      951 bytes  icsNtB4_11FrameBuffer22fill_rounded_rect_grad
+-- base 7858b72, self-test kernel
+      454 bytes  j2sD1Fn_10eurokernel8graphicsNtB2_5Color4lerp
+      951 bytes  icsNtB4_11FrameBuffer22fill_rounded_rect_grad
+
+== soft-float calls in Color::lerp of the base kernel (objdump of the function, call targets by the map)
+   6 __floatunsisf   3 __subsf3   3 __mulsf3   3 __addsf3   3 __fixunssfsi   4 __gtsf2   3 __gesf2   1 __ltsf2  = 26

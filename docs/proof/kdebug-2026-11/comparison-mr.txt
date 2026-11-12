@@ -1,0 +1,24 @@
+== mr-iommu-boot1 (against integ-2026-11)
+== /opt/euroos/wt-kdebug/docs/proof/integ-2026-11/mr-iommu-boot1.markers  vs  /opt/euroos/kdebug-runs/proof/mr-iommu-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== mr-iommu-boot2 (against integ-2026-11)
+== /opt/euroos/wt-kdebug/docs/proof/integ-2026-11/mr-iommu-boot2.markers  vs  /opt/euroos/kdebug-runs/proof/mr-iommu-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== mr-noiommu-boot1 (against integ-2026-11)
+== /opt/euroos/wt-kdebug/docs/proof/integ-2026-11/mr-noiommu-boot1.markers  vs  /opt/euroos/kdebug-runs/proof/mr-noiommu-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== mr-noiommu-boot2 (against integ-2026-11)
+== /opt/euroos/wt-kdebug/docs/proof/integ-2026-11/mr-noiommu-boot2.markers  vs  /opt/euroos/kdebug-runs/proof/mr-noiommu-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0

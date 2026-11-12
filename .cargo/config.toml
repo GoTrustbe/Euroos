@@ -9,6 +9,11 @@ rustflags = [
     # Link-map (symbool -> RVA) voor OFFLINE symbolisatie van panic-backtraces;
     # de .efi zelf is gestript, de map bewaart de namen. scripts/symbolize.sh.
     "-C", "link-arg=/MAP:target/kernel.map",
+    # Reproduceerbaar: lld-link schrijft anders de kloktijd van het linken in de
+    # PE-header (COFF TimeDateStamp) en in de debug-directory, zodat dezelfde
+    # commit twee verschillende .efi's gaf (vier tot acht bytes verschil, verder
+    # niets). Met /Brepro staat daar een hash van de inhoud.
+    "-C", "link-arg=/Brepro",
     # Audit #11: forceer curve25519-dalek's SERIAL backend i.p.v. de SIMD(AVX2)-
     # backend. Twee redenen: (1) de AVX2-codegen liet de debug-build crashen met
     # een LLVM "do not know how to split"-fout op dit UEFI-target; (2) bare-metal

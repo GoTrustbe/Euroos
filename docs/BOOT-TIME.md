@@ -250,12 +250,14 @@ self-test image keeps the grace period.
 - The first frame is 1 s under TCG (full-screen software composite).
 - `udrv::boot` waits for e1000d's link and its DHCP inline (50 ms under KVM;
   up to 10 s without a link).
-- The lock screen paints its background with `fill_rounded_rect_grad` over
-  the whole screen (per-pixel float): 25 to 45 s per frame for the self-test
-  image under TCG at 1920x1080, two frames per boot (BUG-056 in
-  `docs/LOADTEST-TRACKER.md`). The release image on a live medium skips the
-  lock screen; on an installed system under KVM the first frame and a sign-in
-  attempt together take 0.44 s.
+- The lock screen used to paint its background with `fill_rounded_rect_grad`
+  over the whole screen (per-pixel float): 25 to 45 s per frame for the
+  self-test image under TCG at 1920x1080, two frames per boot. Since BUG-056
+  (`docs/LOADTEST-TRACKER.md`, 2026-11-12) it is painted in row runs, the
+  same picture: 2.6 s per frame under TCG, 0.18 s under KVM; the
+  `lockscreen` phase of the self-test image went from 88.7 s to 5.4 s
+  under TCG and from 5.39 s to 0.87 s on the R630. The release image on a
+  live medium skips the lock screen.
 
 Closed since: the inline bring-up of the self-test image looked for answers
 before the configuration was saved (BUG-047: fixed by BUG-039 and `182b19c`;

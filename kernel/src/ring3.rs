@@ -356,7 +356,7 @@ static mut USER_RIP: u64 = 0; // saved user-rip (clone: thread resume point)
 #[no_mangle]
 static mut SAVED_REGS: u64 = 0; // points to the saved register block (clone: child inherits the regs)
 #[no_mangle]
-static mut EXITED: u64 = 0; // set by sys_exit
+static mut EXITED: u64 = 0; // set by sys_exit of a foreground excursion, cleared by the exit epilogue (BUG-063)
 
 static mut EXIT_CODE: u64 = 0;
 static OUTPUT: Mutex<String> = Mutex::new(String::new());
@@ -405,20 +405,45 @@ static FILES: eurolock::sync::Mutex<alloc::vec::Vec<(String, alloc::borrow::Cow<
 // full table made EVERY new open return -1 (EPERM): the shm/README/history failures.
 // Kept below UNIX_FD_BASE (600) so regular fds never collide with the socket range.
 const MAX_FD: usize = 512;
+
+// One set of descriptor tables per process group (BUG-060): see the module text.
+#[path = "fdspace.rs"]
+mod fdspace;
+
+/// A spin-locked value that exists once per fd space: `lock()` takes the one
+/// lock and yields the part of the calling task's space.
+struct SpacedLock<D: 'static>(&'static Mutex<D>);
+impl<D: fdspace::Spaced> SpacedLock<D> {
+    fn lock(&self) -> fdspace::Guard<spin::MutexGuard<'static, D>> {
+        let s = fdspace::current();
+        fdspace::Guard::new(self.0.lock(), s)
+    }
+}
 static SITE_OPEN_FDS: eurolock::LockSite = eurolock::LockSite::new("ring3.OPEN_FDS", eurolock::LockClass::Process);
 // J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
-static OPEN_FDS: eurolock::sync::Mutex<[Option<(usize, usize)>; MAX_FD]> =
-    eurolock::sync::Mutex::new_site(&SITE_OPEN_FDS, eurolock::Mode::Plain, [None; MAX_FD]);
+static OPEN_FDS_ALL: eurolock::sync::Mutex<fdspace::Tab<Option<(usize, usize)>, MAX_FD>> =
+    eurolock::sync::Mutex::new_site(&SITE_OPEN_FDS, eurolock::Mode::Plain, fdspace::Tab::new([None; MAX_FD]));
+/// The open-file table of the calling task's fd space: (file index, offset) per fd.
+struct OpenFds;
+static OPEN_FDS: OpenFds = OpenFds;
+impl OpenFds {
+    fn lock(&self) -> fdspace::Guard<eurolock::sync::MutexGuard<'static, fdspace::Tab<Option<(usize, usize)>, MAX_FD>>> {
+        let s = fdspace::current();
+        fdspace::Guard::new(OPEN_FDS_ALL.lock(), s)
+    }
+}
 /// Open DIRECTORY fds (Linux getdents64): (normalized dir path, cursor in the
 /// children list). Separate table so a dir fd is not read as a file.
-static OPEN_DIRS: Mutex<[Option<(String, usize)>; MAX_FD]> =
-    Mutex::new([const { None }; MAX_FD]);
+static OPEN_DIRS_ALL: Mutex<fdspace::Tab<Option<(String, usize)>, MAX_FD>> =
+    Mutex::new(fdspace::Tab::new([const { None }; MAX_FD]));
+static OPEN_DIRS: SpacedLock<fdspace::Tab<Option<(String, usize)>, MAX_FD>> = SpacedLock(&OPEN_DIRS_ALL);
 
 // ── PIPES (S3 IPC between processes) ─────────────────────────────────────────
 // A pipe is an in-kernel FIFO buffer with two ends (read/write). The
 // `pipe2` syscall returns two fds; after fork() parent and child share them (the
-// fd tables are global), so they can communicate over the pipe.
-static PIPES: Mutex<alloc::vec::Vec<alloc::vec::Vec<u8>>> = Mutex::new(alloc::vec::Vec::new());
+// two are in one fd space), so they can communicate over the pipe. Pipe ids
+// count per fd space.
+static PIPES: Mutex<fdspace::Lists<alloc::vec::Vec<u8>>> = Mutex::new(fdspace::Lists::new());
 
 /// PIPES is taken from the desktop loop too (cdp_send / cdp_next_msg drive the
 /// DevTools pipes from task 0 with interrupts enabled), and a task-context holder
@@ -428,7 +453,7 @@ static PIPES: Mutex<alloc::vec::Vec<alloc::vec::Vec<u8>>> = Mutex::new(alloc::ve
 /// interrupts off first, lock second, unlock before interrupts return (field
 /// order is drop order).
 struct PipesGuard {
-    g: spin::MutexGuard<'static, alloc::vec::Vec<alloc::vec::Vec<u8>>>,
+    g: fdspace::Guard<spin::MutexGuard<'static, fdspace::Lists<alloc::vec::Vec<u8>>>>,
     _if: crate::sched::IfOffGuard,
 }
 impl core::ops::Deref for PipesGuard {
@@ -440,12 +465,13 @@ impl core::ops::DerefMut for PipesGuard {
 }
 fn pipes_lock() -> PipesGuard {
     let _if = crate::sched::IfOffGuard::new();
-    let g = PIPES.lock();
+    let s = fdspace::current();
+    let g = fdspace::Guard::new(PIPES.lock(), s);
     PipesGuard { g, _if }
 }
 /// Pipe fds: per fd (pipe-id, is_write_end). Separate table alongside file/dir fds.
 /// Taken only through [`pipe_fds`] (interrupts off while held).
-static PIPE_FDS: Mutex<[Option<(usize, bool)>; MAX_FD]> = Mutex::new([None; MAX_FD]);
+static PIPE_FDS: Mutex<fdspace::Tab<Option<(usize, bool)>, MAX_FD>> = Mutex::new(fdspace::Tab::new([None; MAX_FD]));
 
 /// BUG-037 (and the BUG-033 hangs): PIPE_FDS is the same disease as PIPES above. The launcher (task 0)
 /// clears it in `reset_fd_table` with interrupts on, and every pipe syscall of a
@@ -454,11 +480,11 @@ static PIPE_FDS: Mutex<[Option<(usize, bool)>; MAX_FD]> = Mutex::new([None; MAX_
 /// spinning in `pipe_write_fd` on PIPE_FDS with IF=0 (NMI probe), silence. Every
 /// acquisition goes through here: interrupts off first, lock second.
 struct PipeFdsGuard {
-    g: spin::MutexGuard<'static, [Option<(usize, bool)>; MAX_FD]>,
+    g: fdspace::Guard<spin::MutexGuard<'static, fdspace::Tab<Option<(usize, bool)>, MAX_FD>>>,
     _if: crate::sched::IfOffGuard,
 }
 impl core::ops::Deref for PipeFdsGuard {
-    type Target = [Option<(usize, bool)>; MAX_FD];
+    type Target = [Option<(usize, bool)>];
     fn deref(&self) -> &Self::Target { &self.g }
 }
 impl core::ops::DerefMut for PipeFdsGuard {
@@ -466,13 +492,15 @@ impl core::ops::DerefMut for PipeFdsGuard {
 }
 fn pipe_fds() -> PipeFdsGuard {
     let _if = crate::sched::IfOffGuard::new();
-    let g = PIPE_FDS.lock();
+    let s = fdspace::current();
+    let g = fdspace::Guard::new(PIPE_FDS.lock(), s);
     PipeFdsGuard { g, _if }
 }
 /// Per pipe-id: is the pipe non-blocking (O_NONBLOCK)? A BLOCKING read on an empty
 /// pipe parks the caller (chrome's shutdown-detector thread reads a signal pipe that
 /// way and FATALs on a spurious EAGAIN). Parallel to PIPES by index.
-static PIPE_NONBLOCK: Mutex<alloc::vec::Vec<bool>> = Mutex::new(alloc::vec::Vec::new());
+static PIPE_NONBLOCK_ALL: Mutex<fdspace::Lists<bool>> = Mutex::new(fdspace::Lists::new());
+static PIPE_NONBLOCK: SpacedLock<fdspace::Lists<bool>> = SpacedLock(&PIPE_NONBLOCK_ALL);
 /// Per-fd-NUMBER O_NONBLOCK, for ANY fd kind (socket, eventfd, memfd, file), set via
 /// fcntl(F_SETFL) and reported via fcntl(F_GETFL). Previously only pipe fds tracked
 /// it, so chrome setting a Mojo SOCKET non-blocking then verifying with F_GETFL saw
@@ -762,14 +790,40 @@ fn seals_add(fd: u64, add: u32) -> u64 {
     }
 }
 
-static FD_NONBLOCK: [core::sync::atomic::AtomicBool; MAX_FD] =
+static FD_NONBLOCK_ROOT: [core::sync::atomic::AtomicBool; MAX_FD] =
     [const { core::sync::atomic::AtomicBool::new(false) }; MAX_FD];
+/// The flag blocks of the fd spaces of background processes; the launcher's
+/// space uses the two `_ROOT` statics. `FD_NONBLOCK[fd]` / `FD_ACCMODE[fd]`
+/// index the calling task's space.
+static FD_FLAGS: fdspace::FlagSlots<MAX_FD> = fdspace::FlagSlots::new();
+struct FdNonblock;
+static FD_NONBLOCK: FdNonblock = FdNonblock;
+impl core::ops::Index<usize> for FdNonblock {
+    type Output = core::sync::atomic::AtomicBool;
+    fn index(&self, fd: usize) -> &Self::Output {
+        match FD_FLAGS.get(fdspace::current()) {
+            Some(f) => &f.nonblock[fd],
+            None => &FD_NONBLOCK_ROOT[fd],
+        }
+    }
+}
+struct FdAccmode;
+static FD_ACCMODE: FdAccmode = FdAccmode;
+impl core::ops::Index<usize> for FdAccmode {
+    type Output = core::sync::atomic::AtomicU8;
+    fn index(&self, fd: usize) -> &Self::Output {
+        match FD_FLAGS.get(fdspace::current()) {
+            Some(f) => &f.accmode[fd],
+            None => &FD_ACCMODE_ROOT[fd],
+        }
+    }
+}
 /// Per-fd access mode (O_RDONLY=0 / O_WRONLY=1 / O_RDWR=2), captured from the open
 /// flags, reported via fcntl(F_GETFL). Default 2 (O_RDWR) so sockets/pipes/eventfd/
 /// memfd (not opened via open()) read back read-write, unchanged. Chrome verifies
 /// (F_GETFL & O_ACCMODE) matches how it opened the fd and IMMEDIATE_CRASHes on a
 /// mismatch — so a read-only file must report O_RDONLY, not a hardcoded O_RDWR.
-static FD_ACCMODE: [core::sync::atomic::AtomicU8; MAX_FD] =
+static FD_ACCMODE_ROOT: [core::sync::atomic::AtomicU8; MAX_FD] =
     [const { core::sync::atomic::AtomicU8::new(2) }; MAX_FD];
 
 /// Monotonic counter behind getrandom, so every call yields DIFFERENT bytes. The
@@ -834,7 +888,8 @@ fn set_fd_accmode(fd: u64, flags: u64) {
     }
 }
 /// Tasks blocked in a read on an empty pipe: (pipe-id, task). Woken by a write.
-static PIPE_WAITERS: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static PIPE_WAITERS_ALL: Mutex<fdspace::Lists<(usize, usize)>> = Mutex::new(fdspace::Lists::new());
+static PIPE_WAITERS: SpacedLock<fdspace::Lists<(usize, usize)>> = SpacedLock(&PIPE_WAITERS_ALL);
 
 // ── CDP driver: EuroOS speaks DevTools to Chromium over a pipe ───────────────
 // `--remote-debugging-pipe` makes chrome read commands on fd 3 and write answers
@@ -2696,9 +2751,121 @@ fn pipe_read_fd(fd: usize, buf: u64, len: usize) -> Option<u64> {
     None
 }
 
+
+// ── fd spaces: who has one, making and releasing them (BUG-060) ─────────────
+static FD_SPACES: Mutex<fdspace::Registry> = Mutex::new(fdspace::Registry::new());
+
+/// Give fd space `s` its tables and flags. False when the heap has no room;
+/// the caller then takes back what was installed ([`fdspace_drop_tables`]).
+fn fdspace_install(s: usize) -> bool {
+    let a = fdspace::Tab::<Option<(usize, usize)>, MAX_FD>::block(None);
+    let b = fdspace::Tab::<Option<(String, usize)>, MAX_FD>::block(None);
+    let c = fdspace::Tab::<Option<(usize, bool)>, MAX_FD>::block(None);
+    let (Some(a), Some(b), Some(c)) = (a, b, c) else { return false };
+    {
+        let mut t = OPEN_FDS_ALL.lock();
+        if !t.reserve(s) {
+            return false;
+        }
+        t.install(s, a);
+    }
+    {
+        let mut t = OPEN_DIRS_ALL.lock();
+        if !t.reserve(s) {
+            return false;
+        }
+        t.install(s, b);
+    }
+    {
+        let mut t = PIPE_FDS.lock();
+        if !t.reserve(s) {
+            return false;
+        }
+        t.install(s, c);
+    }
+    FD_FLAGS.install(s)
+}
+
+/// Take the tables, lists and flags of fd space `s` away and free them.
+fn fdspace_drop_tables(s: usize) {
+    let a = OPEN_FDS_ALL.lock().remove(s);
+    let b = OPEN_DIRS_ALL.lock().remove(s);
+    let c = PIPE_FDS.lock().remove(s);
+    let d = PIPES.lock().remove(s);
+    let e = PIPE_NONBLOCK_ALL.lock().remove(s);
+    let f = PIPE_WAITERS_ALL.lock().remove(s);
+    FD_FLAGS.remove(s);
+    let owner = cloexec_space_owner(s);
+    FD_CLOEXEC.lock().retain(|&(o, _)| o != owner);
+    drop((a, b, c, d, e, f)); // freed after the locks are gone
+}
+
+/// A fresh fd space for a background process, with one reference. None when
+/// every space number is in use or the heap has no room for the tables: the
+/// caller refuses the start.
+fn fdspace_new() -> Option<usize> {
+    let _g = crate::sched::IfOffGuard::new();
+    // The space stragglers are moved to exists from the first use on.
+    if !OPEN_FDS_ALL.lock().has(fdspace::ORPHAN) && !fdspace_install(fdspace::ORPHAN) {
+        return None;
+    }
+    let s = FD_SPACES.lock().take()?;
+    if !fdspace_install(s) {
+        fdspace_drop_tables(s);
+        FD_SPACES.lock().release(s);
+        return None;
+    }
+    Some(s)
+}
+
+/// A fork child shares the space of its parent.
+fn fdspace_retain(s: usize) {
+    let _g = crate::sched::IfOffGuard::new();
+    FD_SPACES.lock().retain(s);
+}
+
+/// A process of the group was reaped. When it was the last one, the space and
+/// every descriptor in it are gone. A task that still points at the space (a
+/// thread that outlived its process) is moved to the orphan space, which is
+/// emptied for it.
+fn fdspace_release(s: usize) {
+    if s <= fdspace::ORPHAN {
+        return;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    if !FD_SPACES.lock().release(s) {
+        return;
+    }
+    if fdspace::orphan_tasks_of(s) > 0 {
+        let o = fdspace::ORPHAN;
+        fdspace::Spaced::of_mut(&mut *OPEN_FDS_ALL.lock(), o).fill(None);
+        fdspace::Spaced::of_mut(&mut *OPEN_DIRS_ALL.lock(), o).fill(None);
+        fdspace::Spaced::of_mut(&mut *PIPE_FDS.lock(), o).fill(None);
+        fdspace::Spaced::of_mut(&mut *PIPES.lock(), o).clear();
+        fdspace::Spaced::of_mut(&mut *PIPE_NONBLOCK_ALL.lock(), o).clear();
+        fdspace::Spaced::of_mut(&mut *PIPE_WAITERS_ALL.lock(), o).clear();
+        if let Some(f) = FD_FLAGS.get(o) {
+            f.reset();
+        }
+    }
+    fdspace_drop_tables(s);
+}
+
+/// Scheduler hook: a task slot is handed out again (see `sched::alloc_slot`).
+pub fn fd_space_slot_reset(task: usize) {
+    fdspace::task_slot_reset(task);
+}
+
+/// Fd spaces in use by background processes (a leak counter for the self-tests).
+pub fn fd_spaces_in_use() -> usize {
+    x86_64::instructions::interrupts::without_interrupts(|| FD_SPACES.lock().in_use())
+}
+
 /// Give the current process a FRESH fd table (fd 0/1/2 implicitly console/VFS).
-/// In the synchronous foreground model one process runs at a time, so this gives
-/// real per-process fd semantics: open fds do not leak between programs.
+/// The launcher (task 0) calls this at every program start, and what it clears
+/// is the launcher's fd space: the one foreground or glibc process runs in it,
+/// one at a time, so open fds do not leak between programs. The background
+/// processes have fd spaces of their own (BUG-060) and keep their descriptors.
 fn reset_fd_table() {
     // BUG-037: the launcher runs this with interrupts on, and syscalls of the
     // background processes take these tables with interrupts off: a preemption
@@ -2707,14 +2874,14 @@ fn reset_fd_table() {
 }
 
 fn reset_fd_table_inner() {
-    *OPEN_FDS.lock() = [None; MAX_FD];
+    OPEN_FDS.lock().fill(None);
     for slot in OPEN_DIRS.lock().iter_mut() {
         *slot = None;
     }
-    // Clear any pipe fds left by an earlier program (PIPE_FDS/PIPES are global): a
-    // stale pipe marker on fd 3 would otherwise hijack this program's libc reads on
-    // that fd number (EAGAIN "cannot read file data"). See the bg_read_fd note.
-    *pipe_fds() = [None; MAX_FD];
+    // Clear any pipe fds left by an earlier program in this space: a stale pipe
+    // marker on fd 3 would otherwise hijack this program's libc reads on that fd
+    // number (EAGAIN "cannot read file data"). See the bg_read_fd note.
+    pipe_fds().fill(None);
     pipes_lock().clear();
     PIPE_NONBLOCK.lock().clear();
     PIPE_WAITERS.lock().clear();
@@ -2953,13 +3120,13 @@ pub fn dump_suspect_addrs() {
     sa!(GLIBC_FORK_CHILDREN, "GLIBC_FORK_CHILDREN");
     sa!(GLIBC_THREADS, "GLIBC_THREADS");
     sa!(MKDIRS, "MKDIRS");
-    sa!(OPEN_DIRS, "OPEN_DIRS");
-    sa!(OPEN_FDS, "OPEN_FDS");
+    sa!(OPEN_DIRS_ALL, "OPEN_DIRS");
+    sa!(OPEN_FDS_ALL, "OPEN_FDS");
     sa!(OUTPUT, "OUTPUT");
     sa!(PIPES, "PIPES");
     sa!(PIPE_FDS, "PIPE_FDS");
-    sa!(PIPE_NONBLOCK, "PIPE_NONBLOCK");
-    sa!(PIPE_WAITERS, "PIPE_WAITERS");
+    sa!(PIPE_NONBLOCK_ALL, "PIPE_NONBLOCK");
+    sa!(PIPE_WAITERS_ALL, "PIPE_WAITERS");
     sa!(PROGRAMS, "PROGRAMS");
     sa!(PROT_NONE_RANGES, "PROT_NONE_RANGES");
     sa!(REAPED, "REAPED");
@@ -3289,7 +3456,17 @@ fn open_low_fd(fi: usize) -> u64 {
 static FD_CLOEXEC: Mutex<alloc::vec::Vec<(usize, u32)>> = Mutex::new(alloc::vec::Vec::new());
 
 fn cloexec_owner() -> usize {
-    fork_child_owner(crate::sched::current()).unwrap_or(0)
+    let cur = crate::sched::current();
+    match fdspace::of_task(cur) {
+        fdspace::ROOT => fork_child_owner(cur).unwrap_or(0),
+        s => cloexec_space_owner(s),
+    }
+}
+
+/// The close-on-exec owner key of a background process's fd space (task
+/// indices and 0 are the keys of the launcher's space).
+fn cloexec_space_owner(s: usize) -> usize {
+    usize::MAX - s
 }
 
 /// Mark/unmark `fd` close-on-exec for the CURRENT process.
@@ -4006,10 +4183,20 @@ pub fn spawn_daemon(falloc: &mut FrameAllocator, program: &[u8]) {
     // SMEP/SMAP stay enforced.
     // Exactly 2 MiB, 2 MiB-aligned in one go (the daemon never reaps -> no
     // free path; no more 4 MiB over-allocation).
-    let arena = falloc.allocate_aligned(512, 512).expect("daemon-arena");
+    // BUG-053: no memory for the daemon is a line in the log, not a boot panic.
+    let Ok(arena) = falloc.allocate_aligned(512, 512) else {
+        crate::serial_println!("[euro] daemon: no free 2 MiB arena - not started");
+        return;
+    };
     let code = arena;
     let stack_top = arena + MIB2; // user stack grows downward from the arena top
-    let kstack = falloc.allocate_contiguous(4).expect("daemon-kstack");
+    let Ok(kstack) = falloc.allocate_contiguous(4) else {
+        for f in 0..512u64 {
+            let _ = falloc.free(arena + f * 4096);
+        }
+        crate::serial_println!("[euro] daemon: no kernel stack free - not started");
+        return;
+    };
     let kstack_top = (kstack + 4 * 4096) & !0xF;
     let pages = program_span_pages(program);
     let info = load_program(program, code, pages);
@@ -4087,6 +4274,9 @@ struct BgProc {
     /// Mirror every output line to the serial log and keep up to 64 of them
     /// (boot self-tests that read a scheduled program's whole output).
     echo: bool,
+    /// The fd space of this process (fdspace.rs): its own, or its parent's
+    /// after a fork. One reference, dropped when the process is reaped.
+    fdspace: usize,
 }
 
 /// Exit statuses of terminated children, kept separate from frame reaping, so that
@@ -4174,6 +4364,8 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
         }
         // Sockets the process still held: closed now (FIN for a live TCP peer).
         bg_net_release(p.pid);
+        // Its files, directories and pipes: gone with the last process of its fd space.
+        fdspace_release(p.fdspace);
         // LOADTEST-R630 BUG-014: give the scheduler slots back. The process task and
         // its thread tasks are Dead (exit / exit_group marked them) and their kernel
         // stacks + address space are gone; without this every background process
@@ -5203,6 +5395,10 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
     }
     set_task_caps(task, effective_caps()); // lock-free read; thread shares its process' rights
     crate::sched::set_ident(task, child_pid as u32, parent_pid as u32);
+    // The child shares its parent's fd space (the pipe of the two is in it).
+    let space = bg[pos].fdspace;
+    fdspace_retain(space);
+    fdspace::set_task(task, space);
 
     bg.push(BgProc {
         task,
@@ -5224,6 +5420,7 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
         pooled: true,
         name: parent_name,
         echo: parent_echo,
+        fdspace: space,
     });
     crate::kinfo!("[fork] pid {parent_pid} -> child pid {child_pid} (task {task}, copy-arena {child_arena:#x}, pml4 {pml4:#x})");
     child_pid // the PARENT gets the child pid; the child got rax=0 via spawn_thread
@@ -5331,10 +5528,10 @@ fn do_execve(p: &mut BgProc, path_ptr: u64, argv_ptr: u64) -> u64 {
 /// touching the VFS locks (a bg read of stdin must not contend FILES.lock with
 /// the boot self-tests). Shared by read() and readv().
 fn bg_read_fd(fd: usize, buf: u64, len: usize) -> u64 {
-    // A real open FILE takes precedence over a pipe: PIPE_FDS is GLOBAL across bg
-    // processes, so a boot demo (forkpipe) can leave a stale pipe on the same fd
-    // number that this process later opens a file on. Checking the file first
-    // stops the DOOM port's WAD reads (fd 3) routing into that stale pipe.
+    // A real open FILE takes precedence over a pipe. (When PIPE_FDS was one table
+    // for every background process, a boot demo could leave a stale pipe on the fd
+    // number this process later opened a file on; each process has its own fd
+    // space since BUG-060, and the order is kept.)
     if fd < MAX_FD && OPEN_FDS.lock()[fd].is_some() {
         vfs_read(fd, buf, len)
     } else if let Some(r) = pipe_read_fd(fd, buf, len) {
@@ -5654,6 +5851,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
                 return (-11i64) as u64;
             }
             set_task_caps(child, effective_caps()); // thread: same rights
+            fdspace::set_task(child, p.fdspace); // and the same descriptors
             register_thread_kstack(child, slot);
             p.threads.push(child);
             crate::serial_println!("[thread] clone: pid {} -> thread task {child} (shared address space, own stack/TLS)", p.pid);
@@ -6424,12 +6622,25 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
     // Linux path with the foreground's globals: a kernel page fault after ~1 h of
     // spawning (soak). Ring-3 tasks run only on this core (the BSP), so keeping
     // interrupts off from spawn to registration closes the window.
+    // BUG-060: the descriptor tables of this process (fdspace.rs).
+    let Some(space) = fdspace_new() else {
+        for f in 0..512u64 {
+            let _ = falloc.free(arena + f * 4096);
+        }
+        for f in 0..4u64 {
+            let _ = falloc.free(kstack + f * 4096);
+        }
+        crate::paging::free_address_space(falloc, pml4);
+        crate::serial_println!("[euro] bg-musl (pid {pid}): no fd space free - not started");
+        return false;
+    };
     let irq_was_on = x86_64::instructions::interrupts::are_enabled();
     x86_64::instructions::interrupts::disable();
     let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
     if idx == usize::MAX {
         // Scheduler table full: undo instead of registering a process whose task
         // never runs (it used to sit "live" forever with task usize::MAX).
+        fdspace_release(space);
         for f in 0..512u64 {
             let _ = falloc.free(arena + f * 4096);
         }
@@ -6443,6 +6654,7 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
         crate::serial_println!("[euro] bg-musl (pid {pid}): scheduler task table full - not started");
         return false;
     }
+    fdspace::set_task(idx, space); // before the task can run (interrupts are off)
     // BUG-007 hardening: irqsave BG hold (non-preemptible) for the registration push.
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().push(BgProc {
@@ -6465,6 +6677,7 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
             pooled: false,
             name: String::from_utf8_lossy(argv0).into_owned(),
             echo: false,
+            fdspace: space,
         });
     });
     if irq_was_on {
@@ -6577,6 +6790,18 @@ pub fn spawn_bg_app(
     // Linux path with the foreground's globals: a kernel page fault after ~1 h of
     // spawning (soak). Ring-3 tasks run only on this core (the BSP), so keeping
     // interrupts off from spawn to registration closes the window.
+    // BUG-060: the descriptor tables of this process (fdspace.rs).
+    let Some(space) = fdspace_new() else {
+        for f in 0..frames {
+            let _ = falloc.free(arena + f * 4096);
+        }
+        for f in 0..4u64 {
+            let _ = falloc.free(kstack + f * 4096);
+        }
+        crate::paging::free_address_space(falloc, pml4);
+        crate::serial_println!("[euro] bg-app (pid {pid}): no fd space free - not started");
+        return None;
+    };
     let irq_was_on = x86_64::instructions::interrupts::are_enabled();
     x86_64::instructions::interrupts::disable();
     let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
@@ -6584,6 +6809,7 @@ pub fn spawn_bg_app(
         // BUG-015 for apps and userspace drivers: a full task table is a refusal
         // (the udrv supervisor retries later), never a registered process whose
         // task never runs.
+        fdspace_release(space);
         for f in 0..frames {
             let _ = falloc.free(arena + f * 4096);
         }
@@ -6597,6 +6823,7 @@ pub fn spawn_bg_app(
         crate::serial_println!("[euro] bg-app (pid {pid}): scheduler task table full - not started");
         return None;
     }
+    fdspace::set_task(idx, space); // before the task can run (interrupts are off)
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().push(BgProc {
             task: idx,
@@ -6618,6 +6845,7 @@ pub fn spawn_bg_app(
             pooled: false,
             name: String::from_utf8_lossy(argv.first().copied().unwrap_or(b"app")).into_owned(),
             echo: false,
+            fdspace: space,
         });
     });
     if irq_was_on {
@@ -7460,6 +7688,13 @@ global_asm!(
     "mov rsp, [rip + USER_RSP]",
     "sysretq",
     "9:",                             // sys_exit -> back to the kernel.
+    // BUG-063: the flag is consumed here. It used to stay 1 until the next
+    // launch, and the next syscall of any scheduled task whose route does not
+    // reset it (a userspace driver, a background process's nanosleep, fork,
+    // wait4 or socket call) then came out of syscall_dispatch, found it set and
+    // took THIS path: a return through the stale SAVED_KERNEL_RSP, on the boot
+    // task's stack, in the wrong task.
+    "mov qword ptr [rip + EXITED], 0",
     "mov rsp, [rip + SAVED_KERNEL_RSP]",
     "pushfq",                         // SMAP window CLOSED: clear AC (no sysret that restores r11)
     "btr qword ptr [rsp], 18",
@@ -7477,6 +7712,7 @@ global_asm!(
     // to the caller.
     ".global force_kernel_return",
     "force_kernel_return:",
+    "mov qword ptr [rip + EXITED], 0", // BUG-063: consumed, as in the sys_exit epilogue
     "mov rsp, [rip + SAVED_KERNEL_RSP]",
     "pushfq",                         // SMAP window CLOSED (a faulted exec may have left AC open)
     "btr qword ptr [rsp], 18",
@@ -7539,6 +7775,8 @@ static LINUXPROG_ELF: &[u8] = include_bytes!("../../userland/linuxprog.elf");
 static FORKTEST_ELF: &[u8] = include_bytes!("../../userland/forktest.elf");
 static EXECEE_ELF: &[u8] = include_bytes!("../../userland/execee.elf");
 static FORKPIPE_ELF: &[u8] = include_bytes!("../../userland/forkpipe.elf");
+/// The [fdspace] self-test program (userland/pipehold.c): holds a pipe and a file open.
+static PIPEHOLD_ELF: &[u8] = include_bytes!("../../userland/pipehold.elf");
 static TICKER_ELF: &[u8] = include_bytes!("../../userland/ticker.elf");
 static MUSLPROG_ELF: &[u8] = include_bytes!("../../userland/muslprog.elf");
 static ARGVPROG_ELF: &[u8] = include_bytes!("../../userland/argvprog.elf");
@@ -8124,11 +8362,22 @@ pub fn spawn_counter_task(falloc: &mut FrameAllocator) -> u64 {
     // 2 MiB, exactly 2 MiB-aligned in one go (no more 4 MiB over-allocation):
     // the counter task never reaps, so this is the safest place to use
     // allocate_aligned. Saves ~2 MiB compared to allocate_contiguous(1024)+manual alignment.
-    let arena = falloc.allocate_aligned(512, 512).expect("utask-arena");
+    // BUG-053: no memory for the demo task is a line in the log (and a counter
+    // that reads 0), not a boot panic.
+    let Ok(arena) = falloc.allocate_aligned(512, 512) else {
+        crate::serial_println!("[euro] counter task: no free 2 MiB arena - not started");
+        return 0;
+    };
     let code = arena;
     let stack_top = arena + MIB2; // user stack grows downward from the arena top
     // Own kernel stack (4 frames = 16 KiB) for the ring3->ring0 interrupt frames.
-    let kstack = falloc.allocate_contiguous(4).expect("utask kernel-stack");
+    let Ok(kstack) = falloc.allocate_contiguous(4) else {
+        for f in 0..512u64 {
+            let _ = falloc.free(arena + f * 4096);
+        }
+        crate::serial_println!("[euro] counter task: no kernel stack free - not started");
+        return 0;
+    };
     let kstack_top = (kstack + 4 * 4096) & !0xF;
     // SAFETY: arena lies in the identity-mapped lowest 1 GiB; under the boot CR3
     // (where we now run) that is a supervisor page -> writing is allowed.
@@ -8636,7 +8885,13 @@ fn vdso_prepare(falloc: &mut FrameAllocator) -> bool {
             for _ in 0..npages {
                 match falloc.allocate() {
                     Ok(f) => { unsafe { core::ptr::write_bytes(f as *mut u8, 0, 4096) }; frames.push(f); }
-                    Err(_) => return false,
+                    Err(_) => {
+                        // BUG-053: the pages taken so far go back; the next launch tries again.
+                        for f in frames {
+                            let _ = falloc.free(f);
+                        }
+                        return false;
+                    }
                 }
             }
             let e_phoff = rd_u64(VDSO_SO, 32) as usize;
@@ -10839,8 +11094,15 @@ pub fn spawn_glibc_persistent(
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
     HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
 
-    let exe_info = load_elf64(exe, exe_base, program_span_pages(exe))?;
-    let ld_info = load_elf64(ldso, ldso_base, program_span_pages(ldso))?;
+    // BUG-053: from here on the arena is held; every refusal gives it back.
+    let (Some(exe_info), Some(ld_info)) = (
+        load_elf64(exe, exe_base, program_span_pages(exe)),
+        load_elf64(ldso, ldso_base, program_span_pages(ldso)),
+    ) else {
+        glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
+        crate::serial_println!("[glibc] persistent app: executable or loader is not a loadable ELF - not started");
+        return None;
+    };
     // NO vDSO here: this RAM-based persistent path never installs a demand pool, so
     // the deferred mapping would never run — and an auxv that promises a vDSO which
     // is not mapped crashes ld.so. The glibc syscall clock keeps working.
@@ -10869,8 +11131,14 @@ pub fn spawn_glibc_persistent(
     GLIBC_CTIDS.lock().clear();
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
-    let (main_slot, main_kstack) = alloc_thread_kstack()?;
+    let Some((main_slot, main_kstack)) = alloc_thread_kstack() else {
+        glibc_launch_abort(falloc, arena, frames, pml4, 0, 0);
+        crate::serial_println!("[glibc] persistent app: no kernel stack - not started");
+        return None;
+    };
     let Some(main_task) = spawn_glibc_main(ld_info.entry, rsp, user_cs, user_ss, main_slot, main_kstack, pml4, caps, argv) else {
+        glibc_launch_abort(falloc, arena, frames, pml4, 0, 0);
+        crate::serial_println!("[glibc] persistent app: scheduler task table full - not started");
         return None;
     };
     PERSIST_ARENA.store(arena, Ordering::Relaxed);
@@ -11313,6 +11581,36 @@ fn free_demand_extra(falloc: &mut euromm::FrameAllocator) {
     }
 }
 
+/// BUG-053: a glibc launch that fails after it took its arena gives back all it
+/// holds at that point: the demand pool (`dp_frames` != 0), the address space
+/// (`pml4` != 0, with the vDSO's table chain) and the arena.
+fn glibc_launch_abort(falloc: &mut FrameAllocator, arena: u64, frames: usize, pml4: u64, dp_base: u64, dp_frames: usize) {
+    if dp_frames != 0 {
+        crate::procpool::demand_uninstall();
+        for i in 0..dp_frames as u64 {
+            let _ = falloc.free(dp_base + i * 4096);
+        }
+        free_demand_extra(falloc);
+    }
+    if pml4 != 0 {
+        free_process_space(falloc, pml4);
+    }
+    for i in 0..frames as u64 {
+        let _ = falloc.free(arena + i * 4096);
+    }
+}
+
+/// [`glibc_launch_abort`] for the disk-served launch, which also switched demand
+/// paging on and may have registered file mappings.
+#[allow(clippy::too_many_arguments)]
+fn glibc_disk_launch_abort(falloc: &mut FrameAllocator, arena: u64, frames: usize, pml4: u64, dp_base: u64, dp_frames: usize,
+                           prev_demand: bool, prev_file: bool) {
+    glibc_launch_abort(falloc, arena, frames, pml4, dp_base, dp_frames);
+    DEMAND_FILE_MAPS.lock().clear();
+    DEMAND_ENABLED.store(prev_demand, Ordering::Relaxed);
+    DEMAND_FILE_ENABLED.store(prev_file, Ordering::Relaxed);
+}
+
 /// The launched state of a disk-served glibc process: everything the two lifecycles
 /// (run-to-completion, and persistent-alongside-the-desktop) must eventually give back.
 struct DiskRun {
@@ -11430,7 +11728,12 @@ fn glibc_disk_launch(
         }
         match got {
             Some(v) => v,
-            None => return Err("(no arena for glibc)"),
+            None => {
+                // BUG-053: the demand flags were switched on above.
+                DEMAND_ENABLED.store(prev_demand, Ordering::Relaxed);
+                DEMAND_FILE_ENABLED.store(prev_file, Ordering::Relaxed);
+                return Err("(no arena for glibc)");
+            }
         }
     };
     let nblocks = arena_mib / 2;
@@ -11451,7 +11754,10 @@ fn glibc_disk_launch(
 
     let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
         Some(i) => i,
-        None => return Err("(bad ld.so ELF)"),
+        None => {
+            glibc_disk_launch_abort(falloc, arena, frames, 0, 0, 0, prev_demand, prev_file);
+            return Err("(bad ld.so ELF)");
+        }
     };
     let vdso_ok = vdso_prepare(falloc);
     if vdso_ok {
@@ -11475,7 +11781,9 @@ fn glibc_disk_launch(
         }
     };
     if vdso_ok && !vdso_map_into(falloc, pml4) {
-        crate::serial_println!("[vdso] mapping FAILED — the auxv promised one; expect a crash");
+        // As in run_glibc: no frames for the vDSO's tables is a refusal (BUG-053).
+        glibc_disk_launch_abort(falloc, arena, frames, pml4, 0, 0, prev_demand, prev_file);
+        return Err("(out of memory: vDSO mapping)");
     }
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
     GLIBC_THREADS.lock().clear();
@@ -11489,6 +11797,7 @@ fn glibc_disk_launch(
     DEMAND_USED.store(false, Ordering::Relaxed);
     // Register the exe's disk-backed segments NOW (after the DEMAND_NEXT reset).
     if !register_disk_exe_segments(diskidx, dev, doff, exe_base) {
+        glibc_disk_launch_abort(falloc, arena, frames, pml4, 0, 0, prev_demand, prev_file);
         return Err("(disk exe segment map failed)");
     }
 
@@ -11534,9 +11843,13 @@ fn glibc_disk_launch(
 
     let (main_slot, main_kstack) = match alloc_thread_kstack() {
         Some(s) => s,
-        None => return Err("(no kernel stack)"),
+        None => {
+            glibc_disk_launch_abort(falloc, arena, frames, pml4, dp_base, dp_frames, prev_demand, prev_file);
+            return Err("(no kernel stack)");
+        }
     };
     let Some(main_task) = spawn_glibc_main(ld_info.entry, rsp, user_cs, user_ss, main_slot, main_kstack, pml4, caps, argv) else {
+        glibc_disk_launch_abort(falloc, arena, frames, pml4, dp_base, dp_frames, prev_demand, prev_file);
         return Err("(scheduler task table full)");
     };
 
@@ -11857,6 +12170,15 @@ static SPAWN_WINDOW_RAN: core::sync::atomic::AtomicU8 = core::sync::atomic::Atom
 /// (exit 42, the launcher wakes). Before the fix the window ran the program and
 /// its exit_group returned through a stale `SAVED_KERNEL_RSP`.
 pub fn spawn_window_selftest(falloc: &mut FrameAllocator) {
+    spawn_window_selftest_inner(falloc);
+    // The process self-tests of 2026-11 run from here, so that main.rs
+    // (which already calls this function in its SELFTEST block) needs no new line.
+    exit_flag_selftest(falloc);
+    fdspace_selftest(falloc);
+    lowmem_launch_selftest(falloc);
+}
+
+fn spawn_window_selftest_inner(falloc: &mut FrameAllocator) {
     let caps = CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO;
     SPAWN_WINDOW_RAN.store(0, Ordering::Relaxed);
     SPAWN_WINDOW_PROBE.store(true, Ordering::Relaxed);
@@ -11878,6 +12200,316 @@ pub fn spawn_window_selftest(falloc: &mut FrameAllocator) {
     );
 }
 
+
+/// The control file of the [fdspace] self-test: `pipehold` polls it by path and
+/// goes on when its first byte is `'1'`.
+const PIPEHOLD_CTL: &str = "/tmp/kdebug-pipehold";
+
+fn pipehold_ctl(byte: u8) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut files = FILES.lock();
+        match files.iter_mut().find(|(p, _)| p == PIPEHOLD_CTL) {
+            Some(e) => e.1 = alloc::borrow::Cow::Owned(alloc::vec![byte]),
+            None => files.push((String::from(PIPEHOLD_CTL), alloc::borrow::Cow::Owned(alloc::vec![byte]))),
+        }
+    });
+}
+
+/// A foreground run of /bin/hello on the boot task. `run_args` comes back
+/// through the syscall exit path with interrupts off; like every caller of
+/// it, restore the flag.
+fn selftest_run_hello(falloc: &mut FrameAllocator) -> (u64, String) {
+    x86_64::instructions::interrupts::without_interrupts(|| run_args(falloc, HELLO_ELF, &[b"hello"], CAP_CONSOLE, false))
+}
+
+/// Give the CPU away until `pred` holds or `ticks` timer ticks have passed.
+fn selftest_wait(ticks: u64, pred: &dyn Fn() -> bool) -> bool {
+    let end = crate::interrupts::ticks() + ticks;
+    while !pred() && crate::interrupts::ticks() < end {
+        crate::sched::sleep_ticks(1);
+        crate::sched::yield_now();
+    }
+    pred()
+}
+
+/// BUG-060 regression self-test `[fdspace]`: two background processes each open
+/// a pipe and a file and do one round trip (phase 1). Then the launcher starts
+/// programs in the foreground, a musl one and a glibc one; every launch begins
+/// with `reset_fd_table`. After that the background processes use the same
+/// descriptors again (phase 2). With one global set of tables the launch wiped
+/// them: the write went to the console, the reads returned nothing.
+pub fn fdspace_selftest(falloc: &mut FrameAllocator) {
+    const PIDS: [u64; 2] = [0x4_0601, 0x4_0602];
+    reap_dead(falloc);
+    FDSPACE_ST_BEFORE.store(fd_spaces_in_use(), Ordering::Relaxed);
+    pipehold_ctl(b'0');
+    let mut started = 0usize;
+    for &pid in PIDS.iter() {
+        if spawn_bg_musl_caps(falloc, PIPEHOLD_ELF, pid, b"/bin/pipehold", CAP_CONSOLE | CAP_FILE, true).is_some() {
+            started += 1;
+        }
+    }
+    let has = |pid: u64, what: &str| bg_output(pid).iter().any(|l| l.contains(what));
+    let phase1 = selftest_wait(3000, &|| PIDS.iter().all(|&p| has(p, "phase1")));
+    let phase1_ok = PIDS.iter().all(|&p| has(p, "phase1 pipe=ok file=ok"));
+    // The foreground launches. A glibc launch that finds no arena (512 MiB) has
+    // reset the tables all the same: the reset is its first step.
+    let (fg_code, _) = selftest_run_hello(falloc);
+    let (_, glibc_exit) = run_glibc(falloc, gtiny_bytes(), ldlinux_bytes(), &[b"/bin/gtiny"], &[b"PATH=/bin"],
+        CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO);
+    pipehold_ctl(b'1');
+    let ended = selftest_wait(3000, &|| PIDS.iter().all(|&p| !bg_alive(p)));
+    let mut pass = 0usize;
+    let mut detail = String::new();
+    for &pid in PIDS.iter() {
+        let lines = bg_output(pid);
+        if lines.iter().any(|l| l.contains("pipehold: PASS")) {
+            pass += 1;
+        }
+        let p2 = lines.iter().find(|l| l.contains("phase2")).cloned().unwrap_or_else(|| String::from("(no phase2 line)"));
+        let p2 = p2.find("phase2").map(|i| String::from(&p2[i..])).unwrap_or(p2);
+        detail.push_str(&alloc::format!(" | pid {pid:#x}: {p2}"));
+        if bg_alive(pid) {
+            kill_pid(pid);
+        }
+    }
+    reap_dead(falloc);
+    let ok = started == PIDS.len() && phase1 && phase1_ok && ended && pass == PIDS.len() && fg_code != u64::MAX
+        && fdspace_selftest_balanced();
+    crate::serial_println!(
+        "[fdspace] {started} background processes keep a pipe and a file open across a foreground launch (musl exit={fg_code}, glibc exit={}): phase1={phase1_ok} ended={ended} pass={pass}/{}{detail}{} → {}",
+        glibc_exit as i64, PIDS.len(), fdspace_selftest_extra(),
+        if ok { "OK ✓" } else { "FAILED" }
+    );
+}
+
+/// What the [fdspace] line says about the fd spaces themselves.
+fn fdspace_selftest_extra() -> String {
+    alloc::format!(" | fd spaces in use {} → {}", FDSPACE_ST_BEFORE.load(Ordering::Relaxed), fd_spaces_in_use())
+}
+static FDSPACE_ST_BEFORE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// Every fd space the self-test's processes had is released again.
+fn fdspace_selftest_balanced() -> bool {
+    fd_spaces_in_use() <= FDSPACE_ST_BEFORE.load(Ordering::Relaxed)
+}
+
+/// The frame allocator drained for a process-start test: everything is taken
+/// except a 2 MiB-aligned hole (the arena of the process to start); `spare`
+/// holds frames that are handed back one at a time.
+struct DrainedFrames {
+    held: alloc::vec::Vec<(u64, usize)>,
+    spare: alloc::vec::Vec<u64>,
+}
+
+/// Take every free frame except a 2 MiB-aligned hole of `hole` frames; keep
+/// `spare` single frames aside. What a process start then finds is exactly its
+/// arena, plus one frame for every [`DrainedFrames::give_one`]. None when no
+/// such hole exists. The frame allocator has one owner (the boot task holds
+/// it), so nothing else is starved meanwhile.
+fn drain_frames_except(falloc: &mut FrameAllocator, hole: usize, spare: usize) -> Option<DrainedFrames> {
+    let hole_base = falloc.allocate_aligned(hole, 512).ok()?;
+    let mut d = DrainedFrames { held: alloc::vec::Vec::new(), spare: alloc::vec::Vec::new() };
+    // One contiguous run, handed back frame by frame from its top: what is free
+    // after k hand-backs is k adjacent frames (a kernel stack needs four).
+    if let Ok(b) = falloc.allocate_contiguous(spare) {
+        for i in 0..spare as u64 {
+            d.spare.push(b + i * 4096);
+        }
+    }
+    // Large runs first (each search is linear in the bitmap), then single
+    // frames, which the allocator finds from its hint.
+    let mut n = 1usize << 18;
+    while n >= 64 {
+        match falloc.allocate_contiguous(n) {
+            Ok(b) => d.held.push((b, n)),
+            Err(_) => n /= 2,
+        }
+    }
+    while let Ok(f) = falloc.allocate() {
+        d.held.push((f, 1));
+    }
+    for f in 0..hole as u64 {
+        let _ = falloc.free(hole_base + f * 4096);
+    }
+    Some(d)
+}
+
+impl DrainedFrames {
+    /// One more free frame for the next attempt.
+    fn give_one(&mut self, falloc: &mut FrameAllocator) -> bool {
+        match self.spare.pop() {
+            Some(f) => falloc.free(f).is_ok(),
+            None => false,
+        }
+    }
+
+    /// Everything back.
+    fn release(self, falloc: &mut FrameAllocator) {
+        for (base, n) in self.held {
+            for f in 0..n as u64 {
+                let _ = falloc.free(base + f * 4096);
+            }
+        }
+        for f in self.spare {
+            let _ = falloc.free(f);
+        }
+    }
+}
+
+/// BUG-053 regression self-test `[bug053]`: process starts that cannot get
+/// their frames, provoked, for the three kinds of start.
+///
+/// For each kind the frame allocator is drained down to the arena of the
+/// process, and one more frame is handed back before every further attempt:
+/// the start is refused until the spare frames cover the kernel stack and the
+/// page tables, and every refusal must leave exactly the frames it found. At
+/// the first attempt that has enough, the process runs with nothing else free,
+/// ends, and gives everything back. Last, a glibc launch whose executable is
+/// not an ELF (it fails after the arena was taken), and an ordinary launch to
+/// show the next one still works.
+pub fn lowmem_launch_selftest(falloc: &mut FrameAllocator) {
+    const SPARE: usize = 24;
+    reap_dead(falloc);
+    let base_free = falloc.free_frames();
+    let mut kept: i64 = 0; // frames a refused start did not give back, summed
+    let mut notes = String::new();
+
+    // 1. A background musl process: 2 MiB arena, 4-frame kernel stack, page tables.
+    pipehold_ctl(b'0');
+    let (mut refused, mut started_at) = (0usize, -1i64);
+    let pid = 0x4_0530u64;
+    if let Some(mut d) = drain_frames_except(falloc, 512, SPARE) {
+        let mut started = false;
+        for k in 0..=SPARE {
+            if k > 0 && !d.give_one(falloc) {
+                break;
+            }
+            let before = falloc.free_frames();
+            if spawn_bg_musl(falloc, PIPEHOLD_ELF, pid, b"/bin/pipehold") {
+                started_at = k as i64;
+                started = true;
+                break;
+            }
+            refused += 1;
+            kept += before as i64 - falloc.free_frames() as i64;
+        }
+        d.release(falloc);
+        if started {
+            kill_pid(pid);
+            reap_dead(falloc);
+        }
+    }
+    let bg_free = falloc.free_frames();
+    notes.push_str(&alloc::format!("bg-musl refused x{refused}, started with {started_at} spare"));
+
+    // 2. A foreground program (run to completion on the boot task).
+    let (mut refused, mut started_at, mut fg_code) = (0usize, -1i64, u64::MAX);
+    if let Some(mut d) = drain_frames_except(falloc, 512, SPARE) {
+        for k in 0..=SPARE {
+            if k > 0 && !d.give_one(falloc) {
+                break;
+            }
+            let before = falloc.free_frames();
+            let (code, _) = selftest_run_hello(falloc);
+            kept += before as i64 - falloc.free_frames() as i64;
+            if code != u64::MAX {
+                started_at = k as i64;
+                fg_code = code;
+                break;
+            }
+            refused += 1;
+        }
+        d.release(falloc);
+    }
+    let fg_free = falloc.free_frames();
+    notes.push_str(&alloc::format!(" · foreground refused x{refused}, ran with {started_at} spare (exit {fg_code})"));
+
+    // 3. A glibc process (only where a glibc arena fits at all).
+    let caps = CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO;
+    let gtiny = |a: &mut FrameAllocator| run_glibc(a, gtiny_bytes(), ldlinux_bytes(), &[b"/bin/gtiny"], &[b"PATH=/bin"], caps);
+    let (_, warm) = gtiny(falloc); // also makes the one-time vDSO frames exist
+    // The arena the launcher gets right now: its request, halved down to 64 MiB
+    // until a contiguous run of that size exists (as run_glibc does).
+    let arena_frames = {
+        let mut mib = GLIBC_ARENA_MIB.load(Ordering::Relaxed);
+        let mut got = 0usize;
+        while mib >= 64 && got == 0 {
+            let f = ((mib / 2) * 512) as usize;
+            if let Ok(a) = falloc.allocate_aligned(f, 512) {
+                for i in 0..f as u64 {
+                    let _ = falloc.free(a + i * 4096);
+                }
+                got = f;
+            }
+            mib /= 2;
+        }
+        got
+    };
+    let glibc_base = falloc.free_frames();
+    let mut glibc_ok = true;
+    if warm == 42 && arena_frames != 0 {
+        let (mut refused, mut started_at, mut exit_at) = (0usize, -1i64, 0u64);
+        if let Some(mut d) = drain_frames_except(falloc, arena_frames, SPARE) {
+            for k in 0..=SPARE {
+                if k > 0 && !d.give_one(falloc) {
+                    break;
+                }
+                let before = falloc.free_frames();
+                let (_, exit) = gtiny(falloc);
+                kept += before as i64 - falloc.free_frames() as i64;
+                if exit != u64::MAX {
+                    started_at = k as i64;
+                    exit_at = exit;
+                    break;
+                }
+                refused += 1;
+            }
+            d.release(falloc);
+        }
+        // A launch that fails after it took its arena: the executable is no ELF.
+        let before = falloc.free_frames();
+        let bad = spawn_glibc_persistent(falloc, b"\x7fELF but nothing more", ldlinux_bytes(), &[b"/bin/notelf"], &[b"PATH=/bin"], caps);
+        let bad_kept = before as i64 - falloc.free_frames() as i64;
+        kept += bad_kept;
+        // And the next launch works.
+        let (_, next) = gtiny(falloc);
+        glibc_ok = started_at >= 0 && exit_at == 42 && bad.is_none() && bad_kept == 0 && next == 42
+            && falloc.free_frames() + 4 >= glibc_base;
+        notes.push_str(&alloc::format!(
+            " · glibc refused x{refused}, ran with {started_at} spare (exit {}), bad executable refused={} kept {bad_kept} frames, next launch exit {}",
+            exit_at as i64, bad.is_none(), next as i64));
+    } else {
+        notes.push_str(" · glibc part skipped (no glibc arena at this RAM size)");
+    }
+    reap_dead(falloc);
+    let end_free = falloc.free_frames();
+    let ok = kept == 0 && bg_free + 4 >= base_free && fg_free + 4 >= base_free && end_free + 4 >= base_free
+        && fg_code != u64::MAX && glibc_ok;
+    crate::serial_println!(
+        "[bug053] process starts with only their arena + k frames free: {notes} · frames kept by refused starts: {kept} · free frames {base_free} → {end_free} → {}",
+        if ok { "OK ✓" } else { "FAILED" }
+    );
+}
+
+/// BUG-063 regression self-test `[bug063]`: after a foreground program has
+/// returned, its exit flag must be gone. While it stayed set, the next syscall
+/// of a userspace driver (or a background process's nanosleep, fork, wait4 or
+/// socket call) returned through the foreground exit path, on the boot task's
+/// stack. The test then gives the CPU away with interrupts on, which is when
+/// those syscalls happen.
+pub fn exit_flag_selftest(falloc: &mut FrameAllocator) {
+    let (code, _) = selftest_run_hello(falloc);
+    // SAFETY: a plain read of a word that only syscall paths write.
+    let flag = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(EXITED)) };
+    let t0 = crate::interrupts::ticks();
+    selftest_wait(30, &|| false);
+    let waited = crate::interrupts::ticks().saturating_sub(t0);
+    let ok = code != u64::MAX && flag == 0 && waited >= 30;
+    crate::serial_println!(
+        "[bug063] foreground program returned (exit {code}): exit flag = {flag} (want 0), then {waited} ticks with interrupts on while drivers and background processes make syscalls → {}",
+        if ok { "OK ✓" } else { "FAILED" }
+    );
+}
 
 pub fn run_glibc(
     falloc: &mut FrameAllocator,
@@ -11992,11 +12624,17 @@ pub fn run_glibc(
     // (idempotent: ld.so also self-relocates).
     let exe_info = match load_elf64(exe, exe_base, program_span_pages(exe)) {
         Some(i) => i,
-        None => return (String::from("(bad exe ELF)"), u64::MAX),
+        None => {
+            glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
+            return (String::from("(bad exe ELF)"), u64::MAX);
+        }
     };
     let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
         Some(i) => i,
-        None => return (String::from("(bad ld.so ELF)"), u64::MAX),
+        None => {
+            glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
+            return (String::from("(bad ld.so ELF)"), u64::MAX);
+        }
     };
 
     let vdso_ok = vdso_prepare(falloc);
@@ -12019,7 +12657,10 @@ pub fn run_glibc(
         }
     };
     if vdso_ok && !vdso_map_into(falloc, pml4) {
-        crate::serial_println!("[vdso] mapping FAILED — the auxv promised one; expect a crash");
+        // The auxv on the stack already promises a vDSO: a process started without
+        // the mapping jumps into nothing. No frames for its tables: refuse (BUG-053).
+        glibc_launch_abort(falloc, arena, frames, pml4, 0, 0);
+        return (String::from("(out of memory: vDSO mapping)"), u64::MAX);
     }
     // Threads this process clones share this address space.
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
@@ -12070,7 +12711,10 @@ pub fn run_glibc(
     // Own kernel stack for the main thread (from the recycling thread-kstack pool).
     let (main_slot, main_kstack) = match alloc_thread_kstack() {
         Some(s) => s,
-        None => return (String::from("(no kernel stack)"), u64::MAX),
+        None => {
+            glibc_launch_abort(falloc, arena, frames, pml4, dp_base, dp_frames);
+            return (String::from("(no kernel stack)"), u64::MAX);
+        }
     };
 
     // Run the glibc program as a FIRST-CLASS SCHEDULED process: spawn its main
@@ -12078,6 +12722,7 @@ pub fn run_glibc(
     // pthread workers are scheduler siblings, so blocking + preemption + waking
     // all work — unlike a boot-task excursion, which starved.
     let Some(main_task) = spawn_glibc_main(ld_info.entry, rsp, user_cs, user_ss, main_slot, main_kstack, pml4, caps, argv) else {
+        glibc_launch_abort(falloc, arena, frames, pml4, dp_base, dp_frames);
         return (String::from("(scheduler task table full)"), u64::MAX);
     };
     crate::serial_println!(
