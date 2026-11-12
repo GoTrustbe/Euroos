@@ -1,0 +1,9 @@
+nap 2
+shot wizard-0-first-desktop
+wizclose
+nap 2
+shot wizard-1-after-closing-the-wizard
+key esc
+nap 1
+shot wizard-2-tour-closed
+scon lsblk

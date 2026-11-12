@@ -1,0 +1,4 @@
+before/1080/01-desktop-empty.png: 1920x1080; step at x=960: max 17, mean 14.98 over 1020 rows; other columns 101..1599: median of the per-column maxima 3, largest 60
+after/1080/01-desktop-empty.png: 1920x1080; step at x=960: max 2, mean 0.13 over 1020 rows; other columns 101..1599: median of the per-column maxima 3, largest 59
+before/720/01-desktop-empty.png: 1280x720; step at x=640: max 17, mean 14.97 over 660 rows; other columns 101..959: median of the per-column maxima 3, largest 58
+after/720/01-desktop-empty.png: 1280x720; step at x=640: max 2, mean 0.18 over 660 rows; other columns 101..959: median of the per-column maxima 3, largest 59

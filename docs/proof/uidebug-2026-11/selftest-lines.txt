@@ -1,0 +1,3 @@
+[altgr] AltGr third level in both decoders (be, fr, de)=true, AltGr+Tab/1..4 switch nothing=true, typed instead=true, split prefix=true, left Alt still Alt+Tab=true Alt+2=true → OK ✓
+[notif] Notifications: posted-to-centre=true, toast-shows=true, toast-expires=true, history-kept=true, centre-toggles=true, change-counters=true, list hit-test and close=true → OK (toasts + a notification centre) ✓
+[disks] sizes formatted=true, 1 disk(s) [sata0 256 MiB SATA (AHCI)], each with name, size and bus=true, system disk marked consistently=true → OK ✓

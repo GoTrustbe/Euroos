@@ -179,6 +179,8 @@ the code.
 | Integration of bug-gpf, fast-boot, robust, settings, help (`feature/integ-2026-11`): TCG matrix, megaraid, modern virtio, CI q35 matrix, host tests | 2026-11-10 | ✅ 0 markers worse | `proof/integ-2026-11/` | 10 TCG boots, 27 comparisons against the five branch proofs; megaraid 4 boots (host checks 4/4 twice); modern virtio; q35 13/13; `[lk]` 0 inversions; 186 host suites, 1 304 tests; BUG-044, 045, 047, 051, 059 fixed; the self-test image reaches the desktop 45 s later under TCG since the settings merge (BUG-056, open) |
 | Release image, integrated: wizard install, GUI smoke, settings across a power cut, open network, boot time (TCG and R630 KVM) | 2026-11-10 | ✅ | `proof/integ-2026-11/` | wizard 14/14; gui-smoke 56/56 (BUG-044 step counting, tour step new); installed system reads back seven settings and `tour.done` after QEMU was quit; ping, DNS, HTTP, HTTPS; R630 boot 2.71 s (SATA + legacy virtio-net) and 2.34 s (modern virtio), 5 boots each (fast-boot: 2.95 s, 2.70 s) |
 | GUI monkey soak, integrated, 35 min each (R630 KVM): USB smp 4 / 4 GiB, virtio smp 2 / 2 GiB | 2026-11-10 | ✅ 3/3 with the fixed harness; 🟡 3/5 with the harness as merged | `proof/integ-2026-11/` | final harness: 2 217 + 1 958 (USB) and 2 190 (virtio) actions, functional checks 11/11, 9/9, 10/10, no crash, console max 250 ms / 2.0 s; as merged: one false "screen frozen" and one failed check, both with the notification list or a context menu open (BUG-057: full repaint in every iteration, 0.3 to 0.4 s per frame; same before the settings and help merges) |
+| Desktop pass on `feature/uidebug` (BUG-052, 054, 055, 057, 058, 070 to 077; mouse wheel; tour after the wizard): host tests, TCG matrix, release image under TCG | 2026-11-12 | ✅ 0 markers worse | `proof/uidebug-2026-11/` | 186 host suites, 1 313 tests; 10 TCG boots, 0 worse against `proof/integ-2026-11/`, new `[altgr]` and `[disks]` OK, `[lk]` 0 inversions; wizard 15/15; gui-smoke under TCG 66/66 twice with the final harness (64, 65 and 66 of 66 before the Alt-Tab steps waited for the switcher: timing on a loaded host, one drag step can still fall short) |
+| Desktop pass, release image on the R630 (KVM): GUI smoke and monkey soak 35 min with USB and with virtio input, frame time, boot time | 2026-11-12 | ✅ | `proof/uidebug-2026-11/` | gui-smoke 66/66 with USB and with virtio input (59/66 on the image without the fixes); monkey 2 227 + 2 087 actions, functional checks 11/11 and 10/10, no crash, console max 250 ms / 2.1 s; notification list open: pointer visible after 39 to 46 ms (was 291 to 373 ms); boot 2.70 s (2.75 s for `7858b72` in the same session) |
 | `soak` 2 h 05 + `churn proc 8` every round + 4 httpd clients, integrated (KVM, `-m 16G`) | 2026-11-10 | ✅ 2 899/2 899 ok | `proof/integ-2026-11/` | on the head (`fb18477`): 371 `churn proc` commands, 2 987 glibc launches, every verdict OK; heap +0.25 kB/min; tasks, files, frames, process pool flat; httpd 1 006 005 answered / 11 failed, p99 122 ms; 0 panics, 0 fault lines. The same on `182b19c` before it (2 868 ok, +0.24 kB/min), whose boot showed BUG-059 |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
@@ -1150,13 +1152,22 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Fix:**      `scrub::run` appends the line in system context whoever calls it, and prints a `[g5]` line when the
   write is refused. After two passes the file holds two lines and the panel shows the last one.
 
-### BUG-052 — right Alt (AltGr) counts as Alt in `poll_key`, not in `poll_key_ex` ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (AltGr+Tab or AltGr+1..4 switch window or workspace in the Terminal, not in an editor)
+### BUG-052 — right Alt (AltGr) counts as Alt in `poll_key`, not in `poll_key_ex` ✅ FIXED
+- **Status:**   FIXED (`98bb550`, `feature/uidebug`) · **Severity:** LOW (AltGr+Tab or AltGr+1..4 switched window or workspace in the Terminal; the AZERTY and QWERTZ layouts had no way to type `@ # { } [ ] \ | ~` or the euro sign)
 - **Found:**    2026-11-10 · reading `ps2.rs` for BUG-044; not tried on a keyboard
-- **Analysis:** `poll_key_ex` consumes the `0xE0` prefix and ignores `E0 38`. `poll_key` has no `0xE0` arm: the prefix
-  is dropped as a break code and the following `0x38` sets the Alt latch. PS/2 and virtio keyboards only (the USB
-  path forwards left Alt alone, BUG-043). `eurokeymap::translate` takes no AltGr level, so AltGr has no other use yet.
-- **Next:**     an `0xE0` arm in `poll_key` that skips the next code, when the keymaps get their AltGr level.
+- **Analysis:** `poll_key_ex` consumed the `0xE0` prefix and ignored `E0 38`. `poll_key` had no `0xE0` arm: the prefix
+  was dropped as a break code and the following `0x38` set the Alt latch. PS/2 and virtio keyboards only (the USB
+  path forwarded left Alt alone, BUG-043, and did not forward right Alt at all). `eurokeymap::translate` had no AltGr level.
+- **Fix:**      `eurokeymap::level3` and `translate_ex` (the third level of be-azerty, fr-azerty and de-qwertz as on the
+  key caps; no dead-key composition, no Shift+AltGr). `ps2.rs`: the prefix is remembered across polls (`EXT`: its
+  code can arrive in a later loop iteration), `E0 38` / `E0 B8` set and clear `ALTGR` in both decoders and never
+  touch `ALT`, and with AltGr held a key without a third level types nothing. `xhci.rs` forwards the right-Alt
+  modifier bit as `E0 38` / `E0 B8`. See BUG-072 for the keys that were wrong below the AltGr level.
+- **Shown by:** 8 host tests in `crates/eurokeymap` (each of the ten characters on exactly one key per layout; AltGr never
+  repeats the base character); boot self-test `[altgr]` (both decoders, the three layouts, AltGr+Tab and AltGr+1..4
+  latch nothing, a prefix split over two polls, left Alt still latches); `gui-smoke.py` steps "AltGr: third-level
+  characters …" and "AltGr+Tab and AltGr+2 … no switcher, no workspace change" (Terminal and EuroText), USB and
+  virtio keyboard, TCG and KVM (`proof/uidebug-2026-11/`).
 
 ### BUG-053 — a glibc launcher that fails after it took its arena keeps the arena ⬜ OPEN
 - **Status:**   OPEN · **Severity:** LOW (needs a damaged executable or loader; 64 to 96 MiB per failed start)
@@ -1167,19 +1178,34 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   out-of-frames exits in the same functions do free it. Also still `expect`s on allocation, boot only:
   `daemon-arena`, `daemon-kstack`, `utask-arena`, `utask kernel-stack`.
 
-### BUG-054 — the default desktop background has a vertical seam at half the screen width ⬜ OPEN
-- **Status:**   OPEN · **Severity:** COSMETIC
+### BUG-054 — the default desktop background has a vertical seam at half the screen width ✅ FIXED
+- **Status:**   FIXED (`98bb550`) · **Severity:** COSMETIC
 - **Found:**    2026-11-10 · reading the screenshots of the integration (it is in the earlier ones too,
   `proof/fast-boot-2026-11/kvm-after-desktop.png`)
-- **Analysis:** `compositor::draw_wallpaper_compute` approximates the diagonal gradient with two row fills per line,
-  left half and right half, each in one colour; the step between them is visible at x = width / 2 on a 1920 px screen.
+- **Analysis:** `compositor::draw_wallpaper_compute` approximated the diagonal gradient with two row fills per line,
+  left half and right half, each in one colour; the step between them was visible at x = width / 2.
+- **Fix:**      the row is filled in 8 px segments whose colour follows the diagonal, in integer arithmetic (no
+  soft-float call per segment; the picture is computed once and cached, as before).
+- **Shown by:** `proof/uidebug-2026-11/seam.txt`: the largest colour step between two neighbouring pixels of a row,
+  measured on the screendumps of the empty desktop, at x = width / 2 and elsewhere, before and after, 1920x1080
+  and 1280x720; `before/1080/01-desktop-empty.png` against `after/1080/01-desktop-empty.png`.
 
-### BUG-055 — EuroBeheer, Storage: "1 MiB of 8 MiB used (21%)", and "no virtio-blk devices" on a SATA boot ⬜ OPEN
-- **Status:**   OPEN · **Severity:** COSMETIC
+### BUG-055 — EuroBeheer, Storage: "1 MiB of 8 MiB used (21%)", and "no virtio-blk devices" on a SATA boot ✅ FIXED
+- **Status:**   FIXED (`98bb550`) · **Severity:** COSMETIC
 - **Found:**    2026-11-10 · the Storage screenshots of the integration (`proof/integ-2026-11/screenshots/`)
-- **Analysis:** `settings_ui::mib` rounds both figures down to whole MiB while the percentage comes from the bytes,
-  so a small file system reads inconsistent. The "Disks" list is `fatmount::lsblk`, which knows virtio-blk only: a
-  system booted from SATA, NVMe or USB is told there are no disks.
+- **Analysis:** `settings_ui::mib` rounded both figures down to whole MiB while the percentage came from the bytes
+  (1.7 MiB of 8.0 MiB is 21 %), so a small file system read inconsistent. The "Disks" list was `fatmount::lsblk`,
+  which knows virtio-blk only: a system booted from SATA, NVMe or USB was told there are no disks.
+- **Fix:**      `rootblk::human_bytes` (one decimal below 100 of a unit, rounded to the nearest; the percentage is
+  rounded the same way) and `rootblk::all_disks`: virtio-blk, SATA (AHCI, with the model string), NVMe (model),
+  MegaRAID logical drives and a USB disk, each with name, size and bus, the disk that carries the root marked
+  "(system disk)". The Storage page lists them; `lsblk` in the shell appends the non-virtio ones.
+- **Shown by:** boot self-test `[disks]`; `proof/uidebug-2026-11/disks.txt` and `disks-four-buses.png`: the page and
+  `lsblk` on a SATA boot medium with a virtio disk, an NVMe disk and a second SATA disk attached; screenshots
+  `before/1080/20-eurobeheer-storage.png` and `after/*/20-eurobeheer-storage.png`. The "(system disk)" mark was not
+  looked at on an installed system in this pass (the harnesses that install do not open the panel).
+- **Not listed:** an NVMe disk handed to the user-space driver (`storage.nvme=user`), and disks behind a controller
+  without a kernel driver.
 
 ### BUG-056 — the lock screen paints 25 to 45 s per frame under TCG (self-test image, 1920x1080) ⬜ OPEN
 - **Status:**   OPEN · **Severity:** LOW (TCG boots of the self-test image; no marker changes; the release image under KVM is not slow)
@@ -1200,32 +1226,47 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   Self-test image under KVM: `lockscreen` 5.4 s.
 - **Next:**     paint that background with row fills (as `draw_wallpaper_compute` does), or cache it.
 
-### BUG-057 — the notification list stays open and the desktop repaints everything in every loop iteration ⬜ OPEN
-- **Status:**   OPEN (kernel) · the two harness heuristics it tripped are fixed in `gui-smoke.py` · **Severity:** LOW/MEDIUM (a sluggish desktop for as long as the list is open)
+### BUG-057 — the notification list stays open and the desktop repaints everything in every loop iteration ✅ FIXED
+- **Status:**   FIXED (`98bb550`) · **Severity:** LOW/MEDIUM (a sluggish desktop for as long as the list is open)
 - **Found:**    2026-11-10 · monkey soaks of the integration on the R630 (USB input): one run with a failed functional
   check after 2 200 actions, one stopped as "screen frozen" after 1 750 (`proof/integ-2026-11/gui-soak-usb-run1.txt`,
   `gui-soak-usb-run2.txt`); in both the notification list was open
-- **Analysis:** the list opens and closes only by a click on the status panel (`notify::toggle_centre`; `close_centre`
-  has no caller): no Esc, no click outside. While it is open `need_full` is set in every iteration. With seven
-  windows on the R630 under KVM: a console echo takes 150 ms (50 ms otherwise) and a pointer move shows after 0.3 to
-  0.4 s (0.04 s otherwise): `frame-time.txt`, the same on `11c30d2` before the settings and help merges, so not from
-  this integration. The loop was alive in the "frozen" run: it ran a typed command and answered the console between
-  the two looks; the NMI probe found it painting (`draw_window_body` -> `fill_rounded_rect` -> soft-float compare).
-- **Harness:**  `gui-smoke.py` looked once, 0.3 s after moving the pointer, and called two such looks in a row a frozen
-  screen; it now gives the picture up to 5 s. Its functional check clicked the EU mark with a context menu still open
-  (Esc does not close one, and with no window button on screen nothing had clicked before): the menu took the click,
-  no launcher opened and the command went elsewhere; it now spends a click beside the dock first. A failed check
-  saves a screenshot.
-- **Next:**     close the list on Esc and on a click outside it; repaint only when a toast or the list changes.
+- **Analysis:** the list opened and closed only by a click on the status panel (`notify::toggle_centre`; `close_centre`
+  had no caller): no Esc, no click outside. While it was open `need_full` was set in every iteration. The same line
+  of `main.rs` did that for an open context menu, the launcher, the file dialog, the symbol picker, the Alt-Tab
+  switcher, a file being dragged, and for 3.2 s after every notification (the toast). With seven windows on the R630
+  under KVM a pointer move showed after 0.3 to 0.4 s instead of 0.04 s.
+- **Fix:**      the loop repaints for an overlay when what it shows changes: the tuple of open flags,
+  `notify::active_toasts` and `notify::generation`; the context-menu row under the pointer; the pointer while a file
+  is dragged. With an overlay up the 2 s tick and a key in the Terminal or the calculator (which redraw a window in
+  place) become one full repaint. Esc closes the list and a context menu, and that Esc is taken out of the key ring
+  (`ps2::take_pending_esc`); a left click beside the list closes it and is used up, a click on the list no longer
+  reaches the window under it, a right click closes it and opens its menu. New shell command `repaints`.
+- **Shown by:** `proof/uidebug-2026-11/frame-time.txt` (R630 KVM, seven windows, list open): pointer visible after
+  291 to 373 ms before, 39 to 46 ms after; console echo median 100 ms before, median 50 ms after. `repaints` with the
+  list open: 2 full repaints in 416 loop iterations (4.3 s). `gui-smoke.py`: four steps on the list, one on the menu; the same steps fail on the image
+  without the fix (`gui-smoke-kvm-baseline-image.txt`). Monkey soaks 35 min USB and virtio.
+- **Left as it is:** one full repaint per pointer move while a file is dragged out of EuroFiles, per change of the
+  highlighted menu row, and while a window is dragged or resized or EuroPaint draws a stroke. The help panel and the
+  tour already repainted only after input and once per tick.
 
-### BUG-058 — EuroReken lower than 252 px draws its keypad down to the bottom of the screen ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (picture only; the desktop keeps working)
+### BUG-058 — EuroReken lower than 252 px draws its keypad down to the bottom of the screen ✅ FIXED
+- **Status:**   FIXED (`98bb550`) · **Severity:** LOW (picture only; the desktop keeps working)
 - **Found:**    2026-11-10 · looking for the cause of BUG-057; `proof/integ-2026-11/screenshots/bug058-calculator-200px.png`
-- **Analysis:** the desktop lets a window shrink to 320 x 200. `calc_ui::button_area` leaves 0 px for the keypad below
-  252 px of window height, and `button_rect` then computes `(ah - gap * (ROWS - 1)) / ROWS` in `usize`: it wraps,
-  the 36 keys become six columns as tall as the screen, drawn outside the window. `render` has the same unchecked
-  subtraction for the width (`w - pad * 2 - HIST_W`), out of reach while the minimum width is 320.
-- **Next:**     saturating arithmetic in `button_rect` and `render`, or a minimum size per app.
+- **Analysis:** the desktop let a window shrink to 320 x 200. `calc_ui::button_area` leaves 0 px for the keypad below
+  252 px of window height, and `button_rect` then computed `(ah - gap * (ROWS - 1)) / ROWS` in `usize`: it wrapped,
+  the 36 keys became six columns as tall as the screen, drawn outside the window. Nothing confined an app's drawing
+  to its window: the framebuffer had no clip rectangle.
+- **Fix:**      three layers. (1) `graphics.rs`: a clip rectangle (`set_clip` / `clear_clip`, honoured by `put_pixel`,
+  `fill_rect`, `blit_xrgb`; `fill_rect` saturates), and `compositor::draw_window_body` draws every app inside its
+  window rectangle. (2) `calc_ui`: saturating layout; a keypad or "=" bar that does not fit is neither drawn nor
+  clickable. (3) the resize grip keeps the calculator at 500 x 380 or larger (`main.rs::min_window_size`); every other
+  app still goes down to 320 x 200 and is cut off at the window edge there.
+- **Shown by:** every dock app at its smallest size and at its default size, at 1920x1080 and 1280x720
+  (`proof/uidebug-2026-11/after/*/app-*-smallest.png`, looked at: nothing outside a window);
+  `before/1080/app-06-calculator-smallest.png` shows the keys down the screen.
+- **Seen there, cosmetic, not changed:** at 320 px width EuroText's Open and Save buttons lie over the file path,
+  and EuroFiles shows two toolbar buttons (the rest need a wider window, as its help page says).
 
 ### BUG-059 — `[robust-fs]` FAILED on a root the installer self-test had just provisioned (no `/tmp`) ✅ FIXED
 - **Status:**   FIXED (`fb18477`, integration) · **Severity:** LOW (a self-test, not the code it tests)
@@ -1237,6 +1278,72 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   runs just before `[edit]`, on `feature/robust` as here, and wrote its two test files into `/tmp` without creating
   it; a missing file then "opens" as a new document. `feature/robust` never booted with a blank virtio disk.
 - **Fix:**      the self-test creates `/tmp` first. Self-test code only (`cfg(feature = "selftest")`).
+
+### BUG-070 — EuroFiles: the folder icon of a list row is a slanted hook ✅ FIXED
+- **Status:**   FIXED (`98bb550`) · **Severity:** COSMETIC
+- **Found:**    2026-11-12 · the first screenshots of this pass (it is in `proof/integ-2026-11/` as well)
+- **Analysis:** the list rows used the glyph "folder", an SVG path with arc commands, which `icons.rs` does not
+  rasterise. **Fix:** the rows use "files", the folder outline of straight segments the Places column already has.
+
+### BUG-071 — EuroReken: the backspace key shows an empty box ✅ FIXED
+- **Status:**   FIXED (`98bb550`) · **Severity:** COSMETIC
+- **Found:**    2026-11-12 · screenshots. The UI font has no glyph for U+232B. **Fix:** `<x` when
+  `text::can_render` says no.
+
+### BUG-072 — keyboard layouts: French 8 key, German punctuation, the keys right of P/L/M on AZERTY, the ISO key ✅ FIXED
+- **Status:**   FIXED (`98bb550`) · **Severity:** MEDIUM for a German keyboard (`- / ( ) = ? ; :` and the umlauts were not where the key caps say)
+- **Found:**    2026-11-12 · writing the AltGr tables of BUG-052 against the key caps
+- **Analysis:** `eurokeymap::base` mapped per layout only the letters and, for AZERTY, the digit row and four
+  punctuation keys; everything else was the US table. German: the whole digit row shifted, ß, ü ö ä, `+ # - , .`
+  shifted. French: the 8 key gave `!` (it is `_`). Belgian and French: the keys right of P, L and M gave `[ ] ' \`.
+  The ISO key left of the bottom row (scancode 0x56, `< >`) was not mapped in any layout, and the USB table had no
+  entry for it (HID usage 0x64) nor for the ISO key left of Enter (0x32).
+- **Fix:**      `eurokeymap::national` (looked up before the shared tables), 0x56 in all four layouts, the two HID
+  usages in `xhci.rs`. Host tests `german_punctuation`, `french_digit_row_and_right_hand_keys`,
+  `belgian_right_hand_keys`, `iso_key_left_of_the_bottom_row`. Dead keys type their own character at once.
+
+### BUG-073 — the 2 s housekeeping of the desktop loop did not run while every iteration was a full repaint ✅ FIXED
+- **Status:**   FIXED (`98bb550`) · **Severity:** LOW/MEDIUM (ended processes not reaped, services and user-space
+  drivers not supervised, the log not flushed, no scrub and no update check for as long as a list, a menu or the
+  launcher was open; a tick that coincided with any other full repaint skipped them too)
+- **Found:**    2026-11-12 · reading the repaint decision for BUG-057
+- **Analysis:** `reap_dead`, `init::supervise`, the three `udrv*::supervise`, `flush_log`, `scrub::maybe_run` and
+  `update::maybe_check` sat in the `else if tick` branch, which runs only when the tick is not a full repaint.
+- **Fix:**      they run on every tick, before the repaint decision. Not provoked separately; the soaks and the TCG
+  matrix run with it.
+
+### BUG-074 — EuroFiles: entries below the bottom of the window cannot be reached ✅ FIXED (mouse wheel)
+- **Status:**   FIXED (`98bb550`) · **Severity:** MEDIUM (`/bin` has more entries than fit a maximized window)
+- **Found:**    2026-11-12 · connecting the mouse wheel: the list had no scroll position at all
+- **Fix:**      `files::wheel` and a first-row index used by render, click, drag and tooltip; a mark at the right
+  edge shows the position. Still no scroll bar to drag and no key for it (said on the help page).
+
+### BUG-075 — 1280x720: windows open partly outside the screen or under the status panel ✅ FIXED
+- **Status:**   FIXED (`98bb550`, `58109e5`) · **Severity:** MEDIUM on a small screen
+- **Found:**    2026-11-12 · the first screenshots at 1280x720 (`proof/uidebug-2026-11/before/720/`): EuroClock almost
+  entirely below the screen, EuroNotes and EuroLog under the status panel, the Terminal and EuroWeb cut off at the
+  bottom; the workspace pager drawn on the bottom line of the help panel
+- **Analysis:** the default window positions and sizes in `main.rs` are constants laid out for 1920x1080.
+- **Fix:**      `main.rs::fit_window` at desktop start and when an installed app's window is placed: inside the
+  screen, left of the status panel when that leaves 640 px, above the pager; nothing changes at 1920x1080. The
+  pager is not drawn while the help panel is open. For testing: boot option `display.mode=<w>x<h>` (`bootopt.rs`).
+- **Shown by:** `proof/uidebug-2026-11/after/720/` (every dock app, the help panel, the six tour cards, the wizard).
+- **Not done:** a window is not moved when it is dragged out of the screen, and the layout does not follow a
+  resolution below 1024x600.
+
+### BUG-076 — EuroFiles: toolbar buttons that are not drawn still take a click ✅ FIXED
+- **Status:**   FIXED (`98bb550`) · **Severity:** LOW
+- **Found:**    2026-11-12 · making Perms, Protect and History fit: `toolbar_click` divided the x position by the
+  92 px pitch without looking at the window width, so a click right of the last drawn button in the toolbar strip
+  of a 720 px window acted as Perms, Protect or History.
+- **Fix:**      one layout function (`tool_rects`) for render, click and tooltip; buttons as wide as their labels,
+  so all nine fit the default window. Part of the `[help]` self-test (`files::tip_selftest`).
+
+### BUG-077 — `gui-smoke.py`: a character of several bytes on the serial console becomes replacement characters ✅ FIXED
+- **Status:**   FIXED (`c50ddf9`, harness) · **Severity:** LOW (a harness)
+- **Found:**    2026-11-12 · the AltGr step: the euro sign of `[e2e] $ echo …` arrived as three U+FFFD
+- **Analysis:** the reader decoded every `recv` on its own; the UART delivers the three bytes in separate reads.
+  **Fix:** an incremental UTF-8 decoder.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

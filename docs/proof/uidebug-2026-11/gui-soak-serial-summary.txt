@@ -1,0 +1,4 @@
+USB, c78a8e8: 1583 serial lines; crash signatures (KERNEL PANIC, panicked at, DOUBLE FAULT, GENERAL PROTECTION FAULT, [idt] PAGE FAULT, [idt] INVALID OPCODE, allocation failed): 0; [tour] lines: 2
+virtio, c78a8e8: 1476 serial lines; crash signatures (KERNEL PANIC, panicked at, DOUBLE FAULT, GENERAL PROTECTION FAULT, [idt] PAGE FAULT, [idt] INVALID OPCODE, allocation failed): 0; [tour] lines: 2
+USB, 58109e5: 1603 serial lines; crash signatures (KERNEL PANIC, panicked at, DOUBLE FAULT, GENERAL PROTECTION FAULT, [idt] PAGE FAULT, [idt] INVALID OPCODE, allocation failed): 0; [tour] lines: 2
+virtio, 58109e5: 1488 serial lines; crash signatures (KERNEL PANIC, panicked at, DOUBLE FAULT, GENERAL PROTECTION FAULT, [idt] PAGE FAULT, [idt] INVALID OPCODE, allocation failed): 0; [tour] lines: 2

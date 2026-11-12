@@ -1,0 +1,17 @@
+# frame_time.py, R630 KVM, smp 4, 4 GiB, USB input, release images
+== before: 7858b72 (feature/app-control)
+FRAME-TIME empty desktop: console echo median 50 ms, max 50 ms; pointer visible after: 128 ms, 128 ms, 129 ms, 47 ms, 128 ms
+FRAME-TIME 7 windows: console echo median 50 ms, max 50 ms; pointer visible after: 44 ms, 45 ms, 45 ms, 124 ms, 44 ms
+FRAME-TIME 7 windows + notification list open (full repaint in every iteration): console echo median 100 ms, max 150 ms; pointer visible after: 373 ms, 291 ms, 307 ms, 371 ms, 291 ms
+== 58109e5 (one commit before the head; the head changes one help text)
+FRAME-TIME empty desktop: console echo median 50 ms, max 50 ms; pointer visible after: 129 ms, 128 ms, 128 ms, 129 ms, 129 ms
+FRAME-TIME 7 windows: console echo median 50 ms, max 50 ms; pointer visible after: 44 ms, 44 ms, 44 ms, 44 ms, 45 ms
+FRAME-TIME 7 windows + notification list open: console echo median 50 ms, max 251 ms; pointer visible after: 46 ms, 44 ms, 43 ms, 35 ms, 45 ms
+== c78a8e8 (head)
+FRAME-TIME empty desktop: console echo median 50 ms, max 50 ms; pointer visible after: 121 ms, 126 ms, 118 ms, 151 ms, 163 ms
+FRAME-TIME 7 windows: console echo median 50 ms, max 50 ms; pointer visible after: 59 ms, 63 ms, 159 ms, 61 ms, 54 ms
+FRAME-TIME 7 windows + notification list open: console echo median 50 ms, max 201 ms; pointer visible after: 45 ms, 46 ms, 39 ms, 44 ms, 43 ms
+== c78a8e8, first measurement, with a TCG guest of this team on the sibling hyperthreads (cpus 10-13 / 30-33)
+FRAME-TIME empty desktop: console echo median 50 ms, max 50 ms; pointer visible after: 172 ms, 157 ms, 136 ms, 167 ms, 132 ms
+FRAME-TIME 7 windows: console echo median 50 ms, max 50 ms; pointer visible after: 128 ms, 44 ms, 42 ms, 38 ms, 47 ms
+FRAME-TIME 7 windows + notification list open: console echo median 50 ms, max 201 ms; pointer visible after: 42 ms, 44 ms, 292 ms, 634 ms, 308 ms

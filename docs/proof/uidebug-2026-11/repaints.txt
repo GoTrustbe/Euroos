@@ -1,0 +1,5 @@
+# the repaints shell command with the notification list open, release image c78a8e8, R630 KVM (scenarios/after.txt, 1920x1080 and 1280x720)
+    | [scon] desktop: 9 full repaints, 1001 loop iterations, 1144 timer ticks since start
+    | [scon] desktop: 11 full repaints, 1417 loop iterations, 1578 timer ticks since start
+    | [scon] desktop: 9 full repaints, 991 loop iterations, 1111 timer ticks since start
+    | [scon] desktop: 11 full repaints, 1409 loop iterations, 1545 timer ticks since start

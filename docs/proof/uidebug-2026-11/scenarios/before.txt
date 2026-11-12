@@ -1,0 +1,109 @@
+shot 00-desktop-boot
+closeall
+nap 1
+shot 01-desktop-empty
+panel
+nap 1
+shot 02-notification-list-open
+key esc
+nap 1
+shot 03-notification-list-after-esc
+desk
+nap 1
+shot 04-notification-list-after-click-beside
+panel
+nap 1
+rdesk
+nap 1
+shot 05-context-menu
+key esc
+nap 1
+shot 06-context-menu-after-esc
+desk
+nap 1
+dock 5
+nap 1
+wclick 80 387
+nap 2
+shot 20-eurobeheer-storage
+wclick 80 107
+nap 1
+closeall
+dock 0
+nap 1.2
+shot app-00-files
+wshrink
+nap 1
+shot app-00-files-smallest
+closeall
+dock 1
+nap 1.2
+shot app-01-notes
+wshrink
+nap 1
+shot app-01-notes-smallest
+closeall
+dock 2
+nap 1.2
+shot app-02-clock
+wshrink
+nap 1
+shot app-02-clock-smallest
+closeall
+dock 3
+nap 1.2
+shot app-03-browser
+wshrink
+nap 1
+shot app-03-browser-smallest
+closeall
+dock 4
+nap 1.2
+shot app-04-terminal
+wshrink
+nap 1
+shot app-04-terminal-smallest
+closeall
+dock 5
+nap 1.2
+shot app-05-settings
+wshrink
+nap 1
+shot app-05-settings-smallest
+closeall
+dock 6
+nap 1.2
+shot app-06-calculator
+wshrink
+nap 1
+shot app-06-calculator-smallest
+closeall
+dock 7
+nap 1.2
+shot app-07-agent
+wshrink
+nap 1
+shot app-07-agent-smallest
+closeall
+dock 8
+nap 1.2
+shot app-08-text
+wshrink
+nap 1
+shot app-08-text-smallest
+closeall
+dock 9
+nap 1.2
+shot app-09-monitor
+wshrink
+nap 1
+shot app-09-monitor-smallest
+closeall
+dock 10
+nap 1.2
+shot app-10-log
+wshrink
+nap 1
+shot app-10-log-smallest
+closeall
+scon lsblk

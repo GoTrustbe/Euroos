@@ -1,0 +1,54 @@
+#!/bin/bash
+# Final runs on the R630 (KVM). usage: final.sh IMAGE TAG. Own CPUs, no NIC or restrict=on.
+B=/srv/euroos/uidebug-runs; S=$B/scripts; I=$B/$1; T=$2; cd $B
+( python3 $S/frame_time2.py $S/gui-smoke.py $I $B/frame-$T --kvm --pin 24-27 > $B/frame-$T.txt 2>&1
+  python3 $S/gui-smoke.py --image $I --workdir $B/soak-usb-$T --kvm --smp 4 --mem 4G --pin 24-27 --input usb --net none --soak 35 --seed 20261112 > $B/soak-usb-$T.out 2>&1
+  echo done > $B/soak-usb-$T.done ) < /dev/null > /dev/null 2>&1 &
+( python3 $S/gui-smoke.py --image $I --workdir $B/soak-virtio-$T --kvm --smp 2 --mem 2G --pin 28-29 --input virtio --net restrict --soak 35 --seed 20261113 > $B/soak-virtio-$T.out 2>&1
+  echo done > $B/soak-virtio-$T.done ) < /dev/null > /dev/null 2>&1 &
+( mkdir -p $B/bt-$T
+  for i in 1 2 3 4 5; do python3 $S/boot-time.py default-$i $I $B/bt-$T --pin 20-21 --hold 20; done > $B/bt-$T.txt 2>&1
+  for i in 1 2 3 4 5; do python3 $S/boot-time.py base-$i $B/base.img $B/bt-$T --pin 20-21 --hold 20; done > $B/bt-$T-base.txt 2>&1
+  echo done > $B/bt-$T.done
+  until [ -f $B/shots-base2.done ]; do sleep 5; done
+  $B/shots-after.sh $1 $T ) < /dev/null > /dev/null 2>&1 &
+disown -a
+#!/bin/bash
+# Final runs on the R630 (KVM). usage: final.sh IMAGE TAG. Own CPUs, no NIC or restrict=on.
+B=/srv/euroos/uidebug-runs; S=$B/scripts; I=$B/$1; T=$2; cd $B
+( python3 $S/frame_time2.py $S/gui-smoke.py $I $B/frame-$T --kvm --pin 30-33 > $B/frame-$T.txt 2>&1
+  python3 $S/gui-smoke.py --image $I --workdir $B/soak-usb-$T --kvm --smp 4 --mem 4G --pin 30-33 --input usb --net none --soak 35 --seed 20261112 > $B/soak-usb-$T.out 2>&1
+  echo done > $B/soak-usb-$T.done ) < /dev/null > /dev/null 2>&1 &
+( python3 $S/gui-smoke.py --image $I --workdir $B/soak-virtio-$T --kvm --smp 2 --mem 2G --pin 34-35 --input virtio --net restrict --soak 35 --seed 20261113 > $B/soak-virtio-$T.out 2>&1
+  echo done > $B/soak-virtio-$T.done ) < /dev/null > /dev/null 2>&1 &
+( mkdir -p $B/bt-$T
+  for i in 1 2 3 4 5; do python3 $S/boot-time.py default-$i $I $B/bt-$T --pin 36-37 --hold 20; done > $B/bt-$T.txt 2>&1
+  for i in 1 2 3 4 5; do python3 $S/boot-time.py base-$i $B/base.img $B/bt-$T --pin 36-37 --hold 20; done > $B/bt-$T-base.txt 2>&1
+  echo done > $B/bt-$T.done
+  true
+  $B/shots-after4.sh $1 $T ) < /dev/null > /dev/null 2>&1 &
+disown -a
+#!/bin/bash
+# after-shots on image $1, tag $2
+B=/srv/euroos/uidebug-runs; S=$B/scripts; I=$B/$1; T=$2
+cd $B
+python3 $S/probe.py $S/gui-smoke.py $I $B/sh-$T-1080 $S/after.txt --kvm --pin 38-39 > $B/sh-$T-1080.out 2>&1
+python3 $S/probe.py $S/gui-smoke.py $I $B/sh-$T-720 $S/after.txt --kvm --pin 38-39 --bootopt display.mode=1280x720 > $B/sh-$T-720.out 2>&1
+python3 $S/probe.py $S/gui-smoke.py $I $B/sh-$T-tour-1080 $S/tour.txt --kvm --pin 38-39 --keep-tour > $B/sh-$T-tour-1080.out 2>&1
+python3 $S/probe.py $S/gui-smoke.py $I $B/sh-$T-tour-720 $S/tour.txt --kvm --pin 38-39 --keep-tour --bootopt display.mode=1280x720 > $B/sh-$T-tour-720.out 2>&1
+for r in 1080 720; do
+  rm -f $B/blank-$T-$r.img; truncate -s 4G $B/blank-$T-$r.img
+  O=""; [ $r = 720 ] && O="--bootopt display.mode=1280x720"
+  python3 $S/probe.py $S/gui-smoke.py $I $B/sh-$T-wizard-$r $S/wizard.txt --kvm --pin 38-39 $O --extra "-drive id=tgt,format=raw,file=$B/blank-$T-$r.img,if=none -device virtio-blk-pci,drive=tgt,disable-modern=on" > $B/sh-$T-wizard-$r.out 2>&1
+  rm -f $B/blank-$T-$r.img
+done
+echo done > $B/shots-$T.done
+#!/bin/bash
+B=/srv/euroos/uidebug-runs; S=$B/scripts; cd $B
+python3 $S/probe.py $S/gui-smoke.py $B/base.img $B/sh-base-1080 $S/before.txt --kvm --pin 22-23 --nofit > $B/sh-base-1080.out 2>&1
+rm -f $B/blank-base.img; truncate -s 4G $B/blank-base.img
+python3 $S/probe.py $S/gui-smoke.py $B/base.img $B/sh-base-wizard-1080 $S/wizard.txt --kvm --pin 22-23 --extra "-drive id=tgt,format=raw,file=$B/blank-base.img,if=none -device virtio-blk-pci,drive=tgt,disable-modern=on" > $B/sh-base-wizard-1080.out 2>&1
+rm -f $B/blank-base.img
+# the new gui-smoke against the image without the fixes: the new steps must fail there
+python3 $S/gui-smoke.py --image $B/base.img --workdir $B/gs-base-newharness --kvm --smp 4 --mem 4G --pin 22-23 > $B/gs-base-newharness.out 2>&1
+echo done > $B/shots-base.done

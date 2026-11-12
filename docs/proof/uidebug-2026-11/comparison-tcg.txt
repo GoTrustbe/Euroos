@@ -1,0 +1,79 @@
+== ../integ-2026-11/tcg-user-smp4-iommu.markers  vs  tcg/user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   altgr: OKx1
+   disks: OKx1
+
+== ../integ-2026-11/tcg-user-smp4-noiommu.markers  vs  tcg/user-smp4-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   altgr: OKx1
+   disks: OKx1
+
+== ../integ-2026-11/tcg-kernel-smp4.markers  vs  tcg/kernel-smp4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   altgr: OKx1
+   disks: OKx1
+
+== ../integ-2026-11/tcg-storage-smp4-iommu-1g.markers  vs  tcg/storage-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   altgr: OKx1
+   disks: OKx1
+
+== ../integ-2026-11/tcg-combined-smp4-iommu-1g.markers  vs  tcg/combined-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   altgr: OKx1
+   disks: OKx1
+
+== ../integ-2026-11/tcg-user-smp1-iommu.markers  vs  tcg/user-smp1-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   altgr: OKx1
+   disks: OKx1
+
+== ../integ-2026-11/tcg-user-smp1-noiommu.markers  vs  tcg/user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   altgr: OKx1
+   disks: OKx1
+
+== ../integ-2026-11/tcg-kernel-smp1.markers  vs  tcg/kernel-smp1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   altgr: OKx1
+   disks: OKx1
+
+== ../integ-2026-11/tcg-storage-smp1-iommu-1g.markers  vs  tcg/storage-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   altgr: OKx1
+   disks: OKx1
+
+== ../integ-2026-11/tcg-combined-smp1-iommu-1g.markers  vs  tcg/combined-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   altgr: OKx1
+   disks: OKx1
