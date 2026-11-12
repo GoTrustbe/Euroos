@@ -4230,6 +4230,8 @@ fn main() -> Status {
         // The process self-tests of 2026-11: [bug063], [fdspace], [bug053].
         ring3::exit_flag_selftest(&mut allocator);
         ring3::fdspace_selftest(&mut allocator);
+        // BUG-098: one descriptor table per process ([fdsem]).
+        ring3::fdsem_selftest(&mut allocator);
         // BUG-080: what a Linux program gets as random bytes ([linux-rand]).
         linuxrand::selftest(&mut allocator);
         ring3::lowmem_launch_selftest(&mut allocator);

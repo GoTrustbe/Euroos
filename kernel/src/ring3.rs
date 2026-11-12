@@ -7953,6 +7953,14 @@ static LINUXPROG_ELF: &[u8] = include_bytes!("../../userland/linuxprog.elf");
 static FORKTEST_ELF: &[u8] = include_bytes!("../../userland/forktest.elf");
 static EXECEE_ELF: &[u8] = include_bytes!("../../userland/execee.elf");
 static FORKPIPE_ELF: &[u8] = include_bytes!("../../userland/forkpipe.elf");
+/// The [fdsem] self-test programs: descriptor semantics per process (BUG-098).
+/// `gfdsem` is glibc with fork (userland/glibc/gfdsem.c); `mfdsem` is the same
+/// source against musl as a static PIE, its single-process half
+/// (userland/musl/); `fdsem` is freestanding and runs, forks and execs on the
+/// background path (userland/fdsem.c).
+static GFDSEM_ELF: &[u8] = include_bytes!("../../userland/glibc/gfdsem");
+static MFDSEM_ELF: &[u8] = include_bytes!("../../userland/musl/mfdsem");
+static FDSEM_ELF: &[u8] = include_bytes!("../../userland/fdsem.elf");
 /// The [fdspace] self-test program (userland/pipehold.c): holds a pipe and a file open.
 static PIPEHOLD_ELF: &[u8] = include_bytes!("../../userland/pipehold.elf");
 static TICKER_ELF: &[u8] = include_bytes!("../../userland/ticker.elf");
@@ -8762,6 +8770,9 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gpoll" => include_bytes!("../../userland/glibc/gpoll.sig"),
         "/bin/gscm" => include_bytes!("../../userland/glibc/gscm.sig"),
         "/bin/gscm3" => include_bytes!("../../userland/glibc/gscm3.sig"),
+        "/bin/gfdsem" => include_bytes!("../../userland/glibc/gfdsem.sig"),
+        "/bin/mfdsem" => include_bytes!("../../userland/musl/mfdsem.sig"),
+        "/bin/fdsem" => include_bytes!("../../userland/fdsem.elf.sig"),
         "/bin/gsdl" => include_bytes!("../../userland/glibc/gsdl.sig"),
         "/bin/gshm" => include_bytes!("../../userland/glibc/gshm.sig"),
         "/bin/gshm2" => include_bytes!("../../userland/glibc/gshm2.sig"),
@@ -12462,6 +12473,77 @@ pub fn fdspace_selftest(falloc: &mut FrameAllocator) {
     crate::serial_println!(
         "[fdspace] {started} background processes keep a pipe and a file open across a foreground launch (musl exit={fg_code}, glibc exit={}): phase1={phase1_ok} ended={ended} pass={pass}/{}{detail}{} → {}",
         glibc_exit as i64, PIDS.len(), fdspace_selftest_extra(),
+        if ok { "OK ✓" } else { "FAILED" }
+    );
+}
+
+/// BUG-098 regression self-test `[fdsem]`: one descriptor table per process,
+/// with the Linux rules. Three programs, each printing one line per rule:
+///
+/// * `gfdsem` (glibc): dup and fork share the open file description (offset,
+///   status flags); a close in the child closes nothing in the parent and the
+///   child reuses the number; end-of-file, EPIPE and POLLHUP on a pipe or a
+///   socket when the LAST descriptor of the other end closes, in whatever
+///   process; an eventfd and an epoll instance across fork; close-on-exec
+///   flags per descriptor; SCM_RIGHTS between two tables; lowest-number-first
+///   for every kind of object; `/proc/self/fd`, `close_range`; 1200
+///   descriptors and 700 open files in one process.
+/// * `mfdsem` (musl, static PIE, foreground): the single-process half.
+/// * `fdsem` (freestanding, background path): the same rules where a
+///   background process forks, and close-on-exec across a real exec.
+///
+/// What the three printed on the tree before the descriptor tables is in
+/// docs/proof/chrome-2026-11b/.
+pub fn fdsem_selftest(falloc: &mut FrameAllocator) {
+    let caps = CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO | CAP_NET;
+    let fails = |tag: &str, out: &str| {
+        for l in out.lines().filter(|l| l.contains("FAIL")) {
+            crate::serial_println!("[fdsem]   {tag}: {}", l.trim_end());
+        }
+    };
+    let last = |out: &str, what: &str| -> String {
+        out.lines().rev().find(|l| l.contains(what)).map(|l| String::from(l.trim_end()))
+            .unwrap_or_else(|| String::from("(no result line)"))
+    };
+    // glibc, with fork.
+    let (gout, gexit) = run_glibc(falloc, GFDSEM_ELF, ldlinux_bytes(), &[b"/bin/gfdsem"], &[b"PATH=/bin"], caps);
+    fails("glibc", &gout);
+    let gsum = last(&gout, if gexit == 171 { "GFDSEM: PASS" } else { "GFDSEM: FAILED" }).replace("GFDSEM: ", "");
+    // musl libc, one process, in the foreground.
+    let (mexit, mout) = x86_64::instructions::interrupts::without_interrupts(||
+        run_args(falloc, MFDSEM_ELF, &[b"/bin/mfdsem"], caps, true));
+    fails("musl", &mout);
+    let msum = last(&mout, if mexit == 171 { "MFDSEM: PASS" } else { "MFDSEM: FAILED" }).replace("MFDSEM: ", "");
+    // Freestanding on the background path, with fork and exec.
+    const PID: u64 = 0x4_0610;
+    register_file("/tmp/fdsem-data", b"abcdefgh".to_vec());
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if !FILES.lock().iter().any(|(p, _)| p == "/bin/fdsem") {
+            register_file_static("/bin/fdsem", FDSEM_ELF);
+        }
+    });
+    reap_dead(falloc);
+    let spaces = fd_spaces_in_use();
+    let started = spawn_bg_musl_caps(falloc, FDSEM_ELF, PID, b"/bin/fdsem", CAP_CONSOLE | CAP_FILE, true).is_some();
+    let ended = started && selftest_wait(6000, &|| !bg_alive(PID));
+    let blines = bg_output(PID);
+    for l in blines.iter().filter(|l| l.contains("FAIL")) {
+        crate::serial_println!("[fdsem]   background: {}", l.trim_end());
+    }
+    let bpass = blines.iter().any(|l| l.contains("fdsem: PASS"));
+    let bsum = blines.iter().rev().find(|l| l.contains("fdsem: PASS") || l.contains("fdsem: FAILED"))
+        .map(|l| l.replace("fdsem: ", "")).unwrap_or_else(|| String::from("(no result line)"));
+    if bg_alive(PID) {
+        kill_pid(PID);
+    }
+    selftest_wait(200, &|| false);
+    reap_dead(falloc);
+    reap_dead(falloc);
+    let balanced = fd_spaces_in_use() <= spaces;
+    let ok = gexit == 171 && mexit == 171 && ended && bpass && balanced;
+    crate::serial_println!(
+        "[fdsem] descriptor tables per process: glibc with fork {gsum} (exit {gexit}, want 171) | musl libc {msum} (exit {mexit}, want 171) | background path with fork and exec {bsum} (ended={ended}) | fd spaces {spaces} -> {} → {}",
+        fd_spaces_in_use(),
         if ok { "OK ✓" } else { "FAILED" }
     );
 }
