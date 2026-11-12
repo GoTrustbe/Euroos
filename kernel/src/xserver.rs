@@ -122,6 +122,7 @@ pub fn close(fd: u64) {
         let idx = (fd - XCONN_FD_BASE) as usize;
         XCONNS.lock()[idx] = None;
         SEL_OWNERS.lock().retain(|&(_, _, c)| c != idx);
+        XFIXES_SELECT.lock().retain(|e| e.0 != idx);
     }
 }
 
@@ -165,6 +166,23 @@ fn atom_name(atom: u32) -> Option<alloc::string::String> {
         _ => ATOMS.lock().get((atom as usize).checked_sub(69)?).cloned(),
     }
 }
+
+/// The hosted desktop client (Chromium) gets the parts of a display server that
+/// the boot-phase test clients were never offered: XFIXES selection events and
+/// PropertyNotify. Set by the desktop before it starts the client.
+static DESKTOP_CLIENT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+pub fn set_desktop_client(on: bool) {
+    DESKTOP_CLIENT.store(on, core::sync::atomic::Ordering::Relaxed);
+    if !on {
+        XFIXES_SELECT.lock().clear();
+    }
+}
+/// XFIXES: major opcode, first event, first error (QueryExtension hands them out).
+const XFIXES_OPCODE: u8 = 138;
+const XFIXES_EVENT: u8 = 87;
+const XFIXES_ERROR: u8 = 140;
+/// XFixesSelectSelectionInput: (connection, window, selection atom, event mask).
+static XFIXES_SELECT: Mutex<Vec<(usize, u32, u32, u32)>> = Mutex::new(Vec::new());
 
 /// Who owns each selection: (selection atom, owner window, owner connection).
 /// Chrome copies by taking CLIPBOARD and then ASKS who owns it; only when the
@@ -1077,15 +1095,72 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             // GenericEvents instead of core ButtonPress) is the whole question about
             // why it reads our click and does nothing.
             let nlen = ru16(c, req, 4) as usize;
+            let mut xfixes = false;
             if req.len() >= 8 + nlen {
                 let name = alloc::string::String::from_utf8_lossy(&req[8..8 + nlen]);
-                trace(format_args!("QueryExtension {:?} -> not present", name));
+                xfixes = name == "XFIXES" && DESKTOP_CLIENT.load(core::sync::atomic::Ordering::Relaxed);
+                trace(format_args!("QueryExtension {:?} -> {}", name, if xfixes { "present" } else { "not present" }));
             }
             let mut r = reply_header(c, 0);
             // 24 extra bytes already zero: present(1)=0, major(1), first-event(1),
-            // first-error(1), then 20 unused. Nothing more to set.
+            // first-error(1), then 20 unused.
+            if xfixes {
+                r[8] = 1;
+                r[9] = XFIXES_OPCODE;
+                r[10] = XFIXES_EVENT;
+                r[11] = XFIXES_ERROR;
+            }
             pad_reply(&mut r);
             c.outbuf.extend_from_slice(&r);
+        }
+        // XFIXES, as far as a client needs it to learn that a selection changed
+        // hands: QueryVersion (minor 0) and SelectSelectionInput (minor 2). The
+        // other requests a toolkit sends (cursor hide/show, regions) owe no
+        // reply and are ignored; the four that do get BadImplementation.
+        XFIXES_OPCODE if DESKTOP_CLIENT.load(core::sync::atomic::Ordering::Relaxed) => match detail {
+            0 => {
+                let major = ru32(c, req, 4).min(5);
+                let mut r = reply_header(c, 0);
+                wr32(c, &mut r, 8, major);
+                wr32(c, &mut r, 12, 0);
+                c.outbuf.extend_from_slice(&r);
+            }
+            2 => {
+                let win = ru32(c, req, 4);
+                let sel = ru32(c, req, 8);
+                let mask = ru32(c, req, 12);
+                let me = conn_index(c);
+                let mut t = XFIXES_SELECT.lock();
+                t.retain(|e| !(e.0 == me && e.1 == win && e.2 == sel));
+                if mask != 0 {
+                    t.push((me, win, sel, mask));
+                }
+                trace(format_args!("XFixesSelectSelectionInput window={win:#x} selection={sel} mask={mask:#x}"));
+            }
+            4 | 19 | 24 | 25 | 34 => send_error(c, 17, 0, opcode, detail as u16),
+            _ => {}
+        },
+        // ChangeProperty (18) / DeleteProperty (19): properties are not stored, but a
+        // client that selected PropertyChange on the window is told, with the server
+        // time. That event is how a toolkit ASKS for the server time (a no-op
+        // property change, then it waits for the notify); without it chrome stamps
+        // its selections with CurrentTime.
+        18 | 19 if DESKTOP_CLIENT.load(core::sync::atomic::Ordering::Relaxed) => {
+            let win = ru32(c, req, 4);
+            let atom = ru32(c, req, 8);
+            let me = conn_index(c);
+            let wants = SELECTIONS.lock().iter().any(|(w, ci, m)| *w == win && *ci == me && m & 0x0040_0000 != 0)
+                || c.windows.iter().any(|w| w.id == win && w.event_mask & 0x0040_0000 != 0);
+            if wants {
+                let mut e = [0u8; 32];
+                e[0] = 28; // PropertyNotify
+                e[2..4].copy_from_slice(&c.seq.to_le_bytes());
+                e[4..8].copy_from_slice(&win.to_le_bytes());
+                e[8..12].copy_from_slice(&atom.to_le_bytes());
+                e[12..16].copy_from_slice(&((crate::interrupts::ticks() * 10) as u32).to_le_bytes());
+                e[16] = if opcode == 19 { 1 } else { 0 }; // Deleted / NewValue
+                c.outbuf.extend_from_slice(&e);
+            }
         }
         // GetInputFocus (43): Xlib's sync/roundtrip. Reply: revert-to + focus window.
         43 => {
@@ -1149,6 +1224,31 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                         e[2..4].copy_from_slice(&o.seq.to_le_bytes());
                         o.outbuf.extend_from_slice(&e);
                     }
+                }
+            }
+            // XFIXES: everyone who asked to hear about this selection. Chrome counts
+            // these events: its clipboard "sequence number" only moves when one
+            // arrives, and a paste within five seconds of the previous one is
+            // answered from a cache keyed by that number. Without the event the
+            // second of two quick copy-and-pastes pasted the FIRST text.
+            let subs: Vec<(usize, u32)> = XFIXES_SELECT.lock().iter()
+                .filter(|e| e.2 == sel && e.3 & 0x1 != 0).map(|e| (e.0, e.1)).collect();
+            let now = (crate::interrupts::ticks() * 10) as u32;
+            for (ci, win) in subs {
+                let mut e = [0u8; 32];
+                e[0] = XFIXES_EVENT; // XFixesSelectionNotify
+                e[1] = 0; // subtype: SetSelectionOwner
+                e[4..8].copy_from_slice(&win.to_le_bytes());
+                e[8..12].copy_from_slice(&owner.to_le_bytes());
+                e[12..16].copy_from_slice(&sel.to_le_bytes());
+                e[16..20].copy_from_slice(&now.to_le_bytes());
+                e[20..24].copy_from_slice(&now.to_le_bytes());
+                if ci == me {
+                    e[2..4].copy_from_slice(&c.seq.to_le_bytes());
+                    c.outbuf.extend_from_slice(&e);
+                } else if let Some(Some(o)) = XCONNS.lock().get_mut(ci).map(|x| x.as_mut()) {
+                    e[2..4].copy_from_slice(&o.seq.to_le_bytes());
+                    o.outbuf.extend_from_slice(&e);
                 }
             }
             trace(format_args!("SetSelectionOwner selection={sel} owner={owner:#x}"));

@@ -470,6 +470,7 @@ fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
     if let Some(fbi) = FB_INFO.get() {
         xserver::set_screen(fbi.width, fbi.height);
     }
+    xserver::set_desktop_client(true);
     // CHROME_ARGV carries --remote-debugging-pipe, so fd 3/4 MUST exist before
     // chrome's first instruction — and the input bridge wants the session anyway:
     // desktop clicks and typing ride the same reliable DevTools route as the
