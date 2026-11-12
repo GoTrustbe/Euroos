@@ -2975,6 +2975,10 @@ fn reset_fd_table() {
 }
 
 fn reset_fd_table_inner() {
+    // A new program: its unknown syscalls are logged afresh (BUG-020).
+    for w in LINUX_ENOSYS_SEEN.iter() {
+        w.store(0, Ordering::Relaxed);
+    }
     OPEN_FDS.lock().fill(None);
     for slot in OPEN_DIRS.lock().iter_mut() {
         *slot = None;
@@ -17568,11 +17572,26 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
         }
         _ => {
-            crate::serial_println!("[linux-abi] ENOSYS Linux syscall {num}");
+            // Logged at the first call of each number in a run (BUG-020): the
+            // line says which call a program misses, and a program that makes
+            // the same unknown call ten thousand times says nothing new.
+            LINUX_ENOSYS.fetch_add(1, Ordering::Relaxed);
+            let first = num >= 512 || {
+                let bit = 1u64 << (num % 64);
+                LINUX_ENOSYS_SEEN[(num / 64) as usize].fetch_or(bit, Ordering::Relaxed) & bit == 0
+            };
+            if first {
+                crate::serial_println!("[linux-abi] ENOSYS Linux syscall {num}");
+            }
             (-38i64) as u64 // -ENOSYS (Linux convention: negative errno)
         }
     }
 }
+
+/// Linux-path syscalls answered with -ENOSYS (counted over the boot), and the
+/// numbers already logged in the current run (cleared when a program starts).
+pub static LINUX_ENOSYS: AtomicU64 = AtomicU64::new(0);
+static LINUX_ENOSYS_SEEN: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 
 /// Status of the hardware protection, for `shell`/diagnostics.
 static SMEP_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -17752,6 +17771,13 @@ pub fn run_args(
     let heap = arena + 0x80000; // +512 KiB
     let stack_top = arena + MIB2; // user stack grows downward from the arena top
     HEAP_BREAK.store(heap, Ordering::Relaxed);
+    // BUG-120: no brk region of its own. Without this the region of the last
+    // glibc program was still there: brk(0) answered with an address in an
+    // arena that is gone, musl's malloc grew "its" heap there and the program
+    // died on its first larger allocation (page fault outside its arena). With
+    // an empty region brk refuses and musl takes its memory from mmap.
+    BRK_CUR.store(0, Ordering::Relaxed);
+    BRK_END.store(0, Ordering::Relaxed);
     ARENA_BASE.store(arena, Ordering::Relaxed); // audit C1
     HEAP_END.store(arena + 0x180000, Ordering::Relaxed); // ~1 MiB heap
 
