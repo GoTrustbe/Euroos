@@ -14280,12 +14280,16 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // epoll timeout and result say whether it is parked on an infinite
             // wait (a lost wakeup) or cycling on a timeout with nothing to do.
             let r = epoll_wait(a1, a2, a3, a4);
-            if thread_name(crate::sched::current()) == "Compositor" {
-                static LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(40);
-                if LEFT.fetch_sub(1, Ordering::Relaxed) > 0 {
-                    crate::serial_println!("[compo] epoll_wait(ep={a1}, max={a3}, timeout={}) = {}",
-                        a4 as i64, r as i64);
-                }
+            // Forty lines, then nothing: the budget used to be counted down with
+            // fetch_sub on an unsigned counter, which wraps at zero, so every
+            // Compositor wait of the session printed a line (4540 in four
+            // minutes), and every epoll_wait of every thread paid for the name
+            // lookup.
+            static LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(40);
+            if LEFT.load(Ordering::Relaxed) > 0 && thread_name(crate::sched::current()) == "Compositor" {
+                LEFT.fetch_sub(1, Ordering::Relaxed);
+                crate::serial_println!("[compo] epoll_wait(ep={a1}, max={a3}, timeout={}) = {}",
+                    a4 as i64, r as i64);
             }
             r
         }

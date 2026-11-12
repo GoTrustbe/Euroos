@@ -2022,30 +2022,25 @@ fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, rx: i16, ry: i16
     // are piling up unread, and no amount of aiming at the right pixel would help.
     trace(format_args!("-> input kind={kind} detail={detail} window={window:#x} at({ex},{ey}) queued={} B",
         c.outbuf.len()));
-    // Events piling up unread: the client is not collecting them. Ask the next waits to
-    // say what they are waiting on and what we report as ready — the only way to tell
-    // "chrome never watches this fd" from "we tell it the fd is empty" from "we say
-    // ready and chrome ignores it".
-    // Re-arm with a cooldown instead of once-only: the first backlog often happens
-    // during hover (the thread is merely busy), and the dump that matters is the one
-    // taken while the click sits unread minutes later.
-    if c.outbuf.len() >= 128 {
+    // Events piling up unread: the client is not collecting them. This used to
+    // dump every thread, the futex table, the syscall histogram and the epoll sets
+    // as soon as FOUR events were queued, at most every 30 s: the instrument for a
+    // browser that never read its connection (BUG-090). With a browser that does
+    // read, four queued events is a person typing, and the dump (some 400 lines
+    // on the serial port with interrupts off) was itself the stall: the USB
+    // keyboard's reports were not collected while it printed, and three or four
+    // characters of a typed word were lost (BUG-095). Now: one line, and only
+    // for a backlog no healthy client has (512 events). `cdiag` in the shell
+    // prints the rest on request.
+    if c.outbuf.len() >= 16 * 1024 {
         let now = crate::interrupts::ticks();
         let last = STALL_LAST_DUMP.load(core::sync::atomic::Ordering::Relaxed);
         if now >= last + 3000
             && STALL_LAST_DUMP.compare_exchange(last, now,
                 core::sync::atomic::Ordering::Relaxed, core::sync::atomic::Ordering::Relaxed).is_ok()
         {
-            crate::serial_println!("[xserver] {} B of input queued unread on connection {} — who should be reading it?",
+            crate::serial_println!("[xserver] {} B of input queued unread on connection {}: the client is not reading (cdiag shows its threads)",
                 c.outbuf.len(), conn_index(c));
-            crate::ring3::arm_wait_diag(30);
-            crate::ring3::dump_threads_now("input events queued unread");
-            crate::ring3::dump_main_syscalls();
-            crate::ring3::dump_futex_state();
-            crate::ring3::dump_syscall_histogram();
-            crate::ring3::dump_epoll_sets();
-            // From here the profile is about the STALL, not about startup.
-            crate::ring3::reset_rip_profile();
         }
     }
 }
