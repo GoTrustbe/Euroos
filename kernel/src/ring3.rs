@@ -7547,6 +7547,8 @@ static LINUXPROG_ELF: &[u8] = include_bytes!("../../userland/linuxprog.elf");
 static FORKTEST_ELF: &[u8] = include_bytes!("../../userland/forktest.elf");
 static EXECEE_ELF: &[u8] = include_bytes!("../../userland/execee.elf");
 static FORKPIPE_ELF: &[u8] = include_bytes!("../../userland/forkpipe.elf");
+/// The [fdspace] self-test program (userland/pipehold.c): holds a pipe and a file open.
+static PIPEHOLD_ELF: &[u8] = include_bytes!("../../userland/pipehold.elf");
 static TICKER_ELF: &[u8] = include_bytes!("../../userland/ticker.elf");
 static MUSLPROG_ELF: &[u8] = include_bytes!("../../userland/muslprog.elf");
 static ARGVPROG_ELF: &[u8] = include_bytes!("../../userland/argvprog.elf");
@@ -11865,6 +11867,15 @@ static SPAWN_WINDOW_RAN: core::sync::atomic::AtomicU8 = core::sync::atomic::Atom
 /// (exit 42, the launcher wakes). Before the fix the window ran the program and
 /// its exit_group returned through a stale `SAVED_KERNEL_RSP`.
 pub fn spawn_window_selftest(falloc: &mut FrameAllocator) {
+    spawn_window_selftest_inner(falloc);
+    // The process self-tests of 2026-11 run from here, so that main.rs
+    // (which already calls this function in its SELFTEST block) needs no new line.
+    exit_flag_selftest(falloc);
+    fdspace_selftest(falloc);
+    lowmem_launch_selftest(falloc);
+}
+
+fn spawn_window_selftest_inner(falloc: &mut FrameAllocator) {
     let caps = CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO;
     SPAWN_WINDOW_RAN.store(0, Ordering::Relaxed);
     SPAWN_WINDOW_PROBE.store(true, Ordering::Relaxed);
@@ -11886,6 +11897,309 @@ pub fn spawn_window_selftest(falloc: &mut FrameAllocator) {
     );
 }
 
+
+/// The control file of the [fdspace] self-test: `pipehold` polls it by path and
+/// goes on when its first byte is `'1'`.
+const PIPEHOLD_CTL: &str = "/tmp/kdebug-pipehold";
+
+fn pipehold_ctl(byte: u8) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut files = FILES.lock();
+        match files.iter_mut().find(|(p, _)| p == PIPEHOLD_CTL) {
+            Some(e) => e.1 = alloc::borrow::Cow::Owned(alloc::vec![byte]),
+            None => files.push((String::from(PIPEHOLD_CTL), alloc::borrow::Cow::Owned(alloc::vec![byte]))),
+        }
+    });
+}
+
+/// A foreground run of /bin/hello on the boot task. `run_args` comes back
+/// through the syscall exit path with interrupts off; like every caller of
+/// it, restore the flag.
+fn selftest_run_hello(falloc: &mut FrameAllocator) -> (u64, String) {
+    x86_64::instructions::interrupts::without_interrupts(|| run_args(falloc, HELLO_ELF, &[b"hello"], CAP_CONSOLE, false))
+}
+
+/// Give the CPU away until `pred` holds or `ticks` timer ticks have passed.
+fn selftest_wait(ticks: u64, pred: &dyn Fn() -> bool) -> bool {
+    let end = crate::interrupts::ticks() + ticks;
+    while !pred() && crate::interrupts::ticks() < end {
+        crate::sched::sleep_ticks(1);
+        crate::sched::yield_now();
+    }
+    pred()
+}
+
+/// BUG-060 regression self-test `[fdspace]`: two background processes each open
+/// a pipe and a file and do one round trip (phase 1). Then the launcher starts
+/// programs in the foreground, a musl one and a glibc one; every launch begins
+/// with `reset_fd_table`. After that the background processes use the same
+/// descriptors again (phase 2). With one global set of tables the launch wiped
+/// them: the write went to the console, the reads returned nothing.
+pub fn fdspace_selftest(falloc: &mut FrameAllocator) {
+    const PIDS: [u64; 2] = [0x4_0601, 0x4_0602];
+    reap_dead(falloc);
+    pipehold_ctl(b'0');
+    let mut started = 0usize;
+    for &pid in PIDS.iter() {
+        if spawn_bg_musl_caps(falloc, PIPEHOLD_ELF, pid, b"/bin/pipehold", CAP_CONSOLE | CAP_FILE, true).is_some() {
+            started += 1;
+        }
+    }
+    let has = |pid: u64, what: &str| bg_output(pid).iter().any(|l| l.contains(what));
+    let phase1 = selftest_wait(3000, &|| PIDS.iter().all(|&p| has(p, "phase1")));
+    let phase1_ok = PIDS.iter().all(|&p| has(p, "phase1 pipe=ok file=ok"));
+    // The foreground launches. A glibc launch that finds no arena (512 MiB) has
+    // reset the tables all the same: the reset is its first step.
+    let (fg_code, _) = selftest_run_hello(falloc);
+    let (_, glibc_exit) = run_glibc(falloc, gtiny_bytes(), ldlinux_bytes(), &[b"/bin/gtiny"], &[b"PATH=/bin"],
+        CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO);
+    pipehold_ctl(b'1');
+    let ended = selftest_wait(3000, &|| PIDS.iter().all(|&p| !bg_alive(p)));
+    let mut pass = 0usize;
+    let mut detail = String::new();
+    for &pid in PIDS.iter() {
+        let lines = bg_output(pid);
+        if lines.iter().any(|l| l.contains("pipehold: PASS")) {
+            pass += 1;
+        }
+        let p2 = lines.iter().find(|l| l.contains("phase2")).cloned().unwrap_or_else(|| String::from("(no phase2 line)"));
+        let p2 = p2.find("phase2").map(|i| String::from(&p2[i..])).unwrap_or(p2);
+        detail.push_str(&alloc::format!(" | pid {pid:#x}: {p2}"));
+        if bg_alive(pid) {
+            kill_pid(pid);
+        }
+    }
+    reap_dead(falloc);
+    let ok = started == PIDS.len() && phase1 && phase1_ok && ended && pass == PIDS.len() && fg_code != u64::MAX;
+    crate::serial_println!(
+        "[fdspace] {started} background processes keep a pipe and a file open across a foreground launch (musl exit={fg_code}, glibc exit={}): phase1={phase1_ok} ended={ended} pass={pass}/{}{detail}{} → {}",
+        glibc_exit as i64, PIDS.len(), fdspace_selftest_extra(),
+        if ok { "OK ✓" } else { "FAILED" }
+    );
+}
+
+/// What the [fdspace] line says about the fd spaces themselves.
+fn fdspace_selftest_extra() -> String {
+    String::new()
+}
+
+/// The frame allocator drained for a process-start test: everything is taken
+/// except a 2 MiB-aligned hole (the arena of the process to start); `spare`
+/// holds frames that are handed back one at a time.
+struct DrainedFrames {
+    held: alloc::vec::Vec<(u64, usize)>,
+    spare: alloc::vec::Vec<u64>,
+}
+
+/// Take every free frame except a 2 MiB-aligned hole of `hole` frames; keep
+/// `spare` single frames aside. What a process start then finds is exactly its
+/// arena, plus one frame for every [`DrainedFrames::give_one`]. None when no
+/// such hole exists. The frame allocator has one owner (the boot task holds
+/// it), so nothing else is starved meanwhile.
+fn drain_frames_except(falloc: &mut FrameAllocator, hole: usize, spare: usize) -> Option<DrainedFrames> {
+    let hole_base = falloc.allocate_aligned(hole, 512).ok()?;
+    let mut d = DrainedFrames { held: alloc::vec::Vec::new(), spare: alloc::vec::Vec::new() };
+    // One contiguous run, handed back frame by frame from its top: what is free
+    // after k hand-backs is k adjacent frames (a kernel stack needs four).
+    if let Ok(b) = falloc.allocate_contiguous(spare) {
+        for i in 0..spare as u64 {
+            d.spare.push(b + i * 4096);
+        }
+    }
+    // Large runs first (each search is linear in the bitmap), then single
+    // frames, which the allocator finds from its hint.
+    let mut n = 1usize << 18;
+    while n >= 64 {
+        match falloc.allocate_contiguous(n) {
+            Ok(b) => d.held.push((b, n)),
+            Err(_) => n /= 2,
+        }
+    }
+    while let Ok(f) = falloc.allocate() {
+        d.held.push((f, 1));
+    }
+    for f in 0..hole as u64 {
+        let _ = falloc.free(hole_base + f * 4096);
+    }
+    Some(d)
+}
+
+impl DrainedFrames {
+    /// One more free frame for the next attempt.
+    fn give_one(&mut self, falloc: &mut FrameAllocator) -> bool {
+        match self.spare.pop() {
+            Some(f) => falloc.free(f).is_ok(),
+            None => false,
+        }
+    }
+
+    /// Everything back.
+    fn release(self, falloc: &mut FrameAllocator) {
+        for (base, n) in self.held {
+            for f in 0..n as u64 {
+                let _ = falloc.free(base + f * 4096);
+            }
+        }
+        for f in self.spare {
+            let _ = falloc.free(f);
+        }
+    }
+}
+
+/// BUG-053 regression self-test `[bug053]`: process starts that cannot get
+/// their frames, provoked, for the three kinds of start.
+///
+/// For each kind the frame allocator is drained down to the arena of the
+/// process, and one more frame is handed back before every further attempt:
+/// the start is refused until the spare frames cover the kernel stack and the
+/// page tables, and every refusal must leave exactly the frames it found. At
+/// the first attempt that has enough, the process runs with nothing else free,
+/// ends, and gives everything back. Last, a glibc launch whose executable is
+/// not an ELF (it fails after the arena was taken), and an ordinary launch to
+/// show the next one still works.
+pub fn lowmem_launch_selftest(falloc: &mut FrameAllocator) {
+    const SPARE: usize = 24;
+    reap_dead(falloc);
+    let base_free = falloc.free_frames();
+    let mut kept: i64 = 0; // frames a refused start did not give back, summed
+    let mut notes = String::new();
+
+    // 1. A background musl process: 2 MiB arena, 4-frame kernel stack, page tables.
+    pipehold_ctl(b'0');
+    let (mut refused, mut started_at) = (0usize, -1i64);
+    let pid = 0x4_0530u64;
+    if let Some(mut d) = drain_frames_except(falloc, 512, SPARE) {
+        let mut started = false;
+        for k in 0..=SPARE {
+            if k > 0 && !d.give_one(falloc) {
+                break;
+            }
+            let before = falloc.free_frames();
+            if spawn_bg_musl(falloc, PIPEHOLD_ELF, pid, b"/bin/pipehold") {
+                started_at = k as i64;
+                started = true;
+                break;
+            }
+            refused += 1;
+            kept += before as i64 - falloc.free_frames() as i64;
+        }
+        d.release(falloc);
+        if started {
+            kill_pid(pid);
+            reap_dead(falloc);
+        }
+    }
+    let bg_free = falloc.free_frames();
+    notes.push_str(&alloc::format!("bg-musl refused x{refused}, started with {started_at} spare"));
+
+    // 2. A foreground program (run to completion on the boot task).
+    let (mut refused, mut started_at, mut fg_code) = (0usize, -1i64, u64::MAX);
+    if let Some(mut d) = drain_frames_except(falloc, 512, SPARE) {
+        for k in 0..=SPARE {
+            if k > 0 && !d.give_one(falloc) {
+                break;
+            }
+            let before = falloc.free_frames();
+            let (code, _) = selftest_run_hello(falloc);
+            kept += before as i64 - falloc.free_frames() as i64;
+            if code != u64::MAX {
+                started_at = k as i64;
+                fg_code = code;
+                break;
+            }
+            refused += 1;
+        }
+        d.release(falloc);
+    }
+    let fg_free = falloc.free_frames();
+    notes.push_str(&alloc::format!(" · foreground refused x{refused}, ran with {started_at} spare (exit {fg_code})"));
+
+    // 3. A glibc process (only where a glibc arena fits at all).
+    let caps = CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO;
+    let gtiny = |a: &mut FrameAllocator| run_glibc(a, gtiny_bytes(), ldlinux_bytes(), &[b"/bin/gtiny"], &[b"PATH=/bin"], caps);
+    let (_, warm) = gtiny(falloc); // also makes the one-time vDSO frames exist
+    // The arena the launcher gets right now: its request, halved down to 64 MiB
+    // until a contiguous run of that size exists (as run_glibc does).
+    let arena_frames = {
+        let mut mib = GLIBC_ARENA_MIB.load(Ordering::Relaxed);
+        let mut got = 0usize;
+        while mib >= 64 && got == 0 {
+            let f = ((mib / 2) * 512) as usize;
+            if let Ok(a) = falloc.allocate_aligned(f, 512) {
+                for i in 0..f as u64 {
+                    let _ = falloc.free(a + i * 4096);
+                }
+                got = f;
+            }
+            mib /= 2;
+        }
+        got
+    };
+    let glibc_base = falloc.free_frames();
+    let mut glibc_ok = true;
+    if warm == 42 && arena_frames != 0 {
+        let (mut refused, mut started_at, mut exit_at) = (0usize, -1i64, 0u64);
+        if let Some(mut d) = drain_frames_except(falloc, arena_frames, SPARE) {
+            for k in 0..=SPARE {
+                if k > 0 && !d.give_one(falloc) {
+                    break;
+                }
+                let before = falloc.free_frames();
+                let (_, exit) = gtiny(falloc);
+                kept += before as i64 - falloc.free_frames() as i64;
+                if exit != u64::MAX {
+                    started_at = k as i64;
+                    exit_at = exit;
+                    break;
+                }
+                refused += 1;
+            }
+            d.release(falloc);
+        }
+        // A launch that fails after it took its arena: the executable is no ELF.
+        let before = falloc.free_frames();
+        let bad = spawn_glibc_persistent(falloc, b"\x7fELF but nothing more", ldlinux_bytes(), &[b"/bin/notelf"], &[b"PATH=/bin"], caps);
+        let bad_kept = before as i64 - falloc.free_frames() as i64;
+        kept += bad_kept;
+        // And the next launch works.
+        let (_, next) = gtiny(falloc);
+        glibc_ok = started_at >= 0 && exit_at == 42 && bad.is_none() && bad_kept == 0 && next == 42
+            && falloc.free_frames() + 4 >= glibc_base;
+        notes.push_str(&alloc::format!(
+            " · glibc refused x{refused}, ran with {started_at} spare (exit {}), bad executable refused={} kept {bad_kept} frames, next launch exit {}",
+            exit_at as i64, bad.is_none(), next as i64));
+    } else {
+        notes.push_str(" · glibc part skipped (no glibc arena at this RAM size)");
+    }
+    reap_dead(falloc);
+    let end_free = falloc.free_frames();
+    let ok = kept == 0 && bg_free + 4 >= base_free && fg_free + 4 >= base_free && end_free + 4 >= base_free
+        && fg_code != u64::MAX && glibc_ok;
+    crate::serial_println!(
+        "[bug053] process starts with only their arena + k frames free: {notes} · frames kept by refused starts: {kept} · free frames {base_free} → {end_free} → {}",
+        if ok { "OK ✓" } else { "FAILED" }
+    );
+}
+
+/// BUG-063 regression self-test `[bug063]`: after a foreground program has
+/// returned, its exit flag must be gone. While it stayed set, the next syscall
+/// of a userspace driver (or a background process's nanosleep, fork, wait4 or
+/// socket call) returned through the foreground exit path, on the boot task's
+/// stack. The test then gives the CPU away with interrupts on, which is when
+/// those syscalls happen.
+pub fn exit_flag_selftest(falloc: &mut FrameAllocator) {
+    let (code, _) = selftest_run_hello(falloc);
+    // SAFETY: a plain read of a word that only syscall paths write.
+    let flag = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(EXITED)) };
+    let t0 = crate::interrupts::ticks();
+    selftest_wait(30, &|| false);
+    let waited = crate::interrupts::ticks().saturating_sub(t0);
+    let ok = code != u64::MAX && flag == 0 && waited >= 30;
+    crate::serial_println!(
+        "[bug063] foreground program returned (exit {code}): exit flag = {flag} (want 0), then {waited} ticks with interrupts on while drivers and background processes make syscalls → {}",
+        if ok { "OK ✓" } else { "FAILED" }
+    );
+}
 
 pub fn run_glibc(
     falloc: &mut FrameAllocator,
