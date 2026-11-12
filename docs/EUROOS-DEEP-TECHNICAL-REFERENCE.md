@@ -1391,7 +1391,7 @@ Two dispatchers exist. The **per-process preemptive** PCB dispatcher (`process_s
 | 186/202 | gettid/futex — real block + wake (`:1183`, `:2990`) |
 | 217 | getdents64 — fills `linux_dirent64` records (`:1345`, `:2983`) |
 | 257/262 | openat/newfstatat (`:2883`) |
-| 318 | getrandom — deterministic fill (`:3103`, `:1131`) |
+| 318 | getrandom — the kernel CSPRNG (`ring3::sys_getrandom`): waits for the seed, `GRND_NONBLOCK` → `EAGAIN`, unknown flags → `EINVAL` (BUG-080) |
 | 332/334 | statx (`:3076`) / rseq → `-ENOSYS` so glibc falls back cleanly (`:3053`) |
 | 500–502 | **EuroIPC** — native message-bus syscalls in their own number range (`:1192`) |
 

@@ -1,0 +1,65 @@
+# Public image (fd0982b) on the open network, .16, TCG. boot-time.py --net open, commands on the serial console.
+== net-open (net-open: kernel-entry 5.11s desktop 7.47s)
+    5.576 [tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+    5.582 [entropy] CSPRNG seeded: 406 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (406 bits) · 5.388 ms → OK
+   12.492 [scon] $ net
+   12.495 [scon] ARP  : 10.0.2.2 asks 10.0.2.15  ->  reply: 10.0.2.15 is-at 52:54:00:12:34:56
+   12.496 [scon] ICMP : echo id=4660 seq=7 -> reply, checksum OK
+   12.496 [scon] IPv4 : 10.0.2.15 -> 8.8.8.8 ttl=64 proto=Udp  hdr-checksum OK
+   12.496 [scon] UDP  : :5353 -> :53  'DNS-query'  pseudo-checksum OK
+   12.496 [scon] Frame: ethertype Ipv4, 51 bytes, fully parsed  [OK]
+   12.542 [scon] $ ping 10.0.2.2
+   12.547 [scon] PING 10.0.2.2: echo-reply OK ✓
+   12.604 [scon] $ nslookup example.com
+   12.616 [scon] example.com = 104.20.23.154
+   12.656 [scon] $ fetch example.com
+   14.115 [scon] DNS: example.com = 104.20.23.154
+   14.117 [scon] GET http://example.com/ -> 888 bytes
+   14.117 [scon]   HTTP/1.1 200 OK
+   14.117 [scon]   Date: Thu, 12 Nov 2026 17:42:35 GMT
+   14.117 [scon]   Content-Type: text/html; charset=utf-8
+   14.117 [scon]   Connection: close
+   14.232 [scon] $ https example.com
+   21.642 [scon] DNS: example.com = 104.20.23.154
+   21.645 [scon] TLS 1.3 handshake (X25519 + ChaCha20-Poly1305) ...
+   21.645 [scon] GET https://example.com/ -> 888 bytes (encrypted)
+   21.645 [scon]   HTTP/1.1 200 OK
+   21.645 [scon]   server certificate: 1002 bytes, SHA-256 85ca6ab068e9bcce…
+   21.759 [scon] $ netstat
+   21.761 [scon] tcp: connect ok 2 (slowest 11 ms), SYN timeouts 0, stale-peer RSTs 0, new-port retries 0, closed-port answers 0, gave up 0 | inbound: half-open 0, httpd conns 0, served 0 | queues 0 (0 segs), unowned segs 0 (after-close ACK
+   21.763 [scon] net worker: task 3, 11 passes, 0 inbound frames, longest pass 755 us; kicks 0 (e1000d/task) + 13 (interrupt, 0 found the scheduler busy)
+   21.763 [scon] DNS cache: 2 hits, 1 misses
+   21.763 [scon]   example.com              104.20.23.154 (TTL 291s)
+self-test lines in this log: 0
+== net-open-e1000e (net-open-e1000e: kernel-entry 5.01s desktop 7.42s)
+    5.474 [tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+    5.482 [entropy] CSPRNG seeded: 427 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (427 bits) · 6.870 ms → OK
+   12.445 [scon] $ net
+   12.449 [scon] ARP  : 10.0.2.2 asks 10.0.2.15  ->  reply: 10.0.2.15 is-at 52:54:00:12:34:56
+   12.450 [scon] ICMP : echo id=4660 seq=7 -> reply, checksum OK
+   12.450 [scon] IPv4 : 10.0.2.15 -> 8.8.8.8 ttl=64 proto=Udp  hdr-checksum OK
+   12.450 [scon] UDP  : :5353 -> :53  'DNS-query'  pseudo-checksum OK
+   12.450 [scon] Frame: ethertype Ipv4, 51 bytes, fully parsed  [OK]
+   12.494 [scon] $ ping 10.0.2.2
+   12.498 [scon] PING 10.0.2.2: echo-reply OK ✓
+   12.554 [scon] $ nslookup example.com
+   12.569 [scon] example.com = 104.20.23.154
+   12.605 [scon] $ fetch example.com
+   12.666 [scon] DNS: example.com = 104.20.23.154
+   12.666 [scon] GET http://example.com/ -> 889 bytes
+   12.666 [scon]   HTTP/1.1 200 OK
+   12.666 [scon]   Date: Thu, 12 Nov 2026 17:43:01 GMT
+   12.666 [scon]   Content-Type: text/html; charset=utf-8
+   12.666 [scon]   Connection: close
+   12.706 [scon] $ https example.com
+   18.937 [scon] DNS: example.com = 104.20.23.154
+   18.939 [scon] TLS 1.3 handshake (X25519 + ChaCha20-Poly1305) ...
+   18.939 [scon] GET https://example.com/ -> 888 bytes (encrypted)
+   18.939 [scon]   HTTP/1.1 200 OK
+   18.939 [scon]   server certificate: 1002 bytes, SHA-256 85ca6ab068e9bcce…
+   19.050 [scon] $ netstat
+   19.051 [scon] tcp: connect ok 2 (slowest 16 ms), SYN timeouts 0, stale-peer RSTs 0, new-port retries 0, closed-port answers 0, gave up 0 | inbound: half-open 0, httpd conns 0, served 0 | queues 0 (0 segs), unowned segs 2 (after-close ACK
+   19.057 [scon] net worker: task 3, 17 passes, 0 inbound frames, longest pass 1335 us; kicks 18 (e1000d/task) + 0 (interrupt, 0 found the scheduler busy); e1000d woken early 18 (frame to send) + 15 (its interrupt)
+   19.057 [scon] DNS cache: 2 hits, 1 misses
+   19.057 [scon]   example.com              104.20.23.154 (TTL 293s)
+self-test lines in this log: 0

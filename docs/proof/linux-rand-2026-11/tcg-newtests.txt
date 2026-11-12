@@ -1,0 +1,514 @@
+== user-smp4-iommu
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 423 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (423 bits) · 6.590 ms → OK
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1677bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-KE-over-TLS + AES-SIV pending) ✓
+[3d3] EuroCA+Attest: 3-level chain(root→intermediate→leaf)-verifies=true, on-disk-cert-store-roundtrip=true · attestation JSON-report=true, verifier-accepts=true, replay-REFUSED=true, tampered-PCR-REFUSED=true → OK (sovereign PKI + remote attestation over the boot PCRs; live HTTPS endpoint + hardware-resident TPM2_Quote pending) ✓
+[ae] EuroID login (Argon2id, no more SHA-256): euro/'euro'=true · euro/'wrong'-rejected=true · root-locked-rejected=true → OK (login path on sovereign Argon2id identity) ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: at_random=4576e0f92d03d790c72c6cfffd5eaf3d
+[linux-rand]   musl#1 randprobe: stack_guard=4500e0f92d03d790 fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=bc2dc7522e44645027068e28a03caa97a14d9b528d7caba59d1b29c41d35bafc ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=52244d5591990b9f74296130fad27929a8fb54eff8cd9d5c00a9e7897ffce5cc
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=ee48e1d015f38163fba37cd307b1b3504618d45e127d47bcd174f1deb0c865aa ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=931691cb746d2f3b960969c0060ab9ffd120b10d17532c0cde18b936fea670c5 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=62609a6f9e39f51afe9fa27c5d15dc728c364377c0147ab7adb10d57757ae7ee ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: urandom=2c6b0df992ae004734bff3b49d33c33de7b8e4842badfdc0425c360a31c7ebb2 ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=15f9818a9b14310bcdaa5720034a245cb893c6c2bdfe51f5363dcedb951e2e34 again=53d18ffe9df9002813570ed6aa4a5190f17b0a86b07ecd79ebbcf7cf17eaff75
+[linux-rand]   musl#1 randprobe: random=7a90506e0b034ac89f6509e827c4cfa2773325d58fe672768645f67b28cf7b77 ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=a389e6e3f62ebac9c48eb3477571381e9450a7479689238ab7d489d33735ad3f again=568798020cdc437312d27073efd2241d8169ecd457887fc08c7007a959b8e679
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: at_random=cfce41b44a4377932f0e391bc245d4c1
+[linux-rand]   musl#2 randprobe: stack_guard=cf0041b44a437793 fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=8b42f971c6a7f7d5080206ec39a32ae881af8c9a775270c37652b5c1d500e3c4 ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=709c2e1e57f2c8db3582e33071c63d026c22a951259331f3e1d3227542a25239
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=5941b68ad9b8a2326cd32ca8c4fa429fb99c0bdea4b78003b81ce7b11f810872 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=7c0fa9cd46df29cec4728cb6ddbe100decd891d92b9e8e860f399e0ab5e126a9 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=dc53039250c83734d646e369afcd2116336e94c267bf1fce47f92f9316be3717 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: urandom=2791d745535717d6699ea4768c0ca8fbb11e4a838e67a6fed5b72d4a22cb383a ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=0e63bba7d2b2b0a3f69eb1013cdd3011c76f53364490f0d25d35f994d36682b8 again=4a59ba20a120bd5a350c315b05f43d69c78571bcad221bcea25b37c33554cbc2
+[linux-rand]   musl#2 randprobe: random=00571529f1e75c5005b26c93ff5728e37db25dade683bee285162864087f4890 ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=48c7d7a7c17d0498b5c9660c8f2d4fff82370683c2871ee77ed23b23b390112d again=f71643b76055243dee6e4816db8f09b603ae4a8964dd5a99c9a18a2c3a347caa
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1048004 of 2097152 (off by 572, limit 3622) worst-bit-position-off=543 (limit 1280) chi2=272 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1048611 of 2097152 (off by 35, limit 3622) worst-bit-position-off=472 (limit 1280) chi2=247 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand] glibc#1 exit=-1
+[linux-rand] glibc#2 exit=-1
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=60d94c703358add1c81b6963282926d9c974494caea33e7852217b5c6b9745f0
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, glibc not run: (no arena for glibc)): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+== user-smp4-noiommu
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 415 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (415 bits) · 6.997 ms → OK
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1698bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-KE-over-TLS + AES-SIV pending) ✓
+[3d3] EuroCA+Attest: 3-level chain(root→intermediate→leaf)-verifies=true, on-disk-cert-store-roundtrip=true · attestation JSON-report=true, verifier-accepts=true, replay-REFUSED=true, tampered-PCR-REFUSED=true → OK (sovereign PKI + remote attestation over the boot PCRs; live HTTPS endpoint + hardware-resident TPM2_Quote pending) ✓
+[ae] EuroID login (Argon2id, no more SHA-256): euro/'euro'=true · euro/'wrong'-rejected=true · root-locked-rejected=true → OK (login path on sovereign Argon2id identity) ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: at_random=eb812bbe5567b971ec1c42d53e776bb0
+[linux-rand]   musl#1 randprobe: stack_guard=eb002bbe5567b971 fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=86dc3f5b6e9eb62f60be6203fb78386f4bbcb33fc92f6d23be0dbe6cf7c4baea ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=931812391f097d9020a0bad81a76084f55b74093219ba82e2581a2f302fc5149
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=04952e4014898436cc7dd66788ae3a73bc21dea8e422ce5832692c09ac8f26b8 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=930a8fa318b8ea561def259334acfabfe5828c23812393db75b509a02aabef8f ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=0e95df4cbe57be0be0db9f7f63f49b1fc0bc3d4e3ce7c9923cba2b321e1230bb ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: urandom=944841f884e762a78d209aafbee884adfa3bdf7babc31b514aab6b36cb8346be ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=ad548994bca4dbbdb2357e543035197be00d79a46a94694de81dc0b144545e8c again=f306f7a2b3c5f6a6d80b6cd830fdfdcf0866b2618be485ae050a8cdf876ed272
+[linux-rand]   musl#1 randprobe: random=28ad7629ec58d9a9355f5a0a54d376a6031db754b99461245c92a1b9456fac49 ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=347e6ebf203b94fd7f7a473b7f9cee68381c625933ee2cdcd6695851406ac948 again=4d588ad463b8e3273deac35ff893ca053c6c1f58376626434818f684c9d24498
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: at_random=6498c2d15bc62532356d509e5819a986
+[linux-rand]   musl#2 randprobe: stack_guard=6400c2d15bc62532 fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=4829fc50b1f3de9dd7057304982194a6db90deb9b076d82d0ffa689eeff822a2 ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=7beba97490552c1404ddd0b563b31ee8ffbc57dd463ab510c6fba8e37c50bf44
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=3dd50896cdd71a4f4528b12a567265c2d9591afae6e3a1d86804c05d237202af ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=59b62f29ebeb3fc889c03b2a3d6d0b61221d0f8be2302cafc289166b9b3c1923 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=fedf7497db482e021b5d441e865cb1578f7180a810935a6c6af73d589eccdd8b ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: urandom=2a28aebc03cbabb5976ac739ecbbaff676afa496dd7a25db117e4cab649e834e ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=4983350b805758896c77abdef1f606c20a9b56dc1e08da47c550f3bc9b2f3c00 again=5ff6b08445e8f6f5dac3f80161d79314789f3ddc2bcc20cef32d85884db5021c
+[linux-rand]   musl#2 randprobe: random=6b8a616bfce44577426014b6a11cb6e73a07b6e152f43935a968d3adec5cf7bf ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=54cac558fb84727bc9cac290a0ac2ce9afebadf7fadc32274e2bf19dda4c06c2 again=b7c7564963c7bbc0777e98d2ba7d0037b8bd998fa90395f918756a50b6a7d7aa
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1049111 of 2097152 (off by 535, limit 3622) worst-bit-position-off=575 (limit 1280) chi2=254 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1048339 of 2097152 (off by 237, limit 3622) worst-bit-position-off=193 (limit 1280) chi2=243 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand] glibc#1 exit=-1
+[linux-rand] glibc#2 exit=-1
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=2bae9425aba411b47628009c0211da876febe678e54fec7c5bdee78521497058
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, glibc not run: (no arena for glibc)): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+== kernel-smp4
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 398 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (398 bits) · 5.858 ms → OK
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1646bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-KE-over-TLS + AES-SIV pending) ✓
+[3d3] EuroCA+Attest: 3-level chain(root→intermediate→leaf)-verifies=true, on-disk-cert-store-roundtrip=true · attestation JSON-report=true, verifier-accepts=true, replay-REFUSED=true, tampered-PCR-REFUSED=true → OK (sovereign PKI + remote attestation over the boot PCRs; live HTTPS endpoint + hardware-resident TPM2_Quote pending) ✓
+[ae] EuroID login (Argon2id, no more SHA-256): euro/'euro'=true · euro/'wrong'-rejected=true · root-locked-rejected=true → OK (login path on sovereign Argon2id identity) ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: at_random=a8da90d55fba0f9b74a0c45186420976
+[linux-rand]   musl#1 randprobe: stack_guard=a80090d55fba0f9b fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=e024d6eaf0e30aa993ed2b92abb1f458883f4adbfac07d27c69b2f093bf6d909 ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=405a793be333b5e87713476cf5a37db6f75b1be5dd360c3febc93a17d4dd4d88
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=f792267bc810d395ac234cd5b349b13d47a8c3f3aea88732645357f472ed2513 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=481b57b04a9b2a47e616217a09ba86d1ecf792978338bda216f6a91c5525b816 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=de89a6900da050c99c11906098c618714bdb8c40973e8526dd6ef902218e33e3 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: urandom=cb7499853a4cd9242b9d54adbee1319f311f532370841e8bb05f54d4461c9872 ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=404463b0543729f25b4f3ae5bdbc265308beeb27c3408124f6ca2c8da806c3f2 again=0db45d863d510058ba7b25dbf3a3785552bfb5106875c0ef3ffe1098258b0089
+[linux-rand]   musl#1 randprobe: random=4ec89d5e4a97ce6c88395a7a97f36e38c997348ff5d730dedfa55c3feb0ccbbe ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=05759aca1f4d39ae797b4e2f282d28ecdfa0e098b6192a19097fc073e9dccd33 again=d6631f49c2c8e7403e2b545f0999088eabd615b9edcc47fcf4a5ca63f5114d6c
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: at_random=915d5537599ca72e43d0ace7f3dc38c0
+[linux-rand]   musl#2 randprobe: stack_guard=91005537599ca72e fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=ac3363d1857a367bb3bdeaf0dc05d849a415c2fe28a38a7faee153527086b1e7 ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=8e5d9eaa903ef57cb31c345902c454386c910e345430e16f26b0c2640588e577
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=b1e36fa4e1c561b75e5847d17c92b494b543034811e63082be0f52807648733f ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=ace4022d2a01fba802e90d567e060638252e580f7f2cd481c43073edebd04724 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=89ae0269f3580163ef4a4d1ed02f5505c08078767a098c02eaf211cc7ade3b3c ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: urandom=bfd5f33494d89989a98793ed7b3c236d187e6ddb33e159ddb410a3e19dcd7ead ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=a22686033e6d4f7b75dc360feb70e912fcd78ede1c7fb60d7314b521cb67eea8 again=b1bd571546d2090006d982960bdd0b31e164b0cd49b56d8d243800dde381437b
+[linux-rand]   musl#2 randprobe: random=b99c79643180980e603079343485ae02e9b0b804a65c143690832cc163879ce9 ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=bb1b26370f15bc9eb0dbdbaa9e779cb91056d2d913be01f70296bb20dcd50a4d again=3b6c4db6a06b2808735789dff3bbb0cb494e1d607bc5d512cf18f32f86292a76
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1048109 of 2097152 (off by 467, limit 3622) worst-bit-position-off=380 (limit 1280) chi2=241 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1049094 of 2097152 (off by 518, limit 3622) worst-bit-position-off=458 (limit 1280) chi2=247 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand] glibc#1 exit=-1
+[linux-rand] glibc#2 exit=-1
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=85c47609c9f32e4e43729839553be538a487515f349a9428624b1c3dac1fc7f4
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, glibc not run: (no arena for glibc)): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+== storage-smp4-iommu-1g
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 415 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (415 bits) · 6.630 ms → OK
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1658bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-KE-over-TLS + AES-SIV pending) ✓
+[3d3] EuroCA+Attest: 3-level chain(root→intermediate→leaf)-verifies=true, on-disk-cert-store-roundtrip=true · attestation JSON-report=true, verifier-accepts=true, replay-REFUSED=true, tampered-PCR-REFUSED=true → OK (sovereign PKI + remote attestation over the boot PCRs; live HTTPS endpoint + hardware-resident TPM2_Quote pending) ✓
+[ae] EuroID login (Argon2id, no more SHA-256): euro/'euro'=true · euro/'wrong'-rejected=true · root-locked-rejected=true → OK (login path on sovereign Argon2id identity) ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: at_random=ebdef37a15b40f1fb1f181415b2ecdaf
+[linux-rand]   musl#1 randprobe: stack_guard=eb00f37a15b40f1f fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=da073f816ed843966367b15277a62c61c1eed4e8d0ff10bc4633079c445fe93a ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=7d8ac7fae5ff91b929eca217709536c98956ed46f41eeb9e1784ac3f654da26f
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=2e2fdf248e5e8c079975b7adb490066fc8c86fde20cb723f994dd6dcd723a144 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=3608d94a303f39277defe6e1e4129b99de14b7aac600205e72a566816c0c038a ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=7e8495b4cdcd758c9a11c24b12881bf18506327e863c37848eb016a66c915a60 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: urandom=a52aaba8d9f9f07dd08d1a6f6199776f1acd0e90f23ab16a1682a516979b4f05 ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=02bbd40461bcef5743ffa99faaf5fe6d6c3fda07592493454f870d8d7eda906a again=2594c47e6b78e2442ab9c6e36c8a19afae456650529631564147eacbbe428dba
+[linux-rand]   musl#1 randprobe: random=48cdd5f9df5d60e1b877d0e1b05f4d2adfd1a989db48e45d403dd4436af69027 ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=65749a003489d89948e35e2e048fe26c616f39fe25555fbaa0649f8c4d78c00c again=ee9ee89d6b8606639f1fcab21c71adc6f43a8d1be33a7b2714cd1417bc4ead71
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: at_random=4f3fc605c06101ae8b1d4553df887739
+[linux-rand]   musl#2 randprobe: stack_guard=4f00c605c06101ae fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=4ab04d94569f140268ccd5778f45ef744ff6f1b71dcc2950cb0d569fb8af5ac4 ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=7370c4e5cf8f6f44dc49055c1cd582523893d98db3cda9fd14befb4b46243f21
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=c16172a74c8e63638d1320ca7a1c7e41fb7a845cdc58b9ebc4b0f77c5a0e1259 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=f63a48d94dd757cd2d20888a97b3721a72de5e85c2cbd606f90821ed6044edf4 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=b2b952e674dfdab1a0ec2a8f9bff10f4b57ab1af9a4cdf6d552531f4284a331c ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: urandom=4ed344839a6fab432d12d29ce348d07248814e7ef9edbf0af00a260bcbe2a150 ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=9d56bde557578734ee86af2beb2d9754b3f0529f70306e8b4a90b414b796b65a again=7bfbcfdc3f72a920d33212ff3633b8681b8af259119ac7fc51c02b1dc67b4182
+[linux-rand]   musl#2 randprobe: random=ef000a38853c8dd79e104a48bf7225f464109246fcc2856eecfb95cd25758d1f ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=974bdee46f9068524bf73d2c8a188d5ff0247f1fe95b4fe066ea39f3f2854a67 again=168f8aa7a93f97116ac802ae95d9b5df9566610f0c4001d68a2ec6c37baf211b
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1048076 of 2097152 (off by 500, limit 3622) worst-bit-position-off=651 (limit 1280) chi2=258 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1049802 of 2097152 (off by 1226, limit 3622) worst-bit-position-off=379 (limit 1280) chi2=246 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand] glibc#1 exit=0
+[linux-rand]   glibc#1 randprobe: at_random=155b635293a3c84164c603347d734e3a
+[linux-rand]   glibc#1 randprobe: stack_guard=005b635293a3c841 fs30=64c603347d734e3a
+[linux-rand]   glibc#1 randprobe: getrandom=51c62a3686add6d2a0cca1253c7b3995f6967e684554881dab9bbae0d6b5e262 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom2=5bd29af805a196c6d22cc3894379682ff53a1f96a0fded556a8280950d9e03fd
+[linux-rand]   glibc#1 randprobe: getrandom_nonblock=42fed408e02296364c2b06ce8a31112bbde5b239e13cf8c6e844ea8286504929 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_random=f35ddcc582836983fe4c95199940950d4b927eb4d404d297f082cfe492639de2 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_insecure=f0840f91abe81e27d07302e4c7ef2b6c963f739aadc6a6b526867403e692be2c ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#1 randprobe: urandom=d31c968188d55a7de11e30d8611855cb0f9999b153b3b438530377ab6315ad30 ret=32
+[linux-rand]   glibc#1 randprobe: urandom_pread0=891af42cde6f88a215cd93599f829f8a3095474f09921e0059715a5d192fc87f again=58aa559beeef66adbeec6cbe12f54305f8ccb52365bb6781e89ae5bdc9536c29
+[linux-rand]   glibc#1 randprobe: random=0f8b4061bd5f1df9417a17e67a862d6eb1188759f1fbd77bb8677d1c7dd254c9 ret=32
+[linux-rand]   glibc#1 randprobe: random_pread0=3b5cbcb892ebfc2d6f0febae05c9903fbd1fbbd437952e04fcf7cfc00d462bfd again=6409272ff52b558d229e15d297173dc79c1dfc90b6c0ab64687a13334f32f653
+[linux-rand] glibc#2 exit=0
+[linux-rand]   glibc#2 randprobe: at_random=e56514442f09ce98619f2d1a91688b32
+[linux-rand]   glibc#2 randprobe: stack_guard=006514442f09ce98 fs30=619f2d1a91688b32
+[linux-rand]   glibc#2 randprobe: getrandom=686361cd6cdc6960b48ddf1886797c1e64c10ace0d9bb86d821142fa47f82ac3 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom2=65c9da2296f19f809e6890c259fd7e1e71564ed05c46e841e1c532cfa9e2bc9b
+[linux-rand]   glibc#2 randprobe: getrandom_nonblock=edfafce8a8ccd759492c897d438e06e13f7af77acc30e5b22bd87ce0fab843a4 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_random=a732c0bc5e5b57baea09e14a93c38de43ea379ceab100b08e0330f3656f7f771 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_insecure=81ec89627b4631fb71ba555f3a2ebd18e2b81f51974ea4d25d72384d516236a7 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#2 randprobe: urandom=beda4b2776113a0e817e28f116f7205fc3854a30868400534d096658b7586dad ret=32
+[linux-rand]   glibc#2 randprobe: urandom_pread0=1357a8240ae9bd05cbb6443534257c0af0d9c09ec71a1b533192e3abd4669a18 again=c24176138dd8b9fc810a70fa3409d277e840f6a25b7e3fc072369dbaaf57246b
+[linux-rand]   glibc#2 randprobe: random=4f985beffb04b8e5e9ffd7c208e574f71b1f0234bed4745aba30d0075763e602 ret=32
+[linux-rand]   glibc#2 randprobe: random_pread0=7bf70d36e9ff1c27a34a4ca707cd59cdb42a0641d9a30c3199e2ac753325d37b again=0b1e46545e49035bce6a73c536b7d7623f896b5b2c378e142676333bae56dfe9
+[linux-rand]   glibc#2 randprobe: stat getrandom bytes=1048576 ones=4195943 of 8388608 (off by 1639, limit 7242) worst-bit-position-off=1343 (limit 2560) chi2=291 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand]   glibc#2 randprobe: stat urandom bytes=1048576 ones=4195730 of 8388608 (off by 1426, limit 7242) worst-bit-position-off=689 (limit 2560) chi2=230 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=bdf3a11efb00de859383e46ed2506c39a919d4517f2750431d8b87b9f5c8a13e
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, 2 glibc processes): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+== combined-smp4-iommu-1g
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 445 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (445 bits) · 7.679 ms → OK
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1629bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-KE-over-TLS + AES-SIV pending) ✓
+[3d3] EuroCA+Attest: 3-level chain(root→intermediate→leaf)-verifies=true, on-disk-cert-store-roundtrip=true · attestation JSON-report=true, verifier-accepts=true, replay-REFUSED=true, tampered-PCR-REFUSED=true → OK (sovereign PKI + remote attestation over the boot PCRs; live HTTPS endpoint + hardware-resident TPM2_Quote pending) ✓
+[ae] EuroID login (Argon2id, no more SHA-256): euro/'euro'=true · euro/'wrong'-rejected=true · root-locked-rejected=true → OK (login path on sovereign Argon2id identity) ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: at_random=359b0cbf0536e911664a03e1cfee9ada
+[linux-rand]   musl#1 randprobe: stack_guard=35000cbf0536e911 fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=6a2269482e28f0827ffd1cc6fc42cf033c7861b690479756283898de4491d359 ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=ba01c0e61e5dd2bafc5924cb2a6e90d5cc91b40c2852b71701e0f5fff43bb5c4
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=51278fe3eaf3c25b3719226a676e4b7778acc937e20b7308075d230f73f2356b ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=88459fc684d4e88093d8238a4ec68fc16fcd9efb3e28578706fcba62c9ee0601 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=52d1c618735b5d2dbcea5397ba83c30a6c69908da89fdeaf4d631d565f71f5d6 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: urandom=926be10ac24714445634dcf0c2afe71201e1f1913d1ca4fc3893fe51b12ec4d0 ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=06ddf94882a21a445f8a9570e187f249a2a450233313fd04d1b2740c0ed8b8c5 again=b8c24d4a641895f5226ab8498b828c9f64bf81235ebb2b0a71d0477d2f838bf4
+[linux-rand]   musl#1 randprobe: random=4cd1e2a6bf6ad62421ef2c1c681ebac0d4e74134aee3912cb1dd230d83dc7670 ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=d107f1d1c8498bb258a0e82bcd1f008236c028c04aada9ae3d89cddcfa189551 again=1ca1d456ee5552dcc775322c23bf2918f6e1ab32fd8402abfdd34c2489716afd
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: at_random=143d804a81d3ec60c64694f6eda1b615
+[linux-rand]   musl#2 randprobe: stack_guard=1400804a81d3ec60 fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=28afcbfabfed9bdcacd9be853841c1c3cf079b4ec18a787dbd02760516245b9b ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=482ae3955cb7e1f597d7d208d6d9443d64e0a38bf34713496d21a4751a9dca55
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=8efb26c89d45f2ec5eb2d9564388d29c6f3311d0b585abb016728e08bc2767c9 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=9628d981a542fca3e718d80b55f935984051ffb2ebca59fb85bcc1e7fada784e ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=c424bd2e2307fc0b7738874d09011a1b1d118268d3a60e7b1e07f635e6a50040 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: urandom=01c7d7aecf4cf92013e5497c6ce3813ab351386eebd4078166aeabe2c890ad0c ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=e0514ebda67837e34a09f32b80210cada7095f8009514961fdf4ff2a152f5a4e again=19512a34238373e80983b78a61de1625c12023cd9f3b410835b222b01532c246
+[linux-rand]   musl#2 randprobe: random=10d23effded1a1473e614ec42c111427b8fbbdab6453d51f966d7b13c33f50ac ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=090ec647d92482872c847ce70c85092f58386767c57aba10b0ed67b65e81ad4e again=ba56b6a4fb50062e34134a7c9863c81e10bd18799ece3745d7693e26c109e10e
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1047430 of 2097152 (off by 1146, limit 3622) worst-bit-position-off=366 (limit 1280) chi2=230 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1048575 of 2097152 (off by 1, limit 3622) worst-bit-position-off=412 (limit 1280) chi2=302 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand] glibc#1 exit=0
+[linux-rand]   glibc#1 randprobe: at_random=ffe270f024a7a9ed0d32aefdc4985062
+[linux-rand]   glibc#1 randprobe: stack_guard=00e270f024a7a9ed fs30=0d32aefdc4985062
+[linux-rand]   glibc#1 randprobe: getrandom=5fbdc38a64dda6483d321a7cbe82355df71ba1639993cd4d13f10334647d5b92 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom2=cc895fde43dfce52ce23748bb5a95aefe1cab0aff5e45621164b404dfa755028
+[linux-rand]   glibc#1 randprobe: getrandom_nonblock=1713c4334ac1bf3577643054d04c037f3f2c4b159427c8515052e09651d3502c ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_random=57d22d6baeb231dd9b701fc0ceaa195aaddf0c328bb75c20e58a82106868b1c3 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_insecure=e901d4cf8429e86a0349cd6fe27b8134f47b459be087e03cb7792fa8732f5607 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#1 randprobe: urandom=7f879af38d6e3ee163429a5e3629e2ef777d7d56b721cdbf723c1b663e6481d6 ret=32
+[linux-rand]   glibc#1 randprobe: urandom_pread0=ae70dfc4f88ba93bf3b97e052c051aadedf2ee1b33d6dc18d6fe99f8feeb844f again=b19f42a48fa2267007b120e43e7fed9c6e934c5bcfe7e67b07673f890a08fed6
+[linux-rand]   glibc#1 randprobe: random=b0230c70d5637cad72aa629a2177a3f0a5c0ceab2b2ba9249b519d637d6b4055 ret=32
+[linux-rand]   glibc#1 randprobe: random_pread0=c961fe589eec57d11707693343fbb487064cf9cffa1fdb8c26813f22e7d8db77 again=822950362a46fe05045fec48064ac5e5b72e514c1d459ee75ce74e27ecc8ee77
+[linux-rand] glibc#2 exit=0
+[linux-rand]   glibc#2 randprobe: at_random=c0de7ff9488eaeb70a016ea9156642b8
+[linux-rand]   glibc#2 randprobe: stack_guard=00de7ff9488eaeb7 fs30=0a016ea9156642b8
+[linux-rand]   glibc#2 randprobe: getrandom=d03d3074dfa130da6818b7a1d755130753c2c61374a554e9c98b017296a8ee4f ret=32
+[linux-rand]   glibc#2 randprobe: getrandom2=804cf3bf294c00cd1302dbd8f398fdae2b3b9cdb08bc74713acc6a1656588aa1
+[linux-rand]   glibc#2 randprobe: getrandom_nonblock=2ca06910d9c5abd8764a9394ad9a20b48d7b882d3b231b194e678759bece5a58 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_random=556f794366453e37e4ca4a9c73d6ed54409cf71c388646b67a8c10e3fb067ace ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_insecure=5089ef0a83f1412f7c192ccafb19fcdf3dc2a1d79868e96289a4aaa7b427d12a ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#2 randprobe: urandom=67d776a835d6bdf76aceb9658a7631429c935f9f136940a676b1a99cff5b32f5 ret=32
+[linux-rand]   glibc#2 randprobe: urandom_pread0=9b900ae9d91c83c801b045d465fbc0ae580e341655d72252643c8b9464dfe648 again=c150b7949baec5fc2c3d60f3cc0b232b32c5dee3624ec64e09d3c1be5d4cdc40
+[linux-rand]   glibc#2 randprobe: random=82e1ede37264ab146dbcd4f9183339d784233050e968ea499dc500f8bcbf2ae1 ret=32
+[linux-rand]   glibc#2 randprobe: random_pread0=b9ff9dfd26d4d0bb6f148fb11c18a870a2c745f8ff168c993a90c5611ba87114 again=9e6af97d7b40132978e6d5736da40c2e74712e54b820120d622521d841fc8520
+[linux-rand]   glibc#2 randprobe: stat getrandom bytes=1048576 ones=4195870 of 8388608 (off by 1566, limit 7242) worst-bit-position-off=616 (limit 2560) chi2=262 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand]   glibc#2 randprobe: stat urandom bytes=1048576 ones=4193409 of 8388608 (off by 895, limit 7242) worst-bit-position-off=840 (limit 2560) chi2=301 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=cbb25986809ef25f3d9c51d53c0f2a7c37da6e05ecf4d27f46499d18f1ebc03a
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, 2 glibc processes): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+== user-smp1-iommu
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 430 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (430 bits) · 11.173 ms → OK
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1721bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-KE-over-TLS + AES-SIV pending) ✓
+[3d3] EuroCA+Attest: 3-level chain(root→intermediate→leaf)-verifies=true, on-disk-cert-store-roundtrip=true · attestation JSON-report=true, verifier-accepts=true, replay-REFUSED=true, tampered-PCR-REFUSED=true → OK (sovereign PKI + remote attestation over the boot PCRs; live HTTPS endpoint + hardware-resident TPM2_Quote pending) ✓
+[ae] EuroID login (Argon2id, no more SHA-256): euro/'euro'=true · euro/'wrong'-rejected=true · root-locked-rejected=true → OK (login path on sovereign Argon2id identity) ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: at_random=f81f419fa89019e0402fbe436f003eb4
+[linux-rand]   musl#1 randprobe: stack_guard=f800419fa89019e0 fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=56d598fe0e2877810bd4c5766db4ab9b81cf61b9394c8d06e56a28b766f6e478 ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=e29af87a98baa89eafc23cfd0ec0d588ebfc2c74a1e3582281a449e417f73af0
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=635781bea83c7a4be00c726acb9acfb9ccba93d20ad4c8cce7a7f82f4da962c3 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=4e7f03d1ee4f520dbc94d6be7fde10433de138ae96aa0861348d5d365f1bf320 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=0c977bb53e9240f5495cc0509b384da939e025591b1243f7cb70b5372c187224 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: urandom=c74b469841ca9391e95ab44bff79f043367fb926124b21bb9e1aa6aa3d0ba804 ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=2ece6bd5dd90610237896815d91a403fcf1eaa403b5066f9f26cc27e8a06872f again=4d1900489d2a724a58b9fd48345fc4aa0a3cbb694e6a1343f9aa3212e712c12b
+[linux-rand]   musl#1 randprobe: random=e87999b3c70000d4d66d8ea76b90381f14e83bedbb5dcdd27ab57e81a0d85cf4 ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=2f79b58c037fc1dac111678ad817a64a64a7788a408ad03470bda3e3a46eaf49 again=15179e26ff4a2c87f54bd105fb93d896d82bc0dff12190acc5b6ad8a4ecf5e90
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: at_random=5a8dc669363c6db822f93d916a2cec1c
+[linux-rand]   musl#2 randprobe: stack_guard=5a00c669363c6db8 fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=cd02269a4ff78fd7caa6d87801612f93cb7659ef1c0b9669fc5a4349fbd35825 ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=5d0540a6b41c0718538fe4b9f469a5233bf3b2630284bda8c814c0bb864e2fb6
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=861ff4bea57a117aadbe7b3a22336df8065e4f6021e3d53bdd0b8afe93246c55 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=c9aece0a37209c5ac116655d900e392c01cb8e3d436ed6ad92e7c2b44532af70 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=e7d94e3fe1e03ca0f37bc2c932c7d43c3664bbd384ab77e5a530f3b89fedb929 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: urandom=f2daba76f86d7887a41e3aa564e5adc594bc7e4fa6a50ca5a910f0b346fda02d ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=7909bdeeb68e7c6afe712b5eb731b7652081bf83c8fd70c7cd8da7c33b944e59 again=1aae854146e3b4473341476e4eb1b43756446194e7294dbc439feca60469cfc8
+[linux-rand]   musl#2 randprobe: random=42bd28bf5688c9bdc37daae89fab587e79f03217d50bc7084c4ee57312014ca0 ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=a845257591916279265578182d8ffd1d19f6ee894d463a801e6262d9e5579695 again=a6504314f83375e49308163e0d3c85703f690598e0a12bcf9f266f468fe6155f
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1048184 of 2097152 (off by 392, limit 3622) worst-bit-position-off=572 (limit 1280) chi2=256 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1048396 of 2097152 (off by 180, limit 3622) worst-bit-position-off=492 (limit 1280) chi2=241 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand] glibc#1 exit=-1
+[linux-rand] glibc#2 exit=-1
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=89d27227d37970bf04f51950f2fbed8af9084c34cdf56561ae4e50ab59bef411
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, glibc not run: (no arena for glibc)): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+== user-smp1-noiommu
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 417 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (417 bits) · 9.648 ms → OK
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1740bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-KE-over-TLS + AES-SIV pending) ✓
+[3d3] EuroCA+Attest: 3-level chain(root→intermediate→leaf)-verifies=true, on-disk-cert-store-roundtrip=true · attestation JSON-report=true, verifier-accepts=true, replay-REFUSED=true, tampered-PCR-REFUSED=true → OK (sovereign PKI + remote attestation over the boot PCRs; live HTTPS endpoint + hardware-resident TPM2_Quote pending) ✓
+[ae] EuroID login (Argon2id, no more SHA-256): euro/'euro'=true · euro/'wrong'-rejected=true · root-locked-rejected=true → OK (login path on sovereign Argon2id identity) ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: at_random=5c40483988f607ed06920035f0674d37
+[linux-rand]   musl#1 randprobe: stack_guard=5c00483988f607ed fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=3f56a432877a4793082175e4ca5f67f711dbc39c5a62b8407c1f73da6608fbce ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=e27267c444f5da9784809aa55f27e4db2eac0764353ef94311545d0d45ad0315
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=75363165dcfa6121ffbee4716a9eeccf44f481bf4ca78607bf27afcdc2f718d6 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=fa8545fbff67a790a06ec7faf03a04b12e45d4747670f562d143d55b4d764491 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=421b66a23a48ba3490f6092a2af4178b97445108356218096f8d489aa0c3b4fe ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: urandom=679441ddd06a26d6bf65a1d61a6f7ded2258b18c2dc2c7794dfd840d1db6d532 ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=043b95ba1f1377b8c8d50c50bcb41121a32ea2c118ff20d92bbecc44b3371944 again=c72d2bfa74f9ccae636abc5f4db1feb60bb4a141b7be85a36ac7c40c14a6013e
+[linux-rand]   musl#1 randprobe: random=a7238fb32556e6a5db427f4e27ad779fe336b2dfa501a2731f763c64c75019fc ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=c58efc419e140587e9cc94d4d08aa49fac68031dd37756c1d512aa96eabe29d4 again=bf68a4bfd404b770810cd8e30f2ba1e0810ad480c51063b866d14285d1e17bae
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: at_random=20bff58174745dc56ee1650b537fe493
+[linux-rand]   musl#2 randprobe: stack_guard=2000f58174745dc5 fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=ad6926c6eeab3c1b25d86f84e3f38a9f0c88904ac9cfe4b9144ec5ac0c95c0a7 ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=ccaf62ce324b44808bf0e4bc3d85b9e84b326b1a9cdad95705d8846dd565dc91
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=3c1e6c6818763831ef64323ffbf8cf296940e34cfefc684534aa6d6fd055884d ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=026ce153a5d4b1aff509fa75233b13085c459d661b3ecab9105c44c3b0a3443e ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=26a40f61c9aa3f9e81040037fb389991af7f9f0bd91c0f5f66a8998681f817f8 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: urandom=0e0313479f9833ac3d4d18b1aef92960af0dbcd2a98cb3d44325d6dbd70e8f13 ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=0c55702312bd5b9a5739a9528a9ebfe26637e70e44a909a245d47763b17b0d06 again=2a0647ac4dfbd6cbd536acf0aeb438ab01f52d005dab032a3682e5caf760f737
+[linux-rand]   musl#2 randprobe: random=70a9940480224ae12debdad46062b39c33b46327a972dc714dbe01dbb5e4611b ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=718b1d62767c44ebbe7c6635f137f0b48cf7c7f16eff9590a521d3434e60dba7 again=f120994655dc8f3ccd98dd772340a89c341960fa0b1c1a78700fc2737e09fbc7
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1048360 of 2097152 (off by 216, limit 3622) worst-bit-position-off=356 (limit 1280) chi2=319 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1047837 of 2097152 (off by 739, limit 3622) worst-bit-position-off=464 (limit 1280) chi2=270 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand] glibc#1 exit=-1
+[linux-rand] glibc#2 exit=-1
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=07fb181873a15e1a93efdde252a0f23b04e426f212e539c20c571fa1f7fc1a88
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, glibc not run: (no arena for glibc)): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+== kernel-smp1
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 434 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (434 bits) · 7.735 ms → OK
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1690bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-KE-over-TLS + AES-SIV pending) ✓
+[3d3] EuroCA+Attest: 3-level chain(root→intermediate→leaf)-verifies=true, on-disk-cert-store-roundtrip=true · attestation JSON-report=true, verifier-accepts=true, replay-REFUSED=true, tampered-PCR-REFUSED=true → OK (sovereign PKI + remote attestation over the boot PCRs; live HTTPS endpoint + hardware-resident TPM2_Quote pending) ✓
+[ae] EuroID login (Argon2id, no more SHA-256): euro/'euro'=true · euro/'wrong'-rejected=true · root-locked-rejected=true → OK (login path on sovereign Argon2id identity) ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: at_random=14263d4d3899753a53a805c25832e5d6
+[linux-rand]   musl#1 randprobe: stack_guard=14003d4d3899753a fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=6da56f9edf92b35ab8442b893e69c0d48aaf106712bfb8d3eb3914662f502628 ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=b99b815125e4881a252d48d107ff2c294a31d9ad7745f966d0e35b17e9c099de
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=5340e59f01f55cbc5d409170c94b1af45c70c7302f0f66b800542c8d48a74300 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=7d9a7a660bfa612e0221c11a90dae6fe6d16be84ac2d22373b4e485ec8b3c6e7 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=adcfafbeedfbd683ff9448aa9a1d839c1f9f85e5abfde6a81d19b9603a827e61 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: urandom=163ea779a328ce442c630eb199b59919fd2894054a6e006007547c527718cd21 ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=a7777082f6d6ff2b30aa2e274f1170ae0f1b83e79eef648f993caf542056b444 again=add1d0358a0ef364489488780e8f368c475d08bc588420e8a15c9acaea4500fc
+[linux-rand]   musl#1 randprobe: random=30408229910d7ca104923976e7695f5a8dadd5f2aa8953ae80d2558ffd1f7610 ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=1bf5917a2978e80187dabc5930a5239ee492b339c5493c790dd018b804b589b2 again=678db27992dc632c3b21bc3193b79e82d339003e4d195faa16a102904aa203a0
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: at_random=930b4affe64ff1056adc01cecfcb055b
+[linux-rand]   musl#2 randprobe: stack_guard=93004affe64ff105 fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=1c0d756113c55dc08e50537a8fea48b88fe10ee123cb969eaac9d67127ea9e18 ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=e18317dccc62fa09f3ad16ed744572c826ebc37ee8734568af76c3db46fd07af
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=95aa8adc4e6af7b7ac509db7c16ebd133affecc46ee25d0fd410cccb48be175c ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=28da96fca93323d7a88047209bfcd6524e392bd39d9ed888488a2df5c5a398a9 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=a37038f56a10e7ade8a55dd6c7eac733b69c87bdc338688f624c2af1793723f2 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: urandom=86163d0744c88d9080dd21d6837bb7e435afbad876dfac7000e4bce4f862a4aa ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=818d6b3d27e4a28bb8a45afe48ddf448bdfc70bbfa39e562ecead3deeeeb1f8f again=56cf8d2b3a3343aa14a0e60bdb5b389eab5744548d5dc5ca47e0e174a8f72fa3
+[linux-rand]   musl#2 randprobe: random=b858cd75481b7127603770e5238623a458bb12e8b7b0298871dac6be04b0445d ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=7059749293dc3d86e1ae1ea98166f0ba6d3fa4a7b8de1932a74ea2ce863117a1 again=48b7a277b6f231f53d661e2722c75c77cd8295621e7eafcde7c42da88e9ac9f9
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1049280 of 2097152 (off by 704, limit 3622) worst-bit-position-off=504 (limit 1280) chi2=282 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1049273 of 2097152 (off by 697, limit 3622) worst-bit-position-off=387 (limit 1280) chi2=276 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand] glibc#1 exit=-1
+[linux-rand] glibc#2 exit=-1
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=b916d60f53734a3dcae6e9841103c4d281f500bc96a4977e8bc73fae11589c82
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, glibc not run: (no arena for glibc)): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+== storage-smp1-iommu-1g
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 435 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (435 bits) · 7.331 ms → OK
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1599bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-KE-over-TLS + AES-SIV pending) ✓
+[3d3] EuroCA+Attest: 3-level chain(root→intermediate→leaf)-verifies=true, on-disk-cert-store-roundtrip=true · attestation JSON-report=true, verifier-accepts=true, replay-REFUSED=true, tampered-PCR-REFUSED=true → OK (sovereign PKI + remote attestation over the boot PCRs; live HTTPS endpoint + hardware-resident TPM2_Quote pending) ✓
+[ae] EuroID login (Argon2id, no more SHA-256): euro/'euro'=true · euro/'wrong'-rejected=true · root-locked-rejected=true → OK (login path on sovereign Argon2id identity) ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: at_random=3d6ce703039a4086fdad4e26fd2d9285
+[linux-rand]   musl#1 randprobe: stack_guard=3d00e703039a4086 fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=2c9a4531333700d3c78286d05934d5823d93131216131d3cd042e351f4a9bfd9 ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=f2d046bfe1566e382481abecaeffd0256ff31ed14a08288cc88eeeca79dfe90f
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=b696909f7b39d7a5eb5c9dae17d710257370253f3ee7c83601a17b8848eb591a ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=31c7d46291a1ad4cebfefed4710e1d5d7bdb169be2732a87a0742bcd297ee35e ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=fc0d6198066789197ce1912def53640f12de1ff7bf4be3dbe8785b5b39536232 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: urandom=c01145ce05c06822e46352dd7bbcd5295ac8edb43719e823020f86e2f3cb8305 ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=8902dc44589937f319019424b54cb31a047d2571188f5c05964a7eb4df4fa6b8 again=e1549a0773ba2af4a98033f6b950d60800d49b5e66fd116982c4cd30cf953bb8
+[linux-rand]   musl#1 randprobe: random=6ad67e10fd42a0dcbd0a1d83b73df474770c043210a3516524b44a9a3db4f248 ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=4502c47a1e5258a164aba133137225216fee00e7313445cd3d86f4f0db47f1df again=e559c7505b324ac93c2409c527882e5db7130b36b9341a7ae74fdaeae29a860d
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: at_random=636aa0ff8bea9ba4a79e4becb60a90f6
+[linux-rand]   musl#2 randprobe: stack_guard=6300a0ff8bea9ba4 fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=73c0a61c5e11a093f3f5be20e07353f17d4653d31445aa11b4226b5feafbb2a3 ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=62b2364e9418336b155425f32342cb7c1d7ce139ba63ce4bc7a2e0a0b2155dc2
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=65d239b70eb93d0391e816fad6aa18cd63af0797e2d3df532ff3c0a9d964ce9a ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=ff3b74055fa529b8f81340dcbc45345e4f8e858fcfe900036e8c564f72a757fe ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=a56feb76fe0120a07d571fe3a97c1533a6dec61be9bc2ac57ce2234a4da461d8 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: urandom=e584057f7479bc712d51652bb5a67facc65022702917e36fd14b4a96fa4451f5 ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=6f72445a73babf99c342373157966f89d4b61711006e8053617a56f46047d228 again=11831b8313ff27c36850cd59fbae388190c4ccfaa82cde95cfa455e2b2880565
+[linux-rand]   musl#2 randprobe: random=96969aa8818e1fc59c3128b49dede52e3725b78ef182fc22608d34ec6881b400 ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=0db484fe49b4f1b175e47182a69f5f0ca9c98fb27520392e119eb039c4c759d4 again=5849808c029468754ee00368f44cc4c7b7a69f0e9527fb779bdb35ba1a9a34dc
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1047589 of 2097152 (off by 987, limit 3622) worst-bit-position-off=497 (limit 1280) chi2=308 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1048572 of 2097152 (off by 4, limit 3622) worst-bit-position-off=511 (limit 1280) chi2=243 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand] glibc#1 exit=0
+[linux-rand]   glibc#1 randprobe: at_random=fd186d54cc28605996dd60bec54d5f20
+[linux-rand]   glibc#1 randprobe: stack_guard=00186d54cc286059 fs30=96dd60bec54d5f20
+[linux-rand]   glibc#1 randprobe: getrandom=5a00bb4945df30f3613eef2f775b8d22196fec7f41c0b6db3cebe73110f8b9bf ret=32
+[linux-rand]   glibc#1 randprobe: getrandom2=7b29a53499fba1512287092b78a3e74b8e9e9c6540394b90df98bed495451516
+[linux-rand]   glibc#1 randprobe: getrandom_nonblock=957617b53bfd4d3d20956d55b9f6a1798d9a293d097e736a279e7fef666d0dfe ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_random=6ecce76e70a0127c7f1455ca665f07b4b3449f7dcbd0f0bb773df13b1308bc24 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_insecure=26fe36342caa4bc794345712efa06b758162d915791019e2467f01fc9d3872c8 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#1 randprobe: urandom=66af7556fe9ca38095052d05c0331073074d15e6711cbd097acfc52b731c15db ret=32
+[linux-rand]   glibc#1 randprobe: urandom_pread0=6e0050e343fba7959170fe175dc996df81becdac99fd70e11492cb79e0b610d1 again=445ad878edffcf2874cd33d79fcc37c1659ac22287d2e58ee5083f401464827e
+[linux-rand]   glibc#1 randprobe: random=516258e707937900b27e908ef8eba79cac9bd8c6d31c12d2b7465ec9174f8bb7 ret=32
+[linux-rand]   glibc#1 randprobe: random_pread0=10c72bef0eaf37c13c287140e43792fe0e44fd580ca0eeeb186a278f3ff4055d again=36d589c919c8e03d42468167c526f908d6900b5ec6a029efc3e6d5da7c606ad4
+[linux-rand] glibc#2 exit=0
+[linux-rand]   glibc#2 randprobe: at_random=3dbef72fc93f6337598ef0d4ee56cc64
+[linux-rand]   glibc#2 randprobe: stack_guard=00bef72fc93f6337 fs30=598ef0d4ee56cc64
+[linux-rand]   glibc#2 randprobe: getrandom=422f93d9cd67015b192ba83e38a5c0b32a62052ba2d9104601220817444d0deb ret=32
+[linux-rand]   glibc#2 randprobe: getrandom2=ffc4ff539b4f12f437999c873184d8d157d2de106a9deb4d24a46db46dd3f325
+[linux-rand]   glibc#2 randprobe: getrandom_nonblock=c7cb617782dcf769f38dc15d4aaa9a86c93bf4d7aa8e6544c50fc48bbf2edb23 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_random=79670e302d64abd23b59159734404f6269617faf131a492326f09747b11fa5e4 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_insecure=908af4d69762c58e25954cebc5e315be32a40b25d12c9dbe9607cfd19b267903 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#2 randprobe: urandom=e953d4d1bd17d287913b109f142a3fae369439935d9ef0c962b9a8533dd20153 ret=32
+[linux-rand]   glibc#2 randprobe: urandom_pread0=3bf58a50e1160657cb2424bd4dcaeb15f981c3487d99c8d1d327ba95efbb7543 again=8f6bada010b4dd25b2da79632250b74abb748e46057ae27242936d7771239851
+[linux-rand]   glibc#2 randprobe: random=2a453ff776e699b6e16d98ff252361f6e5b5d3f091ead6d63c6111794b886be5 ret=32
+[linux-rand]   glibc#2 randprobe: random_pread0=505888727f8e09622950ec9fa09897c1497a326b11c633879f90536f4db95f32 again=317f79289575730963801daa3acc764fd36e31e311db61a3c59497cb085f5299
+[linux-rand]   glibc#2 randprobe: stat getrandom bytes=1048576 ones=4195570 of 8388608 (off by 1266, limit 7242) worst-bit-position-off=798 (limit 2560) chi2=268 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand]   glibc#2 randprobe: stat urandom bytes=1048576 ones=4194149 of 8388608 (off by 155, limit 7242) worst-bit-position-off=970 (limit 2560) chi2=257 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=e39ab3984d629342f15a5c45f3fc023ec2a9a6c507c14da7c8fb1b1468f6a6f2
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, 2 glibc processes): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+== combined-smp1-iommu-1g
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 423 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (423 bits) · 6.006 ms → OK
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1654bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-KE-over-TLS + AES-SIV pending) ✓
+[3d3] EuroCA+Attest: 3-level chain(root→intermediate→leaf)-verifies=true, on-disk-cert-store-roundtrip=true · attestation JSON-report=true, verifier-accepts=true, replay-REFUSED=true, tampered-PCR-REFUSED=true → OK (sovereign PKI + remote attestation over the boot PCRs; live HTTPS endpoint + hardware-resident TPM2_Quote pending) ✓
+[ae] EuroID login (Argon2id, no more SHA-256): euro/'euro'=true · euro/'wrong'-rejected=true · root-locked-rejected=true → OK (login path on sovereign Argon2id identity) ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: at_random=4479143b7233a75294741b6d77cc614f
+[linux-rand]   musl#1 randprobe: stack_guard=4400143b7233a752 fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=b16d85bdb578c3eacc576b1293e43627b8b34131a001fc8db556a289db4b8cd9 ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=aa9e178773c758a4246f5218329ca2e9d87d13e20516146b723f52919771b5fe
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=a7e67941942452cc802ec8a7f57171cac55ee1ee37e1e552b3671661a6a92838 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=a57ca9a8a38cc65971ad350123473cc0739c03c5b91c8e8227d9dfcf0cb78fa3 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=793ab04e63730cc12fbff494c26c5cd23d82beec7c60400d7348406c8419f9b4 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: urandom=6c10decc44f22c3b9f6d3e95dd9b60e85b6f6002b99637100bcb9f55c4f3e667 ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=82f0d2b6570685905a0801adbe0b2d6e583d9977b38ce6ac335524bbb6f98c71 again=f12bcd537ec4938fc1263a5d481fcb842521f4af1259d241cd5ff97dabc7b331
+[linux-rand]   musl#1 randprobe: random=a43ac64922fa7486ff1871c8f0b163b888a9c8dc6e32c1ef281a6d2206fd326b ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=df176953959c9b54587a66b14ebc3b9bfd88277fb6f8f345a427f8d050b86a5c again=07c5cfb3acddb26fe50688a94071a5865f36244ff9c8e94dd139324a42241837
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: at_random=5ee22fe6e78837d057f34480911563f4
+[linux-rand]   musl#2 randprobe: stack_guard=5e002fe6e78837d0 fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=961811add3ca0d1896b8e7abbc8a76179373f57cf7bab6455c0027545b04a904 ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=22fa93a2f7359ab99ac7fffc30ccf8e7213b83ec5bd0af52b95a761726c6086e
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=13d42772fee8f40de383da616d59b85ddcb7b6c97cc90dfc5968cbab5d20126b ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=0b01fcd1bb1e08efe28228a6d663ce1f46b9a6758601fc1c920a6d9da5e8b53a ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=96e93c80a41f93db8e3774bcba5a07e1362bd93575ca68bb8c2bdef2d7927b5c ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: urandom=3a59e5a8146392836c226d36fd5ead674e28119baf3d068a2fde7c40908992a4 ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=649703bbc87a7b57701c0058d55aec3f84ddc773467bb672d7c7c0fc002373d9 again=3db67b85dc0a2cf7a95b1bcaef3cec9cf357ed9399d77d568d31662611e8708f
+[linux-rand]   musl#2 randprobe: random=d2974053144d5c9fd5fda85ebf93b9a224f2668f57a561aa4af383dc45eefb69 ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=fef8dd052249713ab9d6d17d76d2ca302261d8d562774668d995b1529fa46fed again=fa9c8d0ef5b1795f5295827356b62c844d6eabad8005abbfae37da0ba98d885e
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1047195 of 2097152 (off by 1381, limit 3622) worst-bit-position-off=355 (limit 1280) chi2=208 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1048773 of 2097152 (off by 197, limit 3622) worst-bit-position-off=575 (limit 1280) chi2=253 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand] glibc#1 exit=0
+[linux-rand]   glibc#1 randprobe: at_random=e3d701099c0a2eee848983adea927f12
+[linux-rand]   glibc#1 randprobe: stack_guard=00d701099c0a2eee fs30=848983adea927f12
+[linux-rand]   glibc#1 randprobe: getrandom=a1454d1a3e8c5f0412e2aa2e76d7f64e408eb99b8dbf965f124d72bed8b732dc ret=32
+[linux-rand]   glibc#1 randprobe: getrandom2=1e1c9049c9c9d0c971a69a48c8b31bd2f9b7afc576fdcfc3949292e026c33b24
+[linux-rand]   glibc#1 randprobe: getrandom_nonblock=30b4d2f5d04183ce330e5f0b49cbc18cd762362259bd467ff0a8444ccc6b0d4c ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_random=3f3521d4647fef8f86e6597db604d5238f7185f9fb7e2b71555e1398410004c4 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_insecure=bd305c5f12abc2be392113e55b2c4490d9b20384936d7a3c2999e77c67f918f1 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#1 randprobe: urandom=55d6d4711c7a257db634bdd8955ef5652165c2ba84ae05093c19668690803e81 ret=32
+[linux-rand]   glibc#1 randprobe: urandom_pread0=faba9bd7793a7cea2c4c7e2ff081f5983d238165d3b7deb7f42eee03c4a20b6d again=afbae2f18e58a075827522422cc8106a018e337400af3e979d0457bf44cd566e
+[linux-rand]   glibc#1 randprobe: random=afac809fa473031228c42e8a8610b78ce26c7f934151d3757921f5be905a8040 ret=32
+[linux-rand]   glibc#1 randprobe: random_pread0=7bc2048d39eee93dcc1f730e24e37a23cc7b0d70a20b6cb3f1b1fbf5ba407d4a again=c68003c31c9032938adcdc64a18b9843cdf92e2032e28a042692a1256deab605
+[linux-rand] glibc#2 exit=0
+[linux-rand]   glibc#2 randprobe: at_random=8238d39e7cfd636cb317051adcdc0efe
+[linux-rand]   glibc#2 randprobe: stack_guard=0038d39e7cfd636c fs30=b317051adcdc0efe
+[linux-rand]   glibc#2 randprobe: getrandom=cea9bc2ee0c0cb6bc7b1271b5f8f5be99aaf994b1197e3273634a06c2f5c80ea ret=32
+[linux-rand]   glibc#2 randprobe: getrandom2=2135fd257272d7224d9fd0a277c739f4947a8331b613b2293537ebd4afeea1b8
+[linux-rand]   glibc#2 randprobe: getrandom_nonblock=a1659995e74b463686800b50f31a3e6e0477f33d668c48908f1c657a10f3e6c9 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_random=52e9f878ff4260c0573be019570d40d5ffe02c96c8ff436708b4c5225c1938c0 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_insecure=30942e8b68fb884993e06a915d48a56e209979892321005a2d4d265db95f8811 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#2 randprobe: urandom=386ead73af4ae281fab20a002d44b93d845627248180123fd0d8092dd80d4ab4 ret=32
+[linux-rand]   glibc#2 randprobe: urandom_pread0=617ccaa718b6845eb00c4f0565e32a5f7c4e311366758bd4244ea23d3589d06e again=624f26e61c7fb2213cd7848804457105a7e00c382f8f165475af8b08f193d00d
+[linux-rand]   glibc#2 randprobe: random=06fd874c6f09ef9a160a264692fc127c097a07413db978934397075f98d36f6c ret=32
+[linux-rand]   glibc#2 randprobe: random_pread0=e60dc7bc5f28dbfe419cc060dbe23c0e821af49eda3f90fa996c54a976a8baa3 again=974699bf47735475bbb725c55e94b027f0936a421fc3ea0868eac12d953ce098
+[linux-rand]   glibc#2 randprobe: stat getrandom bytes=1048576 ones=4192272 of 8388608 (off by 2032, limit 7242) worst-bit-position-off=951 (limit 2560) chi2=274 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand]   glibc#2 randprobe: stat urandom bytes=1048576 ones=4195411 of 8388608 (off by 1107, limit 7242) worst-bit-position-off=684 (limit 2560) chi2=266 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=07db9a8605b8543d09a17844ebc577711bf108d2d890dd493d30828376d438ec
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, 2 glibc processes): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓

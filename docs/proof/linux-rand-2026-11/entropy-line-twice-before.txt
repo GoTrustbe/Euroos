@@ -1,0 +1,32 @@
+# The [entropy] status line with net.driver=kernel, self-test image under TCG (512 MiB, smp 4, e1000e on SLIRP).
+# Before the fix (91afd7d): 2 status lines. Each with the two lines before and after it:
+[iommu] domain nic: 1 PCI function(s), 18 DMA page(s) registered
+[tcp] @0 FIN from 172.66.147.243:80 to sport 55277 — closing
+[entropy] CSPRNG seeded: 302 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=3 batches of 512 samples (302 bits) · 3.752 ms → OK
+[tcp] @0 FIN from 172.66.147.243:443 to sport 61809 — closing
+[g3] poll/select: 2 fd's multiplexed — listener readable=false (fresh queue empty → expected false)
+--
+[i3-s5] ACPI shutdown ready: PM1a_CNT port 0x604, S5 value 0x2000, SLP_TYP-from-AML=true → `poweroff` performs a clean soft-off ✓ (end-to-end proven via scripts/shutdown-test.py: QEMU guest-shutdown)
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 406 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (406 bits) · 6.119 ms → OK
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1613bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entr
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-
+
+# After (fd0982b), tcg-kernel-smp4: 1 status line, with the lines around it:
+[    0.00 INF] [hpet] HPET active @ 100 MHz — 1M spin iterations = 161074 us (high-resolution HAL time source)
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 398 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (398 bits) · 5.858 ms → OK
+[euroid] no /etc/euroid/users.db on the root — live medium, built-in demo store (euro/alice/bob)
+[euro] boot #1 (live/RAM)
+
+# [entropy] lines per matrix boot (after):
+combined-smp1-iommu-1g: 1
+combined-smp4-iommu-1g: 1
+kernel-smp1: 1
+kernel-smp4: 1
+storage-smp1-iommu-1g: 1
+storage-smp4-iommu-1g: 1
+user-smp1-iommu: 1
+user-smp1-noiommu: 1
+user-smp4-iommu: 1
+user-smp4-noiommu: 1

@@ -1,0 +1,84 @@
+# Boot time of the public image, R630 KVM, boot-time.py --pin 38-39 --hold 5; base = b9a5755, final = fd0982b, alternating.
+== round 1 (while the soak, two lanes of short boots and another team's guest were running)
+base-1: kernel-entry 2.13s desktop 3.11s
+final-1: kernel-entry 1.67s desktop 2.52s
+base-2: kernel-entry 2.04s desktop 2.89s
+final-2: kernel-entry 2.01s desktop 2.87s
+base-3: kernel-entry 1.65s desktop 2.52s
+final-3: kernel-entry 2.80s desktop 4.39s
+base-4: kernel-entry 2.17s desktop 3.16s
+final-4: kernel-entry 1.90s desktop 2.90s
+base-5: kernel-entry 1.62s desktop 2.40s
+final-5: kernel-entry 2.62s desktop 3.76s
+base-1: desktop after 976 ms | entropy::init 0.749 ms | [entropy] lines 1
+base-2: desktop after 854 ms | entropy::init 0.683 ms | [entropy] lines 1
+base-3: desktop after 867 ms | entropy::init 0.722 ms | [entropy] lines 1
+base-4: desktop after 984 ms | entropy::init 0.767 ms | [entropy] lines 1
+base-5: desktop after 779 ms | entropy::init 0.633 ms | [entropy] lines 1
+final-1: desktop after 844 ms | entropy::init 0.706 ms | [entropy] lines 1
+final-2: desktop after 859 ms | entropy::init 0.642 ms | [entropy] lines 1
+final-3: desktop after 1584 ms | entropy::init 1.023 ms | [entropy] lines 1
+final-4: desktop after 993 ms | entropy::init 0.855 ms | [entropy] lines 1
+final-5: desktop after 1143 ms | entropy::init 0.915 ms | [entropy] lines 1
+== round 2 (10 boots each; it started while the last short boots of four lanes were still running: bt2.sh waited for a process name that did not match)
+base-1: kernel-entry 2.12s desktop 3.02s
+final-1: kernel-entry 2.16s desktop 3.08s
+base-2: kernel-entry 2.98s desktop 4.68s
+final-2: kernel-entry 2.83s desktop 4.47s
+base-3: kernel-entry 2.74s desktop 4.30s
+final-3: kernel-entry 2.77s desktop 4.39s
+base-4: kernel-entry 1.79s desktop 2.70s
+final-4: kernel-entry 2.81s desktop 4.54s
+base-5: kernel-entry 2.91s desktop 4.64s
+final-5: kernel-entry 1.78s desktop 2.65s
+base-6: kernel-entry 2.09s desktop 2.93s
+final-6: kernel-entry 2.75s desktop 4.32s
+base-7: kernel-entry 2.60s desktop 4.05s
+final-7: kernel-entry 1.95s desktop 2.76s
+base-8: kernel-entry 1.58s desktop 2.42s
+final-8: kernel-entry 2.00s desktop 2.84s
+base-9: kernel-entry 1.64s desktop 2.48s
+final-9: kernel-entry 1.93s desktop 2.78s
+base-10: kernel-entry 1.82s desktop 2.62s
+final-10: kernel-entry 1.95s desktop 2.75s
+base-10: desktop after 803 ms | entropy::init 0.626 ms | [entropy] lines 1
+base-1: desktop after 895 ms | entropy::init 0.721 ms | [entropy] lines 1
+base-2: desktop after 1699 ms | entropy::init 1.938 ms | [entropy] lines 1
+base-3: desktop after 1563 ms | entropy::init 1.033 ms | [entropy] lines 1
+base-4: desktop after 907 ms | entropy::init 0.835 ms | [entropy] lines 1
+base-5: desktop after 1735 ms | entropy::init 1.027 ms | [entropy] lines 1
+base-6: desktop after 837 ms | entropy::init 0.696 ms | [entropy] lines 1
+base-7: desktop after 1458 ms | entropy::init 1.992 ms | [entropy] lines 1
+base-8: desktop after 838 ms | entropy::init 0.777 ms | [entropy] lines 1
+base-9: desktop after 839 ms | entropy::init 0.740 ms | [entropy] lines 1
+final-10: desktop after 794 ms | entropy::init 0.700 ms | [entropy] lines 1
+final-1: desktop after 919 ms | entropy::init 0.794 ms | [entropy] lines 1
+final-2: desktop after 1634 ms | entropy::init 0.977 ms | [entropy] lines 1
+final-3: desktop after 1617 ms | entropy::init 2.019 ms | [entropy] lines 1
+final-4: desktop after 1728 ms | entropy::init 0.958 ms | [entropy] lines 1
+final-5: desktop after 868 ms | entropy::init 0.665 ms | [entropy] lines 1
+final-6: desktop after 1551 ms | entropy::init 1.092 ms | [entropy] lines 1
+final-7: desktop after 814 ms | entropy::init 0.712 ms | [entropy] lines 1
+final-8: desktop after 837 ms | entropy::init 0.731 ms | [entropy] lines 1
+final-9: desktop after 845 ms | entropy::init 0.732 ms | [entropy] lines 1
+== round 3 (5 boots each, none of our other runs active; another team's guest was running)
+base-1: kernel-entry 1.95s desktop 2.76s
+final-1: kernel-entry 1.78s desktop 2.55s
+base-2: kernel-entry 1.91s desktop 2.73s
+final-2: kernel-entry 1.54s desktop 2.34s
+base-3: kernel-entry 1.82s desktop 2.62s
+final-3: kernel-entry 1.97s desktop 2.79s
+base-4: kernel-entry 1.64s desktop 2.44s
+final-4: kernel-entry 1.66s desktop 2.49s
+base-5: kernel-entry 1.61s desktop 2.45s
+final-5: kernel-entry 2.13s desktop 3.00s
+base-1: desktop after 811 ms | entropy::init 0.636 ms | [entropy] lines 1
+base-2: desktop after 814 ms | entropy::init 0.593 ms | [entropy] lines 1
+base-3: desktop after 794 ms | entropy::init 0.662 ms | [entropy] lines 1
+base-4: desktop after 803 ms | entropy::init 0.719 ms | [entropy] lines 1
+base-5: desktop after 839 ms | entropy::init 0.727 ms | [entropy] lines 1
+final-1: desktop after 773 ms | entropy::init 0.583 ms | [entropy] lines 1
+final-2: desktop after 796 ms | entropy::init 0.715 ms | [entropy] lines 1
+final-3: desktop after 812 ms | entropy::init 0.696 ms | [entropy] lines 1
+final-4: desktop after 825 ms | entropy::init 0.691 ms | [entropy] lines 1
+final-5: desktop after 874 ms | entropy::init 0.729 ms | [entropy] lines 1

@@ -1,0 +1,38 @@
+# Soak, R630 KVM: loadtest.py --kvm --smp 4 --pin 4-7 --nic e1000e --restrict --nmi-on-hang --mem 16G --disks 8G --host-http --hostfwd 18591 --hammer 4 --procs 32 --scenario soak --soak-churn-proc 8 --duration 3600
+serial: loadtest-serial-20261112-173613.log 2660156 bytes
+  'GLIBC-DYNAMIC-OK': 1423
+  'KERNEL PANIC': 0
+  'GENERAL PROTECTION': 0
+  '[idt] PAGE FAULT': 0
+  'DOUBLE FAULT': 0
+  'NMI PROBE': 0
+  '[watchdog]': 0
+  'refused to free': 0
+  'out of memory: page tables': 0
+  'no frames for page tables': 4
+  'random bytes was refused': 0
+  'asked for before the boot seeded': 1
+  'waits for the CSPRNG': 0
+  [entropy] lines: 2
+[entropy] random bytes were asked for before the boot seeded the CSPRNG: seeding now
+[entropy] CSPRNG seeded: 558 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 128 bits, at most half the threshold), jitter=4 batches of 512 samples (430 bits) · 1.243 ms → OK
+  [churn-proc] verdict lines: 1012, with FAILED: 0
+  FAILED lines after the desktop (tag, count):
+      1 [3g2-wire]
+      1 [3g2-wire] WATCHDOG TRIPPED - main loop hung; would reset (i6300esb) FAILED
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+--- hammer / httpd lines of the harness:
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 440088, "err": 0, "p50_ms": 5.0, "p99_ms": 123.9, "max_ms": 7553.4, "busy_windows": 202, "busy_s": 2573, "busy": {"ok": 316390, "err": 0, "p50_ms": 5.0, "p99_ms": 123.
+--- end of the harness output:
+  [ 1150/?] ✓ ok            65ms t= 3058.3s  cat /home/euro/lt-soak/f10
+  [ 1175/?] ✓ ok          1905ms t= 3099.4s  sha256sum /home/euro/lt-soak/big0
+  [ 1200/?] ✓ ok           148ms t= 3165.8s  ltstat
+  [ 1225/?] ✓ ok          1210ms t= 3239.3s  truncate -s 8388608 /home/euro/lt-soak/big1
+  [ 1250/?] ✓ ok           429ms t= 3308.4s  churn net 1
+  [ 1275/?] ✓ ok          1814ms t= 3382.8s  spawn worker 32
+  [ 1300/?] ✓ ok           149ms t= 3414.7s  rm /home/euro/lt-soak/big2
+  [ 1325/?] ✓ ok           140ms t= 3495.3s  ltstat
+  [ 1350/?] ✓ ok          1977ms t= 3565.8s  sha256sum /home/euro/lt-soak/big1
+[loadtest] completed clean · results → /srv/euroos/rand-runs/soak/w/loadtest-results.csv · ltstat samples → /srv/euroos/rand-runs/soak/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 440088, "err": 0, "p50_ms": 5.0, "p99_ms": 123.9, "max_ms": 7553.4, "busy_windows": 202, "busy_s": 2573, "busy": {"ok": 316390, "err": 0, "p50_ms": 5.0, "p99_ms": 123.
+[loadtest] host HTTP server served 158 request(s)

@@ -1,0 +1,152 @@
+boot 1: verdict after 136.8 s
+boot 2: verdict after 131.7 s
+
+== 2 boot(s)
+boot 1: [linux-rand] verdict FAILED; processes ['glibc#1', 'glibc#2', 'musl#1', 'musl#2']; [entropy] status lines 1 (seeded 1)
+boot 2: [linux-rand] verdict FAILED; processes ['glibc#1', 'glibc#2', 'musl#1', 'musl#2']; [entropy] status lines 1 (seeded 1)
+
+-- at_random: 8 values, 1 distinct
+   boot1/glibc#1      5a45640726c1e083a24d6c0f2ec9e88b
+   boot1/glibc#2      5a45640726c1e083a24d6c0f2ec9e88b
+   boot1/musl#1       5a45640726c1e083a24d6c0f2ec9e88b
+   boot1/musl#2       5a45640726c1e083a24d6c0f2ec9e88b
+   boot2/glibc#1      5a45640726c1e083a24d6c0f2ec9e88b
+   boot2/glibc#2      5a45640726c1e083a24d6c0f2ec9e88b
+   boot2/musl#1       5a45640726c1e083a24d6c0f2ec9e88b
+   boot2/musl#2       5a45640726c1e083a24d6c0f2ec9e88b
+
+-- stack_guard: 8 values, 2 distinct
+   boot1/glibc#1      0045640726c1e083
+   boot1/glibc#2      0045640726c1e083
+   boot1/musl#1       5a00640726c1e083
+   boot1/musl#2       5a00640726c1e083
+   boot2/glibc#1      0045640726c1e083
+   boot2/glibc#2      0045640726c1e083
+   boot2/musl#1       5a00640726c1e083
+   boot2/musl#2       5a00640726c1e083
+
+-- getrandom: 8 values, 8 distinct
+   boot1/glibc#1      40e9a78ccfcd71b640b7e86210981964b62e06b0bed11b79de0929eb1a3fe6c1
+   boot1/glibc#2      89b7b73c4b4fb3b3a3e3dd2dec453ddac7d3c60d6ff3abf19faaf1f9af31f259
+   boot1/musl#1       79288a31481646250c848bd5295c1f8c0c8cc78938c78fb4ce22f8c626dc99dd
+   boot1/musl#2       05f3b6935c1ef133114f47022c9a21a963efa945b7f3217303f1970cc4d20949
+   boot2/glibc#1      437d9699fed5ee05d5b7716a7b9a21e96a67b202252d9b3f1c7b347d4cf1ddd9
+   boot2/glibc#2      a65d50362debebe211a7ba091bb270cdf41487258746104a7547702105b198bc
+   boot2/musl#1       4d385cce6b80a2178b0c273863b62b4e72b65f9c230dfaa270c3ba9695bf9102
+   boot2/musl#2       afea6f5847808bdf7a15da2753e0e5b4584cd1d346acb83d93f559ed54d81af0
+
+-- getrandom2: 8 values, 8 distinct
+   boot1/glibc#1      6a2b12771dc929390ed1b0e60c8f3c3e2d7eb5557b36289f7f0b0f0862abf771
+   boot1/glibc#2      c6c7a09597ee1ee936996c20be059997334b7963b3edc180b214860ee1faab99
+   boot1/musl#1       fb3ef19fdca6a5a531628ee09a50c9e5905687245b5a42cd3b10a63c5a902471
+   boot1/musl#2       cf1d83a7fb42e3d3a4f3de64d4ea632e1155f8f3841df3fa0e7c364b75290704
+   boot2/glibc#1      1e643132298e6594b6ead1fb5920b4598edcb5abac7792228184db1d3d514b36
+   boot2/glibc#2      2c0d167800cd60b5e28c7bc5e5b7c0ce1e860b7a4ab61ef702a98c133b4943d7
+   boot2/musl#1       5d30cddb35823792473ef6767f5b5fb14331127e6fc44f2c92114046979268ba
+   boot2/musl#2       909ac619c8b5a69e0cf686b44db8e67a999183507f8549a2839d96e7241e8f1b
+
+-- urandom: 8 values, 8 distinct
+   boot1/glibc#1      c6cb03a54f802693b320d61c18ca5f104f749e45602f84f67c8e09caf05b9812
+   boot1/glibc#2      635de5f6bd390c43b94f0cc0349f57b3e303617496ce8df2f6d942ded3de85b9
+   boot1/musl#1       090effe149aa4a09397888196e0f84fef071595acf059ee2f2d1dbf5709bd912
+   boot1/musl#2       d7a4bae77bb0240f5b82015eb60be72b17a9da5353be1f86c9b0529fd01f5680
+   boot2/glibc#1      3c808cde248541bc0082958fa8a819534bd0d3503eecd9bf97e78d885fb89674
+   boot2/glibc#2      d817ce2a0052aad3df2773d2b5a5e9f94e39dcfff064c069b6911eb34258f6dd
+   boot2/musl#1       1547d03af5f4a00cffa5a045c318193cfc960e01c9d448f4be7268c9f904f105
+   boot2/musl#2       2c9fe209496532d93de5043ed9acbf581ceb3dcf65cfc7c9a13e800d69420231
+
+-- random: 8 values, 8 distinct
+   boot1/glibc#1      2cebb585a38928f0ded622945a603e43a411eb85176cbbd023867a42e7ccdc25
+   boot1/glibc#2      9fc5242d0b863fea06cf18e216a39689b2bef16777590b554d0b01abed569b24
+   boot1/musl#1       00871b3e6642044ef69d5bc34564e78b5feeb02d0a8cb9e8c052b0e70d3b10fc
+   boot1/musl#2       4f95628a7bb85bcee44c3bc8688009bf743f5bb1b6ed80ba9a77d47ff99c1aa7
+   boot2/glibc#1      b240c76181fd3d9d4ae2a4d711b02f02d94869a0939e0121296642ad1b374fee
+   boot2/glibc#2      290d4936042dcbf240887a48ab9215aadd4affe2d04b691ad216e9be0d67f6fb
+   boot2/musl#1       198e1fe8f325096a1c9f90a6d74928b75755dd6d3dae1f2553773c3acfa18bf7
+   boot2/musl#2       9c8b77baf57cc21e98c4b647f028bfc92d05789efc2f360368aee2b858911587
+
+-- getrandom against the old generator (splitmix64 over a counter): words 2..4 of a call predicted from its first word
+   boot1/glibc#1      getrandom  predicted 3 of 3
+   boot1/glibc#1      getrandom2 predicted 3 of 3
+   boot1/glibc#1      urandom    predicted 3 of 3
+   boot1/glibc#1      random     predicted 3 of 3
+   boot1/glibc#2      getrandom  predicted 3 of 3
+   boot1/glibc#2      getrandom2 predicted 3 of 3
+   boot1/glibc#2      urandom    predicted 3 of 3
+   boot1/glibc#2      random     predicted 3 of 3
+   boot1/musl#1       getrandom  predicted 3 of 3
+   boot1/musl#1       getrandom2 predicted 3 of 3
+   boot1/musl#1       urandom    predicted 3 of 3
+   boot1/musl#1       random     predicted 3 of 3
+   boot1/musl#2       getrandom  predicted 3 of 3
+   boot1/musl#2       getrandom2 predicted 3 of 3
+   boot1/musl#2       urandom    predicted 3 of 3
+   boot1/musl#2       random     predicted 3 of 3
+   boot2/glibc#1      getrandom  predicted 3 of 3
+   boot2/glibc#1      getrandom2 predicted 3 of 3
+   boot2/glibc#1      urandom    predicted 3 of 3
+   boot2/glibc#1      random     predicted 3 of 3
+   boot2/glibc#2      getrandom  predicted 3 of 3
+   boot2/glibc#2      getrandom2 predicted 3 of 3
+   boot2/glibc#2      urandom    predicted 3 of 3
+   boot2/glibc#2      random     predicted 3 of 3
+   boot2/musl#1       getrandom  predicted 3 of 3
+   boot2/musl#1       getrandom2 predicted 3 of 3
+   boot2/musl#1       urandom    predicted 3 of 3
+   boot2/musl#1       random     predicted 3 of 3
+   boot2/musl#2       getrandom  predicted 3 of 3
+   boot2/musl#2       getrandom2 predicted 3 of 3
+   boot2/musl#2       urandom    predicted 3 of 3
+   boot2/musl#2       random     predicted 3 of 3
+
+-- stream statistics
+   boot1/glibc#2      stat getrandom bytes=1048576 ones=4193238 of 8388608 (off by 1066, limit 7242) worst-bit-position-off=889 (limit 2560) chi2=259 (140..370) blocks16=65536 repeated=0 ok
+   boot1/glibc#2      stat urandom bytes=1048576 ones=4195009 of 8388608 (off by 705, limit 7242) worst-bit-position-off=1182 (limit 2560) chi2=294 (140..370) blocks16=65536 repeated=0 ok
+   boot1/musl#2       stat getrandom bytes=262144 ones=1048509 of 2097152 (off by 67, limit 3622) worst-bit-position-off=272 (limit 1280) chi2=260 (140..370) blocks16=16384 repeated=0 ok
+   boot1/musl#2       stat urandom bytes=262144 ones=1048017 of 2097152 (off by 559, limit 3622) worst-bit-position-off=522 (limit 1280) chi2=230 (140..370) blocks16=16384 repeated=0 ok
+   boot2/glibc#2      stat getrandom bytes=1048576 ones=4194828 of 8388608 (off by 524, limit 7242) worst-bit-position-off=890 (limit 2560) chi2=264 (140..370) blocks16=65536 repeated=0 ok
+   boot2/glibc#2      stat urandom bytes=1048576 ones=4195770 of 8388608 (off by 1466, limit 7242) worst-bit-position-off=775 (limit 2560) chi2=215 (140..370) blocks16=65536 repeated=0 ok
+   boot2/musl#2       stat getrandom bytes=262144 ones=1048106 of 2097152 (off by 470, limit 3622) worst-bit-position-off=323 (limit 1280) chi2=279 (140..370) blocks16=16384 repeated=0 ok
+   boot2/musl#2       stat urandom bytes=262144 ones=1048600 of 2097152 (off by 24, limit 3622) worst-bit-position-off=343 (limit 1280) chi2=239 (140..370) blocks16=16384 repeated=0 ok
+
+FOUND (38):
+  - boot 1: [linux-rand] verdict is FAILED
+  - boot 2: [linux-rand] verdict is FAILED
+  - at_random: 5a45640726c1e083a24d6c0f2ec9e88b… seen 8 times (boot1/glibc#1, boot1/glibc#2, boot1/musl#1, boot1/musl#2, boot2/glibc#1, boot2/glibc#2, boot2/musl#1, boot2/musl#2)
+  - at_random: the pre-fix constant 5a45640726c1e083a24d6c0f2ec9e88b (8 processes)
+  - stack_guard: 0045640726c1e083… seen 4 times (boot1/glibc#1, boot1/glibc#2, boot2/glibc#1, boot2/glibc#2)
+  - stack_guard: 5a00640726c1e083… seen 4 times (boot1/musl#1, boot1/musl#2, boot2/musl#1, boot2/musl#2)
+  - boot1/glibc#1 getrandom: 3 of 3 words predicted from the first 8 bytes
+  - boot1/glibc#1 getrandom2: 3 of 3 words predicted from the first 8 bytes
+  - boot1/glibc#1 urandom: 3 of 3 words predicted from the first 8 bytes
+  - boot1/glibc#1 random: 3 of 3 words predicted from the first 8 bytes
+  - boot1/glibc#2 getrandom: 3 of 3 words predicted from the first 8 bytes
+  - boot1/glibc#2 getrandom2: 3 of 3 words predicted from the first 8 bytes
+  - boot1/glibc#2 urandom: 3 of 3 words predicted from the first 8 bytes
+  - boot1/glibc#2 random: 3 of 3 words predicted from the first 8 bytes
+  - boot1/musl#1 getrandom: 3 of 3 words predicted from the first 8 bytes
+  - boot1/musl#1 getrandom2: 3 of 3 words predicted from the first 8 bytes
+  - boot1/musl#1 urandom: 3 of 3 words predicted from the first 8 bytes
+  - boot1/musl#1 random: 3 of 3 words predicted from the first 8 bytes
+  - boot1/musl#2 getrandom: 3 of 3 words predicted from the first 8 bytes
+  - boot1/musl#2 getrandom2: 3 of 3 words predicted from the first 8 bytes
+  - boot1/musl#2 urandom: 3 of 3 words predicted from the first 8 bytes
+  - boot1/musl#2 random: 3 of 3 words predicted from the first 8 bytes
+  - boot2/glibc#1 getrandom: 3 of 3 words predicted from the first 8 bytes
+  - boot2/glibc#1 getrandom2: 3 of 3 words predicted from the first 8 bytes
+  - boot2/glibc#1 urandom: 3 of 3 words predicted from the first 8 bytes
+  - boot2/glibc#1 random: 3 of 3 words predicted from the first 8 bytes
+  - boot2/glibc#2 getrandom: 3 of 3 words predicted from the first 8 bytes
+  - boot2/glibc#2 getrandom2: 3 of 3 words predicted from the first 8 bytes
+  - boot2/glibc#2 urandom: 3 of 3 words predicted from the first 8 bytes
+  - boot2/glibc#2 random: 3 of 3 words predicted from the first 8 bytes
+  - boot2/musl#1 getrandom: 3 of 3 words predicted from the first 8 bytes
+  - boot2/musl#1 getrandom2: 3 of 3 words predicted from the first 8 bytes
+  - boot2/musl#1 urandom: 3 of 3 words predicted from the first 8 bytes
+  - boot2/musl#1 random: 3 of 3 words predicted from the first 8 bytes
+  - boot2/musl#2 getrandom: 3 of 3 words predicted from the first 8 bytes
+  - boot2/musl#2 getrandom2: 3 of 3 words predicted from the first 8 bytes
+  - boot2/musl#2 urandom: 3 of 3 words predicted from the first 8 bytes
+  - boot2/musl#2 random: 3 of 3 words predicted from the first 8 bytes
+RESULT: PASS (the image is predictable, as expected of the one before the fix)
+rc=0

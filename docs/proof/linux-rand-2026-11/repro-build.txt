@@ -1,0 +1,11 @@
+# fd0982b, 2026-11-12
+==> reproducible build (SOURCE_DATE_EPOCH=1794504524, EUROOS_BUILD_VERSION=20261112)
+==> eurokernel.efi sha256: aec2bd657d5335b66edf4ea689a517ab17681d29a28565afbd5c7ab472c18a7d
+==> loader.efi     sha256: a6b8a3b0ab39c76011a7ec9497b3004cd1f8c376cebc8e9114cc0caa140fc8aa
+==> reproducible build (SOURCE_DATE_EPOCH=1794504524, EUROOS_BUILD_VERSION=20261112)
+==> eurokernel.efi sha256: aec2bd657d5335b66edf4ea689a517ab17681d29a28565afbd5c7ab472c18a7d
+==> loader.efi     sha256: a6b8a3b0ab39c76011a7ec9497b3004cd1f8c376cebc8e9114cc0caa140fc8aa
+build #1: aec2bd657d5335b66edf4ea689a517ab17681d29a28565afbd5c7ab472c18a7d (loader a6b8a3b0ab39c76011a7ec9497b3004cd1f8c376cebc8e9114cc0caa140fc8aa)
+build #2: aec2bd657d5335b66edf4ea689a517ab17681d29a28565afbd5c7ab472c18a7d (loader a6b8a3b0ab39c76011a7ec9497b3004cd1f8c376cebc8e9114cc0caa140fc8aa)
+paths of the build machine in the kernel: 0
+REPRODUCIBLE

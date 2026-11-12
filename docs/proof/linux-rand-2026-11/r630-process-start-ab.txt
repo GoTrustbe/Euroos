@@ -1,0 +1,30 @@
+# The same commands on the image before the fix (91afd7d) and after it (fd0982b), alternating, KVM, smp 4, 4 GiB, CPUs 12-15 (r630-ab.sh): 40 x 'churn proc 8', 10 x 'spawn worker 32'.
+before-1 rc=0 18:12:43
+after-1 rc=0 18:19:42
+before-2 rc=0 18:26:24
+after-2 rc=0 18:33:11
+before-3 rc=0 18:39:54
+after-3 rc=0 18:46:42
+before-1: 51 commands over 3.6 min = 852 per hour; by status {'ok': 51}
+   churn proc    n=  40  median     5044 ms  mean     5122 ms  p10     4874  p90     5324  max     6575
+   spawn worker  n=  10  median     1551 ms  mean     1561 ms  p10     1489  p90     1771  max     1771
+after-1: 51 commands over 3.7 min = 826 per hour; by status {'ok': 51}
+   churn proc    n=  40  median     5165 ms  mean     5322 ms  p10     4975  p90     5685  max     6059
+   spawn worker  n=  10  median     1507 ms  mean     1533 ms  p10     1491  p90     1677  max     1677
+before-2: 51 commands over 3.5 min = 878 per hour; by status {'ok': 51}
+   churn proc    n=  40  median     4964 ms  mean     4971 ms  p10     4843  p90     5133  max     5585
+   spawn worker  n=  10  median     1550 ms  mean     1563 ms  p10     1490  p90     1681  max     1681
+after-2: 51 commands over 3.5 min = 864 per hour; by status {'ok': 51}
+   churn proc    n=  40  median     5024 ms  mean     5053 ms  p10     4924  p90     5175  max     5668
+   spawn worker  n=  10  median     1551 ms  mean     1594 ms  p10     1551  p90     1771  max     1771
+before-3: 51 commands over 3.5 min = 870 per hour; by status {'ok': 51}
+   churn proc    n=  40  median     5004 ms  mean     5016 ms  p10     4834  p90     5155  max     5541
+   spawn worker  n=  10  median     1557 ms  mean     1584 ms  p10     1549  p90     1724  max     1724
+after-3: 51 commands over 3.6 min = 858 per hour; by status {'ok': 51}
+   churn proc    n=  40  median     5006 ms  mean     5080 ms  p10     4865  p90     5386  max     5770
+   spawn worker  n=  10  median     1616 ms  mean     1631 ms  p10     1560  p90     1733  max     1733
+== the three rounds together (the 'per hour' of this pair is meaningless: three files concatenated)
+   churn proc    n= 120  median     4994 ms  mean     5036 ms  p10     4863  p90     5184  max     6575
+   spawn worker  n=  30  median     1551 ms  mean     1569 ms  p10     1489  p90     1724  max     1771
+   churn proc    n= 120  median     5044 ms  mean     5152 ms  p10     4924  p90     5626  max     6059
+   spawn worker  n=  30  median     1551 ms  mean     1586 ms  p10     1492  p90     1733  max     1771

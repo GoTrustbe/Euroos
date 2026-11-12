@@ -186,6 +186,8 @@ the code.
 | Same, R630 KVM: 100 short boots (user, user + IOMMU, smp 1), `soak` 2 h 05 + `churn proc 8` + 4 httpd clients, release image boot time and wizard install | 2026-11-12 | ✅ 100/100 boots, soak 2 671/2 671 ok; 🟡 BUG-065 in 8 of the 100 boots | `proof/kdebug-2026-11/` | final image: 100 boots (40 user, 30 user + IOMMU, 30 smp 1) to the desktop and clean, the three new self-tests OK in each; soak 2 h 05: 342 `churn proc` commands, 2 758 glibc launches, every verdict OK, heap +0.17 kB/min, 0 panics, httpd 883 286 answered / 10 failed; a first round on the commit before BUG-064: 78/78 boots, soak 2 724/2 724; release image 2.71 s (base 2.69 s beside it), wizard 14/14; lock screen phase 5.39 s → 0.87 s; `[3d8]` (BUG-065, open) FAILED in 8 of the 100 boots, base image 0 of 60 |
 | Integration of `feature/kdebug` and `feature/uidebug` with BUG-065 (`feature/integ-2026-11b`): host tests, TCG matrix, megaraid, CI q35 matrix, reproducible build; public image: GUI smoke twice, wizard install, open network | 2026-11-12 | ✅ 0 markers worse, q35 13/13 | `proof/integ-2026-11b/` | 1 330 host tests; matrix 10/10, 0 worse in 30 comparisons against three proofs, `[lk]` 0 inversions; megaraid 0 worse; q35 13/13 (11/13 in the first round: BUG-083, BUG-084, from the desktop pass); REPRODUCIBLE; gui-smoke 67/67 without NIC and with e1000e; wizard 15/15; ping, DNS, fetch, https on both NICs |
 | Same, R630 KVM: 204 + 20 entropy boots (and 20 under TCG), `soak` 2 h 05 + `churn proc 8` + 4 httpd clients, monkey soak 2 × 35 min, boot time, NVMe untouched, BUG-063 from the desktop | 2026-11-12 | ✅ 0 unseeded boots of 244; soak 2 744/2 744 ok | `proof/integ-2026-11b/` | before the fix 13 of 204 boots FAILED `[3d8]` and 11 were unseeded; after: 0 of 204, 0 of 20 jitter-only (KVM), 0 of 20 (TCG); soak heap +0.17 kB/min, 0 panics, httpd 917 858 answered / 0 failed; monkey 2 225 and 2 102 actions, no crash; public image 2.62 s; base image crashes 5 of 5 in the desktop BUG-063 scenario, final 0 of 5 |
+| BUG-080, BUG-081 (`feature/linux-rand`): `getrandom`, `/dev/urandom`, `/dev/random`, `AT_RANDOM` and the kernel's own callers on the CSPRNG; one early seeding. Host tests, TCG matrix, CI q35 matrix, reproducible build, public image on the open network | 2026-11-12 | ✅ 0 markers worse, q35 13/13 | `proof/linux-rand-2026-11/` | 1 330 host tests; matrix 10/10, 0 worse and 0 changed against `integ-2026-11b`, `[lk]` 0 inversions, one `[entropy]` line in every leg (two in the `kernel` legs before); `[linux-rand]` OK in 10/10; q35 13/13; REPRODUCIBLE; ping, DNS, fetch, https on both NICs. Before the fix, the same probe: one `AT_RANDOM` for 8 of 8 processes of two boots, 32 of 32 `getrandom`/device results predicted from their first 8 bytes |
+| Same, R630 KVM: 104 short boots, before/after boots (also without RDRAND and RDSEED), `soak` 1 h + `churn proc 8` + 4 httpd clients, process start before/after, public image GUI smoke and boot time | 2026-11-12 | ✅ 104/104 boots seeded, soak 1 364/1 364 ok, gui-smoke 67/67 twice; 🟡 one configuration asks before the early seeding | `proof/linux-rand-2026-11/` | 104 boots: `[3d8]`, `[3d7]`, `[3d3]` FAILED in 0, unseeded 0, `[linux-rand]` OK in 104; 416 `AT_RANDOM` values, guards, `getrandom` results and device reads each, none twice. Soak: 1 366 commands per hour (previous 1 314), 1 423 glibc launches, 0 panics, httpd 440 088 answered / 0 failed. `churn proc 8` before/after, alternating: 4 994 against 5 044 ms median, inside the spread. Boot time 2.62 s base and 2.55 s final (median of 5), kernel entry to desktop 811 and 812 ms. With a blank virtio disk the install self-test asks for a salt before the early seeding (served by the same seeding, one status line; see the proof's Open) |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
 > it ✅ from "it should work".
@@ -1467,7 +1469,7 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   the spread of a shared host.
 - **Regression tests:** `[3d8]` (unchanged in what it demands: jitter alone reaches 256 bits in 16 batches; new:
   jitter is in the seed of the global pool); `[entropy]` in every boot; `seed_tests` in `crates/euroentropy`.
-- **Left open:** BUG-080, BUG-081, BUG-082.
+- **Left open:** BUG-082. BUG-080 and BUG-081 are fixed on `feature/linux-rand` (`proof/linux-rand-2026-11/`).
 
 ### BUG-070 — EuroFiles: the folder icon of a list row is a slanted hook ✅ FIXED
 - **Status:**   FIXED (`98bb550`) · **Severity:** COSMETIC
@@ -1535,29 +1537,82 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Analysis:** the reader decoded every `recv` on its own; the UART delivers the three bytes in separate reads.
   **Fix:** an incremental UTF-8 decoder.
 
-### BUG-080 — `getrandom`, `/dev/urandom` and `/dev/random` of the Linux ABI are not the CSPRNG ⬜ OPEN
-- **Status:**   OPEN · **Severity:** HIGH (every key a userspace program makes: Chromium's TLS, an SSH or GnuPG key)
-- **Found:**    2026-11-12 · by reading, while looking for the callers of the CSPRNG (BUG-065). Not provoked.
-- **Actual:**   `ring3::fill_random` serves the `getrandom` syscall (318, both ABIs) and reads of `/dev/urandom` and
-  `/dev/random`. It is splitmix64 over a global counter plus `ticks * constant`: unique per call, which is what
-  its comment asks of it ("Not a CSPRNG"), and predictable from the uptime in ticks and the number of calls
-  so far. The ASLR slides (`aslr_slides`) come from `net::rand_u64`, see BUG-081.
-- **Next:**     fill from `entropy::getrandom` (the pool is seeded before the first process starts; a refusal is
-  `EAGAIN` or a wait), in pieces with the pool lock released between them; keep the counter only as a
-  uniqueness mix. Needs the chrome start and the soak run again: it is on the path of every glibc process.
-  Not changed in the integration (no behaviour change of the process ABI without its own test round).
+### BUG-080 — `getrandom`, `/dev/urandom` and `/dev/random` of the Linux ABI are not the CSPRNG ✅ FIXED
+- **Status:**   FIXED (`f83007a`, with `0b33035`; `feature/linux-rand`) · **Severity:** HIGH (every key a userspace
+  program makes: Chromium's TLS, an SSH or GnuPG key; and the stack guard of every process)
+- **Found:**    2026-11-12 · by reading, while looking for the callers of the CSPRNG (BUG-065). Measured in this
+  round with `userland/randprobe.c` on the image before the fix (`proof/linux-rand-2026-11/`).
+- **Before, measured** (self-test image of `91afd7d`, two boots under TCG and two under KVM, two musl and two
+  glibc processes per boot):
+  - `ring3::fill_random` served the `getrandom` syscall (318, both dispatchers) and reads of `/dev/urandom` and
+    `/dev/random`: splitmix64 over a global counter plus `ticks * constant`. The first 8 bytes of a result
+    are the generator's state: `scripts/rand-boots.py` predicted words 2 to 4 of 32 of 32 results from
+    word 1, under TCG and under KVM.
+  - `AT_RANDOM` was the constant `5a45640726c1e083a24d6c0f2ec9e88b` in all three stack builders: 8 of 8
+    processes. glibc's stack guard was `0045640726c1e083` and its pointer guard `a24d6c0f2ec9e88b`, musl's
+    guard `5a00640726c1e083`, in every process of every boot. A stack protector with a published canary
+    protects nothing.
+  - `pread` on a random device returned the bytes it was registered with: `00bb7733efab6622…` for
+    `/dev/urandom` at offset 0 in every process, 32 zero bytes for `/dev/random`. `main.rs` registers
+    `/dev/urandom` again for a chrome run, as an ordinary 4 KiB file; a name lookup takes the first entry.
+  - Any flag value was accepted; nothing ever waited or refused.
+  - Wrong in the tracker until now: "the pool is seeded before the first process starts". `entropy::init`
+    ran at line 2304 of `main.rs`, after the scheduler, the network bring-up, `euroid::init_from_disk` and
+    the boot programs.
+- **Fix.**
+  - `0b33035`: `tpm::init` and `entropy::init` run right after the HPET, before anything that draws. `init`
+    works once; a request before it does the same seeding and says so. The pool is taken with interrupts
+    off. `fill_wait`/`draw_wait` for kernel callers that cannot refuse.
+  - `f83007a`: `fill_random` draws from `entropy::getrandom` in 4 KiB pieces. `getrandom(buf, len, flags)`:
+    unknown flags and `GRND_RANDOM|GRND_INSECURE` → `EINVAL`; pool not seeded → the call waits (each round
+    gathers 64 batches of noise), with `GRND_NONBLOCK` → `EAGAIN` and nothing written; `GRND_RANDOM` is the
+    same generator; `GRND_INSECURE` is accepted and waits like no flag (no unseeded bytes exist here); never
+    a short result; at most 32 MiB − 1 per call. Both devices: the same generator for `read` and `pread`,
+    one entry per device in the file table, no stored bytes. `AT_RANDOM`: 16 CSPRNG bytes per process
+    image. `aslr_slides`: 8 CSPRNG bytes.
+  - There is no vDSO `getrandom` and no `/proc/sys/kernel/random`.
+- **After** (`proof/linux-rand-2026-11/`): `[linux-rand]` OK in the 10 matrix boots, in 104 short KVM boots on
+  the R630 and in 7 comparison boots (TCG, KVM, KVM without RDRAND and RDSEED); over the short boots
+  416 `AT_RANDOM` values, stack guards, `getrandom` results and device reads each, no value twice;
+  0 of them predicted; 1 MiB streams from `getrandom` and from `/dev/urandom` pass bit balance, chi-square
+  and the repeated-block search (they did before as well: splitmix64 is statistically clean; the constant
+  and the prediction are what distinguish the two).
+- **Cost:**     `churn proc 8` (8 glibc launches) before and after, alternating, three rounds under KVM: median 4 994 against
+  5 044 ms, inside the spread of the rounds; the 1 h soak ran 1 366 commands per hour (previous soak 1 314)
+  and 1 423 glibc launches; public image boot 2.62 s base, 2.55 s final, kernel entry to desktop 811 and
+  812 ms (median of 5). `entropy::init` 0.59 to 1.35 ms under KVM, as before; it only moved.
+- **Regression tests:** `[linux-rand]` (every self-test image); `scripts/rand-boots.py` (between boots);
+  `userland/randprobe.c` runs on Linux as well, as the reference.
+- **Left open:** with a blank virtio data disk the install self-test `[q1x3]` asks for a salt before the early
+  seeding and does the seeding itself (one status line and a note; a TPM would be missing from that seed):
+  the two init lines belong before the storage phase. A Chromium start on this kernel was run once (40 minutes of a chrome boot under TCG beside the base: the same serial lines per tag, no fault, neither got to a paint); the Chromium team's own
+  round is still to come. A read of a random device holds the fd-table lock for the whole request, as
+  before, and the generator is slower than splitmix64: a cap per read (short reads are allowed above
+  256 bytes) would bound that. `O_NONBLOCK` on the devices is not looked at. BUG-088 (the slides are
+  narrow), BUG-089 (no reseed).
 
-### BUG-081 — key material outside the CSPRNG with a weak fallback: `euroid::rand_bytes`, `net::rand_u64` ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (only on a machine without a TPM, respectively without RDRAND)
+### BUG-081 — key material outside the CSPRNG with a weak fallback: `euroid::rand_bytes`, `net::rand_u64` ✅ FIXED
+- **Status:**   FIXED (`fd0982b`, `feature/linux-rand`) · **Severity:** MEDIUM (only on a machine without a TPM,
+  respectively without RDRAND; the QEMU default CPU model has neither)
 - **Found:**    2026-11-12 · by reading (BUG-065). Not provoked.
-- **Actual:**   `euroid::rand_bytes` (password salts, the wallet issuer and holder seeds, session material) asks the
-  TPM and otherwise runs a xorshift seeded with the tick counter. `net::rand_u64` (DNS transaction id and source
-  port, TCP initial sequence numbers and ephemeral ports, the ASLR slides) is RDRAND when the CPU has it and
-  otherwise `rdtsc ^ hpet ^ counter`. The boot self-tests of the FDE key, the VPN, the hybrid tunnel, EuroCA
-  and the quote use fixed bytes when there is no TPM (`0x5A…`, `0x11…`): self-test demonstrations, labelled
-  `from-tpm=false`, but they are the pattern the installed paths should not copy.
-- **Next:**     both functions draw from `entropy::draw` (this is the "REMAINING" line of 3D-8 in
-  `SPRINT-PLAN-PHASE3.md`); the self-tests take their seeds there as well.
+- **Before:**   `euroid::rand_bytes` (password salts at 10 call sites, the session id of a login, the wallet's
+  issuer and holder seeds) asked the TPM and otherwise ran a xorshift seeded with the tick counter.
+  `net::rand_u64` (DNS transaction id and source port, TCP initial sequence numbers at four places,
+  ephemeral ports, the ASLR slides) was RDRAND when the CPU has it and otherwise `rdtsc ^ hpet ^ counter`.
+  Without a TPM, `main.rs` gave fixed bytes to the FDE self-test (`5a…`), the vault as its master key
+  (`a5…`, kept for the running system), the VPN (`11…` to `14…`), ML-KEM (`21…`, `22…`), EuroCA (`3c…`),
+  the quote (`2a…`, `9e…`) and EuroIDM (`1d…`). The vault's seal nonce was a counter without a TPM; the
+  caller nonce of the two TPM policy sessions was `5a…` when `GetRandom` failed; `mktemp` named its file
+  after `epoch ^ ticks * constant`.
+- **Fix.**      All of them draw from the CSPRNG with `entropy::fill_wait`/`draw_wait`: they wait for the seed and
+  have no other source. The pool is seeded before any of them runs (`0b33035`). The TPM arm of the
+  `main.rs` seeds is unchanged (`from-tpm=true` still means bytes straight from the TPM).
+- **After:**    the matrix (0 markers worse, the `kernel` legs run DHCP, DNS, HTTP and HTTPS through
+  `rand_u64`), the public image on the open network (ping, DNS, fetch, https on both NICs), the soak with
+  4 httpd clients.
+- **Not covered:** no configuration of this proof has a TPM (no `swtpm` on either machine): the early
+  `tpm::init` and a pool with TPM bytes in it were not run. BUG-086 (the DHCP id was never one of
+  `rand_u64`'s users; it is a constant).
 
 ### BUG-082 — the jitter estimator credits a periodic series ⬜ OPEN
 - **Status:**   OPEN · **Severity:** MEDIUM (an over-estimate; the source it over-estimated is no longer used)
@@ -1576,6 +1631,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   off line with the 90B estimators on raw dumps from the R630, a NUC and TCG. This strengthens the gate;
   it was not done in the integration because every boot of every configuration has to be shown to still
   reach the threshold with it.
+- **2026-11-12:** not done in the BUG-080/081 round either; what it needs, in five steps, is section 6 of
+  `proof/linux-rand-2026-11/README.md`. With BUG-089 the same tests have to run on every reseed.
 
 ### BUG-083 — the `[altgr]` self-test left the AltGr latch set: typing on the self-test image gave third-level characters ✅ FIXED
 - **Status:**   FIXED (`6fcf24c`) · **Severity:** LOW (self-test image only; the public image runs no self-test)
@@ -1614,6 +1671,50 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   markers kept of a soak were cut at the desktop.
 - **Next:**     pet from the long shell commands, or check the scheduler's progress instead of the desktop loop;
   keep the verdict lines of the whole soak log in the proof.
+
+### BUG-086 — the DHCP transaction id is a constant and a reply is not matched on it ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW to MEDIUM (a host on the same link that answers faster than the DHCP server
+  sets address, gateway and DNS server; the id is what makes that a race it has to win blind)
+- **Found:**    2026-11-12 · by reading, the grep round of BUG-080/081 for randomness in a security context. Not provoked.
+- **Actual:**   five senders use a fixed `xid`: `main.rs` (`0x4505_5201`), `net_bringup.rs` (`0x4E55_5021`), `net.rs`
+  late bring-up (`0x4C41_5445`) and `udrv.rs` (`0x4555_0001`, `0x4555_0002`). `dhcp::parse` (`crates/euronet`) does
+  not return the `xid` of a reply, and `dhcp_reply` filters on the message type only: any OFFER or ACK that
+  arrives is taken. BUG-081's description counted the DHCP id among the users of `net::rand_u64`; it never was.
+- **Next:**     `xid` from `net::rand_u64` (the CSPRNG since BUG-081) per exchange; `DhcpInfo` carries the reply's
+  `xid` and the client MAC, and a reply with another one is dropped; host tests in `euronet`. Not done here: it
+  touches all four bring-up paths, and each needs its DHCP run again on every NIC driver.
+
+### BUG-087 — the SMB client challenge is the RTC second ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW to MEDIUM (the client challenge is the client's contribution to the
+  NTLM response; a server that knows it in advance can prepare its side)
+- **Found:**    2026-11-12 · by reading (the same grep round). Not provoked.
+- **Actual:**   `smbfs::open_share` builds the 8-byte client challenge of the session setup from `rtc::epoch()`
+  (four bytes) and the constant `45 55 52 4F`; the comment says "good enough; not secret". It has to be
+  unpredictable per session.
+- **Next:**     `crate::entropy::draw_wait::<8>()`. Two lines; not changed in this round because the images under
+  test were already built and the SMB mount self-test (`[io5]`) only runs in a dev build with a server.
+
+### BUG-088 — the address-space slides of a Linux-ABI process are 4 to 10 bits wide ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (hardening: the layout can be guessed in a few hundred tries)
+- **Found:**    2026-11-12 · by reading `aslr_slides` while moving its source to the CSPRNG (BUG-080).
+- **Actual:**   `brk` 4 bits (64 KiB steps), the mmap base 5 bits (64 KiB steps), the stack top 8 bits (4 KiB
+  steps), the demand pool 10 bits (2 MiB steps). The bits are now unpredictable (they came from RDRAND or
+  `rdtsc ^ hpet ^ counter`), but there are few of them: the slides stay inside a 2 MiB arena, respectively
+  2 GiB of the demand pool. Where the executable and the interpreter are loaded was not looked at.
+- **Next:**     measure what a glibc process can take (the arena is the limit, not the generator); 28 bits for
+  mmap and 22 for the stack are what Linux gives a 64-bit process.
+
+### BUG-089 — the CSPRNG is seeded once per boot and never again ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise
+- **Found:**    2026-11-12 · by reading `entropy.rs` and `crates/euroentropy` (BUG-080).
+- **Actual:**   `seed_from` runs in `entropy::init` and, for a pool that is still closed, on a later request.
+  Once the pool is open nothing is added to it: no periodic reseed, no reseed after resume, no
+  `vmgenid`. Two guests resumed from one snapshot continue the same HMAC-DRBG state and hand out the same
+  bytes (`AT_RANDOM`, TLS key shares, sequence numbers) until they diverge by the number of requests. A
+  state that leaks once (a memory dump) predicts every later output of that boot.
+- **Next:**     reseed from RDSEED/RDRAND, the TPM and a jitter batch every N minutes or N requests
+  (`EntropyPool::add` already reseeds an open pool; SP 800-90A allows 2^48 requests, so this is about
+  recovery, not about the limit), on resume, and when the ACPI VM generation id changes.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with
