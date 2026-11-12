@@ -2763,8 +2763,8 @@ fn main() -> Status {
         ps2::push_scancode(0x2e); // 'c'
         // Stage a left-mouse-button press (PS/2 mouse packets: [flags, dx, dy]); the
         // 0->1 edge latches a press that pump_mouse() delivers as an X ButtonPress.
-        mouse::push_byte(0x08); mouse::push_byte(0); mouse::push_byte(0); // buttons up
-        mouse::push_byte(0x09); mouse::push_byte(0); mouse::push_byte(0); // left down
+        mouse::push_packet(0x08, 0, 0); // buttons up
+        mouse::push_packet(0x09, 0, 0); // left down
         xserver::TRACE.store(true, core::sync::atomic::Ordering::Relaxed);
         let ox; (ox, ex) = ring3::run_glibc(&mut allocator, ring3::gxwin_bytes(), ring3::ldlinux_bytes(), &[b"gxwin"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);
         xserver::TRACE.store(false, core::sync::atomic::Ordering::Relaxed);
@@ -3585,10 +3585,10 @@ fn main() -> Status {
         // 3 key scancodes (colour cycles 3x) + 2 mouse-button packets (block moves 2x).
         // These flow through the REAL ring/latch that pump_keyboard/pump_mouse drain.
         ps2::push_scancode(0x1e); ps2::push_scancode(0x30); ps2::push_scancode(0x2e);
-        mouse::push_byte(0x08); mouse::push_byte(0); mouse::push_byte(0);
-        mouse::push_byte(0x09); mouse::push_byte(0); mouse::push_byte(0);
-        mouse::push_byte(0x08); mouse::push_byte(0); mouse::push_byte(0);
-        mouse::push_byte(0x09); mouse::push_byte(0); mouse::push_byte(0);
+        mouse::push_packet(0x08, 0, 0);
+        mouse::push_packet(0x09, 0, 0);
+        mouse::push_packet(0x08, 0, 0);
+        mouse::push_packet(0x09, 0, 0);
         ring3::GLIBC_DEADLINE_TICKS.store(1_500, core::sync::atomic::Ordering::Relaxed); // ~15s bounded demo (gxlive loops forever)
         xserver::X_APP_ACTIVE.store(true, core::sync::atomic::Ordering::Relaxed);
         let (ol, _egl) = ring3::run_glibc(&mut allocator, ring3::gxlive_bytes(), ring3::ldlinux_bytes(), &[b"gxlive"], &[b"DISPLAY=:0", b"PATH=/bin"], caps_net);

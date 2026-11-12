@@ -284,6 +284,11 @@ pub fn altgr_selftest() {
     let none_yet = poll_key().is_none();
     feed(&[0x38, 0x03, 0x83, 0xE0, 0xB8]);
     let split = none_yet && poll_key() == Some('@') && !alt_down();
+    // Decode what is left in the ring, the release of the key and of AltGr.
+    // Emptying the ring instead left the AltGr latch set for the rest of the
+    // boot, and on the self-test image every key without a third level then
+    // typed nothing (BUG-083).
+    while poll_key().is_some() {}
     while pop_scancode().is_some() {}
     // Left Alt is still Alt.
     feed(&[0x38, 0x0F, 0x8F, 0xB8]);
@@ -293,9 +298,11 @@ pub fn altgr_selftest() {
     while poll_key_ex().is_some() {}
     let left_ws = take_ws_switch() == Some(1);
     set_layout(saved);
-    let ok = chars_ok && no_switch && typed && no_switch_ex && typed_ex && split && left_alt && left_ws;
+    // The test ends with every latch released, as it says it does.
+    let released = !altgr_down() && !alt_down() && !EXT.load(Ordering::Relaxed);
+    let ok = chars_ok && no_switch && typed && no_switch_ex && typed_ex && split && left_alt && left_ws && released;
     crate::serial_println!(
-        "[altgr] AltGr third level in both decoders (be, fr, de)={chars_ok}, AltGr+Tab/1..4 switch nothing={}, typed instead={}, split prefix={split}, left Alt still Alt+Tab={left_alt} Alt+2={left_ws} → {}",
+        "[altgr] AltGr third level in both decoders (be, fr, de)={chars_ok}, AltGr+Tab/1..4 switch nothing={}, typed instead={}, split prefix={split}, left Alt still Alt+Tab={left_alt} Alt+2={left_ws}, latches released at the end={released} → {}",
         no_switch && no_switch_ex,
         typed && typed_ex,
         if ok { "OK ✓" } else { "FAILED ✗" }

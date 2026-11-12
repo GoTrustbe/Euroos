@@ -273,6 +273,21 @@ pub fn push_byte(byte: u8) {
     update_buttons(flags); // position updated first, so the press latch is correct
 }
 
+/// One whole PS/2 mouse packet (`flags`, `dx`, `dy`) in the format the mouse was
+/// set to at init: three bytes, or four with a zero wheel byte when it is an
+/// IntelliMouse. For code that stages input, such as the X11 self-tests: three
+/// bare bytes fed to a mouse in 4-byte mode are read as pieces of other
+/// packets, the button press is lost and a wheel movement appears that nobody
+/// made (BUG-083).
+pub fn push_packet(flags: u8, dx: u8, dy: u8) {
+    push_byte(flags);
+    push_byte(dx);
+    push_byte(dy);
+    if ps2_has_wheel() {
+        push_byte(0);
+    }
+}
+
 /// Apply a relative USB-HID mouse movement + button state (same cursor atomics
 /// as the PS/2 mouse, so the desktop works transparently on USB input). `dy` is in
 /// HID convention (down positive), so we add it directly to Y.
