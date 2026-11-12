@@ -33,7 +33,7 @@ pub const SYSTEM_KEYS: &[(&str, &str)] = &[
     ("Alt+1 .. Alt+4", "Switch to workspace 1 to 4"),
     ("Esc", "Close the launcher, a dialog, a name prompt, a context menu, the notification list, the tour or help"),
     ("Enter", "Launcher: open the first result"),
-    ("AltGr + key", "Belgian, French and German layout: the third character on the key (@ # { } [ ] \\ | ~ and the euro sign)"),
+    ("AltGr + key", "Belgian, French and German layout: the third character on the key, among them @ { } [ ] \\ | ~ and the euro sign (and # on the Belgian and French layout; the German one has # on a key of its own)"),
 ];
 
 pub const SYSTEM_KEY_NOTES: &[&str] = &[
