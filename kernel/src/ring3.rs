@@ -826,6 +826,13 @@ impl core::ops::Index<usize> for FdAccmode {
 static FD_ACCMODE_ROOT: [core::sync::atomic::AtomicU8; MAX_FD] =
     [const { core::sync::atomic::AtomicU8::new(2) }; MAX_FD];
 
+/// `[linux-rand]` self-test hook: while set, the random syscalls and devices
+/// treat the CSPRNG as not seeded (the pool itself is not touched).
+pub static RANDOM_ST_CLOSED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Rounds a caller of `getrandom` or a reader of a random device has waited
+/// for the CSPRNG to be seeded.
+pub static RANDOM_WAITS: AtomicU64 = AtomicU64::new(0);
+
 /// Monotonic counter behind getrandom, so every call yields DIFFERENT bytes. The
 /// previous fill was deterministic on byte position only, so every getrandom(n)
 /// returned the SAME n bytes — programs that mint "random" IDs/tokens/keys (chrome's
@@ -8637,6 +8644,8 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/argvprog" => include_bytes!("../../userland/argvprog.elf.sig"),
         "/bin/pieprog" => include_bytes!("../../userland/pieprog.elf.sig"),
         "/bin/muslreal" => include_bytes!("../../userland/muslreal.elf.sig"),
+        "/bin/randprobe" => include_bytes!("../../userland/randprobe.elf.sig"),
+        "/bin/grandprobe" => include_bytes!("../../userland/glibc/grandprobe.sig"),
         "/bin/muslfile" => include_bytes!("../../userland/muslfile.elf.sig"),
         "/bin/fbtest" => include_bytes!("../../userland/fbtest.elf.sig"),
         "/bin/doom" => include_bytes!("../../userland/doom.elf.sig"),
