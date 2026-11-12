@@ -1,0 +1,28 @@
+chrome-smoke --soak-hours 2 --sites euro-os,wikipedia (R630, KVM, 2 vCPU, 6144M), started 19:49, stopped by hand after 2610 s.
+
+The browser did not survive the first round: BUG-098. First failure lines in the serial log:
+[linux-abi] [1:50:1112/195343.800000:ERROR:base/memory/platform_shared_memory_region_posix.cc:214] Creating shared memory in /tmp/.org.chromium.Chromium.AwrOym failed: Too many open files (24)
+[linux-abi] [1:122:1112/195344.280000:ERROR:base/memory/platform_shared_memory_region_posix.cc:214] Creating shared memory in /tmp/.org.chromium.Chromium.wtL2Uq failed: Too many open files (24)
+[linux-abi] [1:156:1112/195450.060000:ERROR:base/memory/platform_shared_memory_region_posix.cc:214] Creating shared memory in /tmp/.org.chromium.Chromium.cN6f6r failed: Too many open files (24)
+[linux-abi] [1:109:1112/195527.320000:FATAL:ui/base/resource/resource_bundle.cc:560] NOTREACHED hit. 
+
+From then on every step that needs the browser fails; the guest itself stayed up:
+kernel fault lines (PANIC, PAGE FAULT in ring 0, DOUBLE FAULT): 0
+desktop deadman lines (WATCHDOG TRIPPED): 0
+max console round trip so far: see the harness log; rounds completed:
+[chrome-smoke] soak round 1 done after 571 s: heap 120 MiB used, 391 MiB free; big 477/34 MiB (peak 483); files 494 MiB; demand 1144 MiB free
+[chrome-smoke] soak round 2 done after 1613 s: heap 120 MiB used, 391 MiB free; big 477/34 MiB (peak 483); files 494 MiB; demand 1144 MiB free
+
+The kernel's memory account, first and last heartbeat and every tenth in between:
+1: [cpu] 3004 ticks since last heartbeat; heap 115 MiB used, 396 MiB free; big 41/470 MiB (peak 42); files 59 MiB; demand 1517 MiB free
+10: [cpu] 3001 ticks since last heartbeat; heap 120 MiB used, 391 MiB free; big 477/34 MiB (peak 478); files 494 MiB; demand 1144 MiB free
+20: [cpu] 2999 ticks since last heartbeat; heap 120 MiB used, 391 MiB free; big 477/34 MiB (peak 483); files 494 MiB; demand 1144 MiB free; t84 "CrRendererMain" 1503 t0 "desktop/idle" 1491 t31 "storag
+30: [cpu] 3000 ticks since last heartbeat; heap 120 MiB used, 391 MiB free; big 477/34 MiB (peak 483); files 494 MiB; demand 1144 MiB free
+40: [cpu] 3000 ticks since last heartbeat; heap 120 MiB used, 391 MiB free; big 477/34 MiB (peak 483); files 494 MiB; demand 1144 MiB free
+50: [cpu] 2999 ticks since last heartbeat; heap 120 MiB used, 391 MiB free; big 477/34 MiB (peak 483); files 494 MiB; demand 1144 MiB free
+60: [cpu] 3000 ticks since last heartbeat; heap 120 MiB used, 391 MiB free; big 477/34 MiB (peak 483); files 494 MiB; demand 1144 MiB free
+70: [cpu] 2999 ticks since last heartbeat; heap 120 MiB used, 391 MiB free; big 477/34 MiB (peak 483); files 494 MiB; demand 1144 MiB free
+80: [cpu] 2999 ticks since last heartbeat; heap 120 MiB used, 391 MiB free; big 477/34 MiB (peak 483); files 494 MiB; demand 1144 MiB free
+86: [cpu] 2999 ticks since last heartbeat; heap 120 MiB used, 391 MiB free; big 477/34 MiB (peak 483); files 494 MiB; demand 1144 MiB free
+
+Steps: 5 ok, 48 failed.

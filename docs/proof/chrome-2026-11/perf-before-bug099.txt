@@ -1,0 +1,12 @@
+[gui-smoke] QEMU pid 1711628, booting (KVM, 2 cpu, 6144M)...
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 33.8 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 10.4, first child process 11.6, renderer 16.8), 19 colours in the content area
+[gui-smoke] ok   chrome's infobars are closed or absent: 0 left
+[chrome-smoke]   load 1: first change 0.65 s, final picture 2.58 s
+[chrome-smoke]   load 2: first change 0.88 s, final picture 2.80 s
+[chrome-smoke]   load 3: first change 1.03 s, final picture 1.03 s
+[chrome-smoke]   load 4: first change 0.69 s, final picture 2.67 s
+[chrome-smoke]   load 5: first change 3.29 s, final picture 5.87 s
+[gui-smoke] ok   perf: reference site loads in under 3 s (Enter to the final picture): final picture median 2.67 s (min 1.03, max 5.87), first change median 0.88 s, n=5
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 1742 ms, p90 1828 ms, max 1979 ms over 27 keys (30 characters arrived); one screendump takes 21 ms, which is in every number | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[chrome-smoke] FAIL (1 step(s)) - 4/5 steps ok, report and screenshots in /srv/euroos/chrome-runs/perf1

@@ -4,6 +4,42 @@
 bewijs-screenshots staan in `docs/proof/`, de logbestanden en methodiek in de
 sprintdocumenten (`SPRINT-PLAN-CHROME-*.md`).*
 
+## Stand 2026-11-12: de browser wordt met echte invoer bediend
+
+Na twee maanden kernelwerk startte chrome niet meer (venster leeg). Dat is
+hersteld, en de invoer loopt sindsdien volledig over X: USB-toetsenbord en
+-muis, geen DevTools. Bewijs, cijfers en wat niet werkt:
+`proof/chrome-2026-11/README.md`; bugs BUG-090 t/m BUG-099 in
+`LOADTEST-TRACKER.md`. Kort:
+
+- `chrome URL` in de Terminal, omnibox (Ctrl+L, typen, Enter), formulieren,
+  kopieren/plakken, selecteren met dubbelklik en slepen, wiel en toetsen, F5,
+  tabs, het menu van de browser, venster verslepen/maximaliseren/herstellen,
+  links, terug/vooruit, be-azerty met AltGr na een layoutwissel: 19 van 19
+  stappen van `scripts/chrome-smoke.py`.
+- euro-os.eu, nl.wikipedia.org, openstreetmap.org en een pdf renderen, elk in
+  een verse sessie, drie rondes. github.com rendert maar legt de desktoplus 12
+  tot 17 s stil. youtube.com blijft in zijn laadskelet (`V8 process OOM (Zone)`
+  in de renderer).
+- Alle sites in EEN sessie lukt niet: de browser en al zijn kindprocessen delen
+  een fd-ruimte met 500 nummers voor bestanden (BUG-098).
+- De oude "glib-pump-startup-race" bestond niet: de X-server beantwoordde
+  GetPointerMapping niet en xcb gaf de eerste verbinding op (BUG-090).
+
+### Testen
+
+```
+python3 scripts/chrome-smoke.py --image eurokernel.img --pack chrome-pack2.img \
+    --nss nss-pack-vid.img --kvm --workdir /srv/euroos/chrome-runs/smoke-1
+#   --only sites|interact|youtube|perf   --sites euro-os,wikipedia   --starts 20   --soak-hours 2
+```
+Image bouwen met `EUROOS_BOOTOPTS="ui.tour=off;update.check=off"`. De NSS-pack
+moet bij de chrome-pack horen: `packs/nss-pack.img` (NSS 3.120) doet dat NIET,
+`nss-pack-vid.img` wel. In de EuroOS-shell: `ctabs` (open pagina's met URL en
+titel), `cdiag` (threads, X-invoerstatus, vensters, fd-gebruik), `xtrace
+on|off`, `fstrace N`. Bootopties: `update.check=off`, `chrome.input=cdp` (de
+oude DevTools-kopie van invoer, standaard uit).
+
 ## Wat werkt, met bewijs
 
 **Een echte, ongewijzigde Chromium 152 (485 MB Linux-binary) draait als app op
@@ -134,12 +170,13 @@ renderer-trace, en die bereikt ons om vermoedelijk dezelfde reden niet
 1. **Weergave**: chrome tekent via de in-kernel X-server (`kernel/src/xserver.rs`);
    vensters worden met één gedeelde transform geplaatst (popups op hun echte
    positie).
-2. **Input**: pagina-input loopt over de **DevTools-inputbrug**. Chrome start
-   met `--remote-debugging-pipe`, de kernel attacht (input-only) en vertaalt
-   muis/toetsen naar `Input.dispatchMouseEvent`/`insertText`. Die route werkt
-   in élke pump-toestand; X-events blijven de route voor browser-UI (menu).
-   Achtergrond: of chrome's UI-thread zijn X-socket ooit poll't hangt af van
-   een glib-context-race bij startup die van buitenaf niet te sturen is.
+2. **Input** (sinds 2026-11): alles loopt over **X-events** naar het venster
+   van de browser: toetsen met de keycodes en de keymap van de actieve layout
+   (vier keysyms per toets, AltGr = Mode_switch), beide knopflanken, het wiel
+   als knop 4/5, focus met het actieve venster. Popups (menu, tooltip) worden
+   op het hoofdvenster getekend en krijgen de muis als die erboven staat. De
+   DevTools-pijp blijft voor diagnose (`ctabs`, hartslag) en, met
+   `chrome.input=cdp`, voor de oude kopie van invoer naar de pagina.
 3. **Naamresolutie**: glibc's resolver valt terug op 127.0.0.1:53, dus IS
    EuroOS daar de nameserver (`Sock::LocalDns`): /etc/hosts eerst, dan een
    echte query naar de DHCP-server; EuroGuard filtert.
@@ -163,8 +200,14 @@ renderer-trace, en die bereikt ons om vermoedelijk dezelfde reden niet
   zonder tracing-time-outs. De boottest draait sindsdien multiproces.
 - **Snelheid**: ~20 min per HTTP-resource onder icount-TCG. Puur emulatie;
   geen stack-eigenschap.
-- **Browser-UI-input** (omnibox, menu) via X werkt alleen wanneer chrome's
-  glib-pump de startup-race wint; pagina-input via de brug is betrouwbaar.
+- **Browser-UI-input** (omnibox, menu): werkt sinds BUG-090, 20 van 20 starts
+  (`proof/chrome-2026-11/starts20.txt`).
+- **Een fd-ruimte voor de hele browser** (BUG-098): een derde zware site in
+  dezelfde sessie eindigt in "Too many open files".
+- **YouTube** rendert niet verder dan zijn laadskelet (V8 OOM in de renderer);
+  video en geluid op YouTube zijn dus niet gemeten.
+- Een ingedrukte toets herhaalt niet; een popup wordt afgekapt op de rand van
+  het browservenster; plakken uit een ANDERE X-client is leeg.
 - De start-URL van de boot-run staat in `kernel/src/main.rs` (chrome-boot-
   fase); nu `http://euro-os.eu/nl/`.
 

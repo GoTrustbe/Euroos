@@ -1,0 +1,5 @@
+[fd] space 0 of task 1: 245 files open (104 unlinked/shared memory, 113 in the profile, 0 libraries and pack files, 28 other) + 12 pipe ends, of 500 numbers below the socket range
+[fd] space 0 of task 1: 380 files open (222 unlinked/shared memory, 122 in the profile, 1 libraries and pack files, 35 other) + 12 pipe ends, of 500 numbers below the socket range
+[fd] space 0 of task 1: 483 files open (314 unlinked/shared memory, 131 in the profile, 0 libraries and pack files, 38 other) + 12 pipe ends, of 500 numbers below the socket range
+[linux-abi] [1:1:1112/193016.337894:ERROR:base/memory/platform_shared_memory_region_posix.cc:214] Creating shared memory in /tmp/.org.chromium.Chromium.ejINDt failed: Too many open files (24)
+[fd] space 0 of task 1: 483 files open (314 unlinked/shared memory, 131 in the profile, 0 libraries and pack files, 38 other) + 12 pipe ends, of 500 numbers below the socket range

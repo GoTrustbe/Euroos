@@ -514,6 +514,39 @@ resource counts, the pending resources and the start of the body text. Run
 74 (scheduler fix plus this) runs js:state at the twelfth heartbeat, with
 the census.
 
+### Round of 2026-11-12 (R630, KVM, real USB-HID input; `proof/chrome-2026-11/`)
+
+The work resumed on the 2026-11 kernel. Chrome no longer started; ten bugs later
+(BUG-090 to BUG-097, BUG-099, and a null model provider in chrome's own flags)
+the interaction matrix passes through real input, 19 of 19 steps of the new
+harness `scripts/chrome-smoke.py`.
+
+**W19 is not the wall any more, and was not reached.** The premise of W19 and of
+the "glib pump race" was a browser whose first X connection was dead to xcb
+(BUG-090). With that connection alive every click and key goes through X and
+chrome routes it itself. YouTube now stops earlier:
+
+### W20. one fd space for the browser and its children (BUG-098)
+
+245 open files after euro-os.eu, 380 after Wikipedia, 483 in GitHub, then
+`Too many open files` in a renderer and `Check failed: shmem_token` in the
+browser. 500 numbers for the files of all processes together. Ruled out:
+deferred closes of inherited descriptors (patched, same numbers). The site
+matrix therefore passes per site in a fresh session only.
+
+### W21. YouTube: `V8 process OOM (Zone)` in the renderer
+
+The front page stays a loading skeleton and a typed watch URL never commits
+(90 s); 16 of 18 requests done, none failed, no kernel fault. The renderer's
+one line is the V8 OOM. Not followed further: which allocation fails (the
+256 MiB arena of a fork child, or a reservation) is the next measurement.
+
+### W22. GitHub: the desktop loop stands still for 12 to 17 s during the load
+
+Three runs of three; the page renders. The deadman of BUG-085 prints
+`WATCHDOG TRIPPED`. Not located (the NMI after the fact shows a
+Chrome_ChildIOThread in the kernel after `ftruncate`).
+
 ## Exit criteria
 
 1. Every site of the matrix loads and renders (screendump), three runs in a
@@ -525,3 +558,20 @@ the census.
    memory growth beyond the pools (the [mm] lines).
 5. Page load of the reference site under 3 s after navigate; the interaction
    latency (key to screen) under 100 ms measured on the screendump clock.
+
+### Status of the exit criteria on 2026-11-12
+
+1. Sites, three runs in a row: **not met.** euro-os.eu, nl.wikipedia.org,
+   openstreetmap.org and a PDF render 3 of 3, each in a fresh session; GitHub
+   renders with a 12 to 17 s desktop stall (W22); YouTube does not (W21); all
+   in one session ends in W20. Nextcloud not run (no public instance without
+   a login).
+2. Interaction matrix through real input: **met**, 19 of 19 steps (fullscreen
+   with F11 and scrollbar dragging are not in the harness).
+3. A YouTube video with picture and sound for two minutes: **not met**, not
+   reached (W21).
+4. Two-hour run: **not met.** The browser dies of W20 in the first round; the
+   guest stayed up 43 minutes with a flat memory account (`proof/chrome-2026-11/soak.txt`).
+5. Load of the reference site under 3 s: **met**, median 1.35 s and 1.31 s
+   (two runs of five). Key to screen under 100 ms: **not shown**; 1742 ms
+   before BUG-099, no valid number after it.

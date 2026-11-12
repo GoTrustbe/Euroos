@@ -187,7 +187,8 @@ of several screenshots into one picture.
 
 - It checks that apps open, take input and do not take the kernel down, and one
   end-to-end result (the terminal). It does not check what each app draws.
-- No Chromium pack, no native (ring 3) GUI apps, no network content.
+- No Chromium pack (that is `scripts/chrome-smoke.py`, which uses this script's `Guest`
+  class: `docs/CHROME-ON-EUROOS.md`, "Testen"), no native (ring 3) GUI apps, no network content.
 - Window detection needs the three title-bar buttons of a window visible and
   uncovered. A window pushed half off the screen, or with another window over
   its buttons, is not found (the monkey then simply does not pick it).
