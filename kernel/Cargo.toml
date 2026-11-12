@@ -41,6 +41,7 @@ path = "src/main.rs"
 uefi = { version = "0.33", features = ["alloc"] }
 eurofs = { path = "../crates/eurofs" }
 eurolock = { path = "../crates/eurolock" }
+eurofdspace = { path = "../crates/eurofdspace" }
 euroacpi = { path = "../crates/euroacpi" }
 euroipc = { path = "../crates/euroipc" }
 euronet = { path = "../crates/euronet" }

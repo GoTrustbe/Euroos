@@ -405,20 +405,45 @@ static FILES: eurolock::sync::Mutex<alloc::vec::Vec<(String, alloc::borrow::Cow<
 // full table made EVERY new open return -1 (EPERM): the shm/README/history failures.
 // Kept below UNIX_FD_BASE (600) so regular fds never collide with the socket range.
 const MAX_FD: usize = 512;
+
+// One set of descriptor tables per process group (BUG-060): see the module text.
+#[path = "fdspace.rs"]
+mod fdspace;
+
+/// A spin-locked value that exists once per fd space: `lock()` takes the one
+/// lock and yields the part of the calling task's space.
+struct SpacedLock<D: 'static>(&'static Mutex<D>);
+impl<D: fdspace::Spaced> SpacedLock<D> {
+    fn lock(&self) -> fdspace::Guard<spin::MutexGuard<'static, D>> {
+        let s = fdspace::current();
+        fdspace::Guard::new(self.0.lock(), s)
+    }
+}
 static SITE_OPEN_FDS: eurolock::LockSite = eurolock::LockSite::new("ring3.OPEN_FDS", eurolock::LockClass::Process);
 // J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
-static OPEN_FDS: eurolock::sync::Mutex<[Option<(usize, usize)>; MAX_FD]> =
-    eurolock::sync::Mutex::new_site(&SITE_OPEN_FDS, eurolock::Mode::Plain, [None; MAX_FD]);
+static OPEN_FDS_ALL: eurolock::sync::Mutex<fdspace::Tab<Option<(usize, usize)>, MAX_FD>> =
+    eurolock::sync::Mutex::new_site(&SITE_OPEN_FDS, eurolock::Mode::Plain, fdspace::Tab::new([None; MAX_FD]));
+/// The open-file table of the calling task's fd space: (file index, offset) per fd.
+struct OpenFds;
+static OPEN_FDS: OpenFds = OpenFds;
+impl OpenFds {
+    fn lock(&self) -> fdspace::Guard<eurolock::sync::MutexGuard<'static, fdspace::Tab<Option<(usize, usize)>, MAX_FD>>> {
+        let s = fdspace::current();
+        fdspace::Guard::new(OPEN_FDS_ALL.lock(), s)
+    }
+}
 /// Open DIRECTORY fds (Linux getdents64): (normalized dir path, cursor in the
 /// children list). Separate table so a dir fd is not read as a file.
-static OPEN_DIRS: Mutex<[Option<(String, usize)>; MAX_FD]> =
-    Mutex::new([const { None }; MAX_FD]);
+static OPEN_DIRS_ALL: Mutex<fdspace::Tab<Option<(String, usize)>, MAX_FD>> =
+    Mutex::new(fdspace::Tab::new([const { None }; MAX_FD]));
+static OPEN_DIRS: SpacedLock<fdspace::Tab<Option<(String, usize)>, MAX_FD>> = SpacedLock(&OPEN_DIRS_ALL);
 
 // ── PIPES (S3 IPC between processes) ─────────────────────────────────────────
 // A pipe is an in-kernel FIFO buffer with two ends (read/write). The
 // `pipe2` syscall returns two fds; after fork() parent and child share them (the
-// fd tables are global), so they can communicate over the pipe.
-static PIPES: Mutex<alloc::vec::Vec<alloc::vec::Vec<u8>>> = Mutex::new(alloc::vec::Vec::new());
+// two are in one fd space), so they can communicate over the pipe. Pipe ids
+// count per fd space.
+static PIPES: Mutex<fdspace::Lists<alloc::vec::Vec<u8>>> = Mutex::new(fdspace::Lists::new());
 
 /// PIPES is taken from the desktop loop too (cdp_send / cdp_next_msg drive the
 /// DevTools pipes from task 0 with interrupts enabled), and a task-context holder
@@ -428,7 +453,7 @@ static PIPES: Mutex<alloc::vec::Vec<alloc::vec::Vec<u8>>> = Mutex::new(alloc::ve
 /// interrupts off first, lock second, unlock before interrupts return (field
 /// order is drop order).
 struct PipesGuard {
-    g: spin::MutexGuard<'static, alloc::vec::Vec<alloc::vec::Vec<u8>>>,
+    g: fdspace::Guard<spin::MutexGuard<'static, fdspace::Lists<alloc::vec::Vec<u8>>>>,
     _if: crate::sched::IfOffGuard,
 }
 impl core::ops::Deref for PipesGuard {
@@ -440,12 +465,13 @@ impl core::ops::DerefMut for PipesGuard {
 }
 fn pipes_lock() -> PipesGuard {
     let _if = crate::sched::IfOffGuard::new();
-    let g = PIPES.lock();
+    let s = fdspace::current();
+    let g = fdspace::Guard::new(PIPES.lock(), s);
     PipesGuard { g, _if }
 }
 /// Pipe fds: per fd (pipe-id, is_write_end). Separate table alongside file/dir fds.
 /// Taken only through [`pipe_fds`] (interrupts off while held).
-static PIPE_FDS: Mutex<[Option<(usize, bool)>; MAX_FD]> = Mutex::new([None; MAX_FD]);
+static PIPE_FDS: Mutex<fdspace::Tab<Option<(usize, bool)>, MAX_FD>> = Mutex::new(fdspace::Tab::new([None; MAX_FD]));
 
 /// BUG-037 (and the BUG-033 hangs): PIPE_FDS is the same disease as PIPES above. The launcher (task 0)
 /// clears it in `reset_fd_table` with interrupts on, and every pipe syscall of a
@@ -454,11 +480,11 @@ static PIPE_FDS: Mutex<[Option<(usize, bool)>; MAX_FD]> = Mutex::new([None; MAX_
 /// spinning in `pipe_write_fd` on PIPE_FDS with IF=0 (NMI probe), silence. Every
 /// acquisition goes through here: interrupts off first, lock second.
 struct PipeFdsGuard {
-    g: spin::MutexGuard<'static, [Option<(usize, bool)>; MAX_FD]>,
+    g: fdspace::Guard<spin::MutexGuard<'static, fdspace::Tab<Option<(usize, bool)>, MAX_FD>>>,
     _if: crate::sched::IfOffGuard,
 }
 impl core::ops::Deref for PipeFdsGuard {
-    type Target = [Option<(usize, bool)>; MAX_FD];
+    type Target = [Option<(usize, bool)>];
     fn deref(&self) -> &Self::Target { &self.g }
 }
 impl core::ops::DerefMut for PipeFdsGuard {
@@ -466,13 +492,15 @@ impl core::ops::DerefMut for PipeFdsGuard {
 }
 fn pipe_fds() -> PipeFdsGuard {
     let _if = crate::sched::IfOffGuard::new();
-    let g = PIPE_FDS.lock();
+    let s = fdspace::current();
+    let g = fdspace::Guard::new(PIPE_FDS.lock(), s);
     PipeFdsGuard { g, _if }
 }
 /// Per pipe-id: is the pipe non-blocking (O_NONBLOCK)? A BLOCKING read on an empty
 /// pipe parks the caller (chrome's shutdown-detector thread reads a signal pipe that
 /// way and FATALs on a spurious EAGAIN). Parallel to PIPES by index.
-static PIPE_NONBLOCK: Mutex<alloc::vec::Vec<bool>> = Mutex::new(alloc::vec::Vec::new());
+static PIPE_NONBLOCK_ALL: Mutex<fdspace::Lists<bool>> = Mutex::new(fdspace::Lists::new());
+static PIPE_NONBLOCK: SpacedLock<fdspace::Lists<bool>> = SpacedLock(&PIPE_NONBLOCK_ALL);
 /// Per-fd-NUMBER O_NONBLOCK, for ANY fd kind (socket, eventfd, memfd, file), set via
 /// fcntl(F_SETFL) and reported via fcntl(F_GETFL). Previously only pipe fds tracked
 /// it, so chrome setting a Mojo SOCKET non-blocking then verifying with F_GETFL saw
@@ -762,14 +790,40 @@ fn seals_add(fd: u64, add: u32) -> u64 {
     }
 }
 
-static FD_NONBLOCK: [core::sync::atomic::AtomicBool; MAX_FD] =
+static FD_NONBLOCK_ROOT: [core::sync::atomic::AtomicBool; MAX_FD] =
     [const { core::sync::atomic::AtomicBool::new(false) }; MAX_FD];
+/// The flag blocks of the fd spaces of background processes; the launcher's
+/// space uses the two `_ROOT` statics. `FD_NONBLOCK[fd]` / `FD_ACCMODE[fd]`
+/// index the calling task's space.
+static FD_FLAGS: fdspace::FlagSlots<MAX_FD> = fdspace::FlagSlots::new();
+struct FdNonblock;
+static FD_NONBLOCK: FdNonblock = FdNonblock;
+impl core::ops::Index<usize> for FdNonblock {
+    type Output = core::sync::atomic::AtomicBool;
+    fn index(&self, fd: usize) -> &Self::Output {
+        match FD_FLAGS.get(fdspace::current()) {
+            Some(f) => &f.nonblock[fd],
+            None => &FD_NONBLOCK_ROOT[fd],
+        }
+    }
+}
+struct FdAccmode;
+static FD_ACCMODE: FdAccmode = FdAccmode;
+impl core::ops::Index<usize> for FdAccmode {
+    type Output = core::sync::atomic::AtomicU8;
+    fn index(&self, fd: usize) -> &Self::Output {
+        match FD_FLAGS.get(fdspace::current()) {
+            Some(f) => &f.accmode[fd],
+            None => &FD_ACCMODE_ROOT[fd],
+        }
+    }
+}
 /// Per-fd access mode (O_RDONLY=0 / O_WRONLY=1 / O_RDWR=2), captured from the open
 /// flags, reported via fcntl(F_GETFL). Default 2 (O_RDWR) so sockets/pipes/eventfd/
 /// memfd (not opened via open()) read back read-write, unchanged. Chrome verifies
 /// (F_GETFL & O_ACCMODE) matches how it opened the fd and IMMEDIATE_CRASHes on a
 /// mismatch — so a read-only file must report O_RDONLY, not a hardcoded O_RDWR.
-static FD_ACCMODE: [core::sync::atomic::AtomicU8; MAX_FD] =
+static FD_ACCMODE_ROOT: [core::sync::atomic::AtomicU8; MAX_FD] =
     [const { core::sync::atomic::AtomicU8::new(2) }; MAX_FD];
 
 /// Monotonic counter behind getrandom, so every call yields DIFFERENT bytes. The
@@ -834,7 +888,8 @@ fn set_fd_accmode(fd: u64, flags: u64) {
     }
 }
 /// Tasks blocked in a read on an empty pipe: (pipe-id, task). Woken by a write.
-static PIPE_WAITERS: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static PIPE_WAITERS_ALL: Mutex<fdspace::Lists<(usize, usize)>> = Mutex::new(fdspace::Lists::new());
+static PIPE_WAITERS: SpacedLock<fdspace::Lists<(usize, usize)>> = SpacedLock(&PIPE_WAITERS_ALL);
 
 // ── CDP driver: EuroOS speaks DevTools to Chromium over a pipe ───────────────
 // `--remote-debugging-pipe` makes chrome read commands on fd 3 and write answers
@@ -2696,9 +2751,121 @@ fn pipe_read_fd(fd: usize, buf: u64, len: usize) -> Option<u64> {
     None
 }
 
+
+// ── fd spaces: who has one, making and releasing them (BUG-060) ─────────────
+static FD_SPACES: Mutex<fdspace::Registry> = Mutex::new(fdspace::Registry::new());
+
+/// Give fd space `s` its tables and flags. False when the heap has no room;
+/// the caller then takes back what was installed ([`fdspace_drop_tables`]).
+fn fdspace_install(s: usize) -> bool {
+    let a = fdspace::Tab::<Option<(usize, usize)>, MAX_FD>::block(None);
+    let b = fdspace::Tab::<Option<(String, usize)>, MAX_FD>::block(None);
+    let c = fdspace::Tab::<Option<(usize, bool)>, MAX_FD>::block(None);
+    let (Some(a), Some(b), Some(c)) = (a, b, c) else { return false };
+    {
+        let mut t = OPEN_FDS_ALL.lock();
+        if !t.reserve(s) {
+            return false;
+        }
+        t.install(s, a);
+    }
+    {
+        let mut t = OPEN_DIRS_ALL.lock();
+        if !t.reserve(s) {
+            return false;
+        }
+        t.install(s, b);
+    }
+    {
+        let mut t = PIPE_FDS.lock();
+        if !t.reserve(s) {
+            return false;
+        }
+        t.install(s, c);
+    }
+    FD_FLAGS.install(s)
+}
+
+/// Take the tables, lists and flags of fd space `s` away and free them.
+fn fdspace_drop_tables(s: usize) {
+    let a = OPEN_FDS_ALL.lock().remove(s);
+    let b = OPEN_DIRS_ALL.lock().remove(s);
+    let c = PIPE_FDS.lock().remove(s);
+    let d = PIPES.lock().remove(s);
+    let e = PIPE_NONBLOCK_ALL.lock().remove(s);
+    let f = PIPE_WAITERS_ALL.lock().remove(s);
+    FD_FLAGS.remove(s);
+    let owner = cloexec_space_owner(s);
+    FD_CLOEXEC.lock().retain(|&(o, _)| o != owner);
+    drop((a, b, c, d, e, f)); // freed after the locks are gone
+}
+
+/// A fresh fd space for a background process, with one reference. None when
+/// every space number is in use or the heap has no room for the tables: the
+/// caller refuses the start.
+fn fdspace_new() -> Option<usize> {
+    let _g = crate::sched::IfOffGuard::new();
+    // The space stragglers are moved to exists from the first use on.
+    if !OPEN_FDS_ALL.lock().has(fdspace::ORPHAN) && !fdspace_install(fdspace::ORPHAN) {
+        return None;
+    }
+    let s = FD_SPACES.lock().take()?;
+    if !fdspace_install(s) {
+        fdspace_drop_tables(s);
+        FD_SPACES.lock().release(s);
+        return None;
+    }
+    Some(s)
+}
+
+/// A fork child shares the space of its parent.
+fn fdspace_retain(s: usize) {
+    let _g = crate::sched::IfOffGuard::new();
+    FD_SPACES.lock().retain(s);
+}
+
+/// A process of the group was reaped. When it was the last one, the space and
+/// every descriptor in it are gone. A task that still points at the space (a
+/// thread that outlived its process) is moved to the orphan space, which is
+/// emptied for it.
+fn fdspace_release(s: usize) {
+    if s <= fdspace::ORPHAN {
+        return;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    if !FD_SPACES.lock().release(s) {
+        return;
+    }
+    if fdspace::orphan_tasks_of(s) > 0 {
+        let o = fdspace::ORPHAN;
+        fdspace::Spaced::of_mut(&mut *OPEN_FDS_ALL.lock(), o).fill(None);
+        fdspace::Spaced::of_mut(&mut *OPEN_DIRS_ALL.lock(), o).fill(None);
+        fdspace::Spaced::of_mut(&mut *PIPE_FDS.lock(), o).fill(None);
+        fdspace::Spaced::of_mut(&mut *PIPES.lock(), o).clear();
+        fdspace::Spaced::of_mut(&mut *PIPE_NONBLOCK_ALL.lock(), o).clear();
+        fdspace::Spaced::of_mut(&mut *PIPE_WAITERS_ALL.lock(), o).clear();
+        if let Some(f) = FD_FLAGS.get(o) {
+            f.reset();
+        }
+    }
+    fdspace_drop_tables(s);
+}
+
+/// Scheduler hook: a task slot is handed out again (see `sched::alloc_slot`).
+pub fn fd_space_slot_reset(task: usize) {
+    fdspace::task_slot_reset(task);
+}
+
+/// Fd spaces in use by background processes (a leak counter for the self-tests).
+pub fn fd_spaces_in_use() -> usize {
+    x86_64::instructions::interrupts::without_interrupts(|| FD_SPACES.lock().in_use())
+}
+
 /// Give the current process a FRESH fd table (fd 0/1/2 implicitly console/VFS).
-/// In the synchronous foreground model one process runs at a time, so this gives
-/// real per-process fd semantics: open fds do not leak between programs.
+/// The launcher (task 0) calls this at every program start, and what it clears
+/// is the launcher's fd space: the one foreground or glibc process runs in it,
+/// one at a time, so open fds do not leak between programs. The background
+/// processes have fd spaces of their own (BUG-060) and keep their descriptors.
 fn reset_fd_table() {
     // BUG-037: the launcher runs this with interrupts on, and syscalls of the
     // background processes take these tables with interrupts off: a preemption
@@ -2707,14 +2874,14 @@ fn reset_fd_table() {
 }
 
 fn reset_fd_table_inner() {
-    *OPEN_FDS.lock() = [None; MAX_FD];
+    OPEN_FDS.lock().fill(None);
     for slot in OPEN_DIRS.lock().iter_mut() {
         *slot = None;
     }
-    // Clear any pipe fds left by an earlier program (PIPE_FDS/PIPES are global): a
-    // stale pipe marker on fd 3 would otherwise hijack this program's libc reads on
-    // that fd number (EAGAIN "cannot read file data"). See the bg_read_fd note.
-    *pipe_fds() = [None; MAX_FD];
+    // Clear any pipe fds left by an earlier program in this space: a stale pipe
+    // marker on fd 3 would otherwise hijack this program's libc reads on that fd
+    // number (EAGAIN "cannot read file data"). See the bg_read_fd note.
+    pipe_fds().fill(None);
     pipes_lock().clear();
     PIPE_NONBLOCK.lock().clear();
     PIPE_WAITERS.lock().clear();
@@ -2953,13 +3120,13 @@ pub fn dump_suspect_addrs() {
     sa!(GLIBC_FORK_CHILDREN, "GLIBC_FORK_CHILDREN");
     sa!(GLIBC_THREADS, "GLIBC_THREADS");
     sa!(MKDIRS, "MKDIRS");
-    sa!(OPEN_DIRS, "OPEN_DIRS");
-    sa!(OPEN_FDS, "OPEN_FDS");
+    sa!(OPEN_DIRS_ALL, "OPEN_DIRS");
+    sa!(OPEN_FDS_ALL, "OPEN_FDS");
     sa!(OUTPUT, "OUTPUT");
     sa!(PIPES, "PIPES");
     sa!(PIPE_FDS, "PIPE_FDS");
-    sa!(PIPE_NONBLOCK, "PIPE_NONBLOCK");
-    sa!(PIPE_WAITERS, "PIPE_WAITERS");
+    sa!(PIPE_NONBLOCK_ALL, "PIPE_NONBLOCK");
+    sa!(PIPE_WAITERS_ALL, "PIPE_WAITERS");
     sa!(PROGRAMS, "PROGRAMS");
     sa!(PROT_NONE_RANGES, "PROT_NONE_RANGES");
     sa!(REAPED, "REAPED");
@@ -3289,7 +3456,17 @@ fn open_low_fd(fi: usize) -> u64 {
 static FD_CLOEXEC: Mutex<alloc::vec::Vec<(usize, u32)>> = Mutex::new(alloc::vec::Vec::new());
 
 fn cloexec_owner() -> usize {
-    fork_child_owner(crate::sched::current()).unwrap_or(0)
+    let cur = crate::sched::current();
+    match fdspace::of_task(cur) {
+        fdspace::ROOT => fork_child_owner(cur).unwrap_or(0),
+        s => cloexec_space_owner(s),
+    }
+}
+
+/// The close-on-exec owner key of a background process's fd space (task
+/// indices and 0 are the keys of the launcher's space).
+fn cloexec_space_owner(s: usize) -> usize {
+    usize::MAX - s
 }
 
 /// Mark/unmark `fd` close-on-exec for the CURRENT process.
@@ -4087,6 +4264,9 @@ struct BgProc {
     /// Mirror every output line to the serial log and keep up to 64 of them
     /// (boot self-tests that read a scheduled program's whole output).
     echo: bool,
+    /// The fd space of this process (fdspace.rs): its own, or its parent's
+    /// after a fork. One reference, dropped when the process is reaped.
+    fdspace: usize,
 }
 
 /// Exit statuses of terminated children, kept separate from frame reaping, so that
@@ -4174,6 +4354,8 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
         }
         // Sockets the process still held: closed now (FIN for a live TCP peer).
         bg_net_release(p.pid);
+        // Its files, directories and pipes: gone with the last process of its fd space.
+        fdspace_release(p.fdspace);
         // LOADTEST-R630 BUG-014: give the scheduler slots back. The process task and
         // its thread tasks are Dead (exit / exit_group marked them) and their kernel
         // stacks + address space are gone; without this every background process
@@ -5203,6 +5385,10 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
     }
     set_task_caps(task, effective_caps()); // lock-free read; thread shares its process' rights
     crate::sched::set_ident(task, child_pid as u32, parent_pid as u32);
+    // The child shares its parent's fd space (the pipe of the two is in it).
+    let space = bg[pos].fdspace;
+    fdspace_retain(space);
+    fdspace::set_task(task, space);
 
     bg.push(BgProc {
         task,
@@ -5224,6 +5410,7 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
         pooled: true,
         name: parent_name,
         echo: parent_echo,
+        fdspace: space,
     });
     crate::kinfo!("[fork] pid {parent_pid} -> child pid {child_pid} (task {task}, copy-arena {child_arena:#x}, pml4 {pml4:#x})");
     child_pid // the PARENT gets the child pid; the child got rax=0 via spawn_thread
@@ -5331,10 +5518,10 @@ fn do_execve(p: &mut BgProc, path_ptr: u64, argv_ptr: u64) -> u64 {
 /// touching the VFS locks (a bg read of stdin must not contend FILES.lock with
 /// the boot self-tests). Shared by read() and readv().
 fn bg_read_fd(fd: usize, buf: u64, len: usize) -> u64 {
-    // A real open FILE takes precedence over a pipe: PIPE_FDS is GLOBAL across bg
-    // processes, so a boot demo (forkpipe) can leave a stale pipe on the same fd
-    // number that this process later opens a file on. Checking the file first
-    // stops the DOOM port's WAD reads (fd 3) routing into that stale pipe.
+    // A real open FILE takes precedence over a pipe. (When PIPE_FDS was one table
+    // for every background process, a boot demo could leave a stale pipe on the fd
+    // number this process later opened a file on; each process has its own fd
+    // space since BUG-060, and the order is kept.)
     if fd < MAX_FD && OPEN_FDS.lock()[fd].is_some() {
         vfs_read(fd, buf, len)
     } else if let Some(r) = pipe_read_fd(fd, buf, len) {
@@ -5654,6 +5841,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
                 return (-11i64) as u64;
             }
             set_task_caps(child, effective_caps()); // thread: same rights
+            fdspace::set_task(child, p.fdspace); // and the same descriptors
             register_thread_kstack(child, slot);
             p.threads.push(child);
             crate::serial_println!("[thread] clone: pid {} -> thread task {child} (shared address space, own stack/TLS)", p.pid);
@@ -6424,12 +6612,25 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
     // Linux path with the foreground's globals: a kernel page fault after ~1 h of
     // spawning (soak). Ring-3 tasks run only on this core (the BSP), so keeping
     // interrupts off from spawn to registration closes the window.
+    // BUG-060: the descriptor tables of this process (fdspace.rs).
+    let Some(space) = fdspace_new() else {
+        for f in 0..512u64 {
+            let _ = falloc.free(arena + f * 4096);
+        }
+        for f in 0..4u64 {
+            let _ = falloc.free(kstack + f * 4096);
+        }
+        crate::paging::free_address_space(falloc, pml4);
+        crate::serial_println!("[euro] bg-musl (pid {pid}): no fd space free - not started");
+        return false;
+    };
     let irq_was_on = x86_64::instructions::interrupts::are_enabled();
     x86_64::instructions::interrupts::disable();
     let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
     if idx == usize::MAX {
         // Scheduler table full: undo instead of registering a process whose task
         // never runs (it used to sit "live" forever with task usize::MAX).
+        fdspace_release(space);
         for f in 0..512u64 {
             let _ = falloc.free(arena + f * 4096);
         }
@@ -6443,6 +6644,7 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
         crate::serial_println!("[euro] bg-musl (pid {pid}): scheduler task table full - not started");
         return false;
     }
+    fdspace::set_task(idx, space); // before the task can run (interrupts are off)
     // BUG-007 hardening: irqsave BG hold (non-preemptible) for the registration push.
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().push(BgProc {
@@ -6465,6 +6667,7 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
             pooled: false,
             name: String::from_utf8_lossy(argv0).into_owned(),
             echo: false,
+            fdspace: space,
         });
     });
     if irq_was_on {
@@ -6577,6 +6780,18 @@ pub fn spawn_bg_app(
     // Linux path with the foreground's globals: a kernel page fault after ~1 h of
     // spawning (soak). Ring-3 tasks run only on this core (the BSP), so keeping
     // interrupts off from spawn to registration closes the window.
+    // BUG-060: the descriptor tables of this process (fdspace.rs).
+    let Some(space) = fdspace_new() else {
+        for f in 0..frames {
+            let _ = falloc.free(arena + f * 4096);
+        }
+        for f in 0..4u64 {
+            let _ = falloc.free(kstack + f * 4096);
+        }
+        crate::paging::free_address_space(falloc, pml4);
+        crate::serial_println!("[euro] bg-app (pid {pid}): no fd space free - not started");
+        return None;
+    };
     let irq_was_on = x86_64::instructions::interrupts::are_enabled();
     x86_64::instructions::interrupts::disable();
     let idx = crate::sched::spawn_user(info.entry, rsp, user_cs, user_ss, kstack_top, pml4);
@@ -6584,6 +6799,7 @@ pub fn spawn_bg_app(
         // BUG-015 for apps and userspace drivers: a full task table is a refusal
         // (the udrv supervisor retries later), never a registered process whose
         // task never runs.
+        fdspace_release(space);
         for f in 0..frames {
             let _ = falloc.free(arena + f * 4096);
         }
@@ -6597,6 +6813,7 @@ pub fn spawn_bg_app(
         crate::serial_println!("[euro] bg-app (pid {pid}): scheduler task table full - not started");
         return None;
     }
+    fdspace::set_task(idx, space); // before the task can run (interrupts are off)
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().push(BgProc {
             task: idx,
@@ -6618,6 +6835,7 @@ pub fn spawn_bg_app(
             pooled: false,
             name: String::from_utf8_lossy(argv.first().copied().unwrap_or(b"app")).into_owned(),
             echo: false,
+            fdspace: space,
         });
     });
     if irq_was_on {
@@ -11938,6 +12156,7 @@ fn selftest_wait(ticks: u64, pred: &dyn Fn() -> bool) -> bool {
 pub fn fdspace_selftest(falloc: &mut FrameAllocator) {
     const PIDS: [u64; 2] = [0x4_0601, 0x4_0602];
     reap_dead(falloc);
+    FDSPACE_ST_BEFORE.store(fd_spaces_in_use(), Ordering::Relaxed);
     pipehold_ctl(b'0');
     let mut started = 0usize;
     for &pid in PIDS.iter() {
@@ -11970,7 +12189,8 @@ pub fn fdspace_selftest(falloc: &mut FrameAllocator) {
         }
     }
     reap_dead(falloc);
-    let ok = started == PIDS.len() && phase1 && phase1_ok && ended && pass == PIDS.len() && fg_code != u64::MAX;
+    let ok = started == PIDS.len() && phase1 && phase1_ok && ended && pass == PIDS.len() && fg_code != u64::MAX
+        && fdspace_selftest_balanced();
     crate::serial_println!(
         "[fdspace] {started} background processes keep a pipe and a file open across a foreground launch (musl exit={fg_code}, glibc exit={}): phase1={phase1_ok} ended={ended} pass={pass}/{}{detail}{} → {}",
         glibc_exit as i64, PIDS.len(), fdspace_selftest_extra(),
@@ -11980,7 +12200,12 @@ pub fn fdspace_selftest(falloc: &mut FrameAllocator) {
 
 /// What the [fdspace] line says about the fd spaces themselves.
 fn fdspace_selftest_extra() -> String {
-    String::new()
+    alloc::format!(" | fd spaces in use {} → {}", FDSPACE_ST_BEFORE.load(Ordering::Relaxed), fd_spaces_in_use())
+}
+static FDSPACE_ST_BEFORE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// Every fd space the self-test's processes had is released again.
+fn fdspace_selftest_balanced() -> bool {
+    fd_spaces_in_use() <= FDSPACE_ST_BEFORE.load(Ordering::Relaxed)
 }
 
 /// The frame allocator drained for a process-start test: everything is taken

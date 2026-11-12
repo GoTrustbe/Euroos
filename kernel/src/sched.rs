@@ -1175,6 +1175,14 @@ pub fn task_count() -> usize {
 /// A reused slot is reset to a pristine [`EMPTY_TASK`] so no stale field (pid,
 /// stack_bottom, …) leaks from its previous occupant.
 fn alloc_slot(s: &mut Scheduler) -> Option<usize> {
+    let i = alloc_slot_raw(s)?;
+    // The new occupant starts in the launcher's fd space; a spawner that gives
+    // it another one does so before the task can run (ring3/fdspace.rs).
+    crate::ring3::fd_space_slot_reset(i);
+    Some(i)
+}
+
+fn alloc_slot_raw(s: &mut Scheduler) -> Option<usize> {
     while let Some(i) = s.free_slots.pop() {
         // Defensive: only reuse a slot that is genuinely Dead and not the current
         // task (should always hold, since reclaim_task enforces it).
