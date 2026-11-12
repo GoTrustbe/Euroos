@@ -516,6 +516,8 @@ pub fn pump_keyboard() {
                 MOD_STATE.fetch_xor(0x2, core::sync::atomic::Ordering::Relaxed);
             }
             let keycode = x_keycode(ext, code);
+            trace(format_args!("key sc={sc:#04x} ext={ext} -> keycode {keycode} {} state={:#x}",
+                if pressed { "press" } else { "release" }, MOD_STATE.load(core::sync::atomic::Ordering::Relaxed)));
             if keycode == 0 {
                 continue;
             }

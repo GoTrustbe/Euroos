@@ -476,6 +476,7 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             // tables with interrupts off, and this task preempted while holding
             // one of them would wedge the next epoll_wait.
             let _g = crate::sched::IfOffGuard::new();
+            crate::xserver::dump_input_state();
             crate::ring3::dump_threads_now("cdiag (shell)");
             crate::ring3::dump_main_syscalls();
             crate::ring3::dump_epoll_sets();

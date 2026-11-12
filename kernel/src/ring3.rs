@@ -11471,16 +11471,16 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // ERR_SSL_PROTOCOL_ERROR with the record walker seeing nothing wrong.
     b"--vmodule=ssl_client_socket_impl=2,ssl_connect_job=1,transport_connect_job=1,http_stream_factory_job=1,ech_config_list=1,dns_transaction=1",
     b"--no-first-run", b"--no-default-browser-check",
-    // The live site's name, pinned the way the boot-test path pins it. On the
-    // desktop a navigation to https://euro-os.eu/ ends in ERR_NAME_NOT_RESOLVED
-    // the instant it starts: chrome reads /etc/hosts twice and never sends a
-    // query (no socket, no packet), while lookups for its own background hosts
-    // went out to 10.0.2.3:53 minutes earlier in the same run. Its DNS config
-    // service wants netlink, which this kernel does not provide, and a pinned
-    // /etc/hosts did not change the outcome. The rule takes name resolution out
-    // of the picture so the TCP, TLS and HTTP underneath can be measured; the
-    // resolver itself stays an open item (sprint plan W5b).
-    b"--host-resolver-rules=MAP euro-os.eu 82.192.72.16,MAP www.euro-os.eu 82.192.72.16",
+    // --test-type: no "You are using an unsupported command-line flag" infobar.
+    // The flag it complains about is --no-sandbox, and that one is not a choice
+    // here: chrome's Linux sandbox wants user namespaces and seccomp-bpf, and the
+    // processes run under this kernel's own capability and syscall profile instead.
+    b"--test-type",
+    // No --host-resolver-rules. The flag pinned euro-os.eu while a stale
+    // /etc/hosts entry made every lookup fail (September); /etc/hosts
+    // (chrome_stage_files) carries the right address, other names go to the
+    // resolver, and the flag cost every session the infobar "You are using an
+    // unsupported command-line flag ... Stability and security will suffer".
     // Everything the browser does BESIDES showing the page. The RIP histogram settled
     // what the main thread is busy with: 838 samples spread over 96+ code pages with
     // no hot spot -- not a livelock, just an enormous amount of startup work
@@ -11500,7 +11500,16 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // embeddings after first paint and never returns to its event loop under
     // emulation. Unknown feature names are ignored harmlessly, so the list names
     // every plausible spelling.
-    b"--disable-features=SafeBrowsing,OptimizationHints,SegmentationPlatform,MediaRouter,Translate,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,MojoUseEventFd,AudioServiceOutOfProcess,AudioServiceSandbox,PageContentAnnotations,HistoryEmbeddings,PageEmbeddings,AnnotatedPageContentExtraction,AIPageContent,TextEmbedder,PageContentExtraction,OptimizationGuideModelDownloading,OptimizationTargetPrediction,PageVisibility,ModelExecution",
+    b"--disable-features=SafeBrowsing,SegmentationPlatform,MediaRouter,Translate,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,MojoUseEventFd,AudioServiceOutOfProcess,AudioServiceSandbox,PageContentAnnotations,HistoryEmbeddings,PageEmbeddings,AnnotatedPageContentExtraction,AIPageContent,TextEmbedder,PageContentExtraction,OptimizationGuideModelDownloading,OptimizationTargetPrediction,PageVisibility,ModelExecution",
+    // "OptimizationHints" is NOT in that list any more. With it disabled the
+    // browser has no OptimizationGuideKeyedService, and not every consumer checks:
+    // contextual_tasks::ContextualTasksContextModelHandler is built with the null
+    // provider when a page loads in a second tab, and the browser's main thread
+    // died on a read of address 0 (chrome-smoke runs s7 and s8, both at the tabs
+    // step: rip in optimization_guide::ModelHandler<float, const
+    // std::vector<float>&>::ModelHandler(OptimizationGuideModelProvider*, ...)
+    // +0x2ed, `mov (%r14),%rax` with r14 = 0). Model downloads and target
+    // prediction stay off, so the service has nothing to fetch.
     // The fast, reproducible demo page. The REAL site works down the whole
     // stack on the post-campaign kernel (desk4, 2026-08-31: DNS via usernet,
     // TCP+TLS established to euro-os.eu:443, first composited paint quad at
