@@ -1119,7 +1119,7 @@ pub fn set_chrome_urls(urls: &[String]) {
 /// reaches the new one (W19). Same-site navigations after this keep the session.
 /// Falls back to the staged local page.
 pub fn chrome_init_url() -> String {
-    CHROME_URLS.lock().iter().find(|u| u.starts_with("http"))
+    CHROME_URLS.lock().iter().find(|u| u.starts_with("http") || u.starts_with("file:"))
         .cloned()
         .unwrap_or_else(|| String::from("file:///tmp/euro.html"))
 }
@@ -1146,6 +1146,17 @@ pub fn cdp_window_to_view(wx: i32, wy: i32) -> (i32, i32) {
     let x = (wx as i64 * 1000 / dpr) as i32;
     let y = (((wy as i64 - topbar_dev).max(0)) * 1000 / dpr) as i32;
     (x, y)
+}
+
+/// Ask the hosted browser which pages it has open (Target.getTargets, a browser-
+/// level question that survives every renderer swap); the pump prints one
+/// `[tabs]` line per page. False when no browser with a DevTools pipe runs.
+pub fn cdp_ask_tabs() -> bool {
+    if !CDP_DRIVE.load(Ordering::Relaxed) || !persistent_running() {
+        return false;
+    }
+    cdp_send("{\"id\":52,\"method\":\"Target.getTargets\"}");
+    true
 }
 
 /// Does the desktop ALSO send clicks and typed text to the page over DevTools
@@ -1595,8 +1606,15 @@ pub fn cdp_pump() {
                         }
                     }
                 }
+                // The visit list is a TEST instrument: it navigates the browser by
+                // itself every few heartbeats. It runs only when `chrome` was given
+                // two or more steps. Plain `chrome` and `chrome URL` open one page
+                // and then leave the browser to whoever sits in front of it: the
+                // list used to take the page away from the user after two minutes
+                // (the start page again) and after five (the project site).
+                let walk = CHROME_URLS.lock().len() >= 2;
                 let i = NAV_NEXT.load(Ordering::Relaxed);
-                if i < list.len() && sent >= 4 + (i as u64) * step {
+                if walk && i < list.len() && sent >= 4 + (i as u64) * step {
                     let sid = CDP_SESSION.lock().clone();
                     if !sid.is_empty() {
                         NAV_NEXT.store(i + 1, Ordering::Relaxed);
@@ -2006,6 +2024,20 @@ pub fn cdp_pump() {
                 cdp_send(&alloc::format!("{{\"id\":6,\"sessionId\":\"{sid}\",\"method\":\"Page.enable\"}}"));
                 crate::serial_println!("[cdp] re-attached: session now {sid}");
             }
+        }
+        // `ctabs` (shell): every page target with its URL and title, in full. The
+        // title is what the tab shows, so a test page that puts a field's value
+        // in document.title makes typed text readable on the serial console.
+        if msg.contains("\"id\":52") {
+            let mut pages = 0;
+            for part in msg.split("{\"targetId\":").skip(1) {
+                if json_str(part, "type") == Some("page") {
+                    pages += 1;
+                    crate::serial_println!("[tabs] page url=\"{}\" title=\"{}\"",
+                        json_str(part, "url").unwrap_or(""), json_str(part, "title").unwrap_or(""));
+                }
+            }
+            crate::serial_println!("[tabs] {pages} page(s)");
         }
         // The head cuts a frameNavigated inside its URL; the verdict needs the host.
         if msg.contains("\"method\":\"Page.frameNavigated\"") {
@@ -11337,6 +11369,9 @@ pub fn chrome_stage_files() {
     register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n</fontconfig>\n".to_vec());
     register_device_files();
     register_file("/tmp/euro.html", include_bytes!("euro_page.html").to_vec());
+    // The input test page of scripts/chrome-smoke.py: two fields whose values the
+    // page mirrors into document.title (read back with `ctabs`).
+    register_file("/tmp/input-test.html", include_bytes!("input_test_page.html").to_vec());
     // /etc/localtime: every chrome log line formats a timestamp, localtime_r takes
     // glibc's tz lock and reads this file on first use — and the lock at
     // __abort_msg+0x10 is exactly where main/viz/renderer were found parked with
@@ -11476,6 +11511,9 @@ pub const CHROME_ARGV: &[&[u8]] = &[
 pub const CHROME_ENVP: &[&[u8]] = &[
     b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
     b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null",
+    // A Chromium build without Google API keys opens every session with the
+    // infobar "Google API keys are missing". These three say "none, on purpose".
+    b"GOOGLE_API_KEY=no", b"GOOGLE_DEFAULT_CLIENT_ID=no", b"GOOGLE_DEFAULT_CLIENT_SECRET=no",
 ];
 
 /// Take everything a persistent app has written since the last call. A program that

@@ -19,8 +19,18 @@ const MAX_XCONN: usize = 8;
 
 /// Default screen geometry reported in the setup (refined to the real framebuffer
 /// once window mapping is wired to the compositor).
-const SCREEN_W: u16 = 1280;
-const SCREEN_H: u16 = 800;
+static SCREEN_W: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(1280);
+static SCREEN_H: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(800);
+fn screen_w() -> u16 { SCREEN_W.load(core::sync::atomic::Ordering::Relaxed) }
+fn screen_h() -> u16 { SCREEN_H.load(core::sync::atomic::Ordering::Relaxed) }
+
+/// The size of the X screen as clients see it in the connection setup, and the
+/// largest size a window can be given. The desktop sets it to the framebuffer
+/// before it starts a hosted client; 1280x800 until then.
+pub fn set_screen(w: usize, h: usize) {
+    SCREEN_W.store(w.clamp(640, 8192) as u16, core::sync::atomic::Ordering::Relaxed);
+    SCREEN_H.store(h.clamp(480, 8192) as u16, core::sync::atomic::Ordering::Relaxed);
+}
 
 // Fixed resource ids we hand out in the setup for the root window / visual / colormap.
 const ROOT_WINDOW: u32 = 0x0000_0001;
@@ -109,8 +119,105 @@ pub fn open() -> Option<u64> {
 
 pub fn close(fd: u64) {
     if is_xconn_fd(fd) {
-        XCONNS.lock()[(fd - XCONN_FD_BASE) as usize] = None;
+        let idx = (fd - XCONN_FD_BASE) as usize;
+        XCONNS.lock()[idx] = None;
+        SEL_OWNERS.lock().retain(|&(_, _, c)| c != idx);
     }
+}
+
+/// The atom table: one id per name for every client, as the protocol says. (It
+/// used to be a fresh number per InternAtom call, so two clients, or one client
+/// asking twice, never agreed on what CLIPBOARD is.) Ids 1..=68 are predefined.
+const PREDEFINED_ATOMS: [&str; 68] = [
+    "PRIMARY", "SECONDARY", "ARC", "ATOM", "BITMAP", "CARDINAL", "COLORMAP", "CURSOR",
+    "CUT_BUFFER0", "CUT_BUFFER1", "CUT_BUFFER2", "CUT_BUFFER3", "CUT_BUFFER4", "CUT_BUFFER5",
+    "CUT_BUFFER6", "CUT_BUFFER7", "DRAWABLE", "FONT", "INTEGER", "PIXMAP", "POINT", "RECTANGLE",
+    "RESOURCE_MANAGER", "RGB_COLOR_MAP", "RGB_BEST_MAP", "RGB_BLUE_MAP", "RGB_DEFAULT_MAP",
+    "RGB_GRAY_MAP", "RGB_GREEN_MAP", "RGB_RED_MAP", "STRING", "VISUALID", "WINDOW", "WM_COMMAND",
+    "WM_HINTS", "WM_CLIENT_MACHINE", "WM_ICON_NAME", "WM_ICON_SIZE", "WM_NAME", "WM_NORMAL_HINTS",
+    "WM_SIZE_HINTS", "WM_ZOOM_HINTS", "MIN_SPACE", "NORM_SPACE", "MAX_SPACE", "END_SPACE",
+    "SUPERSCRIPT_X", "SUPERSCRIPT_Y", "SUBSCRIPT_X", "SUBSCRIPT_Y", "UNDERLINE_POSITION",
+    "UNDERLINE_THICKNESS", "STRIKEOUT_ASCENT", "STRIKEOUT_DESCENT", "ITALIC_ANGLE", "X_HEIGHT",
+    "QUAD_WIDTH", "WEIGHT", "POINT_SIZE", "RESOLUTION", "COPYRIGHT", "NOTICE", "FONT_NAME",
+    "FAMILY_NAME", "FULL_NAME", "CAP_HEIGHT", "WM_CLASS", "WM_TRANSIENT_FOR",
+];
+static ATOMS: Mutex<Vec<alloc::string::String>> = Mutex::new(Vec::new());
+
+/// The atom of `name`; 0 (None) when it does not exist and `only_if_exists`.
+fn intern_atom(name: &str, only_if_exists: bool) -> u32 {
+    if let Some(i) = PREDEFINED_ATOMS.iter().position(|a| *a == name) {
+        return i as u32 + 1;
+    }
+    let mut t = ATOMS.lock();
+    if let Some(i) = t.iter().position(|a| a == name) {
+        return 69 + i as u32;
+    }
+    if only_if_exists || t.len() >= 4096 {
+        return 0;
+    }
+    t.push(alloc::string::String::from(name));
+    68 + t.len() as u32
+}
+
+fn atom_name(atom: u32) -> Option<alloc::string::String> {
+    match atom {
+        1..=68 => Some(alloc::string::String::from(PREDEFINED_ATOMS[atom as usize - 1])),
+        _ => ATOMS.lock().get((atom as usize).checked_sub(69)?).cloned(),
+    }
+}
+
+/// Who owns each selection: (selection atom, owner window, owner connection).
+/// Chrome copies by taking CLIPBOARD and then ASKS who owns it; only when the
+/// answer is its own window does it keep what was copied.
+static SEL_OWNERS: Mutex<Vec<(u32, u32, usize)>> = Mutex::new(Vec::new());
+
+/// The keyboard layout changed (`keymap`, the installer, the settings): every
+/// client gets a MappingNotify, on which it fetches the keyboard mapping again.
+pub fn keymap_changed() {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        for conn in XCONNS.lock().iter_mut().flatten() {
+            if conn.state != State::Connected {
+                continue;
+            }
+            let mut e = [0u8; 32];
+            e[0] = 34; // MappingNotify
+            e[2..4].copy_from_slice(&conn.seq.to_le_bytes());
+            e[4] = 1; // request = Keyboard
+            e[5] = 8; // first keycode
+            e[6] = 248; // count
+            conn.outbuf.extend_from_slice(&e);
+        }
+    });
+}
+
+/// The desktop gave the hosted window's frame another size (resize grip,
+/// maximise, a smaller screen): the X window gets that size, a ConfigureNotify
+/// and an Expose, and the client lays itself out again and repaints.
+pub fn hosted_resize(w: usize, h: usize) {
+    let (w, h) = (w.clamp(64, screen_w() as usize) as u16, h.clamp(64, screen_h() as usize) as u16);
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let shown = RETAINED_ID.load(core::sync::atomic::Ordering::Relaxed);
+        if shown == 0 {
+            return;
+        }
+        let mut t = XCONNS.lock();
+        let Some(ci) = conn_of_window(&t[..], shown) else { return };
+        let Some(conn) = t[ci].as_mut() else { return };
+        let mut at = None;
+        if let Some(win) = conn.windows.iter_mut().find(|x| x.id == shown) {
+            if win.w != w || win.h != h {
+                win.w = w;
+                win.h = h;
+                win.buf = alloc::vec![win.bg; w as usize * h as usize];
+                at = Some((win.x, win.y));
+            }
+        }
+        if let Some((x, y)) = at {
+            send_configure_notify(conn, shown, x, y, w, h);
+            send_expose(conn, shown, w, h);
+            crate::serial_println!("[xserver] hosted window {shown:#x} resized to {w}x{h} by the desktop");
+        }
+    });
 }
 
 /// The client wrote `data` — feed the protocol state machine, producing replies.
@@ -941,12 +1048,78 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             pad_reply(&mut r);
             c.outbuf.extend_from_slice(&r);
         }
-        // InternAtom (16): hand back a synthetic atom id (seq-based, nonzero).
+        // InternAtom (16): only-if-exists in the detail byte, name length@4, name@8.
         16 => {
+            let n = ru16(c, req, 4) as usize;
+            let name = alloc::string::String::from_utf8_lossy(req.get(8..8 + n).unwrap_or(&[])).into_owned();
+            let atom = intern_atom(&name, detail != 0);
             let mut r = reply_header(c, 0);
-            wr32(c, &mut r, 8, 0x1000 + c.seq as u32); // atom
+            wr32(c, &mut r, 8, atom);
             pad_reply(&mut r);
             c.outbuf.extend_from_slice(&r);
+        }
+        // GetAtomName (17): atom@4. Reply: name length@8, the name padded to 4.
+        17 => {
+            let atom = ru32(c, req, 4);
+            match atom_name(atom) {
+                Some(name) => {
+                    let mut r = reply_header(c, name.len().div_ceil(4) as u32);
+                    put16(c, &mut r, 8, name.len() as u16);
+                    r[32..32 + name.len()].copy_from_slice(name.as_bytes());
+                    c.outbuf.extend_from_slice(&r);
+                }
+                None => send_error(c, 5, atom, 17, 0), // BadAtom
+            }
+        }
+        // SetSelectionOwner (22): owner@4 (None = give it up), selection@8, time@12.
+        // The previous owner, if it is another window, is told with SelectionClear.
+        22 => {
+            let owner = ru32(c, req, 4);
+            let sel = ru32(c, req, 8);
+            let me = conn_index(c);
+            let prev = {
+                let mut t = SEL_OWNERS.lock();
+                let prev = t.iter().find(|e| e.0 == sel).copied();
+                t.retain(|e| e.0 != sel);
+                if owner != 0 {
+                    t.push((sel, owner, me));
+                }
+                prev
+            };
+            if let Some((_, pwin, pconn)) = prev {
+                if pwin != owner {
+                    let mut e = [0u8; 32];
+                    e[0] = 29; // SelectionClear
+                    e[4..8].copy_from_slice(&((crate::interrupts::ticks() * 10) as u32).to_le_bytes());
+                    e[8..12].copy_from_slice(&pwin.to_le_bytes());
+                    e[12..16].copy_from_slice(&sel.to_le_bytes());
+                    if pconn == me {
+                        e[2..4].copy_from_slice(&c.seq.to_le_bytes());
+                        c.outbuf.extend_from_slice(&e);
+                    } else if let Some(Some(o)) = XCONNS.lock().get_mut(pconn).map(|x| x.as_mut()) {
+                        e[2..4].copy_from_slice(&o.seq.to_le_bytes());
+                        o.outbuf.extend_from_slice(&e);
+                    }
+                }
+            }
+            trace(format_args!("SetSelectionOwner selection={sel} owner={owner:#x}"));
+        }
+        // ConvertSelection (24): requestor@4, selection@8, target@12, property@16,
+        // time@20. Nobody owns it, or the owner is the asking connection's own
+        // window (a client answers itself without the server): SelectionNotify
+        // with property None, so the requestor does not wait. Handing a request to
+        // an owner on ANOTHER connection (SelectionRequest, properties, SendEvent)
+        // is not implemented: that paste comes up empty.
+        24 => {
+            let mut e = [0u8; 32];
+            e[0] = 31; // SelectionNotify
+            e[2..4].copy_from_slice(&c.seq.to_le_bytes());
+            e[4..8].copy_from_slice(&req[20..24]);   // time
+            e[8..12].copy_from_slice(&req[4..8]);    // requestor
+            e[12..16].copy_from_slice(&req[8..12]);  // selection
+            e[16..20].copy_from_slice(&req[12..16]); // target
+            // property@20 = None
+            c.outbuf.extend_from_slice(&e);
         }
         // GetProperty (20): reply "no property" (type=None, all lengths 0).
         20 => {
@@ -967,8 +1140,8 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             // (set_default_size -> ConfigureWindow) then drives the final geometry.
             let raw_w = ru16(c, req, 16);
             let raw_h = ru16(c, req, 18);
-            let w = if raw_w >= 8192 { 400 } else { raw_w.clamp(1, SCREEN_W) };
-            let h = if raw_h >= 8192 { 260 } else { raw_h.clamp(1, SCREEN_H) };
+            let w = if raw_w >= 8192 { 400 } else { raw_w.clamp(1, screen_w()) };
+            let h = if raw_h >= 8192 { 260 } else { raw_h.clamp(1, screen_h()) };
             // CWBackPixel (0x2): the window starts filled with its background, as a
             // core-X client expects (hello-x11 asked for WhitePixel and got dark).
             let bg = value_at(c, req, 28, 32, 0x2).map(|v| v | 0xff00_0000).unwrap_or(0xff20_2020);
@@ -1114,8 +1287,8 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                     // asks for its full unconstrained size; honouring it would make a
                     // giant window. Keep the current size for those.
                     match bit {
-                        2 if v < 8192 => nw = Some((v as u16).clamp(1, SCREEN_W)),
-                        3 if v < 8192 => nh = Some((v as u16).clamp(1, SCREEN_H)),
+                        2 if v < 8192 => nw = Some((v as u16).clamp(1, screen_w())),
+                        3 if v < 8192 => nh = Some((v as u16).clamp(1, screen_h())),
                         _ => {}
                     }
                     voff += 4;
@@ -1183,8 +1356,8 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
         // An off-screen buffer GTK renders its widget tree into. No reply.
         53 => {
             let id = ru32(c, req, 4);
-            let w = ru16(c, req, 12).clamp(1, SCREEN_W);
-            let h = ru16(c, req, 14).clamp(1, SCREEN_H);
+            let w = ru16(c, req, 12).clamp(1, screen_w());
+            let h = ru16(c, req, 14).clamp(1, screen_h());
             c.pixmaps.push(XPixmap { id, w, h, buf: alloc::vec![0xff00_0000u32; w as usize * h as usize] });
             trace(format_args!("CreatePixmap id={id:#x} {w}x{h}"));
         }
@@ -1209,11 +1382,13 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             trace(format_args!("CopyArea src={src:#x} dst={dst:#x} {w}x{h} @({dx},{dy})"));
             present(c, dst);
         }
-        // GetSelectionOwner(23): report None (0) — no selection owner. GTK checks the
-        // clipboard/WM/CM selections at startup; None is a valid answer.
+        // GetSelectionOwner(23): selection@4 -> the window SetSelectionOwner named,
+        // None (0) when nobody owns it.
         23 => {
+            let sel = ru32(c, req, 4);
+            let owner = SEL_OWNERS.lock().iter().find(|e| e.0 == sel).map(|e| e.1).unwrap_or(0);
             let mut r = reply_header(c, 0);
-            wr32(c, &mut r, 8, 0); // owner = None
+            wr32(c, &mut r, 8, owner);
             c.outbuf.extend_from_slice(&r);
         }
         // GetGeometry(14): drawable@4. Reply: depth in r[1], root, x,y,w,h,border.
@@ -1221,7 +1396,7 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             let id = ru32(c, req, 4);
             let (x, y, w, h) = c.windows.iter().find(|w| w.id == id)
                 .map(|win| (win.x, win.y, win.w, win.h))
-                .unwrap_or((0, 0, SCREEN_W, SCREEN_H));
+                .unwrap_or((0, 0, screen_w(), screen_h()));
             let mut r = reply_header(c, 0);
             r[1] = 24; // depth
             wr32(c, &mut r, 8, ROOT_WINDOW); // root
@@ -1455,6 +1630,7 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                 POINTER_WIN.store(0, core::sync::atomic::Ordering::Relaxed);
             }
             if opcode == 4 {
+                SEL_OWNERS.lock().retain(|e| e.1 != id);
                 c.windows.retain(|w| w.id != id);
                 SELECTIONS.lock().retain(|(w, _, _)| *w != id);
             } else if let Some(win) = c.windows.iter_mut().find(|w| w.id == id) {
@@ -2102,10 +2278,10 @@ fn setup_reply(swap: bool, rid_base: u32) -> Vec<u8> {
     p32(&mut a, swap, 0x00ff_ffff); // white-pixel
     p32(&mut a, swap, 0x0000_0000); // black-pixel
     p32(&mut a, swap, 0); // current-input-masks
-    p16(&mut a, swap, SCREEN_W); // width in pixels
-    p16(&mut a, swap, SCREEN_H); // height in pixels
-    p16(&mut a, swap, (SCREEN_W as u32 * 254 / 960) as u16); // width in mm (~96 dpi)
-    p16(&mut a, swap, (SCREEN_H as u32 * 254 / 960) as u16); // height in mm
+    p16(&mut a, swap, screen_w()); // width in pixels
+    p16(&mut a, swap, screen_h()); // height in pixels
+    p16(&mut a, swap, (screen_w() as u32 * 254 / 960) as u16); // width in mm (~96 dpi)
+    p16(&mut a, swap, (screen_h() as u32 * 254 / 960) as u16); // height in mm
     p16(&mut a, swap, 1); // min-installed-maps
     p16(&mut a, swap, 1); // max-installed-maps
     p32(&mut a, swap, ROOT_VISUAL); // root-visual

@@ -453,6 +453,15 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             crate::xserver::TRACE.store(on, core::sync::atomic::Ordering::Relaxed);
             vec![format!("xtrace: {}", if on { "on" } else { "off" })]
         }
+        // `ctabs`: the pages the hosted browser has open, URL and title, as
+        // `[tabs]` lines on the serial console (the answer arrives a moment later).
+        "ctabs" => {
+            if crate::ring3::cdp_ask_tabs() {
+                vec!["ctabs: asked; the [tabs] lines follow on the serial console".into()]
+            } else {
+                vec!["ctabs: no hosted browser is running".into()]
+            }
+        }
         // `fstrace N`: log the next N pread/pwrite calls of every program.
         "fstrace" => {
             let n: u32 = arg1.parse().unwrap_or(0);

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>input-test ready</title>
+<style>
+  body { font: 16px sans-serif; margin: 24px; background: #f4f1ea; color: #1c2430; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  label { display: block; margin: 14px 0 4px; }
+  input { font: 18px monospace; width: 560px; padding: 8px; border: 2px solid #2a5bd7; border-radius: 6px; }
+  p#sel { font: 18px monospace; margin-top: 22px; }
+  .tall { height: 1600px; background: linear-gradient(#f4f1ea, #2a5bd7); margin-top: 30px; }
+</style>
+</head>
+<body>
+<h1>EuroOS input test</h1>
+<label for="a">Field A</label>
+<input id="a" autocomplete="off" spellcheck="false" autofocus>
+<label for="b">Field B</label>
+<input id="b" autocomplete="off" spellcheck="false">
+<p id="sel">select-this-word and copy it</p>
+<div class="tall"></div>
+<script>
+  // Everything a test needs to know goes into the title: both fields, the last
+  // clipboard event, the scroll position. `ctabs` in the EuroOS shell prints it.
+  var a = document.getElementById('a'), b = document.getElementById('b'), last = '-';
+  function show() {
+    document.title = 'A=[' + a.value + '] B=[' + b.value + '] clip=' + last + ' y=' + Math.round(window.scrollY);
+  }
+  ['input', 'change'].forEach(function (e) { a.addEventListener(e, show); b.addEventListener(e, show); });
+  ['copy', 'cut', 'paste'].forEach(function (e) {
+    document.addEventListener(e, function () { last = e; setTimeout(show, 0); });
+  });
+  window.addEventListener('scroll', show);
+  show();
+</script>
+</body>
+</html>

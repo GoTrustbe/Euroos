@@ -465,6 +465,11 @@ fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
     // run-to-completion boot test finish, and would race a live window's deadlines.
     ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
     xserver::set_windowed(true);
+    // The X screen is the real screen: the window can then be as large as the
+    // desktop makes its frame (maximise), not 1280x800 at most.
+    if let Some(fbi) = FB_INFO.get() {
+        xserver::set_screen(fbi.width, fbi.height);
+    }
     // CHROME_ARGV carries --remote-debugging-pipe, so fd 3/4 MUST exist before
     // chrome's first instruction — and the input bridge wants the session anyway:
     // desktop clicks and typing ride the same reliable DevTools route as the
@@ -5267,6 +5272,7 @@ fn main() -> Status {
     let mut x_held = false;
     let mut x_rheld = false;
     let mut x_focus = false;
+    let mut x_body = (0usize, 0usize); // the body size the hosted X window was last given
     // Desktop cost accounting while a hosted app runs: (tick, loops, x-repaints, full repaints)
     let mut hosted_last = (0u64, 0u64, 0u64, 0u64);
     let mut loop_iters = 0u64;
@@ -7323,6 +7329,16 @@ fn main() -> Status {
                     }
                     need_full = true;
                 }
+            }
+        }
+        // The hosted X window is as large as the body of its frame: after a resize
+        // or maximise (once the button is up, not for every pixel of the drag) the
+        // client is told its new size and paints for it.
+        if ring3::persistent_running() && windows[gtk_idx].visible && !mouse::left_down() {
+            let (_, _, bw, bh) = compositor::window_body_rect(&windows[gtk_idx]);
+            if (bw, bh) != x_body && xserver::front_window_size().is_some() {
+                x_body = (bw, bh);
+                xserver::hosted_resize(bw, bh);
             }
         }
         // The hosted X window: focus follows the active window, keys go to it while

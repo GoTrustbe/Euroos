@@ -64,7 +64,11 @@ pub fn take_shortcuts_key() -> bool {
 /// Set the active keyboard layout (installer keymap / `keymap` command).
 pub fn set_layout(layout: Layout) {
     let idx = Layout::ALL.iter().position(|&l| l == layout).unwrap_or(0);
-    LAYOUT.store(idx as u8, Ordering::Relaxed);
+    let old = LAYOUT.swap(idx as u8, Ordering::Relaxed);
+    if old != idx as u8 {
+        // X clients cache the keyboard mapping: tell them it is another one now.
+        crate::xserver::keymap_changed();
+    }
 }
 
 /// The active keyboard layout.
