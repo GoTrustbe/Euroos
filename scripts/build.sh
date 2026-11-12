@@ -11,6 +11,18 @@ exec 9>"${TMPDIR:-/tmp}/eurokernel-build.lock"
 flock 9
 
 PROFILE="${1:-release}"
+# The kernel's link map. Kernel and loader are linked with the same
+# /MAP:target/kernel.map (one flag for the target) and the loader is linked
+# last, so after a build that file was the LOADER's map and the kernel had to
+# be relinked for its symbols. Called right after the kernel build: when the
+# file is the kernel's (it was just linked) it is kept as
+# target/eurokernel.map; when the kernel was up to date, the copy of the
+# build that linked it is still there.
+keep_kernel_map() {
+  if grep -q 'eurokernel-[0-9a-f]*\.eurokernel\.' target/kernel.map 2>/dev/null; then
+    cp -f target/kernel.map target/eurokernel.map
+  fi
+}
 # EuroUpdate compares this against the signed channel manifest (YYYYMMDD).
 export EUROOS_BUILD_VERSION="${EUROOS_BUILD_VERSION:-$(date -u +%Y%m%d)}"
 echo "==> EUROOS_BUILD_VERSION=$EUROOS_BUILD_VERSION"
@@ -25,6 +37,7 @@ if [ "$PROFILE" = "image" ]; then
   PROFILE="release"
   EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
   cargo kbuild-image
+  keep_kernel_map
   cargo lbuild-release           # G4: two-stage loader
 elif [ "$PROFILE" = "lockbench" ]; then
   # J1 lock benchmark image: boots, runs [lk-stress]/[lk-bench] on every core
@@ -32,6 +45,7 @@ elif [ "$PROFILE" = "lockbench" ]; then
   PROFILE="release"
   EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
   cargo kbuild-lockbench
+  keep_kernel_map
   cargo lbuild-release
 elif [ "$PROFILE" = "heaptrace" ]; then
   # BUG-027 debug image: the selftest image plus heap accounting per allocation
@@ -39,24 +53,28 @@ elif [ "$PROFILE" = "heaptrace" ]; then
   PROFILE="release"
   EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
   cargo kbuild-heaptrace
+  keep_kernel_map
   cargo lbuild-release
 elif [ "$PROFILE" = "chrome" ]; then
   # Iteration image: chrome runs in the boot phase (see the chrome-boot feature).
   PROFILE="release"
   EFI="target/x86_64-unknown-uefi/release/eurokernel.efi"
   cargo kbuild-chrome
+  keep_kernel_map
   cargo lbuild-release
 elif [ "$PROFILE" = "release" ]; then
   cargo kbuild-release
+  keep_kernel_map
   cargo lbuild-release           # G4: two-stage loader
 else
   cargo kbuild
+  keep_kernel_map
   cargo build -p loader --target x86_64-unknown-uefi -Z build-std=core,compiler_builtins,alloc -Z build-std-features=compiler-builtins-mem
 fi
 [ -f "$EFI" ] || { echo "ERROR: $EFI not found"; exit 1; }
 LOADER="target/x86_64-unknown-uefi/${PROFILE}/loader.efi"
 [ -f "$LOADER" ] || { echo "ERROR: $LOADER not found"; exit 1; }
-echo "==> kernel: $(du -h "$EFI" | cut -f1) · loader: $(du -h "$LOADER" | cut -f1)"
+echo "==> kernel: $(du -h "$EFI" | cut -f1) · loader: $(du -h "$LOADER" | cut -f1) · kernel link map: target/eurokernel.map"
 
 # Stage the binaries the moment they exist: the image assembly below takes a minute,
 # and until it is done these paths must not change underneath it.
