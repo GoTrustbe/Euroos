@@ -833,37 +833,90 @@ pub static RANDOM_ST_CLOSED: core::sync::atomic::AtomicBool = core::sync::atomic
 /// for the CSPRNG to be seeded.
 pub static RANDOM_WAITS: AtomicU64 = AtomicU64::new(0);
 
-/// Monotonic counter behind getrandom, so every call yields DIFFERENT bytes. The
-/// previous fill was deterministic on byte position only, so every getrandom(n)
-/// returned the SAME n bytes — programs that mint "random" IDs/tokens/keys (chrome's
-/// UnguessableToken, map keys, HashMap seeds) then got COLLISIONS, and a later
-/// lookup CHECK for the second, supposedly-distinct value crashed. splitmix64 over a
-/// fetch_add counter (+ a boot-tick seed) is unique-per-call and race-free. Not a
-/// CSPRNG (euroentropy is), but sufficient for uniqueness/distribution here.
-static RNG_CTR: AtomicU64 = AtomicU64::new(0);
-fn next_rand_u64() -> u64 {
-    let seed = crate::interrupts::ticks().wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    let mut z = RNG_CTR
-        .fetch_add(1, Ordering::Relaxed)
-        .wrapping_add(seed)
-        .wrapping_add(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
-/// Fill `len` user bytes at `buf` with unique-per-call pseudo-randomness. Caller must
-/// have validated `buf`. Returns false on a copy fault.
-fn fill_random(buf: u64, len: u64) -> bool {
-    let mut i = 0u64;
-    while i < len {
-        let r = next_rand_u64().to_le_bytes();
-        let n = core::cmp::min(8, len - i) as usize;
-        if !copy_to_user(buf + i, &r[..n]) {
-            return false;
+/// Linux `getrandom(2)` flags.
+const GRND_NONBLOCK: u64 = 1;
+const GRND_RANDOM: u64 = 2;
+const GRND_INSECURE: u64 = 4;
+/// The most one `getrandom` call or one read of a random device returns
+/// (Linux: 32 MiB - 1 for the same reason, a bounded time in the kernel).
+const RANDOM_MAX_BYTES: u64 = 0x1FF_FFFF;
+
+/// Wait until the CSPRNG is seeded. Each round is one more seeding attempt:
+/// noise is gathered (64 batches, a few milliseconds), so the wait is work
+/// and ends with or without a running clock or scheduler. It does not give
+/// the CPU away itself: a reader of a random device holds the fd lock, and a
+/// foreground program has no task to yield to; a process with interrupts on
+/// is preempted by the timer as in any other long syscall.
+fn random_wait() {
+    loop {
+        if RANDOM_ST_CLOSED.load(Ordering::Relaxed) {
+            // The self-test's closed pool: it opens after three rounds of waiting.
+            static ROUNDS: AtomicU64 = AtomicU64::new(0);
+            RANDOM_WAITS.fetch_add(1, Ordering::Relaxed);
+            if ROUNDS.fetch_add(1, Ordering::Relaxed) % 3 == 2 {
+                RANDOM_ST_CLOSED.store(false, Ordering::Relaxed);
+                return;
+            }
+        } else if crate::entropy::seed_step() {
+            return;
+        } else {
+            RANDOM_WAITS.fetch_add(1, Ordering::Relaxed);
         }
-        i += 8;
+        core::hint::spin_loop();
     }
-    true
+}
+
+/// Fill `len` user bytes at `buf` from the kernel CSPRNG (`entropy`), in pieces,
+/// the pool lock released between them. Caller must have validated `buf`.
+/// Returns the number of bytes written, `-EFAULT` on a copy fault, or, for a
+/// pool that is not seeded, `-EAGAIN` when `nonblock` and otherwise the bytes
+/// after a wait. Never bytes from anywhere else: before BUG-080 this was
+/// splitmix64 over a call counter and the tick count.
+fn fill_random(buf: u64, len: u64, nonblock: bool) -> u64 {
+    let len = len.min(RANDOM_MAX_BYTES);
+    if len == 0 {
+        return 0;
+    }
+    let mut piece = alloc::vec![0u8; (len as usize).min(4096)];
+    let mut done = 0u64;
+    while done < len {
+        let n = ((len - done) as usize).min(piece.len());
+        let seeded = !RANDOM_ST_CLOSED.load(Ordering::Relaxed) && crate::entropy::getrandom(&mut piece[..n]);
+        if !seeded {
+            if nonblock {
+                return if done > 0 { done } else { (-11i64) as u64 }; // -EAGAIN
+            }
+            random_wait();
+            continue;
+        }
+        if !copy_to_user(buf + done, &piece[..n]) {
+            return EFAULT;
+        }
+        done += n as u64;
+    }
+    piece.fill(0);
+    done
+}
+
+/// `getrandom(buf, len, flags)` as Linux defines it. Without flags the call
+/// waits until the CSPRNG is seeded; with `GRND_NONBLOCK` it returns `-EAGAIN`
+/// instead. `GRND_RANDOM` is the same generator (as on Linux since 5.6).
+/// `GRND_INSECURE` is accepted and served like no flag at all: Linux would
+/// hand out bytes of an unseeded generator there, this kernel has no such
+/// bytes to give. A request is never cut short (Linux promises that up to 256
+/// bytes); one call returns at most [`RANDOM_MAX_BYTES`].
+fn sys_getrandom(buf: u64, len: u64, flags: u64) -> u64 {
+    if flags & !(GRND_NONBLOCK | GRND_RANDOM | GRND_INSECURE) != 0 || flags & (GRND_RANDOM | GRND_INSECURE) == (GRND_RANDOM | GRND_INSECURE) {
+        return (-22i64) as u64; // -EINVAL
+    }
+    let len = len.min(RANDOM_MAX_BYTES);
+    if len == 0 {
+        return 0;
+    }
+    if !in_user_arena(buf, len as usize) {
+        return EFAULT;
+    }
+    fill_random(buf, len, flags & GRND_NONBLOCK != 0)
 }
 
 /// (rlim_cur, rlim_max) for a Linux RLIMIT_* resource. Sane, self-consistent values
@@ -2903,7 +2956,24 @@ pub fn vfs_file_bytes(path: &str) -> Option<alloc::vec::Vec<u8>> {
 }
 
 pub fn register_file(path: &str, bytes: alloc::vec::Vec<u8>) {
-    FILES.lock().push((String::from(path), alloc::borrow::Cow::Owned(bytes)));
+    // The generated character devices (see char_device_read) have ONE entry
+    // each, whoever registers them and however often: a second entry under
+    // the same name was an ordinary file, and whichever came first in the
+    // table was the one a program opened. The random devices keep no bytes.
+    let (slot, bytes) = match path {
+        "/dev/urandom" => (Some(&URANDOM_FI), alloc::vec::Vec::new()),
+        "/dev/random" => (Some(&URANDOM_ALIAS_FI), alloc::vec::Vec::new()),
+        "/dev/zero" => (Some(&ZERO_FI), bytes),
+        _ => (None, bytes),
+    };
+    let mut files = FILES.lock();
+    if let Some(slot) = slot {
+        if slot.load(Ordering::Relaxed) != usize::MAX {
+            return;
+        }
+        slot.store(files.len(), Ordering::Relaxed);
+    }
+    files.push((String::from(path), alloc::borrow::Cow::Owned(bytes)));
 }
 
 /// Register a file served ZERO-COPY from the kernel image (an include_bytes! slice).
@@ -3776,6 +3846,11 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
         Some((fi, _)) => fi,
         None => return u64::MAX,
     };
+    // A generated device has no offsets: pread is a read (it used to return
+    // the placeholder bytes the device was registered with).
+    if let Some(n) = char_device_read(fi, buf, len) {
+        return n;
+    }
     sync_shared_region(fi, true); // a shared mapping IS the file: pick up its writes
     diag_page_read(fi, len as u64, "pread");
     if fi == PROC_MEM_FI {
@@ -3861,10 +3936,11 @@ fn char_device_read(fi: usize, buf: u64, len: usize) -> Option<u64> {
         return None;
     }
     if fi == URANDOM_FI.load(Ordering::Relaxed) || fi == URANDOM_ALIAS_FI.load(Ordering::Relaxed) {
-        if !in_user_arena(buf, len) || !fill_random(buf, len as u64) {
+        if !in_user_arena(buf, len) {
             return Some(EFAULT);
         }
-        return Some(len as u64);
+        // The kernel CSPRNG; a read waits for the seed.
+        return Some(fill_random(buf, len as u64, false));
     }
     if fi == ZERO_FI.load(Ordering::Relaxed) {
         let zeros = alloc::vec![0u8; len.min(64 * 1024)];
@@ -4753,7 +4829,7 @@ fn seccomp_evaluate(cur: usize, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5
 /// a 2 MiB-granular slide of the demand pool. Entropy from the kernel CSPRNG.
 struct Slides { brk: u64, mmap: u64, stack: u64, demand: u64 }
 fn aslr_slides() -> Slides {
-    let r = crate::net::rand_u64();
+    let r = u64::from_le_bytes(crate::entropy::draw_wait::<8>());
     Slides {
         brk: (r & 0xF) << 16,              // 0..1 MiB in 64 KiB steps
         mmap: ((r >> 4) & 0x1F) << 16,     // 0..2 MiB in 64 KiB steps
@@ -5818,16 +5894,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
         },
         39 => p.pid,  // getpid
         218 => p.pid, // set_tid_address -> tid
-        318 => {
-            // getrandom: unique-per-call pseudo-randomness (see fill_random).
-            if !in_user_arena(a1, a2 as usize) {
-                return EFAULT;
-            }
-            if !fill_random(a1, a2) {
-                return EFAULT;
-            }
-            a2
-        }
+        318 => sys_getrandom(a1, a2, a3), // getrandom(buf, len, flags): the kernel CSPRNG
         56 => {
             // clone(flags, child_stack, ptid, ctid, tls): create a THREAD that shares
             // the address space (CLONE_VM) but has its own stack/TLS/kernel
@@ -11227,20 +11294,17 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
 /// way found no /dev/urandom at all - and a crypto library that cannot open it
 /// reports a generic "device error" and nothing more.
 pub fn register_device_files() {
-    if URANDOM_FI.load(Ordering::Relaxed) != usize::MAX {
+    static DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    if DONE.swap(true, Ordering::Relaxed) {
         return; // already registered
     }
     register_file("/dev/null", alloc::vec::Vec::new());
-    // /dev/zero and /dev/urandom are GENERATED on read (see char_device_read); the
-    // bytes registered here only give them an entry and a plausible size.
+    // /dev/zero, /dev/urandom and /dev/random are GENERATED on read (see
+    // char_device_read); register_file notes their entries. /dev/random is the
+    // same generator as /dev/urandom, as on Linux.
     register_file("/dev/zero", alloc::vec![0u8; 4096]);
-    ZERO_FI.store(FILES.lock().len() - 1, Ordering::Relaxed);
-    register_file("/dev/urandom", (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect());
-    URANDOM_FI.store(FILES.lock().len() - 1, Ordering::Relaxed);
+    register_file("/dev/urandom", alloc::vec::Vec::new());
     register_file("/dev/random", alloc::vec::Vec::new());
-    let random_fi = FILES.lock().len() - 1;
-    let _ = random_fi; // /dev/random shares urandom's generator below
-    URANDOM_ALIAS_FI.store(random_fi, Ordering::Relaxed);
 }
 
 pub fn chrome_stage_files() {
@@ -12838,9 +12902,7 @@ unsafe fn setup_user_stack_glibc(
     // 16 AT_RANDOM bytes.
     p -= 16;
     let random_ptr = p;
-    for i in 0..16 {
-        (random_ptr as *mut u8).add(i).write(0x5Au8 ^ (i as u8).wrapping_mul(31));
-    }
+    write_at_random(random_ptr);
     // AT_PLATFORM string.
     let plat = b"x86_64\0";
     p -= plat.len() as u64;
@@ -12918,14 +12980,22 @@ unsafe fn setup_user_stack_glibc(
     sp
 }
 
+/// The 16 `AT_RANDOM` bytes of a new process image, from the kernel CSPRNG:
+/// glibc and musl make the stack guard and the pointer guard of them. They
+/// were a constant (`0x5A ^ i * 31`) before BUG-080: every process of every
+/// boot had the same canary. A start waits for the seed rather than go
+/// without them.
+unsafe fn write_at_random(random_ptr: u64) {
+    let r = crate::entropy::draw_wait::<16>();
+    core::ptr::copy_nonoverlapping(r.as_ptr(), random_ptr as *mut u8, 16);
+}
+
 unsafe fn setup_user_stack(stack_top: u64, argv: &[&[u8]], info: &LoadInfo) -> u64 {
     let mut p = stack_top;
     // 16 "random" bytes (AT_RANDOM) — musl uses this for stack-canary/TLS-guard.
     p -= 16;
     let random_ptr = p;
-    for i in 0..16 {
-        (random_ptr as *mut u8).add(i).write(0x5Au8 ^ (i as u8).wrapping_mul(31));
-    }
+    write_at_random(random_ptr);
     // Put each argv string (NUL-terminated) on the stack; keep the pointers.
     let mut argptrs: alloc::vec::Vec<u64> = alloc::vec::Vec::with_capacity(argv.len());
     for a in argv {
@@ -13004,9 +13074,7 @@ unsafe fn setup_user_stack_interp(
     let mut p = stack_top;
     p -= 16;
     let random_ptr = p;
-    for i in 0..16 {
-        (random_ptr as *mut u8).add(i).write(0x5Au8 ^ (i as u8).wrapping_mul(31));
-    }
+    write_at_random(random_ptr);
     let mut argptrs: alloc::vec::Vec<u64> = alloc::vec::Vec::with_capacity(argv.len());
     for a in argv {
         p -= a.len() as u64 + 1;
@@ -17143,17 +17211,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 }
             }
         }
-        318 => {
-            // getrandom(buf, len, flags): unique-per-call pseudo-randomness (see
-            // fill_random) — programs rely on distinct values across calls.
-            if !in_user_arena(a1, a2 as usize) {
-                return EFAULT;
-            }
-            if !fill_random(a1, a2) {
-                return EFAULT;
-            }
-            a2
-        }
+        318 => sys_getrandom(a1, a2, a3), // getrandom(buf, len, flags): the kernel CSPRNG
         35 | 230 => {
             // nanosleep(req, rem) / clock_nanosleep(clockid, flags, req, rem): SLEEP.
             // Returning 0 straight away is the same lie poll() used to tell — the
