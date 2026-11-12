@@ -7013,7 +7013,9 @@ fn main() -> Status {
             switcher::render(&fb, width, height);
             help::render(&fb, width, height); // T3-hook: help panel + first-run tour, above the other overlays
             // Workspace pager: one dot per virtual desktop, the active one filled.
-            {
+            // Not over the help panel: on a 720-line screen the panel reaches down
+            // to the pager and the dots sat on its bottom line.
+            if !help::is_open() {
                 let n = workspace::COUNT;
                 let (dot, gap) = (10usize, 10usize);
                 let total = n * dot + (n - 1) * gap;

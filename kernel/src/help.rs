@@ -605,7 +605,7 @@ fn render_panel(fb: &FrameBuffer, sw: usize, sh: usize) {
     fb.fill_rect(g.x + NAV_W + 1, fy, g.w - NAV_W - 2, 1, Color::BORDER);
     let hint = if max > 0 {
         if scroll < max {
-            "More below: PgDn or click the text.   Esc closes.   Left/Right: other page.   F2: all shortcuts."
+            "More below: PgDn, the wheel or click the text.   Esc closes.   Left/Right: other page.   F2: all shortcuts."
         } else {
             "End of page: PgUp goes back.   Esc closes.   Left/Right: other page.   F2: all shortcuts."
         }
