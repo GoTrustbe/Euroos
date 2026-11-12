@@ -1,0 +1,3 @@
+soak-usb: serial lines 1684; crash signatures: 0; [entropy] CSPRNG seeded: 515 of 256 bits · sources mixed: tpm=none, rd
+soak-virtio: serial lines 1569; crash signatures: 0; [entropy] CSPRNG seeded: 539 of 256 bits · sources mixed: tpm=none, rd
+gs-kvm-e1000e: serial lines 788; crash signatures: 0; [entropy] CSPRNG seeded: 521 of 256 bits · sources mixed: tpm=none, rd

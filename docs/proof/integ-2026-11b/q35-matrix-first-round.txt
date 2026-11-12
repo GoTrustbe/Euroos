@@ -1,0 +1,45 @@
+[matrix] image=/opt/euroos/integ2-runs/q35-image.img legs=base,nvme,ahci,e1000e,hda,usb,usbhub,usbaudio,usbnet,scan,printer,power,hwprobe work=/opt/euroos/integ2-runs/tmp/ek-matrix-hs8wk47_
+[matrix] leg: base
+  [base] PASS ✓
+[matrix] leg: nvme
+  [nvme] PASS ✓
+[matrix] leg: ahci
+  [ahci] PASS ✓
+[matrix] leg: e1000e
+  [e1000e] PASS ✓
+[matrix] leg: hda
+  [hda] PASS ✓
+[matrix] leg: usb
+  [usb] PASS ✓
+[matrix] leg: usbhub
+  [usbhub] FAIL: typed uname never echoed — hub keyboard not delivering
+  [usbhub] FAIL ✗
+[matrix] leg: usbaudio
+  [usbaudio] PASS ✓
+[matrix] leg: usbnet
+  [usbnet] PASS ✓
+[matrix] leg: scan
+  [scan] PASS ✓
+[matrix] leg: printer
+  [printer] PASS ✓
+[matrix] leg: power
+  [power] PASS ✓
+[matrix] leg: hwprobe
+  [hwprobe] FAIL: hwprobe output not seen over serial
+  [hwprobe] FAIL ✗
+
+[matrix] result:
+  base     PASS
+  nvme     PASS
+  ahci     PASS
+  e1000e   PASS
+  hda      PASS
+  usb      PASS
+  usbhub   FAIL
+  usbaudio PASS
+  usbnet   PASS
+  scan     PASS
+  printer  PASS
+  power    PASS
+  hwprobe  FAIL
+rc=1

@@ -1,0 +1,52 @@
+== mr-iommu-boot1 (against integ-2026-11)
+== /opt/euroos/wt-integ2/docs/proof/integ-2026-11/mr-iommu-boot1.markers  vs  /opt/euroos/integ2-runs/proof/mr-iommu-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== mr-iommu-boot1 (against kdebug-2026-11)
+== /opt/euroos/wt-integ2/docs/proof/kdebug-2026-11/mr-iommu-boot1.markers  vs  /opt/euroos/integ2-runs/proof/mr-iommu-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+   fault lines: 0; [entropy] CSPRNG seeded: 416 of 256 bits · sources mixed: tp
+== mr-iommu-boot2 (against integ-2026-11)
+== /opt/euroos/wt-integ2/docs/proof/integ-2026-11/mr-iommu-boot2.markers  vs  /opt/euroos/integ2-runs/proof/mr-iommu-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== mr-iommu-boot2 (against kdebug-2026-11)
+== /opt/euroos/wt-integ2/docs/proof/kdebug-2026-11/mr-iommu-boot2.markers  vs  /opt/euroos/integ2-runs/proof/mr-iommu-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+   fault lines: 0; [entropy] CSPRNG seeded: 423 of 256 bits · sources mixed: tp
+== mr-noiommu-boot1 (against integ-2026-11)
+== /opt/euroos/wt-integ2/docs/proof/integ-2026-11/mr-noiommu-boot1.markers  vs  /opt/euroos/integ2-runs/proof/mr-noiommu-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== mr-noiommu-boot1 (against kdebug-2026-11)
+== /opt/euroos/wt-integ2/docs/proof/kdebug-2026-11/mr-noiommu-boot1.markers  vs  /opt/euroos/integ2-runs/proof/mr-noiommu-boot1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+   fault lines: 0; [entropy] CSPRNG seeded: 405 of 256 bits · sources mixed: tp
+== mr-noiommu-boot2 (against integ-2026-11)
+== /opt/euroos/wt-integ2/docs/proof/integ-2026-11/mr-noiommu-boot2.markers  vs  /opt/euroos/integ2-runs/proof/mr-noiommu-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== mr-noiommu-boot2 (against kdebug-2026-11)
+== /opt/euroos/wt-integ2/docs/proof/kdebug-2026-11/mr-noiommu-boot2.markers  vs  /opt/euroos/integ2-runs/proof/mr-noiommu-boot2.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+   fault lines: 0; [entropy] CSPRNG seeded: 385 of 256 bits · sources mixed: tp

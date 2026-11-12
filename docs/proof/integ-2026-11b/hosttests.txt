@@ -1,0 +1,21 @@
+# cargo test (default members), rc=0 6fcf24c 15:46:25
+187 suites, 1330 passed, 0 failed, 1 ignored
+
+# crates/euroentropy
+test seed_tests::the_estimator_gives_a_constant_series_nothing ... ok
+test seed_tests::rdrand_alone_is_credited_less_than_rdseed ... ok
+test seed_tests::jitter_is_gathered_even_when_the_tpm_alone_meets_the_threshold ... ok
+test tests::hmac_rfc4231_case2 ... ok
+test tests::jitter_estimate_is_conservative ... ok
+test tests::pool_blocks_until_threshold ... ok
+test tests::pool_deterministic_given_same_noise ... ok
+test seed_tests::cpu_words_and_jitter_are_mixed_not_swapped ... ok
+test seed_tests::a_long_wait_does_not_grow_the_staged_material ... ok
+test seed_tests::a_quiet_start_is_waited_out ... ok
+test seed_tests::a_later_attempt_seeds_a_pool_that_gave_up ... ok
+test seed_tests::no_noise_ends_at_the_bound_and_the_pool_stays_closed ... ok
+test seed_tests::the_cpu_sources_alone_never_open_the_pool ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test nist_acvp_hmac_drbg_sha256_kat ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

@@ -1,0 +1,6 @@
+# [3g2-wire] WATCHDOG TRIPPED in soak serial logs (the deadman of the desktop loop, 15 s; churn fs 1 takes 30 to 57 s)
+/srv/euroos/integ-runs/soak/w/loadtest-serial-20261110-134319.log: 1 line(s), line 10018, desktop at line 9328; the command before it: [scon] $ churn fs 1
+/srv/euroos/kdebug-runs/soak/w/loadtest-serial-20261112-093658.log: 1 line(s), line 9534, desktop at line 8844; the command before it: [scon] $ churn fs 1
+/srv/euroos/kdebug-runs/soak2/w/loadtest-serial-20261112-102022.log: 1 line(s), line 9615, desktop at line 8925; the command before it: [scon] $ churn fs 1
+soak/w/loadtest-serial-20261112-131707.log: 1 line(s), line 10082, desktop at line 9392; the command before it: [scon] $ churn fs 1
+soak5/w/loadtest-serial-20261112-144303.log: 1 line(s), line 9505, desktop at line 8815; the command before it: [scon] $ churn fs 1

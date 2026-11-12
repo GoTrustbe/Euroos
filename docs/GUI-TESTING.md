@@ -40,8 +40,11 @@ screenshots (`app-NN-<name>.png` per dock app, `feature-*.png`, `monkey-NN.png`)
   directory, the QMP and serial sockets live there, and the script stops only
   the QEMU process it started (its PID is in `qemu.pid`). The shared
   `/tmp/ek-qmp.sock` of the older scripts is not used. Network: none by default
-  (`-nic none`), or `--net restrict` (SLIRP with `restrict=on`). More devices
-  go in with `--extra "-device intel-hda ..."`.
+  (`-nic none`), `--net restrict` (virtio-net on SLIRP with `restrict=on`), or
+  `--net e1000e` (an e1000e NIC on SLIRP with `restrict=on`: the NIC the
+  userspace driver `e1000d` serves, so that driver's syscalls run beside
+  everything the desktop does). More devices go in with
+  `--extra "-device intel-hda ..."`.
 
 ## What "alive" means
 
@@ -101,6 +104,16 @@ and stops.
    steps on the image without the fixes: 59/66
    (`proof/uidebug-2026-11/gui-smoke-kvm-baseline-image.txt`).
 
+6. Since the integration of 2026-11-12 (one more step, 67 on the release
+   image): BUG-063 from the desktop. `/bin/hello` is typed in the Terminal: a
+   foreground program, which leaves through `sys_exit`, after which the
+   Terminal turns interrupts back on. Then `ps`, with `--net e1000e` a
+   `ping 10.0.2.2` that has to be answered through `e1000d`, two seconds with
+   the desktop idle, `hello` again and an `echo` whose line has to arrive on
+   the serial console. Everything the Terminal printed is read from its
+   `[e2e]` mirror. Without `--net e1000e` the step runs without the driver
+   and says so in its detail.
+
 A step that fails because of a tracked, open bug is listed in `KNOWN_ISSUES`
 at the top of the script with its tracker number. It is reported as `known`
 and does not fail the run; when the bug is fixed the entry is removed, and the
@@ -114,6 +127,14 @@ Under TCG the guest notices a button press some milliseconds late, so a window
 that is dragged ends up a few pixels short of the pointer's path. The drag
 step therefore accepts a window that followed the pointer for at least half of
 the distance; under KVM it lands on the pixel.
+
+The drag waits for the guest twice (`drag_window`). On a busy host under TCG
+the guest once latched the press when the pointer was already most of the way,
+and the window followed for 37 % of the distance. So after the press the
+pointer moves six pixels and stays there until a screenshot shows the window
+displaced (up to 6 s, 18 s under TCG): the press is latched. Then the drag is
+made, and the button stays down until a screenshot shows the window at least
+half of the way (the same wait). What the step demands is unchanged.
 
 ## The monkey soak (`--soak MINUTES`)
 

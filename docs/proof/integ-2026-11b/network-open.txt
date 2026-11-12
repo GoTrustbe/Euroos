@@ -1,0 +1,67 @@
+# public image under TCG, user-net unrestricted (boot-time.py --net open --cmds): virtio-net, then e1000e (e1000d)
+
+== net-open: 
+    6.668 [entropy] CSPRNG seeded: 437 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (437 bits) · 9.746 ms → 
+    6.723 [udrv] net.driver=user: the e1000 driver runs in ring 3 (e1000d); the in-kernel e1000 stays unbound
+    6.729 [net-up] kernel task 2: DHCP + ARP + router discovery over virtio-net run in the background
+    6.753 [net-up] lease 10.0.2.15 (gateway 10.0.2.2, dns 10.0.2.3, 86400 s) over virtio-net; IPv6 router found; 30 ms after the task started ✓
+   13.326 [scon] $ net
+   13.333 [scon] ARP  : 10.0.2.2 asks 10.0.2.15  ->  reply: 10.0.2.15 is-at 52:54:00:12:34:56
+   13.339 [scon] ICMP : echo id=4660 seq=7 -> reply, checksum OK
+   13.339 [scon] IPv4 : 10.0.2.15 -> 8.8.8.8 ttl=64 proto=Udp  hdr-checksum OK
+   13.339 [scon] UDP  : :5353 -> :53  'DNS-query'  pseudo-checksum OK
+   13.339 [scon] Frame: ethertype Ipv4, 51 bytes, fully parsed  [OK]
+   13.376 [scon] $ ping 10.0.2.2
+   13.383 [scon] PING 10.0.2.2: echo-reply OK ✓
+   13.437 [scon] $ nslookup example.com
+   13.452 [scon] example.com = 104.20.23.154
+   13.488 [scon] $ fetch example.com
+   14.953 [scon] DNS: example.com = 104.20.23.154
+   14.956 [scon] GET http://example.com/ -> 891 bytes
+   14.956 [scon]   HTTP/1.1 200 OK
+   14.956 [scon]   Date: Thu, 12 Nov 2026 15:11:09 GMT
+   14.956 [scon]   Content-Type: text/html; charset=utf-8
+   14.956 [scon]   Connection: close
+   15.064 [scon] $ https example.com
+   22.477 [scon] DNS: example.com = 104.20.23.154
+   22.477 [scon] TLS 1.3 handshake (X25519 + ChaCha20-Poly1305) ...
+   22.477 [scon] GET https://example.com/ -> 891 bytes (encrypted)
+   22.477 [scon]   HTTP/1.1 200 OK
+   22.477 [scon]   server certificate: 1002 bytes, SHA-256 85ca6ab068e9bcce…
+   22.572 [scon] $ netstat
+   22.574 [scon] tcp: connect ok 2 (slowest 11 ms), SYN timeouts 0, stale-peer RSTs 0, new-port retries 0, closed-port answers 0, gave up 0 | inbound: half-open 0, httpd conns 0, served 0 | queues 0 (0 segs), unowned segs 0 (after
+   22.574 [scon] net worker: task 3, 12 passes, 0 inbound frames, longest pass 1007 us; kicks 0 (e1000d/task) + 13 (interrupt, 0 found the scheduler busy)
+   22.574 [scon] DNS cache: 2 hits, 1 misses
+   22.574 [scon]   example.com              104.20.23.154 (TTL 291s)
+
+== net-open-e1000e: 
+    5.654 [entropy] CSPRNG seeded: 440 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (440 bits) · 10.294 ms →
+    5.707 [udrv] net.driver=user: the e1000 driver runs in ring 3 (e1000d); the in-kernel e1000 stays unbound
+   12.350 [scon] $ net
+   12.353 [scon] ARP  : 10.0.2.2 asks 10.0.2.15  ->  reply: 10.0.2.15 is-at 52:54:00:12:34:56
+   12.353 [scon] ICMP : echo id=4660 seq=7 -> reply, checksum OK
+   12.353 [scon] IPv4 : 10.0.2.15 -> 8.8.8.8 ttl=64 proto=Udp  hdr-checksum OK
+   12.353 [scon] UDP  : :5353 -> :53  'DNS-query'  pseudo-checksum OK
+   12.353 [scon] Frame: ethertype Ipv4, 51 bytes, fully parsed  [OK]
+   12.400 [scon] $ ping 10.0.2.2
+   12.405 [scon] PING 10.0.2.2: echo-reply OK ✓
+   12.461 [scon] $ nslookup example.com
+   12.475 [scon] example.com = 172.66.147.243
+   12.512 [scon] $ fetch example.com
+   12.549 [scon] DNS: example.com = 172.66.147.243
+   12.550 [scon] GET http://example.com/ -> 891 bytes
+   12.550 [scon]   HTTP/1.1 200 OK
+   12.550 [scon]   Date: Thu, 12 Nov 2026 15:11:35 GMT
+   12.550 [scon]   Content-Type: text/html; charset=utf-8
+   12.550 [scon]   Connection: close
+   12.614 [scon] $ https example.com
+   18.879 [scon] DNS: example.com = 172.66.147.243
+   18.880 [scon] TLS 1.3 handshake (X25519 + ChaCha20-Poly1305) ...
+   18.880 [scon] GET https://example.com/ -> 891 bytes (encrypted)
+   18.880 [scon]   HTTP/1.1 200 OK
+   18.881 [scon]   server certificate: 1002 bytes, SHA-256 85ca6ab068e9bcce…
+   18.974 [scon] $ netstat
+   18.975 [scon] tcp: connect ok 2 (slowest 12 ms), SYN timeouts 0, stale-peer RSTs 0, new-port retries 0, closed-port answers 0, gave up 0 | inbound: half-open 0, httpd conns 0, served 0 | queues 0 (0 segs), unowned segs 2 (after
+   18.975 [scon] net worker: task 3, 17 passes, 0 inbound frames, longest pass 1020 us; kicks 18 (e1000d/task) + 0 (interrupt, 0 found the scheduler busy); e1000d woken early 17 (frame to send) + 16 (its interrupt)
+   18.975 [scon] DNS cache: 2 hits, 1 misses
+   18.976 [scon]   example.com              172.66.147.243 (TTL 293s)
