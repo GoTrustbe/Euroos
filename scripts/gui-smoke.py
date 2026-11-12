@@ -513,6 +513,18 @@ class Guest:
         self.nap(0.25)
         return self.shot(save_as)
 
+    def wait_changed(self, before, save_as, region, min_pixels=15000, seconds=4.0):
+        """Screenshots until the picture differs from `before` (an overlay came up) or the
+        time is over; returns the last one. Under TCG on a busy host one full repaint
+        can take longer than a fixed pause: two runs of 2026-11-12 looked 0.9 s after
+        Alt-Tab and saw the desktop without the switcher, which was there a moment later."""
+        end = time.time() + seconds * self.slow
+        while True:
+            s = self.shot(save_as)
+            if s.differs(before, min_pixels=min_pixels, region=region) or time.time() >= end:
+                return s
+            self.nap(0.2)
+
     def desktop_region(self):
         """The part of the screen windows live in (not the dock, not the clock)."""
         return (SIDEBAR_W, 0, self.w - PANEL_W - 20, self.h)
@@ -684,7 +696,7 @@ class Guest:
         self.nap(0.1)
         for _ in range(2):
             self._send([k("tab", True)]); self.nap(0.1); self._send([k("tab", False)]); self.nap(0.3)
-        sw = self.shot("feature-alt-tab")
+        sw = self.wait_changed(three, "feature-alt-tab", region)
         self._send([k("alt", False)])
         self.nap(0.5)
         after = self.look()
@@ -704,7 +716,7 @@ class Guest:
         self._send([k("alt", True)])
         self.nap(0.1)
         self._send([k("tab", True)]); self.nap(0.1); self._send([k("tab", False)]); self.nap(0.3)
-        sw2 = self.shot("feature-alt-tab-editor")
+        sw2 = self.wait_changed(two, "feature-alt-tab-editor", region)
         self._send([k("alt", False)])
         self.nap(0.5)
         self.step("Alt-Tab with the text editor in front", sw2.differs(two, min_pixels=15000, region=region))
