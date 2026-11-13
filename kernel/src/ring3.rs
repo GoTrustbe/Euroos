@@ -5592,14 +5592,41 @@ fn set_syscall_yield_ok(v: bool) {
 // context from ring 3. Slots are RECYCLED (freed when the owning task dies), so
 // long-lived programs that spin up many threads (the pthreads/Chromium path)
 // don't exhaust the pool the way a monotonic bump counter did.
-const MAX_THREADS: usize = 224; // chrome-scale: dozens of pthreads (< MAX_TASKS)
+const MAX_THREADS: usize = 448; // 14 browser processes had 220 threads (BUG-151); < MAX_TASKS
+/// The first slots are the static array below (as before); the ones past it
+/// get their stack from the kernel heap the first time they are used and keep
+/// it, so a machine that never runs that many threads pays nothing for them.
+const STATIC_THREADS: usize = 224;
+static THREAD_KSTACK_HEAP: [AtomicU64; MAX_THREADS - STATIC_THREADS] =
+    [const { AtomicU64::new(0) }; MAX_THREADS - STATIC_THREADS];
+
+/// Base address of thread kernel stack `i`. None: no kernel memory for it.
+fn thread_kstack_base(i: usize) -> Option<u64> {
+    if i < STATIC_THREADS {
+        // SAFETY: only the address is taken.
+        return Some(unsafe { core::ptr::addr_of_mut!(THREAD_KSTACKS[i]) as u64 });
+    }
+    let slot = &THREAD_KSTACK_HEAP[i - STATIC_THREADS];
+    let have = slot.load(Ordering::Acquire);
+    if have != 0 {
+        return Some(have);
+    }
+    let layout = core::alloc::Layout::from_size_align(TKSTACK_SIZE, 4096).ok()?;
+    // SAFETY: a non-zero-sized layout; a null result is handled.
+    let p = unsafe { alloc::alloc::alloc_zeroed(layout) } as u64;
+    if p == 0 {
+        return None;
+    }
+    slot.store(p, Ordering::Release);
+    Some(p)
+}
 // 64 KiB per-thread kernel stack. 16 KiB was too small: chrome's deep syscall paths
 // plus a ring-0 demand-fault (disk-read bounce buffers) mid-syscall can overflow it,
 // and THREAD_KSTACKS is a flat array with NO guard pages between slots — so an overflow
 // silently corrupts the ADJACENT thread's saved context (its RIP), which then jumps to
 // garbage (rip=0 / GP fault). A larger stack removes that overflow.
 const TKSTACK_SIZE: usize = 64 * 1024;
-static mut THREAD_KSTACKS: [[u8; TKSTACK_SIZE]; MAX_THREADS] = [[0; TKSTACK_SIZE]; MAX_THREADS];
+static mut THREAD_KSTACKS: [[u8; TKSTACK_SIZE]; STATIC_THREADS] = [[0; TKSTACK_SIZE]; STATIC_THREADS];
 // Per-slot in-use flag (lock-free bitmap allocator).
 static THREAD_KSTACK_USED: [core::sync::atomic::AtomicBool; MAX_THREADS] =
     [const { core::sync::atomic::AtomicBool::new(false) }; MAX_THREADS];
@@ -5617,7 +5644,10 @@ fn alloc_thread_kstack() -> Option<(usize, u64)> {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
-            let kbase = unsafe { core::ptr::addr_of_mut!(THREAD_KSTACKS[i]) as u64 };
+            let Some(kbase) = thread_kstack_base(i) else {
+                THREAD_KSTACK_USED[i].store(false, Ordering::Release);
+                return None; // the kernel heap has no room for another stack
+            };
             let top = (kbase + TKSTACK_SIZE as u64) & !0xF;
             return Some((i, top));
         }
@@ -5647,7 +5677,10 @@ fn alloc_thread_kstack() -> Option<(usize, u64)> {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
-            let kbase = unsafe { core::ptr::addr_of_mut!(THREAD_KSTACKS[i]) as u64 };
+            let Some(kbase) = thread_kstack_base(i) else {
+                THREAD_KSTACK_USED[i].store(false, Ordering::Release);
+                return None; // the kernel heap has no room for another stack
+            };
             let top = (kbase + TKSTACK_SIZE as u64) & !0xF;
             return Some((i, top));
         }
@@ -10445,13 +10478,30 @@ fn child_mem_drop(task: usize) {
 /// `status` is the wait status recorded for wait4 (None: nobody will wait).
 /// The child is not running: callers run on another task, and ring-3 tasks run
 /// only on the BSP.
+/// A task of an ended fork child: Dead, and its slot in the task table may be
+/// used again (BUG-151). The caller has given back what the task ran on (its
+/// kernel stack; the address space goes with the process) and has taken it
+/// out of the registries (CHILD_THREADS, the futex queues). The scheduler
+/// takes a reclaimable slot only when the task is not the running one, so the
+/// exiting task itself can be retired here too.
+///
+/// Before this only a thread that ended by itself offered its slot: the main
+/// task of every child, and every thread of a child that was killed or whose
+/// process exited under it, kept a slot of the 256 for good. A browser ends
+/// processes all the time; after some tens of navigations the table was "full"
+/// with 135 live tasks, every fork was refused and no renderer could start.
+fn retire_task(t: usize) {
+    crate::sched::mark_dead(t);
+    crate::sched::RECLAIMABLE[t].store(true, Ordering::Relaxed);
+}
+
 fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: usize, status: Option<u32>) {
     let threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter()
         .filter(|&&(_, m)| m == ctask).map(|&(t, _)| t).collect();
     for t in threads {
         futex_purge_task(t);
         free_thread_kstack(t);
-        crate::sched::mark_dead(t);
+        retire_task(t);
         crate::net::forget_rx_waiter(t);
     }
     if let Some(st) = status {
@@ -10479,7 +10529,7 @@ fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: us
     crate::procpool::free(pml4);
     futex_purge_task(ctask);
     free_thread_kstack(ctask);
-    crate::sched::mark_dead(ctask);
+    retire_task(ctask);
     // Torn down in a network wait (kill(2), the end-of-run reap): not a waiter
     // any more, or its reused slot gets an early wake (see reset_task_slot).
     crate::net::forget_rx_waiter(ctask);
@@ -10810,16 +10860,37 @@ fn do_glibc_fork() -> u64 {
     // Child page tables (PML4/PDPT/PD) from the fork pool.
     let (pml4, pdpt, pd) = match (crate::procpool::alloc(), crate::procpool::alloc(), crate::procpool::alloc()) {
         (Some(a), Some(b), Some(c)) => (a, b, c),
-        _ => {
-            crate::procpool::free(child_arena);
+        (a, b, c) => {
+            // BUG-150: the whole arena goes back (one frame of it did), and
+            // whichever of the three tables was got.
+            for f in [a, b, c].into_iter().flatten() {
+                crate::procpool::free(f);
+            }
+            crate::procpool::free_range(child_arena, arena_frames);
             crate::serial_println!("[fork] page-table alloc FAILED");
             return (-12i64) as u64;
         }
+    };
+    // BUG-150: from here on the child has an address space. A fork that is
+    // refused further down gives all of it back, as the exit of a child does:
+    // the copies of the demand pages and their tables (demand pool), the arena
+    // tables, the arena and the PML4 (process pool). It used to return with
+    // all of that still allocated and owned by nobody: 128 MiB of arena and
+    // ~105 MiB of demand pages per refused fork of the browser, which retries.
+    let undo_fork = |why: &str| {
+        let (d0, p0) = (crate::procpool::demand_free_frames(), crate::procpool::free_frames());
+        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+        crate::paging::free_fork_tables(pml4);
+        crate::procpool::free_range(child_arena, arena_frames);
+        crate::procpool::free(pml4);
+        crate::serial_println!("[fork] refused ({why}): {} MiB of demand pages and {} MiB of arena and tables given back",
+            (crate::procpool::demand_free_frames() - d0) / 256, (crate::procpool::free_frames() - p0) / 256);
     };
     crate::paging::fill_remap_tables_multiblock(pml4, pdpt, pd, arena, child_arena, nblocks);
     // Copy every committed demand page (exe data/bss, heap-in-demand) into the child.
     if !crate::paging::clone_demand_region(parent_pml4, pml4, DEMAND_PML4_IDX, &mut irq_window) {
         crate::serial_println!("[fork] clone_demand_region OOM");
+        undo_fork("no memory for the copy of the demand pages");
         return (-12i64) as u64;
     }
     let t_demand = unsafe { core::arch::x86_64::_rdtsc() };
@@ -10833,6 +10904,7 @@ fn do_glibc_fork() -> u64 {
         Some(s) => s,
         None => {
             spawn_refused("fork", if injected { "refused for the [memt] self-test" } else { "no thread kernel stack left" });
+            undo_fork("no thread kernel stack");
             return (-11i64) as u64; // -EAGAIN
         }
     };
@@ -10846,6 +10918,7 @@ fn do_glibc_fork() -> u64 {
     if child == usize::MAX {
         free_thread_kstack_slot(slot);
         spawn_refused("fork", "the task table is full");
+        undo_fork("task table full");
         return (-11i64) as u64;
     }
     register_thread_kstack(child, slot);
@@ -12906,11 +12979,13 @@ fn ram_file_budget() -> (i64, usize) {
     (-1, SHARED_FRAMES.lock().iter().map(|(_, v)| v.iter().filter(|&&p| p != 0).count()).sum())
 }
 
-/// [memt]: memory that comes back, and what happens when it runs out. Four
+/// [memt]: memory that comes back, and what happens when it runs out. Five
 /// runs of `gmemt` (userland/glibc/gmemt.c), each in a demand-paged process:
 ///
 /// * forkfail: a fork the kernel refuses after it took the child's arena, page
 ///   tables and a copy of every demand page gives all of it back (BUG-150);
+/// * forkmany: 270 children one after the other, every second one ended by a
+///   signal; the task slots of ended processes are used again (BUG-151);
 /// * madvise: MADV_DONTNEED and MADV_FREE give the frames back (BUG-152);
 /// * memfd: a memory file is frames, one memory for read/write and every
 ///   mapping, with ENOSPC at a limit that follows the pool (BUG-154);
@@ -12923,7 +12998,7 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
     let mut all = true;
     let mut ran = 0;
     // (mode, demand pool cap in MiB or 0, forks to refuse)
-    for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0)] {
+    for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("forkmany", 0, 0), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0)] {
         DEMAND_POOL_CAP_FRAMES.store(cap_mib * 256, Ordering::Relaxed);
         FORK_REFUSE_NEXT.store(refuse, Ordering::Relaxed);
         let free0 = falloc.free_frames();
@@ -15367,14 +15442,18 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         .filter(|&&(_, m)| m == ctask).map(|&(t, _)| t).collect();
                     for t in threads {
                         if t != cur {
+                            futex_purge_task(t);
                             free_thread_kstack(t);
-                            crate::sched::mark_dead(t);
+                            retire_task(t);
+                            crate::net::forget_rx_waiter(t);
                         }
                     }
                     if cur != ctask {
                         // The caller is a worker: the child MAIN dies with it.
+                        futex_purge_task(ctask);
                         free_thread_kstack(ctask);
-                        crate::sched::mark_dead(ctask);
+                        retire_task(ctask);
+                        crate::net::forget_rx_waiter(ctask);
                     }
                     crate::serial_println!("[fork] child pid {pid} (task {cur}) exit({a1}) — arena recycled ({} MiB back to pool)", frames / 256);
                     // Record the exit for wait4: WEXITSTATUS lives in bits 8..16.
@@ -15406,8 +15485,9 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     if exit_log {
                         crate::serial_println!("[fork-acct] child exit AFTER frees: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
                     }
+                    futex_purge_task(cur);
                     free_thread_kstack(cur);
-                    crate::sched::mark_dead(cur);
+                    retire_task(cur);
                     switch_away_dead();
                 }
             }

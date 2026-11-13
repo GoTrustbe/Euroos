@@ -20,7 +20,9 @@ const IA32_FS_BASE: u32 = 0xC000_0100;
 // Chrome (even --single-process headless) spawns dozens of threads (thread pool,
 // compositor, IO, message pumps). 48 was fine for the shell + a few glibc apps; a
 // browser needs far more scheduler slots. Each slot costs one 16 KiB kernel stack.
-pub const MAX_TASKS: usize = 256;
+// 512 since BUG-151: a browser with 14 processes had 224 live tasks of 256,
+// every thread kernel stack in use, and its next renderer could not start.
+pub const MAX_TASKS: usize = 512;
 const STACK_SIZE: usize = 16 * 1024;
 const CONTEXT_WORDS: usize = 20; // 15 GP registers + 5 (rip,cs,rflags,rsp,ss)
 

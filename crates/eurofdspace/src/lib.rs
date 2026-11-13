@@ -34,7 +34,7 @@ pub const ROOT: usize = 0;
 /// scheduler slot: tables that belong to nobody, cleared at every release.
 pub const ORPHAN: usize = 1;
 /// Upper bound on spaces (the kernel checks it against its task table).
-pub const MAX_SPACES: usize = 256;
+pub const MAX_SPACES: usize = 512; // >= the task table of the kernel (512 since BUG-151)
 
 /// Data that exists once per space.
 pub trait Spaced {

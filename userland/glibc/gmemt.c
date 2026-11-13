@@ -1,6 +1,8 @@
 /* gmemt: memory that comes back, and what happens when it runs out.
  *
  *   gmemt forkfail   a fork the kernel refuses must give back all it took
+ *   gmemt forkmany   270 children one after the other, every second one ended by a signal:
+ *                    the slots of ended processes are used again (the task table has 256)
  *   gmemt madvise    madvise(MADV_DONTNEED) gives the frames back; the pages read as zeros
  *   gmemt memfd      a memory file is made of frames, not of kernel heap; one memory for
  *                    read/write and every mapping; ENOSPC at its limit, no kill
@@ -93,6 +95,42 @@ static int mode_forkfail(void)
     if (c > 0)
         waitpid(c, &st, 0);
     check(c > 0 && WIFEXITED(st) && WEXITSTATUS(st) == 7, "a fork after them works (pid %ld, status 0x%lx)", c, st, 0);
+    return 0;
+}
+
+static int mode_forkmany(void)
+{
+    long d0 = kacct("demand_free_kb "), p0 = kacct("procpool_free_kb ");
+    int made = 0, refused = 0, wrong = 0, first_errno = 0;
+    for (int i = 0; i < 270; i++) {
+        pid_t c = fork();
+        if (c == 0) {
+            if (i & 1)
+                for (;;)
+                    pause();
+            _exit(i & 0x7f);
+        }
+        if (c < 0) {
+            if (!refused)
+                first_errno = errno;
+            refused++;
+            continue;
+        }
+        made++;
+        if (i & 1)
+            kill(c, SIGTERM);
+        int st = 0;
+        if (waitpid(c, &st, 0) != c)
+            wrong++;
+        else if (i & 1)
+            wrong += !(WIFSIGNALED(st) && WTERMSIG(st) == SIGTERM);
+        else
+            wrong += !(WIFEXITED(st) && WEXITSTATUS(st) == (i & 0x7f));
+    }
+    check(made == 270 && refused == 0, "270 forks one after the other: %ld made, %ld refused (first errno %ld)", made, refused, first_errno);
+    check(wrong == 0, "every child reported the way it ended (%ld did not)", wrong, 0, 0);
+    long d1 = kacct("demand_free_kb "), p1 = kacct("procpool_free_kb ");
+    check(d1 >= d0 - 64 && p1 >= p0 - 64, "pools afterwards: demand %ld kB free, process %ld kB free (demand %ld before)", d1, p1, d0);
     return 0;
 }
 
@@ -239,6 +277,8 @@ int main(int argc, char **argv)
     int r = 1;
     if (!strcmp(mode, "forkfail"))
         r = mode_forkfail();
+    else if (!strcmp(mode, "forkmany"))
+        r = mode_forkmany();
     else if (!strcmp(mode, "madvise"))
         r = mode_madvise();
     else if (!strcmp(mode, "memfd"))
