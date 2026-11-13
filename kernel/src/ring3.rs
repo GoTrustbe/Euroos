@@ -1321,6 +1321,15 @@ fn scm_take(fd: u64) -> alloc::vec::Vec<u64> {
 /// Thread names as the program set them with prctl(PR_SET_NAME).
 static THREAD_NAMES: Mutex<alloc::vec::Vec<(usize, String)>> = Mutex::new(alloc::vec::Vec::new());
 
+/// Like [`thread_name`], for interrupt context: "(names locked)" instead of
+/// waiting when the table is held (the NMI probe).
+pub fn thread_name_try(t: usize) -> String {
+    match THREAD_NAMES.try_lock() {
+        Some(n) => n.iter().find(|(x, _)| *x == t).map(|(_, n)| n.clone()).unwrap_or_else(|| String::from("?")),
+        None => String::from("(names locked)"),
+    }
+}
+
 /// The name a task gave itself, or "?" if it never did.
 pub fn thread_name(t: usize) -> String {
     THREAD_NAMES.lock().iter().find(|(x, _)| *x == t).map(|(_, n)| n.clone())
@@ -3240,6 +3249,12 @@ fn fdspace_release(s: usize) {
 pub fn fd_space_slot_reset(task: usize) {
     fdspace::task_slot_reset(task);
     fdtab::task_slot_reset(task);
+    // BUG-140: slots of ended fork-child tasks are reused during a browser
+    // session now; the new occupant must not run with the capabilities or the
+    // syscall profile (renderer, utility) of the task that had the slot before.
+    // Spawners set their own after the slot is handed out. Atomics only: this
+    // runs under the scheduler lock.
+    reset_task_slot(task);
 }
 
 /// Fd spaces in use by background processes (a leak counter for the self-tests).
@@ -4875,6 +4890,36 @@ fn futex_purge_task(t: usize) {
     }
 }
 
+/// BUG-140: a task of a glibc fork child that has ended for good (Dead, its
+/// process torn down): give back its kernel stack, drop it from every registry
+/// that names it by task number, and offer its scheduler slot for reuse.
+///
+/// Only a worker thread that ended by itself with exit(2) used to give its slot
+/// back. Every other task of a fork child (its main task, and every thread that
+/// was still waiting when the child ended by exit_group, by a worker's
+/// exit_group, by kill or by abort) kept its slot until the browser itself
+/// ended. A renderer has 15-25 tasks: after a few sites the 256-slot table was
+/// full, pthread_create answered EAGAIN and every new renderer died in its first
+/// CHECK on a thread start (BUG-134), the browser's own new threads with it
+/// (BUG-135). The slot is taken lazily by the next spawn (`sched::alloc_slot`,
+/// which also clears the per-task policy state of the old occupant).
+fn retire_task(t: usize) {
+    futex_purge_task(t);
+    free_thread_kstack(t);
+    crate::net::forget_rx_waiter(t);
+    // A stale entry would make the slot's next occupant look like this task:
+    // GLIBC_THREADS decides whether an exit(2) ends a thread or a process and
+    // which tasks the end of the run kills, GLIBC_CTIDS where an exiting thread
+    // writes its zero (in another address space by then), THREAD_NAMES what the
+    // diagnostics call it.
+    GLIBC_THREADS.lock().retain(|&x| x != t);
+    GLIBC_CTIDS.lock().retain(|&(x, _)| x != t);
+    THREAD_NAMES.lock().retain(|(x, _)| *x != t);
+    if t < crate::sched::MAX_TASKS && crate::sched::is_dead(t) {
+        crate::sched::RECLAIMABLE[t].store(true, Ordering::Relaxed);
+    }
+}
+
 // ── Syscall profiles (sprint WP1): kernel-enforced per-process syscall policy ──
 // One byte per scheduler task (eurosandbox::Profile::as_u8). Lock-free: read on
 // every Linux-ABI syscall. Threads inherit from the task that created them, a
@@ -5076,6 +5121,27 @@ fn seccomp_evaluate(cur: usize, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5
 /// for the brk base, the mmap bump base and the stack top inside the arena, and
 /// a 2 MiB-granular slide of the demand pool. Entropy from the kernel CSPRNG.
 struct Slides { brk: u64, mmap: u64, stack: u64, demand: u64 }
+/// BUG-136: brk start, mmap window start and stack top of a glibc arena of
+/// `span` bytes at `arena`, every region inside it (euromm::arena, host-tested).
+/// The launchers fall back to 64 MiB arenas on fragmented RAM; with the fixed
+/// +32/+64 MiB layout of before, such an arena had its mmap window past its end
+/// and its brk region over its stack (every 512 MiB TCG boot: gsdl, ENOMEM,
+/// then a crash; one of them wedged the scheduler lock). An arena too small for
+/// any layout gets empty brk and mmap regions (every allocation ENOMEM), which
+/// the launchers never hand out (their floor is 64 MiB).
+fn glibc_arena_layout(arena: u64, span: u64) -> (u64, u64, u64) {
+    let sl = aslr_slides();
+    let s = euromm::arena::Slides { brk: sl.brk, mmap: sl.mmap, stack: sl.stack };
+    match euromm::arena::glibc_layout(arena, span, s) {
+        Some(l) => (l.brk_start, l.mmap_start, l.stack_top),
+        None => {
+            crate::serial_println!("[glibc] arena of {} MiB: no layout fits, brk and mmap refused", span >> 20);
+            let top = arena + span;
+            (top - 0x0020_0000, top - 0x0020_0000, top - 0x0010_0000)
+        }
+    }
+}
+
 fn aslr_slides() -> Slides {
     let r = u64::from_le_bytes(crate::entropy::draw_wait::<8>());
     Slides {
@@ -10408,6 +10474,7 @@ fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: us
         free_thread_kstack(t);
         crate::sched::mark_dead(t);
         crate::net::forget_rx_waiter(t);
+        retire_task(t); // BUG-140
     }
     if let Some(st) = status {
         GLIBC_CHILD_EXITS.lock().push((pid, st));
@@ -10438,6 +10505,7 @@ fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: us
     // Torn down in a network wait (kill(2), the end-of-run reap): not a waiter
     // any more, or its reused slot gets an early wake (see reset_task_slot).
     crate::net::forget_rx_waiter(ctask);
+    retire_task(ctask); // BUG-140
 }
 
 /// End every fork child the finished run left behind. A run is one process
@@ -10638,10 +10706,7 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     SHARED_MAPS.lock().clear();
 
     let ldso_base = arena + 0x0080_0000;
-    let sl = aslr_slides();
-    let brk_start = arena + 0x0200_0000 + sl.brk;
-    let mmap_start = arena + 0x0400_0000 + sl.mmap;
-    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000 - sl.stack;
+    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21));
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
@@ -10731,6 +10796,17 @@ unsafe fn arena_fill(dst: u64, src: Option<u64>, bytes: usize) {
     }
 }
 
+/// A fork that cannot finish after the child's memory exists (no kernel stack,
+/// no scheduler slot, no memory for its demand pages): give back what the child
+/// would have given back at its exit. Before BUG-140 these paths returned EAGAIN
+/// and kept a 128 MiB arena each, which a full task table made routine.
+fn fork_undo(pml4: u64, child_arena: u64, arena_frames: usize) {
+    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+    crate::paging::free_fork_tables(pml4);
+    crate::procpool::free_range(child_arena, arena_frames);
+    crate::procpool::free(pml4);
+}
+
 fn do_glibc_fork() -> u64 {
     static FORKLOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
     let fork_log = FORKLOG.fetch_add(1, Ordering::Relaxed) < 4;
@@ -10765,8 +10841,13 @@ fn do_glibc_fork() -> u64 {
     // Child page tables (PML4/PDPT/PD) from the fork pool.
     let (pml4, pdpt, pd) = match (crate::procpool::alloc(), crate::procpool::alloc(), crate::procpool::alloc()) {
         (Some(a), Some(b), Some(c)) => (a, b, c),
-        _ => {
-            crate::procpool::free(child_arena);
+        (a, b, c) => {
+            // The whole arena goes back (one frame did before), and whichever
+            // table frames were found.
+            crate::procpool::free_range(child_arena, arena_frames);
+            for f in [a, b, c].into_iter().flatten() {
+                crate::procpool::free(f);
+            }
             crate::serial_println!("[fork] page-table alloc FAILED");
             return (-12i64) as u64;
         }
@@ -10775,6 +10856,7 @@ fn do_glibc_fork() -> u64 {
     // Copy every committed demand page (exe data/bss, heap-in-demand) into the child.
     if !crate::paging::clone_demand_region(parent_pml4, pml4, DEMAND_PML4_IDX, &mut irq_window) {
         crate::serial_println!("[fork] clone_demand_region OOM");
+        fork_undo(pml4, child_arena, arena_frames);
         return (-12i64) as u64;
     }
     let t_demand = unsafe { core::arch::x86_64::_rdtsc() };
@@ -10783,7 +10865,10 @@ fn do_glibc_fork() -> u64 {
     // frames via the arena copy).
     let (slot, kstack_top) = match alloc_thread_kstack() {
         Some(s) => s,
-        None => return (-11i64) as u64, // -EAGAIN
+        None => {
+            fork_undo(pml4, child_arena, arena_frames);
+            return (-11i64) as u64; // -EAGAIN
+        }
     };
     let (urip, ursp, sregs) = unsafe { (USER_RIP, USER_RSP, SAVED_REGS) };
     let fs = unsafe { Msr::new(0xC000_0100).read() };
@@ -10794,6 +10879,8 @@ fn do_glibc_fork() -> u64 {
     set_task_caps(child, effective_caps()); // fork child: inherits the parent's rights
     if child == usize::MAX {
         free_thread_kstack_slot(slot);
+        crate::serial_println!("[fork] no scheduler slot for the child: EAGAIN, its arena and tables back to the pool");
+        fork_undo(pml4, child_arena, arena_frames);
         return (-11i64) as u64;
     }
     register_thread_kstack(child, slot);
@@ -11079,14 +11166,17 @@ pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
     {
         static LAST: AtomicU64 = AtomicU64::new(0);
         static RUN: AtomicU64 = AtomicU64::new(0);
-        let key = (addr & !0xFFF) | (crate::sched::current() as u64 & 0xFFF);
+        // Lock-free (BUG-136): a fault taken with the scheduler lock held must
+        // not wait for that lock here.
+        let me = crate::sched::current_lockfree();
+        let key = (addr & !0xFFF) | (me as u64 & 0xFFF);
         if LAST.swap(key, Ordering::Relaxed) == key {
             let n = RUN.fetch_add(1, Ordering::Relaxed) + 1;
             if n == 64 || n == 4096 || n == 262_144 {
                 crate::serial_println!(
                     "[demand] the same page faults again and again: {:#x} (address {addr:#x}) {n} times in a row, write={write} present={present}, error code {:#x}, rip {:#x}, task {} {:?}",
                     addr & !0xFFF, FAULT_CODE.load(Ordering::Relaxed), FAULT_RIP.load(Ordering::Relaxed),
-                    crate::sched::current(), thread_name(crate::sched::current()));
+                    me, thread_name(me));
                 if n == 64 {
                     let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
                     crate::paging::dump_walk(cr3, addr);
@@ -11549,10 +11639,7 @@ pub fn spawn_glibc_persistent(
     let ldso_base = arena + 0x0080_0000;
     // brk heap: [arena+32MiB, arena+64MiB); mmap bump area starts AFTER it so brk() and
     // mmap() never share a cursor (see BRK_CUR/BRK_END).
-    let sl = aslr_slides();
-    let brk_start = arena + 0x0200_0000 + sl.brk;
-    let mmap_start = arena + 0x0400_0000 + sl.mmap;
-    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000 - sl.stack;
+    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21));
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
@@ -12219,10 +12306,7 @@ fn glibc_disk_launch(
     unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
 
     let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
-    let sl = aslr_slides();
-    let brk_start = arena + 0x0200_0000 + sl.brk;
-    let mmap_start = arena + 0x0400_0000 + sl.mmap;
-    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000 - sl.stack;
+    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21));
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
@@ -13170,10 +13254,7 @@ pub fn run_glibc(
     let exe_base = arena; // PIE exe: first PT_LOAD has p_vaddr 0
     let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
     // brk heap [+32 MiB, +64 MiB); mmap bump area starts after it (disjoint cursors).
-    let sl = aslr_slides();
-    let brk_start = arena + 0x0200_0000 + sl.brk;
-    let mmap_start = arena + 0x0400_0000 + sl.mmap; // runtime mmaps (libc, …) bump from +64 MiB (+ slide)
-    let stack_top = arena + nblocks * (1 << 21) - 0x0010_0000 - sl.stack; // near the arena top (- slide)
+    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21));
 
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
@@ -14339,7 +14420,13 @@ fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 
     // process' was in; nothing swaps back at exit, so a syscall that blocks
     // mid-arm stays consistent and the next entrant fixes ownership itself.
     ensure_globals_for_current();
-    linux_dispatch_swapped(num, a1, a2, a3, a4, a5)
+    let r = linux_dispatch_swapped(num, a1, a2, a3, a4, a5);
+    // Wake hand-off (sched::WAKE_YIELD): this call woke a task, or the hosted
+    // window drew; give the CPU away now instead of at the end of the tick.
+    if crate::sched::take_resched() && syscall_yield_ok() {
+        yield_reacquire();
+    }
+    r
 }
 
 fn linux_dispatch_inner_traced(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
@@ -15020,12 +15107,14 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         if t != cur {
                             free_thread_kstack(t);
                             crate::sched::mark_dead(t);
+                            retire_task(t); // BUG-140: its slot comes back now
                         }
                     }
                     if cur != ctask {
                         // The caller is a worker: the child MAIN dies with it.
                         free_thread_kstack(ctask);
                         crate::sched::mark_dead(ctask);
+                        retire_task(ctask);
                     }
                     crate::serial_println!("[fork] child pid {pid} (task {cur}) exit({a1}) — arena recycled ({} MiB back to pool)", frames / 256);
                     // Record the exit for wait4: WEXITSTATUS lives in bits 8..16.
@@ -15059,6 +15148,9 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     }
                     free_thread_kstack(cur);
                     crate::sched::mark_dead(cur);
+                    // The caller's own slot: taken by a later spawn once this
+                    // task is no longer the current one (alloc_slot skips it).
+                    retire_task(cur);
                     switch_away_dead();
                 }
             }

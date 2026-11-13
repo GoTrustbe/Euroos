@@ -789,13 +789,17 @@ pub fn render(fb: &FrameBuffer, windows: &[Window], order: &[usize], clock: &str
     let w = fb.width();
     let h = fb.height();
     draw_wallpaper(fb);
+    crate::sched::deskwatch::step("repaint: wallpaper");
     draw_sidebar(fb, h);
+    crate::sched::deskwatch::step("repaint: sidebar");
     for &i in order {
         if windows[i].visible {
             draw_window(fb, &windows[i]);
         }
     }
+    crate::sched::deskwatch::step("repaint: windows");
     draw_status_panel(fb, w, h, clock, date, stats, true);
+    crate::sched::deskwatch::step("repaint: status panel");
 }
 
 pub const CURSOR_W: usize = 11;

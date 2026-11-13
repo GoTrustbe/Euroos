@@ -38,20 +38,22 @@ pub struct Layout {
 /// The layout of an arena of `span` bytes at `base`, or None when no layout
 /// with every region inside the arena exists.
 pub fn glibc_layout(base: u64, span: u64, sl: Slides) -> Option<Layout> {
-    // The layout of the launchers today (kernel/src/ring3.rs): brk from +32 MiB,
-    // the mmap window from +64 MiB, the stack at the top, whatever the span.
-    let brk_start = base + 32 * MIB + sl.brk;
-    let mmap_start = base + 64 * MIB + sl.mmap;
-    let stack_top = base + span - MIB - sl.stack;
-    Some(Layout {
-        exe: base,
-        ldso: base + 8 * MIB,
-        brk_start,
-        brk_end: mmap_start,
-        mmap_start,
-        heap_end: stack_top - MIB,
-        stack_top,
-    })
+    // From 128 MiB the layout of every earlier release: brk from +32 MiB, the
+    // mmap window from +64 MiB. A smaller arena keeps the same order in the same
+    // proportions (a quarter, three eighths): 64 MiB gives brk from +16 MiB and
+    // the mmap window from +24 MiB, ~35 MiB of it.
+    let (brk_off, mmap_off) = if span >= 128 * MIB { (32 * MIB, 64 * MIB) } else { (span / 4, span * 3 / 8) };
+    let brk_start = base + brk_off + sl.brk;
+    let mmap_start = base + mmap_off + sl.mmap;
+    let stack_top = (base + span).checked_sub(MIB + sl.stack)?;
+    let heap_end = stack_top.checked_sub(MIB)?;
+    let l = Layout { exe: base, ldso: base + 8 * MIB, brk_start, brk_end: mmap_start, mmap_start, heap_end, stack_top };
+    // Every region inside the arena and in order, with room in each.
+    let ok = l.brk_start >= l.ldso + MIB
+        && l.brk_end >= l.brk_start + 4 * MIB
+        && l.heap_end >= l.mmap_start + 8 * MIB
+        && l.stack_top <= base + span;
+    ok.then_some(l)
 }
 
 #[cfg(test)]

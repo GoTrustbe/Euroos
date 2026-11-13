@@ -137,6 +137,10 @@ pub fn push_scancode(sc: u8) {
     // (PS/2, USB HID, virtio-input) passes, so help opens whichever consumer
     // drains the ring afterwards (char poll, rich poll, a program that owns
     // the keyboard). No layout maps these codes to a character.
+    // [keylat]: a make code (not an E0 prefix, not a break) starts a measurement.
+    if sc & 0x80 == 0 && sc != 0xE0 && !matches!(sc, 0x2a | 0x36 | 0x1d | 0x38) {
+        crate::xserver::keylat::key_in();
+    }
     match sc {
         0x3B => HELP_KEY.store(true, Ordering::Relaxed),
         0x3C => SHORTCUTS_KEY.store(true, Ordering::Relaxed),

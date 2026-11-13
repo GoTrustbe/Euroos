@@ -450,10 +450,14 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     // per-process state is loaded — the holder of whatever lock the spin waits
     // on is almost always identified by these four.
     {
-        let cur = crate::sched::current();
+        // Lock-free (BUG-136): the probe is sent to a machine that is wedged,
+        // often on the scheduler lock; sched::current() waited for that lock
+        // and the probe stopped before its stack scan and census.
+        let cur = crate::sched::current_lockfree();
         let (sn, sa, sr) = crate::ring3::last_syscall(cur);
+        let name = crate::ring3::thread_name_try(cur);
         serial_println!("[nmi] current task {cur} {:?} last-syscall={sn}(a1={sa:#x})->{sr:#x} globals-owner={}",
-            crate::ring3::thread_name_pub(cur), crate::ring3::globals_owner_now());
+            name, crate::ring3::globals_owner_now());
     }
     // Scan the interrupted stack for plausible kernel code return addresses (RBP
     // chains are unreliable in release). Kernel code lives high (>= 0x2000_0000).

@@ -334,6 +334,9 @@ pub fn read(fd: u64, max: usize) -> Vec<u8> {
         mark_reader((fd - XCONN_FD_BASE) as usize);
     }
     let out: Vec<u8> = c.outbuf.drain(0..n).collect();
+    if n >= 32 {
+        keylat::read();
+    }
     // Did this read carry a ButtonPress/Release out to the client? Events are
     // 32-byte records and replies are 32-byte-multiples, so the opcode of every
     // 32-byte chunk is at a known place; 4/5 in the low 7 bits is press/release.
@@ -461,6 +464,103 @@ fn x_keycode(ext: bool, code: u8) -> u8 {
 /// event (X keycode = scancode + 8). Called from the run_glibc wait loop while an X
 /// client is up — this is how live hardware input reaches an X window (vs. the
 /// injected self-test events). No-op (pops nothing) unless a window wants keys.
+
+// ── Key to screen, measured in the kernel ([keylat]) ───────────────────────
+//
+// One key at a time (a typist, or the harness's perf step, waits for the
+// character before the next key): when its make code entered the scancode
+// ring, when the X server handed the KeyPress to a client, when that client
+// read it, when the client next drew into a window, and when the desktop loop
+// put that drawing on the screen. One line per key with the four gaps, and
+// `keylat` in the shell gives the medians of the last 64 keys. Where the
+// ~300 ms of chrome-2026-11b went (W23, task 4).
+pub mod keylat {
+    use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    const N: usize = 64;
+    /// Stage reached by the key in flight: 0 none, 1 in the ring, 2 handed to a
+    /// client, 3 read by it, 4 drawn.
+    static STAGE: AtomicU64 = AtomicU64::new(0);
+    static T: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    static HIST: [[AtomicU64; 5]; N] = [const { [const { AtomicU64::new(0) }; 5] }; N];
+    static HN: AtomicUsize = AtomicUsize::new(0);
+
+    fn now() -> u64 {
+        unsafe { core::arch::x86_64::_rdtsc() }
+    }
+    fn us(a: u64, b: u64) -> u64 {
+        let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+        b.saturating_sub(a) * 10_000 / per
+    }
+    fn at(stage: u64, from: u64) {
+        if STAGE.compare_exchange(from, stage, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+            T[stage as usize].store(now(), Ordering::Relaxed);
+        }
+    }
+    /// A make code entered the scancode ring (any keyboard).
+    pub fn key_in() {
+        // A new key restarts the measurement, whatever stage the last one reached.
+        STAGE.store(0, Ordering::Relaxed);
+        at(1, 0);
+    }
+    /// The X server handed the KeyPress to a client.
+    pub fn delivered() { at(2, 1) }
+    /// A client read at least one event or reply.
+    pub fn read() { at(3, 2) }
+    /// A client drew into a window (the hosted window is now dirty).
+    pub fn drawn() { at(4, 3) }
+    /// The desktop loop put the hosted window on the screen.
+    pub fn painted() {
+        if STAGE.compare_exchange(4, 0, Ordering::AcqRel, Ordering::Relaxed).is_err() {
+            return;
+        }
+        let t: [u64; 5] = core::array::from_fn(|i| T[i].load(Ordering::Relaxed));
+        let p = now();
+        let g = [us(t[1], t[2]), us(t[2], t[3]), us(t[3], t[4]), us(t[4], p), us(t[1], p)];
+        let n = SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+        let slot = HN.fetch_add(1, Ordering::Relaxed) % N;
+        for (i, v) in g.iter().enumerate() {
+            HIST[slot][i].store(*v, Ordering::Relaxed);
+        }
+        crate::serial_println!(
+            "[keylat] key {n}: ring to X client {} us, X queue to client read {} us, read to first draw {} us, draw to screen {} us; total {} us",
+            g[0], g[1], g[2], g[3], g[4]);
+    }
+    /// `keylat`: medians and maxima of the last keys.
+    pub fn summary() -> alloc::vec::Vec<alloc::string::String> {
+        let n = HN.load(Ordering::Relaxed).min(N);
+        if n == 0 {
+            return alloc::vec![alloc::string::String::from("[keylat] no key measured yet"), wake_line()];
+        }
+        let names = ["ring to X client", "X queue to client read", "read to first draw", "draw to screen", "total"];
+        let mut out = alloc::vec![alloc::format!("[keylat] last {n} keys (medians, max):")];
+        for (i, name) in names.iter().enumerate() {
+            let mut v: alloc::vec::Vec<u64> = (0..n).map(|k| HIST[k][i].load(Ordering::Relaxed)).collect();
+            v.sort_unstable();
+            out.push(alloc::format!("[keylat]   {name}: median {} us, max {} us", v[n / 2], v[n - 1]));
+        }
+        out.push(wake_line());
+        out
+    }
+    /// How long woken tasks waited for the CPU (all tasks, since boot or "keylat reset").
+    pub fn wake_line() -> alloc::string::String {
+        let mut l = alloc::format!("[keylat] woken tasks waited for the CPU (ms; wake hand-off {}):",
+            if crate::sched::WAKE_YIELD.load(Ordering::Relaxed) { "on" } else { "off" });
+        for (i, b) in crate::sched::WAKE_HIST.iter().enumerate() {
+            l.push_str(&alloc::format!(" {} {}", crate::sched::WAKE_HIST_MS[i], b.load(Ordering::Relaxed)));
+        }
+        l
+    }
+    /// "keylat reset": forget the keys and the wake histogram (an A/B in one boot).
+    pub fn reset() {
+        HN.store(0, Ordering::Relaxed);
+        STAGE.store(0, Ordering::Relaxed);
+        for b in crate::sched::WAKE_HIST.iter() {
+            b.store(0, Ordering::Relaxed);
+        }
+    }
+}
+
 pub fn pump_keyboard() {
     // IRQ-safe: called from task 0 (desktop) while the client's read/process spins on
     // XCONNS with IF=0 — a preemption holding this lock would deadlock (BUG-007 class).
@@ -523,6 +623,9 @@ pub fn pump_keyboard() {
             }
             let want: u32 = if pressed { 0x1 } else { 0x2 }; // KeyPress / KeyRelease mask
             let kind: u8 = if pressed { 2 } else { 3 };
+            if pressed {
+                keylat::delivered();
+            }
             // Ferry typed characters to the page over the CDP bridge as well (the
             // reliable route; see pump_mouse). Presses only; layout = our qwerty
             // keysym table, shift honoured. Enter goes as a raw key event — an
@@ -2474,6 +2577,8 @@ fn compose_windowed(c: &XConn) {
     }
     RETAINED_ID.store(main.id, core::sync::atomic::Ordering::Relaxed);
     X_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
+    keylat::drawn();
+    crate::sched::want_desktop();
 }
 
 /// The current placement anchor (x, y, w, h), refreshed by present() BEFORE the
@@ -2508,6 +2613,8 @@ fn present_win(win: Option<&XWindow>, id: u32) {
                 RETAINED_ID.store(id, core::sync::atomic::Ordering::Relaxed);
             }
             X_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
+            keylat::drawn();
+            crate::sched::want_desktop();
         } else {
             // ONE shared transform for every window: the ANCHOR (largest mapped
             // window on any connection — chrome's browser toplevel) is centred and
