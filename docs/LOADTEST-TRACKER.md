@@ -2084,9 +2084,9 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   YouTube serves VP9/AV1 + Opus to such a browser, so it does not block criterion 3; sites that only offer H.264 will not play.
 - **Next:**     decide whether `proprietary_codecs`/`ffmpeg_branding=Chrome` is wanted (licence); otherwise document it.
 
-### BUG-162 — a click on a page link is sometimes not followed ⬜ OPEN (unconfirmed)
+### BUG-162 — a click on a page link is sometimes not followed ✅ HARNESS (not an input bug)
 - **Actual:**   `chrome-smoke.py --only interact`: the click on the "Download" link in the euro-os.eu header (a real tablet click, `interact-rerun-report.txt`) did not navigate in 1 of 2 fresh boots (the other boot followed it, `#download`); the history step that follows failed with it.
-- **Next:**     repeat the step 20 times on a fresh boot; check whether the click came while the page was still loading (the harness waits 1.5 s of unchanged picture) before it is called an input bug.
+- **Cause:**    the click came while euro-os.eu was still loading. `chrome-smoke.py` waits for the end of the load plus 3 s of a still picture (`wait_ready`); 20 of 20 boots followed the link (`proof/chrome-harness/followup.txt`).
 
 ### BUG-163 — YouTube answers "Sign in to confirm you're not a bot" to every public video (not a EuroOS bug, recorded) ⬜ OPEN
 - **Actual:**   with the consent dialog answered and verified gone (`proof/chrome-harness/`), four public videos all show the bot page in the player; no login or workaround was tried. Criterion 3 (2 minutes of YouTube with sound) cannot be measured from this network; `--only localvideo` measures the same stack without YouTube (BUG-160).

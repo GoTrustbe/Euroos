@@ -66,6 +66,7 @@ VIDEO_URLS = [VIDEO_URL, "https://www.youtube.com/watch?v=YE7VzlLtp-4", "https:/
 # tablet. Order: reject first, then accept (no reject button on the banner).
 CONSENT_REJECT = ["reject all", "alles weigeren", "tout refuser", "alle ablehnen", "decline all", "reject", "weigeren", "refuser", "ablehnen"]
 CONSENT_ACCEPT = ["accept all", "alles accepteren", "tout accepter", "alle akzeptieren", "accept", "agree", "accepteren", "akzeptieren"]
+CONSENT_RETRY = ("reject all", "alles weigeren", "tout refuser", "alle ablehnen")
 FIND_ACTIVE = bytes((255, 150, 50))       # Blink's active find match background, 0xFF9632
 
 # Characters beyond the tables of gui-smoke: (qcode, shift, altgr).
@@ -167,6 +168,8 @@ class Chrome(gs.Guest):
         self.probe = None               # EchoProbe, from the first desktop on
         self.stalls = []                # (step, slowest console answer in ms)
         self.consent_log = []           # one dict per consent button that was clicked
+        self.find_misses = 0            # a full reject label found nothing (then typed again, slowly)
+        self.find_retries = []          # (label, did the second attempt find it)
 
     def start_probe(self):
         if self.probe is None:
@@ -369,6 +372,20 @@ class Chrome(gs.Guest):
             time.sleep(0.2)
         return st
 
+    def scroll_settled(self, timeout=8):
+        """scrollY once the page has stopped scrolling (two reads 0.6 s apart agree): Chromium scrolls
+        smoothly, and the first change of the title is only the start of the movement. The next key
+        of a step is sent after this, not in the middle of the previous one's animation."""
+        last, t0 = None, time.time()
+        while time.time() - t0 < timeout * self.slow:
+            st = self.page_state()
+            y = st[3] if st else None
+            if y is not None and y == last:
+                return y
+            last = y
+            time.sleep(0.6)
+        return last if last is not None else -1
+
     def new_bad(self):
         """Lines since the last call in which chrome or the kernel reports a failure."""
         text = self.serial.since(self.bad_pos)
@@ -504,6 +521,18 @@ class Chrome(gs.Guest):
                 return time.time() - t0, True
             time.sleep(0.25)
         return time.time() - t0, idle is None
+
+    def wait_ready(self, timeout=20):
+        """Ready for a click on the page: the browser says the load is over (the reload button is
+        the arrow again, no spinner) AND the content has not changed for 3 s; at most `timeout` s
+        in all. (The missed link click of BUG-162 happened while euro-os.eu was still loading: 1.5 s
+        of an unchanged picture is not enough.) Returns the seconds it took."""
+        t0 = time.time()
+        self.move(self.w - 4, self.h - 4)
+        loaded, _ = self.wait_loaded(timeout)[0], None
+        left = max(3.0, timeout - (time.time() - t0))
+        self.settle(left, quiet=3.0)
+        return time.time() - t0
 
     def close_infobars(self):
         """Close chrome's infobars. Only on the input test page: its background is not
@@ -674,18 +703,18 @@ class Chrome(gs.Guest):
         # 4. scrolling: wheel, keys
         self.move(*self.page(400, 300))
         self.wheel(4)
-        st = self.wait_state(lambda s: s[3] > 0); y_wheel = st[3] if st else -1
+        self.wait_state(lambda s: s[3] > 0); y_wheel = self.scroll_settled()
         self.click(*self.page(700, 300))            # focus on the page, not a field
         self.key("pgdn")
-        st = self.wait_state(lambda s: s[3] > y_wheel); y_pg = st[3] if st else -1
+        self.wait_state(lambda s: s[3] > y_wheel); y_pg = self.scroll_settled()
         self.key("end")
-        st = self.wait_state(lambda s: s[3] > y_pg); y_end = st[3] if st else -1
+        self.wait_state(lambda s: s[3] > y_pg); y_end = self.scroll_settled()
         self.key("home")
-        st = self.wait_state(lambda s: s[3] == 0); y_home = st[3] if st else -1
+        self.wait_state(lambda s: s[3] == 0); y_home = self.scroll_settled()
         self.wheel(3)
-        self.wait_state(lambda s: s[3] > 0)
+        self.wait_state(lambda s: s[3] > 0); self.scroll_settled()
         self.wheel(-3)
-        st = self.wait_state(lambda s: s[3] == 0); y_back = st[3] if st else -1
+        self.wait_state(lambda s: s[3] == 0); y_back = self.scroll_settled()
         rec("scroll: wheel down, PageDown, End, Home, wheel down and up again",
             0 < y_wheel < y_pg < y_end and y_home == 0 and y_back == 0,
             f"scrollY {y_wheel} -> {y_pg} -> {y_end} -> {y_home} -> {y_back}")
@@ -740,12 +769,14 @@ class Chrome(gs.Guest):
         self.window_steps(rec)
         # 10. a link, back, forward (the reference site's own navigation)
         ok, secs, detail = self.navigate("https://euro-os.eu/en/", "euro-os.eu/en")
-        self.settle(30, quiet=1.5)
+        waited = self.wait_ready(20)
         self.click(*self.page(self.xw - 58 - 16, 33))        # the "Download" link in the page header
         hit = self.wait_tab(lambda u, t: u.endswith("#download"), 15)
-        rec("link: a click on a link in the page navigates", ok and hit is not None, f"{self.tabs()}")
+        rec("link: a click on a link in the page navigates", ok and hit is not None, f"page ready after {waited:.1f} s; {self.tabs()}")
+        self.wait_ready(20)
         self.key("alt", "left")
         back = self.wait_tab(lambda u, t: u.endswith("/en/"), 15)
+        self.wait_ready(20)
         self.click(*self.cx(FORWARD_X, TOOLBAR_Y))
         fwd = self.wait_tab(lambda u, t: u.endswith("#download"), 15)
         rec("history: Alt+Left goes back, the toolbar's forward button goes forward", back is not None and fwd is not None,
@@ -1151,6 +1182,18 @@ class Chrome(gs.Guest):
             repeats, last = 0, None
             for m in range(max_matches):
                 s, hit = self.stable_highlight(base, region, shot_name if (shot_name and m == 0) else None)
+                if not hit and m == 0 and label in CONSENT_RETRY:
+                    # A full reject label that finds nothing: is the text in the find bar what was
+                    # typed? Keep the picture of the find bar, then type it again, slowly.
+                    self.find_misses += 1
+                    s.save_png(os.path.join(self.wd, f"findbar-miss-{self.find_misses:02d}-{label.replace(' ', '_')}.png"))
+                    self.key("ctrl", "a")
+                    for ch in label:
+                        self.type(ch)
+                        self.nap(0.15)
+                    self.nap(0.5)
+                    s, hit = self.stable_highlight(base, region)
+                    self.find_retries.append((label, bool(hit)))
                 if not hit:
                     break
                 centre, bbox = hit
@@ -1225,7 +1268,8 @@ class Chrome(gs.Guest):
                          + (f" [matches of the reject labels, (label, n, at, looked like a button): {p['find_trace']}]" if p["kind"] == "accept" and p.get("find_trace") else "")
                          + ("gone" if p["gone"] else f"STILL THERE (label found again: {p['label_still_found']}, pixels around the button changed: {p['pixels_changed']})")
                          for p in c["passes"])
-        self.step(f"consent {c['site']}: {c['passes'][0]['kind']} button clicked", c["ok"], what)
+        self.step(f"consent {c['site']}: {c['passes'][0]['kind']} button clicked", c["ok"],
+                  what + (f"; full reject labels that found nothing at first and what typing them again slowly did: {self.find_retries}" if self.find_retries else ""))
 
     def memory(self):
         """The kernel's own memory account while a browser runs: the newest `[cpu]`
